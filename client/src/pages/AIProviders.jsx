@@ -196,7 +196,7 @@ export default function AIProviders() {
       prompt: runPrompt,
       workspacePath: workspace?.repoPath,
       workspaceName: workspace?.name
-    }).catch(err => ({ error: err.message }));
+    }, { silent: true }).catch(err => ({ error: err.message }));
 
     if (result.error) {
       setRunOutput(`Error: ${result.error}`);

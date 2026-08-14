@@ -3,9 +3,10 @@ import { request } from './apiCore.js';
 // Runs
 export const getRuns = (limit = 50, offset = 0, source = 'all') =>
   request(`/runs?limit=${limit}&offset=${offset}&source=${source}`);
-export const createRun = (data) => request('/runs', {
+export const createRun = (data, options) => request('/runs', {
   method: 'POST',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
 export const getRun = (id) => request(`/runs/${id}`);
 // These endpoints deliberately return text/plain. A model response can itself
