@@ -1,32 +1,59 @@
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { homedir } from 'node:os';
+import { existsSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const script = join(dirname(fileURLToPath(import.meta.url)), 'generate_minimax_h3.py');
 
-const pyBin = process.platform === 'win32' ? 'python' : 'python3';
-const runPython = (source) => execFileSync(pyBin, ['-c', source, script], {
-  encoding: 'utf8',
-});
-
-// This suite drives the real interpreter, so it needs one to exist. Probe once
-// rather than letting all 16 cases fail with an opaque "Command failed".
+// Resolve an interpreter that actually RUNS, rather than trusting a name on
+// PATH. On Windows a machine with no Store-installed Python still has `python`
+// on PATH as a Microsoft Store ALIAS STUB: it exists, exits non-zero, and
+// prints "Python was not found; run without arguments to install from the
+// Microsoft Store". A which/where-style check passes on that stub and every
+// case then fails with an opaque "Command failed", so the probe has to execute
+// something trivial. The `py` launcher is checked too — it is the standard
+// Windows entry point — but it is itself a shim that can point at an
+// uninstalled version, so it gets the same treatment.
 //
-// Windows makes the check load-bearing: a machine with no Python still has
-// `python` on PATH as a Microsoft Store ALIAS STUB, which exits non-zero with
-// "Python was not found; run without arguments to install from the Microsoft
-// Store" — so an `is it on PATH` test would pass and the suite would still
-// fail. Actually running it is the only reliable probe. CI's windows-latest
-// image ships Python, so this skips on a contributor's bare machine, not there.
-const pythonAvailable = (() => {
+// PORTOS_TEST_PYTHON overrides the whole search when a machine needs it.
+//
+// PortOS provisions its own interpreters (setup:image / setup:video build venvs
+// under ~/.portos, and imageGen.local.pythonPath names whichever python the
+// install was pointed at), so a machine can be fully set up for image/video gen
+// while the BARE `python` name is still a Store stub. Fall back to those before
+// concluding there is no interpreter — otherwise this suite silently skips on
+// exactly the machines that exercise the script it covers.
+const portosPythons = () => {
+  const home = homedir();
+  const venvBin = process.platform === 'win32' ? ['Scripts', 'python.exe'] : ['bin', 'python3'];
+  const roots = ['venv-flux2', 'venv-mflux', 'venv-video', 'voice'];
+  const found = roots.map((v) => join(home, '.portos', v, ...venvBin));
+  if (process.platform === 'win32') found.push(join(home, 'miniconda3', 'python.exe'));
+  return found.filter((p) => existsSync(p));
+};
+
+const PY_CANDIDATES = [
+  process.env.PORTOS_TEST_PYTHON,
+  process.platform === 'win32' ? 'python' : 'python3',
+  process.platform === 'win32' ? 'python3' : 'python',
+  ...(process.platform === 'win32' ? ['py'] : []),
+  ...portosPythons(),
+].filter(Boolean);
+
+const pyBin = PY_CANDIDATES.find((candidate) => {
   try {
-    execFileSync(pyBin, ['-c', 'pass'], { stdio: 'ignore' });
+    execFileSync(candidate, ['-c', 'pass'], { stdio: 'ignore' });
     return true;
   } catch {
     return false;
   }
-})();
+}) || null;
+
+const runPython = (source) => execFileSync(pyBin, ['-c', source, script], {
+  encoding: 'utf8',
+});
 
 const importRunner = [
   'import importlib.util, sys',
@@ -37,7 +64,7 @@ const importRunner = [
   'spec.loader.exec_module(runner)',
 ].join('\n');
 
-describe.skipIf(!pythonAvailable)('generate_minimax_h3.py', () => {
+describe.skipIf(!pyBin)('generate_minimax_h3.py', () => {
   it('keeps the lexical HF snapshot root when cache entries are blob symlinks', () => {
     const output = runPython(`${importRunner}\n${[
       'import tempfile',
@@ -197,7 +224,12 @@ describe.skipIf(!pythonAvailable)('generate_minimax_h3.py', () => {
 
   it('emits the video_path JSON completion contract on stdout', () => {
     const output = runPython(`${importRunner}\nrunner.emit_result(Path("/tmp/example.mp4"))`);
-    expect(JSON.parse(output)).toEqual({ video_path: '/tmp/example.mp4' });
+    // The contract is "the output path, as JSON under video_path" — not
+    // "the separators you typed". pathlib.Path normalizes to the host
+    // separator, so on Windows this comes back '\tmp\example.mp4'. Compare on a
+    // normalized copy rather than pinning POSIX.
+    const { video_path: videoPath } = JSON.parse(output);
+    expect(videoPath.split('\\').join('/')).toBe('/tmp/example.mp4');
   });
 
   it('loads only the pinned namespace and cannot import a root-level shadow module', () => {
