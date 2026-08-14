@@ -1,0 +1,1 @@
+- Task-learning no longer banks a phantom success for a task type when an agent run was never evaluated — an output hook that aborts before reading the agent's output (e.g. the task's app was deleted mid-run) now skips the learning write entirely instead of falling back to the exit code (#4107)
