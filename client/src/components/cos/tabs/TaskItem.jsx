@@ -199,8 +199,20 @@ export default function TaskItem({ task, isSystem, onRefresh, providers, duratio
     }
   };
 
+  // Discarding must actually revert the draft, not just hide it — without this,
+  // reopening Edit after a confirmed discard would show the just-discarded text
+  // again instead of the task's real values, since editData is otherwise only
+  // ever seeded once at mount.
   const handleConfirmDiscard = () => {
-    confirmDiscard(() => setEditing(false));
+    confirmDiscard(() => {
+      setEditData({
+        description: task.description,
+        context: task.metadata?.context || '',
+        model: task.metadata?.model || '',
+        provider: task.metadata?.provider || ''
+      });
+      setEditing(false);
+    });
   };
 
   const handleDelete = async () => {

@@ -306,6 +306,19 @@ describe('TaskItem cancel-edit confirmation (#4037)', () => {
     expect(screen.getByRole('button', { name: 'Edit task' })).toBeInTheDocument();
   });
 
+  it('reverts the draft, not just hides it, so reopening Edit does not resurrect the discarded text', () => {
+    render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    fireEvent.change(screen.getByDisplayValue(task.description), { target: { value: 'Edited description' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    expect(screen.getByDisplayValue(task.description)).toBeInTheDocument();
+    expect(screen.queryByDisplayValue('Edited description')).not.toBeInTheDocument();
+  });
+
   it('returns to the edit fields when the discard confirm is itself canceled', () => {
     render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);
 
