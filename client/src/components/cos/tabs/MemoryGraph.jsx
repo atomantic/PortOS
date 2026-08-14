@@ -2,11 +2,18 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
+import { Info } from 'lucide-react';
 import * as api from '../../../services/api';
 import { MEMORY_TYPES, MEMORY_TYPE_COLORS } from '../constants';
 import { buildGraph } from '../../../lib/graphSimulation';
 import BrailleSpinner from '../../BrailleSpinner';
+import useHoverTooltip from '../../../hooks/useHoverTooltip';
 import { formatDateNumeric } from '../../../utils/formatters';
+
+// Widest the hover tooltip renders. Single source for both its max-width and
+// the clamp that keeps it inside the viewport — as a CSS class plus a mirrored
+// constant the two silently drift apart.
+const TOOLTIP_WIDTH = 320;
 
 const TYPE_HEX = {
   fact: '#3b82f6',
@@ -86,7 +93,10 @@ function GraphScene({ graph, selectedId, adjacentIds, onSelect, onHover }) {
             scale={radius}
             position={[node.x, node.y, node.z]}
             onClick={(e) => { e.stopPropagation(); onSelect(node); }}
-            onPointerOver={(e) => { e.stopPropagation(); onHover(node); }}
+            // Pass the enter event's coordinates up: the wrapper's onPointerMove
+            // only tracks the cursor WHILE a node is hovered, so the tooltip's
+            // first frame has to be placed from this event.
+            onPointerOver={(e) => { e.stopPropagation(); onHover(node, { x: e.clientX, y: e.clientY }); }}
             onPointerOut={() => onHover(null)}
           >
             <meshStandardMaterial
@@ -116,9 +126,12 @@ export default function MemoryGraph() {
   const [loading, setLoading] = useState(true);
   const [selectedNode, setSelectedNode] = useState(null);
   const [fullMemory, setFullMemory] = useState(null);
-  const [hoveredNode, setHoveredNode] = useState(null);
-  const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
+  // Hover tooltip state + the ref-gated pointer tracking that keeps a plain
+  // mouse move from re-rendering this component when nothing can paint.
+  const { hoveredNode, tooltipPos, handleHover, handlePointerMove } = useHoverTooltip();
   const [layoutKey, setLayoutKey] = useState(0);
+  // Mobile-only: the legend auto-shows on a roomy viewport (CSS, not this flag).
+  const [legendOpen, setLegendOpen] = useState(false);
 
   const graphRef = useRef(null);
   const dragStartRef = useRef(null);
@@ -171,10 +184,6 @@ export default function MemoryGraph() {
     setSelectedNode(prev => prev?.id === node.id ? null : node);
   }, []);
 
-  const handleHover = useCallback((node) => {
-    setHoveredNode(node);
-  }, []);
-
   const handlePointerMissed = useCallback((e) => {
     const start = dragStartRef.current;
     if (!start) return;
@@ -214,12 +223,15 @@ export default function MemoryGraph() {
         </button>
       </div>
 
-      {/* 3D Canvas */}
+      {/* 3D Canvas. Viewport-relative rather than a flat 500px: the canvas is a
+          touch-action:none dead zone for page scrolling, so on a phone (and
+          especially in landscape, where 500px overflowed the whole viewport) it
+          has to leave room to scroll past. Caps at the original 500px on
+          desktop, floors at 240px so it stays usable on a short viewport. */}
       <div
-        className="relative bg-port-card border border-port-border rounded-lg overflow-hidden"
-        style={{ height: '500px' }}
+        className="relative bg-port-card border border-port-border rounded-lg overflow-hidden h-[clamp(240px,45vh,500px)]"
         onPointerDown={(e) => { dragStartRef.current = { x: e.clientX, y: e.clientY }; }}
-        onPointerMove={(e) => setTooltipPos({ x: e.clientX, y: e.clientY })}
+        onPointerMove={handlePointerMove}
       >
         {graph && (
           <Canvas
@@ -239,34 +251,68 @@ export default function MemoryGraph() {
           </Canvas>
         )}
 
-        {/* Legend */}
-        <div className="absolute bottom-3 left-3 bg-port-bg/90 border border-port-border rounded-lg p-3 text-xs space-y-1.5 pointer-events-none">
-          {MEMORY_TYPES.map(t => (
-            <div key={t} className="flex items-center gap-2">
-              <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ backgroundColor: TYPE_HEX[t] }} />
-              <span className="text-gray-400">{t}</span>
-            </div>
-          ))}
-          <div className="border-t border-port-border pt-1.5 mt-1.5 space-y-1">
-            <div className="flex items-center gap-2">
-              {/* Stays a fixed blue (not port-accent) to match GraphEdges' hardcoded
-                  #3b82f6 three.js edge color below — theming just the legend would
-                  desync it from the actual rendered edge color on non-blue themes. */}
-              <span className="inline-block w-4 h-0 border-t border-blue-400" />
-              <span className="text-gray-500">linked</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="inline-block w-4 h-0 border-t border-gray-500" />
-              <span className="text-gray-500">similar</span>
+        {/* Legend. Its ~200px blankets a short canvas, so it auto-shows only on
+            a `roomy-viewport` (wide AND tall — see index.css); otherwise it
+            collapses behind a toggle and expands upward from the corner. The
+            height half of that variant is what makes a landscape phone work: it
+            is wider than `sm` but only ~390px tall, so a width-only rule
+            force-showed the legend over a floored 240px canvas AND hid the
+            toggle — blanketing the graph with no way out.
+            (The edge colours exist nowhere else in this tab, hence a toggle
+            rather than dropping the legend on small screens.) */}
+        {/* pointer-events-none on the WRAPPER, not just the panel: it covers a
+            corner of the canvas, and as a hit-testable box it would swallow the
+            orbit drags the panel alone used to let through (pointer-events is
+            inherited, so the panel needs no declaration of its own; the toggle
+            opts back in). */}
+        <div className="absolute bottom-3 left-3 z-10 flex flex-col items-start gap-1.5 pointer-events-none">
+          <div
+            data-testid="graph-legend"
+            className={`${legendOpen ? 'block' : 'hidden'} roomy-viewport:block bg-port-bg/90 border border-port-border rounded-lg p-3 text-xs space-y-1.5`}
+          >
+            {MEMORY_TYPES.map(t => (
+              <div key={t} className="flex items-center gap-2">
+                <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ backgroundColor: TYPE_HEX[t] }} />
+                <span className="text-gray-400">{t}</span>
+              </div>
+            ))}
+            <div className="border-t border-port-border pt-1.5 mt-1.5 space-y-1">
+              <div className="flex items-center gap-2">
+                {/* Stays a fixed blue (not port-accent) to match GraphEdges' hardcoded
+                    #3b82f6 three.js edge color below — theming just the legend would
+                    desync it from the actual rendered edge color on non-blue themes. */}
+                <span className="inline-block w-4 h-0 border-t border-blue-400" />
+                <span className="text-gray-500">linked</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="inline-block w-4 h-0 border-t border-gray-500" />
+                <span className="text-gray-500">similar</span>
+              </div>
             </div>
           </div>
+          <button
+            onClick={() => setLegendOpen(o => !o)}
+            aria-expanded={legendOpen}
+            className="roomy-viewport:hidden pointer-events-auto flex items-center gap-1.5 px-2.5 py-1.5 min-h-[32px] text-[11px] bg-port-bg/90 border border-port-border text-gray-400 hover:text-white rounded-lg transition-colors"
+          >
+            <Info size={12} />
+            Legend
+          </button>
         </div>
 
-        {/* Tooltip */}
+        {/* Hover tooltip. Suppressed on a coarse pointer: there is no hover to
+            preview with — a tap selects the node and the detail panel below
+            already shows the same record — and it would otherwise flash under
+            the user's own finger. Position is clamped so it can't run off the
+            right edge of a narrow window, where `x + 12` alone would clip it. */}
         {hoveredNode && (
           <div
-            className="fixed z-50 pointer-events-none bg-port-bg border border-port-border rounded-lg px-3 py-2 shadow-lg max-w-xs"
-            style={{ left: tooltipPos.x + 12, top: tooltipPos.y - 12 }}
+            className="fixed z-50 pointer-events-none pointer-coarse:hidden bg-port-bg border border-port-border rounded-lg px-3 py-2 shadow-lg"
+            style={{
+              maxWidth: TOOLTIP_WIDTH,
+              left: Math.max(8, Math.min(tooltipPos.x + 12, window.innerWidth - TOOLTIP_WIDTH - 8)),
+              top: Math.max(8, tooltipPos.y - 12)
+            }}
           >
             <div className="flex items-center gap-2 mb-1">
               <span className={`px-1.5 py-0.5 text-[10px] rounded-full border ${MEMORY_TYPE_COLORS[hoveredNode.type] || 'border-port-border text-gray-400'}`}>
