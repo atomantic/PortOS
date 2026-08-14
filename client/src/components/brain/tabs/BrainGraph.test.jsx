@@ -9,6 +9,9 @@ import userEvent from '@testing-library/user-event';
 // back are HTMLElements without the three.js geometry API.
 vi.mock('@react-three/fiber', () => ({
   Canvas: () => <div data-testid="graph-canvas" />,
+  // GraphScene reads the live camera through this; it is never rendered here,
+  // but the named import has to resolve.
+  useThree: () => ({ camera: null, size: { width: 0, height: 0 } }),
 }));
 vi.mock('@react-three/drei', () => ({ OrbitControls: () => null }));
 

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback, memo } from 'react';
-import { Canvas } from '@react-three/fiber';
+import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import {AlertTriangle, Zap, RefreshCw, X, ChevronRight, ArrowLeft, Compass, Info} from 'lucide-react';
@@ -7,6 +7,7 @@ import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import { BRAIN_TYPE_HEX, DESTINATIONS } from '../constants';
 import { buildGraph } from '../../../lib/graphSimulation';
+import { pickNearestNodeByScreenDistance, isTapGesture } from '../../../lib/graphPicking';
 import { pushFocus, popFocus, currentFocusId } from '../../../lib/brainGraphFocus';
 import EntityCombobox from '../../EntityCombobox';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
@@ -96,11 +97,33 @@ function GraphEdges({ simEdges, selectedId }) {
 // move over the canvas (it tracks the tooltip position), and every prop here is
 // already identity-stable across that render — so without memo each move
 // reconciles a <mesh> per node for nothing.
-const GraphScene = memo(function GraphScene({ graph, selectedId, adjacentIds, onSelect, onFocus, onHover }) {
+const GraphScene = memo(function GraphScene({ graph, selectedId, adjacentIds, onSelect, onFocus, onHover, pickRef, touchGestureRef }) {
   const sphereGeo = useMemo(() => new THREE.SphereGeometry(1, 16, 12), []);
+  const { camera, size } = useThree();
 
   const selNode = selectedId ? graph.idMap.get(selectedId) : null;
   const selRadius = selNode ? 0.4 + (selNode.importance ?? 0.5) * 0.8 : 0;
+
+  // Publish a live screen-space pick to the DOM wrapper, which owns the touch
+  // gesture (see the tap handler in BrainGraph). The camera object is stable
+  // across orbiting, so the matrices are read at tap time, not captured here.
+  useEffect(() => {
+    if (!pickRef) return;
+    pickRef.current = (point) => {
+      camera.updateMatrixWorld();
+      const viewProjection = new THREE.Matrix4()
+        .multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
+        .elements;
+      return pickNearestNodeByScreenDistance({
+        nodes: graph.simNodes,
+        viewProjection,
+        width: size.width,
+        height: size.height,
+        point
+      });
+    };
+    return () => { pickRef.current = null; };
+  }, [camera, graph, size.width, size.height, pickRef]);
 
   return (
     <>
@@ -123,7 +146,16 @@ const GraphScene = memo(function GraphScene({ graph, selectedId, adjacentIds, on
             geometry={sphereGeo}
             scale={radius}
             position={[node.x, node.y, node.z]}
-            onClick={(e) => { e.stopPropagation(); onSelect(node); }}
+            // Touch selection is owned by the wrapper's threshold pick, which
+            // fires on `pointerup` — ahead of the compatibility `click` r3f
+            // raycasts here — so a tap that lands on a mesh must not toggle the
+            // same node a second time. `click` is a MouseEvent with no
+            // `pointerType` after a touch, hence the recorded gesture ref.
+            onClick={(e) => {
+              e.stopPropagation();
+              if (touchGestureRef?.current) return;
+              onSelect(node);
+            }}
             onDoubleClick={(e) => { e.stopPropagation(); onFocus(node); }}
             onPointerOver={(e) => { e.stopPropagation(); onHover(node); }}
             onPointerOut={() => onHover(null)}
@@ -171,6 +203,11 @@ export default function BrainGraph() {
 
   const graphRef = useRef(null);
   const dragStartRef = useRef(null);
+  // Set by GraphScene: (point in canvas-local px) => node | null.
+  const pickRef = useRef(null);
+  // True while the in-flight gesture came from a finger, so the mesh raycast
+  // and onPointerMissed can stand down for the threshold pick below.
+  const touchGestureRef = useRef(false);
 
   const focusId = currentFocusId(focusTrail);
 
@@ -284,8 +321,10 @@ export default function BrainGraph() {
     return () => { cancelled = true; };
   }, [selectedNode]);
 
+  // A null node clears the selection (an empty-space tap); re-selecting the
+  // current node toggles it off.
   const handleSelect = useCallback((node) => {
-    setSelectedNode(prev => prev?.id === node.id ? null : node);
+    setSelectedNode(prev => (node && prev?.id !== node.id ? node : null));
   }, []);
 
   const handleHover = useCallback((node) => {
@@ -303,13 +342,38 @@ export default function BrainGraph() {
     return () => window.removeEventListener('keydown', onKey);
   }, [selectedNode]);
 
+  // Mouse only: a touch tap is resolved by handlePointerUp below (which also
+  // owns clearing on an empty-space tap), and would otherwise be undone here by
+  // the compatibility `click` r3f fires afterwards.
   const handlePointerMissed = useCallback((e) => {
-    const start = dragStartRef.current;
-    if (!start) return;
-    if (Math.abs(e.clientX - start.x) < 5 && Math.abs(e.clientY - start.y) < 5) {
+    if (touchGestureRef.current) return;
+    if (isTapGesture(dragStartRef.current, { x: e.clientX, y: e.clientY })) {
       setSelectedNode(null);
     }
   }, []);
+
+  const handlePointerDown = useCallback((e) => {
+    // A second finger is a pinch-zoom or two-finger pan, never a tap — drop the
+    // recorded start so neither the threshold pick nor the miss-clear can fire
+    // for it (both gate on `isTapGesture`, which is false without a start).
+    const secondFinger = touchGestureRef.current && !e.isPrimary;
+    dragStartRef.current = secondFinger ? null : { x: e.clientX, y: e.clientY };
+    touchGestureRef.current = e.pointerType === 'touch';
+  }, []);
+
+  // Touch selection. The raw mesh raycast needs the ray to hit a ~10px sphere;
+  // instead project every node and take the nearest within a finger-sized
+  // radius (see lib/graphPicking.js). Runs on `pointerup` on the wrapper, which
+  // bubbles after the canvas' own pointerup and before the `click` r3f picks
+  // with — so this result is what sticks. Mouse input is untouched.
+  const handlePointerUp = useCallback((e) => {
+    if (!touchGestureRef.current) return;
+    const end = { x: e.clientX, y: e.clientY };
+    if (!isTapGesture(dragStartRef.current, end)) return; // an orbit drag
+    const rect = e.currentTarget.getBoundingClientRect();
+    const picked = pickRef.current?.({ x: end.x - rect.left, y: end.y - rect.top }) ?? null;
+    handleSelect(picked);
+  }, [handleSelect]);
 
   // refresh:true re-embeds already-mapped records — the recovery path for
   // memory entries that diverged before synced-in records were re-vectorized
@@ -527,7 +591,8 @@ export default function BrainGraph() {
           desktop, floors at 240px so it stays usable on a short viewport. */}
       <div
         className="relative bg-port-card border border-port-border rounded-lg overflow-hidden h-[clamp(240px,45vh,500px)]"
-        onPointerDown={(e) => { dragStartRef.current = { x: e.clientX, y: e.clientY }; }}
+        onPointerDown={handlePointerDown}
+        onPointerUp={handlePointerUp}
         onPointerMove={(e) => setTooltipPos({ x: e.clientX, y: e.clientY })}
       >
         {graph && (
@@ -545,6 +610,8 @@ export default function BrainGraph() {
               onSelect={handleSelect}
               onFocus={focusNode}
               onHover={handleHover}
+              pickRef={pickRef}
+              touchGestureRef={touchGestureRef}
             />
           </Canvas>
         )}

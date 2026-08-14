@@ -74,6 +74,7 @@ grep -i "what you want to do" client/src/lib/README.md
 | Module | Purpose |
 |---|---|
 | `brainGraphFocus.js` | Pure focus-trail (breadcrumb) transitions for BrainGraph re-focus navigation. |
+| `graphPicking.js` | Screen-space touch picking for the 3D brain graph (#4114). `projectToScreen(point, viewProjection, width, height)` projects a world point to canvas-local pixels (y down, `null` when the point sits on or behind the camera plane); `pickNearestNodeByScreenDistance({ nodes, viewProjection, width, height, point, threshold })` returns the node whose projected centre is nearest the tap within `TOUCH_PICK_THRESHOLD_PX` (44px — a max-importance sphere only projects to ~38px at `OrbitControls minDistance`, so a tap anywhere inside a node still lands), tie-broken by depth then array order; `isTapGesture(start, end, slop)` separates a tap from an orbit drag (`TAP_SLOP_PX`). Takes the 16 flattened column-major `THREE.Matrix4` elements rather than a camera, so it stays three.js-free and unit-testable — jsdom has no WebGL context and therefore no raycast to exercise. |
 | `graphSimulation.js` | 3D force simulation parameters for BrainGraph / CyberCity. |
 | `goalFeatureMap.js` | Deterministic goal `category` → PortOS feature-area deep-link map (Daily Driver). `getGoalFeatureAreas(goal)` honors the per-goal `featureAreas` override, else the category default. Mirrored byte-for-byte from `server/lib/`. |
 

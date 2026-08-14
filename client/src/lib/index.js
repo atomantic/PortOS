@@ -53,6 +53,7 @@ export * from './wrImageDefaults.js';
 
 // === Graph & sim ===
 export * from './brainGraphFocus.js';
+export * from './graphPicking.js';
 export * from './graphSimulation.js';
 export * from './goalFeatureMap.js';
 
