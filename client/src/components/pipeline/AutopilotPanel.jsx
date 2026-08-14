@@ -27,6 +27,7 @@ import Pill from '../ui/Pill';
 import ProviderModelSelector from '../ProviderModelSelector';
 import AutopilotMilestones from './AutopilotMilestones';
 import SeriesAutopilotSchedule from './SeriesAutopilotSchedule';
+import { severityColor } from './constants.js';
 
 // Convergence-round bounds — mirror the server (seriesAutopilot.js + the
 // pipelineEditorialChecks settings schema). 0 = skip that gate entirely.
@@ -266,12 +267,6 @@ function RoundInput({ id, label, settingKey, value, setValue, persist, max = ROU
   );
 }
 
-const SEVERITY_COLORS = {
-  high: 'text-port-error border-port-error/40 bg-port-error/10',
-  medium: 'text-port-warning border-port-warning/40 bg-port-warning/10',
-  low: 'text-gray-400 border-gray-500/30 bg-gray-700/20',
-};
-
 // Step labels are shared with the milestone map (lib/autopilotMilestones.js) so
 // the live status line and the map can't name the same step differently.
 const stepLabel = autopilotStepLabel;
@@ -477,7 +472,7 @@ function Findings({ items }) {
   return (
     <ul className="space-y-1.5 mt-2">
       {items.map((f, i) => (
-        <li key={i} className={`text-xs p-2 rounded border ${SEVERITY_COLORS[f.severity] || SEVERITY_COLORS.medium}`}>
+        <li key={i} className={`text-xs p-2 rounded border ${severityColor(f.severity)}`}>
           <div className="flex items-center gap-2">
             <AlertCircle size={12} />
             <span className="uppercase tracking-wider font-semibold">{f.severity || 'note'}</span>

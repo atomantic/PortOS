@@ -1,0 +1,1 @@
+- Pipeline severity styling (series review, autopilot, arc-canvas verification and completeness panels) now reads one shared palette instead of three duplicate inline copies, so a tweak can't land on one panel only.

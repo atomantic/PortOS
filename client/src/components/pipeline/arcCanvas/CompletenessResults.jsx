@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { Link } from 'react-router';
 import { X, FileSearch, FileText } from 'lucide-react';
-import { SEVERITY_COLORS } from './shared.js';
+import { severityColor } from '../constants.js';
 
 // Human-readable labels for the manuscript-completeness categories.
 const COMPLETENESS_CATEGORY_LABELS = {
@@ -55,7 +55,7 @@ export default function CompletenessResults({ issues, onDismiss, seriesId }) {
             <span className="text-[11px] uppercase tracking-wider text-gray-500">{COMPLETENESS_CATEGORY_LABELS[cat]} ({list.length})</span>
             <ul className="space-y-1">
               {list.map((iss, i) => (
-                <li key={i} className={`text-xs p-2 rounded border ${SEVERITY_COLORS[iss.severity] || SEVERITY_COLORS.medium}`}>
+                <li key={i} className={`text-xs p-2 rounded border ${severityColor(iss.severity)}`}>
                   {iss.location ? <span className="font-medium">{iss.location}: </span> : null}
                   <span>{iss.problem}</span>
                   {iss.suggestion ? <p className="mt-1 text-gray-300"><span className="opacity-70">Suggestion: </span>{iss.suggestion}</p> : null}

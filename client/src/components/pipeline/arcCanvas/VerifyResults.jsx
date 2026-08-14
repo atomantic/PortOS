@@ -1,5 +1,5 @@
 import { AlertCircle, Wand2, Loader2, Lock } from 'lucide-react';
-import { SEVERITY_COLORS } from './shared.js';
+import { severityColor } from '../constants.js';
 
 export default function VerifyResults({ issues, onDismiss, onResolveAll, onResolveOne, resolvingAll, resolvingIdx, title = 'Verification', lockedNote = null }) {
   const busy = resolvingAll || (resolvingIdx && resolvingIdx.size > 0);
@@ -39,7 +39,7 @@ export default function VerifyResults({ issues, onDismiss, onResolveAll, onResol
         {issues.map((iss, i) => {
           const resolvingThis = resolvingIdx && resolvingIdx.has(i);
           return (
-            <li key={i} className={`text-xs p-2 rounded border ${SEVERITY_COLORS[iss.severity] || SEVERITY_COLORS.medium}`}>
+            <li key={i} className={`text-xs p-2 rounded border ${severityColor(iss.severity)}`}>
               <div className="flex items-center gap-2 mb-1">
                 <AlertCircle size={12} />
                 <span className="uppercase tracking-wider font-semibold">{iss.severity}</span>

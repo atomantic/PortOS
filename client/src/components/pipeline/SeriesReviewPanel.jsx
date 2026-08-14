@@ -19,12 +19,7 @@ import {
   getPipelineSeries,
   listPipelineIssues,
 } from '../../services/api';
-
-const SEVERITY_STYLES = {
-  high: 'text-port-error border-port-error/40 bg-port-error/10',
-  medium: 'text-port-warning border-port-warning/40 bg-port-warning/10',
-  low: 'text-gray-400 border-gray-500/30 bg-gray-700/20',
-};
+import { severityColor } from './constants.js';
 
 const RUN_ENDED = new Set(['complete', 'canceled', 'error']);
 // The fix run's terminal frames: `rejected` = the cos gate/budget refused it.
@@ -425,7 +420,7 @@ export default function SeriesReviewPanel({ series, onSeriesUpdate, onIssuesUpda
                   </div>
                   <ul className="space-y-1">
                     {g.items.map((f) => (
-                      <li key={f.commentId} className={`p-2 rounded border ${SEVERITY_STYLES[f.severity] || SEVERITY_STYLES.medium}`}>
+                      <li key={f.commentId} className={`p-2 rounded border ${severityColor(f.severity)}`}>
                         <div className="flex items-center gap-2">
                           <AlertCircle size={11} />
                           <span className="uppercase tracking-wider font-semibold text-[10px]">{f.severity}</span>
