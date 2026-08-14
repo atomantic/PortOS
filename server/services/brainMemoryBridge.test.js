@@ -582,14 +582,21 @@ describe('brainMemoryBridge — SongBook enrollment (issue #4105)', () => {
     expect(payload.content.length).toBeLessThan(1000);
   });
 
-  it('omits the setup line entirely when a song has no key/tuning/capo', async () => {
+  it('omits the setup line when a song has no key/tuning and capo is the 0 default', async () => {
     const bridge = await loadBridge();
 
+    // `capo: 0` is the schema default meaning "no capo" — not a capo at fret 0
+    // — so it contributes nothing, and with no key/tuning the line disappears.
     const payload = bridge.brainRecordToMemory('songs', {
       id: 's2', title: 'Bare Song', capo: 0, content: { format: 'tab', text: '' }
     });
 
     expect(payload.content).toBe('Song: Bare Song');
+
+    // A real capo still renders, so the omission above is the 0 default and not
+    // the whole field being dropped.
+    const capoed = bridge.brainRecordToMemory('songs', { id: 's3', title: 'Capoed', capo: 3 });
+    expect(capoed.content).toBe('Song: Capoed\nCapo: 3');
   });
 
   it('re-embeds a song on :upserted through the debounced queue', async () => {

@@ -67,7 +67,13 @@ const entityLabel = (record) => record.name || record.title || '(untitled)';
 // SongBook record — an untyped chain would put `[object Object]` in the
 // tooltip. `artist` sits ahead of `notes` so a song reads as "who plays it"
 // rather than whatever practice note happens to be attached.
-const SUMMARY_FIELDS = ['context', 'oneLiner', 'artist', 'notes', 'content'];
+//
+// Kept identical to `BODY_FIELDS` in client/src/components/brain/tabs/BrainGraph.jsx:
+// the detail panel falls back to this server-computed summary when the full
+// record hasn't loaded, so a different field order would make the text jump on
+// load. `description` is inert here (no entity store carries it — goals set
+// their summary directly below) but stays in the list so the two can't drift.
+const SUMMARY_FIELDS = ['description', 'context', 'oneLiner', 'artist', 'notes', 'content'];
 const entitySummary = (record) => {
   for (const field of SUMMARY_FIELDS) {
     if (typeof record[field] === 'string' && record[field]) return record[field];

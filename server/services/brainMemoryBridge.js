@@ -170,7 +170,10 @@ function composeSongContent(r) {
   const setup = [
     r.key && `Key: ${r.key}`,
     r.tuning && `Tuning: ${r.tuning}`,
-    r.capo ? `Capo: ${r.capo}` : null
+    // `capo: 0` is the schema default and means "no capo" — not "capo at fret
+    // 0" — so it is legitimately omitted rather than rendered as `Capo: 0`.
+    // Explicit `> 0` so the intent doesn't read as an accidental truthiness bug.
+    r.capo > 0 ? `Capo: ${r.capo}` : null
   ].filter(Boolean);
   if (setup.length) parts.push(setup.join(' · '));
   if (r.notes) parts.push(r.notes);
