@@ -12,6 +12,7 @@ import { pushFocus, popFocus, currentFocusId } from '../../../lib/brainGraphFocu
 import EntityCombobox from '../../EntityCombobox';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import BrailleSpinner from '../../BrailleSpinner';
+import useHoverTooltip from '../../../hooks/useHoverTooltip';
 import { formatDateNumeric } from '../../../utils/formatters';
 
 const EDGE_COLORS = {
@@ -102,9 +103,9 @@ function GraphEdges({ simEdges, selectedId }) {
 }
 
 // Memoized: the container's onPointerMove re-renders BrainGraph on every mouse
-// move over the canvas (it tracks the tooltip position), and every prop here is
-// already identity-stable across that render — so without memo each move
-// reconciles a <mesh> per node for nothing.
+// move over the canvas WHILE A NODE IS HOVERED (it tracks the tooltip position),
+// and every prop here is already identity-stable across that render — so without
+// memo each move reconciles a <mesh> per node for nothing.
 const GraphScene = memo(function GraphScene({ graph, selectedId, adjacentIds, onSelect, onFocus, onHover, pickRef, touchGestureRef }) {
   const sphereGeo = useMemo(() => new THREE.SphereGeometry(1, 16, 12), []);
   const { camera, size } = useThree();
@@ -165,7 +166,10 @@ const GraphScene = memo(function GraphScene({ graph, selectedId, adjacentIds, on
               onSelect(node);
             }}
             onDoubleClick={(e) => { e.stopPropagation(); onFocus(node); }}
-            onPointerOver={(e) => { e.stopPropagation(); onHover(node); }}
+            // Pass the enter event's coordinates up: the wrapper's onPointerMove
+            // only tracks the cursor WHILE a node is hovered, so the tooltip's
+            // first frame has to be placed from this event.
+            onPointerOver={(e) => { e.stopPropagation(); onHover(node, { x: e.clientX, y: e.clientY }); }}
             onPointerOut={() => onHover(null)}
           >
             <meshStandardMaterial
@@ -194,8 +198,9 @@ export default function BrainGraph() {
   const [subLoading, setSubLoading] = useState(false);
   const [selectedNode, setSelectedNode] = useState(null);
   const [fullRecord, setFullRecord] = useState(null);
-  const [hoveredNode, setHoveredNode] = useState(null);
-  const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
+  // Hover tooltip state + the ref-gated pointer tracking that keeps a plain
+  // mouse move from re-rendering this component when nothing can paint.
+  const { hoveredNode, tooltipPos, handleHover, handlePointerMove } = useHoverTooltip();
   const [layoutKey, setLayoutKey] = useState(0);
   const [syncing, setSyncing] = useState(false);
   const [confirmingRefresh, setConfirmingRefresh] = useState(false);
@@ -333,10 +338,6 @@ export default function BrainGraph() {
   // current node toggles it off.
   const handleSelect = useCallback((node) => {
     setSelectedNode(prev => (node && prev?.id !== node.id ? node : null));
-  }, []);
-
-  const handleHover = useCallback((node) => {
-    setHoveredNode(node);
   }, []);
 
   // Escape always clears selection. Clicking "empty space" is unreliable for
@@ -605,7 +606,7 @@ export default function BrainGraph() {
         className="relative bg-port-card border border-port-border rounded-lg overflow-hidden h-[clamp(240px,45vh,500px)]"
         onPointerDown={handlePointerDown}
         onPointerUp={handlePointerUp}
-        onPointerMove={(e) => setTooltipPos({ x: e.clientX, y: e.clientY })}
+        onPointerMove={handlePointerMove}
       >
         {graph && (
           <Canvas

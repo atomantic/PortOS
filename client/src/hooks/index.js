@@ -24,6 +24,7 @@ export { default as useEscapeKey } from './useEscapeKey.js';
 export { default as useFieldDraft } from './useFieldDraft.js';
 export { default as useFocusTrap } from './useFocusTrap.js';
 export { default as useNoteSave } from './useNoteSave.js';
+export { default as useHoverTooltip } from './useHoverTooltip.js';
 export { default as useImageGenQueue } from './useImageGenQueue.js';
 export { default as useImageRenderSettings } from './useImageRenderSettings.js';
 export { default as useUserTimezone } from './useUserTimezone.js';

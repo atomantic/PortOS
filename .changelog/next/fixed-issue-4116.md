@@ -1,0 +1,1 @@
+- Brain graph no longer re-renders on every pointer move over the 3D canvas — the tooltip position now updates only while a node is actually hovered, and never for touch input (where the tooltip is hidden)
