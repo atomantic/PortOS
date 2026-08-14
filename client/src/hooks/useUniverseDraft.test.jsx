@@ -1212,6 +1212,7 @@ describe('useUniverseDraft', () => {
         logline: '',
         premise: '',
         styleNotes: '',
+        moodBoardId: null,
         categories: seededCategories(),
         compositeSheets: [],
         influences: { embrace: [], avoid: [] },
