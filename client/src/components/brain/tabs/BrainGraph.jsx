@@ -22,6 +22,14 @@ const EDGE_COLORS = {
 
 const BRAIN_TYPES = ['people', 'projects', 'ideas', 'admin', 'memories', 'songs', 'goals', 'journals'];
 
+// Only a gesture on the WebGL canvas itself picks a node. The overlay chrome —
+// "Clear selection", the legend toggle, the loading veil — sits INSIDE the same
+// wrapper the touch handlers are bound to, so its taps bubble there too; without
+// this, tapping the legend toggle would also select whichever node happens to
+// project nearest that corner. (r3f binds its own listeners to the canvas, so
+// the mouse path never had this problem.)
+const isCanvasGesture = (e) => e.target?.tagName === 'CANVAS';
+
 // Widest the hover tooltip renders. Single source for both its max-width and
 // the clamp that keeps it inside the viewport — as a CSS class plus a mirrored
 // constant the two silently drift apart.
@@ -353,6 +361,7 @@ export default function BrainGraph() {
   }, []);
 
   const handlePointerDown = useCallback((e) => {
+    if (!isCanvasGesture(e)) return;
     // A second finger is a pinch-zoom or two-finger pan, never a tap — drop the
     // recorded start so neither the threshold pick nor the miss-clear can fire
     // for it (both gate on `isTapGesture`, which is false without a start).
@@ -367,10 +376,13 @@ export default function BrainGraph() {
   // bubbles after the canvas' own pointerup and before the `click` r3f picks
   // with — so this result is what sticks. Mouse input is untouched.
   const handlePointerUp = useCallback((e) => {
-    if (!touchGestureRef.current) return;
+    if (!touchGestureRef.current || !isCanvasGesture(e)) return;
     const end = { x: e.clientX, y: e.clientY };
     if (!isTapGesture(dragStartRef.current, end)) return; // an orbit drag
-    const rect = e.currentTarget.getBoundingClientRect();
+    // The CANVAS rect, not the wrapper's: the wrapper carries a 1px border, and
+    // `size` from useThree measures the canvas, so mixing the two shifts every
+    // projected position against the tap.
+    const rect = e.target.getBoundingClientRect();
     const picked = pickRef.current?.({ x: end.x - rect.left, y: end.y - rect.top }) ?? null;
     handleSelect(picked);
   }, [handleSelect]);
