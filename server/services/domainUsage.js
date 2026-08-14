@@ -40,7 +40,11 @@ function emptyUsageMap() {
 // date isn't today (or the file is missing / hand-edited into a bad shape).
 async function readFreshLedger() {
   const today = todayKey();
-  const stored = await readJSONFile(USAGE_FILE, null, { logError: false });
+  // STRICT (#4115): the fall-through below resets the ledger to an empty map,
+  // and `recordDomainUsage` writes that back — so a swallowed unreadable file
+  // both zeroes the Domain Budgets panel's actions/ms and re-opens a domain that
+  // had already spent its daily cap. Only ENOENT / a stale date are real rolls.
+  const stored = await readJSONFile(USAGE_FILE, null, { logError: false, strict: true });
   if (!stored || stored.date !== today || typeof stored.usage !== 'object' || stored.usage === null) {
     return { date: today, usage: emptyUsageMap() };
   }

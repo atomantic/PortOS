@@ -7,6 +7,11 @@ vi.mock('./cosEvents.js', () => ({
 
 vi.mock('../lib/fileUtils.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
+  // Strict twin (#4115) — `services/settings.js#readSettingsStrict` reads through
+  // it, and this factory is exhaustive (no `importActual` spread), so an omitted
+  // export is a hard "not defined on the mock" throw. `ok: true, value: null` is
+  // the absent-file shape, matching `tryReadFile`'s null above.
+  tryReadFileStrict: vi.fn().mockResolvedValue({ ok: true, value: null }),
   readJSONFile: vi.fn(),
   ensureDir: vi.fn().mockResolvedValue(),
   atomicWrite: vi.fn().mockResolvedValue(),

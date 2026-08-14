@@ -82,7 +82,10 @@ export function cancelVideoDownload(jobId) {
 
 /** List downloaded videos — the `source: 'download'` slice of video-history, newest first. */
 export async function listDownloads() {
-  const history = await loadHistory().catch(() => []);
+  // No `.catch(() => [])`: that re-swallowed exactly what `loadHistory`'s strict
+  // read exists to surface (#4115), turning an unreadable history into a
+  // confident "you have no downloads". Let it bubble to the error middleware.
+  const history = await loadHistory();
   return (Array.isArray(history) ? history : []).filter((h) => h?.source === 'download');
 }
 
@@ -93,7 +96,9 @@ export async function listDownloads() {
  * (identical lifecycle to a deleted generation).
  */
 export async function deleteDownload(id) {
-  const history = await loadHistory().catch(() => []);
+  // Same reason as listDownloads: an unreadable history must not answer
+  // "not found" (a 404 the user would read as "already gone").
+  const history = await loadHistory();
   const item = (Array.isArray(history) ? history : []).find((h) => h?.id === id);
   if (!item || item.source !== 'download') {
     throw new ServerError('Downloaded video not found', { status: 404, code: 'NOT_FOUND' });

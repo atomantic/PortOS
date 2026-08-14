@@ -89,7 +89,12 @@ async function loadApps() {
 
   await ensureDir(DATA_DIR);
 
-  const data = await readJSONFile(APPS_FILE, { apps: {} });
+  // STRICT (#4115): this reader WRITES — an empty `data.apps` makes the baseline
+  // branch below rewrite apps.json with a lone PortOS entry, so a swallowed
+  // EACCES/EIO would delete every registered app. It also feeds displayed counts
+  // (`getAppStatusSummary`'s total/online/unmanaged), where a fake 0 reads as
+  // fact. Absent is still a legitimate first-run empty; unreadable is not.
+  const data = await readJSONFile(APPS_FILE, { apps: {} }, { strict: true });
 
   // Normalize: ensure data.apps is always an object
   if (!data.apps || typeof data.apps !== 'object') {

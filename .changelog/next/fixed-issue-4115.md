@@ -1,0 +1,1 @@
+- An unreadable data file no longer reports as an empty one — usage totals, app/instance registries, notification and review counts, memory stats, decision-log stats, quota-burn dispatch counts, domain budgets and video history now refuse to publish a fake zero or overwrite themselves with it

@@ -287,6 +287,10 @@ async function evaluate({ trigger = 'scheduled', familyId = null, jobId = null, 
   if (!quotas) return finish({ dispatched: false, reason: 'provider quota read failed' });
 
   const [dispatches, blocks] = await Promise.all([getQuotaBurnDispatches(), getActiveQuotaBurnBlocks()]);
+  // An unreadable dispatch ledger reads as "0 used this window", which would
+  // walk straight past `maxDispatchesPerWindow` and spend quota the user already
+  // spent (#4115). Same posture as the provider-quota read above: skip the cycle.
+  if (!dispatches) return finish({ dispatched: false, reason: 'dispatch ledger read failed' });
   // `force` is the page's per-job "Run now" — the window/reserve/cap/denial gates
   // that bound UNATTENDED burns don't apply to a run the user just asked for. It
   // goes through the same selection, so the candidate still carries the family's
@@ -416,7 +420,11 @@ export async function getQuotaBurnStatus({ refresh = false } = {}) {
       console.error(`❌ Quota-burn status could not read provider quota: ${err.message}`);
       return [];
     }),
-    getQuotaBurnDispatches(),
+    // Degrades to "no dispatches counted" on an unreadable ledger for the same
+    // reason the completions read below does: on the STATUS path the cost of
+    // being wrong is a stale `N/M used` label, not re-spent quota. The cycle's
+    // read of the same ledger refuses to run instead.
+    getQuotaBurnDispatches().then((ledger) => ledger || {}),
     getActiveQuotaBurnBlocks(),
     // An unreadable ledger degrades to "no badges" here rather than failing the
     // whole status read — the opposite of the CYCLE's posture, and deliberately

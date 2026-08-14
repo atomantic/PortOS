@@ -54,7 +54,12 @@ async function loadDecisions() {
 
   await ensureDir(DATA_DIR);
 
-  decisionCache = await readJSONFile(DECISION_FILE, { ...DEFAULT_DATA });
+  // STRICT (#4115): `getDecisionSummary()` divides by `recentDecisions.length`
+  // for the transparency score and reduces `count` into `totalOccurrences` — a
+  // swallowed unreadable read publishes those as real numbers over an empty set.
+  // `data.stats.totalDecisions` is also a LIFETIME counter that `saveDecisions`
+  // writes back, so the same read resets it to zero on the next recordDecision.
+  decisionCache = await readJSONFile(DECISION_FILE, { ...DEFAULT_DATA }, { strict: true });
   cacheLoaded = true;
   return decisionCache;
 }

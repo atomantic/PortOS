@@ -125,7 +125,13 @@ export function rollupOldDailyActivity(dailyActivity, monthlyActivity, { retenti
 export async function loadUsage() {
   await ensureDir(DATA_DIR);
 
-  usageData = await readJSONFile(USAGE_FILE, null);
+  // STRICT (#4115): the `!usageData` branch below does not just report an empty
+  // total — it atomically OVERWRITES usage.json with zeros on the same tick. A
+  // swallowed EACCES/EIO would therefore erase every historical session, cost,
+  // and rollup bucket permanently. Only a genuinely ABSENT file is a real fresh
+  // install; a present-but-unreadable one now throws before reaching the write
+  // (the module-load bootstrap at the bottom of this file already logs it).
+  usageData = await readJSONFile(USAGE_FILE, null, { strict: true });
   if (!usageData) {
     usageData = getEmptyUsage();
     await saveUsage();

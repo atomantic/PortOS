@@ -1,7 +1,6 @@
 import { join } from 'path';
-import { access } from 'fs/promises';
 import { EventEmitter } from 'events';
-import { safeJSONParse, PATHS, atomicWrite, tryReadFile } from '../lib/fileUtils.js';
+import { safeJSONParse, PATHS, atomicWrite, tryReadFile, tryReadFileStrict } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { isPlainObject, POLLUTING_KEYS } from '../lib/objects.js';
 
@@ -95,24 +94,13 @@ const loadRaw = async () => {
  * exists so unit tests can point it at a temp file without touching real data.
  */
 export const readSettingsStrict = async (filePath = SETTINGS_FILE) => {
-  const raw = await tryReadFile(filePath);
-  if (raw === null) {
-    // tryReadFile collapses BOTH an absent file (ENOENT) and a read failure
-    // (EACCES / EIO / …) to null. Probe with access() to tell them apart: an
-    // ABSENT file is the fresh-install default (auth off), while a file that
-    // EXISTS but couldn't be read is corrupt (fail closed).
-    try {
-      await access(filePath);
-      return { present: true, corrupt: true, settings: {} };   // exists but unreadable
-    } catch (err) {
-      // Only ENOENT proves the file is genuinely absent (fresh install → auth
-      // off). Any OTHER access() failure — EACCES because the parent directory
-      // lacks search permission, ENOTDIR, EIO — means we could NOT confirm
-      // absence, so it must fail closed (corrupt), not be mistaken for absent.
-      if (err?.code === 'ENOENT') return { present: false, corrupt: false, settings: {} };
-      return { present: true, corrupt: true, settings: {} };
-    }
-  }
+  // `tryReadFileStrict` keeps the distinction `tryReadFile` collapses, straight
+  // off the read's own errno — no second `access()` probe, which could disagree
+  // with the read it is explaining. `ok: false` = we could NOT confirm absence
+  // (EACCES on the file or a parent dir, ENOTDIR, EIO) → fail closed.
+  const { ok, value: raw } = await tryReadFileStrict(filePath);
+  if (!ok) return { present: true, corrupt: true, settings: {} };
+  if (raw === null) return { present: false, corrupt: false, settings: {} };
   // Present and read. safeJSONParse returns null for malformed/empty input; a
   // valid-JSON but non-object root (array, string, number) is likewise not a
   // settings document — either way, treat it as corrupt rather than reading

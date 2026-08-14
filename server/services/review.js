@@ -24,8 +24,13 @@ const ITEM_STATUSES = ['pending', 'completed', 'dismissed'];
 /**
  * Load all review items from file
  */
+// STRICT (#4115): `getPendingCounts()` reduces this list into the Review Hub's
+// total/alert/todo/briefing/cos tiles, so a swallowed unreadable read reports a
+// confident "0 pending" that is simply false. It is also the base of every
+// read-modify-write (createItem/status updates → `saveItems`), where an
+// unreadable file collapsing to `[]` would destroy every stored review item.
 async function loadItems() {
-  return readJSONFile(ITEMS_FILE, []);
+  return readJSONFile(ITEMS_FILE, [], { strict: true });
 }
 
 /**

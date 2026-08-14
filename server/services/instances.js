@@ -138,8 +138,14 @@ const DEFAULT_DATA = {
 
 // --- File I/O ---
 
+// STRICT (#4115): every mutation runs through `withData`, which writes whatever
+// this read returned straight back. Swallowing an unreadable instances.json into
+// DEFAULT_DATA therefore hands `ensureSelf` an identity-less record — it mints a
+// BRAND-NEW instanceId and `saveData` persists it over the real file, rotating
+// this node's federation identity and wiping every peer. ENOENT (never
+// federated) stays the trustworthy first-run empty.
 async function loadData() {
-  return await readJSONFile(INSTANCES_FILE, DEFAULT_DATA);
+  return await readJSONFile(INSTANCES_FILE, DEFAULT_DATA, { strict: true });
 }
 
 async function saveData(data) {

@@ -457,7 +457,8 @@ export function safeJSONParse(str, defaultValue = null, { allowArray = true, log
  *
  * NOTE: like `readJSONFile`, this conflates "absent" with "unreadable" — both
  * return null. When the caller derives a user-visible stat from the result (where
- * a fake empty is a lie, not a default), reach for `readJSONFileStrict` instead.
+ * a fake empty is a lie, not a default), reach for `tryReadFileStrict` (raw bytes)
+ * or `readJSONFileStrict` (parsed JSON) instead.
  *
  * @param {string} filePath - Path to read
  * @param {string|null} [encoding='utf8'] - Encoding (null for Buffer)
@@ -465,6 +466,40 @@ export function safeJSONParse(str, defaultValue = null, { allowArray = true, log
  */
 export async function tryReadFile(filePath, encoding = 'utf8') {
   return readFile(filePath, encoding).catch(() => null);
+}
+
+/**
+ * `tryReadFile` that reports whether the read is TRUSTWORTHY — the raw-bytes
+ * counterpart to `readJSONFileStrict`, for callers that parse (or count, or
+ * display) the contents themselves rather than handing the file to JSON.parse.
+ *
+ *   - ENOENT (never written) → `{ ok: true,  value: null }` — a genuine "nothing
+ *     here yet". Safe to treat as a real empty.
+ *   - any other read error   → `{ ok: false, value: null }` — EACCES, EIO,
+ *     EISDIR, a transient FS failure. We do NOT know the file is absent.
+ *   - read                   → `{ ok: true,  value: contents }`
+ *
+ * So the three states `tryReadFile` collapses into one `null` stay separable:
+ * `ok && value !== null` = read, `ok && value === null` = absent, `!ok` =
+ * present-but-unreadable. Windows swap-window retries are shared with
+ * `readJSONFileStrict`, so an `atomicWrite` in flight can't masquerade as ENOENT.
+ *
+ * @param {string} filePath - Path to read
+ * @param {string|null} [encoding='utf8'] - Encoding (null for Buffer)
+ * @returns {Promise<{ ok: boolean, value: string|Buffer|null }>}
+ *
+ * @example
+ * const { ok, value } = await tryReadFileStrict(LEDGER_FILE);
+ * if (!ok) throw new Error('ledger unreadable'); // never report a fake 0
+ */
+export async function tryReadFileStrict(filePath, encoding = 'utf8') {
+  return readWithSwapRetry(filePath, encoding).then(
+    (value) => ({ ok: true, value }),
+    // ENOENT is the ONLY errno that proves absence. Everything else — EACCES on
+    // the file or a parent dir, ENOTDIR, EIO — means we could not confirm it,
+    // which must stay distinct from "confirmed empty".
+    (err) => ({ ok: err?.code === 'ENOENT', value: null })
+  );
 }
 
 /**
@@ -553,7 +588,7 @@ async function hasSwapSibling(filePath) {
 }
 
 /**
- * `readFile(filePath, 'utf-8')` with the Windows-only retries that keep a read
+ * `readFile(filePath, encoding)` with the Windows-only retries that keep a read
  * racing `atomicWrite` from being mistaken for an empty/absent file (#4095).
  *
  * On POSIX this is a straight delegate — zero extra syscalls, zero delay.
@@ -570,12 +605,13 @@ async function hasSwapSibling(filePath) {
  * existing errno handling is unchanged.
  *
  * @param {string} filePath
- * @returns {Promise<string>}
+ * @param {string|null} [encoding='utf-8'] - Encoding (null for Buffer)
+ * @returns {Promise<string|Buffer>}
  */
-async function readTextWithSwapRetry(filePath) {
-  if (!isWindows()) return readFile(filePath, 'utf-8');
+async function readWithSwapRetry(filePath, encoding = 'utf-8') {
+  if (!isWindows()) return readFile(filePath, encoding);
   for (let attempt = 0; ; attempt += 1) {
-    const outcome = await readFile(filePath, 'utf-8').then((content) => ({ content }), (err) => ({ err }));
+    const outcome = await readFile(filePath, encoding).then((content) => ({ content }), (err) => ({ err }));
     if (!outcome.err) {
       if (attempt > 0) console.log(`⚠️ read succeeded after ${attempt} retry(s) — write swap in flight: ${basename(filePath)}`);
       return outcome.content;
@@ -624,7 +660,7 @@ async function readTextWithSwapRetry(filePath) {
 export async function readJSONFileStrict(filePath, defaultValue = null, { allowArray = true, logError = true } = {}) {
   let content;
   try {
-    content = await readTextWithSwapRetry(filePath);
+    content = await readWithSwapRetry(filePath);
   } catch (err) {
     // ENOENT = file doesn't exist → a trustworthy "nothing here yet", silently.
     // On win32 an ENOENT that was really an `atomicWrite` swap window has

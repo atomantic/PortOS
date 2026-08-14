@@ -18,7 +18,7 @@
  */
 
 import { join } from 'path';
-import { atomicWrite, PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { atomicWrite, PATHS, readJSONFileStrict } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { familyHasRunnableJobs, familyIsConfigured, isUnlimitedDispatchCap, normalizeQuotaBurnFamily } from '../lib/quotaBurnConfig.js';
 import { isPlainObject } from '../lib/objects.js';
@@ -34,10 +34,22 @@ const LEDGER_FILE = () => join(PATHS.cos, 'quota-burn-dispatches.json');
 // install.
 const LEDGER_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
-/** Dispatch counts per `<family>:<resetEpochMs>` window key. */
+/**
+ * Dispatch counts per `<family>:<resetEpochMs>` window key, or `null` when the
+ * ledger could not be read.
+ *
+ * The `null` is load-bearing, and matches `quotaBurnCompletions.js` /
+ * `quotaBurnDenials.js`, which read the sibling ledgers strictly for exactly this
+ * reason (#4115). A failed or corrupt read must not come back as "0 dispatches
+ * this window": `dispatchesUsed` is both the cap gate AND the number the family
+ * card shows as `N/M used`, so a swallowed read re-opens a spent window and then
+ * lets the next write persist the empty ledger over every surviving count — real
+ * quota overspend. Absent (never dispatched) is still a trustworthy `{}`.
+ */
 export async function getQuotaBurnDispatches() {
-  const loaded = await readJSONFile(LEDGER_FILE(), {});
-  return isPlainObject(loaded) ? loaded : {};
+  const { ok, value } = await readJSONFileStrict(LEDGER_FILE(), {}, { logError: false });
+  if (!ok) return null;
+  return isPlainObject(value) ? value : {};
 }
 
 const windowEpoch = (key) => Number(String(key).split(':').pop());
@@ -61,7 +73,12 @@ const ledgerWriteQueue = createFileWriteQueue();
 
 export async function recordQuotaBurnDispatch(key, { now = Date.now() } = {}) {
   return ledgerWriteQueue(async () => {
-    const ledger = pruneLedger(await getQuotaBurnDispatches(), now);
+    const loaded = await getQuotaBurnDispatches();
+    // Never overwrite a ledger we could not read — the same guard the sibling
+    // ledgers' `writeLedger` carries. Returning null tells the caller the
+    // dispatch went unrecorded rather than pretending the window is at 1.
+    if (!loaded) return null;
+    const ledger = pruneLedger(loaded, now);
     const next = { ...ledger, [key]: Number(ledger[key] || 0) + 1 };
     await atomicWrite(LEDGER_FILE(), next);
     return next;

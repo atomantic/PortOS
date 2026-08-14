@@ -172,12 +172,14 @@ describe('selectBurnCandidates bypassGatesFor', () => {
 describe('recordQuotaBurnDispatch', () => {
   afterEach(() => { vi.doUnmock('../lib/fileUtils.js'); vi.resetModules(); });
 
-  const withLedger = async (initial = {}) => {
+  // `readable: false` drives the present-but-unreadable case (#4115): the strict
+  // reader's `ok: false`, which must never be mistaken for an empty ledger.
+  const withLedger = async (initial = {}, { readable = true } = {}) => {
     vi.resetModules();
     let stored = { ...initial };
     vi.doMock('../lib/fileUtils.js', async (importActual) => ({
       ...(await importActual()),
-      readJSONFile: async () => ({ ...stored }),
+      readJSONFileStrict: async () => (readable ? { ok: true, value: { ...stored } } : { ok: false, value: {} }),
       // The delay must sit on the WRITE: it holds each read-modify-write open
       // long enough for the next caller's read to observe the pre-write state.
       // (A delay on the read instead resolves in a macrotask whose continuation
@@ -209,6 +211,21 @@ describe('recordQuotaBurnDispatch', () => {
     const { recordQuotaBurnDispatch } = await withLedger({ [`grok:${stale}`]: 3, 'grok:not-a-number': 1 });
     const next = await recordQuotaBurnDispatch(`grok:${NOW}`, { now: NOW });
     expect(next).toEqual({ 'grok:not-a-number': 1, [`grok:${NOW}`]: 1 });
+  });
+
+  // #4115: an unreadable ledger used to read as "0 dispatches this window",
+  // which both under-reports the family card's `N/M used` badge and lets the
+  // next write persist an empty ledger over every surviving count.
+  it('reports an unreadable ledger as null rather than an empty one', async () => {
+    const { getQuotaBurnDispatches } = await withLedger({ 'grok:1': 4 }, { readable: false });
+    await expect(getQuotaBurnDispatches()).resolves.toBeNull();
+  });
+
+  it('refuses to write over a ledger it could not read', async () => {
+    const { recordQuotaBurnDispatch } = await withLedger({ [`grok:${NOW}`]: 4 }, { readable: false });
+    // No write, and a null return so the caller knows the dispatch went
+    // unrecorded instead of believing the window is now at 1.
+    await expect(recordQuotaBurnDispatch(`grok:${NOW}`, { now: NOW })).resolves.toBeNull();
   });
 });
 

@@ -63,7 +63,12 @@ async function loadNotifications() {
 
   await ensureDirectory();
 
-  notificationsCache = await readJSONFile(NOTIFICATIONS_FILE, { version: 1, notifications: [] });
+  // STRICT (#4115): this feeds `getUnreadCount()`, the bell badge served by
+  // GET /api/notifications/count — a fake 0 there is a lie, not a default. It is
+  // also the base of every read-modify-write (`saveNotifications`), so a
+  // swallowed unreadable read would let the next markAsRead truncate the file.
+  // `ensureDirectory()` above can already reject, so callers tolerate a throw.
+  notificationsCache = await readJSONFile(NOTIFICATIONS_FILE, { version: 1, notifications: [] }, { strict: true });
   return notificationsCache;
 }
 

@@ -11,7 +11,12 @@ import { PATHS, readJSONFile, atomicWrite } from '../../lib/fileUtils.js';
 
 const HISTORY_FILE = join(PATHS.data, 'video-history.json');
 
-export const loadHistory = () => readJSONFile(HISTORY_FILE, []);
+// STRICT (#4115): every write to this file goes `loadHistory` → mutate →
+// `saveHistory`, so a present-but-unreadable video-history.json swallowed to `[]`
+// makes the next completed download persist an empty array over the user's whole
+// render history. The Media History page also counts this list ("Show more (N
+// remaining)"), where a fake 0 reads as fact. Absent stays a real first-run empty.
+export const loadHistory = () => readJSONFile(HISTORY_FILE, [], { strict: true });
 export const saveHistory = (h) => atomicWrite(HISTORY_FILE, h);
 
 // Serialized read-modify-write for the shared history file. `loadHistory` +

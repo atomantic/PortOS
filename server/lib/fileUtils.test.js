@@ -39,6 +39,8 @@ import {
   createCachedStore,
   readJSONFile,
   readJSONFileStrict,
+  tryReadFile,
+  tryReadFileStrict,
   readJSONLFile,
   appendJSONLine,
   readJSONLines,
@@ -514,6 +516,75 @@ describe('fileUtils', () => {
       await writeFile(filePath, '{"incomplete":');
       await readJSONFileStrict(filePath, {}, { logError: false });
       expect(warnSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  // #4115: `tryReadFile` had the same absent-vs-unreadable conflation as
+  // `readJSONFile` (a bare `.catch(() => null)`) but no strict counterpart at all.
+  // These pin the three-state contract for the raw-bytes variant.
+  describe('tryReadFileStrict', () => {
+    const testDir = join(tmpdir(), 'fileutils-tryreadstrict-test-' + Date.now());
+
+    beforeEach(async () => {
+      await mkdir(testDir, { recursive: true });
+    });
+
+    afterEach(async () => {
+      await rm(testDir, { recursive: true, force: true });
+    });
+
+    const eacces = () => Object.assign(new Error('permission denied'), { code: 'EACCES' });
+
+    it('reports ENOENT as a TRUSTWORTHY absence', async () => {
+      expect(await tryReadFileStrict(join(testDir, 'never-written.txt')))
+        .toEqual({ ok: true, value: null });
+    });
+
+    it('reports EACCES as NOT ok — an unreadable file is not an absent one', async () => {
+      const filePath = join(testDir, 'locked.txt');
+      await writeFile(filePath, 'real contents');
+
+      expect(await withUnreadableFile(eacces(), () => tryReadFileStrict(filePath)))
+        .toEqual({ ok: false, value: null });
+    });
+
+    it('reports a real non-ENOENT errno as NOT ok (reading a directory → EISDIR)', async () => {
+      // Unmocked, no synthetic errno: proves the classification keys off "not
+      // ENOENT" rather than a hard-coded list the real world can step outside of.
+      expect((await tryReadFileStrict(testDir)).ok).toBe(false);
+    });
+
+    it('returns the contents with ok when the read succeeds', async () => {
+      const filePath = join(testDir, 'present.txt');
+      await writeFile(filePath, 'hello');
+
+      expect(await tryReadFileStrict(filePath)).toEqual({ ok: true, value: 'hello' });
+    });
+
+    it('keeps an EMPTY file distinguishable from an absent one', async () => {
+      const filePath = join(testDir, 'empty.txt');
+      await writeFile(filePath, '');
+
+      expect(await tryReadFileStrict(filePath)).toEqual({ ok: true, value: '' });
+      expect(await tryReadFileStrict(join(testDir, 'gone.txt'))).toEqual({ ok: true, value: null });
+    });
+
+    it('honours a null encoding and returns a Buffer', async () => {
+      const filePath = join(testDir, 'bytes.bin');
+      await writeFile(filePath, Buffer.from([0x00, 0x01, 0xff]));
+
+      const { ok, value } = await tryReadFileStrict(filePath, null);
+      expect(ok).toBe(true);
+      expect(Buffer.isBuffer(value)).toBe(true);
+      expect([...value]).toEqual([0x00, 0x01, 0xff]);
+    });
+
+    it('matches tryReadFile on the value for every non-error case', async () => {
+      const filePath = join(testDir, 'parity.txt');
+      await writeFile(filePath, 'same bytes');
+
+      expect((await tryReadFileStrict(filePath)).value).toBe(await tryReadFile(filePath));
+      expect((await tryReadFileStrict(join(testDir, 'nope.txt'))).value).toBe(await tryReadFile(join(testDir, 'nope.txt')));
     });
   });
 

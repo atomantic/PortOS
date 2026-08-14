@@ -42,7 +42,11 @@ export async function loadIndex() {
   await ensureDirectories();
 
   const defaultIndex = { version: 1, lastUpdated: new Date().toISOString(), count: 0, memories: [] };
-  indexCache = await readJSONFile(INDEX_FILE, defaultIndex);
+  // STRICT (#4115): `index.count` and the byStatus tally ARE the Memory page's
+  // stat card (GET /api/memory/stats). Worse, the value is cached for the life of
+  // the process AND written back by `saveIndex` — one swallowed unreadable read
+  // would report 0 memories and then overwrite index.json with the empty default.
+  indexCache = await readJSONFile(INDEX_FILE, defaultIndex, { strict: true });
   return indexCache;
 }
 
@@ -65,7 +69,9 @@ export async function loadEmbeddings() {
   await ensureDirectories();
 
   const defaultEmbeddings = { model: null, dimension: 0, vectors: {} };
-  embeddingsCache = await readJSONFile(EMBEDDINGS_FILE, defaultEmbeddings);
+  // Same contract as `loadIndex` — `Object.keys(vectors).length` is the stats
+  // card's `withEmbeddings`, and `saveEmbeddings` writes this value back.
+  embeddingsCache = await readJSONFile(EMBEDDINGS_FILE, defaultEmbeddings, { strict: true });
   return embeddingsCache;
 }
 

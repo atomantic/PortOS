@@ -6,27 +6,25 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // serializer is exercised for real — writes are sequential in these tests anyway.
 vi.mock('../lib/fileUtils.js', async (importActual) => {
   const actual = await importActual();
+  const tryReadFile = vi.fn();
   return {
     ...actual,
     atomicWrite: vi.fn(),
-    tryReadFile: vi.fn()
+    tryReadFile,
+    // readSettingsStrict reads through the strict twin (#4115) so the
+    // absent-vs-unreadable split comes off the read's own errno instead of a
+    // second access() probe. Default it to MIRROR the mocked tryReadFile — the
+    // per-test content stubs below then drive every read path unchanged, and a
+    // null (nothing on disk) reads as a trustworthy absence. The two tests that
+    // need the unreadable branch override this mock directly.
+    tryReadFileStrict: vi.fn(async (...args) => ({ ok: true, value: await tryReadFile(...args) }))
   };
 });
 
-// readSettingsStrict probes with a real access() for the absent-vs-unreadable
-// split, so keep the real implementation as the default and let a single test
-// override it to drive the non-ENOENT branch (see below for why it can't use a
-// real filesystem quirk).
-vi.mock('fs/promises', async (importActual) => {
-  const actual = await importActual();
-  return { ...actual, access: vi.fn(actual.access) };
-});
-
-import { access } from 'fs/promises';
-import { writeFileSync, mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, rmSync } from 'fs';
 import { join as joinPath } from 'path';
 import { tmpdir } from 'os';
-import { atomicWrite, tryReadFile } from '../lib/fileUtils.js';
+import { atomicWrite, tryReadFile, tryReadFileStrict } from '../lib/fileUtils.js';
 import { getSettings, updateSettings, updateSettingsWith, reloadSettings, settingsEvents, __resetSettingsCache, readSettingsStrict } from './settings.js';
 
 describe('settings.js', () => {
@@ -39,6 +37,10 @@ describe('settings.js', () => {
     // override as needed.
     tryReadFile.mockResolvedValue('{}');
     atomicWrite.mockResolvedValue();
+    // Re-arm the mirroring default: `clearAllMocks` drops recorded calls but NOT
+    // an implementation a prior test installed via `mockResolvedValue`, so the
+    // unreadable-file stubs below would otherwise leak into every later test.
+    tryReadFileStrict.mockImplementation(async (...args) => ({ ok: true, value: await tryReadFile(...args) }));
   });
 
   describe('getSettings', () => {
@@ -533,44 +535,27 @@ describe('settings.js', () => {
   // Strict read for the auth gate (#2684): distinguishes absent (auth off) from
   // present-but-corrupt (fail closed), which loadRaw()/getSettings() collapse to {}.
   // Content comes through the mocked tryReadFile; the absent-vs-unreadable split
-  // uses a real access() probe, so those two cases drive a real temp file.
+  // rides `tryReadFileStrict`'s `ok` flag (#4115), so those cases stub it directly.
   describe('readSettingsStrict', () => {
     let dir;
     beforeEach(() => { dir = mkdtempSync(joinPath(tmpdir(), 'portos-strict-')); });
     afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
     it('reports absent (not corrupt) when the file does not exist', async () => {
-      // tryReadFile null + a path that isn't there → access() throws → absent.
-      tryReadFile.mockResolvedValue(null);
+      // ENOENT is the one errno that PROVES absence → ok, with a null value.
+      tryReadFileStrict.mockResolvedValue({ ok: true, value: null });
       const res = await readSettingsStrict(joinPath(dir, 'nope.json'));
       expect(res).toEqual({ present: false, corrupt: false, settings: {} });
     });
 
     it('flags a present-but-unreadable file as corrupt (fail-closed signal)', async () => {
-      // tryReadFile null (read failed) but the file EXISTS → access() succeeds → corrupt.
-      const p = joinPath(dir, 'settings.json');
-      writeFileSync(p, '{}');
-      tryReadFile.mockResolvedValue(null);
-      const res = await readSettingsStrict(p);
-      expect(res).toEqual({ present: true, corrupt: true, settings: {} });
-    });
-
-    it('fails closed when access() errors for a non-ENOENT reason (only ENOENT is absent)', async () => {
-      // access() failing does not by itself prove the file is absent — ENOTDIR (a
-      // path component is a file), EACCES (parent lacks search permission) and EIO
-      // all leave absence unconfirmed, so they must classify as corrupt (fail
-      // closed), never as an absent fresh install.
-      //
-      // Driven through a stubbed access() rather than a real filesystem quirk: the
-      // errno for "parent component is a file" is ENOTDIR on POSIX but ENOENT on
-      // Windows, so a real path flipped this assertion by platform and failed CI.
-      const notADirErr = new Error('ENOTDIR: not a directory');
-      notADirErr.code = 'ENOTDIR';
-      access.mockRejectedValueOnce(notADirErr);
-      tryReadFile.mockResolvedValue(null);
+      // `ok: false` means the read failed for a reason that does NOT prove absence
+      // — EACCES on the file or a parent dir, ENOTDIR, EIO. Absence is unconfirmed,
+      // so it must classify as corrupt (fail closed), never as a fresh install.
+      // This is precisely the state the old access() re-probe had to reconstruct.
+      tryReadFileStrict.mockResolvedValue({ ok: false, value: null });
       const res = await readSettingsStrict(joinPath(dir, 'settings.json'));
-      expect(res.present).toBe(true);
-      expect(res.corrupt).toBe(true);
+      expect(res).toEqual({ present: true, corrupt: true, settings: {} });
     });
 
     it('parses a clean settings file', async () => {
