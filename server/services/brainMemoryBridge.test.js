@@ -492,7 +492,7 @@ describe('brainMemoryBridge — syncAllBrainData refresh mode (issue #1080 recov
 });
 
 describe('brainMemoryBridge — getEmbeddingCoverage (issue #3508)', () => {
-  const ENTITY_TYPES = ['people', 'projects', 'ideas', 'admin', 'memories'];
+  const ENTITY_TYPES = ['people', 'projects', 'ideas', 'admin', 'memories', 'songs'];
 
   beforeEach(() => {
     listLiveIds.mockImplementation(async () => []);
@@ -543,5 +543,116 @@ describe('brainMemoryBridge — getEmbeddingCoverage (issue #3508)', () => {
     getMemoryIdsMissingEmbedding.mockRejectedValue(new Error('backend down'));
 
     expect(await bridge.getEmbeddingCoverage()).toEqual({ total: 1, missing: 0 });
+  });
+});
+
+describe('brainMemoryBridge — SongBook enrollment (issue #4105)', () => {
+  const SONG = Object.freeze({
+    id: 's1',
+    title: 'Example Song',
+    artist: 'Placeholder Band',
+    instrument: 'guitar',
+    stage: 'learning',
+    key: 'G',
+    tuning: 'Drop D',
+    capo: 2,
+    notes: 'Bridge needs work',
+    tags: ['acoustic'],
+    // The sheet body — deliberately NOT embedded (see composeSongContent).
+    content: { format: 'chordpro', text: '[C]la '.repeat(20000) }
+  });
+
+  it('maps a song to a memory payload without its sheet body', async () => {
+    const bridge = await loadBridge();
+
+    const payload = bridge.brainRecordToMemory('songs', SONG);
+
+    expect(payload.category).toBe('songbook');
+    expect(payload.tags).toEqual(expect.arrayContaining(['acoustic', 'brain', 'songs']));
+    expect(payload.content).toContain('Example Song');
+    expect(payload.content).toContain('Placeholder Band');
+    expect(payload.content).toContain('Stage: learning');
+    expect(payload.content).toContain('Key: G');
+    expect(payload.content).toContain('Capo: 2');
+    expect(payload.content).toContain('Bridge needs work');
+    // The 200k-char tab/ChordPro body is notation, not prose: embedding it adds
+    // no semantic signal and would push the record into the embedder's
+    // over-budget LLM-summarization branch.
+    expect(payload.content).not.toContain('[C]la');
+    expect(payload.content.length).toBeLessThan(1000);
+  });
+
+  it('omits the setup line when a song has no key/tuning and capo is the 0 default', async () => {
+    const bridge = await loadBridge();
+
+    // `capo: 0` is the schema default meaning "no capo" — not a capo at fret 0
+    // — so it contributes nothing, and with no key/tuning the line disappears.
+    const payload = bridge.brainRecordToMemory('songs', {
+      id: 's2', title: 'Bare Song', capo: 0, content: { format: 'tab', text: '' }
+    });
+
+    expect(payload.content).toBe('Song: Bare Song');
+
+    // A real capo still renders, so the omission above is the 0 default and not
+    // the whole field being dropped.
+    const capoed = bridge.brainRecordToMemory('songs', { id: 's3', title: 'Capoed', capo: 3 });
+    expect(capoed.content).toBe('Song: Capoed\nCapo: 3');
+  });
+
+  it('re-embeds a song on :upserted through the debounced queue', async () => {
+    const bridge = await loadBridge();
+    const { brainEvents } = await import('./brainStorage.js');
+    bridge.initBridge();
+    getById.mockResolvedValue(SONG);
+
+    brainEvents.emit('songs:upserted', { id: 's1', record: { id: 's1' } });
+    expect(createMemory).not.toHaveBeenCalled(); // queued, not embedded inline
+
+    await bridge.flushPendingResync();
+
+    expect(getById).toHaveBeenCalledWith('songs', 's1');
+    expect(createMemory).toHaveBeenCalledTimes(1);
+  });
+
+  it('hard-prunes the mapped memory when a song is deleted locally', async () => {
+    const bridge = await loadBridge();
+    const { brainEvents } = await import('./brainStorage.js');
+    bridge.initBridge();
+    bridgeFileContents = JSON.stringify({ [bridge.bridgeKey('songs', 's1')]: 'mem-song' });
+    getById.mockResolvedValue(null); // tombstoned
+
+    brainEvents.emit('songs:deleted', { id: 's1' });
+    await bridge.flushPendingResync();
+
+    expect(deleteMemory).toHaveBeenCalledWith('mem-song', true);
+  });
+
+  it('includes songs in the bulk sync and the embedding-coverage tally', async () => {
+    const bridge = await loadBridge();
+    getAll.mockImplementation(async (type) => (type === 'songs' ? [SONG] : []));
+    listLiveIds.mockImplementation(async (type) => (type === 'songs' ? ['s1'] : []));
+
+    // Unmapped in a fresh bridge map → the tally counts it as a backfill
+    // target rather than skipping the store entirely.
+    expect(await bridge.getEmbeddingCoverage()).toEqual({ total: 1, missing: 1 });
+
+    const stats = await bridge.syncAllBrainData();
+    expect(stats.synced).toBe(1);
+    expect(createMemory).toHaveBeenCalledTimes(1);
+
+    // …and the bulk sync clears it.
+    expect(await bridge.getEmbeddingCoverage()).toEqual({ total: 1, missing: 0 });
+  });
+
+  it('archives an orphaned song mapping in the refresh reconcile', async () => {
+    const bridge = await loadBridge();
+    getAll.mockResolvedValue([]);
+    getById.mockResolvedValue(null);
+    bridgeFileContents = JSON.stringify({ [bridge.bridgeKey('songs', 's-gone')]: 'mem-orphan' });
+
+    const refreshed = await bridge.syncAllBrainData({ refresh: true });
+
+    expect(updateMemory).toHaveBeenCalledWith('mem-orphan', { status: 'archived' });
+    expect(refreshed.archived).toBe(1);
   });
 });

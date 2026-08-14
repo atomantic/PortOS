@@ -8,6 +8,7 @@
 
 import { join } from 'path';
 import { atomicWrite, PATHS, ensureDir, readJSONFile, getDateString } from '../lib/fileUtils.js';
+import { DAILY_LOG_FILE, readLocalDailyLog } from './meatspaceDailyLog.js';
 import {
   isMortalLoomEnabled,
   mlArrayIfEnabled,
@@ -18,7 +19,6 @@ import {
 } from './mortalLoomStore.js';
 
 const MEATSPACE_DIR = PATHS.meatspace;
-const DAILY_LOG_FILE = join(MEATSPACE_DIR, 'daily-log.json');
 const BLOOD_TESTS_FILE = join(MEATSPACE_DIR, 'blood-tests.json');
 const EPIGENETIC_TESTS_FILE = join(MEATSPACE_DIR, 'epigenetic-tests.json');
 const EYES_FILE = join(MEATSPACE_DIR, 'eyes.json');
@@ -73,12 +73,14 @@ export async function saveBloodTests(data) {
  *   (#2726). Off by default — existing callers keep the empty fallback.
  */
 export async function getBodyHistory({ strict = false } = {}) {
+  // Body entries come from MortalLoom's own `bodyEntries` array, NOT the composed
+  // daily log the alcohol/nicotine services probe — so this reads the local mirror
+  // directly rather than going through `loadMeatspaceDailyLog`. Routing it through
+  // the composed view would turn "MortalLoom is on but has no bodyEntries key" into
+  // a non-null empty log and stop the fall-through to the local file entirely.
   const ml = await mlArrayIfEnabled('bodyEntries', { strict });
   if (ml) return ml.map(({ id, ...rest }) => rest).sort(byDate);
-  const log = await readJSONFile(DAILY_LOG_FILE, { entries: [] }, { strict });
-  if (strict && !Array.isArray(log?.entries)) {
-    throw new Error(`Health daily log malformed: ${DAILY_LOG_FILE}`);
-  }
+  const log = await readLocalDailyLog({ strict, label: 'Health' });
   return (log.entries || [])
     .filter(e => e.body && Object.keys(e.body).length > 0)
     .map(e => ({ date: e.date, ...e.body }))

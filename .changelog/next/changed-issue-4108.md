@@ -1,0 +1,1 @@
+- Series review runs the foundation judge and canon readiness concurrently with the editorial-checks pass instead of before/after it, cutting roughly the full foundation-judge round-trip off each run; the live progress panel now summarizes the interleaved frame stream instead of labelling only the newest frame

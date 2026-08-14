@@ -6,10 +6,9 @@
  */
 
 import { Router } from 'express';
-import { join } from 'path';
 import crypto from 'node:crypto';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { readLocalDailyLog } from '../services/meatspaceDailyLog.js';
 import * as meatspaceService from '../services/meatspace.js';
 import * as alcoholService from '../services/meatspaceAlcohol.js';
 import * as nicotineService from '../services/meatspaceNicotine.js';
@@ -29,7 +28,7 @@ router.get('/export/mortalloom', asyncHandler(async (req, res) => {
     healthService.getBloodTests(),
     healthService.getEpigeneticTests(),
     healthService.getEyeExams(),
-    readJSONFile(join(PATHS.meatspace, 'daily-log.json'), { entries: [] }),
+    readLocalDailyLog(),
     alcoholService.getCustomDrinks(),
     nicotineService.getCustomProducts(),
     getGoals(),

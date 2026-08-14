@@ -1,4 +1,4 @@
-import { MessageSquare, Database, Calendar, Rss, Shield, Users, FolderKanban, Lightbulb, ClipboardList, Settings, Link2, BookOpen, Network, FileText, NotebookPen, Upload, Target, BookText } from 'lucide-react';
+import { MessageSquare, Database, Calendar, Rss, Shield, Users, FolderKanban, Lightbulb, ClipboardList, Settings, Link2, BookOpen, Network, FileText, NotebookPen, Upload, Target, BookText, Music } from 'lucide-react';
 
 // Main navigation tabs.
 // `fullBleed: true` marks a tab that fills the available height and owns its
@@ -72,6 +72,11 @@ export const DESTINATIONS = {
     icon: BookText,
     color: 'bg-teal-500/20 text-teal-400 border-teal-500/30'
   },
+  songs: {
+    label: 'SongBook',
+    icon: Music,
+    color: 'bg-rose-500/20 text-rose-400 border-rose-500/30'
+  },
   unknown: {
     label: 'Unknown',
     icon: MessageSquare,
@@ -81,8 +86,8 @@ export const DESTINATIONS = {
 
 // Destinations a user can file an inbox entry to by hand (Route / Fix pickers).
 // Mirrors the server's `manualDestinationEnum` — NOT `Object.keys(DESTINATIONS)`,
-// which also holds display-only entries (`links`, `goals`, `journals`) the
-// resolve/fix endpoints reject.
+// which also holds display-only entries (`links`, `goals`, `journals`, `songs`)
+// the resolve/fix endpoints reject.
 export const MANUAL_DESTINATIONS = ['people', 'projects', 'ideas', 'admin', 'memories'];
 
 /**
@@ -149,6 +154,7 @@ export const BRAIN_TYPE_HEX = {
   admin: '#22c55e',
   memories: '#ec4899',
   goals: '#f97316',
-  journals: '#14b8a6'
+  journals: '#14b8a6',
+  songs: '#f43f5e'
 };
 

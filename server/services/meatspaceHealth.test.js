@@ -40,6 +40,10 @@ vi.mock('../lib/fileUtils.js', () => ({
 vi.mock('./mortalLoomStore.js', () => ({
   isMortalLoomEnabled: vi.fn().mockResolvedValue(false),
   mlArrayIfEnabled: vi.fn().mockResolvedValue(null),
+  // meatspaceHealth reaches daily-log.json through the shared reader (#4112), which
+  // imports this export even though the body-history path never calls it — a mock
+  // factory that omits it would throw on the first access if that ever changes.
+  readDailyLogIfEnabled: vi.fn().mockResolvedValue(null),
   mlPush: vi.fn(),
   mlPatchById: vi.fn(),
   mlRemoveById: vi.fn(),

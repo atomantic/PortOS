@@ -128,11 +128,11 @@ describe('getBrainGraphSearchIndex', () => {
     onlyType('people', [{ id: 'p1', name: 'A' }]);
 
     await getBrainGraphSearchIndex();
-    // 5 entity types + journals, one scan each.
-    expect(brainStorage.getAll).toHaveBeenCalledTimes(6);
+    // 6 entity types (incl. songs) + journals, one scan each.
+    expect(brainStorage.getAll).toHaveBeenCalledTimes(7);
 
     await getBrainGraphSearchIndex();
-    expect(brainStorage.getAll).toHaveBeenCalledTimes(6);
+    expect(brainStorage.getAll).toHaveBeenCalledTimes(7);
   });
 
   it('keeps unrendered payloads and journal bodies out of the projections it reads', async () => {
@@ -184,6 +184,39 @@ describe('getBrainGraphOverview', () => {
     const result = await getBrainGraphOverview({ limit: 100 });
     expect(result.nodes).toHaveLength(2);
     expect(result.nodes.map(n => n.label).sort()).toEqual(['Alice', 'Phoenix']);
+  });
+
+  it('summarizes a SongBook node with its artist, never its content object (#4105)', async () => {
+    onlyType('songs', [{
+      id: 's1',
+      title: 'Example Song',
+      artist: 'Placeholder Band',
+      tags: ['acoustic'],
+      // The sheet body is an object on a song record, not a string — the
+      // summary chain must never fall through to it.
+      content: { format: 'chordpro', text: '[C]la la la' }
+    }]);
+    const result = await getBrainGraphOverview({ limit: 100 });
+    expect(result.nodes).toHaveLength(1);
+    expect(result.nodes[0]).toMatchObject({
+      id: 's1',
+      brainType: 'songs',
+      label: 'Example Song',
+      summary: 'Placeholder Band',
+      tags: ['acoustic']
+    });
+  });
+
+  it('emits shared_tag edges between a song and another brain record (#4105)', async () => {
+    brainStorage.getAll.mockImplementation(async (type) => {
+      if (type === 'songs') return [{ id: 's1', title: 'Example Song', tags: ['practice', 'guitar'] }];
+      if (type === 'projects') return [{ id: 'pr1', title: 'Learn guitar', tags: ['practice', 'guitar'] }];
+      return [];
+    });
+    const result = await getBrainGraphOverview({ limit: 100 });
+    const tagEdges = result.edges.filter(e => e.type === 'shared_tag');
+    expect(tagEdges).toHaveLength(1);
+    expect([tagEdges[0].source, tagEdges[0].target].sort()).toEqual(['pr1', 's1']);
   });
 
   it('falls back to "(untitled)" when an entity has no name/title', async () => {
@@ -397,5 +430,11 @@ describe('goals and journal nodes', () => {
     const ids = nodes.map(n => n.id);
     expect(ids).not.toContain('2026-01-01');
     expect(ids).toContain('2026-01-02');
+  });
+
+  it('includes SongBook records as graph nodes labelled by title (#4105)', async () => {
+    onlyType('songs', [{ id: 's1', title: 'Example Song', artist: 'Placeholder Band' }]);
+    const { nodes } = await getBrainGraphSearchIndex();
+    expect(nodes).toEqual([{ id: 's1', label: 'Example Song', brainType: 'songs' }]);
   });
 });

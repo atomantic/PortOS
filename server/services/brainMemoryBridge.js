@@ -1,8 +1,8 @@
 /**
  * Brain → CoS Memory Bridge
  *
- * Mirrors brain records (projects, ideas, admin, memories/journal, digests, reviews, people)
- * into the CoS memory system so agents can semantically search user-captured thoughts.
+ * Mirrors brain records (projects, ideas, admin, memories/journal, digests, reviews, people,
+ * songs) into the CoS memory system so agents can semantically search user-captured thoughts.
  *
  * Brain JSON files remain the operational data store for the brain UI.
  * This bridge creates/updates corresponding entries in the memories table
@@ -30,8 +30,34 @@ const TYPE_MAP = {
   memories: { type: 'observation', category: 'personal' },
   digests:  { type: 'context',     category: 'digest' },
   reviews:  { type: 'context',     category: 'review' },
-  journals: { type: 'observation', category: 'daily-log' }
+  journals: { type: 'observation', category: 'daily-log' },
+  songs:    { type: 'context',     category: 'songbook' }
 };
+
+// Append-only JSONL stores — no per-record events, no deletes, walked with
+// their own getters rather than brainStorage.getAll.
+const JSONL_TYPES = ['digests', 'reviews'];
+
+// Whole-store read for an append-only JSONL type (the `1000` cap is "all of
+// them" — these files are small and cached by brainStorage).
+const readJsonlStore = (type) =>
+  (type === 'digests' ? brainStorage.getDigests : brainStorage.getReviews)(1000);
+
+// The id-keyed entity stores the bridge mirrors. DERIVED from TYPE_MAP (minus
+// the JSONL stores and the Daily Log, both of which have their own walk) so
+// adding a type to the map above automatically enrolls it in the bulk sync, the
+// embedding-coverage tally, the refresh reconcile, and the live event
+// listeners. Those four sites used to restate the list, and a new type wired
+// into TYPE_MAP but missed in one of them would sync but never re-embed (or
+// count, or archive) — silently.
+const BRIDGED_ENTITY_TYPES = Object.keys(TYPE_MAP)
+  .filter((type) => type !== 'journals' && !JSONL_TYPES.includes(type));
+
+// Entity stores plus the Daily Log: everything keyed by a canonical record the
+// bridge can re-read, which is what the coverage tally and the refresh
+// reconcile walk. (JSONL stores are append-only, so they can never orphan a
+// mapped memory entry.)
+const RECONCILABLE_TYPES = [...BRIDGED_ENTITY_TYPES, 'journals'];
 
 // ─── Bridge Map ─────────────────────────────────────────────────────────────
 // Maps "brainType:brainId" → memoryId so updates hit the same memory entry
@@ -129,6 +155,31 @@ function composeDailyLogContent(r) {
   return parts.join('\n');
 }
 
+// SongBook repertoire entry (brain type `songs`). The sheet body
+// (`content.text`, up to 200k chars of tab/ChordPro notation) is deliberately
+// LEFT OUT: it is positional notation, not prose, so it adds no semantic signal
+// to an embedding while blowing the embedder's char budget — one long song
+// would push the record into generateMemoryEmbedding's over-budget LLM
+// summarization branch for nothing. What the user actually searches for is the
+// song's identity and their own notes about it.
+function composeSongContent(r) {
+  const parts = [`Song: ${r.title}`];
+  if (r.artist) parts.push(`Artist: ${r.artist}`);
+  if (r.instrument) parts.push(`Instrument: ${r.instrument}`);
+  if (r.stage) parts.push(`Stage: ${r.stage}`);
+  const setup = [
+    r.key && `Key: ${r.key}`,
+    r.tuning && `Tuning: ${r.tuning}`,
+    // `capo: 0` is the schema default and means "no capo" — not "capo at fret
+    // 0" — so it is legitimately omitted rather than rendered as `Capo: 0`.
+    // Explicit `> 0` so the intent doesn't read as an accidental truthiness bug.
+    r.capo > 0 ? `Capo: ${r.capo}` : null
+  ].filter(Boolean);
+  if (setup.length) parts.push(setup.join(' · '));
+  if (r.notes) parts.push(r.notes);
+  return parts.join('\n');
+}
+
 export const CONTENT_COMPOSERS = {
   people: composePeopleContent,
   projects: composeProjectContent,
@@ -137,7 +188,8 @@ export const CONTENT_COMPOSERS = {
   memories: composeJournalContent,
   digests: composeDigestContent,
   reviews: composeReviewContent,
-  journals: composeDailyLogContent
+  journals: composeDailyLogContent,
+  songs: composeSongContent
 };
 
 // ─── Core Mapping ───────────────────────────────────────────────────────────
@@ -253,8 +305,7 @@ export async function syncAllBrainData({ dryRun = false, refresh = false, onlyMi
   const isEmbedded = makeEmbeddedChecker(map, missingMemIds);
 
   // Entity stores (JSON-based)
-  const entityTypes = ['people', 'projects', 'ideas', 'admin', 'memories'];
-  for (const type of entityTypes) {
+  for (const type of BRIDGED_ENTITY_TYPES) {
     const records = await brainStorage.getAll(type);
     for (const record of records) {
       // Skip archived records
@@ -316,10 +367,8 @@ export async function syncAllBrainData({ dryRun = false, refresh = false, onlyMi
   }
 
   // JSONL stores (digests, reviews)
-  const jsonlTypes = ['digests', 'reviews'];
-  for (const type of jsonlTypes) {
-    const getter = type === 'digests' ? brainStorage.getDigests : brainStorage.getReviews;
-    const records = await getter(1000); // get all
+  for (const type of JSONL_TYPES) {
+    const records = await readJsonlStore(type);
     for (const record of records) {
       const key = bridgeKey(type, record.id);
       if (onlyMissing) {
@@ -353,7 +402,7 @@ export async function syncAllBrainData({ dryRun = false, refresh = false, onlyMi
   // mirrored stores: digests/reviews are append-only (never deleted) and
   // links/buckets/inbox aren't mirrored, so neither can orphan a memory entry.
   if (refresh && !dryRun) {
-    const reconcilableTypes = new Set(['people', 'projects', 'ideas', 'admin', 'memories', 'journals']);
+    const reconcilableTypes = new Set(RECONCILABLE_TYPES);
     for (const mapKey of Object.keys(map)) {
       const sep = mapKey.indexOf(':');
       if (sep === -1) continue;
@@ -405,14 +454,14 @@ export async function getEmbeddingCoverage() {
   // same key syncAllBrainData bridges under. `listLiveIds` already drops
   // tombstones and archived records, and it has no page cap (the old
   // `listJournals({ limit: 10000 })` silently stopped counting past 10k days).
-  for (const type of ['people', 'projects', 'ideas', 'admin', 'memories', 'journals']) {
+  for (const type of RECONCILABLE_TYPES) {
     for (const id of await brainStorage.listLiveIds(type)) tally(bridgeKey(type, id));
   }
 
   // digests/reviews are append-only JSONL: one whole-file read each, behind
   // brainStorage's own cache — not a per-record disk walk, so they stay as-is.
-  for (const [type, getter] of [['digests', brainStorage.getDigests], ['reviews', brainStorage.getReviews]]) {
-    const records = await getter(1000);
+  for (const type of JSONL_TYPES) {
+    const records = await readJsonlStore(type);
     for (const record of records) tally(bridgeKey(type, record.id));
   }
 
@@ -622,7 +671,7 @@ export function initBridge() {
   // re-reads each record's CANONICAL state (resyncBrainRecord), so the archived/
   // deleted/tombstoned branches are handled there uniformly and an event whose
   // payload is already stale by flush time still converges correctly.
-  for (const type of ['people', 'projects', 'ideas', 'admin', 'memories']) {
+  for (const type of BRIDGED_ENTITY_TYPES) {
     brainEvents.on(`${type}:upserted`, ({ id }) => queueResync([{ type, id }]));
     // A `:deleted` event is a genuine LOCAL user delete (remove() emits it;
     // applyRemoteRecord is event-silent), so hard-prune the mapped vector row
@@ -631,8 +680,9 @@ export function initBridge() {
   }
 
   // JSONL appends (digests, reviews)
-  brainEvents.on('digests:added', (record) => handleJsonlAdded('digests', record));
-  brainEvents.on('reviews:added', (record) => handleJsonlAdded('reviews', record));
+  for (const type of JSONL_TYPES) {
+    brainEvents.on(`${type}:added`, (record) => handleJsonlAdded(type, record));
+  }
 
   // Daily log — per-entry events so a single append doesn't re-embed every
   // day of the user's history. (An earlier version listened for the

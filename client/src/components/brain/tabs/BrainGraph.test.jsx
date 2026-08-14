@@ -24,10 +24,11 @@ vi.mock('../../../services/api', () => ({
   getBrainMemory: vi.fn(),
   getBrainGoal: vi.fn(),
   getBrainJournalEntry: vi.fn(),
+  getSong: vi.fn(),
 }));
 
 import * as api from '../../../services/api';
-import BrainGraph from './BrainGraph';
+import BrainGraph, { recordBody } from './BrainGraph';
 
 const GRAPH = {
   hasEmbeddings: true,
@@ -54,7 +55,7 @@ beforeEach(() => {
   // a resolved default and let individual tests override the one they assert.
   for (const getter of [
     api.getBrainPerson, api.getBrainProject, api.getBrainIdea, api.getBrainAdminItem,
-    api.getBrainMemory, api.getBrainGoal, api.getBrainJournalEntry,
+    api.getBrainMemory, api.getBrainGoal, api.getBrainJournalEntry, api.getSong,
   ]) getter.mockResolvedValue(null);
 });
 
@@ -149,5 +150,25 @@ describe('canvas sizing', () => {
     // clamp values are free to be tuned, so only assert it's viewport-relative.
     expect(shell.style.height).toBe('');
     expect(shell.className).toMatch(/h-\[clamp\([^\]]*vh[^\]]*\)\]/);
+  });
+});
+
+describe('recordBody (SongBook nodes, #4105)', () => {
+  it('never returns a non-string field — a song\'s `content` is an object', () => {
+    // Rendering `{ format, text }` into the panel throws "Objects are not valid
+    // as a React child", so the chain must type-check every candidate rather
+    // than `||` its way into the sheet body.
+    const song = { title: 'Example Song', content: { format: 'chordpro', text: '[C]la' } };
+    expect(recordBody(song)).toBe('');
+    expect(recordBody({ ...song, artist: 'Placeholder Band' })).toBe('Placeholder Band');
+    expect(recordBody({ ...song, artist: 'Placeholder Band', notes: 'Bridge needs work' }))
+      .toBe('Placeholder Band');
+  });
+
+  it('still reads a string `content` (memories, journals) and prefers description', () => {
+    expect(recordBody({ content: 'a good day' })).toBe('a good day');
+    expect(recordBody({ description: 'goal blurb', notes: 'aside' })).toBe('goal blurb');
+    expect(recordBody(null)).toBe('');
+    expect(recordBody({})).toBe('');
   });
 });

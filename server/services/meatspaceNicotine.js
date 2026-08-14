@@ -7,9 +7,9 @@
 
 import { join } from 'path';
 import { atomicWrite, PATHS, ensureDir, readJSONFile, getDateString } from '../lib/fileUtils.js';
+import { DAILY_LOG_FILE, loadMeatspaceDailyLog } from './meatspaceDailyLog.js';
 import {
   isMortalLoomEnabled,
-  readDailyLogIfEnabled,
   mlPush,
   mlPatchById,
   mlRemoveById,
@@ -17,7 +17,6 @@ import {
 } from './mortalLoomStore.js';
 
 const MEATSPACE_DIR = PATHS.meatspace;
-const DAILY_LOG_FILE = join(MEATSPACE_DIR, 'daily-log.json');
 const CUSTOM_PRODUCTS_FILE = join(MEATSPACE_DIR, 'custom-nicotine-products.json');
 
 const DEFAULT_PRODUCTS = [
@@ -104,20 +103,7 @@ function recalcDayTotal(entry) {
  *   default so the UI keeps degrading gracefully; the health-logging COUNT opts in,
  *   because a fake 0 there reads as "you have never logged anything" (#2726).
  */
-async function loadDailyLog({ strict = false } = {}) {
-  const ml = await readDailyLogIfEnabled({ strict });
-  if (ml) return ml;
-  const raw = await readJSONFile(DAILY_LOG_FILE, { entries: [], lastEntryDate: null }, { allowArray: false, strict });
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    if (strict) throw new Error(`Nicotine daily log malformed: ${DAILY_LOG_FILE}`);
-    return { entries: [], lastEntryDate: null };
-  }
-  if (!Array.isArray(raw.entries)) {
-    if (strict) throw new Error(`Nicotine daily log malformed: ${DAILY_LOG_FILE}`);
-    raw.entries = [];
-  }
-  return raw;
-}
+const loadDailyLog = (options) => loadMeatspaceDailyLog({ ...options, label: 'Nicotine' });
 
 async function saveDailyLog(log) {
   await ensureDir(MEATSPACE_DIR);

@@ -39,10 +39,16 @@ describe('brainSearchIndex', () => {
       expect(BRAIN_PROJECTION_TYPES).toContain(type)
     }
     expect(BRAIN_PROJECTION_TYPES).toContain('journals')
+    // Graph-only types (not unified-search sources) still have to be projected,
+    // or getBrainGraphSearchIndex throws on them.
+    expect(BRAIN_PROJECTION_TYPES).toContain('songs')
+    expect(BRAIN_SEARCH_TYPES).not.toContain('songs')
   })
 
   it('rejects a type it does not index', async () => {
-    await expect(getBrainProjections('songs')).rejects.toThrow(/unknown projection type/)
+    // `buckets` is a real brain entity store with no projection — the graph and
+    // unified search both ignore it.
+    await expect(getBrainProjections('buckets')).rejects.toThrow(/unknown projection type/)
   })
 
   it('projects only the fields its consumers read', async () => {

@@ -7,6 +7,7 @@ import {
 import toast from '../ui/Toast';
 import { usePipelineProgress } from '../../hooks/usePipelineProgress';
 import { severityRank } from '../../lib/editorialChecks';
+import { reviewFrameLabel, summarizeReviewProgress } from '../../lib/seriesReviewProgress';
 import {
   startPipelineSeriesReview,
   getPipelineSeriesReview,
@@ -24,30 +25,6 @@ import { severityColor } from './constants.js';
 const RUN_ENDED = new Set(['complete', 'canceled', 'error']);
 // The fix run's terminal frames: `rejected` = the cos gate/budget refused it.
 const FIX_RUN_ENDED = new Set(['complete', 'canceled', 'error', 'rejected']);
-
-// One-line label for a review SSE frame (mirrors AutopilotPanel's frameLabel,
-// scoped to this flow's steps).
-const REVIEW_STEP_LABELS = {
-  foundation: 'Judging foundation',
-  feedback: 'Routing your feedback',
-  editorialChecks: 'Running editorial checks',
-  canon: 'Checking canon descriptions',
-  health: 'Scoring editorial health',
-};
-function reviewFrameLabel(f) {
-  if (!f) return null;
-  switch (f.type) {
-    case 'start': return 'Starting review…';
-    case 'step:start': return `${REVIEW_STEP_LABELS[f.kind] || f.kind}…`;
-    case 'step:complete': return `${REVIEW_STEP_LABELS[f.kind] || f.kind} done`;
-    case 'check:start': return `Editorial check: ${f.label || f.checkId}…`;
-    case 'check:complete': return `Editorial check: ${f.label || f.checkId} — ${f.count ?? 0} finding(s)`;
-    case 'complete': return 'Review complete';
-    case 'canceled': return 'Review canceled';
-    case 'error': return `Review failed — ${f.error}`;
-    default: return f.type;
-  }
-}
 
 // Compact label for the per-finding fix run.
 function fixFrameLabel(f) {
@@ -264,7 +241,14 @@ export default function SeriesReviewPanel({ series, onSeriesUpdate, onIssuesUpda
 
   if (!seriesId) return null;
 
-  const reviewLabel = reviewing ? (reviewFrameLabel(reviewLatest) || 'Working…') : null;
+  // The review's background passes (foundation judge, canon readiness) run
+  // CONCURRENTLY with the editorial checks (#4108), so the frames interleave —
+  // summarize the whole stream rather than labelling only the newest frame, or
+  // the headline flickers between the checks pass and a step that just settled.
+  const { headline: reviewHeadline, alsoRunning: reviewAlsoRunning } = reviewing
+    ? summarizeReviewProgress(reviewFrames)
+    : { headline: null, alsoRunning: [] };
+  const reviewLabel = reviewing ? (reviewHeadline || 'Working…') : null;
   const groups = review ? groupFindings(review.findings) : [];
   const hasIssues = review?.verdict === 'issues';
   // Only the manuscript-review findings are auto-fixable; a verdict that is
@@ -336,10 +320,17 @@ export default function SeriesReviewPanel({ series, onSeriesUpdate, onIssuesUpda
       {/* Live review progress */}
       {reviewing ? (
         <div className="px-3 pb-3 border-t border-port-border pt-2">
-          <div className="text-xs text-gray-300 flex items-center gap-2">
+          <div className="text-xs text-gray-300 flex items-center gap-2 flex-wrap">
             <Loader2 size={12} className="animate-spin text-port-accent" />
             {reviewLabel}
           </div>
+          {/* The passes running alongside the headline step, so a long foundation
+              judge stays visible while the checks pass owns the line above. */}
+          {reviewAlsoRunning.length ? (
+            <div className="mt-1 text-[11px] text-gray-500">
+              also running: {reviewAlsoRunning.join(' · ')}
+            </div>
+          ) : null}
           {reviewFrames?.length ? (
             <div className="mt-2 max-h-24 overflow-y-auto text-[11px] text-gray-500 space-y-0.5">
               {reviewFrames.slice(-6).map((f, i) => <div key={i}>{reviewFrameLabel(f)}</div>)}
