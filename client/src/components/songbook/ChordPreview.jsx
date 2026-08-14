@@ -1,4 +1,4 @@
-import { useLayoutEffect, useState } from 'react';
+import { useCallback, useLayoutEffect, useState } from 'react';
 import useChordPlayer from '../../hooks/useChordPlayer.js';
 import useWakeLock from '../../hooks/useWakeLock.js';
 import ChordTransportBar from './ChordTransportBar.jsx';
@@ -13,6 +13,12 @@ import TabSheetView from './TabSheetView.jsx';
  * therefore keep changing without tearing down the schedule mid-run, and the
  * sheet stays on the sounding snapshot too so the highlight keeps pointing at
  * the chord you're actually hearing.
+ *
+ * `settingsMirror` is a SECOND `useChordPlayer` (the viewer's play-mode one)
+ * that should follow the practice settings changed here. Both transports read
+ * the per-song tempo/beats from storage at MOUNT, so without the mirror a tempo
+ * set in the editor wouldn't reach the already-mounted play-mode bar until a
+ * reload. Same contract as `<DrumPreview>`'s.
  */
 export default function ChordPreview({
   text,
@@ -22,6 +28,7 @@ export default function ChordPreview({
   instrumentView,
   showChordStrip = false,
   sheetClassName = '',
+  settingsMirror,
 }) {
   const [snapshot, setSnapshot] = useState(text);
   // `plain` is the sheet's explicit opt-out of ALL notation UI, chord tokens
@@ -38,6 +45,29 @@ export default function ChordPreview({
     if (!player.playing && snapshot !== text) setSnapshot(text);
   }, [player.playing, snapshot, text]);
 
+  const setBpm = useCallback((next) => {
+    player.setBpm(next);
+    settingsMirror?.setBpm(next);
+  }, [player.setBpm, settingsMirror]);
+  const setBpmPercent = useCallback((percent) => {
+    player.setBpmPercent(percent);
+    settingsMirror?.setBpmPercent(percent);
+  }, [player.setBpmPercent, settingsMirror]);
+  const setBeatsPerBar = useCallback((next) => {
+    player.setBeatsPerBar(next);
+    settingsMirror?.setBeatsPerBar(next);
+  }, [player.setBeatsPerBar, settingsMirror]);
+  const setCountInBars = useCallback((next) => {
+    player.setCountInBars(next);
+    settingsMirror?.setCountInBars(next);
+  }, [player.setCountInBars, settingsMirror]);
+  // The click persists globally, but the viewer's transport already read it at
+  // mount — mirror the change so the two don't disagree until a reload.
+  const setClickEnabled = useCallback((enabled) => {
+    player.setClickEnabled(enabled);
+    settingsMirror?.setClickEnabled(enabled);
+  }, [player.setClickEnabled, settingsMirror]);
+
   const displayedText = player.playing ? snapshot : text;
 
   return (
@@ -50,15 +80,15 @@ export default function ChordPreview({
           onToggle={player.toggle}
           hasChords={player.hasChords}
           bpm={player.bpm}
-          onBpmChange={player.setBpm}
-          onPercent={player.setBpmPercent}
+          onBpmChange={setBpm}
+          onPercent={setBpmPercent}
           writtenTempo={player.writtenTempo}
           beatsPerBar={player.beatsPerBar}
-          onBeatsPerBarChange={player.setBeatsPerBar}
+          onBeatsPerBarChange={setBeatsPerBar}
           countInBars={player.countInBars}
-          onCountInChange={player.setCountInBars}
+          onCountInChange={setCountInBars}
           clickEnabled={player.clickEnabled}
-          onClickToggle={player.setClickEnabled}
+          onClickToggle={setClickEnabled}
           chordCount={player.chordCount}
           pulse={player.pulse}
         />

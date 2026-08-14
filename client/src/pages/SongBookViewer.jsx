@@ -812,6 +812,7 @@ export default function SongBookViewer() {
                     fontSizeRem={fontSize}
                     instrumentView={toVoicingInstrument(draft.instrument)}
                     sheetClassName="p-3 overflow-x-auto"
+                    settingsMirror={chord}
                   />
                 )}
               </div>

@@ -66,6 +66,18 @@ describe('useChordPlayer', () => {
     expect(result.current.bpm).toBe(DEFAULT_CHORD_TEMPO);
     act(() => { result.current.setCountInBars(99); });
     expect(result.current.countInBars).toBe(4);
+    // Unparseable input is rejected, NOT collapsed into the legitimate "none"
+    // choice — 0 is a real count-in value here.
+    act(() => { result.current.setCountInBars('nonsense'); });
+    expect(result.current.countInBars).toBe(4);
+    act(() => { result.current.setCountInBars(0); });
+    expect(result.current.countInBars).toBe(0);
+  });
+
+  it('takes the defaults when nothing is stored, rather than coercing null to a number', () => {
+    window.localStorage.setItem('songbook:chordBeats:song-4', '');
+    const { result } = renderHook(() => useChordPlayer(SHEET, { songId: 'song-4' }));
+    expect(result.current.beatsPerBar).toBe(DEFAULT_CHORD_BEATS_PER_BAR);
   });
 
   it('sets the tempo from a percent of the reference tempo', () => {

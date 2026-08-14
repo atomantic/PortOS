@@ -170,9 +170,13 @@ export const resolveChordPlayhead = (schedule, posSec) => {
   if (!events.length || !(beatSec > 0)) return null;
   const pos = Number.isFinite(posSec) ? posSec : 0;
 
-  if (pos < countInSec) {
-    // The transport's pre-roll lead is negative — clamp it to the first beat
-    // rather than counting backwards past the start of the count-in.
+  // `countInSec > 0` is load-bearing, not redundant: the transport's pre-roll
+  // lead makes `pos` briefly NEGATIVE, so a bare `pos < countInSec` would report
+  // "counting in" for the first ~80ms of a run that has no count-in at all —
+  // yellow beat dots and a null highlight before the first chord.
+  if (countInSec > 0 && pos < countInSec) {
+    // Clamp that negative lead to the first beat rather than counting backwards
+    // past the start of the count-in.
     const elapsedBeats = Math.floor(Math.max(0, pos) / beatSec);
     return { countIn: true, beat: (elapsedBeats % Math.max(1, beatsPerBar)) + 1 };
   }

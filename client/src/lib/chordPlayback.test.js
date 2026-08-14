@@ -159,6 +159,14 @@ describe('resolveChordPlayhead', () => {
     expect(resolveChordPlayhead(schedule, 999).index).toBe(3);
   });
 
+  it('never reports a count-in for a schedule that has none, pre-roll included', () => {
+    // The transport's lead makes `pos` briefly negative. With no count-in bars
+    // that must still read as bar 1 beat 1 — not as a phantom count-in.
+    const noCountIn = buildChordSchedule(lines(SHEET), { bpm: 120 });
+    expect(resolveChordPlayhead(noCountIn, -0.08)).toEqual({ countIn: false, index: 0, beat: 1 });
+    expect(resolveChordPlayhead(noCountIn, 0)).toEqual({ countIn: false, index: 0, beat: 1 });
+  });
+
   it('returns null when there is nothing to place', () => {
     expect(resolveChordPlayhead(buildChordSchedule(lines('words only')), 1)).toBeNull();
     expect(resolveChordPlayhead(null, 1)).toBeNull();

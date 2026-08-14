@@ -77,9 +77,13 @@ export default function useChordPlayer(text, { songId } = {}) {
     setBpmState(clampBpm(bpmKey ? safeReadStorage(bpmKey) : null) ?? DEFAULT_CHORD_TEMPO);
   }, [bpmKey]);
   useEffect(() => {
-    const stored = Number(beatsKey ? safeReadStorage(beatsKey) : null);
+    // `null` (never set) must not reach Number(), which would turn it into a 0
+    // that then has to be rescued by the range check — the sentinel is tested
+    // for explicitly instead.
+    const raw = beatsKey ? safeReadStorage(beatsKey) : null;
+    const stored = raw == null ? null : Number(raw);
     setBeatsPerBarState(
-      Number.isFinite(stored) && stored >= CHORD_BEATS_MIN && stored <= CHORD_BEATS_MAX
+      stored != null && Number.isFinite(stored) && stored >= CHORD_BEATS_MIN && stored <= CHORD_BEATS_MAX
         ? Math.trunc(stored)
         : DEFAULT_CHORD_BEATS_PER_BAR,
     );
@@ -209,9 +213,14 @@ export default function useChordPlayer(text, { songId } = {}) {
     if (beatsKey) safeWriteStorage(beatsKey, String(n));
   }, [stopIfPlaying, beatsKey]);
 
+  // Unparseable input is REJECTED rather than falling through to 0 — 0 is the
+  // legitimate "no count-in" choice, so a `|| 0` fallback would make a garbled
+  // value indistinguishable from that choice (and silently stop playback for it).
   const setCountInBars = useCallback((next) => {
+    const n = Math.trunc(Number(next));
+    if (!Number.isFinite(n)) return;
     stopIfPlaying();
-    setCountInBarsState(Math.max(0, Math.min(CHORD_COUNT_IN_MAX, Math.trunc(Number(next)) || 0)));
+    setCountInBarsState(Math.max(0, Math.min(CHORD_COUNT_IN_MAX, n)));
   }, [stopIfPlaying]);
 
   return {
