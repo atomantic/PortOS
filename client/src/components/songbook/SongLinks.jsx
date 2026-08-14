@@ -28,11 +28,18 @@ import {
 // label captured when the link was made, else the raw id (never blank).
 const linkText = (link, freshTitle) => freshTitle || link.label || link.id;
 
+// React list key. The POSITION is part of it because nothing dedupes the stored
+// array: brain records sync raw between installs with no receive-side
+// validation, so a record can legitimately arrive holding the same {type,id}
+// twice, and a pure identity key would collide. Removal is likewise by index,
+// so deleting one duplicate doesn't take its twin with it.
+const rowKey = (link, index) => `${songLinkKey(link)}#${index}`;
+
 export function SongLinkChips({ links, className = '' }) {
   if (!links?.length) return null;
   return (
     <div className={`flex flex-wrap items-center gap-2 text-xs ${className}`}>
-      {links.map((link) => {
+      {links.map((link, i) => {
         const href = songLinkHref(link);
         const text = linkText(link);
         const inner = (
@@ -46,7 +53,7 @@ export function SongLinkChips({ links, className = '' }) {
         // from a newer peer) — render it as a plain chip rather than a dead link.
         return href ? (
           <Link
-            key={songLinkKey(link)}
+            key={rowKey(link, i)}
             to={href}
             className="flex items-center gap-1 px-2 py-1 rounded-full bg-port-bg border border-port-border text-port-accent hover:border-port-accent/50"
           >
@@ -54,7 +61,7 @@ export function SongLinkChips({ links, className = '' }) {
           </Link>
         ) : (
           <span
-            key={songLinkKey(link)}
+            key={rowKey(link, i)}
             className="flex items-center gap-1 px-2 py-1 rounded-full bg-port-bg border border-port-border text-gray-400"
           >
             {inner}
@@ -104,7 +111,7 @@ export function SongLinksEditor({ links, onChange }) {
     const map = new Map();
     for (const [kind, records] of Object.entries(recordsByType)) {
       for (const r of records || []) {
-        if (r?.id && r.title) map.set(`${kind}:${r.id}`, r.title);
+        if (r?.id && r.title) map.set(songLinkKey({ type: kind, id: r.id }), r.title);
       }
     }
     return map;
@@ -117,7 +124,9 @@ export function SongLinksEditor({ links, onChange }) {
     setTargetId('');
   };
 
-  const remove = (link) => onChange(links.filter((l) => songLinkKey(l) !== songLinkKey(link)));
+  // By INDEX, not by identity — see rowKey: a synced record can hold the same
+  // {type,id} twice, and filtering on identity would delete both at once.
+  const remove = (index) => onChange(links.filter((_, i) => i !== index));
 
   const loading = recordsByType[type] === null;
 
@@ -127,19 +136,18 @@ export function SongLinksEditor({ links, onChange }) {
 
       {links.length > 0 && (
         <ul className="space-y-1 mb-2">
-          {links.map((link) => {
-            const key = songLinkKey(link);
-            const text = linkText(link, freshTitles.get(key));
+          {links.map((link, i) => {
+            const text = linkText(link, freshTitles.get(songLinkKey(link)));
             return (
               <li
-                key={key}
+                key={rowKey(link, i)}
                 className="flex items-center gap-2 px-3 py-2 bg-port-card border border-port-border rounded-lg text-sm"
               >
                 <span className="shrink-0 text-xs text-gray-500">{songLinkTypeLabel(link.type)}</span>
                 <span className="flex-1 min-w-0 truncate text-gray-200">{text}</span>
                 <button
                   type="button"
-                  onClick={() => remove(link)}
+                  onClick={() => remove(i)}
                   className="p-1 shrink-0 text-gray-500 hover:text-port-error"
                   aria-label={`Remove link to ${text}`}
                 >

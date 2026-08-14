@@ -60,7 +60,7 @@ import PracticeLogger from '../components/songbook/PracticeLogger';
 import { SongLinkChips, SongLinksEditor } from '../components/songbook/SongLinks';
 import {
   SONG_STAGES, SONG_STAGE_COLORS, INSTRUMENTS, SONG_FORMATS, DRUM_FORMAT,
-  DRUM_INSTRUMENT, withStoredOption, songLinks, songLinkKey,
+  DRUM_INSTRUMENT, withStoredOption, songLinks,
   inputClass, labelClass, btnClass, instrumentLabel,
 } from '../components/songbook/constants';
 import { useAsyncAction } from '../hooks/useAsyncAction';
@@ -145,7 +145,14 @@ const normalizeDraftField = (draft, k) => {
   // arrays is always false, so every open of Edit would read as dirty). Order
   // matters (adding a link is an edit), and the label rides along because it is
   // stored on the record — swapping it is a real change to save.
-  if (k === 'links') return (draft.links || []).map((l) => `${songLinkKey(l)}|${l.label || ''}`).join('\n');
+  //
+  // Serialized as JSON over per-link ARRAYS, not by joining on a delimiter: a
+  // label is free text (it comes from another record's title), so any separator
+  // could appear inside one and let two different link lists collapse to the
+  // same string — an unsaved edit the guard would never see. Arrays rather than
+  // the objects themselves because JSON.stringify is key-ORDER sensitive, and a
+  // record synced from a peer can carry the same keys in a different order.
+  if (k === 'links') return JSON.stringify((draft.links || []).map((l) => [l.type, l.id, l.label || '']));
   // Compare the SAVED value, not the raw text: '210' and '0210' (and '' vs a
   // sub-minimum '3', which clamps) both save the same, so retyping one isn't
   // unsaved work. Null (no target) compares equal to itself.
@@ -391,6 +398,16 @@ export default function SongBookViewer() {
     const title = draft.title.trim();
     if (!title) { toast.error('Title is required'); return null; }
     const capo = Math.max(0, Math.min(12, Math.trunc(Number(draft.capo) || 0)));
+    // `links` is sent only when the user actually CHANGED it. An untouched array
+    // would otherwise be re-validated against this version's bounds on every
+    // save, so a song synced from a NEWER peer (a raised link cap, a longer
+    // label than this version allows) would 400 the whole save on a field the
+    // user never touched — the same forward-compat hazard the link-type slug
+    // guards, applied to the bounds. Omitting the key takes the schema's
+    // absent-preserves branch instead. When it IS changed the array always goes
+    // whole, including as an empty one: clearing the last link must clear the
+    // stored list, and an omitted key would preserve it.
+    const linksChanged = normalizeDraftField(draft, 'links') !== normalizeDraftField(toDraft(song), 'links');
     // Always the WHOLE content object — a partial { text } would reset format.
     const updated = await updateSong(id, {
       title,
@@ -402,9 +419,7 @@ export default function SongBookViewer() {
       tuning: draft.tuning.trim(),
       tags: parseTags(draft.tags),
       sourceUrl: draft.sourceUrl.trim(),
-      // Always sent, including as an empty array — removing the last link has to
-      // clear the stored list, and an omitted key would preserve it instead.
-      links: draft.links,
+      ...(linksChanged ? { links: draft.links } : {}),
       notes: draft.notes,
       // Always sent, including as an explicit null — clearing the input has to
       // clear the stored target, and an omitted key would preserve it instead.

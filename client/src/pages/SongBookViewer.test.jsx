@@ -650,6 +650,56 @@ K:  o - - - - - o -`;
       expect(api.updateSong.mock.calls[0][1].links).toEqual([]);
     });
 
+    // Re-validating an untouched array on every save would 400 the WHOLE save
+    // for a song synced from a newer peer whose links exceed this version's
+    // bounds — a field the user never touched. Omitting the key takes the
+    // schema's absent-preserves branch instead.
+    it('omits links from the PATCH when the user edited something else', async () => {
+      api.getSong.mockResolvedValue(song({ links: [{ type: 'round', id: 'r1', label: 'Example Round' }] }));
+      api.updateSong.mockImplementation((_id, patch) => Promise.resolve(song({ ...patch })));
+      renderPage('/songbook/abc?mode=edit');
+      const titleInput = await screen.findByLabelText('Title');
+      fireEvent.change(titleInput, { target: { value: 'Renamed Song' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(api.updateSong).toHaveBeenCalled());
+      const [, patch] = api.updateSong.mock.calls[0];
+      expect(patch.title).toBe('Renamed Song');
+      expect('links' in patch).toBe(false);
+    });
+
+    // A label is free text — it is another record's title, captured at link
+    // time — so a delimiter-joined comparison lets two DIFFERENT link lists
+    // serialize identically and hides a real edit from the unsaved-changes
+    // guard. Reachable: two links stored, the first target later renamed to a
+    // title that happens to contain the separators, then the user replaces the
+    // two links with just that one. Both lists join to the same string.
+    it('sees a link edit that a delimiter-joined comparison would miss', async () => {
+      api.getSong.mockResolvedValue(song({
+        links: [
+          { type: 'round', id: 'r1', label: 'A' },
+          { type: 'round', id: 'r2', label: 'B' },
+        ],
+      }));
+      api.listRounds.mockResolvedValue({
+        rounds: [{ id: 'r1', title: 'A\nround:r2|B' }, { id: 'r2', title: 'B' }],
+      });
+      const { router } = renderPage('/songbook/abc?mode=edit', { history: ['/songbook'] });
+
+      // Drop both links, then re-add the renamed one → a single link whose label
+      // is the two old rows run together.
+      const removals = await screen.findAllByRole('button', { name: /^Remove link to/ });
+      expect(removals).toHaveLength(2);
+      fireEvent.click(removals[1]);
+      fireEvent.click(screen.getAllByRole('button', { name: /^Remove link to/ })[0]);
+      fireEvent.change(screen.getByLabelText('Record to link'), { target: { value: 'r1' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Add link' }));
+
+      await navigate(router, '/songbook');
+      // Blocked: the discard prompt is up and we're still on the song.
+      expect(screen.queryByText('All songs index')).toBeNull();
+      expect(screen.getByText('Discard your unsaved changes to this song?')).toBeTruthy();
+    });
+
     it('keeps editing usable when the picker lists fail to load', async () => {
       api.listRounds.mockRejectedValue(new Error('boom'));
       api.listTracks.mockRejectedValue(new Error('boom'));

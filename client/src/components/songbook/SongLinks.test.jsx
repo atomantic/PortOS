@@ -92,6 +92,22 @@ describe('SongLinksEditor', () => {
     expect(links).toHaveLength(1);
   });
 
+  // Nothing dedupes the stored array — brain records sync raw with no
+  // receive-side validation, so a record can arrive holding the same {type,id}
+  // twice. Removing one must not take its twin with it.
+  it('removes only the clicked row when the record holds a duplicate link', async () => {
+    const dupe = [
+      { type: 'round', id: 'r1', label: 'Example Round' },
+      { type: 'round', id: 'r1', label: 'Example Round' },
+      { type: 'track', id: 't1', label: 'Example Track' },
+    ];
+    const onChange = renderEditor(dupe);
+    const buttons = await screen.findAllByRole('button', { name: 'Remove link to Example Round' });
+    expect(buttons).toHaveLength(2);
+    fireEvent.click(buttons[0]);
+    expect(onChange).toHaveBeenCalledWith([dupe[1], dupe[2]]);
+  });
+
   it('disables Add until a record is picked', async () => {
     const onChange = renderEditor([]);
     const add = await screen.findByRole('button', { name: 'Add link' });
