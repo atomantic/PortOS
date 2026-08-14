@@ -1199,8 +1199,9 @@ export async function saveImageUpload(dir, { filename, data }, { maxBytes }) {
  * Throws ServerError with the exact status/code/message contract the
  * attachment routes established (`INVALID_FILE_TYPE`, `FILE_TOO_LARGE`,
  * `INVALID_FILENAME` — all 400), so refactored routes keep their pinned
- * responses. Consolidates `routes/attachments.js` and
- * `routes/brainSongbook.js` (uploads.js has a different shape — see #4101).
+ * responses. Consolidates `routes/attachments.js`, `routes/brainSongbook.js`,
+ * and `routes/uploads.js` — the last keeps its own richer response shape
+ * (`originalName` / `sizeFormatted` / `createdAt`) around these fields.
  *
  * @param {string} dir - Destination directory (created if missing).
  * @param {{ filename: string, data: string }} upload - Original filename +

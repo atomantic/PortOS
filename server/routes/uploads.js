@@ -4,24 +4,36 @@
  */
 
 import { Router } from 'express';
-import { writeFile, unlink, readdir, stat } from 'fs/promises';
-import { existsSync } from 'fs';
+import { unlink, readdir, stat } from 'fs/promises';
 import { join, resolve } from 'path';
-import { v4 as uuidv4 } from '../lib/uuid.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { ensureDir, PATHS, RISKY_MIME_TYPES, sanitizeFilename, getFileExtension, getMimeType, isPathInsideDir } from '../lib/fileUtils.js';
+import {
+  pathExists, PATHS, sanitizeFilename, getFileExtension, getMimeType,
+  EXTENSION_MIME_MAP, isPathInsideDir, saveBase64Upload, serveLocalFile,
+} from '../lib/fileUtils.js';
 import { MAX_BASE64_UPLOAD_BYTES } from '../lib/uploadLimits.js';
 
 const UPLOADS_DIR = PATHS.uploads;
 
 const router = Router();
 
+// This is the GENERIC upload bucket (recordings, gallery videos, reference
+// audio, arbitrary drops from the Uploads page), so it allows every extension
+// the shared MIME map knows rather than a route-specific subset like
+// ATTACHMENT_ALLOWED_EXTENSIONS / SONGBOOK_ATTACHMENT_EXTENSIONS. Derived from
+// the map instead of a second literal so the two can never drift.
+const UPLOAD_ALLOWED_EXTENSIONS = new Set(Object.keys(EXTENSION_MIME_MAP));
+
 // Bounded by the JSON body limit, not by any uploads-specific rule — see
 // lib/uploadLimits.js.
 const MAX_FILE_SIZE = MAX_BASE64_UPLOAD_BYTES;
 
 /**
- * Format file size for display
+ * Format file size for display. Deliberately NOT lib/fileUtils.js's
+ * `formatBytes` — that one rounds KB to whole units ("1 KB"), while the
+ * `sizeFormatted` / `freedSpaceFormatted` fields this route has always
+ * returned carry one decimal ("1.0 KB"), and the Uploads page renders them
+ * verbatim.
  */
 function formatSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
@@ -42,50 +54,30 @@ router.post('/', asyncHandler(async (req, res) => {
     throw new ServerError('filename is required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
-  // Decode base64 and validate size
-  const buffer = Buffer.from(data, 'base64');
-  if (buffer.length > MAX_FILE_SIZE) {
-    throw new ServerError(`File exceeds maximum size of ${MAX_FILE_SIZE / 1024 / 1024}MB`, { status: 400, code: 'FILE_TOO_LARGE' });
-  }
+  // Shared pipeline: allowlist → decode → size cap → `<uuid8>-name` → write.
+  const saved = await saveBase64Upload(UPLOADS_DIR, { filename, data }, {
+    allowedExtensions: UPLOAD_ALLOWED_EXTENSIONS,
+    maxBytes: MAX_FILE_SIZE,
+  });
 
-  // Ensure uploads directory exists
-  if (!existsSync(UPLOADS_DIR)) {
-    await ensureDir(UPLOADS_DIR);
-  }
-
-  const id = uuidv4();
-  const safeName = sanitizeFilename(filename);
-  const ext = getFileExtension(safeName);
-  // Create unique filename with UUID prefix to avoid collisions
-  const fname = `${id.slice(0, 8)}-${safeName}`;
-  const filepath = join(UPLOADS_DIR, fname);
-
-  // Double-check path is within uploads directory (defense in depth)
-  if (!isPathInsideDir(UPLOADS_DIR, filepath)) {
-    throw new ServerError('Invalid filename', { status: 400, code: 'INVALID_FILENAME' });
-  }
-
-  await writeFile(filepath, buffer);
-
-  const mimeType = getMimeType(ext);
-
-  console.log(`📤 File uploaded: ${fname} (${formatSize(buffer.length)}, ${mimeType})`);
+  console.log(`📤 File uploaded: ${saved.filename} (${formatSize(saved.size)}, ${saved.mime})`);
 
   res.json({
-    id,
-    filename: fname,
+    id: saved.id,
+    filename: saved.filename,
     originalName: filename,
-    path: `/api/uploads/${encodeURIComponent(fname)}`,
-    size: buffer.length,
-    sizeFormatted: formatSize(buffer.length),
-    mimeType,
+    // API-relative URL only — never the absolute FS path (leaks install layout).
+    path: `/api/uploads/${encodeURIComponent(saved.filename)}`,
+    size: saved.size,
+    sizeFormatted: formatSize(saved.size),
+    mimeType: saved.mime,
     createdAt: new Date().toISOString()
   });
 }));
 
 // GET /api/uploads - List all uploads
 router.get('/', asyncHandler(async (req, res) => {
-  if (!existsSync(UPLOADS_DIR)) {
+  if (!(await pathExists(UPLOADS_DIR))) {
     return res.json({ uploads: [], totalSize: 0, totalSizeFormatted: '0 B' });
   }
 
@@ -100,6 +92,7 @@ router.get('/', asyncHandler(async (req, res) => {
 
     return {
       filename,
+      // API-relative URL only — never the absolute FS path (leaks install layout).
       path: `/api/uploads/${encodeURIComponent(filename)}`,
       size: stats.size,
       sizeFormatted: formatSize(stats.size),
@@ -122,27 +115,11 @@ router.get('/', asyncHandler(async (req, res) => {
 
 // GET /api/uploads/:filename - Serve a file
 router.get('/:filename', asyncHandler(async (req, res) => {
-  const { filename } = req.params;
-  const safeFilename = sanitizeFilename(filename);
-  const filepath = resolve(UPLOADS_DIR, safeFilename);
-
-  if (!isPathInsideDir(UPLOADS_DIR, filepath)) {
-    throw new ServerError('Invalid filename', { status: 400, code: 'INVALID_FILENAME' });
-  }
-
-  if (!existsSync(filepath)) {
-    throw new ServerError('File not found', { status: 404, code: 'NOT_FOUND' });
-  }
-
-  const ext = getFileExtension(safeFilename);
-  const mimeType = getMimeType(ext);
-
-  res.set('X-Content-Type-Options', 'nosniff');
-  if (RISKY_MIME_TYPES.has(mimeType)) {
-    res.set('Content-Disposition', `attachment; filename="${safeFilename}"`);
-  }
-
-  res.type(mimeType).sendFile(filepath);
+  // Shared pipeline: sanitize → containment guard → existence → nosniff +
+  // attachment disposition for risky MIME types → sendFile.
+  await serveLocalFile(res, UPLOADS_DIR, req.params.filename, {
+    missingError: { message: 'File not found', code: 'NOT_FOUND' },
+  });
 }));
 
 // DELETE /api/uploads/:filename - Delete a file
@@ -155,7 +132,7 @@ router.delete('/:filename', asyncHandler(async (req, res) => {
     throw new ServerError('Invalid filename', { status: 400, code: 'INVALID_FILENAME' });
   }
 
-  if (!existsSync(filepath)) {
+  if (!(await pathExists(filepath))) {
     throw new ServerError('File not found', { status: 404, code: 'NOT_FOUND' });
   }
 
@@ -175,7 +152,7 @@ router.delete('/', asyncHandler(async (req, res) => {
     throw new ServerError('Add ?confirm=true to delete all uploads', { status: 400, code: 'CONFIRMATION_REQUIRED' });
   }
 
-  if (!existsSync(UPLOADS_DIR)) {
+  if (!(await pathExists(UPLOADS_DIR))) {
     return res.json({ success: true, deleted: 0, freedSpace: 0 });
   }
 
