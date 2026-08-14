@@ -53,8 +53,18 @@ const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
 export function toUserDayKey(value, timezone) {
   if (typeof value !== 'string' || !value) return null;
 
-  // No time component → a day LABEL, not an instant. Take it as authored (see header).
-  if (!value.includes('T')) return DAY_KEY_RE.test(value) ? value : null;
+  // No time component → a day LABEL, not an instant. Take it as authored (see header), but
+  // only once it is a real calendar day. Shape alone is not validity, and neither is parsing:
+  // `2026-13-45` matches the regex, and `2026-02-30` even parses — `Date` silently rolls it
+  // over to March 2 rather than rejecting it. Round-trip through `Date` so only a day that
+  // survives unchanged counts; anything else is a phantom that would inflate the tally by a
+  // day the user never had.
+  if (!value.includes('T')) {
+    if (!DAY_KEY_RE.test(value)) return null;
+    const day = new Date(value);
+    if (Number.isNaN(day.getTime())) return null;
+    return day.toISOString().slice(0, 10) === value ? value : null;
+  }
 
   const at = new Date(value);
   if (Number.isNaN(at.getTime())) return null;
@@ -64,14 +74,24 @@ export function toUserDayKey(value, timezone) {
 /**
  * Union several domains' date values into one sorted set of user-local day keys.
  *
+ * A non-array source contributes nothing rather than throwing — this function unions what it
+ * is given and does not classify read failures. Deciding that a missing/unreadable domain means
+ * `unavailable` (never a confident 0) is the CALLER's job, and `characterMetrics.js`'s
+ * `daysActive` validates every source before calling in for exactly that reason.
+ *
  * @param {Array<Array<unknown>|null|undefined>} sources - one array of date values per domain
  * @param {string} timezone - IANA timezone (from `getUserTimezone()`)
  * @returns {string[]} sorted, de-duplicated day keys. `.length` is the honest "days active".
  */
 export function unionActiveDayKeys(sources, timezone) {
+  if (!Array.isArray(sources)) return [];
+
   const days = new Set();
-  for (const source of sources || []) {
-    for (const value of source || []) {
+  for (const source of sources) {
+    // `Array.isArray`, not `source || []` — a truthy non-array source (a bare object, a number)
+    // is not iterable, and `for...of` over it would throw a TypeError.
+    if (!Array.isArray(source)) continue;
+    for (const value of source) {
       const key = toUserDayKey(value, timezone);
       if (key) days.add(key);
     }

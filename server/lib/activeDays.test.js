@@ -40,6 +40,20 @@ describe('toUserDayKey', () => {
     expect(toUserDayKey('not-a-date T nope', TZ)).toBeNull();
     expect(toUserDayKey('2026-13-45T99:99:99Z', TZ)).toBeNull();
   });
+
+  it('rejects a day-SHAPED value that is not a real calendar day', () => {
+    // The shape check alone is not validity, and neither is parsing: `2026-13-45` is rejected
+    // by Date, but `2026-02-30` PARSES — Date rolls it over to March 2 instead of failing. Both
+    // must be dropped, or a corrupt stored key inflates the tally by a day that never existed.
+    for (const phantom of ['2026-13-45', '2026-00-00', '2026-02-30', '2026-99-99', '2026-04-31']) {
+      expect(toUserDayKey(phantom, TZ)).toBeNull();
+    }
+  });
+
+  it('accepts a real leap day and rejects a fake one', () => {
+    expect(toUserDayKey('2024-02-29', TZ)).toBe('2024-02-29');
+    expect(toUserDayKey('2026-02-29', TZ)).toBeNull(); // 2026 is not a leap year
+  });
 });
 
 describe('unionActiveDayKeys', () => {
@@ -75,6 +89,16 @@ describe('unionActiveDayKeys', () => {
     expect(unionActiveDayKeys([null, undefined, ['2026-03-14', null, undefined, '']], TZ))
       .toEqual(['2026-03-14']);
     expect(unionActiveDayKeys(null, TZ)).toEqual([]);
+  });
+
+  it('skips a non-array source instead of throwing on it', () => {
+    // `source || []` would hand a truthy non-array straight to `for...of` and TypeError. This
+    // function unions what it is given; classifying an unreadable domain is the caller's job
+    // (characterMetrics.js validates each source before calling in).
+    expect(() => unionActiveDayKeys([42, true, { date: '2026-03-14' }, ['2026-03-14']], TZ)).not.toThrow();
+    expect(unionActiveDayKeys([42, true, { date: '2026-03-15' }, ['2026-03-14']], TZ))
+      .toEqual(['2026-03-14']);
+    expect(unionActiveDayKeys('2026-03-14', TZ)).toEqual([]);
   });
 
   it('returns the keys sorted ascending', () => {
