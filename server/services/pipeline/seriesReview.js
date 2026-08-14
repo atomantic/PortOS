@@ -337,7 +337,7 @@ export async function runSeriesReview(seriesId, {
     getReview(seriesId).catch(() => ({ comments: [] })),
   ]);
   onProgress({ type: 'step:complete', kind: 'health', ready: health?.ready === true, score: health?.score ?? null });
-  const findings = collectReviewFindings(review.comments);
+  const findings = collectReviewFindings(review?.comments);
 
   // 4. Join the background passes. Both resolve (never reject) with their own
   //    failure flag, so the failed-stage list is assembled here in ONE place and
