@@ -94,7 +94,7 @@ export function SongLinksEditor({ links, onChange }) {
   const linked = useMemo(() => new Set(links.map(songLinkKey)), [links]);
   const options = useMemo(() => (
     (recordsByType[type] || [])
-      .filter((r) => r?.id && !linked.has(`${type}:${r.id}`))
+      .filter((r) => r?.id && !linked.has(songLinkKey({ type, id: r.id })))
       .map((r) => ({ id: r.id, title: r.title || r.id }))
   ), [recordsByType, type, linked]);
 
@@ -127,25 +127,27 @@ export function SongLinksEditor({ links, onChange }) {
 
       {links.length > 0 && (
         <ul className="space-y-1 mb-2">
-          {links.map((link) => (
-            <li
-              key={songLinkKey(link)}
-              className="flex items-center gap-2 px-3 py-2 bg-port-card border border-port-border rounded-lg text-sm"
-            >
-              <span className="shrink-0 text-xs text-gray-500">{songLinkTypeLabel(link.type)}</span>
-              <span className="flex-1 min-w-0 truncate text-gray-200">
-                {linkText(link, freshTitles.get(songLinkKey(link)))}
-              </span>
-              <button
-                type="button"
-                onClick={() => remove(link)}
-                className="p-1 shrink-0 text-gray-500 hover:text-port-error"
-                aria-label={`Remove link to ${linkText(link, freshTitles.get(songLinkKey(link)))}`}
+          {links.map((link) => {
+            const key = songLinkKey(link);
+            const text = linkText(link, freshTitles.get(key));
+            return (
+              <li
+                key={key}
+                className="flex items-center gap-2 px-3 py-2 bg-port-card border border-port-border rounded-lg text-sm"
               >
-                <X size={14} />
-              </button>
-            </li>
-          ))}
+                <span className="shrink-0 text-xs text-gray-500">{songLinkTypeLabel(link.type)}</span>
+                <span className="flex-1 min-w-0 truncate text-gray-200">{text}</span>
+                <button
+                  type="button"
+                  onClick={() => remove(link)}
+                  className="p-1 shrink-0 text-gray-500 hover:text-port-error"
+                  aria-label={`Remove link to ${text}`}
+                >
+                  <X size={14} />
+                </button>
+              </li>
+            );
+          })}
         </ul>
       )}
 

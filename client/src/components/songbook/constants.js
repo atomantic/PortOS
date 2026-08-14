@@ -81,12 +81,11 @@ export const SONG_FORMATS = ['chordpro', 'tab', 'plain', 'drum'];
 
 // The record kinds a song can link to. Mirrors `songLinkTypeEnum` in
 // server/lib/brainValidation.js; `path` is the detail route the chip navigates
-// to (`${path}/${id}`), and `listAll` names the api.js helper the edit-mode
-// picker loads its options from. Parity with the server enum is asserted in
+// to (`${path}/${id}`). Parity with the server enum is asserted in
 // constants.test.js.
 export const SONG_LINK_TYPES = [
-  { id: 'round', label: 'Round', path: '/rounds', listAll: 'listRounds' },
-  { id: 'track', label: 'Track', path: '/music/tracks', listAll: 'listTracks' },
+  { id: 'round', label: 'Round', path: '/rounds' },
+  { id: 'track', label: 'Track', path: '/music/tracks' },
 ];
 
 // Display label for a stored link type. A type this client doesn't know (a song
