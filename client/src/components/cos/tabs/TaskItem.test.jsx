@@ -267,6 +267,58 @@ describe('TaskItem long-text clamping', () => {
   });
 });
 
+describe('TaskItem cancel-edit confirmation (#4037)', () => {
+  it('discards immediately when Cancel is clicked with no unsaved changes', () => {
+    render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    // Back to the read-only view — no confirm row, no edit fields.
+    expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Confirm discard task edits' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Edit task' })).toBeInTheDocument();
+  });
+
+  it('shows an inline confirm row instead of discarding when there are unsaved changes', () => {
+    render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    fireEvent.change(screen.getByDisplayValue(task.description), { target: { value: 'Edited description' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    // Still editing — the draft field keeps the typed value, and a confirm row
+    // replaced the Save/Cancel pair instead of silently discarding it.
+    expect(screen.getByDisplayValue('Edited description')).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Confirm discard task edits' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+  });
+
+  it('discards the draft on a second click confirming the discard', () => {
+    render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    fireEvent.change(screen.getByDisplayValue(task.description), { target: { value: 'Edited description' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+
+    expect(screen.queryByDisplayValue('Edited description')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Edit task' })).toBeInTheDocument();
+  });
+
+  it('returns to the edit fields when the discard confirm is itself canceled', () => {
+    render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    fireEvent.change(screen.getByDisplayValue(task.description), { target: { value: 'Edited description' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.getByDisplayValue('Edited description')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument();
+  });
+});
+
 describe('TaskItem challenge resolve controls (#2471)', () => {
   const challenged = {
     id: 'sys-challenged',

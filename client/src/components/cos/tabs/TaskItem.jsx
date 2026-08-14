@@ -81,6 +81,11 @@ export default function TaskItem({ task, isSystem, onRefresh, providers, duratio
   const [showBlockedModal, setShowBlockedModal] = useState(false);
   const [blockedReason, setBlockedReason] = useState('');
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
+  // Independent armed-state from the delete confirm above — a second instance
+  // of the same single-at-a-time hook, keyed on the same task id, gates
+  // discarding an in-progress edit (#4037) behind the same inline two-click-arm
+  // pattern rather than silently dropping the draft on Cancel.
+  const { isConfirming: isConfirmingDiscard, requestDelete: requestDiscardConfirm, cancelDelete: cancelDiscardConfirm, confirmDelete: confirmDiscard } = useConfirmDelete();
   const blockedInputRef = useRef(null);
 
   // Focus input when modal opens
@@ -175,6 +180,27 @@ export default function TaskItem({ task, isSystem, onRefresh, providers, duratio
     toast.success('Task updated');
     setEditing(false);
     onRefresh();
+  };
+
+  // Compares the draft against the same task fields editData was seeded from
+  // (see the useState initializer above) — true only when the user actually
+  // changed something, so an unmodified Cancel still discards with no friction.
+  const hasUnsavedEdits =
+    editData.description !== task.description ||
+    editData.context !== (task.metadata?.context || '') ||
+    editData.model !== (task.metadata?.model || '') ||
+    editData.provider !== (task.metadata?.provider || '');
+
+  const handleCancelEdit = () => {
+    if (hasUnsavedEdits) {
+      requestDiscardConfirm(task.id);
+    } else {
+      setEditing(false);
+    }
+  };
+
+  const handleConfirmDiscard = () => {
+    confirmDiscard(() => setEditing(false));
   };
 
   const handleDelete = async () => {
@@ -336,20 +362,31 @@ export default function TaskItem({ task, isSystem, onRefresh, providers, duratio
                   </select>
                 )}
               </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={handleSave}
-                  className="flex items-center gap-1 text-sm px-3 py-2 min-h-[40px] text-port-success hover:text-port-success/80 bg-port-success/10 hover:bg-port-success/20 rounded transition-colors"
-                >
-                  <Save size={14} aria-hidden="true" /> Save
-                </button>
-                <button
-                  onClick={() => setEditing(false)}
-                  className="flex items-center gap-1 text-sm px-3 py-2 min-h-[40px] text-gray-400 hover:text-white bg-port-bg hover:bg-port-border rounded transition-colors"
-                >
-                  <X size={14} aria-hidden="true" /> Cancel
-                </button>
-              </div>
+              {isConfirmingDiscard(task.id) ? (
+                <ConfirmButtonPair
+                  prompt="Discard unsaved changes?"
+                  confirmText="Discard"
+                  ariaLabel="Confirm discard task edits"
+                  tone="warning"
+                  onConfirm={handleConfirmDiscard}
+                  onCancel={cancelDiscardConfirm}
+                />
+              ) : (
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleSave}
+                    className="flex items-center gap-1 text-sm px-3 py-2 min-h-[40px] text-port-success hover:text-port-success/80 bg-port-success/10 hover:bg-port-success/20 rounded transition-colors"
+                  >
+                    <Save size={14} aria-hidden="true" /> Save
+                  </button>
+                  <button
+                    onClick={handleCancelEdit}
+                    className="flex items-center gap-1 text-sm px-3 py-2 min-h-[40px] text-gray-400 hover:text-white bg-port-bg hover:bg-port-border rounded transition-colors"
+                  >
+                    <X size={14} aria-hidden="true" /> Cancel
+                  </button>
+                </div>
+              )}
             </div>
           ) : (
             <>
