@@ -156,6 +156,11 @@ export default function useSingToVerify({ score: scoreText = '', tempo } = {}) {
     });
     metronomeRef.current = metronome;
     await metronome.start().catch((err) => {
+      // Same generation gate as the getUserMedia paths above, for the same
+      // reason: a cancel()/restart during this await already tore THIS request
+      // down, so an ungated teardown() here would stop the newer request's mic
+      // stream and release the session claim it now holds.
+      if (requestGeneration !== requestGenerationRef.current) return;
       if (mountedRef.current) setError(err?.message || 'Could not start audio');
       teardown();
       if (mountedRef.current) setPhase(VERIFY_IDLE);

@@ -109,12 +109,22 @@ export default function useSingToScore({ tempo, score = '', musicKey = 'C' } = {
     setResult(null);
     trackRef.current = [];
 
+    // Resolved (and null-checked) BEFORE the claim: on an insecure origin
+    // `navigator.mediaDevices` is undefined, and reaching through it throws
+    // synchronously — past a claim, that leaves the document pinned
+    // record-capable with no release left to call. Mirrors useSingToVerify.
+    const getUserMedia = navigator.mediaDevices?.getUserMedia?.bind(navigator.mediaDevices);
+    if (!getUserMedia) {
+      if (mountedRef.current) setError('Microphone access requires a secure browser connection');
+      return;
+    }
+
     // Claimed BEFORE getUserMedia — an output-only `playback` session held by a
     // player elsewhere on the page would refuse the request outright — and
     // handed back on every path that never reaches teardown() (the unmount bail
     // below is belt-and-suspenders: the hook already releases on unmount).
     claimSession();
-    const src = await navigator.mediaDevices.getUserMedia({ audio: true }).catch((err) => {
+    const src = await getUserMedia({ audio: true }).catch((err) => {
       releaseSession();
       if (mountedRef.current) setError(err?.message || 'Microphone access denied');
       return null;

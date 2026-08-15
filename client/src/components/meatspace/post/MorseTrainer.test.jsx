@@ -529,4 +529,25 @@ describe('MorseTrainer iOS audio session', () => {
     // The superseded startTone must not re-declare on its way out.
     expect(navigator.audioSession.type).toBe('auto');
   });
+
+  // Unmounting inside the unlock window close()s and nulls the per-mount
+  // context, so the parked playPrompt resumes with nothing to sound into. It
+  // must bail rather than throw into playMorse, and the claim must be gone.
+  it('releases and bails when the trainer unmounts inside the unlock window', async () => {
+    let unlock;
+    class SlowAudioContext extends MockAudioContext {
+      constructor() { super(); this.state = 'suspended'; }
+      resume() { return new Promise((r) => { unlock = () => { this.state = 'running'; r(); }; }); }
+    }
+    window.AudioContext = SlowAudioContext;
+    const { unmount } = await renderMorse({ mode: 'copy', onSelectMode: vi.fn(), onExitMode: vi.fn() });
+
+    fireEvent.click(await screen.findByRole('button', { name: /Start Round/i }));
+    expect(navigator.audioSession.type).toBe('playback');
+
+    unmount();
+    expect(navigator.audioSession.type).toBe('auto');
+    await act(async () => { unlock(); });
+    expect(navigator.audioSession.type).toBe('auto');
+  });
 });

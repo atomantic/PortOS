@@ -86,25 +86,31 @@ export default function Security() {
       cancelAnimationFrame(animationFrameRef.current);
     }
 
-    // Claimed BEFORE the resume so the context comes up on the right session.
-    // One slot: a re-setup (device switch, stream restart) replaces the previous
-    // claim rather than stranding it.
-    claimAudioSession();
-
     const audioContext = new (window.AudioContext || window.webkitAudioContext)();
 
-    // Bring the context up if it isn't running (browser autoplay policy, or
-    // iOS's `'interrupted'` after a call/lock) — see lib/audioContext.js.
-    await resumeAudioContext(audioContext).catch(() => {
-      setAudioNeedsInteraction(true);
-    });
-
+    // The graph is built BEFORE the session claim, on purpose: node
+    // construction can throw (createMediaElementSource refuses an element that
+    // is already wired to another source node), and a throw past the claim
+    // would leave the document pinned output-only with no release left to call.
+    // Building against a not-yet-resumed context is fine — only the resume has
+    // to happen with the claim in force, so the context comes up on the right
+    // session.
     const analyser = audioContext.createAnalyser();
     const source = audioContext.createMediaElementSource(audioElement);
 
     analyser.fftSize = 256;
     source.connect(analyser);
     source.connect(audioContext.destination); // Connect to speakers
+
+    // One slot: a re-setup (device switch, stream restart) replaces the previous
+    // claim rather than stranding it.
+    claimAudioSession();
+
+    // Bring the context up if it isn't running (browser autoplay policy, or
+    // iOS's `'interrupted'` after a call/lock) — see lib/audioContext.js.
+    await resumeAudioContext(audioContext).catch(() => {
+      setAudioNeedsInteraction(true);
+    });
 
     audioContextRef.current = audioContext;
     analyserRef.current = analyser;

@@ -943,6 +943,11 @@ function CopyDrill({ prefs, updatePrefs, ensureCtx, claimSession, releaseSession
     // release below, so it hands the claim back on its way out.
     claimSession();
     const ctx = await ensureCtx().catch((err) => { releaseSession(); throw err; });
+    // The per-mount context is close()d and nulled on unmount, so a play that
+    // was still inside the iOS unlock window when the trainer went away has
+    // nothing left to sound into. Bail rather than throwing into playMorse — and
+    // hand the claim back, since no teardown will run for this play.
+    if (!ctx) { releaseSession(); playingRef.current = false; return; }
     const text = isNew ? pickKochPrompt(prefs.kochLevel) : prompt;
     if (isNew) {
       setPrompt(text);
@@ -950,10 +955,14 @@ function CopyDrill({ prefs, updatePrefs, ensureCtx, claimSession, releaseSession
       setFeedback(null);
     }
     setPlaying(true);
-    await playMorse(ctx, text, prefs);
-    releaseSession();
-    setPlaying(false);
-    playingRef.current = false;
+    // `finally`, not a plain sequence: a scheduling failure that rejects here
+    // would otherwise strand the session claim AND leave `playingRef` true,
+    // which silently blocks every later Start Round / replay for the session.
+    await playMorse(ctx, text, prefs).finally(() => {
+      releaseSession();
+      setPlaying(false);
+      playingRef.current = false;
+    });
     questionStartRef.current = Date.now();
     setTimeout(() => inputRef.current?.focus(), 50);
   }
