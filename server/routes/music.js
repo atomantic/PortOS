@@ -2,7 +2,14 @@
  * Music generation routes (the Music studio's on-device generator surface).
  *
  *   GET  /api/music/engines              → { engines, defaultEngine }
+ *   POST /api/music/describe             → { description, llm }
+ *   POST /api/music/lyrics               → { lyrics, llm }
  *   POST /api/music/generate             → { track, filename, durationSec, engine, modelId }
+ *
+ * `describe`/`lyrics` are the Generate tab's stepped designer (#4305): an LLM
+ * expands a short reference/vibe into a rich conditioning prompt, then writes
+ * lyrics from it. Both are one-shot, user-triggered calls — the studio never
+ * fires them on its own (AI Provider Usage Policy).
  *
  * Generation runs the engine-agnostic `generateMusic` (server/services/pipeline/
  * musicGen.js) — MusicGen / AudioLDM2 / ACE-Step behind one contract — lands the
@@ -28,6 +35,7 @@ import {
   enginePlatformLabel, generateMusic,
 } from '../services/pipeline/musicGen.js';
 import { listEngineModels, addAudioModel, removeAudioModel, isValidRepoId } from '../services/audioModels.js';
+import { describeMusic, writeLyrics } from '../services/musicDesigner.js';
 import { startHfDownloadStream, openSseStream } from '../lib/sseDownload.js';
 import { createInstallLogger } from '../lib/installLogger.js';
 import { inspectModelCache } from '../lib/hfCache.js';
@@ -277,6 +285,70 @@ router.delete('/models/:engine/*id', asyncHandler(async (req, res) => {
   const id = Array.isArray(splat) ? splat.join('/') : String(splat || '');
   const removed = await removeAudioModel({ engine: req.params.engine, id });
   res.json({ removed });
+}));
+
+// --- Stepped designer (#4305) ----------------------------------------------
+// Empty/whitespace picker values normalize to undefined so a blank <select>
+// means "use the install's active provider / the provider's default model"
+// instead of reaching the runner as a whitespace string (same preprocessing as
+// `refinePromptSchema` in routes/mediaJobs.js).
+const blankToUndefined = (s) => {
+  const v = (s ?? '').trim();
+  return v.length > 0 ? v : undefined;
+};
+// Shared picker + meta-prompt-override fields for both designer routes. The
+// template cap matches the description cap — an override is an instruction
+// block, not a document.
+const designerPickerShape = {
+  guidance: z.string().trim().max(4000).optional(),
+  template: z.string().trim().max(8000).optional(),
+  providerId: z.string().max(128).optional().transform(blankToUndefined),
+  model: z.string().max(256).optional().transform(blankToUndefined),
+  effort: z.string().max(64).optional().transform(blankToUndefined),
+};
+
+// Caps mirror the Generate form's own limits: a concept/description feeds the
+// prompt field (≤8000), lyrics feed the lyrics field (≤20000).
+const describeSchema = z.object({
+  concept: z.string().trim().min(1, 'concept is required').max(8000),
+  ...designerPickerShape,
+});
+
+const lyricsSchema = z.object({
+  description: z.string().trim().min(1, 'description is required').max(8000),
+  ...designerPickerShape,
+});
+
+// POST /api/music/describe — expand a short reference/vibe into a rich musical
+// description the audio engine can condition on. One explicit user action per
+// call; nothing here runs unprompted.
+router.post('/describe', asyncHandler(async (req, res) => {
+  const body = validateRequest(describeSchema, req.body ?? {});
+  const { description, llm } = await describeMusic({
+    concept: body.concept,
+    guidance: body.guidance,
+    template: body.template,
+    providerId: body.providerId,
+    model: body.model,
+    effort: body.effort,
+  });
+  res.json({ description, llm });
+}));
+
+// POST /api/music/lyrics — write original lyrics from that description plus the
+// user's extra guidance, in the `[verse]`/`[chorus]` syntax the lyric-aware
+// engines expect.
+router.post('/lyrics', asyncHandler(async (req, res) => {
+  const body = validateRequest(lyricsSchema, req.body ?? {});
+  const { lyrics, llm } = await writeLyrics({
+    description: body.description,
+    guidance: body.guidance,
+    template: body.template,
+    providerId: body.providerId,
+    model: body.model,
+    effort: body.effort,
+  });
+  res.json({ lyrics, llm });
 }));
 
 const generateSchema = z.object({

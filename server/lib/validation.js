@@ -681,12 +681,22 @@ export const autofixerSettingsSchema = featureProviderConfigSchema.extend({
 
 // Music settings slice (#2911). `chiptune` remembers the Track editor's last
 // chiptune generation provider/model pin plus the publish preferences (target
-// managed app + subdir inside its repo). Reuses the shared feature-provider
-// shape so an empty-string picker value normalizes to unset.
+// managed app + subdir inside its repo). `designer` (#4305) is the Generate
+// tab's stepped music designer: its provider/model/effort pin plus optional
+// meta-prompt overrides for the describe + lyrics steps (a blank override falls
+// back to the shipped default server-side, in services/musicDesigner.js).
+// Reuses the shared feature-provider shape so an empty-string picker value
+// normalizes to unset. Every key stays optional so an older client PUTting only
+// `{ chiptune }` — or only `{ designer }` — still validates.
 export const musicSettingsSchema = z.object({
   chiptune: featureProviderConfigSchema.extend({
     publishAppId: z.preprocess(emptyToUndefined, z.string().max(120).optional()),
     publishSubdir: z.preprocess(emptyToUndefined, z.string().max(200).optional()),
+  }).partial().optional(),
+  designer: featureProviderConfigSchema.extend({
+    effort: z.preprocess(emptyToUndefined, z.string().max(64).optional()),
+    describeTemplate: z.preprocess(emptyToUndefined, z.string().max(8000).optional()),
+    lyricsTemplate: z.preprocess(emptyToUndefined, z.string().max(8000).optional()),
   }).partial().optional(),
 });
 

@@ -110,8 +110,16 @@ vi.mock('../services/albums/index.js', () => ({
   updateAlbum: vi.fn(async (id, patch) => ({ id, ...patch })),
 }));
 
+// The stepped designer's two LLM steps (#4305) — stubbed so the route tests pin
+// validation + the exact service call args, not a provider round trip.
+vi.mock('../services/musicDesigner.js', () => ({
+  describeMusic: vi.fn(),
+  writeLyrics: vi.fn(),
+}));
+
 import * as tracks from '../services/tracks/index.js';
 import * as albums from '../services/albums/index.js';
+import * as designer from '../services/musicDesigner.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import musicRoutes from './music.js';
 
@@ -152,6 +160,103 @@ describe('music routes', () => {
     cache.cached = true;
     cuda.status = 'available';
     models.list.mockResolvedValue([{ id: 'm', name: 'M', userAdded: false }]);
+    designer.describeMusic.mockReset().mockResolvedValue({ description: 'Lush pads over a broken beat.', llm: { provider: 'fake-provider', model: 'fake-model' } });
+    designer.writeLyrics.mockReset().mockResolvedValue({ lyrics: '[verse]\nrain on the window', llm: { provider: 'fake-provider', model: 'fake-model' } });
+  });
+
+  describe('POST /describe', () => {
+    it('passes every designer field through to describeMusic and returns text + attribution', async () => {
+      const r = await request(app).post('/api/music/describe').send({
+        concept: 'a rainy downtempo loop',
+        guidance: 'under 100 BPM',
+        template: 'Be terse.',
+        providerId: 'fake-provider',
+        model: 'fake-model',
+        effort: 'high',
+      });
+      expect(r.status).toBe(200);
+      expect(r.body).toEqual({ description: 'Lush pads over a broken beat.', llm: { provider: 'fake-provider', model: 'fake-model' } });
+      expect(designer.describeMusic).toHaveBeenCalledWith({
+        concept: 'a rainy downtempo loop',
+        guidance: 'under 100 BPM',
+        template: 'Be terse.',
+        providerId: 'fake-provider',
+        model: 'fake-model',
+        effort: 'high',
+      });
+    });
+
+    it('normalizes empty picker values to undefined so the service falls back to its defaults', async () => {
+      const r = await request(app).post('/api/music/describe').send({
+        concept: 'a rainy downtempo loop', providerId: '', model: '   ', effort: '',
+      });
+      expect(r.status).toBe(200);
+      expect(designer.describeMusic).toHaveBeenCalledWith({
+        concept: 'a rainy downtempo loop',
+        guidance: undefined,
+        template: undefined,
+        providerId: undefined,
+        model: undefined,
+        effort: undefined,
+      });
+    });
+
+    it('rejects a missing/blank concept', async () => {
+      const missing = await request(app).post('/api/music/describe').send({});
+      expect(missing.status).toBe(400);
+      const blank = await request(app).post('/api/music/describe').send({ concept: '   ' });
+      expect(blank.status).toBe(400);
+      expect(designer.describeMusic).not.toHaveBeenCalled();
+    });
+
+    it('rejects a concept past the prompt-field cap', async () => {
+      const r = await request(app).post('/api/music/describe').send({ concept: 'x'.repeat(8001) });
+      expect(r.status).toBe(400);
+      expect(designer.describeMusic).not.toHaveBeenCalled();
+    });
+
+    it('surfaces the service NO_PROVIDER error through the error middleware', async () => {
+      designer.describeMusic.mockRejectedValue(new ServerError('No AI provider available to describe the music', { status: 503, code: 'NO_PROVIDER' }));
+      const r = await request(app).post('/api/music/describe').send({ concept: 'x' });
+      expect(r.status).toBe(503);
+      expect(r.body.code).toBe('NO_PROVIDER');
+    });
+  });
+
+  describe('POST /lyrics', () => {
+    it('passes every designer field through to writeLyrics and returns lyrics + attribution', async () => {
+      const r = await request(app).post('/api/music/lyrics').send({
+        description: 'warm rhodes soul',
+        guidance: 'about leaving at dawn',
+        template: 'Two verses only.',
+        providerId: 'fake-provider',
+        model: 'fake-model',
+        effort: 'low',
+      });
+      expect(r.status).toBe(200);
+      expect(r.body).toEqual({ lyrics: '[verse]\nrain on the window', llm: { provider: 'fake-provider', model: 'fake-model' } });
+      expect(designer.writeLyrics).toHaveBeenCalledWith({
+        description: 'warm rhodes soul',
+        guidance: 'about leaving at dawn',
+        template: 'Two verses only.',
+        providerId: 'fake-provider',
+        model: 'fake-model',
+        effort: 'low',
+      });
+    });
+
+    it('rejects a missing description', async () => {
+      const r = await request(app).post('/api/music/lyrics').send({ guidance: 'about leaving at dawn' });
+      expect(r.status).toBe(400);
+      expect(designer.writeLyrics).not.toHaveBeenCalled();
+    });
+
+    it('surfaces the service LLM_EMPTY error through the error middleware', async () => {
+      designer.writeLyrics.mockRejectedValue(new ServerError('The AI returned empty lyrics.', { status: 502, code: 'LLM_EMPTY' }));
+      const r = await request(app).post('/api/music/lyrics').send({ description: 'warm rhodes soul' });
+      expect(r.status).toBe(502);
+      expect(r.body.code).toBe('LLM_EMPTY');
+    });
   });
 
   it('GET /engines lists engines with readiness + lyric capability + merged models', async () => {
