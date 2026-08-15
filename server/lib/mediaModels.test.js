@@ -566,7 +566,15 @@ describe('mediaModels registry', () => {
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       const { loadMediaModels, getDefaultVideoModelId } = await import('./mediaModels.js');
       expect(loadMediaModels().video.defaultMlx).toBe('ltx23_distilled_q4');
-      if (process.platform !== 'win32') expect(getDefaultVideoModelId()).toBe('ltx23_distilled_q4');
+      // Pinned rather than skipped off-Darwin: the repointed default lives in the
+      // MLX bucket, which only a Mac resolves — pinning runs the assertion on
+      // every runner instead of silently skipping it on the Linux one.
+      const restore = pinPlatform('darwin');
+      try {
+        expect(getDefaultVideoModelId()).toBe('ltx23_distilled_q4');
+      } finally {
+        restore();
+      }
       logSpy.mockRestore();
     });
 
