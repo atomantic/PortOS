@@ -135,6 +135,7 @@ export default function CompositeSheetsEditor({
             value={newLabel}
             onChange={(e) => setNewLabel(e.target.value)}
             placeholder={newKind === 'world_pitch_poster' ? 'World summary concept pitch poster' : 'Gas-Giant Drifters costume sheet'}
+            aria-label="New board label"
             className="bg-port-card border border-port-border rounded px-2 py-1 text-white text-sm"
             maxLength={120}
           />
@@ -193,6 +194,7 @@ export default function CompositeSheetsEditor({
                     <input
                       value={editLabel}
                       onChange={(e) => setEditLabel(e.target.value)}
+                      aria-label="Board label"
                       className="bg-port-card border border-port-border rounded px-2 py-1 text-white text-sm"
                       maxLength={120}
                     />

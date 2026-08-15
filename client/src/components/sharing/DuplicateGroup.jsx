@@ -65,6 +65,7 @@ function RecordRow({ kind, record, onRenamed }) {
         {editing ? (
           <div className="flex items-center gap-2">
             <input autoFocus value={name} onChange={(e) => setName(e.target.value)}
+              aria-label={`Rename ${record.name}`}
               onKeyDown={(e) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') setEditing(false); }}
               className="flex-1 px-2 py-1 bg-port-card border border-port-border rounded text-white" />
             <button type="button" onClick={save} disabled={busy} aria-label="Save" className="text-port-success hover:opacity-80"><Check size={14} /></button>

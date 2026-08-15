@@ -288,6 +288,7 @@ export default function DataDog() {
                     name="site"
                     value={formData.site}
                     onChange={handleInputChange}
+                    aria-label="Custom site"
                     className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white"
                     placeholder="e.g., api.custom-datadog.com"
                   />

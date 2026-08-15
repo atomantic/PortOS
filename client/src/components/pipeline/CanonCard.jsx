@@ -260,6 +260,7 @@ function WardrobeRow({ wardrobe, editable, onCommit, onRemove }) {
           onChange={(e) => setDraft('name', e.target.value)}
           onBlur={() => commit('name')}
           placeholder="Outfit name (e.g. Wedding)"
+          aria-label="Outfit name"
           className="flex-1 min-w-0 px-1.5 py-0.5 text-xs bg-port-bg border border-port-border rounded text-white"
           maxLength={BIBLE_LIMITS.WARDROBE_NAME_MAX}
         />

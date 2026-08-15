@@ -75,6 +75,7 @@ export default function VideoTimeline() {
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="New project name…"
+          aria-label="New project name"
           className="flex-1 max-w-sm px-3 py-2 bg-port-card border border-port-border rounded-md text-white text-sm placeholder-gray-500 focus:outline-none focus:border-port-accent"
           disabled={creating}
         />

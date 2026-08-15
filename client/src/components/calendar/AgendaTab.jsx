@@ -92,6 +92,7 @@ export default function AgendaTab({ accounts }) {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search events..."
+            aria-label="Search events"
             className="w-full pl-9 pr-3 py-2 bg-port-card border border-port-border rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:border-port-accent"
           />
         </div>

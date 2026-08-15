@@ -98,11 +98,11 @@ export default function DeriveFromManuscriptPreview({ preview, committing, onCan
           onChange={(e) => setArc((a) => ({ ...a, protagonistArc: e.target.value }))} />
       </label>
 
-      <div className="border-t border-port-border pt-2 space-y-2">
+      <label className="block border-t border-port-border pt-2 space-y-2">
         <span className="text-[11px] uppercase tracking-wider text-gray-500">Volume</span>
         <input className={inputCls} value={volume.title} maxLength={DERIVE_TITLE_MAX} placeholder="Volume title"
           onChange={(e) => setVolume((v) => ({ ...v, title: e.target.value }))} />
-      </div>
+      </label>
 
       <div className="border-t border-port-border pt-2 space-y-2">
         <span className="text-[11px] uppercase tracking-wider text-gray-500">Issues (acts / chapters)</span>

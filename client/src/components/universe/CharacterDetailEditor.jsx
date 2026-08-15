@@ -154,8 +154,10 @@ function DraftField({ field, value, onCommit, disabled, idPrefix }) {
   // character cards don't render duplicate `chr-field-pronouns` DOM ids
   // and break the label/input association.
   const id = `chr-field-${idPrefix || 'unknown'}-${field.name}`;
+  // `id` stays off the shared spread and is written at each call site: a
+  // control whose id arrives through `{...common}` reads as unnamed to any
+  // reader — human or the a11y scan — that cannot resolve the spread.
   const common = {
-    id,
     value: draft.value,
     onChange: draft.onChange,
     onBlur: draft.onBlur,
@@ -170,8 +172,8 @@ function DraftField({ field, value, onCommit, disabled, idPrefix }) {
         {field.label}
       </label>
       {field.type === 'textarea'
-        ? <textarea {...common} rows={2} />
-        : <input type="text" {...common} />}
+        ? <textarea id={id} {...common} rows={2} />
+        : <input type="text" id={id} {...common} />}
     </div>
   );
 }

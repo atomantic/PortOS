@@ -383,6 +383,7 @@ export default function InboxTab({ accounts }) {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search messages..."
+            aria-label="Search messages"
             className="w-full pl-9 pr-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:border-port-accent"
           />
         </div>

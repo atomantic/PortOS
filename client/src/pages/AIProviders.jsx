@@ -1389,6 +1389,7 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [], runnerAllo
                       <code className="text-xs text-gray-300 bg-port-bg px-2 py-1.5 rounded border border-port-border shrink-0">{key}</code>
                       <input
                         type={isSecret ? 'password' : 'text'}
+                        aria-label={`${key} value`}
                         value={value}
                         onChange={(e) => setFormData(prev => ({
                           ...prev,
@@ -1439,6 +1440,7 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [], runnerAllo
                 value={newEnvKey}
                 onChange={(e) => setNewEnvKey(e.target.value.toUpperCase())}
                 placeholder="KEY"
+                aria-label="New environment variable name"
                 className="w-1/3 px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm focus:border-port-accent focus:outline-hidden font-mono"
               />
               <input
@@ -1446,6 +1448,7 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [], runnerAllo
                 value={newEnvValue}
                 onChange={(e) => setNewEnvValue(e.target.value)}
                 placeholder="value"
+                aria-label="New environment variable value"
                 className="flex-1 px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm focus:border-port-accent focus:outline-hidden"
               />
               <label className="flex items-center gap-1 text-xs text-gray-400 shrink-0 cursor-pointer" title="Mark as secret (value will be masked on provider list)">

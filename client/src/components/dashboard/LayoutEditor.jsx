@@ -304,6 +304,7 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
                   <input
                     id="layout-editor-window-end"
                     type="time"
+                    aria-label="Auto-activate window end time"
                     value={activateWindow.end}
                     onChange={(e) => updateWindowField('end', e.target.value)}
                     className="bg-port-bg border border-port-border rounded-lg px-2 py-1.5 text-white focus:border-port-accent outline-hidden"
@@ -372,6 +373,7 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
                 }}
                 maxLength={nameMax}
                 placeholder="Name for new layout"
+                aria-label="Name for new layout"
                 className="flex-1 bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:border-port-accent outline-hidden"
               />
               <button onClick={commitDuplicate} className="px-3 py-1.5 text-sm rounded-lg bg-port-accent text-white hover:bg-port-accent/80">Create</button>

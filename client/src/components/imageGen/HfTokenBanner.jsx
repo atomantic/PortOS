@@ -106,6 +106,7 @@ export default function HfTokenBanner({ modelLabel, licenseUrl, models, onSaved 
             onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); }}
             disabled={saving}
             placeholder="hf_…"
+            aria-label="Hugging Face read token"
             autoComplete="off"
             spellCheck={false}
             className="flex-1 bg-transparent text-white text-xs focus:outline-none disabled:opacity-50"

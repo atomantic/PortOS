@@ -35,6 +35,7 @@ export default function TickingClockEditor({ clock, disabled, onChange }) {
       </label>
       {enabled ? (
         <div className="space-y-2 pl-1">
+          <label htmlFor="ticking-clock-label" className="block text-[10px] uppercase tracking-wider text-gray-500">Countdown</label>
           <input
             id="ticking-clock-label"
             type="text"

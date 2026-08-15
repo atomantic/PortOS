@@ -89,16 +89,18 @@ export default function IdeaStage(props) {
           </p>
           <ul className="space-y-2">
             {questions.map((q, i) => (
-              <li key={i} className="space-y-1">
-                <div className="text-xs text-gray-300">{q}</div>
-                <input
-                  type="text"
-                  value={answers[i] || ''}
-                  onChange={(e) => setAnswers((prev) => ({ ...prev, [i]: e.target.value }))}
-                  placeholder="Your answer (optional — leave blank for LLM's choice)"
-                  className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-xs"
-                  disabled={refining}
-                />
+              <li key={i}>
+                <label className="block space-y-1">
+                  <span className="block text-xs text-gray-300">{q}</span>
+                  <input
+                    type="text"
+                    value={answers[i] || ''}
+                    onChange={(e) => setAnswers((prev) => ({ ...prev, [i]: e.target.value }))}
+                    placeholder="Your answer (optional — leave blank for LLM's choice)"
+                    className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-xs"
+                    disabled={refining}
+                  />
+                </label>
               </li>
             ))}
           </ul>

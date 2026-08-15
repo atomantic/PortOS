@@ -319,9 +319,10 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
           a fixed foundation checkpoint, so the install affordance is hidden. */}
       {engine?.customModels ? (
       <div className="pt-2 border-t border-port-border/60">
-        <span className="block text-[11px] uppercase tracking-wider text-gray-500 mb-1">Install a model from HuggingFace</span>
+        <label htmlFor="musicgen-install-repo" className="block text-[11px] uppercase tracking-wider text-gray-500 mb-1">Install a model from HuggingFace</label>
         <div className="flex items-center gap-2">
           <input
+            id="musicgen-install-repo"
             value={installRepo}
             onChange={(e) => setInstallRepo(e.target.value)}
             placeholder="org/model-repo"

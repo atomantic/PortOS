@@ -500,6 +500,16 @@ function hasMatchingForwardedLabel(src, id) {
       if (!tag) continue;
       re.lastIndex = match.index + tag.length;
       if (normalizedAttributeValue(attributeValue(tag, idProp)) !== id) continue;
+      // A forwarder can take its text as JSX children rather than a prop
+      // (`<FieldLabel htmlFor="world-logline">Logline</FieldLabel>`), in which
+      // case there is no same-named attribute to read — the name is the
+      // element's own body, judged by the same text check the aria-labelledby
+      // path uses. Without this branch every children-shaped forwarder looked
+      // unnamed and its controls stayed on the allowlist.
+      if (labelProp === 'children') {
+        if (hasUsableElementText(src, match.index, tag)) return true;
+        continue;
+      }
       if (isUsableLabelAttributeValue(normalizedAttributeValue(attributeValue(tag, labelProp)))) return true;
     }
   }
@@ -844,78 +854,21 @@ function inputSourceAnchor(file, src, index) {
   return `${file}|${semantic}|occurrence=${occurrence}`;
 }
 
+// What is left is no longer a backlog of unnamed controls — all three are
+// shapes the scan cannot resolve, not gaps in the UI:
+//   * EntityCombobox / TagPicker take the control's `id` as a prop and every
+//     caller pairs its own `<label htmlFor>`, which lives in the caller's file.
+//     A same-file scan cannot see it, and an `aria-label` here would OVERRIDE
+//     the caller's visible label — a regression, not a fix. Tracked in #4321.
+//   * AIProviders' fallback-model input sits in a labeled `<FormField>` whose
+//     conditional child holds an apostrophe in JSX text; `matchingBraceEnd`
+//     reads it as a string opener and loses the expression bounds (#4318).
+// So: do not "fix" these by bolting an aria-label onto the control. Fix the
+// recognizer, then delete the row.
 const PREEXISTING_INPUT_NAME_ALLOWLIST = new Set([
-  "src/components/CronInput.jsx|type=text|placeholder=0 7 * * *|value=expr",
   "src/components/EntityCombobox.jsx|id=inputId|type=text|placeholder=placeholder || `Search ${noun}s or type a new name…`|value=value|role=combobox",
   "src/components/TagPicker.jsx|id=id|type=text|placeholder=value.length >= maxTags ? `Max ${maxTags} tags` : placeholder|value=input",
-  "src/components/apps/ReferenceReposPanel.jsx|placeholder=Display name (e.g. phosphene)|value=form.name",
-  "src/components/apps/ReferenceReposPanel.jsx|placeholder=Branch (default: main)|value=form.branch",
-  "src/components/apps/ReferenceReposPanel.jsx|placeholder=Repo URL (https://github.com/owner/repo.git) or local path|value=form.repoUrl",
-  "src/components/apps/tabs/CustomTasksSection.jsx|type=text|placeholder=Task name *|value=form.name",
-  "src/components/apps/tabs/CustomTasksSection.jsx|type=text|placeholder=Description|value=form.description",
-  "src/components/apps/tabs/CustomTasksSection.jsx|type=text|placeholder=0 7 * * *|value=form.cronExpression || ''|title=Cron expression: minute hour dayOfMonth month dayOfWeek",
-  "src/components/apps/tabs/CustomTasksSection.jsx|type=time|value=form.scheduledTime || ''|title=Run at a specific time (leave empty for any time)",
-  "src/components/apps/tabs/GitTab.jsx|type=text|placeholder=Commit message...|value=commitMessage",
-  "src/components/calendar/AgendaTab.jsx|type=text|placeholder=Search events...|value=search",
-  "src/components/calendar/ConfigTab.jsx|type=text|placeholder=Client ID (e.g. 123456789-abc.apps.googleusercontent.com)|value=oauthForm.clientId",
-  "src/components/calendar/ConfigTab.jsx|type=password|placeholder=Client Secret (e.g. GOCSPX-...)|value=oauthForm.clientSecret",
-  "src/components/calendar/ReviewTab.jsx|type=date|value=date",
-  "src/components/calendar/ReviewTab.jsx|type=number|placeholder=min|value=editForm.durationMinutes|min=1|max=1440",
-  "src/components/calendar/ReviewTab.jsx|type=text|placeholder=Note (optional)|value=editForm.note",
-  "src/components/dashboard/LayoutEditor.jsx|id=layout-editor-window-end|type=time|value=activateWindow.end",
-  "src/components/dashboard/LayoutEditor.jsx|type=text|placeholder=Name for new layout|value=dupName",
-  "src/components/digital-twin/tabs/DocumentsTab.jsx|type=range|value=selectedDoc.weight || 5|min=1|max=10|occurrence=1",
-  "src/components/digital-twin/tabs/DocumentsTab.jsx|type=range|value=selectedDoc.weight || 5|min=1|max=10|occurrence=2",
-  "src/components/digital-twin/tabs/GoalsTab.jsx|type=date|value=birthDateInput",
-  "src/components/digital-twin/tabs/GoalsTab.jsx|type=text|placeholder=Goal title...|value=newGoal.title",
-  "src/components/digital-twin/tabs/GoalsTab.jsx|type=text|placeholder=Add milestone...|value=newMilestone.title",
-  "src/components/digital-twin/tabs/GoalsTab.jsx|type=date|value=newMilestone.targetDate",
-  "src/components/digital-twin/tabs/TimeCapsuleTab.jsx|type=text|placeholder=Snapshot label (e.g., Spring 2026, Pre-career-change)|value=label",
-  "src/components/digital-twin/tabs/TimeCapsuleTab.jsx|type=checkbox",
-  "src/components/imageGen/HfTokenBanner.jsx|type=password|placeholder=hf_…|value=token",
-  "src/components/imageGen/LoraPicker.jsx|type=number|value=sel.scale|min=0|max=2|step=0.1",
-  "src/components/insights/GoalScorecardTab.jsx|type=text|placeholder=extra keywords, comma-separated|value=drafts[rule.id] ?? ''",
-  "src/components/loraTraining/ImportGalleryDialog.jsx|type=text|placeholder=Search prompt, model, seed, LoRA…|value=query",
-  "src/components/media/CollectionPickerShell.jsx|type=text|placeholder=searchPlaceholder|value=query",
-  "src/components/media/CollectionPickerShell.jsx|type=text|placeholder=newCollectionPlaceholder|value=newName",
-  "src/components/messages/InboxTab.jsx|type=text|placeholder=Search messages...|value=search",
-  "src/components/music/MusicGenPanel.jsx|placeholder=org/model-repo|value=installRepo",
-  "src/components/pipeline/CanonCard.jsx|type=text|placeholder=Outfit name (e.g. Wedding)|value=draftFor('name')",
-  "src/components/pipeline/arcCanvas/AddSeasonRow.jsx|placeholder=Volume / Season title…|value=title",
-  "src/components/pipeline/arcCanvas/DeriveFromManuscriptPreview.jsx|placeholder=Volume title|value=volume.title",
-  "src/components/pipeline/arcCanvas/SeasonActions.jsx|placeholder=Issue / Episode title…|value=newTitle",
-  "src/components/pipeline/arcCanvas/SeasonEditor.jsx|placeholder=Title|value=draft.title || ''",
-  "src/components/pipeline/arcCanvas/SeasonEditor.jsx|type=number|placeholder=#|value=draft.number || 0|min=0|max=99",
-  "src/components/pipeline/arcCanvas/SeasonEditor.jsx|placeholder=One-sentence logline|value=draft.logline || ''",
-  "src/components/pipeline/arcCanvas/SeasonEditor.jsx|placeholder=Ending hook|value=draft.endingHook || ''",
-  "src/components/pipeline/arcCanvas/SeasonEditor.jsx|type=number|placeholder=Issue / episode target|value=draft.episodeCountTarget || 0|title=Issue / episode count target for this volume / season|min=0",
-  "src/components/pipeline/arcCanvas/TickingClockEditor.jsx|id=ticking-clock-label|type=text|placeholder=What the reader counts down to (e.g. “The storm makes landfall”)|value=c.label || ''",
-  "src/components/pipeline/stages/IdeaStage.jsx|type=text|placeholder=Your answer (optional — leave blank for LLM's choice)|value=answers[i] || ''",
-  "src/components/pipeline/stages/StoryboardsStage.jsx|placeholder=INT. FOUNDRY — NIGHT|value=scene.slugline || ''",
-  "src/components/pipeline/stages/StoryboardsStage.jsx|type=number|value=shot.durationSeconds ?? 4|title=Duration in seconds|min=1|max=30",
-  "src/components/sharing/DuplicateGroup.jsx|value=name",
-  "src/components/shell/TerminalHotKeys.jsx|type=text|placeholder=Tap & paste here|ref=pasteInputRef",
-  "src/components/universe/CharacterDetailEditor.jsx|type=text",
-  "src/components/universeBuilder/CompositeSheetsEditor.jsx|placeholder=newKind === 'world_pitch_poster' ? 'World summary concept pitch poster' : 'Gas-Giant Drifters costume sheet'|value=newLabel",
-  "src/components/universeBuilder/CompositeSheetsEditor.jsx|value=editLabel",
-  "src/components/universeBuilder/InfluenceChipsInput.jsx|type=text|placeholder=placeholder|value=input",
-  "src/components/universeBuilder/UniverseBibleTab.jsx|id=world-logline|type=text|placeholder=One-sentence hook — A foundry city goes silent, and the only survivor is a child.|value=draft.logline || ''",
-  "src/components/universeBuilder/UniverseBuilderPage.jsx|type=text|placeholder=colonies, factions, species|value=newCategoryName",
-  "src/components/universeBuilder/UniverseCategoryEditor.jsx|type=number|placeholder=Custom|value=genCustom|min=GENERATE_CUSTOM_MIN|max=GENERATE_CUSTOM_MAX",
-  "src/components/universeBuilder/UniverseCategoryEditor.jsx|placeholder=Label (e.g. Crystalline canyon basin)|value=newLabel",
-  "src/components/universeBuilder/UniverseCategoryEditor.jsx|value=editLabel",
-  "src/components/universeBuilder/UniverseTrunkPanels.jsx|type=text|placeholder=trunk.kind === 'characters' ? 'heroes, villains, factions' : trunk.kind === 'places' ? 'colonies, ruins' : 'weapons, vehicles'|value=newBucketName",
-  "src/components/voice/VoiceWidget.jsx|type=text|placeholder=Type a message…|value=draft",
-  "src/components/wiki/tabs/SearchTab.jsx|placeholder=Search wiki pages and raw sources...|value=query|ref=inputRef",
-  "src/components/writers-room/LibraryPane.jsx|placeholder=Folder name|value=folderName",
-  "src/components/writers-room/LibraryPane.jsx|placeholder=Title|value=workTitle",
-  "src/pages/AIProviders.jsx|type=isSecret ? 'password' : 'text'|value=value",
-  "src/pages/AIProviders.jsx|type=text|placeholder=KEY|value=newEnvKey",
-  "src/pages/AIProviders.jsx|type=newEnvSecret ? 'password' : 'text'|placeholder=value|value=newEnvValue",
-  "src/pages/MediaCollectionDetail.jsx|type=text|value=nameDraft",
   "src/pages/AIProviders.jsx|type=text|placeholder=Use fallback provider's default|value=formData.fallbackModel",
-  "src/pages/VideoTimeline.jsx|type=text|placeholder=New project name…|value=name",
-  "src/pages/DataDog.jsx|name=site|type=text|placeholder=e.g., api.custom-datadog.com|value=formData.site",
 ]);
 
 describe('a11y conventions', () => {
@@ -1198,6 +1151,22 @@ describe('a11y conventions', () => {
     // `htmlFor=` on the call site is not the forwarded prop here, so it must
     // not stand in for the `id` this wrapper reads.
     expect(hasMatchingExplicitLabel(`${idPropForwarder}\n${idPropCall.replace('id="sleep-hours" label', 'htmlFor="sleep-hours" label')}`, 'sleep-hours')).toBe(false);
+
+    // A forwarder can take its text as JSX children instead of a prop
+    // (UniverseBibleTab's `<FieldLabel htmlFor="world-logline">Logline`). There
+    // is no `children=` attribute to read at the call site, so the name has to
+    // come from the element's own body — and an empty body still names nothing.
+    const childrenForwarder = `function FieldLabel({ htmlFor, children }) {
+  return (
+    <div>
+      <label htmlFor={htmlFor} className="text-xs">{children}</label>
+    </div>
+  );
+}`;
+    const childrenCall = '<FieldLabel htmlFor="sleep-hours">Sleep</FieldLabel>\n<input id="sleep-hours" type="range" />';
+    expect(hasMatchingExplicitLabel(`${childrenForwarder}\n${childrenCall}`, 'sleep-hours')).toBe(true);
+    expect(hasMatchingExplicitLabel(`${childrenForwarder}\n${childrenCall.replace('>Sleep<', '><')}`, 'sleep-hours')).toBe(false);
+    expect(hasMatchingExplicitLabel(`${childrenForwarder}\n${childrenCall}`, 'other-id')).toBe(false);
   });
 
   it('credits a FormField whose only child is a conditional, but not a list', () => {

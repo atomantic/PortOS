@@ -166,6 +166,7 @@ export default function GoalsTab({ onRefresh }) {
               type="date"
               value={birthDateInput}
               onChange={e => setBirthDateInput(e.target.value)}
+              aria-label="Birth date"
               className="bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white"
             />
             <button
@@ -270,20 +271,24 @@ export default function GoalsTab({ onRefresh }) {
         {/* New Goal Form */}
         {showNewGoal && (
           <div className="bg-port-bg border border-port-border rounded-lg p-4 mb-4 space-y-3">
-            <input
-              type="text"
-              value={newGoal.title}
-              onChange={e => setNewGoal({ ...newGoal, title: e.target.value })}
-              placeholder="Goal title..."
-              className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-sm text-white placeholder-gray-500"
-            />
-            <textarea
-              value={newGoal.description}
-              onChange={e => setNewGoal({ ...newGoal, description: e.target.value })}
-              placeholder="Description (optional)..."
-              rows={2}
-              className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-sm text-white placeholder-gray-500 resize-none"
-            />
+            <FormField label="Goal title" labelClassName="block text-xs text-gray-500 mb-1">
+              <input
+                type="text"
+                value={newGoal.title}
+                onChange={e => setNewGoal({ ...newGoal, title: e.target.value })}
+                placeholder="Goal title..."
+                className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-sm text-white placeholder-gray-500"
+              />
+            </FormField>
+            <FormField label="Description" labelClassName="block text-xs text-gray-500 mb-1">
+              <textarea
+                value={newGoal.description}
+                onChange={e => setNewGoal({ ...newGoal, description: e.target.value })}
+                placeholder="Description (optional)..."
+                rows={2}
+                className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-sm text-white placeholder-gray-500 resize-none"
+              />
+            </FormField>
             <div className="flex gap-3">
               <FormField className="flex-1" label="Horizon" labelClassName="block text-xs text-gray-500 mb-1">
                 <select
@@ -440,6 +445,7 @@ export default function GoalsTab({ onRefresh }) {
                             value={newMilestone.title}
                             onChange={e => setNewMilestone({ ...newMilestone, title: e.target.value })}
                             placeholder="Add milestone..."
+                            aria-label={`New milestone title for ${goal.title}`}
                             className="flex-1 bg-port-card border border-port-border rounded px-2 py-1 text-xs text-white placeholder-gray-600"
                             onKeyDown={e => e.key === 'Enter' && handleAddMilestone(goal.id)}
                           />
@@ -447,6 +453,7 @@ export default function GoalsTab({ onRefresh }) {
                             type="date"
                             value={newMilestone.targetDate}
                             onChange={e => setNewMilestone({ ...newMilestone, targetDate: e.target.value })}
+                            aria-label={`New milestone target date for ${goal.title}`}
                             className="bg-port-card border border-port-border rounded px-2 py-1 text-xs text-white w-32"
                           />
                           <button

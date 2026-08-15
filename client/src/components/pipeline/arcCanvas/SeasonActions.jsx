@@ -94,6 +94,7 @@ export default function SeasonActions({
               value={newTitle}
               onChange={(e) => setNewTitle(e.target.value)}
               placeholder="Issue / Episode title…"
+              aria-label="Issue / episode title"
               className="flex-1 px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm"
               autoFocus
               maxLength={300}

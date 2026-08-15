@@ -218,6 +218,7 @@ export default function CollectionPickerShell({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder={searchPlaceholder}
+            aria-label={searchPlaceholder}
             className="w-full bg-port-bg border border-port-border rounded pl-7 pr-2 py-1 text-[11px] text-white focus:outline-none focus:border-port-accent"
             autoFocus
           />
@@ -241,6 +242,7 @@ export default function CollectionPickerShell({
           value={newName}
           onChange={(e) => setNewName(e.target.value)}
           placeholder={newCollectionPlaceholder}
+          aria-label={newCollectionPlaceholder}
           maxLength={80}
           disabled={busy}
           className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-[11px] text-white focus:outline-none focus:border-port-accent disabled:opacity-50"

@@ -37,12 +37,18 @@ const TONE_CLASS = {
  *
  * `readOnly` collapses the editor to a plain chip preview (no input, no X
  * buttons, no drag handles) so locked influences render with the same chrome.
+ *
+ * `ariaLabel` names the trailing entry field. The two lists render side by side
+ * with identical chrome, so "Add reference" alone would read the same for both
+ * — callers pass which list they are (`Style prompt reference`, `Negative
+ * prompt reference`).
  */
 export default function InfluenceChipsInput({
   tokens,
   onChange,
   tone = 'accent',
   placeholder = 'Add reference, press Enter',
+  ariaLabel = 'Add reference',
   readOnly = false,
   emptyLabel = '(none)',
 }) {
@@ -150,6 +156,7 @@ export default function InfluenceChipsInput({
             }
           }}
           placeholder={placeholder}
+          aria-label={ariaLabel}
           maxLength={WORLD_INFLUENCE_ENTRY_MAX}
           className="flex-1 min-w-[120px] bg-transparent text-sm text-white placeholder-gray-500 focus:outline-none"
         />

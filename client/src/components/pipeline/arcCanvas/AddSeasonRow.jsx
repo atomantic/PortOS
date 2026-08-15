@@ -45,6 +45,7 @@ export default function AddSeasonRow({ series, onSeriesUpdate }) {
         value={title}
         onChange={(e) => setTitle(e.target.value)}
         placeholder="Volume / Season title…"
+        aria-label="Volume / season title"
         className="w-72 px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
         autoFocus
         maxLength={200}

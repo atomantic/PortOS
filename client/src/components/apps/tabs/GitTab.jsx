@@ -519,6 +519,7 @@ export default function GitTab({ appId: _appId, appName, repoPath }) {
                       value={commitMessage}
                       onChange={(e) => setCommitMessage(e.target.value)}
                       placeholder="Commit message..."
+                      aria-label="Commit message"
                       className="flex-1 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
                     />
                     <button

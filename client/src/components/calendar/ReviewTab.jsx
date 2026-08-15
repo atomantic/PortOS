@@ -117,6 +117,7 @@ export default function ReviewTab() {
             type="date"
             value={date}
             onChange={e => setDate(e.target.value)}
+            aria-label="Review date"
             className="bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-port-accent"
           />
           <button aria-label="Next" onClick={() => changeDate(1)} className="p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-white">
@@ -291,6 +292,7 @@ export default function ReviewTab() {
                             value={editForm.durationMinutes}
                             onChange={e => setEditForm(f => ({ ...f, durationMinutes: e.target.value }))}
                             placeholder="min"
+                            aria-label="Duration in minutes"
                             min="1"
                             max="1440"
                             className="w-16 bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white"
@@ -302,6 +304,7 @@ export default function ReviewTab() {
                         value={editForm.note}
                         onChange={e => setEditForm(f => ({ ...f, note: e.target.value }))}
                         placeholder="Note (optional)"
+                        aria-label="Note"
                         className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white"
                       />
                       <div className="flex gap-1.5">

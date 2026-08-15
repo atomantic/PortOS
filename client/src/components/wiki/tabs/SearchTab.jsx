@@ -34,6 +34,7 @@ export default function SearchTab({ vaultId }) {
           onChange={e => setQuery(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && handleSearch()}
           placeholder="Search wiki pages and raw sources..."
+          aria-label="Search wiki pages and raw sources"
           className="w-full bg-port-card border border-port-border rounded-lg pl-11 pr-20 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-port-accent"
           autoFocus
         />

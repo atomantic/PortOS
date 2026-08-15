@@ -48,6 +48,7 @@ export default function SeasonEditor({ series, season, seasons, onSeriesUpdate, 
           onChange={(e) => setDraft({ ...draft, title: e.target.value })}
           disabled={contentDisabled}
           placeholder="Title"
+          aria-label="Volume / season title"
           className={contentInputClass}
           maxLength={200}
         />
@@ -57,6 +58,7 @@ export default function SeasonEditor({ series, season, seasons, onSeriesUpdate, 
           onChange={(e) => setDraft({ ...draft, number: parseInt(e.target.value, 10) || 0 })}
           disabled={contentDisabled}
           placeholder="#"
+          aria-label="Volume / season number"
           className={`w-16 ${contentInputClass}`}
           min={0}
           max={99}
@@ -67,6 +69,7 @@ export default function SeasonEditor({ series, season, seasons, onSeriesUpdate, 
         onChange={(e) => setDraft({ ...draft, logline: e.target.value })}
         disabled={contentDisabled}
         placeholder="One-sentence logline"
+        aria-label="Logline"
         className={`w-full ${contentInputClass}`}
         maxLength={500}
       />
@@ -85,6 +88,7 @@ export default function SeasonEditor({ series, season, seasons, onSeriesUpdate, 
           onChange={(e) => setDraft({ ...draft, endingHook: e.target.value })}
           disabled={contentDisabled}
           placeholder="Ending hook"
+          aria-label="Ending hook"
           className={contentInputClass}
           maxLength={1000}
         />
@@ -94,6 +98,7 @@ export default function SeasonEditor({ series, season, seasons, onSeriesUpdate, 
           onChange={(e) => setDraft({ ...draft, episodeCountTarget: parseInt(e.target.value, 10) || 0 })}
           disabled={contentDisabled}
           placeholder="Issue / episode target"
+          aria-label="Issue / episode count target"
           title="Issue / episode count target for this volume / season"
           className={contentInputClass}
           min={0}

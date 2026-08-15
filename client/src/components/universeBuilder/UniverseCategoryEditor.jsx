@@ -259,6 +259,7 @@ export function CategoryEditor({
                       onChange={(e) => setGenCustom(e.target.value)}
                       onKeyDown={(e) => { if (e.key === 'Enter') runGenerate(genCustom); }}
                       placeholder="Custom"
+                      aria-label="Custom number to generate"
                       className="w-16 bg-port-bg border border-port-border rounded px-1.5 py-1 text-white text-xs focus:outline-none focus:border-port-accent"
                     />
                     <button
@@ -317,6 +318,7 @@ export function CategoryEditor({
             value={newLabel}
             onChange={(e) => setNewLabel(e.target.value)}
             placeholder="Label (e.g. Crystalline canyon basin)"
+            aria-label="New entry label"
             className="bg-port-card border border-port-border rounded px-2 py-1 text-white text-sm"
             maxLength={120}
           />
@@ -434,6 +436,7 @@ function VariationCard({
             <input
               value={editLabel}
               onChange={(e) => setEditLabel(e.target.value)}
+              aria-label="Entry label"
               className="bg-port-card border border-port-border rounded px-2 py-1 text-white text-sm"
               maxLength={120}
             />

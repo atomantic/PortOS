@@ -170,6 +170,7 @@ export default function LibraryPane({ folders, works, activeWorkId, onSelectWork
             value={folderName}
             onChange={(e) => setFolderName(e.target.value)}
             placeholder="Folder name"
+            aria-label="Folder name"
             className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs min-w-0 min-h-[44px]"
           />
           <div className="flex items-center gap-1">
@@ -187,6 +188,7 @@ export default function LibraryPane({ folders, works, activeWorkId, onSelectWork
             value={workTitle}
             onChange={(e) => setWorkTitle(e.target.value)}
             placeholder="Title"
+            aria-label="Work title"
             className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs min-h-[44px]"
           />
           <select

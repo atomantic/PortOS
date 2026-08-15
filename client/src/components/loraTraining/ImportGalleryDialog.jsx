@@ -92,6 +92,7 @@ export default function ImportGalleryDialog({ dataset, onClose, onImported }) {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search prompt, model, seed, LoRA…"
+            aria-label="Search gallery images"
             className="w-full pl-7 pr-7 py-1.5 text-xs bg-port-bg border border-port-border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-port-accent"
             autoFocus
           />

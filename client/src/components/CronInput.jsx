@@ -72,6 +72,7 @@ export default function CronInput({ value, onSave, onCancel, className = '' }) {
             }}
             className="w-28 sm:w-32 px-2 py-1 bg-port-bg border border-port-border rounded text-xs text-white font-mono focus:border-port-accent focus:outline-hidden"
             placeholder="0 7 * * *"
+            aria-label="Cron expression"
           />
           <select
             value=""

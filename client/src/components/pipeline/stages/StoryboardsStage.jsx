@@ -512,6 +512,7 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
                   onChange={(e) => updateScene(i, { slugline: e.target.value })}
                   onBlur={() => persist(scenes)}
                   placeholder="INT. FOUNDRY — NIGHT"
+                  aria-label={`Scene ${i + 1} slugline`}
                   className="flex-1 mr-2 px-2 py-1 bg-port-bg border border-port-border rounded text-white text-xs uppercase tracking-wider font-mono"
                   maxLength={200}
                 />
@@ -750,6 +751,7 @@ function ShotList({
                     onChange={(e) => onUpdateShot(j, { durationSeconds: Number(e.target.value) || 4 })}
                     onBlur={onBlurShot}
                     title="Duration in seconds"
+                    aria-label={`Shot ${j + 1} duration in seconds`}
                     className="px-1 py-1 bg-port-bg border border-port-border rounded text-white text-[10px] text-center"
                   />
                   <button

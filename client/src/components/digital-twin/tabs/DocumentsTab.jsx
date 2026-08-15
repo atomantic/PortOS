@@ -211,6 +211,7 @@ export default function DocumentsTab({ onRefresh }) {
                       max="10"
                       value={selectedDoc.weight || 5}
                       onChange={(e) => handleWeightChange(selectedDoc, parseInt(e.target.value, 10))}
+                      aria-label="Document weight"
                       className="w-16 h-1 accent-port-accent"
                     />
                     <span className="text-xs text-gray-400 w-4">{selectedDoc.weight || 5}</span>
@@ -268,8 +269,9 @@ export default function DocumentsTab({ onRefresh }) {
               {/* Mobile weight control row */}
               <div className="flex md:hidden items-center gap-2 mt-2 pt-2 border-t border-port-border">
                 <Scale size={14} className="text-gray-500" />
-                <span className="text-xs text-gray-400">Weight:</span>
+                <label htmlFor="document-weight-mobile" className="text-xs text-gray-400">Weight:</label>
                 <input
+                  id="document-weight-mobile"
                   type="range"
                   min="1"
                   max="10"

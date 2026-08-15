@@ -16,6 +16,7 @@ import BrailleSpinner from '../../BrailleSpinner';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
+import FormField from '../../ui/FormField';
 import { formatBytes, formatDateTime, timeAgo } from '../../../utils/formatters';
 
 export default function TimeCapsuleTab({ onRefresh: _onRefresh }) {
@@ -155,22 +156,26 @@ export default function TimeCapsuleTab({ onRefresh: _onRefresh }) {
         <div className="bg-port-card rounded-lg border border-port-accent/30 p-4">
           <h3 className="font-medium text-white mb-3">Create Snapshot</h3>
           <div className="space-y-3">
-            <input
-              type="text"
-              value={label}
-              onChange={e => setLabel(e.target.value)}
-              placeholder="Snapshot label (e.g., Spring 2026, Pre-career-change)"
-              className="w-full px-3 py-2 min-h-[40px] bg-port-bg border border-port-border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-port-accent"
-              autoFocus
-              onKeyDown={e => e.key === 'Enter' && label.trim() && handleCreate()}
-            />
-            <textarea
-              value={description}
-              onChange={e => setDescription(e.target.value)}
-              placeholder="Optional notes about this moment in time..."
-              rows={2}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-port-accent resize-none"
-            />
+            <FormField label="Snapshot label">
+              <input
+                type="text"
+                value={label}
+                onChange={e => setLabel(e.target.value)}
+                placeholder="Snapshot label (e.g., Spring 2026, Pre-career-change)"
+                className="w-full px-3 py-2 min-h-[40px] bg-port-bg border border-port-border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-port-accent"
+                autoFocus
+                onKeyDown={e => e.key === 'Enter' && label.trim() && handleCreate()}
+              />
+            </FormField>
+            <FormField label="Notes">
+              <textarea
+                value={description}
+                onChange={e => setDescription(e.target.value)}
+                placeholder="Optional notes about this moment in time..."
+                rows={2}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-port-accent resize-none"
+              />
+            </FormField>
             <div className="flex justify-end gap-2">
               <button
                 onClick={() => { setShowForm(false); setLabel(''); setDescription(''); }}
@@ -294,6 +299,7 @@ export default function TimeCapsuleTab({ onRefresh: _onRefresh }) {
                         type="checkbox"
                         checked={isCompareSelected}
                         onChange={() => toggleCompareId(snap.id)}
+                        aria-label={`Compare ${snap.label}`}
                         className="w-5 h-5 shrink-0 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent"
                       />
                     )}

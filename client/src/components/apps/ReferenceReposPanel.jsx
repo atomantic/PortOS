@@ -1,8 +1,13 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { GitBranch, Plus, RefreshCw, Trash2, CheckCircle, AlertCircle, Edit3, X } from 'lucide-react';
 import toast from '../ui/Toast';
+import FormField from '../ui/FormField';
 import * as api from '../../services/api';
 import { formatDateTime } from '../../utils/formatters';
+
+// The add-reference form is dense, so its labels sit a step below FormField's
+// default size rather than the config-page default.
+const FIELD_LABEL_CLASS = 'block text-xs text-gray-500 mb-1';
 
 /**
  * Where reference-watch records its proposals, keyed by the app's RESOLVED work
@@ -396,26 +401,32 @@ function AddRefForm({ onSubmit, onCancel }) {
   return (
     <form onSubmit={submit} className="bg-port-card border border-port-accent/40 rounded-lg p-3 space-y-2">
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-        <input
-          autoFocus
-          value={form.name}
-          onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-          placeholder="Display name (e.g. phosphene)"
-          className="px-2 py-1 bg-port-bg border border-port-border rounded text-sm text-white focus:border-port-accent focus:outline-hidden"
-        />
-        <input
-          value={form.branch}
-          onChange={(e) => setForm((f) => ({ ...f, branch: e.target.value }))}
-          placeholder="Branch (default: main)"
-          className="px-2 py-1 bg-port-bg border border-port-border rounded text-sm text-white focus:border-port-accent focus:outline-hidden"
-        />
+        <FormField label="Display name" labelClassName={FIELD_LABEL_CLASS}>
+          <input
+            autoFocus
+            value={form.name}
+            onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+            placeholder="Display name (e.g. phosphene)"
+            className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-sm text-white focus:border-port-accent focus:outline-hidden"
+          />
+        </FormField>
+        <FormField label="Branch" labelClassName={FIELD_LABEL_CLASS}>
+          <input
+            value={form.branch}
+            onChange={(e) => setForm((f) => ({ ...f, branch: e.target.value }))}
+            placeholder="Branch (default: main)"
+            className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-sm text-white focus:border-port-accent focus:outline-hidden"
+          />
+        </FormField>
       </div>
-      <input
-        value={form.repoUrl}
-        onChange={(e) => setForm((f) => ({ ...f, repoUrl: e.target.value }))}
-        placeholder="Repo URL (https://github.com/owner/repo.git) or local path"
-        className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-sm text-white focus:border-port-accent focus:outline-hidden"
-      />
+      <FormField label="Repo URL or local path" labelClassName={FIELD_LABEL_CLASS}>
+        <input
+          value={form.repoUrl}
+          onChange={(e) => setForm((f) => ({ ...f, repoUrl: e.target.value }))}
+          placeholder="Repo URL (https://github.com/owner/repo.git) or local path"
+          className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-sm text-white focus:border-port-accent focus:outline-hidden"
+        />
+      </FormField>
       <textarea
         value={form.notes}
         onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}

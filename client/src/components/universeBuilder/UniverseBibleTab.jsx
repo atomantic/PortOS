@@ -71,6 +71,7 @@ function StyleNegativePromptEditor({ influences, onChange, locked, onToggleLock 
             tokens={safe.embrace}
             onChange={(next) => onChange({ ...safe, embrace: next })}
             placeholder="moebius linework, cel-shading, dust palette…"
+            ariaLabel="Add style prompt reference"
             tone="success"
             readOnly={!!locked?.influencesEmbrace}
           />
@@ -84,6 +85,7 @@ function StyleNegativePromptEditor({ influences, onChange, locked, onToggleLock 
             tokens={safe.avoid}
             onChange={(next) => onChange({ ...safe, avoid: next })}
             placeholder="blurry, lowres, watermark, neon cyberpunk…"
+            ariaLabel="Add negative prompt reference"
             tone="error"
             readOnly={!!locked?.influencesAvoid}
           />

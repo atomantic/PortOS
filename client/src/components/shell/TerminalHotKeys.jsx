@@ -58,6 +58,7 @@ export default function TerminalHotKeys({ sendCtrlB, sendCtrlC, handlePaste, sen
           type="text"
           className="w-32 px-2 py-1.5 bg-port-card text-white text-xs font-mono rounded border border-port-accent/50 focus:outline-none focus:border-port-accent min-h-[40px] placeholder-gray-500 shrink-0"
           placeholder="Tap & paste here"
+          aria-label="Paste target — tap and paste here"
           onPaste={handlePasteInputEvent}
           onBlur={() => setShowPasteInput(false)}
         />

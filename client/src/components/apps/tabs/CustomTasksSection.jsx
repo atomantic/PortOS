@@ -3,6 +3,7 @@ import { Plus, Play, Trash2, Edit3, Save, X, Clock } from 'lucide-react';
 import toast from '../../ui/Toast';
 import ToggleSwitch from '../../ToggleSwitch';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
+import FormField from '../../ui/FormField';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import * as api from '../../../services/api';
 import { timeAgo } from '../../../utils/formatters';
@@ -112,26 +113,32 @@ function TaskForm({ form, setForm, onSave, onCancel, saveLabel }) {
 
   return (
     <div className="space-y-3 bg-port-card border border-port-accent/50 rounded-lg p-4">
-      <input
-        type="text"
-        placeholder="Task name *"
-        value={form.name}
-        onChange={e => update('name', e.target.value)}
-        className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
-      />
-      <input
-        type="text"
-        placeholder="Description"
-        value={form.description}
-        onChange={e => update('description', e.target.value)}
-        className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
-      />
-      <textarea
-        placeholder="Prompt for the agent *"
-        value={form.promptTemplate}
-        onChange={e => update('promptTemplate', e.target.value)}
-        className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm font-mono h-32"
-      />
+      <FormField label="Task name *">
+        <input
+          type="text"
+          placeholder="Task name *"
+          value={form.name}
+          onChange={e => update('name', e.target.value)}
+          className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
+        />
+      </FormField>
+      <FormField label="Description">
+        <input
+          type="text"
+          placeholder="Description"
+          value={form.description}
+          onChange={e => update('description', e.target.value)}
+          className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
+        />
+      </FormField>
+      <FormField label="Prompt for the agent *">
+        <textarea
+          placeholder="Prompt for the agent *"
+          value={form.promptTemplate}
+          onChange={e => update('promptTemplate', e.target.value)}
+          className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm font-mono h-32"
+        />
+      </FormField>
 
       {/* Schedule */}
       <div className="space-y-2">
@@ -160,6 +167,7 @@ function TaskForm({ form, setForm, onSave, onCancel, saveLabel }) {
                 onChange={e => update('cronExpression', e.target.value)}
                 className="flex-1 min-w-[10rem] px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm font-mono"
                 placeholder="0 7 * * *"
+                aria-label="Cron expression"
                 title="Cron expression: minute hour dayOfMonth month dayOfWeek"
               />
               <select
@@ -189,6 +197,7 @@ function TaskForm({ form, setForm, onSave, onCancel, saveLabel }) {
               onChange={e => update('scheduledTime', e.target.value || '')}
               className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
               title="Run at a specific time (leave empty for any time)"
+              aria-label="Run at time"
             />
           </div>
         )}

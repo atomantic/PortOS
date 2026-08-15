@@ -126,6 +126,7 @@ export default function LoraPicker({
                     <span className="text-xs text-gray-500" title={`Recommended: ${recommended.toFixed(2)}`}>Scale</span>
                     <input
                       type="number" min={0} max={2} step={0.1}
+                      aria-label={`Scale for ${lora.filename}`}
                       value={sel.scale}
                       disabled={disabled}
                       onChange={(e) => setScale(lora.filename, parseFloat(e.target.value) || 0)}

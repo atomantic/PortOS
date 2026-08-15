@@ -754,6 +754,7 @@ export default function VoiceWidget() {
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             placeholder="Type a message…"
+            aria-label="Message to the voice assistant"
             className="flex-1 bg-transparent text-sm text-white placeholder-gray-500 focus:outline-none"
           />
           <button

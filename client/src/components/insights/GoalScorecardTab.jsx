@@ -100,6 +100,7 @@ function RulesEditor({ onClose }) {
               value={drafts[rule.id] ?? ''}
               onChange={(e) => setDrafts((prev) => ({ ...prev, [rule.id]: e.target.value }))}
               placeholder="extra keywords, comma-separated"
+              aria-label={`Extra keywords for ${rule.title}`}
               className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-gray-200 focus:border-port-accent/60 focus:outline-none"
             />
           </div>

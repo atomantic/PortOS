@@ -95,6 +95,7 @@ export function TrunkView({
               onChange={(e) => setNewBucketName(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') handleAddBucket(); }}
               placeholder={trunk.kind === 'characters' ? 'heroes, villains, factions' : trunk.kind === 'places' ? 'colonies, ruins' : 'weapons, vehicles'}
+              aria-label={`New ${trunk.label} sub-bucket name`}
               className="flex-1 min-w-[160px] bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:outline-none focus:border-port-accent"
               maxLength={WORLD_CATEGORY_KEY_MAX}
               autoFocus
