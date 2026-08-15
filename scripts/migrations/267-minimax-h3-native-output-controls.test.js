@@ -56,7 +56,7 @@ describe('migration 267 — MiniMax H3 native output controls', () => {
       { label: '768x1344 (9:16 H3 native)', w: 768, h: 1344 },
     ]);
     const seeded = JSON.parse(readFileSync(REFERENCE_PATH, 'utf-8'))
-      .video.macos.find((entry) => entry.id === H3_ID);
+      .video.mlx.find((entry) => entry.id === H3_ID);
     expect({
       defaultFrames: migrated.defaultFrames,
       frameOptions: migrated.frameOptions,

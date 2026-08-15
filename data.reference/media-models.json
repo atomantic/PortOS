@@ -1,7 +1,7 @@
 {
   "_doc": "PortOS media model registry. Edit to add models, tune defaults, or switch the text encoder. Restart the server to apply changes.",
   "video": {
-    "macos": [
+    "mlx": [
       {
         "id": "ltx23_unified",
         "name": "LTX-2.3 Unified Beta (~48 GB, bf16 quality ceiling)",
@@ -474,7 +474,7 @@
         }
       }
     ],
-    "windows": [
+    "cuda": [
       {
         "id": "ltx_video",
         "name": "LTX-Video 0.9.5 — T2V + I2V (~9.5 GB, auto-downloads)",
@@ -654,8 +654,8 @@
         }
       }
     ],
-    "defaultMacos": "ltx23_distilled_q4",
-    "defaultWindows": "ltx_video"
+    "defaultMlx": "ltx23_distilled_q4",
+    "defaultCuda": "ltx_video"
   },
   "image": [
     {

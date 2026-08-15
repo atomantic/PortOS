@@ -1,0 +1,1 @@
+- Video model catalog now selects on an MLX/CUDA axis instead of a macOS/Windows one, so a Linux install is served the torch+CUDA runtimes (LTX-Video, MiniMax H3 CUDA) it can actually run instead of an MLX-only list (#4142)

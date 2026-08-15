@@ -101,12 +101,31 @@ describe('migration 268 — MiniMax H3 CUDA model', () => {
     writeJson(path, legacyRegistry());
     await migration242.up({ rootDir });
     const afterMlx = readJson(path);
-    expect(afterMlx._shippedDefaults.video.windows).not.toContain(CUDA_ID);
+    // 242 writes the snapshot under the canonical #4142 keys.
+    expect(afterMlx._shippedDefaults.video.cuda).not.toContain(CUDA_ID);
 
     await migration.up({ rootDir });
     const got = readJson(path);
     expect(got.video.windows.some((entry) => entry.id === CUDA_ID)).toBe(true);
-    expect(got._shippedDefaults.video.windows).toContain(CUDA_ID);
+    expect(got._shippedDefaults.video.cuda).toContain(CUDA_ID);
+  });
+
+  // A fresh install seeds data/media-models.json from the canonical-keyed
+  // data.reference copy BEFORE any migration runs, so this family has to read
+  // the post-#4142 spelling as readily as the legacy one it was written against.
+  it('reads the canonical mlx/cuda bucket keys too', async () => {
+    const { video, ...rest } = legacyRegistry();
+    writeJson(path, {
+      ...rest,
+      video: { mlx: video.macos, cuda: video.windows, defaultMlx: video.defaultMacos, defaultCuda: video.defaultWindows },
+      _shippedDefaults: { video: { mlx: [], cuda: ['ltx_video'] } },
+    });
+    await migration.up({ rootDir });
+
+    const got = readJson(path);
+    expect(got.video.cuda.some((entry) => entry.id === CUDA_ID)).toBe(true);
+    expect(got.video.windows).toBeUndefined();
+    expect(got._shippedDefaults.video.cuda).toContain(CUDA_ID);
   });
 
   it('does nothing when the registry file is absent', async () => {

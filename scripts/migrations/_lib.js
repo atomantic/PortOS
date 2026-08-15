@@ -15,7 +15,7 @@
  *      a new `data/providers.json` entry repeats (149, 152, 185, 195, 201, 231).
  *   6. Media-model-registry migrations — `readMediaRegistry` /
  *      `writeMediaRegistry` collapse the strict-read → absent/unreadable skip →
- *      platform-array guard shell shared by every migration that patches
+ *      bucket-array guard shell shared by every migration that patches
  *      `data/media-models.json` (244, 247, …).
  *
  * The runner (`scripts/run-migrations.js`) explicitly skips `_`-prefixed
@@ -27,6 +27,7 @@ import { join } from 'path';
 import { pathToFileURL } from 'url';
 import { createHash } from 'crypto';
 import { atomicWrite, readJSONFileStrict } from '../../server/lib/fileUtils.js';
+import { VIDEO_BUCKET_MLX, resolveVideoBucketKey } from '../../server/lib/mediaModelBuckets.js';
 
 // ---- monolithic → per-record split-migration family ----
 //
@@ -543,21 +544,15 @@ export async function writeLayoutsDoc(path, doc) {
 const MEDIA_MODELS_REL_PATH = 'data/media-models.json';
 
 /**
- * Read `data/media-models.json` for a registry-patching migration. Collapses
- * the preamble every such migration repeats (244, 247, …): resolve the path,
- * strict-read it, and pull out one platform's entry array.
+ * Read `data/media-models.json` whole, for a migration that patches something
+ * other than one bucket's entry array (270 renames the bucket keys themselves).
  *
  * `readJSONFileStrict`'s `ok` flag is what separates "never written" (fresh
  * install — the seed in `data.reference/` already carries the change) from
  * "unreadable or corrupt", where rewriting the file would destroy a registry we
  * couldn't read. Both are skips, but only one of them is a warning.
- *
- * Returns `{ ok: false }` when the caller should do nothing, or
- * `{ ok: true, config, entries, path }` — mutate `config` in place, then persist
- * with `writeMediaRegistry(path, config)`. `platform` selects which
- * `config.video.<platform>` array lands in `entries`.
  */
-export async function readMediaRegistry({ rootDir, platform = 'macos' } = {}) {
+export async function readMediaRegistryConfig({ rootDir } = {}) {
   const path = join(rootDir, MEDIA_MODELS_REL_PATH);
   const { ok, value: config } = await readJSONFileStrict(path, null);
   if (!ok) {
@@ -568,12 +563,37 @@ export async function readMediaRegistry({ rootDir, platform = 'macos' } = {}) {
     console.log(`📄 ${MEDIA_MODELS_REL_PATH} not present — skipping (fresh install seeds from data.reference)`);
     return { ok: false };
   }
-  const entries = config?.video?.[platform];
+  return { ok: true, config, path };
+}
+
+/**
+ * Read `data/media-models.json` for a registry-patching migration. Collapses
+ * the preamble every such migration repeats (244, 247, …):
+ * `readMediaRegistryConfig` above, plus pulling out one bucket's entry array.
+ *
+ * Returns `{ ok: false }` when the caller should do nothing, or
+ * `{ ok: true, config, entries, bucketKey, path }` — mutate `config` in place,
+ * then persist with `writeMediaRegistry(path, config)`. `bucket` selects which
+ * video bucket lands in `entries`; `bucketKey` is the key it was actually found
+ * under, which a caller that REPLACES the whole array must write back to.
+ *
+ * The bucket key is resolved canonical-first with a fallback to the pre-#4142
+ * `macos` / `windows` spelling (see server/lib/mediaModelBuckets.js). Every
+ * member of this family predates the rename and can therefore meet either
+ * shape: an install upgrading from an older release still has the legacy keys
+ * when they run, while a fresh install seeds `data/media-models.json` from the
+ * canonical-keyed `data.reference/` copy before any migration runs.
+ */
+export async function readMediaRegistry({ rootDir, bucket = VIDEO_BUCKET_MLX } = {}) {
+  const { ok, config, path } = await readMediaRegistryConfig({ rootDir });
+  if (!ok) return { ok: false };
+  const bucketKey = resolveVideoBucketKey(config?.video, bucket);
+  const entries = bucketKey === null ? undefined : config.video[bucketKey];
   if (!Array.isArray(entries)) {
-    console.log(`⚠️ ${MEDIA_MODELS_REL_PATH}: no video.${platform}[] array — skipping`);
+    console.log(`⚠️ ${MEDIA_MODELS_REL_PATH}: no video.${bucket}[] array — skipping`);
     return { ok: false };
   }
-  return { ok: true, config, entries, path };
+  return { ok: true, config, entries, bucketKey, path };
 }
 
 /** Persist a media-model registry with the canonical trailing-newline shape. */

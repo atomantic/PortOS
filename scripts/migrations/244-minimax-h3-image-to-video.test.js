@@ -76,7 +76,7 @@ describe('migration 244 — MiniMax H3 image-to-video', () => {
 
     const migrated = h3In(readJson(path));
     const seeded = JSON.parse(readFileSync(REFERENCE_PATH, 'utf-8'))
-      .video.macos.find((entry) => entry.id === H3_ID);
+      .video.mlx.find((entry) => entry.id === H3_ID);
     expect(migrated.supportedModes).toEqual(seeded.supportedModes);
     expect(migrated.requiredWeights[0].files.filter((f) => f.startsWith('FL2VA/processor/')))
       .toEqual(seeded.requiredWeights[0].files.filter((f) => f.startsWith('FL2VA/processor/')));

@@ -21,10 +21,10 @@ const { id: H3_ID, shippedRepo: SHIPPED_REPO } = MINIMAX_H3_OUTPUT_PROFILE;
 
 export default {
   async up({ rootDir }) {
-    const { ok, config, entries: macos, path } = await readMediaRegistry({ rootDir });
+    const { ok, config, entries: mlxEntries, path } = await readMediaRegistry({ rootDir });
     if (!ok) return;
 
-    const entry = macos.find((model) => model?.id === H3_ID);
+    const entry = mlxEntries.find((model) => model?.id === H3_ID);
     if (!entry) {
       console.log(`✅ ${REL_PATH}: no '${H3_ID}' entry — user removed it, nothing to migrate`);
       return;

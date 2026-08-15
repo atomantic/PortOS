@@ -28,6 +28,7 @@
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite } from '../../server/lib/fileUtils.js';
+import { VIDEO_BUCKET_MLX, readVideoBucket } from '../../server/lib/mediaModelBuckets.js';
 
 const REL_PATH = 'data/media-models.json';
 
@@ -56,13 +57,15 @@ export default {
       return;
     }
 
-    const macos = Array.isArray(config?.video?.macos) ? config.video.macos : null;
-    if (!macos) {
-      console.log(`⚠️ ${REL_PATH}: no video.macos[] array — skipping`);
+    // Bucket key resolved canonical-first with a legacy fallback: this
+    // migration predates the #4142 `macos` → `mlx` rename, so it meets either.
+    const mlxEntries = readVideoBucket(config?.video, VIDEO_BUCKET_MLX);
+    if (!Array.isArray(mlxEntries)) {
+      console.log(`⚠️ ${REL_PATH}: no video.mlx[] array — skipping`);
       return;
     }
 
-    const entry = macos.find((m) => m?.id === 'hunyuan_video');
+    const entry = mlxEntries.find((m) => m?.id === 'hunyuan_video');
     if (!entry) {
       console.log(`✅ ${REL_PATH}: no 'hunyuan_video' entry — user removed it, nothing to migrate`);
       return;

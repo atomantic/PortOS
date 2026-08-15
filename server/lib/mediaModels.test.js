@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from 'fs
 import { tmpdir, homedir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { pinPlatform } from './testHelper.js';
 
 const __dirname_self = dirname(fileURLToPath(import.meta.url));
 const SAMPLE_REGISTRY_PATH = join(__dirname_self, '..', '..', 'data.reference', 'media-models.json');
@@ -59,7 +60,7 @@ describe('mediaModels registry', () => {
 
   it('ships LTX-2.5 MLX Q8 as a sibling runtime of the 2.3 dgrauet pin', async () => {
     const { loadMediaModels } = await import('./mediaModels.js');
-    const ltx25 = loadMediaModels().video.macos.find((model) => model.id === 'ltx25_mlx_q8');
+    const ltx25 = loadMediaModels().video.mlx.find((model) => model.id === 'ltx25_mlx_q8');
     expect(ltx25).toMatchObject({
       runtime: 'ltx25',
       repo: 'MrMofer/ltx-2.5-mlx-q8',
@@ -74,7 +75,7 @@ describe('mediaModels registry', () => {
     const { loadMediaModels } = await import('./mediaModels.js');
     // H3 is an Apple-silicon MLX runtime, so inspect the shipped macOS catalog
     // directly instead of the current platform's filtered model list.
-    const h3 = loadMediaModels().video.macos.find((model) => model.id === 'minimax_h3_8bit');
+    const h3 = loadMediaModels().video.mlx.find((model) => model.id === 'minimax_h3_8bit');
     expect(h3).toMatchObject({
       runtime: 'minimax_h3',
       repo: 'pipenetwork/MiniMax-H3-MLX-8bit',
@@ -133,11 +134,11 @@ describe('mediaModels registry', () => {
     expect(h3.termsGate.id).toBe('minimax-h3-community-license-2026-08-02');
   });
 
-  it('ships MiniMax H3 CUDA as the Windows/NVIDIA H3 profile', async () => {
+  it('ships MiniMax H3 CUDA as the NVIDIA H3 profile', async () => {
     const { loadMediaModels } = await import('./mediaModels.js');
-    // The CUDA entry is Windows-list-only, so inspect the shipped catalog
+    // The CUDA entry is CUDA-bucket-only, so inspect the shipped catalog
     // directly rather than the current platform's filtered list.
-    const h3 = loadMediaModels().video.windows.find((model) => model.id === 'minimax_h3_cuda');
+    const h3 = loadMediaModels().video.cuda.find((model) => model.id === 'minimax_h3_cuda');
     expect(h3).toMatchObject({
       runtime: 'minimax_h3_cuda',
       repo: 'MiniMaxAI/MiniMax-H3',
@@ -152,7 +153,7 @@ describe('mediaModels registry', () => {
     });
     // Same canvas contract as the MLX profile — it's the checkpoint's, not the
     // runner's — so these must not drift apart.
-    const mlx = loadMediaModels().video.macos.find((model) => model.id === 'minimax_h3_8bit');
+    const mlx = loadMediaModels().video.mlx.find((model) => model.id === 'minimax_h3_8bit');
     expect(h3.defaultWidth).toBe(mlx.defaultWidth);
     expect(h3.defaultHeight).toBe(mlx.defaultHeight);
     expect(h3.resolutionStep).toBe(mlx.resolutionStep);
@@ -170,7 +171,7 @@ describe('mediaModels registry', () => {
 
   it('pins an explicit file list for MiniMax H3 CUDA rather than a repo snapshot', async () => {
     const { loadMediaModels } = await import('./mediaModels.js');
-    const h3 = loadMediaModels().video.windows.find((model) => model.id === 'minimax_h3_cuda');
+    const h3 = loadMediaModels().video.cuda.find((model) => model.id === 'minimax_h3_cuda');
     // `MiniMaxAI/MiniMax-H3` is ~498 GB: it carries the diffusers layout, the
     // `transformer_ref/` partition for the ref2va workflow PortOS doesn't
     // expose, AND the original non-diffusers FL2VA/ + Ref2VA/ layouts the MLX
@@ -220,16 +221,16 @@ describe('mediaModels registry', () => {
       const { VIDEO_RUNTIME_MODES } = await import('./videoModeProfiles.js');
       const { loadMediaModels } = await import('./mediaModels.js');
       const { video } = loadMediaModels();
-      for (const entry of [...video.macos, ...video.windows]) {
+      for (const entry of [...video.mlx, ...video.cuda]) {
         expect(Object.keys(VIDEO_RUNTIME_MODES), entry.id).toContain(entry.runtime);
       }
     });
 
     it('retires the hunyuan legacy `mode: t2v` field for a text-only contract', async () => {
       const { loadMediaModels, getVideoModels } = await import('./mediaModels.js');
-      expect(loadMediaModels().video.macos.find((m) => m.id === 'hunyuan_video').mode).toBeUndefined();
+      expect(loadMediaModels().video.mlx.find((m) => m.id === 'hunyuan_video').mode).toBeUndefined();
       const hunyuan = getVideoModels().find((m) => m.id === 'hunyuan_video');
-      // Windows ships no hunyuan entry, so only assert where it's runnable.
+      // The CUDA bucket ships no hunyuan entry, so only assert where it's runnable.
       if (hunyuan) expect(hunyuan.supportedModes).toEqual(['text']);
     });
 
@@ -240,16 +241,16 @@ describe('mediaModels registry', () => {
       // A persisted copy would read back as a *declared* list, freezing this
       // install's built-ins against any later correction to VIDEO_RUNTIME_MODES.
       const onDisk = JSON.parse(readFileSync(registryFile, 'utf-8'));
-      const mlx = [...onDisk.video.macos, ...onDisk.video.windows]
+      const mlx = [...onDisk.video.mlx, ...onDisk.video.cuda]
         .find((m) => m.runtime === 'mlx_video');
       expect(mlx.supportedModes).toBeUndefined();
     });
 
     it('keeps a user entry that declares its own list, and resolves one that does not', async () => {
-      const platform = process.platform === 'win32' ? 'windows' : 'macos';
+      const platform = process.platform === 'darwin' ? 'mlx' : 'cuda';
       writeFileSync(registryFile, JSON.stringify({
         video: {
-          macos: [], windows: [], defaultMacos: 'custom-narrow', defaultWindows: 'custom-narrow',
+          mlx: [], cuda: [], defaultMlx: 'custom-narrow', defaultCuda: 'custom-narrow',
           [platform]: [
             { id: 'custom-narrow', name: 'Custom', runtime: 'mlx_video', supportedModes: ['text'], source: 'user' },
             { id: 'custom-bare', name: 'Bare', runtime: 'mlx_video', source: 'user' },
@@ -257,7 +258,7 @@ describe('mediaModels registry', () => {
         },
         // Non-empty so the deletion-survives-upgrade union doesn't re-append
         // the built-ins over the two entries under test.
-        _shippedDefaults: { video: { macos: ['custom-narrow', 'custom-bare'], windows: ['custom-narrow', 'custom-bare'] } },
+        _shippedDefaults: { video: { mlx: ['custom-narrow', 'custom-bare'], cuda: ['custom-narrow', 'custom-bare'] } },
       }));
       const { getVideoModels } = await import('./mediaModels.js');
       const byId = new Map(getVideoModels().map((m) => [m.id, m]));
@@ -267,10 +268,10 @@ describe('mediaModels registry', () => {
   });
 
   it('hides models with broken === current platform', async () => {
-    const here = process.platform === 'win32' ? 'windows' : 'macos';
-    const elsewhere = process.platform === 'win32' ? 'macos' : 'windows';
+    const here = process.platform === 'darwin' ? 'mlx' : 'cuda';
+    const elsewhere = process.platform === 'darwin' ? 'cuda' : 'mlx';
     writeFileSync(registryFile, JSON.stringify({
-      video: { macos: [], windows: [], defaultMacos: 'x', defaultWindows: 'x' },
+      video: { mlx: [], cuda: [], defaultMlx: 'x', defaultCuda: 'x' },
       image: [
         { id: 'works', name: 'Works' },
         { id: 'broken-here', name: 'Broken Here', broken: here },
@@ -288,7 +289,7 @@ describe('mediaModels registry', () => {
 
   it('expandHome resolves ~/ correctly without dropping the home dir', async () => {
     writeFileSync(registryFile, JSON.stringify({
-      video: { macos: [], windows: [], defaultMacos: 'x', defaultWindows: 'x' },
+      video: { mlx: [], cuda: [], defaultMlx: 'x', defaultCuda: 'x' },
       image: [],
       textEncoders: [
         { id: 'tilde-only', label: 't', repo: 'r1', localPath: '~' },
@@ -315,7 +316,7 @@ describe('mediaModels registry', () => {
 
   it('getTextEncoderRepo prefers existing localPath over repo', async () => {
     writeFileSync(registryFile, JSON.stringify({
-      video: { macos: [], windows: [], defaultMacos: 'x', defaultWindows: 'x' },
+      video: { mlx: [], cuda: [], defaultMlx: 'x', defaultCuda: 'x' },
       image: [],
       textEncoders: [
         { id: 'has-local', label: 'L', repo: 'org/repo', localPath: tmpDir },
@@ -328,7 +329,7 @@ describe('mediaModels registry', () => {
 
   it('getTextEncoderRepo falls back to repo when localPath does not exist', async () => {
     writeFileSync(registryFile, JSON.stringify({
-      video: { macos: [], windows: [], defaultMacos: 'x', defaultWindows: 'x' },
+      video: { mlx: [], cuda: [], defaultMlx: 'x', defaultCuda: 'x' },
       image: [],
       textEncoders: [{ id: 't', label: 't', repo: 'org/repo', localPath: '/definitely/not/existing/12345' }],
       selectedTextEncoder: 't',
@@ -375,8 +376,8 @@ describe('mediaModels registry', () => {
     const { loadMediaModels, getVideoModels, getDefaultVideoModelId } = await import('./mediaModels.js');
     const reg = loadMediaModels();
     expect(reg.video).toBeDefined();
-    expect(Array.isArray(reg.video.macos)).toBe(true);
-    expect(Array.isArray(reg.video.windows)).toBe(true);
+    expect(Array.isArray(reg.video.mlx)).toBe(true);
+    expect(Array.isArray(reg.video.cuda)).toBe(true);
     expect(getVideoModels().length).toBeGreaterThan(0);
     expect(typeof getDefaultVideoModelId()).toBe('string');
   });
@@ -386,15 +387,15 @@ describe('mediaModels registry', () => {
     // arrays — without coercion, getImageModels()/getVideoModels() throw at
     // module import-time.
     writeFileSync(registryFile, JSON.stringify({
-      video: { macos: 'ltx', windows: { id: 'oops' } },
+      video: { mlx: 'ltx', cuda: { id: 'oops' } },
       image: {},
       textEncoders: 'gemma',
       selectedTextEncoder: 'gemma-bf16',
     }));
     const { loadMediaModels, getVideoModels, getImageModels } = await import('./mediaModels.js');
     const reg = loadMediaModels();
-    expect(Array.isArray(reg.video.macos)).toBe(true);
-    expect(Array.isArray(reg.video.windows)).toBe(true);
+    expect(Array.isArray(reg.video.mlx)).toBe(true);
+    expect(Array.isArray(reg.video.cuda)).toBe(true);
     expect(Array.isArray(reg.image)).toBe(true);
     expect(Array.isArray(reg.textEncoders)).toBe(true);
     expect(() => getVideoModels()).not.toThrow();
@@ -405,24 +406,24 @@ describe('mediaModels registry', () => {
     writeFileSync(registryFile, JSON.stringify({}));
     const { loadMediaModels } = await import('./mediaModels.js');
     const reg = loadMediaModels();
-    expect(reg.video.defaultMacos).toBeDefined();
+    expect(reg.video.defaultMlx).toBeDefined();
     expect(reg.textEncoders.length).toBeGreaterThan(0);
   });
 
   it('getDefaultVideoModelId falls back to first available when configured id is unknown', async () => {
-    const platformKey = process.platform === 'win32' ? 'windows' : 'macos';
-    const otherKey = process.platform === 'win32' ? 'macos' : 'windows';
+    const platformKey = process.platform === 'darwin' ? 'mlx' : 'cuda';
+    const otherKey = process.platform === 'darwin' ? 'cuda' : 'mlx';
     writeFileSync(registryFile, JSON.stringify({
       video: {
-        macos: [],
-        windows: [],
+        mlx: [],
+        cuda: [],
         [platformKey]: [
           { id: 'real-model', name: 'Real' },
           { id: 'other', name: 'Other' },
         ],
         [otherKey]: [],
-        defaultMacos: 'nonexistent-typo',
-        defaultWindows: 'nonexistent-typo',
+        defaultMlx: 'nonexistent-typo',
+        defaultCuda: 'nonexistent-typo',
       },
       image: [],
       textEncoders: [{ id: 't', label: 't', repo: 'r' }],
@@ -437,7 +438,7 @@ describe('mediaModels registry', () => {
 
   it('getTextEncoderRepo falls back when entry has no repo string', async () => {
     writeFileSync(registryFile, JSON.stringify({
-      video: { macos: [], windows: [], defaultMacos: 'x', defaultWindows: 'x' },
+      video: { mlx: [], cuda: [], defaultMlx: 'x', defaultCuda: 'x' },
       image: [],
       textEncoders: [{ id: 't', label: 't' }], // no repo field
       selectedTextEncoder: 't',
@@ -464,20 +465,20 @@ describe('mediaModels registry', () => {
   });
 
   it('getDefaultVideoModelId skips broken-on-platform models when falling back', async () => {
-    const platformKey = process.platform === 'win32' ? 'windows' : 'macos';
-    const here = process.platform === 'win32' ? 'windows' : 'macos';
-    const otherKey = process.platform === 'win32' ? 'macos' : 'windows';
+    const platformKey = process.platform === 'darwin' ? 'mlx' : 'cuda';
+    const here = process.platform === 'darwin' ? 'mlx' : 'cuda';
+    const otherKey = process.platform === 'darwin' ? 'cuda' : 'mlx';
     writeFileSync(registryFile, JSON.stringify({
       video: {
-        macos: [],
-        windows: [],
+        mlx: [],
+        cuda: [],
         [platformKey]: [
           { id: 'broken-here', name: 'Broken', broken: here },
           { id: 'works', name: 'Works' },
         ],
         [otherKey]: [],
-        defaultMacos: 'broken-here',
-        defaultWindows: 'broken-here',
+        defaultMlx: 'broken-here',
+        defaultCuda: 'broken-here',
       },
       image: [],
       textEncoders: [{ id: 't', label: 't', repo: 'r' }],
@@ -497,20 +498,20 @@ describe('mediaModels registry', () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const { loadMediaModels } = await import('./mediaModels.js');
     const reg = loadMediaModels();
-    // All built-in macos models should be present
+    // All built-in MLX models should be present
     const { DEFAULT_VIDEO_MODEL_IDS } = await import('./mediaModels.js').then(async (m) => {
       // We don't export the ids directly, so read them from the registry itself
       const r = m.loadMediaModels();
-      return { DEFAULT_VIDEO_MODEL_IDS: r.video.macos.map((e) => e.id) };
+      return { DEFAULT_VIDEO_MODEL_IDS: r.video.mlx.map((e) => e.id) };
     });
     for (const id of DEFAULT_VIDEO_MODEL_IDS) {
-      expect(reg.video.macos.some((e) => e.id === id)).toBe(true);
+      expect(reg.video.mlx.some((e) => e.id === id)).toBe(true);
     }
     // _shippedDefaults should be populated
-    expect(reg._shippedDefaults?.video?.macos?.length).toBeGreaterThan(0);
+    expect(reg._shippedDefaults?.video?.mlx?.length).toBeGreaterThan(0);
     // Disk should now contain _shippedDefaults
     const onDisk = JSON.parse(readFileSync(registryFile, 'utf-8'));
-    expect(onDisk._shippedDefaults?.video?.macos?.length).toBeGreaterThan(0);
+    expect(onDisk._shippedDefaults?.video?.mlx?.length).toBeGreaterThan(0);
     logSpy.mockRestore();
   });
 
@@ -525,17 +526,17 @@ describe('mediaModels registry', () => {
     // _shippedDefaults claims every current built-in so appendNewlyShippedEntries
     // adds nothing — these cases are about what the load REMOVES, and an
     // "everything else is new" fixture would bury it under a dozen appends.
-    const shippedMacosIds = JSON.parse(readFileSync(SAMPLE_REGISTRY_PATH, 'utf-8'))
-      .video.macos.map((e) => e.id).concat(RETIRED_ID);
+    const shippedMlxIds = JSON.parse(readFileSync(SAMPLE_REGISTRY_PATH, 'utf-8'))
+      .video.mlx.map((e) => e.id).concat(RETIRED_ID);
 
-    const writeRegistry = (macos, defaultMacos = 'ltx23_distilled_q4') => writeFileSync(
+    const writeRegistry = (mlx, defaultMlx = 'ltx23_distilled_q4') => writeFileSync(
       registryFile,
       JSON.stringify({
-        video: { macos, windows: [], defaultMacos, defaultWindows: 'ltx_video' },
+        video: { mlx, cuda: [], defaultMlx, defaultCuda: 'ltx_video' },
         image: [],
         textEncoders: [{ id: 't', label: 't', repo: 'r' }],
         selectedTextEncoder: 't',
-        _shippedDefaults: { video: { macos: shippedMacosIds, windows: [] } },
+        _shippedDefaults: { video: { mlx: shippedMlxIds, cuda: [] } },
       }),
     );
     const retiredEntry = (repo = SHIPPED_REPO) => ({
@@ -547,7 +548,7 @@ describe('mediaModels registry', () => {
       writeRegistry([retiredEntry(), survivor]);
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       const { loadMediaModels } = await import('./mediaModels.js');
-      expect(loadMediaModels().video.macos.map((e) => e.id)).toEqual(['ltx23_distilled_q4']);
+      expect(loadMediaModels().video.mlx.map((e) => e.id)).toEqual(['ltx23_distilled_q4']);
       logSpy.mockRestore();
     });
 
@@ -556,7 +557,7 @@ describe('mediaModels registry', () => {
       writeRegistry([retiredEntry('example-org/ltx2-fork'), survivor]);
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       const { loadMediaModels } = await import('./mediaModels.js');
-      expect(loadMediaModels().video.macos.map((e) => e.id)).toContain(RETIRED_ID);
+      expect(loadMediaModels().video.mlx.map((e) => e.id)).toContain(RETIRED_ID);
       logSpy.mockRestore();
     });
 
@@ -564,7 +565,7 @@ describe('mediaModels registry', () => {
       writeRegistry([retiredEntry(), survivor], RETIRED_ID);
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       const { loadMediaModels, getDefaultVideoModelId } = await import('./mediaModels.js');
-      expect(loadMediaModels().video.defaultMacos).toBe('ltx23_distilled_q4');
+      expect(loadMediaModels().video.defaultMlx).toBe('ltx23_distilled_q4');
       if (process.platform !== 'win32') expect(getDefaultVideoModelId()).toBe('ltx23_distilled_q4');
       logSpy.mockRestore();
     });
@@ -573,7 +574,7 @@ describe('mediaModels registry', () => {
       writeRegistry([retiredEntry('example-org/ltx2-fork'), survivor], RETIRED_ID);
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       const { loadMediaModels } = await import('./mediaModels.js');
-      expect(loadMediaModels().video.defaultMacos).toBe(RETIRED_ID);
+      expect(loadMediaModels().video.defaultMlx).toBe(RETIRED_ID);
       logSpy.mockRestore();
     });
 
@@ -583,7 +584,7 @@ describe('mediaModels registry', () => {
       const { loadMediaModels } = await import('./mediaModels.js');
       // Nothing left to name — getDefaultVideoModelId's "unknown default →
       // first available" warning is the honest outcome.
-      expect(loadMediaModels().video.defaultMacos).toBe(RETIRED_ID);
+      expect(loadMediaModels().video.defaultMlx).toBe(RETIRED_ID);
       logSpy.mockRestore();
     });
 
@@ -591,7 +592,7 @@ describe('mediaModels registry', () => {
       writeRegistry([survivor]);
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       const { loadMediaModels } = await import('./mediaModels.js');
-      expect(loadMediaModels().video.macos.some((e) => e.id === RETIRED_ID)).toBe(false);
+      expect(loadMediaModels().video.mlx.some((e) => e.id === RETIRED_ID)).toBe(false);
       logSpy.mockRestore();
     });
   });
@@ -601,8 +602,8 @@ describe('mediaModels registry', () => {
   // persist the cached object wholesale later in the same boot.
   describe('MiniMax H3 output-control upgrade', () => {
     const OLD_FRAMES = [124, 141, 158, 175, 192, 209, 226, 243, 260, 277, 294, 311, 328, 345, 362];
-    const shippedMacosIds = JSON.parse(readFileSync(SAMPLE_REGISTRY_PATH, 'utf-8'))
-      .video.macos.map((entry) => entry.id);
+    const shippedMlxIds = JSON.parse(readFileSync(SAMPLE_REGISTRY_PATH, 'utf-8'))
+      .video.mlx.map((entry) => entry.id);
     const legacyH3 = (extra = {}) => ({
       id: 'minimax_h3_8bit',
       name: 'MiniMax H3',
@@ -615,17 +616,17 @@ describe('mediaModels registry', () => {
       ...extra,
     });
     const writeRegistry = (entry) => writeFileSync(registryFile, JSON.stringify({
-      video: { macos: [entry], windows: [], defaultMacos: entry.id, defaultWindows: 'ltx_video' },
+      video: { mlx: [entry], cuda: [], defaultMlx: entry.id, defaultCuda: 'ltx_video' },
       image: [],
       textEncoders: [{ id: 't', label: 't', repo: 'r' }],
       selectedTextEncoder: 't',
-      _shippedDefaults: { video: { macos: shippedMacosIds, windows: [] } },
+      _shippedDefaults: { video: { mlx: shippedMlxIds, cuda: [] } },
     }));
 
     it('upgrades the cached legacy shipped row before migrations run', async () => {
       writeRegistry(legacyH3());
       const { loadMediaModels } = await import('./mediaModels.js');
-      const entry = loadMediaModels().video.macos[0];
+      const entry = loadMediaModels().video.mlx[0];
       expect(entry).toMatchObject({
         defaultWidth: 1344,
         defaultHeight: 768,
@@ -640,45 +641,45 @@ describe('mediaModels registry', () => {
     it('preserves a repointed row and a partial custom geometry contract', async () => {
       writeRegistry(legacyH3({ repo: 'example-org/h3-fork' }));
       let module = await import('./mediaModels.js');
-      expect(module.loadMediaModels().video.macos[0]).not.toHaveProperty('defaultWidth');
+      expect(module.loadMediaModels().video.mlx[0]).not.toHaveProperty('defaultWidth');
 
       vi.resetModules();
       writeRegistry(legacyH3({ resolutionStep: 64 }));
       module = await import('./mediaModels.js');
-      const entry = module.loadMediaModels().video.macos[0];
+      const entry = module.loadMediaModels().video.mlx[0];
       expect(entry.resolutionStep).toBe(64);
       expect(entry).not.toHaveProperty('resolutionOptions');
     });
   });
 
   it('user-deleted built-in video model is NOT re-added on subsequent load', async () => {
-    const platformKey = process.platform === 'win32' ? 'windows' : 'macos';
-    const otherKey = process.platform === 'win32' ? 'macos' : 'windows';
+    const platformKey = process.platform === 'darwin' ? 'mlx' : 'cuda';
+    const otherKey = process.platform === 'darwin' ? 'cuda' : 'mlx';
     // Simulate a registry that already has _shippedDefaults (post-bootstrap)
     // but is missing one model the user deleted. The id MUST still be a current
     // built-in — a retired one would pass this assertion for the wrong reason
     // (nothing re-adds a model that left DEFAULT_REGISTRY).
     const deletedId = 'ltx23_dgrauet_q8';
-    const remainingMacos = [
+    const remainingMlx = [
       { id: 'ltx23_unified', name: 'LTX-2.3 Unified Beta (~48 GB)', runtime: 'mlx_video', steps: 25, guidance: 3.0 },
       { id: 'ltx23_distilled_q4', name: 'LTX-2.3 Distilled Q4 (~22 GB)', runtime: 'mlx_video', steps: 25, guidance: 3.0 },
       { id: 'ltx23_dgrauet_q4', name: 'LTX-2.3 dgrauet Q4', runtime: 'ltx2', steps: 8, guidance: 3.0 },
     ];
-    const shippedMacosIds = [deletedId, ...remainingMacos.map((e) => e.id)];
+    const shippedMlxIds = [deletedId, ...remainingMlx.map((e) => e.id)];
     writeFileSync(registryFile, JSON.stringify({
       video: {
-        [platformKey]: platformKey === 'macos' ? remainingMacos : [{ id: 'ltx_video', name: 'LTX', runtime: 'mlx_video', steps: 25, guidance: 3.0 }],
+        [platformKey]: platformKey === 'mlx' ? remainingMlx : [{ id: 'ltx_video', name: 'LTX', runtime: 'mlx_video', steps: 25, guidance: 3.0 }],
         [otherKey]: [],
-        defaultMacos: 'ltx23_distilled_q4',
-        defaultWindows: 'ltx_video',
+        defaultMlx: 'ltx23_distilled_q4',
+        defaultCuda: 'ltx_video',
       },
       image: [],
       textEncoders: [{ id: 't', label: 't', repo: 'r' }],
       selectedTextEncoder: 't',
       _shippedDefaults: {
         video: {
-          macos: shippedMacosIds,
-          windows: ['ltx_video'],
+          mlx: shippedMlxIds,
+          cuda: ['ltx_video'],
         },
       },
     }));
@@ -686,38 +687,38 @@ describe('mediaModels registry', () => {
     const { loadMediaModels } = await import('./mediaModels.js');
     const reg = loadMediaModels();
     // The deleted model must NOT be back
-    expect(reg.video.macos.some((e) => e.id === deletedId)).toBe(false);
+    expect(reg.video.mlx.some((e) => e.id === deletedId)).toBe(false);
     // The shipped id must still be tracked
-    expect(reg._shippedDefaults.video.macos).toContain(deletedId);
+    expect(reg._shippedDefaults.video.mlx).toContain(deletedId);
     logSpy.mockRestore();
   });
 
   it('new built-in id not in _shippedDefaults is added AND recorded', async () => {
-    const platformKey = process.platform === 'win32' ? 'windows' : 'macos';
-    const otherKey = process.platform === 'win32' ? 'macos' : 'windows';
+    const platformKey = process.platform === 'darwin' ? 'mlx' : 'cuda';
+    const otherKey = process.platform === 'darwin' ? 'cuda' : 'mlx';
     // Simulate a registry that pre-dates a newly-shipped model: _shippedDefaults
     // exists but does NOT include 'ltx23_dgrauet_q8' (as if it shipped later).
-    const existingMacos = [
+    const existingMlx = [
       { id: 'ltx23_unified', name: 'LTX-2.3 Unified', runtime: 'mlx_video', steps: 25, guidance: 3.0 },
       { id: 'ltx23_distilled_q4', name: 'LTX-2.3 Q4', runtime: 'mlx_video', steps: 25, guidance: 3.0 },
       { id: 'ltx23_dgrauet_q4', name: 'LTX-2.3 dgrauet Q4', runtime: 'ltx2', steps: 8, guidance: 3.0 },
     ];
     // _shippedDefaults does NOT include ltx23_dgrauet_q8
-    const shippedMacosIds = existingMacos.map((e) => e.id);
+    const shippedMlxIds = existingMlx.map((e) => e.id);
     writeFileSync(registryFile, JSON.stringify({
       video: {
-        [platformKey]: platformKey === 'macos' ? existingMacos : [{ id: 'ltx_video', name: 'LTX', runtime: 'mlx_video', steps: 25, guidance: 3.0 }],
+        [platformKey]: platformKey === 'mlx' ? existingMlx : [{ id: 'ltx_video', name: 'LTX', runtime: 'mlx_video', steps: 25, guidance: 3.0 }],
         [otherKey]: [],
-        defaultMacos: 'ltx23_distilled_q4',
-        defaultWindows: 'ltx_video',
+        defaultMlx: 'ltx23_distilled_q4',
+        defaultCuda: 'ltx_video',
       },
       image: [],
       textEncoders: [{ id: 't', label: 't', repo: 'r' }],
       selectedTextEncoder: 't',
       _shippedDefaults: {
         video: {
-          macos: shippedMacosIds,
-          windows: ['ltx_video'],
+          mlx: shippedMlxIds,
+          cuda: ['ltx_video'],
         },
       },
     }));
@@ -726,14 +727,14 @@ describe('mediaModels registry', () => {
     const reg = loadMediaModels();
     // ltx23_dgrauet_q8 is a current DEFAULT_REGISTRY entry not yet shipped →
     // should be added to the user's list
-    expect(reg.video.macos.some((e) => e.id === 'ltx23_dgrauet_q8')).toBe(true);
-    expect(reg.video.macos.some((e) => e.id === 'minimax_h3_8bit')).toBe(true);
+    expect(reg.video.mlx.some((e) => e.id === 'ltx23_dgrauet_q8')).toBe(true);
+    expect(reg.video.mlx.some((e) => e.id === 'minimax_h3_8bit')).toBe(true);
     // And should now be recorded in _shippedDefaults
-    expect(reg._shippedDefaults.video.macos).toContain('ltx23_dgrauet_q8');
-    expect(reg._shippedDefaults.video.macos).toContain('minimax_h3_8bit');
+    expect(reg._shippedDefaults.video.mlx).toContain('ltx23_dgrauet_q8');
+    expect(reg._shippedDefaults.video.mlx).toContain('minimax_h3_8bit');
     // Persisted to disk
     const onDisk = JSON.parse(readFileSync(registryFile, 'utf-8'));
-    expect(onDisk._shippedDefaults.video.macos).toContain('ltx23_dgrauet_q8');
+    expect(onDisk._shippedDefaults.video.mlx).toContain('ltx23_dgrauet_q8');
     logSpy.mockRestore();
   });
 
@@ -773,7 +774,7 @@ describe('mediaModels registry', () => {
     // Simulate an install that stored qwen-image-edit before the editOnly flag
     // existed — the entry lacks the field entirely.
     writeFileSync(registryFile, JSON.stringify({
-      video: { macos: [], windows: [], defaultMacos: 'x', defaultWindows: 'x' },
+      video: { mlx: [], cuda: [], defaultMlx: 'x', defaultCuda: 'x' },
       image: [
         { id: 'qwen-image-edit', name: 'Qwen-Image-Edit', runner: 'qwen', repo: 'Qwen/Qwen-Image-Edit', pipelineClass: 'QwenImageEditPipeline', steps: 30, guidance: 4 },
       ],
@@ -787,7 +788,7 @@ describe('mediaModels registry', () => {
 
   it('preserves an explicit editOnly: false user override', async () => {
     writeFileSync(registryFile, JSON.stringify({
-      video: { macos: [], windows: [], defaultMacos: 'x', defaultWindows: 'x' },
+      video: { mlx: [], cuda: [], defaultMlx: 'x', defaultCuda: 'x' },
       image: [
         { id: 'qwen-image-edit', name: 'Qwen-Image-Edit', runner: 'qwen', repo: 'Qwen/Qwen-Image-Edit', pipelineClass: 'QwenImageEditPipeline', steps: 30, guidance: 4, editOnly: false },
       ],
@@ -812,7 +813,7 @@ describe('mediaModels registry', () => {
 
   it('backfills kvRepo onto a pre-flag flux2-klein-9b-bf16 entry (no migration needed)', async () => {
     writeFileSync(registryFile, JSON.stringify({
-      video: { macos: [], windows: [], defaultMacos: 'x', defaultWindows: 'x' },
+      video: { mlx: [], cuda: [], defaultMlx: 'x', defaultCuda: 'x' },
       image: [
         { id: 'flux2-klein-9b-bf16', name: 'Flux 2 Klein 9B (bf16)', runner: 'flux2', quantization: 'none', repo: 'black-forest-labs/FLUX.2-klein-9B', steps: 20, guidance: 3.5 },
       ],
@@ -826,7 +827,7 @@ describe('mediaModels registry', () => {
 
   it('preserves an explicit kvRepo user override (including empty-string clear)', async () => {
     writeFileSync(registryFile, JSON.stringify({
-      video: { macos: [], windows: [], defaultMacos: 'x', defaultWindows: 'x' },
+      video: { mlx: [], cuda: [], defaultMlx: 'x', defaultCuda: 'x' },
       image: [
         { id: 'flux2-klein-9b-bf16', name: 'Flux 2 Klein 9B (bf16)', runner: 'flux2', quantization: 'none', repo: 'black-forest-labs/FLUX.2-klein-9B', steps: 20, guidance: 3.5, kvRepo: '' },
       ],
@@ -840,7 +841,7 @@ describe('mediaModels registry', () => {
 
   it('does NOT inject kvRepo when repo points at a fork (fork-preservation, mirrors migration 064)', async () => {
     writeFileSync(registryFile, JSON.stringify({
-      video: { macos: [], windows: [], defaultMacos: 'x', defaultWindows: 'x' },
+      video: { mlx: [], cuda: [], defaultMlx: 'x', defaultCuda: 'x' },
       image: [
         { id: 'flux2-klein-9b-bf16', name: 'Flux 2 Klein 9B (bf16)', runner: 'flux2', quantization: 'none', repo: 'my-fork/FLUX.2-klein-9B', steps: 20, guidance: 3.5 },
       ],
@@ -856,14 +857,14 @@ describe('mediaModels registry', () => {
     // Simulate a pre-z-image registry: only flux2 and Flux 1 entries, no
     // _shippedDefaults.image at all.
     writeFileSync(registryFile, JSON.stringify({
-      video: { macos: [], windows: [], defaultMacos: 'x', defaultWindows: 'x' },
+      video: { mlx: [], cuda: [], defaultMlx: 'x', defaultCuda: 'x' },
       image: [
         { id: 'dev', name: 'Flux 1 Dev', steps: 20, guidance: 3.5 },
         { id: 'schnell', name: 'Flux 1 Schnell', steps: 4, guidance: 0 },
       ],
       textEncoders: [{ id: 't', label: 't', repo: 'r' }],
       selectedTextEncoder: 't',
-      _shippedDefaults: { video: { macos: [], windows: [] } }, // image key missing
+      _shippedDefaults: { video: { mlx: [], cuda: [] } }, // image key missing
     }));
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const { loadMediaModels, getImageModels } = await import('./mediaModels.js');
@@ -886,7 +887,7 @@ describe('mediaModels registry', () => {
     // _shippedDefaults.image already records z-image-turbo-bf16, but the user
     // has removed it from their image list.
     writeFileSync(registryFile, JSON.stringify({
-      video: { macos: [], windows: [], defaultMacos: 'x', defaultWindows: 'x' },
+      video: { mlx: [], cuda: [], defaultMlx: 'x', defaultCuda: 'x' },
       image: [
         { id: 'dev', name: 'Flux 1 Dev', steps: 20, guidance: 3.5 },
         // z-image-turbo-bf16 deliberately absent
@@ -894,7 +895,7 @@ describe('mediaModels registry', () => {
       textEncoders: [{ id: 't', label: 't', repo: 'r' }],
       selectedTextEncoder: 't',
       _shippedDefaults: {
-        video: { macos: [], windows: [] },
+        video: { mlx: [], cuda: [] },
         image: { list: ['dev', 'z-image-turbo-bf16', 'flux2-klein-4b', 'flux2-klein-9b', 'flux2-klein-4b-int8', 'schnell', 'z-image-turbo-quant'] },
       },
     }));
@@ -909,31 +910,31 @@ describe('mediaModels registry', () => {
   });
 
   it('user deletes a model that was newly added; deletion survives next load', async () => {
-    const platformKey = process.platform === 'win32' ? 'windows' : 'macos';
-    const otherKey = process.platform === 'win32' ? 'macos' : 'windows';
+    const platformKey = process.platform === 'darwin' ? 'mlx' : 'cuda';
+    const otherKey = process.platform === 'darwin' ? 'cuda' : 'mlx';
     // _shippedDefaults includes ltx23_dgrauet_q8 (it was added in a prior
     // load), but the user has now removed it from their video list.
-    const userMacos = [
+    const userMlx = [
       { id: 'ltx23_unified', name: 'LTX-2.3 Unified', runtime: 'mlx_video', steps: 25, guidance: 3.0 },
       { id: 'ltx23_distilled_q4', name: 'LTX-2.3 Q4', runtime: 'mlx_video', steps: 25, guidance: 3.0 },
       { id: 'ltx23_dgrauet_q4', name: 'LTX-2.3 dgrauet Q4', runtime: 'ltx2', steps: 8, guidance: 3.0 },
       // ltx23_dgrauet_q8 intentionally absent
     ];
-    const shippedMacosIds = [...userMacos.map((e) => e.id), 'ltx23_dgrauet_q8'];
+    const shippedMlxIds = [...userMlx.map((e) => e.id), 'ltx23_dgrauet_q8'];
     writeFileSync(registryFile, JSON.stringify({
       video: {
-        [platformKey]: platformKey === 'macos' ? userMacos : [{ id: 'ltx_video', name: 'LTX', runtime: 'mlx_video', steps: 25, guidance: 3.0 }],
+        [platformKey]: platformKey === 'mlx' ? userMlx : [{ id: 'ltx_video', name: 'LTX', runtime: 'mlx_video', steps: 25, guidance: 3.0 }],
         [otherKey]: [],
-        defaultMacos: 'ltx23_distilled_q4',
-        defaultWindows: 'ltx_video',
+        defaultMlx: 'ltx23_distilled_q4',
+        defaultCuda: 'ltx_video',
       },
       image: [],
       textEncoders: [{ id: 't', label: 't', repo: 'r' }],
       selectedTextEncoder: 't',
       _shippedDefaults: {
         video: {
-          macos: shippedMacosIds,
-          windows: ['ltx_video'],
+          mlx: shippedMlxIds,
+          cuda: ['ltx_video'],
         },
       },
     }));
@@ -941,9 +942,9 @@ describe('mediaModels registry', () => {
     const { loadMediaModels } = await import('./mediaModels.js');
     const reg = loadMediaModels();
     // Deletion must be respected — model NOT re-added
-    expect(reg.video.macos.some((e) => e.id === 'ltx23_dgrauet_q8')).toBe(false);
+    expect(reg.video.mlx.some((e) => e.id === 'ltx23_dgrauet_q8')).toBe(false);
     // The id stays in _shippedDefaults so future loads also honour the deletion
-    expect(reg._shippedDefaults.video.macos).toContain('ltx23_dgrauet_q8');
+    expect(reg._shippedDefaults.video.mlx).toContain('ltx23_dgrauet_q8');
     logSpy.mockRestore();
   });
 
@@ -958,7 +959,7 @@ describe('mediaModels registry', () => {
     // image[] array doesn't have it (and it IS a current DEFAULT_REGISTRY
     // entry, so this is true drift — not a legitimate deletion).
     writeFileSync(registryFile, JSON.stringify({
-      video: { macos: [], windows: [], defaultMacos: 'x', defaultWindows: 'x' },
+      video: { mlx: [], cuda: [], defaultMlx: 'x', defaultCuda: 'x' },
       image: [
         { id: 'dev', name: 'Flux 1 Dev' },
         // 'z-image-turbo-bf16' deliberately missing
@@ -966,7 +967,7 @@ describe('mediaModels registry', () => {
       textEncoders: [{ id: 't', label: 't', repo: 'r' }],
       selectedTextEncoder: 't',
       _shippedDefaults: {
-        video: { macos: [], windows: [] },
+        video: { mlx: [], cuda: [] },
         image: { list: ['dev', 'z-image-turbo-bf16'] },
       },
     }));
@@ -986,12 +987,12 @@ describe('mediaModels registry', () => {
     // that we removed from DEFAULT_REGISTRY) — that's not drift, it's normal
     // upgrade churn. The warning must skip it.
     writeFileSync(registryFile, JSON.stringify({
-      video: { macos: [], windows: [], defaultMacos: 'x', defaultWindows: 'x' },
+      video: { mlx: [], cuda: [], defaultMlx: 'x', defaultCuda: 'x' },
       image: [{ id: 'dev', name: 'Flux 1 Dev' }],
       textEncoders: [{ id: 't', label: 't', repo: 'r' }],
       selectedTextEncoder: 't',
       _shippedDefaults: {
-        video: { macos: [], windows: [] },
+        video: { mlx: [], cuda: [] },
         image: { list: ['dev', 'ancient-removed-model'] },
       },
     }));
@@ -1005,14 +1006,14 @@ describe('mediaModels registry', () => {
     logSpy.mockRestore();
   });
 
-  it('drift warning fires for video.macos as well as image', async () => {
-    const platformKey = process.platform === 'win32' ? 'windows' : 'macos';
-    const otherKey = process.platform === 'win32' ? 'macos' : 'windows';
+  it('drift warning fires for the video bucket as well as image', async () => {
+    const platformKey = process.platform === 'darwin' ? 'mlx' : 'cuda';
+    const otherKey = process.platform === 'darwin' ? 'cuda' : 'mlx';
     // _shippedDefaults claims ltx23_dgrauet_q4 was shipped (and it IS still
-    // in DEFAULT_REGISTRY.video.macos), but the user's macos list doesn't
+    // in DEFAULT_REGISTRY.video.mlx), but the user's mlx list doesn't
     // have it.
     const driftedId = 'ltx23_dgrauet_q4';
-    const userPlatformList = platformKey === 'macos' ? [
+    const userPlatformList = platformKey === 'mlx' ? [
       { id: 'ltx23_unified', name: 'LTX-2.3 Unified', runtime: 'mlx_video', steps: 25, guidance: 3.0 },
       // ltx23_dgrauet_q4 deliberately absent (drift)
     ] : [
@@ -1022,16 +1023,16 @@ describe('mediaModels registry', () => {
       video: {
         [platformKey]: userPlatformList,
         [otherKey]: [],
-        defaultMacos: 'ltx23_unified',
-        defaultWindows: 'ltx_video',
+        defaultMlx: 'ltx23_unified',
+        defaultCuda: 'ltx_video',
       },
       image: [],
       textEncoders: [{ id: 't', label: 't', repo: 'r' }],
       selectedTextEncoder: 't',
       _shippedDefaults: {
         video: {
-          macos: platformKey === 'macos' ? ['ltx23_unified', driftedId] : [],
-          windows: platformKey === 'windows' ? ['ltx_video'] : [],
+          mlx: platformKey === 'mlx' ? ['ltx23_unified', driftedId] : [],
+          cuda: platformKey === 'cuda' ? ['ltx_video'] : [],
         },
         image: { list: [] },
       },
@@ -1042,10 +1043,10 @@ describe('mediaModels registry', () => {
     const driftCalls = logSpy.mock.calls
       .map((args) => args.join(' '))
       .filter((line) => line.includes('media-models drift'));
-    // Only assert on macos to avoid platform divergence in CI — the macos
+    // Only assert on mlx to avoid platform divergence in CI — the MLX
     // built-in list is the populated one for both test runs.
-    if (platformKey === 'macos') {
-      expect(driftCalls.some((c) => c.includes(driftedId) && c.includes('video.macos'))).toBe(true);
+    if (platformKey === 'mlx') {
+      expect(driftCalls.some((c) => c.includes(driftedId) && c.includes('video.mlx'))).toBe(true);
     }
     logSpy.mockRestore();
   });
@@ -1078,12 +1079,12 @@ describe('mediaModels registry', () => {
     // NOT cause normalizeRegistry to silently re-add the missing built-in.
     // Auto-recovery would defeat real deletions.
     writeFileSync(registryFile, JSON.stringify({
-      video: { macos: [], windows: [], defaultMacos: 'x', defaultWindows: 'x' },
+      video: { mlx: [], cuda: [], defaultMlx: 'x', defaultCuda: 'x' },
       image: [{ id: 'dev', name: 'Flux 1 Dev' }],
       textEncoders: [{ id: 't', label: 't', repo: 'r' }],
       selectedTextEncoder: 't',
       _shippedDefaults: {
-        video: { macos: [], windows: [] },
+        video: { mlx: [], cuda: [] },
         image: { list: ['dev', 'z-image-turbo-bf16'] },
       },
     }));
@@ -1121,7 +1122,7 @@ describe('user model entry mutators (#2124)', () => {
     expect(getVideoModels().some((m) => m.id === 'hf-test-video')).toBe(true);
     // And it's persisted to disk.
     const onDisk = JSON.parse(readFileSync(registryFile, 'utf-8'));
-    const inList = [...onDisk.video.macos, ...onDisk.video.windows].some((m) => m.id === 'hf-test-video');
+    const inList = [...onDisk.video.mlx, ...onDisk.video.cuda].some((m) => m.id === 'hf-test-video');
     expect(inList).toBe(true);
     // The mutators bypass normalizeRegistry, so the mode backfill has to run
     // here too — otherwise the new model carries no supportedModes and the
@@ -1154,11 +1155,11 @@ describe('user model entry mutators (#2124)', () => {
 
   it('conflict-checks only the target platform list, not every list', async () => {
     // A video id present ONLY on the OTHER platform's list must remain addable
-    // on the current platform (shared media-models.json across macOS+Windows).
+    // in the current bucket (shared media-models.json across an MLX and a CUDA box).
     const { loadMediaModels } = await import('./mediaModels.js');
     const reg = loadMediaModels();
-    const currentKey = process.platform === 'win32' ? 'windows' : 'macos';
-    const otherKey = currentKey === 'macos' ? 'windows' : 'macos';
+    const currentKey = process.platform === 'darwin' ? 'mlx' : 'cuda';
+    const otherKey = currentKey === 'mlx' ? 'cuda' : 'mlx';
     reg.video[otherKey] = [...(reg.video[otherKey] || []), { ...videoEntry }];
     writeFileSync(registryFile, JSON.stringify(reg, null, 2) + '\n');
     vi.resetModules();
@@ -1195,5 +1196,124 @@ describe('user model entry mutators (#2124)', () => {
     expect(first).toBe(second); // cached identity
     const reloaded = reloadMediaModels();
     expect(reloaded).not.toBe(first); // fresh object after bust
+  });
+});
+
+// Issue #4142. The catalog used to select `IS_WIN ? video.windows : video.macos`,
+// which handed a Linux install the MLX list — every entry on it unrunnable there —
+// while the two torch+CUDA entries that DO run on Linux sat in an unreachable
+// `windows` list. The axis is the runtime family, so the selector is "is this a
+// Mac?" and the buckets are named for what they hold.
+describe('video bucket selection is an MLX/CUDA axis, not an OS one', () => {
+  let restorePlatform = () => {};
+  const asPlatform = (value) => { restorePlatform = pinPlatform(value); };
+  afterEach(() => restorePlatform());
+
+  const MLX_ONLY = { id: 'mlx-only', name: 'MLX only', runtime: 'mlx_video', steps: 25, guidance: 3.0 };
+  const CUDA_ONLY = { id: 'cuda-only', name: 'CUDA only', runtime: 'minimax_h3_cuda', steps: 8, guidance: 0 };
+
+  // Canonical (post-#4142) and legacy (any registry written before it) spellings
+  // of the same two-bucket registry. Both must resolve identically on every
+  // platform — the legacy read aliases are the whole compatibility story for
+  // installs that upgrade on their own schedule.
+  // _shippedDefaults claims every current built-in so appendNewlyShippedEntries
+  // adds nothing and each bucket holds exactly the one probe entry.
+  const seed = JSON.parse(readFileSync(SAMPLE_REGISTRY_PATH, 'utf-8'));
+  const shippedMlx = [...seed.video.mlx.map((m) => m.id), MLX_ONLY.id];
+  const shippedCuda = [...seed.video.cuda.map((m) => m.id), CUDA_ONLY.id];
+  const shippedImage = seed.image.map((m) => m.id);
+
+  const CANONICAL = {
+    video: { mlx: [MLX_ONLY], cuda: [CUDA_ONLY], defaultMlx: MLX_ONLY.id, defaultCuda: CUDA_ONLY.id },
+    image: [],
+    textEncoders: [{ id: 't', label: 't', repo: 'r' }],
+    selectedTextEncoder: 't',
+    _shippedDefaults: { video: { mlx: shippedMlx, cuda: shippedCuda }, image: { list: shippedImage } },
+  };
+  const LEGACY = {
+    ...CANONICAL,
+    video: { macos: [MLX_ONLY], windows: [CUDA_ONLY], defaultMacos: MLX_ONLY.id, defaultWindows: CUDA_ONLY.id },
+    _shippedDefaults: { video: { macos: shippedMlx, windows: shippedCuda }, image: { list: shippedImage } },
+  };
+
+  const resolveOn = async (platform, registry) => {
+    writeFileSync(registryFile, JSON.stringify(registry));
+    asPlatform(platform);
+    const { getVideoModels, getDefaultVideoModelId } = await import('./mediaModels.js');
+    return { ids: getVideoModels().map((m) => m.id), defaultId: getDefaultVideoModelId() };
+  };
+
+  for (const [shape, registry] of [['canonical mlx/cuda keys', CANONICAL], ['legacy macos/windows keys', LEGACY]]) {
+    describe(shape, () => {
+      it('serves the MLX list on darwin', async () => {
+        expect(await resolveOn('darwin', registry)).toEqual({ ids: [MLX_ONLY.id], defaultId: MLX_ONLY.id });
+      });
+
+      it('serves the CUDA list on win32', async () => {
+        expect(await resolveOn('win32', registry)).toEqual({ ids: [CUDA_ONLY.id], defaultId: CUDA_ONLY.id });
+      });
+
+      // The bug: linux used to fall through to the macOS/MLX branch.
+      it('serves the CUDA list on linux', async () => {
+        expect(await resolveOn('linux', registry)).toEqual({ ids: [CUDA_ONLY.id], defaultId: CUDA_ONLY.id });
+      });
+    });
+  }
+
+  it('normalizes a legacy-keyed registry to the canonical keys on disk', async () => {
+    writeFileSync(registryFile, JSON.stringify(LEGACY));
+    const { loadMediaModels } = await import('./mediaModels.js');
+    loadMediaModels();
+    const onDisk = JSON.parse(readFileSync(registryFile, 'utf-8'));
+    // Exactly one spelling survives — two would let a hand-edit land on the
+    // copy nothing reads.
+    expect(Object.keys(onDisk.video).sort()).toEqual(['cuda', 'defaultCuda', 'defaultMlx', 'mlx']);
+    expect(onDisk.video.mlx.map((m) => m.id)).toEqual([MLX_ONLY.id]);
+    expect(onDisk.video.cuda.map((m) => m.id)).toEqual([CUDA_ONLY.id]);
+    expect(onDisk.video.defaultMlx).toBe(MLX_ONLY.id);
+    expect(onDisk.video.defaultCuda).toBe(CUDA_ONLY.id);
+    expect(Object.keys(onDisk._shippedDefaults.video).sort()).toEqual(['cuda', 'mlx']);
+  });
+
+  it('hides an entry whose legacy per-bucket `broken` flag names the active bucket', async () => {
+    writeFileSync(registryFile, JSON.stringify({
+      ...LEGACY,
+      video: { ...LEGACY.video, windows: [{ ...CUDA_ONLY, broken: 'windows' }] },
+    }));
+    asPlatform('linux');
+    const { getVideoModels } = await import('./mediaModels.js');
+    expect(getVideoModels()).toEqual([]);
+  });
+
+  // The warning tells the user which key to edit, so it has to quote the
+  // spelling THEIR file uses — and the two halves can legitimately disagree
+  // (migration 242 writes a canonical snapshot onto a legacy-keyed video).
+  it('names the on-disk key each half of a mixed-spelling registry actually uses', async () => {
+    const driftedId = seed.video.mlx[0].id;
+    writeFileSync(registryFile, JSON.stringify({
+      ...LEGACY,
+      video: { ...LEGACY.video, macos: [MLX_ONLY] },
+      _shippedDefaults: { video: { mlx: [...shippedMlx, driftedId], windows: shippedCuda }, image: { list: shippedImage } },
+    }));
+    asPlatform('darwin');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { loadMediaModels } = await import('./mediaModels.js');
+    loadMediaModels();
+    const drift = logSpy.mock.calls.map((args) => args.join(' '))
+      .filter((line) => line.includes('media-models drift') && line.includes(driftedId));
+    logSpy.mockRestore();
+    expect(drift).toHaveLength(1);
+    expect(drift[0]).toContain('missing from video.macos[]');
+    expect(drift[0]).toContain('delete _shippedDefaults.video.mlx');
+  });
+
+  it('adds a user video entry to the bucket this machine actually runs', async () => {
+    writeFileSync(registryFile, JSON.stringify(CANONICAL));
+    asPlatform('linux');
+    const { addUserModelEntry, loadMediaModels } = await import('./mediaModels.js');
+    addUserModelEntry({ id: 'user-cuda', name: 'User', repo: 'example/user', source: 'user' }, { kind: 'video' });
+    const reg = loadMediaModels();
+    expect(reg.video.cuda.map((m) => m.id)).toContain('user-cuda');
+    expect(reg.video.mlx.map((m) => m.id)).not.toContain('user-cuda');
   });
 });

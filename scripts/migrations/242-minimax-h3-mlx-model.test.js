@@ -46,9 +46,11 @@ describe('migration 242 — MiniMax H3 MLX model', () => {
       runtime: 'minimax_h3',
       termsGate: { id: 'minimax-h3-community-license-2026-08-02' },
     });
-    expect(got._shippedDefaults.video.macos).toContain(H3_ID);
-    expect(got._shippedDefaults.video.macos).toContain('ltx23_unified');
-    expect(got._shippedDefaults.video.windows).toContain('ltx_video');
+    // The snapshot it creates uses the canonical #4142 keys even though the
+    // registry it read is still legacy-keyed — mediaModels.js reads either.
+    expect(got._shippedDefaults.video.mlx).toContain(H3_ID);
+    expect(got._shippedDefaults.video.mlx).toContain('ltx23_unified');
+    expect(got._shippedDefaults.video.cuda).toContain('ltx_video');
   });
 
   it('adds and records H3 when a post-snapshot registry has not received it', async () => {

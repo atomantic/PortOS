@@ -22,17 +22,19 @@
  * an entry a user re-pointed at a different `repo` is their model, not the
  * retired built-in, and survives untouched.
  *
- * `video.defaultMacos` is repointed at `ltx23_distilled_q4` only when the
+ * The MLX bucket's default (`video.defaultMlx`, or the pre-#4142
+ * `defaultMacos`) is repointed at `ltx23_distilled_q4` only when the
  * removal actually happened and that replacement is present; otherwise
  * `getDefaultVideoModelId()`'s "unknown default → first available" fallback
  * would silently land on the 48 GB Unified Beta.
  *
- * `_shippedDefaults.video.macos` intentionally keeps the id: it records what has
+ * `_shippedDefaults.video.mlx` intentionally keeps the id: it records what has
  * ever been delivered to this install, nothing re-adds a model that is no longer
  * in `DEFAULT_REGISTRY`, and `warnDrift` ignores ids that aren't current
  * built-ins, so no boot warning results.
  */
 
+import { VIDEO_BUCKET_MLX, resolveVideoDefaultKey } from '../../server/lib/mediaModelBuckets.js';
 import { readMediaRegistry, writeMediaRegistry } from './_lib.js';
 
 export const RETIRED_ID = 'ltx2_unified';
@@ -41,10 +43,10 @@ export const REPLACEMENT_ID = 'ltx23_distilled_q4';
 
 export default {
   async up({ rootDir }) {
-    const { ok, config, entries: macos, path } = await readMediaRegistry({ rootDir });
+    const { ok, config, entries: mlxEntries, bucketKey, path } = await readMediaRegistry({ rootDir });
     if (!ok) return;
 
-    const entry = macos.find((m) => m?.id === RETIRED_ID);
+    const entry = mlxEntries.find((m) => m?.id === RETIRED_ID);
     if (!entry) {
       console.log(`✅ media-models: no '${RETIRED_ID}' entry — already retired, nothing to migrate`);
       return;
@@ -54,15 +56,22 @@ export default {
       return;
     }
 
-    config.video.macos = macos.filter((m) => m?.id !== RETIRED_ID);
+    // Write back under the key the array was FOUND under (`mlx`, or the
+    // pre-#4142 `macos` on a registry this install hasn't renamed yet) — writing
+    // the canonical key unconditionally would leave the legacy array in place
+    // and silently un-retire the model. Same for the default-model key.
+    const kept = mlxEntries.filter((m) => m?.id !== RETIRED_ID);
+    config.video[bucketKey] = kept;
 
-    // When the replacement was deleted too, leave defaultMacos pointing at the
-    // retired id and let getDefaultVideoModelId() fall back to whatever this
+    // When the replacement was deleted too, leave the MLX default pointing at
+    // the retired id and let getDefaultVideoModelId() fall back to whatever this
     // install still has, rather than naming a model that isn't there.
     let defaultNote = '';
-    if (config.video.defaultMacos === RETIRED_ID
-        && config.video.macos.some((m) => m?.id === REPLACEMENT_ID)) {
-      config.video.defaultMacos = REPLACEMENT_ID;
+    const defaultKey = resolveVideoDefaultKey(config.video, VIDEO_BUCKET_MLX);
+    if (defaultKey !== null
+        && config.video[defaultKey] === RETIRED_ID
+        && kept.some((m) => m?.id === REPLACEMENT_ID)) {
+      config.video[defaultKey] = REPLACEMENT_ID;
       defaultNote = `; default video model → ${REPLACEMENT_ID}`;
     }
 

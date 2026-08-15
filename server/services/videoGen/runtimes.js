@@ -60,13 +60,11 @@ export const MINIMAX_H3_ENCODER_SHIM_DIR = join(homedir(), '.portos', 'minimax-h
 // pinned source checkout, so this runtime is a plain pip venv with no revision
 // to verify and no source package to keep clean.
 //
-// SHIPPED FOR WINDOWS. The venv itself is not win32-specific (which is why the
-// interpreter is resolved by venv layout below rather than assumed), but the
-// model catalog's platform axis is a macOS/Windows binary —
-// `getVideoModels()` is `IS_WIN ? video.windows : video.macos` — so a Linux
-// install is served the macOS/MLX list and cannot select this runtime's model
-// however well the venv provisions. Widening that axis is tracked in #4142;
-// until then, do not advertise Linux support here or in the installer.
+// SHIPPED FOR WINDOWS AND LINUX. The venv is not win32-specific (which is why
+// the interpreter is resolved by venv layout below rather than assumed), and
+// since #4142 neither is the catalog: `getVideoModels()` selects `video.cuda`
+// on every non-Darwin platform, so a Linux install sees this runtime's model
+// row exactly as a Windows one does.
 export const MINIMAX_H3_CUDA_REPO_DIR = join(homedir(), '.portos', 'minimax-h3-cuda');
 export const MINIMAX_H3_CUDA_VENV_PYTHON = process.platform === 'win32'
   ? join(MINIMAX_H3_CUDA_REPO_DIR, '.venv', 'Scripts', 'python.exe')

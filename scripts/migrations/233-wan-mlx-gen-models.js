@@ -7,6 +7,7 @@
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite } from '../../server/lib/fileUtils.js';
+import { VIDEO_BUCKET_MLX, readVideoBucket } from '../../server/lib/mediaModelBuckets.js';
 
 const REL_PATH = 'data/media-models.json';
 const LIGHTNING_REPO = 'lightx2v/Wan2.2-Lightning';
@@ -94,11 +95,13 @@ export default {
     } catch (err) {
       throw new Error(`Cannot migrate ${REL_PATH}: invalid JSON (${err.message})`, { cause: err });
     }
-    const macos = Array.isArray(config?.video?.macos) ? config.video.macos : null;
-    if (!macos) return;
+    // Bucket key resolved canonical-first with a legacy fallback: this
+    // migration predates the #4142 `macos` → `mlx` rename, so it meets either.
+    const mlxEntries = readVideoBucket(config?.video, VIDEO_BUCKET_MLX);
+    if (!Array.isArray(mlxEntries)) return;
 
     let changed = false;
-    for (const entry of macos) {
+    for (const entry of mlxEntries) {
       const spec = UPGRADES[entry?.id];
       if (!spec || entry.repo !== spec.oldRepo) continue;
       const preserved = Object.fromEntries(USER_TUNABLE_FIELDS
@@ -113,14 +116,14 @@ export default {
       changed = true;
     }
 
-    const present = new Set(macos.map((entry) => entry?.id));
+    const present = new Set(mlxEntries.map((entry) => entry?.id));
     for (const entry of NEW_ENTRIES) {
       if (present.has(entry.id)) continue;
-      macos.push(entry);
+      mlxEntries.push(entry);
       present.add(entry.id);
       changed = true;
     }
-    const shipped = config?._shippedDefaults?.video?.macos;
+    const shipped = readVideoBucket(config?._shippedDefaults?.video, VIDEO_BUCKET_MLX);
     if (Array.isArray(shipped)) {
       for (const entry of NEW_ENTRIES) {
         if (!shipped.includes(entry.id)) { shipped.push(entry.id); changed = true; }

@@ -439,14 +439,9 @@ if [[ "$INSTALL_MINIMAX_H3_CUDA" == "1" ]]; then
     echo "❌ MiniMax H3 CUDA needs an NVIDIA GPU. On Apple Silicon use INSTALL_MINIMAX_H3=1 (the MLX port) instead." >&2
     exit 1
   fi
-  # The venv provisions fine on Linux, but PortOS only surfaces this model on
-  # Windows: the catalog picks video.windows[] vs video.macos[] off IS_WIN, so
-  # a Linux install is served the macOS/MLX list and would never see the row.
-  # Warn rather than refuse — the install is harmless and ready for the day
-  # that axis widens (tracked in #4142).
-  if ! is_windows; then
-    echo "⚠️  MiniMax H3 CUDA is only surfaced in Video Gen on Windows today; this venv will install but no model row will appear." >&2
-  fi
+  # Windows and Linux both reach this model: since #4142 the catalog picks
+  # video.cuda[] vs video.mlx[] on `process.platform === 'darwin'`, so a Linux
+  # install is served the same CUDA list a Windows one is.
   # diffusers is pinned to a git commit until a release carries the MiniMax-H3
   # integration (see the note in requirements-minimax-h3-cuda.txt), so pip needs
   # git to build that wheel. Say so up front rather than failing several minutes

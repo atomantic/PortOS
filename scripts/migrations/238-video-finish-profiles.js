@@ -26,9 +26,13 @@ import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite } from '../../server/lib/fileUtils.js';
 import { applyVideoFinishProfiles, sanitizeFinishProfiles } from '../../server/lib/videoFinishProfiles.js';
+import { LEGACY_VIDEO_BUCKET_KEYS, VIDEO_BUCKETS } from '../../server/lib/mediaModelBuckets.js';
 
 const REL_PATH = 'data/media-models.json';
-const PLATFORMS = ['macos', 'windows'];
+// Both the canonical (#4142) and the legacy bucket spellings: this migration
+// predates the rename and can meet either shape. Only keys actually holding an
+// array are touched, so listing all four is safe on both.
+const BUCKET_KEYS = [...VIDEO_BUCKETS, ...Object.values(LEGACY_VIDEO_BUCKET_KEYS)];
 
 export default {
   async up({ rootDir }) {
@@ -52,7 +56,7 @@ export default {
     // and a hand-edited bad edge is left for the load-time sanitizer to warn
     // about instead of being silently deleted from the user's file here.
     let linked = 0;
-    for (const platform of PLATFORMS) {
+    for (const platform of BUCKET_KEYS) {
       const list = config.video[platform];
       if (!Array.isArray(list)) continue;
       const next = sanitizeFinishProfiles(applyVideoFinishProfiles(list));

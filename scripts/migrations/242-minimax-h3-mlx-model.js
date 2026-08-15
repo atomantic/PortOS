@@ -13,6 +13,11 @@ import { readFile } from 'fs/promises';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { atomicWrite } from '../../server/lib/fileUtils.js';
+import {
+  VIDEO_BUCKET_CUDA,
+  VIDEO_BUCKET_MLX,
+  readVideoBucket,
+} from '../../server/lib/mediaModelBuckets.js';
 
 const REL_PATH = 'data/media-models.json';
 const H3_ID = 'minimax_h3_8bit';
@@ -27,13 +32,13 @@ const REFERENCE_PATH = join(
 // migration delivered, not a live view of the catalog, so it must never be
 // re-read from `data.reference/media-models.json`.
 const SHIPPED_AT_242 = Object.freeze({
-  macos: Object.freeze([
+  [VIDEO_BUCKET_MLX]: Object.freeze([
     'ltx2_unified', 'ltx23_unified', 'ltx23_distilled_q4', 'ltx23_dgrauet_q4',
     'ltx23_dgrauet_q8', 'minimax_h3_8bit', 'wan22_ti2v_5b', 'wan22_t2v_a14b',
     'wan22_i2v_a14b', 'wan22_t2v_a14b_lightning', 'wan22_i2v_a14b_lightning',
     'hunyuan_video',
   ]),
-  windows: Object.freeze(['ltx_video']),
+  [VIDEO_BUCKET_CUDA]: Object.freeze(['ltx_video']),
 });
 
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -62,31 +67,36 @@ export default {
     if (raw == null) return;
 
     const config = parseJson(raw, REL_PATH);
-    const macos = Array.isArray(config?.video?.macos) ? config.video.macos : null;
-    if (!macos) return;
+    // Bucket keys resolved canonical-first with a legacy fallback: this
+    // migration predates the #4142 `macos`/`windows` → `mlx`/`cuda` rename, so
+    // it meets either shape (an upgrading install still has the old keys; a
+    // fresh one seeds the canonical ones from data.reference).
+    const mlxEntries = readVideoBucket(config?.video, VIDEO_BUCKET_MLX);
+    if (!Array.isArray(mlxEntries)) return;
 
     const reference = parseJson(await readFile(REFERENCE_PATH, 'utf-8'), 'data.reference/media-models.json');
-    const referenceMacos = Array.isArray(reference?.video?.macos) ? reference.video.macos : [];
-    const h3 = referenceMacos.find((entry) => entry?.id === H3_ID);
+    const referenceMlx = readVideoBucket(reference?.video, VIDEO_BUCKET_MLX);
+    const h3 = (Array.isArray(referenceMlx) ? referenceMlx : []).find((entry) => entry?.id === H3_ID);
     if (!h3) throw new Error(`Cannot migrate ${REL_PATH}: shipped ${H3_ID} reference is missing`);
 
     const shippedRoot = isObject(config._shippedDefaults) ? config._shippedDefaults : null;
     const shippedVideo = isObject(shippedRoot?.video) ? shippedRoot.video : null;
-    const shippedMacos = Array.isArray(shippedVideo?.macos) ? shippedVideo.macos : null;
-    const wasAlreadyShipped = shippedMacos?.includes(H3_ID) === true;
-    const existing = macos.find((entry) => entry?.id === H3_ID);
+    const shippedMlxRaw = readVideoBucket(shippedVideo, VIDEO_BUCKET_MLX);
+    const shippedMlx = Array.isArray(shippedMlxRaw) ? shippedMlxRaw : null;
+    const wasAlreadyShipped = shippedMlx?.includes(H3_ID) === true;
+    const existing = mlxEntries.find((entry) => entry?.id === H3_ID);
     let changed = false;
 
     // A recorded-but-missing id is a user deletion and stays deleted. An
     // existing row may be user-customized and is never overwritten.
     if (!existing && !wasAlreadyShipped) {
-      macos.push(structuredClone(h3));
+      mlxEntries.push(structuredClone(h3));
       changed = true;
     }
 
-    if (shippedMacos) {
-      if (macos.some((entry) => entry?.id === H3_ID) && !shippedMacos.includes(H3_ID)) {
-        shippedMacos.push(H3_ID);
+    if (shippedMlx) {
+      if (mlxEntries.some((entry) => entry?.id === H3_ID) && !shippedMlx.includes(H3_ID)) {
+        shippedMlx.push(H3_ID);
         changed = true;
       }
     } else {
@@ -105,9 +115,15 @@ export default {
       // retroactively change what this migration claims to have delivered.
       const nextRoot = shippedRoot || {};
       const nextVideo = shippedVideo || {};
-      nextVideo.macos = bootstrapIds(macos, SHIPPED_AT_242.macos.map((id) => ({ id })));
+      // The snapshot is written under the CANONICAL keys even when the
+      // registry itself is still legacy-keyed: mediaModels.js reads either
+      // spelling, and migration 270 renames the rest of the file right after.
+      nextVideo[VIDEO_BUCKET_MLX] = bootstrapIds(mlxEntries, SHIPPED_AT_242[VIDEO_BUCKET_MLX].map((id) => ({ id })));
       if (!shippedVideo) {
-        nextVideo.windows = bootstrapIds(config.video.windows, SHIPPED_AT_242.windows.map((id) => ({ id })));
+        nextVideo[VIDEO_BUCKET_CUDA] = bootstrapIds(
+          readVideoBucket(config.video, VIDEO_BUCKET_CUDA),
+          SHIPPED_AT_242[VIDEO_BUCKET_CUDA].map((id) => ({ id })),
+        );
       }
       nextRoot.video = nextVideo;
       config._shippedDefaults = nextRoot;

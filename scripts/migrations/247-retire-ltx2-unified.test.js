@@ -66,8 +66,8 @@ describe('migration 247 — retire LTX-2 Unified', () => {
   // silently diverge, so assert the seed agrees the model is gone.
   it('matches data.reference, which no longer ships the entry', () => {
     const seeded = JSON.parse(readFileSync(REFERENCE_PATH, 'utf-8'));
-    expect(seeded.video.macos.some((entry) => entry.id === RETIRED_ID)).toBe(false);
-    expect(seeded.video.macos.some((entry) => entry.id === REPLACEMENT_ID)).toBe(true);
+    expect(seeded.video.mlx.some((entry) => entry.id === RETIRED_ID)).toBe(false);
+    expect(seeded.video.mlx.some((entry) => entry.id === REPLACEMENT_ID)).toBe(true);
   });
 
   it('removes the retired entry and leaves the LTX-2.3 models in place', async () => {
