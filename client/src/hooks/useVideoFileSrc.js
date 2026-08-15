@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { listVideoHistory } from '../services/apiImageVideo.js';
+import { getVideoHistoryItem } from '../services/apiImageVideo.js';
 
 /**
  * Resolve a video-history id to the URL of the file it actually points at.
@@ -19,6 +19,12 @@ import { listVideoHistory } from '../services/apiImageVideo.js';
  * So: resolve through the stored `filename` — the same thing the server does
  * (`stitchRunner.js` joins `PATHS.videos` with `finalEntry.filename`) and the
  * media UI does (`components/media/normalize.js` → `/data/videos/${v.filename}`).
+ *
+ * The lookup is a single-entry read (`GET /api/video-gen/history/:id`, #4165).
+ * It used to pull the WHOLE history list and scan it client-side, because no
+ * by-id endpoint existed — so three surfaces (CD cards, CD Overview,
+ * EpisodeVideoStage) each downloaded every render the install has ever produced
+ * to learn one filename.
  *
  * Usage: pass the resolved `src` to `<ScenePreview src=…>`, which falls back to
  * its `<jobId>.mp4` reconstruction when this returns null. Callers should gate
@@ -46,15 +52,14 @@ export function useVideoFileSrc(jobId, { enabled = true } = {}) {
   useEffect(() => {
     if (!active || settled) return undefined;
     let cancelled = false;
-    // Silent: a failed lookup is not a user-facing error — ScenePreview's
-    // reconstruction fallback (and its own missing-media UI) covers it, so a
-    // toast here would be noise on a page that already degrades gracefully.
+    // Silent: neither a 404 (media deleted out from under the record) nor a
+    // transient failure is a user-facing error here — ScenePreview's
+    // reconstruction fallback (and its own missing-media UI) covers both, so a
+    // toast would be noise on a page that already degrades gracefully.
     // Both paths settle on THIS jobId+attempt so `resolving` can never latch on.
-    listVideoHistory({ silent: true })
-      .then((entries) => {
+    getVideoHistoryItem(jobId, { silent: true })
+      .then((entry) => {
         if (cancelled) return;
-        const list = Array.isArray(entries) ? entries : [];
-        const entry = list.find((e) => e?.id === jobId);
         const filename = typeof entry?.filename === 'string' ? entry.filename.trim() : '';
         setResolved({ jobId, attempt, src: filename ? `/data/videos/${filename}` : null });
       })

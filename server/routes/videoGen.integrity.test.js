@@ -63,6 +63,7 @@ vi.mock('../services/videoGen/local.js', () => ({
   ]),
   defaultVideoModelId: vi.fn(() => 'ltx2_unified'),
   loadHistory: vi.fn(async () => []),
+  getHistoryItem: vi.fn(async () => null),
   deleteHistoryItem: vi.fn(),
   setHistoryItemHidden: vi.fn(),
   extractLastFrame: vi.fn(),

@@ -76,7 +76,7 @@ import {
   invalidateByovReadyCache,
   pickDeathFingerprint,
 } from './runtimes.js';
-import { loadHistory, saveHistory, mutateVideoHistory } from './history.js';
+import { loadHistory, saveHistory, mutateVideoHistory, getHistoryItem } from './history.js';
 import { videoModeContractError, videoChainUnsupportedError, VIDEO_MODE_GATED_RUNTIMES } from './modeContract.js';
 import { minimaxH3ControlError } from './minimaxH3Controls.js';
 import { estimateRenderMs } from './eta.js';
@@ -85,7 +85,7 @@ import { estimateRenderMs } from './eta.js';
 export * from './runtimes.js';
 export * from './modeContract.js';
 export * from './eta.js';
-export { loadHistory, saveHistory, mutateVideoHistory };
+export { loadHistory, saveHistory, mutateVideoHistory, getHistoryItem };
 
 // LoRA wrapper for the notapalindrome `mlx_video` runtime. The stock
 // `mlx_video.generate_av` CLI has no --lora flag, but the package ships an

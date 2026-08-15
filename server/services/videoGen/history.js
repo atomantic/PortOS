@@ -19,6 +19,25 @@ const HISTORY_FILE = join(PATHS.data, 'video-history.json');
 export const loadHistory = () => readJSONFile(HISTORY_FILE, [], { strict: true });
 export const saveHistory = (h) => atomicWrite(HISTORY_FILE, h);
 
+// Resolve ONE entry by its history id, or `null` when no entry carries it (#4165).
+// A history id is NOT the filename stem — `videoGen/local.js` names a clip
+// `<jobId>.mp4` (so reconstruction happens to work there), but the timeline
+// renderer mints `timeline-<project>-<ts>.mp4` beside an independent
+// `randomUUID()` id, so a Creative Director `finalVideoId` can only be resolved
+// through the stored `filename`. Callers that hold just an id used to pull the
+// WHOLE list to find one row; this is the single-entry read behind
+// `GET /api/video-gen/history/:id`.
+//
+// `null` (not a throw) is the not-found signal so the route owns the 404 and
+// this stays usable as a plain lookup; distinct from the strict `loadHistory`
+// read, which still throws on an unreadable history file rather than reporting
+// a bogus "no such entry".
+export async function getHistoryItem(id) {
+  const history = await loadHistory();
+  if (!Array.isArray(history)) return null;
+  return history.find((entry) => entry?.id === id) || null;
+}
+
 // Serialized read-modify-write for the shared history file. `loadHistory` +
 // mutate + `saveHistory` is not atomic on its own, so two write paths that
 // finish near-simultaneously (e.g. two out-of-queue video downloads completing

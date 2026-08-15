@@ -80,6 +80,11 @@ vi.mock('../services/apiImageVideo.js', () => ({
     ],
   })),
   listVideoHistory: vi.fn(async () => [{ id: 'rh-9', filename: 'final.mp4' }]),
+  // By-id resolver behind useVideoFileSrc (#4165) — 404s (rejects) for any
+  // other id, exactly as the real endpoint does.
+  getVideoHistoryItem: vi.fn(async (id) => (id === 'rh-9'
+    ? { id: 'rh-9', filename: 'final.mp4' }
+    : Promise.reject(Object.assign(new Error('Not found'), { status: 404 })))),
   // Restricted-model license gate — none of the models above carry a
   // `termsGate`, so the board renders no acceptance panel and nothing blocks.
   getVideoModelTerms: vi.fn(async () => ({ accepted: [] })),
@@ -829,7 +834,7 @@ describe('MusicVideo media lightbox (#3718)', () => {
   });
 
   it('opens the final render from the resolved filename, not the history-id reconstruction', async () => {
-    // listVideoHistory is mocked → { id: 'rh-9', filename: 'final.mp4' }; the
+    // getVideoHistoryItem is mocked → { id: 'rh-9', filename: 'final.mp4' }; the
     // final-render id is NOT its filename stem, so /data/videos/rh-9.mp4 404s.
     await openProject({ ...PROJECT_WITH_CLIP, renderHistoryId: 'rh-9' });
     const expand = await screen.findByRole('button', { name: 'View final video full size' });

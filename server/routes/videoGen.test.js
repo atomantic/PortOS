@@ -70,6 +70,7 @@ vi.mock('../services/videoGen/local.js', () => ({
   listVideoModels: vi.fn(() => [{ id: 'ltx2_unified', name: 'LTX-2 Unified', runtime: 'ltx2' }]),
   defaultVideoModelId: vi.fn(() => 'ltx2_unified'),
   loadHistory: vi.fn(async () => []),
+  getHistoryItem: vi.fn(async () => null),
   deleteHistoryItem: vi.fn(async (id) => ({ ok: true, id })),
   // The route imports setHistoryItemHidden too — without this entry, ESM
   // module linking fails when the route is loaded inside the test process.
@@ -2106,6 +2107,42 @@ describe('videoGen routes', () => {
       const r = await request(app).get('/api/video-gen/history');
       expect(r.status).toBe(200);
       expect(r.body).toHaveLength(2);
+    });
+  });
+
+  describe('GET /history/:id', () => {
+    // The point of the route (#4165): a timeline render's history id is a
+    // randomUUID() that has nothing to do with its `timeline-*.mp4` filename,
+    // so a client holding only the id learns the real file from HERE instead of
+    // downloading the whole history list to find one row.
+    it('returns the one entry, resolving an id whose filename is unrelated to it', async () => {
+      const entry = { id: 'final-1', filename: 'timeline-abcd1234-1700000000000.mp4', thumbnail: 'final-1.jpg' };
+      videoGenService.getHistoryItem.mockResolvedValueOnce(entry);
+      const r = await request(app).get('/api/video-gen/history/final-1');
+      expect(r.status).toBe(200);
+      expect(r.body).toEqual(entry);
+      expect(videoGenService.getHistoryItem).toHaveBeenCalledWith('final-1');
+      // Never the full list — that fan-out is exactly what this replaced.
+      expect(videoGenService.loadHistory).not.toHaveBeenCalled();
+    });
+
+    it('404s for an id that is not in history', async () => {
+      videoGenService.getHistoryItem.mockResolvedValueOnce(null);
+      const r = await request(app).get('/api/video-gen/history/gone-1');
+      expect(r.status).toBe(404);
+      expect(videoGenService.getHistoryItem).toHaveBeenCalledWith('gone-1');
+    });
+
+    it('decodes a percent-encoded id before looking it up', async () => {
+      videoGenService.getHistoryItem.mockResolvedValueOnce(null);
+      await request(app).get(`/api/video-gen/history/${encodeURIComponent('a b/c')}`);
+      expect(videoGenService.getHistoryItem).toHaveBeenCalledWith('a b/c');
+    });
+
+    it('rejects an absurdly long id without touching the service', async () => {
+      const r = await request(app).get(`/api/video-gen/history/${'x'.repeat(201)}`);
+      expect(r.status).toBe(400);
+      expect(videoGenService.getHistoryItem).not.toHaveBeenCalled();
     });
   });
 

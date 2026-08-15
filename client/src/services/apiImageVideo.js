@@ -221,6 +221,13 @@ export const getVideoGenRuntimeStatus = (runtime, { signal } = {}) =>
 // poll doesn't double-toast on every navigation.
 export const getActiveVideoJob = () => request('/video-gen/active', { silent: true });
 export const listVideoHistory = (options = {}) => request('/video-gen/history', options);
+// ONE history entry by id (#4165) — for a surface that holds only a video-history
+// id and needs the file it actually points at. A history id is not the filename
+// stem (a timeline render mints `timeline-*.mp4` beside a randomUUID() id), and
+// pulling the whole list to find one row is what this replaces. 404s (throwing an
+// Error with `.status === 404`) when the entry is gone; pass `{ silent: true }`
+// when the caller owns the not-found UI.
+export const getVideoHistoryItem = (id, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}`, options);
 // Upload a video into the shared gallery (#4188) — lands under /data/videos/
 // with a video-history entry (peer-syncable), unlike the /api/uploads scratch
 // dir. Returns the history entry; feed it through normalizeVideo to display.

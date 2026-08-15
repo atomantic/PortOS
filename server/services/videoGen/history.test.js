@@ -14,7 +14,7 @@ vi.mock('../../lib/fileUtils.js', () => ({
   atomicWrite: vi.fn(async (_file, value) => { store.data = value; }),
 }));
 
-import { mutateVideoHistory } from './history.js';
+import { mutateVideoHistory, getHistoryItem } from './history.js';
 
 describe('mutateVideoHistory serialization', () => {
   beforeEach(() => { store.data = []; });
@@ -39,5 +39,42 @@ describe('mutateVideoHistory serialization', () => {
     await expect(mutateVideoHistory(() => { throw new Error('boom'); })).rejects.toThrow('boom');
     await mutateVideoHistory((h) => { h.unshift({ id: 'after' }); return h; });
     expect(store.data.map((x) => x.id)).toEqual(['after']);
+  });
+});
+
+describe('getHistoryItem', () => {
+  beforeEach(() => { store.data = []; });
+
+  it('resolves an id whose filename is unrelated to it (the timeline case)', async () => {
+    store.data = [
+      { id: 'final-1', filename: 'timeline-abcd1234-1700000000000.mp4' },
+      { id: 'scene-1', filename: 'scene-1.mp4' },
+    ];
+    expect(await getHistoryItem('final-1')).toEqual({
+      id: 'final-1',
+      filename: 'timeline-abcd1234-1700000000000.mp4',
+    });
+  });
+
+  it('returns null — not a throw — for an id absent from history', async () => {
+    store.data = [{ id: 'scene-1', filename: 'scene-1.mp4' }];
+    expect(await getHistoryItem('gone-1')).toBeNull();
+  });
+
+  it('returns null on an empty history rather than undefined', async () => {
+    expect(await getHistoryItem('anything')).toBeNull();
+  });
+
+  it('matches ids exactly — a filename stem is not an id', async () => {
+    store.data = [{ id: 'final-1', filename: 'timeline-final-1.mp4' }];
+    expect(await getHistoryItem('timeline-final-1')).toBeNull();
+  });
+
+  it('survives a malformed entry sitting in the list', async () => {
+    // A hand-edited or half-written history file must not make the lookup
+    // throw on the null row before it reaches the entry the caller asked for.
+    store.data = [null, { filename: 'no-id.mp4' }, { id: 'scene-1', filename: 'scene-1.mp4' }];
+    const entry = await getHistoryItem('scene-1');
+    expect(entry?.filename).toBe('scene-1.mp4');
   });
 });

@@ -37,6 +37,7 @@ import {
   invalidateRuntimeFingerprintCache,
   resolveRuntimeFingerprint,
   loadHistory,
+  getHistoryItem,
   deleteHistoryItem,
   setHistoryItemHidden,
   extractLastFrame,
@@ -1227,6 +1228,29 @@ router.post('/cancel', asyncHandler(async (req, res) => {
 
 router.get('/history', asyncHandler(async (_req, res) => {
   res.json(await loadHistory());
+}));
+
+// One history entry by id (#4165). A history id is NOT the filename stem — the
+// timeline renderer mints `timeline-<project>-<ts>.mp4` beside an independent
+// `randomUUID()` id — so a client holding only an id (a Creative Director
+// `finalVideoId`, an EpisodeVideoStage final) has to ask the server which file
+// it points at. Before this route existed, every such surface pulled the WHOLE
+// history list to find one row.
+//
+// The id is validated loosely on purpose: `historyIdSchema`'s UUID check below
+// suits ids this install MINTS, but entries also arrive from a caller-supplied
+// download id and from federated peers, so a `.guid()` gate here would 400 rows
+// that are legitimately in the list. Nothing is interpolated into a path — the
+// value is only compared against stored ids — so a length-capped string is the
+// right bound.
+const historyLookupIdSchema = z.string().min(1).max(200);
+
+router.get('/history/:id', asyncHandler(async (req, res) => {
+  const parsed = historyLookupIdSchema.safeParse(req.params.id);
+  if (!parsed.success) failValidation(parsed);
+  const entry = await getHistoryItem(parsed.data);
+  if (!entry) throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
+  res.json(entry);
 }));
 
 // Upload a video into the shared gallery (#4188) — the video counterpart of

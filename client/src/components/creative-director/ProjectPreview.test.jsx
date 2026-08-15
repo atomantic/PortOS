@@ -11,7 +11,10 @@ import { MemoryRouter } from 'react-router';
 // the test stays a unit of ProjectPreview's own branch selection.
 vi.mock('../MediaImage.jsx', () => ({ default: () => <div data-testid="media-image" /> }));
 vi.mock('./ScenePreview.jsx', () => ({ default: () => <div data-testid="scene-preview" /> }));
-vi.mock('../../services/apiImageVideo.js', () => ({ listVideoHistory: vi.fn(async () => []) }));
+vi.mock('../../services/apiImageVideo.js', () => ({
+  // useVideoFileSrc resolves one id at a time (#4165); nothing is in history here.
+  getVideoHistoryItem: vi.fn(async () => Promise.reject(Object.assign(new Error('Not found'), { status: 404 }))),
+}));
 
 import ProjectPreview from './ProjectPreview.jsx';
 

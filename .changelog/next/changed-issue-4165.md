@@ -1,0 +1,1 @@
+- Video history is now resolvable one entry at a time (`GET /api/video-gen/history/:id`) — Creative Director previews, the CD Overview, MusicVideo, and the pipeline's episode video stage no longer download the entire render history just to learn one clip's filename
