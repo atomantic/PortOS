@@ -6,8 +6,14 @@
  * process-provider entries: `kimi-cli` (headless one-shot via `kimi --print`) and
  * `kimi-tui` (interactive PTY). The plain HTTP API entry already exists separately
  * as `nvidia-kimi`. The CLI/TUI argv conventions live in server/lib/kimi.js (kimi
- * reads its prompt as the `--prompt <value>` argv, not raw stdin; `--print` implies
- * `--afk` so headless runs auto-approve).
+ * reads its prompt as the `--prompt <value>` argv, not raw stdin).
+ *
+ * NOTE (issue #4139): the frozen `KIMI_CLI` def below seeds `args: ["--print"]`,
+ * which a live `kimi` v0.32.0 rejects outright — the flag does not exist. The def
+ * is left as-is because it is the historical record of what this migration
+ * installed; migration 269 strips the token from any install that received it
+ * (including one seeding it here for the first time, since migrations run in
+ * numeric order), and the data.reference seed now ships empty args.
  *
  * `setup-data.js` merges *missing* provider entries from data.reference, but only
  * when an install re-runs setup. This migration delivers the providers on a plain

@@ -3,17 +3,26 @@
  *
  * Kimi Code (MoonshotAI/kimi-cli, MIT-licensed) ships two PortOS process-provider
  * shapes (the plain HTTP API entry already exists separately as `nvidia-kimi`):
- *   - `kimi-cli`  (type `cli`) — headless one-shot via `kimi --print`.
+ *   - `kimi-cli`  (type `cli`) — headless one-shot via `kimi --prompt <value>`.
  *   - `kimi-tui`  (type `tui`) — the interactive Kimi Code TUI driven over a PTY.
  *
- * Prompt delivery (headless): unlike claude/codex (raw stdin), `kimi --print`
- * takes the prompt as the VALUE of its `--prompt`/`-p` flag and does NOT read
- * stdin. `--print` also implicitly enables `--afk` (away-from-keyboard: auto-
- * approve tool calls, auto-dismiss AskUserQuestion), so a headless run never
- * stalls on an approval prompt. `prepareKimiPrompt` splices the prompt in as the
- * `--prompt` value and reports `useStdin: false`, mirroring the antigravity
- * `{ args, useStdin, cleanup }` shape so the shared `prepareCliPrompt` dispatcher
- * can handle it uniformly.
+ * Verified against a live `kimi` v0.32.0 (issue #4139 — the shape below was first
+ * written blind against docs, and every headless run failed at argv parsing):
+ *   - There is NO `--print` flag (`error: unknown option '--print'`). Non-interactive
+ *     mode is implicit in supplying `-p`/`--prompt`, so the headless argv needs no
+ *     mode flag at all beyond the prompt itself.
+ *   - There is NO `--afk` flag either (`error: unknown option '--afk'`).
+ *   - The headless path takes NO approval-posture flag: kimi refuses to combine
+ *     `--prompt` with `--yolo`/`-y`/`--auto` (`error: Cannot combine --prompt with
+ *     --yolo.`) and runs unattended without one. Only the interactive TUI path
+ *     (no `--prompt`) gets `--yolo`.
+ *
+ * Prompt delivery (headless): unlike claude/codex (raw stdin), `kimi` takes the
+ * prompt as the VALUE of its `--prompt`/`-p` flag and does NOT read stdin (neither
+ * a stdin path nor a `--prompt-file` option appears in `--help`).
+ * `prepareKimiPrompt` splices the prompt in as the `--prompt` value and reports
+ * `useStdin: false`, mirroring the antigravity `{ args, useStdin, cleanup }` shape
+ * so the shared `prepareCliPrompt` dispatcher can handle it uniformly.
  *
  * Model selection mirrors Antigravity/Grok Build: PortOS does not pick a model.
  * The stored sentinel lives in providerModels.js (`KIMI_CONFIGURED_DEFAULT`);
@@ -24,26 +33,15 @@
  * Dependency-light on purpose: imports only `providerModels.js` helpers, mirroring
  * `grok.js`/`antigravity.js` so it stays importable from the standalone autofixer.
  *
- * NOTE: `kimi` was not installed in the dev environment where this shipped, so the
- * argv-value prompt path (`--prompt <value>`, like `agy --print <value>`) was
- * chosen as the documented default and should be confirmed against a live binary.
- * Two follow-ups to reconcile once a live `kimi` is available (raised in review,
- * deferred because they can't be validated blind and both risk regressing the
- * happy path if guessed wrong):
- *   1. Argv length limits. A large CoS operating-contract prompt on the argv can
- *      exceed Windows' ~32K command-line limit (and eventually POSIX ARG_MAX). If
- *      the live `kimi --print` accepts the prompt from stdin (or from a
- *      `--prompt-file <path>` that can point at `/dev/stdin`, as grok does), switch
- *      this delivery to stdin to lift the cap. It is NOT switched now because the
- *      antigravity analog (`agy --print`) takes the prompt as an argv VALUE and
- *      does NOT read stdin at all — guessing stdin against an agy-like `kimi` would
- *      silently deliver an empty prompt, a worse failure than the length ceiling.
- *   2. Structured-output contamination. If plain `--print` interleaves intermediate
- *      tool/assistant activity with the final message, a pipeline stage that parses
- *      stdout as JSON could choke on the chatter. If the live `kimi` exposes a
- *      "final message only" flag, add it to `ensureKimiHeadlessArgs`. It is NOT
- *      added now because passing a flag the binary doesn't recognize would make
- *      every headless run fail at startup.
+ * Known remaining limitation (confirmed, not a guess): argv length. A large CoS
+ * operating-contract prompt rides the command line and can exceed Windows' ~32K
+ * limit (and eventually POSIX `ARG_MAX`). There is no lower-risk delivery to switch
+ * to — `-p <value>` is the only prompt mechanism `kimi --help` documents.
+ *
+ * Deliberately not adopted: `--output-format stream-json` (`--output-format` takes
+ * `text` (default) or `stream-json`). It would let a pipeline stage parse discrete
+ * JSON events instead of scraping possibly-interleaved plain text, but no stage
+ * parses kimi's stdout programmatically today, so `text` stays the default.
  */
 
 import { argvHasFlag, commandBasename, hasModelFlag } from './providerModels.js';
@@ -59,14 +57,15 @@ const isFlagToken = (a) => typeof a === 'string' && a.startsWith('-');
 export const KIMI_CLI_ID = 'kimi-cli';
 export const KIMI_TUI_ID = 'kimi-tui';
 
-// `--print` puts kimi in non-interactive print mode (implies `--afk`).
-const PRINT_FLAGS = ['--print'];
-// The prompt-carrying flags — kimi reads the prompt as this flag's VALUE.
+// The prompt-carrying flags — kimi reads the prompt as this flag's VALUE, and
+// their mere presence is what puts kimi in non-interactive mode (there is no
+// separate `--print`-style boolean; see the header note).
 const PROMPT_FLAGS = ['--prompt', '-p'];
 // Auto-approval postures for the unattended PTY: `--yolo`/`-y` auto-approve all
-// tool calls; `--afk` also auto-dismisses AskUserQuestion. Any one already
-// present means the user pinned their own posture — don't add another.
-const APPROVAL_FLAGS = ['--yolo', '-y', '--afk'];
+// tool calls. Either one already present means the user pinned their own posture
+// — don't add another. Interactive path ONLY: kimi rejects these alongside
+// `--prompt` (`Cannot combine --prompt with --yolo.`).
+const APPROVAL_FLAGS = ['--yolo', '-y'];
 
 /**
  * True when a provider command points at the Kimi Code binary — the bare `kimi`
@@ -92,12 +91,15 @@ export function isKimiTuiProvider(provider) {
 }
 
 /**
- * Build the headless (one-shot) argv for the Kimi Code CLI. Ensures, when not
- * already pinned by the user's saved `args`:
- *   - `--print`      — non-interactive print mode (implies `--afk`, so tool calls
- *                      auto-approve; PortOS parses stdout as plain text).
- *   - `--model <id>` — gated on `model` being a real id (the sentinel already
- *                      resolved to null upstream) AND no user-baked model flag.
+ * Build the headless (one-shot) argv for the Kimi Code CLI. The ONLY thing added
+ * here is `--model <id>`, gated on `model` being a real id (the sentinel already
+ * resolved to null upstream) AND no user-baked model flag.
+ *
+ * No mode flag and no approval flag are added — kimi has neither a `--print`
+ * boolean (non-interactive mode is implicit in `--prompt`) nor a headless
+ * approval posture (it refuses `--yolo`/`-y`/`--auto` alongside `--prompt`).
+ * Adding any of them makes the binary exit at argv parsing before it runs.
+ *
  * The prompt itself is NOT added here — it's spliced in as the `--prompt` value
  * at spawn time by `prepareKimiPrompt`.
  * @param {string[]} baseArgs - user/legacy args (already model-flag-sanitized)
@@ -106,9 +108,6 @@ export function isKimiTuiProvider(provider) {
  */
 export function ensureKimiHeadlessArgs(baseArgs = [], model) {
   const out = [...baseArgs];
-  if (!argvHasFlag(out, PRINT_FLAGS)) {
-    out.push('--print');
-  }
   if (model && !hasModelFlag(out)) {
     out.push('--model', model);
   }
@@ -121,6 +120,7 @@ export function ensureKimiHeadlessArgs(baseArgs = [], model) {
  * `--dangerously-bypass-approvals-and-sandbox` / claude-code-tui
  * `--dangerously-skip-permissions` / grok `--permission-mode bypassPermissions`
  * TUI defaults). Idempotent when the user already pinned an approval posture.
+ * Interactive path only — the headless (`--prompt`) path must never get one.
  * @param {string[]} args
  * @returns {string[]}
  */
@@ -134,7 +134,8 @@ export function ensureKimiTuiArgs(args = []) {
 
 /**
  * Spawn-time prompt delivery for the Kimi Code CLI: splice the prompt in as the
- * VALUE of the `--prompt` flag (kimi does NOT read stdin in `--print` mode).
+ * VALUE of the `--prompt` flag (kimi does NOT read stdin). Supplying the flag is
+ * also what selects non-interactive mode — there is no separate mode flag.
  * Mirrors the `{ args, useStdin, cleanup }` shape of
  * `antigravity.js#prepareAntigravityPrompt` / `grok.js#prepareGrokPromptFile` so
  * the spawn sites can dispatch through the single `prepareCliPrompt` helper.
