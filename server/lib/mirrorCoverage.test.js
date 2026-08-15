@@ -45,34 +45,42 @@ function uniquePairs(pairs) {
   return [...new Map(pairs.map((pair) => [`${pair.serverFile}:${pair.clientFile}`, pair])).values()];
 }
 
+// Matches `ref` only when it appears as (part of) a quoted string — i.e. an
+// actual import/require specifier — not a bare substring. A prose comment
+// mentioning a filename, or an unrelated same-prefix fixture, must not count
+// as "this test imports that file".
+function importsRef(source, ref) {
+  const escaped = ref.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`['"\`][^'"\`]*${escaped}['"\`]`).test(source);
+}
+
 function missingParityPins(pairs, testSources) {
   return pairs.filter(({ clientFile, serverFile }) => {
     const serverName = basename(serverFile);
     // For a direct mirror, clientFile and serverName are the identical
     // string — so "reads the client copy" and "reads the server copy" can't
-    // be proven by a plain substring check on each independently, or the
-    // SAME occurrence satisfies both (a client-only test that only imports
-    // its own module via `'./example.js'` would otherwise pass as a valid
-    // parity pin, and symmetrically for a server-only test — see the two
-    // bypass-probe tests below). Strip whichever string just proved
-    // "reads the client copy" before checking for server-copy evidence, so
-    // the two proofs must come from genuinely different occurrences.
+    // be proven by a plain check on each independently, or the SAME
+    // occurrence satisfies both (a client-only test that only imports its
+    // own module via `'./example.js'` would otherwise pass as a valid
+    // parity pin, and symmetrically for a server-only test — see the
+    // bypass-probe tests below). Strip whichever string just proved "reads
+    // the client copy" before checking for server-copy evidence, so the two
+    // proofs must come from genuinely different occurrences.
     const clientPathRef = `client/src/lib/${clientFile}`;
-    const bareRef = `'./${clientFile}'`;
     return !testSources.some(({ path, source }) => {
       if (path === fileURLToPath(import.meta.url)) return false;
       const inClientLib = path.startsWith(CLIENT_LIB);
-      const readsClient = source.includes(clientPathRef) || (inClientLib && source.includes(bareRef));
+      const readsClient = importsRef(source, clientPathRef) || (inClientLib && importsRef(source, clientFile));
       if (!readsClient) return false;
       let remainder = source.split(clientPathRef).join('');
-      // Only strip the bare-import string when it was actually used as
+      // Only strip the bare-import specifier when it was actually used as
       // client-copy evidence above (inClientLib) — outside client/src/lib
-      // that same bare string is exactly what proves the SERVER copy was
-      // read (see catalogTypes.parity.test.js: `from './catalogTypes.js'`
+      // that same specifier is exactly what proves the SERVER copy was read
+      // (see catalogTypes.parity.test.js: `from './catalogTypes.js'`
       // alongside the full client path), so stripping it unconditionally
       // would erase legitimate server-copy evidence.
-      if (inClientLib) remainder = remainder.split(bareRef).join('');
-      return remainder.includes(serverName) || (!inClientLib && remainder.includes(`'./${serverName}'`));
+      if (inClientLib) remainder = remainder.split(`'./${clientFile}'`).join('').split(`"./${clientFile}"`).join('');
+      return importsRef(remainder, serverName);
     });
   });
 }
@@ -138,6 +146,21 @@ describe('declared server/client mirror coverage', () => {
       source: "import { thing } from './example.js';\n",
     };
     expect(missingParityPins(synthetic, [clientOnlyUnitTest])).toEqual([
+      { clientFile: 'example.js', serverFile: 'example.js' },
+    ]);
+  });
+
+  it('does not accept a bare prose mention of the filename as a parity pin (bypass probe)', () => {
+    // A comment mentioning the server path in passing — without an actual
+    // import of it — must not satisfy the guard either, or a stray comment
+    // surviving the deletion of the real parity-pinning test would keep this
+    // suite silently green.
+    const synthetic = listedMirrorPairs('| `example.js` | Mirror of `server/lib/example.js`. |');
+    const commentOnlyMention = {
+      path: join(CLIENT_LIB, 'example.test.js'),
+      source: "import { thing } from './example.js';\n// keep this in sync with server/lib/example.js\n",
+    };
+    expect(missingParityPins(synthetic, [commentOnlyMention])).toEqual([
       { clientFile: 'example.js', serverFile: 'example.js' },
     ]);
   });
