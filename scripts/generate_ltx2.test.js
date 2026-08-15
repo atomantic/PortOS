@@ -300,7 +300,9 @@ describe.skipIf(!pyBin)('generate_ltx2.py', () => {
       // nothing here imports it from a path the fork could move.
       'print(cls.__name__)',
     ].join('\n')}`);
-    expect(output.trim().split('\n')).toEqual([
+    // Split on \r?\n: Python's print writes CRLF on Windows, and a trailing \r
+    // on the first line would fail an equality that passes everywhere else.
+    expect(output.trim().split(/\r?\n/)).toEqual([
       join('/shims', 'ltx25-heretic-8bit'),
       'Gemma4LanguageModel',
     ]);
