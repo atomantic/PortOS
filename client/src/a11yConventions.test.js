@@ -294,7 +294,12 @@ function maskComments(src) {
   // Each entry marks whether the element started in JavaScript expression
   // context. A nested JSX expression can sit inside an outer element; when its
   // root closes, return to JavaScript rather than mistaking the outer element's
-  // remaining stack entry for JSX text.
+  // remaining stack entry for JSX text. Each entry also parks the enclosing
+  // `braceDepth`: an element rendered from inside an expression
+  // (`{list.map((x) => <option>{x.name}</option>)}`) has expression braces open
+  // around it, and its own `{x.name}` would otherwise close them — leaving the
+  // lexer in `code` mode where the following `</select>` reads as a
+  // less-than, never pops, and strands the rest of the file in `jsx-text`.
   const jsxStack = [];
 
   const jsxTagInfoAt = (index) => {
@@ -380,11 +385,13 @@ function maskComments(src) {
       const selfClosing = src[previous] === '/';
       if (tagInfo.closing) {
         const entry = jsxStack.pop();
+        braceDepth = entry?.braceDepth ?? 0;
         mode = entry?.root ? 'code' : (jsxStack.length ? 'jsx-text' : 'code');
       } else if (selfClosing) {
         mode = tagParentMode;
       } else {
-        jsxStack.push({ name: tagInfo.fragment ? null : tagInfo.name, root: tagParentMode === 'code' });
+        jsxStack.push({ name: tagInfo.fragment ? null : tagInfo.name, root: tagParentMode === 'code', braceDepth });
+        braceDepth = 0;
         mode = 'jsx-text';
       }
       tagInfo = null;
@@ -709,11 +716,16 @@ function isNestedInLabeledFormField(src, index) {
       if (!tag.selfClosing) depth++;
       cursor = tag.end;
     }
-    if (!closed && depth === 0 && firstChild === null && cursor === index) firstChild = 'input';
-    // FormField clones only its first React child. The current input is named
+    // `#control` rather than `'input'`: `firstChild` otherwise holds a real tag
+    // name, so a control preceded by a literal `<input>` sibling would read as
+    // "the control IS the first child" and be credited by a wrapper that never
+    // named it. Harmless while the scan only ever asked about `<input>`; a live
+    // bypass now that a `<select>` can follow one.
+    if (!closed && depth === 0 && firstChild === null && cursor === index) firstChild = '#control';
+    // FormField clones only its first React child. The current control is named
     // by the wrapper only when it is that first, direct child; a later control
     // (DataDog's optional custom-site input) must remain actionable here.
-    if (!closed && depth === 0 && firstChild === 'input') return true;
+    if (!closed && depth === 0 && firstChild === '#control') return true;
   }
   return false;
 }
@@ -812,10 +824,15 @@ function hasUsableAriaLabelledByReference(src, tag) {
   });
 }
 
-function hasAccessibleInputName(src, tag, index) {
+// `type`-derived names are an <input>-only affordance: a submit button names
+// itself from `value`, an image button from `alt`, and a hidden input is not in
+// the a11y tree at all. <select> and <textarea> have no such escape hatch, so
+// the caller passes the tag name rather than this reading `type` off anything
+// that happens to carry one.
+function hasAccessibleControlName(src, tag, index, tagName) {
   if (hasUsableAccessibleNameAttribute(tag, 'aria-label')) return true;
   if (hasUsableAccessibleNameAttribute(tag, 'aria-labelledby') && hasUsableAriaLabelledByReference(src, tag)) return true;
-  if (hasUsableNativeInputName(tag)) return true;
+  if (tagName === 'input' && hasUsableNativeInputName(tag)) return true;
   if (isNestedInLabel(src, index) || isNestedInLabeledFormField(src, index)) return true;
   if (isNestedInLabelWrappingComponent(src, index)) return true;
 
@@ -823,39 +840,43 @@ function hasAccessibleInputName(src, tag, index) {
   return id !== null && id !== '' && hasMatchingExplicitLabel(src, id);
 }
 
-// These are pre-existing controls exposed when the rule was generalized. The
-// migration is tracked in #4297. Keep exceptions tied to stable source anchors
-// rather than line numbers, so inserting code above a control does not move
-// the exception to a different input; remove each entry as its control receives
-// a real name.
-const INPUT_ANCHOR_ATTRIBUTES = [
+// Keep exceptions tied to stable source anchors rather than line numbers, so
+// inserting code above a control does not move the exception to a different
+// control; remove each entry as its control receives a real name. The tag name
+// is part of the anchor so a <select> and a <textarea> that happen to share a
+// file and an attribute set can't exempt each other.
+const CONTROL_ANCHOR_ATTRIBUTES = [
   'id', 'name', 'type', 'placeholder', 'value', 'ref', 'title', 'role',
-  'aria-label', 'aria-labelledby', 'autoFocus', 'min', 'max', 'step',
+  'aria-label', 'aria-labelledby', 'autoFocus', 'min', 'max', 'step', 'rows',
 ];
 
-function inputSemanticAnchor(tag) {
-  return INPUT_ANCHOR_ATTRIBUTES.map((name) => {
+function controlSemanticAnchor(tag) {
+  return CONTROL_ANCHOR_ATTRIBUTES.map((name) => {
     const value = attributeValue(tag, name);
     return value === null ? null : `${name}=${value.replace(/\s+/g, ' ')}`;
   }).filter(Boolean).join('|');
 }
 
-function inputSourceAnchor(file, src, index) {
-  const tag = openingTagAt(src, index, '<input'.length);
-  if (!tag) return `${file}|unknown-input`;
-  const semantic = inputSemanticAnchor(tag);
-  const matchingInputs = [];
-  for (const match of src.matchAll(/<input\b/g)) {
-    const otherTag = openingTagAt(src, match.index, '<input'.length);
-    if (inputSemanticAnchor(otherTag) === semantic) matchingInputs.push(match.index);
+const controlTagRe = (tagName) => new RegExp(`<${tagName}\\b`, 'g');
+
+function controlSourceAnchor(file, src, index, tagName) {
+  const nameLength = tagName.length + 1;
+  const tag = openingTagAt(src, index, nameLength);
+  if (!tag) return `${file}|${tagName}|unknown`;
+  const semantic = controlSemanticAnchor(tag);
+  const matching = [];
+  for (const match of src.matchAll(controlTagRe(tagName))) {
+    const otherTag = openingTagAt(src, match.index, nameLength);
+    if (otherTag && controlSemanticAnchor(otherTag) === semantic) matching.push(match.index);
   }
-  if (matchingInputs.length === 1) return `${file}|${semantic}`;
-  const occurrence = matchingInputs.indexOf(index) + 1;
-  return `${file}|${semantic}|occurrence=${occurrence}`;
+  const base = `${file}|${tagName}|${semantic}`;
+  if (matching.length === 1) return base;
+  return `${base}|occurrence=${matching.indexOf(index) + 1}`;
 }
 
-// What is left is no longer a backlog of unnamed controls — all three are
-// shapes the scan cannot resolve, not gaps in the UI:
+// These are pre-existing controls exposed when the rule was generalized; the
+// migration is tracked in #4297. What is left is no longer a backlog of unnamed
+// controls — all three are shapes the scan cannot resolve, not gaps in the UI:
 //   * EntityCombobox / TagPicker take the control's `id` as a prop and every
 //     caller pairs its own `<label htmlFor>`, which lives in the caller's file.
 //     A same-file scan cannot see it, and an `aria-label` here would OVERRIDE
@@ -866,9 +887,144 @@ function inputSourceAnchor(file, src, index) {
 // So: do not "fix" these by bolting an aria-label onto the control. Fix the
 // recognizer, then delete the row.
 const PREEXISTING_INPUT_NAME_ALLOWLIST = new Set([
-  "src/components/EntityCombobox.jsx|id=inputId|type=text|placeholder=placeholder || `Search ${noun}s or type a new name…`|value=value|role=combobox",
-  "src/components/TagPicker.jsx|id=id|type=text|placeholder=value.length >= maxTags ? `Max ${maxTags} tags` : placeholder|value=input",
-  "src/pages/AIProviders.jsx|type=text|placeholder=Use fallback provider's default|value=formData.fallbackModel",
+  "src/components/EntityCombobox.jsx|input|id=inputId|type=text|placeholder=placeholder || `Search ${noun}s or type a new name…`|value=value|role=combobox",
+  "src/components/TagPicker.jsx|input|id=id|type=text|placeholder=value.length >= maxTags ? `Max ${maxTags} tags` : placeholder|value=input",
+  "src/pages/AIProviders.jsx|input|type=text|placeholder=Use fallback provider's default|value=formData.fallbackModel",
+]);
+
+// The <select>/<textarea> half of the same rule, seeded when #4309 widened the
+// scan past <input>. Unlike the list above this one IS a live backlog: every
+// row is a real dropdown or free-text box a screen reader announces with no
+// name. It only shrinks — name the control (a paired `<label htmlFor>` first,
+// `aria-label` only where a visible label would break the layout), then delete
+// its row. Burn-down tracked in #4309.
+const PREEXISTING_SELECT_TEXTAREA_NAME_ALLOWLIST = new Set([
+  "src/components/agents/tabs/ActivityTab.jsx|select|value=actionFilter",
+  "src/components/agents/tabs/OverviewTab.jsx|select|value=fnConfig.model || ''",
+  "src/components/agents/tabs/OverviewTab.jsx|select|value=fnConfig.providerId || ''",
+  "src/components/agents/tabs/PublishedTab.jsx|select|value=publishedDays",
+  "src/components/agents/tabs/ToolsTab.jsx|select|value=feedSort",
+  "src/components/agents/tabs/ToolsTab.jsx|select|value=selectedSubmolt",
+  "src/components/agents/tabs/ToolsTab.jsx|textarea|placeholder=Comment content (markdown)...|value=commentContent|rows=4",
+  "src/components/agents/tabs/ToolsTab.jsx|textarea|placeholder=Post content (markdown)...|value=postContent|rows=6",
+  "src/components/agents/tabs/WorldTab.jsx|select|value=blockType",
+  "src/components/agents/tabs/WorldTab.jsx|select|value=buildAction",
+  "src/components/agents/tabs/WorldTab.jsx|select|value=historyFilter",
+  "src/components/agents/tabs/WorldTab.jsx|select|value=newActionType",
+  "src/components/apps/ReferenceReposPanel.jsx|textarea|placeholder=Notes — what features in our app use this repo? (Helps the watch agent prioritize.)|value=form.notes|rows=3",
+  "src/components/apps/ReferenceReposPanel.jsx|textarea|placeholder=What features rely on this repo? The watch agent reads this to know which commits matter.|value=notesDraft|rows=4",
+  "src/components/apps/tabs/AutomationTab.jsx|select|value=cronEditing[taskType] !== undefined || isCronExpression(overrideInterval) ? 'cron' : (overrideInterval ?? 'null')",
+  "src/components/apps/tabs/CustomTasksSection.jsx|select|value=form.autonomyLevel",
+  "src/components/apps/tabs/CustomTasksSection.jsx|select|value=form.interval",
+  "src/components/apps/tabs/CustomTasksSection.jsx|select|value=form.priority",
+  "src/components/apps/tabs/DocumentsTab.jsx|textarea|value=editContent",
+  "src/components/brain/tabs/DailyLogTab.jsx|textarea|placeholder=isToday ? \"What's on your mind today? Type freely, append voice segments, or toggle dictation above…\" : 'This day\\'s entry is empty.'|value=content|ref=editorRef",
+  "src/components/brain/tabs/FeedsTab.jsx|select|value=selectedFeedId || ''",
+  "src/components/brain/tabs/InboxTab.jsx|select|value=fixDestination|title=Select new destination",
+  "src/components/brain/tabs/InboxTab.jsx|textarea|value=editText|rows=3|occurrence=1",
+  "src/components/brain/tabs/InboxTab.jsx|textarea|value=editText|rows=3|occurrence=2",
+  "src/components/brain/tabs/LinksTab.jsx|select|value=editForm.linkType",
+  "src/components/brain/tabs/LinksTab.jsx|textarea|placeholder=Description (optional)|value=editForm.description|rows=2",
+  "src/components/brain/tabs/NotesTab.jsx|select|value=selectedVaultId || ''",
+  "src/components/brain/tabs/NotesTab.jsx|textarea|value=noteContent|ref=editorRef",
+  "src/components/brain/tabs/TrustTab.jsx|select|value=statusFilter",
+  "src/components/calendar/AgendaTab.jsx|select|value=accountFilter",
+  "src/components/calendar/ConfigTab.jsx|select|value=account.syncMethod || 'claude-mcp'",
+  "src/components/calendar/ReviewTab.jsx|select|value=editForm.goalId",
+  "src/components/cos/tabs/BriefingTab.jsx|select|value=selectedDate || ''",
+  "src/components/cos/tabs/DigestTab.jsx|select|value=selectedWeek || currentDigest?.weekId || ''",
+  "src/components/cos/tabs/JobsTab.jsx|select|value=data.interval",
+  "src/components/cos/tabs/JobsTab.jsx|select|value=editData.appId || ''",
+  "src/components/cos/tabs/JobsTab.jsx|select|value=editData.autonomyLevel",
+  "src/components/cos/tabs/JobsTab.jsx|select|value=editData.priority",
+  "src/components/cos/tabs/JobsTab.jsx|select|value=editData.triggerAction",
+  "src/components/cos/tabs/JobsTab.jsx|select|value=editData.type",
+  "src/components/cos/tabs/JobsTab.jsx|select|value=newJob.appId || ''",
+  "src/components/cos/tabs/JobsTab.jsx|select|value=newJob.autonomyLevel",
+  "src/components/cos/tabs/JobsTab.jsx|select|value=newJob.priority",
+  "src/components/cos/tabs/JobsTab.jsx|select|value=newJob.triggerAction",
+  "src/components/cos/tabs/JobsTab.jsx|textarea|placeholder=Prompt template for the agent *|value=newJob.promptTemplate",
+  "src/components/cos/tabs/JobsTab.jsx|textarea|placeholder=Prompt template for the agent|value=editData.promptTemplate",
+  "src/components/cos/tabs/JobsTab.jsx|textarea|placeholder=Shell command *|value=newJob.command",
+  "src/components/cos/tabs/JobsTab.jsx|textarea|placeholder=Shell command|value=editData.command",
+  "src/components/cos/tabs/TaskItem.jsx|select|value=editData.model",
+  "src/components/cos/tabs/TaskItem.jsx|select|value=editData.provider",
+  "src/components/cos/tabs/schedule/AppOverrideRow.jsx|select|value=cronEditing || hasCron ? 'cron' : (currentInterval || '')",
+  "src/components/cos/tabs/schedule/PromptEditor.jsx|textarea|placeholder=Enter task prompt|value=promptValue|rows=12",
+  "src/components/digital-twin/ListEnrichment.jsx|textarea|value=documentContent|rows=15",
+  "src/components/digital-twin/NextActionBanner.jsx|textarea|placeholder=Type your answer...|value=answer|rows=3",
+  "src/components/digital-twin/tabs/AutobiographyTab.jsx|textarea|placeholder=Start writing your story... Take about 5 minutes.|value=storyContent",
+  "src/components/digital-twin/tabs/AutobiographyTab.jsx|textarea|value=editContent",
+  "src/components/digital-twin/tabs/DocumentsTab.jsx|textarea|placeholder=Write your soul document here...|value=editContent",
+  "src/components/digital-twin/tabs/EnrichTab.jsx|textarea|placeholder=Type your answer here...|value=answer|rows=6",
+  "src/components/digital-twin/tabs/EnrichTab.jsx|textarea|placeholder=`Paste writing sample ${index + 1} here (emails, messages, docs)...`|value=sample.value|rows=4",
+  "src/components/digital-twin/tabs/InterviewTab.jsx|textarea|placeholder=Paste your personality assessment here (from ChatGPT, Claude, etc.)...|value=content|rows=8",
+  "src/components/digital-twin/tabs/OverviewTab.jsx|select|value=selectedProvider ? `${selectedProvider.providerId}:${selectedProvider.model}` : ''",
+  "src/components/digital-twin/tabs/TasteTab.jsx|select|value=selectedProvider ? `${selectedProvider.providerId}:${selectedProvider.model}` : ''",
+  "src/components/digital-twin/tabs/TasteTab.jsx|textarea|placeholder=Share your thoughts... be as specific as possible.|value=answer|rows=6",
+  "src/components/goals/GoalLinkedActivities.jsx|select|value=selectedActivity",
+  "src/components/goals/GoalsListView.jsx|select|value=newGoal.category",
+  "src/components/goals/GoalsListView.jsx|select|value=newGoal.horizon",
+  "src/components/gsd/GsdDocumentsPanel.jsx|textarea|value=editContent",
+  "src/components/meatspace/EpigeneticTracker.jsx|select|value=customForm.category",
+  "src/components/meatspace/EpigeneticTracker.jsx|select|value=customForm.frequency",
+  "src/components/meatspace/post/MemoryPractice.jsx|textarea|placeholder=Type the line...|value=answer|ref=inputRef|rows=2",
+  "src/components/meatspace/post/MemoryPractice.jsx|textarea|placeholder=Type the next line...|value=answer|ref=inputRef|rows=2",
+  "src/components/meatspace/post/PostLlmDrillRunner.jsx|textarea|placeholder=placeholder|value=value|ref=inputRef|rows=3",
+  "src/components/meatspace/post/WordplayDrillUI.jsx|textarea|placeholder=Write a sentence using both meanings...|value=inputValue|ref=inputRef|rows=3",
+  "src/components/meatspace/post/WordplayDrillUI.jsx|textarea|placeholder=Your twisted idiom...|value=inputValue|ref=inputRef|rows=3",
+  "src/components/meatspace/tabs/GenomeTab.jsx|select|value=clinvarStarFilter",
+  "src/components/media/MediaLightbox.jsx|textarea|placeholder=Add a note — use this for cover, reshoot at 24fps, etc.|value=noteDraft|rows=3",
+  "src/components/media/PromptFromMedia.jsx|textarea|value=value|rows=4",
+  "src/components/messages/InboxTab.jsx|select|value=selectedAccount",
+  "src/components/music/ArtistPicker.jsx|select|id=id|value=value || ''",
+  "src/components/musicVideo/SceneCard.jsx|textarea|placeholder=Reference frame prompt — the still that seeds this shot (defaults to the shot prompt)|value=scene.framePrompt || ''|rows=2",
+  "src/components/musicVideo/SceneCard.jsx|textarea|placeholder=Shot prompt — what this scene's video should show|value=scene.prompt || ''|rows=2",
+  "src/components/pipeline/AuthorPicker.jsx|select|id=id|value=value || ''",
+  "src/components/pipeline/CanonCard.jsx|textarea|placeholder=What's the character wearing? (image-gen-ready prose)|value=draftFor('description')|rows=2",
+  "src/components/pipeline/CanonCard.jsx|textarea|placeholder=placeholder|value=draft.value|rows=3",
+  "src/components/pipeline/arcCanvas/ArcContent.jsx|textarea|placeholder=Multi-volume / multi-season summary (~500 words)|value=draft.summary || ''|rows=6",
+  "src/components/pipeline/arcCanvas/ArcContent.jsx|textarea|placeholder=One-sentence whole-arc pitch|value=draft.logline || ''|rows=2",
+  "src/components/pipeline/arcCanvas/ArcContent.jsx|textarea|placeholder=Protagonist arc across all volumes / seasons|value=draft.protagonistArc || ''|rows=3",
+  "src/components/pipeline/arcCanvas/IssueRow.jsx|select|value=issue.seasonId || ''|title=Move to a different season",
+  "src/components/pipeline/arcCanvas/SeasonEditor.jsx|select|value=draft.status || 'draft'",
+  "src/components/pipeline/arcCanvas/SeasonEditor.jsx|textarea|placeholder=Season synopsis (~200 words)|value=draft.synopsis || ''|rows=4",
+  "src/components/pipeline/arcCanvas/TickingClockEditor.jsx|textarea|id=ticking-clock-stakes|placeholder=Stakes — what happens if the clock runs out|value=c.stakes || ''|rows=2",
+  "src/components/pipeline/arcCanvas/VolumeCoverEditorBox.jsx|textarea|placeholder=placeholder|value=draft|rows=3",
+  "src/components/pipeline/manuscript/AnnotatedManuscriptSection.jsx|textarea|value=content|rows=rowsFor(content)",
+  "src/components/pipeline/manuscript/ManuscriptLiveSection.jsx|textarea|value=content|ref=(el) => { taRef.current = el; }|rows=rowsFor(content)",
+  "src/components/pipeline/stages/AudioStage.jsx|textarea|value=textValue|rows=2",
+  "src/components/pipeline/stages/ComicPagesStage.jsx|textarea|placeholder=Panel subject: wide shot, foundry crucible, dusk light, Lina silhouetted against the glow.|value=panel.description || ''|rows=2",
+  "src/components/pipeline/stages/ComicScriptStage.jsx|textarea|placeholder=Back cover concept — illustration only. No text, no masthead. A quiet companion image: a single object, an aftermath beat, a distant silhouette.|value=draftBackCoverScript|rows=3",
+  "src/components/pipeline/stages/ComicScriptStage.jsx|textarea|placeholder=Cover concept — describe the hero image, mood, lighting, framing. Series masthead and issue-number tag included in the prompt automatically.|value=draftCoverScript|rows=3",
+  "src/components/pipeline/stages/ComicScriptStage.jsx|textarea|placeholder=`## Page ${pageIndex + 1}\\n\\n### Panel 1\\n**Description:** ...`|value=draft|rows=18",
+  "src/components/pipeline/stages/StoryboardsStage.jsx|textarea|placeholder=One camera setup. Subject + framing + motion + mood.|value=shot.description || ''|rows=2",
+  "src/components/pipeline/stages/StoryboardsStage.jsx|textarea|placeholder=Subject + framing + mood. The series style notes are prepended automatically.|value=scene.description || ''|rows=3",
+  "src/components/pipeline/stages/VisualGenSettings.jsx|select|value=cfg.imageModelId || ''",
+  "src/components/settings/VoiceTab.jsx|select|value=activeVoice || ''",
+  "src/components/ui/AutoSizeTextarea.jsx|textarea|value=value|ref=ref",
+  "src/components/ui/ProseEditor.jsx|textarea|placeholder=placeholder|value=value|ref=ref",
+  "src/components/universeBuilder/CompositeSheetsEditor.jsx|select|value=editKind",
+  "src/components/universeBuilder/CompositeSheetsEditor.jsx|select|value=newKind",
+  "src/components/universeBuilder/CompositeSheetsEditor.jsx|textarea|placeholder=newKind === 'world_pitch_poster' ? 'Create a cinematic world summary concept pitch poster with a hero panorama, inset environments, cultures, creatures, visual language, palette, materials, and theme icons...' : 'Create a clean illustrated costume reference sheet...'|value=newPrompt|rows=6",
+  "src/components/universeBuilder/CompositeSheetsEditor.jsx|textarea|value=editPrompt|rows=8",
+  "src/components/universeBuilder/UniverseBibleTab.jsx|textarea|placeholder=moebius and scavengers reign meets Prophet inspired sci fi universe|value=draft.starterPrompt|rows=2",
+  "src/components/universeBuilder/UniverseCategoryEditor.jsx|textarea|placeholder=Prompt fragment (subject only)|value=newPrompt|rows=2",
+  "src/components/universeBuilder/UniverseCategoryEditor.jsx|textarea|value=editPrompt|rows=3",
+  "src/components/wiki/tabs/BrowseTab.jsx|textarea|value=noteContent|ref=editorRef",
+  "src/components/writers-room/ExercisePanel.jsx|textarea|placeholder=Just write…|value=text",
+  "src/components/writers-room/LibraryPane.jsx|select|value=workKind",
+  "src/components/writers-room/StagePromptModelPicker.jsx|select|value=stage.model || 'default'",
+  "src/components/writers-room/StoryboardConfigTab.jsx|select|value=value.presetId",
+  "src/pages/AIProviders.jsx|select|value=activeProviderId || ''",
+  "src/pages/AIProviders.jsx|select|value=formData.fallbackModel",
+  "src/pages/AIProviders.jsx|select|value=selectedWorkspace",
+  "src/pages/AIProviders.jsx|textarea|placeholder=Enter your prompt...|value=runPrompt|rows=3",
+  "src/pages/Ask.jsx|select|id=e.target.value;",
+  "src/pages/Ask.jsx|textarea|placeholder=mode === 'draft' ? 'Describe what you want drafted (recipient, tone, key points)…' : 'Ask yourself anything…'|value=question|rows=2",
+  "src/pages/Importer.jsx|textarea|id=`iss-${idx}-prose`|value=issue.proseExcerpt || ''",
+  "src/pages/JiraReports.jsx|select|value=filterAppId",
+  "src/pages/Loops.jsx|textarea|placeholder=What should this loop do? e.g., check if the deployment finished and report status|value=prompt|rows=2",
 ]);
 
 describe('a11y conventions', () => {
@@ -1064,44 +1220,114 @@ describe('a11y conventions', () => {
     expect(offenders, `Icon-only <button> with no aria-label/aria-labelledby — title alone isn't touch-discoverable and isn't reliably read as the accessible name; see media/MediaCard.jsx's Annotate button for the convention:\n${offenders.join('\n')}`).toEqual([]);
   });
 
-  // Both rules below ask the same question of every tracked file and differ
-  // only in which direction they compare the answer against the allowlist, so
-  // they share one scan. Two copies would each re-lex ~11MB of source, and —
-  // worse — could drift on what "unnamed" means, which would quietly turn the
-  // burn-down check vacuously green.
-  let unnamedAnchors = null;
-  const unnamedInputAnchors = () => {
-    if (unnamedAnchors) return unnamedAnchors;
-    unnamedAnchors = new Set();
+  // Every rule below asks the same question of every tracked file and differs
+  // only in which tag it asks about and which direction it compares the answer
+  // against the allowlist, so they share one scan per tag. Two copies would each
+  // re-lex ~11MB of source, and — worse — could drift on what "unnamed" means,
+  // which would quietly turn the burn-down checks vacuously green.
+  const unnamedAnchorsByTag = new Map();
+  const unnamedControlAnchors = (tagName) => {
+    const cached = unnamedAnchorsByTag.get(tagName);
+    if (cached) return cached;
+    const anchors = new Set();
     for (const file of trackedJsxFiles()) {
       const scanSrc = maskComments(readFileSync(join(CLIENT_ROOT, file), 'utf8'));
-      const re = /<input\b/g;
+      const re = controlTagRe(tagName);
       let m;
       while ((m = re.exec(scanSrc))) {
-        const tag = openingTagAt(scanSrc, m.index, '<input'.length);
-        if (!tag || hasAccessibleInputName(scanSrc, tag, m.index)) continue;
-        unnamedAnchors.add(inputSourceAnchor(file, scanSrc, m.index));
+        const tag = openingTagAt(scanSrc, m.index, tagName.length + 1);
+        if (!tag || hasAccessibleControlName(scanSrc, tag, m.index, tagName)) continue;
+        anchors.add(controlSourceAnchor(file, scanSrc, m.index, tagName));
       }
     }
-    return unnamedAnchors;
+    unnamedAnchorsByTag.set(tagName, anchors);
+    return anchors;
   };
 
-  it('gives every input an accessible name', () => {
-    // These controls live in compact peer-management rows where visible labels
-    // would break the layout. Keep explicit names on each input so placeholders
-    // never become their only screen-reader context.
-    const offenders = [...unnamedInputAnchors()].filter((anchor) => !PREEXISTING_INPUT_NAME_ALLOWLIST.has(anchor));
-    expect(offenders, `Input without an accessible name — add aria-label/aria-labelledby or an explicit/implicit <label>, or exclude type="hidden":\n${offenders.join('\n')}`).toEqual([]);
+  // One rule per tag rather than one merged rule, so a failure names the tag
+  // and each backlog burns down on its own schedule. `<select>` and `<textarea>`
+  // share an allowlist because they were seeded together by the same widening.
+  const CONTROL_NAME_RULES = [
+    { tag: 'input', listName: 'PREEXISTING_INPUT_NAME_ALLOWLIST', allowlist: PREEXISTING_INPUT_NAME_ALLOWLIST, issue: '#4297' },
+    { tag: 'select', listName: 'PREEXISTING_SELECT_TEXTAREA_NAME_ALLOWLIST', allowlist: PREEXISTING_SELECT_TEXTAREA_NAME_ALLOWLIST, issue: '#4309' },
+    { tag: 'textarea', listName: 'PREEXISTING_SELECT_TEXTAREA_NAME_ALLOWLIST', allowlist: PREEXISTING_SELECT_TEXTAREA_NAME_ALLOWLIST, issue: '#4309' },
+  ];
+
+  for (const { tag, listName, allowlist, issue } of CONTROL_NAME_RULES) {
+    it(`gives every <${tag}> an accessible name`, () => {
+      // A control with no name is announced as bare "edit text" / "combo box".
+      // Prefer a paired `<label htmlFor>`; aria-label is for the compact rows
+      // (peer management, inline filters) where a visible label breaks layout.
+      const offenders = [...unnamedControlAnchors(tag)].filter((anchor) => !allowlist.has(anchor));
+      expect(offenders, `<${tag}> without an accessible name — add aria-label/aria-labelledby or an explicit/implicit <label>${tag === 'input' ? ', or exclude type="hidden"' : ''}:\n${offenders.join('\n')}`).toEqual([]);
+    });
+
+    it(`keeps no stale <${tag}> entries in ${listName} (${issue})`, () => {
+      // The allowlists only shrink. An entry whose control has since been named —
+      // or deleted, or renamed so its anchor no longer resolves — is dead weight
+      // that quietly re-exempts the next control to land on that same anchor.
+      // Fail on it so the burn-down stays honest instead of drifting. A shared
+      // allowlist is filtered to this tag's own rows (field 2 of the anchor) so
+      // the <select> pass can't call a live <textarea> row stale.
+      const unnamed = unnamedControlAnchors(tag);
+      const stale = [...allowlist].filter((entry) => entry.split('|')[1] === tag && !unnamed.has(entry));
+      expect(stale, `${listName} entries that no longer match an unnamed <${tag}> — delete them:\n${stale.join('\n')}`).toEqual([]);
+    });
+  }
+
+  it('reads a name for <select>/<textarea> from every escape hatch, and from nothing else', () => {
+    // The rules above are only honest if the recognizer really rejects a bare
+    // control. Probe each direction on the two tags #4309 added: without this
+    // the whole widening could be vacuous (every control "named", allowlist
+    // never shrinking because nothing was ever unnamed).
+    const isNamed = (src, tagName) => {
+      const index = src.indexOf(`<${tagName}`);
+      return hasAccessibleControlName(src, openingTagAt(src, index, tagName.length + 1), index, tagName);
+    };
+
+    expect(isNamed('<select value={sort}><option>a</option></select>', 'select')).toBe(false);
+    expect(isNamed('<textarea value={notes} rows={3} />', 'textarea')).toBe(false);
+
+    expect(isNamed('<select aria-label="Sort by" value={sort} />', 'select')).toBe(true);
+    expect(isNamed('<label htmlFor="sort">Sort by</label>\n<select id="sort" />', 'select')).toBe(true);
+    expect(isNamed('<label>Sort by<select value={sort} /></label>', 'select')).toBe(true);
+    expect(isNamed('<span id="notes-h">Notes</span>\n<textarea aria-labelledby="notes-h" />', 'textarea')).toBe(true);
+    expect(isNamed("import FormField from '../ui/FormField';\n<FormField label=\"Notes\"><textarea value={notes} /></FormField>", 'textarea')).toBe(true);
+    expect(isNamed('function Field({ label, children }) {\n  return (<label className="block"><span>{label}</span>{children}</label>);\n}\n<Field label="Sort by"><select value={sort} /></Field>', 'select')).toBe(true);
+
+    // `type` names an <input> and nothing else. A `type` attribute on the other
+    // two tags is meaningless markup, and reading it as a name would exempt
+    // them wholesale — the widest bypass this change could have introduced.
+    expect(isNamed('<input type="hidden" value={token} />', 'input')).toBe(true);
+    expect(isNamed('<select type="hidden" value={sort} />', 'select')).toBe(false);
+    expect(isNamed('<textarea type="submit" value="Send" />', 'textarea')).toBe(false);
   });
 
-  it('keeps no stale entries in the pre-existing input allowlist', () => {
-    // The allowlist only shrinks. An entry whose control has since been named —
-    // or deleted, or renamed so its anchor no longer resolves — is dead weight
-    // that quietly re-exempts the next input to land on that same anchor. Fail
-    // on it so #4297's burn-down stays honest instead of drifting.
-    const unnamed = unnamedInputAnchors();
-    const stale = [...PREEXISTING_INPUT_NAME_ALLOWLIST].filter((entry) => !unnamed.has(entry));
-    expect(stale, `PREEXISTING_INPUT_NAME_ALLOWLIST entries that no longer match an unnamed input — delete them:\n${stale.join('\n')}`).toEqual([]);
+  it('masks JSX examples written in comments after an expression-rendered list', () => {
+    // maskComments exists so a `<select>` mentioned in prose isn't scanned as
+    // markup. One shape stranded it: an element rendered from inside an
+    // expression (`{options.map(…)}`), whose own `{o.label}` closed the
+    // enclosing expression's braces. The following `</select>` then read as a
+    // less-than and never popped, so the file finished one element deep — and
+    // in `jsx-text` mode `//` no longer starts a comment, which made every
+    // later prose mention of a control scan as real markup. PipelineSeries.jsx
+    // is the live instance: a comment describing its labeled <select> showed up
+    // as an unnamed control 500 lines below the expression that broke the lexer.
+    const listThenProse = `function Picker({ options }) {
+  return (
+    <div>
+      <select value={value} onChange={onChange}>
+        {options.map((o) => <option key={o.id}>{o.label}</option>)}
+      </select>
+    </div>
+  );
+}
+
+// A blank-first labeled <select> lives in SgSelect — prose, not markup.
+`;
+    const masked = maskComments(listThenProse);
+    expect(masked).toContain('<select value={value}');
+    expect(masked.split('\n').at(-2)).not.toContain('<select>');
   });
 
   it('only credits an htmlFor-forwarding wrapper that really names the control', () => {
@@ -1191,6 +1417,12 @@ describe('a11y conventions', () => {
 
     const list = field(`{fields.map((f) => (<input key={f} type="number" />))}`);
     expect(isNestedInLabeledFormField(list, index(list))).toBe(false);
+
+    // A sibling that happens to BE an <input> must not stand in for the
+    // "control is the first child" marker — the second control is not cloned,
+    // so a <select> after an <input> is still unnamed.
+    const afterInput = field('<input type="text" />\n  <select><option>a</option></select>');
+    expect(isNestedInLabeledFormField(afterInput, afterInput.indexOf('<select'))).toBe(false);
 
     // Only the element the expression yields directly is cloned; a control
     // nested inside a wrapper element gets no id.
