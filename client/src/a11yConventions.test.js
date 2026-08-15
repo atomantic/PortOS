@@ -239,6 +239,374 @@ function hasFortyFourMinTouchTarget(cls) {
   return hOk && wOk;
 }
 
+// Return a static JSX attribute value, including the common expression forms
+// used for paired input ids (`id={fieldId}` / `id={`field-${id}`}`). Dynamic
+// expressions are compared as source text, which is sufficient for matching
+// an input and its label when they share the same expression in one file.
+function attributeValue(tag, name) {
+  const match = new RegExp(`\\b${name}\\s*=`).exec(tag);
+  if (!match) return null;
+
+  let index = match.index + match[0].length;
+  while (/\s/.test(tag[index])) index++;
+
+  if (tag[index] === '"' || tag[index] === "'" || tag[index] === '`') {
+    const quote = tag[index];
+    for (let end = index + 1; end < tag.length; end++) {
+      if (tag[end] === '\\') { end++; continue; }
+      if (tag[end] === quote) return tag.slice(index + 1, end);
+    }
+    return null;
+  }
+
+  if (tag[index] === '{') {
+    const end = matchingBraceEnd(tag, index);
+    if (end === -1) return null;
+    return tag.slice(index + 1, end).trim();
+  }
+
+  const rest = tag.slice(index);
+  const end = rest.search(/[\s/>]/);
+  return rest.slice(0, end === -1 ? rest.length : end);
+}
+
+function normalizedAttributeValue(value) {
+  if (value === null) return null;
+  const trimmed = value.trim();
+  if (trimmed.length >= 2 && ['"', "'", '`'].includes(trimmed[0]) && trimmed.at(-1) === trimmed[0]) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+// Keep source indexes stable while removing comments that may contain JSX
+// examples. This lets the repo-wide scan inspect actual elements without
+// reporting documentation snippets such as `<input>` in a component header.
+function maskComments(src) {
+  const chars = [...src];
+  let quote = null;
+  for (let i = 0; i < chars.length; i++) {
+    if (quote) {
+      if (chars[i] === '\\') { i++; continue; }
+      if (chars[i] === quote) quote = null;
+      continue;
+    }
+    if (chars[i] === '"' || chars[i] === "'" || chars[i] === '`') {
+      quote = chars[i];
+      continue;
+    }
+    if (chars[i] === '/' && chars[i + 1] === '/') {
+      for (i += 1; i < chars.length && chars[i] !== '\n'; i++) chars[i] = ' ';
+      continue;
+    }
+    if (chars[i] === '/' && chars[i + 1] === '*') {
+      chars[i] = ' ';
+      chars[i + 1] = ' ';
+      for (i += 2; i < chars.length - 1; i++) {
+        if (chars[i] === '*' && chars[i + 1] === '/') {
+          chars[i] = ' ';
+          chars[i + 1] = ' ';
+          i++;
+          break;
+        }
+        if (chars[i] !== '\n') chars[i] = ' ';
+      }
+    }
+  }
+  return chars.join('');
+}
+
+function hasMatchingExplicitLabel(src, id) {
+  const re = /<label\b/g;
+  let match;
+  while ((match = re.exec(src))) {
+    const tag = openingTagAt(src, match.index, '<label'.length);
+    if (!tag) continue;
+    const htmlFor = normalizedAttributeValue(attributeValue(tag, 'htmlFor'));
+    if (htmlFor === id) return true;
+  }
+  return false;
+}
+
+function isNestedInLabel(src, index) {
+  let depth = 0;
+  const re = /<\/?label\b/g;
+  let match;
+  while ((match = re.exec(src)) && match.index < index) {
+    if (match[0].startsWith('</')) {
+      depth = Math.max(0, depth - 1);
+      continue;
+    }
+    const tag = openingTagAt(src, match.index, '<label'.length);
+    if (!tag) continue;
+    if (!/\/\s*>$/.test(tag)) depth++;
+    re.lastIndex = match.index + tag.length;
+  }
+  return depth > 0;
+}
+
+function isNestedInLabeledFormField(src, index) {
+  const stack = [];
+  const re = /<\/?FormField\b/g;
+  let match;
+  while ((match = re.exec(src)) && match.index < index) {
+    if (match[0].startsWith('</')) {
+      stack.pop();
+      continue;
+    }
+    const tag = openingTagAt(src, match.index, '<FormField'.length);
+    if (!tag) continue;
+    if (!/\/\s*>$/.test(tag)) stack.push(attributeValue(tag, 'label') !== null);
+    re.lastIndex = match.index + tag.length;
+  }
+  return stack.some(Boolean);
+}
+
+function hasAccessibleInputName(src, tag, index) {
+  if (/\baria-label(?:ledby)?\s*=/.test(tag)) return true;
+  if (normalizedAttributeValue(attributeValue(tag, 'type'))?.toLowerCase() === 'hidden') return true;
+  if (isNestedInLabel(src, index) || isNestedInLabeledFormField(src, index)) return true;
+
+  const id = normalizedAttributeValue(attributeValue(tag, 'id'));
+  return id !== null && id !== '' && hasMatchingExplicitLabel(src, id);
+}
+
+// These are pre-existing controls exposed when the rule was generalized. The
+// migration is tracked in #4297. Keep exceptions location-specific so a new
+// input in an existing file still fails the guard; remove each entry as its
+// control receives a real name.
+const PREEXISTING_INPUT_NAME_ALLOWLIST = new Set([
+  'src/components/CronInput.jsx:65',
+  'src/components/EntityCombobox.jsx:125',
+  'src/components/TagPicker.jsx:103',
+  'src/components/agents/tabs/ToolsTab.jsx:581',
+  'src/components/agents/tabs/WorldTab.jsx:406',
+  'src/components/agents/tabs/WorldTab.jsx:407',
+  'src/components/agents/tabs/WorldTab.jsx:408',
+  'src/components/agents/tabs/WorldTab.jsx:413',
+  'src/components/agents/tabs/WorldTab.jsx:418',
+  'src/components/agents/tabs/WorldTab.jsx:419',
+  'src/components/agents/tabs/WorldTab.jsx:420',
+  'src/components/agents/tabs/WorldTab.jsx:437',
+  'src/components/agents/tabs/WorldTab.jsx:438',
+  'src/components/agents/tabs/WorldTab.jsx:831',
+  'src/components/agents/tabs/WorldTab.jsx:862',
+  'src/components/agents/tabs/WorldTab.jsx:955',
+  'src/components/agents/tabs/WorldTab.jsx:963',
+  'src/components/apps/ReferenceReposPanel.jsx:399',
+  'src/components/apps/ReferenceReposPanel.jsx:406',
+  'src/components/apps/ReferenceReposPanel.jsx:413',
+  'src/components/apps/tabs/CustomTasksSection.jsx:115',
+  'src/components/apps/tabs/CustomTasksSection.jsx:122',
+  'src/components/apps/tabs/CustomTasksSection.jsx:157',
+  'src/components/apps/tabs/CustomTasksSection.jsx:186',
+  'src/components/apps/tabs/GitTab.jsx:517',
+  'src/components/brain/tabs/DailyLogTab.jsx:929',
+  'src/components/brain/tabs/FeedsTab.jsx:143',
+  'src/components/brain/tabs/InboxTab.jsx:320',
+  'src/components/brain/tabs/LinksTab.jsx:367',
+  'src/components/brain/tabs/LinksTab.jsx:466',
+  'src/components/brain/tabs/LinksTab.jsx:548',
+  'src/components/brain/tabs/MemoryTab.jsx:318',
+  'src/components/brain/tabs/MemoryTab.jsx:332',
+  'src/components/brain/tabs/MemoryTab.jsx:345',
+  'src/components/brain/tabs/MemoryTab.jsx:363',
+  'src/components/brain/tabs/MemoryTab.jsx:383',
+  'src/components/brain/tabs/MemoryTab.jsx:398',
+  'src/components/brain/tabs/MemoryTab.jsx:418',
+  'src/components/brain/tabs/MemoryTab.jsx:434',
+  'src/components/brain/tabs/MemoryTab.jsx:441',
+  'src/components/brain/tabs/MemoryTab.jsx:454',
+  'src/components/brain/tabs/MemoryTab.jsx:468',
+  'src/components/brain/tabs/MemoryTab.jsx:475',
+  'src/components/brain/tabs/MemoryTab.jsx:770',
+  'src/components/brain/tabs/NotesTab.jsx:305',
+  'src/components/brain/tabs/NotesTab.jsx:327',
+  'src/components/brain/tabs/NotesTab.jsx:745',
+  'src/components/calendar/AgendaTab.jsx:90',
+  'src/components/calendar/ConfigTab.jsx:472',
+  'src/components/calendar/ConfigTab.jsx:479',
+  'src/components/calendar/ReviewTab.jsx:116',
+  'src/components/calendar/ReviewTab.jsx:289',
+  'src/components/calendar/ReviewTab.jsx:300',
+  'src/components/cos/TaskAddForm.jsx:788',
+  'src/components/cos/tabs/AgentCard.jsx:734',
+  'src/components/cos/tabs/AgentCard.jsx:896',
+  'src/components/cos/tabs/ConfigRow.jsx:16',
+  'src/components/cos/tabs/ConfigRow.jsx:8',
+  'src/components/cos/tabs/JobsTab.jsx:225',
+  'src/components/cos/tabs/JobsTab.jsx:260',
+  'src/components/cos/tabs/JobsTab.jsx:458',
+  'src/components/cos/tabs/JobsTab.jsx:465',
+  'src/components/cos/tabs/JobsTab.jsx:802',
+  'src/components/cos/tabs/JobsTab.jsx:818',
+  'src/components/cos/tabs/JobsTab.jsx:826',
+  'src/components/cos/tabs/MemoryEditModal.jsx:228',
+  'src/components/cos/tabs/TaskItem.jsx:354',
+  'src/components/cos/tabs/TaskItem.jsx:639',
+  'src/components/cos/tabs/workflow/ScheduleEditor.jsx:208',
+  'src/components/dashboard/LayoutEditor.jsx:304',
+  'src/components/dashboard/LayoutEditor.jsx:364',
+  'src/components/digital-twin/tabs/DocumentsTab.jsx:208',
+  'src/components/digital-twin/tabs/DocumentsTab.jsx:272',
+  'src/components/digital-twin/tabs/GoalsTab.jsx:165',
+  'src/components/digital-twin/tabs/GoalsTab.jsx:273',
+  'src/components/digital-twin/tabs/GoalsTab.jsx:438',
+  'src/components/digital-twin/tabs/GoalsTab.jsx:446',
+  'src/components/digital-twin/tabs/TimeCapsuleTab.jsx:158',
+  'src/components/digital-twin/tabs/TimeCapsuleTab.jsx:293',
+  'src/components/goals/GoalEditForm.jsx:139',
+  'src/components/goals/GoalEditForm.jsx:174',
+  'src/components/goals/GoalEditForm.jsx:38',
+  'src/components/goals/GoalLinkedCalendars.jsx:58',
+  'src/components/goals/GoalMilestones.jsx:79',
+  'src/components/goals/GoalPlanSection.jsx:185',
+  'src/components/goals/GoalPlanSection.jsx:195',
+  'src/components/goals/GoalPlanSection.jsx:74',
+  'src/components/goals/GoalPlanSection.jsx:84',
+  'src/components/goals/GoalPlanSection.jsx:97',
+  'src/components/goals/GoalProgressLog.jsx:35',
+  'src/components/goals/GoalProgressLog.jsx:50',
+  'src/components/goals/GoalTodoList.jsx:71',
+  'src/components/goals/GoalTodoList.jsx:98',
+  'src/components/goals/GoalsListView.jsx:339',
+  'src/components/goals/GoalsListView.jsx:349',
+  'src/components/goals/GoalsListView.jsx:417',
+  'src/components/goals/GoalsTreeView.jsx:484',
+  'src/components/goals/GoalsTreeView.jsx:562',
+  'src/components/imageGen/HfTokenBanner.jsx:102',
+  'src/components/imageGen/LoraPicker.jsx:127',
+  'src/components/insights/GoalScorecardTab.jsx:98',
+  'src/components/loraTraining/ImportGalleryDialog.jsx:90',
+  'src/components/meatspace/EpigeneticTracker.jsx:149',
+  'src/components/meatspace/EpigeneticTracker.jsx:174',
+  'src/components/meatspace/EpigeneticTracker.jsx:181',
+  'src/components/meatspace/EpigeneticTracker.jsx:265',
+  'src/components/meatspace/post/ElementsSong.jsx:1001',
+  'src/components/meatspace/post/ElementsSong.jsx:1152',
+  'src/components/meatspace/post/ElementsSong.jsx:345',
+  'src/components/meatspace/post/MemoryPractice.jsx:646',
+  'src/components/meatspace/post/MorseTrainer.jsx:1136',
+  'src/components/meatspace/post/MorseTrainer.jsx:651',
+  'src/components/meatspace/post/PostCognitiveDrillRunner.jsx:647',
+  'src/components/meatspace/post/PostDrillRunner.jsx:211',
+  'src/components/meatspace/post/PostLlmDrillRunner.jsx:630',
+  'src/components/meatspace/post/PostLlmDrillRunner.jsx:672',
+  'src/components/meatspace/post/PostLlmDrillRunner.jsx:800',
+  'src/components/meatspace/post/WordplayDrillUI.jsx:127',
+  'src/components/meatspace/post/WordplayDrillUI.jsx:182',
+  'src/components/meatspace/tabs/AgeTab.jsx:47',
+  'src/components/meatspace/tabs/AlcoholTab.jsx:350',
+  'src/components/meatspace/tabs/AlcoholTab.jsx:357',
+  'src/components/meatspace/tabs/AlcoholTab.jsx:373',
+  'src/components/meatspace/tabs/AlcoholTab.jsx:418',
+  'src/components/meatspace/tabs/AlcoholTab.jsx:425',
+  'src/components/meatspace/tabs/AlcoholTab.jsx:441',
+  'src/components/meatspace/tabs/AlcoholTab.jsx:486',
+  'src/components/meatspace/tabs/AlcoholTab.jsx:574',
+  'src/components/meatspace/tabs/AlcoholTab.jsx:597',
+  'src/components/meatspace/tabs/AlcoholTab.jsx:606',
+  'src/components/meatspace/tabs/AlcoholTab.jsx:624',
+  'src/components/meatspace/tabs/AlcoholTab.jsx:635',
+  'src/components/meatspace/tabs/GenomeTab.jsx:859',
+  'src/components/meatspace/tabs/LifestyleTab.jsx:163',
+  'src/components/meatspace/tabs/LifestyleTab.jsx:184',
+  'src/components/meatspace/tabs/LifestyleTab.jsx:243',
+  'src/components/meatspace/tabs/NicotineTab.jsx:254',
+  'src/components/meatspace/tabs/NicotineTab.jsx:261',
+  'src/components/meatspace/tabs/NicotineTab.jsx:295',
+  'src/components/meatspace/tabs/NicotineTab.jsx:302',
+  'src/components/meatspace/tabs/NicotineTab.jsx:435',
+  'src/components/meatspace/tabs/NicotineTab.jsx:456',
+  'src/components/meatspace/tabs/NicotineTab.jsx:464',
+  'src/components/meatspace/tabs/NicotineTab.jsx:473',
+  'src/components/media/CollectionPickerShell.jsx:216',
+  'src/components/media/CollectionPickerShell.jsx:239',
+  'src/components/messages/InboxTab.jsx:381',
+  'src/components/music/AlbumsManager.jsx:328',
+  'src/components/music/AlbumsManager.jsx:346',
+  'src/components/music/AlbumsManager.jsx:349',
+  'src/components/music/ArtistsManager.jsx:273',
+  'src/components/music/ArtistsManager.jsx:283',
+  'src/components/music/ArtistsManager.jsx:395',
+  'src/components/music/MusicGenPanel.jsx:324',
+  'src/components/music/TracksManager.jsx:397',
+  'src/components/pipeline/CanonCard.jsx:257',
+  'src/components/pipeline/arcCanvas/AddSeasonRow.jsx:44',
+  'src/components/pipeline/arcCanvas/DeriveFromManuscriptPreview.jsx:103',
+  'src/components/pipeline/arcCanvas/SeasonActions.jsx:93',
+  'src/components/pipeline/arcCanvas/SeasonEditor.jsx:46',
+  'src/components/pipeline/arcCanvas/SeasonEditor.jsx:54',
+  'src/components/pipeline/arcCanvas/SeasonEditor.jsx:65',
+  'src/components/pipeline/arcCanvas/SeasonEditor.jsx:83',
+  'src/components/pipeline/arcCanvas/SeasonEditor.jsx:91',
+  'src/components/pipeline/arcCanvas/TickingClockEditor.jsx:38',
+  'src/components/pipeline/stages/IdeaStage.jsx:94',
+  'src/components/pipeline/stages/StoryboardsStage.jsx:510',
+  'src/components/pipeline/stages/StoryboardsStage.jsx:745',
+  'src/components/settings/VoiceTab.jsx:358',
+  'src/components/settings/VoiceTab.jsx:443',
+  'src/components/settings/VoiceTab.jsx:482',
+  'src/components/settings/VoiceTab.jsx:595',
+  'src/components/settings/VoiceTab.jsx:603',
+  'src/components/settings/VoiceTab.jsx:611',
+  'src/components/settings/VoiceTab.jsx:619',
+  'src/components/settings/VoiceTab.jsx:757',
+  'src/components/settings/VoiceTab.jsx:766',
+  'src/components/settings/VoiceTab.jsx:871',
+  'src/components/settings/VoiceTab.jsx:885',
+  'src/components/sharing/DuplicateGroup.jsx:67',
+  'src/components/shell/TerminalHotKeys.jsx:56',
+  'src/components/universe/CharacterDetailEditor.jsx:174',
+  'src/components/universeBuilder/CompositeSheetsEditor.jsx:134',
+  'src/components/universeBuilder/CompositeSheetsEditor.jsx:193',
+  'src/components/universeBuilder/InfluenceChipsInput.jsx:132',
+  'src/components/universeBuilder/UniverseBibleTab.jsx:338',
+  'src/components/universeBuilder/UniverseBuilderPage.jsx:497',
+  'src/components/universeBuilder/UniverseCategoryEditor.jsx:254',
+  'src/components/universeBuilder/UniverseCategoryEditor.jsx:316',
+  'src/components/universeBuilder/UniverseCategoryEditor.jsx:434',
+  'src/components/universeBuilder/UniverseTrunkPanels.jsx:92',
+  'src/components/voice/VoiceWidget.jsx:752',
+  'src/components/wiki/tabs/SearchTab.jsx:31',
+  'src/components/writers-room/LibraryPane.jsx:168',
+  'src/components/writers-room/LibraryPane.jsx:185',
+  'src/pages/AIProviders.jsx:1390',
+  'src/pages/AIProviders.jsx:1437',
+  'src/pages/AIProviders.jsx:1444',
+  'src/pages/Authors.jsx:300',
+  'src/pages/Authors.jsx:413',
+  'src/pages/Browser.jsx:446',
+  'src/pages/CharacterSheet.jsx:522',
+  'src/pages/CharacterSheet.jsx:738',
+  'src/pages/CharacterSheet.jsx:745',
+  'src/pages/CharacterSheet.jsx:770',
+  'src/pages/CharacterSheet.jsx:777',
+  'src/pages/CharacterSheet.jsx:802',
+  'src/pages/CharacterSheet.jsx:809',
+  'src/pages/CharacterSheet.jsx:818',
+  'src/pages/GitHub.jsx:229',
+  'src/pages/GitHub.jsx:388',
+  'src/pages/GitHub.jsx:395',
+  'src/pages/MediaCollectionDetail.jsx:346',
+  'src/pages/MoodBoardDetail.jsx:606',
+  'src/pages/PipelineSeries.jsx:339',
+  'src/pages/PipelineSeries.jsx:354',
+  'src/pages/PipelineSeries.jsx:364',
+  'src/pages/Sharing.jsx:317',
+  'src/pages/Sharing.jsx:325',
+  'src/pages/StackerNews.jsx:474',
+  'src/pages/StackerNews.jsx:566',
+  'src/pages/StackerNews.jsx:567',
+  'src/pages/StackerNews.jsx:587',
+  'src/pages/StackerNews.jsx:588',
+  'src/pages/StackerNews.jsx:597',
+  'src/pages/StackerNews.jsx:640',
+  'src/pages/VideoTimeline.jsx:73',
+  'src/pages/VideoTimelineEditor.jsx:530',
+  'src/pages/VideoTimelineEditor.jsx:627',
+]);
+
 describe('a11y conventions', () => {
   // Modal.jsx IS the shared implementation; Drawer and Layout use the same
   // backdrop treatment for a slide-in panel / mobile nav scrim, both of which
@@ -432,21 +800,24 @@ describe('a11y conventions', () => {
     expect(offenders, `Icon-only <button> with no aria-label/aria-labelledby — title alone isn't touch-discoverable and isn't reliably read as the accessible name; see media/MediaCard.jsx's Annotate button for the convention:\n${offenders.join('\n')}`).toEqual([]);
   });
 
-  it('gives the inline Instances form controls accessible names', () => {
+  it('gives every input an accessible name', () => {
     // These controls live in compact peer-management rows where visible labels
     // would break the layout. Keep explicit names on each input so placeholders
     // never become their only screen-reader context.
-    const file = 'src/pages/Instances.jsx';
-    const src = readFileSync(join(CLIENT_ROOT, file), 'utf8');
     const offenders = [];
-    const re = /<input\b/g;
-    let m;
-    while ((m = re.exec(src))) {
-      const tag = openingTagAt(src, m.index, '<input'.length);
-      if (!tag || /\baria-label\s*=|\baria-labelledby\s*=/.test(tag)) continue;
-      offenders.push(`${file}:${lineOf(src, m.index)}`);
+    for (const file of trackedJsxFiles()) {
+      const src = readFileSync(join(CLIENT_ROOT, file), 'utf8');
+      const scanSrc = maskComments(src);
+      const re = /<input\b/g;
+      let m;
+      while ((m = re.exec(scanSrc))) {
+        const tag = openingTagAt(scanSrc, m.index, '<input'.length);
+        const location = `${file}:${lineOf(src, m.index)}`;
+        if (!tag || hasAccessibleInputName(scanSrc, tag, m.index) || PREEXISTING_INPUT_NAME_ALLOWLIST.has(location)) continue;
+        offenders.push(location);
+      }
     }
-    expect(offenders, `Instances input without an accessible name:\n${offenders.join('\n')}`).toEqual([]);
+    expect(offenders, `Input without an accessible name — add aria-label/aria-labelledby or an explicit/implicit <label>, or exclude type="hidden":\n${offenders.join('\n')}`).toEqual([]);
   });
 
   it('meets the 44px touch-target minimum on Close buttons', () => {
