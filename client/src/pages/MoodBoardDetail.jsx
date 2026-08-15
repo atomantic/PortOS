@@ -9,7 +9,7 @@
  * `mediaKey` image item if one exists, but the in-page add form uses URL/text.
  */
 
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router';
 import { ArrowLeft, ImageIcon, FileText, Trash2, Plus, Save, Link2, Unlink, RefreshCw, Images, Film, Play, ScanEye, Copy } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
@@ -97,6 +97,17 @@ export default function MoodBoardDetail() {
   useEffect(() => { load(); }, [load]);
 
   const metaDirty = board && (name.trim() !== (board.name || '') || description !== (board.description || ''));
+
+  // The item under analysis (#4188 Phase 3), re-derived from board state so the
+  // modal's stored-analysis view stays fresh after the persist PATCH. The
+  // source is memoized on the item's identity: PromptFromMedia resets its panel
+  // when its `initialSource` identity changes, so a fresh object every render
+  // would wipe an in-flight run on unrelated re-renders. (Lives above the
+  // loading/not-found early returns — hooks must run unconditionally.)
+  const analyzeItem = analyzeItemId
+    ? ((Array.isArray(board?.items) ? board.items : []).find((it) => it.id === analyzeItemId) || null)
+    : null;
+  const analyzeSource = useMemo(() => moodBoardItemAnalysisSource(analyzeItem), [analyzeItem]);
 
   const handleSaveMeta = async () => {
     if (!name.trim()) { toast.error('Board name is required'); return; }
@@ -262,7 +273,6 @@ export default function MoodBoardDetail() {
   }
 
   const items = Array.isArray(board.items) ? board.items : [];
-  const analyzeItem = analyzeItemId ? (items.find((it) => it.id === analyzeItemId) || null) : null;
   const linkedFeedUrl = board.pinterest?.feedUrl || '';
   const linkedBoardUrl = board.pinterest?.boardUrl || '';
   const lastSyncedAt = board.pinterest?.lastSyncedAt || null;
@@ -665,7 +675,7 @@ export default function MoodBoardDetail() {
           analyzer with copy/remove. */}
       {analyzeItem ? (
         <PromptFromMediaModal
-          item={moodBoardItemAnalysisSource(analyzeItem)}
+          item={analyzeSource}
           open
           onClose={() => setAnalyzeItemId(null)}
           kindDefault={analyzeItem.type === 'video' ? 'video' : 'image'}
