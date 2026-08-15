@@ -32,7 +32,7 @@ vi.mock('../../hooks/useMediaJobSse', () => ({
 }));
 
 import {
-  getSettings, getToolsList, updateSettings, listAgyImageModels, getImageGenStatus,
+  getSettings, getToolsList, updateSettings, listAgyImageModels, getImageGenStatus, generateImage,
 } from '../../services/api';
 import { useHfTokenStatus } from '../../hooks/useHfTokenStatus';
 import { ImageGenTab, MEDIA_TABS } from './ImageGenTab';
@@ -231,6 +231,87 @@ describe('ImageGenTab grouped tabs', () => {
     await waitFor(() => expect(updateSettings).toHaveBeenCalled());
     const patch = updateSettings.mock.calls[0][0];
     expect(patch.videoGen).toEqual({ mode: 'local', defaultModelId: 'ltx23_distilled_q4' });
+  });
+});
+
+describe('ImageGenTab — Test Render backend picker (#4128)', () => {
+  const multiBackendSettings = {
+    imageGen: {
+      mode: 'external',
+      external: { sdapiUrl: 'http://localhost:7860' },
+      local: { pythonPath: '' },
+      codex: { enabled: false },
+      grok: { enabled: true, grokPath: 'grok' },
+      agy: { enabled: true, agyPath: 'agy' },
+      expose: { a1111: false },
+    },
+  };
+
+  it('offers every enabled backend and marks the saved default as the initial pick', async () => {
+    getSettings.mockResolvedValue(multiBackendSettings);
+    await renderTab(['/media/image?mediaTab=test']);
+    const select = screen.getByLabelText('Backend');
+    expect(select.value).toBe('external');
+    const options = Array.from(select.options).map((o) => o.value);
+    expect(options).toEqual(['grok', 'agy', 'external']);
+    // Local has no python path and codex is disabled — neither is renderable,
+    // so neither may be offered.
+    expect(options).not.toContain('local');
+    expect(options).not.toContain('codex');
+    expect(screen.getByText(/Send a prompt through External/)).toBeTruthy();
+  });
+
+  it('renders through the picked backend instead of the saved default', async () => {
+    getSettings.mockResolvedValue(multiBackendSettings);
+    generateImage.mockResolvedValue({ mode: 'grok', path: '/data/renders/test.png', filename: 'test.png' });
+    await renderTab(['/media/image?mediaTab=test']);
+    fireEvent.change(screen.getByLabelText('Backend'), { target: { value: 'grok' } });
+    expect(screen.getByText(/Send a prompt through Grok/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Render Test Image/i }));
+    await waitFor(() => expect(generateImage).toHaveBeenCalled());
+    expect(generateImage.mock.calls[0][0].mode).toBe('grok');
+  });
+
+  it('keeps the saved default selectable even when it is not otherwise renderable', async () => {
+    // External is the saved default with a blank URL: the server still routes
+    // the render there, so the select must not silently show a different
+    // backend than the button uses.
+    getSettings.mockResolvedValue({
+      imageGen: {
+        mode: 'external',
+        external: { sdapiUrl: '' },
+        grok: { enabled: true, grokPath: 'grok' },
+      },
+    });
+    generateImage.mockResolvedValue({ mode: 'external', path: '/data/renders/test.png', filename: 'test.png' });
+    await renderTab(['/media/image?mediaTab=test']);
+    const select = screen.getByLabelText('Backend');
+    expect(select.value).toBe('external');
+    expect(Array.from(select.options).map((o) => o.value)).toEqual(['external', 'grok']);
+    fireEvent.click(screen.getByRole('button', { name: /Render Test Image/i }));
+    await waitFor(() => expect(generateImage).toHaveBeenCalled());
+    expect(generateImage.mock.calls[0][0].mode).toBe('external');
+  });
+
+  it('falls a pick back to the saved default once that backend is disabled and saved', async () => {
+    getSettings.mockResolvedValue(multiBackendSettings);
+    generateImage.mockResolvedValue({ mode: 'external', path: '/data/renders/test.png', filename: 'test.png' });
+    await renderTab(['/media/image?mediaTab=test']);
+    fireEvent.change(screen.getByLabelText('Backend'), { target: { value: 'grok' } });
+
+    // Disable Grok on its own tab and save — the pick is now unrenderable.
+    fireEvent.click(screen.getByRole('tab', { name: /Grok CLI/i }));
+    fireEvent.click(screen.getByLabelText(/Enable Grok/i));
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => expect(updateSettings).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('tab', { name: /^Test$/i }));
+    const select = screen.getByLabelText('Backend');
+    expect(select.value).toBe('external');
+    expect(Array.from(select.options).map((o) => o.value)).not.toContain('grok');
+    fireEvent.click(screen.getByRole('button', { name: /Render Test Image/i }));
+    await waitFor(() => expect(generateImage).toHaveBeenCalled());
+    expect(generateImage.mock.calls[0][0].mode).toBe('external');
   });
 });
 

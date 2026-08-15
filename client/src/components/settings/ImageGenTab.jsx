@@ -22,7 +22,7 @@ import {
   registerTool, updateTool, getToolsList,
   saveHfToken, clearHfToken,
 } from '../../services/api';
-import { isCloudCliMode, IMAGE_GEN_MODE, AGY_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_IMAGE_MODEL, CODEX_IMAGEGEN_DEFAULT_EFFORT, GROK_ASPECT_RATIOS, RENDER_TARGET_BACKEND_AUTO, RENDER_TARGET_OPTIONS, VIDEO_RENDER_MODES, modeLabel, normalizeRenderPinValue, supportsCloudModelOverride } from '../../lib/imageGenBackends';
+import { deriveAvailableBackends, isCloudCliMode, IMAGE_GEN_MODE, AGY_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_IMAGE_MODEL, CODEX_IMAGEGEN_DEFAULT_EFFORT, GROK_ASPECT_RATIOS, RENDER_TARGET_BACKEND_AUTO, RENDER_TARGET_OPTIONS, VIDEO_RENDER_MODES, modeLabel, normalizeRenderPinValue, supportsCloudModelOverride } from '../../lib/imageGenBackends';
 import { resolveCleanersFromConfig } from '../../lib/imageCleaners';
 import { useMediaJobSse } from '../../hooks/useMediaJobSse';
 import { useAgyModels } from '../../hooks/useAgyModels';
@@ -183,6 +183,12 @@ export function ImageGenTab() {
   const [agyToolRegistered, setAgyToolRegistered] = useState(false);
 
   const [testPrompt, setTestPrompt] = useState(DEFAULT_TEST_PROMPT);
+  // Backend the Test Render panel should render through. '' is the sentinel for
+  // "follow the saved default" — NOT a picked backend — so the panel tracks a
+  // default the user changes on the Backend tab instead of pinning whatever was
+  // saved the first time this tab painted (#4128).
+  const [testMode, setTestMode] = useState('');
+  const testModeId = useId();
   const [rendering, setRendering] = useState(false);
   const [renderResult, setRenderResult] = useState(null);
   // Shared per-job SSE subscriber — same hook ImageGen/VideoGen use to await
@@ -332,6 +338,33 @@ export function ImageGenTab() {
       .catch(() => setStatus({ connected: false, reason: 'Check failed', forTab: mediaTab }))
       .finally(() => setChecking(false));
   }, [probeMode, mediaTab]);
+
+  // Backends the Test Render picker may offer — derived from the SAVED slice,
+  // not the live form, because a test render runs against what the server has
+  // persisted (the same reason handleRenderTest reads `saved.mode`). The
+  // settings-shaped argument is what `deriveAvailableBackends` (the client
+  // mirror of the server's usability gate) consumes, so enabling a backend is
+  // still one edit in one place.
+  const savedBackends = deriveAvailableBackends({
+    imageGen: {
+      local: { pythonPath: saved.pythonPath },
+      codex: { enabled: saved.codexEnabled },
+      grok: { enabled: saved.grokEnabled },
+      agy: { enabled: saved.agyEnabled },
+      external: { sdapiUrl: saved.sdapiUrl },
+    },
+  });
+
+  // The saved default always stays selectable even when it isn't "usable" by
+  // the derivation above (e.g. external with a blank URL) — the server would
+  // still route the render there, so hiding it would make the select disagree
+  // with what the button actually does.
+  const testModeOptions = savedBackends.some((b) => b.id === saved.mode)
+    ? savedBackends
+    : [{ id: saved.mode, label: modeLabel(saved.mode) }, ...savedBackends];
+  // A pick that a later save disabled falls back to the saved default rather
+  // than queueing a render that can only 400.
+  const effectiveTestMode = testModeOptions.some((b) => b.id === testMode) ? testMode : saved.mode;
 
   const isDirty = mode !== saved.mode
     || normalizeUrl(sdapiUrl) !== saved.sdapiUrl
@@ -527,13 +560,13 @@ export function ImageGenTab() {
     setRendering(true);
     setRenderResult(null);
     try {
-      // Use saved.mode (not the live `mode` state) so the test render
-      // always reflects what's actually persisted server-side. The
-      // disabled={isDirty} guard already prevents this branch from running
-      // with unsaved changes, but reading from `saved` makes the contract
-      // explicit. Codex is async like local (returns a job descriptor
-      // immediately) so the SSE branch handles it.
-      const result = await generateImage({ prompt: testPrompt.trim(), mode: saved.mode }, { silent: true });
+      // `effectiveTestMode` is the panel's own picker, defaulting to saved.mode
+      // (not the live `mode` state) so an unchanged picker still reflects what's
+      // actually persisted server-side. The disabled={isDirty} guard already
+      // prevents this branch from running with unsaved changes, but resolving
+      // through `saved` makes the contract explicit. Codex is async like local
+      // (returns a job descriptor immediately) so the SSE branch handles it.
+      const result = await generateImage({ prompt: testPrompt.trim(), mode: effectiveTestMode }, { silent: true });
       // Local + Codex modes return immediately after spawning the child —
       // the PNG isn't on disk yet. Subscribe to the per-job SSE and only
       // mark the render complete on the `complete` event (or fail on
@@ -1246,9 +1279,28 @@ export function ImageGenTab() {
           <h2 className="text-lg font-semibold">Test Render</h2>
         </div>
         <p className="text-xs text-gray-500">
-          Send a prompt through the active backend to verify end-to-end. For richer controls, visit the
+          Send a prompt through {modeLabel(effectiveTestMode)} to verify end-to-end. For richer controls, visit the
           <a href="/media/image" className="text-port-accent hover:underline ml-1">Image Gen</a> page.
         </p>
+        <div>
+          <label htmlFor={testModeId} className="block text-sm text-gray-300 mb-1">Backend</label>
+          <select
+            id={testModeId}
+            value={effectiveTestMode}
+            onChange={(e) => setTestMode(e.target.value)}
+            disabled={rendering}
+            className="w-full sm:w-64 bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
+          >
+            {testModeOptions.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.label}{b.id === saved.mode ? ' (default)' : ''}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-gray-500 mt-1">
+            Only enabled backends are listed — smoke-test one without making it your default.
+          </p>
+        </div>
         <label htmlFor="test-render-prompt" className="sr-only">Test prompt</label>
         <textarea
           id="test-render-prompt"
@@ -1264,7 +1316,7 @@ export function ImageGenTab() {
           onClick={handleRenderTest}
           disabled={rendering || isDirty || !testPrompt.trim()}
           className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white text-sm rounded-lg transition-colors disabled:opacity-50 min-h-[40px]"
-          title={isDirty ? 'Save settings first' : 'Generate a test image'}
+          title={isDirty ? 'Save settings first' : `Generate a test image with ${modeLabel(effectiveTestMode)}`}
         >
           {rendering ? <BrailleSpinner /> : <Sparkles size={14} />}
           {rendering ? 'Rendering...' : 'Render Test Image'}

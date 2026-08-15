@@ -1,0 +1,1 @@
+- Image Gen settings: the Test Render panel now picks its own backend, so you can smoke-test Agy or Grok without making it your default
