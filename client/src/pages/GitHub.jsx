@@ -13,6 +13,7 @@ import {
 import { timeAgo } from '../utils/formatters';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import Modal from '../components/ui/Modal';
+import { FormField } from '../components/ui/FormField';
 
 const FILTERS = ['all', 'npm', 'secrets', 'archived'];
 
@@ -228,6 +229,7 @@ export default function GitHub() {
           <div className="flex flex-col sm:flex-row gap-2 mb-4">
             <input
               type="text"
+              aria-label="Search repositories"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search repos..."
@@ -385,20 +387,24 @@ export default function GitHub() {
             )}
 
             <div className="flex flex-col gap-2">
-              <input
-                type="text"
-                value={newSecretName}
-                onChange={(e) => setNewSecretName(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, ''))}
-                placeholder="SECRET_NAME"
-                className="px-3 py-2 bg-port-bg border border-port-border rounded text-white font-mono text-sm"
-              />
-              <input
-                type="password"
-                value={newSecretValue}
-                onChange={(e) => setNewSecretValue(e.target.value)}
-                placeholder="Secret value"
-                className="px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
-              />
+              <FormField label="Secret name">
+                <input
+                  type="text"
+                  value={newSecretName}
+                  onChange={(e) => setNewSecretName(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, ''))}
+                  placeholder="SECRET_NAME"
+                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white font-mono text-sm"
+                />
+              </FormField>
+              <FormField label="Secret value">
+                <input
+                  type="password"
+                  value={newSecretValue}
+                  onChange={(e) => setNewSecretValue(e.target.value)}
+                  placeholder="Secret value"
+                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
+                />
+              </FormField>
               <button
                 onClick={handleSaveSecret}
                 disabled={savingSecret || !newSecretName.trim() || !newSecretValue}

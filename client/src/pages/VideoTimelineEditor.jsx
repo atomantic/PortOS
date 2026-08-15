@@ -529,6 +529,7 @@ export default function VideoTimelineEditor() {
           </button>
           <input
             type="text"
+            aria-label="Project name"
             value={nameDraft}
             onChange={(e) => setNameDraft(e.target.value)}
             onBlur={async (e) => {
@@ -626,6 +627,7 @@ export default function VideoTimelineEditor() {
             </button>
             <input
               type="range"
+              aria-label="Playhead position"
               min={0}
               max={Math.max(0.01, total)}
               step={0.01}

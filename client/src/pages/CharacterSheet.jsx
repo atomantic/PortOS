@@ -521,6 +521,7 @@ export default function CharacterSheet() {
                 {editingClass ? (
                   <input
                     autoFocus
+                    aria-label="Character title"
                     value={classVal}
                     onChange={e => setClassVal(e.target.value)}
                     onBlur={handleClassSave}
@@ -736,6 +737,7 @@ export default function CharacterSheet() {
                 <div className="flex items-center gap-2">
                   <Dices className="w-4 h-4 text-gray-400" />
                   <input
+                    aria-label="Damage dice"
                     value={dmgDice}
                     onChange={e => setDmgDice(e.target.value)}
                     placeholder="1d8"
@@ -743,6 +745,7 @@ export default function CharacterSheet() {
                   />
                 </div>
                 <input
+                  aria-label="Damage description"
                   value={dmgDesc}
                   onChange={e => setDmgDesc(e.target.value)}
                   placeholder="Description (optional)"
@@ -769,12 +772,14 @@ export default function CharacterSheet() {
               <div className="flex flex-col sm:flex-row gap-2">
                 <input
                   type="number"
+                  aria-label="XP amount"
                   value={xpAmount}
                   onChange={e => setXpAmount(e.target.value)}
                   placeholder="XP amount"
                   className="bg-port-card border border-port-border rounded px-2 py-1.5 text-sm text-white w-28"
                 />
                 <input
+                  aria-label="XP description"
                   value={xpDesc}
                   onChange={e => setXpDesc(e.target.value)}
                   placeholder="Description (optional)"
@@ -800,6 +805,7 @@ export default function CharacterSheet() {
               </div>
               <div className="flex flex-col gap-2">
                 <input
+                  aria-label="Event description"
                   value={evtDesc}
                   onChange={e => setEvtDesc(e.target.value)}
                   placeholder="What happened?"
@@ -808,6 +814,7 @@ export default function CharacterSheet() {
                 <div className="flex flex-col sm:flex-row gap-2">
                   <input
                     type="number"
+                    aria-label="Event XP"
                     value={evtXp}
                     onChange={e => setEvtXp(e.target.value)}
                     placeholder="XP (optional)"
@@ -816,6 +823,7 @@ export default function CharacterSheet() {
                   <div className="flex items-center gap-2">
                     <Dices className="w-4 h-4 text-gray-400" />
                     <input
+                      aria-label="Event dice"
                       value={evtDice}
                       onChange={e => setEvtDice(e.target.value)}
                       placeholder="Dice (e.g. 2d6)"

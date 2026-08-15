@@ -605,6 +605,7 @@ export default function MoodBoardDetail() {
                 <div className="p-2 flex flex-col gap-1">
                   <input
                     type="text"
+                    aria-label="Item caption"
                     defaultValue={item.caption || ''}
                     placeholder="Add a caption…"
                     maxLength={2000}

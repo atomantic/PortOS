@@ -316,6 +316,7 @@ function SharingBuckets({ selectedId }) {
         <div className="grid grid-cols-1 md:grid-cols-[1fr_2fr_auto] gap-3 items-start">
           <input
             type="text"
+            aria-label="Your display name"
             value={sharingDisplayName}
             onChange={(e) => setSharingDisplayName(e.target.value)}
             placeholder="Display name (e.g. atomantic)"
@@ -324,6 +325,7 @@ function SharingBuckets({ selectedId }) {
           />
           <input
             type="text"
+            aria-label="Your bio / contact note"
             value={sharingBio}
             onChange={(e) => setSharingBio(e.target.value)}
             placeholder="Optional bio / contact note (visible to recipients)"

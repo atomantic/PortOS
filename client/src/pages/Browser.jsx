@@ -445,6 +445,7 @@ export default function BrowserPage() {
               >
                 <input
                   type="text"
+                  aria-label="URL to open"
                   value={navUrl}
                   onChange={e => setNavUrl(e.target.value)}
                   placeholder="https://example.com"

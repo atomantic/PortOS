@@ -576,6 +576,59 @@ function isNestedInLabeledFormField(src, index) {
   return false;
 }
 
+// Page-local field wrappers (PipelineSeries.jsx's `<Field label="…">`) render
+// their children inside a real <label>, so the control they wrap is implicitly
+// named — the <label> just lives in the component definition instead of at the
+// call site. Recognise those wrappers from their own source so a correctly
+// labeled control isn't forced to carry a redundant aria-label that would
+// shadow the visible text. Only same-file definitions count; a wrapper imported
+// from elsewhere stays unknown (FormField has its own dedicated check).
+function localLabelWrapperNames(src) {
+  const names = new Set();
+  const re = /function\s+([A-Z][\w]*)\s*\(/g;
+  let match;
+  while ((match = re.exec(src))) {
+    let depth = 1;
+    let cursor = match.index + match[0].length;
+    for (; cursor < src.length && depth > 0; cursor++) {
+      if (src[cursor] === '(') depth++;
+      else if (src[cursor] === ')') depth--;
+    }
+    const bodyStart = src.indexOf('{', cursor);
+    if (bodyStart === -1) continue;
+    const bodyEnd = matchingBraceEnd(src, bodyStart);
+    if (bodyEnd === -1) continue;
+    const body = src.slice(bodyStart, bodyEnd);
+    // The wrapper must render {children} between a <label> and its </label>.
+    if (/<label\b[\s\S]*?\{\s*children\s*\}[\s\S]*?<\/label>/.test(body)) names.add(match[1]);
+  }
+  return names;
+}
+
+function isNestedInLabelWrappingComponent(src, index) {
+  for (const name of localLabelWrapperNames(src)) {
+    const re = new RegExp(`</?${name}\\b`, 'g');
+    let depth = 0;
+    let outerLabel = null;
+    let match;
+    while ((match = re.exec(src)) && match.index < index) {
+      if (match[0].startsWith('</')) {
+        depth = Math.max(0, depth - 1);
+        continue;
+      }
+      const tag = openingTagAt(src, match.index, name.length + 1);
+      if (!tag) continue;
+      re.lastIndex = match.index + tag.length;
+      if (/\/\s*>$/.test(tag)) continue;
+      if (depth === 0) outerLabel = normalizedAttributeValue(attributeValue(tag, 'label'));
+      depth++;
+    }
+    if (depth === 0 || outerLabel === null || outerLabel === '') continue;
+    if (!/^(?:undefined|null|false)$/i.test(outerLabel)) return true;
+  }
+  return false;
+}
+
 function hasUsableAriaLabelledByReference(src, tag) {
   const raw = attributeValue(tag, 'aria-labelledby');
   const value = normalizedAttributeValue(raw);
@@ -599,6 +652,7 @@ function hasAccessibleInputName(src, tag, index) {
   if (hasUsableAccessibleNameAttribute(tag, 'aria-labelledby') && hasUsableAriaLabelledByReference(src, tag)) return true;
   if (hasUsableNativeInputName(tag)) return true;
   if (isNestedInLabel(src, index) || isNestedInLabeledFormField(src, index)) return true;
+  if (isNestedInLabelWrappingComponent(src, index)) return true;
 
   const id = normalizedAttributeValue(attributeValue(tag, 'id'));
   return id !== null && id !== '' && hasMatchingExplicitLabel(src, id);
@@ -836,25 +890,7 @@ const PREEXISTING_INPUT_NAME_ALLOWLIST = new Set([
   "src/pages/AIProviders.jsx|type=newEnvSecret ? 'password' : 'text'|placeholder=value|value=newEnvValue",
   "src/pages/Authors.jsx|placeholder=Jane Doe|value=form.name",
   "src/pages/Authors.jsx|placeholder=/images/… or https://…|value=form.headshotImageUrl",
-  "src/pages/Browser.jsx|type=text|placeholder=https://example.com|value=navUrl",
-  "src/pages/CharacterSheet.jsx|value=classVal",
-  "src/pages/CharacterSheet.jsx|placeholder=1d8|value=dmgDice",
-  "src/pages/CharacterSheet.jsx|placeholder=Description (optional)|value=dmgDesc",
-  "src/pages/CharacterSheet.jsx|type=number|placeholder=XP amount|value=xpAmount",
-  "src/pages/CharacterSheet.jsx|placeholder=Description (optional)|value=xpDesc",
-  "src/pages/CharacterSheet.jsx|placeholder=What happened?|value=evtDesc",
-  "src/pages/CharacterSheet.jsx|type=number|placeholder=XP (optional)|value=evtXp",
-  "src/pages/CharacterSheet.jsx|placeholder=Dice (e.g. 2d6)|value=evtDice",
-  "src/pages/GitHub.jsx|type=text|placeholder=Search repos...|value=search",
-  "src/pages/GitHub.jsx|type=text|placeholder=SECRET_NAME|value=newSecretName",
-  "src/pages/GitHub.jsx|type=password|placeholder=Secret value|value=newSecretValue",
   "src/pages/MediaCollectionDetail.jsx|type=text|value=nameDraft",
-  "src/pages/MoodBoardDetail.jsx|type=text|placeholder=Add a caption…",
-  "src/pages/PipelineSeries.jsx|value=series.name || ''",
-  "src/pages/PipelineSeries.jsx|placeholder=One-sentence pitch|value=series.logline || ''",
-  "src/pages/PipelineSeries.jsx|type=number|value=series.issueCountTarget || 0|min=0|max=999",
-  "src/pages/Sharing.jsx|type=text|placeholder=Display name (e.g. atomantic)|value=sharingDisplayName",
-  "src/pages/Sharing.jsx|type=text|placeholder=Optional bio / contact note (visible to recipients)|value=sharingBio",
   "src/components/meatspace/post/PostDrillConfig.jsx|type=number|value=drillConfig[field.key] ?? ''|min=field.min|max=field.max",
   "src/pages/AIProviders.jsx|type=text|placeholder=claude-sonnet-4-20250514|value=formData.defaultModel",
   "src/pages/AIProviders.jsx|type=text|placeholder=haiku|value=formData.lightModel",
@@ -875,8 +911,6 @@ const PREEXISTING_INPUT_NAME_ALLOWLIST = new Set([
   "src/pages/StackerNews.jsx|id=`${prefix}-api-key`|type=password|value=form.apiKey",
   "src/pages/StackerNews.jsx|id=`${prefix}-slug`|value=form.slug",
   "src/pages/VideoTimeline.jsx|type=text|placeholder=New project name…|value=name",
-  "src/pages/VideoTimelineEditor.jsx|type=text|value=nameDraft",
-  "src/pages/VideoTimelineEditor.jsx|type=range|value=Math.min(t, total)|min=0|max=Math.max(0.01, total)|step=0.01",
   "src/pages/DataDog.jsx|name=site|type=text|placeholder=e.g., api.custom-datadog.com|value=formData.site",
 ]);
 
