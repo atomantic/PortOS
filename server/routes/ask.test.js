@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
-import { createServer, request as httpRequest } from 'node:http';
-import { request } from '../lib/testHelper.js';
+import { request as httpRequest } from 'node:http';
+import { request, startLoopbackServer, closeLoopbackServer, waitForAbort } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
 vi.mock('../services/askConversations.js', () => ({
@@ -50,18 +50,6 @@ const makeApp = () => {
   app.use(errorMiddleware);
   return app;
 };
-
-const startLoopbackServer = (app) => new Promise((resolve, reject) => {
-  const server = createServer(app);
-  server.once('error', reject);
-  server.listen(0, '127.0.0.1', () => resolve(server));
-});
-
-const closeLoopbackServer = (server) => new Promise((resolve) => server.close(resolve));
-
-const waitForAbort = (signal) => (signal.aborted
-  ? Promise.resolve()
-  : new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true })));
 
 beforeEach(() => {
   vi.clearAllMocks();

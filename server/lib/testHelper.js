@@ -31,6 +31,32 @@ function closeServer(server) {
   return new Promise((resolve, reject) => server.close(err => err ? reject(err) : resolve()));
 }
 
+/**
+ * Start a real loopback HTTP server for tests that need to drive an actual
+ * socket (raw disconnect via `httpRequest(...).destroy()`, SSE streaming) —
+ * scenarios `request()`'s fetch-based harness can't model because it always
+ * runs a request to completion. Reject on a listen error instead of hanging.
+ */
+export function startLoopbackServer(app) {
+  return new Promise((resolve, reject) => {
+    const server = createServer(app);
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => resolve(server));
+  });
+}
+
+/** Close a server started with `startLoopbackServer`. */
+export function closeLoopbackServer(server) {
+  return new Promise((resolve) => server.close(resolve));
+}
+
+/** Resolve once an `AbortSignal` fires (or immediately if already aborted). */
+export function waitForAbort(signal) {
+  return signal.aborted
+    ? Promise.resolve()
+    : new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+}
+
 class RequestBuilder {
   constructor(app, method, path) {
     this._app = app;
