@@ -60,9 +60,10 @@ describe('selectTopGoals', () => {
   });
 
   it('keeps a status-less goal rather than dropping it', () => {
-    // MortalLoom-synced goals pass through normalizeGoal, whose defaults backfill every field
-    // EXCEPT status. Dropping them would render a populated goal list as "No active goals
-    // yet" — the exact lie the empty state must never tell.
+    // normalizeGoal now stamps status:'active' at the MortalLoom sync boundary (#4123), but a
+    // goals.json record written before status existed never passes through it. Dropping such a
+    // goal would render a populated goal list as "No active goals yet" — the exact lie the
+    // empty state must never tell.
     const picked = selectTopGoals([goal({ id: 'ml', status: undefined })]);
     expect(picked.map(g => g.id)).toEqual(['ml']);
   });

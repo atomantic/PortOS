@@ -17,10 +17,27 @@ export const PORTOS_GOAL_DEFAULTS = {
   scheduledEvents: [],
   checkIns: [],
   milestones: [],
-  goalType: 'standard'
+  goalType: 'standard',
+  // A PortOS-created goal always gets `status: 'active'` (`createGoal` in goals.js), but a
+  // MortalLoom-synced one may carry no status at all — and this is the ONLY normalization it
+  // passes through. Without a default the codebase splits on what that means: the voice tools
+  // and the Character card treat a status-less goal as active, while check-in scheduling,
+  // Telegram digests, insights, jobGates, and getGoalsTree's own urgency enrichment all test
+  // `status === 'active'` and silently skip it. Same goal, listed in one place and invisible in
+  // the other. Defaulting here makes both readings agree at the sync boundary (#4123).
+  status: 'active'
 };
 
-export const normalizeGoal = g => ({ ...PORTOS_GOAL_DEFAULTS, ...g });
+// A falsy status — absent, null, or '' — is never a legitimate value (there is no "no status"
+// goal state), so it collapses to the default rather than surviving the spread. That is what
+// makes the strict `status === 'active'` consumers agree with the lenient
+// `status === 'active' || !status` ones for every normalized goal: the set of goals the lenient
+// predicate calls active is exactly the set this stamps 'active'. A plain `{ ...defaults, ...g }`
+// would let an explicit `status: null` from MortalLoom re-open the split.
+export const normalizeGoal = g => {
+  const merged = { ...PORTOS_GOAL_DEFAULTS, ...g };
+  return merged.status ? merged : { ...merged, status: PORTOS_GOAL_DEFAULTS.status };
+};
 
 // === File paths ===
 

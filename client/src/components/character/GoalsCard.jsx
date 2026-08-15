@@ -24,13 +24,13 @@ const TOP_N = 4;
 // is stable. Real urgencies are clamped to [0,1] server-side, so -1 can never collide.
 const urgencyRank = (urgency) => (Number.isFinite(urgency) ? urgency : -1);
 
-// A missing `status` counts as active, matching server/services/voice/tools/goals.js. Goals
-// synced in from MortalLoom are only run through `normalizeGoal` (server/services/identity/
-// store.js), whose PORTOS_GOAL_DEFAULTS backfills every field EXCEPT status — so a
-// status-less goal is a real, reachable shape, and dropping it here would render a
-// user's populated goal list as "No active goals yet". Erring toward showing a goal is the
-// safe direction: the cost is at worst one stale row, versus a card that lies about the
-// user having no goals at all.
+// A missing `status` counts as active, matching server/services/voice/tools/goals.js.
+// `normalizeGoal` (server/services/identity/store.js) now defaults status to 'active' at the
+// MortalLoom sync boundary (#4123), so the server should no longer hand us a status-less goal —
+// but this stays lenient on purpose: a goals.json record written before status existed never
+// passes through that normalization, and dropping it here would render a user's populated goal
+// list as "No active goals yet". Erring toward showing a goal is the safe direction: the cost is
+// at worst one stale row, versus a card that lies about the user having no goals at all.
 const isActive = (goal) => Boolean(goal) && (goal.status === 'active' || !goal.status);
 
 export function selectTopGoals(goals, limit = TOP_N) {

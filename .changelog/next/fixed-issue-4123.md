@@ -1,0 +1,1 @@
+- MortalLoom-synced goals with no status field are normalized to status 'active', so check-in scheduling, Telegram digests, insights, job gates, and the identity dashboard no longer silently skip goals the voice tools and Character card list as active

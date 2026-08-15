@@ -23,7 +23,16 @@ vi.mock('../mortalLoomStore.js', () => ({
   mlReplace: vi.fn(async () => {}),
 }));
 
-const { loadJSON, GOALS_FILE, LONGEVITY_FILE, DEFAULT_GOALS, DEFAULT_LONGEVITY } = await import('./store.js');
+// getIdentityStatus is the real strict `status === 'active'` consumer these tests reach through
+// (#4123). Its other two inputs are unrelated domains — stubbed to "nothing uploaded" so the
+// goals section is the only thing under test.
+vi.mock('../genome.js', () => ({ getGenomeSummary: vi.fn(async () => null) }));
+vi.mock('../taste-questionnaire.js', () => ({
+  getTasteProfile: vi.fn(async () => ({ completedCount: 0, totalSections: 0, lastSessionAt: null })),
+}));
+
+const { loadJSON, normalizeGoal, GOALS_FILE, LONGEVITY_FILE, DEFAULT_GOALS, DEFAULT_LONGEVITY, PORTOS_GOAL_DEFAULTS } = await import('./store.js');
+const { getIdentityStatus } = await import('./status.js');
 
 afterAll(() => rmSync(TEST_DATA_ROOT, { recursive: true, force: true }));
 
@@ -111,5 +120,69 @@ describe('loadJSON — strict defers to the active MortalLoom source (#2726)', (
     const data = await loadJSON(GOALS_FILE, DEFAULT_GOALS, { strict: true });
     expect(data.goals).toEqual([expect.objectContaining({ id: 'ml1' })]);
     expect(data.birthDate).toBe('1990-01-01'); // metadata still comes from local
+  });
+});
+
+// A MortalLoom-synced goal passes through normalizeGoal and nothing else. Before #4123 the
+// defaults backfilled every field EXCEPT status, so half the codebase (voice tools, the Character
+// card) counted a status-less goal as active while the other half (check-in scheduling, Telegram
+// digests, insights, jobGates, getGoalsTree's urgency enrichment, getIdentityStatus) tested
+// `status === 'active'` and silently skipped it.
+describe('normalizeGoal — status defaulting (#4123)', () => {
+  it('stamps status:active on a goal that arrives without one', () => {
+    expect(normalizeGoal({ id: 'ml1', title: 'Sync me' }).status).toBe('active');
+  });
+
+  it.each([['null', null], ['undefined', undefined], ['an empty string', '']])(
+    'treats a falsy status (%s) as active rather than passing it through',
+    (_label, status) => {
+      // A falsy status is never a legitimate goal state — there is no "no status" goal — so it
+      // must not survive the spread. `{ ...defaults, ...g }` alone would let an explicit null
+      // re-open the split: null overwrites the default but still fails `status === 'active'`.
+      expect(normalizeGoal({ id: 'ml1', status }).status).toBe('active');
+    });
+
+  it.each(['completed', 'abandoned', 'paused'])('preserves a real non-active status (%s)', (status) => {
+    expect(normalizeGoal({ id: 'ml1', status }).status).toBe(status);
+  });
+
+  it('still backfills every other default alongside status', () => {
+    const normalized = normalizeGoal({ id: 'ml1' });
+    for (const [key, value] of Object.entries(PORTOS_GOAL_DEFAULTS)) {
+      expect(normalized[key]).toEqual(value);
+    }
+    expect(normalized.id).toBe('ml1');
+  });
+
+  it('does not let the status default clobber a caller-supplied field', () => {
+    const normalized = normalizeGoal({ id: 'ml1', progress: 42, goalType: 'habit', status: 'completed' });
+    expect(normalized).toMatchObject({ progress: 42, goalType: 'habit', status: 'completed' });
+  });
+});
+
+describe('loadJSON — status-less MortalLoom goals reach strict active-goal consumers (#4123)', () => {
+  it('normalizes a status-less MortalLoom goal to active on the way out of loadJSON', async () => {
+    ml.goals = [{ id: 'ml1', title: 'No status from the phone' }, { id: 'ml2', status: null }];
+
+    const data = await loadJSON(GOALS_FILE, DEFAULT_GOALS);
+    expect(data.goals.map(g => g.status)).toEqual(['active', 'active']);
+  });
+
+  it('reports the goals section active in getIdentityStatus, which filters on status === active', async () => {
+    // The end-to-end shape of the bug: a MortalLoom user with status-less goals saw the Character
+    // card list them while the identity dashboard called the Goals section "unavailable".
+    ml.goals = [{ id: 'ml1', title: 'No status from the phone' }];
+
+    const status = await getIdentityStatus();
+    expect(status.sections.goals).toMatchObject({ status: 'active', goalCount: 1 });
+  });
+
+  it('still reports unavailable when every synced goal is genuinely finished', async () => {
+    // The default must not paper over real non-active goals — otherwise the section would claim
+    // active goals for a user who has completed all of them.
+    ml.goals = [{ id: 'ml1', status: 'completed' }, { id: 'ml2', status: 'abandoned' }];
+
+    const status = await getIdentityStatus();
+    expect(status.sections.goals.status).toBe('unavailable');
   });
 });
