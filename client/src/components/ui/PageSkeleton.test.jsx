@@ -66,8 +66,10 @@ describe('PageSkeleton', () => {
 
   it('omits the header entirely for header="none" (page already rendered its own)', () => {
     const { container } = render(<PageSkeleton header="none" cards={1} sidebar={false} />);
-    // Only the single card block remains — no title/action placeholders.
-    expect(container.querySelectorAll('.animate-pulse')).toHaveLength(1);
+    // Only the single card block remains — no title/action placeholders. Its
+    // own title + two body lines are the only pulsing blocks left.
+    expect(cardCount(container)).toBe(1);
+    expect(container.querySelectorAll('.animate-pulse')).toHaveLength(3);
   });
 
   it('reserves a bordered PageHeader bar for header="bar"', () => {

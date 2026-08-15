@@ -316,3 +316,28 @@ describe('DataManager full-width shell (#4145)', () => {
     expect(skeletonScrollers[0].className).toContain('p-4');
   });
 });
+
+// The category detail panel refetches after the page has already rendered, so
+// it used to drop a bare BrailleSpinner into a panel the row had just expanded
+// to full height (#4147).
+describe('DataManager category detail loading state (#4147)', () => {
+  beforeEach(() => {
+    getDataOverview.mockReset().mockResolvedValue(overview);
+    // Never resolves — hold the expanded category on its detail-loading branch.
+    getDataCategory.mockReset().mockReturnValue(new Promise(() => {}));
+  });
+
+  it('reserves the item table instead of centering a spinner', async () => {
+    render(<DataManager />);
+    await waitFor(() => expect(screen.getAllByText('Prompts').length).toBeGreaterThan(0));
+
+    expandRow('Prompts');
+
+    const panel = await screen.findByRole('status', { name: 'Loading Prompts contents' });
+    expect(panel).toHaveAttribute('aria-busy', 'true');
+    // Five rows × three columns (Name / Size / Files) of reserved blocks.
+    expect(panel.querySelectorAll('.animate-pulse')).toHaveLength(15);
+    // Matches the loaded scroller's cap so filling in doesn't resize the panel.
+    expect(panel.className).toContain('max-h-64');
+  });
+});

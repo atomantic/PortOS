@@ -34,6 +34,7 @@ accessibility). Feature-specific components live under their own feature directo
 | `ProseEditor` | Prose-writing textarea — serif face, relaxed leading, spellcheck. Markdown string in/out. |
 | `ProvenanceChip` | Chip + popover showing where a generated value came from. |
 | `SideBySideDiff` | Columnar word-level diff — old left, new right. |
+| `Skeleton` | Loading-placeholder primitives (`SkeletonBlock` / `Lines` / `Card` / `Rows` / `Region`) — what `PageSkeleton` is built from, and what a sub-region loader should reserve its shape with instead of a bare spinner. |
 | `TabPills` | Shared tab nav — `underline` / `pills` families, with a mobile `<select>` fallback. |
 | `Toast` | Toast notification system (`toast()`, `.success()`, `.error()`, `.loading()`, `<Toaster />`). |
 | `ToggleChip` | Checkbox styled as a pill — the "pick some of these" affordance. |

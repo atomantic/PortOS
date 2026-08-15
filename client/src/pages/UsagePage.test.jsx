@@ -231,3 +231,21 @@ describe('UsagePage provider reset times', () => {
     expect(reset.textContent).not.toContain(resetsAt);
   });
 });
+
+// The provider-quota section reads every provider on mount, well after the page
+// shell has painted. A centered spinner there let the whole page below it jump
+// by the card grid's height once the reading landed (#4147).
+describe('UsagePage provider-quota loading state (#4147)', () => {
+  it('reserves the quota card grid instead of centering a spinner', async () => {
+    // Never resolves — hold the section on its loading branch.
+    api.getProviderUsage.mockReturnValue(new Promise(() => {}));
+
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+
+    const region = await screen.findByRole('status', { name: 'Reading provider usage' });
+    expect(region).toHaveAttribute('aria-busy', 'true');
+    expect(region.querySelectorAll('.animate-pulse').length).toBeGreaterThan(0);
+    // Mirrors the loaded grid so the cards land where the placeholders were.
+    expect(region.innerHTML).toContain('lg:grid-cols-2');
+  });
+});

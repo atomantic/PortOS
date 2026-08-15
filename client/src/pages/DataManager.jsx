@@ -2,8 +2,8 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { HardDrive, RefreshCw, Archive, Trash2, ChevronDown, ChevronRight, FolderOpen, File, Package } from 'lucide-react';
 import * as api from '../services/api';
 import { formatBytes, formatDateNumeric } from '../utils/formatters';
-import BrailleSpinner from '../components/BrailleSpinner';
 import PageSkeleton from '../components/ui/PageSkeleton';
+import { SkeletonRegion, SkeletonRows } from '../components/ui/Skeleton';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';
 import { useAsyncAction } from '../hooks/useAsyncAction';
@@ -284,9 +284,17 @@ function CategoryRow({ cat, maxSize, onExpand, expanded, detail, onArchive, onPu
               )}
             </div>
           ) : (
-            <div className="p-3 flex items-center gap-2 text-xs text-gray-500">
-              <BrailleSpinner text="Loading" />
-      </div>
+            // Reserve the item table's rows and columns rather than centering a
+            // spinner in the panel (#4147). `max-h-64` matches the loaded
+            // scroller so expanding a category doesn't resize when it fills in.
+            <SkeletonRegion label={`Loading ${cat.label} contents`} className="max-h-64 overflow-hidden">
+              <SkeletonRows
+                rows={5}
+                columnWidthClasses={itemScoped
+                  ? ['flex-1', 'w-14', 'w-10', 'w-4']
+                  : ['flex-1', 'w-14', 'w-10']}
+              />
+            </SkeletonRegion>
           )}
         </div>
       )}

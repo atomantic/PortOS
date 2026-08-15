@@ -295,7 +295,16 @@ function ProviderQuotaSection() {
       </div>
 
       {loading && !quotas && (
-        <div className="py-6"><BrailleSpinner text="Reading provider usage" /></div>
+        // Reserve the quota-card grid below rather than a centered spinner
+        // (#4147) — the cards are the whole section, so the reading arriving
+        // shouldn't jump the page down by their height.
+        <PageSkeleton
+          header="none"
+          label="Reading provider usage"
+          layout="grid"
+          gridColsClass="lg:grid-cols-2"
+          cards={4}
+        />
       )}
 
       {!loading && error && !quotas && (

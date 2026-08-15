@@ -2,7 +2,6 @@ import { useCallback, lazy, Suspense } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import * as api from '../services/api';
 import { Heart } from 'lucide-react';
-import BrailleSpinner from '../components/BrailleSpinner';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import { sameJsonShape } from '../lib/sameJsonShape';
@@ -167,7 +166,9 @@ export default function DigitalTwin() {
 
       {/* Tab content */}
       <div className="flex-1 overflow-auto p-4">
-        <Suspense fallback={<div className="flex justify-center py-12"><BrailleSpinner text="Loading" /></div>}>
+        {/* Reserve the section's card stack while its lazy chunk loads — the
+            wrapper already owns the padding and the scroll (#4147). */}
+        <Suspense fallback={<PageSkeleton header="none" label="Loading digital twin section" cards={3} sidebar={false} />}>
           {renderTabContent()}
         </Suspense>
       </div>

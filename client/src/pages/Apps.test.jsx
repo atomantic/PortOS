@@ -539,3 +539,33 @@ describe('Apps sprint-ticket cache keying (#3437)', () => {
     expect(api.getMySprintTickets).toHaveBeenLastCalledWith('jira-1', 'OTHER', { silent: true });
   });
 });
+
+// The Kanban board is a ~120px-tall region that loads after the row expands, so
+// the one-line spinner it used to show let everything below the expansion jump
+// once the tickets landed (#4147).
+describe('Apps sprint-ticket loading state (#4147)', () => {
+  const JIRA_APP = {
+    ...APPS[0],
+    jira: { enabled: true, instanceId: 'jira-1', projectKey: 'EX', issueType: 'Task' }
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getApps.mockResolvedValue([JIRA_APP]);
+  });
+
+  it('reserves the board columns instead of a one-line spinner', async () => {
+    // Never resolves — hold the expansion on its ticket-loading branch.
+    api.getMySprintTickets.mockReturnValue(new Promise(() => {}));
+    const user = userEvent.setup();
+    await renderApps();
+
+    await user.click(screen.getByRole('button', { name: /Expand Example App details/ }));
+
+    const region = await screen.findByRole('status', { name: 'Loading sprint tickets for Example App' });
+    expect(region).toHaveAttribute('aria-busy', 'true');
+    // Three columns, each reserving a heading plus two ticket cards.
+    expect(region.querySelectorAll('.animate-pulse')).toHaveLength(9);
+    expect(region.querySelectorAll('.min-h-\\[120px\\]')).toHaveLength(3);
+  });
+});

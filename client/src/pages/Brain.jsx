@@ -2,7 +2,6 @@ import { useCallback, lazy, Suspense } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import * as api from '../services/api';
 import {Brain as BrainIcon} from 'lucide-react';
-import BrailleSpinner from '../components/BrailleSpinner';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
@@ -145,7 +144,12 @@ export default function Brain() {
       {/* Tab content — full-bleed tabs own their own scroll and fill height;
           document-style tabs scroll inside a padded wrapper. */}
       <div className={`flex-1 min-h-0 ${fullBleed ? 'overflow-hidden' : 'overflow-auto p-3 sm:p-4'}`}>
-        <Suspense fallback={<div className="flex items-center justify-center h-64"><BrailleSpinner text="Loading" /></div>}>
+        {/* The lazy tab chunk lands in a region the page has already sized, so
+            reserve that region's card stack rather than centering a spinner in
+            it (#4147). Mirror the wrapper: a document-style tab is padded by the
+            wrapper already, a full-bleed one isn't, so the skeleton pads itself
+            there instead of running its cards into the edges. */}
+        <Suspense fallback={<PageSkeleton header="none" label="Loading brain section" cards={3} sidebar={false} padded={fullBleed} />}>
           {renderTabContent()}
         </Suspense>
       </div>

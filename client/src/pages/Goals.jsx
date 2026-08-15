@@ -6,7 +6,6 @@ import GoalsListView from '../components/goals/GoalsListView';
 import MortalLoomBanner from '../components/MortalLoomBanner';
 import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
-import BrailleSpinner from '../components/BrailleSpinner';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import { useValidTab } from '../hooks/useValidTab';
 
@@ -80,7 +79,10 @@ export default function Goals() {
         ) : tab === 'list' ? (
           <GoalsListView data={data} onRefresh={loadData} selectedGoalId={goalId} />
         ) : (
-          <Suspense fallback={<div className="flex items-center justify-center h-full"><BrailleSpinner text="Loading" /></div>}>
+          // Same reserved shape the page's own load branch uses above — the tree
+          // chunk arriving late shouldn't look different from the data arriving
+          // late (#4147).
+          <Suspense fallback={<PageSkeleton header="none" label="Loading goal tree" fullHeight cards={4} sidebar={false} />}>
             <GoalsTreeView data={data} onRefresh={loadData} />
           </Suspense>
         )}

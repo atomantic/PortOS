@@ -5,8 +5,8 @@ import toast from '../components/ui/Toast';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
 import OverflowMenu from '../components/ui/OverflowMenu';
 import AppIcon from '../components/AppIcon';
-import BrailleSpinner from '../components/BrailleSpinner';
 import PageSkeleton from '../components/ui/PageSkeleton';
+import { SkeletonBlock, SkeletonRegion, skeletonRepeat } from '../components/ui/Skeleton';
 import KanbanBoard from '../components/KanbanBoard';
 import StatusBadge from '../components/StatusBadge';
 import AppOperationBanner from '../components/apps/AppOperationBanner';
@@ -614,10 +614,27 @@ export default function Apps() {
                           <div className="mt-3">
                             <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">My Sprint Tickets</div>
                             {loadingTickets[sprintKey(app)] ? (
-                              <div className="flex items-center gap-2 px-3 py-2 text-sm text-gray-400">
-                                <BrailleSpinner text="" />
-                                <span>Loading tickets...</span>
-                              </div>
+                              // Reserve the board's three columns instead of a
+                              // one-line spinner (#4147) — the board is ~120px
+                              // tall, so the spinner row let everything below
+                              // the expansion jump when the tickets landed.
+                              <SkeletonRegion
+                                label={`Loading sprint tickets for ${app.name}`}
+                                className="flex gap-3 overflow-x-auto pb-2"
+                              >
+                                {skeletonRepeat(3).map((_, col) => (
+                                  <div
+                                    key={col}
+                                    className="flex-1 min-w-[220px] min-h-[120px] rounded-lg border border-port-border p-3"
+                                  >
+                                    <SkeletonBlock className="h-4 w-24 mb-3" />
+                                    <div className="space-y-2">
+                                      <SkeletonBlock className="h-10 w-full" />
+                                      <SkeletonBlock className="h-10 w-full" />
+                                    </div>
+                                  </div>
+                                ))}
+                              </SkeletonRegion>
                             ) : ticketErrors[sprintKey(app)] ? (
                               <div className="flex flex-wrap items-center gap-3 px-3 py-2 bg-port-card border border-port-error/30 rounded-lg">
                                 <AlertTriangle size={16} aria-hidden="true" className="text-port-error shrink-0" />
