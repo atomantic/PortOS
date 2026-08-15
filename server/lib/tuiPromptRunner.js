@@ -299,8 +299,11 @@ ${prompt}`;
   // retain their existing idle/deadline behavior.
   const inputReady = createInputReadyTracker({ directLaunch: true });
   const requiresInputReady = isClaudeCommand(command);
+  // needsTrust has no self-clearing latch in the tracker, so this flag is
+  // load-bearing to avoid re-sending Enter on every poll tick. needsAutoModeChoice
+  // doesn't need a matching flag below — ackAutoModeChoice() latches it false
+  // permanently on the tracker itself (see autoModeAnswered in tuiHandshake.js).
   let trustAccepted = false;
-  let autoModeDeclined = false;
 
   // The wrapped prompt directs the model to write its COMPLETE response to
   // `responseFilePath` and then finish. That file appearing is the model's
@@ -785,8 +788,7 @@ ${prompt}`;
           dismissStartupDialog('\r', 'folder-trust prompt');
           return;
         }
-        if (inputReady.needsAutoModeChoice && !autoModeDeclined) {
-          autoModeDeclined = true;
+        if (inputReady.needsAutoModeChoice) {
           // Select "No, keep don't ask" so a one-shot run never rewrites the
           // user's global Claude permission default as a startup side effect.
           if (dismissStartupDialog('\x1b[B\r', 'auto-mode prompt')) {
