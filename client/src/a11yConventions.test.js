@@ -244,7 +244,7 @@ function hasFortyFourMinTouchTarget(cls) {
 // expressions are compared as source text, which is sufficient for matching
 // an input and its label when they share the same expression in one file.
 function attributeValue(tag, name) {
-  const match = new RegExp(`\\b${name}\\s*=`).exec(tag);
+  const match = new RegExp(`(?:^|\\s)${name}\\s*=`).exec(tag);
   if (!match) return null;
 
   let index = match.index + match[0].length;
@@ -323,9 +323,28 @@ function hasMatchingExplicitLabel(src, id) {
     const tag = openingTagAt(src, match.index, '<label'.length);
     if (!tag) continue;
     const htmlFor = normalizedAttributeValue(attributeValue(tag, 'htmlFor'));
-    if (htmlFor === id) return true;
+    if (htmlFor !== id || !hasUsableElementText(src, match.index, tag)) continue;
+    return true;
   }
   return false;
+}
+
+function hasUsableElementText(src, index, tag) {
+  if (hasUsableAccessibleNameAttribute(tag, 'aria-label')) return true;
+  if (/\/\s*>$/.test(tag)) return false;
+  const name = tag.match(/^<([A-Za-z][\w.-]*)\b/)?.[1];
+  if (!name) return false;
+  const closeIndex = src.indexOf(`</${name}>`, index + tag.length);
+  if (closeIndex === -1) return false;
+  const body = maskComments(src.slice(index + tag.length, closeIndex))
+    .replace(/<\/?[A-Za-z][^>]*>/g, ' ')
+    .trim();
+  if (!body) return false;
+  const staticText = body.replace(/\{[^{}]*\}/g, ' ').trim();
+  if (staticText) return true;
+  return [...body.matchAll(/\{([^{}]*)\}/g)].some(([, expression]) => (
+    !/^(?:''|""|``|null|undefined|false)\s*$/.test(expression.trim())
+  ));
 }
 
 function isNestedInLabel(src, index) {
@@ -352,7 +371,6 @@ function hasUsableAccessibleNameAttribute(tag, name) {
 }
 
 function isNestedInLabeledFormField(src, index) {
-  const re = /<\/?[A-Za-z][\w.-]*\b|<>|<\/>/g;
   const formRe = /<FormField\b/g;
   let formMatch;
   while ((formMatch = formRe.exec(src)) && formMatch.index < index) {
@@ -364,34 +382,93 @@ function isNestedInLabeledFormField(src, index) {
     let depth = 0;
     let firstChild = null;
     let closed = false;
-    re.lastIndex = formMatch.index + formTag.length;
-    let childMatch;
-    while ((childMatch = re.exec(src)) && childMatch.index < index) {
-      const token = childMatch[0];
-      const closing = token.startsWith('</');
-      const fragment = token === '<>' || token === '</>';
-      const name = token === '<>' ? 'fragment' : fragment ? null : token.slice(closing ? 2 : 1).split(/\s|>/, 1)[0];
-      if (closing) {
-        if (depth > 0) depth--;
-        else if (name === 'FormField') { closed = true; break; }
+    let cursor = formMatch.index + formTag.length;
+    while (cursor < index) {
+      if (/\s/.test(src[cursor])) {
+        cursor++;
         continue;
       }
-      const tag = tagBoundaryAt(src, childMatch.index);
-      if (!tag) continue;
-      if (depth === 0 && firstChild === null) firstChild = name;
+      if (src[cursor] === '{') {
+        const end = matchingBraceEnd(src, cursor);
+        if (end === -1 || end >= index) break;
+        if (src.slice(cursor + 1, end).trim()) firstChild = firstChild || 'expression';
+        cursor = end + 1;
+        continue;
+      }
+      if (src[cursor] !== '<') {
+        const nextTag = src.indexOf('<', cursor);
+        const nextExpression = src.indexOf('{', cursor);
+        const next = Math.min(
+          nextTag === -1 ? index : nextTag,
+          nextExpression === -1 ? index : nextExpression,
+          index,
+        );
+        if (depth === 0 && src.slice(cursor, next).trim()) firstChild = firstChild || 'text';
+        cursor = next;
+        continue;
+      }
+
+      const closing = src.startsWith('</', cursor);
+      const name = src.slice(cursor + (closing ? 2 : 1)).match(/^([A-Za-z][\w.-]*)/)?.[1];
+      if (!name) {
+        if (src.startsWith('<>', cursor)) {
+          if (depth === 0) firstChild = firstChild || 'fragment';
+          depth++;
+          cursor += 2;
+          continue;
+        }
+        if (src.startsWith('</>', cursor)) {
+          depth = Math.max(0, depth - 1);
+          cursor += 3;
+          continue;
+        }
+        cursor++;
+        continue;
+      }
+      if (closing) {
+        const end = src.indexOf('>', cursor);
+        if (end === -1) break;
+        if (depth > 0) depth--;
+        else if (name === 'FormField') { closed = true; break; }
+        cursor = end + 1;
+        continue;
+      }
+      const tag = tagBoundaryAt(src, cursor);
+      if (!tag) break;
+      if (depth === 0) firstChild = firstChild || name;
       if (!tag.selfClosing) depth++;
-      re.lastIndex = childMatch.index + (tag.end - childMatch.index);
+      cursor = tag.end;
     }
+    if (!closed && depth === 0 && firstChild === null && cursor === index) firstChild = 'input';
     // FormField clones only its first React child. The current input is named
     // by the wrapper only when it is that first, direct child; a later control
     // (DataDog's optional custom-site input) must remain actionable here.
-    if (!closed && depth === 0 && firstChild === null) return true;
+    if (!closed && depth === 0 && firstChild === 'input') return true;
   }
   return false;
 }
 
+function hasUsableAriaLabelledByReference(src, tag) {
+  const raw = attributeValue(tag, 'aria-labelledby');
+  const value = normalizedAttributeValue(raw);
+  if (!value || !/^[A-Za-z][\w:.-]*(?:\s+[A-Za-z][\w:.-]*)*$/.test(value)) return false;
+  return value.split(/\s+/).every((id) => {
+    const re = /<[A-Za-z][\w.-]*\b/g;
+    let match;
+    while ((match = re.exec(src))) {
+      const referencedTag = openingTagAt(src, match.index, 1);
+      if (!referencedTag) continue;
+      if (normalizedAttributeValue(attributeValue(referencedTag, 'id')) !== id) continue;
+      if (/\baria-hidden\s*=\s*['"`]true['"`]/.test(referencedTag)) return false;
+      if (hasUsableElementText(src, match.index, referencedTag)) return true;
+    }
+    return false;
+  });
+}
+
 function hasAccessibleInputName(src, tag, index) {
-  if (hasUsableAccessibleNameAttribute(tag, 'aria-label') || hasUsableAccessibleNameAttribute(tag, 'aria-labelledby')) return true;
+  if (hasUsableAccessibleNameAttribute(tag, 'aria-label')) return true;
+  if (hasUsableAccessibleNameAttribute(tag, 'aria-labelledby') && hasUsableAriaLabelledByReference(src, tag)) return true;
   if (normalizedAttributeValue(attributeValue(tag, 'type'))?.toLowerCase() === 'hidden') return true;
   if (isNestedInLabel(src, index) || isNestedInLabeledFormField(src, index)) return true;
 
@@ -418,11 +495,16 @@ function inputSemanticAnchor(tag) {
 
 function inputSourceAnchor(file, src, index) {
   const tag = openingTagAt(src, index, '<input'.length);
+  if (!tag) return `${file}|unknown-input`;
   const semantic = inputSemanticAnchor(tag);
-  const matchingInputs = [...src.matchAll(/<input\b/g)].filter((match) => inputSemanticAnchor(openingTagAt(src, match.index, '<input'.length)) === semantic);
+  const matchingInputs = [];
+  for (const match of src.matchAll(/<input\b/g)) {
+    const otherTag = openingTagAt(src, match.index, '<input'.length);
+    if (inputSemanticAnchor(otherTag) === semantic) matchingInputs.push(match.index);
+  }
   if (matchingInputs.length === 1) return `${file}|${semantic}`;
-  const before = src.slice(Math.max(0, index - 400), index).replace(/\s+/g, ' ').trim();
-  return `${file}|${semantic}|before=${before}`;
+  const occurrence = matchingInputs.indexOf(index) + 1;
+  return `${file}|${semantic}|occurrence=${occurrence}`;
 }
 
 const PREEXISTING_INPUT_NAME_ALLOWLIST = new Set([
@@ -430,12 +512,12 @@ const PREEXISTING_INPUT_NAME_ALLOWLIST = new Set([
   "src/components/EntityCombobox.jsx|id=inputId|type=text|placeholder=placeholder || `Search ${noun}s or type a new name…`|value=value|role=combobox",
   "src/components/TagPicker.jsx|id=id|type=text|placeholder=value.length >= maxTags ? `Max ${maxTags} tags` : placeholder|value=input",
   "src/components/agents/tabs/ToolsTab.jsx|type=text|placeholder=Post title...|value=postTitle",
-  "src/components/agents/tabs/WorldTab.jsx|type=number|placeholder=X|value=newActionParams.x || ''|before=s', connecting: 'bg-port-warning animate-pulse', reconnecting: 'bg-port-warning animate-pulse', disconnected: 'bg-gray-600' }[connectionStatus] || 'bg-gray-600'; // Dynamic param fields for add-to-queue form const renderQueueParamFields = () => { switch (newActionType) { case 'mw_explore': return ( <div className=\"grid grid-cols-2 gap-2\">",
-  "src/components/agents/tabs/WorldTab.jsx|type=number|placeholder=Y|value=newActionParams.y || ''|before=eParamFields = () => { switch (newActionType) { case 'mw_explore': return ( <div className=\"grid grid-cols-2 gap-2\"> <input type=\"number\" placeholder=\"X\" value={newActionParams.x || ''} onChange={e => setNewActionParams(p => ({ ...p, x: e.target.value }))} className=\"px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm\" />",
+  "src/components/agents/tabs/WorldTab.jsx|type=number|placeholder=X|value=newActionParams.x || ''|occurrence=1",
+  "src/components/agents/tabs/WorldTab.jsx|type=number|placeholder=Y|value=newActionParams.y || ''|occurrence=1",
   "src/components/agents/tabs/WorldTab.jsx|type=text|placeholder=Thinking (optional)|value=newActionParams.thinking || ''",
   "src/components/agents/tabs/WorldTab.jsx|type=text|placeholder=Thought text|value=newActionParams.thought || ''",
-  "src/components/agents/tabs/WorldTab.jsx|type=number|placeholder=X|value=newActionParams.x || ''|before=return ( <input type=\"text\" placeholder=\"Thought text\" value={newActionParams.thought || ''} onChange={e => setNewActionParams(p => ({ ...p, thought: e.target.value }))} className=\"w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm\" /> ); case 'mw_build': return ( <div className=\"grid grid-cols-3 gap-2\">",
-  "src/components/agents/tabs/WorldTab.jsx|type=number|placeholder=Y|value=newActionParams.y || ''|before=port-border rounded text-white text-sm\" /> ); case 'mw_build': return ( <div className=\"grid grid-cols-3 gap-2\"> <input type=\"number\" placeholder=\"X\" value={newActionParams.x || ''} onChange={e => setNewActionParams(p => ({ ...p, x: e.target.value }))} className=\"px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm\" />",
+  "src/components/agents/tabs/WorldTab.jsx|type=number|placeholder=X|value=newActionParams.x || ''|occurrence=2",
+  "src/components/agents/tabs/WorldTab.jsx|type=number|placeholder=Y|value=newActionParams.y || ''|occurrence=2",
   "src/components/agents/tabs/WorldTab.jsx|type=number|placeholder=Z|value=newActionParams.z || ''",
   "src/components/agents/tabs/WorldTab.jsx|type=text|placeholder=Message|value=newActionParams.message || ''",
   "src/components/agents/tabs/WorldTab.jsx|type=text|placeholder=To Agent ID (optional)|value=newActionParams.sayTo || ''",
@@ -461,9 +543,9 @@ const PREEXISTING_INPUT_NAME_ALLOWLIST = new Set([
   "src/components/brain/tabs/MemoryTab.jsx|type=text|placeholder=Follow-ups (comma separated)|value=(form.followUps || []).join(', ')",
   "src/components/brain/tabs/MemoryTab.jsx|type=text|placeholder=Project name|value=form.name || ''",
   "src/components/brain/tabs/MemoryTab.jsx|type=text|placeholder=Next action (concrete, actionable step)|value=form.nextAction || ''",
-  "src/components/brain/tabs/MemoryTab.jsx|type=text|placeholder=Title|value=form.title || ''|before=placeholder=\"Notes\" value={form.notes || ''} onChange={(e) => setForm({ ...form, notes: e.target.value })} className=\"w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white\" rows={2} /> </div> ); case 'ideas': return ( <div className=\"space-y-3\">",
+  "src/components/brain/tabs/MemoryTab.jsx|type=text|placeholder=Title|value=form.title || ''|occurrence=1",
   "src/components/brain/tabs/MemoryTab.jsx|type=text|placeholder=One-liner (core insight)|value=form.oneLiner || ''",
-  "src/components/brain/tabs/MemoryTab.jsx|type=text|placeholder=Title|value=form.title || ''|before=placeholder=\"Notes\" value={form.notes || ''} onChange={(e) => setForm({ ...form, notes: e.target.value })} className=\"w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white\" rows={2} /> </div> ); case 'admin': return ( <div className=\"space-y-3\">",
+  "src/components/brain/tabs/MemoryTab.jsx|type=text|placeholder=Title|value=form.title || ''|occurrence=2",
   "src/components/brain/tabs/MemoryTab.jsx|type=date|placeholder=Due date|value=form.dueDate ? form.dueDate.split('T')[0] : ''",
   "src/components/brain/tabs/MemoryTab.jsx|type=text|placeholder=Next action|value=form.nextAction || ''",
   "src/components/brain/tabs/MemoryTab.jsx|type=text|placeholder=Title (e.g. 'DnD session tonight')|value=form.title || ''",
@@ -497,8 +579,8 @@ const PREEXISTING_INPUT_NAME_ALLOWLIST = new Set([
   "src/components/cos/tabs/workflow/ScheduleEditor.jsx|type=time|value=parseSimpleCron(form.recheckCron)?.time ?? ''",
   "src/components/dashboard/LayoutEditor.jsx|id=layout-editor-window-end|type=time|value=activateWindow.end",
   "src/components/dashboard/LayoutEditor.jsx|type=text|placeholder=Name for new layout|value=dupName",
-  "src/components/digital-twin/tabs/DocumentsTab.jsx|type=range|value=selectedDoc.weight || 5|min=1|max=10|before=Name=\"flex items-center gap-1 sm:gap-2 shrink-0\"> {/* Weight Control - hidden on mobile */} <div className=\"hidden md:flex items-center gap-2 px-2 py-1 bg-port-bg rounded border border-port-border\" title=\"Document weight (1-10): Higher weight = included first when truncating\"> <Scale size={14} className=\"text-gray-500\" />",
-  "src/components/digital-twin/tabs/DocumentsTab.jsx|type=range|value=selectedDoc.weight || 5|min=1|max=10|before=</button> </> )} </div> </div> {/* Mobile weight control row */} <div className=\"flex md:hidden items-center gap-2 mt-2 pt-2 border-t border-port-border\"> <Scale size={14} className=\"text-gray-500\" /> <span className=\"text-xs text-gray-400\">Weight:</span>",
+  "src/components/digital-twin/tabs/DocumentsTab.jsx|type=range|value=selectedDoc.weight || 5|min=1|max=10|occurrence=1",
+  "src/components/digital-twin/tabs/DocumentsTab.jsx|type=range|value=selectedDoc.weight || 5|min=1|max=10|occurrence=2",
   "src/components/digital-twin/tabs/GoalsTab.jsx|type=date|value=birthDateInput",
   "src/components/digital-twin/tabs/GoalsTab.jsx|type=text|placeholder=Goal title...|value=newGoal.title",
   "src/components/digital-twin/tabs/GoalsTab.jsx|type=text|placeholder=Add milestone...|value=newMilestone.title",
@@ -547,11 +629,11 @@ const PREEXISTING_INPUT_NAME_ALLOWLIST = new Set([
   "src/components/meatspace/post/WordplayDrillUI.jsx|type=text|placeholder=The bridge word is...|value=inputValue|ref=inputRef",
   "src/components/meatspace/tabs/AgeTab.jsx|type=date|value=input",
   "src/components/meatspace/tabs/AlcoholTab.jsx|type=text|placeholder=Name|value=buttonForm.name",
-  "src/components/meatspace/tabs/AlcoholTab.jsx|type=number|placeholder=buttonVolumeUnit === 'oz' ? 'Oz' : 'mL'|value=buttonForm.oz|min=0.1|step=0.1|before=<input type=\"text\" value={buttonForm.name} onChange={e => setButtonForm(f => ({ ...f, name: e.target.value }))} placeholder=\"Name\" className=\"flex-1 px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-xs text-white\" />",
-  "src/components/meatspace/tabs/AlcoholTab.jsx|type=number|placeholder=ABV%|value=buttonForm.abv|min=0|max=100|step=0.1|before=type=\"button\" onClick={() => setButtonVolumeUnit(u => u === 'oz' ? 'ml' : 'oz')} className=\"px-1.5 py-1 text-[10px] font-medium rounded bg-port-border/50 text-gray-400 hover:text-port-accent hover:bg-port-accent/10 transition-colors\" > {buttonVolumeUnit} </button>",
+  "src/components/meatspace/tabs/AlcoholTab.jsx|type=number|placeholder=buttonVolumeUnit === 'oz' ? 'Oz' : 'mL'|value=buttonForm.oz|min=0.1|step=0.1|occurrence=1",
+  "src/components/meatspace/tabs/AlcoholTab.jsx|type=number|placeholder=ABV%|value=buttonForm.abv|min=0|max=100|step=0.1|occurrence=1",
   "src/components/meatspace/tabs/AlcoholTab.jsx|type=text|placeholder=New button name|value=buttonForm.name",
-  "src/components/meatspace/tabs/AlcoholTab.jsx|type=number|placeholder=buttonVolumeUnit === 'oz' ? 'Oz' : 'mL'|value=buttonForm.oz|min=0.1|step=0.1|before=<input type=\"text\" value={buttonForm.name} onChange={e => setButtonForm(f => ({ ...f, name: e.target.value }))} placeholder=\"New button name\" className=\"flex-1 px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-xs text-white placeholder-gray-600\" />",
-  "src/components/meatspace/tabs/AlcoholTab.jsx|type=number|placeholder=ABV%|value=buttonForm.abv|min=0|max=100|step=0.1|before=<button type=\"button\" onClick={() => setButtonVolumeUnit(u => u === 'oz' ? 'ml' : 'oz')} className=\"px-1.5 py-1 text-[10px] font-medium rounded bg-port-border/50 text-gray-400 hover:text-port-accent hover:bg-port-accent/10 transition-colors\" > {buttonVolumeUnit} </button>",
+  "src/components/meatspace/tabs/AlcoholTab.jsx|type=number|placeholder=buttonVolumeUnit === 'oz' ? 'Oz' : 'mL'|value=buttonForm.oz|min=0.1|step=0.1|occurrence=2",
+  "src/components/meatspace/tabs/AlcoholTab.jsx|type=number|placeholder=ABV%|value=buttonForm.abv|min=0|max=100|step=0.1|occurrence=2",
   "src/components/meatspace/tabs/AlcoholTab.jsx|type=number|placeholder=volumeUnit === 'oz' ? '12' : '355'|value=oz|min=0.1|step=0.1",
   "src/components/meatspace/tabs/AlcoholTab.jsx|type=date|value=editForm.date",
   "src/components/meatspace/tabs/AlcoholTab.jsx|type=text|value=editForm.name",
@@ -563,9 +645,9 @@ const PREEXISTING_INPUT_NAME_ALLOWLIST = new Set([
   "src/components/meatspace/tabs/LifestyleTab.jsx|type=range|value=lifestyle?.sleepHoursPerNight ?? 7.5|min=3|max=12|step=0.5",
   "src/components/meatspace/tabs/LifestyleTab.jsx|type=number|placeholder=e.g. 22.5|value=lifestyle?.bmi ?? ''|min=10|max=80|step=0.1",
   "src/components/meatspace/tabs/NicotineTab.jsx|type=text|placeholder=Name|value=buttonForm.name",
-  "src/components/meatspace/tabs/NicotineTab.jsx|type=number|placeholder=mg|value=buttonForm.mgPerUnit|step=0.1|before=<input type=\"text\" value={buttonForm.name} onChange={e => setButtonForm({ ...buttonForm, name: e.target.value })} className=\"flex-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-xs text-white\" placeholder=\"Name\" />",
+  "src/components/meatspace/tabs/NicotineTab.jsx|type=number|placeholder=mg|value=buttonForm.mgPerUnit|step=0.1|occurrence=1",
   "src/components/meatspace/tabs/NicotineTab.jsx|type=text|placeholder=New product name|value=buttonForm.name",
-  "src/components/meatspace/tabs/NicotineTab.jsx|type=number|placeholder=mg|value=buttonForm.mgPerUnit|step=0.1|before=<input type=\"text\" value={buttonForm.name} onChange={e => setButtonForm({ ...buttonForm, name: e.target.value })} className=\"flex-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-xs text-white placeholder-gray-600\" placeholder=\"New product name\" />",
+  "src/components/meatspace/tabs/NicotineTab.jsx|type=number|placeholder=mg|value=buttonForm.mgPerUnit|step=0.1|occurrence=2",
   "src/components/meatspace/tabs/NicotineTab.jsx|type=date|value=editForm.date",
   "src/components/meatspace/tabs/NicotineTab.jsx|type=text|value=editForm.product",
   "src/components/meatspace/tabs/NicotineTab.jsx|type=number|value=editForm.mgPerUnit|step=0.1",
@@ -651,8 +733,8 @@ const PREEXISTING_INPUT_NAME_ALLOWLIST = new Set([
   "src/pages/AIProviders.jsx|type=text|placeholder=sonnet|value=formData.mediumModel",
   "src/pages/AIProviders.jsx|type=text|placeholder=opus|value=formData.heavyModel",
   "src/pages/AIProviders.jsx|type=text|placeholder=Use fallback provider's default|value=formData.fallbackModel",
-  "src/pages/StackerNews.jsx|id=`${prefix}-label`|value=form.label|before=s of configuration. closeOnEsc={false} closeOnBackdrop={false} closeLabel=\"Close account settings\" > {formError && <div className=\"mb-3 rounded border border-port-error p-3 text-sm text-port-error\">{formError}</div>} <form className=\"space-y-3\" onSubmit={onSubmit}> {activeTab === 'identity' && <> <Field id={`${prefix}-label`} label=\"Local label\">",
-  "src/pages/StackerNews.jsx|id=`${prefix}-label`|value=form.label|before=ed border border-port-border bg-port-card p-4\" onSubmit={onSubmit}><h2 className=\"font-semibold text-white\">{title}</h2><div className=\"mt-3 space-y-3\"><Field id={`${prefix}-slug`} label=\"Territory slug\"><input id={`${prefix}-slug`} required className={fieldClass} value={form.slug} onChange={(event) => update('slug', event.target.value)} /></Field><Field id={`${prefix}-label`} label=\"Local label\">",
+  "src/pages/StackerNews.jsx|id=`${prefix}-label`|value=form.label|occurrence=1",
+  "src/pages/StackerNews.jsx|id=`${prefix}-label`|value=form.label|occurrence=2",
   "src/pages/StackerNews.jsx|id=`${prefix}-tone`|value=form.tone",
   "src/pages/StackerNews.jsx|id=`${prefix}-allowed`|value=form.allowedThemes",
   "src/pages/StackerNews.jsx|id=`${prefix}-disallowed`|value=form.disallowedThemes",
@@ -875,7 +957,7 @@ describe('a11y conventions', () => {
       let m;
       while ((m = re.exec(scanSrc))) {
         const tag = openingTagAt(scanSrc, m.index, '<input'.length);
-        const location = inputSourceAnchor(file, src, m.index);
+        const location = inputSourceAnchor(file, scanSrc, m.index);
         if (!tag || hasAccessibleInputName(scanSrc, tag, m.index) || PREEXISTING_INPUT_NAME_ALLOWLIST.has(location)) continue;
         offenders.push(location);
       }
