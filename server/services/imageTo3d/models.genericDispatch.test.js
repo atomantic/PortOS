@@ -30,6 +30,14 @@ vi.mock('../../lib/hfToken.js', () => ({
   hfChildEnv: vi.fn(async () => ({ HF_TOKEN: 'hf_test' })),
 }));
 
+// models.js also claims the machine-wide heavy-accelerator lock before
+// rendering (see heavyJobClaim.js). Mock it the same way models.test.js does —
+// this suite mocks fileUtils.js down to `imageTo3d` alone, and the real
+// heavyJobClaim.js needs PATHS.data at import time.
+vi.mock('../../lib/heavyJobClaim.js', () => ({
+  claimHeavyLocalJob: vi.fn(async () => ({ ok: true, holder: {}, release: vi.fn(() => Promise.resolve()) })),
+}));
+
 vi.mock('./db.js', () => ({
   listModels: vi.fn(),
   getModel: vi.fn(),
