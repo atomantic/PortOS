@@ -40,7 +40,7 @@ import { inspectModelCache, findCachedRepoFile } from '../../lib/hfCache.js';
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
 import { makeVideoGenLineHandler, finalizeGeneratedVideo, isWatchdogSuccess, describeSignalDeath, describeRenderConditioning, RENDER_INPUTS_VERSION } from './generateVideoHelpers.js';
 import { assertSafeLoraFilename, getLoraKeyLayout } from '../loras.js';
-import { videoLoraFamily } from '../../lib/runners.js';
+import { videoLoraFamily, isLtx2FamilyRuntime } from '../../lib/runners.js';
 import {
   publicVideoTextEncoderOptions, resolveVideoTextEncoder,
 } from '../../lib/videoTextEncoders.js';
@@ -49,7 +49,6 @@ import {
   assertIcReferenceCount, icResolutionIssue,
 } from '../../lib/icLoraWeights.js';
 import {
-  LTX2_VENV_PYTHON,
   LTX2_HELPER_SCRIPT,
   WAN22_VENV_PYTHON,
   WAN22_HELPER_SCRIPT,
@@ -294,7 +293,7 @@ export const resolveT2vTwoStageOverride = ({
 }) => {
   const enabled = ['1', 'true', 'yes', 'on']
     .includes(String(env.PORTOS_T2V_TWO_STAGE ?? '').trim().toLowerCase());
-  if (!enabled || runtime !== 'ltx2') return null;
+  if (!enabled || !isLtx2FamilyRuntime(runtime)) return null;
   // Only the default text mode — anything explicitly fflf/a2v/extend/image
   // is conditioned and out of scope for the T2V Standard experiment.
   if (mode != null && mode !== 'text') return null;
@@ -422,7 +421,7 @@ export const icLoraArgs = ({ mode, width, height, icReferencePaths, icLoraWeight
 };
 
 const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, disableAudio, outputPath, textEncoderRepo, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2 }) => {
-  assertByovRuntimeInstalled('ltx2');
+  assertByovRuntimeInstalled(model.runtime);
   // Map PortOS UI modes to the helper's subcommand. Native extend on ltx2
   // routes to ExtendPipeline.extend_from_video — conditions on the entire
   // source video's latent (motion + visual content) rather than just the
@@ -523,7 +522,6 @@ const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames
     '--prompt', prompt,
     '--output', outputPath,
     '--model', model.repo,
-    '--gemma', textEncoderRepo,
     '--width', String(width),
     '--height', String(height),
     '--num-frames', String(numFrames),
@@ -532,6 +530,10 @@ const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames
     '--steps', String(steps),
     '--cfg-scale', String(guidance),
   ];
+  // LTX-2.5 packs ship Gemma 4 under text_encoder/. Passing the shared 2.3
+  // Gemma 3 encoder would either fail load or silently condition on the wrong
+  // model. The 2.3 runtime still needs the explicit shared encoder.
+  if (model.runtime === 'ltx2') args.push('--gemma', textEncoderRepo);
   // User LoRAs — fused into the transformer via the pipeline's _pending_loras
   // hook. Emitted as a JSON list of { path, strength }; generate_ltx2.py sets
   // pipe._pending_loras before generation so the deltas fuse at load time
@@ -582,7 +584,7 @@ const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames
       icStrength, icAttentionStrength, icSkipStage2,
     }));
   }
-  return { bin: LTX2_VENV_PYTHON, args };
+  return { bin: BYOV_RUNTIME_INFO[model.runtime].venvPython, args };
 };
 
 // The render-side adapter for the shared mode/source contract: `prepareParams`
@@ -847,7 +849,7 @@ const buildArgs = ({ pythonPath, modelId, model, wanModelPath, wanRequiredWeight
   // Route to the dgrauet/ltx-2-mlx helper when the model declares the new
   // runtime. Existing notapalindrome models default to runtime: 'mlx_video'
   // (or undefined in legacy registries — see backfillRuntime in mediaModels.js).
-  if (model.runtime === 'ltx2') {
+  if (isLtx2FamilyRuntime(model.runtime)) {
     return buildLtx2Args({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, disableAudio, outputPath, textEncoderRepo, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2 });
   }
   // IC-LoRA remix modes are an LTX-2 primitive (ICLoraPipeline) — no other

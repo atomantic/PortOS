@@ -71,7 +71,7 @@ export const LATENT_FRAME_STRIDE = 8;
 
 /**
  * Runtimes whose helper can condition on a source *video* rather than a still.
- * `ltx2` routes to ExtendPipeline.extend_from_video; the `minimax_h3`
+ * `ltx2` / `ltx25` route to ExtendPipeline.extend_from_video; the `minimax_h3`
  * runtimes, `wan22`,
  * `hunyuan` and `mlx_video` have no equivalent and take the 'frame' path.
  *
@@ -88,7 +88,7 @@ export const LATENT_FRAME_STRIDE = 8;
  * The two questions genuinely differ: "can the user pick Extend mode?" vs "can
  * this runtime condition on a source VIDEO?", and only the latter belongs here.
  */
-export const CONTEXT_WINDOW_RUNTIMES = new Set(['ltx2']);
+export const CONTEXT_WINDOW_RUNTIMES = new Set(['ltx2', 'ltx25']);
 
 /** True when the model's runtime exposes a video-conditioned extend path. */
 export const supportsContextWindow = (model) => CONTEXT_WINDOW_RUNTIMES.has(model?.runtime);

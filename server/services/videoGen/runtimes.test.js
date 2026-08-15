@@ -139,7 +139,7 @@ describe('MiniMax H3 LoRA capability', () => {
     expect(runtimeMocks.spawn).toHaveBeenCalledTimes(1);
   });
 
-  it.each(['ltx2', 'wan22', 'hunyuan'])('never probes %s, which has no LoRA runtime path', async (runtime) => {
+  it.each(['ltx2', 'ltx25', 'wan22', 'hunyuan'])('never probes %s, which has no LoRA runtime path', async (runtime) => {
     await expect(resolveByovRuntimeLoraCapable(runtime)).resolves.toBe(false);
     expect(byovRuntimeLoraCapable(runtime)).toBe(false);
     expect(runtimeMocks.spawn).not.toHaveBeenCalled();
@@ -152,6 +152,7 @@ describe('MiniMax H3 LoRA capability', () => {
 describe('modelAnchorsLastFrame', () => {
   it.each([
     ['ltx2', true],
+    ['ltx25', true],
     ['minimax_h3', true],
     // Anchoring is a property of the fl2va checkpoint, not of the runner in
     // front of it, so the CUDA path must agree with the MLX one.

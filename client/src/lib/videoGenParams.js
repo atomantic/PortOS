@@ -4,6 +4,8 @@
 // predicate. Kept in lib/ (not hooks/) because none touch React state; the
 // page and any future consumer import them directly.
 
+import { isLtx2FamilyRuntime } from './runnerFamilies';
+
 // Values follow LTX-2's 8k+1 latent boundary so the model doesn't silently
 // snap. 241 = 10s @ 24fps is the comfortable single-pass ceiling on 48 GB
 // at standard widths; the higher options (265–481) push past that and may
@@ -32,7 +34,7 @@ export const CONTEXT_FRAME_OPTIONS = [0, 11, 22, 45, 73];
 // Only a runtime with a video-conditioned extend pipeline can use a window;
 // elsewhere the server ignores the value, so the control stays hidden rather
 // than offering a knob that does nothing.
-export const supportsContextWindow = (model) => model?.runtime === 'ltx2';
+export const supportsContextWindow = (model) => isLtx2FamilyRuntime(model?.runtime);
 export const WAN_FRAME_OPTIONS = [...new Set([
   ...FRAME_OPTIONS,
   41, 61, 81, 101, 161, 201, 321,
@@ -231,6 +233,6 @@ export const icResolutionIssue = (spec, width, height) => {
 // #3737), so an absent list means the payload didn't come from the registry.
 export const isModelAllowedForMode = (model, mode) => {
   if (!model) return false;
-  if (mode === 'a2v' || isIcLoraMode(mode)) return model.runtime === 'ltx2';
+  if (mode === 'a2v' || isIcLoraMode(mode)) return isLtx2FamilyRuntime(model.runtime);
   return Array.isArray(model.supportedModes) && model.supportedModes.includes(mode);
 };

@@ -64,6 +64,7 @@ import sys
 from pathlib import Path
 from typing import NoReturn
 
+DISTILLED_LORA_25 = "ltx-2.5-22b-distilled-lora-450.safetensors"
 DISTILLED_LORA_V11 = "ltx-2.3-22b-distilled-lora-384-1.1.safetensors"
 DISTILLED_LORA_LEGACY = "ltx-2.3-22b-distilled-lora-384.safetensors"
 
@@ -365,7 +366,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--negative-prompt", default="")
     p.add_argument("--output", required=True, help="Output .mp4 path")
     p.add_argument("--model", required=True, help="HF repo id or local path (e.g. dgrauet/ltx-2.3-mlx-q4)")
-    p.add_argument("--gemma", default="mlx-community/gemma-3-12b-it-4bit")
+    p.add_argument("--gemma", default=None,
+                   help="Shared Gemma repo for LTX-2.3. Omit on LTX-2.5 packs that "
+                        "ship Gemma 4 under text_encoder/.")
     p.add_argument("--height", type=int, default=480)
     p.add_argument("--width", type=int, default=704)
     p.add_argument("--num-frames", type=int, default=97)
@@ -606,7 +609,7 @@ def _prefer_distilled_lora(pipe, requested: str | None) -> str:
         selected = next(
             (
                 filename
-                for filename in (DISTILLED_LORA_V11, DISTILLED_LORA_LEGACY)
+                for filename in (DISTILLED_LORA_25, DISTILLED_LORA_V11, DISTILLED_LORA_LEGACY)
                 if (Path(pipe.model_dir) / filename).exists()
             ),
             DISTILLED_LORA_LEGACY,
@@ -616,6 +619,13 @@ def _prefer_distilled_lora(pipe, requested: str | None) -> str:
     return selected
 
 
+def _gemma_kwargs(args: argparse.Namespace) -> dict:
+    """LTX-2.5 packs ship Gemma 4 under text_encoder/; omit the 2.3 shared encoder."""
+    if args.gemma:
+        return {"gemma_model_id": args.gemma}
+    return {}
+
+
 def run_two_stage(args: argparse.Namespace, image: str | None = None) -> str:
     """T2V/I2V path that honors CFG via the dgrauet two-stage pipeline."""
     TwoStagePipeline = _resolve_pipeline("TI2VidTwoStagesPipeline", "TwoStagePipeline")
@@ -623,10 +633,10 @@ def run_two_stage(args: argparse.Namespace, image: str | None = None) -> str:
     emit_stage(1, 0, 1, "Loading model")
     pipe = TwoStagePipeline(
         model_dir=args.model,
-        gemma_model_id=args.gemma,
         dev_transformer=args.dev_transformer or "transformer-dev.safetensors",
         distilled_lora=args.distilled_lora or DISTILLED_LORA_LEGACY,
         distilled_lora_strength=args.lora_strength,
+        **_gemma_kwargs(args),
     )
     _prefer_distilled_lora(pipe, args.distilled_lora)
     _apply_user_loras(pipe, args.user_lora_specs)
@@ -654,7 +664,7 @@ def run_text(args: argparse.Namespace) -> str:
     OneStagePipeline = _resolve_pipeline("TI2VidOneStagePipeline", "TextToVideoPipeline")
     emit_status(f"Loading T2V pipeline ({args.model})…")
     emit_stage(1, 0, 1, "Loading model")
-    pipe = OneStagePipeline(model_dir=args.model, gemma_model_id=args.gemma)
+    pipe = OneStagePipeline(model_dir=args.model, **_gemma_kwargs(args))
     _apply_user_loras(pipe, args.user_lora_specs)
     bind_output_fps(pipe, args.fps)
     emit_stage(1, 1, 1, "Loaded")
@@ -676,7 +686,7 @@ def run_image(args: argparse.Namespace) -> str:
     OneStagePipeline = _resolve_pipeline("TI2VidOneStagePipeline", "ImageToVideoPipeline")
     emit_status(f"Loading I2V pipeline ({args.model})…")
     emit_stage(1, 0, 1, "Loading model")
-    pipe = OneStagePipeline(model_dir=args.model, gemma_model_id=args.gemma)
+    pipe = OneStagePipeline(model_dir=args.model, **_gemma_kwargs(args))
     _apply_user_loras(pipe, args.user_lora_specs)
     bind_output_fps(pipe, args.fps)
     emit_stage(1, 1, 1, "Loaded")
@@ -760,10 +770,10 @@ def run_fflf(args: argparse.Namespace) -> str:
     emit_stage(1, 0, 1, "Loading model")
     pipe = KeyframeInterpolationPipeline(
         model_dir=args.model,
-        gemma_model_id=args.gemma,
         dev_transformer=dev_transformer,
         distilled_lora=distilled_lora,
         distilled_lora_strength=args.lora_strength,
+        **_gemma_kwargs(args),
     )
     _prefer_distilled_lora(pipe, args.distilled_lora)
     _apply_user_loras(pipe, args.user_lora_specs)
@@ -803,7 +813,7 @@ def run_extend(args: argparse.Namespace) -> str:
         raise SystemExit("--extend-from-video is required for extend mode")
     emit_status(f"Loading Extend pipeline ({args.model})…")
     emit_stage(1, 0, 1, "Loading model")
-    pipe = ExtendPipeline(model_dir=args.model, gemma_model_id=args.gemma)
+    pipe = ExtendPipeline(model_dir=args.model, **_gemma_kwargs(args))
     _apply_user_loras(pipe, args.user_lora_specs)
     emit_stage(1, 1, 1, "Loaded")
     emit_status(f"Extending video {args.extend_direction} by {args.extend_frames} latent frames…")
@@ -857,7 +867,7 @@ def run_a2v(args: argparse.Namespace) -> str:
         raise SystemExit("--audio is required for a2v mode")
     emit_status(f"Loading A2V pipeline ({args.model})…")
     emit_stage(1, 0, 1, "Loading model")
-    pipe = AudioToVideoPipeline(model_dir=args.model, gemma_model_id=args.gemma)
+    pipe = AudioToVideoPipeline(model_dir=args.model, **_gemma_kwargs(args))
     _prefer_distilled_lora(pipe, args.distilled_lora)
     _apply_user_loras(pipe, args.user_lora_specs)
     emit_stage(1, 1, 1, "Loaded")
@@ -960,7 +970,7 @@ def run_ic_lora(args: argparse.Namespace) -> str:
         # which weights the reference conditioning). Upstream's CLI defaults the
         # same way.
         lora_paths=[(args.ic_lora_path, 1.0)],
-        gemma_model_id=args.gemma,
+        **_gemma_kwargs(args),
     )
     # User LoRAs go through _pending_loras (fused at DiT load), NOT lora_paths —
     # so they stack with the IC-LoRA above instead of displacing it.

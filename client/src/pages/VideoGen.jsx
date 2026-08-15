@@ -37,7 +37,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router';
-import { isMiniMaxH3Runtime } from '../lib/runnerFamilies';
+import { isMiniMaxH3Runtime, isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import Drawer from '../components/Drawer';
 import { ImageGenTab } from '../components/settings/ImageGenTab';
 import LocalSetupPanel from '../components/settings/LocalSetupPanel';
@@ -1183,7 +1183,7 @@ export default function VideoGen() {
                     : textEncoderOptionBlocked ? `Download the ${selectedTextEncoder?.label || 'selected'} text encoder before generating`
                     : icWeightsBlocked ? `Download the ${icSpec?.label || 'IC-LoRA'} weight before generating`
                     : extendModeBlocked ? 'Pick a prior render and wait for the last frame to extract before generating'
-                    : a2vModeBlocked ? (currentModel?.runtime !== 'ltx2'
+                    : a2vModeBlocked ? (!isLtx2FamilyRuntime(currentModel?.runtime)
                       ? 'a2v mode requires an ltx2-runtime model — pick one from the Model dropdown'
                       : 'Pick an audio file before generating')
                     : keyframesBlocked ? keyframesError

@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router';
 import toast from '../components/ui/Toast';
 import { extractLastFrame } from '../services/api';
 import { composeStyledPrompt } from '../lib/composeStyledPrompt';
-import { videoLoraFamily, isVideoLoraFamily, loraFamilyOf, VIDEO_LORA_FAMILIES } from '../lib/runnerFamilies';
+import { videoLoraFamily, isVideoLoraFamily, loraFamilyOf, VIDEO_LORA_FAMILIES, isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import { randomSeed } from '../lib/genUtils';
 import {
   resolutionOptionsForModel, defaultResolutionForModel, snapAspectToImage,
@@ -485,7 +485,7 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled })
   // the server's accept rules (server/routes/videoGen.js ~line 574) so the
   // form blocks before a doomed POST: 2–8 entries, each pinned to a gallery
   // file, indices strictly ascending and within [0, numFrames-1].
-  const keyframesSupported = currentModel?.runtime === 'ltx2';
+  const keyframesSupported = isLtx2FamilyRuntime(currentModel?.runtime);
   const keyframesActive = mode === 'fflf' && keyframesMode && keyframesSupported;
   // Whether an FFLF last frame is a real anchor or just a hint. The server
   // decorates each model with `lastFrameAnchored` from the one runtime list
@@ -820,7 +820,7 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled })
     // extract roundtrip — the route resolves the video id to a disk path
     // server-side. Saves ~1s per pick + avoids the i2v fallback when the
     // extract fails.
-    if (currentModel?.runtime === 'ltx2') {
+    if (isLtx2FamilyRuntime(currentModel?.runtime)) {
       setExtendingFrame(false);
       return;
     }
@@ -1063,12 +1063,12 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled })
   // legacy runtime, also wait for the extracted frame).
   const extendModeBlocked = mode === 'extend' && (
     !extendFromVideoId
-    || (currentModel?.runtime !== 'ltx2' && (extendingFrame || !sourceImageFile))
+    || (!isLtx2FamilyRuntime(currentModel?.runtime) && (extendingFrame || !sourceImageFile))
   );
   // a2v requires an audio upload AND an ltx2-runtime model — the legacy
   // mlx_video runtime has no audio-conditioned pipeline. Block submit when
   // either is missing so the request fails the form, not the worker.
-  const a2vModeBlocked = mode === 'a2v' && (!audioFile || currentModel?.runtime !== 'ltx2');
+  const a2vModeBlocked = mode === 'a2v' && (!audioFile || !isLtx2FamilyRuntime(currentModel?.runtime));
   // IC-LoRA remix needs a reference clip AND an ltx2-runtime model, and the
   // resolution must divide by the weight's reference-downscale factor (the
   // server rejects otherwise). Block submit for all three so the request fails
@@ -1081,7 +1081,7 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled })
     (icImageKind
       ? (icFilledImageRefs < icSpec.minReferences || icFilledImageRefs > icSpec.maxReferences)
       : (!icReferenceFile && !icReferenceVideoId))
-    || currentModel?.runtime !== 'ltx2'
+    || !isLtx2FamilyRuntime(currentModel?.runtime)
     || !!icResolutionIssue(icSpec, width, height)
   );
   // Chaining seeds each chunk from the previous one's last frame, so it needs
@@ -1210,12 +1210,12 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled })
       loraFilenames: (loraFamily && selectedLoras.length) ? selectedLoras.map((l) => l.filename) : undefined,
       loraScales: (loraFamily && selectedLoras.length) ? selectedLoras.map((l) => l.scale) : undefined,
       sourceImageFile: (mode === 'image' || legacyFflf
-        || (mode === 'extend' && currentModel?.runtime !== 'ltx2'))
+        || (mode === 'extend' && !isLtx2FamilyRuntime(currentModel?.runtime)))
         ? (sourceImageFile || '') : '',
       sourceImage: (mode === 'image' || legacyFflf) ? (sourceImageUpload || '') : '',
       lastImageFile: legacyFflf ? (lastImageFile || '') : '',
       lastImage: legacyFflf ? (lastImageUpload || '') : '',
-      extendFromVideoId: (mode === 'extend' && currentModel?.runtime === 'ltx2')
+      extendFromVideoId: (mode === 'extend' && isLtx2FamilyRuntime(currentModel?.runtime))
         ? (extendFromVideoId || '') : '',
       // Audio File goes through under the multipart field 'audioFile'. Server
       // routes it to the durable uploads dir and into the a2v helper.

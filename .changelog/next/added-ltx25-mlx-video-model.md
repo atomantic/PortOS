@@ -1,0 +1,1 @@
+- Add LTX-2.5 MLX Q8 as an installable Apple Silicon video model (sibling runtime of the LTX-2.3 pin)

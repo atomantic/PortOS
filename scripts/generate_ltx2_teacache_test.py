@@ -126,6 +126,18 @@ class GenerateLtx2TeaCacheTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.helper._resolve_pipeline("Nope1", "Nope2")
 
+    def test_prefers_25_distilled_lora_when_model_contains_it(self):
+        with tempfile.TemporaryDirectory() as model_dir:
+            Path(model_dir, self.helper.DISTILLED_LORA_25).touch()
+            Path(model_dir, self.helper.DISTILLED_LORA_V11).touch()
+            Path(model_dir, self.helper.DISTILLED_LORA_LEGACY).touch()
+            pipe = SimpleNamespace(
+                model_dir=Path(model_dir),
+                _distilled_lora=self.helper.DISTILLED_LORA_LEGACY,
+            )
+            selected = self.helper._prefer_distilled_lora(pipe, None)
+            self.assertEqual(selected, self.helper.DISTILLED_LORA_25)
+
     def test_prefers_v11_distilled_lora_when_model_contains_it(self):
         with tempfile.TemporaryDirectory() as model_dir:
             Path(model_dir, self.helper.DISTILLED_LORA_V11).touch()

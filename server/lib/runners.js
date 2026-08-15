@@ -57,6 +57,13 @@ export const isVideoLoraFamily = (family) => VIDEO_LORA_FAMILY_SET.has(family);
 export const MINIMAX_H3_RUNTIMES = Object.freeze(['minimax_h3', 'minimax_h3_cuda']);
 const MINIMAX_H3_RUNTIME_SET = new Set(MINIMAX_H3_RUNTIMES);
 export const isMiniMaxH3Runtime = (runtime) => MINIMAX_H3_RUNTIME_SET.has(runtime);
+// dgrauet's LTX-2.3 pin (`ltx2`) and the LTX-2.5 fork (`ltx25`) share the
+// same pipeline surface — true FFLF, video-conditioned extend, a2v, IC-LoRA —
+// so capability gates ask this predicate instead of naming one id. The venvs
+// stay separate: 2.5 is a different checkout and cannot load on the 2.3 pin.
+export const LTX2_FAMILY_RUNTIMES = Object.freeze(['ltx2', 'ltx25']);
+const LTX2_FAMILY_RUNTIME_SET = new Set(LTX2_FAMILY_RUNTIMES);
+export const isLtx2FamilyRuntime = (runtime) => LTX2_FAMILY_RUNTIME_SET.has(runtime);
 
 // The family an INSTALLED LoRA belongs to. `loraCompatKey` is the refined key
 // (e.g. flux2-9b) written by the importer; `runnerFamily` is the coarse legacy
@@ -91,8 +98,8 @@ export const isMlxVideoLtxLoraCapable = (model) => {
 
 // Map a video-model registry entry (which carries `runtime`, not `runner`) to
 // the LoRA family the picker filters on. Two runtimes can fuse user LoRAs:
-//   - dgrauet's `ltx2` — its `ltx_pipelines_mlx` pipelines honor a
-//     `_pending_loras` hook (see scripts/generate_ltx2.py), any LTX-2.3 quant.
+//   - dgrauet's `ltx2` / MrMofer's `ltx25` — `ltx_pipelines_mlx` honors a
+//     `_pending_loras` hook (see scripts/generate_ltx2.py).
 //   - notapalindrome's `mlx_video` on a non-quantized LTX-2.x model — fused
 //     offline into the transformer weights (see isMlxVideoLtxLoraCapable +
 //     scripts/generate_av_lora.py).
@@ -106,7 +113,7 @@ export const isMlxVideoLtxLoraCapable = (model) => {
 // The wan22 / hunyuan runtimes (and quantized mlx_video models) have no LoRA
 // path, so they return null ("no LoRA support") and the VideoGen picker hides.
 export const videoLoraFamily = (model) => {
-  if (model?.runtime === 'ltx2' || isMlxVideoLtxLoraCapable(model)) return VIDEO_LORA_FAMILIES.LTX_VIDEO;
+  if (isLtx2FamilyRuntime(model?.runtime) || isMlxVideoLtxLoraCapable(model)) return VIDEO_LORA_FAMILIES.LTX_VIDEO;
   if (model?.runtime === 'minimax_h3' && model?.runtimeLoraCapable === true) return VIDEO_LORA_FAMILIES.MINIMAX_H3;
   return null;
 };

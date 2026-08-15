@@ -33,7 +33,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS, ensureDir, resolveGalleryImage } from '../../lib/fileUtils.js';
 import { safeUnder } from '../../lib/ffmpeg.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
-import { videoLoraFamily, isMiniMaxH3Runtime } from '../../lib/runners.js';
+import { videoLoraFamily, isMiniMaxH3Runtime, isLtx2FamilyRuntime } from '../../lib/runners.js';
 import {
   isStockTextEncoder, supportsVideoTextEncoder, videoTextEncoderUnsupportedError,
 } from '../../lib/videoTextEncoders.js';
@@ -368,7 +368,7 @@ async function resolvePreparedParams({
     }
     // IC-LoRA remix is an LTX-2 primitive (ICLoraPipeline). Fail before enqueue
     // so a bad modelId can't pollute the persisted queue with a doomed job.
-    if (effectiveModel && effectiveModel.runtime !== 'ltx2') {
+    if (effectiveModel && !isLtx2FamilyRuntime(effectiveModel.runtime)) {
       await cleanupStaged();
       throw new ServerError(
         `${icSpec.label} mode requires an ltx2-runtime model. Model "${effectiveModelId}" runs on "${effectiveModel.runtime || 'mlx_video'}".`,
@@ -397,7 +397,7 @@ async function resolvePreparedParams({
   // A2V_REQUIRES_LTX2), but checking here keeps the route's "fail fast
   // before enqueue" contract so a bad modelId can't pollute the persisted
   // queue with a doomed entry.
-  if (body.mode === 'a2v' && effectiveModel && effectiveModel.runtime !== 'ltx2') {
+  if (body.mode === 'a2v' && effectiveModel && !isLtx2FamilyRuntime(effectiveModel.runtime)) {
     await cleanupStaged();
     throw new ServerError(
       `a2v mode requires an ltx2-runtime model. Model "${effectiveModelId}" runs on "${effectiveModel.runtime || 'mlx_video'}".`,
@@ -615,7 +615,7 @@ async function resolvePreparedParams({
     // pipeline has no equivalent. Mirror the a2v guard above so a bad
     // modelId can't enqueue a doomed job that will only fail in the
     // worker (with KEYFRAMES_REQUIRE_LTX2).
-    if (effectiveModel && effectiveModel.runtime !== 'ltx2') {
+    if (effectiveModel && !isLtx2FamilyRuntime(effectiveModel.runtime)) {
       await cleanupStaged();
       throw new ServerError(
         `keyframes mode requires an ltx2-runtime model. Model "${effectiveModelId}" runs on "${effectiveModel.runtime || 'mlx_video'}".`,

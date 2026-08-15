@@ -3,7 +3,7 @@ import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
-import { RUNNER_FAMILIES, VIDEO_LORA_FAMILIES, MINIMAX_H3_RUNTIMES, videoLoraFamily, isMiniMaxH3Runtime, isMlxVideoLtxLoraCapable, loraFamilyOf, isMflux, isFlux2, isZImage, isErnie, isHiDream, isQwen, flux2VariantFromModel, loraCompatKey, composeCompatKey } from './runners.js';
+import { RUNNER_FAMILIES, VIDEO_LORA_FAMILIES, MINIMAX_H3_RUNTIMES, LTX2_FAMILY_RUNTIMES, videoLoraFamily, isMiniMaxH3Runtime, isLtx2FamilyRuntime, isMlxVideoLtxLoraCapable, loraFamilyOf, isMflux, isFlux2, isZImage, isErnie, isHiDream, isQwen, flux2VariantFromModel, loraCompatKey, composeCompatKey } from './runners.js';
 
 const __dirname_self = dirname(fileURLToPath(import.meta.url));
 const CLIENT_MIRROR_PATH = join(__dirname_self, '..', '..', 'client', 'src', 'lib', 'runnerFamilies.js');
@@ -130,6 +130,8 @@ describe('VIDEO_LORA_FAMILIES / videoLoraFamily', () => {
     expect(text).toMatch(/export const loraFamilyOf/);
     expect(text).toMatch(/export const isMiniMaxH3Runtime/);
     expect(text).toMatch(/'minimax_h3', 'minimax_h3_cuda'/);
+    expect(text).toMatch(/export const isLtx2FamilyRuntime/);
+    expect(text).toMatch(/'ltx2', 'ltx25'/);
   });
 });
 
@@ -223,4 +225,18 @@ describe('isMiniMaxH3Runtime', () => {
     // Not even when a stale/synced payload claims the MLX port's probe verdict.
     expect(videoLoraFamily({ runtime: 'minimax_h3_cuda', runtimeLoraCapable: true })).toBe(null);
   });
+});
+
+describe('isLtx2FamilyRuntime', () => {
+  it('covers the 2.3 pin and the 2.5 fork, and nothing else', () => {
+    expect(LTX2_FAMILY_RUNTIMES).toEqual(['ltx2', 'ltx25']);
+    expect(isLtx2FamilyRuntime('ltx2')).toBe(true);
+    expect(isLtx2FamilyRuntime('ltx25')).toBe(true);
+    expect(videoLoraFamily({ runtime: 'ltx25' })).toBe(VIDEO_LORA_FAMILIES.LTX_VIDEO);
+  });
+
+  it.each(['mlx_video', 'wan22', 'hunyuan', 'minimax_h3', 'ltx', '', undefined, null])(
+    'reports %s as not an LTX-2 family runtime',
+    (runtime) => { expect(isLtx2FamilyRuntime(runtime)).toBe(false); },
+  );
 });

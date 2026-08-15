@@ -54,6 +54,7 @@ const RUNTIME_LICENSE = {
   // installs — NOT the unrelated PyPI `mlx_video`).
   mlx_video: { name: 'MIT', url: 'https://pypi.org/project/mlx-video-with-audio/' },
   ltx2: { name: 'MIT', url: 'https://github.com/dgrauet/ltx-2-mlx/blob/main/LICENSE' },
+  ltx25: { name: 'MIT', url: 'https://github.com/MrMoferFRAN/ltx-2-mlx/blob/57952288076766abe27dda3a774b2c24f7346977/LICENSE' },
   wan22: { name: 'MIT', url: 'https://github.com/lpalbou/mlx-gen/blob/main/LICENSE' },
   minimax_h3: {
     name: 'Apache-2.0',
@@ -89,6 +90,11 @@ const MINIMAX_H3_TERMS_GATE = Object.freeze({
     'United States of America',
   ]),
 });
+
+const LTX_2X_WEIGHTS = {
+  name: 'LTX-2.x Community License',
+  url: 'https://github.com/Lightricks/LTX-2/blob/main/LICENSE.md',
+};
 
 const hfModelCard = (repo) => `https://huggingface.co/${repo}`;
 
@@ -183,6 +189,17 @@ export const VIDEO_MODEL_DISCLOSURES = Object.freeze({
       weightsLicense: customLicense('dgrauet/ltx-2.3-mlx-q8'),
       runtimeLicense: RUNTIME_LICENSE.ltx2,
       estimatedDownloadGb: 87.5,
+      reviewedAt: VIDEO_DISCLOSURE_REVIEWED_AT,
+    },
+  },
+  ltx25_mlx_q8: {
+    shippedRepo: 'MrMofer/ltx-2.5-mlx-q8',
+    disclosure: {
+      modelCardUrl: hfModelCard('MrMofer/ltx-2.5-mlx-q8'),
+      weightsLicense: LTX_2X_WEIGHTS,
+      runtimeLicense: RUNTIME_LICENSE.ltx25,
+      // Hugging Face usedStorage for the pinned snapshot (decimal GB).
+      estimatedDownloadGb: 67.7,
       reviewedAt: VIDEO_DISCLOSURE_REVIEWED_AT,
     },
   },

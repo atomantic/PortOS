@@ -23,6 +23,7 @@ describe('VIDEO_RUNTIME_MODES', () => {
     // on lastFrameAnchored: false, so the mode still has to be offerable.
     expect(VIDEO_RUNTIME_MODES.mlx_video).toContain('fflf');
     expect(VIDEO_RUNTIME_MODES.ltx2).toContain('fflf');
+    expect(VIDEO_RUNTIME_MODES.ltx25).toEqual(VIDEO_RUNTIME_MODES.ltx2);
     expect(VIDEO_RUNTIME_MODES.minimax_h3).toContain('fflf');
     expect(VIDEO_RUNTIME_MODES.wan22).not.toContain('fflf');
   });

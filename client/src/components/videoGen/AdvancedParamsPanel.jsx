@@ -14,6 +14,7 @@ import {
   CONTEXT_FRAME_OPTIONS, supportsContextWindow,
 } from '../../lib/videoGenParams.js';
 import { VIDEO_TILING_OPTIONS } from '../../lib/videoTilingOptions';
+import { isLtx2FamilyRuntime } from '../../lib/runnerFamilies';
 
 const inputCls = 'w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50';
 
@@ -44,7 +45,7 @@ export default function AdvancedParamsPanel({
   const showChunks = mode !== 'a2v' && isModelAllowedForMode(currentModel, 'image');
   // ltx2 extend conditions on the source's latent rather than a single frame,
   // so image strength is meaningless for it.
-  const showImageStrength = mode === 'image' || (mode === 'extend' && currentModel?.runtime !== 'ltx2');
+  const showImageStrength = mode === 'image' || (mode === 'extend' && !isLtx2FamilyRuntime(currentModel?.runtime));
   const frameOptions = frameOptionsForModel(currentModel, numFrames);
   const fpsOptions = fpsOptionsForModel(currentModel);
   const samplerLocked = currentModel?.samplerLocked === true;

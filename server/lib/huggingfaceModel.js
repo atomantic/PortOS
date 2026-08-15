@@ -66,7 +66,7 @@ export const searchHuggingfaceModels = async (query, { pipeline, limit = 12, fet
 // default-mlx_video-plus-denylist. Kept in sync with BYOV_RUNTIME_INFO's keys
 // in server/services/videoGen/runtimes.js (the classifier stays pure, so the
 // self-service exclusions live here rather than importing that stateful module).
-export const ADDABLE_VIDEO_RUNTIMES = Object.freeze(['mlx_video', 'ltx2']);
+export const ADDABLE_VIDEO_RUNTIMES = Object.freeze(['mlx_video', 'ltx2', 'ltx25']);
 
 // Detect the underlying video runtime family from the classification blob, so
 // the allowlist above can refuse the rest symmetrically with the image path.
@@ -87,6 +87,7 @@ const detectVideoRuntime = (blob) => {
     // pipeline), not notapalindrome's `mlx_video` — auto-detect that from the
     // author/marker so an added dgrauet repo routes to the right generator.
     // Everything else LTX defaults to mlx_video (the shipped default runtime).
+    if (/ltx[\s._-]?2\.5|ltx25|mrmofer/.test(blob)) return { runtime: 'ltx25' };
     if (/dgrauet|ltx[\s._-]?pipelines/.test(blob)) return { runtime: 'ltx2' };
     return { runtime: 'mlx_video' };
   }
@@ -109,7 +110,7 @@ export const ADDABLE_IMAGE_RUNNERS = Object.freeze(
 // Default steps/guidance per target so an added entry renders sanely without
 // the user having to know each pipeline's sweet spot. Mirrors the shipped
 // DEFAULT_REGISTRY entries.
-const VIDEO_DEFAULTS = { mlx_video: { steps: 25, guidance: 3.0 }, ltx2: { steps: 8, guidance: 3.0 } };
+const VIDEO_DEFAULTS = { mlx_video: { steps: 25, guidance: 3.0 }, ltx2: { steps: 8, guidance: 3.0 }, ltx25: { steps: 8, guidance: 3.0 } };
 const IMAGE_DEFAULTS = {
   [RUNNER_FAMILIES.MFLUX]: { steps: 20, guidance: 3.5 },
   [RUNNER_FAMILIES.FLUX2]: { steps: 8, guidance: 3.5 },

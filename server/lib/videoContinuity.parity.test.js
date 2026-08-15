@@ -52,7 +52,7 @@ describe('continuation context window — server/client parity', () => {
   });
 
   it('agrees on which runtimes can use a window', () => {
-    for (const runtime of ['ltx2', 'mlx_video', 'minimax_h3', 'wan22', 'hunyuan', undefined]) {
+    for (const runtime of ['ltx2', 'ltx25', 'mlx_video', 'minimax_h3', 'wan22', 'hunyuan', undefined]) {
       expect(clientSupportsContextWindow({ runtime })).toBe(serverSupportsContextWindow({ runtime }));
     }
     expect(clientSupportsContextWindow(null)).toBe(serverSupportsContextWindow(null));

@@ -37,6 +37,7 @@ import RenderStatusPanel from '../components/musicVideo/RenderStatusPanel.jsx';
 import AnalysisPanel from '../components/musicVideo/AnalysisPanel.jsx';
 import SceneCard from '../components/musicVideo/SceneCard.jsx';
 import { autoArrangeScenes } from '../lib/beatGrid.js';
+import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import { videoSrcForJob, videoPosterForJob } from '../lib/creativeDirectorPreview.js';
 
 const STATUS_COLORS = {
@@ -355,7 +356,7 @@ export default function MusicVideo() {
 
   const canContinueShot = videoSettings.settings.backend === 'local'
     && videoSettings.settings.generationMode === 'image'
-    && videoSettings.activeModel?.runtime === 'ltx2';
+    && isLtx2FamilyRuntime(videoSettings.activeModel?.runtime);
 
   // Final render filename is NOT the history id — resolve once at page level so
   // the lightbox item and the inline player share the same lookup (#3718).

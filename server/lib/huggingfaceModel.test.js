@@ -143,6 +143,14 @@ describe('classifyHfMediaModel — happy paths', () => {
     })).toEqual({ kind: 'video', runtime: 'ltx2', format: 'safetensors' });
   });
 
+  it('auto-detects an LTX-2.5 MLX repo as the ltx25 runtime', () => {
+    expect(classifyHfMediaModel({
+      repo: 'MrMofer/ltx-2.5-mlx-q8',
+      model: hf({ files: ['transformer-distilled.safetensors'], tags: ['ltx-2.5'] }),
+      isWindows: false,
+    })).toEqual({ kind: 'video', runtime: 'ltx25', format: 'safetensors' });
+  });
+
   it('detects a Qwen-Image-Edit repo and stamps the edit pipeline + editOnly', () => {
     const c = classifyHfMediaModel({
       repo: 'Qwen/Qwen-Image-Edit',

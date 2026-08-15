@@ -79,6 +79,28 @@
         }
       },
       {
+        "id": "ltx25_mlx_q8",
+        "name": "LTX-2.5 MLX Q8 (~68 GB, Apple Silicon)",
+        "repo": "MrMofer/ltx-2.5-mlx-q8",
+        "revision": "f1b56e7dc89f71a9af2cddac787b89ed22a8b7fc",
+        "runtime": "ltx25",
+        "steps": 8,
+        "guidance": 3,
+        "disclosure": {
+          "modelCardUrl": "https://huggingface.co/MrMofer/ltx-2.5-mlx-q8",
+          "weightsLicense": {
+            "name": "LTX-2.x Community License",
+            "url": "https://github.com/Lightricks/LTX-2/blob/main/LICENSE.md"
+          },
+          "runtimeLicense": {
+            "name": "MIT",
+            "url": "https://github.com/MrMoferFRAN/ltx-2-mlx/blob/57952288076766abe27dda3a774b2c24f7346977/LICENSE"
+          },
+          "estimatedDownloadGb": 67.7,
+          "reviewedAt": "2026-08-09"
+        }
+      },
+      {
         "id": "minimax_h3_8bit",
         "name": "MiniMax H3 MLX 8-bit (joint video + audio, ~103 GB download, 128 GB RAM)",
         "repo": "pipenetwork/MiniMax-H3-MLX-8bit",

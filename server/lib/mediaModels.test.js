@@ -57,6 +57,19 @@ describe('mediaModels registry', () => {
     expect(list.every((m) => m.id && m.name)).toBe(true);
   });
 
+  it('ships LTX-2.5 MLX Q8 as a sibling runtime of the 2.3 dgrauet pin', async () => {
+    const { loadMediaModels } = await import('./mediaModels.js');
+    const ltx25 = loadMediaModels().video.macos.find((model) => model.id === 'ltx25_mlx_q8');
+    expect(ltx25).toMatchObject({
+      runtime: 'ltx25',
+      repo: 'MrMofer/ltx-2.5-mlx-q8',
+      revision: 'f1b56e7dc89f71a9af2cddac787b89ed22a8b7fc',
+      steps: 8,
+    });
+    expect(ltx25.disclosure.weightsLicense.name).toBe('LTX-2.x Community License');
+    expect(ltx25.disclosure.estimatedDownloadGb).toBe(67.7);
+  });
+
   it('ships MiniMax H3 as a pinned, keyframe-capable 128 GB BYOV profile', async () => {
     const { loadMediaModels } = await import('./mediaModels.js');
     // H3 is an Apple-silicon MLX runtime, so inspect the shipped macOS catalog

@@ -17,7 +17,7 @@ import { PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
 import { createSingleFlight } from '../../lib/singleFlight.js';
-import { MINIMAX_H3_RUNTIMES } from '../../lib/runners.js';
+import { MINIMAX_H3_RUNTIMES, LTX2_FAMILY_RUNTIMES } from '../../lib/runners.js';
 
 // Path to the dgrauet/ltx-2-mlx venv populated by `INSTALL_LTX2=1
 // scripts/setup-image-video.sh`. Used when a model entry has
@@ -26,6 +26,12 @@ import { MINIMAX_H3_RUNTIMES } from '../../lib/runners.js';
 // progress protocol (STAGE:/STATUS:/DOWNLOAD:) as the mlx_video CLI.
 export const LTX2_VENV_PYTHON = join(homedir(), '.portos', 'ltx-2-mlx', '.venv', 'bin', 'python3');
 export const LTX2_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_ltx2.py');
+
+// LTX-2.5 MLX runtime — MrMofer's ltx25 fork of dgrauet/ltx-2-mlx. Same
+// helper script as `ltx2`, separate checkout so the 2.3 pin stays frozen.
+export const LTX25_VENV_PYTHON = join(homedir(), '.portos', 'ltx-2.5-mlx', '.venv', 'bin', 'python3');
+export const LTX25_REPO_DIR = join(homedir(), '.portos', 'ltx-2.5-mlx');
+export const LTX25_EXPECTED_REVISION = '57952288076766abe27dda3a774b2c24f7346977';
 
 // Wan 2.2 MLX runtime — pinned MLX-Gen checkout provisioned on demand.
 export const WAN22_VENV_PYTHON = join(homedir(), '.portos', 'mlx-gen', '.venv', 'bin', 'python3');
@@ -212,6 +218,18 @@ export const BYOV_RUNTIME_INFO = Object.freeze({
     // Mirror scripts/generate_ltx2.py's emit_runtime_fingerprint package list.
     fingerprintPackages: ['ltx_pipelines_mlx', 'ltx_core_mlx', 'mlx', 'mlx_metal'],
   },
+  ltx25: {
+    id: 'ltx25',
+    label: 'LTX-2.5 MLX',
+    venvPython: LTX25_VENV_PYTHON,
+    repoDir: LTX25_REPO_DIR,
+    installEnvVar: 'INSTALL_LTX25',
+    repoUrl: 'https://github.com/MrMoferFRAN/ltx-2-mlx',
+    expectedRevision: LTX25_EXPECTED_REVISION,
+    pinEnvVar: 'LTX25_PIN',
+    importProbe: 'import ltx_pipelines_mlx',
+    fingerprintPackages: ['ltx_pipelines_mlx', 'ltx_core_mlx', 'mlx', 'mlx_metal'],
+  },
 });
 
 export const BYOV_VIDEO_RUNTIMES = Object.freeze(new Set(Object.keys(BYOV_RUNTIME_INFO)));
@@ -248,7 +266,7 @@ export const routesToWindowsHelper = (model) => process.platform === 'win32'
 // resize in local.js (wasted ffmpeg work otherwise), and the client's
 // "last frame is advisory" note, which reads it off the model payload via
 // `lastFrameAnchored`.
-export const LAST_FRAME_ANCHORED_RUNTIMES = Object.freeze(new Set(['ltx2', ...MINIMAX_H3_RUNTIMES]));
+export const LAST_FRAME_ANCHORED_RUNTIMES = Object.freeze(new Set([...LTX2_FAMILY_RUNTIMES, ...MINIMAX_H3_RUNTIMES]));
 
 export const modelAnchorsLastFrame = (model) => LAST_FRAME_ANCHORED_RUNTIMES.has(model?.runtime);
 

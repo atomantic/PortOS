@@ -238,6 +238,9 @@ const DEFAULT_REGISTRY = {
       // via `INSTALL_LTX2=1 bash scripts/setup-image-video.sh`.
       { id: 'ltx23_dgrauet_q4',   name: 'LTX-2.3 dgrauet Q4 (~16 GB, true keyframes)', repo: 'dgrauet/ltx-2.3-mlx-q4', runtime: 'ltx2', steps: 8, guidance: 3.0 },
       { id: 'ltx23_dgrauet_q8',   name: 'LTX-2.3 dgrauet Q8 (~25 GB, true keyframes)', repo: 'dgrauet/ltx-2.3-mlx-q8', runtime: 'ltx2', steps: 8, guidance: 3.0 },
+      // LTX-2.5 Q8 on MrMofer's ltx25 fork of dgrauet/ltx-2-mlx. The 2.3 pin
+      // cannot load these weights; INSTALL_LTX25 provisions a sibling venv.
+      { id: 'ltx25_mlx_q8', name: 'LTX-2.5 MLX Q8 (~68 GB, Apple Silicon)', repo: 'MrMofer/ltx-2.5-mlx-q8', revision: 'f1b56e7dc89f71a9af2cddac787b89ed22a8b7fc', runtime: 'ltx25', steps: 8, guidance: 3.0 },
       // MiniMax H3 joint video+audio through PipeNetwork's pinned MLX port.
       // The quantized DiT is one HF snapshot; the released conditioner + VAEs
       // are an exact selective file set from MiniMax's upstream snapshot. Both

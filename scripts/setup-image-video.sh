@@ -10,6 +10,7 @@
 #   PORTOS_DATA    Path to PortOS data dir (default: ./data, resolved from $REPO_ROOT)
 #   INSTALL_VIDEO  '1' to also install mlx_video for LTX video generation (default: 1 on macOS, 0 on Windows)
 #   INSTALL_LTX2   '1' to also clone + uv-sync dgrauet/ltx-2-mlx at ~/.portos/ltx-2-mlx for the second-gen LTX-2.3 pipeline (proper keyframe interpolation, true video extend, audio-to-video). Default: 0; opt in with INSTALL_LTX2=1.
+#   INSTALL_LTX25  '1' to clone + uv-sync MrMofer's ltx-2.5 fork at ~/.portos/ltx-2.5-mlx (Apple Silicon). The 2.3 pin cannot load LTX-2.5 weights. Default: 0.
 #   INSTALL_MINIMAX_H3 '1' to install the pinned MiniMax H3 MLX runtime at ~/.portos/minimax-h3-mlx (Apple Silicon). Weights remain a separate explicit Video Gen download. Default: 0.
 #   INSTALL_MINIMAX_H3_CUDA '1' to install the MiniMax H3 CUDA runtime at ~/.portos/minimax-h3-cuda (Windows + NVIDIA), via diffusers' MiniMaxH3ModularPipeline. Weights remain a separate explicit Video Gen download (~144 GB). Default: 0.
 #   INSTALL_FLUX2  '1' to also bootstrap a separate venv at ~/.portos/venv-flux2 for FLUX.2-klein (default: 1 on macOS, 0 elsewhere)
@@ -67,7 +68,7 @@ mkdir -p "${PORTOS_DATA}/video-thumbnails"
 # install ever starts — which on Linux/CPU/CUDA blocks the advertised
 # `INSTALL_ACESTEP=1 bash …` path. A bare `bash setup-image-video.sh` still
 # installs mflux as before.
-ANY_BYOV="${INSTALL_LTX2:-0}${INSTALL_WAN22:-0}${INSTALL_HUNYUAN:-0}${INSTALL_MINIMAX_H3:-0}${INSTALL_MINIMAX_H3_CUDA:-0}${INSTALL_MUSICGEN:-0}${INSTALL_AUDIOLDM2:-0}${INSTALL_ACESTEP:-0}${INSTALL_MINIMAX_MUSIC3:-0}${INSTALL_MUSCRIPTOR:-0}"
+ANY_BYOV="${INSTALL_LTX2:-0}${INSTALL_LTX25:-0}${INSTALL_WAN22:-0}${INSTALL_HUNYUAN:-0}${INSTALL_MINIMAX_H3:-0}${INSTALL_MINIMAX_H3_CUDA:-0}${INSTALL_MUSICGEN:-0}${INSTALL_AUDIOLDM2:-0}${INSTALL_ACESTEP:-0}${INSTALL_MINIMAX_MUSIC3:-0}${INSTALL_MUSCRIPTOR:-0}"
 # "no BYOV runtime was requested" = the concatenation contains no non-zero
 # character. Matching a literal string of zeros instead made this a counting
 # exercise that the string and the variable list had to agree on — and they had
@@ -273,6 +274,47 @@ if [[ "$INSTALL_LTX2" == "1" ]]; then
     exit 1
   fi
   echo "✅ ltx-2-mlx venv ready: ${LTX2_PY}"
+fi
+
+INSTALL_LTX25="${INSTALL_LTX25:-0}"
+if [[ "$INSTALL_LTX25" == "1" ]]; then
+  # MrMofer's ltx25 fork of dgrauet/ltx-2-mlx. Same pipeline API as the 2.3
+  # runtime (generate_ltx2.py), different checkout — LTX-2.5 weights do not
+  # load on the frozen 2.3 pin.
+  if ! have uv; then
+    echo "❌ INSTALL_LTX25=1 requires the 'uv' Python installer. Install with:" >&2
+    echo "   curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
+    exit 1
+  fi
+  if ! have git; then
+    echo "❌ INSTALL_LTX25=1 requires git." >&2
+    exit 1
+  fi
+  LTX25_PIN="${LTX25_PIN:-57952288076766abe27dda3a774b2c24f7346977}"
+  LTX25_DIR="${HOME}/.portos/ltx-2.5-mlx"
+  LTX25_PY="${LTX25_DIR}/.venv/bin/python3"
+  mkdir -p "${HOME}/.portos"
+  if [[ ! -d "${LTX25_DIR}/.git" ]]; then
+    echo "📦 Cloning MrMoferFRAN/ltx-2-mlx (pinned to ${LTX25_PIN:0:12})..."
+    git clone https://github.com/MrMoferFRAN/ltx-2-mlx.git "${LTX25_DIR}"
+  else
+    echo "📦 Fetching ltx-2.5-mlx updates..."
+    (cd "${LTX25_DIR}" && git fetch origin)
+  fi
+  echo "📦 Checking out pinned commit ${LTX25_PIN:0:12}..."
+  git_checkout_pin "${LTX25_DIR}" "${LTX25_PIN}"
+  if [[ ! -x "${LTX25_PY}" ]]; then
+    echo "📦 Creating ltx-2.5-mlx venv with Python 3.11..."
+    (cd "${LTX25_DIR}" && uv venv --python 3.11)
+  fi
+  echo "📦 Syncing ltx-2.5-mlx packages (uv sync, no extras)..."
+  (cd "${LTX25_DIR}" && uv sync)
+  if ! "${LTX25_PY}" -c "import ltx_pipelines_mlx" 2>/dev/null; then
+    echo "❌ ltx-2.5-mlx synced but 'import ltx_pipelines_mlx' failed." >&2
+    echo "   Re-run with: rm -rf ${LTX25_DIR}/.venv && bash $0" >&2
+    exit 1
+  fi
+  echo "✅ ltx-2.5-mlx venv ready: ${LTX25_PY}"
 fi
 
 INSTALL_WAN22="${INSTALL_WAN22:-0}"
@@ -809,6 +851,9 @@ echo "   LoRAs:     ${PORTOS_DATA}/loras"
 echo "   Videos:    ${PORTOS_DATA}/videos"
 if [[ "$INSTALL_LTX2" == "1" ]]; then
   echo "   LTX-2.3:   ${HOME}/.portos/ltx-2-mlx/.venv/bin/python3 (separate venv, dgrauet pipeline @ ${LTX2_PIN:0:12})"
+fi
+if [[ "$INSTALL_LTX25" == "1" ]]; then
+  echo "   LTX-2.5:   ${HOME}/.portos/ltx-2.5-mlx/.venv/bin/python3 (MrMofer ltx25 fork @ ${LTX25_PIN:0:12})"
 fi
 if [[ "$INSTALL_WAN22" == "1" ]]; then
   echo "   Wan 2.2:  ${HOME}/.portos/mlx-gen/.venv/bin/python3 (MLX-Gen @ ${WAN22_PIN:0:12})"
