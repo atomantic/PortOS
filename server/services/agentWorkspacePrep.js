@@ -329,7 +329,28 @@ export async function prepareAgentWorkspace({ agentId, task }) {
     }
 
     if (wantsWorktree && !jiraBranchName) {
-      const { baseBranch: detectedBase } = await git.getRepoBranches(workspacePath).catch(() => ({ baseBranch: null }));
+      // Detecting the base branch and resolving the branch holder are independent
+      // reads (a git-branches lookup vs. an agent-liveness + worktree-list check) —
+      // kick both off before awaiting either so their I/O overlaps instead of
+      // serializing on the spawn hot path.
+      const detectedBasePromise = git.getRepoBranches(workspacePath).catch(() => ({ baseBranch: null }));
+      // Resolve the branch holder ONCE before creation. `resumeWorktreePath` is a
+      // cache of that answer, not a separate ownership rule: if it is gone or
+      // stale, discovery finds the actual holder. This gives resume retries the
+      // same safe adoption path review-loop follow-ups use, rather than cutting a
+      // fresh branch merely because a cached path could not be moved.
+      const resumeWorktreePath = existingBranch ? task.metadata?.resumeWorktreePath : null;
+      const takeoverPromise = existingBranch
+        ? adoptWorktreeHoldingBranch({
+          agentId,
+          workspacePath,
+          branchName: existingBranch,
+          preferredPath: resumeWorktreePath,
+          taskId: task.id,
+        })
+        : Promise.resolve(null);
+
+      const { baseBranch: detectedBase } = await detectedBasePromise;
       if (existingBranch) {
         emitLog('info', `🌳 Worktree requested for task ${task.id} on existing branch ${existingBranch}`, {
           taskId: task.id, app: task.metadata?.app, branch: existingBranch
@@ -340,21 +361,7 @@ export async function prepareAgentWorkspace({ agentId, task }) {
         });
       }
 
-      // Resolve the branch holder ONCE before creation. `resumeWorktreePath` is a
-      // cache of that answer, not a separate ownership rule: if it is gone or
-      // stale, discovery finds the actual holder. This gives resume retries the
-      // same safe adoption path review-loop follow-ups use, rather than cutting a
-      // fresh branch merely because a cached path could not be moved.
-      const resumeWorktreePath = existingBranch ? task.metadata?.resumeWorktreePath : null;
-      const takeover = existingBranch
-        ? await adoptWorktreeHoldingBranch({
-          agentId,
-          workspacePath,
-          branchName: existingBranch,
-          preferredPath: resumeWorktreePath,
-          taskId: task.id,
-        })
-        : null;
+      const takeover = await takeoverPromise;
 
       // Both read only by the block/pause decision below: the failure REASON
       // decides whether the task is unrunnable or merely early, and `attempt` is

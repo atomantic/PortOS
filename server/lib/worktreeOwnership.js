@@ -6,8 +6,8 @@
  * remove one. The callers therefore share this pure gate instead of carrying
  * slightly different copies of "managed root, agent id, claim, liveness, lock".
  * Callers can explicitly opt into the differences that are intentional: a
- * reaper may include `.claude/worktrees/`, stale claims may be reclaimed only by
- * branch reconciliation, and a caller that merely inspects a lock can allow it.
+ * reaper may include `.claude/worktrees/`, and stale claims may be reclaimed
+ * only by branch reconciliation.
  */
 
 import { win32 } from 'path';
@@ -30,7 +30,6 @@ export function isAgentWorktreeId(agentId) {
 
 function normalizedRoots(roots) {
   return (Array.isArray(roots) ? roots : [])
-    .map((root) => typeof root === 'string' ? { path: root } : root)
     .filter((root) => typeof root?.path === 'string' && root.path);
 }
 
@@ -47,9 +46,8 @@ function normalizedRoots(roots) {
  *   path?: string,
  *   locked?: boolean,
  *   activeAgentIds?: Set<string>,
- *   roots?: Array<string|{path:string, requireAgentId?:boolean}>,
+ *   roots?: Array<{path:string, requireAgentId?:boolean}>,
  *   requireAgentId?: boolean,
- *   allowLocked?: boolean,
  *   allowStaleClaim?: boolean,
  *   ageMs?: number|null,
  *   staleClaimIdleMs?: number,
@@ -63,7 +61,6 @@ export function worktreeOwnershipReason({
   activeAgentIds,
   roots = [],
   requireAgentId = false,
-  allowLocked = false,
   allowStaleClaim = false,
   ageMs = null,
   staleClaimIdleMs,
@@ -86,7 +83,7 @@ export function worktreeOwnershipReason({
 
   const mustBeAgentWorktree = root?.requireAgentId ?? requireAgentId;
   if (mustBeAgentWorktree && !isAgentWorktreeId(agentId)) return 'worktree-missing-agent-id';
-  if (locked && !allowLocked) return 'worktree-locked';
+  if (locked) return 'worktree-locked';
   if (activeAgentIds instanceof Set && activeAgentIds.has(agentId)) return 'worktree-active-agent';
   if (requireKnownLiveness && isAgentWorktreeId(agentId) && !(activeAgentIds instanceof Set)) {
     return 'worktree-agent-liveness-unknown';
