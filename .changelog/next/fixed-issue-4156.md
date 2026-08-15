@@ -1,0 +1,1 @@
+- Screen readers now announce the inline form controls on the Character Sheet, GitHub, Sharing, Browser, Mood Board and Video Timeline Editor pages, which previously had no accessible name
