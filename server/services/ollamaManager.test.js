@@ -10,7 +10,7 @@ import { pinPlatform } from '../lib/testHelper.js'
 // be scripted (brew --version, services start/stop/list). `spawn` is referenced
 // at module import (startServer) but never invoked by these tests.
 const execMock = { impl: () => {} }
-vi.mock('child_process', () => ({
+vi.mock('../lib/childProcess.js', () => ({
   execFile: (cmd, args, opts, cb) => execMock.impl(cmd, args, opts, cb),
   spawn: vi.fn()
 }))

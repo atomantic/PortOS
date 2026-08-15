@@ -61,10 +61,10 @@ vi.mock('./memoryBackend.js', () => ({
 import { EventEmitter } from 'events';
 import { createHash } from 'crypto';
 import { hostname } from 'os';
-import { spawn } from 'child_process';
+import { spawn } from '../lib/childProcess.js';
 // Partial mock: only override spawn. Preserve execFile et al. because
 // backup.js transitively imports fileUtils.js, which promisifies execFile.
-vi.mock('child_process', async (importOriginal) => ({
+vi.mock('../lib/childProcess.js', async (importOriginal) => ({
   ...(await importOriginal()),
   spawn: vi.fn(),
 }));

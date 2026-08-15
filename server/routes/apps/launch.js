@@ -9,7 +9,7 @@
  */
 
 import { Router } from 'express';
-import { spawn } from 'child_process';
+import { spawn } from '../../lib/childProcess.js';
 import { basename, join } from 'path';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { deriveProjectInfo } from '../../services/xcodeScripts.js';

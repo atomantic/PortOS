@@ -11,7 +11,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 
 const spawnMock = vi.fn();
-vi.mock('child_process', () => ({ spawn: (...args) => spawnMock(...args) }));
+vi.mock('./childProcess.js', () => ({ spawn: (...args) => spawnMock(...args) }));
 
 const { listOpenPullRequestHeadRefs } = await import('./planIds.js');
 

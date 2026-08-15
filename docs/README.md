@@ -21,6 +21,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | [SELF_UPDATE.md](./SELF_UPDATE.md) | Fork-aware self-update flow — release polling, `FORK_SYNC_REQUIRED`, fork sync |
 | [DEPS.md](./DEPS.md) | Dependency audit — every third-party package and its verdict |
 | [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) | Common runtime issues, known issues |
+| [WINDOWS_CONSOLE.md](./WINDOWS_CONSOLE.md) | Why console windows flash and steal focus on Windows, and the two fixes |
 | [GOALS_OPERATIONAL.md](./GOALS_OPERATIONAL.md) | Runtime operating principles the CoS agent reads (parsed by `goalProgress.js`) |
 | [METRICS.md](./METRICS.md) | The `METRICS.md` convention — how a managed app exposes its own success metrics so agents (incl. Layered Intelligence) can evaluate it against its goals |
 | [SECURITY_AUDIT.md](./SECURITY_AUDIT.md) | Historical hardening audit (2026-02, all items resolved) |

@@ -124,7 +124,7 @@
 import { readFile, stat } from 'fs/promises';
 import { realpathSync } from 'fs';
 import { dirname } from 'path';
-import { spawn } from 'child_process';
+import { spawn } from './childProcess.js';
 import { bufferedSpawn } from './bufferedSpawn.js';
 import { createSingleFlight } from './singleFlight.js';
 

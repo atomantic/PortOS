@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { pinPlatform } from '../lib/testHelper.js';
 
-vi.mock('child_process', () => ({
+vi.mock('../lib/childProcess.js', () => ({
   spawn: vi.fn()
 }));
 
@@ -25,7 +25,7 @@ vi.mock('./updateChecker.js', () => ({
   recordUpdateResult: vi.fn().mockResolvedValue(undefined)
 }));
 
-import { spawn } from 'child_process';
+import { spawn } from '../lib/childProcess.js';
 import { spawnDetached, isDetachedRunning } from '../lib/detachedSpawn.js';
 import { readFile } from 'fs/promises';
 import { recordUpdateResult } from './updateChecker.js';

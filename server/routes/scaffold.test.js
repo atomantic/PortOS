@@ -28,7 +28,7 @@ vi.mock('fs', () => ({
   realpathSync: vi.fn((p) => p)
 }));
 
-vi.mock('child_process', () => ({
+vi.mock('../lib/childProcess.js', () => ({
   exec: vi.fn((cmd, opts, cb) => cb(null, { stdout: '', stderr: '' })),
   spawn: vi.fn(() => {
     const proc = new EventEmitter();
@@ -59,7 +59,7 @@ vi.mock('../services/xcodeScripts.js', () => ({ toTargetName: vi.fn(() => 'TestA
 import scaffoldRoutes from './scaffold.js';
 import { ensureDir } from '../lib/fileUtils.js';
 import { writeFile } from 'fs/promises';
-import { spawn, exec } from 'child_process';
+import { spawn, exec } from '../lib/childProcess.js';
 import { createApp } from '../services/apps.js';
 import { scaffoldVite } from './scaffoldVite.js';
 import { scaffoldPortOS } from './scaffoldPortOS.js';

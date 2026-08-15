@@ -8,7 +8,7 @@
  * logs rather than crashing the Node process.
  */
 
-import { spawn } from 'child_process';
+import { spawn } from './childProcess.js';
 
 /**
  * Open a local path in the system file manager (Finder / Explorer / Nautilus).

@@ -29,8 +29,14 @@ vi.mock('./cosState.js', () => ({
   isDaemonRunning: () => mock.daemonRunning
 }));
 
+// The jlist poll and the auto-restart both run through execPm2 now, so the mock
+// dispatches on the verb. Restarts deliberately do NOT go through
+// execFile('pm2', …, { shell: true }) — that resolves to pm2.cmd on Windows and
+// flashes a console window (docs/WINDOWS_CONSOLE.md).
 vi.mock('./pm2.js', () => ({
-  execPm2: vi.fn(async () => ({ stdout: mock.pm2Stdout }))
+  execPm2: vi.fn(async (args) => (
+    args[0] === 'jlist' ? { stdout: mock.pm2Stdout } : mock.restartImpl(args)
+  ))
 }));
 
 vi.mock('../lib/memoryStats.js', () => ({
@@ -40,10 +46,6 @@ vi.mock('../lib/memoryStats.js', () => ({
 vi.mock('./cosEvents.js', () => ({
   cosEvents: { emit: (name, payload) => mock.events.push({ name, payload }) },
   emitLog: vi.fn()
-}));
-
-vi.mock('child_process', () => ({
-  execFile: (cmd, args, opts, cb) => mock.restartImpl(cmd, args, opts, cb)
 }));
 
 import { runHealthCheck, getHealthStatus } from './cosHealthMonitor.js';
@@ -62,8 +64,8 @@ describe('cosHealthMonitor.runHealthCheck', () => {
     mock.events = [];
     mock.desktopProcessNames = new Set();
     mock.desktopLookupError = null;
-    // default execFile success
-    mock.restartImpl = (cmd, args, opts, cb) => cb(null, { stdout: 'restarted', stderr: '' });
+    // default restart success
+    mock.restartImpl = async () => ({ stdout: 'restarted', stderr: '' });
   });
 
   it('short-circuits when the daemon is not running', async () => {
@@ -95,7 +97,7 @@ describe('cosHealthMonitor.runHealthCheck', () => {
 
   it('records an error issue and emits health:critical when a restart fails', async () => {
     mock.pm2Stdout = JSON.stringify([{ name: 'boom', pm2_env: { status: 'errored' }, monit: { memory: 0 } }]);
-    mock.restartImpl = (cmd, args, opts, cb) => cb(new Error('restart failed'), null);
+    mock.restartImpl = async () => { throw new Error('restart failed'); };
     const { issues } = await runHealthCheck();
     expect(issues.some(i => i.type === 'error' && /failed to auto-restart/.test(i.message))).toBe(true);
     expect(mock.events.some(e => e.name === 'health:critical')).toBe(true);
@@ -113,9 +115,9 @@ describe('cosHealthMonitor.runHealthCheck', () => {
       mock.desktopProcessNames = new Set(['game']);
       mock.pm2Stdout = erroredGame();
       const restarted = [];
-      mock.restartImpl = (cmd, args, opts, cb) => {
+      mock.restartImpl = async (args) => {
         restarted.push(args);
-        cb(null, { stdout: 'restarted', stderr: '' });
+        return { stdout: 'restarted', stderr: '' };
       };
 
       const { issues } = await runHealthCheck();
@@ -168,9 +170,9 @@ describe('cosHealthMonitor.runHealthCheck', () => {
         { name: 'web', pm2_env: { status: 'errored' }, monit: { memory: 0 } }
       ]);
       const restarted = [];
-      mock.restartImpl = (cmd, args, opts, cb) => {
+      mock.restartImpl = async (args) => {
         restarted.push(args[1]);
-        cb(null, { stdout: 'restarted', stderr: '' });
+        return { stdout: 'restarted', stderr: '' };
       };
 
       const { metrics, issues } = await runHealthCheck();
@@ -186,9 +188,9 @@ describe('cosHealthMonitor.runHealthCheck', () => {
         { name: 'web', pm2_env: { status: 'errored' }, monit: { memory: 0 } }
       ]);
       const restarted = [];
-      mock.restartImpl = (cmd, args, opts, cb) => {
+      mock.restartImpl = async (args) => {
         restarted.push(args[1]);
-        cb(null, { stdout: 'restarted', stderr: '' });
+        return { stdout: 'restarted', stderr: '' };
       };
 
       const { metrics } = await runHealthCheck();

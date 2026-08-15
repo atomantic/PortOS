@@ -6,7 +6,7 @@
  * caching, or rename-safety semantics.
  */
 
-import { execFile, spawn } from 'child_process';
+import { execFile, spawn } from './childProcess.js';
 import { existsSync, statSync } from 'fs';
 import { unlink, rename } from 'fs/promises';
 import { join, resolve as resolvePath, sep as PATH_SEP, dirname } from 'path';

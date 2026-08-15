@@ -43,7 +43,7 @@
 // the supervisor records the exit status — exactly as if the original handle
 // had never gone away (#1332).
 
-import { spawn } from 'child_process';
+import { spawn } from './childProcess.js';
 import { EventEmitter } from 'events';
 import { constants as osConstants } from 'os';
 import { join } from 'path';

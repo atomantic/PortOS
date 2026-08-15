@@ -8,7 +8,7 @@
 import { join } from 'path';
 import { readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
-import { spawn } from 'child_process';
+import { spawn } from '../lib/childProcess.js';
 import { homedir } from 'os';
 import { cosEvents, emitLog } from './cosEvents.js';
 // The DEFINING module, not a barrel (#3450) — see the note in

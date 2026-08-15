@@ -1,7 +1,7 @@
 import { writeFile, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { spawn } from 'child_process';
+import { spawn } from '../lib/childProcess.js';
 import { atomicWrite, ensureDir } from '../lib/fileUtils.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 

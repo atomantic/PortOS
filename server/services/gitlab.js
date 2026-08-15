@@ -1,4 +1,4 @@
-import { spawn } from 'child_process';
+import { spawn } from '../lib/childProcess.js';
 
 // Mirrors execGh's DEFAULT_EXEC_GH_TIMEOUT_MS. `glab` hits the network, so a
 // stalled call (hung keychain prompt, dead VPN) would otherwise leave the

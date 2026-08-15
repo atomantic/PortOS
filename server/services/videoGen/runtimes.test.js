@@ -13,7 +13,7 @@ vi.mock('fs', async (importOriginal) => ({
   ...await importOriginal(),
   existsSync: runtimeMocks.existsSync,
 }));
-vi.mock('child_process', async (importOriginal) => ({
+vi.mock('../../lib/childProcess.js', async (importOriginal) => ({
   ...await importOriginal(),
   spawn: runtimeMocks.spawn,
 }));

@@ -1,6 +1,6 @@
 /** Shared best-effort local-model memory reclamation and headroom reporting. */
 
-import { execFile } from 'child_process';
+import { execFile } from './childProcess.js';
 import { platform, freemem, totalmem } from 'os';
 import { promisify } from 'util';
 import { getLoadedModels as ollamaLoadedModels, unloadModel as ollamaUnload, getBaseUrl as ollamaBaseUrl } from '../services/ollamaManager.js';

@@ -1,4 +1,4 @@
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, ChildProcess } from './childProcess.js';
 import { existsSync } from 'fs';
 import { delimiter, isAbsolute, join } from 'path';
 import { withSpawnCwdEnv } from './spawnCwd.js';

@@ -291,7 +291,7 @@ const { makeProc } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('child_process', () => ({
+vi.mock('../../lib/childProcess.js', () => ({
   spawn: vi.fn(() => makeProc()),
   execFile: vi.fn((_bin, _args, _opts, cb) => cb?.(null, '', '')),
 }));
@@ -458,7 +458,7 @@ describe('generateChainedVideo — continuation strategy (context window vs last
   async function runChain(chainParams, totalChunks, probeFrames = null) {
     const { spawnDetached } = await import('../../lib/detachedSpawn.js');
     const { trimVideoFromFrame, probeFrameCount } = await import('../../lib/ffmpeg.js');
-    const { spawn } = await import('child_process');
+    const { spawn } = await import('../../lib/childProcess.js');
     const { readJSONFile, atomicWrite } = await import('../../lib/fileUtils.js');
     vi.mocked(spawnDetached).mockClear();
     vi.mocked(trimVideoFromFrame).mockClear();
@@ -619,7 +619,7 @@ describe('generateChainedVideo — continuation strategy (context window vs last
     // already rendered. Moving the cut into the concat has to keep that: the
     // untrimmed chunks were never re-encoded, so they're still in codec
     // lockstep and the demuxer can still assemble them.
-    const { spawn } = await import('child_process');
+    const { spawn } = await import('../../lib/childProcess.js');
     const failingProc = () => {
       const listeners = {};
       const proc = {
@@ -901,7 +901,7 @@ describe('generateVideo — ltx2 FFLF image resizing', () => {
   // Windows uses the separate diffusers runner, which intentionally consumes
   // only the start image. This assertion is specific to the MLX FFLF helper.
   it.skipIf(process.platform === 'win32')('resizes both start and end frames before passing them to the ltx2 helper', async () => {
-    const { execFile } = await import('child_process');
+    const { execFile } = await import('../../lib/childProcess.js');
     const { spawnDetached } = await import('../../lib/detachedSpawn.js');
     const execFileMock = vi.mocked(execFile);
     const spawnMock = vi.mocked(spawnDetached);
@@ -3085,7 +3085,7 @@ describe('generateVideo — IC-LoRA remix arg threading (#3100)', () => {
     };
 
     it('materializes each still into a 9-frame clip at the render resolution', async () => {
-      const { execFile } = await import('child_process');
+      const { execFile } = await import('../../lib/childProcess.js');
       const { spawnDetached } = await import('../../lib/detachedSpawn.js');
       const execFileMock = vi.mocked(execFile);
       const spawnMock = vi.mocked(spawnDetached);
@@ -3179,7 +3179,7 @@ describe('generateVideo — IC-LoRA remix arg threading (#3100)', () => {
       // Promise.all rejects at the first failure while siblings are still in
       // flight, so a push-on-success registry would miss the ones that landed
       // afterwards. Every target path is registered before any encode starts.
-      const { execFile } = await import('child_process');
+      const { execFile } = await import('../../lib/childProcess.js');
       const { unlink } = await import('fs/promises');
       const execFileMock = vi.mocked(execFile);
       const unlinkMock = vi.mocked(unlink);
@@ -3222,7 +3222,7 @@ describe('generateVideo — IC-LoRA remix arg threading (#3100)', () => {
       // try/catch, so without explicit cleanup here the resized-source temp
       // file would leak into os.tmpdir() even though the clip temp files
       // themselves were already covered by the test above.
-      const { execFile } = await import('child_process');
+      const { execFile } = await import('../../lib/childProcess.js');
       const { unlink } = await import('fs/promises');
       const execFileMock = vi.mocked(execFile);
       const unlinkMock = vi.mocked(unlink);

@@ -7,7 +7,7 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('os', () => ({ platform: () => h.platform }));
-vi.mock('child_process', () => ({
+vi.mock('../../lib/childProcess.js', () => ({
   spawn: (cmd, args) => {
     h.spawned.push({ cmd, args });
     return { on: () => {}, unref: () => {} };

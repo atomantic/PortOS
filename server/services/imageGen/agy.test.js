@@ -18,7 +18,7 @@ const makeFakeChild = () => {
   return child;
 };
 
-vi.mock('child_process', async (importOriginal) => {
+vi.mock('../../lib/childProcess.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,

@@ -14,11 +14,11 @@ vi.mock('./tracks/index.js', () => ({
   createTrack: vi.fn(async (input) => ({ id: 'track-new', ...input })),
   DURATION_MAX_SEC: 3600,
 }));
-vi.mock('child_process', async (importOriginal) => ({ ...(await importOriginal()), spawn: vi.fn() }));
+vi.mock('../lib/childProcess.js', async (importOriginal) => ({ ...(await importOriginal()), spawn: vi.fn() }));
 
 const { findYtDlp } = await import('../lib/ytdlp.js');
 const { findFfmpeg } = await import('../lib/ffmpeg.js');
-const { spawn } = await import('child_process');
+const { spawn } = await import('../lib/childProcess.js');
 const {
   YOUTUBE_URL_RE, assertYoutubeUrl, startYoutubeImport,
 } = await import('./trackYoutubeImport.js');

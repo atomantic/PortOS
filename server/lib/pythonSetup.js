@@ -1,4 +1,4 @@
-import { execFile, spawn } from 'node:child_process';
+import { execFile, spawn } from './childProcess.js';
 import { existsSync, readdirSync } from 'node:fs';
 import { arch, homedir, platform } from 'node:os';
 import { dirname, join } from 'node:path';

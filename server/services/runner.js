@@ -2,7 +2,7 @@
  * Compatibility shim for PortOS services that import from runner.js
  * Re-exports toolkit runner service functions with local overrides
  */
-import { spawn } from 'child_process';
+import { spawn } from '../lib/childProcess.js';
 import { writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, ensureDir, tryReadFile, PATHS } from '../lib/fileUtils.js';

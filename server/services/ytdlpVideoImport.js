@@ -16,7 +16,7 @@
  * unvetted URL.
  */
 
-import { spawn } from 'child_process';
+import { spawn } from '../lib/childProcess.js';
 import { readdir, unlink } from 'fs/promises';
 import { join, dirname } from 'path';
 import { ensureDir } from '../lib/fileUtils.js';

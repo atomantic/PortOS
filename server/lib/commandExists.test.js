@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const execFileMock = { impl: (_cmd, _args, _opts, cb) => cb(null, { stdout: '', stderr: '' }) }
-vi.mock('child_process', () => ({
+vi.mock('./childProcess.js', () => ({
   execFile: (cmd, args, opts, cb) => execFileMock.impl(cmd, args, opts, cb),
 }))
 

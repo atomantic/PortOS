@@ -13,7 +13,7 @@
  * creating a venv.
  */
 
-import { spawn } from 'child_process';
+import { spawn } from './childProcess.js';
 import { join } from 'path';
 import { PATHS } from './fileUtils.js';
 import { resolveBashBinary, toBashPath } from './bashResolver.js';

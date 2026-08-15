@@ -1,6 +1,6 @@
 import { writeFile } from 'fs/promises';
 import { join } from 'path';
-import { exec } from 'child_process';
+import { exec } from '../lib/childProcess.js';
 import { promisify } from 'util';
 import { ensureDir, ensureDirs } from '../lib/fileUtils.js';
 import { XCODE_TEAM_ID, XCODE_BUNDLE_PREFIX, toBundleId, toTargetName } from '../services/xcodeScripts.js';

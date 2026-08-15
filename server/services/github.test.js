@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 
-vi.mock('child_process', async (importOriginal) => {
+vi.mock('../lib/childProcess.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, spawn: vi.fn() };
 });
 
-import { spawn } from 'child_process';
+import { spawn } from '../lib/childProcess.js';
 import { execGh, getPullRequestState } from './github.js';
 
 const makeChild = () => {

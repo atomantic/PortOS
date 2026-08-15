@@ -23,7 +23,7 @@
  * resolves — nothing throws into a route (CLAUDE.md child-process exception).
  */
 
-import { execFile } from 'node:child_process';
+import { execFile } from './childProcess.js';
 
 /**
  * One CSV row per GPU: `<name>, <total VRAM in MiB>`. `nounits` strips the " MiB"

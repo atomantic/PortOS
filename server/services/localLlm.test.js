@@ -87,7 +87,7 @@ const cp = vi.hoisted(() => ({
   spawn: null,
   execFile: null,
 }));
-vi.mock('child_process', () => ({
+vi.mock('../lib/childProcess.js', () => ({
   spawn: (...a) => cp.spawn(...a),
   execFile: (cmd, args, opts, cb) => cp.execFile(cmd, args, opts, cb),
 }));

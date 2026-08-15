@@ -11,7 +11,7 @@
  * tool parameter, so an image-only agy render is rejected up front.
  */
 
-import { spawn } from 'child_process';
+import { spawn } from '../../lib/childProcess.js';
 import { copyFile, mkdir, open, rename, rm, stat, unlink } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { isAbsolute, join, resolve as pathResolve, sep } from 'path';

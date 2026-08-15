@@ -5,17 +5,14 @@
  */
 
 import { readdir, stat, unlink } from 'fs/promises';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
 import { join, basename, resolve, extname } from 'path';
 import { EventEmitter } from 'events';
 import { ensureDir, safeJSONParse, PATHS, tryReadFile, atomicWrite, sleep } from '../lib/fileUtils.js';
 import { normalizeBrowserConfig } from '../lib/browserConfig.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { readResponseJson } from '../lib/readResponseJson.js';
+import { execPm2 } from './pm2.js';
 
-const execFileAsync = promisify(execFile);
-const PM2_SHELL = process.platform === 'win32';
 const PM2_SETTLE_MS = 1500;
 const HEALTH_TIMEOUT_MS = 3000;
 const NAVIGATE_TIMEOUT_MS = 10000;
@@ -126,7 +123,10 @@ export async function getHealthStatus() {
 
 async function pm2Action(action, args) {
   console.log(`🌐 Browser PM2 ${action}: portos-browser`);
-  await execFileAsync('pm2', [action, ...args], { shell: PM2_SHELL });
+  // execPm2 runs `node pm2/bin/pm2` directly. Resolving bare `pm2` through a
+  // shell picks up pm2.cmd on Windows, and that cmd.exe hop opens a console
+  // window out of PortOS's console-less PM2 fork — see docs/WINDOWS_CONSOLE.md.
+  await execPm2([action, ...args]);
   console.log(`✅ Browser PM2 ${action} complete`);
 
   // Give PM2 a moment to settle
@@ -153,7 +153,7 @@ export async function restartBrowser() {
 // ---------- PM2 status (process-level) ----------
 
 export async function getProcessStatus() {
-  const { stdout } = await execFileAsync('pm2', ['jlist'], { shell: PM2_SHELL });
+  const { stdout } = await execPm2(['jlist']);
   const processes = safeJSONParse(stdout, [], { allowArray: true });
   const browserProc = processes.find(p => p.name === 'portos-browser');
 
@@ -177,9 +177,8 @@ export async function getProcessStatus() {
 // ---------- Logs ----------
 
 export async function getRecentLogs(lines = 50) {
-  const { stdout, stderr } = await execFileAsync('pm2', ['logs', 'portos-browser', '--nostream', '--lines', String(lines)], {
-    timeout: LOGS_TIMEOUT_MS,
-    shell: PM2_SHELL
+  const { stdout, stderr } = await execPm2(['logs', 'portos-browser', '--nostream', '--lines', String(lines)], {
+    timeout: LOGS_TIMEOUT_MS
   }).catch(() => ({ stdout: '', stderr: '' }));
 
   return { stdout: stdout || '', stderr: stderr || '' };

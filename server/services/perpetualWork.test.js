@@ -6,12 +6,12 @@ vi.mock('./cosEvents.js', () => ({
   emitLog: vi.fn()
 }));
 
-vi.mock('child_process', async (importOriginal) => {
+vi.mock('../lib/childProcess.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, spawn: vi.fn() };
 });
 
-import { spawn } from 'child_process';
+import { spawn } from '../lib/childProcess.js';
 import {
   isActionableIssue,
   titleMarksEpic,

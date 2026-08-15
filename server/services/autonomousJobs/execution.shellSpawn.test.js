@@ -18,7 +18,7 @@ const spawnMock = vi.fn()
 
 // Partial mock — other modules in this import graph (fileUtils) need the real
 // execFile/exec exports at load time.
-vi.mock('child_process', async (importOriginal) => ({
+vi.mock('../../lib/childProcess.js', async (importOriginal) => ({
   ...(await importOriginal()),
   spawn: (...args) => spawnMock(...args),
 }))

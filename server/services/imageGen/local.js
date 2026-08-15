@@ -12,7 +12,7 @@
  * raw status text mflux prints to stderr.
  */
 
-import { spawn } from 'child_process';
+import { spawn } from '../../lib/childProcess.js';
 import sharp from 'sharp';
 import { writeFile, readFile, readdir, stat, unlink, rm, mkdtemp } from 'fs/promises';
 import { existsSync, watch as fsWatch } from 'fs';

@@ -22,7 +22,7 @@
  * full recheck cadence on a blip.
  */
 
-import { spawn } from 'child_process';
+import { spawn } from '../lib/childProcess.js';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { emitLog } from './cosEvents.js';

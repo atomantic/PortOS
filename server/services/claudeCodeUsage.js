@@ -1,4 +1,4 @@
-import { spawn } from 'child_process';
+import { spawn } from '../lib/childProcess.js';
 import { existsSync, lstatSync, readlinkSync, readFileSync } from 'fs';
 import { stripAnsi } from '../lib/ansiStrip.js';
 import { parseHumanReset } from '../lib/quotaReset.js';

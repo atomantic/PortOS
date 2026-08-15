@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 
-vi.mock('child_process', () => ({
+vi.mock('./childProcess.js', () => ({
   spawn: vi.fn()
 }));
 
-import { spawn } from 'child_process';
+import { spawn } from './childProcess.js';
 import { execGit } from './execGit.js';
 
 const makeChild = () => {

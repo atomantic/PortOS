@@ -25,7 +25,7 @@ const installProcess = vi.hoisted(() => {
   };
   return { spawn, makeChild };
 });
-vi.mock('child_process', async (importOriginal) => ({
+vi.mock('../lib/childProcess.js', async (importOriginal) => ({
   ...(await importOriginal()),
   spawn: installProcess.spawn,
 }));

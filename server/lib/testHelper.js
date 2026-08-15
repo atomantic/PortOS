@@ -10,7 +10,7 @@
  */
 
 import { createServer } from 'http';
-import { execFileSync } from 'child_process';
+import { execFileSync } from './childProcess.js';
 import { homedir } from 'os';
 import { existsSync, readdirSync, readFileSync } from 'fs';
 import { join, relative } from 'path';

@@ -1,4 +1,4 @@
-import { spawn } from 'child_process';
+import { spawn } from '../lib/childProcess.js';
 import { readFile, unlink } from 'fs/promises';
 import { join } from 'path';
 import { PATHS } from '../lib/fileUtils.js';

@@ -4,7 +4,7 @@
  * filer can both use it without an import cycle.
  */
 
-import { spawn } from 'child_process';
+import { spawn } from '../../lib/childProcess.js';
 import { withSpawnCwdEnv } from '../../lib/spawnCwd.js';
 
 /** Run a CLI, resolving `{ code, stdout, stderr }` (never rejects). */

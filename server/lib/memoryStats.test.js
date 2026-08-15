@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import os from 'os';
 
-vi.mock('child_process', () => ({
+vi.mock('./childProcess.js', () => ({
   exec: vi.fn()
 }));
 
@@ -9,7 +9,7 @@ vi.mock('fs/promises', () => ({
   readFile: vi.fn()
 }));
 
-const { exec } = await import('child_process');
+const { exec } = await import('./childProcess.js');
 const { readFile } = await import('fs/promises');
 const { getMemoryStats, _resetMemoryStatsCache } = await import('./memoryStats.js');
 

@@ -10,7 +10,7 @@
  * the model sees them.
  */
 
-import { execFile, spawn } from 'child_process';
+import { execFile, spawn } from '../../lib/childProcess.js';
 import { existsSync, statSync } from 'fs';
 import { unlink, writeFile, copyFile } from 'fs/promises';
 import { join, basename } from 'path';

@@ -571,7 +571,7 @@ async function* streamCompletion(provider, model, prompt, signal) {
   // because Ask prompts can run tens of thousands of characters once
   // sources + history are concatenated, which exceeds OS argv limits
   // (especially on Windows ~32k).
-  const { spawn } = await import('child_process');
+  const { spawn } = await import('../lib/childProcess.js');
   let args = [...(provider.args || [])];
   // OpenCode runs headless via the `run` subcommand (reads the prompt from
   // stdin); ensure it leads the argv even if a customized/TUI provider config

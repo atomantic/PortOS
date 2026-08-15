@@ -17,7 +17,7 @@
  * lifecycle), so per the repo convention the spawn boundary is wrapped and never
  * throws into the event loop.
  */
-import { spawn } from 'child_process';
+import { spawn } from '../../lib/childProcess.js';
 import { platform } from 'os';
 
 // Whether auto display-sleep is enabled for this host. Apple Silicon only (the

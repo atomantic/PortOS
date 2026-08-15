@@ -5,7 +5,7 @@
  * Supports shallow clones to save space and provides progress tracking.
  */
 
-import { spawn } from 'child_process';
+import { spawn } from '../lib/childProcess.js';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';

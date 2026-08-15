@@ -6,7 +6,7 @@
 
 import { access, appendFile, chmod, mkdir, open, readFile, readdir, stat, writeFile, rename, unlink, copyFile } from 'fs/promises';
 import { existsSync, statSync, createReadStream } from 'fs';
-import { execFile } from 'child_process';
+import { execFile } from './childProcess.js';
 import { promisify } from 'util';
 import { createHash, randomUUID } from 'crypto';
 import { join, dirname, basename, extname, resolve as resolvePath, sep as PATH_SEP } from 'path';

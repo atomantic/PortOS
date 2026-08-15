@@ -1,6 +1,6 @@
 import { writeFile, chmod } from 'fs/promises';
 import { join } from 'path';
-import { exec } from 'child_process';
+import { exec } from '../lib/childProcess.js';
 import { promisify } from 'util';
 import { ensureDir, ensureDirs } from '../lib/fileUtils.js';
 import {

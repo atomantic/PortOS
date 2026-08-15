@@ -659,7 +659,7 @@ export async function getAgentProcessStats(agentId) {
       return { active: true, agentId, pid: null, cpu: 0, memoryKb: 0, memoryMb: 0, state: 'unknown' };
     }
 
-    const { exec } = await import('child_process');
+    const { exec } = await import('../lib/childProcess.js');
     const { promisify } = await import('util');
     const execAsync = promisify(exec);
 

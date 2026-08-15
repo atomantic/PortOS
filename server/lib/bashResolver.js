@@ -29,7 +29,7 @@
 
 import { existsSync } from 'fs';
 import { join, dirname } from 'path';
-import { execFileSync } from 'child_process';
+import { execFileSync } from './childProcess.js';
 
 const IS_WIN32 = process.platform === 'win32';
 

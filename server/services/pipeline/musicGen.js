@@ -28,7 +28,7 @@
  */
 
 import { existsSync, statSync } from 'fs';
-import { execFile } from 'child_process';
+import { execFile } from '../../lib/childProcess.js';
 import { platform as osPlatform, arch as osArch } from 'os';
 import { promisify } from 'util';
 import { unlink } from 'fs/promises';

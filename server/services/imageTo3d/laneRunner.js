@@ -18,7 +18,7 @@
  * (CLAUDE.md child-process exception).
  */
 
-import { spawn } from 'node:child_process';
+import { spawn } from '../../lib/childProcess.js';
 import { sleep as defaultSleep } from '../../lib/fileUtils.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { createLineReader } from '../../lib/streamLines.js';

@@ -324,8 +324,8 @@ vi.mock('os', async () => ({
   arch: () => h.osArch,
 }));
 
-vi.mock('child_process', async () => {
-  const actual = await vi.importActual('child_process');
+vi.mock('../../lib/childProcess.js', async () => {
+  const actual = await vi.importActual('../../lib/childProcess.js');
   return {
     ...actual,
     // isEngineHealthy probes the venv with `python -c <import>`; promisify()

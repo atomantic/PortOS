@@ -36,7 +36,7 @@
  * The durable, federated record of "I kept this" is the links entry.
  */
 
-import { spawn } from 'child_process';
+import { spawn } from '../lib/childProcess.js';
 import { readdir, readFile, rename, rm, stat, unlink } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';

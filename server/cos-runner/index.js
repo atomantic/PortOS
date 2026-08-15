@@ -9,7 +9,7 @@
  */
 
 import express from 'express';
-import { spawn } from 'child_process';
+import { spawn } from '../lib/childProcess.js';
 import * as pty from 'node-pty';
 import { join, basename } from 'path';
 import { writeFile, readFile } from 'fs/promises';

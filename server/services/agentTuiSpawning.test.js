@@ -208,14 +208,14 @@ vi.mock('../lib/tuiHandshake.js', async (importOriginal) => {
 // (shellHasLiveChild). Default to an error callback so the probe resolves
 // "assume alive" (guard bypassed) for every test that doesn't exercise it —
 // the early-exit test below overrides this to report no child process.
-vi.mock('child_process', async (importOriginal) => {
+vi.mock('../lib/childProcess.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, execFile: vi.fn((_file, _args, _opts, cb) => cb(new Error('not mocked'))) };
 });
 
 import { existsSync } from 'fs';
 import { readFile } from 'fs/promises';
-import { execFile } from 'child_process';
+import { execFile } from '../lib/childProcess.js';
 import { buildTuiSpawnConfig, spawnTuiAgent } from './agentTuiSpawning.js';
 import { releaseRetryHold } from './agentWorktreeCleanup.js';
 import { spawnTuiSessionViaRunner } from './cosRunnerClient.js';

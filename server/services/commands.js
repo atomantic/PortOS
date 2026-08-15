@@ -1,4 +1,4 @@
-import { spawn } from 'child_process';
+import { spawn } from '../lib/childProcess.js';
 import { logAction } from './history.js';
 import { ALLOWED_COMMANDS, validateCommand } from '../lib/commandSecurity.js';
 import { safeChildProcessEnv } from '../lib/processEnv.js';

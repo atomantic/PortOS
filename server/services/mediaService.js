@@ -1,4 +1,4 @@
-import { spawn } from 'child_process';
+import { spawn } from '../lib/childProcess.js';
 import { PassThrough } from 'stream';
 import { safeChildProcessOptions } from '../lib/processEnv.js';
 

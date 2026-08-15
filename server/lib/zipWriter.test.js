@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Readable, Writable } from 'stream';
-import { execFileSync } from 'child_process';
+import { execFileSync } from './childProcess.js';
 import { writeFileSync, mkdtempSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';

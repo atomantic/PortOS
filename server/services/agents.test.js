@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock child_process before importing agents.js
-vi.mock('child_process', () => ({
+vi.mock('../lib/childProcess.js', () => ({
   exec: vi.fn(),
   // agents.js probes Windows via execFile(powershell, …) — see findWindowsProcesses.
   execFile: vi.fn()
@@ -32,7 +32,7 @@ vi.mock('./agentOrchestrator.js', () => ({
   killAgent: vi.fn().mockResolvedValue({ success: true })
 }));
 
-import { exec, execFile } from 'child_process';
+import { exec, execFile } from '../lib/childProcess.js';
 import { pinPlatform } from '../lib/testHelper.js';
 import { registerSpawnedAgent, unregisterSpawnedAgent } from './agentState.js';
 import {

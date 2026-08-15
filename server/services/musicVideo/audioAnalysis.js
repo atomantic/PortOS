@@ -25,7 +25,7 @@
  * thin ffmpeg-decode wrapper around it.
  */
 
-import { spawn } from 'child_process';
+import { spawn } from '../../lib/childProcess.js';
 import { findFfmpeg } from '../../lib/ffmpeg.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 

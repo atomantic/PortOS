@@ -6,7 +6,7 @@
  * Integrates with eventScheduler for daily cron scheduling.
  */
 
-import { spawn } from 'child_process';
+import { spawn } from '../lib/childProcess.js';
 import { access, readdir, readFile, stat, unlink } from 'fs/promises';
 import { hostname } from 'os';
 import { join, resolve, relative, isAbsolute } from 'path';

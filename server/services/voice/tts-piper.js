@@ -1,6 +1,6 @@
 // Piper TTS backend — spawn-per-request CLI: text on stdin, WAV on stdout.
 
-import { spawn } from 'child_process';
+import { spawn } from '../../lib/childProcess.js';
 import { randomUUID } from 'crypto';
 import { existsSync, readFileSync, unlinkSync } from 'fs';
 import { tmpdir } from 'os';

@@ -3,7 +3,7 @@ import { writeFile, readdir, stat } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { join, dirname, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
-import { exec, spawn } from 'child_process';
+import { exec, spawn } from '../lib/childProcess.js';
 import { promisify } from 'util';
 import { platform } from 'os';
 import { createApp, getReservedPorts } from '../services/apps.js';

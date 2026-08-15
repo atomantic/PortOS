@@ -23,7 +23,7 @@
  * guess).
  */
 
-import { spawn } from 'child_process';
+import { spawn } from '../lib/childProcess.js';
 import { writeFile, rm, mkdtemp, copyFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { tmpdir } from 'os';

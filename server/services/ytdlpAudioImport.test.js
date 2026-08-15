@@ -3,11 +3,11 @@ import { EventEmitter } from 'events';
 
 vi.mock('../lib/ytdlp.js', () => ({ findYtDlp: vi.fn(async () => '/usr/local/bin/yt-dlp') }));
 vi.mock('../lib/ffmpeg.js', () => ({ findFfmpeg: vi.fn(async () => '/usr/local/bin/ffmpeg') }));
-vi.mock('child_process', async (importOriginal) => ({ ...(await importOriginal()), spawn: vi.fn() }));
+vi.mock('../lib/childProcess.js', async (importOriginal) => ({ ...(await importOriginal()), spawn: vi.fn() }));
 
 const { findYtDlp } = await import('../lib/ytdlp.js');
 const { findFfmpeg } = await import('../lib/ffmpeg.js');
-const { spawn } = await import('child_process');
+const { spawn } = await import('../lib/childProcess.js');
 const { resolveYtDlpBinaries, downloadAudioToTempMp3 } = await import('./ytdlpAudioImport.js');
 
 // A fake yt-dlp child. `emit` optionally pushes stdout/stderr lines before the

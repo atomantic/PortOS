@@ -20,7 +20,7 @@ vi.mock('fs/promises', async (importOriginal) => ({
   access: vi.fn()
 }));
 
-vi.mock('child_process', async (importOriginal) => ({
+vi.mock('../../lib/childProcess.js', async (importOriginal) => ({
   ...(await importOriginal()),
   spawn: vi.fn(() => ({ on: vi.fn(), unref: vi.fn() }))
 }));
@@ -28,7 +28,7 @@ vi.mock('child_process', async (importOriginal) => ({
 import * as appsService from '../../services/apps.js';
 import { deriveProjectInfo } from '../../services/xcodeScripts.js';
 import { access } from 'fs/promises';
-import { spawn } from 'child_process';
+import { spawn } from '../../lib/childProcess.js';
 
 const REPO_PATH = '/example/repos/my-client';
 

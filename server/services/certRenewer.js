@@ -11,7 +11,7 @@
  * Self-signed certs don't renew (the script issues 10-year certs for local
  * use); the renewer is a no-op in that mode.
  */
-import { execFile } from 'child_process';
+import { execFile } from '../lib/childProcess.js';
 import { existsSync, readFileSync, statSync } from 'fs';
 import { promisify } from 'util';
 import { PATHS } from '../lib/fileUtils.js';

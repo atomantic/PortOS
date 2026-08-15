@@ -48,8 +48,8 @@ vi.mock('node:fs', async () => {
   };
 });
 
-vi.mock('node:child_process', async () => {
-  const actual = await vi.importActual('node:child_process');
+vi.mock('./childProcess.js', async () => {
+  const actual = await vi.importActual('./childProcess.js');
   const util = await vi.importActual('node:util');
   // `promisify(execFile)` uses execFile's util.promisify.custom symbol so the
   // resolved value is `{ stdout, stderr }` (not a bare string). Honor that on

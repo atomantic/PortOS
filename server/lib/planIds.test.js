@@ -5,7 +5,7 @@ const execGitMock = vi.hoisted(() => vi.fn());
 const spawnMock = vi.hoisted(() => vi.fn());
 
 vi.mock('./execGit.js', () => ({ execGit: (...args) => execGitMock(...args) }));
-vi.mock('child_process', () => ({ spawn: (...args) => spawnMock(...args) }));
+vi.mock('./childProcess.js', () => ({ spawn: (...args) => spawnMock(...args) }));
 
 import {
   slugify,

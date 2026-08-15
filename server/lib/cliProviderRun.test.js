@@ -124,7 +124,7 @@ describe('runCliProviderPrompt', () => {
     // regardless of the host's exact PATH layout) so the round-trip still
     // completes — proves the resolved path, not the bare provider.command,
     // is what actually gets spawned.
-    const { execFileSync } = await import('child_process');
+    const { execFileSync } = await import('./childProcess.js');
     const isWin = process.platform === 'win32';
     const catPath = isWin
       ? execFileSync('where', ['node']).toString().split(/\r?\n/)[0].trim()

@@ -22,7 +22,7 @@ import { existsSync } from 'node:fs';
 import { homedir, platform, totalmem } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawn, execFile } from 'node:child_process';
+import { spawn, execFile } from '../../lib/childProcess.js';
 import { rewriteGlbMaterialsOpaque } from './glbMaterials.js';
 import { getTarget } from './targets.js';
 import { textMatcher, runInstallSteps, runGenerateSubprocess } from './laneRunner.js';

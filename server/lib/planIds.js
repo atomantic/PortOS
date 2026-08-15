@@ -24,7 +24,7 @@
 
 import { execGit } from './execGit.js';
 import { stripMarkdownEmphasis } from './markdownText.js';
-import { spawn } from 'child_process';
+import { spawn } from './childProcess.js';
 
 const SLUG_MAX_LEN = 50;
 const CHECKBOX_RE = /^(?<indent>\s*)-\s+\[(?<box>[ xX])\]\s+(?:\[(?<id>[a-z0-9][a-z0-9-]*)\]\s+)?(?<rest>.*)$/;

@@ -22,7 +22,7 @@ vi.mock('fs/promises', () => ({
   stat: (...args) => statMock(...args),
 }));
 
-vi.mock('child_process', () => ({
+vi.mock('../lib/childProcess.js', () => ({
   spawn: (...args) => spawnMock(...args),
 }));
 

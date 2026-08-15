@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
-import { ChildProcess } from 'child_process';
+import { ChildProcess } from './childProcess.js';
 import { mkdtemp, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -11,7 +11,7 @@ import { tmpdir } from 'os';
 // needs the real `ChildProcess` export; a from-scratch replacement object
 // (no `ChildProcess` key) would make that check throw on an actual win32 run.
 const spawnMock = vi.fn();
-vi.mock('child_process', async (importOriginal) => {
+vi.mock('./childProcess.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, spawn: (...a) => spawnMock(...a) };
 });

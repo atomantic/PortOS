@@ -6,7 +6,7 @@ import EventEmitter from 'events';
 // these tests need a real directory rather than a synthetic '/workspace' path.
 const TEST_WORKSPACE = process.cwd();
 
-vi.mock('child_process', async (importOriginal) => {
+vi.mock('../lib/childProcess.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, spawn: vi.fn() };
 });
@@ -51,7 +51,7 @@ vi.mock('fs/promises', () => ({
   readFile: vi.fn().mockResolvedValue('{}'),
 }));
 
-const { spawn } = await import('child_process');
+const { spawn } = await import('../lib/childProcess.js');
 const { writeFile, readFile } = await import('fs/promises');
 const { atomicWrite, tryReadFile } = await import('../lib/fileUtils.js');
 const runner = await import('./runner.js');

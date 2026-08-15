@@ -10,7 +10,7 @@
 //
 // The Malloc* family is documented in libmalloc(3) and only affects macOS;
 // stripping the prefix is a no-op on Linux/Windows.
-import { execFile, execFileSync } from 'child_process';
+import { execFile, execFileSync } from './childProcess.js';
 import { promisify } from 'util';
 
 const execFileAsync = promisify(execFile);

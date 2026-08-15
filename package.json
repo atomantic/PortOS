@@ -33,6 +33,7 @@
     "test:db": "npm run test:db --prefix server",
     "setup:llm": "node scripts/setup-llm.js",
     "setup:browser": "node scripts/setup-browser.js",
+    "fix:windows-console": "node scripts/fix-windows-console.js",
     "setup:cert": "node scripts/setup-cert.js",
     "setup:ghostty": "node scripts/setup-ghostty.js",
     "setup:hooks": "bash scripts/setup-git-hooks.sh",

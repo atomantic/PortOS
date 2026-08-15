@@ -43,8 +43,8 @@ vi.mock('../../lib/ffmpeg.js', async () => {
 const spawnCalls = [];
 let mockExitCode = 0;
 let mockStderr = '';
-vi.mock('child_process', async () => {
-  const actual = await vi.importActual('child_process');
+vi.mock('../../lib/childProcess.js', async () => {
+  const actual = await vi.importActual('../../lib/childProcess.js');
   const fs = await import('fs/promises');
   return {
     ...actual,

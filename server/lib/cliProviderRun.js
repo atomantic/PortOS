@@ -16,7 +16,7 @@
  * lightweight cousin for fire-and-collect prompts.
  */
 
-import { spawn } from 'child_process';
+import { spawn } from './childProcess.js';
 import { buildCliArgs, prepareCliPrompt } from './cliProviderArgs.js';
 import { killProcessTree, resolveWindowsExecutable, prepareWindowsSafeSpawn } from './bufferedSpawn.js';
 import { buildCliChildEnv } from './cliChildEnv.js';

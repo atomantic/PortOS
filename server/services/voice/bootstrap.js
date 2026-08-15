@@ -2,7 +2,7 @@
 // provisioning. Piper (TTS) is spawned per-request in services/voice/tts.js.
 
 import { existsSync } from 'fs';
-import { execFile } from 'child_process';
+import { execFile } from '../../lib/childProcess.js';
 import { promisify } from 'util';
 import { basename, join } from 'path';
 import { createServer } from 'net';

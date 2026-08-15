@@ -6,17 +6,12 @@
  * snapshot to CoS state, and emits health events for downstream consumers.
  */
 
-import { execFile } from 'child_process';
-import { promisify } from 'util';
 import { execPm2 } from './pm2.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { getMemoryStats } from '../lib/memoryStats.js';
 import { loadState, saveState, withStateLock, isDaemonRunning } from './cosState.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { annotateExpectedExit } from './apps.js';
-
-const _execFileAsync = promisify(execFile);
-const execFileAsync = (cmd, args, opts) => _execFileAsync(cmd, args, { ...opts, windowsHide: true });
 
 /**
  * Run a daemon health check: inspect PM2 processes and memory, auto-restart
@@ -90,7 +85,10 @@ export async function runHealthCheck() {
     emitLog('warn', `🔄 ${names.length} errored PM2 process(es) detected: ${names.join(', ')} — attempting restart`);
 
     const restartResults = await Promise.all(names.map(async (name) => {
-      const result = await execFileAsync('pm2', ['restart', name], { shell: process.platform === 'win32' }).catch(e => ({ stdout: '', stderr: e.message }));
+      // execPm2, not execFileAsync('pm2', …, { shell: true }) — `shell: true`
+      // resolves `pm2` to pm2.cmd and rebuilds the cmd.exe → pm2.cmd → node
+      // chain that v1.6.7 removed, flashing a console window on every restart.
+      const result = await execPm2(['restart', name]).catch(e => ({ stdout: '', stderr: e.message }));
       const failed = result.stderr && !result.stdout;
       if (failed) {
         emitLog('error', `❌ Failed to restart ${name}: ${result.stderr}`);

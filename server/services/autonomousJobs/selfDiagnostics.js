@@ -25,8 +25,7 @@
  * takes injectable deps so tests drive it without a live `gh` or filesystem.
  */
 
-import { spawn } from 'child_process'
-import { PATHS, safeJSONParse } from '../../lib/fileUtils.js'
+import { spawn } from '../../lib/childProcess.js';import { PATHS, safeJSONParse } from '../../lib/fileUtils.js'
 import { withSpawnCwdEnv } from '../../lib/spawnCwd.js'
 import { loadLearningData, computeWindowedStats } from '../taskLearning/store.js'
 

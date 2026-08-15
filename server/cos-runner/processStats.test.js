@@ -44,7 +44,7 @@ describe('cos-runner processStats', () => {
     const loadWithMockedExec = async (stdout) => {
       const calls = [];
       vi.resetModules();
-      vi.doMock('child_process', () => ({
+      vi.doMock('../lib/childProcess.js', () => ({
         exec: (cmd, _opts, cb) => { calls.push(cmd); cb(null, { stdout, stderr: '' }); },
       }));
       vi.stubGlobal('process', { ...process, platform: 'win32' });
@@ -91,7 +91,7 @@ describe('cos-runner processStats', () => {
     const loadWithMockedExec = async (stdout) => {
       const calls = [];
       vi.resetModules();
-      vi.doMock('child_process', () => ({
+      vi.doMock('../lib/childProcess.js', () => ({
         exec: (cmd, _opts, cb) => { calls.push(cmd); cb(null, { stdout, stderr: '' }); },
       }));
       vi.stubGlobal('process', { ...process, platform: 'win32' });

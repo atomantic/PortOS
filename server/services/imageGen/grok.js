@@ -32,7 +32,7 @@
  * drew itself rather than generated (see fabricationGuard.js).
  */
 
-import { spawn } from 'child_process';
+import { spawn } from '../../lib/childProcess.js';
 import { copyFile, mkdir, open, rename, rm, stat, unlink } from 'fs/promises';
 import { isAbsolute, join, resolve as pathResolve, sep } from 'path';
 import { tmpdir } from 'os';

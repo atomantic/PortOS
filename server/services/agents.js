@@ -1,4 +1,4 @@
-import { exec, execFile } from 'child_process';
+import { exec, execFile } from '../lib/childProcess.js';
 import { promisify } from 'util';
 import { getSpawnedAgent } from './agentState.js';
 import { killAgent } from './agentOrchestrator.js';

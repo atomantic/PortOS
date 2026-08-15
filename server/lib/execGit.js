@@ -3,7 +3,7 @@
  * to avoid a circular dependency (git.js imports worktreeManager.js).
  */
 
-import { spawn } from 'child_process';
+import { spawn } from './childProcess.js';
 
 /**
  * Execute a git command safely using spawn (prevents shell injection).

@@ -123,8 +123,11 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
     // Node's documented safe pattern (no shell:true, no DEP0190 hazard).
     expect(versionCall?.[0]).toBe('cmd.exe');
     expect(versionCall?.[1]).toEqual(['/c', join(fakePathDir, 'opencode.cmd'), '--version']);
-    expect(versionCall?.length).toBe(3);
-    expect(typeof versionCall?.[2]).toBe('function');
+    // (file, args, options, callback) — the options slot carries windowsHide so
+    // this probe can't pop a console window out of a PM2 fork on Windows.
+    expect(versionCall?.length).toBe(4);
+    expect(versionCall?.[2]).toMatchObject({ windowsHide: true });
+    expect(typeof versionCall?.[3]).toBe('function');
   });
 
   it('falls back to the where-resolved path when no extension-bearing match exists on PATH', async () => {

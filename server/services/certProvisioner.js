@@ -17,7 +17,7 @@
  * process is still serving HTTP (e.g. provision was run twice without a
  * restart in between).
  */
-import { execFile } from 'child_process';
+import { execFile } from '../lib/childProcess.js';
 import { existsSync, mkdirSync, statSync } from 'fs';
 import { promisify } from 'util';
 import { PATHS, atomicWrite } from '../lib/fileUtils.js';

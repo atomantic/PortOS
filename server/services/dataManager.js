@@ -1,7 +1,7 @@
 import { readdir, stat, lstat, rm, writeFile as fsWriteFile } from 'fs/promises';
 import { join, relative, resolve, isAbsolute } from 'path';
 import { existsSync } from 'fs';
-import { execFile } from 'child_process';
+import { execFile } from '../lib/childProcess.js';
 import { promisify } from 'util';
 import { PATHS, ensureDir, isTopLevelEntryName } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';

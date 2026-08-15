@@ -7,7 +7,7 @@
  * isolated `portos-cos` PM2 process stays standalone.
  */
 
-import { exec } from 'child_process';
+import { exec } from '../lib/childProcess.js';
 import { promisify } from 'util';
 
 const execAsync = promisify(exec);

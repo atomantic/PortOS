@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { existsSync, realpathSync } from 'fs';
 import { readFile, stat } from 'fs/promises';
 import { join, resolve } from 'path';
-import { exec } from 'child_process';
+import { exec } from '../lib/childProcess.js';
 import { promisify } from 'util';
 import { execPm2 } from '../services/pm2.js';
 import { detectAppWithAi } from '../services/aiDetect.js';

@@ -19,7 +19,7 @@ vi.mock('fs/promises', async (importOriginal) => ({
   readFile: (...args) => readFileMock(...args),
 }));
 
-vi.mock('child_process', async (importOriginal) => ({
+vi.mock('./childProcess.js', async (importOriginal) => ({
   ...await importOriginal(),
   spawn: (...args) => spawnMock(...args),
 }));

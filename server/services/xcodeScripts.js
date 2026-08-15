@@ -1,7 +1,7 @@
 import { existsSync } from 'fs';
 import { readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
-import { exec, execFile } from 'child_process';
+import { exec, execFile } from '../lib/childProcess.js';
 import { promisify } from 'util';
 import { activateAppLine, osascriptSystemEvents } from './xcodeScriptBuilders.js';
 

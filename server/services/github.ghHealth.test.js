@@ -16,7 +16,7 @@ vi.mock('./settings.js', () => ({
 }));
 
 const spawnMock = vi.fn();
-vi.mock('child_process', () => ({ spawn: (...args) => spawnMock(...args) }));
+vi.mock('../lib/childProcess.js', () => ({ spawn: (...args) => spawnMock(...args) }));
 
 const {
   classifyGhProbe, ghRemedy, checkGhHealth, __resetGhHealthCache,

@@ -6,7 +6,7 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
-import { execFile } from 'child_process';
+import { execFile } from '../lib/childProcess.js';
 import { promisify } from 'util';
 import * as instances from '../services/instances.js';
 import { getSyncStatus, syncWithPeer } from '../services/syncOrchestrator.js';

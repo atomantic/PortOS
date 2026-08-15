@@ -1,6 +1,6 @@
 import { existsSync } from 'fs';
 import { join, delimiter } from 'path';
-import { execFile } from 'child_process';
+import { execFile } from './childProcess.js';
 import { promisify } from 'util';
 import { safeJSONParse } from './fileUtils.js';
 

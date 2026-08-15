@@ -34,7 +34,7 @@
  */
 import { DatabaseSync } from 'node:sqlite';
 import { promisify } from 'node:util';
-import { execFile } from 'node:child_process';
+import { execFile } from '../lib/childProcess.js';
 import { copyFile, mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { statSync } from 'node:fs';
 import { tmpdir } from 'node:os';

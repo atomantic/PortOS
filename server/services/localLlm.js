@@ -20,8 +20,7 @@
  * multimodal). See `server/lib/localLlmDisk.js` for the disk logic.
  */
 
-import { execFile, spawn } from 'child_process'
-import { promisify } from 'util'
+import { execFile, spawn } from '../lib/childProcess.js';import { promisify } from 'util'
 import { readFileSync, createWriteStream } from 'fs'
 import { rm } from 'fs/promises'
 import { join } from 'path'

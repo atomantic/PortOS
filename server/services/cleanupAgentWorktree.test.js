@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // --- Mock every dependency agentWorktreeCleanup.js pulls in transitively ---
 
-vi.mock('child_process', () => ({
+vi.mock('../lib/childProcess.js', () => ({
   spawn: vi.fn(),
   execSync: vi.fn(),
   // `execFile` is pulled in transitively by codeReview.js → lmStudioManager

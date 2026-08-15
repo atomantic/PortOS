@@ -30,7 +30,7 @@ vi.mock('os', () => ({
   totalmem: () => h.totalBytes,
   freemem: () => h.freeBytes,
 }));
-vi.mock('child_process', () => ({
+vi.mock('../../lib/childProcess.js', () => ({
   execFile: (_cmd, cb) => {
     if (h.vmStatThrows) return cb(new Error('vm_stat missing'));
     return cb(null, h.vmStat);

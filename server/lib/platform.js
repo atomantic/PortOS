@@ -1,4 +1,4 @@
-import { exec, execSync } from 'child_process';
+import { exec, execSync } from './childProcess.js';
 import { promisify } from 'util';
 
 const execAsync = promisify(exec);

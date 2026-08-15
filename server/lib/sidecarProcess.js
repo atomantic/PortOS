@@ -14,7 +14,7 @@
  * instead.
  */
 
-import { spawn } from 'child_process';
+import { spawn } from './childProcess.js';
 import { safeChildProcessOptions } from './processEnv.js';
 
 // Only the trailing RESULT: line is ever consumed, and sidecar runs are

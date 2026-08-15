@@ -15,7 +15,7 @@ vi.mock('fs/promises', () => ({
   readFile: vi.fn(),
   writeFile: vi.fn()
 }));
-vi.mock('child_process', () => ({
+vi.mock('../lib/childProcess.js', () => ({
   exec: hoisted.execMock,
   execFile: hoisted.execFileMock
 }));

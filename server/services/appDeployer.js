@@ -1,4 +1,4 @@
-import { spawn } from 'child_process';
+import { spawn } from '../lib/childProcess.js';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { NON_PM2_TYPES } from './streamingDetect.js';

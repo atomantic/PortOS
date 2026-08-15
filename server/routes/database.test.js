@@ -34,7 +34,7 @@ vi.mock('../lib/db.js', () => ({
 }));
 
 // Mock child_process.execFile + spawn at the module level.
-vi.mock('child_process', async (importOriginal) => {
+vi.mock('../lib/childProcess.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
@@ -43,7 +43,7 @@ vi.mock('child_process', async (importOriginal) => {
   };
 });
 
-import { execFile, spawn } from 'child_process';
+import { execFile, spawn } from '../lib/childProcess.js';
 import { EventEmitter } from 'events';
 import { PassThrough } from 'stream';
 import { writeFileSync, mkdtempSync } from 'fs';

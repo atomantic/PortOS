@@ -5,12 +5,12 @@ vi.mock('fs', () => ({
   existsSync: vi.fn()
 }));
 
-vi.mock('child_process', () => ({
+vi.mock('./childProcess.js', () => ({
   execFile: vi.fn()
 }));
 
 import { existsSync } from 'fs';
-import { execFile } from 'child_process';
+import { execFile } from './childProcess.js';
 import {
   findTailscale,
   isSandboxedTailscale,

@@ -29,7 +29,7 @@ const makeFakeChild = () => {
 };
 // Partial mock — keep execFile/exec real for fileUtils.dirSize and friends,
 // only swap spawn so we can assert + drive the codex child.
-vi.mock('child_process', async (importOriginal) => {
+vi.mock('../../lib/childProcess.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,

@@ -10,7 +10,7 @@ vi.mock('./providers.js', () => ({
   getProviderById: vi.fn(),
 }));
 
-vi.mock('child_process', async (importOriginal) => {
+vi.mock('../lib/childProcess.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, spawn: vi.fn() };
 });
@@ -52,7 +52,7 @@ vi.mock('./catalogDB.js', () => ({
   hybridSearchIngredients: vi.fn(),
 }));
 
-const { spawn } = await import('child_process');
+const { spawn } = await import('../lib/childProcess.js');
 const catalogDB = await import('./catalogDB.js');
 const memoryBackend = await import('./memoryBackend.js');
 const memoryEmbeddings = await import('./memoryEmbeddings.js');

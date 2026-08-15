@@ -83,7 +83,7 @@ vi.mock('../lib/bufferedSpawn.js', () => ({
 
 // Mock child_process.spawn to return a controllable fake process
 let fakeProcess;
-vi.mock('child_process', () => ({
+vi.mock('../lib/childProcess.js', () => ({
   spawn: vi.fn(() => fakeProcess),
   // `execFile` is pulled in transitively by codeReview.js → lmStudioManager
   // (via `resolveReviewLoopOptions`'s dependency graph), even though this
@@ -104,7 +104,7 @@ import { releaseRetryHold } from './agentWorktreeCleanup.js';
 // directly exercises the same code path production does.
 import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../lib/hostShutdown.js';
 import { existsSync } from 'fs';
-import { spawn } from 'child_process';
+import { spawn } from '../lib/childProcess.js';
 import { prepareCliSpawn, killProcessTree } from '../lib/bufferedSpawn.js';
 
 // Helper: feed the parser a sequence of stream-json lines

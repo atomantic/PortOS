@@ -23,7 +23,7 @@
 // parseHfDownloadLine is the single decoder — downloadHfRepo and the tests
 // share it so a wire-shape change cannot drift between them.
 
-import { spawn } from 'node:child_process';
+import { spawn } from './childProcess.js';
 import { join } from 'node:path';
 import {
   resolveFlux2Python, isFlux2VenvHealthy,

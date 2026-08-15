@@ -5,7 +5,7 @@ import { pinPlatform } from './testHelper.js';
 // Mock the collaborators so the behavior under test is observable without
 // launching bash, probing the filesystem for a Python, or firing a real kill.
 const spawnMock = vi.fn();
-vi.mock('child_process', async (importOriginal) => {
+vi.mock('./childProcess.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, spawn: (...a) => spawnMock(...a) };
 });
