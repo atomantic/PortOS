@@ -280,37 +280,143 @@ function normalizedAttributeValue(value) {
 }
 
 // Keep source indexes stable while removing comments that may contain JSX
-// examples. This lets the repo-wide scan inspect actual elements without
-// reporting documentation snippets such as `<input>` in a component header.
+// examples. This is a small lexer rather than a quote-only scan: apostrophes,
+// slashes, and URLs are ordinary JSX text and must not put the rest of a file
+// into a fake JavaScript string/comment state.
 function maskComments(src) {
   const chars = [...src];
+  let mode = 'code';
   let quote = null;
+  let braceDepth = 0;
+  let tagBraceDepth = 0;
+  let tagInfo = null;
+  let tagParentMode = 'code';
+  const jsxStack = [];
+
+  const jsxTagInfoAt = (index) => {
+    const closing = src.startsWith('</', index);
+    const fragment = src.startsWith('<>', index) || src.startsWith('</>', index);
+    const name = src.slice(index + (closing ? 2 : 1)).match(/^([A-Za-z][\w.-]*)/)?.[1] || null;
+    return { closing, fragment, name };
+  };
+
+  const looksLikeJsxTagStart = (index) => {
+    const next = src[index + 1];
+    if (!(next === '/' || next === '>' || /[A-Za-z]/.test(next || ''))) return false;
+    let previous = index - 1;
+    while (previous >= 0 && /\s/.test(src[previous])) previous--;
+    if (previous < 0 || '=([{,:;!?&|>'.includes(src[previous])) return true;
+    return /(?:return|yield|=>)\s*$/.test(src.slice(Math.max(0, index - 12), index));
+  };
+
   for (let i = 0; i < chars.length; i++) {
-    if (quote) {
-      if (chars[i] === '\\') { i++; continue; }
-      if (chars[i] === quote) quote = null;
+    const c = chars[i];
+
+    if (mode === 'line-comment') {
+      if (c === '\n') mode = 'code';
+      else chars[i] = ' ';
       continue;
     }
-    if (chars[i] === '"' || chars[i] === "'" || chars[i] === '`') {
-      quote = chars[i];
-      continue;
-    }
-    if (chars[i] === '/' && chars[i + 1] === '/') {
-      for (i += 1; i < chars.length && chars[i] !== '\n'; i++) chars[i] = ' ';
-      continue;
-    }
-    if (chars[i] === '/' && chars[i + 1] === '*') {
-      chars[i] = ' ';
-      chars[i + 1] = ' ';
-      for (i += 2; i < chars.length - 1; i++) {
-        if (chars[i] === '*' && chars[i + 1] === '/') {
-          chars[i] = ' ';
-          chars[i + 1] = ' ';
-          i++;
-          break;
-        }
-        if (chars[i] !== '\n') chars[i] = ' ';
+    if (mode === 'block-comment') {
+      if (c === '*' && chars[i + 1] === '/') {
+        chars[i] = ' ';
+        chars[++i] = ' ';
+        mode = 'code';
+      } else if (c !== '\n') {
+        chars[i] = ' ';
       }
+      continue;
+    }
+    if (quote) {
+      if (c === '\\') { i++; continue; }
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (mode === 'jsx-text') {
+      if (c === '{') {
+        mode = 'code';
+        braceDepth = 1;
+      } else if (c === '<' && (src[i + 1] === '/' || /[A-Za-z>]/.test(src[i + 1] || ''))) {
+        tagInfo = jsxTagInfoAt(i);
+        tagParentMode = 'jsx-text';
+        tagBraceDepth = 0;
+        mode = 'jsx-tag';
+      }
+      continue;
+    }
+    if (mode === 'jsx-tag') {
+      if (c === '/' && chars[i + 1] === '/') {
+        chars[i] = ' ';
+        chars[++i] = ' ';
+        mode = 'line-comment';
+        continue;
+      }
+      if (c === '/' && chars[i + 1] === '*') {
+        chars[i] = ' ';
+        chars[++i] = ' ';
+        mode = 'block-comment';
+        continue;
+      }
+      if (c === '"' || c === "'" || c === '`') {
+        quote = c;
+        continue;
+      }
+      if (c === '{') {
+        tagBraceDepth++;
+        continue;
+      }
+      if (c === '}' && tagBraceDepth > 0) {
+        tagBraceDepth--;
+        continue;
+      }
+      if (c !== '>' || tagBraceDepth !== 0) continue;
+
+      let previous = i - 1;
+      while (previous >= 0 && /\s/.test(src[previous])) previous--;
+      const selfClosing = src[previous] === '/';
+      if (tagInfo.closing) {
+        jsxStack.pop();
+        mode = jsxStack.length ? 'jsx-text' : 'code';
+      } else if (selfClosing) {
+        mode = tagParentMode;
+      } else {
+        jsxStack.push(tagInfo.fragment ? null : tagInfo.name);
+        mode = 'jsx-text';
+      }
+      tagInfo = null;
+      continue;
+    }
+
+    if (c === '"' || c === "'" || c === '`') {
+      quote = c;
+      continue;
+    }
+    if (c === '/' && chars[i + 1] === '/') {
+      chars[i] = ' ';
+      chars[++i] = ' ';
+      mode = 'line-comment';
+      continue;
+    }
+    if (c === '/' && chars[i + 1] === '*') {
+      chars[i] = ' ';
+      chars[++i] = ' ';
+      mode = 'block-comment';
+      continue;
+    }
+    if (braceDepth > 0 && c === '{') {
+      braceDepth++;
+      continue;
+    }
+    if (braceDepth > 0 && c === '}') {
+      braceDepth--;
+      if (braceDepth === 0) mode = 'jsx-text';
+      continue;
+    }
+    if (c === '<' && looksLikeJsxTagStart(i)) {
+      tagInfo = jsxTagInfoAt(i);
+      tagParentMode = 'code';
+      tagBraceDepth = 0;
+      mode = 'jsx-tag';
     }
   }
   return chars.join('');
@@ -329,6 +435,13 @@ function hasMatchingExplicitLabel(src, id) {
   return false;
 }
 
+function stripHiddenElementContent(body) {
+  const hiddenAttribute = String.raw`(?:aria-hidden\s*=\s*(?:["']true["']|\{\s*true\s*\})|\bhidden(?:\s*=\s*(?:["']true["']|\{\s*true\s*\}))?)`;
+  return body
+    .replace(new RegExp(`<([A-Za-z][\\w.-]*)\\b[^>]*${hiddenAttribute}[^>]*/\\s*>`, 'gi'), ' ')
+    .replace(new RegExp(`<([A-Za-z][\\w.-]*)\\b[^>]*${hiddenAttribute}[^>]*>[\\s\\S]*?<\\/\\1\\s*>`, 'gi'), ' ');
+}
+
 function hasUsableElementText(src, index, tag) {
   if (hasUsableAccessibleNameAttribute(tag, 'aria-label')) return true;
   if (/\/\s*>$/.test(tag)) return false;
@@ -336,7 +449,7 @@ function hasUsableElementText(src, index, tag) {
   if (!name) return false;
   const closeIndex = src.indexOf(`</${name}>`, index + tag.length);
   if (closeIndex === -1) return false;
-  const body = maskComments(src.slice(index + tag.length, closeIndex))
+  const body = stripHiddenElementContent(maskComments(src.slice(index + tag.length, closeIndex)))
     .replace(/<\/?[A-Za-z][^>]*>/g, ' ')
     .trim();
   if (!body) return false;
@@ -348,26 +461,37 @@ function hasUsableElementText(src, index, tag) {
 }
 
 function isNestedInLabel(src, index) {
-  let depth = 0;
+  const labels = [];
   const re = /<\/?label\b/g;
   let match;
   while ((match = re.exec(src)) && match.index < index) {
     if (match[0].startsWith('</')) {
-      depth = Math.max(0, depth - 1);
+      labels.pop();
       continue;
     }
     const tag = openingTagAt(src, match.index, '<label'.length);
     if (!tag) continue;
-    if (!/\/\s*>$/.test(tag)) depth++;
+    if (!/\/\s*>$/.test(tag)) labels.push({ index: match.index, tag });
     re.lastIndex = match.index + tag.length;
   }
-  return depth > 0;
+  return labels.some(({ index: labelIndex, tag }) => hasUsableElementText(src, labelIndex, tag));
 }
 
 function hasUsableAccessibleNameAttribute(tag, name) {
   const value = normalizedAttributeValue(attributeValue(tag, name));
   if (value === null || value === '') return false;
-  return !/^(?:undefined|null)$/i.test(value);
+  const trimmed = value.trim();
+  return trimmed !== '' && !/^(?:undefined|null)$/i.test(trimmed);
+}
+
+function hasUsableNativeInputName(tag) {
+  const type = normalizedAttributeValue(attributeValue(tag, 'type'))?.toLowerCase() || 'text';
+  if (type === 'hidden') return true;
+  if (['submit', 'button', 'reset'].includes(type)) {
+    const value = attributeValue(tag, 'value');
+    return value === null || hasUsableAccessibleNameAttribute(tag, 'value');
+  }
+  return type === 'image' && hasUsableAccessibleNameAttribute(tag, 'alt');
 }
 
 function isNestedInLabeledFormField(src, index) {
@@ -469,7 +593,7 @@ function hasUsableAriaLabelledByReference(src, tag) {
 function hasAccessibleInputName(src, tag, index) {
   if (hasUsableAccessibleNameAttribute(tag, 'aria-label')) return true;
   if (hasUsableAccessibleNameAttribute(tag, 'aria-labelledby') && hasUsableAriaLabelledByReference(src, tag)) return true;
-  if (normalizedAttributeValue(attributeValue(tag, 'type'))?.toLowerCase() === 'hidden') return true;
+  if (hasUsableNativeInputName(tag)) return true;
   if (isNestedInLabel(src, index) || isNestedInLabeledFormField(src, index)) return true;
 
   const id = normalizedAttributeValue(attributeValue(tag, 'id'));
