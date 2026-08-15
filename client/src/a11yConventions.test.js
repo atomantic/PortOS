@@ -291,6 +291,10 @@ function maskComments(src) {
   let tagBraceDepth = 0;
   let tagInfo = null;
   let tagParentMode = 'code';
+  // Each entry marks whether the element started in JavaScript expression
+  // context. A nested JSX expression can sit inside an outer element; when its
+  // root closes, return to JavaScript rather than mistaking the outer element's
+  // remaining stack entry for JSX text.
   const jsxStack = [];
 
   const jsxTagInfoAt = (index) => {
@@ -375,12 +379,12 @@ function maskComments(src) {
       while (previous >= 0 && /\s/.test(src[previous])) previous--;
       const selfClosing = src[previous] === '/';
       if (tagInfo.closing) {
-        jsxStack.pop();
-        mode = jsxStack.length ? 'jsx-text' : 'code';
+        const entry = jsxStack.pop();
+        mode = entry?.root ? 'code' : (jsxStack.length ? 'jsx-text' : 'code');
       } else if (selfClosing) {
         mode = tagParentMode;
       } else {
-        jsxStack.push(tagInfo.fragment ? null : tagInfo.name);
+        jsxStack.push({ name: tagInfo.fragment ? null : tagInfo.name, root: tagParentMode === 'code' });
         mode = 'jsx-text';
       }
       tagInfo = null;
@@ -501,7 +505,7 @@ function isNestedInLabeledFormField(src, index) {
     const formTag = openingTagAt(src, formMatch.index, '<FormField'.length);
     if (!formTag || /\/\s*>$/.test(formTag)) continue;
     const label = normalizedAttributeValue(attributeValue(formTag, 'label'));
-    if (label === null || label === '' || /^(?:undefined|null)$/i.test(label)) continue;
+    if (label === null || label === '' || /^(?:undefined|null|false)$/i.test(label)) continue;
 
     let depth = 0;
     let firstChild = null;
