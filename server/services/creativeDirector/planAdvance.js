@@ -30,6 +30,7 @@ import { listJobs, mediaJobEvents } from '../mediaJobQueue/index.js';
 import { autopilotEvents, isAutopilotActive, AUTOPILOT_TERMINAL_TYPES } from '../pipeline/seriesAutopilot.js';
 import { getSeries } from '../pipeline/series.js';
 import { MAX_REPLAN_ROUNDS, PLAN_STEP_TERMINAL_SUCCESS } from '../../lib/creativeDirectorPresets.js';
+import { blockedStageReason, closeDeliverableStreak, exhaustedDeliverableStreak } from './deliverableGate.js';
 
 // The registry tool that runs Series Autopilot as a plan step. A long-running
 // step whose dispatch returns a run handle (a `runId`, not a media `jobId`)
@@ -253,17 +254,49 @@ function summarizeResult(result) {
   return out;
 }
 
+// Flip the project to `planning` and hand the planner agent a fresh task. Shared
+// by the no-plan-yet branch and the bounded re-planner so they can never drift on
+// the in-flight bookkeeping. Callers own their own pre-guards AND must have taken
+// `inflightPlanner` already (this releases it).
+async function dispatchPlanner(projectId) {
+  await updateProject(projectId, { status: 'planning' })
+    .catch((e) => { inflightPlanner.delete(projectId); throw e; });
+  const fresh = await getProject(projectId);
+  await enqueuePlanTask(fresh).finally(() => inflightPlanner.delete(projectId));
+}
+
+/**
+ * #4146 — bounded blocked-stage gate in front of every planner dispatch.
+ *
+ * The planner agent's deliverable is `PATCH /:id/plan`. When it exits cleanly
+ * without PATCHing, completionHook now records the run `failed` — which is what
+ * lets the guard above re-dispatch LIVE rather than at boot. But re-handing the
+ * SAME task to a model that has already demonstrated it cannot perform the PATCH
+ * just burns the provider in a tight loop (and the re-plan route can't even be
+ * bounded by MAX_REPLAN_ROUNDS: `replanRounds` only advances when a plan actually
+ * lands). After MAX_CONSECUTIVE_MISSED_DELIVERABLES empty completions, surface
+ * the stage to the user instead — and close the streak so a Resume after
+ * switching models starts from a clean budget.
+ *
+ * Returns true when the caller must NOT dispatch.
+ */
+async function plannerBlockedOnEmptyRuns(project) {
+  const streak = exhaustedDeliverableStreak(project.runs, 'plan');
+  if (!streak) return false;
+  await closeDeliverableStreak(project.id, project.runs, 'plan');
+  await pausePlanWithResidual(project.id, blockedStageReason('plan', streak));
+  return true;
+}
+
 async function enqueuePlannerOnce(project) {
   const projectId = project.id;
   const hasInflightPlanRun = (project.runs || []).some(
     (r) => r.kind === 'plan' && r.status !== 'completed' && r.status !== 'failed',
   );
   if (hasInflightPlanRun || inflightPlanner.has(projectId)) return;
+  if (await plannerBlockedOnEmptyRuns(project)) return;
   inflightPlanner.add(projectId);
-  await updateProject(projectId, { status: 'planning' })
-    .catch((e) => { inflightPlanner.delete(projectId); throw e; });
-  const fresh = await getProject(projectId);
-  await enqueuePlanTask(fresh).finally(() => inflightPlanner.delete(projectId));
+  return dispatchPlanner(projectId);
 }
 
 /**
@@ -440,12 +473,14 @@ async function handlePlanStepFailure(projectId, step) {
   if (!project || project.status === 'paused' || project.status === 'failed') return;
   const rounds = project.plan?.replanRounds || 0;
   if (rounds < MAX_REPLAN_ROUNDS && !inflightPlanner.has(projectId)) {
+    // MAX_REPLAN_ROUNDS alone cannot bound this path: `replanRounds` is bumped by
+    // applyPlan, so a planner that never PATCHes leaves it at the same value and
+    // this branch would re-fire forever (#4146). The empty-run gate is what
+    // terminates that loop.
+    if (await plannerBlockedOnEmptyRuns(project)) return;
     console.log(`🔁 CD plan ${projectId}: step "${step.stepId}" failed — re-planning (round ${rounds + 1}/${MAX_REPLAN_ROUNDS})`);
     inflightPlanner.add(projectId);
-    await updateProject(projectId, { status: 'planning' })
-      .catch((e) => { inflightPlanner.delete(projectId); throw e; });
-    const fresh = await getProject(projectId);
-    await enqueuePlanTask(fresh).finally(() => inflightPlanner.delete(projectId));
+    await dispatchPlanner(projectId);
     return;
   }
   return pausePlanWithResidual(

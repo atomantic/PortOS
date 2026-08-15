@@ -21,6 +21,7 @@ import { getToolSpecs } from '../creative/toolRegistry.js';
 import { getSettings } from '../settings.js';
 import { resolveStagePin } from './projectsLogic.js';
 import { recordRun } from './local.js';
+import { DELIVERABLE_KINDS, deliverableMark } from './deliverableGate.js';
 
 // Treatment and production planning are CoS tasks, so unlike scene evaluation
 // they need a CLI/TUI provider with an agent harness. Resolution prefers the
@@ -140,12 +141,21 @@ async function persistAndEmit({ id, runId, record }, project, kind, sceneId) {
   }
   // Record the run as `running` so the Runs tab shows in-flight state.
   // completionHook updates the same runId on finish.
+  //
+  // `deliverableMark` is the BASELINE fingerprint of what this stage is supposed
+  // to write (#4146). completionHook compares the project's mark against it when
+  // the run settles, so an agent that exits 0 having PATCHed nothing is recorded
+  // as the failure it is instead of a success the re-dispatch guard skips over.
+  // Only stamped for kinds with a verifiable PATCH deliverable — the key is
+  // ABSENT (not null) for the rest, which is exactly how `deliverableLanded`
+  // recognizes "no baseline recorded" and declines to manufacture a failure.
   await recordRun(project.id, {
     runId,
     taskId: effective.id,
     kind,
     sceneId: sceneId || null,
     status: 'running',
+    ...(DELIVERABLE_KINDS.has(kind) ? { deliverableMark: deliverableMark(project, kind) } : {}),
   }).catch((err) => console.log(`⚠️ CD recordRun(running) failed: ${err.message}`));
   cosEvents.emit('task:ready', effective);
   console.log(`📤 CD task enqueued: ${effective.id} (${kind}${sceneId ? ` for ${sceneId}` : ''} on ${project.id})`);

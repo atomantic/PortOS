@@ -167,7 +167,9 @@ export function isNonCommittingCoordinatorTask(task) {
 
 /**
  * Whether a task declares NO commit criterion: the static
- * coordinator set above, OR a TRACKER-FILING task whose dispatch derived
+ * coordinator set above, a NO-CODE-OUTPUT task (its deliverable is an action —
+ * an HTTP PATCH, a filed issue — and its prompt never asks for a commit), OR a
+ * TRACKER-FILING task whose dispatch derived
  * `worktreeChangesExpected: false` (cosTaskGenerator.js#resolveTrackerFilingBlock,
  * referenceRepos.js#triggerReferenceAnalysis).
  *
@@ -202,6 +204,19 @@ export function declaresNoCommitCriterion(task) {
   // SUCCESSFUL run a validation miss and drags that provider/model's learning
   // bucket toward 0% — the #2696/#3273 artifact, arriving by a third route.
   if (isTruthyMeta(task?.metadata?.discardWorktree)) return true;
+  // `noCodeOutput` tasks deliver something the agent DOES — an HTTP PATCH, a filed
+  // issue, an API call — and their prompt routes through
+  // agentPromptBuilder#buildActionOutputCompletionSection, which explicitly does
+  // NOT tell them to commit or open a PR. Creative Director tasks are the shipped
+  // instance of that shape (their deliverable is `PATCH /api/creative-director/…`),
+  // and they run with `useWorktree: false` against the live checkout — so
+  // workspacePath IS set and the commit criterion scored every SUCCESSFUL run as a
+  // miss, the #2696/#3273 artifact reaching CD by a fourth route (#4146). Resolved
+  // exactly as agentPromptBuilder resolves it (flag OR the creativeDirector
+  // metadata block) so the criterion and the prompt can't disagree about whether a
+  // commit was ever asked for. Their REAL deliverable is verified in the CD
+  // completion hook, which is the only place the project record is visible.
+  if (isTruthyMeta(task?.metadata?.noCodeOutput) || task?.metadata?.creativeDirector) return true;
   if (!isTrackerFilingDispatch(task)) return false;
   return isFalsyMeta(task?.metadata?.worktreeChangesExpected);
 }

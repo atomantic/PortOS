@@ -1,0 +1,1 @@
+- Creative Director: a plan/treatment agent that exits cleanly without writing its plan/treatment is now recorded as a failed run and, after two consecutive empty completions, the project is paused with an actionable reason instead of endlessly re-dispatching the same incapable model

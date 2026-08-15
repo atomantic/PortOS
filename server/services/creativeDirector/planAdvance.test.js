@@ -10,6 +10,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { MAX_CONSECUTIVE_MISSED_DELIVERABLES } from '../../lib/creativeDirectorPresets.js';
 
 // ---- pure derivation (no mocks needed) -------------------------------------
 import { deriveNextPlanAction, lastRenderedVideoJobId, resolvePlanStepArgs } from './planAdvance.js';
@@ -516,5 +517,76 @@ describe('advanceAfterPlanStepSettled — runAutopilot plan step', () => {
     const p = read();
     expect(p.plan.steps[0].status).toBe('blocked');
     expect(p.status).toBe('paused');
+  });
+});
+
+// ---- #4146 bounded planner gate --------------------------------------------
+
+describe('advanceAfterPlanStepSettled — empty-planner gate (#4146)', () => {
+  const missedPlanRun = (runId, over = {}) => ({
+    runId, kind: 'plan', status: 'failed', deliverableMissing: true, ...over,
+  });
+  const noPlan = (runs) => ({
+    id: 'cd-1', status: 'planning', directive: { goal: 'g', deliverables: [], constraints: {} },
+    plan: null, runs,
+  });
+
+  it('re-dispatches the planner once a run that never PATCHed is marked failed', async () => {
+    // The whole point of failing the empty run: the `hasInflightPlanRun` guard
+    // treats it as terminal, so the loop re-enqueues LIVE instead of waiting for
+    // boot recovery to reap a run stuck at `completed`.
+    makeStore(noPlan([missedPlanRun('r1')]));
+    await advanceAfterPlanStepSettled('cd-1');
+    expect(mockEnqueuePlanTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('still refuses to re-dispatch while a plan run is genuinely in flight', async () => {
+    makeStore(noPlan([{ runId: 'r1', kind: 'plan', status: 'running' }]));
+    await advanceAfterPlanStepSettled('cd-1');
+    expect(mockEnqueuePlanTask).not.toHaveBeenCalled();
+  });
+
+  it('pauses the project instead of re-dispatching once the empty streak hits the bound', async () => {
+    const runs = Array.from({ length: MAX_CONSECUTIVE_MISSED_DELIVERABLES }, (_, i) => missedPlanRun(`r${i}`));
+    const read = makeStore(noPlan(runs));
+    await advanceAfterPlanStepSettled('cd-1');
+    expect(mockEnqueuePlanTask).not.toHaveBeenCalled();
+    const p = read();
+    expect(p.status).toBe('paused');
+    expect(p.failureReason).toMatch(/tool-capable model/);
+    // Streak closed so a Resume after switching models starts from a fresh budget.
+    expect(p.runs.every((r) => r.deliverableStreakClosed === true)).toBe(true);
+  });
+
+  it('re-dispatches again after the streak was closed (Resume gets a fresh budget)', async () => {
+    const runs = Array.from({ length: MAX_CONSECUTIVE_MISSED_DELIVERABLES }, (_, i) => (
+      missedPlanRun(`r${i}`, { deliverableStreakClosed: true })
+    ));
+    makeStore(noPlan(runs));
+    await advanceAfterPlanStepSettled('cd-1');
+    expect(mockEnqueuePlanTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('bounds the RE-PLAN route too — replanRounds never advances on an empty planner', async () => {
+    // A failed step routes through handlePlanStepFailure, which is budgeted by
+    // MAX_REPLAN_ROUNDS. But `replanRounds` is only bumped when a plan actually
+    // lands, so an empty planner would loop there forever without this gate.
+    const steps = [step('a', { toolName: 'pipeline_generateStage', status: 'failed' })];
+    const runs = Array.from({ length: MAX_CONSECUTIVE_MISSED_DELIVERABLES }, (_, i) => missedPlanRun(`r${i}`));
+    const read = makeStore(planProject(steps, { plan: { steps, replanRounds: 0 }, runs }));
+    await advanceAfterPlanStepSettled('cd-1');
+    expect(mockEnqueuePlanTask).not.toHaveBeenCalled();
+    expect(read().status).toBe('paused');
+  });
+
+  it('still re-plans on a failed step when the planner has been delivering', async () => {
+    const steps = [step('a', { toolName: 'pipeline_generateStage', status: 'failed' })];
+    const read = makeStore(planProject(steps, {
+      plan: { steps, replanRounds: 0 },
+      runs: [{ runId: 'r1', kind: 'plan', status: 'completed' }],
+    }));
+    await advanceAfterPlanStepSettled('cd-1');
+    expect(mockEnqueuePlanTask).toHaveBeenCalledTimes(1);
+    expect(read().status).toBe('planning');
   });
 });

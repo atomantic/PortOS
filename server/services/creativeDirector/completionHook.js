@@ -33,6 +33,14 @@ import { runStitch } from './stitchRunner.js';
 import { sampleEvaluationFrames } from '../videoGen/local.js';
 import { listJobs, mediaJobEvents } from '../mediaJobQueue/index.js';
 import { PATHS } from '../../lib/fileUtils.js';
+import {
+  DELIVERABLE_KINDS,
+  blockedStageReason,
+  closeDeliverableStreak,
+  deliverableLanded,
+  exhaustedDeliverableStreak,
+  missedDeliverableReason,
+} from './deliverableGate.js';
 
 export async function handleCreativeDirectorCompletion(task, agentId, success) {
   const meta = task?.metadata?.creativeDirector;
@@ -43,17 +51,35 @@ export async function handleCreativeDirectorCompletion(task, agentId, success) {
     return;
   }
 
+  // #4146 — a `plan`/`treatment` agent's deliverable is the PATCH its prompt
+  // describes, not its exit code. A non-tool-calling model narrates a
+  // done-message, exits 0, and writes nothing; recording that as `completed`
+  // makes the re-dispatch guard in enqueuePlannerOnce / advanceAfterSceneSettled
+  // see no in-flight run and hand the SAME model the SAME task again, forever.
+  // Compare the project's deliverable against the baseline stamped on the run at
+  // dispatch: an exit-0 run with no PATCH is recorded as the failure it is, so
+  // the guard reaps it LIVE instead of waiting for boot recovery.
+  const runId = meta.runId;
+  const priorRun = runId ? (project.runs || []).find((r) => r.runId === runId) : null;
+  const deliverableKind = DELIVERABLE_KINDS.has(meta.kind) ? meta.kind : null;
+  const missedDeliverable = Boolean(success && deliverableKind
+    && !deliverableLanded(project, deliverableKind, priorRun?.deliverableMark));
+
   // Update / create the run record so the Runs tab reflects this agent run.
   const completedAt = new Date().toISOString();
-  const runId = meta.runId;
+  const runStatus = success && !missedDeliverable ? 'completed' : 'failed';
+  const missedFields = missedDeliverable
+    ? { deliverableMissing: true, failureReason: missedDeliverableReason(meta.kind) }
+    : {};
   const updatedExisting = runId
     ? await updateRun(project.id, runId, {
         agentId,
-        status: success ? 'completed' : 'failed',
+        status: runStatus,
         completedAt,
         kind: meta.kind,
         sceneId: meta.sceneId || null,
         taskId: task.id,
+        ...missedFields,
       })
     : null;
   if (!updatedExisting) {
@@ -63,9 +89,18 @@ export async function handleCreativeDirectorCompletion(task, agentId, success) {
       taskId: task.id,
       kind: meta.kind,
       sceneId: meta.sceneId || null,
-      status: success ? 'completed' : 'failed',
+      status: runStatus,
       completedAt,
+      ...missedFields,
     }).catch((err) => console.log(`⚠️ CD recordRun failed: ${err.message}`));
+  }
+
+  if (missedDeliverable) {
+    // NOT a project failure: the advance loop below re-dispatches once (the
+    // agent may simply have run out of context), and the bounded gate in
+    // enqueuePlannerOnce / the no-treatment branch parks the project once the
+    // stage has come back empty MAX_CONSECUTIVE_MISSED_DELIVERABLES times.
+    console.log(`⚠️ CD ${meta.kind} run on ${project.id} exited cleanly but never wrote its ${meta.kind} — run marked failed`);
   }
 
   if (!success) {
@@ -220,6 +255,19 @@ export async function advanceAfterSceneSettled(projectId, opts = {}) {
       (r) => r.kind === 'treatment' && r.status !== 'completed' && r.status !== 'failed'
     );
     if (hasInflightTreatmentRun || inflightTreatment.has(projectId)) return;
+    // #4146 — bounded blocked-stage gate. Once the treatment agent has come back
+    // empty MAX_CONSECUTIVE_MISSED_DELIVERABLES times in a row, re-dispatching
+    // the same task to the same model is guaranteed to fail the same way. Park
+    // the project with an actionable reason instead, and CLOSE the streak so a
+    // Resume after switching models gets a fresh budget rather than re-pausing.
+    const emptyStreak = exhaustedDeliverableStreak(project.runs, 'treatment');
+    if (emptyStreak) {
+      await closeDeliverableStreak(project.id, project.runs, 'treatment');
+      await updateProject(project.id, { status: 'paused', failureReason: blockedStageReason('treatment', emptyStreak) })
+        .catch((e) => console.log(`⚠️ CD updateProject(paused) for ${project.id} failed: ${e.message}`));
+      console.log(`⏸️  CD project ${project.id}: treatment agent came back empty ${emptyStreak}× — paused for a model change`);
+      return;
+    }
     inflightTreatment.add(projectId);
     await updateProject(project.id, { status: 'planning' })
       .catch((e) => { inflightTreatment.delete(projectId); throw e; });

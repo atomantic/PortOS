@@ -24,6 +24,19 @@ describe('declaresNoCommitCriterion', () => {
     expect(declaresNoCommitCriterion(task({ discardWorktree: 'true' }))).toBe(true);
   });
 
+  it('exempts a no-code-output task, whose deliverable is an action not a commit (#4146)', () => {
+    expect(declaresNoCommitCriterion(task({ noCodeOutput: true }))).toBe(true);
+    expect(declaresNoCommitCriterion(task({ noCodeOutput: 'true' }))).toBe(true);
+    // Creative Director tasks are the shipped instance: they run against the live
+    // checkout (useWorktree:false) so workspacePath IS set, and their deliverable
+    // is `PATCH /api/creative-director/:id/plan|treatment`. Commit-checking them
+    // scored every successful run as a miss. Resolved the same way
+    // agentPromptBuilder resolves noCodeOutput, so prompt and criterion agree.
+    expect(declaresNoCommitCriterion(task({
+      creativeDirector: { projectId: 'cd-1', kind: 'plan', runId: 'r1' },
+    }))).toBe(true);
+  });
+
   describe('tracker-filing runs', () => {
     it('exempts a SCHEDULED type whose dispatch derived a clean tree', () => {
       expect(declaresNoCommitCriterion(task({

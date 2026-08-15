@@ -79,6 +79,17 @@ export const PLAN_STEP_TERMINAL_SUCCESS = Object.freeze(new Set(['done', 'skippe
 // residuals for human review (autopilot's convergence-pause contract).
 export const MAX_REPLAN_ROUNDS = 2;
 
+// Bounded re-dispatch of a COGNITIVE stage (plan / treatment) whose agent keeps
+// exiting cleanly without writing its deliverable (#4146). A non-tool-calling
+// local model narrates a done-message and PATCHes nothing; re-handing it the same
+// task is guaranteed to fail the same way, so after this many consecutive empty
+// completions the stage is surfaced to the user as a blocked/paused project
+// (naming the remedy: assign a tool-capable model) rather than re-dispatched.
+// 2 — one retry covers a genuine one-off (a truncated response, a transient
+// provider hiccup) without burning a third identical run on a model that has now
+// demonstrated twice that it cannot perform the PATCH.
+export const MAX_CONSECUTIVE_MISSED_DELIVERABLES = 2;
+
 /**
  * Map a project's aspectRatio + quality + scene durationSeconds to the
  * concrete render-API body.

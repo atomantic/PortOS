@@ -26,7 +26,7 @@ vi.mock('../creative/toolRegistry.js', () => ({ getToolSpecs: mocks.getToolSpecs
 vi.mock('../settings.js', () => ({ getSettings: mocks.getSettings }));
 vi.mock('./local.js', () => ({ recordRun: mocks.recordRun }));
 
-const { enqueueTreatmentTask, enqueuePlanTask } = await import('./agentBridge.js');
+const { enqueueTreatmentTask, enqueuePlanTask, enqueueEvaluateTask } = await import('./agentBridge.js');
 
 const project = { id: 'cd-1', name: 'Test project', treatment: { scenes: [] } };
 
@@ -163,5 +163,30 @@ describe('persistAndEmit duplicate handling (#2614 — addTask dedup also matche
     expect(taskA.description).toContain('[cd:cd-1]');
     expect(taskB.description).toContain('[cd:cd-2222]');
     expect(taskA.description).not.toBe(taskB.description);
+  });
+});
+
+describe('deliverable baseline stamped on the run row (#4146)', () => {
+  it('records the plan baseline so completionHook can tell a real PATCH from a no-op', async () => {
+    mocks.addTask.mockResolvedValue();
+    await enqueuePlanTask({ id: 'cd-1', name: 'p', plan: { steps: [{ stepId: 'a' }], replanRounds: 1 } });
+    expect(mocks.recordRun.mock.calls[0][1]).toMatchObject({ kind: 'plan', deliverableMark: 'plan:1' });
+  });
+
+  it('records a NULL baseline (recorded-and-absent, not "unknown") when there is no plan yet', async () => {
+    await enqueuePlanTask({ id: 'cd-1', name: 'p', plan: null });
+    const entry = mocks.recordRun.mock.calls[0][1];
+    expect(entry).toHaveProperty('deliverableMark', null);
+  });
+
+  it('records the treatment baseline', async () => {
+    await enqueueTreatmentTask({ id: 'cd-1', name: 'p', treatment: null });
+    expect(mocks.recordRun.mock.calls[0][1]).toMatchObject({ kind: 'treatment', deliverableMark: null });
+  });
+
+  it('omits the key entirely for a kind with no verifiable PATCH deliverable', async () => {
+    mocks.buildEvaluatePrompt.mockResolvedValue('evaluate context');
+    await enqueueEvaluateTask({ id: 'cd-1', name: 'p', treatment: { scenes: [{ sceneId: 's1', order: 0 }] } }, { sceneId: 's1', order: 0, intent: 'x' });
+    expect(mocks.recordRun.mock.calls[0][1]).not.toHaveProperty('deliverableMark');
   });
 });
