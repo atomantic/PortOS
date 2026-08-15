@@ -210,6 +210,13 @@ const { mockInspectModelCache, mockFindCachedRepoFile } = vi.hoisted(() => ({
 vi.mock('../../lib/hfCache.js', () => ({
   inspectModelCache: mockInspectModelCache,
   findCachedRepoFile: mockFindCachedRepoFile,
+  // Built on the singular mock rather than stubbed independently, mirroring the
+  // real helper — so a test that makes ONE file miss (the partial-download
+  // cases) still drives the plural probe's all-or-nothing verdict.
+  findCachedRepoFiles: async (repo, filenames, opts) => {
+    const paths = await Promise.all(filenames.map((name) => mockFindCachedRepoFile(repo, name, opts)));
+    return paths.every(Boolean) ? paths : null;
+  },
 }));
 
 vi.mock('fs', () => ({
@@ -2335,6 +2342,54 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
     expect(args.flatMap((arg, i) => (arg === '--text-encoder-key-prefix' ? [args[i + 1]] : [])))
       .toEqual(['model.=model.language_model.', 'visual.=model.visual.']);
     expect(args[args.indexOf('--text-encoder-final-norm-key') + 1]).toBe('model.norm.weight');
+  });
+
+  // An upstream conditioner arrives as several shards, and the loader globs the
+  // shim directory — so every pinned shard has to reach the helper. Forwarding
+  // just the first would load a module tree with most of its layers missing.
+  it('forwards every shard of a multi-shard text encoder', async () => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const { downloadableVideoTextEncoder } = await import('../../lib/videoTextEncoders.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    spawnMock.mockClear();
+
+    await generateVideo({
+      jobId: 'h3-multishard-encoder',
+      modelId: 'minimax_h3_8bit',
+      prompt: 'a fox watches the rain',
+      mode: 'text',
+      textEncoderId: 'huihui-abliterated',
+    });
+
+    const [, args] = spawnMock.mock.calls.find(([, a]) => (
+      Array.isArray(a) && a.some((arg) => basename(String(arg)) === 'generate_minimax_h3.py')
+    ));
+    const forwarded = args.flatMap((arg, i) => (arg === '--text-encoder-file' ? [args[i + 1]] : []));
+    expect(forwarded).toEqual(
+      downloadableVideoTextEncoder('huihui-abliterated').files.map((name) => join('/mock/hf/snap', name)),
+    );
+    // Upstream namespace, own final norm — neither adapter is emitted.
+    expect(args).not.toContain('--text-encoder-key-prefix');
+    expect(args).not.toContain('--text-encoder-final-norm-key');
+  });
+
+  // A partially-cached multi-shard conditioner (one shard interrupted) must fail
+  // as a clean 400, not load a module tree with missing parameters.
+  it('rejects a multi-shard text encoder missing any one shard', async () => {
+    mockFindCachedRepoFile.mockImplementation(async (_repo, filename) => (
+      filename === 'model-00011-of-00014.safetensors' ? null : join('/mock/hf/snap', filename)
+    ));
+    try {
+      await expect(generateVideo({
+        jobId: 'h3-multishard-partial',
+        modelId: 'minimax_h3_8bit',
+        prompt: 'a fox watches the rain',
+        mode: 'text',
+        textEncoderId: 'huihui-abliterated',
+      })).rejects.toMatchObject({ status: 400, code: 'VIDEO_TEXT_ENCODER_NOT_CACHED' });
+    } finally {
+      mockFindCachedRepoFile.mockImplementation(async (_repo, filename) => join('/mock/hf/snap', filename));
+    }
   });
 
   // A ~48 GB weight that isn't downloaded must fail as a clean 400 on the

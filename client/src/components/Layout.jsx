@@ -474,6 +474,10 @@ export function SingleNavRow({ item, collapsed, active, badgeCount, pinned, onTo
 const EXACT_FULL_WIDTH_PATHS = [
   '/character',
   '/ai',
+  // Data Manager is a bordered title bar over a `flex-1 overflow-auto` body,
+  // so it owns its own scroll. EXACT, not a prefix — a `/data` prefix would
+  // also swallow the `/datadog` redirect route.
+  '/data',
   '/devtools/flows',
   '/ask',
   // OpenClaw lives under the Settings nav group; it's a full-bleed

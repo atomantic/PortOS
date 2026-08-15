@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { CheckCircle, XCircle } from 'lucide-react';
+import ProgressBar from '../../ui/ProgressBar';
 import { scorePostLlmDrill } from '../../../services/api';
 import { DRILL_LABELS, WORDPLAY_LLM_DRILL_TYPES } from './constants';
 import { AILoadingIndicator, MissedExamplesDisplay, CompoundChainUI, BridgeWordUI, DoubleMeaningUI, IdiomTwistUI, scoreWordplayResponse } from './WordplayDrillUI';
@@ -188,9 +189,9 @@ export default function PostLlmDrillRunner({ drill, timeLimitSec, drillIndex, dr
   }
 
   const timePct = timeLimitMs > 0 ? (timeLeft / timeLimitMs) * 100 : 0;
-  let timerColor = 'bg-port-accent';
-  if (timePct <= 10) timerColor = 'bg-port-error';
-  else if (timePct <= 25) timerColor = 'bg-port-warning';
+  let timerTone = 'accent';
+  if (timePct <= 10) timerTone = 'error';
+  else if (timePct <= 25) timerTone = 'warning';
 
   // Training mode: feedback overlay
   if (isTraining && trainingFeedback) {
@@ -231,14 +232,7 @@ export default function PostLlmDrillRunner({ drill, timeLimitSec, drillIndex, dr
         >
           Next
         </button>
-        <div className="space-y-1">
-          <div className="flex justify-between text-xs text-gray-500">
-            <span>Prompt {questionIndex + 1} of {totalPrompts}</span>
-          </div>
-          <div className="w-full h-1.5 bg-port-border rounded-full overflow-hidden">
-            <div className="h-full bg-port-accent-2/60 transition-all" style={{ width: `${((questionIndex + 1) / totalPrompts) * 100}%` }} />
-          </div>
-        </div>
+        <PromptProgress index={questionIndex} total={totalPrompts} tone="accent2" showPercent={false} />
       </div>
     );
   }
@@ -257,9 +251,14 @@ export default function PostLlmDrillRunner({ drill, timeLimitSec, drillIndex, dr
       {/* Timer bar (hidden in training mode) */}
       {!isTraining && (
         <>
-          <div className="w-full h-2 bg-port-border rounded-full overflow-hidden">
-            <div className={`h-full ${timerColor} transition-all duration-100`} style={{ width: `${timePct}%` }} />
-          </div>
+          <ProgressBar
+            percent={timePct}
+            tone={timerTone}
+            size="md"
+            track="border"
+            duration={100}
+            label={`Time remaining: ${Math.ceil(timeLeft / 1000)}s`}
+          />
           <div className="text-center text-sm text-gray-500">{Math.ceil(timeLeft / 1000)}s remaining</div>
         </>
       )}
@@ -427,7 +426,7 @@ export default function PostLlmDrillRunner({ drill, timeLimitSec, drillIndex, dr
             </div>
           </div>
           <TextInput inputRef={inputRef} value={inputValue} onChange={setInputValue} onSubmit={handleSubmit} placeholder="Your micro-story (2-4 sentences)..." buttonLabel="Next" />
-          <ProgressBar index={questionIndex} total={totalPrompts} />
+          <PromptProgress index={questionIndex} total={totalPrompts} />
         </>
       )}
 
@@ -532,17 +531,23 @@ export function buildLlmResponseObj({ drillType, questionIndex, items, inputValu
 // DRILL-SPECIFIC UI COMPONENTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-function ProgressBar({ index, total }) {
+// "Prompt N of M" counter over the shared meter. Both knobs exist for the
+// training-feedback screen, which draws the same counter without the numeric
+// readout and in the accent-2 tone that marks training throughout this runner.
+function PromptProgress({ index, total, tone = 'accent', showPercent = true }) {
   const pct = total > 0 ? ((index + 1) / total) * 100 : 0;
   return (
     <div className="space-y-1">
       <div className="flex justify-between text-xs text-gray-500">
         <span>Prompt {index + 1} of {total}</span>
-        <span>{Math.round(pct)}%</span>
+        {showPercent && <span>{Math.round(pct)}%</span>}
       </div>
-      <div className="w-full h-1.5 bg-port-border rounded-full overflow-hidden">
-        <div className="h-full bg-port-accent/60 transition-all" style={{ width: `${pct}%` }} />
-      </div>
+      <ProgressBar
+        percent={pct}
+        tone={tone}
+        track="border"
+        label={`Prompt ${index + 1} of ${total}`}
+      />
     </div>
   );
 }
@@ -586,7 +591,7 @@ function WordAssociationUI({ prompt, inputValue, setInputValue, onSubmit, inputR
         placeholder="Type your associations..."
         buttonLabel="Next"
       />
-      <ProgressBar index={questionIndex} total={totalPrompts} />
+      <PromptProgress index={questionIndex} total={totalPrompts} />
     </>
   );
 }
@@ -605,7 +610,7 @@ function StoryRecallUI({ exercise, phase, onStartRecall, items, inputValue, setI
         >
           I'm Ready — Show Questions
         </button>
-        <ProgressBar index={questionIndex} total={totalPrompts} />
+        <PromptProgress index={questionIndex} total={totalPrompts} />
       </>
     );
   }
@@ -647,7 +652,7 @@ function StoryRecallUI({ exercise, phase, onStartRecall, items, inputValue, setI
           Submit All Answers
         </button>
       )}
-      <ProgressBar index={questionIndex} total={totalPrompts} />
+      <PromptProgress index={questionIndex} total={totalPrompts} />
     </>
   );
 }
@@ -701,7 +706,7 @@ function VerbalFluencyUI({ category, items, inputValue, setInputValue, onAddItem
       >
         Done — Submit {items.length} items
       </button>
-      <ProgressBar index={questionIndex} total={totalPrompts} />
+      <PromptProgress index={questionIndex} total={totalPrompts} />
     </>
   );
 }
@@ -729,7 +734,7 @@ function WitComebackUI({ scenario, inputValue, setInputValue, onSubmit, inputRef
         placeholder="Your witty response..."
         buttonLabel="Next"
       />
-      <ProgressBar index={questionIndex} total={totalPrompts} />
+      <PromptProgress index={questionIndex} total={totalPrompts} />
     </>
   );
 }
@@ -753,7 +758,7 @@ function PunWordplayUI({ challenge, inputValue, setInputValue, onSubmit, inputRe
         placeholder="Your pun or wordplay..."
         buttonLabel="Next"
       />
-      <ProgressBar index={questionIndex} total={totalPrompts} />
+      <PromptProgress index={questionIndex} total={totalPrompts} />
     </>
   );
 }
@@ -776,7 +781,7 @@ function ImaginationUI({ label, prompt, badge, badgeColor, placeholder, inputVal
         placeholder={placeholder}
         buttonLabel="Next"
       />
-      <ProgressBar index={questionIndex} total={totalPrompts} />
+      <PromptProgress index={questionIndex} total={totalPrompts} />
     </>
   );
 }
@@ -827,7 +832,7 @@ function AlternativeUsesUI({ object, items, inputValue, setInputValue, onAddItem
       >
         Done — Submit {items.length} uses
       </button>
-      <ProgressBar index={questionIndex} total={totalPrompts} />
+      <PromptProgress index={questionIndex} total={totalPrompts} />
     </>
   );
 }

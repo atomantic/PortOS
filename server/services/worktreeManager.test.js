@@ -39,6 +39,7 @@ const {
   isBranchCheckedOutElsewhereError,
   removeWorktree,
   adoptWorktree,
+  findAdoptableWorktreeForBranch,
   createWorktree,
   createPersistentWorktree,
 } = await import('./worktreeManager.js');
@@ -713,6 +714,84 @@ describe('isBranchCheckedOutElsewhereError (branch-busy pause gate)', () => {
 
   it('stays out of the in-process add retry — that budget is sized for lock contention', () => {
     expect(isGitLockError("fatal: 'b' is already used by worktree at '/repo/wt'")).toBe(false);
+  });
+});
+
+describe('findAdoptableWorktreeForBranch (take over the tree that holds the branch)', () => {
+  const REPO = '/repo';
+  const BRANCH = 'cos/task-x/agent-y';
+
+  // `git worktree list --porcelain`: the primary checkout first, then whatever
+  // entries a test names.
+  function scriptWorktrees(entries) {
+    execGitMock.mockReset();
+    const stdout = [
+      `worktree ${REPO}`, 'HEAD abc123', 'branch refs/heads/main', '',
+      ...entries.flatMap(e => [
+        `worktree ${e.path}`, 'HEAD def456',
+        e.branch ? `branch ${e.branch}` : 'detached',
+        ...(e.locked ? ['locked'] : []), ''
+      ])
+    ].join('\n');
+    execGitMock.mockResolvedValue({ stdout, stderr: '' });
+  }
+
+  const cosTree = (agentId) => join(PATHS.worktrees, agentId);
+
+  it('finds the CoS worktree holding the branch', async () => {
+    scriptWorktrees([{ path: cosTree('agent-y'), branch: `refs/heads/${BRANCH}` }]);
+
+    expect(await findAdoptableWorktreeForBranch(REPO, BRANCH))
+      .toEqual({ path: cosTree('agent-y'), agentId: 'agent-y' });
+  });
+
+  it('returns null when nothing holds the branch', async () => {
+    scriptWorktrees([{ path: cosTree('agent-z'), branch: 'refs/heads/cos/other/agent-z' }]);
+
+    expect(await findAdoptableWorktreeForBranch(REPO, BRANCH)).toBeNull();
+  });
+
+  // Adoption MOVES the directory, so a holder PortOS doesn't own is never a
+  // candidate — taking the user's own checkout is the branch-jacking this
+  // codebase guards against everywhere else.
+  it('refuses the primary checkout, and any tree outside the managed root', async () => {
+    scriptWorktrees([{ path: '/repo/../elsewhere/tree', branch: `refs/heads/${BRANCH}` }]);
+    expect(await findAdoptableWorktreeForBranch(REPO, BRANCH)).toBeNull();
+
+    // The repo root itself, checked out on the branch.
+    execGitMock.mockResolvedValue({
+      stdout: `worktree ${REPO}\nHEAD abc\nbranch refs/heads/${BRANCH}\n`, stderr: ''
+    });
+    expect(await findAdoptableWorktreeForBranch(REPO, BRANCH)).toBeNull();
+  });
+
+  it('refuses a human /claim worktree — the claim flow owns its cleanup', async () => {
+    scriptWorktrees([{ path: cosTree('claim-issue-42'), branch: `refs/heads/${BRANCH}` }]);
+
+    expect(await findAdoptableWorktreeForBranch(REPO, BRANCH)).toBeNull();
+  });
+
+  it('refuses a tree whose agent is still running — it is mid-edit in there', async () => {
+    scriptWorktrees([{ path: cosTree('agent-y'), branch: `refs/heads/${BRANCH}` }]);
+
+    expect(await findAdoptableWorktreeForBranch(REPO, BRANCH, {
+      activeAgentIds: new Set(['agent-y'])
+    })).toBeNull();
+  });
+
+  it('refuses a locked worktree whatever else is true of it', async () => {
+    scriptWorktrees([{ path: cosTree('agent-y'), branch: `refs/heads/${BRANCH}`, locked: true }]);
+
+    expect(await findAdoptableWorktreeForBranch(REPO, BRANCH)).toBeNull();
+  });
+
+  it('returns null rather than throwing when the listing fails', async () => {
+    execGitMock.mockReset();
+    execGitMock.mockRejectedValue(new Error('not a git repository'));
+
+    expect(await findAdoptableWorktreeForBranch(REPO, BRANCH)).toBeNull();
+    expect(await findAdoptableWorktreeForBranch(REPO, '')).toBeNull();
+    expect(await findAdoptableWorktreeForBranch('', BRANCH)).toBeNull();
   });
 });
 

@@ -56,7 +56,7 @@ const VALIDATE_ARGS_DEFAULTS = {
   lora: [],
   lora_scale: [],
   text_encoder_id: null,
-  text_encoder_file: null,
+  text_encoder_file: [],
   text_encoder_shim_root: null,
   text_encoder_key_prefix: [],
   text_encoder_final_norm_key: null,
@@ -158,14 +158,14 @@ describe.skipIf(!pyBin)('generate_minimax_h3.py', () => {
   // for, so the boundary rejects it instead of choosing for them.
   it.each([
     [{ text_encoder_id: 'heretic-bf16' }, /must be given together/i],
-    [{ text_encoder_file: '/tmp/e.safetensors' }, /must be given together/i],
-    [{ text_encoder_id: 'heretic-bf16', text_encoder_file: '/tmp/e.safetensors' }, /must be given together/i],
+    [{ text_encoder_file: ['/tmp/e.safetensors'] }, /must be given together/i],
+    [{ text_encoder_id: 'heretic-bf16', text_encoder_file: ['/tmp/e.safetensors'] }, /must be given together/i],
     // A traversal-shaped id would put the shim tree outside the root PortOS
     // chose (and `rmtree` it from there).
     [
       {
         text_encoder_id: '../escape',
-        text_encoder_file: '/tmp/e.safetensors',
+        text_encoder_file: ['/tmp/e.safetensors'],
         text_encoder_shim_root: '/tmp/shims',
       },
       /bare directory-safe name/i,
@@ -193,7 +193,7 @@ describe.skipIf(!pyBin)('generate_minimax_h3.py', () => {
       'from types import SimpleNamespace',
       argsExpr({
         text_encoder_id: 'heretic-bf16',
-        text_encoder_file: '/tmp/e.safetensors',
+        text_encoder_file: ['/tmp/e.safetensors'],
         text_encoder_shim_root: '/tmp/shims',
         text_encoder_key_prefix: ['model.=model.language_model.', 'visual.=model.visual.'],
         text_encoder_final_norm_key: 'model.norm.weight',
@@ -306,7 +306,7 @@ describe.skipIf(!pyBin)('generate_minimax_h3.py', () => {
       '    (checkpoint / "text_encoder" / "model-00001-of-00002.safetensors").write_text("stock")',
       '    substitute = root / "substitute.safetensors"',
       '    substitute.write_text("swapped")',
-      '    shim = runner.build_encoder_shim(checkpoint, root / "shims", "heretic-bf16", substitute, None)',
+      '    shim = runner.build_encoder_shim(checkpoint, root / "shims", "heretic-bf16", [substitute], None)',
       '    print(json.dumps({',
       '        "name": shim.name,',
       '        "root": sorted(p.name for p in shim.iterdir()),',
@@ -337,7 +337,7 @@ describe.skipIf(!pyBin)('generate_minimax_h3.py', () => {
       '    (checkpoint / "text_encoder" / "config.json").write_text(json.dumps({"text_config": {"hidden_size": 8}}))',
       '    substitute = root / "substitute.safetensors"',
       '    substitute.write_text("swapped")',
-      '    shim = runner.build_encoder_shim(checkpoint, root / "shims", "heretic-bf16", substitute, "model.norm.weight")',
+      '    shim = runner.build_encoder_shim(checkpoint, root / "shims", "heretic-bf16", [substitute], "model.norm.weight")',
       '    import mlx.core as mx',
       '    loaded = mx.load(str(shim / "text_encoder" / "_portos_final_norm.safetensors"))',
       '    key = next(iter(loaded))',
@@ -365,7 +365,7 @@ describe.skipIf(!pyBin)('generate_minimax_h3.py', () => {
       '    (stale / "old.safetensors").write_text("stale")',
       '    substitute = root / "substitute.safetensors"',
       '    substitute.write_text("swapped")',
-      '    shim = runner.build_encoder_shim(checkpoint, root / "shims", "heretic-bf16", substitute, None)',
+      '    shim = runner.build_encoder_shim(checkpoint, root / "shims", "heretic-bf16", [substitute], None)',
       '    print(json.dumps(sorted(p.name for p in (shim / "text_encoder").iterdir())))',
     ].join('\n')}`);
     expect(JSON.parse(output)).toEqual(['config.json', 'substitute.safetensors']);
@@ -379,7 +379,7 @@ describe.skipIf(!pyBin)('generate_minimax_h3.py', () => {
       '    checkpoint = root / "FL2VA"',
       '    (checkpoint / "text_encoder").mkdir(parents=True)',
       '    try:',
-      '        runner.build_encoder_shim(checkpoint, root / "shims", "heretic-bf16", root / "absent.safetensors", None)',
+      '        runner.build_encoder_shim(checkpoint, root / "shims", "heretic-bf16", [root / "absent.safetensors"], None)',
       '    except RuntimeError as exc:',
       '        print(json.dumps({"error": str(exc), "built": (root / "shims").exists()}))',
       '    else:',
@@ -387,6 +387,67 @@ describe.skipIf(!pyBin)('generate_minimax_h3.py', () => {
     ].join('\n')}`);
     const result = JSON.parse(output);
     expect(result.error).toMatch(/Substituted text encoder is missing/);
+    expect(result.built).toBe(false);
+  });
+
+  // An upstream (rather than repackaged) conditioner arrives as several shards.
+  // The loader globs *.safetensors in the shim, so every shard has to be linked
+  // in — a partial link set loads a module tree with missing parameters.
+  it('links every shard of a multi-shard substitute into one text_encoder', () => {
+    const output = runPython(`${importRunner}\n${[
+      'import json, tempfile',
+      'with tempfile.TemporaryDirectory() as temp:',
+      '    root = Path(temp)',
+      '    checkpoint = root / "FL2VA"',
+      '    (checkpoint / "text_encoder").mkdir(parents=True)',
+      '    (checkpoint / "text_encoder" / "config.json").write_text(json.dumps({"text_config": {"hidden_size": 8}}))',
+      '    shards = []',
+      '    for name in ("model-00001-of-00014.safetensors", "model-00002-of-00014.safetensors", "model-00014-of-00014.safetensors"):',
+      '        shard = root / name',
+      '        shard.write_text(name)',
+      '        shards.append(shard)',
+      '    shim = runner.build_encoder_shim(checkpoint, root / "shims", "huihui-abliterated", shards, None)',
+      '    linked = sorted(p.name for p in (shim / "text_encoder").iterdir())',
+      '    print(json.dumps({"linked": linked, "resolves": [(shim / "text_encoder" / s.name).read_text() for s in shards]}))',
+    ].join('\n')}`);
+    const result = JSON.parse(output);
+    expect(result.linked).toEqual([
+      'config.json',
+      'model-00001-of-00014.safetensors',
+      'model-00002-of-00014.safetensors',
+      'model-00014-of-00014.safetensors',
+    ]);
+    expect(result.resolves).toEqual([
+      'model-00001-of-00014.safetensors',
+      'model-00002-of-00014.safetensors',
+      'model-00014-of-00014.safetensors',
+    ]);
+  });
+
+  // Two shards sharing a basename would collide on the single symlink name, and
+  // whichever lost would be silently absent from the glob.
+  it('refuses a substitute whose shards share a basename', () => {
+    const output = runPython(`${importRunner}\n${[
+      'import json, tempfile',
+      'with tempfile.TemporaryDirectory() as temp:',
+      '    root = Path(temp)',
+      '    checkpoint = root / "FL2VA"',
+      '    (checkpoint / "text_encoder").mkdir(parents=True)',
+      '    shards = []',
+      '    for parent in ("a", "b"):',
+      '        (root / parent).mkdir()',
+      '        shard = root / parent / "model-00001-of-00002.safetensors"',
+      '        shard.write_text(parent)',
+      '        shards.append(shard)',
+      '    try:',
+      '        runner.build_encoder_shim(checkpoint, root / "shims", "dupe", shards, None)',
+      '    except RuntimeError as exc:',
+      '        print(json.dumps({"error": str(exc), "built": (root / "shims").exists()}))',
+      '    else:',
+      '        raise SystemExit("colliding shard names were accepted")',
+    ].join('\n')}`);
+    const result = JSON.parse(output);
+    expect(result.error).toMatch(/duplicate shard names/);
     expect(result.built).toBe(false);
   });
 

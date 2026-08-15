@@ -53,10 +53,12 @@ import { listIssues } from './issues.js';
 import { getSeriesCanon } from './seriesCanon.js';
 import {
   resolveVerifyIssues,
+  resolvedEpisodeEdits,
   restoreArcState,
   snapshotArcState,
   verifyArc,
 } from './arcPlanner.js';
+import { createArcMutationLedger } from './arcMutationLedger.js';
 
 const STAGE = 'pipeline-judge-foundation';
 const REPAIR_STAGE = 'pipeline-foundation-repair';
@@ -1840,7 +1842,20 @@ export async function applyFoundationFix(seriesId, dimension, {
       problem: finding.gap || 'arc structure is below the foundation-quality bar',
       suggestion: finding.fix || '',
     }];
-    const snapshot = await snapshotArcState(seriesId);
+    // Which episode synopses each rollback below may put back: the ones the
+    // resolver reported writing after that checkpoint was taken, and nothing
+    // else (see `createArcMutationLedger`). Without it, a repair that runs a
+    // resolve plus up to MAX_STRUCTURE_CORRECTION_PASSES correct/verify pairs
+    // reverted every episode `idea` that merely DIFFERED from its checkpoint —
+    // including a write that landed from elsewhere across that whole window.
+    // One ledger for the whole repair, because a checkpoint outlives the pass
+    // that took it: rewinding to `bestVerified` has to undo every resolve since.
+    const ledger = createArcMutationLedger();
+    const takeSnapshot = async () => ledger.hold(await snapshotArcState(seriesId));
+    const restoreTo = (checkpoint) => restoreArcState(seriesId, checkpoint, {
+      episodeEdits: ledger.since(checkpoint),
+    });
+    const snapshot = await takeSnapshot();
     const structureRunIds = [];
     const resolveOptions = {
       providerDefault: providerOverride,
@@ -1871,6 +1886,7 @@ export async function applyFoundationFix(seriesId, dimension, {
     const trackedResolve = async (resolveFindings) => {
       const before = structureRunIds.length;
       const result = await resolveVerifyIssues(seriesId, { findings: resolveFindings, ...resolveOptions });
+      ledger.note(resolvedEpisodeEdits(result));
       return { result, runIds: structureRunIds.slice(before) };
     };
     const runGuardedStructureRepair = async () => {
@@ -1891,7 +1907,7 @@ export async function applyFoundationFix(seriesId, dimension, {
       let rejectedRunIds = [];
       let bestVerified = {
         blockers,
-        snapshot: await snapshotArcState(seriesId),
+        snapshot: await takeSnapshot(),
         runIds: [...retainedRunIds],
       };
 
@@ -1930,7 +1946,7 @@ export async function applyFoundationFix(seriesId, dimension, {
         if (compareArcBlockers(blockers, bestVerified.blockers) <= 0) {
           bestVerified = {
             blockers,
-            snapshot: await snapshotArcState(seriesId),
+            snapshot: await takeSnapshot(),
             runIds: [...retainedRunIds],
           };
         }
@@ -1942,7 +1958,7 @@ export async function applyFoundationFix(seriesId, dimension, {
       // still decide whether it improved structure, and the normal full-arc
       // gate remains latched dirty so it must close the residual before beats.
       if (compareArcBlockers(bestVerified.blockers, initialBlockers) < 0) {
-        await restoreArcState(seriesId, bestVerified.snapshot);
+        await restoreTo(bestVerified.snapshot);
         return {
           dimension,
           applied: true,
@@ -1956,7 +1972,7 @@ export async function applyFoundationFix(seriesId, dimension, {
         };
       }
 
-      await restoreArcState(seriesId, snapshot);
+      await restoreTo(snapshot);
       return {
         dimension,
         applied: false,
@@ -1975,7 +1991,7 @@ export async function applyFoundationFix(seriesId, dimension, {
     // series in the unverified intermediate draft. Restore, then preserve the
     // original error so the conductor pauses with the real provider diagnosis.
     return runGuardedStructureRepair().catch(async (err) => {
-      await restoreArcState(seriesId, snapshot);
+      await restoreTo(snapshot);
       throw err;
     });
   }

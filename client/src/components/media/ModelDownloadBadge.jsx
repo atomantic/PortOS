@@ -4,13 +4,18 @@
 // HF pull. Local generation forms block until required weights are present,
 // keeping downloads explicit and recoverable instead of hiding them in render.
 //
-// Three render states:
+// Four render states:
 //   1. cached     → green CheckCircle, "Available · <size>"
 //   2. unknown    → grey, no CTA (model has no `repo` in the registry)
 //   3. needsDl    → "↓ Download (~est)" button; while downloading, a stage
 //                   label + percentage replace the button.
+//   4. queued     → this pull is already committed (a picker chose it via
+//                   `startWhenIdle`) and is waiting for the single download
+//                   lane. REPLACES the button rather than sitting beside it:
+//                   offering Download here would hijack the lane the queued
+//                   pull is politely waiting for.
 
-import { CheckCircle, Download, Loader2 } from 'lucide-react';
+import { CheckCircle, Clock, Download, Loader2 } from 'lucide-react';
 import { formatBytes } from '../../utils/formatters.js';
 
 const STAGE_LABELS = {
@@ -25,6 +30,7 @@ export default function ModelDownloadBadge({
   onDownload,     // () => void
   onCancel,       // () => void
   estimateLabel,  // e.g. "~8 GB" — caller derives from model entry name
+  queued = false, // this pull is committed and waiting for the download lane
   disabled = false,
   disabledReason,
   disabledReasonId,
@@ -95,6 +101,17 @@ export default function ModelDownloadBadge({
       <p className="mt-1 flex items-center gap-1.5 text-[11px] text-port-success">
         <CheckCircle className="w-3.5 h-3.5" />
         <span>Available{sizeLabel}</span>
+      </p>
+    );
+  }
+
+  // Committed but not yet started — the lane belongs to another pull. Say so
+  // instead of rendering a button that reads as "your click did nothing".
+  if (queued) {
+    return (
+      <p className="mt-1 flex items-center gap-1.5 text-[11px] text-gray-400">
+        <Clock className="w-3.5 h-3.5" />
+        <span>Queued{estimateLabel ? ` (${estimateLabel})` : ''} — starts when the current download finishes</span>
       </p>
     );
   }

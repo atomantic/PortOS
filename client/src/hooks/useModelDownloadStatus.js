@@ -67,6 +67,12 @@ export const buildDownloadUrl = (kind, modelId, force = false) => {
 // opens an EventSource against the download endpoint. When the stream
 // emits a terminal frame we automatically refetch /models/status so the
 // badge flips to "Available" without the caller wiring that up.
+//
+// `startWhenIdle(modelId)` is the same pull expressed as an intent rather than
+// a command — for a picker where choosing an option IS the request for its
+// weights. It waits for the cache verdict, skips an already-resident repo, and
+// queues behind whatever owns the lane; `queuedModelId` is what a badge renders
+// while it waits.
 export function useModelDownloadStatus({ kind = 'image' } = {}) {
   const [statuses, setStatuses] = useState(null);
   const [extra, setExtra] = useState({}); // video: { textEncoder: {...} }
@@ -245,6 +251,29 @@ export function useModelDownloadStatus({ kind = 'image' } = {}) {
     return findEntry(modelId);
   }, [findEntry, activeModelId, activeStatus]);
 
+  // "Download this unless it's already here" — the shape a picker needs when
+  // choosing an option IS the request to fetch its weights, with no separate
+  // Download click. Lives here rather than in the caller because both things it
+  // has to wait on are this hook's: the cache verdict (`statuses` may still be
+  // loading, and starting on an unknown verdict would re-pull a resident
+  // multi-GB repo) and the single EventSource lane (`start` would otherwise
+  // hijack a download already in flight).
+  //
+  // Passing a falsy id clears a queued intent, so a caller whose selection moved
+  // on — to an option with no download of its own, or to another id, which
+  // replaces the queue — doesn't strand a pull nobody is waiting for any more.
+  const [queuedModelId, setQueuedModelId] = useState(null);
+  const startWhenIdle = useCallback((modelId) => { setQueuedModelId(modelId || null); }, []);
+  useEffect(() => {
+    if (!queuedModelId || loading || activeModelId) return;
+    const entry = findEntry(queuedModelId);
+    // Cleared either way: with the verdict in, the question is answered. A
+    // missing entry means the id is in no downloadable collection, so there is
+    // nothing to start and nothing to keep waiting for.
+    setQueuedModelId(null);
+    if (entry?.cached === false) start(queuedModelId);
+  }, [queuedModelId, loading, activeModelId, findEntry, start]);
+
   return {
     statuses,
     extra,
@@ -252,6 +281,8 @@ export function useModelDownloadStatus({ kind = 'image' } = {}) {
     statusError,
     refresh: fetchStatuses,
     start,
+    startWhenIdle,
+    queuedModelId,
     cancel,
     verify,
     verifying,

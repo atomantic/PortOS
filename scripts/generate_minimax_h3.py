@@ -53,8 +53,9 @@ def parse_args() -> argparse.Namespace:
                         help="strength for each --lora, in the same order")
     parser.add_argument("--text-encoder-id",
                         help="id of the substituted prompt conditioner (shim directory name)")
-    parser.add_argument("--text-encoder-file",
-                        help="already-cached safetensors to condition with instead of the checkpoint's own")
+    parser.add_argument("--text-encoder-file", action="append", default=[],
+                        help="already-cached safetensors to condition with instead of the checkpoint's own "
+                             "(repeatable — one per shard of a multi-shard conditioner)")
     parser.add_argument("--text-encoder-shim-root",
                         help="directory the composed checkpoint root is built under")
     parser.add_argument("--text-encoder-key-prefix", action="append", default=[],
@@ -167,7 +168,7 @@ def build_encoder_shim(
     checkpoint_dir: Path,
     shim_root: Path,
     encoder_id: str,
-    encoder_file: Path,
+    encoder_files: list[Path],
     final_norm_key: str | None,
 ) -> Path:
     """Compose a checkpoint root whose `text_encoder/` is the substitute.
@@ -180,12 +181,22 @@ def build_encoder_shim(
     is correct because abliteration changes weights, not the vocabulary or the
     vision geometry.
 
+    A substitute may be one repackaged safetensors or several shards of an
+    upstream checkpoint: every file is linked into the same `text_encoder/`,
+    which the loader globs, so a multi-shard conditioner needs no index file.
+    Only the shards carrying parameters the loader actually builds are pulled,
+    so the glob deliberately sees fewer files than the upstream repo publishes.
+
     Rebuilt from scratch on every render: the links are free, and a stale shim
     pointing at a blob the user has since re-downloaded would otherwise load
     silently-wrong weights.
     """
-    if not encoder_file.is_file():
-        raise RuntimeError(f"Substituted text encoder is missing: {encoder_file}")
+    for encoder_file in encoder_files:
+        if not encoder_file.is_file():
+            raise RuntimeError(f"Substituted text encoder is missing: {encoder_file}")
+    names = [f.name for f in encoder_files]
+    if len(set(names)) != len(names):
+        raise RuntimeError(f"Substituted text encoder has duplicate shard names: {sorted(names)}")
 
     root = shim_root / encoder_id
     shutil.rmtree(root, ignore_errors=True)
@@ -203,7 +214,8 @@ def build_encoder_shim(
     if not stock_config.is_file():
         raise RuntimeError(f"Upstream text-encoder config is missing: {stock_config}")
     (root / "text_encoder" / "config.json").symlink_to(stock_config)
-    (root / "text_encoder" / encoder_file.name).symlink_to(encoder_file)
+    for encoder_file in encoder_files:
+        (root / "text_encoder" / encoder_file.name).symlink_to(encoder_file)
 
     if final_norm_key:
         hidden_size = json.loads(stock_config.read_text(encoding="utf-8"))["text_config"]["hidden_size"]
@@ -363,7 +375,7 @@ def main() -> int:
             checkpoint_dir,
             Path(args.text_encoder_shim_root),
             args.text_encoder_id,
-            Path(args.text_encoder_file),
+            [Path(f) for f in args.text_encoder_file],
             args.text_encoder_final_norm_key,
         )
 

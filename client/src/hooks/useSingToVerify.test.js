@@ -54,9 +54,12 @@ describe('useSingToVerify', () => {
     clock = 1000;
     global.performance = { now: () => clock };
     global.navigator.mediaDevices = { getUserMedia: vi.fn(async () => fakeStream()) };
+    // Safari 16.4+ only — jsdom has no `navigator.audioSession`, so the iOS
+    // session tests below stub the shape the arbiter writes to.
+    global.navigator.audioSession = { type: 'auto' };
   });
 
-  afterEach(() => vi.clearAllMocks());
+  afterEach(() => { vi.clearAllMocks(); delete global.navigator.audioSession; });
 
   it('captures from the selected start bar and aligns rows on stop', async () => {
     const { result } = renderHook(() => useSingToVerify({
@@ -170,5 +173,67 @@ describe('useSingToVerify', () => {
 
     expect(trackStop).toHaveBeenCalledOnce();
     expect(result.current.phase).toBe(VERIFY_IDLE);
+  });
+
+  // `playback` REFUSES capture on iOS, and the transport-driven players declare
+  // it document-wide, so this hook has to claim `play-and-record` around its own
+  // getUserMedia rather than relying on nothing else having claimed first (#4131).
+  describe('iOS audio session', () => {
+    const opts = { tempo: 120, score: 'time: 4/4\n| C4q |' };
+
+    it('claims play-and-record for the mic window and hands it back on stop', async () => {
+      const { result } = renderHook(() => useSingToVerify(opts));
+      await act(async () => { await result.current.start(1); });
+      expect(navigator.audioSession.type).toBe('play-and-record');
+
+      act(() => result.current.stop());
+      expect(navigator.audioSession.type).toBe('auto');
+    });
+
+    it('hands the session back on cancel', async () => {
+      const { result } = renderHook(() => useSingToVerify(opts));
+      await act(async () => { await result.current.start(1); });
+      act(() => result.current.cancel());
+      expect(navigator.audioSession.type).toBe('auto');
+    });
+
+    it('hands the session back when the mic is denied', async () => {
+      navigator.mediaDevices.getUserMedia = vi.fn(async () => { throw new Error('Permission denied'); });
+      const { result } = renderHook(() => useSingToVerify(opts));
+      await act(async () => { await result.current.start(1); });
+      expect(result.current.error).toBe('Permission denied');
+      expect(navigator.audioSession.type).toBe('auto');
+    });
+
+    // A cancel during the permission prompt, then a fresh start: the superseded
+    // request must NOT release on its way out — cancel() already released its
+    // claim, and the slot now belongs to the newer start, which is still live.
+    it('keeps the newer start\'s claim when a superseded request settles', async () => {
+      let resolveStream;
+      navigator.mediaDevices.getUserMedia = vi.fn(() => new Promise((resolve) => { resolveStream = resolve; }));
+      const { result } = renderHook(() => useSingToVerify(opts));
+
+      let stalePromise;
+      act(() => { stalePromise = result.current.start(1); });
+      act(() => result.current.cancel());
+      expect(navigator.audioSession.type).toBe('auto');
+
+      navigator.mediaDevices.getUserMedia = vi.fn(async () => fakeStream());
+      await act(async () => { await result.current.start(1); });
+      expect(navigator.audioSession.type).toBe('play-and-record');
+
+      await act(async () => { resolveStream(fakeStream()); await stalePromise; });
+      expect(navigator.audioSession.type).toBe('play-and-record');
+
+      act(() => result.current.stop());
+      expect(navigator.audioSession.type).toBe('auto');
+    });
+
+    it('hands the session back on unmount mid-capture', async () => {
+      const { result, unmount } = renderHook(() => useSingToVerify(opts));
+      await act(async () => { await result.current.start(1); });
+      unmount();
+      expect(navigator.audioSession.type).toBe('auto');
+    });
   });
 });

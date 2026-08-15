@@ -199,6 +199,27 @@ export async function findCachedRepoFile(repoId, filename, { revision = null } =
   return stat && stat.size > 0 ? candidate : null;
 }
 
+/**
+ * All-or-nothing plural form of `findCachedRepoFile`: the resolved paths in the
+ * SAME order as `filenames`, or `null` when any one of them is missing.
+ *
+ * The all-or-nothing verdict is the point. A caller that needs several pinned
+ * files (the shards of one checkpoint, a runtime's required weights) can't do
+ * anything useful with a partial set — resolving them one at a time and
+ * "handling" the misses individually is how a half-downloaded checkpoint reaches
+ * a loader that then fails deep inside a load. Mirrors the plural exact-file
+ * contract `verifyCachedRepoFiles` / `repairCachedRepoFiles` already use, and
+ * resolves the files concurrently.
+ */
+export async function findCachedRepoFiles(repoId, filenames, { revision = null } = {}) {
+  const wanted = Array.isArray(filenames) ? filenames : [];
+  if (wanted.length === 0) return null;
+  const paths = await Promise.all(
+    wanted.map((name) => findCachedRepoFile(repoId, name, { revision })),
+  );
+  return paths.every(Boolean) ? paths : null;
+}
+
 // Verify an explicit file subset inside an aggregate HF repo without walking
 // unrelated siblings. Lightning repositories commonly contain many adapters;
 // a PortOS profile needs only its pinned high/low-noise pair.

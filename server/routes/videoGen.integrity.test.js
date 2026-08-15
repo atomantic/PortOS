@@ -215,12 +215,23 @@ describe('Video Gen integrity routes', () => {
 
   // Substitutable prompt conditioners (#4081) — their own lane, keyed by the
   // registry id rather than a model id (they aren't listVideoModels() entries).
-  // Every operation is scoped to the ONE pinned file: the upstream repo also
-  // publishes INT8 ConvRot / NVFP4 quantizations and 50-63 generation tails this
-  // MLX loader can't read, so a repo-wide pull would cost ~130 GB for ~48 GB of
-  // usable weights — and a repo-wide verify would flag those as corrupt.
+  // Every operation is scoped to the entry's pinned FILE LIST: the upstream
+  // repos also publish INT8 ConvRot / NVFP4 quantizations, 50-63 generation
+  // tails and (for a full checkpoint) the language layers past the conditioning
+  // depth this MLX loader never builds, so a repo-wide pull would cost ~130 GB
+  // for ~48 GB of usable weights — and a repo-wide verify would flag the rest as
+  // corrupt.
   describe('substitutable text encoders', () => {
     const encoder = () => downloadableVideoTextEncoders()[0];
+
+    // Every entry gets its own row, not just the first: a substitute missing
+    // from this lane has no Download badge and no repair path in the UI.
+    it('GET /models/status reports every registered substitute', async () => {
+      const res = await request(app).get('/api/video-gen/models/status');
+      expect(res.status).toBe(200);
+      expect(res.body.textEncoderOptions.map((o) => o.id))
+        .toEqual(downloadableVideoTextEncoders().map((e) => e.id));
+    });
 
     it('GET /models/status reports each substitute with the badge shape', async () => {
       const res = await request(app).get('/api/video-gen/models/status');
@@ -238,7 +249,7 @@ describe('Video Gen integrity routes', () => {
       // Through the shared target verifier, so the badge is checked exactly the
       // way the integrity scan and the repair route check it.
       expect(verifyCachedRepoFiles).toHaveBeenCalledWith(
-        encoder().repo, [encoder().file], { deep: false, revision: encoder().revision },
+        encoder().repo, encoder().files, { deep: false, revision: encoder().revision },
       );
     });
 
@@ -246,7 +257,7 @@ describe('Video Gen integrity routes', () => {
       const res = await request(app).get(`/api/video-gen/text-encoders/${encoder().id}/download`);
       expect(res.status).toBe(200);
       expect(sseDownload.start).toHaveBeenCalledWith(expect.objectContaining({
-        repos: [{ repo: encoder().repo, revision: encoder().revision, only: [encoder().file] }],
+        repos: [{ repo: encoder().repo, revision: encoder().revision, only: encoder().files }],
         force: false,
       }));
     });
@@ -261,9 +272,9 @@ describe('Video Gen integrity routes', () => {
       const res = await request(app).post(`/api/video-gen/text-encoders/${encoder().id}/repair`).send({ deep: true });
       expect(res.status).toBe(200);
       expect(res.body.deep).toBe(true);
-      expect(res.body.deleted).toEqual([{ repo: encoder().repo, name: encoder().file }]);
+      expect(res.body.deleted).toEqual(encoder().files.map((name) => ({ repo: encoder().repo, name })));
       expect(repairCachedRepoFiles).toHaveBeenCalledWith(
-        encoder().repo, [encoder().file], { deep: true, revision: encoder().revision },
+        encoder().repo, encoder().files, { deep: true, revision: encoder().revision },
       );
     });
 
@@ -286,7 +297,7 @@ describe('Video Gen integrity routes', () => {
     it('POST /models/verify covers every substitute in an unscoped scan', async () => {
       await request(app).post('/api/video-gen/models/verify').send({});
       expect(verifyCachedRepoFiles).toHaveBeenCalledWith(
-        encoder().repo, [encoder().file], { deep: false, revision: encoder().revision },
+        encoder().repo, encoder().files, { deep: false, revision: encoder().revision },
       );
     });
   });

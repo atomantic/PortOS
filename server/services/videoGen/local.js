@@ -36,7 +36,7 @@ import {
   contextPrefixFrames, tailWindowStartFrame,
 } from '../../lib/videoContinuity.js';
 import { hfChildEnv } from '../../lib/hfToken.js';
-import { inspectModelCache, findCachedRepoFile } from '../../lib/hfCache.js';
+import { inspectModelCache, findCachedRepoFile, findCachedRepoFiles } from '../../lib/hfCache.js';
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
 import { makeVideoGenLineHandler, finalizeGeneratedVideo, isWatchdogSuccess, describeSignalDeath, describeRenderConditioning, RENDER_INPUTS_VERSION } from './generateVideoHelpers.js';
 import { assertSafeLoraFilename, getLoraKeyLayout } from '../loras.js';
@@ -724,11 +724,13 @@ const buildMiniMaxH3Args = ({ model, prompt, negativePrompt, width, height, numF
   for (const l of loras ?? []) args.push('--lora', l.path, '--lora-scale', String(l.strength));
   // Substituted prompt conditioner (lib/videoTextEncoders.js). Absent for the
   // stock choice, so the argv of an unswapped render is byte-identical to what
-  // it was before this feature existed. `textEncoder.path` was already resolved
-  // against the HF cache by generateVideo — the helper never downloads.
+  // it was before this feature existed. `textEncoder.paths` were already
+  // resolved against the HF cache by generateVideo — the helper never downloads.
+  // One --text-encoder-file per shard; the shim links them all into the same
+  // `text_encoder/`, which the loader globs.
   if (textEncoder) {
     args.push('--text-encoder-id', textEncoder.id);
-    args.push('--text-encoder-file', textEncoder.path);
+    for (const path of textEncoder.paths) args.push('--text-encoder-file', path);
     args.push('--text-encoder-shim-root', MINIMAX_H3_ENCODER_SHIM_DIR);
     for (const [from, to] of Object.entries(textEncoder.keyPrefixMap || {})) {
       args.push('--text-encoder-key-prefix', `${from}=${to}`);
@@ -1109,10 +1111,13 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   const textEncoderOption = resolveVideoTextEncoder(model, textEncoderId);
   let resolvedTextEncoder = null;
   if (textEncoderOption) {
-    const encoderPath = await findCachedRepoFile(
-      textEncoderOption.repo, textEncoderOption.file, { revision: textEncoderOption.revision },
+    // All-or-nothing across every pinned shard: a partially-cached multi-shard
+    // conditioner must fail here as a clean 400 rather than loading a module
+    // tree with missing parameters minutes into the render.
+    const encoderPaths = await findCachedRepoFiles(
+      textEncoderOption.repo, textEncoderOption.files, { revision: textEncoderOption.revision },
     );
-    if (!encoderPath) {
+    if (!encoderPaths) {
       throw new ServerError(
         `Text encoder "${textEncoderOption.label}" is not downloaded. Download it in Video Gen before rendering.`,
         { status: 400, code: 'VIDEO_TEXT_ENCODER_NOT_CACHED' },
@@ -1120,7 +1125,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     }
     resolvedTextEncoder = {
       id: textEncoderOption.id,
-      path: encoderPath,
+      paths: encoderPaths,
       keyPrefixMap: textEncoderOption.keyPrefixMap,
       finalNormKey: textEncoderOption.finalNormKey,
     };

@@ -1,0 +1,1 @@
+- A merge follow-up now takes over the worktree that already holds its PR branch instead of blocking on it

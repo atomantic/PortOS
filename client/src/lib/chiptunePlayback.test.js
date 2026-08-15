@@ -1,9 +1,13 @@
-// Pure-schedule tests for the chiptune preview (#2911). Only the Web-Audio-free
-// exports are exercised (buildChiptuneSchedule / parseChiptunePitch); the
-// timing semantics here MUST agree with server/lib/chiptuneScore.test.js —
-// the two flatteners are mirrors of the same contract.
-import { describe, expect, it } from 'vitest';
-import { buildChiptuneSchedule, parseChiptunePitch } from './chiptunePlayback.js';
+// Schedule + audio-session tests for the chiptune preview (#2911). Most of this
+// file exercises the Web-Audio-free exports (buildChiptuneSchedule /
+// parseChiptunePitch); the timing semantics there MUST agree with
+// server/lib/chiptuneScore.test.js — the two flatteners are mirrors of the same
+// contract. The last block drives the real player over the shared Web Audio
+// fake, purely to pin the iOS audio-session claim (#4131).
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { buildChiptuneSchedule, parseChiptunePitch, createChiptunePlayer } from './chiptunePlayback.js';
+import { acquireAudioSession } from './audioContext.js';
+import { createFakeAudio } from '../test/fakeAudioContext.js';
 
 const score = () => ({
   version: 1,
@@ -70,5 +74,62 @@ describe('buildChiptuneSchedule', () => {
     expect(buildChiptuneSchedule(null).events).toEqual([]);
     expect(buildChiptuneSchedule({}).events).toEqual([]);
     expect(buildChiptuneSchedule({ channels: [], order: [] }).totalSec).toBe(0);
+  });
+});
+
+// The preview is pure synth with no media element, so on iOS the document's
+// default `auto` session behaves as *ambient* — the hardware ring/silent switch
+// silences it while the panel's playhead keeps scrolling, with nothing on screen
+// to explain the silence. The player opts into `playback` through the shared
+// transport; these pin that it claims while sounding and hands it back.
+describe('createChiptunePlayer on iOS Safari', () => {
+  const { FakeAudioContext, audio } = createFakeAudio();
+
+  beforeEach(() => {
+    audio.reset();
+    vi.stubGlobal('AudioContext', FakeAudioContext);
+    vi.stubGlobal('navigator', { audioSession: { type: 'auto' } });
+    vi.useFakeTimers();
+  });
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+  const player = () => createChiptunePlayer(() => score());
+
+  it('holds the playback session while looping so the silent switch cannot mute it', async () => {
+    const p = player();
+    await p.play();
+    expect(p.isPlaying()).toBe(true);
+    expect(globalThis.navigator.audioSession.type).toBe('playback');
+    p.stop();
+  });
+
+  it('hands the session back on stop', async () => {
+    const p = player();
+    await p.play();
+    p.stop();
+    expect(globalThis.navigator.audioSession.type).toBe('auto');
+  });
+
+  // The VoiceWidget is mounted on every page (Layout.jsx), so push-to-talk can
+  // open the mic mid-preview. `playback` REFUSES capture, so the arbiter has to
+  // promote — otherwise fixing the silence here would kill the mic instead.
+  it('yields to a mic opened mid-preview, then takes playback back', async () => {
+    const p = player();
+    await p.play();
+    const releaseMic = acquireAudioSession('play-and-record');
+    expect(globalThis.navigator.audioSession.type).toBe('play-and-record');
+    releaseMic();
+    expect(globalThis.navigator.audioSession.type).toBe('playback');
+    p.stop();
+    expect(globalThis.navigator.audioSession.type).toBe('auto');
+  });
+
+  // An empty/garbage score aborts in prepare() and never sounds a note, so it
+  // must not leave the document pinned output-only either.
+  it('does not keep the session when there is nothing to play', async () => {
+    const p = createChiptunePlayer(() => null);
+    await p.play();
+    expect(p.isPlaying()).toBe(false);
+    expect(globalThis.navigator.audioSession.type).toBe('auto');
   });
 });

@@ -199,6 +199,26 @@ describe('Layout — Game workspace scroll mode', () => {
   });
 });
 
+// Data Manager renders its own bordered title bar over a `flex-1 overflow-auto`
+// body, so it needs the bare full-width main. While it was missing from the
+// tables it nested that scroller inside `<main>`'s own `overflow-auto p-4
+// md:p-6` — two scrollbars, doubled padding (#4145).
+describe('Layout — Data Manager scroll mode', () => {
+  it('gives /data the bare full-width main, and leaves /devtools/datadog padded', async () => {
+    const dataManager = await renderLayout('/data');
+    const dataMain = dataManager.container.querySelector('#main-content');
+    expect(dataMain?.className).toContain('overflow-hidden');
+    expect(dataMain?.className).not.toContain('overflow-auto');
+    expect(dataMain?.className).not.toContain('p-4');
+    dataManager.unmount();
+
+    const dataDog = await renderLayout('/devtools/datadog');
+    const dataDogMain = dataDog.container.querySelector('#main-content');
+    expect(dataDogMain?.className).toContain('overflow-auto');
+    expect(dataDogMain?.className).toContain('p-4');
+  });
+});
+
 describe('Layout — dynamic third-level navigation', () => {
   it('collapses and expands the Series and Universes children', async () => {
     api.listPipelineSeries.mockResolvedValue([{ id: 'series-1', name: 'Example Series' }]);
@@ -252,6 +272,9 @@ describe('Layout — isFullWidthRoute classification', () => {
     // Apps: detail editor is full-width, but the Add App form is explicitly excluded
     // (it has no internal scroll container and would clip below the fold).
     ['/apps/create', false], ['/apps/create/', false], ['/apps/a1', true], ['/apps/a1/tab', true],
+    // Data Manager owns its own bar+scroll shell, and is registered EXACT so
+    // it can't leak onto the DataDog routes that share the `/data` prefix.
+    ['/data', true], ['/datadog', false], ['/devtools/datadog', false],
     // Whole-section prefixes, and the default for an unlisted route.
     ['/songbook', true], ['/', false],
   ])('%s -> %s', (pathname, expected) => {

@@ -10,6 +10,7 @@ import {
   downloadableVideoTextEncoder,
   publicTextEncoderOption,
 } from './videoTextEncoders.js';
+import { isSafeHfRepoRelativePath } from './hfCache.js';
 
 const H3 = { id: 'minimax_h3_8bit', runtime: 'minimax_h3' };
 const LTX = { id: 'ltx2_unified', runtime: 'ltx2' };
@@ -48,8 +49,22 @@ describe('videoTextEncoders', () => {
     // A floating revision would let the upstream repo change the weights under
     // a pinned PortOS build.
     expect(option.revision).toMatch(/^[0-9a-f]{40}$/);
-    expect(option.file).toMatch(/\.safetensors$/);
+    expect(option.files).toEqual([expect.stringMatching(/\.safetensors$/)]);
     expect(Object.keys(option.keyPrefixMap).length).toBeGreaterThan(0);
+  });
+
+  // An upstream checkpoint arrives as several shards; the ones holding only
+  // language layers past the conditioning depth are deliberately not pinned, so
+  // the list is a subset of the repo rather than every shard it publishes.
+  it('resolves a multi-shard substitute with no loader adapters', () => {
+    const option = resolveVideoTextEncoder(H3, 'huihui-abliterated');
+    expect(option.revision).toMatch(/^[0-9a-f]{40}$/);
+    expect(option.files.length).toBeGreaterThan(1);
+    expect(option.files.every((name) => name.endsWith('.safetensors'))).toBe(true);
+    // Upstream Hugging Face namespace, and it ships its own final norm — the
+    // remap and the synthesized norm exist only for a repackaged checkpoint.
+    expect(option.keyPrefixMap).toBeUndefined();
+    expect(option.finalNormKey).toBeUndefined();
   });
 
   // The remap has to land on the namespace the pinned MLX loader matches
@@ -90,7 +105,18 @@ describe('videoTextEncoders', () => {
     expect(downloadableVideoTextEncoder('heretic-bf16')).toBeTruthy();
     for (const entry of downloadableVideoTextEncoders()) {
       expect(entry.repo).toBeTruthy();
-      expect(entry.file).toBeTruthy();
+      // Always an explicit file list. A snapshot of any of these repos pulls
+      // quantizations, generation tails or never-built layers the loader can't
+      // use — tens of GB of waste per entry.
+      expect(entry.files.length).toBeGreaterThan(0);
+      expect(entry.files.every((name) => name.endsWith('.safetensors'))).toBe(true);
+      expect(new Set(entry.files).size).toBe(entry.files.length);
+      // Through the same predicate the download target validates with, so the
+      // registry can't declare a path the route would then reject at runtime.
+      expect(entry.files.every(isSafeHfRepoRelativePath)).toBe(true);
+      // The shim links every shard into one flat directory, so two shards with
+      // the same basename would collide on one symlink name.
+      expect(new Set(entry.files.map((name) => name.split('/').pop())).size).toBe(entry.files.length);
     }
   });
 

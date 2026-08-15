@@ -14,7 +14,7 @@
  *   - Antigravity: `agy --print <prompt>` (argv value, not stdin; + `--model`)
  *   - Gemini CLI:  legacy prompt piped to stdin (+ `-m <model>`)
  *   - Grok Build:  `grok --prompt-file /dev/stdin` (+ `--model <id>`, see grok.js)
- *   - Kimi Code:   `kimi --print --prompt <value>` (argv value, not stdin; see kimi.js)
+ *   - Kimi Code:   `kimi --prompt <value>` (argv value, not stdin; see kimi.js)
  *   - Cursor:      `cursor-agent --print --force` (prompt on stdin; see cursor.js)
  *   - Claude Code: `-p -`                (+ `--model <id>`)
  */
@@ -66,7 +66,8 @@ export function buildCliArgs(provider) {
  *   - Antigravity (`agy`): the prompt is spliced in as the VALUE of --print
  *     (agy does NOT read stdin) → `useStdin: false`.
  *   - Kimi (`kimi`): the prompt is spliced in as the VALUE of --prompt
- *     (kimi does NOT read stdin in --print mode) → `useStdin: false`.
+ *     (kimi does NOT read stdin; supplying --prompt is also what selects
+ *     non-interactive mode) → `useStdin: false`.
  *   - Grok on Windows: the `/dev/stdin` prompt-file is rewritten to a temp file
  *     → `useStdin: false` with a real `cleanup`.
  *   - Every other provider (Claude Code `-p -`, Codex `exec -`, OpenCode `run`,

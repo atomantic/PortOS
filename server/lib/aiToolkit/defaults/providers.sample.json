@@ -338,7 +338,7 @@
       "name": "Kimi Code CLI",
       "type": "cli",
       "command": "kimi",
-      "args": ["--print"],
+      "args": [],
       "models": ["kimi-configured-default"],
       "defaultModel": "kimi-configured-default",
       "lightModel": "kimi-configured-default",

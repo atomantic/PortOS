@@ -17,12 +17,21 @@
  * with the select rather than behind the collapsed Advanced panel — the user has
  * to see the cost at the moment they pick it, and the page gates Generate on the
  * same status.
+ *
+ * Selecting an un-downloaded substitute starts that pull (the page wires the
+ * select to `startWhenIdle`), so the option's size rides in the option TEXT
+ * where it is legible before the click. The badge still renders because it owns
+ * every state that follows — queued, in progress, cancel, and the retry after a
+ * failed or cancelled pull.
  */
 import { FormField } from '../ui/FormField';
 import ModelSelect from '../ModelSelect';
 import ModelDownloadBadge from '../media/ModelDownloadBadge';
 import FactLink from './FactLink';
 import { formatBytes } from '../../utils/formatters.js';
+
+// Shared by the three sub-label lines below so they can't drift apart.
+const HINT_CLASS = 'text-[10px] text-gray-500 leading-snug mt-1';
 
 // The option text carries its own download size, so the shared ModelSelect gets
 // a getLabel rather than the default `m.name` (these entries have `label`).
@@ -37,6 +46,7 @@ export default function TextEncoderPicker({
   status = null,
   onDownload,
   onCancel,
+  queued = false,
   disabled = false,
 }) {
   if (options.length < 2) return null;
@@ -61,15 +71,13 @@ export default function TextEncoderPicker({
         getLabel={optionLabel}
         disabled={disabled}
       />
-      {selected.description && (
-        <p className="text-[10px] text-gray-500 leading-snug mt-1">{selected.description}</p>
-      )}
+      {selected.description && <p className={HINT_CLASS}>{selected.description}</p>}
       {/* Same provenance affordance a MODEL gets (ModelDisclosure/FactLink): a
           substitute is someone else's tens-of-GB checkpoint, so its card and
           license stay one click away instead of being facts only the registry
           knows. */}
       {(card || license) && (
-        <p className="text-[10px] text-gray-500 leading-snug mt-1 flex flex-wrap items-center gap-x-2">
+        <p className={`${HINT_CLASS} flex flex-wrap items-center gap-x-2`}>
           {card && <FactLink href={card}>Model card</FactLink>}
           {license && <FactLink href={license.url}>{license.name}</FactLink>}
         </p>
@@ -79,6 +87,7 @@ export default function TextEncoderPicker({
           status={status}
           onDownload={() => onDownload?.(selected.id)}
           onCancel={onCancel}
+          queued={queued}
           estimateLabel={selected.sizeBytes ? `~${formatBytes(selected.sizeBytes)}` : undefined}
         />
       )}

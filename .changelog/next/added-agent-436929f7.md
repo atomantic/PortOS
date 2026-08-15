@@ -1,0 +1,1 @@
+- Video Gen: a second swappable text encoder for MiniMax H3 (huihui-ai's abliterated Qwen3-VL-32B), and picking any substitute now starts its download instead of waiting on a separate Download click

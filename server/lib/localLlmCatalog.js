@@ -252,8 +252,8 @@ export const LOCAL_LLM_CATALOG = [
   // long context window matter most. To actually fit the manuscript, raise Ollama's
   // context window (OLLAMA_CONTEXT_LENGTH) — the default 4K window silently truncates.
   {
-    key: 'qwen3.6-27b',
-    name: 'Qwen3.6 27B',
+    key: 'qwen3.8-27b',
+    name: 'Qwen3.8 27B',
     category: 'chat',
     params: '27B',
     size: '17 GB',
@@ -261,8 +261,8 @@ export const LOCAL_LLM_CATALOG = [
     description: 'Dense current-generation Qwen with a 256K context, vision, tools, and a thinking mode — the strongest all-round narrative editor that still fits 32GB.',
     capabilities: ['chat', 'reasoning', 'tools', 'vision'],
     context: 262144,
-    ollama: 'qwen3.6:27b',
-    lmstudio: 'lmstudio-community/Qwen3.6-27B-GGUF'
+    ollama: 'hf.co/unsloth/Qwen3.8-27B-GGUF:Q4_K_M',
+    lmstudio: 'unsloth/Qwen3.8-27B-GGUF'
   },
   {
     key: 'gemma4-26b-a4b',

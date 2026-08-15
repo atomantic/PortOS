@@ -162,33 +162,34 @@ describe('cliProviderArgs', () => {
   });
 
   describe('buildCliArgs — Kimi Code CLI', () => {
-    it('builds a headless --print invocation without --model for the sentinel (seeded args)', () => {
-      const args = buildCliArgs({ id: 'kimi-cli', command: 'kimi', args: ['--print'], defaultModel: 'kimi-configured-default' });
-      expect(args).toEqual(['--print']);
+    it('builds an empty headless argv for the sentinel (seeded args) — no mode flag exists (#4139)', () => {
+      const args = buildCliArgs({ id: 'kimi-cli', command: 'kimi', args: [], defaultModel: 'kimi-configured-default' });
+      expect(args).toEqual([]);
       expect(args).not.toContain('--model');
       expect(args).not.toContain('kimi-configured-default');
     });
 
-    it('adds --print when the saved args omit it', () => {
-      const args = buildCliArgs({ id: 'kimi-cli', command: 'kimi', args: [], defaultModel: 'kimi-configured-default' });
-      expect(args).toEqual(['--print']);
+    it('never injects --print or --afk — kimi rejects both outright (#4139)', () => {
+      const args = buildCliArgs({ id: 'kimi-cli', command: 'kimi', args: [], defaultModel: 'kimi-k2' });
+      expect(args).not.toContain('--print');
+      expect(args).not.toContain('--afk');
     });
 
     it('injects --model when a concrete model id is set (path/exe tolerant)', () => {
-      const args = buildCliArgs({ id: 'my-kimi', command: '/opt/homebrew/bin/kimi', args: ['--print'], defaultModel: 'kimi-k2' });
-      expect(args).toEqual(['--print', '--model', 'kimi-k2']);
+      const args = buildCliArgs({ id: 'my-kimi', command: '/opt/homebrew/bin/kimi', args: [], defaultModel: 'kimi-k2' });
+      expect(args).toEqual(['--model', 'kimi-k2']);
     });
 
     it('respects a user-baked --model and does not duplicate it', () => {
-      const args = buildCliArgs({ id: 'kimi-cli', command: 'kimi', args: ['--print', '--model', 'mine'], defaultModel: 'kimi-configured-default' });
+      const args = buildCliArgs({ id: 'kimi-cli', command: 'kimi', args: ['--model', 'mine'], defaultModel: 'kimi-configured-default' });
       expect(args.filter((a) => a === '--model')).toHaveLength(1);
       expect(args).toContain('mine');
     });
 
     it('delivers the prompt as the --prompt argv value (useStdin false)', () => {
-      const built = buildCliArgs({ id: 'kimi-cli', command: 'kimi', args: ['--print'], defaultModel: 'kimi-configured-default' });
+      const built = buildCliArgs({ id: 'kimi-cli', command: 'kimi', args: [], defaultModel: 'kimi-configured-default' });
       const { args, useStdin } = prepareCliPrompt('kimi', built, 'write a haiku');
-      expect(args).toEqual(['--print', '--prompt', 'write a haiku']);
+      expect(args).toEqual(['--prompt', 'write a haiku']);
       expect(useStdin).toBe(false);
     });
   });

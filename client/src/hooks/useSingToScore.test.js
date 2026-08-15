@@ -47,10 +47,13 @@ describe('useSingToScore', () => {
     trackerOnUpdate = null;
     metroOpts = null;
     global.navigator.mediaDevices = { getUserMedia: vi.fn(async () => fakeStream()) };
+    // Safari 16.4+ only — jsdom has no `navigator.audioSession`, so the iOS
+    // session tests below stub the shape the arbiter writes to.
+    global.navigator.audioSession = { type: 'auto' };
     global.performance = { now: () => 1000 };
   });
 
-  afterEach(() => { vi.clearAllMocks(); });
+  afterEach(() => { vi.clearAllMocks(); delete global.navigator.audioSession; });
 
   it('walks idle → count-in → recording → idle and transcribes on stop', async () => {
     const { result } = renderHook(() => useSingToScore({ tempo: 120, score: 'time: 4/4', musicKey: 'C' }));
@@ -100,5 +103,35 @@ describe('useSingToScore', () => {
     expect(trackerStop).toHaveBeenCalled();
     expect(analyserClose).toHaveBeenCalled();
     expect(trackStop).toHaveBeenCalled();
+  });
+
+  // `playback` REFUSES capture on iOS, and the transport-driven players declare
+  // it document-wide, so this hook has to claim `play-and-record` around its own
+  // getUserMedia rather than relying on nothing else having claimed first (#4131).
+  describe('iOS audio session', () => {
+    it('claims play-and-record for the mic window and hands it back on stop', async () => {
+      const { result } = renderHook(() => useSingToScore({ tempo: 120, score: 'time: 4/4' }));
+      await act(async () => { await result.current.start(); });
+      expect(navigator.audioSession.type).toBe('play-and-record');
+
+      act(() => { result.current.stop(); });
+      expect(navigator.audioSession.type).toBe('auto');
+    });
+
+    it('hands the session back when the mic is denied', async () => {
+      global.navigator.mediaDevices.getUserMedia = vi.fn(async () => { throw new Error('Permission denied'); });
+      const { result } = renderHook(() => useSingToScore({ tempo: 120 }));
+      await act(async () => { await result.current.start(); });
+      // A denied mic never reaches teardown(), so the claim has to be released
+      // on the rejection path or the page stays pinned record-capable.
+      expect(navigator.audioSession.type).toBe('auto');
+    });
+
+    it('hands the session back on unmount mid-capture', async () => {
+      const { result, unmount } = renderHook(() => useSingToScore({ tempo: 120, score: 'time: 4/4' }));
+      await act(async () => { await result.current.start(); });
+      unmount();
+      expect(navigator.audioSession.type).toBe('auto');
+    });
   });
 });

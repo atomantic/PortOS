@@ -27,23 +27,41 @@ schedule, same joint video+audio output.
 |--------|-----------|----------------|
 | **Stock** | The conditioner inside `MiniMaxAI/MiniMax-H3`'s `FL2VA/text_encoder/` | none — already downloaded with the model |
 | **Ultra-Heretic uncensored** | `ethanfel/Qwen3-VL-32B-Ultra-Heretic-H3-ComfyUI-INT8-ConvRot`, bf16 variant — Qwen3-VL-32B-Instruct abliterated with Heretic v1.2.0 (attention-targeted), repackaged for H3 | ~48 GB, one pinned file |
+| **Huihui abliterated** | `huihui-ai/Huihui-Qwen3-VL-32B-Instruct-abliterated` — the same base model abliterated by a different lab and a different method, so it reads prompts differently again | ~57 GB, 12 of the repo's 14 pinned shards |
 
-Only the **bf16** file is usable here. The repo's INT8 ConvRot and NVFP4/AWQ
-variants use ComfyUI's own quantization (learned row-wise rotation matrices,
-group size 256) that the MLX loader cannot dequantize, and the `50_63`
+For Ultra-Heretic, only the **bf16** file is usable. The repo's INT8 ConvRot and
+NVFP4/AWQ variants use ComfyUI's own quantization (learned row-wise rotation
+matrices, group size 256) that the MLX loader cannot dequantize, and the `50_63`
 generation tails belong to ComfyUI's H3 Prompt Enhancer node — a feature PortOS
 does not implement. That's why the download is scoped to one file rather than a
 repo snapshot: the full repo is ~130 GB for ~48 GB of usable weights.
+
+Huihui's is an upstream checkpoint rather than a repack, so it arrives as
+safetensors shards. Two of the fourteen hold only language layers 50–63 —
+parameters the loader never builds — so they aren't pulled: 12 shards, ~57 GB
+instead of ~67 GB. Because it's the upstream Hugging Face namespace and it ships
+its own final norm, it needs neither the key remap nor the synthesized norm the
+repack does.
 
 ## Using it
 
 1. Pick **MiniMax H3** on `/media/video`. A **Text encoder** select appears under
    the model's download badge.
-2. Choose a substitute. If it isn't downloaded, a Download button appears and
-   **Generate stays disabled** until it's resident — the same gate the model
-   weights and IC-LoRA weights use.
+2. Choose a substitute. **Selecting one starts its download** — each option's
+   size is in its own line of the select, so the cost is visible before the
+   click. **Generate stays disabled** until it's resident, the same gate the
+   model weights and IC-LoRA weights use, and the badge below the select carries
+   the progress, the cancel and the retry.
 3. Render. The chosen conditioner is recorded in history, so **Remix** reproduces
    the render faithfully; a stock render records nothing and remixes as stock.
+
+Only an explicit pick starts a download. Restoring a conditioner — a Remix, a
+resumed render replayed after a reload — never does; those weights are either
+already present or one click away on the badge.
+
+If another download already holds the progress stream, the pick queues behind it
+(the badge reads "Queued — starts when the current download finishes") rather
+than aborting it.
 
 Switching to a model whose runtime can't load your selection snaps the picker
 back to Stock rather than leaving it on a value the server would reject.
@@ -62,6 +80,11 @@ substitute plus the stock `config.json`. The runtime's own `from_pretrained()`
 then loads it with no argument it doesn't already take. The shim lives outside
 the pinned checkout deliberately: anything written inside would read as untracked
 in the pin verification.
+
+The loader globs `*.safetensors` in that directory, so a multi-shard substitute
+is just several links instead of one — no index file, no loader change. It also
+means the shards that weren't pulled are simply absent from the glob, which is
+exactly right: their tensors are ones the loader never asks for.
 
 The substitute ships weights only. Its config, tokenizer and processor come from
 upstream — correct, because abliteration changes weights, not the vocabulary or
@@ -90,6 +113,12 @@ Verified against the real pinned runtime: the 902 tensors in the bf16 file plus
 the synthesized norm map onto exactly the 903 parameters the loader builds — 552
 language, 351 vision, zero missing, zero extra, zero skipped.
 
+Neither adapter runs for the Huihui entry: its keys are already the namespace the
+loader matches, and its `model.language_model.norm.weight` is real rather than
+synthesized. Its 12 pinned shards carry the same 903 parameters (the other 155
+tensors in the repo are layers 50–63 and `lm_head`, which the loader skips
+exactly as it skips them in the stock checkpoint).
+
 ## Adding another conditioner
 
 Add an entry to `TEXT_ENCODERS_BY_RUNTIME` in
@@ -104,7 +133,7 @@ integrity scan and the render path all read from that table.
   description: '…',
   repo: 'org/repo',
   revision: '<40-char sha>',     // pinned, never a branch
-  file: 'weights.safetensors',   // one file; never a repo snapshot
+  files: ['weights.safetensors'],  // explicit list; never a repo snapshot
   keyPrefixMap: { 'model.': 'model.language_model.', 'visual.': 'model.visual.' },
   finalNormKey: 'model.norm.weight',  // omit if the checkpoint ships its own norm
   sizeBytes: 12345,              // exact published size — the UI formats this
@@ -116,10 +145,35 @@ These live in code rather than `data/media-models.json` on purpose: a stale
 registry file must never be able to name a checkpoint this build's runner has no
 key map for.
 
-To confirm a candidate is really a drop-in before downloading tens of GB, read
-its safetensors header with an HTTP range request, apply the prefix map, and diff
-the result against the parameter set the loader builds. That's how the shipped
-entry was validated.
+### The candidate has to be Qwen3-VL-32B
+
+The shim reuses **upstream's** `config.json`, tokenizer and processor, so a
+substitute has to match them: `hidden_size` 5120, 64 language layers, `head_dim`
+128, `vocab_size` 151936, `intermediate_size` 25600, and the same 27-block /
+1152-wide vision tower with deepstack indices `[8, 16, 24]`. Abliteration changes
+weights, not the vocabulary or the vision geometry, which is exactly why an
+abliterated Qwen3-VL-32B drops in.
+
+A *different Qwen generation* does not, however close the conditioning width
+looks. Qwen3.5-27B (`model_type: qwen3_5`, e.g.
+`Blackfrost-AI/Qwen3.8-27B-ABLITERATED-BF16`) also reports `hidden_size: 5120`,
+but 48 of its 64 layers are Gated-DeltaNet `linear_attn` blocks with parameters
+(`in_proj_qkv`, `conv1d`, `A_log`, `dt_bias`) that have no counterpart in the
+module tree this loader builds, its vocabulary is 248320 tokens against the
+stock tokenizer's 151936, and its `head_dim` is 256. No key remap can bridge
+that — it needs a different model implementation and a different tokenizer, not
+a registry entry.
+
+### Validating one before you pull tens of GB
+
+Fetch the candidate's `model.safetensors.index.json` (or read a single file's
+safetensors header with an HTTP range request), apply the prefix map, and diff
+the result against the parameter set the loader builds — 903 tensors: embed +
+`norm` + language layers 0–49, plus the full vision tower. Diff its
+`config.json` against `FL2VA/text_encoder/config.json` at the same time. That's
+how both shipped entries were validated; for the Huihui entry the index also
+identified which shards carry no needed tensor, which is what the `files` list
+leaves out.
 
 ## Cost note
 
@@ -134,3 +188,4 @@ grows.
 - `scripts/generate_minimax_h3.py` — the shim builder and key remap
 - `server/services/videoGen/local.js` — cache resolution and argv
 - `client/src/components/videoGen/TextEncoderPicker.jsx` — the control
+- `client/src/hooks/useModelDownloadStatus.js` — `startWhenIdle`, the select-starts-the-pull mechanism (generic: any gated-weight picker can adopt it)

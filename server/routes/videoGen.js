@@ -593,16 +593,22 @@ router.get('/models', (_req, res) => {
 // Resolve the repo set an integrity scan should cover. A specific `modelId`
 // scopes to that model's repo; no modelId scans every model repo plus the
 // shared text encoder.
-const safeOnlyList = (model, files, label) => {
+// One definition of "a valid `only` list" for every download target this file
+// builds — model repos, their required weights, and the substitutable prompt
+// conditioners. `owner` is only used to name the offender in the error, so a
+// conditioner entry can pass its own registry id.
+const safeOnlyList = (owner, files, label) => {
   const only = Array.isArray(files) ? files.filter((file) => typeof file === 'string' && file.length > 0) : [];
   if (only.some((file) => !isSafeHfRepoRelativePath(file))) {
     throw new ServerError(
-      `Video model "${model.id}" has an unsafe ${label} path. Use repo-relative POSIX filenames only.`,
+      `${owner} has an unsafe ${label} path. Use repo-relative POSIX filenames only.`,
       { status: 500, code: 'VIDEO_MODEL_MISCONFIGURED' },
     );
   }
   return only;
 };
+
+const videoModelLabel = (model) => `Video model "${model?.id}"`;
 
 const modelDownloadTargets = (model) => {
   const repo = repoForModel(model);
@@ -618,24 +624,26 @@ const modelDownloadTargets = (model) => {
   const targets = [{
     repo,
     revision: model?.revision || null,
-    only: safeOnlyList(model, model?.repoFiles, 'repo-file'),
+    only: safeOnlyList(videoModelLabel(model), model?.repoFiles, 'repo-file'),
   }];
   for (const dep of Array.isArray(model?.requiredWeights) ? model.requiredWeights : []) {
     if (typeof dep?.repo !== 'string') continue;
-    const only = safeOnlyList(model, dep.files, 'required-weight');
+    const only = safeOnlyList(videoModelLabel(model), dep.files, 'required-weight');
     if (only.length > 0) targets.push({ repo: dep.repo, revision: dep.revision || null, only });
   }
   return targets;
 };
 
-// One download target per substitutable prompt conditioner. Each is a single
-// pinned file inside a repo that also publishes quantizations and generation
-// tails PortOS's MLX loader can't read, so these are ALWAYS scoped to `only:
-// [file]` — a repo-wide snapshot would pull ~130 GB of unusable variants.
+// One download target per substitutable prompt conditioner. Each names an
+// explicit file list inside a repo that holds more than the loader can use —
+// quantizations and generation tails in a repack, or the language layers past
+// the conditioning depth in an upstream checkpoint — so these are ALWAYS scoped
+// to `only: entry.files`. A repo-wide snapshot would pull ~130 GB of unusable
+// variants for the repack and ~10 GB of never-built layers for the upstream one.
 const textEncoderDownloadTarget = (entry) => ({
   repo: entry.repo,
   revision: entry.revision || null,
-  only: [entry.file],
+  only: safeOnlyList(`Text encoder "${entry.id}"`, entry.files, 'weight-file'),
 });
 // Paired with its entry so the status lane can project the registry fields
 // (label, size) alongside the cache verdict without a second lookup.
@@ -911,10 +919,11 @@ const textEncoderFromParam = (id) => {
   return entry;
 };
 
-// Always single-file, never a snapshot: the upstream repo also publishes INT8
-// ConvRot / NVFP4 quantizations and 50-63 generation tails that this MLX loader
-// cannot read, so a repo-wide pull would cost ~130 GB for ~48 GB of usable
-// weights.
+// Always the entry's pinned file list, never a snapshot: these repos publish
+// more than the loader can read — INT8 ConvRot / NVFP4 quantizations and 50-63
+// generation tails in a repack, the language layers past the conditioning depth
+// in an upstream checkpoint — so a repo-wide pull would cost ~130 GB for ~48 GB
+// of usable weights.
 router.get('/text-encoders/:id/download', asyncHandler(async (req, res) => {
   const entry = textEncoderFromParam(req.params.id);
   await startHfDownloadStream({

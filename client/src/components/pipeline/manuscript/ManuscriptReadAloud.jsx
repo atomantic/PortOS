@@ -22,6 +22,7 @@ import { Play, Pause, Square, Loader2, Volume2, AlertTriangle } from 'lucide-rea
 import Modal from '../../ui/Modal';
 import VoicePicker from '../../voice/VoicePicker';
 import toast from '../../ui/Toast';
+import ProgressBar from '../../ui/ProgressBar';
 import { formatDurationMs } from '../../../utils/formatters';
 import { narratePipelineProse } from '../../../services/api';
 import { STAGE_LABEL } from './constants';
@@ -293,9 +294,7 @@ export default function ManuscriptReadAloud({ open, onClose, section }) {
 
           {segments ? (
             <div className="space-y-1">
-              <div className="h-1.5 w-full rounded bg-port-bg overflow-hidden">
-                <div className="h-full bg-port-accent transition-[width] duration-150" style={{ width: `${progressPct}%` }} />
-              </div>
+              <ProgressBar percent={progressPct} label="Narration progress" duration={150} />
               <div className="flex items-center justify-between text-[11px] text-gray-500">
                 <span>
                   {segments.length} sentence{segments.length === 1 ? '' : 's'}

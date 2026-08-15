@@ -122,6 +122,36 @@ describe('TextEncoderPicker', () => {
       .toHaveAttribute('href', HERETIC.disclosure.weightsLicense.url);
   });
 
+  // Selecting a substitute commits its pull, but the single download lane may
+  // already be busy. The badge then says "queued" INSTEAD of offering Download —
+  // a button here would hijack the lane the queued pull is waiting for.
+  it('replaces the Download button with a queued notice, not a second control', () => {
+    const { rerender } = render(
+      <TextEncoderPicker
+        options={OPTIONS}
+        value="heretic-bf16"
+        onChange={vi.fn()}
+        status={{ id: 'heretic-bf16', repo: 'org/heretic', cached: false, sizeBytes: 0 }}
+        queued
+      />,
+    );
+    expect(screen.getByText(/starts when the current download finishes/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Download/ })).not.toBeInTheDocument();
+
+    // Once this option's own pull is running, the badge carries the progress —
+    // a "queued" line alongside it would contradict it.
+    rerender(
+      <TextEncoderPicker
+        options={OPTIONS}
+        value="heretic-bf16"
+        onChange={vi.fn()}
+        status={{ id: 'heretic-bf16', repo: 'org/heretic', cached: false, sizeBytes: 0, downloading: true }}
+        queued
+      />,
+    );
+    expect(screen.queryByText(/starts when the current download finishes/i)).not.toBeInTheDocument();
+  });
+
   it('disables the select while a render is in flight', () => {
     render(<TextEncoderPicker options={OPTIONS} value="stock" onChange={vi.fn()} disabled />);
     expect(screen.getByLabelText('Text encoder')).toBeDisabled();

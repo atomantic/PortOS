@@ -8,6 +8,7 @@ import {
   isStoppedTerminal,
   MILESTONE_STATUS,
 } from '../../lib/autopilotMilestones';
+import ProgressBar from '../ui/ProgressBar';
 
 // Per-status chrome in ONE table — icon and tones together, so a new status
 // can't get a row color and no icon (or the reverse). `blocked` reuses the
@@ -53,19 +54,13 @@ export default function AutopilotMilestones({ plan, planTotals, progress, termin
       {/* Overall meter. A plan snapshot can under-count a step the run repeats,
           so this is honest about milestones settled — not a time estimate. */}
       {!dryRun ? (
-        <div
-          className="mt-1.5 h-1.5 w-full rounded-full bg-port-bg overflow-hidden"
-          role="progressbar"
-          aria-label="Autopilot story progress"
-          aria-valuenow={summary.percent}
-          aria-valuemin={0}
-          aria-valuemax={100}
-        >
-          <div
-            className={`h-full rounded-full transition-all duration-500 ${isStoppedTerminal(terminal) ? 'bg-port-warning' : 'bg-port-accent'}`}
-            style={{ width: `${summary.percent}%` }}
-          />
-        </div>
+        <ProgressBar
+          percent={summary.percent}
+          tone={isStoppedTerminal(terminal) ? 'warning' : 'accent'}
+          label="Autopilot story progress"
+          duration={500}
+          className="mt-1.5"
+        />
       ) : null}
 
       {/* Capped so a long plan (a comic series can project 16 milestones) can't

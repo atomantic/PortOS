@@ -1,0 +1,1 @@
+- Foundation-gate structure repair now rolls back only the episode synopses its own arc resolves wrote, so a planning-synopsis edit that lands from elsewhere during the repair is no longer reverted with the rejected candidate

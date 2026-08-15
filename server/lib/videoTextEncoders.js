@@ -28,6 +28,23 @@
  * the final norm — correct, since H3 reads the state before it — would trip
  * that check, so the runner synthesizes a ones-filled `norm.weight` under this
  * key. Absent means "the checkpoint ships its own norm".
+ *
+ * `files` is always a LIST, because a substitute is either one repackaged
+ * safetensors or the subset of an upstream model's shards that actually carries
+ * the 903 parameters the loader builds. The runner symlinks every entry into the
+ * shim's `text_encoder/` and the loader globs `*.safetensors` there, so a
+ * multi-shard checkpoint needs no index file and no loader change — but the list
+ * must stay an explicit pin rather than a repo snapshot, since these repos also
+ * publish quantizations, generation tails and (for a full upstream checkpoint)
+ * the layers past the conditioning depth that H3 never evaluates.
+ *
+ * COMPATIBILITY RULE for a new entry: the checkpoint must be Qwen3-VL-32B —
+ * same `text_config` (hidden 5120, 64 layers, vocab 151936, head_dim 128) and
+ * the same vision geometry, because the shim reuses UPSTREAM's config,
+ * tokenizer and processor. A different Qwen generation is not a substitute
+ * however similar its conditioning width looks: Qwen3.5's linear-attention
+ * layers, 248320-token vocabulary and separate tokenizer have no mapping onto
+ * the module tree this loader builds, and no key remap can create one.
  */
 
 import { ServerError } from './errorHandler.js';
@@ -58,7 +75,7 @@ const TEXT_ENCODERS_BY_RUNTIME = Object.freeze({
         + 'Reads prompts the stock conditioner refuses or waters down; the diffusion weights are unchanged.',
       repo: 'ethanfel/Qwen3-VL-32B-Ultra-Heretic-H3-ComfyUI-INT8-ConvRot',
       revision: 'e8967f6a39ea5b4939a1aff81be3e8706490c0e8',
-      file: 'qwen3vl_32b_h3_ultra_uncensored_heretic_bf16.safetensors',
+      files: Object.freeze(['qwen3vl_32b_h3_ultra_uncensored_heretic_bf16.safetensors']),
       // ComfyUI namespace -> the HF namespace the pinned MLX loader matches.
       // Longest-prefix-first is applied at the runner, so these two disjoint
       // rules can be declared in any order.
@@ -82,6 +99,46 @@ const TEXT_ENCODERS_BY_RUNTIME = Object.freeze({
         modelCardUrl: 'https://huggingface.co/ethanfel/Qwen3-VL-32B-Ultra-Heretic-H3-ComfyUI-INT8-ConvRot',
         weightsLicense: APACHE_2,
         reviewedAt: '2026-08-14',
+      }),
+    }),
+    Object.freeze({
+      id: 'huihui-abliterated',
+      label: 'Huihui abliterated — Qwen3-VL-32B bf16',
+      description:
+        'Qwen3-VL-32B-Instruct abliterated by huihui-ai — a different refusal-removal method than the '
+        + 'Heretic substitute, so it reads prompts differently again. Upstream checkpoint, not a repack.',
+      repo: 'huihui-ai/Huihui-Qwen3-VL-32B-Instruct-abliterated',
+      revision: '5e88d9b37e5dca1e95d434f5c4ddfa9b51b1591c',
+      // The upstream shard layout, minus the two shards that hold ONLY language
+      // layers 50-63 — parameters the loader never builds (H3 conditions on the
+      // state after layer 49). Verified against this revision's
+      // model.safetensors.index.json: the 12 shards below carry all 903
+      // parameters the port instantiates, and shards 12 + 13 carry none of them.
+      // Pinned by name rather than snapshotted so a repo re-shard can't silently
+      // change what gets pulled — it fails the cache check instead.
+      files: Object.freeze([
+        'model-00001-of-00014.safetensors',
+        'model-00002-of-00014.safetensors',
+        'model-00003-of-00014.safetensors',
+        'model-00004-of-00014.safetensors',
+        'model-00005-of-00014.safetensors',
+        'model-00006-of-00014.safetensors',
+        'model-00007-of-00014.safetensors',
+        'model-00008-of-00014.safetensors',
+        'model-00009-of-00014.safetensors',
+        'model-00010-of-00014.safetensors',
+        'model-00011-of-00014.safetensors',
+        'model-00014-of-00014.safetensors',
+      ]),
+      // No keyPrefixMap and no finalNormKey: this is the upstream Hugging Face
+      // namespace the pinned loader already matches, and it ships its own
+      // `model.language_model.norm.weight` (in shard 14, which is why that shard
+      // is pulled for one tensor rather than synthesized).
+      sizeBytes: 56962931632,
+      disclosure: Object.freeze({
+        modelCardUrl: 'https://huggingface.co/huihui-ai/Huihui-Qwen3-VL-32B-Instruct-abliterated',
+        weightsLicense: APACHE_2,
+        reviewedAt: '2026-08-15',
       }),
     }),
   ]),
@@ -168,7 +225,7 @@ export const downloadableVideoTextEncoder = (id) =>
  *
  * Deliberately drops `keyPrefixMap` / `finalNormKey` (loader mechanics that
  * would only invite a client-side reimplementation of the remap), `revision`,
- * and `file`: the client never addresses the weight by path — it passes the
+ * and `files`: the client never addresses the weight by path — it passes the
  * option's `id` and the server resolves the rest. `repo` stays because the
  * download badge names it in its tooltip.
  */

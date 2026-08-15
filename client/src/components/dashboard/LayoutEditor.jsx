@@ -30,6 +30,14 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
   const [dupName, setDupName] = useState('');
   const [pendingSwitchId, setPendingSwitchId] = useState(null);
   const closeRef = useRef(null);
+  // The order this draft would have if the user had never pressed Move: the
+  // stored order, with `add`'s appends and `remove`'s deletions applied but
+  // `move` deliberately left out. Comparing it against `widgets` at save time
+  // is what tells the dashboard whether the ORDER is part of this edit — see
+  // isReordered below. It can't be derived from `widgets` after the fact,
+  // because nothing in the list records which widgets were added in this
+  // session or in what order. A ref, not state: no render depends on it.
+  const unmovedOrder = useRef(editing?.widgets ?? []);
 
   useScrollLock(true);
 
@@ -47,7 +55,9 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
     const cur = layouts.find((l) => l.id === editingId);
     if (!cur) return;
     if (dirty) return;
-    setWidgets(cur.widgets);
+    const curWidgets = cur.widgets ?? [];
+    setWidgets(curWidgets);
+    unmovedOrder.current = curWidgets;
     setName(cur.name);
     setActivateWindow(cur.activateWindow ?? null);
     setMode('idle');
@@ -105,8 +115,18 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
     setDirty(true);
   };
 
+  // The dashboard renders from the layout's `grid`, not from this list, so a
+  // save has to say out loud when the widget order IS the edit — otherwise the
+  // grid keeps its old reading order and Move up/down looks inert (#4132).
+  // Both lists always hold the same widgets, so a positional compare is exact.
+  // Because only `move` can make them differ, a move up followed by a move
+  // back down correctly nets out to "not a reorder", and a widget added in
+  // this session and then moved is caught like any other.
+  const isReordered = () => widgets.some((id, i) => id !== unmovedOrder.current[i]);
+
   const remove = (id) => {
     setWidgets((prev) => prev.filter((w) => w !== id));
+    unmovedOrder.current = unmovedOrder.current.filter((w) => w !== id);
     setDirty(true);
   };
 
@@ -119,6 +139,7 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
       return;
     }
     setWidgets([...widgets, id]);
+    unmovedOrder.current = [...unmovedOrder.current, id];
     setDirty(true);
   };
 
@@ -133,7 +154,7 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
       toast.error('Time window: start and end must be HH:MM and differ');
       return;
     }
-    const ok = await onSave({ id: editingId, name: trimmed, widgets, activateWindow }).then(() => true, () => false);
+    const ok = await onSave({ id: editingId, name: trimmed, widgets, activateWindow, reordered: isReordered() }).then(() => true, () => false);
     if (!ok) return;
     setDirty(false);
     toast.success('Layout saved');
@@ -170,7 +191,7 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
     let id = fitId(n);
     while (existingIds.has(id)) { n += 1; id = fitId(n); }
     // Duplicate inherits the source's activateWindow — easier to clear post-duplicate than to re-enter.
-    const ok = await onDuplicate({ id, name: trimmed, widgets, activateWindow }).then(() => true, () => false);
+    const ok = await onDuplicate({ id, name: trimmed, widgets, activateWindow, reordered: isReordered() }).then(() => true, () => false);
     if (!ok) return;
     // The duplicate IS saved — clear dirty so the rehydrate effect runs
     // when the new layout lands in `layouts` props; otherwise the editor

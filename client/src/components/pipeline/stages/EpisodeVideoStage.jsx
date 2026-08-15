@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 import { Film, ExternalLink, Loader2, Sparkles, AlertCircle, CheckCircle2 } from 'lucide-react';
 import toast from '../../ui/Toast';
 import Banner from '../../ui/Banner';
+import ProgressBar from '../../ui/ProgressBar';
 import { generatePipelineVisualImage, listVideoModels } from '../../../services/api';
 import { getCreativeDirectorProject } from '../../../services/apiCreativeDirector';
 import { getSceneStatusBadge, PROJECT_STATUS_LABEL } from '../../creative-director/sceneStatus';
@@ -360,12 +361,11 @@ export default function EpisodeVideoStage({ issue, onStageUpdate }) {
 
           {total > 0 && (
             <div className="space-y-1">
-              <div className="h-1.5 w-full bg-port-bg rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-port-accent transition-all"
-                  style={{ width: `${total ? (accepted / total) * 100 : 0}%` }}
-                />
-              </div>
+              <ProgressBar
+                percent={(accepted / total) * 100}
+                label={`Scenes accepted: ${accepted} of ${total}`}
+                duration={150}
+              />
               <ul className="flex flex-wrap gap-1.5 pt-1">
                 {sortedScenes.map((s) => {
                   const badge = getSceneStatusBadge(s.status);

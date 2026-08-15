@@ -896,8 +896,8 @@ describe('tuiHandshake.applyCommandDefaults', () => {
     expect(applyCommandDefaults('kimi', [])).toEqual(['--yolo']);
     // Seeded default already carries --yolo — no duplicate.
     expect(applyCommandDefaults('kimi', ['--yolo'])).toEqual(['--yolo']);
-    // A user-pinned posture (-y / --afk) is respected.
-    expect(applyCommandDefaults('kimi', ['--afk'])).toEqual(['--afk']);
+    // A user-pinned short posture is respected.
+    expect(applyCommandDefaults('kimi', ['-y'])).toEqual(['-y']);
   });
 });
 

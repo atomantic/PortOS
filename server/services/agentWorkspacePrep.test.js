@@ -35,6 +35,7 @@ vi.mock('./worktreeManager.js', async (importOriginal) => ({
   ...(await importOriginal()),
   createWorktree: vi.fn(),
   adoptWorktree: vi.fn(),
+  findAdoptableWorktreeForBranch: vi.fn().mockResolvedValue(null),
   mergeBaseIntoFeatureWorktree: vi.fn(),
 }));
 vi.mock('./agentPromptBuilder.js', () => ({
@@ -43,12 +44,12 @@ vi.mock('./agentPromptBuilder.js', () => ({
   createJiraTicketForTask: vi.fn(),
 }));
 
-import { prepareAgentWorkspace } from './agentWorkspacePrep.js';
-import { updateTask } from './cos.js';
+import { prepareAgentWorkspace, resolveTaskExistingBranch } from './agentWorkspacePrep.js';
+import { updateTask, getAgents } from './cos.js';
 import { ensureLatest } from './git.js';
 import { detectConflicts } from './taskConflict.js';
 import { getAppWorkspace } from './agentPromptBuilder.js';
-import { createWorktree, adoptWorktree } from './worktreeManager.js';
+import { createWorktree, adoptWorktree, findAdoptableWorktreeForBranch } from './worktreeManager.js';
 
 beforeEach(() => { vi.clearAllMocks(); });
 
@@ -311,6 +312,80 @@ describe('prepareAgentWorkspace — the branch is checked out in another worktre
     ensureLatest.mockResolvedValue({ success: true, upToDate: true });
     adoptWorktree.mockResolvedValue(null);
     createWorktree.mockRejectedValue(BUSY);
+    getAgents.mockResolvedValue([]);
+    // Default: nobody adoptable holds the branch, so the pause path below is
+    // reached. The adoption tests opt in explicitly.
+    findAdoptableWorktreeForBranch.mockResolvedValue(null);
+  });
+
+  // The whole point of a merge follow-up's worktree is to be attached to the PR
+  // branch. When a tree PortOS owns already has it — the finished run's own,
+  // preserved because it was dirty — that tree IS the workspace being asked for,
+  // and no cooldown was ever going to free it.
+  it('adopts the worktree that already holds the branch instead of pausing', async () => {
+    findAdoptableWorktreeForBranch.mockResolvedValue({ path: '/mock/worktrees/agent-y', agentId: 'agent-y' });
+    adoptWorktree.mockResolvedValue({
+      worktreePath: '/mock/worktrees/agent-new', branchName: 'cos/task-x/agent-y',
+      baseBranch: null, existingBranch: true, adopted: true
+    });
+
+    const r = await prepareAgentWorkspace({ agentId: 'agent-new', task: followUpTask() });
+
+    expect(adoptWorktree).toHaveBeenCalledWith('agent-new', expect.any(String), '/mock/worktrees/agent-y', 'cos/task-x/agent-y');
+    expect(r.outcome).toBe('ready');
+    expect(r.workspacePath).toBe('/mock/worktrees/agent-new');
+    // Not blocked, not paused — the task never reaches updateTask at all.
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  // Adoption MOVES the directory, so the protected set has to cover every agent
+  // that still needs its tree — including a PAUSED one, whose worktree is
+  // deliberately preserved as resume context and which is absent from the
+  // in-process maps entirely.
+  it('protects running AND paused agents from having their tree moved', async () => {
+    getAgents.mockResolvedValue([
+      { id: 'agent-running', status: 'running' },
+      { id: 'agent-paused', status: 'paused' },
+      { id: 'agent-done', status: 'completed' },
+    ]);
+
+    await prepareAgentWorkspace({ agentId: 'agent-new', task: followUpTask() });
+
+    const [, , opts] = findAdoptableWorktreeForBranch.mock.calls.at(-1);
+    expect([...opts.activeAgentIds].sort()).toEqual(['agent-paused', 'agent-running']);
+  });
+
+  // An unreadable agent list must not read as "nothing is running" — that is the
+  // one wrong answer, since it would move a live run's directory.
+  it('refuses to adopt at all when the agent list cannot be read', async () => {
+    getAgents.mockRejectedValue(new Error('state.json unreadable'));
+
+    const r = await prepareAgentWorkspace({ agentId: 'agent-new', task: followUpTask() });
+
+    expect(findAdoptableWorktreeForBranch).not.toHaveBeenCalled();
+    expect(adoptWorktree).toHaveBeenCalledTimes(0);
+    expect(r.outcome).toBe('blocked');
+  });
+
+  it('falls back to the cooldown pause when the adoption is refused', async () => {
+    findAdoptableWorktreeForBranch.mockResolvedValue({ path: '/mock/worktrees/agent-y', agentId: 'agent-y' });
+    adoptWorktree.mockResolvedValue(null);
+
+    const r = await prepareAgentWorkspace({ agentId: 'agent-new', task: followUpTask() });
+
+    expect(r.outcome).toBe('blocked');
+    expect(updateTask.mock.calls.at(-1)[1].metadata.blockedCategory).toBe('worktree-busy');
+  });
+
+  // Only a task that KNOWS which branch it wants can take over the tree holding
+  // it. A plain isolated task's add failure names a branch it just tried to
+  // create, and adopting some other tree would hand it unrelated work.
+  it('does not go looking for a holder when the task has no branch to attach to', async () => {
+    const task = { id: 't-plain', taskType: 'user', metadata: { useWorktree: true } };
+
+    await prepareAgentWorkspace({ agentId: 'agent-new', task });
+
+    expect(findAdoptableWorktreeForBranch).not.toHaveBeenCalled();
   });
 
   it('pauses with a cooldown instead of blocking, and keeps the branch pointer', async () => {
@@ -356,5 +431,56 @@ describe('prepareAgentWorkspace — the branch is checked out in another worktre
 
     const [, patch] = updateTask.mock.calls.at(-1);
     expect(patch.metadata.blockedCategory).toBe('worktree-failed');
+  });
+});
+
+// Which branch a task's worktree attaches to when `existingBranch` didn't survive
+// `updateTask`'s resume-pointer strip — see the docblock on the function.
+describe('resolveTaskExistingBranch', () => {
+  it('prefers the explicit pointer', () => {
+    expect(resolveTaskExistingBranch({ existingBranch: 'cos/a/agent-1' })).toBe('cos/a/agent-1');
+  });
+
+  it('falls back to a follow-up’s own record of its PR branch', () => {
+    expect(resolveTaskExistingBranch({
+      reviewLoopFollowUp: true, reviewLoopPRBranch: 'cos/a/agent-1'
+    })).toBe('cos/a/agent-1');
+    // TASKS.md round-trips metadata as strings.
+    expect(resolveTaskExistingBranch({
+      reviewLoopFollowUp: 'true', reviewLoopPRBranch: 'cos/a/agent-1'
+    })).toBe('cos/a/agent-1');
+  });
+
+  // The ORIGINAL task also carries PR metadata once its review loop starts; it
+  // owns that branch through its own worktree and must not be re-pointed at it.
+  it('ignores a PR branch on anything that is not a follow-up', () => {
+    expect(resolveTaskExistingBranch({ reviewLoopPRBranch: 'cos/a/agent-1' })).toBeNull();
+    expect(resolveTaskExistingBranch({ reviewLoopFollowUp: false, reviewLoopPRBranch: 'cos/a/agent-1' })).toBeNull();
+    expect(resolveTaskExistingBranch({})).toBeNull();
+    expect(resolveTaskExistingBranch(undefined)).toBeNull();
+  });
+
+  it('attaches a stripped follow-up to its PR branch rather than cutting a new one', async () => {
+    ensureLatest.mockResolvedValue({ success: true, upToDate: true });
+    adoptWorktree.mockResolvedValue(null);
+    createWorktree.mockResolvedValue({
+      worktreePath: '/mock/worktrees/agent-new', branchName: 'cos/task-x/agent-y',
+      baseBranch: null, existingBranch: true
+    });
+
+    await prepareAgentWorkspace({
+      agentId: 'agent-new',
+      task: {
+        id: 'sys-rl-1', taskType: 'internal',
+        metadata: {
+          useWorktree: true, reviewLoopFollowUp: true,
+          reviewLoopPRBranch: 'cos/task-x/agent-y',
+          reviewLoopPRUrl: 'https://github.com/o/r/pull/1'
+        }
+      }
+    });
+
+    expect(createWorktree).toHaveBeenCalledWith('agent-new', expect.any(String), 'sys-rl-1',
+      expect.objectContaining({ existingBranch: 'cos/task-x/agent-y' }));
   });
 });

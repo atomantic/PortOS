@@ -73,8 +73,8 @@ describe('localLlmCatalog', () => {
       const ollama = getCatalog('ollama');
       // granite4.1-8b documents a 128K window.
       expect(ollama.find((m) => m.key === 'granite4.1-8b').contextLength).toBe(131072);
-      // qwen3.6-27b documents a native 256K window.
-      expect(ollama.find((m) => m.key === 'qwen3.6-27b').contextLength).toBe(262144);
+      // qwen3.8-27b documents a native 256K window.
+      expect(ollama.find((m) => m.key === 'qwen3.8-27b').contextLength).toBe(262144);
       // Entries whose real window isn't a documented round number expose null
       // (never undefined) rather than an invented one.
       expect(ollama.find((m) => m.key === 'glm-4.7-flash').contextLength).toBeNull();

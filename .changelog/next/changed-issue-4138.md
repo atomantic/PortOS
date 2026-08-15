@@ -1,0 +1,1 @@
+- Shared ui/ProgressBar primitive replaces six hand-rolled progress meters; every meter now carries role=progressbar with aria-valuenow/min/max and an accessible name
