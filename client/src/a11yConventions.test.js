@@ -113,19 +113,112 @@ function balancedCallAt(src, openIndex, skipStrings = true) {
 
 // --- helpers for the icon-only-button-name and 44px-close-target rules ---
 
+// Whether `src[index]` (a `<`) opens a JSX tag rather than a less-than, and
+// which tag it opens. Shared by `matchingBraceEnd` and `maskComments`, which
+// have to draw the JavaScript/JSX line in exactly the same place.
+const jsxTagInfoAt = (src, index) => {
+  const closing = src.startsWith('</', index);
+  const fragment = src.startsWith('<>', index) || src.startsWith('</>', index);
+  const name = src.slice(index + (closing ? 2 : 1)).match(/^([A-Za-z][\w.-]*)/)?.[1] || null;
+  return { closing, fragment, name };
+};
+
+const looksLikeJsxTagStart = (src, index) => {
+  const next = src[index + 1];
+  if (!(next === '/' || next === '>' || /[A-Za-z]/.test(next || ''))) return false;
+  let previous = index - 1;
+  while (previous >= 0 && /\s/.test(src[previous])) previous--;
+  if (previous < 0 || '=([{,:;!?&|>'.includes(src[previous])) return true;
+  return /(?:return|yield|=>)\s*$/.test(src.slice(Math.max(0, index - 12), index));
+};
+
+// In JSX element text, `<` only opens a tag when a name, `/`, or `>` follows.
+const opensJsxTagInText = (src, index) => src[index] === '<'
+  && (src[index + 1] === '/' || /[A-Za-z>]/.test(src[index + 1] || ''));
+
 // Find the index of the `}` matching the `{` at `s[idx]`, respecting nested
-// braces and quoted/template strings.
+// braces, quoted/template strings, and JSX.
+//
+// A quote delimits a string only in JavaScript-expression context. In JSX
+// element *text* an apostrophe is an ordinary character — `<option>Use the
+// provider's default</option>` — and reading it as a string opener swallows
+// every brace after it, so the helper returns -1 and whatever recognizer sits
+// on top of it silently sees nothing (#4318). `maskComments` separates the two
+// contexts for the same reason; this walk mirrors its mode machine and adds
+// the brace accounting the mask has no use for.
 function matchingBraceEnd(s, idx) {
   let depth = 0;
+  let mode = 'code';
+  // The tag being read, `{ closing, parentMode }`, whenever `mode` is
+  // 'jsx-tag' — `parentMode` is where a self-closing tag hands back to.
+  let tag = null;
+  // The state to resume when each open brace closes: an attribute expression
+  // returns to the tag holding it, a child expression to the element's text.
+  // The half-read tag rides along, because an attribute expression can itself
+  // hold a whole element (`label={<span>…</span>}`) whose own `>` would
+  // otherwise be mistaken for the end of the outer tag.
+  const braceFrames = [];
+  // One entry per open element, marking whether it was opened from JavaScript.
+  // Its closing tag hands back there rather than to an enclosing element's text.
+  const jsxStack = [];
+
+  const skipString = (from) => {
+    let i = from + 1;
+    for (; i < s.length && s[i] !== s[from]; i++) if (s[i] === '\\') i++;
+    return i;
+  };
+
+  const openBrace = () => {
+    braceFrames.push({ mode, tag });
+    depth++;
+    mode = 'code';
+    tag = null;
+  };
+
+  const openTag = (at, parentMode) => {
+    tag = { closing: jsxTagInfoAt(s, at).closing, parentMode };
+    mode = 'jsx-tag';
+  };
+
   for (let i = idx; i < s.length; i++) {
     const c = s[i];
-    if (c === '"' || c === '\'' || c === '`') {
-      const q = c;
-      for (i++; i < s.length && s[i] !== q; i++) if (s[i] === '\\') i++;
+
+    if (mode === 'jsx-text') {
+      if (c === '{') openBrace();
+      else if (opensJsxTagInText(s, i)) openTag(i, 'jsx-text');
       continue;
     }
-    if (c === '{') depth++;
-    else if (c === '}') { depth--; if (depth === 0) return i; }
+
+    if (mode === 'jsx-tag') {
+      if (c === '"' || c === '\'' || c === '`') { i = skipString(i); continue; }
+      if (c === '{') { openBrace(); continue; }
+      if (c !== '>') continue;
+      let back = i - 1;
+      while (back > idx && /\s/.test(s[back])) back--;
+      if (tag.closing) {
+        const entry = jsxStack.pop();
+        mode = entry?.root ? 'code' : (jsxStack.length ? 'jsx-text' : 'code');
+      } else if (s[back] === '/') {
+        mode = tag.parentMode;
+      } else {
+        jsxStack.push({ root: tag.parentMode === 'code' });
+        mode = 'jsx-text';
+      }
+      tag = null;
+      continue;
+    }
+
+    if (c === '"' || c === '\'' || c === '`') { i = skipString(i); continue; }
+    if (c === '{') { openBrace(); continue; }
+    if (c === '}') {
+      depth--;
+      if (depth === 0) return i;
+      const frame = braceFrames.pop();
+      mode = frame?.mode ?? 'code';
+      tag = frame?.tag ?? null;
+      continue;
+    }
+    if (c === '<' && looksLikeJsxTagStart(s, i)) openTag(i, 'code');
   }
   return -1;
 }
@@ -326,22 +419,6 @@ function maskComments(src) {
   // less-than, never pops, and strands the rest of the file in `jsx-text`.
   const jsxStack = [];
 
-  const jsxTagInfoAt = (index) => {
-    const closing = src.startsWith('</', index);
-    const fragment = src.startsWith('<>', index) || src.startsWith('</>', index);
-    const name = src.slice(index + (closing ? 2 : 1)).match(/^([A-Za-z][\w.-]*)/)?.[1] || null;
-    return { closing, fragment, name };
-  };
-
-  const looksLikeJsxTagStart = (index) => {
-    const next = src[index + 1];
-    if (!(next === '/' || next === '>' || /[A-Za-z]/.test(next || ''))) return false;
-    let previous = index - 1;
-    while (previous >= 0 && /\s/.test(src[previous])) previous--;
-    if (previous < 0 || '=([{,:;!?&|>'.includes(src[previous])) return true;
-    return /(?:return|yield|=>)\s*$/.test(src.slice(Math.max(0, index - 12), index));
-  };
-
   for (let i = 0; i < chars.length; i++) {
     const c = chars[i];
 
@@ -369,8 +446,8 @@ function maskComments(src) {
       if (c === '{') {
         mode = 'code';
         braceDepth = 1;
-      } else if (c === '<' && (src[i + 1] === '/' || /[A-Za-z>]/.test(src[i + 1] || ''))) {
-        tagInfo = jsxTagInfoAt(i);
+      } else if (opensJsxTagInText(src, i)) {
+        tagInfo = jsxTagInfoAt(src, i);
         tagParentMode = 'jsx-text';
         tagBraceDepth = 0;
         mode = 'jsx-tag';
@@ -447,8 +524,8 @@ function maskComments(src) {
       if (braceDepth === 0) mode = 'jsx-text';
       continue;
     }
-    if (c === '<' && looksLikeJsxTagStart(i)) {
-      tagInfo = jsxTagInfoAt(i);
+    if (c === '<' && looksLikeJsxTagStart(src, i)) {
+      tagInfo = jsxTagInfoAt(src, i);
       tagParentMode = 'code';
       tagBraceDepth = 0;
       mode = 'jsx-tag';
@@ -1107,20 +1184,16 @@ function controlSourceAnchor(file, src, index, tagName) {
 
 // These are pre-existing controls exposed when the rule was generalized; the
 // migration is tracked in #4297. What is left is no longer a backlog of unnamed
-// controls — all three are shapes the scan cannot resolve, not gaps in the UI:
-//   * EntityCombobox / TagPicker take the control's `id` as a prop and every
-//     caller pairs its own `<label htmlFor>`, which lives in the caller's file.
-//     A same-file scan cannot see it, and an `aria-label` here would OVERRIDE
-//     the caller's visible label — a regression, not a fix. Tracked in #4321.
-//   * AIProviders' fallback-model input sits in a labeled `<FormField>` whose
-//     conditional child holds an apostrophe in JSX text; `matchingBraceEnd`
-//     reads it as a string opener and loses the expression bounds (#4318).
+// controls — both are one shape the scan cannot resolve, not a gap in the UI:
+// EntityCombobox / TagPicker take the control's `id` as a prop and every caller
+// pairs its own `<label htmlFor>`, which lives in the caller's file. A same-file
+// scan cannot see it, and an `aria-label` here would OVERRIDE the caller's
+// visible label — a regression, not a fix. Tracked in #4321.
 // So: do not "fix" these by bolting an aria-label onto the control. Fix the
 // recognizer, then delete the row.
 const PREEXISTING_INPUT_NAME_ALLOWLIST = new Set([
   "src/components/EntityCombobox.jsx|input|id=inputId|type=text|placeholder=placeholder || `Search ${noun}s or type a new name…`|value=value|role=combobox",
   "src/components/TagPicker.jsx|input|id=id|type=text|placeholder=value.length >= maxTags ? `Max ${maxTags} tags` : placeholder|value=input",
-  "src/pages/AIProviders.jsx|input|type=text|placeholder=Use fallback provider's default|value=formData.fallbackModel",
 ]);
 
 // The <select>/<textarea> half of the same rule, seeded when #4309 widened the
@@ -1248,7 +1321,6 @@ const PREEXISTING_SELECT_TEXTAREA_NAME_ALLOWLIST = new Set([
   "src/components/writers-room/StagePromptModelPicker.jsx|select|value=stage.model || 'default'",
   "src/components/writers-room/StoryboardConfigTab.jsx|select|value=value.presetId",
   "src/pages/AIProviders.jsx|select|value=activeProviderId || ''",
-  "src/pages/AIProviders.jsx|select|value=formData.fallbackModel",
   "src/pages/AIProviders.jsx|select|value=selectedWorkspace",
   "src/pages/AIProviders.jsx|textarea|placeholder=Enter your prompt...|value=runPrompt|rows=3",
   "src/pages/Ask.jsx|select|id=e.target.value;",
@@ -1683,6 +1755,32 @@ describe('a11y conventions', () => {
     // Same for a locally-declared `FormField` that is not a cloning wrapper.
     const shadowed = `function FormField({ label, children }) {\n  return <div>{label}{children}</div>;\n}\n${ternary.replace(/^import[^\n]*\n/, '')}`;
     expect(credits(shadowed)).toBe(false);
+  });
+
+  it('reads an apostrophe in JSX text as text, not a string opener (#4318)', () => {
+    // `matchingBraceEnd` used to treat `'` as a string delimiter everywhere. In
+    // JSX element text it is an ordinary character, so a brace expression
+    // containing one never found its closing brace: the helper returned -1 and
+    // every recognizer built on it — the conditional-child credit above, the
+    // component-body walk the wrapper registry runs on — silently saw nothing.
+    // This is the shape that left pages/AIProviders.jsx's fallback-model
+    // controls on the allowlists while their four identical siblings passed.
+    const field = (child) => `import FormField from '../ui/FormField';\n<FormField label="Fallback Model">\n  ${child}\n</FormField>`;
+
+    const apostrophe = field(`{opts.length > 0 ? (<select><option value="">Use the provider's default</option></select>) : (<input type="text" placeholder="Use the provider's default" />)}`);
+    expect(isNamed(apostrophe, 'select')).toBe(true);
+    expect(isNamed(apostrophe, 'input')).toBe(true);
+
+    // A quote in JavaScript-expression context is still a delimiter, so a `}`
+    // inside a string cannot pass for the expression's end — that would cut the
+    // scan short of the control and lose the credit the other way.
+    const braceInString = field(`{mode === 'a}b' ? (<select><option>a</option></select>) : (<input type="text" />)}`);
+    expect(isNamed(braceInString, 'select')).toBe(true);
+
+    // The fix widens what the scanner can READ, not what it credits: a rendered
+    // list is still vetoed once its bounds are legible.
+    const list = field(`{fields.map((f) => (<input key={f} type="text" placeholder="it's here" />))}`);
+    expect(isNamed(list, 'input')).toBe(false);
   });
 
   it('recognizes a wrapper wherever it is declared and however it names', () => {
