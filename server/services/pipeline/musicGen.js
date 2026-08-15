@@ -42,6 +42,7 @@ import {
   resolveMusicgenPython, MUSICGEN_RUNTIME_DIR, MUSICGEN_VENV_DEFAULT,
   resolveAudioldm2Python, AUDIOLDM2_RUNTIME_DIR, AUDIOLDM2_VENV_DEFAULT,
   resolveAcestepPython, ACESTEP_RUNTIME_DIR, ACESTEP_VENV_DEFAULT,
+  resolveAcestep15Python, ACESTEP15_RUNTIME_DIR, ACESTEP15_VENV_DEFAULT,
   resolveMinimaxMusic3Python, MINIMAX_MUSIC3_RUNTIME_DIR, MINIMAX_MUSIC3_VENV_DEFAULT,
 } from '../../lib/pythonSetup.js';
 import { getCudaCapability } from '../../lib/cudaCapability.js';
@@ -57,6 +58,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const MUSICGEN_SCRIPT = join(__dirname, '../../../scripts/generate_musicgen.py');
 const AUDIOLDM2_SCRIPT = join(__dirname, '../../../scripts/generate_audioldm2.py');
 const ACESTEP_SCRIPT = join(__dirname, '../../../scripts/generate_acestep.py');
+const ACESTEP15_SCRIPT = join(__dirname, '../../../scripts/generate_acestep15.py');
 const MINIMAX_MUSIC3_SCRIPT = join(__dirname, '../../../scripts/generate_minimax_music3.py');
 // Back-compat alias for the pre-multi-engine `buildMusicGenArgs` default.
 const SIDECAR_SCRIPT = MUSICGEN_SCRIPT;
@@ -97,6 +99,13 @@ export const ACESTEP_MODELS = Object.freeze([
   { id: 'ace-step-v1-3.5b', repo: 'ACE-Step/ACE-Step-v1-3.5B', name: 'ACE-Step v1 3.5B (full song + vocals)' },
 ]);
 export const DEFAULT_ACESTEP_MODEL_ID = 'ace-step-v1-3.5b';
+// ACE-Step 1.5 stores its DiT, VAE, text encoder, and LM in one HF repository.
+// It is deliberately a separate engine: persisted v1 render metadata must
+// continue to select v1's pip-based runtime instead of silently changing.
+export const ACESTEP15_MODELS = Object.freeze([
+  { id: 'ace-step-v1.5', repo: 'ACE-Step/Ace-Step1.5', name: 'ACE-Step 1.5 (full song + vocals)' },
+]);
+export const DEFAULT_ACESTEP15_MODEL_ID = 'ace-step-v1.5';
 export const MINIMAX_MUSIC3_MODELS = Object.freeze([
   { id: 'minimax-music3', repo: 'MiniMaxAI/MiniMax-Music3', name: 'MiniMax Music 3 (CUDA, up to 5 minutes)' },
 ]);
@@ -188,6 +197,28 @@ export const ENGINES = Object.freeze({
     // therefore disabled for it (customModels falsy) — the sidecar ignores
     // --model by design.
     customModels: false,
+  },
+  acestep15: {
+    id: 'acestep15',
+    name: 'ACE-Step 1.5 (full song + vocals)',
+    models: ACESTEP15_MODELS,
+    defaultModelId: DEFAULT_ACESTEP15_MODEL_ID,
+    minDurationSec: 1,
+    // The vendor supports much longer compositions, but retain the established
+    // studio window until a user-facing duration expansion is separately tested.
+    maxDurationSec: 240,
+    defaultDurationSec: 60,
+    scriptPath: ACESTEP15_SCRIPT,
+    runtimeDir: ACESTEP15_RUNTIME_DIR,
+    resolvePython: resolveAcestep15Python,
+    venvDefault: ACESTEP15_VENV_DEFAULT,
+    installEnv: 'INSTALL_ACESTEP15',
+    // ACE-Step 1.5's handler imports the fixed snapshot's custom
+    // modeling_acestep_v15_turbo.py via transformers AutoModel trust_remote_code.
+    healthProbe: 'import torch; from transformers import AutoModel; from acestep.handler import AceStepHandler',
+    lyrics: true,
+    customModels: false,
+    fixedModelInstall: true,
   },
   'minimax-music3': {
     id: 'minimax-music3',
@@ -377,7 +408,8 @@ export function buildMusicGenArgs({ pythonPath, scriptPath = SIDECAR_SCRIPT, run
  * ServerError (503) when the selected backend's venv isn't provisioned, or
  * (500) when the sidecar exits non-zero / produces no result.
  *
- * `engine` selects the backend (`musicgen` | `audioldm2` | `acestep`); unknown
+ * `engine` selects the backend (`musicgen` | `audioldm2` | `acestep` |
+ * `acestep15`); unknown
  * ids fall back to the default. `modelId` is resolved within that engine's
  * registry. `lyrics` is forwarded only to lyric-aware engines (ACE-Step); other
  * engines ignore it. `signal` (optional AbortSignal) SIGTERMs the child — wired

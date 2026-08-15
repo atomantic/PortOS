@@ -18,6 +18,7 @@
 #   MLX_EXAMPLES_PIN  commit SHA of ml-explore/mlx-examples to check out for MusicGen (default: main).
 #   INSTALL_AUDIOLDM2 '1' to bootstrap a venv at ~/.portos/venv-audioldm2 (torch + diffusers) for local AudioLDM2 long-form background-music generation (pipeline audio stage, second backend alongside MusicGen). Default: 0; opt in with INSTALL_AUDIOLDM2=1 (runs on MPS / CUDA / CPU).
 #   INSTALL_ACESTEP '1' to bootstrap a venv at ~/.portos/venv-acestep (torch + the acestep package) for local ACE-Step full-song generation with vocals (Music studio, third backend). Default: 0; opt in with INSTALL_ACESTEP=1 (runs on MPS / CUDA / CPU; checkpoints auto-download to ~/.cache/ace-step on first run).
+#   INSTALL_ACESTEP15 '1' to bootstrap a venv at ~/.portos/venv-acestep15 (the ACE-Step 1.5 package + torch) for local ACE-Step 1.5 full-song generation (Music studio). Default: 0; opt in with INSTALL_ACESTEP15=1 (runs on MPS / CUDA / CPU; model weights are installed separately from Music).
 #   INSTALL_MUSCRIPTOR '1' to bootstrap a venv at ~/.portos/venv-muscriptor (the muscriptor pip package + its torch stack) for local audio → MIDI transcription (Rounds reference audio + Music Video parsing). Default: 0; opt in with INSTALL_MUSCRIPTOR=1 (runs on MPS / CUDA / CPU; model weights auto-download from HuggingFace on first transcription).
 
 set -euo pipefail
@@ -74,7 +75,7 @@ mkdir -p "${PORTOS_DATA}/video-thumbnails"
 
 # When the user only wants a specific BYOV runtime (set via INSTALL_LTX2 /
 # INSTALL_WAN22 / INSTALL_HUNYUAN / INSTALL_MINIMAX_H3 / INSTALL_MINIMAX_H3_CUDA — or one of the self-contained MUSIC venvs
-# INSTALL_MUSICGEN / INSTALL_AUDIOLDM2 / INSTALL_ACESTEP — typically from the
+# INSTALL_MUSICGEN / INSTALL_AUDIOLDM2 / INSTALL_ACESTEP / INSTALL_ACESTEP15 — typically from the
 # in-app installer), skip the mflux + legacy mlx_video preamble. Those
 # bring-your-own-venv runtimes are self-contained and don't depend on mflux;
 # running the preamble unprompted hits PEP 668 ("externally-managed-environment")
@@ -82,7 +83,7 @@ mkdir -p "${PORTOS_DATA}/video-thumbnails"
 # install ever starts — which on Linux/CPU/CUDA blocks the advertised
 # `INSTALL_ACESTEP=1 bash …` path. A bare `bash setup-image-video.sh` still
 # installs mflux as before.
-ANY_BYOV="${INSTALL_LTX2:-0}${INSTALL_LTX25:-0}${INSTALL_WAN22:-0}${INSTALL_HUNYUAN:-0}${INSTALL_MINIMAX_H3:-0}${INSTALL_MINIMAX_H3_CUDA:-0}${INSTALL_MUSICGEN:-0}${INSTALL_AUDIOLDM2:-0}${INSTALL_ACESTEP:-0}${INSTALL_MINIMAX_MUSIC3:-0}${INSTALL_MUSCRIPTOR:-0}"
+ANY_BYOV="${INSTALL_LTX2:-0}${INSTALL_LTX25:-0}${INSTALL_WAN22:-0}${INSTALL_HUNYUAN:-0}${INSTALL_MINIMAX_H3:-0}${INSTALL_MINIMAX_H3_CUDA:-0}${INSTALL_MUSICGEN:-0}${INSTALL_AUDIOLDM2:-0}${INSTALL_ACESTEP:-0}${INSTALL_ACESTEP15:-0}${INSTALL_MINIMAX_MUSIC3:-0}${INSTALL_MUSCRIPTOR:-0}"
 # "no BYOV runtime was requested" = the concatenation contains no non-zero
 # character. Matching a literal string of zeros instead made this a counting
 # exercise that the string and the variable list had to agree on — and they had
@@ -716,6 +717,41 @@ if [[ "$INSTALL_ACESTEP" == "1" ]]; then
   echo "✅ ACE-Step venv ready: $ACESTEP_PY"
 fi
 
+INSTALL_ACESTEP15="${INSTALL_ACESTEP15:-0}"
+if [[ "$INSTALL_ACESTEP15" == "1" ]]; then
+  # ACE-Step 1.5 is a separate architecture from v1. The package supplies the
+  # multi-component pipeline whose DiT loads custom Transformers code with
+  # trust_remote_code, so it must never share v1's `acestep` venv.
+  ACESTEP15_VENV="${HOME}/.portos/venv-acestep15"
+  ACESTEP15_PY="$ACESTEP15_VENV/bin/python3"
+  mkdir -p "${HOME}/.portos"
+
+  if [[ ! -x "$ACESTEP15_PY" && ! -x "$ACESTEP15_VENV/Scripts/python.exe" ]]; then
+    echo "📦 Creating ACE-Step 1.5 venv at ${ACESTEP15_VENV}..."
+    "$PYTHON_BIN" -m venv "$ACESTEP15_VENV"
+  fi
+  if [[ ! -x "$ACESTEP15_PY" ]]; then
+    ACESTEP15_PY="$ACESTEP15_VENV/Scripts/python.exe"
+  fi
+  echo "📦 Installing ACE-Step 1.5 into ${ACESTEP15_VENV}..."
+  "$ACESTEP15_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
+  # ACE-Step 1.5's Linux/Windows torch pins are published on PyTorch's CUDA
+  # index. Passing it as an extra index remains harmless on macOS, where the
+  # package selects its native MPS-compatible torch dependency.
+  # Pin the runtime to a vendor release. The model snapshot is installed
+  # separately through Music, but its custom-code loader depends on this
+  # package's handler contract.
+  "$ACESTEP15_PY" -m pip install --upgrade --extra-index-url https://download.pytorch.org/whl/cu128 \
+    "git+https://github.com/ace-step/ACE-Step-1.5.git@v0.1.8" \
+    "huggingface_hub[hf_xet]"
+  if ! "$ACESTEP15_PY" -c "import torch; from transformers import AutoModel; from acestep.handler import AceStepHandler" 2>/dev/null; then
+    echo "❌ ACE-Step 1.5 venv built but its Transformers runtime failed to import." >&2
+    echo "   Check that torch, transformers, and ACE-Step 1.5 installed cleanly in ${ACESTEP15_VENV}." >&2
+    exit 1
+  fi
+  echo "✅ ACE-Step 1.5 venv ready: $ACESTEP15_PY"
+fi
+
 INSTALL_MINIMAX_MUSIC3="${INSTALL_MINIMAX_MUSIC3:-0}"
 if [[ "$INSTALL_MINIMAX_MUSIC3" == "1" ]]; then
   MINIMAX_MUSIC3_VENV="${HOME}/.portos/venv-minimax-music3"
@@ -899,6 +935,9 @@ if [[ "$INSTALL_AUDIOLDM2" == "1" ]]; then
 fi
 if [[ "$INSTALL_ACESTEP" == "1" ]]; then
   echo "   ACE-Step:  ${ACESTEP_PY} (separate venv, acestep — full song + vocals)"
+fi
+if [[ "$INSTALL_ACESTEP15" == "1" ]]; then
+  echo "   ACE-Step 1.5: ${HOME}/.portos/venv-acestep15/bin/python3 (separate venv, Transformers — full song + vocals)"
 fi
 if [[ "$INSTALL_MUSCRIPTOR" == "1" ]]; then
   echo "   MuScriptor: ${MUSCRIPTOR_PY} (separate venv, muscriptor — audio → MIDI)"

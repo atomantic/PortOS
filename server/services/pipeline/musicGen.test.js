@@ -63,7 +63,7 @@ describe('AUDIOLDM2_MODELS registry', () => {
 
 describe('ENGINES backend registry', () => {
   it('exposes all backends with the fields the route + UI consume', () => {
-    expect(Object.keys(ENGINES).sort()).toEqual(['acestep', 'audioldm2', 'minimax-music3', 'musicgen']);
+    expect(Object.keys(ENGINES).sort()).toEqual(['acestep', 'acestep15', 'audioldm2', 'minimax-music3', 'musicgen']);
     for (const engine of Object.values(ENGINES)) {
       expect(typeof engine.id).toBe('string');
       expect(typeof engine.name).toBe('string');
@@ -87,6 +87,16 @@ describe('ENGINES backend registry', () => {
 
   it('audioldm2 has a wider duration window than musicgen (long-form)', () => {
     expect(ENGINES.audioldm2.maxDurationSec).toBeGreaterThan(ENGINES.musicgen.maxDurationSec);
+  });
+
+  it('keeps ACE-Step 1.5 separate from v1 and requires its fixed installed snapshot', () => {
+    expect(ENGINES.acestep15).toMatchObject({
+      id: 'acestep15', installEnv: 'INSTALL_ACESTEP15', lyrics: true,
+      customModels: false, fixedModelInstall: true,
+    });
+    expect(ENGINES.acestep15.models).toEqual([expect.objectContaining({ repo: 'ACE-Step/Ace-Step1.5' })]);
+    expect(ENGINES.acestep15.scriptPath).toMatch(/generate_acestep15\.py$/);
+    expect(ENGINES.acestep.models[0].repo).toBe('ACE-Step/ACE-Step-v1-3.5B');
   });
 
   it('musicgen window mirrors the legacy module-level constants', () => {
@@ -136,6 +146,17 @@ describe('clampDuration', () => {
 });
 
 describe('buildSidecarArgs', () => {
+  it('routes ACE-Step 1.5 to its own sidecar with the fixed model repo and lyrics', () => {
+    const { args } = buildSidecarArgs({
+      engineId: 'acestep15', pythonPath: '/venv/python', repo: 'ACE-Step/Ace-Step1.5',
+      prompt: 'bright pop', lyrics: '[Verse] Example', durationSec: 999, outputPath: '/tmp/out.wav',
+    });
+    expect(args[0]).toMatch(/generate_acestep15\.py$/);
+    expect(args.slice(args.indexOf('--model'), args.indexOf('--model') + 2)).toEqual(['--model', 'ACE-Step/Ace-Step1.5']);
+    expect(args.slice(args.indexOf('--duration'), args.indexOf('--duration') + 2)).toEqual(['--duration', '240']);
+    expect(args.slice(args.indexOf('--lyrics'), args.indexOf('--lyrics') + 2)).toEqual(['--lyrics', '[Verse] Example']);
+  });
+
   it('builds MiniMax Music 3 args with lyrics and clamps to five minutes', () => {
     const { args } = buildSidecarArgs({
       engineId: 'minimax-music3', pythonPath: '/venv/python', repo: 'MiniMaxAI/MiniMax-Music3',

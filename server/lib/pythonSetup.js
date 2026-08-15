@@ -427,6 +427,36 @@ export function invalidateAcestepPython() {
   cachedAcestepPython = null;
 }
 
+// ACE-Step 1.5 has a different runtime from v1: its installed package supplies
+// the multi-component Transformers pipeline that loads the fixed HF snapshot
+// with trust_remote_code. Keep it in a sibling venv so v1 renders remain
+// reproducible even when the two packages need different torch stacks.
+const ACESTEP15_VENV_CANDIDATES = IS_WIN
+  ? [
+      join(HOME, '.portos', 'venv-acestep15', 'Scripts', 'python.exe'),
+      join(PATHS.data, 'python', 'venv-acestep15', 'Scripts', 'python.exe'),
+    ]
+  : [
+      join(HOME, '.portos', 'venv-acestep15', 'bin', 'python3'),
+      join(PATHS.data, 'python', 'venv-acestep15', 'bin', 'python3'),
+    ];
+
+export const ACESTEP15_VENV_DEFAULT = ACESTEP15_VENV_CANDIDATES[0];
+export const ACESTEP15_RUNTIME_DIR = '';
+
+let cachedAcestep15Python = null;
+export function resolveAcestep15Python() {
+  if (cachedAcestep15Python && existsSync(cachedAcestep15Python)) return cachedAcestep15Python;
+  for (const p of ACESTEP15_VENV_CANDIDATES) {
+    if (existsSync(p)) { cachedAcestep15Python = p; return p; }
+  }
+  return null;
+}
+
+export function invalidateAcestep15Python() {
+  cachedAcestep15Python = null;
+}
+
 const MINIMAX_MUSIC3_VENV_CANDIDATES = IS_WIN
   ? [
       join(HOME, '.portos', 'venv-minimax-music3', 'Scripts', 'python.exe'),

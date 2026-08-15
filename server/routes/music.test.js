@@ -22,6 +22,7 @@ vi.mock('../services/pipeline/musicGen.js', () => {
   const ENGINES = {
     musicgen: { id: 'musicgen', name: 'MusicGen', models: [{ id: 'm', name: 'M' }], defaultModelId: 'm', minDurationSec: 1, maxDurationSec: 30, defaultDurationSec: 12, installEnv: 'INSTALL_MUSICGEN', venvDefault: '/v/mg', resolvePython: () => (gen.ready ? '/v/mg/bin/python3' : null), customModels: true },
     acestep: { id: 'acestep', name: 'ACE-Step', models: [{ id: 'a', name: 'A' }], defaultModelId: 'a', minDurationSec: 1, maxDurationSec: 240, defaultDurationSec: 60, installEnv: 'INSTALL_ACESTEP', venvDefault: '/v/ace', resolvePython: () => (gen.ready ? '/v/ace/bin/python3' : null), lyrics: true, customModels: false },
+    acestep15: { id: 'acestep15', name: 'ACE-Step 1.5', models: [{ id: 'ace-step-v1.5', repo: 'ACE-Step/Ace-Step1.5', name: 'ACE-Step 1.5' }], defaultModelId: 'ace-step-v1.5', minDurationSec: 1, maxDurationSec: 240, defaultDurationSec: 60, installEnv: 'INSTALL_ACESTEP15', venvDefault: '/v/ace15', resolvePython: () => (gen.ready ? '/v/ace15/bin/python3' : null), lyrics: true, customModels: false, fixedModelInstall: true },
     'minimax-music3': { id: 'minimax-music3', name: 'MiniMax Music 3', models: [{ id: 'minimax-music3', repo: 'MiniMaxAI/MiniMax-Music3', name: 'MiniMax Music 3' }], defaultModelId: 'minimax-music3', minDurationSec: 1, maxDurationSec: 300, defaultDurationSec: 60, installEnv: 'INSTALL_MINIMAX_MUSIC3', venvDefault: '/v/minimax', resolvePython: () => (gen.ready ? '/v/minimax/bin/python3' : null), lyrics: true, customModels: false, fixedModelInstall: true, cudaRequired: true },
   };
   return {
@@ -186,6 +187,17 @@ describe('music routes', () => {
     const unsupported = await request(app).get('/api/music/engines');
     expect(unsupported.body.engines.find((e) => e.id === 'minimax-music3')).toMatchObject({
       cudaState: 'absent', ready: false,
+    });
+  });
+
+  it('GET /engines exposes ACE-Step 1.5 as a fixed model install distinct from v1', async () => {
+    cache.cached = false;
+    const r = await request(app).get('/api/music/engines');
+    expect(r.status).toBe(200);
+    expect(r.body.engines.find((e) => e.id === 'acestep15')).toMatchObject({
+      lyrics: true, customModels: false, fixedModelInstall: true,
+      modelReady: false, runtimeReady: true, ready: false,
+      installEnv: 'INSTALL_ACESTEP15',
     });
   });
 
