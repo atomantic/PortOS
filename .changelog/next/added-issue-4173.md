@@ -1,0 +1,1 @@
+- Image Gen, sprite reference locking and the vision judge now reject a degenerate generated frame (solid fill, empty alpha, near-zero entropy) instead of saving a blank tile as a gallery record or spending a vision-provider call on it

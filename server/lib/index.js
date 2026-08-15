@@ -165,6 +165,7 @@ export * from './icloudFile.js';
 export * from './spawnCwd.js';
 export * from './schemaVersions.js';
 export * from './imageClean.js';
+export * from './imageFrameStats.js';
 export * from './imageWatermark.js';
 export * from './localImageFilename.js';
 export * from './localMemory.js';

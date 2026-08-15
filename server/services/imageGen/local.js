@@ -22,6 +22,7 @@ import { randomUUID } from 'crypto';
 import { atomicWrite, assertSafeFilename, detectImageFormat, ensureDir, listDirectoryByExtension, PATHS, safeJSONParse, resolveImageInputPath, tryReadFile } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
+import { rejectDegenerateFrame } from './frameGuard.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
 import { resolveFlux2Python, FLUX2_VENV_DEFAULT } from '../../lib/pythonSetup.js';
@@ -758,6 +759,21 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     void releaseHeavyClaim();
     if (watcher) { try { watcher.close(); } catch { /* ignore */ } }
     rm(stepwiseDir, { recursive: true, force: true }).catch(() => {});
+    // Degenerate-frame gate (#4173): a runner can exit 0 having written a PNG
+    // that decodes fine and holds no content (a solid-black frame from a run
+    // that produced nothing). Fail the job instead of saving a black tile —
+    // the file is removed so no gallery scan can pick it up. An unmeasurable
+    // frame yields no reason and falls through to the normal success path.
+    const emptyFrame = code === 0 ? await rejectDegenerateFrame(outputPath) : null;
+    if (emptyFrame) {
+      job.status = 'error';
+      job.error = emptyFrame;
+      console.log(`❌ Image generation failed [${jobId.slice(0, 8)}]: ${emptyFrame}`);
+      broadcastSse(job, { type: 'error', error: emptyFrame });
+      imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: emptyFrame });
+      closeJobAfterDelay(jobs, jobId);
+      return;
+    }
     if (code !== 0) {
       job.status = 'error';
       const reason = signal ? `Killed by signal ${signal}` : `Exit code ${code}`;

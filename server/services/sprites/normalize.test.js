@@ -20,6 +20,10 @@ afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 const MAGENTA = { r: 255, g: 0, b: 255 };
 const GREEN = { r: 0, g: 255, b: 0 };
+// Within MASK_CHANNEL_THRESHOLD (40) of MAGENTA on every channel, so it never
+// registers as foreground — but it is real variance, so the degenerate-frame
+// gate (#4173) still passes the image through to the mask.
+const NEAR_KEY = { r: 245, g: 20, b: 245 };
 
 // 64×64 key-color canvas with a green rectangle at x∈[20,30), y∈[10,30).
 async function writeCandidate(path, { bg = MAGENTA, fg = GREEN } = {}) {
@@ -143,11 +147,53 @@ describe('normalizeAnchorFrame', () => {
   it('copies through an image with no detectable foreground', async () => {
     const src = join(dir, 'blank.png');
     const dest = join(dir, 'blank-out.png');
-    await writeCandidate(src, { fg: MAGENTA }); // rectangle same as background
+    // Real variance, but every pixel sits within the mask threshold of the key
+    // (max-channel diff 20 < 40), so nothing is detected as foreground. Still a
+    // legitimate frame as far as the degenerate-frame gate is concerned.
+    await writeCandidate(src, { fg: NEAR_KEY });
     const result = await normalizeAnchorFrame(src, dest, { maskKeyHex: '#FF00FF', canvasKeyHex: '#FF00FF' });
     expect(result.copiedThrough).toBe(true);
     const img = await readRaw(dest);
     expect(img.width).toBe(64); // untouched original
+  });
+
+  it('refuses a candidate that is a single flat color (#4173)', async () => {
+    const src = join(dir, 'flat.png');
+    const dest = join(dir, 'flat-out.png');
+    await writeCandidate(src, { fg: MAGENTA }); // rectangle same as background
+    await expect(normalizeAnchorFrame(src, dest, { maskKeyHex: '#FF00FF', canvasKeyHex: '#FF00FF' }))
+      .rejects.toMatchObject({ code: 'DEGENERATE_FRAME', status: 422 });
+  });
+
+  it('refuses a fully transparent candidate (#4173)', async () => {
+    const src = join(dir, 'transparent.png');
+    const dest = join(dir, 'transparent-out.png');
+    const w = 64; const h = 64;
+    const buf = Buffer.alloc(w * h * 4);
+    for (let p = 0; p < w * h; p++) {
+      buf[p * 4] = p % 256; buf[p * 4 + 1] = (p * 3) % 256; buf[p * 4 + 2] = (p * 7) % 256;
+      buf[p * 4 + 3] = 0; // varied colour under a zero alpha
+    }
+    await sharp(buf, { raw: { width: w, height: h, channels: 4 } }).png().toFile(src);
+    await expect(normalizeAnchorFrame(src, dest, { maskKeyHex: '#FF00FF', canvasKeyHex: '#FF00FF' }))
+      .rejects.toMatchObject({ code: 'DEGENERATE_FRAME' });
+  });
+
+  it('does NOT refuse a very dark but real candidate — the gate is not a quality judge', async () => {
+    const src = join(dir, 'dark.png');
+    const dest = join(dir, 'dark-out.png');
+    const w = 64; const h = 64;
+    const buf = Buffer.alloc(w * h * 3);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 3;
+        const v = Math.round(((x + y) / (2 * (w - 1))) * 12); // 0..12 of 255
+        buf[i] = v; buf[i + 1] = v; buf[i + 2] = v + (x % 2);
+      }
+    }
+    await sharp(buf, { raw: { width: w, height: h, channels: 3 } }).png().toFile(src);
+    await expect(normalizeAnchorFrame(src, dest, { maskKeyHex: '#FF00FF', canvasKeyHex: '#FF00FF' }))
+      .resolves.toBeTruthy();
   });
 });
 
@@ -239,8 +285,15 @@ describe('recompositeOnKey (#2979 — turnaround sheet re-key)', () => {
   it('copies through a sheet with no detectable foreground', async () => {
     const src = join(dir, 'sheet-blank.png');
     const dest = join(dir, 'sheet-blank-out.png');
-    await writeCandidate(src, { fg: MAGENTA });
+    await writeCandidate(src, { fg: NEAR_KEY });
     const analysis = await analyzeForeground(src, '#FF00FF');
     expect((await recompositeOnKey(analysis, src, dest, '#00FF00')).copiedThrough).toBe(true);
+  });
+
+  it('refuses a flat sheet before it can be locked and atlased (#4173)', async () => {
+    const src = join(dir, 'sheet-flat.png');
+    await writeCandidate(src, { fg: MAGENTA });
+    await expect(analyzeForeground(src, '#FF00FF'))
+      .rejects.toMatchObject({ code: 'DEGENERATE_FRAME' });
   });
 });

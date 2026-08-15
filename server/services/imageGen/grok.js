@@ -44,6 +44,7 @@ import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { buildNoImageReason } from './noImageReason.js';
+import { rejectDegenerateFrame } from './frameGuard.js';
 import { checkFabrication, noFabricationClause } from './fabricationGuard.js';
 import sharp from 'sharp';
 import { bufferedSpawn, killProcessTree, prepareCliSpawn } from '../../lib/bufferedSpawn.js';
@@ -401,6 +402,12 @@ async function runGrok(job, jobId, bin, args, {
         await sharp(stagingPath).png().toFile(outputPath);
       }
       removeScratch();
+      // Degenerate-frame gate (#4173) — a decline that still emitted a flat
+      // canvas must fail here, not become a gallery record.
+      const emptyFrame = await rejectDegenerateFrame(outputPath);
+      if (emptyFrame) {
+        return finalizeError(job, jobId, proc, emptyFrame);
+      }
       // Sidecar metadata so the gallery can recover prompt/ratio/etc.
       const sidecar = join(PATHS.images, `${jobId}.metadata.json`);
       await atomicWrite(sidecar, meta).catch(() => {});

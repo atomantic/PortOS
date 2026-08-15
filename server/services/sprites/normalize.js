@@ -30,6 +30,8 @@
 import sharp from 'sharp';
 import { copyFile } from 'fs/promises';
 import { hexToRgb, keyChannelSplit, keyShareFn } from './chromaKey.js';
+import { describeFrameStats, isDegenerateFrame } from '../../lib/imageFrameStats.js';
+import { ServerError } from '../../lib/errorHandler.js';
 
 const FRAME_HEIGHT_FRAC = 0.80;
 const FRAME_BOTTOM_FRAC = 0.07;
@@ -54,7 +56,36 @@ export { hexToRgb };
  * color. The lock path runs palette extraction AND normalization off ONE
  * analysis so a multi-MP candidate is decoded and scanned once.
  */
+const DEGENERATE_FRAME_DETAIL = {
+  'solid-fill': 'a single flat color',
+  'fully-transparent': 'fully transparent',
+  'near-empty': 'almost no detail',
+};
+
+/**
+ * Degenerate-frame gate for a sprite candidate (issue #4173).
+ *
+ * A blank candidate has no foreground at all, so `normalizeFromAnalysis` /
+ * `recompositeOnKey` copy it straight through and it gets locked, atlased and
+ * published as a real reference frame. Refuse it up front instead.
+ *
+ * Only a MEASURED degenerate verdict rejects: a candidate whose stats could
+ * not be computed (`ok: null`) falls through untouched, so an undecodable file
+ * still reaches the existing `imageError` / `INVALID_IMAGE` handling rather
+ * than being mislabeled as empty.
+ */
+export async function assertFrameHasContent(src) {
+  const stats = await describeFrameStats(src);
+  if (!isDegenerateFrame(stats)) return stats;
+  const detail = DEGENERATE_FRAME_DETAIL[stats.reason] || 'no content';
+  throw new ServerError(
+    `Candidate frame has no content (${detail}) — regenerate it before locking.`,
+    { status: 422, code: 'DEGENERATE_FRAME' },
+  );
+}
+
 export async function analyzeForeground(src, maskKeyHex) {
+  await assertFrameHasContent(src);
   const key = hexToRgb(maskKeyHex);
   const { data, info } = await sharp(src)
     .flatten({ background: { r: 255, g: 255, b: 255 } })

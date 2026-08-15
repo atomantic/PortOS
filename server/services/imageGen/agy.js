@@ -31,6 +31,7 @@ import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { buildNoImageReason } from './noImageReason.js';
+import { rejectDegenerateFrame } from './frameGuard.js';
 import { checkFabrication, noFabricationClause } from './fabricationGuard.js';
 import {
   AGY_IMAGEGEN_IMAGE_MODEL, IMAGE_GEN_MODE, IMAGE_TOOL_NAMES, describeFidelity,
@@ -368,6 +369,12 @@ async function runAgy(job, jobId, bin, args, {
         await sharp(stagingPath).png().toFile(outputPath);
       }
       removeScratch();
+      // Degenerate-frame gate (#4173) — before the sidecar, so a decodable but
+      // contentless canvas never becomes a gallery record.
+      const emptyFrame = await rejectDegenerateFrame(outputPath);
+      if (emptyFrame) {
+        return finalizeError(job, jobId, proc, emptyFrame);
+      }
       const sidecar = join(PATHS.images, `${jobId}.metadata.json`);
       await atomicWrite(sidecar, meta).catch(() => {});
       await autoCleanGeneratedImage({

@@ -37,3 +37,22 @@ export function buildNoImageReason(stdoutTail = '', { hint, dropLine, describe }
   const said = lines.slice(-NARRATION_LINES).join(' ').slice(-NARRATION_MAX_CHARS);
   return said ? describe(said) : hint;
 }
+
+/**
+ * The other way a run can end without an image: it wrote a file that decodes
+ * fine and has no content (issue #4173). Same narrator, different input — the
+ * verdict is a `reason` from `lib/imageFrameStats.js`, not stdout — so the UI
+ * says something true instead of rendering a black tile.
+ */
+const DEGENERATE_FRAME_DETAIL = {
+  'solid-fill': 'it is a single flat color',
+  'fully-transparent': 'it is fully transparent',
+  'near-empty': 'it has almost no detail',
+};
+
+export function describeDegenerateFrame(reason) {
+  const detail = DEGENERATE_FRAME_DETAIL[reason];
+  return detail
+    ? `The backend wrote an image with no content — ${detail}. Nothing was saved; try again or switch models.`
+    : 'The backend wrote an image with no content. Nothing was saved; try again or switch models.';
+}

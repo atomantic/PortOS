@@ -47,6 +47,7 @@ import {
   describeFidelity, visualReferenceRole,
 } from './modes.js';
 import { buildNoImageReason } from './noImageReason.js';
+import { rejectDegenerateFrame } from './frameGuard.js';
 import { resolveInputImages } from './inputImages.js';
 import { cloudPromptRequired } from './cloudProviderConfig.js';
 
@@ -405,6 +406,12 @@ async function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cle
         await copyFile(harvested.path, outputPath);
       } else {
         await writeFile(outputPath, harvested.buffer);
+      }
+      // Degenerate-frame gate (#4173) — before the sidecar, so a decodable but
+      // contentless canvas never becomes a gallery record.
+      const emptyFrame = await rejectDegenerateFrame(outputPath);
+      if (emptyFrame) {
+        return finalizeError(job, jobId, proc, emptyFrame);
       }
       // Sidecar metadata so the gallery can recover prompt/seed/etc. The
       // codex sessionId is the closest analogue to a seed for gpt-image-2

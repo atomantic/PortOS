@@ -9,6 +9,7 @@ import { readFile, readdir } from 'fs/promises';
 import { extname } from 'path';
 import { getProviderById } from './providers.js';
 import { PATHS, resolveScreenshot } from '../lib/fileUtils.js';
+import { describeFrameStats, isDegenerateFrame } from '../lib/imageFrameStats.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { ensureProviderReady as ensureOllamaProviderReady } from './ollamaManager.js';
 import { describeImageViaCli } from './visionCli.js';
@@ -51,6 +52,14 @@ async function loadImageAsBase64(imagePath) {
   }
 
   const buffer = await readFile(fullPath);
+  // Degenerate-frame gate (#4173): never spend a vision-provider call asking a
+  // model to describe a solid black square. Only a MEASURED degenerate verdict
+  // refuses — an image whose stats could not be computed (`ok: null`) is sent
+  // as before, because "couldn't measure" is not "has no content".
+  const stats = await describeFrameStats(buffer);
+  if (isDegenerateFrame(stats)) {
+    throw new Error(`image has no content (${stats.reason}) — not sending it to the vision provider`);
+  }
   const mimeType = getMimeType(fullPath);
   return `data:${mimeType};base64,${buffer.toString('base64')}`;
 }

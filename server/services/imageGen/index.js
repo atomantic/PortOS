@@ -12,6 +12,7 @@
  * exists for users whose Codex plan doesn't expose the image_gen tool.
  */
 
+import { join } from 'path';
 import { getSettings } from '../settings.js';
 import { resolveCleanersFromConfig } from '../../lib/imageClean.js';
 import * as external from './external.js';
@@ -23,6 +24,9 @@ import {
   IMAGE_GEN_MODE, IMAGE_GEN_MODES, CLOUD_IMAGE_GEN_MODES, isEditCapableMode,
 } from './modes.js';
 import { resolveCloudProviderConfig } from './cloudProviderConfig.js';
+import { rejectDegenerateFrame } from './frameGuard.js';
+import { PATHS } from '../../lib/fileUtils.js';
+import { ServerError } from '../../lib/errorHandler.js';
 
 // Cloud-CLI provider modules keyed by mode, so the shared gate in
 // checkConnection/generateImage dispatches without a per-provider branch.
@@ -126,12 +130,31 @@ export async function generateImage(params) {
   const cloud = resolveCloudProviderConfig(s, mode, { model: cloudModel });
   if (cloud) {
     if (!cloud.enabled) throw cloud.disabledError;
-    return CLOUD_PROVIDERS[mode].generateImage({ ...cloud.providerParams, cleanC2PA, denoise, ...normalized });
+    return guardResolvedFrame(await CLOUD_PROVIDERS[mode].generateImage({ ...cloud.providerParams, cleanC2PA, denoise, ...normalized }));
   }
   if (mode === IMAGE_GEN_MODE.LOCAL) {
-    return local.generateImage({ pythonPath: pythonPath(s), cleanC2PA, denoise, ...normalized });
+    return guardResolvedFrame(await local.generateImage({ pythonPath: pythonPath(s), cleanC2PA, denoise, ...normalized }));
   }
-  return external.generateImage({ sdapiUrl: sdapiUrl(s), cleanC2PA, denoise, ...normalized });
+  return guardResolvedFrame(await external.generateImage({ sdapiUrl: sdapiUrl(s), cleanC2PA, denoise, ...normalized }));
+}
+
+/**
+ * Degenerate-frame gate at the dispatcher seam (issue #4173) — a provider must
+ * not be able to hand back an artifact that decodes but has no content.
+ *
+ * This covers every provider that resolves AFTER writing its bytes (the
+ * synchronous external SD-API path, and any future one shaped like it). The
+ * four job-based providers return a `jobId` while the render is still running,
+ * so there is nothing on disk to judge here — they call the same gate from
+ * their own completion handlers, before the sidecar write and the `completed`
+ * event that create the gallery record.
+ */
+async function guardResolvedFrame(result) {
+  const pngPath = result?.outputPath
+    || (result?.filename && result?.path ? join(PATHS.images, result.filename) : null);
+  const reason = pngPath ? await rejectDegenerateFrame(pngPath) : null;
+  if (reason) throw new ServerError(reason, { status: 502, code: 'DEGENERATE_FRAME' });
+  return result;
 }
 
 const DEFAULT_NEGATIVE_PROMPT = 'blurry, low quality, distorted, deformed, ugly, watermark, text, signature';
