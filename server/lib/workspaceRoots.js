@@ -85,27 +85,54 @@ const HOME_ROOT = ALLOWED_WORKSPACE_ROOTS[0];
 
 const singleLine = (value) => String(value).replace(/[\r\n]+/g, ' ');
 
-const PRIVATE_HOME_SEGMENT = /(^|[\\/])((?:Users|home))[\\/][^\\/]+(?=([\\/]|$))/gi;
+const PRIVATE_HOME_SEGMENT = /(^|[\\/])((?:Users|home))([\\/])[^\\/]+(?=([\\/]|$))/gi;
 
 const redactUncHost = (path) => {
-  const prefix = path.startsWith('\\\\') ? '\\\\' : path.startsWith('//') ? '//' : null;
-  if (!prefix) return path;
-  const hostEndOffset = path.slice(prefix.length).search(/[\\/]/);
-  if (hostEndOffset < 0) return `${prefix}<host>`;
-  const hostEnd = prefix.length + hostEndOffset;
-  return `${prefix}<host>${path.slice(hostEnd)}`;
+  const leading = path.startsWith('//')
+    ? '//'
+    : path.charCodeAt(0) === 92 && path.charCodeAt(1) === 92
+      ? path.slice(0, 2)
+      : null;
+  if (!leading) return path;
+
+  const firstSegmentEndOffset = path.slice(leading.length).search(/[\\/]/);
+  if (firstSegmentEndOffset < 0) return `${leading}<host>`;
+  const firstSegmentEnd = leading.length + firstSegmentEndOffset;
+  const firstSegment = path.slice(leading.length, firstSegmentEnd);
+
+  // Extended-length UNC paths (`\\?\\UNC\\server\\share`) put the marker and
+  // `UNC` segments before the actual host. Extended local paths (`\\?\\C:\\…`)
+  // have no host to redact and fall through to the home-segment redaction.
+  let hostStart = leading.length;
+  if (firstSegment === '?' || firstSegment === '.') {
+    const secondSegmentStart = firstSegmentEnd + 1;
+    const secondSegmentEndOffset = path.slice(secondSegmentStart).search(/[\\/]/);
+    if (secondSegmentEndOffset < 0) return path;
+    const secondSegmentEnd = secondSegmentStart + secondSegmentEndOffset;
+    const secondSegment = path.slice(secondSegmentStart, secondSegmentEnd);
+    if (secondSegment.toUpperCase() !== 'UNC') return path;
+    hostStart = secondSegmentEnd + 1;
+  }
+
+  const hostEndOffset = path.slice(hostStart).search(/[\\/]/);
+  if (hostEndOffset < 0) return `${path.slice(0, hostStart)}<host>`;
+  const hostEnd = hostStart + hostEndOffset;
+  return `${path.slice(0, hostStart)}<host>${path.slice(hostEnd)}`;
 };
 
 const formatLogPath = (value) => {
   const path = singleLine(value);
   if (path === HOME_ROOT) return '~';
   const redactedUncPath = redactUncHost(path);
-  if (redactedUncPath !== path) return redactedUncPath;
+  const isWindowsStylePath = path.startsWith('//')
+    || path.charCodeAt(0) === 92
+    || /^[A-Za-z]:[\\/]/.test(path);
+  if (isWindowsStylePath) return redactedUncPath.replace(PRIVATE_HOME_SEGMENT, (_match, prefix, root, separator) => `${prefix}${root}${separator}<user>`);
   const relativeHomePath = relative(HOME_ROOT, path);
   if (relativeHomePath && !relativeHomePath.startsWith('..') && !isAbsolute(relativeHomePath)) {
     return `~/${relativeHomePath}`;
   }
-  return path.replace(PRIVATE_HOME_SEGMENT, '$1$2/<user>');
+  return redactedUncPath.replace(PRIVATE_HOME_SEGMENT, (_match, prefix, root, separator) => `${prefix}${root}${separator}<user>`);
 };
 
 /**

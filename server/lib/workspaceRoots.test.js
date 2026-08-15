@@ -75,6 +75,17 @@ describe('outsideAllowedRootsMessage', () => {
     expect(message).toContain(String.raw`\\<host>\share\repo`);
     expect(message).not.toContain('server');
   });
+
+  it('redacts nested usernames and extended UNC hosts', () => {
+    const nestedMessage = outsideAllowedRootsMessage(String.raw`\\server\share\Users\alice\repo`);
+    const extendedMessage = outsideAllowedRootsMessage(String.raw`\\?\UNC\server\share\repo`);
+
+    expect(nestedMessage).toContain(String.raw`\\<host>\share\Users\<user>\repo`);
+    expect(nestedMessage).not.toContain('server');
+    expect(nestedMessage).not.toContain('alice');
+    expect(extendedMessage).toContain(String.raw`\\?\UNC\<host>\share\repo`);
+    expect(extendedMessage).not.toContain('server');
+  });
 });
 
 // Windows repos routinely live off the system drive (D:\code, E:\projects), and
