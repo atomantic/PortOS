@@ -83,17 +83,27 @@ export function isWithinAllowedRoots(realPath) {
 
 const HOME_ROOT = ALLOWED_WORKSPACE_ROOTS[0];
 
-const formatWorkspaceRoot = (root) => root === HOME_ROOT ? '~' : root;
-
 const singleLine = (value) => String(value).replace(/[\r\n]+/g, ' ');
 
+const PRIVATE_HOME_SEGMENT = /(^|[\\/])((?:Users|home))[\\/][^\\/]+(?=([\\/]|$))/gi;
+
+const formatLogPath = (value) => {
+  const path = singleLine(value);
+  if (path === HOME_ROOT) return '~';
+  const relativeHomePath = relative(HOME_ROOT, path);
+  if (relativeHomePath && !relativeHomePath.startsWith('..') && !isAbsolute(relativeHomePath)) {
+    return `~/${relativeHomePath}`;
+  }
+  return path.replace(PRIVATE_HOME_SEGMENT, '$1$2/<user>');
+};
+
 /**
- * Build the server-only diagnostic for a path rejected by isWithinAllowedRoots.
+ * Build the redacted, server-only diagnostic for a path rejected by isWithinAllowedRoots.
  * Callers keep their existing terse HTTP error so a real filesystem path never
  * appears in an API response or a value a user might paste into a public issue.
  */
 export function outsideAllowedRootsMessage(realPath, { field = 'path' } = {}) {
-  const roots = ALLOWED_WORKSPACE_ROOTS.map(formatWorkspaceRoot);
+  const roots = ALLOWED_WORKSPACE_ROOTS.map(formatLogPath);
   if (IS_WINDOWS) roots.push('any non-system drive');
-  return `${singleLine(field)} is outside allowed directories: ${singleLine(realPath)} (allowed: ${roots.map(singleLine).join(', ')})`;
+  return `${singleLine(field)} is outside allowed directories: ${formatLogPath(realPath)} (allowed: ${roots.join(', ')})`;
 }

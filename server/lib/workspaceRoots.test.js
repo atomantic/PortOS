@@ -61,6 +61,13 @@ describe('outsideAllowedRootsMessage', () => {
     expect(outsideAllowedRootsMessage('/etc/shadow', { field: 'workspacePath' }))
       .toMatch(/^workspacePath is outside allowed directories: \/etc\/shadow \(allowed: .+\)$/);
   });
+
+  it('redacts usernames in other home-directory paths', () => {
+    const message = outsideAllowedRootsMessage('/home/alice/private-repo');
+
+    expect(message).toContain('/home/<user>/private-repo');
+    expect(message).not.toContain('alice');
+  });
 });
 
 // Windows repos routinely live off the system drive (D:\code, E:\projects), and
