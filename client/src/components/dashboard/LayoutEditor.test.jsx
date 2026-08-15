@@ -106,6 +106,19 @@ describe('LayoutEditor reorder signal', () => {
     }));
   });
 
+  // `add` appends, so a widget added and then moved up IS a reorder — the grid
+  // would otherwise auto-place it at the bottom, ignoring where it was put.
+  it('flags a widget that was added and then moved up', async () => {
+    const { onSave } = await renderEditor();
+    clickButton(/Death Clock/);
+    moveUp(3);
+    await save();
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      widgets: ['quick-task', 'apps', 'death-clock', 'backup'],
+      reordered: true,
+    }));
+  });
+
   it('nets out a move up followed by a move back down', async () => {
     const { onSave } = await renderEditor();
     moveUp(1);

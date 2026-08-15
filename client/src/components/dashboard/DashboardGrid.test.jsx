@@ -258,6 +258,9 @@ describe('reconcileGrid', () => {
 
   it('leaves an arranged grid alone when the save is not a reorder', () => {
     expect(reconcileGrid(ARRANGED, ['a', 'b', 'c'])).toEqual(ARRANGED);
+    expect(reconcileGrid(ARRANGED, ['a', 'b', 'c'], {})).toEqual(ARRANGED);
+    // A caller forwarding a `reordered` it never received must not re-flow.
+    expect(reconcileGrid(ARRANGED, ['a', 'b', 'c'], { reorder: undefined })).toEqual(ARRANGED);
     expect(reconcileGrid(ARRANGED, ['a', 'b', 'c'], { reorder: false })).toEqual(ARRANGED);
   });
 

@@ -109,15 +109,19 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
   // save has to say out loud when the widget order IS the edit — otherwise the
   // grid keeps its old reading order and Move up/down looks inert (#4132).
   // Derived rather than a sticky flag so moving a widget up and back down again
-  // nets out to "not a reorder". `add` appends and `remove` filters, both of
-  // which preserve relative order, so comparing the two lists restricted to the
-  // widgets they share isolates exactly what `move` did.
+  // nets out to "not a reorder". `remove` filters and `add` appends, so the
+  // list the draft WOULD have without any `move` is reconstructible exactly:
+  // the surviving stored widgets in their stored order, then the newly added
+  // ones in the order they were added. Anything else is a reorder — including
+  // moving a widget that was added in this same editing session.
   const isReordered = () => {
     const stored = editing?.widgets ?? [];
     const storedIds = new Set(stored);
-    const draftIds = new Set(widgets);
-    const shared = stored.filter((id) => draftIds.has(id));
-    return widgets.filter((id) => storedIds.has(id)).some((id, i) => id !== shared[i]);
+    const unmoved = [
+      ...stored.filter((id) => widgets.includes(id)),
+      ...widgets.filter((id) => !storedIds.has(id)),
+    ];
+    return widgets.length !== unmoved.length || widgets.some((id, i) => id !== unmoved[i]);
   };
 
   const remove = (id) => {
