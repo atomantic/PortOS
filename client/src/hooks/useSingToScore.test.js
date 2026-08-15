@@ -93,6 +93,10 @@ describe('useSingToScore', () => {
     await act(async () => { await result.current.start(); });
     expect(result.current.phase).toBe(SING_IDLE);
     expect(result.current.error).toBe('Permission denied');
+
+    global.navigator.mediaDevices.getUserMedia = vi.fn(async () => fakeStream());
+    await act(async () => { await result.current.start(); });
+    expect(result.current.phase).toBe(SING_COUNT_IN);
   });
 
   it('tears down mic, analyser, tracker, and metronome on unmount', async () => {
@@ -103,6 +107,45 @@ describe('useSingToScore', () => {
     expect(trackerStop).toHaveBeenCalled();
     expect(analyserClose).toHaveBeenCalled();
     expect(trackStop).toHaveBeenCalled();
+  });
+
+  it('allows only one microphone request while permission is pending', async () => {
+    let resolveStream;
+    navigator.mediaDevices.getUserMedia = vi.fn(() => new Promise((resolve) => {
+      resolveStream = resolve;
+    }));
+    const { result } = renderHook(() => useSingToScore({ tempo: 120, score: 'time: 4/4' }));
+
+    let firstStart;
+    act(() => {
+      firstStart = result.current.start();
+      result.current.start();
+    });
+    expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveStream(fakeStream());
+      await firstStart;
+    });
+    expect(result.current.phase).toBe(SING_COUNT_IN);
+  });
+
+  it('stops a permission-pending stream when capture is cancelled', async () => {
+    let resolveStream;
+    navigator.mediaDevices.getUserMedia = vi.fn(() => new Promise((resolve) => {
+      resolveStream = resolve;
+    }));
+    const { result, unmount } = renderHook(() => useSingToScore({ tempo: 120, score: 'time: 4/4' }));
+
+    let startPromise;
+    act(() => { startPromise = result.current.start(); });
+    unmount();
+    await act(async () => {
+      resolveStream(fakeStream());
+      await startPromise;
+    });
+
+    expect(trackStop).toHaveBeenCalledOnce();
   });
 
   // `playback` REFUSES capture on iOS, and the transport-driven players declare

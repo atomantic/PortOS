@@ -1,0 +1,1 @@
+- Sing-to-score now closes a microphone stream that resolves after its permission prompt has been cancelled.
