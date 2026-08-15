@@ -652,13 +652,16 @@ export default function VideoGen() {
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-2 text-xs">
         {status ? (
-          <span className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full border ${
-            status.connected
-              ? 'border-port-success/40 bg-port-success/10 text-port-success'
-              : 'border-port-error/40 bg-port-error/10 text-port-error'
-          }`}>
+          <span
+            className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full border ${
+              status.connected
+                ? 'border-port-success/40 bg-port-success/10 text-port-success'
+                : 'border-port-error/40 bg-port-error/10 text-port-error'
+            }`}
+            title={status.pythonPath || 'Local Python'}
+          >
             {status.connected ? (
-              <><span className="w-2 h-2 rounded-full bg-port-success" /> {status.pythonPath || 'local Python'}</>
+              <><span className="w-2 h-2 rounded-full bg-port-success" /> {status.pythonVersion ? `Python ${status.pythonVersion}` : 'Python'}</>
             ) : (
               <>
                 <AlertTriangle className="w-3 h-3" />

@@ -324,10 +324,11 @@ const generateBodySchema = z.object({
 router.get('/status', asyncHandler(async (_req, res) => {
   const s = await getSettings();
   const py = s.imageGen?.local?.pythonPath || null;
-  const { connected, reason, missing } = await resolveLocalPythonHealth(py);
+  const { connected, reason, missing, pythonVersion } = await resolveLocalPythonHealth(py);
   res.json({
     connected,
     pythonPath: py,
+    pythonVersion: pythonVersion || null,
     reason,
     missingPackages: missing,
     // Each entry carries its optional `disclosure` block (provenance, weights/
@@ -571,18 +572,19 @@ router.get('/setup/runtime-install', asyncHandler(async (req, res) => {
 }));
 
 async function resolveLocalPythonHealth(py) {
-  if (!py) return { connected: false, reason: 'Local Python not configured', missing: [] };
-  if (!isAllowedPython(py)) return { connected: false, reason: 'Saved pythonPath is not a python interpreter', missing: [] };
+  if (!py) return { connected: false, reason: 'Local Python not configured', missing: [], pythonVersion: null };
+  if (!isAllowedPython(py)) return { connected: false, reason: 'Saved pythonPath is not a python interpreter', missing: [], pythonVersion: null };
   try {
-    const { missing } = await checkPackages(py);
-    if (missing.length === 0) return { connected: true, reason: null, missing };
+    const { missing, pythonVersion } = await checkPackages(py);
+    if (missing.length === 0) return { connected: true, reason: null, missing, pythonVersion };
     return {
       connected: false,
       reason: `${missing.length} python package${missing.length === 1 ? '' : 's'} missing: ${missing.join(', ')}`,
       missing,
+      pythonVersion,
     };
   } catch (err) {
-    return { connected: false, reason: `Python probe failed: ${err.message || err}`, missing: [] };
+    return { connected: false, reason: `Python probe failed: ${err.message || err}`, missing: [], pythonVersion: null };
   }
 }
 

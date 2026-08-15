@@ -501,6 +501,7 @@ export async function probePythonHealth(pythonPath) {
     '  "basePrefix": sys.base_prefix,',
     '  "stdlib": sysconfig.get_path("stdlib"),',
     '  "arch": platform.machine(),',
+    '  "pythonVersion": platform.python_version(),',
     '  "imports": imports,',
     '}))',
   ].join('\n');
@@ -525,12 +526,13 @@ export async function probePythonHealth(pythonPath) {
     missingPip: missing.map(pipNameFor),
     externallyManaged,
     interpreterArch: data.arch || null,
+    pythonVersion: data.pythonVersion || null,
   };
 }
 
 export async function checkPackages(pythonPath) {
-  const { installed, missing, missingPip } = await probePythonHealth(pythonPath);
-  return { installed, missing, missingPip };
+  const { installed, missing, missingPip, pythonVersion } = await probePythonHealth(pythonPath);
+  return { installed, missing, missingPip, pythonVersion };
 }
 
 // Spawn a child, stream its stdout+stderr line-by-line via `onLog`, resolve
