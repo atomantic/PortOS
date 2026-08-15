@@ -21,6 +21,7 @@ import { createHash } from 'crypto'
 import { execFile, spawn } from '../lib/childProcess.js';import { promisify } from 'util'
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
 import { readResponseJson } from '../lib/readResponseJson.js'
+import { describeFetchError } from '../lib/fetchErrorChain.js'
 import { readJSONFile, sha256File, safeJSONParse, ensureDir, atomicWrite, sleep } from '../lib/fileUtils.js'
 import {
   parseOllamaManifest, parseOllamaModelRef, ollamaManifestRelPath, digestToBlobFilename, buildModelfile,
@@ -807,32 +808,6 @@ async function attemptOllamaPull(modelId, onProgress) {
   }).catch((err) => err?.message || String(err))
 
   return lastError ? { success: false, error: lastError } : { success: true }
-}
-
-/**
- * Flatten a thrown fetch error into a single descriptive string, walking the
- * `cause` chain. Node/undici reports network failures as `TypeError: fetch
- * failed` with the real reason (ECONNRESET, ETIMEDOUT, ...) tucked into
- * `err.cause` (and sometimes nested deeper). Without this, the transient
- * classifier only sees "fetch failed" and misclassifies retryable failures as
- * fatal. Includes each level's `.code` so `isTransientPullError()` can match.
- * @param {unknown} err
- * @returns {string}
- */
-function describeFetchError(err) {
-  const parts = []
-  let node = err
-  const seen = new Set()
-  // Bound the walk in case of a self-referential cause chain.
-  for (let depth = 0; node && typeof node === 'object' && depth < 5; depth++) {
-    if (seen.has(node)) break
-    seen.add(node)
-    if (node.code) parts.push(String(node.code))
-    if (node.message) parts.push(String(node.message))
-    node = node.cause
-  }
-  if (typeof node === 'string') parts.push(node)
-  return parts.join(': ') || String(err)
 }
 
 /**

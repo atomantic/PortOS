@@ -1,12 +1,18 @@
 import { formatBytes as formatBytesRaw } from '../lib/fileUtils.js'
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
 import { readResponseJson } from '../lib/readResponseJson.js'
+import { createConcurrencyGate } from '../lib/concurrencyGate.js'
+import { createSingleFlight } from '../lib/singleFlight.js'
+import { describeFetchError, isReplayableConnectionError } from '../lib/fetchErrorChain.js'
+import { readCachedRepoModel, writeCachedRepoModel } from './huggingFaceRepoCache.js'
 import { LOCAL_LLM_CATEGORIES, isBackend } from '../lib/localLlmCatalog.js'
 import { ENGINES } from './pipeline/musicGen.js'
 import { fetchOllamaRegistryVariants } from './ollamaRegistryCatalog.js'
 
 const HF_API_BASE = 'https://huggingface.co/api/models'
 const HF_TIMEOUT_MS = 12_000
+// Pause before the single connection-blip retry (see hfFetch).
+const HF_RETRY_DELAY_MS = 250
 // Upper bound on how long the curated-catalog endpoint waits for HF variant
 // enrichment. The curated catalog must stay usable offline (it was a pure local
 // list before enrichment), so when HF is slow/down we return the catalog as-is
@@ -669,6 +675,34 @@ function hfHeaders() {
   return headers
 }
 
+// 4 at a time, shared by BOTH entry points: a cold catalog load fires ~36
+// `?blobs=true` probes and a keystroke fires up to 18 more, concurrently — a
+// burst the Hub answers with an HTTP/2 GOAWAY. See concurrencyGate for why a
+// shared gate rather than a per-map cap.
+const hfGate = createConcurrencyGate(4)
+// Coalesce concurrent probes of the SAME repo — a repo can appear in both the
+// curated catalog and the live search, and neither caches until it resolves.
+const repoModelFlight = createSingleFlight()
+
+// Single door to the Hub: bounded concurrency + the shared one-shot retry.
+// Resolves with the Response (including non-2xx — status handling stays with the
+// caller); throws only when the request itself failed twice. The retry runs
+// INSIDE the gate slot so a replay doesn't re-queue behind every other probe.
+function hfFetch(url) {
+  return hfGate.run(() => fetchWithTimeout(
+    url,
+    { headers: hfHeaders() },
+    HF_TIMEOUT_MS,
+    { retries: 1, retryDelayMs: HF_RETRY_DELAY_MS, shouldRetry: isReplayableConnectionError }
+  // undici reports a connection-level failure as a bare `fetch failed`, which
+  // reaches the search box verbatim and reads like a bug in PortOS. Name the
+  // actual condition so the user knows to just try again.
+  ).catch((err) => {
+    if (!isReplayableConnectionError(err)) throw err
+    throw new Error(`Hugging Face is not responding (connection dropped twice) — try again in a moment. [${describeFetchError(err)}]`)
+  }))
+}
+
 // `filter` is a Hugging Face library tag — 'gguf' for the GGUF query, 'mlx' for
 // the Apple-MLX query, or null/'' to relax the format filter (audio category and
 // the GGUF-signal fallback). Only one filter at a time; MLX runs as a separate
@@ -683,7 +717,7 @@ async function fetchModels(search, limit, filter) {
   })
   if (filter) params.set('filter', filter)
 
-  const response = await fetchWithTimeout(`${HF_API_BASE}?${params.toString()}`, { headers: hfHeaders() }, HF_TIMEOUT_MS)
+  const response = await hfFetch(`${HF_API_BASE}?${params.toString()}`)
   if (!response.ok) {
     const text = await response.text().catch(() => '')
     throw new Error(`Hugging Face search failed: ${response.status}${text ? ` — ${text.slice(0, 160)}` : ''}`)
@@ -701,27 +735,47 @@ const REPO_MODEL_CACHE_MAX = 500
 const TRANSIENT_FETCH = Symbol('transient-fetch')
 
 // Fetch (and cache) the per-model record WITH per-file sizes. The search
-// endpoint returns siblings without sizes; only `?blobs=true` carries them, and
-// the box is debounced per keystroke, so cache by repo to avoid re-fetching.
-// `null` = fetched-but-unavailable (gated / private / 404), cached (per the
-// absent-vs-empty sentinel rule) so a sizeless repo isn't re-probed every search.
-// A transient failure returns null too, but is NOT cached, so a recovered HF
-// re-enriches on the next request instead of staying blank until restart.
+// endpoint returns siblings without sizes; only `?blobs=true` carries them.
+//
+// Three tiers, cheapest first: an in-process Map, then the disk cache
+// (huggingFaceRepoCache.js), then the Hub. The disk tier is what stops the
+// curated catalog — a KNOWN, fixed list of ~36 repos — from re-asking the Hub
+// for all of them after every restart, self-update, or dev reload. Steady state
+// on that path is zero network.
+//
+// `null` = fetched-but-unavailable (gated / private / 404), cached at both tiers
+// (per the absent-vs-empty sentinel rule) so a sizeless repo isn't re-probed
+// every search. A transient failure returns null too but is NOT cached, so a
+// recovered Hub re-enriches on the next request instead of staying blank.
 async function fetchRepoModel(repoId) {
   if (repoModelCache.has(repoId)) return repoModelCache.get(repoId)
-  // repoId comes from the HF search response (untrusted upstream) — encode each
-  // path segment so a `?`/`#`/`..` in the id can't reshape the request path/query.
-  const safeRepoPath = String(repoId).split('/').map(encodeURIComponent).join('/')
-  const model = await fetchWithTimeout(`${HF_API_BASE}/${safeRepoPath}?blobs=true`, { headers: hfHeaders() }, HF_TIMEOUT_MS)
-    .then((res) => (res.ok ? res.json() : null))
-    .catch(() => TRANSIENT_FETCH)
-  if (model === TRANSIENT_FETCH) return null // transient — return null but don't cache
+  return repoModelFlight.run(repoId, async () => {
+    const cached = await readCachedRepoModel(repoId)
+    // `hit` is separate from the value because a cached `model` of null is a
+    // real answer (gated/absent), not a miss.
+    if (cached.hit) {
+      rememberRepoModel(repoId, cached.model)
+      return cached.model
+    }
+    // repoId comes from the HF search response (untrusted upstream) — encode each
+    // path segment so a `?`/`#`/`..` in the id can't reshape the request path/query.
+    const safeRepoPath = String(repoId).split('/').map(encodeURIComponent).join('/')
+    const model = await hfFetch(`${HF_API_BASE}/${safeRepoPath}?blobs=true`)
+      .then((res) => (res.ok ? res.json() : null))
+      .catch(() => TRANSIENT_FETCH)
+    if (model === TRANSIENT_FETCH) return null // transient — return null but don't cache
+    rememberRepoModel(repoId, model)
+    await writeCachedRepoModel(repoId, model)
+    return model
+  })
+}
+
+function rememberRepoModel(repoId, model) {
   // Evict oldest entry when the cap is reached (insertion-order iteration).
   if (repoModelCache.size >= REPO_MODEL_CACHE_MAX) {
     repoModelCache.delete(repoModelCache.keys().next().value)
   }
   repoModelCache.set(repoId, model)
-  return model
 }
 
 // Total resident size of an audio repo's weight files — audio generators ship

@@ -22,9 +22,32 @@
 
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
 import { readResponseJson } from '../lib/readResponseJson.js'
+import { createConcurrencyGate } from '../lib/concurrencyGate.js'
+import { createSingleFlight } from '../lib/singleFlight.js'
+import { isReplayableConnectionError } from '../lib/fetchErrorChain.js'
 
 const REGISTRY_BASE = 'https://registry.ollama.ai/v2'
 const REGISTRY_TIMEOUT_MS = 12_000
+// Per-process cap on simultaneous registry requests, so a cold catalog load
+// (~31 bare Ollama entries, each a tags call plus a manifest call per quant)
+// arrives as a trickle rather than a thundering herd. See concurrencyGate for
+// why a shared gate rather than a per-entry cap.
+//
+// 16, not the 4 the Hugging Face path uses: this fan-out is an order of
+// magnitude larger (~31 × (1 + quants) vs ~36 flat), and the whole enrich must
+// still land inside huggingFaceCatalog's 5s CATALOG_ENRICH_TIMEOUT_MS or the
+// cards render without their quant pickers. The payloads are also far smaller
+// (OCI manifest JSON, not full model records).
+const registryGate = createConcurrencyGate(16)
+// Coalesce concurrent identical lookups. Both caches below are written only when
+// the response resolves, so without this every caller that arrives during a
+// cold fetch misses and queues its own duplicate behind the gate — and with a
+// gate in front, duplicates cost queue depth rather than just a spare socket.
+const registryFlight = createSingleFlight()
+// Replay a dropped pooled connection once. Both calls below are GETs, so a
+// replay is safe; without this a GOAWAY (or reset) collapses to TRANSIENT_FETCH
+// and the card silently renders with no quant picker and no size.
+const REGISTRY_RETRY = { retries: 1, retryDelayMs: 250, shouldRetry: isReplayableConnectionError }
 // Ollama publishes OCI image manifests; the model weights live in a layer with
 // this media type (template/params/license layers carry the other media types).
 const MANIFEST_ACCEPT = 'application/vnd.docker.distribution.manifest.v2+json'
@@ -151,31 +174,37 @@ function preferTag(candidate, current) {
 
 async function fetchTags(repoPath, timeoutMs) {
   if (tagsCache.has(repoPath)) return tagsCache.get(repoPath)
-  // repoPath is derived from a curated id, but encode each segment defensively so
-  // a stray character can't reshape the request path.
-  const safePath = repoPath.split('/').map(encodeURIComponent).join('/')
-  const result = await fetchWithTimeout(`${REGISTRY_BASE}/${safePath}/tags/list`, { headers: { Accept: 'application/json' } }, timeoutMs)
-    .then(resolveRegistryBody)
-    .catch(() => TRANSIENT_FETCH)
-  if (result === TRANSIENT_FETCH) return null // transient (throw / 5xx / 429 / unparseable 200) — don't cache
-  const tags = Array.isArray(result?.tags) ? result.tags : null
-  cacheSet(tagsCache, repoPath, tags)
-  return tags
+  return registryFlight.run(`tags:${repoPath}`, async () => {
+    // repoPath is derived from a curated id, but encode each segment defensively so
+    // a stray character can't reshape the request path.
+    const safePath = repoPath.split('/').map(encodeURIComponent).join('/')
+    const result = await registryGate
+      .run(() => fetchWithTimeout(`${REGISTRY_BASE}/${safePath}/tags/list`, { headers: { Accept: 'application/json' } }, timeoutMs, REGISTRY_RETRY))
+      .then(resolveRegistryBody)
+      .catch(() => TRANSIENT_FETCH)
+    if (result === TRANSIENT_FETCH) return null // transient (throw / 5xx / 429 / unparseable 200) — don't cache
+    const tags = Array.isArray(result?.tags) ? result.tags : null
+    cacheSet(tagsCache, repoPath, tags)
+    return tags
+  })
 }
 
 async function fetchManifestModelBytes(repoPath, tag, timeoutMs) {
   const key = `${repoPath}:${tag}`
   if (manifestCache.has(key)) return manifestCache.get(key)
-  const safePath = repoPath.split('/').map(encodeURIComponent).join('/')
-  const safeTag = encodeURIComponent(tag)
-  // Same transient-vs-cacheable distinction as fetchTags (see resolveRegistryBody).
-  const result = await fetchWithTimeout(`${REGISTRY_BASE}/${safePath}/manifests/${safeTag}`, { headers: { Accept: MANIFEST_ACCEPT } }, timeoutMs)
-    .then(resolveRegistryBody)
-    .catch(() => TRANSIENT_FETCH)
-  if (result === TRANSIENT_FETCH) return null // transient (throw / 5xx / 429 / unparseable 200) — don't cache
-  const bytes = sumModelLayerBytes(result) // result is null (permanent non-OK) or the manifest object
-  cacheSet(manifestCache, key, bytes)
-  return bytes
+  return registryFlight.run(`manifest:${key}`, async () => {
+    const safePath = repoPath.split('/').map(encodeURIComponent).join('/')
+    const safeTag = encodeURIComponent(tag)
+    // Same transient-vs-cacheable distinction as fetchTags (see resolveRegistryBody).
+    const result = await registryGate
+      .run(() => fetchWithTimeout(`${REGISTRY_BASE}/${safePath}/manifests/${safeTag}`, { headers: { Accept: MANIFEST_ACCEPT } }, timeoutMs, REGISTRY_RETRY))
+      .then(resolveRegistryBody)
+      .catch(() => TRANSIENT_FETCH)
+    if (result === TRANSIENT_FETCH) return null // transient (throw / 5xx / 429 / unparseable 200) — don't cache
+    const bytes = sumModelLayerBytes(result) // result is null (permanent non-OK) or the manifest object
+    cacheSet(manifestCache, key, bytes)
+    return bytes
+  })
 }
 
 // Resolve the per-quant install variants for a bare Ollama registry model.

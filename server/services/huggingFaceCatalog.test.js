@@ -926,4 +926,112 @@ describe('huggingFaceCatalog', () => {
       expect(small.installed).toBe(true)
     })
   })
+
+  // The Hub retires idle pooled HTTP/2 connections; undici surfaces the retirement
+  // as a request-level `fetch failed` with a GOAWAY cause, which used to blank the
+  // whole result set. It is a connection artifact, not a request failure.
+  describe('hub politeness — transient retry and burst bounding', () => {
+    const goaway = () => {
+      const err = new TypeError('fetch failed')
+      err.cause = new Error('HTTP/2: "GOAWAY" frame received with code 0')
+      return err
+    }
+
+    it('retries a GOAWAY once and returns the results the retry fetched', async () => {
+      const repo = 'goaway-pub/Retry-GGUF'
+      let searchCalls = 0
+      fetch.mockImplementation(async (url) => {
+        const u = String(url)
+        if (u.includes('blobs=true')) return response({ id: repo, siblings: [{ rfilename: 'R-Q4_K_M.gguf', size: 4_000_000_000 }] })
+        searchCalls += 1
+        if (searchCalls === 1) throw goaway()
+        return response([{ modelId: repo, downloads: 10, tags: ['gguf'], siblings: [{ rfilename: 'R-Q4_K_M.gguf', size: 4_000_000_000 }] }])
+      })
+
+      const results = await searchHuggingFaceModels({ backend: 'lmstudio', query: 'retry' })
+
+      expect(searchCalls).toBe(2)
+      expect(results.some((r) => r.repository === repo)).toBe(true)
+    })
+
+    it('reports a repeated GOAWAY as a named condition, not a bare "fetch failed"', async () => {
+      let calls = 0
+      fetch.mockImplementation(async () => { calls += 1; throw goaway() })
+
+      await expect(searchHuggingFaceModels({ backend: 'lmstudio', query: 'always-goaway' }))
+        .rejects.toThrow(/Hugging Face is not responding/)
+      expect(calls).toBe(2) // one retry, not an unbounded loop
+    })
+
+    it('does not retry a timeout — a slow hub must not get double the traffic', async () => {
+      let calls = 0
+      fetch.mockImplementation(async () => {
+        calls += 1
+        const err = new Error('The operation was aborted')
+        err.name = 'AbortError'
+        throw err
+      })
+
+      await expect(searchHuggingFaceModels({ backend: 'lmstudio', query: 'timeout-not-retried' }))
+        .rejects.toThrow(/aborted/i)
+      expect(calls).toBe(1)
+    })
+
+    it('caps simultaneous hub requests while enriching a full catalog', async () => {
+      let inFlight = 0
+      let peak = 0
+      fetch.mockImplementation(async (url) => {
+        inFlight += 1
+        peak = Math.max(peak, inFlight)
+        await new Promise((resolve) => setTimeout(resolve, 5))
+        inFlight -= 1
+        const repo = String(url).split('/api/models/')[1]?.split('?')[0] || 'x/y'
+        return response({ id: repo, siblings: [{ rfilename: 'C-Q4_K_M.gguf', size: 4_000_000_000 }] })
+      })
+
+      // 30 distinct repos so none is served from the per-process repo cache — this
+      // is the cold-page-load shape the gate exists for.
+      const catalog = Array.from({ length: 30 }, (_, i) => ({
+        id: `burst-pub/Burst-${i}-GGUF`, key: `burst-${i}`, name: `Burst ${i}`, category: 'chat', size: '2.0 GB'
+      }))
+      await enrichCatalogWithVariants(catalog, {
+        backend: 'lmstudio', systemMemoryBytes: 128 * 1024 ** 3, installedIds: [], timeoutMs: 0
+      })
+
+      // Two properties, both required. The upper bound is the cap itself; the
+      // lower bound catches a gate that degraded to serial, which the cap
+      // assertion alone would happily pass. Not `toBe(4)`: each probe now
+      // awaits the disk cache before reaching the gate, so arrivals stagger and
+      // the observed peak legitimately lands a slot or two below the cap. The
+      // exact-cap guarantee is pinned in concurrencyGate.test.js instead.
+      expect(peak).toBeLessThanOrEqual(4)
+      expect(peak).toBeGreaterThan(1)
+      // The cap must not cost coverage — every entry still enriched.
+      expect(catalog.every((e) => e.format === 'gguf')).toBe(true)
+    })
+
+    it('coalesces concurrent probes of the same repo into one request', async () => {
+      const repo = 'dedupe-pub/Shared-GGUF'
+      let blobCalls = 0
+      fetch.mockImplementation(async (url) => {
+        const u = String(url)
+        if (u.includes('blobs=true')) {
+          blobCalls += 1
+          await new Promise((resolve) => setTimeout(resolve, 5))
+          return response({ id: repo, siblings: [{ rfilename: 'S-Q4_K_M.gguf', size: 4_000_000_000 }] })
+        }
+        return response([])
+      })
+
+      const catalogs = Array.from({ length: 3 }, () => ([
+        { id: repo, key: 'shared', name: 'Shared', category: 'chat', size: '2.0 GB' }
+      ]))
+      await Promise.all(catalogs.map((c) => enrichCatalogWithVariants(c, {
+        backend: 'lmstudio', systemMemoryBytes: 128 * 1024 ** 3, installedIds: [], timeoutMs: 0
+      })))
+
+      expect(blobCalls).toBe(1)
+      expect(catalogs.every((c) => c[0].format === 'gguf')).toBe(true)
+    })
+  })
 })

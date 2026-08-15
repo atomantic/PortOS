@@ -345,7 +345,12 @@ export function LocalLlmTab() {
       });
   }, []);
 
-  const loadCatalog = useCallback((backend, q, source = catalogSource, category = activeCategory) => {
+  // `source` and `category` are required rather than defaulted from state: a
+  // state default would put them in the dep list, so `loadCatalog`'s identity
+  // would change on every category click and re-trigger the debounce effect —
+  // the exact refetch the effect below is written to avoid. Every call site
+  // passes both.
+  const loadCatalog = useCallback((backend, q, source, category) => {
     const requestId = ++catalogRequestId.current;
     setCatalogLoading(true);
     setCatalogError('');
@@ -368,14 +373,26 @@ export function LocalLlmTab() {
       .finally(() => {
         if (requestId === catalogRequestId.current) setCatalogLoading(false);
       });
-  }, [activeCategory, catalogSource]);
+  }, []);
 
   useEffect(() => { loadStatus(); }, [loadStatus]);
   // Debounce so typing in the search box doesn't fire a request per keystroke.
+  //
+  // `activeCategory` is a trigger for the Hugging Face source ONLY — the live
+  // search asks the Hub for that category's models, so switching tabs is a new
+  // query. The curated catalog sends just backend+q and filters by category on
+  // the client (see visibleCatalogGroups), so refetching on a tab click would
+  // re-request a byte-identical list AND re-run the server's ~36-repo variant
+  // enrichment. `catalogCategoryKey` is the category when it matters and a
+  // constant when it doesn't, which keeps the whole effect one code path.
+  const catalogCategoryKey = catalogSource === 'huggingface' ? activeCategory : 'client-filtered';
   useEffect(() => {
     const t = setTimeout(() => loadCatalog(selected, query, catalogSource, activeCategory), catalogSource === 'huggingface' ? 450 : 250);
     return () => clearTimeout(t);
-  }, [selected, query, catalogSource, activeCategory, loadCatalog]);
+    // activeCategory is intentionally absent — catalogCategoryKey carries it for
+    // the one source that needs it. loadCatalog reads the freshest value anyway.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, query, catalogSource, catalogCategoryKey, loadCatalog]);
 
   useEffect(() => {
     const handleProgress = (data) => {

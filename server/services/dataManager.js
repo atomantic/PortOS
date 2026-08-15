@@ -54,6 +54,7 @@ export const CATEGORIES = {
   // but installs that predate that move still carry the dir, and backup still excludes it.
   'browser-downloads': { label: 'Browser Downloads', description: 'Files the agent browser downloaded — re-downloadable, safe to purge', archivable: false, deletable: true, purgeScope: 'category' },
   'browser-profile': { label: 'Browser Profile', description: 'Chrome/Chromium browser data', archivable: false, deletable: true, purgeScope: 'category' },
+  cache: { label: 'Remote API Cache', description: 'Cached metadata from remote APIs (Hugging Face repo records) — refetched on demand, safe to purge', archivable: false, deletable: true, purgeScope: 'category' },
   'calendar': { label: 'Calendar', description: 'Calendar sync data', archivable: true, deletable: false },
   'certs': { label: 'TLS Certificates', description: 'HTTPS certificate and private key — purging drops the install back to HTTP', archivable: false, deletable: false },
   'commission-feedback': { label: 'Commission Feedback', description: 'Reactions on creative commissions (file mirror of the Postgres store)', archivable: true, deletable: false },

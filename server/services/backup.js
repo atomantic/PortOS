@@ -62,6 +62,7 @@ export const DEFAULT_EXCLUDES = [
   { path: '/repos/', reason: 'Cloned git repositories — large, re-cloneable from origin', overridable: true },
   { path: '/cos/reference-repos/', reason: 'Reference upstream repos used by agents — re-cloneable', overridable: true },
   { path: '/browser-downloads/', reason: 'Browser downloads cache — large, re-downloadable', overridable: true },
+  { path: '/cache/', reason: 'Remote-API metadata caches (e.g. Hugging Face repo records) — regenerable on demand, and stale on restore anyway', overridable: false },
   // Sprite animation-run raw intermediates: 30–96 ffmpeg-extracted PNGs per
   // run, byte-for-byte regenerable from the archived source video by the
   // deterministic postprocess (walkPostprocess.js). The source video, packaged
