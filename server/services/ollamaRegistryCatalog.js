@@ -18,7 +18,9 @@
 // Network is bounded by the same discipline as fetchRepoModel: per-process
 // caches with a `null` sentinel (fetched-but-unavailable, cached) distinct from
 // a transient failure (returns null, NOT cached, so a recovered registry
-// re-enriches on the next request).
+// re-enriches on the next request), plus a shared concurrency gate and a
+// single-flight coalescer so a COLD load — where the caches are empty and every
+// entry probes at once — reaches the registry as a trickle rather than a herd.
 
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
 import { readResponseJson } from '../lib/readResponseJson.js'

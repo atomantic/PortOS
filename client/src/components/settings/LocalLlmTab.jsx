@@ -389,8 +389,11 @@ export function LocalLlmTab() {
   useEffect(() => {
     const t = setTimeout(() => loadCatalog(selected, query, catalogSource, activeCategory), catalogSource === 'huggingface' ? 450 : 250);
     return () => clearTimeout(t);
-    // activeCategory is intentionally absent — catalogCategoryKey carries it for
-    // the one source that needs it. loadCatalog reads the freshest value anyway.
+    // `activeCategory` is intentionally absent: `catalogCategoryKey` IS it
+    // whenever the source consumes it, so the effect re-runs (with a fresh
+    // closure) exactly when the category matters. On the curated source the
+    // closure can hold a stale category, which is harmless because that branch
+    // of loadCatalog never reads the argument.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected, query, catalogSource, catalogCategoryKey, loadCatalog]);
 

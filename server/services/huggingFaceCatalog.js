@@ -694,9 +694,9 @@ function hfFetch(url) {
     { headers: hfHeaders() },
     HF_TIMEOUT_MS,
     { retries: 1, retryDelayMs: HF_RETRY_DELAY_MS, shouldRetry: isReplayableConnectionError }
-  // undici reports a connection-level failure as a bare `fetch failed`, which
-  // reaches the search box verbatim and reads like a bug in PortOS. Name the
-  // actual condition so the user knows to just try again.
+  // Both attempts lost the connection. undici's own message is a bare `fetch
+  // failed`, which reaches the search box verbatim and reads like a bug in
+  // PortOS — name the actual condition so the user knows to just try again.
   ).catch((err) => {
     if (!isReplayableConnectionError(err)) throw err
     throw new Error(`Hugging Face is not responding (connection dropped twice) — try again in a moment. [${describeFetchError(err)}]`)
