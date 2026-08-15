@@ -49,18 +49,24 @@ export function classifyNonNodeType(files) {
  * unrecognized repo. On a Python/Go/Docker/static repo the LLM doesn't fail, it
  * confidently writes a Node ecosystem config into someone else's project.
  *
- * `unknown` stays in the list on purpose: `type` is persisted on the app record,
- * so every app imported before this classification existed keeps `unknown` until
- * it's re-detected — and most of those really are Node apps. `desktop` (a Godot
- * game binary) is here for the same continuity reason; those repos commonly
- * carry a Node web process alongside the game and were always offered the flow.
+ * The list has to cover every type an install can have PERSISTED, not just the
+ * ones detection emits today — `type` lives on the app record and other installs
+ * upgrade on their own schedule:
+ *   - `express` is `appSchema`'s default (`server/lib/validation.js`) and the
+ *     type of PortOS's own app entry, so it's the most common stored value.
+ *   - `unknown` is what every app imported before this classification existed
+ *     kept — and most of those really are Node apps.
+ *   - `desktop` (a Godot game binary) was always offered the flow; those repos
+ *     commonly carry a Node web process alongside the game.
+ * A missing/blank type normalizes to `unknown`, so an unrecognized legacy value
+ * degrades to "offer it" rather than silently hiding the button.
  */
 export const STANDARDIZABLE_TYPES = new Set([
-  'vite+express', 'vite', 'single-node-server', 'nextjs', 'desktop', 'unknown'
+  'vite+express', 'vite', 'single-node-server', 'nextjs', 'express', 'desktop', 'unknown'
 ]);
 
 /** Whether the PM2 standardizer (which writes a NODE ecosystem config) applies. */
-export const isStandardizable = (type) => STANDARDIZABLE_TYPES.has(type ?? 'unknown');
+export const isStandardizable = (type) => STANDARDIZABLE_TYPES.has(type || 'unknown');
 
 /**
  * App types that run a GUI/desktop process with no HTTP port (e.g. a Godot

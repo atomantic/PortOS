@@ -48,13 +48,14 @@ export function resolveLaunchPanelProcess(app, result) {
 // test asserts the two Sets match). POSITIVE list: the PM2 standardizer writes a
 // NODE ecosystem config from a prompt that opens "You are analyzing a Node.js
 // application", so a Python/Go/Docker/static repo must not be offered the flow.
-// `unknown` and `desktop` stay in for continuity — see the server's rationale.
+// `express` (appSchema's default), `unknown`, and `desktop` stay in for
+// continuity with already-persisted app records — see the server's rationale.
 export const STANDARDIZABLE_TYPES = new Set([
-  'vite+express', 'vite', 'single-node-server', 'nextjs', 'desktop', 'unknown'
+  'vite+express', 'vite', 'single-node-server', 'nextjs', 'express', 'desktop', 'unknown'
 ]);
 
 /** Whether the PM2 standardizer (which writes a NODE ecosystem config) applies. */
-export const isStandardizable = (type) => STANDARDIZABLE_TYPES.has(type ?? 'unknown');
+export const isStandardizable = (type) => STANDARDIZABLE_TYPES.has(type || 'unknown');
 
 // Every app type that can reach a UI label. Kept TOTAL (with a raw-type
 // fallback) rather than a ternary chain ending in '🔨 Xcode' — that default
@@ -72,6 +73,7 @@ const APP_TYPE_LABELS = {
   'vite+express': '⚡ Vite + Express',
   vite: '⚡ Vite',
   'single-node-server': '🟢 Node',
+  express: '🟢 Express',
   nextjs: '▲ Next.js'
 };
 

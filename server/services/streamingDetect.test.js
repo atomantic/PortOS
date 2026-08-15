@@ -1154,6 +1154,16 @@ describe('isStandardizable', () => {
     expect(isStandardizable('unknown')).toBe(true);
     expect(isStandardizable(undefined)).toBe(true);
     expect(isStandardizable(null)).toBe(true);
+    expect(isStandardizable('')).toBe(true);
+  });
+
+  it("covers appSchema's default type — the most common PERSISTED value", async () => {
+    // `type` lives on the app record, and an app created without one defaults to
+    // this. A positive gate that missed it would silently hide the standardize
+    // button on every such app across every install.
+    const { appSchema } = await import('../lib/validation.js');
+    const defaultType = appSchema.parse({ name: 'Example App', repoPath: '/srv/example-app' }).type;
+    expect(isStandardizable(defaultType)).toBe(true);
   });
 
   it('refuses the non-Node runtimes', () => {
