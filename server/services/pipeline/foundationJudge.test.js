@@ -1207,18 +1207,19 @@ describe('applyFoundationFix — dimension → owning-service routing table', ()
       .mockResolvedValueOnce({ issues: findings(9, 'initial') })
       .mockResolvedValueOnce({ issues: findings(1, 'best') })
       .mockResolvedValueOnce({ issues: findings(5, 'regressed') });
+    const wrote = (issueId) => ({ issueId, idea: { input: `${issueId} synopsis`, output: '', status: 'empty' } });
     arcPlanner.resolveVerifyIssues
       .mockImplementationOnce(async (_id, options) => {
         options.onRunCreated('structure-broad');
-        return { applied: true };
+        return { applied: true, episodesResolved: [wrote('iss-broad')] };
       })
       .mockImplementationOnce(async (_id, options) => {
         options.onRunCreated('structure-improved');
-        return { applied: true };
+        return { applied: true, episodesResolved: [wrote('iss-improved')] };
       })
       .mockImplementationOnce(async (_id, options) => {
         options.onRunCreated('structure-regressed');
-        return { applied: true };
+        return { applied: true, episodesResolved: [wrote('iss-regressed')] };
       });
 
     const r = await applyFoundationFix('ser-1', 'structure', {
@@ -1226,8 +1227,14 @@ describe('applyFoundationFix — dimension → owning-service routing table', ()
       onRunCreated: vi.fn(),
     });
 
-    expect(arcPlanner.restoreArcState).toHaveBeenCalledWith('ser-1', bestCandidate);
-    expect(arcPlanner.restoreArcState).not.toHaveBeenCalledWith('ser-1', original);
+    // The rewind to the best checkpoint may only undo what landed AFTER it: the
+    // regressed pass's episode write. The two retained passes' writes are part
+    // of the improvement being kept, and anything else in the store belongs to
+    // whoever wrote it (#4135).
+    expect(arcPlanner.restoreArcState).toHaveBeenCalledWith('ser-1', bestCandidate, {
+      episodeEdits: [wrote('iss-regressed')],
+    });
+    expect(arcPlanner.restoreArcState).not.toHaveBeenCalledWith('ser-1', original, expect.anything());
     expect(r).toMatchObject({
       dimension: 'structure', applied: true, partial: true,
       acceptedRunIds: ['structure-broad', 'structure-improved'],
@@ -1274,7 +1281,7 @@ describe('applyFoundationFix — dimension → owning-service routing table', ()
       onRunCreated: vi.fn(),
     });
 
-    expect(arcPlanner.restoreArcState).toHaveBeenCalledWith('ser-1', lowerCheckpoint);
+    expect(arcPlanner.restoreArcState).toHaveBeenCalledWith('ser-1', lowerCheckpoint, { episodeEdits: [] });
     expect(r).toMatchObject({
       dimension: 'structure', applied: true, partial: true,
       acceptedRunIds: ['structure-broad', 'structure-lower-severity'],
@@ -1287,7 +1294,15 @@ describe('applyFoundationFix — dimension → owning-service routing table', ()
 
   it('rolls a structure repair back when its bounded correction remains unverified', async () => {
     const snapshot = { seriesId: 'ser-1', arc: { logline: 'Before' }, seasons: [], episodes: [] };
-    arcPlanner.snapshotArcState.mockResolvedValue(snapshot);
+    // A fresh object per call, as the real `snapshotArcState` returns — the
+    // ledger keys checkpoints by identity, so a shared literal would make every
+    // later checkpoint alias the pre-repair one.
+    arcPlanner.snapshotArcState.mockImplementation(async () => structuredClone(snapshot));
+    const wrote = (issueId) => ({ issueId, idea: { input: `${issueId} synopsis`, output: '', status: 'empty' } });
+    arcPlanner.resolveVerifyIssues.mockImplementation(async () => ({
+      applied: true,
+      episodesResolved: [wrote(`iss-${arcPlanner.resolveVerifyIssues.mock.calls.length}`)],
+    }));
     arcPlanner.verifyArc
       .mockResolvedValueOnce({ issues: [{ severity: 'high', location: 'Issue 6', problem: 'First blocker' }] })
       .mockResolvedValueOnce({ issues: [{ severity: 'high', location: 'Issue 7', problem: 'Residual blocker' }] })
@@ -1298,21 +1313,28 @@ describe('applyFoundationFix — dimension → owning-service routing table', ()
       finding: { gap: 'The midpoint lacks a costly reversal.', fix: 'Add a costly reversal.' },
     });
 
-    expect(arcPlanner.restoreArcState).toHaveBeenCalledWith('ser-1', snapshot);
+    // The full-revert manifest spans the whole exposure window: the first
+    // resolve plus every correction pass, and nothing outside them (#4135).
+    expect(arcPlanner.restoreArcState).toHaveBeenCalledWith('ser-1', snapshot, {
+      episodeEdits: [wrote('iss-1'), wrote('iss-2'), wrote('iss-3'), wrote('iss-4')],
+    });
     expect(r).toMatchObject({ dimension: 'structure', applied: false, actions: 8 });
     expect(r.reason).toMatch(/reverted to the pre-repair plan/);
   });
 
   it('rolls a mutated structure repair back when verification errors', async () => {
     const snapshot = { seriesId: 'ser-1', arc: { logline: 'Before' }, seasons: [], episodes: [] };
+    const wrote = { issueId: 'iss-1', idea: { input: 'resolver rewrote iss-1', output: '', status: 'empty' } };
     arcPlanner.snapshotArcState.mockResolvedValue(snapshot);
+    arcPlanner.resolveVerifyIssues.mockResolvedValue({ applied: true, episodesResolved: [wrote] });
     arcPlanner.verifyArc.mockRejectedValueOnce(new Error('judge provider unavailable'));
 
     await expect(applyFoundationFix('ser-1', 'structure', {
       finding: { gap: 'The midpoint lacks a costly reversal.', fix: 'Add a costly reversal.' },
     })).rejects.toThrow('judge provider unavailable');
 
-    expect(arcPlanner.restoreArcState).toHaveBeenCalledWith('ser-1', snapshot);
+    // Even the provider-failure bail-out undoes only the resolve's own writes.
+    expect(arcPlanner.restoreArcState).toHaveBeenCalledWith('ser-1', snapshot, { episodeEdits: [wrote] });
   });
 
   it('routes character → judge-directed core-cast and character-arc repair', async () => {

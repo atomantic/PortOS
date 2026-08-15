@@ -1167,10 +1167,11 @@ export async function snapshotArcState(seriesId) {
  *     expected to rewrite all three, so the false-revert exposure is small — but
  *     it is the same reasoning, and closing it needs a manifest one level up.
  *
- * Omit `episodeEdits` and every differing episode is restored. That is the right
- * contract for `restoreFoundationState`, which verifies its own restore fidelity
- * by diffing episodes wholesale; the foundation gate's structure-repair rollbacks
- * merely inherit it, and are the next callers that should pass a manifest.
+ * Omit `episodeEdits` and every differing episode is restored. The one caller
+ * that still wants that is `restoreFoundationState`, which verifies its own
+ * restore fidelity by diffing episodes wholesale. Both rollback loops that judge
+ * a round by re-verifying it — the arc gate and the foundation gate's structure
+ * repair — pass a manifest.
  *
  * Callers must re-verify after every resolve so they can distinguish a
  * regressive round from a good one. The arc convergence loop uses this to keep

@@ -1,5 +1,10 @@
 /**
- * Rollback OWNERSHIP for the autopilot's arc gate.
+ * Rollback OWNERSHIP for the gates that revert an arc round they just verified —
+ * the autopilot's arc gate (`seriesAutopilot/childRuns.js`) and the foundation
+ * gate's structure repair (`foundationJudge.js`). It sits beside them rather
+ * than inside `seriesAutopilot/` because the autopilot already imports the
+ * foundation judge; a shared helper one level down would point the dependency
+ * back the way it came.
  *
  * `restoreArcState` can put an episode's planning synopsis back, but nothing in
  * a snapshot says who wrote the difference: the rollback used to treat every
@@ -15,12 +20,13 @@
  * AFTER its snapshot was taken. Everything else in the store keeps whatever it
  * has.
  *
- * One ledger serves the whole gate — the round loop AND its per-finding
- * isolation pass — because a checkpoint outlives the round that took it:
+ * One ledger serves a whole gate — the arc gate's round loop AND its per-finding
+ * isolation pass, or the structure repair's first resolve AND its bounded
+ * correction passes — because a checkpoint outlives the round that took it:
  * rewinding to a `bestVerified` from three rounds back has to undo every
- * resolve that landed since, including the isolation pass's. Two hand-rolled
- * accumulators is how they drift while a reader assumes they haven't (the same
- * argument `discardedEvidence.js` makes for findings evidence).
+ * resolve that landed since. Two hand-rolled accumulators is how they drift
+ * while a reader assumes they haven't (the same argument
+ * `seriesAutopilot/discardedEvidence.js` makes for findings evidence).
  *
  * Pure except for the ledger's own closed-over state: no I/O, no broadcast, and
  * no import of the arc planner — the caller derives the writes and hands them
