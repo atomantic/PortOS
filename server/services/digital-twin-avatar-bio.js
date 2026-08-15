@@ -20,7 +20,7 @@ import { loadMeta } from './digital-twin-meta.js';
 import { getTraits } from './digital-twin-analysis.js';
 import { getGoals } from './identity.js';
 import { getProviderById } from './providers.js';
-import { estimateTokens } from '../lib/contextBudget.js';
+import { estimateTokens, trimContextToBudget } from '../lib/contextBudget.js';
 import { tryReadFile } from '../lib/fileUtils.js';
 
 // Bio length presets. `blurb` is a single paragraph per section (avatar persona
@@ -71,12 +71,9 @@ function buildFallbackSourceContext(sectionLines, sourceDocuments) {
   for (const filename of filenames) {
     const source = sourceDocuments[filename]?.trim();
     if (!source || remaining <= 0) continue;
-    const content = source.slice(0, remaining);
+    const content = trimContextToBudget(source, remaining);
     remaining -= content.length;
-    const truncationNote = content.length < source.length
-      ? '\n\n[Truncated for Avatar Bio fallback.]'
-      : '';
-    sourceBlocks.push(`### ${filename}\n${content}${truncationNote}`);
+    sourceBlocks.push(`### ${filename}\n${content}`);
   }
 
   if (!sourceBlocks.length) return '';
@@ -199,7 +196,7 @@ function verbosityWord(n) {
  * the whole twin is empty the sections come back with a single "no data yet"
  * note so the UI can still render and point the user at enrichment.
  */
-async function buildAvatarBioDraft({ length = DEFAULT_AVATAR_BIO_LENGTH } = {}) {
+async function buildAvatarBioDraft({ length = DEFAULT_AVATAR_BIO_LENGTH, includeFallback = false } = {}) {
   const useLength = AVATAR_BIO_LENGTHS.includes(length) ? length : DEFAULT_AVATAR_BIO_LENGTH;
 
   // Honor the same disabled-document boundary as getDigitalTwinForPrompt and
@@ -341,13 +338,14 @@ async function buildAvatarBioDraft({ length = DEFAULT_AVATAR_BIO_LENGTH } = {}) 
       hasVoiceTraits,
       tokenEstimate: estimateTokens(combined),
     },
-    fallbackSourceContext: buildFallbackSourceContext(sectionLines, sourceDocuments),
+    fallbackSourceContext: includeFallback ? buildFallbackSourceContext(sectionLines, sourceDocuments) : '',
   };
 }
 
 /**
  * Deterministic public avatar-bio build. Safe to call on tab load: it never
- * sends source documents to an AI provider.
+ * sends source documents to an AI provider, and skips building the raw-source
+ * fallback context entirely (see `includeFallback` on `buildAvatarBioDraft`).
  */
 export async function buildAvatarBio(options = {}) {
   return (await buildAvatarBioDraft(options)).bio;
@@ -370,7 +368,7 @@ export async function polishAvatarBio({ providerId, model, length = DEFAULT_AVAT
     return { error: 'Provider not found or disabled' };
   }
 
-  const { bio: draft, fallbackSourceContext } = await buildAvatarBioDraft({ length });
+  const { bio: draft, fallbackSourceContext } = await buildAvatarBioDraft({ length, includeFallback: true });
 
   const prompt = [
     'You are helping a person create the persona description for a live conversational AI avatar of themselves.',
