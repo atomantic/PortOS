@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, Fragment } from 'react';
+import { createPortal } from 'react-dom';
 import { Maximize2, X } from 'lucide-react';
 import * as api from '../../../services/api';
 import { executeCommand } from '../../../services/api';
@@ -227,8 +228,19 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
         </div>
       </div>
 
-      {/* Fullscreen Log Modal */}
-      {fullscreen && expandedProcess && (
+      {/*
+        Fullscreen Log Modal — portaled to <body>.
+
+        This tab renders inside an app-detail / processes-page card tree, and on
+        "glass" themes (`--port-backdrop-filter` non-none) `index.css` gives every
+        bordered/rounded `.bg-port-card` a backdrop-filter, which makes that card
+        the containing block for `position:fixed` descendants. Rendered inline the
+        overlay would be sized to the card instead of the viewport. Same escape
+        GalleryImagePicker / FolderPicker get via <ui/Modal>'s `usePortal`, and the
+        same fix MediaLightbox took in #4151 — reached through createPortal
+        directly because this overlay isn't a <Modal>.
+      */}
+      {fullscreen && expandedProcess && createPortal(
         <div className="fixed inset-0 bg-port-bg z-50 flex flex-col">
           <div className="flex items-center justify-between px-6 py-4 border-b border-port-border bg-port-card">
             <div className="flex items-center gap-4">
@@ -273,7 +285,8 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
           >
             <ProcessLogLines logs={logs} subscribed={subscribed} showTimestamps timestampGap="mr-3" />
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </>
   );
