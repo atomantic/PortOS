@@ -155,7 +155,14 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => ({
   // agentSentinel.parseSentinelPayload, etc.); only stub the I/O + PATHS.
   ...(await importOriginal()),
   tryReadFile: vi.fn().mockResolvedValue(null),
-  PATHS: { root: '/tmp/portos-root' }
+  // `data` is required alongside `root`: this module pulls in taskTypeHooks.js
+  // -> ... -> lib/validation.js -> subscriptionSavings.js -> postStreak.js ->
+  // activeDays.js -> timezone.js -> services/settings.js, whose module-scope
+  // `join(PATHS.data, 'settings.json')` throws on load without it (#4211
+  // added the activeDays.js edge). The bare `PATHS: {...}` below fully
+  // replaces the real object (it doesn't merge), so every member this graph
+  // needs at import time has to be listed explicitly.
+  PATHS: { root: '/tmp/portos-root', data: '/tmp/portos-root/data' }
 }));
 
 vi.mock('../lib/providerModels.js', async (importOriginal) => ({
