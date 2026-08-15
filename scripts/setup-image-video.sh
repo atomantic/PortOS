@@ -745,7 +745,7 @@ if [[ "$INSTALL_ACESTEP15" == "1" ]]; then
   "$ACESTEP15_PY" -m pip install --upgrade --extra-index-url "$ACESTEP15_TORCH_INDEX" \
     "git+https://github.com/ace-step/ACE-Step-1.5.git@v0.1.8" \
     "huggingface_hub[hf_xet]"
-  if ! "$ACESTEP15_PY" -c "import torch; from transformers import AutoModel; from acestep.handler import AceStepHandler" 2>/dev/null; then
+  if ! "$ACESTEP15_PY" -c "import torch; from transformers import AutoModel; from acestep.handler import AceStepHandler; from acestep.inference import GenerationConfig, GenerationParams, generate_music" 2>/dev/null; then
     echo "❌ ACE-Step 1.5 venv built but its Transformers runtime failed to import." >&2
     echo "   Check that torch, transformers, and ACE-Step 1.5 installed cleanly in ${ACESTEP15_VENV}." >&2
     exit 1
