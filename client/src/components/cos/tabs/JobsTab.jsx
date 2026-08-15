@@ -229,6 +229,7 @@ function ScheduleFields({ data, onChange }) {
               className="flex-1 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm font-mono"
               placeholder="0 7 * * *"
               title="Cron expression: minute hour dayOfMonth month dayOfWeek"
+              aria-label="Cron expression"
             />
             <select
               value=""
@@ -263,6 +264,7 @@ function ScheduleFields({ data, onChange }) {
             onChange={e => onChange('scheduledTime', e.target.value || null)}
             className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
             title="Run at specific time (leave empty for any time)"
+            aria-label="Run at a specific time"
           />
         </div>
       )}
@@ -458,6 +460,7 @@ function JobCard({ job, apps, providers, onToggle, onTrigger, onDelete, onUpdate
               <input
                 type="text"
                 value={editData.name}
+                aria-label="Job name"
                 onChange={e => setEditData(d => ({ ...d, name: e.target.value }))}
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
                 placeholder="Job name"
@@ -465,6 +468,7 @@ function JobCard({ job, apps, providers, onToggle, onTrigger, onDelete, onUpdate
               <input
                 type="text"
                 value={editData.description}
+                aria-label="Job description"
                 onChange={e => setEditData(d => ({ ...d, description: e.target.value }))}
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
                 placeholder="Description"
@@ -802,6 +806,7 @@ export default function JobsTab() {
               <input
                 type="text"
                 placeholder="Job name *"
+                aria-label="New job name"
                 value={newJob.name}
                 onChange={e => setNewJob(j => ({ ...j, name: e.target.value }))}
                 className="flex-1 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
@@ -818,6 +823,7 @@ export default function JobsTab() {
               <input
                 type="text"
                 placeholder="Category"
+                aria-label="New job category"
                 value={newJob.category}
                 onChange={e => setNewJob(j => ({ ...j, category: e.target.value }))}
                 className="w-40 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
@@ -826,6 +832,7 @@ export default function JobsTab() {
             <input
               type="text"
               placeholder="Description"
+              aria-label="New job description"
               value={newJob.description}
               onChange={e => setNewJob(j => ({ ...j, description: e.target.value }))}
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"

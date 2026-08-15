@@ -652,6 +652,7 @@ function DigitSpanRunner({ drill, drillIndex, drillCount, onComplete, isTraining
             value={input}
             onChange={e => setInput(e.target.value.replace(/\D/g, ''))}
             placeholder="Digits"
+            aria-label="Your answer"
             autoFocus
             className="flex-1 bg-port-bg border border-port-border rounded-lg px-4 py-3 text-2xl font-mono text-white text-center tracking-widest placeholder-gray-600 focus:border-rose-400 focus:outline-none"
           />

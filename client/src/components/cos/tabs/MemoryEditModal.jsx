@@ -231,6 +231,7 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
                 onChange={e => setNewTag(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder="Add tag..."
+                aria-label="Add tag"
                 className="flex-1 px-3 py-3 min-h-[44px] bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden"
               />
               <button

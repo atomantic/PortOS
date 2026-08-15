@@ -457,15 +457,21 @@ function isUsableLabelAttributeValue(value) {
 // localLabelWrapperNames: same-file `function` declarations only, so a missed
 // one is a false negative that leaves its controls on the allowlist.
 //
+// The two prop names are read out of the wrapper rather than hardcoded: the
+// forwarded id arrives as `htmlFor` in LifestyleTab's `FieldGroup` but as `id`
+// in StackerNews's `Field({ id, label, children })`, and both name their
+// control just as well. Hardcoding `htmlFor` left the second shape's controls
+// looking unnamed.
+//
 // Both helpers below read whatever source they are handed. The input scan hands
 // them `maskComments(src)`, which is what keeps a commented-out wrapper — or a
 // commented-out call site — from registering; same as localLabelWrapperNames.
-const htmlForForwarderNamesBySource = new Map();
+const htmlForForwardersBySource = new Map();
 
-function localHtmlForForwarderNames(src) {
-  const cached = htmlForForwarderNamesBySource.get(src);
+function localHtmlForForwarders(src) {
+  const cached = htmlForForwardersBySource.get(src);
   if (cached) return cached;
-  const names = new Set();
+  const forwarders = new Map();
   const re = /function\s+([A-Z][\w]*)\s*\(/g;
   let match;
   while ((match = re.exec(src))) {
@@ -478,25 +484,32 @@ function localHtmlForForwarderNames(src) {
     if (bodyEnd === -1) continue;
     const body = src.slice(bodyStart, bodyEnd);
     // The <label> has to do both jobs before the call site's attributes can be
-    // trusted: point at the forwarded `htmlFor`, and render the `label` prop as
-    // its own text. A component that forwards the id onto a <label> it never
-    // fills with text names nothing.
-    if (/<label\b[^>]*\bhtmlFor\s*=\s*\{\s*htmlFor\s*\}(?:[^>]*[^/>])?>(?:(?!<\/label>)[\s\S])*?\{\s*label\s*\}/.test(body)) names.add(match[1]);
+    // trusted: point at one prop, and render another prop as its own text. A
+    // component that forwards the id onto a <label> it never fills with text
+    // names nothing.
+    const shape = /<label\b[^>]*\bhtmlFor\s*=\s*\{\s*([A-Za-z_$][\w$]*)\s*\}(?:[^>]*[^/>])?>(?:(?!<\/label>)[\s\S])*?\{\s*([A-Za-z_$][\w$]*)\s*\}/.exec(body);
+    if (!shape) continue;
+    const [, idProp, labelProp] = shape;
+    // Both names must be parameters of this component. A <label> pointed at a
+    // module-level constant forwards nothing from the call site, so reading the
+    // call site's same-named attribute would exempt an unrelated control.
+    if (![idProp, labelProp].every((prop) => new RegExp(`\\b${prop}\\b`).test(params))) continue;
+    forwarders.set(match[1], { idProp, labelProp });
   }
-  htmlForForwarderNamesBySource.set(src, names);
-  return names;
+  htmlForForwardersBySource.set(src, forwarders);
+  return forwarders;
 }
 
 function hasMatchingForwardedLabel(src, id) {
-  for (const name of localHtmlForForwarderNames(src)) {
+  for (const [name, { idProp, labelProp }] of localHtmlForForwarders(src)) {
     const re = new RegExp(`<${name}\\b`, 'g');
     let match;
     while ((match = re.exec(src))) {
       const tag = openingTagAt(src, match.index, name.length + 1);
       if (!tag) continue;
       re.lastIndex = match.index + tag.length;
-      if (normalizedAttributeValue(attributeValue(tag, 'htmlFor')) !== id) continue;
-      if (isUsableLabelAttributeValue(normalizedAttributeValue(attributeValue(tag, 'label')))) return true;
+      if (normalizedAttributeValue(attributeValue(tag, idProp)) !== id) continue;
+      if (isUsableLabelAttributeValue(normalizedAttributeValue(attributeValue(tag, labelProp)))) return true;
     }
   }
   return false;
@@ -561,6 +574,58 @@ function hasUsableNativeInputName(tag) {
   return type === 'image' && hasUsableAccessibleNameAttribute(tag, 'alt');
 }
 
+// A FormField's only child is often a conditional rather than the control
+// itself (`{field.type === 'select' ? <select/> : <input/>}`). React still
+// clones the id onto whichever branch renders, because Children.map sees the
+// expression's single result as child 0 — so the control inside it is named.
+// Credit that only when the control really is what the expression yields:
+// directly, at the expression's top level, and not one entry of a rendered
+// list (Children.map flattens an array and clones only its FIRST element, so
+// crediting every control in a `.map()` would exempt the ones that stay
+// unnamed).
+function isEnclosedInListCall(src, start, index) {
+  const callStack = [];
+  for (let cursor = start; cursor < index; cursor++) {
+    const c = src[cursor];
+    if (c === '"' || c === "'" || c === '`') {
+      for (cursor++; cursor < index && src[cursor] !== c; cursor++) if (src[cursor] === '\\') cursor++;
+      continue;
+    }
+    // Only a call that still encloses the control disqualifies it. A `.map()`
+    // in the ternary's OTHER branch has already closed by then, so testing for
+    // the text anywhere before the control would reject the whole shape.
+    if (c === '(') callStack.push(/\.(?:map|flatMap)\s*$/.test(src.slice(start, cursor)));
+    else if (c === ')') callStack.pop();
+  }
+  return callStack.some(Boolean);
+}
+
+function isDirectElementInExpression(src, start, end, index) {
+  if (isEnclosedInListCall(src, start, index)) return false;
+  let depth = 0;
+  let cursor = start;
+  while (cursor < index) {
+    // Only an element start matters here; a bare `<` is a comparison operator
+    // (`{count < 3 ? <input/> : null}`) and must not open a phantom element.
+    if (src[cursor] !== '<' || !/^<\/?[A-Za-z]/.test(src.slice(cursor, cursor + 3))) {
+      cursor++;
+      continue;
+    }
+    if (src.startsWith('</', cursor)) {
+      const close = src.indexOf('>', cursor);
+      if (close === -1 || close > end) return false;
+      if (depth > 0) depth--;
+      cursor = close + 1;
+      continue;
+    }
+    const tag = tagBoundaryAt(src, cursor);
+    if (!tag || tag.end > end) return false;
+    if (!tag.selfClosing) depth++;
+    cursor = tag.end;
+  }
+  return depth === 0;
+}
+
 function isNestedInLabeledFormField(src, index) {
   const formRe = /<FormField\b/g;
   let formMatch;
@@ -581,7 +646,12 @@ function isNestedInLabeledFormField(src, index) {
       }
       if (src[cursor] === '{') {
         const end = matchingBraceEnd(src, cursor);
-        if (end === -1 || end >= index) break;
+        if (end === -1) break;
+        if (end >= index) {
+          // The control lives inside this expression rather than after it.
+          if (depth === 0 && firstChild === null && isDirectElementInExpression(src, cursor + 1, end, index)) return true;
+          break;
+        }
         if (src.slice(cursor + 1, end).trim()) firstChild = firstChild || 'expression';
         cursor = end + 1;
         continue;
@@ -781,22 +851,6 @@ const PREEXISTING_INPUT_NAME_ALLOWLIST = new Set([
   "src/components/calendar/ReviewTab.jsx|type=date|value=date",
   "src/components/calendar/ReviewTab.jsx|type=number|placeholder=min|value=editForm.durationMinutes|min=1|max=1440",
   "src/components/calendar/ReviewTab.jsx|type=text|placeholder=Note (optional)|value=editForm.note",
-  "src/components/cos/TaskAddForm.jsx|type=text|placeholder=Template name...|value=templateNameInput",
-  "src/components/cos/tabs/AgentCard.jsx|type=text|placeholder=Send additional context to agent...|value=btwInput",
-  "src/components/cos/tabs/AgentCard.jsx|type=text|placeholder=What made this work well or poorly?|value=feedbackComment",
-  "src/components/cos/tabs/ConfigRow.jsx|type=number|value=inputValue",
-  "src/components/cos/tabs/ConfigRow.jsx|type=checkbox",
-  "src/components/cos/tabs/JobsTab.jsx|type=text|placeholder=0 7 * * *|value=data.cronExpression || ''|title=Cron expression: minute hour dayOfMonth month dayOfWeek",
-  "src/components/cos/tabs/JobsTab.jsx|type=time|value=data.scheduledTime || ''|title=Run at specific time (leave empty for any time)",
-  "src/components/cos/tabs/JobsTab.jsx|type=text|placeholder=Job name|value=editData.name",
-  "src/components/cos/tabs/JobsTab.jsx|type=text|placeholder=Description|value=editData.description",
-  "src/components/cos/tabs/JobsTab.jsx|type=text|placeholder=Job name *|value=newJob.name",
-  "src/components/cos/tabs/JobsTab.jsx|type=text|placeholder=Category|value=newJob.category",
-  "src/components/cos/tabs/JobsTab.jsx|type=text|placeholder=Description|value=newJob.description",
-  "src/components/cos/tabs/MemoryEditModal.jsx|type=text|placeholder=Add tag...|value=newTag",
-  "src/components/cos/tabs/TaskItem.jsx|type=text|value=editData.description",
-  "src/components/cos/tabs/TaskItem.jsx|type=text|placeholder=e.g., Waiting for API access, Needs design review...|value=blockedReason|ref=blockedInputRef",
-  "src/components/cos/tabs/workflow/ScheduleEditor.jsx|type=time|value=parseSimpleCron(form.recheckCron)?.time ?? ''",
   "src/components/dashboard/LayoutEditor.jsx|id=layout-editor-window-end|type=time|value=activateWindow.end",
   "src/components/dashboard/LayoutEditor.jsx|type=text|placeholder=Name for new layout|value=dupName",
   "src/components/digital-twin/tabs/DocumentsTab.jsx|type=range|value=selectedDoc.weight || 5|min=1|max=10|occurrence=1",
@@ -811,34 +865,10 @@ const PREEXISTING_INPUT_NAME_ALLOWLIST = new Set([
   "src/components/imageGen/LoraPicker.jsx|type=number|value=sel.scale|min=0|max=2|step=0.1",
   "src/components/insights/GoalScorecardTab.jsx|type=text|placeholder=extra keywords, comma-separated|value=drafts[rule.id] ?? ''",
   "src/components/loraTraining/ImportGalleryDialog.jsx|type=text|placeholder=Search prompt, model, seed, LoRA…|value=query",
-  "src/components/meatspace/EpigeneticTracker.jsx|type=text|placeholder=Intervention name|value=customForm.name",
-  "src/components/meatspace/EpigeneticTracker.jsx|type=text|placeholder=Target dosage (e.g. 5g/day)|value=customForm.dosage",
-  "src/components/meatspace/EpigeneticTracker.jsx|type=text|placeholder=Unit (g, mg, min, etc.)|value=customForm.trackingUnit",
-  "src/components/meatspace/EpigeneticTracker.jsx|type=number|placeholder=`Amount (${intervention.trackingUnit})`|value=logAmounts[key] || ''|min=0|step=any",
-  "src/components/meatspace/post/ElementsSong.jsx|type=text|placeholder=...|value=answer|ref=inputRef",
-  "src/components/meatspace/post/ElementsSong.jsx|type=text|placeholder=`${blankedWords.length} element${blankedWords.length > 1 ? 's' : ''}...`|value=answer|ref=inputRef",
-  "src/components/meatspace/post/ElementsSong.jsx|type=text|placeholder=Search...|value=searchQuery",
-  "src/components/meatspace/post/MemoryPractice.jsx|type=text|placeholder=`${blankWords.length} word${blankWords.length > 1 ? 's' : ''} missing...`|value=answer|ref=inputRef",
-  "src/components/meatspace/post/MorseTrainer.jsx|placeholder=????|value=input|ref=inputRef",
-  "src/components/meatspace/post/MorseTrainer.jsx|type=range|value=value|min=min|max=max|step=step",
-  "src/components/meatspace/post/PostCognitiveDrillRunner.jsx|type=text|placeholder=Digits|value=input|ref=inputRef",
-  "src/components/meatspace/post/PostDrillRunner.jsx|type=isTextDrill ? 'text' : 'number'|placeholder=Answer|value=inputValue|ref=inputRef",
-  "src/components/meatspace/post/PostLlmDrillRunner.jsx|type=text|placeholder=Your answer...|value=i === items.length ? inputValue : ''|ref=i === items.length ? inputRef : undefined|autoFocus=i === items.length",
-  "src/components/meatspace/post/PostLlmDrillRunner.jsx|type=text|placeholder=Type an item and press Enter...|value=inputValue|ref=inputRef",
-  "src/components/meatspace/post/PostLlmDrillRunner.jsx|type=text|placeholder=Type a creative use and press Enter...|value=inputValue|ref=inputRef",
-  "src/components/meatspace/post/WordplayDrillUI.jsx|type=text|placeholder=Type the full compound or just the other half...|value=inputValue|ref=inputRef",
-  "src/components/meatspace/post/WordplayDrillUI.jsx|type=text|placeholder=The bridge word is...|value=inputValue|ref=inputRef",
   "src/components/media/CollectionPickerShell.jsx|type=text|placeholder=searchPlaceholder|value=query",
   "src/components/media/CollectionPickerShell.jsx|type=text|placeholder=newCollectionPlaceholder|value=newName",
   "src/components/messages/InboxTab.jsx|type=text|placeholder=Search messages...|value=search",
-  "src/components/music/AlbumsManager.jsx|placeholder=Album title|value=form.title",
-  "src/components/music/AlbumsManager.jsx|placeholder=dream pop|value=form.genre",
-  "src/components/music/AlbumsManager.jsx|type=number|placeholder=2026|value=form.releaseYear|min=ALBUM_RELEASE_YEAR_MIN|max=ALBUM_RELEASE_YEAR_MAX",
-  "src/components/music/ArtistsManager.jsx|placeholder=Nova Vale|value=form.name",
-  "src/components/music/ArtistsManager.jsx|placeholder=indie folk, dream pop|value=form.genre",
-  "src/components/music/ArtistsManager.jsx|placeholder=/images/… or https://…|value=form.portraitImageUrl",
   "src/components/music/MusicGenPanel.jsx|placeholder=org/model-repo|value=installRepo",
-  "src/components/music/TracksManager.jsx|placeholder=Track title|value=form.title",
   "src/components/pipeline/CanonCard.jsx|type=text|placeholder=Outfit name (e.g. Wedding)|value=draftFor('name')",
   "src/components/pipeline/arcCanvas/AddSeasonRow.jsx|placeholder=Volume / Season title…|value=title",
   "src/components/pipeline/arcCanvas/DeriveFromManuscriptPreview.jsx|placeholder=Volume title|value=volume.title",
@@ -852,17 +882,6 @@ const PREEXISTING_INPUT_NAME_ALLOWLIST = new Set([
   "src/components/pipeline/stages/IdeaStage.jsx|type=text|placeholder=Your answer (optional — leave blank for LLM's choice)|value=answers[i] || ''",
   "src/components/pipeline/stages/StoryboardsStage.jsx|placeholder=INT. FOUNDRY — NIGHT|value=scene.slugline || ''",
   "src/components/pipeline/stages/StoryboardsStage.jsx|type=number|value=shot.durationSeconds ?? 4|title=Duration in seconds|min=1|max=30",
-  "src/components/settings/VoiceTab.jsx|type=text|value=cfg.hotkey",
-  "src/components/settings/VoiceTab.jsx|type=number|value=cfg.tts.rate ?? 1.0|min=0.5|max=2|step=0.1",
-  "src/components/settings/VoiceTab.jsx|type=text|value=cfg.stt.endpoint",
-  "src/components/settings/VoiceTab.jsx|type=text|value=cfg.llm.personality?.name ?? ''",
-  "src/components/settings/VoiceTab.jsx|type=text|value=cfg.llm.personality?.role ?? ''",
-  "src/components/settings/VoiceTab.jsx|type=text|value=cfg.llm.personality?.speechStyle ?? ''",
-  "src/components/settings/VoiceTab.jsx|type=text|value=(cfg.llm.personality?.traits || []).join(', ')",
-  "src/components/settings/VoiceTab.jsx|type=time|value=cfg.llm.proactive?.quietHours?.start || '22:00'",
-  "src/components/settings/VoiceTab.jsx|type=time|value=cfg.llm.proactive?.quietHours?.end || '07:00'",
-  "src/components/settings/VoiceTab.jsx|type=number|value=fastPathCfg.browser?.temperature ?? 0.7|min=0|max=2|step=0.1",
-  "src/components/settings/VoiceTab.jsx|type=number|value=fastPathCfg.browser?.topK ?? 3|min=1|max=128|step=1",
   "src/components/sharing/DuplicateGroup.jsx|value=name",
   "src/components/shell/TerminalHotKeys.jsx|type=text|placeholder=Tap & paste here|ref=pasteInputRef",
   "src/components/universe/CharacterDetailEditor.jsx|type=text",
@@ -882,28 +901,8 @@ const PREEXISTING_INPUT_NAME_ALLOWLIST = new Set([
   "src/pages/AIProviders.jsx|type=isSecret ? 'password' : 'text'|value=value",
   "src/pages/AIProviders.jsx|type=text|placeholder=KEY|value=newEnvKey",
   "src/pages/AIProviders.jsx|type=newEnvSecret ? 'password' : 'text'|placeholder=value|value=newEnvValue",
-  "src/pages/Authors.jsx|placeholder=Jane Doe|value=form.name",
-  "src/pages/Authors.jsx|placeholder=/images/… or https://…|value=form.headshotImageUrl",
   "src/pages/MediaCollectionDetail.jsx|type=text|value=nameDraft",
-  "src/components/meatspace/post/PostDrillConfig.jsx|type=number|value=drillConfig[field.key] ?? ''|min=field.min|max=field.max",
-  "src/pages/AIProviders.jsx|type=text|placeholder=claude-sonnet-4-20250514|value=formData.defaultModel",
-  "src/pages/AIProviders.jsx|type=text|placeholder=haiku|value=formData.lightModel",
-  "src/pages/AIProviders.jsx|type=text|placeholder=sonnet|value=formData.mediumModel",
-  "src/pages/AIProviders.jsx|type=text|placeholder=opus|value=formData.heavyModel",
   "src/pages/AIProviders.jsx|type=text|placeholder=Use fallback provider's default|value=formData.fallbackModel",
-  "src/pages/StackerNews.jsx|id=`${prefix}-label`|value=form.label|occurrence=1",
-  "src/pages/StackerNews.jsx|id=`${prefix}-label`|value=form.label|occurrence=2",
-  "src/pages/StackerNews.jsx|id=`${prefix}-tone`|value=form.tone",
-  "src/pages/StackerNews.jsx|id=`${prefix}-allowed`|value=form.allowedThemes",
-  "src/pages/StackerNews.jsx|id=`${prefix}-disallowed`|value=form.disallowedThemes",
-  "src/pages/StackerNews.jsx|id=`${prefix}-escalation`|value=form.escalationCues",
-  "src/pages/StackerNews.jsx|id=action-title|value=draft.title",
-  "src/pages/StackerNews.jsx|id=`${prefix}-${id}`|value=form[key]",
-  "src/pages/StackerNews.jsx|id=`${prefix}-${id}`|type=number|value=form[key]|min=min|max=max",
-  "src/pages/StackerNews.jsx|id=`${prefix}-label`|value=form.label",
-  "src/pages/StackerNews.jsx|id=`${prefix}-username`|value=form.username",
-  "src/pages/StackerNews.jsx|id=`${prefix}-api-key`|type=password|value=form.apiKey",
-  "src/pages/StackerNews.jsx|id=`${prefix}-slug`|value=form.slug",
   "src/pages/VideoTimeline.jsx|type=text|placeholder=New project name…|value=name",
   "src/pages/DataDog.jsx|name=site|type=text|placeholder=e.g., api.custom-datadog.com|value=formData.site",
 ]);
@@ -1121,6 +1120,26 @@ describe('a11y conventions', () => {
     expect(offenders, `Input without an accessible name — add aria-label/aria-labelledby or an explicit/implicit <label>, or exclude type="hidden":\n${offenders.join('\n')}`).toEqual([]);
   });
 
+  it('keeps no stale entries in the pre-existing input allowlist', () => {
+    // The allowlist only shrinks. An entry whose control has since been named —
+    // or deleted, or renamed so its anchor no longer resolves — is dead weight
+    // that quietly re-exempts the next input to land on that same anchor. Fail
+    // on it so #4297's burn-down stays honest instead of drifting.
+    const offending = new Set();
+    for (const file of trackedJsxFiles()) {
+      const scanSrc = maskComments(readFileSync(join(CLIENT_ROOT, file), 'utf8'));
+      const re = /<input\b/g;
+      let m;
+      while ((m = re.exec(scanSrc))) {
+        const tag = openingTagAt(scanSrc, m.index, '<input'.length);
+        if (!tag || hasAccessibleInputName(scanSrc, tag, m.index)) continue;
+        offending.add(inputSourceAnchor(file, scanSrc, m.index));
+      }
+    }
+    const stale = [...PREEXISTING_INPUT_NAME_ALLOWLIST].filter((entry) => !offending.has(entry));
+    expect(stale, `PREEXISTING_INPUT_NAME_ALLOWLIST entries that no longer match an unnamed input — delete them:\n${stale.join('\n')}`).toEqual([]);
+  });
+
   it('only credits an htmlFor-forwarding wrapper that really names the control', () => {
     // The rule above now accepts a page-local wrapper that renders the <label>
     // and takes the control's id as a prop. That is only a real name when the
@@ -1156,6 +1175,49 @@ describe('a11y conventions', () => {
   return <div>{children}</div>;
 }`;
     expect(hasMatchingExplicitLabel(maskComments(`${commentedForwarder}\n${namedCall}`), 'sleep-hours')).toBe(false);
+
+    // The forwarded prop does not have to be called `htmlFor` — StackerNews's
+    // `Field({ id, label })` does the same job through `id`. Both halves stay
+    // required, and the id must still be read from the prop the wrapper
+    // actually forwards, not from any attribute that happens to be present.
+    const idPropForwarder = forwarder.replace('label, htmlFor, children', 'id, label, children').replace('htmlFor={htmlFor}', 'htmlFor={id}');
+    const idPropCall = `<Group id="sleep-hours" label="Sleep"><input id="sleep-hours" type="range" /></Group>`;
+    expect(hasMatchingExplicitLabel(`${idPropForwarder}\n${idPropCall}`, 'sleep-hours')).toBe(true);
+    expect(hasMatchingExplicitLabel(`${idPropForwarder}\n${idPropCall.replace(' label="Sleep"', '')}`, 'sleep-hours')).toBe(false);
+    // `htmlFor=` on the call site is not the forwarded prop here, so it must
+    // not stand in for the `id` this wrapper reads.
+    expect(hasMatchingExplicitLabel(`${idPropForwarder}\n${idPropCall.replace('id="sleep-hours" label', 'htmlFor="sleep-hours" label')}`, 'sleep-hours')).toBe(false);
+  });
+
+  it('credits a FormField whose only child is a conditional, but not a list', () => {
+    // A FormField's child is frequently a ternary rather than the control
+    // itself (`{isSelect ? <select/> : <input/>}`); React clones the generated
+    // id onto whichever branch renders, so the control really is named. The
+    // veto that matters is a rendered LIST — Children.map flattens it and
+    // clones only the first element, so crediting each control in a `.map()`
+    // would exempt every one after the first.
+    const field = (child) => `<FormField label="Rounds">\n  ${child}\n</FormField>`;
+    const index = (src) => src.indexOf('<input');
+
+    const ternary = field(`{isSelect ? (<select><option>a</option></select>) : (<input type="number" />)}`);
+    expect(isNestedInLabeledFormField(ternary, index(ternary))).toBe(true);
+
+    // A `.map()` in the OTHER branch has already closed by the time the control
+    // is reached, so it must not disqualify the shape.
+    const ternaryWithListedOptions = field(`{isSelect ? (<select>{opts.map((o) => (<option key={o}>{o}</option>))}</select>) : (<input type="number" />)}`);
+    expect(isNestedInLabeledFormField(ternaryWithListedOptions, index(ternaryWithListedOptions))).toBe(true);
+
+    const list = field(`{fields.map((f) => (<input key={f} type="number" />))}`);
+    expect(isNestedInLabeledFormField(list, index(list))).toBe(false);
+
+    // Only the element the expression yields directly is cloned; a control
+    // nested inside a wrapper element gets no id.
+    const wrapped = field(`{isSelect ? (<select />) : (<div><input type="number" /></div>)}`);
+    expect(isNestedInLabeledFormField(wrapped, index(wrapped))).toBe(false);
+
+    // An unlabeled FormField names nothing, whatever its child looks like.
+    const unlabeled = ternary.replace(' label="Rounds"', '');
+    expect(isNestedInLabeledFormField(unlabeled, index(unlabeled))).toBe(false);
   });
 
   it('meets the 44px touch-target minimum on Close buttons', () => {

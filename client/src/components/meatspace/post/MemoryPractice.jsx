@@ -650,6 +650,7 @@ function MemoryPracticeRunner({ item, mode, onSelectMode, onExitMode, onBack, on
                 onChange={e => setAnswer(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') handleCheckFillBlank(blankWords); }}
                 placeholder={`${blankWords.length} word${blankWords.length > 1 ? 's' : ''} missing...`}
+                aria-label="Missing words"
                 className="w-full bg-port-bg border border-port-border rounded px-4 py-2.5 text-white placeholder-gray-600 focus:border-port-accent focus:outline-none"
               />
             </div>

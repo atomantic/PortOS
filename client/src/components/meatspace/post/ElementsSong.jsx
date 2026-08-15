@@ -342,7 +342,7 @@ function ElementsSongMain({ item, mastery, onSelectMode, onBack, onAttestMastery
           <div className="flex items-center gap-2">
             <div className="relative flex-1 sm:flex-none">
               <Search size={14} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-600" />
-              <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search..."
+              <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search..." aria-label="Search elements"
                 className="w-full sm:w-32 bg-port-bg border border-port-border rounded pl-7 pr-2 py-1.5 sm:py-1 text-xs text-white placeholder-gray-600 focus:border-port-accent focus:outline-none" />
             </div>
             <div className="flex bg-port-bg rounded border border-port-border shrink-0">
@@ -1006,6 +1006,7 @@ function ElementFlashMode({ item, mastery, onBack, onComplete }) {
             onKeyDown={e => { if (e.key === 'Enter') check(); }}
             className="mt-6 w-48 bg-port-bg border border-port-border rounded-lg px-4 py-2.5 text-white text-center text-lg placeholder-gray-600 focus:border-port-accent focus:outline-none"
             placeholder="..."
+            aria-label="Your answer"
             autoComplete="off"
           />
         )}
@@ -1156,6 +1157,7 @@ function FillBlankMode({ item, onBack, onComplete }) {
               onChange={e => setAnswer(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') check(); }}
               placeholder={`${blankedWords.length} element${blankedWords.length > 1 ? 's' : ''}...`}
+              aria-label="Missing elements"
               className="w-full bg-port-bg border border-port-border rounded px-4 py-2.5 text-white placeholder-gray-600 focus:border-port-accent focus:outline-none"
             />
           </div>

@@ -130,6 +130,7 @@ export function CompoundChainUI({ challenge, items, inputValue, setInputValue, o
           value={inputValue}
           onChange={e => setInputValue(e.target.value)}
           placeholder="Type the full compound or just the other half..."
+          aria-label="Your answer"
           autoFocus
           className="flex-1 bg-port-bg border border-port-border rounded-lg px-4 py-2.5 text-white placeholder-gray-600 focus:border-port-accent focus:outline-none"
         />
@@ -185,6 +186,7 @@ export function BridgeWordUI({ puzzle, inputValue, setInputValue, onSubmit, inpu
           value={inputValue}
           onChange={e => setInputValue(e.target.value)}
           placeholder="The bridge word is..."
+          aria-label="Bridge word"
           autoFocus
           className="w-full bg-port-bg border border-port-border rounded-lg px-4 py-3 text-white text-center text-lg placeholder-gray-600 focus:border-port-accent focus:outline-none"
         />

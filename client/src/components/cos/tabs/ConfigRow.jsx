@@ -1,11 +1,18 @@
+import { useId } from 'react';
+
 export default function ConfigRow({ label, value, editing, type, inputValue, onChange, suffix, tooltip }) {
+  // The row's text already reads as the control's label, so pair the two rather
+  // than duplicating it into an aria-label — that also makes the text a click
+  // target for the checkbox, which is otherwise a 16px hit area.
+  const controlId = useId();
   return (
     <div className="flex items-center justify-between p-4" title={tooltip}>
-      <span className="text-gray-400 cursor-help">{label}</span>
+      <label htmlFor={controlId} className="text-gray-400 cursor-help">{label}</label>
       {editing ? (
         <div className="flex items-center gap-2">
           {type === 'checkbox' ? (
             <input
+              id={controlId}
               type="checkbox"
               checked={inputValue}
               onChange={e => onChange(e.target.checked)}
@@ -14,6 +21,7 @@ export default function ConfigRow({ label, value, editing, type, inputValue, onC
           ) : (
             <>
               <input
+                id={controlId}
                 type="number"
                 value={inputValue}
                 onChange={e => onChange(parseInt(e.target.value, 10) || 0)}

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useId } from 'react';
 import { ArrowLeft, Radio, Headphones, Hand, EyeOff, CheckCircle, XCircle, Play, RefreshCw, Volume2, GitBranch, List as ListIcon, Ruler, Eraser } from 'lucide-react';
 import useDrawerTab from '../../../hooks/useDrawerTab';
 import useAudioSessionClaim from '../../../hooks/useAudioSessionClaim.js';
@@ -642,13 +642,18 @@ function SettingsPanel({ prefs, updatePrefs, onResetProgress, trainingStats }) {
 }
 
 function SliderRow({ label, value, min, max, step = 1, onChange, suffix = '', hint }) {
+  // The row already shows the label; pair it to the slider rather than
+  // duplicating it into an aria-label. Wrapping instead would pull the live
+  // value readout beside it into the accessible name.
+  const sliderId = useId();
   return (
     <div>
       <div className="flex items-center justify-between mb-1">
-        <label className="text-xs text-gray-400 uppercase tracking-wide">{label}</label>
+        <label htmlFor={sliderId} className="text-xs text-gray-400 uppercase tracking-wide">{label}</label>
         <span className="text-sm text-white font-mono">{value}{suffix && ` ${suffix}`}</span>
       </div>
       <input
+        id={sliderId}
         type="range"
         min={min}
         max={max}
@@ -1141,6 +1146,7 @@ function CopyDrill({ prefs, updatePrefs, ensureCtx, claimSession, releaseSession
           autoFocus
           className="w-full px-4 py-3 bg-port-bg border border-port-border focus:border-port-accent rounded-lg text-white text-center font-mono text-lg uppercase tracking-widest outline-none"
           placeholder="????"
+          aria-label="Decoded characters"
         />
       )}
       {feedback && (

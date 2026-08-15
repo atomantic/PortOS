@@ -634,6 +634,7 @@ function StoryRecallUI({ exercise, phase, onStartRecall, items, inputValue, setI
                   onChange={e => i === items.length && setInputValue(e.target.value)}
                   disabled={i !== items.length}
                   placeholder="Your answer..."
+                  aria-label="Your answer"
                   autoFocus={i === items.length}
                   className="flex-1 bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white placeholder-gray-600 focus:border-port-accent focus:outline-none disabled:opacity-50"
                 />
@@ -675,6 +676,7 @@ function VerbalFluencyUI({ category, items, inputValue, setInputValue, onAddItem
           value={inputValue}
           onChange={e => setInputValue(e.target.value)}
           placeholder="Type an item and press Enter..."
+          aria-label="Next item"
           autoFocus
           className="flex-1 bg-port-bg border border-port-border rounded-lg px-4 py-2.5 text-white placeholder-gray-600 focus:border-port-accent focus:outline-none"
         />
@@ -803,6 +805,7 @@ function AlternativeUsesUI({ object, items, inputValue, setInputValue, onAddItem
           value={inputValue}
           onChange={e => setInputValue(e.target.value)}
           placeholder="Type a creative use and press Enter..."
+          aria-label="Next creative use"
           autoFocus
           className="flex-1 bg-port-bg border border-port-border rounded-lg px-4 py-2.5 text-white placeholder-gray-600 focus:border-port-accent focus:outline-none"
         />

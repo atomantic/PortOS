@@ -737,6 +737,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
               onChange={(e) => setBtwInput(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && sendBtw()}
               placeholder="Send additional context to agent..."
+              aria-label="Additional context for the agent"
               className="flex-1 px-2 py-1 text-sm bg-port-bg border border-port-border rounded text-white placeholder-gray-600 focus:outline-hidden focus:border-yellow-500/50 min-h-[32px]"
               maxLength={5000}
               disabled={sendingBtw}
@@ -898,6 +899,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
                   value={feedbackComment}
                   onChange={(e) => setFeedbackComment(e.target.value)}
                   placeholder="What made this work well or poorly?"
+                  aria-label="Feedback comment"
                   className="flex-1 px-2 py-1 text-sm bg-port-bg border border-port-border rounded text-white placeholder-gray-500 focus:outline-hidden focus:border-port-accent min-h-[32px]"
                   maxLength={200}
                 />

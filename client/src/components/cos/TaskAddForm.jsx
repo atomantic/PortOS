@@ -792,6 +792,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
               onChange={e => setTemplateNameInput(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && saveAsTemplate()}
               placeholder="Template name..."
+              aria-label="Template name"
               className="flex-1 px-3 py-1.5 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
               autoFocus
             />

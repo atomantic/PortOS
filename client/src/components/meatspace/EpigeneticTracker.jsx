@@ -151,6 +151,7 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
               value={customForm.name}
               onChange={(e) => setCustomForm(prev => ({ ...prev, name: e.target.value }))}
               placeholder="Intervention name"
+              aria-label="Intervention name"
               className="col-span-2 px-3 py-2 bg-port-bg border border-port-border rounded text-sm text-white placeholder-gray-600 focus:outline-hidden focus:border-port-accent"
             />
             <select
@@ -176,6 +177,7 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
               value={customForm.dosage}
               onChange={(e) => setCustomForm(prev => ({ ...prev, dosage: e.target.value }))}
               placeholder="Target dosage (e.g. 5g/day)"
+              aria-label="Target dosage"
               className="px-3 py-2 bg-port-bg border border-port-border rounded text-sm text-white placeholder-gray-600 focus:outline-hidden"
             />
             <input
@@ -183,6 +185,7 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
               value={customForm.trackingUnit}
               onChange={(e) => setCustomForm(prev => ({ ...prev, trackingUnit: e.target.value }))}
               placeholder="Unit (g, mg, min, etc.)"
+              aria-label="Tracking unit"
               className="px-3 py-2 bg-port-bg border border-port-border rounded text-sm text-white placeholder-gray-600 focus:outline-hidden"
             />
           </div>
@@ -268,6 +271,7 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
                         onChange={(e) => setLogAmounts(prev => ({ ...prev, [key]: e.target.value }))}
                         onKeyDown={(e) => e.key === 'Enter' && handleLog(key)}
                         placeholder={`Amount (${intervention.trackingUnit})`}
+                        aria-label={`Amount to log for ${intervention.name}`}
                         className="flex-1 max-w-[160px] px-3 py-1.5 bg-port-bg border border-port-border rounded text-sm text-white placeholder-gray-600 focus:outline-hidden focus:border-port-accent font-mono"
                         min="0"
                         step="any"

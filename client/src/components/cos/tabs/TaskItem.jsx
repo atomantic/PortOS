@@ -354,6 +354,7 @@ export default function TaskItem({ task, isSystem, onRefresh, providers, duratio
               <input
                 type="text"
                 value={editData.description}
+                aria-label="Task description"
                 onChange={e => setEditData(d => ({ ...d, description: e.target.value }))}
                 className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm"
               />
@@ -645,6 +646,7 @@ export default function TaskItem({ task, isSystem, onRefresh, providers, duratio
             if (e.key === 'Enter') handleConfirmBlocked();
           }}
           placeholder="e.g., Waiting for API access, Needs design review..."
+          aria-label="Reason this task is blocked"
           className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm mb-4"
         />
         <div className="flex justify-end gap-2">

@@ -215,6 +215,7 @@ export default function PostDrillRunner({ session }) {
           value={inputValue}
           onChange={e => setInputValue(e.target.value)}
           placeholder="Answer"
+          aria-label="Your answer"
           autoFocus
           className="flex-1 bg-port-bg border border-port-border rounded-lg px-4 py-3 text-xl font-mono text-white text-center placeholder-gray-600 focus:border-port-accent focus:outline-none"
         />

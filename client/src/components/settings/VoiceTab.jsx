@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useId, Children, cloneElement, isValidElement } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router';
 import { Save, Mic, Play, Zap, RefreshCw, Globe } from 'lucide-react';
 import toast from '../ui/Toast';
@@ -11,6 +11,7 @@ import { playWav, webSpeechSupported } from '../../services/voiceClient';
 import { nanoAvailability } from '../../services/browserLlm';
 import { readVoiceHidden, writeVoiceHidden } from '../../services/voiceVisibility';
 import { formatVoiceLabel } from '../../lib/voiceLabel';
+import FormField from '../ui/FormField';
 
 const SERVICE_LABELS = {
   whisper: 'Whisper (STT)',
@@ -66,23 +67,6 @@ const ServiceBadge = ({ label, probe }) => {
         {ok ? `${probe.latencyMs ?? probe.state ?? '—'}` : probe.state || probe.error || 'down'}
         {ok && typeof probe.latencyMs === 'number' ? 'ms' : ''}
       </span>
-    </div>
-  );
-};
-
-const Field = ({ label, hint, children, className = '' }) => {
-  const id = useId();
-  // Inject `id` into the first child element so the label's htmlFor resolves.
-  const augmented = Children.map(children, (child, i) =>
-    i === 0 && isValidElement(child) && !child.props.id
-      ? cloneElement(child, { id })
-      : child
-  );
-  return (
-    <div className={`space-y-1 ${className}`}>
-      <label htmlFor={id} className="block text-sm text-gray-400">{label}</label>
-      {hint && <p className="text-xs text-gray-500">{hint}</p>}
-      {augmented}
     </div>
   );
 };
@@ -354,16 +338,16 @@ export function VoiceTab() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <Field label="Hotkey" hint="Hold to talk (keyboard).">
+        <FormField label="Hotkey" hint="Hold to talk (keyboard).">
           <input
             type="text"
             value={cfg.hotkey}
             onChange={(e) => patch('hotkey', e.target.value)}
             className={inputCls}
           />
-        </Field>
+        </FormField>
 
-        <Field label="TTS engine" hint="Kokoro is higher quality and runs in-process. Piper is a small CLI binary.">
+        <FormField label="TTS engine" hint="Kokoro is higher quality and runs in-process. Piper is a small CLI binary.">
           <select
             value={engine}
             onChange={(e) => patch('tts.engine', e.target.value)}
@@ -373,9 +357,9 @@ export function VoiceTab() {
               <option key={opt.value} value={opt.value}>{opt.label}</option>
             ))}
           </select>
-        </Field>
+        </FormField>
 
-        <Field label={`${engine === 'kokoro' ? 'Kokoro' : 'Piper'} voice`} hint={
+        <FormField label={`${engine === 'kokoro' ? 'Kokoro' : 'Piper'} voice`} hint={
           engine === 'kokoro'
             ? 'Grade letter = Kokoro author\'s quality rating. ❤️ 🔥 🎧 mark the best-sounding voices. Click ▶ to preview without saving.'
             : 'Curated Piper catalog — selecting a ⬇ voice fetches it immediately so you can preview. Click ▶ to audition.'
@@ -423,10 +407,10 @@ export function VoiceTab() {
                 : <Play size={14} />}
             </button>
           </div>
-        </Field>
+        </FormField>
 
         {engine === 'kokoro' && (
-          <Field label="Kokoro precision" hint="Lower precision = smaller download + faster, slight quality cost.">
+          <FormField label="Kokoro precision" hint="Lower precision = smaller download + faster, slight quality cost.">
             <select
               value={cfg.tts.kokoro?.dtype || 'q8'}
               onChange={(e) => patch('tts.kokoro.dtype', e.target.value)}
@@ -436,19 +420,19 @@ export function VoiceTab() {
                 <option key={opt.value} value={opt.value}>{opt.label}</option>
               ))}
             </select>
-          </Field>
+          </FormField>
         )}
 
-        <Field label="Speech rate" hint="0.5 = slow, 1.0 = normal, 2.0 = fast">
+        <FormField label="Speech rate" hint="0.5 = slow, 1.0 = normal, 2.0 = fast">
           <input
             type="number" min="0.5" max="2" step="0.1"
             value={cfg.tts.rate ?? 1.0}
             onChange={(e) => patch('tts.rate', parseFloat(e.target.value) || 1.0)}
             className={inputCls}
           />
-        </Field>
+        </FormField>
 
-        <Field label="STT engine" hint={webSpeechSupported
+        <FormField label="STT engine" hint={webSpeechSupported
           ? 'Web Speech = browser-native, zero-latency, but quality varies by browser and only works in Chrome/Edge. Whisper = local, consistent, offline.'
           : 'Web Speech unavailable in this browser (Chrome/Edge only). Whisper it is.'}>
           <select
@@ -462,11 +446,11 @@ export function VoiceTab() {
               </option>
             ))}
           </select>
-        </Field>
+        </FormField>
 
         {sttEngine === 'whisper' && (
           <>
-            <Field label="Whisper model" hint="Bigger = more accurate, slower, larger download.">
+            <FormField label="Whisper model" hint="Bigger = more accurate, slower, larger download.">
               <select
                 value={cfg.stt.model || 'base.en'}
                 onChange={(e) => handleWhisperModel(e.target.value)}
@@ -476,20 +460,20 @@ export function VoiceTab() {
                   <option key={m.value} value={m.value}>{m.label}</option>
                 ))}
               </select>
-            </Field>
+            </FormField>
 
-            <Field label="Whisper endpoint">
+            <FormField label="Whisper endpoint">
               <input
                 type="text"
                 value={cfg.stt.endpoint}
                 onChange={(e) => patch('stt.endpoint', e.target.value)}
                 className={inputCls}
               />
-            </Field>
+            </FormField>
           </>
         )}
 
-        <Field label="LLM provider" hint="Voice streams tokens, so only API providers (LM Studio, Ollama, OpenAI-compatible) are listed. Configure providers under Settings → Providers.">
+        <FormField label="LLM provider" hint="Voice streams tokens, so only API providers (LM Studio, Ollama, OpenAI-compatible) are listed. Configure providers under Settings → Providers.">
           <select
             value={llmProvider}
             onChange={(e) => {
@@ -511,11 +495,12 @@ export function VoiceTab() {
             ))}
             {apiProviders.length === 0 && <option value={llmProvider}>{llmProvider}</option>}
           </select>
-        </Field>
+        </FormField>
 
-        {/* Not wrapped in <Field>: the select sits beside a refresh button, so
-            the id must land on the <select> (Field injects it onto the first
-            child, which would be the flex wrapper — orphaning the label). */}
+        {/* Not wrapped in <FormField>: the select sits beside a refresh button,
+            so the id must land on the <select> (FormField injects it onto the
+            first child, which would be the flex wrapper — orphaning the
+            label). */}
         <div className="space-y-1">
           <label htmlFor="voice-llm-model" className="block text-sm text-gray-400">LLM model</label>
           <p className="text-xs text-gray-500">'auto' uses the provider's default model, or the fastest loaded model for LM Studio / Ollama.</p>
@@ -591,31 +576,31 @@ export function VoiceTab() {
 
         {cfg.llm.usePersonality !== false ? (
           <>
-            <Field label="Name" hint="What the assistant calls itself.">
+            <FormField label="Name" hint="What the assistant calls itself.">
               <input
                 type="text"
                 value={cfg.llm.personality?.name ?? ''}
                 onChange={(e) => patch('llm.personality.name', e.target.value)}
                 className={inputCls}
               />
-            </Field>
-            <Field label="Role" hint="The role it plays for you.">
+            </FormField>
+            <FormField label="Role" hint="The role it plays for you.">
               <input
                 type="text"
                 value={cfg.llm.personality?.role ?? ''}
                 onChange={(e) => patch('llm.personality.role', e.target.value)}
                 className={inputCls}
               />
-            </Field>
-            <Field label="Speech style" hint="e.g. 'casual and brief', 'formal and precise'.">
+            </FormField>
+            <FormField label="Speech style" hint="e.g. 'casual and brief', 'formal and precise'.">
               <input
                 type="text"
                 value={cfg.llm.personality?.speechStyle ?? ''}
                 onChange={(e) => patch('llm.personality.speechStyle', e.target.value)}
                 className={inputCls}
               />
-            </Field>
-            <Field label="Traits (comma-separated)" hint="e.g. 'concise, warm, proactive'.">
+            </FormField>
+            <FormField label="Traits (comma-separated)" hint="e.g. 'concise, warm, proactive'.">
               <input
                 type="text"
                 value={(cfg.llm.personality?.traits || []).join(', ')}
@@ -623,25 +608,25 @@ export function VoiceTab() {
                   e.target.value.split(',').map((s) => s.trim()).filter(Boolean))}
                 className={inputCls}
               />
-            </Field>
-            <Field label="Custom prompt (optional)" className="md:col-span-2" hint="Any extra context or instructions appended to the system prompt.">
+            </FormField>
+            <FormField label="Custom prompt (optional)" className="md:col-span-2" hint="Any extra context or instructions appended to the system prompt.">
               <textarea
                 value={cfg.llm.personality?.customPrompt ?? ''}
                 onChange={(e) => patch('llm.personality.customPrompt', e.target.value)}
                 rows={2}
                 className={`${inputCls} font-mono text-xs`}
               />
-            </Field>
+            </FormField>
           </>
         ) : (
-          <Field label="System prompt" className="md:col-span-2">
+          <FormField label="System prompt" className="md:col-span-2">
             <textarea
               value={cfg.llm.systemPrompt}
               onChange={(e) => patch('llm.systemPrompt', e.target.value)}
               rows={2}
               className={`${inputCls} font-mono text-xs`}
             />
-          </Field>
+          </FormField>
         )}
 
         <label className="flex items-start gap-3 cursor-pointer md:col-span-2">
@@ -676,7 +661,7 @@ export function VoiceTab() {
 
         {cfg.llm.codeAgent?.enabled === true && (
           <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-3 pl-7">
-            <Field label="Coding agent" hint="Which CLI/TUI agent runs the task. 'System default' uses your active AI provider (Settings → Providers).">
+            <FormField label="Coding agent" hint="Which CLI/TUI agent runs the task. 'System default' uses your active AI provider (Settings → Providers).">
               <select
                 value={codeProvider}
                 onChange={(e) => {
@@ -696,8 +681,8 @@ export function VoiceTab() {
                   </option>
                 ))}
               </select>
-            </Field>
-            <Field label="Model" hint="'System default' lets the agent pick per task complexity.">
+            </FormField>
+            <FormField label="Model" hint="'System default' lets the agent pick per task complexity.">
               <select
                 value={codeModel}
                 onChange={(e) => patch('llm.codeAgent.model', e.target.value)}
@@ -709,7 +694,7 @@ export function VoiceTab() {
                   <option key={m} value={m}>{m}</option>
                 ))}
               </select>
-            </Field>
+            </FormField>
             <label className="flex items-start gap-3 cursor-pointer sm:col-span-2">
               <input
                 type="checkbox"
@@ -753,7 +738,7 @@ export function VoiceTab() {
               />
               <span className="text-sm text-white">Quiet hours</span>
             </label>
-            <Field label="Start (HH:MM)" hint="Local time">
+            <FormField label="Start (HH:MM)" hint="Local time">
               <input
                 type="time"
                 value={cfg.llm.proactive?.quietHours?.start || '22:00'}
@@ -761,8 +746,8 @@ export function VoiceTab() {
                 disabled={!cfg.llm.proactive?.quietHours?.enabled}
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm disabled:opacity-50"
               />
-            </Field>
-            <Field label="End (HH:MM)" hint="Local time">
+            </FormField>
+            <FormField label="End (HH:MM)" hint="Local time">
               <input
                 type="time"
                 value={cfg.llm.proactive?.quietHours?.end || '07:00'}
@@ -770,7 +755,7 @@ export function VoiceTab() {
                 disabled={!cfg.llm.proactive?.quietHours?.enabled}
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm disabled:opacity-50"
               />
-            </Field>
+            </FormField>
           </div>
         )}
 
@@ -867,7 +852,7 @@ export function VoiceTab() {
                     </p>
                   )}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <Field label="Temperature" hint="0 = deterministic, higher = more varied. Default 0.7.">
+                    <FormField label="Temperature" hint="0 = deterministic, higher = more varied. Default 0.7.">
                       <input
                         type="number"
                         min="0"
@@ -880,8 +865,8 @@ export function VoiceTab() {
                         }}
                         className={inputCls}
                       />
-                    </Field>
-                    <Field label="Top-K" hint="Sampling breadth. Default 3.">
+                    </FormField>
+                    <FormField label="Top-K" hint="Sampling breadth. Default 3.">
                       <input
                         type="number"
                         min="1"
@@ -894,7 +879,7 @@ export function VoiceTab() {
                         }}
                         className={inputCls}
                       />
-                    </Field>
+                    </FormField>
                   </div>
                 </div>
               )}

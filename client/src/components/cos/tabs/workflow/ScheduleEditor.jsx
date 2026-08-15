@@ -208,6 +208,7 @@ export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSa
             <input
               type="time"
               value={parseSimpleCron(form.recheckCron)?.time ?? ''}
+              aria-label="Perpetual recheck time"
               onChange={event => set('recheckCron', buildWeeklyCron(parseSimpleCron(form.recheckCron)?.days ?? [], event.target.value))}
               className="w-full rounded border border-port-border bg-port-bg px-3 py-2 text-sm text-white"
             />
