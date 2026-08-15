@@ -1,0 +1,1 @@
+- Media previews use Esc to leave full screen or close a prompt panel before closing the viewer.

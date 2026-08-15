@@ -256,7 +256,6 @@ export default function MediaLightbox({
       aria-label={`Media viewer — ${item.filename || item.key || 'item'}`}
       className={`fixed inset-0 z-50 bg-black/90 flex items-center justify-center ${overlayPad}`}
       onClick={onClose}
-      onKeyDown={(e) => e.key === 'Escape' && onClose()}
     >
       {hasPrevious && (
         <button

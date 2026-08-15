@@ -2,12 +2,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import MediaLightbox from './MediaLightbox';
 
-// The footer's AddToCollectionMenu and the (closed) PromptRefineModal pull the
-// whole API surface (and useProviderModels) into the import graph. Neither is
-// under test here, so stub them to inert nodes — that keeps the test focused
-// on MediaLightbox's own <video> markup and off the network.
+// The footer's AddToCollectionMenu and prompt modals pull the whole API surface
+// (and useProviderModels) into the import graph. Keep the mocks inert except
+// for PromptRefineModal's open state, which lets the Escape regression assert
+// that it closes without pulling its provider hooks into the test.
 vi.mock('./AddToCollectionMenu', () => ({ default: () => null }));
-vi.mock('./PromptRefineModal', () => ({ default: () => null }));
+vi.mock('./PromptRefineModal', () => ({
+  default: ({ open }) => open ? <div data-testid="refine-modal" /> : null,
+}));
 vi.mock('./PromptFromMedia', () => ({ default: () => null, PromptFromMediaModal: () => null }));
 
 const videoItem = {
@@ -111,6 +113,35 @@ describe('MediaLightbox overlay portal', () => {
     expect(dialog.parentElement).toBe(document.body);
     // The component's own rendered subtree holds nothing at all.
     expect(container.querySelector('[role="dialog"]')).toBeNull();
+  });
+});
+
+describe('MediaLightbox Escape cascade', () => {
+  it('exits full screen without closing the lightbox', () => {
+    const onClose = vi.fn();
+    render(<MediaLightbox item={imageItem} onClose={onClose} />);
+
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Full screen' }), { key: 'f' });
+    const exitFullScreen = screen.getByRole('button', { name: 'Exit full screen' });
+
+    fireEvent.keyDown(exitFullScreen, { key: 'Escape' });
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Full screen' })).toBeTruthy();
+  });
+
+  it('closes the refine modal without closing the lightbox', () => {
+    const onClose = vi.fn();
+    render(<MediaLightbox item={imageItem} onClose={onClose} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refine Prompt' }));
+    const refineModal = screen.getByTestId('refine-modal');
+
+    fireEvent.keyDown(refineModal, { key: 'Escape' });
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('refine-modal')).toBeNull();
+    expect(screen.getByRole('dialog')).toBeTruthy();
   });
 });
 
