@@ -1,0 +1,1 @@
+- Data Manager (/data) no longer double-scrolls and double-pads: the route is now full-width, so the page's own header bar + scrolling body is the only scroll container

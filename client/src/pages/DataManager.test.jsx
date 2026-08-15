@@ -262,3 +262,57 @@ describe('DataManager busy categories (#3342)', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /Purge/ })).toBeInTheDocument());
   });
 });
+
+// `/data` is an `isFullWidthRoute`, so Layout's `<main>` is a bare
+// `relative overflow-hidden`: this page must supply exactly ONE scroll region
+// and all of its own padding. Before #4145 the route was NOT full-width, so the
+// page's shell nested inside a padded, scrolling `<main>` — two scrollbars and
+// doubled padding. Assert the shape so a revert on either side fails here.
+describe('DataManager full-width shell (#4145)', () => {
+  beforeEach(() => {
+    getDataOverview.mockReset().mockResolvedValue(overview);
+    getDataCategory.mockReset().mockResolvedValue({ key: 'mystery-dir', items: [] });
+  });
+
+  it('renders a single h-full column whose only scroll container is the body', async () => {
+    const { container } = render(<DataManager />);
+    await waitFor(() => expect(screen.getByText(UNKNOWN_DESCRIPTION)).toBeInTheDocument());
+
+    const root = container.firstElementChild;
+    expect(root.className).toContain('h-full');
+    expect(root.className).toContain('flex-col');
+    // The root itself never scrolls — it fills `<main>` exactly.
+    expect(root.className).not.toMatch(/overflow-(auto|y-auto|scroll)/);
+
+    // Exactly one scrolling region in the page shell (the category list's own
+    // inner `max-h-64 overflow-auto` only exists on an expanded row).
+    const scrollers = [...root.children].filter((el) => /overflow-auto/.test(el.className));
+    expect(scrollers).toHaveLength(1);
+    expect(scrollers[0].className).toContain('flex-1');
+    expect(scrollers[0].className).toContain('min-h-0');
+    // The page owns its padding — Layout's full-width main supplies none.
+    expect(scrollers[0].className).toContain('p-4');
+  });
+
+  it('keeps the header bar out of the scroll region', async () => {
+    const { container } = render(<DataManager />);
+    await waitFor(() => expect(screen.getByText(UNKNOWN_DESCRIPTION)).toBeInTheDocument());
+
+    const bar = container.firstElementChild.firstElementChild;
+    expect(bar).toContainElement(screen.getByRole('heading', { name: 'Data Manager' }));
+    expect(bar.className).toContain('shrink-0');
+    expect(bar.className).not.toMatch(/overflow-(auto|y-auto|scroll)/);
+  });
+
+  it('reserves the same shell in the loading skeleton', () => {
+    // Never resolves — hold the page in its loading state.
+    getDataOverview.mockReset().mockReturnValue(new Promise(() => {}));
+    const { container } = render(<DataManager />);
+
+    const skeleton = container.querySelector('[aria-busy="true"]');
+    expect(skeleton.className).toContain('h-full');
+    const skeletonScrollers = [...skeleton.children].filter((el) => /overflow-y-auto/.test(el.className));
+    expect(skeletonScrollers).toHaveLength(1);
+    expect(skeletonScrollers[0].className).toContain('p-4');
+  });
+});
