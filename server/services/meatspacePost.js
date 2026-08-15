@@ -263,9 +263,16 @@ export async function getPostSessions(from, to, options) {
   return sessions;
 }
 
+/**
+ * One session by id, with the same re-derived `date` the list view gets (#4168)
+ * — otherwise the detail drawer would quote the frozen write-time day while the
+ * history row beside it shows the re-keyed one.
+ */
 export async function getPostSession(id) {
   const data = await loadSessions();
-  return data.sessions.find(s => s.id === id) || null;
+  const session = data.sessions.find(s => s.id === id);
+  if (!session) return null;
+  return { ...session, date: recordDayKey(session, await getUserTimezone()) };
 }
 
 export async function submitPostSession(sessionData) {

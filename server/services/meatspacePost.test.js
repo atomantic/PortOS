@@ -48,6 +48,7 @@ import {
   getAdaptivePreview,
   getPostStats,
   getPostSessions,
+  getPostSession,
   deriveTaskAccuracy,
   deriveTaskCompletion,
   getCognitiveProgress,
@@ -1589,6 +1590,14 @@ describe('POST readers re-derive day keys after a timezone change (issue #4168)'
     // '2026-07-16' is nobody's day under UTC — both records moved forward one day.
     expect(await getPostSessions('2026-07-16', '2026-07-16')).toHaveLength(0);
     expect(await getPostSessions('2026-07-18', '2026-07-18')).toHaveLength(1);
+  });
+
+  it('getPostSession re-keys the single record the same way the list does', async () => {
+    freezeAt('2026-07-18T12:00:00Z', 'UTC');
+    mockHistory(laHistory.map((s, i) => ({ ...s, id: `s${i}` })));
+    const session = await getPostSession('s1');
+    expect(session.date).toBe('2026-07-18');
+    expect(await getPostSession('missing')).toBeNull();
   });
 
   it('leaves a legacy record with no instant on its authored day', async () => {
