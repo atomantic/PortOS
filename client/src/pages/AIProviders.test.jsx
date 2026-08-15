@@ -190,3 +190,75 @@ describe('handleAddAllSamples partial failure handling', () => {
   });
 });
 
+describe('CoS Agent Runner allowlist warning', () => {
+  const cliProvider = (command) => ({
+    id: 'p1', name: 'Custom Agent', type: 'cli', enabled: true, command, args: [],
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getApps.mockResolvedValue([]);
+    api.getRuns.mockResolvedValue({ runs: [] });
+    api.getProviderStatuses.mockResolvedValue({ providers: {} });
+  });
+
+  it('badges a provider whose command is off the published allowlist', async () => {
+    api.getProviders.mockResolvedValue({
+      providers: [cliProvider('my-custom-agent')],
+      activeProvider: 'p1',
+      runnerAllowedCommands: ['claude', 'codex'],
+    });
+
+    renderPage();
+
+    expect(await screen.findByText('NO AGENT RUNNER')).toBeInTheDocument();
+  });
+
+  it('does not badge a provider whose command IS on the allowlist', async () => {
+    api.getProviders.mockResolvedValue({
+      providers: [cliProvider('/usr/local/bin/claude')],
+      activeProvider: 'p1',
+      runnerAllowedCommands: ['claude', 'codex'],
+    });
+
+    renderPage();
+
+    expect(await screen.findByText('Custom Agent')).toBeInTheDocument();
+    expect(screen.queryByText('NO AGENT RUNNER')).not.toBeInTheDocument();
+  });
+
+  // A server that predates #4143 omits `runnerAllowedCommands`; an unfetchable
+  // list must read as "can't tell", never as "nothing is allowed".
+  it('stays silent when the server omits runnerAllowedCommands', async () => {
+    api.getProviders.mockResolvedValue({
+      providers: [cliProvider('my-custom-agent')],
+      activeProvider: 'p1',
+    });
+
+    renderPage();
+
+    expect(await screen.findByText('Custom Agent')).toBeInTheDocument();
+    expect(screen.queryByText('NO AGENT RUNNER')).not.toBeInTheDocument();
+  });
+
+  it('warns inline in the editor as the command is typed, without blocking Save', async () => {
+    api.getProviders.mockResolvedValue({
+      providers: [cliProvider('claude')],
+      activeProvider: 'p1',
+      runnerAllowedCommands: ['claude', 'codex'],
+    });
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+
+    const commandInput = await screen.findByDisplayValue('claude');
+    expect(screen.queryByText(/command allowlist/)).not.toBeInTheDocument();
+
+    fireEvent.change(commandInput, { target: { value: 'my-custom-agent' } });
+
+    expect(await screen.findByText(/command allowlist/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save' })).not.toBeDisabled();
+  });
+});
+

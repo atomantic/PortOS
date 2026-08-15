@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
+import { AlertTriangle } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
-import { filterSelectableModels, filterGenerationModels, isEmbeddingModel, mergeModelLists, configuredDefaultIn, localBackendForProvider, modelOptionLabel, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, supportsModelRefresh, isGrokBuildCli, isLocalEndpoint, effectiveModelContextWindow } from '../utils/providers';
+import { filterSelectableModels, filterGenerationModels, isEmbeddingModel, mergeModelLists, configuredDefaultIn, localBackendForProvider, modelOptionLabel, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, supportsModelRefresh, isGrokBuildCli, isLocalEndpoint, effectiveModelContextWindow, isRunnerAllowedCommand } from '../utils/providers';
 import useLocalModels from '../hooks/useLocalModels';
 import BrailleSpinner from '../components/BrailleSpinner';
 import EmptyState from '../components/EmptyState';
@@ -20,6 +21,10 @@ import SettingsTabsHeader from '../components/settings/SettingsTabsHeader';
 import CodeReviewDefaultsPanel from '../components/providers/CodeReviewDefaultsPanel';
 import Modal from '../components/ui/Modal';
 import { FormField } from '../components/ui/FormField';
+
+// One phrasing for "this command isn't on the CoS Agent Runner's allowlist",
+// shared by the provider-card badge tooltip and the editor's inline banner.
+const RUNNER_NOT_ALLOWED_HINT = 'This command is not on the CoS Agent Runner’s allowlist, so /spawn and /spawn-tui will refuse it. The provider still works everywhere else (direct spawn, chat, pipeline). The allowlist is curated in the PortOS source, not in this form.';
 
 // Privacy disclosure for the Grok Build CLI/TUI: its harness uploads the entire
 // working repo to xAI (GCP) as it works unless the user opts out. Shown both on
@@ -39,6 +44,9 @@ disable_codebase_upload = true`}</pre>
 
 export default function AIProviders() {
   const [providers, setProviders] = useState([]);
+  // The CoS Agent Runner's exec allowlist, published by GET /api/providers.
+  // `null` = not fetched yet (or the fetch failed) — never warn from that state.
+  const [runnerAllowedCommands, setRunnerAllowedCommands] = useState(null);
   const [statuses, setStatuses] = useState({}); // runtime availability by providerId (separate from the `enabled` toggle)
   const [recovering, setRecovering] = useState({});
   const [activeProviderId, setActiveProviderId] = useState(null);
@@ -110,6 +118,12 @@ export default function AIProviders() {
       setLoadError(false);
       setProviders(providersData.providers || []);
       setActiveProviderId(providersData.activeProvider);
+      // Keep `null` (not an empty array) when an older server omits the field,
+      // so the "off the allowlist" warning stays silent rather than firing on
+      // every command.
+      setRunnerAllowedCommands(Array.isArray(providersData.runnerAllowedCommands)
+        ? providersData.runnerAllowedCommands
+        : null);
     }
     setApps(appsData);
     setRuns(runsData.runs || []);
@@ -534,6 +548,17 @@ export default function AIProviders() {
                           UNAVAILABLE{statuses[provider.id]?.reason ? ` · ${statuses[provider.id].reason}` : ''}
                         </span>
                       )}
+                      {/* Off the CoS Agent Runner's exec allowlist: the provider still
+                          works for direct spawn, it just can't be launched by /spawn
+                          or /spawn-tui. Informational — never a save-time rejection. */}
+                      {isProcessProvider(provider) && isRunnerAllowedCommand(provider.command, runnerAllowedCommands) === false && (
+                        <span
+                          className="text-xs px-2 py-0.5 rounded bg-port-warning/20 text-port-warning"
+                          title={RUNNER_NOT_ALLOWED_HINT}
+                        >
+                          NO AGENT RUNNER
+                        </span>
+                      )}
                     </div>
 
                     {provider.enabled && statuses[provider.id]?.available === false && (
@@ -748,6 +773,7 @@ export default function AIProviders() {
         <ProviderForm
           provider={editingProvider}
           allProviders={providers}
+          runnerAllowedCommands={runnerAllowedCommands}
           onClose={() => { setShowForm(false); setEditingProvider(null); }}
           onSave={() => { setShowForm(false); setEditingProvider(null); loadData(); }}
         />
@@ -757,7 +783,7 @@ export default function AIProviders() {
   );
 }
 
-function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
+function ProviderForm({ provider, onClose, onSave, allProviders = [], runnerAllowedCommands = null }) {
   const [formData, setFormData] = useState({
     name: provider?.name || '',
     type: provider?.type || 'cli',
@@ -952,6 +978,22 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
                   required={formData.type === 'cli' || formData.type === 'tui'}
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
                 />
+                {/* Informational only — an off-allowlist command saves fine and runs
+                    fine in direct-spawn mode; it just can't be launched by the CoS
+                    Agent Runner. Rejecting the save would break that valid config. */}
+                {isRunnerAllowedCommand(formData.command, runnerAllowedCommands) === false && (
+                  <Banner tone="warning" icon={AlertTriangle} className="mt-2">
+                    <p>
+                      <code className="font-mono break-all">{formData.command}</code> is not on the CoS Agent Runner’s
+                      command allowlist, so <code className="font-mono">/spawn</code> and{' '}
+                      <code className="font-mono">/spawn-tui</code> will refuse it. Saving is fine — the provider still
+                      runs in direct-spawn mode and everywhere else.
+                    </p>
+                    <p className="mt-1 text-port-warning/80 break-words">
+                      Allowlisted: {runnerAllowedCommands.join(', ')}
+                    </p>
+                  </Banner>
+                )}
               </FormField>
 
               <FormField label="Arguments (space-separated)">

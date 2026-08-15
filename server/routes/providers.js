@@ -3,6 +3,24 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { testVision, runVisionTestSuite, checkVisionHealth } from '../services/visionTest.js';
 import { providerSchema, providerActiveSchema, validate } from '../lib/aiToolkit/validation.js';
 import { withRefreshCapability } from '../lib/aiToolkit/internal/modelFetchers.js';
+import { ALLOWED_COMMANDS } from '../cos-runner/allowedCommands.js';
+
+/**
+ * The CoS Agent Runner's exec allowlist, published read-only so the AI
+ * Providers editor can warn that a custom `command` will never spawn via
+ * `/spawn` / `/spawn-tui` (#4143). Direct (non-runner) spawn does NOT consult
+ * this list, so an off-list command is a legitimate config — informational
+ * only, never a save-time rejection.
+ *
+ * Published as a list rather than a per-provider `runnerAllowed` flag on
+ * purpose: the editor has to warn about the command the user is TYPING, which
+ * has no persisted provider to decorate. Sorted so the payload is stable.
+ *
+ * This is a one-way read: the allowlist stays hand-curated in
+ * `cos-runner/allowedCommands.js` and is never derived from the user-writable
+ * `data/providers.json`, or a config write could choose the exec target.
+ */
+const RUNNER_ALLOWED_COMMANDS = [...ALLOWED_COMMANDS].sort();
 
 /**
  * Sanitize a provider object for client responses.
@@ -59,7 +77,8 @@ export function createPortOSProviderRoutes(aiToolkit) {
     const data = await providerService.getAllProviders();
     res.json({
       activeProvider: data.activeProvider,
-      providers: data.providers.map(presentProvider)
+      providers: data.providers.map(presentProvider),
+      runnerAllowedCommands: RUNNER_ALLOWED_COMMANDS
     });
   }));
 

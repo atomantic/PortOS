@@ -725,6 +725,51 @@ export const enabledApiProviderFilter = (provider) => Boolean(provider?.enabled)
 export const isProcessProvider = (provider) => isCliProvider(provider) || isTuiProvider(provider);
 
 /**
+ * Base name of a spawn command, normalized the way the CoS Agent Runner's
+ * allowlist check does before its membership test: strip any directory
+ * prefix, then a trailing Windows `.exe`. Mirror of `isAllowedCommand`'s
+ * normalization in `server/cos-runner/allowedCommands.js`, pinned by
+ * `server/cos-runner/allowedCommands.parity.test.js`.
+ *
+ * The server uses `path.basename`, which is platform-specific — on a POSIX
+ * host a backslash is NOT a separator. This mirror always treats both `/` and
+ * `\` as separators, so a Windows-style path typed into the editor on a POSIX
+ * install reads as "allowed" when the server would spawn-time reject it. That
+ * direction is deliberate: this drives an informational warning, and a false
+ * *warning* about a path the user's own platform handles fine is worse than a
+ * missing one for a path shape that platform can't run anyway.
+ */
+const runnerCommandBaseName = (command) => {
+  const base = String(command).replace(/[/\\]+$/, '').split(/[/\\]/).pop();
+  // Only `.exe` — a `.cmd`/`.bat` npm shim is deliberately NOT stripped,
+  // matching the server: the spawn path runs with `shell: false` and cannot
+  // execute a batch shim, so accepting it would only move the failure later.
+  return base.toLowerCase().endsWith('.exe') ? base.slice(0, -4) : base;
+};
+
+/**
+ * Would the CoS Agent Runner (`/spawn`, `/spawn-tui`) accept this command?
+ *
+ * `allowedCommands` is the server-published list (`runnerAllowedCommands` on
+ * `GET /api/providers`) — the client never carries its own copy, because the
+ * allowlist is the runner's exec boundary and must stay hand-curated
+ * server-side rather than derived from user-writable provider config.
+ *
+ * Returns `null` for "can't tell" — the list hasn't been fetched, or the field
+ * is still blank — which is distinct from `false` ("fetched, and this command
+ * is definitely off the list"). Only an explicit `false` should render a
+ * warning; a failed fetch must not accuse a perfectly good command.
+ *
+ * The command is matched UNTRIMMED (past the blank guard), because the editor
+ * persists it untrimmed too — `'claude '` really would fail the runner's check.
+ */
+export const isRunnerAllowedCommand = (command, allowedCommands) => {
+  if (!Array.isArray(allowedCommands) || allowedCommands.length === 0) return null;
+  if (typeof command !== 'string' || command.trim() === '') return null;
+  return allowedCommands.includes(runnerCommandBaseName(command));
+};
+
+/**
  * Whether `provider` is served by an Ollama daemon rather than its nominal
  * cloud/CLI backend: the built-in `ollama` API provider itself (id match), an
  * `api`-type provider whose `endpoint` points at Ollama, or the Claude-Ollama

@@ -1,0 +1,1 @@
+- AI Providers editor now warns when a custom CLI/TUI command isn't on the CoS Agent Runner's allowlist — the provider still saves and runs in direct-spawn mode, it just can't be launched by /spawn or /spawn-tui

@@ -59,7 +59,7 @@ PortOS is designed for personal/developer use on trusted networks. It implements
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/providers` | List all AI providers |
+| GET | `/providers` | List all AI providers. Also returns `runnerAllowedCommands` — the CoS Agent Runner's exec allowlist, read-only, so the editor can warn that a custom `command` won't spawn via `/spawn` / `/spawn-tui`. |
 | POST | `/providers` | Add new provider |
 | PUT | `/providers/:id` | Update provider |
 | DELETE | `/providers/:id` | Delete provider |
