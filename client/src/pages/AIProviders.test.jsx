@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 const api = vi.hoisted(() => ({
@@ -9,6 +9,7 @@ const api = vi.hoisted(() => ({
   getProviderStatuses: vi.fn(),
   getSampleProviders: vi.fn(),
   createProvider: vi.fn(),
+  updateProvider: vi.fn(),
 }));
 
 const toast = vi.hoisted(() => ({
@@ -260,5 +261,35 @@ describe('CoS Agent Runner allowlist warning', () => {
     expect(await screen.findByText(/command allowlist/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save' })).not.toBeDisabled();
   });
-});
 
+  it('shows the provider default-effort selector for an effort-capable provider', async () => {
+    api.getProviders.mockResolvedValue({
+      providers: [{
+        id: 'codex',
+        name: 'Codex',
+        type: 'cli',
+        command: 'codex',
+        enabled: true,
+        models: ['gpt-5'],
+        defaultModel: 'gpt-5',
+        effort: '',
+      }],
+      activeProvider: 'codex',
+    });
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+
+    const effort = await screen.findByLabelText('Default Effort');
+    expect(effort).toHaveValue('');
+    fireEvent.change(effort, { target: { value: 'xhigh' } });
+    expect(effort).toHaveValue('xhigh');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.updateProvider).toHaveBeenCalledWith(
+      'codex',
+      expect.objectContaining({ effort: 'xhigh' }),
+    ));
+  });
+});

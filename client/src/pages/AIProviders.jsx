@@ -3,7 +3,7 @@ import { AlertTriangle } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
-import { filterSelectableModels, filterGenerationModels, isEmbeddingModel, mergeModelLists, configuredDefaultIn, localBackendForProvider, modelOptionLabel, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, supportsModelRefresh, isGrokBuildCli, isLocalEndpoint, effectiveModelContextWindow, isRunnerAllowedCommand } from '../utils/providers';
+import { filterSelectableModels, filterGenerationModels, isEmbeddingModel, mergeModelLists, configuredDefaultIn, localBackendForProvider, modelOptionLabel, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, supportsModelRefresh, isGrokBuildCli, isLocalEndpoint, effectiveModelContextWindow, isRunnerAllowedCommand, effortLevelsForProvider } from '../utils/providers';
 import useLocalModels from '../hooks/useLocalModels';
 import BrailleSpinner from '../components/BrailleSpinner';
 import EmptyState from '../components/EmptyState';
@@ -19,6 +19,7 @@ import {
 } from '../utils/formatters';
 import SettingsTabsHeader from '../components/settings/SettingsTabsHeader';
 import CodeReviewDefaultsPanel from '../components/providers/CodeReviewDefaultsPanel';
+import EffortSelect from '../components/cos/EffortSelect';
 import Modal from '../components/ui/Modal';
 import { FormField } from '../components/ui/FormField';
 
@@ -607,6 +608,9 @@ export default function AIProviders() {
                       {provider.defaultModel && (
                         <p className="break-words">Default: <code className="text-gray-300 break-all">{provider.defaultModel}</code></p>
                       )}
+                      {provider.effort && (
+                        <p className="break-words">Default effort: <code className="text-gray-300">{provider.effort}</code></p>
+                      )}
                       {(() => {
                         const windowLabel = formatContextLength(effectiveModelContextWindow(provider, provider.defaultModel));
                         return windowLabel ? (
@@ -794,6 +798,7 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [], runnerAllo
     allowCustomEndpoint: provider?.allowCustomEndpoint === true,
     models: provider?.models || [],
     defaultModel: provider?.defaultModel || '',
+    effort: provider?.effort || '',
     lightModel: provider?.lightModel || '',
     mediumModel: provider?.mediumModel || '',
     heavyModel: provider?.heavyModel || '',
@@ -835,6 +840,7 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [], runnerAllo
   // option for it the four selects below would hold a value matching no option
   // and render blank — reading as "no model configured" when one is.
   const configuredDefault = configuredDefaultIn(mergedModels);
+  const effortProvider = { ...formData, id: provider?.id, models: mergedModels };
   // Shared option list for the Default Model + Light/Medium/Heavy tier selects,
   // so the sentinel option can't be added to some and missed on others.
   const modelSelectOptions = (
@@ -899,6 +905,13 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [], runnerAllo
     // what the picker allows.
     for (const field of ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel', 'fallbackModel']) {
       if (isEmbeddingModel(data[field])) data[field] = '';
+    }
+    // Effort is meaningful only for providers/models that expose an effort
+    // ladder. Clear a stale value when an edit switches to an effort-less
+    // provider or Antigravity model; narrowed ladders are clamped by the
+    // server and remain visible in the selector.
+    if (!isProcessProvider(data) || !effortLevelsForProvider({ ...data, id: provider?.id }, data.defaultModel)) {
+      data.effort = '';
     }
     if (parsedTimeout != null) {
       data.timeout = parsedTimeout;
@@ -1149,6 +1162,15 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [], runnerAllo
                 : 'Save and test provider to fetch available models'}
             </p>
           </FormField>
+
+          <EffortSelect
+            provider={isProcessProvider(formData) ? effortProvider : null}
+            model={formData.defaultModel}
+            value={formData.effort}
+            onChange={(effort) => setFormData(prev => ({ ...prev, effort }))}
+            label="Default Effort"
+            hint="Reasoning effort used when a run does not specify one."
+          />
 
           {/* Model Tiers */}
           <div className="border-t border-port-border pt-4 mt-4">

@@ -134,6 +134,19 @@ describe('providerSchema', () => {
     });
   });
 
+  describe('default reasoning effort', () => {
+    it('accepts known effort levels and treats an empty UI value as unset', () => {
+      expect(providerSchema.safeParse({ ...minimalProvider, effort: 'xhigh' }).success).toBe(true);
+      const empty = providerSchema.safeParse({ ...minimalProvider, effort: '' });
+      expect(empty.success).toBe(true);
+      expect(empty.data.effort).toBeNull();
+    });
+
+    it('rejects an unknown effort level', () => {
+      expect(providerSchema.safeParse({ ...minimalProvider, effort: 'turbo' }).success).toBe(false);
+    });
+  });
+
   describe('type enum + required name', () => {
     it('rejects an unknown type and a missing/empty name', () => {
       expect(providerSchema.safeParse({ name: 'X', type: 'magic' }).success).toBe(false);

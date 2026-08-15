@@ -129,6 +129,7 @@ describe('Provider Service', () => {
       apiKey: 'sk-test-secret',
       models: ['model-a', 'model-b', 'model-c'],
       defaultModel: 'model-a',
+      effort: 'xhigh',
       lightModel: 'model-b',
       mediumModel: 'model-a',
       heavyModel: 'model-c',

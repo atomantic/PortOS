@@ -533,6 +533,7 @@ export function createProviderService(config = {}) {
         apiKey: providerData.apiKey || '',
         models: providerData.models || [],
         defaultModel: providerData.defaultModel || null,
+        effort: providerData.effort || null,
         lightModel: providerData.lightModel || null,
         mediumModel: providerData.mediumModel || null,
         heavyModel: providerData.heavyModel || null,
