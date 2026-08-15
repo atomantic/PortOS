@@ -813,7 +813,14 @@ function wrapperShapes(body, params) {
     // label-ish prop exempts its input". `labelProp` names where that text comes
     // from: a parameter the <label> renders, or `children` (the call site's
     // element body). A <label> holding neither is not a naming wrapper.
-    const rendered = [...inner.matchAll(/\{\s*([A-Za-z_$][\w$]*)\s*\}/g)].map(([, name]) => name);
+    //
+    // Nested markup is stripped first, so only expressions in TEXT position
+    // count. A prop passed to a nested element's attribute renders no text:
+    // `<label><span className={label} aria-hidden />{children}</label>` puts
+    // nothing in the accessible name, and reading its `label` prop as the name
+    // would exempt a genuinely unnamed control.
+    const renderedText = inner.replace(/<[^>]*>/g, ' ');
+    const rendered = [...renderedText.matchAll(/\{\s*([A-Za-z_$][\w$]*)\s*\}/g)].map(([, name]) => name);
     const childrenInLabel = rendered.includes('children');
     const labelProp = rendered.find((name) => name !== 'children' && parameterNames.has(name)) ?? null;
 
@@ -838,8 +845,13 @@ function wrapperShapes(body, params) {
     }
     // The id is generated here. It only reaches a child if the wrapper clones
     // it on, so demand the clone as proof rather than assuming the shape.
+    //
+    // The clone target must be a bare identifier — the `Children.map` callback
+    // parameter. `cloneElement(children[1], { id })` names the SECOND child,
+    // while the call-site check below credits the FIRST, so accepting an
+    // indexed target would exempt a control the wrapper never named.
     if (labelProp !== null
-      && new RegExp(`cloneElement\\s*\\([^,]*,\\s*\\{[^}]*\\bid\\s*:\\s*${idRef}\\b`).test(body)) {
+      && new RegExp(`cloneElement\\s*\\(\\s*[A-Za-z_$][\\w$]*\\s*,\\s*\\{[^}]*\\bid\\s*:\\s*${idRef}\\b`).test(body)) {
       shapes.push({ kind: 'cloned', labelProp });
     }
   }
@@ -1676,6 +1688,26 @@ describe('a11y conventions', () => {
     // A <label> that renders no text names nothing, in any quadrant.
     expect(isNamed(localCloner.replace('>{label}<', '><'))).toBe(false);
     expect(isNamed(parenArrow.replace('<span>{label}</span>', ''))).toBe(false);
+
+    // A prop the <label> passes to a nested element's ATTRIBUTE renders no
+    // text — `<span className={label} aria-hidden />` puts nothing in the
+    // accessible name. Reading it as the label's text would exempt a control
+    // that really is unnamed, which is the one failure direction this guard
+    // cannot afford.
+    const attributeOnlyProp = 'const Field = ({ label, children }) => (\n  <label><span className={label} aria-hidden="true" />{children}</label>\n);\n<Field label="theme-icon"><input type="text" /></Field>';
+    expect(isNamed(attributeOnlyProp)).toBe(false);
+    const forwarderAttributeOnlyProp = `function TooltipLabel({ htmlFor, label, children }) {
+  return (<label htmlFor={htmlFor}><span data-tooltip={label} aria-hidden="true" />{children}</label>);
+}
+<TooltipLabel htmlFor="rounds" label="tooltip text" />
+<input id="rounds" type="number" />`;
+    expect(isNamed(forwarderAttributeOnlyProp)).toBe(false);
+
+    // A cloning wrapper that clones onto an INDEXED child names that child, not
+    // the first one — and the call-site check credits the first. Only a bare
+    // `Children.map` callback parameter counts as the clone target.
+    const indexedClone = localCloner.replace('cloneElement(child, { id: controlId })', 'cloneElement(children[1], { id: controlId })');
+    expect(isNamed(indexedClone)).toBe(false);
   });
 
   it('meets the 44px touch-target minimum on Close buttons', () => {
