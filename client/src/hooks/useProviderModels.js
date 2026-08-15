@@ -81,9 +81,11 @@ export default function useProviderModels({ filter, allowDefault = false, silent
   // caller whose filter identity changes when a capability list resolves would
   // otherwise re-run the whole `api.getProviders()` fetch for a change that
   // needs no new data. The ref hands the async body the freshest picker without
-  // pulling it into the dependency list.
+  // pulling it into the dependency list — synced in an effect (never mutated
+  // during render), which is soon enough: `load` only reads it after awaiting
+  // the fetch, and the initial value covers the mount.
   const pickInitialModelRef = useRef(pickInitialModel);
-  pickInitialModelRef.current = pickInitialModel;
+  useEffect(() => { pickInitialModelRef.current = pickInitialModel; }, [pickInitialModel]);
 
   const load = useCallback(async () => {
     setLoading(true);
