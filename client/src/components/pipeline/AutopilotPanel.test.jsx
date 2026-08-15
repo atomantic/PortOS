@@ -791,6 +791,54 @@ describe('AutopilotPanel', () => {
       // The run is over — no Stop/Pause affordances, but the map is still there.
       expect(screen.getByRole('button', { name: /run autopilot/i })).toBeInTheDocument();
     });
+
+    // #4140 — the live halves die with the run, so a reload the morning after a
+    // pause has to redraw from the marker the run stamped.
+    it('redraws the map from the persisted marker when no run is active', async () => {
+      getPipelineAutopilotStatus.mockResolvedValue({ autopilot: { status: 'paused' }, active: false });
+      renderPanel({
+        id: 's1',
+        targetFormat: 'comic',
+        autopilot: {
+          status: 'paused',
+          plan: PLAN,
+          progress: {
+            currentStep: 'foundationGate',
+            currentStepComplete: false,
+            completed: { verifyArcSpine: 1 },
+            verified: { verifyArcSpine: { round: 2, findings: 5, blocking: 0 } },
+          },
+        },
+      });
+      expect(await screen.findByText(/Story progress/i)).toBeInTheDocument();
+      expect(screen.getByText(/1 of 3 milestone\(s\) · 25%/i)).toBeInTheDocument();
+      expect(screen.getByText(/0 blocking of 5 finding\(s\)/i)).toBeInTheDocument();
+      // A paused marker means the run STOPPED on that step, so the meter reads
+      // as a halted run rather than one still working.
+      expect(screen.getByRole('progressbar', { name: /story progress/i })).toBeInTheDocument();
+      expect(screen.getByText(/Judging foundation/i)).toBeInTheDocument();
+    });
+
+    it('prefers the live run over the marker when both exist', async () => {
+      getPipelineAutopilotStatus.mockResolvedValue({
+        autopilot: { status: 'running', runId: 'r2' },
+        active: true,
+        start: { type: 'start', runId: 'r2', mode: 'execute', plan: PLAN },
+        progress: { currentStep: 'textStages', completed: { verifyArcSpine: 1, foundationGate: 1 } },
+      });
+      // A stale marker from the PREVIOUS run must not win over the run in flight.
+      renderPanel({
+        id: 's1',
+        targetFormat: 'comic',
+        autopilot: {
+          status: 'paused',
+          plan: [{ kind: 'generateArc', count: 1 }],
+          progress: { currentStep: 'generateArc', completed: {} },
+        },
+      });
+      expect(await screen.findByText(/2 of 3 milestone\(s\)/i)).toBeInTheDocument();
+      expect(screen.queryByText(/Generating arc/i)).not.toBeInTheDocument();
+    });
   });
 
   // #1578 — per-check editorial telemetry forwarded up the autopilot SSE stream

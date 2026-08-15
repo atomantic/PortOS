@@ -166,10 +166,27 @@ export async function persistMarker(seriesId, patch) {
       overrideStagePins: run.options.overrideStagePins === true,
     }
     : null;
+  // Milestone map (#4140). Both halves the Autonomous card draws it from live
+  // ONLY on the in-memory run record — the projected plan on the retained
+  // `start` frame, and the progress snapshot folded onto the record — so a run
+  // that paused overnight came back as a resume banner with no map beside it.
+  // Carry them on the marker, which outlives the run.
+  //
+  // Stamped on EVERY marker write that has a plan, not only the terminals: the
+  // marker is wholesale-replaced per write, so a terminals-only stamp would
+  // leave the map missing for the one interruption that skips a terminal write
+  // entirely — a hard restart, whose `running` marker the boot recovery demotes
+  // to `paused` by spreading whatever the marker already held. The plan is ~20
+  // small rows and the snapshot is keyed by the same step vocabulary, so this
+  // costs a couple of KB on a series record that is already tens.
+  const plan = Array.isArray(run?.startPayload?.plan) ? run.startPayload.plan : null;
+  const progress = plan ? snapshotProgress(run) : null;
   await updateSeries(seriesId, {
     autopilot: {
       ...patch,
       ...(resumable ? { resumeOptions: resumable } : {}),
+      ...(plan ? { plan } : {}),
+      ...(progress ? { progress } : {}),
       updatedAt: new Date().toISOString(),
     },
   }).catch((err) => {

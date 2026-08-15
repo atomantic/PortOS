@@ -1,0 +1,1 @@
+- Autopilot milestone map now survives a reload — a paused or completed run stamps its plan and progress onto the persisted marker, so the Autonomous-mode card redraws the map instead of showing a bare resume banner

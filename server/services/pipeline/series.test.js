@@ -879,6 +879,89 @@ describe('pipeline series service', () => {
     });
   });
 
+  describe('sanitizeAutopilot milestone map (#4140)', () => {
+    it('keeps the projected plan rows the map renders', () => {
+      const a = svc.sanitizeAutopilot({
+        status: 'paused',
+        plan: [
+          { kind: 'generateArc', count: 1, estActions: 1 },
+          { kind: 'textStages', count: 3, note: 'prose + scripts', estActions: 3 },
+        ],
+      });
+      expect(a.plan).toEqual([
+        { kind: 'generateArc', count: 1, note: null, estActions: 1 },
+        { kind: 'textStages', count: 3, note: 'prose + scripts', estActions: 3 },
+      ]);
+    });
+
+    it('drops a kind-less row and defaults a missing/absurd count to one', () => {
+      const a = svc.sanitizeAutopilot({
+        status: 'paused',
+        plan: [{ count: 2 }, 'nope', { kind: 'verifyArc' }, { kind: 'beatSheet', count: -4 }],
+      });
+      expect(a.plan).toEqual([
+        { kind: 'verifyArc', count: 1, note: null, estActions: 0 },
+        { kind: 'beatSheet', count: 1, note: null, estActions: 0 },
+      ]);
+    });
+
+    it('caps a peer-written plan so an unknown step vocabulary cannot bloat the marker', () => {
+      const many = Array.from({ length: 90 }, (_, i) => ({ kind: `step${i}`, count: 1 }));
+      expect(svc.sanitizeAutopilot({ status: 'paused', plan: many }).plan).toHaveLength(40);
+    });
+
+    it('is an empty plan for a marker that carries none (older peers, idle series)', () => {
+      expect(svc.sanitizeAutopilot({ status: 'paused' }).plan).toEqual([]);
+      expect(svc.sanitizeAutopilot({ status: 'paused', plan: 'nope' }).plan).toEqual([]);
+    });
+
+    it('keeps the progress snapshot, including the step a paused run stopped on', () => {
+      const a = svc.sanitizeAutopilot({
+        status: 'paused',
+        progress: {
+          currentStep: 'editorialReview',
+          currentStepComplete: false,
+          completed: { generateArc: 1, textStages: 3, neverRan: 0 },
+          skipped: { textStages: 1 },
+          verified: { verifyArc: { round: 2, findings: 5, blocking: 1 } },
+        },
+      });
+      expect(a.progress).toEqual({
+        currentStep: 'editorialReview',
+        currentStepComplete: false,
+        // A zero tally reads the same as a missing key, so it is not persisted.
+        completed: { generateArc: 1, textStages: 3 },
+        skipped: { textStages: 1 },
+        verified: {
+          verifyArc: {
+            round: 2, findings: 5, blocking: 1, errored: null, weightedScore: null, threshold: null, weakest: null,
+          },
+        },
+      });
+    });
+
+    it('keeps the foundation gate\'s scoring shape alongside the counting gates\'', () => {
+      const a = svc.sanitizeAutopilot({
+        status: 'paused',
+        progress: { verified: { foundationGate: { round: 1, weightedScore: 62, threshold: 70, weakest: 'motivation' } } },
+      });
+      expect(a.progress.verified.foundationGate).toMatchObject({ weightedScore: 62, threshold: 70, weakest: 'motivation' });
+    });
+
+    it('drops a verification blob carrying none of the numbers the map reads', () => {
+      const a = svc.sanitizeAutopilot({
+        status: 'paused',
+        progress: { verified: { verifyArc: { junk: true }, beatSheet: 'nope' } },
+      });
+      expect(a.progress.verified).toEqual({});
+    });
+
+    it('is a null progress snapshot for a marker that carries none', () => {
+      expect(svc.sanitizeAutopilot({ status: 'paused' }).progress).toBeNull();
+      expect(svc.sanitizeAutopilot({ status: 'paused', progress: [] }).progress).toBeNull();
+    });
+  });
+
   describe('sanitizeAutopilot discardedFindings', () => {
     it('bounds the rolled-back candidate set the same way as residualFindings', () => {
       const a = svc.sanitizeAutopilot({

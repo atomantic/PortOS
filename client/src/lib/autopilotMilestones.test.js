@@ -4,6 +4,7 @@ import {
   summarizeAutopilotMilestones,
   describeAutopilotVerification,
   autopilotStepLabel,
+  autopilotMarkerTerminal,
   MILESTONE_STATUS,
 } from './autopilotMilestones';
 
@@ -149,5 +150,28 @@ describe('autopilotStepLabel', () => {
   it('labels known step kinds and falls back to the raw kind', () => {
     expect(autopilotStepLabel('editorialHealthGate')).toBe('Editorial health gate');
     expect(autopilotStepLabel('somethingNew')).toBe('somethingNew');
+  });
+});
+
+describe('autopilotMarkerTerminal (#4140)', () => {
+  it('translates a persisted marker status into the terminal frame type the fold reads', () => {
+    expect(autopilotMarkerTerminal('done')).toBe('complete');
+    expect(autopilotMarkerTerminal('paused')).toBe('paused');
+    expect(autopilotMarkerTerminal('error')).toBe('error');
+  });
+
+  it('is null while no terminal has been reached, so the step still reads as active', () => {
+    expect(autopilotMarkerTerminal('running')).toBe(null);
+    expect(autopilotMarkerTerminal('idle')).toBe(null);
+    expect(autopilotMarkerTerminal(undefined)).toBe(null);
+  });
+
+  it('turns a marker-drawn paused run\'s step into a blocked row', () => {
+    const rows = buildAutopilotMilestones(
+      PLAN,
+      { currentStep: 'foundationGate', completed: { generateArc: 1, verifyArcSpine: 1 } },
+      { terminal: autopilotMarkerTerminal('paused') },
+    );
+    expect(statuses(rows).foundationGate).toBe(MILESTONE_STATUS.BLOCKED);
   });
 });

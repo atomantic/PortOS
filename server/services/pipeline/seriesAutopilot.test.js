@@ -2741,6 +2741,42 @@ describe('autopilot conductor', () => {
     });
   });
 
+  it('persists the milestone map so a paused run survives a reload (#4140)', async () => {
+    editorialFindings = [{ severity: 'high', problem: 'missing scene', issueNumber: 1 }];
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { maxEditorialRounds: 1 });
+    await waitFor(runFinished(seriesId));
+    const series = await seriesSvc.getSeries(seriesId);
+    expect(series.autopilot?.status).toBe('paused');
+    // The plan half: the same projection the run's `start` frame carried, so the
+    // panel can redraw every milestone the run expected to reach.
+    expect(series.autopilot?.plan?.length).toBeGreaterThan(0);
+    expect(series.autopilot.plan.every((r) => typeof r.kind === 'string' && r.count >= 1)).toBe(true);
+    // …and the progress half: where it actually got to, including the step it
+    // stopped on (which is what the map draws as blocked).
+    expect(series.autopilot?.progress?.currentStep).toBe('editorialReview');
+    expect(Object.keys(series.autopilot.progress.completed).length).toBeGreaterThan(0);
+  });
+
+  it('keeps the milestone map on a restart-interrupted run (#4140)', async () => {
+    // The map is stamped on every marker write that has a plan, not only the
+    // terminals — a hard restart never reaches a terminal write, and the boot
+    // recovery demotes `running` → `paused` by SPREADING whatever the marker
+    // already held. Simulate that: complete a run, rewind its marker to the
+    // `running` shape a killed process would have left, and recover.
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, {});
+    await waitFor(runFinished(seriesId));
+    const done = (await seriesSvc.getSeries(seriesId)).autopilot;
+    expect(done?.plan?.length).toBeGreaterThan(0);
+    await seriesSvc.updateSeries(seriesId, { autopilot: { ...done, status: 'running' } });
+    await autopilot.recoverStuckAutopilots();
+    const recovered = (await seriesSvc.getSeries(seriesId)).autopilot;
+    expect(recovered.status).toBe('paused');
+    expect(recovered.plan).toEqual(done.plan);
+    expect(recovered.progress).toEqual(done.progress);
+  });
+
   it('does not notify on a clean complete (#1615)', async () => {
     const { seriesId } = await seedComplete();
     await autopilot.startSeriesAutopilot(seriesId, {});

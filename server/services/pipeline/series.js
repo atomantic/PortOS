@@ -248,19 +248,113 @@ const sanitizeAutopilotFindings = (raw, limit) => (Array.isArray(raw)
 // ever bounds a marker written by a peer that knows dimensions this one doesn't.
 const AUTOPILOT_DISCARDED_KEYS_MAX = 12;
 
+// Bound a keyed marker map (`{ dimension | stepKind: value }`): cap the key
+// count, trim each key, sanitize each value, and DROP a key whose value doesn't
+// survive — an unrecognized blob must never land as an empty bucket. Shared by
+// every keyed autopilot map (per-dimension discarded findings, the milestone
+// map's per-step counts and gate verifications) so they can't drift apart.
+// `value` returns null to drop the key.
+const sanitizeAutopilotKeyedMap = (raw, max, value) => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out = {};
+  for (const [key, v] of Object.entries(raw).slice(0, max)) {
+    const name = trimTo(key, AUTOPILOT_STEP_MAX);
+    const bounded = value(v);
+    if (name && bounded !== null) out[name] = bounded;
+  }
+  return out;
+};
+
 // The keyed form of the above, for a gate whose repairs are owned by independent
 // targets (the foundation gate's dimensions): each key keeps its own bounded
 // history, and a key whose findings all fail sanitization is dropped rather than
 // persisted as an empty bucket.
-const sanitizeAutopilotKeyedFindings = (raw, limit) => {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
-  const out = {};
-  for (const [key, findings] of Object.entries(raw).slice(0, AUTOPILOT_DISCARDED_KEYS_MAX)) {
-    const name = trimTo(key, 80);
+const sanitizeAutopilotKeyedFindings = (raw, limit) => sanitizeAutopilotKeyedMap(
+  raw,
+  AUTOPILOT_DISCARDED_KEYS_MAX,
+  (findings) => {
     const bounded = sanitizeAutopilotFindings(findings, limit);
-    if (name && bounded.length > 0) out[name] = bounded;
-  }
-  return out;
+    return bounded.length > 0 ? bounded : null;
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Milestone map (#4140). The Autonomous-mode card draws it from two halves that
+// otherwise live ONLY on the in-memory run record — the projected plan on the
+// run's `start` frame and the progress snapshot folded onto the record — so a
+// run that paused overnight showed a resume banner with no map beside it.
+// `persistMarker` stamps both onto the marker; these bound them to a wire shape.
+//
+// Both are naturally small (the resolver's step vocabulary is ~20 kinds, one row
+// each), so the caps here only ever bound a marker written by a PEER whose
+// vocabulary this install doesn't know. Same transient-marker posture as
+// pauseKind / craftGap*: no `pipelineSeries` schema-gate bump — a behind peer
+// that drops the map briefly shows a banner with no milestones until the next
+// run re-stamps it, which is exactly the pre-#4140 behavior.
+// ---------------------------------------------------------------------------
+const AUTOPILOT_PLAN_MAX = 40;
+const AUTOPILOT_PLAN_NOTE_MAX = 300;
+
+// One projected step: what it is, how many times the run expects to take it, the
+// planner's aside, and its estimated cos-action cost.
+const sanitizeAutopilotPlan = (raw) => (Array.isArray(raw)
+  ? raw
+    .map((row) => {
+      if (!row || typeof row !== 'object') return null;
+      const kind = trimTo(row.kind, AUTOPILOT_STEP_MAX);
+      if (!kind) return null;
+      return {
+        kind,
+        count: Number.isInteger(row.count) && row.count > 0 ? row.count : 1,
+        note: trimTo(row.note, AUTOPILOT_PLAN_NOTE_MAX) || null,
+        estActions: toCount(row.estActions),
+      };
+    })
+    .filter(Boolean)
+    .slice(0, AUTOPILOT_PLAN_MAX)
+  : []);
+
+// What one gate last verified. The convergence gates report finding counts and
+// the foundation gate reports a weighted score, so this keeps the union of the
+// numbers `describeAutopilotVerification` reads (each null when that gate
+// doesn't report it) and drops a blob carrying none of them.
+const sanitizeAutopilotVerification = (raw) => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const num = (v) => (Number.isFinite(v) ? v : null);
+  const out = {
+    round: num(raw.round),
+    findings: num(raw.findings),
+    blocking: num(raw.blocking),
+    errored: num(raw.errored),
+    weightedScore: num(raw.weightedScore),
+    threshold: num(raw.threshold),
+    weakest: trimTo(raw.weakest, AUTOPILOT_STEP_MAX) || null,
+  };
+  return Object.values(out).some((v) => v !== null) ? out : null;
+};
+
+// A `{ stepKind: count }` tally. A zero is dropped rather than persisted — the
+// map reads a missing key and a zero identically, so keeping zeros would only
+// grow the marker.
+const sanitizeAutopilotCounts = (raw) => sanitizeAutopilotKeyedMap(
+  raw,
+  AUTOPILOT_PLAN_MAX,
+  (n) => toCount(n) || null,
+);
+
+// Where the run got to against its plan. Null unless the marker carries an
+// object — a run with a plan but no progress yet draws every row as pending.
+const sanitizeAutopilotProgress = (raw) => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  return {
+    currentStep: trimTo(raw.currentStep, AUTOPILOT_STEP_MAX) || null,
+    // `currentStep` survives its own completion, so this flag is what separates
+    // "on this step" from "just finished it" — see state.js#noteProgress.
+    currentStepComplete: raw.currentStepComplete === true,
+    completed: sanitizeAutopilotCounts(raw.completed),
+    skipped: sanitizeAutopilotCounts(raw.skipped),
+    verified: sanitizeAutopilotKeyedMap(raw.verified, AUTOPILOT_PLAN_MAX, sanitizeAutopilotVerification),
+  };
 };
 
 export const sanitizeAutopilot = (raw) => {
@@ -335,6 +429,12 @@ export const sanitizeAutopilot = (raw) => {
     // Observing-orchestrator activity for the run that just ended (null unless
     // the run opted in and the observer dispatched at least one fix task).
     observer: sanitizeAutopilotObserver(raw.observer),
+    // #4140 — the milestone map's two halves, so a run that paused overnight
+    // still draws its map on reload instead of a bare resume banner. Both are
+    // the run's OWN copies (see persistMarker); a live run's panel keeps reading
+    // the in-memory originals off the status route, which are fresher.
+    plan: sanitizeAutopilotPlan(raw.plan),
+    progress: sanitizeAutopilotProgress(raw.progress),
     updatedAt: isStr(raw.updatedAt) ? raw.updatedAt : null,
   };
 };

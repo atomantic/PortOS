@@ -65,6 +65,16 @@ const STOPPED_TERMINALS = new Set(['paused', 'error', 'canceled']);
 /** Did the run stop mid-plan? Drives both the blocked row and the meter's tone. */
 export const isStoppedTerminal = (terminal) => STOPPED_TERMINALS.has(terminal);
 
+// A persisted marker records how the run ENDED as a status, not as the frame
+// type the fold reads — so a map rebuilt from the marker (#4140, after a reload
+// with no live run) needs the same translation the live panel gets for free from
+// the terminal frame. `running` / `idle` map to null: no terminal reached, so
+// the step the run was on still reads as active rather than blocked.
+const MARKER_TERMINALS = Object.freeze({ done: 'complete', paused: 'paused', error: 'error' });
+
+/** Terminal frame type equivalent to a persisted `autopilot.status`, or null. */
+export const autopilotMarkerTerminal = (status) => MARKER_TERMINALS[status] || null;
+
 const countOf = (map, key) => {
   const n = map?.[key];
   return Number.isFinite(n) && n > 0 ? n : 0;

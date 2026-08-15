@@ -22,7 +22,7 @@ import {
   patchSettingsSlice,
 } from '../../services/api';
 import { providerDisplayName, providerModelLabel, assignmentModelOptions, resolveSeriesRunLlm, resolveCliEffort } from '../../utils/providers';
-import { autopilotStepLabel, describeAutopilotVerification } from '../../lib/autopilotMilestones';
+import { autopilotStepLabel, describeAutopilotVerification, autopilotMarkerTerminal } from '../../lib/autopilotMilestones';
 import Pill from '../ui/Pill';
 import ProviderModelSelector from '../ProviderModelSelector';
 import AutopilotMilestones from './AutopilotMilestones';
@@ -960,6 +960,20 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     : ap?.status === 'done' ? 'Run autopilot again'
       : 'Run autopilot';
 
+  // Milestone map (#4140). The live halves — the plan off the run's `start`
+  // frame and the progress the stream folds — only exist while this panel has a
+  // run to watch, so a reload the morning after a pause used to show the resume
+  // banner with nothing beside it. The marker the run stamped carries both;
+  // fall back to it only when there is no live plan to draw, so a dry-run
+  // preview and a run in flight both keep the fresher in-memory copy.
+  const markerPlan = !active && !plan && ap?.plan?.length ? ap.plan : null;
+  const mapPlan = markerPlan || plan;
+  const mapProgress = markerPlan ? ap.progress : progress;
+  // A marker records how the run ended as a STATUS; the fold reads a terminal
+  // frame type, so translate. Without this the step a paused run stopped on
+  // would redraw as still running.
+  const mapTerminal = markerPlan ? autopilotMarkerTerminal(ap.status) : terminal;
+
   return (
     <div className="border border-port-border rounded-lg bg-port-card/40">
       <div className="flex items-center gap-2 flex-wrap p-3">
@@ -1405,16 +1419,20 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
           plan exists, so it survives after the stream closes: a dry-run persists
           no marker and completes immediately, and a run that pauses while the
           panel is open keeps its map beside the banner. Both halves are
-          in-memory on the server, so a reload after the run ended shows the
-          persisted banner alone — persisting the map itself is tracked in #4140.
+          in-memory on the server, so a reload after the run ended falls back to
+          the copy the run stamped on its marker (#4140) — see `markerPlan`.
           Cleared when the next run starts. `planTotals` carries the #1576
           estimated cos-action budget so a large series on a small daily cap can
-          see, before starting, whether it will run out before editorial. */}
+          see, before starting, whether it will run out before editorial; it and
+          `mode` are set from the same start frame as the live `plan`, so a
+          marker-drawn map (which only happens when there is no live plan) has
+          neither — no estimate and no dry-run badge, both correct for a run
+          that has already spent its budget. */}
       <AutopilotMilestones
-        plan={plan}
+        plan={mapPlan}
         planTotals={planTotals}
-        progress={progress}
-        terminal={terminal}
+        progress={mapProgress}
+        terminal={mapTerminal}
         dryRun={mode === 'dry-run'}
       />
 
