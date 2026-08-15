@@ -46,18 +46,24 @@ export function describeFetchError(err) {
  * same request generally succeeds immediately on a fresh socket, which is what
  * makes them worth one replay via `fetchWithTimeout`'s `shouldRetry`.
  *
- * Deliberately narrow. It excludes timeouts (`AbortError`, `\btimeout\b`) that
- * broader classifiers like `ollamaManager`'s `isTransientPullError` include:
- * that one is retrying a multi-GB streamed download over a flaky link, where a
- * timeout really is worth another go, while a request-per-item probe loop that
- * retried timeouts would hand a merely-slow host double the traffic. Callers
- * needing the wider net should keep their own predicate over
- * `describeFetchError`.
+ * Deliberately narrow, and the exclusions are the load-bearing part. It matches
+ * NO timeout — not our own `AbortError`, not a bare `timeout`, and not the
+ * TCP-level `ETIMEDOUT`. Broader classifiers like `ollamaManager`'s
+ * `isTransientPullError` do include timeouts, correctly: that one is retrying a
+ * multi-GB streamed download over a flaky link, where another go is worth it.
+ * Here the caller is a per-item probe loop, so retrying a timeout would hand a
+ * merely-slow host double the traffic — the opposite of the politeness this
+ * whole path exists to provide. Callers needing the wider net should keep their
+ * own predicate over `describeFetchError`.
+ *
+ * `ECONNREFUSED` is kept despite not being a reuse artifact: nothing is
+ * listening, so the replay fails in milliseconds and costs the host nothing,
+ * and it genuinely recovers a request that raced a server restart.
  *
  * @param {unknown} err
  * @returns {boolean}
  */
 export function isReplayableConnectionError(err) {
-  return /GOAWAY|ECONNRESET|EPIPE|ETIMEDOUT|ECONNREFUSED|socket hang up|other side closed|UND_ERR_SOCKET/i
+  return /GOAWAY|ECONNRESET|EPIPE|ECONNREFUSED|socket hang up|other side closed|UND_ERR_SOCKET/i
     .test(describeFetchError(err));
 }

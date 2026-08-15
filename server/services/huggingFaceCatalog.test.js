@@ -982,17 +982,18 @@ describe('huggingFaceCatalog', () => {
       expect(calls).toBe(2) // one retry, not an unbounded loop
     })
 
-    it('does not retry a timeout — a slow hub must not get double the traffic', async () => {
+    // Every flavour of timeout, not just our own AbortController's. A per-item
+    // probe loop that retried timeouts would hand a merely-slow Hub double the
+    // traffic — the opposite of the politeness this whole path exists to provide.
+    it.each([
+      ['our AbortController firing', () => Object.assign(new Error('The operation was aborted'), { name: 'AbortError' }), /aborted/i],
+      ['a TCP-level ETIMEDOUT', () => Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('connect ETIMEDOUT'), { code: 'ETIMEDOUT' }) }), /fetch failed/i]
+    ])('does not retry %s — a slow hub must not get double the traffic', async (_label, makeErr, expected) => {
       let calls = 0
-      fetch.mockImplementation(async () => {
-        calls += 1
-        const err = new Error('The operation was aborted')
-        err.name = 'AbortError'
-        throw err
-      })
+      fetch.mockImplementation(async () => { calls += 1; throw makeErr() })
 
-      await expect(searchHuggingFaceModels({ backend: 'lmstudio', query: 'timeout-not-retried' }))
-        .rejects.toThrow(/aborted/i)
+      await expect(searchHuggingFaceModels({ backend: 'lmstudio', query: `timeout-${calls}` }))
+        .rejects.toThrow(expected)
       expect(calls).toBe(1)
     })
 

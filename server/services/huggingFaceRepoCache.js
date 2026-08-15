@@ -87,7 +87,16 @@ async function flush() {
   // ~5 KB apiece — so on a long-lived server heavy search use would grow the
   // process by tens of MB that never came back, while every flush re-sorted the
   // whole set to write only the top 500.
-  entries = new Map(capped)
+  //
+  // Prune IN PLACE — never `entries = new Map(capped)`. `load()` is memoized on
+  // its promise, so every reader and writer holds the Map instance that promise
+  // resolved to; rebinding here would leave them writing into the old Map while
+  // subsequent flushes serialized the new one, so nothing written after the
+  // first flush would ever persist. Regression-tested.
+  const keep = new Set(capped.map(([repoId]) => repoId))
+  for (const repoId of [...entries.keys()]) {
+    if (!keep.has(repoId)) entries.delete(repoId)
+  }
   await ensureDir(join(PATHS.data, 'cache'))
   await atomicWrite(CACHE_FILE, {
     schemaVersion: CACHE_SCHEMA_VERSION,
@@ -104,23 +113,18 @@ function scheduleSave() {
   saveTimer = setTimeout(() => {
     flush().catch((err) => console.error(`❌ Failed to persist Hugging Face repo cache: ${err.message}`))
   }, SAVE_DEBOUNCE_MS)
-  // unref'd so a pending cache write never holds the process open — but that
-  // means a restart landing inside the debounce window drops the batch and the
-  // next boot re-pays the whole burst, which is the one cost this module exists
-  // to remove. The shutdown flush below closes that window without giving up the
-  // unref.
+  // unref'd so a pending cache write never holds the process open. A shutdown
+  // landing inside the debounce window therefore drops that batch and the next
+  // boot re-fetches it.
+  //
+  // Deliberately NOT closed with a SIGTERM/SIGINT handler. Registering a signal
+  // listener OVERRIDES Node's default terminate-on-signal, so a leaf cache
+  // module doing it would quietly take part-ownership of process shutdown —
+  // and in any context without another handler that calls `process.exit`
+  // (a script, a test, a one-off import) the process would stop dying on Ctrl-C.
+  // That is a severe failure mode to trade for a 2-second window whose entire
+  // cost is re-fetching a cache. Process lifecycle belongs to server/index.js.
   saveTimer.unref?.()
-}
-
-// Persist a pending batch on shutdown. Fire-and-forget by necessity — the signal
-// handler can't await — but atomicWrite's temp+rename means a half-written file
-// is never observable, and a dropped write only costs a refetch. `once` per
-// signal so repeated SIGTERMs don't stack handlers.
-for (const signal of ['SIGTERM', 'SIGINT']) {
-  process.once(signal, () => {
-    if (!dirty) return
-    flush().catch((err) => console.error(`❌ Failed to flush Hugging Face repo cache on ${signal}: ${err.message}`))
-  })
 }
 
 /**

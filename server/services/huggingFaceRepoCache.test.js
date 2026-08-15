@@ -78,6 +78,24 @@ describe('huggingFaceRepoCache', () => {
     expect(Object.keys(onDisk.entries).sort()).toEqual(['new/Repo', 'third/Repo']);
   });
 
+  // Regression: the prune in flush() must not swap the Map instance. load() is
+  // memoized on its PROMISE, so every reader/writer holds the Map that promise
+  // resolved to — rebinding `entries` left writes going into the old Map while
+  // flush() serialized the new one, silently persisting nothing after the first
+  // flush and serving evicted entries forever.
+  it('keeps persisting writes made after an earlier flush', async () => {
+    await cache.writeCachedRepoModel('first/Repo', { id: 'first/Repo' });
+    await cache.__flushRepoCache();
+
+    await cache.writeCachedRepoModel('second/Repo', { id: 'second/Repo' });
+    await cache.__flushRepoCache();
+
+    const onDisk = JSON.parse(await readFile(cacheFile(), 'utf8'));
+    expect(Object.keys(onDisk.entries).sort()).toEqual(['first/Repo', 'second/Repo']);
+    // ...and the reader must see it too, not a stale pre-flush Map.
+    expect(await cache.readCachedRepoModel('second/Repo')).toEqual({ hit: true, model: { id: 'second/Repo' } });
+  });
+
   it('ignores a cache file written by a different schema version', async () => {
     await mkdir(join(tempRoot, 'cache'), { recursive: true });
     await writeFile(cacheFile(), JSON.stringify({
