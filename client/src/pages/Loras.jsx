@@ -16,6 +16,7 @@ import toast from '../components/ui/Toast';
 import Modal from '../components/ui/Modal';
 import Banner from '../components/ui/Banner';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
+import ProgressBar from '../components/ui/ProgressBar';
 import { FormField } from '../components/ui/FormField';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import { formatBytes } from '../utils/formatters';
@@ -476,12 +477,7 @@ function HfDownloadProgress({ progress }) {
           <span className="font-mono text-gray-500">{formatBytes(progress.received)} / {formatBytes(total)}</span>
         )}
       </div>
-      <div className="h-1.5 w-full overflow-hidden rounded-full bg-port-bg" role="progressbar" aria-valuenow={pct ?? undefined} aria-valuemin={0} aria-valuemax={100}>
-        <div
-          className={`h-full bg-port-accent ${pct != null ? 'transition-[width] duration-200' : 'w-1/3 animate-pulse'}`}
-          style={pct != null ? { width: `${pct}%` } : undefined}
-        />
-      </div>
+      <ProgressBar percent={pct} label="Download progress" duration={200} />
     </div>
   );
 }

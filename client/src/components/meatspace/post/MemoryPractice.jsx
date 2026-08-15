@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { ChevronLeft, Check, X, SkipForward, RotateCcw, Target, ChevronDown, Loader, ShieldCheck } from 'lucide-react';
 import { submitMemoryPractice, getChunkMastery, getMemoryItem, attestMemoryMastery } from '../../../services/api';
+import ProgressBar from '../../ui/ProgressBar';
 import PostCompletionActions from './PostCompletionActions';
 import { startRetryableSave } from './completionSave';
 
@@ -386,7 +387,7 @@ function MemoryPracticeRunner({ item, mode, onSelectMode, onExitMode, onBack, on
           </span>
         </div>
 
-        <ProgressBar current={spacedChunkIdx * 10 + spacedLineIdx + 1} total={chunkMastery.length * 10} />
+        <PracticeProgress current={spacedChunkIdx * 10 + spacedLineIdx + 1} total={chunkMastery.length * 10} />
 
         {/* Chunk info */}
         <div className="flex items-center gap-3 text-xs">
@@ -480,7 +481,7 @@ function MemoryPracticeRunner({ item, mode, onSelectMode, onExitMode, onBack, on
           <span className="text-gray-500 text-sm ml-auto">{currentIdx + 1} / {lines.length}</span>
         </div>
 
-        <ProgressBar current={currentIdx + 1} total={lines.length} />
+        <PracticeProgress current={currentIdx + 1} total={lines.length} />
 
         <div className="bg-port-card border border-port-border rounded-lg p-6">
           <div className="space-y-2">
@@ -547,7 +548,7 @@ function MemoryPracticeRunner({ item, mode, onSelectMode, onExitMode, onBack, on
           <span className="text-gray-500 text-sm ml-auto">{currentIdx + 1} / {lines.length - 1}</span>
         </div>
 
-        <ProgressBar current={currentIdx + 1} total={lines.length - 1} />
+        <PracticeProgress current={currentIdx + 1} total={lines.length - 1} />
 
         <div className="bg-port-card border border-port-border rounded-lg p-6">
           <div className="text-gray-400 text-xs mb-2 uppercase tracking-wide">Current line:</div>
@@ -629,7 +630,7 @@ function MemoryPracticeRunner({ item, mode, onSelectMode, onExitMode, onBack, on
           <span className="text-gray-500 text-sm ml-auto">{currentIdx + 1} / {lines.length}</span>
         </div>
 
-        <ProgressBar current={currentIdx + 1} total={lines.length} />
+        <PracticeProgress current={currentIdx + 1} total={lines.length} />
 
         <div className="bg-port-card border border-port-border rounded-lg p-6">
           <div className="text-white text-lg leading-relaxed mb-4 font-mono">{displayText}</div>
@@ -904,14 +905,18 @@ function ChunkMasteryOverview({ item }) {
             const accuracy = typeof stats?.masteredAt === 'string'
               ? 100
               : stats?.attempts > 0 ? Math.round((stats.correct / stats.attempts) * 100) : 0;
-            const barColor = accuracy >= 80 ? 'bg-port-success' : accuracy >= 40 ? 'bg-port-warning' : 'bg-gray-600';
+            const barTone = accuracy >= 80 ? 'success' : accuracy >= 40 ? 'warning' : 'muted';
 
             return (
               <div key={chunk.id} className="flex items-center gap-2">
                 <span className="text-xs text-gray-500 w-16 truncate">{chunk.label}</span>
-                <div className="flex-1 h-1.5 bg-port-border rounded-full overflow-hidden">
-                  <div className={`h-full rounded-full ${barColor}`} style={{ width: `${accuracy}%` }} />
-                </div>
+                <ProgressBar
+                  percent={accuracy}
+                  tone={barTone}
+                  track="border"
+                  className="flex-1"
+                  label={`${chunk.label} mastery`}
+                />
                 <span className="text-xs font-mono text-gray-500 w-10 text-right">{accuracy}%</span>
               </div>
             );
@@ -962,12 +967,17 @@ function SpeedRunLine({ line, index, onResult }) {
   );
 }
 
-function ProgressBar({ current, total }) {
-  const pct = Math.round((current / total) * 100);
+// The name stays generic rather than "line 3 of 12": the spaced mode measures a
+// synthetic chunk×line position, so only the percentage is meaningful across all
+// four modes — and `aria-valuenow` already carries it.
+function PracticeProgress({ current, total }) {
   return (
-    <div className="w-full h-1.5 bg-port-border rounded-full overflow-hidden">
-      <div className="h-full bg-port-accent rounded-full transition-all" style={{ width: `${pct}%` }} />
-    </div>
+    <ProgressBar
+      percent={Math.round((current / total) * 100)}
+      track="border"
+      label="Practice progress"
+      duration={150}
+    />
   );
 }
 
