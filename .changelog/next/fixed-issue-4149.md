@@ -1,0 +1,1 @@
+- Creative Commission detail page now live-updates a freshly-run render instead of asking you to reload — it polls the referenced Creative Director projects while any run is still generating, and stops once they settle

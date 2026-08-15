@@ -8,8 +8,8 @@
  * degrades to the status-only card.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 vi.mock('../services/api', async (importOriginal) => ({
@@ -29,12 +29,14 @@ vi.mock('../components/ui/Toast', () => ({
   default: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },
 }));
 // ProjectPreview reaches into the media/job graph; the assertions here are about
-// which projects resolved, so stub it down to an identifiable marker.
+// which projects resolved (and, for #4149, which snapshot of a project is on
+// screen), so stub it down to an identifiable marker carrying the status.
 vi.mock('../components/creative-director/ProjectPreview.jsx', () => ({
-  default: ({ project }) => <div data-testid={`preview-${project.id}`} />,
+  default: ({ project }) => <div data-testid={`preview-${project.id}`}>{project.status}</div>,
 }));
 
 import * as api from '../services/api';
+import toast from '../components/ui/Toast';
 import CreativeCommissionDetail from './CreativeCommissionDetail';
 
 const COMMISSION = {
@@ -103,5 +105,94 @@ describe('CreativeCommissionDetail render-history project resolution (#4148)', (
     // placeholder must read "unavailable" rather than staying on "loading…".
     expect(screen.queryByTestId('preview-cd-2')).toBeNull();
     expect(screen.getByText('render unavailable')).toBeTruthy();
+  });
+});
+
+/**
+ * Live render refresh (#4149).
+ *
+ * A commission fire creates the CD project and returns; the render lands minutes
+ * later. The page used to sit on the stale "no render yet" card until a reload,
+ * and the Run-now toast said as much. It now polls the referenced projects while
+ * any `started` run still points at one that hasn't settled — and stops as soon
+ * as they all have, so an idle detail page issues no traffic.
+ */
+describe('CreativeCommissionDetail live render refresh (#4149)', () => {
+  // Drain pending promises (and optionally advance the poll clock) inside act.
+  const settle = async (ms = 0) => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
+  const mountLoaded = async () => {
+    render(<MemoryRouter><CreativeCommissionDetail /></MemoryRouter>);
+    // Commission fetch → id-set effect → project batch fetch: two awaits deep.
+    await settle();
+    await settle();
+  };
+  const withRun = (ranAt) => ({
+    ...COMMISSION,
+    runs: [{ id: 'run-1', projectId: 'cd-1', status: 'started', trigger: 'manual', ranAt }],
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getCommission.mockResolvedValue(COMMISSION);
+    api.getCreativeDirectorProjectsByIds.mockResolvedValue([]);
+  });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('swaps a still-generating run to its finished render without a reload', async () => {
+    vi.useFakeTimers();
+    api.getCommission.mockResolvedValue(withRun(new Date().toISOString()));
+    api.getCreativeDirectorProjectsByIds
+      .mockResolvedValueOnce([{ id: 'cd-1', status: 'rendering' }])
+      .mockResolvedValue([{ id: 'cd-1', status: 'complete', finalVideoId: 'job-1' }]);
+
+    await mountLoaded();
+    expect(screen.getByTestId('preview-cd-1').textContent).toBe('rendering');
+    const beforePoll = api.getCreativeDirectorProjectsByIds.mock.calls.length;
+
+    await settle(5000);
+    expect(api.getCreativeDirectorProjectsByIds.mock.calls.length).toBeGreaterThan(beforePoll);
+    expect(screen.getByTestId('preview-cd-1').textContent).toBe('complete');
+  });
+
+  it('stops polling once every referenced project has settled', async () => {
+    vi.useFakeTimers();
+    api.getCommission.mockResolvedValue(withRun(new Date().toISOString()));
+    api.getCreativeDirectorProjectsByIds.mockResolvedValue([
+      { id: 'cd-1', status: 'complete', finalVideoId: 'job-1' },
+    ]);
+
+    await mountLoaded();
+    const settledCalls = api.getCreativeDirectorProjectsByIds.mock.calls.length;
+
+    await settle(30000);
+    expect(api.getCreativeDirectorProjectsByIds.mock.calls.length).toBe(settledCalls);
+  });
+
+  it('never polls for a started run past the in-flight age ceiling', async () => {
+    vi.useFakeTimers();
+    // A run whose project stalled mid-render hours ago: polling it forever would
+    // burn a request every 5s on any tab left open, and no poll can rescue it.
+    const stale = new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString();
+    api.getCommission.mockResolvedValue(withRun(stale));
+    api.getCreativeDirectorProjectsByIds.mockResolvedValue([{ id: 'cd-1', status: 'rendering' }]);
+
+    await mountLoaded();
+    const initialCalls = api.getCreativeDirectorProjectsByIds.mock.calls.length;
+
+    await settle(30000);
+    expect(api.getCreativeDirectorProjectsByIds.mock.calls.length).toBe(initialCalls);
+  });
+
+  it('no longer tells the user to reload when a run starts', async () => {
+    api.runCommissionNow.mockResolvedValue({ status: 'started', commission: COMMISSION });
+    render(<MemoryRouter><CreativeCommissionDetail /></MemoryRouter>);
+    await screen.findByRole('heading', { name: COMMISSION.name });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Run commission .* now/i }));
+    });
+
+    expect(toast.success).toHaveBeenCalledWith(expect.stringContaining('appears below'));
+    expect(toast.success).toHaveBeenCalledWith(expect.not.stringContaining('reload'));
   });
 });

@@ -10,6 +10,12 @@
  * generation config. The URL is the source of truth for what's open (the
  * ID-based deep-linking rule), so a render or its detail page is directly
  * shareable, bookmarkable, and reachable from ⌘K / voice / notification links.
+ *
+ * A run's render materializes ASYNCHRONOUSLY — the fire creates the Creative
+ * Director project and returns, then the planner/render loop fills it in over
+ * the following minutes. The page therefore polls the referenced projects while
+ * any of them is still generating (#4149) so a freshly-fired render appears in
+ * place; there is no server-side completion event to subscribe to today.
  */
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
@@ -19,6 +25,7 @@ import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
+import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import { timeAgo } from '../utils/formatters';
 import CommissionConfigForm from '../components/creative-commission/CommissionConfigForm.jsx';
 import RenderHistory from '../components/creative-commission/RenderHistory.jsx';
@@ -29,6 +36,24 @@ import {
   getCommission, updateCommission, deleteCommission,
   submitCommissionFeedback, runCommissionNow, getCreativeDirectorProjectsByIds,
 } from '../services/api';
+
+// A CD project's lifecycle status is the only completion signal this page can
+// read (no socket channel, and a commission run row is written once and never
+// updated). These are the statuses where more output can still show up.
+//
+// NOTE the difference from `CreativeDirectorDetail`'s terminal set, which counts
+// 'draft' as settled: there, a draft is a project the user hasn't started. Here,
+// a commission fire creates the project and advances it in the same breath, so a
+// draft we observe is just the sliver before the planner's first status write.
+const GENERATING_PROJECT_STATUSES = new Set(['draft', 'planning', 'rendering', 'stitching']);
+
+// Hard ceiling on how long a `started` run is treated as still in flight. A run
+// whose project stalled (crashed mid-plan) or was pruned would otherwise poll
+// forever on a tab left open — bounding by run age stops that without needing a
+// timer, and generously outlasts any real generation.
+const IN_FLIGHT_RUN_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+
+const PROJECT_POLL_MS = 5000;
 
 export default function CreativeCommissionDetail() {
   const navigate = useNavigate();
@@ -49,6 +74,10 @@ export default function CreativeCommissionDetail() {
   const [running, setRunning] = useState(false);
   const [projectsById, setProjectsById] = useState(() => new Map());
   const [projectsLoading, setProjectsLoading] = useState(false);
+  // When the project batch was last ATTEMPTED — the clock the in-flight run
+  // check reads, so it re-evaluates on every poll tick rather than freezing at
+  // whatever `Date.now()` was during the last render.
+  const [projectsFetchedAt, setProjectsFetchedAt] = useState(0);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   // Load (and refresh) the deep-linked commission. `location.key` is a dep so a
@@ -99,22 +128,69 @@ export default function CreativeCommissionDetail() {
     return [...new Set(ids)].sort().join(',');
   }, [commission]);
 
-  useEffect(() => {
-    if (!projectIdsKey) { setProjectsById(new Map()); setProjectsLoading(false); return; }
-    let cancelled = false;
-    setProjectsLoading(true);
-    getCreativeDirectorProjectsByIds(projectIdsKey.split(','), { silent: true })
-      .then((projects) => {
-        if (cancelled) return;
-        // Index by id, not position: an id that no longer resolves (pruned
-        // project) is absent from the response, and its card degrades to the
-        // status-only placeholder.
-        setProjectsById(new Map((Array.isArray(projects) ? projects : []).map((p) => [p.id, p])));
-      })
-      .catch(() => { /* status-only cards degrade gracefully */ })
-      .finally(() => { if (!cancelled) setProjectsLoading(false); });
-    return () => { cancelled = true; };
+  // ONE fetch path, shared by the id-set change and the generation poll below
+  // (#4149). `seq` supersedes an in-flight response another call has already
+  // replaced — a poll tick that resolves after the id set changed must not
+  // reinstate the previous set's projects.
+  const projectsFetchSeqRef = useRef(0);
+  const projectsAttemptedKeyRef = useRef(null);
+  const fetchProjects = useCallback(async () => {
+    const seq = (projectsFetchSeqRef.current += 1);
+    if (!projectIdsKey) {
+      setProjectsById(new Map());
+      setProjectsLoading(false);
+      projectsAttemptedKeyRef.current = '';
+      return null;
+    }
+    // Only the FIRST attempt at a given id set shows "loading…" — a poll tick
+    // must not flash an already-resolved (or known-pruned) card back to the
+    // loading placeholder every few seconds.
+    if (projectsAttemptedKeyRef.current !== projectIdsKey) setProjectsLoading(true);
+    const projects = await getCreativeDirectorProjectsByIds(projectIdsKey.split(','), { silent: true })
+      .catch(() => null); // null = fetch failed; [] = resolved-but-empty (keep the two apart)
+    if (seq !== projectsFetchSeqRef.current) return null;
+    // Index by id, not position: an id that no longer resolves (pruned project)
+    // is absent from the response, and its card degrades to the status-only
+    // placeholder. A FAILED fetch keeps the last good map instead of blanking it.
+    if (Array.isArray(projects)) setProjectsById(new Map(projects.map((p) => [p.id, p])));
+    projectsAttemptedKeyRef.current = projectIdsKey;
+    setProjectsLoading(false);
+    // Stamped on every ATTEMPT, not just a successful one, so the in-flight age
+    // bound below keeps re-evaluating even while the endpoint is failing.
+    setProjectsFetchedAt(Date.now());
+    return null;
   }, [projectIdsKey]);
+
+  // Is any run still producing? A run row is written once with status 'started'
+  // and never revisited, so "still generating" has to come from the project it
+  // points at — unresolved (a just-created project can postdate the last batch)
+  // or sitting in a non-terminal CD status.
+  const hasGeneratingRun = useMemo(() => {
+    // The freshness of the data we're judging, not wall-clock render time.
+    const now = projectsFetchedAt || Date.now();
+    return (commission?.runs || []).some((r) => {
+      if (r?.status !== 'started' || !r.projectId) return false;
+      const ranAt = Date.parse(r.ranAt);
+      if (!Number.isFinite(ranAt) || now - ranAt > IN_FLIGHT_RUN_MAX_AGE_MS) return false;
+      const project = projectsById.get(r.projectId);
+      if (!project) return true;
+      return GENERATING_PROJECT_STATUSES.has(project.status);
+    });
+  }, [commission, projectsById, projectsFetchedAt]);
+
+  // Poll only while something is actually generating; the hook also pauses while
+  // the tab is hidden and re-fires on return. `immediate: false` because the
+  // id-set effect below already owns the first fetch.
+  const { refetch: refetchProjects } = useAutoRefetch(fetchProjects, PROJECT_POLL_MS, {
+    enabled: hasGeneratingRun,
+    immediate: false,
+    pollOnly: true,
+  });
+
+  // Fetch whenever the referenced id set changes (including the initial load and
+  // a Run Now appending a render) — the poll is gated on in-flight work, so it
+  // can't be responsible for the first read.
+  useEffect(() => { refetchProjects(); }, [projectIdsKey, refetchProjects]);
 
   const patchForm = useCallback((path, value) => setForm((prev) => patchFormState(prev, path, value)), []);
 
@@ -167,7 +243,7 @@ export default function CreativeCommissionDetail() {
         const fresh = result.commission;
         setCommission((prev) => (prev ? { ...prev, runs: fresh.runs, feedback: fresh.feedback } : fresh));
       }
-      if (result?.status === 'started') toast.success('Run started — its render appears below once generation finishes (reload to refresh)');
+      if (result?.status === 'started') toast.success('Run started — its render appears below once generation finishes');
       else if (result?.status === 'skipped') toast.error(`Run skipped: ${result.reason}`);
       else toast.error(`Run failed: ${result?.error || 'unknown error'}`);
     } catch (e) {
