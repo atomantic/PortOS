@@ -50,7 +50,14 @@ function missingParityPins(pairs, testSources) {
     const serverName = basename(serverFile);
     return !testSources.some(({ path, source }) => (
       path !== fileURLToPath(import.meta.url)
-      && (source.includes(`client/src/lib/${clientFile}`) || source.includes(`'./${clientFile}'`))
+      // The bare `'./<file>'` form only proves "reads the client copy" when the
+      // test itself lives in client/src/lib — a same-name server-only unit test
+      // (e.g. bareUrl.test.js importing './bareUrl.js') would otherwise satisfy
+      // this on its own, since serverName and clientFile are identical strings
+      // for a direct mirror. Without the directory check, deleting the actual
+      // parity-pinning *.mirror.test.js leaves this guard silently reporting
+      // no missing pins.
+      && (source.includes(`client/src/lib/${clientFile}`) || (path.startsWith(CLIENT_LIB) && source.includes(`'./${clientFile}'`)))
       && source.includes(serverName)
     ));
   });
@@ -86,6 +93,22 @@ describe('declared server/client mirror coverage', () => {
   it('reports a synthetic declared mirror when no test reads both copies', () => {
     const synthetic = listedMirrorPairs('| `example.js` | Mirror of `server/lib/example.js`. |');
     expect(missingParityPins(synthetic, [])).toEqual([
+      { clientFile: 'example.js', serverFile: 'example.js' },
+    ]);
+  });
+
+  it('does not accept a same-name server-only unit test as a parity pin (bypass probe)', () => {
+    // A direct mirror's clientFile and serverFile are the same string, so a
+    // plain server-side unit test importing its own module via a bare
+    // relative path (e.g. `bareUrl.test.js` doing `from './bareUrl.js'`)
+    // trivially contains both `'./example.js'` and the server filename
+    // without ever touching the client copy. Pin that this does NOT count.
+    const synthetic = listedMirrorPairs('| `example.js` | Mirror of `server/lib/example.js`. |');
+    const serverOnlyUnitTest = {
+      path: join(here, 'example.test.js'),
+      source: "import { thing } from './example.js';\n",
+    };
+    expect(missingParityPins(synthetic, [serverOnlyUnitTest])).toEqual([
       { clientFile: 'example.js', serverFile: 'example.js' },
     ]);
   });
