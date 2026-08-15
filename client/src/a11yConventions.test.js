@@ -472,30 +472,21 @@ function localHtmlForForwarders(src) {
   const cached = htmlForForwardersBySource.get(src);
   if (cached) return cached;
   const forwarders = new Map();
-  const re = /function\s+([A-Z][\w]*)\s*\(/g;
-  let match;
-  while ((match = re.exec(src))) {
-    const parenIndex = match.index + match[0].length - 1;
-    const params = balancedCallAt(src, parenIndex);
-    if (!params) continue;
-    const bodyStart = src.indexOf('{', parenIndex + params.length);
-    if (bodyStart === -1) continue;
-    const bodyEnd = matchingBraceEnd(src, bodyStart);
-    if (bodyEnd === -1) continue;
-    const body = src.slice(bodyStart, bodyEnd);
+  forEachLocalComponent(src, (name, body, params) => {
     // The <label> has to do both jobs before the call site's attributes can be
     // trusted: point at one prop, and render another prop as its own text. A
     // component that forwards the id onto a <label> it never fills with text
     // names nothing.
     const shape = /<label\b[^>]*\bhtmlFor\s*=\s*\{\s*([A-Za-z_$][\w$]*)\s*\}(?:[^>]*[^/>])?>(?:(?!<\/label>)[\s\S])*?\{\s*([A-Za-z_$][\w$]*)\s*\}/.exec(body);
-    if (!shape) continue;
+    if (!shape) return;
     const [, idProp, labelProp] = shape;
     // Both names must be parameters of this component. A <label> pointed at a
     // module-level constant forwards nothing from the call site, so reading the
     // call site's same-named attribute would exempt an unrelated control.
-    if (![idProp, labelProp].every((prop) => new RegExp(`\\b${prop}\\b`).test(params))) continue;
-    forwarders.set(match[1], { idProp, labelProp });
-  }
+    const parameterNames = new Set(params.match(/[A-Za-z_$][\w$]*/g));
+    if (!parameterNames.has(idProp) || !parameterNames.has(labelProp)) return;
+    forwarders.set(name, { idProp, labelProp });
+  });
   htmlForForwardersBySource.set(src, forwarders);
   return forwarders;
 }
@@ -584,23 +575,18 @@ function hasUsableNativeInputName(tag) {
 // crediting every control in a `.map()` would exempt the ones that stay
 // unnamed).
 function isEnclosedInListCall(src, start, index) {
-  const callStack = [];
-  for (let cursor = start; cursor < index; cursor++) {
-    const c = src[cursor];
-    if (c === '"' || c === "'" || c === '`') {
-      for (cursor++; cursor < index && src[cursor] !== c; cursor++) if (src[cursor] === '\\') cursor++;
-      continue;
-    }
-    // Only a call that still encloses the control disqualifies it. A `.map()`
-    // in the ternary's OTHER branch has already closed by then, so testing for
-    // the text anywhere before the control would reject the whole shape.
-    if (c === '(') callStack.push(/\.(?:map|flatMap)\s*$/.test(src.slice(start, cursor)));
-    else if (c === ')') callStack.pop();
+  // Only a call that STILL encloses the control disqualifies it — a `.map()`
+  // in the ternary's other branch has already closed by then, so testing for
+  // the text anywhere before the control would reject the whole shape.
+  for (const call of src.slice(start, index).matchAll(/\.(?:map|flatMap)\s*\(/g)) {
+    const openParen = start + call.index + call[0].length - 1;
+    const args = balancedCallAt(src, openParen);
+    if (!args || openParen + args.length > index) return true;
   }
-  return callStack.some(Boolean);
+  return false;
 }
 
-function isDirectElementInExpression(src, start, end, index) {
+function isDirectElementInExpression(src, start, index) {
   if (isEnclosedInListCall(src, start, index)) return false;
   let depth = 0;
   let cursor = start;
@@ -613,20 +599,33 @@ function isDirectElementInExpression(src, start, end, index) {
     }
     if (src.startsWith('</', cursor)) {
       const close = src.indexOf('>', cursor);
-      if (close === -1 || close > end) return false;
+      if (close === -1) return false;
       if (depth > 0) depth--;
       cursor = close + 1;
       continue;
     }
     const tag = tagBoundaryAt(src, cursor);
-    if (!tag || tag.end > end) return false;
+    if (!tag) return false;
     if (!tag.selfClosing) depth++;
     cursor = tag.end;
   }
   return depth === 0;
 }
 
+// The other two recognizers read a wrapper's own source before trusting it.
+// This one cannot — FormField is imported, not declared here — so at minimum
+// require that the name really is the shared component. Without the check a
+// file that declares or imports its own `FormField` exempts every control
+// under it, and that is the guard's widest exemption by far.
+// Matches every specifier the tree actually uses — `../ui/FormField`,
+// `../components/ui/FormField`, the one `.jsx`-suffixed import, and
+// `./FormField` from inside components/ui itself.
+function importsSharedFormField(src) {
+  return /\bfrom\s+['"](?:[^'"]*\/)?(?:ui\/)?FormField(?:\.jsx?)?['"]/.test(src);
+}
+
 function isNestedInLabeledFormField(src, index) {
+  if (!importsSharedFormField(src)) return false;
   const formRe = /<FormField\b/g;
   let formMatch;
   while ((formMatch = formRe.exec(src)) && formMatch.index < index) {
@@ -649,7 +648,7 @@ function isNestedInLabeledFormField(src, index) {
         if (end === -1) break;
         if (end >= index) {
           // The control lives inside this expression rather than after it.
-          if (depth === 0 && firstChild === null && isDirectElementInExpression(src, cursor + 1, end, index)) return true;
+          if (depth === 0 && firstChild === null && isDirectElementInExpression(src, cursor + 1, index)) return true;
           break;
         }
         if (src.slice(cursor + 1, end).trim()) firstChild = firstChild || 'expression';
@@ -718,12 +717,14 @@ function isNestedInLabeledFormField(src, index) {
 // from elsewhere stays unknown (FormField has its own dedicated check), and
 // only `function` declarations are matched — a missed wrapper is a false
 // negative that simply leaves its controls on the allowlist.
-const labelWrapperNamesBySource = new Map();
-
-function localLabelWrapperNames(src) {
-  const cached = labelWrapperNamesBySource.get(src);
-  if (cached) return cached;
-  const names = new Set();
+// Both wrapper recognizers below need the same three things out of a same-file
+// component — its name, its body, and (for one of them) its parameter list —
+// so they walk
+// declarations through this one iterator rather than each re-deriving the
+// boundaries. Only `function` declarations are matched; an arrow-function
+// component stays invisible, which is a false negative that simply leaves its
+// controls on the allowlist (tracked in #4317).
+function forEachLocalComponent(src, visit) {
   const re = /function\s+([A-Z][\w]*)\s*\(/g;
   let match;
   while ((match = re.exec(src))) {
@@ -737,14 +738,24 @@ function localLabelWrapperNames(src) {
     if (bodyStart === -1) continue;
     const bodyEnd = matchingBraceEnd(src, bodyStart);
     if (bodyEnd === -1) continue;
-    const body = src.slice(bodyStart, bodyEnd);
+    visit(match[1], src.slice(bodyStart, bodyEnd), params);
+  }
+}
+
+const labelWrapperNamesBySource = new Map();
+
+function localLabelWrapperNames(src) {
+  const cached = labelWrapperNamesBySource.get(src);
+  if (cached) return cached;
+  const names = new Set();
+  forEachLocalComponent(src, (name, body) => {
     // {children} must sit inside a <label> — no </label> may intervene, or a
     // component rendering `<label>Header</label>{children}<label>Footer</label>`
     // would register as a wrapper and exempt controls it never labels. The
     // opening tag must also not be self-closing (`<label … />` wraps nothing,
     // so anything after it is outside the label).
-    if (/<label\b(?:[^>]*[^/>])?>(?:(?!<\/label>)[\s\S])*?\{\s*children\s*\}/.test(body)) names.add(match[1]);
-  }
+    if (/<label\b(?:[^>]*[^/>])?>(?:(?!<\/label>)[\s\S])*?\{\s*children\s*\}/.test(body)) names.add(name);
+  });
   labelWrapperNamesBySource.set(src, names);
   return names;
 }
@@ -1100,23 +1111,33 @@ describe('a11y conventions', () => {
     expect(offenders, `Icon-only <button> with no aria-label/aria-labelledby — title alone isn't touch-discoverable and isn't reliably read as the accessible name; see media/MediaCard.jsx's Annotate button for the convention:\n${offenders.join('\n')}`).toEqual([]);
   });
 
-  it('gives every input an accessible name', () => {
-    // These controls live in compact peer-management rows where visible labels
-    // would break the layout. Keep explicit names on each input so placeholders
-    // never become their only screen-reader context.
-    const offenders = [];
+  // Both rules below ask the same question of every tracked file and differ
+  // only in which direction they compare the answer against the allowlist, so
+  // they share one scan. Two copies would each re-lex ~11MB of source, and —
+  // worse — could drift on what "unnamed" means, which would quietly turn the
+  // burn-down check vacuously green.
+  let unnamedAnchors = null;
+  const unnamedInputAnchors = () => {
+    if (unnamedAnchors) return unnamedAnchors;
+    unnamedAnchors = new Set();
     for (const file of trackedJsxFiles()) {
-      const src = readFileSync(join(CLIENT_ROOT, file), 'utf8');
-      const scanSrc = maskComments(src);
+      const scanSrc = maskComments(readFileSync(join(CLIENT_ROOT, file), 'utf8'));
       const re = /<input\b/g;
       let m;
       while ((m = re.exec(scanSrc))) {
         const tag = openingTagAt(scanSrc, m.index, '<input'.length);
-        const location = inputSourceAnchor(file, scanSrc, m.index);
-        if (!tag || hasAccessibleInputName(scanSrc, tag, m.index) || PREEXISTING_INPUT_NAME_ALLOWLIST.has(location)) continue;
-        offenders.push(location);
+        if (!tag || hasAccessibleInputName(scanSrc, tag, m.index)) continue;
+        unnamedAnchors.add(inputSourceAnchor(file, scanSrc, m.index));
       }
     }
+    return unnamedAnchors;
+  };
+
+  it('gives every input an accessible name', () => {
+    // These controls live in compact peer-management rows where visible labels
+    // would break the layout. Keep explicit names on each input so placeholders
+    // never become their only screen-reader context.
+    const offenders = [...unnamedInputAnchors()].filter((anchor) => !PREEXISTING_INPUT_NAME_ALLOWLIST.has(anchor));
     expect(offenders, `Input without an accessible name — add aria-label/aria-labelledby or an explicit/implicit <label>, or exclude type="hidden":\n${offenders.join('\n')}`).toEqual([]);
   });
 
@@ -1125,18 +1146,8 @@ describe('a11y conventions', () => {
     // or deleted, or renamed so its anchor no longer resolves — is dead weight
     // that quietly re-exempts the next input to land on that same anchor. Fail
     // on it so #4297's burn-down stays honest instead of drifting.
-    const offending = new Set();
-    for (const file of trackedJsxFiles()) {
-      const scanSrc = maskComments(readFileSync(join(CLIENT_ROOT, file), 'utf8'));
-      const re = /<input\b/g;
-      let m;
-      while ((m = re.exec(scanSrc))) {
-        const tag = openingTagAt(scanSrc, m.index, '<input'.length);
-        if (!tag || hasAccessibleInputName(scanSrc, tag, m.index)) continue;
-        offending.add(inputSourceAnchor(file, scanSrc, m.index));
-      }
-    }
-    const stale = [...PREEXISTING_INPUT_NAME_ALLOWLIST].filter((entry) => !offending.has(entry));
+    const unnamed = unnamedInputAnchors();
+    const stale = [...PREEXISTING_INPUT_NAME_ALLOWLIST].filter((entry) => !unnamed.has(entry));
     expect(stale, `PREEXISTING_INPUT_NAME_ALLOWLIST entries that no longer match an unnamed input — delete them:\n${stale.join('\n')}`).toEqual([]);
   });
 
@@ -1196,7 +1207,9 @@ describe('a11y conventions', () => {
     // veto that matters is a rendered LIST — Children.map flattens it and
     // clones only the first element, so crediting each control in a `.map()`
     // would exempt every one after the first.
-    const field = (child) => `<FormField label="Rounds">\n  ${child}\n</FormField>`;
+    // The wrapper is only credited when the file really imports the shared
+    // component, so every fixture carries the import a real call site would.
+    const field = (child) => `import FormField from '../ui/FormField';\n<FormField label="Rounds">\n  ${child}\n</FormField>`;
     const index = (src) => src.indexOf('<input');
 
     const ternary = field(`{isSelect ? (<select><option>a</option></select>) : (<input type="number" />)}`);
@@ -1218,6 +1231,13 @@ describe('a11y conventions', () => {
     // An unlabeled FormField names nothing, whatever its child looks like.
     const unlabeled = ternary.replace(' label="Rounds"', '');
     expect(isNestedInLabeledFormField(unlabeled, index(unlabeled))).toBe(false);
+
+    // This recognizer trusts a component it cannot read the source of, so the
+    // name alone must not be enough — a file with its own local `FormField`
+    // would otherwise exempt every control under it, and that is the widest
+    // exemption the guard grants.
+    const foreign = ternary.replace("from '../ui/FormField'", "from './LocalFormField'");
+    expect(isNestedInLabeledFormField(foreign, index(foreign))).toBe(false);
   });
 
   it('meets the 44px touch-target minimum on Close buttons', () => {
