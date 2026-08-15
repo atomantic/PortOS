@@ -17,6 +17,14 @@
  *      `writeMediaRegistry` collapse the strict-read → absent/unreadable skip →
  *      bucket-array guard shell shared by every migration that patches
  *      `data/media-models.json` (244, 247, …).
+ *   7. Seeded-provider-tier bumps — `makeSeededProviderTierMigration` collapses
+ *      the exact-match → rewrite-models → swap-retired-pointers shell that
+ *      032 / 058 / 153 / 206 each hand-copied. Those four stay frozen; the
+ *      factory is for the next bump.
+ *
+ * Families 5 and 7 both target `data/providers.json` and share its
+ * read → parse → shape-guard preamble via `readProvidersDoc`; each still owns
+ * its own log copy and result shape.
  *
  * The runner (`scripts/run-migrations.js`) explicitly skips `_`-prefixed
  * files so this module is never imported as a migration.
@@ -749,6 +757,43 @@ export function makeBrainSeedMigration({ logTag, entityType, seedIds, seedLabel,
 const PROVIDERS_REL_PATH = 'data/providers.json';
 
 /**
+ * Read + parse + shape-guard `data/providers.json` for the two provider
+ * migration families below. Returns a discriminated result:
+ *
+ * - `{ ok: false, reason: 'no-file' | 'unreadable' | 'bad-shape', path }` —
+ *   absent (a fresh install seeds from data.reference), unparseable, or missing
+ *   its `providers` map. In every case the caller leaves the file untouched: a
+ *   migration must never clobber a user's stored apiKeys to "fix" a shape.
+ * - `{ ok: true, config, providers, path }` — mutate `providers` in place, then
+ *   persist the whole `config` with `writeJsonAtomic(path, config)`.
+ *
+ * Deliberately silent: each family owns its own log copy (they say different
+ * things about what the skip costs the user), so the wording stays per-family
+ * while the read shell is shared. `err` carries the parse failure for the
+ * `'unreadable'` message.
+ */
+async function readProvidersDoc({ rootDir }) {
+  const path = join(rootDir, PROVIDERS_REL_PATH);
+  const raw = await readFile(path, 'utf-8').catch((err) => {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  });
+  if (raw == null) return { ok: false, reason: 'no-file', path };
+
+  let config;
+  try {
+    config = JSON.parse(raw);
+  } catch (err) {
+    return { ok: false, reason: 'unreadable', path, err };
+  }
+
+  const providers = config?.providers;
+  if (!providers || typeof providers !== 'object') return { ok: false, reason: 'bad-shape', path };
+
+  return { ok: true, config, providers, path };
+}
+
+/**
  * Build a provider-seed migration's `up()`. Returns `{ up }`, so a migration is
  * `export default makeProviderSeedMigration({ label, defs })`.
  *
@@ -772,30 +817,15 @@ export function makeProviderSeedMigration({ label, defs }) {
   const noun = defs.length === 1 ? 'provider' : 'providers';
 
   async function up({ rootDir }) {
-    const providersPath = join(rootDir, PROVIDERS_REL_PATH);
-    const raw = await readFile(providersPath, 'utf-8').catch((err) => {
-      if (err.code === 'ENOENT') return null;
-      throw err;
-    });
-    if (raw == null) {
-      console.log(`📄 ${PROVIDERS_REL_PATH} not present — skipping (fresh install seeds ${label} from data.reference)`);
-      return { ok: false, reason: 'no-file', added: 0 };
+    const doc = await readProvidersDoc({ rootDir });
+    if (!doc.ok) {
+      if (doc.reason === 'no-file') console.log(`📄 ${PROVIDERS_REL_PATH} not present — skipping (fresh install seeds ${label} from data.reference)`);
+      else if (doc.reason === 'unreadable') console.log(`⚠️ ${PROVIDERS_REL_PATH}: invalid JSON, skipping (${doc.err.message})`);
+      else console.log(`⚠️ ${PROVIDERS_REL_PATH}: unexpected shape, skipping`);
+      return { ok: false, reason: doc.reason, added: 0 };
     }
 
-    let config;
-    try {
-      config = JSON.parse(raw);
-    } catch (err) {
-      console.log(`⚠️ ${PROVIDERS_REL_PATH}: invalid JSON, skipping (${err.message})`);
-      return { ok: false, reason: 'unreadable', added: 0 };
-    }
-
-    if (!config || typeof config !== 'object' || !config.providers || typeof config.providers !== 'object') {
-      console.log(`⚠️ ${PROVIDERS_REL_PATH}: unexpected shape, skipping`);
-      return { ok: false, reason: 'bad-shape', added: 0 };
-    }
-
-    const providers = config.providers;
+    const { config, providers, path: providersPath } = doc;
     let added = 0;
 
     for (const def of defs) {
@@ -823,6 +853,169 @@ export function makeProviderSeedMigration({ label, defs }) {
 
     await writeJsonAtomic(providersPath, config);
     return { ok: true, reason: 'seeded', added };
+  }
+
+  return { up };
+}
+
+// ---- seeded-provider-tier bump migration family ----
+//
+// Migrations 032 / 058 / 153 / 206 each bump ONE model tier of the seeded
+// Claude provider entries (`claude-code`, `claude-code-tui`, and their
+// `-bedrock` twins) from a retired model id to its replacement. `setup-data.js`
+// merges *missing* provider entries but never updates existing ones, so an
+// existing install only picks a new default up when a migration rewrites its
+// `data/providers.json`.
+//
+// All four are the same shell with different data, and it is a deliberately
+// conservative shell:
+//   - `models` is rewritten only when it matches the prior seeded list EXACTLY
+//     (order-sensitive). A curated list — reordered, trimmed, extended — is left
+//     alone rather than silently reset to the shipped default.
+//   - On a rewrite, every retired id is swapped to its mapped replacement
+//     wherever it appears (the `models` array and any tier pointer). Pointers
+//     parked on still-current models are preserved.
+//   - Bedrock ids map like-for-like, so a long-context `…[1m]` pin lands on the
+//     new `…[1m]` id instead of silently dropping to the standard-context id.
+//   - The "already-new models but stale pointer" case is repaired: an install
+//     freshly seeded from the new data.reference can still carry a tier pointer
+//     at a now-absent id, which would leave it requesting a model it no longer
+//     lists.
+//
+// The four shipped copies stay FROZEN and do not consume this factory. A
+// migration is the historical record of what it did to an install; rewriting an
+// applied one to route through shared code would change that record and risk
+// changing its behavior for anyone who has not run it yet. This factory is the
+// shell the NEXT tier bump uses, and `_testHelpers.js#runSeededProviderTierMigrationTests`
+// is its companion test runner.
+
+// The four tier pointers a provider entry can park on a model id. A bump must
+// consider all of them, not just `defaultModel` — an install that pinned
+// `heavyModel` to the retired id would otherwise be left pointing at a model
+// that is no longer in its `models` list.
+const TIER_POINTER_KEYS = ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel'];
+
+/**
+ * The post-bump `models` array for one target, derived from its prior seeded
+ * list plus its id map — so the two can never drift apart in a caller's data
+ * table. Exported for the shared test runner (and for a migration that wants to
+ * assert the shape it is about to ship).
+ */
+export const seededProviderTierModels = ({ oldModels, idMap }) =>
+  oldModels.map((id) => (Object.hasOwn(idMap, id) ? idMap[id] : id));
+
+// Order-sensitive equality. Reordering the seeded list counts as customization
+// (skipped) — that is the "left alone" promise 032/058/153/206 all made.
+const sameModelList = (a, b) =>
+  Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => v === b[i]);
+
+// Swap any tier pointer still referencing a retired id to its replacement.
+// `Object.hasOwn` before the lookup: a bare `idMap[provider[key]]` would inherit
+// an Object.prototype member for a pointer literally named `constructor` /
+// `toString`. Unreachable via the UI or any seed, but the guard costs nothing.
+// Mutates in place; returns true if any pointer changed.
+const swapTierPointers = (provider, idMap) => {
+  let changed = false;
+  for (const key of TIER_POINTER_KEYS) {
+    const mapped = Object.hasOwn(idMap, provider[key]) ? idMap[provider[key]] : null;
+    if (mapped) {
+      provider[key] = mapped;
+      changed = true;
+    }
+  }
+  return changed;
+};
+
+/**
+ * Build a seeded-provider-tier bump migration's `up()`. Returns `{ up }`, so a
+ * migration collapses to `export default makeSeededProviderTierMigration({…})`
+ * over a small data table.
+ *
+ *   - `targets`   — `{ [providerId]: { oldModels, idMap } }`.
+ *       - `oldModels` — the EXACT prior seeded `models` array, in order. Only an
+ *         exact match is rewritten.
+ *       - `idMap` — retired id → replacement id, for every id this bump
+ *         retires. Bedrock targets list the plain and `[1m]` ids separately so
+ *         each maps like-for-like. Ids absent from the map are still-current
+ *         tiers and are carried through untouched.
+ *     Sibling providers that ship identical lists (the CLI/TUI pair, the two
+ *     Bedrock entries) should share one spec object.
+ *   - `tierLabel` — the human phrase for the tier being bumped, used in the log
+ *     lines (e.g. `'opus tier claude-opus-5'`).
+ *
+ * The summary log reports each touched provider's resulting `defaultModel` —
+ * the "what will this install actually run now" value — regardless of which
+ * tier was bumped.
+ *
+ * Resolves to `{ ok, reason: 'no-file' | 'unreadable' | 'bad-shape' |
+ * 'no-change' | 'bumped', touched, alreadyCurrent, customized }`, where the
+ * three arrays hold provider ids.
+ */
+export function makeSeededProviderTierMigration({ targets, tierLabel }) {
+  // Derive each target's post-bump list once, at build time.
+  const plans = Object.entries(targets).map(([id, target]) => ({
+    id,
+    idMap: target.idMap,
+    oldModels: target.oldModels,
+    newModels: seededProviderTierModels(target),
+  }));
+
+  async function up({ rootDir }) {
+    const doc = await readProvidersDoc({ rootDir });
+    if (!doc.ok) {
+      if (doc.reason === 'no-file') console.log(`📄 ${PROVIDERS_REL_PATH} not present — skipping (fresh install seeds from data.reference with the new defaults)`);
+      else if (doc.reason === 'unreadable') console.log(`⚠️ ${PROVIDERS_REL_PATH}: invalid JSON, skipping (${doc.err.message})`);
+      else console.log(`⚠️ ${PROVIDERS_REL_PATH}: no providers map — skipping`);
+      return { ok: false, reason: doc.reason, touched: [], alreadyCurrent: [], customized: [] };
+    }
+
+    const { config, providers, path: providersPath } = doc;
+
+    const touched = [];
+    const alreadyCurrent = [];
+    const customized = [];
+
+    for (const plan of plans) {
+      // `Object.hasOwn` rather than a bare `providers[plan.id]` probe: every
+      // plain object inherits `constructor` / `toString`, so a target id
+      // colliding with one would read as present and get "bumped" on the
+      // prototype. No seeded provider id is one of those, but the probe stays
+      // honest for free.
+      if (!Object.hasOwn(providers, plan.id)) continue;
+      const provider = providers[plan.id];
+      if (!provider || typeof provider !== 'object') continue;
+
+      if (sameModelList(provider.models, plan.oldModels)) {
+        // Prior seeded list → rewrite models + swap retired pointers.
+        provider.models = [...plan.newModels];
+        swapTierPointers(provider, plan.idMap);
+        touched.push(plan.id);
+        continue;
+      }
+
+      if (sameModelList(provider.models, plan.newModels)) {
+        // Models already current — only act if a tier pointer is still orphaned
+        // at a now-absent retired id.
+        if (swapTierPointers(provider, plan.idMap)) touched.push(plan.id);
+        else alreadyCurrent.push(plan.id);
+        continue;
+      }
+
+      customized.push(plan.id);
+    }
+
+    if (touched.length === 0) {
+      const notes = [];
+      if (alreadyCurrent.length > 0) notes.push(`already current: ${alreadyCurrent.join(', ')}`);
+      if (customized.length > 0) notes.push(`customized: ${customized.join(', ')}`);
+      console.log(`✅ ${PROVIDERS_REL_PATH}: nothing to bump for ${tierLabel}${notes.length ? ` (${notes.join('; ')})` : ''}`);
+      return { ok: true, reason: 'no-change', touched, alreadyCurrent, customized };
+    }
+
+    await writeJsonAtomic(providersPath, config);
+    const summary = touched.map((id) => `${id} (default: ${providers[id].defaultModel})`).join(', ');
+    console.log(`📝 ${PROVIDERS_REL_PATH}: updated ${summary} → ${tierLabel}`);
+    return { ok: true, reason: 'bumped', touched, alreadyCurrent, customized };
   }
 
   return { up };

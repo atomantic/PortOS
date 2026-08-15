@@ -1,0 +1,1 @@
+- Factored the repeated 'bump the seeded Claude provider tier' migration into a reusable `makeSeededProviderTierMigration` factory (plus a shared test runner), so the next model-tier default bump is a small data table instead of another ~200-line hand-copy

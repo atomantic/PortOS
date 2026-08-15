@@ -9,16 +9,22 @@
  * exercise the branches the helper guards behind opt-in flags.
  *
  * Also home to the shell suites for the other migration factories —
- * `makeSplitMigration`'s flags and `makeProviderSeedMigration`'s whole
- * read → guard → add-missing-ids → write shell, which the six provider-seed
- * migrations (149/152/185/195/201/231) used to re-assert one file at a time.
+ * `makeSplitMigration`'s flags, `makeProviderSeedMigration`'s whole
+ * read → guard → add-missing-ids → write shell (which the six provider-seed
+ * migrations 149/152/185/195/201/231 used to re-assert one file at a time), and
+ * `makeSeededProviderTierMigration` — including a differential suite proving it
+ * reproduces the shipped 153 / 206 tier bumps byte-for-byte without those
+ * frozen migrations being rewritten to consume it.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-import { applyPromptReplaceMigration, md5, readLayoutsDoc, writeLayoutsDoc, makeSplitMigration, makeProviderSeedMigration } from './_lib.js';
+import { applyPromptReplaceMigration, md5, readLayoutsDoc, writeLayoutsDoc, makeSplitMigration, makeProviderSeedMigration, makeSeededProviderTierMigration, seededProviderTierModels } from './_lib.js';
+import { runSeededProviderTierMigrationTests } from './_testHelpers.js';
+import sonnet5Migration from './153-claude-default-sonnet-5.js';
+import opus5Migration from './206-claude-default-opus-5.js';
 
 const FILENAME = 'pipeline-fake.md';
 const BODY_OLD = '# OLD\n';
@@ -423,5 +429,281 @@ describe('makeProviderSeedMigration', () => {
     expect(out.providers['seed-a']).toBeDefined();
     // The prototype itself is untouched — nothing leaked onto Object.prototype.
     expect({}.name).toBeUndefined();
+  });
+});
+
+// ---- makeSeededProviderTierMigration ----
+//
+// The factory has to earn the right to be used by the NEXT tier bump, and the
+// only evidence that counts is the shipped ones: migrations 153 and 206 stay
+// frozen and are re-expressed here as `targets` tables, then run head-to-head
+// against factory-built equivalents over the same fixtures. If the factory ever
+// diverges from what those two actually do to a `data/providers.json`, the
+// differential suite below fails.
+
+const SONNET_5_BARE = {
+  oldModels: ['claude-haiku-4-5', 'claude-sonnet-4-6', 'claude-opus-4-8'],
+  idMap: { 'claude-sonnet-4-6': 'claude-sonnet-5' },
+};
+const SONNET_5_BEDROCK = {
+  oldModels: [
+    'us.anthropic.claude-haiku-4-5',
+    'us.anthropic.claude-sonnet-4-6',
+    'global.anthropic.claude-opus-4-8',
+    'global.anthropic.claude-opus-4-8[1m]',
+  ],
+  idMap: { 'us.anthropic.claude-sonnet-4-6': 'us.anthropic.claude-sonnet-5' },
+};
+const SONNET_5_TARGETS = {
+  'claude-code': SONNET_5_BARE,
+  'claude-code-tui': SONNET_5_BARE,
+  'claude-code-bedrock': SONNET_5_BEDROCK,
+  'claude-code-tui-bedrock': SONNET_5_BEDROCK,
+};
+
+const OPUS_5_BARE = {
+  oldModels: ['claude-haiku-4-5', 'claude-sonnet-5', 'claude-opus-4-8'],
+  idMap: { 'claude-opus-4-8': 'claude-opus-5' },
+};
+const OPUS_5_BEDROCK = {
+  oldModels: [
+    'us.anthropic.claude-haiku-4-5',
+    'us.anthropic.claude-sonnet-5',
+    'global.anthropic.claude-opus-4-8',
+    'global.anthropic.claude-opus-4-8[1m]',
+  ],
+  idMap: {
+    'global.anthropic.claude-opus-4-8': 'global.anthropic.claude-opus-5',
+    'global.anthropic.claude-opus-4-8[1m]': 'global.anthropic.claude-opus-5[1m]',
+  },
+};
+const OPUS_5_TARGETS = {
+  'claude-code': OPUS_5_BARE,
+  'claude-code-tui': OPUS_5_BARE,
+  'claude-code-bedrock': OPUS_5_BEDROCK,
+  'claude-code-tui-bedrock': OPUS_5_BEDROCK,
+};
+
+/**
+ * Every `data/providers.json` shape a tier bump has to have an opinion about,
+ * derived from a `targets` table so both parameterizations get the same
+ * coverage: the prior seeded shape, a survivor pin, an orphan pointer, the
+ * post-bump shape, a trimmed list, a reordered list, one doc per retired id,
+ * and a doc carrying an unrelated provider plus a top-level key.
+ */
+const tierScenarioDocs = (targets) => {
+  const specs = Object.entries(targets).map(([id, target]) => ({
+    id,
+    target,
+    retired: target.oldModels.filter((m) => Object.hasOwn(target.idMap, m)),
+    surviving: target.oldModels.filter((m) => !Object.hasOwn(target.idMap, m)),
+    newModels: seededProviderTierModels(target),
+  }));
+
+  const entry = (s, overrides = {}) => ({
+    id: s.id,
+    models: [...s.target.oldModels],
+    defaultModel: s.retired.at(-1),
+    lightModel: s.surviving[0],
+    mediumModel: s.surviving.at(-1),
+    heavyModel: s.retired.at(-1),
+    ...overrides,
+  });
+  const doc = (build) => ({ providers: Object.fromEntries(specs.map((s) => [s.id, build(s)])) });
+  const bumped = (s, overrides = {}) => entry(s, {
+    models: [...s.newModels],
+    defaultModel: s.target.idMap[s.retired.at(-1)],
+    heavyModel: s.target.idMap[s.retired.at(-1)],
+    ...overrides,
+  });
+
+  const scenarios = {
+    seeded: doc((s) => entry(s)),
+    survivorPin: doc((s) => entry(s, { defaultModel: s.surviving[0] })),
+    orphanPointer: doc((s) => bumped(s, { defaultModel: s.retired.at(-1) })),
+    alreadyCurrent: doc(bumped),
+    trimmedList: doc((s) => entry(s, { models: s.target.oldModels.slice(1) })),
+    reorderedList: doc((s) => entry(s, { models: [s.target.oldModels.at(-1), ...s.target.oldModels.slice(0, -1)] })),
+    missingPointers: doc((s) => ({ id: s.id, models: [...s.target.oldModels] })),
+    unrelatedNeighbor: {
+      activeProvider: 'claude-code',
+      providers: {
+        ...Object.fromEntries(specs.map((s) => [s.id, entry(s)])),
+        'unrelated-provider': { id: 'unrelated-provider', models: ['some-configured-default'] },
+      },
+    },
+  };
+
+  // One doc per retired id, so the Bedrock plain-vs-`[1m]` split is exercised
+  // in both directions rather than only on whichever id the fixture defaults to.
+  for (const s of specs) {
+    for (const retiredId of s.retired) {
+      scenarios[`pin:${s.id}:${retiredId}`] = {
+        providers: { [s.id]: entry(s, { defaultModel: retiredId, heavyModel: retiredId }) },
+      };
+    }
+  }
+
+  return scenarios;
+};
+
+describe.each([
+  ['153 (sonnet tier → claude-sonnet-5)', sonnet5Migration, SONNET_5_TARGETS, 'sonnet tier claude-sonnet-5'],
+  ['206 (opus tier → claude-opus-5)', opus5Migration, OPUS_5_TARGETS, 'opus tier claude-opus-5'],
+])('makeSeededProviderTierMigration reproduces shipped migration %s', (_label, shipped, targets, tierLabel) => {
+  const factory = makeSeededProviderTierMigration({ targets, tierLabel });
+
+  let shippedRoot;
+  let factoryRoot;
+
+  beforeEach(() => {
+    shippedRoot = mkdtempSync(join(tmpdir(), 'tier-shipped-'));
+    factoryRoot = mkdtempSync(join(tmpdir(), 'tier-factory-'));
+    for (const root of [shippedRoot, factoryRoot]) mkdirSync(join(root, 'data'), { recursive: true });
+  });
+
+  afterEach(() => {
+    for (const root of [shippedRoot, factoryRoot]) rmSync(root, { recursive: true, force: true });
+  });
+
+  const providersFile = (root) => join(root, 'data', 'providers.json');
+
+  // The fixtures the family deliberately declines to touch. Naming them keeps
+  // the equality assertion below honest: without this split, a factory that
+  // wrote nothing at all would "match" the shipped migration on every fixture.
+  const NO_OP_SCENARIOS = new Set(['alreadyCurrent', 'trimmedList', 'reorderedList']);
+
+  it.each(Object.keys(tierScenarioDocs(targets)))('produces an identical data/providers.json for the %s fixture', async (scenario) => {
+    const input = JSON.stringify(tierScenarioDocs(targets)[scenario], null, 2) + '\n';
+    for (const root of [shippedRoot, factoryRoot]) writeFileSync(providersFile(root), input);
+
+    await shipped.up({ rootDir: shippedRoot });
+    await factory.up({ rootDir: factoryRoot });
+
+    const shippedOut = readFileSync(providersFile(shippedRoot), 'utf-8');
+    expect(readFileSync(providersFile(factoryRoot), 'utf-8')).toBe(shippedOut);
+    if (NO_OP_SCENARIOS.has(scenario)) expect(shippedOut).toBe(input);
+    else expect(shippedOut).not.toBe(input);
+  });
+
+  it('matches the shipped no-op behaviour on an absent file', async () => {
+    await shipped.up({ rootDir: shippedRoot });
+    await factory.up({ rootDir: factoryRoot });
+
+    expect(existsSync(providersFile(shippedRoot))).toBe(false);
+    expect(existsSync(providersFile(factoryRoot))).toBe(false);
+  });
+
+  it('matches the shipped skip on an unparseable file and on a missing providers map', async () => {
+    for (const input of ['{ not valid json', '{}\n', '{ "providers": null }\n']) {
+      for (const root of [shippedRoot, factoryRoot]) writeFileSync(providersFile(root), input);
+
+      await shipped.up({ rootDir: shippedRoot });
+      await factory.up({ rootDir: factoryRoot });
+
+      expect(readFileSync(providersFile(shippedRoot), 'utf-8')).toBe(input);
+      expect(readFileSync(providersFile(factoryRoot), 'utf-8')).toBe(input);
+    }
+  });
+});
+
+describe('makeSeededProviderTierMigration — shared contract (206 parameterization)', () => {
+  runSeededProviderTierMigrationTests({
+    migration: makeSeededProviderTierMigration({ targets: OPUS_5_TARGETS, tierLabel: 'opus tier claude-opus-5' }),
+    targets: OPUS_5_TARGETS,
+    prefix: 'tier-contract-opus-',
+  });
+});
+
+describe('makeSeededProviderTierMigration — shared contract (153 parameterization)', () => {
+  runSeededProviderTierMigrationTests({
+    migration: makeSeededProviderTierMigration({ targets: SONNET_5_TARGETS, tierLabel: 'sonnet tier claude-sonnet-5' }),
+    targets: SONNET_5_TARGETS,
+    prefix: 'tier-contract-sonnet-',
+  });
+});
+
+describe('makeSeededProviderTierMigration — factory-specific guards', () => {
+  let rootDir;
+  let providersPath;
+
+  beforeEach(() => {
+    rootDir = mkdtempSync(join(tmpdir(), 'tier-guards-'));
+    mkdirSync(join(rootDir, 'data'), { recursive: true });
+    providersPath = join(rootDir, 'data/providers.json');
+  });
+
+  afterEach(() => rmSync(rootDir, { recursive: true, force: true }));
+
+  const write = (value) => writeFileSync(providersPath, JSON.stringify(value, null, 2) + '\n');
+  const read = () => JSON.parse(readFileSync(providersPath, 'utf-8'));
+
+  it('never hands a target its own copy of the derived models array', async () => {
+    // Two providers sharing one spec object must not end up sharing one array —
+    // an in-memory mutation of either would otherwise show up in both.
+    const mig = makeSeededProviderTierMigration({ targets: OPUS_5_TARGETS, tierLabel: 'opus tier claude-opus-5' });
+    write({
+      providers: {
+        'claude-code': { id: 'claude-code', models: [...OPUS_5_BARE.oldModels], defaultModel: 'claude-opus-4-8' },
+        'claude-code-tui': { id: 'claude-code-tui', models: [...OPUS_5_BARE.oldModels], defaultModel: 'claude-opus-4-8' },
+      },
+    });
+
+    await mig.up({ rootDir });
+
+    const out = read().providers;
+    out['claude-code'].models.push('mutated');
+    expect(out['claude-code-tui'].models).toEqual(['claude-haiku-4-5', 'claude-sonnet-5', 'claude-opus-5']);
+    expect(OPUS_5_BARE.oldModels).toEqual(['claude-haiku-4-5', 'claude-sonnet-5', 'claude-opus-4-8']);
+  });
+
+  it('does not treat an inherited prototype key as a present provider', async () => {
+    // `providers['constructor']` is truthy on ANY plain object; a bare presence
+    // probe would "bump" the prototype instead of skipping a target that the
+    // install simply does not have.
+    const mig = makeSeededProviderTierMigration({
+      targets: { constructor: OPUS_5_BARE },
+      tierLabel: 'opus tier claude-opus-5',
+    });
+    write({ providers: {} });
+    const before = readFileSync(providersPath, 'utf-8');
+
+    expect(await mig.up({ rootDir })).toMatchObject({ ok: true, reason: 'no-change', touched: [] });
+
+    expect(readFileSync(providersPath, 'utf-8')).toBe(before);
+    expect({}.models).toBeUndefined();
+  });
+
+  it('skips a target whose entry is not an object rather than throwing', async () => {
+    const mig = makeSeededProviderTierMigration({ targets: { 'claude-code': OPUS_5_BARE }, tierLabel: 'opus tier claude-opus-5' });
+    write({ providers: { 'claude-code': 'not-an-object' } });
+    const before = readFileSync(providersPath, 'utf-8');
+
+    expect(await mig.up({ rootDir })).toMatchObject({ ok: true, reason: 'no-change' });
+    expect(readFileSync(providersPath, 'utf-8')).toBe(before);
+  });
+
+  it('leaves a pointer at an id this bump does not retire alone', async () => {
+    const mig = makeSeededProviderTierMigration({ targets: { 'claude-code': OPUS_5_BARE }, tierLabel: 'opus tier claude-opus-5' });
+    write({
+      providers: {
+        'claude-code': {
+          id: 'claude-code',
+          models: [...OPUS_5_BARE.oldModels],
+          defaultModel: 'claude-haiku-4-5',
+          lightModel: 'claude-haiku-4-5',
+          mediumModel: 'claude-sonnet-5',
+          heavyModel: 'claude-opus-4-8',
+        },
+      },
+    });
+
+    await mig.up({ rootDir });
+
+    const after = read().providers['claude-code'];
+    expect(after.defaultModel).toBe('claude-haiku-4-5');
+    expect(after.lightModel).toBe('claude-haiku-4-5');
+    expect(after.mediumModel).toBe('claude-sonnet-5');
+    expect(after.heavyModel).toBe('claude-opus-5');
   });
 });
