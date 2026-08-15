@@ -582,8 +582,14 @@ function isNestedInLabeledFormField(src, index) {
 // call site. Recognise those wrappers from their own source so a correctly
 // labeled control isn't forced to carry a redundant aria-label that would
 // shadow the visible text. Only same-file definitions count; a wrapper imported
-// from elsewhere stays unknown (FormField has its own dedicated check).
+// from elsewhere stays unknown (FormField has its own dedicated check), and
+// only `function` declarations are matched — a missed wrapper is a false
+// negative that simply leaves its controls on the allowlist.
+const labelWrapperNamesBySource = new Map();
+
 function localLabelWrapperNames(src) {
+  const cached = labelWrapperNamesBySource.get(src);
+  if (cached) return cached;
   const names = new Set();
   const re = /function\s+([A-Z][\w]*)\s*\(/g;
   let match;
@@ -602,6 +608,7 @@ function localLabelWrapperNames(src) {
     // The wrapper must render {children} between a <label> and its </label>.
     if (/<label\b[\s\S]*?\{\s*children\s*\}[\s\S]*?<\/label>/.test(body)) names.add(match[1]);
   }
+  labelWrapperNamesBySource.set(src, names);
   return names;
 }
 
