@@ -12,7 +12,9 @@
 // disk: it's saved into the gallery via POST /api/image-gen/upload (so the
 // stored `/data/images/<f>` URL syncs to peers, unlike a generic upload) and
 // then selected exactly like a gallery image — the same source-image flow the
-// image→3D page feeds to createImageTo3dModel.
+// image→3D page feeds to createImageTo3dModel. Hosts get one modal for both
+// "reuse an image" and "upload a new one" instead of a separate file `<input>`
+// beside the picker; `maxBytes` narrows the size cap below the wire limit.
 //
 // Local gallery only — no external/web search (deliberate, see plan).
 
@@ -25,7 +27,9 @@ import { normalizeImage } from '../media/normalize';
 import { listImageGallery, listMediaCollections } from '../../services/apiImageVideo';
 import { listUniverses } from '../../services/apiUniverseBuilder';
 import { uploadGalleryImage } from '../../services/apiSystem';
-import { readFileAsBase64 } from '../../utils/fileUpload';
+import {
+  readFileAsBase64, validateImageFile, JSON_UPLOAD_MAX_FILE_SIZE, UPLOAD_IMAGE_ACCEPT,
+} from '../../utils/fileUpload';
 import { buildMediaHaystack, tokenizeQuery, matchHaystack } from '../../lib/mediaSearch';
 import { humanizeCategory } from '../../lib/universeBuilderShared';
 import toast from '../ui/Toast';
@@ -51,7 +55,9 @@ const byLabel = (a, b) => a.label.localeCompare(b.label);
 // bad value drops the option rather than throwing during render.
 const asText = (value) => (typeof value === 'string' && value.trim() ? value : null);
 
-export default function GalleryImagePicker({ open, onClose, onSelect, allowUpload = false }) {
+export default function GalleryImagePicker({
+  open, onClose, onSelect, allowUpload = false, maxBytes = JSON_UPLOAD_MAX_FILE_SIZE,
+}) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -184,10 +190,17 @@ export default function GalleryImagePicker({ open, onClose, onSelect, allowUploa
 
   // Upload a file off disk into the gallery, then select it like any gallery
   // image. Saving goes through the peer-syncable `/data/images/` upload so the
-  // resulting `filename` resolves for createImageTo3dModel.
+  // resulting `filename` resolves for createImageTo3dModel — and so a host that
+  // stores the returned URL on a record (album cover, artist portrait, author
+  // headshot) gets bytes that actually transfer to federated peers (issue #1327).
   const handleUpload = async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
+    // Drag-drop and clipboard paste bypass the picker's `accept`, and an
+    // oversized body only fails as an opaque 413 — so gate here, not just in the
+    // file dialog. `maxBytes` lets a host keep a tighter product cap than the wire limit.
+    const invalid = validateImageFile(file, maxBytes);
+    if (invalid) { toast.error(invalid); return; }
     setUploading(true);
     const base64 = await readFileAsBase64(file).catch(() => null);
     if (!base64) { setUploading(false); toast.error(`Failed to read ${file.name}`); return; }
@@ -222,7 +235,7 @@ export default function GalleryImagePicker({ open, onClose, onSelect, allowUploa
           <div className="flex items-center gap-2 shrink-0">
             {allowUpload && (
               <FilePickerButton
-                accept="image/png,image/jpeg,image/webp,image/gif"
+                accept={UPLOAD_IMAGE_ACCEPT}
                 onChange={handleUpload}
                 disabled={uploading}
                 title="Upload an image from your device"

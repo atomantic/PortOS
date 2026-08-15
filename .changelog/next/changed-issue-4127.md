@@ -1,0 +1,1 @@
+- Album cover, artist portrait, and author headshot uploads now go through the shared gallery picker's Upload button (one "Choose or upload" control instead of a separate file input), and that picker now rejects unsupported formats and oversized files before uploading
