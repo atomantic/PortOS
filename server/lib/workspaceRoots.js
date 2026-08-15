@@ -87,9 +87,20 @@ const singleLine = (value) => String(value).replace(/[\r\n]+/g, ' ');
 
 const PRIVATE_HOME_SEGMENT = /(^|[\\/])((?:Users|home))[\\/][^\\/]+(?=([\\/]|$))/gi;
 
+const redactUncHost = (path) => {
+  const prefix = path.startsWith('\\\\') ? '\\\\' : path.startsWith('//') ? '//' : null;
+  if (!prefix) return path;
+  const hostEndOffset = path.slice(prefix.length).search(/[\\/]/);
+  if (hostEndOffset < 0) return `${prefix}<host>`;
+  const hostEnd = prefix.length + hostEndOffset;
+  return `${prefix}<host>${path.slice(hostEnd)}`;
+};
+
 const formatLogPath = (value) => {
   const path = singleLine(value);
   if (path === HOME_ROOT) return '~';
+  const redactedUncPath = redactUncHost(path);
+  if (redactedUncPath !== path) return redactedUncPath;
   const relativeHomePath = relative(HOME_ROOT, path);
   if (relativeHomePath && !relativeHomePath.startsWith('..') && !isAbsolute(relativeHomePath)) {
     return `~/${relativeHomePath}`;

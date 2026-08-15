@@ -68,6 +68,13 @@ describe('outsideAllowedRootsMessage', () => {
     expect(message).toContain('/home/<user>/private-repo');
     expect(message).not.toContain('alice');
   });
+
+  it('redacts hosts in UNC paths', () => {
+    const message = outsideAllowedRootsMessage(String.raw`\\server\share\repo`);
+
+    expect(message).toContain(String.raw`\\<host>\share\repo`);
+    expect(message).not.toContain('server');
+  });
 });
 
 // Windows repos routinely live off the system drive (D:\code, E:\projects), and
