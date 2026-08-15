@@ -50,6 +50,13 @@ vi.mock('./cosEvents.js', () => ({
 
 import { runHealthCheck, getHealthStatus } from './cosHealthMonitor.js';
 
+// The restart assertions differ only in what they record off the pm2 argv —
+// the whole argv, or just the process name.
+const recordRestarts = (sink, pick = (args) => args) => async (args) => {
+  sink.push(pick(args));
+  return { stdout: 'restarted', stderr: '' };
+};
+
 const baseState = () => ({
   config: { maxTotalProcesses: 10, maxProcessMemoryMb: 1024 },
   stats: {}
@@ -115,10 +122,7 @@ describe('cosHealthMonitor.runHealthCheck', () => {
       mock.desktopProcessNames = new Set(['game']);
       mock.pm2Stdout = erroredGame();
       const restarted = [];
-      mock.restartImpl = async (args) => {
-        restarted.push(args);
-        return { stdout: 'restarted', stderr: '' };
-      };
+      mock.restartImpl = recordRestarts(restarted);
 
       const { issues } = await runHealthCheck();
 
@@ -170,10 +174,7 @@ describe('cosHealthMonitor.runHealthCheck', () => {
         { name: 'web', pm2_env: { status: 'errored' }, monit: { memory: 0 } }
       ]);
       const restarted = [];
-      mock.restartImpl = async (args) => {
-        restarted.push(args[1]);
-        return { stdout: 'restarted', stderr: '' };
-      };
+      mock.restartImpl = recordRestarts(restarted, (args) => args[1]);
 
       const { metrics, issues } = await runHealthCheck();
 
@@ -188,10 +189,7 @@ describe('cosHealthMonitor.runHealthCheck', () => {
         { name: 'web', pm2_env: { status: 'errored' }, monit: { memory: 0 } }
       ]);
       const restarted = [];
-      mock.restartImpl = async (args) => {
-        restarted.push(args[1]);
-        return { stdout: 'restarted', stderr: '' };
-      };
+      mock.restartImpl = recordRestarts(restarted, (args) => args[1]);
 
       const { metrics } = await runHealthCheck();
 

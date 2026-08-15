@@ -107,16 +107,34 @@ imports `child_process` directly. This bug was fixed twice before by sweeping
 because nothing prevented the next new file from omitting it. Owning the import
 is the version of the rule that new code cannot silently skip.
 
-Two carve-outs, both enforced rather than exempted:
+Carve-outs, all enforced rather than exempted. Trees that cannot import the
+wrapper are held to a **per-call-site** rule instead — every `spawn`/`exec`
+family call must carry `windowsHide` itself:
 
 - **`server/lib/aiToolkit/`** is vendored and contractually self-contained (no
-  imports out to other PortOS modules), so it applies `windowsHide` inline. The
-  guard asserts it stays that way.
-- **`shell: true` with a bare `pm2`** is banned separately. `windowsHide` does
-  not help there: the shell resolves `pm2` to `pm2.cmd`, and the intermediate
-  `cmd.exe` → `pm2.cmd` → `node` hop flashes its own window. Use `execPm2` /
-  `spawnPm2` from `server/services/pm2.js`, which exec `node pm2/bin/pm2`
-  directly.
+  imports out to other PortOS modules), so it applies `windowsHide` inline.
+- **`autofixer/` and `browser/`** are separate packages with their own
+  `package.json`, so they cannot reach `server/lib/` either — but both are
+  PM2-forked apps (`ecosystem.config.cjs`), which puts them in exactly the
+  console-less blast radius above.
+
+The per-call-site check is deliberate: a file-level "mentions `windowsHide`
+somewhere" test is the weak form of the rule, and would let a second spawn added
+to an already-compliant file through unchecked.
+- **`shell: true` with a bare `pm2`** is banned separately, but *not* because
+  `windowsHide` fails there. Measured on Windows 11: eight `shell: true` spawns
+  from a console-less parent produce eight `OpenConsole.exe -Embedding`
+  handoffs without `windowsHide`, and zero with it — `shell: true` makes
+  `cmd.exe` the direct child, so `CREATE_NO_WINDOW` applies to it and the
+  `pm2.cmd`/`node` grandchildren inherit its hidden console. The v1.6.7 sites
+  flashed because they passed no `windowsHide` at all. The rule stands on its
+  other merits: `execPm2` / `spawnPm2` (`server/services/pm2.js`) exec
+  `node pm2/bin/pm2` directly, dropping two process hops and the PATH ambiguity
+  of resolving a bare `pm2` through a shell.
+
+  This distinction matters. If you believe `windowsHide` is unreliable, you
+  start layering redundant per-call special cases on top of the wrapper — which
+  is the failure mode the wrapper exists to end.
 
 ### What is *not* affected
 
@@ -124,6 +142,18 @@ Two carve-outs, both enforced rather than exempted:
 always with `--headless`, which never triggers the terminal handoff and never
 draws a window. Web shells and TUI agent sessions were never part of this
 symptom, and there is nothing to change there.
+
+That holds because the pinned node-pty is ConPTY-only — its Windows agent has
+no winpty fallback path. It is a property of this dependency, not of PTYs in
+general, so re-check it on a node-pty major bump. All PTY spawns go through the
+one module (`server/services/shell.js`, `server/cos-runner/index.js`,
+`server/lib/tuiPromptRunner.js`, `server/lib/tuiUsageScrape.js`), so the blast
+radius of that assumption is real.
+
+**`detached: true` spawns.** Windows ignores `CREATE_NO_WINDOW` when
+`DETACHED_PROCESS` is set. Those children are safe because they get *no* console
+at all — not because `windowsHide` is doing the work. Don't remove `detached`
+from a spawn and assume the flag was what protected it.
 
 ## Does PortOS need to be launched differently from PowerShell?
 

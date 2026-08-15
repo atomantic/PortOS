@@ -1,39 +1,17 @@
 /**
  * Drop-in `child_process` replacement that defaults every spawn to
- * `windowsHide: true`.
+ * `windowsHide: true` (`CREATE_NO_WINDOW`), so a console-less PM2 fork never
+ * makes Windows allocate a visible console for a child. An explicit
+ * `windowsHide: false` is always respected — the default only fills the gap.
  *
- * ## Why this module exists
+ * Server runtime code must import from here rather than `child_process`;
+ * `childProcess.guards.test.js` enforces that. Why a wrapper instead of another
+ * per-call-site sweep, what the console handoff actually is, and what is out of
+ * scope: docs/WINDOWS_CONSOLE.md.
  *
- * On Windows, a process that has **no console of its own** — every app PM2
- * forks, which is all of PortOS — must have Windows allocate a brand-new
- * console for any console child it launches (`git`, `gh`, `psql`, `ffmpeg`,
- * `tailscale`, `where`, …). When the "Default terminal application" setting is
- * Windows Terminal (the Windows 11 default, including the `{00000000-…}`
- * "Let Windows decide" value), that allocation is handed off to Windows
- * Terminal over COM: `OpenConsole.exe -Embedding` starts as the COM server and
- * a terminal window appears, takes foreground focus, then dies with the child.
- * At PortOS's background spawn rate that reads as a stream of console windows
- * flickering across the desktop and stealing keystrokes.
- *
- * `windowsHide: true` sets `CREATE_NO_WINDOW`, so the child gets a headless
- * console and the handoff never happens. It is a no-op on POSIX.
- *
- * ## Why a wrapper instead of per-call-site fixes
- *
- * This bug has been fixed twice by sweeping `windowsHide: true` across every
- * call site (v1.5.x: 23 sites / 11 files; v1.6.7: ~20 more) and has regressed
- * twice, because nothing stopped the next `import { spawn } from
- * 'child_process'` from landing without it. Routing every spawn through one
- * module makes the default structural, and `childProcess.guards.test.js`
- * fails the build when server code imports `child_process` directly.
- *
- * An explicit `windowsHide: false` is always respected — the default only
- * fills in the gap, so a caller that genuinely wants a visible console (none
- * today) can still ask for one.
- *
- * Not covered here: node-pty. ConPTY allocates its own console host, but it is
- * always `--headless` and never triggers the terminal handoff, so PTY sessions
- * were never part of this symptom.
+ * Note `CREATE_NO_WINDOW` is ignored for `detached: true` spawns — those are
+ * safe because `DETACHED_PROCESS` gives the child no console at all, not
+ * because this default is doing the work.
  */
 
 import {
@@ -50,14 +28,6 @@ import { promisify } from 'node:util';
 
 export { ChildProcess };
 
-// Promisified lazily rather than at module load: a test that partially mocks
-// child_process (a factory returning only `spawn`, say) would otherwise crash
-// every importer of this module at import time, on a binding it never uses.
-let execAsyncCache;
-let execFileAsyncCache;
-const nodeExecAsync = (...args) => (execAsyncCache ??= promisify(nodeExec))(...args);
-const nodeExecFileAsync = (...args) => (execFileAsyncCache ??= promisify(nodeExecFile))(...args);
-
 /**
  * Fill in `windowsHide: true` unless the caller stated an opinion.
  * @param {object} [options]
@@ -69,28 +39,14 @@ function withHide(options) {
 }
 
 /**
- * Normalize the `(command[, args][, options])` overload shared by
- * `spawn`/`spawnSync`/`fork` into a fixed `[args, options]` pair. The second
- * positional is the arg array only when it actually is an array — otherwise
- * it is the options object, which is the overload Node itself accepts.
- * @param {string[]|object} [argsOrOptions]
- * @param {object} [maybeOptions]
- * @returns {[string[]|undefined, object]}
- */
-function splitSpawnArgs(argsOrOptions, maybeOptions) {
-  if (Array.isArray(argsOrOptions)) return [argsOrOptions, withHide(maybeOptions)];
-  return [undefined, withHide(argsOrOptions)];
-}
-
-/**
- * Normalize the `(file[, args][, options][, callback])` overload shared by
- * `execFile`/`execFileSync` into the positional list Node expects, with
- * `windowsHide` injected. Classifying by type rather than by position is what
- * lets one helper serve all eight documented call shapes.
- * @param {Array} rest
+ * Normalize any of node's `(…[, args][, options][, callback])` overloads into
+ * the positional list it expects, with `windowsHide` injected. Classifying by
+ * type rather than position is what lets one helper serve all of them — the
+ * spawn family simply never passes a callback.
+ * @param {Array} rest - every argument after the command/file/module
  * @returns {Array}
  */
-function buildExecFileArgs(rest) {
+function normalize(rest) {
   let args;
   let options;
   let callback;
@@ -99,36 +55,29 @@ function buildExecFileArgs(rest) {
     else if (typeof value === 'function') callback = value;
     else if (value && typeof value === 'object') options = value;
   }
-  const out = args ? [args, withHide(options)] : [withHide(options)];
-  if (callback) out.push(callback);
-  return out;
+  return [...(args ? [args] : []), withHide(options), ...(callback ? [callback] : [])];
 }
 
 /**
  * `child_process.spawn` with `windowsHide` defaulted on.
  * @returns {ChildProcess}
  */
-export function spawn(command, argsOrOptions, maybeOptions) {
-  const [args, options] = splitSpawnArgs(argsOrOptions, maybeOptions);
-  return args ? nodeSpawn(command, args, options) : nodeSpawn(command, options);
-}
+export const spawn = (command, ...rest) => nodeSpawn(command, ...normalize(rest));
 
-/**
- * `child_process.spawnSync` with `windowsHide` defaulted on.
- */
-export function spawnSync(command, argsOrOptions, maybeOptions) {
-  const [args, options] = splitSpawnArgs(argsOrOptions, maybeOptions);
-  return args ? nodeSpawnSync(command, args, options) : nodeSpawnSync(command, options);
-}
+/** `child_process.spawnSync` with `windowsHide` defaulted on. */
+export const spawnSync = (command, ...rest) => nodeSpawnSync(command, ...normalize(rest));
 
 /**
  * `child_process.fork` with `windowsHide` defaulted on.
  * @returns {ChildProcess}
  */
-export function fork(modulePath, argsOrOptions, maybeOptions) {
-  const [args, options] = splitSpawnArgs(argsOrOptions, maybeOptions);
-  return args ? nodeFork(modulePath, args, options) : nodeFork(modulePath, options);
-}
+export const fork = (modulePath, ...rest) => nodeFork(modulePath, ...normalize(rest));
+
+/** `child_process.execSync` with `windowsHide` defaulted on. */
+export const execSync = (command, options) => nodeExecSync(command, withHide(options));
+
+/** `child_process.execFileSync` with `windowsHide` defaulted on. */
+export const execFileSync = (file, ...rest) => nodeExecFileSync(file, ...normalize(rest));
 
 /**
  * `child_process.exec` with `windowsHide` defaulted on.
@@ -138,22 +87,18 @@ export function fork(modulePath, argsOrOptions, maybeOptions) {
  * `.child` property on the returned promise). Without it, `promisify` would
  * fall back to generic callback wrapping and resolve to `stdout` alone,
  * silently breaking every `const { stdout } = await execAsync(...)` caller.
+ *
+ * Both hooks promisify at call time rather than at module load, so a test that
+ * partially mocks child_process can't crash every importer on a binding it
+ * never uses.
  * @returns {ChildProcess}
  */
 export const exec = Object.assign(
-  function exec(command, options, callback) {
-    if (typeof options === 'function') return nodeExec(command, withHide(undefined), options);
-    return nodeExec(command, withHide(options), callback);
+  function exec(command, ...rest) {
+    return nodeExec(command, ...normalize(rest));
   },
-  { [promisify.custom]: (command, options) => nodeExecAsync(command, withHide(options)) }
+  { [promisify.custom]: (command, options) => promisify(nodeExec)(command, withHide(options)) }
 );
-
-/**
- * `child_process.execSync` with `windowsHide` defaulted on.
- */
-export function execSync(command, options) {
-  return nodeExecSync(command, withHide(options));
-}
 
 /**
  * `child_process.execFile` with `windowsHide` defaulted on. Carries the same
@@ -162,14 +107,7 @@ export function execSync(command, options) {
  */
 export const execFile = Object.assign(
   function execFile(file, ...rest) {
-    return nodeExecFile(file, ...buildExecFileArgs(rest));
+    return nodeExecFile(file, ...normalize(rest));
   },
-  { [promisify.custom]: (file, ...rest) => nodeExecFileAsync(file, ...buildExecFileArgs(rest)) }
+  { [promisify.custom]: (file, ...rest) => promisify(nodeExecFile)(file, ...normalize(rest)) }
 );
-
-/**
- * `child_process.execFileSync` with `windowsHide` defaulted on.
- */
-export function execFileSync(file, ...rest) {
-  return nodeExecFileSync(file, ...buildExecFileArgs(rest));
-}

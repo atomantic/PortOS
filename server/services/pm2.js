@@ -32,7 +32,8 @@ function isJsScript(script) {
 /**
  * Spawn PM2 CLI via local binary (node pm2/bin/pm2).
  * Always uses the local PM2 binary to avoid depending on a global pm2 install.
- * On Windows this also avoids pm2.cmd which creates visible CMD windows.
+ * On Windows this also skips the pm2.cmd shim, dropping the cmd.exe -> pm2.cmd
+ * -> node hops and the PATH-resolution ambiguity that comes with them.
  *
  * A default 'error' listener is attached so that an ENOENT or EACCES error
  * (e.g. missing Node binary) doesn't crash Node via the uncaught-EventEmitter
@@ -45,10 +46,9 @@ function isJsScript(script) {
  * @returns {ChildProcess}
  */
 export function spawnPm2(pm2Args, opts = {}) {
-  const child = spawn(process.execPath, [PM2_BIN, ...pm2Args], {
-    ...opts,
-    windowsHide: true
-  });
+  // windowsHide comes from lib/childProcess.js. Re-asserting it here would also
+  // outrank a caller's explicit opt-out, which the wrapper deliberately honors.
+  const child = spawn(process.execPath, [PM2_BIN, ...pm2Args], opts);
   // Default error handler — prevents an uncaught EventEmitter 'error' crash
   // when no caller attaches its own handler. Callers that do attach their own
   // 'error' listener receive the event too (multiple listeners are additive).

@@ -226,7 +226,11 @@ async function launchBrowser() {
   // Headless mode skips this (no UI to click) and non-darwin platforms don't
   // have the TCC-responsibility problem at all.
   if (platform() === 'darwin' && !headlessMode) {
-    chromeProcess = spawn('/usr/bin/open', ['-na', macAppBundle, '--args', ...args], { stdio: 'ignore' });
+    // windowsHide is a no-op on POSIX and this branch is darwin-only, but every
+    // spawn in this package carries it: portos-browser is a PM2 fork, so the
+    // guard holds the whole tree to one rule rather than reasoning about which
+    // branch runs where. See docs/WINDOWS_CONSOLE.md.
+    chromeProcess = spawn('/usr/bin/open', ['-na', macAppBundle, '--args', ...args], { stdio: 'ignore', windowsHide: true });
     chromeProcess.on('exit', () => {
       // `open` returns ~immediately once Chrome is handed off to launchd; that
       // exit is not Chrome's death. Chrome-exit detection happens via the

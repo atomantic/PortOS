@@ -18,7 +18,7 @@
  * --revert, inspectable with --show.
  */
 
-import { execFileSync } from 'node:child_process';
+import { execFileSync } from '../server/lib/childProcess.js';
 
 // Console-host delegation CLSIDs. These identify which COM server Windows hands
 // a newly allocated console to.
@@ -37,26 +37,30 @@ if (process.platform !== 'win32') {
 }
 
 /**
- * Read one delegation value, or null when the key/value does not exist yet
- * (a machine that has never changed the setting has no key at all).
- * @param {string} name
- * @returns {string|null}
+ * Read both delegation values in one `reg query`. Values are absent entirely on
+ * a machine that has never changed the setting, which reads the same as "Let
+ * Windows decide" and is reported as such.
+ * @returns {Record<string, string|null>}
  */
-function readValue(name) {
-  // try/catch is required here: `reg query` exits non-zero for "value not set",
-  // which is a normal state, not an error. This runs outside Express, so an
-  // uncaught throw would take the process down rather than reach middleware.
+function readValues() {
+  // try/catch is required: `reg query` exits non-zero when the key does not
+  // exist, which is a normal state, not an error. This runs outside Express, so
+  // an uncaught throw would take the process down rather than reach middleware.
+  let out = '';
   try {
-    const out = execFileSync('reg', ['query', KEY, '/v', name], {
+    out = execFileSync('reg', ['query', KEY], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
-      windowsHide: true,
     });
-    const match = out.match(/REG_SZ\s+(\{[0-9A-Fa-f-]+\})/);
-    return match ? match[1].toUpperCase() : null;
   } catch {
-    return null;
+    out = '';
   }
+  return Object.fromEntries(
+    VALUES.map((name) => {
+      const match = out.match(new RegExp(`${name}\\s+REG_SZ\\s+(\\{[0-9A-Fa-f-]+\\})`, 'i'));
+      return [name, match ? match[1].toUpperCase() : null];
+    })
+  );
 }
 
 /**
@@ -66,7 +70,6 @@ function readValue(name) {
 function writeValue(name, guid) {
   execFileSync('reg', ['add', KEY, '/v', name, '/t', 'REG_SZ', '/d', guid, '/f'], {
     stdio: ['ignore', 'ignore', 'pipe'],
-    windowsHide: true,
   });
 }
 
@@ -83,8 +86,9 @@ function describe(guid) {
 }
 
 function report(label) {
+  const values = readValues();
   console.log(`📋 ${label}:`);
-  for (const name of VALUES) console.log(`   ${name} = ${describe(readValue(name))}`);
+  for (const name of VALUES) console.log(`   ${name} = ${describe(values[name])}`);
 }
 
 if (has('--show')) {

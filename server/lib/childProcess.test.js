@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { promisify } from 'node:util';
 
 // Spy on the real child_process surface so each wrapper can be checked for the
 // exact positional shape it forwards — the overload juggling is the part most
@@ -124,14 +123,5 @@ describe('childProcess overload handling', () => {
       { cwd: '/repo', windowsHide: true },
       cb,
     ]);
-  });
-});
-
-describe('childProcess promisify hooks', () => {
-  it('exposes promisify.custom on exec and execFile', () => {
-    // Without these, promisify() falls back to generic callback wrapping and
-    // resolves to stdout alone — see childProcess.promisify.test.js.
-    expect(typeof exec[promisify.custom]).toBe('function');
-    expect(typeof execFile[promisify.custom]).toBe('function');
   });
 });
