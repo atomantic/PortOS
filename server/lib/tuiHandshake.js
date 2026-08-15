@@ -342,6 +342,10 @@ export function createInputReadyTracker({ readyTextPattern = null, directLaunch 
   let needsAutoModeChoice = false;
   let autoModeAnswered = false;
   let tail = '';
+  // node-pty can split `ESC[?2004h` across reads. Keep only the trailing
+  // prefix of that exact toggle so the next chunk can complete it without
+  // treating unrelated escape traffic as a readiness signal.
+  let rawTail = '';
   return {
     // Ready once the TUI has RE-ENABLED bracketed-paste mode after the launch
     // shell turned it off to run the command — for claude that means its input
@@ -365,9 +369,16 @@ export function createInputReadyTracker({ readyTextPattern = null, directLaunch 
     // strippedText: ANSI-stripped chunk (the trust-gate / composer text).
     observe(rawText, strippedText) {
       if (rawText) {
-        for (const m of rawText.matchAll(BRACKETED_PASTE_MODE_PATTERN)) {
+        const raw = rawTail + rawText;
+        rawTail = '';
+        for (const m of raw.matchAll(BRACKETED_PASTE_MODE_PATTERN)) {
           if (m[1] === 'l') { pasteModeOn = false; sawCommandRun = true; }
           else pasteModeOn = true;
+        }
+        const lastEscape = raw.lastIndexOf('\x1b');
+        const possibleTogglePrefix = lastEscape === -1 ? '' : raw.slice(lastEscape);
+        if (possibleTogglePrefix && '\x1b[?2004'.startsWith(possibleTogglePrefix)) {
+          rawTail = possibleTogglePrefix;
         }
       }
       if (strippedText) {

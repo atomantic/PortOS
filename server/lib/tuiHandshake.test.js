@@ -1382,6 +1382,14 @@ describe('createInputReadyTracker', () => {
     expect(tracker.ready).toBe(true);
   });
 
+  it('directLaunch: carries a split bracketed-paste toggle across PTY chunks', () => {
+    const tracker = createInputReadyTracker({ directLaunch: true });
+    tracker.observe('\x1b[?2004', '');
+    expect(tracker.ready).toBe(false);
+    tracker.observe('h', '');
+    expect(tracker.ready).toBe(true);
+  });
+
   it('directLaunch + readyTextPattern: still waits for the composer marker', () => {
     const tracker = createInputReadyTracker({ readyTextPattern: AGY_INPUT_READY_PATTERN, directLaunch: true });
     tracker.observe(PASTE_ON, 'Signing in...');

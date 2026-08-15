@@ -57,6 +57,7 @@ import {
   scheduleSubmitEnters,
   SELF_CLEARING_RESUBMIT_POLL_MS,
   PASTE_DEADLINE_MS,
+  TUI_INPUT_READY_DEADLINE_MS,
   READY_POLL_INTERVAL_MS,
   READY_IDLE_THRESHOLD_MS,
   OUTPUT_BUFFER_CAP,
@@ -64,11 +65,13 @@ import {
   RAW_BUFFER_CAP,
   RAW_BUFFER_HEADROOM,
   buildTuiInvocation,
+  createInputReadyTracker,
   detectMissingTuiBinary,
   createSelfClearingSignalGate,
 } from './tuiHandshake.js';
 import { buildCliChildEnv } from './cliChildEnv.js';
 import { isCodexCommand } from './codex.js';
+import { isClaudeCommand } from './providerModels.js';
 
 // One-shot defaults that don't apply to the long-running agent path:
 //   - hard run cap (5 min vs unbounded for agents)
@@ -291,6 +294,13 @@ ${prompt}`;
   let outputBufferTruncated = false;
 
   const streamingStrip = createStreamingAnsiStripper();
+  // This PTY spawns the TUI directly, so the TUI's first paste-mode ON is the
+  // positive ready signal. Claude gets that positive gate; other providers
+  // retain their existing idle/deadline behavior.
+  const inputReady = createInputReadyTracker({ directLaunch: true });
+  const requiresInputReady = isClaudeCommand(command);
+  let trustAccepted = false;
+  let autoModeDeclined = false;
 
   // The wrapped prompt directs the model to write its COMPLETE response to
   // `responseFilePath` and then finish. That file appearing is the model's
@@ -488,6 +498,9 @@ ${prompt}`;
       if (rawBuffer.length > RAW_BUFFER_HEADROOM) rawBuffer = rawBuffer.slice(-RAW_BUFFER_CAP);
 
       const stripped = streamingStrip(text);
+      // The readiness tracker needs both streams: bracketed-paste transitions
+      // survive only in raw output, while startup dialog text is ANSI-stripped.
+      inputReady.observe(text, stripped);
       if (stripped) {
         if (postPasteStripped !== null) postPasteStripped += stripped;
         outputBuffer += stripped;
@@ -707,6 +720,23 @@ ${prompt}`;
       }, PASTE_MARKER_POLL_MS);
     };
 
+    const dismissStartupDialog = (keys, dialog) => {
+      try {
+        ptyProcess.write(keys);
+        return true;
+      } catch (err) {
+        finish({
+          success: false,
+          exitCode: 1,
+          error: `Failed to dismiss ${dialog}: ${err.message}`,
+          reason: 'startup-dialog-write-failed',
+        }).catch((finishErr) => {
+          console.error(`❌ TUI run ${runId} ${dialog} dismissal failed: ${finishErr?.message || finishErr}`);
+        });
+        return false;
+      }
+    };
+
     /**
      * Re-deliver the prompt while a self-clearing provider signal's window is
      * open. Mirrors `resubmitAfterSignal` on the long-running agent path — see
@@ -738,10 +768,9 @@ ${prompt}`;
       }
     };
 
-    // Ready watch — paste only once the TUI banner finishes repainting AND
-    // we've had at least promptDelayMs of runtime. Falls back to forcing
-    // the paste after PASTE_DEADLINE_MS so a silent provider still gets
-    // the prompt.
+    // Ready watch — Claude dismisses known startup dialogs before sending
+    // anything, then waits for its positive input-ready signal. Other providers
+    // retain the existing idle/deadline fallback unchanged.
     readyTimer = setInterval(() => {
       if (finalized || promptSentAt) {
         clearInterval(readyTimer);
@@ -750,6 +779,42 @@ ${prompt}`;
       }
       const now = Date.now();
       const elapsed = now - startTime;
+      if (requiresInputReady) {
+        if (inputReady.needsTrust && !trustAccepted) {
+          trustAccepted = true;
+          dismissStartupDialog('\r', 'folder-trust prompt');
+          return;
+        }
+        if (inputReady.needsAutoModeChoice && !autoModeDeclined) {
+          autoModeDeclined = true;
+          // Select "No, keep don't ask" so a one-shot run never rewrites the
+          // user's global Claude permission default as a startup side effect.
+          if (dismissStartupDialog('\x1b[B\r', 'auto-mode prompt')) {
+            // The offer paints over an already-live composer, so this re-arms
+            // that verified paste-mode signal. Returning still leaves a full
+            // ready-poll interval for Ink to redraw before any paste can start.
+            inputReady.ackAutoModeChoice();
+          }
+          return;
+        }
+        if (inputReady.ready && elapsed >= promptDelayMs) {
+          sendPrompt('input-ready');
+          return;
+        }
+        if (elapsed >= TUI_INPUT_READY_DEADLINE_MS) {
+          clearInterval(readyTimer);
+          readyTimer = null;
+          finish({
+            success: false,
+            exitCode: 1,
+            error: `${command} did not present an input prompt within ${Math.round(TUI_INPUT_READY_DEADLINE_MS / 1000)}s, so no prompt was sent.`,
+            reason: 'tui-not-ready',
+          }).catch((err) => {
+            console.error(`❌ TUI run ${runId} input-readiness failure could not finalize: ${err?.message || err}`);
+          });
+        }
+        return;
+      }
       if (elapsed >= PASTE_DEADLINE_MS) {
         sendPrompt('fallback');
         return;

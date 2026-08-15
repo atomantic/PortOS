@@ -104,7 +104,7 @@ vi.mock('./fileUtils.js', async () => {
 
 import { cleanTuiResponse, resolveTuiResponseText, executeTuiRun } from './tuiPromptRunner.js';
 import { markHostShuttingDown, resetHostShutdownFlagForTests } from './hostShutdown.js';
-import { SELF_CLEARING_RESUBMIT_INTERVAL_MS, SELF_CLEARING_RESUBMIT_ECHO_MS } from './tuiHandshake.js';
+import { SELF_CLEARING_RESUBMIT_INTERVAL_MS, SELF_CLEARING_RESUBMIT_ECHO_MS, TUI_INPUT_READY_DEADLINE_MS } from './tuiHandshake.js';
 
 const makeFakePty = () => {
   const fake = {
@@ -505,6 +505,118 @@ describe('executeTuiRun', () => {
     });
   });
 
+  describe('startup dialogs', () => {
+    it('confirms the Claude folder-trust gate and waits for input readiness before pasting', async () => {
+      vi.useFakeTimers({
+        toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+      });
+      const provider = { id: 'claude', type: 'tui', command: 'claude', tuiPromptDelayMs: 50 };
+      const promise = executeTuiRun({
+        runId: 'run-claude-trust-gate', provider, prompt: 'return one structured response',
+        workspacePath: TEST_WORKSPACE, timeout: 60000,
+      });
+      await flushAsync();
+
+      const pty = ptyInstances[0];
+      pty.emitData('Is this a project you trust?\n1. Yes, I trust this folder\n2. No, exit\n');
+      await vi.advanceTimersByTimeAsync(400);
+
+      expect(pty.write).toHaveBeenCalledWith('\r');
+      expect(pty.write).not.toHaveBeenCalledWith(expect.stringContaining('\x1b[200~'));
+
+      // A blind fallback must not paste into a known startup dialog.
+      await vi.advanceTimersByTimeAsync(11000);
+      expect(pty.write).not.toHaveBeenCalledWith(expect.stringContaining('\x1b[200~'));
+
+      // Claude's own bracketed-paste mode is the positive direct-PTY signal.
+      // node-pty may split its raw control sequence across callbacks.
+      pty.emitData('\x1b[?2004');
+      pty.emitData('h');
+      await vi.advanceTimersByTimeAsync(400);
+      expect(pty.write).toHaveBeenCalledWith(expect.stringContaining('\x1b[200~'));
+
+      pty.emitExit({ exitCode: 0 });
+      await promise;
+    });
+
+    it('declines Claude auto-mode and pastes only after dismissing the offer', async () => {
+      vi.useFakeTimers({
+        toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+      });
+      const provider = { id: 'claude', type: 'tui', command: 'claude', tuiPromptDelayMs: 50 };
+      const promise = executeTuiRun({
+        runId: 'run-claude-auto-mode', provider, prompt: 'return one structured response',
+        workspacePath: TEST_WORKSPACE, timeout: 60000,
+      });
+      await flushAsync();
+
+      const pty = ptyInstances[0];
+      pty.emitData(
+        '\x1b[?2004hMake auto mode your default permission mode?\n'
+        + '1. Yes, set auto mode as my default permission mode\n'
+        + "2. No, keep don't ask\n",
+      );
+      await vi.advanceTimersByTimeAsync(400);
+
+      expect(pty.write).toHaveBeenCalledWith('\x1b[B\r');
+      expect(pty.write).not.toHaveBeenCalledWith(expect.stringContaining('\x1b[200~'));
+
+      await vi.advanceTimersByTimeAsync(400);
+      expect(pty.write).toHaveBeenCalledWith(expect.stringContaining('\x1b[200~'));
+
+      pty.emitExit({ exitCode: 0 });
+      await promise;
+    });
+
+    it('keeps non-Claude TUIs on the existing idle fallback when startup output resembles Claude trust text', async () => {
+      vi.useFakeTimers({
+        toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+      });
+      const provider = { id: 'opencode', type: 'tui', command: 'opencode', tuiPromptDelayMs: 50 };
+      const promise = executeTuiRun({
+        runId: 'run-non-claude-trust-text', provider, prompt: 'return one structured response',
+        workspacePath: TEST_WORKSPACE, timeout: 60000,
+      });
+      await flushAsync();
+
+      const pty = ptyInstances[0];
+      pty.emitData('Is this a project you trust?\n1. Yes, I trust this folder\n2. No, exit\n');
+      await vi.advanceTimersByTimeAsync(2000);
+
+      expect(pty.write).not.toHaveBeenCalledWith('\r');
+      expect(pty.write).toHaveBeenCalledWith(expect.stringContaining('\x1b[200~'));
+
+      pty.emitExit({ exitCode: 0 });
+      await promise;
+    });
+
+    it('fails Claude startup after its input-readiness deadline instead of blind-pasting', async () => {
+      vi.useFakeTimers({
+        toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+      });
+      const provider = { id: 'claude', type: 'tui', command: 'claude', tuiPromptDelayMs: 50 };
+      const runId = 'run-claude-not-ready';
+      const promise = executeTuiRun({
+        runId, provider, prompt: 'return one structured response',
+        workspacePath: TEST_WORKSPACE, timeout: 60000,
+      });
+      await flushAsync();
+
+      ptyInstances[0].emitData('Claude Code is still starting\n');
+      await vi.advanceTimersByTimeAsync(TUI_INPUT_READY_DEADLINE_MS + 500);
+      await promise;
+
+      expect(ptyInstances[0].write).not.toHaveBeenCalledWith(expect.stringContaining('\x1b[200~'));
+      expect(runnerMocks.finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({
+        runId,
+        success: false,
+        exitCode: 1,
+        error: expect.stringContaining('did not present an input prompt'),
+        extras: expect.objectContaining({ completionReason: 'tui-not-ready' }),
+      }));
+    });
+  });
+
   describe('completion paths', () => {
     it('finishes with reason "idle-complete" once output stays idle past tuiOneShotIdleMs after the first response chunk', async () => {
       vi.useFakeTimers({
@@ -655,7 +767,7 @@ describe('executeTuiRun', () => {
       await flushAsync();
 
       const pty = ptyInstances[0];
-      pty.emitData('claude code ready> ');
+      pty.emitData('\x1b[?2004hclaude code ready> ');
       await vi.advanceTimersByTimeAsync(2000); // paste
       await vi.advanceTimersByTimeAsync(4000); // enter
       pty.emitData('model thinking…');          // arms idleWatchTimer
@@ -695,7 +807,7 @@ describe('executeTuiRun', () => {
       const pty = ptyInstances[0];
       // Pre-paste banner lets the ready-watch paste — but NOTHING is emitted
       // after the paste, so idleWatchTimer never arms.
-      pty.emitData('claude code ready> ');
+      pty.emitData('\x1b[?2004hclaude code ready> ');
       await vi.advanceTimersByTimeAsync(2000); // ready-watch pastes → response-file watcher starts
       await vi.advanceTimersByTimeAsync(4000); // enter submitted; still zero post-paste output
 
@@ -1053,7 +1165,7 @@ describe('executeTuiRun', () => {
       await flushAsync();
 
       const pty = ptyInstances[0];
-      pty.emitData('claude code ready> ');
+      pty.emitData('\x1b[?2004hclaude code ready> ');
       await vi.advanceTimersByTimeAsync(2000); // paste → response-file watcher armed
       await vi.advanceTimersByTimeAsync(4000); // enter
 
