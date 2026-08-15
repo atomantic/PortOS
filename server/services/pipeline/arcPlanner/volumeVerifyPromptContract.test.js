@@ -32,16 +32,39 @@ const NON_FIELD_TOKENS = new Set([
   // `location` VALUE forms (`episode:3`, `episode:2-3`, bare `volume`), not
   // field names.
   'episode', 'volume',
+  // The ordinal placeholder in the `episode:<n>-<n+1>` boundary form.
+  'n',
 ]);
 
 // The prompt scores an issue at whichever depth it has, so BOTH branches of the
 // leaf are legitimately citable: `beats` on an LLM-expanded issue, `synopsis` on
 // an un-expanded one.
-const renderableFields = () => new Set([
+const issueLeafFields = () => new Set([
   ...Object.keys(renderVolumeIssue({ stages: { idea: { output: 'beat sheet' } } })),
   ...Object.keys(renderVolumeIssue({ stages: { idea: { input: 'seed synopsis' } } })),
+]);
+
+const renderableFields = () => new Set([
+  ...issueLeafFields(),
   ...Object.keys(renderVolumeFields({})),
 ]);
+
+// Citations the checklist makes in a SPECIFIC scope. The union assertion below
+// only proves a cited field is rendered somewhere, which is blind to the case
+// codex flagged: `synopsis` exists on both renderers, so either side could drop
+// it and the other would mask the loss. These pin the owner. New tokens still
+// get caught by the union check — this table only has to carry the names the
+// generic scan cannot attribute on its own.
+const SCOPED_CITATIONS = [
+  // "Each entry has either `beats` … OR just `synopsis`" — the issue leaf.
+  ['beats', 'issue leaf', issueLeafFields],
+  ['synopsis', 'issue leaf', issueLeafFields],
+  ['arcPosition', 'issue leaf', issueLeafFields],
+  // Checks #1/#4/#5 read these off the volume node.
+  ['logline', 'volume node', () => new Set(Object.keys(renderVolumeFields({})))],
+  ['synopsis', 'volume node', () => new Set(Object.keys(renderVolumeFields({})))],
+  ['endingHook', 'volume node', () => new Set(Object.keys(renderVolumeFields({})))],
+];
 
 const unrenderableIn = (markdown, renderable) => [...backtickedTokens(markdown)]
   .filter((token) => !NON_FIELD_TOKENS.has(token) && !renderable.has(token));
@@ -60,6 +83,20 @@ describe('pipeline-volume-verify prompt ↔ buildVolumeVerifyContext contract', 
     );
     const cited = 'Beat-level findings are only valid against issues that have `beats`.';
     expect(unrenderableIn(cited, renderableWithoutBeats)).toEqual(['beats']);
+  });
+
+  it.each(SCOPED_CITATIONS)('renders %s on the %s the checklist reads it from', (field, _scope, rendered) => {
+    expect([...rendered()]).toContain(field);
+  });
+
+  it('catches a scoped drop the other renderer would mask (bypass probe)', () => {
+    // `synopsis` lives on BOTH renderers, so the union assertion alone cannot
+    // see the issue leaf losing it — the volume node's copy keeps the union
+    // satisfied while every beat/synopsis-depth check silently loses its input.
+    const leafWithoutSynopsis = new Set([...issueLeafFields()].filter((f) => f !== 'synopsis'));
+    const union = new Set([...leafWithoutSynopsis, ...Object.keys(renderVolumeFields({}))]);
+    expect(union.has('synopsis')).toBe(true); // masked by the volume node…
+    expect(leafWithoutSynopsis.has('synopsis')).toBe(false); // …but caught here.
   });
 
   it('renders every {{volume.*}} field the prompt interpolates', async () => {
