@@ -61,19 +61,20 @@ export default function PageSkeleton({
   barClassName = 'px-3 py-2 sm:px-4 sm:py-3',
   bodyClassName = 'p-3 sm:p-4',
   // `layout="split"` only. Mirror whatever the loaded two-pane shell does:
-  //   splitColsClass    — the desktop grid tracks, INCLUDING the collapsed
-  //                       variant when the page remembers a collapsed rail
-  //                       (Chief of Staff: `lg:grid-cols-[0px_1fr]`).
   //   sideCollapsed     — the rail is collapsed on desktop: reserve a
   //                       zero-width track there and keep the rail's mobile
   //                       band, which a collapsible page still renders.
+  //   splitColsClass    — the desktop grid tracks. Defaults off
+  //                       `sideCollapsed` so a collapsed rail can't reserve a
+  //                       320px column of nothing; pass your own when the
+  //                       page's rail isn't 320px wide.
   //   sideClassName     — the rail's own box (borders, padding, scroll).
   //   sideHero          — reserve a large circular block (avatar, portrait)
   //                       at the top of the rail.
   //   sideBlocks        — small blocks under the hero: a nav list at
   //                       `grid-cols-1`, a stat grid at `grid-cols-2`.
-  splitColsClass = 'lg:grid-cols-[320px_1fr]',
   sideCollapsed = false,
+  splitColsClass = sideCollapsed ? 'lg:grid-cols-[0px_1fr]' : 'lg:grid-cols-[320px_1fr]',
   sideClassName = 'flex flex-col gap-3 border-b lg:border-b-0 lg:border-r border-port-border p-3 lg:p-4 lg:h-full lg:overflow-hidden',
   sideHero = false,
   sideBlocks = 4,
@@ -105,24 +106,6 @@ export default function PageSkeleton({
   ));
 
   const stackedCards = <div className="space-y-4">{cardBlocks}</div>;
-
-  const body = layout === 'grid'
-    ? <div className={`grid grid-cols-1 gap-4 items-start ${gridColsClass}`}>{cardBlocks}</div>
-    : (
-      <div className={`grid grid-cols-1 gap-6 items-start ${sidebar ? 'lg:grid-cols-[1fr_360px]' : ''}`}>
-        {stackedCards}
-        {sidebar && (
-          <div className="rounded-lg border border-port-border bg-port-card p-4 sm:p-6 animate-pulse">
-            <div className="h-5 w-1/3 rounded bg-port-border mb-4" />
-            <div className="space-y-2">
-              <div className="h-4 w-full rounded bg-port-border" />
-              <div className="h-4 w-5/6 rounded bg-port-border" />
-              <div className="h-4 w-4/6 rounded bg-port-border" />
-            </div>
-          </div>
-        )}
-      </div>
-    );
 
   const tabRows = repeat(tabs);
   const sideBlockRows = repeat(sideBlocks);
@@ -172,13 +155,36 @@ export default function PageSkeleton({
         ) : (
           <div className={sideClassName}>{sideRail}</div>
         )}
-        <div className={`flex-1 min-h-0 min-w-0 overflow-hidden ${padded ? bodyClassName : ''}`}>
+        {/* The main pane owns the scroll on a `fullHeight` split, same as the
+            loaded page — the root is `overflow-hidden`, so without this the
+            reserved cards are clipped instead of scrolling. */}
+        <div className={`flex-1 min-h-0 min-w-0 ${fullHeight ? 'overflow-y-auto overflow-x-hidden' : 'overflow-hidden'} ${padded ? bodyClassName : ''}`}>
           {tabRows.length > 0 && <div className="mb-4 lg:mb-6">{renderTabStrip(true)}</div>}
           {stackedCards}
         </div>
       </div>
     );
   }
+
+  // Built after the `split` return so a two-pane page doesn't allocate the
+  // stack/grid tree (and its sidebar card) it never renders.
+  const body = layout === 'grid'
+    ? <div className={`grid grid-cols-1 gap-4 items-start ${gridColsClass}`}>{cardBlocks}</div>
+    : (
+      <div className={`grid grid-cols-1 gap-6 items-start ${sidebar ? 'lg:grid-cols-[1fr_360px]' : ''}`}>
+        {stackedCards}
+        {sidebar && (
+          <div className="rounded-lg border border-port-border bg-port-card p-4 sm:p-6 animate-pulse">
+            <div className="h-5 w-1/3 rounded bg-port-border mb-4" />
+            <div className="space-y-2">
+              <div className="h-4 w-full rounded bg-port-border" />
+              <div className="h-4 w-5/6 rounded bg-port-border" />
+              <div className="h-4 w-4/6 rounded bg-port-border" />
+            </div>
+          </div>
+        )}
+      </div>
+    );
 
   // `bar` pages are the flex-column shells: the header bar and tab strip are
   // full-bleed, only the body region takes padding and owns the scroll.

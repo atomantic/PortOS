@@ -172,9 +172,16 @@ describe('PageSkeleton', () => {
       expect(cardCount(container)).toBe(2);
     });
 
-    it('takes the caller grid tracks so a collapsed rail reserves its real width', () => {
-      render(<PageSkeleton layout="split" splitColsClass="lg:grid-cols-[0px_1fr]" />);
+    it('collapses the rail track by default when sideCollapsed, without a caller override', () => {
+      // Otherwise a collapsed rail reserves 320px of nothing on desktop.
+      render(<PageSkeleton layout="split" sideCollapsed />);
       expect(status().className).toContain('lg:grid-cols-[0px_1fr]');
+      expect(status().className).not.toContain('lg:grid-cols-[320px_1fr]');
+    });
+
+    it('takes caller-supplied grid tracks over the derived default', () => {
+      render(<PageSkeleton layout="split" splitColsClass="lg:grid-cols-[240px_1fr]" />);
+      expect(status().className).toContain('lg:grid-cols-[240px_1fr]');
     });
 
     it('renders the tab strip INSIDE the main pane, not above the split', () => {
@@ -217,6 +224,16 @@ describe('PageSkeleton', () => {
 
       render(<PageSkeleton layout="split" />);
       expect(status().className).not.toContain('h-full');
+    });
+
+    it('gives the main pane the scroll on a fullHeight split, since the root hides overflow', () => {
+      const tall = render(<PageSkeleton layout="split" fullHeight sideBlocks={0} />);
+      expect(tall.container.querySelector('.flex-1').className).toContain('overflow-y-auto');
+      tall.unmount();
+
+      // Without fullHeight the shell doesn't own a viewport, so nothing scrolls.
+      const short = render(<PageSkeleton layout="split" sideBlocks={0} />);
+      expect(short.container.querySelector('.flex-1').className).not.toContain('overflow-y-auto');
     });
 
     it('pads the main pane with bodyClassName only when padded', () => {

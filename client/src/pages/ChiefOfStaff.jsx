@@ -649,7 +649,6 @@ export default function ChiefOfStaff() {
         fullHeight
         padded
         bodyClassName="p-3 lg:p-4"
-        splitColsClass={desktopPanelCollapsed ? 'lg:grid-cols-[0px_1fr]' : 'lg:grid-cols-[320px_1fr]'}
         sideCollapsed={desktopPanelCollapsed}
         sideClassName="flex flex-col gap-3 border-b lg:border-b-0 lg:border-r border-port-accent-2/20 bg-gradient-to-b from-port-card/80 to-port-card/40 p-3 lg:px-4 lg:py-6 lg:h-full lg:overflow-hidden"
         sideHero
