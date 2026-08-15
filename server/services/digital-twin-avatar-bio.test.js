@@ -251,6 +251,28 @@ describe('polishAvatarBio', () => {
     expect(prompt).not.toContain('### VALUES.md');
   });
 
+  it('stops filling the fallback budget once it cannot even fit a truncation marker, instead of appending empty stub headers', async () => {
+    // A near-budget-exhausting first document leaves a small positive `remaining`
+    // (20 chars) that is still > 0 but below trimContextToBudget's own truncation
+    // marker length (44 chars) — regression coverage for the case where that
+    // returns '' and the loop must treat the budget as exhausted rather than
+    // looping through every remaining filename appending an empty '### file' block.
+    DOCS['TECHNICAL.md'] = `# Working Notes\n${'x'.repeat(11963)}`; // trims to exactly 11,980 chars
+    DOCS['CREATIVE.md'] = '# Creative Notes\nMakes interactive worlds.';
+    DOCS['COGNITIVE.md'] = '# Thinking Notes\nReasons from evidence.';
+    getProviderById.mockResolvedValue({ id: 'x', enabled: true });
+    callProviderAI.mockResolvedValue({
+      text: '## Who I Am\nI am Ada.\n## How I Speak\nDirectly.\n## What I Know\nSystems.',
+    });
+
+    await polishAvatarBio({ providerId: 'x', model: 'm' });
+
+    const prompt = callProviderAI.mock.calls[0][2];
+    expect(prompt).toContain('### TECHNICAL.md');
+    expect(prompt).not.toContain('### CREATIVE.md');
+    expect(prompt).not.toContain('### COGNITIVE.md');
+  });
+
   it('never sends a disabled document through the raw Markdown fallback', async () => {
     DOCS['TECHNICAL.md'] = '# Private Notes\nDo not share this technical detail.';
     DOCS['CREATIVE.md'] = '# Creative Notes\nMakes interactive worlds.';

@@ -72,6 +72,11 @@ function buildFallbackSourceContext(sectionLines, sourceDocuments) {
     const source = sourceDocuments[filename]?.trim();
     if (!source || remaining <= 0) continue;
     const content = trimContextToBudget(source, remaining);
+    // trimContextToBudget returns '' once the remaining budget can't even fit
+    // its own truncation marker — treat that as the budget being exhausted so
+    // the rest of the loop stops appending empty stub headers instead of
+    // silently no-oping through every remaining filename.
+    if (!content) { remaining = 0; continue; }
     remaining -= content.length;
     sourceBlocks.push(`### ${filename}\n${content}`);
   }
