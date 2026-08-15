@@ -828,6 +828,119 @@ export function createProviderService(config = {}) {
       return this.updateProvider(id, { models });
     },
 
+    /**
+     * Refresh MANY providers with ONE `providers.json` write.
+     *
+     * `refreshProviderModels` is a per-provider `loadProviders` → mutate →
+     * `saveProviders` round-trip, and `saveProviders` invalidates the cache and
+     * rewrites the whole file. A host fanning a refresh across every provider
+     * backed by one local daemon (PortOS does this after an Ollama install or
+     * delete) therefore paid N full-file writes — each superseded by the next —
+     * plus N cache invalidate/repopulate cycles for any concurrent reader. This
+     * does the same work as three phases: group, probe, then a single write.
+     *
+     * 1. **Group** by {@link ollamaRefreshGroupKey}, so providers sharing a
+     *    daemon AND a probe shape are probed once rather than once each. A
+     *    `null` key is the "not a shared Ollama probe" sentinel, NOT a bucket —
+     *    those providers each become a group of one and keep their own probe.
+     * 2. **Probe** one lead per group, sequentially. Nothing is persisted here,
+     *    so a probe that fails or answers late cannot leave a half-written file.
+     * 3. **Apply + save once.** The providers map is re-read after the probes
+     *    (they are network-bound and outlive the read cache's TTL), every
+     *    probed list is applied in one pass, and `saveProviders` runs exactly
+     *    once — or not at all when nothing was probed successfully.
+     *
+     * Never throws for a per-provider failure: each group carries its own
+     * outcome so the host can log group-level context (one line per group, not
+     * one per member) and decide what a failure means.
+     *
+     * - `updated` — probed successfully; `models` was applied to every member
+     *   still present at save time. `[]` is a real answer (the user deleted
+     *   their last model) and IS persisted; only the two statuses below skip.
+     * - `failed` — the probe threw; `error` carries it. The stored lists are
+     *   left untouched.
+     * - `missing` — no such provider, or the lead was deleted between the
+     *   grouping read and its probe.
+     *
+     * @param {string[]} ids
+     * @returns {Promise<Array<{ ids: string[], leadId: string, status: 'updated'|'failed'|'missing', models?: string[], error?: Error }>>}
+     */
+    async refreshProviderModelsBatch(ids) {
+      const requested = [...new Set(Array.isArray(ids) ? ids : [])];
+      if (requested.length === 0) return [];
+
+      const data = await loadProviders();
+      const groups = [];
+      const byKey = new Map();
+
+      for (const id of requested) {
+        const provider = data.providers[id];
+        if (!provider) {
+          groups.push({ ids: [id], leadId: id, status: 'missing' });
+          continue;
+        }
+        const key = ollamaRefreshGroupKey(provider);
+        const existing = key ? byKey.get(key) : null;
+        if (existing) {
+          existing.ids.push(id);
+          continue;
+        }
+        // `missing` is the starting status for EVERY group, not just the ones
+        // whose id is already unknown: the probe below either upgrades it or
+        // leaves it, which is exactly the answer for a lead that vanished
+        // between this read and its probe.
+        const group = { ids: [id], leadId: id, status: 'missing' };
+        if (key) byKey.set(key, group);
+        groups.push(group);
+      }
+
+      // Sequential, not `Promise.all`: several groups commonly hit the same
+      // local daemon, and this whole call is background work behind an
+      // install/delete, so nothing is waiting on the wall clock.
+      for (const group of groups) {
+        if (!data.providers[group.leadId]) continue;
+        const probed = await this.fetchProviderModels(group.leadId).then(
+          (models) => ({ models }),
+          (error) => ({ error })
+        );
+        if (probed.error) {
+          group.status = 'failed';
+          group.error = probed.error;
+          continue;
+        }
+        // `null` here means the lead vanished mid-probe — the same `missing`
+        // the group already carries, so leave the status alone.
+        if (probed.models === null) continue;
+        group.status = 'updated';
+        group.models = probed.models;
+      }
+
+      const updated = groups.filter((g) => g.status === 'updated');
+      if (updated.length === 0) return groups;
+
+      // Re-read rather than reusing the pre-probe snapshot: the probes above are
+      // network-bound and outlast the read cache's TTL, so `data` may no longer
+      // be the freshest view. Writing our stale copy would drop anything saved
+      // while we were probing.
+      const fresh = await loadProviders();
+      let changed = false;
+      for (const group of updated) {
+        for (const id of group.ids) {
+          const provider = fresh.providers[id];
+          // Deleted between the grouping read and now — nothing to write, and
+          // re-adding it here would resurrect a provider the user removed.
+          if (!provider) continue;
+          // Copy the list per provider so members of one group don't end up
+          // sharing (and later mutating) a single array instance.
+          fresh.providers[id] = { ...provider, models: [...group.models], id };
+          changed = true;
+        }
+      }
+      if (changed) await saveProviders(fresh);
+
+      return groups;
+    },
+
     async _refreshAPIProviderModels(provider) {
       if (provider.endpoint?.includes('ollama') || provider.endpoint?.includes(':11434')) {
         const ollamaUrl = `${provider.endpoint}/api/tags`;

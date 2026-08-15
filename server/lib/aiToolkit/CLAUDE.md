@@ -9,6 +9,7 @@ The AI provider/runner/prompt toolkit is vendored in-tree here. (It was previous
 - PortOS extends toolkit routes in `server/routes/providers.js` for vision testing and provider status (status routes live in PortOS, not the toolkit, because they call PortOS-side socket helpers)
 - When adding new provider fields (e.g., `fallbackProvider`, `lightModel`), update `createProvider()` in `providers.js`
 - `updateProvider()` uses spread so existing providers preserve custom fields, but `createProvider()` has an explicit field list
+- **Refreshing more than one provider goes through `refreshProviderModelsBatch(ids)`, never a loop over `refreshProviderModels(id)`.** Every single-provider refresh ends in `saveProviders`, which invalidates the read cache and rewrites all of `providers.json`; an N-provider fan-out that way is N full-file writes, each superseded by the next. The batch form groups by `ollamaRefreshGroupKey` (one probe per daemon + probe shape), probes each group's lead without persisting, then applies every result and saves **exactly once**. It never throws for a per-provider failure — each group carries its own `status` (`updated` / `failed` / `missing`) so the host logs one line per group rather than one per member. PortOS's post-install fan-out (`refreshOllamaBackedProviders` in `server/services/localLlm.js`) is the worked example.
 
 **Runner extension points.** The runner exposes a small declared override surface (in `runner.js`) so the host (PortOS) supplies its own runners without reaching into private internals:
 

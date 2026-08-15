@@ -17,7 +17,9 @@ export const setAIToolkit = setAIToolkitInstance;
 // routes decorate their payloads with; it is derived on read and never stored.
 // `ollamaRefreshGroupKey` buckets providers whose refresh hits the same Ollama
 // daemon with the same probe, so a fan-out can fetch once per daemon instead of
-// once per provider (see `refreshOllamaBackedProviders` in localLlm.js).
+// once per provider. `refreshProviderModelsBatch` below already applies it —
+// this export is for a caller that needs to reason about the grouping without
+// running a refresh.
 export {
   isOllamaBackedProvider,
   canRefreshModels,
@@ -67,4 +69,14 @@ export async function refreshProviderModels(id) {
  */
 export async function fetchProviderModels(id) {
   return requireToolkit().services.providers.fetchProviderModels(id);
+}
+
+/**
+ * Refresh a whole set of providers with ONE providers.json write: the toolkit
+ * groups them by shared Ollama daemon + probe shape, probes one lead per group,
+ * then applies every result in a single save. Returns one result per group so
+ * the caller logs group-level context instead of one line per member.
+ */
+export async function refreshProviderModelsBatch(ids) {
+  return requireToolkit().services.providers.refreshProviderModelsBatch(ids);
 }
