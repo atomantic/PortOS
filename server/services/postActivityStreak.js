@@ -32,8 +32,9 @@ import { getUserTimezone, todayInTimezone } from '../lib/timezone.js';
  * @param {string} [timezone] - defaults to the user's configured timezone.
  */
 export async function getUnifiedActivityStreak(training, todayStr, timezone) {
+  const atDate = new Date();
   const resolvedTimezone = timezone ?? await getUserTimezone();
-  const day = todayStr ?? todayInTimezone(resolvedTimezone);
+  const day = todayStr ?? todayInTimezone(resolvedTimezone, atDate);
   const sessions = await getPostSessions();
   return computeUnifiedStreak(sessions, training, day, resolvedTimezone);
 }

@@ -63,10 +63,11 @@ export async function submitTrainingEntry(entry) {
  * ALL history; only the per-drill breakdown below is windowed.
  */
 export async function getTrainingStats(days = 30) {
+  const atDate = new Date();
   const data = await loadTrainingLog();
   const allEntries = data.entries;
   const timezone = await getUserTimezone();
-  const todayStr = todayInTimezone(timezone);
+  const todayStr = todayInTimezone(timezone, atDate);
 
   let entries = allEntries;
   if (days > 0) {

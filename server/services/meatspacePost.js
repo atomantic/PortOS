@@ -645,9 +645,10 @@ export function deriveTaskAvgResponseMs(task) {
 }
 
 export async function getPostStats(days = 30) {
+  const atDate = new Date();
   const sessions = await getPostSessions();
   const timezone = await getUserTimezone();
-  const todayStr = todayInTimezone(timezone);
+  const todayStr = todayInTimezone(timezone, atDate);
   // Streaks are computed over ALL history, independent of the stats window, and
   // over BOTH scored sessions and the training log so the launcher/dashboard
   // streak matches the Morse trainer and the Progress page (issue #2091).
@@ -784,8 +785,9 @@ function finalizeMetricSeries(map) {
  * fallback for legacy sessions.
  */
 export async function getPostProgress({ days = 90 } = {}) {
+  const atDate = new Date();
   const timezone = await getUserTimezone();
-  const todayStr = todayInTimezone(timezone);
+  const todayStr = todayInTimezone(timezone, atDate);
   const window = Number.isFinite(days) && days > 0 ? Math.min(days, 365) : 0;
 
   const allSessions = await getPostSessions();
@@ -1298,6 +1300,7 @@ export function isRecDrillRunnable(config, module, type, memoryItemId = null) {
  * config can actually run.
  */
 export async function getPostRecommendations({ limit = RECOMMENDATION_LIMIT } = {}) {
+  const atDate = new Date();
   const [dueMemoryItems, dueReviews, stats, mulProgress, powersProgress, cogProgress, morse, sessions, config, training, timezone] = await Promise.all([
     getDueMemoryItems(),
     getDueReviews(new Date(), Infinity),
@@ -1311,7 +1314,7 @@ export async function getPostRecommendations({ limit = RECOMMENDATION_LIMIT } = 
     getAllTrainingEntries(),
     getUserTimezone(),
   ]);
-  const todayStr = todayInTimezone(timezone);
+  const todayStr = todayInTimezone(timezone, atDate);
 
   // Weakest skill — drop it unless the drill is currently runnable; a memory
   // weak-skill deep-links to its own tab rather than a composed session.
@@ -1564,12 +1567,13 @@ async function getAdaptiveSignal(type) {
  * @returns {Promise<{stats: Record<number, {samples,accuracy,avgResponseMs}>, floorLevel: number}>}
  */
 async function getMultiplicationLevelStats(windowDays = MASTERY_DEFAULTS.windowDays) {
+  const atDate = new Date();
   const sessions = await getPostSessions();
   // Window off the user's local today (DST-safe day math) so the cutoff stays
   // consistent with the tz-correct session dates submitPostSession now stamps
   // (issue #2681) — a UTC-day cutoff would skew the window edge by the tz offset.
   const timezone = await getUserTimezone();
-  const todayStr = todayInTimezone(timezone);
+  const todayStr = todayInTimezone(timezone, atDate);
   const cutoffStr = windowDays > 0 ? ymdShift(todayStr, -windowDays) : null;
 
   const byLevel = {};
@@ -1610,9 +1614,10 @@ async function getMultiplicationLevelStats(windowDays = MASTERY_DEFAULTS.windowD
 }
 
 async function getPowersLevelStats(windowDays = POWERS_MASTERY_DEFAULTS.windowDays) {
+  const atDate = new Date();
   const sessions = await getPostSessions();
   const timezone = await getUserTimezone();
-  const todayStr = todayInTimezone(timezone);
+  const todayStr = todayInTimezone(timezone, atDate);
   const cutoffStr = windowDays > 0 ? ymdShift(todayStr, -windowDays) : null;
   const byLevel = {};
   let floorLevel = 0;
@@ -1692,11 +1697,12 @@ export async function getPowersProgress() {
  * @returns {Promise<{stats: Record<number, {samples,accuracy,avgResponseMs}>, floorLevel: number}>}
  */
 async function getCognitiveLevelStats(type, windowDays = COGNITIVE_MASTERY_DEFAULTS.windowDays) {
+  const atDate = new Date();
   const sessions = await getPostSessions();
   // Window off the user's local today (DST-safe) so the cutoff stays consistent
   // with the tz-correct session dates submitPostSession now stamps (issue #2681).
   const timezone = await getUserTimezone();
-  const todayStr = todayInTimezone(timezone);
+  const todayStr = todayInTimezone(timezone, atDate);
   const cutoffStr = windowDays > 0 ? ymdShift(todayStr, -windowDays) : null;
 
   const byLevel = {};

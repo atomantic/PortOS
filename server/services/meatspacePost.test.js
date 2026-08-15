@@ -20,9 +20,14 @@ vi.mock('../lib/fileUtils.js', () => ({
 // assertion holds deterministically (an unpinned `{}` would fall back to the
 // runner's system tz and break these suites off a non-UTC CI runner). tz-specific
 // tests set settingsState.current to a real IANA zone.
-const settingsState = vi.hoisted(() => ({ current: { timezone: 'UTC' } }));
+const settingsState = vi.hoisted(() => ({ current: { timezone: 'UTC' }, onRead: null }));
 vi.mock('../services/settings.js', () => ({
-  getSettings: () => Promise.resolve(settingsState.current),
+  getSettings: () => {
+    const onRead = settingsState.onRead;
+    settingsState.onRead = null;
+    onRead?.();
+    return Promise.resolve(settingsState.current);
+  },
 }));
 
 import { readJSONFile, atomicWrite } from '../lib/fileUtils.js';
@@ -1398,7 +1403,11 @@ describe('getPostStats — byModule averaging, days window cutoff, empty-window 
 
 describe('getPostStats / submitPostSession — timezone-correct day boundary (issue #2681)', () => {
   beforeEach(() => { vi.clearAllMocks(); });
-  afterEach(() => { vi.useRealTimers(); settingsState.current = { timezone: 'UTC' }; });
+  afterEach(() => {
+    vi.useRealTimers();
+    settingsState.current = { timezone: 'UTC' };
+    settingsState.onRead = null;
+  });
 
   function mockSessions(sessions) {
     readJSONFile.mockImplementation((path, defaultValue) => {
@@ -1462,6 +1471,21 @@ describe('getPostStats / submitPostSession — timezone-correct day boundary (is
     const stats = await getPostStats(1);
     expect(stats.sessionCount).toBe(1);
     expect(stats.overall).toBe(84);
+  });
+
+  it('anchors the read-side day to the request-start instant when settings resolve after midnight', async () => {
+    // The settings read crosses LA midnight. The loaded session still belongs to
+    // the request-start local day; todayInTimezone must use that captured instant
+    // rather than the clock after the awaited settings read.
+    freezeAt('2026-07-18T06:59:59.000Z', 'America/Los_Angeles');
+    settingsState.onRead = () => vi.setSystemTime(new Date('2026-07-18T07:00:01.000Z'));
+    mockSessions([
+      { date: '2026-07-17', score: 91, tasks: [{ module: 'mental-math', type: 'doubling-chain', score: 91 }] },
+    ]);
+
+    const stats = await getPostStats(30);
+    expect(stats.completedToday).toBe(true);
+    expect(stats.todayScore).toBe(91);
   });
 
   it('submitPostSession stamps a new session date in the user local timezone, not the server UTC day', async () => {
