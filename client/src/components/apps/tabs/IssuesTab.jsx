@@ -84,10 +84,13 @@ export default function IssuesTab({ appId, appName }) {
   const requestRef = useRef(0);
 
   // Page-level provider/model/effort pin for every Claim button on this tab —
-  // left untouched (blank), a claim resolves the app's own configured default,
-  // same as the bare button always did. This picker never persists across a
-  // reload; it's a session convenience for "claim the next several issues with
-  // model X" without reopening the Agent Operations drawer each time.
+  // left untouched (blank), a claim resolves the install's active provider,
+  // same as the bare button always did (POST /tasks/slashdo -> resolveAgentProviderAndModel;
+  // this manual path does NOT consult the app's scheduled claim-work override —
+  // that's a separate resolution used only by the automated claim-work task).
+  // This picker never persists across a reload; it's a session convenience for
+  // "claim the next several issues with model X" without reopening the Agent
+  // Operations drawer each time.
   const {
     providers, selectedProviderId, selectedModel, availableModels,
     setSelectedProviderId, setSelectedModel
@@ -221,7 +224,7 @@ export default function IssuesTab({ appId, appName }) {
             onModelChange={setSelectedModel}
             effort={effort}
             onEffortChange={setEffort}
-            emptyProviderOption="Auto (app default)"
+            emptyProviderOption="Auto (default)"
             emptyModelOption="Default model"
             compact
             highlightToolUse
