@@ -143,3 +143,38 @@ export async function claimHeavyLocalJob({
     await wait(Math.min(250, Math.max(1, deadline - now())));
   }
 }
+
+/**
+ * Adopt a claim already recorded on disk, for a process that did not
+ * acquire it — a restarted server re-attaching to a detached child that
+ * survived the crash (#1332). The surviving child already holds the
+ * machine-wide accelerator claim (transferred to it via `handoffTo` before
+ * the restart); calling `claimHeavyLocalJob` again here would see that live
+ * claim as a COMPETING job and refuse it, failing every restart-survived run
+ * outright. This never contends for the lock — it only recognizes a claim
+ * that already names this exact job and PID, so it's safe to call blind.
+ *
+ * Returns `null` when no on-disk claim matches `kind`/`id`/`pid` (e.g. an
+ * in-flight run that predates this claim file, or a genuinely different
+ * holder), so the caller can fall back to `claimHeavyLocalJob`.
+ */
+export async function adoptHeavyLocalJob({
+  kind, id, pid, claimPath = HEAVY_LOCAL_JOB_CLAIM_PATH,
+} = {}) {
+  const holder = await readHolder(claimPath);
+  if (holder?.kind !== kind || holder.id !== id || holder.pid !== pid || typeof holder.token !== 'string') return null;
+  let released = false;
+  return {
+    ok: true,
+    holder: publicHolder(holder),
+    async handoffTo() {},
+    async release() {
+      if (released) return;
+      released = true;
+      const current = await readHolder(claimPath);
+      if (current?.token === holder.token) await unlink(claimPath).catch((err) => {
+        if (err?.code !== 'ENOENT') throw err;
+      });
+    },
+  };
+}

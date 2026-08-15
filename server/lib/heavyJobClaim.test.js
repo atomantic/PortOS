@@ -3,7 +3,7 @@ import { existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { describe, expect, it, vi } from 'vitest';
-import { claimHeavyLocalJob, HEAVY_LOCAL_JOB_STALE_MS } from './heavyJobClaim.js';
+import { adoptHeavyLocalJob, claimHeavyLocalJob, HEAVY_LOCAL_JOB_STALE_MS } from './heavyJobClaim.js';
 
 const withClaimPath = async (run) => {
   const dir = await mkdtemp(join(tmpdir(), 'portos-heavy-job-'));
@@ -64,6 +64,59 @@ describe('claimHeavyLocalJob', () => {
       });
       expect(result.stale).toBe(true);
       expect(result.message).toContain('older than the safety ceiling');
+    });
+  });
+});
+
+describe('adoptHeavyLocalJob', () => {
+  // #1332 boot re-attach: a restarted server re-attaches to a detached trainer
+  // that survived the crash. That trainer's PID already holds the machine-wide
+  // claim (handed off to it pre-restart) — the new process must recognize and
+  // adopt that claim rather than contending for a fresh one, which would see
+  // its own survivor as a competing job and refuse it.
+  it('adopts an on-disk claim already recorded for this exact kind/id/pid', async () => {
+    await withClaimPath(async (claimPath) => {
+      await writeFile(claimPath, JSON.stringify({
+        kind: 'LoRA training', id: 'run-a', pid: 4242, startedAt: 0, token: 'tok-a',
+      }));
+      const adopted = await adoptHeavyLocalJob({ kind: 'LoRA training', id: 'run-a', pid: 4242, claimPath });
+      expect(adopted).toMatchObject({ ok: true, holder: { kind: 'LoRA training', id: 'run-a', pid: 4242 } });
+
+      await adopted.release();
+      expect(existsSync(claimPath)).toBe(false);
+    });
+  });
+
+  it('returns null (does not steal) when no claim exists, or the on-disk claim names a different job', async () => {
+    await withClaimPath(async (claimPath) => {
+      expect(await adoptHeavyLocalJob({ kind: 'LoRA training', id: 'run-a', pid: 4242, claimPath })).toBeNull();
+
+      await writeFile(claimPath, JSON.stringify({
+        kind: 'LoRA training', id: 'run-a', pid: 4242, startedAt: 0, token: 'tok-a',
+      }));
+      // Wrong id, wrong pid, and wrong kind all fail to match — and the claim
+      // file is left untouched (still readable, still holding the same token).
+      expect(await adoptHeavyLocalJob({ kind: 'LoRA training', id: 'run-b', pid: 4242, claimPath })).toBeNull();
+      expect(await adoptHeavyLocalJob({ kind: 'LoRA training', id: 'run-a', pid: 9999, claimPath })).toBeNull();
+      expect(await adoptHeavyLocalJob({ kind: 'video', id: 'run-a', pid: 4242, claimPath })).toBeNull();
+      expect(JSON.parse(await readFile(claimPath, 'utf8'))).toMatchObject({ token: 'tok-a' });
+    });
+  });
+
+  it('release() only removes the claim file if its token still matches', async () => {
+    await withClaimPath(async (claimPath) => {
+      await writeFile(claimPath, JSON.stringify({
+        kind: 'LoRA training', id: 'run-a', pid: 4242, startedAt: 0, token: 'tok-a',
+      }));
+      const adopted = await adoptHeavyLocalJob({ kind: 'LoRA training', id: 'run-a', pid: 4242, claimPath });
+
+      // Someone else already claimed the path under a different token by the
+      // time release() runs — it must not remove that unrelated claim.
+      await writeFile(claimPath, JSON.stringify({
+        kind: 'video', id: 'run-c', pid: 1, startedAt: 0, token: 'tok-c',
+      }));
+      await adopted.release();
+      expect(JSON.parse(await readFile(claimPath, 'utf8'))).toMatchObject({ token: 'tok-c' });
     });
   });
 });

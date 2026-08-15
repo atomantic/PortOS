@@ -43,7 +43,7 @@ import {
 import { makeTrainingLineHandler } from './progress.js';
 import { makeStallDetector } from './stallDetector.js';
 import { prepareMemoryForTraining, TRAINING_MIN_HEADROOM_GB } from './memoryPrep.js';
-import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
+import { claimHeavyLocalJob, adoptHeavyLocalJob } from '../../lib/heavyJobClaim.js';
 import { classifyTrainingFailure } from './failure.js';
 import { buildTrainedSidecar, trainedLoraFilename } from './sidecar.js';
 import { validateDatasetReady } from './dataset.js';
@@ -457,9 +457,6 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
     return fail(message);
   };
 
-  heavyClaim = await claimHeavyLocalJob({ kind: 'LoRA training', id: jobId });
-  if (!heavyClaim.ok) return failBeforeSpawn(heavyClaim.message);
-
   // Boot re-attach (#1332): the queue re-enqueues a run whose detached trainer
   // SURVIVED a hard server restart with `reattach: true`. The child reparented
   // to init and is still training (or finished during the downtime), so we tail
@@ -467,6 +464,13 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
   // staging, no validation, no fresh spawn. wireProcLifecycle then drives the
   // exact same line-handling/finalize path as a normal spawn, so a run that
   // completed mid-restart still registers its LoRA instead of being discarded.
+  //
+  // This runs BEFORE the fresh claimHeavyLocalJob() below: the survivor already
+  // holds the machine-wide accelerator claim from before the restart (handed
+  // off to its PID pre-crash), so acquiring a NEW claim here would see that
+  // live claim as a competing job and refuse it — failing every restart-
+  // survived run outright. Adopt the existing claim instead of contending for
+  // a fresh one.
   if (reattach) {
     const proc = await reattachDetached(join(dir, '.detached'));
     if (!proc) {
@@ -475,11 +479,21 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
       // pre-#1332 reap path would have left it.
       return failBeforeSpawn('Trainer did not survive the restart — marking failed; resume from the latest checkpoint.');
     }
+    heavyClaim = (await adoptHeavyLocalJob({ kind: 'LoRA training', id: jobId, pid: proc.pid }))
+      || (await claimHeavyLocalJob({ kind: 'LoRA training', id: jobId }));
+    if (!heavyClaim.ok) return failBeforeSpawn(heavyClaim.message);
+    // Only true on the claimHeavyLocalJob fallback (no matching on-disk claim
+    // survived) — adoptHeavyLocalJob only ever returns a claim already
+    // recorded against this exact pid.
+    if (heavyClaim.holder?.pid !== proc.pid) await heavyClaim.handoffTo?.(proc.pid);
     console.log(`🔁 training [${shortId(jobId)}] re-attached to surviving trainer pid ${proc.pid} (run ${shortId(runId)})`);
     trainingEvents.emit('status', { generationId: jobId, message: 'Re-attached to trainer that survived a restart' });
     wireProcLifecycle(proc, { isReattach: true });
     return;
   }
+
+  heavyClaim = await claimHeavyLocalJob({ kind: 'LoRA training', id: jobId });
+  if (!heavyClaim.ok) return failBeforeSpawn(heavyClaim.message);
 
   // Re-validate — the dataset may have been edited/deleted while queued. Skip
   // the caption identity-leak gate ONLY for a run that already opted past it:
