@@ -44,7 +44,8 @@ vi.mock('../services/cosAgentLifecycle.js', () => ({
 // Mock workspace-roots so we control which paths are "allowed" without
 // touching the real filesystem.
 vi.mock('../lib/workspaceRoots.js', () => ({
-  isWithinAllowedRoots: vi.fn()
+  isWithinAllowedRoots: vi.fn(),
+  outsideAllowedRootsMessage: vi.fn((realPath, { field = 'path' } = {}) => `${field} is outside allowed directories: ${realPath}`)
 }));
 
 // Mock fs functions used by assertAllowedWorkspace.
@@ -59,7 +60,7 @@ vi.mock('fs', async (importOriginal) => {
 });
 
 import { existsSync, statSync, realpathSync } from 'fs';
-import { isWithinAllowedRoots } from '../lib/workspaceRoots.js';
+import { isWithinAllowedRoots, outsideAllowedRootsMessage } from '../lib/workspaceRoots.js';
 import * as cosAgentLifecycleService from '../services/cosAgentLifecycle.js';
 import * as gitService from '../services/git.js';
 
@@ -99,6 +100,7 @@ describe('git routes — workspace root validation', () => {
 
       expect(res.status).toBe(403);
       expect(res.body.code).toBe('FORBIDDEN');
+      expect(outsideAllowedRootsMessage).toHaveBeenCalledWith(body.path);
     });
   });
 

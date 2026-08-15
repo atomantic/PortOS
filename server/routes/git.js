@@ -5,7 +5,7 @@ import * as git from '../services/git.js';
 import * as appsService from '../services/apps.js';
 import { getAgents } from '../services/cosAgentLifecycle.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { isWithinAllowedRoots } from '../lib/workspaceRoots.js';
+import { isWithinAllowedRoots, outsideAllowedRootsMessage } from '../lib/workspaceRoots.js';
 import { validateRequest, submoduleStatusQuerySchema, submoduleUpdateSchema } from '../lib/validation.js';
 
 /**
@@ -32,6 +32,7 @@ function assertAllowedWorkspace(path) {
     throw new ServerError('path is not accessible', { status: 400, code: 'INVALID_PATH' });
   }
   if (!isWithinAllowedRoots(realPath)) {
+    console.error(`❌ ${outsideAllowedRootsMessage(realPath)}`);
     throw new ServerError('path is outside allowed directories', { status: 403, code: 'FORBIDDEN' });
   }
 }

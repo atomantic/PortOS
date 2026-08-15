@@ -4,7 +4,7 @@ import { resolve } from 'path';
 import * as commands from '../services/commands.js';
 import * as pm2Service from '../services/pm2.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { isWithinAllowedRoots } from '../lib/workspaceRoots.js';
+import { isWithinAllowedRoots, outsideAllowedRootsMessage } from '../lib/workspaceRoots.js';
 
 const router = Router();
 
@@ -41,6 +41,7 @@ router.post('/execute', asyncHandler(async (req, res) => {
       throw new ServerError('workspacePath is not accessible', { status: 400, code: 'INVALID_PATH' });
     }
     if (!isWithinAllowedRoots(realPath)) {
+      console.error(`❌ ${outsideAllowedRootsMessage(realPath, { field: 'workspacePath' })}`);
       throw new ServerError('workspacePath is outside allowed directories', { status: 400, code: 'INVALID_PATH' });
     }
   }

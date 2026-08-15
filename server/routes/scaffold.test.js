@@ -45,7 +45,8 @@ vi.mock('../services/apps.js', () => ({
 }));
 
 vi.mock('../lib/workspaceRoots.js', () => ({
-  isWithinAllowedRoots: vi.fn(() => true)
+  isWithinAllowedRoots: vi.fn(() => true),
+  outsideAllowedRootsMessage: vi.fn((realPath, { field = 'path' } = {}) => `${field} is outside allowed directories: ${realPath}`)
 }));
 
 vi.mock('./scaffoldVite.js', () => ({ scaffoldVite: vi.fn().mockResolvedValue(undefined) }));

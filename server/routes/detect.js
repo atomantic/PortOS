@@ -8,7 +8,7 @@ import { execPm2 } from '../services/pm2.js';
 import { detectAppWithAi } from '../services/aiDetect.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
-import { isWithinAllowedRoots, WORKSPACE_ROOTS_CONFIGURED } from '../lib/workspaceRoots.js';
+import { isWithinAllowedRoots, outsideAllowedRootsMessage, WORKSPACE_ROOTS_CONFIGURED } from '../lib/workspaceRoots.js';
 
 const execAsync = promisify(exec);
 const router = Router();
@@ -68,6 +68,7 @@ router.post('/repo', asyncHandler(async (req, res) => {
       return res.json({ valid: false, error: 'Path is not accessible' });
     }
     if (!isWithinAllowedRoots(realPath)) {
+      console.error(`❌ ${outsideAllowedRootsMessage(realPath)}`);
       return res.json({
         valid: false,
         error: 'Path is outside the configured workspace roots (PORTOS_WORKSPACE_ROOTS)'

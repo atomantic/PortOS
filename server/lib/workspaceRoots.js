@@ -80,3 +80,20 @@ export function isWithinAllowedRoots(realPath) {
   if (isOnWindowsWorkspaceDrive(realPath)) return true;
   return ALLOWED_WORKSPACE_ROOTS.some(root => isWithinRoot(realPath, root));
 }
+
+const HOME_ROOT = ALLOWED_WORKSPACE_ROOTS[0];
+
+const formatWorkspaceRoot = (root) => root === HOME_ROOT ? '~' : root;
+
+const singleLine = (value) => String(value).replace(/[\r\n]+/g, ' ');
+
+/**
+ * Build the server-only diagnostic for a path rejected by isWithinAllowedRoots.
+ * Callers keep their existing terse HTTP error so a real filesystem path never
+ * appears in an API response or a value a user might paste into a public issue.
+ */
+export function outsideAllowedRootsMessage(realPath, { field = 'path' } = {}) {
+  const roots = ALLOWED_WORKSPACE_ROOTS.map(formatWorkspaceRoot);
+  if (IS_WINDOWS) roots.push('any non-system drive');
+  return `${singleLine(field)} is outside allowed directories: ${singleLine(realPath)} (allowed: ${roots.map(singleLine).join(', ')})`;
+}

@@ -4,6 +4,7 @@ import { join, delimiter } from 'path';
 import {
   isWithinRoot,
   isWithinAllowedRoots,
+  outsideAllowedRootsMessage,
   ALLOWED_WORKSPACE_ROOTS,
   DEFAULT_WORKSPACE_ROOTS,
 } from './workspaceRoots.js';
@@ -44,6 +45,21 @@ describe('isWithinAllowedRoots', () => {
   it('rejects a path outside every allowed root', () => {
     // /etc is not in DEFAULT_WORKSPACE_ROOTS and (in tests) PORTOS_WORKSPACE_ROOTS is unset.
     expect(isWithinAllowedRoots('/etc/shadow')).toBe(false);
+  });
+});
+
+describe('outsideAllowedRootsMessage', () => {
+  it('names the rejected realpath and the roots checked', () => {
+    const message = outsideAllowedRootsMessage('/etc/shadow');
+
+    expect(message).toMatch(/^path is outside allowed directories: \/etc\/shadow \(allowed: .+\)$/);
+    expect(message).toContain('allowed: ~');
+    if (IS_WINDOWS) expect(message).toContain('any non-system drive');
+  });
+
+  it('uses a caller-provided field name', () => {
+    expect(outsideAllowedRootsMessage('/etc/shadow', { field: 'workspacePath' }))
+      .toMatch(/^workspacePath is outside allowed directories: \/etc\/shadow \(allowed: .+\)$/);
   });
 });
 

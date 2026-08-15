@@ -10,7 +10,7 @@ import { createApp, getReservedPorts } from '../services/apps.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, scaffoldSchema } from '../lib/validation.js';
 import { ensureDir, expandHome } from '../lib/fileUtils.js';
-import { isWithinAllowedRoots } from '../lib/workspaceRoots.js';
+import { isWithinAllowedRoots, outsideAllowedRootsMessage } from '../lib/workspaceRoots.js';
 import { scaffoldVite } from './scaffoldVite.js';
 import { scaffoldExpress } from './scaffoldExpress.js';
 import { scaffoldIOS } from './scaffoldIOS.js';
@@ -259,6 +259,7 @@ async function scaffoldApp(req, res) {
     throw new ServerError('parentDir is not accessible', { status: 400, code: 'INVALID_PARENT' });
   }
   if (!isWithinAllowedRoots(realParentDir)) {
+    console.error(`❌ ${outsideAllowedRootsMessage(realParentDir, { field: 'parentDir' })}`);
     throw new ServerError('parentDir is outside allowed directories', { status: 403, code: 'FORBIDDEN' });
   }
 
