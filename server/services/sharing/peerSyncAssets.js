@@ -407,18 +407,46 @@ export async function buildProjectAssetManifest(project) {
 }
 
 // `data/video-history.json` is a FLAT array of video-generation rows
-// (`{ id, filename, ... }`). The same store dataSync's `videoHistory` category
-// federates as metadata; here we read it only to resolve a scene's
-// `videoHistoryId` to its on-disk basename under PATHS.videos. Mirrors
-// dataSync's direct readJSONFile (no videoGen import — that drags in
-// ffmpeg/spawn machinery we don't need on the manifest path).
-async function videoHistoryFilenamesById() {
+// (`{ id, filename, thumbnail, ... }`). The same store dataSync's `videoHistory`
+// category federates as metadata; the two lookups below read it to map between a
+// row's id, its on-disk basename under PATHS.videos, and its poster basename
+// under PATHS.videoThumbnails. Mirrors dataSync's direct readJSONFile (no
+// videoGen import — that drags in ffmpeg/spawn machinery we don't need here).
+async function readVideoHistoryRows() {
   const raw = await readJSONFile(join(PATHS.data, 'video-history.json'), []);
+  return Array.isArray(raw) ? raw : [];
+}
+
+// Resolve a scene's `videoHistoryId` to its on-disk basename.
+async function videoHistoryFilenamesById() {
   const map = new Map();
-  for (const row of Array.isArray(raw) ? raw : []) {
+  for (const row of await readVideoHistoryRows()) {
     if (isStr(row?.id) && isStr(row?.filename)) map.set(row.id, row.filename);
   }
   return map;
+}
+
+// The reverse lookup (#4162): given an on-disk video basename, what THUMBNAIL
+// basename does its history row declare? Returns `null` when no row carries the
+// filename or its `thumbnail` isn't a safe basename.
+//
+// A history id is NOT the video filename stem. `videoGen/local.js` names a clip
+// `<jobId>.mp4` beside `thumbnail: '<jobId>.jpg'`, so stem-derivation happens to
+// land on the right name there — but `videoTimeline/local.js` mints an
+// independent `randomUUID()` id for a stitched final whose file is
+// `timeline-<projectId-slice>-<ts>.mp4`. Every poster URL the UI builds is
+// `/data/video-thumbnails/<row.id>.jpg`, so a stem-derived regeneration writes a
+// name nothing ever requests and the card stays on MediaImage's "Syncing"
+// placeholder forever.
+//
+// `row.thumbnail` rode the wire from a peer, so it goes through
+// `sanitizeAssetFilename` before it can become a path segment.
+async function videoThumbnailNameForVideo(filename) {
+  for (const row of await readVideoHistoryRows()) {
+    if (row?.filename !== filename) continue;
+    return isStr(row?.thumbnail) ? sanitizeAssetFilename(row.thumbnail) : null;
+  }
+  return null;
 }
 
 /**
@@ -919,16 +947,31 @@ async function doPullOneAsset(peer, base, entry, urlPrefix, localDir, safeName) 
   }
   // After a video pull, regenerate the thumbnail LOCALLY rather than pulling it
   // as a sibling asset. Cheaper end-to-end: no new asset kind / URL-prefix /
-  // manifest-diff plumbing, and the thumbnail filename is deterministic
-  // (`<jobId>.jpg`, where jobId === the video filename minus `.mp4`). The
-  // synced video-history row already carries `thumbnail: '<jobId>.jpg'`, so
-  // once this file exists on disk `normalizeVideo` renders the collection
-  // tile. Best-effort: if ffmpeg is missing the row still syncs (the item
-  // stops being filtered as "missing"); the tile just falls back to no
-  // preview. Mirrors generateThumbnail's null-on-failure contract.
+  // manifest-diff plumbing. The NAME comes from the synced video-history row's
+  // `thumbnail` field (#4162) — NOT the mp4 stem, which is only coincidentally
+  // right for videoGen clips and flatly wrong for a stitched timeline final (see
+  // `videoThumbnailNameForVideo`). The stem stays the fallback for the window
+  // where the bytes beat the `videoHistory` metadata category across.
+  //
+  // The regenerated thumbnail then gets its OWN `asset-arrived` emit: the video
+  // emit above names the `.mp4`, and `MediaImage` matches on filename alone, so
+  // without this a poster `<img>` that already 404'd sits on the "Syncing"
+  // placeholder until a remount even though the bytes are on disk.
+  //
+  // Best-effort throughout: if ffmpeg is missing the row still syncs (the item
+  // stops being filtered as "missing"); the tile just falls back to no preview.
+  // Mirrors generateThumbnail's null-on-failure contract.
   if (entry.kind === 'video') {
-    const jobId = safeName.replace(/\.[a-z0-9]+$/i, '');
+    const rowThumbnail = await videoThumbnailNameForVideo(safeName).catch(() => null);
+    const jobId = (rowThumbnail || safeName).replace(/\.[a-z0-9]+$/i, '');
     const videoPath = join(localDir, safeName);
-    await generateThumbnail(videoPath, jobId).catch(() => null);
+    const thumbFilename = await generateThumbnail(videoPath, jobId).catch(() => null);
+    if (thumbFilename) {
+      peerSyncEvents.emit('asset-arrived', {
+        filename: thumbFilename,
+        kind: 'video-thumbnail',
+        peerId: peer.instanceId,
+      });
+    }
   }
 }

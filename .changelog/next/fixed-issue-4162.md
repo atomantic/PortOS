@@ -1,0 +1,1 @@
+- Federated video posters now un-stick from the "Syncing" placeholder: a pulled video's regenerated thumbnail emits its own asset-arrived event and is named from the video-history row's thumbnail field instead of the mp4 basename (which was wrong for stitched timeline finals)
