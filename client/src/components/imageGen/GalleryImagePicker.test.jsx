@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import GalleryImagePicker from './GalleryImagePicker';
 import toast from '../ui/Toast';
 
@@ -160,6 +160,25 @@ describe('GalleryImagePicker', () => {
     expect(toast.error.mock.calls[0][0]).toMatch(/PNG, JPEG, GIF, WebP/);
     expect(uploadGalleryImage).not.toHaveBeenCalled();
     expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  // Hosts are master-detail editors: dismissing the modal mid-upload and picking
+  // a different album/artist/author must not write this image onto that record.
+  it('drops an upload that lands after the picker was dismissed', async () => {
+    let settleUpload;
+    uploadGalleryImage.mockReturnValue(new Promise((resolve) => { settleUpload = resolve; }));
+    const onSelect = vi.fn();
+    const onClose = vi.fn();
+    const { rerender } = render(<GalleryImagePicker open allowUpload onSelect={onSelect} onClose={onClose} />);
+    await pickFile(new File(['x'], 'photo.png', { type: 'image/png' }));
+    await waitFor(() => expect(uploadGalleryImage).toHaveBeenCalledTimes(1));
+
+    // Host dismissed the modal (Esc / backdrop / X) while the POST was in flight.
+    rerender(<GalleryImagePicker open={false} allowUpload onSelect={onSelect} onClose={onClose} />);
+    await act(async () => { settleUpload({ filename: 'late.png', path: '/data/images/late.png' }); });
+
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it('allows a large file when no host cap narrows the wire limit', async () => {

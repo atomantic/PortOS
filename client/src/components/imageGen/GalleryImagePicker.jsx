@@ -18,7 +18,7 @@
 //
 // Local gallery only — no external/web search (deliberate, see plan).
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Search, X, RefreshCw, Upload } from 'lucide-react';
 import Modal from '../ui/Modal';
 import FilePickerButton from '../ui/FilePickerButton';
@@ -67,6 +67,10 @@ export default function GalleryImagePicker({
   // '' = All. Otherwise `uni:<id>` or `col:<id>`.
   const [scope, setScope] = useState('');
   const [type, setType] = useState('');
+  // Bumped on every open/close transition, so an async upload can tell whether
+  // the picker session it started in is still the current one.
+  const sessionRef = useRef(0);
+  useEffect(() => { sessionRef.current += 1; }, [open]);
 
   // Fetch the gallery each time the picker opens so newly generated images show
   // up without a page reload. Reset the search on close so a re-open starts clean.
@@ -201,6 +205,7 @@ export default function GalleryImagePicker({
     // file dialog. `maxBytes` lets a host keep a tighter product cap than the wire limit.
     const invalid = validateImageFile(file, maxBytes);
     if (invalid) { toast.error(invalid); return; }
+    const session = sessionRef.current;
     setUploading(true);
     const base64 = await readFileAsBase64(file).catch(() => null);
     if (!base64) { setUploading(false); toast.error(`Failed to read ${file.name}`); return; }
@@ -210,6 +215,11 @@ export default function GalleryImagePicker({
     });
     setUploading(false);
     if (!saved?.filename) return;
+    // The host may have dismissed the picker (Esc / backdrop / X) while the read
+    // + POST were in flight and moved on to a different record. Selecting now
+    // would write this image onto whatever the host has open instead — so the
+    // upload stays in the gallery, but nothing is picked.
+    if (sessionRef.current !== session) return;
     onSelect?.(normalizeImage({ filename: saved.filename, path: saved.path }));
     onClose?.();
   };

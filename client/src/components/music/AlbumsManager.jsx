@@ -166,8 +166,9 @@ export default function AlbumsManager() {
 
   // Both "pick an existing gallery image" and "upload one from disk" land here —
   // GalleryImagePicker's `allowUpload` owns the read + POST and hands back the
-  // saved image already normalized (issue #4127). No album-switch guard needed:
-  // this fires synchronously from the modal, which sits over the album list.
+  // saved image already normalized (issue #4127). The album-switch guard that
+  // used to live here moved into the picker, which drops an upload that lands
+  // after its modal was dismissed.
   const handleCoverPick = (item) => {
     setGalleryOpen(false);
     const url = item?.previewUrl || (item?.filename ? `/data/images/${item.filename}` : '');
