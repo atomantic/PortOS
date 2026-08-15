@@ -10,6 +10,59 @@ import { detectAppIcon } from './appIconDetect.js';
 export const NON_PM2_TYPES = new Set(['ios-native', 'macos-native', 'xcode', 'swift']);
 
 /**
+ * Non-Node runtimes recognized from marker files, mapped to the files that
+ * identify them. Order is precedence: a repo's LANGUAGE beats its packaging, so
+ * a Python service that also ships a `Dockerfile` classifies as `python` (the
+ * common case), while a compose-only stack with no language markers is
+ * `docker`. `static` is last — it's the "nothing but a page here" fallback.
+ */
+const NON_NODE_MARKERS = [
+  ['python', ['pyproject.toml', 'requirements.txt', 'setup.py', 'Pipfile']],
+  ['go', ['go.mod']],
+  ['docker', ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml', 'Dockerfile']],
+  ['static', ['index.html']]
+];
+
+/** The non-Node app types `classifyNonNodeType` can emit. */
+export const NON_NODE_TYPES = new Set(NON_NODE_MARKERS.map(([type]) => type));
+
+/**
+ * Classify a repo's runtime from its top-level filenames, for repos that
+ * carried no Node or Apple signal. Returns `null` when no marker matched — the
+ * caller keeps `unknown` rather than guessing.
+ *
+ * @param {string[]} files Top-level entry names (from `readdir`).
+ * @returns {'python'|'go'|'docker'|'static'|null}
+ */
+export function classifyNonNodeType(files) {
+  const present = new Set(files || []);
+  for (const [type, markers] of NON_NODE_MARKERS) {
+    if (markers.some(marker => present.has(marker))) return type;
+  }
+  return null;
+}
+
+/**
+ * App types the PM2 standardizer may run against — a POSITIVE list, because the
+ * standardizer's prompt opens with "You are analyzing a Node.js application"
+ * and a negative list (`!NON_PM2_TYPES.has(type)`) silently swept in every
+ * unrecognized repo. On a Python/Go/Docker/static repo the LLM doesn't fail, it
+ * confidently writes a Node ecosystem config into someone else's project.
+ *
+ * `unknown` stays in the list on purpose: `type` is persisted on the app record,
+ * so every app imported before this classification existed keeps `unknown` until
+ * it's re-detected — and most of those really are Node apps. `desktop` (a Godot
+ * game binary) is here for the same continuity reason; those repos commonly
+ * carry a Node web process alongside the game and were always offered the flow.
+ */
+export const STANDARDIZABLE_TYPES = new Set([
+  'vite+express', 'vite', 'single-node-server', 'nextjs', 'desktop', 'unknown'
+]);
+
+/** Whether the PM2 standardizer (which writes a NODE ecosystem config) applies. */
+export const isStandardizable = (type) => STANDARDIZABLE_TYPES.has(type ?? 'unknown');
+
+/**
  * App types that run a GUI/desktop process with no HTTP port (e.g. a Godot
  * game binary). These are still supervised through PM2, but launched from the
  * app's own `startCommands` — never an ecosystem web-server config — and with
@@ -1208,7 +1261,18 @@ export async function streamDetection(socket, dirPath) {
       }
     }
   } else {
-    emit('package', 'done', { message: 'No package.json found' });
+    // No package.json ⇒ nothing Node owns this repo, so fall back to marker-file
+    // classification for the common non-Node runtimes. Without this, a Python
+    // service / Go binary / Docker stack / static site all landed on `unknown`
+    // and were offered Node PM2 standardization. Guarded on `unknown` so an
+    // Apple type already resolved in step 2 (a Swift repo that also ships a
+    // Dockerfile) isn't overwritten.
+    const nonNodeType = result.type === 'unknown' ? classifyNonNodeType(files) : null;
+    if (nonNodeType) result.type = nonNodeType;
+    emit('package', 'done', {
+      message: nonNodeType ? `No package.json — detected ${nonNodeType} project` : 'No package.json found',
+      type: result.type
+    });
   }
 
   // Native game launch is additive: web ports/processes remain the standard

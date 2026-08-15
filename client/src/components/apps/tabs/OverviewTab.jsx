@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { Link } from 'react-router';
 import { FolderOpen, Gamepad2, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Download, Tag, AlertTriangle, Rocket, Camera, Image, Sparkles } from 'lucide-react';
 import toast from '../../ui/Toast';
-import { NON_PM2_TYPES } from '../constants';
+import { isStandardizable } from '../constants';
 import ActivityLog from '../ActivityLog';
 import SlashDoPanel from '../SlashDoPanel';
 import Banner from '../../ui/Banner';
@@ -313,8 +313,10 @@ export default function OverviewTab({ app, onRefresh }) {
           {detectingIcon ? 'Scanning...' : 'Detect Icon'}
         </button>
         {/* PortOS's own ecosystem.config.cjs is the canonical PORTS source —
-            it is never regenerated from an LLM analysis (the server refuses too). */}
-        {!NON_PM2_TYPES.has(app.type) && app.id !== api.PORTOS_APP_ID && (
+            it is never regenerated from an LLM analysis (the server refuses too).
+            `isStandardizable` also keeps the button off non-Node repos, whose
+            ecosystem config the Node-shaped prompt has no business writing. */}
+        {isStandardizable(app.type) && app.id !== api.PORTOS_APP_ID && (
           <button
             onClick={handleStandardize}
             disabled={isOperating}

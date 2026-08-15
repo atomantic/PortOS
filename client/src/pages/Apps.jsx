@@ -14,7 +14,7 @@ import { useAppOperation } from '../hooks/useAppOperation';
 import useUrlParams from '../hooks/useUrlParams';
 import * as api from '../services/api';
 import socket from '../services/socket';
-import { NON_PM2_TYPES, getAppTypeLabel } from '../components/apps/constants';
+import { NON_PM2_TYPES, isStandardizable, getAppTypeLabel } from '../components/apps/constants';
 import { formatBytes } from '../utils/formatters';
 
 export default function Apps() {
@@ -700,7 +700,10 @@ export default function Apps() {
                             <RefreshCw size={14} aria-hidden="true" className={refreshingConfig[app.id] ? 'animate-spin' : ''} />
                             Refresh Config
                           </button>
-                          {(!app.processes?.length || app.processes.some(p => !p.ports || Object.keys(p.ports).length === 0)) && (
+                          {/* The standardizer writes a NODE ecosystem config —
+                              never offer it for a Python/Go/Docker/static repo
+                              (the server refuses too). */}
+                          {isStandardizable(app.type) && (!app.processes?.length || app.processes.some(p => !p.ports || Object.keys(p.ports).length === 0)) && (
                             <button
                               onClick={() => handleStandardize(app)}
                               disabled={isOperating}

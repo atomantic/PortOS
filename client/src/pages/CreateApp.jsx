@@ -7,7 +7,7 @@ import * as api from '../services/api';
 import IconPicker from '../components/IconPicker';
 import FolderPicker from '../components/FolderPicker';
 import Banner from '../components/ui/Banner';
-import { NON_PM2_TYPES } from '../components/apps/constants';
+import { NON_PM2_TYPES, isStandardizable, getAppTypeLabel } from '../components/apps/constants';
 
 const DETECTION_STEPS_PM2 = [
   { id: 'validate', label: 'Validating path' },
@@ -479,14 +479,13 @@ export default function CreateApp() {
               </div>
             )}
 
-            {/* App Type Badge */}
-            {detected && isNonPm2 && (
+            {/* App Type Badge — shown for every type the PM2 standardizer skips,
+                so a Python/Go/Docker/static repo says WHY the card below is gone
+                rather than silently offering nothing. */}
+            {detected && !isStandardizable(appType) && (
               <Banner tone="info" size="md">
                 <p className="font-medium">
-                  {appType === 'ios-native' ? '📱 iOS App' :
-                   appType === 'macos-native' ? '🖥️ macOS App' :
-                   appType === 'swift' ? '🐦 Swift Package' :
-                   '🔨 Xcode Project'} — not managed by PM2
+                  {getAppTypeLabel(appType)} — {isNonPm2 ? 'not managed by PM2' : 'not a Node.js project'}
                 </p>
               </Banner>
             )}
@@ -504,7 +503,7 @@ export default function CreateApp() {
             )}
 
             {/* Standardize PM2 config — opt-in, because it rewrites the repo */}
-            {detected && !isNonPm2 && !standardizeResult && (
+            {detected && isStandardizable(appType) && !standardizeResult && (
               <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-3">
                 <h3 className="text-xs font-medium uppercase tracking-wide text-gray-500">Optional</h3>
                 <p className="text-sm text-white flex items-center gap-2">

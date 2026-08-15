@@ -9,7 +9,7 @@ import { safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { runPromptThroughProvider } from '../lib/promptRunner.js';
 import { getReservedPorts, getAllApps } from './apps.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
-import { usesPm2 } from './streamingDetect.js';
+import { usesPm2, isStandardizable } from './streamingDetect.js';
 import { getListeningPorts } from '../lib/platform.js';
 
 const execAsync = promisify(exec);
@@ -51,6 +51,12 @@ export function standardizeRefusalFor(app) {
   }
   if (!usesPm2(app?.type)) {
     return `${app?.type} apps are not run under PM2, so there is no ecosystem config to standardize`;
+  }
+  if (!isStandardizable(app?.type)) {
+    // The analysis prompt below opens with "You are analyzing a Node.js
+    // application" — on a Python/Go/Docker/static repo it doesn't fail, it
+    // confidently writes a Node ecosystem config. A type check, not prose.
+    return `${app?.type} apps are not Node.js projects, so there is no Node ecosystem config to generate`;
   }
   return null;
 }

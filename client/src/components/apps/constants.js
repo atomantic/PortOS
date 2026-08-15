@@ -44,10 +44,38 @@ export function resolveLaunchPanelProcess(app, result) {
   return result?.results?.[processName]?.success === false ? null : processName;
 }
 
-export const getAppTypeLabel = (type) =>
-  type === 'ios-native' ? '📱 iOS' :
-  type === 'macos-native' ? '🖥️ macOS' :
-  type === 'swift' ? '🐦 Swift' : '🔨 Xcode';
+// Mirrors STANDARDIZABLE_TYPES in server/services/streamingDetect.js (a parity
+// test asserts the two Sets match). POSITIVE list: the PM2 standardizer writes a
+// NODE ecosystem config from a prompt that opens "You are analyzing a Node.js
+// application", so a Python/Go/Docker/static repo must not be offered the flow.
+// `unknown` and `desktop` stay in for continuity — see the server's rationale.
+export const STANDARDIZABLE_TYPES = new Set([
+  'vite+express', 'vite', 'single-node-server', 'nextjs', 'desktop', 'unknown'
+]);
+
+/** Whether the PM2 standardizer (which writes a NODE ecosystem config) applies. */
+export const isStandardizable = (type) => STANDARDIZABLE_TYPES.has(type ?? 'unknown');
+
+// Every app type that can reach a UI label. Kept TOTAL (with a raw-type
+// fallback) rather than a ternary chain ending in '🔨 Xcode' — that default
+// meant any type not explicitly listed rendered as an Xcode project.
+const APP_TYPE_LABELS = {
+  'ios-native': '📱 iOS',
+  'macos-native': '🖥️ macOS',
+  swift: '🐦 Swift',
+  xcode: '🔨 Xcode',
+  python: '🐍 Python',
+  go: '🐹 Go',
+  docker: '🐳 Docker',
+  static: '📄 Static',
+  desktop: '🎮 Desktop',
+  'vite+express': '⚡ Vite + Express',
+  vite: '⚡ Vite',
+  'single-node-server': '🟢 Node',
+  nextjs: '▲ Next.js'
+};
+
+export const getAppTypeLabel = (type) => APP_TYPE_LABELS[type] || type || 'Unknown';
 
 // Where an app's autonomous work items live. Mirrors WORK_TRACKERS +
 // TRACKER_LABELS in server/lib/workTracker.js — shared by the Edit App picker

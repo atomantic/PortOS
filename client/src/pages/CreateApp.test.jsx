@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 
@@ -27,8 +27,12 @@ vi.mock('../components/ui/Toast', () => ({
 
 import CreateApp from './CreateApp';
 
-/** Render the wizard and drive detection to completion for the given app type. */
-const detectApp = async (result = { type: 'node', name: 'Example App' }) => {
+/**
+ * Render the wizard and drive detection to completion for the given app type.
+ * The default is a REAL type streamingDetect emits — the standardize card is
+ * gated on a positive list now, so a made-up placeholder would be refused.
+ */
+const detectApp = async (result = { type: 'single-node-server', name: 'Example App' }) => {
   render(<MemoryRouter><CreateApp /></MemoryRouter>);
   // Let the mount effects (provider + default directory) settle.
   await act(async () => {});
@@ -70,6 +74,38 @@ describe('CreateApp — PM2 standardization is opt-in', () => {
 
     expect(screen.queryByRole('button', { name: 'Standardize PM2 config' })).toBeNull();
     expect(standardizeEmits()).toHaveLength(0);
+  });
+
+  it('offers no standardization for non-Node runtimes', async () => {
+    // The standardizer's prompt opens "You are analyzing a Node.js application";
+    // on a Python/Go/Docker/static repo it doesn't fail, it confidently writes a
+    // Node ecosystem config. The card must not render at all.
+    for (const type of ['python', 'go', 'docker', 'static']) {
+      // Each iteration renders its own wizard — tear the previous one down so a
+      // stale card from an earlier type can't satisfy (or defeat) the query.
+      cleanup();
+      emit.mockClear();
+      for (const key of Object.keys(handlers)) delete handlers[key];
+
+      await detectApp({ type, name: 'Example App' });
+
+      expect(screen.queryByRole('button', { name: 'Standardize PM2 config' })).toBeNull();
+      expect(standardizeEmits()).toHaveLength(0);
+    }
+  });
+
+  it('explains why a non-Node repo gets no standardize card', async () => {
+    await detectApp({ type: 'python', name: 'Example App' });
+
+    expect(screen.getByText(/not a Node\.js project/)).toBeInTheDocument();
+  });
+
+  it('still offers standardization for an app whose type detection could not name', async () => {
+    // `unknown` is the persisted type of every app imported before non-Node
+    // classification existed — most of them are Node apps.
+    await detectApp({ type: 'unknown', name: 'Example App' });
+
+    expect(screen.getByRole('button', { name: 'Standardize PM2 config' })).toBeEnabled();
   });
 
   it('disables the action when no LLM provider is configured', async () => {

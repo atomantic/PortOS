@@ -1,8 +1,13 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { detectGodotNativeLaunch, parseEcosystemConfig, resolveViteConfigPortForProcess, rewriteEcosystemPorts, rewriteEcosystemPortsByProcess, writeEcosystemPorts, writeEcosystemPortsByProcess, writeEcosystemPortEdits, DESKTOP_TYPES, NON_PM2_TYPES } from './streamingDetect.js';
+import { detectGodotNativeLaunch, parseEcosystemConfig, resolveViteConfigPortForProcess, rewriteEcosystemPorts, rewriteEcosystemPortsByProcess, writeEcosystemPorts, writeEcosystemPortsByProcess, writeEcosystemPortEdits, streamDetection, classifyNonNodeType, isStandardizable, usesPm2, DESKTOP_TYPES, NON_PM2_TYPES, NON_NODE_TYPES, STANDARDIZABLE_TYPES } from './streamingDetect.js';
+
+// streamDetection shells out to PM2 and scans for an app icon; neither is under
+// test here and both are slow/environment-dependent.
+vi.mock('./pm2.js', () => ({ execPm2: vi.fn(async () => ({ stdout: '[]' })) }));
+vi.mock('./appIconDetect.js', () => ({ detectAppIcon: vi.fn(async () => null) }));
 
 describe('detectGodotNativeLaunch', () => {
   let dir;
@@ -1021,5 +1026,155 @@ describe('client mirror of the app-type sets', () => {
   it('matches NON_PM2_TYPES', async () => {
     const client = await import('../../client/src/components/apps/constants.js');
     expect([...client.NON_PM2_TYPES].sort()).toEqual([...NON_PM2_TYPES].sort());
+  });
+
+  it('matches STANDARDIZABLE_TYPES', async () => {
+    const client = await import('../../client/src/components/apps/constants.js');
+    expect([...client.STANDARDIZABLE_TYPES].sort()).toEqual([...STANDARDIZABLE_TYPES].sort());
+  });
+});
+
+describe('streamDetection app-type classification', () => {
+  let dir;
+  afterEach(() => { if (dir) rmSync(dir, { recursive: true, force: true }); dir = null; });
+
+  /** Run detection over a temp repo built from `{ filename: contents }`. */
+  const detect = async (files) => {
+    dir = mkdtempSync(join(tmpdir(), 'detect-type-'));
+    for (const [name, contents] of Object.entries(files)) {
+      writeFileSync(join(dir, name), contents);
+    }
+    let completed = null;
+    const socket = {
+      emit: (event, payload) => { if (event === 'detect:complete') completed = payload; }
+    };
+    await streamDetection(socket, dir);
+    return completed;
+  };
+
+  it('classifies a Python repo instead of leaving it unknown', async () => {
+    const { success, result } = await detect({ 'pyproject.toml': '[project]\nname = "example"\n' });
+    expect(success).toBe(true);
+    expect(result.type).toBe('python');
+    expect(isStandardizable(result.type)).toBe(false);
+  });
+
+  it('classifies a Go repo', async () => {
+    const { result } = await detect({ 'go.mod': 'module example.com/demo\n', 'main.go': 'package main\n' });
+    expect(result.type).toBe('go');
+  });
+
+  it('classifies a compose-only stack as docker', async () => {
+    const { result } = await detect({ 'docker-compose.yml': 'services:\n  web:\n    image: nginx\n' });
+    expect(result.type).toBe('docker');
+  });
+
+  it('classifies a bare index.html as static', async () => {
+    const { result } = await detect({ 'index.html': '<!doctype html><title>Example</title>' });
+    expect(result.type).toBe('static');
+  });
+
+  it('leaves a package.json repo alone — Node tooling owns it, so `unknown` stays honest', async () => {
+    // A Node repo whose deps PortOS doesn't recognize must NOT be relabelled
+    // `static` just because it also ships an index.html; `unknown` remains
+    // standardizable, which is the correct answer for a Node project.
+    const { result } = await detect({
+      'package.json': JSON.stringify({ name: 'example', dependencies: { lodash: '^4' } }),
+      'index.html': '<!doctype html>'
+    });
+    expect(result.type).toBe('unknown');
+    expect(isStandardizable(result.type)).toBe(true);
+  });
+
+  it('does not overwrite an Apple type detected from the repo layout', async () => {
+    // A Swift package that also ships a Dockerfile is still `swift`.
+    const { result } = await detect({ 'Package.swift': '// swift-tools-version:5.9\n', Dockerfile: 'FROM swift\n' });
+    expect(result.type).toBe('swift');
+  });
+
+  it('still recognizes the Node types from package.json deps', async () => {
+    const { result } = await detect({
+      'package.json': JSON.stringify({ name: 'example', dependencies: { vite: '^5', express: '^4' } })
+    });
+    expect(result.type).toBe('vite+express');
+  });
+});
+
+describe('classifyNonNodeType', () => {
+  it('classifies python from any of its marker files', () => {
+    for (const marker of ['pyproject.toml', 'requirements.txt', 'setup.py', 'Pipfile']) {
+      expect(classifyNonNodeType(['README.md', marker])).toBe('python');
+    }
+  });
+
+  it('classifies go from go.mod', () => {
+    expect(classifyNonNodeType(['go.mod', 'go.sum', 'main.go'])).toBe('go');
+  });
+
+  it('classifies docker from a compose file or Dockerfile', () => {
+    for (const marker of ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml', 'Dockerfile']) {
+      expect(classifyNonNodeType([marker])).toBe('docker');
+    }
+  });
+
+  it('classifies static from a bare index.html', () => {
+    expect(classifyNonNodeType(['index.html', 'style.css'])).toBe('static');
+  });
+
+  it('prefers the language over the packaging when both markers are present', () => {
+    // A Python service that also ships a Dockerfile is a python repo, not a
+    // docker stack — the language is the more useful classification, and both
+    // land outside STANDARDIZABLE_TYPES either way.
+    expect(classifyNonNodeType(['pyproject.toml', 'Dockerfile', 'index.html'])).toBe('python');
+    expect(classifyNonNodeType(['go.mod', 'docker-compose.yml'])).toBe('go');
+    expect(classifyNonNodeType(['Dockerfile', 'index.html'])).toBe('docker');
+  });
+
+  it('returns null when nothing matches, rather than guessing', () => {
+    expect(classifyNonNodeType(['README.md', 'LICENSE'])).toBeNull();
+    expect(classifyNonNodeType([])).toBeNull();
+    expect(classifyNonNodeType(undefined)).toBeNull();
+  });
+
+  it('emits only types the standardizer refuses', () => {
+    for (const type of NON_NODE_TYPES) {
+      expect(isStandardizable(type)).toBe(false);
+    }
+  });
+});
+
+describe('isStandardizable', () => {
+  it('allows the Node app types', () => {
+    for (const type of ['vite+express', 'vite', 'single-node-server', 'nextjs']) {
+      expect(isStandardizable(type)).toBe(true);
+    }
+  });
+
+  it('stays permissive for unknown — the persisted type of every pre-classification app', () => {
+    expect(isStandardizable('unknown')).toBe(true);
+    expect(isStandardizable(undefined)).toBe(true);
+    expect(isStandardizable(null)).toBe(true);
+  });
+
+  it('refuses the non-Node runtimes', () => {
+    for (const type of ['python', 'go', 'docker', 'static']) {
+      expect(isStandardizable(type)).toBe(false);
+    }
+  });
+
+  it('refuses the Apple types', () => {
+    for (const type of NON_PM2_TYPES) {
+      expect(isStandardizable(type)).toBe(false);
+    }
+  });
+
+  it('does not widen NON_PM2_TYPES — a Python or Go service can still run under PM2', () => {
+    // NON_PM2_TYPES means "Apple" to its other consumers (appDeployer's deploy
+    // gate, the slashdo workflow filter, the client's Xcode-only UI), so the
+    // standardizer gate is a separate predicate rather than an entry there.
+    for (const type of NON_NODE_TYPES) {
+      expect(NON_PM2_TYPES.has(type)).toBe(false);
+      expect(usesPm2(type)).toBe(true);
+    }
   });
 });

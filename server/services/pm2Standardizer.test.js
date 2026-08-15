@@ -24,6 +24,22 @@ describe('standardizeRefusalFor', () => {
     }
   });
 
+  it('refuses non-Node runtimes — the analysis prompt is Node-shaped', () => {
+    // These types DO run under PM2, so the usesPm2 gate lets them through; the
+    // refusal is that there is no Node ecosystem config to generate for them.
+    for (const type of ['python', 'go', 'docker', 'static']) {
+      expect(standardizeRefusalFor({ id: 'app-1', type })).toMatch(/not Node\.js projects/);
+    }
+  });
+
+  it('still allows an app whose persisted type predates the classification', () => {
+    // `type` is persisted on the app record, so apps imported before non-Node
+    // classification existed keep `unknown` until re-detected — and most of
+    // them are Node apps. Refusing them would break the button on upgrade.
+    expect(standardizeRefusalFor({ id: 'app-1', type: 'unknown' })).toBeNull();
+    expect(standardizeRefusalFor({ id: 'app-1' })).toBeNull();
+  });
+
   it('refuses PortOS itself — its ecosystem.config.cjs is the canonical PORTS source', () => {
     expect(standardizeRefusalFor({ id: PORTOS_APP_ID, type: 'vite+express' }))
       .toMatch(/manages its own ecosystem\.config\.cjs/);

@@ -1,0 +1,1 @@
+- App detection now classifies Python, Go, Docker, and static repos instead of labelling them `unknown`, and PM2 standardization (which writes a Node ecosystem config) is no longer offered for them
