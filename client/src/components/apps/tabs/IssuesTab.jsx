@@ -1,17 +1,26 @@
 import { useState, useEffect, useCallback, useMemo, useId, useRef } from 'react';
 import { Link } from 'react-router';
 import {
-  AlertTriangle, ChevronDown, ChevronRight, CircleDot, ExternalLink,
+  AlertTriangle, Bot, ChevronDown, ChevronRight, CircleDot, ExternalLink,
   Loader2, RefreshCw, Rocket, Search, User
 } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import Banner from '../../ui/Banner';
 import Pill from '../../ui/Pill';
 import toast from '../../ui/Toast';
+import ProviderModelSelector from '../../ProviderModelSelector';
+import useProviderModels from '../../../hooks/useProviderModels';
+import { isProcessProvider } from '../../../utils/providers';
 import * as api from '../../../services/api';
 import { timeAgo } from '../../../utils/formatters';
 
 const FORGE_LABEL = { github: 'GitHub', gitlab: 'GitLab' };
+
+// Module-scoped so `useProviderModels` sees a stable predicate — an inline
+// arrow would be a new identity every render, re-firing the hook's fetch
+// effect forever. Matches SlashDoRunDrawer's filter: only CODING providers
+// (CLI/TUI agents with a file-writing harness) can run a `/do:next` claim.
+const enabledProcessProviderFilter = (p) => Boolean(p?.enabled) && isProcessProvider(p);
 
 // Why the forge returned nothing, in the user's terms. Sentinel-aware: a
 // definitive "no open issues" and a failed probe are different sentences, so an
@@ -74,6 +83,17 @@ export default function IssuesTab({ appId, appName }) {
   // response lands last and shows one app's issues under another's Claim buttons.
   const requestRef = useRef(0);
 
+  // Page-level provider/model/effort pin for every Claim button on this tab —
+  // left untouched (blank), a claim resolves the app's own configured default,
+  // same as the bare button always did. This picker never persists across a
+  // reload; it's a session convenience for "claim the next several issues with
+  // model X" without reopening the Agent Operations drawer each time.
+  const {
+    providers, selectedProviderId, selectedModel, availableModels,
+    setSelectedProviderId, setSelectedModel
+  } = useProviderModels({ filter: enabledProcessProviderFilter, allowDefault: true, silent: true, withEffort: true });
+  const [effort, setEffort] = useState('');
+
   const load = useCallback(async () => {
     const generation = requestRef.current + 1;
     requestRef.current = generation;
@@ -125,7 +145,12 @@ export default function IssuesTab({ appId, appName }) {
 
   const handleClaim = async (issue) => {
     setClaims(prev => ({ ...prev, [issue.number]: 'queuing' }));
-    const result = await api.createSlashdoTask('next', appId, { target: String(issue.number) }, { silent: true })
+    const result = await api.createSlashdoTask('next', appId, {
+      target: String(issue.number),
+      provider: selectedProviderId || undefined,
+      model: selectedModel || undefined,
+      effort: effort || undefined,
+    }, { silent: true })
       .catch(err => {
         toast.error(err?.message || `Failed to queue a claim for #${issue.number}`);
         return null;
@@ -180,6 +205,28 @@ export default function IssuesTab({ appId, appName }) {
         >
           <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Refresh
         </button>
+      </div>
+
+      <div className="flex flex-col sm:flex-row sm:items-center gap-2 px-3 py-2 bg-port-card border border-port-border rounded-lg">
+        <span className="flex items-center gap-1.5 text-xs text-gray-500 uppercase tracking-wide shrink-0">
+          <Bot size={14} /> Claim with
+        </span>
+        <div className="flex-1">
+          <ProviderModelSelector
+            providers={providers}
+            selectedProviderId={selectedProviderId}
+            selectedModel={selectedModel}
+            availableModels={availableModels}
+            onProviderChange={(id) => { setSelectedProviderId(id); setEffort(''); }}
+            onModelChange={setSelectedModel}
+            effort={effort}
+            onEffortChange={setEffort}
+            emptyProviderOption="Auto (app default)"
+            emptyModelOption="Default model"
+            compact
+            highlightToolUse
+          />
+        </div>
       </div>
 
       {error && (

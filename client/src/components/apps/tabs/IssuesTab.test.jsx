@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router';
 vi.mock('../../../services/api', () => ({
   getAppIssues: vi.fn(),
   createSlashdoTask: vi.fn(),
+  getProviders: vi.fn(),
 }));
 
 import * as api from '../../../services/api';
@@ -42,6 +43,7 @@ const renderTab = () => render(
 beforeEach(() => {
   api.getAppIssues.mockResolvedValue(okPayload([ISSUE]));
   api.createSlashdoTask.mockResolvedValue({ id: 'task-1' });
+  api.getProviders.mockResolvedValue({ providers: [] });
 });
 
 afterEach(() => {
@@ -83,6 +85,28 @@ describe('IssuesTab', () => {
       'next', 'app-1', { target: '42' }, { silent: true }
     ));
     expect(await screen.findByRole('link', { name: /Queued/ })).toBeInTheDocument();
+  });
+
+  it('sends the page-level provider/model/effort pin along with a claim', async () => {
+    api.getProviders.mockResolvedValue({
+      providers: [{
+        id: 'claude', name: 'Claude', type: 'cli', enabled: true,
+        models: ['claude-opus-5', 'claude-sonnet-5'], defaultModel: 'claude-sonnet-5',
+      }],
+    });
+    renderTab();
+
+    await screen.findByText('Crash on save');
+    fireEvent.change(await screen.findByLabelText('Provider'), { target: { value: 'claude' } });
+    fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'claude-opus-5' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /Claim/ }));
+
+    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalledWith(
+      'next', 'app-1',
+      { target: '42', provider: 'claude', model: 'claude-opus-5', effort: undefined },
+      { silent: true }
+    ));
   });
 
   it('re-enables the Claim button when queuing fails, instead of stranding it', async () => {
