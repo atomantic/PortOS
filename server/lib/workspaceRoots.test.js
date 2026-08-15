@@ -77,6 +77,14 @@ describe('outsideAllowedRootsMessage', () => {
     expect(message).not.toContain(username);
   });
 
+  it('redacts the current username in nested home-directory segments', () => {
+    const username = basename(homedir());
+    const message = outsideAllowedRootsMessage(join(homedir(), 'nested', username, 'repo'));
+
+    expect(message).toContain('~/nested/<user>/repo');
+    expect(message).not.toContain(username);
+  });
+
   it('redacts hosts in UNC paths', () => {
     const message = outsideAllowedRootsMessage(String.raw`\\server\share\repo`);
 

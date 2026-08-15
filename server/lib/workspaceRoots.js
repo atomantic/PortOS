@@ -155,7 +155,7 @@ const formatLogPath = (value) => {
   if (isWindowsStylePath) return redactPrivatePath(redactedUncPath);
   const relativeHomePath = relative(HOME_ROOT, path);
   if (relativeHomePath && !relativeHomePath.startsWith('..') && !isAbsolute(relativeHomePath)) {
-    return `~/${relativeHomePath}`;
+    return `~/${redactPrivatePath(relativeHomePath)}`;
   }
   return redactPrivatePath(redactedUncPath);
 };
