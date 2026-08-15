@@ -432,6 +432,23 @@ describe('a11y conventions', () => {
     expect(offenders, `Icon-only <button> with no aria-label/aria-labelledby — title alone isn't touch-discoverable and isn't reliably read as the accessible name; see media/MediaCard.jsx's Annotate button for the convention:\n${offenders.join('\n')}`).toEqual([]);
   });
 
+  it('gives the inline Instances form controls accessible names', () => {
+    // These controls live in compact peer-management rows where visible labels
+    // would break the layout. Keep explicit names on each input so placeholders
+    // never become their only screen-reader context.
+    const file = 'src/pages/Instances.jsx';
+    const src = readFileSync(join(CLIENT_ROOT, file), 'utf8');
+    const offenders = [];
+    const re = /<input\b/g;
+    let m;
+    while ((m = re.exec(src))) {
+      const tag = openingTagAt(src, m.index, '<input'.length);
+      if (!tag || /\baria-label\s*=|\baria-labelledby\s*=/.test(tag)) continue;
+      offenders.push(`${file}:${lineOf(src, m.index)}`);
+    }
+    expect(offenders, `Instances input without an accessible name:\n${offenders.join('\n')}`).toEqual([]);
+  });
+
   it('meets the 44px touch-target minimum on Close buttons', () => {
     // Close buttons keep shipping sized to their bare icon (w-4 h-4, p-1,
     // p-1.5) instead of a real tap target. components/Drawer.jsx:106 is the

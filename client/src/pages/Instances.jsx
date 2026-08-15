@@ -250,6 +250,7 @@ function SelfCard({ self, onUpdate, syncStatus, tailnetInfo }) {
           {editing ? (
             <div className="flex items-center gap-2 flex-1">
               <input
+                aria-label="Instance name"
                 value={name}
                 onChange={e => setName(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && saveName()}
@@ -369,6 +370,7 @@ function AddPeerForm({ onAdd }) {
       </h3>
       <div className="flex flex-wrap gap-2">
         <input
+          aria-label="Peer address"
           value={address}
           onChange={e => setAddress(e.target.value)}
           placeholder="100.64.x.x"
@@ -377,6 +379,7 @@ function AddPeerForm({ onAdd }) {
           className="bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-hidden focus:border-port-accent flex-1 min-w-[140px]"
         />
         <input
+          aria-label="Peer port"
           value={port}
           onChange={e => setPort(e.target.value)}
           placeholder="5554"
@@ -386,6 +389,7 @@ function AddPeerForm({ onAdd }) {
           className="bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-hidden focus:border-port-accent w-20"
         />
         <input
+          aria-label="Peer name"
           value={name}
           onChange={e => setName(e.target.value)}
           placeholder="Name (optional)"
@@ -411,6 +415,7 @@ function AddPeerForm({ onAdd }) {
         {showAuth && (
           <div className="flex flex-wrap gap-2 mt-2">
             <input
+              aria-label="Peer username"
               value={username}
               onChange={e => setUsername(e.target.value)}
               placeholder="Username (optional)"
@@ -418,6 +423,7 @@ function AddPeerForm({ onAdd }) {
               className="bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-hidden focus:border-port-accent flex-1 min-w-[120px]"
             />
             <input
+              aria-label="Peer password"
               value={password}
               onChange={e => setPassword(e.target.value)}
               placeholder="Password"
@@ -931,6 +937,7 @@ function PeerHostEditor({ peer, onRefresh, tailnetInfo }) {
     return (
       <div className="mt-1 flex items-center gap-1 flex-wrap">
         <input
+          aria-label="Peer hostname"
           value={value}
           onChange={e => setValue(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && save()}
@@ -938,7 +945,7 @@ function PeerHostEditor({ peer, onRefresh, tailnetInfo }) {
           className="bg-port-bg border border-port-border rounded px-2 py-0.5 text-xs text-white font-mono focus:outline-hidden focus:border-port-accent flex-1 min-w-[180px]"
           autoFocus
         />
-        <button onClick={save} disabled={saving} aria-label="Save name" className="text-port-success hover:text-port-success/80 disabled:opacity-50"><Check size={14} /></button>
+        <button onClick={save} disabled={saving} aria-label="Save hostname" className="text-port-success hover:text-port-success/80 disabled:opacity-50"><Check size={14} /></button>
         <button onClick={() => setEditing(false)} aria-label="Cancel" className="text-gray-500 hover:text-white"><X size={14} /></button>
         {suggestion && suggestion !== value && (
           <button
@@ -1036,6 +1043,7 @@ function PeerAuthEditor({ peer, onRefresh }) {
     return (
       <div className="mt-1 flex items-center gap-1 flex-wrap">
         <input
+          aria-label="Peer username"
           value={username}
           onChange={e => setUsername(e.target.value)}
           placeholder="user (optional)"
@@ -1043,6 +1051,7 @@ function PeerAuthEditor({ peer, onRefresh }) {
           className="bg-port-bg border border-port-border rounded px-2 py-0.5 text-xs text-white focus:outline-hidden focus:border-port-accent w-28"
         />
         <input
+          aria-label="Peer password"
           value={password}
           onChange={e => setPassword(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && save()}
@@ -1052,7 +1061,7 @@ function PeerAuthEditor({ peer, onRefresh }) {
           className="bg-port-bg border border-port-border rounded px-2 py-0.5 text-xs text-white focus:outline-hidden focus:border-port-accent flex-1 min-w-[120px]"
           autoFocus
         />
-        <button onClick={save} disabled={saving || !password} aria-label="Save name" className="text-port-success hover:text-port-success/80 disabled:opacity-50"><Check size={14} /></button>
+        <button onClick={save} disabled={saving || !password} aria-label="Save credentials" className="text-port-success hover:text-port-success/80 disabled:opacity-50"><Check size={14} /></button>
         <button onClick={() => setEditing(false)} aria-label="Cancel" className="text-gray-500 hover:text-white"><X size={14} /></button>
         {hasAuth && (
           <button onClick={clear} disabled={saving} className="text-[10px] text-gray-500 hover:text-port-error underline disabled:opacity-50">remove</button>
@@ -1249,6 +1258,7 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo }) {
           {editingName ? (
             <div className="flex items-center gap-1">
               <input
+                aria-label="Peer name"
                 value={name}
                 onChange={e => setName(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && saveName()}
