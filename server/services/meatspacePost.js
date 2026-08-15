@@ -36,7 +36,7 @@ import { applySessionToReviewSchedule, getDueReviews, getRetentionReport } from 
 // meatspacePostTraining.js would close that into a 3-file circular import.
 import { getAllTrainingEntries } from './postTrainingLogStore.js';
 import { getMorseProgress, MAX_KOCH_LEVEL } from './meatspacePostMorse.js';
-import { computePostStreaks, computeUnifiedStreak, normalizeYmd, ymdToUTC, ymdShift } from '../lib/postStreak.js';
+import { computePostStreaks, computeUnifiedStreak, normalizeYmd, recordDayKey, withDerivedDayKeys, ymdToUTC, ymdShift } from '../lib/postStreak.js';
 import { getUserTimezone, todayInTimezone, userLocalToday as localToday } from '../lib/timezone.js';
 
 // Re-export the shared streak helper so existing importers of
@@ -238,13 +238,25 @@ async function loadSessions({ strict = false } = {}) {
   return data;
 }
 
+/**
+ * All scored sessions, with each record's `date` RE-DERIVED from its `startedAt`
+ * instant in the user's CURRENT timezone (issue #4168). This is the single read
+ * boundary for sessions — every stats/streak/history reader and the client go
+ * through it — so a `settings.timezone` change re-keys existing history on read
+ * instead of leaving days frozen in the zone that was active when they were
+ * written. The stored `date` stays as a cache the readers ignore; the write path
+ * (`submitPostSession`, via `loadSessions`) is untouched.
+ */
 export async function getPostSessions(from, to, options) {
   const data = await loadSessions(options);
-  let sessions = data.sessions;
+  const timezone = await getUserTimezone();
+  let sessions = withDerivedDayKeys(data.sessions, timezone);
+  // Re-derivation can move a record across a day boundary, so re-sort rather
+  // than trusting the stored-date order `submitPostSession` wrote.
+  sessions.sort((a, b) => (a?.date || '').localeCompare(b?.date || ''));
   if (from || to) {
-    const timezone = await getUserTimezone();
     sessions = sessions.filter((session) => {
-      const date = normalizeYmd(session?.date, timezone);
+      const date = session?.date;
       return date && (!from || date >= from) && (!to || date <= to);
     });
   }
@@ -670,7 +682,7 @@ export async function getPostStats(days = 30) {
     // UTC midnight, DST-safe) so the cutoff matches the tz-correct session dates.
     const cutoffStr = ymdShift(todayStr, -days);
     recent = sessions.filter(s => {
-      const date = normalizeYmd(s?.date, timezone);
+      const date = recordDayKey(s, timezone);
       return date && date >= cutoffStr;
     });
   }
@@ -802,13 +814,13 @@ export async function getPostProgress({ days = 90 } = {}) {
   }
   const sessions = cutoffStr
     ? allSessions.filter(s => {
-      const date = normalizeYmd(s?.date, timezone);
+      const date = recordDayKey(s, timezone);
       return date && date >= cutoffStr;
     })
     : allSessions;
   const training = cutoffStr
     ? allTraining.filter(e => {
-      const date = normalizeYmd(e?.date, timezone);
+      const date = recordDayKey(e, timezone);
       return date && date >= cutoffStr;
     })
     : allTraining;
@@ -825,7 +837,7 @@ export async function getPostProgress({ days = 90 } = {}) {
   };
 
   for (const s of sessions) {
-    const date = normalizeYmd(s?.date, timezone);
+    const date = recordDayKey(s, timezone);
     if (!date) continue;
     const day = ensureDay(date);
     day.sessions += 1;
@@ -851,7 +863,7 @@ export async function getPostProgress({ days = 90 } = {}) {
   // Practice time (Morse / memory) folds into each day's minutes — a practice-
   // only day still shows time-in-training even with no scored session.
   for (const e of training) {
-    const date = normalizeYmd(e?.date, timezone);
+    const date = recordDayKey(e, timezone);
     if (!date) continue;
     ensureDay(date).minutes += (e.totalMs || 0) / 60000;
   }
@@ -1100,18 +1112,19 @@ export function practicedTodayFromActivity(sessions = [], trainingEntries = [], 
   const today = normalizeYmd(todayStr, timezone);
   if (!today) return { drillTypes, memoryItemIds, completedSession };
 
-  // Both feeds go through normalizeYmd: session dates are stored as the day
-  // prefix already, but some training-log entries (memory practice) carry a full
-  // ISO timestamp, and a raw `!==` would read those as not-practiced.
+  // Both feeds go through recordDayKey, which re-derives the day from each
+  // record's own instant in the CURRENT timezone (#4168) — a raw `!==` against
+  // the stored `date` would read a record written under a previous timezone (or
+  // a memory-practice entry carrying a full ISO timestamp) as not-practiced.
   for (const session of sessions || []) {
-    if (normalizeYmd(session?.date, timezone) !== today) continue;
+    if (recordDayKey(session, timezone) !== today) continue;
     completedSession = true;
     for (const task of session.tasks || []) {
       if (task?.type) drillTypes.add(task.type);
     }
   }
   for (const entry of trainingEntries || []) {
-    if (normalizeYmd(entry?.date, timezone) !== today) continue;
+    if (recordDayKey(entry, timezone) !== today) continue;
     // Training entries are two shapes sharing one log: drill practice carries
     // `drillType`, memory practice carries `memoryItemId` + `mode`.
     if (entry.drillType) drillTypes.add(entry.drillType);
@@ -1588,7 +1601,7 @@ async function getMultiplicationLevelStats(windowDays = MASTERY_DEFAULTS.windowD
       const anyAnswered = (task.questions || []).some(q => q?.answered != null);
       if (anyAnswered && level > floorLevel) floorLevel = level;
       // Mastery stats are windowed — skip out-of-window sessions for the buckets.
-      const date = normalizeYmd(session?.date, timezone);
+      const date = recordDayKey(session, timezone);
       if (cutoffStr && (!date || date < cutoffStr)) continue;
       const bucket = byLevel[level] || (byLevel[level] = { samples: 0, correct: 0, totalResponseMs: 0 });
       for (const q of task.questions || []) {
@@ -1628,7 +1641,7 @@ async function getPowersLevelStats(windowDays = POWERS_MASTERY_DEFAULTS.windowDa
       if (level == null) continue;
       const anyAnswered = (task.questions || []).some(question => question?.answered != null);
       if (anyAnswered && level > floorLevel) floorLevel = level;
-      const date = normalizeYmd(session?.date, timezone);
+      const date = recordDayKey(session, timezone);
       if (cutoffStr && (!date || date < cutoffStr)) continue;
       for (const question of task.questions || []) {
         if (question?.answered == null) continue;
@@ -1717,7 +1730,7 @@ async function getCognitiveLevelStats(type, windowDays = COGNITIVE_MASTERY_DEFAU
       const reached = ((task.totalCount ?? (task.questions?.length || 0)) > 0);
       if (reached && level > floorLevel) floorLevel = level;
       // Mastery stats are windowed.
-      const date = normalizeYmd(session?.date, timezone);
+      const date = recordDayKey(session, timezone);
       if (cutoffStr && (!date || date < cutoffStr)) continue;
       const acc = Number.isFinite(task.accuracy) ? task.accuracy : null;
       if (acc == null) continue;

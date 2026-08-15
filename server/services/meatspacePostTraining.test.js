@@ -242,7 +242,63 @@ describe('getTrainingStats', () => {
   });
 });
 
+describe('getTrainingStats — re-derived day keys after a timezone change (issue #4168)', () => {
+  // Entries written while the user was in Los Angeles: `date` is the LA day, while
+  // `timestamp` is the true instant (late local evening = next UTC day). Only the
+  // SETTING changes below — the stored bytes stay exactly as they were written.
+  const laEntries = [
+    { id: 'e1', module: 'morse', drillType: 'morse-copy', date: '2026-07-16', timestamp: '2026-07-17T05:30:00.000Z', questionCount: 5, correctCount: 5, totalMs: 30000 },
+    { id: 'e2', module: 'morse', drillType: 'morse-copy', date: '2026-07-17', timestamp: '2026-07-18T05:30:00.000Z', questionCount: 5, correctCount: 4, totalMs: 30000 },
+  ];
+
+  it('counts the streak against the CURRENT zone, not the frozen stored keys', async () => {
+    settingsState.current = { timezone: 'UTC' };
+    vi.useFakeTimers();
+    // 07-19 UTC: today is unpracticed, so the grace window anchors on 07-18.
+    // Under UTC the instants key to 07-17 + 07-18 → a live 2-day streak, where
+    // the frozen LA keys (07-16 + 07-17) reach neither and report 0.
+    vi.setSystemTime(new Date('2026-07-19T12:00:00Z'));
+    try {
+      readJSONFile.mockResolvedValue({ entries: laEntries });
+      const stats = await getTrainingStats(30);
+      expect(stats.currentStreak).toBe(2);
+      expect(stats.activeDays).toBe(2);
+      expect(stats.byDrill['morse:morse-copy'].daysActive).toBe(2);
+      // The stored records are untouched — derivation is a read-time view.
+      expect(laEntries.map(e => e.date)).toEqual(['2026-07-16', '2026-07-17']);
+    } finally {
+      vi.useRealTimers();
+      settingsState.current = { timezone: 'UTC' };
+    }
+  });
+
+  it('windows the same history off the re-derived days', async () => {
+    settingsState.current = { timezone: 'UTC' };
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-18T12:00:00Z'));
+    try {
+      readJSONFile.mockResolvedValue({ entries: laEntries });
+      // A 1-day window ends at 2026-07-17 under UTC, so both re-derived days survive;
+      // the older stored key (2026-07-16) would have been clipped.
+      const stats = await getTrainingStats(1);
+      expect(stats.totalEntries).toBe(2);
+    } finally {
+      vi.useRealTimers();
+      settingsState.current = { timezone: 'UTC' };
+    }
+  });
+});
+
 describe('getTrainingEntries', () => {
+  it('re-derives each displayed entry date in the current timezone (issue #4168)', async () => {
+    settingsState.current = { timezone: 'UTC' };
+    readJSONFile.mockResolvedValue({
+      entries: [{ id: 'a', date: '2026-07-16', timestamp: '2026-07-17T05:30:00.000Z' }],
+    });
+    const entries = await getTrainingEntries(10);
+    expect(entries[0].date).toBe('2026-07-17');
+  });
+
   it('returns entries in reverse order (most recent first)', async () => {
     readJSONFile.mockResolvedValue({
       entries: [

@@ -1502,6 +1502,109 @@ describe('getPostStats / submitPostSession — timezone-correct day boundary (is
 });
 
 // =============================================================================
+// Re-derived day keys after a timezone CHANGE (issue #4168)
+//
+// #2681 fixed the steady state: a session is stamped in the zone configured at
+// write time. The residual gap is what happens when the user later CHANGES
+// settings.timezone — the stored `date` is frozen in the old zone and disagrees
+// with the new-zone readers. These tests hold the history fixed (the exact bytes
+// a previous zone wrote) and flip only the setting, which is what a user moving
+// house actually does.
+// =============================================================================
+
+describe('POST readers re-derive day keys after a timezone change (issue #4168)', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+  afterEach(() => {
+    vi.useRealTimers();
+    settingsState.current = { timezone: 'UTC' };
+  });
+
+  // History written while the user was in Los Angeles: each session's `date` is
+  // the LA day, while `startedAt` is the true instant (late local evening, so it
+  // already belongs to the NEXT UTC day).
+  const laHistory = [
+    {
+      date: '2026-07-16',
+      startedAt: '2026-07-17T05:30:00.000Z',
+      completedAt: '2026-07-17T05:45:00.000Z',
+      score: 70,
+      tasks: [{ module: 'mental-math', type: 'doubling-chain', score: 70 }],
+    },
+    {
+      date: '2026-07-17',
+      startedAt: '2026-07-18T05:30:00.000Z',
+      completedAt: '2026-07-18T05:45:00.000Z',
+      score: 90,
+      tasks: [{ module: 'mental-math', type: 'doubling-chain', score: 90 }],
+    },
+  ];
+
+  function mockHistory(sessions) {
+    readJSONFile.mockImplementation((path, defaultValue) => {
+      if (String(path).includes('post-sessions')) return Promise.resolve({ sessions });
+      return Promise.resolve(defaultValue);
+    });
+  }
+
+  function freezeAt(utcIso, timezone) {
+    settingsState.current = { timezone };
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(utcIso));
+  }
+
+  it('getPostSessions re-keys stored dates into the CURRENT timezone', async () => {
+    freezeAt('2026-07-18T12:00:00Z', 'UTC');
+    mockHistory(laHistory);
+    const sessions = await getPostSessions();
+    expect(sessions.map(s => s.date)).toEqual(['2026-07-17', '2026-07-18']);
+    // The stored record is untouched — the derived key is a read-time view.
+    expect(laHistory.map(s => s.date)).toEqual(['2026-07-16', '2026-07-17']);
+  });
+
+  it('getPostStats counts the streak and today against the new zone', async () => {
+    // Under UTC the second session lands on 2026-07-18, which IS today there.
+    freezeAt('2026-07-18T12:00:00Z', 'UTC');
+    mockHistory(laHistory);
+    const stats = await getPostStats(30);
+    // The frozen LA keys would have read completedToday=false (last stored day 07-17).
+    expect(stats.completedToday).toBe(true);
+    expect(stats.todayScore).toBe(90);
+    expect(stats.currentStreak).toBe(2);
+  });
+
+  it('the same history still reads correctly back in the original zone', async () => {
+    // Nothing was rewritten, so moving the setting back restores the LA days.
+    freezeAt('2026-07-18T05:45:00Z', 'America/Los_Angeles');
+    mockHistory(laHistory);
+    const stats = await getPostStats(30);
+    expect(stats.completedToday).toBe(true);
+    expect(stats.todayScore).toBe(90);
+    expect(stats.currentStreak).toBe(2);
+    expect(stats.lastDate).toBe('2026-07-17');
+  });
+
+  it('the from/to range filter matches the re-derived days, not the stored ones', async () => {
+    freezeAt('2026-07-18T12:00:00Z', 'UTC');
+    mockHistory(laHistory);
+    // '2026-07-16' is nobody's day under UTC — both records moved forward one day.
+    expect(await getPostSessions('2026-07-16', '2026-07-16')).toHaveLength(0);
+    expect(await getPostSessions('2026-07-18', '2026-07-18')).toHaveLength(1);
+  });
+
+  it('leaves a legacy record with no instant on its authored day', async () => {
+    // Pre-timestamp history carries only a day label — there is nothing to
+    // re-derive from, so it must stay put rather than vanish from the stats.
+    freezeAt('2026-07-18T12:00:00Z', 'UTC');
+    mockHistory([
+      { date: '2026-07-18', score: 55, tasks: [{ module: 'mental-math', type: 'doubling-chain', score: 55 }] },
+    ]);
+    const stats = await getPostStats(30);
+    expect(stats.completedToday).toBe(true);
+    expect(stats.todayScore).toBe(55);
+  });
+});
+
+// =============================================================================
 // resolveDrillConfig / getAdaptivePreview — adaptive integration across ALL
 // math drill types (issue #2102 gap 3). The pure `adaptDrillConfig` policy is
 // already exhaustively covered in postAdaptive.test.js; these tests exercise

@@ -1,0 +1,1 @@
+- POST streak/stats/history readers now re-derive each record's day key from its own timestamp in the current timezone, so changing settings.timezone re-keys existing practice history instead of leaving it frozen in the zone it was written in

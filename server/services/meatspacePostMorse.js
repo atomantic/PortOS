@@ -25,8 +25,8 @@
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
-import { userLocalToday } from '../lib/timezone.js';
-import { ymdShift } from '../lib/postStreak.js';
+import { getUserTimezone, todayInTimezone, userLocalToday } from '../lib/timezone.js';
+import { withDerivedDayKeys, ymdShift } from '../lib/postStreak.js';
 
 const MEATSPACE_DIR = PATHS.meatspace;
 const MORSE_FILE = join(MEATSPACE_DIR, 'post-morse-progress.json');
@@ -184,12 +184,17 @@ export async function setKochLevel({ kochLevel, adopt = false, settings } = {}) 
  */
 export async function getMorseProgress(days = 30) {
   const data = await loadMorseProgress();
-  let rounds = data.rounds;
+  // Re-derive each round's day key from its own `timestamp` in the CURRENT
+  // timezone (issue #4168) — the stored `date` is frozen in whatever zone was
+  // configured when the round was appended, so after a `settings.timezone`
+  // change the window cutoff and the emitted series would key off stale days.
+  const timezone = await getUserTimezone();
+  let rounds = withDerivedDayKeys(data.rounds, timezone);
 
   if (days > 0) {
     // Window off the user's local today (DST-safe day math) so the cutoff matches
     // the local-day round dates now stamped above (issue #2681).
-    const cutoffStr = ymdShift(await userLocalToday(), -days);
+    const cutoffStr = ymdShift(todayInTimezone(timezone), -days);
     rounds = rounds.filter((r) => (r.date || '') >= cutoffStr);
   }
 

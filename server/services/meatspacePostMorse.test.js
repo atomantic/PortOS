@@ -8,10 +8,12 @@ vi.mock('../lib/fileUtils.js', () => ({
 }));
 
 // appendMorseRound / getMorseProgress derive the local day via userLocalToday →
-// getSettings (issue #2681). Pin to UTC so the day-key is the UTC day regardless
-// of the runner's system timezone (matching the UTC-today assertions below).
+// getSettings (issue #2681). Default-pin to UTC so the day-key is the UTC day
+// regardless of the runner's system timezone (matching the UTC-today assertions
+// below); the timezone-change tests below set settingsState.current themselves.
+const settingsState = vi.hoisted(() => ({ current: { timezone: 'UTC' } }));
 vi.mock('../services/settings.js', () => ({
-  getSettings: () => Promise.resolve({ timezone: 'UTC' }),
+  getSettings: () => Promise.resolve(settingsState.current),
 }));
 
 import { readJSONFile, atomicWrite } from '../lib/fileUtils.js';
@@ -237,5 +239,31 @@ describe('getMorseProgress', () => {
     expect(p.totalRounds).toBe(1);
     expect(p.confusionMatrix.M).toBeTruthy();
     expect(p.confusionMatrix.K).toBeUndefined();
+  });
+
+  it('re-derives round day keys from `timestamp` after a timezone change (issue #4168)', async () => {
+    // Rounds appended while the user was in Los Angeles: `date` is the LA day,
+    // `timestamp` is the true instant (late local evening = next UTC day). Only
+    // the setting moves here — the stored rounds are byte-identical.
+    const laRounds = [
+      { id: 'r1', date: '2026-07-16', timestamp: '2026-07-17T05:30:00.000Z', mode: 'copy', wpm: 18, accuracy: 80, items: [{ sent: 'K', guessed: 'K', correct: true }] },
+      { id: 'r2', date: '2026-07-17', timestamp: '2026-07-18T05:30:00.000Z', mode: 'copy', wpm: 18, accuracy: 90, items: [{ sent: 'M', guessed: 'M', correct: true }] },
+    ];
+    settingsState.current = { timezone: 'UTC' };
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-18T12:00:00Z'));
+    try {
+      readJSONFile.mockResolvedValue({ kochLevel: 5, settings: null, rounds: laRounds });
+      // A 1-day UTC window cuts at 2026-07-17: both re-derived days survive, where
+      // the frozen LA keys would have dropped the older round.
+      const p = await getMorseProgress(1);
+      expect(p.totalRounds).toBe(2);
+      expect(p.series.copy.map((s) => s.date)).toEqual(['2026-07-17', '2026-07-18']);
+      // The stored rounds are untouched — derivation is a read-time view.
+      expect(laRounds.map((r) => r.date)).toEqual(['2026-07-16', '2026-07-17']);
+    } finally {
+      vi.useRealTimers();
+      settingsState.current = { timezone: 'UTC' };
+    }
   });
 });

@@ -13,6 +13,8 @@
 
 import { join } from 'path';
 import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
+import { withDerivedDayKeys } from '../lib/postStreak.js';
+import { getUserTimezone } from '../lib/timezone.js';
 
 const MEATSPACE_DIR = PATHS.meatspace;
 const TRAINING_LOG_FILE = join(MEATSPACE_DIR, 'post-training-log.json');
@@ -37,14 +39,20 @@ export async function saveTrainingLog(data) {
 }
 
 /**
- * All training-log entries in chronological (append) order — the raw feed the
+ * All training-log entries in chronological (append) order — the feed the
  * unified progress aggregation reads (both meatspacePostTraining and
  * meatspacePostMemory practice write to the same `post-training-log.json`).
+ *
+ * Each entry's `date` is RE-DERIVED from its `timestamp` in the user's CURRENT
+ * timezone (issue #4168), so a `settings.timezone` change re-keys existing
+ * practice history on read rather than leaving it frozen in the zone that was
+ * active when it was written. `loadTrainingLog` above stays raw — the write
+ * paths must round-trip the stored record untouched.
  *
  * @param {{ strict?: boolean }} [options] - `strict: true` throws rather than
  *   reporting an unreadable log as zero entries (#2726).
  */
 export async function getAllTrainingEntries(options) {
   const data = await loadTrainingLog(options);
-  return data.entries;
+  return withDerivedDayKeys(data.entries, await getUserTimezone());
 }

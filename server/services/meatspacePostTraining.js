@@ -7,7 +7,7 @@
 
 import { randomUUID } from 'crypto';
 import { getUserTimezone, todayInTimezone, userLocalToday } from '../lib/timezone.js';
-import { normalizeYmd, ymdShift } from '../lib/postStreak.js';
+import { recordDayKey, ymdShift } from '../lib/postStreak.js';
 import { getUnifiedActivityStreak } from './postActivityStreak.js';
 import { loadTrainingLog, saveTrainingLog, getAllTrainingEntries } from './postTrainingLogStore.js';
 
@@ -76,7 +76,7 @@ export async function getTrainingStats(days = 30) {
     // a UTC-day cutoff would clip the oldest local day or admit an extra one.
     const cutoffStr = ymdShift(todayStr, -days);
     entries = allEntries.filter(e => {
-      const date = normalizeYmd(e?.date, timezone);
+      const date = recordDayKey(e, timezone);
       return date && date >= cutoffStr;
     });
   }
@@ -90,7 +90,7 @@ export async function getTrainingStats(days = 30) {
     byDrill[key].totalCorrect += e.correctCount || 0;
     byDrill[key].totalQuestions += e.questionCount || 0;
     byDrill[key].totalMs += e.totalMs || 0;
-    const date = normalizeYmd(e?.date, timezone);
+    const date = recordDayKey(e, timezone);
     if (date) byDrill[key].dates.add(date);
   }
 
@@ -99,7 +99,7 @@ export async function getTrainingStats(days = 30) {
   // getAllTrainingEntries() — postActivityStreak.js takes training as a
   // parameter specifically so it doesn't need to import this module.
   const { current: currentStreak, longest: longestStreak } = await getUnifiedActivityStreak(allEntries, todayStr, timezone);
-  const activeDays = new Set(entries.map(e => normalizeYmd(e?.date, timezone)).filter(Boolean)).size;
+  const activeDays = new Set(entries.map(e => recordDayKey(e, timezone)).filter(Boolean)).size;
 
   // Summarize
   const summary = {};
@@ -123,10 +123,13 @@ export async function getTrainingStats(days = 30) {
 }
 
 /**
- * Get recent training entries for display.
+ * Get recent training entries for display. Reads through
+ * `getAllTrainingEntries`, so each entry's `date` is re-derived in the user's
+ * current timezone (#4168) and the history list agrees with the streak/stats
+ * that are computed off the same day keys.
  */
 export async function getTrainingEntries(limit = 20) {
-  const data = await loadTrainingLog();
-  if (!limit) return data.entries.slice().reverse();
-  return data.entries.slice(-limit).reverse();
+  const entries = await getAllTrainingEntries();
+  if (!limit) return entries.slice().reverse();
+  return entries.slice(-limit).reverse();
 }
