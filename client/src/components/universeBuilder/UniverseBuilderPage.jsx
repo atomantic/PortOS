@@ -130,6 +130,7 @@ export default function UniverseBuilder() {
     providerLabel,
     providerModels,
     providers,
+    adoptStyleGuideFromBoard,
     persistStyleReference,
     removeCategory,
     removeStyleReference,
@@ -400,6 +401,7 @@ export default function UniverseBuilder() {
             saved={!!selectedId}
             onPersistStyleReference={persistStyleReference}
             onRemoveStyleReference={removeStyleReference}
+            onAdoptStyleGuide={adoptStyleGuideFromBoard}
           />
         )}
 

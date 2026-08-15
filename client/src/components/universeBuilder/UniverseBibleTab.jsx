@@ -112,6 +112,7 @@ export default function BibleTab({
   saved = false,
   onPersistStyleReference,
   onRemoveStyleReference,
+  onAdoptStyleGuide,
 }) {
   const { providers, providerModels, providerLabel, activeProviderId } = llm;
   const {
@@ -178,8 +179,10 @@ export default function BibleTab({
         />
 
         {/* Board → style synthesis (#4188 Phase 4): distill the linked board
-            into the style guide; adoption is a server-side queued write and
-            the adopted values are merged back into the draft here. */}
+            into the style guide. Adoption goes through the draft hook
+            (adoptStyleGuideFromBoard), which runs the server-side queued
+            write AND the same saved-snapshot/watermark bookkeeping as an
+            art-reference adopt — so styleProbeDirty clears correctly. */}
         <MoodBoardStyleSynthesis
           boardId={draft.moodBoardId || ''}
           universeId={draft.id}
@@ -187,10 +190,7 @@ export default function BibleTab({
           influences={draft.influences || {}}
           locked={draft.locked || {}}
           saved={saved}
-          onAdopted={(updated) => updateDraft({
-            styleNotes: updated?.styleNotes ?? '',
-            influences: ensureInfluences(updated?.influences),
-          })}
+          onAdopt={onAdoptStyleGuide}
         />
 
         <div className="flex items-center gap-2 flex-wrap">

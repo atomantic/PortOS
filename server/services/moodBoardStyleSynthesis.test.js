@@ -78,6 +78,18 @@ describe('collectBoardStyleContext', () => {
     expect(ctx.items).toHaveLength(60);
     expect(ctx.droppedItems).toBe(10);
   });
+
+  it('bounds the AGGREGATE character budget, not just the fragment count', () => {
+    // 50 items × ~600 chars each ≈ 30k chars — under the 60-item cap but past
+    // the 24k aggregate budget, so the tail must be dropped.
+    const big = Array.from({ length: 50 }, (_, i) => ({ id: `t${i}`, type: 'text', text: 'x'.repeat(600) }));
+    const ctx = collectBoardStyleContext(boardWith(big));
+    expect(ctx.items.length).toBeLessThan(50);
+    expect(ctx.items.length).toBeGreaterThan(0);
+    expect(ctx.droppedItems).toBe(50 - ctx.items.length);
+    const total = ctx.items.reduce((sum, it) => sum + it.note.length, 0);
+    expect(total).toBeLessThanOrEqual(24000);
+  });
 });
 
 describe('synthesizeBoardStyle', () => {

@@ -4,7 +4,6 @@ import MoodBoardStyleSynthesis from './MoodBoardStyleSynthesis';
 
 const apiMocks = vi.hoisted(() => ({
   synthesizeMoodBoardStyle: vi.fn(),
-  adoptUniverseStyleGuide: vi.fn(),
 }));
 vi.mock('../../services/api', () => ({ ...apiMocks }));
 vi.mock('../../hooks/useProviderModels', () => ({
@@ -38,17 +37,24 @@ const synthesis = {
   llm: { provider: 'ollama', model: 'qwen' },
 };
 
+const baseProps = {
+  boardId: 'mb-1',
+  universeId: 'u1',
+  styleNotes: 'Clean vector art',
+  influences: { embrace: ['clean vectors'], avoid: ['grain'] },
+  locked: { influencesAvoid: true },
+  saved: true,
+};
+
 const renderPanel = (props = {}) => render(
-  <MoodBoardStyleSynthesis
-    boardId="mb-1"
-    universeId="u1"
-    styleNotes="Clean vector art"
-    influences={{ embrace: ['clean vectors'], avoid: ['grain'] }}
-    locked={{ influencesAvoid: true }}
-    saved
-    {...props}
-  />,
+  <MoodBoardStyleSynthesis {...baseProps} {...props} />,
 );
+
+const runSynthesis = async () => {
+  fireEvent.click(screen.getByRole('button', { name: /synthesize style/i }));
+  fireEvent.click(screen.getByRole('button', { name: /^synthesize$/i }));
+  await waitFor(() => expect(screen.getByText('Style guide preview')).toBeInTheDocument());
+};
 
 describe('MoodBoardStyleSynthesis (#4188 Phase 4)', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -61,38 +67,34 @@ describe('MoodBoardStyleSynthesis (#4188 Phase 4)', () => {
     expect(screen.getByRole('button', { name: /synthesize style/i })).toBeDisabled();
   });
 
-  it('synthesizes with the draft style context, previews the diff, and adopts via the queued write', async () => {
+  it('synthesizes with the draft style context, previews the diff, and adopts through the caller', async () => {
     apiMocks.synthesizeMoodBoardStyle.mockResolvedValue(synthesis);
-    const adopted = { id: 'u1', styleNotes: 'Tactile ink-wash science fiction.', influences: synthesis.proposed.influences };
-    apiMocks.adoptUniverseStyleGuide.mockResolvedValue(adopted);
-    const onAdopted = vi.fn();
+    const onAdopt = vi.fn().mockResolvedValue(true);
 
-    renderPanel({ onAdopted });
-    fireEvent.click(screen.getByRole('button', { name: /synthesize style/i }));
-    fireEvent.click(screen.getByRole('button', { name: /^synthesize$/i }));
+    renderPanel({ onAdopt });
+    await runSynthesis();
 
-    await waitFor(() => {
-      expect(apiMocks.synthesizeMoodBoardStyle).toHaveBeenCalledWith('mb-1', {
-        styleNotes: 'Clean vector art',
-        influences: { embrace: ['clean vectors'], avoid: ['grain'] },
-        locked: { influencesAvoid: true },
-        providerId: 'ollama',
-        model: 'qwen',
-      }, { silent: true });
-    });
-
-    // Diff preview renders the proposal.
-    expect(screen.getByText('Style guide preview')).toBeInTheDocument();
+    expect(apiMocks.synthesizeMoodBoardStyle).toHaveBeenCalledWith('mb-1', {
+      styleNotes: 'Clean vector art',
+      influences: { embrace: ['clean vectors'], avoid: ['grain'] },
+      locked: { influencesAvoid: true },
+      providerId: 'ollama',
+      model: 'qwen',
+    }, { silent: true });
     expect(screen.getByText('+ ink wash')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /adopt style/i }));
     await waitFor(() => {
-      expect(apiMocks.adoptUniverseStyleGuide).toHaveBeenCalledWith('u1', {
+      expect(onAdopt).toHaveBeenCalledWith({
         styleNotes: 'Tactile ink-wash science fiction.',
         influences: { embrace: ['ink wash'], avoid: ['gloss'] },
-      }, { silent: true });
+      });
     });
-    expect(onAdopted).toHaveBeenCalledWith(adopted);
+    // A successful adopt closes the modal (force path — the parent's busy
+    // gate hasn't re-rendered yet when the body requests the close).
+    await waitFor(() => {
+      expect(screen.queryByText('Style guide preview')).toBeNull();
+    });
   });
 
   it('disables Adopt when the proposal matches the current guidance', async () => {
@@ -101,10 +103,21 @@ describe('MoodBoardStyleSynthesis (#4188 Phase 4)', () => {
       diff: { ...synthesis.diff, hasChanges: false },
     });
     renderPanel();
-    fireEvent.click(screen.getByRole('button', { name: /synthesize style/i }));
-    fireEvent.click(screen.getByRole('button', { name: /^synthesize$/i }));
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /adopt style/i })).toBeDisabled();
-    });
+    await runSynthesis();
+    expect(screen.getByRole('button', { name: /adopt style/i })).toBeDisabled();
+  });
+
+  it('discards a stale proposal when the target universe changes (remount by key)', async () => {
+    apiMocks.synthesizeMoodBoardStyle.mockResolvedValue(synthesis);
+    const { rerender } = renderPanel();
+    await runSynthesis();
+    expect(screen.getByRole('button', { name: /adopt style/i })).toBeInTheDocument();
+
+    // Navigating to a different universe while the modal is open must wipe
+    // the proposal — adopting universe A's synthesis into B would silently
+    // copy one universe's style into another.
+    rerender(<MoodBoardStyleSynthesis {...baseProps} universeId="u2" />);
+    expect(screen.queryByRole('button', { name: /adopt style/i })).toBeNull();
+    expect(screen.queryByText('Style guide preview')).toBeNull();
   });
 });

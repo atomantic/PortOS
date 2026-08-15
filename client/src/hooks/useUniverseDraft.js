@@ -3,6 +3,7 @@ import useMounted from './useMounted';
 import toast from '../components/ui/Toast';
 import {
   addUniverseStyleReference,
+  adoptUniverseStyleGuide,
   createUniverse,
   deleteUniverse,
   getProviders,
@@ -496,6 +497,32 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
     return true;
   }, [applyStyleReferenceResult, draft, selectedId]);
 
+  // Adopt a board-synthesized style guide (#4188 Phase 4) — the reference-less
+  // sibling of the persistStyleReference adopt path. Routes through the same
+  // applyStyleReferenceResult bookkeeping so the saved snapshot + update
+  // watermark advance and styleProbeDirty clears, exactly as an art-reference
+  // adopt does; the server re-checks field locks in its queued write.
+  const adoptStyleGuideFromBoard = useCallback(async (proposed) => {
+    if (!selectedId) return false;
+    const targetId = selectedId;
+    const current = draftRef.current || draft;
+    const capturedStyle = {
+      styleNotes: current.styleNotes || '',
+      influences: ensureInfluences(current.influences),
+    };
+    const updated = await adoptUniverseStyleGuide(targetId, {
+      styleNotes: proposed?.styleNotes || '',
+      influences: ensureInfluences(proposed?.influences),
+    }, { silent: true }).catch((error) => {
+      toast.error(`Adopting the style guide failed: ${error.message}`);
+      return null;
+    });
+    if (!updated) return false;
+    applyStyleReferenceResult(targetId, updated, capturedStyle);
+    toast.success('Style guide adopted from mood board');
+    return true;
+  }, [applyStyleReferenceResult, draft, selectedId]);
+
   // Remove one art reference by id. Also a delta, so back-to-back removals need
   // no client-side queue — the server's record write queue serializes them.
   const removeStyleReference = useCallback(async (referenceId) => {
@@ -719,6 +746,7 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
     // Exposed so a consumer can retry the catalog/settings load after a failed
     // refresh instead of forcing a full page reload.
     refresh,
+    adoptStyleGuideFromBoard,
     persistStyleReference,
     removeCategory,
     removeStyleReference,

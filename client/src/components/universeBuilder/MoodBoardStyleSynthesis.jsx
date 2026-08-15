@@ -4,15 +4,17 @@
  * "Synthesize style" on the universe's mood-board tool: runs the linked
  * board's collected content (notes, captions, per-item analyses) through a
  * user-picked API LLM, previews the proposed style guide as the shared
- * StyleDiffPreview against the CURRENT draft values, and "Adopt" persists it
- * via the universe's server-side queued write (never a client wholesale
- * `influences` PATCH). Locks are honored at proposal time and re-checked
+ * StyleDiffPreview against the CURRENT draft values, and "Adopt" hands the
+ * proposal to the caller (`onAdopt` — the draft hook's queued-write adopt,
+ * which also advances the saved-style bookkeeping). Never a client wholesale
+ * `influences` PATCH. Locks are honored at proposal time and re-checked
  * server-side on adopt.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Loader2, Sparkles, Wand2, X } from 'lucide-react';
-import { synthesizeMoodBoardStyle, adoptUniverseStyleGuide } from '../../services/api';
+import { synthesizeMoodBoardStyle } from '../../services/api';
+import useMounted from '../../hooks/useMounted';
 import useProviderModels from '../../hooks/useProviderModels';
 import ProviderModelSelector from '../ProviderModelSelector';
 import Modal from '../ui/Modal';
@@ -22,11 +24,14 @@ import StyleDiffPreview from './StyleDiffPreview';
 const apiProviderFilter = (p) => p.enabled && p.type === 'api';
 
 // Inner body so the provider fetch (useProviderModels mounts it) is deferred
-// until the modal actually opens.
-function SynthesisBody({ boardId, universeId, styleNotes, influences, locked, onAdopted, onClose }) {
+// until the modal actually opens. The parent keys this by universe+board, so
+// switching targets remounts it and a stale proposal can never be adopted
+// into a different universe.
+function SynthesisBody({ boardId, styleNotes, influences, locked, onAdopt, onBusyChange, onClose }) {
   const [result, setResult] = useState(null);
   const [running, setRunning] = useState(false);
   const [adopting, setAdopting] = useState(false);
+  const mountedRef = useMounted();
   const {
     providers,
     selectedProviderId,
@@ -39,6 +44,13 @@ function SynthesisBody({ boardId, universeId, styleNotes, influences, locked, on
 
   const busy = running || adopting;
 
+  // The parent gates modal dismissal (backdrop/Escape/close button) on this,
+  // so a run can't be silently orphaned mid-flight. Cleared on unmount.
+  useEffect(() => {
+    onBusyChange?.(busy);
+    return () => onBusyChange?.(false);
+  }, [busy, onBusyChange]);
+
   const synthesize = async () => {
     if (!selectedProviderId || busy) return;
     setRunning(true);
@@ -49,9 +61,10 @@ function SynthesisBody({ boardId, universeId, styleNotes, influences, locked, on
       providerId: selectedProviderId,
       model: selectedModel || undefined,
     }, { silent: true }).catch((error) => {
-      toast.error(`Style synthesis failed: ${error.message}`);
+      if (mountedRef.current) toast.error(`Style synthesis failed: ${error.message}`);
       return null;
     });
+    if (!mountedRef.current) return;
     setRunning(false);
     if (data) setResult(data);
   };
@@ -59,18 +72,16 @@ function SynthesisBody({ boardId, universeId, styleNotes, influences, locked, on
   const adopt = async () => {
     if (!result?.proposed || busy) return;
     setAdopting(true);
-    const updated = await adoptUniverseStyleGuide(universeId, {
+    const ok = await onAdopt?.({
       styleNotes: result.proposed.styleNotes || '',
       influences: result.proposed.influences || {},
-    }, { silent: true }).catch((error) => {
-      toast.error(`Adopting the style guide failed: ${error.message}`);
-      return null;
     });
+    if (!mountedRef.current) return;
     setAdopting(false);
-    if (!updated) return;
-    onAdopted?.(updated);
-    toast.success('Style guide adopted');
-    onClose();
+    // Force-close: the parent's busy gate reads its own state, which hasn't
+    // re-rendered from the setAdopting(false) above yet — a plain close()
+    // would still see busy and refuse.
+    if (ok) onClose(true);
   };
 
   return (
@@ -153,10 +164,19 @@ export default function MoodBoardStyleSynthesis({
   influences,
   locked,
   saved = false,
-  onAdopted,
+  onAdopt,
 }) {
   const [open, setOpen] = useState(false);
+  const [bodyBusy, setBodyBusy] = useState(false);
   if (!boardId) return null;
+  // Guarded close: backdrop, Escape (Modal routes both here), and the body's
+  // Cancel/X are ignored mid-run so a request can't be silently orphaned.
+  // The body passes `force === true` after a successful adopt, where its own
+  // busy flag has just cleared but this component hasn't re-rendered yet.
+  const close = (force) => {
+    if (bodyBusy && force !== true) return;
+    setOpen(false);
+  };
   return (
     <div className="flex items-center gap-2">
       <button
@@ -174,21 +194,23 @@ export default function MoodBoardStyleSynthesis({
       <span className="text-[11px] text-gray-500">Board notes + analyses → style prompt, negative prompt, style notes.</span>
       <Modal
         open={open}
-        onClose={() => setOpen(false)}
+        onClose={close}
         size="2xl"
+        closeOnBackdrop={!bodyBusy}
         usePortal
         panelClassName="bg-port-card border border-port-border rounded-xl max-h-[90vh] overflow-y-auto"
         ariaLabel="Synthesize universe style from mood board"
       >
         {open ? (
           <SynthesisBody
+            key={`${universeId || ''}:${boardId}`}
             boardId={boardId}
-            universeId={universeId}
             styleNotes={styleNotes}
             influences={influences}
             locked={locked}
-            onAdopted={onAdopted}
-            onClose={() => setOpen(false)}
+            onAdopt={onAdopt}
+            onBusyChange={setBodyBusy}
+            onClose={close}
           />
         ) : null}
       </Modal>
