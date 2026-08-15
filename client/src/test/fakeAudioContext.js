@@ -102,7 +102,9 @@ export const createFakeAudio = ({ state: initialState = 'running' } = {}) => {
       createOscillator() {
         const osc = {
           type: '', frequency: fakeParam(), onended: null, started: null, stopped: null,
+          periodicWave: null,
           ...connectable(), start(t) { this.started = t; }, stop(t) { this.stopped = t; },
+          setPeriodicWave(w) { this.periodicWave = w; },
         };
         audio.oscillators.push(osc);
         return osc;
@@ -131,6 +133,12 @@ export const createFakeAudio = ({ state: initialState = 'running' } = {}) => {
         const filter = { type: '', frequency: fakeParam(), Q: { value: 1 }, ...connectable() };
         audio.filters.push(filter);
         return filter;
+      },
+      // Band-limited pulse waves (chiptune's non-50%-duty channels). Only the
+      // identity matters to a test — the players just hand it back to
+      // setPeriodicWave — so the harmonic arrays are recorded, not modelled.
+      createPeriodicWave(real, imag, options) {
+        return { periodicWave: true, real, imag, options };
       },
       createWaveShaper() {
         const shaper = { curve: null, oversample: 'none', ...connectable() };

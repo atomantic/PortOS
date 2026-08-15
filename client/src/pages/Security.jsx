@@ -5,6 +5,7 @@ import Banner from '../components/ui/Banner';
 import { FormField } from '../components/ui/FormField';
 import { safeReadStorage, safeReadJsonStorage, safeWriteStorage, safeRemoveStorage } from '../lib/safeStorage';
 import { resumeAudioContext } from '../lib/audioContext.js';
+import useAudioSessionClaim from '../hooks/useAudioSessionClaim.js';
 
 const MEDIA_CONSTRAINTS_KEY = 'portos-media-constraints';
 
@@ -15,6 +16,16 @@ export default function Security() {
   const analyserRef = useRef(null);
   const animationFrameRef = useRef(null);
   const deviceRestartTimerRef = useRef(null);
+
+  // The monitor routes the host's microphone stream through its OWN
+  // AudioContext to the speakers, so it can't inherit the shared lookahead
+  // transport's `audioSession` option — it claims the iOS `playback` session by
+  // hand for exactly as long as that graph is live. Everything this page sounds
+  // is output-only (the capture happens on the server, not in the browser), and
+  // without the claim the iPhone's ring/silent switch mutes a remote listen-in
+  // that shows a moving level meter the whole time. See the audio-session note
+  // in lib/audioContext.js.
+  const { claim: claimAudioSession, release: releaseAudioSession } = useAudioSessionClaim('playback');
 
   const [streaming, setStreaming] = useState(false);
   const [videoEnabled, setVideoEnabled] = useState(true);
@@ -75,6 +86,11 @@ export default function Security() {
       cancelAnimationFrame(animationFrameRef.current);
     }
 
+    // Claimed BEFORE the resume so the context comes up on the right session.
+    // One slot: a re-setup (device switch, stream restart) replaces the previous
+    // claim rather than stranding it.
+    claimAudioSession();
+
     const audioContext = new (window.AudioContext || window.webkitAudioContext)();
 
     // Bring the context up if it isn't running (browser autoplay policy, or
@@ -110,7 +126,7 @@ export default function Security() {
     };
 
     updateLevel();
-  }, []);
+  }, [claimAudioSession]);
 
   // Enable audio with user interaction (for mobile browsers)
   const enableAudio = useCallback(async () => {
@@ -189,9 +205,13 @@ export default function Security() {
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
     }
+    // Nothing is sounding any more, so hand the session back — holding it would
+    // follow the user (SPA, no reload) onto every other page and refuse the
+    // globally-mounted VoiceWidget's microphone.
+    releaseAudioSession();
     setStreaming(false);
     setAudioLevel(0);
-  }, []);
+  }, [releaseAudioSession]);
 
   // Toggle video
   const toggleVideo = useCallback(() => {

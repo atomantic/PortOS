@@ -36,7 +36,11 @@ class MockOscillator {
   constructor(context = { currentTime: 0 }) { this.onended = null; this.frequency = { value: 0 }; this.context = context; }
   connect() { return this; }
   start() {}
-  stop() { if (this.onended) setTimeout(() => this.onended(), 0); }
+  // Scheduled unconditionally, then null-checked when it fires: playMorse calls
+  // stop() BEFORE it assigns onended (the handler lives in the Promise executor
+  // it returns), so an `if (this.onended)` gate here never fires and its promise
+  // never resolves — which silently hid every post-playback assertion.
+  stop() { setTimeout(() => this.onended?.(), 0); }
   disconnect() {}
 }
 class MockGainNode {
@@ -463,5 +467,66 @@ describe('isNodeOnPath (live keying highlight gate)', () => {
 
   it('does not flag a node unrelated to the current path', () => {
     expect(isNodeOnPath(t, '..')).toEqual({ matched: false, onPath: false });
+  });
+});
+
+// The trainer sounds through its OWN per-mount AudioContext (it close()s it on
+// unmount), so it can't inherit the shared lookahead transport's `audioSession`
+// option — it claims the iOS `playback` session by hand. Without the claim the
+// iPhone's ring/silent switch mutes a pure-synth drill that still says
+// "playing..." on screen. jsdom has no `navigator.audioSession`, so these stub
+// the shape Safari 16.4+ exposes and read the declared type back off it (#4131).
+describe('MorseTrainer iOS audio session', () => {
+  beforeEach(() => {
+    window.AudioContext = MockAudioContext;
+    navigator.audioSession = { type: 'auto' };
+  });
+  afterEach(() => {
+    delete window.AudioContext;
+    delete navigator.audioSession;
+  });
+
+  it('claims playback while a copy prompt sounds and hands it back after', async () => {
+    await renderMorse({ mode: 'copy', onSelectMode: vi.fn(), onExitMode: vi.fn() });
+    fireEvent.click(await screen.findByRole('button', { name: /Start Round/i }));
+    // The claim is taken synchronously, before the resume await, so the context
+    // comes up on the right session.
+    expect(navigator.audioSession.type).toBe('playback');
+
+    // playMorse resolves off the oscillator's `onended`, so the release lands a
+    // tick after the prompt stops sounding.
+    await waitFor(() => expect(navigator.audioSession.type).toBe('auto'));
+  });
+
+  it('claims playback while the send sidetone is keyed and hands it back on release', async () => {
+    await renderMorse({ mode: 'send', onSelectMode: vi.fn(), onExitMode: vi.fn() });
+    await act(async () => { fireEvent.keyDown(window, { code: 'Space' }); });
+    expect(navigator.audioSession.type).toBe('playback');
+
+    await act(async () => { fireEvent.keyUp(window, { code: 'Space' }); });
+    expect(navigator.audioSession.type).toBe('auto');
+  });
+
+  // A tap short enough to end before the resume await settles has a claim but no
+  // oscillator yet — stopTone releases before its no-oscillator early return, or
+  // the document stays pinned output-only with no release left to call.
+  it('releases a claim taken by a press that ended before the audio unlocked', async () => {
+    // Resume parks until flushed, reproducing the iOS unlock window.
+    let unlock;
+    class SlowAudioContext extends MockAudioContext {
+      constructor() { super(); this.state = 'suspended'; }
+      resume() { return new Promise((r) => { unlock = () => { this.state = 'running'; r(); }; }); }
+    }
+    window.AudioContext = SlowAudioContext;
+    await renderMorse({ mode: 'send', onSelectMode: vi.fn(), onExitMode: vi.fn() });
+
+    fireEvent.keyDown(window, { code: 'Space' });
+    expect(navigator.audioSession.type).toBe('playback');
+    fireEvent.keyUp(window, { code: 'Space' });
+    expect(navigator.audioSession.type).toBe('auto');
+
+    await act(async () => { unlock(); });
+    // The superseded startTone must not re-declare on its way out.
+    expect(navigator.audioSession.type).toBe('auto');
   });
 });

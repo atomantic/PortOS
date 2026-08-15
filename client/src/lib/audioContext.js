@@ -7,9 +7,13 @@
 //
 // Known holdouts, on purpose: components/city/audio/cityAudioEngine.js keeps
 // its own context (it owns a persistent gain graph and its own — differently
-// contracted — getAudioContext export), and MorseTrainer creates a per-mount
+// contracted — getAudioContext export); MorseTrainer creates a per-mount
 // context it close()s on unmount, which would kill a shared one for everyone
-// else. Migrate those only with their graphs/lifecycles in mind.
+// else; and pages/Security.jsx builds one per stream around a
+// createMediaElementSource graph it tears down with the stream. Migrate those
+// only with their graphs/lifecycles in mind. They are holdouts on the CONTEXT
+// only — each now claims the iOS audio session below via `useAudioSessionClaim`,
+// so none of them is a holdout on the session any more.
 //
 // The constructor is resolved lazily so importing this module never touches
 // audio APIs at load time (node-env test runs import it cleanly). Tests
@@ -48,7 +52,10 @@ let sharedCtx = null;
 // Callers rarely reach for this directly: an output-only player passes
 // `audioSession: 'playback'` to `createLookaheadTransport`, which acquires on
 // play and releases on teardown. Capture surfaces acquire `'play-and-record'`
-// around the window their `getUserMedia` stream is open.
+// around the window their `getUserMedia` stream is open. A React surface that
+// owns its own context or stream (so neither of those applies) uses
+// `hooks/useAudioSessionClaim.js`, which wraps one claim with the
+// release-on-unmount backstop rather than hand-rolling the ref dance.
 //
 // Safari 16.4+ only; `navigator.audioSession` is absent everywhere else and
 // those browsers need nothing. Assignment is guarded because it runs from the

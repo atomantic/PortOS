@@ -211,6 +211,10 @@ export function createChiptunePlayer(getScore, { onLoop } = {}) {
       }
     },
     seekCursors: () => { cursor = { idx: 0, loopStartSec: 0, loops: 0 }; },
+    // Output-only preview: hold the iOS `playback` session while it loops, or
+    // the iPhone's ring/silent switch mutes a page that looks like it is
+    // playing. Claimed on play and released on teardown by the transport.
+    audioSession: 'playback',
     onTeardown: () => {
       if (master) { try { master.disconnect(); } catch { /* already gone */ } master = null; }
     },

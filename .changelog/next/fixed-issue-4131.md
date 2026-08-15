@@ -1,0 +1,1 @@
+- iOS: the chiptune preview, the Morse trainer, and the Security audio monitor now hold the playback audio session while they sound, so the iPhone ring/silent switch can't silence them; the sing-to-score and sing-to-verify capture hooks claim play-and-record around their own microphone

@@ -17,6 +17,7 @@ import { createStreamAnalyser } from '../lib/audioRecorder.js';
 import { createPitchTracker } from '../lib/pitchDetect.js';
 import { createMetronome, clampBpm, timeSignatureFromScore, DEFAULT_BPM } from '../lib/metronome.js';
 import { transcribePitchTrack } from '../lib/singToScore.js';
+import useAudioSessionClaim from './useAudioSessionClaim.js';
 import useMounted from './useMounted.js';
 
 // Phases the UI renders distinct states for.
@@ -61,6 +62,13 @@ export default function useSingToScore({ tempo, score = '', musicKey = 'C' } = {
   const captureStartRef = useRef(0);  // performance.now() at first music beat
   const capturingRef = useRef(false); // gate frames until the count-in completes
 
+  // Held for exactly the window our own mic stream is open, symmetric with
+  // `voiceClient` / `audioRecorder`. Sing-to-score is safe on `auto` only
+  // because no `playback` claimant happens to share its route today — an
+  // accident of routing, not an invariant, and `playback` REFUSES capture. See
+  // the audio-session note in lib/audioContext.js.
+  const { claim: claimSession, release: releaseSession } = useAudioSessionClaim('play-and-record');
+
   const bpm = clampBpm(tempo) ?? DEFAULT_BPM;
   const timeSig = timeSignatureFromScore(score);
 
@@ -70,8 +78,9 @@ export default function useSingToScore({ tempo, score = '', musicKey = 'C' } = {
     if (trackerRef.current) { trackerRef.current.stop(); trackerRef.current = null; }
     if (analyserRef.current) { analyserRef.current.close(); analyserRef.current = null; }
     if (streamRef.current) { streamRef.current.getTracks().forEach((t) => t.stop()); streamRef.current = null; }
+    releaseSession();
     capturingRef.current = false;
-  }, []);
+  }, [releaseSession]);
 
   // Finalize: stop everything, run the transcription over the captured track.
   const finish = useCallback(() => {
@@ -100,12 +109,18 @@ export default function useSingToScore({ tempo, score = '', musicKey = 'C' } = {
     setResult(null);
     trackRef.current = [];
 
+    // Claimed BEFORE getUserMedia — an output-only `playback` session held by a
+    // player elsewhere on the page would refuse the request outright — and
+    // handed back on every path that never reaches teardown() (the unmount bail
+    // below is belt-and-suspenders: the hook already releases on unmount).
+    claimSession();
     const src = await navigator.mediaDevices.getUserMedia({ audio: true }).catch((err) => {
+      releaseSession();
       if (mountedRef.current) setError(err?.message || 'Microphone access denied');
       return null;
     });
     if (!src) return;
-    if (!mountedRef.current) { src.getTracks().forEach((t) => t.stop()); return; }
+    if (!mountedRef.current) { src.getTracks().forEach((t) => t.stop()); releaseSession(); return; }
     streamRef.current = src;
 
     const graph = createStreamAnalyser(src);
@@ -153,7 +168,7 @@ export default function useSingToScore({ tempo, score = '', musicKey = 'C' } = {
       teardown();
       if (mountedRef.current) setPhase(SING_IDLE);
     });
-  }, [phase, bpm, timeSig.beats, timeSig.beatValue, teardown, mountedRef]);
+  }, [phase, bpm, timeSig.beats, timeSig.beatValue, teardown, mountedRef, claimSession, releaseSession]);
 
   // Clear a produced result (after the user inserts or discards it).
   const reset = useCallback(() => {
