@@ -799,6 +799,50 @@ function* labelElements(body) {
   }
 }
 
+// Strip JSX tags, leaving only what renders as text. A quoted attribute value
+// or a `{…}` expression can hold a `>` (`<span title=">" data-tooltip={label}/>`),
+// so the scan tracks both rather than stopping at the first one — otherwise the
+// tail of a tag survives as "text" and its attributes read as rendered props.
+function stripJsxTags(source) {
+  let out = '';
+  let cursor = 0;
+  while (cursor < source.length) {
+    const open = source.indexOf('<', cursor);
+    if (open === -1) return out + source.slice(cursor);
+    out += source.slice(cursor, open);
+    let depth = 0;
+    let i = open + 1;
+    for (; i < source.length; i++) {
+      const c = source[i];
+      if (c === '{') depth++;
+      else if (c === '}') depth--;
+      else if (c === '"' || c === '\'' || c === '`') {
+        const quote = c;
+        for (i++; i < source.length && source[i] !== quote; i++) if (source[i] === '\\') i++;
+      } else if (c === '>' && depth === 0) break;
+    }
+    // An unterminated tag swallows the rest: nothing after it is text.
+    if (i >= source.length) return `${out} `;
+    out += ' ';
+    cursor = i + 1;
+  }
+  return out;
+}
+
+// `Children.map(children, (child, i) => …)` — proof that `cloneTarget` is the
+// CALLER's child rather than an element the wrapper built for itself. Without
+// it, `cloneElement(internalControl, { id })` looks like the FormField shape
+// while the caller's control never receives the id at all.
+function clonesChildrenParameter(body, cloneTarget, parameterNames) {
+  const re = /Children\.map\s*\(\s*([A-Za-z_$][\w$]*)\s*,\s*\(?\s*([A-Za-z_$][\w$]*)/g;
+  let match;
+  while ((match = re.exec(body))) {
+    const [, mapped, element] = match;
+    if (parameterNames.has(mapped) && element === cloneTarget) return true;
+  }
+  return false;
+}
+
 // Which naming strategies a component's source proves it implements. Reads
 // whatever source it is handed; the scan hands over `maskComments(src)`, which
 // is what keeps a commented-out wrapper from registering.
@@ -819,7 +863,7 @@ function wrapperShapes(body, params) {
     // `<label><span className={label} aria-hidden />{children}</label>` puts
     // nothing in the accessible name, and reading its `label` prop as the name
     // would exempt a genuinely unnamed control.
-    const renderedText = inner.replace(/<[^>]*>/g, ' ');
+    const renderedText = stripJsxTags(inner);
     const rendered = [...renderedText.matchAll(/\{\s*([A-Za-z_$][\w$]*)\s*\}/g)].map(([, name]) => name);
     const childrenInLabel = rendered.includes('children');
     const labelProp = rendered.find((name) => name !== 'children' && parameterNames.has(name)) ?? null;
@@ -846,12 +890,15 @@ function wrapperShapes(body, params) {
     // The id is generated here. It only reaches a child if the wrapper clones
     // it on, so demand the clone as proof rather than assuming the shape.
     //
-    // The clone target must be a bare identifier — the `Children.map` callback
-    // parameter. `cloneElement(children[1], { id })` names the SECOND child,
-    // while the call-site check below credits the FIRST, so accepting an
-    // indexed target would exempt a control the wrapper never named.
-    if (labelProp !== null
-      && new RegExp(`cloneElement\\s*\\(\\s*[A-Za-z_$][\\w$]*\\s*,\\s*\\{[^}]*\\bid\\s*:\\s*${idRef}\\b`).test(body)) {
+    // The target must be the `Children.map` callback parameter, since that is
+    // the only thing the call-site check can then credit. An indexed target
+    // (`cloneElement(children[1], …)`) names the SECOND child while the check
+    // below credits the FIRST, and an element the wrapper built for itself
+    // (`cloneElement(internalControl, …)`) never touches the caller's child at
+    // all — both would exempt a control the wrapper never named.
+    if (labelProp === null) continue;
+    const cloneTarget = new RegExp(`cloneElement\\s*\\(\\s*([A-Za-z_$][\\w$]*)\\s*,\\s*\\{[^}]*\\bid\\s*:\\s*${idRef}\\b`).exec(body)?.[1];
+    if (cloneTarget && clonesChildrenParameter(body, cloneTarget, parameterNames)) {
       shapes.push({ kind: 'cloned', labelProp });
     }
   }
@@ -1708,6 +1755,22 @@ describe('a11y conventions', () => {
     // `Children.map` callback parameter counts as the clone target.
     const indexedClone = localCloner.replace('cloneElement(child, { id: controlId })', 'cloneElement(children[1], { id: controlId })');
     expect(isNamed(indexedClone)).toBe(false);
+    // …and a wrapper that clones onto an element it built for ITSELF never
+    // touches the caller's child, so the caller's control stays unnamed.
+    const internalClone = `function Boxed({ label, children }) {
+  const controlId = useId();
+  const own = <div />;
+  const cloned = cloneElement(own, { id: controlId });
+  return (<div><label htmlFor={controlId}>{label}</label>{cloned}{children}</div>);
+}
+<Boxed label="Rounds"><input type="number" /></Boxed>`;
+    expect(isNamed(internalClone)).toBe(false);
+
+    // A `>` inside a quoted attribute value must not end the tag early — the
+    // rest of the tag would survive as "text" and its attributes would read as
+    // rendered props, re-opening the attribute-only bypass above.
+    const angleBracketInAttribute = 'const Field = ({ label, children }) => (\n  <label><span title=">" data-tooltip={label} />{children}</label>\n);\n<Field label="Help text"><input type="text" /></Field>';
+    expect(isNamed(angleBracketInAttribute)).toBe(false);
   });
 
   it('meets the 44px touch-target minimum on Close buttons', () => {
