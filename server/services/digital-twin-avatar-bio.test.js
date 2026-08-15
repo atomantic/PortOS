@@ -68,6 +68,7 @@ const DOCS = {
     'medical diagnosis',
   ].join('\n'),
 };
+const DEFAULT_DOCS = { ...DOCS };
 
 vi.mock('fs/promises', () => ({
   readFile: vi.fn(async (path) => {
@@ -100,8 +101,15 @@ import { getGoals } from './identity.js';
 import { getProviderById } from './providers.js';
 import { callProviderAI } from './digital-twin-helpers.js';
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
+  Object.assign(DOCS, DEFAULT_DOCS);
+  const fsp = await import('fs/promises');
+  fsp.readFile.mockImplementation(async (path) => {
+    const name = String(path).split(/[\\/]/).pop();
+    if (DOCS[name] != null) return DOCS[name];
+    throw new Error('ENOENT');
+  });
   loadMeta.mockResolvedValue({ documents: [] }); // nothing explicitly disabled
   getTraits.mockResolvedValue(null);
   getGoals.mockResolvedValue({
@@ -191,6 +199,17 @@ describe('buildAvatarBio', () => {
     expect(bio.sections.whoIAm).toContain('No identity data yet');
     expect(bio.sections.howISpeak).toContain('No communication data yet');
   });
+
+  it('stays deterministic when arbitrary Markdown leaves a section unparsed', async () => {
+    DOCS['TECHNICAL.md'] = '# Working Notes\nBuilds durable distributed systems.';
+    DOCS['CREATIVE.md'] = '# Creative Notes\nMakes interactive worlds.';
+    DOCS['COGNITIVE.md'] = '# Thinking Notes\nReasons from evidence.';
+
+    const bio = await buildAvatarBio();
+
+    expect(bio.sections.whatIKnow).toContain('No knowledge data yet');
+    expect(callProviderAI).not.toHaveBeenCalled();
+  });
 });
 
 describe('polishAvatarBio', () => {
@@ -210,6 +229,43 @@ describe('polishAvatarBio', () => {
     expect(res.error).toBeUndefined();
     expect(res.content).toContain('Who I Am');
     expect(res.tokenEstimate).toBeGreaterThan(0);
+    expect(callProviderAI.mock.calls[0][2]).not.toContain('RAW SOURCE MARKDOWN FOR MISSING AVATAR BIO SECTIONS');
+  });
+
+  it('adds only relevant raw enabled documents when canonical parsing leaves a section empty', async () => {
+    DOCS['TECHNICAL.md'] = '# Working Notes\nBuilds durable distributed systems.';
+    DOCS['CREATIVE.md'] = '# Creative Notes\nMakes interactive worlds.';
+    DOCS['COGNITIVE.md'] = '# Thinking Notes\nReasons from evidence.';
+    getProviderById.mockResolvedValue({ id: 'x', enabled: true });
+    callProviderAI.mockResolvedValue({
+      text: '## Who I Am\nI am Ada.\n## How I Speak\nDirectly.\n## What I Know\nSystems.',
+    });
+
+    await polishAvatarBio({ providerId: 'x', model: 'm' });
+
+    const prompt = callProviderAI.mock.calls[0][2];
+    expect(prompt).toContain('The canonical parser found no usable structured data for: What I Know.');
+    expect(prompt).toContain('### TECHNICAL.md\n# Working Notes');
+    expect(prompt).toContain('### CREATIVE.md\n# Creative Notes');
+    expect(prompt).toContain('### COGNITIVE.md\n# Thinking Notes');
+    expect(prompt).not.toContain('### VALUES.md');
+  });
+
+  it('never sends a disabled document through the raw Markdown fallback', async () => {
+    DOCS['TECHNICAL.md'] = '# Private Notes\nDo not share this technical detail.';
+    DOCS['CREATIVE.md'] = '# Creative Notes\nMakes interactive worlds.';
+    DOCS['COGNITIVE.md'] = '# Thinking Notes\nReasons from evidence.';
+    loadMeta.mockResolvedValue({ documents: [{ filename: 'TECHNICAL.md', enabled: false }] });
+    getProviderById.mockResolvedValue({ id: 'x', enabled: true });
+    callProviderAI.mockResolvedValue({
+      text: '## Who I Am\nI am Ada.\n## How I Speak\nDirectly.\n## What I Know\nSystems.',
+    });
+
+    await polishAvatarBio({ providerId: 'x', model: 'm' });
+
+    const prompt = callProviderAI.mock.calls[0][2];
+    expect(prompt).not.toContain('Do not share this technical detail.');
+    expect(prompt).toContain('### CREATIVE.md\n# Creative Notes');
   });
 
   it('surfaces an unparseable response instead of passing it off as a bio', async () => {
