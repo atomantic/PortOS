@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { tmpdir } from 'os';
+import { tmpdir, platform as osPlatform, arch as osArch } from 'os';
 import { join } from 'path';
 import { rm, readdir } from 'fs/promises';
 import { writeFileSync, mkdtempSync } from 'fs';
@@ -266,6 +266,14 @@ const h = vi.hoisted(() => ({
   mockWriteOutput: true,
   musicgenPython: '/fake/venv-musicgen/bin/python3',
   audioldm2Python: '/fake/venv-audioldm2/bin/python3',
+  // isEngineHealthy's import probe: which interpreters it ran, and whether the
+  // import succeeded (a half-built venv exits non-zero).
+  probeCalls: [],
+  probeOk: true,
+  // Host identity, so platform-gated engines (MLX MusicGen) behave the same in
+  // CI on Linux, on a Windows dev box, and on the Apple Silicon they target.
+  osPlatform: 'darwin',
+  osArch: 'arm64',
 }));
 // Set after the top-level imports resolve; the fileUtils mock reads it through
 // a getter so the (eagerly-built) PATHS object always reflects the final value.
@@ -273,10 +281,27 @@ h.testDir = mkdtempSync(join(tmpdir(), 'musicgen-test-'));
 const TEST_DIR = h.testDir;
 const spawnCalls = h.spawnCalls;
 
+// Partial: tmpdir() stays real (the suite writes fake WAVs under it); only the
+// host identity is driven by the test.
+vi.mock('os', async () => ({
+  ...(await vi.importActual('os')),
+  platform: () => h.osPlatform,
+  arch: () => h.osArch,
+}));
+
 vi.mock('child_process', async () => {
   const actual = await vi.importActual('child_process');
   return {
     ...actual,
+    // isEngineHealthy probes the venv with `python -c <import>`; promisify()
+    // wraps this callback form. h.probeOk drives success vs a broken venv.
+    execFile: (file, args, opts, cb) => {
+      h.probeCalls.push({ file, args });
+      const done = typeof opts === 'function' ? opts : cb;
+      setImmediate(() => (h.probeOk
+        ? done(null, '', '')
+        : done(Object.assign(new Error("ModuleNotFoundError: No module named 'torch'"), { code: 1 }))));
+    },
     spawn: (bin, args, _opts) => {
       h.spawnCalls.push({ bin, args });
       const listeners = {};
@@ -322,7 +347,9 @@ vi.mock('../../lib/pythonSetup.js', async () => {
   };
 });
 
-const { generateMusic } = await import('./musicGen.js');
+const {
+  generateMusic, isEngineHealthy, invalidateEngineHealth, isEnginePlatformSupported, enginePlatformLabel,
+} = await import('./musicGen.js');
 
 beforeEach(() => {
   h.spawnCalls.length = 0;
@@ -331,6 +358,11 @@ beforeEach(() => {
   h.mockStdout = 'STAGE:done\nRESULT:{"output":"x","durationSec":12.5,"sampleRate":32000}\n';
   h.musicgenPython = '/fake/venv-musicgen/bin/python3';
   h.audioldm2Python = '/fake/venv-audioldm2/bin/python3';
+  h.probeCalls.length = 0;
+  h.probeOk = true;
+  h.osPlatform = 'darwin';
+  h.osArch = 'arm64';
+  invalidateEngineHealth();
 });
 
 afterEach(async () => {
@@ -417,5 +449,123 @@ describe('isEngineReady', () => {
     h.audioldm2Python = null;
     expect(isEngineReady('musicgen')).toBe(true);
     expect(isEngineReady('audioldm2')).toBe(false);
+  });
+});
+
+describe('isEngineHealthy', () => {
+  it('reports a half-built venv as unhealthy even though the interpreter exists', async () => {
+    // The exact state a killed/failed install leaves behind: `python` is there,
+    // the packages are not. isEngineReady says yes; isEngineHealthy must not.
+    h.probeOk = false;
+    expect(isEngineReady('musicgen')).toBe(true);
+    expect(await isEngineHealthy('musicgen')).toBe(false);
+  });
+
+  it('reports a fully-installed venv as healthy', async () => {
+    expect(await isEngineHealthy('musicgen')).toBe(true);
+    expect(h.probeCalls[0]).toMatchObject({ file: '/fake/venv-musicgen/bin/python3' });
+    expect(h.probeCalls[0].args[0]).toBe('-c');
+  });
+
+  it('skips the probe entirely when no interpreter is resolved', async () => {
+    h.audioldm2Python = null;
+    expect(await isEngineHealthy('audioldm2')).toBe(false);
+    expect(h.probeCalls).toHaveLength(0);
+  });
+
+  it('caches the verdict so repeat readiness checks do not respawn python', async () => {
+    expect(await isEngineHealthy('musicgen')).toBe(true);
+    expect(await isEngineHealthy('musicgen')).toBe(true);
+    expect(h.probeCalls).toHaveLength(1);
+  });
+
+  it('re-probes with refresh so a repair install is not blocked by a stale verdict', async () => {
+    h.probeOk = false;
+    expect(await isEngineHealthy('musicgen')).toBe(false);
+    // The install just rebuilt the venv — a cached `false` must not stick.
+    h.probeOk = true;
+    expect(await isEngineHealthy('musicgen', { refresh: true })).toBe(true);
+    expect(h.probeCalls).toHaveLength(2);
+  });
+
+  it('tracks each engine independently', async () => {
+    expect(await isEngineHealthy('musicgen')).toBe(true);
+    h.probeOk = false;
+    expect(await isEngineHealthy('audioldm2')).toBe(false);
+    expect(await isEngineHealthy('musicgen')).toBe(true);
+  });
+});
+
+describe('ENGINES healthProbe parity', () => {
+  it('every engine declares an import probe', () => {
+    // A new engine without one silently falls back to "the interpreter file
+    // exists", which is the exact check isEngineHealthy was added to replace.
+    for (const engine of Object.values(ENGINES)) {
+      expect(typeof engine.healthProbe, `${engine.id} healthProbe`).toBe('string');
+      expect(engine.healthProbe.length).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe('generateMusic venv-health gate', () => {
+  it('returns the install hint instead of spawning into a half-built venv', async () => {
+    // The interpreter is present, the packages are not — without the health gate
+    // the sidecar spawns and dies with a raw Python ImportError traceback.
+    h.probeOk = false;
+    await expect(generateMusic({ prompt: 'a calm piano bed', engine: 'musicgen' }))
+      .rejects.toMatchObject({ status: 503, code: 'PIPELINE_MUSIC_RUNTIME_MISSING' });
+    expect(spawnCalls).toHaveLength(0);
+  });
+
+  it('still generates when the venv is healthy', async () => {
+    const res = await generateMusic({ prompt: 'a calm piano bed', engine: 'musicgen' });
+    expect(res.filename).toMatch(/^music-gen-.*\.wav$/);
+    expect(spawnCalls).toHaveLength(1);
+  });
+});
+describe('isEnginePlatformSupported', () => {
+  it('treats an engine with no requiresPlatform as portable', () => {
+    expect(ENGINES.audioldm2.requiresPlatform).toBeUndefined();
+    h.osPlatform = 'win32';
+    h.osArch = 'x64';
+    expect(isEnginePlatformSupported('audioldm2')).toBe(true);
+    expect(enginePlatformLabel('audioldm2')).toBeNull();
+  });
+
+  it('allows MusicGen only on Apple Silicon', () => {
+    // MLX has no Windows/Linux build, so the setup script skips and exits 0 —
+    // which the install route used to report as "installer exited 0 but still
+    // not available", indistinguishable from a broken install.
+    expect(ENGINES.musicgen.requiresPlatform).toMatchObject({ platform: 'darwin', arch: 'arm64' });
+    expect(isEnginePlatformSupported('musicgen')).toBe(true);
+
+    h.osPlatform = 'win32';
+    h.osArch = 'x64';
+    expect(isEnginePlatformSupported('musicgen')).toBe(false);
+
+    // Intel Mac: right OS, wrong silicon.
+    h.osPlatform = 'darwin';
+    h.osArch = 'x64';
+    expect(isEnginePlatformSupported('musicgen')).toBe(false);
+  });
+
+  it('exposes a human-readable requirement for the UI', () => {
+    expect(enginePlatformLabel('musicgen')).toContain('Apple Silicon');
+  });
+
+  it('never reports an unsupported host as healthy, and never spawns a probe there', async () => {
+    h.osPlatform = 'win32';
+    h.osArch = 'x64';
+    h.probeOk = true;
+    expect(await isEngineHealthy('musicgen')).toBe(false);
+    expect(h.probeCalls).toHaveLength(0);
+  });
+
+  it('refuses to generate on an unsupported host instead of spawning the sidecar', async () => {
+    h.osPlatform = 'win32';
+    h.osArch = 'x64';
+    await expect(generateMusic({ prompt: 'a calm piano bed', engine: 'musicgen' }))
+      .rejects.toMatchObject({ status: 503, code: 'PIPELINE_MUSIC_RUNTIME_MISSING' });
+    expect(spawnCalls).toHaveLength(0);
   });
 });

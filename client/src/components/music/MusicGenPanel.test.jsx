@@ -154,6 +154,27 @@ describe('MusicGenPanel', () => {
     expect(onGenerated).toHaveBeenCalledWith(expect.objectContaining({ id: 'generated-track' }));
   });
 
+  it('names the host requirement and hides Install for a platform-gated engine', async () => {
+    // MusicGen is MLX-only. Before this, a Windows/Linux user got an Install
+    // button whose installer skipped and exited 0, surfaced as 'installer exited
+    // 0 but MusicGen (MLX) is still not available'.
+    api.listMusicEngines.mockResolvedValue({
+      defaultEngine: 'musicgen',
+      engines: [engine({
+        ready: false,
+        runtimeReady: false,
+        platformSupported: false,
+        platformLabel: 'macOS on Apple Silicon (MLX)',
+      })],
+    });
+
+    render(<MusicGenPanel track={{ id: 'track-1' }} prompt="ambient bed" lyrics="" />);
+
+    expect(await screen.findByText(/requires macOS on Apple Silicon/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /install runtime/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /unavailable on this host/i })).toBeInTheDocument();
+  });
+
   it('offers the fixed-model install without suggesting a runtime reinstall', async () => {
     api.listMusicEngines.mockResolvedValue({
       defaultEngine: 'minimax-music3',

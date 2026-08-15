@@ -28,7 +28,7 @@ import {
   generateMusic,
   ENGINES,
   DEFAULT_ENGINE_ID,
-  isEngineReady,
+  isEngineHealthy,
 } from '../../services/pipeline/musicGen.js';
 import { deriveAudioCues, preserveRenderedCues } from '../../services/pipeline/audioCues.js';
 import { uploadSingle } from '../../lib/multipart.js';
@@ -292,7 +292,7 @@ router.get('/audio/music-library', asyncHandler(async (_req, res) => {
 // id. The top-level `models`/`ready`/duration fields mirror the default engine
 // for backward compatibility with pre-multi-engine clients.
 router.get('/audio/music/generators', asyncHandler(async (_req, res) => {
-  const engines = Object.values(ENGINES).map((engine) => ({
+  const engines = await Promise.all(Object.values(ENGINES).map(async (engine) => ({
     id: engine.id,
     name: engine.name,
     models: engine.models.map(({ id, name }) => ({ id, name })),
@@ -303,8 +303,10 @@ router.get('/audio/music/generators', asyncHandler(async (_req, res) => {
     // The authoritative install-hint env var (e.g. INSTALL_AUDIOLDM2) so the UI
     // renders the exact command instead of re-deriving it from the engine id.
     installEnv: engine.installEnv,
-    ready: isEngineReady(engine.id),
-  }));
+    // Health, not path-existence: a half-built venv would report ready here and
+    // then fail inside the sidecar. Matches /api/music/engines.
+    ready: await isEngineHealthy(engine.id),
+  })));
   const fallback = engines.find((e) => e.id === DEFAULT_ENGINE_ID) ?? engines[0];
   res.json({
     engines,

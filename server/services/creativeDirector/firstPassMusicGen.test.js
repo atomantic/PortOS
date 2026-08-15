@@ -6,12 +6,12 @@ vi.mock('../mediaJobQueue/index.js', () => ({
 vi.mock('../pipeline/musicGen.js', () => ({
   ENGINES: { musicgen: {}, audioldm2: {}, acestep: {} },
   DEFAULT_ENGINE_ID: 'musicgen',
-  isEngineReady: vi.fn(),
+  isEngineHealthy: vi.fn(),
 }));
 
 import { buildMusicBedPrompt, enqueueFirstPassMusicBed } from './firstPassMusicGen.js';
 import { enqueueJob } from '../mediaJobQueue/index.js';
-import { isEngineReady } from '../pipeline/musicGen.js';
+import { isEngineHealthy } from '../pipeline/musicGen.js';
 
 let jobSeq = 0;
 
@@ -19,7 +19,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   jobSeq = 0;
   enqueueJob.mockImplementation(() => ({ jobId: `job-${++jobSeq}`, position: 1, status: 'queued' }));
-  isEngineReady.mockReturnValue(true);
+  isEngineHealthy.mockResolvedValue(true);
 });
 
 describe('buildMusicBedPrompt', () => {
@@ -73,7 +73,7 @@ describe('enqueueFirstPassMusicBed', () => {
   });
 
   it('skips gracefully when no engine is ready', async () => {
-    isEngineReady.mockReturnValue(false);
+    isEngineHealthy.mockResolvedValue(false);
     const project = { id: 'proj-1', name: 'Neon Drift' };
     const out = await enqueueFirstPassMusicBed(project);
     expect(out).toEqual({ mode: 'musicgen', enqueued: false, reason: 'engine-not-ready' });
@@ -90,11 +90,11 @@ describe('enqueueFirstPassMusicBed', () => {
   it('reports no-project for a missing / id-less project (never reads engine readiness)', async () => {
     expect(await enqueueFirstPassMusicBed(null)).toEqual({ mode: 'musicgen', enqueued: false, reason: 'no-project' });
     expect(await enqueueFirstPassMusicBed({ name: 'no id' })).toEqual({ mode: 'musicgen', enqueued: false, reason: 'no-project' });
-    expect(isEngineReady).not.toHaveBeenCalled();
+    expect(isEngineHealthy).not.toHaveBeenCalled();
   });
 
   it('prefers a ready non-default engine over the default when the default is not provisioned', async () => {
-    isEngineReady.mockImplementation((id) => id === 'audioldm2');
+    isEngineHealthy.mockImplementation(async (id) => id === 'audioldm2');
     const project = { id: 'proj-1', name: 'Neon Drift', styleSpec: 'synthwave' };
     const out = await enqueueFirstPassMusicBed(project);
     expect(out).toEqual({ mode: 'audioldm2', enqueued: true, jobId: 'job-1' });
@@ -106,6 +106,6 @@ describe('enqueueFirstPassMusicBed', () => {
     const out = await enqueueFirstPassMusicBed(project, { engine: 'acestep' });
     expect(out.mode).toBe('acestep');
     expect(enqueueJob.mock.calls[0][0].params.engine).toBe('acestep');
-    expect(isEngineReady).toHaveBeenCalledWith('acestep');
+    expect(isEngineHealthy).toHaveBeenCalledWith('acestep');
   });
 });

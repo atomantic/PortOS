@@ -23,7 +23,10 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { createLineReader } from '../lib/streamLines.js';
 import { SETUP_IMAGE_VIDEO_SCRIPT, spawnSetupScript, stopSetupScript } from '../lib/setupScriptRunner.js';
-import { ENGINES, DEFAULT_ENGINE_ID, getEngine, isEngineReady, generateMusic } from '../services/pipeline/musicGen.js';
+import {
+  ENGINES, DEFAULT_ENGINE_ID, getEngine, isEngineHealthy, isEnginePlatformSupported,
+  enginePlatformLabel, generateMusic,
+} from '../services/pipeline/musicGen.js';
 import { listEngineModels, addAudioModel, removeAudioModel, isValidRepoId } from '../services/audioModels.js';
 import { startHfDownloadStream, openSseStream } from '../lib/sseDownload.js';
 import { createInstallLogger } from '../lib/installLogger.js';
@@ -42,7 +45,10 @@ router.get('/engines', asyncHandler(async (_req, res) => {
   const cuda = await getCudaCapability();
   const engines = await Promise.all(Object.values(ENGINES).map(async (engine) => {
     const modelCache = engine.fixedModelInstall ? await inspectModelCache(engine.models[0].repo).catch(() => ({ cached: false })) : null;
-    const runtimeReady = isEngineReady(engine.id);
+    // isEngineHealthy, not isEngineReady: a half-built venv (install died
+    // mid-pip) still has its interpreter, and reporting that as runtimeReady
+    // hides the install affordance on a backend that cannot generate.
+    const runtimeReady = await isEngineHealthy(engine.id);
     return ({
       id: engine.id,
       name: engine.name,
@@ -60,6 +66,11 @@ router.get('/engines', asyncHandler(async (_req, res) => {
       modelReady: modelCache ? modelCache.cached === true : true,
       runtimeReady,
       cudaRequired: engine.cudaRequired === true,
+      // false when this host can never run the backend (e.g. MLX MusicGen off
+      // Apple Silicon) — the UI shows "unavailable" instead of an Install button
+      // whose installer would skip and exit 0.
+      platformSupported: isEnginePlatformSupported(engine.id),
+      platformLabel: enginePlatformLabel(engine.id),
       cudaState: engine.cudaRequired ? cuda.status : 'available',
       ready: runtimeReady && (!engine.cudaRequired || cuda.status === 'available') && (!modelCache || modelCache.cached === true),
       installEnv: engine.installEnv,
@@ -87,7 +98,7 @@ router.get('/setup/runtime-status', asyncHandler(async (req, res) => {
   res.json({
     runtime: engine.id,
     label: engine.name,
-    installed: isEngineReady(engine.id),
+    installed: await isEngineHealthy(engine.id),
     venvPath: engine.resolvePython() || null,
     expectedVenvPath: engine.venvDefault,
     installEnvVar: engine.installEnv,
@@ -109,6 +120,10 @@ router.get('/setup/runtime-install', asyncHandler(async (req, res) => {
     send({ type: 'error', message: `Another ${engine.name} install is already running. Wait for it to finish or restart PortOS.` });
     return safeEnd();
   }
+  if (!isEnginePlatformSupported(engine.id)) {
+    send({ type: 'error', message: `${engine.name} requires ${enginePlatformLabel(engine.id)} and cannot be installed on this host.` });
+    return safeEnd();
+  }
   if (engine.cudaRequired) {
     const cuda = await getCudaCapability();
     if (cuda.status !== 'available') {
@@ -120,7 +135,9 @@ router.get('/setup/runtime-install', asyncHandler(async (req, res) => {
   }
   runtimeInstallInFlight.set(engine.id, null);
 
-  if (isEngineReady(engine.id)) {
+  // Force a fresh probe: a cached `true` from before the venv broke would
+  // short-circuit the very install meant to repair it.
+  if (await isEngineHealthy(engine.id, { refresh: true })) {
     runtimeInstallInFlight.delete(engine.id);
     send({ type: 'log', message: `${engine.name} already installed at ${engine.resolvePython() || engine.venvDefault}` });
     send({ type: 'complete', message: 'Already installed - nothing to do.' });
@@ -160,19 +177,31 @@ router.get('/setup/runtime-install', asyncHandler(async (req, res) => {
     emit({ type: 'error', message: `Installer failed to spawn: ${err.message}` });
     safeEnd();
   });
-  child.on('close', (code) => {
-    stdoutReader.flush();
-    stderrReader.flush();
-    finished = true;
-    runtimeInstallInFlight.delete(engine.id);
-    if (code === 0 && isEngineReady(engine.id)) {
-      emit({ type: 'complete', message: `${engine.name} ready: ${engine.resolvePython() || engine.venvDefault}` });
-    } else if (code === 0) {
-      emit({ type: 'error', message: `Installer exited 0 but ${engine.name} is still not available. Check the log above for setup errors.` });
-    } else {
-      emit({ type: 'error', message: `Installer exited with code ${code}.` });
+  // Async because the completion verdict re-probes the venv. try/catch because
+  // this runs outside the request lifecycle — an uncaught throw here would take
+  // the process down instead of reaching the error middleware.
+  child.on('close', async (code) => {
+    try {
+      stdoutReader.flush();
+      stderrReader.flush();
+      finished = true;
+      runtimeInstallInFlight.delete(engine.id);
+      // The venv just changed on disk, so the cached verdict is stale by
+      // definition — re-probe rather than trusting it.
+      const healthy = code === 0 && await isEngineHealthy(engine.id, { refresh: true });
+      if (healthy) {
+        emit({ type: 'complete', message: `${engine.name} ready: ${engine.resolvePython() || engine.venvDefault}` });
+      } else if (code === 0) {
+        emit({ type: 'error', message: `Installer exited 0 but ${engine.name} is still not available. Check the log above for setup errors.` });
+      } else {
+        emit({ type: 'error', message: `Installer exited with code ${code}.` });
+      }
+      safeEnd();
+    } catch (err) {
+      console.error(`❌ ${engine.name} install completion check failed: ${err.message}`);
+      emit({ type: 'error', message: `Install completion check failed: ${err.message}` });
+      safeEnd();
     }
-    safeEnd();
   });
 
   req.on('close', () => {

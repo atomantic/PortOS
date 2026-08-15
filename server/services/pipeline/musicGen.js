@@ -28,6 +28,9 @@
  */
 
 import { existsSync, statSync } from 'fs';
+import { execFile } from 'child_process';
+import { platform as osPlatform, arch as osArch } from 'os';
+import { promisify } from 'util';
 import { unlink } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -44,6 +47,9 @@ import {
 import { getCudaCapability } from '../../lib/cudaCapability.js';
 import { inspectModelCache } from '../../lib/hfCache.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { safeChildProcessEnv } from '../../lib/processEnv.js';
+
+const execFileAsync = promisify(execFile);
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // The sidecar scripts live at the repo root — resolve module-relative so the
@@ -104,6 +110,15 @@ export const MINIMAX_MUSIC3_MODELS = Object.freeze([
  *   - `scriptPath`       — the Python sidecar
  *   - `runtimeDir`       — value for the sidecar's --runtime-dir flag
  *   - `resolvePython`    — () => venv interpreter path | null (readiness probe)
+ *   - `healthProbe`      — python source proving the venv can actually run this
+ *     backend. `resolvePython` only confirms the interpreter exists, and a
+ *     failed/cancelled install leaves the interpreter with no packages — see
+ *     isEngineHealthy below. Mirrors each engine's assertion in
+ *     scripts/setup-image-video.sh; keep the two in sync.
+ *   - `requiresPlatform` — hosts this backend can run on at all, when it is not
+ *     portable. Absent means "anywhere". The installer already refuses on the
+ *     wrong host, but without this the UI offers an Install button that exits 0
+ *     having done nothing — see isEnginePlatformSupported below.
  *   - `venvDefault`/`installEnv` — install-hint pieces for the 503 message
  */
 export const ENGINES = Object.freeze({
@@ -120,6 +135,14 @@ export const ENGINES = Object.freeze({
     resolvePython: resolveMusicgenPython,
     venvDefault: MUSICGEN_VENV_DEFAULT,
     installEnv: 'INSTALL_MUSICGEN',
+    // MLX is Apple-Silicon only, and the implementation lives in the
+    // ml-explore/mlx-examples clone rather than a pip package — there is no
+    // Windows/Linux path at all. Mirrors the is_macos guard in
+    // scripts/setup-image-video.sh's INSTALL_MUSICGEN block.
+    requiresPlatform: { platform: 'darwin', arch: 'arm64', label: 'macOS on Apple Silicon (MLX)' },
+    // Mirrors the setup script's MusicGen assertion — the class lives in the
+    // mlx-examples clone, so the probe re-creates the sidecar's sys.path insert.
+    healthProbe: 'import sys; sys.path.insert(0, r"' + MUSICGEN_RUNTIME_DIR + '"); import torch; from musicgen import MusicGen',
     // The sidecar passes `--model <repo>` straight to from_pretrained, so any
     // HuggingFace MusicGen checkpoint works — user-installed models are usable.
     customModels: true,
@@ -137,6 +160,7 @@ export const ENGINES = Object.freeze({
     resolvePython: resolveAudioldm2Python,
     venvDefault: AUDIOLDM2_VENV_DEFAULT,
     installEnv: 'INSTALL_AUDIOLDM2',
+    healthProbe: 'import torch; from diffusers import AudioLDM2Pipeline',
     // `--model <repo>` → AudioLDM2Pipeline.from_pretrained: any HF AudioLDM2
     // checkpoint works, so user-installed models are usable.
     customModels: true,
@@ -154,6 +178,7 @@ export const ENGINES = Object.freeze({
     resolvePython: resolveAcestepPython,
     venvDefault: ACESTEP_VENV_DEFAULT,
     installEnv: 'INSTALL_ACESTEP',
+    healthProbe: 'import torch; from acestep.pipeline_ace_step import ACEStepPipeline',
     // ACE-Step is lyric-aware: the route/UI may send `lyrics`, threaded into the
     // sidecar as --lyrics. The other engines ignore lyrics (the flag gates UI).
     lyrics: true,
@@ -177,6 +202,7 @@ export const ENGINES = Object.freeze({
     resolvePython: resolveMinimaxMusic3Python,
     venvDefault: MINIMAX_MUSIC3_VENV_DEFAULT,
     installEnv: 'INSTALL_MINIMAX_MUSIC3',
+    healthProbe: 'import torch; from diffusers import ModularPipeline',
     lyrics: true,
     customModels: false,
     fixedModelInstall: true,
@@ -205,12 +231,82 @@ export function getMusicgenModel(modelId) {
   return MUSICGEN_MODELS.find((m) => m.id === modelId) || null;
 }
 
-// Whether a backend's opt-in venv is provisioned. The UI gates its "Generate"
-// affordance on this so users see an install hint instead of a 503 after typing
-// a prompt. Cheap (an existsSync probe behind the resolver's cache) — safe to
-// call per request.
+// Whether this host can run a backend at all. An engine with no
+// `requiresPlatform` is portable and always supported. Distinct from every other
+// readiness signal: the others describe something the user can fix by
+// installing, this one never becomes true here. Without it the UI offers an
+// Install button that runs the setup script, hits its own platform guard, prints
+// "Skipping.", and exits 0 — reported back as "installer exited 0 but the engine
+// is still not available", which reads like a broken install rather than an
+// unsupported host.
+export function isEnginePlatformSupported(engineId) {
+  const { requiresPlatform } = getEngine(engineId);
+  if (!requiresPlatform) return true;
+  if (requiresPlatform.platform && osPlatform() !== requiresPlatform.platform) return false;
+  if (requiresPlatform.arch && osArch() !== requiresPlatform.arch) return false;
+  return true;
+}
+
+// Human-readable requirement for the UI's "unavailable on this host" copy, or
+// null for a portable engine.
+export function enginePlatformLabel(engineId) {
+  return getEngine(engineId).requiresPlatform?.label || null;
+}
+
+// Whether a backend's venv interpreter exists. Cheap (an existsSync behind the
+// resolver's cache) but NOT sufficient for a readiness verdict — a failed
+// install leaves the interpreter with no packages, and this still says yes.
+// Prefer `isEngineHealthy` for anything that gates install/generate UI; this
+// stays as the synchronous "is there a venv at all" primitive.
 export function isEngineReady(engineId) {
   return getEngine(engineId).resolvePython() !== null;
+}
+
+// Whether a backend's venv can actually RUN — not just whether its interpreter
+// file exists. An install that dies partway (pip resolve failure, a killed
+// child, a lost network) leaves `venv-<engine>/…/python` behind with none of the
+// packages, and `isEngineReady` reports that corpse as provisioned forever: the
+// install endpoint then short-circuits with "already installed", the UI hides
+// the install affordance, and the engine can never be repaired from the app.
+// Same failure `isFlux2VenvHealthy` exists to prevent for the FLUX.2 venv.
+//
+// Cached per engine because the probe spawns a Python process. `refresh: true`
+// forces a re-probe — the install path passes it so a venv that broke after the
+// last check is re-examined instead of trusting a stale `true`.
+const engineHealthCache = new Map();
+
+export async function isEngineHealthy(engineId, { refresh = false } = {}) {
+  const engine = getEngine(engineId);
+  // A host that can never run this backend is never healthy, and probing it
+  // would spawn a python that cannot exist.
+  if (!isEnginePlatformSupported(engine.id)) return false;
+  if (refresh) engineHealthCache.delete(engine.id);
+  else if (engineHealthCache.has(engine.id)) return engineHealthCache.get(engine.id);
+
+  const python = engine.resolvePython();
+  if (!python) {
+    engineHealthCache.set(engine.id, false);
+    return false;
+  }
+  // No declared probe → fall back to the interpreter-exists verdict rather than
+  // guessing an import and reporting a working engine as broken.
+  if (!engine.healthProbe) {
+    engineHealthCache.set(engine.id, true);
+    return true;
+  }
+  const healthy = await execFileAsync(python, ['-c', engine.healthProbe], {
+    env: safeChildProcessEnv(),
+    timeout: 60_000,
+  }).then(() => true).catch(() => false);
+  engineHealthCache.set(engine.id, healthy);
+  return healthy;
+}
+
+// Drop a cached health verdict (or all of them). Called after an install so the
+// next readiness check re-probes the freshly-built venv.
+export function invalidateEngineHealth(engineId = null) {
+  if (engineId) engineHealthCache.delete(engineId);
+  else engineHealthCache.clear();
 }
 
 // Back-compat: MusicGen readiness probe.
@@ -314,7 +410,13 @@ export async function generateMusic({ prompt, lyrics, engine: engineId = DEFAULT
       });
     }
   }
-  if (!pythonPath) {
+  // Health, not just "the interpreter file is there". A venv left half-built by
+  // a failed install passes the path check and then dies inside the sidecar with
+  // a raw ImportError traceback; this turns that into the actionable 503 the
+  // module contract promises. Subsumes the old `!pythonPath` guard — a missing
+  // interpreter is unhealthy by definition, and is answered without a spawn. The
+  // verdict is cached, so this costs one spawn per engine per process.
+  if (!await isEngineHealthy(engine.id)) {
     throw new ServerError(
       `${engine.name} runtime not found. Run \`${engine.installEnv}=1 bash scripts/setup-image-video.sh\` to bootstrap it (expected venv at ${engine.venvDefault}).`,
       { status: 503, code: 'PIPELINE_MUSIC_RUNTIME_MISSING' },

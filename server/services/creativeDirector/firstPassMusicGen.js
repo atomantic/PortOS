@@ -20,15 +20,21 @@
  */
 
 import { enqueueJob } from '../mediaJobQueue/index.js';
-import { ENGINES, DEFAULT_ENGINE_ID, isEngineReady } from '../pipeline/musicGen.js';
+import { ENGINES, DEFAULT_ENGINE_ID, isEngineHealthy } from '../pipeline/musicGen.js';
 
 // First provisioned engine in ENGINES' declared order (musicgen, audioldm2,
 // acestep), so a project where only a non-default local backend is installed
 // (e.g. AudioLDM2 but not MusicGen) still gets a first-pass bed instead of
 // silently skipping on a hardcoded DEFAULT_ENGINE_ID check. Returns null when
 // nothing is provisioned.
-function firstReadyEngineId() {
-  return Object.keys(ENGINES).find((id) => isEngineReady(id)) || null;
+// Sequential on purpose: ENGINES' declared order IS the preference order, so
+// the first healthy backend wins and the rest are never probed. isEngineHealthy
+// caches its verdict, so the spawn cost is paid once per engine per process.
+async function firstReadyEngineId() {
+  for (const id of Object.keys(ENGINES)) {
+    if (await isEngineHealthy(id)) return id;
+  }
+  return null;
 }
 
 // Keep the derived prompt bounded — a music-gen prompt is a short mood/style
@@ -77,8 +83,10 @@ export async function enqueueFirstPassMusicBed(project, { engine } = {}) {
   // Resolve the engine once the project is known to need a render. An
   // explicit `engine` wins; otherwise prefer any provisioned local backend
   // over assuming the default (musicgen) is the one installed.
-  const resolvedEngine = engine || firstReadyEngineId() || DEFAULT_ENGINE_ID;
-  if (!isEngineReady(resolvedEngine)) {
+  const resolvedEngine = engine || await firstReadyEngineId() || DEFAULT_ENGINE_ID;
+  // Health, not mere presence: a half-built venv would otherwise pass this gate
+  // and the enqueued job would die at render with a Python ImportError.
+  if (!await isEngineHealthy(resolvedEngine)) {
     return { mode: resolvedEngine, enqueued: false, reason: 'engine-not-ready' };
   }
   const prompt = buildMusicBedPrompt(project);

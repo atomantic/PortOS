@@ -4,12 +4,15 @@ import { request } from '../lib/testHelper.js';
 import { ServerError } from '../lib/errorHandler.js';
 
 // Mock the music-gen service: a small engine registry + a generateMusic that the
-// tests drive per-case. The route only consumes ENGINES/getEngine/isEngineReady/
+// tests drive per-case. The route only consumes ENGINES/getEngine/isEngineHealthy/
 // generateMusic + DEFAULT_ENGINE_ID.
 const gen = vi.hoisted(() => ({
   generateMusic: vi.fn(),
   ready: true,
   readyByEngine: null,
+  healthy: null,
+  healthyByEngine: null,
+  unsupportedPlatform: null,
 }));
 const cuda = vi.hoisted(() => ({ status: 'available' }));
 vi.mock('../lib/cudaCapability.js', () => ({
@@ -26,9 +29,41 @@ vi.mock('../services/pipeline/musicGen.js', () => {
     DEFAULT_ENGINE_ID: 'musicgen',
     getEngine: (id) => ENGINES[id] || ENGINES.musicgen,
     isEngineReady: (engineId) => (gen.readyByEngine ? gen.readyByEngine[engineId] === true : gen.ready),
+    // The route reads readiness through isEngineHealthy (the import probe), so
+    // `gen.healthyByEngine` / `gen.healthy` drive it; both default to the same
+    // `ready` knobs so existing cases keep their meaning.
+    isEnginePlatformSupported: (engineId) => (gen.unsupportedPlatform ? engineId !== gen.unsupportedPlatform : true),
+    enginePlatformLabel: () => 'macOS on Apple Silicon (MLX)',
+    isEngineHealthy: async (engineId) => {
+      if (gen.healthyByEngine) return gen.healthyByEngine[engineId] === true;
+      if (gen.healthy !== null) return gen.healthy;
+      return gen.readyByEngine ? gen.readyByEngine[engineId] === true : gen.ready;
+    },
+    invalidateEngineHealth: vi.fn(),
     generateMusic: gen.generateMusic,
   };
 });
+
+// The install route shells out to scripts/setup-image-video.sh. Stand in a child
+// that closes immediately so the SSE stream terminates instead of running a real
+// multi-GB bash install under the test.
+const setup = vi.hoisted(() => ({ spawn: vi.fn(), exitCode: 0 }));
+vi.mock('../lib/setupScriptRunner.js', async () => ({
+  // Keep the real SETUP_IMAGE_VIDEO_SCRIPT — the route existsSync-checks it.
+  ...(await vi.importActual('../lib/setupScriptRunner.js')),
+  stopSetupScript: vi.fn(),
+  spawnSetupScript: (env) => {
+    setup.spawn(env);
+    const listeners = {};
+    const child = {
+      stdout: { on: () => {} },
+      stderr: { on: () => {} },
+      on: (event, cb) => { listeners[event] = cb; },
+    };
+    Promise.resolve().then(() => listeners.close?.(setup.exitCode));
+    return child;
+  },
+}));
 
 vi.mock('../services/tracks/index.js', () => ({
   getTrack: vi.fn(),
@@ -108,6 +143,11 @@ describe('music routes', () => {
     sse.run.mockReset().mockImplementation(async ({ res }) => { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); res.end('data: {"type":"complete"}\n\n'); });
     gen.ready = true;
     gen.readyByEngine = null;
+    gen.healthy = null;
+    gen.healthyByEngine = null;
+    gen.unsupportedPlatform = null;
+    setup.spawn.mockReset();
+    setup.exitCode = 0;
     cache.cached = true;
     cuda.status = 'available';
     models.list.mockResolvedValue([{ id: 'm', name: 'M', userAdded: false }]);
@@ -183,6 +223,50 @@ describe('music routes', () => {
     expect(r.status).toBe(200);
     expect(r.text).toContain('"type":"complete"');
     expect(r.text).toContain('Already installed');
+  });
+
+  it('GET /setup/runtime-install proceeds when the interpreter exists but the venv is broken', async () => {
+    // Regression: a failed install leaves the venv's interpreter behind, so the
+    // old interpreter-exists check short-circuited with "already installed" and
+    // the engine could never be repaired from the UI.
+    gen.ready = true;          // resolvePython() finds the leftover interpreter
+    gen.healthy = false;       // ...but the import probe fails
+    const r = await request(app).get('/api/music/setup/runtime-install?runtime=acestep');
+    expect(r.status).toBe(200);
+    expect(r.text).not.toContain('Already installed');
+    expect(r.text).toContain('Starting ACE-Step install.');
+    expect(setup.spawn).toHaveBeenCalled();
+  });
+
+  it('GET /engines reports a broken venv as not ready so the install hint shows', async () => {
+    gen.ready = true;
+    gen.healthy = false;
+    const r = await request(app).get('/api/music/engines');
+    expect(r.status).toBe(200);
+    const acestep = r.body.engines.find((e) => e.id === 'acestep');
+    expect(acestep.runtimeReady).toBe(false);
+    expect(acestep.ready).toBe(false);
+  });
+
+  it('GET /setup/runtime-install refuses on a host that can never run the engine', async () => {
+    // Previously the route spawned the setup script, whose own platform guard
+    // printed "Skipping." and exited 0 — surfaced to the user as "installer
+    // exited 0 but the engine is still not available".
+    gen.unsupportedPlatform = 'musicgen';
+    gen.healthy = false;
+    const r = await request(app).get('/api/music/setup/runtime-install?runtime=musicgen');
+    expect(r.status).toBe(200);
+    expect(r.text).toContain('cannot be installed on this host');
+    expect(setup.spawn).not.toHaveBeenCalled();
+  });
+
+  it('GET /engines flags a host-incompatible engine so the UI can hide Install', async () => {
+    gen.unsupportedPlatform = 'musicgen';
+    const r = await request(app).get('/api/music/engines');
+    const musicgen = r.body.engines.find((e) => e.id === 'musicgen');
+    expect(musicgen.platformSupported).toBe(false);
+    expect(musicgen.platformLabel).toContain('Apple Silicon');
+    expect(r.body.engines.find((e) => e.id === 'acestep').platformSupported).toBe(true);
   });
 
   it('GET /models/:engine returns the merged model list; 404s for an unknown engine', async () => {

@@ -22,6 +22,9 @@ import {
 import RuntimeInstallModal from '../install/RuntimeInstallModal';
 
 function engineSetupMessage(engine) {
+  // Host-incompatible comes first: it is the only reason that no amount of
+  // installing will fix, so it must not be worded as a setup step.
+  if (engine.platformSupported === false) return `${engine.name} requires ${engine.platformLabel || 'a different host'} and is unavailable on this machine.`;
   if (engine.cudaRequired && engine.cudaState === 'absent') return `${engine.name} requires an NVIDIA CUDA GPU and is unavailable on this host.`;
   if (engine.cudaRequired && engine.cudaState === 'unknown') return `${engine.name} is disabled because CUDA availability could not be determined.`;
   if (engine.runtimeReady === false && engine.fixedModelInstall && engine.modelReady === false) return `${engine.name} needs its runtime and model weights before generation.`;
@@ -175,7 +178,9 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
 
   const selectedUserModel = engine?.models?.find((m) => m.id === modelId && m.userAdded);
   const showRuntimeInstallHint = !!engine && !engine.ready && (!!prompt?.trim() || userSelectedEngine);
-  const canInstallRuntime = engine?.runtimeReady !== true && (!engine?.cudaRequired || engine?.cudaState === 'available');
+  const canInstallRuntime = engine?.runtimeReady !== true
+    && engine?.platformSupported !== false
+    && (!engine?.cudaRequired || engine?.cudaState === 'available');
 
   return (
     <div className="space-y-2 border border-port-border rounded-lg p-3 bg-port-bg/40">
@@ -195,7 +200,7 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
             className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm"
           >
             {engines.map((e) => (
-              <option key={e.id} value={e.id}>{e.name}{e.cudaRequired && e.cudaState !== 'available' ? ' (CUDA unavailable)' : e.ready ? '' : ' (setup required)'}</option>
+              <option key={e.id} value={e.id}>{e.name}{e.platformSupported === false ? ' (unavailable on this host)' : e.cudaRequired && e.cudaState !== 'available' ? ' (CUDA unavailable)' : e.ready ? '' : ' (setup required)'}</option>
             ))}
           </select>
         </label>
@@ -243,7 +248,7 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
           : null}
         </div>
       ) : null}
-      {engine?.fixedModelInstall && !engine.modelReady && engine.cudaState === 'available' ? (
+      {engine?.fixedModelInstall && !engine.modelReady && engine.platformSupported !== false && engine.cudaState === 'available' ? (
         <div className="rounded-lg border border-port-border px-3 py-2">
           <button type="button" onClick={handleFixedModelInstall} disabled={installing} className="inline-flex items-center gap-2 text-xs text-port-accent disabled:opacity-50">
             {installing ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />} Install model
