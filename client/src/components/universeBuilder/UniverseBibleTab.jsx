@@ -14,6 +14,7 @@ import MoodBoardReferenceStrip from '../moodBoard/MoodBoardReferenceStrip';
 import StyleProbeImage from '../universe/StyleProbeImage';
 import VisionProviderPicker from '../universe/VisionProviderPicker';
 import InfluenceChipsInput from './InfluenceChipsInput';
+import MoodBoardStyleSynthesis from './MoodBoardStyleSynthesis';
 import UniverseStyleReferences from './UniverseStyleReferences';
 
 function LockButton({ field, locked, onToggle, label }) {
@@ -174,6 +175,22 @@ export default function BibleTab({
           value={draft.moodBoardId || ''}
           onChange={(id) => updateDraft({ moodBoardId: id || null })}
           newBoardName={draft.name?.trim() || ''}
+        />
+
+        {/* Board → style synthesis (#4188 Phase 4): distill the linked board
+            into the style guide; adoption is a server-side queued write and
+            the adopted values are merged back into the draft here. */}
+        <MoodBoardStyleSynthesis
+          boardId={draft.moodBoardId || ''}
+          universeId={draft.id}
+          styleNotes={draft.styleNotes || ''}
+          influences={draft.influences || {}}
+          locked={draft.locked || {}}
+          saved={saved}
+          onAdopted={(updated) => updateDraft({
+            styleNotes: updated?.styleNotes ?? '',
+            influences: ensureInfluences(updated?.influences),
+          })}
         />
 
         <div className="flex items-center gap-2 flex-wrap">

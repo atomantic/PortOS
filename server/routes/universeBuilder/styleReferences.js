@@ -75,6 +75,22 @@ router.post('/:id/style-references', asyncHandler(async (req, res) => {
   res.json(w);
 }));
 
+// Adopt a style guide with NO reference record attached (#4188 Phase 4: the
+// mood-board synthesis flow proposes styleNotes + influences from board
+// content, not from a single image). Same queued-write semantics as the
+// `adopt` half of the add-reference endpoint; locks are re-checked server-side
+// against the freshest persisted record.
+const adoptStyleSchema = z.object({
+  styleNotes: z.string().trim().max(svc.STYLE_NOTES_MAX).optional().default(''),
+  influences: influencesSchema.optional().default({ embrace: [], avoid: [] }),
+}).strict();
+router.post('/:id/adopt-style', asyncHandler(async (req, res) => {
+  const body = validateRequest(adoptStyleSchema, req.body ?? {});
+  const w = await svc.adoptStyleGuide(req.params.id, body)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(w);
+}));
+
 // The id is only ever compared against stored reference ids (never used as a
 // path/SQL operand), but validate it anyway so an absurdly long param is a 400
 // here rather than a silent no-op deeper in.

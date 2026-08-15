@@ -18,7 +18,7 @@ import {
 import { store } from './storeFacade.js';
 import {
   sanitizeTemplate, sanitizeRun, sanitizeImageRefFilename, resolveInfluences,
-  sanitizeStyleReference,
+  sanitizeStyleReference, sanitizeInfluences, sanitizeLocked, mergeInfluencesWithLocks,
   makeErr, UNIVERSE_ID_RE,
   ERR_NOT_FOUND, ERR_VALIDATION, ERR_DUPLICATE, ERR_HAS_LIVE_SERIES,
   NAME_MAX_LENGTH, CURRENT_SCHEMA_VERSION, ENTRY_REF_KIND, IMAGE_REFS_PER_ENTRY_MAX,
@@ -748,6 +748,31 @@ export async function addStyleReference(id, reference, { adopt = null } = {}) {
     };
     // The patch above carries no canon key, so skip the per-entry catalog
     // projection the mutator path would otherwise run.
+  }, { touchesCanon: false });
+}
+
+/**
+ * Adopt a proposed style guide (styleNotes + influences) as one queued write —
+ * the standalone counterpart to `addStyleReference`'s `adopt` half, for flows
+ * with no reference record to add (mood-board style synthesis, #4188 Phase 4).
+ * Locks are enforced HERE against the freshest persisted record, not just at
+ * proposal time: a field the user locked after the proposal was generated
+ * keeps its current value (`mergeInfluencesWithLocks` for the lists; a locked
+ * styleNotes keeps the persisted prose).
+ */
+export async function adoptStyleGuide(id, { styleNotes, influences } = {}) {
+  return updateUniverse(id, (cur) => {
+    const locked = sanitizeLocked(cur.locked);
+    return {
+      styleNotes: locked.styleNotes
+        ? trimTo(cur.styleNotes, STYLE_NOTES_MAX)
+        : trimTo(styleNotes, STYLE_NOTES_MAX),
+      influences: mergeInfluencesWithLocks(
+        locked,
+        sanitizeInfluences(influences),
+        resolveInfluences(cur),
+      ),
+    };
   }, { touchesCanon: false });
 }
 

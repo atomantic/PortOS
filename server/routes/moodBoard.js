@@ -8,6 +8,7 @@
  */
 
 import { Router } from 'express';
+import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
   validateRequest,
@@ -19,6 +20,9 @@ import {
   isPaginationRequested,
   paginateArray,
 } from '../lib/validation.js';
+import { influencesSchema, lockedSchema } from './universeBuilder/shared.js';
+import { synthesizeBoardStyle } from '../services/moodBoardStyleSynthesis.js';
+import { STYLE_NOTES_MAX } from '../services/universeBuilder.js';
 import {
   listBoards,
   getBoard,
@@ -85,6 +89,25 @@ router.patch('/:id/items/:itemId', asyncHandler(async (req, res) => {
 router.delete('/:id/items/:itemId', asyncHandler(async (req, res) => {
   const board = await removeBoardItem(req.params.id, req.params.itemId);
   res.json(board);
+}));
+
+// Board → universe style synthesis (#4188 Phase 4). Stateless like
+// /analyze-style-reference: the client sends the universe's CURRENT style
+// context (draft values — possibly unsaved), the server reads the board and
+// returns a proposal + diff. Persistence happens only through the universe's
+// queued-write adopt endpoint after the user reviews the diff.
+const synthesizeStyleSchema = z.object({
+  styleNotes: z.string().trim().max(STYLE_NOTES_MAX).optional().default(''),
+  influences: influencesSchema.optional().default({ embrace: [], avoid: [] }),
+  locked: lockedSchema.optional().default({}),
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
+}).strict();
+router.post('/:id/synthesize-style', asyncHandler(async (req, res) => {
+  const body = validateRequest(synthesizeStyleSchema, req.body ?? {});
+  const board = await getBoard(req.params.id);
+  if (!board) throw new ServerError('Mood board not found', { status: 404, code: 'NOT_FOUND' });
+  res.json(await synthesizeBoardStyle({ board, ...body }));
 }));
 
 // Link the board to a public Pinterest board's RSS feed.

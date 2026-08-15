@@ -19,7 +19,14 @@ vi.mock('../services/moodBoard/index.js', () => ({
   syncPinterestBoard: vi.fn(),
 }));
 
+// The synthesis service pulls the aiProvider/promptRunner stack — stub it so
+// this stays a routing test (service behavior is covered in its own suite).
+vi.mock('../services/moodBoardStyleSynthesis.js', () => ({
+  synthesizeBoardStyle: vi.fn(),
+}));
+
 import * as svc from '../services/moodBoard/index.js';
+import { synthesizeBoardStyle } from '../services/moodBoardStyleSynthesis.js';
 import moodBoardRoutes from './moodBoard.js';
 
 const makeApp = () => {
@@ -68,6 +75,45 @@ describe('mood-board routes', () => {
       const res = await request(makeApp()).get('/api/mood-boards/mb-1');
       expect(res.status).toBe(200);
       expect(res.body.id).toBe('mb-1');
+    });
+  });
+
+  describe('POST /:id/synthesize-style (#4188 Phase 4)', () => {
+    it('404s when the board is missing', async () => {
+      svc.getBoard.mockResolvedValueOnce(null);
+      const res = await request(makeApp()).post('/api/mood-boards/nope/synthesize-style').send({});
+      expect(res.status).toBe(404);
+      expect(synthesizeBoardStyle).not.toHaveBeenCalled();
+    });
+
+    it('passes the board and the validated style context to the service', async () => {
+      const board = { id: 'mb-1', name: 'A', items: [] };
+      svc.getBoard.mockResolvedValueOnce(board);
+      synthesizeBoardStyle.mockResolvedValueOnce({ proposed: {}, diff: { hasChanges: false } });
+      const res = await request(makeApp()).post('/api/mood-boards/mb-1/synthesize-style').send({
+        styleNotes: 'current',
+        influences: { embrace: ['a'], avoid: [] },
+        locked: { influencesAvoid: true },
+        providerId: 'ollama',
+        model: 'qwen',
+      });
+      expect(res.status).toBe(200);
+      expect(synthesizeBoardStyle).toHaveBeenCalledWith({
+        board,
+        styleNotes: 'current',
+        influences: { embrace: ['a'], avoid: [] },
+        locked: { influencesAvoid: true },
+        providerId: 'ollama',
+        model: 'qwen',
+      });
+    });
+
+    it('400s on an unknown body key (strict schema)', async () => {
+      const res = await request(makeApp()).post('/api/mood-boards/mb-1/synthesize-style').send({
+        universeId: 'w-1',
+      });
+      expect(res.status).toBe(400);
+      expect(synthesizeBoardStyle).not.toHaveBeenCalled();
     });
   });
 });

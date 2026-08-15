@@ -46,6 +46,19 @@ export const removeMoodBoardItem = (id, itemId, options) =>
     ...options,
   });
 
+// Board → universe style synthesis (#4188 Phase 4). Stateless review step:
+// sends the universe's CURRENT style context (styleNotes/influences/locked)
+// plus the chosen LLM; resolves to `{ proposed, diff, rationale, llm }`.
+// Adoption goes through adoptUniverseStyleGuide (apiUniverseBuilder.js).
+export const synthesizeMoodBoardStyle = (id, {
+  styleNotes, influences, locked, providerId, model,
+} = {}, options = {}) =>
+  request(`/mood-boards/${encodeURIComponent(id)}/synthesize-style`, {
+    method: 'POST',
+    body: JSON.stringify({ styleNotes, influences, locked, providerId, model }),
+    ...options,
+  });
+
 // Pinterest importer: link a board to a Pinterest board URL, unlink, and run a
 // manual "Sync now" that pulls new pins (download + dedupe) server-side.
 export const linkMoodBoardPinterest = (id, url, options) =>

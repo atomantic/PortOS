@@ -61,6 +61,15 @@ export const removeUniverseStyleReference = (id, referenceId, options = {}) => r
   { method: 'DELETE', ...options },
 );
 
+// Adopt a proposed style guide with no reference record attached (#4188
+// Phase 4 — mood-board synthesis). Server-side queued write; locks are
+// re-checked against the freshest persisted record. Resolves with the full
+// updated universe.
+export const adoptUniverseStyleGuide = (id, { styleNotes, influences } = {}, options = {}) => request(
+  `/universe-builder/${encodeURIComponent(id)}/adopt-style`,
+  { method: 'POST', body: JSON.stringify({ styleNotes, influences }), ...options },
+);
+
 export const expandUniverse = ({
   starterPrompt, influences,
   preservedVariations, preservedCompositeSheets,

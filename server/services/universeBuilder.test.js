@@ -448,6 +448,36 @@ describe("universeBuilder service", () => {
     expect(fresh.styleReferences).toHaveLength(1);
   });
 
+  it("adoptStyleGuide writes the proposed guide with no reference attached (#4188 Phase 4)", async () => {
+    const w = await svc.createUniverse({ name: "Adopt Guide", influences: { embrace: ["old"], avoid: [] } });
+    const updated = await svc.adoptStyleGuide(w.id, {
+      styleNotes: "Board-synthesized prose",
+      influences: { embrace: ["ink wash"], avoid: ["gloss"] },
+    });
+    expect(updated.styleNotes).toBe("Board-synthesized prose");
+    expect(updated.influences).toEqual({ embrace: ["ink wash"], avoid: ["gloss"] });
+    const fresh = await svc.getUniverse(w.id);
+    expect(fresh.styleNotes).toBe("Board-synthesized prose");
+    expect(fresh.styleReferences ?? []).toHaveLength(0);
+  });
+
+  it("adoptStyleGuide re-checks locks against the freshest persisted record", async () => {
+    const w = await svc.createUniverse({
+      name: "Adopt Locked",
+      styleNotes: "Locked prose",
+      influences: { embrace: ["keep me"], avoid: ["old bad"] },
+      locked: { styleNotes: true, influencesEmbrace: true },
+    });
+    const updated = await svc.adoptStyleGuide(w.id, {
+      styleNotes: "Should not land",
+      influences: { embrace: ["should not land"], avoid: ["new bad"] },
+    });
+    // Locked fields keep the persisted values; the unlocked avoid list adopts.
+    expect(updated.styleNotes).toBe("Locked prose");
+    expect(updated.influences.embrace).toEqual(["keep me"]);
+    expect(updated.influences.avoid).toEqual(["new bad"]);
+  });
+
   it("addStyleReference is idempotent on a re-sent id and rejects an invalid reference", async () => {
     const reference = {
       id: "style-ref-once",
