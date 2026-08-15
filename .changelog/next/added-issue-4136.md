@@ -1,0 +1,1 @@
+- Field-contract test guarding the volume-verify prompt against its rendered context, so a checklist item can no longer cite a volume/issue field the context never renders

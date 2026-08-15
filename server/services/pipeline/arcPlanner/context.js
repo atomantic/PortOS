@@ -494,7 +494,10 @@ export function groupIssuesBySeasonTree(seasons, issues, { renderLeaf, seasonFie
   for (const list of issuesBySeason.values()) {
     list.sort(compareIssuesByPosition);
   }
-  const renderBucket = (list) => list.map(renderLeaf);
+  // Arity-safe: bare `list.map(renderLeaf)` would feed the array index as a
+  // second argument, so a renderer with an options bag (`renderVolumeIssue`'s
+  // `{ synopsisOnly }`) would silently receive the index as its options.
+  const renderBucket = (list) => list.map((iss) => renderLeaf(iss));
   const tree = seasons.map((s) => ({
     ...seasonFields(s),
     episodes: renderBucket(issuesBySeason.get(s.id) || []),
@@ -620,9 +623,15 @@ export function shapeEpisodeResolutions(rawEpisodes) {
 // Set exactly one of `beats` / `synopsis` so the prompt's beat-level checks
 // don't run against synopsis-only issues (and vice-versa). Beats land in
 // idea.output once the LLM-expand pass runs; before that, idea.input still
-// carries the seed synopsis.
-export function renderVolumeIssue(iss) {
-  const beats = (iss.stages?.idea?.output || '').trim();
+// carries the seed synopsis. `synopsisOnly` forces the synopsis branch for
+// callers that deliberately verify at synopsis depth even where beats exist.
+//
+// EXPORTED for the same reason as `renderVerifyIssueLeaf`: the volume-verify
+// prompt's checklist and this shape are two independent lists that must agree,
+// and a check naming a field this drops becomes a finding no resolver can close
+// — see `volumeVerifyPromptContract.test.js`.
+export function renderVolumeIssue(iss, { synopsisOnly = false } = {}) {
+  const beats = synopsisOnly ? '' : (iss.stages?.idea?.output || '').trim();
   const synopsis = (iss.stages?.idea?.input || '').trim();
   const base = {
     number: iss.number,
@@ -633,6 +642,20 @@ export function renderVolumeIssue(iss) {
   if (beats) return { ...base, beats };
   return { ...base, synopsis: synopsis || null };
 }
+
+// The volume node `pipeline-volume-verify.md` scores, as `{{volume.*}}`.
+// Exported alongside `renderVolumeIssue` so the same contract test can assert
+// every volume field the prompt interpolates is actually rendered. Empty-string
+// fallbacks (not null) keep the Mustache render clean for an unfilled volume.
+export const renderVolumeFields = (s) => ({
+  number: s.number ?? '',
+  title: s.title || '',
+  logline: s.logline || '',
+  synopsis: s.synopsis || '',
+  endingHook: s.endingHook || '',
+  episodeCountTarget: s.episodeCountTarget ?? '',
+  themesCsv: Array.isArray(s.themes) ? s.themes.join(', ') : '',
+});
 
 // Neighbor volumes — only the immediately-prior and immediately-next season
 // (by `number`) — so the LLM can check boundary continuity (#5 in the

@@ -17,7 +17,7 @@ import { getSeason } from '../seasons.js';
 import { ARC_LIMITS, READER_MAP_BEAT_KINDS, buildSeason, cleanThemes, renderArcShapeGuidance, renderArcShapePositionSummary, sanitizeArc, sanitizeReaderMap, sanitizeSeason, sanitizeSeasonList } from '../../../lib/storyArc.js';
 import { sanitizeCharacterArcList } from '../../../lib/seriesCharacterArc.js';
 import { runPromptRefineRaw, trimChanges } from '../refineHelpers.js';
-import { ERR_VALIDATION, SHAPE_GUIDANCE_NONE, appendTickingClock, buildArcBaseContext, buildArcOverviewContext, buildNeighborVolumes, buildReaderMapContext, buildResolveContext, buildVerifyContext, compareIssuesByPosition, findingIdSet, makeErr, matchIssueForEpisodeEdit, matchResolvedFindings, renderVolumeIssue, resolveWorldContext, seasonIdByNumberOf, shapeEpisodeResolutions, shapeFindings, shapeSeasonOutlines, shapeVerifyIssues } from './context.js';
+import { ERR_VALIDATION, SHAPE_GUIDANCE_NONE, appendTickingClock, buildArcBaseContext, buildArcOverviewContext, buildNeighborVolumes, buildReaderMapContext, buildResolveContext, buildVerifyContext, compareIssuesByPosition, findingIdSet, makeErr, matchIssueForEpisodeEdit, matchResolvedFindings, renderVolumeFields, renderVolumeIssue, resolveWorldContext, seasonIdByNumberOf, shapeEpisodeResolutions, shapeFindings, shapeSeasonOutlines, shapeVerifyIssues } from './context.js';
 
 export async function generateArcOverview(seriesId, options = {}) {
   const series = await getSeries(seriesId);
@@ -287,15 +287,7 @@ export async function buildVolumeVerifyContext(series, season, preloadedWorld, {
   const volumeIssues = allIssues
     .filter((iss) => iss.seasonId === season.id)
     .sort(compareIssuesByPosition)
-    .map((issue) => (synopsisOnly
-      ? {
-        number: issue.number,
-        title: issue.title,
-        status: issue.status,
-        arcPosition: issue.arcPosition,
-        synopsis: (issue.stages?.idea?.input || '').trim() || null,
-      }
-      : renderVolumeIssue(issue)));
+    .map((issue) => renderVolumeIssue(issue, { synopsisOnly }));
   // Volume-specific curve placement layered on top of base's arc-wide
   // shapeGuidance so the verifier can flag "this volume inverts the expected
   // fortune at its position."
@@ -304,15 +296,7 @@ export async function buildVolumeVerifyContext(series, season, preloadedWorld, {
     || '(no story shape selected — do not flag shape adherence for this volume)';
   return {
     ...base,
-    volume: {
-      number: season.number ?? '',
-      title: season.title || '',
-      logline: season.logline || '',
-      synopsis: season.synopsis || '',
-      endingHook: season.endingHook || '',
-      episodeCountTarget: season.episodeCountTarget ?? '',
-      themesCsv: Array.isArray(season.themes) ? season.themes.join(', ') : '',
-    },
+    volume: renderVolumeFields(season),
     volumeShapePosition,
     neighborsJson: JSON.stringify(buildNeighborVolumes(series.seasons, season.id), null, 2),
     volumeIssuesJson: JSON.stringify(volumeIssues, null, 2),

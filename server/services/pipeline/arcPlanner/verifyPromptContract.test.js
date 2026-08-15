@@ -23,14 +23,9 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { readFile } from 'fs/promises';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
 
 import { renderVerifyIssueLeaf, renderVerifySeasonFields } from './context.js';
-
-const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
-const shippedPrompt = (name) => join(REPO_ROOT, 'data.reference', 'prompts', 'stages', name);
+import { readShippedPrompt, backtickedTokens, worldVars } from './promptContractHelpers.js';
 
 // Backticked tokens that are deliberately NOT record fields. Anything backticked
 // in the prompt that is not here must be renderable — that is the whole point of
@@ -42,20 +37,6 @@ const NON_FIELD_TOKENS = new Set([
   'pilot', 'finale', 'complication', 'midpoint', 'b-plot', 'all-is-lost',
 ]);
 
-const backtickedTokens = (markdown) => {
-  const out = new Set();
-  for (const match of markdown.matchAll(/`([^`\n]+)`/g)) {
-    // Strip the illustrative value a check may attach (`episodeCountTarget: 12`)
-    // and the array marker (`issues[]`) so the bare identifier is what's tested.
-    const token = match[1].split(':')[0].replace(/\[\]$/, '').trim();
-    // Only single identifiers are candidate record fields. JSON blobs, dotted
-    // arc paths (`arc.themes` — an arc field, not a leaf/season one), and prose
-    // fragments are not.
-    if (/^[a-z][A-Za-z0-9]*$/.test(token)) out.add(token);
-  }
-  return out;
-};
-
 const renderableFields = () => new Set([
   ...Object.keys(renderVerifyIssueLeaf({ stages: { idea: { input: 'x' } } })),
   ...Object.keys(renderVerifySeasonFields({})),
@@ -63,7 +44,7 @@ const renderableFields = () => new Set([
 
 describe('pipeline-arc-verify prompt ↔ buildVerifyContext leaf contract', () => {
   it('renders every record field the shipped checklist cites', async () => {
-    const markdown = await readFile(shippedPrompt('pipeline-arc-verify.md'), 'utf-8');
+    const markdown = await readShippedPrompt('pipeline-arc-verify.md');
     const renderable = renderableFields();
     const unrenderable = [...backtickedTokens(markdown)]
       .filter((token) => !NON_FIELD_TOKENS.has(token) && !renderable.has(token));
@@ -88,14 +69,10 @@ describe('pipeline-arc-verify ↔ pipeline-arc-resolve world parity', () => {
   // world bag. A world variable the resolver renders but the verifier does not is
   // exactly the asymmetry that manufactures unsatisfiable groundedness findings:
   // the verifier calls a canon entity invented, the resolver can see it is not.
-  const worldVars = (markdown) => new Set(
-    [...markdown.matchAll(/\{\{\{?(world[A-Za-z0-9]*)\}?\}\}/g)].map((m) => m[1]),
-  );
-
   it('shows the verifier every world block the resolver can see', async () => {
     const [verify, resolve] = await Promise.all([
-      readFile(shippedPrompt('pipeline-arc-verify.md'), 'utf-8'),
-      readFile(shippedPrompt('pipeline-arc-resolve.md'), 'utf-8'),
+      readShippedPrompt('pipeline-arc-verify.md'),
+      readShippedPrompt('pipeline-arc-resolve.md'),
     ]);
     const verifyVars = worldVars(verify);
     const missing = [...worldVars(resolve)].filter((v) => !verifyVars.has(v));
@@ -103,7 +80,7 @@ describe('pipeline-arc-verify ↔ pipeline-arc-resolve world parity', () => {
   });
 
   it('renders the category canon the world actually defines', async () => {
-    const markdown = await readFile(shippedPrompt('pipeline-arc-verify.md'), 'utf-8');
+    const markdown = await readShippedPrompt('pipeline-arc-verify.md');
     expect(markdown).toContain('{{worldCategoriesText}}');
   });
 });
