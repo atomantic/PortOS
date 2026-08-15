@@ -40,6 +40,7 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
   const [modelId, setModelId] = useState('');
   const [durationSec, setDurationSec] = useState(null);
   const [generating, setGenerating] = useState(false);
+  const [generationElapsedSec, setGenerationElapsedSec] = useState(0);
   // Inline HF model install.
   const [installRepo, setInstallRepo] = useState('');
   const [installing, setInstalling] = useState(false);
@@ -63,6 +64,16 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
   };
 
   useEffect(() => { loadEngines(); }, []);
+
+  useEffect(() => {
+    if (!generating) return undefined;
+    const startedAt = Date.now();
+    setGenerationElapsedSec(0);
+    const timer = setInterval(() => {
+      if (mountedRef.current) setGenerationElapsedSec(Math.floor((Date.now() - startedAt) / 1000));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [generating]);
 
   const engine = useMemo(() => engines.find((e) => e.id === engineId) || null, [engines, engineId]);
 
@@ -282,6 +293,26 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
           </button>
         ) : null}
       </div>
+      {generating ? (
+        <div role="status" className="rounded-lg border border-port-accent/30 bg-port-accent/10 px-3 py-2">
+          <div className="flex items-center justify-between gap-3 text-xs">
+            <span className="text-gray-300">
+              {engine?.cudaRequired ? 'Processing on the GPU' : 'Rendering audio'}
+            </span>
+            <span className="font-mono tabular-nums text-port-accent">
+              {Math.floor(generationElapsedSec / 60)}:{String(generationElapsedSec % 60).padStart(2, '0')} elapsed
+            </span>
+          </div>
+          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-port-border" aria-hidden="true">
+            <div className="h-full w-1/3 animate-pulse rounded-full bg-port-accent" />
+          </div>
+          <p className="mt-1.5 text-[11px] text-gray-500">
+            {engine?.id === 'minimax-music3'
+              ? 'MiniMax Music 3 does not report an exact percentage yet; a 60-second track can take tens of minutes on a 24 GB GPU.'
+              : 'Generation is still active. Longer requested durations take more time.'}
+          </p>
+        </div>
+      ) : null}
 
       {/* Install an additional model from HuggingFace — only for engines that
           can render an arbitrary checkpoint (musicgen/audioldm2). ACE-Step uses
