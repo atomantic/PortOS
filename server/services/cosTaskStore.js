@@ -20,6 +20,7 @@ import { REVIEW_STOP_MODES, normalizeReviewers, normalizeReviewUsernames, normal
 import { isPlainObject } from '../lib/objects.js';
 import { PR_COMPLETIONS, PR_COMPLETION_VALUES } from '../lib/prDisposition.js';
 import { RETRY_HOLD_KEY, RETRY_HOLD_SINCE_KEY } from '../lib/taskRetryHold.js';
+import { resolveTaskTargetBranch, shouldStripTaskTargetBranch } from '../lib/taskTargetBranch.js';
 import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS, isAgentPausedTask, resolvePausedTaskResume, retirePausedAgent } from '../lib/taskPauseHold.js';
 import { REQUEUED_AT_KEY } from '../lib/taskRequeue.js';
 import { isInvestigationTask } from '../lib/investigationTasks.js';
@@ -557,7 +558,7 @@ export async function updateTask(taskId, updates, taskType = 'user', { now = Dat
   const release = await preparePauseRelease(taskId, updates);
   const result = await writeTaskUpdate(taskId, release ? { ...updates, metadata: release.metadata } : updates, taskType, { now });
   if (release && !result?.error) {
-    await retirePausedAgent(release.agentId, taskId, result?.metadata?.existingBranch || null);
+    await retirePausedAgent(release.agentId, taskId, resolveTaskTargetBranch(result?.metadata));
   }
   return result;
 }
@@ -660,17 +661,10 @@ async function writeTaskUpdate(taskId, updates, taskType, { now }) {
   // starts clean and abandons the worktree its dead agent left behind — which is
   // exactly the recovery this mechanism exists for.
   if (isTerminalTaskStatus(updates.status) && !PAUSED_BLOCKED_CATEGORIES.has(updatedMetadata.blockedCategory)) {
-    // ...but only the RESUME mechanism's `existingBranch`, which is keyed by the
-    // `resumedFromAgentId` it is always written with — the same discriminator
-    // `resumePointerMetadata` (agentWorktreeCleanup.js) uses to avoid clearing a
-    // pointer it didn't write. A review-loop / merge follow-up sets
-    // `existingBranch` as its own CONFIGURATION: it exists to land the PR on that
-    // branch. Stripping that copy meant re-running a blocked merge follow-up got
-    // a worktree cut fresh off the default branch — the merge still targets the
-    // right PR by url, but any fix-and-push lands on a branch the PR has never
-    // heard of. Keyed on the mechanism rather than on the task kind so the next
-    // producer of a self-configured `existingBranch` doesn't re-hit this.
-    if (updatedMetadata.resumedFromAgentId) delete updatedMetadata.existingBranch;
+    // The shared predicate identifies only retry-owned `existingBranch` pointers.
+    // Review-loop follow-ups own `reviewLoopPRBranch`, so their canonical target
+    // remains intact even when a legacy duplicate is removed here.
+    if (shouldStripTaskTargetBranch(updatedMetadata)) delete updatedMetadata.existingBranch;
     delete updatedMetadata.resumedFromAgentId;
     delete updatedMetadata.resumeWorktreePath;
   }

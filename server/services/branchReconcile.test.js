@@ -33,7 +33,6 @@ vi.mock('./worktreeManager.js', () => ({
       realChangePaths: lines.map((l) => l.replace(/^\s*\S+\s+/, ''))
     };
   }),
-  isHumanClaimWorktree: vi.fn((id) => typeof id === 'string' && id.startsWith('claim-'))
 }));
 const ensureForgeReachableMock = vi.fn(async () => ({ ok: true, status: 'ok', detail: null, remedy: null }));
 vi.mock('./github.js', () => ({
@@ -52,6 +51,8 @@ const tryReadFileMock = vi.fn(async () => null);
 vi.mock('../lib/fileUtils.js', () => ({
   PATHS: { root: '/repo', cos: '/repo/data/cos' },
   safeJSONParse: (raw, fallback) => { try { return JSON.parse(raw); } catch { return fallback; } },
+  isPathInsideDir: (dir, candidate) => typeof dir === 'string' && typeof candidate === 'string'
+    && candidate.startsWith(`${dir}/`),
   tryReadFile: (...args) => tryReadFileMock(...args),
   atomicWrite: vi.fn(async () => {})
 }));

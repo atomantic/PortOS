@@ -27,6 +27,7 @@ import { activeAgents, runnerAgents, userTerminatedAgents, pausedAgents, useRunn
 // lets that edge be a plain static import instead of a dynamic-import dodge.
 import { cleanupAgentWorktree, resolveTaskResumePatch } from './agentWorktreeCleanup.js';
 import { isRetryHeld, clearedRetryHoldMetadata } from '../lib/taskRetryHold.js';
+import { resolveTaskTargetBranch } from '../lib/taskTargetBranch.js';
 import { syncRunnerAgents } from './agentRunnerSync.js';
 import { flushRunnerOutputBatcher } from './agentRunnerOutputBatchers.js';
 import { completeAgentRun } from './agentRunTracking.js';
@@ -408,7 +409,7 @@ async function requeuePausedTask({ task, taskType, overrides }) {
       status: 500, code: 'AGENT_RESUME_FAILED'
     });
   }
-  return { taskId: task.id, mode: 'requeued', branchName: result?.metadata?.existingBranch || null };
+  return { taskId: task.id, mode: 'requeued', branchName: resolveTaskTargetBranch(result?.metadata) };
 }
 
 /**
@@ -1145,8 +1146,9 @@ export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agent
       emitLog('warn', `Resume pointer for held task ${taskId} could not be resolved: ${err.message}`, { taskId, agentId });
       return {};
     });
-    emitLog('info', `🔓 Completing interrupted retry transition for task ${taskId}${resumePatch.existingBranch ? ` — resuming ${resumePatch.existingBranch}` : ''}`, {
-      taskId, agentId, branchName: resumePatch.existingBranch || null
+    const targetBranch = resolveTaskTargetBranch(resumePatch);
+    emitLog('info', `🔓 Completing interrupted retry transition for task ${taskId}${targetBranch ? ` — resuming ${targetBranch}` : ''}`, {
+      taskId, agentId, branchName: targetBranch
     });
     await updateTask(taskId, {
       status: 'pending',

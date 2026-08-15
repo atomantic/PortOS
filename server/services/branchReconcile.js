@@ -25,7 +25,8 @@
 import { stat } from 'node:fs/promises';
 import { getBranches, getDefaultBranch, isBranchMergedInto, deleteBranch } from './git.js';
 import { execGit } from '../lib/execGit.js';
-import { listWorktrees, forceRemoveWorktreeDir, classifyWorktreeDirt, isHumanClaimWorktree } from './worktreeManager.js';
+import { listWorktrees, forceRemoveWorktreeDir, classifyWorktreeDirt } from './worktreeManager.js';
+import { isAgentWorktreeId, worktreeOwnershipReason } from '../lib/worktreeOwnership.js';
 import { execGh, ensureForgeReachable } from './github.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { githubRepoSpec, githubApiHost } from '../lib/workTracker.js';
@@ -234,22 +235,15 @@ async function getOpenPrsByHead(repoPath) {
  * @returns {string|null}
  */
 export function worktreeProtectionReason({ path, locked, activeAgentIds, ageMs, staleClaimIdleMs = STALE_CLAIM_IDLE_MS }) {
-  if (locked) return 'worktree-locked';
-  const basename = (path || '').split('/').pop() || '';
-  if (isHumanClaimWorktree(basename)) {
-    // Reap an abandoned claim (age known AND past the idle window); keep protecting
-    // a recent one so a live human /claim session — or its Phase-7 self-clean — wins.
-    // Unknown age (ageMs omitted) stays protected: fail safe toward not-deleting.
-    if (typeof ageMs === 'number' && ageMs >= staleClaimIdleMs) return null;
-    return 'worktree-human-claim';
-  }
-  // `instanceof Set`, not truthiness: `getActiveAgentIds()` returns an ARRAY, and a
-  // caller passing it raw would otherwise throw `.has is not a function` mid-cleanup.
-  // Non-Set ⇒ liveness unknown ⇒ not protected here; see isAbandonedAgentWorktree's
-  // JSDoc below for the sentinel rationale, and resolveLiveOwnerReason for the
-  // dispatch side, which fails the other way on purpose.
-  if (activeAgentIds instanceof Set && activeAgentIds.has(basename)) return 'worktree-active-agent';
-  return null;
+  if (!path) return null;
+  return worktreeOwnershipReason({
+    path,
+    locked,
+    activeAgentIds,
+    allowStaleClaim: true,
+    ageMs,
+    staleClaimIdleMs,
+  });
 }
 
 /**
@@ -275,10 +269,13 @@ export function worktreeProtectionReason({ path, locked, activeAgentIds, ageMs, 
  * @returns {boolean}
  */
 export function isAbandonedAgentWorktree({ path, locked, activeAgentIds }) {
-  if (!path || locked || !(activeAgentIds instanceof Set)) return false;
-  const basename = path.split('/').pop() || '';
-  if (!basename.startsWith('agent-') || isHumanClaimWorktree(basename)) return false;
-  return !activeAgentIds.has(basename);
+  return worktreeOwnershipReason({
+    path,
+    locked,
+    activeAgentIds,
+    requireAgentId: true,
+    requireKnownLiveness: true,
+  }) === null;
 }
 
 /**
@@ -308,15 +305,19 @@ export function resolveLiveOwnerReason({ branch, path, locked, activeAgentIds, a
   // The branch's own trailing segment is an agent id for CoS branches — checked
   // FIRST because it holds even after the worktree is gone.
   const owner = (branch || '').split('/').pop() || '';
-  if (owner.startsWith('agent-') && activeAgentIds instanceof Set && activeAgentIds.has(owner)) {
+  if (isAgentWorktreeId(owner) && activeAgentIds instanceof Set && activeAgentIds.has(owner)) {
     return 'branch-active-agent';
   }
   if (!path) return null;
-  const reason = worktreeProtectionReason({ path, locked, activeAgentIds, ageMs });
-  if (reason) return reason;
-  const basename = path.split('/').pop() || '';
-  if (basename.startsWith('agent-') && !(activeAgentIds instanceof Set)) return 'worktree-agent-liveness-unknown';
-  return null;
+  return worktreeOwnershipReason({
+    path,
+    locked,
+    activeAgentIds,
+    allowStaleClaim: true,
+    ageMs,
+    staleClaimIdleMs: STALE_CLAIM_IDLE_MS,
+    requireKnownLiveness: true,
+  });
 }
 
 /**

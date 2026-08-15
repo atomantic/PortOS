@@ -37,6 +37,7 @@ import { detectConflicts } from './taskConflict.js';
 import { createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, isBranchCheckedOutElsewhereError } from './worktreeManager.js';
 import { resolveSpawnCwd } from '../lib/spawnCwd.js';
 import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
+import { resolveTaskTargetBranch } from '../lib/taskTargetBranch.js';
 import { getAppWorkspace, getAppDataForTask, createJiraTicketForTask } from './agentPromptBuilder.js';
 
 const ROOT_DIR = PATHS.root;
@@ -75,30 +76,9 @@ async function blockTask(task, reason, blockedCategory, extraMetadata = {}) {
 const WORKTREE_BUSY_COOLDOWN_MS = 2 * 60 * 1000;
 const WORKTREE_BUSY_MAX_ATTEMPTS = 5;
 
-/**
- * The branch this task's worktree must attach to, or null to cut a fresh one.
- *
- * `existingBranch` is the pointer both producers write — a resume, and a
- * review-loop/merge follow-up. It is also the key `updateTask` DROPS when a task
- * reaches a terminal state, since a stale resume pointer would silently attach an
- * unrelated re-run to a dead branch. That strip is keyed on `resumedFromAgentId`
- * so a follow-up's copy — its CONFIGURATION, not a resume pointer — normally
- * survives, but the exemption does not hold once the follow-up's OWN run fails:
- * `resumePointerMetadata` stamps `resumedFromAgentId` onto any task with work left
- * behind, and from then on the follow-up looks exactly like a resume and loses its
- * branch. It then cut a worktree fresh off the default branch, so the fix it
- * pushed for the PR went to a branch the PR never heard of.
- *
- * `reviewLoopPRBranch` is the same branch under the follow-up's own namespace,
- * written by `spawnReviewLoopFollowUp` and never treated as a resume pointer, so
- * it survives both the strip and the older records written before the exemption
- * existed. Falling back to it makes the two copies impossible to disagree about.
- */
-export function resolveTaskExistingBranch(metadata) {
-  if (metadata?.existingBranch) return metadata.existingBranch;
-  if (isTruthyMeta(metadata?.reviewLoopFollowUp) && metadata?.reviewLoopPRBranch) return metadata.reviewLoopPRBranch;
-  return null;
-}
+// Compatibility export for callers that reached for the accessor from this
+// service before the shared task-target-branch contract existed.
+export { resolveTaskTargetBranch as resolveTaskExistingBranch } from '../lib/taskTargetBranch.js';
 
 /**
  * Agent ids whose worktree must not be taken out from under them, using the same
@@ -125,19 +105,19 @@ async function getProtectedAgentIds() {
  * Take over the worktree that already holds `branchName`, for a task whose whole
  * purpose is to run ON that branch (a merge/review-loop follow-up, a resume).
  *
- * Called only after `git worktree add` refused because the branch is checked out
- * elsewhere. Routinely that holder is a cleanup's tree seconds from teardown — the
- * caller's timed pause covers that — but a tree `removeWorktree` REFUSED to delete
- * (uncommitted changes) holds the branch until a human intervenes, and waiting it
- * out just strands the pull request the follow-up exists to land. Adoption is the
- * shorter path in both cases and preserves whatever the previous run left behind.
+ * Resolved before `createWorktree`, so both a resume and a review-loop follow-up
+ * share one answer to "which tree holds this branch?". Routinely that holder is a
+ * cleanup's tree seconds from teardown, but a tree `removeWorktree` REFUSED to
+ * delete (uncommitted changes) holds the branch until a human intervenes. Adoption
+ * is the shorter path in both cases and preserves whatever the previous run left
+ * behind.
  *
  * `findAdoptableWorktreeForBranch` refuses every holder PortOS doesn't own
  * outright, so this can never move the user's checkout or a live agent's tree.
  *
  * @returns {Promise<{ worktreeInfo: object, adoptedFrom: string }|null>}
  */
-async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, taskId }) {
+async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, preferredPath = null, taskId }) {
   // Fail CLOSED on an unreadable agent list: an empty protected set would read as
   // "nothing is running", which is the one wrong answer here — it would move a
   // live run's directory. The caller's timed pause is the safe outcome instead.
@@ -147,7 +127,7 @@ async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, 
   });
   if (!activeAgentIds) return null;
 
-  const holder = await findAdoptableWorktreeForBranch(workspacePath, branchName, { activeAgentIds });
+  const holder = await findAdoptableWorktreeForBranch(workspacePath, branchName, { activeAgentIds, preferredPath });
   if (!holder) return null;
 
   const worktreeInfo = await adoptWorktree(agentId, workspacePath, holder.path, branchName).catch(err => {
@@ -223,7 +203,7 @@ export async function prepareAgentWorkspace({ agentId, task }) {
   // conflict AUTO-detection resumes into the shared workspace on retry (conflict
   // detection returns `proceed` once the dead agent is gone) and silently
   // abandons the work the pointer was recorded to save.
-  const existingBranch = resolveTaskExistingBranch(task.metadata);
+  const existingBranch = resolveTaskTargetBranch(task.metadata);
   const wantsWorktree = explicitWorktree || !!existingBranch;
 
   if (!isReadOnly) {
@@ -360,27 +340,21 @@ export async function prepareAgentWorkspace({ agentId, task }) {
         });
       }
 
-      // Resume path: the run this task is retrying left a worktree behind (its
-      // process died mid-edit, so `removeWorktree` refused to delete the dirty
-      // tree — see recordTaskResumePointer). Adopt it, which carries the
-      // uncommitted edits and untracked files no branch pointer can, instead of
-      // building a fresh tree and redoing that work.
+      // Resolve the branch holder ONCE before creation. `resumeWorktreePath` is a
+      // cache of that answer, not a separate ownership rule: if it is gone or
+      // stale, discovery finds the actual holder. This gives resume retries the
+      // same safe adoption path review-loop follow-ups use, rather than cutting a
+      // fresh branch merely because a cached path could not be moved.
       const resumeWorktreePath = existingBranch ? task.metadata?.resumeWorktreePath : null;
-      const adopted = resumeWorktreePath
-        ? await adoptWorktree(agentId, workspacePath, resumeWorktreePath, existingBranch).catch(err => {
-          emitLog('warn', `🌳 Could not adopt worktree ${resumeWorktreePath} for task ${task.id}: ${err.message}`, { taskId: task.id });
-          return null;
+      const takeover = existingBranch
+        ? await adoptWorktreeHoldingBranch({
+          agentId,
+          workspacePath,
+          branchName: existingBranch,
+          preferredPath: resumeWorktreePath,
+          taskId: task.id,
         })
         : null;
-
-      // Adoption failing while the stale tree is STILL on disk means the branch is
-      // checked out there, so attaching a second worktree to it would fail with
-      // "already checked out" and block the task outright. Fail open — start clean,
-      // the same polarity resolveResumePointer uses — rather than not spawning.
-      const branchStillClaimed = !adopted && resumeWorktreePath && existsSync(resumeWorktreePath);
-      if (branchStillClaimed) {
-        emitLog('warn', `🌳 Worktree ${resumeWorktreePath} could not be adopted and still holds ${existingBranch} — task ${task.id} starts from a clean branch`, { taskId: task.id });
-      }
 
       // Both read only by the block/pause decision below: the failure REASON
       // decides whether the task is unrunnable or merely early, and `attempt` is
@@ -389,24 +363,15 @@ export async function prepareAgentWorkspace({ agentId, task }) {
       // task's whole patience budget rather than a per-attempt one).
       let worktreeError = null;
       const attempt = (Number(task.metadata?.worktreeBusyAttempts) || 0) + 1;
-      worktreeInfo = adopted || await createWorktree(agentId, workspacePath, task.id, {
+      worktreeInfo = takeover?.worktreeInfo || await createWorktree(agentId, workspacePath, task.id, {
         baseBranch: detectedBase || undefined,
-        existingBranch: branchStillClaimed ? undefined : (existingBranch || undefined),
+        existingBranch: existingBranch || undefined,
         planId: task.metadata?.planId || undefined
       }).catch(err => {
         worktreeError = err;
         emitLog('warn', `🌳 Worktree creation failed, using shared workspace: ${err.message}`, { taskId: task.id });
         return null;
       });
-
-      // The branch this task exists to work on is checked out somewhere else. If
-      // that somewhere is a tree PortOS owns, take it over rather than burning
-      // cooldowns below on a teardown that may never come (see
-      // `adoptWorktreeHoldingBranch`).
-      const takeover = !worktreeInfo && existingBranch && isBranchCheckedOutElsewhereError(worktreeError?.message)
-        ? await adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName: existingBranch, taskId: task.id })
-        : null;
-      if (takeover) worktreeInfo = takeover.worktreeInfo;
 
       if (worktreeInfo) {
         workspacePath = worktreeInfo.worktreePath;

@@ -241,7 +241,9 @@ export * from './taskPauseHold.js';
 export * from './taskBlockCategories.js';
 export * from './taskRequeue.js';
 export * from './taskRetryHold.js';
+export * from './taskTargetBranch.js';
 export * from './taxonomyTally.js';
+export * from './worktreeOwnership.js';
 export * from './xmlEntities.js';
 
 // === Curated static data ===

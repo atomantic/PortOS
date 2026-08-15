@@ -180,9 +180,14 @@ describe('prepareAgentWorkspace — resuming an interrupted run', () => {
     }
   });
 
-  beforeEach(() => { ensureLatest.mockResolvedValue({ success: true, upToDate: true }); });
+  beforeEach(() => {
+    ensureLatest.mockResolvedValue({ success: true, upToDate: true });
+    getAgents.mockResolvedValue([]);
+    findAdoptableWorktreeForBranch.mockResolvedValue(null);
+  });
 
   it('adopts the interrupted run’s worktree instead of creating a new one', async () => {
+    findAdoptableWorktreeForBranch.mockResolvedValue({ path: DEAD_TREE, agentId: 'agent-dead' });
     adoptWorktree.mockResolvedValue({
       worktreePath: '/mock/worktrees/agent-new', branchName: 'cos/t-resume/agent-dead',
       baseBranch: null, existingBranch: true, adopted: true
@@ -213,24 +218,22 @@ describe('prepareAgentWorkspace — resuming an interrupted run', () => {
     expect(r.outcome).toBe('ready');
   });
 
-  // Git allows a branch in only ONE worktree. If adoption failed while the stale
-  // tree is still on disk holding the branch, attaching a second worktree to it
-  // errors out and the task is blocked entirely — worse than starting clean.
-  it('starts clean when adoption fails and the stale tree still holds the branch', async () => {
-    // Any real directory stands in for the stale tree — the production check is a
-    // bare `existsSync`, so `cwd` is enough and leaves nothing behind to clean up.
-    const stillThere = process.cwd();
-    adoptWorktree.mockResolvedValue(null);
-    createWorktree.mockResolvedValue({
-      worktreePath: '/mock/worktrees/agent-new', branchName: 'cos/t-resume/agent-new', baseBranch: 'main'
+  it('discovers and adopts the branch holder before cutting a fresh resume branch', async () => {
+    const stalePointer = '/mock/worktrees/agent-moved';
+    findAdoptableWorktreeForBranch.mockResolvedValue({ path: DEAD_TREE, agentId: 'agent-dead' });
+    adoptWorktree.mockResolvedValue({
+      worktreePath: '/mock/worktrees/agent-new', branchName: 'cos/t-resume/agent-dead',
+      baseBranch: null, existingBranch: true, adopted: true
     });
 
     const r = await prepareAgentWorkspace({
-      agentId: 'agent-new', task: resumeTask({ resumeWorktreePath: stillThere })
+      agentId: 'agent-new', task: resumeTask({ resumeWorktreePath: stalePointer })
     });
 
-    expect(createWorktree).toHaveBeenCalledWith('agent-new', expect.any(String), 't-resume',
-      expect.objectContaining({ existingBranch: undefined }));
+    expect(findAdoptableWorktreeForBranch).toHaveBeenCalledWith(expect.any(String), 'cos/t-resume/agent-dead',
+      expect.objectContaining({ preferredPath: stalePointer }));
+    expect(adoptWorktree).toHaveBeenCalledWith('agent-new', expect.any(String), DEAD_TREE, 'cos/t-resume/agent-dead');
+    expect(createWorktree).not.toHaveBeenCalled();
     expect(r.outcome).toBe('ready');
   });
 
@@ -239,6 +242,7 @@ describe('prepareAgentWorkspace — resuming an interrupted run', () => {
   // detection returns `proceed` once the dead agent is gone, so the old gate sent
   // the retry into the shared workspace and abandoned the work on disk.
   it('takes the worktree path for a resume even when the task never asked for isolation', async () => {
+    findAdoptableWorktreeForBranch.mockResolvedValue({ path: DEAD_TREE, agentId: 'agent-dead' });
     adoptWorktree.mockResolvedValue({
       worktreePath: '/mock/worktrees/agent-new', branchName: 'cos/t-resume/agent-dead',
       baseBranch: null, existingBranch: true, adopted: true
@@ -301,8 +305,8 @@ describe('prepareAgentWorkspace — the branch is checked out in another worktre
     id: 'sys-rl-1', taskType: 'internal',
     metadata: {
       useWorktree: true,
-      existingBranch: 'cos/task-x/agent-y',
       reviewLoopFollowUp: true,
+      reviewLoopPRBranch: 'cos/task-x/agent-y',
       reviewLoopPRUrl: 'https://github.com/o/r/pull/1',
       ...extra
     }
@@ -395,9 +399,9 @@ describe('prepareAgentWorkspace — the branch is checked out in another worktre
     const [, patch] = updateTask.mock.calls.at(-1);
     expect(patch.status).toBe('blocked');
     expect(patch.metadata.blockedCategory).toBe('worktree-busy');
-    // `worktree-busy` is a PAUSE category, so updateTask keeps `existingBranch` —
+    // `worktree-busy` is a PAUSE category, so its canonical PR branch survives —
     // the revived attempt must still attach to the PR branch, not cut a new one.
-    expect(patch.metadata.existingBranch).toBe('cos/task-x/agent-y');
+    expect(patch.metadata.reviewLoopPRBranch).toBe('cos/task-x/agent-y');
     // The cooldown stamp is what the sweeper in cosTaskGenerator revives on.
     expect(new Date(patch.metadata.cooldownUntil).getTime()).toBeGreaterThan(Date.now());
     expect(patch.metadata.worktreeBusyAttempts).toBe(1);

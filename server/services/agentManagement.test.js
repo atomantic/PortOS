@@ -752,6 +752,16 @@ describe('resumeAgent — requeues the paused agent\'s own task', () => {
     });
   });
 
+  it('reports a review-loop task’s canonical PR branch when no legacy duplicate exists', async () => {
+    reviveBlockedTask.mockResolvedValueOnce({ metadata: {
+      reviewLoopFollowUp: true,
+      reviewLoopPRBranch: 'cos/task-abc/agent-pr',
+    } });
+    await expect(resumeAgent('agent-paused-1')).resolves.toMatchObject({
+      mode: 'requeued', branchName: 'cos/task-abc/agent-pr',
+    });
+  });
+
   it('retires the paused agent record so it stops showing as paused', async () => {
     await resumeAgent('agent-paused-1');
     expect(markAgentComplete).toHaveBeenCalledWith('agent-paused-1', expect.objectContaining({

@@ -11,13 +11,16 @@
 
 import { existsSync, realpathSync } from 'fs';
 import { readdir, rm, stat } from 'fs/promises';
-import { join, win32 } from 'path';
+import { join } from 'path';
 import { ensureDir, isPathInsideDir, PATHS, sleep, tryReadFile } from '../lib/fileUtils.js';
 import { DONE_SENTINEL_NAME, doneSentinelName } from '../lib/agentSentinel.js';
 import { execGit } from '../lib/execGit.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
+import { isHumanClaimWorktree, worktreeAgentId, worktreeOwnershipReason } from '../lib/worktreeOwnership.js';
 import { ensureInstanceId } from './instances.js';
+
+export { isHumanClaimWorktree } from '../lib/worktreeOwnership.js';
 
 const WORKTREES_DIR = PATHS.worktrees;
 // `git worktree list --porcelain` reports POSIX separators on every platform —
@@ -25,11 +28,10 @@ const WORKTREES_DIR = PATHS.worktrees;
 // `join` and is backslash-separated on Windows. So a git-reported path is never
 // compared with a bare `startsWith`/`split('/')`: `isPathInsideDir` resolves
 // both sides first (and rejects a sibling like `worktrees-old`), and
-// `win32.basename` treats either separator as one. Before this, every CoS
+// `worktreeAgentId()` treats either separator as one. Before this, every CoS
 // worktree failed the containment check on Windows — `cleanupOrphanedWorktrees`
 // skipped them all and `reapMergedWorktrees` filed them as `unmanaged-location`,
 // so the daily line read "reaped 0 merged + 0 orphaned" with orphans on disk.
-const worktreeAgentId = (worktreePath) => win32.basename(worktreePath || '');
 // Lockfiles that npm/yarn/pnpm modify as a side-effect — safe to discard during worktree cleanup
 const AUTO_GENERATED_LOCKFILES = ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml'];
 // Cap the dirty paths named in a "worktree preserved" warning — the message ends
@@ -318,24 +320,6 @@ function pathsEqual(a, b) {
 }
 
 /**
- * True when a worktree directory belongs to a human-driven `/claim` TUI
- * session, not a CoS agent.
- *
- * The `/claim` command creates its worktree at `data/cos/worktrees/claim-<slug>`
- * — the SAME directory CoS uses for agent worktrees (`agent-<uuid>`). CoS
- * agent IDs are always `agent-<8-char-uuid>` (see `agentLifecycle.js`), so the
- * `claim-` prefix is unambiguous. These worktrees are owned by the `/claim`
- * command's own Phase 7 cleanup; CoS orphan-cleanup MUST skip them. Otherwise
- * every cleanup cycle (boot + each evaluation) sees a `claim-<slug>` dir with
- * no matching active agent, treats it as orphaned, and removes it — pruning a
- * human's in-flight claim mid-review (and, with `{ merge: true }`, even
- * fast-forwarding the `claim/<slug>` branch into the default branch).
- */
-export function isHumanClaimWorktree(agentId) {
-  return typeof agentId === 'string' && agentId.startsWith('claim-');
-}
-
-/**
  * Decide whether an auto-merge into `currentBranch` should be refused.
  *
  * Pure helper for the defense-in-depth gate in `removeWorktree`: an agent's
@@ -515,20 +499,34 @@ async function createWorktreeUnlocked(agentId, sourceWorkspace, taskId, options 
  * @param {string} branchName - branch to find a holder for (no `refs/heads/`)
  * @param {object} [options]
  * @param {Set<string>} [options.activeAgentIds] - agents currently running
+ * @param {string} [options.preferredPath] - cached holder path to validate first
  * @returns {Promise<{ path: string, agentId: string }|null>}
  */
-export async function findAdoptableWorktreeForBranch(sourceWorkspace, branchName, { activeAgentIds = new Set() } = {}) {
+export async function findAdoptableWorktreeForBranch(sourceWorkspace, branchName, {
+  activeAgentIds = new Set(),
+  preferredPath = null,
+} = {}) {
   if (!sourceWorkspace || !branchName) return null;
 
   const worktrees = await listWorktrees(sourceWorkspace).catch(() => []);
-  // Only one worktree can hold a branch, so the first match is the only match —
-  // a guard failing means "nobody may adopt this", not "keep looking".
-  const holder = worktrees.find(wt => wt.branch?.replace('refs/heads/', '') === branchName);
-  if (!holder?.path || holder.locked) return null;
-  if (!isPathInsideDir(WORKTREES_DIR, holder.path)) return null;
+  // Git permits one holder per branch. A resume pointer is merely a cache of that
+  // answer, so validate it against the current worktree list first and then fall
+  // back to discovery when the cached path went stale or was moved.
+  const holders = worktrees.filter(wt => wt.branch?.replace('refs/heads/', '') === branchName);
+  const holder = preferredPath
+    ? holders.find(wt => pathsEqual(wt.path, preferredPath)) || holders[0]
+    : holders[0];
+  if (!holder?.path) return null;
 
   const agentId = worktreeAgentId(holder.path);
-  if (!agentId || isHumanClaimWorktree(agentId) || activeAgentIds.has(agentId)) return null;
+  const ownershipReason = worktreeOwnershipReason({
+    path: holder.path,
+    locked: holder.locked,
+    activeAgentIds,
+    roots: [{ path: WORKTREES_DIR, requireAgentId: true }],
+    requireKnownLiveness: true,
+  });
+  if (ownershipReason) return null;
 
   return { path: holder.path, agentId };
 }
@@ -1005,25 +1003,27 @@ export async function cleanupOrphanedWorktrees(sourceWorkspace, activeAgentIds) 
   const handledAgentIds = new Set();
 
   for (const wt of worktrees) {
-    // Only clean up worktrees under our managed directory
-    if (!isPathInsideDir(WORKTREES_DIR, wt.path)) continue;
-
+    const ownershipReason = worktreeOwnershipReason({
+      path: wt.path,
+      locked: wt.locked,
+      activeAgentIds,
+      roots: [{ path: WORKTREES_DIR, requireAgentId: true }],
+      requireKnownLiveness: true,
+    });
+    if (ownershipReason === 'worktree-unmanaged-location') continue;
     const agentId = worktreeAgentId(wt.path);
     handledAgentIds.add(agentId);
-    // Never reap human-driven `/claim` worktrees (`claim-<slug>`) — they belong
-    // to the `/claim` command's own Phase 7 cleanup, not CoS. See isHumanClaimWorktree.
-    if (isHumanClaimWorktree(agentId)) continue;
-    if (!activeAgentIds.has(agentId)) {
-      const branchName = wt.branch?.replace('refs/heads/', '') || '';
-      // Attempt merge so committed work from preserved worktrees (e.g., PR/push failures) isn't lost.
-      // If merge fails, the branch is preserved for manual recovery.
-      const result = await removeWorktree(agentId, sourceWorkspace, branchName, { merge: true })
-        .catch(err => {
-          console.log(`⚠️ Failed to clean orphaned worktree ${agentId}: ${err.message}`);
-          return { removed: false };
-        });
-      if (result?.removed) cleaned++;
-    }
+    if (ownershipReason) continue;
+
+    const branchName = wt.branch?.replace('refs/heads/', '') || '';
+    // Attempt merge so committed work from preserved worktrees (e.g., PR/push failures) isn't lost.
+    // If merge fails, the branch is preserved for manual recovery.
+    const result = await removeWorktree(agentId, sourceWorkspace, branchName, { merge: true })
+      .catch(err => {
+        console.log(`⚠️ Failed to clean orphaned worktree ${agentId}: ${err.message}`);
+        return { removed: false };
+      });
+    if (result?.removed) cleaned++;
   }
 
   // Scan for external-repo worktrees (directories whose .git points to a different repo).
@@ -1087,6 +1087,10 @@ export async function reapMergedWorktrees(sourceWorkspace, {
 
   const protectedBranches = new Set(['main', 'master', 'dev', 'develop', 'release', defaultBranch]);
   const claudeTreesRoot = join(sourceWorkspace, '.claude', 'worktrees');
+  const managedRoots = [
+    { path: WORKTREES_DIR, requireAgentId: true },
+    { path: claudeTreesRoot, requireAgentId: false },
+  ];
 
   const worktrees = await listWorktrees(sourceWorkspace).catch(() => []);
   const reaped = [];
@@ -1101,16 +1105,25 @@ export async function reapMergedWorktrees(sourceWorkspace, {
     if (!branchName) { skipped.push({ path: wt.path, reason: 'no-branch' }); continue; }
     if (protectedBranches.has(branchName) || branchName === currentBranch) { skipped.push({ path: wt.path, reason: 'protected' }); continue; }
 
-    const agentId = worktreeAgentId(wt.path);
-    // Human `/claim` worktrees self-clean in the claim flow's Phase 7 — never reap them here.
-    if (isHumanClaimWorktree(agentId)) { skipped.push({ path: wt.path, reason: 'human-claim' }); continue; }
-    if (activeAgentIds.has(agentId)) { skipped.push({ path: wt.path, reason: 'active-agent' }); continue; }
-
-    const isCosTree = isPathInsideDir(WORKTREES_DIR, wt.path);
     const isClaudeTree = isPathInsideDir(claudeTreesRoot, wt.path);
-    if (!isCosTree && !isClaudeTree) { skipped.push({ path: wt.path, reason: 'unmanaged-location' }); continue; }
+    const ownershipReason = worktreeOwnershipReason({
+      path: wt.path,
+      locked: wt.locked,
+      activeAgentIds,
+      roots: managedRoots,
+      requireKnownLiveness: true,
+    });
+    if (ownershipReason) {
+      const reason = {
+        'worktree-human-claim': 'human-claim',
+        'worktree-active-agent': 'active-agent',
+        'worktree-locked': 'locked',
+        'worktree-unmanaged-location': 'unmanaged-location',
+      }[ownershipReason] || ownershipReason;
+      skipped.push({ path: wt.path, reason });
+      continue;
+    }
     if (isClaudeTree && !includeClaudeTrees) { skipped.push({ path: wt.path, reason: 'claude-tree-excluded' }); continue; }
-    if (wt.locked) { skipped.push({ path: wt.path, reason: 'locked' }); continue; }
 
     // Gate 1: working tree must be completely clean. Unlike removeWorktree(),
     // the background reaper does not discard even lockfile-only edits: an

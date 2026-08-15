@@ -664,7 +664,7 @@ describe('cleanupAgentWorktree - PR-creation path', () => {
     expect(followUp.metadata.reviewLoopPRNumber).toBe(42);
     expect(followUp.metadata.reviewLoopPROwner).toBe('test');
     expect(followUp.metadata.reviewLoopPRRepo).toBe('repo');
-    expect(followUp.metadata.existingBranch).toBe('cos/task-abc123');
+    expect(followUp.metadata.existingBranch).toBeUndefined();
     expect(followUp.metadata.useWorktree).toBe(true);
     expect(followUp.metadata.openPR).toBe(false); // must not chain another PR
     expect(followUp.metadata.reviewLoop).toBe(false); // must not chain another loop
@@ -848,7 +848,8 @@ describe('cleanupAgentWorktree - PR-creation path', () => {
     expect(followUp.metadata.reviewLoopReviewerUsernames).toEqual([]);
     expect(followUp.description).toMatch(/^\[Merge\]/);
     // Still attaches to the PR branch so it can fix a failing check before merging.
-    expect(followUp.metadata.existingBranch).toBe('cos/task-abc123');
+    expect(followUp.metadata.reviewLoopPRBranch).toBe('cos/task-abc123');
+    expect(followUp.metadata.existingBranch).toBeUndefined();
     expect(removeWorktree).toHaveBeenCalled();
   });
 

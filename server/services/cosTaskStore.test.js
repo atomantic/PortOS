@@ -994,6 +994,22 @@ describe('cosTaskStore.updateTask', () => {
     expect(done.metadata.resumeWorktreePath).toBeUndefined();
   });
 
+  it('keeps a review-loop target after clearing its legacy retry duplicate', async () => {
+    await addTask({ description: 'merge PR canonical', id: 'sys-rl-canonical' }, 'internal');
+    await updateTask('sys-rl-canonical', {
+      metadata: {
+        existingBranch: 'cos/task-4/agent-old',
+        resumedFromAgentId: 'agent-old',
+        resumeWorktreePath: '/w/agent-old',
+        reviewLoopFollowUp: true,
+        reviewLoopPRBranch: 'cos/task-4/agent-pr',
+      }
+    }, 'internal');
+    const done = await updateTask('sys-rl-canonical', { status: 'completed' }, 'internal');
+    expect(done.metadata.existingBranch).toBeUndefined();
+    expect(done.metadata.reviewLoopPRBranch).toBe('cos/task-4/agent-pr');
+  });
+
   // `worktree-busy` joins the pause categories: the cooldown sweeper revives it,
   // and the revived attempt must still attach to the PR branch.
   it('keeps the pointer through a worktree-busy cooldown block', async () => {

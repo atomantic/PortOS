@@ -44,6 +44,7 @@ const {
   createPersistentWorktree,
 } = await import('./worktreeManager.js');
 const { isPathInsideDir } = await import('../lib/fileUtils.js');
+const { worktreeOwnershipReason } = await import('../lib/worktreeOwnership.js');
 const { win32 } = await import('path');
 const { existsSync } = await import('fs');
 const { PATHS } = await import('../lib/fileUtils.js');
@@ -429,17 +430,13 @@ describe('git-vs-PortOS path comparison', () => {
 
 describe('Orphaned Worktree Detection', () => {
   function findOrphanedWorktrees(worktrees, worktreesDir, activeAgentIds) {
-    return worktrees.filter(wt => {
-      // The real helpers, not a local re-implementation: a mirrored copy here is
-      // exactly what let the Windows separator bug live in the shipped path
-      // while this suite stayed green.
-      if (!isPathInsideDir(worktreesDir, wt.path)) return false;
-      const agentId = win32.basename(wt.path);
-      // Mirror the real cleanup guard: human-driven `/claim` worktrees are
-      // never CoS orphans.
-      if (isHumanClaimWorktree(agentId)) return false;
-      return !activeAgentIds.has(agentId);
-    });
+    return worktrees.filter((wt) => worktreeOwnershipReason({
+      path: wt.path,
+      locked: wt.locked,
+      activeAgentIds,
+      roots: [{ path: worktreesDir, requireAgentId: true }],
+      requireKnownLiveness: true,
+    }) === null);
   }
 
   it('should identify worktrees without active agents', () => {
@@ -767,6 +764,12 @@ describe('findAdoptableWorktreeForBranch (take over the tree that holds the bran
 
   it('refuses a human /claim worktree — the claim flow owns its cleanup', async () => {
     scriptWorktrees([{ path: cosTree('claim-issue-42'), branch: `refs/heads/${BRANCH}` }]);
+
+    expect(await findAdoptableWorktreeForBranch(REPO, BRANCH)).toBeNull();
+  });
+
+  it('refuses a non-agent directory in the managed root', async () => {
+    scriptWorktrees([{ path: cosTree('next-issue-42'), branch: `refs/heads/${BRANCH}` }]);
 
     expect(await findAdoptableWorktreeForBranch(REPO, BRANCH)).toBeNull();
   });

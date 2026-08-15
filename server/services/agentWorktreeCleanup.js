@@ -23,6 +23,7 @@ import { removeWorktree, classifyWorktreeDirt } from './worktreeManager.js';
 import { isTruthyMeta } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { isRetryHoldOwner, clearedRetryHoldMetadata } from '../lib/taskRetryHold.js';
+import { resolveTaskTargetBranch, shouldStripTaskTargetBranch } from '../lib/taskTargetBranch.js';
 import { RECOVERY_TASK_PREFIX } from './recoveryTasks.js';
 import { detectForgeCli } from '../lib/gitForge.js';
 import { PR_COMPLETIONS, PR_COMPLETION_VALUES, PR_CREATION, leavesPrForHuman, prClaimWasVerified } from '../lib/prDisposition.js';
@@ -584,18 +585,18 @@ export async function resolveTaskResumePatch({ task, agentId, agentMetadata }) {
 /**
  * The task-metadata patch that makes a retry resume (or stop resuming).
  *
- * `existingBranch` is the flag agentWorkspacePrep already honors to attach a
- * worktree to a pre-existing branch (the review-loop follow-up uses it), and
- * `resumeWorktreePath` is honored there too, so resuming needs no new spawn
- * plumbing. `resumedFromAgentId` records whose run is being continued — it drives
- * the prompt's resume banner and is the marker that distinguishes a resume from
- * the follow-up (see `isPrBranchWorktree` in agentPromptBuilder.js).
+ * `existingBranch` is the retry-owned target that `agentWorkspacePrep` resolves
+ * before attaching a worktree, and `resumeWorktreePath` is honored there too, so
+ * resuming needs no new spawn plumbing. `resumedFromAgentId` records whose run is
+ * being continued — it drives the prompt's resume banner and is the marker that
+ * distinguishes a resume from a review-loop follow-up (see `isPrBranchWorktree`
+ * in agentPromptBuilder.js).
  *
  * With no pointer, a previously-stamped resume is CLEARED: its branch may since
  * have been merged or deleted, and leaving the pointer would attach the next
  * attempt to landed work. Keyed on `resumedFromAgentId` so it only ever clears a
- * pointer this mechanism wrote — the review-loop follow-up's own `existingBranch`
- * is its whole reason for existing and must survive being orphaned.
+ * pointer this mechanism wrote. Review-loop follow-ups keep their canonical target
+ * in `reviewLoopPRBranch`, so clearing a legacy duplicate cannot strand the PR.
  *
  * @param {{branchName: string, worktreePath: string|null}|null} pointer
  * @param {string} agentId - the run being resumed from
@@ -610,7 +611,7 @@ export function resumePointerMetadata(pointer, agentId, task) {
       resumeWorktreePath: pointer.worktreePath
     };
   }
-  if (!task?.metadata?.resumedFromAgentId) return {};
+  if (!shouldStripTaskTargetBranch(task?.metadata)) return {};
   // `undefined`, not `null`: `updateTask` DELETES undefined keys from the merged
   // metadata, while a null survives the merge and TASKS.md serializes it as the
   // literal string `"null"` — which reads back as a truthy `existingBranch` and
@@ -634,7 +635,7 @@ export async function recordTaskResumePointer({ task, agentId, agentMetadata }) 
   await updateTask(task.id, { metadata }, task.taskType || 'user').catch(err => {
     emitLog('warn', `Failed to record resume pointer for task ${task.id}: ${err.message}`, { taskId: task.id, agentId });
   });
-  if (!metadata.existingBranch) {
+  if (!resolveTaskTargetBranch(metadata)) {
     emitLog('info', `🧹 Cleared spent resume pointer on task ${task.id} — nothing left to resume`, { taskId: task.id, agentId });
   }
   return metadata;
@@ -734,9 +735,10 @@ export async function releaseRetryHold({ agentId, task, success, agentMetadata }
     emitLog('warn', `⏳ Task ${task.id} still held after a failed release — the orphan sweep will requeue it`, { taskId: task.id, agentId });
     return {};
   }
-  emitLog('info', patch.existingBranch
-    ? `🔁 Task ${task.id} requeued pointing at ${patch.existingBranch}`
-    : `🔓 Task ${task.id} requeued for retry`, { taskId: task.id, agentId, branchName: patch.existingBranch || null });
+  const targetBranch = resolveTaskTargetBranch(patch);
+  emitLog('info', targetBranch
+    ? `🔁 Task ${task.id} requeued pointing at ${targetBranch}`
+    : `🔓 Task ${task.id} requeued for retry`, { taskId: task.id, agentId, branchName: targetBranch });
   return patch;
 }
 
@@ -759,9 +761,9 @@ export async function releaseRetryHold({ agentId, task, success, agentMetadata }
  * then merge versus merge on green directly; `leave-open` is intentional and
  * returns without creating a follow-up.
  *
- * The follow-up task uses an isolated worktree attached to the existing PR
- * branch (via createWorktree's `existingBranch` option) so it can fix-and-push
- * without trampling concurrent agents.
+ * The follow-up task uses an isolated worktree attached to the existing PR branch
+ * through its canonical `reviewLoopPRBranch`, so it can fix-and-push without
+ * trampling concurrent agents.
  */
 export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, prUrl, prBranch, sourceWorkspace, prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null, reviewerEfforts = null, leaveOpen = false }) {
   if (!prUrl || !prBranch) return null;
@@ -869,10 +871,9 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
     metadata: {
       app: appId,
       ...providerPins,
-      // useWorktree is required so the follow-up runs in isolation; existingBranch
-      // tells createWorktree to attach to the PR branch instead of cutting a new one.
+      // useWorktree is required so the follow-up runs in isolation. Its canonical
+      // reviewLoopPRBranch below tells the shared resolver which PR branch to attach.
       useWorktree: true,
-      existingBranch: prBranch,
       // openPR/reviewLoop must stay false so cleanup doesn't try to create another PR
       // or request another initial review (the agent itself drives the loop)
       openPR: false,
