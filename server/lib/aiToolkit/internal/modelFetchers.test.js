@@ -72,9 +72,25 @@ describe('ollamaRefreshGroupKey — one probe per daemon, not one per provider',
   });
 
   it('normalizes trailing slashes and an OpenAI-compat /v1 to the same daemon key', () => {
+    // Safe here because `_fetchOllamaToolCapableModels` itself resolves the base
+    // through `ollamaBaseFromProvider` — both spellings issue the SAME request.
     const bare = { id: 'a', type: 'tui', ollamaBacked: true, envVars: { ANTHROPIC_BASE_URL: 'http://localhost:11434' } };
     const suffixed = { id: 'b', type: 'tui', ollamaBacked: true, envVars: { ANTHROPIC_BASE_URL: 'http://localhost:11434/v1/' } };
     expect(ollamaRefreshGroupKey(suffixed)).toBe(ollamaRefreshGroupKey(bare));
+  });
+
+  it('does NOT fold /v1 away for an api provider — that arm probes the endpoint verbatim', () => {
+    // `_refreshAPIProviderModels` requests `${endpoint}/api/tags` then
+    // `${endpoint}/models` with no normalization, so `…:11434` and
+    // `…:11434/v1` are genuinely different probes (only the `/v1` spelling
+    // answers `/models`). Sharing one answer between them would persist a
+    // catalog onto a provider whose own refresh would have failed.
+    const bare = { id: 'a', type: 'api', endpoint: 'http://localhost:11434' };
+    const v1 = { id: 'b', type: 'api', endpoint: 'http://localhost:11434/v1' };
+    expect(ollamaRefreshGroupKey(bare)).not.toBe(ollamaRefreshGroupKey(v1));
+    // A bare trailing slash IS just a spelling of the same URL, so it folds.
+    expect(ollamaRefreshGroupKey({ id: 'c', type: 'api', endpoint: 'http://localhost:11434/v1/' }))
+      .toBe(ollamaRefreshGroupKey(v1));
   });
 
   it('returns null — never a shared bucket — for anything that is not an Ollama probe', () => {

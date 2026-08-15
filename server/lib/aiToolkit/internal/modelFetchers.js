@@ -204,6 +204,12 @@ export function ollamaRefreshGroupKey(provider, table = MODEL_FETCHERS) {
     if (provider.apiKey) return null;
     const endpoint = String(provider.endpoint || '');
     if (!endpoint.includes('ollama') && !endpoint.includes(':11434')) return null;
+    // Only a trailing slash is normalized away here — NOT an OpenAI-compat
+    // `/v1`, the way `ollamaBaseFromProvider` does for the tools namespace.
+    // The api arm probes `${endpoint}/api/tags` and then `${endpoint}/models`
+    // verbatim, so `…:11434` and `…:11434/v1` are two DIFFERENT requests (only
+    // the `/v1` spelling answers `/models`). Folding them together would share
+    // one provider's catalog onto another whose own probe would have 404'd.
     return `api:${endpoint.replace(/\/+$/, '')}`;
   }
   return resolveModelFetcher(provider, table)?.key === 'ollama'

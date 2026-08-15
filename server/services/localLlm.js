@@ -861,15 +861,18 @@ async function listVisionCliModels() {
 
 // ---- install / delete --------------------------------------------------------
 
+// Probe-failure sentinel, distinct from `fetchProviderModels`' own `null` ("no
+// such provider") and from a legitimately empty `[]` catalog. Three outcomes,
+// three values — collapsing any two of them loses a real distinction.
+const PROBE_FAILED = Symbol('ollama-probe-failed')
+
 /**
  * Fetch one Ollama probe for a group of providers that share a daemon + probe
  * shape, then persist that single answer onto each of them.
  *
  * The probe is issued through the group's first member; every member (that one
  * included) is then written via `updateProvider`, so no provider is special-
- * cased. Writes are sequential because `saveProviders` is a whole-file
- * read-modify-write — firing them concurrently would have members clobber each
- * other's models.
+ * cased.
  *
  * A failed probe skips the whole group with ONE log line: every member would
  * have failed identically against the same unreachable daemon, so N copies of
@@ -879,11 +882,18 @@ async function refreshOllamaProviderGroup(group) {
   const [lead] = group
   const models = await fetchProviderModels(lead.id).catch((err) => {
     console.error(`⚠️ Failed to refresh models for ${group.length} Ollama-backed provider(s) via ${lead.id}: ${err.message}`)
-    return null
+    return PROBE_FAILED
   })
-  // `null` = probe failed or the provider vanished; `[]` = a real, empty catalog
-  // (the user just deleted their last model) and MUST still be persisted.
-  if (models === null) return
+  if (models === PROBE_FAILED) return
+  if (models === null) {
+    // The lead was deleted between listing the providers and probing it. Say so
+    // — silently dropping the whole group would leave its siblings stale with no
+    // trace of why.
+    console.error(`⚠️ Skipped refreshing ${group.length} Ollama-backed provider(s): lead provider ${lead.id} no longer exists`)
+    return
+  }
+  // `[]` is a real, empty catalog (the user just deleted their last model) and
+  // MUST still be persisted — only the two cases above are skips.
   for (const p of group) {
     await updateProvider(p.id, { models }).catch((err) => {
       console.error(`⚠️ Failed to save refreshed models for provider ${p.id}: ${err.message}`)
@@ -925,17 +935,22 @@ function refreshOllamaBackedProviders() {
     // Only a group with something to SHARE takes the split fetch/apply path; a
     // lone member keeps the plain one-call refresh, so the common single-daemon
     // single-provider install behaves exactly as it did before.
-    const shared = []
+    const work = []
     for (const group of groups.values()) {
       if (group.length === 1) singles.push(group[0])
-      else shared.push(group)
+      else work.push(() => refreshOllamaProviderGroup(group))
     }
-    return Promise.all([
-      ...singles.map((p) => refreshProviderModels(p.id).catch((err) => {
+    for (const p of singles) {
+      work.push(() => refreshProviderModels(p.id).catch((err) => {
         console.error(`⚠️ Failed to refresh models for provider ${p.id} after Ollama model change: ${err.message}`)
-      })),
-      ...shared.map(refreshOllamaProviderGroup),
-    ])
+      }))
+    }
+    // Sequential, not `Promise.all`: every one of these ends in `saveProviders`,
+    // a whole-file read-modify-write of providers.json. Run concurrently they
+    // interleave and clobber each other's model arrays. This whole chain is
+    // fire-and-forget background work behind an install/delete, so nothing is
+    // waiting on the wall-clock saving.
+    return work.reduce((tail, run) => tail.then(run), Promise.resolve())
   }).catch((err) => {
     console.error(`⚠️ Failed to list providers for post-install Ollama refresh: ${err.message}`)
   })

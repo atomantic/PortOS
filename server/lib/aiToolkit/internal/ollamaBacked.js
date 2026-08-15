@@ -30,9 +30,10 @@ export function isOllamaBackedProvider(provider) {
  *
  * Lives here beside {@link isOllamaBackedProvider} rather than in `providers.js`
  * so `internal/modelFetchers.js` can build a refresh group key on it without
- * importing back into `providers.js` and forming a module cycle. Re-exported
- * from `providers.js` (and `server/services/providers.js`) for hosts that group
- * providers by daemon.
+ * importing back into `providers.js` and forming a module cycle. Deliberately
+ * NOT re-exported from `providers.js`: `ollamaRefreshGroupKey` is the contract
+ * hosts group on, and exporting the normalizer alongside it only invites a
+ * caller to re-derive the grouping rule and drift from the real dispatch.
  */
 export function ollamaBaseFromProvider(provider) {
   const base = String(provider?.envVars?.ANTHROPIC_BASE_URL || provider?.endpoint || 'http://localhost:11434');

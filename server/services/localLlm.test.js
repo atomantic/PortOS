@@ -318,6 +318,28 @@ describe('localLlm', () => {
       errSpy.mockRestore();
     });
 
+    it('logs rather than silently dropping a group whose lead provider vanished', async () => {
+      // `fetchProviderModels` answers null (not a throw) for a provider deleted
+      // between the listing and the probe — a third outcome that must not be
+      // confused with a failed probe or an empty catalog.
+      mocks.providers.getAllProviders.mockResolvedValueOnce({
+        providers: [
+          { id: 'local-a', type: 'cli', ollamaBacked: true },
+          { id: 'local-b', type: 'tui', ollamaBacked: true }
+        ]
+      });
+      mocks.providers.fetchProviderModels.mockResolvedValueOnce(null);
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      await svc.installModel('ollama', 'llama3.2');
+      await flushMicrotasks();
+
+      expect(mocks.providers.updateProvider).not.toHaveBeenCalled();
+      expect(errSpy).toHaveBeenCalledTimes(1);
+      expect(String(errSpy.mock.calls[0][0])).toMatch(/local-a no longer exists/);
+      errSpy.mockRestore();
+    });
+
     it('persists a legitimately EMPTY catalog across the group', async () => {
       // `[]` (the user just deleted their last model) is a real answer and must
       // be written; only `null` — probe failed — is the skip signal.
