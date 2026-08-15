@@ -82,6 +82,12 @@ async function flush() {
   // likely to be wanted again, not whichever the Map happened to hold first.
   fresh.sort((a, b) => b[1].fetchedAt - a[1].fetchedAt)
   const capped = fresh.slice(0, CACHE_MAX_ENTRIES)
+  // Apply the prune+cap to the IN-MEMORY map too, not just the disk projection.
+  // Nothing else evicts from it, and each HF search enriches up to 18 repos at
+  // ~5 KB apiece — so on a long-lived server heavy search use would grow the
+  // process by tens of MB that never came back, while every flush re-sorted the
+  // whole set to write only the top 500.
+  entries = new Map(capped)
   await ensureDir(join(PATHS.data, 'cache'))
   await atomicWrite(CACHE_FILE, {
     schemaVersion: CACHE_SCHEMA_VERSION,
@@ -98,7 +104,23 @@ function scheduleSave() {
   saveTimer = setTimeout(() => {
     flush().catch((err) => console.error(`❌ Failed to persist Hugging Face repo cache: ${err.message}`))
   }, SAVE_DEBOUNCE_MS)
+  // unref'd so a pending cache write never holds the process open — but that
+  // means a restart landing inside the debounce window drops the batch and the
+  // next boot re-pays the whole burst, which is the one cost this module exists
+  // to remove. The shutdown flush below closes that window without giving up the
+  // unref.
   saveTimer.unref?.()
+}
+
+// Persist a pending batch on shutdown. Fire-and-forget by necessity — the signal
+// handler can't await — but atomicWrite's temp+rename means a half-written file
+// is never observable, and a dropped write only costs a refetch. `once` per
+// signal so repeated SIGTERMs don't stack handlers.
+for (const signal of ['SIGTERM', 'SIGINT']) {
+  process.once(signal, () => {
+    if (!dirty) return
+    flush().catch((err) => console.error(`❌ Failed to flush Hugging Face repo cache on ${signal}: ${err.message}`))
+  })
 }
 
 /**

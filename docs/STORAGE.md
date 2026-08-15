@@ -97,6 +97,7 @@ PostgreSQL is a **required** install/runtime dependency (see [Backup & Restore](
 - Upload staging — `data/uploads/*`. Ephemeral; do not put in DB except as job references.
 - Media job queue — runtime queue state can stay file-backed short term, but **job history and artifact lineage are `db-primary`** and should move to the DB.
 - Browser CDP profile / downloads — `data/browser-profile/`, `data/browser-downloads/` — cache, non-overridable backup excludes.
+- Remote-API metadata cache — `data/cache/huggingface-repos.json` (`server/services/huggingFaceRepoCache.js`). Hugging Face per-repo records (file sizes, native context window) backing the local-LLM catalog's quant pickers. `ephemeral-file` rather than `db-primary` because it is a pure projection of someone else's API with no queries, no relationships, and no sync cursor — and because it is *machine-local by construction*: it exists to spare THIS install's cold-start requests, so federating it would be pure noise. Long TTL (7 days) since published GGUF file sizes are immutable, but bounded because a repo can gain a new quant. Non-overridable backup exclude — regenerable on demand, and stale by restore time anyway. Purgeable from Data Manager (`cache` category).
 
 ---
 

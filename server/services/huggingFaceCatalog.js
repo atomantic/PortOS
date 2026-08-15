@@ -680,27 +680,65 @@ function hfHeaders() {
 // burst the Hub answers with an HTTP/2 GOAWAY. See concurrencyGate for why a
 // shared gate rather than a per-map cap.
 const hfGate = createConcurrencyGate(4)
+// The interactive search's own LIST query gets a separate, tiny budget so it is
+// never stuck behind the catalog's fan-out. `enrichCatalogWithVariants` bounds
+// how long the *response* waits, not the probes themselves — abandoned probes
+// keep draining through hfGate — so a user who lands on the curated tab and then
+// switches to Hugging Face would otherwise queue behind up to ~32 waiters. On a
+// degraded Hub each of those costs two timeouts, which is minutes of a search box
+// that has not even issued its request yet. This query is 1–2 requests, not a
+// fan-out, so a budget of 2 keeps the total offered to the Hub bounded (4 + 2)
+// while making the path the user is actually waiting on independent.
+const hfSearchGate = createConcurrencyGate(2)
 // Coalesce concurrent probes of the SAME repo — a repo can appear in both the
 // curated catalog and the live search, and neither caches until it resolves.
 const repoModelFlight = createSingleFlight()
 
+// Statuses that are a real, durable "this repo has no data for you" answer and
+// so are safe to cache. Everything else non-OK (429 rate limit, 5xx, 408) is the
+// Hub having a bad moment — mirrors `resolveRegistryBody` in
+// ollamaRegistryCatalog.js, which has always drawn this line.
+const HF_PERMANENT_NOT_FOUND = new Set([401, 403, 404, 410])
+
 // Single door to the Hub: bounded concurrency + the shared one-shot retry.
-// Resolves with the Response (including non-2xx — status handling stays with the
-// caller); throws only when the request itself failed twice. The retry runs
-// INSIDE the gate slot so a replay doesn't re-queue behind every other probe.
+//
+// Returns a discriminated outcome rather than a Response, because the body must
+// be consumed INSIDE the gate slot. Releasing at response headers would bound
+// only the header waits while every body streamed concurrently — i.e. exactly
+// the many-simultaneous-streams-on-one-pooled-connection condition that earns
+// the GOAWAY this gate exists to prevent.
+//
+//   { outcome: 'ok', data }                    — 2xx with a parseable body
+//   { outcome: 'permanent', status, errorText } — a durable no-data answer; cacheable
+//   { outcome: 'transient', status, errorText } — a bad moment; MUST NOT be cached
+//
+// Throws only when both attempts failed at the connection level.
 function hfFetch(url) {
-  return hfGate.run(() => fetchWithTimeout(
-    url,
-    { headers: hfHeaders() },
-    HF_TIMEOUT_MS,
-    { retries: 1, retryDelayMs: HF_RETRY_DELAY_MS, shouldRetry: isReplayableConnectionError }
-  // Both attempts lost the connection. undici's own message is a bare `fetch
-  // failed`, which reaches the search box verbatim and reads like a bug in
-  // PortOS — name the actual condition so the user knows to just try again.
-  ).catch((err) => {
-    if (!isReplayableConnectionError(err)) throw err
-    throw new Error(`Hugging Face is not responding (connection dropped twice) — try again in a moment. [${describeFetchError(err)}]`)
-  }))
+  return hfGate.run(async () => {
+    const res = await fetchWithTimeout(
+      url,
+      { headers: hfHeaders() },
+      HF_TIMEOUT_MS,
+      { retries: 1, retryDelayMs: HF_RETRY_DELAY_MS, shouldRetry: isReplayableConnectionError }
+    // Both attempts lost the connection. undici's own message is a bare `fetch
+    // failed`, which reaches the search box verbatim and reads like a bug in
+    // PortOS — name the actual condition so the user knows to just try again.
+    ).catch((err) => {
+      if (!isReplayableConnectionError(err)) throw err
+      throw new Error(`Hugging Face is not responding (connection dropped twice) — try again in a moment. [${describeFetchError(err)}]`)
+    })
+    if (!res.ok) {
+      const errorText = await res.text().catch(() => '')
+      const outcome = HF_PERMANENT_NOT_FOUND.has(res.status) ? 'permanent' : 'transient'
+      return { outcome, status: res.status, errorText }
+    }
+    // A 200 whose body won't parse is a proxy/captive-portal error page, not an
+    // answer about the repo — transient, so it is never cached as "no data".
+    const data = await readResponseJson(res, { fallback: null })
+    return data == null
+      ? { outcome: 'transient', status: res.status, errorText: 'unparseable response body' }
+      : { outcome: 'ok', data }
+  })
 }
 
 // `filter` is a Hugging Face library tag — 'gguf' for the GGUF query, 'mlx' for
@@ -717,21 +755,21 @@ async function fetchModels(search, limit, filter) {
   })
   if (filter) params.set('filter', filter)
 
-  const response = await hfFetch(`${HF_API_BASE}?${params.toString()}`)
-  if (!response.ok) {
-    const text = await response.text().catch(() => '')
-    throw new Error(`Hugging Face search failed: ${response.status}${text ? ` — ${text.slice(0, 160)}` : ''}`)
+  const result = await hfSearchGate.run(() => hfFetch(`${HF_API_BASE}?${params.toString()}`))
+  if (result.outcome !== 'ok') {
+    const detail = result.errorText ? ` — ${result.errorText.slice(0, 160)}` : ''
+    throw new Error(`Hugging Face search failed: ${result.status}${detail}`)
   }
-  const data = await readResponseJson(response, { fallback: [] })
-  return Array.isArray(data) ? data : []
+  return Array.isArray(result.data) ? result.data : []
 }
 
 const repoModelCache = new Map()
 const REPO_MODEL_CACHE_MAX = 500
-// A transient fetch failure (network down / timeout / malformed body) — distinct
-// from a genuine HTTP non-OK (404 / gated / private). The former must NOT be
-// cached (it would permanently disable enrichment for the process until HF
-// recovers); the latter is a real "no data" answer worth caching.
+// A connection-level failure (network down / both retry attempts dropped) —
+// distinct both from a durable no-data answer (401/403/404/410, cacheable) and
+// from a transient HTTP status (429/5xx), which `hfFetch` reports as
+// `outcome: 'transient'`. Neither transient form may be cached: doing so would
+// disable enrichment for the repo until the TTL expires, a week later.
 const TRANSIENT_FETCH = Symbol('transient-fetch')
 
 // Fetch (and cache) the per-model record WITH per-file sizes. The search
@@ -743,10 +781,12 @@ const TRANSIENT_FETCH = Symbol('transient-fetch')
 // for all of them after every restart, self-update, or dev reload. Steady state
 // on that path is zero network.
 //
-// `null` = fetched-but-unavailable (gated / private / 404), cached at both tiers
-// (per the absent-vs-empty sentinel rule) so a sizeless repo isn't re-probed
-// every search. A transient failure returns null too but is NOT cached, so a
-// recovered Hub re-enriches on the next request instead of staying blank.
+// `null` = fetched-but-unavailable, and it is cached at both tiers (per the
+// absent-vs-empty sentinel rule) so a sizeless repo isn't re-probed every search
+// — but ONLY when the Hub gave a durable answer (401/403/404/410). A rate limit,
+// a 5xx, or a dropped connection also returns null and is NOT cached, so a
+// recovered Hub re-enriches on the next request instead of staying blank for the
+// week the disk TTL would otherwise hold it.
 async function fetchRepoModel(repoId) {
   if (repoModelCache.has(repoId)) return repoModelCache.get(repoId)
   return repoModelFlight.run(repoId, async () => {
@@ -760,10 +800,15 @@ async function fetchRepoModel(repoId) {
     // repoId comes from the HF search response (untrusted upstream) — encode each
     // path segment so a `?`/`#`/`..` in the id can't reshape the request path/query.
     const safeRepoPath = String(repoId).split('/').map(encodeURIComponent).join('/')
-    const model = await hfFetch(`${HF_API_BASE}/${safeRepoPath}?blobs=true`)
-      .then((res) => (res.ok ? res.json() : null))
+    const result = await hfFetch(`${HF_API_BASE}/${safeRepoPath}?blobs=true`)
       .catch(() => TRANSIENT_FETCH)
-    if (model === TRANSIENT_FETCH) return null // transient — return null but don't cache
+    // Transient — a rate limit, a 5xx, or a dropped connection. Return null so
+    // this load degrades gracefully, but do NOT cache it: persisting a transient
+    // as "no data" would bake a bad moment into the disk tier for the full TTL,
+    // and a restart would no longer clear it the way the old memory-only cache did.
+    if (result === TRANSIENT_FETCH || result.outcome === 'transient') return null
+    // 'permanent' (gated / private / gone) IS a real answer — cache the null.
+    const model = result.outcome === 'ok' ? result.data : null
     rememberRepoModel(repoId, model)
     await writeCachedRepoModel(repoId, model)
     return model
