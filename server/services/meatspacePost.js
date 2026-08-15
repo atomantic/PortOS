@@ -37,7 +37,7 @@ import { applySessionToReviewSchedule, getDueReviews, getRetentionReport } from 
 import { getAllTrainingEntries } from './postTrainingLogStore.js';
 import { getMorseProgress, MAX_KOCH_LEVEL } from './meatspacePostMorse.js';
 import { computePostStreaks, computeUnifiedStreak, normalizeYmd, ymdToUTC, ymdShift } from '../lib/postStreak.js';
-import { userLocalToday as localToday } from '../lib/timezone.js';
+import { getUserTimezone, todayInTimezone, userLocalToday as localToday } from '../lib/timezone.js';
 
 // Re-export the shared streak helper so existing importers of
 // `computePostStreaks` from this module keep working after it moved to
@@ -241,8 +241,13 @@ async function loadSessions({ strict = false } = {}) {
 export async function getPostSessions(from, to, options) {
   const data = await loadSessions(options);
   let sessions = data.sessions;
-  if (from) sessions = sessions.filter(s => s.date >= from);
-  if (to) sessions = sessions.filter(s => s.date <= to);
+  if (from || to) {
+    const timezone = await getUserTimezone();
+    sessions = sessions.filter((session) => {
+      const date = normalizeYmd(session?.date, timezone);
+      return date && (!from || date >= from) && (!to || date <= to);
+    });
+  }
   return sessions;
 }
 
@@ -641,16 +646,17 @@ export function deriveTaskAvgResponseMs(task) {
 
 export async function getPostStats(days = 30) {
   const sessions = await getPostSessions();
-  const todayStr = await localToday();
+  const timezone = await getUserTimezone();
+  const todayStr = todayInTimezone(timezone);
   // Streaks are computed over ALL history, independent of the stats window, and
   // over BOTH scored sessions and the training log so the launcher/dashboard
   // streak matches the Morse trainer and the Progress page (issue #2091).
   // `completedToday`/`todayScore` stay SCORED-session specific — they answer
   // "did you complete a scored POST today / what did you score", which a
   // practice-only day legitimately doesn't satisfy.
-  const sessionStreaks = computePostStreaks(sessions, todayStr);
+  const sessionStreaks = computePostStreaks(sessions, todayStr, timezone);
   const training = await getAllTrainingEntries();
-  const unified = computeUnifiedStreak(sessions, training, todayStr);
+  const unified = computeUnifiedStreak(sessions, training, todayStr, timezone);
   const streaks = {
     ...sessionStreaks,
     currentStreak: unified.current,
@@ -662,7 +668,10 @@ export async function getPostStats(days = 30) {
     // Window the stats relative to the user's local today (day-string math via
     // UTC midnight, DST-safe) so the cutoff matches the tz-correct session dates.
     const cutoffStr = ymdShift(todayStr, -days);
-    recent = sessions.filter(s => s.date >= cutoffStr);
+    recent = sessions.filter(s => {
+      const date = normalizeYmd(s?.date, timezone);
+      return date && date >= cutoffStr;
+    });
   }
 
   if (recent.length === 0) {
@@ -775,21 +784,32 @@ function finalizeMetricSeries(map) {
  * fallback for legacy sessions.
  */
 export async function getPostProgress({ days = 90 } = {}) {
-  const todayStr = await localToday();
+  const timezone = await getUserTimezone();
+  const todayStr = todayInTimezone(timezone);
   const window = Number.isFinite(days) && days > 0 ? Math.min(days, 365) : 0;
 
   const allSessions = await getPostSessions();
   const allTraining = await getAllTrainingEntries();
 
   // Unified streak is computed over ALL history, independent of the window.
-  const streak = computeUnifiedStreak(allSessions, allTraining, todayStr);
+  const streak = computeUnifiedStreak(allSessions, allTraining, todayStr, timezone);
 
   let cutoffStr = null;
   if (window > 0) {
     cutoffStr = new Date(ymdToUTC(todayStr) - window * 86400000).toISOString().split('T')[0];
   }
-  const sessions = cutoffStr ? allSessions.filter(s => (s.date || '') >= cutoffStr) : allSessions;
-  const training = cutoffStr ? allTraining.filter(e => String(e.date || '').split('T')[0] >= cutoffStr) : allTraining;
+  const sessions = cutoffStr
+    ? allSessions.filter(s => {
+      const date = normalizeYmd(s?.date, timezone);
+      return date && date >= cutoffStr;
+    })
+    : allSessions;
+  const training = cutoffStr
+    ? allTraining.filter(e => {
+      const date = normalizeYmd(e?.date, timezone);
+      return date && date >= cutoffStr;
+    })
+    : allTraining;
 
   // Per-day buckets for the headline trends, plus per-domain/per-drill series.
   const dayMap = new Map();      // date -> { scores, accs, resp, minutes, sessions }
@@ -803,7 +823,7 @@ export async function getPostProgress({ days = 90 } = {}) {
   };
 
   for (const s of sessions) {
-    const date = s.date;
+    const date = normalizeYmd(s?.date, timezone);
     if (!date) continue;
     const day = ensureDay(date);
     day.sessions += 1;
@@ -829,7 +849,7 @@ export async function getPostProgress({ days = 90 } = {}) {
   // Practice time (Morse / memory) folds into each day's minutes — a practice-
   // only day still shows time-in-training even with no scored session.
   for (const e of training) {
-    const date = String(e.date || '').split('T')[0];
+    const date = normalizeYmd(e?.date, timezone);
     if (!date) continue;
     ensureDay(date).minutes += (e.totalMs || 0) / 60000;
   }
@@ -1066,29 +1086,30 @@ export function memoryItemIdFromReview(review) {
  * @param {Array} sessions - all scored sessions (`{ date, tasks: [{ type }] }`)
  * @param {Array} trainingEntries - all training-log entries
  * @param {string|null} todayStr - the user's local `YYYY-MM-DD`
+ * @param {string} [timezone] - user timezone for re-keying legacy ISO dates
  * @returns {{ drillTypes: Set<string>, memoryItemIds: Set<string>, completedSession: boolean }}
  */
-export function practicedTodayFromActivity(sessions = [], trainingEntries = [], todayStr = null) {
+export function practicedTodayFromActivity(sessions = [], trainingEntries = [], todayStr = null, timezone) {
   const drillTypes = new Set();
   const memoryItemIds = new Set();
   let completedSession = false;
   // No resolvable local day ⇒ report nothing practiced rather than guessing, so
   // the routine degrades to its pre-#3563 ordering instead of silently demoting.
-  const today = normalizeYmd(todayStr);
+  const today = normalizeYmd(todayStr, timezone);
   if (!today) return { drillTypes, memoryItemIds, completedSession };
 
   // Both feeds go through normalizeYmd: session dates are stored as the day
   // prefix already, but some training-log entries (memory practice) carry a full
   // ISO timestamp, and a raw `!==` would read those as not-practiced.
   for (const session of sessions || []) {
-    if (normalizeYmd(session?.date) !== today) continue;
+    if (normalizeYmd(session?.date, timezone) !== today) continue;
     completedSession = true;
     for (const task of session.tasks || []) {
       if (task?.type) drillTypes.add(task.type);
     }
   }
   for (const entry of trainingEntries || []) {
-    if (normalizeYmd(entry?.date) !== today) continue;
+    if (normalizeYmd(entry?.date, timezone) !== today) continue;
     // Training entries are two shapes sharing one log: drill practice carries
     // `drillType`, memory practice carries `memoryItemId` + `mode`.
     if (entry.drillType) drillTypes.add(entry.drillType);
@@ -1277,7 +1298,7 @@ export function isRecDrillRunnable(config, module, type, memoryItemId = null) {
  * config can actually run.
  */
 export async function getPostRecommendations({ limit = RECOMMENDATION_LIMIT } = {}) {
-  const [dueMemoryItems, dueReviews, stats, mulProgress, powersProgress, cogProgress, morse, sessions, config, training, todayStr] = await Promise.all([
+  const [dueMemoryItems, dueReviews, stats, mulProgress, powersProgress, cogProgress, morse, sessions, config, training, timezone] = await Promise.all([
     getDueMemoryItems(),
     getDueReviews(new Date(), Infinity),
     getPostStats(MASTERY_DEFAULTS.windowDays),
@@ -1288,8 +1309,9 @@ export async function getPostRecommendations({ limit = RECOMMENDATION_LIMIT } = 
     getPostSessions(),
     getPostConfig(),
     getAllTrainingEntries(),
-    localToday(),
+    getUserTimezone(),
   ]);
+  const todayStr = todayInTimezone(timezone);
 
   // Weakest skill — drop it unless the drill is currently runnable; a memory
   // weak-skill deep-links to its own tab rather than a composed session.
@@ -1339,7 +1361,7 @@ export async function getPostRecommendations({ limit = RECOMMENDATION_LIMIT } = 
       weakestSkill,
       stalled,
       hasHistory: sessions.length > 0,
-      practicedToday: practicedTodayFromActivity(sessions, training, todayStr),
+      practicedToday: practicedTodayFromActivity(sessions, training, todayStr, timezone),
       limit,
     }),
   };
@@ -1546,7 +1568,9 @@ async function getMultiplicationLevelStats(windowDays = MASTERY_DEFAULTS.windowD
   // Window off the user's local today (DST-safe day math) so the cutoff stays
   // consistent with the tz-correct session dates submitPostSession now stamps
   // (issue #2681) — a UTC-day cutoff would skew the window edge by the tz offset.
-  const cutoffStr = windowDays > 0 ? ymdShift(await localToday(), -windowDays) : null;
+  const timezone = await getUserTimezone();
+  const todayStr = todayInTimezone(timezone);
+  const cutoffStr = windowDays > 0 ? ymdShift(todayStr, -windowDays) : null;
 
   const byLevel = {};
   let floorLevel = 0;
@@ -1560,7 +1584,8 @@ async function getMultiplicationLevelStats(windowDays = MASTERY_DEFAULTS.windowD
       const anyAnswered = (task.questions || []).some(q => q?.answered != null);
       if (anyAnswered && level > floorLevel) floorLevel = level;
       // Mastery stats are windowed — skip out-of-window sessions for the buckets.
-      if (cutoffStr && session.date < cutoffStr) continue;
+      const date = normalizeYmd(session?.date, timezone);
+      if (cutoffStr && (!date || date < cutoffStr)) continue;
       const bucket = byLevel[level] || (byLevel[level] = { samples: 0, correct: 0, totalResponseMs: 0 });
       for (const q of task.questions || []) {
         if (q?.answered == null) continue;
@@ -1586,7 +1611,9 @@ async function getMultiplicationLevelStats(windowDays = MASTERY_DEFAULTS.windowD
 
 async function getPowersLevelStats(windowDays = POWERS_MASTERY_DEFAULTS.windowDays) {
   const sessions = await getPostSessions();
-  const cutoffStr = windowDays > 0 ? ymdShift(await localToday(), -windowDays) : null;
+  const timezone = await getUserTimezone();
+  const todayStr = todayInTimezone(timezone);
+  const cutoffStr = windowDays > 0 ? ymdShift(todayStr, -windowDays) : null;
   const byLevel = {};
   let floorLevel = 0;
   for (const session of sessions) {
@@ -1596,7 +1623,8 @@ async function getPowersLevelStats(windowDays = POWERS_MASTERY_DEFAULTS.windowDa
       if (level == null) continue;
       const anyAnswered = (task.questions || []).some(question => question?.answered != null);
       if (anyAnswered && level > floorLevel) floorLevel = level;
-      if (cutoffStr && session.date < cutoffStr) continue;
+      const date = normalizeYmd(session?.date, timezone);
+      if (cutoffStr && (!date || date < cutoffStr)) continue;
       for (const question of task.questions || []) {
         if (question?.answered == null) continue;
         const match = typeof question.prompt === 'string' ? question.prompt.match(/^(\d+)\^(\d+)$/) : null;
@@ -1667,7 +1695,9 @@ async function getCognitiveLevelStats(type, windowDays = COGNITIVE_MASTERY_DEFAU
   const sessions = await getPostSessions();
   // Window off the user's local today (DST-safe) so the cutoff stays consistent
   // with the tz-correct session dates submitPostSession now stamps (issue #2681).
-  const cutoffStr = windowDays > 0 ? ymdShift(await localToday(), -windowDays) : null;
+  const timezone = await getUserTimezone();
+  const todayStr = todayInTimezone(timezone);
+  const cutoffStr = windowDays > 0 ? ymdShift(todayStr, -windowDays) : null;
 
   const byLevel = {};
   let floorLevel = 0;
@@ -1681,7 +1711,8 @@ async function getCognitiveLevelStats(type, windowDays = COGNITIVE_MASTERY_DEFAU
       const reached = ((task.totalCount ?? (task.questions?.length || 0)) > 0);
       if (reached && level > floorLevel) floorLevel = level;
       // Mastery stats are windowed.
-      if (cutoffStr && session.date < cutoffStr) continue;
+      const date = normalizeYmd(session?.date, timezone);
+      if (cutoffStr && (!date || date < cutoffStr)) continue;
       const acc = Number.isFinite(task.accuracy) ? task.accuracy : null;
       if (acc == null) continue;
       // Skip low-completion runs: accuracy is answered-only, so a run that

@@ -214,6 +214,32 @@ describe('getTrainingStats', () => {
       settingsState.current = { timezone: 'UTC' };
     }
   });
+
+  it('uses the user-local day for legacy ISO entries in windows and active-day counts', async () => {
+    settingsState.current = { timezone: 'Asia/Tokyo' };
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-18T00:30:00.000Z'));
+    try {
+      readJSONFile.mockResolvedValue({
+        entries: [{
+          date: '2026-07-16T15:30:00.000Z',
+          module: 'morse',
+          drillType: 'morse-copy',
+          questionCount: 5,
+          correctCount: 4,
+          totalMs: 60000,
+        }],
+      });
+
+      const stats = await getTrainingStats(1);
+      expect(stats.totalEntries).toBe(1); // July 17 in Tokyo; raw UTC prefix is July 16.
+      expect(stats.activeDays).toBe(1);
+      expect(stats.byDrill['morse:morse-copy'].daysActive).toBe(1);
+    } finally {
+      vi.useRealTimers();
+      settingsState.current = { timezone: 'UTC' };
+    }
+  });
 });
 
 describe('getTrainingEntries', () => {

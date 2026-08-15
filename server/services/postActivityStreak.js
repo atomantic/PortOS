@@ -15,7 +15,7 @@
  */
 import { getPostSessions } from './meatspacePost.js';
 import { computeUnifiedStreak } from '../lib/postStreak.js';
-import { userLocalToday as localToday } from '../lib/timezone.js';
+import { getUserTimezone, todayInTimezone } from '../lib/timezone.js';
 
 /**
  * ONE unified activity streak across scored sessions AND the training log — the
@@ -29,9 +29,11 @@ import { userLocalToday as localToday } from '../lib/timezone.js';
  *   rather than fetched here so this module doesn't need to import
  *   meatspacePostTraining.js — see the module docblock above.
  * @param {string} [todayStr] - defaults to the user's local today.
+ * @param {string} [timezone] - defaults to the user's configured timezone.
  */
-export async function getUnifiedActivityStreak(training, todayStr) {
-  const day = todayStr ?? await localToday();
+export async function getUnifiedActivityStreak(training, todayStr, timezone) {
+  const resolvedTimezone = timezone ?? await getUserTimezone();
+  const day = todayStr ?? todayInTimezone(resolvedTimezone);
   const sessions = await getPostSessions();
-  return computeUnifiedStreak(sessions, training, day);
+  return computeUnifiedStreak(sessions, training, day, resolvedTimezone);
 }

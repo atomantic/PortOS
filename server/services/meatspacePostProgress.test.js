@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Route file reads by path so getPostProgress sees sessions, the training log,
 // and memory items independently (all share the same mocked fileUtils).
@@ -21,8 +21,9 @@ vi.mock('../lib/fileUtils.js', () => ({
 // getUserTimezone (via ../lib/timezone.js) reads getSettings() for the local-day
 // boundary (issue #2681). Pin it to UTC so "today" is the UTC day regardless of
 // the runner's own system timezone — matching these tests' UTC-today assumptions.
+const settingsState = vi.hoisted(() => ({ timezone: 'UTC' }));
 vi.mock('../services/settings.js', () => ({
-  getSettings: () => Promise.resolve({ timezone: 'UTC' }),
+  getSettings: () => Promise.resolve(settingsState),
 }));
 
 import { getPostProgress, getPostStats } from './meatspacePost.js';
@@ -40,6 +41,11 @@ beforeEach(() => {
   state.sessions = [];
   state.training = [];
   state.memoryItems = [];
+  settingsState.timezone = 'UTC';
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('getPostProgress bucketing', () => {
@@ -94,6 +100,26 @@ describe('getPostProgress bucketing', () => {
     expect(day.sessions).toBe(0);
     expect(day.score).toBeNull();
     expect(day.minutes).toBe(2);
+  });
+
+  it('uses the user-local day for legacy ISO training buckets and windows', async () => {
+    settingsState.timezone = 'Asia/Tokyo';
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-18T00:30:00.000Z'));
+    state.training = [{
+      date: '2026-07-16T15:30:00.000Z',
+      module: 'morse',
+      drillType: 'morse-copy',
+      questionCount: 5,
+      correctCount: 4,
+      totalMs: 60000,
+    }];
+
+    const p = await getPostProgress({ days: 1 });
+    expect(p.totals.practiceEntries).toBe(1); // July 17 in Tokyo; raw UTC prefix is July 16.
+    expect(p.series.byDay).toEqual([
+      expect.objectContaining({ date: '2026-07-17', minutes: 1, sessions: 0 }),
+    ]);
   });
 
   it('builds per-domain and per-drill series keyed correctly', async () => {

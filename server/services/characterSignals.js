@@ -71,10 +71,11 @@ export const SIGNAL_READERS = {
   // a day for any user whose configured timezone isn't the server's.
   postToday: () => userLocalToday(),
   // The user's IANA timezone itself, for consumers that must re-key a stored INSTANT to the
-  // user's day rather than just compare against today (`daysActive` — see
-  // `server/lib/activeDays.js`). Same settings read `postToday` bottoms out in, so keeping it
-  // as its own signal costs one extra `getSettings()` per request and keeps the day-boundary
-  // decision in ONE place instead of forking a second "which day is this?" implementation.
+  // user's day rather than just compare against today (`daysActive` and `postStreakDays` — see
+  // `server/lib/activeDays.js` and `server/lib/postStreak.js`). Same settings read `postToday`
+  // bottoms out in, so keeping it as its own signal costs one extra `getSettings()` per request
+  // and keeps the day-boundary decision in ONE place instead of forking a second "which day is
+  // this?" implementation.
   userTimezone: () => getUserTimezone(),
   // `withActiveDayKeys` (#4120): the raw union of stored health-log day keys, which the
   // cross-domain `daysActive` metric unions with POST's days. Opt-in at the service so the

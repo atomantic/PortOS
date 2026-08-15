@@ -205,6 +205,19 @@ describe('getCharacterMetrics — populated domains', () => {
     expect(userLocalToday).toHaveBeenCalled();
   });
 
+  it('re-keys legacy POST instants with the same timezone as Days Active', async () => {
+    stats.today = '2026-07-18';
+    stats.timezone = 'America/Los_Angeles';
+    stats.training = [
+      { date: '2026-07-17T09:00:00.000Z' },
+      { date: '2026-07-18T02:00:00.000Z' },
+    ];
+
+    expect(byId(await getCharacterMetrics(), 'postStreakDays')).toMatchObject({
+      value: 1, unavailable: false,
+    });
+  });
+
   it('reports a broken POST streak as a real 0, not as unavailable', async () => {
     stats.today = '2026-07-17';
     stats.sessions = [{ date: '2026-01-01' }]; // active once, long ago

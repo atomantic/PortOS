@@ -14,6 +14,28 @@ describe('computePostStreaks (shared helper)', () => {
     expect(r.lastDate).toBe('2026-06-28');
   });
 
+  it('keys legacy instants to the user-local day while preserving bare day labels', () => {
+    // The pair crosses UTC midnight: it is still July 17 in Los Angeles, but July 17 and 18
+    // in Tokyo. The same local boundary must drive both the streak and active-days tile.
+    const legacy = [
+      rec('2026-07-17T09:00:00.000Z'),
+      rec('2026-07-18T02:00:00.000Z'),
+    ];
+
+    const behindUtc = computePostStreaks(legacy, '2026-07-18', 'America/Los_Angeles');
+    expect(behindUtc).toMatchObject({ currentStreak: 1, longestStreak: 1, lastDate: '2026-07-17' });
+
+    const aheadOfUtc = computePostStreaks(legacy, '2026-07-18', 'Asia/Tokyo');
+    expect(aheadOfUtc).toMatchObject({ currentStreak: 2, longestStreak: 2, lastDate: '2026-07-18' });
+
+    const bareLabels = computePostStreaks(
+      [rec('2026-07-17'), rec('2026-07-18')],
+      '2026-07-18',
+      'America/Los_Angeles'
+    );
+    expect(bareLabels).toMatchObject({ currentStreak: 2, longestStreak: 2, lastDate: '2026-07-18' });
+  });
+
   it('honors the grace window (today not done, yesterday done)', () => {
     const r = computePostStreaks([rec('2026-06-26'), rec('2026-06-27')], '2026-06-28');
     expect(r.completedToday).toBe(false);

@@ -1,0 +1,1 @@
+- POST streaks and activity statistics now use the user's local day for legacy timestamped practice.

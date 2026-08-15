@@ -23,11 +23,12 @@ vi.mock('../lib/fileUtils.js', () => ({
   }),
 }));
 
-// getPostStats (via getPostRecommendations) derives the local day through
-// getUserTimezone → getSettings (issue #2681). Pin it to UTC so the day boundary
-// is the UTC day regardless of the runner's own system timezone.
+// POST recommendation and stats day keys derive from getUserTimezone → getSettings
+// (issue #2681). Pin it to UTC by default so the day boundary is deterministic;
+// tz-specific tests set the mutable state below.
+const settingsState = vi.hoisted(() => ({ timezone: 'UTC' }));
 vi.mock('../services/settings.js', () => ({
-  getSettings: () => Promise.resolve({ timezone: 'UTC' }),
+  getSettings: () => Promise.resolve(settingsState),
 }));
 
 import {
@@ -50,7 +51,12 @@ beforeEach(() => {
   state.reviewSchedule = { skills: {} };
   state.morse = { kochLevel: null, settings: null, rounds: [] };
   state.config = {};
+  settingsState.timezone = 'UTC';
   atomicWrite.mockClear();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 // Read back the config object written to post-config.json by the most recent
@@ -438,6 +444,14 @@ describe('practicedTodayFromActivity', () => {
     expect([...done.drillTypes]).toEqual(['morse-copy']);
   });
 
+  it('normalizes legacy ISO activity through the configured timezone', () => {
+    const done = practicedTodayFromActivity([
+      { date: '2026-07-17T15:30:00.000Z', tasks: [{ type: 'digit-span' }] },
+    ], [], '2026-07-18', 'Asia/Tokyo');
+    expect([...done.drillTypes]).toEqual(['digit-span']);
+    expect(done.completedSession).toBe(true);
+  });
+
   it('reports nothing practiced when the local day cannot be resolved', () => {
     const done = practicedTodayFromActivity([{ date: '2026-08-05', tasks: [{ type: 'digit-span' }] }], [], null);
     expect(done.drillTypes.size).toBe(0);
@@ -575,6 +589,26 @@ describe('getPostRecommendations (integration)', () => {
     // Something the user has NOT done today outranks it, so the routine advances.
     expect(recommendations[0].practicedToday).toBe(false);
     expect(recommendations[0].drillType).not.toBe('digit-span');
+  });
+
+  it('uses the configured local day for legacy session dates', async () => {
+    settingsState.timezone = 'Asia/Tokyo';
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-18T00:30:00.000Z'));
+    state.sessions = [{
+      id: 'legacy-local-day',
+      date: '2026-07-17T15:30:00.000Z',
+      score: 60,
+      durationMs: 60000,
+      tasks: [{ module: 'cognitive', type: 'digit-span', score: 60, accuracy: 0.4, completion: 1 }],
+    }];
+    state.morse = { kochLevel: 3, settings: { kochLevel: 3 }, rounds: [] };
+    state.config = { memory: { enabled: false }, topics: { memory: { enabled: false } } };
+
+    const { recommendations } = await getPostRecommendations();
+    const digitSpan = recommendations.filter(r => r.drillType === 'digit-span');
+    expect(digitSpan.length).toBeGreaterThan(0);
+    for (const rec of digitSpan) expect(rec.practicedToday).toBe(true);
   });
 
   it('never returns an empty list on a fresh install', async () => {

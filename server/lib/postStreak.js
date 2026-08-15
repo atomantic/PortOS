@@ -10,12 +10,19 @@
  * circular dependency back into meatspacePost.js.
  */
 
-// A date key is always the local `YYYY-MM-DD` prefix. Session dates are stored
-// that way already; some training-log entries (memory practice) store a full
-// ISO timestamp, so normalize both to the day prefix before any set math.
-export function normalizeYmd(value) {
+import { toUserDayKey } from './activeDays.js';
+
+/**
+ * Normalize a stored day label or legacy ISO instant.
+ *
+ * @param {unknown} value - a bare day label or full ISO timestamp
+ * @param {string} [timezone] - user timezone for re-keying legacy instants
+ * @returns {string|null} a day key, or null for an absent/invalid timezone-aware value
+ */
+export function normalizeYmd(value, timezone) {
   if (!value) return null;
-  return String(value).split('T')[0];
+  const raw = String(value);
+  return timezone && raw.includes('T') ? toUserDayKey(raw, timezone) : raw.split('T')[0];
 }
 
 // Local-date arithmetic on `YYYY-MM-DD` strings via UTC midnight so day math
@@ -42,15 +49,19 @@ export function ymdShift(s, deltaDays) {
  * - `longestStreak`   — longest consecutive-day run in all history
  * - `lastDate`        — most recent record date (null if never active)
  * - `todayScore`      — best record score recorded today (null if none)
+ *
+ * @param {Array} records - activity records with a `date` field
+ * @param {string} todayStr - user's local `YYYY-MM-DD` today
+ * @param {string} [timezone] - user timezone for legacy ISO dates
  */
-export function computePostStreaks(records, todayStr) {
-  const dateSet = new Set((records || []).map(s => normalizeYmd(s?.date)).filter(Boolean));
+export function computePostStreaks(records, todayStr, timezone) {
+  const dateSet = new Set((records || []).map(s => normalizeYmd(s?.date, timezone)).filter(Boolean));
   const dates = Array.from(dateSet).sort();
   const completedToday = dateSet.has(todayStr);
   const lastDate = dates.length ? dates[dates.length - 1] : null;
 
   const todayScores = (records || [])
-    .filter(s => normalizeYmd(s?.date) === todayStr && typeof s?.score === 'number')
+    .filter(s => normalizeYmd(s?.date, timezone) === todayStr && typeof s?.score === 'number')
     .map(s => s.score);
   const todayScore = todayScores.length ? Math.max(...todayScores) : null;
 
@@ -80,12 +91,17 @@ export function computePostStreaks(records, todayStr) {
  * memory practice). Reuses `computePostStreaks` so the DST-safe grace-window
  * semantics are identical to the scored-session streak. Returns the progress-API
  * shape (`current` / `longest` / `lastActiveDate`).
+ *
+ * @param {Array} sessions - scored POST sessions
+ * @param {Array} trainingEntries - training-log entries
+ * @param {string} todayStr - user's local `YYYY-MM-DD` today
+ * @param {string} [timezone] - user timezone for legacy ISO dates
  */
-export function computeUnifiedStreak(sessions, trainingEntries, todayStr) {
+export function computeUnifiedStreak(sessions, trainingEntries, todayStr, timezone) {
   const activity = [
     ...(sessions || []).map(s => ({ date: s?.date })),
     ...(trainingEntries || []).map(e => ({ date: e?.date })),
   ];
-  const { currentStreak, longestStreak, lastDate } = computePostStreaks(activity, todayStr);
+  const { currentStreak, longestStreak, lastDate } = computePostStreaks(activity, todayStr, timezone);
   return { current: currentStreak, longest: longestStreak, lastActiveDate: lastDate };
 }

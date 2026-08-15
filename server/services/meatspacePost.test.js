@@ -42,6 +42,7 @@ import {
   getMultiplicationProgress,
   getAdaptivePreview,
   getPostStats,
+  getPostSessions,
   deriveTaskAccuracy,
   deriveTaskCompletion,
   getCognitiveProgress,
@@ -955,6 +956,11 @@ describe('resolveDrillConfig — progressive multiplication', () => {
     vi.clearAllMocks();
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+    settingsState.current = { timezone: 'UTC' };
+  });
+
   it('starts a fresh user at level 0 (single×single) and strips maxDigits', async () => {
     mockSessions([]);
     const { config, progression } = await resolveDrillConfig('multiplication', { count: 10, maxDigits: 2 });
@@ -996,6 +1002,16 @@ describe('resolveDrillConfig — progressive multiplication', () => {
     expect(progression.level).toBe(2);
     expect(progression.floorLevel).toBe(2);
     expect(config.factors).toEqual([1, 1, 1]);
+  });
+
+  it('includes legacy ISO sessions whose user-local day is at the window edge', async () => {
+    settingsState.current = { timezone: 'Asia/Tokyo' };
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-18T00:30:00.000Z'));
+    mockSessions([masteredSession(0, 14, 2500, '2026-06-17T15:30:00.000Z')]);
+
+    const progression = await getMultiplicationProgress();
+    expect(progression.level).toBe(1);
   });
 
   it('getMultiplicationProgress exposes the full ladder + thresholds', async () => {
@@ -1283,6 +1299,7 @@ describe('adaptive signal is accuracy-driven — fast-sloppy vs slow-accurate di
 
 describe('getPostStats — byModule averaging, days window cutoff, empty-window shape', () => {
   beforeEach(() => { vi.clearAllMocks(); });
+  afterEach(() => { settingsState.current = { timezone: 'UTC' }; });
 
   function mockSessions(sessions) {
     readJSONFile.mockImplementation((path, defaultValue) => {
@@ -1325,6 +1342,16 @@ describe('getPostStats — byModule averaging, days window cutoff, empty-window 
     const stats = await getPostStats(days);
     expect(stats.sessionCount).toBe(1);
     expect(stats.overall).toBe(100);
+  });
+
+  it('filters legacy ISO session history by the configured local day', async () => {
+    settingsState.current = { timezone: 'America/Los_Angeles' };
+    mockSessions([
+      { date: '2026-07-18T00:30:00.000Z', score: 100, tasks: [] },
+    ]);
+
+    const sessions = await getPostSessions('2026-07-17', '2026-07-17');
+    expect(sessions).toHaveLength(1);
   });
 
   it('returns the zeroed empty-window shape when nothing falls inside the window, but streaks still pass through from all-time history', async () => {
@@ -1423,6 +1450,18 @@ describe('getPostStats / submitPostSession — timezone-correct day boundary (is
     // Old UTC logic derived today='2026-07-15' → would have read completedToday=false.
     expect(stats.completedToday).toBe(true);
     expect(stats.todayScore).toBe(72);
+  });
+
+  it('uses the user-local day for legacy ISO sessions in the stats window (Asia/Tokyo)', async () => {
+    // The instant is July 17 in Tokyo but its UTC prefix is July 16. A one-day
+    // local window ending July 18 must still include it.
+    freezeAt('2026-07-18T00:30:00Z', 'Asia/Tokyo');
+    mockSessions([
+      { date: '2026-07-16T15:30:00.000Z', score: 84, tasks: [{ module: 'mental-math', type: 'doubling-chain', score: 84 }] },
+    ]);
+    const stats = await getPostStats(1);
+    expect(stats.sessionCount).toBe(1);
+    expect(stats.overall).toBe(84);
   });
 
   it('submitPostSession stamps a new session date in the user local timezone, not the server UTC day', async () => {

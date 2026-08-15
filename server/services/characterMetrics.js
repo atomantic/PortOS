@@ -84,12 +84,13 @@ export const METRICS = [
     // day boundary) the Progress page and the dashboard widgets use, so the Character sheet
     // can't quote a different streak than the rest of PortOS (#2091).
     compute: async (read) => {
-      const [sessions, training, today] = await Promise.all([
+      const [sessions, training, today, timezone] = await Promise.all([
         read('postSessions'),
         read('postTraining'),
         read('postToday'),
+        read('userTimezone'),
       ]);
-      return computeUnifiedStreak(sessions, training, today).current;
+      return computeUnifiedStreak(sessions, training, today, timezone).current;
     },
   },
   {
@@ -115,13 +116,8 @@ export const METRICS = [
     // documents exactly what it can and cannot fix — notably that a stored bare day LABEL is
     // taken as authored, because no instant survives to re-derive it from.
     //
-    // KNOWN DIVERGENCE (#4211): `postStreakDays` above resolves its day keys through
-    // `postStreak.js`'s `normalizeYmd`, which still takes the UTC day (`split('T')[0]`). For
-    // the bare `YYYY-MM-DD` keys every writer has stamped since #2681 the two agree exactly;
-    // they can disagree only on a LEGACY full-ISO entry straddling UTC midnight, where this
-    // tile is the correct one and the streak is not. Aligning the shared streak helper is
-    // cross-cutting (it feeds the Progress page and the dashboard widgets too), so it is
-    // tracked separately rather than smuggled in here.
+    // The shared streak helper re-keys legacy full-ISO entries through the same user-local
+    // boundary as this union, while bare `YYYY-MM-DD` labels remain authored day keys.
     //
     // Missing keys are a FAILED read, not an idle install: each source is validated as an
     // array and a throw here lands in `readMetric`'s `unavailable`, so a shape mismatch can
