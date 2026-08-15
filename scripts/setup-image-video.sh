@@ -43,6 +43,10 @@ venv_python() {
   fi
 }
 
+# True if a venv at $1 already has an interpreter under either layout —
+# shared with venv_python so the two probes can't drift apart.
+venv_exists() { [[ -x "$1/bin/python3" || -x "$1/Scripts/python.exe" ]]; }
+
 # Check out a pin (a commit SHA, tag, or branch name) in an already-fetched
 # clone. A bare `git checkout <branch>` lands on the *local* branch created at
 # clone time, which `git fetch origin` never advances — so re-running with a
@@ -468,7 +472,7 @@ if [[ "$INSTALL_MINIMAX_H3_CUDA" == "1" ]]; then
   # A Windows venv puts the interpreter under Scripts/, a POSIX one under bin/.
   # Probe for either rather than branching on `uname`, so an MSYS/Cygwin bash on
   # Windows (which is what the in-app installer runs) resolves correctly.
-  if [[ ! -x "$MINIMAX_H3_CUDA_VENV/bin/python3" && ! -x "$MINIMAX_H3_CUDA_VENV/Scripts/python.exe" ]]; then
+  if ! venv_exists "$MINIMAX_H3_CUDA_VENV"; then
     echo "📦 Creating MiniMax H3 CUDA venv..."
     "$PYTHON_BIN" -m venv "$MINIMAX_H3_CUDA_VENV"
   fi
@@ -642,7 +646,7 @@ if [[ "$INSTALL_AUDIOLDM2" == "1" ]]; then
   AUDIOLDM2_VENV="${HOME}/.portos/venv-audioldm2"
   mkdir -p "${HOME}/.portos"
 
-  if [[ ! -x "$AUDIOLDM2_VENV/bin/python3" && ! -x "$AUDIOLDM2_VENV/Scripts/python.exe" ]]; then
+  if ! venv_exists "$AUDIOLDM2_VENV"; then
     echo "📦 Creating AudioLDM2 venv at ${AUDIOLDM2_VENV}..."
     "$PYTHON_BIN" -m venv "$AUDIOLDM2_VENV"
   fi
@@ -688,7 +692,7 @@ if [[ "$INSTALL_ACESTEP" == "1" ]]; then
   ACESTEP_VENV="${HOME}/.portos/venv-acestep"
   mkdir -p "${HOME}/.portos"
 
-  if [[ ! -x "$ACESTEP_VENV/bin/python3" && ! -x "$ACESTEP_VENV/Scripts/python.exe" ]]; then
+  if ! venv_exists "$ACESTEP_VENV"; then
     echo "📦 Creating ACE-Step venv at ${ACESTEP_VENV}..."
     "$PYTHON_BIN" -m venv "$ACESTEP_VENV"
   fi
@@ -728,7 +732,7 @@ if [[ "$INSTALL_MINIMAX_MUSIC3" == "1" ]]; then
     echo "♻️  Existing MiniMax Music 3 venv was built from a conda base (torch can't load there) — rebuilding from ${PYTHON_BIN}."
     rm -rf "$MINIMAX_MUSIC3_VENV"
   fi
-  if [[ ! -x "$MINIMAX_MUSIC3_VENV/bin/python3" && ! -x "$MINIMAX_MUSIC3_VENV/Scripts/python.exe" ]]; then
+  if ! venv_exists "$MINIMAX_MUSIC3_VENV"; then
     "$PYTHON_BIN" -m venv "$MINIMAX_MUSIC3_VENV"
   fi
   MINIMAX_MUSIC3_PY="$(venv_python "$MINIMAX_MUSIC3_VENV")"
@@ -783,7 +787,7 @@ if [[ "$INSTALL_MUSCRIPTOR" == "1" ]]; then
   MUSCRIPTOR_VENV="${HOME}/.portos/venv-muscriptor"
   mkdir -p "${HOME}/.portos"
 
-  if [[ ! -x "$MUSCRIPTOR_VENV/bin/python3" && ! -x "$MUSCRIPTOR_VENV/Scripts/python.exe" ]]; then
+  if ! venv_exists "$MUSCRIPTOR_VENV"; then
     echo "📦 Creating MuScriptor venv at ${MUSCRIPTOR_VENV}..."
     "$PYTHON_BIN" -m venv "$MUSCRIPTOR_VENV"
   fi
@@ -814,7 +818,7 @@ if [[ "$INSTALL_FLUX2" == "1" ]]; then
   # fragile, so we use a sibling venv. server/lib/pythonSetup.js looks for
   # this venv's interpreter when the active model has runner=='flux2'.
   FLUX2_VENV="${HOME}/.portos/venv-flux2"
-  if [[ ! -x "$FLUX2_VENV/bin/python3" && ! -x "$FLUX2_VENV/Scripts/python.exe" ]]; then
+  if ! venv_exists "$FLUX2_VENV"; then
     echo "📦 Creating FLUX.2 venv at ${FLUX2_VENV}..."
     mkdir -p "${HOME}/.portos"
     "$PYTHON_BIN" -m venv "$FLUX2_VENV"

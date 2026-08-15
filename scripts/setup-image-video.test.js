@@ -9,6 +9,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SETUP_SCRIPT = join(REPO_ROOT, 'scripts', 'setup-image-video.sh');
 const source = readFileSync(SETUP_SCRIPT, 'utf8');
 const helper = source.match(/^venv_python\(\) \{\n(?:.*\n)*?^\}\n/m)?.[0];
+const existsHelper = source.match(/^venv_exists\(\) \{.*\}\n/m)?.[0];
 const tempVenvs = [];
 
 afterEach(() => {
@@ -31,9 +32,22 @@ function resolveVenvPython(venv) {
   }).trim();
 }
 
+function venvExists(venv) {
+  const result = execFileSync(
+    'bash',
+    ['-c', `${existsHelper}\nvenv_exists "$1" && echo yes || echo no`, 'bash', venv],
+    { encoding: 'utf8' }
+  ).trim();
+  return result === 'yes';
+}
+
 describe('setup-image-video venv layout handling (issue #4200)', () => {
   it('defines the shared venv interpreter resolver', () => {
     expect(helper).toBeTruthy();
+  });
+
+  it('defines the shared venv-exists predicate', () => {
+    expect(existsHelper).toBeTruthy();
   });
 
   // Windows CI runs Node directly; these bash-execution checks are POSIX-only,
@@ -52,6 +66,14 @@ describe('setup-image-video venv layout handling (issue #4200)', () => {
     expect(resolveVenvPython(venv)).toBe(interpreter);
   });
 
+  it.skipIf(process.platform === 'win32')('venv_exists is true for either layout, false for neither', () => {
+    expect(venvExists(createVenv('posix').venv)).toBe(true);
+    expect(venvExists(createVenv('windows').venv)).toBe(true);
+    const empty = mkdtempSync(join(tmpdir(), 'portos-venv-python-'));
+    tempVenvs.push(empty);
+    expect(venvExists(empty)).toBe(false);
+  });
+
   it.each([
     ['MiniMax H3 CUDA', 'MINIMAX_H3_CUDA_VENV', 'MINIMAX_H3_CUDA_PY'],
     ['AudioLDM2', 'AUDIOLDM2_VENV', 'AUDIOLDM2_PY'],
@@ -60,7 +82,22 @@ describe('setup-image-video venv layout handling (issue #4200)', () => {
     ['MuScriptor', 'MUSCRIPTOR_VENV', 'MUSCRIPTOR_PY'],
     ['FLUX.2', 'FLUX2_VENV', 'FLUX2_PY'],
   ])('%s reuses an existing Windows venv and resolves it with the helper', (_name, venv, python) => {
-    expect(source).toContain(`if [[ ! -x "$${venv}/bin/python3" && ! -x "$${venv}/Scripts/python.exe" ]]; then`);
+    expect(source).toContain(`if ! venv_exists "$${venv}"; then`);
     expect(source).toContain(`${python}="$(venv_python "$${venv}")"`);
+  });
+
+  it('has no call site that hardcodes a venv interpreter path outside the shared helpers', () => {
+    // A literal "$SOMETHING_VENV/bin/python3" assignment outside the helper
+    // definitions means a call site bypassed venv_python() and reintroduced
+    // the POSIX-only bug this file guards against — EXCEPT for venvs that are
+    // gated behind is_macos and can never be created by Windows Python, which
+    // legitimately hardcode the POSIX path: mflux (uv-managed, Apple Silicon
+    // only) and MusicGen (MLX runtime, is_macos-gated).
+    const macosOnlyVenvExemptions = ['MFLUX_VENV', 'MUSICGEN_VENV'];
+    const body = macosOnlyVenvExemptions
+      .reduce((text, name) => text.replaceAll(`\${${name}}`, '').replaceAll(`$${name}`, ''), source)
+      .replace(helper, '')
+      .replace(existsHelper, '');
+    expect(body).not.toMatch(/\$\{?\w+_VENV\}?\/bin\/python3/);
   });
 });
