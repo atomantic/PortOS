@@ -322,7 +322,10 @@ export async function initMediaJobQueue() {
     const { ok, value: data } = await readJSONFileStrict(JOBS_FILE, { jobs: [] });
     if (!ok) {
       persistBlocked = true;
-      console.error(`❌ media-job queue: ${JOBS_FILE} is present but unreadable — starting empty and NOT persisting, so the file is preserved`);
+      // Name the recovery step: the latch is process-lifetime, so without this
+      // the user has a queue that silently stops surviving restarts and no
+      // indication that repairing or deleting one file restores it.
+      console.error(`❌ media-job queue: ${JOBS_FILE} is present but unreadable — starting empty and NOT persisting so it is preserved; repair or delete it and restart to re-enable persistence`);
     }
     const persistedJobs = Array.isArray(data?.jobs) ? data.jobs : [];
     const restartedFailedIds = [];
