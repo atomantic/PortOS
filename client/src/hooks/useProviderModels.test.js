@@ -90,3 +90,101 @@ describe('useProviderModels — Antigravity base models', () => {
     ]);
   });
 });
+
+// A capability-scoped picker (vision) starts on the client-side id regex and
+// widens once the server's authoritative list resolves, so its `modelFilter`
+// identity changes AFTER the first load. Stand-in filters here: the contract
+// under test is the identity change, not any particular capability rule.
+describe('useProviderModels — a modelFilter whose identity changes', () => {
+  const LOCAL = {
+    id: 'local-backend',
+    name: 'Local Backend',
+    type: 'api',
+    enabled: true,
+    defaultModel: 'text-a',
+    models: ['text-a', 'vlm-b', 'vlm-c'],
+  };
+  const OTHER = { ...LOCAL, id: 'other-backend', name: 'Other Backend', defaultModel: 'text-a' };
+
+  // The blind first pass: knows no vision family this backend has installed.
+  const matchesNothing = () => false;
+  const matchesB = (id) => id === 'vlm-b';
+  const matchesBandC = (id) => id === 'vlm-b' || id === 'vlm-c';
+
+  const mountFiltered = async (modelFilter, providers = [LOCAL], extra = {}) => {
+    api.getProviders.mockResolvedValue({ providers });
+    const hook = renderHook(
+      ({ filterFn }) => useProviderModels({ modelFilter: filterFn, ...extra }),
+      { initialProps: { filterFn: modelFilter } },
+    );
+    await waitFor(() => expect(hook.result.current.loading).toBe(false));
+    return hook;
+  };
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it('re-picks the initial model once the filter widens', async () => {
+    const { result, rerender } = await mountFiltered(matchesNothing);
+    // The blind first pass finds nothing — the bug this guards is that the
+    // hook used to freeze here forever.
+    expect(result.current.selectedModel).toBe('');
+    expect(result.current.availableModels).toEqual([]);
+
+    rerender({ filterFn: matchesB });
+    await waitFor(() => expect(result.current.selectedModel).toBe('vlm-b'));
+    expect(result.current.availableModels).toEqual(['vlm-b']);
+  });
+
+  it('does not refetch the provider list for a filter identity change', async () => {
+    const { rerender, result } = await mountFiltered(matchesNothing);
+    expect(api.getProviders).toHaveBeenCalledTimes(1);
+
+    rerender({ filterFn: matchesB });
+    await waitFor(() => expect(result.current.selectedModel).toBe('vlm-b'));
+    expect(api.getProviders).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves a deliberate user clear alone when the filter widens', async () => {
+    const { result, rerender } = await mountFiltered(matchesB);
+    expect(result.current.selectedModel).toBe('vlm-b');
+
+    act(() => result.current.setSelectedModel(''));
+    rerender({ filterFn: matchesBandC });
+    // A clear and a "the filter matched nothing" both read as `''` — only the
+    // user-pick latch tells them apart, and the user's wins.
+    await waitFor(() => expect(result.current.availableModels).toEqual(['vlm-b', 'vlm-c']));
+    expect(result.current.selectedModel).toBe('');
+  });
+
+  it('leaves a user-picked model alone when the filter changes', async () => {
+    const { result, rerender } = await mountFiltered(matchesBandC);
+    act(() => result.current.setSelectedModel('vlm-c'));
+
+    rerender({ filterFn: matchesB });
+    await waitFor(() => expect(result.current.availableModels).toEqual(['vlm-b']));
+    expect(result.current.selectedModel).toBe('vlm-c');
+  });
+
+  it('re-arms the auto-pick after a provider change', async () => {
+    const { result, rerender } = await mountFiltered(matchesNothing, [LOCAL, OTHER]);
+    // A provider change picks through the CURRENT (still blind) filter…
+    act(() => result.current.setSelectedProviderId('other-backend'));
+    expect(result.current.selectedModel).toBe('');
+
+    // …so the widened filter must still get its say on that provider.
+    rerender({ filterFn: matchesB });
+    await waitFor(() => expect(result.current.selectedModel).toBe('vlm-b'));
+    expect(result.current.selectedProviderId).toBe('other-backend');
+  });
+
+  it('keeps the empty-model sentinel under allowDefault', async () => {
+    const { result, rerender } = await mountFiltered(matchesNothing, [LOCAL], { allowDefault: true });
+    expect(result.current.selectedProviderId).toBe('');
+    expect(result.current.selectedModel).toBe('');
+
+    rerender({ filterFn: matchesB });
+    await waitFor(() => expect(result.current.availableModels).toEqual([]));
+    // `''` is the "use the default model" choice here, never an auto-pick target.
+    expect(result.current.selectedModel).toBe('');
+  });
+});

@@ -35,6 +35,15 @@ const sourceModels = (provider, withEffort) => {
  *   set, the auto-selected / provider-change model is the first model that
  *   passes the filter rather than the provider's `defaultModel` (which may not
  *   qualify). Omit for the full selectable list.
+ *
+ *   A `modelFilter` whose IDENTITY changes is supported and expected: a vision
+ *   picker starts on the client-side id regex and widens once the server's
+ *   authoritative capability list resolves (`useVisionModelIds`). The hook then
+ *   re-runs its initial pick — without refetching the provider list — so a
+ *   selection the first, blinder filter couldn't make isn't frozen at `''`.
+ *   Once the user picks (or clears) a model, that wins and the re-pick stands
+ *   down. Memoize the predicate (`useCallback`) so it only changes when its
+ *   inputs do.
  * @param {boolean} [options.withEffort] - Set when the caller also renders an
  *   effort control (`ProviderModelSelector`'s `effort`/`onEffortChange`) and
  *   threads the value to the server. Providers whose CLI bakes the reasoning
@@ -50,6 +59,12 @@ export default function useProviderModels({ filter, allowDefault = false, silent
   const [selectedModel, setSelectedModel] = useState('');
   const [loading, setLoading] = useState(true);
   const hasSetInitialRef = useRef(false);
+  // Latched once the model is chosen deliberately — a picker change, or a
+  // caller restoring a saved pin. The auto re-pick below then stands down for
+  // good, so a deliberate CLEAR (`''`) is not silently refilled when the filter
+  // later widens; `selectedModel === ''` alone can't carry that distinction,
+  // since it is also what a filter that matched nothing produces.
+  const userPickedModelRef = useRef(false);
 
   // Resolve the model to pin when a provider is (auto-)selected. With a
   // modelFilter, the provider's defaultModel may not qualify (e.g. a vision
@@ -61,6 +76,14 @@ export default function useProviderModels({ filter, allowDefault = false, silent
       .filter((m) => modelFilter(m, provider));
     return models[0] || '';
   }, [modelFilter, withEffort]);
+
+  // `load` must NOT depend on `pickInitialModel` (and so on `modelFilter`): a
+  // caller whose filter identity changes when a capability list resolves would
+  // otherwise re-run the whole `api.getProviders()` fetch for a change that
+  // needs no new data. The ref hands the async body the freshest picker without
+  // pulling it into the dependency list.
+  const pickInitialModelRef = useRef(pickInitialModel);
+  pickInitialModelRef.current = pickInitialModel;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -76,10 +99,10 @@ export default function useProviderModels({ filter, allowDefault = false, silent
     if (!allowDefault && filtered.length > 0 && !hasSetInitialRef.current) {
       hasSetInitialRef.current = true;
       setSelectedProviderId(filtered[0].id);
-      setSelectedModel(pickInitialModel(filtered[0]));
+      setSelectedModel(pickInitialModelRef.current(filtered[0]));
     }
     setLoading(false);
-  }, [filter, allowDefault, silent, pickInitialModel]);
+  }, [filter, allowDefault, silent]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -107,8 +130,35 @@ export default function useProviderModels({ filter, allowDefault = false, silent
     [currentProvider, modelFilter, selectedModel, withEffort]
   );
 
+  // Re-run the initial pick when the `modelFilter`'s identity changes. Without
+  // this, `hasSetInitialRef` freezes the auto-pick at whatever the FIRST filter
+  // produced: a vision picker running on the client id regex alone returns `''`
+  // for a backend whose only VLM the regex doesn't know (`gemma4`), and the
+  // authoritative list landing a moment later never gets a say — leaving a
+  // "no vision model" blocker next to a now-populated dropdown. Scoped to
+  // filtered pickers (an unfiltered one pins `defaultModel`, which needs no
+  // revision) and to a selection that is still the hook's own.
+  useEffect(() => {
+    if (!modelFilter || allowDefault || userPickedModelRef.current) return;
+    if (!hasSetInitialRef.current || !currentProvider) return;
+    // Still valid under the current filter → nothing to revise.
+    if (selectedModel && availableModels.includes(selectedModel)) return;
+    const next = pickInitialModel(currentProvider);
+    if (next !== selectedModel) setSelectedModel(next);
+  }, [modelFilter, allowDefault, currentProvider, availableModels, selectedModel, pickInitialModel]);
+
+  // A user pick latches: the re-pick above never overrides it, in either
+  // direction (a chosen model, or a deliberate clear).
+  const handleModelChange = useCallback((model) => {
+    userPickedModelRef.current = true;
+    setSelectedModel(model);
+  }, []);
+
   const handleProviderChange = useCallback((id) => {
     setSelectedProviderId(id);
+    // The model that follows a provider change is auto-picked, not user-picked,
+    // so it stays eligible for the re-pick above if the filter widens later.
+    userPickedModelRef.current = false;
     if (allowDefault) {
       // Empty model = "use the default model" — don't pin the provider's
       // defaultModel, which would suppress the empty-sentinel choice.
@@ -131,7 +181,7 @@ export default function useProviderModels({ filter, allowDefault = false, silent
     availableModels,
     selectedProvider,
     setSelectedProviderId: handleProviderChange,
-    setSelectedModel,
+    setSelectedModel: handleModelChange,
     loading
   };
 }

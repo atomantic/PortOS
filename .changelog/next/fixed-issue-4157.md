@@ -1,0 +1,1 @@
+- Vision pickers in the universe builder (image describe, style-reference analysis, corrective reference) now offer installed vision models the client id regex doesn't recognize, instead of showing a "no vision model" blocker

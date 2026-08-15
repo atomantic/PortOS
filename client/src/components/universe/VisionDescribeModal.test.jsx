@@ -15,6 +15,13 @@ vi.mock('../../hooks/useProviderModels', () => ({
   }),
 }));
 
+// VisionProviderPicker unions the server's authoritative VLM set into its model
+// filter, so it runs the capability scan on mount — stub it out (this suite is
+// about the modal's actions, and the picker's own suite covers the union).
+vi.mock('../../hooks/useVisionModelIds', () => ({
+  default: () => ({ idsByProvider: null, loaded: true }),
+}));
+
 // The gallery picker pulls in the media/socket layer — stub it.
 vi.mock('../imageGen/GalleryImagePicker', () => ({ default: () => null }));
 vi.mock('../ProviderModelSelector', () => ({ default: () => null }));
