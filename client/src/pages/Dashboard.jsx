@@ -328,21 +328,26 @@ export default function Dashboard() {
   // don't get wiped when the user toggles a widget in the LayoutEditor.
   // reconcileGrid drops removed widgets and appends any new ones at the
   // bottom, mirroring what the renderer does at view time.
-  const saveLayout = async ({ id, name, widgets, activateWindow }) => {
+  //
+  // The renderer reads the grid, not `widgets` — so a Move up/down in the
+  // editor is invisible unless the grid is re-flowed to the new order. The
+  // editor tells us when that's what the save is (`reordered`) rather than us
+  // inferring it from the two orders disagreeing; see reconcileGrid (#4132).
+  const saveLayout = async ({ id, name, widgets, activateWindow, reordered }) => {
     const existing = layouts.find((l) => l.id === id);
     const baseGrid = (existing?.grid && existing.grid.length > 0)
       ? existing.grid
       : synthesizeGrid(existing?.widgets ?? widgets);
-    const nextGrid = reconcileGrid(baseGrid, widgets);
+    const nextGrid = reconcileGrid(baseGrid, widgets, { reorder: reordered });
     const result = await api.saveDashboardLayout(id, { name, widgets, grid: nextGrid, activateWindow });
     setLayouts(result.layouts);
   };
 
-  const duplicateLayout = async ({ id, name, widgets, activateWindow }) => {
+  const duplicateLayout = async ({ id, name, widgets, activateWindow, reordered }) => {
     // New layouts inherit the current renderGrid so "Save as new…" from a
     // visually-arranged dashboard captures what the user actually sees.
     const sourceGrid = renderGrid && renderGrid.length > 0 ? renderGrid : synthesizeGrid(widgets);
-    const grid = reconcileGrid(sourceGrid, widgets);
+    const grid = reconcileGrid(sourceGrid, widgets, { reorder: reordered });
     const result = await api.saveDashboardLayout(id, { name, widgets, grid, activateWindow });
     setLayouts(result.layouts);
     // Bump the switch generation only now — AFTER the save resolved and right

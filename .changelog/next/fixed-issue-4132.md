@@ -1,0 +1,1 @@
+- Dashboard: LayoutEditor's Move up/down buttons now actually reorder widgets on the dashboard — the reorder is re-flowed into the layout's grid, which is what the renderer reads

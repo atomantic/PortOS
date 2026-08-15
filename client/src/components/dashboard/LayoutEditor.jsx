@@ -105,6 +105,21 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
     setDirty(true);
   };
 
+  // The dashboard renders from the layout's `grid`, not from this list, so a
+  // save has to say out loud when the widget order IS the edit — otherwise the
+  // grid keeps its old reading order and Move up/down looks inert (#4132).
+  // Derived rather than a sticky flag so moving a widget up and back down again
+  // nets out to "not a reorder". `add` appends and `remove` filters, both of
+  // which preserve relative order, so comparing the two lists restricted to the
+  // widgets they share isolates exactly what `move` did.
+  const isReordered = () => {
+    const stored = editing?.widgets ?? [];
+    const storedIds = new Set(stored);
+    const draftIds = new Set(widgets);
+    const shared = stored.filter((id) => draftIds.has(id));
+    return widgets.filter((id) => storedIds.has(id)).some((id, i) => id !== shared[i]);
+  };
+
   const remove = (id) => {
     setWidgets((prev) => prev.filter((w) => w !== id));
     setDirty(true);
@@ -133,7 +148,7 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
       toast.error('Time window: start and end must be HH:MM and differ');
       return;
     }
-    const ok = await onSave({ id: editingId, name: trimmed, widgets, activateWindow }).then(() => true, () => false);
+    const ok = await onSave({ id: editingId, name: trimmed, widgets, activateWindow, reordered: isReordered() }).then(() => true, () => false);
     if (!ok) return;
     setDirty(false);
     toast.success('Layout saved');
@@ -170,7 +185,7 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
     let id = fitId(n);
     while (existingIds.has(id)) { n += 1; id = fitId(n); }
     // Duplicate inherits the source's activateWindow — easier to clear post-duplicate than to re-enter.
-    const ok = await onDuplicate({ id, name: trimmed, widgets, activateWindow }).then(() => true, () => false);
+    const ok = await onDuplicate({ id, name: trimmed, widgets, activateWindow, reordered: isReordered() }).then(() => true, () => false);
     if (!ok) return;
     // The duplicate IS saved — clear dirty so the rehydrate effect runs
     // when the new layout lands in `layouts` props; otherwise the editor

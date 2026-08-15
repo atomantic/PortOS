@@ -246,6 +246,31 @@ describe('reconcileGrid', () => {
   it('drops hidden widgets and appends newly visible ones', () => {
     expect(reconcileGrid(THREE, ['a', 'c']).map((it) => it.id)).toEqual(['a', 'c']);
   });
+
+  // The arranged layout below deliberately disagrees with its widget list: `b`
+  // sits above `a` in the grid while the list still says `['a','b','c']`, which
+  // is exactly the pre-`saveGridEdit` state #4132 warns about.
+  const ARRANGED = [
+    { id: 'b', x: 0, y: 0, w: 6, h: 3 },
+    { id: 'a', x: 6, y: 0, w: 6, h: 2 },
+    { id: 'c', x: 0, y: 3, w: 12, h: 2 },
+  ];
+
+  it('leaves an arranged grid alone when the save is not a reorder', () => {
+    expect(reconcileGrid(ARRANGED, ['a', 'b', 'c'])).toEqual(ARRANGED);
+    expect(reconcileGrid(ARRANGED, ['a', 'b', 'c'], { reorder: false })).toEqual(ARRANGED);
+  });
+
+  it('re-flows to the widget order when the caller says the save IS a reorder', () => {
+    const next = reconcileGrid(THREE, ['b', 'a', 'c'], { reorder: true });
+    expect(readingOrderIds(next)).toEqual(['b', 'a', 'c']);
+    expect(next.map((it) => it.h)).toEqual([2, 2, 2]);
+  });
+
+  it('re-flows a widget added in the same reorder save', () => {
+    const next = reconcileGrid(THREE, ['c', 'a', 'apps', 'b'], { reorder: true });
+    expect(readingOrderIds(next)).toEqual(['c', 'a', 'apps', 'b']);
+  });
 });
 
 describe('DashboardGrid mobile reorder', () => {
