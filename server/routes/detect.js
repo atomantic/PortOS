@@ -190,7 +190,7 @@ router.post('/port', asyncHandler(async (req, res) => {
     ? `lsof -i :${safePort} -P -n | grep LISTEN`
     : `ss -lntp | grep :${safePort}`;
 
-  const { stdout } = await execAsync(command, { windowsHide: true }).catch(() => ({ stdout: '' }));
+  const { stdout } = await execAsync(command).catch(() => ({ stdout: '' }));
 
   if (stdout.trim()) {
     result.inUse = true;

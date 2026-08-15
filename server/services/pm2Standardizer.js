@@ -452,7 +452,7 @@ export async function createGitBackup(repoPath) {
   }
 
   // Refuse to overwrite uncommitted changes
-  const { stdout: statusOut } = await execAsync('git status --porcelain', { cwd: repoPath, windowsHide: true });
+  const { stdout: statusOut } = await execAsync('git status --porcelain', { cwd: repoPath });
   if (statusOut.trim()) {
     return { success: false, code: 'DIRTY_WORKTREE', reason: 'Working tree has uncommitted changes — commit or discard them before standardizing' };
   }
@@ -463,7 +463,7 @@ export async function createGitBackup(repoPath) {
   // Create backup branch from current HEAD (captures committed state without stashing)
   // Use spawn with shell:false to avoid shell injection via branch name
   await new Promise((resolve, reject) => {
-    const proc = spawn('git', ['branch', branch], { cwd: repoPath, shell: false, windowsHide: true });
+    const proc = spawn('git', ['branch', branch], { cwd: repoPath, shell: false });
     let stderr = '';
     proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
     proc.on('close', (code) => code === 0 ? resolve() : reject(new Error(`git branch failed: ${stderr.trim()}`)));

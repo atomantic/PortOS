@@ -52,7 +52,6 @@ describe('executeShellJob — Windows CLI shim resolution', () => {
     await executeShellJob({ id: 'job-1', name: 'System Health Check', command: 'pm2 jlist' })
     const [, , opts] = spawnMock.mock.calls[0]
     expect(opts.shell).toBe(false)
-    expect(opts.windowsHide).toBe(true)
   })
 
   it('resolves the command against the CHILD env, not process.env', async () => {

@@ -308,7 +308,7 @@ export async function checkout(dir, branchName) {
 
 function spawnCli(cmd, args, options = {}) {
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, { shell: false, windowsHide: true, ...options });
+    const child = spawn(cmd, args, { shell: false, ...options });
     let stdout = '', stderr = '';
     child.stdout.on('data', (d) => { stdout += d.toString(); });
     child.stderr.on('data', (d) => { stderr += d.toString(); });
@@ -437,7 +437,7 @@ export async function createPR(dir, { title, body, base, head }) {
   const meta = { cli, account, owner, host };
 
   return new Promise((resolve) => {
-    const child = spawn(cli, args, { cwd: dir, env, shell: false, windowsHide: true });
+    const child = spawn(cli, args, { cwd: dir, env, shell: false });
 
     let stdout = '';
     let stderr = '';
@@ -481,7 +481,7 @@ export async function mergePR(dir, prNumber) {
 
   return new Promise((resolve) => {
     const child = spawn('gh', ['pr', 'merge', String(prNumber), '--merge', '--delete-branch'], {
-      cwd: dir, env, shell: false, windowsHide: true
+      cwd: dir, env, shell: false
     });
     let stderr = '';
     child.stderr.on('data', (data) => { stderr += data.toString(); });
@@ -540,7 +540,7 @@ export async function requestCopilotReview(dir, prUrl) {
   );
 
   return new Promise((resolve) => {
-    const child = spawn(cli, args, { cwd: dir, env, shell: false, windowsHide: true });
+    const child = spawn(cli, args, { cwd: dir, env, shell: false });
     let stderr = '';
     child.stderr.on('data', (data) => { stderr += data.toString(); });
     child.on('close', (code) => {

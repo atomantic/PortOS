@@ -224,7 +224,7 @@ const manager = (backend) => (backend === 'ollama' ? ollamaManager : lmStudioMan
  */
 function runStreaming(cmd, args, onLine, timeoutMs = 0) {
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+    const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] })
     let buffer = ''
     let settled = false
     const tail = [] // recent non-empty lines, capped by char budget for the error message

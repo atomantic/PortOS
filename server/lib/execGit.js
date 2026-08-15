@@ -24,8 +24,7 @@ export function execGit(args, cwd, options = {}) {
     // platforms (including Windows) without a shell wrapper.
     const child = spawn('git', args, {
       cwd,
-      shell: false,
-      windowsHide: true
+      shell: false
     });
 
     let stdout = '';

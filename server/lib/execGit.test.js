@@ -34,8 +34,7 @@ describe('execGit', () => {
     await promise;
     expect(spawn).toHaveBeenCalledWith('git', ['status'], expect.objectContaining({
       cwd: '/repo',
-      shell: false,
-      windowsHide: true
+      shell: false
     }));
   });
 

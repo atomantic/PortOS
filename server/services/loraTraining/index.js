@@ -682,7 +682,7 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
   // protection doesn't wait on the OS idle timeout. Best-effort — caffeinate
   // exits with the child.
   if (platform() === 'darwin' && proc.pid) {
-    const caf = spawn('caffeinate', ['-is', '-w', String(proc.pid)], { stdio: 'ignore', windowsHide: true });
+    const caf = spawn('caffeinate', ['-is', '-w', String(proc.pid)], { stdio: 'ignore' });
     caf.on('error', () => {});
     caf.unref();
   }

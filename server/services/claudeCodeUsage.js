@@ -217,7 +217,7 @@ function runUsageCli() {
   return new Promise((resolve, reject) => {
     const tz = systemTimeZone();
     const env = tz ? { ...process.env, TZ: tz } : process.env;
-    const child = spawn(CLI_COMMAND, CLI_ARGS, { stdio: ['pipe', 'pipe', 'pipe'], env, windowsHide: true });
+    const child = spawn(CLI_COMMAND, CLI_ARGS, { stdio: ['pipe', 'pipe', 'pipe'], env });
     let stdout = '';
     let stderr = '';
     let settled = false;

@@ -390,8 +390,7 @@ app.post('/spawn', async (req, res) => {
     cwd,
     shell: false,
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: childEnv,
-    windowsHide: true
+    env: childEnv
   });
 
   // Detect if stream-json format is active (Claude CLI with streaming)

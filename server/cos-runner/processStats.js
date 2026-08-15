@@ -79,7 +79,7 @@ export async function getProcessStats(pid) {
   const psCmd = isWindows
     ? `tasklist /FI "PID eq ${safePid}" /FO CSV /NH`
     : `ps -p ${safePid} -o pid=,pcpu=,rss=,state=`;
-  const result = await execAsync(psCmd, { windowsHide: true }).catch(() => ({ stdout: '' }));
+  const result = await execAsync(psCmd).catch(() => ({ stdout: '' }));
   const line = result.stdout.trim();
 
   if (!line) {
@@ -114,12 +114,12 @@ export async function checkProcessRunning(pid) {
   }
 
   if (process.platform === 'win32') {
-    const result = await execAsync(`tasklist /FI "PID eq ${safePid}" /FO CSV /NH`, { windowsHide: true }).catch(() => ({ stdout: '' }));
+    const result = await execAsync(`tasklist /FI "PID eq ${safePid}" /FO CSV /NH`).catch(() => ({ stdout: '' }));
     // tasklist prints a CSV row containing the PID when the process exists;
     // otherwise it emits an "INFO: No tasks…" line that won't contain the PID.
     return result.stdout.includes(`"${safePid}"`);
   }
 
-  const result = await execAsync(`ps -p ${safePid} -o pid=`, { windowsHide: true }).catch(() => ({ stdout: '' }));
+  const result = await execAsync(`ps -p ${safePid} -o pid=`).catch(() => ({ stdout: '' }));
   return result.stdout.trim() !== '';
 }

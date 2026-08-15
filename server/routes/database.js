@@ -25,7 +25,7 @@ const router = Router();
  */
 function runCmd(cmd, args, timeout = 120_000, env = process.env) {
   return new Promise((resolve) => {
-    execFile(cmd, args, { cwd: rootDir, timeout, env, windowsHide: true }, (err, stdout, stderr) => {
+    execFile(cmd, args, { cwd: rootDir, timeout, env }, (err, stdout, stderr) => {
       const exitCode = err ? (typeof err.code === 'number' ? err.code : 1) : 0;
       if (exitCode !== 0) {
         const detail = stripAnsi(stderr || stdout || err.message || '').replace(/\s+/g, ' ').trim();
@@ -321,7 +321,7 @@ export function importDumpFile(dumpFile, port, env, timeout = 120_000) {
     const psql = spawn('psql', [
       '-h', 'localhost', '-p', String(port), '-U', pgUser, '-d', pgDb,
       '-v', 'ON_ERROR_STOP=1', '--single-transaction'
-    ], { cwd: rootDir, env, windowsHide: true });
+    ], { cwd: rootDir, env });
 
     // The dump read stream — declared up front so finish() can tear it down. If
     // psql exits early (ON_ERROR_STOP rollback) or the timeout SIGKILLs it, the

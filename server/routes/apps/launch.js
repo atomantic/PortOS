@@ -28,7 +28,6 @@ function spawnDetached(cmd, args, options = {}) {
   const child = spawn(cmd, args, {
     detached: true,
     stdio: 'ignore',
-    windowsHide: true,
     ...options
   });
   child.on('error', (err) => console.error(`❌ Failed to launch '${cmd}': ${err.message}`));

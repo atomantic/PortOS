@@ -44,8 +44,11 @@ describe('cos-runner processStats', () => {
     const loadWithMockedExec = async (stdout) => {
       const calls = [];
       vi.resetModules();
+      // Variadic like node's own `exec`: the callback is the last argument, and
+      // the options slot is optional. A fixed `(cmd, opts, cb)` signature ties
+      // the mock to whether the caller happens to pass options at all.
       vi.doMock('../lib/childProcess.js', () => ({
-        exec: (cmd, _opts, cb) => { calls.push(cmd); cb(null, { stdout, stderr: '' }); },
+        exec: (cmd, ...rest) => { calls.push(cmd); rest.at(-1)(null, { stdout, stderr: '' }); },
       }));
       vi.stubGlobal('process', { ...process, platform: 'win32' });
       const mod = await import('./processStats.js');
@@ -91,8 +94,11 @@ describe('cos-runner processStats', () => {
     const loadWithMockedExec = async (stdout) => {
       const calls = [];
       vi.resetModules();
+      // Variadic like node's own `exec`: the callback is the last argument, and
+      // the options slot is optional. A fixed `(cmd, opts, cb)` signature ties
+      // the mock to whether the caller happens to pass options at all.
       vi.doMock('../lib/childProcess.js', () => ({
-        exec: (cmd, _opts, cb) => { calls.push(cmd); cb(null, { stdout, stderr: '' }); },
+        exec: (cmd, ...rest) => { calls.push(cmd); rest.at(-1)(null, { stdout, stderr: '' }); },
       }));
       vi.stubGlobal('process', { ...process, platform: 'win32' });
       const mod = await import('./processStats.js');

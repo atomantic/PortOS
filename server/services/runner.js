@@ -303,8 +303,7 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
 
   childProcess = spawn(spawnCommand, spawnArgs, {
     cwd: effectiveCwd,
-    env: childEnv,
-    windowsHide: true
+    env: childEnv
   });
 
   // Pass prompt via stdin to avoid OS argv limits. When grok is delivered via a

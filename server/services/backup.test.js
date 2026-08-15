@@ -837,7 +837,7 @@ describe('restoreSnapshot subdirFilter guard', () => {
       expect(spawn).toHaveBeenCalledWith(
         '/custom/bin/rsync',
         expect.arrayContaining(['--archive', '--itemize-changes', '--dry-run']),
-        { shell: false, windowsHide: true },
+        { shell: false },
       );
     } finally {
       if (previous === undefined) delete process.env.PORTOS_RSYNC;
@@ -858,7 +858,7 @@ describe('restoreSnapshot subdirFilter guard', () => {
       await restore;
 
       expect(spawn.mock.calls[0][0]).toBe('rsync');
-      expect(spawn.mock.calls[0][2]).toEqual({ shell: false, windowsHide: true });
+      expect(spawn.mock.calls[0][2]).toEqual({ shell: false });
     } finally {
       if (previous === undefined) delete process.env.PORTOS_RSYNC;
       else process.env.PORTOS_RSYNC = previous;
@@ -1238,7 +1238,7 @@ describe('runBackup lifecycle', () => {
     // --- rsync invocation -------------------------------------------------
     const [bin, args, opts] = spawn.mock.calls[0];
     expect(bin).toBe('rsync');
-    expect(opts).toEqual({ shell: false, windowsHide: true });
+    expect(opts).toEqual({ shell: false });
     expect(args.slice(0, 2)).toEqual(['--archive', '--itemize-changes']);
     // Source is PATHS.data with a trailing slash (copy contents, not the dir);
     // destination is the snapshot's data/ subdir.

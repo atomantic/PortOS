@@ -46,8 +46,7 @@ export function executeCommand(command, workspacePath, onData, onComplete) {
   const child = spawn(baseCommand, args, {
     cwd: commandCwd,
     env: withSpawnCwdEnv(safeChildProcessEnv({ FORCE_COLOR: '1' }), commandCwd),
-    shell: false,
-    windowsHide: true
+    shell: false
   });
 
   activeCommands.set(commandId, child);

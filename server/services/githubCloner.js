@@ -84,8 +84,7 @@ export async function cloneRepo(url, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn('git', args, {
       env: process.env,
-      shell: false,
-      windowsHide: true
+      shell: false
     });
 
     let stderr = '';
@@ -136,8 +135,7 @@ export async function pullRepo(localPath) {
     const child = spawn('git', ['pull', '--ff-only'], {
       cwd: localPath,
       env: process.env,
-      shell: false,
-      windowsHide: true
+      shell: false
     });
 
     let stdout = '';
@@ -183,8 +181,7 @@ export async function getRepoInfo(localPath) {
     const child = spawn('git', ['log', '-1', '--format=%H|%s|%ci'], {
       cwd: localPath,
       env: process.env,
-      shell: false,
-      windowsHide: true
+      shell: false
     });
 
     let stdout = '';

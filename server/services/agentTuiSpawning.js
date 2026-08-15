@@ -231,7 +231,7 @@ function shellHasLiveChild(shellPid) {
   return new Promise((resolve) => {
     // `-Ao ppid=` is POSIX (all processes, ppid column only, no header) and
     // works on both macOS (BSD ps) and Linux (procps).
-    execFile('ps', ['-Ao', 'ppid='], { timeout: 2000, windowsHide: true }, (err, stdout) => {
+    execFile('ps', ['-Ao', 'ppid='], { timeout: 2000 }, (err, stdout) => {
       if (err) { resolve(true); return; }
       resolve(stdout.split('\n').some((line) => parseInt(line, 10) === shellPid));
     });

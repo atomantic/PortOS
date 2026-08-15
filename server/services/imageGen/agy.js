@@ -110,7 +110,7 @@ export function listModels({ agyPath } = {}) {
   const bin = agyPath || DEFAULT_BIN;
   const { command, args } = prepareCliSpawn(bin, ['models']);
   return new Promise((resolve) => {
-    const proc = spawn(command, args, { shell: false, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    const proc = spawn(command, args, { shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
     let settled = false;
@@ -312,7 +312,7 @@ async function runAgy(job, jobId, bin, args, {
   // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193). agy reads
   // process.cwd(), so this is defensive rather than a live fix; it keeps every
   // scratch-dir spawn telling the child one consistent story about where it is.
-  const proc = spawn(command, spawnArgs, { cwd: scratchDir, env: withSpawnCwdEnv(process.env, scratchDir), shell: false, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  const proc = spawn(command, spawnArgs, { cwd: scratchDir, env: withSpawnCwdEnv(process.env, scratchDir), shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
   activeProcs.set(jobId, proc);
   const removeScratch = () => rm(scratchDir, { recursive: true, force: true }).catch(() => {});
   let stdoutTail = '';

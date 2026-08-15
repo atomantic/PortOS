@@ -86,7 +86,7 @@ export async function detectCudaGpus({ execFileImpl = execFile, timeoutMs = 8000
     execFileImpl(
       'nvidia-smi',
       [...NVIDIA_SMI_QUERY_ARGS],
-      { timeout: timeoutMs, windowsHide: true },
+      { timeout: timeoutMs },
       (err, stdout) => resolve({ err, stdout: String(stdout ?? '') }),
     );
   }).catch((err) => ({ err, stdout: '' }));

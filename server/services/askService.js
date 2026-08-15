@@ -624,7 +624,6 @@ async function* streamCompletion(provider, model, prompt, signal) {
       env: childEnv,
       stdio: ['pipe', 'pipe', 'pipe'],
       shell: false,
-      windowsHide: true,
     });
 
     // Single settlement gate — the timer, the abort listener, and the close

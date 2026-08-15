@@ -30,7 +30,7 @@ export function isDisplaySleepEnabled(settings) {
 // can't block or outlive its purpose; errors are swallowed (telemetry-grade,
 // never fatal to a training run).
 function runPowerCmd(cmd, args) {
-  const proc = spawn(cmd, args, { stdio: 'ignore', windowsHide: true });
+  const proc = spawn(cmd, args, { stdio: 'ignore' });
   proc.on('error', () => {}); // command missing / not permitted → ignore
   proc.unref();
   return proc;

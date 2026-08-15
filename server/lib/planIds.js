@@ -234,8 +234,7 @@ export function listOpenPullRequestHeadRefs(repoPath) {
   return new Promise(resolve => {
     const child = spawn('gh', ['pr', 'list', '--state', 'open', '--json', 'headRefName', '-q', '.[].headRefName'], {
       cwd: repoPath,
-      shell: false,
-      windowsHide: true
+      shell: false
     });
     let out = '';
     let settled = false;

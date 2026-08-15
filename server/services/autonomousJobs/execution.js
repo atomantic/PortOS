@@ -87,8 +87,7 @@ async function executeShellJob(job) {
     const child = spawn(spawnCommand, spawnArgs, {
       cwd: PATHS.root,
       env: childEnv,
-      shell: false,
-      windowsHide: true
+      shell: false
     })
 
     const timer = setTimeout(() => {

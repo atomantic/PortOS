@@ -309,7 +309,7 @@ echo "🧹 Cleaned build artifacts"
 `;
   await writeFile(join(repoPath, 'deploy.sh'), deployScript);
   // Make deploy.sh executable
-  await execAsync(`chmod +x "${join(repoPath, 'deploy.sh')}"`, { windowsHide: true });
+  await execAsync(`chmod +x "${join(repoPath, 'deploy.sh')}"`);
 
   // CLAUDE.md
   await writeFile(join(repoPath, 'CLAUDE.md'), `# ${name}
@@ -353,7 +353,7 @@ Requires \`.env\` file with App Store Connect API credentials (see \`.env.exampl
   addStep('Create iOS project', 'done');
 
   // Run xcodegen if available
-  const { stderr: xgenErr } = await execAsync('xcodegen generate', { cwd: repoPath, windowsHide: true })
+  const { stderr: xgenErr } = await execAsync('xcodegen generate', { cwd: repoPath })
     .catch(err => ({ stderr: err.message }));
 
   if (xgenErr && !xgenErr.includes('Created project')) {

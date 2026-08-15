@@ -69,7 +69,6 @@ export function deployApp(app, flags, emit) {
     const child = spawn(resolveBashBinary(), ['deploy.sh', ...safeFlags], {
       cwd: dir,
       shell: false,
-      windowsHide: true,
       env: { ...process.env, FORCE_COLOR: '0' }
     });
 

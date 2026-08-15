@@ -102,6 +102,16 @@ const parsed = new Map(candidates.map(({ rel, raw }) => [rel, blankComments(raw)
 
 const inCallSiteTree = (rel) => CALL_SITE_TREES.some((t) => rel.startsWith(t));
 
+// A separate pre-filter for the redundant-literal rule below. The `candidates`
+// set above keys on the string `child_process`, which a file that has correctly
+// moved to the wrapper no longer contains — so reusing it there would scan
+// exactly the files the rule does not apply to and pass green forever.
+const IMPORTS_WRAPPER = /['"][^'"]*childProcess\.js['"]/;
+const wrapperImporters = allFiles
+  .filter((rel) => rel !== WRAPPER && !inCallSiteTree(rel))
+  .map((rel) => ({ rel, raw: readServerSource(rel) }))
+  .filter(({ raw }) => IMPORTS_WRAPPER.test(raw));
+
 describe('comment blanking', () => {
   // Every rule below filters through blankComments, so a stripper that blanked
   // too much would silently turn all of them into no-ops.
@@ -167,6 +177,43 @@ describe('child_process import guard', () => {
       'These files import child_process directly, so their spawns default to a\n' +
         'visible console on Windows. Import from server/lib/childProcess.js instead:\n' +
         offenders.map((f) => `  - ${f}`).join('\n')
+    ).toEqual([]);
+  });
+
+  it('drops the redundant windowsHide literal wherever the wrapper supplies it', () => {
+    // The inverse of the rule above, and the reason #4315 existed: the v1.5.x /
+    // v1.6.7 per-call-site sweeps left ~85 `windowsHide: true` literals behind,
+    // and once the wrapper injects the identical value they are two competing
+    // conventions in one file — the loud one being the one a newcomer copies.
+    // Any callee, not just the child_process names: most spawns here are reached
+    // through a promisified local alias (`execAsync`, `execFileAsync`), which is
+    // exactly where several of those literals lived.
+    //
+    // Scoped to call ARGUMENTS, which is what leaves `processEnv.js`'s
+    // `safeChildProcessOptions` alone — it authors a canonical options object
+    // rather than passing one to a spawn, and states `windowsHide` on purpose.
+    expect(wrapperImporters.length, 'no wrapper importers found — has the scan broken?').toBeGreaterThan(40);
+
+    const hits = [];
+    for (const { rel, raw } of wrapperImporters) {
+      for (const call of callExpressions(blankComments(raw), null)) {
+        if (/windowsHide\s*:\s*true/.test(call.text)) hits.push({ rel, ...call });
+      }
+    }
+
+    // `names: null` matches nested calls too, so the literal inside
+    // `spawn(…)` also reports the `new Promise(…)` wrapping it. Keep only the
+    // innermost call holding each literal, so the list points at the fix.
+    const offenders = hits
+      .filter((hit) => !hits.some((inner) => (
+        inner.rel === hit.rel && inner.text.length < hit.text.length && hit.text.includes(inner.text)
+      )))
+      .map(({ rel, line, name }) => `${rel}:${line} ${name}(…)`);
+
+    expect(
+      offenders,
+      'The wrapper already defaults windowsHide: true — drop the literal:\n' +
+        offenders.map((o) => `  - ${o}`).join('\n')
     ).toEqual([]);
   });
 

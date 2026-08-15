@@ -131,7 +131,6 @@ export function runCliProviderPrompt(args = {}) {
       cwd: effectiveCwd,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: childEnv,
-      windowsHide: true,
     });
 
     // Single settlement gate — the timer, spawn error, and close handler all

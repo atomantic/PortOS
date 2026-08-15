@@ -238,7 +238,7 @@ export const MAX_OUTPUT_BYTES = 64 * 1024;
 export function killProcessTree(child, signal = 'SIGTERM', { processGroup = false } = {}) {
   if (IS_WIN32 && child.pid && child instanceof ChildProcess) {
     child.killed = true;
-    spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore', windowsHide: true })
+    spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore' })
       .on('error', () => {})
       .unref();
     return;
@@ -289,7 +289,6 @@ export function bufferedSpawn(cmd, args, { cwd, timeoutMs, shell } = {}) {
       // copy of process.env when no cwd was given, matching the previous
       // implicit-inherit behavior exactly.
       env: withSpawnCwdEnv(process.env, cwd),
-      windowsHide: true,
       shell: shell === undefined ? needsShell(cmd) : shell,
     });
     let stdout = '';

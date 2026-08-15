@@ -159,7 +159,6 @@ function runCli(cmd, args, options = {}) {
     // caller (mirrors layeredIntelligence/runCli.js, which has the same shape).
     const child = spawn(cmd, args, {
       shell: false,
-      windowsHide: true,
       ...options,
       env: withSpawnCwdEnv(options.env ?? process.env, options.cwd),
     })

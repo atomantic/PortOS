@@ -243,7 +243,6 @@ async function runCliVisionSpawn({ provider, model, invocation, timeout, spawnIm
     const child = spawnImpl(spawnCommand, spawnArgs, {
       cwd,
       env: childEnv,
-      windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let out = '';

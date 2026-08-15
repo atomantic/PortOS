@@ -29,7 +29,6 @@ function runMoltworldExploration() {
     const child = spawn('node', [scriptPath, durationMinutes], {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env },
-      windowsHide: true,
     })
 
     const output = []

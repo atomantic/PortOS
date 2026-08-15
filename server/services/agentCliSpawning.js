@@ -385,7 +385,6 @@ export async function spawnDirectly({
     cwd,
     shell: false,
     stdio: ['pipe', 'pipe', 'pipe'],
-    windowsHide: true,
     env: childEnv
   });
 

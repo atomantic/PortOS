@@ -313,7 +313,7 @@ async function runGrok(job, jobId, bin, args, {
   // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193). grok reads
   // process.cwd(), so this is defensive rather than a live fix; it keeps every
   // scratch-dir spawn telling the child one consistent story about where it is.
-  const proc = spawn(spawnBin, spawnArgs, { cwd: scratchDir, env: withSpawnCwdEnv(process.env, scratchDir), shell: false, stdio: [useStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'], windowsHide: true });
+  const proc = spawn(spawnBin, spawnArgs, { cwd: scratchDir, env: withSpawnCwdEnv(process.env, scratchDir), shell: false, stdio: [useStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
   activeProcs.set(jobId, proc);
   const removeScratch = () => rm(scratchDir, { recursive: true, force: true }).catch(() => {});
 

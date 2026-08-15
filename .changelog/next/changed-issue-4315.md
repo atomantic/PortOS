@@ -1,0 +1,1 @@
+- Removed the 85 now-redundant windowsHide literals left at server spawn call sites by the earlier per-call-site sweeps — server/lib/childProcess.js already injects that value, and a guard now fails if one comes back

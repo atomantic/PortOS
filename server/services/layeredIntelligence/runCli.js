@@ -15,7 +15,6 @@ export function runCli(cmd, args, options = {}) {
     // every caller's behalf rather than each one remembering it.
     const child = spawn(cmd, args, {
       shell: false,
-      windowsHide: true,
       ...options,
       env: withSpawnCwdEnv(options.env ?? process.env, options.cwd),
     });

@@ -58,7 +58,7 @@ describe('detectCudaGpus', () => {
     expect(execFileImpl).toHaveBeenCalledWith(
       'nvidia-smi',
       [...NVIDIA_SMI_QUERY_ARGS],
-      expect.objectContaining({ windowsHide: true }),
+      expect.objectContaining({ timeout: expect.any(Number) }),
       expect.any(Function),
     );
     expect(result).toMatchObject({ status: 'available', maxVramGb: 40 });

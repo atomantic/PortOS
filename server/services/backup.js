@@ -125,7 +125,7 @@ export function resolveRsyncBinary(env = process.env) {
 function runRsync(srcDir, destDir, flags = []) {
   return new Promise((resolve, reject) => {
     const args = ['--archive', '--itemize-changes', ...flags, srcDir + '/', destDir];
-    const proc = spawn(resolveRsyncBinary(), args, { shell: false, windowsHide: true });
+    const proc = spawn(resolveRsyncBinary(), args, { shell: false });
 
     const changed = [];
     let stderr = '';
@@ -342,7 +342,6 @@ export async function dumpPostgres(outputPath) {
       '-f', outputPath
     ], {
       shell: false,
-      windowsHide: true,
       env: { ...process.env, PGPASSWORD: process.env.PGPASSWORD || 'portos' }
     });
 
@@ -593,7 +592,7 @@ export async function restorePostgres(destPath, snapshotId, { dryRun = true } = 
       '-v', 'ON_ERROR_STOP=1',
       '--single-transaction',
       '-h', pgHost, '-p', pgPort, '-U', pgUser, '-d', pgDb, '-f', sqlPath
-    ], { shell: false, windowsHide: true, env: { ...process.env, PGPASSWORD: process.env.PGPASSWORD || 'portos' } });
+    ], { shell: false, env: { ...process.env, PGPASSWORD: process.env.PGPASSWORD || 'portos' } });
 
     let stderr = '';
     proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });

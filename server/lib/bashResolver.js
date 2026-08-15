@@ -54,7 +54,7 @@ function standardGitBashPaths() {
 function gitBashFromPath() {
   let gitExe = '';
   try {
-    gitExe = execFileSync('where', ['git'], { encoding: 'utf8', windowsHide: true }).split(/\r?\n/)[0].trim();
+    gitExe = execFileSync('where', ['git'], { encoding: 'utf8' }).split(/\r?\n/)[0].trim();
   } catch {
     return null;
   }

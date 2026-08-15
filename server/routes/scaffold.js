@@ -436,7 +436,7 @@ module.exports = {
   // Run npm install (skip for Xcode projects — no npm)
   if (template !== 'ios-native' && template !== 'xcode-multiplatform') {
     const installCmd = template === 'portos-stack' ? 'npm run install:all' : 'npm install';
-    const { stderr: installErr } = await execAsync(installCmd, { cwd: repoPath, windowsHide: true })
+    const { stderr: installErr } = await execAsync(installCmd, { cwd: repoPath })
       .catch(err => ({ stderr: err.message }));
 
     if (installErr && !installErr.includes('npm warn')) {
@@ -447,7 +447,7 @@ module.exports = {
   }
 
   // Initialize git
-  await execAsync('git init', { cwd: repoPath, windowsHide: true });
+  await execAsync('git init', { cwd: repoPath });
 
   // Create .gitignore
   let gitignoreContent;
@@ -510,7 +510,7 @@ Thumbs.db
   await writeFile(join(repoPath, '.gitignore'), gitignoreContent);
   // Use spawn with shell:false to avoid shell injection
   const spawnGit = (args) => new Promise((resolve, reject) => {
-    const proc = spawn('git', args, { cwd: repoPath, shell: false, windowsHide: true });
+    const proc = spawn('git', args, { cwd: repoPath, shell: false });
     let stderr = '';
     proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
     proc.on('close', (code) => code === 0 ? resolve() : reject(new Error(`git ${args[0]} failed: ${stderr.trim()}`)));
@@ -527,7 +527,7 @@ Thumbs.db
     const ghArgs = ['repo', 'create', repoName, '--source=.', '--push', '--private'];
 
     const { stderr: ghErr } = await new Promise((resolve) => {
-      const child = spawn('gh', ghArgs, { cwd: repoPath, shell: false, windowsHide: true });
+      const child = spawn('gh', ghArgs, { cwd: repoPath, shell: false });
       let stderr = '';
       child.stderr.on('data', (data) => { stderr += data.toString(); });
       child.on('close', () => resolve({ stderr }));

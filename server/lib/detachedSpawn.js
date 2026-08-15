@@ -247,7 +247,7 @@ export async function spawnDetached(bin, args = [], {
   // is a POSIX-only guarantee; Windows keeps its prior spawn semantics apart
   // from `kill`, which is replaced with a tree-kill below.
   if (process.platform === 'win32') {
-    const child = spawn(bin, args, { env: withSpawnCwdEnv(env ?? process.env, cwd), cwd, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    const child = spawn(bin, args, { env: withSpawnCwdEnv(env ?? process.env, cwd), cwd, stdio: ['ignore', 'pipe', 'pipe'] });
     // A bare `child.kill()` terminates ONLY the runner. Windows has no process
     // group for the POSIX `-pid` trick `killProcessGroup` relies on, so whatever
     // the runner spawned (the ffmpeg mux a CUDA video runtime shells out to, a
@@ -355,7 +355,6 @@ export async function spawnDetached(bin, args = [], {
     // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193).
     env: withSpawnCwdEnv(env ?? process.env, cwd),
     cwd,
-    windowsHide: true,
     detached: true,
     stdio: 'ignore',
   });

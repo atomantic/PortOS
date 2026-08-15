@@ -324,7 +324,7 @@ export function requestMaterialization(path, options = {}) {
   // is still correctly refused either way.
   let child;
   try {
-    child = spawn('brctl', ['download', path], { detached: true, stdio: 'ignore', windowsHide: true });
+    child = spawn('brctl', ['download', path], { detached: true, stdio: 'ignore' });
     child.unref();
   } catch (err) {
     // Nothing was reserved yet — the slot is claimed below, after a successful

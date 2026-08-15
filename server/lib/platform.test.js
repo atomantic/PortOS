@@ -44,7 +44,7 @@ describe('platform module', () => {
         .mockRejectedValueOnce(new Error('ss: command not found'))
 
       await expect(getListeningPorts({ platform: 'linux', exec })).resolves.toEqual([6000])
-      expect(exec).toHaveBeenCalledWith('ss -lntp', { windowsHide: true })
+      expect(exec).toHaveBeenCalledWith('ss -lntp')
       await expect(getListeningPorts({ platform: 'linux', exec })).rejects.toMatchObject({
         code: 'PORT_DISCOVERY_FAILED',
         command: 'ss -lntp',

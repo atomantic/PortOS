@@ -23,7 +23,7 @@ const DEFAULT_EXEC_GLAB_TIMEOUT_MS = 60000;
  */
 export function execGlab(args, cwd, timeoutMs = DEFAULT_EXEC_GLAB_TIMEOUT_MS) {
   return new Promise((resolve) => {
-    const child = spawn('glab', args, { cwd, shell: false, windowsHide: true });
+    const child = spawn('glab', args, { cwd, shell: false });
     let stdout = '';
     let settled = false;
     // One settle path so the timeout can't resolve a promise `close` already

@@ -105,7 +105,7 @@ describe('killProcessTree', () => {
     killProcessTree(child);
     expect(spawnMock).toHaveBeenCalledWith(
       'taskkill', ['/T', '/F', '/PID', '999'],
-      expect.objectContaining({ stdio: 'ignore', windowsHide: true })
+      expect.objectContaining({ stdio: 'ignore' })
     );
     // taskkill runs in a detached process that never touches `child` itself —
     // .killed must be set synchronously here so re-entrant kill/abort guards
@@ -357,8 +357,9 @@ describe('bufferedSpawn — structured result', () => {
       success: true, code: 0, signal: null,
       stdout: 'out-data', stderr: 'err-data', timedOut: false,
     });
-    // cwd + windowsHide passed through; shell defaults to needsShell(cmd).
-    expect(spawnMock).toHaveBeenCalledWith('echo', ['hi'], expect.objectContaining({ cwd: '/tmp', windowsHide: true }));
+    // cwd passed through; shell defaults to needsShell(cmd). windowsHide is the
+    // wrapper's job now, so it isn't in what bufferedSpawn itself passes.
+    expect(spawnMock).toHaveBeenCalledWith('echo', ['hi'], expect.objectContaining({ cwd: '/tmp' }));
   });
 
   it('resolves failure (not throw) on a non-zero exit', async () => {

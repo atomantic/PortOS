@@ -666,7 +666,7 @@ export async function getAgentProcessStats(agentId) {
     const psCmd = process.platform === 'win32'
       ? `tasklist /FI "PID eq ${agent.pid}" /FO CSV /NH`
       : `ps -p ${agent.pid} -o pid=,pcpu=,rss=,state=`;
-    const result = await execAsync(psCmd, { windowsHide: true }).catch(() => ({ stdout: '' }));
+    const result = await execAsync(psCmd).catch(() => ({ stdout: '' }));
     const line = result.stdout.trim();
 
     if (!line) {

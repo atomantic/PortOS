@@ -51,7 +51,6 @@ export function execGh(args, timeoutMs = DEFAULT_EXEC_GH_TIMEOUT_MS, { cwd = nul
     const baseEnv = env || process.env;
     const child = spawn('gh', args, {
       shell: false,
-      windowsHide: true,
       ...(cwd ? { cwd, env: withSpawnCwdEnv(baseEnv, cwd) } : (env ? { env } : {}))
     });
     let stdout = '';
@@ -260,8 +259,7 @@ export async function syncSecretToRepos(name) {
 function syncOneSecret(name, value, fullName) {
   return new Promise((resolve) => {
     const child = spawn('gh', ['secret', 'set', name, '--repo', fullName], {
-      shell: false,
-      windowsHide: true
+      shell: false
     });
     let stderr = '';
     child.stderr.on('data', (d) => { stderr += d.toString(); });
@@ -448,7 +446,7 @@ function probeGh(timeoutMs, hostname) {
     // targets github.com regardless of cwd, so an enterprise repo would be
     // gated on a host it never talks to.
     const args = hostname ? ['api', 'rate_limit', '--hostname', hostname] : ['api', 'rate_limit'];
-    const child = spawn('gh', args, { shell: false, windowsHide: true });
+    const child = spawn('gh', args, { shell: false });
     let stderr = '';
     let settled = false;
     const done = (result) => { if (!settled) { settled = true; clearTimeout(timer); resolve(result); } };

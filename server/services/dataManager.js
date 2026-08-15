@@ -168,10 +168,10 @@ const SAFE_NAME = /^[a-z0-9_-]+$/;
 async function getDirSizeAndCount(dirPath) {
   if (!existsSync(dirPath)) return { size: 0, fileCount: 0 };
   const [duOut, findOut] = await Promise.all([
-    execFileAsync('du', ['-sk', dirPath], { windowsHide: true, timeout: 30000 })
+    execFileAsync('du', ['-sk', dirPath], { timeout: 30000 })
       .then(r => r.stdout.trim())
       .catch(() => '0'),
-    execFileAsync('find', [dirPath, '-type', 'f'], { windowsHide: true, timeout: 30000 })
+    execFileAsync('find', [dirPath, '-type', 'f'], { timeout: 30000 })
       .then(r => r.stdout.trim().split('\n').filter(Boolean).length)
       .catch(() => 0)
   ]);
@@ -277,7 +277,7 @@ export async function archiveCategory(categoryKey, options = {}) {
     // Write file list to temp file to avoid shell argument limits
     const listPath = join(backupDir, `.filelist-${Date.now()}.txt`);
     await fsWriteFile(listPath, oldFiles.join('\n'));
-    await execFileAsync('tar', ['-czf', archivePath, '-C', dirPath, '-T', listPath], { timeout: 120000, windowsHide: true });
+    await execFileAsync('tar', ['-czf', archivePath, '-C', dirPath, '-T', listPath], { timeout: 120000 });
     await rm(listPath).catch(() => {});
 
     for (const f of oldFiles) {
@@ -289,7 +289,7 @@ export async function archiveCategory(categoryKey, options = {}) {
   }
 
   // Generic: archive entire category contents
-  await execFileAsync('tar', ['-czf', archivePath, '-C', DATA_DIR, categoryKey], { timeout: 120000, windowsHide: true });
+  await execFileAsync('tar', ['-czf', archivePath, '-C', DATA_DIR, categoryKey], { timeout: 120000 });
   const archiveStat = await stat(archivePath).catch(() => null);
 
   return {
