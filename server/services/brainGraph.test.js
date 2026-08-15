@@ -149,6 +149,11 @@ describe('getBrainGraphSearchIndex', () => {
         content: 'z'.repeat(5000),
         segments: [{ text: 'z'.repeat(5000) }]
       }];
+      if (type === 'songs') return [{
+        id: 's1',
+        title: 'Example song',
+        content: { format: 'chordpro', text: 'x'.repeat(5000) }
+      }];
       return [];
     });
 
@@ -157,6 +162,9 @@ describe('getBrainGraphSearchIndex', () => {
     const [memory] = await getBrainProjections('memories', { ranked: false });
     expect(memory.embedding).toBeUndefined();
     expect(memory.attachments).toBeUndefined();
+
+    const [song] = await getBrainProjections('songs', { ranked: false });
+    expect(song.content).toBeUndefined();
 
     // The Daily Log body is the biggest record in the brain — the graph only
     // needs "is this day non-empty?", so the text must never reach the cache.
@@ -184,6 +192,25 @@ describe('getBrainGraphOverview', () => {
     const result = await getBrainGraphOverview({ limit: 100 });
     expect(result.nodes).toHaveLength(2);
     expect(result.nodes.map(n => n.label).sort()).toEqual(['Alice', 'Phoenix']);
+  });
+
+  it('keeps projected summaries, tags, and status for edge-bearing views', async () => {
+    onlyType('people', [{
+      id: 'p1',
+      name: 'Ada Placeholder',
+      description: 'Example description',
+      tags: ['example'],
+      status: 'active'
+    }]);
+
+    const result = await getBrainGraphOverview({ limit: 100 });
+
+    expect(result.nodes).toMatchObject([{
+      id: 'p1',
+      summary: 'Example description',
+      tags: ['example'],
+      status: 'active'
+    }]);
   });
 
   it('summarizes a SongBook node with its artist, never its content object (#4105)', async () => {

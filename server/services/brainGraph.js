@@ -15,9 +15,9 @@
  * O(n²) tag explosion can't happen.
  *
  * The two edge-bearing views need every record's tags and summary, so they go
- * through `loadNodes()` (a full read of each entity store). The search index
- * needs only `{ id, label, brainType }`, so it reads the cached field
- * projections in `brainSearchIndex` instead — focusing the graph's search box
+ * through `loadNodes()` (the cached field projections for each entity store).
+ * The search index needs only `{ id, label, brainType }`, so it reads those
+ * same projections in `brainSearchIndex` instead — focusing the graph's search box
  * no longer walks and JSON-parses every record body and Daily Log entry on disk
  * (issue #3507).
  */
@@ -88,7 +88,7 @@ const journalDate = (entry) => entry.id || entry.date;
 async function loadNodes() {
   const nodes = [];
   for (const type of ENTITY_TYPES) {
-    const records = await brainStorage.getAll(type);
+    const records = await getBrainProjections(type, { ranked: false });
     for (const record of records) {
       if (record.archived) continue;
       nodes.push({

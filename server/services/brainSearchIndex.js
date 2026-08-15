@@ -47,37 +47,50 @@ import { safeDate } from '../lib/fileUtils.js';
  *     from `capturedText` / `name` / `context` / `title` / `oneLiner` / `notes`
  *     / `nextAction` / `content` / `mood` / `url` / `description`.
  *   - `getBrainGraphSearchIndex` (server/services/brainGraph.js) derives each
- *     node's label from `name || title` and drops archived records, so the
- *     graph entity types also project `name`, `title` and `archived`.
+ *     node's label from `name || title` and drops archived records, while the
+ *     edge-bearing graph views also need tags, status, and summary fields.
  * `journals` is graph-only (the Daily Log is not a unified-search source), and
  * projects no body — see `journalHasBody` below. `songs` (SongBook) is
- * graph-only too, and projects only its label field: the sheet body lives in
- * `content.text` (up to 200k chars of tab/ChordPro per song) and nothing here
- * renders it, so it must never reach the cache.
+ * graph-only too, and its sheet body lives in `content.text` (up to 200k
+ * chars of tab/ChordPro per song). The graph projection keeps only a string
+ * `content` value, so the SongBook object never reaches the cache.
  */
+const GRAPH_PROJECTION_FIELDS = Object.freeze([
+  'name', 'title', 'archived', 'tags', 'status',
+  'description', 'context', 'oneLiner', 'artist', 'notes'
+]);
+
 const PROJECTED_FIELDS = Object.freeze({
   inbox: Object.freeze(['capturedText']),
-  people: Object.freeze(['name', 'title', 'context', 'archived']),
-  projects: Object.freeze(['name', 'title', 'notes', 'archived']),
-  ideas: Object.freeze(['name', 'title', 'oneLiner', 'notes', 'archived']),
-  admin: Object.freeze(['name', 'title', 'notes', 'nextAction', 'archived']),
-  memories: Object.freeze(['name', 'title', 'content', 'mood', 'archived']),
+  people: GRAPH_PROJECTION_FIELDS,
+  projects: GRAPH_PROJECTION_FIELDS,
+  ideas: GRAPH_PROJECTION_FIELDS,
+  admin: Object.freeze([...GRAPH_PROJECTION_FIELDS, 'nextAction']),
+  memories: Object.freeze([...GRAPH_PROJECTION_FIELDS, 'mood']),
   links: Object.freeze(['title', 'url', 'description']),
   journals: Object.freeze(['date']),
-  songs: Object.freeze(['title', 'archived']),
+  songs: GRAPH_PROJECTION_FIELDS,
 });
 
 /**
  * Is this Daily Log entry non-empty? The graph only asks the question — it
  * never renders the answer's source — and a journal body is the largest record
  * in the brain, so the predicate is projected and `content`/`segments` are not.
- * Exported so `brainGraph`'s full-record path (which still loads bodies, for
- * summaries and tags) applies the identical rule.
+ * Exported so `brainGraph`'s journal path applies the identical rule.
  */
 export const journalHasBody = (record) => !!(record?.content || record?.segments?.length);
 
+const stringContent = (record) => typeof record?.content === 'string' ? record.content : undefined;
+const GRAPH_DERIVED_FIELDS = Object.freeze({ content: stringContent });
+
 // Fields computed from the record rather than copied off it, per type.
 const DERIVED_FIELDS = Object.freeze({
+  people: GRAPH_DERIVED_FIELDS,
+  projects: GRAPH_DERIVED_FIELDS,
+  ideas: GRAPH_DERIVED_FIELDS,
+  admin: GRAPH_DERIVED_FIELDS,
+  memories: GRAPH_DERIVED_FIELDS,
+  songs: GRAPH_DERIVED_FIELDS,
   journals: Object.freeze({ hasBody: journalHasBody }),
 });
 

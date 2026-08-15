@@ -1,0 +1,1 @@
+- Brain graph views now load lightweight projections, keeping large song sheets out of graph data while preserving node summaries and tags.
