@@ -67,10 +67,14 @@ export default function GalleryImagePicker({
   // '' = All. Otherwise `uni:<id>` or `col:<id>`.
   const [scope, setScope] = useState('');
   const [type, setType] = useState('');
-  // Bumped on every open/close transition, so an async upload can tell whether
-  // the picker session it started in is still the current one.
+  // Bumped on every open/close transition — and on unmount, for a host that
+  // tears the picker down instead of toggling `open` — so an async upload can
+  // tell whether the picker session it started in is still the current one.
   const sessionRef = useRef(0);
-  useEffect(() => { sessionRef.current += 1; }, [open]);
+  useEffect(() => {
+    sessionRef.current += 1;
+    return () => { sessionRef.current += 1; };
+  }, [open]);
 
   // Fetch the gallery each time the picker opens so newly generated images show
   // up without a page reload. Reset the search on close so a re-open starts clean.

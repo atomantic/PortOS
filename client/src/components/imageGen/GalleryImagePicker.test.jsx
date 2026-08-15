@@ -181,6 +181,22 @@ describe('GalleryImagePicker', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  // Same guarantee for a host that tears the picker down (route change, or a
+  // parent that conditionally renders it) rather than toggling `open`.
+  it('drops an upload that lands after the picker unmounted', async () => {
+    let settleUpload;
+    uploadGalleryImage.mockReturnValue(new Promise((resolve) => { settleUpload = resolve; }));
+    const onSelect = vi.fn();
+    const { unmount } = render(<GalleryImagePicker open allowUpload onSelect={onSelect} onClose={vi.fn()} />);
+    await pickFile(new File(['x'], 'photo.png', { type: 'image/png' }));
+    await waitFor(() => expect(uploadGalleryImage).toHaveBeenCalledTimes(1));
+
+    unmount();
+    await act(async () => { settleUpload({ filename: 'late.png', path: '/data/images/late.png' }); });
+
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
   it('allows a large file when no host cap narrows the wire limit', async () => {
     uploadGalleryImage.mockResolvedValue({ filename: 'big.png', path: '/data/images/big.png' });
     render(<GalleryImagePicker open allowUpload onSelect={vi.fn()} onClose={vi.fn()} />);
