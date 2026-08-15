@@ -183,8 +183,44 @@ describe('CreativeCommissionDetail live render refresh (#4149)', () => {
     expect(api.getCreativeDirectorProjectsByIds.mock.calls.length).toBe(initialCalls);
   });
 
-  it('no longer tells the user to reload when a run starts', async () => {
-    api.runCommissionNow.mockResolvedValue({ status: 'started', commission: COMMISSION });
+  it('treats a project the batch resolved as pruned as settled, not in flight', async () => {
+    vi.useFakeTimers();
+    // The batch answered for this exact id set and omitted cd-1 — the project is
+    // gone. Polling can never resurrect it, so the page must not keep asking.
+    api.getCommission.mockResolvedValue(withRun(new Date().toISOString()));
+    api.getCreativeDirectorProjectsByIds.mockResolvedValue([]);
+
+    await mountLoaded();
+    expect(screen.getByText('render unavailable')).toBeTruthy();
+    const prunedCalls = api.getCreativeDirectorProjectsByIds.mock.calls.length;
+
+    await settle(30000);
+    expect(api.getCreativeDirectorProjectsByIds.mock.calls.length).toBe(prunedCalls);
+  });
+
+  it('keeps retrying while the project batch request is failing', async () => {
+    vi.useFakeTimers();
+    // A FAILED fetch is not an authoritative "pruned" answer — an unresolved id
+    // still means "not known yet", so the poll has to stay armed.
+    api.getCommission.mockResolvedValue(withRun(new Date().toISOString()));
+    api.getCreativeDirectorProjectsByIds.mockRejectedValue(new Error('offline'));
+
+    await mountLoaded();
+    const failedCalls = api.getCreativeDirectorProjectsByIds.mock.calls.length;
+
+    await settle(5000);
+    expect(api.getCreativeDirectorProjectsByIds.mock.calls.length).toBeGreaterThan(failedCalls);
+  });
+
+  it('refetches the render batch for a new run and drops the reload advice', async () => {
+    const started = {
+      id: 'run-new', projectId: 'cd-new', status: 'started', trigger: 'manual',
+      ranAt: new Date().toISOString(),
+    };
+    api.getCommission.mockResolvedValue({ ...COMMISSION, runs: [] });
+    api.runCommissionNow.mockResolvedValue({
+      status: 'started', commission: { ...COMMISSION, runs: [started] },
+    });
     render(<MemoryRouter><CreativeCommissionDetail /></MemoryRouter>);
     await screen.findByRole('heading', { name: COMMISSION.name });
 
@@ -192,6 +228,8 @@ describe('CreativeCommissionDetail live render refresh (#4149)', () => {
       fireEvent.click(screen.getByRole('button', { name: /Run commission .* now/i }));
     });
 
+    await waitFor(() => expect(api.getCreativeDirectorProjectsByIds)
+      .toHaveBeenCalledWith(['cd-new'], { silent: true }));
     expect(toast.success).toHaveBeenCalledWith(expect.stringContaining('appears below'));
     expect(toast.success).toHaveBeenCalledWith(expect.not.stringContaining('reload'));
   });

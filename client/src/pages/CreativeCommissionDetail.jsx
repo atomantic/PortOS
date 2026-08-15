@@ -78,6 +78,12 @@ export default function CreativeCommissionDetail() {
   // check reads, so it re-evaluates on every poll tick rather than freezing at
   // whatever `Date.now()` was during the last render.
   const [projectsFetchedAt, setProjectsFetchedAt] = useState(0);
+  // The id set the batch last resolved SUCCESSFULLY. Distinct from the
+  // attempted-key ref below: a failed fetch is an attempt but not a load, and
+  // the in-flight check has to keep the two apart — an id missing from a
+  // successful batch is a pruned project (settled), while the same id missing
+  // because the request failed is simply not known yet (retry).
+  const [projectsLoadedKey, setProjectsLoadedKey] = useState(null);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   // Load (and refresh) the deep-linked commission. `location.key` is a dep so a
@@ -140,6 +146,7 @@ export default function CreativeCommissionDetail() {
       setProjectsById(new Map());
       setProjectsLoading(false);
       projectsAttemptedKeyRef.current = '';
+      setProjectsLoadedKey('');
       return null;
     }
     // Only the FIRST attempt at a given id set shows "loading…" — a poll tick
@@ -152,7 +159,10 @@ export default function CreativeCommissionDetail() {
     // Index by id, not position: an id that no longer resolves (pruned project)
     // is absent from the response, and its card degrades to the status-only
     // placeholder. A FAILED fetch keeps the last good map instead of blanking it.
-    if (Array.isArray(projects)) setProjectsById(new Map(projects.map((p) => [p.id, p])));
+    if (Array.isArray(projects)) {
+      setProjectsById(new Map(projects.map((p) => [p.id, p])));
+      setProjectsLoadedKey(projectIdsKey);
+    }
     projectsAttemptedKeyRef.current = projectIdsKey;
     setProjectsLoading(false);
     // Stamped on every ATTEMPT, not just a successful one, so the in-flight age
@@ -163,20 +173,24 @@ export default function CreativeCommissionDetail() {
 
   // Is any run still producing? A run row is written once with status 'started'
   // and never revisited, so "still generating" has to come from the project it
-  // points at — unresolved (a just-created project can postdate the last batch)
-  // or sitting in a non-terminal CD status.
+  // points at, in a non-terminal CD status.
   const hasGeneratingRun = useMemo(() => {
     // The freshness of the data we're judging, not wall-clock render time.
     const now = projectsFetchedAt || Date.now();
+    // Has the CURRENT id set come back from a successful batch? Until it has, an
+    // unresolved id means "not known yet" (initial load, or a failed attempt
+    // worth retrying) — after it has, the same id means the project was pruned,
+    // and no amount of polling brings it back.
+    const batchIsAuthoritative = projectsLoadedKey === projectIdsKey;
     return (commission?.runs || []).some((r) => {
       if (r?.status !== 'started' || !r.projectId) return false;
       const ranAt = Date.parse(r.ranAt);
       if (!Number.isFinite(ranAt) || now - ranAt > IN_FLIGHT_RUN_MAX_AGE_MS) return false;
       const project = projectsById.get(r.projectId);
-      if (!project) return true;
+      if (!project) return !batchIsAuthoritative;
       return GENERATING_PROJECT_STATUSES.has(project.status);
     });
-  }, [commission, projectsById, projectsFetchedAt]);
+  }, [commission, projectsById, projectsFetchedAt, projectsLoadedKey, projectIdsKey]);
 
   // Poll only while something is actually generating; the hook also pauses while
   // the tab is hidden and re-fires on return. `immediate: false` because the
@@ -189,8 +203,12 @@ export default function CreativeCommissionDetail() {
 
   // Fetch whenever the referenced id set changes (including the initial load and
   // a Run Now appending a render) — the poll is gated on in-flight work, so it
-  // can't be responsible for the first read.
-  useEffect(() => { refetchProjects(); }, [projectIdsKey, refetchProjects]);
+  // can't be responsible for the first read. The newest run id is a dep too: a
+  // fire always mints a NEW project today, so the id set moves on its own, but a
+  // run that ever REUSED a project id would otherwise be judged against the
+  // cached 'complete' snapshot and never start polling.
+  const latestRunId = commission?.runs?.length ? commission.runs[commission.runs.length - 1].id : null;
+  useEffect(() => { refetchProjects(); }, [projectIdsKey, latestRunId, refetchProjects]);
 
   const patchForm = useCallback((path, value) => setForm((prev) => patchFormState(prev, path, value)), []);
 
