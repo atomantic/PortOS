@@ -1,0 +1,1 @@
+- Claim and planning tasks no longer risk pushing work directly to their default branch.

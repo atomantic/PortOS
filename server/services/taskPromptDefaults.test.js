@@ -218,10 +218,10 @@ describe('taskPromptDefaults integrity snapshot', () => {
   // declared the reviewer unavailable, and merged its PR on a self-review. Every
   // claim/plan prompt that enumerates the CLI reviewers must name the binary.
   it.each([
-    ['plan-task', 13],
-    ['claim-issue', 11],
-    ['claim-issue-gitlab', 10],
-    ['claim-issue-jira', 8],
+    ['plan-task', 14],
+    ['claim-issue', 12],
+    ['claim-issue-gitlab', 11],
+    ['claim-issue-jira', 9],
   ])('%s v%d names the antigravity reviewer\'s `agy` binary, preserving the pre-`agy` default', (key, version) => {
     const current = DEFAULT_TASK_PROMPTS[key];
     expect(PROMPT_VERSIONS[key]).toBe(version);
@@ -243,6 +243,38 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(preAgy).toBeDefined();
     expect(preAgy).not.toContain('is UNSATISFIED, not clean');
     expect(preAgy).not.toBe(current);
+  });
+
+  // A branch created from a remote default-branch ref normally inherits that
+  // ref as its upstream. The claim flows later derive their push destination
+  // from the branch config, so that inherited upstream could send claim work
+  // directly to the default branch instead of its PR branch. Keep these four
+  // commands untracked until their explicit `git push -u` phase establishes
+  // the correct upstream. dependency-updates intentionally differs: it starts
+  // from the bot PR head, where tracking the existing PR branch is correct.
+  it.each([
+    'plan-task',
+    'claim-issue',
+    'claim-issue-gitlab',
+    'claim-issue-jira',
+  ])('%s creates a no-track claim worktree and preserves the outgoing default', (key) => {
+    const current = DEFAULT_TASK_PROMPTS[key];
+    const worktreeCommands = current.match(/^git(?: -C \{repoPath\})? worktree add\b.*$/gm) || [];
+
+    expect(worktreeCommands).toHaveLength(1);
+    expect(worktreeCommands.every((command) => command.includes('--no-track'))).toBe(true);
+
+    const outgoing = PREVIOUS_DEFAULT_PROMPTS[key].at(-1);
+    expect(outgoing).toMatch(/\bworktree add -b\b/);
+    expect(outgoing).not.toContain('--no-track');
+    expect(outgoing).not.toBe(current);
+  });
+
+  it('keeps dependency-update worktrees tracking their PR head', () => {
+    const current = DEFAULT_TASK_PROMPTS['dependency-updates'];
+
+    expect(current).toContain('worktree add -b dep-{appName}-pr-<n>');
+    expect(current).not.toContain('--no-track');
   });
 
   // Changelog instructions defer to the convention the repo documents rather
@@ -304,7 +336,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
   it.each([
     ['claim-issue', 'gh issue close', 'gh issue edit "${NUM}" --add-label needs-input'],
     ['claim-issue-gitlab', 'glab issue close', 'glab issue update "${NUM}" --label needs-input'],
-  ])('%s converges every Phase-3 release, preserving the outgoing default', (key, closeCommand, parkCommand) => {
+  ])('%s converges every Phase-3 release, preserving the pre-convergence default', (key, closeCommand, parkCommand) => {
     const current = DEFAULT_TASK_PROMPTS[key];
     const phase3 = phaseSection(current, 3);
     // The already-fixed/superseded branch CLOSES rather than releasing open…
@@ -321,13 +353,15 @@ describe('taskPromptDefaults integrity snapshot', () => {
     // the issue open and unlabeled — it must be gone, not merely qualified.
     expect(phase3).not.toContain('If ANY of these are true, release the claim and re-pick');
 
-    // The outgoing default is preserved verbatim so installs holding it are
-    // recognized and auto-upgraded rather than read as user customizations.
-    const outgoing = PREVIOUS_DEFAULT_PROMPTS[key][PREVIOUS_DEFAULT_PROMPTS[key].length - 1];
-    const outgoingPhase3 = phaseSection(outgoing, 3);
-    expect(outgoingPhase3).toContain('If ANY of these are true, release the claim and re-pick');
-    expect(outgoingPhase3).not.toContain(closeCommand);
-    expect(outgoing).not.toBe(current);
+    // Later prompt revisions append their own outgoing defaults, so identify
+    // the pre-convergence body by its Phase-3 behavior rather than array slot.
+    const preConvergence = PREVIOUS_DEFAULT_PROMPTS[key].findLast(
+      (body) => phaseSection(body, 3).includes('If ANY of these are true, release the claim and re-pick'),
+    );
+    expect(preConvergence).toBeDefined();
+    const preConvergencePhase3 = phaseSection(preConvergence, 3);
+    expect(preConvergencePhase3).not.toContain(closeCommand);
+    expect(preConvergence).not.toBe(current);
   });
 
   // JIRA has no labels, so its converging vocabulary is status: an already-fixed
@@ -335,7 +369,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
   // status behind a Review Hub todo. Transitioning back to a not-started status
   // is the JIRA shape of the same bug — Phase 1's not-started-only filter
   // re-picks it immediately.
-  it('claim-issue-jira converges every Phase-3 release, preserving the outgoing default', () => {
+  it('claim-issue-jira converges every Phase-3 release, preserving the pre-convergence default', () => {
     const current = DEFAULT_TASK_PROMPTS['claim-issue-jira'];
     const phase3 = phaseSection(current, 3);
     expect(phase3).toContain('CONVERGING status');
@@ -348,10 +382,13 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(phase3).toContain('NOT back to a not-started status');
     expect(phase3).not.toContain('If ANY of these are true, release the claim and re-pick');
 
-    const previous = PREVIOUS_DEFAULT_PROMPTS['claim-issue-jira'];
-    const outgoing = previous[previous.length - 1];
-    expect(phaseSection(outgoing, 3)).toContain('transition the ticket back to its not-started status');
-    expect(outgoing).not.toBe(current);
+    // Newer prompt revisions append another outgoing default, so retain this
+    // historical assertion by its Phase-3 behavior rather than its array slot.
+    const preConvergence = PREVIOUS_DEFAULT_PROMPTS['claim-issue-jira'].findLast(
+      (body) => phaseSection(body, 3).includes('transition the ticket back to its not-started status'),
+    );
+    expect(preConvergence).toBeDefined();
+    expect(preConvergence).not.toBe(current);
   });
 
   // release-check READS the changelog rather than writing it, so its fix is the

@@ -533,7 +533,7 @@ SLUG=<picked-slug>
 WORKTREE="{worktreesRoot}/claim-\${SLUG}"
 mkdir -p {worktreesRoot}
 git fetch origin main
-git worktree add -b "claim/\${SLUG}" "\${WORKTREE}" origin/main
+git worktree add --no-track -b "claim/\${SLUG}" "\${WORKTREE}" origin/main
 cd "\${WORKTREE}"
 \`\`\`
 
@@ -732,7 +732,7 @@ NUM=<picked-number>
 WORKTREE="{worktreesRoot}/claim-issue-\${NUM}"
 mkdir -p {worktreesRoot}
 git fetch origin main
-git worktree add -b "claim/issue-\${NUM}" "\${WORKTREE}" origin/main
+git worktree add --no-track -b "claim/issue-\${NUM}" "\${WORKTREE}" origin/main
 # Cross-machine claim markers (best-effort — do not abort the run if these fail):
 gh issue edit "\${NUM}" --add-assignee @me 2>/dev/null
 gh issue edit "\${NUM}" --add-label in-progress 2>/dev/null
@@ -864,7 +864,7 @@ DEFAULT_BRANCH="\${DEFAULT_BRANCH:-main}"
 WORKTREE="{worktreesRoot}/claim-issue-\${NUM}"
 mkdir -p {worktreesRoot}
 git fetch origin "\${DEFAULT_BRANCH}"
-git worktree add -b "claim/issue-\${NUM}" "\${WORKTREE}" "origin/\${DEFAULT_BRANCH}"
+git worktree add --no-track -b "claim/issue-\${NUM}" "\${WORKTREE}" "origin/\${DEFAULT_BRANCH}"
 # Cross-machine claim markers (best-effort — do not abort the run if these fail).
 # Resolve your own username first — glab's --assignee wants a username (the
 # \`@me\` gh-ism isn't universally supported), falling back to @me if the lookup fails:
@@ -1001,7 +1001,7 @@ DEFAULT_BRANCH="\${DEFAULT_BRANCH:-main}"
 WORKTREE="{worktreesRoot}/claim-\${KEY}"
 mkdir -p "{worktreesRoot}"
 git -C {repoPath} fetch origin "\${DEFAULT_BRANCH}"
-git -C {repoPath} worktree add -b "claim/\${KEY}" "\${WORKTREE}" "origin/\${DEFAULT_BRANCH}"
+git -C {repoPath} worktree add --no-track -b "claim/\${KEY}" "\${WORKTREE}" "origin/\${DEFAULT_BRANCH}"
 cd "\${WORKTREE}"
 \`\`\`
 
