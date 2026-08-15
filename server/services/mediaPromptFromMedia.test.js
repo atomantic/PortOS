@@ -205,9 +205,11 @@ describe('promptFromMedia', () => {
     });
 
     expect(history.loadHistory).not.toHaveBeenCalled();
+    // The extraction id is stable per clip (filename stem), so re-analysis
+    // overwrites the same frame set instead of accumulating new ones.
     expect(ffmpeg.extractEvaluationFrames).toHaveBeenCalledWith(
       '/mock/videos/clip.webm',
-      expect.stringMatching(/^pfm-vf-/),
+      'pfm-vf-clip',
       expect.any(Number),
     );
     expect(result.mediaKind).toBe('video');

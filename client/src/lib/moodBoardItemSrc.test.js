@@ -64,6 +64,17 @@ describe('moodBoardItemAnalysisSource (#4188 Phase 3)', () => {
     expect(moodBoardItemAnalysisSource({ type: 'image', imageUrl: '/data/images/my%20render.png' }))
       .toEqual({ filename: 'my render.png', previewUrl: '/data/images/my%20render.png' });
   });
+  it('normalizes legacy bare refs and query/hash-suffixed gallery URLs (server imageUrlToAppAsset parity)', () => {
+    expect(moodBoardItemAnalysisSource({ type: 'image', imageUrl: 'render.png' }))
+      .toEqual({ filename: 'render.png', previewUrl: '/data/images/render.png' });
+    expect(moodBoardItemAnalysisSource({ type: 'image', imageUrl: '/data/images/ref.png?v=2#top' }))
+      .toEqual({ filename: 'ref.png', previewUrl: '/data/images/ref.png' });
+    // Query/hash strips BEFORE the basename — a suffix containing a slash
+    // must not swap in a different asset name.
+    expect(moodBoardItemAnalysisSource({ type: 'image', imageUrl: '/data/images/photo.png?source=/other.png' }))
+      .toEqual({ filename: 'photo.png', previewUrl: '/data/images/photo.png' });
+    expect(moodBoardItemAnalysisSource({ type: 'image', imageUrl: '/data/other/ref.png' })).toBeNull();
+  });
   it('returns null for text items, external pins, and legacy video: pins on image items', () => {
     expect(moodBoardItemAnalysisSource({ type: 'text', text: 'n' })).toBeNull();
     expect(moodBoardItemAnalysisSource({ type: 'image', imageUrl: 'https://x/y.png' })).toBeNull();

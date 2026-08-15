@@ -208,7 +208,10 @@ async function resolveVideoSource(videoId) {
 // (`video:<file>.mp4` — see isVideoItemMediaKey), not by history id, so the
 // board's analyze flow resolves a gallery video directly by filename instead
 // of a history lookup. safeUnder guards traversal; the extension gate keeps
-// this to actual clip files.
+// this to actual clip files. The extraction id is STABLE (derived from the
+// filename stem, like the id-based path's `pfm-<videoId>`) so re-analyzing
+// the same clip overwrites its frames instead of accumulating new sets under
+// data/video-thumbnails.
 async function resolveVideoFilename(filename) {
   if (!VIDEO_EXT_RE.test(filename || '')) {
     throw new ServerError(`Not a gallery video filename: ${filename}`, {
@@ -220,7 +223,8 @@ async function resolveVideoFilename(filename) {
   if (!videoPath || !existsSync(videoPath)) {
     throw new ServerError('Video file not found on disk', { status: 404, code: 'NOT_FOUND' });
   }
-  return sampleVideoFrames(videoPath, `pfm-vf-${randomUUID()}`);
+  const stem = filename.replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_');
+  return sampleVideoFrames(videoPath, `pfm-vf-${stem}`);
 }
 
 async function resolveUploadSource(filename) {
