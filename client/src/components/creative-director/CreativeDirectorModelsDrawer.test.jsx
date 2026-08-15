@@ -27,8 +27,11 @@ const ASSIGNMENTS = {
     },
   ],
   assignments: [
-    { id: 'settings.creativeDirector.treatment', providerTypes: ['cli', 'tui'], providerId: '', model: '' },
-    { id: 'settings.creativeDirector.plan', providerTypes: ['cli', 'tui'], providerId: '', model: '' },
+    // `needsTools` is the SERVER's marker for an agent-harness stage — the
+    // drawer no longer hard-codes which stages those are, so the fixture mirrors
+    // what `getAiAssignments` stamps.
+    { id: 'settings.creativeDirector.treatment', providerTypes: ['cli', 'tui'], providerId: '', model: '', needsTools: true },
+    { id: 'settings.creativeDirector.plan', providerTypes: ['cli', 'tui'], providerId: '', model: '', needsTools: true },
     {
       id: 'settings.creativeDirector.evaluation',
       providerTypes: ['api'],
@@ -105,6 +108,19 @@ describe('CreativeDirectorModelsDrawer', () => {
     getToolUseModels.mockRejectedValue(new Error('ollama down'));
     renderDrawer({ id: 'cd-1', name: 'Demo', modelOverrides: { plan: { providerId: 'ollama', model: 'gemma2:9b' } } });
     await waitFor(() => expect(screen.getByText(/recognized tool-calling model/i)).toBeInTheDocument());
+  });
+
+  it('takes needsTools from the server payload, not a hard-coded stage list', async () => {
+    // The drawer used to decide which stages need tools client-side, so the same
+    // pins stayed unannotated in AI Assignments. Drop the server marker and the
+    // warning must disappear — proof the flag, not a local list, drives it.
+    getAiAssignments.mockResolvedValue({
+      ...ASSIGNMENTS,
+      assignments: ASSIGNMENTS.assignments.map((a) => ({ ...a, needsTools: false })),
+    });
+    renderDrawer({ id: 'cd-1', name: 'Demo', modelOverrides: { plan: { providerId: 'ollama', model: 'gemma2:9b' } } });
+    await waitFor(() => expect(screen.getByLabelText('Production plan model')).toBeTruthy());
+    expect(screen.queryByText(/recognized tool-calling model/i)).not.toBeInTheDocument();
   });
 
   it('never shows a tool-use warning on the vision (evaluation) stage', async () => {

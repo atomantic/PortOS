@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
-import { Bot, Save, AlertTriangle } from 'lucide-react';
+import { Bot, Save } from 'lucide-react';
 import Drawer from '../Drawer.jsx';
 import toast from '../ui/Toast';
+import ToolUseWarning from '../ui/ToolUseWarning.jsx';
 import { getAiAssignments, updateAiAssignment } from '../../services/api';
 import { updateCreativeDirectorProject } from '../../services/apiCreativeDirector.js';
 import useVisionModelIds from '../../hooks/useVisionModelIds.js';
@@ -13,7 +14,7 @@ import {
   assignmentModelOptions,
   assignmentDefaultModel,
   localBackendForProvider,
-  localToolUseHint,
+  assignmentToolUseState,
   withToolUseOptionLabel,
 } from '../../utils/providers.js';
 
@@ -27,13 +28,16 @@ import {
 //
 // The server's `resolveStagePin` resolves project override → CD default →
 // system default; the inherit hint mirrors that chain for display only.
+//
+// Which stages need TOOL-CALLING is deliberately NOT listed here: the server
+// stamps `needsTools` on the assignment entry (see `agentEntry` in
+// server/services/aiAssignments.js) and every editor of these same pins reads
+// that one flag. A client-side list here only warned in this drawer, while the
+// AI Assignments table — which the copy below links to — let the identical pin
+// be set to a tool-less local model with no annotation at all.
 const STAGES = [
-  // `needsTools`: these stages run as agent-harness tasks that must emit native
-  // tool calls (the plan agent PATCHes the API to write the plan). A local model
-  // without tool-calling (e.g. Gemma) narrates a done-message instead of acting,
-  // silently wedging the project — so the picker marks + warns on those.
-  { key: 'treatment', label: 'Treatment', needsTools: true, help: 'Agent that turns the brief into a treatment + scene plan.' },
-  { key: 'plan', label: 'Production plan', needsTools: true, help: 'Agent that converts a production directive into an executable plan.' },
+  { key: 'treatment', label: 'Treatment', help: 'Agent that turns the brief into a treatment + scene plan.' },
+  { key: 'plan', label: 'Production plan', help: 'Agent that converts a production directive into an executable plan.' },
   {
     key: 'evaluation',
     label: 'Scene evaluation',
@@ -237,22 +241,14 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
             const providerOptions = assignmentProviderOptions(entry, providers);
             const modelOptions = assignmentModelOptions(entry, providers, draft.providerId, visionIdsByProvider);
             const pinned = !!draft.providerId;
-            // Agent stages (treatment/plan) need native tool calling. Warn when a
-            // pinned LOCAL model can't do it (Gemma & friends narrate instead of
-            // PATCHing) — the incident behind this: a plan agent on gemma4:e4b
-            // reported "done" without ever writing the plan. `localToolUseHint`
-            // is null for cloud providers (their ids don't encode family), so the
-            // warning only fires where the heuristic is trustworthy.
-            // A blank model runs the provider's default at fire time, so evaluate
-            // the EFFECTIVE model (explicit pin, else provider default) — a pinned
-            // provider whose default is a non-tool local model wedges the stage
-            // just the same.
-            const effectiveModel = draft.model || selectedProvider?.defaultModel || '';
-            const annotateToolUse = stage.needsTools && toolUseLoaded;
-            const toolHint = annotateToolUse
-              ? localToolUseHint(effectiveModel, selectedProvider, toolUseIdsByProvider)
-              : null;
-            const toolIncapable = pinned && toolHint?.toolCapable === false;
+            // Agent stages (whichever ones the SERVER marks `needsTools`) need
+            // native tool calling. Warn when a pinned LOCAL model can't do it
+            // (Gemma & friends narrate instead of PATCHing) — the incident behind
+            // this: a plan agent on gemma4:e4b reported "done" without ever
+            // writing the plan. See `assignmentToolUseState` for why the
+            // EFFECTIVE model is judged and why nothing is asserted mid-scan.
+            const { annotate: annotateToolUse, effectiveModel, incapable: toolIncapable } =
+              assignmentToolUseState(entry, selectedProvider, draft.model, toolUseIdsByProvider, toolUseLoaded);
             // Both hints below are about the LOCAL capability scan, so they only
             // apply when the pinned provider is an Ollama / LM Studio backend. A
             // cloud API provider's list is never vision-filtered, so an empty one
@@ -359,17 +355,9 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
                 )}
 
                 {toolIncapable && (
-                  <p className="flex items-start gap-1.5 text-xs text-port-warning">
-                    <AlertTriangle size={13} className="shrink-0 mt-0.5" />
-                    <span>
-                      <span className="font-medium">{effectiveModel}</span>
-                      {!draft.model && ' (this provider’s default)'} isn't a recognized tool-calling
-                      model — many local models (e.g. Gemma) reply with text instead of calling tools,
-                      which can leave this agent's stage stuck. Prefer a recognized tool-capable local
-                      model (e.g. <span className="text-gray-300">qwen3.6:35b</span>) or an API/CLI provider.{' '}
-                      <Link to="/settings/local-llm" className="underline hover:text-port-warning/80">Browse models</Link>.
-                    </span>
-                  </p>
+                  <ToolUseWarning model={effectiveModel} isProviderDefault={!draft.model}>
+                    <Link to="/settings/local-llm" className="underline hover:text-port-warning/80">Browse models</Link>.
+                  </ToolUseWarning>
                 )}
               </section>
             );

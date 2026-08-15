@@ -1,5 +1,5 @@
 import { getSettings, updateSettings } from './settings.js';
-import { getAllProviders, getProviderById, setActiveProvider, updateProvider } from './providers.js';
+import { getAllProviders, getProviderById, isOllamaBackedProvider, setActiveProvider, updateProvider } from './providers.js';
 import * as brainService from './brain.js';
 import * as universeService from './universeBuilder.js';
 import * as storyBuilderService from './storyBuilder.js';
@@ -20,6 +20,16 @@ const embeddingProviders = [
   { id: 'ollama', name: 'Ollama' },
   { id: 'lmstudio', name: 'LM Studio' },
 ];
+
+// Shared shape for every assignment whose provider runs an AGENT HARNESS. Such a
+// stage only works with a model that emits native tool calls — a local model that
+// can't (e.g. Gemma) narrates a done-message instead of acting, silently wedging
+// the run. `needsTools` is the SERVER-side source of truth every editor reads
+// (AI Assignments, the Creative Director Models drawer, any future one), so the
+// flag can't drift per-editor the way the drawer's hard-coded stage list did —
+// that list left the same pins editable without a warning from AI Assignments.
+// Mirrors how the scene-evaluation entry carries `modelFilter: 'vision'`.
+const agentEntry = { providerTypes: cliProviderTypes, needsTools: true };
 
 const asNullable = (value) => {
   if (value == null) return null;
@@ -52,6 +62,12 @@ const makeEntry = ({
   // Assignments / Creative Director pickers to restrict LOCAL backends
   // (Ollama / LM Studio) to vision-capable models only.
   modelFilter = null,
+  // Marks an assignment whose provider runs an agent harness (see `agentEntry`).
+  // Editors annotate their model options with a tool-use marker and warn when the
+  // EFFECTIVE model (explicit pin, else the provider default) isn't a recognized
+  // tool-caller. Advisory only — never a filter, because the capability signal is
+  // a positive allowlist and a non-match is "unrecognized", not a proven negative.
+  needsTools = false,
   link = null,
   notes = '',
 }) => ({
@@ -69,6 +85,7 @@ const makeEntry = ({
   providerOptions,
   modelOptions,
   modelFilter,
+  needsTools,
   link,
   notes,
 });
@@ -156,7 +173,7 @@ const addSettingsEntries = async (entries) => {
       source: `settings.${key}`,
       providerId: settings[key]?.providerId || null,
       model: settings[key]?.model || null,
-      providerTypes: cliProviderTypes,
+      ...agentEntry,
       notes: 'Requires a CLI/TUI provider because it runs agentic tool work.',
       link: key === 'autofixer' ? '/settings/autofixer' : '/settings/general',
     }));
@@ -169,7 +186,7 @@ const addSettingsEntries = async (entries) => {
     source: 'settings.creativeDirector.treatment',
     providerId: settings.creativeDirector?.treatment?.providerId || null,
     model: settings.creativeDirector?.treatment?.model || null,
-    providerTypes: cliProviderTypes,
+    ...agentEntry,
     notes: 'Agent model that turns a project brief into a treatment and scene plan. Blank = system default provider and model. Each Creative Director project can override this from its Models drawer.',
     link: '/creative-director',
   }));
@@ -181,7 +198,7 @@ const addSettingsEntries = async (entries) => {
     source: 'settings.creativeDirector.plan',
     providerId: settings.creativeDirector?.plan?.providerId || null,
     model: settings.creativeDirector?.plan?.model || null,
-    providerTypes: cliProviderTypes,
+    ...agentEntry,
     notes: 'Agent model that converts a production directive into an executable plan. Blank = system default provider and model. Each Creative Director project can override this from its Models drawer.',
     link: '/creative-director',
   }));
@@ -229,7 +246,7 @@ const addSettingsEntries = async (entries) => {
     source: 'settings.voice.llm.codeAgent',
     providerId: voice.llm?.codeAgent?.provider || null,
     model: voice.llm?.codeAgent?.model || null,
-    providerTypes: cliProviderTypes,
+    ...agentEntry,
     link: '/settings/voice',
   }));
 
@@ -350,7 +367,7 @@ const addRecordEntries = async (entries) => {
         providerId: task.providerId || null,
         model: task.model || null,
         scope: 'record',
-        providerTypes: cliProviderTypes,
+        ...agentEntry,
         link: '/cos/config',
       }));
     }
@@ -364,7 +381,7 @@ const addRecordEntries = async (entries) => {
           providerId: stage.providerId || null,
           model: stage.model || null,
           scope: 'record',
-          providerTypes: cliProviderTypes,
+          ...agentEntry,
           link: '/cos/config',
         }));
       }
@@ -382,7 +399,7 @@ const addRecordEntries = async (entries) => {
         model: null,
         scope: 'record',
         modelEditable: false,
-        providerTypes: cliProviderTypes,
+        ...agentEntry,
         link: '/loops',
       }));
     }
@@ -398,7 +415,7 @@ const addRecordEntries = async (entries) => {
         providerId: agent.providerId || null,
         model: agent.model || null,
         scope: 'record',
-        providerTypes: cliProviderTypes,
+        ...agentEntry,
         link: `/feature-agents/${agent.id}/config`,
       }));
     }
@@ -473,6 +490,13 @@ export async function getAiAssignments() {
       enabled: p.enabled !== false,
       defaultModel: p.defaultModel || null,
       models: pickModelOptions(p),
+      // Resolved HERE rather than client-side: the client mirror of this
+      // predicate reads `envVars.ANTHROPIC_BASE_URL` / `endpoint`, and this
+      // payload deliberately ships neither (envVars can hold secrets). Without
+      // the resolved flag a renamed `claude-ollama-tui` — the exact provider
+      // class the tool-use warning exists for — looked like a cloud agent to
+      // every editor and was silently skipped.
+      ollamaBacked: isOllamaBackedProvider(p),
     })),
     activeProvider: providersData.activeProvider || null,
     assignments: entries,

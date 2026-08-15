@@ -7,6 +7,7 @@ import {
   assignmentProviderOptions,
   assignmentModelOptions,
   assignmentDefaultModel,
+  assignmentToolUseState,
   PROVIDER_TYPES,
   filterSelectableModels,
   filterGenerationModels,
@@ -1065,5 +1066,57 @@ describe('AI Assignments option helpers', () => {
     // Non-vision rows still seed the provider default.
     expect(assignmentDefaultModel({}, providers, 'ollama')).toBe('granite4.1:8b');
     expect(assignmentDefaultModel({}, providers, '')).toBe('');
+  });
+
+  describe('assignmentToolUseState', () => {
+    const ollama = providers.find((p) => p.id === 'ollama');
+    const openai = providers.find((p) => p.id === 'openai');
+    const agentEntry = { needsTools: true };
+
+    it('flags a needsTools row on a local model with no recognized tool use', () => {
+      expect(assignmentToolUseState(agentEntry, ollama, 'llava:latest', null, true))
+        .toEqual({ annotate: true, effectiveModel: 'llava:latest', incapable: true });
+    });
+
+    it('clears once the model is recognized, by regex or by the backend', () => {
+      expect(assignmentToolUseState(agentEntry, ollama, 'llama3.2:latest', null, true).incapable).toBe(false);
+      // Authoritative map wins for an id the regex does not know.
+      const ids = { ollama: new Set(['llava:latest']) };
+      expect(assignmentToolUseState(agentEntry, ollama, 'llava:latest', ids, true).incapable).toBe(false);
+    });
+
+    it('judges the EFFECTIVE model, so a blank pin resolves the provider default', () => {
+      // granite4.1 IS a recognized tool-caller, so a blank pin on ollama is clean…
+      expect(assignmentToolUseState(agentEntry, ollama, '', null, true))
+        .toEqual({ annotate: true, effectiveModel: 'granite4.1:8b', incapable: false });
+      // …while a provider whose default is not gets flagged on the same blank pin.
+      const textOnly = { id: 'ollama', name: 'Ollama', defaultModel: 'llava:latest' };
+      expect(assignmentToolUseState(agentEntry, textOnly, '', null, true))
+        .toEqual({ annotate: true, effectiveModel: 'llava:latest', incapable: true });
+    });
+
+    it('asserts nothing until the capability scan settles', () => {
+      expect(assignmentToolUseState(agentEntry, ollama, 'llava:latest', null, false))
+        .toEqual({ annotate: false, effectiveModel: 'llava:latest', incapable: false });
+    });
+
+    it('stays silent for a non-agent entry, a cloud provider, or an unpinned row', () => {
+      // The server did not mark this assignment — same model, no warning.
+      expect(assignmentToolUseState({ modelFilter: 'vision' }, ollama, 'llava:latest', null, true).incapable).toBe(false);
+      expect(assignmentToolUseState(undefined, ollama, 'llava:latest', null, true).incapable).toBe(false);
+      // Cloud ids do not encode their family, so they are never judged.
+      expect(assignmentToolUseState(agentEntry, openai, 'gpt-4.1', null, true).incapable).toBe(false);
+      expect(assignmentToolUseState(agentEntry, undefined, '', null, true))
+        .toEqual({ annotate: true, effectiveModel: '', incapable: false });
+    });
+
+    it('flags an ollama-BACKED wrapper whose id and name say nothing about ollama', () => {
+      // Only the server-resolved `ollamaBacked` flag identifies it — the exact
+      // provider class the tool-use warning exists for.
+      const wrapper = { id: 'local-agent', name: 'Local Agent', ollamaBacked: true, defaultModel: 'llava:latest' };
+      expect(assignmentToolUseState(agentEntry, wrapper, '', null, true).incapable).toBe(true);
+      // Without the flag it reads as a cloud CLI and is left alone.
+      expect(assignmentToolUseState(agentEntry, { ...wrapper, ollamaBacked: false }, '', null, true).incapable).toBe(false);
+    });
   });
 });

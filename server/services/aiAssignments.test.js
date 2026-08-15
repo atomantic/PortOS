@@ -40,11 +40,15 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('./settings.js', () => ({ getSettings: mocks.getSettings, updateSettings: mocks.updateSettings }));
-vi.mock('./providers.js', () => ({
+vi.mock('./providers.js', async () => ({
   getAllProviders: mocks.getAllProviders,
   getProviderById: mocks.getProviderById,
   setActiveProvider: mocks.setActiveProvider,
   updateProvider: mocks.updateProvider,
+  // Pure predicate, deliberately NOT stubbed: the curated payload's
+  // `ollamaBacked` flag has to be the same answer the toolkit's own refresh
+  // dispatch gives, so re-implementing it here would test nothing.
+  isOllamaBackedProvider: (await import('../lib/aiToolkit/providers.js')).isOllamaBackedProvider,
 }));
 vi.mock('./brain.js', () => ({ loadMeta: mocks.loadMeta, updateMeta: mocks.updateMeta }));
 vi.mock('./universeBuilder.js', () => ({ listUniverses: mocks.listUniverses, updateUniverse: mocks.updateUniverse }));
@@ -98,12 +102,14 @@ describe('getAiAssignments', () => {
     const result = await getAiAssignments();
     expect(result.activeProvider).toBe('openai');
     expect(result.providers).toEqual([
-      { id: 'openai', name: 'OpenAI', type: 'api', enabled: true, defaultModel: 'gpt-4', models: ['gpt-4', 'gpt-4o'] },
-      { id: 'claude', name: 'Claude', type: 'cli', enabled: true, defaultModel: 'opus', models: ['opus'] },
+      { id: 'openai', name: 'OpenAI', type: 'api', enabled: true, defaultModel: 'gpt-4', models: ['gpt-4', 'gpt-4o'], ollamaBacked: false },
+      { id: 'claude', name: 'Claude', type: 'cli', enabled: true, defaultModel: 'opus', models: ['opus'], ollamaBacked: false },
     ]);
-    // The provider mock has no apiKey, but assert the curated shape has no extra keys regardless.
+    // The provider mock has no apiKey, but assert the curated shape has no extra
+    // keys regardless — in particular no `envVars`, which is why `ollamaBacked`
+    // has to be resolved server-side instead of re-derived by the client.
     for (const p of result.providers) {
-      expect(Object.keys(p).sort()).toEqual(['defaultModel', 'enabled', 'id', 'models', 'name', 'type']);
+      expect(Object.keys(p).sort()).toEqual(['defaultModel', 'enabled', 'id', 'models', 'name', 'ollamaBacked', 'type']);
     }
     const ids = result.assignments.map((a) => a.id);
     expect(ids).toContain('provider.active');
@@ -116,6 +122,56 @@ describe('getAiAssignments', () => {
     // Scene evaluation is a vision call — clients filter local model lists to VLMs.
     const evaluation = result.assignments.find((a) => a.id === 'settings.creativeDirector.evaluation');
     expect(evaluation.modelFilter).toBe('vision');
+  });
+
+  it('marks agent-harness assignments needsTools so every editor warns from one flag', async () => {
+    const result = await getAiAssignments();
+    const byId = Object.fromEntries(result.assignments.map((a) => [a.id, a]));
+    // The pins the Creative Director drawer used to hard-code client-side —
+    // editable from AI Assignments too, which is why the marker is server-side.
+    expect(byId['settings.creativeDirector.treatment'].needsTools).toBe(true);
+    expect(byId['settings.creativeDirector.plan'].needsTools).toBe(true);
+    // Every other assignment that requires a CLI/TUI provider because it runs
+    // agentic tool work carries it as well.
+    expect(byId['settings.autofixer'].needsTools).toBe(true);
+    expect(byId['settings.voice.codeAgent'].needsTools).toBe(true);
+    expect(byId['cos.task.morning-brief'].needsTools).toBe(true);
+    // A vision call and a plain chat pin are NOT agent runs — a non-tool model
+    // there is expected, so they must not be flagged.
+    expect(byId['settings.creativeDirector.evaluation'].needsTools).toBe(false);
+    expect(byId['settings.voice.llm'].needsTools).toBe(false);
+    expect(byId['settings.embeddings'].needsTools).toBe(false);
+    // Every needsTools entry also restricts providers to CLI/TUI — the two ride
+    // together, so a future entry can't claim tool use on an API-only pin.
+    for (const entry of result.assignments.filter((a) => a.needsTools)) {
+      expect(entry.providerTypes).toEqual(['cli', 'tui']);
+    }
+  });
+
+  it('resolves ollamaBacked on the curated providers so the client can flag wrapper CLIs', async () => {
+    // A renamed Claude-Ollama TUI: neither its id nor its name says "ollama",
+    // and the curated payload ships no envVars — without the server-resolved
+    // flag the tool-use warning silently skips the incident's provider class.
+    mocks.getAllProviders.mockResolvedValue({
+      activeProvider: 'openai',
+      providers: [
+        { id: 'openai', name: 'OpenAI', type: 'api', enabled: true, defaultModel: 'gpt-4', models: ['gpt-4'] },
+        {
+          id: 'local-agent',
+          name: 'Local Agent',
+          type: 'tui',
+          enabled: true,
+          defaultModel: 'gemma4:e4b',
+          models: ['gemma4:e4b'],
+          envVars: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:11434' },
+        },
+      ],
+    });
+    const result = await getAiAssignments();
+    const byId = Object.fromEntries(result.providers.map((p) => [p.id, p]));
+    expect(byId['local-agent'].ollamaBacked).toBe(true);
+    expect(byId['local-agent'].envVars).toBeUndefined();
+    expect(byId.openai.ollamaBacked).toBe(false);
   });
 });
 

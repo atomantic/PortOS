@@ -1,0 +1,1 @@
+- AI Assignments now warns when an agent assignment (Creative Director treatment/plan, autofixer, CoS tasks, feature agents) is pinned to a local model with no known tool use — the tool-use marker is driven by a server-side needsTools flag read by every model picker instead of a hard-coded list in one drawer

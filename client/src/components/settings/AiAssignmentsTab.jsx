@@ -2,13 +2,17 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { ArrowRight, Bot, RefreshCw, Save, Search } from 'lucide-react';
 import toast from '../ui/Toast';
+import ToolUseWarning from '../ui/ToolUseWarning.jsx';
 import { getAiAssignments, updateAiAssignment } from '../../services/api';
 import useVisionModelIds from '../../hooks/useVisionModelIds.js';
+import useToolUseModelIds from '../../hooks/useToolUseModelIds.js';
 import {
   providerDisplayName,
   assignmentProviderOptions,
   assignmentModelOptions,
   assignmentDefaultModel,
+  assignmentToolUseState,
+  withToolUseOptionLabel,
 } from '../../utils/providers.js';
 
 const getDraft = (entry) => ({
@@ -51,6 +55,11 @@ export default function AiAssignmentsTab() {
   // the client's id regex not knowing a newer VLM family. This table renders a
   // <select> either way (no "none installed" claim), so it needs the map only.
   const { idsByProvider: visionIdsByProvider, loaded: visionLoaded } = useVisionModelIds();
+  // Same authoritative-union treatment for the AGENT rows the server marks
+  // `needsTools` (Creative Director treatment/plan, autofixer, CoS tasks, feature
+  // agents, …). Ungated: this table always lists those rows, so there is no
+  // "page that merely contains a non-agent picker" case to spare the scan for.
+  const { idsByProvider: toolUseIdsByProvider, loaded: toolUseLoaded } = useToolUseModelIds();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -257,9 +266,16 @@ export default function AiAssignmentsTab() {
           <tbody className="divide-y divide-port-border bg-port-bg">
             {filtered.map((entry) => {
               const draft = drafts[entry.id] || getDraft(entry);
+              const selectedProvider = data.providers.find((p) => p.id === draft.providerId);
               const providerOptions = assignmentProviderOptions(entry, data.providers);
               const modelOptions = assignmentModelOptions(entry, data.providers, draft.providerId, visionIdsByProvider);
               const dirty = !sameDraft(entry, draft);
+              // Agent rows: mark each model option and warn when the EFFECTIVE
+              // model isn't a recognized tool-caller. Same server flag, same
+              // helper, same copy as the Creative Director drawer — which links
+              // here, so the pin it warns about must not be silently editable.
+              const { annotate: annotateToolUse, effectiveModel, incapable: toolIncapable } =
+                assignmentToolUseState(entry, selectedProvider, draft.model, toolUseIdsByProvider, toolUseLoaded);
               // Choosing a provider seeds its default model; for a vision row
               // that seed is only correct once the capability scan has settled.
               // Picking during it leaves a blank model pin, which the evaluator
@@ -308,7 +324,13 @@ export default function AiAssignmentsTab() {
                         className="w-full bg-port-card border border-port-border rounded px-2 py-2 text-sm text-white"
                       >
                         <option value="">Default / auto</option>
-                        {modelOptions.map((m) => <option key={m} value={m}>{m}</option>)}
+                        {modelOptions.map((m) => (
+                          <option key={m} value={m}>
+                            {annotateToolUse
+                              ? withToolUseOptionLabel(m, m, selectedProvider, toolUseIdsByProvider)
+                              : m}
+                          </option>
+                        ))}
                       </select>
                     ) : (
                       <input
@@ -318,6 +340,11 @@ export default function AiAssignmentsTab() {
                         aria-label={`Model for ${entry.label}`}
                         className="w-full bg-port-card border border-port-border rounded px-2 py-2 text-sm text-white placeholder-gray-600"
                       />
+                    )}
+                    {toolIncapable && (
+                      <ToolUseWarning model={effectiveModel} isProviderDefault={!draft.model} className="mt-1.5">
+                        <Link to="/settings/local-llm" className="underline hover:text-port-warning/80">Browse models</Link>.
+                      </ToolUseWarning>
                     )}
                   </td>
                   <td className="px-3 py-3 text-xs text-gray-500">

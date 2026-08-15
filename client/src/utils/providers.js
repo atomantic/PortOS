@@ -903,6 +903,43 @@ export const assignmentModelOptions = (entry, providers, providerId, visionIdsBy
 };
 
 /**
+ * Tool-use annotation state for one AI-assignment row/stage, so every editor of
+ * the same pin (the AI Assignments table, the Creative Director Models drawer,
+ * any future one) derives it identically instead of re-deriving the rule and
+ * drifting — the drawer used to be the only editor that warned at all, because
+ * its stage list hard-coded `needsTools` client-side.
+ *
+ * `entry.needsTools` is the SERVER's marker for an assignment whose provider runs
+ * an agent harness (see `agentEntry` in server/services/aiAssignments.js). It
+ * mirrors `modelFilter: 'vision'`: one server flag, read uniformly.
+ *
+ * Three rules are baked in here so a caller can't forget one:
+ *   - The EFFECTIVE model is judged, not the pin. A blank model isn't a no-op —
+ *     the agent resolver then runs the provider's own `defaultModel`, which for a
+ *     local backend can be the non-tool model that wedges the run.
+ *   - Nothing is asserted until the capability scan SETTLES (`toolUseLoaded`,
+ *     success or failure). Annotating mid-scan shows the false "no known tool
+ *     use" the authoritative union exists to remove, only to retract it a beat
+ *     later.
+ *   - `incapable` is a strict `=== false` on the hint, so a non-agent entry, a
+ *     cloud provider (`localToolUseHint` returns null — ids don't encode family)
+ *     or an unpinned row all read as "no warning", never as "incapable".
+ *
+ * @param {{needsTools?:boolean}|null|undefined} entry - the assignment entry
+ * @param {object|undefined} provider - the currently selected provider object
+ * @param {string} model - the row's model pin ('' = provider default)
+ * @param {Record<string, Set<string>>|null} [toolUseIdsByProvider] - from `useToolUseModelIds`
+ * @param {boolean} [toolUseLoaded] - whether that scan has settled
+ * @returns {{annotate: boolean, effectiveModel: string, incapable: boolean}}
+ */
+export const assignmentToolUseState = (entry, provider, model, toolUseIdsByProvider = null, toolUseLoaded = false) => {
+  const effectiveModel = effectiveModelFor(provider, model);
+  const annotate = entry?.needsTools === true && toolUseLoaded;
+  const hint = annotate ? localToolUseHint(effectiveModel, provider, toolUseIdsByProvider) : null;
+  return { annotate, effectiveModel, incapable: hint?.toolCapable === false };
+};
+
+/**
  * Default model to seed when the user picks a provider for an assignment.
  * For vision-filtered entries, only returns a model that still appears in the
  * filtered options — a local backend's text-only `defaultModel` must not be

@@ -55,6 +55,7 @@ import { useId } from 'react';
 import { effectiveModelFor, effortLevelsForProvider, effortSurvivingModel, localToolUseHint, withToolUseOptionLabel } from '../utils/providers.js';
 import useToolUseModelIds from '../hooks/useToolUseModelIds.js';
 import EffortSelect from './cos/EffortSelect.jsx';
+import ToolUseWarning from './ui/ToolUseWarning.jsx';
 
 const SELECT_CLASS =
   'w-full px-3 py-1.5 min-h-[36px] bg-port-bg border border-port-border rounded-lg text-white text-sm';
@@ -186,13 +187,10 @@ export default function ProviderModelSelector({
               return <option key={opt.value} value={opt.value}>{label}</option>;
             })}
           </select>
+          {/* No remediation link: this selector renders in hosts that aren't
+              wrapped in a Router, so the shared warning stays link-free here. */}
           {toolIncapable && (
-            <p className="mt-1 text-xs text-port-warning">
-              ⚠ <span className="font-medium">{effectiveModel}</span>
-              {!selectedModel && ' (this provider’s default)'} isn't a recognized tool-calling
-              model — many local models (e.g. Gemma) reply with text instead of calling tools, which
-              stalls an agent. Prefer a recognized tool-capable model (e.g. qwen3.6:35b).
-            </p>
+            <ToolUseWarning model={effectiveModel} isProviderDefault={!selectedModel} className="mt-1" />
           )}
         </div>
       )}
