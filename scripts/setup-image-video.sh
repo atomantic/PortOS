@@ -723,16 +723,13 @@ if [[ "$INSTALL_ACESTEP15" == "1" ]]; then
   # multi-component pipeline whose DiT loads custom Transformers code with
   # trust_remote_code, so it must never share v1's `acestep` venv.
   ACESTEP15_VENV="${HOME}/.portos/venv-acestep15"
-  ACESTEP15_PY="$ACESTEP15_VENV/bin/python3"
   mkdir -p "${HOME}/.portos"
 
-  if [[ ! -x "$ACESTEP15_PY" && ! -x "$ACESTEP15_VENV/Scripts/python.exe" ]]; then
+  if ! venv_exists "$ACESTEP15_VENV"; then
     echo "📦 Creating ACE-Step 1.5 venv at ${ACESTEP15_VENV}..."
     "$PYTHON_BIN" -m venv "$ACESTEP15_VENV"
   fi
-  if [[ ! -x "$ACESTEP15_PY" ]]; then
-    ACESTEP15_PY="$ACESTEP15_VENV/Scripts/python.exe"
-  fi
+  ACESTEP15_PY="$(venv_python "$ACESTEP15_VENV")"
   echo "📦 Installing ACE-Step 1.5 into ${ACESTEP15_VENV}..."
   "$ACESTEP15_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
   # ACE-Step 1.5's Linux/Windows torch pins are published on PyTorch's CUDA
@@ -938,7 +935,7 @@ if [[ "$INSTALL_ACESTEP" == "1" ]]; then
   echo "   ACE-Step:  ${ACESTEP_PY} (separate venv, acestep — full song + vocals)"
 fi
 if [[ "$INSTALL_ACESTEP15" == "1" ]]; then
-  echo "   ACE-Step 1.5: ${HOME}/.portos/venv-acestep15/bin/python3 (separate venv, Transformers — full song + vocals)"
+  echo "   ACE-Step 1.5: ${ACESTEP15_PY} (separate venv, Transformers — full song + vocals)"
 fi
 if [[ "$INSTALL_MUSCRIPTOR" == "1" ]]; then
   echo "   MuScriptor: ${MUSCRIPTOR_PY} (separate venv, muscriptor — audio → MIDI)"
