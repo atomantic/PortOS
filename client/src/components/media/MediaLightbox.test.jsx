@@ -10,7 +10,10 @@ vi.mock('./AddToCollectionMenu', () => ({ default: () => null }));
 vi.mock('./PromptRefineModal', () => ({
   default: ({ open }) => open ? <div data-testid="refine-modal" /> : null,
 }));
-vi.mock('./PromptFromMedia', () => ({ default: () => null, PromptFromMediaModal: () => null }));
+vi.mock('./PromptFromMedia', () => ({
+  default: () => null,
+  PromptFromMediaModal: ({ open }) => open ? <div data-testid="prompt-from-modal" /> : null,
+}));
 
 const videoItem = {
   kind: 'video',
@@ -142,6 +145,29 @@ describe('MediaLightbox Escape cascade', () => {
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.queryByTestId('refine-modal')).toBeNull();
     expect(screen.getByRole('dialog')).toBeTruthy();
+  });
+
+  it('closes the prompt-from-media modal without closing the lightbox', () => {
+    const onClose = vi.fn();
+    render(<MediaLightbox item={imageItem} onClose={onClose} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Prompt from this' }));
+    const promptFromModal = screen.getByTestId('prompt-from-modal');
+
+    fireEvent.keyDown(promptFromModal, { key: 'Escape' });
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('prompt-from-modal')).toBeNull();
+    expect(screen.getByRole('dialog')).toBeTruthy();
+  });
+
+  it('closes the lightbox when Escape is pressed with nothing else open', () => {
+    const onClose = vi.fn();
+    render(<MediaLightbox item={imageItem} onClose={onClose} />);
+
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
 
