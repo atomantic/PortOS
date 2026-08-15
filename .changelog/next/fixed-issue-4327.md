@@ -1,0 +1,1 @@
+- a11y guard: the wrapper registry now decodes wrapped default exports (`export default memo(Field)`) and named re-export barrels, so an imported label wrapper is no longer silently read as "not a wrapper"

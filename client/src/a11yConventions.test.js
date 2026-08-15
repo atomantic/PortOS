@@ -59,10 +59,19 @@ const trackedSourceSet = (() => {
 // and the wrapper lookups then share one source *object*.
 const maskedSourceByFile = new Map();
 
+// Probe-only stand-in modules, keyed by the same client-relative path a real
+// file would use. An import idiom with no live witness in the tree — a wrapped
+// default export, a re-export barrel — is otherwise only testable by calling
+// its decoder by hand, which proves the decoder and not the wiring. Installed
+// for the duration of one `withVirtualSources` callback and torn down with
+// every cache entry they seeded, so no rule that reads real source sees them.
+const virtualSources = new Map();
+
 function maskedSourceOf(file) {
   let masked = maskedSourceByFile.get(file);
   if (masked === undefined) {
-    masked = maskComments(readFileSync(join(CLIENT_ROOT, file), 'utf8'));
+    const raw = virtualSources.get(file) ?? readFileSync(join(CLIENT_ROOT, file), 'utf8');
+    masked = maskComments(raw);
     maskedSourceByFile.set(file, masked);
   }
   return masked;
@@ -1004,7 +1013,21 @@ function resolveRelativeImport(fromFile, specifier) {
   if (!specifier.startsWith('.')) return null;
   const base = join(dirname(fromFile), specifier);
   const candidates = [base, `${base}.jsx`, `${base}.js`, `${base}/index.jsx`, `${base}/index.js`];
-  return candidates.find((candidate) => trackedSourceSet().has(candidate)) ?? null;
+  // The virtual set is consulted without being folded into `trackedSourceSet()`
+  // — that Set is memoized for the whole suite, and seeding it would outlive
+  // the probe that installed the module.
+  return candidates.find((candidate) => virtualSources.has(candidate) || trackedSourceSet().has(candidate)) ?? null;
+}
+
+// `export { A }` / `export { A as B }` / `import { A as B }` all bind the same
+// way: the left name is what the SOURCE module exports, the right one is what
+// this module calls it. Shared so an import clause and a re-export clause can
+// never drift apart on the aliasing.
+function addNamedClauseBindings(bindings, clause, file) {
+  for (const entry of clause.split(',')) {
+    const [exported, local] = entry.trim().split(/\s+as\s+/);
+    if (exported) bindings.set(local ?? exported, { file, exportedName: exported });
+  }
 }
 
 // Local binding name -> { file, exportedName } for every relatively-imported
@@ -1019,12 +1042,69 @@ function relativeImportBindings(src, file) {
     const resolved = resolveRelativeImport(file, specifier);
     if (!resolved) continue;
     const named = /\{([^}]*)\}/.exec(clause);
-    for (const entry of named ? named[1].split(',') : []) {
-      const [exported, local] = entry.trim().split(/\s+as\s+/);
-      if (exported) bindings.set(local ?? exported, { file: resolved, exportedName: exported });
-    }
+    if (named) addNamedClauseBindings(bindings, named[1], resolved);
     const defaultBinding = clause.replace(/\{[^}]*\}/, ' ').replace(/,/g, ' ').trim();
     if (/^[A-Z][\w$]*$/.test(defaultBinding)) bindings.set(defaultBinding, { file: resolved, exportedName: 'default' });
+  }
+  return bindings;
+}
+
+// Which component a file's default export actually points at:
+//
+//   export default FormField              -> FormField
+//   export default function FormField()   -> FormField
+//   export default memo(Field)            -> Field
+//   export default React.memo(Field)      -> Field
+//   export default memo(forwardRef(Field))-> Field
+//   export default forwardRef(function Field(props) {…}) -> Field
+//
+// Each pass steps over one `identifier(` prefix, so what is credited is the
+// innermost thing the export really names rather than the HOC wrapping it. A
+// default that is neither a reference nor a call — an inline arrow, an object
+// literal, an anonymous `memo(({label}) => …)` — yields null: there is no
+// declared component to look up, and guessing at a neighbouring capitalized
+// name would credit a wrapper the export does not point at. The depth bound is
+// a backstop; real HOC stacks in this tree are one or two deep.
+function defaultExportName(src) {
+  const start = /export\s+default\s+/.exec(src);
+  if (!start) return null;
+  let rest = src.slice(start.index + start[0].length).trimStart();
+  for (let depth = 0; depth < 4; depth++) {
+    const ref = /^(function\s+)?([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*/.exec(rest);
+    if (!ref) return null;
+    const [, isDeclaration, reference] = ref;
+    const after = rest.slice(ref[0].length);
+    // A declaration owns its parens (they are its parameter list), so it is the
+    // name — only a bare reference followed by `(` is a call to unwrap.
+    if (isDeclaration || !after.startsWith('(')) {
+      const name = reference.split('.').pop();
+      return /^[A-Z]/.test(name) ? name : null;
+    }
+    rest = after.slice(1).trimStart();
+  }
+  return null;
+}
+
+// `export { Field } from './Field'` / `export { default as Field } from './Field'`
+// — the barrel idiom this tree writes. A barrel declares no components of its
+// own, so `forEachLocalComponent` finds nothing in it and the registry reports
+// "not a wrapper" for a wrapper it simply never opened. Re-exports are chased
+// through `importedComponentShapes`, which already publishes its map before
+// filling it, so a barrel cycle resolves to no shapes instead of recursing.
+//
+// `export * from './x'` is still undecoded: it forwards names without listing
+// them, so resolving one means reading every star target on every miss. No
+// barrel in this tree star-exports a label wrapper (they star only constants
+// modules), and the miss direction is the safe one — a control stays on the
+// allowlist rather than being falsely exempted.
+function reExportBindings(src, file) {
+  const bindings = new Map();
+  const re = /export\s*\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]/g;
+  let match;
+  while ((match = re.exec(src))) {
+    const [, clause, specifier] = match;
+    const resolved = resolveRelativeImport(file, specifier);
+    if (resolved) addNamedClauseBindings(bindings, clause, resolved);
   }
   return bindings;
 }
@@ -1042,13 +1122,17 @@ function importedComponentShapes(file, exportedName) {
     importedShapesByFile.set(file, byName);
     const src = maskedSourceOf(file);
     for (const [name, shapes] of wrapperRegistry(src, file)) byName.set(name, shapes);
-    // `export default FormField` / `export default function FormField()`. The
-    // local binding at the call site can be spelled anything, so the default
-    // export is resolved to the component it names. Wrapped default exports
-    // (`export default memo(Field)`) and re-export barrels are not decoded —
-    // a false negative that leaves the control on the allowlist (#4327).
-    const defaultName = /export\s+default\s+(?:function\s+)?([A-Z][\w$]*)/.exec(src)?.[1];
+    // The local binding at the call site can be spelled anything, so the
+    // default export is resolved to the component it names (#4327).
+    const defaultName = defaultExportName(src);
     if (defaultName && byName.has(defaultName)) byName.set('default', byName.get(defaultName));
+    // A barrel's own declarations win over what it forwards: a module cannot
+    // export the same name twice, so this only fills names it has none for.
+    for (const [name, forwarded] of reExportBindings(src, file)) {
+      if (byName.has(name)) continue;
+      const shapes = importedComponentShapes(forwarded.file, forwarded.exportedName);
+      if (shapes.length) byName.set(name, shapes);
+    }
     importedShapesByFile.set(file, byName);
   }
   return byName.get(exportedName) ?? [];
@@ -1083,6 +1167,24 @@ function wrapperRegistry(src, file) {
   }
   if (cacheable) wrapperRegistryByFile.set(file, registry);
   return registry;
+}
+
+// Install stand-in modules for one callback, then drop them along with every
+// cache entry they seeded — `finally`, so a failing assertion inside cannot
+// leak a virtual module into the rules that read real source. Test-only:
+// nothing in the scan reaches it.
+function withVirtualSources(sources, run) {
+  for (const [file, src] of Object.entries(sources)) virtualSources.set(file, src);
+  try {
+    return run();
+  } finally {
+    for (const file of Object.keys(sources)) {
+      virtualSources.delete(file);
+      maskedSourceByFile.delete(file);
+      wrapperRegistryByFile.delete(file);
+      importedShapesByFile.delete(file);
+    }
+  }
 }
 
 function isNestedInLabelWrapper(src, { index }, { labelProp }, name) {
@@ -2041,6 +2143,80 @@ describe('a11y conventions', () => {
     // rendered props, re-opening the attribute-only bypass above.
     const angleBracketInAttribute = 'const Field = ({ label, children }) => (\n  <label><span title=">" data-tooltip={label} />{children}</label>\n);\n<Field label="Help text"><input type="text" /></Field>';
     expect(isNamed(angleBracketInAttribute)).toBe(false);
+  });
+
+  it('decodes a wrapped default export and a re-export barrel (#4327)', () => {
+    // The registry resolves an imported wrapper by READING the imported file,
+    // so an export idiom it cannot decode reports "not a wrapper" for a wrapper
+    // it never opened — the absent-vs-empty collapse, and the same silent false
+    // negative #4317 was filed to close. Neither idiom has a live label-wrapper
+    // witness in the tree (this repo's barrels forward pages, not wrappers, and
+    // its `export default memo(…)` components are not label wrappers), so the
+    // fixtures stand in as virtual modules and the assertion still runs through
+    // the real scan rather than through a hand-called decoder.
+    const DIR = 'src/components/settings';
+    const implicit = (name) => `function ${name}({ label, children }) {
+  return (<label className="block"><span>{label}</span>{children}</label>);
+}`;
+    const callSite = (specifier, binding, clause = binding) =>
+      `import ${clause} from '${specifier}';\n<${binding} label="Rounds"><input type="number" /></${binding}>`;
+
+    // 1. A default export wrapped in HOC calls. `export default memo(Field)` is
+    // a live idiom here (grep `export default memo(`), and the old
+    // `export default (function )?Name` pattern yields nothing for all of these
+    // — `memo` is not the component, and it is not capitalized either.
+    for (const wrapped of ['memo(Field)', 'React.memo(Field)', 'memo(forwardRef(Field))']) {
+      const src = `${implicit('Field')}\nexport default ${wrapped};`;
+      const named = withVirtualSources({ [`${DIR}/Wrapped.jsx`]: src }, () =>
+        isNamed(callSite('./Wrapped', 'Field')));
+      expect(named, `default export \`${wrapped}\` was not decoded`).toBe(true);
+    }
+    // The declaration form inside the HOC, where the parens after the name are
+    // a parameter list rather than a call to unwrap.
+    const inlineDeclaration = `export default forwardRef(function Field({ label, children }) {
+  return (<label className="block"><span>{label}</span>{children}</label>);
+});`;
+    expect(withVirtualSources({ [`${DIR}/Inline.jsx`]: inlineDeclaration }, () =>
+      isNamed(callSite('./Inline', 'Field')))).toBe(true);
+
+    // An anonymous wrapped default names no declared component, so there is
+    // nothing to look up — and guessing would credit whatever capitalized name
+    // sat nearby. Unnamed is the safe direction: the control stays allowlisted.
+    const anonymous = 'export default memo(({ label, children }) => (\n  <label className="block"><span>{label}</span>{children}</label>\n));';
+    expect(withVirtualSources({ [`${DIR}/Anon.jsx`]: anonymous }, () =>
+      isNamed(callSite('./Anon', 'Field')))).toBe(false);
+    // …as is a wrapped default whose component is not a wrapper at all.
+    const notAWrapper = 'function Field({ label, children }) {\n  return (<div>{label}{children}</div>);\n}\nexport default memo(Field);';
+    expect(withVirtualSources({ [`${DIR}/Plain.jsx`]: notAWrapper }, () =>
+      isNamed(callSite('./Plain', 'Field')))).toBe(false);
+
+    // 2. A re-export barrel. `resolveRelativeImport` already resolves `../ui`
+    // to its index file; before this, that index declared no components and the
+    // registry stopped there.
+    const barrel = (line) => ({
+      [`${DIR}/kit/index.js`]: line,
+      [`${DIR}/kit/Field.jsx`]: `${implicit('Field')}\nexport default Field;`,
+      [`${DIR}/kit/Named.jsx`]: implicit('Named').replace('function', 'export function'),
+    });
+    expect(withVirtualSources(barrel("export { default as Field } from './Field';"), () =>
+      isNamed(callSite('./kit', 'Field', '{ Field }')))).toBe(true);
+    // The aliasing has to survive the hop: `Named` is what the source module
+    // exports, `Field` is what the call site renders.
+    expect(withVirtualSources(barrel("export { Named as Field } from './Named';"), () =>
+      isNamed(callSite('./kit', 'Field', '{ Field }')))).toBe(true);
+    // A barrel that forwards a name it cannot resolve credits nothing.
+    expect(withVirtualSources(barrel("export { default as Field } from './Missing';"), () =>
+      isNamed(callSite('./kit', 'Field', '{ Field }')))).toBe(false);
+    // Neither does one whose target is a component that names no control.
+    expect(withVirtualSources({
+      ...barrel("export { default as Field } from './Field';"),
+      [`${DIR}/kit/Field.jsx`]: 'function Field({ label, children }) {\n  return (<div>{label}{children}</div>);\n}\nexport default Field;',
+    }, () => isNamed(callSite('./kit', 'Field', '{ Field }')))).toBe(false);
+
+    // The stand-ins are torn down with the caches they seeded, so a rule that
+    // reads real source can never observe one.
+    expect(virtualSources.size).toBe(0);
+    expect(maskedSourceByFile.has(`${DIR}/kit/index.js`)).toBe(false);
   });
 
   it('meets the 44px touch-target minimum on Close buttons', () => {
