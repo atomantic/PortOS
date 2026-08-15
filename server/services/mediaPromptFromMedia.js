@@ -204,6 +204,25 @@ async function resolveVideoSource(videoId) {
   return sampleVideoFrames(videoPath, `pfm-${videoId}`);
 }
 
+// A mood-board video item (#4188) references its clip by on-disk FILENAME
+// (`video:<file>.mp4` — see isVideoItemMediaKey), not by history id, so the
+// board's analyze flow resolves a gallery video directly by filename instead
+// of a history lookup. safeUnder guards traversal; the extension gate keeps
+// this to actual clip files.
+async function resolveVideoFilename(filename) {
+  if (!VIDEO_EXT_RE.test(filename || '')) {
+    throw new ServerError(`Not a gallery video filename: ${filename}`, {
+      status: 400,
+      code: 'VALIDATION_ERROR',
+    });
+  }
+  const videoPath = safeUnder(PATHS.videos, filename);
+  if (!videoPath || !existsSync(videoPath)) {
+    throw new ServerError('Video file not found on disk', { status: 404, code: 'NOT_FOUND' });
+  }
+  return sampleVideoFrames(videoPath, `pfm-vf-${randomUUID()}`);
+}
+
 async function resolveUploadSource(filename) {
   const uploadPath = safeUnder(PATHS.uploads, filename);
   if (!uploadPath || !existsSync(uploadPath)) {
@@ -226,7 +245,7 @@ async function resolveUploadSource(filename) {
 
 async function resolvePromptFromMediaSource({ sourceKind, filename, videoId }) {
   if (sourceKind === 'image') return resolveImagePath(filename);
-  if (sourceKind === 'video') return resolveVideoSource(videoId);
+  if (sourceKind === 'video') return videoId ? resolveVideoSource(videoId) : resolveVideoFilename(filename);
   if (sourceKind === 'upload') return resolveUploadSource(filename);
   throw new ServerError(`Unsupported sourceKind "${sourceKind}"`, {
     status: 400,

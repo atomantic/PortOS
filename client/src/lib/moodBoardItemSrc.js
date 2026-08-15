@@ -30,6 +30,35 @@ export function moodBoardItemSrc(item) {
   return null;
 }
 
+// Resolve a board item to a prompt-from-media source (#4188 Phase 3) — the
+// gallery-item shape PromptFromMedia's `initialSource` expects. Returns null
+// when the item's media isn't a local gallery asset the analyzer can read:
+// text items, external-URL pins, and legacy `video:<id>` pins on image items.
+// A video item resolves by FILENAME (`kind:'video'` with no id — the server
+// accepts filename in place of the history id); an image item resolves by its
+// `image:<file>` media-key or a `/data/images/<file>` app-path imageUrl.
+export function moodBoardItemAnalysisSource(item) {
+  if (item?.type === 'video') {
+    if (typeof item?.mediaKey === 'string' && item.mediaKey.startsWith(VIDEO_PREFIX)) {
+      const filename = item.mediaKey.slice(VIDEO_PREFIX.length);
+      if (filename) return { kind: 'video', filename, previewUrl: moodBoardItemSrc(item) };
+    }
+    return null;
+  }
+  if (item?.type !== 'image') return null;
+  if (typeof item?.mediaKey === 'string' && item.mediaKey.startsWith(IMAGE_PREFIX)) {
+    const filename = item.mediaKey.slice(IMAGE_PREFIX.length);
+    if (filename) return { filename, previewUrl: moodBoardItemSrc(item) };
+  }
+  const GALLERY_PREFIX = '/data/images/';
+  if (typeof item?.imageUrl === 'string' && item.imageUrl.startsWith(GALLERY_PREFIX)) {
+    let filename = item.imageUrl.slice(GALLERY_PREFIX.length);
+    try { filename = decodeURIComponent(filename); } catch { /* keep raw */ }
+    if (filename && !filename.includes('/')) return { filename, previewUrl: item.imageUrl };
+  }
+  return null;
+}
+
 // Playback URL for a `type: 'video'` item; null for anything else (including
 // legacy `video:<id>` pins on image items, whose ref is not a filename).
 export function moodBoardItemVideoSrc(item) {

@@ -110,6 +110,38 @@ describe('PromptFromMedia', () => {
     expect(screen.getByText('the camera dollies past the subject')).toBeInTheDocument();
   });
 
+  it('notifies the host via onResult and sends a filename-only clip without a videoId (#4188)', async () => {
+    const onResult = vi.fn();
+    const payload = {
+      videoPrompt: 'a slow dolly through fog',
+      videoNegativePrompt: 'jitter',
+      rationale: 'Foggy push-in.',
+      providerId: 'openai',
+      model: 'gpt-4o',
+    };
+    vi.mocked(api.promptFromMedia).mockResolvedValue(payload);
+
+    renderPanel({
+      kindDefault: 'video',
+      applyKind: undefined,
+      onResult,
+      // A mood-board video item resolves by on-disk filename — no history id.
+      initialSource: { kind: 'video', filename: 'clip.mp4', previewUrl: '/data/video-thumbnails/clip.jpg' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /create prompt/i }));
+
+    await waitFor(() => {
+      expect(api.promptFromMedia).toHaveBeenCalledWith(expect.objectContaining({
+        sourceKind: 'video',
+        videoId: undefined,
+        filename: 'clip.mp4',
+        targets: ['video'],
+      }));
+    });
+    expect(onResult).toHaveBeenCalledWith(payload);
+  });
+
   it('skips the disclosure toggle when hosted as an always-open card', () => {
     renderPanel({ alwaysOpen: true, initialSource: null });
     expect(screen.queryByRole('button', { name: /toggle prompt from media/i })).toBeNull();

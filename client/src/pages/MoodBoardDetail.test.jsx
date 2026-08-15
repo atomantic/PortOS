@@ -6,12 +6,13 @@ import { MemoryRouter } from 'react-router';
 // ── Mocks must be declared before any imports that use them ──────────────────
 
 const mockGetMoodBoard = vi.fn();
+const mockUpdateMoodBoardItem = vi.fn();
 
 vi.mock('../services/api', () => ({
   getMoodBoard: (...args) => mockGetMoodBoard(...args),
   updateMoodBoard: vi.fn(),
   addMoodBoardItem: vi.fn(),
-  updateMoodBoardItem: vi.fn(),
+  updateMoodBoardItem: (...args) => mockUpdateMoodBoardItem(...args),
   removeMoodBoardItem: vi.fn(),
   linkMoodBoardPinterest: vi.fn(),
   unlinkMoodBoardPinterest: vi.fn(),
@@ -25,6 +26,29 @@ vi.mock('../components/ui/Toast', () => ({
     error: (...args) => mockToastError(...args),
     warning: vi.fn(),
   }),
+}));
+
+// Stub the prompt-from-media modal (#4188 Phase 3) — the analysis flow under
+// test is the page's own wiring (open, persist via onResult, stored-analysis
+// children), not the analyzer internals, which have their own suite.
+vi.mock('../components/media/PromptFromMedia', () => ({
+  PromptFromMediaModal: ({ open, item, onResult, children }) => (open && item ? (
+    <div data-testid="pfm-modal">
+      {children}
+      <button
+        type="button"
+        onClick={() => onResult?.({
+          imagePrompt: 'a moody castle at dusk',
+          imageNegativePrompt: 'blurry',
+          rationale: 'gothic look',
+          providerId: 'openai',
+          model: 'gpt-4o',
+        })}
+      >
+        mock-generate
+      </button>
+    </div>
+  ) : null),
 }));
 
 // Control the board id `useParams` returns so we can simulate the user
@@ -170,5 +194,89 @@ describe('MoodBoardDetail video items (#4188)', () => {
     expect(poster.getAttribute('src')).toBe('/data/video-thumbnails/abc123.jpg');
     fireEvent.error(poster);
     expect(poster.getAttribute('src')).toBe('/data/video-thumbnails/downloaded-abc123.jpg');
+  });
+});
+
+describe('MoodBoardDetail item analysis (#4188 Phase 3)', () => {
+  const galleryImageItem = {
+    id: 'i1', type: 'image', mediaKey: 'image:ref.png', imageUrl: null, caption: null, source: null,
+  };
+
+  it('offers the analyze action only on gallery-backed media items', async () => {
+    mockGetMoodBoard.mockResolvedValueOnce({
+      id: 'a',
+      name: 'Board A',
+      items: [
+        galleryImageItem,
+        { id: 'i2', type: 'text', text: 'note', caption: null, source: null },
+        { id: 'i3', type: 'image', mediaKey: null, imageUrl: 'https://x/y.png', caption: null, source: null },
+      ],
+    });
+    renderPage();
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+
+    // One analyzable item → exactly one analyze button; the text item and the
+    // external-URL pin get none.
+    expect(screen.getAllByRole('button', { name: 'Analyze with AI' })).toHaveLength(1);
+  });
+
+  it('persists a run onto the item and flips the card to its analyzed state', async () => {
+    mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [galleryImageItem] });
+    const analyzedItem = {
+      ...galleryImageItem,
+      analysis: {
+        prompt: 'a moody castle at dusk',
+        negativePrompt: 'blurry',
+        rationale: 'gothic look',
+        providerId: 'openai',
+        model: 'gpt-4o',
+        analyzedAt: '2026-08-14T00:00:00.000Z',
+      },
+    };
+    mockUpdateMoodBoardItem.mockResolvedValueOnce(analyzedItem);
+    renderPage();
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Analyze with AI' }));
+    expect(screen.getByTestId('pfm-modal')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'mock-generate' }));
+    await waitFor(() => {
+      expect(mockUpdateMoodBoardItem).toHaveBeenCalledWith('a', 'i1', {
+        analysis: {
+          prompt: 'a moody castle at dusk',
+          negativePrompt: 'blurry',
+          rationale: 'gothic look',
+          providerId: 'openai',
+          model: 'gpt-4o',
+        },
+      }, { silent: true });
+    });
+
+    // The persisted item flows back into board state: the card badge flips and
+    // the modal now shows the stored analysis.
+    await screen.findByRole('button', { name: 'View AI analysis' });
+    expect(screen.getByLabelText('Saved analysis prompt')).toHaveValue('a moody castle at dusk');
+  });
+
+  it('removes a stored analysis via the modal', async () => {
+    const analyzed = {
+      ...galleryImageItem,
+      analysis: {
+        prompt: 'a moody castle at dusk', negativePrompt: null, rationale: null,
+        providerId: null, model: null, analyzedAt: '2026-08-14T00:00:00.000Z',
+      },
+    };
+    mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [analyzed] });
+    mockUpdateMoodBoardItem.mockResolvedValueOnce({ ...galleryImageItem, analysis: null });
+    renderPage();
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'View AI analysis' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    await waitFor(() => {
+      expect(mockUpdateMoodBoardItem).toHaveBeenCalledWith('a', 'i1', { analysis: null }, { silent: true });
+    });
+    await screen.findByRole('button', { name: 'Analyze with AI' });
   });
 });

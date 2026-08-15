@@ -85,8 +85,10 @@ const promptFromMediaSchema = z.object({
     return v.length > 0 ? v : undefined;
   }),
 }).superRefine((data, ctx) => {
-  if (data.sourceKind === 'video' && !data.videoId) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'videoId is required for a gallery video', path: ['videoId'] });
+  // A gallery video resolves by history id (the gallery flow) OR by on-disk
+  // filename (a mood-board video item's `video:<filename>` ref — #4188).
+  if (data.sourceKind === 'video' && !data.videoId && !data.filename) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'videoId or filename is required for a gallery video', path: ['videoId'] });
   }
   if ((data.sourceKind === 'image' || data.sourceKind === 'upload') && !data.filename) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'filename is required', path: ['filename'] });

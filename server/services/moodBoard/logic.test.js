@@ -144,6 +144,35 @@ describe('updateItem', () => {
     expect(() => updateItem(board, vidId, { mediaKey: 'image:foo.png' })).toThrow(/mediaKey/i);
     expect(() => updateItem(board, vidId, { mediaKey: 'video:job-123' })).toThrow(/mediaKey/i);
   });
+  it('persists a normalized analysis on a media item and clears it with null (#4188 Phase 3)', () => {
+    const { board } = addItem(buildBoardRecord({ name: 'A' }, { id: 'mb-5', now: 't0' }), { type: 'image', imageUrl: 'https://x/y.png' });
+    const imgId = board.items[0].id;
+    const { board: analyzed, item } = updateItem(board, imgId, { analysis: { prompt: 'a moody castle' } });
+    expect(item.analysis).toMatchObject({
+      prompt: 'a moody castle',
+      negativePrompt: null,
+      rationale: null,
+      providerId: null,
+      model: null,
+    });
+    // analyzedAt is stamped server-side when the client didn't send one.
+    expect(typeof item.analysis.analyzedAt).toBe('string');
+    expect(item.analysis.analyzedAt.length).toBeGreaterThan(0);
+    // Other patches leave the stored analysis untouched.
+    const { board: captioned, item: kept } = updateItem(analyzed, imgId, { caption: 'c' });
+    expect(kept.analysis.prompt).toBe('a moody castle');
+    const { item: cleared } = updateItem(captioned, imgId, { analysis: null });
+    expect(cleared.analysis).toBeNull();
+  });
+  it('keeps a client-provided analyzedAt on a video item and ignores analysis on a text item', () => {
+    const { board } = addItem(buildBoardRecord({ name: 'A' }, { id: 'mb-6', now: 't0' }), { type: 'video', mediaKey: 'video:a.mp4' });
+    const vidId = board.items[0].id;
+    const { item } = updateItem(board, vidId, { analysis: { prompt: 'motion', analyzedAt: '2026-08-14T00:00:00.000Z' } });
+    expect(item.analysis.analyzedAt).toBe('2026-08-14T00:00:00.000Z');
+    // Analysis comes from the item's media, so a text item never gains one.
+    const { item: textItem } = updateItem(withItem, itemId, { analysis: { prompt: 'nope' } });
+    expect(textItem.analysis).toBeUndefined();
+  });
 });
 
 describe('removeItem', () => {

@@ -11,12 +11,14 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router';
-import { ArrowLeft, ImageIcon, FileText, Trash2, Plus, Save, Link2, Unlink, RefreshCw, Images, Film, Play } from 'lucide-react';
+import { ArrowLeft, ImageIcon, FileText, Trash2, Plus, Save, Link2, Unlink, RefreshCw, Images, Film, Play, ScanEye, Copy } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
 import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
 import GalleryVideoPicker from '../components/videoGen/GalleryVideoPicker';
+import { PromptFromMediaModal } from '../components/media/PromptFromMedia';
+import { copyToClipboard } from '../lib/clipboard';
 import {
   getMoodBoard,
   updateMoodBoard,
@@ -27,7 +29,7 @@ import {
   unlinkMoodBoardPinterest,
   syncMoodBoardPinterest,
 } from '../services/api';
-import { moodBoardItemSrc, moodBoardItemVideoSrc } from '../lib/moodBoardItemSrc';
+import { moodBoardItemSrc, moodBoardItemVideoSrc, moodBoardItemAnalysisSource } from '../lib/moodBoardItemSrc';
 import { timeAgo } from '../utils/formatters';
 import useMounted from '../hooks/useMounted';
 
@@ -53,6 +55,11 @@ export default function MoodBoardDetail() {
   const [imagePickerOpen, setImagePickerOpen] = useState(false);
   const [videoPickerOpen, setVideoPickerOpen] = useState(false);
   const [playingItemId, setPlayingItemId] = useState(null);
+
+  // Per-item prompt-from-media analysis (#4188 Phase 3). Track the item by id
+  // (not a snapshot) so the modal's stored-analysis view stays fresh after the
+  // persist PATCH updates the board state.
+  const [analyzeItemId, setAnalyzeItemId] = useState(null);
 
   // Pinterest link/sync.
   const [pinUrl, setPinUrl] = useState('');
@@ -159,6 +166,42 @@ export default function MoodBoardDetail() {
       : prev));
   };
 
+  // Persist a prompt-from-media run onto the item (#4188 Phase 3). The
+  // analyzer can return an image and/or a video prompt; store the one that
+  // matches the item's own type, falling back to whichever was generated.
+  const persistAnalysis = async (item, result) => {
+    const preferVideo = item.type === 'video';
+    const primary = preferVideo ? result.videoPrompt : result.imagePrompt;
+    const fallback = preferVideo ? result.imagePrompt : result.videoPrompt;
+    const usedPrimary = primary != null && primary !== '';
+    const prompt = usedPrimary ? primary : fallback;
+    if (!prompt) return;
+    const negative = usedPrimary
+      ? (preferVideo ? result.videoNegativePrompt : result.imageNegativePrompt)
+      : (preferVideo ? result.imageNegativePrompt : result.videoNegativePrompt);
+    const analysis = {
+      prompt,
+      negativePrompt: negative || null,
+      rationale: result.rationale || null,
+      providerId: result.providerId || null,
+      model: result.model || null,
+    };
+    const updated = await updateMoodBoardItem(id, item.id, { analysis }, { silent: true }).catch(() => null);
+    if (!updated) { toast.error('Analysis ran but could not be saved to the item'); return; }
+    setBoard((prev) => (prev
+      ? { ...prev, items: (prev.items || []).map((it) => (it.id === item.id ? updated : it)) }
+      : prev));
+    toast.success('Analysis saved to item');
+  };
+
+  const handleClearAnalysis = async (itemId) => {
+    const updated = await updateMoodBoardItem(id, itemId, { analysis: null }, { silent: true }).catch(() => null);
+    if (!updated) { toast.error('Failed to remove analysis'); return; }
+    setBoard((prev) => (prev
+      ? { ...prev, items: (prev.items || []).map((it) => (it.id === itemId ? updated : it)) }
+      : prev));
+  };
+
   const handleRemoveItem = async (itemId) => {
     setConfirmingItemId(null);
     const updated = await removeMoodBoardItem(id, itemId, { silent: true }).catch(() => null);
@@ -219,6 +262,7 @@ export default function MoodBoardDetail() {
   }
 
   const items = Array.isArray(board.items) ? board.items : [];
+  const analyzeItem = analyzeItemId ? (items.find((it) => it.id === analyzeItemId) || null) : null;
   const linkedFeedUrl = board.pinterest?.feedUrl || '';
   const linkedBoardUrl = board.pinterest?.boardUrl || '';
   const lastSyncedAt = board.pinterest?.lastSyncedAt || null;
@@ -485,6 +529,7 @@ export default function MoodBoardDetail() {
           {items.map((item) => {
             const src = moodBoardItemSrc(item);
             const videoSrc = moodBoardItemVideoSrc(item);
+            const analysisSource = moodBoardItemAnalysisSource(item);
             return (
               <div key={item.id} className="bg-port-card border border-port-border rounded-md overflow-hidden flex flex-col">
                 {item.type === 'video' && videoSrc ? (
@@ -563,15 +608,28 @@ export default function MoodBoardDetail() {
                     {item.source ? (
                       <span className="text-[10px] text-gray-500 truncate" title={item.source}>{item.source}</span>
                     ) : <span />}
-                    <button
-                      type="button"
-                      onClick={() => setConfirmingItemId(item.id)}
-                      title="Remove item"
-                      aria-label="Remove item"
-                      className="p-1 text-gray-500 hover:text-port-error transition-colors"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                    </button>
+                    <div className="flex items-center gap-1">
+                      {analysisSource ? (
+                        <button
+                          type="button"
+                          onClick={() => setAnalyzeItemId(item.id)}
+                          title={item.analysis ? 'View AI analysis' : 'Analyze with AI'}
+                          aria-label={item.analysis ? 'View AI analysis' : 'Analyze with AI'}
+                          className={`p-1 transition-colors ${item.analysis ? 'text-port-accent hover:text-port-accent/80' : 'text-gray-500 hover:text-white'}`}
+                        >
+                          <ScanEye className="w-3.5 h-3.5" aria-hidden="true" />
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() => setConfirmingItemId(item.id)}
+                        title="Remove item"
+                        aria-label="Remove item"
+                        className="p-1 text-gray-500 hover:text-port-error transition-colors"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                      </button>
+                    </div>
                   </div>
                   {confirmingItemId === item.id ? (
                     <InlineConfirmRow
@@ -601,6 +659,70 @@ export default function MoodBoardDetail() {
         allowUpload
         uploadToGallery
       />
+
+      {/* Per-item prompt-from-media analysis (#4188 Phase 3). A successful run
+          auto-persists onto the item; the stored analysis renders above the
+          analyzer with copy/remove. */}
+      {analyzeItem ? (
+        <PromptFromMediaModal
+          item={moodBoardItemAnalysisSource(analyzeItem)}
+          open
+          onClose={() => setAnalyzeItemId(null)}
+          kindDefault={analyzeItem.type === 'video' ? 'video' : 'image'}
+          onResult={(result) => persistAnalysis(analyzeItem, result)}
+        >
+          {analyzeItem.analysis ? (
+            <div className="mb-4 p-3 bg-port-bg border border-port-border rounded-lg space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] uppercase tracking-wide text-gray-500">
+                  Saved analysis{analyzeItem.analysis.analyzedAt ? ` · ${timeAgo(analyzeItem.analysis.analyzedAt)}` : ''}
+                </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => copyToClipboard(analyzeItem.analysis.prompt, 'Analysis prompt copied')}
+                    className="p-1 rounded text-gray-400 hover:text-white hover:bg-port-border/50"
+                    aria-label="Copy saved analysis prompt"
+                  >
+                    <Copy className="w-3.5 h-3.5" aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleClearAnalysis(analyzeItem.id)}
+                    className="px-2 py-1 rounded text-[11px] text-gray-400 hover:text-port-error transition-colors"
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
+              {analyzeItem.analysis.rationale ? (
+                <p className="text-xs text-gray-300">{analyzeItem.analysis.rationale}</p>
+              ) : null}
+              <textarea
+                readOnly
+                value={analyzeItem.analysis.prompt}
+                rows={4}
+                aria-label="Saved analysis prompt"
+                className="w-full bg-port-card border border-port-border rounded-lg p-2 text-xs text-white resize-y"
+              />
+              {analyzeItem.analysis.negativePrompt ? (
+                <textarea
+                  readOnly
+                  value={analyzeItem.analysis.negativePrompt}
+                  rows={2}
+                  aria-label="Saved analysis negative prompt"
+                  className="w-full bg-port-card border border-port-border rounded-lg p-2 text-xs text-gray-300 resize-y"
+                />
+              ) : null}
+              {(analyzeItem.analysis.providerId || analyzeItem.analysis.model) ? (
+                <p className="text-[10px] text-gray-500 truncate">
+                  {[analyzeItem.analysis.providerId, analyzeItem.analysis.model].filter(Boolean).join(' · ')}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+        </PromptFromMediaModal>
+      ) : null}
     </div>
   );
 }

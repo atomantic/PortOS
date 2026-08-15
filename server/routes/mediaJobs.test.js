@@ -82,6 +82,15 @@ describe('mediaJobs routes', () => {
     expect(r.status).toBe(400);
   });
 
+  it('POST /prompt-from-media 400s when a video source has neither videoId nor filename (#4188)', async () => {
+    const r = await request(makeApp()).post('/api/media-jobs/prompt-from-media').send({
+      sourceKind: 'video',
+      targets: ['video'],
+      providerId: 'openai',
+    });
+    expect(r.status).toBe(400);
+  });
+
   it('POST /:id/retry 404s for unknown id', async () => {
     const r = await request(makeApp()).post('/api/media-jobs/nope/retry').send({});
     expect(r.status).toBe(404);

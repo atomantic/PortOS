@@ -102,4 +102,27 @@ describe('moodBoardItemUpdateSchema', () => {
   it('accepts a null caption (clear)', () => {
     expect(moodBoardItemUpdateSchema.parse({ caption: null }).caption).toBeNull();
   });
+  it('accepts a full and a minimal analysis patch (#4188 Phase 3)', () => {
+    const full = moodBoardItemUpdateSchema.parse({
+      analysis: {
+        prompt: 'a moody castle at dusk',
+        negativePrompt: 'blurry',
+        rationale: 'gothic look',
+        providerId: 'openai',
+        model: 'gpt-4o',
+        analyzedAt: '2026-08-14T00:00:00.000Z',
+      },
+    });
+    expect(full.analysis.prompt).toBe('a moody castle at dusk');
+    expect(moodBoardItemUpdateSchema.parse({ analysis: { prompt: 'p' } }).analysis.prompt).toBe('p');
+  });
+  it('accepts a null analysis (clear)', () => {
+    expect(moodBoardItemUpdateSchema.parse({ analysis: null }).analysis).toBeNull();
+  });
+  it('rejects an analysis without a prompt, with unknown keys, or with a non-ISO analyzedAt', () => {
+    expect(() => moodBoardItemUpdateSchema.parse({ analysis: {} })).toThrow();
+    expect(() => moodBoardItemUpdateSchema.parse({ analysis: { prompt: '   ' } })).toThrow();
+    expect(() => moodBoardItemUpdateSchema.parse({ analysis: { prompt: 'p', extra: true } })).toThrow();
+    expect(() => moodBoardItemUpdateSchema.parse({ analysis: { prompt: 'p', analyzedAt: 'yesterday' } })).toThrow();
+  });
 });

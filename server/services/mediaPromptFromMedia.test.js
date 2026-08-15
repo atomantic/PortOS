@@ -193,6 +193,38 @@ describe('promptFromMedia', () => {
     expect(result.frameCount).toBe(2);
   });
 
+  it('resolves a gallery video by FILENAME when no videoId is given (mood-board item — #4188)', async () => {
+    providers.getProviderById.mockResolvedValue(CLI_PROVIDER);
+    visionCli.describeImagesFromPaths.mockResolvedValue({ text: JSON_BOTH });
+
+    const result = await promptFromMedia({
+      sourceKind: 'video',
+      filename: 'clip.webm',
+      targets: ['video'],
+      providerId: 'codex',
+    });
+
+    expect(history.loadHistory).not.toHaveBeenCalled();
+    expect(ffmpeg.extractEvaluationFrames).toHaveBeenCalledWith(
+      '/mock/videos/clip.webm',
+      expect.stringMatching(/^pfm-vf-/),
+      expect.any(Number),
+    );
+    expect(result.mediaKind).toBe('video');
+    expect(result.videoPrompt).toContain('dollies');
+  });
+
+  it('rejects an extension-less video filename (a bare id is not an on-disk clip name)', async () => {
+    providers.getProviderById.mockResolvedValue(CLI_PROVIDER);
+    await expect(promptFromMedia({
+      sourceKind: 'video',
+      filename: 'job-123',
+      targets: ['video'],
+      providerId: 'codex',
+    })).rejects.toMatchObject({ code: 'VALIDATION_ERROR', status: 400 });
+    expect(ffmpeg.extractEvaluationFrames).not.toHaveBeenCalled();
+  });
+
   it('rejects a text-only CLI that cannot see images', async () => {
     providers.getProviderById.mockResolvedValue({
       id: 'opencode',

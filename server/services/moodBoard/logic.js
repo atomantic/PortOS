@@ -179,6 +179,23 @@ export function addItem(board, itemInput) {
   return { board: next, item };
 }
 
+// Normalize a validated prompt-from-media analysis patch (#4188 Phase 3) into
+// the stored shape: absent optional fields become explicit nulls and
+// `analyzedAt` is stamped server-side when the client didn't send one, so
+// every stored analysis carries a wall clock for the "analyzed N ago"
+// affordance. `null` clears a stored analysis.
+function normalizeItemAnalysis(analysis, now = nowIso()) {
+  if (!analysis) return null;
+  return {
+    prompt: analysis.prompt,
+    negativePrompt: analysis.negativePrompt ?? null,
+    rationale: analysis.rationale ?? null,
+    providerId: analysis.providerId ?? null,
+    model: analysis.model ?? null,
+    analyzedAt: analysis.analyzedAt ?? now,
+  };
+}
+
 // PATCH a single item's editable fields. caption/source apply to any item;
 // the body fields are gated to the item's FIXED type (an item's kind can't
 // change after creation) so a patch can't make a text item carry an imageUrl
@@ -193,11 +210,19 @@ export function updateItem(board, itemId, patch) {
   }
   const current = items[idx];
   const updated = { ...current };
-  const editableKeys = current.type === 'image' || current.type === 'video'
+  const isMediaItem = current.type === 'image' || current.type === 'video';
+  const editableKeys = isMediaItem
     ? ['caption', 'source', 'imageUrl', 'mediaKey']
     : ['caption', 'source', 'text'];
   for (const key of editableKeys) {
     if (patch[key] !== undefined) updated[key] = patch[key];
+  }
+  // Analysis (#4188 Phase 3) comes from the item's media, so it only applies
+  // to media items — a patch carrying it for a text item is silently ignored,
+  // matching how the other type-gated keys behave. Stored normalized (explicit
+  // nulls + stamped analyzedAt); `null` clears.
+  if (isMediaItem && patch.analysis !== undefined) {
+    updated.analysis = normalizeItemAnalysis(patch.analysis);
   }
   // Reject a patch that would strip the item's required content (the schema
   // permits nulls so a partial edit can clear one of two image sources, but the

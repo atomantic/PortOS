@@ -113,13 +113,31 @@ export const moodBoardPinterestLinkSchema = z.object({
   ),
 }).strict();
 
+// Per-item prompt-from-media analysis (#4188 Phase 3) — written by the item
+// PATCH after a user-triggered vision run on the item's media. Additive on the
+// wire: the board federates whole-record LWW (sanitizeBoardForSync's `...raw`
+// spread) and an older peer preserves the unknown key, so no `moodBoards`
+// schema-gate bump — same precedent as the `pinterest` sub-object. Bounds
+// mirror the analyzer's own caps (MAX_PROMPT_LEN / MAX_REASON_LEN in
+// mediaPromptFromMedia.js). `null` on the PATCH clears a stored analysis.
+export const moodBoardItemAnalysisSchema = z.object({
+  prompt: z.string().trim().min(1).max(8000),
+  negativePrompt: z.string().max(8000).nullable().optional(),
+  rationale: z.string().max(1200).nullable().optional(),
+  providerId: z.string().max(128).nullable().optional(),
+  model: z.string().max(256).nullable().optional(),
+  analyzedAt: z.string().datetime({ offset: true }).nullable().optional(),
+}).strict();
+
 // Item PATCH — caption/source on any item, plus the type-appropriate body
 // field. No `type` switch (an item's kind is fixed at creation); every field
-// optional so a partial edit validates.
+// optional so a partial edit validates. `analysis` applies to media items
+// only (enforced in logic.js where the item's type is known).
 export const moodBoardItemUpdateSchema = z.object({
   caption: captionSchema,
   source: sourceSchema,
   text: z.string().trim().max(10000).nullable().optional(),
   imageUrl: imageUrlSchema.nullable().optional(),
   mediaKey: mediaKeySchema.nullable().optional(),
+  analysis: moodBoardItemAnalysisSchema.nullable().optional(),
 }).strict();

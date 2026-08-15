@@ -51,6 +51,8 @@ function SourceThumb({ source }) {
  * `kindDefault` seeds the target checkboxes (`image` / `video` / `both`).
  * When `setPrompt` is passed (Image Gen / Video Gen), Apply fills the host
  * form. Otherwise the result offers "Open in Image Gen / Video Gen".
+ * `onResult` (optional) fires with the full analysis payload after each
+ * successful run, so a host (e.g. a mood-board item — #4188) can persist it.
  */
 export default function PromptFromMedia({
   kindDefault = 'both',
@@ -60,6 +62,7 @@ export default function PromptFromMedia({
   initialSource = null,
   disabled = false,
   alwaysOpen = false,
+  onResult,
 }) {
   const navigate = useNavigate();
   const idPrefix = useId();
@@ -174,6 +177,7 @@ export default function PromptFromMedia({
     if (!data) return;
     setResult(data);
     toast.success('Prompts ready');
+    if (onResult) onResult(data);
   };
 
   const apply = (kind) => {
@@ -389,7 +393,10 @@ function PromptResultField({ label, value, negative, onCopy, onApply, applyLabel
   );
 }
 
-export function PromptFromMediaModal({ item, open, onClose }) {
+// `kindDefault` / `onResult` pass through to PromptFromMedia; `children`
+// render above the analyzer in the scroll area — a host can slot in the
+// item's stored analysis (mood boards — #4188).
+export function PromptFromMediaModal({ item, open, onClose, kindDefault = 'both', onResult, children }) {
   if (!open || !item) return null;
   return (
     <Modal
@@ -416,10 +423,12 @@ export function PromptFromMediaModal({ item, open, onClose }) {
         </button>
       </header>
       <div className="flex-1 overflow-y-auto p-4">
+        {children}
         <PromptFromMedia
-          kindDefault="both"
+          kindDefault={kindDefault}
           initialSource={item}
           alwaysOpen
+          onResult={onResult}
         />
       </div>
     </Modal>
