@@ -439,6 +439,14 @@ function hasMatchingExplicitLabel(src, id) {
   return hasMatchingForwardedLabel(src, id);
 }
 
+// A `label` prop only names something when it carries text. Every literal that
+// React renders as nothing has to be rejected, `true` included: `<Field label>`
+// and `label={true}` are the same prop value, and `<label>{true}</label>` puts
+// no text in the DOM. Reading it as a name would exempt a control that has none.
+function isUsableLabelAttributeValue(value) {
+  return Boolean(value) && !/^(?:undefined|null|false|true)$/i.test(value);
+}
+
 // A page-local field wrapper can own the <label> AND take the control's id as a
 // prop instead of wrapping it (LifestyleTab.jsx's `<FieldGroup label="Sleep …"
 // htmlFor="lifestyle-sleep-hours">`). Wrapping is wrong there — an implicit
@@ -448,6 +456,10 @@ function hasMatchingExplicitLabel(src, id) {
 // those forwarders the same way and under the same limits as
 // localLabelWrapperNames: same-file `function` declarations only, so a missed
 // one is a false negative that leaves its controls on the allowlist.
+//
+// Both helpers below read whatever source they are handed. The input scan hands
+// them `maskComments(src)`, which is what keeps a commented-out wrapper — or a
+// commented-out call site — from registering; same as localLabelWrapperNames.
 const htmlForForwarderNamesBySource = new Map();
 
 function localHtmlForForwarderNames(src) {
@@ -484,8 +496,7 @@ function hasMatchingForwardedLabel(src, id) {
       if (!tag) continue;
       re.lastIndex = match.index + tag.length;
       if (normalizedAttributeValue(attributeValue(tag, 'htmlFor')) !== id) continue;
-      const label = normalizedAttributeValue(attributeValue(tag, 'label'));
-      if (label && !/^(?:undefined|null|false)$/i.test(label)) return true;
+      if (isUsableLabelAttributeValue(normalizedAttributeValue(attributeValue(tag, 'label')))) return true;
     }
   }
   return false;
@@ -687,7 +698,7 @@ function isNestedInLabelWrappingComponent(src, index) {
       if (/\/\s*>$/.test(tag)) continue;
       open.push(normalizedAttributeValue(attributeValue(tag, 'label')));
     }
-    if (open.some((label) => label && !/^(?:undefined|null|false)$/i.test(label))) return true;
+    if (open.some(isUsableLabelAttributeValue)) return true;
   }
   return false;
 }
@@ -1135,6 +1146,16 @@ describe('a11y conventions', () => {
     expect(hasMatchingExplicitLabel(`${emptyForwarder}\n${namedCall}`, 'sleep-hours')).toBe(false);
     // A different id on the same wrapper must not be swept up either.
     expect(hasMatchingExplicitLabel(`${forwarder}\n${namedCall}`, 'other-id')).toBe(false);
+    // `label` with no value is `label={true}`, which renders no text.
+    expect(hasMatchingExplicitLabel(`${forwarder}\n${namedCall.replace('label="Sleep"', 'label={true}')}`, 'sleep-hours')).toBe(false);
+    // The scan masks comments before any of this runs, so a commented-out
+    // wrapper must not register as one. Probe the source the way the scan
+    // hands it over, or this helper looks safe for the wrong reason.
+    const commentedForwarder = `function Group({ label, htmlFor, children }) {
+  // <label htmlFor={htmlFor}>{label}</label>
+  return <div>{children}</div>;
+}`;
+    expect(hasMatchingExplicitLabel(maskComments(`${commentedForwarder}\n${namedCall}`), 'sleep-hours')).toBe(false);
   });
 
   it('meets the 44px touch-target minimum on Close buttons', () => {

@@ -193,7 +193,7 @@ export default function GoalPlanSection({
                           next[idx] = { ...next[idx], title: e.target.value };
                           setProposedDecomposition(next);
                         }}
-                        aria-label={`Sub-goal ${idx + 1} title`}
+                        aria-label={`Milestone ${idx + 1} title`}
                         className="w-full bg-port-card border border-port-border rounded px-2 py-0.5 text-xs text-white"
                       />
                       <input
@@ -205,7 +205,7 @@ export default function GoalPlanSection({
                           setProposedDecomposition(next);
                         }}
                         placeholder="Description..."
-                        aria-label={`Sub-goal ${idx + 1} description`}
+                        aria-label={`Milestone ${idx + 1} description`}
                         className="w-full bg-port-card border border-port-border rounded px-2 py-0.5 text-xs text-gray-400 mt-0.5"
                       />
                     </div>
