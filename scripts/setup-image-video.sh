@@ -741,7 +741,8 @@ if [[ "$INSTALL_ACESTEP15" == "1" ]]; then
   # Pin the runtime to a vendor release. The model snapshot is installed
   # separately through Music, but its custom-code loader depends on this
   # package's handler contract.
-  "$ACESTEP15_PY" -m pip install --upgrade --extra-index-url https://download.pytorch.org/whl/cu128 \
+  ACESTEP15_TORCH_INDEX="${PORTOS_TORCH_CUDA_INDEX:-https://download.pytorch.org/whl/cu128}"
+  "$ACESTEP15_PY" -m pip install --upgrade --extra-index-url "$ACESTEP15_TORCH_INDEX" \
     "git+https://github.com/ace-step/ACE-Step-1.5.git@v0.1.8" \
     "huggingface_hub[hf_xet]"
   if ! "$ACESTEP15_PY" -c "import torch; from transformers import AutoModel; from acestep.handler import AceStepHandler" 2>/dev/null; then
