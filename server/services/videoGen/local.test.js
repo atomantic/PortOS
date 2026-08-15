@@ -24,6 +24,8 @@ const MOCK_PATHS = {
 
 const isLtx2Python = (bin) => String(bin)
   .includes(join('.portos', 'ltx-2-mlx', '.venv', 'bin', 'python3'));
+const isLtx25Python = (bin) => String(bin)
+  .includes(join('.portos', 'ltx-2.5-mlx', '.venv', 'bin', 'python3'));
 
 // The two chain helpers below used to sleep a flat 100ms for the timeline
 // stitch and then read the concat spawn / stitched history entry out of the
@@ -71,6 +73,7 @@ vi.mock('../settings.js', () => ({
 vi.mock('../../lib/mediaModels.js', () => ({
   getVideoModels: vi.fn(() => [
     { id: 'ltx2_unified', name: 'LTX-2 Unified', runtime: 'ltx2', repo: 'Lightricks/LTX-Video', steps: 30, guidance: 3.5 },
+    { id: 'ltx25_mlx_q8', name: 'LTX-2.5 MLX Q8', runtime: 'ltx25', repo: 'MrMofer/ltx-2.5-mlx-q8', steps: 8, guidance: 3 },
     // bf16 LTX-2.x mlx_video model — LoRA-capable via the generate_av wrapper.
     { id: 'ltx23_unified', name: 'LTX-2.3 Unified Beta', runtime: 'mlx_video', repo: 'notapalindrome/ltx23-mlx-av', steps: 25, guidance: 3.0 },
     // quantized mlx_video model — NOT LoRA-capable (out of scope).
@@ -1003,6 +1006,51 @@ describe('generateVideo — PORTOS_T2V_TWO_STAGE arg threading', () => {
     expect(args).not.toContain('--stage2-steps');
     expect(args[args.indexOf('--steps') + 1]).toBe('30');
     expect(args[args.indexOf('--cfg-scale') + 1]).toBe('3.5');
+  });
+});
+
+describe('generateVideo — LTX-2.5 sibling runtime spawn', () => {
+  const renderLtxFamily = async (jobId, modelId) => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    spawnMock.mockClear();
+    await generateVideo({
+      jobId,
+      pythonPath: '/usr/bin/python3',
+      modelId,
+      prompt: 'a quiet street at dusk',
+      width: 512,
+      height: 512,
+      numFrames: 25,
+      fps: 24,
+    });
+    return spawnMock.mock.calls;
+  };
+
+  it('spawns the 2.5 venv and omits the shared Gemma 3 encoder', async () => {
+    const calls = await renderLtxFamily('ltx25-spawn', 'ltx25_mlx_q8');
+    const renderCall = calls.find(
+      ([bin, args]) => isLtx25Python(bin)
+        && Array.isArray(args)
+        && args.includes('--mode')
+        && args.includes('text'),
+    );
+    expect(renderCall).toBeTruthy();
+    expect(renderCall[1]).not.toContain('--gemma');
+    expect(calls.some(([bin]) => isLtx2Python(bin))).toBe(false);
+  });
+
+  it('still threads --gemma through the 2.3 venv', async () => {
+    const calls = await renderLtxFamily('ltx2-gemma-still', 'ltx2_unified');
+    const renderCall = calls.find(
+      ([bin, args]) => isLtx2Python(bin)
+        && Array.isArray(args)
+        && args.includes('--mode')
+        && args.includes('text'),
+    );
+    expect(renderCall).toBeTruthy();
+    expect(renderCall[1]).toEqual(expect.arrayContaining(['--gemma', 'some/text-encoder']));
+    expect(calls.some(([bin]) => isLtx25Python(bin))).toBe(false);
   });
 });
 
