@@ -607,8 +607,10 @@ function localLabelWrapperNames(src) {
     const body = src.slice(bodyStart, bodyEnd);
     // {children} must sit inside a <label> — no </label> may intervene, or a
     // component rendering `<label>Header</label>{children}<label>Footer</label>`
-    // would register as a wrapper and exempt controls it never labels.
-    if (/<label\b[^>]*>(?:(?!<\/label>)[\s\S])*?\{\s*children\s*\}/.test(body)) names.add(match[1]);
+    // would register as a wrapper and exempt controls it never labels. The
+    // opening tag must also not be self-closing (`<label … />` wraps nothing,
+    // so anything after it is outside the label).
+    if (/<label\b(?:[^>]*[^/>])?>(?:(?!<\/label>)[\s\S])*?\{\s*children\s*\}/.test(body)) names.add(match[1]);
   }
   labelWrapperNamesBySource.set(src, names);
   return names;
