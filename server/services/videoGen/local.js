@@ -52,6 +52,7 @@ import {
 } from '../../lib/icLoraWeights.js';
 import {
   LTX2_HELPER_SCRIPT,
+  LTX25_ENCODER_SHIM_DIR,
   WAN22_VENV_PYTHON,
   WAN22_HELPER_SCRIPT,
   MINIMAX_H3_VENV_PYTHON,
@@ -422,7 +423,35 @@ export const icLoraArgs = ({ mode, width, height, icReferencePaths, icLoraWeight
   return args;
 };
 
-const buildLtx2Args = ({ model, ltxModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, disableAudio, outputPath, textEncoderRepo, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2 }) => {
+/**
+ * Shim flags for a substituted LTX-2.5 prompt conditioner (#4320), or `[]` for
+ * the stock choice — so an unswapped render's argv is byte-identical to what it
+ * was before the feature existed.
+ *
+ * A 2.5 pack's own Gemma 4 tower wins unconditionally inside the pinned fork
+ * (`PromptEncoder._text_encoder_source` ignores `gemma_model_id` whenever the
+ * pack ships a local `text_encoder/` reporting `model_type: "gemma4"`), so the
+ * substitution is a shim directory the runner builds and then points that
+ * resolution at — NOT a repo id on `--gemma`, which is why this shares no flag
+ * with the ltx2 path. `textEncoder.paths` were already resolved against the HF
+ * cache by generateVideo; the helper runs offline and never downloads.
+ *
+ * `--text-encoder-config-json` is emitted only when the entry declares
+ * `configOverrides`, mirroring how the H3 builder omits its key-remap flags for
+ * a checkpoint that needs none.
+ */
+export const ltx25TextEncoderArgs = (textEncoder) => {
+  if (!textEncoder) return [];
+  const args = ['--text-encoder-id', textEncoder.id];
+  for (const path of textEncoder.paths) args.push('--text-encoder-file', path);
+  args.push('--text-encoder-shim-root', LTX25_ENCODER_SHIM_DIR);
+  if (Object.keys(textEncoder.configOverrides || {}).length > 0) {
+    args.push('--text-encoder-config-json', JSON.stringify(textEncoder.configOverrides));
+  }
+  return args;
+};
+
+const buildLtx2Args = ({ model, ltxModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, disableAudio, outputPath, textEncoderRepo, textEncoder, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2 }) => {
   assertByovRuntimeInstalled(model.runtime);
   // Map PortOS UI modes to the helper's subcommand. Native extend on ltx2
   // routes to ExtendPipeline.extend_from_video — conditions on the entire
@@ -536,6 +565,9 @@ const buildLtx2Args = ({ model, ltxModelPath, prompt, negativePrompt, width, hei
   // Gemma 3 encoder would either fail load or silently condition on the wrong
   // model. The 2.3 runtime still needs the explicit shared encoder.
   if (model.runtime === 'ltx2') args.push('--gemma', textEncoderRepo);
+  // The 2.5 substitution, which overrides the pack's OWN conditioner rather
+  // than naming a repo — the two runtimes share this builder but not a flag.
+  if (model.runtime === 'ltx25') args.push(...ltx25TextEncoderArgs(textEncoder));
   // User LoRAs — fused into the transformer via the pipeline's _pending_loras
   // hook. Emitted as a JSON list of { path, strength }; generate_ltx2.py sets
   // pipe._pending_loras before generation so the deltas fuse at load time
@@ -854,7 +886,7 @@ const buildArgs = ({ pythonPath, modelId, model, wanModelPath, wanRequiredWeight
   // runtime. Existing notapalindrome models default to runtime: 'mlx_video'
   // (or undefined in legacy registries — see backfillRuntime in mediaModels.js).
   if (isLtx2FamilyRuntime(model.runtime)) {
-    return buildLtx2Args({ model, ltxModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, disableAudio, outputPath, textEncoderRepo, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2 });
+    return buildLtx2Args({ model, ltxModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, disableAudio, outputPath, textEncoderRepo, textEncoder, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2 });
   }
   // IC-LoRA remix modes are an LTX-2 primitive (ICLoraPipeline) — no other
   // runtime has an equivalent. The route guards this too, but a non-route
@@ -1125,11 +1157,15 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
         { status: 400, code: 'VIDEO_TEXT_ENCODER_NOT_CACHED' },
       );
     }
+    // Runtime-agnostic: each runner's arg builder reads only the loader
+    // mechanics its own helper understands (H3 the key remap and final norm,
+    // ltx25 the config overrides), so one resolution serves both.
     resolvedTextEncoder = {
       id: textEncoderOption.id,
       paths: encoderPaths,
       keyPrefixMap: textEncoderOption.keyPrefixMap,
       finalNormKey: textEncoderOption.finalNormKey,
+      configOverrides: textEncoderOption.configOverrides,
     };
   }
 

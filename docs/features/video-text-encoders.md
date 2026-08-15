@@ -1,9 +1,12 @@
 # Swappable video text encoders
 
-Video Gen lets a MiniMax H3 render choose which **prompt conditioner** (text
-encoder) reads the prompt. The picker sits under the Model field and defaults to
-the conditioner that ships with the model, so nothing changes unless you pick
-something else.
+Video Gen lets a render choose which **prompt conditioner** (text encoder) reads
+the prompt. The picker sits under the Model field and defaults to the conditioner
+that ships with the model, so nothing changes unless you pick something else.
+
+Two runtimes have a conditioner table: **MiniMax H3** (the substitutes below) and
+**LTX-2.5**, whose mechanism ships but whose substitutes are still gated — see
+[LTX-2.5](#ltx-25) at the end. Every other runtime has no picker at all.
 
 ## Why H3's conditioner is swappable at all
 
@@ -182,10 +185,81 @@ resident so you can switch back instantly. Resident memory during a render is
 unchanged (the same 50 layers + vision tower are loaded either way); only disk
 grows.
 
+## LTX-2.5
+
+LTX-2.5 conditions through a Gemma 4 12B tower packed **inside** the model under
+`text_encoder/`. The pinned fork's `PromptEncoder._text_encoder_source()` prefers
+that directory unconditionally whenever its `config.json` reports
+`model_type: "gemma4"` and ignores `gemma_model_id` entirely — which is why
+`--gemma`, the flag the LTX-2.3 runtime uses, cannot substitute anything here.
+A 2.5 substitution overrides that **resolution** instead.
+
+**The shim.** `build_ltx25_encoder_shim()` in `scripts/generate_ltx2.py` builds
+`~/.portos/ltx25-encoder-shims/<id>/` from scratch each render: every pinned file
+of the substitute linked in by basename (the shards, their
+`model.safetensors.index.json`, the tokenizer and generation configs), plus a
+generated `config.json`. Nothing comes from the model pack — unlike the H3 shim,
+which must keep upstream's config, tokenizer and processor, a Gemma 4 tower is
+self-describing and the pack contributes only its connector, loaded separately.
+
+`config.json` is generated rather than linked because two things have to change:
+`vision_config` / `audio_config` are dropped (so what remains is the
+`model_type` + `text_config` + `quantization` triple the fork's own
+`convert_ltx25_to_mlx.py --step text-encoder` emits), and the registry entry's
+`configOverrides` are merged over the rest. That field exists for exactly one
+correction — a *unified* Gemma 4 checkpoint publishes
+`model_type: "gemma4_unified"`, which `Gemma4LanguageModel.load()` hard-rejects,
+and it is the only thing such a checkpoint gets wrong, since mlx-lm's
+`gemma4.Model.sanitize()` already discards the `vision_tower.*` / `audio_tower.*`
+/ `multi_modal_projector.*` towers at load. The `quantization` block is never
+overridden: per-layer group-size overrides are part of how the weights were
+packed, and a mismatch dequantizes to noise.
+
+**The override.** `install_ltx25_encoder_override()` patches
+`PromptEncoder._text_encoder_source` on the **class**, once, before any pipeline
+is constructed — so no render mode can build a pipeline that skips it, including
+one added later. The wrapper delegates to the original to obtain the encoder
+class, then swaps only the path, which means nothing imports
+`Gemma4LanguageModel` from a path the pinned fork could move; a model dir that
+does *not* resolve to it (an LTX-2.3 pack reached through this flag) fails loudly
+rather than conditioning on the wrong architecture. The pinned fork source is
+never edited.
+
+### The candidate has to be Gemma 4 12B at the LTX-2.5 geometry
+
+48 layers, `hidden_size` 3840, `vocab_size` 262144, `head_dim` 256,
+`attention_k_eq_v: true` — `Gemma4LanguageModel` hard-validates `model_type`, the
+layer count and the hidden size on load, and the pack's connector was trained
+against a 49-hidden-state stack of that width. Those are stock
+`google/gemma-4-12B-it` dimensions, which is what makes an off-the-shelf
+abliterated Gemma 4 12B a plausible drop-in. A different Gemma generation is not:
+Gemma 3's tokenizer, vocabulary and layer count have no mapping onto the module
+tree mlx-lm's `gemma4` builds.
+
+### Status: substitutes gated pending a coherence check
+
+Two substitutes are declared in the registry (`ltx25-abliterated-4bit`,
+`ltx25-heretic-8bit`) and both carry `verified: false`, which keeps them out of
+the picker **and** out of the download lane — an unverified id is rejected by
+route validation and its weights cannot be pulled. The LTX-2.5 picker therefore
+hides itself today, exactly as it does for a runtime with no substitutes at all.
+
+What is unsettled is empirical, not structural: Lightricks'
+`gemma4-12b-with-proj-ltx-2.5` tower may be LTX-fine-tuned rather than stock
+`google/gemma-4-12B-it`, in which case a stock-derived abliterated tower would
+feed the pack's connector out-of-distribution features and render incoherently.
+To settle it, flip an entry to `verified: true` locally, download it from Media
+Models, then render the same prompt/seed/steps/resolution against the stock
+conditioner and against the substitute — once on a benign prompt (does it stay
+structurally coherent?) and once on a prompt the stock conditioner waters down
+(does it read differently?). Ship the flag flip only for a substitute that passes
+both, and record a failure in the module docblock rather than deleting the entry.
+
 ## Related
 
 - `server/lib/videoTextEncoders.js` — the registry, and the one place a new entry goes
-- `scripts/generate_minimax_h3.py` — the shim builder and key remap
+- `scripts/generate_minimax_h3.py` — the H3 shim builder and key remap
+- `scripts/generate_ltx2.py` — the LTX-2.5 shim builder and resolution override
 - `server/services/videoGen/local.js` — cache resolution and argv
 - `client/src/components/videoGen/TextEncoderPicker.jsx` — the control
 - `client/src/hooks/useModelDownloadStatus.js` — `startWhenIdle`, the select-starts-the-pull mechanism (generic: any gated-weight picker can adopt it)

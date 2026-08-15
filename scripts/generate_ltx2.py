@@ -60,6 +60,8 @@ import importlib
 import inspect
 import json
 import os
+import re
+import shutil
 import sys
 from pathlib import Path
 from typing import NoReturn
@@ -369,6 +371,16 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--gemma", default=None,
                    help="Shared Gemma repo for LTX-2.3. Omit on LTX-2.5 packs that "
                         "ship Gemma 4 under text_encoder/.")
+    p.add_argument("--text-encoder-id",
+                   help="id of the substituted LTX-2.5 prompt conditioner (shim directory name)")
+    p.add_argument("--text-encoder-file", action="append", default=[],
+                   help="an already-cached file of the substitute — shards, the shard index and the "
+                        "tokenizer/generation configs (repeatable; the whole pinned set)")
+    p.add_argument("--text-encoder-shim-root",
+                   help="directory the composed conditioner root is built under")
+    p.add_argument("--text-encoder-config-json", default=None,
+                   help="JSON object merged over the substitute's own config.json in the shim "
+                        "(e.g. {\"model_type\": \"gemma4\"} for a unified checkpoint)")
     p.add_argument("--height", type=int, default=480)
     p.add_argument("--width", type=int, default=704)
     p.add_argument("--num-frames", type=int, default=97)
@@ -458,6 +470,136 @@ def parse_args() -> argparse.Namespace:
                         "skipping = faster but lower fidelity (~1.2x at 0.5, up to ~3x at 1.5). "
                         "Omit to use the pipeline default (0.5).")
     return p.parse_args()
+
+
+def parse_text_encoder_config_overrides(raw: str | None) -> dict:
+    """Parse `--text-encoder-config-json` into the dict merged over the shim config."""
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"--text-encoder-config-json must be valid JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise SystemExit(
+            f"--text-encoder-config-json must be a JSON object; got {type(parsed).__name__}."
+        )
+    return parsed
+
+
+def validate_text_encoder_args(args: argparse.Namespace) -> None:
+    """Reject a partial substitution set before any weights load.
+
+    All-or-nothing, mirroring generate_minimax_h3.py: without the id there is
+    nowhere to build the shim, and without the shim root there is nowhere to put
+    it. Accepting a partial set would silently fall back to the conditioner
+    packed in the model and hand the user a render they'd have no way to tell
+    apart from a substituted one.
+    """
+    encoder_flags = (args.text_encoder_id, args.text_encoder_file, args.text_encoder_shim_root)
+    if any(encoder_flags) and not all(encoder_flags):
+        raise SystemExit(
+            "--text-encoder-id, --text-encoder-file and --text-encoder-shim-root must be given together."
+        )
+    if args.text_encoder_id and not re.fullmatch(r"[A-Za-z0-9._-]+", args.text_encoder_id):
+        raise SystemExit(f"--text-encoder-id must be a bare directory-safe name; got {args.text_encoder_id!r}.")
+    if not args.text_encoder_file and args.text_encoder_config_json:
+        raise SystemExit("--text-encoder-config-json needs --text-encoder-file.")
+    # A substitution and the 2.3 shared encoder are mutually exclusive: --gemma
+    # is only read when the pack ships no local gemma4 tower, which is exactly
+    # the case where the override below has nothing to replace.
+    if args.text_encoder_file and args.gemma:
+        raise SystemExit("--text-encoder-file substitutes an LTX-2.5 pack's own conditioner; --gemma cannot apply.")
+    parse_text_encoder_config_overrides(args.text_encoder_config_json)
+
+
+def build_ltx25_encoder_shim(
+    shim_root: Path,
+    encoder_id: str,
+    encoder_files: list[Path],
+    config_overrides: dict,
+) -> Path:
+    """Compose a standalone Gemma 4 checkpoint directory from the substitute.
+
+    Unlike the MiniMax H3 shim next door — which links an upstream checkpoint
+    root through and swaps only `text_encoder/` — everything here comes from the
+    substitute: mlx-lm loads a Gemma 4 tower from one self-describing directory,
+    and the LTX-2.5 pack contributes only its connector, which is loaded
+    separately and never sees this path.
+
+    Every pinned file is linked in under its own basename: the shards, the
+    `model.safetensors.index.json` that names them, and the tokenizer /
+    generation configs. Only `config.json` is generated, because two things must
+    change before `Gemma4LanguageModel.load()` will accept it — `model_type`
+    (a unified checkpoint publishes `gemma4_unified`, which that loader
+    hard-rejects) and the `vision_config` / `audio_config` blocks, dropped so
+    what remains matches what the fork's own converter emits. The substitute's
+    `quantization` block is copied verbatim: its per-layer group-size overrides
+    are part of how the weights were packed, and a mismatch dequantizes to noise.
+
+    Rebuilt from scratch on every render — the links are free, and a stale shim
+    pointing at a blob the user has since re-downloaded would otherwise load
+    silently-wrong weights.
+    """
+    for encoder_file in encoder_files:
+        if not encoder_file.is_file():
+            raise RuntimeError(f"Substituted text encoder is missing: {encoder_file}")
+    names = [f.name for f in encoder_files]
+    if len(set(names)) != len(names):
+        raise RuntimeError(f"Substituted text encoder has duplicate file names: {sorted(names)}")
+    source_config = next((f for f in encoder_files if f.name == "config.json"), None)
+    if source_config is None:
+        raise RuntimeError("Substituted text encoder must pin its own config.json.")
+
+    root = shim_root / encoder_id
+    shutil.rmtree(root, ignore_errors=True)
+    root.mkdir(parents=True, exist_ok=True)
+
+    for encoder_file in encoder_files:
+        # config.json is generated below, not linked: linking it through would
+        # hand the loader the very `model_type` the override exists to correct.
+        if encoder_file.name != "config.json":
+            (root / encoder_file.name).symlink_to(encoder_file)
+
+    config = json.loads(source_config.read_text(encoding="utf-8"))
+    config.pop("vision_config", None)
+    config.pop("audio_config", None)
+    config.update(config_overrides)
+    (root / "config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
+
+    return root
+
+
+def install_ltx25_encoder_override(shim_dir: Path) -> None:
+    """Point the pack's conditioner resolution at the shim, for every pipeline.
+
+    ``PromptEncoder._text_encoder_source`` prefers a local ``text_encoder/``
+    reporting ``model_type: "gemma4"`` unconditionally and ignores
+    ``gemma_model_id``, so a substitution has to override that method rather than
+    pass an argument. Patched on the CLASS — not on a constructed pipeline — so
+    it cannot be skipped by a mode that builds its pipeline differently, or by a
+    mode added later. This is the same shape as
+    ``generate_minimax_h3.install_key_prefix_map``.
+
+    The wrapped original still resolves the encoder CLASS, so nothing here has to
+    import ``Gemma4LanguageModel`` from a path the pinned fork could move — and a
+    pack that does NOT resolve to it (an LTX-2.3 model dir reached through this
+    flag) fails loudly instead of conditioning on the wrong architecture.
+    """
+    from ltx_pipelines_mlx.utils.blocks import PromptEncoder
+
+    original = PromptEncoder._text_encoder_source
+
+    def _text_encoder_source(self):
+        _, encoder_class = original(self)
+        if encoder_class.__name__ != "Gemma4LanguageModel":
+            raise RuntimeError(
+                "A substituted text encoder needs an LTX-2.5 pack whose own conditioner is gemma4; "
+                f"this model dir resolves to {encoder_class.__name__}."
+            )
+        return str(shim_dir), encoder_class
+
+    PromptEncoder._text_encoder_source = _text_encoder_source
 
 
 def _apply_user_loras(pipe, specs: list[tuple[str, float]]) -> None:
@@ -1031,10 +1173,25 @@ def maybe_strip_audio(output_path: str) -> None:
 
 def main() -> NoReturn:
     args = parse_args()
+    validate_text_encoder_args(args)
     # One-line runtime fingerprint at startup — captured by PortOS onto the
     # render record so garbled output can be tied to a specific ltx/mlx stack.
     emit_runtime_fingerprint("ltx2", ["ltx_pipelines_mlx", "ltx_core_mlx", "mlx", "mlx_metal"])
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+    # Substituted LTX-2.5 prompt conditioner (#4320). Installed BEFORE any
+    # runner builds its pipeline, so every mode picks it up from the class.
+    if args.text_encoder_file:
+        # Bare phase marker plus a separate STATUS line: the SSE parser reads
+        # field 2 of a STAGE frame as `step`/`heartbeat`, so the encoder id
+        # cannot ride along in the marker itself.
+        print("STAGE:swap-text-encoder", file=sys.stderr, flush=True)
+        emit_status(f"Conditioning with the {args.text_encoder_id} text encoder")
+        install_ltx25_encoder_override(build_ltx25_encoder_shim(
+            Path(args.text_encoder_shim_root),
+            args.text_encoder_id,
+            [Path(f) for f in args.text_encoder_file],
+            parse_text_encoder_config_overrides(args.text_encoder_config_json),
+        ))
     # Parse user LoRAs once up-front (strict validation surfaces bad input
     # before any model load). Each run_* sets pipe._pending_loras from this.
     args.user_lora_specs = parse_user_loras(args.user_loras)

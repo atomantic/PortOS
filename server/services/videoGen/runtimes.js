@@ -32,6 +32,14 @@ export const LTX2_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_ltx2.py'
 export const LTX25_VENV_PYTHON = join(homedir(), '.portos', 'ltx-2.5-mlx', '.venv', 'bin', 'python3');
 export const LTX25_REPO_DIR = join(homedir(), '.portos', 'ltx-2.5-mlx');
 export const LTX25_EXPECTED_REVISION = '57952288076766abe27dda3a774b2c24f7346977';
+// Shim roots for a substituted prompt conditioner (lib/videoTextEncoders.js).
+// Unlike the H3 sibling below — which composes a whole checkpoint root and
+// replaces only `text_encoder/` — an ltx25 shim is a standalone Gemma 4
+// checkpoint directory the runner points the pack's PromptEncoder at, so
+// nothing here links back into the model snapshot. Deliberately OUTSIDE
+// LTX25_REPO_DIR for the same reason: anything written inside the checkout
+// would read as untracked in that pin verification.
+export const LTX25_ENCODER_SHIM_DIR = join(homedir(), '.portos', 'ltx25-encoder-shims');
 
 // Wan 2.2 MLX runtime — pinned MLX-Gen checkout provisioned on demand.
 export const WAN22_VENV_PYTHON = join(homedir(), '.portos', 'mlx-gen', '.venv', 'bin', 'python3');

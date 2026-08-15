@@ -36,6 +36,11 @@ export const VIDEO_DISCLOSURE_REVIEWED_AT = '2026-08-09';
 // the same `disclosure` shape — a license-text correction here has to reach
 // both tables, which a second inline literal would prevent.
 export const APACHE_2 = { name: 'Apache-2.0', url: 'https://www.apache.org/licenses/LICENSE-2.0' };
+// Every Gemma derivative stays under Google's Gemma Terms of Use, which travel
+// with the weights — a repacker's card that declares Apache-2.0 is relicensing
+// something it cannot, so the ltx25 conditioners in lib/videoTextEncoders.js
+// disclose THIS rather than whatever their card happens to say.
+export const GEMMA_TERMS = { name: 'Gemma Terms of Use', url: 'https://ai.google.dev/gemma/terms' };
 const TENCENT_HUNYUAN_WEIGHTS = {
   name: 'Tencent Hunyuan Community License',
   url: 'https://huggingface.co/tencent/HunyuanVideo/blob/main/LICENSE',

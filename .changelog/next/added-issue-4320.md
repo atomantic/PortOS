@@ -1,0 +1,1 @@
+- Video Gen: LTX-2.5 renders can now swap the prompt conditioner through a shim directory, the same affordance MiniMax H3 has — the two uncensored Gemma 4 substitutes ship gated until an A/B render confirms they stay coherent (#4320)

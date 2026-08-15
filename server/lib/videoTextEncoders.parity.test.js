@@ -19,7 +19,9 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { STOCK_TEXT_ENCODER_ID, isStockTextEncoder, videoTextEncoderOptions } from './videoTextEncoders.js';
+import {
+  STOCK_TEXT_ENCODER_ID, isStockTextEncoder, videoTextEncoderOptions, videoTextEncoderRuntimes,
+} from './videoTextEncoders.js';
 import {
   STOCK_TEXT_ENCODER_ID as CLIENT_STOCK_TEXT_ENCODER_ID,
   normalizeTextEncoderForModel,
@@ -34,25 +36,35 @@ describe('video text-encoder client/server parity', () => {
   // The client emits this value in three places (initial state, the
   // model-change reset, the record restore). Every one of them must land on
   // something the server reads as "no override".
-  it('produces a sentinel the server accepts as no-override', () => {
+  // Asserted per RUNTIME rather than for the one the table happened to hold
+  // when this was written: every runtime's built-in entry has to normalize to
+  // the same sentinel, or adding a table key silently breaks that runtime's
+  // model-change reset while the H3 path keeps passing.
+  it.each(videoTextEncoderRuntimes())('produces a sentinel the server accepts as no-override (%s)', (runtime) => {
     expect(isStockTextEncoder(CLIENT_STOCK_TEXT_ENCODER_ID)).toBe(true);
     expect(isStockTextEncoder(textEncoderIdFromRecord(undefined))).toBe(true);
     expect(isStockTextEncoder(textEncoderIdFromRecord(''))).toBe(true);
-    expect(isStockTextEncoder(normalizeTextEncoderForModel('gone', { runtime: 'minimax_h3' }))).toBe(true);
+    expect(isStockTextEncoder(normalizeTextEncoderForModel('gone', { runtime }))).toBe(true);
   });
 
   // The server ships the true option list (including a lone built-in entry), so
   // the client's normalizer has to agree that a stock-only model offers no
-  // substitute to select.
-  it('agrees that the built-in option is the stock sentinel', () => {
-    const options = videoTextEncoderOptions({ runtime: 'minimax_h3' });
+  // substitute to select. A runtime whose substitutes are all still gated
+  // (ltx25, #4320) is exactly that case, and must normalize the same way.
+  it.each(videoTextEncoderRuntimes())('agrees that the built-in option is the stock sentinel (%s)', (runtime) => {
+    const options = videoTextEncoderOptions({ runtime });
     const builtIn = options.filter((option) => option.builtIn);
     expect(builtIn).toHaveLength(1);
     expect(builtIn[0].id).toBe(CLIENT_STOCK_TEXT_ENCODER_ID);
 
-    // A substitute the model really offers survives normalization unchanged.
+    const model = { runtime, textEncoderOptions: options };
+    // A substitute the model really offers survives normalization unchanged;
+    // with none offered, the built-in is all there is to land on.
     const substitute = options.find((option) => !option.builtIn);
-    const model = { runtime: 'minimax_h3', textEncoderOptions: options };
-    expect(normalizeTextEncoderForModel(substitute.id, model)).toBe(substitute.id);
+    if (substitute) {
+      expect(normalizeTextEncoderForModel(substitute.id, model)).toBe(substitute.id);
+    } else {
+      expect(isStockTextEncoder(normalizeTextEncoderForModel(CLIENT_STOCK_TEXT_ENCODER_ID, model))).toBe(true);
+    }
   });
 });

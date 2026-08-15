@@ -9,11 +9,14 @@ import {
   downloadableVideoTextEncoders,
   downloadableVideoTextEncoder,
   publicTextEncoderOption,
+  videoTextEncoderRuntimes,
+  declaredVideoTextEncoders,
 } from './videoTextEncoders.js';
 import { isSafeHfRepoRelativePath } from './hfCache.js';
 
 const H3 = { id: 'minimax_h3_8bit', runtime: 'minimax_h3' };
 const LTX = { id: 'ltx2_unified', runtime: 'ltx2' };
+const LTX25 = { id: 'ltx25_mlx_q8', runtime: 'ltx25' };
 
 describe('videoTextEncoders', () => {
   // An empty list is the signal the client uses to hide the picker entirely, so
@@ -31,6 +34,29 @@ describe('videoTextEncoders', () => {
     expect(options[0].id).toBe(STOCK_TEXT_ENCODER_ID);
     expect(options[0].builtIn).toBe(true);
     expect(options.slice(1).every((option) => !option.builtIn)).toBe(true);
+  });
+
+  // The client selects options[0] by default, so a runtime whose list did not
+  // lead with its built-in entry would silently start every render on a
+  // substitute. Asserted across EVERY runtime rather than the one the tests
+  // above happen to name, so a second table key can't ship mis-ordered.
+  it('leads every runtime with exactly one built-in option', () => {
+    const runtimes = videoTextEncoderRuntimes();
+    expect(runtimes).toContain('minimax_h3');
+    expect(runtimes).toContain('ltx25');
+    for (const runtime of runtimes) {
+      const options = videoTextEncoderOptions({ runtime });
+      expect(options[0]).toMatchObject({ id: STOCK_TEXT_ENCODER_ID, builtIn: true });
+      expect(options.filter((option) => option.builtIn)).toHaveLength(1);
+    }
+  });
+
+  // Each runtime's built-in entry names ITS conditioner — the picker's default
+  // row would otherwise tell an LTX-2.5 user their prompt runs through H3's
+  // Qwen tower.
+  it('describes each runtime built-in as its own packed conditioner', () => {
+    expect(videoTextEncoderOption(H3, STOCK_TEXT_ENCODER_ID).label).toMatch(/Qwen3-VL/);
+    expect(videoTextEncoderOption(LTX25, STOCK_TEXT_ENCODER_ID).label).toMatch(/Gemma 4/);
   });
 
   // Absence and the stock sentinel have to mean the same thing everywhere: the
@@ -81,6 +107,99 @@ describe('videoTextEncoders', () => {
     expect(finalNormKey.startsWith('model.language_model.')).toBe(false);
   });
 
+  // The ltx25 substitutes are declared but not yet coherence-checked against
+  // the pack's connector (#4320 step 6), so they must be unreachable: not in
+  // the picker, not accepted by route validation, and not downloadable — an
+  // 11-13 GB pull for something no render can select is pure waste.
+  describe('unverified substitutes', () => {
+    const UNVERIFIED = ['ltx25-abliterated-4bit', 'ltx25-heretic-8bit'];
+
+    it('offers ltx25 only its built-in conditioner', () => {
+      expect(videoTextEncoderOptions(LTX25).map((option) => option.id)).toEqual([STOCK_TEXT_ENCODER_ID]);
+    });
+
+    it.each(UNVERIFIED)('refuses to resolve or download %s', (id) => {
+      expect(supportsVideoTextEncoder(LTX25, id)).toBe(false);
+      expect(() => resolveVideoTextEncoder(LTX25, id)).toThrow(/has no text encoder/);
+      expect(downloadableVideoTextEncoder(id)).toBeNull();
+      expect(downloadableVideoTextEncoders().map((entry) => entry.id)).not.toContain(id);
+    });
+
+    // "Not yet checked" must not collapse into "fine": the flag is required on
+    // every substitute and only an explicit `true` opens the gate, so a new
+    // entry is invisible until someone states a verdict rather than shipping by
+    // omission.
+    it('requires every declared substitute to state a verdict', () => {
+      const declared = declaredVideoTextEncoders();
+      expect(declared.length).toBeGreaterThan(downloadableVideoTextEncoders().length);
+      for (const entry of declared) expect(typeof entry.verified).toBe('boolean');
+      // Everything the two lanes DO expose said `true` — nothing rode in on an
+      // absent or falsy flag.
+      const offered = videoTextEncoderRuntimes()
+        .flatMap((runtime) => videoTextEncoderOptions({ runtime }))
+        .filter((option) => !option.builtIn)
+        .concat(downloadableVideoTextEncoders());
+      for (const entry of offered) expect(entry.verified).toBe(true);
+    });
+
+    // An unverified entry gets no shape checking from the download-lane loop
+    // below (it isn't in that lane yet), so the pins are enforced here — a
+    // floating revision or an unsafe path must fail when it is WRITTEN, not
+    // months later when someone flips the flag.
+    it('pins every declared substitute whether or not it is offered yet', () => {
+      for (const entry of declaredVideoTextEncoders()) {
+        expect(entry.repo).toBeTruthy();
+        expect(entry.revision).toMatch(/^[0-9a-f]{40}$/);
+        expect(entry.files.every(isSafeHfRepoRelativePath)).toBe(true);
+        expect(new Set(entry.files.map((name) => name.split('/').pop())).size)
+          .toBe(entry.files.length);
+        expect(entry.sizeBytes).toBeGreaterThan(0);
+        expect(entry.disclosure?.modelCardUrl).toMatch(/^https:\/\/huggingface\.co\//);
+      }
+    });
+
+    // The shim reads the substitute's OWN config.json to generate the one it
+    // writes, so an entry that never pinned it would fail in the runner with a
+    // missing-file error minutes after the download completed.
+    it('pins the config.json every ltx25 shim is generated from', () => {
+      const ltx25 = declaredVideoTextEncoders().filter((entry) => entry.id.startsWith('ltx25-'));
+      expect(ltx25.length).toBeGreaterThan(0);
+      for (const entry of ltx25) {
+        expect(entry.files).toContain('config.json');
+        expect(entry.files).toContain('model.safetensors.index.json');
+        expect(entry.files).toContain('tokenizer.json');
+      }
+    });
+
+    // `configOverrides` corrects the ONE thing a unified checkpoint gets wrong.
+    // Overriding `text_config` or `quantization` would change how the weights
+    // are interpreted rather than how they are labelled — group-size drift
+    // dequantizes to noise — so the field must stay a label fix.
+    it('limits configOverrides to the model_type label', () => {
+      for (const entry of declaredVideoTextEncoders()) {
+        if (!entry.configOverrides) continue;
+        expect(Object.keys(entry.configOverrides)).toEqual(['model_type']);
+        expect(entry.configOverrides.model_type).toBe('gemma4');
+      }
+      // The text-only export already reports gemma4, so it declares none.
+      expect(declaredVideoTextEncoders()
+        .find((entry) => entry.id === 'ltx25-abliterated-4bit').configOverrides).toBeUndefined();
+      expect(declaredVideoTextEncoders()
+        .find((entry) => entry.id === 'ltx25-heretic-8bit').configOverrides)
+        .toEqual({ model_type: 'gemma4' });
+    });
+  });
+
+  // The picker offers a substitute only where its runtime's loader can consume
+  // it — an id is never global, so H3's conditioners must stay off ltx25 and
+  // vice versa even once both are verified.
+  it('keeps a runtime\'s substitutes off the other runtimes', () => {
+    expect(supportsVideoTextEncoder(LTX25, 'heretic-bf16')).toBe(false);
+    expect(() => resolveVideoTextEncoder(LTX25, 'heretic-bf16'))
+      .toThrow(/has no text encoder "heretic-bf16"/);
+    expect(supportsVideoTextEncoder(H3, 'ltx25-abliterated-4bit')).toBe(false);
+  });
+
   it('rejects an id the model cannot load', () => {
     expect(supportsVideoTextEncoder(H3, 'nope')).toBe(false);
     expect(() => resolveVideoTextEncoder(H3, 'nope')).toThrow(/has no text encoder "nope"/);
@@ -109,7 +228,10 @@ describe('videoTextEncoders', () => {
       // quantizations, generation tails or never-built layers the loader can't
       // use — tens of GB of waste per entry.
       expect(entry.files.length).toBeGreaterThan(0);
-      expect(entry.files.every((name) => name.endsWith('.safetensors'))).toBe(true);
+      // Weights are the point; the companion files an ltx25 shim also pins
+      // (shard index, tokenizer, generation config) are not weights, so the
+      // shape rule is "carries weights", not "is nothing but weights".
+      expect(entry.files.some((name) => name.endsWith('.safetensors'))).toBe(true);
       expect(new Set(entry.files).size).toBe(entry.files.length);
       // Through the same predicate the download target validates with, so the
       // registry can't declare a path the route would then reject at runtime.

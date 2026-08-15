@@ -1076,6 +1076,80 @@ describe('generateVideo — LTX-2.5 sibling runtime spawn', () => {
     expect(calls.some(([bin]) => isLtx25Python(bin))).toBe(false);
   });
 
+  // Substituted prompt conditioner on 2.5 (#4320). The shim flags and the 2.3
+  // `--gemma` flag are different mechanisms sharing one builder, so each
+  // runtime must emit exactly its own — and neither when nothing was picked.
+  it.each([
+    ['ltx25_mlx_q8', isLtx25Python],
+    ['ltx2_unified', isLtx2Python],
+  ])('adds no text-encoder shim argv to an unswapped %s render', async (modelId, isPython) => {
+    const calls = await renderLtxFamily(`${modelId}-no-shim`, modelId);
+    const [, args] = calls.find(([bin, a]) => isPython(bin) && Array.isArray(a) && a.includes('--mode'));
+    expect(args.filter((arg) => String(arg).startsWith('--text-encoder'))).toEqual([]);
+  });
+
+  // Every ltx25 substitute is still gated behind the coherence check, so the
+  // route/service path must reject its id rather than half-wire a render.
+  it.each(['ltx25-abliterated-4bit', 'ltx25-heretic-8bit'])('rejects the unverified %s', async (textEncoderId) => {
+    await expect(generateVideo({
+      jobId: `ltx25-unverified-${textEncoderId}`,
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx25_mlx_q8',
+      prompt: 'a quiet street at dusk',
+      width: 512, height: 512, numFrames: 25, fps: 24,
+      textEncoderId,
+    })).rejects.toMatchObject({ status: 400, code: 'VIDEO_TEXT_ENCODER_UNSUPPORTED' });
+  });
+
+  // The flags a resolved substitute produces, exercised directly: the registry
+  // entries that would drive them end-to-end are gated until the A/B render in
+  // #4320 lands, and this is the contract that has to survive that flag flip.
+  describe('ltx25TextEncoderArgs', () => {
+    let ltx25TextEncoderArgs;
+    beforeEach(async () => {
+      ({ ltx25TextEncoderArgs } = await import('./local.js'));
+    });
+
+    it('emits nothing for the stock choice', () => {
+      expect(ltx25TextEncoderArgs(null)).toEqual([]);
+    });
+
+    it('emits one --text-encoder-file per pinned file plus a shim root outside the checkout', () => {
+      const args = ltx25TextEncoderArgs({
+        id: 'ltx25-abliterated-4bit',
+        paths: ['/mock/hf/snap/config.json', '/mock/hf/snap/model-00001-of-00003.safetensors'],
+      });
+      expect(args[args.indexOf('--text-encoder-id') + 1]).toBe('ltx25-abliterated-4bit');
+      expect(args.flatMap((arg, i) => (arg === '--text-encoder-file' ? [args[i + 1]] : [])))
+        .toEqual(['/mock/hf/snap/config.json', '/mock/hf/snap/model-00001-of-00003.safetensors']);
+      const shimRoot = args[args.indexOf('--text-encoder-shim-root') + 1];
+      expect(shimRoot).toContain(join('.portos', 'ltx25-encoder-shims'));
+      expect(shimRoot).not.toContain(join('.portos', 'ltx-2.5-mlx'));
+      // No overrides declared — the config rewrite flag stays off, the same way
+      // the H3 builder omits its key-remap flags for a checkpoint needing none.
+      expect(args).not.toContain('--text-encoder-config-json');
+      // Never the 2.3 mechanism: a 2.5 pack's own tower wins over --gemma.
+      expect(args).not.toContain('--gemma');
+    });
+
+    it('forwards configOverrides as one JSON payload', () => {
+      const args = ltx25TextEncoderArgs({
+        id: 'ltx25-heretic-8bit',
+        paths: ['/mock/hf/snap/config.json'],
+        configOverrides: { model_type: 'gemma4' },
+      });
+      expect(JSON.parse(args[args.indexOf('--text-encoder-config-json') + 1]))
+        .toEqual({ model_type: 'gemma4' });
+    });
+
+    // An empty object is not an override — emitting `{}` would make the runner
+    // rewrite a config for no reason and hide a registry typo behind a no-op.
+    it('omits the config flag for an empty override map', () => {
+      expect(ltx25TextEncoderArgs({ id: 'x', paths: ['/p'], configOverrides: {} }))
+        .not.toContain('--text-encoder-config-json');
+    });
+  });
+
   it('rejects a missing pinned 2.5 snapshot before spawn', async () => {
     const { spawnDetached } = await import('../../lib/detachedSpawn.js');
     vi.mocked(spawnDetached).mockClear();
