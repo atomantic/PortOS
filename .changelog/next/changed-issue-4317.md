@@ -1,0 +1,1 @@
+- a11y guard: one wrapper registry recognizes label wrappers declared as arrow functions and imported from other files, replacing three ad-hoc recognizers and the hardcoded FormField name

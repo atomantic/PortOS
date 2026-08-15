@@ -41,8 +41,32 @@ const CLIENT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 // why `.js` is included alongside `.jsx`: the OpenClaw composer's file-input ref
 // lived in `hooks/useOpenClawAttachments.js`, exactly the hole a `.jsx`-only
 // scan leaves open).
-const trackedJsxFiles = () => trackedJsx(CLIENT_ROOT);
-const trackedSourceFiles = () => trackedSources(CLIENT_ROOT);
+// Memoized: each call shells out to `git ls-files`, and the rules below ask for
+// the list a dozen times over.
+let trackedJsxCache = null;
+let trackedSourceCache = null;
+const trackedJsxFiles = () => (trackedJsxCache ??= trackedJsx(CLIENT_ROOT));
+const trackedSourceFiles = () => (trackedSourceCache ??= trackedSources(CLIENT_ROOT));
+const trackedSourceSet = (() => {
+  let cached = null;
+  return () => (cached ??= new Set(trackedSourceFiles()));
+})();
+
+// `maskComments` is the most expensive routine in this file — a per-character
+// lexer over ~11MB of source — and several rules want the same file masked.
+// Memoizing by path collapses that to one pass per file for the whole suite;
+// it is also what lets `wrapperRegistry` key its cache by path, since the scan
+// and the wrapper lookups then share one source *object*.
+const maskedSourceByFile = new Map();
+
+function maskedSourceOf(file) {
+  let masked = maskedSourceByFile.get(file);
+  if (masked === undefined) {
+    masked = maskComments(readFileSync(join(CLIENT_ROOT, file), 'utf8'));
+    maskedSourceByFile.set(file, masked);
+  }
+  return masked;
+}
 
 /**
  * Slice out the full opening tag starting at `index`, tolerating `>` inside
@@ -433,7 +457,7 @@ function maskComments(src) {
   return chars.join('');
 }
 
-function hasMatchingExplicitLabel(src, id) {
+function hasMatchingLabelElement(src, id) {
   const re = /<label\b/g;
   let match;
   while ((match = re.exec(src))) {
@@ -443,7 +467,7 @@ function hasMatchingExplicitLabel(src, id) {
     if (htmlFor !== id || !hasUsableElementText(src, match.index, tag)) continue;
     return true;
   }
-  return hasMatchingForwardedLabel(src, id);
+  return false;
 }
 
 // A `label` prop only names something when it carries text. Every literal that
@@ -454,71 +478,37 @@ function isUsableLabelAttributeValue(value) {
   return Boolean(value) && !/^(?:undefined|null|false|true)$/i.test(value);
 }
 
-// A page-local field wrapper can own the <label> AND take the control's id as a
-// prop instead of wrapping it (LifestyleTab.jsx's `<FieldGroup label="Sleep …"
+// A field wrapper can own the <label> AND take the control's id as a prop
+// instead of wrapping it (LifestyleTab.jsx's `<FieldGroup label="Sleep …"
 // htmlFor="lifestyle-sleep-hours">`). Wrapping is wrong there — an implicit
 // <label> would swallow the live value readout and the hint paragraph sitting
 // beside the control into the accessible name — so the control is explicitly
-// labeled, just not by a `<label htmlFor>` written at the call site. Recognise
-// those forwarders the same way and under the same limits as
-// localLabelWrapperNames: same-file `function` declarations only, so a missed
-// one is a false negative that leaves its controls on the allowlist.
+// labeled, just not by a `<label htmlFor>` written at the call site.
 //
-// The two prop names are read out of the wrapper rather than hardcoded: the
-// forwarded id arrives as `htmlFor` in LifestyleTab's `FieldGroup` but as `id`
-// in StackerNews's `Field({ id, label, children })`, and both name their
-// control just as well. Hardcoding `htmlFor` left the second shape's controls
-// looking unnamed.
-//
-// Both helpers below read whatever source they are handed. The input scan hands
-// them `maskComments(src)`, which is what keeps a commented-out wrapper — or a
-// commented-out call site — from registering; same as localLabelWrapperNames.
-const htmlForForwardersBySource = new Map();
-
-function localHtmlForForwarders(src) {
-  const cached = htmlForForwardersBySource.get(src);
-  if (cached) return cached;
-  const forwarders = new Map();
-  forEachLocalComponent(src, (name, body, params) => {
-    // The <label> has to do both jobs before the call site's attributes can be
-    // trusted: point at one prop, and render another prop as its own text. A
-    // component that forwards the id onto a <label> it never fills with text
-    // names nothing.
-    const shape = /<label\b[^>]*\bhtmlFor\s*=\s*\{\s*([A-Za-z_$][\w$]*)\s*\}(?:[^>]*[^/>])?>(?:(?!<\/label>)[\s\S])*?\{\s*([A-Za-z_$][\w$]*)\s*\}/.exec(body);
-    if (!shape) return;
-    const [, idProp, labelProp] = shape;
-    // Both names must be parameters of this component. A <label> pointed at a
-    // module-level constant forwards nothing from the call site, so reading the
-    // call site's same-named attribute would exempt an unrelated control.
-    const parameterNames = new Set(params.match(/[A-Za-z_$][\w$]*/g));
-    if (!parameterNames.has(idProp) || !parameterNames.has(labelProp)) return;
-    forwarders.set(name, { idProp, labelProp });
-  });
-  htmlForForwardersBySource.set(src, forwarders);
-  return forwarders;
-}
-
-function hasMatchingForwardedLabel(src, id) {
-  for (const [name, { idProp, labelProp }] of localHtmlForForwarders(src)) {
-    const re = new RegExp(`<${name}\\b`, 'g');
-    let match;
-    while ((match = re.exec(src))) {
-      const tag = openingTagAt(src, match.index, name.length + 1);
-      if (!tag) continue;
-      re.lastIndex = match.index + tag.length;
-      if (normalizedAttributeValue(attributeValue(tag, idProp)) !== id) continue;
-      // A forwarder can take its text as JSX children rather than a prop
-      // (`<FieldLabel htmlFor="world-logline">Logline</FieldLabel>`), in which
-      // case there is no same-named attribute to read — the name is the
-      // element's own body, judged by the same text check the aria-labelledby
-      // path uses. Without this branch every children-shaped forwarder looked
-      // unnamed and its controls stayed on the allowlist.
-      if (labelProp === 'children') {
-        if (hasUsableElementText(src, match.index, tag)) return true;
-        continue;
-      }
-      if (isUsableLabelAttributeValue(normalizedAttributeValue(attributeValue(tag, labelProp)))) return true;
+// The prop names come from the wrapper's own source rather than a hardcoded
+// list: the forwarded id arrives as `htmlFor` in LifestyleTab's `FieldGroup`
+// but as `id` in StackerNews's `Field({ id, label, children })`, and both name
+// their control just as well. See `wrapperShapes` for how the shape is proved.
+function forwardsLabelForId(src, { id }, { idProp, labelProp }, name) {
+  if (!id) return false;
+  const re = new RegExp(`<${name}\\b`, 'g');
+  let match;
+  while ((match = re.exec(src))) {
+    const tag = openingTagAt(src, match.index, name.length + 1);
+    if (!tag) continue;
+    re.lastIndex = match.index + tag.length;
+    if (normalizedAttributeValue(attributeValue(tag, idProp)) !== id) continue;
+    // A forwarder can take its text as JSX children rather than a prop
+    // (`<FieldLabel htmlFor="world-logline">Logline</FieldLabel>`), in which
+    // case there is no same-named attribute to read — the name is the element's
+    // own body, judged by the same text check the aria-labelledby path uses.
+    // Without this branch every children-shaped forwarder looked unnamed and
+    // its controls stayed on the allowlist.
+    if (labelProp === 'children') {
+      if (hasUsableElementText(src, match.index, tag)) return true;
+      continue;
     }
+    if (isUsableLabelAttributeValue(normalizedAttributeValue(attributeValue(tag, labelProp)))) return true;
   }
   return false;
 }
@@ -629,32 +619,22 @@ function isDirectElementInExpression(src, start, index) {
   return depth === 0;
 }
 
-// The other two recognizers read a wrapper's own source before trusting it.
-// This one cannot — FormField is imported, not declared here — so at minimum
-// require that the name really is the shared component. Without the check a
-// file that declares or imports its own `FormField` exempts every control
-// under it, and that is the guard's widest exemption by far.
-// Matches every specifier the tree actually uses — `../ui/FormField`,
-// `../components/ui/FormField`, the one `.jsx`-suffixed import, and
-// `./FormField` from inside components/ui itself.
-function importsSharedFormField(src) {
-  return /\bfrom\s+['"](?:[^'"]*\/)?(?:ui\/)?FormField(?:\.jsx?)?['"]/.test(src);
-}
-
-function isNestedInLabeledFormField(src, index) {
-  if (!importsSharedFormField(src)) return false;
-  const formRe = /<FormField\b/g;
-  let formMatch;
-  while ((formMatch = formRe.exec(src)) && formMatch.index < index) {
-    const formTag = openingTagAt(src, formMatch.index, '<FormField'.length);
-    if (!formTag || /\/\s*>$/.test(formTag)) continue;
-    const label = normalizedAttributeValue(attributeValue(formTag, 'label'));
-    if (!isUsableLabelAttributeValue(label)) continue;
+// The "cloned" shape: the wrapper generates the id itself and clones it onto
+// its first React child (components/ui/FormField.jsx), so the control is named
+// without either side writing a `<label htmlFor>` next to it.
+function isNestedInLabeledCloner(src, { index }, { labelProp }, wrapperName) {
+  if (index === undefined) return false;
+  const wrapperRe = new RegExp(`<${wrapperName}\\b`, 'g');
+  let wrapperMatch;
+  while ((wrapperMatch = wrapperRe.exec(src)) && wrapperMatch.index < index) {
+    const wrapperTag = openingTagAt(src, wrapperMatch.index, wrapperName.length + 1);
+    if (!wrapperTag || /\/\s*>$/.test(wrapperTag)) continue;
+    if (!isUsableLabelAttributeValue(normalizedAttributeValue(attributeValue(wrapperTag, labelProp)))) continue;
 
     let depth = 0;
     let firstChild = null;
     let closed = false;
-    let cursor = formMatch.index + formTag.length;
+    let cursor = wrapperMatch.index + wrapperTag.length;
     while (cursor < index) {
       if (/\s/.test(src[cursor])) {
         cursor++;
@@ -706,7 +686,7 @@ function isNestedInLabeledFormField(src, index) {
         const end = src.indexOf('>', cursor);
         if (end === -1) break;
         if (depth > 0) depth--;
-        else if (name === 'FormField') { closed = true; break; }
+        else if (name === wrapperName) { closed = true; break; }
         cursor = end + 1;
         continue;
       }
@@ -722,86 +702,278 @@ function isNestedInLabeledFormField(src, index) {
     // named it. Harmless while the scan only ever asked about `<input>`; a live
     // bypass now that a `<select>` can follow one.
     if (!closed && depth === 0 && firstChild === null && cursor === index) firstChild = '#control';
-    // FormField clones only its first React child. The current control is named
-    // by the wrapper only when it is that first, direct child; a later control
-    // (DataDog's optional custom-site input) must remain actionable here.
+    // A cloning wrapper clones only its first React child. The current control
+    // is named by the wrapper only when it is that first, direct child; a later
+    // control (DataDog's optional custom-site input) must remain actionable here.
     if (!closed && depth === 0 && firstChild === '#control') return true;
   }
   return false;
 }
 
-// Page-local field wrappers (PipelineSeries.jsx's `<Field label="…">`) render
-// their children inside a real <label>, so the control they wrap is implicitly
-// named — the <label> just lives in the component definition instead of at the
-// call site. Recognise those wrappers from their own source so a correctly
-// labeled control isn't forced to carry a redundant aria-label that would
-// shadow the visible text. Only same-file definitions count; a wrapper imported
-// from elsewhere stays unknown (FormField has its own dedicated check), and
-// only `function` declarations are matched — a missed wrapper is a false
-// negative that simply leaves its controls on the allowlist.
-// Both wrapper recognizers below need the same three things out of a same-file
-// component — its name, its body, and (for one of them) its parameter list —
-// so they walk
-// declarations through this one iterator rather than each re-deriving the
-// boundaries. Only `function` declarations are matched; an arrow-function
-// component stays invisible, which is a false negative that simply leaves its
-// controls on the allowlist (tracked in #4317).
+// --- the wrapper registry -------------------------------------------------
+//
+// A control is often named by the component that wraps it rather than by markup
+// written next to it. Whether the guard sees that has two independent
+// dimensions, and flattening them into ad-hoc branches left half the
+// combinations unreachable (#4317):
+//
+//   WHERE the wrapper is declared — in this file, or imported from a relative
+//   path. Resolved by `wrapperRegistry`, which reads the imported file and runs
+//   the very same detectors on it.
+//
+//   HOW it names — proved by `wrapperShapes` from the wrapper's own source:
+//     implicit  `<label …>{children}</label>` — the control is wrapped in a
+//               real <label> (PipelineSeries.jsx's `<Field label="…">`), so the
+//               text that <label> carries names it.
+//     forwarded `<label htmlFor={idProp}>{labelProp}</label>` — the wrapper
+//               renders the <label>, the call site supplies the id and text
+//               (LifestyleTab.jsx's `<FieldGroup>`).
+//     cloned    the wrapper generates the id and clones it onto its first React
+//               child (components/ui/FormField.jsx).
+//
+// Every entry is earned by reading the wrapper's source, never by matching its
+// name. That is what stops the registry degenerating into "any component with a
+// label-ish prop exempts its input", and it is why the imported branch can be
+// trusted at all: an imported `FormField` is credited because its <label> was
+// read, not because it is spelled FormField.
+
+// A component is either a `function` declaration or an arrow assigned to a
+// capitalized binding. Both forms count: an arrow-shaped label wrapper names
+// its control just as well, and treating it as invisible pushes new code toward
+// an `aria-label` that shadows the visible label the wrapper already renders.
+// A concise arrow body that is neither `{…}` nor `(…)` (`= (p) => <label…>`) is
+// still skipped — there is no cheap end boundary for it, and the repo wraps
+// multi-line JSX in parens.
 function forEachLocalComponent(src, visit) {
-  const re = /function\s+([A-Z][\w]*)\s*\(/g;
+  const re = /(?:function\s+([A-Z][\w]*)\s*\(|(?:const|let|var)\s+([A-Z][\w]*)\s*=\s*(?:async\s+)?\()/g;
   let match;
   while ((match = re.exec(src))) {
     // Skip the parameter list with the string-aware scanner — a default value
     // like `{ label = ')' }` would close the parens early on a naive count and
-    // point `bodyStart` at the destructuring instead of the body.
+    // point the body start at the destructuring instead of the body.
+    const [, declaredName, arrowName] = match;
     const parenIndex = match.index + match[0].length - 1;
     const params = balancedCallAt(src, parenIndex);
     if (!params) continue;
-    const bodyStart = src.indexOf('{', parenIndex + params.length);
-    if (bodyStart === -1) continue;
-    const bodyEnd = matchingBraceEnd(src, bodyStart);
-    if (bodyEnd === -1) continue;
-    visit(match[1], src.slice(bodyStart, bodyEnd), params);
+    const afterParams = parenIndex + params.length;
+    const body = declaredName === undefined
+      ? arrowBodyAt(src, afterParams)
+      : blockBodyAt(src, afterParams);
+    if (body === null) continue;
+    visit(declaredName ?? arrowName, body, params);
   }
 }
 
-const labelWrapperNamesBySource = new Map();
-
-function localLabelWrapperNames(src) {
-  const cached = labelWrapperNamesBySource.get(src);
-  if (cached) return cached;
-  const names = new Set();
-  forEachLocalComponent(src, (name, body) => {
-    // {children} must sit inside a <label> — no </label> may intervene, or a
-    // component rendering `<label>Header</label>{children}<label>Footer</label>`
-    // would register as a wrapper and exempt controls it never labels. The
-    // opening tag must also not be self-closing (`<label … />` wraps nothing,
-    // so anything after it is outside the label).
-    if (/<label\b(?:[^>]*[^/>])?>(?:(?!<\/label>)[\s\S])*?\{\s*children\s*\}/.test(body)) names.add(name);
-  });
-  labelWrapperNamesBySource.set(src, names);
-  return names;
+function blockBodyAt(src, from) {
+  const bodyStart = src.indexOf('{', from);
+  if (bodyStart === -1) return null;
+  const bodyEnd = matchingBraceEnd(src, bodyStart);
+  return bodyEnd === -1 ? null : src.slice(bodyStart, bodyEnd);
 }
 
-function isNestedInLabelWrappingComponent(src, index) {
-  for (const name of localLabelWrapperNames(src)) {
-    const re = new RegExp(`</?${name}\\b`, 'g');
-    // Keep the label of every wrapper instance still open at `index`, not just
-    // the outermost: an inner `<Field label="…">` nested in an unlabeled outer
-    // one still names the control.
-    const open = [];
-    let match;
-    while ((match = re.exec(src)) && match.index < index) {
-      if (match[0].startsWith('</')) {
-        open.pop();
-        continue;
-      }
-      const tag = openingTagAt(src, match.index, name.length + 1);
-      if (!tag) continue;
-      re.lastIndex = match.index + tag.length;
-      if (/\/\s*>$/.test(tag)) continue;
-      open.push(normalizedAttributeValue(attributeValue(tag, 'label')));
+// `=>` is what separates a component from an ordinary parenthesized
+// initializer (`const RE = ('a' + 'b')`), which would otherwise register as a
+// component whose "body" is the next brace block in the file.
+function arrowBodyAt(src, from) {
+  const arrow = /^\s*=>\s*/.exec(src.slice(from));
+  if (!arrow) return null;
+  const bodyStart = from + arrow[0].length;
+  if (src[bodyStart] === '{') return blockBodyAt(src, bodyStart);
+  if (src[bodyStart] === '(') return balancedCallAt(src, bodyStart);
+  return null;
+}
+
+// Every `<label>` element in a component body, as `{ tag, inner }`. A
+// self-closing `<label />` wraps nothing and carries no text, so it is skipped.
+function* labelElements(body) {
+  const re = /<label\b/g;
+  let match;
+  while ((match = re.exec(body))) {
+    const tag = openingTagAt(body, match.index, '<label'.length);
+    if (!tag || /\/\s*>$/.test(tag)) continue;
+    const contentStart = match.index + tag.length;
+    re.lastIndex = contentStart;
+    const close = body.indexOf('</label>', contentStart);
+    if (close === -1) continue;
+    yield { tag, inner: body.slice(contentStart, close) };
+  }
+}
+
+// Which naming strategies a component's source proves it implements. Reads
+// whatever source it is handed; the scan hands over `maskComments(src)`, which
+// is what keeps a commented-out wrapper from registering.
+function wrapperShapes(body, params) {
+  if (!body.includes('<label')) return [];
+  const parameterNames = new Set(params.match(/[A-Za-z_$][\w$]*/g) ?? []);
+  const shapes = [];
+  for (const { tag, inner } of labelElements(body)) {
+    // Every shape has to prove the <label> really carries text before the call
+    // site's attributes can be trusted — that is the one invariant all three
+    // share, and dropping it would turn the registry into "any component with a
+    // label-ish prop exempts its input". `labelProp` names where that text comes
+    // from: a parameter the <label> renders, or `children` (the call site's
+    // element body). A <label> holding neither is not a naming wrapper.
+    const rendered = [...inner.matchAll(/\{\s*([A-Za-z_$][\w$]*)\s*\}/g)].map(([, name]) => name);
+    const childrenInLabel = rendered.includes('children');
+    const labelProp = rendered.find((name) => name !== 'children' && parameterNames.has(name)) ?? null;
+
+    // `{children}` inside the <label> means the control itself is wrapped, so
+    // the name has to come from somewhere ELSE in that <label>.
+    if (childrenInLabel && labelProp !== null) shapes.push({ kind: 'implicit', labelProp });
+
+    const idRef = /\bhtmlFor\s*=\s*\{\s*([A-Za-z_$][\w$]*)\s*\}/.exec(tag)?.[1];
+    if (!idRef) continue;
+    if (parameterNames.has(idRef)) {
+      // The id comes from the call site, so the call site's same-named
+      // attribute is this control's id. A <label> pointed at a module-level
+      // constant forwards nothing, and reading the call site's attributes then
+      // would exempt an unrelated control — hence the parameter check.
+      //
+      // Here the control is NOT the wrapper's children, so `{children}` in the
+      // <label> is the name, supplied as the element's body at the call site
+      // (`<FieldLabel htmlFor="world-logline">Logline</FieldLabel>`).
+      const forwardedLabelProp = labelProp ?? (childrenInLabel ? 'children' : null);
+      if (forwardedLabelProp !== null) shapes.push({ kind: 'forwarded', idProp: idRef, labelProp: forwardedLabelProp });
+      continue;
     }
-    if (open.some(isUsableLabelAttributeValue)) return true;
+    // The id is generated here. It only reaches a child if the wrapper clones
+    // it on, so demand the clone as proof rather than assuming the shape.
+    if (labelProp !== null
+      && new RegExp(`cloneElement\\s*\\([^,]*,\\s*\\{[^}]*\\bid\\s*:\\s*${idRef}\\b`).test(body)) {
+      shapes.push({ kind: 'cloned', labelProp });
+    }
+  }
+  return shapes;
+}
+
+// Resolve a relative import specifier to a client-relative path, the way the
+// bundler would. Restricted to git-tracked sources for the same reason the scan
+// is: an untracked scratch file must not be able to name a control either.
+function resolveRelativeImport(fromFile, specifier) {
+  if (!specifier.startsWith('.')) return null;
+  const base = join(dirname(fromFile), specifier);
+  const candidates = [base, `${base}.jsx`, `${base}.js`, `${base}/index.jsx`, `${base}/index.js`];
+  return candidates.find((candidate) => trackedSourceSet().has(candidate)) ?? null;
+}
+
+// Local binding name -> { file, exportedName } for every relatively-imported
+// component. `default` stands in for a default import; the imported file
+// resolves it to the component it actually points at.
+function relativeImportBindings(src, file) {
+  const bindings = new Map();
+  const re = /import\s+([^'";]+?)\s+from\s+['"]([^'"]+)['"]/g;
+  let match;
+  while ((match = re.exec(src))) {
+    const [, clause, specifier] = match;
+    const resolved = resolveRelativeImport(file, specifier);
+    if (!resolved) continue;
+    const named = /\{([^}]*)\}/.exec(clause);
+    for (const entry of named ? named[1].split(',') : []) {
+      const [exported, local] = entry.trim().split(/\s+as\s+/);
+      if (exported) bindings.set(local ?? exported, { file: resolved, exportedName: exported });
+    }
+    const defaultBinding = clause.replace(/\{[^}]*\}/, ' ').replace(/,/g, ' ').trim();
+    if (/^[A-Z][\w$]*$/.test(defaultBinding)) bindings.set(defaultBinding, { file: resolved, exportedName: 'default' });
+  }
+  return bindings;
+}
+
+const importedShapesByFile = new Map();
+
+function importedComponentShapes(file, exportedName) {
+  let byName = importedShapesByFile.get(file);
+  if (!byName) {
+    // Publish the (empty) map before building it: two components that import
+    // each other would otherwise recurse forever. A cycle resolves to no shapes
+    // for whichever file is re-entered, which is a false negative that leaves
+    // its controls on the allowlist.
+    byName = new Map();
+    importedShapesByFile.set(file, byName);
+    const src = maskedSourceOf(file);
+    for (const [name, shapes] of wrapperRegistry(src, file)) byName.set(name, shapes);
+    // `export default FormField` / `export default function FormField()`. The
+    // local binding at the call site can be spelled anything, so the default
+    // export is resolved to the component it names. Wrapped default exports
+    // (`export default memo(Field)`) and re-export barrels are not decoded —
+    // a false negative that leaves the control on the allowlist (#4327).
+    const defaultName = /export\s+default\s+(?:function\s+)?([A-Z][\w$]*)/.exec(src)?.[1];
+    if (defaultName && byName.has(defaultName)) byName.set('default', byName.get(defaultName));
+    importedShapesByFile.set(file, byName);
+  }
+  return byName.get(exportedName) ?? [];
+}
+
+const wrapperRegistryByFile = new Map();
+
+// name -> shape[] for every wrapper this file can render.
+//
+// Cached by path, not by source: the scan hands over the file's own memoized
+// masked source, so the two are the same string object and `===` settles it in
+// a pointer compare. The probe fixtures pass a synthetic source under a real
+// directory (they only need it to resolve their relative imports) and build
+// fresh each time, which is cheap for a handful of one-line sources.
+function wrapperRegistry(src, file) {
+  const cacheable = file !== undefined && src === maskedSourceByFile.get(file);
+  if (cacheable && wrapperRegistryByFile.has(file)) return wrapperRegistryByFile.get(file);
+
+  const registry = new Map();
+  // A module cannot bind the same identifier twice, so a plain `set` is enough
+  // — a local declaration and an import can never collide on one name.
+  const add = (name, shapes) => {
+    if (shapes.length) registry.set(name, shapes);
+  };
+  forEachLocalComponent(src, (name, body, params) => add(name, wrapperShapes(body, params)));
+  if (file !== undefined) {
+    for (const [localName, { file: importedFile, exportedName }] of relativeImportBindings(src, file)) {
+      // Only pay to read a file whose component this one actually renders.
+      if (!new RegExp(`<${localName}\\b`).test(src)) continue;
+      add(localName, importedComponentShapes(importedFile, exportedName));
+    }
+  }
+  if (cacheable) wrapperRegistryByFile.set(file, registry);
+  return registry;
+}
+
+function isNestedInLabelWrapper(src, { index }, { labelProp }, name) {
+  if (index === undefined) return false;
+  const re = new RegExp(`</?${name}\\b`, 'g');
+  // Keep every wrapper instance still open at `index`, not just the outermost:
+  // an inner `<Field label="…">` nested in an unlabeled outer one still names
+  // the control.
+  const open = [];
+  let match;
+  while ((match = re.exec(src)) && match.index < index) {
+    if (match[0].startsWith('</')) {
+      open.pop();
+      continue;
+    }
+    const tag = openingTagAt(src, match.index, name.length + 1);
+    if (!tag) continue;
+    re.lastIndex = match.index + tag.length;
+    if (/\/\s*>$/.test(tag)) continue;
+    open.push(tag);
+  }
+  return open.some((tag) => isUsableLabelAttributeValue(normalizedAttributeValue(attributeValue(tag, labelProp))));
+}
+
+// One matcher per shape `wrapperShapes` can emit. Adding a naming strategy is a
+// detector branch plus an entry here — not another recognizer function plus
+// another hand-written line in `hasAccessibleControlName`.
+const SHAPE_MATCHERS = {
+  implicit: isNestedInLabelWrapper,
+  forwarded: forwardsLabelForId,
+  cloned: isNestedInLabeledCloner,
+};
+
+// Is the control described by `context` named by one of the wrappers this file
+// can render? `context` carries the control's source `index` (for the two
+// ancestor-based shapes), its `id` (for the id-forwarding shape), and the
+// `file` whose relative imports the registry may follow.
+function isNamedByWrapper(src, context) {
+  for (const [name, shapes] of wrapperRegistry(src, context.file)) {
+    for (const shape of shapes) {
+      if (SHAPE_MATCHERS[shape.kind](src, context, shape, name)) return true;
+    }
   }
   return false;
 }
@@ -829,15 +1001,15 @@ function hasUsableAriaLabelledByReference(src, tag) {
 // the a11y tree at all. <select> and <textarea> have no such escape hatch, so
 // the caller passes the tag name rather than this reading `type` off anything
 // that happens to carry one.
-function hasAccessibleControlName(src, tag, index, tagName) {
+function hasAccessibleControlName(src, tag, index, tagName, file) {
   if (hasUsableAccessibleNameAttribute(tag, 'aria-label')) return true;
   if (hasUsableAccessibleNameAttribute(tag, 'aria-labelledby') && hasUsableAriaLabelledByReference(src, tag)) return true;
   if (tagName === 'input' && hasUsableNativeInputName(tag)) return true;
-  if (isNestedInLabel(src, index) || isNestedInLabeledFormField(src, index)) return true;
-  if (isNestedInLabelWrappingComponent(src, index)) return true;
+  if (isNestedInLabel(src, index)) return true;
 
   const id = normalizedAttributeValue(attributeValue(tag, 'id'));
-  return id !== null && id !== '' && hasMatchingExplicitLabel(src, id);
+  if (id !== null && id !== '' && hasMatchingLabelElement(src, id)) return true;
+  return isNamedByWrapper(src, { index, id: id || null, file });
 }
 
 // Keep exceptions tied to stable source anchors rather than line numbers, so
@@ -1231,12 +1403,12 @@ describe('a11y conventions', () => {
     if (cached) return cached;
     const anchors = new Set();
     for (const file of trackedJsxFiles()) {
-      const scanSrc = maskComments(readFileSync(join(CLIENT_ROOT, file), 'utf8'));
+      const scanSrc = maskedSourceOf(file);
       const re = controlTagRe(tagName);
       let m;
       while ((m = re.exec(scanSrc))) {
         const tag = openingTagAt(scanSrc, m.index, tagName.length + 1);
-        if (!tag || hasAccessibleControlName(scanSrc, tag, m.index, tagName)) continue;
+        if (!tag || hasAccessibleControlName(scanSrc, tag, m.index, tagName, file)) continue;
         anchors.add(controlSourceAnchor(file, scanSrc, m.index, tagName));
       }
     }
@@ -1275,16 +1447,25 @@ describe('a11y conventions', () => {
     });
   }
 
+  // Fixture sources are scanned as if they lived here, so a relative
+  // `../ui/FormField` resolves against the real components/ui/FormField.jsx the
+  // way a call site's would. Only the directory matters — the file itself need
+  // not exist.
+  const FIXTURE_HOST = 'src/components/settings/FixtureHost.jsx';
+  const isNamed = (src, tagName = 'input', file = FIXTURE_HOST) => {
+    const index = src.indexOf(`<${tagName}`);
+    return hasAccessibleControlName(src, openingTagAt(src, index, tagName.length + 1), index, tagName, file);
+  };
+  // The id-keyed half of the same question: is a control carrying this `id`
+  // named by one of the wrappers the source renders? These fixtures declare
+  // their wrapper inline, so no host path is needed.
+  const namesId = (src, id) => isNamedByWrapper(src, { id });
+
   it('reads a name for <select>/<textarea> from every escape hatch, and from nothing else', () => {
     // The rules above are only honest if the recognizer really rejects a bare
     // control. Probe each direction on the two tags #4309 added: without this
     // the whole widening could be vacuous (every control "named", allowlist
     // never shrinking because nothing was ever unnamed).
-    const isNamed = (src, tagName) => {
-      const index = src.indexOf(`<${tagName}`);
-      return hasAccessibleControlName(src, openingTagAt(src, index, tagName.length + 1), index, tagName);
-    };
-
     expect(isNamed('<select value={sort}><option>a</option></select>', 'select')).toBe(false);
     expect(isNamed('<textarea value={notes} rows={3} />', 'textarea')).toBe(false);
 
@@ -1350,13 +1531,13 @@ describe('a11y conventions', () => {
     const namedCall = `<Group label="Sleep" htmlFor="sleep-hours"><input id="sleep-hours" type="range" /></Group>`;
     const unnamedCall = `<Group htmlFor="sleep-hours"><input id="sleep-hours" type="range" /></Group>`;
 
-    expect(hasMatchingExplicitLabel(`${forwarder}\n${namedCall}`, 'sleep-hours')).toBe(true);
-    expect(hasMatchingExplicitLabel(`${forwarder}\n${unnamedCall}`, 'sleep-hours')).toBe(false);
-    expect(hasMatchingExplicitLabel(`${emptyForwarder}\n${namedCall}`, 'sleep-hours')).toBe(false);
+    expect(namesId(`${forwarder}\n${namedCall}`, 'sleep-hours')).toBe(true);
+    expect(namesId(`${forwarder}\n${unnamedCall}`, 'sleep-hours')).toBe(false);
+    expect(namesId(`${emptyForwarder}\n${namedCall}`, 'sleep-hours')).toBe(false);
     // A different id on the same wrapper must not be swept up either.
-    expect(hasMatchingExplicitLabel(`${forwarder}\n${namedCall}`, 'other-id')).toBe(false);
+    expect(namesId(`${forwarder}\n${namedCall}`, 'other-id')).toBe(false);
     // `label` with no value is `label={true}`, which renders no text.
-    expect(hasMatchingExplicitLabel(`${forwarder}\n${namedCall.replace('label="Sleep"', 'label={true}')}`, 'sleep-hours')).toBe(false);
+    expect(namesId(`${forwarder}\n${namedCall.replace('label="Sleep"', 'label={true}')}`, 'sleep-hours')).toBe(false);
     // The scan masks comments before any of this runs, so a commented-out
     // wrapper must not register as one. Probe the source the way the scan
     // hands it over, or this helper looks safe for the wrong reason.
@@ -1364,7 +1545,7 @@ describe('a11y conventions', () => {
   // <label htmlFor={htmlFor}>{label}</label>
   return <div>{children}</div>;
 }`;
-    expect(hasMatchingExplicitLabel(maskComments(`${commentedForwarder}\n${namedCall}`), 'sleep-hours')).toBe(false);
+    expect(namesId(maskComments(`${commentedForwarder}\n${namedCall}`), 'sleep-hours')).toBe(false);
 
     // The forwarded prop does not have to be called `htmlFor` — StackerNews's
     // `Field({ id, label })` does the same job through `id`. Both halves stay
@@ -1372,11 +1553,11 @@ describe('a11y conventions', () => {
     // actually forwards, not from any attribute that happens to be present.
     const idPropForwarder = forwarder.replace('label, htmlFor, children', 'id, label, children').replace('htmlFor={htmlFor}', 'htmlFor={id}');
     const idPropCall = `<Group id="sleep-hours" label="Sleep"><input id="sleep-hours" type="range" /></Group>`;
-    expect(hasMatchingExplicitLabel(`${idPropForwarder}\n${idPropCall}`, 'sleep-hours')).toBe(true);
-    expect(hasMatchingExplicitLabel(`${idPropForwarder}\n${idPropCall.replace(' label="Sleep"', '')}`, 'sleep-hours')).toBe(false);
+    expect(namesId(`${idPropForwarder}\n${idPropCall}`, 'sleep-hours')).toBe(true);
+    expect(namesId(`${idPropForwarder}\n${idPropCall.replace(' label="Sleep"', '')}`, 'sleep-hours')).toBe(false);
     // `htmlFor=` on the call site is not the forwarded prop here, so it must
     // not stand in for the `id` this wrapper reads.
-    expect(hasMatchingExplicitLabel(`${idPropForwarder}\n${idPropCall.replace('id="sleep-hours" label', 'htmlFor="sleep-hours" label')}`, 'sleep-hours')).toBe(false);
+    expect(namesId(`${idPropForwarder}\n${idPropCall.replace('id="sleep-hours" label', 'htmlFor="sleep-hours" label')}`, 'sleep-hours')).toBe(false);
 
     // A forwarder can take its text as JSX children instead of a prop
     // (UniverseBibleTab's `<FieldLabel htmlFor="world-logline">Logline`). There
@@ -1390,9 +1571,9 @@ describe('a11y conventions', () => {
   );
 }`;
     const childrenCall = '<FieldLabel htmlFor="sleep-hours">Sleep</FieldLabel>\n<input id="sleep-hours" type="range" />';
-    expect(hasMatchingExplicitLabel(`${childrenForwarder}\n${childrenCall}`, 'sleep-hours')).toBe(true);
-    expect(hasMatchingExplicitLabel(`${childrenForwarder}\n${childrenCall.replace('>Sleep<', '><')}`, 'sleep-hours')).toBe(false);
-    expect(hasMatchingExplicitLabel(`${childrenForwarder}\n${childrenCall}`, 'other-id')).toBe(false);
+    expect(namesId(`${childrenForwarder}\n${childrenCall}`, 'sleep-hours')).toBe(true);
+    expect(namesId(`${childrenForwarder}\n${childrenCall.replace('>Sleep<', '><')}`, 'sleep-hours')).toBe(false);
+    expect(namesId(`${childrenForwarder}\n${childrenCall}`, 'other-id')).toBe(false);
   });
 
   it('credits a FormField whose only child is a conditional, but not a list', () => {
@@ -1402,43 +1583,99 @@ describe('a11y conventions', () => {
     // veto that matters is a rendered LIST — Children.map flattens it and
     // clones only the first element, so crediting each control in a `.map()`
     // would exempt every one after the first.
-    // The wrapper is only credited when the file really imports the shared
-    // component, so every fixture carries the import a real call site would.
+    // The wrapper is credited only once its own source has been read, so every
+    // fixture carries the import a real call site would.
     const field = (child) => `import FormField from '../ui/FormField';\n<FormField label="Rounds">\n  ${child}\n</FormField>`;
-    const index = (src) => src.indexOf('<input');
+    const credits = (src, tagName = 'input') => isNamed(src, tagName);
 
     const ternary = field(`{isSelect ? (<select><option>a</option></select>) : (<input type="number" />)}`);
-    expect(isNestedInLabeledFormField(ternary, index(ternary))).toBe(true);
+    expect(credits(ternary)).toBe(true);
 
     // A `.map()` in the OTHER branch has already closed by the time the control
     // is reached, so it must not disqualify the shape.
     const ternaryWithListedOptions = field(`{isSelect ? (<select>{opts.map((o) => (<option key={o}>{o}</option>))}</select>) : (<input type="number" />)}`);
-    expect(isNestedInLabeledFormField(ternaryWithListedOptions, index(ternaryWithListedOptions))).toBe(true);
+    expect(credits(ternaryWithListedOptions)).toBe(true);
 
     const list = field(`{fields.map((f) => (<input key={f} type="number" />))}`);
-    expect(isNestedInLabeledFormField(list, index(list))).toBe(false);
+    expect(credits(list)).toBe(false);
 
     // A sibling that happens to BE an <input> must not stand in for the
     // "control is the first child" marker — the second control is not cloned,
     // so a <select> after an <input> is still unnamed.
     const afterInput = field('<input type="text" />\n  <select><option>a</option></select>');
-    expect(isNestedInLabeledFormField(afterInput, afterInput.indexOf('<select'))).toBe(false);
+    expect(credits(afterInput, 'select')).toBe(false);
 
     // Only the element the expression yields directly is cloned; a control
     // nested inside a wrapper element gets no id.
     const wrapped = field(`{isSelect ? (<select />) : (<div><input type="number" /></div>)}`);
-    expect(isNestedInLabeledFormField(wrapped, index(wrapped))).toBe(false);
+    expect(credits(wrapped)).toBe(false);
 
     // An unlabeled FormField names nothing, whatever its child looks like.
     const unlabeled = ternary.replace(' label="Rounds"', '');
-    expect(isNestedInLabeledFormField(unlabeled, index(unlabeled))).toBe(false);
+    expect(credits(unlabeled)).toBe(false);
 
-    // This recognizer trusts a component it cannot read the source of, so the
-    // name alone must not be enough — a file with its own local `FormField`
-    // would otherwise exempt every control under it, and that is the widest
-    // exemption the guard grants.
+    // The registry never trusts a component by name — a same-named wrapper
+    // imported from somewhere else is a different component, and crediting it
+    // on the strength of the identifier `FormField` would be the widest
+    // exemption the guard grants. Here the specifier resolves to nothing, so
+    // there is no source to read and no shape to credit.
     const foreign = ternary.replace("from '../ui/FormField'", "from './LocalFormField'");
-    expect(isNestedInLabeledFormField(foreign, index(foreign))).toBe(false);
+    expect(credits(foreign)).toBe(false);
+    // Same for a locally-declared `FormField` that is not a cloning wrapper.
+    const shadowed = `function FormField({ label, children }) {\n  return <div>{label}{children}</div>;\n}\n${ternary.replace(/^import[^\n]*\n/, '')}`;
+    expect(credits(shadowed)).toBe(false);
+  });
+
+  it('recognizes a wrapper wherever it is declared and however it names', () => {
+    // The registry splits "where the wrapper lives" from "how it names", so
+    // every combination has to work — the arrow-function and imported-wrapper
+    // quadrants were unreachable before #4317, and the cheapest way to make a
+    // new control pass a guard that misses its wrapper is an `aria-label` that
+    // shadows the visible label the wrapper already renders.
+    // An arrow-function implicit wrapper, in both body forms.
+    const parenArrow = 'const Field = ({ label, children }) => (\n  <label className="block"><span>{label}</span>{children}</label>\n);\n<Field label="Rounds"><input type="number" /></Field>';
+    expect(isNamed(parenArrow)).toBe(true);
+    expect(isNamed(parenArrow.replace('label="Rounds"', ''))).toBe(false);
+    const blockArrow = `const Field = ({ label, children }) => {
+  return (<label className="block"><span>{label}</span>{children}</label>);
+};
+<Field label="Rounds"><input type="number" /></Field>`;
+    expect(isNamed(blockArrow)).toBe(true);
+
+    // An arrow-function htmlFor forwarder.
+    const arrowForwarder = 'const Group = ({ id, label, children }) => (\n  <div><label htmlFor={id}>{label}</label>{children}</div>\n);\n<Group id="rounds" label="Rounds"><input id="rounds" type="number" /></Group>';
+    expect(isNamed(arrowForwarder)).toBe(true);
+    expect(isNamed(arrowForwarder.replace(' label="Rounds"', ''))).toBe(false);
+
+    // An IMPORTED wrapper, resolved and read: components/ui/FormField.jsx is
+    // the cloning shape, and its default export is credited through whatever
+    // name the call site binds it to.
+    const importedCloner = "import FormField from '../ui/FormField';\n<FormField label=\"Rounds\"><input type=\"number\" /></FormField>";
+    expect(isNamed(importedCloner)).toBe(true);
+    const renamedBinding = 'import Wrapped from \'../ui/FormField\';\n<Wrapped label="Rounds"><input type="number" /></Wrapped>';
+    expect(isNamed(renamedBinding)).toBe(true);
+    // An unresolvable specifier is not credited: there is no source to read, so
+    // the name alone proves nothing.
+    expect(isNamed(importedCloner.replace("'../ui/FormField'", "'./NotAFile'"))).toBe(false);
+    // Neither is a resolvable import of a component that names no control.
+    const importedNonWrapper = 'import Drawer from \'../Drawer\';\n<Drawer label="Rounds"><input type="number" /></Drawer>';
+    expect(isNamed(importedNonWrapper)).toBe(false);
+
+    // A same-file cloning wrapper — the quadrant the hardcoded `FormField`
+    // name could never reach. The clone is what proves the generated id gets
+    // to the child; without it the <label> points at a local that goes nowhere.
+    const localCloner = `function Boxed({ label, children }) {
+  const controlId = useId();
+  const augmented = Children.map(children, (child, i) => (i === 0 ? cloneElement(child, { id: controlId }) : child));
+  return (<div><label htmlFor={controlId}>{label}</label>{augmented}</div>);
+}
+<Boxed label="Rounds"><input type="number" /></Boxed>`;
+    expect(isNamed(localCloner)).toBe(true);
+    expect(isNamed(localCloner.replace('cloneElement(child, { id: controlId })', 'child'))).toBe(false);
+    expect(isNamed(localCloner.replace(' label="Rounds"', ''))).toBe(false);
+    // A <label> that renders no text names nothing, in any quadrant.
+    expect(isNamed(localCloner.replace('>{label}<', '><'))).toBe(false);
+    expect(isNamed(parenArrow.replace('<span>{label}</span>', ''))).toBe(false);
   });
 
   it('meets the 44px touch-target minimum on Close buttons', () => {
