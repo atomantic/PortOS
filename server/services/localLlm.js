@@ -783,6 +783,62 @@ export async function listVisionModels() {
 }
 
 /**
+ * Tool-use (function-calling) capable installed models across both local
+ * backends, tagged with the aiToolkit provider id (`ollama` / `lmstudio`) that
+ * serves them. Each entry: `{ providerId, backend, id, name, toolUse: true }`.
+ *
+ * Powers the AGENT model pickers' tool-use annotation, whose client-side
+ * `isToolUseModel` id regex is a positive allowlist that goes stale every time a
+ * new function-calling family ships — so a genuinely tool-capable model whose id
+ * the regex doesn't know (`phi4-mini`, a newer function-calling Gemma build) got
+ * flagged "⚠ no known tool use" while the Local LLMs tab's "Agents" badge, which
+ * reads these same authoritative capabilities, said otherwise.
+ *
+ * Deliberately NOT a mirror of `listVisionModels`' CLI expansion: a CLI provider
+ * has no enumerable per-model capability, and its tool-calling comes from the CLI
+ * harness rather than the model, so there is nothing authoritative to report.
+ * Callers union this with the id regex, so an unlisted model still falls back to
+ * the regex rather than being asserted incapable.
+ */
+export async function listToolUseModels() {
+  // Cache-first for both backends — same rationale as listVisionModels: the
+  // model-list caches are busted on install/delete, so they stay accurate.
+  const [ollama, lmstudio] = await Promise.all([
+    listModels('ollama').catch(() => []),
+    listModels('lmstudio').catch(() => [])
+  ])
+  // Ollama's /api/tags carries no capability flags at all, so `normalizeModels`
+  // could only regex-guess. /api/show reports an authoritative `tools`
+  // capability (cached per model), which is what makes this endpoint worth more
+  // than the client's own regex — consult it for every model. Unlike the vision
+  // path there is no id short-circuit: an id-regex hit is exactly the case the
+  // client can already decide for itself, so skipping the round-trip would leave
+  // this list adding nothing beyond what the caller already knows.
+  const ollamaToolUse = await Promise.all(ollama.map(async (m) => {
+    const capabilities = await ollamaManager.getModelCapabilities(m.id).catch(() => [])
+    // `isToolUseModel` treats a NON-EMPTY capabilities array as authoritative in
+    // both directions; an empty one (daemon didn't report, or /api/show failed)
+    // falls back to the id regex.
+    return { ...m, toolUse: isToolUseModel({ id: m.id, capabilities }) }
+  }))
+  // LM Studio reports no tool-calling flag, so `lmStudioBadgeCapabilities`
+  // already resolved `tools` from the shared id heuristic — read that rather
+  // than re-deriving it, so this endpoint and the Local LLMs tab's badges can
+  // never disagree about the same model.
+  const lmStudioToolUse = lmstudio.map((m) => ({
+    ...m,
+    toolUse: (m.capabilities || []).includes('tools')
+  }))
+  const tag = (backend, models) => models
+    .filter((m) => m.toolUse)
+    .map((m) => ({ providerId: PROVIDER_ID[backend], backend, id: m.id, name: m.name || m.id, toolUse: true }))
+  return [
+    ...tag('ollama', ollamaToolUse),
+    ...tag('lmstudio', lmStudioToolUse),
+  ]
+}
+
+/**
  * Vision-capable CLI providers (codex / claude-code), expanded to one entry per
  * configured model so the caption picker can offer e.g. "codex / gpt-5" or
  * "claude-code / claude-opus-5". A disabled provider is skipped. Each entry

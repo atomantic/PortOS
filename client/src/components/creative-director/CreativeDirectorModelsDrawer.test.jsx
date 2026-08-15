@@ -4,13 +4,14 @@ import { MemoryRouter } from 'react-router';
 
 vi.mock('../../services/api', () => ({ getAiAssignments: vi.fn(), updateAiAssignment: vi.fn() }));
 vi.mock('../../services/apiCreativeDirector.js', () => ({ updateCreativeDirectorProject: vi.fn() }));
-vi.mock('../../services/apiLocalLlm', () => ({ getVisionModels: vi.fn() }));
+vi.mock('../../services/apiLocalLlm', () => ({ getVisionModels: vi.fn(), getToolUseModels: vi.fn() }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
 import CreativeDirectorModelsDrawer from './CreativeDirectorModelsDrawer.jsx';
 import { getAiAssignments, updateAiAssignment } from '../../services/api';
 import { updateCreativeDirectorProject } from '../../services/apiCreativeDirector.js';
-import { getVisionModels } from '../../services/apiLocalLlm';
+import { getVisionModels, getToolUseModels } from '../../services/apiLocalLlm';
+import { __resetToolUseModelIdsCache } from '../../hooks/useToolUseModelIds.js';
 
 const ASSIGNMENTS = {
   providers: [
@@ -50,6 +51,10 @@ beforeEach(() => {
   // Default: the local backends report no vision models, so the id regex alone
   // decides — the pre-`useVisionModelIds` behavior.
   getVisionModels.mockResolvedValue({ models: [] });
+  // Same default for the tool-use capability scan: nothing authoritative, so the
+  // id regex alone decides the agent stages' annotation.
+  __resetToolUseModelIdsCache();
+  getToolUseModels.mockResolvedValue({ models: [] });
 });
 
 describe('CreativeDirectorModelsDrawer', () => {
@@ -79,6 +84,27 @@ describe('CreativeDirectorModelsDrawer', () => {
     renderDrawer({ id: 'cd-1', name: 'Demo', modelOverrides: { plan: { providerId: 'ollama', model: '' } } });
     await waitFor(() => expect(screen.getByLabelText('Production plan provider')).toBeTruthy());
     expect(screen.getByText(/recognized tool-calling model/i)).toBeInTheDocument();
+  });
+
+  it('clears the plan-stage warning for a model the server reports as tool-capable', async () => {
+    // `gemma2:9b` matches no TOOL_USE_RE alternative, but if Ollama's /api/show
+    // says it has `tools`, the authoritative answer wins over the stale regex —
+    // otherwise this drawer contradicts the Local LLMs tab's "Agents" badge.
+    getToolUseModels.mockResolvedValue({
+      models: [{ providerId: 'ollama', id: 'gemma2:9b', toolUse: true }],
+    });
+    renderDrawer({ id: 'cd-1', name: 'Demo', modelOverrides: { plan: { providerId: 'ollama', model: 'gemma2:9b' } } });
+    await waitFor(() => expect(getToolUseModels).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByLabelText('Production plan model')).toBeTruthy());
+    expect(screen.queryByText(/recognized tool-calling model/i)).not.toBeInTheDocument();
+  });
+
+  it('still warns on the plan stage when the capability scan fails', async () => {
+    // A failed scan must degrade to the id regex, not go silent — going silent
+    // would hide the wedge this warning exists to prevent.
+    getToolUseModels.mockRejectedValue(new Error('ollama down'));
+    renderDrawer({ id: 'cd-1', name: 'Demo', modelOverrides: { plan: { providerId: 'ollama', model: 'gemma2:9b' } } });
+    await waitFor(() => expect(screen.getByText(/recognized tool-calling model/i)).toBeInTheDocument());
   });
 
   it('never shows a tool-use warning on the vision (evaluation) stage', async () => {

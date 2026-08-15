@@ -1,5 +1,16 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+
+// The card's pins render a `highlightToolUse` ProviderModelSelector, which
+// fetches the backends' authoritative tool-use capabilities. Park that scan
+// unresolved: this suite is about the provider/model/effort pins, not the
+// tool-use annotation (covered in ProviderModelSelector.test.jsx), and a scan
+// that settles mid-test would land a state update outside act() in the
+// synchronous cases below.
+vi.mock('../../../../services/apiLocalLlm', () => ({
+  getToolUseModels: vi.fn(() => new Promise(() => {})),
+}));
+
 import AppTaskCard from './AppTaskCard';
 
 // `claude-code-*` ids carry the claude effort ladder (see effortLevelsForProvider).

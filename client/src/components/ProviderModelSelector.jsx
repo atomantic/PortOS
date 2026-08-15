@@ -46,11 +46,14 @@
  *   marks each LOCAL (Ollama / LM Studio) model option with a tool-use indicator
  *   and warns below the select when the chosen local model can't call tools (it
  *   would narrate instead of acting). Off by default so non-agent pickers
- *   (embeddings, vision, prose generation) stay unannotated. No-op for cloud/API
- *   providers, whose ids don't encode their family.
+ *   (embeddings, vision, prose generation) stay unannotated — it also gates the
+ *   authoritative capability fetch (`useToolUseModelIds`), so an unannotated
+ *   picker costs nothing. No-op for cloud/API providers, whose ids don't encode
+ *   their family.
  */
 import { useId } from 'react';
 import { effectiveModelFor, effortLevelsForProvider, effortSurvivingModel, localToolUseHint, withToolUseOptionLabel } from '../utils/providers.js';
+import useToolUseModelIds from '../hooks/useToolUseModelIds.js';
 import EffortSelect from './cos/EffortSelect.jsx';
 
 const SELECT_CLASS =
@@ -101,7 +104,19 @@ export default function ProviderModelSelector({
   // model (explicit selection, else the provider default) for the warning — and
   // for the effort ladder, which is per-model on Antigravity.
   const effectiveModel = effectiveModelFor(selectedProvider, selectedModel);
-  const toolHint = highlightToolUse ? localToolUseHint(effectiveModel, selectedProvider) : null;
+  // Authoritative tool-use capability from the backends themselves, unioned into
+  // the id regex so a tool-capable family the regex predates isn't mislabelled.
+  // Gated on `highlightToolUse`, so the many non-agent pickers never pay for the
+  // capability scan; the fetch is module-shared, so a list page rendering one
+  // selector per row still issues a single request.
+  const { idsByProvider: toolUseIdsByProvider, loaded: toolUseLoaded } = useToolUseModelIds(highlightToolUse);
+  // Nothing is asserted until the scan settles (success OR failure). Annotating
+  // mid-fetch would show the exact false "⚠ no known tool use" this union exists
+  // to remove, only for it to vanish a beat later; a failed fetch settles too, so
+  // an unreachable backend degrades to the regex-only labels rather than muting
+  // the annotation forever.
+  const annotateToolUse = highlightToolUse && toolUseLoaded;
+  const toolHint = annotateToolUse ? localToolUseHint(effectiveModel, selectedProvider, toolUseIdsByProvider) : null;
   const toolIncapable = toolHint?.toolCapable === false;
   // Only offer enabled providers (treat a missing `enabled` as enabled). The
   // currently-selected provider stays visible even if disabled, so a record
@@ -165,8 +180,8 @@ export default function ProviderModelSelector({
             {availableModels.map(m => {
               const opt = modelOption(m);
               if (!opt) return null;
-              const label = highlightToolUse
-                ? withToolUseOptionLabel(opt.value, opt.label, selectedProvider)
+              const label = annotateToolUse
+                ? withToolUseOptionLabel(opt.value, opt.label, selectedProvider, toolUseIdsByProvider)
                 : opt.label;
               return <option key={opt.value} value={opt.value}>{label}</option>;
             })}

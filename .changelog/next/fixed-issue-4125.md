@@ -1,0 +1,1 @@
+- Agent model pickers now union each local backend's authoritative tool-use capability (Ollama /api/show) into the model-id heuristic, so a genuinely tool-capable model the id regex predates is no longer labelled "no known tool use"

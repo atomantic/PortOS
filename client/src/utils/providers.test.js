@@ -660,6 +660,57 @@ describe('localToolUseHint', () => {
   it('returns null for a blank id', () => {
     expect(localToolUseHint('', ollama)).toBeNull();
   });
+
+  describe('authoritative capability union (useToolUseModelIds)', () => {
+    // The map is keyed by the PROVIDER ID the server enumerated, so the fixture
+    // provider needs one.
+    const ollamaProvider = { id: 'ollama', name: 'Ollama', endpoint: 'http://localhost:11434/v1' };
+
+    it('flags a tool-capable model the id regex does not recognize', () => {
+      // The bug: `phi4-mini` reports the `tools` capability from Ollama's
+      // /api/show, but no TOOL_USE_RE alternative matches it — so the picker
+      // said "⚠ no known tool use" while the Local LLMs tab's Agents badge,
+      // reading the same capabilities, disagreed.
+      expect(localToolUseHint('phi4-mini:latest', ollamaProvider)).toEqual({ toolCapable: false });
+      const ids = { ollama: new Set(['phi4-mini:latest']) };
+      expect(localToolUseHint('phi4-mini:latest', ollamaProvider, ids)).toEqual({ toolCapable: true });
+      expect(withToolUseOptionLabel('phi4-mini:latest', 'phi4-mini:latest', ollamaProvider, ids))
+        .toBe('phi4-mini:latest · 🔧 tool use');
+    });
+
+    it('keeps the regex verdict for a model the server did not list (union, not substitution)', () => {
+      // A fetched-and-legitimately-EMPTY set is not a veto: the server can only
+      // ADD to the regex, never subtract from it, so a regex hit still wins.
+      const ids = { ollama: new Set(), lmstudio: new Set() };
+      expect(localToolUseHint('qwen3.6:35b', ollamaProvider, ids)).toEqual({ toolCapable: true });
+      expect(localToolUseHint('gemma3:4b', ollamaProvider, ids)).toEqual({ toolCapable: false });
+    });
+
+    it('falls back to regex-only when the fetch never landed or failed (null map)', () => {
+      // `null` = not fetched / failed — distinct from a fetched empty map above.
+      // Both degrade to the regex, but only the empty map is a real answer.
+      expect(localToolUseHint('qwen3.6:35b', ollamaProvider, null)).toEqual({ toolCapable: true });
+      expect(localToolUseHint('phi4-mini:latest', ollamaProvider, null)).toEqual({ toolCapable: false });
+      expect(localToolUseHint('phi4-mini:latest', ollamaProvider, undefined)).toEqual({ toolCapable: false });
+    });
+
+    it('never lets one provider vouch for another (keyed by enumerated provider)', () => {
+      // A CUSTOM provider pointed at a DIFFERENT Ollama host resolves to the same
+      // backend but was never enumerated — a matching id there is a coincidence,
+      // and a false "tool-capable" wedges the agent. It stays regex-only.
+      const ids = { ollama: new Set(['phi4-mini:latest']) };
+      const remote = { id: 'ollama-remote', name: 'Remote Ollama', endpoint: 'http://192.0.2.10:11434/v1' };
+      expect(localToolUseHint('phi4-mini:latest', remote, ids)).toEqual({ toolCapable: false });
+      // Same for a renamed Ollama-backed wrapper with its own provider id.
+      const wrapper = { id: 'my-local-agent', name: 'My Local Agent', ollamaBacked: true };
+      expect(localToolUseHint('phi4-mini:latest', wrapper, ids)).toEqual({ toolCapable: false });
+    });
+
+    it('still returns null for cloud providers even with a map present', () => {
+      const cloud = { id: 'openai', name: 'OpenAI', endpoint: 'https://api.openai.com/v1' };
+      expect(localToolUseHint('gpt-4o', cloud, { openai: new Set(['gpt-4o']) })).toBeNull();
+    });
+  });
 });
 
 describe('withToolUseOptionLabel', () => {

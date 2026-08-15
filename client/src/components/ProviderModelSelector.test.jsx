@@ -1,6 +1,13 @@
-import { describe, it, expect, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+
+// The tool-use annotation unions the server's authoritative capability list into
+// the client id regex, so the picker fetches it whenever `highlightToolUse` is on.
+const getToolUseModels = vi.fn();
+vi.mock('../services/apiLocalLlm', () => ({ getToolUseModels: (...a) => getToolUseModels(...a) }));
+
 import ProviderModelSelector from './ProviderModelSelector';
+import { __resetToolUseModelIdsCache } from '../hooks/useToolUseModelIds.js';
 
 const PROVIDERS = [
   { id: 'p1', name: 'Provider One' },
@@ -119,8 +126,18 @@ describe('ProviderModelSelector', () => {
 
   describe('highlightToolUse (agent pickers)', () => {
     const OLLAMA = [{ id: 'ollama', name: 'Ollama' }];
+    const modelLabels = () =>
+      [...screen.getAllByRole('combobox')[1].querySelectorAll('option')].map((o) => o.textContent);
 
-    it('marks local model options with a tool-use indicator', () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+      __resetToolUseModelIdsCache();
+      // Default: the capability scan finds nothing extra, so every assertion
+      // below is about the id regex unless the case says otherwise.
+      getToolUseModels.mockResolvedValue({ models: [] });
+    });
+
+    it('marks local model options with a tool-use indicator', async () => {
       renderSelector({
         providers: OLLAMA,
         selectedProviderId: 'ollama',
@@ -128,11 +145,11 @@ describe('ProviderModelSelector', () => {
         availableModels: ['qwen3.6:35b', 'gemma3:4b'],
         highlightToolUse: true,
       });
-      const labels = [...screen.getAllByRole('combobox')[1].querySelectorAll('option')].map((o) => o.textContent);
-      expect(labels).toEqual(['qwen3.6:35b · 🔧 tool use', 'gemma3:4b · ⚠ no known tool use']);
+      await waitFor(() =>
+        expect(modelLabels()).toEqual(['qwen3.6:35b · 🔧 tool use', 'gemma3:4b · ⚠ no known tool use']));
     });
 
-    it('warns when the selected LOCAL model cannot call tools', () => {
+    it('warns when the selected LOCAL model cannot call tools', async () => {
       renderSelector({
         providers: OLLAMA,
         selectedProviderId: 'ollama',
@@ -140,10 +157,10 @@ describe('ProviderModelSelector', () => {
         availableModels: ['qwen3.6:35b', 'gemma3:4b'],
         highlightToolUse: true,
       });
-      expect(screen.getByText(/recognized tool-calling model/i)).toBeInTheDocument();
+      expect(await screen.findByText(/recognized tool-calling model/i)).toBeInTheDocument();
     });
 
-    it('warns on the provider default when the model selection is blank', () => {
+    it('warns on the provider default when the model selection is blank', async () => {
       // "Default model" (blank) isn't a no-op — the resolver runs the provider's
       // defaultModel, which here is a non-tool local model.
       renderSelector({
@@ -155,10 +172,10 @@ describe('ProviderModelSelector', () => {
         emptyModelOption: 'Default model',
         highlightToolUse: true,
       });
-      expect(screen.getByText(/recognized tool-calling model/i)).toBeInTheDocument();
+      expect(await screen.findByText(/recognized tool-calling model/i)).toBeInTheDocument();
     });
 
-    it('does not warn when the selected local model is tool-capable', () => {
+    it('does not warn when the selected local model is tool-capable', async () => {
       renderSelector({
         providers: OLLAMA,
         selectedProviderId: 'ollama',
@@ -166,10 +183,11 @@ describe('ProviderModelSelector', () => {
         availableModels: ['qwen3.6:35b', 'gemma3:4b'],
         highlightToolUse: true,
       });
+      await waitFor(() => expect(getToolUseModels).toHaveBeenCalled());
       expect(screen.queryByText(/recognized tool-calling model/i)).not.toBeInTheDocument();
     });
 
-    it('is a no-op for cloud providers (ids do not encode family)', () => {
+    it('is a no-op for cloud providers (ids do not encode family)', async () => {
       renderSelector({
         providers: [{ id: 'openai', name: 'OpenAI', endpoint: 'https://api.openai.com/v1' }],
         selectedProviderId: 'openai',
@@ -177,8 +195,8 @@ describe('ProviderModelSelector', () => {
         availableModels: ['gpt-4o', 'o1'],
         highlightToolUse: true,
       });
-      const labels = [...screen.getAllByRole('combobox')[1].querySelectorAll('option')].map((o) => o.textContent);
-      expect(labels).toEqual(['gpt-4o', 'o1']);
+      await waitFor(() => expect(getToolUseModels).toHaveBeenCalled());
+      expect(modelLabels()).toEqual(['gpt-4o', 'o1']);
       expect(screen.queryByText(/recognized tool-calling model/i)).not.toBeInTheDocument();
     });
 
@@ -189,9 +207,63 @@ describe('ProviderModelSelector', () => {
         selectedModel: 'gemma3:4b',
         availableModels: ['qwen3.6:35b', 'gemma3:4b'],
       });
-      const labels = [...screen.getAllByRole('combobox')[1].querySelectorAll('option')].map((o) => o.textContent);
-      expect(labels).toEqual(['qwen3.6:35b', 'gemma3:4b']);
+      expect(modelLabels()).toEqual(['qwen3.6:35b', 'gemma3:4b']);
       expect(screen.queryByText(/recognized tool-calling model/i)).not.toBeInTheDocument();
+      // An unannotated picker must not pay for the capability scan either.
+      expect(getToolUseModels).not.toHaveBeenCalled();
+    });
+
+    it('trusts the server over the id regex for a family the regex predates', async () => {
+      // `phi4-mini` reports Ollama's `tools` capability but matches no
+      // TOOL_USE_RE alternative — the mislabel this union exists to fix.
+      getToolUseModels.mockResolvedValue({
+        models: [{ providerId: 'ollama', id: 'phi4-mini:latest', toolUse: true }],
+      });
+      renderSelector({
+        providers: OLLAMA,
+        selectedProviderId: 'ollama',
+        selectedModel: 'phi4-mini:latest',
+        availableModels: ['phi4-mini:latest', 'gemma3:4b'],
+        highlightToolUse: true,
+      });
+      await waitFor(() =>
+        expect(modelLabels()).toEqual(['phi4-mini:latest · 🔧 tool use', 'gemma3:4b · ⚠ no known tool use']));
+      expect(screen.queryByText(/recognized tool-calling model/i)).not.toBeInTheDocument();
+    });
+
+    it('asserts nothing until the capability scan settles', async () => {
+      let resolveScan;
+      getToolUseModels.mockReturnValue(new Promise((r) => { resolveScan = r; }));
+      renderSelector({
+        providers: OLLAMA,
+        selectedProviderId: 'ollama',
+        selectedModel: 'phi4-mini:latest',
+        availableModels: ['phi4-mini:latest'],
+        highlightToolUse: true,
+      });
+      // Mid-scan the regex would say "⚠ no known tool use" — showing it here
+      // just to retract it a beat later is the bug, so hold the annotation.
+      expect(modelLabels()).toEqual(['phi4-mini:latest']);
+      expect(screen.queryByText(/recognized tool-calling model/i)).not.toBeInTheDocument();
+
+      resolveScan({ models: [{ providerId: 'ollama', id: 'phi4-mini:latest', toolUse: true }] });
+      await waitFor(() => expect(modelLabels()).toEqual(['phi4-mini:latest · 🔧 tool use']));
+    });
+
+    it('falls back to the id regex when the capability scan fails', async () => {
+      getToolUseModels.mockRejectedValue(new Error('ollama down'));
+      renderSelector({
+        providers: OLLAMA,
+        selectedProviderId: 'ollama',
+        selectedModel: 'gemma3:4b',
+        availableModels: ['qwen3.6:35b', 'gemma3:4b'],
+        highlightToolUse: true,
+      });
+      // A failed scan still settles, so the annotation appears — regex-only is
+      // the best answer available, not a reason to go silent forever.
+      await waitFor(() =>
+        expect(modelLabels()).toEqual(['qwen3.6:35b · 🔧 tool use', 'gemma3:4b · ⚠ no known tool use']));
+      expect(screen.getByText(/recognized tool-calling model/i)).toBeInTheDocument();
     });
   });
 

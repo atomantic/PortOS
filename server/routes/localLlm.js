@@ -28,7 +28,7 @@ import { getCatalog, searchCatalog, isBackend } from '../lib/localLlmCatalog.js'
 import { isAppleSilicon } from '../lib/platform.js'
 import { searchHuggingFaceModels, enrichCatalogWithVariants } from '../services/huggingFaceCatalog.js'
 import {
-  getStatus, listModels, listVisionModels, installModel, deleteModel, switchBackend, migrateBackend, installBackend, upgradeBackend, controlOllamaServer,
+  getStatus, listModels, listVisionModels, listToolUseModels, installModel, deleteModel, switchBackend, migrateBackend, installBackend, upgradeBackend, controlOllamaServer,
   describeInstallProgress
 } from '../services/localLlm.js'
 import { runLocalLlmTest, compareLocalLlmModels } from '../services/localLlmPlayground.js'
@@ -55,6 +55,19 @@ router.get('/status', asyncHandler(async (req, res) => {
 // LoRA caption-model picker.
 router.get('/vision-models', asyncHandler(async (_req, res) => {
   res.json({ models: await listVisionModels() })
+}))
+
+// GET /api/local-llm/tool-use-models — tool-use (function-calling) capable
+// installed models across both backends, tagged with the provider id that serves
+// them. Powers the agent model pickers' tool-use annotation.
+//
+// Kept separate from /vision-models rather than folded into it: that endpoint's
+// contract is "every row returned is vision-capable" (the LoRA caption picker
+// lists its rows verbatim), so returning tool-only rows there would need a
+// discriminator plus a filter in every existing consumer, and its CLI-provider
+// expansion has no tool-use analogue.
+router.get('/tool-use-models', asyncHandler(async (_req, res) => {
+  res.json({ models: await listToolUseModels() })
 }))
 
 // GET /api/local-llm/catalog?backend=ollama&q=llama — curated install picker.

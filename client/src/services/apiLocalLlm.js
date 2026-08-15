@@ -8,6 +8,12 @@ export const getLocalLlmStatus = (options) => request('/local-llm/status', optio
 // provider id that serves it. Powers the LoRA caption-model picker.
 export const getVisionModels = (options) => request('/local-llm/vision-models', options);
 
+// Tool-use (function-calling) capable installed models across both backends,
+// each tagged with the provider id that serves it. Authoritative where the
+// backend reports capabilities (Ollama `/api/show`); agent pickers union it with
+// the client-side id regex via `useToolUseModelIds`.
+export const getToolUseModels = (options) => request('/local-llm/tool-use-models', options);
+
 // `variants: true` opts into per-quant RAM-aware enrichment (probes Hugging Face
 // per HF-backed entry) — the recommended-models picker wants it. Callers that only
 // need catalog metadata (e.g. the playground decorating installed models) omit it

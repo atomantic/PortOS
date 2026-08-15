@@ -494,21 +494,41 @@ export const isToolUseModel = (id) =>
  *
  * Returns `null` for cloud / API providers: their model ids don't encode their
  * family, so the name heuristic would mislabel them. LOCAL backends return
- * `{ toolCapable }` keyed on {@link isToolUseModel} — where "local" is BOTH a
- * direct Ollama / LM Studio backend ({@link localBackendForProvider}) AND an
- * Ollama-BACKED CLI/TUI wrapper ({@link isOllamaBackedProvider}): a renamed
- * `claude-ollama-tui` / OpenCode wrapper keeps `ollamaBacked: true` but may lose
- * the "ollama" name/endpoint/id that `localBackendForProvider` matches on, and
- * that wrapper is exactly the incident's provider class — so it must still be
- * flagged, not silently skipped.
+ * `{ toolCapable }` — where "local" is BOTH a direct Ollama / LM Studio backend
+ * ({@link localBackendForProvider}) AND an Ollama-BACKED CLI/TUI wrapper
+ * ({@link isOllamaBackedProvider}): a renamed `claude-ollama-tui` / OpenCode
+ * wrapper keeps `ollamaBacked: true` but may lose the "ollama"
+ * name/endpoint/id that `localBackendForProvider` matches on, and that wrapper
+ * is exactly the incident's provider class — so it must still be flagged, not
+ * silently skipped.
+ *
+ * `toolUseIdsByProvider` is the AUTHORITATIVE map the server reports from each
+ * backend's own capability metadata (Ollama `/api/show` `tools`) keyed by the
+ * PROVIDER ID the server says serves each model — see `useToolUseModelIds`. It
+ * is UNIONED with, never substituted for, {@link isToolUseModel}: the regex is a
+ * positive allowlist that goes stale every time a new function-calling family
+ * ships (`phi4-mini`, newer Gemma builds got "⚠ no known tool use" while the
+ * Local LLMs tab's "Agents" badge, reading these same capabilities, said
+ * otherwise), while the map can't speak for a provider the server never
+ * enumerated. Pass `null` (the default) when it hasn't loaded — that degrades to
+ * regex-only, the behavior this picker has always had.
+ *
+ * Keyed by the ENUMERATED PROVIDER, not flattened and not keyed by backend,
+ * because a bare id is not a capability: a CUSTOM provider (or an Ollama-backed
+ * CLI wrapper) pointed at a *different* Ollama/LM Studio host resolves to the
+ * same backend, but the server never enumerated that host — so a local model's
+ * id must not vouch for a remote model that merely shares its name. Such a
+ * provider stays regex-only, which is the conservative direction: a false
+ * "tool-capable" sends an agent to a model that narrates instead of acting.
  * @param {string} id
  * @param {object} [provider]
+ * @param {Record<string, Set<string>>|null} [toolUseIdsByProvider]
  * @returns {{toolCapable:boolean}|null}
  */
-export const localToolUseHint = (id, provider) =>
+export const localToolUseHint = (id, provider, toolUseIdsByProvider = null) =>
   (localBackendForProvider(provider) || isOllamaBackedProvider(provider))
     && typeof id === 'string' && id.length > 0
-    ? { toolCapable: isToolUseModel(id) }
+    ? { toolCapable: toolUseIdsByProvider?.[provider?.id]?.has(id) === true || isToolUseModel(id) }
     : null;
 
 /**
@@ -523,14 +543,18 @@ export const localToolUseHint = (id, provider) =>
  * "tool-capable", but a NON-match only means "not a recognized tool-caller" —
  * NOT a proven negative (a newer tool-capable family whose id isn't in the regex
  * yet would fall here). So the negative marker is worded as unverified, not a
- * false-certain "no tool use".
+ * false-certain "no tool use". Passing `toolUseIdsByProvider` (from
+ * `useToolUseModelIds`) shrinks that unverified band to the models the server
+ * couldn't speak for; see {@link localToolUseHint} for the union rule.
  * @param {string} id - model id (drives the heuristic)
  * @param {string} label - display label to annotate (often === id)
  * @param {object} [provider] - the selected provider object
+ * @param {Record<string, Set<string>>|null} [toolUseIdsByProvider] - authoritative
+ *   server-reported tool-capable ids, keyed by provider id; `null` = regex-only
  * @returns {string}
  */
-export const withToolUseOptionLabel = (id, label, provider) => {
-  const hint = localToolUseHint(id, provider);
+export const withToolUseOptionLabel = (id, label, provider, toolUseIdsByProvider = null) => {
+  const hint = localToolUseHint(id, provider, toolUseIdsByProvider);
   if (!hint) return label;
   return `${label}${hint.toolCapable ? ' · 🔧 tool use' : ' · ⚠ no known tool use'}`;
 };

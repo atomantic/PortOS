@@ -6,6 +6,7 @@ import toast from '../ui/Toast';
 import { getAiAssignments, updateAiAssignment } from '../../services/api';
 import { updateCreativeDirectorProject } from '../../services/apiCreativeDirector.js';
 import useVisionModelIds from '../../hooks/useVisionModelIds.js';
+import useToolUseModelIds from '../../hooks/useToolUseModelIds.js';
 import {
   providerDisplayName,
   assignmentProviderOptions,
@@ -82,6 +83,13 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
   // normal first render, and asserting "none found" there would flash the exact
   // empty-picker bug this drawer was fixed for.
   const { idsByProvider: visionIdsByProvider, loaded: visionLoaded } = useVisionModelIds(open);
+  // Same shape for the AGENT stages (treatment/plan): the authoritative
+  // tool-use capability each backend reports, unioned into the client's id regex
+  // so a tool-capable family the regex predates isn't warned about. `null` until
+  // fetched, which the union degrades to regex-only for; `toolUseLoaded` gates
+  // the annotation so the ⚠ warning isn't asserted during the scan and then
+  // retracted. Gated on `open` — this drawer stays mounted on a closed page.
+  const { idsByProvider: toolUseIdsByProvider, loaded: toolUseLoaded } = useToolUseModelIds(open);
 
   const seed = useCallback((next) => { setDrafts(next); setBaseline(next); }, []);
 
@@ -240,7 +248,10 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
             // provider whose default is a non-tool local model wedges the stage
             // just the same.
             const effectiveModel = draft.model || selectedProvider?.defaultModel || '';
-            const toolHint = stage.needsTools ? localToolUseHint(effectiveModel, selectedProvider) : null;
+            const annotateToolUse = stage.needsTools && toolUseLoaded;
+            const toolHint = annotateToolUse
+              ? localToolUseHint(effectiveModel, selectedProvider, toolUseIdsByProvider)
+              : null;
             const toolIncapable = pinned && toolHint?.toolCapable === false;
             // Both hints below are about the LOCAL capability scan, so they only
             // apply when the pinned provider is an Ollama / LM Studio backend. A
@@ -321,7 +332,9 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
                         <option value="">Provider default / auto</option>
                         {modelOptions.map((m) => (
                           <option key={m} value={m}>
-                            {stage.needsTools ? withToolUseOptionLabel(m, m, selectedProvider) : m}
+                            {annotateToolUse
+                              ? withToolUseOptionLabel(m, m, selectedProvider, toolUseIdsByProvider)
+                              : m}
                           </option>
                         ))}
                       </select>

@@ -14,6 +14,14 @@ const api = vi.hoisted(() => ({
 
 vi.mock('../../services/api', () => api);
 
+// The drawer's `highlightToolUse` picker fetches the backends' authoritative
+// tool-use capabilities from apiLocalLlm directly (not through services/api),
+// so stub it here or the suite makes a real network call. Parked unresolved —
+// the annotation itself is covered in ProviderModelSelector.test.jsx.
+vi.mock('../../services/apiLocalLlm', () => ({
+  getToolUseModels: vi.fn(() => new Promise(() => {})),
+}));
+
 const renderDrawer = (props = {}) => render(
   <SlashDoRunDrawer
     open

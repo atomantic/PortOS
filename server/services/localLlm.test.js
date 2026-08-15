@@ -525,6 +525,85 @@ describe('localLlm', () => {
     });
   });
 
+  describe('listToolUseModels', () => {
+    it('reports a tool-capable Ollama model whose id the TOOL_USE_RE does not match', async () => {
+      mocks.ollama.getInstalledModels.mockResolvedValueOnce([
+        // The bug: /api/show says `tools`, but no id-regex alternative matches
+        // `phi4-mini` — so the agent picker warned "no known tool use".
+        { id: 'phi4-mini:latest', name: 'phi4-mini:latest', family: 'phi3' },
+        { id: 'gemma3:4b', name: 'gemma3:4b', family: 'gemma3' },
+      ]);
+      mocks.ollama.getModelCapabilities.mockImplementation(async (id) =>
+        id === 'phi4-mini:latest' ? ['completion', 'tools'] : ['completion', 'vision']);
+
+      const models = await svc.listToolUseModels();
+      expect(models).toEqual([
+        { providerId: 'ollama', backend: 'ollama', id: 'phi4-mini:latest', name: 'phi4-mini:latest', toolUse: true },
+      ]);
+    });
+
+    it('consults /api/show even for an id the regex already matches', async () => {
+      // Unlike the vision path there is no id short-circuit: an id-regex hit is
+      // exactly what the client can already decide for itself, so skipping the
+      // round-trip would leave this endpoint adding nothing.
+      mocks.ollama.getInstalledModels.mockResolvedValueOnce([
+        { id: 'qwen3.6:35b', name: 'qwen3.6:35b', family: 'qwen35moe' },
+      ]);
+      mocks.ollama.getModelCapabilities.mockResolvedValue(['completion', 'tools']);
+
+      const models = await svc.listToolUseModels();
+      expect(models.map((m) => m.id)).toEqual(['qwen3.6:35b']);
+      expect(mocks.ollama.getModelCapabilities).toHaveBeenCalledWith('qwen3.6:35b');
+    });
+
+    it('falls back to the id regex when /api/show reports no capabilities', async () => {
+      // Empty array = the daemon didn't answer / doesn't report — NOT an
+      // explicit "no tools". Regex-only is then the best answer available.
+      mocks.ollama.getInstalledModels.mockResolvedValueOnce([
+        { id: 'qwen3.6:35b', name: 'qwen3.6:35b', family: 'qwen35moe' },
+        { id: 'phi4-mini:latest', name: 'phi4-mini:latest', family: 'phi3' },
+      ]);
+      mocks.ollama.getModelCapabilities.mockResolvedValue([]);
+
+      const models = await svc.listToolUseModels();
+      expect(models.map((m) => m.id)).toEqual(['qwen3.6:35b']);
+    });
+
+    it('reads LM Studio tool capability off the normalized catalog badges', async () => {
+      // LM Studio reports no tool flag, so `lmStudioBadgeCapabilities` already
+      // resolved `tools` from the shared id heuristic — reading that keeps this
+      // endpoint and the Local LLMs tab's badges from ever disagreeing.
+      mocks.lmstudio.getAvailableModels.mockResolvedValueOnce([
+        { id: 'mistral-7b-instruct', type: 'llm' },
+        { id: 'nomic-embed-text', type: 'embeddings' },
+        { id: 'some-unknown-model', type: 'llm' },
+      ]);
+
+      const models = await svc.listToolUseModels();
+      expect(models).toEqual([
+        { providerId: 'lmstudio', backend: 'lmstudio', id: 'mistral-7b-instruct', name: 'mistral-7b-instruct', toolUse: true },
+      ]);
+    });
+
+    it('never emits CLI-provider rows (no per-model capability to report)', async () => {
+      mocks.providers.getAllProviders.mockResolvedValueOnce({
+        providers: [
+          { id: 'claude-code', type: 'cli', command: 'claude', enabled: true, models: ['claude-opus-4-8'] },
+        ],
+      });
+      const models = await svc.listToolUseModels();
+      expect(models.some((m) => m.backend === 'cli')).toBe(false);
+    });
+
+    it('survives a backend being down — the other still reports', async () => {
+      mocks.ollama.getInstalledModels.mockRejectedValueOnce(new Error('ollama down'));
+      mocks.lmstudio.getAvailableModels.mockResolvedValueOnce([{ id: 'mistral-7b-instruct', type: 'llm' }]);
+
+      const models = await svc.listToolUseModels();
+      expect(models.map((m) => m.id)).toEqual(['mistral-7b-instruct']);
+    });
+  });
+
   describe('getLatestOllamaVersion', () => {
     afterEach(() => vi.unstubAllGlobals());
 

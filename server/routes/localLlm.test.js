@@ -3,7 +3,7 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import localLlmRoutes from './localLlm.js';
 import { runLocalLlmTest, compareLocalLlmModels } from '../services/localLlmPlayground.js';
-import { listModels } from '../services/localLlm.js';
+import { listModels, listVisionModels, listToolUseModels } from '../services/localLlm.js';
 import { enrichCatalogWithVariants } from '../services/huggingFaceCatalog.js';
 import { getLoadedModels, unloadModel } from '../services/ollamaManager.js';
 import { localLlmCompareSchema, localLlmTestSchema } from '../lib/validation.js';
@@ -17,6 +17,8 @@ errorEvents.on('error', () => {});
 vi.mock('../services/localLlm.js', () => ({
   getStatus: vi.fn(),
   listModels: vi.fn(async () => []),
+  listVisionModels: vi.fn(async () => []),
+  listToolUseModels: vi.fn(async () => []),
   installModel: vi.fn(),
   deleteModel: vi.fn(),
   switchBackend: vi.fn(),
@@ -307,5 +309,44 @@ describe('local LLM memory-management routes', () => {
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('VALIDATION_ERROR');
     expect(unloadModel).not.toHaveBeenCalled();
+  });
+});
+
+describe('local LLM capability routes', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('GET /tool-use-models returns the service list under `models`', async () => {
+    listToolUseModels.mockResolvedValueOnce([
+      { providerId: 'ollama', backend: 'ollama', id: 'phi4-mini:latest', name: 'phi4-mini:latest', toolUse: true },
+    ]);
+
+    const res = await request(makeApp()).get('/api/local-llm/tool-use-models');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      models: [
+        { providerId: 'ollama', backend: 'ollama', id: 'phi4-mini:latest', name: 'phi4-mini:latest', toolUse: true },
+      ],
+    });
+    expect(listToolUseModels).toHaveBeenCalledTimes(1);
+  });
+
+  it('GET /tool-use-models is a distinct list from /vision-models', async () => {
+    // The two endpoints answer different questions; folding tool-use rows into
+    // /vision-models would break its "every row is vision-capable" contract,
+    // which the LoRA caption picker lists verbatim.
+    listVisionModels.mockResolvedValueOnce([
+      { providerId: 'ollama', backend: 'ollama', id: 'qwen2.5-vl:7b', name: 'qwen2.5-vl:7b', vision: true },
+    ]);
+    listToolUseModels.mockResolvedValueOnce([
+      { providerId: 'ollama', backend: 'ollama', id: 'phi4-mini:latest', name: 'phi4-mini:latest', toolUse: true },
+    ]);
+    const app = makeApp();
+
+    const vision = await request(app).get('/api/local-llm/vision-models');
+    const tools = await request(app).get('/api/local-llm/tool-use-models');
+
+    expect(vision.body.models.map((m) => m.id)).toEqual(['qwen2.5-vl:7b']);
+    expect(tools.body.models.map((m) => m.id)).toEqual(['phi4-mini:latest']);
   });
 });
