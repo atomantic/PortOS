@@ -44,18 +44,20 @@ export function resolveLaunchPanelProcess(app, result) {
   return result?.results?.[processName]?.success === false ? null : processName;
 }
 
-// Mirrors STANDARDIZABLE_TYPES in server/services/streamingDetect.js (a parity
-// test asserts the two Sets match). POSITIVE list: the PM2 standardizer writes a
-// NODE ecosystem config from a prompt that opens "You are analyzing a Node.js
-// application", so a Python/Go/Docker/static repo must not be offered the flow.
-// `express` (appSchema's default), `unknown`, and `desktop` stay in for
-// continuity with already-persisted app records — see the server's rationale.
-export const STANDARDIZABLE_TYPES = new Set([
-  'vite+express', 'vite', 'single-node-server', 'nextjs', 'express', 'desktop', 'unknown'
-]);
+// Mirrors NON_NODE_TYPES / NON_STANDARDIZABLE_TYPES in
+// server/services/streamingDetect.js (parity tests assert the Sets match). The
+// PM2 standardizer writes a NODE ecosystem config from a prompt that opens "You
+// are analyzing a Node.js application", so a Python/Go/Docker/static repo must
+// not be offered the flow. It's a DENY list, not an allowlist of Node types:
+// `type` is a free-form string persisted on the app record, so records in the
+// wild carry legacy values this file has never heard of, and an allowlist would
+// silently withdraw the button from all of them. See the server's rationale.
+export const NON_NODE_TYPES = new Set(['python', 'go', 'docker', 'static']);
+
+export const NON_STANDARDIZABLE_TYPES = new Set([...NON_PM2_TYPES, ...NON_NODE_TYPES]);
 
 /** Whether the PM2 standardizer (which writes a NODE ecosystem config) applies. */
-export const isStandardizable = (type) => STANDARDIZABLE_TYPES.has(type || 'unknown');
+export const isStandardizable = (type) => !NON_STANDARDIZABLE_TYPES.has(type);
 
 // Every app type that can reach a UI label. Kept TOTAL (with a raw-type
 // fallback) rather than a ternary chain ending in '🔨 Xcode' — that default

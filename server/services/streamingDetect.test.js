@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { detectGodotNativeLaunch, parseEcosystemConfig, resolveViteConfigPortForProcess, rewriteEcosystemPorts, rewriteEcosystemPortsByProcess, writeEcosystemPorts, writeEcosystemPortsByProcess, writeEcosystemPortEdits, streamDetection, classifyNonNodeType, isStandardizable, usesPm2, DESKTOP_TYPES, NON_PM2_TYPES, NON_NODE_TYPES, STANDARDIZABLE_TYPES } from './streamingDetect.js';
+import { detectGodotNativeLaunch, parseEcosystemConfig, resolveViteConfigPortForProcess, rewriteEcosystemPorts, rewriteEcosystemPortsByProcess, writeEcosystemPorts, writeEcosystemPortsByProcess, writeEcosystemPortEdits, streamDetection, classifyNonNodeType, isStandardizable, usesPm2, DESKTOP_TYPES, NON_PM2_TYPES, NON_NODE_TYPES, NON_STANDARDIZABLE_TYPES } from './streamingDetect.js';
 
 // streamDetection shells out to PM2 and scans for an app icon; neither is under
 // test here and both are slow/environment-dependent.
@@ -1028,9 +1028,14 @@ describe('client mirror of the app-type sets', () => {
     expect([...client.NON_PM2_TYPES].sort()).toEqual([...NON_PM2_TYPES].sort());
   });
 
-  it('matches STANDARDIZABLE_TYPES', async () => {
+  it('matches NON_NODE_TYPES', async () => {
     const client = await import('../../client/src/components/apps/constants.js');
-    expect([...client.STANDARDIZABLE_TYPES].sort()).toEqual([...STANDARDIZABLE_TYPES].sort());
+    expect([...client.NON_NODE_TYPES].sort()).toEqual([...NON_NODE_TYPES].sort());
+  });
+
+  it('matches NON_STANDARDIZABLE_TYPES', async () => {
+    const client = await import('../../client/src/components/apps/constants.js');
+    expect([...client.NON_STANDARDIZABLE_TYPES].sort()).toEqual([...NON_STANDARDIZABLE_TYPES].sort());
   });
 });
 
@@ -1072,6 +1077,15 @@ describe('streamDetection app-type classification', () => {
   it('classifies a bare index.html as static', async () => {
     const { result } = await detect({ 'index.html': '<!doctype html><title>Example</title>' });
     expect(result.type).toBe('static');
+  });
+
+  it('keeps a served repo standardizable even when it ships an index.html', async () => {
+    const { result } = await detect({
+      'index.html': '<!doctype html>',
+      'server.js': 'require("http").createServer().listen(3000);\n'
+    });
+    expect(result.type).toBe('unknown');
+    expect(isStandardizable(result.type)).toBe(true);
   });
 
   it('leaves a package.json repo alone — Node tooling owns it, so `unknown` stays honest', async () => {
@@ -1121,6 +1135,21 @@ describe('classifyNonNodeType', () => {
     expect(classifyNonNodeType(['index.html', 'style.css'])).toBe('static');
   });
 
+  it('does not call an index.html beside a server entry point static', () => {
+    // "index.html with NO server" is the rule. A served app that happens to
+    // have an index.html must fall through to `unknown` (still standardizable)
+    // rather than have the flow withdrawn from it.
+    for (const server of ['server.js', 'app.js', 'ecosystem.config.js', 'ecosystem.config.cjs']) {
+      expect(classifyNonNodeType(['index.html', server])).toBeNull();
+    }
+  });
+
+  it('still treats a client-side index.js as static, not a server', () => {
+    // In a static site an `index.js` is a browser script far more often than a
+    // server entry point, so it must not suppress the classification.
+    expect(classifyNonNodeType(['index.html', 'index.js', 'style.css'])).toBe('static');
+  });
+
   it('prefers the language over the packaging when both markers are present', () => {
     // A Python service that also ships a Dockerfile is a python repo, not a
     // docker stack — the language is the more useful classification, and both
@@ -1145,7 +1174,7 @@ describe('classifyNonNodeType', () => {
 
 describe('isStandardizable', () => {
   it('allows the Node app types', () => {
-    for (const type of ['vite+express', 'vite', 'single-node-server', 'nextjs']) {
+    for (const type of ['vite+express', 'vite', 'single-node-server', 'nextjs', 'desktop']) {
       expect(isStandardizable(type)).toBe(true);
     }
   });
@@ -1155,6 +1184,17 @@ describe('isStandardizable', () => {
     expect(isStandardizable(undefined)).toBe(true);
     expect(isStandardizable(null)).toBe(true);
     expect(isStandardizable('')).toBe(true);
+  });
+
+  it('stays permissive for legacy/custom persisted types', () => {
+    // `type` is a free-form string on the app record (appSchema accepts any
+    // value) and installs upgrade independently, so records in the wild carry
+    // values this file never emitted. Only a POSITIVELY identified non-Node
+    // type is refused — anything else keeps the pre-change behavior instead of
+    // the button silently vanishing on upgrade.
+    for (const type of ['express', 'node', 'react', 'web', 'anything-a-user-typed']) {
+      expect(isStandardizable(type)).toBe(true);
+    }
   });
 
   it("covers appSchema's default type — the most common PERSISTED value", async () => {

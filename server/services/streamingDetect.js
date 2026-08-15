@@ -19,12 +19,19 @@ export const NON_PM2_TYPES = new Set(['ios-native', 'macos-native', 'xcode', 'sw
 const NON_NODE_MARKERS = [
   ['python', ['pyproject.toml', 'requirements.txt', 'setup.py', 'Pipfile']],
   ['go', ['go.mod']],
-  ['docker', ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml', 'Dockerfile']],
-  ['static', ['index.html']]
+  ['docker', ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml', 'Dockerfile']]
 ];
 
+/**
+ * Files meaning "something SERVES this directory". A package-less repo holding
+ * one of these is a served app, not a static site, so `static` must not claim
+ * it. `index.js` is deliberately absent: next to an `index.html` it is far more
+ * often a client-side script than a server entry point.
+ */
+const SERVER_ENTRY_MARKERS = ['server.js', 'app.js', 'ecosystem.config.js', 'ecosystem.config.cjs'];
+
 /** The non-Node app types `classifyNonNodeType` can emit. */
-export const NON_NODE_TYPES = new Set(NON_NODE_MARKERS.map(([type]) => type));
+export const NON_NODE_TYPES = new Set([...NON_NODE_MARKERS.map(([type]) => type), 'static']);
 
 /**
  * Classify a repo's runtime from its top-level filenames, for repos that
@@ -39,34 +46,38 @@ export function classifyNonNodeType(files) {
   for (const [type, markers] of NON_NODE_MARKERS) {
     if (markers.some(marker => present.has(marker))) return type;
   }
+  // `static` is the last resort and the only rule carrying a negative
+  // condition — "an index.html with no server". An index.html sitting beside a
+  // server entry point is a served app, so fall through to `unknown` (which
+  // stays standardizable) rather than wrongly withdrawing the flow.
+  if (present.has('index.html') && !SERVER_ENTRY_MARKERS.some(marker => present.has(marker))) {
+    return 'static';
+  }
   return null;
 }
 
 /**
- * App types the PM2 standardizer may run against — a POSITIVE list, because the
- * standardizer's prompt opens with "You are analyzing a Node.js application"
- * and a negative list (`!NON_PM2_TYPES.has(type)`) silently swept in every
- * unrecognized repo. On a Python/Go/Docker/static repo the LLM doesn't fail, it
- * confidently writes a Node ecosystem config into someone else's project.
+ * App types the PM2 standardizer must REFUSE: the Apple types (never PM2 at
+ * all) plus the non-Node runtimes above. The standardizer's prompt opens with
+ * "You are analyzing a Node.js application" — on a Python/Go/Docker/static repo
+ * it doesn't fail, it confidently writes a Node ecosystem config into someone
+ * else's project. That is what this predicate exists to stop.
  *
- * The list has to cover every type an install can have PERSISTED, not just the
- * ones detection emits today — `type` lives on the app record and other installs
- * upgrade on their own schedule:
- *   - `express` is `appSchema`'s default (`server/lib/validation.js`) and the
- *     type of PortOS's own app entry, so it's the most common stored value.
- *   - `unknown` is what every app imported before this classification existed
- *     kept — and most of those really are Node apps.
- *   - `desktop` (a Godot game binary) was always offered the flow; those repos
- *     commonly carry a Node web process alongside the game.
- * A missing/blank type normalizes to `unknown`, so an unrecognized legacy value
- * degrades to "offer it" rather than silently hiding the button.
+ * It is a DENY list rather than an allowlist of Node types because `type` is a
+ * free-form string (`appSchema` in `server/lib/validation.js` defaults it to
+ * `express` and accepts any value) PERSISTED on the app record. Installs
+ * upgrade on their own schedule, so app records in the wild carry values this
+ * file has never heard of — `unknown` from before this classification existed,
+ * `node`/`react`/`web` from older detection, whatever a user typed. An
+ * allowlist would silently withdraw standardization from every one of them.
+ * Only a type we have positively identified as non-Node is refused; anything
+ * unrecognized degrades to the previous behavior (offer it, and let the user
+ * decide) instead of a button that quietly disappears on upgrade.
  */
-export const STANDARDIZABLE_TYPES = new Set([
-  'vite+express', 'vite', 'single-node-server', 'nextjs', 'express', 'desktop', 'unknown'
-]);
+export const NON_STANDARDIZABLE_TYPES = new Set([...NON_PM2_TYPES, ...NON_NODE_TYPES]);
 
 /** Whether the PM2 standardizer (which writes a NODE ecosystem config) applies. */
-export const isStandardizable = (type) => STANDARDIZABLE_TYPES.has(type || 'unknown');
+export const isStandardizable = (type) => !NON_STANDARDIZABLE_TYPES.has(type);
 
 /**
  * App types that run a GUI/desktop process with no HTTP port (e.g. a Godot
