@@ -63,8 +63,8 @@ describe.skipIf(!pyBin)('_minimax_h3_common.py — checkpoint facts shared by bo
   // The shared validator reads these exact fields off the parsed Namespace, so
   // the two runners have to present the same surface or one of them can hand it
   // an attribute that doesn't exist. Declaring the flags once is what makes that
-  // true; this pins the set so a runner can't quietly drop one back into its own
-  // parser with a different type or default.
+  // true; the per-runner sampler default is an explicit parameter because MLX
+  // and diffusers count their schedules differently.
   it('declares the CLI surface both runners share', () => {
     const output = lines(runPython(`${importShared}\n${[
       'import argparse',

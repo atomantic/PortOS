@@ -67,7 +67,7 @@ def log(message: str) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = add_h3_common_args(argparse.ArgumentParser(description=__doc__))
+    parser = add_h3_common_args(argparse.ArgumentParser(description=__doc__), steps_default=8)
     parser.add_argument("--repo-file", action="append", default=[],
                         help="repo-relative diffusers component file that must already be cached (repeatable)")
     parser.add_argument("--offload-profile", choices=OFFLOAD_PROFILES, default="auto",

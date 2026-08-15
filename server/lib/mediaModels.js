@@ -126,6 +126,10 @@ export const MINIMAX_H3_OUTPUT_PROFILE = Object.freeze({
   shippedRepo: 'pipenetwork/MiniMax-H3-MLX-8bit',
   oldFrameOptions: h3FrameGrid(124, 362),
   frameOptions: h3FrameGrid(107, 362),
+  oldMlxSteps: 8,
+  mlxSteps: 9,
+  oldMlxSamplerNote: 'MiniMax H3 is CFG-distilled; this profile locks the validated 8-point sigma schedule and does not use CFG.',
+  mlxSamplerNote: 'MiniMax H3 is CFG-distilled; this profile locks the MLX reference 9-point sigma schedule (8 DiT forwards) and does not use CFG.',
   ...MINIMAX_H3_CANVAS,
 });
 
@@ -201,10 +205,31 @@ const sameValues = (left, right) => (
   && left.every((value, index) => value === right[index])
 );
 
+const upgradeMiniMaxH3DenoisingCountEntry = (entry, profile) => {
+  if (!isPlainObject(entry) || entry.id !== profile.id || entry.repo !== profile.shippedRepo) return entry;
+  // The MLX port treats `steps` as sigma-grid points, with the terminal zero
+  // excluded from transformer evaluation. The old shipped value therefore
+  // ran seven forwards, while the reference quality example uses nine grid
+  // points for eight forwards. Preserve a hand-tuned sampler contract.
+  const samplerIsLegacyShipped = entry.steps === profile.oldMlxSteps
+    && (!Object.hasOwn(entry, 'guidance') || entry.guidance === 0)
+    && (!Object.hasOwn(entry, 'samplerLocked') || entry.samplerLocked === true)
+    && (!Object.hasOwn(entry, 'samplerNote') || entry.samplerNote === profile.oldMlxSamplerNote);
+  return samplerIsLegacyShipped
+    ? { ...entry, steps: profile.mlxSteps, samplerNote: profile.mlxSamplerNote }
+    : entry;
+};
+
+export const upgradeMiniMaxH3DenoisingCount = (list) => {
+  if (!Array.isArray(list)) return list;
+  const profile = MINIMAX_H3_OUTPUT_PROFILE;
+  return list.map((entry) => upgradeMiniMaxH3DenoisingCountEntry(entry, profile));
+};
+
 export const upgradeMiniMaxH3OutputControls = (list) => {
   if (!Array.isArray(list)) return list;
   const profile = MINIMAX_H3_OUTPUT_PROFILE;
-  return list.map((entry) => {
+  const withGeometry = list.map((entry) => {
     if (!isPlainObject(entry) || entry.id !== profile.id || entry.repo !== profile.shippedRepo) return entry;
     let next = entry;
     if (sameValues(next.frameOptions, profile.oldFrameOptions)) {
@@ -225,6 +250,7 @@ export const upgradeMiniMaxH3OutputControls = (list) => {
     }
     return next;
   });
+  return upgradeMiniMaxH3DenoisingCount(withGeometry);
 };
 
 const DEFAULT_REGISTRY = {
@@ -283,10 +309,10 @@ const DEFAULT_REGISTRY = {
         ...MINIMAX_H3_CANVAS,
         resolutionOptions: MINIMAX_H3_CANVAS.resolutionOptions.map((preset) => ({ ...preset })),
         memoryGb: 128,
-        steps: 8,
+        steps: MINIMAX_H3_OUTPUT_PROFILE.mlxSteps,
         guidance: 0,
         samplerLocked: true,
-        samplerNote: 'MiniMax H3 is CFG-distilled; this profile locks the validated 8-point sigma schedule and does not use CFG.',
+        samplerNote: MINIMAX_H3_OUTPUT_PROFILE.mlxSamplerNote,
         supportsNegativePrompt: false,
         supportsTiling: false,
         supportsDisableAudio: false,

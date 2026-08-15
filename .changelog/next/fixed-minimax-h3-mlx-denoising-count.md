@@ -1,0 +1,1 @@
+- Use the MLX MiniMax H3 reference denoising schedule by default

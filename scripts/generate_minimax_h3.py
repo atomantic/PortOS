@@ -41,7 +41,7 @@ STEP_RE = re.compile(r"\bstep\s+(\d+)/(\d+)\b", re.IGNORECASE)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = add_h3_common_args(argparse.ArgumentParser(description=__doc__))
+    parser = add_h3_common_args(argparse.ArgumentParser(description=__doc__), steps_default=9)
     parser.add_argument("--runtime-dir", required=True)
     parser.add_argument("--runtime-revision", required=True)
     parser.add_argument("--checkpoint-repo", required=True)

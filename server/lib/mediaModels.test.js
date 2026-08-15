@@ -88,7 +88,8 @@ describe('mediaModels registry', () => {
       fpsOptions: [24],
       memoryGb: 128,
       samplerLocked: true,
-      steps: 8,
+      steps: 9,
+      samplerNote: 'MiniMax H3 is CFG-distilled; this profile locks the MLX reference 9-point sigma schedule (8 DiT forwards) and does not use CFG.',
     });
     expect(h3.frameOptions).toEqual([107, 124, 141, 158, 175, 192, 209, 226, 243, 260, 277, 294, 311, 328, 345, 362]);
     expect(h3.resolutionOptions).toEqual([
@@ -641,6 +642,8 @@ describe('mediaModels registry', () => {
         resolutionStep: 32,
       });
       expect(entry.frameOptions[0]).toBe(107);
+      expect(entry.steps).toBe(9);
+      expect(entry.samplerNote).toContain('9-point sigma schedule (8 DiT forwards)');
       expect(entry.resolutionOptions).toContainEqual({
         label: '1536x672 (21:9 H3 native)', w: 1536, h: 672,
       });

@@ -38,15 +38,21 @@ FRAME_MODULUS = 17
 FRAME_REMAINDER = 5
 
 
-def add_h3_common_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
+def add_h3_common_args(
+    parser: argparse.ArgumentParser,
+    *,
+    steps_default: int = 8,
+) -> argparse.ArgumentParser:
     """Declare the CLI surface both runners present to PortOS.
 
     `validate_h3_output_args` below reads exactly these fields off the parsed
     Namespace, so the schema and its validator have to agree — declaring them
-    apart is how one runner's `--steps` default drifts from the other's with
+    apart is how one runner's `--steps` surface drifts from the other's with
     nothing failing until a render. Each runner adds its own flags on top
     (`--checkpoint-*` and the LoRA / text-encoder pairs for MLX, `--repo-file`
-    and `--offload-profile` for CUDA).
+    and `--offload-profile` for CUDA). The runners pass their own sampler
+    default because the MLX port's sigma-grid argument is one larger than its
+    desired transformer-forward count, while diffusers counts forwards.
     """
     parser.add_argument("--model-repo", required=True)
     parser.add_argument("--model-revision", required=True)
@@ -55,7 +61,7 @@ def add_h3_common_args(parser: argparse.ArgumentParser) -> argparse.ArgumentPars
     parser.add_argument("--height", type=int, required=True)
     parser.add_argument("--num-frames", type=int, required=True)
     parser.add_argument("--fps", type=int, default=FPS)
-    parser.add_argument("--steps", type=int, default=8)
+    parser.add_argument("--steps", type=int, default=steps_default)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--image", action="append", default=[],
                         help="keyframe conditioning image (repeatable, max 2)")

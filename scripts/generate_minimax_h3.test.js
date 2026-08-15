@@ -50,7 +50,7 @@ const VALIDATE_ARGS_DEFAULTS = {
   width: 512,
   height: 320,
   num_frames: 124,
-  steps: 8,
+  steps: 9,
   image: [],
   anchor: [],
   lora: [],
@@ -68,6 +68,19 @@ const argsExpr = (overrides = {}) => {
 };
 
 describe.skipIf(!pyBin)('generate_minimax_h3.py', () => {
+  it('defaults the MLX runner to nine sigma points for eight forwards', () => {
+    const output = runPython(`${importRunner}\n${[
+      'import sys',
+      'sys.argv = ["generate_minimax_h3.py", "--model-repo", "example/model", "--model-revision", "revision",',
+      '    "--runtime-dir", "/tmp/runtime", "--runtime-revision", "revision",',
+      '    "--checkpoint-repo", "example/checkpoint", "--checkpoint-revision", "revision",',
+      '    "--prompt", "a test prompt", "--width", "1344", "--height", "768",',
+      '    "--num-frames", "124", "--output", "test.mp4"]',
+      'print(runner.parse_args().steps)',
+    ].join('\n')}`);
+    expect(output.trim()).toBe('9');
+  });
+
   // Only this runner shells out to ffmpeg (the CUDA sibling muxes in-process
   // via PyAV), so the preflight lives here rather than in the shared module.
   // Tens of GB of weights load before the mux; discovering a missing ffmpeg

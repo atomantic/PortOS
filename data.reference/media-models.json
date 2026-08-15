@@ -169,10 +169,10 @@
           }
         ],
         "memoryGb": 128,
-        "steps": 8,
+        "steps": 9,
         "guidance": 0,
         "samplerLocked": true,
-        "samplerNote": "MiniMax H3 is CFG-distilled; this profile locks the validated 8-point sigma schedule and does not use CFG.",
+        "samplerNote": "MiniMax H3 is CFG-distilled; this profile locks the MLX reference 9-point sigma schedule (8 DiT forwards) and does not use CFG.",
         "supportsNegativePrompt": false,
         "supportsTiling": false,
         "supportsDisableAudio": false,
