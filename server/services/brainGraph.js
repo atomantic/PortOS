@@ -87,9 +87,9 @@ const journalDate = (entry) => entry.id || entry.date;
 // Load all non-archived brain entities as graph nodes (no edges).
 async function loadNodes() {
   const nodes = [];
-  for (const type of ENTITY_TYPES) {
-    const records = await getBrainProjections(type, { ranked: false });
-    for (const record of records) {
+  const perType = await Promise.all(ENTITY_TYPES.map((type) => getBrainProjections(type, { ranked: false })));
+  ENTITY_TYPES.forEach((type, i) => {
+    for (const record of perType[i]) {
       if (record.archived) continue;
       nodes.push({
         id: record.id,
@@ -101,7 +101,7 @@ async function loadNodes() {
         status: record.status
       });
     }
-  }
+  });
 
   // Goals (identity system): active goals only (completed/abandoned excluded)
   const goalsData = await getGoals().catch(() => null);
