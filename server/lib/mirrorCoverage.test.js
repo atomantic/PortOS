@@ -51,7 +51,12 @@ function uniquePairs(pairs) {
 // as "this test imports that file".
 function importsRef(source, ref) {
   const escaped = ref.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`['"\`][^'"\`]*${escaped}['"\`]`).test(source);
+  // Quote characters only — no backtick. Backtick-fenced prose is this
+  // codebase's dominant style for referencing a file path in a comment or
+  // JSDoc header (see every existing parity-test docstring), so treating it
+  // as an import specifier would reopen the exact prose-mention bypass this
+  // helper exists to close.
+  return new RegExp(`['"][^'"]*${escaped}['"]`).test(source);
 }
 
 function missingParityPins(pairs, testSources) {
@@ -161,6 +166,21 @@ describe('declared server/client mirror coverage', () => {
       source: "import { thing } from './example.js';\n// keep this in sync with server/lib/example.js\n",
     };
     expect(missingParityPins(synthetic, [commentOnlyMention])).toEqual([
+      { clientFile: 'example.js', serverFile: 'example.js' },
+    ]);
+  });
+
+  it('does not accept a backtick-fenced prose mention as a parity pin (bypass probe)', () => {
+    // Backtick-fenced file references are this codebase's dominant docstring
+    // style (see every existing parity-test header) — a JSDoc comment that
+    // mentions both paths in backticks, with no real import backing it, must
+    // not count either.
+    const synthetic = listedMirrorPairs('| `example.js` | Mirror of `server/lib/example.js`. |');
+    const backtickOnlyMention = {
+      path: join(CLIENT_LIB, 'example.test.js'),
+      source: 'import { thing } from \'./example.js\';\n// mirrors `server/lib/example.js` in spirit only, no import here.\n',
+    };
+    expect(missingParityPins(synthetic, [backtickOnlyMention])).toEqual([
       { clientFile: 'example.js', serverFile: 'example.js' },
     ]);
   });
