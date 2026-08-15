@@ -15,7 +15,14 @@ export const setAIToolkit = setAIToolkitInstance;
 // a provider shape without an initialized toolkit instance.
 // `canRefreshModels` is the model-refresh capability predicate the providers
 // routes decorate their payloads with; it is derived on read and never stored.
-export { isOllamaBackedProvider, canRefreshModels } from '../lib/aiToolkit/providers.js';
+// `ollamaRefreshGroupKey` buckets providers whose refresh hits the same Ollama
+// daemon with the same probe, so a fan-out can fetch once per daemon instead of
+// once per provider (see `refreshOllamaBackedProviders` in localLlm.js).
+export {
+  isOllamaBackedProvider,
+  canRefreshModels,
+  ollamaRefreshGroupKey,
+} from '../lib/aiToolkit/providers.js';
 
 export async function getAllProviders() {
   return requireToolkit().services.providers.getAllProviders();
@@ -51,4 +58,13 @@ export async function testProvider(id) {
 
 export async function refreshProviderModels(id) {
   return requireToolkit().services.providers.refreshProviderModels(id);
+}
+
+/**
+ * Probe a provider's model list without persisting it. Pair with
+ * `updateProvider(id, { models })` to apply one probe's result to several
+ * providers that share an upstream.
+ */
+export async function fetchProviderModels(id) {
+  return requireToolkit().services.providers.fetchProviderModels(id);
 }

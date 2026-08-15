@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
-import { MODEL_FETCHERS, canRefreshModels, resolveModelFetcher, withRefreshCapability, withRefreshCapabilityList } from './modelFetchers.js';
+import { MODEL_FETCHERS, canRefreshModels, ollamaRefreshGroupKey, resolveModelFetcher, withRefreshCapability, withRefreshCapabilityList } from './modelFetchers.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SHIPPED = JSON.parse(readFileSync(resolve(__dirname, '../../../../data.reference/providers.json'), 'utf8'));
@@ -39,6 +39,65 @@ describe('MODEL_FETCHERS — shipped catalog visibility is unchanged', () => {
         `${provider.id}: model-refresh visibility changed`,
       ).toBe(SHIPPED_REFRESHABLE.includes(provider.id));
     }
+  });
+});
+
+describe('ollamaRefreshGroupKey — one probe per daemon, not one per provider', () => {
+  it('collapses every shipped CLI/TUI Ollama provider onto ONE key', () => {
+    // The shipped catalog ships four of them (claude-ollama, claude-ollama-tui,
+    // opencode-ollama, opencode-ollama-tui) all pointed at the same default
+    // daemon — the exact fan-out this key exists to dedup. If a future seed adds
+    // a fifth on the same daemon it must land in this same bucket.
+    const shared = Object.values(SHIPPED.providers)
+      .filter((p) => (p.type === 'cli' || p.type === 'tui') && p.ollamaBacked === true);
+    expect(shared.length).toBeGreaterThanOrEqual(4);
+    const keys = new Set(shared.map((p) => ollamaRefreshGroupKey(p)));
+    expect(keys.size).toBe(1);
+    expect([...keys][0]).toBe('tools:http://localhost:11434');
+  });
+
+  it('keeps the api-type ollama provider OUT of the tool-filtered bucket', () => {
+    // `_refreshAPIProviderModels` persists the unfiltered tag list; the CLI/TUI
+    // probe persists a tool-use-only subset. Same daemon, different answers.
+    const api = SHIPPED.providers.ollama;
+    expect(api.type).toBe('api');
+    expect(ollamaRefreshGroupKey(api)).toBe('api:http://localhost:11434/v1');
+    expect(ollamaRefreshGroupKey(api)).not.toBe(ollamaRefreshGroupKey(SHIPPED.providers['claude-ollama']));
+  });
+
+  it('separates providers on DIFFERENT daemons', () => {
+    const local = { id: 'a', type: 'cli', ollamaBacked: true, envVars: { ANTHROPIC_BASE_URL: 'http://localhost:11434' } };
+    const remote = { id: 'b', type: 'cli', ollamaBacked: true, envVars: { ANTHROPIC_BASE_URL: 'http://192.0.2.10:11434' } };
+    expect(ollamaRefreshGroupKey(local)).not.toBe(ollamaRefreshGroupKey(remote));
+  });
+
+  it('normalizes trailing slashes and an OpenAI-compat /v1 to the same daemon key', () => {
+    const bare = { id: 'a', type: 'tui', ollamaBacked: true, envVars: { ANTHROPIC_BASE_URL: 'http://localhost:11434' } };
+    const suffixed = { id: 'b', type: 'tui', ollamaBacked: true, envVars: { ANTHROPIC_BASE_URL: 'http://localhost:11434/v1/' } };
+    expect(ollamaRefreshGroupKey(suffixed)).toBe(ollamaRefreshGroupKey(bare));
+  });
+
+  it('returns null — never a shared bucket — for anything that is not an Ollama probe', () => {
+    // A null key means "refresh me individually". Treating it as a group would
+    // persist one vendor's catalog onto every other provider.
+    expect(ollamaRefreshGroupKey(null)).toBeNull();
+    expect(ollamaRefreshGroupKey({ id: 'anthropic', type: 'api', endpoint: 'https://api.anthropic.com' })).toBeNull();
+    expect(ollamaRefreshGroupKey({ id: 'cursor-cli', type: 'cli', command: 'cursor-agent' })).toBeNull();
+    expect(ollamaRefreshGroupKey({ id: 'codex-tui', type: 'tui', command: 'codex' })).toBeNull();
+    // An api provider with no endpoint at all has nothing to key on.
+    expect(ollamaRefreshGroupKey({ id: 'x', type: 'api' })).toBeNull();
+  });
+
+  it('never groups two API providers that would attach DIFFERENT keys to the same probe', () => {
+    // `_refreshAPIProviderModels` falls through from its `/api/tags`
+    // short-circuit to a generic `/models` fetch carrying `provider.apiKey`, so
+    // a keyed provider is ungroupable even on an Ollama-shaped endpoint.
+    const paid = { id: 'x', type: 'api', endpoint: 'https://api.example.com/v1', apiKey: 'k1' };
+    expect(ollamaRefreshGroupKey(paid)).toBeNull();
+    const keyed = { id: 'y', type: 'api', endpoint: 'http://localhost:11434/v1', apiKey: 'k2' };
+    const alsoKeyed = { id: 'z', type: 'api', endpoint: 'http://localhost:11434/v1', apiKey: 'k3' };
+    expect(ollamaRefreshGroupKey(keyed)).toBeNull();
+    expect(ollamaRefreshGroupKey(alsoKeyed)).toBeNull();
   });
 });
 

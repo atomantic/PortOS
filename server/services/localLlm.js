@@ -36,7 +36,7 @@ import { recommendEditorialModel, isVisionModel, isVisionCapableCliProvider, isT
 import { commandExists } from '../lib/commandExists.js'
 import * as ollamaManager from './ollamaManager.js'
 import * as lmStudioManager from './lmStudioManager.js'
-import { getProviderById, getAllProviders, updateProvider, refreshProviderModels, isOllamaBackedProvider } from './providers.js'
+import { getProviderById, getAllProviders, updateProvider, refreshProviderModels, fetchProviderModels, isOllamaBackedProvider, ollamaRefreshGroupKey } from './providers.js'
 
 const execFileAsync = promisify(execFile)
 const ENV_PATH = join(PATHS.root, '.env')
@@ -862,6 +862,36 @@ async function listVisionCliModels() {
 // ---- install / delete --------------------------------------------------------
 
 /**
+ * Fetch one Ollama probe for a group of providers that share a daemon + probe
+ * shape, then persist that single answer onto each of them.
+ *
+ * The probe is issued through the group's first member; every member (that one
+ * included) is then written via `updateProvider`, so no provider is special-
+ * cased. Writes are sequential because `saveProviders` is a whole-file
+ * read-modify-write — firing them concurrently would have members clobber each
+ * other's models.
+ *
+ * A failed probe skips the whole group with ONE log line: every member would
+ * have failed identically against the same unreachable daemon, so N copies of
+ * the same error is noise, not information.
+ */
+async function refreshOllamaProviderGroup(group) {
+  const [lead] = group
+  const models = await fetchProviderModels(lead.id).catch((err) => {
+    console.error(`⚠️ Failed to refresh models for ${group.length} Ollama-backed provider(s) via ${lead.id}: ${err.message}`)
+    return null
+  })
+  // `null` = probe failed or the provider vanished; `[]` = a real, empty catalog
+  // (the user just deleted their last model) and MUST still be persisted.
+  if (models === null) return
+  for (const p of group) {
+    await updateProvider(p.id, { models }).catch((err) => {
+      console.error(`⚠️ Failed to save refreshed models for provider ${p.id}: ${err.message}`)
+    })
+  }
+}
+
+/**
  * Push a live model-list refresh to every provider backed by the Ollama daemon,
  * so an install/delete on the Local LLMs tab is immediately reflected in every
  * provider/model picker (task scheduler, pipeline stages, etc.) without the user
@@ -870,13 +900,42 @@ async function listVisionCliModels() {
  * wait on an extra round-trip to Ollama per matching provider. Best-effort per
  * provider — one failing refresh (e.g. Ollama briefly unreachable mid-pull)
  * must not block the others.
+ *
+ * Providers are DEDUPED by `ollamaRefreshGroupKey` before the fan-out. Several
+ * providers (the built-in `ollama` one plus any Claude/Codex/Gemini-over-Ollama
+ * CLI/TUI providers) normally resolve to the same `http://localhost:11434`
+ * daemon; refreshing each in turn re-ran the full `/api/tags` + per-model
+ * `/api/show` capability sweep once per provider for an answer that cannot
+ * differ. One probe per (daemon, probe shape) now serves all of them.
  */
 function refreshOllamaBackedProviders() {
   getAllProviders().then(({ providers }) => {
     const targets = (providers || []).filter(isOllamaBackedProvider)
-    return Promise.all(targets.map((p) => refreshProviderModels(p.id).catch((err) => {
-      console.error(`⚠️ Failed to refresh models for provider ${p.id} after Ollama model change: ${err.message}`)
-    })))
+    const groups = new Map()
+    const singles = []
+    for (const p of targets) {
+      // A null key is "not an Ollama probe", NOT a bucket — those providers
+      // still get their own individual refresh.
+      const key = ollamaRefreshGroupKey(p)
+      if (!key) { singles.push(p); continue }
+      const existing = groups.get(key)
+      if (existing) existing.push(p)
+      else groups.set(key, [p])
+    }
+    // Only a group with something to SHARE takes the split fetch/apply path; a
+    // lone member keeps the plain one-call refresh, so the common single-daemon
+    // single-provider install behaves exactly as it did before.
+    const shared = []
+    for (const group of groups.values()) {
+      if (group.length === 1) singles.push(group[0])
+      else shared.push(group)
+    }
+    return Promise.all([
+      ...singles.map((p) => refreshProviderModels(p.id).catch((err) => {
+        console.error(`⚠️ Failed to refresh models for provider ${p.id} after Ollama model change: ${err.message}`)
+      })),
+      ...shared.map(refreshOllamaProviderGroup),
+    ])
   }).catch((err) => {
     console.error(`⚠️ Failed to list providers for post-install Ollama refresh: ${err.message}`)
   })

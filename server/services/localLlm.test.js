@@ -49,19 +49,23 @@ const mocks = vi.hoisted(() => ({
     getAllProviders: vi.fn(async () => ({ providers: [] })),
     updateProvider: vi.fn(async () => ({})),
     refreshProviderModels: vi.fn(async (id) => ({ id, models: [] })),
-    // Mirrors the real aiToolkit/providers.js predicate (not a spy — tests
-    // assert against refreshProviderModels calls, not this classification).
-    isOllamaBackedProvider: (provider) => {
-      if (provider?.id === 'ollama') return true;
-      if (provider?.ollamaBacked === true) return true;
-      const base = String(provider?.envVars?.ANTHROPIC_BASE_URL || provider?.endpoint || '');
-      return /:11434\b/.test(base) || /ollama/i.test(base);
-    }
+    fetchProviderModels: vi.fn(async () => ['qwen2.5:7b'])
   }
 }));
 vi.mock('./ollamaManager.js', () => mocks.ollama);
 vi.mock('./lmStudioManager.js', () => mocks.lmstudio);
-vi.mock('./providers.js', () => mocks.providers);
+// The two classification helpers come from the REAL toolkit module rather than
+// being re-implemented here: they decide which providers get refreshed and which
+// share one probe, so a hand-mirrored copy would let the service and the suite
+// drift together and assert nothing. Everything with a side effect stays a spy.
+vi.mock('./providers.js', async () => {
+  const real = await import('../lib/aiToolkit/providers.js');
+  return {
+    ...mocks.providers,
+    isOllamaBackedProvider: real.isOllamaBackedProvider,
+    ollamaRefreshGroupKey: real.ollamaRefreshGroupKey
+  };
+});
 
 // child_process is mocked so the install/upgrade paths (spawn-based streaming +
 // execFile-based presence checks) are drivable. Defaults are benign for the rest
@@ -109,6 +113,12 @@ const flushMicrotasks = () => new Promise((resolve) => setTimeout(resolve, 0));
 let svc;
 beforeEach(async () => {
   vi.clearAllMocks(); // clears calls, keeps the default impls defined above
+  // `clearAllMocks` clears recorded CALLS but not queued `…Once` values, and the
+  // provider fan-out is fire-and-forget: a test where it correctly never runs
+  // (a failed pull) leaves its `getAllProviders` answer queued and the NEXT test
+  // silently consumes it. `mockReset` drops the queue and restores the default
+  // implementation each spy was declared with.
+  for (const fn of Object.values(mocks.providers)) fn.mockReset();
   cp.spawn = cp.defaults.spawn; // reset child_process drivers to benign defaults
   cp.execFile = cp.defaults.execFile;
   delete process.env.LLM_BACKEND;
@@ -240,6 +250,94 @@ describe('localLlm', () => {
       await flushMicrotasks();
       expect(mocks.providers.refreshProviderModels).not.toHaveBeenCalled();
     });
+    it('probes the daemon ONCE for providers that share it, then applies that answer to each', async () => {
+      // Four CLI/TUI providers on the same default daemon — the shipped catalog
+      // ships exactly this shape. Before the dedup each one re-ran /api/tags plus
+      // the whole per-model /api/show capability sweep for an identical answer.
+      mocks.providers.getAllProviders.mockResolvedValueOnce({
+        providers: [
+          { id: 'claude-ollama', type: 'cli', ollamaBacked: true, envVars: { ANTHROPIC_BASE_URL: 'http://localhost:11434' } },
+          { id: 'claude-ollama-tui', type: 'tui', ollamaBacked: true, envVars: { ANTHROPIC_BASE_URL: 'http://localhost:11434/v1' } },
+          { id: 'opencode-ollama', type: 'cli', ollamaBacked: true },
+          { id: 'opencode-ollama-tui', type: 'tui', ollamaBacked: true }
+        ]
+      });
+      await svc.installModel('ollama', 'llama3.2');
+      await flushMicrotasks();
+
+      expect(mocks.providers.fetchProviderModels).toHaveBeenCalledTimes(1);
+      expect(mocks.providers.refreshProviderModels).not.toHaveBeenCalled();
+      // …and every member still ends up with the models, including the one the
+      // probe was issued through.
+      expect(mocks.providers.updateProvider.mock.calls.map(([id]) => id)).toEqual([
+        'claude-ollama', 'claude-ollama-tui', 'opencode-ollama', 'opencode-ollama-tui'
+      ]);
+      for (const [, updates] of mocks.providers.updateProvider.mock.calls) {
+        expect(updates).toEqual({ models: ['qwen2.5:7b'] });
+      }
+    });
+
+    it('keeps providers on different daemons (and different probe shapes) apart', async () => {
+      mocks.providers.getAllProviders.mockResolvedValueOnce({
+        providers: [
+          // Same daemon, but an api-type provider persists the UNFILTERED tag
+          // list — a different answer, so it must not join the tools bucket.
+          { id: 'ollama', type: 'api', endpoint: 'http://localhost:11434/v1' },
+          { id: 'local-a', type: 'cli', ollamaBacked: true, envVars: { ANTHROPIC_BASE_URL: 'http://localhost:11434' } },
+          { id: 'local-b', type: 'tui', ollamaBacked: true, envVars: { ANTHROPIC_BASE_URL: 'http://localhost:11434' } },
+          { id: 'remote', type: 'cli', ollamaBacked: true, envVars: { ANTHROPIC_BASE_URL: 'http://192.0.2.10:11434' } }
+        ]
+      });
+      await svc.installModel('ollama', 'llama3.2');
+      await flushMicrotasks();
+
+      // The api provider and the lone remote daemon each keep a plain one-call
+      // refresh; only the two-member local group takes the split fetch/apply path.
+      expect(mocks.providers.refreshProviderModels.mock.calls.map(([id]) => id).sort()).toEqual(['ollama', 'remote']);
+      expect(mocks.providers.fetchProviderModels).toHaveBeenCalledTimes(1);
+      expect(mocks.providers.updateProvider.mock.calls.map(([id]) => id)).toEqual(['local-a', 'local-b']);
+    });
+
+    it('skips a whole group with one log line when its shared probe fails', async () => {
+      mocks.providers.getAllProviders.mockResolvedValueOnce({
+        providers: [
+          { id: 'local-a', type: 'cli', ollamaBacked: true },
+          { id: 'local-b', type: 'tui', ollamaBacked: true }
+        ]
+      });
+      mocks.providers.fetchProviderModels.mockRejectedValueOnce(new Error('unreachable'));
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const result = await svc.installModel('ollama', 'llama3.2');
+      await flushMicrotasks();
+
+      expect(result.success).toBe(true);
+      // No half-write: a failed probe must not persist anything.
+      expect(mocks.providers.updateProvider).not.toHaveBeenCalled();
+      expect(errSpy).toHaveBeenCalledTimes(1);
+      errSpy.mockRestore();
+    });
+
+    it('persists a legitimately EMPTY catalog across the group', async () => {
+      // `[]` (the user just deleted their last model) is a real answer and must
+      // be written; only `null` — probe failed — is the skip signal.
+      mocks.providers.getAllProviders.mockResolvedValueOnce({
+        providers: [
+          { id: 'local-a', type: 'cli', ollamaBacked: true },
+          { id: 'local-b', type: 'tui', ollamaBacked: true }
+        ]
+      });
+      mocks.providers.fetchProviderModels.mockResolvedValueOnce([]);
+
+      await svc.deleteModel('ollama', 'llama3.2');
+      await flushMicrotasks();
+
+      expect(mocks.providers.updateProvider.mock.calls).toEqual([
+        ['local-a', { models: [] }],
+        ['local-b', { models: [] }]
+      ]);
+    });
+
     it('does not fail install when a provider refresh throws', async () => {
       mocks.providers.getAllProviders.mockResolvedValueOnce({ providers: [{ id: 'ollama' }] });
       mocks.providers.refreshProviderModels.mockRejectedValueOnce(new Error('unreachable'));

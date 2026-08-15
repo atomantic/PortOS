@@ -830,6 +830,79 @@ describe('Provider Service', () => {
       expect(await providerService.refreshProviderModels('no-such-provider')).toBeNull();
     });
 
+    describe('fetchProviderModels — the compute half, without the write', () => {
+      const ollamaCli = {
+        name: 'Claude Ollama (local model)',
+        type: 'cli',
+        command: 'claude',
+        ollamaBacked: true,
+        models: ['stale-model'],
+        envVars: { ANTHROPIC_BASE_URL: 'http://localhost:11434' },
+      };
+
+      it('returns the probed list and leaves the stored one untouched', async () => {
+        stubOllama(['qwen2.5:7b', 'gemma2:9b'], {
+          'qwen2.5:7b': ['completion', 'tools'],
+          'gemma2:9b': ['completion', 'vision'],
+        });
+        const p = await providerService.createProvider(ollamaCli);
+
+        expect(await providerService.fetchProviderModels(p.id)).toEqual(['qwen2.5:7b']);
+        // The whole point of the split: a caller can fan ONE probe out to
+        // several providers itself, so this call must not have persisted.
+        expect((await providerService.getProviderById(p.id)).models).toEqual(['stale-model']);
+      });
+
+      it('is what refreshProviderModels persists — the two halves cannot drift', async () => {
+        stubOllama(['qwen2.5:7b', 'gemma2:9b'], {
+          'qwen2.5:7b': ['completion', 'tools'],
+          'gemma2:9b': ['completion', 'vision'],
+        });
+        const p = await providerService.createProvider(ollamaCli);
+
+        const fetched = await providerService.fetchProviderModels(p.id);
+        const persisted = await providerService.refreshProviderModels(p.id);
+        expect(persisted.models).toEqual(fetched);
+        expect((await providerService.getProviderById(p.id)).models).toEqual(fetched);
+      });
+
+      it('applying a fetched list to a SIBLING provider matches refreshing it directly', async () => {
+        // The dedup path in localLlm.js: probe once through one member of a
+        // group, then `updateProvider(id, { models })` every member.
+        stubOllama(['qwen2.5:7b', 'gemma2:9b'], {
+          'qwen2.5:7b': ['completion', 'tools'],
+          'gemma2:9b': ['completion', 'vision'],
+        });
+        const lead = await providerService.createProvider({ ...ollamaCli, name: 'Lead Ollama' });
+        const sibling = await providerService.createProvider({ ...ollamaCli, name: 'Sibling Ollama', type: 'tui' });
+
+        const models = await providerService.fetchProviderModels(lead.id);
+        const applied = await providerService.updateProvider(sibling.id, { models });
+        const directly = await providerService.refreshProviderModels(sibling.id);
+
+        expect(applied.models).toEqual(directly.models);
+        // Every other field survives the apply — `updateProvider` spreads.
+        expect(applied.ollamaBacked).toBe(true);
+        expect(applied.id).toBe(sibling.id);
+      });
+
+      it('returns null only for a provider that does not exist', async () => {
+        expect(await providerService.fetchProviderModels('no-such-provider')).toBeNull();
+      });
+
+      it('throws (does not return null) when the probe fails', async () => {
+        const p = await providerService.createProvider(ollamaCli);
+        vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 503 })));
+        const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const err = await providerService.fetchProviderModels(p.id).catch(e => e);
+        errSpy.mockRestore();
+
+        expect(err).toBeInstanceOf(Error);
+        expect(err.status).toBe(502);
+        expect((await providerService.getProviderById(p.id)).models).toEqual(['stale-model']);
+      });
+    });
+
     // Pins the `provider.id === ANTIGRAVITY_TUI_ID` half of that arm's OR — the
     // same gap that was open on CURSOR_TUI_ID. Every other antigravity-TUI test
     // matches on the `agy` command, so deleting the id clause left the suite

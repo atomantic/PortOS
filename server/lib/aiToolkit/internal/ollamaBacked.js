@@ -22,3 +22,19 @@ export function isOllamaBackedProvider(provider) {
   const base = String(provider?.envVars?.ANTHROPIC_BASE_URL || provider?.endpoint || '');
   return /:11434\b/.test(base) || /ollama/i.test(base);
 }
+
+/**
+ * Normalize an Ollama base URL (strip trailing slash + an OpenAI-compat `/v1`)
+ * so two providers pointed at the same daemon through differently-spelled URLs
+ * resolve to the same string.
+ *
+ * Lives here beside {@link isOllamaBackedProvider} rather than in `providers.js`
+ * so `internal/modelFetchers.js` can build a refresh group key on it without
+ * importing back into `providers.js` and forming a module cycle. Re-exported
+ * from `providers.js` (and `server/services/providers.js`) for hosts that group
+ * providers by daemon.
+ */
+export function ollamaBaseFromProvider(provider) {
+  const base = String(provider?.envVars?.ANTHROPIC_BASE_URL || provider?.endpoint || 'http://localhost:11434');
+  return base.replace(/\/+$/, '').replace(/\/v1$/, '');
+}

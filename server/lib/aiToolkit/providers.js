@@ -20,12 +20,17 @@ import {
   CURSOR_COMMAND,
   parseCursorModelList,
 } from './internal/cursor.js';
-import { isOllamaBackedProvider } from './internal/ollamaBacked.js';
-import { canRefreshModels, resolveModelFetcher } from './internal/modelFetchers.js';
+import { isOllamaBackedProvider, ollamaBaseFromProvider } from './internal/ollamaBacked.js';
+import { canRefreshModels, ollamaRefreshGroupKey, resolveModelFetcher } from './internal/modelFetchers.js';
 
 // Re-exported (rather than defined here) so the model-fetcher table can key its
 // ollama row on the same predicate without importing back into this module.
 export { isOllamaBackedProvider };
+// Groups providers that share one daemon + one probe shape, so a host fanning a
+// refresh across them can fetch once instead of once per provider. The base-URL
+// normalizer it keys on stays internal — the group key IS the contract, and an
+// exported normalizer only invites callers to re-derive the grouping rule.
+export { ollamaRefreshGroupKey };
 // The pure capability predicate that both refresh arms below dispatch through —
 // exported so the providers route can decorate its payload with it and the
 // client stops re-deriving refreshability from command/name string sniffing.
@@ -124,12 +129,6 @@ const TOOL_USE_RE = new RegExp([
   'smollm2',
   'deepseek-v3', 'deepseek-r1', 'deepseek-v4',
 ].join('|'), 'i');
-
-/** Normalize an Ollama base URL (strip trailing slash + an OpenAI-compat `/v1`). */
-function ollamaBaseFromProvider(provider) {
-  const base = String(provider?.envVars?.ANTHROPIC_BASE_URL || provider?.endpoint || 'http://localhost:11434');
-  return base.replace(/\/+$/, '').replace(/\/v1$/, '');
-}
 
 /**
  * Whether an Ollama model supports tool use. Prefers the authoritative `tools`
@@ -725,7 +724,23 @@ export function createProviderService(config = {}) {
       return { success: false, error: 'Unknown provider type' };
     },
 
-    async refreshProviderModels(id) {
+    /**
+     * Probe a provider's model list WITHOUT persisting it — the compute half of
+     * {@link refreshProviderModels}.
+     *
+     * Split out so a host fanning a refresh across several providers backed by
+     * the SAME upstream (see {@link ollamaRefreshGroupKey}) can run the probe
+     * once and apply the answer to each of them via `updateProvider`, instead of
+     * re-issuing an identical `/api/tags` + per-model `/api/show` sweep per
+     * provider.
+     *
+     * Same contract as `refreshProviderModels` minus the write: `null` means
+     * ONLY "no such provider"; every other failure throws (with `.status`).
+     *
+     * @param {string} id
+     * @returns {Promise<string[]|null>}
+     */
+    async fetchProviderModels(id) {
       const data = await loadProviders();
       const provider = data.providers[id];
 
@@ -799,14 +814,18 @@ export function createProviderService(config = {}) {
         throw unsupported;
       }
 
-      const updatedProvider = {
-        ...data.providers[id],
-        models
-      };
+      return models;
+    },
 
-      data.providers[id] = updatedProvider;
-      await saveProviders(data);
-      return updatedProvider;
+    /**
+     * Probe AND persist a provider's model list. Thin composition of
+     * {@link fetchProviderModels} + `updateProvider` — keep it that way so the
+     * two halves can't drift.
+     */
+    async refreshProviderModels(id) {
+      const models = await this.fetchProviderModels(id);
+      if (models === null) return null;
+      return this.updateProvider(id, { models });
     },
 
     async _refreshAPIProviderModels(provider) {

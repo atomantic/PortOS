@@ -39,7 +39,7 @@
  */
 import { ANTIGRAVITY_TUI_ID, isAntigravityCommand } from './antigravity.js';
 import { CURSOR_TUI_ID, isCursorCommand } from './cursor.js';
-import { isOllamaBackedProvider } from './ollamaBacked.js';
+import { isOllamaBackedProvider, ollamaBaseFromProvider } from './ollamaBacked.js';
 
 const displayName = (provider) => String(provider?.name || '').toLowerCase();
 
@@ -160,4 +160,53 @@ export function withRefreshCapability(provider) {
 export function withRefreshCapabilityList(providers) {
   if (!Array.isArray(providers)) return providers;
   return providers.map(withRefreshCapability);
+}
+
+/**
+ * Stable key grouping providers whose model refresh issues the IDENTICAL probe
+ * against the same Ollama daemon — or `null` when the provider's refresh isn't
+ * an Ollama probe at all (refresh it on its own).
+ *
+ * Why a host wants this: several providers commonly resolve to ONE daemon (the
+ * built-in `ollama` provider plus any number of Claude/Codex/Gemini-over-Ollama
+ * CLI/TUI providers, all defaulting to `http://localhost:11434`). Refreshing
+ * them one by one re-fetches `/api/tags` and re-runs the whole per-model
+ * `/api/show` capability probe once per provider for a result that cannot
+ * differ. Grouping on this key lets the caller fetch once and apply the answer
+ * to every member (`fetchProviderModels` + `updateProvider`).
+ *
+ * `null` is a real sentinel, NOT "no group": a provider without a key must
+ * still be refreshed individually. Never treat a nullish key as a bucket.
+ *
+ * Two probe shapes are deliberately kept in SEPARATE key namespaces because
+ * they return different lists for the same daemon:
+ * - `api:` — an `api`-type provider short-circuits in `_refreshAPIProviderModels`
+ *   to `${endpoint}/api/tags` and persists the UNFILTERED tag list.
+ * - `tools:` — a `cli`/`tui` provider routes to `_fetchOllamaToolCapableModels`,
+ *   which filters down to tool-use-capable models.
+ * Collapsing the two would persist a tool-filtered list onto the plain `ollama`
+ * provider (or an unfiltered one onto a Claude harness that then silently fails
+ * to edit files).
+ *
+ * @param {object|null|undefined} provider
+ * @param {Array} [table]
+ * @returns {string|null}
+ */
+export function ollamaRefreshGroupKey(provider, table = MODEL_FETCHERS) {
+  if (!provider) return null;
+  if (provider.type === 'api') {
+    // Mirror of the short-circuit condition in `_refreshAPIProviderModels`.
+    // `apiKey` is part of the identity, not an extra: when the `/api/tags`
+    // short-circuit misses, that method falls THROUGH to a generic `/models`
+    // fetch carrying `provider.apiKey`, so two providers on one endpoint with
+    // different keys can legitimately see different catalogs. Only the keyless
+    // shape is safe to share, and a key makes the provider ungroupable.
+    if (provider.apiKey) return null;
+    const endpoint = String(provider.endpoint || '');
+    if (!endpoint.includes('ollama') && !endpoint.includes(':11434')) return null;
+    return `api:${endpoint.replace(/\/+$/, '')}`;
+  }
+  return resolveModelFetcher(provider, table)?.key === 'ollama'
+    ? `tools:${ollamaBaseFromProvider(provider)}`
+    : null;
 }

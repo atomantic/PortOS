@@ -6,7 +6,12 @@
 
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { canRefreshModels, createProviderService, isOllamaBackedProvider } from './providers.js';
+import {
+  canRefreshModels,
+  createProviderService,
+  isOllamaBackedProvider,
+  ollamaRefreshGroupKey,
+} from './providers.js';
 import { createRunnerService } from './runner.js';
 import { createPromptsService } from './prompts.js';
 import { createProviderStatusService } from './providerStatus.js';
@@ -25,7 +30,7 @@ export * from './validation.js';
 export * from './errorDetection.js';
 export * from './constants.js';
 export { createProviderService, createRunnerService, createPromptsService, createProviderStatusService };
-export { isOllamaBackedProvider, canRefreshModels };
+export { isOllamaBackedProvider, canRefreshModels, ollamaRefreshGroupKey };
 export { createProvidersRoutes, createRunsRoutes, createPromptsRoutes, createProviderStatusRoutes };
 
 export function createAIToolkit(config = {}) {
