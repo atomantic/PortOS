@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { homedir } from 'os';
-import { join, delimiter } from 'path';
+import { join, basename, delimiter } from 'path';
 import {
   isWithinRoot,
   isWithinAllowedRoots,
@@ -67,6 +67,14 @@ describe('outsideAllowedRootsMessage', () => {
 
     expect(message).toContain('/home/<user>/private-repo');
     expect(message).not.toContain('alice');
+  });
+
+  it('redacts the current username in nonstandard path segments', () => {
+    const username = basename(homedir());
+    const message = outsideAllowedRootsMessage(`/srv/${username}/repo`);
+
+    expect(message).toContain('<user>');
+    expect(message).not.toContain(username);
   });
 
   it('redacts hosts in UNC paths', () => {

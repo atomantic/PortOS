@@ -1,5 +1,5 @@
 import { realpathSync } from 'fs';
-import { resolve, relative, isAbsolute, delimiter } from 'path';
+import { resolve, relative, isAbsolute, delimiter, basename } from 'path';
 import { homedir, tmpdir } from 'os';
 
 // Allowed workspace roots shared by routes that accept a caller-supplied
@@ -87,6 +87,9 @@ const singleLine = (value) => String(value).replace(/[\r\n]+/g, ' ');
 
 const PRIVATE_HOME_SEGMENT = /(^|[\\/])((?:Users|home))([\\/])[^\\/]+(?=([\\/]|$))/gi;
 
+const HOME_USERNAME = basename(homedir());
+const HOME_USERNAME_KEY = HOME_USERNAME.toLowerCase();
+
 const redactUncHost = (path) => {
   const leading = path.startsWith('//')
     ? '//'
@@ -120,6 +123,28 @@ const redactUncHost = (path) => {
   return `${path.slice(0, hostStart)}<host>${path.slice(hostEnd)}`;
 };
 
+const redactKnownUsername = (path) => {
+  if (!HOME_USERNAME) return path;
+  let result = '';
+  let segmentStart = 0;
+  for (let index = 0; index <= path.length; index += 1) {
+    const atBoundary = index === path.length || path[index] === '/' || path[index] === '\\';
+    if (!atBoundary) continue;
+    const segment = path.slice(segmentStart, index);
+    const matches = IS_WINDOWS
+      ? segment.toLowerCase() === HOME_USERNAME_KEY
+      : segment === HOME_USERNAME;
+    result += matches ? '<user>' : segment;
+    if (index < path.length) result += path[index];
+    segmentStart = index + 1;
+  }
+  return result;
+};
+
+const redactPrivatePath = (path) => redactKnownUsername(
+  path.replace(PRIVATE_HOME_SEGMENT, (_match, prefix, root, separator) => `${prefix}${root}${separator}<user>`)
+);
+
 const formatLogPath = (value) => {
   const path = singleLine(value);
   if (path === HOME_ROOT) return '~';
@@ -127,12 +152,12 @@ const formatLogPath = (value) => {
   const isWindowsStylePath = path.startsWith('//')
     || path.charCodeAt(0) === 92
     || /^[A-Za-z]:[\\/]/.test(path);
-  if (isWindowsStylePath) return redactedUncPath.replace(PRIVATE_HOME_SEGMENT, (_match, prefix, root, separator) => `${prefix}${root}${separator}<user>`);
+  if (isWindowsStylePath) return redactPrivatePath(redactedUncPath);
   const relativeHomePath = relative(HOME_ROOT, path);
   if (relativeHomePath && !relativeHomePath.startsWith('..') && !isAbsolute(relativeHomePath)) {
     return `~/${relativeHomePath}`;
   }
-  return redactedUncPath.replace(PRIVATE_HOME_SEGMENT, (_match, prefix, root, separator) => `${prefix}${root}${separator}<user>`);
+  return redactPrivatePath(redactedUncPath);
 };
 
 /**
