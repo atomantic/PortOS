@@ -568,7 +568,7 @@ function isNestedInLabeledFormField(src, index) {
     const formTag = openingTagAt(src, formMatch.index, '<FormField'.length);
     if (!formTag || /\/\s*>$/.test(formTag)) continue;
     const label = normalizedAttributeValue(attributeValue(formTag, 'label'));
-    if (label === null || label === '' || /^(?:undefined|null|false)$/i.test(label)) continue;
+    if (!isUsableLabelAttributeValue(label)) continue;
 
     let depth = 0;
     let firstChild = null;
