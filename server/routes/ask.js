@@ -24,6 +24,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { awaitWritableDrain } from '../lib/streamBackpressure.js';
 import { SSE_HEADERS } from '../lib/sseHeaders.js';
+import { onClientDisconnect } from '../lib/sseDownload.js';
 import * as convs from '../services/askConversations.js';
 import { runAsk, VALID_MODES } from '../services/askService.js';
 import { ID_RE as CONV_ID_RE } from '../services/askConversations.js';
@@ -165,7 +166,7 @@ router.post('/', asyncHandler(async (req, res) => {
     aborted = true;
     abortController.abort();
   };
-  req.on('close', onClose);
+  onClientDisconnect(req, res, onClose);
 
   // Honour socket backpressure — for long answers with many delta frames,
   // a slow reader could otherwise force Node to buffer unbounded SSE data
@@ -209,8 +210,8 @@ router.post('/', asyncHandler(async (req, res) => {
   // From here on, headers are flushed and the stream is "in SSE mode" —
   // any thrown error must convert to a terminal SSE `error` frame instead
   // of being thrown to asyncHandler (which would try to send a JSON 500
-  // body and trigger ERR_HTTP_HEADERS_SENT). The try/finally guarantees
-  // the close listener is detached even on a thrown path.
+  // body and trigger ERR_HTTP_HEADERS_SENT). The finally closes a still-live
+  // response; onClientDisconnect ignores that normal response close.
   let streamErrored = false;
   try {
     for await (const evt of runAsk({
@@ -276,7 +277,6 @@ router.post('/', asyncHandler(async (req, res) => {
     console.error(`❌ Ask SSE handler error: ${err?.message || err}`);
     await send('error', { error: err?.message || 'internal error' }).catch(() => {});
   } finally {
-    req.off('close', onClose);
     // Guard both `writableEnded` AND `destroyed` — if the client disconnected
     // mid-stream the underlying socket may already be torn down, and calling
     // `res.end()` on a destroyed stream throws an unhandled write error.

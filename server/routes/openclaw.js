@@ -10,7 +10,7 @@ import {
   sendSessionMessage,
   streamSessionMessage
 } from '../integrations/openclaw/api.js';
-import { openSseStream } from '../lib/sseDownload.js';
+import { onClientDisconnect, openSseStream } from '../lib/sseDownload.js';
 
 const router = express.Router();
 
@@ -169,61 +169,57 @@ router.post('/sessions/:id/messages/stream', asyncHandler(async (req, res) => {
     }
   };
 
-  req.on('close', handleClose);
+  onClientDisconnect(req, res, handleClose);
+
+  let streamResult;
+  try {
+    streamResult = await streamSessionMessage(sessionId, payload, { signal: abortController.signal });
+  } catch (err) {
+    if (clientDisconnected) return;
+    throw err;
+  }
+
+  if (clientDisconnected || res.writableEnded || res.destroyed) return;
+
+  const { response } = streamResult;
+
+  // Shared SSE header boilerplate (writeHead flushes headers). This route
+  // proxies raw upstream bytes / named `event:` frames, so it uses safeEnd
+  // but not send.
+  const { safeEnd } = openSseStream(res);
+
+  const upstream = response.body;
+  if (!upstream) {
+    res.write('event: error\ndata: {"error":"No upstream stream body"}\n\n');
+    return safeEnd();
+  }
+
+  reader = upstream.getReader();
+  const decoder = new TextDecoder();
 
   try {
-    let streamResult;
-    try {
-      streamResult = await streamSessionMessage(sessionId, payload, { signal: abortController.signal });
-    } catch (err) {
-      if (clientDisconnected) return;
-      throw err;
-    }
-
-    if (clientDisconnected || res.writableEnded || res.destroyed) return;
-
-    const { response } = streamResult;
-
-    // Shared SSE header boilerplate (writeHead flushes headers). This route
-    // proxies raw upstream bytes / named `event:` frames, so it uses safeEnd
-    // but not send.
-    const { safeEnd } = openSseStream(res);
-
-    const upstream = response.body;
-    if (!upstream) {
-      res.write('event: error\ndata: {"error":"No upstream stream body"}\n\n');
-      return safeEnd();
-    }
-
-    reader = upstream.getReader();
-    const decoder = new TextDecoder();
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done || clientDisconnected || res.writableEnded || res.destroyed) break;
-        if (value) {
-          const canContinue = res.write(decoder.decode(value, { stream: true }));
-          if (!canContinue) await new Promise(resolve => res.once('drain', resolve));
-        }
-      }
-      const tail = decoder.decode();
-      if (tail && !res.writableEnded && !res.destroyed) res.write(tail);
-    } catch (err) {
-      if (err?.name !== 'AbortError' && !clientDisconnected && !res.writableEnded && !res.destroyed) {
-        const errorPayload = {
-          error: 'Upstream stream error',
-          message: err instanceof Error ? err.message : String(err)
-        };
-        res.write(`event: error\ndata: ${JSON.stringify(errorPayload)}\n\n`);
-        console.error(`❌ OpenClaw stream error: ${err instanceof Error ? err.message : String(err)}`);
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done || clientDisconnected || res.writableEnded || res.destroyed) break;
+      if (value) {
+        const canContinue = res.write(decoder.decode(value, { stream: true }));
+        if (!canContinue) await new Promise(resolve => res.once('drain', resolve));
       }
     }
-
-    safeEnd();
-  } finally {
-    req.off('close', handleClose);
+    const tail = decoder.decode();
+    if (tail && !res.writableEnded && !res.destroyed) res.write(tail);
+  } catch (err) {
+    if (err?.name !== 'AbortError' && !clientDisconnected && !res.writableEnded && !res.destroyed) {
+      const errorPayload = {
+        error: 'Upstream stream error',
+        message: err instanceof Error ? err.message : String(err)
+      };
+      res.write(`event: error\ndata: ${JSON.stringify(errorPayload)}\n\n`);
+      console.error(`❌ OpenClaw stream error: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
+
+  safeEnd();
 }));
 
 export default router;

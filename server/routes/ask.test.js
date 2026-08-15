@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
+import { createServer, request as httpRequest } from 'node:http';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
@@ -49,6 +50,18 @@ const makeApp = () => {
   app.use(errorMiddleware);
   return app;
 };
+
+const startLoopbackServer = (app) => new Promise((resolve, reject) => {
+  const server = createServer(app);
+  server.once('error', reject);
+  server.listen(0, '127.0.0.1', () => resolve(server));
+});
+
+const closeLoopbackServer = (server) => new Promise((resolve) => server.close(resolve));
+
+const waitForAbort = (signal) => (signal.aborted
+  ? Promise.resolve()
+  : new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true })));
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -326,7 +339,9 @@ describe('POST /api/ask (streaming happy path)', () => {
       turn: { ...turn, id: 'tid' },
     }));
     // runAsk is async-iterable — emit a deterministic event sequence.
-    svc.runAsk.mockImplementation(async function* () {
+    let providerSignal;
+    svc.runAsk.mockImplementation(async function* ({ signal }) {
+      providerSignal = signal;
       yield { type: 'sources', sources: [{ kind: 'memory', id: 'memory:1', title: 'a', snippet: 'b' }] };
       yield { type: 'delta', text: 'Hi ' };
       yield { type: 'delta', text: 'there.' };
@@ -354,5 +369,56 @@ describe('POST /api/ask (streaming happy path)', () => {
     const roles = convs.appendTurn.mock.calls.map((c) => c[1].role);
     expect(roles).toContain('user');
     expect(roles).toContain('assistant');
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(providerSignal.aborted).toBe(false);
+  });
+
+  // A consumed JSON POST body makes IncomingMessage emit `close` before this
+  // handler attaches its disconnect hook. A req/res double cannot model that
+  // lifecycle, so exercise the real loopback socket and sever it mid-stream.
+  it('aborts provider work when a real SSE client disconnects mid-stream', async () => {
+    convs.createConversation.mockResolvedValue({ id: 'ask_lwgnewabc_abcdef00', mode: 'ask', turns: [] });
+    convs.appendTurn.mockImplementation((id, turn) => Promise.resolve({
+      conversation: { id, mode: 'ask', turns: [{ ...turn, id: 'tid' }] },
+      turn: { ...turn, id: 'tid' },
+    }));
+
+    let markStreamStarted;
+    const streamStarted = new Promise((resolve) => { markStreamStarted = resolve; });
+    svc.runAsk.mockImplementation(async function* ({ signal }) {
+      markStreamStarted(signal);
+      await waitForAbort(signal);
+    });
+
+    const server = await startLoopbackServer(makeApp());
+    let client;
+    try {
+      const body = JSON.stringify({ question: 'hello' });
+      client = httpRequest({
+        hostname: '127.0.0.1',
+        port: server.address().port,
+        method: 'POST',
+        path: '/api/ask',
+        headers: {
+          'content-type': 'application/json',
+          'content-length': Buffer.byteLength(body),
+        },
+      });
+      client.on('response', (response) => {
+        response.on('error', () => {});
+        response.resume();
+      });
+      client.on('error', () => {});
+      client.end(body);
+
+      const signal = await streamStarted;
+      client.destroy();
+      await waitForAbort(signal);
+
+      expect(signal.aborted).toBe(true);
+    } finally {
+      client?.destroy();
+      await closeLoopbackServer(server);
+    }
   });
 });

@@ -1,0 +1,1 @@
+- Ask and OpenClaw streams now stop provider work when a client disconnects.
