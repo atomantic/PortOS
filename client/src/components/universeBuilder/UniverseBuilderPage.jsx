@@ -69,20 +69,26 @@ export function UniverseSelector({ universes, selectedId, value, onChange, onPic
     [universes],
   );
   return (
-    <EntityCombobox
-      items={items}
-      selectedId={selectedId}
-      value={value}
-      onChange={onChange}
-      onPick={(item) => onPick(item.id)}
-      onCreate={onCreate}
-      busy={busy}
-      inputId="universe-name"
-      noun="universe"
-      placeholder="Search universes or type a new name…"
-      emptyNoItems="No universes yet — type a name and Create."
-      maxLength={100}
-    />
+    <>
+      {/* The combobox doubles as the name field in a thin action header, so the
+          label is sr-only: the placeholder carries the affordance visually, but
+          a screen reader would otherwise announce a bare combo box. */}
+      <label htmlFor="universe-name" className="sr-only">Universe name</label>
+      <EntityCombobox
+        items={items}
+        selectedId={selectedId}
+        value={value}
+        onChange={onChange}
+        onPick={(item) => onPick(item.id)}
+        onCreate={onCreate}
+        busy={busy}
+        inputId="universe-name"
+        noun="universe"
+        placeholder="Search universes or type a new name…"
+        emptyNoItems="No universes yet — type a name and Create."
+        maxLength={100}
+      />
+    </>
   );
 }
 

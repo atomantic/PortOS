@@ -475,6 +475,7 @@ export default function BrainGraph() {
       {/* Search — jump to any memory across the whole brain (not just the
           loaded view) and focus its neighborhood. */}
       <div className="flex items-center gap-2">
+        <label htmlFor="brain-graph-search" className="sr-only">Search memories</label>
         <EntityCombobox
           items={searchItems}
           value={searchValue}

@@ -847,15 +847,18 @@ function forEachLocalComponent(src, visit) {
       ? arrowBodyAt(src, afterParams)
       : blockBodyAt(src, afterParams);
     if (body === null) continue;
-    visit(declaredName ?? arrowName, body, params);
+    visit(declaredName ?? arrowName, body.text, params, body.start);
   }
 }
 
+// `{ start, text }` rather than the bare slice: `enclosingParameterizedComponent`
+// has to decide whether a control's source index falls inside a component, and
+// the slice alone cannot answer that.
 function blockBodyAt(src, from) {
   const bodyStart = src.indexOf('{', from);
   if (bodyStart === -1) return null;
   const bodyEnd = matchingBraceEnd(src, bodyStart);
-  return bodyEnd === -1 ? null : src.slice(bodyStart, bodyEnd);
+  return bodyEnd === -1 ? null : { start: bodyStart, text: src.slice(bodyStart, bodyEnd) };
 }
 
 // `=>` is what separates a component from an ordinary parenthesized
@@ -866,7 +869,10 @@ function arrowBodyAt(src, from) {
   if (!arrow) return null;
   const bodyStart = from + arrow[0].length;
   if (src[bodyStart] === '{') return blockBodyAt(src, bodyStart);
-  if (src[bodyStart] === '(') return balancedCallAt(src, bodyStart);
+  if (src[bodyStart] === '(') {
+    const text = balancedCallAt(src, bodyStart);
+    return text === null ? null : { start: bodyStart, text };
+  }
   return null;
 }
 
@@ -1123,6 +1129,104 @@ function isNamedByWrapper(src, context) {
   return false;
 }
 
+// The mirror image of the wrapper shapes: instead of a component that renders
+// the <label> around someone else's control, a REUSABLE CONTROL that takes its
+// own `id` as a prop and leaves the <label> to whoever renders it
+// (components/EntityCombobox.jsx, components/TagPicker.jsx). Nothing in the
+// control's own file names it, and an `aria-label` here would OVERRIDE the
+// caller's visible label — a regression, not a fix — so the name has to be
+// proved where it actually lives: at the call sites.
+//
+// Which component owns `index`, if that component takes `param` as a prop. The
+// innermost match wins: a file can declare a small control inside a page
+// component, and it is the nearest enclosing parameter list that supplies the
+// id. Returns the component's name so its exports can be resolved.
+function enclosingParameterizedComponent(src, index, param) {
+  let owner = null;
+  const parameterRe = new RegExp(`\\b${param}\\b`);
+  forEachLocalComponent(src, (name, body, params, bodyStart) => {
+    if (index < bodyStart || index >= bodyStart + body.length) return;
+    if (!parameterRe.test(params)) return;
+    if (!owner || bodyStart > owner.bodyStart) owner = { name, bodyStart };
+  });
+  return owner?.name ?? null;
+}
+
+// Under which names can another module import `name` from this source? The
+// local declaration name for a named export, and `default` when the file's
+// default export points at it — the same two spellings `relativeImportBindings`
+// records on the other side of the import.
+function exportedNamesOf(src, name) {
+  const names = new Set();
+  const declared = new RegExp(`export\\s+(?:async\\s+)?(?:function|const|let|var)\\s+${name}\\b`);
+  const listed = new RegExp(`export\\s*\\{[^}]*\\b${name}\\b[^}]*\\}`);
+  if (declared.test(src) || listed.test(src)) names.add(name);
+  if (/export\s+default\s+(?:function\s+)?([A-Z][\w$]*)/.exec(src)?.[1] === name) names.add('default');
+  return names;
+}
+
+// One verdict per `<Name …>` in `src`: does this call site pass `idProp` a
+// value AND pair a <label htmlFor> carrying text for it? Both halves are
+// required — an id with no label names nothing, and a label with no id names
+// something else.
+function callSiteIdVerdicts(src, name, idProp) {
+  const verdicts = [];
+  const re = new RegExp(`<${name}\\b`, 'g');
+  let match;
+  while ((match = re.exec(src))) {
+    const tag = openingTagAt(src, match.index, name.length + 1);
+    if (!tag) {
+      verdicts.push(false);
+      continue;
+    }
+    re.lastIndex = match.index + tag.length;
+    const id = normalizedAttributeValue(attributeValue(tag, idProp));
+    verdicts.push(id !== null && id !== '' && hasMatchingLabelElement(src, id));
+  }
+  return verdicts;
+}
+
+// `sites` are the files importing this one, each with the local name it bound
+// the component to. EVERY rendered call site has to do its half: one that
+// passes the id and no label leaves the control unnamed on that screen, which
+// is exactly what the rule scans for. Without that quantifier this degenerates
+// into "any component with an id prop is exempt" — the same bypass the wrapper
+// shapes demand proof against. An unrendered import proves nothing either way,
+// so a component with no call sites at all is never credited.
+function hasCallerSuppliedName(src, tag, index, sites) {
+  // Anchored on whitespace the way `attributeValue` is: a `\b` would read
+  // `data-id={rowId}` as the control's own id and credit an unrelated prop.
+  const idProp = /(?:^|\s)id\s*=\s*\{\s*([A-Za-z_$][\w$]*)\s*\}/.exec(tag)?.[1];
+  if (!idProp) return false;
+  const owner = enclosingParameterizedComponent(src, index, idProp);
+  if (!owner) return false;
+  const exported = exportedNamesOf(src, owner);
+  const verdicts = sites
+    .filter(({ exportedName }) => exported.has(exportedName))
+    .flatMap((site) => callSiteIdVerdicts(site.src, site.localName, idProp));
+  return verdicts.length > 0 && verdicts.every(Boolean);
+}
+
+// file -> [{ src, localName, exportedName }] for every tracked file importing
+// it. Built once over the whole tree: resolving importers is the half a
+// per-file scan cannot do, and the sources are the same memoized masked strings
+// the scan already reads.
+let importerIndexCache = null;
+
+function callSitesOf(file) {
+  if (!importerIndexCache) {
+    importerIndexCache = new Map();
+    for (const importer of trackedJsxFiles()) {
+      const src = maskedSourceOf(importer);
+      for (const [localName, { file: target, exportedName }] of relativeImportBindings(src, importer)) {
+        if (!importerIndexCache.has(target)) importerIndexCache.set(target, []);
+        importerIndexCache.get(target).push({ src, localName, exportedName });
+      }
+    }
+  }
+  return importerIndexCache.get(file) ?? [];
+}
+
 function hasUsableAriaLabelledByReference(src, tag) {
   const raw = attributeValue(tag, 'aria-labelledby');
   const value = normalizedAttributeValue(raw);
@@ -1154,7 +1258,8 @@ function hasAccessibleControlName(src, tag, index, tagName, file) {
 
   const id = normalizedAttributeValue(attributeValue(tag, 'id'));
   if (id !== null && id !== '' && hasMatchingLabelElement(src, id)) return true;
-  return isNamedByWrapper(src, { index, id: id || null, file });
+  if (isNamedByWrapper(src, { index, id: id || null, file })) return true;
+  return file !== undefined && hasCallerSuppliedName(src, tag, index, callSitesOf(file));
 }
 
 // Keep exceptions tied to stable source anchors rather than line numbers, so
@@ -1191,19 +1296,16 @@ function controlSourceAnchor(file, src, index, tagName) {
   return `${base}|occurrence=${matching.indexOf(index) + 1}`;
 }
 
-// These are pre-existing controls exposed when the rule was generalized; the
-// migration is tracked in #4297. What is left is no longer a backlog of unnamed
-// controls — both are one shape the scan cannot resolve, not a gap in the UI:
-// EntityCombobox / TagPicker take the control's `id` as a prop and every caller
-// pairs its own `<label htmlFor>`, which lives in the caller's file. A same-file
-// scan cannot see it, and an `aria-label` here would OVERRIDE the caller's
-// visible label — a regression, not a fix. Tracked in #4321.
-// So: do not "fix" these by bolting an aria-label onto the control. Fix the
-// recognizer, then delete the row.
-const PREEXISTING_INPUT_NAME_ALLOWLIST = new Set([
-  "src/components/EntityCombobox.jsx|input|id=inputId|type=text|placeholder=placeholder || `Search ${noun}s or type a new name…`|value=value|role=combobox",
-  "src/components/TagPicker.jsx|input|id=id|type=text|placeholder=value.length >= maxTags ? `Max ${maxTags} tags` : placeholder|value=input",
-]);
+// Pre-existing controls exposed when the rule was generalized; the migration is
+// tracked in #4297. The list is EMPTY — every <input> in the tree now carries a
+// real accessible name. The last two rows were EntityCombobox / TagPicker, the
+// caller-supplied-id shape a same-file scan cannot resolve; `hasCallerSuppliedName`
+// (#4321) reads the call sites instead of exempting the control.
+//
+// Keep it empty. A new unnamed <input> is a bug to fix at the control, not a row
+// to add here — and never by bolting on an `aria-label` that shadows a visible
+// label the caller already renders.
+const PREEXISTING_INPUT_NAME_ALLOWLIST = new Set([]);
 
 // The <select>/<textarea> half of the same rule, seeded when #4309 widened the
 // scan past <input>. Unlike the list above this one IS a live backlog: every
@@ -1714,6 +1816,66 @@ describe('a11y conventions', () => {
     expect(namesId(`${childrenForwarder}\n${childrenCall}`, 'sleep-hours')).toBe(true);
     expect(namesId(`${childrenForwarder}\n${childrenCall.replace('>Sleep<', '><')}`, 'sleep-hours')).toBe(false);
     expect(namesId(`${childrenForwarder}\n${childrenCall}`, 'other-id')).toBe(false);
+  });
+
+  it('credits a caller-supplied id only when every call site names it', () => {
+    // The mirror of the wrapper probes above: here the reusable component IS
+    // the control, and the <label> lives in the caller's file. The exemption is
+    // only real when every call site does its half, so probe both bypasses — a
+    // caller that passes the id and no label, and one that omits the id — plus
+    // the "one bad call site spoils it" quantifier. Without these the rule
+    // degenerates into "any component with an id prop is exempt", which would
+    // hide the exact gap it scans for.
+    const control = `export default function Combo({ inputId, value, onChange }) {
+  return <input id={inputId} type="text" value={value} onChange={onChange} />;
+}`;
+    const site = (src, localName = 'Combo') => ({ src, localName, exportedName: 'default' });
+    const credits = (...sites) => {
+      const index = control.indexOf('<input');
+      return hasCallerSuppliedName(control, openingTagAt(control, index, '<input'.length), index, sites);
+    };
+
+    const labeled = '<label htmlFor="rounds">Rounds</label>\n<Combo inputId="rounds" value={v} />';
+    const noLabel = '<Combo inputId="rounds" value={v} />';
+    const noId = '<label htmlFor="rounds">Rounds</label>\n<Combo value={v} />';
+
+    expect(credits(site(labeled))).toBe(true);
+    expect(credits(site(noLabel))).toBe(false);
+    expect(credits(site(noId))).toBe(false);
+    // A label whose htmlFor points somewhere else names a different control.
+    expect(credits(site(labeled.replace('htmlFor="rounds"', 'htmlFor="other"')))).toBe(false);
+    // …and a <label> carrying no text names nothing, here as everywhere.
+    expect(credits(site(labeled.replace('>Rounds<', '><')))).toBe(false);
+
+    // Every call site, not any: the unlabeled screen is still unlabeled.
+    expect(credits(site(labeled), site(noLabel))).toBe(false);
+    expect(credits(site(labeled), site(labeled.replace(/rounds/g, 'laps')))).toBe(true);
+
+    // A renamed default import is the same component, and must be read under
+    // the local binding the caller actually renders.
+    expect(credits(site(labeled.replace(/Combo/g, 'Wrapped'), 'Wrapped'))).toBe(true);
+    // A site importing a DIFFERENT export of the same file proves nothing about
+    // this component, so it is neither credited nor counted against it.
+    expect(credits({ ...site(labeled), exportedName: 'Other' })).toBe(false);
+    // No call site at all is not proof of a name — an unrendered control cannot
+    // borrow one from a caller that does not exist.
+    expect(credits()).toBe(false);
+
+    // The id has to be CALLER-supplied. A locally generated one is not the
+    // caller's to name — `<Combo inputId="rounds">` would then exempt an input
+    // whose id the caller never saw — so a non-parameter id is not this shape.
+    const localId = `export default function Combo({ value, onChange }) {
+  const inputId = useId();
+  return <input id={inputId} type="text" value={value} onChange={onChange} />;
+}`;
+    const localIndex = localId.indexOf('<input');
+    expect(hasCallerSuppliedName(localId, openingTagAt(localId, localIndex, '<input'.length), localIndex, [site(labeled)])).toBe(false);
+
+    // …and the id has to be the control's OWN. A same-named prop on another
+    // attribute (`data-id={inputId}`) never reaches the a11y tree.
+    const dataId = control.replace('id={inputId}', 'data-id={inputId}');
+    const dataIndex = dataId.indexOf('<input');
+    expect(hasCallerSuppliedName(dataId, openingTagAt(dataId, dataIndex, '<input'.length), dataIndex, [site(labeled)])).toBe(false);
   });
 
   it('credits a FormField whose only child is a conditional, but not a list', () => {

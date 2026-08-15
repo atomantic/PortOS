@@ -1,0 +1,1 @@
+- a11y guard: credit a reusable control whose id is caller-supplied by proving every call site pairs a label, and name the two EntityCombobox call sites that did not (#4321)
