@@ -8,3 +8,4 @@
 - Music engines whose install failed partway now report as not installed instead of ready — the Install button comes back, generation gives an actionable setup message instead of a Python traceback, and the installer stops refusing with 'already installed'
 - Local music runtimes now build on a standalone Python instead of a conda base on Windows, where torch installs but cannot load (WinError 1114); an already-broken venv is rebuilt automatically
 - MusicGen is now shown as unavailable on non-Apple-Silicon machines rather than offering an Install button whose installer skips and reports a confusing failure
+- Installing MiniMax Music 3's model weights now actually downloads — the request was aborted before its first byte and the UI reported the no-op as a successful install

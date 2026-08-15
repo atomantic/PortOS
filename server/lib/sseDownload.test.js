@@ -21,18 +21,22 @@ import { startHfDownloadStream } from './sseDownload.js';
 import { inspectModelCache } from './hfCache.js';
 import { downloadHfRepo } from './hfDownload.js';
 
-// Minimal req/res doubles — req only needs `.on('close')`; res captures the
-// SSE frames written so we can assert the terminal `complete` message.
+// Minimal req/res doubles. Disconnect detection lives on `res` (see
+// onClientDisconnect), so `res.on` records handlers and `disconnect()` fires
+// them the way a real client hang-up would.
 const makeReqRes = () => {
   const frames = [];
   const req = { on: vi.fn() };
+  const handlers = {};
   const res = {
     writableEnded: false,
     writeHead: vi.fn(),
     write: vi.fn((chunk) => { frames.push(chunk); }),
     end: vi.fn(function end() { res.writableEnded = true; }),
+    on: vi.fn((event, cb) => { handlers[event] = cb; }),
   };
-  return { req, res, frames };
+  const disconnect = () => handlers.close?.();
+  return { req, res, frames, disconnect };
 };
 
 const parseFrames = (frames) => frames
@@ -87,16 +91,18 @@ describe('startHfDownloadStream server-side logging', () => {
   let logSpy;
   let errorSpy;
 
-  // req double whose `close` handler we can fire on demand (to simulate the
-  // EventSource client hanging up mid-download).
+  // res double whose `close` handler we can fire on demand (to simulate the
+  // EventSource client hanging up mid-download). The handler lives on `res`,
+  // not `req` — see onClientDisconnect.
   const makeLoggingReqRes = () => {
     let closeHandler;
-    const req = { on: vi.fn((ev, cb) => { if (ev === 'close') closeHandler = cb; }) };
+    const req = { on: vi.fn() };
     const res = {
       writableEnded: false,
       writeHead: vi.fn(),
       write: vi.fn(() => true),
       end: vi.fn(function end() { res.writableEnded = true; }),
+      on: vi.fn((ev, cb) => { if (ev === 'close') closeHandler = cb; }),
     };
     return { req, res, fireClose: () => closeHandler?.() };
   };
@@ -427,5 +433,76 @@ describe('startHfDownloadStream repos (ALL must succeed)', () => {
       pythonPath: '/runtime/bin/python3',
     }));
     expect(parseFrames(frames).at(-1)).toMatchObject({ type: 'complete' });
+  });
+});
+
+// The bug this guards was invisible to the doubles above: it depended on Node's
+// real `IncomingMessage` lifecycle, so it needs a real socket. `express.json()`
+// finishes reading a POST body before the handler runs, leaving `req.complete
+// === true` — so a `req.on('close')` listener attached before the first `await`
+// fired immediately and read as a client disconnect. The download aborted
+// before its first frame, the stream closed empty, and because an empty stream
+// carries no `error` event the UI reported the install as a success.
+describe('startHfDownloadStream over a real socket (POST body already consumed)', () => {
+  let server;
+  let baseUrl;
+
+  const startServer = async () => {
+    const express = (await import('express')).default;
+    const app = express();
+    app.use(express.json());
+    app.post('/download', (req, res) => {
+      // Mirrors POST /api/music/models: hand the response straight to the driver.
+      startHfDownloadStream({ req, res, repo: 'org/model' });
+    });
+    app.get('/download', (req, res) => {
+      startHfDownloadStream({ req, res, repo: 'org/model' });
+    });
+    server = app.listen(0);
+    await new Promise((resolve) => server.once('listening', resolve));
+    baseUrl = `http://127.0.0.1:${server.address().port}`;
+  };
+
+  const collect = async (init) => {
+    const res = await fetch(`${baseUrl}/download`, init);
+    const text = await res.text();
+    return text.split('\n\n').map((f) => f.replace(/^data: /, '').trim()).filter(Boolean).map((f) => JSON.parse(f));
+  };
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    inspectModelCache.mockResolvedValue({ cached: false, sizeBytes: 0 });
+    downloadHfRepo.mockImplementation(({ onEvent }) => ({
+      promise: Promise.resolve().then(() => {
+        onEvent({ type: 'progress', stage: 'download', step: 1, total: 1, file: 'weights.safetensors' });
+        return { ok: true, sizeBytes: 1234 };
+      }),
+      kill: vi.fn(),
+    }));
+    await startServer();
+  });
+
+  afterEach(async () => {
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  it('downloads on a POST instead of closing an empty stream', async () => {
+    const events = await collect({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ engine: 'minimax-music3', repo: 'org/model' }),
+    });
+
+    expect(downloadHfRepo).toHaveBeenCalledTimes(1);
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.at(-1)).toMatchObject({ type: 'complete' });
+    // The exact shape of the old failure: a 200 that streamed nothing at all.
+    expect(events).not.toHaveLength(0);
+  });
+
+  it('still downloads on a GET (the shape every other caller uses)', async () => {
+    const events = await collect({ method: 'GET' });
+    expect(downloadHfRepo).toHaveBeenCalledTimes(1);
+    expect(events.at(-1)).toMatchObject({ type: 'complete' });
   });
 });

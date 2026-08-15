@@ -29,6 +29,34 @@ export function openSseStream(res) {
   return { send, safeEnd };
 }
 
+/**
+ * Run `onDisconnect` when the CLIENT goes away mid-stream.
+ *
+ * Use this instead of `req.on('close', …)`. On a POST whose JSON body
+ * `express.json()` has already consumed, the request is complete before the
+ * handler runs (`req.complete === true`), so Node emits `'close'` on the very
+ * next tick — a handler that attaches the listener before its first `await`
+ * reads that as an instant client disconnect and cancels work that never
+ * started. `POST /api/music/models` did exactly that: the download aborted
+ * before its first frame, the stream closed empty, and the UI reported the
+ * install as a success. GET routes are unaffected (nothing to consume), which
+ * is why every other SSE endpoint here looked fine.
+ *
+ * The response is the right thing to watch: `res` `'close'` fires only when the
+ * response actually closes, and `writableEnded` separates our own `safeEnd()`
+ * from a genuine disconnect.
+ *
+ * @param {import('http').IncomingMessage} _req - unused; kept so call sites read as (req, res)
+ * @param {import('http').ServerResponse} res
+ * @param {() => void} onDisconnect
+ */
+export function onClientDisconnect(_req, res, onDisconnect) {
+  res.on('close', () => {
+    if (res.writableEnded) return; // we ended it — normal completion
+    onDisconnect();
+  });
+}
+
 export async function startHfDownloadStream({ req, res, repo, repos, fallbacks, cachedFile = null, alreadyDownloadedMessage, force = false, pythonPath = null }) {
   // Three input shapes, two semantics:
   //  - `repo` (single string) / `repos` (ordered array) — ALL must succeed. Used
@@ -75,11 +103,11 @@ export async function startHfDownloadStream({ req, res, repo, repos, fallbacks, 
   // client closing mid-await would land after spawn with no kill path.
   let currentHandle = null;
   let aborted = false;
-  req.on('close', () => {
+  onClientDisconnect(req, res, () => {
     aborted = true;
-    // Only a live handle means a download was mid-flight — `close` also fires
-    // on normal completion (currentHandle is nulled after each repo), so this
-    // guard keeps the cancel line out of the log on a clean finish.
+    // Only a live handle means a download was mid-flight, so this keeps the
+    // cancel line out of the log when the client simply navigated away between
+    // repos.
     if (currentHandle) {
       console.log(`🛑 HuggingFace download cancelled (client disconnect)`);
       currentHandle.kill();
