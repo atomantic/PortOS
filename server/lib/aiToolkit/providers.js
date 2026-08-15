@@ -909,8 +909,13 @@ export function createProviderService(config = {}) {
           continue;
         }
         // `null` here means the lead vanished mid-probe — the same `missing`
-        // the group already carries, so leave the status alone.
-        if (probed.models === null) continue;
+        // the group already carries, so leave the status alone. Validated as an
+        // ARRAY rather than compared to `null`: `fetchProviderModels` promises
+        // an array or a throw, but a future fetcher that leaks `undefined` must
+        // land on `missing` too, not be persisted as an "updated" catalog (and
+        // then crash the whole batch on the spread below). `[]` is an array, so
+        // a legitimately empty catalog still passes.
+        if (!Array.isArray(probed.models)) continue;
         group.status = 'updated';
         group.models = probed.models;
       }

@@ -216,6 +216,27 @@ describe('refreshProviderModelsBatch — one providers.json write per fan-out', 
     expect(atomicWrite).toHaveBeenCalledTimes(1);
   });
 
+  it('treats a probe that answers with no array as missing, not as an update', async () => {
+    // `fetchProviderModels` promises an array or a throw, so this is a guard
+    // against a future fetcher rather than a reachable path today — but the
+    // failure mode it prevents is the whole batch dying on `[...undefined]`,
+    // taking the healthy groups' write down with it.
+    stubOllama({ [LOCAL]: ['qwen2.5:7b'] });
+    const broken = await providerService.createProvider(ollamaProvider('Broken', { base: REMOTE }));
+    const healthy = await providerService.createProvider(ollamaProvider('Local One'));
+    vi.spyOn(providerService, 'fetchProviderModels').mockImplementation(async (id) => (
+      id === broken.id ? undefined : ['qwen2.5:7b']
+    ));
+    atomicWrite.mockClear();
+
+    const groups = await providerService.refreshProviderModelsBatch([broken.id, healthy.id]);
+
+    expect(groups.map((g) => g.status)).toEqual(['missing', 'updated']);
+    expect(atomicWrite).toHaveBeenCalledTimes(1);
+    expect((await providerService.getProviderById(broken.id)).models).toEqual(['stale-model']);
+    expect((await providerService.getProviderById(healthy.id)).models).toEqual(['qwen2.5:7b']);
+  });
+
   it('is a no-op for an empty id list', async () => {
     stubOllama({ [LOCAL]: ['qwen2.5:7b'] });
     await providerService.createProvider(ollamaProvider('Local One'));
