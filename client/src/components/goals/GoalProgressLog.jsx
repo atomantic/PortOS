@@ -36,12 +36,14 @@ export default function GoalProgressLog({
             type="date"
             value={progressForm.date}
             onChange={e => setProgressForm({ ...progressForm, date: e.target.value })}
+            aria-label="Progress date"
             className="w-full bg-port-card border border-port-border rounded px-2 py-1 text-xs text-white"
           />
           <textarea
             value={progressForm.note}
             onChange={e => setProgressForm({ ...progressForm, note: e.target.value })}
             placeholder="What did you work on?"
+            aria-label="Progress note"
             rows={2}
             className="w-full bg-port-card border border-port-border rounded px-2 py-1 text-xs text-white resize-none"
           />
@@ -52,6 +54,7 @@ export default function GoalProgressLog({
               value={progressForm.durationMinutes}
               onChange={e => setProgressForm({ ...progressForm, durationMinutes: e.target.value })}
               placeholder="Minutes (optional)"
+              aria-label="Duration in minutes (optional)"
               min="1"
               max="1440"
               className="flex-1 bg-port-card border border-port-border rounded px-2 py-1 text-xs text-white"

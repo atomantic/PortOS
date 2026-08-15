@@ -257,6 +257,7 @@ export default function NicotineTab() {
                       onChange={e => setButtonForm({ ...buttonForm, name: e.target.value })}
                       className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-xs text-white"
                       placeholder="Name"
+                      aria-label="Product button name"
                     />
                     <input
                       type="number"
@@ -264,6 +265,7 @@ export default function NicotineTab() {
                       onChange={e => setButtonForm({ ...buttonForm, mgPerUnit: e.target.value })}
                       className="w-16 bg-port-bg border border-port-border rounded px-2 py-1.5 text-xs text-white"
                       placeholder="mg"
+                      aria-label="Product button milligrams per unit"
                       step="0.1"
                     />
                     <button aria-label="Save" onClick={saveEditButton} className="p-1.5 text-port-success hover:text-white"><Check size={14} /></button>
@@ -298,6 +300,7 @@ export default function NicotineTab() {
                   onChange={e => setButtonForm({ ...buttonForm, name: e.target.value })}
                   className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-xs text-white placeholder-gray-600"
                   placeholder="New product name"
+                  aria-label="New product button name"
                 />
                 <input
                   type="number"
@@ -305,6 +308,7 @@ export default function NicotineTab() {
                   onChange={e => setButtonForm({ ...buttonForm, mgPerUnit: e.target.value })}
                   className="w-16 bg-port-bg border border-port-border rounded px-2 py-1.5 text-xs text-white placeholder-gray-600"
                   placeholder="mg"
+                  aria-label="New product button milligrams per unit"
                   step="0.1"
                 />
                 <button type="submit" aria-label="Add product" className="px-3 py-1.5 bg-port-accent/10 text-port-accent rounded text-xs hover:bg-port-accent/20">
@@ -436,6 +440,7 @@ export default function NicotineTab() {
                               type="date"
                               value={editForm.date}
                               onChange={e => setEditForm({ ...editForm, date: e.target.value })}
+                              aria-label="Entry date"
                               className="bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white"
                             />
                           ) : idx === 0 ? (
@@ -457,6 +462,7 @@ export default function NicotineTab() {
                                 type="text"
                                 value={editForm.product}
                                 onChange={e => setEditForm({ ...editForm, product: e.target.value })}
+                                aria-label="Entry product"
                                 className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-xs text-white"
                               />
                             </td>
@@ -465,6 +471,7 @@ export default function NicotineTab() {
                                 type="number"
                                 value={editForm.mgPerUnit}
                                 onChange={e => setEditForm({ ...editForm, mgPerUnit: e.target.value })}
+                                aria-label="Entry milligrams per unit"
                                 className="w-16 px-2 py-1 bg-port-bg border border-port-border rounded text-xs text-white text-right"
                                 step="0.1"
                               />
@@ -474,6 +481,7 @@ export default function NicotineTab() {
                                 type="number"
                                 value={editForm.count}
                                 onChange={e => setEditForm({ ...editForm, count: e.target.value })}
+                                aria-label="Entry count"
                                 className="w-14 px-2 py-1 bg-port-bg border border-port-border rounded text-xs text-white text-right"
                                 min="1"
                               />

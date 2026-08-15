@@ -436,6 +436,58 @@ function hasMatchingExplicitLabel(src, id) {
     if (htmlFor !== id || !hasUsableElementText(src, match.index, tag)) continue;
     return true;
   }
+  return hasMatchingForwardedLabel(src, id);
+}
+
+// A page-local field wrapper can own the <label> AND take the control's id as a
+// prop instead of wrapping it (LifestyleTab.jsx's `<FieldGroup label="Sleep …"
+// htmlFor="lifestyle-sleep-hours">`). Wrapping is wrong there — an implicit
+// <label> would swallow the live value readout and the hint paragraph sitting
+// beside the control into the accessible name — so the control is explicitly
+// labeled, just not by a `<label htmlFor>` written at the call site. Recognise
+// those forwarders the same way and under the same limits as
+// localLabelWrapperNames: same-file `function` declarations only, so a missed
+// one is a false negative that leaves its controls on the allowlist.
+const htmlForForwarderNamesBySource = new Map();
+
+function localHtmlForForwarderNames(src) {
+  const cached = htmlForForwarderNamesBySource.get(src);
+  if (cached) return cached;
+  const names = new Set();
+  const re = /function\s+([A-Z][\w]*)\s*\(/g;
+  let match;
+  while ((match = re.exec(src))) {
+    const parenIndex = match.index + match[0].length - 1;
+    const params = balancedCallAt(src, parenIndex);
+    if (!params) continue;
+    const bodyStart = src.indexOf('{', parenIndex + params.length);
+    if (bodyStart === -1) continue;
+    const bodyEnd = matchingBraceEnd(src, bodyStart);
+    if (bodyEnd === -1) continue;
+    const body = src.slice(bodyStart, bodyEnd);
+    // The <label> has to do both jobs before the call site's attributes can be
+    // trusted: point at the forwarded `htmlFor`, and render the `label` prop as
+    // its own text. A component that forwards the id onto a <label> it never
+    // fills with text names nothing.
+    if (/<label\b[^>]*\bhtmlFor\s*=\s*\{\s*htmlFor\s*\}(?:[^>]*[^/>])?>(?:(?!<\/label>)[\s\S])*?\{\s*label\s*\}/.test(body)) names.add(match[1]);
+  }
+  htmlForForwarderNamesBySource.set(src, names);
+  return names;
+}
+
+function hasMatchingForwardedLabel(src, id) {
+  for (const name of localHtmlForForwarderNames(src)) {
+    const re = new RegExp(`<${name}\\b`, 'g');
+    let match;
+    while ((match = re.exec(src))) {
+      const tag = openingTagAt(src, match.index, name.length + 1);
+      if (!tag) continue;
+      re.lastIndex = match.index + tag.length;
+      if (normalizedAttributeValue(attributeValue(tag, 'htmlFor')) !== id) continue;
+      const label = normalizedAttributeValue(attributeValue(tag, 'label'));
+      if (label && !/^(?:undefined|null|false)$/i.test(label)) return true;
+    }
+  }
   return false;
 }
 
@@ -704,20 +756,6 @@ const PREEXISTING_INPUT_NAME_ALLOWLIST = new Set([
   "src/components/CronInput.jsx|type=text|placeholder=0 7 * * *|value=expr",
   "src/components/EntityCombobox.jsx|id=inputId|type=text|placeholder=placeholder || `Search ${noun}s or type a new name…`|value=value|role=combobox",
   "src/components/TagPicker.jsx|id=id|type=text|placeholder=value.length >= maxTags ? `Max ${maxTags} tags` : placeholder|value=input",
-  "src/components/agents/tabs/ToolsTab.jsx|type=text|placeholder=Post title...|value=postTitle",
-  "src/components/agents/tabs/WorldTab.jsx|type=number|placeholder=X|value=newActionParams.x || ''|occurrence=1",
-  "src/components/agents/tabs/WorldTab.jsx|type=number|placeholder=Y|value=newActionParams.y || ''|occurrence=1",
-  "src/components/agents/tabs/WorldTab.jsx|type=text|placeholder=Thinking (optional)|value=newActionParams.thinking || ''",
-  "src/components/agents/tabs/WorldTab.jsx|type=text|placeholder=Thought text|value=newActionParams.thought || ''",
-  "src/components/agents/tabs/WorldTab.jsx|type=number|placeholder=X|value=newActionParams.x || ''|occurrence=2",
-  "src/components/agents/tabs/WorldTab.jsx|type=number|placeholder=Y|value=newActionParams.y || ''|occurrence=2",
-  "src/components/agents/tabs/WorldTab.jsx|type=number|placeholder=Z|value=newActionParams.z || ''",
-  "src/components/agents/tabs/WorldTab.jsx|type=text|placeholder=Message|value=newActionParams.message || ''",
-  "src/components/agents/tabs/WorldTab.jsx|type=text|placeholder=To Agent ID (optional)|value=newActionParams.sayTo || ''",
-  "src/components/agents/tabs/WorldTab.jsx|type=text|placeholder=Thinking... (optional)|value=moveThinking",
-  "src/components/agents/tabs/WorldTab.jsx|type=text|placeholder=What is this agent thinking?|value=thought",
-  "src/components/agents/tabs/WorldTab.jsx|type=text|placeholder=Message to nearby agents...|value=sayMessage",
-  "src/components/agents/tabs/WorldTab.jsx|type=text|placeholder=To Agent ID (optional — leave blank for broadcast)|value=sayTo",
   "src/components/apps/ReferenceReposPanel.jsx|placeholder=Display name (e.g. phosphene)|value=form.name",
   "src/components/apps/ReferenceReposPanel.jsx|placeholder=Branch (default: main)|value=form.branch",
   "src/components/apps/ReferenceReposPanel.jsx|placeholder=Repo URL (https://github.com/owner/repo.git) or local path|value=form.repoUrl",
@@ -726,28 +764,6 @@ const PREEXISTING_INPUT_NAME_ALLOWLIST = new Set([
   "src/components/apps/tabs/CustomTasksSection.jsx|type=text|placeholder=0 7 * * *|value=form.cronExpression || ''|title=Cron expression: minute hour dayOfMonth month dayOfWeek",
   "src/components/apps/tabs/CustomTasksSection.jsx|type=time|value=form.scheduledTime || ''|title=Run at a specific time (leave empty for any time)",
   "src/components/apps/tabs/GitTab.jsx|type=text|placeholder=Commit message...|value=commitMessage",
-  "src/components/brain/tabs/DailyLogTab.jsx|type=text|placeholder=Quick append — adds a new paragraph…|value=quickAppend",
-  "src/components/brain/tabs/FeedsTab.jsx|type=text|placeholder=Paste an RSS or Atom feed URL...|value=inputUrl|ref=inputRef",
-  "src/components/brain/tabs/InboxTab.jsx|type=text|placeholder=One thought at a time...|value=inputText|ref=inputRef",
-  "src/components/brain/tabs/LinksTab.jsx|type=text|placeholder=Paste a URL (GitHub repos auto-clone)...|value=inputUrl|ref=inputRef",
-  "src/components/brain/tabs/LinksTab.jsx|type=text|placeholder=Search links by title, URL, description, or tag...|value=search",
-  "src/components/brain/tabs/LinksTab.jsx|type=text|placeholder=Tags (comma-separated)|value=editForm.tags",
-  "src/components/brain/tabs/MemoryTab.jsx|type=text|placeholder=Name|value=form.name || ''",
-  "src/components/brain/tabs/MemoryTab.jsx|type=text|placeholder=Follow-ups (comma separated)|value=(form.followUps || []).join(', ')",
-  "src/components/brain/tabs/MemoryTab.jsx|type=text|placeholder=Project name|value=form.name || ''",
-  "src/components/brain/tabs/MemoryTab.jsx|type=text|placeholder=Next action (concrete, actionable step)|value=form.nextAction || ''",
-  "src/components/brain/tabs/MemoryTab.jsx|type=text|placeholder=Title|value=form.title || ''|occurrence=1",
-  "src/components/brain/tabs/MemoryTab.jsx|type=text|placeholder=One-liner (core insight)|value=form.oneLiner || ''",
-  "src/components/brain/tabs/MemoryTab.jsx|type=text|placeholder=Title|value=form.title || ''|occurrence=2",
-  "src/components/brain/tabs/MemoryTab.jsx|type=date|placeholder=Due date|value=form.dueDate ? form.dueDate.split('T')[0] : ''",
-  "src/components/brain/tabs/MemoryTab.jsx|type=text|placeholder=Next action|value=form.nextAction || ''",
-  "src/components/brain/tabs/MemoryTab.jsx|type=text|placeholder=Title (e.g. 'DnD session tonight')|value=form.title || ''",
-  "src/components/brain/tabs/MemoryTab.jsx|type=text|placeholder=Mood (e.g. happy, reflective, tired)|value=form.mood || ''",
-  "src/components/brain/tabs/MemoryTab.jsx|type=text|placeholder=Tags (comma separated)|value=form.tagInput ?? (form.tags || []).join(', ')",
-  "src/components/brain/tabs/MemoryTab.jsx|type=text|placeholder=`Search ${DESTINATIONS[activeType]?.label?.toLowerCase() || 'records'}...`|value=searchQuery",
-  "src/components/brain/tabs/NotesTab.jsx|placeholder=Search notes...|value=searchQuery|ref=searchRef",
-  "src/components/brain/tabs/NotesTab.jsx|placeholder=folder/note-name|value=newNotePath",
-  "src/components/brain/tabs/NotesTab.jsx|placeholder=/path/to/obsidian/vault|value=customPath",
   "src/components/calendar/AgendaTab.jsx|type=text|placeholder=Search events...|value=search",
   "src/components/calendar/ConfigTab.jsx|type=text|placeholder=Client ID (e.g. 123456789-abc.apps.googleusercontent.com)|value=oauthForm.clientId",
   "src/components/calendar/ConfigTab.jsx|type=password|placeholder=Client Secret (e.g. GOCSPX-...)|value=oauthForm.clientSecret",
@@ -780,25 +796,6 @@ const PREEXISTING_INPUT_NAME_ALLOWLIST = new Set([
   "src/components/digital-twin/tabs/GoalsTab.jsx|type=date|value=newMilestone.targetDate",
   "src/components/digital-twin/tabs/TimeCapsuleTab.jsx|type=text|placeholder=Snapshot label (e.g., Spring 2026, Pre-career-change)|value=label",
   "src/components/digital-twin/tabs/TimeCapsuleTab.jsx|type=checkbox",
-  "src/components/goals/GoalEditForm.jsx|type=number|value=form.timeBlockConfig?.sessionDurationMinutes || 60|min=15|max=480",
-  "src/components/goals/GoalEditForm.jsx|type=text|placeholder=Add tag...|value=tagInput",
-  "src/components/goals/GoalEditForm.jsx|type=text|value=form.title",
-  "src/components/goals/GoalLinkedCalendars.jsx|type=text|placeholder=Match pattern (optional)|value=calendarMatchPattern",
-  "src/components/goals/GoalMilestones.jsx|type=text|placeholder=Add milestone...|value=newMilestone.title",
-  "src/components/goals/GoalPlanSection.jsx|type=text|value=ms.title",
-  "src/components/goals/GoalPlanSection.jsx|type=text|placeholder=Description...|value=ms.description || ''",
-  "src/components/goals/GoalPlanSection.jsx|type=text|value=phase.title",
-  "src/components/goals/GoalPlanSection.jsx|type=text|placeholder=Description...|value=phase.description || ''",
-  "src/components/goals/GoalPlanSection.jsx|type=date|value=phase.targetDate",
-  "src/components/goals/GoalProgressLog.jsx|type=date|value=progressForm.date",
-  "src/components/goals/GoalProgressLog.jsx|type=number|placeholder=Minutes (optional)|value=progressForm.durationMinutes|min=1|max=1440",
-  "src/components/goals/GoalTodoList.jsx|type=text|placeholder=Add todo...|value=newTodoTitle",
-  "src/components/goals/GoalTodoList.jsx|type=number|placeholder=Est. min|value=newTodoEstimate|min=1",
-  "src/components/goals/GoalsListView.jsx|type=text|placeholder=Search goals...|value=searchQuery",
-  "src/components/goals/GoalsListView.jsx|type=text|placeholder=Add goal...|value=quickAdd",
-  "src/components/goals/GoalsListView.jsx|type=text|placeholder=Goal title...|value=newGoal.title",
-  "src/components/goals/GoalsTreeView.jsx|type=text|placeholder=Search...|value=searchQuery",
-  "src/components/goals/GoalsTreeView.jsx|type=text|placeholder=Goal title...|value=newGoal.title",
   "src/components/imageGen/HfTokenBanner.jsx|type=password|placeholder=hf_…|value=token",
   "src/components/imageGen/LoraPicker.jsx|type=number|value=sel.scale|min=0|max=2|step=0.1",
   "src/components/insights/GoalScorecardTab.jsx|type=text|placeholder=extra keywords, comma-separated|value=drafts[rule.id] ?? ''",
@@ -820,31 +817,6 @@ const PREEXISTING_INPUT_NAME_ALLOWLIST = new Set([
   "src/components/meatspace/post/PostLlmDrillRunner.jsx|type=text|placeholder=Type a creative use and press Enter...|value=inputValue|ref=inputRef",
   "src/components/meatspace/post/WordplayDrillUI.jsx|type=text|placeholder=Type the full compound or just the other half...|value=inputValue|ref=inputRef",
   "src/components/meatspace/post/WordplayDrillUI.jsx|type=text|placeholder=The bridge word is...|value=inputValue|ref=inputRef",
-  "src/components/meatspace/tabs/AgeTab.jsx|type=date|value=input",
-  "src/components/meatspace/tabs/AlcoholTab.jsx|type=text|placeholder=Name|value=buttonForm.name",
-  "src/components/meatspace/tabs/AlcoholTab.jsx|type=number|placeholder=buttonVolumeUnit === 'oz' ? 'Oz' : 'mL'|value=buttonForm.oz|min=0.1|step=0.1|occurrence=1",
-  "src/components/meatspace/tabs/AlcoholTab.jsx|type=number|placeholder=ABV%|value=buttonForm.abv|min=0|max=100|step=0.1|occurrence=1",
-  "src/components/meatspace/tabs/AlcoholTab.jsx|type=text|placeholder=New button name|value=buttonForm.name",
-  "src/components/meatspace/tabs/AlcoholTab.jsx|type=number|placeholder=buttonVolumeUnit === 'oz' ? 'Oz' : 'mL'|value=buttonForm.oz|min=0.1|step=0.1|occurrence=2",
-  "src/components/meatspace/tabs/AlcoholTab.jsx|type=number|placeholder=ABV%|value=buttonForm.abv|min=0|max=100|step=0.1|occurrence=2",
-  "src/components/meatspace/tabs/AlcoholTab.jsx|type=number|placeholder=volumeUnit === 'oz' ? '12' : '355'|value=oz|min=0.1|step=0.1",
-  "src/components/meatspace/tabs/AlcoholTab.jsx|type=date|value=editForm.date",
-  "src/components/meatspace/tabs/AlcoholTab.jsx|type=text|value=editForm.name",
-  "src/components/meatspace/tabs/AlcoholTab.jsx|type=number|value=editForm.oz|min=0.1|step=0.1",
-  "src/components/meatspace/tabs/AlcoholTab.jsx|type=number|value=editForm.abv|min=0|max=100|step=0.1",
-  "src/components/meatspace/tabs/AlcoholTab.jsx|type=number|value=editForm.count|min=1|max=100",
-  "src/components/meatspace/tabs/GenomeTab.jsx|type=text|placeholder=rs1801133|value=searchRsid",
-  "src/components/meatspace/tabs/LifestyleTab.jsx|type=range|value=lifestyle?.exerciseMinutesPerWeek ?? 150|min=0|max=600|step=15",
-  "src/components/meatspace/tabs/LifestyleTab.jsx|type=range|value=lifestyle?.sleepHoursPerNight ?? 7.5|min=3|max=12|step=0.5",
-  "src/components/meatspace/tabs/LifestyleTab.jsx|type=number|placeholder=e.g. 22.5|value=lifestyle?.bmi ?? ''|min=10|max=80|step=0.1",
-  "src/components/meatspace/tabs/NicotineTab.jsx|type=text|placeholder=Name|value=buttonForm.name",
-  "src/components/meatspace/tabs/NicotineTab.jsx|type=number|placeholder=mg|value=buttonForm.mgPerUnit|step=0.1|occurrence=1",
-  "src/components/meatspace/tabs/NicotineTab.jsx|type=text|placeholder=New product name|value=buttonForm.name",
-  "src/components/meatspace/tabs/NicotineTab.jsx|type=number|placeholder=mg|value=buttonForm.mgPerUnit|step=0.1|occurrence=2",
-  "src/components/meatspace/tabs/NicotineTab.jsx|type=date|value=editForm.date",
-  "src/components/meatspace/tabs/NicotineTab.jsx|type=text|value=editForm.product",
-  "src/components/meatspace/tabs/NicotineTab.jsx|type=number|value=editForm.mgPerUnit|step=0.1",
-  "src/components/meatspace/tabs/NicotineTab.jsx|type=number|value=editForm.count|min=1",
   "src/components/media/CollectionPickerShell.jsx|type=text|placeholder=searchPlaceholder|value=query",
   "src/components/media/CollectionPickerShell.jsx|type=text|placeholder=newCollectionPlaceholder|value=newName",
   "src/components/messages/InboxTab.jsx|type=text|placeholder=Search messages...|value=search",
@@ -1136,6 +1108,33 @@ describe('a11y conventions', () => {
       }
     }
     expect(offenders, `Input without an accessible name — add aria-label/aria-labelledby or an explicit/implicit <label>, or exclude type="hidden":\n${offenders.join('\n')}`).toEqual([]);
+  });
+
+  it('only credits an htmlFor-forwarding wrapper that really names the control', () => {
+    // The rule above now accepts a page-local wrapper that renders the <label>
+    // and takes the control's id as a prop. That is only a real name when the
+    // wrapper does BOTH halves of the job, so probe the bypasses: a wrapper
+    // that forwards the id onto a <label> holding no text names nothing, and a
+    // call site that omits `label=` supplies no text either. Without these, the
+    // recognizer degenerates into "any component with an htmlFor prop exempts
+    // its input" — which would silently hide the exact gap the rule scans for.
+    const forwarder = `function Group({ label, htmlFor, children }) {
+  return (
+    <div>
+      <label htmlFor={htmlFor} className="block">{label}</label>
+      {children}
+    </div>
+  );
+}`;
+    const emptyForwarder = forwarder.replace('{label}', '');
+    const namedCall = `<Group label="Sleep" htmlFor="sleep-hours"><input id="sleep-hours" type="range" /></Group>`;
+    const unnamedCall = `<Group htmlFor="sleep-hours"><input id="sleep-hours" type="range" /></Group>`;
+
+    expect(hasMatchingExplicitLabel(`${forwarder}\n${namedCall}`, 'sleep-hours')).toBe(true);
+    expect(hasMatchingExplicitLabel(`${forwarder}\n${unnamedCall}`, 'sleep-hours')).toBe(false);
+    expect(hasMatchingExplicitLabel(`${emptyForwarder}\n${namedCall}`, 'sleep-hours')).toBe(false);
+    // A different id on the same wrapper must not be swept up either.
+    expect(hasMatchingExplicitLabel(`${forwarder}\n${namedCall}`, 'other-id')).toBe(false);
   });
 
   it('meets the 44px touch-target minimum on Close buttons', () => {

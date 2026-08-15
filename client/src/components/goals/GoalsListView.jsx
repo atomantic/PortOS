@@ -341,6 +341,7 @@ export default function GoalsListView({ data, onRefresh, selectedGoalId }) {
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
               placeholder="Search goals..."
+              aria-label="Search goals"
               className="w-full bg-port-bg border border-port-border rounded-lg pl-8 pr-3 py-1.5 text-sm text-white"
             />
           </div>
@@ -352,6 +353,7 @@ export default function GoalsListView({ data, onRefresh, selectedGoalId }) {
               onChange={e => setQuickAdd(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleQuickAdd()}
               placeholder="Add goal..."
+              aria-label="Quick-add a goal"
               className="w-full bg-port-bg border border-port-border rounded-lg pl-8 pr-3 py-1.5 text-sm text-white placeholder-gray-500"
             />
           </div>
@@ -419,6 +421,7 @@ export default function GoalsListView({ data, onRefresh, selectedGoalId }) {
                 value={newGoal.title}
                 onChange={e => setNewGoal({ ...newGoal, title: e.target.value })}
                 placeholder="Goal title..."
+                aria-label="New goal title"
                 className="flex-1 bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white"
                 onKeyDown={e => e.key === 'Enter' && handleCreateGoal()}
                 autoFocus

@@ -308,6 +308,7 @@ export default function NotesTab() {
               onChange={e => setSearchQuery(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleSearch()}
               placeholder="Search notes..."
+              aria-label="Search notes"
               className="w-full min-h-[44px] bg-port-bg border border-port-border rounded pl-7 pr-14 py-1.5 text-sm text-white placeholder-gray-500"
             />
             {searchQuery && (
@@ -329,6 +330,7 @@ export default function NotesTab() {
                 onChange={e => setNewNotePath(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && handleCreateNote()}
                 placeholder="folder/note-name"
+                aria-label="New note path"
                 className="flex-1 min-w-0 min-h-[44px] bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white placeholder-gray-500"
                 autoFocus
               />
@@ -746,6 +748,7 @@ function VaultSetup({ detectedVaults, vaults, customPath, setCustomPath, adding,
             value={customPath}
             onChange={e => setCustomPath(e.target.value)}
             placeholder="/path/to/obsidian/vault"
+            aria-label="Custom vault path"
             className="flex-1 min-w-0 bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white placeholder-gray-500"
           />
           <FolderPicker

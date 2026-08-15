@@ -46,6 +46,7 @@ function BirthDateSection({ birthDate, onUpdate }) {
         <div className="flex items-center gap-3">
           <input
             type="date"
+            aria-label="Birth date"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             className="bg-port-bg border border-port-border rounded px-3 py-2 text-white font-mono text-lg focus:border-port-accent focus:outline-none"

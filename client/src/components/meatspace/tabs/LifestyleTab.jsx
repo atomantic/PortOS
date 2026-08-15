@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useId } from 'react';
 import { ClipboardList, Save } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
@@ -158,9 +158,10 @@ export default function LifestyleTab() {
           </FieldGroup>
 
           {/* Exercise */}
-          <FieldGroup label="Exercise (minutes/week)">
+          <FieldGroup label="Exercise (minutes/week)" htmlFor="lifestyle-exercise-minutes">
             <div className="flex items-center gap-3">
               <input
+                id="lifestyle-exercise-minutes"
                 type="range"
                 min="0"
                 max="600"
@@ -179,9 +180,10 @@ export default function LifestyleTab() {
           </FieldGroup>
 
           {/* Sleep */}
-          <FieldGroup label="Sleep (hours/night)">
+          <FieldGroup label="Sleep (hours/night)" htmlFor="lifestyle-sleep-hours">
             <div className="flex items-center gap-3">
               <input
+                id="lifestyle-sleep-hours"
                 type="range"
                 min="3"
                 max="12"
@@ -238,9 +240,10 @@ export default function LifestyleTab() {
           </FieldGroup>
 
           {/* BMI */}
-          <FieldGroup label="BMI (auto-calculated from body data when available)">
+          <FieldGroup label="BMI (auto-calculated from body data when available)" htmlFor="lifestyle-bmi">
             <div className="flex items-center gap-3">
               <input
+                id="lifestyle-bmi"
                 type="number"
                 min="10"
                 max="80"
@@ -304,10 +307,22 @@ export default function LifestyleTab() {
   );
 }
 
-function FieldGroup({ label, children }) {
+// `htmlFor` names a single control; without it the group holds a button set
+// with no labelable control, so the text becomes the group's accessible name
+// instead of an orphan <label> pointing at nothing.
+function FieldGroup({ label, htmlFor, children }) {
+  const labelId = useId();
+  if (!htmlFor) {
+    return (
+      <div role="group" aria-labelledby={labelId}>
+        <span id={labelId} className="block text-xs text-gray-500 uppercase mb-2">{label}</span>
+        {children}
+      </div>
+    );
+  }
   return (
     <div>
-      <label className="block text-xs text-gray-500 uppercase mb-2">{label}</label>
+      <label htmlFor={htmlFor} className="block text-xs text-gray-500 uppercase mb-2">{label}</label>
       {children}
     </div>
   );

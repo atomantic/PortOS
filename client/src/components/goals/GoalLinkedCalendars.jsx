@@ -39,6 +39,7 @@ export default function GoalLinkedCalendars({
             <select
               value={selectedCalendar}
               onChange={e => setSelectedCalendar(e.target.value)}
+              aria-label="Calendar to link"
               className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white"
             >
               <option value="">Link calendar...</option>
@@ -60,6 +61,7 @@ export default function GoalLinkedCalendars({
               value={calendarMatchPattern}
               onChange={e => setCalendarMatchPattern(e.target.value)}
               placeholder="Match pattern (optional)"
+              aria-label="Calendar event match pattern"
               className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white"
             />
           )}

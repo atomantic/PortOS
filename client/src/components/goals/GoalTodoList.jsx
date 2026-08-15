@@ -74,6 +74,7 @@ export default function GoalTodoList({
             onChange={e => setNewTodoTitle(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && handleAddTodo()}
             placeholder="Add todo..."
+            aria-label="New todo title"
             className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white"
           />
           <button
@@ -89,6 +90,7 @@ export default function GoalTodoList({
             <select
               value={newTodoPriority}
               onChange={e => setNewTodoPriority(e.target.value)}
+              aria-label="New todo priority"
               className="bg-port-bg border border-port-border rounded px-1.5 py-0.5 text-xs text-white"
             >
               <option value="low">Low</option>
@@ -100,6 +102,7 @@ export default function GoalTodoList({
               value={newTodoEstimate}
               onChange={e => setNewTodoEstimate(e.target.value)}
               placeholder="Est. min"
+              aria-label="New todo estimate in minutes"
               min="1"
               className="w-20 bg-port-bg border border-port-border rounded px-1.5 py-0.5 text-xs text-white"
             />

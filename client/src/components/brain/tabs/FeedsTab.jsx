@@ -146,6 +146,7 @@ export default function FeedsTab({ onRefresh }) {
             value={inputUrl}
             onChange={(e) => setInputUrl(e.target.value)}
             placeholder="Paste an RSS or Atom feed URL..."
+            aria-label="RSS or Atom feed URL"
             className="flex-1 px-4 py-3 bg-port-card border border-port-border rounded-lg text-white placeholder-gray-500 focus:outline-hidden focus:border-port-accent"
             disabled={adding}
           />

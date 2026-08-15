@@ -352,6 +352,7 @@ export default function AlcoholTab() {
                       value={buttonForm.name}
                       onChange={e => setButtonForm(f => ({ ...f, name: e.target.value }))}
                       placeholder="Name"
+                      aria-label="Drink button name"
                       className="flex-1 px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-xs text-white"
                     />
                     <input
@@ -361,6 +362,7 @@ export default function AlcoholTab() {
                       value={buttonForm.oz}
                       onChange={e => setButtonForm(f => ({ ...f, oz: e.target.value }))}
                       placeholder={buttonVolumeUnit === 'oz' ? 'Oz' : 'mL'}
+                      aria-label={`Drink button volume in ${buttonVolumeUnit}`}
                       className="w-16 px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-xs text-white text-right"
                     />
                     <button
@@ -378,6 +380,7 @@ export default function AlcoholTab() {
                       value={buttonForm.abv}
                       onChange={e => setButtonForm(f => ({ ...f, abv: e.target.value }))}
                       placeholder="ABV%"
+                      aria-label="Drink button ABV percent"
                       className="w-16 px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-xs text-white text-right"
                     />
                     <button onClick={saveEditButton} className="p-1.5 text-port-success hover:text-port-success/80" title="Save" aria-label="Save">
@@ -420,6 +423,7 @@ export default function AlcoholTab() {
                   value={buttonForm.name}
                   onChange={e => setButtonForm(f => ({ ...f, name: e.target.value }))}
                   placeholder="New button name"
+                  aria-label="New drink button name"
                   className="flex-1 px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-xs text-white placeholder-gray-600"
                 />
                 <input
@@ -429,6 +433,7 @@ export default function AlcoholTab() {
                   value={buttonForm.oz}
                   onChange={e => setButtonForm(f => ({ ...f, oz: e.target.value }))}
                   placeholder={buttonVolumeUnit === 'oz' ? 'Oz' : 'mL'}
+                  aria-label={`New drink button volume in ${buttonVolumeUnit}`}
                   className="w-16 px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-xs text-white text-right placeholder-gray-600"
                 />
                 <button
@@ -446,6 +451,7 @@ export default function AlcoholTab() {
                   value={buttonForm.abv}
                   onChange={e => setButtonForm(f => ({ ...f, abv: e.target.value }))}
                   placeholder="ABV%"
+                  aria-label="New drink button ABV percent"
                   className="w-16 px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-xs text-white text-right placeholder-gray-600"
                 />
                 <button
@@ -474,7 +480,7 @@ export default function AlcoholTab() {
           </FormField>
           <div>
             <div className="flex items-center gap-1.5 mb-1">
-              <label className="text-xs text-gray-500">Volume</label>
+              <label htmlFor="alcohol-volume" className="text-xs text-gray-500">Volume</label>
               <button
                 type="button"
                 onClick={() => setVolumeUnit(u => u === 'oz' ? 'ml' : 'oz')}
@@ -484,6 +490,7 @@ export default function AlcoholTab() {
               </button>
             </div>
             <input
+              id="alcohol-volume"
               type="number"
               step="0.1"
               min="0.1"
@@ -575,6 +582,7 @@ export default function AlcoholTab() {
                               type="date"
                               value={editForm.date}
                               onChange={e => setEditForm(f => ({ ...f, date: e.target.value }))}
+                              aria-label="Entry date"
                               className="bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white"
                             />
                           ) : idx === 0 ? (
@@ -598,6 +606,7 @@ export default function AlcoholTab() {
                                 type="text"
                                 value={editForm.name}
                                 onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))}
+                                aria-label="Entry name"
                                 className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-xs text-white"
                               />
                             </td>
@@ -609,6 +618,7 @@ export default function AlcoholTab() {
                                   min="0.1"
                                   value={editForm.oz}
                                   onChange={e => setEditForm(f => ({ ...f, oz: e.target.value }))}
+                                  aria-label={`Entry volume in ${editVolumeUnit}`}
                                   className="w-16 px-2 py-1 bg-port-bg border border-port-border rounded text-xs text-white text-right"
                                 />
                                 <button
@@ -628,6 +638,7 @@ export default function AlcoholTab() {
                                 max="100"
                                 value={editForm.abv}
                                 onChange={e => setEditForm(f => ({ ...f, abv: e.target.value }))}
+                                aria-label="Entry ABV percent"
                                 className="w-16 px-2 py-1 bg-port-bg border border-port-border rounded text-xs text-white text-right"
                               />
                             </td>
@@ -638,6 +649,7 @@ export default function AlcoholTab() {
                                 max="100"
                                 value={editForm.count}
                                 onChange={e => setEditForm(f => ({ ...f, count: e.target.value }))}
+                                aria-label="Entry count"
                                 className="w-14 px-2 py-1 bg-port-bg border border-port-border rounded text-xs text-white text-right"
                               />
                             </td>

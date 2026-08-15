@@ -35,18 +35,22 @@ export default function GoalEditForm({
     .filter(Boolean);
   return (
     <div className="space-y-3">
-      <input
-        type="text"
-        value={form.title}
-        onChange={e => setForm({ ...form, title: e.target.value })}
-        className="w-full bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white"
-      />
-      <textarea
-        value={form.description}
-        onChange={e => setForm({ ...form, description: e.target.value })}
-        rows={3}
-        className="w-full bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white resize-none"
-      />
+      <FormField label="Title" labelClassName="text-xs text-gray-500">
+        <input
+          type="text"
+          value={form.title}
+          onChange={e => setForm({ ...form, title: e.target.value })}
+          className="w-full bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white mt-1"
+        />
+      </FormField>
+      <FormField label="Description" labelClassName="text-xs text-gray-500">
+        <textarea
+          value={form.description}
+          onChange={e => setForm({ ...form, description: e.target.value })}
+          rows={3}
+          className="w-full bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white resize-none mt-1"
+        />
+      </FormField>
       <FormField label="Horizon" labelClassName="text-xs text-gray-500">
         <select
           value={form.horizon}
@@ -123,8 +127,9 @@ export default function GoalEditForm({
           </div>
           <div className="flex gap-2">
             <div className="flex-1">
-              <span className="text-[10px] text-gray-600">Time slot</span>
+              <label htmlFor="goal-time-slot" className="text-[10px] text-gray-600">Time slot</label>
               <select
+                id="goal-time-slot"
                 value={form.timeBlockConfig?.timeSlot || 'morning'}
                 onChange={e => setForm({ ...form, timeBlockConfig: { ...(form.timeBlockConfig || { preferredDays: ['mon','wed','fri'], sessionDurationMinutes: 60 }), timeSlot: e.target.value } })}
                 className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white mt-0.5"
@@ -135,8 +140,9 @@ export default function GoalEditForm({
               </select>
             </div>
             <div className="w-20">
-              <span className="text-[10px] text-gray-600">Duration</span>
+              <label htmlFor="goal-session-duration" className="text-[10px] text-gray-600">Duration</label>
               <input
+                id="goal-session-duration"
                 type="number"
                 min="15"
                 max="480"
@@ -177,6 +183,7 @@ export default function GoalEditForm({
             onChange={e => setTagInput(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), addTag())}
             placeholder="Add tag..."
+            aria-label="Add tag"
             className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white"
           />
           <button

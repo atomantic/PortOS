@@ -486,6 +486,7 @@ export default function GoalsTreeView({ data, onRefresh }) {
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
               placeholder="Search..."
+              aria-label="Search goals"
               className="bg-port-card/90 backdrop-blur border border-port-border rounded-lg pl-7 pr-3 py-1.5 text-sm text-white w-32 sm:w-48"
             />
           </div>
@@ -564,6 +565,7 @@ export default function GoalsTreeView({ data, onRefresh }) {
               value={newGoal.title}
               onChange={e => setNewGoal({ ...newGoal, title: e.target.value })}
               placeholder="Goal title..."
+              aria-label="New goal title"
               className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white"
               onKeyDown={e => e.key === 'Enter' && handleCreateGoal()}
             />
@@ -571,6 +573,7 @@ export default function GoalsTreeView({ data, onRefresh }) {
               value={newGoal.description}
               onChange={e => setNewGoal({ ...newGoal, description: e.target.value })}
               placeholder="Description..."
+              aria-label="New goal description"
               rows={2}
               className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white resize-none"
             />
@@ -578,6 +581,7 @@ export default function GoalsTreeView({ data, onRefresh }) {
               <select
                 value={newGoal.horizon}
                 onChange={e => setNewGoal({ ...newGoal, horizon: e.target.value })}
+                aria-label="New goal horizon"
                 className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"
               >
                 {HORIZON_OPTIONS.map(h => <option key={h.value} value={h.value}>{h.label}</option>)}
@@ -585,6 +589,7 @@ export default function GoalsTreeView({ data, onRefresh }) {
               <select
                 value={newGoal.category}
                 onChange={e => setNewGoal({ ...newGoal, category: e.target.value })}
+                aria-label="New goal category"
                 className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"
               >
                 {Object.entries(CATEGORY_CONFIG).map(([k, v]) => (

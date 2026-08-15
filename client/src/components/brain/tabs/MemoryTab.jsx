@@ -13,6 +13,7 @@ import {Plus,
   MessageSquareText} from 'lucide-react';
 import toast from '../../ui/Toast';
 import Banner from '../../ui/Banner';
+import { FormField } from '../../ui/FormField';
 import ConversationViewer from '../ConversationViewer';
 
 import {
@@ -315,170 +316,208 @@ export default function MemoryTab({ onRefresh }) {
       case 'people':
         return (
           <div className="space-y-3">
-            <input
-              type="text"
-              placeholder="Name"
-              value={form.name || ''}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-            />
-            <textarea
-              placeholder="Context (who they are, how you know them)"
-              value={form.context || ''}
-              onChange={(e) => setForm({ ...form, context: e.target.value })}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-              rows={2}
-            />
-            <input
-              type="text"
-              placeholder="Follow-ups (comma separated)"
-              value={(form.followUps || []).join(', ')}
-              onChange={(e) => setForm({ ...form, followUps: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-            />
+            <FormField label="Name" labelClassName="block text-xs text-gray-400 mb-1">
+              <input
+                type="text"
+                placeholder="Name"
+                value={form.name || ''}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+              />
+            </FormField>
+            <FormField label="Context" labelClassName="block text-xs text-gray-400 mb-1">
+              <textarea
+                placeholder="Context (who they are, how you know them)"
+                value={form.context || ''}
+                onChange={(e) => setForm({ ...form, context: e.target.value })}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+                rows={2}
+              />
+            </FormField>
+            <FormField label="Follow-ups" labelClassName="block text-xs text-gray-400 mb-1">
+              <input
+                type="text"
+                placeholder="Follow-ups (comma separated)"
+                value={(form.followUps || []).join(', ')}
+                onChange={(e) => setForm({ ...form, followUps: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+              />
+            </FormField>
           </div>
         );
 
       case 'projects':
         return (
           <div className="space-y-3">
-            <input
-              type="text"
-              placeholder="Project name"
-              value={form.name || ''}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-            />
-            <select
-              value={form.status || 'active'}
-              onChange={(e) => setForm({ ...form, status: e.target.value })}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-            >
-              <option value="active">Active</option>
-              <option value="waiting">Waiting</option>
-              <option value="blocked">Blocked</option>
-              <option value="someday">Someday</option>
-              <option value="done">Done</option>
-            </select>
-            <input
-              type="text"
-              placeholder="Next action (concrete, actionable step)"
-              value={form.nextAction || ''}
-              onChange={(e) => setForm({ ...form, nextAction: e.target.value })}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-            />
-            <textarea
-              placeholder="Notes"
-              value={form.notes || ''}
-              onChange={(e) => setForm({ ...form, notes: e.target.value })}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-              rows={2}
-            />
+            <FormField label="Project name" labelClassName="block text-xs text-gray-400 mb-1">
+              <input
+                type="text"
+                placeholder="Project name"
+                value={form.name || ''}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+              />
+            </FormField>
+            <FormField label="Status" labelClassName="block text-xs text-gray-400 mb-1">
+              <select
+                value={form.status || 'active'}
+                onChange={(e) => setForm({ ...form, status: e.target.value })}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+              >
+                <option value="active">Active</option>
+                <option value="waiting">Waiting</option>
+                <option value="blocked">Blocked</option>
+                <option value="someday">Someday</option>
+                <option value="done">Done</option>
+              </select>
+            </FormField>
+            <FormField label="Next action" labelClassName="block text-xs text-gray-400 mb-1">
+              <input
+                type="text"
+                placeholder="Next action (concrete, actionable step)"
+                value={form.nextAction || ''}
+                onChange={(e) => setForm({ ...form, nextAction: e.target.value })}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+              />
+            </FormField>
+            <FormField label="Notes" labelClassName="block text-xs text-gray-400 mb-1">
+              <textarea
+                placeholder="Notes"
+                value={form.notes || ''}
+                onChange={(e) => setForm({ ...form, notes: e.target.value })}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+                rows={2}
+              />
+            </FormField>
           </div>
         );
 
       case 'ideas':
         return (
           <div className="space-y-3">
-            <input
-              type="text"
-              placeholder="Title"
-              value={form.title || ''}
-              onChange={(e) => setForm({ ...form, title: e.target.value })}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-            />
-            <select
-              value={form.status || 'active'}
-              onChange={(e) => setForm({ ...form, status: e.target.value })}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-            >
-              <option value="active">Active</option>
-              <option value="done">Done</option>
-            </select>
-            <input
-              type="text"
-              placeholder="One-liner (core insight)"
-              value={form.oneLiner || ''}
-              onChange={(e) => setForm({ ...form, oneLiner: e.target.value })}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-            />
-            <textarea
-              placeholder="Notes"
-              value={form.notes || ''}
-              onChange={(e) => setForm({ ...form, notes: e.target.value })}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-              rows={2}
-            />
+            <FormField label="Title" labelClassName="block text-xs text-gray-400 mb-1">
+              <input
+                type="text"
+                placeholder="Title"
+                value={form.title || ''}
+                onChange={(e) => setForm({ ...form, title: e.target.value })}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+              />
+            </FormField>
+            <FormField label="Status" labelClassName="block text-xs text-gray-400 mb-1">
+              <select
+                value={form.status || 'active'}
+                onChange={(e) => setForm({ ...form, status: e.target.value })}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+              >
+                <option value="active">Active</option>
+                <option value="done">Done</option>
+              </select>
+            </FormField>
+            <FormField label="One-liner" labelClassName="block text-xs text-gray-400 mb-1">
+              <input
+                type="text"
+                placeholder="One-liner (core insight)"
+                value={form.oneLiner || ''}
+                onChange={(e) => setForm({ ...form, oneLiner: e.target.value })}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+              />
+            </FormField>
+            <FormField label="Notes" labelClassName="block text-xs text-gray-400 mb-1">
+              <textarea
+                placeholder="Notes"
+                value={form.notes || ''}
+                onChange={(e) => setForm({ ...form, notes: e.target.value })}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+                rows={2}
+              />
+            </FormField>
           </div>
         );
 
       case 'admin':
         return (
           <div className="space-y-3">
-            <input
-              type="text"
-              placeholder="Title"
-              value={form.title || ''}
-              onChange={(e) => setForm({ ...form, title: e.target.value })}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-            />
-            <select
-              value={form.status || 'open'}
-              onChange={(e) => setForm({ ...form, status: e.target.value })}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-            >
-              <option value="open">Open</option>
-              <option value="waiting">Waiting</option>
-              <option value="done">Done</option>
-            </select>
-            <input
-              type="date"
-              placeholder="Due date"
-              value={form.dueDate ? form.dueDate.split('T')[0] : ''}
-              onChange={(e) => setForm({ ...form, dueDate: e.target.value ? new Date(e.target.value).toISOString() : null })}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-            />
-            <input
-              type="text"
-              placeholder="Next action"
-              value={form.nextAction || ''}
-              onChange={(e) => setForm({ ...form, nextAction: e.target.value })}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-            />
+            <FormField label="Title" labelClassName="block text-xs text-gray-400 mb-1">
+              <input
+                type="text"
+                placeholder="Title"
+                value={form.title || ''}
+                onChange={(e) => setForm({ ...form, title: e.target.value })}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+              />
+            </FormField>
+            <FormField label="Status" labelClassName="block text-xs text-gray-400 mb-1">
+              <select
+                value={form.status || 'open'}
+                onChange={(e) => setForm({ ...form, status: e.target.value })}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+              >
+                <option value="open">Open</option>
+                <option value="waiting">Waiting</option>
+                <option value="done">Done</option>
+              </select>
+            </FormField>
+            <FormField label="Due date" labelClassName="block text-xs text-gray-400 mb-1">
+              <input
+                type="date"
+                placeholder="Due date"
+                value={form.dueDate ? form.dueDate.split('T')[0] : ''}
+                onChange={(e) => setForm({ ...form, dueDate: e.target.value ? new Date(e.target.value).toISOString() : null })}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+              />
+            </FormField>
+            <FormField label="Next action" labelClassName="block text-xs text-gray-400 mb-1">
+              <input
+                type="text"
+                placeholder="Next action"
+                value={form.nextAction || ''}
+                onChange={(e) => setForm({ ...form, nextAction: e.target.value })}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+              />
+            </FormField>
           </div>
         );
 
       case 'memories':
         return (
           <div className="space-y-3">
-            <input
-              type="text"
-              placeholder="Title (e.g. 'DnD session tonight')"
-              value={form.title || ''}
-              onChange={(e) => setForm({ ...form, title: e.target.value })}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-            />
-            <textarea
-              placeholder="What happened? Write your thoughts..."
-              value={form.content || ''}
-              onChange={(e) => setForm({ ...form, content: e.target.value })}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-              rows={3}
-            />
-            <input
-              type="text"
-              placeholder="Mood (e.g. happy, reflective, tired)"
-              value={form.mood || ''}
-              onChange={(e) => setForm({ ...form, mood: e.target.value })}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-            />
-            <input
-              type="text"
-              placeholder="Tags (comma separated)"
-              value={form.tagInput ?? (form.tags || []).join(', ')}
-              onChange={(e) => setForm({ ...form, tagInput: e.target.value })}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-            />
+            <FormField label="Title" labelClassName="block text-xs text-gray-400 mb-1">
+              <input
+                type="text"
+                placeholder="Title (e.g. 'DnD session tonight')"
+                value={form.title || ''}
+                onChange={(e) => setForm({ ...form, title: e.target.value })}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+              />
+            </FormField>
+            <FormField label="What happened" labelClassName="block text-xs text-gray-400 mb-1">
+              <textarea
+                placeholder="What happened? Write your thoughts..."
+                value={form.content || ''}
+                onChange={(e) => setForm({ ...form, content: e.target.value })}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+                rows={3}
+              />
+            </FormField>
+            <FormField label="Mood" labelClassName="block text-xs text-gray-400 mb-1">
+              <input
+                type="text"
+                placeholder="Mood (e.g. happy, reflective, tired)"
+                value={form.mood || ''}
+                onChange={(e) => setForm({ ...form, mood: e.target.value })}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+              />
+            </FormField>
+            <FormField label="Tags" labelClassName="block text-xs text-gray-400 mb-1">
+              <input
+                type="text"
+                placeholder="Tags (comma separated)"
+                value={form.tagInput ?? (form.tags || []).join(', ')}
+                onChange={(e) => setForm({ ...form, tagInput: e.target.value })}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+              />
+            </FormField>
           </div>
         );
     }
@@ -737,6 +776,7 @@ export default function MemoryTab({ onRefresh }) {
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
+            aria-label="Filter by status"
             className="px-3 py-2 bg-port-card border border-port-border rounded-lg text-sm text-white"
           >
             <option value="">All statuses</option>
@@ -770,6 +810,7 @@ export default function MemoryTab({ onRefresh }) {
         <input
           type="text"
           placeholder={`Search ${DESTINATIONS[activeType]?.label?.toLowerCase() || 'records'}...`}
+          aria-label={`Search ${DESTINATIONS[activeType]?.label?.toLowerCase() || 'records'}`}
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           className="w-full pl-9 pr-3 py-2 bg-port-card border border-port-border rounded-lg text-sm text-white placeholder-gray-500"

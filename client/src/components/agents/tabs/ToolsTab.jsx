@@ -583,6 +583,7 @@ export default function ToolsTab({ agentId, agent }) {
                 value={postTitle}
                 onChange={(e) => setPostTitle(e.target.value)}
                 placeholder="Post title..."
+            aria-label="Post title"
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white mb-2"
               />
               <textarea

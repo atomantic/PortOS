@@ -862,6 +862,7 @@ export default function GenomeTab() {
             onChange={(e) => setSearchRsid(e.target.value.toLowerCase().trim())}
             onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
             placeholder="rs1801133"
+            aria-label="Search SNP by rsID"
             className="flex-1 max-w-xs px-3 py-2 bg-port-card border border-port-border rounded text-sm text-white placeholder-gray-600 focus:outline-hidden focus:border-port-accent font-mono"
           />
           <button

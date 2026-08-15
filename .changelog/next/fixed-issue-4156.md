@@ -1,1 +1,2 @@
 - Screen readers now announce the inline form controls on the Character Sheet, GitHub, Sharing, Browser, Mood Board and Video Timeline Editor pages, which previously had no accessible name
+- Screen readers now announce 80 more form controls that previously had no accessible name, across the Goals views, the Brain tabs (Daily Log, Feeds, Inbox, Links, Memory, Notes), the MeatSpace tabs (Age, Alcohol, Genome, Lifestyle, Nicotine) and the Agent World/Tools tabs — visible labels where the surface had room, `aria-label` in compact toolbars and table rows

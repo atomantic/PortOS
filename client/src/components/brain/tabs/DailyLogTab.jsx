@@ -931,6 +931,7 @@ export default function DailyLogTab() {
                 value={quickAppend}
                 onChange={(e) => setQuickAppend(e.target.value)}
                 placeholder="Quick append — adds a new paragraph…"
+                aria-label="Quick append a paragraph to the daily log"
                 className="flex-1 min-w-0 bg-port-bg border border-port-border rounded px-3 min-h-[40px] text-sm text-white placeholder-gray-500"
               />
               <button

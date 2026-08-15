@@ -370,6 +370,7 @@ export default function LinksTab({ onRefresh }) {
             value={inputUrl}
             onChange={(e) => setInputUrl(e.target.value)}
             placeholder="Paste a URL (GitHub repos auto-clone)..."
+            aria-label="Link URL to save"
             className="flex-1 px-4 py-3 bg-port-card border border-port-border rounded-lg text-white placeholder-gray-500 focus:outline-hidden focus:border-port-accent"
             disabled={sending}
           />
@@ -468,6 +469,7 @@ export default function LinksTab({ onRefresh }) {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search links by title, URL, description, or tag..."
+          aria-label="Search links"
           className="w-full pl-9 pr-9 py-2 bg-port-card border border-port-border rounded-lg text-white text-sm placeholder-gray-500 focus:outline-hidden focus:border-port-accent"
         />
         {search && (
@@ -551,6 +553,7 @@ export default function LinksTab({ onRefresh }) {
                       onChange={(e) => setEditForm({ ...editForm, tags: e.target.value })}
                       className="flex-1 px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm"
                       placeholder="Tags (comma-separated)"
+                      aria-label="Link tags, comma-separated"
                     />
                   </div>
                   <div className="flex gap-2">

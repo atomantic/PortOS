@@ -82,6 +82,7 @@ export default function GoalMilestones({
           onChange={e => setNewMilestone({ ...newMilestone, title: e.target.value })}
           onKeyDown={e => e.key === 'Enter' && handleAddMilestone()}
           placeholder="Add milestone..."
+          aria-label="New milestone title"
           className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white"
         />
         <button

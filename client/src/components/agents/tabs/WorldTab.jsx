@@ -403,29 +403,29 @@ export default function WorldTab({ agentId }) {
       case 'mw_explore':
         return (
           <div className="grid grid-cols-2 gap-2">
-            <input type="number" placeholder="X" value={newActionParams.x || ''} onChange={e => setNewActionParams(p => ({ ...p, x: e.target.value }))} className="px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm" />
-            <input type="number" placeholder="Y" value={newActionParams.y || ''} onChange={e => setNewActionParams(p => ({ ...p, y: e.target.value }))} className="px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm" />
-            <input type="text" placeholder="Thinking (optional)" value={newActionParams.thinking || ''} onChange={e => setNewActionParams(p => ({ ...p, thinking: e.target.value }))} className="col-span-2 px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm" />
+            <input type="number" placeholder="X" aria-label="Queued action X coordinate" value={newActionParams.x || ''} onChange={e => setNewActionParams(p => ({ ...p, x: e.target.value }))} className="px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm" />
+            <input type="number" placeholder="Y" aria-label="Queued action Y coordinate" value={newActionParams.y || ''} onChange={e => setNewActionParams(p => ({ ...p, y: e.target.value }))} className="px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm" />
+            <input type="text" placeholder="Thinking (optional)" aria-label="Queued action thinking (optional)" value={newActionParams.thinking || ''} onChange={e => setNewActionParams(p => ({ ...p, thinking: e.target.value }))} className="col-span-2 px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm" />
           </div>
         );
       case 'mw_think':
         return (
-          <input type="text" placeholder="Thought text" value={newActionParams.thought || ''} onChange={e => setNewActionParams(p => ({ ...p, thought: e.target.value }))} className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm" />
+          <input type="text" placeholder="Thought text" aria-label="Queued thought text" value={newActionParams.thought || ''} onChange={e => setNewActionParams(p => ({ ...p, thought: e.target.value }))} className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm" />
         );
       case 'mw_build':
         return (
           <div className="grid grid-cols-3 gap-2">
-            <input type="number" placeholder="X" value={newActionParams.x || ''} onChange={e => setNewActionParams(p => ({ ...p, x: e.target.value }))} className="px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm" />
-            <input type="number" placeholder="Y" value={newActionParams.y || ''} onChange={e => setNewActionParams(p => ({ ...p, y: e.target.value }))} className="px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm" />
-            <input type="number" placeholder="Z" value={newActionParams.z || ''} onChange={e => setNewActionParams(p => ({ ...p, z: e.target.value }))} className="px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm" />
-            <select value={newActionParams.type || 'stone'} onChange={e => setNewActionParams(p => ({ ...p, type: e.target.value }))} className="px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm">
+            <input type="number" placeholder="X" aria-label="Queued action X coordinate" value={newActionParams.x || ''} onChange={e => setNewActionParams(p => ({ ...p, x: e.target.value }))} className="px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm" />
+            <input type="number" placeholder="Y" aria-label="Queued action Y coordinate" value={newActionParams.y || ''} onChange={e => setNewActionParams(p => ({ ...p, y: e.target.value }))} className="px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm" />
+            <input type="number" placeholder="Z" aria-label="Queued action Z coordinate" value={newActionParams.z || ''} onChange={e => setNewActionParams(p => ({ ...p, z: e.target.value }))} className="px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm" />
+            <select aria-label="Queued build block type" value={newActionParams.type || 'stone'} onChange={e => setNewActionParams(p => ({ ...p, type: e.target.value }))} className="px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm">
               <option value="wood">Wood</option>
               <option value="stone">Stone</option>
               <option value="dirt">Dirt</option>
               <option value="grass">Grass</option>
               <option value="leaves">Leaves</option>
             </select>
-            <select value={newActionParams.action || 'place'} onChange={e => setNewActionParams(p => ({ ...p, action: e.target.value }))} className="px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm">
+            <select aria-label="Queued build action" value={newActionParams.action || 'place'} onChange={e => setNewActionParams(p => ({ ...p, action: e.target.value }))} className="px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm">
               <option value="place">Place</option>
               <option value="remove">Remove</option>
             </select>
@@ -434,8 +434,8 @@ export default function WorldTab({ agentId }) {
       case 'mw_say':
         return (
           <div className="space-y-2">
-            <input type="text" placeholder="Message" value={newActionParams.message || ''} onChange={e => setNewActionParams(p => ({ ...p, message: e.target.value }))} className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm" />
-            <input type="text" placeholder="To Agent ID (optional)" value={newActionParams.sayTo || ''} onChange={e => setNewActionParams(p => ({ ...p, sayTo: e.target.value }))} className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm" />
+            <input type="text" placeholder="Message" aria-label="Queued message" value={newActionParams.message || ''} onChange={e => setNewActionParams(p => ({ ...p, message: e.target.value }))} className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm" />
+            <input type="text" placeholder="To Agent ID (optional)" aria-label="Queued message recipient agent ID (optional)" value={newActionParams.sayTo || ''} onChange={e => setNewActionParams(p => ({ ...p, sayTo: e.target.value }))} className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm" />
           </div>
         );
       default:
@@ -833,6 +833,7 @@ export default function WorldTab({ agentId }) {
               value={moveThinking}
               onChange={(e) => setMoveThinking(e.target.value)}
               placeholder="Thinking... (optional)"
+              aria-label="Move thinking (optional)"
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white mb-3"
             />
             <div className="flex gap-2">
@@ -864,6 +865,7 @@ export default function WorldTab({ agentId }) {
               value={thought}
               onChange={(e) => setThought(e.target.value)}
               placeholder="What is this agent thinking?"
+              aria-label="Thought text"
               maxLength={500}
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white mb-3"
             />
@@ -957,6 +959,7 @@ export default function WorldTab({ agentId }) {
               value={sayMessage}
               onChange={(e) => setSayMessage(e.target.value)}
               placeholder="Message to nearby agents..."
+              aria-label="Message to nearby agents"
               maxLength={500}
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white mb-2"
             />
@@ -965,6 +968,7 @@ export default function WorldTab({ agentId }) {
               value={sayTo}
               onChange={(e) => setSayTo(e.target.value)}
               placeholder="To Agent ID (optional — leave blank for broadcast)"
+              aria-label="Recipient agent ID (optional — leave blank for broadcast)"
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white mb-3"
             />
             <button
