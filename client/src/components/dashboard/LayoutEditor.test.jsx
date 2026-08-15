@@ -22,13 +22,13 @@ const LAYOUT = {
   ],
 };
 
-async function renderEditor() {
+async function renderEditor(layout = LAYOUT) {
   const onSave = vi.fn().mockResolvedValue(undefined);
   const onDuplicate = vi.fn().mockResolvedValue(undefined);
   render(
     <LayoutEditor
-      layouts={[LAYOUT]}
-      activeLayoutId={LAYOUT.id}
+      layouts={[layout]}
+      activeLayoutId={layout.id}
       limits={null}
       onClose={vi.fn()}
       onSave={onSave}
@@ -40,9 +40,12 @@ async function renderEditor() {
   return { onSave, onDuplicate };
 }
 
+// Queries go through text/label rather than `getByRole(…, { name })`: the
+// editor renders a button per registered widget, and computing an accessible
+// name for every one of them on each query costs seconds under load.
 // The widget rows are the only <li>s once a layout has widgets.
-const widgetRows = () => screen.getAllByRole('listitem');
-const clickButton = (name) => fireEvent.click(screen.getByRole('button', { name }));
+const widgetRows = () => [...document.querySelectorAll('li')];
+const clickButton = (label) => fireEvent.click(screen.getByText(label).closest('button'));
 const moveUp = (idx) => fireEvent.click(within(widgetRows()[idx]).getByLabelText('Move up'));
 const moveDown = (idx) => fireEvent.click(within(widgetRows()[idx]).getByLabelText('Move down'));
 // Two settles: one to run the click's own async handler, one to let the
@@ -51,7 +54,7 @@ const settle = async (fire) => {
   await act(async () => { fire(); });
   await act(async () => {});
 };
-const save = () => settle(() => clickButton(/^Save$/));
+const save = () => settle(() => clickButton('Save'));
 
 describe('LayoutEditor reorder signal', () => {
   beforeEach(() => { vi.clearAllMocks(); });
@@ -98,7 +101,7 @@ describe('LayoutEditor reorder signal', () => {
   it('does not flag a widget toggle as a reorder', async () => {
     const { onSave } = await renderEditor();
     fireEvent.click(within(widgetRows()[1]).getByLabelText('Remove widget'));
-    clickButton(/Death Clock/);
+    clickButton('Death Clock');
     await save();
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
       widgets: ['quick-task', 'backup', 'death-clock'],
@@ -110,11 +113,37 @@ describe('LayoutEditor reorder signal', () => {
   // would otherwise auto-place it at the bottom, ignoring where it was put.
   it('flags a widget that was added and then moved up', async () => {
     const { onSave } = await renderEditor();
-    clickButton(/Death Clock/);
+    clickButton('Death Clock');
     moveUp(3);
     await save();
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
       widgets: ['quick-task', 'apps', 'death-clock', 'backup'],
+      reordered: true,
+    }));
+  });
+
+  it('flags a swap between two widgets added in the same session', async () => {
+    const { onSave } = await renderEditor();
+    clickButton('Death Clock');
+    clickButton('Review Hub');
+    moveUp(4);
+    await save();
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      widgets: [...WIDGET_IDS, 'review-hub', 'death-clock'],
+      reordered: true,
+    }));
+  });
+
+  // A layout with nothing stored has no order to compare against — the
+  // baseline has to come from the order the widgets were added in.
+  it('flags a reorder in a layout that started empty', async () => {
+    const { onSave } = await renderEditor({ id: 'blank', name: 'Blank', widgets: [], grid: [] });
+    clickButton('Death Clock');
+    clickButton('Review Hub');
+    moveUp(1);
+    await save();
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      widgets: ['review-hub', 'death-clock'],
       reordered: true,
     }));
   });
@@ -133,8 +162,8 @@ describe('LayoutEditor reorder signal', () => {
   it('carries the reorder signal through "Save as new…"', async () => {
     const { onDuplicate } = await renderEditor();
     moveUp(2);
-    clickButton(/Save as new/);
-    await settle(() => clickButton(/^Create$/));
+    clickButton(/^Save as new/);
+    await settle(() => clickButton('Create'));
     expect(onDuplicate).toHaveBeenCalledWith(expect.objectContaining({
       widgets: ['quick-task', 'backup', 'apps'],
       reordered: true,

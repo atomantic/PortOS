@@ -30,6 +30,14 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
   const [dupName, setDupName] = useState('');
   const [pendingSwitchId, setPendingSwitchId] = useState(null);
   const closeRef = useRef(null);
+  // The order this draft would have if the user had never pressed Move: the
+  // stored order, with `add`'s appends and `remove`'s deletions applied but
+  // `move` deliberately left out. Comparing it against `widgets` at save time
+  // is what tells the dashboard whether the ORDER is part of this edit — see
+  // isReordered below. It can't be derived from `widgets` after the fact,
+  // because nothing in the list records which widgets were added in this
+  // session or in what order. A ref, not state: no render depends on it.
+  const unmovedOrder = useRef(editing?.widgets ?? []);
 
   useScrollLock(true);
 
@@ -48,6 +56,7 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
     if (!cur) return;
     if (dirty) return;
     setWidgets(cur.widgets);
+    unmovedOrder.current = cur.widgets;
     setName(cur.name);
     setActivateWindow(cur.activateWindow ?? null);
     setMode('idle');
@@ -108,24 +117,15 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
   // The dashboard renders from the layout's `grid`, not from this list, so a
   // save has to say out loud when the widget order IS the edit — otherwise the
   // grid keeps its old reading order and Move up/down looks inert (#4132).
-  // Derived rather than a sticky flag so moving a widget up and back down again
-  // nets out to "not a reorder". `remove` filters and `add` appends, so the
-  // list the draft WOULD have without any `move` is reconstructible exactly:
-  // the surviving stored widgets in their stored order, then the newly added
-  // ones in the order they were added. Anything else is a reorder — including
-  // moving a widget that was added in this same editing session.
-  const isReordered = () => {
-    const stored = editing?.widgets ?? [];
-    const storedIds = new Set(stored);
-    const unmoved = [
-      ...stored.filter((id) => widgets.includes(id)),
-      ...widgets.filter((id) => !storedIds.has(id)),
-    ];
-    return widgets.length !== unmoved.length || widgets.some((id, i) => id !== unmoved[i]);
-  };
+  // Both lists always hold the same widgets, so a positional compare is exact.
+  // Because only `move` can make them differ, a move up followed by a move
+  // back down correctly nets out to "not a reorder", and a widget added in
+  // this session and then moved is caught like any other.
+  const isReordered = () => widgets.some((id, i) => id !== unmovedOrder.current[i]);
 
   const remove = (id) => {
     setWidgets((prev) => prev.filter((w) => w !== id));
+    unmovedOrder.current = unmovedOrder.current.filter((w) => w !== id);
     setDirty(true);
   };
 
@@ -138,6 +138,7 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
       return;
     }
     setWidgets([...widgets, id]);
+    unmovedOrder.current = [...unmovedOrder.current, id];
     setDirty(true);
   };
 
