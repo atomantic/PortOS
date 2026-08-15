@@ -594,19 +594,21 @@ function localLabelWrapperNames(src) {
   const re = /function\s+([A-Z][\w]*)\s*\(/g;
   let match;
   while ((match = re.exec(src))) {
-    let depth = 1;
-    let cursor = match.index + match[0].length;
-    for (; cursor < src.length && depth > 0; cursor++) {
-      if (src[cursor] === '(') depth++;
-      else if (src[cursor] === ')') depth--;
-    }
-    const bodyStart = src.indexOf('{', cursor);
+    // Skip the parameter list with the string-aware scanner — a default value
+    // like `{ label = ')' }` would close the parens early on a naive count and
+    // point `bodyStart` at the destructuring instead of the body.
+    const parenIndex = match.index + match[0].length - 1;
+    const params = balancedCallAt(src, parenIndex);
+    if (!params) continue;
+    const bodyStart = src.indexOf('{', parenIndex + params.length);
     if (bodyStart === -1) continue;
     const bodyEnd = matchingBraceEnd(src, bodyStart);
     if (bodyEnd === -1) continue;
     const body = src.slice(bodyStart, bodyEnd);
-    // The wrapper must render {children} between a <label> and its </label>.
-    if (/<label\b[\s\S]*?\{\s*children\s*\}[\s\S]*?<\/label>/.test(body)) names.add(match[1]);
+    // {children} must sit inside a <label> — no </label> may intervene, or a
+    // component rendering `<label>Header</label>{children}<label>Footer</label>`
+    // would register as a wrapper and exempt controls it never labels.
+    if (/<label\b[^>]*>(?:(?!<\/label>)[\s\S])*?\{\s*children\s*\}/.test(body)) names.add(match[1]);
   }
   labelWrapperNamesBySource.set(src, names);
   return names;
@@ -615,23 +617,23 @@ function localLabelWrapperNames(src) {
 function isNestedInLabelWrappingComponent(src, index) {
   for (const name of localLabelWrapperNames(src)) {
     const re = new RegExp(`</?${name}\\b`, 'g');
-    let depth = 0;
-    let outerLabel = null;
+    // Keep the label of every wrapper instance still open at `index`, not just
+    // the outermost: an inner `<Field label="…">` nested in an unlabeled outer
+    // one still names the control.
+    const open = [];
     let match;
     while ((match = re.exec(src)) && match.index < index) {
       if (match[0].startsWith('</')) {
-        depth = Math.max(0, depth - 1);
+        open.pop();
         continue;
       }
       const tag = openingTagAt(src, match.index, name.length + 1);
       if (!tag) continue;
       re.lastIndex = match.index + tag.length;
       if (/\/\s*>$/.test(tag)) continue;
-      if (depth === 0) outerLabel = normalizedAttributeValue(attributeValue(tag, 'label'));
-      depth++;
+      open.push(normalizedAttributeValue(attributeValue(tag, 'label')));
     }
-    if (depth === 0 || outerLabel === null || outerLabel === '') continue;
-    if (!/^(?:undefined|null|false)$/i.test(outerLabel)) return true;
+    if (open.some((label) => label && !/^(?:undefined|null|false)$/i.test(label))) return true;
   }
   return false;
 }
