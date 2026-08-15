@@ -5,8 +5,9 @@
  * ~470-LOC `spawnAgentForTask` and `handleAgentCompletion` orchestrators
  * (agentLifecycle.js) so the concurrency contracts they enforce are unit-
  * testable against the REAL code path instead of a hand-copied replica
- * (issue #2548). Both operate purely on a Set/Map passed in — no module
- * state, no I/O — so a test can drive them with a throwaway collection.
+ * (issue #2548). All of them operate purely on the collection/predicate passed
+ * in — no module state, no I/O — so a test can drive them with a throwaway
+ * collection or a stub predicate.
  */
 
 /**
@@ -46,6 +47,39 @@ export async function withSpawnDedupGuard(spawningTasks, taskId, fn) {
   } finally {
     spawningTasks.delete(taskId);
   }
+}
+
+/**
+ * Sentinel returned by `withUpdateInProgressGuard` when a PortOS self-update is
+ * running. A distinct Symbol from `SPAWN_DEDUP_SKIP` so the caller can log the
+ * right reason — "held for an update" is a temporary, self-clearing hold, not a
+ * duplicate dispatch — while both share the same "no-op, leave the task queued"
+ * contract.
+ */
+export const SPAWN_UPDATE_SKIP = Symbol('spawn-update-skip');
+
+/**
+ * Run `fn` only when no self-update is in progress.
+ *
+ * Contract (the race closed by issue #4124): `/api/update/execute` blocks on
+ * live CoS agents both before and after acquiring the update lock, but
+ * `update.sh` then spends multiple seconds in `git pull` / submodule update /
+ * `npm install` before it reaches `pm2 delete`. An agent that starts inside
+ * THAT window is severed by the restart — its PTY/child process is a child of
+ * this server. This guard closes it from the spawn side: while the update flag
+ * is set, a spawn is a no-op and the task stays queued for after the restart,
+ * rather than burning a spawn (and its retry budget) on a doomed run.
+ *
+ * The predicate is injected rather than imported so this module stays free of
+ * module state and I/O, and so a test can drive the real guard with a stub.
+ *
+ * @param {() => boolean} isUpdateInProgress - synchronous flag reader
+ * @param {() => Promise<any>} fn - the guarded spawn work
+ * @returns {Promise<any|typeof SPAWN_UPDATE_SKIP>}
+ */
+export async function withUpdateInProgressGuard(isUpdateInProgress, fn) {
+  if (isUpdateInProgress()) return SPAWN_UPDATE_SKIP;
+  return fn();
 }
 
 /**

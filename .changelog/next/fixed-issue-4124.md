@@ -1,0 +1,1 @@
+- CoS agents no longer spawn into a server that a self-update is about to restart — a task dispatched during update.sh now stays queued and runs after the restart instead of being severed mid-run

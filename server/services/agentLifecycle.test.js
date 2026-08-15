@@ -26,11 +26,11 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { readFileSync } from 'fs';
+import { readFileSync, readdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { spawningTasks, runnerAgents } from './agentState.js';
-import { withSpawnDedupGuard, withMapEntryCleanup, SPAWN_DEDUP_SKIP } from './agentGuards.js';
+import { withSpawnDedupGuard, withMapEntryCleanup, withUpdateInProgressGuard, SPAWN_DEDUP_SKIP, SPAWN_UPDATE_SKIP } from './agentGuards.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -114,6 +114,56 @@ describe('withSpawnDedupGuard — spawn dedup guard', () => {
     expect(second).toBe(SPAWN_DEDUP_SKIP);
     gate.resolve();
     expect(await first).toBe('agent-first');
+  });
+});
+
+// ─── withUpdateInProgressGuard — the self-update spawn hold (issue #4124) ───
+
+describe('withUpdateInProgressGuard — self-update spawn hold', () => {
+  it('runs the spawn body when no update is in progress', async () => {
+    let ran = false;
+    const result = await withUpdateInProgressGuard(() => false, async () => {
+      ran = true;
+      return 'agent-1';
+    });
+    expect(ran).toBe(true);
+    expect(result).toBe('agent-1');
+  });
+
+  it('returns SPAWN_UPDATE_SKIP without running the body while an update is in progress', async () => {
+    let ran = false;
+    const result = await withUpdateInProgressGuard(() => true, async () => {
+      ran = true;
+      return 'agent-2';
+    });
+    // The whole point: no agent process is created inside the window where
+    // update.sh is about to pm2-delete this server. The task record is never
+    // touched, so it stays `pending` and runs after the restart.
+    expect(ran).toBe(false);
+    expect(result).toBe(SPAWN_UPDATE_SKIP);
+  });
+
+  it('reads the flag on EVERY call, so the hold releases when the update settles', async () => {
+    let updating = true;
+    const isUpdating = () => updating;
+    expect(await withUpdateInProgressGuard(isUpdating, async () => 'spawned')).toBe(SPAWN_UPDATE_SKIP);
+    updating = false;
+    expect(await withUpdateInProgressGuard(isUpdating, async () => 'spawned')).toBe('spawned');
+  });
+
+  it('uses a sentinel distinct from the dedup skip, so the two holds stay distinguishable', () => {
+    expect(SPAWN_UPDATE_SKIP).not.toBe(SPAWN_DEDUP_SKIP);
+  });
+
+  it('checks the flag OUTSIDE the dedup guard, so a held task leaves no stranded guard entry', async () => {
+    // Mirrors how spawnAgentForTask composes them. If the update check sat
+    // inside withSpawnDedupGuard the task id would be added and removed for a
+    // spawn that never happened — harmless today, but it would also mean the
+    // dedup set churned once per held dispatch during the whole update window.
+    const outcome = await withUpdateInProgressGuard(() => true, () =>
+      withSpawnDedupGuard(spawningTasks, 'task-held', async () => 'agent-3'));
+    expect(outcome).toBe(SPAWN_UPDATE_SKIP);
+    expect(spawningTasks.has('task-held')).toBe(false);
   });
 });
 
@@ -238,6 +288,91 @@ describe('agentLifecycle — guard wiring', () => {
     );
     // The dedup-skip sentinel is honored (returns null to the caller).
     expect(body).toMatch(/SPAWN_DEDUP_SKIP/);
+  });
+
+  // Issue #4124: `/api/update/execute` refuses to start while an agent is live,
+  // but `update.sh` then runs git pull / submodule update / npm install for
+  // seconds before `pm2 delete`. This is the last-line gate for a spawn landing
+  // in THAT window.
+  it('spawnAgentForTask wraps the spawn in withUpdateInProgressGuard(isUpdateInProgress)', () => {
+    const idx = AGENT_LIFECYCLE_SRC.indexOf('export async function spawnAgentForTask');
+    expect(idx, 'spawnAgentForTask must exist').toBeGreaterThan(-1);
+    const body = AGENT_LIFECYCLE_SRC.slice(idx, idx + 1200);
+    expect(body).toMatch(/withUpdateInProgressGuard\(\s*isUpdateInProgress\s*,/);
+    expect(body).toMatch(/SPAWN_UPDATE_SKIP/);
+    // The synchronous mirror, not a re-implemented disk read.
+    expect(AGENT_LIFECYCLE_SRC).toMatch(/import \{ isUpdateInProgress \} from '\.\/updateChecker\.js'/);
+  });
+});
+
+// ─── Coverage guard for the self-update spawn gate (issue #4124) ────────────
+//
+// The gate is argued to cover EVERY path that can start an agent because those
+// paths funnel through exactly two chokepoints: `task:ready` → subAgentSpawner's
+// listener → `spawnAgentForTask` → one of the three low-level spawn helpers.
+// Gating fewer files than "every spawn engine" is only sound while that funnel
+// holds, so pin it: a new direct caller of `spawnAgentForTask` or of a spawn
+// helper would bypass the gate and must fail here rather than in production.
+
+describe('self-update spawn gate — funnel coverage (#4124)', () => {
+  const SERVICES_DIR = __dirname;
+
+  /** Every non-test .js under server/services (recursively), with its source. */
+  const serviceSources = () => {
+    const out = [];
+    const walk = (dir) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) { walk(full); continue; }
+        if (!entry.name.endsWith('.js') || entry.name.includes('.test.')) continue;
+        out.push({ path: full, src: readFileSync(full, 'utf-8') });
+      }
+    };
+    walk(SERVICES_DIR);
+    return out;
+  };
+
+  /**
+   * Files whose source invokes `name(` somewhere other than its own
+   * declaration, relative to server/services and sorted. Listing the DEFINING
+   * file too keeps the assertions non-vacuous: a regex that silently stopped
+   * matching would drop that file and fail, instead of passing as an empty set.
+   */
+  const invokersOf = (name) => serviceSources()
+    .filter(({ src }) => new RegExp(`(?<!function )\\b${name}\\(`).test(src))
+    .map(({ path }) => path.slice(SERVICES_DIR.length + 1))
+    .sort();
+
+  it('spawnAgentForTask is invoked from exactly one place — the gated task:ready listener', () => {
+    expect(
+      invokersOf('spawnAgentForTask'),
+      'a new caller of spawnAgentForTask must also carry the self-update hold (see subAgentSpawner.js)'
+    ).toEqual(['agentLifecycle.js', 'subAgentSpawner.js']);
+  });
+
+  it('the three low-level spawn helpers are invoked only from the gated dispatch', () => {
+    // If any other module called these directly it would create an agent
+    // process without passing spawnAgentForTask's update guard at all.
+    for (const helper of ['spawnTuiAgent', 'spawnViaRunner', 'spawnDirectly']) {
+      expect(
+        invokersOf(helper),
+        `${helper} must stay reachable only through spawnAgentForTask`
+      ).toEqual(['agentLifecycle.js']);
+    }
+  });
+
+  it('subAgentSpawner holds the dispatch on the synchronous update flag', () => {
+    const src = readFileSync(join(SERVICES_DIR, 'subAgentSpawner.js'), 'utf-8');
+    expect(src).toMatch(/import \{ isUpdateInProgress \} from '\.\/updateChecker\.js'/);
+    const idx = src.indexOf("cosEvents.on('task:ready'");
+    expect(idx, 'the task:ready listener must exist').toBeGreaterThan(-1);
+    const spawnIdx = src.indexOf('await spawnAgentForTask(task)', idx);
+    expect(spawnIdx).toBeGreaterThan(idx);
+    // The hold is BEFORE the spawn, and before the (awaited) runner probe — a
+    // synchronous check can't be raced by anything in between.
+    const preamble = src.slice(idx, spawnIdx);
+    expect(preamble).toMatch(/if \(isUpdateInProgress\(\)\) \{\s*return holdTask\(task,/);
+    expect(preamble.indexOf('isUpdateInProgress()')).toBeLessThan(preamble.indexOf('isRunnerReachable()'));
   });
 
   it('handleAgentCompletion delegates runnerAgents cleanup to withMapEntryCleanup', () => {

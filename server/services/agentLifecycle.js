@@ -65,7 +65,8 @@ import { ensureInstanceId } from './instances.js';
 import { isClaimableBy, buildClaim, buildRelease, getClaimOwner } from './cosTaskClaim.js';
 import { resolveForgeTokenEnv } from './git.js';
 import { runnerAgents, pausedAgents, spawningTasks, useRunner, isTruthyMeta } from './agentState.js';
-import { withSpawnDedupGuard, withMapEntryCleanup, SPAWN_DEDUP_SKIP } from './agentGuards.js';
+import { withSpawnDedupGuard, withMapEntryCleanup, withUpdateInProgressGuard, SPAWN_DEDUP_SKIP, SPAWN_UPDATE_SKIP } from './agentGuards.js';
+import { isUpdateInProgress } from './updateChecker.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 
 // Extracted helpers — these carve the two giant orchestrators
@@ -99,9 +100,24 @@ const AGENTS_DIR = PATHS.cosAgents;
  * it in a `finally` so no early `return null` or throw can strand the task id
  * in the set. Extracting the guard makes the late-delete race it closes
  * unit-testable against the real helper (issue #2548) instead of a replica.
+ *
+ * Outside that, `withUpdateInProgressGuard` holds every spawn while a PortOS
+ * self-update is running (issue #4124) — `update.sh` pm2-restarts this server,
+ * which severs any agent it started, so the task stays queued for after the
+ * restart instead. This is the LAST-LINE gate: the primary hold sits at
+ * subAgentSpawner's `task:ready` listener, where the app-review marker and the
+ * job spawn-failed signal can also be released (an unconditional bail from here
+ * would strand both — the #989 failure mode). Both exist because this is the
+ * one function every spawn path ends at, so a future direct caller that
+ * bypasses the listener is still gated.
  */
 export async function spawnAgentForTask(task) {
-  const outcome = await withSpawnDedupGuard(spawningTasks, task.id, () => runAgentSpawn(task));
+  const outcome = await withUpdateInProgressGuard(isUpdateInProgress, () =>
+    withSpawnDedupGuard(spawningTasks, task.id, () => runAgentSpawn(task)));
+  if (outcome === SPAWN_UPDATE_SKIP) {
+    console.log(`⏸️ Holding task ${task.id} — a PortOS self-update is in progress`);
+    return null;
+  }
   if (outcome === SPAWN_DEDUP_SKIP) {
     console.log(`⚠️ Task ${task.id} already being spawned, skipping duplicate`);
     return null;

@@ -219,7 +219,10 @@ router.post('/execute', asyncHandler(async (req, res) => {
   // spawn) may have started live during the git/fork awaits between the
   // fast-fail pre-check and here. If so, release the lock and reject rather than
   // restart out from under it. A spawn that begins AFTER this, during update.sh
-  // itself, is the residual the #4124 spawn-engine gate will close.
+  // itself, is closed from the spawn side: the lock we just acquired flips
+  // `updateChecker.isUpdateInProgress()`, which subAgentSpawner's `task:ready`
+  // listener and `spawnAgentForTask` both check, holding the task as `pending`
+  // until after the restart (issue #4124).
   const postLock = countActiveCosAgents();
   if (postLock > 0) {
     await updateChecker.setUpdateInProgress(false);

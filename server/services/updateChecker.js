@@ -30,6 +30,42 @@ export const updateEvents = new EventEmitter();
 
 const withLock = createMutex();
 
+// ─── Synchronous in-memory mirror of the persisted `updateInProgress` flag ───
+//
+// The flag itself lives in `data/update.json` and is only readable through an
+// `await` (loadState). The CoS spawn engines need the answer SYNCHRONOUSLY, at
+// the top of a spawn, to hold a task rather than launch an agent into a process
+// `update.sh` is about to `pm2 delete` (issue #4124). Awaiting a disk read there
+// would both slow the hot dispatch path and re-open the very window the gate
+// exists to close, so this module keeps a boolean in lockstep with every write
+// it makes to the persisted flag.
+//
+// Semantics — deliberately PROCESS-LOCAL, and NOT hydrated from disk on boot:
+//   - It flips only where this module actually WRITES `state.updateInProgress`
+//     (setUpdateInProgress, recordUpdateResult, clearStaleUpdateInProgress's
+//     clear branch). A `setUpdateInProgress(true)` that loses the atomic
+//     check-and-set writes nothing, so it leaves the mirror alone.
+//   - It starts `false` on every boot because a *running* server process is by
+//     definition post-restart: `update.sh` pm2-deletes the old process before it
+//     starts a new one, so nothing this process spawns can be severed by an
+//     update that was already underway. Hydrating a persisted `true` (which
+//     survives a killed-mid-update cycle until `clearStaleUpdateInProgress`
+//     ages it out at 30 minutes) would instead wedge CoS for half an hour.
+let updateInProgressMirror = false;
+
+/**
+ * Is a self-update running in THIS process right now?
+ *
+ * Synchronous, allocation-free, and safe to call on every spawn attempt.
+ * `true` from the moment `/api/update/execute` acquires the update lock until
+ * the update settles (`recordUpdateResult`) or is released — i.e. exactly the
+ * window in which `update.sh` may pm2-restart the server out from under a
+ * freshly spawned agent.
+ */
+export function isUpdateInProgress() {
+  return updateInProgressMirror;
+}
+
 let schedulerInterval = null;
 let startupTimeout = null;
 
@@ -297,6 +333,9 @@ export async function setUpdateInProgress(inProgress) {
     state.updateInProgress = inProgress;
     state.updateStartedAt = inProgress ? new Date().toISOString() : null;
     await saveState(state);
+    // Mirror BEFORE returning so the caller's next synchronous statement — and
+    // any spawn engine that runs before the next tick — already sees the gate.
+    updateInProgressMirror = inProgress;
     return true;
   });
 }
@@ -311,6 +350,7 @@ export async function recordUpdateResult(result) {
     state.updateStartedAt = null;
     state.lastUpdateResult = result;
     await saveState(state);
+    updateInProgressMirror = false;
   });
 }
 
@@ -396,6 +436,7 @@ export async function clearStaleUpdateInProgress() {
         log: 'Cleared stale update lock on boot — server was likely killed mid-update'
       };
       await saveState(state);
+      updateInProgressMirror = false;
       return true;
     }
 

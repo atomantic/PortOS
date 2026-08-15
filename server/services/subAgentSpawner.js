@@ -44,6 +44,7 @@ import { cleanupOrphanedAgents } from './agentManagement.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import { runnerAgents, setUseRunner, useRunner } from './agentState.js';
 import { releaseAppReviewMarker } from './appActivity.js';
+import { isUpdateInProgress } from './updateChecker.js';
 // This module's own event wiring drives three LIFECYCLE TRANSITIONS, so it takes
 // them from the facade rather than from the three separate leaves that happen to
 // implement them (#3450). It can: nothing the facade imports imports this module
@@ -55,6 +56,34 @@ const RUNS_DIR = PATHS.runs;
 // Coalesce reconnect storms (a crash-looping runner) into one dequeue.
 const RECONNECT_DEQUEUE_DEBOUNCE_MS = 1000;
 let reconnectDequeueTimer = null;
+
+/**
+ * Decline a `task:ready` dispatch WITHOUT failing the task.
+ *
+ * The task record is left untouched (still `pending`), so the next dequeue tick
+ * picks it up once `reason` clears — no status write, no retry charged, no
+ * `blocked` walk. What must still be undone is the state the emitter bound in
+ * anticipation of a spawn:
+ *
+ *   - the synthetic app-review marker, or the app reads "in review" for the
+ *     whole outage (issue #989);
+ *   - `spawningJobIds` for a scheduled job, cleared by `job:spawn-failed`,
+ *     which also re-registers the cron schedule. Without it an autonomous job
+ *     sits wedged until the scheduler's 5-minute spawn timeout — per job, per
+ *     outage.
+ *
+ * Shared by both hold conditions (self-update in progress, runner down) so a
+ * third one can't ship with only half the releases.
+ */
+async function holdTask(task, reason) {
+  emitLog('debug', `⏸️ Holding task ${task.id} — ${reason}`, { taskId: task.id });
+  await releaseAppReviewMarker(task.metadata?.app).catch(err =>
+    emitLog('warn', `Failed to release app review marker for ${task.metadata?.app}: ${err.message}`, { taskId: task.id })
+  );
+  if (task.metadata?.jobId) {
+    cosEvents.emit('job:spawn-failed', { jobId: task.metadata.jobId });
+  }
+}
 
 /**
  * Load a slashdo command from the bundled submodule, resolving !`cat` lib includes inline.
@@ -225,30 +254,33 @@ async function runInitSpawner() {
   }
 
   cosEvents.on('task:ready', async (task) => {
-    // Runner-down HOLD, at the one chokepoint all seven `task:ready` emitters
-    // funnel through. Dispatching into a stopped runner is not a task failure,
-    // but both spawn arms recorded it as one: the CLI arm finalized
-    // `spawn-rejected` (a retry each time, so a runner left off overnight walked
-    // every queued task through its retry budget into `blocked`), and the TUI arm
-    // threw into the actionable `spawn-error`, parking the task for a human over
-    // an app the user simply turned off.
+    // ── HOLDS, at the one chokepoint all seven `task:ready` emitters funnel
+    // through. Both leave the task queued (no status write, no retry charged)
+    // for a condition that clears on its own.
     //
     // Held HERE rather than inside `runAgentSpawn`: a hold below this line would
     // return past `releaseAppReviewMarker`, stranding the synthetic "in review"
-    // marker for the whole outage — issue #989's exact failure mode. The two
-    // releases below are the same ones the spawn body owns.
+    // marker for the whole outage — issue #989's exact failure mode. The
+    // releases in `holdTask` are the same ones the spawn body owns.
+    //
+    // 1. Self-update in progress (issue #4124). `/api/update/execute` refuses to
+    //    start while an agent is live, but `update.sh` then spends multiple
+    //    seconds in `git pull` / submodule update / `npm install` before it
+    //    reaches `pm2 delete` — an agent spawned inside that window is severed
+    //    by the restart (its PTY/child process is a child of this server). The
+    //    flag reads synchronously, so nothing can slip between the check and the
+    //    spawn; the task runs on the other side of the restart.
+    if (isUpdateInProgress()) {
+      return holdTask(task, 'a PortOS self-update is in progress');
+    }
+    // 2. Runner down. Dispatching into a stopped runner is not a task failure,
+    //    but both spawn arms recorded it as one: the CLI arm finalized
+    //    `spawn-rejected` (a retry each time, so a runner left off overnight
+    //    walked every queued task through its retry budget into `blocked`), and
+    //    the TUI arm threw into the actionable `spawn-error`, parking the task
+    //    for a human over an app the user simply turned off.
     if (useRunner && !(await isRunnerReachable())) {
-      emitLog('debug', `⏸️ Holding task ${task.id} — CoS Runner is down`, { taskId: task.id });
-      await releaseAppReviewMarker(task.metadata?.app).catch(err =>
-        emitLog('warn', `Failed to release app review marker for ${task.metadata?.app}: ${err.message}`, { taskId: task.id })
-      );
-      // Clears `spawningJobIds` immediately and re-registers the cron schedule.
-      // Without it an autonomous job sits wedged until the scheduler's 5-minute
-      // spawn timeout — per job, per outage.
-      if (task.metadata?.jobId) {
-        cosEvents.emit('job:spawn-failed', { jobId: task.metadata.jobId });
-      }
-      return;
+      return holdTask(task, 'CoS Runner is down');
     }
     try {
       await spawnAgentForTask(task);

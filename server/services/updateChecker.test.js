@@ -54,7 +54,10 @@ import {
   getRemoteInfo,
   syncFork,
   processUpdateMarker,
-  updateEvents
+  updateEvents,
+  isUpdateInProgress,
+  setUpdateInProgress,
+  recordUpdateResult
 } from './updateChecker.js';
 
 describe('compareSemver', () => {
@@ -436,6 +439,102 @@ describe('clearStaleUpdateInProgress', () => {
     const cleared = await clearStaleUpdateInProgress();
     expect(cleared).toBe(false);
     expect(atomicWrite).not.toHaveBeenCalled();
+  });
+});
+
+// ─── isUpdateInProgress — the synchronous mirror (issue #4124) ──────────────
+//
+// The CoS spawn engines gate on this to avoid launching an agent into a process
+// `update.sh` is about to `pm2 delete`. It must track every write this module
+// makes to the persisted flag — a mirror that drifts either wedges CoS (stuck
+// true) or silently re-opens the race (stuck false).
+
+describe('isUpdateInProgress mirror', () => {
+  const persisted = (overrides = {}) => ({
+    lastCheck: null,
+    latestRelease: null,
+    ignoredVersions: [],
+    updateInProgress: false,
+    updateStartedAt: null,
+    lastUpdateResult: null,
+    ...overrides
+  });
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    atomicWrite.mockResolvedValue(undefined);
+    ensureDir.mockResolvedValue(undefined);
+    // Module state is shared across tests in this file — return to the boot
+    // value so each case starts from a known mirror.
+    readJSONFile.mockResolvedValue(persisted({ updateInProgress: true }));
+    await recordUpdateResult({ version: '0.0.0', success: true, completedAt: null, log: '' });
+    // …and forget the reset's own write, so a test can assert on writes.
+    atomicWrite.mockClear();
+  });
+
+  it('starts false — a live process is by definition post-restart', () => {
+    expect(isUpdateInProgress()).toBe(false);
+  });
+
+  it('flips true the moment setUpdateInProgress(true) acquires the lock', async () => {
+    readJSONFile.mockResolvedValue(persisted());
+
+    const acquired = await setUpdateInProgress(true);
+
+    expect(acquired).toBe(true);
+    expect(isUpdateInProgress()).toBe(true);
+    // Lockstep: what the mirror reports is what was persisted.
+    const saved = JSON.parse(atomicWrite.mock.calls.at(-1)[1]);
+    expect(saved.updateInProgress).toBe(true);
+  });
+
+  it('flips back to false when the lock is released', async () => {
+    readJSONFile.mockResolvedValue(persisted());
+    await setUpdateInProgress(true);
+
+    readJSONFile.mockResolvedValue(persisted({ updateInProgress: true }));
+    await setUpdateInProgress(false);
+
+    expect(isUpdateInProgress()).toBe(false);
+  });
+
+  it('flips back to false when the update settles via recordUpdateResult', async () => {
+    readJSONFile.mockResolvedValue(persisted());
+    await setUpdateInProgress(true);
+    expect(isUpdateInProgress()).toBe(true);
+
+    readJSONFile.mockResolvedValue(persisted({ updateInProgress: true }));
+    await recordUpdateResult({ version: '1.28.0', success: true, completedAt: new Date().toISOString(), log: '' });
+
+    expect(isUpdateInProgress()).toBe(false);
+  });
+
+  it('is not raised by a setUpdateInProgress(true) that LOSES the check-and-set', async () => {
+    // The persisted flag is already true — set from a process that has since
+    // died, since this one's mirror is false. Nothing is written, so nothing is
+    // mirrored: the 409 already stops /execute, and raising the flag here would
+    // hold every CoS spawn until the 30-minute stale sweep with no update
+    // actually running.
+    readJSONFile.mockResolvedValue(persisted({ updateInProgress: true, updateStartedAt: new Date().toISOString() }));
+
+    const acquired = await setUpdateInProgress(true);
+
+    expect(acquired).toBe(false);
+    expect(isUpdateInProgress()).toBe(false);
+    expect(atomicWrite).not.toHaveBeenCalled();
+  });
+
+  it('is cleared by the boot-time stale sweep', async () => {
+    readJSONFile.mockResolvedValue(persisted());
+    await setUpdateInProgress(true);
+
+    readJSONFile.mockResolvedValue(persisted({
+      updateInProgress: true,
+      updateStartedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString()
+    }));
+    expect(await clearStaleUpdateInProgress()).toBe(true);
+
+    expect(isUpdateInProgress()).toBe(false);
   });
 });
 

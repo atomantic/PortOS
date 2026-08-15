@@ -1,12 +1,20 @@
 /**
- * Runner-down HOLD at the dispatch chokepoint, and the reconnect that releases it.
+ * The two dispatch HOLDS at the `task:ready` chokepoint, and what releases them.
  *
- * `portos-cos` is a separate PM2 app the user can stop from the Apps page, and
- * in runner mode it owns every agent process. Dispatching into a stopped runner
- * is not a task failure, but both spawn arms recorded it as one — see the
- * `task:ready` listener in subAgentSpawner.js for the two failure modes.
+ * Both leave the task queued for a condition that clears on its own, rather than
+ * failing it:
  *
- * The hold lives in that listener, not inside `runAgentSpawn`, because a hold
+ *  - Runner down. `portos-cos` is a separate PM2 app the user can stop from the
+ *    Apps page, and in runner mode it owns every agent process. Dispatching into
+ *    a stopped runner is not a task failure, but both spawn arms recorded it as
+ *    one — see the `task:ready` listener in subAgentSpawner.js for the two
+ *    failure modes.
+ *  - Self-update in progress (issue #4124). `/api/update/execute` refuses to
+ *    start while an agent is live, but `update.sh` then spends seconds in git
+ *    pull / submodule update / npm install before `pm2 delete`. An agent spawned
+ *    in that window is severed by the restart.
+ *
+ * The holds live in that listener, not inside `runAgentSpawn`, because a hold
  * below the spawn body's entry returns past `releaseAppReviewMarker` and strands
  * the synthetic "in review" marker for the whole outage (issue #989). The two
  * side effects the dequeue tiers already committed — that marker and the
@@ -40,6 +48,7 @@ vi.mock('./agentLifecycle.js', () => ({ handleAgentCompletion: vi.fn() }));
 vi.mock('./agentManagement.js', () => ({ cleanupOrphanedAgents: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('./agentRunTracking.js', () => ({ completeAgentRun: vi.fn() }));
 vi.mock('./appActivity.js', () => ({ releaseAppReviewMarker: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('./updateChecker.js', () => ({ isUpdateInProgress: vi.fn().mockReturnValue(false) }));
 vi.mock('./agentOrchestrator.js', () => ({
   completeAgent: vi.fn(),
   spawnAgentForTask: vi.fn().mockResolvedValue('agent-1'),
@@ -54,6 +63,7 @@ import { cosEvents, emitLog } from './cosEvents.js';
 import { isRunnerReachable } from './cosRunnerClient.js';
 import { spawnAgentForTask } from './agentOrchestrator.js';
 import { releaseAppReviewMarker } from './appActivity.js';
+import { isUpdateInProgress } from './updateChecker.js';
 import { setUseRunner } from './agentState.js';
 
 const dispatch = (task) => taskHandlers.get('task:ready')(task);
@@ -65,6 +75,7 @@ describe('subAgentSpawner — runner-down hold', () => {
     vi.useRealTimers();
     setUseRunner(true);
     isRunnerReachable.mockResolvedValue(true);
+    isUpdateInProgress.mockReturnValue(false);
   });
 
   it('spawns normally while the runner is up', async () => {
@@ -113,6 +124,64 @@ describe('subAgentSpawner — runner-down hold', () => {
 
     expect(isRunnerReachable).not.toHaveBeenCalled();
     expect(spawnAgentForTask).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('subAgentSpawner — self-update hold (#4124)', () => {
+  beforeEach(async () => {
+    await initSpawner();
+    vi.clearAllMocks();
+    vi.useRealTimers();
+    setUseRunner(true);
+    isRunnerReachable.mockResolvedValue(true);
+    isUpdateInProgress.mockReturnValue(false);
+  });
+
+  it('holds the task instead of spawning into a process update.sh is about to restart', async () => {
+    isUpdateInProgress.mockReturnValue(true);
+
+    await dispatch({ id: 'cos-u1', metadata: {} });
+
+    // No agent is created, and the task record is untouched — it stays
+    // `pending` and is picked up by the first dequeue after the restart.
+    expect(spawnAgentForTask).not.toHaveBeenCalled();
+  });
+
+  it('holds BEFORE the awaited runner probe, so nothing can race between check and spawn', async () => {
+    isUpdateInProgress.mockReturnValue(true);
+
+    await dispatch({ id: 'cos-u2', metadata: {} });
+
+    expect(isRunnerReachable).not.toHaveBeenCalled();
+  });
+
+  it('releases the app-review marker and the job spawn reservation, same as the runner hold', async () => {
+    isUpdateInProgress.mockReturnValue(true);
+
+    await dispatch({ id: 'cos-u3', metadata: { app: 'some-app', jobId: 'job-9' } });
+
+    expect(releaseAppReviewMarker).toHaveBeenCalledWith('some-app');
+    expect(cosEvents.emit).toHaveBeenCalledWith('job:spawn-failed', { jobId: 'job-9' });
+  });
+
+  it('resumes spawning once the update settles — the hold is not sticky', async () => {
+    isUpdateInProgress.mockReturnValue(true);
+    await dispatch({ id: 'cos-u4', metadata: {} });
+    expect(spawnAgentForTask).not.toHaveBeenCalled();
+
+    isUpdateInProgress.mockReturnValue(false);
+    await dispatch({ id: 'cos-u4', metadata: {} });
+
+    expect(spawnAgentForTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('holds in direct mode too, where there is no runner probe to hide behind', async () => {
+    setUseRunner(false);
+    isUpdateInProgress.mockReturnValue(true);
+
+    await dispatch({ id: 'cos-u5', metadata: {} });
+
+    expect(spawnAgentForTask).not.toHaveBeenCalled();
   });
 });
 
