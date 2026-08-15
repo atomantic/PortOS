@@ -73,7 +73,12 @@ vi.mock('../settings.js', () => ({
 vi.mock('../../lib/mediaModels.js', () => ({
   getVideoModels: vi.fn(() => [
     { id: 'ltx2_unified', name: 'LTX-2 Unified', runtime: 'ltx2', repo: 'Lightricks/LTX-Video', steps: 30, guidance: 3.5 },
-    { id: 'ltx25_mlx_q8', name: 'LTX-2.5 MLX Q8', runtime: 'ltx25', repo: 'MrMofer/ltx-2.5-mlx-q8', steps: 8, guidance: 3 },
+    {
+      id: 'ltx25_mlx_q8', name: 'LTX-2.5 MLX Q8', runtime: 'ltx25',
+      repo: 'MrMofer/ltx-2.5-mlx-q8',
+      revision: 'f1b56e7dc89f71a9af2cddac787b89ed22a8b7fc',
+      steps: 8, guidance: 3,
+    },
     // bf16 LTX-2.x mlx_video model — LoRA-capable via the generate_av wrapper.
     { id: 'ltx23_unified', name: 'LTX-2.3 Unified Beta', runtime: 'mlx_video', repo: 'notapalindrome/ltx23-mlx-av', steps: 25, guidance: 3.0 },
     // quantized mlx_video model — NOT LoRA-capable (out of scope).
@@ -1027,7 +1032,7 @@ describe('generateVideo — LTX-2.5 sibling runtime spawn', () => {
     return spawnMock.mock.calls;
   };
 
-  it('spawns the 2.5 venv and omits the shared Gemma 3 encoder', async () => {
+  it('spawns the 2.5 venv, omits the shared Gemma 3 encoder, and pins --model to the cached revision', async () => {
     const calls = await renderLtxFamily('ltx25-spawn', 'ltx25_mlx_q8');
     const renderCall = calls.find(
       ([bin, args]) => isLtx25Python(bin)
@@ -1037,10 +1042,12 @@ describe('generateVideo — LTX-2.5 sibling runtime spawn', () => {
     );
     expect(renderCall).toBeTruthy();
     expect(renderCall[1]).not.toContain('--gemma');
+    expect(renderCall[1][renderCall[1].indexOf('--model') + 1]).toBe('/mock/hf/snap');
+    expect(renderCall[1]).not.toContain('MrMofer/ltx-2.5-mlx-q8');
     expect(calls.some(([bin]) => isLtx2Python(bin))).toBe(false);
   });
 
-  it('still threads --gemma through the 2.3 venv', async () => {
+  it('still threads --gemma through the 2.3 venv and leaves an unpinned repo id on --model', async () => {
     const calls = await renderLtxFamily('ltx2-gemma-still', 'ltx2_unified');
     const renderCall = calls.find(
       ([bin, args]) => isLtx2Python(bin)
@@ -1050,7 +1057,22 @@ describe('generateVideo — LTX-2.5 sibling runtime spawn', () => {
     );
     expect(renderCall).toBeTruthy();
     expect(renderCall[1]).toEqual(expect.arrayContaining(['--gemma', 'some/text-encoder']));
+    expect(renderCall[1][renderCall[1].indexOf('--model') + 1]).toBe('Lightricks/LTX-Video');
     expect(calls.some(([bin]) => isLtx25Python(bin))).toBe(false);
+  });
+
+  it('rejects a missing pinned 2.5 snapshot before spawn', async () => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    vi.mocked(spawnDetached).mockClear();
+    mockInspectModelCache.mockResolvedValueOnce({ cached: false, snapshotPath: null, sizeBytes: 0 });
+    await expect(generateVideo({
+      jobId: 'ltx25-uncached',
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx25_mlx_q8',
+      prompt: 'a quiet street at dusk',
+      width: 512, height: 512, numFrames: 25, fps: 24,
+    })).rejects.toMatchObject({ code: 'LTX2_MODEL_NOT_CACHED' });
+    expect(spawnDetached).not.toHaveBeenCalled();
   });
 });
 
