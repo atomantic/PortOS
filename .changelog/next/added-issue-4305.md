@@ -1,0 +1,1 @@
+- Music studio: /music/generate is now a stepped designer — a short reference/vibe becomes an AI-enriched musical description, then optional AI lyrics, then the existing generator, with every step editable and deep-linkable
