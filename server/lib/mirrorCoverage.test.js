@@ -16,26 +16,29 @@ function listTestFiles(dir) {
   });
 }
 
-function listedMirrorPairs(readme) {
+// Both catalogs declare mirrors the same way — a backtick-fenced filename in
+// column 1, a description in column 2 naming the counterpart path — differing
+// only in which side is "this file" vs. "the other file it mirrors". One
+// parameterized walker keeps that row-parsing logic from drifting between the
+// two catalogs the way the mirrored declarations it guards must not drift.
+function listedPairsFor(readme, otherPathRe) {
   const rows = [...readme.matchAll(/^\|\s+`([^`]+\.js)`\s+\|\s+(.+)\|$/gm)];
-  const pairs = rows.flatMap(([, clientFile, description]) => {
+  return rows.flatMap(([, thisFile, description]) => {
     if (!/\bmirror/i.test(description)) return [];
-    const serverMatch = description.match(/server\/lib\/([\w/-]+\.js)/);
-    if (!serverMatch || serverMatch[1].includes('/') || clientFile !== basename(serverMatch[1])) return [];
-    return [{ clientFile, serverFile: serverMatch[1] }];
+    const otherMatch = description.match(otherPathRe);
+    if (!otherMatch || otherMatch[1].includes('/') || thisFile !== basename(otherMatch[1])) return [];
+    return [{ thisFile, otherFile: otherMatch[1] }];
   });
-  return pairs;
+}
+
+function listedMirrorPairs(readme) {
+  return listedPairsFor(readme, /server\/lib\/([\w/-]+\.js)/)
+    .map(({ thisFile, otherFile }) => ({ clientFile: thisFile, serverFile: otherFile }));
 }
 
 function listedServerMirrorPairs(readme) {
-  const rows = [...readme.matchAll(/^\|\s+`([^`]+\.js)`\s+\|\s+(.+)\|$/gm)];
-  const pairs = rows.flatMap(([, serverFile, description]) => {
-    if (!/\bmirror/i.test(description)) return [];
-    const clientMatch = description.match(/client\/src\/lib\/([\w/-]+\.js)/);
-    if (!clientMatch || clientMatch[1].includes('/') || serverFile !== basename(clientMatch[1])) return [];
-    return [{ clientFile: clientMatch[1], serverFile }];
-  });
-  return pairs;
+  return listedPairsFor(readme, /client\/src\/lib\/([\w/-]+\.js)/)
+    .map(({ thisFile, otherFile }) => ({ clientFile: otherFile, serverFile: thisFile }));
 }
 
 function uniquePairs(pairs) {
