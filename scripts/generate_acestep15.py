@@ -13,6 +13,7 @@ import json
 import os
 import shutil
 import sys
+import tempfile
 import wave
 
 
@@ -97,23 +98,28 @@ def main():
         seed=-1,
     )
     stage("generate", f"{duration:.1f}s")
-    result = generate_music(
-        dit_handler=dit_handler,
-        llm_handler=None,
-        params=params,
-        config=GenerationConfig(batch_size=1, audio_format="wav"),
-        save_dir=output_dir,
-    )
-    if not result.success or not result.audios:
-        reason = getattr(result, "error", None) or getattr(result, "status_message", "unknown error")
-        print(f"ERROR: ACE-Step 1.5 generation failed: {reason}", file=sys.stderr, flush=True)
-        return 1
+    # Render into a per-invocation temp dir, not directly into the shared
+    # PortOS music library (output_dir): any extra or partial file the vendor
+    # call writes to save_dir beyond the one we move out — including on a
+    # failed/partial generation — is cleaned up automatically when the `with`
+    # block exits, instead of lingering as a phantom track in the library.
+    with tempfile.TemporaryDirectory(prefix="acestep15-") as tmp:
+        result = generate_music(
+            dit_handler=dit_handler,
+            llm_handler=None,
+            params=params,
+            config=GenerationConfig(batch_size=1, audio_format="wav"),
+            save_dir=tmp,
+        )
+        if not result.success or not result.audios:
+            reason = getattr(result, "error", None) or getattr(result, "status_message", "unknown error")
+            print(f"ERROR: ACE-Step 1.5 generation failed: {reason}", file=sys.stderr, flush=True)
+            return 1
 
-    produced = result.audios[0].get("path")
-    if not produced or not os.path.isfile(produced):
-        print("ERROR: ACE-Step 1.5 returned no audio file", file=sys.stderr, flush=True)
-        return 1
-    if os.path.abspath(produced) != os.path.abspath(args.output):
+        produced = result.audios[0].get("path")
+        if not produced or not os.path.isfile(produced):
+            print("ERROR: ACE-Step 1.5 returned no audio file", file=sys.stderr, flush=True)
+            return 1
         shutil.move(produced, args.output)
     stage("encode-wav")
     print("RESULT:" + json.dumps({

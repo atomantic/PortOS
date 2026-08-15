@@ -215,7 +215,11 @@ export const ENGINES = Object.freeze({
     installEnv: 'INSTALL_ACESTEP15',
     // ACE-Step 1.5's handler imports the fixed snapshot's custom
     // modeling_acestep_v15_turbo.py via transformers AutoModel trust_remote_code.
-    healthProbe: 'import torch; from transformers import AutoModel; from acestep.handler import AceStepHandler',
+    // Probe the generation import path too (acestep.inference), not just the
+    // handler — a venv missing that submodule would otherwise report healthy
+    // and fail generation with a bare ImportError instead of the actionable
+    // "runtime not found" 503.
+    healthProbe: 'import torch; from transformers import AutoModel; from acestep.handler import AceStepHandler; from acestep.inference import GenerationConfig, GenerationParams, generate_music',
     lyrics: true,
     customModels: false,
     fixedModelInstall: true,
