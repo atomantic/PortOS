@@ -549,13 +549,19 @@ describe('cosTaskStore.addTask', () => {
     const task = await addTask({ description: 'budget reset', app: 'portos', id: 'sys-budget' }, 'internal');
     await updateTask(task.id, {
       status: 'blocked',
-      metadata: { blockedCategory: 'max-spawns', totalSpawnCount: 99, orphanRetryCount: 3, lastOrphanedAt: '2026-01-01T00:00:00.000Z' }
+      metadata: {
+        blockedCategory: 'max-spawns', totalSpawnCount: 99, orphanRetryCount: 3,
+        lastOrphanedAt: '2026-01-01T00:00:00.000Z', worktreeBusyAttempts: 5
+      }
     }, 'internal');
     const revived = await reviveBlockedTask(task.id, { metadata: { totalSpawnCount: 99, fresh: 'yes' } }, 'internal');
     expect(revived.status).toBe('pending');
     expect(revived.metadata.totalSpawnCount).toBeUndefined();
     expect(revived.metadata.orphanRetryCount).toBeUndefined();
     expect(revived.metadata.lastOrphanedAt).toBeUndefined();
+    // The branch-busy patience budget is spent by the time a follow-up gives up;
+    // leaving it would make the revived task hard-block on the first busy race.
+    expect(revived.metadata.worktreeBusyAttempts).toBeUndefined();
     expect(revived.metadata.blockedCategory).toBeUndefined();
     expect(revived.metadata.fresh).toBe('yes');
   });
@@ -871,6 +877,54 @@ describe('cosTaskStore.updateTask', () => {
     }, 'user');
     expect(blocked.metadata.existingBranch).toBe('cos/b');
     expect(blocked.metadata.resumeWorktreePath).toBe('/w/agent-x');
+  });
+
+  // An `existingBranch` with no `resumedFromAgentId` beside it was never written
+  // by the resume mechanism — it is the task's OWN configuration. A merge
+  // follow-up is the producer: it exists to land the PR on that branch. Stripping
+  // that copy meant re-running a blocked follow-up cut a worktree fresh off the
+  // default branch, so any fix-and-push landed on a branch the PR never heard of.
+  it('keeps a self-configured branch pointer through a terminal block', async () => {
+    await addTask({ description: 'merge PR 1', id: 'sys-rl-keep' }, 'internal');
+    await updateTask('sys-rl-keep', {
+      metadata: { existingBranch: 'cos/task-1/agent-1', reviewLoopFollowUp: true, reviewLoopPRUrl: 'https://github.com/o/r/pull/1' }
+    }, 'internal');
+    const blocked = await updateTask('sys-rl-keep', {
+      status: 'blocked',
+      metadata: { blockedCategory: 'worktree-failed' }
+    }, 'internal');
+    expect(blocked.metadata.existingBranch).toBe('cos/task-1/agent-1');
+  });
+
+  // ...but once the resume mechanism has stamped its marker, the whole pointer is
+  // the resume's and goes with it — the tree the dead run left behind is gone by
+  // the time anyone re-runs the task.
+  it('drops the branch pointer once resumedFromAgentId marks it as the resume’s', async () => {
+    await addTask({ description: 'merge PR 2', id: 'sys-rl-halfkeep' }, 'internal');
+    await updateTask('sys-rl-halfkeep', {
+      metadata: {
+        existingBranch: 'cos/task-2/agent-2', reviewLoopFollowUp: true,
+        resumedFromAgentId: 'agent-2', resumeWorktreePath: '/w/agent-2'
+      }
+    }, 'internal');
+    const done = await updateTask('sys-rl-halfkeep', { status: 'completed' }, 'internal');
+    expect(done.metadata.existingBranch).toBeUndefined();
+    expect(done.metadata.resumedFromAgentId).toBeUndefined();
+    expect(done.metadata.resumeWorktreePath).toBeUndefined();
+  });
+
+  // `worktree-busy` joins the pause categories: the cooldown sweeper revives it,
+  // and the revived attempt must still attach to the PR branch.
+  it('keeps the pointer through a worktree-busy cooldown block', async () => {
+    await addTask({ description: 'merge PR 3', id: 'sys-rl-busy' }, 'internal');
+    await updateTask('sys-rl-busy', {
+      metadata: { existingBranch: 'cos/task-3/agent-3', resumedFromAgentId: 'agent-3', reviewLoopFollowUp: true }
+    }, 'internal');
+    const cooled = await updateTask('sys-rl-busy', {
+      status: 'blocked',
+      metadata: { blockedCategory: 'worktree-busy', cooldownUntil: '2026-01-01T00:02:00.000Z' }
+    }, 'internal');
+    expect(cooled.metadata.existingBranch).toBe('cos/task-3/agent-3');
   });
 
   it('releases the federation claim/lease when a task leaves in_progress (#1563)', async () => {

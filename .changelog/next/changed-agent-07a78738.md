@@ -1,0 +1,1 @@
+- The uncensored text-encoder option no longer prints a refusal-behavior advisory under the picker; its model card and license links stay.

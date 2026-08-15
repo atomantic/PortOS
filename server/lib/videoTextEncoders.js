@@ -83,12 +83,6 @@ const TEXT_ENCODERS_BY_RUNTIME = Object.freeze({
         weightsLicense: APACHE_2,
         reviewedAt: '2026-08-14',
       }),
-      // Informational, NOT a second license. This conditioner is Apache-2.0
-      // with nothing extra to accept. The picker states the behavior change
-      // inline at the moment of choosing.
-      advisory:
-        'This conditioner has had its refusal behavior removed. It will follow prompts the stock '
-        + 'conditioner declines. You remain responsible for what you generate.',
     }),
   ]),
 });
@@ -185,7 +179,6 @@ export const publicTextEncoderOption = (entry) => ({
   builtIn: !!entry.builtIn,
   ...(entry.repo ? { repo: entry.repo } : {}),
   ...(entry.sizeBytes ? { sizeBytes: entry.sizeBytes } : {}),
-  ...(entry.advisory ? { advisory: entry.advisory } : {}),
   ...(entry.disclosure ? { disclosure: entry.disclosure } : {}),
 });
 

@@ -84,6 +84,26 @@ export function isGitLockError(message) {
 }
 
 /**
+ * True when `git worktree add` refused because the branch is ALREADY checked out
+ * in some other worktree — `fatal: '<branch>' is already used by worktree at
+ * '<path>'` on current git, `is already checked out at '<path>'` on older ones.
+ *
+ * This is a TRANSIENT condition, not a misconfiguration: the only routine
+ * producer is a cleanup still tearing down the previous agent's worktree while
+ * the follow-up spawned to land its PR is already prepping (the two ran ~0.7s
+ * apart in the incident that motivated this). Callers use it to pause and retry
+ * rather than blocking the task, which stranded the pull request the follow-up
+ * existed to merge.
+ *
+ * Deliberately NOT folded into `isGitLockError`: that predicate drives the
+ * in-process add retry, whose budget is sized in milliseconds for bookkeeping
+ * locks. Waiting out another worktree's teardown belongs at the task level.
+ */
+export function isBranchCheckedOutElsewhereError(message) {
+  return /already (?:used by worktree|checked out) at/i.test(message || '');
+}
+
+/**
  * Run `git worktree add …` with retry on lock contention. Promise-chained
  * (no try/catch) so it stays idiomatic with the rest of the module: on a lock
  * error it backs off and recurses until WORKTREE_ADD_MAX_ATTEMPTS, then lets

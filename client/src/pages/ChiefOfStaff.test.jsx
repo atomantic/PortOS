@@ -275,6 +275,19 @@ describe('ChiefOfStaff Learning card skipped label', () => {
     }
   });
 
+  it('paints a skipped tile as critical even if the server status disagrees', async () => {
+    // The tile derives `critical` from `skipped > 0` itself instead of trusting
+    // the server's status chain to keep classifying it that way — this fixture
+    // is deliberately the mismatched combination (skipped 3 / status 'warning').
+    api.getCosLearningSummary.mockResolvedValue(summaryWithSkipped);
+    renderAt('config');
+
+    for (const card of await learningCards()) {
+      expect(within(card).getByText(/skipped/).className).toContain('text-port-error');
+      expect(card.className).toContain('border-port-error');
+    }
+  });
+
   it('omits the skipped label entirely when nothing was skipped', async () => {
     api.getCosLearningSummary.mockResolvedValue({ ...summaryWithSkipped, skipped: 0, status: 'good' });
     renderAt('config');

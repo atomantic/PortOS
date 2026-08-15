@@ -18,6 +18,7 @@
  *   { outcome: 'ready', workspacePath, resolvedAppName, worktreeInfo, jiraTicket, jiraBranchName, explicitWorktree }
  *   { outcome: 'deferred', reason, deferReason, branch }   // git conflict — task re-queued
  *   { outcome: 'blocked', reason }                          // explicit worktree requested but creation failed
+ *                                                           // (`worktree-busy` blocks are a TIMED pause and revive themselves)
  *
  * An unexpected throw bubbles to the caller's widened try/catch the same way
  * the inline code did.
@@ -33,7 +34,7 @@ import { isTruthyMeta, isFalsyMeta } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
 import * as git from './git.js';
 import { detectConflicts } from './taskConflict.js';
-import { createWorktree, adoptWorktree } from './worktreeManager.js';
+import { createWorktree, adoptWorktree, isBranchCheckedOutElsewhereError } from './worktreeManager.js';
 import { resolveSpawnCwd } from '../lib/spawnCwd.js';
 import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
 import { getAppWorkspace, getAppDataForTask, createJiraTicketForTask } from './agentPromptBuilder.js';
@@ -51,7 +52,7 @@ const ROOT_DIR = PATHS.root;
  * it revivable once the config is fixed. Best-effort — the caller's block
  * outcome must stand even if the write fails.
  */
-async function blockTask(task, reason, blockedCategory) {
+async function blockTask(task, reason, blockedCategory, extraMetadata = {}) {
   await updateTask(task.id, {
     status: 'blocked',
     metadata: {
@@ -59,9 +60,20 @@ async function blockTask(task, reason, blockedCategory) {
       blockedReason: reason,
       blockedCategory,
       blockedAt: new Date().toISOString(),
+      ...extraMetadata,
     },
   }, task.taskType || 'user').catch(() => {});
 }
+
+// How long a task waits for another worktree to release the branch it needs, and
+// how many times it may wait. The producer of that contention is a cleanup
+// tearing down the previous agent's worktree, which finishes in seconds — but a
+// worktree `removeWorktree` REFUSED to delete (uncommitted changes) holds the
+// branch until a human clears it, so the wait has to be bounded. Past the cap the
+// task takes the ordinary `worktree-failed` block and the orphaned-PR notifier
+// raises its card.
+const WORKTREE_BUSY_COOLDOWN_MS = 2 * 60 * 1000;
+const WORKTREE_BUSY_MAX_ATTEMPTS = 5;
 
 /**
  * Prepare the workspace (and any worktree/JIRA branch) for an agent task.
@@ -288,11 +300,19 @@ export async function prepareAgentWorkspace({ agentId, task }) {
         emitLog('warn', `🌳 Worktree ${resumeWorktreePath} could not be adopted and still holds ${existingBranch} — task ${task.id} starts from a clean branch`, { taskId: task.id });
       }
 
+      // Both read only by the block/pause decision below: the failure REASON
+      // decides whether the task is unrunnable or merely early, and `attempt` is
+      // which branch-busy wait this would be (TASKS.md round-trips metadata as
+      // strings, hence the coercion; never reset on revive, so the cap is the
+      // task's whole patience budget rather than a per-attempt one).
+      let worktreeError = null;
+      const attempt = (Number(task.metadata?.worktreeBusyAttempts) || 0) + 1;
       worktreeInfo = adopted || await createWorktree(agentId, workspacePath, task.id, {
         baseBranch: detectedBase || undefined,
         existingBranch: branchStillClaimed ? undefined : (existingBranch || undefined),
         planId: task.metadata?.planId || undefined
       }).catch(err => {
+        worktreeError = err;
         emitLog('warn', `🌳 Worktree creation failed, using shared workspace: ${err.message}`, { taskId: task.id });
         return null;
       });
@@ -312,6 +332,21 @@ export async function prepareAgentWorkspace({ agentId, task }) {
         // degrade to that instead. The resume is lost (the leftover work stays on
         // disk for the next attempt), but the task still runs.
         emitLog('warn', `🌳 Worktree creation failed for task ${task.id}; resuming is not possible, continuing in the shared workspace`, { taskId: task.id });
+      } else if (isBranchCheckedOutElsewhereError(worktreeError?.message) && attempt <= WORKTREE_BUSY_MAX_ATTEMPTS) {
+        // The branch is checked out in ANOTHER worktree. Routinely that other
+        // worktree is the previous agent's, still being torn down by the very
+        // cleanup that spawned this task, so waiting it out lands the pull
+        // request a permanent block would have stranded. `worktree-busy` is a
+        // TIMED PAUSE (lib/taskBlockCategories.js): the cooldown sweeper revives
+        // it, and the pause keeps `existingBranch` so the revived attempt still
+        // attaches to the PR branch instead of cutting a fresh one off main.
+        const reason = `Branch ${existingBranch || 'for this task'} is still checked out in another worktree; retrying after a short cooldown`;
+        emitLog('info', `🌳 ${reason} (attempt ${attempt}/${WORKTREE_BUSY_MAX_ATTEMPTS})`, { taskId: task.id, branch: existingBranch || null });
+        await blockTask(task, `${reason}. ${worktreeError?.message || ''}`.trim(), 'worktree-busy', {
+          cooldownUntil: new Date(Date.now() + WORKTREE_BUSY_COOLDOWN_MS).toISOString(),
+          worktreeBusyAttempts: attempt,
+        });
+        return { outcome: 'blocked', reason };
       } else {
         // Isolation was EXPLICITLY requested (useWorktree/openPR) but the
         // worktree couldn't be created. Falling back to the shared workspace
@@ -323,7 +358,7 @@ export async function prepareAgentWorkspace({ agentId, task }) {
         // since there the worktree was only a recommendation, not a request.)
         const reason = `Worktree creation failed for task ${task.id}; refusing to run in the shared workspace because isolation was explicitly requested`;
         emitLog('warn', `🌳 ${reason}`, { taskId: task.id });
-        await blockTask(task, 'Worktree creation failed — isolation was explicitly requested', 'worktree-failed');
+        await blockTask(task, `Worktree creation failed — isolation was explicitly requested${worktreeError?.message ? `: ${worktreeError.message}` : ''}`, 'worktree-failed');
         return { outcome: 'blocked', reason };
       }
     } else if (!jiraBranchName && !isFalsyMeta(task.metadata?.useWorktree)) {

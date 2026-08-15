@@ -1,0 +1,1 @@
+- A merge follow-up no longer blocks when the PR branch is still checked out in the agent worktree that spawned it — cleanup releases the branch before queueing the follow-up, and a branch-busy failure pauses on a short cooldown instead of stranding the pull request

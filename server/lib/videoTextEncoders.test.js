@@ -108,7 +108,6 @@ describe('videoTextEncoders', () => {
       builtIn: false,
       label: expect.any(String),
       description: expect.any(String),
-      advisory: expect.any(String),
       // The exact published byte count — the picker formats it, so there is no
       // second "~N GB" literal that could drift from the real download.
       sizeBytes: expect.any(Number),
@@ -141,11 +140,10 @@ describe('videoTextEncoders', () => {
     expect(entry.disclosure.weightsLicense).toBe(APACHE_2);
   });
 
-  // An uncensored conditioner is a deliberate choice; the picker states what
-  // changed rather than leaving it to an external model card.
-  it('carries an advisory on every non-built-in option', () => {
+  // A substitute is someone else's tens-of-GB checkpoint, so its provenance
+  // stays one click away — the picker links the card it declares here.
+  it('carries a model card on every non-built-in option', () => {
     for (const entry of downloadableVideoTextEncoders()) {
-      expect(entry.advisory).toBeTruthy();
       expect(entry.disclosure?.modelCardUrl).toMatch(/^https:\/\/huggingface\.co\//);
     }
   });

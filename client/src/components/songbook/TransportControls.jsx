@@ -2,7 +2,8 @@
  * Shared presentational pieces for the SongBook play-along transports — the
  * drum-kit bar (`DrumTransportBar`) and the chord-sheet bar
  * (`ChordTransportBar`) render the same play button, practice-tempo cluster,
- * percent-of-written buttons, count-in select and beat pulse.
+ * percent-of-written buttons and count-in select. The beat pulse they also share
+ * lives in `components/ui/BeatPulse.jsx` — the song Metronome draws it too.
  *
  * Extracted rather than copied so the two bars can't drift on touch-target size,
  * label wording or the ±5 stepper behaviour. Everything here is stateless: the
@@ -140,32 +141,5 @@ export const CountInSelect = ({ idPrefix, countInBars, onCountInChange }) => (
         <option key={n} value={n}>{n === 0 ? 'none' : `${n} bar${n === 1 ? '' : 's'}`}</option>
       ))}
     </select>
-  </div>
-);
-
-/**
- * The pulse row: one dot per beat of the bar, the current one lit. This is the
- * metronome you can SEE — the audible click is easy to lose under a backing,
- * and on a phone the dots double as "yes, it's actually running".
- */
-export const BeatDots = ({ beatsPerBar, beat, countingIn }) => (
-  <div
-    className="flex items-center gap-1"
-    role="status"
-    aria-live="off"
-    aria-label={countingIn ? `Counting in, beat ${beat || 1}` : (beat ? `Beat ${beat}` : 'Stopped')}
-  >
-    {Array.from({ length: beatsPerBar }, (_, i) => {
-      const lit = beat === i + 1;
-      return (
-        <span
-          key={i}
-          aria-hidden="true"
-          className={`rounded-full ${lit ? 'w-2.5 h-2.5' : 'w-1.5 h-1.5'} ${
-            !lit ? 'bg-port-border' : (countingIn ? 'bg-port-warning' : 'bg-port-accent')
-          }`}
-        />
-      );
-    })}
   </div>
 );

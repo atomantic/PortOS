@@ -32,6 +32,15 @@ A separate `portos-cos` PM2 process that:
                                           └───────────────┘
 ```
 
+## Mode selection (runner vs direct)
+
+`portos-server` spawns agents through the runner when it is there, and directly (as its own children) when it is not. The choice is not frozen at boot:
+
+- A health probe at spawner init seeds the mode, for the window before the socket connects.
+- The Socket.IO connection is opened either way and reconnects indefinitely with capped backoff. The first `connect` **promotes** a direct-mode process to runner mode, logs `🔼 CoS Runner came up …`, and reconciles agents the runner was already driving — so starting `portos-cos` after `portos-server` takes effect immediately, with no server restart.
+- A disconnect does **not** demote. In runner mode the runner owns every agent process, so while it is down new tasks are **held** as `pending` (logged once, not per task) and resume on reconnect. Demoting would spawn them as children of `portos-server` — the orphaning this app exists to prevent.
+- Agents already spawned directly keep completing through the direct path across a promotion; reconciliation only adopts agents this server does not already own.
+
 ## Features
 
 - **Process Isolation**: Agent processes survive server restarts

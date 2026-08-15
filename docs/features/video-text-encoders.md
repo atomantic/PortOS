@@ -28,9 +28,6 @@ schedule, same joint video+audio output.
 | **Stock** | The conditioner inside `MiniMaxAI/MiniMax-H3`'s `FL2VA/text_encoder/` | none — already downloaded with the model |
 | **Ultra-Heretic uncensored** | `ethanfel/Qwen3-VL-32B-Ultra-Heretic-H3-ComfyUI-INT8-ConvRot`, bf16 variant — Qwen3-VL-32B-Instruct abliterated with Heretic v1.2.0 (attention-targeted), repackaged for H3 | ~48 GB, one pinned file |
 
-The Ultra-Heretic option has had its refusal behavior removed. It follows
-prompts the stock conditioner declines; the picker says so inline.
-
 Only the **bf16** file is usable here. The repo's INT8 ConvRot and NVFP4/AWQ
 variants use ComfyUI's own quantization (learned row-wise rotation matrices,
 group size 256) that the MLX loader cannot dequantize, and the `50_63`
@@ -112,7 +109,6 @@ integrity scan and the render path all read from that table.
   finalNormKey: 'model.norm.weight',  // omit if the checkpoint ships its own norm
   sizeBytes: 12345,              // exact published size — the UI formats this
   disclosure: { modelCardUrl, weightsLicense, baseModel, estimatedDownloadGb, reviewedAt },
-  advisory: '…',                 // required when behavior differs from stock
 }
 ```
 

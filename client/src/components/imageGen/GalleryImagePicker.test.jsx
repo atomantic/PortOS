@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import GalleryImagePicker from './GalleryImagePicker';
+import toast from '../ui/Toast';
 
 const listImageGallery = vi.fn();
 const listMediaCollections = vi.fn();
@@ -23,7 +24,10 @@ vi.mock('../../services/apiSystem', () => ({
   uploadGalleryImage: (...args) => uploadGalleryImage(...args),
 }));
 
-vi.mock('../../utils/fileUpload', () => ({
+// Only the FileReader round-trip is stubbed — `validateImageFile` and the size
+// constants stay real so the upload gate is genuinely under test.
+vi.mock('../../utils/fileUpload', async (importOriginal) => ({
+  ...(await importOriginal()),
   readFileAsBase64: vi.fn().mockResolvedValue('ZmFrZS1iYXNlNjQ='),
 }));
 
@@ -64,7 +68,15 @@ describe('GalleryImagePicker', () => {
     listMediaCollections.mockResolvedValue(COLLECTIONS);
     listUniverses.mockReset();
     listUniverses.mockResolvedValue(UNIVERSES);
+    uploadGalleryImage.mockReset();
+    toast.error.mockReset();
   });
+
+  // Drop a file on the (portalled) upload input and wait for the grid to settle.
+  const pickFile = async (file) => {
+    await screen.findByAltText('a neon sunset');
+    fireEvent.change(document.querySelector('input[type="file"]'), { target: { files: [file] } });
+  };
 
   it('does not fetch or render while closed', () => {
     render(<GalleryImagePicker open={false} onClose={vi.fn()} onSelect={vi.fn()} />);
@@ -115,15 +127,83 @@ describe('GalleryImagePicker', () => {
     const onSelect = vi.fn();
     const onClose = vi.fn();
     render(<GalleryImagePicker open allowUpload onSelect={onSelect} onClose={onClose} />);
-    await screen.findByAltText('a neon sunset');
     // Modal portals to <body>, so query the whole document for the file input.
-    const fileInput = document.querySelector('input[type="file"]');
-    const file = new File(['x'], 'photo.png', { type: 'image/png' });
-    fireEvent.change(fileInput, { target: { files: [file] } });
+    await pickFile(new File(['x'], 'photo.png', { type: 'image/png' }));
     await waitFor(() => expect(uploadGalleryImage).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(onSelect).toHaveBeenCalledTimes(1));
     expect(onSelect.mock.calls[0][0]).toMatchObject({ filename: 'upload-abcd1234.png', previewUrl: '/data/images/upload-abcd1234.png' });
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  // A host that stores the picked URL on a record (album cover, artist portrait,
+  // author headshot) caps uploads below the wire limit — a drag-drop or a paste
+  // bypasses the input's `accept`, so the gate has to live in the handler.
+  it('refuses a file over maxBytes without uploading it', async () => {
+    const onSelect = vi.fn();
+    const onClose = vi.fn();
+    render(<GalleryImagePicker open allowUpload maxBytes={4} onSelect={onSelect} onClose={onClose} />);
+    await pickFile(new File(['0123456789'], 'huge.png', { type: 'image/png' }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
+    expect(toast.error.mock.calls[0][0]).toMatch(/exceeds/i);
+    expect(uploadGalleryImage).not.toHaveBeenCalled();
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('refuses a format the upload endpoint cannot verify', async () => {
+    const onSelect = vi.fn();
+    render(<GalleryImagePicker open allowUpload onSelect={onSelect} onClose={vi.fn()} />);
+    await pickFile(new File(['x'], 'vector.svg', { type: 'image/svg+xml' }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
+    expect(toast.error.mock.calls[0][0]).toMatch(/PNG, JPEG, GIF, WebP/);
+    expect(uploadGalleryImage).not.toHaveBeenCalled();
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  // Hosts are master-detail editors: dismissing the modal mid-upload and picking
+  // a different album/artist/author must not write this image onto that record.
+  it('drops an upload that lands after the picker was dismissed', async () => {
+    let settleUpload;
+    uploadGalleryImage.mockReturnValue(new Promise((resolve) => { settleUpload = resolve; }));
+    const onSelect = vi.fn();
+    const onClose = vi.fn();
+    const { rerender } = render(<GalleryImagePicker open allowUpload onSelect={onSelect} onClose={onClose} />);
+    await pickFile(new File(['x'], 'photo.png', { type: 'image/png' }));
+    await waitFor(() => expect(uploadGalleryImage).toHaveBeenCalledTimes(1));
+
+    // Host dismissed the modal (Esc / backdrop / X) while the POST was in flight.
+    rerender(<GalleryImagePicker open={false} allowUpload onSelect={onSelect} onClose={onClose} />);
+    await act(async () => { settleUpload({ filename: 'late.png', path: '/data/images/late.png' }); });
+
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  // Same guarantee for a host that tears the picker down (route change, or a
+  // parent that conditionally renders it) rather than toggling `open`.
+  it('drops an upload that lands after the picker unmounted', async () => {
+    let settleUpload;
+    uploadGalleryImage.mockReturnValue(new Promise((resolve) => { settleUpload = resolve; }));
+    const onSelect = vi.fn();
+    const { unmount } = render(<GalleryImagePicker open allowUpload onSelect={onSelect} onClose={vi.fn()} />);
+    await pickFile(new File(['x'], 'photo.png', { type: 'image/png' }));
+    await waitFor(() => expect(uploadGalleryImage).toHaveBeenCalledTimes(1));
+
+    unmount();
+    await act(async () => { settleUpload({ filename: 'late.png', path: '/data/images/late.png' }); });
+
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it('allows a large file when no host cap narrows the wire limit', async () => {
+    uploadGalleryImage.mockResolvedValue({ filename: 'big.png', path: '/data/images/big.png' });
+    render(<GalleryImagePicker open allowUpload onSelect={vi.fn()} onClose={vi.fn()} />);
+    await pickFile(new File(['0123456789'], 'big.png', { type: 'image/png' }));
+
+    await waitFor(() => expect(uploadGalleryImage).toHaveBeenCalledTimes(1));
+    expect(toast.error).not.toHaveBeenCalled();
   });
 
   it('filters by universe, preferring the fetched record name over the stamped one', async () => {

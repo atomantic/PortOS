@@ -1,0 +1,1 @@
+- HuggingFace LoRA install now detects Flux.2 Klein (and other image families) instead of only offering LTX-Video.

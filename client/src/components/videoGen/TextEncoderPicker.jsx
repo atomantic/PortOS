@@ -64,11 +64,6 @@ export default function TextEncoderPicker({
       {selected.description && (
         <p className="text-[10px] text-gray-500 leading-snug mt-1">{selected.description}</p>
       )}
-      {/* An uncensored conditioner is a deliberate choice, not a default —
-          state what changed rather than leaving it to the model card. */}
-      {selected.advisory && (
-        <p className="text-[10px] text-port-warning leading-snug mt-1">{selected.advisory}</p>
-      )}
       {/* Same provenance affordance a MODEL gets (ModelDisclosure/FactLink): a
           substitute is someone else's tens-of-GB checkpoint, so its card and
           license stay one click away instead of being facts only the registry

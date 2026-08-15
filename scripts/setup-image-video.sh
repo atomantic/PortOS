@@ -674,8 +674,22 @@ if [[ "$INSTALL_MINIMAX_MUSIC3" == "1" ]]; then
   [[ -x "$MINIMAX_MUSIC3_PY" || -x "$MINIMAX_MUSIC3_VENV/Scripts/python.exe" ]] || "$PYTHON_BIN" -m venv "$MINIMAX_MUSIC3_VENV"
   [[ -x "$MINIMAX_MUSIC3_PY" ]] || MINIMAX_MUSIC3_PY="$MINIMAX_MUSIC3_VENV/Scripts/python.exe"
   "$MINIMAX_MUSIC3_PY" -m pip install --upgrade pip wheel setuptools
-  "$MINIMAX_MUSIC3_PY" -m pip install --upgrade torch transformers accelerate huggingface_hub numpy \
-    'diffusers @ git+https://github.com/huggingface/diffusers.git@7cd51fa'
+  # torch comes from PyTorch's own CUDA index on Windows — the default PyPI
+  # Windows wheel is CPU-only, which fails the cuda assert below. Linux's PyPI
+  # torch already bundles CUDA. Mirrors the MiniMax H3 CUDA block above.
+  MINIMAX_MUSIC3_TORCH_INDEX="${PORTOS_TORCH_CUDA_INDEX:-https://download.pytorch.org/whl/cu126}"
+  if is_windows; then
+    echo "📦 Installing CUDA torch from ${MINIMAX_MUSIC3_TORCH_INDEX}..."
+    "$MINIMAX_MUSIC3_PY" -m pip install --upgrade --index-url "$MINIMAX_MUSIC3_TORCH_INDEX" torch
+  else
+    "$MINIMAX_MUSIC3_PY" -m pip install --upgrade torch
+  fi
+  # Pinned to the main commit that merged MiniMax Music 3 (diffusers PR #14456,
+  # 2026-08-13) — the integration is in no tagged release yet. The pin must be a
+  # commit reachable from main: pip clones the default branch, so a PR-branch
+  # head SHA fails with "pathspec ... did not match any file(s) known to git".
+  "$MINIMAX_MUSIC3_PY" -m pip install --upgrade transformers accelerate huggingface_hub numpy \
+    'diffusers @ git+https://github.com/huggingface/diffusers.git@2da7040be1a2e5f2fcbc8b985083342a308f5a86'
   "$MINIMAX_MUSIC3_PY" -c "import torch; from diffusers import ModularPipeline; assert torch.cuda.is_available()"
   echo "✅ MiniMax Music 3 venv ready: $MINIMAX_MUSIC3_PY"
 fi

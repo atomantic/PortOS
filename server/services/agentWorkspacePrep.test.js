@@ -27,7 +27,16 @@ vi.mock('./git.js', () => ({
   createBranch: vi.fn(),
 }));
 vi.mock('./taskConflict.js', () => ({ detectConflicts: vi.fn().mockResolvedValue({ recommendation: 'proceed' }) }));
-vi.mock('./worktreeManager.js', () => ({ createWorktree: vi.fn(), adoptWorktree: vi.fn(), mergeBaseIntoFeatureWorktree: vi.fn() }));
+// `isBranchCheckedOutElsewhereError` is imported from the REAL module: it is a
+// pure predicate over git's own wording, and re-stating that regex in the mock
+// would make every branch-busy assertion below agree with a copy of the code
+// instead of with the code.
+vi.mock('./worktreeManager.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  createWorktree: vi.fn(),
+  adoptWorktree: vi.fn(),
+  mergeBaseIntoFeatureWorktree: vi.fn(),
+}));
 vi.mock('./agentPromptBuilder.js', () => ({
   getAppWorkspace: vi.fn().mockResolvedValue('/repos/app-x'),
   getAppDataForTask: vi.fn().mockResolvedValue(null),
@@ -278,5 +287,74 @@ describe('prepareAgentWorkspace — resuming an interrupted run', () => {
 
     expect(adoptWorktree).not.toHaveBeenCalled();
     expect(createWorktree).toHaveBeenCalled();
+  });
+});
+
+// A merge follow-up preps its worktree within a second or two of the cleanup that
+// spawned it, so it can find the PR branch still checked out in the previous
+// agent's tree. Blocking there orphans the pull request the follow-up exists to
+// land, so the branch-busy failure is a TIMED pause instead.
+describe('prepareAgentWorkspace — the branch is checked out in another worktree', () => {
+  const BUSY = new Error("fatal: 'cos/task-x/agent-y' is already used by worktree at '/mock/worktrees/agent-y'");
+  const followUpTask = (extra = {}) => ({
+    id: 'sys-rl-1', taskType: 'internal',
+    metadata: {
+      useWorktree: true,
+      existingBranch: 'cos/task-x/agent-y',
+      reviewLoopFollowUp: true,
+      reviewLoopPRUrl: 'https://github.com/o/r/pull/1',
+      ...extra
+    }
+  });
+
+  beforeEach(() => {
+    ensureLatest.mockResolvedValue({ success: true, upToDate: true });
+    adoptWorktree.mockResolvedValue(null);
+    createWorktree.mockRejectedValue(BUSY);
+  });
+
+  it('pauses with a cooldown instead of blocking, and keeps the branch pointer', async () => {
+    const r = await prepareAgentWorkspace({ agentId: 'agent-new', task: followUpTask() });
+
+    expect(r.outcome).toBe('blocked');
+    const [, patch] = updateTask.mock.calls.at(-1);
+    expect(patch.status).toBe('blocked');
+    expect(patch.metadata.blockedCategory).toBe('worktree-busy');
+    // `worktree-busy` is a PAUSE category, so updateTask keeps `existingBranch` —
+    // the revived attempt must still attach to the PR branch, not cut a new one.
+    expect(patch.metadata.existingBranch).toBe('cos/task-x/agent-y');
+    // The cooldown stamp is what the sweeper in cosTaskGenerator revives on.
+    expect(new Date(patch.metadata.cooldownUntil).getTime()).toBeGreaterThan(Date.now());
+    expect(patch.metadata.worktreeBusyAttempts).toBe(1);
+  });
+
+  it('counts up from the attempts already recorded on the task', async () => {
+    // Metadata round-trips through TASKS.md as strings.
+    await prepareAgentWorkspace({ agentId: 'agent-new', task: followUpTask({ worktreeBusyAttempts: '3' }) });
+
+    const [, patch] = updateTask.mock.calls.at(-1);
+    expect(patch.metadata.worktreeBusyAttempts).toBe(4);
+    expect(patch.metadata.blockedCategory).toBe('worktree-busy');
+  });
+
+  it('gives up on a branch nothing is going to release, so a human sees the real block', async () => {
+    // A worktree removeWorktree REFUSED to delete (uncommitted changes) holds the
+    // branch until someone clears it — waiting forever would just hide the PR.
+    await prepareAgentWorkspace({ agentId: 'agent-new', task: followUpTask({ worktreeBusyAttempts: 5 }) });
+
+    const [, patch] = updateTask.mock.calls.at(-1);
+    expect(patch.metadata.blockedCategory).toBe('worktree-failed');
+    // The git error rides along — "worktree creation failed" alone said nothing
+    // about which branch was held, or by what.
+    expect(patch.metadata.blockedReason).toContain('already used by worktree');
+  });
+
+  it('does NOT pause for a permanent worktree failure', async () => {
+    createWorktree.mockRejectedValue(new Error("fatal: '/mock/worktrees/agent-new' already exists"));
+
+    await prepareAgentWorkspace({ agentId: 'agent-new', task: followUpTask() });
+
+    const [, patch] = updateTask.mock.calls.at(-1);
+    expect(patch.metadata.blockedCategory).toBe('worktree-failed');
   });
 });

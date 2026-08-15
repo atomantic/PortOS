@@ -24,7 +24,8 @@ import { getSuggestions, searchLorasInFamily } from '../services/civitaiSuggesti
 import { getVideoSuggestions } from '../services/videoLoraSuggestions.js';
 import { findLorasByCharacter } from '../services/characterLoraResolver.js';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
-import { RUNNER_FAMILIES, VIDEO_LORA_FAMILIES } from '../lib/runners.js';
+import { RUNNER_FAMILIES } from '../lib/runners.js';
+import { HF_LORA_FAMILIES } from '../lib/huggingfaceLora.js';
 import { openSseStream } from '../lib/sseDownload.js';
 
 const router = Router();
@@ -134,11 +135,12 @@ router.post('/install', asyncHandler(async (req, res) => {
   res.status(201).json(sidecar);
 }));
 
-// Install a video LoRA from a HuggingFace repo (fal / Lightricks LTX LoRAs).
-// `family` is an optional override; absence auto-detects from the repo.
+// Install an image or video LoRA from a HuggingFace repo (Flux.2 Klein,
+// fal / Lightricks LTX, MiniMax H3). `family` is an optional override;
+// absence auto-detects from the repo id / tags / filenames.
 const hfInstallSchema = z.object({
   url: z.string().min(1).max(1024),
-  family: z.enum(Object.values(VIDEO_LORA_FAMILIES)).optional(),
+  family: z.enum(HF_LORA_FAMILIES).optional(),
   file: z.string().min(1).max(512).regex(/\.safetensors$/i).optional(),
   // One-shot token override; absence falls back to the stored/env/CLI HF token.
   token: z.string().min(1).max(256).optional(),
@@ -163,7 +165,7 @@ router.post('/install/huggingface', asyncHandler(async (req, res) => {
 // retry, exactly as the plain POST path's thrown error does.
 const hfInstallStreamSchema = z.object({
   url: z.string().min(1).max(1024),
-  family: z.enum(Object.values(VIDEO_LORA_FAMILIES)).optional(),
+  family: z.enum(HF_LORA_FAMILIES).optional(),
   file: z.string().min(1).max(512).regex(/\.safetensors$/i).optional(),
 });
 router.post('/install/huggingface/stream', asyncHandler(async (req, res) => {

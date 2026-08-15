@@ -119,7 +119,15 @@ export function initCosRunnerConnection() {
     }
   };
 
+  // One connection-error line per outage, not one per retry. The socket is now
+  // opened unconditionally (issue #4134) so a promotion can happen when the
+  // runner comes up later — which means an install whose runner is simply off
+  // would otherwise log a `connect_error` every 10s, forever. Reset on connect
+  // so the NEXT outage is reported again.
+  let connectErrorLogged = false;
+
   socket.on('connect', () => {
+    connectErrorLogged = false;
     console.log('🔌 Connected to CoS Runner');
     for (const [sessionId, state] of tuiSessions) {
       for (const { event, payload } of state.pendingControls.splice(0)) {
@@ -135,7 +143,9 @@ export function initCosRunnerConnection() {
   });
 
   socket.on('connect_error', (err) => {
-    console.error(`🔌 CoS Runner connection error: ${err.message}`);
+    if (connectErrorLogged) return;
+    connectErrorLogged = true;
+    console.error(`🔌 CoS Runner connection error: ${err.message} — retrying until it answers`);
   });
 
   // Forward events to registered handlers
@@ -216,11 +226,14 @@ const probeRunnerHealth = (timeoutMs) =>
 /**
  * Check if CoS Runner is available.
  *
- * The BOOT-time mode decision (`setUseRunner`), taken before any socket exists,
- * which is why it probes rather than reading `socket.connected` the way
- * `isRunnerReachable` does. The generous timeout is deliberate: during a rolling
- * PM2 start the runner can be slow to answer, and a premature `false` here
- * demotes the whole process to direct mode for its lifetime.
+ * The COLD-START SEED for the mode decision (`setUseRunner`), taken before any
+ * socket exists, which is why it probes rather than reading `socket.connected`
+ * the way `isRunnerReachable` does. The generous timeout is deliberate: during a
+ * rolling PM2 start the runner can be slow to answer, and a premature `false`
+ * here starts the process in direct mode. It no longer strands it there —
+ * `connection:ready` promotes the process the moment the socket lands (#4134) —
+ * but every task dispatched in the meantime is spawned as a child of this
+ * server, so the seed is still worth getting right.
  */
 export async function isRunnerAvailable() {
   return (await probeRunnerHealth(10000)) !== null;

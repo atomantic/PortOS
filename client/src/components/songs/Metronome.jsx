@@ -4,8 +4,9 @@
  * Drives client/src/lib/metronome.js (sample-accurate Web Audio scheduler). The
  * BPM defaults from the song `tempo`; the time signature is derived from the
  * score header (default 4/4). Beat 1 is accented both audibly (brighter click)
- * and visually (filled accent dot). The optional one-bar count-in lets a singer
- * find beat 1 before recording / color-match begins.
+ * and visually (the shared `BeatPulse` draws the downbeat a size larger). The
+ * optional one-bar count-in lets a singer find beat 1 before recording /
+ * color-match begins.
  *
  * Reads tempo + score from props already on the song record — issues no fetch of
  * its own. Tears the metronome down on stop and on unmount so a navigation-away
@@ -15,6 +16,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Play, Square, Timer } from 'lucide-react';
 import toast from '../ui/Toast';
+import BeatPulse from '../ui/BeatPulse.jsx';
 import {
   createMetronome,
   clampBpm,
@@ -75,8 +77,7 @@ export default function Metronome({ tempo = null, score = '', countInBars = 1 })
     if (metroRef.current) metroRef.current.setBpm(next);
   }, []);
 
-  const dots = useMemo(() => Array.from({ length: beatsPerBar }, (_, i) => i + 1), [beatsPerBar]);
-  const activeBeat = running && pulse ? pulse.beat : 0;
+  const activeBeat = running && pulse ? pulse.beat : null;
 
   return (
     <div className="bg-port-card border border-port-border rounded-lg p-3">
@@ -106,21 +107,9 @@ export default function Metronome({ tempo = null, score = '', countInBars = 1 })
         </div>
       </div>
 
-      {/* Visual beat pulse — one dot per beat; beat 1 is the accent. */}
-      <div className="flex items-center gap-2 mt-3" aria-hidden="true">
-        {dots.map((n) => {
-          const isActive = n === activeBeat;
-          const isAccent = n === 1;
-          const tone = isActive
-            ? (pulse?.countIn ? 'bg-port-warning' : 'bg-port-success')
-            : 'bg-port-border';
-          return (
-            <span
-              key={n}
-              className={`rounded-full transition-transform duration-75 ${isAccent ? 'w-3.5 h-3.5' : 'w-2.5 h-2.5'} ${tone} ${isActive ? 'scale-125' : 'scale-100'}`}
-            />
-          );
-        })}
+      {/* Visual beat pulse — shared with the SongBook play-along transports. */}
+      <div className="flex items-center gap-2 mt-3">
+        <BeatPulse beatsPerBar={beatsPerBar} beat={activeBeat} countingIn={pulse?.countIn} />
         {running && (
           <span className="text-xs text-gray-500 ml-1">
             {pulse?.countIn ? 'Count-in…' : pulse?.bar ? `Bar ${pulse.bar}` : ''}

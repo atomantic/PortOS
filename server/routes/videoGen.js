@@ -638,7 +638,7 @@ const textEncoderDownloadTarget = (entry) => ({
   only: [entry.file],
 });
 // Paired with its entry so the status lane can project the registry fields
-// (label, advisory, size) alongside the cache verdict without a second lookup.
+// (label, size) alongside the cache verdict without a second lookup.
 const textEncoderDownloadTargets = () => downloadableVideoTextEncoders()
   .map((entry) => ({ entry, target: textEncoderDownloadTarget(entry) }));
 

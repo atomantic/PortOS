@@ -1,10 +1,10 @@
 /**
- * LoRA Manager — install / browse / delete Civitai LoRAs.
+ * LoRA Manager — install / browse / delete Civitai and HuggingFace LoRAs.
  *
- * Paste a Civitai URL to download and install. Each LoRA card shows the
- * Civitai preview, base model (Flux.1 / Flux.2 / Z-Image / Other), trigger
- * words, recommended scale, and a "Test in Image Gen" deep-link that
- * preselects the LoRA on the generation page.
+ * Paste a Civitai or HuggingFace URL to download and install. Each LoRA card
+ * shows the preview, base model (Flux.1 / Flux.2 / Z-Image / LTX / Other),
+ * trigger words, recommended scale, and a "Test in Image Gen" / Video Gen
+ * deep-link that preselects the LoRA on the generation page.
  */
 
 import { useState, useEffect, useCallback } from 'react';
@@ -70,6 +70,20 @@ const cardKey = (card) => suggestionKey(card.modelId, card.versionId);
 const hfCardKey = (card) => `${card.repo}:${card.file || ''}`;
 const installedHfKey = (lora) => `${lora.huggingface?.repo || ''}:${lora.huggingface?.file || ''}`;
 
+// Manual family choices when HF autodetection returns HF_UNKNOWN_FAMILY.
+// Image families first — the previous LTX-only confirm silently mis-tagged
+// Flux.2 Klein adapters (Alissonerdx/CharacterSheet) as video LoRAs.
+const HF_FAMILY_OVERRIDES = [
+  { family: RUNNER_FAMILIES.FLUX2, label: 'Flux 2' },
+  { family: RUNNER_FAMILIES.MFLUX, label: 'Flux 1' },
+  { family: RUNNER_FAMILIES.Z_IMAGE, label: 'Z-Image' },
+  { family: RUNNER_FAMILIES.QWEN, label: 'Qwen' },
+  { family: RUNNER_FAMILIES.ERNIE, label: 'ERNIE' },
+  { family: RUNNER_FAMILIES.HIDREAM, label: 'HiDream' },
+  { family: VIDEO_LORA_FAMILIES.LTX_VIDEO, label: 'LTX-Video' },
+  { family: VIDEO_LORA_FAMILIES.MINIMAX_H3, label: 'MiniMax H3' },
+];
+
 // Integer download percent (0..100) from an SSE progress frame, or null when
 // the frame carries no numeric ratio (server sent no Content-Length → the UI
 // shows an indeterminate bar). Shared by the HF install form button, the
@@ -82,8 +96,8 @@ export default function Loras() {
   const [error, setError] = useState(null);
   const [installUrl, setInstallUrl] = useState('');
   const [installing, setInstalling] = useState(false);
-  // HuggingFace video-LoRA import (fal / Lightricks LTX LoRAs) — separate from
-  // the Civitai installer above because video LoRAs live on HF.
+  // HuggingFace LoRA import (Flux.2 Klein image adapters, fal / Lightricks
+  // LTX video LoRAs) — separate from the Civitai installer above.
   const [hfUrl, setHfUrl] = useState('');
   const [hfInstalling, setHfInstalling] = useState(false);
   // Byte-level download progress for the in-flight HF install (form OR curated
@@ -91,9 +105,9 @@ export default function Loras() {
   // where progress is 0..1, or null when the server had no Content-Length.
   const [hfProgress, setHfProgress] = useState(null);
   // When autodetection can't classify the repo (HF_UNKNOWN_FAMILY), hold the
-  // URL here to render an inline "install as LTX-Video?" confirm row — the API
-  // supports an explicit family override, so a valid LTX LoRA with an
-  // unrecognizable id shouldn't dead-end at an error toast.
+  // URL here to render an inline family picker — the API supports an explicit
+  // family override, so a valid LoRA with an unrecognizable id shouldn't
+  // dead-end at an error toast (or get force-tagged as LTX-Video).
   const [hfFamilyPrompt, setHfFamilyPrompt] = useState(null);
   const [deleting, setDeleting] = useState(null);
   // Arms one installed card's delete at a time — a LoRA is a multi-gigabyte
@@ -174,9 +188,10 @@ export default function Loras() {
     return performInstall(installUrl.trim());
   };
 
-  // Install a video LoRA from a HuggingFace repo. The family is auto-detected
-  // server-side from the repo id/tags (LTX-Video → ltx-video); HF_UNKNOWN_FAMILY
-  // surfaces as a toast asking the user to confirm it's an LTX LoRA.
+  // Install a LoRA from a HuggingFace repo. The family is auto-detected
+  // server-side from the repo id/tags/filenames (Flux.2 Klein → flux2,
+  // LTX-Video → ltx-video); HF_UNKNOWN_FAMILY surfaces as an inline picker
+  // of image and video families rather than a dead-end toast.
   // Shared install runner: `family` is undefined for the first attempt
   // (server autodetects) and set to the override on the inline-confirm retry.
   const runHfInstall = useCallback(async (url, family) => {
@@ -195,8 +210,8 @@ export default function Loras() {
       })
       .catch((err) => {
         // Autodetection failed but the install is otherwise valid — offer an
-        // inline confirm to retry with the LTX-Video family rather than toast a
-        // dead-end. (Skip when we already tried with an explicit override.)
+        // inline family picker rather than toast a dead-end or force LTX.
+        // (Skip when we already tried with an explicit override.)
         if (err?.code === 'HF_UNKNOWN_FAMILY' && !family) {
           setHfFamilyPrompt(url);
         } else {
@@ -265,7 +280,7 @@ export default function Loras() {
       <div>
         <h1 className="text-2xl font-bold text-white mb-1">LoRA Manager</h1>
         <p className="text-sm text-gray-400">
-          Install LoRA fine-tunes from Civitai (image) or HuggingFace (video) and apply them to your Image Gen and Video Gen renders.
+          Install LoRA fine-tunes from Civitai or HuggingFace and apply them to your Image Gen and Video Gen renders.
         </p>
       </div>
 
@@ -312,15 +327,15 @@ export default function Loras() {
       >
         <div className="flex items-center gap-2 text-sm font-medium text-gray-300">
           <Download size={16} />
-          <span>Install video LoRA from HuggingFace</span>
+          <span>Install LoRA from HuggingFace</span>
         </div>
         <div className="flex gap-2">
           <input
             type="text"
             value={hfUrl}
             onChange={(e) => setHfUrl(e.target.value)}
-            aria-label="HuggingFace video LoRA URL"
-            placeholder="https://huggingface.co/fal/ltx2.3-audio-reactive-lora"
+            aria-label="HuggingFace LoRA URL"
+            placeholder="https://huggingface.co/Alissonerdx/CharacterSheet"
             className="flex-1 bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-gray-200 placeholder:text-gray-600"
             disabled={hfInstalling}
           />
@@ -335,24 +350,30 @@ export default function Loras() {
         {hfInstalling && <HfDownloadProgress progress={hfProgress} />}
         <p className="text-xs text-gray-500">
           Paste a <code className="bg-port-bg px-1 rounded">huggingface.co</code> repo URL — or an{' '}
-          <code className="bg-port-bg px-1 rounded">org/name</code> id — for an LTX-Video LoRA
-          (e.g. <code className="bg-port-bg px-1 rounded">fal/ltx2.3-audio-reactive-lora</code>).
-          These apply to <Link to="/media/video" className="text-port-accent hover:underline">Video Gen</Link> renders on an LTX-2 (ltx2) model. Gated repos use your HuggingFace token from Image Gen settings.
+          <code className="bg-port-bg px-1 rounded">org/name</code> id — for an image or video LoRA
+          (e.g. <code className="bg-port-bg px-1 rounded">Alissonerdx/CharacterSheet</code> or{' '}
+          <code className="bg-port-bg px-1 rounded">fal/ltx2.3-audio-reactive-lora</code>).
+          Flux.2 Klein adapters apply in <Link to="/media/image" className="text-port-accent hover:underline">Image Gen</Link>;
+          LTX-Video LoRAs apply in <Link to="/media/video" className="text-port-accent hover:underline">Video Gen</Link>.
+          Gated repos use your HuggingFace token from Image Gen settings.
         </p>
         {hfFamilyPrompt && (
-          <div className="flex items-center justify-between gap-3 rounded border border-port-warning/40 bg-port-warning/10 px-3 py-2">
+          <div className="rounded border border-port-warning/40 bg-port-warning/10 px-3 py-2 space-y-2">
             <span className="text-xs text-gray-300">
-              Couldn&apos;t detect the model family for <code className="bg-port-bg px-1 rounded">{hfFamilyPrompt}</code>. Install it as an LTX-Video LoRA?
+              Couldn&apos;t detect the model family for <code className="bg-port-bg px-1 rounded">{hfFamilyPrompt}</code>. Choose the runner this LoRA targets:
             </span>
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                type="button"
-                onClick={() => runHfInstall(hfFamilyPrompt, VIDEO_LORA_FAMILIES.LTX_VIDEO)}
-                disabled={hfInstalling}
-                className="bg-port-accent text-white px-3 py-1 rounded text-xs font-medium hover:bg-port-accent/90 disabled:opacity-50"
-              >
-                {hfInstalling ? (hfPct != null ? `Installing ${hfPct}%` : 'Installing…') : 'Install as LTX-Video'}
-              </button>
+            <div className="flex flex-wrap items-center gap-2">
+              {HF_FAMILY_OVERRIDES.map(({ family, label }) => (
+                <button
+                  key={family}
+                  type="button"
+                  onClick={() => runHfInstall(hfFamilyPrompt, family)}
+                  disabled={hfInstalling}
+                  className="bg-port-accent text-white px-3 py-1 rounded text-xs font-medium hover:bg-port-accent/90 disabled:opacity-50"
+                >
+                  {hfInstalling ? (hfPct != null ? `Installing ${hfPct}%` : 'Installing…') : `Install as ${label}`}
+                </button>
+              ))}
               <button
                 type="button"
                 onClick={() => setHfFamilyPrompt(null)}

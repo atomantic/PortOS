@@ -46,12 +46,13 @@ import {
   buildHfAuthHeaders,
   buildHfLoraSidecar,
   buildHfResolveUrl,
-  detectVideoLoraFamily,
+  detectHfLoraFamily,
   fetchHuggingfaceModel,
+  HF_LORA_FAMILIES,
   parseHuggingfaceLoraRef,
   pickHfLoraFile,
 } from '../lib/huggingfaceLora.js';
-import { RUNNER_FAMILIES, VIDEO_LORA_FAMILIES, composeCompatKey } from '../lib/runners.js';
+import { RUNNER_FAMILIES, composeCompatKey } from '../lib/runners.js';
 import {
   classifyLoraKeyLayout,
   classifyLoraKeyLayoutFromHeader,
@@ -537,23 +538,24 @@ export const installFromCivitai = async (input, { fetchImpl = fetch } = {}) => {
   return sidecar;
 };
 
-// Set of recognized video-LoRA families an HF import may target. Used to
-// validate a user-supplied `family` override before trusting it.
-const VIDEO_LORA_FAMILY_VALUES = new Set(Object.values(VIDEO_LORA_FAMILIES));
+// Set of recognized LoRA families an HF import may target (image runners +
+// video families). Used to validate a user-supplied `family` override.
+const HF_LORA_FAMILY_VALUES = new Set(HF_LORA_FAMILIES);
 
-// Install a video LoRA from a HuggingFace repo (e.g.
-// fal/ltx2.3-audio-reactive-lora). Mirrors installFromCivitai: parse the ref →
-// fetch repo metadata → pick the .safetensors → stream-download → write the
-// sidecar. The family is auto-detected from the repo id / tags / base_model,
-// or taken from an explicit `input.family` override (validated against the
-// known video families). Returns the new sidecar JSON.
+// Install a LoRA from a HuggingFace repo (Flux.2 Klein image adapters, fal /
+// Lightricks LTX video LoRAs, MiniMax H3). Mirrors installFromCivitai: parse
+// the ref → fetch repo metadata → pick the .safetensors → stream-download →
+// write the sidecar. The family is auto-detected from the repo id / tags /
+// base_model / filenames, or taken from an explicit `input.family` override
+// (validated against the known image + video families). Returns the new sidecar.
 export const installFromHuggingface = async (input, { fetchImpl = fetch, onProgress = null, signal = null } = {}) => {
-  const { repo, revision } = parseHuggingfaceLoraRef(input?.url);
+  const { repo, revision, file: parsedFile } = parseHuggingfaceLoraRef(input?.url);
   // Stored/env/CLI HF token — only needed for gated repos, but harmless to
   // send on public ones (HF ignores a bearer it doesn't require).
   const token = (typeof input?.token === 'string' && input.token.trim()) || (await getHfToken()) || '';
   const model = await fetchHuggingfaceModel(repo, { token, revision, fetchImpl });
-  const file = pickHfLoraFile(model, input?.file || null);
+  const preferredFile = input?.file || parsedFile || null;
+  const detected = detectHfLoraFamily({ repo, model, file: preferredFile });
 
   // Family: explicit override (validated) wins over autodetection so a user
   // can correct a mis-detected repo from the UI. An unrecognized repo with no
@@ -561,35 +563,47 @@ export const installFromHuggingface = async (input, { fetchImpl = fetch, onProgr
   // would surface under a model it can't actually load against.
   let family = null;
   if (input?.family) {
-    if (!VIDEO_LORA_FAMILY_VALUES.has(input.family)) {
+    if (!HF_LORA_FAMILY_VALUES.has(input.family)) {
       throw new ServerError(
-        `Unknown video LoRA family "${input.family}" — expected one of ${[...VIDEO_LORA_FAMILY_VALUES].join(', ')}`,
+        `Unknown LoRA family "${input.family}" — expected one of ${[...HF_LORA_FAMILY_VALUES].join(', ')}`,
         { status: 400, code: 'HF_BAD_FAMILY' },
       );
     }
     family = input.family;
   } else {
-    family = detectVideoLoraFamily({ repo, model });
+    family = detected?.family || null;
   }
   if (!family) {
     throw new ServerError(
-      `Couldn't determine a supported video model for HuggingFace repo "${repo}". Only LTX-Video LoRAs are supported today — pass an explicit family if you know this LoRA targets LTX-2.`,
+      `Couldn't determine a supported model for HuggingFace repo "${repo}". PortOS can install Flux 2, Flux 1, Z-Image, ERNIE, HiDream, Qwen, LTX-Video, and MiniMax H3 LoRAs — pass an explicit family if you know which one this targets.`,
       { status: 422, code: 'HF_UNKNOWN_FAMILY' },
     );
   }
 
+  const file = pickHfLoraFile(
+    model,
+    preferredFile,
+    { family, fluxVariant: family === RUNNER_FAMILIES.FLUX2 ? (detected?.fluxVariant || null) : null },
+  );
+  const refined = preferredFile ? detected : detectHfLoraFamily({ repo, model, file });
+  const fluxVariant = family === RUNNER_FAMILIES.FLUX2
+    ? (refined?.fluxVariant || detected?.fluxVariant || null)
+    : null;
+
   // Stable filename: `lora-<org>-<name>[-<file-variant>]-hf.safetensors`.
-  // No explicit file preserves the original filename contract. A versioned
-  // file from the same repo (for example `_v2`) gets a distinct suffix so both
-  // artifacts can coexist and projects can pin either one.
+  // Canonical single-file names (pytorch_lora_weights / lora) keep the original
+  // repo-only contract. Any other stem (CharacterSheet's QuadView_klein9b_v1,
+  // a `_v2` artifact) gets a distinct suffix so siblings can coexist.
   const slug = slugifyForFilename(repo.replace('/', '-'));
   const repoNameSlug = slugifyForFilename((repo.split('/')[1] || repo).replace(/_/g, '-'));
-  const fileStemSlug = slugifyForFilename(file.replace(/\.safetensors$/i, '').split('/').pop().replace(/_/g, '-'));
-  const explicitVariant = input?.file
-    ? (fileStemSlug.startsWith(`${repoNameSlug}-`)
+  const pickedStem = file.replace(/\.safetensors$/i, '').split('/').pop();
+  const fileStemSlug = slugifyForFilename(pickedStem.replace(/_/g, '-'));
+  const isCanonicalStem = /^(pytorch_lora_weights|lora)$/i.test(pickedStem);
+  const explicitVariant = isCanonicalStem
+    ? ''
+    : (fileStemSlug.startsWith(`${repoNameSlug}-`)
       ? fileStemSlug.slice(repoNameSlug.length + 1)
-      : (fileStemSlug === repoNameSlug ? '' : fileStemSlug))
-    : '';
+      : (fileStemSlug === repoNameSlug ? '' : fileStemSlug));
   const filename = `lora-${slug}${explicitVariant ? `-${explicitVariant}` : ''}-hf.safetensors`;
   const destPath = join(PATHS.loras, filename);
   if (existsSync(destPath)) {
@@ -615,7 +629,7 @@ export const installFromHuggingface = async (input, { fetchImpl = fetch, onProgr
   await verifyDownloadedLora(destPath, { source: 'huggingface' });
 
   const sidecar = await withKeyLayout(
-    buildHfLoraSidecar({ repo, revision, file, model, family, filename }),
+    buildHfLoraSidecar({ repo, revision, file, model, family, filename, fluxVariant }),
     destPath,
   );
   await atomicWrite(sidecarPath(filename), JSON.stringify(sidecar, null, 2) + '\n');

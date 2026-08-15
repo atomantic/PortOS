@@ -153,7 +153,7 @@ export const inspectModelFiles = (model) => {
 
 // A repo is a LoRA ADAPTER (not a base model) when its id/tags carry a LoRA
 // marker or it's a PEFT/adapter package. The base-model installer must refuse
-// these — a LoRA has the video LoRA installer (/api/loras/install/huggingface)
+// these — a LoRA has the LoRA installer (/api/loras/install/huggingface)
 // and would otherwise register as a bogus base entry the render path can't load.
 //
 // Deliberately does NOT key on `cardData.base_model` alone: full fine-tunes and

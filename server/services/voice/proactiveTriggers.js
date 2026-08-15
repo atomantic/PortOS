@@ -31,6 +31,7 @@ import { cosEvents } from '../cosEvents.js';
 import { notificationEvents } from '../notifications.js';
 import { speakProactive as defaultSpeak } from './proactiveSpeech.js';
 import { getVoiceConfig } from './config.js';
+import { TIMED_COOLDOWN_BLOCKED_CATEGORIES } from '../../lib/taskBlockCategories.js';
 
 // Per-source minimum interval between spoken lines (ms). Tuned for an opt-in
 // assistant: critical errors are rare so a wide spacing is fine; tasks and
@@ -262,6 +263,11 @@ export const wireProactiveTriggers = ({ io, speak = defaultSpeak, limits = RATE_
     if (status !== 'completed' && status !== 'blocked') return;
     if (!isMetaTrue(task.metadata?.voiceDispatch)) return;
     if (status === 'blocked' && task.metadata?.blockedCategory === 'user-terminated') return;
+    // A TIMED cooldown is not a terminal outcome — the sweeper flips it back to
+    // `pending` in minutes. Announcing it would be wrong AND would burn the
+    // once-per-`${id}:blocked` reservation below, swallowing the announcement
+    // for a real block the task lands on later.
+    if (status === 'blocked' && TIMED_COOLDOWN_BLOCKED_CATEGORIES.has(task.metadata?.blockedCategory)) return;
     // Reserve this terminal outcome synchronously (before queueing onto the
     // async tail) so a same-tick / in-flight duplicate dedups to one line. The
     // reservation is rolled back inside the tail if no line went out (config

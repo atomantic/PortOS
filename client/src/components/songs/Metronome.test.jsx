@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 
 // Mock the metronome engine — jsdom has no Web Audio. Track instances so the
 // test can assert start/stop and setBpm wiring without driving the audio clock.
@@ -55,6 +55,22 @@ describe('Metronome component', () => {
     const input = screen.getByLabelText('Tempo (BPM)');
     fireEvent.change(input, { target: { value: '5000' } });
     expect(input).toHaveValue(320);
+  });
+
+  // The engine reports `countIn` while the shared <BeatPulse> takes `countingIn`
+  // — a field-name slip would silently draw count-in beats as ordinary ones.
+  it('maps the engine beat onto the shared pulse, count-in included', async () => {
+    render(<Metronome tempo={120} score="time: 4/4" />);
+    fireEvent.click(screen.getByRole('button', { name: /start/i }));
+    await waitFor(() => expect(engine.opts).toHaveLength(1));
+
+    act(() => engine.opts[0].onBeat({ beat: 2, bar: 0, accent: false, countIn: true }));
+    expect(screen.getByRole('status')).toHaveAttribute('aria-label', 'Counting in, beat 2');
+    expect(screen.getByText('Count-in…')).toBeInTheDocument();
+
+    act(() => engine.opts[0].onBeat({ beat: 3, bar: 4, accent: false, countIn: false }));
+    expect(screen.getByRole('status')).toHaveAttribute('aria-label', 'Beat 3');
+    expect(screen.getByText('Bar 4')).toBeInTheDocument();
   });
 
   it('omits the count-in when the toggle is unchecked', async () => {

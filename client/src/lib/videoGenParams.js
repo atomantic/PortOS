@@ -81,7 +81,7 @@ export const supportsVideoAudioPromptControls = (model) => model?.supportsAudioP
 
 // Substitutable prompt conditioners (#4081). The OPTIONS themselves are not
 // mirrored here — the server decorates each model entry with its own
-// `textEncoderOptions` (label, description, size, advisory) in
+// `textEncoderOptions` (label, description, size) in
 // `videoGen/local.js#decorateVideoModel`, so the picker renders whatever this
 // build's runner can actually key-map and a stale client can't offer one it
 // can't. Only the "no override" sentinel is duplicated, and it must stay equal

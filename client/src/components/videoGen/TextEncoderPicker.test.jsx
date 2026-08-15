@@ -10,7 +10,6 @@ const HERETIC = {
   description: 'Abliterated Qwen3-VL-32B conditioner.',
   builtIn: false,
   sizeBytes: 51506295440,
-  advisory: 'This conditioner has had its refusal behavior removed.',
   disclosure: {
     modelCardUrl: 'https://huggingface.co/example/heretic',
     weightsLicense: { name: 'Apache-2.0', url: 'https://www.apache.org/licenses/LICENSE-2.0' },
@@ -43,16 +42,16 @@ describe('TextEncoderPicker', () => {
     expect(screen.getByRole('option', { name: 'Stock — H3 Qwen3-VL-32B' })).toBeInTheDocument();
   });
 
-  // An uncensored conditioner is a deliberate choice, so the picker states what
-  // changed instead of leaving it to an external model card.
-  it('shows the advisory only for the option that carries one', () => {
+  // The blurb under the select describes the option you actually picked, not
+  // whichever one happened to render first.
+  it('describes the selected option', () => {
     const { rerender } = render(<TextEncoderPicker options={OPTIONS} value="stock" onChange={vi.fn()} />);
-    expect(screen.queryByText(HERETIC.advisory)).not.toBeInTheDocument();
     expect(screen.getByText(STOCK.description)).toBeInTheDocument();
+    expect(screen.queryByText(HERETIC.description)).not.toBeInTheDocument();
 
     rerender(<TextEncoderPicker options={OPTIONS} value="heretic-bf16" onChange={vi.fn()} />);
-    expect(screen.getByText(HERETIC.advisory)).toBeInTheDocument();
     expect(screen.getByText(HERETIC.description)).toBeInTheDocument();
+    expect(screen.queryByText(STOCK.description)).not.toBeInTheDocument();
   });
 
   // The built-in option ships inside the model's own weights — badging it would

@@ -36,6 +36,7 @@ const {
   isGitLockError,
   addWorktreeWithRetry,
   isPreexistingRefError,
+  isBranchCheckedOutElsewhereError,
   removeWorktree,
   adoptWorktree,
   createWorktree,
@@ -684,6 +685,34 @@ describe('isPreexistingRefError (orphan-cleanup guard, #2193)', () => {
     expect(isPreexistingRefError('fatal: invalid reference')).toBe(false);
     expect(isPreexistingRefError('')).toBe(false);
     expect(isPreexistingRefError(undefined)).toBe(false);
+  });
+});
+
+describe('isBranchCheckedOutElsewhereError (branch-busy pause gate)', () => {
+  it('matches git\'s wording for a branch held by another worktree, old and new', () => {
+    // Current git.
+    expect(isBranchCheckedOutElsewhereError(
+      "fatal: 'cos/task-x/agent-y' is already used by worktree at '/repo/data/cos/worktrees/agent-y'"
+    )).toBe(true);
+    // Pre-2.30 wording.
+    expect(isBranchCheckedOutElsewhereError(
+      "fatal: 'cos/task-x/agent-y' is already checked out at '/repo/data/cos/worktrees/agent-y'"
+    )).toBe(true);
+  });
+
+  it('does NOT match the other "already exists" failures — those are permanent', () => {
+    // An occupied worktree DIRECTORY is not a branch another tree is holding;
+    // pausing on it would wait out a cooldown that can never clear it.
+    expect(isBranchCheckedOutElsewhereError("fatal: '/repo/data/cos/worktrees/agent-x' already exists")).toBe(false);
+    expect(isBranchCheckedOutElsewhereError("fatal: a branch named 'cos/task/agent' already exists")).toBe(false);
+    expect(isBranchCheckedOutElsewhereError('error: cannot lock ref')).toBe(false);
+    expect(isBranchCheckedOutElsewhereError('fatal: invalid reference: origin/nope')).toBe(false);
+    expect(isBranchCheckedOutElsewhereError('')).toBe(false);
+    expect(isBranchCheckedOutElsewhereError(undefined)).toBe(false);
+  });
+
+  it('stays out of the in-process add retry — that budget is sized for lock contention', () => {
+    expect(isGitLockError("fatal: 'b' is already used by worktree at '/repo/wt'")).toBe(false);
   });
 });
 

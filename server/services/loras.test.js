@@ -531,11 +531,11 @@ describe('installFromHuggingface', () => {
     );
     expect(sidecar.filename).toBe('lora-fal-ltx2.3-audio-reactive-lora-v2-hf.safetensors');
     expect(sidecar.huggingface.file).toBe('ltx2.3_audio_reactive_lora_v2.safetensors');
-    expect(sidecar.name).toMatch(/V2$/);
+    expect(sidecar.name).toBe('ltx2.3-audio-reactive-lora · ltx2.3_audio_reactive_lora_v2');
     expect(sidecar.recommendedScale).toBe(1.2);
   });
 
-  it('refuses a repo it cannot classify as a supported video family', async () => {
+  it('refuses a repo it cannot classify as a supported family', async () => {
     const fetchImpl = async (url) => {
       if (url.startsWith('https://huggingface.co/api/models/')) {
         return mockJsonResponse({ id: 'someone/sdxl-lora', tags: ['sdxl'], siblings: [{ rfilename: 'lora.safetensors' }] });
@@ -620,6 +620,74 @@ describe('installFromHuggingface', () => {
     // The controller's signal must reach the actual weights download (not just
     // the metadata fetch) — that's the transfer a disconnect needs to cancel.
     expect(sawSignal).toBe(controller.signal);
+  });
+
+  it('installs a Flux.2 Klein 9B collection as flux2 and picks the klein9b file', async () => {
+    const characterSheet = {
+      id: 'Alissonerdx/CharacterSheet',
+      tags: ['lora', 'flux.2', 'flux.2-klein-9b', 'krea-2'],
+      siblings: [
+        { rfilename: 'DynamicCharacterSheet_krea2_v1.safetensors' },
+        { rfilename: 'QuadView_klein9b_v1.safetensors' },
+        { rfilename: 'QuadView_krea2_v1.safetensors' },
+        { rfilename: 'TripleView_klein9b_v1.safetensors' },
+      ],
+    };
+    const calls = [];
+    const fetchImpl = async (url) => {
+      calls.push(url);
+      if (url.startsWith('https://huggingface.co/api/models/Alissonerdx/CharacterSheet')) {
+        return mockJsonResponse(characterSheet);
+      }
+      if (url.includes('/resolve/main/QuadView_klein9b_v1.safetensors')) {
+        const stream = new ReadableStream({
+          start(c) { c.enqueue(new Uint8Array(validSafetensors())); c.close(); },
+        });
+        return { ok: true, status: 200, body: stream };
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    };
+    const sidecar = await lorasService.installFromHuggingface(
+      { url: 'https://huggingface.co/Alissonerdx/CharacterSheet' },
+      { fetchImpl },
+    );
+    expect(sidecar.runnerFamily).toBe('flux2');
+    expect(sidecar.fluxVariant).toBe('9b');
+    expect(sidecar.huggingface.file).toBe('QuadView_klein9b_v1.safetensors');
+    expect(sidecar.filename).toBe('lora-alissonerdx-charactersheet-quadview-klein9b-v1-hf.safetensors');
+    expect(sidecar.name).toContain('QuadView_klein9b_v1');
+    expect(calls.some((u) => u.includes('QuadView_klein9b_v1.safetensors'))).toBe(true);
+    expect(calls.some((u) => u.includes('krea2'))).toBe(false);
+  });
+
+  it('installs a specific Klein 9B file when the pasted URL points at it', async () => {
+    const characterSheet = {
+      id: 'Alissonerdx/CharacterSheet',
+      tags: ['lora', 'flux.2-klein-9b'],
+      siblings: [
+        { rfilename: 'QuadView_klein9b_v1.safetensors' },
+        { rfilename: 'TripleView_klein9b_v1.safetensors' },
+      ],
+    };
+    const fetchImpl = async (url) => {
+      if (url.startsWith('https://huggingface.co/api/models/Alissonerdx/CharacterSheet')) {
+        return mockJsonResponse(characterSheet);
+      }
+      if (url.includes('/resolve/main/TripleView_klein9b_v1.safetensors')) {
+        const stream = new ReadableStream({
+          start(c) { c.enqueue(new Uint8Array(validSafetensors())); c.close(); },
+        });
+        return { ok: true, status: 200, body: stream };
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    };
+    const sidecar = await lorasService.installFromHuggingface(
+      { url: 'https://huggingface.co/Alissonerdx/CharacterSheet/blob/main/TripleView_klein9b_v1.safetensors' },
+      { fetchImpl },
+    );
+    expect(sidecar.huggingface.file).toBe('TripleView_klein9b_v1.safetensors');
+    expect(sidecar.runnerFamily).toBe('flux2');
+    expect(sidecar.fluxVariant).toBe('9b');
   });
 
   it('accepts an explicit family override', async () => {

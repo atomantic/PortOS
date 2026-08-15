@@ -1,8 +1,9 @@
 /**
- * `unblockExpiredOrphanCooldowns` — expired orphan-cooldown revival (#3500).
+ * `unblockExpiredCooldowns` — expired timed-cooldown revival (#3500).
  *
- * The pass walks BOTH task stores' blocked groups and flips any
- * `orphan-cooldown` task whose `cooldownUntil` has passed back to `pending`.
+ * The pass walks BOTH task stores' blocked groups and flips any task in
+ * `TIMED_COOLDOWN_BLOCKED_CATEGORIES` whose `cooldownUntil` has passed back to
+ * `pending`.
  * Each revived task has to be written back to the store it came from, and the
  * pre-fix version re-derived that origin per task with
  * `userTaskData.grouped.blocked.includes(task)` — an O(N) scan inside the O(N)
@@ -21,7 +22,7 @@ vi.mock('./cosTaskStore.js', async (importActual) => ({
   updateTask: (...args) => updateTaskMock(...args),
 }));
 
-import { unblockExpiredOrphanCooldowns } from './cosTaskGenerator.js';
+import { unblockExpiredCooldowns } from './cosTaskGenerator.js';
 
 const EXPIRED = new Date(Date.now() - 60_000).toISOString();
 const PENDING = new Date(Date.now() + 60 * 60_000).toISOString();
@@ -54,9 +55,9 @@ beforeEach(() => {
   updateTaskMock.mockClear();
 });
 
-describe('unblockExpiredOrphanCooldowns', () => {
+describe('unblockExpiredCooldowns', () => {
   it('routes each revived task back to the store it was read from', async () => {
-    await unblockExpiredOrphanCooldowns(
+    await unblockExpiredCooldowns(
       store([cooldownTask('u1', EXPIRED)]),
       store([cooldownTask('c1', EXPIRED)])
     );
@@ -77,7 +78,7 @@ describe('unblockExpiredOrphanCooldowns', () => {
       Array.from({ length: 25 }, (_, i) => cooldownTask(`c${i}`, EXPIRED))
     );
 
-    await unblockExpiredOrphanCooldowns(store(userBlocked), store(cosBlocked));
+    await unblockExpiredCooldowns(store(userBlocked), store(cosBlocked));
 
     expect(updateTaskMock).toHaveBeenCalledTimes(50);
     expect(userBlocked.scans).toBe(0);
@@ -86,7 +87,7 @@ describe('unblockExpiredOrphanCooldowns', () => {
 
   it('honors an explicit taskType over the queue default', async () => {
     // A user-typed task parked in the CoS store still writes back as 'user'.
-    await unblockExpiredOrphanCooldowns(
+    await unblockExpiredCooldowns(
       store([]),
       store([cooldownTask('c1', EXPIRED, { taskType: 'user' })])
     );
@@ -95,7 +96,7 @@ describe('unblockExpiredOrphanCooldowns', () => {
   });
 
   it('clears the block fields and flips status to pending', async () => {
-    await unblockExpiredOrphanCooldowns(store([cooldownTask('u1', EXPIRED)]), store([]));
+    await unblockExpiredCooldowns(store([cooldownTask('u1', EXPIRED)]), store([]));
 
     const [, update] = updateTaskMock.mock.calls[0];
     expect(update.status).toBe('pending');
@@ -106,7 +107,7 @@ describe('unblockExpiredOrphanCooldowns', () => {
   });
 
   it('leaves unexpired cooldowns, other block categories, and missing groups alone', async () => {
-    await unblockExpiredOrphanCooldowns(
+    await unblockExpiredCooldowns(
       store([
         cooldownTask('u1', PENDING),
         { id: 'u2', metadata: { blockedCategory: 'max-spawns', cooldownUntil: EXPIRED } },
@@ -119,11 +120,41 @@ describe('unblockExpiredOrphanCooldowns', () => {
     expect(updateTaskMock).not.toHaveBeenCalled();
   });
 
+  // The pass sweeps the whole TIMED_COOLDOWN_BLOCKED_CATEGORIES vocabulary, not a
+  // literal `orphan-cooldown` — a category added to that set with no sweeper of
+  // its own would otherwise sit blocked forever. `worktree-busy` is the second
+  // member: a merge follow-up waiting for another worktree to release its branch.
+  it('revives every timed-cooldown category, not just orphan-cooldown', async () => {
+    await unblockExpiredCooldowns(
+      store([]),
+      store([{
+        id: 'sys-rl-1',
+        status: 'blocked',
+        metadata: {
+          blockedCategory: 'worktree-busy',
+          cooldownUntil: EXPIRED,
+          existingBranch: 'cos/task-1/agent-1',
+          worktreeBusyAttempts: 1,
+        },
+      }])
+    );
+
+    expect(updateTaskMock).toHaveBeenCalledTimes(1);
+    const [id, update] = updateTaskMock.mock.calls[0];
+    expect(id).toBe('sys-rl-1');
+    expect(update.status).toBe('pending');
+    expect(update.metadata.blockedCategory).toBeUndefined();
+    // The branch the follow-up exists to land survives the revival...
+    expect(update.metadata.existingBranch).toBe('cos/task-1/agent-1');
+    // ...and so does the attempt count, or the wait would never give up.
+    expect(update.metadata.worktreeBusyAttempts).toBe(1);
+  });
+
   it('leaves a task with an unparseable cooldownUntil blocked rather than reviving it', async () => {
     // NaN loses both `<=` and `>`, so writing the expiry test as the negation of
     // "still cooling" would silently unblock every malformed timestamp on the
     // next tick instead of leaving it parked for a human to look at.
-    await unblockExpiredOrphanCooldowns(store([cooldownTask('u1', 'not-a-date')]), store([]));
+    await unblockExpiredCooldowns(store([cooldownTask('u1', 'not-a-date')]), store([]));
 
     expect(updateTaskMock).not.toHaveBeenCalled();
   });

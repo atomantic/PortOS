@@ -123,6 +123,17 @@ describe('POST /api/loras/install/huggingface/stream', () => {
     expect(res.status).toBe(400);
   });
 
+  it('accepts an image-family override (flux2) on the stream path', async () => {
+    const res = await request(makeApp())
+      .post('/api/loras/install/huggingface/stream')
+      .send({ url: 'Alissonerdx/CharacterSheet', family: 'flux2' });
+    expect(res.status).toBe(200);
+    expect(installFromHuggingface).toHaveBeenCalledWith(
+      expect.objectContaining({ url: 'Alissonerdx/CharacterSheet', family: 'flux2' }),
+      expect.objectContaining({ onProgress: expect.any(Function) }),
+    );
+  });
+
   it('rejects a requested file that is not safetensors before opening the stream', async () => {
     const res = await request(makeApp())
       .post('/api/loras/install/huggingface/stream')

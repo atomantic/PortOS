@@ -269,6 +269,22 @@ async function runCleanupAgentWorktree(agentId, success, { prCreation = PR_CREAT
       // run, but the follow-up must not merge. An explicit leave-open policy is
       // different — opening the PR is the entire requested outcome.
       const leaveOpen = leavesPrForHuman(originalTask);
+
+      // Release the PR branch BEFORE anything is queued against it. A follow-up
+      // spawned below attaches its OWN worktree to `worktreeBranch`, and the CoS
+      // evaluation tick preps that task within a second or two — comfortably
+      // inside the window this cleanup needs for its own teardown. Removing
+      // afterwards lost that race (~0.7s in the reported incident): the
+      // follow-up's `git worktree add` failed with "is already used by worktree
+      // at …", the task was blocked, and the pull request it existed to land was
+      // orphaned. Nothing below this point reads the worktree — the Copilot
+      // pre-request above is the last user of that checkout.
+      const result = await removeWorktree(agentId, sourceWorkspace, worktreeBranch, { merge: false }).catch(err => {
+        emitLog('warn', `🌳 Worktree cleanup failed for ${agentId}: ${err.message}`, { agentId });
+        return { warnings: [`Worktree cleanup failed: ${err.message}`] };
+      });
+      warnings.push(...(result?.warnings || []));
+
       if (resolvedPrCompletion === PR_COMPLETIONS.LEAVE_OPEN) {
         emitLog('info', `🤝 Leaving ${prResult.url} open by task completion policy`, { agentId, prUrl: prResult.url });
       } else if (leaveOpen && !runsReviewLoop) {
@@ -337,11 +353,6 @@ async function runCleanupAgentWorktree(agentId, success, { prCreation = PR_CREAT
         }
       }
 
-      const result = await removeWorktree(agentId, sourceWorkspace, worktreeBranch, { merge: false }).catch(err => {
-        emitLog('warn', `🌳 Worktree cleanup failed for ${agentId}: ${err.message}`, { agentId });
-        return { warnings: [`Worktree cleanup failed: ${err.message}`] };
-      });
-      warnings.push(...(result?.warnings || []));
       return warnings;
     }
 
@@ -361,6 +372,12 @@ async function runCleanupAgentWorktree(agentId, success, { prCreation = PR_CREAT
   // budget and goes `blocked` would strand it — and the orphaned-PR notifier
   // keys on a follow-up task's `reviewLoopPRUrl`, which an inline run never
   // creates. So hand it to the same follow-up machinery the old flow used.
+  //
+  // The lookup happens here (it needs the checkout), but the SPAWN waits until
+  // after `removeWorktree` below — same reason as the PR path above: the
+  // follow-up attaches its own worktree to this branch and would otherwise race
+  // this cleanup's teardown for it.
+  let strandedPrUrl = null;
   if (prCreation === PR_CREATION.IF_MISSING && !success) {
     const worktreePath = agentState.metadata.workspacePath || join(PATHS.worktrees, agentId);
     const { findPullRequestForBranch } = await import('./github.js');
@@ -368,22 +385,9 @@ async function runCleanupAgentWorktree(agentId, success, { prCreation = PR_CREAT
     const found = await findPullRequestForBranch(worktreeBranch, { cwd: worktreePath, env: env || null })
       .catch(() => ({ status: 'unavailable' }));
     if (found.status === 'found' && found.url) {
+      strandedPrUrl = found.url;
       emitLog('warn', `🌳 ${agentId} failed after opening ${found.url} — handing the PR to a follow-up so it isn't stranded`, { agentId, prUrl: found.url, branchName: worktreeBranch });
       warnings.push(`Agent ${agentId} failed after opening ${found.url}; a follow-up was queued to land it.`);
-      await spawnReviewLoopFollowUp({
-        originalAgentId: agentId,
-        originalTask,
-        prUrl: found.url,
-        prBranch: worktreeBranch,
-        sourceWorkspace,
-        prCompletion: PR_COMPLETION_VALUES.includes(prCompletion) ? prCompletion : PR_COMPLETIONS.REVIEW_THEN_MERGE,
-        reviewers, usernames, optionalReviewers, reviewerMaxRounds,
-        reviewStopMode, reviewerApplies, reviewerModels, reviewerEfforts,
-        leaveOpen: leavesPrForHuman(originalTask),
-      }).catch(err => {
-        emitLog('warn', `🌳 Failed to spawn a follow-up for orphaned ${found.url}: ${err.message}`, { agentId });
-        warnings.push(`Could not queue a follow-up for ${found.url}: ${err.message}`);
-      });
     }
   }
 
@@ -409,6 +413,24 @@ async function runCleanupAgentWorktree(agentId, success, { prCreation = PR_CREAT
     return { warnings: [`Worktree cleanup failed: ${err.message}`] };
   });
   warnings.push(...(result?.warnings || []));
+
+  // The branch is released now, so the follow-up can check it out.
+  if (strandedPrUrl) {
+    await spawnReviewLoopFollowUp({
+      originalAgentId: agentId,
+      originalTask,
+      prUrl: strandedPrUrl,
+      prBranch: worktreeBranch,
+      sourceWorkspace,
+      prCompletion: PR_COMPLETION_VALUES.includes(prCompletion) ? prCompletion : PR_COMPLETIONS.REVIEW_THEN_MERGE,
+      reviewers, usernames, optionalReviewers, reviewerMaxRounds,
+      reviewStopMode, reviewerApplies, reviewerModels, reviewerEfforts,
+      leaveOpen: leavesPrForHuman(originalTask),
+    }).catch(err => {
+      emitLog('warn', `🌳 Failed to spawn a follow-up for orphaned ${strandedPrUrl}: ${err.message}`, { agentId });
+      warnings.push(`Could not queue a follow-up for ${strandedPrUrl}: ${err.message}`);
+    });
+  }
   return warnings;
 }
 

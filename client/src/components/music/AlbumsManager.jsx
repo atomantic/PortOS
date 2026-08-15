@@ -3,32 +3,33 @@
  *
  * Master-detail: a list of albums on the left, an editor on the right. An album
  * carries a title, artist (via ArtistPicker), description, genre, release year,
- * cover art (generate via image-gen / upload / gallery — same affordances as the
- * artist portrait), and an ordered list of tracks (add from existing tracks,
- * reorder, remove). Mirrors the Authors/Artists master-detail pattern.
+ * cover art (generate via image-gen, or pick/upload through GalleryImagePicker —
+ * same affordances as the artist portrait), and an ordered list of tracks (add
+ * from existing tracks, reorder, remove). Mirrors the Authors/Artists
+ * master-detail pattern.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
-import { Plus, Loader2, Trash2, Save, Upload, ImageIcon, Sparkles, X, ArrowUp, ArrowDown } from 'lucide-react';
+import { Plus, Loader2, Trash2, Save, ImageIcon, Sparkles, X, ArrowUp, ArrowDown } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
 import toast from '../ui/Toast';
-import FilePickerButton from '../ui/FilePickerButton';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { DEFAULT_NEGATIVE_PROMPT } from '../../lib/imageGenDefaults';
-import { readFileAsBase64 } from '../../utils/fileUpload';
-import { formatBytes, formatTimecode } from '../../utils/formatters';
+import { formatTimecode } from '../../utils/formatters';
 import ArtistPicker from './ArtistPicker';
 import {
   listAlbums, createAlbum, updateAlbum, deleteAlbum,
-  listTracks, uploadGalleryImage, generateImage,
+  listTracks, generateImage,
   ALBUM_TITLE_MAX, ALBUM_DESCRIPTION_MAX, ALBUM_GENRE_MAX,
   ALBUM_RELEASE_YEAR_MIN, ALBUM_RELEASE_YEAR_MAX,
 } from '../../services/api';
 
+// Cap cover uploads so the base64 round-trip stays small. Enforced by
+// GalleryImagePicker's `maxBytes`.
 const COVER_MAX_BYTES = 12 * 1024 * 1024;
 
 const emptyForm = () => ({
@@ -81,7 +82,6 @@ export default function AlbumsManager() {
   const [saving, setSaving] = useState(false);
   const { isConfirming: isConfirmingDelete, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const [galleryOpen, setGalleryOpen] = useState(false);
-  const [uploadingCover, setUploadingCover] = useState(false);
   const [startingGen, setStartingGen] = useState(false);
   const [genJobId, setGenJobId] = useState(null);
   const genRequestRef = useRef(0);
@@ -145,7 +145,7 @@ export default function AlbumsManager() {
   }, [selectionKey, isCreate, selected, loading]);
 
   const handleGenerateCover = async () => {
-    if (isGenerating || uploadingCover) return;
+    if (isGenerating) return;
     if (!canGenerate) { toast.error('Add a title, genre, or description to generate from'); return; }
     const requestId = genRequestRef.current;
     setStartingGen(true);
@@ -164,26 +164,11 @@ export default function AlbumsManager() {
     else toast.error('Cover generation returned no image');
   };
 
-  const handleCoverFile = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (!file.type.startsWith('image/')) { toast.error('Please choose an image file'); return; }
-    if (file.size > COVER_MAX_BYTES) { toast.error(`Image exceeds ${formatBytes(COVER_MAX_BYTES, 0)}`); return; }
-    // Capture the album-switch generation counter (bumped by selectAlbum/
-    // startCreate) so a slow read+upload that finishes after the user moved to a
-    // different album doesn't write this cover onto the wrong album's form.
-    const requestId = genRequestRef.current;
-    setUploadingCover(true);
-    const base64 = await readFileAsBase64(file).catch(() => null);
-    if (!base64) { setUploadingCover(false); toast.error('Could not read that file'); return; }
-    const uploaded = await uploadGalleryImage(base64, { silent: true }).catch((err) => { toast.error(err.message || 'Upload failed'); return null; });
-    // Always clear the in-flight flag (even on a stale result) so a mid-upload
-    // album switch doesn't leave the new album's Upload/Generate stuck disabled.
-    setUploadingCover(false);
-    if (genRequestRef.current !== requestId) return; // album switched mid-upload — don't write the form
-    if (uploaded?.path) { setCover(uploaded.path); toast.success('Cover uploaded'); }
-  };
-
+  // Both "pick an existing gallery image" and "upload one from disk" land here —
+  // GalleryImagePicker's `allowUpload` owns the read + POST and hands back the
+  // saved image already normalized (issue #4127). The album-switch guard that
+  // used to live here moved into the picker, which drops an upload that lands
+  // after its modal was dismissed.
   const handleCoverPick = (item) => {
     setGalleryOpen(false);
     const url = item?.previewUrl || (item?.filename ? `/data/images/${item.filename}` : '');
@@ -259,7 +244,7 @@ export default function AlbumsManager() {
       <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
         <p className="text-sm text-gray-400 max-w-2xl">
           Albums group ordered tracks under an artist, with cover art. Generate a cover from the title +
-          genre, upload one, or pick from your gallery. Add tracks from the Tracks tab and order them here.
+          genre, or choose/upload one from your gallery. Add tracks from the Tracks tab and order them here.
         </p>
         <button
           type="button"
@@ -343,14 +328,11 @@ export default function AlbumsManager() {
                     <input value={form.title} onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))} placeholder="Album title" maxLength={ALBUM_TITLE_MAX} className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white" autoFocus />
                   </Field>
                   <div className="flex items-center gap-2 flex-wrap">
-                    <button type="button" onClick={handleGenerateCover} disabled={isGenerating || uploadingCover || !canGenerate} title={canGenerate ? 'Generate a cover' : 'Add a title, genre, or description first'} className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-bg border border-port-border text-white text-sm hover:border-port-accent disabled:opacity-50">
+                    <button type="button" onClick={handleGenerateCover} disabled={isGenerating || !canGenerate} title={canGenerate ? 'Generate a cover' : 'Add a title, genre, or description first'} className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-bg border border-port-border text-white text-sm hover:border-port-accent disabled:opacity-50">
                       {isGenerating ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />} Generate cover
                     </button>
-                    <FilePickerButton accept="image/*" onChange={handleCoverFile} disabled={uploadingCover || isGenerating} ariaLabel="Upload album cover" className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-bg border border-port-border text-white text-sm hover:border-port-accent">
-                      {uploadingCover ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} Upload
-                    </FilePickerButton>
-                    <button type="button" onClick={() => setGalleryOpen(true)} disabled={isGenerating} className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-bg border border-port-border text-white text-sm hover:border-port-accent disabled:opacity-50">
-                      <ImageIcon size={14} /> Gallery
+                    <button type="button" onClick={() => setGalleryOpen(true)} disabled={isGenerating} title="Pick a gallery image, or upload one from this device" className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-bg border border-port-border text-white text-sm hover:border-port-accent disabled:opacity-50">
+                      <ImageIcon size={14} /> Choose or upload
                     </button>
                   </div>
                 </div>
@@ -434,7 +416,7 @@ export default function AlbumsManager() {
         </div>
       </div>
 
-      <GalleryImagePicker open={galleryOpen} onClose={() => setGalleryOpen(false)} onSelect={handleCoverPick} />
+      <GalleryImagePicker open={galleryOpen} onClose={() => setGalleryOpen(false)} onSelect={handleCoverPick} allowUpload maxBytes={COVER_MAX_BYTES} />
     </div>
   );
 }

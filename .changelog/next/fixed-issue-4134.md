@@ -1,0 +1,1 @@
+- CoS Runner mode now recovers when portos-cos starts after portos-server — the spawner keeps its socket open and promotes from direct to runner mode on connect, instead of degrading for the process lifetime

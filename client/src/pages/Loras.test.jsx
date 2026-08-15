@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import Loras from './Loras';
-import { listLorasFull, deleteLoraFull } from '../services/api';
+import { listLorasFull, deleteLoraFull, installLoraFromHuggingfaceStream } from '../services/api';
 
 vi.mock('../services/api', () => ({
   listLorasFull: vi.fn(),
@@ -110,5 +110,26 @@ describe('Loras installed-card delete confirmation', () => {
     await waitFor(() => expect(deleteLoraFull).toHaveBeenCalled());
     expect(await screen.findByLabelText('Delete Example LoRA')).toBeInTheDocument();
     expect(screen.getByText('Example LoRA')).toBeInTheDocument();
+  });
+});
+
+describe('Loras HuggingFace family picker', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    listLorasFull.mockResolvedValue([]);
+    installLoraFromHuggingfaceStream.mockRejectedValue(
+      Object.assign(new Error('could not classify'), { code: 'HF_UNKNOWN_FAMILY' }),
+    );
+  });
+
+  it('offers image and video families when autodetection fails, not just LTX-Video', async () => {
+    renderPage();
+    const input = await screen.findByLabelText('HuggingFace LoRA URL');
+    fireEvent.change(input, { target: { value: 'https://huggingface.co/Alissonerdx/CharacterSheet' } });
+    fireEvent.submit(input.closest('form'));
+    expect(await screen.findByRole('button', { name: 'Install as Flux 2' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Install as Flux 1' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Install as LTX-Video' })).toBeInTheDocument();
+    expect(screen.queryByText(/Install it as an LTX-Video LoRA/)).not.toBeInTheDocument();
   });
 });

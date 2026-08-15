@@ -9,24 +9,22 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
-import { Plus, Loader2, Trash2, Save, Upload, ImageIcon, Sparkles, X } from 'lucide-react';
+import { Plus, Loader2, Trash2, Save, ImageIcon, Sparkles, X } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
 import toast from '../ui/Toast';
-import FilePickerButton from '../ui/FilePickerButton';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { DEFAULT_NEGATIVE_PROMPT } from '../../lib/imageGenDefaults';
-import { readFileAsBase64 } from '../../utils/fileUpload';
-import { formatBytes } from '../../utils/formatters';
 import {
-  listArtists, createArtist, updateArtist, deleteArtist, uploadGalleryImage, generateImage,
+  listArtists, createArtist, updateArtist, deleteArtist, generateImage,
   ARTIST_NAME_MAX, ARTIST_GENRE_MAX, ARTIST_BIO_MAX, ARTIST_MUSICAL_STYLE_MAX,
   ARTIST_PHYSICAL_DESCRIPTION_MAX, ARTIST_PORTRAIT_STYLE_MAX, ARTIST_PORTRAIT_IMAGE_URL_MAX,
 } from '../../services/api';
 
-// Cap portrait uploads so the base64 round-trip stays small.
+// Cap portrait uploads so the base64 round-trip stays small. Enforced by
+// GalleryImagePicker's `maxBytes`.
 const PORTRAIT_MAX_BYTES = 12 * 1024 * 1024;
 
 const emptyForm = () => ({
@@ -75,7 +73,6 @@ export default function ArtistsManager() {
   const [saving, setSaving] = useState(false);
   const { isConfirming: isConfirmingDelete, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const [galleryOpen, setGalleryOpen] = useState(false);
-  const [uploadingPortrait, setUploadingPortrait] = useState(false);
   const [startingGen, setStartingGen] = useState(false);
   const [genJobId, setGenJobId] = useState(null);
   // Bumped on every artist switch / new-artist so a stale generate response
@@ -101,7 +98,7 @@ export default function ArtistsManager() {
   }, [genJobId, gen.status, gen.filename, gen.path, gen.error]);
 
   const handleGeneratePortrait = async () => {
-    if (isGenerating || uploadingPortrait) return;
+    if (isGenerating) return;
     if (!form.physicalDescription.trim() && !form.portraitStyle.trim()) {
       toast.error('Add a physical description or portrait style to generate from');
       return;
@@ -134,30 +131,9 @@ export default function ArtistsManager() {
     }
   };
 
-  const handlePortraitFile = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (!file.type.startsWith('image/')) { toast.error('Please choose an image file'); return; }
-    if (file.size > PORTRAIT_MAX_BYTES) {
-      toast.error(`Image exceeds ${formatBytes(PORTRAIT_MAX_BYTES, 0)}`);
-      return;
-    }
-    setUploadingPortrait(true);
-    const base64 = await readFileAsBase64(file).catch(() => null);
-    if (!base64) { setUploadingPortrait(false); toast.error('Could not read that file'); return; }
-    // Route through the gallery (`/data/images/`) so the stored portrait URL
-    // rides the image asset path (matches Authors' headshot upload).
-    const uploaded = await uploadGalleryImage(base64, { silent: true }).catch((err) => {
-      toast.error(err.message || 'Upload failed');
-      return null;
-    });
-    setUploadingPortrait(false);
-    if (uploaded?.path) {
-      setPortrait(uploaded.path);
-      toast.success('Portrait uploaded');
-    }
-  };
-
+  // Both "pick an existing gallery image" and "upload one from disk" land here —
+  // GalleryImagePicker's `allowUpload` owns the read + POST and hands back the
+  // saved image already normalized (issue #4127).
   const handlePortraitPick = (item) => {
     setGalleryOpen(false);
     const url = item?.previewUrl || (item?.filename ? `/data/images/${item.filename}` : '');
@@ -352,7 +328,7 @@ export default function ArtistsManager() {
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
                 />
               </Field>
-              <Field label="Portrait image" hint="Optional — generate from the description + style, upload a photo, pick one from your gallery, or paste a URL.">
+              <Field label="Portrait image" hint="Optional — generate from the description + style, choose or upload one via the gallery, or paste a URL.">
                 <div className="flex items-start gap-3">
                   {isGenerating ? (
                     <div className="relative w-20 h-20 rounded border border-port-border bg-port-bg overflow-hidden flex items-center justify-center shrink-0">
@@ -397,7 +373,7 @@ export default function ArtistsManager() {
                       <button
                         type="button"
                         onClick={handleGeneratePortrait}
-                        disabled={isGenerating || uploadingPortrait || !canGenerate}
+                        disabled={isGenerating || !canGenerate}
                         title={canGenerate
                           ? 'Generate a portrait from the description + style'
                           : 'Add a physical description or portrait style first'}
@@ -406,23 +382,14 @@ export default function ArtistsManager() {
                         {isGenerating ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
                         Generate
                       </button>
-                      <FilePickerButton
-                        accept="image/*"
-                        onChange={handlePortraitFile}
-                        disabled={uploadingPortrait || isGenerating}
-                        ariaLabel="Upload artist portrait"
-                        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-bg border border-port-border text-white text-sm hover:border-port-accent"
-                      >
-                        {uploadingPortrait ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
-                        Upload
-                      </FilePickerButton>
                       <button
                         type="button"
                         onClick={() => setGalleryOpen(true)}
                         disabled={isGenerating}
+                        title="Pick a gallery image, or upload one from this device"
                         className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-bg border border-port-border text-white text-sm hover:border-port-accent disabled:opacity-50"
                       >
-                        <ImageIcon size={14} /> Choose from gallery
+                        <ImageIcon size={14} /> Choose or upload
                       </button>
                     </div>
                     <input
@@ -477,6 +444,8 @@ export default function ArtistsManager() {
         open={galleryOpen}
         onClose={() => setGalleryOpen(false)}
         onSelect={handlePortraitPick}
+        allowUpload
+        maxBytes={PORTRAIT_MAX_BYTES}
       />
     </div>
   );

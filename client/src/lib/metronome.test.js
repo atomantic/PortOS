@@ -4,6 +4,7 @@ import {
   clampBpm,
   secondsPerBeat,
   timeSignatureFromScore,
+  normalizeBeatsPerBar,
   createMetronome,
   METRONOME_BPM_MIN,
   METRONOME_BPM_MAX,
@@ -105,6 +106,20 @@ describe('timeSignatureFromScore', () => {
 
   it('accepts a pre-parsed { beats, beatValue } object', () => {
     expect(timeSignatureFromScore({ beats: 5, beatValue: 4 })).toEqual({ beats: 5, beatValue: 4 });
+  });
+});
+
+describe('normalizeBeatsPerBar', () => {
+  it('keeps a positive count, flooring a fractional one', () => {
+    expect(normalizeBeatsPerBar(3)).toBe(3);
+    expect(normalizeBeatsPerBar('7')).toBe(7);
+    expect(normalizeBeatsPerBar(5.9)).toBe(5);
+  });
+
+  // Every non-count reads as 4/4 — a one-beat bar or an infinite one would put
+  // the visual pulse out of step with the clicks (or fail to render at all).
+  it.each([undefined, null, NaN, 0, -3, Infinity, 'x'])('reads %s as 4/4', (input) => {
+    expect(normalizeBeatsPerBar(input)).toBe(4);
   });
 });
 

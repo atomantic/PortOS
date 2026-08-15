@@ -12,23 +12,20 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
-import { FilePen, Plus, Loader2, Trash2, Save, Upload, ImageIcon, Sparkles, X } from 'lucide-react';
+import { FilePen, Plus, Loader2, Trash2, Save, ImageIcon, Sparkles, X } from 'lucide-react';
 import BrailleSpinner from '../components/BrailleSpinner';
 import toast from '../components/ui/Toast';
-import FilePickerButton from '../components/ui/FilePickerButton';
 import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
 import useMediaJobProgress from '../hooks/useMediaJobProgress';
 import { DEFAULT_NEGATIVE_PROMPT } from '../lib/imageGenDefaults';
-import { readFileAsBase64 } from '../utils/fileUpload';
-import { formatBytes } from '../utils/formatters';
 import {
-  listAuthors, createAuthor, updateAuthor, deleteAuthor, uploadGalleryImage, generateImage,
+  listAuthors, createAuthor, updateAuthor, deleteAuthor, generateImage,
   AUTHOR_NAME_MAX, AUTHOR_WRITING_STYLE_MAX, AUTHOR_BIO_MAX,
   AUTHOR_PHYSICAL_DESCRIPTION_MAX, AUTHOR_HEADSHOT_STYLE_MAX, AUTHOR_HEADSHOT_IMAGE_URL_MAX,
 } from '../services/api';
 
 // Cap headshot uploads so the base64 round-trip stays small — a cover headshot
-// never needs more than a few MB.
+// never needs more than a few MB. Enforced by GalleryImagePicker's `maxBytes`.
 const HEADSHOT_MAX_BYTES = 12 * 1024 * 1024;
 
 const emptyForm = () => ({
@@ -76,7 +73,6 @@ export default function Authors() {
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [galleryOpen, setGalleryOpen] = useState(false);
-  const [uploadingHeadshot, setUploadingHeadshot] = useState(false);
   // Headshot generation: `startingGen` covers the request round-trip before a
   // jobId exists; `genJobId` tracks an async (local/codex) render until it
   // completes. External SD-API renders synchronously and never sets genJobId.
@@ -111,7 +107,7 @@ export default function Authors() {
   }, [genJobId, gen.status, gen.filename, gen.path, gen.error]);
 
   const handleGenerateHeadshot = async () => {
-    if (isGenerating || uploadingHeadshot) return;
+    if (isGenerating) return;
     if (!form.physicalDescription.trim() && !form.headshotStyle.trim()) {
       toast.error('Add a physical description or headshot style to generate from');
       return;
@@ -151,31 +147,9 @@ export default function Authors() {
     }
   };
 
-  const handleHeadshotFile = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (!file.type.startsWith('image/')) { toast.error('Please choose an image file'); return; }
-    if (file.size > HEADSHOT_MAX_BYTES) {
-      toast.error(`Image exceeds ${formatBytes(HEADSHOT_MAX_BYTES, 0)}`);
-      return;
-    }
-    setUploadingHeadshot(true);
-    const base64 = await readFileAsBase64(file).catch(() => null);
-    if (!base64) { setUploadingHeadshot(false); toast.error('Could not read that file'); return; }
-    // Route through the gallery (`/data/images/`) — NOT the generic /uploads
-    // path — so the stored headshot URL rides the `image` peer-sync asset path
-    // and the bytes actually transfer to federated peers (issue #1327).
-    const uploaded = await uploadGalleryImage(base64, { silent: true }).catch((err) => {
-      toast.error(err.message || 'Upload failed');
-      return null;
-    });
-    setUploadingHeadshot(false);
-    if (uploaded?.path) {
-      setHeadshot(uploaded.path);
-      toast.success('Headshot uploaded');
-    }
-  };
-
+  // Both "pick an existing gallery image" and "upload one from disk" land here —
+  // GalleryImagePicker's `allowUpload` owns the read + POST and hands back the
+  // saved image already normalized (issue #4127).
   const handleHeadshotPick = (item) => {
     setGalleryOpen(false);
     const url = item?.previewUrl || (item?.filename ? `/data/images/${item.filename}` : '');
@@ -372,7 +346,7 @@ export default function Authors() {
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
                 />
               </Field>
-              <Field label="Headshot image" hint="Optional — generate from the description + style, upload a photo, pick one from your gallery, or paste a URL. Used on covers.">
+              <Field label="Headshot image" hint="Optional — generate from the description + style, choose or upload one via the gallery, or paste a URL. Used on covers.">
                 <div className="flex items-start gap-3">
                   {isGenerating ? (
                     <div className="relative w-20 h-20 rounded border border-port-border bg-port-bg overflow-hidden flex items-center justify-center shrink-0">
@@ -417,7 +391,7 @@ export default function Authors() {
                       <button
                         type="button"
                         onClick={handleGenerateHeadshot}
-                        disabled={isGenerating || uploadingHeadshot || !canGenerate}
+                        disabled={isGenerating || !canGenerate}
                         title={canGenerate
                           ? 'Generate a headshot from the description + style'
                           : 'Add a physical description or headshot style first'}
@@ -426,23 +400,14 @@ export default function Authors() {
                         {isGenerating ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
                         Generate
                       </button>
-                      <FilePickerButton
-                        accept="image/*"
-                        onChange={handleHeadshotFile}
-                        disabled={uploadingHeadshot || isGenerating}
-                        ariaLabel="Upload author headshot"
-                        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-bg border border-port-border text-white text-sm hover:border-port-accent"
-                      >
-                        {uploadingHeadshot ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
-                        Upload
-                      </FilePickerButton>
                       <button
                         type="button"
                         onClick={() => setGalleryOpen(true)}
                         disabled={isGenerating}
+                        title="Pick a gallery image, or upload one from this device"
                         className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-bg border border-port-border text-white text-sm hover:border-port-accent disabled:opacity-50"
                       >
-                        <ImageIcon size={14} /> Choose from gallery
+                        <ImageIcon size={14} /> Choose or upload
                       </button>
                     </div>
                     <input
@@ -498,6 +463,8 @@ export default function Authors() {
         open={galleryOpen}
         onClose={() => setGalleryOpen(false)}
         onSelect={handleHeadshotPick}
+        allowUpload
+        maxBytes={HEADSHOT_MAX_BYTES}
       />
     </div>
   );

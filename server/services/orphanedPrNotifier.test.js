@@ -68,6 +68,22 @@ describe('notifyIfPrLeftOrphaned', () => {
     expect(addNotification.mock.calls[0][0].description).toContain('worktree-failed');
   });
 
+  // ...but a TIMED pause is not an orphaning: the cooldown sweeper revives it.
+  // The one-per-PR guard makes this load-bearing — a card raised for the pause
+  // would swallow the card for the real block the task lands on if it gives up.
+  it('stays quiet for a self-reviving cooldown block', async () => {
+    const task = followUp({
+      blockedCategory: 'worktree-busy',
+      blockedReason: 'Branch cos/task-1/agent-1 is still checked out in another worktree',
+      cooldownUntil: new Date(Date.now() + 60_000).toISOString(),
+    });
+    expect(await notifyIfPrLeftOrphaned({ task, previousStatus: 'pending' })).toBe(false);
+    expect(addNotification).not.toHaveBeenCalled();
+    // The cooldown check must come before the dedupe probe, or the pause would
+    // still consume the one card this PR gets.
+    expect(exists).not.toHaveBeenCalled();
+  });
+
   it('ignores an ordinary blocked task that is not landing a PR', async () => {
     const task = { id: 't-plain', status: 'blocked', metadata: { blockedCategory: 'app-unresolved' } };
     expect(await notifyIfPrLeftOrphaned({ task, previousStatus: 'pending' })).toBe(false);

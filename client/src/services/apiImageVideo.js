@@ -433,10 +433,11 @@ export const installLoraFromCivitai = ({ url, silent = false } = {}) => request(
   silent,
 });
 
-// Install a video LoRA from a HuggingFace repo (fal / Lightricks LTX LoRAs).
-// `family` is an optional override (e.g. 'ltx-video') when autodetection from
-// the repo id/tags can't classify it. `silent` lets the page route HF_AUTH /
-// HF_UNKNOWN_FAMILY errors into its own inline UI.
+// Install an image or video LoRA from a HuggingFace repo (Flux.2 Klein, fal /
+// Lightricks LTX, MiniMax H3). `family` is an optional override (e.g. 'flux2'
+// or 'ltx-video') when autodetection from the repo id/tags/filenames can't
+// classify it. `silent` lets the page route HF_AUTH / HF_UNKNOWN_FAMILY errors
+// into its own inline UI.
 export const installLoraFromHuggingface = ({ url, family, file, silent = false } = {}) => request('/loras/install/huggingface', {
   method: 'POST',
   body: JSON.stringify({ url, ...(family ? { family } : {}), ...(file ? { file } : {}) }),

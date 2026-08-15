@@ -4,3 +4,4 @@
 - Series Autopilot retires a queued gap task when a new run starts, so CoS stops dispatching agents against findings the resumed run has already repaired
 - Single-file HuggingFace downloads no longer sit at 100% for the whole transfer — the badge now tracks bytes.
 - Enhance with AI and Prompt from media stay usable during a video render so the next clip can be queued.
+- Installing the MiniMax Music 3 engine no longer fails partway through — it now pulls a diffusers build that actually exists, and on Windows installs the CUDA build of PyTorch instead of the CPU-only one.

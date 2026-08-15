@@ -27,8 +27,9 @@ import { Repeat, SlidersHorizontal, Volume2, VolumeX } from 'lucide-react';
 import { DRUM_KIT_LIST, resolveDrumKit } from '../../lib/drumKits.js';
 import { clampClickVolume, DEFAULT_CLICK_VOLUME } from '../../lib/drumPlayback.js';
 import { ctrlBtnClass, activeCtrlClass, smallSelectClass } from './constants.js';
+import BeatPulse from '../ui/BeatPulse.jsx';
 import {
-  BeatDots, CountInSelect, PercentButtons, PlayStopButton, TempoControls,
+  CountInSelect, PercentButtons, PlayStopButton, TempoControls,
 } from './TransportControls.jsx';
 
 export default function DrumTransportBar({
@@ -108,7 +109,7 @@ export default function DrumTransportBar({
 
         {/* Where you are: the visual pulse plus the bar counter */}
         <div className="flex items-center gap-2">
-          <BeatDots beatsPerBar={beatsPerBar} beat={pulse?.beat ?? null} countingIn={!!pulse?.countingIn} />
+          <BeatPulse beatsPerBar={beatsPerBar} beat={pulse?.beat} countingIn={pulse?.countingIn} />
           <span className="text-xs text-gray-400 tabular-nums whitespace-nowrap">
             {pulse?.countingIn ? 'count-in' : `${currentBar || 1}/${Math.max(1, barCount)}`}
           </span>

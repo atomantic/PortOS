@@ -100,6 +100,17 @@ export function readFileAsBase64(file) {
  */
 export const SUPPORTED_UPLOAD_IMAGE_MIME = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 
+/**
+ * `accept` for pickers whose file goes straight to an upload endpoint (the
+ * gallery picker's Upload button). Derived from `SUPPORTED_UPLOAD_IMAGE_MIME` so
+ * the picker filter and `validateImageFile` can never disagree about which
+ * formats are allowed.
+ *
+ * Distinct from `IMAGE_ACCEPT`, which is narrower (no GIF) because its consumers
+ * feed image-gen backends rather than this upload pipeline.
+ */
+export const UPLOAD_IMAGE_ACCEPT = SUPPORTED_UPLOAD_IMAGE_MIME.join(',');
+
 const SUPPORTED_LABEL = 'PNG, JPEG, GIF, WebP';
 
 /**

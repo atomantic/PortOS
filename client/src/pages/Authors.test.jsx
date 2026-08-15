@@ -22,7 +22,6 @@ vi.mock('../services/api', () => ({
   createAuthor: vi.fn(),
   updateAuthor: vi.fn(),
   deleteAuthor: vi.fn(),
-  uploadGalleryImage: vi.fn(),
   generateImage: (...a) => generateImage(...a),
   AUTHOR_NAME_MAX: 120,
   AUTHOR_WRITING_STYLE_MAX: 4000,
@@ -38,9 +37,13 @@ vi.mock('../components/ui/Toast', () => ({
   default: { success: (...a) => toastSuccess(...a), error: (...a) => toastError(...a) },
 }));
 
-// Gallery picker is exercised elsewhere; stub it so this suite focuses on
-// the generate flow.
-vi.mock('../components/imageGen/GalleryImagePicker', () => ({ default: () => null }));
+// Gallery picker internals are exercised in GalleryImagePicker.test.jsx; stub it
+// here but keep the last props so this suite can assert the page hands it the
+// upload duty (issue #4127) and drive its `onSelect` the way a real pick/upload does.
+let pickerProps = null;
+vi.mock('../components/imageGen/GalleryImagePicker', () => ({
+  default: (props) => { pickerProps = props; return null; },
+}));
 
 // Drive the headshot-progress hook from a mutable module-level value so a test
 // can transition an in-flight async render to 'completed' between renders. The
@@ -58,6 +61,7 @@ describe('Authors headshot generation', () => {
     toastSuccess.mockReset();
     toastError.mockReset();
     hookState = idleProgress();
+    pickerProps = null;
   });
 
   const openCreateForm = async () => {
@@ -135,12 +139,27 @@ describe('Authors headshot generation', () => {
     await waitFor(() => expect(generateImage).toHaveBeenCalledTimes(1));
 
     // The async job is in flight — a manual headshot change would be clobbered
-    // on completion, so Upload / gallery / URL are locked until it settles.
-    // Upload is a <label> + file input (native picker activation) — matched by
-    // its accessible label rather than a button role.
-    expect(screen.getByLabelText('Upload author headshot').disabled).toBe(true);
-    expect(screen.getByRole('button', { name: 'Choose from gallery' }).disabled).toBe(true);
+    // on completion, so the picker (which owns both pick and upload) and the URL
+    // field are locked until it settles.
+    expect(screen.getByRole('button', { name: 'Choose or upload' }).disabled).toBe(true);
     expect(screen.getByPlaceholderText(/https:/i).disabled).toBe(true);
+  });
+
+  it('delegates headshot uploads to the gallery picker instead of a second file input', async () => {
+    await openCreateForm();
+
+    // The bespoke upload handler is gone — no file input lives beside the picker.
+    expect(document.querySelector('input[type="file"]')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Choose or upload' }));
+
+    expect(pickerProps.open).toBe(true);
+    expect(pickerProps.allowUpload).toBe(true);
+    // The page's own product cap still applies, rather than the wider wire limit.
+    expect(pickerProps.maxBytes).toBe(12 * 1024 * 1024);
+
+    // An uploaded image comes back through the same onSelect as a gallery pick.
+    act(() => pickerProps.onSelect({ filename: 'up.png', previewUrl: '/data/images/up.png' }));
+    expect(screen.getByPlaceholderText(/https:/i).value).toBe('/data/images/up.png');
   });
 
   it('does not overwrite a different author when one is selected mid-render', async () => {

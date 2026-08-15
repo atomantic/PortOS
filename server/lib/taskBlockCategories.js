@@ -18,13 +18,33 @@
 import { AGENT_PAUSED_CATEGORY } from './taskPauseHold.js';
 
 /**
+ * Pauses a TIMER clears, not a person: the task carries a `cooldownUntil` and the
+ * cooldown sweeper (`unblockExpiredCooldowns`, cosTaskGenerator.js) flips it back
+ * to `pending` once that stamp passes.
+ *
+ * Membership is what makes a block self-reviving, so anything that reports a
+ * block to a human — the orphaned-PR notifier is the one that matters, since a
+ * merge follow-up's block means its PR is stranded — must check here first and
+ * stay quiet: the system is already going to clear this one.
+ */
+export const TIMED_COOLDOWN_BLOCKED_CATEGORIES = new Set([
+  'orphan-cooldown',  // the orphan sweep's retry backoff
+  'worktree-busy'     // the branch is checked out in another worktree
+]);
+
+/**
  * "Paused until something outside the task changes", not "finished with". A
  * pause keeps the resume pointer (see `updateTask`) and is never auto-expired by
  * the failure reaper — the task is expected to run again once the cooldown
  * lapses or the user fixes the config.
+ *
+ * Every TIMED cooldown is a pause by construction, so it is spread in rather
+ * than re-listed: a new timed category added to one set but not the other would
+ * either lose its resume pointer or never revive — exactly the three-literal-sets
+ * drift this module exists to prevent.
  */
 export const PAUSED_BLOCKED_CATEGORIES = new Set([
-  'orphan-cooldown',   // timed cooldown; unblockExpiredOrphanCooldowns revives it
+  ...TIMED_COOLDOWN_BLOCKED_CATEGORIES,
   'app-unresolved',    // the task's app has no usable Repository Path
   'workspace-invalid'  // the resolved workspace isn't a usable directory
 ]);
@@ -36,9 +56,9 @@ export const PAUSED_BLOCKED_CATEGORIES = new Set([
  *
  * The workspace blocks are an open user decision, not a stale failure: the task
  * is waiting for the app's Repository Path to be fixed, and auto-completing it
- * at 14 days would silently retire work nobody decided to drop. (The third pause
- * category, `orphan-cooldown`, stays reapable — it revives itself in ~30
- * minutes, so one still sitting there after 14 days IS stale.)
+ * at 14 days would silently retire work nobody decided to drop. (The TIMED pause
+ * categories stay reapable — they revive themselves in minutes, so one still
+ * sitting there after 14 days IS stale.)
  */
 export const USER_DECISION_BLOCKED_CATEGORIES = new Set([
   'user-terminated',      // user explicitly stopped the agent

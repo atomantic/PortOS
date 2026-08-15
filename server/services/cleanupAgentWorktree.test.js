@@ -198,6 +198,13 @@ vi.mock('./prWatcher.js', () => ({
   queuePendingMerge: (...args) => queuePendingMergeMock(...args)
 }));
 
+// The `if-missing` net's OTHER half: a FAILED run may still have opened its PR
+// before it died, and cleanup hands that orphan to the same follow-up machinery.
+const findPullRequestForBranchMock = vi.fn().mockResolvedValue({ status: 'unavailable' });
+vi.mock('./github.js', () => ({
+  findPullRequestForBranch: (...args) => findPullRequestForBranchMock(...args)
+}));
+
 // The `if-missing` safety net asks finalize's own PR-claim check whether
 // the agent actually opened the PR it was told to open (#3733).
 const verifyPrClaimMock = vi.fn();
@@ -577,6 +584,23 @@ describe('cleanupAgentWorktree - PR-creation path', () => {
       expect(git.createPR).not.toHaveBeenCalled();
     });
 
+    // The failed-run half of the net hands its orphaned PR to the same follow-up,
+    // so it needs the same ordering guarantee as the success path: the follow-up
+    // checks the branch out, and the teardown below has to release it first.
+    it('releases the branch before handing a failed run’s orphaned PR to a follow-up', async () => {
+      findPullRequestForBranchMock.mockResolvedValue({ status: 'found', url: 'https://github.com/test/repo/pull/77' });
+      addTask.mockResolvedValue({ id: 'sys-rl-orphan' });
+
+      const warnings = await cleanupAgentWorktree('agent-1', false, netOpts);
+
+      expect(addTask).toHaveBeenCalledTimes(1);
+      expect(addTask.mock.calls[0][0].metadata.reviewLoopPRUrl).toBe('https://github.com/test/repo/pull/77');
+      expect(removeWorktree).toHaveBeenCalledTimes(1);
+      expect(removeWorktree.mock.invocationCallOrder[0])
+        .toBeLessThan(addTask.mock.invocationCallOrder[0]);
+      expect(warnings.some(w => w.includes('a follow-up was queued to land it'))).toBe(true);
+    });
+
     it('still creates the PR outright when the net is off (a lean session hands off)', async () => {
       git.push.mockResolvedValue(undefined);
       git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/43' });
@@ -648,6 +672,31 @@ describe('cleanupAgentWorktree - PR-creation path', () => {
     expect(followUp.metadata.sourceAgentId).toBe('agent-1');
     expect(followUp.priority).toBe('HIGH');
     expect(followUp.autoApproved).toBe(true);
+  });
+
+  // Git allows a branch in exactly one worktree. The follow-up attaches its own
+  // worktree to the PR branch and the CoS tick preps it a second or two after
+  // this call queues it — so tearing THIS worktree down afterwards lost the race:
+  // `git worktree add` failed with "is already used by worktree at …", the
+  // follow-up was blocked, and the PR it existed to land was orphaned.
+  it('removes the worktree BEFORE queueing the follow-up that must check out its branch', async () => {
+    git.push.mockResolvedValue(undefined);
+    git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/44' });
+    git.requestCopilotReview.mockResolvedValue({ success: true });
+    addTask.mockResolvedValue({ id: 'sys-rl-order' });
+
+    await cleanupAgentWorktree('agent-1', true, {
+      prCreation: 'always', requestCopilotReview: true, description: 'X',
+      originalTask: { id: 'task-orig', metadata: {}, description: 'X' }
+    });
+
+    expect(removeWorktree).toHaveBeenCalledTimes(1);
+    expect(addTask).toHaveBeenCalledTimes(1);
+    expect(removeWorktree.mock.invocationCallOrder[0])
+      .toBeLessThan(addTask.mock.invocationCallOrder[0]);
+    // ...but not so early that the Copilot pre-request loses the checkout it runs in.
+    expect(git.requestCopilotReview.mock.invocationCallOrder[0])
+      .toBeLessThan(removeWorktree.mock.invocationCallOrder[0]);
   });
 
   it('STILL spawns the review-loop follow-up when the Copilot pre-request fails (follow-up re-requests at its turn)', async () => {

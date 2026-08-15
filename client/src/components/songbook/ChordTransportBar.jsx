@@ -22,8 +22,9 @@ import { useState } from 'react';
 import { SlidersHorizontal, Volume2, VolumeX } from 'lucide-react';
 import { CHORD_BEATS_MIN, CHORD_BEATS_MAX } from '../../lib/chordPlayback.js';
 import { ctrlBtnClass, activeCtrlClass, smallSelectClass } from './constants.js';
+import BeatPulse from '../ui/BeatPulse.jsx';
 import {
-  BeatDots, CountInSelect, PercentButtons, PlayStopButton, TempoControls,
+  CountInSelect, PercentButtons, PlayStopButton, TempoControls,
 } from './TransportControls.jsx';
 
 const BEATS_OPTIONS = Array.from(
@@ -78,7 +79,7 @@ export default function ChordTransportBar({
 
         {/* Where you are: the visual pulse plus the chord counter */}
         <div className="flex items-center gap-2">
-          <BeatDots beatsPerBar={beatsPerBar} beat={pulse?.beat ?? null} countingIn={!!pulse?.countingIn} />
+          <BeatPulse beatsPerBar={beatsPerBar} beat={pulse?.beat} countingIn={pulse?.countingIn} />
           <span className="text-xs text-gray-400 tabular-nums whitespace-nowrap">
             {pulse?.countingIn
               ? 'count-in'

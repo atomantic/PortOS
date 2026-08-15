@@ -633,14 +633,24 @@ async function writeTaskUpdate(taskId, updates, taskType, { now }) {
   // PAUSE-shaped blocks are the exception (`PAUSED_BLOCKED_CATEGORIES`): the task
   // is waiting on something outside itself and is expected to run again, so its
   // pointer is not spent. `orphan-cooldown` is a TIMED pause —
-  // `unblockExpiredOrphanCooldowns` (cosTaskGenerator.js) flips it back to
+  // `unblockExpiredCooldowns` (cosTaskGenerator.js) flips it back to
   // `pending` once `cooldownUntil` passes. The workspace blocks are a CONFIG pause:
   // the app's Repository Path is missing/unreachable, and the user fixes it and
   // revives the task. Stripping the pointer in either case means the revived task
   // starts clean and abandons the worktree its dead agent left behind — which is
   // exactly the recovery this mechanism exists for.
   if (isTerminalTaskStatus(updates.status) && !PAUSED_BLOCKED_CATEGORIES.has(updatedMetadata.blockedCategory)) {
-    delete updatedMetadata.existingBranch;
+    // ...but only the RESUME mechanism's `existingBranch`, which is keyed by the
+    // `resumedFromAgentId` it is always written with — the same discriminator
+    // `resumePointerMetadata` (agentWorktreeCleanup.js) uses to avoid clearing a
+    // pointer it didn't write. A review-loop / merge follow-up sets
+    // `existingBranch` as its own CONFIGURATION: it exists to land the PR on that
+    // branch. Stripping that copy meant re-running a blocked merge follow-up got
+    // a worktree cut fresh off the default branch — the merge still targets the
+    // right PR by url, but any fix-and-push lands on a branch the PR has never
+    // heard of. Keyed on the mechanism rather than on the task kind so the next
+    // producer of a self-configured `existingBranch` doesn't re-hit this.
+    if (updatedMetadata.resumedFromAgentId) delete updatedMetadata.existingBranch;
     delete updatedMetadata.resumedFromAgentId;
     delete updatedMetadata.resumeWorktreePath;
   }
@@ -769,7 +779,13 @@ export async function reviveBlockedTask(taskId, { priority, metadata } = {}, tas
       ...(metadata || {}),
       totalSpawnCount: undefined,
       orphanRetryCount: undefined,
-      lastOrphanedAt: undefined
+      lastOrphanedAt: undefined,
+      // Same reasoning: the branch-busy patience budget is spent by the time a
+      // follow-up hard-blocks, so a revived one would hard-block again on the
+      // first busy race instead of waiting the other worktree out. NOT cleared on
+      // the cooldown revive (updateTask's blocked→pending path) — that runs on
+      // every wait and would defeat the cap.
+      worktreeBusyAttempts: undefined
     }
   }, taskType);
 }
