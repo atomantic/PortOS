@@ -169,7 +169,14 @@ export default function Security() {
 
   // Set up media sources when streaming starts
   useEffect(() => {
-    if (!streaming) return;
+    if (!streaming) return undefined;
+    // Pausing the element (stopMedia, a restart, unmount) rejects an in-flight
+    // play() with AbortError, and the rejection handler below sets up the
+    // analyser anyway — which would CLAIM the audio session again just after
+    // stopMedia released it, pinning the page output-only with nothing running
+    // to hand it back. `active` drops both continuations once this effect run is
+    // superseded.
+    let active = true;
 
     const timestamp = Date.now();
 
@@ -183,13 +190,16 @@ export default function Security() {
       audioRef.current.src = `/api/media/audio?t=${timestamp}`;
 
       audioRef.current.play().then(() => {
-        setupAudioAnalyser(audioRef.current);
+        if (active) setupAudioAnalyser(audioRef.current);
       }).catch(() => {
+        if (!active) return;
         // On mobile browsers, autoplay is often blocked - show interaction prompt
         setAudioNeedsInteraction(true);
         setupAudioAnalyser(audioRef.current); // Set up analyser anyway for when user enables
       });
     }
+
+    return () => { active = false; };
   }, [streaming, videoEnabled, audioEnabled, setupAudioAnalyser]);
 
   // Stop media stream

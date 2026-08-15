@@ -25,8 +25,13 @@ class FakeAnalyser {
   connect() { return this; }
 }
 
+// Counted so a test can assert the analyser graph was NOT rebuilt — the session
+// claim lives inside setupAudioAnalyser, so "no new context" is the tell that no
+// stray continuation re-claimed.
+let contextsBuilt = 0;
+
 class FakeAudioContext {
-  constructor() { this.state = 'running'; this.destination = {}; this.closed = false; }
+  constructor() { contextsBuilt += 1; this.state = 'running'; this.destination = {}; this.closed = false; }
   createAnalyser() { return new FakeAnalyser(); }
   createMediaElementSource() { return { connect() { return this; } }; }
   resume() { return Promise.resolve(); }
@@ -47,6 +52,7 @@ const startMonitor = async () => {
 
 describe('Security monitor iOS audio session', () => {
   beforeEach(() => {
+    contextsBuilt = 0;
     window.AudioContext = FakeAudioContext;
     navigator.audioSession = { type: 'auto' };
     // The level meter's rAF loop would otherwise run forever under jsdom.
@@ -78,6 +84,30 @@ describe('Security monitor iOS audio session', () => {
   it('hands the session back when the page unmounts while streaming', async () => {
     const { unmount } = await startMonitor();
     unmount();
+    expect(sessionType()).toBe('auto');
+  });
+
+  // Pausing the element rejects an in-flight play() with AbortError, and the
+  // rejection handler sets the analyser up anyway (the autoplay-blocked path).
+  // Landing after Stop Media, that would re-claim a session nothing is left to
+  // release, pinning the page output-only for the rest of the SPA session.
+  it('does not re-claim when a play() rejection lands after the stream was stopped', async () => {
+    let rejectPlay;
+    window.HTMLMediaElement.prototype.play = vi.fn(() => new Promise((_, reject) => { rejectPlay = reject; }));
+
+    render(<Security />);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: /Start Media/i }));
+    await screen.findByRole('button', { name: /Stop Media/i });
+    // play() is still pending, so the analyser graph does not exist yet.
+    expect(contextsBuilt).toBe(0);
+    expect(sessionType()).toBe('auto');
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Stop Media/i })); });
+    await act(async () => { rejectPlay(new DOMException('aborted', 'AbortError')); });
+    // The rejection must NOT build the graph now that the stream is stopped —
+    // building it is what re-claims the session.
+    expect(contextsBuilt).toBe(0);
     expect(sessionType()).toBe('auto');
   });
 });

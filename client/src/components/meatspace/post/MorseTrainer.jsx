@@ -288,6 +288,10 @@ function useKeyingDecoder({ unitMs, hz, ensureCtx, claimSession, releaseSession,
     // reaches stopTone, so it hands the claim back on its way out.
     claimSession();
     const ctx = await ensureCtx().catch((err) => { releaseSession(); throw err; });
+    // Unmounting close()s and nulls the per-mount context, so a press parked in
+    // the unlock window resumes with nothing to sound into (same bail as
+    // CopyDrill.playPrompt). Release rather than throwing into createOscillator.
+    if (!ctx) { releaseSession(); return; }
     // A fast tap can release (endPress → stopTone), or a newer press can start,
     // before the first-press-only resume await settles. Bail if the key is no
     // longer held (`!pressingRef.current`) OR a newer press superseded this one
