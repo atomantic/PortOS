@@ -81,7 +81,10 @@ describe('outsideAllowedRootsMessage', () => {
     const username = basename(homedir());
     const message = outsideAllowedRootsMessage(join(homedir(), 'nested', username, 'repo'));
 
-    expect(message).toContain('~/nested/<user>/repo');
+    const expectedNestedPath = IS_WINDOWS
+      ? String.raw`nested\<user>\repo`
+      : '~/nested/<user>/repo';
+    expect(message).toContain(expectedNestedPath);
     expect(message).not.toContain(username);
   });
 
