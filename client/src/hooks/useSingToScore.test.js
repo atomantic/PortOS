@@ -148,6 +148,30 @@ describe('useSingToScore', () => {
     expect(trackStop).toHaveBeenCalledOnce();
   });
 
+  it('ignores a permission rejection that arrives after capture was already cancelled', async () => {
+    let rejectStream;
+    navigator.mediaDevices.getUserMedia = vi.fn(() => new Promise((_resolve, reject) => {
+      rejectStream = reject;
+    }));
+    const { result, unmount } = renderHook(() => useSingToScore({ tempo: 120, score: 'time: 4/4' }));
+
+    let startPromise;
+    act(() => { startPromise = result.current.start(); });
+    unmount();
+
+    // The pending getUserMedia request rejects only after cancel() already
+    // tore this attempt down (generation bumped). The stale-generation branch
+    // in the catch handler must swallow this quietly — no error surfaced, no
+    // stream to stop, no double release.
+    await act(async () => {
+      rejectStream(new Error('Permission denied'));
+      await startPromise.catch(() => {});
+    });
+
+    expect(result.current.error).toBeNull();
+    expect(trackStop).not.toHaveBeenCalled();
+  });
+
   // `playback` REFUSES capture on iOS, and the transport-driven players declare
   // it document-wide, so this hook has to claim `play-and-record` around its own
   // getUserMedia rather than relying on nothing else having claimed first (#4131).
