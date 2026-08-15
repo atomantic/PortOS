@@ -1,0 +1,1 @@
+- Media lightbox no longer gets trapped inside a gallery card on glass themes — its overlay now portals to the document body so it covers the full viewport

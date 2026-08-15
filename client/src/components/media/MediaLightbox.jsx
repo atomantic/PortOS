@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   X, Copy, Sparkles, Film, Image as ImageIcon, Download, Eraser, Wand2,
   ChevronLeft, ChevronRight, Maximize2, Minimize2, Star, Box, ScanEye,
@@ -33,8 +34,9 @@ import { formatDateTime, formatDateNumeric } from '../../utils/formatters';
 // (A mobile tap-to-open bottom-sheet drawer existed pre-ed0e4859 and was
 // removed because it covered the image area in fullscreen.)
 // Opting out means owning the dialog semantics Modal would have supplied:
-// the overlay carries role="dialog"/aria-modal and runs useFocusTrap itself,
-// and `a11yConventions.test.js` allowlists it on that basis.
+// the overlay carries role="dialog"/aria-modal, runs useFocusTrap itself, and
+// portals to <body> in place of Modal's `usePortal` (see the render below);
+// `a11yConventions.test.js` allowlists it on that basis.
 
 const NOTE_MAX = 2000;
 const NOTE_DEBOUNCE_MS = 500;
@@ -238,7 +240,15 @@ export default function MediaLightbox({
   // — bottom-anchoring would bury them in the SettingsPane underneath.
   const chevronPositionClass = fullScreen ? 'bottom-4' : 'top-1/2 -translate-y-1/2';
 
-  return (
+  // Portal to <body>. The overlay is a hand-rolled `fixed inset-0` (this file
+  // opts out of <ui/Modal> and its `usePortal`, see the note at the top), and
+  // the lightbox is opened from inside themed gallery cards. On "glass" themes
+  // (`--port-backdrop-filter` non-none) `index.css` gives every bordered/rounded
+  // `.bg-port-card` a backdrop-filter, which makes it the containing block for
+  // position:fixed descendants — an inline overlay would be sized to the card
+  // instead of the viewport. Same fix as GalleryImagePicker / FolderPicker,
+  // reached through createPortal directly because Modal isn't in play here.
+  return createPortal(
     <div
       ref={overlayRef}
       role="dialog"
@@ -369,7 +379,8 @@ export default function MediaLightbox({
       </div>
       <PromptRefineModal item={item} open={refineOpen} onClose={() => setRefineOpen(false)} />
       <PromptFromMediaModal item={item} open={promptFromOpen} onClose={() => setPromptFromOpen(false)} />
-    </div>
+    </div>,
+    document.body
   );
 }
 
