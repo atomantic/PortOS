@@ -16,6 +16,13 @@
 //                      body region is loading (Goals).
 //   layout  'stack'  — vertically stacked cards, optional right sidebar.
 //           'grid'   — responsive card grid (dashboard widgets, tiles).
+//           'split'  — two-pane shell: a fixed-width side rail beside a
+//                      flexible main pane that owns the scroll (Chief of
+//                      Staff). Unlike `stack`/`grid` this owns the whole
+//                      shell, so it ignores `header` (a two-pane page's
+//                      title lives inside a pane) and renders the tab strip
+//                      INSIDE the main pane where a two-pane page puts it,
+//                      not above the split. Tuned by `split*`/`side*` below.
 //   tabs    n > 0    — reserves a `TabPills` (underline variant) strip under
 //                      the header. A default-size TabPills button is `text-sm`
 //                      (20px line box) + `py-3`, i.e. 44px — its
@@ -53,6 +60,24 @@ export default function PageSkeleton({
   fullHeight = false,
   barClassName = 'px-3 py-2 sm:px-4 sm:py-3',
   bodyClassName = 'p-3 sm:p-4',
+  // `layout="split"` only. Mirror whatever the loaded two-pane shell does:
+  //   splitColsClass    — the desktop grid tracks, INCLUDING the collapsed
+  //                       variant when the page remembers a collapsed rail
+  //                       (Chief of Staff: `lg:grid-cols-[0px_1fr]`).
+  //   sideCollapsed     — the rail is collapsed on desktop: reserve a
+  //                       zero-width track there and keep the rail's mobile
+  //                       band, which a collapsible page still renders.
+  //   sideClassName     — the rail's own box (borders, padding, scroll).
+  //   sideHero          — reserve a large circular block (avatar, portrait)
+  //                       at the top of the rail.
+  //   sideBlocks        — small blocks under the hero: a nav list at
+  //                       `grid-cols-1`, a stat grid at `grid-cols-2`.
+  splitColsClass = 'lg:grid-cols-[320px_1fr]',
+  sideCollapsed = false,
+  sideClassName = 'flex flex-col gap-3 border-b lg:border-b-0 lg:border-r border-port-border p-3 lg:p-4 lg:h-full lg:overflow-hidden',
+  sideHero = false,
+  sideBlocks = 4,
+  sideBlockColsClass = 'grid-cols-1',
   // Flex shape of the title/action row. The defaults are the common cases
   // (PageHeader's wrapping row for `bar`, stack-then-row for `inline`); pages
   // that break at a different width — or never stack at all — pass their own,
@@ -79,11 +104,13 @@ export default function PageSkeleton({
     </div>
   ));
 
+  const stackedCards = <div className="space-y-4">{cardBlocks}</div>;
+
   const body = layout === 'grid'
     ? <div className={`grid grid-cols-1 gap-4 items-start ${gridColsClass}`}>{cardBlocks}</div>
     : (
       <div className={`grid grid-cols-1 gap-6 items-start ${sidebar ? 'lg:grid-cols-[1fr_360px]' : ''}`}>
-        <div className="space-y-4">{cardBlocks}</div>
+        {stackedCards}
         {sidebar && (
           <div className="rounded-lg border border-port-border bg-port-card p-4 sm:p-6 animate-pulse">
             <div className="h-5 w-1/3 rounded bg-port-border mb-4" />
@@ -98,6 +125,7 @@ export default function PageSkeleton({
     );
 
   const tabRows = repeat(tabs);
+  const sideBlockRows = repeat(sideBlocks);
   const renderTabStrip = (bordered) => tabRows.length > 0 ? (
     <div className={`shrink-0 flex gap-1 overflow-hidden ${bordered ? 'border-b border-port-border' : ''}`}>
       {tabRows.map((_, i) => (
@@ -107,6 +135,50 @@ export default function PageSkeleton({
       ))}
     </div>
   ) : null;
+
+  // `split` pages are the two-pane shells. The rail stacks above the main pane
+  // below `lg` (same as the loaded page), so the mobile band is reserved too.
+  if (layout === 'split') {
+    const sideRail = (
+      <>
+        <div className={`h-5 w-2/3 rounded bg-port-card animate-pulse ${sideHero ? 'mx-auto' : ''}`} />
+        {sideHero && (
+          <div className="mx-auto h-24 w-24 sm:h-32 sm:w-32 lg:h-40 lg:w-40 rounded-full bg-port-card animate-pulse" />
+        )}
+        {sideBlockRows.length > 0 && (
+          <div className={`grid gap-1.5 ${sideBlockColsClass}`}>
+            {sideBlockRows.map((_, i) => (
+              <div key={i} className="h-[52px] rounded border border-port-border bg-port-card animate-pulse" />
+            ))}
+          </div>
+        )}
+      </>
+    );
+
+    return (
+      <div
+        className={`relative flex flex-col lg:grid ${splitColsClass} overflow-hidden ${fullHeight ? 'h-full' : ''}`}
+        role="status"
+        aria-busy="true"
+        aria-label={label}
+      >
+        {sideCollapsed ? (
+          <>
+            {/* Desktop: the rail is collapsed to a zero-width track, but the
+                track still has to exist or the main pane lands in column 1. */}
+            <div className="hidden lg:block overflow-hidden min-w-0" />
+            <div className={`lg:hidden ${sideClassName}`}>{sideRail}</div>
+          </>
+        ) : (
+          <div className={sideClassName}>{sideRail}</div>
+        )}
+        <div className={`flex-1 min-h-0 min-w-0 overflow-hidden ${padded ? bodyClassName : ''}`}>
+          {tabRows.length > 0 && <div className="mb-4 lg:mb-6">{renderTabStrip(true)}</div>}
+          {stackedCards}
+        </div>
+      </div>
+    );
+  }
 
   // `bar` pages are the flex-column shells: the header bar and tab strip are
   // full-bleed, only the body region takes padding and owns the scroll.

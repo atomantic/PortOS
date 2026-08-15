@@ -9,6 +9,7 @@ import { Play, Pause, Square, Clock, CheckCircle, AlertCircle, Cpu, ChevronDown,
 import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
 import TabPills from '../components/ui/TabPills';
+import PageSkeleton from '../components/ui/PageSkeleton';
 
 // Import from modular components
 import {
@@ -637,10 +638,25 @@ export default function ChiefOfStaff() {
   };
 
   if (loading) {
+    // Reserve the loaded two-pane shell (#4144) — `/cos` is an `isFullWidth`
+    // route, so a centered spinner reserved nothing and the whole page jumped
+    // into place on first paint. `desktopPanelCollapsed` comes from
+    // localStorage, so the skeleton already knows which rail width to hold.
     return (
-      <div className="flex items-center justify-center h-64">
-        <BrailleSpinner text="Loading" />
-      </div>
+      <PageSkeleton
+        layout="split"
+        label="Loading Chief of Staff"
+        fullHeight
+        padded
+        bodyClassName="p-3 lg:p-4"
+        splitColsClass={desktopPanelCollapsed ? 'lg:grid-cols-[0px_1fr]' : 'lg:grid-cols-[320px_1fr]'}
+        sideCollapsed={desktopPanelCollapsed}
+        sideClassName="flex flex-col gap-3 border-b lg:border-b-0 lg:border-r border-port-accent-2/20 bg-gradient-to-b from-port-card/80 to-port-card/40 p-3 lg:px-4 lg:py-6 lg:h-full lg:overflow-hidden"
+        sideHero
+        sideBlocks={4}
+        sideBlockColsClass="grid-cols-2"
+        tabs={TABS.length}
+      />
     );
   }
 
