@@ -53,7 +53,10 @@ const EXACT_RATES = {
   // Anthropic
   'claude-fable-5': [10.0, 50.0],
   'claude-mythos-5': [10.0, 50.0],
-  ...Object.fromEntries(OPUS_MODEL_IDS.map((id) => [id, OPUS_TIER_RATES])),
+  // Cloned per row so each key owns its pair exactly as the hand-written rows
+  // above and below do — sharing one array across five keys would make any
+  // future edit to one opus row silently rewrite the whole tier.
+  ...Object.fromEntries(OPUS_MODEL_IDS.map((id) => [id, [...OPUS_TIER_RATES]])),
   'claude-sonnet-5': [2.0, 10.0], // intro pricing through 2026-08-31 ($3/$15 after)
   'claude-sonnet-4-6': [3.0, 15.0],
   'claude-sonnet-4-5': [3.0, 15.0],

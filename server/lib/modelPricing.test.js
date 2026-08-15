@@ -55,7 +55,11 @@ describe('resolveModelRates', () => {
     // a null or synthetic label would silently break both.
     it('reports a family label that is itself an exact table id at the same rates', () => {
       const viaFamily = resolveModelRates('claude-code', 'opus');
-      expect(viaFamily.rateModel).toEqual(expect.any(String));
+      // Shape-matched rather than hardcoded to the current head id, so the next
+      // opus bump doesn't have to edit this suite — that per-bump edit is what
+      // the refactor removed. The exact-resolution check below is what actually
+      // pins the pointer to a real table key.
+      expect(viaFamily.rateModel).toMatch(/^claude-opus-\d/);
       expect(resolveModelRates('claude-code', viaFamily.rateModel)).toMatchObject({
         rateModel: viaFamily.rateModel,
         inputPer1M: viaFamily.inputPer1M,
