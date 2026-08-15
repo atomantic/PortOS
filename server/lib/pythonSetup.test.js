@@ -14,6 +14,8 @@ const mockState = {
   archByPath: new Map(),
   execShouldFail: false,
   pathPython: null,
+  // Directory names under uv python root, as readdirSync would return them.
+  uvPythonDirs: null,
 };
 
 vi.mock('node:os', async () => {
@@ -32,7 +34,18 @@ vi.mock('node:fs', async () => {
   // Windows host they arrive backslash-separated while presentPaths is seeded
   // with the POSIX spellings the tests read. Normalize the probe, not the
   // fixtures — the module's own platform is pinned via mockState.platform.
-  return { ...actual, existsSync: (p) => mockState.presentPaths.has(String(p).split('\\').join('/')) };
+  return {
+    ...actual,
+    existsSync: (p) => mockState.presentPaths.has(String(p).split('\\').join('/')),
+    // uv's install root is enumerated rather than listed, so the candidate
+    // builder readdirs it. `null` means "uv not installed" — the common case —
+    // and must throw the way the real readdirSync does so the builder swallows
+    // it instead of crashing module load.
+    readdirSync: () => {
+      if (!mockState.uvPythonDirs) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      return mockState.uvPythonDirs;
+    },
+  };
 });
 
 vi.mock('node:child_process', async () => {
@@ -81,6 +94,7 @@ const resetState = () => {
   mockState.archByPath = new Map();
   mockState.execShouldFail = false;
   mockState.pathPython = null;
+  mockState.uvPythonDirs = null;
 };
 
 describe('HOST_ARCH', () => {
@@ -302,5 +316,75 @@ describe('resolveMfluxPython', () => {
     const { resolveMfluxPython } = await loadModule();
     expect(resolveMfluxPython(null)).toBeNull();
     expect(resolveMfluxPython()).toBeNull();
+  });
+});
+describe('detectVenvBasePythonSync', () => {
+  beforeEach(resetState);
+
+  const WIN_UV = 'C:/Users/example/AppData/Roaming/uv/python';
+
+  it('prefers a uv standalone build over conda — a conda-based venv cannot import torch', async () => {
+    // Regression: on a box whose only listed Python was miniconda, every torch
+    // venv the installer built died at `import torch` with
+    // "WinError 1114 ... c10.dll initialization routine failed".
+    mockState.platform = 'win32';
+    mockState.homedir = 'C:/Users/example';
+    mockState.uvPythonDirs = ['cpython-3.10-windows-x86_64-none'];
+    mockState.presentPaths.add(`${WIN_UV}/cpython-3.10-windows-x86_64-none/python.exe`);
+    mockState.presentPaths.add('C:/Users/example/miniconda3/python.exe');
+    const { detectVenvBasePythonSync, detectPythonSync } = await loadModule();
+    expect(posixPath(detectVenvBasePythonSync())).toBe(`${WIN_UV}/cpython-3.10-windows-x86_64-none/python.exe`);
+    // ...and the pip-target picker is deliberately unchanged: uv Pythons are
+    // PEP 668 externally-managed, so installPackages must not be sent there.
+    expect(posixPath(detectPythonSync())).toBe('C:/Users/example/miniconda3/python.exe');
+  });
+
+  it('prefers the newest uv version, and 3.9 does not beat 3.10', async () => {
+    mockState.platform = 'win32';
+    mockState.homedir = 'C:/Users/example';
+    mockState.uvPythonDirs = [
+      'cpython-3.9.21-windows-x86_64-none',
+      'cpython-3.13.12-windows-x86_64-none',
+      'cpython-3.10.19-windows-x86_64-none',
+    ];
+    for (const d of mockState.uvPythonDirs) mockState.presentPaths.add(`${WIN_UV}/${d}/python.exe`);
+    const { detectVenvBasePythonSync } = await loadModule();
+    expect(posixPath(detectVenvBasePythonSync())).toContain('cpython-3.13.12');
+  });
+
+  it('ignores non-cpython entries under the uv root and falls through to python.org', async () => {
+    mockState.platform = 'win32';
+    mockState.homedir = 'C:/Users/example';
+    mockState.uvPythonDirs = ['.temp', 'pypy-3.10-windows-x86_64-none'];
+    mockState.presentPaths.add('C:/Users/example/AppData/Local/Programs/Python/Python312/python.exe');
+    mockState.presentPaths.add('C:/Users/example/miniconda3/python.exe');
+    const { detectVenvBasePythonSync } = await loadModule();
+    expect(posixPath(detectVenvBasePythonSync()))
+      .toBe('C:/Users/example/AppData/Local/Programs/Python/Python312/python.exe');
+  });
+
+  it('falls back to the pip-target answer when no standalone build exists — a conda venv beats no venv', async () => {
+    mockState.platform = 'win32';
+    mockState.homedir = 'C:/Users/example';
+    mockState.uvPythonDirs = null; // uv not installed: readdir throws
+    mockState.presentPaths.add('C:/Users/example/miniconda3/python.exe');
+    const { detectVenvBasePythonSync } = await loadModule();
+    expect(posixPath(detectVenvBasePythonSync())).toBe('C:/Users/example/miniconda3/python.exe');
+  });
+
+  it('finds uv under its Linux install root too', async () => {
+    mockState.platform = 'linux';
+    mockState.homedir = '/home/example';
+    mockState.uvPythonDirs = ['cpython-3.12.8-linux-x86_64-gnu'];
+    mockState.presentPaths.add('/home/example/.local/share/uv/python/cpython-3.12.8-linux-x86_64-gnu/bin/python3');
+    mockState.presentPaths.add('/opt/miniconda3/bin/python3');
+    const { detectVenvBasePythonSync } = await loadModule();
+    expect(posixPath(detectVenvBasePythonSync()))
+      .toBe('/home/example/.local/share/uv/python/cpython-3.12.8-linux-x86_64-gnu/bin/python3');
+  });
+
+  it('returns null when there is no Python at all', async () => {
+    const { detectVenvBasePythonSync } = await loadModule();
+    expect(detectVenvBasePythonSync()).toBeNull();
   });
 });

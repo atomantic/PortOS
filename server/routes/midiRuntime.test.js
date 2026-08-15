@@ -14,7 +14,9 @@ vi.mock('../lib/pythonSetup.js', () => ({
   isMuscriptorRuntimeReady: async () => py.installed,
   invalidateMuscriptorPython: vi.fn(),
   MUSCRIPTOR_VENV_DEFAULT: '/home/x/.portos/venv-muscriptor/bin/python3',
-  detectPythonSync: () => null, // setupScriptRunner's Windows PYTHON_BIN preset
+  detectPythonSync: () => null,
+  // setupScriptRunner presets PYTHON_BIN from the venv-base picker on Windows.
+  detectVenvBasePythonSync: () => null,
 }));
 
 // Real SSE frames so supertest can read them off the response body.

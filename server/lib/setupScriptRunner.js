@@ -18,7 +18,7 @@ import { join } from 'path';
 import { PATHS } from './fileUtils.js';
 import { resolveBashBinary, toBashPath } from './bashResolver.js';
 import { safeChildProcessEnv } from './processEnv.js';
-import { detectPythonSync } from './pythonSetup.js';
+import { detectVenvBasePythonSync } from './pythonSetup.js';
 import { killProcessTree } from './bufferedSpawn.js';
 
 const IS_WIN = process.platform === 'win32';
@@ -38,7 +38,10 @@ export function spawnSetupScript(envVars = {}) {
   // An explicit PYTHON_BIN — from the caller or the environment — is the
   // documented override and wins over anything detected here.
   if (IS_WIN && !env.PYTHON_BIN && !process.env.PYTHON_BIN) {
-    const python = detectPythonSync();
+    // Venv-base picker, not the pip-target picker: everything this script does
+    // with PYTHON_BIN is `python -m venv`, and a conda base yields a venv whose
+    // torch cannot load. See detectVenvBasePythonSync.
+    const python = detectVenvBasePythonSync();
     if (python) env.PYTHON_BIN = toBashPath(python);
   }
   return spawn(resolveBashBinary(), [toBashPath(SETUP_IMAGE_VIDEO_SCRIPT)], {

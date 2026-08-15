@@ -712,6 +712,19 @@ fi
 INSTALL_MINIMAX_MUSIC3="${INSTALL_MINIMAX_MUSIC3:-0}"
 if [[ "$INSTALL_MINIMAX_MUSIC3" == "1" ]]; then
   MINIMAX_MUSIC3_VENV="${HOME}/.portos/venv-minimax-music3"
+  mkdir -p "${HOME}/.portos"
+  # A venv built from a conda/anaconda base is the sticky Windows failure: pip
+  # installs torch happily, then `import torch` dies with
+  # "WinError 1114 ... c10.dll initialization routine failed" because conda's
+  # MKL/OpenMP DLLs poison the search path. Re-running never helped, because the
+  # venv already existed and got reused. Rebuild it when its recorded base is
+  # conda and the interpreter we'd build from is not.
+  if [[ -f "$MINIMAX_MUSIC3_VENV/pyvenv.cfg" ]] \
+     && grep -qiE '^home *=.*(miniconda|anaconda)' "$MINIMAX_MUSIC3_VENV/pyvenv.cfg" \
+     && [[ ! "$PYTHON_BIN" =~ [Mm]ini?conda|[Aa]naconda ]]; then
+    echo "♻️  Existing MiniMax Music 3 venv was built from a conda base (torch can't load there) — rebuilding from ${PYTHON_BIN}."
+    rm -rf "$MINIMAX_MUSIC3_VENV"
+  fi
   MINIMAX_MUSIC3_PY="$MINIMAX_MUSIC3_VENV/bin/python3"
   [[ -x "$MINIMAX_MUSIC3_PY" || -x "$MINIMAX_MUSIC3_VENV/Scripts/python.exe" ]] || "$PYTHON_BIN" -m venv "$MINIMAX_MUSIC3_VENV"
   [[ -x "$MINIMAX_MUSIC3_PY" ]] || MINIMAX_MUSIC3_PY="$MINIMAX_MUSIC3_VENV/Scripts/python.exe"
@@ -725,6 +738,20 @@ if [[ "$INSTALL_MINIMAX_MUSIC3" == "1" ]]; then
     "$MINIMAX_MUSIC3_PY" -m pip install --upgrade --index-url "$MINIMAX_MUSIC3_TORCH_INDEX" torch
   else
     "$MINIMAX_MUSIC3_PY" -m pip install --upgrade torch
+  fi
+  # Fail here, with the cause named, rather than 400 MB of diffusers later. The
+  # conda-base check above is a heuristic (a venv can inherit a poisoned DLL path
+  # other ways); this is the ground truth.
+  if ! "$MINIMAX_MUSIC3_PY" -c "import torch" 2>/dev/null; then
+    echo "❌ torch installed into ${MINIMAX_MUSIC3_VENV} but cannot be imported." >&2
+    "$MINIMAX_MUSIC3_PY" -c "import torch" 2>&1 | tail -5 >&2
+    if is_windows; then
+      echo "   On Windows this is almost always a venv built from a conda/anaconda base:" >&2
+      echo "   conda's MKL/OpenMP DLLs break torch's c10.dll load (WinError 1114)." >&2
+      echo "   Install a standalone Python (\`uv python install 3.10\`, or python.org)," >&2
+      echo "   then re-run with PYTHON_BIN pointed at it." >&2
+    fi
+    exit 1
   fi
   # Pinned to the main commit that merged MiniMax Music 3 (diffusers PR #14456,
   # 2026-08-13) — the integration is in no tagged release yet. The pin must be a

@@ -57,7 +57,9 @@ vi.mock('../services/tracks/index.js', () => ({
 vi.mock('../lib/pythonSetup.js', () => ({
   checkPackages: vi.fn(async () => ({ installed: ['mflux', 'mlx'], missing: [], missingPip: [] })),
   isAllowedPython: vi.fn(() => true),
-  detectPythonSync: vi.fn(() => null), // setupScriptRunner's Windows PYTHON_BIN preset
+  detectPythonSync: vi.fn(() => null),
+  // setupScriptRunner presets PYTHON_BIN from the venv-base picker on Windows.
+  detectVenvBasePythonSync: vi.fn(() => null),
 }));
 
 vi.mock('../services/videoGen/local.js', () => ({

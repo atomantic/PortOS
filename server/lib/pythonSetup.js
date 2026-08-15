@@ -1,5 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { arch, homedir, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -55,6 +55,32 @@ const PIP_PRE_UNINSTALL = {
 export const pipNameFor = (importName) => PIP_NAMES[importName] || importName;
 
 const HOME = homedir();
+
+// uv-managed CPython installs (`uv python install 3.10`). These are standalone
+// python-build-standalone builds — no conda MKL/OpenMP in the DLL search path —
+// which makes them the right base for a torch venv, so they rank with the
+// python.org installs and ahead of conda. uv's install root is versioned and
+// platform-tagged (`cpython-3.10.19-windows-x86_64-none`), so it has to be
+// enumerated rather than listed. Newest version first; a bad read (uv absent,
+// which is the common case) yields nothing rather than throwing.
+const UV_PYTHON_ROOT = IS_WIN
+  ? join(HOME, 'AppData', 'Roaming', 'uv', 'python')
+  : join(HOME, '.local', 'share', 'uv', 'python');
+
+function uvPythonCandidates() {
+  let entries;
+  try {
+    entries = readdirSync(UV_PYTHON_ROOT);
+  } catch {
+    return [];
+  }
+  // Sort by the version triple descending, so 3.13 beats 3.10 and 3.10.19 beats
+  // the bare 3.10 alias. localeCompare's numeric mode keeps 3.9 < 3.10.
+  return entries
+    .filter((name) => name.startsWith('cpython-'))
+    .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))
+    .map((name) => join(UV_PYTHON_ROOT, name, IS_WIN ? 'python.exe' : join('bin', 'python3')));
+}
 
 // Earlier = preferred. Non-externally-managed Pythons (venvs, conda) win
 // over Homebrew/system Pythons because PEP 668 blocks pip there.
@@ -134,6 +160,37 @@ export function detectPythonSync() {
   // Microsoft Store and exits, so a venv built from it never appears.
   if (found && /\\Microsoft\\WindowsApps\\/i.test(found)) return null;
   return found || null;
+}
+
+// The interpreter to build a torch venv FROM — a different question than
+// detectPythonSync's "which interpreter can we pip into".
+//
+// Those two answers conflict. `detectPythonSync` ranks conda highly precisely
+// because conda is not PEP 668 externally-managed, so `installPackages` can pip
+// straight into it. But a venv created from a conda base installs torch fine and
+// then dies at `import torch` with "WinError 1114: c10.dll initialization routine
+// failed" — conda's MKL/OpenMP DLLs poison the child venv's DLL search path.
+// uv/python.org standalone builds are the reverse: externally-managed (so a bad
+// pip target) but a perfect venv base.
+//
+// So this prefers standalone builds and only falls back to detectPythonSync's
+// answer when there are none — a conda-based venv still beats no venv at all,
+// and the setup script's own import check reports it when it can't work.
+export function detectVenvBasePythonSync() {
+  const standalone = [
+    ...uvPythonCandidates(),
+    ...(IS_WIN
+      ? [
+          join(HOME, 'AppData', 'Local', 'Programs', 'Python', 'Python313', 'python.exe'),
+          join(HOME, 'AppData', 'Local', 'Programs', 'Python', 'Python312', 'python.exe'),
+          join(HOME, 'AppData', 'Local', 'Programs', 'Python', 'Python311', 'python.exe'),
+          'C:\\Python313\\python.exe',
+          'C:\\Python312\\python.exe',
+          'C:\\Python311\\python.exe',
+        ]
+      : []),
+  ];
+  return standalone.find((p) => existsSync(p)) || detectPythonSync();
 }
 
 export async function detectPython() {

@@ -5,3 +5,6 @@
 - Single-file HuggingFace downloads no longer sit at 100% for the whole transfer — the badge now tracks bytes.
 - Enhance with AI and Prompt from media stay usable during a video render so the next clip can be queued.
 - Installing the MiniMax Music 3 engine no longer fails partway through — it now pulls a diffusers build that actually exists, and on Windows installs the CUDA build of PyTorch instead of the CPU-only one.
+- Music engines whose install failed partway now report as not installed instead of ready — the Install button comes back, generation gives an actionable setup message instead of a Python traceback, and the installer stops refusing with 'already installed'
+- Local music runtimes now build on a standalone Python instead of a conda base on Windows, where torch installs but cannot load (WinError 1114); an already-broken venv is rebuilt automatically
+- MusicGen is now shown as unavailable on non-Apple-Silicon machines rather than offering an Install button whose installer skips and reports a confusing failure

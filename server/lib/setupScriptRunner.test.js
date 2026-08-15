@@ -15,7 +15,7 @@ vi.mock('./bashResolver.js', async (importOriginal) => ({
 }));
 const detectPythonSyncMock = vi.fn();
 vi.mock('./pythonSetup.js', () => ({
-  detectPythonSync: (...a) => detectPythonSyncMock(...a),
+  detectVenvBasePythonSync: (...a) => detectPythonSyncMock(...a),
 }));
 const killProcessTreeMock = vi.fn();
 vi.mock('./bufferedSpawn.js', () => ({
