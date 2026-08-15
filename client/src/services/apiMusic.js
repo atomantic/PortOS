@@ -19,6 +19,29 @@ export const generateMusic = (body, requestOptions = {}) => request('/music/gene
   ...requestOptions,
 });
 
+// ---- Stepped music designer (#4305) ----
+// Both fire one LLM call each and are only ever invoked from an explicit button
+// press in the designer wizard. Callers own their loading/error UI, so pass
+// `{ silent: true }`.
+
+// Expand a short reference/vibe into a rich musical description.
+// body: { concept, guidance?, template?, providerId?, model?, effort? }
+// → { description, llm: { provider, model } }
+export const describeMusic = (body, requestOptions = {}) => request('/music/describe', {
+  method: 'POST',
+  body: JSON.stringify(body),
+  ...requestOptions,
+});
+
+// Write original lyrics from an enriched description (+ optional guidance).
+// body: { description, guidance?, template?, providerId?, model?, effort? }
+// → { lyrics, llm: { provider, model } }
+export const generateLyrics = (body, requestOptions = {}) => request('/music/lyrics', {
+  method: 'POST',
+  body: JSON.stringify(body),
+  ...requestOptions,
+});
+
 // The merged shipped+user model list for one engine → { models }.
 export const listEngineModels = (engine, options = {}) => request(`/music/models/${encodeURIComponent(engine)}`, options);
 

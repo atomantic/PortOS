@@ -15,7 +15,7 @@ import { Music as MusicIcon, Mic, Disc3, AudioLines, Wand2 } from 'lucide-react'
 import ArtistsManager from '../components/music/ArtistsManager';
 import AlbumsManager from '../components/music/AlbumsManager';
 import TracksManager from '../components/music/TracksManager';
-import QuickMusicGenerator from '../components/music/QuickMusicGenerator';
+import MusicDesigner from '../components/music/MusicDesigner';
 import TabPills from '../components/ui/TabPills';
 
 const TABS = [
@@ -52,7 +52,7 @@ export default function Music() {
         className="mb-6"
       />
 
-      {active === 'generate' && <QuickMusicGenerator />}
+      {active === 'generate' && <MusicDesigner />}
       {active === 'artists' && <ArtistsManager />}
       {active === 'albums' && <AlbumsManager />}
       {active === 'tracks' && <TracksManager />}

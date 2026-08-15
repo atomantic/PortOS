@@ -1,0 +1,260 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { MemoryRouter, Routes, Route, useLocation } from 'react-router';
+import MusicDesigner from './MusicDesigner';
+import * as api from '../../services/api';
+
+vi.mock('../../services/api', () => ({
+  describeMusic: vi.fn(),
+  generateLyrics: vi.fn(),
+  getSettings: vi.fn(),
+  updateSettings: vi.fn(),
+}));
+
+// The render step hosts MusicGenPanel unchanged; stub it to a props readout so
+// the wizard's hand-off (prompt = the enriched description, lyrics = possibly
+// empty) is directly assertable without the engine-list fetch.
+vi.mock('./MusicGenPanel', () => ({
+  default: ({ title, prompt, lyrics }) => (
+    <div data-testid="gen-panel" data-title={title} data-prompt={prompt} data-lyrics={lyrics} />
+  ),
+}));
+
+// Stateful stub of useProviderModels: the pin-restore effect calls its setters,
+// so they have to actually move the returned selection for the restore path to
+// be observable.
+const hook = vi.hoisted(() => ({
+  providers: [{ id: 'provider-a', name: 'Provider A', models: ['model-a'], defaultModel: 'model-a' }],
+  selectedProviderId: 'provider-a',
+  selectedModel: 'model-a',
+  loading: false,
+  setSelectedProviderId: null,
+  setSelectedModel: null,
+}));
+vi.mock('../../hooks/useProviderModels', () => ({
+  default: () => ({
+    providers: hook.providers,
+    selectedProviderId: hook.selectedProviderId,
+    selectedModel: hook.selectedModel,
+    availableModels: hook.providers.find((p) => p.id === hook.selectedProviderId)?.models || [],
+    setSelectedProviderId: hook.setSelectedProviderId,
+    setSelectedModel: hook.setSelectedModel,
+    loading: hook.loading,
+  }),
+}));
+
+function LocationDisplay() {
+  const location = useLocation();
+  return <div data-testid="location">{location.pathname}</div>;
+}
+
+const renderAt = (path) => render(
+  <MemoryRouter initialEntries={[path]}>
+    <Routes>
+      <Route path="/music/:tab" element={<><LocationDisplay /><MusicDesigner /></>} />
+      <Route path="/music/:tab/:id" element={<><LocationDisplay /><MusicDesigner /></>} />
+      <Route path="/music/tracks/:id" element={<LocationDisplay />} />
+    </Routes>
+  </MemoryRouter>,
+);
+
+describe('<MusicDesigner>', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    hook.providers = [{ id: 'provider-a', name: 'Provider A', models: ['model-a'], defaultModel: 'model-a' }];
+    hook.selectedProviderId = 'provider-a';
+    hook.selectedModel = 'model-a';
+    hook.loading = false;
+    hook.setSelectedProviderId = vi.fn();
+    hook.setSelectedModel = vi.fn();
+    api.getSettings.mockResolvedValue({ music: {} });
+    api.updateSettings.mockResolvedValue({});
+  });
+
+  afterEach(cleanup);
+
+  describe('step routing', () => {
+    it('defaults a bare /music/generate to the concept step', async () => {
+      renderAt('/music/generate');
+      expect(await screen.findByLabelText(/what do you want to hear/i)).toBeInTheDocument();
+    });
+
+    it('renders the step named in the URL', async () => {
+      renderAt('/music/generate/lyrics');
+      expect(await screen.findByLabelText('Lyrics')).toBeInTheDocument();
+      expect(screen.queryByLabelText(/what do you want to hear/i)).toBeNull();
+    });
+
+    it('redirects an unknown step to the first step instead of an empty shell', async () => {
+      renderAt('/music/generate/bogus');
+      await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/music/generate/concept'));
+      expect(screen.getByLabelText(/what do you want to hear/i)).toBeInTheDocument();
+    });
+
+    it('moves the URL when a step in the step bar is clicked', async () => {
+      renderAt('/music/generate/concept');
+      await screen.findByLabelText(/what do you want to hear/i);
+      fireEvent.click(screen.getByRole('tab', { name: /render/i }));
+      expect(screen.getByTestId('location')).toHaveTextContent('/music/generate/render');
+    });
+  });
+
+  describe('the describe step', () => {
+    it('fires no LLM call on mount — both provider calls need an explicit press', async () => {
+      renderAt('/music/generate/concept');
+      await screen.findByLabelText(/what do you want to hear/i);
+      await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
+      expect(api.describeMusic).not.toHaveBeenCalled();
+      expect(api.generateLyrics).not.toHaveBeenCalled();
+    });
+
+    it('sends the concept, guidance and picker selection, then advances with the result editable', async () => {
+      api.describeMusic.mockResolvedValue({ description: 'Lush pads over a broken beat.', llm: { provider: 'provider-a', model: 'model-a' } });
+      renderAt('/music/generate/concept');
+
+      fireEvent.change(await screen.findByLabelText(/what do you want to hear/i), { target: { value: 'a rainy downtempo loop' } });
+      fireEvent.change(screen.getByLabelText(/extra guidance/i), { target: { value: 'under 100 BPM' } });
+      fireEvent.click(screen.getByRole('button', { name: /describe it/i }));
+
+      await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/music/generate/description'));
+      expect(api.describeMusic).toHaveBeenCalledWith({
+        concept: 'a rainy downtempo loop',
+        guidance: 'under 100 BPM',
+        template: undefined,
+        providerId: 'provider-a',
+        model: 'model-a',
+        effort: undefined,
+      }, { silent: true });
+
+      const box = screen.getByLabelText(/music description/i);
+      expect(box).toHaveValue('Lush pads over a broken beat.');
+      fireEvent.change(box, { target: { value: 'My own words.' } });
+      expect(box).toHaveValue('My own words.');
+    });
+
+    it('persists the provider pin after a successful describe', async () => {
+      api.describeMusic.mockResolvedValue({ description: 'Lush pads.', llm: {} });
+      renderAt('/music/generate/concept');
+      fireEvent.change(await screen.findByLabelText(/what do you want to hear/i), { target: { value: 'x' } });
+      fireEvent.click(screen.getByRole('button', { name: /describe it/i }));
+
+      await waitFor(() => expect(api.updateSettings).toHaveBeenCalledWith(
+        { music: { designer: { providerId: 'provider-a', model: 'model-a', effort: '' } } },
+        { silent: true },
+      ));
+    });
+
+    it('keeps the user on the concept step when the call fails', async () => {
+      api.describeMusic.mockRejectedValue(new Error('no provider'));
+      renderAt('/music/generate/concept');
+      fireEvent.change(await screen.findByLabelText(/what do you want to hear/i), { target: { value: 'x' } });
+      fireEvent.click(screen.getByRole('button', { name: /describe it/i }));
+
+      await waitFor(() => expect(api.describeMusic).toHaveBeenCalled());
+      expect(screen.getByTestId('location')).toHaveTextContent('/music/generate/concept');
+    });
+  });
+
+  describe('the lyrics step', () => {
+    it('generates lyrics from the description without leaving the step', async () => {
+      api.describeMusic.mockResolvedValue({ description: 'Lush pads over a broken beat.', llm: {} });
+      api.generateLyrics.mockResolvedValue({ lyrics: '[verse]\nrain on the window', llm: {} });
+      renderAt('/music/generate/concept');
+
+      fireEvent.change(await screen.findByLabelText(/what do you want to hear/i), { target: { value: 'a rainy downtempo loop' } });
+      fireEvent.click(screen.getByRole('button', { name: /describe it/i }));
+      await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/music/generate/description'));
+      fireEvent.click(screen.getByRole('button', { name: /next: lyrics/i }));
+
+      fireEvent.change(screen.getByLabelText(/lyric guidance/i), { target: { value: 'about leaving at dawn' } });
+      fireEvent.click(screen.getByRole('button', { name: /generate lyrics/i }));
+
+      await waitFor(() => expect(screen.getByLabelText('Lyrics')).toHaveValue('[verse]\nrain on the window'));
+      expect(api.generateLyrics).toHaveBeenCalledWith({
+        description: 'Lush pads over a broken beat.',
+        guidance: 'about leaving at dawn',
+        template: undefined,
+        providerId: 'provider-a',
+        model: 'model-a',
+        effort: undefined,
+      }, { silent: true });
+      expect(screen.getByTestId('location')).toHaveTextContent('/music/generate/lyrics');
+    });
+
+    it('is skippable — an instrumental reaches the generator with empty lyrics', async () => {
+      api.describeMusic.mockResolvedValue({ description: 'Lush pads over a broken beat.', llm: {} });
+      renderAt('/music/generate/concept');
+
+      fireEvent.change(await screen.findByLabelText(/what do you want to hear/i), { target: { value: 'a rainy downtempo loop' } });
+      fireEvent.click(screen.getByRole('button', { name: /describe it/i }));
+      await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/music/generate/description'));
+      fireEvent.click(screen.getByRole('button', { name: /next: lyrics/i }));
+
+      fireEvent.click(screen.getByRole('button', { name: /skip — make it instrumental/i }));
+
+      const panel = await screen.findByTestId('gen-panel');
+      expect(panel).toHaveAttribute('data-prompt', 'Lush pads over a broken beat.');
+      expect(panel).toHaveAttribute('data-lyrics', '');
+      expect(api.generateLyrics).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('the saved provider pin', () => {
+    it('restores a pin that still matches a live provider', async () => {
+      hook.providers = [
+        { id: 'provider-a', name: 'Provider A', models: ['model-a'], defaultModel: 'model-a' },
+        { id: 'provider-b', name: 'Provider B', models: ['model-b'], defaultModel: 'model-b' },
+      ];
+      api.getSettings.mockResolvedValue({ music: { designer: { providerId: 'provider-b', model: 'model-b' } } });
+      renderAt('/music/generate/concept');
+
+      await waitFor(() => expect(hook.setSelectedProviderId).toHaveBeenCalledWith('provider-b'));
+      expect(hook.setSelectedModel).toHaveBeenCalledWith('model-b');
+    });
+
+    it('degrades to the hook default for a stale provider id', async () => {
+      api.getSettings.mockResolvedValue({ music: { designer: { providerId: 'provider-gone', model: 'model-gone' } } });
+      renderAt('/music/generate/concept');
+
+      await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
+      await waitFor(() => expect(screen.getByLabelText(/what do you want to hear/i)).toBeInTheDocument());
+      expect(hook.setSelectedProviderId).not.toHaveBeenCalled();
+      expect(hook.setSelectedModel).not.toHaveBeenCalled();
+    });
+
+    it('skips a stale MODEL on a provider that still exists', async () => {
+      api.getSettings.mockResolvedValue({ music: { designer: { providerId: 'provider-a', model: 'model-removed' } } });
+      renderAt('/music/generate/concept');
+
+      await waitFor(() => expect(hook.setSelectedProviderId).toHaveBeenCalledWith('provider-a'));
+      expect(hook.setSelectedModel).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('meta-prompt overrides', () => {
+    it('sends a saved override as the template, and stops sending it once reset', async () => {
+      api.getSettings.mockResolvedValue({ music: { designer: { describeTemplate: 'Be terse.' } } });
+      api.describeMusic.mockResolvedValue({ description: 'Terse.', llm: {} });
+      renderAt('/music/generate/concept');
+
+      fireEvent.change(await screen.findByLabelText(/what do you want to hear/i), { target: { value: 'x' } });
+      fireEvent.click(screen.getByRole('button', { name: /advanced — meta-prompts/i }));
+      await waitFor(() => expect(screen.getByLabelText(/description instruction/i)).toHaveValue('Be terse.'));
+
+      fireEvent.click(screen.getByRole('button', { name: /describe it/i }));
+      await waitFor(() => expect(api.describeMusic).toHaveBeenCalledWith(
+        expect.objectContaining({ template: 'Be terse.' }),
+        { silent: true },
+      ));
+
+      // Reset clears the override so the server falls back to the shipped default.
+      fireEvent.click(screen.getByRole('tab', { name: /concept/i }));
+      fireEvent.click(screen.getAllByRole('button', { name: /reset to default/i })[0]);
+      fireEvent.click(screen.getByRole('button', { name: /describe it/i }));
+      await waitFor(() => expect(api.describeMusic).toHaveBeenLastCalledWith(
+        expect.objectContaining({ template: undefined }),
+        { silent: true },
+      ));
+    });
+  });
+});
