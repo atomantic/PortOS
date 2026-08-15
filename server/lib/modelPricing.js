@@ -31,16 +31,29 @@
 
 export const PRICING_AS_OF = '2026-07-12';
 
+/**
+ * Every shipped Claude Opus generation bills at the same published rate, so the
+ * tier owns one [input, output] pair rather than a hand-copied literal per row.
+ * `OPUS_MODEL_IDS` is ordered NEWEST FIRST: its head is the id the `/opus/i`
+ * family rule reports for opus ids the table doesn't list, so an opus bump is a
+ * single prepend here — the family rule no longer has to be re-pointed by hand
+ * (it was, at every bump through migration 206, for zero behavioral effect).
+ */
+const OPUS_TIER_RATES = [5.0, 25.0];
+const OPUS_MODEL_IDS = [
+  'claude-opus-5',
+  'claude-opus-4-8',
+  'claude-opus-4-7',
+  'claude-opus-4-6',
+  'claude-opus-4-5',
+];
+
 /** USD per 1M tokens: [input, output]. Exact model-id matches. */
 const EXACT_RATES = {
   // Anthropic
   'claude-fable-5': [10.0, 50.0],
   'claude-mythos-5': [10.0, 50.0],
-  'claude-opus-5': [5.0, 25.0],
-  'claude-opus-4-8': [5.0, 25.0],
-  'claude-opus-4-7': [5.0, 25.0],
-  'claude-opus-4-6': [5.0, 25.0],
-  'claude-opus-4-5': [5.0, 25.0],
+  ...Object.fromEntries(OPUS_MODEL_IDS.map((id) => [id, OPUS_TIER_RATES])),
   'claude-sonnet-5': [2.0, 10.0], // intro pricing through 2026-08-31 ($3/$15 after)
   'claude-sonnet-4-6': [3.0, 15.0],
   'claude-sonnet-4-5': [3.0, 15.0],
@@ -94,7 +107,10 @@ const EXACT_KEYS_BY_LENGTH = Object.keys(EXACT_RATES).sort((a, b) => b.length - 
  */
 const FAMILY_RULES = [
   { test: /fable|mythos/i, rateModel: 'claude-fable-5' },
-  { test: /opus/i, rateModel: 'claude-opus-5' },
+  // Reports the newest listed opus id (see OPUS_MODEL_IDS) — the whole tier
+  // shares one rate pair, so the pointer only supplies the label, and deriving
+  // it means an opus bump never has to edit this line.
+  { test: /opus/i, rateModel: OPUS_MODEL_IDS[0] },
   { test: /sonnet[-.]?5/i, rateModel: 'claude-sonnet-5' },
   { test: /sonnet/i, rateModel: 'claude-sonnet-4-5' },
   { test: /haiku/i, rateModel: 'claude-haiku-4-5' },

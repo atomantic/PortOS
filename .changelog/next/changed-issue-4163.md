@@ -1,0 +1,1 @@
+- Deduped the identical Claude Opus rate rows in the usage-cost table: the tier now shares one rate pair and the opus family rule derives its pointer, so an opus model bump no longer needs a second hand-edit (#4163)

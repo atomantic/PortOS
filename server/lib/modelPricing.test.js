@@ -10,9 +10,62 @@ describe('resolveModelRates', () => {
   });
 
   it('resolves CLI shorthand model names via family rules', () => {
-    expect(resolveModelRates('claude-code', 'opus')).toMatchObject({ rateModel: 'claude-opus-5', matched: 'family' });
+    // Asserted by RATES, not by pointer id: the whole opus tier shares one rate
+    // pair, so which listed opus id gets reported is a bump-to-bump detail the
+    // suite should not have to be edited for. The pointer's validity is pinned
+    // by the dedicated test below.
+    expect(resolveModelRates('claude-code', 'opus')).toMatchObject({ inputPer1M: 5, outputPer1M: 25, matched: 'family' });
     expect(resolveModelRates('claude-code', 'sonnet')).toMatchObject({ rateModel: 'claude-sonnet-4-5', matched: 'family' });
     expect(resolveModelRates('claude-code', 'haiku')).toMatchObject({ rateModel: 'claude-haiku-4-5', matched: 'family' });
+  });
+
+  // #4163: the opus tier is one shared rate pair, and the `/opus/i` family rule
+  // derives its pointer from the model list instead of naming an id by hand.
+  // These three pin the properties that made the hand-maintained pointer safe,
+  // so a future opus bump is a one-line prepend with no other edit anywhere.
+  describe('opus tier', () => {
+    const LISTED_OPUS_IDS = [
+      'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-opus-4-5',
+    ];
+
+    it('bills every listed opus generation at the same tier rates', () => {
+      for (const id of LISTED_OPUS_IDS) {
+        expect(resolveModelRates('claude-code', id)).toMatchObject({
+          rateModel: id, inputPer1M: 5, outputPer1M: 25, matched: 'exact',
+        });
+      }
+    });
+
+    // The point of the dedup: an opus id the table has never heard of still
+    // prices at $5/$25 without anyone re-pointing a family rule at it.
+    it('prices an unlisted opus id at tier rates without a pointer bump', () => {
+      for (const id of [
+        'opus', 'claude-opus-9', 'claude-opus-6-2', 'global.anthropic.claude-opus-7-20270101-v1:0',
+      ]) {
+        expect(resolveModelRates('claude-code', id)).toMatchObject({
+          inputPer1M: 5, outputPer1M: 25, matched: 'family',
+        });
+      }
+    });
+
+    // The family rule reports a LABEL, and downstream code leans on it: the UI
+    // prints "Priced as <rateModel>", and usageReconciler compares two ids'
+    // rateModel to decide whether they are the same family. So the pointer must
+    // stay a non-null, exactly-resolvable key whose rates agree with the tier —
+    // a null or synthetic label would silently break both.
+    it('reports a family label that is itself an exact table id at the same rates', () => {
+      const viaFamily = resolveModelRates('claude-code', 'opus');
+      expect(viaFamily.rateModel).toEqual(expect.any(String));
+      expect(resolveModelRates('claude-code', viaFamily.rateModel)).toMatchObject({
+        rateModel: viaFamily.rateModel,
+        inputPer1M: viaFamily.inputPer1M,
+        outputPer1M: viaFamily.outputPer1M,
+        matched: 'exact',
+      });
+      // …and every opus id agrees on that label, which is what lets the
+      // reconciler treat `opus` and `claude-opus-N` as one model.
+      expect(resolveModelRates('claude-code', 'claude-opus-9').rateModel).toBe(viaFamily.rateModel);
+    });
   });
 
   it('resolves fable/mythos to the Claude 5 flagship rates', () => {
