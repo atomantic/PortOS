@@ -10,6 +10,14 @@ import { basename, join } from 'path';
 import { tmpdir, totalmem } from 'os';
 import { randomUUID } from 'crypto';
 
+const { heavyClaimRelease } = vi.hoisted(() => ({ heavyClaimRelease: vi.fn(async () => {}) }));
+vi.mock('../../lib/heavyJobClaim.js', () => ({
+  claimHeavyLocalJob: vi.fn(async () => ({ ok: true, holder: {}, release: heavyClaimRelease })),
+}));
+vi.mock('../../lib/localMemory.js', () => ({
+  prepareLocalMemory: vi.fn(async () => ({ unloaded: [], availableGb: 64, totalGb: 64, budgetGb: 64 })),
+}));
+
 // ─── dep mocks (must be declared before the module import) ───────────────────
 
 const MOCK_PATHS = {

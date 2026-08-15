@@ -15,12 +15,12 @@ const h = vi.hoisted(() => ({
   vmStatThrows: false,
 }));
 
-vi.mock('../ollamaManager.js', () => ({
+vi.mock('../../services/ollamaManager.js', () => ({
   getLoadedModels: vi.fn(async () => h.ollamaLoaded),
   unloadModel: (...a) => h.ollamaUnload(...a),
   getBaseUrl: () => h.ollamaUrl,
 }));
-vi.mock('../lmStudioManager.js', () => ({
+vi.mock('../../services/lmStudioManager.js', () => ({
   getLoadedModels: vi.fn(async () => h.lmLoaded),
   unloadModel: (...a) => h.lmUnload(...a),
   getBaseUrl: () => h.lmUrl,

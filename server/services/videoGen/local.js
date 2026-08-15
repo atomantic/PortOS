@@ -21,6 +21,8 @@ import { ensureDir, PATHS, UUID_RE } from '../../lib/fileUtils.js';
 import { spawnDetached } from '../../lib/detachedSpawn.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { createLineReader } from '../../lib/streamLines.js';
+import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
+import { prepareLocalMemory } from '../../lib/localMemory.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { videoLoraLayoutIssue } from '../../lib/safetensors.js';
 import { videoGenEvents } from './events.js';
@@ -1508,6 +1510,22 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     throw err;
   }
 
+  const heavyClaim = await claimHeavyLocalJob({ kind: 'local video generation', id: jobId });
+  if (!heavyClaim.ok) {
+    jobs.delete(jobId);
+    if (resizedSrcTempPath) await unlink(resizedSrcTempPath).catch(() => {});
+    if (resizedLastTempPath) await unlink(resizedLastTempPath).catch(() => {});
+    await Promise.all(resizedKeyframeTempPaths.map((path) => unlink(path).catch(() => {})));
+    await Promise.all(icReferenceTempPaths.map((path) => unlink(path).catch(() => {})));
+    if (uploadedTempPath) await unlink(uploadedTempPath).catch(() => {});
+    await Promise.all(uploadedTempPaths.map((path) => unlink(path).catch(() => {})));
+    throw new ServerError(heavyClaim.message, { status: 409, code: 'HEAVY_LOCAL_JOB_BUSY', context: { holder: heavyClaim.holder } });
+  }
+  const releaseHeavyClaim = () => heavyClaim.release()
+    .catch((err) => console.error(`❌ Video generation claim release [${jobId.slice(0, 8)}]: ${err.message}`));
+  const memoryReport = await prepareLocalMemory();
+  if (memoryReport.unloaded.length) console.log(`🧹 Video generation [${jobId.slice(0, 8)}] freed ${memoryReport.unloaded.length} resident model(s)`);
+
   // History-calibrated wall-clock estimate (#3801). `null` when this install
   // has never measured a render on this model — an explicit "no estimate"
   // sentinel the UI must render as "unknown", never as 0 or a guess. Stamped
@@ -1564,13 +1582,20 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // still `proc.kill()` it directly by PID on cancel / watchdog. `cleanup: true`
   // lets the helper drop that scratch dir on every terminal path (close/error)
   // so it can't accumulate under data/videos.
-  const proc = await spawnDetached(bin, args, {
-    env: childEnv,
-    controlDir: join(PATHS.videos, '.detached', jobId),
-    cleanup: true,
-    killProcessGroup: runtimeNeedsProcessGroupKill(model.runtime),
-  });
+  let proc;
+  try {
+    proc = await spawnDetached(bin, args, {
+      env: childEnv,
+      controlDir: join(PATHS.videos, '.detached', jobId),
+      cleanup: true,
+      killProcessGroup: runtimeNeedsProcessGroupKill(model.runtime),
+    });
+  } catch (err) {
+    await releaseHeavyClaim();
+    throw err;
+  }
   activeProcess = proc;
+  await heavyClaim.handoffTo?.(proc.pid);
 
   // Panel-side completion watchdog. Armed once we see the render's completion
   // marker on stdout; SIGKILLs the child if it hasn't exited after the grace
@@ -1680,6 +1705,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     broadcastSse(job, { type: 'error', error: reason });
     videoGenEvents.emit('failed', { generationId: jobId, error: reason });
     activeProcess = null;
+    void releaseHeavyClaim();
     // Spawn failed, so proc.on('close') will never fire — clean up every
     // temp file we own here, including the multipart upload, otherwise
     // ENOENT/permission errors leak files in os.tmpdir().
@@ -1765,6 +1791,10 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     clearCompletionWatchdog();
     clearIdleStallTimer();
     activeProcess = null;
+    // The child has exited, so its accelerator allocation is gone. Release
+    // before emitting the terminal completion event: an extend chain starts its
+    // next child from that event and must be able to acquire the machine claim.
+    await releaseHeavyClaim();
     // Wrap the whole teardown so a throw from finalizeGeneratedVideo (history
     // save, thumbnail, file move) can't leak as an unhandled rejection — on
     // Node ≥15 that kills the process AND strands the media job `running` with

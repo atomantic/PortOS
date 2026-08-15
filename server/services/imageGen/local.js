@@ -29,6 +29,8 @@ import { hfChildEnv } from '../../lib/hfToken.js';
 import { extractGatedRepo, isGatedRepoError } from '../../lib/hfErrors.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { createLineReader } from '../../lib/streamLines.js';
+import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
+import { prepareLocalMemory } from '../../lib/localMemory.js';
 import { IMAGE_GEN_MODE, LOCAL_IMAGEGEN_DEFAULT_MODEL } from './modes.js';
 import { computePixelDelta } from './regen.js';
 import { parseByteProgress, formatDownloadMessage } from '../videoGen/generateVideoHelpers.js';
@@ -541,6 +543,16 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   const stepwiseDir = await mkdtemp(join(tmpdir(), 'portos-stepwise-'));
 
   const { bin, args } = buildArgs({ pythonPath, model, prompt, negativePrompt, width: Number(width), height: Number(height), steps: actualSteps, guidance: actualGuidance, seed: actualSeed, quantize, outputPath, loraPaths: validLoras, loraScales, stepwiseDir, initImagePath: validInitImagePath, initImageStrength: validInitImageStrength, referenceImagePaths: validReferenceImagePaths, referenceImageStrengths: validReferenceImageStrengths });
+  const heavyClaim = await claimHeavyLocalJob({ kind: 'local image generation', id: jobId });
+  if (!heavyClaim.ok) {
+    jobs.delete(jobId);
+    await rm(stepwiseDir, { recursive: true, force: true });
+    throw new ServerError(heavyClaim.message, { status: 409, code: 'HEAVY_LOCAL_JOB_BUSY', context: { holder: heavyClaim.holder } });
+  }
+  const releaseHeavyClaim = () => heavyClaim.release()
+    .catch((err) => console.error(`❌ Image generation claim release [${jobId.slice(0, 8)}]: ${err.message}`));
+  const memoryReport = await prepareLocalMemory();
+  if (memoryReport.unloaded.length) console.log(`🧹 Image generation [${jobId.slice(0, 8)}] freed ${memoryReport.unloaded.length} resident model(s)`);
 
   console.log(`🎨 Generating image [${jobId.slice(0, 8)}] local: ${modelId} ${width}x${height} steps=${actualSteps}`);
   imageGenEvents.emit('started', { generationId: jobId, totalSteps: actualSteps });
@@ -548,6 +560,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
 
   const proc = spawn(bin, args, { env: await hfChildEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
   activeProcess = proc;
+  await heavyClaim.handoffTo?.(proc.pid);
   // Spawn ENOENT (missing/non-executable pythonPath) fires BOTH 'error' and
   // 'close' on Node — without this guard, a typo'd pythonPath emits two
   // 'failed' events to imageGenEvents and two SSE error frames to the
@@ -566,6 +579,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: reason });
     activeProcess = null;
     activeJob = null;
+    void releaseHeavyClaim();
     rm(stepwiseDir, { recursive: true, force: true }).catch(() => {});
     closeJobAfterDelay(jobs, jobId);
   });
@@ -741,6 +755,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     stdoutReader.flush();
     activeProcess = null;
     activeJob = null;
+    void releaseHeavyClaim();
     if (watcher) { try { watcher.close(); } catch { /* ignore */ } }
     rm(stepwiseDir, { recursive: true, force: true }).catch(() => {});
     if (code !== 0) {

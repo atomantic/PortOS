@@ -40,6 +40,14 @@ vi.mock('../../lib/hfToken.js', () => ({
   hfChildEnv: vi.fn(async () => ({ HF_TOKEN: 'hf_from_store', HUGGINGFACE_HUB_TOKEN: 'hf_from_store' })),
 }));
 
+const { claimRelease } = vi.hoisted(() => ({ claimRelease: vi.fn(async () => {}) }));
+vi.mock('../../lib/heavyJobClaim.js', () => ({
+  claimHeavyLocalJob: vi.fn(async () => ({ ok: true, holder: {}, release: claimRelease })),
+}));
+vi.mock('../../lib/localMemory.js', () => ({
+  prepareLocalMemory: vi.fn(async () => ({ unloaded: [], availableGb: 64, totalGb: 64, budgetGb: 64 })),
+}));
+
 vi.mock('./db.js', () => ({
   listModels: vi.fn(),
   getModel: vi.fn(),
@@ -53,6 +61,7 @@ import { rm } from 'node:fs/promises';
 import { ensureDir } from '../../lib/fileUtils.js';
 import { resolveTarget } from './targets.js';
 import { isTrellis2Installed, runTrellis2Generate } from './trellis2.js';
+import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
 import * as store from './db.js';
 import {
   createModel, startGeneration, getModelAsset, recoverInterruptedModels, deleteModel,
@@ -72,6 +81,7 @@ const draftRecord = () => ({
 describe('image-to-3D model orchestration', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    claimHeavyLocalJob.mockResolvedValue({ ok: true, holder: {}, release: claimRelease });
     isTrellis2Installed.mockReturnValue(true);
     resolveTarget.mockImplementation((id) => (
       id === 'trellis2'
@@ -139,6 +149,8 @@ describe('image-to-3D model orchestration', () => {
     // #3032: the resolved HF token (settings-stored included) rides into the child,
     // merged over process.env — without it, gated DINOv3/RMBG-2.0 pulls 401.
     expect(generateArgs.env).toMatchObject({ HF_TOKEN: 'hf_from_store', HUGGINGFACE_HUB_TOKEN: 'hf_from_store' });
+    expect(claimHeavyLocalJob).toHaveBeenCalledWith(expect.objectContaining({ kind: 'image-to-3D generation' }));
+    expect(claimRelease).toHaveBeenCalled();
     expect(posixPath(current.assetPath)).toBe('/data/image-to-3d/image3d-example/model.glb');
     expect(current.generationOperationId).toBeNull();
     expect(current.runs.at(-1)).toMatchObject({ status: 'completed', percent: 100 });

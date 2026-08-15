@@ -20,6 +20,8 @@ import { join } from 'node:path';
 import { rm } from 'node:fs/promises';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS, resolveGalleryImage, ensureDir } from '../../lib/fileUtils.js';
+import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
+import { prepareLocalMemory } from '../../lib/localMemory.js';
 import { slugifyForFilename } from '../../lib/civitai.js';
 import { detectHostCapabilities, resolveTarget, DEFAULT_IMAGE_TO_3D_TARGET } from './targets.js';
 import { getTargetAdapter } from './adapters.js';
@@ -113,8 +115,15 @@ async function failGeneration(id, operationId, error) {
 async function executeRender({ id, operationId, adapter, sourcePath, caps }) {
   const outputPath = assetDiskPath(id);
   let lastPersistedPercent = -1;
+  let heavyClaim = null;
   try {
     await ensureDir(join(PATHS.imageTo3d, id));
+    heavyClaim = await claimHeavyLocalJob({ kind: 'image-to-3D generation', id: operationId });
+    if (!heavyClaim.ok) {
+      throw new ServerError(heavyClaim.message, { status: 409, code: 'HEAVY_LOCAL_JOB_BUSY', context: { holder: heavyClaim.holder } });
+    }
+    const memoryReport = await prepareLocalMemory();
+    if (memoryReport.unloaded.length) console.log(`🧹 Image-to-3D render freed ${memoryReport.unloaded.length} resident model(s)`);
     // Resolve this target's own credential/env needs via its adapter (e.g.
     // TRELLIS.2 resolves the stored Hugging Face token) — omitted for a target
     // with nothing to resolve. Resolving HERE (an async caller) keeps `run`
@@ -179,6 +188,7 @@ async function executeRender({ id, operationId, adapter, sourcePath, caps }) {
     console.error(`❌ Image-to-3D render failed for ${id}: ${cleanError(error)}`);
     await failGeneration(id, operationId, error);
   } finally {
+    await heavyClaim?.release().catch((err) => console.error(`❌ Image-to-3D claim release failed: ${err.message}`));
     activeRenders.delete(operationId);
     activeOperations.delete(operationId);
     // If the record was deleted while the render ran, the completion/failure writes
