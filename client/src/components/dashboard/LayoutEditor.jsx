@@ -55,8 +55,9 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
     const cur = layouts.find((l) => l.id === editingId);
     if (!cur) return;
     if (dirty) return;
-    setWidgets(cur.widgets);
-    unmovedOrder.current = cur.widgets;
+    const curWidgets = cur.widgets ?? [];
+    setWidgets(curWidgets);
+    unmovedOrder.current = curWidgets;
     setName(cur.name);
     setActivateWindow(cur.activateWindow ?? null);
     setMode('idle');
