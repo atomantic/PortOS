@@ -10,32 +10,43 @@ import { detectAppIcon } from './appIconDetect.js';
 export const NON_PM2_TYPES = new Set(['ios-native', 'macos-native', 'xcode', 'swift']);
 
 /**
- * Non-Node runtimes recognized from marker files, mapped to the files that
- * identify them. Order is precedence: a repo's LANGUAGE beats its packaging, so
- * a Python service that also ships a `Dockerfile` classifies as `python` (the
- * common case), while a compose-only stack with no language markers is
- * `docker`. `static` is last — it's the "nothing but a page here" fallback.
+ * Language markers, checked FIRST: a repo's LANGUAGE beats its packaging, so a
+ * Python service that also ships a `Dockerfile` classifies as `python` (the
+ * common case) rather than as a Docker stack.
  */
-const NON_NODE_MARKERS = [
+const LANGUAGE_MARKERS = [
   ['python', ['pyproject.toml', 'requirements.txt', 'setup.py', 'Pipfile']],
-  ['go', ['go.mod']],
-  ['docker', ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml', 'Dockerfile']]
+  ['go', ['go.mod']]
 ];
 
+/** Compose/Dockerfile markers — only reached when no language marker matched. */
+const DOCKER_MARKERS = ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml', 'Dockerfile'];
+
 /**
- * Files meaning "something SERVES this directory". A package-less repo holding
- * one of these is a served app, not a static site, so `static` must not claim
- * it. `index.js` is deliberately absent: next to an `index.html` it is far more
- * often a client-side script than a server entry point.
+ * Node entry points meaning "a process runs here". Checked BEFORE the docker
+ * and static rules, and mapped to *no* classification rather than to a type: a
+ * package-less repo shipping `server.mjs` is a Node app someone containerized
+ * (or that also serves a page), and classifying it `docker`/`static` would
+ * withdraw standardization from an app that genuinely wants it — the exact
+ * false negative this predicate exists to avoid. `index` is deliberately absent
+ * from the basenames: next to an `index.html` it is far more often a
+ * client-side script than a server entry point.
  */
-const SERVER_ENTRY_MARKERS = ['server.js', 'app.js', 'ecosystem.config.js', 'ecosystem.config.cjs'];
+const SERVER_ENTRY_BASENAMES = ['server', 'app', 'main'];
+const SERVER_ENTRY_EXTENSIONS = ['.js', '.mjs', '.cjs', '.ts'];
+
+const hasNodeServerEntry = (present) =>
+  // ECOSYSTEM_CONFIG_FILENAMES (below) is the one list of PM2 config names — a
+  // repo carrying one is unambiguously a PM2-managed process app.
+  ECOSYSTEM_CONFIG_FILENAMES.some(name => present.has(name)) ||
+  SERVER_ENTRY_BASENAMES.some(base => SERVER_ENTRY_EXTENSIONS.some(ext => present.has(`${base}${ext}`)));
 
 /** The non-Node app types `classifyNonNodeType` can emit. */
-export const NON_NODE_TYPES = new Set([...NON_NODE_MARKERS.map(([type]) => type), 'static']);
+export const NON_NODE_TYPES = new Set([...LANGUAGE_MARKERS.map(([type]) => type), 'docker', 'static']);
 
 /**
  * Classify a repo's runtime from its top-level filenames, for repos that
- * carried no Node or Apple signal. Returns `null` when no marker matched — the
+ * carried no Node or Apple signal. Returns `null` when nothing matched — the
  * caller keeps `unknown` rather than guessing.
  *
  * @param {string[]} files Top-level entry names (from `readdir`).
@@ -43,16 +54,12 @@ export const NON_NODE_TYPES = new Set([...NON_NODE_MARKERS.map(([type]) => type)
  */
 export function classifyNonNodeType(files) {
   const present = new Set(files || []);
-  for (const [type, markers] of NON_NODE_MARKERS) {
+  for (const [type, markers] of LANGUAGE_MARKERS) {
     if (markers.some(marker => present.has(marker))) return type;
   }
-  // `static` is the last resort and the only rule carrying a negative
-  // condition — "an index.html with no server". An index.html sitting beside a
-  // server entry point is a served app, so fall through to `unknown` (which
-  // stays standardizable) rather than wrongly withdrawing the flow.
-  if (present.has('index.html') && !SERVER_ENTRY_MARKERS.some(marker => present.has(marker))) {
-    return 'static';
-  }
+  if (hasNodeServerEntry(present)) return null;
+  if (DOCKER_MARKERS.some(marker => present.has(marker))) return 'docker';
+  if (present.has('index.html')) return 'static';
   return null;
 }
 

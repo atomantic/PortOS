@@ -1138,10 +1138,22 @@ describe('classifyNonNodeType', () => {
   it('does not call an index.html beside a server entry point static', () => {
     // "index.html with NO server" is the rule. A served app that happens to
     // have an index.html must fall through to `unknown` (still standardizable)
-    // rather than have the flow withdrawn from it.
-    for (const server of ['server.js', 'app.js', 'ecosystem.config.js', 'ecosystem.config.cjs']) {
+    // rather than have the flow withdrawn from it. Every JS/TS extension counts
+    // — `server.mjs` is as much an entry point as `server.js`.
+    for (const server of [
+      'server.js', 'server.mjs', 'server.cjs', 'server.ts',
+      'app.js', 'app.mjs', 'main.js', 'main.ts',
+      'ecosystem.config.js', 'ecosystem.config.cjs'
+    ]) {
       expect(classifyNonNodeType(['index.html', server])).toBeNull();
     }
+  });
+
+  it('does not call a Node server with a Dockerfile a docker stack', () => {
+    // A containerized Node service is still a Node service — the entry point
+    // outranks the packaging, the same way a language marker does.
+    expect(classifyNonNodeType(['server.js', 'Dockerfile'])).toBeNull();
+    expect(classifyNonNodeType(['app.mjs', 'docker-compose.yml'])).toBeNull();
   });
 
   it('still treats a client-side index.js as static, not a server', () => {
@@ -1150,10 +1162,16 @@ describe('classifyNonNodeType', () => {
     expect(classifyNonNodeType(['index.html', 'index.js', 'style.css'])).toBe('static');
   });
 
+  it('keeps the language markers ahead of a Node entry point', () => {
+    // A Python repo with a stray `app.py`-adjacent `main.js` build script is
+    // still python — the language check runs first.
+    expect(classifyNonNodeType(['requirements.txt', 'main.js'])).toBe('python');
+  });
+
   it('prefers the language over the packaging when both markers are present', () => {
     // A Python service that also ships a Dockerfile is a python repo, not a
     // docker stack — the language is the more useful classification, and both
-    // land outside STANDARDIZABLE_TYPES either way.
+    // are refused by the standardize gate either way.
     expect(classifyNonNodeType(['pyproject.toml', 'Dockerfile', 'index.html'])).toBe('python');
     expect(classifyNonNodeType(['go.mod', 'docker-compose.yml'])).toBe('go');
     expect(classifyNonNodeType(['Dockerfile', 'index.html'])).toBe('docker');
