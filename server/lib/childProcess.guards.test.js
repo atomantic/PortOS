@@ -94,23 +94,47 @@ const allFiles = [
 // pure CPU to `npm test` for nothing. A hit inside a comment survives the
 // pre-filter and is then correctly discarded by blankComments, so narrowing
 // this way cannot hide a violation.
-const candidates = allFiles
-  .map((rel) => ({ rel, raw: readServerSource(rel) }))
+const allSources = allFiles.map((rel) => ({ rel, raw: readServerSource(rel) }));
+
+const candidates = allSources
   .filter(({ raw }) => raw.includes('child_process') || /['"]pm2['"]/.test(raw));
 
 const parsed = new Map(candidates.map(({ rel, raw }) => [rel, blankComments(raw)]));
 
 const inCallSiteTree = (rel) => CALL_SITE_TREES.some((t) => rel.startsWith(t));
 
-// A separate pre-filter for the redundant-literal rule below. The `candidates`
-// set above keys on the string `child_process`, which a file that has correctly
-// moved to the wrapper no longer contains — so reusing it there would scan
-// exactly the files the rule does not apply to and pass green forever.
-const IMPORTS_WRAPPER = /['"][^'"]*childProcess\.js['"]/;
-const wrapperImporters = allFiles
-  .filter((rel) => rel !== WRAPPER && !inCallSiteTree(rel))
-  .map((rel) => ({ rel, raw: readServerSource(rel) }))
-  .filter(({ raw }) => IMPORTS_WRAPPER.test(raw));
+// Pre-filter for the redundant-literal rule below, keyed on `windowsHide`
+// rather than on `child_process`. Two reasons it cannot reuse `candidates`:
+// a file that has correctly moved to the wrapper no longer contains the string
+// `child_process` at all, and a file can reach a spawn through an intermediate
+// (`bufferedSpawn.js`, `detachedSpawn.js`, `execGit.js`) without naming either
+// module. Anything that mentions windowsHide is in scope; nothing else can
+// violate the rule.
+const hideMentions = allSources.filter(({ rel, raw }) => (
+  rel !== WRAPPER && !inCallSiteTree(rel) && raw.includes('windowsHide')
+));
+
+/**
+ * Call expressions in `raw` that pass a redundant `windowsHide: true`.
+ *
+ * Any callee, not just the child_process names: most spawns here are reached
+ * through a promisified local alias (`execAsync`, `execFileAsync`), which is
+ * exactly where several of the removed literals lived. Scoping to call
+ * ARGUMENTS is what leaves an options *builder* alone — `processEnv.js`'s
+ * `safeChildProcessOptions` returns an object rather than passing one to a
+ * spawn, and states `windowsHide` on purpose.
+ * @param {string} raw
+ * @returns {{name: string, text: string, line: number}[]}
+ */
+function redundantHideCalls(raw) {
+  const hits = callExpressions(blankComments(raw), null)
+    .filter((call) => /windowsHide\s*:\s*true/.test(call.text));
+  // A nested match also reports every call wrapping it, so keep the innermost
+  // one — that is the line someone has to edit.
+  return hits.filter((hit) => !hits.some((inner) => (
+    inner.text.length < hit.text.length && hit.text.includes(inner.text)
+  )));
+}
 
 describe('comment blanking', () => {
   // Every rule below filters through blankComments, so a stripper that blanked
@@ -180,35 +204,33 @@ describe('child_process import guard', () => {
     ).toEqual([]);
   });
 
+  it('detects a redundant literal without flagging an options builder', () => {
+    // The rule below expects an EMPTY list, so it would pass just as green if
+    // the detector matched nothing at all. Pin the detector on fixtures first.
+    expect(redundantHideCalls("spawn('git', args, { cwd, windowsHide: true });").map((c) => c.name))
+      .toEqual(['spawn']);
+    // Reached through a promisified alias, which is where several of the
+    // removed literals actually lived.
+    expect(redundantHideCalls("await execAsync(cmd, { windowsHide: true });").map((c) => c.name))
+      .toEqual(['execAsync']);
+    // Only the innermost call, not every call wrapping it.
+    expect(redundantHideCalls("new Promise(() => { spawn('git', { windowsHide: true }); });").map((c) => c.name))
+      .toEqual(['spawn']);
+    // An options BUILDER states windowsHide deliberately — it is not a call
+    // argument, so it stays (processEnv.js's safeChildProcessOptions).
+    expect(redundantHideCalls('function opts(o) {\n  return { ...o, windowsHide: true };\n}')).toEqual([]);
+    // An explicit opt-out is a decision, not a redundant restatement.
+    expect(redundantHideCalls("spawn('code', ['.'], { windowsHide: false });")).toEqual([]);
+  });
+
   it('drops the redundant windowsHide literal wherever the wrapper supplies it', () => {
-    // The inverse of the rule above, and the reason #4315 existed: the v1.5.x /
-    // v1.6.7 per-call-site sweeps left ~85 `windowsHide: true` literals behind,
-    // and once the wrapper injects the identical value they are two competing
-    // conventions in one file — the loud one being the one a newcomer copies.
-    // Any callee, not just the child_process names: most spawns here are reached
-    // through a promisified local alias (`execAsync`, `execFileAsync`), which is
-    // exactly where several of those literals lived.
-    //
-    // Scoped to call ARGUMENTS, which is what leaves `processEnv.js`'s
-    // `safeChildProcessOptions` alone — it authors a canonical options object
-    // rather than passing one to a spawn, and states `windowsHide` on purpose.
-    expect(wrapperImporters.length, 'no wrapper importers found — has the scan broken?').toBeGreaterThan(40);
-
-    const hits = [];
-    for (const { rel, raw } of wrapperImporters) {
-      for (const call of callExpressions(blankComments(raw), null)) {
-        if (/windowsHide\s*:\s*true/.test(call.text)) hits.push({ rel, ...call });
-      }
-    }
-
-    // `names: null` matches nested calls too, so the literal inside
-    // `spawn(…)` also reports the `new Promise(…)` wrapping it. Keep only the
-    // innermost call holding each literal, so the list points at the fix.
-    const offenders = hits
-      .filter((hit) => !hits.some((inner) => (
-        inner.rel === hit.rel && inner.text.length < hit.text.length && hit.text.includes(inner.text)
-      )))
-      .map(({ rel, line, name }) => `${rel}:${line} ${name}(…)`);
+    // The inverse of the import rule above, and the reason #4315 existed: the
+    // v1.5.x / v1.6.7 per-call-site sweeps left 85 `windowsHide: true` literals
+    // behind, and once the wrapper injects the identical value they are two
+    // competing conventions in one file — the loud one being what gets copied.
+    const offenders = hideMentions.flatMap(({ rel, raw }) => (
+      redundantHideCalls(raw).map(({ line, name }) => `${rel}:${line} ${name}(…)`)
+    ));
 
     expect(
       offenders,
