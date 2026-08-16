@@ -24,6 +24,15 @@ export const getCharacter = ({ skills = true, metrics = true, ...options } = {})
 // Health
 export const checkHealth = (options) => request('/system/health', options);
 export const getSystemHealth = (options) => request('/system/health/details', options);
+export const runSystemResourceReport = (options = {}) => request('/system-resources/report', {
+  method: 'POST',
+  ...options,
+});
+export const triageSystemResources = (payload, options = {}) => request('/system-resources/triage', {
+  method: 'POST',
+  body: JSON.stringify(payload),
+  ...options,
+});
 export const getNetworkExposure = (options) => request('/network-exposure/status', options);
 export const getCapabilities = (options) => request('/capabilities', options);
 export const updateHealthThresholds = (thresholds, options = {}) => request('/system/health/thresholds', {
@@ -147,7 +156,11 @@ export const restoreDatabase = (data, options) => request('/backup/restore-db', 
 export const getDataOverview = () => request('/data');
 export const getDataCategory = (key) => request(`/data/${key}`);
 export const archiveDataCategory = (key, opts) => request(`/data/${key}/archive`, { method: 'POST', body: JSON.stringify(opts || {}) });
-export const purgeDataCategory = (key, opts) => request(`/data/${key}`, { method: 'DELETE', body: JSON.stringify(opts || {}) });
+export const purgeDataCategory = (key, opts, options = {}) => request(`/data/${key}`, {
+  method: 'DELETE',
+  body: JSON.stringify(opts || {}),
+  ...options,
+});
 export const getDataBackups = () => request('/data/backups');
 export const deleteDataBackup = (filename) => request(`/data/backups/${filename}`, { method: 'DELETE' });
 

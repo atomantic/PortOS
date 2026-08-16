@@ -37,6 +37,7 @@ import { ENGINES } from '../services/pipeline/musicGen.js'
 import { abortSignalFromResponse } from '../lib/requestAbort.js'
 import { awaitWritableDrain } from '../lib/streamBackpressure.js'
 import { getLoadedModels as getLoadedOllamaModels, unloadModel as unloadOllamaModel } from '../services/ollamaManager.js'
+import { getLoadedModels as getLoadedLmStudioModels } from '../services/lmStudioManager.js'
 
 const router = Router()
 
@@ -272,13 +273,18 @@ router.post('/migrate', asyncHandler(async (req, res) => {
   res.json(result)
 }))
 
-// GET /api/local-llm/loaded — models currently resident in memory.
+// GET /api/local-llm/loaded — models currently resident in memory across both
+// local backends. An unavailable backend resolves to an empty list so the
+// Memory Management poll stays quiet instead of generating a 503 every 5s.
 // Distinct from /catalog (disk-installed) — only flags what's eating VRAM
 // right now so the Memory Management panel can show what to unload before
 // kicking off a big diffusion render.
-router.get('/loaded', asyncHandler(async (req, res) => {
-  const loaded = await getLoadedOllamaModels()
-  res.json({ ollama: loaded })
+router.get('/loaded', asyncHandler(async (_req, res) => {
+  const [ollama, lmstudio] = await Promise.all([
+    getLoadedOllamaModels(),
+    getLoadedLmStudioModels(),
+  ])
+  res.json({ ollama, lmstudio })
 }))
 
 // POST /api/local-llm/unload — body: { backend: 'ollama', modelId }.

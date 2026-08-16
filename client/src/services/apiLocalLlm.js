@@ -30,8 +30,8 @@ export const getLocalLlmHuggingFaceSearch = (backend, q = '', category = 'all', 
 export const installLocalLlmModel = (backend, modelId, options) =>
   request('/local-llm/install', { method: 'POST', body: JSON.stringify({ backend, modelId }), ...options });
 
-export const deleteLocalLlmModel = (backend, modelId) =>
-  request('/local-llm/delete', { method: 'POST', body: JSON.stringify({ backend, modelId }) });
+export const deleteLocalLlmModel = (backend, modelId, options = {}) =>
+  request('/local-llm/delete', { method: 'POST', body: JSON.stringify({ backend, modelId }), ...options });
 
 export const installLocalLlmBackend = (backend) =>
   request('/local-llm/install-backend', { method: 'POST', body: JSON.stringify({ backend }) });
@@ -63,13 +63,18 @@ export const migrateLocalLlmBackend = (to, mode = 'link') =>
 export const getLoadedLlmModels = (options) =>
   request('/local-llm/loaded', options);
 
-// Force Ollama to evict a model immediately. LM Studio has its own
-// /api/lmstudio/unload endpoint (see apiCore default export usage in
-// LocalLlmTab) — we don't proxy it through this module.
+// Force a local backend to evict a model immediately.
 export const unloadOllamaModel = (modelId, options) =>
   request('/local-llm/unload', {
     method: 'POST',
     body: JSON.stringify({ backend: 'ollama', modelId }),
+    ...options,
+  });
+
+export const unloadLmStudioModel = (modelId, options) =>
+  request('/lmstudio/unload', {
+    method: 'POST',
+    body: JSON.stringify({ modelId }),
     ...options,
   });
 

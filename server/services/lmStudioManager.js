@@ -699,6 +699,7 @@ export {
   resetCache,
   isAppInstalled,
   getLastListError,
+  getModelsDir,
   resolveLocalModel,
   importModelFromGguf,
   deleteModel,

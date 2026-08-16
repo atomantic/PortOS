@@ -1285,6 +1285,7 @@ export {
   ensureProviderReady,
   isOllamaProvider,
   getServiceStatus,
+  getModelsDir,
   getEmbeddings,
   isBootstrapConflictError,
   isPullDeadlineError,

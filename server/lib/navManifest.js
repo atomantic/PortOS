@@ -243,7 +243,10 @@ export const NAV_COMMANDS = [
   { id: 'nav.loops', path: '/loops', label: 'Loops', section: 'Dev Tools', aliases: ['loops'] },
   { id: 'nav.devtools.processes', path: '/devtools/processes', label: 'Processes', section: 'Dev Tools', aliases: ['devtools-processes', 'processes'] },
   { id: 'nav.security', path: '/security', label: 'Security', section: 'Dev Tools', aliases: ['security'] },
-  { id: 'nav.system-health', path: '/system-health', label: 'System Health', section: 'Dev Tools', aliases: ['system-health', 'system-status', 'memory-usage', 'disk-usage', 'cpu-usage'], keywords: ['memory', 'cpu', 'disk', 'thresholds', 'top processes', 'resource usage'] },
+  { id: 'nav.system-health', path: '/system-resources/overview', label: 'System Resources', section: 'Dev Tools', aliases: ['system-health', 'system-status', 'memory-usage', 'cpu-usage'], keywords: ['health', 'memory', 'cpu', 'disk', 'thresholds', 'top processes', 'resource usage'] },
+  { id: 'nav.system-resources.storage', path: '/system-resources/storage', label: 'Storage Report', section: 'Dev Tools', aliases: ['disk-usage', 'storage-report', 'disk-cleanup'], keywords: ['disk', 'storage', 'space', 'cleanup', 'cache', 'data usage', 'ai triage'] },
+  { id: 'nav.system-resources.models', path: '/system-resources/models', label: 'Model Resources', section: 'Dev Tools', aliases: ['loaded-models', 'downloaded-models', 'model-memory'], keywords: ['ollama', 'lm studio', 'hugging face', 'lora', 'unload', 'delete model', 'vram'] },
+  { id: 'nav.system-resources.queues', path: '/system-resources/queues', label: 'Active Queues', section: 'Dev Tools', aliases: ['job-queues', 'pending-jobs', 'render-queue'], keywords: ['media jobs', 'agent tasks', 'pending', 'running', 'cancel', 'run now'] },
   { id: 'nav.cos.jobs', path: '/cos/jobs', label: 'System Tasks', section: 'Chief of Staff', aliases: ['cos-jobs', 'system-tasks'] },
   { id: 'nav.uploads', path: '/uploads', label: 'Uploads', section: 'Dev Tools', aliases: ['uploads'] },
 

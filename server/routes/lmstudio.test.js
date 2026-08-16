@@ -120,6 +120,26 @@ describe('lmstudio routes', () => {
     });
   });
 
+  describe('POST /api/lmstudio/unload', () => {
+    it('surfaces manager failures as an unsuccessful request', async () => {
+      lmStudioManager.unloadModel.mockResolvedValue({ success: false, error: 'model is busy' });
+
+      const res = await request(app).post('/api/lmstudio/unload').send({ modelId: 'example/model' });
+
+      expect(res.status).toBe(502);
+      expect(res.body.error).toContain('model is busy');
+    });
+
+    it('returns a successful unload result', async () => {
+      lmStudioManager.unloadModel.mockResolvedValue({ success: true, modelId: 'example/model' });
+
+      const res = await request(app).post('/api/lmstudio/unload').send({ modelId: 'example/model' });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ success: true, modelId: 'example/model' });
+    });
+  });
+
   describe('POST /api/lmstudio/completion', () => {
     it('rejects a missing prompt', async () => {
       const res = await request(app).post('/api/lmstudio/completion').send({});

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
-import SystemHealthWidget from './SystemHealthWidget';
+import SystemHealthWidget from './SystemHealthWidget.jsx';
 
 const HEALTH = {
   overallHealth: 'healthy',
@@ -53,5 +53,11 @@ describe('SystemHealthWidget', () => {
     );
 
     expect(screen.getByText('55%')).toBeInTheDocument();
+  });
+
+  it('links details to overview and disk usage directly to storage', () => {
+    renderWidget({ health: HEALTH, refetchHealth: vi.fn() });
+    expect(screen.getByRole('link', { name: 'Open disk usage report' })).toHaveAttribute('href', '/system-resources/storage');
+    expect(screen.getByRole('link', { name: /Details/ })).toHaveAttribute('href', '/system-resources/overview');
   });
 });

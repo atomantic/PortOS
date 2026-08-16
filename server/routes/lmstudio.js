@@ -86,6 +86,9 @@ router.post('/unload', asyncHandler(async (req, res) => {
   const { modelId } = validateRequest(lmStudioModelIdSchema, req.body)
 
   const result = await lmStudioManager.unloadModel(modelId)
+  if (!result.success) {
+    throw new ServerError(result.error || 'Unload failed', { status: 502, context: { modelId } })
+  }
   res.json(result)
 }))
 

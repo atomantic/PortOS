@@ -137,7 +137,7 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
             <RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} aria-hidden="true" />
           </button>
           <Link
-            to="/system-health"
+            to="/system-resources/overview"
             className="flex items-center gap-1 text-sm text-port-accent hover:text-port-accent/80 transition-colors min-h-[40px] px-2"
           >
             <span className="hidden sm:inline">Details</span>
@@ -267,7 +267,11 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
 
         {/* Disk Usage */}
         {system.disk && (
-          <div className="bg-port-bg/50 rounded-lg p-3">
+          <Link
+            to="/system-resources/storage"
+            aria-label="Open disk usage report"
+            className="block rounded-lg bg-port-bg/50 p-3 transition-colors hover:bg-port-bg/80 focus:outline-none focus:ring-2 focus:ring-port-accent/60"
+          >
             <div className="flex items-center gap-2 mb-1">
               <Database size={14} className="text-cyan-400" />
               <span className="text-xs text-gray-500">Disk</span>
@@ -284,7 +288,7 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
                 style={{ width: `${system.disk.usagePercent}%` }}
               />
             </div>
-          </div>
+          </Link>
         )}
       </div>
 

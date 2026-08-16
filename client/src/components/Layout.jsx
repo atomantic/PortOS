@@ -274,7 +274,7 @@ const navItems = [
       { to: '/devtools/quota-burn', label: 'Quota Burn', icon: Flame },
       { to: '/security', label: 'Security', icon: Camera },
       { to: '/shell', label: 'Shell', icon: SquareTerminal },
-      { to: '/system-health', label: 'System Health', icon: Activity },
+      { to: '/system-resources/overview', label: 'System Resources', icon: Activity },
       { to: '/uploads', label: 'Uploads', icon: Upload },
       { to: '/devtools/usage', label: 'Usage', icon: BarChart3 },
       { to: '/devtools/video-download', label: 'Video Downloader', icon: Film },

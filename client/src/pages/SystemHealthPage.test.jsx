@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, within, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, Route, Routes } from 'react-router';
 
 const HEALTH = {
   overallHealth: 'warning',
@@ -21,6 +21,20 @@ const withWarnings = warnings => ({ ...HEALTH, warnings });
 vi.mock('../services/api', () => ({
   getSystemHealth: vi.fn(),
   updateHealthThresholds: vi.fn(() => Promise.resolve({})),
+  runSystemResourceReport: vi.fn(),
+  triageSystemResources: vi.fn(),
+}));
+
+vi.mock('../hooks/useProviderModels', () => ({
+  default: () => ({
+    providers: [],
+    selectedProviderId: '',
+    selectedModel: '',
+    availableModels: [],
+    setSelectedProviderId: vi.fn(),
+    setSelectedModel: vi.fn(),
+    loading: false,
+  }),
 }));
 
 vi.mock('../components/ui/Toast', () => ({
@@ -30,9 +44,11 @@ vi.mock('../components/ui/Toast', () => ({
 import * as api from '../services/api';
 import SystemHealthPage from './SystemHealthPage';
 
-const renderPage = () => render(
-  <MemoryRouter>
-    <SystemHealthPage />
+const renderPage = (path = '/system-resources/overview') => render(
+  <MemoryRouter initialEntries={[path]}>
+    <Routes>
+      <Route path="/system-resources/:tab" element={<SystemHealthPage />} />
+    </Routes>
   </MemoryRouter>
 );
 
@@ -49,7 +65,7 @@ describe('SystemHealthPage remediation links', () => {
 
     const banner = (await screen.findByText('Disk usage at or above 90%')).parentElement;
     // The alert itself carries the link, not just the drill-in nav below it.
-    expect(within(banner).getByRole('link', { name: /Disk usage breakdown/ })).toHaveAttribute('href', '/data');
+    expect(within(banner).getByRole('link', { name: /Disk usage breakdown/ })).toHaveAttribute('href', '/system-resources/storage');
   });
 
   it('links memory, process and app alerts to their own remediation page', async () => {
@@ -103,5 +119,28 @@ describe('SystemHealthPage remediation links', () => {
 
     await waitFor(() => expect(screen.getByText('55%')).toBeInTheDocument());
     expect(api.getSystemHealth).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the active section in the URL and runs storage scans explicitly', async () => {
+    api.runSystemResourceReport.mockResolvedValue({
+      generatedAt: '2026-08-16T00:00:00.000Z',
+      filesystem: { totalBytes: 1000, usedBytes: 750, freeBytes: 250, usagePercent: 75 },
+      summary: { managedReclaimableBytes: 100 },
+      storageAreas: [{
+        id: 'cache', label: 'Cache', kind: 'cache', sizeBytes: 100,
+        status: 'ready', managePath: null, protected: false, note: 'Reproducible data.',
+      }],
+      cleanupCandidates: [],
+      sourceErrors: [],
+      models: { downloaded: [], loaded: [], totals: { all: 0 } },
+      queues: { media: { queued: 0, running: 0 }, agents: null },
+    });
+    renderPage('/system-resources/storage');
+
+    expect(screen.getByRole('link', { name: /Storage/ })).toHaveAttribute('href', '/system-resources/storage');
+    expect(api.runSystemResourceReport).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Run system report' }));
+    await waitFor(() => expect(api.runSystemResourceReport).toHaveBeenCalledWith({ silent: true }));
+    expect(await screen.findByText('Known storage areas')).toBeInTheDocument();
   });
 });

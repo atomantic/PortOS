@@ -1,11 +1,15 @@
-import { useEffect, useState, useRef } from 'react';
-import { Link } from 'react-router';
-import { Activity, AlertTriangle, CheckCircle, XCircle, HardDrive, Cpu, Database, ServerCog, Zap, RefreshCw } from 'lucide-react';
+import { useCallback, useEffect, useState, useRef } from 'react';
+import { Link, Navigate, NavLink, useParams } from 'react-router';
+import { Activity, AlertTriangle, Boxes, CheckCircle, XCircle, HardDrive, Cpu, Database, ListOrdered, RefreshCw, ServerCog, Zap } from 'lucide-react';
 import * as api from '../services/api';
 import toast from '../components/ui/Toast';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import Banner from '../components/ui/Banner';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { useConfirmDelete } from '../hooks/useConfirmDelete.js';
+import StoragePanel from '../components/system-resources/StoragePanel.jsx';
+import ModelsPanel from '../components/system-resources/ModelsPanel.jsx';
+import QueuesPanel from '../components/system-resources/QueuesPanel.jsx';
 
 const HEALTH_STYLE = {
   healthy: { color: 'text-port-success', bg: 'bg-port-success/10', icon: CheckCircle, label: 'Healthy' },
@@ -19,7 +23,7 @@ const HEALTH_STYLE = {
 // `forge` is intentionally absent — its message already embeds gh's own remedy
 // text and there is no in-app page that fixes it.
 const REMEDIATION = {
-  disk: { to: '/data', label: 'Disk usage breakdown' },
+  disk: { to: '/system-resources/storage', label: 'Disk usage breakdown' },
   memory: { to: '/devtools/processes', label: 'All processes' },
   cpu: { to: '/devtools/processes', label: 'All processes' },
   process: { to: '/devtools/processes', label: 'All processes' },
@@ -46,7 +50,121 @@ function barTone(pct, warn, critical) {
   return 'bg-port-success';
 }
 
-export default function SystemHealthPage() {
+const RESOURCE_TABS = [
+  { id: 'overview', label: 'Overview', icon: Activity },
+  { id: 'storage', label: 'Storage', icon: HardDrive },
+  { id: 'models', label: 'Models', icon: Boxes },
+  { id: 'queues', label: 'Queues', icon: ListOrdered },
+];
+
+export default function SystemResourcesPage() {
+  const { tab = 'overview' } = useParams();
+  const [report, setReport] = useState(null);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [cleanupBusyId, setCleanupBusyId] = useState(null);
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
+
+  const runReport = useCallback(async () => {
+    setReportLoading(true);
+    const result = await api.runSystemResourceReport({ silent: true }).catch((error) => {
+      toast.error(error?.message || 'System report failed');
+      return null;
+    });
+    setReportLoading(false);
+    if (result) setReport(result);
+    return result;
+  }, []);
+
+  const removeCandidate = useCallback(async (candidate) => {
+    const action = candidate.action;
+    if (!action) return;
+    setCleanupBusyId(candidate.id);
+    const result = await (async () => {
+      if (action.type === 'data-category') {
+        return api.purgeDataCategory(action.key, {}, { silent: true });
+      }
+      if (action.type === 'hf-model') {
+        return api.deleteCachedModel(action.dirName, { silent: true });
+      }
+      if (action.type === 'lora') {
+        return api.deleteLora(action.filename, { silent: true });
+      }
+      if (action.type === 'local-model') {
+        return api.deleteLocalLlmModel(action.backend, action.modelId, { silent: true });
+      }
+      return null;
+    })().catch((error) => {
+      toast.error(error?.message || `Could not remove ${candidate.label}`);
+      return null;
+    });
+    setCleanupBusyId(null);
+    if (!result) return;
+    toast.success(`${candidate.label} removed`);
+    await runReport();
+  }, [runReport]);
+
+  const cleanup = {
+    busyId: cleanupBusyId,
+    isConfirming,
+    request: requestDelete,
+    cancel: cancelDelete,
+    confirm: (candidate) => confirmDelete(() => removeCandidate(candidate)),
+  };
+
+  const validTab = RESOURCE_TABS.some((item) => item.id === tab);
+  if (!validTab) return <Navigate to="/system-resources/overview" replace />;
+
+  return (
+    <div className="mx-auto max-w-7xl space-y-4">
+      <header className="overflow-hidden rounded-2xl border border-port-border bg-gradient-to-r from-port-card via-port-card to-port-accent/10 p-4 sm:p-5">
+        <div className="flex items-start gap-3">
+          <div className="rounded-xl bg-port-accent/15 p-2.5 text-port-accent"><ServerCog size={22} /></div>
+          <div>
+            <h1 className="text-xl font-bold text-white">System Resources</h1>
+            <p className="mt-1 max-w-3xl text-sm text-gray-400">
+              Health, disk intelligence, loaded models, and active work queues in one control center.
+            </p>
+          </div>
+        </div>
+        <nav aria-label="System resources sections" className="mt-5 grid grid-cols-4 border-b border-port-border sm:flex sm:gap-1">
+          {RESOURCE_TABS.map(({ id, label, icon: Icon }) => (
+            <NavLink
+              key={id}
+              to={`/system-resources/${id}`}
+              className={({ isActive }) => `flex min-h-[40px] items-center justify-center gap-1 border-b-2 px-1 py-2 text-xs transition-colors sm:shrink-0 sm:gap-1.5 sm:px-3 sm:text-sm ${
+                isActive ? 'border-port-accent text-white' : 'border-transparent text-gray-500 hover:text-gray-200'
+              }`}
+            >
+              <Icon size={14} /> {label}
+            </NavLink>
+          ))}
+        </nav>
+      </header>
+
+      {tab === 'overview' && <SystemHealthOverview />}
+      {tab === 'storage' && (
+        <StoragePanel
+          report={report}
+          loading={reportLoading}
+          onRunReport={runReport}
+          onReport={setReport}
+          cleanup={cleanup}
+        />
+      )}
+      {tab === 'models' && (
+        <ModelsPanel
+          report={report}
+          loading={reportLoading}
+          onRunReport={runReport}
+          cleanup={cleanup}
+        />
+      )}
+      {tab === 'queues' && <QueuesPanel />}
+    </div>
+  );
+}
+
+function SystemHealthOverview() {
   const [draft, setDraft] = useState(null);
   const [saving, setSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -131,7 +249,7 @@ export default function SystemHealthPage() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-xl font-bold text-white flex items-center gap-2">
             <ServerCog size={20} />
-            System Health
+            Live health
           </h2>
           <div className="flex flex-wrap items-center justify-end gap-2">
             <button

@@ -280,7 +280,7 @@ const PRODUCERS = [
   {
     source: 'health',
     label: 'Health anomalies',
-    drillTo: '/system-health',
+    drillTo: '/system-resources/overview',
     async gather() {
       // System/health alerts; only surface the ones worth interrupting for.
       const { alerts = [] } = await getAlertsCached();
@@ -300,7 +300,7 @@ const PRODUCERS = [
         summary: (alert.detail || alert.message || '').slice(0, 200),
         timestamp: alert.timestamp || null,
         severity: alert.severity === 'critical' ? 'critical' : 'high',
-        drillTo: alert.link || '/system-health',
+        drillTo: alert.link || '/system-resources/overview',
         ...(alertType ? { meta: { alertType } } : {})
       };
     }

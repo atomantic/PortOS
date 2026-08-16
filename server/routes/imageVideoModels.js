@@ -10,25 +10,24 @@
 
 import { Router } from 'express';
 import { existsSync } from 'fs';
-import { readdir, stat, rm } from 'fs/promises';
+import { rm } from 'fs/promises';
 import { join } from 'path';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { PATHS, formatBytes, dirSize } from '../lib/fileUtils.js';
+import { PATHS } from '../lib/fileUtils.js';
 import { getHfCacheRoot } from '../lib/hfCache.js';
 import {
   getImageModels,
   getVideoModels,
   isUserModelEntry,
-  loadMediaModels,
   patchUserModelEntry,
   removeUserModelEntry,
 } from '../lib/mediaModels.js';
 import { publicTextEncoderOption, videoTextEncoderOptions } from '../lib/videoTextEncoders.js';
-import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { emptyToUndefined, validateRequest } from '../lib/validation.js';
 import { ADDABLE_IMAGE_RUNNERS, ADDABLE_VIDEO_RUNTIMES, searchHuggingfaceModels } from '../lib/huggingfaceModel.js';
 import { addModelFromHuggingface } from '../services/mediaModelInstall.js';
+import { getMediaModelStorage } from '../services/mediaModelStorage.js';
 
 const router = Router();
 
@@ -38,85 +37,8 @@ const router = Router();
 // would make a downloaded encoder impossible to delete from this UI.
 const HF_HUB_DIR = getHfCacheRoot;
 
-// Friendly labels for known models, derived from the media-models registry.
-// HF stores cache dirs as `models--<org>--<name>` (slashes replaced with --).
-// Image gen still has a few well-known repos (Flux) that the registry tracks
-// only by short id, so we add those here as a small static fallback.
-const buildAppModels = () => {
-  const reg = loadMediaModels();
-  const out = {
-    'black-forest-labs--FLUX.1-schnell': 'Flux 1 Schnell (Image)',
-    'black-forest-labs--FLUX.1-dev': 'Flux 1 Dev (Image)',
-  };
-  const addEntry = (m, suffix) => {
-    if (!m.repo) return;
-    out[m.repo.replace(/\//g, '--')] = `${m.name} ${suffix}`;
-  };
-  for (const m of [...(reg.video?.macos || []), ...(reg.video?.windows || [])]) addEntry(m, '(Video)');
-  for (const t of (reg.textEncoders || [])) addEntry({ name: t.label, repo: t.repo }, '(Text Encoder)');
-  return out;
-};
-const APP_MODELS = buildAppModels();
-
 router.get('/', asyncHandler(async (_req, res) => {
-  const hubDir = HF_HUB_DIR();
-
-  const entries = existsSync(hubDir)
-    ? (await readdir(hubDir)).filter((f) => f.startsWith('models--'))
-    : [];
-
-  const [models, loras, totalImages, totalVideos] = await Promise.all([
-    mapWithConcurrency(entries, 4, async (dirName) => {
-      const fullPath = join(hubDir, dirName);
-      const modelKey = dirName.replace('models--', '');
-      const [org, ...nameParts] = modelKey.split('--');
-      const name = nameParts.join('--');
-      const size = await dirSize(fullPath);
-      return {
-        id: dirName,
-        org,
-        name,
-        repo: `${org}/${name}`,
-        label: APP_MODELS[modelKey] || null,
-        size,
-        sizeHuman: formatBytes(size),
-      };
-    }),
-    (async () => {
-      const out = [];
-      if (!existsSync(PATHS.loras)) return out;
-      for (const f of await readdir(PATHS.loras)) {
-        if (!f.endsWith('.safetensors')) continue;
-        const s = await stat(join(PATHS.loras, f));
-        out.push({
-          filename: f,
-          name: f.replace(/^lora-/, '').replace(/\.safetensors$/, ''),
-          size: s.size,
-          sizeHuman: formatBytes(s.size),
-        });
-      }
-      return out;
-    })(),
-    dirSize(PATHS.images),
-    dirSize(PATHS.videos),
-  ]);
-  models.sort((a, b) => b.size - a.size);
-
-  const totalModels = models.reduce((sum, m) => sum + m.size, 0);
-  const totalLoras = loras.reduce((sum, l) => sum + l.size, 0);
-
-  res.json({
-    models,
-    loras,
-    hubDir,
-    diskUsage: {
-      models: formatBytes(totalModels),
-      loras: formatBytes(totalLoras),
-      images: formatBytes(totalImages),
-      videos: formatBytes(totalVideos),
-      total: formatBytes(totalModels + totalLoras + totalImages + totalVideos),
-    },
-  });
+  res.json(await getMediaModelStorage());
 }));
 
 // GET /registry — the media-model registry as the manager UI needs it:

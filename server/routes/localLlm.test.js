@@ -6,6 +6,7 @@ import { runLocalLlmTest, compareLocalLlmModels } from '../services/localLlmPlay
 import { listModels, listVisionModels, listToolUseModels } from '../services/localLlm.js';
 import { enrichCatalogWithVariants } from '../services/huggingFaceCatalog.js';
 import { getLoadedModels, unloadModel } from '../services/ollamaManager.js';
+import { getLoadedModels as getLoadedLmStudioModels } from '../services/lmStudioManager.js';
 import { localLlmCompareSchema, localLlmTestSchema } from '../lib/validation.js';
 import { errorEvents } from '../lib/errorHandler.js';
 
@@ -36,6 +37,10 @@ vi.mock('../services/localLlmPlayground.js', () => ({
 vi.mock('../services/ollamaManager.js', () => ({
   getLoadedModels: vi.fn(async () => []),
   unloadModel: vi.fn(),
+}));
+
+vi.mock('../services/lmStudioManager.js', () => ({
+  getLoadedModels: vi.fn(async () => []),
 }));
 
 // Mock the HF catalog service so /catalog tests don't hit the network. The no-op
@@ -237,17 +242,20 @@ describe('local LLM memory-management routes', () => {
     vi.clearAllMocks();
   });
 
-  it('GET /loaded reports the models Ollama currently has resident', async () => {
+  it('GET /loaded reports models both local backends currently have resident', async () => {
     // Mirror the real getLoadedModels() field set so the fixture documents the
     // pass-through contract and would catch any future field-stripping.
     const resident = { id: 'llama3.2', name: 'llama3.2', size: 4096, sizeVram: 4096, expiresAt: null };
+    const lmStudioResident = { id: 'example/lmstudio', state: 'loaded' };
     getLoadedModels.mockResolvedValue([resident]);
+    getLoadedLmStudioModels.mockResolvedValue([lmStudioResident]);
 
     const res = await request(makeApp()).get('/api/local-llm/loaded');
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ollama: [resident] });
+    expect(res.body).toEqual({ ollama: [resident], lmstudio: [lmStudioResident] });
     expect(getLoadedModels).toHaveBeenCalledTimes(1);
+    expect(getLoadedLmStudioModels).toHaveBeenCalledTimes(1);
   });
 
   it('POST /unload evicts a resident model and echoes the service result', async () => {

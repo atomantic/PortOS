@@ -4,6 +4,7 @@
 //
 // Sources of residency this panel covers:
 //   - Ollama models (multiple can be loaded simultaneously) → /api/local-llm/loaded
+//   - LM Studio models → /api/lmstudio/models
 //   - Whisper STT (PM2 process `portos-whisper`) → /api/voice/status + /api/voice/whisper
 //   - Kokoro TTS (in-process kokoro-js) → /api/voice/tts/status + /api/voice/tts/unload
 //
@@ -27,7 +28,11 @@ import BrailleSpinner from '../BrailleSpinner';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
 import useMounted from '../../hooks/useMounted.js';
 import { formatBytes } from '../../utils/formatters';
-import { getLoadedLlmModels, unloadOllamaModel } from '../../services/apiLocalLlm.js';
+import {
+  getLoadedLlmModels,
+  unloadLmStudioModel,
+  unloadOllamaModel,
+} from '../../services/apiLocalLlm.js';
 import { getTtsStatus, unloadKokoroTts, controlWhisper, getVoiceStatus } from '../../services/apiVoice.js';
 
 const SILENT = { silent: true };
@@ -52,6 +57,7 @@ function Row({ icon: Icon, title, subtitle, status, action, danger }) {
 
 export default function MemoryManagement() {
   const [loadedOllama, setLoadedOllama] = useState([]);
+  const [loadedLmStudio, setLoadedLmStudio] = useState([]);
   const [ttsState, setTtsState] = useState({ state: 'lazy', loadedKey: null });
   const [whisperRunning, setWhisperRunning] = useState(false);
   const [sttEngine, setSttEngine] = useState('whisper');
@@ -70,12 +76,13 @@ export default function MemoryManagement() {
   // the prior poll's snapshot.
   const refresh = useCallback(async () => {
     const [llm, tts, voice] = await Promise.all([
-      getLoadedLlmModels(SILENT).catch(() => ({ ollama: [] })),
+      getLoadedLlmModels(SILENT).catch(() => ({ ollama: [], lmstudio: [] })),
       getTtsStatus(SILENT).catch(() => ({ kokoro: { state: 'lazy', loadedKey: null } })),
       getVoiceStatus(SILENT).catch(() => null),
     ]);
     const snapshot = {
       loadedOllama: Array.isArray(llm?.ollama) ? llm.ollama : [],
+      loadedLmStudio: Array.isArray(llm?.lmstudio) ? llm.lmstudio : [],
       ttsState: tts?.kokoro || { state: 'lazy', loadedKey: null },
       // voice.services.whisper.ok is the "PM2 process responsive" probe in
       // checkAll(). When the service block is missing (status fetch failed)
@@ -86,6 +93,7 @@ export default function MemoryManagement() {
     };
     if (!mountedRef.current) return snapshot;
     setLoadedOllama(snapshot.loadedOllama);
+    setLoadedLmStudio(snapshot.loadedLmStudio);
     setTtsState(snapshot.ttsState);
     setWhisperRunning(snapshot.whisperRunning);
     setSttEngine(snapshot.sttEngine);
@@ -102,6 +110,11 @@ export default function MemoryManagement() {
 
   const [unloadModel, unloadingModel] = useAsyncAction(async (modelId) => {
     await unloadOllamaModel(modelId, SILENT);
+    toast.success(`Unloaded ${modelId}`);
+    await refresh();
+  });
+  const [unloadLmStudio, unloadingLmStudio] = useAsyncAction(async (modelId) => {
+    await unloadLmStudioModel(modelId, SILENT);
     toast.success(`Unloaded ${modelId}`);
     await refresh();
   });
@@ -127,7 +140,9 @@ export default function MemoryManagement() {
     // snapshot rather than component state — React's async setState in
     // refresh() won't have flushed by the time `loadedOllama` etc. is
     // referenced in this same closure.
-    const fresh = (await refresh()) || { loadedOllama: [], whisperRunning: false, ttsState: { state: 'lazy' } };
+    const fresh = (await refresh()) || {
+      loadedOllama: [], loadedLmStudio: [], whisperRunning: false, ttsState: { state: 'lazy' },
+    };
     // Fan out in parallel — the operations don't depend on each other and
     // doing them serially would visibly stall on whisper's PM2-delete step.
     // Per-step errors get swallowed here because freeAll is the "best effort"
@@ -135,6 +150,7 @@ export default function MemoryManagement() {
     // Per-step toasts would also stack four-deep on success which is noise.
     const results = await Promise.allSettled([
       ...fresh.loadedOllama.map((m) => unloadOllamaModel(m.id, SILENT)),
+      ...fresh.loadedLmStudio.map((m) => unloadLmStudioModel(m.id, SILENT)),
       fresh.whisperRunning ? controlWhisper('stop', SILENT) : Promise.resolve(),
       fresh.ttsState.state !== 'lazy' ? unloadKokoroTts(SILENT) : Promise.resolve(),
     ]);
@@ -154,9 +170,10 @@ export default function MemoryManagement() {
     );
   }
 
-  const anythingLoaded = loadedOllama.length > 0 || whisperRunning || ttsState.state !== 'lazy';
+  const anythingLoaded = loadedOllama.length > 0 || loadedLmStudio.length > 0
+    || whisperRunning || ttsState.state !== 'lazy';
   const anyActionRunning =
-    unloadingModel || unloadingKokoro || stoppingWhisper || startingWhisper || freeingAll;
+    unloadingModel || unloadingLmStudio || unloadingKokoro || stoppingWhisper || startingWhisper || freeingAll;
 
   return (
     <div className="bg-port-card border border-port-border rounded mb-4">
@@ -190,7 +207,8 @@ export default function MemoryManagement() {
         </div>
       </div>
 
-      {loadedOllama.length === 0 && !whisperRunning && ttsState.state === 'lazy' ? (
+      {loadedOllama.length === 0 && loadedLmStudio.length === 0
+        && !whisperRunning && ttsState.state === 'lazy' ? (
         <div className="px-3 py-3 text-xs text-gray-500 italic">
           Nothing memory-resident — full unified memory is available for diffusion.
         </div>
@@ -208,6 +226,28 @@ export default function MemoryManagement() {
                   type="button"
                   onClick={() => unloadModel(m.id)}
                   disabled={anyActionRunning}
+                  aria-label={`Unload ${m.name || m.id}`}
+                  className={`${btnClass} text-gray-300 border border-port-border hover:bg-port-border/40`}
+                >
+                  Unload
+                </button>
+              }
+              danger
+            />
+          ))}
+          {loadedLmStudio.map((m) => (
+            <Row
+              key={`lmstudio:${m.id}`}
+              icon={Cpu}
+              title={m.id}
+              subtitle="LM Studio"
+              status="loaded"
+              action={
+                <button
+                  type="button"
+                  onClick={() => unloadLmStudio(m.id)}
+                  disabled={anyActionRunning}
+                  aria-label={`Unload ${m.id}`}
                   className={`${btnClass} text-gray-300 border border-port-border hover:bg-port-border/40`}
                 >
                   Unload

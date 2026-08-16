@@ -19,7 +19,7 @@ import { getHttpsEnabledAtBoot } from '../lib/httpsState.js';
 // 75-85% band on a host with a couple of LLMs loaded, and big SSDs commonly
 // run >85% before being a real problem. Earlier thresholds (75/90 mem,
 // 85/95 disk) fired warnings on every healthy laptop. Users can override
-// these from /system-health (persisted to settings.json under `health`).
+// these from /system-resources/overview (persisted to settings.json under `health`).
 const DEFAULT_THRESHOLDS = {
   memoryWarn: 85,
   memoryCritical: 95,

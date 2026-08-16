@@ -305,7 +305,9 @@ export default function App() {
           <Route path="instances" element={<Instances />} />
           <Route path="workspace-contexts" element={<WorkspaceContexts />} />
           <Route path="workspace-contexts/:appId" element={<WorkspaceContexts />} />
-          <Route path="system-health" element={<SystemHealthPage />} />
+          <Route path="system-health" element={<Navigate to="/system-resources/overview" replace />} />
+          <Route path="system-resources" element={<Navigate to="/system-resources/overview" replace />} />
+          <Route path="system-resources/:tab" element={<SystemHealthPage />} />
           <Route path="capabilities" element={<CapabilityMap />} />
           <Route path="loops" element={<Loops />} />
           <Route path="meatspace" element={<Navigate to="/meatspace/overview" replace />} />
