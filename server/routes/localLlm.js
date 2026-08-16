@@ -87,7 +87,13 @@ router.get('/catalog', asyncHandler(async (req, res) => {
   const installedForVariants = installedModels.map((m) => (
     backend === 'lmstudio' && m.quantization ? `${m.id}@${m.quantization}` : m.id
   ))
-  const models = q ? searchCatalog(backend, q, installedRaw) : getCatalog(backend, installedRaw)
+  // Native MLX entries are meaningful only on Apple Silicon. Keep this gate at
+  // the route boundary so the pure catalog remains useful to tests and other
+  // callers while the user-facing picker never offers an un-runnable format.
+  const catalogOptions = { appleSilicon: isAppleSilicon() }
+  const models = q
+    ? searchCatalog(backend, q, installedRaw, catalogOptions)
+    : getCatalog(backend, installedRaw, catalogOptions)
   // Total system memory drives the RAM-aware recommended quant (unified memory on
   // Apple Silicon also backs the GPU, so a big box can default to higher fidelity).
   const systemMemoryBytes = os.totalmem()

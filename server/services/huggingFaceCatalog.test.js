@@ -751,6 +751,39 @@ describe('huggingFaceCatalog', () => {
       expect(catalog[0].sizeBytes).toBe(8_000_000_000)
     })
 
+    it('enriches a curated LM Studio MLX entry with one installed native-format variant', async () => {
+      const repo = 'lmstudio-community/Qwen3.8-27B-MLX-4bit'
+      fetch.mockResolvedValueOnce(blobs(repo, {
+        'model-00001-of-00003.safetensors': 5_400_000_000,
+        'model-00002-of-00003.safetensors': 5_300_000_000,
+        'model-00003-of-00003.safetensors': 5_300_000_000,
+      }))
+
+      const catalog = [{
+        id: repo,
+        key: 'qwen3.8-27b-mlx-4bit',
+        name: 'Qwen3.8 27B MLX 4-bit',
+        category: 'general',
+        format: 'mlx',
+        size: '15.0 GB'
+      }]
+      await enrichCatalogWithVariants(catalog, {
+        backend: 'lmstudio',
+        systemMemoryBytes: 128 * 1024 ** 3,
+        installedIds: [`${repo}@4bit`]
+      })
+
+      expect(catalog[0]).toMatchObject({ format: 'mlx', quant: '4bit', sizeBytes: 16_000_000_000, installed: true })
+      expect(catalog[0].variants).toEqual([expect.objectContaining({
+        format: 'mlx',
+        quant: '4bit',
+        installId: repo,
+        sizeBytes: 16_000_000_000,
+        installed: true,
+        recommended: true
+      })])
+    })
+
     it('enriches an Ollama hf.co curated id and keeps the hf.co install ids', async () => {
       const repo = 'unsloth/Curated-Devstral-GGUF'
       fetch.mockResolvedValueOnce(blobs(repo, {

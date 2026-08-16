@@ -5,10 +5,11 @@ runtime for Apple Silicon that can run Qwen checkpoints with native
 multi-token-prediction (MTP) decoding. It exposes OpenAI-compatible and
 Anthropic-compatible local APIs; PortOS uses its OpenAI-compatible endpoint.
 
-This is an additional runtime, not an Ollama replacement. PortOS continues to
-offer **Qwen3.8 27B** in the Ollama catalog using its GGUF model path. MTPLX's
-native-MTP checkpoints and Ollama GGUF models are distinct formats, so neither
-PortOS nor Ollama attempts to load one as the other.
+This is an additional runtime, not an Ollama replacement. PortOS offers
+**Qwen3.8 27B** through the Ollama GGUF path and, on Apple Silicon, recommends
+the LM Studio MLX 4-bit build as the native-format install path. MTPLX's
+native-MTP checkpoints, MLX builds, and Ollama GGUF models are distinct
+formats, so neither PortOS nor Ollama attempts to load one as the other.
 
 ## What PortOS adds
 

@@ -38,7 +38,8 @@ export const LOCAL_LLM_CATEGORIES = [
 ];
 
 // Each entry: { key, name, category, recommendedFor?, featured?, params, size,
-//               family, description, capabilities, context?, ollama?, lmstudio? }
+//               family, description, capabilities, context?, format?,
+//               appleSiliconOnly?, ollama?, lmstudio? }
 //
 // `category` is the one primary lane that groups a model in the unfiltered
 // picker. `recommendedFor` is its intentionally broader set of use-case lanes:
@@ -52,6 +53,9 @@ export const LOCAL_LLM_CATEGORIES = [
 // `context` is the model's native context window in tokens — set it only when
 // it's a documented spec for that build (the install-card badge shows it; live
 // Hugging Face results read the true value from GGUF metadata instead).
+// `format` identifies a backend-native format such as `mlx` when the install id
+// is not a GGUF build. `appleSiliconOnly` keeps native MLX recommendations out
+// of catalogs where the selected host cannot run them.
 //
 // Ollama ids must name a build that runs LOCALLY. Several headline 2026 models
 // (mistral-large-3, glm-5.2, deepseek-v4-*, minimax-m3, kimi-k3) are published
@@ -274,6 +278,25 @@ export const LOCAL_LLM_CATALOG = [
   // Best suited for whole-manuscript editorial review, where prose quality and a
   // long context window matter most. To actually fit the manuscript, raise Ollama's
   // context window (OLLAMA_CONTEXT_LENGTH) — the default 4K window silently truncates.
+  {
+    key: 'qwen3.8-27b-mlx-4bit',
+    name: 'Qwen3.8 27B MLX 4-bit',
+    category: 'general',
+    recommendedFor: ['general', 'coding', 'reasoning', 'vision', 'multilingual'],
+    featured: {
+      label: 'Fast on Apple Silicon',
+      description: 'Recommended native-MLX Qwen3.8 install for LM Studio on Apple Silicon.'
+    },
+    params: '27B',
+    size: '15.0 GB',
+    family: 'qwen',
+    description: 'LM Studio’s 4-bit MLX build of Qwen3.8 27B — a native Apple-Silicon format with long context, coding, reasoning, tools, vision, thinking, and multilingual support.',
+    capabilities: ['chat', 'code', 'reasoning', 'tools', 'vision', 'multilingual'],
+    context: 262144,
+    format: 'mlx',
+    appleSiliconOnly: true,
+    lmstudio: 'lmstudio-community/Qwen3.8-27B-MLX-4bit'
+  },
   {
     key: 'qwen3.8-27b',
     name: 'Qwen3.8 27B',
@@ -652,13 +675,14 @@ const normalizeFor = (backend, id) =>
  *
  * @param {string} backend - 'ollama' | 'lmstudio'
  * @param {string[]} [installedIds] - ids currently installed on that backend
- * @returns {Array<{ id, key, name, category, recommendedFor, featured, params, size, family, description, capabilities, contextLength, installed }>}
+ * @param {{ appleSilicon?: boolean }} [options] - host capabilities used for platform-gated entries
+ * @returns {Array<{ id, key, name, category, recommendedFor, featured, params, size, family, description, capabilities, format, contextLength, installed }>}
  */
-export function getCatalog(backend, installedIds = []) {
+export function getCatalog(backend, installedIds = [], { appleSilicon } = {}) {
   if (!isBackend(backend)) return [];
   const installedNorm = new Set(installedIds.map((id) => normalizeFor(backend, id)));
   return LOCAL_LLM_CATALOG
-    .filter((entry) => entry[backend])
+    .filter((entry) => entry[backend] && (!entry.appleSiliconOnly || appleSilicon !== false))
     .map((entry) => {
       const recommendedFor = Array.isArray(entry.recommendedFor) && entry.recommendedFor.length
         ? [...entry.recommendedFor]
@@ -675,6 +699,7 @@ export function getCatalog(backend, installedIds = []) {
         family: entry.family,
         description: entry.description,
         capabilities: entry.capabilities,
+        format: entry.format || null,
         // Native context window (tokens), when it's a documented spec; null otherwise.
         contextLength: Number.isFinite(entry.context) ? entry.context : null,
         installed: installedNorm.has(normalizeFor(backend, entry[backend]))
@@ -686,8 +711,8 @@ export function getCatalog(backend, installedIds = []) {
  * Filter the per-backend catalog by a free-text query against name, id,
  * family, category, and description. Empty query returns the full catalog.
  */
-export function searchCatalog(backend, query, installedIds = []) {
-  const all = getCatalog(backend, installedIds);
+export function searchCatalog(backend, query, installedIds = [], options = {}) {
+  const all = getCatalog(backend, installedIds, options);
   const q = String(query || '').trim().toLowerCase();
   if (!q) return all;
   return all.filter((m) =>
@@ -724,6 +749,10 @@ export function mapModelToBackend(fromBackend, modelId, toBackend) {
   if (entry && entry[toBackend]) {
     return { targetId: entry[toBackend], exact: true };
   }
+  // A known catalog entry without a build on the target backend is not an
+  // unknown model: do not turn a native-format id (for example an MLX repo)
+  // into a misleading best-effort Ollama stem.
+  if (entry) return { targetId: null, exact: false };
 
   // No catalog match. Ollama can pull bare model names, so derive a stem and
   // try it best-effort. There's no safe way to guess a HuggingFace repo for

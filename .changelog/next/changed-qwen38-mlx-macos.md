@@ -1,0 +1,1 @@
+- Recommend the complete Qwen3.8 27B MLX 4-bit build on Apple Silicon via the LM Studio local-LLM catalog
