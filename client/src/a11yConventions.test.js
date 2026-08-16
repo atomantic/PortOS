@@ -122,8 +122,14 @@ function skipString(src, from) {
 // `src.length`, ending the walk.
 //
 // A `/` in JavaScript can also be division or a regex delimiter, but neither
-// can be followed by `/` or `*` (an empty regex `//` IS a line comment, and a
-// regex may not start with a quantifier), so the two-character check is exact.
+// can OPEN with `/` or `*` — `//` is a line comment to the JS grammar itself,
+// never an empty regex, and a regex may not start with a quantifier — so the
+// two-character check is exact at the start of a token. It is not exact INSIDE
+// a regex body (`/[//]/` reads as a comment here), which is the same blind spot
+// `skipString` already has there; regex literals are outside this lexer's model
+// and stay that way until the scanners share one machine (#4333's remaining
+// consolidation).
+//
 // Only JavaScript and tag-interior context may call this: inside JSX element
 // text a `//` is ordinary visible text.
 function commentEnd(src, from) {
