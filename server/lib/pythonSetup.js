@@ -507,6 +507,23 @@ export function invalidateMinimaxMusic3MlxPython() {
   cachedMinimaxMusic3MlxPython = null;
 }
 
+// Every venv PortOS provisions with `huggingface_hub` installed, in preference
+// order. hfDownload.js falls back through these to find an interpreter that can
+// run scripts/hf_download_repo.py when no image-gen runtime is configured — a
+// music-only install still has to be able to download its own weights.
+//
+// ADDING A RUNTIME: if its setup-image-video.sh block pip-installs
+// huggingface_hub, add its resolver here. This list used to live in
+// hfDownload.js, where each new engine forgot it; keeping it next to the
+// resolvers is what makes the omission visible.
+export const HF_HUB_PYTHON_RESOLVERS = Object.freeze([
+  resolveAcestepPython,
+  resolveAudioldm2Python,
+  resolveMusicgenPython,
+  resolveMinimaxMusic3Python,
+  resolveMinimaxMusic3MlxPython,
+]);
+
 // MuScriptor (audio → MIDI transcription for the Rounds workbench + Music Video
 // parsing, #reference-audio-to-midi) runs in its own venv at
 // ~/.portos/venv-muscriptor — the `muscriptor` pip package pulls its own torch

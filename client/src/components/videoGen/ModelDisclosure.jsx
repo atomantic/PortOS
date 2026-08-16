@@ -18,12 +18,9 @@
 // acknowledgement.
 import { Server, Cloud } from 'lucide-react';
 import FactLink from './FactLink.jsx';
+import { formatDownloadGb } from '../../utils/formatters';
 
 const UNKNOWN = 'Unknown';
-
-// Compact GB rendering — `estimatedDownloadGb` is decimal GB (10^9 bytes),
-// measured from the pinned repository snapshot on HuggingFace.
-const formatGb = (gb) => (typeof gb === 'number' && gb > 0 ? `~${gb} GB` : null);
 
 function Fact({ label, children }) {
   return (
@@ -100,7 +97,7 @@ export default function ModelDisclosure({
             <span aria-hidden="true">·</span>
             <span>Weights license: {disclosure?.weightsLicense?.name || UNKNOWN}</span>
             <span aria-hidden="true">·</span>
-            <span>Download: {formatGb(disclosure?.estimatedDownloadGb) || UNKNOWN}</span>
+            <span>Download: {formatDownloadGb(disclosure?.estimatedDownloadGb) || UNKNOWN}</span>
           </>
         )}
         <span className="text-gray-500 underline">Details</span>
@@ -141,7 +138,7 @@ export default function ModelDisclosure({
                   Excludes {model.termsGate.excludedTerritories.join(', ')}
                 </Fact>
               )}
-              <Fact label="Estimated download">{formatGb(disclosure?.estimatedDownloadGb)}</Fact>
+              <Fact label="Estimated download">{formatDownloadGb(disclosure?.estimatedDownloadGb)}</Fact>
               <MemoryFact model={model} systemMemoryGb={systemMemoryGb} />
               <Fact label="Supported modes">{modes}</Fact>
               <Fact label="Runtime">{model?.runtime || null}</Fact>

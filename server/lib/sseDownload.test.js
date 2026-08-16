@@ -252,6 +252,19 @@ describe('startHfDownloadStream single-file + fallbacks (#3112)', () => {
     }));
   });
 
+  // The inverse of `only`: still snapshot the repo, but drop paths the runtime
+  // never loads. MiniMax Music 3 ships a 20 GB captioner and 10 GB of
+  // original-format checkpoints beside the 29 GB its diffusers pipeline reads.
+  it('forwards `ignore` globs for a snapshot pull', async () => {
+    const { req, res } = makeReqRes();
+    await startHfDownloadStream({ req, res, repos: [{ repo: 'org/bundle', ignore: ['extra/*', 'legacy.pth'] }] });
+    expect(downloadHfRepo).toHaveBeenCalledWith(expect.objectContaining({
+      repo: 'org/bundle',
+      only: null,
+      ignore: ['extra/*', 'legacy.pth'],
+    }));
+  });
+
   it('forwards `only` so the helper never enumerates the repo', async () => {
     const { req, res } = makeReqRes();
     await startHfDownloadStream({ req, res, fallbacks: [CANDIDATES[0]], cachedFile: async () => false });

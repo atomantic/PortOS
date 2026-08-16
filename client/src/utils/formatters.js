@@ -365,6 +365,19 @@ export function formatBytes(bytes, decimals = 1) {
 }
 
 /**
+ * Format a model's decimal-GB (10^9 bytes) download footprint as "~29 GB".
+ * Returns null for missing/zero/invalid values so callers can omit the label
+ * entirely rather than render "~undefined GB". Deliberately decimal, not the
+ * binary units `formatBytes` uses: these values come from HuggingFace repo
+ * sizes, which are quoted in decimal GB.
+ * @param {number|null|undefined} gb
+ * @returns {string|null}
+ */
+export function formatDownloadGb(gb) {
+  return typeof gb === 'number' && Number.isFinite(gb) && gb > 0 ? `~${gb} GB` : null;
+}
+
+/**
  * Format a model context window (in tokens) compactly, e.g. 32768 → "32K ctx",
  * 131072 → "128K ctx", 1048576 → "1M ctx". Returns null for missing/invalid
  * values so callers can omit the label entirely.

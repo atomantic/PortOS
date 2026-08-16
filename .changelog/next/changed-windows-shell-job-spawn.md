@@ -1,0 +1,1 @@
+- MiniMax Music 3 weights download skips the bundled Qwen-7B captioner and the original-format .pth checkpoints its diffusers pipeline never loads — about 29 GB instead of 57 GB
