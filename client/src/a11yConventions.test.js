@@ -819,16 +819,19 @@ function hasUsableElementText(src, node) {
   if (!body) return false;
   const staticText = body.replace(/\{[^{}]*\}/g, ' ').trim();
   if (staticText) return true;
-  // An EMPTY expression belongs with the literals that render nothing:
+  // Everything React renders as nothing has to be rejected, and this set had
+  // drifted from the one `isUsableLabelAttributeValue` keeps for the same
+  // question one attribute over — which already spells out that `{true}` puts
+  // no text in the DOM. Missing from here were `true` and the EMPTY expression:
   // `<span id="notes-h">{}</span>` and `<span id="notes-h">{/* todo */}</span>`
-  // (a comment, masked to spaces by the line above) put no text in the DOM, so
-  // an `aria-labelledby` pointing at one names nothing. Reading them as text
-  // credited a control that has no name — and this walk now reaches such an
+  // (a comment, masked to spaces by the line above) render nothing, so an
+  // `aria-labelledby` pointing at one names nothing. Reading either as text
+  // credited a control that has none — and this walk now reaches such an
   // element inside an attribute expression too, so the gap widened before it
   // was closed.
   return [...body.matchAll(/\{([^{}]*)\}/g)].some(([, expression]) => {
     const rendered = expression.trim();
-    return rendered !== '' && !/^(?:''|""|``|null|undefined|false)$/.test(rendered);
+    return rendered !== '' && !/^(?:''|""|``|null|undefined|false|true)$/.test(rendered);
   });
 }
 
@@ -2274,6 +2277,9 @@ describe('a11y conventions', () => {
     expect(isNamed('<Foo render={<span id="notes-h" />} />\n<textarea aria-labelledby="notes-h" />', 'textarea')).toBe(false);
     expect(isNamed('<span id="notes-h">{}</span>\n<textarea aria-labelledby="notes-h" />', 'textarea')).toBe(false);
     expect(isNamed('<span id="notes-h">{/* todo */}</span>\n<textarea aria-labelledby="notes-h" />', 'textarea')).toBe(false);
+    // `{true}` renders nothing either — the sibling check on `label` props has
+    // said so since it was written, and this one had drifted off it.
+    expect(isNamed('<span id="notes-h">{true}</span>\n<textarea aria-labelledby="notes-h" />', 'textarea')).toBe(false);
     // A non-empty expression is still text, or the fix would have swung past it.
     expect(isNamed('<span id="notes-h">{heading}</span>\n<textarea aria-labelledby="notes-h" />', 'textarea')).toBe(true);
 
