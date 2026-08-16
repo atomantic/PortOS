@@ -23,6 +23,7 @@ import * as agy from './agy.js';
 import {
   IMAGE_GEN_MODE, IMAGE_GEN_MODES, CLOUD_IMAGE_GEN_MODES, isEditCapableMode,
 } from './modes.js';
+import { DEFAULT_NEGATIVE_PROMPT } from './defaults.js';
 import { resolveCloudProviderConfig } from './cloudProviderConfig.js';
 import { rejectDegenerateFrame } from './frameGuard.js';
 import { PATHS } from '../../lib/fileUtils.js';
@@ -156,8 +157,6 @@ async function guardResolvedFrame(result) {
   if (reason) throw new ServerError(reason, { status: 502, code: 'DEGENERATE_FRAME' });
   return result;
 }
-
-const DEFAULT_NEGATIVE_PROMPT = 'blurry, low quality, distorted, deformed, ugly, watermark, text, signature';
 
 // Build the default avatar prompt for the human-centered Character surface (#2677).
 // The Character page portrays the real human user, so a blank identity must NOT

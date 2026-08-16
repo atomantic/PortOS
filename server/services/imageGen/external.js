@@ -15,8 +15,8 @@ import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { IMAGE_GEN_MODE } from './modes.js';
+import { DEFAULT_NEGATIVE_PROMPT } from './defaults.js';
 
-const DEFAULT_NEGATIVE_PROMPT = 'blurry, low quality, distorted, deformed, ugly, watermark, text, signature';
 const PROGRESS_POLL_INTERVAL = 500;
 const IMAGE_PREVIEW_THROTTLE = 2000;
 const MODEL_CACHE_TTL = 5 * 60 * 1000;
