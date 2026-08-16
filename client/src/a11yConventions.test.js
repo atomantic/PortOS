@@ -78,48 +78,41 @@ function maskedSourceOf(file) {
 }
 
 /**
- * Slice out the full opening tag starting at `index`, tolerating `>` inside
- * JSX expression containers (`className={`a > b`}`) by tracking brace depth.
+ * Slice out the full opening tag starting at `index` — the file's busiest
+ * scanner, at 20-odd call sites, every one of which reads `null` as `continue`
+ * and drops the control (or its <label>) out of the scan entirely.
  *
- * A quoted ATTRIBUTE VALUE is skipped whole: at tag level a quote always opens
- * a string. Counting braces alone made ordinary prose in an attribute break the
- * file's busiest scanner (18 call sites) two ways — a `>` ended the tag early,
- * so `<input placeholder="a > b" aria-label="Search"/>` lost its `aria-label`
- * and read as UNNAMED; and a lone `{` or `}` drove the depth negative and
- * returned null, which every call site treats as `continue`, dropping the
- * control (or its <label>) out of the scan entirely. Both are false negatives
- * in a guard, and the first already triggers on product code: `pages/
- * Instances.jsx` has a `>` inside a `title` attribute.
- *
- * An expression container is handed to `matchingBraceEnd` and skipped whole,
- * rather than having its quotes read here. Inside `{…}` the context is no
- * longer "tag": `render={<span>don't</span>}` puts JSX TEXT in the middle of a
- * tag, where an apostrophe is an ordinary character. Reading it as a string
- * opener runs the scan off the end of the file and returns null — trading the
- * bug above for the same bug in a rarer shape. `matchingBraceEnd` already
- * tracks that nesting; this scanner just has to not second-guess it.
+ * Everything it has to see through — a `>` or a brace inside a quoted attribute
+ * value, a whole element inside an attribute expression, a comment mid-tag — is
+ * `jsxScanner`'s job; the tag simply ends at the first `>` still in tag context.
  */
-function openingTagAt(src, index, nameLength) {
-  for (let i = index + nameLength; i < src.length; i++) {
-    const c = src[i];
-    if (c === '"' || c === '\'' || c === '`') { i = skipString(src, i); continue; }
-    if (c === '{') {
-      const end = matchingBraceEnd(src, i);
-      if (end === -1) return null;
-      i = end;
-      continue;
-    }
-    if (c === '>') return src.slice(index, i + 1);
-  }
-  return null;
+function openingTagAt(src, index) {
+  const end = tagEndAt(src, index);
+  return end === -1 ? null : src.slice(index, end + 1);
 }
 
 const lineOf = (src, index) => src.slice(0, index).split('\n').length;
 
+// Index of the last non-whitespace character before `from`, stopping at `floor`
+// rather than walking past it. Four walks spelled this out — deciding whether a
+// `<` opens a tag, whether a `/` opens a regex, and (twice) whether a tag closed
+// itself — each with its own idea of how far back it was allowed to look.
+const previousSignificant = (src, from, floor) => {
+  let i = from - 1;
+  while (i > floor && /\s/.test(src[i])) i--;
+  return i;
+};
+
+// --- the token readers `jsxScanner` is built from -------------------------
+// Each lands on the LAST character of what it consumed and lets the scanner's
+// `for` step past. Nothing outside `jsxScanner` calls them: whether a quote,
+// a slash, or a `<` is structural at all depends on the context the scanner is
+// tracking, and every past defect in this file (#4318, #4327, #4333) came from
+// one walk making that call for itself.
+
 // Index of the quote closing the string that opens at `src[from]`, honoring
-// backslash escapes. Every scanner in this file walks strings the same way, so
-// they share one loop; each lands on the closing quote and lets its own `for`
-// step past. An unterminated string returns `src.length`, ending the walk.
+// backslash escapes. An unterminated string returns `src.length`, ending the
+// walk.
 function skipString(src, from) {
   let i = from + 1;
   for (; i < src.length && src[i] !== src[from]; i++) if (src[i] === '\\') i++;
@@ -127,21 +120,14 @@ function skipString(src, from) {
 }
 
 // Index of the LAST character of the comment opening at `src[from]`, or -1 when
-// no comment opens there — the same "land on the last char, let the caller's
-// `for` step past" contract as `skipString`. An unterminated comment returns
-// `src.length`, ending the walk.
+// no comment opens there. An unterminated comment returns `src.length`.
 //
 // A `/` in JavaScript can also be division or a regex delimiter, but neither
 // can OPEN with `/` or `*` — `//` is a line comment to the JS grammar itself,
 // never an empty regex, and a regex may not start with a quantifier — so the
-// two-character check is exact at the start of a token. It is not exact INSIDE
-// a regex body (`/[//]/` reads as a comment here), which is the same blind spot
-// `skipString` already has there; regex literals are outside this lexer's model
-// and stay that way until the scanners share one machine (#4333's remaining
-// consolidation).
-//
-// Only JavaScript and tag-interior context may call this: inside JSX element
-// text a `//` is ordinary visible text.
+// two-character check is exact at the start of a token. Inside a regex BODY it
+// is not (`/[//]/` would read as a comment), which is why the scanner consumes
+// regex literals whole before it ever gets here.
 function commentEnd(src, from) {
   if (src[from] !== '/') return -1;
   if (src[from + 1] === '/') {
@@ -155,30 +141,58 @@ function commentEnd(src, from) {
   return -1;
 }
 
+// Characters after which a `/` starts a regex literal rather than a division.
+// Deliberately none of `)`, `]`, or an identifier/number character: those end a
+// VALUE, and a `/` after a value is always division. Keywords cover the rest.
+const REGEX_PRECEDERS = '=([{,;:!&|?';
+const REGEX_KEYWORDS = /(?:^|[^\w$])(?:return|typeof|instanceof|case|in|of|new|delete|void|yield|await|do|else)$/;
+
+// Index of the `/` closing the regex literal opening at `src[from]`, or -1 when
+// that `/` is division. A regex body may hold any of `{ } ' " \` < >` — and a
+// character class holds `/` itself — so leaving it to the JavaScript walk lets
+// `/[<>]/` open a phantom JSX tag and `/it's/` a phantom string, the same class
+// of runaway the string and comment states exist to prevent.
+//
+// A regex literal may not span a line, so an unmatched `/` on the line means
+// this was division after all and the walk continues from the next character.
+// That bound is what makes guessing safe: a wrong guess costs one character,
+// never the rest of the file.
+function regexEnd(src, from) {
+  const previous = previousSignificant(src, from, -1);
+  if (previous >= 0
+    && !REGEX_PRECEDERS.includes(src[previous])
+    && !REGEX_KEYWORDS.test(src.slice(Math.max(0, previous - 11), previous + 1))) return -1;
+
+  let inClass = false;
+  for (let i = from + 1; i < src.length; i++) {
+    const c = src[i];
+    if (c === '\n') return -1;
+    if (c === '\\') { i++; continue; }
+    if (c === '[') inClass = true;
+    else if (c === ']') inClass = false;
+    else if (c === '/' && !inClass) return i;
+  }
+  return -1;
+}
+
 /**
  * Slice a call's full argument list, `(` through its matching `)`, starting at
- * the opening paren. Skips over string and template literals so a `)` inside
- * one can't close the call early.
+ * the opening paren.
+ *
+ * Only parens in JavaScript-expression context count. A `(` in an element's
+ * visible text is prose — `toast(<p>Retry (again)</p>)` — and an apostrophe
+ * there is an ordinary character, not a string opener that swallows the closing
+ * paren. That used to need a retry-without-strings second pass; the scanner
+ * knows which context it is in, so there is nothing left to retry.
  */
-function balancedCallAt(src, openIndex, skipStrings = true) {
+function balancedCallAt(src, openIndex) {
   let depth = 0;
-  for (let i = openIndex; i < src.length; i++) {
-    const c = src[i];
-    if (skipStrings && (c === '\'' || c === '"' || c === '`')) {
-      i = skipString(src, i);
-      continue;
-    }
-    if (c === '(') depth++;
-    else if (c === ')' && --depth === 0) return src.slice(openIndex, i + 1);
+  for (const token of jsxScanner(src, { from: openIndex })) {
+    if (token.kind !== 'char' || token.mode !== 'code') continue;
+    if (token.char === '(') depth++;
+    else if (token.char === ')' && --depth === 0) return src.slice(openIndex, token.index + 1);
   }
-  // Falling off the end means a quote opened a "string" that never closed —
-  // in practice an apostrophe in JSX text, `toast(<p>You're out of sync</p>,
-  // { duration: Infinity })`. The scan swallows the closing paren, the caller
-  // skips the unparseable call, and the toast rule silently misses the one
-  // shape it exists to catch: JSX content, which is precisely what needs
-  // `label`. Retry counting parens only — a `)` inside a real string could
-  // close early, but a well-formed string already returned on the first pass.
-  return skipStrings ? balancedCallAt(src, openIndex, false) : null;
+  return null;
 }
 
 // --- helpers for the icon-only-button-name and 44px-close-target rules ---
@@ -194,64 +208,113 @@ const opensJsxTagInText = (src, index) => src[index] === '<'
 // drift on where the JavaScript/JSX line falls — widening one widens both.
 const looksLikeJsxTagStart = (src, index) => {
   if (!opensJsxTagInText(src, index)) return false;
-  let previous = index - 1;
-  while (previous >= 0 && /\s/.test(src[previous])) previous--;
+  const previous = previousSignificant(src, index, -1);
   if (previous < 0 || '=([{,:;!?&|>'.includes(src[previous])) return true;
   return /(?:return|yield|=>)\s*$/.test(src.slice(Math.max(0, index - 12), index));
 };
 
-// Find the index of the `}` matching the `{` at `s[idx]`, respecting nested
-// braces, quoted/template strings, and JSX.
-//
-// A quote delimits a string only in JavaScript-expression context. In JSX
-// element *text* an apostrophe is an ordinary character — `<option>Use the
-// provider's default</option>` — and reading it as a string opener swallows
-// every brace after it, so the helper returns -1 and whatever recognizer sits
-// on top of it silently sees nothing (#4318). `maskComments` separates the two
-// contexts for the same reason; this walk mirrors its mode machine and adds
-// the brace accounting the mask has no use for.
-function matchingBraceEnd(s, idx) {
-  let mode = 'code';
-  // The tag being read, `{ closing, parentMode }`, whenever `mode` is
-  // 'jsx-tag' — `parentMode` is where a self-closing tag hands back to.
-  let tag = null;
+/**
+ * The one lexer every scanner in this file runs on.
+ *
+ * Six walks used to re-derive this JSX/JavaScript state machine independently,
+ * each learning about strings, comments, or element text on its own schedule —
+ * which is what #4318, #4327 and #4333 all were: one scanner taught something
+ * its siblings weren't. They now share this generator, which yields one token
+ * per significant character together with the CONTEXT it sits in, and hands
+ * back strings, comments, and regex literals as whole spans so no caller can
+ * read into one by accident.
+ *
+ * Tokens:
+ *   { kind: 'char',    index, char, mode, depth }
+ *   { kind: 'string',  index, end,  mode }   — `end` is the closing quote
+ *   { kind: 'comment', index, end,  mode }   — `end` is the comment's last char
+ *   { kind: 'regex',   index, end,  mode }   — `end` is the closing slash
+ *
+ * `mode` is where the character sits: `'code'` (a JavaScript expression),
+ * `'jsx-tag'` (between a tag's `<` and the `>` that closes it), or `'jsx-text'`
+ * (an element's visible body, where an apostrophe is an apostrophe and `//` is
+ * two slashes). `depth` is `{…}` nesting relative to `from`, reported so that a
+ * brace and its match share a depth: an opener reports the depth it opens FROM,
+ * a closer the depth it leaves behind. So the `}` matching the `{` at `from` is
+ * the first `}` at depth 0.
+ *
+ * `from` and `mode` together are what the arbitrary-substring callers need: a
+ * slice is not always a whole file, and the machine has to be told where it is.
+ */
+function* jsxScanner(src, { from = 0, mode: startMode = 'code' } = {}) {
+  let mode = startMode;
+  // The tag being read whenever `mode` is 'jsx-tag'; `parentMode` is where a
+  // self-closing tag hands back to. A caller that starts mid-tag gets a stand-in
+  // so the first `>` still closes something.
+  let tag = startMode === 'jsx-tag' ? { closing: false, parentMode: 'code' } : null;
   // One frame per open brace, holding the state to resume when it closes: an
   // attribute expression returns to the tag holding it, a child expression to
   // the element's text. The half-read tag rides along, because an attribute
-  // expression can itself hold a whole element (`label={<span>…</span>}`)
-  // whose own `>` would otherwise be mistaken for the end of the outer tag.
-  // The stack doubles as the brace depth, so there is no second counter to
-  // keep in step with it.
+  // expression can itself hold a whole element (`label={<span>…</span>}`) whose
+  // own `>` would otherwise be mistaken for the end of the outer tag. The stack
+  // doubles as the brace depth, so there is no second counter to keep in step.
   const braceFrames = [];
   // One entry per open element, marking whether it was opened from JavaScript.
   // Its closing tag hands back there rather than to an enclosing element's text.
   const jsxStack = [];
 
-  const openBrace = () => {
-    braceFrames.push({ mode, tag });
-    mode = 'code';
-    tag = null;
-  };
+  for (let i = from; i < src.length; i++) {
+    const c = src[i];
 
-  const openTag = (at, parentMode) => {
-    tag = { closing: s.startsWith('</', at), parentMode };
-    mode = 'jsx-tag';
-  };
+    // Strings, comments, and regex literals exist only outside element text —
+    // in `<option>Use the provider's default</option>` the apostrophe is text,
+    // and reading it as a string opener swallows the rest of the file (#4318).
+    if (mode !== 'jsx-text') {
+      const comment = commentEnd(src, i);
+      if (comment !== -1) {
+        yield { kind: 'comment', index: i, end: Math.min(comment, src.length - 1), mode };
+        i = comment;
+        continue;
+      }
+      if (c === '"' || c === '\'' || c === '`') {
+        const end = skipString(src, i);
+        yield { kind: 'string', index: i, end: Math.min(end, src.length - 1), mode };
+        i = end;
+        continue;
+      }
+      if (mode === 'code' && c === '/') {
+        const end = regexEnd(src, i);
+        if (end !== -1) {
+          yield { kind: 'regex', index: i, end, mode };
+          i = end;
+          continue;
+        }
+      }
+    }
 
-  for (let i = idx; i < s.length; i++) {
-    const c = s[i];
+    // Braces nest the same way in all three contexts, so they are handled once.
+    if (c === '{') {
+      yield { kind: 'char', index: i, char: c, mode, depth: braceFrames.length };
+      braceFrames.push({ mode, tag });
+      mode = 'code';
+      tag = null;
+      continue;
+    }
+    if (c === '}') {
+      // A slice can begin inside an expression, so the pop may come back empty;
+      // an unmatched `}` then simply sits at depth 0 and changes no context.
+      const frame = braceFrames.pop();
+      yield { kind: 'char', index: i, char: c, mode, depth: braceFrames.length };
+      if (frame) ({ mode, tag } = frame);
+      continue;
+    }
+
+    yield { kind: 'char', index: i, char: c, mode, depth: braceFrames.length };
 
     if (mode === 'jsx-text') {
-      if (c === '{') openBrace();
-      else if (opensJsxTagInText(s, i)) openTag(i, 'jsx-text');
+      if (opensJsxTagInText(src, i)) {
+        tag = { closing: src.startsWith('</', i), parentMode: 'jsx-text' };
+        mode = 'jsx-tag';
+      }
       continue;
     }
 
     if (mode === 'jsx-tag') {
-      const comment = commentEnd(s, i);
-      if (comment !== -1) { i = comment; continue; }
-      if (c === '"' || c === '\'' || c === '`') { i = skipString(s, i); continue; }
-      if (c === '{') { openBrace(); continue; }
       if (c !== '>') continue;
       if (tag.closing) {
         // A closing tag can outnumber the opens in a slice that starts mid-
@@ -259,9 +322,7 @@ function matchingBraceEnd(s, idx) {
         const entry = jsxStack.pop();
         mode = entry?.root ? 'code' : (jsxStack.length ? 'jsx-text' : 'code');
       } else {
-        let back = i - 1;
-        while (back > idx && /\s/.test(s[back])) back--;
-        if (s[back] === '/') {
+        if (src[previousSignificant(src, i, from)] === '/') {
           mode = tag.parentMode;
         } else {
           jsxStack.push({ root: tag.parentMode === 'code' });
@@ -272,56 +333,39 @@ function matchingBraceEnd(s, idx) {
       continue;
     }
 
-    // JavaScript-expression context. `maskComments` has line/block-comment
-    // states and this walk did not, yet it is reached from UNMASKED source
-    // (`findButtonBody` → `isIconOnlyBody` → `soleTopLevelNode`, which strips
-    // only `{/* … */}`). So a `//` or inline `/* */` inside the expression
-    // survived to here: `{ // don't\n open ? <Up/> : <Down/> }` returned -1 (the
-    // apostrophe opened a string that never closed) and the button was silently
-    // dropped from the icon-only rule, while `{ /* } */ <Icon/> }` returned the
-    // comment's brace — wrong bounds, no error.
-    const codeComment = commentEnd(s, i);
-    if (codeComment !== -1) { i = codeComment; continue; }
-    if (c === '"' || c === '\'' || c === '`') { i = skipString(s, i); continue; }
-    if (c === '{') { openBrace(); continue; }
-    if (c === '}') {
-      // The frame for the brace at `idx` is the last one out, so popping is
-      // only reached with a frame to pop.
-      const frame = braceFrames.pop();
-      if (braceFrames.length === 0) return i;
-      ({ mode, tag } = frame);
-      continue;
+    if (c === '<' && looksLikeJsxTagStart(src, i)) {
+      tag = { closing: src.startsWith('</', i), parentMode: 'code' };
+      mode = 'jsx-tag';
     }
-    if (c === '<' && looksLikeJsxTagStart(s, i)) openTag(i, 'code');
+  }
+}
+
+// Index of the `}` matching the `{` at `s[idx]`, or -1.
+function matchingBraceEnd(s, idx) {
+  for (const token of jsxScanner(s, { from: idx })) {
+    if (token.kind === 'char' && token.char === '}' && token.depth === 0) return token.index;
   }
   return -1;
 }
 
-// Find the top-level `>` closing a JSX opening tag starting at `s[idx]` (`<`),
-// respecting `{...}` attribute-expression nesting and quoted strings inside
-// them. Returns `{ end, selfClosing }`, `end` being the index just past `>`.
-function tagBoundaryAt(s, idx) {
-  for (let i = idx + 1; i < s.length; i++) {
-    const c = s[i];
-    // Same two contexts, same handling, as `openingTagAt` — see its comment.
-    // This scanner skipped strings only at `depth > 0`, so a `>` in a top-level
-    // attribute value (`<Icon title="a > b" />`) ended the tag at the wrong
-    // character AND reported `selfClosing: false`, which is how a self-closing
-    // icon stops looking self-closing to `isIconOnlyBody`.
-    if (c === '"' || c === '\'' || c === '`') { i = skipString(s, i); continue; }
-    if (c === '{') {
-      const end = matchingBraceEnd(s, i);
-      if (end === -1) return null;
-      i = end;
-      continue;
-    }
-    if (c === '>') {
-      let back = i - 1;
-      while (back > idx && /\s/.test(s[back])) back--;
-      return { end: i + 1, selfClosing: s[back] === '/' };
-    }
+// Index of the `>` closing the tag that opens at `s[idx]` (`<`), or -1: the
+// first `>` still in TAG context at brace depth 0. A quoted value's `>` never
+// reaches this walk at all, and an attribute expression can hold a whole element
+// (`render={<span>don't</span>}`) whose own `>` is in tag context too — the
+// depth is what tells the two apart.
+function tagEndAt(s, idx) {
+  for (const token of jsxScanner(s, { from: idx + 1, mode: 'jsx-tag' })) {
+    if (token.kind === 'char' && token.char === '>' && token.mode === 'jsx-tag' && token.depth === 0) return token.index;
   }
-  return null;
+  return -1;
+}
+
+// The same boundary the icon rules need, plus whether the tag closed itself.
+// Returns `{ end, selfClosing }`, `end` being the index just past `>`.
+function tagBoundaryAt(s, idx) {
+  const end = tagEndAt(s, idx);
+  if (end === -1) return null;
+  return { end: end + 1, selfClosing: s[previousSignificant(s, end, idx)] === '/' };
 }
 
 const stripJsxComments = (s) => s.replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, '');
@@ -355,26 +399,25 @@ function soleTopLevelNode(rawBody) {
   return null; // bare text at top level
 }
 
-// Index of the first `char` at bracket depth 0 in a JavaScript expression, or
-// -1. Quoted regions are skipped whole: `inner` is an expression, so a `?` or
-// `:` inside a string is not the ternary's — `mode === 'a?b' ? <IconA/> :
-// <IconB/>` and `cond ? <IconA title="a:b"/> : <IconB/>` both used to read as
-// "not a ternary", quietly dropping an icon-only button from the rule that
+// Index of the first `char` at top level of the JavaScript expression `inner`,
+// or -1. Strings, comments, and element text are the scanner's business — a `?`
+// or `:` in any of them is not the ternary's, which is how `mode === 'a?b' ?
+// <IconA/> : <IconB/>` and `cond ? <IconA title="a:b"/> : <IconB/>` used to read
+// as "not a ternary" and quietly drop an icon-only button from the rule that
 // requires it to have a name.
+//
+// Brace nesting comes from the scanner (`depth`) rather than a local counter:
+// a `{…}` child expression opens in element text and closes in code, so
+// counting only the braces this walk can see would go negative on the way out.
 const topLevelOperatorIn = (inner, char, from) => {
   let depth = 0;
-  for (let i = from; i < inner.length; i++) {
-    const c = inner[i];
-    // `inner` is raw expression source — `soleTopLevelNode` strips only
-    // `{/* … */}` — so a comment can hold an apostrophe (`// don't`) that would
-    // otherwise open a string swallowing the rest of the expression.
-    const comment = commentEnd(inner, i);
-    if (comment !== -1) { i = comment; continue; }
-    if (c === '"' || c === '\'' || c === '`') { i = skipString(inner, i); continue; }
-    if (c === '(' || c === '{' || c === '[') depth++;
-    else if (c === ')' || c === '}' || c === ']') depth--;
+  for (const token of jsxScanner(inner, { from })) {
+    if (token.kind !== 'char' || token.mode !== 'code' || token.depth !== 0) continue;
+    const c = token.char;
+    if (c === '(' || c === '[') depth++;
+    else if (c === ')' || c === ']') depth--;
     // `?.` is optional chaining, not the start of a ternary.
-    else if (c === char && depth === 0 && !(char === '?' && inner[i + 1] === '.')) return i;
+    else if (c === char && depth === 0 && !(char === '?' && inner[token.index + 1] === '.')) return token.index;
   }
   return -1;
 };
@@ -486,10 +529,10 @@ function normalizedAttributeValue(value) {
   return trimmed;
 }
 
-// Keep source indexes stable while removing comments that may contain JSX
-// examples. This is a small lexer rather than a quote-only scan: apostrophes,
-// slashes, and URLs are ordinary JSX text and must not put the rest of a file
-// into a fake JavaScript string/comment state.
+// Keep source indexes stable while blanking the comments — a scan that reads a
+// JSX example out of a doc comment reports offenders that do not exist. Only the
+// comment spans are rewritten; strings, regex literals, and element text are
+// left exactly as they are, since the point is to preserve every index.
 //
 // `startMode` is where the slice BEGINS. A whole file starts in `'code'` (the
 // default), but a mid-file slice need not: an element's body is JSX text, and
@@ -499,153 +542,15 @@ function normalizedAttributeValue(value) {
 // unnamed. That is #4318's defect exactly: the machine has to be told where it
 // is, and the caller is the only one that knows.
 function maskComments(src, { startMode = 'code' } = {}) {
-  const chars = [...src];
-  let mode = startMode;
-  let quote = null;
-  let braceDepth = 0;
-  let tagBraceDepth = 0;
-  let tagInfo = null;
-  let tagParentMode = 'code';
-  // Each entry marks whether the element started in JavaScript expression
-  // context. A nested JSX expression can sit inside an outer element; when its
-  // root closes, return to JavaScript rather than mistaking the outer element's
-  // remaining stack entry for JSX text. Each entry also parks the enclosing
-  // `braceDepth`: an element rendered from inside an expression
-  // (`{list.map((x) => <option>{x.name}</option>)}`) has expression braces open
-  // around it, and its own `{x.name}` would otherwise close them — leaving the
-  // lexer in `code` mode where the following `</select>` reads as a
-  // less-than, never pops, and strands the rest of the file in `jsx-text`.
-  const jsxStack = [];
-  // Where a comment hands back when it ends. A comment can open from JavaScript
-  // OR from inside a tag (`<Icon // note\n name={x} />`), and resetting to
-  // 'code' on exit dropped the lexer out of the half-read tag — every later
-  // `>` and quote in that tag then read in the wrong context.
-  let commentParentMode = 'code';
-
-  // The mask is the only caller that needs the tag's identity as well as its
-  // direction — it stacks the name to decide what a `</…>` closes.
-  const jsxTagInfoAt = (index) => {
-    const closing = src.startsWith('</', index);
-    const fragment = src.startsWith('<>', index) || src.startsWith('</>', index);
-    const name = src.slice(index + (closing ? 2 : 1)).match(/^([A-Za-z][\w.-]*)/)?.[1] || null;
-    return { closing, fragment, name };
-  };
-
-  for (let i = 0; i < chars.length; i++) {
-    const c = chars[i];
-
-    if (mode === 'line-comment') {
-      if (c === '\n') mode = commentParentMode;
-      else chars[i] = ' ';
-      continue;
-    }
-    if (mode === 'block-comment') {
-      if (c === '*' && chars[i + 1] === '/') {
-        chars[i] = ' ';
-        chars[++i] = ' ';
-        mode = commentParentMode;
-      } else if (c !== '\n') {
-        chars[i] = ' ';
-      }
-      continue;
-    }
-    if (quote) {
-      if (c === '\\') { i++; continue; }
-      if (c === quote) quote = null;
-      continue;
-    }
-    if (mode === 'jsx-text') {
-      if (c === '{') {
-        mode = 'code';
-        braceDepth = 1;
-      } else if (opensJsxTagInText(src, i)) {
-        tagInfo = jsxTagInfoAt(i);
-        tagParentMode = 'jsx-text';
-        tagBraceDepth = 0;
-        mode = 'jsx-tag';
-      }
-      continue;
-    }
-    if (mode === 'jsx-tag') {
-      if (c === '/' && chars[i + 1] === '/') {
-        chars[i] = ' ';
-        chars[++i] = ' ';
-        commentParentMode = mode;
-        mode = 'line-comment';
-        continue;
-      }
-      if (c === '/' && chars[i + 1] === '*') {
-        chars[i] = ' ';
-        chars[++i] = ' ';
-        commentParentMode = mode;
-        mode = 'block-comment';
-        continue;
-      }
-      if (c === '"' || c === "'" || c === '`') {
-        quote = c;
-        continue;
-      }
-      if (c === '{') {
-        tagBraceDepth++;
-        continue;
-      }
-      if (c === '}' && tagBraceDepth > 0) {
-        tagBraceDepth--;
-        continue;
-      }
-      if (c !== '>' || tagBraceDepth !== 0) continue;
-
-      let previous = i - 1;
-      while (previous >= 0 && /\s/.test(src[previous])) previous--;
-      const selfClosing = src[previous] === '/';
-      if (tagInfo.closing) {
-        const entry = jsxStack.pop();
-        braceDepth = entry?.braceDepth ?? 0;
-        mode = entry?.root ? 'code' : (jsxStack.length ? 'jsx-text' : 'code');
-      } else if (selfClosing) {
-        mode = tagParentMode;
-      } else {
-        jsxStack.push({ name: tagInfo.fragment ? null : tagInfo.name, root: tagParentMode === 'code', braceDepth });
-        braceDepth = 0;
-        mode = 'jsx-text';
-      }
-      tagInfo = null;
-      continue;
-    }
-
-    if (c === '"' || c === "'" || c === '`') {
-      quote = c;
-      continue;
-    }
-    if (c === '/' && chars[i + 1] === '/') {
-      chars[i] = ' ';
-      chars[++i] = ' ';
-      commentParentMode = mode;
-      mode = 'line-comment';
-      continue;
-    }
-    if (c === '/' && chars[i + 1] === '*') {
-      chars[i] = ' ';
-      chars[++i] = ' ';
-      commentParentMode = mode;
-      mode = 'block-comment';
-      continue;
-    }
-    if (braceDepth > 0 && c === '{') {
-      braceDepth++;
-      continue;
-    }
-    if (braceDepth > 0 && c === '}') {
-      braceDepth--;
-      if (braceDepth === 0) mode = 'jsx-text';
-      continue;
-    }
-    if (c === '<' && looksLikeJsxTagStart(src, i)) {
-      tagInfo = jsxTagInfoAt(i);
-      tagParentMode = 'code';
-      tagBraceDepth = 0;
-      mode = 'jsx-tag';
-    }
+  // Split by UTF-16 unit, not by code point: the scanner reports STRING indexes,
+  // and a spread (`[...src]`) collapses each astral character to one slot, so
+  // every index after the first emoji in a file would land a slot early.
+  const chars = src.split('');
+  for (const token of jsxScanner(src, { mode: startMode })) {
+    if (token.kind !== 'comment') continue;
+    // Newlines survive so line numbers — and a line comment's own terminator —
+    // stay where they were.
+    for (let i = token.index; i <= token.end; i++) if (chars[i] !== '\n') chars[i] = ' ';
   }
   return chars.join('');
 }
@@ -654,7 +559,7 @@ function hasMatchingLabelElement(src, id) {
   const re = /<label\b/g;
   let match;
   while ((match = re.exec(src))) {
-    const tag = openingTagAt(src, match.index, '<label'.length);
+    const tag = openingTagAt(src, match.index);
     if (!tag) continue;
     const htmlFor = normalizedAttributeValue(attributeValue(tag, 'htmlFor'));
     if (htmlFor !== id || !hasUsableElementText(src, match.index, tag)) continue;
@@ -695,7 +600,7 @@ function forwardsLabelForId(src, { id }, { idProp, labelProp }, name) {
   const re = new RegExp(`<${name}\\b`, 'g');
   let match;
   while ((match = re.exec(src))) {
-    const tag = openingTagAt(src, match.index, name.length + 1);
+    const tag = openingTagAt(src, match.index);
     if (!tag) continue;
     re.lastIndex = match.index + tag.length;
     if (normalizedAttributeValue(attributeValue(tag, idProp)) !== id) continue;
@@ -825,7 +730,7 @@ function openWrapperInstancesAt(src, name, index) {
       open.pop();
       continue;
     }
-    const tag = openingTagAt(src, match.index, name.length + 1);
+    const tag = openingTagAt(src, match.index);
     if (!tag) continue;
     const contentStart = match.index + tag.length;
     re.lastIndex = contentStart;
@@ -1015,7 +920,7 @@ function* labelElements(body) {
   const re = /<label\b/g;
   let match;
   while ((match = re.exec(body))) {
-    const tag = openingTagAt(body, match.index, '<label'.length);
+    const tag = openingTagAt(body, match.index);
     if (!tag || /\/\s*>$/.test(tag)) continue;
     const contentStart = match.index + tag.length;
     re.lastIndex = contentStart;
@@ -1036,20 +941,11 @@ function stripJsxTags(source) {
     const open = source.indexOf('<', cursor);
     if (open === -1) return out + source.slice(cursor);
     out += source.slice(cursor, open);
-    let depth = 0;
-    let i = open + 1;
-    for (; i < source.length; i++) {
-      const c = source[i];
-      if (c === '{') depth++;
-      else if (c === '}') depth--;
-      else if (c === '"' || c === '\'' || c === '`') {
-        i = skipString(source, i);
-      } else if (c === '>' && depth === 0) break;
-    }
+    const end = tagEndAt(source, open);
     // An unterminated tag swallows the rest: nothing after it is text.
-    if (i >= source.length) return `${out} `;
+    if (end === -1) return `${out} `;
     out += ' ';
-    cursor = i + 1;
+    cursor = end + 1;
   }
   return out;
 }
@@ -1383,7 +1279,7 @@ function callSiteIdVerdicts(src, name, idProp) {
   const re = new RegExp(`<${name}\\b`, 'g');
   let match;
   while ((match = re.exec(src))) {
-    const tag = openingTagAt(src, match.index, name.length + 1);
+    const tag = openingTagAt(src, match.index);
     if (!tag) {
       verdicts.push(false);
       continue;
@@ -1444,7 +1340,7 @@ function hasUsableAriaLabelledByReference(src, tag) {
     const re = /<[A-Za-z][\w.-]*\b/g;
     let match;
     while ((match = re.exec(src))) {
-      const referencedTag = openingTagAt(src, match.index, 1);
+      const referencedTag = openingTagAt(src, match.index);
       if (!referencedTag) continue;
       if (normalizedAttributeValue(attributeValue(referencedTag, 'id')) !== id) continue;
       if (/\baria-hidden\s*=\s*['"`]true['"`]/.test(referencedTag)) return false;
@@ -1491,13 +1387,12 @@ function controlSemanticAnchor(tag) {
 const controlTagRe = (tagName) => new RegExp(`<${tagName}\\b`, 'g');
 
 function controlSourceAnchor(file, src, index, tagName) {
-  const nameLength = tagName.length + 1;
-  const tag = openingTagAt(src, index, nameLength);
+  const tag = openingTagAt(src, index);
   if (!tag) return `${file}|${tagName}|unknown`;
   const semantic = controlSemanticAnchor(tag);
   const matching = [];
   for (const match of src.matchAll(controlTagRe(tagName))) {
-    const otherTag = openingTagAt(src, match.index, nameLength);
+    const otherTag = openingTagAt(src, match.index);
     if (otherTag && controlSemanticAnchor(otherTag) === semantic) matching.push(match.index);
   }
   const base = `${file}|${tagName}|${semantic}`;
@@ -1693,7 +1588,7 @@ describe('a11y conventions', () => {
       const re = /<button\b/g;
       let m;
       while ((m = re.exec(src))) {
-        const tag = openingTagAt(src, m.index, '<button'.length);
+        const tag = openingTagAt(src, m.index);
         if (!tag) continue;
         if (!/rounded-full/.test(tag) || !TRACK_SIZES.test(tag)) continue;
         if (/role="switch"/.test(tag)) continue;
@@ -1719,7 +1614,7 @@ describe('a11y conventions', () => {
       const re = /<input\b/g;
       let m;
       while ((m = re.exec(src))) {
-        const tag = openingTagAt(src, m.index, '<input'.length);
+        const tag = openingTagAt(src, m.index);
         // Match against the whole opening tag, not a quoted-attribute-shaped
         // regex: `type='file'` / `type={'file'}` and a `hidden` arriving via a
         // template literal or ternary (`className={cond ? 'hidden' : ''}`) are
@@ -1807,7 +1702,7 @@ describe('a11y conventions', () => {
       const re = /<button\b/g;
       let m;
       while ((m = re.exec(src))) {
-        const tag = openingTagAt(src, m.index, '<button'.length);
+        const tag = openingTagAt(src, m.index);
         if (!tag || !/role="switch"/.test(tag)) continue;
         if (/aria-checked/.test(tag)) continue;
         offenders.push(`${file}:${lineOf(src, m.index)}`);
@@ -1831,7 +1726,7 @@ describe('a11y conventions', () => {
       const re = /<button\b/g;
       let m;
       while ((m = re.exec(src))) {
-        const tag = openingTagAt(src, m.index, '<button'.length);
+        const tag = openingTagAt(src, m.index);
         if (!tag || tag.endsWith('/>')) continue; // self-closing — no body to judge
         if (/\baria-label\s*=/.test(tag) || /\baria-labelledby\s*=/.test(tag)) continue;
         const openEnd = m.index + tag.length;
@@ -1858,7 +1753,7 @@ describe('a11y conventions', () => {
       const re = controlTagRe(tagName);
       let m;
       while ((m = re.exec(scanSrc))) {
-        const tag = openingTagAt(scanSrc, m.index, tagName.length + 1);
+        const tag = openingTagAt(scanSrc, m.index);
         if (!tag || hasAccessibleControlName(scanSrc, tag, m.index, tagName, file)) continue;
         anchors.add(controlSourceAnchor(file, scanSrc, m.index, tagName));
       }
@@ -1905,7 +1800,7 @@ describe('a11y conventions', () => {
   const FIXTURE_HOST = 'src/components/settings/FixtureHost.jsx';
   const isNamed = (src, tagName = 'input', file = FIXTURE_HOST) => {
     const index = src.indexOf(`<${tagName}`);
-    return hasAccessibleControlName(src, openingTagAt(src, index, tagName.length + 1), index, tagName, file);
+    return hasAccessibleControlName(src, openingTagAt(src, index), index, tagName, file);
   };
   // The id-keyed half of the same question: is a control carrying this `id`
   // named by one of the wrappers the source renders? These fixtures declare
@@ -2041,7 +1936,7 @@ describe('a11y conventions', () => {
     const site = (src, localName = 'Combo') => ({ src, localName, exportedName: 'default' });
     const credits = (...sites) => {
       const index = control.indexOf('<input');
-      return hasCallerSuppliedName(control, openingTagAt(control, index, '<input'.length), index, sites);
+      return hasCallerSuppliedName(control, openingTagAt(control, index), index, sites);
     };
 
     const labeled = '<label htmlFor="rounds">Rounds</label>\n<Combo inputId="rounds" value={v} />';
@@ -2078,13 +1973,13 @@ describe('a11y conventions', () => {
   return <input id={inputId} type="text" value={value} onChange={onChange} />;
 }`;
     const localIndex = localId.indexOf('<input');
-    expect(hasCallerSuppliedName(localId, openingTagAt(localId, localIndex, '<input'.length), localIndex, [site(labeled)])).toBe(false);
+    expect(hasCallerSuppliedName(localId, openingTagAt(localId, localIndex), localIndex, [site(labeled)])).toBe(false);
 
     // …and the id has to be the control's OWN. A same-named prop on another
     // attribute (`data-id={inputId}`) never reaches the a11y tree.
     const dataId = control.replace('id={inputId}', 'data-id={inputId}');
     const dataIndex = dataId.indexOf('<input');
-    expect(hasCallerSuppliedName(dataId, openingTagAt(dataId, dataIndex, '<input'.length), dataIndex, [site(labeled)])).toBe(false);
+    expect(hasCallerSuppliedName(dataId, openingTagAt(dataId, dataIndex), dataIndex, [site(labeled)])).toBe(false);
   });
 
   it('credits a FormField whose only child is a conditional, but not a list', () => {
@@ -2187,7 +2082,7 @@ describe('a11y conventions', () => {
       "<Foo x={/* don't */ 1} />",
       '<Foo c={`a > b`} />', // the case the original brace counting existed for
     ];
-    for (const shape of attrExpressions) expect(openingTagAt(shape, 0, 4)).toBe(shape);
+    for (const shape of attrExpressions) expect(openingTagAt(shape, 0)).toBe(shape);
 
     // `tagBoundaryAt` answers the same question for the icon rules and skipped
     // strings only at depth > 0, so a `>` in a top-level attribute value ended
@@ -2219,7 +2114,7 @@ describe('a11y conventions', () => {
     const isIconOnly = (body) => {
       const src = `<button onClick={run}>${body}</button>`;
       const open = src.indexOf('<button');
-      const tag = openingTagAt(src, open, '<button'.length);
+      const tag = openingTagAt(src, open);
       return isIconOnlyBody(findButtonBody(src, open + tag.length));
     };
     expect(isIconOnly("{mode === 'a?b' ? <IconA /> : <IconB />}")).toBe(true);
@@ -2250,7 +2145,7 @@ describe('a11y conventions', () => {
     const isIconOnly = (body) => {
       const src = `<button onClick={run}>${body}</button>`;
       const open = src.indexOf('<button');
-      const tag = openingTagAt(src, open, '<button'.length);
+      const tag = openingTagAt(src, open);
       return isIconOnlyBody(findButtonBody(src, open + tag.length));
     };
     // A line comment whose text holds an apostrophe used to open a string that
@@ -2272,6 +2167,75 @@ describe('a11y conventions', () => {
     // Division and regex literals must not be mistaken for comment openers.
     expect(isIconOnly('{ ratio / 2 > 1 ? <Up /> : <Down /> }')).toBe(true);
     expect(isIconOnly('{ /up/.test(dir) ? <Up /> : <Down /> }')).toBe(true);
+  });
+
+  it('reads a regex literal as one token, not as JSX or a comment (#4333)', () => {
+    // The last context outside the old model. A regex BODY may hold any of
+    // `{ } ' " < >` and a character class may hold `/` itself, so every scanner
+    // that walked one character by character could be started down a phantom
+    // tag, string, or comment by ordinary product source.
+    const isIconOnly = (body) => {
+      const src = `<button onClick={run}>${body}</button>`;
+      const open = src.indexOf('<button');
+      return isIconOnlyBody(findButtonBody(src, open + openingTagAt(src, open).length));
+    };
+    // `<` followed by `>` inside a character class opened a JSX tag: the rest of
+    // the expression lexed as element text, so the `?` was no longer a top-level
+    // operator and the button left the icon-only rule.
+    expect(isIconOnly('{ /[<>]/.test(dir) ? <Up /> : <Down /> }')).toBe(true);
+    // An apostrophe in a regex opened a string that never closed.
+    expect(isIconOnly("{ /it's/.test(dir) ? <Up /> : <Down /> }")).toBe(true);
+    // A `//` inside a character class read as a line comment and blanked the
+    // rest of the line — including, here, the label text that follows it.
+    expect(maskComments('const re = /[//]/;\n<label htmlFor="x">Rounds</label>'))
+      .toBe('const re = /[//]/;\n<label htmlFor="x">Rounds</label>');
+    // Guessing has to stay conservative in the other direction: a `/` after a
+    // VALUE is division, and a regex may not span a line, so an unmatched `/`
+    // was division after all. Neither may swallow the code that follows.
+    expect(maskComments('const r = (a) / b; // note\nconst s = c[0] / d;'))
+      .toBe('const r = (a) / b;        \nconst s = c[0] / d;');
+    expect(maskComments('const r = x = / not a regex\nconst s = 1; // note'))
+      .toBe('const r = x = / not a regex\nconst s = 1;        ');
+  });
+
+  it('keeps the mask in the same index space as the source (#4333)', () => {
+    // `jsxScanner` reports STRING indexes, so the mask has to be a UTF-16 split.
+    // Against a code-point split (`[...src]`) an astral character collapses to
+    // one slot, and from the first emoji onward every blank lands a slot early —
+    // here leaving a stray `/` behind and eating the newline's neighbour. 72
+    // tracked client files carry an emoji, so this is live, not theoretical.
+    expect(maskComments('const icon = \'🚀\'; // note\nconst b = 2;'))
+      .toBe('const icon = \'🚀\';        \nconst b = 2;');
+    // And the shifted reads take the lexer with them: the `<` of a tag is no
+    // longer where the machine looks, so it never enters tag context and the
+    // visible text of a correctly labeled control masks away as code.
+    const labelled = 'const icon = \'🚀\';\n<label htmlFor="x">see // docs</label>\n<input id="x" type="text" />';
+    expect(maskComments(labelled)).toBe(labelled);
+    expect(isNamed(labelled)).toBe(true);
+  });
+
+  it('reads a call\'s arguments through unbalanced parens in JSX text (#4333)', () => {
+    // The toast rule slices `toast(…)` out of raw source. A `(` or `)` in an
+    // element's visible text is prose, not structure — `:(` alone left the call
+    // unbalanced, so the slice came back null and the rule silently skipped the
+    // one shape it exists to catch: JSX content with no `label`.
+    const smiley = 'toast(<p>Sync failed :( sorry</p>, { duration: Infinity })';
+    expect(balancedCallAt(smiley, smiley.indexOf('('))).toBe(smiley.slice(smiley.indexOf('(')));
+    const closer = 'toast(<p>Sync failed :) sorry</p>, { duration: Infinity })';
+    expect(balancedCallAt(closer, closer.indexOf('('))).toBe(closer.slice(closer.indexOf('(')));
+  });
+
+  it('takes brace nesting from the scanner, not a local counter (#4333)', () => {
+    // `topLevelOperatorIn` sees only JavaScript-context characters, and a `{…}`
+    // child expression opens in ELEMENT TEXT and closes in JavaScript. A local
+    // `{`/`}` counter therefore misses the open and still sees the close, going
+    // negative and never matching `depth === 0` again — so nothing after the
+    // first rendered expression is ever found. Latent today (no verdict flips),
+    // and pinned on the helper for the same reason the block-comment case is.
+    const withChildExpression = 'render(<p>{x}</p>) ? <Up /> : <Down />';
+    expect(topLevelOperatorIn(withChildExpression, '?', 0)).toBe(withChildExpression.indexOf('?'));
+    expect(topLevelOperatorIn(withChildExpression, ':', withChildExpression.indexOf('?') + 1))
+      .toBe(withChildExpression.indexOf(':'));
   });
 
   it('reads an apostrophe in JSX text as text, not a string opener (#4318)', () => {
@@ -2488,7 +2452,7 @@ describe('a11y conventions', () => {
       const re = /<button\b/g;
       let m;
       while ((m = re.exec(src))) {
-        const tag = openingTagAt(src, m.index, '<button'.length);
+        const tag = openingTagAt(src, m.index);
         if (!tag || !CLOSE_LABEL_RE.test(tag)) continue;
         if (/\binset-0\b/.test(tag)) continue;
         const clsMatch = tag.match(/className\s*=\s*"([^"]*)"/);

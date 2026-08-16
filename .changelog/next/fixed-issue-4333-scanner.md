@@ -1,0 +1,1 @@
+- a11y guard: a regex literal or an emoji in a source file no longer blinds the scan that checks its controls for accessible names
