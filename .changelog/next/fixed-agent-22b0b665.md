@@ -1,0 +1,1 @@
+- Codex agents now safely continue past hook-review prompts instead of losing their task prompt.

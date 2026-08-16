@@ -304,6 +304,7 @@ ${prompt}`;
   // doesn't need a matching flag below — ackAutoModeChoice() latches it false
   // permanently on the tracker itself (see autoModeAnswered in tuiHandshake.js).
   let trustAccepted = false;
+  let hookReviewDeclined = false;
 
   // The wrapped prompt directs the model to write its COMPLETE response to
   // `responseFilePath` and then finish. That file appearing is the model's
@@ -782,6 +783,17 @@ ${prompt}`;
       }
       const now = Date.now();
       const elapsed = now - startTime;
+      // Codex's hook-review selector precedes its composer. An unattended run
+      // must not grant hooks permission to execute outside the sandbox, so take
+      // the explicit "Continue without trusting" option before ordinary
+      // readiness/fallback delivery can paste into the selector.
+      if (inputReady.needsHookReview && !hookReviewDeclined) {
+        hookReviewDeclined = true;
+        if (dismissStartupDialog('\x1b[B\x1b[B\r', 'hook-review prompt')) {
+          inputReady.ackHookReview();
+        }
+        return;
+      }
       if (requiresInputReady) {
         if (inputReady.needsTrust && !trustAccepted) {
           trustAccepted = true;

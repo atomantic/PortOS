@@ -596,6 +596,7 @@ export async function spawnTuiAgent({
   });
   let trustAccepted = false;
   let autoModeDeclined = false;
+  let hookReviewDeclined = false;
   // True once shell.js actually injects the `claude` command (after its
   // round-trip readiness probe). The probe runs its OWN shell command first,
   // which toggles bracketed-paste mode and would otherwise advance the
@@ -1304,6 +1305,19 @@ export async function spawnTuiAgent({
     }
     const now = Date.now();
     const elapsed = now - startedAt;
+
+    // Codex can present a hook-review selector before its composer exists.
+    // Do not trust hooks from an unattended run: option 3 keeps them disabled
+    // for this session and lets the agent continue without executing code
+    // outside its sandbox. This must run for every TUI, not only the positive
+    // input-ready providers below — Codex currently uses the idle/deadline path.
+    if (inputReady.needsHookReview && !hookReviewDeclined) {
+      hookReviewDeclined = true;
+      shellService.writeToSession(sessionId, '\x1b[B\x1b[B\r');
+      inputReady.ackHookReview();
+      appendLine(`📟 Continued ${tuiConfig.command} without trusting startup hooks for session ${sessionId.slice(0, 8)}`);
+      return;
+    }
 
     if (requireInputReady) {
       // Auto-confirm the first-run "trust this folder?" gate (claude's and agy's

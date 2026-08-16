@@ -1073,6 +1073,29 @@ describe('createInputReadyTracker', () => {
     });
   });
 
+  describe('Codex hook-review offer', () => {
+    const OFFER = 'Hooks need review\n'
+      + '1 hook is new or changed.\n'
+      + '1. Review hooks\n'
+      + '2. Trust all and continue\n'
+      + "3. Continue without trusting (hooks won't run)\n";
+
+    it('latches the selector and does not re-arm after the safe dismissal', () => {
+      const tracker = createInputReadyTracker();
+      tracker.observe(`${PASTE_OFF}${PASTE_ON}`, OFFER);
+      expect(tracker.needsHookReview).toBe(true);
+      expect(tracker.ready).toBe(false);
+
+      tracker.ackHookReview();
+      expect(tracker.needsHookReview).toBe(false);
+      expect(tracker.ready).toBe(true);
+
+      tracker.observe('', 'Codex ready'); // rolling tail still contains the offer
+      expect(tracker.needsHookReview).toBe(false);
+      expect(tracker.ready).toBe(true);
+    });
+  });
+
   it('matches a marker split across two PTY chunks (rolling tail)', () => {
     const tracker = createInputReadyTracker();
     tracker.observe('', '> Yes, I trust th');

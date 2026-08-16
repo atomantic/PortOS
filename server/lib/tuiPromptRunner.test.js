@@ -568,6 +568,38 @@ describe('executeTuiRun', () => {
       await promise;
     });
 
+    it('declines Codex hook trust and pastes only after its selector clears', async () => {
+      vi.useFakeTimers({
+        toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+      });
+      const provider = { id: 'codex', type: 'tui', command: 'codex', tuiPromptDelayMs: 50 };
+      const promise = executeTuiRun({
+        runId: 'run-codex-hook-review', provider, prompt: 'return one structured response',
+        workspacePath: TEST_WORKSPACE, timeout: 60000,
+      });
+      await flushAsync();
+
+      const pty = ptyInstances[0];
+      pty.emitData(
+        'Hooks need review\n'
+        + '1 hook is new or changed.\n'
+        + '1. Review hooks\n'
+        + '2. Trust all and continue\n'
+        + "3. Continue without trusting (hooks won't run)\n",
+      );
+      await vi.advanceTimersByTimeAsync(400);
+
+      expect(pty.write).toHaveBeenCalledWith('\x1b[B\x1b[B\r');
+      expect(pty.write).not.toHaveBeenCalledWith(expect.stringContaining('\x1b[200~'));
+
+      pty.emitData('OpenAI Codex ready\n');
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(pty.write).toHaveBeenCalledWith(expect.stringContaining('\x1b[200~'));
+
+      pty.emitExit({ exitCode: 0 });
+      await promise;
+    });
+
     it('keeps non-Claude TUIs on the existing idle fallback when startup output resembles Claude trust text', async () => {
       vi.useFakeTimers({
         toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],

@@ -295,6 +295,16 @@ export const TUI_TRUST_PROMPT_PATTERN =
 export const TUI_AUTO_MODE_PROMPT_PATTERN =
   /automodeyourdefaultpermissionmode|setautomodeasmydefaultpermissionmode/i;
 
+// Codex can stop before its composer on a hook-review selector when a newly
+// configured hook has not yet been trusted. `--dangerously-bypass-approvals-and-
+// sandbox` deliberately does not answer this prompt: trusting a hook permits
+// code outside the sandbox, so unattended PortOS runs must choose Codex's
+// explicit "Continue without trusting" option instead. Without this gate the
+// normal startup paste lands in the selector and all paste retries are swallowed.
+// Match the stable heading after whitespace stripping; the exact count/plural
+// wording below it varies with the configured hooks.
+export const TUI_HOOK_REVIEW_PROMPT_PATTERN = /hooksneedreview/i;
+
 // Antigravity (agy) needs a SECOND, positive readiness signal on top of paste
 // mode. agy enables bracketed paste the moment it enters the alt screen — while
 // it is still "Signing in…", before its folder-trust gate has painted and long
@@ -343,6 +353,11 @@ export function createInputReadyTracker({ readyTextPattern = null, directLaunch 
   // false until the 45s deadline. Arm-once, same as the gates above it.
   let needsAutoModeChoice = false;
   let autoModeAnswered = false;
+  // Like the auto-mode offer, hook-review text remains in the rolling tail
+  // after its selector closes. A terminal acknowledgement prevents a repaint
+  // from re-arming the dialog and blocking delivery forever.
+  let needsHookReview = false;
+  let hookReviewAnswered = false;
   let tail = '';
   // node-pty can split `ESC[?2004h` across reads. Keep only the trailing
   // prefix of that exact toggle so the next chunk can complete it without
@@ -360,13 +375,16 @@ export function createInputReadyTracker({ readyTextPattern = null, directLaunch 
     // modal is still swallowing input. Cleared by ackAutoModeChoice() once the
     // spawner has answered it.
     get ready() {
-      return sawCommandRun && pasteModeOn && !needsAutoModeChoice
+      return sawCommandRun && pasteModeOn && !needsAutoModeChoice && !needsHookReview
         && (!readyTextPattern || sawReadyText);
     },
     get needsTrust() { return needsTrust; },
     get needsAutoModeChoice() { return needsAutoModeChoice; },
+    get needsHookReview() { return needsHookReview; },
     /** Spawner reports the dismissal keystrokes went out; re-arms `ready`. */
     ackAutoModeChoice() { needsAutoModeChoice = false; autoModeAnswered = true; },
+    /** Spawner selected Codex's safe "Continue without trusting" option. */
+    ackHookReview() { needsHookReview = false; hookReviewAnswered = true; },
     // rawText: un-stripped chunk (paste-mode toggles live here);
     // strippedText: ANSI-stripped chunk (the trust-gate / composer text).
     observe(rawText, strippedText) {
@@ -387,6 +405,7 @@ export function createInputReadyTracker({ readyTextPattern = null, directLaunch 
         tail = (tail + strippedText.replace(/\s+/g, '')).slice(-OBSERVE_TAIL_MAX_LEN);
         if (!needsTrust && TUI_TRUST_PROMPT_PATTERN.test(tail)) needsTrust = true;
         if (!needsAutoModeChoice && !autoModeAnswered && TUI_AUTO_MODE_PROMPT_PATTERN.test(tail)) needsAutoModeChoice = true;
+        if (!needsHookReview && !hookReviewAnswered && TUI_HOOK_REVIEW_PROMPT_PATTERN.test(tail)) needsHookReview = true;
         if (readyTextPattern && !sawReadyText && readyTextPattern.test(tail)) sawReadyText = true;
       }
     },

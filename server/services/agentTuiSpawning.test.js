@@ -1051,6 +1051,34 @@ describe('spawnTuiAgent runtime', () => {
     expect(pasteCount()).toBe(1);
   });
 
+  it('codex hook-review offer: continues without trusting hooks before pasting the prompt', async () => {
+    runSpawn();
+    await flushMicrotasks();
+
+    await capturedOnData(Buffer.from(
+      'Hooks need review\n'
+      + '1 hook is new or changed.\n'
+      + '› 1. Review hooks\n'
+      + '2. Trust all and continue\n'
+      + "3. Continue without trusting (hooks won't run)\n",
+    ));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(400);
+    await flushMicrotasks();
+
+    // Two down-arrows select option 3, preserving the sandbox boundary.
+    expect(vi.mocked(shellService.writeToSession).mock.calls.map(([, data]) => data))
+      .toContain('\x1b[B\x1b[B\r');
+    expect(pasteCount()).toBe(0);
+
+    // The selector clears and Codex repaints its composer; only then can the
+    // ordinary Codex readiness path paste the task.
+    await capturedOnData(Buffer.from('OpenAI Codex ready\n'));
+    await vi.advanceTimersByTimeAsync(2000);
+    await flushMicrotasks();
+    expect(pasteCount()).toBe(1);
+  });
+
   it('tui-not-ready: claude that never shows an input prompt finalizes failure without pasting', async () => {
     let resolveComplete;
     const completeDone = new Promise((r) => { resolveComplete = r; });
