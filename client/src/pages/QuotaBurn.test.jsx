@@ -110,25 +110,27 @@ describe('QuotaBurn page', () => {
   });
 
   it('renders immediately while a family\'s quota is still being read, then polls it in', async () => {
-    // The server does not hold the response open for a 10-20s CLI/TUI spawn on a
-    // cold cache — it answers with `pending` and the page fills the number in.
-    // "reading quota…" must not be confused with a verdict: a pending family
-    // has no reading yet, so neither "will burn" nor a skip reason is true.
-    const pendingStatus = {
-      ...status,
-      families: [{ ...status.families[0], willBurn: false, percentRemaining: null, skipReason: 'reading provider quota…', pending: true }, status.families[1]],
-    };
-    api.getQuotaBurn.mockResolvedValueOnce({ config, status: pendingStatus });
-    renderPage();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const pendingStatus = {
+        ...status,
+        families: [{ ...status.families[0], willBurn: false, percentRemaining: null, skipReason: 'reading provider quota…', pending: true }, status.families[1]],
+      };
+      api.getQuotaBurn.mockResolvedValueOnce({ config, status: pendingStatus });
+      renderPage();
 
-    expect(await screen.findByText(/reading quota…/)).toBeInTheDocument();
-    // The plan itself rendered on that same first paint — the page is usable
-    // before any provider has answered.
-    expect(screen.getByLabelText(/Run the quota-burn loop automatically/)).toBeInTheDocument();
+      expect(await screen.findByText(/reading quota…/)).toBeInTheDocument();
+      expect(screen.getByLabelText(/Run the quota-burn loop automatically/)).toBeInTheDocument();
 
-    // The poll (default mock: no longer pending) replaces it with the reading.
-    expect(await screen.findByText(/62% left/, undefined, { timeout: 8000 })).toBeInTheDocument();
-    expect(screen.queryByText(/reading quota…/)).not.toBeInTheDocument();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4000);
+      });
+
+      expect(await screen.findByText(/62% left/)).toBeInTheDocument();
+      expect(screen.queryByText(/reading quota…/)).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('names WHICH window the reading describes', async () => {
@@ -664,28 +666,33 @@ describe('QuotaBurn save races', () => {
   });
 
   it('surfaces a background poll that failed, and clears it on the next poll that lands', async () => {
-    // A poll failure is the one read nobody asked for — with nothing on screen
-    // changing, a stalled scrape looked identical to one that kept answering
-    // with the same numbers.
-    const pendingStatus = {
-      ...status,
-      families: [{ ...status.families[0], pending: true }, status.families[1]],
-    };
-    api.getQuotaBurn.mockResolvedValueOnce({ config, status: pendingStatus });
-    api.getQuotaBurn.mockRejectedValueOnce(new Error('Provider CLI is not responding'));
-    renderPage();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const pendingStatus = {
+        ...status,
+        families: [{ ...status.families[0], pending: true }, status.families[1]],
+      };
+      api.getQuotaBurn.mockResolvedValueOnce({ config, status: pendingStatus });
+      api.getQuotaBurn.mockRejectedValueOnce(new Error('Provider CLI is not responding'));
+      renderPage();
 
-    expect(await screen.findByText(/reading quota…/)).toBeInTheDocument();
-    expect(await screen.findByText(/Provider CLI is not responding/, undefined, { timeout: 8000 })).toBeInTheDocument();
-    // The plan stays on screen: a failed poll must not blank it.
-    expect(screen.getByLabelText(/Run the quota-burn loop automatically/)).toBeInTheDocument();
+      expect(await screen.findByText(/reading quota…/)).toBeInTheDocument();
 
-    // The default mock resolves, so the following poll clears the banner and
-    // fills the reading in.
-    expect(await screen.findByText(/62% left/, undefined, { timeout: 8000 })).toBeInTheDocument();
-    expect(screen.queryByText(/Provider CLI is not responding/)).not.toBeInTheDocument();
-    // Two 4s poll intervals have to elapse, so the default 5s cap is too tight.
-  }, 20000);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4000);
+      });
+      expect(await screen.findByText(/Provider CLI is not responding/)).toBeInTheDocument();
+      expect(screen.getByLabelText(/Run the quota-burn loop automatically/)).toBeInTheDocument();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4000);
+      });
+      expect(await screen.findByText(/62% left/)).toBeInTheDocument();
+      expect(screen.queryByText(/Provider CLI is not responding/)).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it('does not also toast when the failure is already named by the banner', async () => {
     // With no plan on screen the banner owns the error surface — a toast on top
@@ -725,12 +732,15 @@ describe('QuotaBurn save races', () => {
   });
 
   it('does not commit 0 when a number field is cleared to be retyped', async () => {
-    // Number('') === 0, which is below the server minimum for the interval and
-    // the dispatch cap — a 400 that also discards every co-pending edit.
-    const user = userEvent.setup();
-    renderPage('/devtools/quota-burn/grok');
-    await user.clear(await screen.findByLabelText(/Dispatch cap per window/));
-    await act(async () => { await new Promise((r) => setTimeout(r, 700)); });
-    expect(api.saveQuotaBurn).not.toHaveBeenCalled();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      renderPage('/devtools/quota-burn/grok');
+      await user.clear(await screen.findByLabelText(/Dispatch cap per window/));
+      await act(async () => { await vi.advanceTimersByTimeAsync(700); });
+      expect(api.saveQuotaBurn).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

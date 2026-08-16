@@ -24,6 +24,47 @@ if (!Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = () => {};
 }
 
+// Stub jsdom missing media/canvas methods to eliminate stderr noise in test runs
+if (typeof HTMLMediaElement !== 'undefined') {
+  if (!HTMLMediaElement.prototype.play) {
+    HTMLMediaElement.prototype.play = () => Promise.resolve();
+  }
+  if (!HTMLMediaElement.prototype.pause) {
+    HTMLMediaElement.prototype.pause = () => {};
+  }
+}
+
+if (typeof HTMLCanvasElement !== 'undefined') {
+  if (!HTMLCanvasElement.prototype.getContext) {
+    HTMLCanvasElement.prototype.getContext = () => ({
+      fillRect: () => {},
+      clearRect: () => {},
+      getImageData: (x, y, w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }),
+      putImageData: () => {},
+      createImageData: () => ({ data: new Uint8ClampedArray(0) }),
+      setTransform: () => {},
+      drawImage: () => {},
+      save: () => {},
+      fillText: () => {},
+      restore: () => {},
+      beginPath: () => {},
+      moveTo: () => {},
+      lineTo: () => {},
+      closePath: () => {},
+      stroke: () => {},
+      translate: () => {},
+      scale: () => {},
+      rotate: () => {},
+      arc: () => {},
+      fill: () => {},
+      measureText: () => ({ width: 0 }),
+      transform: () => {},
+      rect: () => {},
+      clip: () => {},
+    });
+  }
+}
+
 // Fail any test that triggers React's "not wrapped in act(...)" warning (#2406).
 // These mark unsettled async state updates — usually a mount-effect fetch whose
 // mocked promise resolves after the sync test body — which vitest hides locally
