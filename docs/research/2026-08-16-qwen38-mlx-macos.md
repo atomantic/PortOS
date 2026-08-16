@@ -43,6 +43,10 @@ decode latency only when the target runtime supports that exact MTP architecture
 and the draft's proposed tokens are accepted often enough. A poorly matched
 draft can add overhead instead.
 
+The live MLX discovery path also excludes repositories explicitly named as MTP
+or drafter checkpoints, so these auxiliary weights are not presented as normal
+one-click chat-model installs.
+
 LM Studio has added speculative-decoding support for models with built-in MTP
 heads, but that is a different compatibility path from automatically pairing an
 arbitrary `qwen3_5_mtp` sidecar with the curated MLX base model. PortOS does not

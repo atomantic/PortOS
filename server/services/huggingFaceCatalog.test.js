@@ -663,6 +663,20 @@ describe('huggingFaceCatalog', () => {
       expect(results.some((r) => r.repository === mlxRepo)).toBe(false)
     })
 
+    it('does not offer non-standalone MTP drafter checkpoints as MLX installs', async () => {
+      const drafterRepo = 'mlx-community/Qwen3.8-27B-MTP-4bit'
+      fetch.mockImplementation(urlRouter([
+        ['filter=mlx', [mlxListing(drafterRepo, ['model.safetensors'])]],
+        ['filter=gguf', []],
+      ]))
+
+      const results = await searchHuggingFaceModels({
+        backend: 'lmstudio', query: 'qwen3.8', appleSilicon: true
+      })
+
+      expect(results.some((r) => r.repository === drafterRepo)).toBe(false)
+    })
+
     it('does not surface MLX on a non-Apple host even for LM Studio', async () => {
       const mlxRepo = 'mlx-community/Hidden-On-Intel-4bit'
       fetch.mockImplementation(urlRouter([

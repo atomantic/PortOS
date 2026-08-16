@@ -568,6 +568,14 @@ function hasMlxSignal(model) {
     && hasSafetensors
 }
 
+// MTP/drafter checkpoints are auxiliary weights for speculative decoding, not
+// standalone chat models. Keep them out of the normal MLX install cards; the
+// catalog's complete target model is the safe one-click path.
+function isMlxDrafter(model) {
+  const haystack = `${repoIdOf(model)} ${tagsOf(model).join(' ')} ${model?.pipeline_tag || ''}`
+  return /(?:^|[\/_-])(?:mtp|drafter)(?:[\/_\-.]|$)/i.test(haystack)
+}
+
 // Build an MLX search result. Same shape as a GGUF result with `format: 'mlx'`,
 // a single variant (the repo's quant), and the LM Studio bare-repo install id.
 // Sizes/variant fit are backfilled in enrichWithSizes from `?blobs=true`.
@@ -1039,7 +1047,7 @@ export async function searchHuggingFaceModels({ backend, query = '', category = 
   // MLX results (LM Studio + Apple Silicon only) merge into the same list — each
   // is its own card (`format: 'mlx'`), deduped against the GGUF repos already seen.
   const mlxLive = mlxModelsRaw
-    .filter((model) => hasMlxSignal(model))
+    .filter((model) => hasMlxSignal(model) && !isMlxDrafter(model))
     .map((model) => toMlxResult(model, requestedCategory, installedIds))
     .filter(Boolean)
     .filter((model) => {
