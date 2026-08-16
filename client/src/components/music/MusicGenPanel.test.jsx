@@ -366,6 +366,7 @@ describe('MusicGenPanel', () => {
           'minimax-music3-mlx-bf16': false,
         }, fixedModelInstall: true, customModels: false, lyrics: true,
         cudaState: 'available', platformSupported: true, maxDurationSec: 300, defaultDurationSec: 60,
+        modelSizeGbById: { 'minimax-music3-mlx-8bit': 14, 'minimax-music3-mlx-bf16': 29 },
         models: [
           { id: 'minimax-music3-mlx-8bit', repo: 'mlx-community/MiniMax-Music3-8bit', name: 'MiniMax Music 3 MLX 8-bit' },
           { id: 'minimax-music3-mlx-bf16', repo: 'mlx-community/MiniMax-Music3-bf16', name: 'MiniMax Music 3 MLX BF16' },
@@ -378,13 +379,20 @@ describe('MusicGenPanel', () => {
 
     const modelSelect = await screen.findByRole('combobox', { name: /model/i });
     expect(modelSelect).toHaveValue('minimax-music3-mlx-8bit');
-    expect(screen.queryByRole('button', { name: /install model/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /download model weights/i })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /generate track/i })).toBeEnabled();
 
     fireEvent.change(modelSelect, { target: { value: 'minimax-music3-mlx-bf16' } });
     expect(await screen.findByText(/selected model weights are not installed yet/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /install model/i })).toBeInTheDocument();
+    const install = screen.getByRole('button', { name: /download model weights \(~29 GB\)/i });
+    expect(install).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /generate track/i })).toBeDisabled();
+
+    fireEvent.click(install);
+    await waitFor(() => expect(api.installAudioModel).toHaveBeenCalledWith(
+      { engine: 'minimax-music3-mlx', repo: 'mlx-community/MiniMax-Music3-bf16' },
+      expect.any(Function),
+    ));
   });
 
   it('shows honest elapsed GPU feedback while MiniMax generation is running', async () => {

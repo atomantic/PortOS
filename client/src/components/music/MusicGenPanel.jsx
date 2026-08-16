@@ -128,10 +128,18 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
   }, [generating]);
 
   const engine = useMemo(() => engines.find((e) => e.id === engineId) || null, [engines, engineId]);
+  const selectedModel = engine?.models?.find((item) => item.id === modelId)
+    || engine?.models?.find((item) => item.id === engine.defaultModelId)
+    || engine?.models?.[0]
+    || null;
+  // A native <select> displays its first option while React is applying the
+  // engine's default id. Use that effective option for readiness and generation
+  // too, so the first paint cannot briefly disable an otherwise ready engine.
+  const selectedModelId = selectedModel?.id || modelId;
   const selectedModelReady = !engine?.fixedModelInstall
     ? true
     : engine?.modelReadyById
-      ? engine.modelReadyById[modelId] === true
+      ? engine.modelReadyById[selectedModelId] === true
       : engine.modelReady === true;
   const autoDurationAvailable = supportsAutoDuration(engine);
   const lyricDuration = useMemo(() => analyzeMusicLyrics(lyrics, {
@@ -173,14 +181,14 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
   }, [engine?.id, engine?.models]);
 
   const canGenerate = !!engine?.ready && selectedModelReady && !!prompt?.trim() && !generating;
-  const selectedModelSizeGb = engine?.modelSizeGbById?.[modelId] ?? null;
+  const selectedModelSizeGb = engine?.modelSizeGbById?.[selectedModelId] ?? null;
   const setup = engineSetupState(engine, selectedModelReady, selectedModelSizeGb);
 
   // `target` is the engine record to install for — passed explicitly by the
   // post-runtime chain, which holds a fresher record than component state does.
   const installFixedModel = async (target) => {
     const eng = target || engine;
-    const selectedId = eng?.id === engine?.id ? modelId : '';
+    const selectedId = eng?.id === engine?.id ? selectedModelId : '';
     const model = eng?.models?.find((item) => item.id === selectedId)
       || eng?.models?.find((item) => item.id === eng.defaultModelId)
       || eng?.models?.[0];
@@ -219,9 +227,9 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
     const freshSelectedModelReady = !fresh?.fixedModelInstall
       ? true
       : fresh?.modelReadyById
-        ? fresh.modelReadyById[modelId] === true
+        ? fresh.modelReadyById[selectedModelId] === true
         : fresh.modelReady === true;
-    const freshSetup = engineSetupState(fresh, freshSelectedModelReady, fresh?.modelSizeGbById?.[modelId] ?? null);
+    const freshSetup = engineSetupState(fresh, freshSelectedModelReady, fresh?.modelSizeGbById?.[selectedModelId] ?? null);
     if (freshSetup && !freshSetup.blocked && !freshSetup.needsRuntime && freshSetup.needsWeights) {
       await installFixedModel(fresh);
     }
@@ -235,7 +243,7 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
       prompt: prompt.trim(),
       lyrics: engine.lyrics ? (lyrics || '') : '',
       engine: engine.id,
-      modelId,
+      modelId: selectedModelId,
     };
     if (track?.id) body.trackId = track.id;
     else {
