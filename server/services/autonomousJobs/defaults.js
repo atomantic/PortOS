@@ -172,7 +172,7 @@ Phase 3 — File Issues and Queue Fixes:
 5. For each genuinely new error:
    - Update the error cache with the new fingerprint (always, regardless of JIRA config)
    - If app has jira.enabled = true AND jira.instanceId AND jira.projectKey are set:
-     Create a JIRA ticket with labels ["datadog-auto", "cos-detected"] plus equivalent dispatch/contributor labels when independently justified (`model-light|model-medium|model-heavy`, `effort-low|effort-medium|effort-high|effort-xhigh|effort-max`, `good-first-issue`, `help-wanted` — omit an axis rather than guessing; a recurring unknown crash is not a good-first-issue):
+     Create a JIRA ticket with labels ["datadog-auto", "cos-detected"] plus equivalent dispatch/contributor labels when independently justified (\`model-light|model-medium|model-heavy\`, \`effort-low|effort-medium|effort-high|effort-xhigh|effort-max\`, \`good-first-issue\`, \`help-wanted\` — omit an axis rather than guessing; a recurring unknown crash is not a good-first-issue):
      POST /api/jira/instances/:instanceId/tickets with projectKey, summary, description, issueType: "Bug", labels
    - Create a CoS task to fix the error in an isolated worktree:
      POST /api/cos/tasks with type: "internal", useWorktree: true, openPR: true, the error stack trace, JIRA ticket reference (if created), and instructions to implement fix + open PR
