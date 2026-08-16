@@ -22,6 +22,9 @@ export const deleteProvider = (id) => request(`/providers/${id}`, { method: 'DEL
 export const getSampleProviders = () => request('/providers/samples');
 export const testProvider = (id) => request(`/providers/${id}/test`, { method: 'POST' });
 export const refreshProviderModels = (id, options) => request(`/providers/${id}/refresh-models`, { method: 'POST', ...options });
+// OpenCode is installed only after an explicit Providers-page click. The
+// status endpoint carries booleans only — never local executable paths.
+export const getOpenCodeInstallStatus = (options) => request('/providers/opencode/installation', options);
 
 // Provider status (usage limits, availability)
 export const getProviderStatuses = () => request('/providers/status');

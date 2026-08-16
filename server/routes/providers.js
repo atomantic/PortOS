@@ -4,6 +4,15 @@ import { testVision, runVisionTestSuite, checkVisionHealth } from '../services/v
 import { providerSchema, providerActiveSchema, validate } from '../lib/aiToolkit/validation.js';
 import { withRefreshCapability } from '../lib/aiToolkit/internal/modelFetchers.js';
 import { ALLOWED_COMMANDS } from '../cos-runner/allowedCommands.js';
+import { createLineReader } from '../lib/streamLines.js';
+import { onClientDisconnect, openSseStream } from '../lib/sseDownload.js';
+import { createInstallLogger } from '../lib/installLogger.js';
+import {
+  getOpenCodeInstallStatus,
+  OPENCODE_NPM_PACKAGE,
+  spawnOpenCodeInstaller,
+  stopOpenCodeInstaller,
+} from '../services/opencodeInstaller.js';
 
 /**
  * The CoS Agent Runner's exec allowlist, published read-only so the AI
@@ -21,6 +30,11 @@ import { ALLOWED_COMMANDS } from '../cos-runner/allowedCommands.js';
  * `data/providers.json`, or a config write could choose the exec target.
  */
 const RUNNER_ALLOWED_COMMANDS = [...ALLOWED_COMMANDS].sort();
+
+// One npm global install may write the same package prefix at a time. This is
+// a lightweight re-entrancy guard for a double-click or a second browser tab;
+// its child stays in the route so a client disconnect can terminate it.
+let opencodeInstallInFlight = null;
 
 /**
  * Sanitize a provider object for client responses.
@@ -105,6 +119,111 @@ export function createPortOSProviderRoutes(aiToolkit) {
   router.get('/samples', asyncHandler(async (req, res) => {
     const providers = await providerService.getSampleProviders();
     res.json({ providers: providers.map(presentProvider) });
+  }));
+
+  // OpenCode is a local coding CLI, not an LLM service PortOS can silently
+  // bootstrap. These endpoints only expose availability and service an
+  // explicit click from the Providers page. They intentionally return no
+  // resolved filesystem paths, which could disclose the host account name.
+  router.get('/opencode/installation', asyncHandler(async (_req, res) => {
+    res.json(await getOpenCodeInstallStatus());
+  }));
+
+  // EventSource can only issue GET requests, matching the app's existing
+  // in-product runtime installers. The fixed command is npm install --global
+  // opencode-ai@latest; no request input reaches a shell or package argument.
+  router.get('/opencode/install', asyncHandler(async (req, res) => {
+    const { send, safeEnd } = openSseStream(res);
+    const installLog = createInstallLogger({ installer: 'OpenCode CLI', target: 'npm global prefix' });
+    const emit = (event) => { installLog.onEvent(event); send(event); };
+    let child = null;
+    let finished = false;
+    let clientGone = false;
+    let reservation = null;
+
+    // Register before the availability probe. If the modal closes while the
+    // probe is resolving, do not start an installer nobody can observe.
+    onClientDisconnect(req, res, () => {
+      clientGone = true;
+      installLog.cancel();
+      if (finished) return;
+      if (child) stopOpenCodeInstaller(child);
+      if (reservation && opencodeInstallInFlight === reservation) opencodeInstallInFlight = null;
+      safeEnd();
+    });
+
+    const status = await getOpenCodeInstallStatus();
+    if (clientGone) return safeEnd();
+    if (status.installed) {
+      send({ type: 'log', message: 'OpenCode is already available to PortOS.' });
+      send({ type: 'complete', message: 'Already installed — nothing to do.' });
+      return safeEnd();
+    }
+    if (!status.npmAvailable) {
+      send({ type: 'error', message: 'npm is not available on PortOS\'s PATH, so OpenCode cannot be installed from this page.' });
+      return safeEnd();
+    }
+    if (opencodeInstallInFlight) {
+      send({ type: 'error', message: 'Another OpenCode install is already running. Wait for it to finish or restart PortOS.' });
+      return safeEnd();
+    }
+
+    // Reserve synchronously before spawning so two requests that finish their
+    // status probe together cannot launch competing global npm installs.
+    reservation = {};
+    opencodeInstallInFlight = reservation;
+    if (clientGone) {
+      opencodeInstallInFlight = null;
+      return safeEnd();
+    }
+
+    send({ type: 'stage', stage: 'install', message: 'Installing OpenCode CLI with npm.' });
+    emit({ type: 'log', message: `Running npm install --global ${OPENCODE_NPM_PACKAGE}.` });
+    installLog.start();
+    child = spawnOpenCodeInstaller();
+    opencodeInstallInFlight = child;
+
+    const onLine = (line) => {
+      const text = line.trimEnd();
+      if (text) emit({ type: 'log', message: text });
+    };
+    const stdoutReader = createLineReader(onLine, { splitRe: /[\r\n]+/ });
+    const stderrReader = createLineReader(onLine, { splitRe: /[\r\n]+/ });
+    child.stdout.on('data', stdoutReader.push);
+    child.stderr.on('data', stderrReader.push);
+    child.on('error', (err) => {
+      if (finished) return;
+      finished = true;
+      if (opencodeInstallInFlight === child) opencodeInstallInFlight = null;
+      emit({ type: 'error', message: `OpenCode installer failed to start: ${err.message}` });
+      safeEnd();
+    });
+    // The post-install PATH check is deliberately stronger than npm's exit
+    // code. A successful global write whose bin directory is absent from PM2's
+    // PATH would otherwise recreate the same opaque agent-start failure.
+    child.on('close', async (code) => {
+      if (finished) return;
+      try {
+        stdoutReader.flush();
+        stderrReader.flush();
+        finished = true;
+        if (opencodeInstallInFlight === child) opencodeInstallInFlight = null;
+        const installed = code === 0 && (await getOpenCodeInstallStatus()).installed;
+        if (installed) {
+          emit({ type: 'complete', message: 'OpenCode is installed and available to PortOS.' });
+        } else if (code === 0) {
+          emit({ type: 'error', message: 'npm completed, but OpenCode is not on PortOS\'s PATH. Restart PortOS or add npm\'s global bin directory to PATH, then try again.' });
+        } else {
+          emit({ type: 'error', message: `OpenCode installer exited with code ${code}.` });
+        }
+        safeEnd();
+      } catch (err) {
+        // Child-process completion runs outside Express's request lifecycle.
+        console.error(`❌ OpenCode install completion check failed: ${err.message}`);
+        emit({ type: 'error', message: `OpenCode install completion check failed: ${err.message}` });
+        safeEnd();
+      }
+    });
   }));
 
   // Provider status routes MUST be defined before toolkit routes,

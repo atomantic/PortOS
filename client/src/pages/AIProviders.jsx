@@ -22,6 +22,7 @@ import CodeReviewDefaultsPanel from '../components/providers/CodeReviewDefaultsP
 import EffortSelect from '../components/cos/EffortSelect';
 import Modal from '../components/ui/Modal';
 import { FormField } from '../components/ui/FormField';
+import RuntimeInstallModal from '../components/install/RuntimeInstallModal';
 
 // One phrasing for "this command isn't on the CoS Agent Runner's allowlist",
 // shared by the provider-card badge tooltip and the editor's inline banner.
@@ -68,6 +69,10 @@ export default function AIProviders() {
   const [sampleProviders, setSampleProviders] = useState([]);
   const [loadingSamples, setLoadingSamples] = useState(false);
   const [addingSample, setAddingSample] = useState({});
+  // `null` means the availability endpoint was not reached (for example, an
+  // older server during an upgrade), distinct from a confirmed missing CLI.
+  const [opencodeInstallStatus, setOpenCodeInstallStatus] = useState(null);
+  const [showOpenCodeInstaller, setShowOpenCodeInstaller] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -103,14 +108,15 @@ export default function AIProviders() {
     setLoading(true);
     setLoadError(false);
     let providersFailed = false;
-    const [providersData, appsData, runsData, statusData] = await Promise.all([
+    const [providersData, appsData, runsData, statusData, opencodeData] = await Promise.all([
       api.getProviders().catch(() => {
         providersFailed = true;
         return null;
       }),
       api.getApps().catch(() => []),
       api.getRuns(20).catch(() => ({ runs: [] })),
-      api.getProviderStatuses().catch(() => ({ providers: {} }))
+      api.getProviderStatuses().catch(() => ({ providers: {} })),
+      api.getOpenCodeInstallStatus({ silent: true }).catch(() => null),
     ]);
     if (providersFailed || !providersData) {
       setLoadError(true);
@@ -129,6 +135,9 @@ export default function AIProviders() {
     setApps(appsData);
     setRuns(runsData.runs || []);
     setStatuses(statusData.providers || {});
+    setOpenCodeInstallStatus(opencodeData && typeof opencodeData.installed === 'boolean'
+      ? opencodeData
+      : null);
     setLoading(false);
   };
 
@@ -281,6 +290,11 @@ export default function AIProviders() {
     }
   };
 
+  const handleOpenCodeInstallComplete = () => {
+    toast.success('OpenCode CLI installed and ready to test');
+    loadData();
+  };
+
   const selectedRunProvider = providers.find(p => p.id === activeProviderId);
   const runProviderIsTui = isTuiProvider(selectedRunProvider);
 
@@ -331,6 +345,39 @@ export default function AIProviders() {
           </button>
         </div>
       </div>
+
+      {opencodeInstallStatus && (
+        <div className={`rounded-xl border p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
+          opencodeInstallStatus.installed
+            ? 'border-port-success/40 bg-port-success/5'
+            : 'border-port-warning/40 bg-port-warning/5'
+        }`}>
+          <div className="min-w-0">
+            <h2 className="text-base font-semibold text-white">OpenCode CLI</h2>
+            {opencodeInstallStatus.installed ? (
+              <p className="mt-1 text-sm text-port-success">Available on PortOS&apos;s PATH. OpenCode CLI and TUI providers can run.</p>
+            ) : (
+              <>
+                <p className="mt-1 text-sm text-gray-300">Required by OpenCode CLI and TUI providers. Install it here before sending an OpenCode agent task.</p>
+                {!opencodeInstallStatus.npmAvailable && (
+                  <p className="mt-1 text-xs text-port-warning">npm is not available on PortOS&apos;s PATH, so this host cannot install OpenCode from the page.</p>
+                )}
+              </>
+            )}
+          </div>
+          {!opencodeInstallStatus.installed && (
+            <button
+              type="button"
+              onClick={() => setShowOpenCodeInstaller(true)}
+              disabled={!opencodeInstallStatus.npmAvailable}
+              className="min-h-[44px] shrink-0 px-4 py-2 rounded-lg text-sm font-medium bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed"
+              title={opencodeInstallStatus.npmAvailable ? 'Install OpenCode CLI with npm' : 'npm is required to install OpenCode from this page'}
+            >
+              Install OpenCode
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Sample Providers Panel */}
       {showSamples && (
@@ -782,6 +829,15 @@ export default function AIProviders() {
           onSave={() => { setShowForm(false); setEditingProvider(null); loadData(); }}
         />
       )}
+      <RuntimeInstallModal
+        open={showOpenCodeInstaller}
+        runtime="opencode"
+        label="OpenCode CLI"
+        onClose={() => setShowOpenCodeInstaller(false)}
+        onComplete={handleOpenCodeInstallComplete}
+        installUrlBase="/api/providers/opencode/install"
+        description="Installing the OpenCode CLI with npm. This downloads the current OpenCode package."
+      />
       </div>
     </div>
   );

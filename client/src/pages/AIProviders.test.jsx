@@ -7,6 +7,7 @@ const api = vi.hoisted(() => ({
   getApps: vi.fn(),
   getRuns: vi.fn(),
   getProviderStatuses: vi.fn(),
+  getOpenCodeInstallStatus: vi.fn(),
   getSampleProviders: vi.fn(),
   createProvider: vi.fn(),
   updateProvider: vi.fn(),
@@ -38,6 +39,9 @@ vi.mock('../components/settings/SettingsTabsHeader', () => ({
 vi.mock('../components/providers/CodeReviewDefaultsPanel', () => ({
   default: () => <div data-testid="code-review-defaults-panel" />,
 }));
+vi.mock('../components/install/RuntimeInstallModal', () => ({
+  default: ({ open }) => open ? <div data-testid="opencode-install-modal" /> : null,
+}));
 
 import AIProviders from './AIProviders';
 
@@ -53,6 +57,39 @@ describe('AIProviders page load error handling', () => {
     api.getApps.mockResolvedValue([]);
     api.getRuns.mockResolvedValue({ runs: [] });
     api.getProviderStatuses.mockResolvedValue({ providers: {} });
+    api.getOpenCodeInstallStatus.mockResolvedValue({ installed: false, npmAvailable: true });
+  });
+
+  it('offers an in-page OpenCode install when the CLI is missing', async () => {
+    api.getProviders.mockResolvedValue({ providers: [], activeProvider: null });
+
+    renderPage();
+
+    expect(await screen.findByText('OpenCode CLI')).toBeInTheDocument();
+    const install = screen.getByRole('button', { name: 'Install OpenCode' });
+    expect(install).toBeEnabled();
+    fireEvent.click(install);
+    expect(screen.getByTestId('opencode-install-modal')).toBeInTheDocument();
+  });
+
+  it('reports OpenCode as ready instead of offering another install', async () => {
+    api.getProviders.mockResolvedValue({ providers: [], activeProvider: null });
+    api.getOpenCodeInstallStatus.mockResolvedValue({ installed: true, npmAvailable: true });
+
+    renderPage();
+
+    expect(await screen.findByText(/Available on PortOS's PATH/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Install OpenCode' })).not.toBeInTheDocument();
+  });
+
+  it('explains why the install action is unavailable without npm', async () => {
+    api.getProviders.mockResolvedValue({ providers: [], activeProvider: null });
+    api.getOpenCodeInstallStatus.mockResolvedValue({ installed: false, npmAvailable: false });
+
+    renderPage();
+
+    expect(await screen.findByText(/npm is not available on PortOS's PATH/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Install OpenCode' })).toBeDisabled();
   });
 
   it('renders provider list when api.getProviders succeeds with data', async () => {
@@ -120,6 +157,7 @@ describe('handleAddSample error handling', () => {
     api.getApps.mockResolvedValue([]);
     api.getRuns.mockResolvedValue({ runs: [] });
     api.getProviderStatuses.mockResolvedValue({ providers: {} });
+    api.getOpenCodeInstallStatus.mockResolvedValue({ installed: false, npmAvailable: true });
     api.getProviders.mockResolvedValue({
       providers: [],
       activeProvider: null,
@@ -156,6 +194,7 @@ describe('handleAddAllSamples partial failure handling', () => {
     api.getApps.mockResolvedValue([]);
     api.getRuns.mockResolvedValue({ runs: [] });
     api.getProviderStatuses.mockResolvedValue({ providers: {} });
+    api.getOpenCodeInstallStatus.mockResolvedValue({ installed: false, npmAvailable: true });
     api.getProviders.mockResolvedValue({
       providers: [],
       activeProvider: null,
@@ -201,6 +240,7 @@ describe('CoS Agent Runner allowlist warning', () => {
     api.getApps.mockResolvedValue([]);
     api.getRuns.mockResolvedValue({ runs: [] });
     api.getProviderStatuses.mockResolvedValue({ providers: {} });
+    api.getOpenCodeInstallStatus.mockResolvedValue({ installed: false, npmAvailable: true });
   });
 
   it('badges a provider whose command is off the published allowlist', async () => {
@@ -300,6 +340,7 @@ describe('Local num_ctx field', () => {
     api.getApps.mockResolvedValue([]);
     api.getRuns.mockResolvedValue({ runs: [] });
     api.getProviderStatuses.mockResolvedValue({ providers: {} });
+    api.getOpenCodeInstallStatus.mockResolvedValue({ installed: false, npmAvailable: true });
   });
 
   const openEditorFor = async (provider) => {
