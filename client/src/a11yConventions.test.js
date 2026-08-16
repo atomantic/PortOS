@@ -574,6 +574,14 @@ function isUsableLabelAttributeValue(value) {
   return Boolean(value) && !/^(?:undefined|null|false|true)$/i.test(value);
 }
 
+// Does this wrapper instance carry a usable name in the prop its own source
+// names its label with? Every shape matcher asks it, so the three-deep read
+// (`attributeValue` → `normalizedAttributeValue` → `isUsableLabelAttributeValue`)
+// lives here rather than being respelled at each one.
+function hasUsableLabelProp(tag, labelProp) {
+  return isUsableLabelAttributeValue(normalizedAttributeValue(attributeValue(tag, labelProp)));
+}
+
 // A field wrapper can own the <label> AND take the control's id as a prop
 // instead of wrapping it (LifestyleTab.jsx's `<FieldGroup label="Sleep …"
 // htmlFor="lifestyle-sleep-hours">`). Wrapping is wrong there — an implicit
@@ -604,7 +612,7 @@ function forwardsLabelForId(src, { id }, { idProp, labelProp }, name) {
       if (hasUsableElementText(src, match.index, tag)) return true;
       continue;
     }
-    if (isUsableLabelAttributeValue(normalizedAttributeValue(attributeValue(tag, labelProp)))) return true;
+    if (hasUsableLabelProp(tag, labelProp)) return true;
   }
   return false;
 }
@@ -635,20 +643,8 @@ function hasUsableElementText(src, index, tag) {
 }
 
 function isNestedInLabel(src, index) {
-  const labels = [];
-  const re = /<\/?label\b/g;
-  let match;
-  while ((match = re.exec(src)) && match.index < index) {
-    if (match[0].startsWith('</')) {
-      labels.pop();
-      continue;
-    }
-    const tag = openingTagAt(src, match.index, '<label'.length);
-    if (!tag) continue;
-    if (!/\/\s*>$/.test(tag)) labels.push({ index: match.index, tag });
-    re.lastIndex = match.index + tag.length;
-  }
-  return labels.some(({ index: labelIndex, tag }) => hasUsableElementText(src, labelIndex, tag));
+  return openWrapperInstancesAt(src, 'label', index)
+    .some(({ index: labelIndex, tag }) => hasUsableElementText(src, labelIndex, tag));
 }
 
 function hasUsableAccessibleNameAttribute(tag, name) {
@@ -733,23 +729,35 @@ function openWrapperInstancesAt(src, name, index) {
     }
     const tag = openingTagAt(src, match.index, name.length + 1);
     if (!tag) continue;
-    re.lastIndex = match.index + tag.length;
+    const contentStart = match.index + tag.length;
+    re.lastIndex = contentStart;
     if (/\/\s*>$/.test(tag)) continue;
-    open.push({ tag, contentStart: match.index + tag.length });
+    open.push({ tag, index: match.index, contentStart });
   }
   return open;
 }
 
 // Is the control at `index` the FIRST direct child of the wrapper whose body
-// starts at `contentStart`? A cloning wrapper clones its id onto its first
+// starts at `openContentStart`? A cloning wrapper clones its id onto its first
 // React child only, so a later control (DataDog's optional custom-site input)
-// must remain actionable. The walk has to survive every JSX shape that can
-// legitimately precede or contain the control inside a wrapper body: whitespace
-// and text nodes, `{expr}` children, fragments, and self-closing tags.
-function isFirstDirectChild(src, contentStart, index) {
+// must remain actionable. The question is only ever "did ANYTHING precede the
+// control" — a boolean, not the preceding node's identity, so that a control
+// preceded by a literal `<input>` sibling can never read as the first child of
+// a wrapper that never named it. The walk has to survive every JSX shape that
+// can legitimately precede or contain the control inside a wrapper body:
+// whitespace and text nodes, `{expr}` children, fragments, self-closing tags.
+//
+// PRECONDITION: the instance must still be OPEN at `index` — feed this only a
+// `contentStart` from `openWrapperInstancesAt`. It deliberately treats a
+// depth-0 closing tag as stray markup to skip (a wrapper body can contain one),
+// so a CLOSED wrapper's body start would walk straight past its own `</Name>`
+// and report the next control as its first child. The shared stack is what
+// rules that out; a hand-rolled `indexOf` for the wrapper would not, and would
+// fail silent — the control just drops off the offender list.
+function isFirstDirectChild(src, openContentStart, index) {
   let depth = 0;
-  let firstChild = null;
-  let cursor = contentStart;
+  let sawPrecedingChild = false;
+  let cursor = openContentStart;
   while (cursor < index) {
     if (/\s/.test(src[cursor])) {
       cursor++;
@@ -760,9 +768,9 @@ function isFirstDirectChild(src, contentStart, index) {
       if (end === -1) return false;
       if (end >= index) {
         // The control lives inside this expression rather than after it.
-        return depth === 0 && firstChild === null && isDirectElementInExpression(src, cursor + 1, index);
+        return depth === 0 && !sawPrecedingChild && isDirectElementInExpression(src, cursor + 1, index);
       }
-      if (src.slice(cursor + 1, end).trim()) firstChild = firstChild || 'expression';
+      if (src.slice(cursor + 1, end).trim()) sawPrecedingChild = true;
       cursor = end + 1;
       continue;
     }
@@ -774,7 +782,7 @@ function isFirstDirectChild(src, contentStart, index) {
         nextExpression === -1 ? index : nextExpression,
         index,
       );
-      if (depth === 0 && src.slice(cursor, next).trim()) firstChild = firstChild || 'text';
+      if (depth === 0 && src.slice(cursor, next).trim()) sawPrecedingChild = true;
       cursor = next;
       continue;
     }
@@ -783,7 +791,7 @@ function isFirstDirectChild(src, contentStart, index) {
     const name = src.slice(cursor + (closing ? 2 : 1)).match(/^([A-Za-z][\w.-]*)/)?.[1];
     if (!name) {
       if (src.startsWith('<>', cursor)) {
-        if (depth === 0) firstChild = firstChild || 'fragment';
+        if (depth === 0) sawPrecedingChild = true;
         depth++;
         cursor += 2;
         continue;
@@ -805,18 +813,13 @@ function isFirstDirectChild(src, contentStart, index) {
     }
     const tag = tagBoundaryAt(src, cursor);
     if (!tag) return false;
-    if (depth === 0) firstChild = firstChild || name;
+    if (depth === 0) sawPrecedingChild = true;
     if (!tag.selfClosing) depth++;
     cursor = tag.end;
   }
-  // `firstChild === null` — rather than a comparison against `'input'` — is what
-  // makes "nothing at all preceded the control" the credited case. `firstChild`
-  // otherwise holds a real tag name, so a control preceded by a literal
-  // `<input>` sibling would read as "the control IS the first child" and be
-  // credited by a wrapper that never named it: harmless while the scan only
-  // ever asked about `<input>`, a live bypass now that a `<select>` can follow
-  // one.
-  return depth === 0 && firstChild === null && cursor === index;
+  // `cursor === index` matters as much as the rest: a walk that broke out early
+  // or overshot never proved anything about the control.
+  return depth === 0 && !sawPrecedingChild && cursor === index;
 }
 
 // The "cloned" shape: the wrapper generates the id itself and clones it onto
@@ -825,8 +828,7 @@ function isFirstDirectChild(src, contentStart, index) {
 function isNestedInLabeledCloner(src, { index }, { labelProp }, wrapperName) {
   if (index === undefined) return false;
   return openWrapperInstancesAt(src, wrapperName, index).some(({ tag, contentStart }) => (
-    isUsableLabelAttributeValue(normalizedAttributeValue(attributeValue(tag, labelProp)))
-    && isFirstDirectChild(src, contentStart, index)
+    hasUsableLabelProp(tag, labelProp) && isFirstDirectChild(src, contentStart, index)
   ));
 }
 
@@ -1213,9 +1215,7 @@ function withVirtualSources(sources, run) {
 
 function isNestedInLabelWrapper(src, { index }, { labelProp }, name) {
   if (index === undefined) return false;
-  return openWrapperInstancesAt(src, name, index).some(({ tag }) => (
-    isUsableLabelAttributeValue(normalizedAttributeValue(attributeValue(tag, labelProp)))
-  ));
+  return openWrapperInstancesAt(src, name, index).some(({ tag }) => hasUsableLabelProp(tag, labelProp));
 }
 
 // One matcher per shape `wrapperShapes` can emit. Adding a naming strategy is a
@@ -2018,18 +2018,6 @@ describe('a11y conventions', () => {
     const afterInput = field('<input type="text" />\n  <select><option>a</option></select>');
     expect(credits(afterInput, 'select')).toBe(false);
 
-    // Openness comes from the shared `openWrapperInstancesAt` scanner, so both
-    // directions of "which wrapper is still open here" need a probe. A wrapper
-    // that has already CLOSED names nothing after it — and the control has to
-    // be the first thing following the close, or the "first direct child" walk
-    // would reject it for a reason that has nothing to do with openness...
-    const afterClosedField = `import FormField from '../ui/FormField';\n<FormField label="Rounds"></FormField>\n<select><option>a</option></select>`;
-    expect(credits(afterClosedField, 'select')).toBe(false);
-    // ...while an inner labeled wrapper nested in an unlabeled outer one still
-    // names its own first child.
-    const nested = `import FormField from '../ui/FormField';\n<FormField>\n  <FormField label="Rounds">\n    <select><option>a</option></select>\n  </FormField>\n</FormField>`;
-    expect(credits(nested, 'select')).toBe(true);
-
     // Only the element the expression yields directly is cloned; a control
     // nested inside a wrapper element gets no id.
     const wrapped = field(`{isSelect ? (<select />) : (<div><input type="number" /></div>)}`);
@@ -2049,6 +2037,29 @@ describe('a11y conventions', () => {
     // Same for a locally-declared `FormField` that is not a cloning wrapper.
     const shadowed = `function FormField({ label, children }) {\n  return <div>{label}{children}</div>;\n}\n${ternary.replace(/^import[^\n]*\n/, '')}`;
     expect(credits(shadowed)).toBe(false);
+  });
+
+  it('shares one open-wrapper scanner between the implicit and cloned matchers (#4328)', () => {
+    // Both ancestor-based shapes ask `openWrapperInstancesAt` the same question,
+    // so both DIRECTIONS of it need pinning — and through BOTH matchers, or the
+    // fold that stopped the two from drifting is witnessed on one path only.
+    const implicitWrapper = 'const Field = ({ label, children }) => (\n  <label className="block"><span>{label}</span>{children}</label>\n);\n';
+    const clonedWrapper = "import FormField from '../ui/FormField';\n";
+
+    // A wrapper that has already CLOSED names nothing after it. The control has
+    // to be the first thing following the close: with a preceding sibling the
+    // cloned path would reject it via the first-direct-child walk instead, for
+    // a reason that has nothing to do with openness.
+    const afterClose = (wrapper, name) => `${wrapper}<${name} label="Rounds"></${name}>\n<select><option>a</option></select>`;
+    expect(isNamed(afterClose(implicitWrapper, 'Field'), 'select')).toBe(false);
+    expect(isNamed(afterClose(clonedWrapper, 'FormField'), 'select')).toBe(false);
+
+    // An inner labeled wrapper nested in an unlabeled outer one still names its
+    // own first child — the reason the scanner keeps EVERY open instance rather
+    // than just the outermost.
+    const nested = (wrapper, name) => `${wrapper}<${name}>\n  <${name} label="Rounds">\n    <select><option>a</option></select>\n  </${name}>\n</${name}>`;
+    expect(isNamed(nested(implicitWrapper, 'Field'), 'select')).toBe(true);
+    expect(isNamed(nested(clonedWrapper, 'FormField'), 'select')).toBe(true);
   });
 
   it('reads an apostrophe in JSX text as text, not a string opener (#4318)', () => {
