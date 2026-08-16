@@ -1,0 +1,1 @@
+- [4224] Add Apple Silicon MiniMax Music 3 MLX generation with selectable 8-bit and BF16 checkpoints.
