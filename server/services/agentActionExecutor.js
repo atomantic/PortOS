@@ -10,8 +10,8 @@ import { scheduleEvents } from './automationScheduler.js';
 import * as agentActivity from './agentActivity.js';
 import * as platformAccounts from './platformAccounts.js';
 import * as agentPersonalities from './agentPersonalities.js';
-import { MoltbookClient, checkRateLimit, isAccountSuspended } from '../integrations/moltbook/index.js';
-import { MoltworldClient } from '../integrations/moltworld/index.js';
+import { createMoltbookClient, checkRateLimit, isAccountSuspended } from '../integrations/moltbook/index.js';
+import { createMoltworldClient } from '../integrations/moltworld/index.js';
 import { generatePost, generateComment, generateReply } from './agentContentGenerator.js';
 import { findRelevantPosts, findReplyOpportunities } from './agentFeedFilter.js';
 import { sleep as delay } from '../lib/fileUtils.js';
@@ -31,7 +31,7 @@ async function executeAction(schedule, account, agent) {
     return executeMoltworldAction(action, account, agent);
   }
 
-  const client = new MoltbookClient(account.credentials.apiKey);
+  const client = createMoltbookClient(account.credentials.apiKey);
 
   switch (action.type) {
     case 'heartbeat':
@@ -406,7 +406,7 @@ async function executeMonitor(client, agent, schedule, params) {
  * Dispatch a Moltworld action
  */
 async function executeMoltworldAction(action, account, agent) {
-  const client = new MoltworldClient(
+  const client = createMoltworldClient(
     account.credentials.apiKey,
     account.credentials.agentId
   );

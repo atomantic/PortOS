@@ -175,7 +175,7 @@ router.post('/:id/test', asyncHandler(async (req, res) => {
 
   if (account.platform === 'moltbook') {
     // Test with real Moltbook API - fetch profile (read-only, no side effects)
-    const client = new moltbook.MoltbookClient(account.credentials.apiKey);
+    const client = moltbook.createMoltbookClient(account.credentials.apiKey);
     const profileResult = await client.getProfile();
     const agent = profileResult.agent || profileResult;
     const platformStatus = agent.is_claimed ? 'active' : 'pending_claim';
@@ -200,7 +200,7 @@ router.post('/:id/test', asyncHandler(async (req, res) => {
     res.json(testResult);
   } else if (account.platform === 'moltworld') {
     // Test with Moltworld API — fetch profile + balance
-    const client = new moltworld.MoltworldClient(
+    const client = moltworld.createMoltworldClient(
       account.credentials.apiKey,
       account.credentials.agentId
     );

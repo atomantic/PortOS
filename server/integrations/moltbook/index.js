@@ -19,7 +19,7 @@ export {
   clearRateLimitState
 } from './rateLimits.js';
 
-// Export a convenience client class for stateful usage
+// Export a convenience client factory for stateful usage
 import * as api from './api.js';
 import { getRateLimitStatus } from './rateLimits.js';
 
@@ -66,9 +66,6 @@ export function createMoltbookClient(apiKey) {
   };
   return client;
 }
-
-/** @deprecated Use createMoltbookClient() */
-export const MoltbookClient = createMoltbookClient;
 
 /**
  * Register a new agent on Moltbook (doesn't require an existing API key)

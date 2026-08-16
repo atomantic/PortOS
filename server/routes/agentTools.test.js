@@ -32,7 +32,7 @@ vi.mock('../services/agentFeedFilter.js', () => fnMap([
 ]));
 vi.mock('../services/agentPublished.js', () => fnMap(['collectPublishedPosts']));
 
-// MoltbookClient is a factory; checkRateLimit gates the engage loop's writes.
+// createMoltbookClient is a factory; checkRateLimit gates the engage loop's writes.
 const moltbookClient = vi.hoisted(() => ({
   upvote: vi.fn(() => Promise.resolve({})),
   createComment: vi.fn(() => Promise.resolve({ id: 'c1' })),
@@ -42,9 +42,7 @@ const moltbookClient = vi.hoisted(() => ({
 }));
 const checkRateLimitMock = vi.hoisted(() => vi.fn(() => ({ allowed: true })));
 vi.mock('../integrations/moltbook/index.js', () => ({
-  // The route calls `new MoltbookClient(apiKey)`; a plain function returning
-  // the shared mock client is constructable (new returns the object).
-  MoltbookClient: function MoltbookClient() { return moltbookClient; },
+  createMoltbookClient: () => moltbookClient,
   checkRateLimit: checkRateLimitMock,
 }));
 

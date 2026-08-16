@@ -1,0 +1,1 @@
+- Retired the unused Moltbook/Moltworld class aliases and pinned the services README catalog.

@@ -44,13 +44,13 @@ vi.mock('./agentPersonalities.js', () => ({
 }));
 
 vi.mock('../integrations/moltbook/index.js', () => ({
-  MoltbookClient: vi.fn(function () { return mockMoltbookClient; }),
+  createMoltbookClient: vi.fn(() => mockMoltbookClient),
   checkRateLimit: vi.fn(() => ({ allowed: true })),
   isAccountSuspended: vi.fn(() => false)
 }));
 
 vi.mock('../integrations/moltworld/index.js', () => ({
-  MoltworldClient: vi.fn(function () { return mockMoltworldClient; })
+  createMoltworldClient: vi.fn(() => mockMoltworldClient)
 }));
 
 vi.mock('./agentContentGenerator.js', () => ({
@@ -67,8 +67,6 @@ vi.mock('./agentFeedFilter.js', () => ({
 import * as agentActivity from './agentActivity.js';
 import * as platformAccounts from './platformAccounts.js';
 import * as agentPersonalities from './agentPersonalities.js';
-import { MoltbookClient, checkRateLimit, isAccountSuspended } from '../integrations/moltbook/index.js';
-import { MoltworldClient } from '../integrations/moltworld/index.js';
 import { generatePost, generateComment, generateReply } from './agentContentGenerator.js';
 import { findRelevantPosts, findReplyOpportunities } from './agentFeedFilter.js';
 import { init } from './agentActionExecutor.js';

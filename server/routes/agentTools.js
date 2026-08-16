@@ -24,7 +24,7 @@ import * as agentActivity from '../services/agentActivity.js';
 import * as agentDrafts from '../services/agentDrafts.js';
 import { generatePost, generateComment, generateReply } from '../services/agentContentGenerator.js';
 import { findRelevantPosts } from '../services/agentFeedFilter.js';
-import { MoltbookClient } from '../integrations/moltbook/index.js';
+import { createMoltbookClient } from '../integrations/moltbook/index.js';
 import { collectPublishedPosts } from '../services/agentPublished.js';
 import { sleep } from '../lib/fileUtils.js';
 
@@ -35,7 +35,7 @@ const MOLTBOOK_ACTION_DELAY_MS = 1500;
 const router = Router();
 
 /**
- * Get authenticated MoltbookClient for an account
+ * Get an authenticated Moltbook client for an account
  */
 async function getClientAndAgent(accountId, agentId) {
   const account = await platformAccounts.getAccountWithCredentials(accountId);
@@ -51,7 +51,7 @@ async function getClientAndAgent(accountId, agentId) {
     throw new ServerError('Agent not found', { status: 404, code: 'NOT_FOUND' });
   }
 
-  const client = new MoltbookClient(account.credentials.apiKey);
+  const client = createMoltbookClient(account.credentials.apiKey);
   return { client, agent, account };
 }
 
@@ -242,7 +242,7 @@ router.get('/feed', asyncHandler(async (req, res) => {
     throw new ServerError('Account not found', { status: 404, code: 'NOT_FOUND' });
   }
 
-  const client = new MoltbookClient(account.credentials.apiKey);
+  const client = createMoltbookClient(account.credentials.apiKey);
   const feed = await client.getFeed(sort, parseInt(limit, 10));
   res.json(feed);
 }));
@@ -277,7 +277,7 @@ router.get('/submolts', asyncHandler(async (req, res) => {
     throw new ServerError('Account not found', { status: 404, code: 'NOT_FOUND' });
   }
 
-  const client = new MoltbookClient(account.credentials.apiKey);
+  const client = createMoltbookClient(account.credentials.apiKey);
   const submolts = await client.getSubmolts();
   res.json(submolts);
 }));
@@ -298,7 +298,7 @@ router.get('/post/:postId', asyncHandler(async (req, res) => {
     throw new ServerError('Account not found', { status: 404, code: 'NOT_FOUND' });
   }
 
-  const client = new MoltbookClient(account.credentials.apiKey);
+  const client = createMoltbookClient(account.credentials.apiKey);
   const [post, commentsResponse] = await Promise.all([
     client.getPost(postId),
     client.getComments(postId)
@@ -325,7 +325,7 @@ router.get('/rate-limits', asyncHandler(async (req, res) => {
     throw new ServerError('Account not found', { status: 404, code: 'NOT_FOUND' });
   }
 
-  const client = new MoltbookClient(account.credentials.apiKey);
+  const client = createMoltbookClient(account.credentials.apiKey);
   const rateLimits = client.getRateLimitStatus();
   res.json(rateLimits);
 }));

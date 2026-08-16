@@ -9,7 +9,8 @@ either `import * as api from '.../services/api'` or `import { specificFn } from 
 
 This directory has no `index.js` barrel because every file already follows the `apiX.js`
 naming convention, and `api.js` already aggregates them. When you add a new `apiX.js`,
-add it to `api.js` and add a row here.
+add it to `api.js` and add a row here. `index.test.js` fails if either side drifts
+(or if a non-api helper is added without a README row).
 
 ## Discovery rule
 
@@ -79,6 +80,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiMortalLoom.js` | Mortality tracking. |
 | `apiMoodBoard.js` | Mood boards (inspiration canvas + items). |
 | `apiTribe.js` | Tribe people (relationship rings + contacts). |
+| `apiTimeline.js` | Human-activity timeline: `/timeline/day` + `/timeline/events`. |
 | `apiCalendar.js` | Calendar events. |
 | `apiMessages.js` | Messages / notifications + iMessage manager (#2413). |
 | `apiStackerNews.js` | Stacker News account, territory, review-action, and safe analysis APIs. |

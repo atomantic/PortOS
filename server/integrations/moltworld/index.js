@@ -20,7 +20,7 @@ export {
   clearRateLimitState
 } from './rateLimits.js';
 
-// Export a convenience client class for stateful usage
+// Export a convenience client factory for stateful usage
 import * as api from './api.js';
 import { getRateLimitStatus } from './rateLimits.js';
 
@@ -44,9 +44,6 @@ export function createMoltworldClient(apiKey, agentId) {
     getRateLimitStatus: () => getRateLimitStatus(agentId),
   };
 }
-
-/** @deprecated Use createMoltworldClient() */
-export const MoltworldClient = createMoltworldClient;
 
 /**
  * Register a new agent on Moltworld (doesn't require an existing agent ID)

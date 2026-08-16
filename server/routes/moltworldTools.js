@@ -11,13 +11,13 @@ import { validateRequest, moltworldJoinSchema, moltworldBuildSchema, moltworldEx
 import * as platformAccounts from '../services/platformAccounts.js';
 import * as agentPersonalities from '../services/agentPersonalities.js';
 import * as agentActivity from '../services/agentActivity.js';
-import { MoltworldClient } from '../integrations/moltworld/index.js';
+import { createMoltworldClient } from '../integrations/moltworld/index.js';
 import * as moltworldQueue from '../services/moltworldQueue.js';
 
 const router = Router();
 
 /**
- * Get authenticated MoltworldClient for an account
+ * Get an authenticated Moltworld client for an account
  */
 async function getClientAndAgent(accountId, agentId) {
   const account = await platformAccounts.getAccountWithCredentials(accountId);
@@ -35,7 +35,7 @@ async function getClientAndAgent(accountId, agentId) {
 
   // Moltworld uses agentId for all API calls; fall back to apiKey which serves as the agent identifier
   const moltworldAgentId = account.credentials.agentId || account.credentials.apiKey;
-  const client = new MoltworldClient(
+  const client = createMoltworldClient(
     account.credentials.apiKey,
     moltworldAgentId
   );
