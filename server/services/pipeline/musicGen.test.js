@@ -26,6 +26,7 @@ import {
   DEFAULT_ENGINE_ID,
   MUSICGEN_MODELS,
   AUDIOLDM2_MODELS,
+  MINIMAX_MUSIC3_MLX_MODELS,
   DEFAULT_MUSICGEN_MODEL_ID,
   DEFAULT_AUDIOLDM2_MODEL_ID,
   MIN_DURATION_SEC,
@@ -72,7 +73,7 @@ describe('AUDIOLDM2_MODELS registry', () => {
 
 describe('ENGINES backend registry', () => {
   it('exposes all backends with the fields the route + UI consume', () => {
-    expect(Object.keys(ENGINES).sort()).toEqual(['acestep', 'acestep15', 'audioldm2', 'minimax-music3', 'musicgen']);
+    expect(Object.keys(ENGINES).sort()).toEqual(['acestep', 'acestep15', 'audioldm2', 'minimax-music3', 'minimax-music3-mlx', 'musicgen']);
     for (const engine of Object.values(ENGINES)) {
       expect(typeof engine.id).toBe('string');
       expect(typeof engine.name).toBe('string');
@@ -106,6 +107,23 @@ describe('ENGINES backend registry', () => {
     expect(ENGINES.acestep15.models).toEqual([expect.objectContaining({ repo: 'ACE-Step/Ace-Step1.5' })]);
     expect(ENGINES.acestep15.scriptPath).toMatch(/generate_acestep15\.py$/);
     expect(ENGINES.acestep.models[0].repo).toBe('ACE-Step/ACE-Step-v1-3.5B');
+  });
+
+  it('offers both pinned MLX MiniMax variants with 8-bit as the default', () => {
+    expect(ENGINES['minimax-music3-mlx']).toMatchObject({
+      id: 'minimax-music3-mlx',
+      defaultModelId: 'minimax-music3-mlx-8bit',
+      installEnv: 'INSTALL_MINIMAX_MUSIC3_MLX',
+      lyrics: true,
+      customModels: false,
+      fixedModelInstall: true,
+      supportsModelRevision: true,
+      requiresPlatform: { platform: 'darwin', arch: 'arm64' },
+    });
+    expect(MINIMAX_MUSIC3_MLX_MODELS).toEqual([
+      expect.objectContaining({ id: 'minimax-music3-mlx-8bit', repo: 'mlx-community/MiniMax-Music3-8bit', revision: expect.stringMatching(/^[0-9a-f]{40}$/) }),
+      expect.objectContaining({ id: 'minimax-music3-mlx-bf16', repo: 'mlx-community/MiniMax-Music3-bf16', revision: expect.stringMatching(/^[0-9a-f]{40}$/) }),
+    ]);
   });
 
   it('musicgen window mirrors the legacy module-level constants', () => {
@@ -174,6 +192,19 @@ describe('buildSidecarArgs', () => {
     expect(args).toContain('MiniMaxAI/MiniMax-Music3');
     expect(args.slice(args.indexOf('--duration'), args.indexOf('--duration') + 2)).toEqual(['--duration', '300']);
     expect(args.slice(args.indexOf('--lyrics'), args.indexOf('--lyrics') + 2)).toEqual(['--lyrics', 'Example lyrics']);
+  });
+
+  it('pins the selected MLX checkpoint revision in the sidecar args', () => {
+    const { args } = buildSidecarArgs({
+      engineId: 'minimax-music3-mlx', pythonPath: '/venv/python', repo: 'mlx-community/MiniMax-Music3-8bit',
+      revision: '10aa4ca578d04c6f5256c1bc22fc8405a09602b5', prompt: 'bright pop', lyrics: '[verse] Example',
+      durationSec: 30, outputPath: '/tmp/out.wav',
+    });
+    expect(args.slice(args.indexOf('--revision'), args.indexOf('--revision') + 2)).toEqual([
+      '--revision', '10aa4ca578d04c6f5256c1bc22fc8405a09602b5',
+    ]);
+    expect(args[0]).toMatch(/generate_minimax_music3_mlx\.py$/);
+    expect(args).toContain('--lyrics');
   });
   const base = {
     pythonPath: '/venv/bin/python3',
@@ -310,6 +341,7 @@ const h = vi.hoisted(() => ({
   musicgenPython: '/fake/venv-musicgen/bin/python3',
   audioldm2Python: '/fake/venv-audioldm2/bin/python3',
   minimaxMusic3Python: '/fake/venv-minimax-music3/bin/python3',
+  minimaxMusic3MlxPython: '/fake/venv-minimax-music3-mlx/bin/python3',
   // isEngineHealthy's import probe: which interpreters it ran, and whether the
   // import succeeded (a half-built venv exits non-zero).
   probeCalls: [],
@@ -389,6 +421,7 @@ vi.mock('../../lib/pythonSetup.js', async () => {
     resolveMusicgenPython: () => h.musicgenPython,
     resolveAudioldm2Python: () => h.audioldm2Python,
     resolveMinimaxMusic3Python: () => h.minimaxMusic3Python,
+    resolveMinimaxMusic3MlxPython: () => h.minimaxMusic3MlxPython,
   };
 });
 
@@ -404,6 +437,7 @@ beforeEach(() => {
   h.musicgenPython = '/fake/venv-musicgen/bin/python3';
   h.audioldm2Python = '/fake/venv-audioldm2/bin/python3';
   h.minimaxMusic3Python = '/fake/venv-minimax-music3/bin/python3';
+  h.minimaxMusic3MlxPython = '/fake/venv-minimax-music3-mlx/bin/python3';
   h.probeCalls.length = 0;
   h.probeOk = true;
   h.osPlatform = 'darwin';
@@ -438,6 +472,25 @@ describe('generateMusic backend selection', () => {
 
     const duration = spawnCalls[0].args[spawnCalls[0].args.indexOf('--duration') + 1];
     expect(duration).toBe('120');
+  });
+
+  it('routes MiniMax Music 3 MLX to its sibling venv and pins the selected checkpoint', async () => {
+    await generateMusic({
+      prompt: 'warm cinematic pop',
+      lyrics: '[verse]\nExample words',
+      engine: 'minimax-music3-mlx',
+      modelId: 'minimax-music3-mlx-bf16',
+      durationSec: 30,
+    });
+    expect(spawnCalls).toHaveLength(1);
+    expect(spawnCalls[0].bin).toBe('/fake/venv-minimax-music3-mlx/bin/python3');
+    expect(spawnCalls[0].args[0]).toMatch(/generate_minimax_music3_mlx\.py$/);
+    expect(spawnCalls[0].args.slice(spawnCalls[0].args.indexOf('--model'), spawnCalls[0].args.indexOf('--model') + 2)).toEqual([
+      '--model', 'mlx-community/MiniMax-Music3-bf16',
+    ]);
+    expect(spawnCalls[0].args.slice(spawnCalls[0].args.indexOf('--revision'), spawnCalls[0].args.indexOf('--revision') + 2)).toEqual([
+      '--revision', '83a5f2d365673689df5c8f36e21e108751fd92ea',
+    ]);
   });
 
   it('routes to the audioldm2 sidecar + venv when engine=audioldm2', async () => {

@@ -75,13 +75,19 @@ export async function listUserModels(engineId) {
 
 /**
  * The combined model list for an engine: shipped defaults (from musicGen.js)
- * first, then user-added, deduped by id. Returned shape is `{ id, name, repo? }`
+ * first, then user-added, deduped by id. Returned shape is `{ id, name, repo?, revision? }`
  * matching the shipped models so the route/UI treat them uniformly. `userAdded`
  * marks the entries this registry contributed (so the UI can offer "remove").
  */
 export async function listEngineModels(engineId) {
   const engine = getEngine(engineId);
-  const shipped = engine.models.map((m) => ({ id: m.id, name: m.name, repo: m.repo, userAdded: false }));
+  const shipped = engine.models.map((m) => ({
+    id: m.id,
+    name: m.name,
+    repo: m.repo,
+    ...(m.revision ? { revision: m.revision } : {}),
+    userAdded: false,
+  }));
   const seen = new Set(shipped.map((m) => m.id));
   const user = (await listUserModels(engine.id))
     .filter((m) => !seen.has(m.id))

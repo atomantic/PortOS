@@ -483,6 +483,30 @@ export function invalidateMinimaxMusic3Python() {
   cachedMinimaxMusic3Python = null;
 }
 
+// MiniMax Music 3's native MLX port runs in a separate venv from the CUDA
+// Diffusers runtime above. Keeping the stacks isolated prevents a torch/
+// diffusers upgrade from changing the MLX install (and vice versa).
+const MINIMAX_MUSIC3_MLX_VENV_CANDIDATES = [
+  join(HOME, '.portos', 'venv-minimax-music3-mlx', 'bin', 'python3'),
+  join(PATHS.data, 'python', 'venv-minimax-music3-mlx', 'bin', 'python3'),
+];
+
+export const MINIMAX_MUSIC3_MLX_VENV_DEFAULT = MINIMAX_MUSIC3_MLX_VENV_CANDIDATES[0];
+export const MINIMAX_MUSIC3_MLX_RUNTIME_DIR = '';
+
+let cachedMinimaxMusic3MlxPython = null;
+export function resolveMinimaxMusic3MlxPython() {
+  if (cachedMinimaxMusic3MlxPython && existsSync(cachedMinimaxMusic3MlxPython)) return cachedMinimaxMusic3MlxPython;
+  for (const p of MINIMAX_MUSIC3_MLX_VENV_CANDIDATES) {
+    if (existsSync(p)) { cachedMinimaxMusic3MlxPython = p; return p; }
+  }
+  return null;
+}
+
+export function invalidateMinimaxMusic3MlxPython() {
+  cachedMinimaxMusic3MlxPython = null;
+}
+
 // MuScriptor (audio → MIDI transcription for the Rounds workbench + Music Video
 // parsing, #reference-audio-to-midi) runs in its own venv at
 // ~/.portos/venv-muscriptor — the `muscriptor` pip package pulls its own torch

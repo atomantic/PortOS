@@ -11,6 +11,9 @@
  *     (≤30s; trained on 30s windows, degrades past that). First backend.
  *   - `audioldm2` — AudioLDM2 latent diffusion via HuggingFace `diffusers`.
  *     Long-form (well past 30s), torch on MPS/CUDA/CPU. Second backend.
+ *   - `minimax-music3` — MiniMax Music 3 via CUDA Diffusers, up to five minutes.
+ *   - `minimax-music3-mlx` — native MiniMax Music 3 on Apple Silicon via MLX,
+ *     with selectable 8-bit and BF16 checkpoints.
  *
  * An ENGINES registry holds each backend's models, duration window, sidecar
  * script, venv resolver and install hint, so the route, UI and `generateMusic`
@@ -22,8 +25,8 @@
  * `generateMusic` throws a 503 with that backend's install hint rather than a
  * bare spawn error — exactly like the FLUX.2 venv gate.
  *
- * Output: a mono WAV written into the shared music library (PATHS.music) under
- * a `music-gen-<uuid>.wav` basename, so the picker treats a generated track
+ * Output: a WAV written into the shared music library (PATHS.music) under a
+ * `music-gen-<uuid>.wav` basename, so the picker treats a generated track
  * identically to an uploaded one.
  */
 
@@ -44,6 +47,7 @@ import {
   resolveAcestepPython, ACESTEP_RUNTIME_DIR, ACESTEP_VENV_DEFAULT,
   resolveAcestep15Python, ACESTEP15_RUNTIME_DIR, ACESTEP15_VENV_DEFAULT,
   resolveMinimaxMusic3Python, MINIMAX_MUSIC3_RUNTIME_DIR, MINIMAX_MUSIC3_VENV_DEFAULT,
+  resolveMinimaxMusic3MlxPython, MINIMAX_MUSIC3_MLX_RUNTIME_DIR, MINIMAX_MUSIC3_MLX_VENV_DEFAULT,
 } from '../../lib/pythonSetup.js';
 import { getCudaCapability } from '../../lib/cudaCapability.js';
 import { inspectModelCache } from '../../lib/hfCache.js';
@@ -62,6 +66,7 @@ const AUDIOLDM2_SCRIPT = join(__dirname, '../../../scripts/generate_audioldm2.py
 const ACESTEP_SCRIPT = join(__dirname, '../../../scripts/generate_acestep.py');
 const ACESTEP15_SCRIPT = join(__dirname, '../../../scripts/generate_acestep15.py');
 const MINIMAX_MUSIC3_SCRIPT = join(__dirname, '../../../scripts/generate_minimax_music3.py');
+const MINIMAX_MUSIC3_MLX_SCRIPT = join(__dirname, '../../../scripts/generate_minimax_music3_mlx.py');
 // Back-compat alias for the pre-multi-engine `buildMusicGenArgs` default.
 const SIDECAR_SCRIPT = MUSICGEN_SCRIPT;
 
@@ -110,6 +115,26 @@ export const ACESTEP15_MODELS = Object.freeze([
 export const DEFAULT_ACESTEP15_MODEL_ID = 'ace-step-v1.5';
 export const MINIMAX_MUSIC3_MODELS = Object.freeze([
   { id: 'minimax-music3', repo: 'MiniMaxAI/MiniMax-Music3', name: 'MiniMax Music 3 (CUDA, up to 5 minutes)' },
+]);
+
+// These are immutable HF revisions because a shipped model must not silently
+// change underneath an existing install. The 8-bit conversion is the safer
+// default for general Apple-Silicon installs (~14 GB); BF16 remains selectable
+// as the larger unquantized reference (~29 GB), which is a comfortable fit on
+// the user's 128 GB Mac when fidelity is the priority.
+export const MINIMAX_MUSIC3_MLX_MODELS = Object.freeze([
+  {
+    id: 'minimax-music3-mlx-8bit',
+    repo: 'mlx-community/MiniMax-Music3-8bit',
+    revision: '10aa4ca578d04c6f5256c1bc22fc8405a09602b5',
+    name: 'MiniMax Music 3 MLX 8-bit (~14 GB, recommended default)',
+  },
+  {
+    id: 'minimax-music3-mlx-bf16',
+    repo: 'mlx-community/MiniMax-Music3-bf16',
+    revision: '83a5f2d365673689df5c8f36e21e108751fd92ea',
+    name: 'MiniMax Music 3 MLX BF16 (~29 GB, reference quality)',
+  },
 ]);
 
 /**
@@ -257,6 +282,32 @@ export const ENGINES = Object.freeze({
     customModels: false,
     fixedModelInstall: true,
     cudaRequired: true,
+  },
+  'minimax-music3-mlx': {
+    id: 'minimax-music3-mlx',
+    name: 'MiniMax Music 3 (MLX, Apple Silicon)',
+    models: MINIMAX_MUSIC3_MLX_MODELS,
+    defaultModelId: 'minimax-music3-mlx-8bit',
+    minDurationSec: 1,
+    maxDurationSec: 300,
+    defaultDurationSec: 60,
+    scriptPath: MINIMAX_MUSIC3_MLX_SCRIPT,
+    runtimeDir: MINIMAX_MUSIC3_MLX_RUNTIME_DIR,
+    resolvePython: resolveMinimaxMusic3MlxPython,
+    venvDefault: MINIMAX_MUSIC3_MLX_VENV_DEFAULT,
+    installEnv: 'INSTALL_MINIMAX_MUSIC3_MLX',
+    healthProbe: 'import mlx; from mlx_audio.music import load',
+    lyrics: true,
+    instrumentalLyrics: buildMinimaxInstrumentalLyrics,
+    autoDuration: true,
+    customModels: false,
+    fixedModelInstall: true,
+    supportsModelRevision: true,
+    requiresPlatform: {
+      platform: 'darwin',
+      arch: 'arm64',
+      label: 'macOS on Apple Silicon (MLX)',
+    },
   },
 });
 
@@ -419,16 +470,19 @@ export function buildMinimaxInstrumentalLyrics(durationSec) {
  * spawning Python. All sidecars share the same base flag contract
  * (`--model/--text/--duration/--output/--runtime-dir`), so one builder serves
  * every engine; `engineId` selects the duration window + script + runtime dir.
+ * Engines with immutable shipped snapshots can opt into `--revision` so the
+ * Python loader and the local cache inspect the same HF commit.
  * Lyric-aware engines (`engine.lyrics`, e.g. ACE-Step) additionally get
  * `--lyrics`; non-lyric engines never receive the flag (their sidecars don't
  * define it), so a stray lyrics arg can't break a MusicGen/AudioLDM2 spawn.
  */
-export function buildSidecarArgs({ engineId = DEFAULT_ENGINE_ID, pythonPath, scriptPath, runtimeDir, repo, prompt, lyrics, durationSec, outputPath }) {
+export function buildSidecarArgs({ engineId = DEFAULT_ENGINE_ID, pythonPath, scriptPath, runtimeDir, repo, revision, prompt, lyrics, durationSec, outputPath }) {
   const engine = getEngine(engineId);
   const seconds = clampDuration(durationSec, engine.id);
   const args = [
     scriptPath ?? engine.scriptPath,
     '--model', repo,
+    ...(engine.supportsModelRevision && revision ? ['--revision', revision] : []),
     // Prompts are authored in a plain textarea that many users type markdown
     // into out of habit. Every backend's text encoder tokenizes `**` and `_`
     // as literal content, so the emphasis markers become conditioning noise —
@@ -512,7 +566,7 @@ export async function generateMusic({ prompt, lyrics, engine: engineId = DEFAULT
     }
   }
   if (engine.fixedModelInstall) {
-    const cache = await inspectModelCache(model.repo).catch(() => ({ cached: false }));
+    const cache = await inspectModelCache(model.repo, { revision: model.revision }).catch(() => ({ cached: false }));
     if (!cache.cached) {
       throw new ServerError(`${engine.name} model weights are not installed. Install them from Music before generating.`, {
         status: 503, code: 'PIPELINE_MUSIC_MODEL_MISSING',
@@ -535,7 +589,7 @@ export async function generateMusic({ prompt, lyrics, engine: engineId = DEFAULT
   await ensureDir(PATHS.music);
   const filename = `music-gen-${randomUUID()}.wav`;
   const outputPath = join(PATHS.music, filename);
-  const { bin, args } = buildSidecarArgs({ engineId: engine.id, pythonPath, repo: model.repo, prompt: text, lyrics, durationSec: resolvedDuration, outputPath });
+  const { bin, args } = buildSidecarArgs({ engineId: engine.id, pythonPath, repo: model.repo, revision: model.revision, prompt: text, lyrics, durationSec: resolvedDuration, outputPath });
 
   console.log(`🎼 Generating music [${engine.id}/${model.id}] ${clampDuration(resolvedDuration, engine.id)}s: "${text.slice(0, 60)}"`);
   // The default backends use ungated HF weights (facebook/* and cvssp/*), so a

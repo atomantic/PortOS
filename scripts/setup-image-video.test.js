@@ -79,6 +79,7 @@ describe('setup-image-video venv layout handling (issue #4200)', () => {
     ['AudioLDM2', 'AUDIOLDM2_VENV', 'AUDIOLDM2_PY'],
     ['ACE-Step', 'ACESTEP_VENV', 'ACESTEP_PY'],
     ['MiniMax Music 3', 'MINIMAX_MUSIC3_VENV', 'MINIMAX_MUSIC3_PY'],
+    ['MiniMax Music 3 MLX', 'MINIMAX_MUSIC3_MLX_VENV', 'MINIMAX_MUSIC3_MLX_PY'],
     ['MuScriptor', 'MUSCRIPTOR_VENV', 'MUSCRIPTOR_PY'],
     ['FLUX.2', 'FLUX2_VENV', 'FLUX2_PY'],
   ])('%s reuses an existing Windows venv and resolves it with the helper', (_name, venv, python) => {

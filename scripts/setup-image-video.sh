@@ -16,6 +16,8 @@
 #   INSTALL_FLUX2  '1' to also bootstrap a separate venv at ~/.portos/venv-flux2 for FLUX.2-klein (default: 1 on macOS, 0 elsewhere)
 #   INSTALL_MUSICGEN '1' to bootstrap a venv at ~/.portos/venv-musicgen + clone ml-explore/mlx-examples to ~/.portos/mlx-examples for local MusicGen (MLX) background-music generation (pipeline audio stage). Default: 0; opt in with INSTALL_MUSICGEN=1 (macOS / Apple Silicon only).
 #   MLX_EXAMPLES_PIN  commit SHA of ml-explore/mlx-examples to check out for MusicGen (default: main).
+#   INSTALL_MINIMAX_MUSIC3_MLX '1' to bootstrap a separate venv at ~/.portos/venv-minimax-music3-mlx for native MiniMax Music 3 MLX generation (Music studio). Default: 0; opt in with INSTALL_MINIMAX_MUSIC3_MLX=1 (macOS / Apple Silicon only).
+#   MLX_AUDIO_PIN    commit SHA of Blaizzy/mlx-audio containing MiniMax Music 3 support (default: 784b29e2691a93ca7483147d86f61859dfaa6296).
 #   INSTALL_AUDIOLDM2 '1' to bootstrap a venv at ~/.portos/venv-audioldm2 (torch + diffusers) for local AudioLDM2 long-form background-music generation (pipeline audio stage, second backend alongside MusicGen). Default: 0; opt in with INSTALL_AUDIOLDM2=1 (runs on MPS / CUDA / CPU).
 #   INSTALL_ACESTEP '1' to bootstrap a venv at ~/.portos/venv-acestep (torch + the acestep package) for local ACE-Step full-song generation with vocals (Music studio, third backend). Default: 0; opt in with INSTALL_ACESTEP=1 (runs on MPS / CUDA / CPU; checkpoints auto-download to ~/.cache/ace-step on first run).
 #   INSTALL_ACESTEP15 '1' to bootstrap a venv at ~/.portos/venv-acestep15 (the ACE-Step 1.5 package + torch) for local ACE-Step 1.5 full-song generation (Music studio). Default: 0; opt in with INSTALL_ACESTEP15=1 (runs on MPS / CUDA / CPU; model weights are installed separately from Music).
@@ -75,7 +77,7 @@ mkdir -p "${PORTOS_DATA}/video-thumbnails"
 
 # When the user only wants a specific BYOV runtime (set via INSTALL_LTX2 /
 # INSTALL_WAN22 / INSTALL_HUNYUAN / INSTALL_MINIMAX_H3 / INSTALL_MINIMAX_H3_CUDA — or one of the self-contained MUSIC venvs
-# INSTALL_MUSICGEN / INSTALL_AUDIOLDM2 / INSTALL_ACESTEP / INSTALL_ACESTEP15 — typically from the
+# INSTALL_MUSICGEN / INSTALL_AUDIOLDM2 / INSTALL_ACESTEP / INSTALL_ACESTEP15 / INSTALL_MINIMAX_MUSIC3_MLX — typically from the
 # in-app installer), skip the mflux + legacy mlx_video preamble. Those
 # bring-your-own-venv runtimes are self-contained and don't depend on mflux;
 # running the preamble unprompted hits PEP 668 ("externally-managed-environment")
@@ -83,7 +85,7 @@ mkdir -p "${PORTOS_DATA}/video-thumbnails"
 # install ever starts — which on Linux/CPU/CUDA blocks the advertised
 # `INSTALL_ACESTEP=1 bash …` path. A bare `bash setup-image-video.sh` still
 # installs mflux as before.
-ANY_BYOV="${INSTALL_LTX2:-0}${INSTALL_LTX25:-0}${INSTALL_WAN22:-0}${INSTALL_HUNYUAN:-0}${INSTALL_MINIMAX_H3:-0}${INSTALL_MINIMAX_H3_CUDA:-0}${INSTALL_MUSICGEN:-0}${INSTALL_AUDIOLDM2:-0}${INSTALL_ACESTEP:-0}${INSTALL_ACESTEP15:-0}${INSTALL_MINIMAX_MUSIC3:-0}${INSTALL_MUSCRIPTOR:-0}"
+ANY_BYOV="${INSTALL_LTX2:-0}${INSTALL_LTX25:-0}${INSTALL_WAN22:-0}${INSTALL_HUNYUAN:-0}${INSTALL_MINIMAX_H3:-0}${INSTALL_MINIMAX_H3_CUDA:-0}${INSTALL_MUSICGEN:-0}${INSTALL_AUDIOLDM2:-0}${INSTALL_ACESTEP:-0}${INSTALL_ACESTEP15:-0}${INSTALL_MINIMAX_MUSIC3:-0}${INSTALL_MINIMAX_MUSIC3_MLX:-0}${INSTALL_MUSCRIPTOR:-0}"
 # "no BYOV runtime was requested" = the concatenation contains no non-zero
 # character. Matching a literal string of zeros instead made this a counting
 # exercise that the string and the variable list had to agree on — and they had
@@ -805,6 +807,41 @@ if [[ "$INSTALL_MINIMAX_MUSIC3" == "1" ]]; then
   echo "✅ MiniMax Music 3 venv ready: $MINIMAX_MUSIC3_PY"
 fi
 
+INSTALL_MINIMAX_MUSIC3_MLX="${INSTALL_MINIMAX_MUSIC3_MLX:-0}"
+if [[ "$INSTALL_MINIMAX_MUSIC3_MLX" == "1" ]]; then
+  # Native MLX MiniMax Music 3 is intentionally a sibling of the CUDA
+  # Diffusers runtime above: the packages have different dependency stacks and
+  # the MLX model loader is Apple-Silicon-only. Model weights stay a separate,
+  # explicit Music-studio download so installing a runtime never spends tens of
+  # gigabytes without the user's consent.
+  if ! is_macos || [[ "$(uname -m)" != "arm64" ]]; then
+    echo "⚠️ INSTALL_MINIMAX_MUSIC3_MLX=1 is macOS / Apple-Silicon only. Skipping." >&2
+  else
+    MINIMAX_MUSIC3_MLX_VENV="${HOME}/.portos/venv-minimax-music3-mlx"
+    mkdir -p "${HOME}/.portos"
+    if ! venv_exists "$MINIMAX_MUSIC3_MLX_VENV"; then
+      echo "📦 Creating MiniMax Music 3 MLX venv at ${MINIMAX_MUSIC3_MLX_VENV}..."
+      "$PYTHON_BIN" -m venv "$MINIMAX_MUSIC3_MLX_VENV"
+    fi
+    MINIMAX_MUSIC3_MLX_PY="$(venv_python "$MINIMAX_MUSIC3_MLX_VENV")"
+    MLX_AUDIO_PIN="${MLX_AUDIO_PIN:-784b29e2691a93ca7483147d86f61859dfaa6296}"
+    echo "📦 Installing MiniMax Music 3 MLX packages into ${MINIMAX_MUSIC3_MLX_VENV}..."
+    "$MINIMAX_MUSIC3_MLX_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
+    # MiniMax Music 3 support merged into mlx-audio after its latest release;
+    # pin the merge commit until a release containing it is published. The model
+    # cards themselves document this same upstream commit as the required API.
+    "$MINIMAX_MUSIC3_MLX_PY" -m pip install --upgrade \
+      "mlx-audio @ git+https://github.com/Blaizzy/mlx-audio.git@${MLX_AUDIO_PIN}" \
+      "huggingface_hub[hf_xet]"
+    if ! "$MINIMAX_MUSIC3_MLX_PY" -c "import mlx; from mlx_audio.music import load" 2>/dev/null; then
+      echo "❌ MiniMax Music 3 MLX venv built but 'import mlx; from mlx_audio.music import load' failed." >&2
+      echo "   Check that mlx-audio installed cleanly in ${MINIMAX_MUSIC3_MLX_VENV}." >&2
+      exit 1
+    fi
+    echo "✅ MiniMax Music 3 MLX venv ready: $MINIMAX_MUSIC3_MLX_PY (mlx-audio @ ${MLX_AUDIO_PIN:0:12})"
+  fi
+fi
+
 INSTALL_MUSCRIPTOR="${INSTALL_MUSCRIPTOR:-0}"
 if [[ "$INSTALL_MUSCRIPTOR" == "1" ]]; then
   # Local audio → MIDI transcription for the Rounds workbench + Music Video
@@ -927,6 +964,9 @@ if [[ "$INSTALL_MINIMAX_H3" == "1" ]]; then
 fi
 if [[ "$INSTALL_MUSICGEN" == "1" ]] && is_macos; then
   echo "   MusicGen:  ${HOME}/.portos/venv-musicgen/bin/python3 (separate venv, MLX runtime @ ${HOME}/.portos/mlx-examples/musicgen)"
+fi
+if [[ "$INSTALL_MINIMAX_MUSIC3_MLX" == "1" ]] && is_macos && [[ "$(uname -m)" == "arm64" ]]; then
+  echo "   MiniMax Music 3 MLX: ${MINIMAX_MUSIC3_MLX_PY} (separate venv, mlx-audio; weights install separately in Music)"
 fi
 if [[ "$INSTALL_AUDIOLDM2" == "1" ]]; then
   echo "   AudioLDM2: ${AUDIOLDM2_PY} (separate venv, diffusers — long-form audio)"

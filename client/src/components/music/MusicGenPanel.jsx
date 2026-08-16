@@ -1,7 +1,8 @@
 /**
  * MusicGenPanel — on-device music generation for the Track editor.
  *
- * Lets the user pick a generation engine (MusicGen / AudioLDM2 / ACE-Step),
+ * Lets the user pick a generation engine (MusicGen / AudioLDM2 / ACE-Step /
+ * MiniMax Music 3 MLX),
  * pick or install a model, and Generate audio from the track's prompt (+ lyrics
  * for lyric-aware engines like ACE-Step). On success the parent receives the
  * updated track (the server attaches the audio + gen metadata).
@@ -23,15 +24,15 @@ import {
 } from '../../services/api';
 import RuntimeInstallModal from '../install/RuntimeInstallModal';
 
-function engineSetupMessage(engine) {
+function engineSetupMessage(engine, selectedModelReady = true) {
   // Host-incompatible comes first: it is the only reason that no amount of
   // installing will fix, so it must not be worded as a setup step.
   if (engine.platformSupported === false) return `${engine.name} requires ${engine.platformLabel || 'a different host'} and is unavailable on this machine.`;
   if (engine.cudaRequired && engine.cudaState === 'absent') return `${engine.name} requires an NVIDIA CUDA GPU and is unavailable on this host.`;
   if (engine.cudaRequired && engine.cudaState === 'unknown') return `${engine.name} is disabled because CUDA availability could not be determined.`;
-  if (engine.runtimeReady === false && engine.fixedModelInstall && engine.modelReady === false) return `${engine.name} needs its runtime and model weights before generation.`;
+  if (engine.runtimeReady === false && engine.fixedModelInstall && !selectedModelReady) return `${engine.name} needs its runtime and selected model weights before generation.`;
   if (engine.runtimeReady === false) return `${engine.name} needs its runtime before generation.`;
-  if (engine.fixedModelInstall && engine.modelReady === false) return `${engine.name} model weights are not installed yet.`;
+  if (engine.fixedModelInstall && !selectedModelReady) return `${engine.name} selected model weights are not installed yet.`;
   return `${engine.name} is not installed yet. Install the runtime to enable generation.`;
 }
 
@@ -86,6 +87,11 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
   }, [generating]);
 
   const engine = useMemo(() => engines.find((e) => e.id === engineId) || null, [engines, engineId]);
+  const selectedModelReady = !engine?.fixedModelInstall
+    ? true
+    : engine?.modelReadyById
+      ? engine.modelReadyById[modelId] === true
+      : engine.modelReady === true;
   const autoDurationAvailable = supportsAutoDuration(engine);
   const lyricDuration = useMemo(() => analyzeMusicLyrics(lyrics, {
     minDurationSec: Math.max(60, engine?.defaultDurationSec || 60),
@@ -125,10 +131,12 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
     setDurationSec((d) => (d == null ? engine.defaultDurationSec : d));
   }, [engine?.id, engine?.models]);
 
-  const canGenerate = !!engine?.ready && !!prompt?.trim() && !generating;
+  const canGenerate = !!engine?.ready && selectedModelReady && !!prompt?.trim() && !generating;
 
   const handleFixedModelInstall = async () => {
-    const model = engine?.models?.find((item) => item.id === engine.defaultModelId) || engine?.models?.[0];
+    const model = engine?.models?.find((item) => item.id === modelId)
+      || engine?.models?.find((item) => item.id === engine.defaultModelId)
+      || engine?.models?.[0];
     if (!engine || !model?.repo) return;
     setInstalling(true);
     setInstallProgress({ message: `Starting ${model.name}…` });
@@ -316,7 +324,7 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
       {showRuntimeInstallHint ? (
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 rounded-lg border border-port-warning/30 bg-port-warning/10 px-3 py-2">
           <p className="text-[11px] text-port-warning">
-            {engineSetupMessage(engine)}
+            {engineSetupMessage(engine, selectedModelReady)}
           </p>
           {canInstallRuntime ? <button
             type="button"
@@ -329,8 +337,9 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
           : null}
         </div>
       ) : null}
-      {engine?.fixedModelInstall && !engine.modelReady && engine.platformSupported !== false && engine.cudaState === 'available' ? (
+      {engine?.fixedModelInstall && !selectedModelReady && engine.platformSupported !== false && engine.cudaState === 'available' ? (
         <div className="rounded-lg border border-port-border px-3 py-2">
+          {!showRuntimeInstallHint ? <p className="mb-1 text-[11px] text-port-warning">{engineSetupMessage(engine, selectedModelReady)}</p> : null}
           <button type="button" onClick={handleFixedModelInstall} disabled={installing} className="inline-flex items-center gap-2 text-xs text-port-accent disabled:opacity-50">
             {installing ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />} Install model
           </button>
@@ -346,7 +355,7 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
           type="button"
           onClick={handleGenerate}
           disabled={!canGenerate}
-          title={!prompt?.trim() ? 'Add a generation prompt' : !engine?.ready ? 'Complete engine setup first' : track?.id ? 'Generate audio' : 'Generate and create a standalone track'}
+          title={!prompt?.trim() ? 'Add a generation prompt' : !engine?.ready ? 'Complete engine setup first' : !selectedModelReady ? 'Install the selected model first' : track?.id ? 'Generate audio' : 'Generate and create a standalone track'}
           className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-accent text-white text-sm font-medium disabled:opacity-50"
         >
           {generating ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
@@ -379,7 +388,9 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
           <p className="mt-1.5 text-[11px] text-gray-500">
             {engine?.id === 'minimax-music3'
               ? 'MiniMax Music 3 does not report an exact percentage yet; a 60-second track can take tens of minutes on a 24 GB GPU.'
-              : 'Generation is still active. Longer requested durations take more time.'}
+              : engine?.id === 'minimax-music3-mlx'
+                ? 'MiniMax Music 3 MLX does not report an exact percentage yet; the first render includes model loading.'
+                : 'Generation is still active. Longer requested durations take more time.'}
           </p>
         </div>
       ) : null}
