@@ -112,6 +112,17 @@ const ANY_TAG_NAME = '[A-Za-z][\\w.-]*';
  * `name` is spliced into the pattern verbatim, so a caller that wants any
  * element at all passes `ANY_TAG_NAME`.
  *
+ * The advance steps over the WHOLE opening tag, so an element written inside an
+ * attribute EXPRESSION (`<Foo render={<span id="notes-h">Notes</span>} />`) is
+ * not visited. That only reaches a caller scanning `ANY_TAG_NAME`, since a
+ * name-specific walk lands on the nested tag directly unless it is nested in a
+ * same-named tag — which is the false positive this advance exists to stop. No
+ * such shape is in the tree today, and the failure direction is the safe one:
+ * an id the walk cannot see reads as UNRESOLVED, so the control lands on the
+ * offender list and the rule goes red, rather than being credited a name it
+ * does not have. Teaching the walk to descend into attribute expressions is a
+ * scanner of its own; do not "fix" it by dropping the advance.
+ *
  * `closers: true` additionally yields each `</Name>` as `{ closing: true, index }`
  * — no `tag`/`contentStart`, since a closing tag has neither attributes nor
  * children. Only `openWrapperInstancesAt` asks for them, to keep an open/close
