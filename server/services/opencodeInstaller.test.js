@@ -16,7 +16,7 @@ describe('OpenCode installer', () => {
     });
     expect(findCommand).toHaveBeenCalledWith('opencode');
     expect(findCommand).toHaveBeenCalledWith('npm');
-    expect(probeCommand).toHaveBeenCalledWith('/example/opencode');
+    expect(probeCommand).toHaveBeenCalledWith('/example/opencode', ['--version']);
   });
 
   it('reports a PATH-resolved but broken OpenCode CLI as unavailable', async () => {
@@ -27,7 +27,7 @@ describe('OpenCode installer', () => {
       installed: false,
       npmAvailable: true,
     });
-    expect(probeCommand).toHaveBeenCalledWith('/example/opencode');
+    expect(probeCommand).toHaveBeenCalledWith('/example/opencode', ['--version']);
   });
 
   it('spawns only the fixed npm global package install without a shell', () => {

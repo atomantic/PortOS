@@ -10,7 +10,7 @@
 import { spawn } from '../lib/childProcess.js';
 import { killProcessTree, prepareCliSpawn } from '../lib/bufferedSpawn.js';
 import { commandExists } from '../lib/commandExists.js';
-import { safeChildProcessEnv, safeChildProcessOptions, whichFirst } from '../lib/processEnv.js';
+import { findCommandOnPath, safeChildProcessEnv, safeChildProcessOptions } from '../lib/processEnv.js';
 
 const IS_WIN = process.platform === 'win32';
 
@@ -32,13 +32,17 @@ export const OPENCODE_NPM_INSTALL_ARGS = Object.freeze([
  * Paths can contain the machine account name and are not useful to the browser;
  * the boolean is the exact question the Providers page needs to answer.
  */
-export async function getOpenCodeInstallStatus({ findCommand = whichFirst, probeCommand = commandExists } = {}) {
+export async function getOpenCodeInstallStatus({ findCommand = findCommandOnPath, probeCommand = commandExists } = {}) {
   const [opencode, npm] = await Promise.all([
     findCommand(OPENCODE_COMMAND),
     findCommand('npm'),
   ]);
+  // `where opencode` can select npm's extensionless POSIX shim before the
+  // working `.cmd` wrapper on Windows. The filesystem resolver gives us the
+  // real executable; prepareCliSpawn then probes that same safe launch shape.
+  const versionProbe = opencode ? prepareCliSpawn(opencode, ['--version']) : null;
   return {
-    installed: Boolean(opencode) && Boolean(await probeCommand(opencode)),
+    installed: Boolean(versionProbe) && Boolean(await probeCommand(versionProbe.command, versionProbe.args)),
     npmAvailable: Boolean(npm),
   };
 }
