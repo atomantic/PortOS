@@ -13,7 +13,7 @@
     "lint": "biome lint --error-on-warnings src",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:ci": "vitest run --bail=1 --reporter=default --reporter=github-actions",
+    "test:ci": "vitest run --bail=1 --silent=passed-only --reporter=default --reporter=github-actions",
     "test:watch": "vitest"
   },
   "dependencies": {

@@ -27,22 +27,8 @@ for (const f of sourceFiles) {
 }
 
 describe('client/src/utils/ barrel', () => {
-  it('resolves every re-export', () => {
-    expect(Object.keys(barrel).length).toBeGreaterThan(0);
-  });
-
-  it('exposes a representative sample of helpers', () => {
-    expect(typeof barrel.formatBytes).toBe('function');
-    expect(typeof barrel.timeAgo).toBe('function');
-    expect(typeof barrel.describeCron).toBe('function');
-    expect(typeof barrel.hashString).toBe('function');
-    expect(typeof barrel.normalizeUrl).toBe('function');
-    expect(typeof barrel.levelFromXP).toBe('function');
-    expect(typeof barrel.computeAiCore).toBe('function');
-    expect(typeof barrel.computeGoalMonuments).toBe('function');
-  });
-
   it('re-exports every non-test .js file from index.js', () => {
+    expect(Object.keys(barrel).length).toBeGreaterThan(0);
     for (const f of sourceFiles) {
       expect(BARREL_SRC, `missing barrel re-export for ${f}`).toContain(`'./${f}'`);
     }

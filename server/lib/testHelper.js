@@ -153,9 +153,15 @@ export function request(app) {
  * @param {*} body - serialized into the response body via JSON.stringify
  * @param {{ ok?: boolean, status?: number }} [opts]
  */
-export function mockJsonResponse(body, { ok = true, status = 200 } = {}) {
+export function mockJsonResponse(body, { ok = true, status = 200, contentType = 'application/json' } = {}) {
   const text = JSON.stringify(body);
-  return { ok, status, text: async () => text };
+  return {
+    ok,
+    status,
+    headers: { get: (name) => name.toLowerCase() === 'content-type' ? contentType : null },
+    text: async () => text,
+    json: async () => body,
+  };
 }
 
 /**
@@ -168,8 +174,14 @@ export function mockJsonResponse(body, { ok = true, status = 200 } = {}) {
  * @param {string} [body] - returned verbatim by `text()`
  * @param {{ ok?: boolean, status?: number }} [opts]
  */
-export function mockTextResponse(body = '', { ok = true, status = 200 } = {}) {
-  return { ok, status, text: async () => body };
+export function mockTextResponse(body = '', { ok = true, status = 200, contentType = 'text/plain' } = {}) {
+  return {
+    ok,
+    status,
+    headers: { get: (name) => name.toLowerCase() === 'content-type' ? contentType : null },
+    text: async () => body,
+    json: async () => { throw new SyntaxError('Unexpected token in JSON'); },
+  };
 }
 
 /**

@@ -40,6 +40,8 @@ describe('CI test impact planner', () => {
       lint: { mode: 'skip' },
       build: false,
       smoke: false,
+      windows: false,
+      serverNative: false,
     });
   });
 
@@ -89,6 +91,7 @@ describe('CI test impact planner', () => {
       'client/biome.jsonc',
       'client/lint-no-random-uuid.grit',
       'client/lint-react-legacy-apis.grit',
+      'scripts/run-ci-tests.test.js',
     ]) {
       const plan = buildCiTestPlan([path], { trackedFiles: TRACKED });
       expect(plan.full, path).toBe(true);
@@ -270,6 +273,28 @@ describe('CI test impact planner', () => {
       lint: { mode: 'full' },
       build: true,
       smoke: true,
+      windows: true,
+      serverNative: true,
     });
+  });
+
+  it('skips Windows unless a Windows-sensitive surface changed', () => {
+    const sprites = buildCiTestPlan([
+      'server/services/sprites/atlas.js',
+    ], { trackedFiles: TRACKED });
+    expect(sprites.windows).toBe(false);
+    expect(sprites.serverNative).toBe(true);
+
+    const spawn = buildCiTestPlan([
+      'server/lib/bufferedSpawn.js',
+    ], { trackedFiles: TRACKED });
+    expect(spawn.full).toBe(false);
+    expect(spawn.windows).toBe(true);
+
+    const winHelper = buildCiTestPlan([
+      'scripts/fix-windows-console.js',
+    ], { trackedFiles: TRACKED });
+    expect(winHelper.full).toBe(false);
+    expect(winHelper.windows).toBe(true);
   });
 });

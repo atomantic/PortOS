@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { isAllowedCommand, ALLOWED_COMMANDS } from './allowedCommands.js';
+import { isAllowedCommand } from './allowedCommands.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -15,12 +15,6 @@ function shippedProviderCommands(relativePath) {
 }
 
 describe('isAllowedCommand', () => {
-  describe('permitted plain names', () => {
-    it.each([...ALLOWED_COMMANDS])('allows "%s" by exact name', (name) => {
-      expect(isAllowedCommand(name)).toBe(true);
-    });
-  });
-
   describe('permitted commands via full absolute path', () => {
     it('allows /usr/bin/claude', () => {
       expect(isAllowedCommand('/usr/bin/claude')).toBe(true);

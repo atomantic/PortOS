@@ -82,3 +82,52 @@ describe('useMediaJobProgress — canceled handling (#1791)', () => {
     await waitFor(() => expect(result.current.status).toBe('canceled'));
   });
 });
+
+describe('useMediaJobProgress — render ETA (#3801)', () => {
+  beforeEach(() => { handlers.clear(); getMediaJob.mockClear(); getMediaJob.mockResolvedValue({ status: 'running' }); });
+  afterEach(cleanup);
+
+  it('starts with no estimate', async () => {
+    const { result } = renderHook(() => useMediaJobProgress('job-1', { kind: 'video' }));
+    await settle();
+    expect(result.current.etaMs).toBeNull();
+  });
+
+  it('picks up the estimate from the started event and repeats it on progress', async () => {
+    const { result } = renderHook(() => useMediaJobProgress('job-1', { kind: 'video' }));
+    await waitFor(() => expect(handlers.has('video-gen:started')).toBe(true));
+    fire('video-gen:started', { generationId: 'job-1', totalSteps: 30, etaMs: 1_800_000 });
+    expect(result.current.etaMs).toBe(1_800_000);
+    fire('video-gen:progress', { generationId: 'job-1', progress: 0.5, etaMs: 1_800_000 });
+    expect(result.current.etaMs).toBe(1_800_000);
+  });
+
+  it('keeps the last estimate when a progress frame omits the key', async () => {
+    const { result } = renderHook(() => useMediaJobProgress('job-1', { kind: 'video' }));
+    await waitFor(() => expect(handlers.has('video-gen:started')).toBe(true));
+    fire('video-gen:started', { generationId: 'job-1', etaMs: 600_000 });
+    fire('video-gen:progress', { generationId: 'job-1', progress: 0.2 });
+    expect(result.current.etaMs).toBe(600_000);
+  });
+
+  it('treats an explicit null estimate as "unknown", not as a stale value to keep', async () => {
+    const { result } = renderHook(() => useMediaJobProgress('job-1', { kind: 'video' }));
+    await waitFor(() => expect(handlers.has('video-gen:started')).toBe(true));
+    fire('video-gen:started', { generationId: 'job-1', etaMs: 600_000 });
+    fire('video-gen:started', { generationId: 'job-1', etaMs: null });
+    expect(result.current.etaMs).toBeNull();
+  });
+
+  it('hydrates the estimate from the queue snapshot on reload', async () => {
+    getMediaJob.mockResolvedValue({ status: 'running', progress: 0.3, etaMs: 900_000 });
+    const { result } = renderHook(() => useMediaJobProgress('job-1', { kind: 'video' }));
+    await waitFor(() => expect(result.current.etaMs).toBe(900_000));
+  });
+
+  it('ignores events for a different job', async () => {
+    const { result } = renderHook(() => useMediaJobProgress('job-1', { kind: 'video' }));
+    await waitFor(() => expect(handlers.has('video-gen:started')).toBe(true));
+    fire('video-gen:started', { generationId: 'job-2', etaMs: 600_000 });
+    expect(result.current.etaMs).toBeNull();
+  });
+});

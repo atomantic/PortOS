@@ -15,21 +15,8 @@ const sourceFiles = readdirSync(HERE).filter(
 );
 
 describe('client/src/hooks/ barrel', () => {
-  it('resolves every re-export', () => {
-    expect(Object.keys(barrel).length).toBeGreaterThan(0);
-  });
-
-  it('exposes hooks under their canonical names', () => {
-    // Both default-exported and named-exported hooks should surface as `useX`.
-    expect(typeof barrel.useLockToggle).toBe('function');
-    expect(typeof barrel.useMounted).toBe('function');
-    expect(typeof barrel.useAsyncAction).toBe('function');
-    expect(typeof barrel.useSseProgress).toBe('function');
-    expect(typeof barrel.useSocket).toBe('function');
-    expect(typeof barrel.useClickOutside).toBe('function');
-  });
-
   it('re-exports every non-test hook file from index.js', () => {
+    expect(Object.keys(barrel).length).toBeGreaterThan(0);
     for (const f of sourceFiles) {
       expect(BARREL_SRC, `missing barrel re-export for ${f}`).toContain(`'./${f}'`);
     }

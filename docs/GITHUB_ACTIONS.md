@@ -27,16 +27,30 @@ PR therefore still runs the server job with that one file selected.
 
 The selected work is split across parallel jobs:
 
-- **Server tests** — full, related, or explicit feature test files.
+- **Server tests** — full, related, or explicit feature test files. Smoke-boots
+  the server on the same job when server source changed (the smoke path uses the
+  file backend under `NODE_ENV=test` and does not need Postgres). Always-run-only
+  plans skip the native-addon rebuild.
 - **Client tests and build** — affected client tests; production build whenever
-  client source changed.
-- **DB tests and server smoke** — provisions only the isolated `portos_test`
-  database and runs DB tests when database-sensitive files changed; smoke-boots
-  for server source changes.
-- **Client lint** — only changed JS/JSX files on targeted PRs, the complete
-  client tree during full CI.
+  client source changed; client lint on the same install so Biome does not pay a
+  second `npm ci`.
+- **DB tests** — provisions only the isolated `portos_test` database and runs
+  the serial DB suite when database-sensitive files changed.
+- **Windows server tests** — the same server selection, but only on full CI
+  (push to `main`, nightly, release, workflow dispatch) or when a
+  Windows-sensitive surface changed (`.ps1` / `.cmd` spawn, PowerShell BOM,
+  `bufferedSpawn`, `cos-runner`, shell/PM2, etc.). Docs-only and ordinary
+  Linux-faithful PRs skip this job. `pinPlatform('win32')` tests still run on
+  Linux.
+- **lint** — historical required-check name. The real lint step lives in the
+  client job; this job only mirrors that result.
 - **CI Gate** — always reports one stable required-check result and fails if any
   selected job failed or was cancelled.
+
+Targeted `files` / `related` plans run **one** Vitest process for the union of
+planner-selected files and Vitest's `--changed` import graph. The two sets are
+listed then merged — they cannot share one argv, because Vitest ANDs
+`--changed` with path selectors.
 
 No third-party change-filter action is used. The planner passes test paths as a
 JSON argument array to `spawnSync`, never through shell interpolation.

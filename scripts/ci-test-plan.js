@@ -26,7 +26,24 @@ const FULL_TRIGGER_RULES = [
   { re: /^client\/src\/App\.jsx$/, reason: 'client composition root changed' },
   { re: /^server\/lib\/(?:index|schemaVersions|validation)\.js$/, reason: 'shared server contract changed' },
   { re: /^scripts\/ci-test-plan(?:\.test)?\.js$/, reason: 'CI impact planner changed' },
-  { re: /^scripts\/run-ci-(?:lint|tests)\.js$/, reason: 'CI runner changed' },
+  { re: /^scripts\/run-ci-(?:lint|tests)(?:\.test)?\.js$/, reason: 'CI runner changed' },
+];
+
+// Files whose Windows behavior is not faithfully exercised by pinPlatform()
+// stubs on Linux: real .cmd spawn, PowerShell BOM, PTY wrap, path.basename
+// on backslashes. A PR that does not touch these still gets a full Windows
+// run on main / nightly / release.
+const WINDOWS_RISK_RULES = [
+  /\.(?:ps1|cmd|bat)$/i,
+  /^scripts\/fix-windows-console(?:\.test)?\.js$/,
+  /^scripts\/ps1-bom\.test\.js$/,
+  /^server\/lib\/(?:bufferedSpawn|detachedSpawn|childProcess|bashResolver|processEnv|platform|spawnCwd|cliProviderRun|grok)\b/,
+  /^server\/lib\/agentGuard\//,
+  /^server\/cos-runner\//,
+  /^server\/services\/(?:shell|pm2|appBuilder)\b/,
+  /^server\/services\/autonomousJobs\/execution\.shellSpawn/,
+  /^server\/routes\/apps\//,
+  /^server\/routes\/scaffoldVite\.js$/,
 ];
 
 // Contract guards that run on EVERY plan, whatever the impact scope selects.
@@ -205,6 +222,8 @@ export function buildCiTestPlan(changedFiles, { trackedFiles = [], forceFull = f
       lint: { mode: 'full', files: [] },
       build: true,
       smoke: true,
+      windows: true,
+      serverNative: true,
     };
   }
 
@@ -232,6 +251,8 @@ export function buildCiTestPlan(changedFiles, { trackedFiles = [], forceFull = f
       lint: { mode: 'skip', files: [] },
       build: false,
       smoke: false,
+      windows: false,
+      serverNative: false,
     };
   }
 
@@ -310,7 +331,15 @@ export function buildCiTestPlan(changedFiles, { trackedFiles = [], forceFull = f
     },
     build: hasClientSource,
     smoke: hasServerSource,
+    windows: executable.some((path) => WINDOWS_RISK_RULES.some((rule) => rule.test(path))),
+    serverNative: needsServerNative(server),
   };
+}
+
+function needsServerNative(server) {
+  if (server.mode === 'skip') return false;
+  if (server.mode !== 'files') return true;
+  return server.files.some((path) => !ALWAYS_RUN_TESTS.includes(path));
 }
 
 function fullPlan(changedFiles, reason) {
@@ -324,6 +353,8 @@ function fullPlan(changedFiles, reason) {
     lint: { mode: 'full', files: [] },
     build: true,
     smoke: true,
+    windows: true,
+    serverNative: true,
   };
 }
 
@@ -351,6 +382,8 @@ export function emitGitHubPlan(plan) {
     lint_files: JSON.stringify(plan.lint.files),
     build: plan.build,
     smoke: plan.smoke,
+    windows: plan.windows,
+    server_native: plan.serverNative,
   };
 
   Object.entries(outputs).forEach(([name, value]) => writeOutput(name, value));

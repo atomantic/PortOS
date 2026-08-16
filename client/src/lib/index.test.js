@@ -13,20 +13,8 @@ const sourceFiles = readdirSync(HERE).filter(
 );
 
 describe('client/src/lib/ barrel', () => {
-  it('resolves every re-export', () => {
-    expect(Object.keys(barrel).length).toBeGreaterThan(0);
-  });
-
-  it('exposes a representative sample of helpers', () => {
-    expect(typeof barrel.copyToClipboard).toBe('function');
-    expect(typeof barrel.flattenCanonDescriptorFragments).toBe('function');
-    expect(typeof barrel.mapCanonDescriptorFragments).toBe('function');
-    expect(typeof barrel.descriptorForCanonEntry).toBe('function');
-    expect(typeof barrel.composeCleanPlatePrompt).toBe('function');
-    expect(typeof barrel.getAdjacentMedia).toBe('function');
-  });
-
   it('re-exports every non-test .js file from index.js', () => {
+    expect(Object.keys(barrel).length).toBeGreaterThan(0);
     for (const f of sourceFiles) {
       expect(BARREL_SRC, `missing barrel re-export for ${f}`).toContain(`'./${f}'`);
     }

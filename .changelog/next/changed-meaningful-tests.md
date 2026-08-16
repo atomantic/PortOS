@@ -1,0 +1,1 @@
+- CI skips Windows and a second Vitest pass unless they add signal; tests that only re-ran a copy of the code now exercise the real modules.

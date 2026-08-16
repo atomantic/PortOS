@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createHttpClient } from './httpClient.js'
+import { mockJsonResponse, mockTextResponse } from './testHelper.js'
 
 // Mock global fetch
 const mockFetch = vi.fn()
@@ -10,25 +11,14 @@ describe('httpClient', () => {
     vi.clearAllMocks()
   })
 
-  function mockJsonResponse(data, status = 200) {
-    return {
-      ok: status >= 200 && status < 300,
-      status,
-      headers: { get: (name) => name.toLowerCase() === 'content-type' ? 'application/json' : null },
-      json: () => Promise.resolve(data),
-      text: () => Promise.resolve(JSON.stringify(data))
-    }
-  }
-
-  function mockTextResponse(text, status = 200) {
-    return {
-      ok: status >= 200 && status < 300,
-      status,
-      headers: { get: () => 'text/plain' },
-      json: () => Promise.resolve(text),
-      text: () => Promise.resolve(text)
-    }
-  }
+  const json = (data, status = 200) => mockJsonResponse(data, {
+    ok: status >= 200 && status < 300,
+    status,
+  })
+  const text = (body, status = 200) => mockTextResponse(body, {
+    ok: status >= 200 && status < 300,
+    status,
+  })
 
   describe('createHttpClient', () => {
     it('should return an object with get, post, put, delete methods', () => {
@@ -42,7 +32,7 @@ describe('httpClient', () => {
 
   describe('GET requests', () => {
     it('should make a GET request with baseURL', async () => {
-      mockFetch.mockResolvedValueOnce(mockJsonResponse({ ok: true }))
+      mockFetch.mockResolvedValueOnce(json({ ok: true }))
       const client = createHttpClient({ baseURL: 'http://localhost:3000' })
 
       const result = await client.get('/api/test')
@@ -56,7 +46,7 @@ describe('httpClient', () => {
     })
 
     it('should append query params', async () => {
-      mockFetch.mockResolvedValueOnce(mockJsonResponse([]))
+      mockFetch.mockResolvedValueOnce(json([]))
       const client = createHttpClient({ baseURL: 'http://localhost:3000' })
 
       await client.get('/items', { params: { page: 1, limit: 10 } })
@@ -67,7 +57,7 @@ describe('httpClient', () => {
     })
 
     it('should filter out null/undefined params', async () => {
-      mockFetch.mockResolvedValueOnce(mockJsonResponse([]))
+      mockFetch.mockResolvedValueOnce(json([]))
       const client = createHttpClient({ baseURL: 'http://localhost:3000' })
 
       await client.get('/items', { params: { page: 1, filter: null, sort: undefined } })
@@ -79,7 +69,7 @@ describe('httpClient', () => {
     })
 
     it('should include default headers', async () => {
-      mockFetch.mockResolvedValueOnce(mockJsonResponse({}))
+      mockFetch.mockResolvedValueOnce(json({}))
       const client = createHttpClient({
         baseURL: 'http://localhost:3000',
         headers: { 'Authorization': 'Bearer token123' }
@@ -92,7 +82,7 @@ describe('httpClient', () => {
     })
 
     it('should merge extra headers with default headers', async () => {
-      mockFetch.mockResolvedValueOnce(mockJsonResponse({}))
+      mockFetch.mockResolvedValueOnce(json({}))
       const client = createHttpClient({
         baseURL: 'http://localhost:3000',
         headers: { 'Authorization': 'Bearer token123' }
@@ -106,7 +96,7 @@ describe('httpClient', () => {
     })
 
     it('should handle text responses', async () => {
-      mockFetch.mockResolvedValueOnce(mockTextResponse('Hello World'))
+      mockFetch.mockResolvedValueOnce(text('Hello World'))
       const client = createHttpClient()
 
       const result = await client.get('/text')
@@ -116,7 +106,7 @@ describe('httpClient', () => {
 
   describe('POST requests', () => {
     it('should send JSON body', async () => {
-      mockFetch.mockResolvedValueOnce(mockJsonResponse({ id: 1 }, 201))
+      mockFetch.mockResolvedValueOnce(json({ id: 1 }, 201))
       const client = createHttpClient({ baseURL: 'http://localhost:3000' })
 
       const result = await client.post('/items', { name: 'test' })
@@ -128,7 +118,7 @@ describe('httpClient', () => {
     })
 
     it('should not override existing Content-Type header', async () => {
-      mockFetch.mockResolvedValueOnce(mockJsonResponse({}))
+      mockFetch.mockResolvedValueOnce(json({}))
       const client = createHttpClient({
         headers: { 'Content-Type': 'application/xml' }
       })
@@ -140,7 +130,7 @@ describe('httpClient', () => {
     })
 
     it('should not set Content-Type when no data provided', async () => {
-      mockFetch.mockResolvedValueOnce(mockJsonResponse({}))
+      mockFetch.mockResolvedValueOnce(json({}))
       const client = createHttpClient()
 
       await client.post('/items')
@@ -152,7 +142,7 @@ describe('httpClient', () => {
 
   describe('PUT requests', () => {
     it('should make PUT request with body', async () => {
-      mockFetch.mockResolvedValueOnce(mockJsonResponse({ updated: true }))
+      mockFetch.mockResolvedValueOnce(json({ updated: true }))
       const client = createHttpClient({ baseURL: 'http://localhost:3000' })
 
       const result = await client.put('/items/1', { name: 'updated' })
@@ -166,7 +156,7 @@ describe('httpClient', () => {
 
   describe('DELETE requests', () => {
     it('should make DELETE request', async () => {
-      mockFetch.mockResolvedValueOnce(mockJsonResponse({ deleted: true }))
+      mockFetch.mockResolvedValueOnce(json({ deleted: true }))
       const client = createHttpClient({ baseURL: 'http://localhost:3000' })
 
       const result = await client.delete('/items/1')
@@ -179,14 +169,14 @@ describe('httpClient', () => {
 
   describe('error handling', () => {
     it('should throw on non-ok response', async () => {
-      mockFetch.mockResolvedValueOnce(mockJsonResponse({ error: 'Not found' }, 404))
+      mockFetch.mockResolvedValueOnce(json({ error: 'Not found' }, 404))
       const client = createHttpClient()
 
       await expect(client.get('/missing')).rejects.toThrow('HTTP 404')
     })
 
     it('should include status and response data on error', async () => {
-      mockFetch.mockResolvedValueOnce(mockJsonResponse({ error: 'Forbidden' }, 403))
+      mockFetch.mockResolvedValueOnce(json({ error: 'Forbidden' }, 403))
       const client = createHttpClient()
 
       try {
@@ -200,7 +190,7 @@ describe('httpClient', () => {
     })
 
     it('should throw on 500 server error', async () => {
-      mockFetch.mockResolvedValueOnce(mockJsonResponse({ error: 'Internal error' }, 500))
+      mockFetch.mockResolvedValueOnce(json({ error: 'Internal error' }, 500))
       const client = createHttpClient()
 
       await expect(client.get('/error')).rejects.toThrow('HTTP 500')
@@ -209,7 +199,7 @@ describe('httpClient', () => {
 
   describe('no baseURL', () => {
     it('should work without baseURL', async () => {
-      mockFetch.mockResolvedValueOnce(mockJsonResponse({ ok: true }))
+      mockFetch.mockResolvedValueOnce(json({ ok: true }))
       const client = createHttpClient()
 
       await client.get('/api/test')

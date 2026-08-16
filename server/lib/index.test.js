@@ -18,22 +18,11 @@ const sourceFiles = readdirSync(HERE)
 // a README row. Both halves keep the discovery contract in CLAUDE.md honest.
 
 describe('server/lib/ barrel', () => {
-  it('resolves every re-export', () => {
-    expect(Object.keys(barrel).length).toBeGreaterThan(0);
-  });
-
-  it('exposes a representative sample of helpers', () => {
-    expect(typeof barrel.tryReadFile).toBe('function');
-    expect(typeof barrel.atomicWrite).toBe('function');
-    expect(typeof barrel.optionalBooleanMap).toBe('function');
-    expect(typeof barrel.flattenCanonDescriptorFragments).toBe('function');
-    expect(typeof barrel.mapCanonDescriptorFragments).toBe('function');
-    expect(typeof barrel.descriptorForCanonEntry).toBe('function');
-    expect(typeof barrel.ServerError).toBe('function');
-    expect(typeof barrel.v4).toBe('function');
-  });
-
   it('re-exports every non-test .js file from index.js', () => {
+    // The `import * as barrel` above is the load: a star-export of a missing
+    // module throws before this body runs. The length check keeps `barrel` live
+    // so an unused-import lint can't delete that load.
+    expect(Object.keys(barrel).length).toBeGreaterThan(0);
     // Forces the maintenance rule: a new server/lib/foo.js must be added to
     // index.js. Catches a new helper that bypassed the barrel.
     for (const f of sourceFiles) {

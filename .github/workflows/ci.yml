@@ -40,6 +40,8 @@ jobs:
       lint_files: ${{ steps.plan.outputs.lint_files }}
       build: ${{ steps.plan.outputs.build }}
       smoke: ${{ steps.plan.outputs.smoke }}
+      windows: ${{ steps.plan.outputs.windows }}
+      server_native: ${{ steps.plan.outputs.server_native }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -62,6 +64,8 @@ jobs:
           LINT_MODE: ${{ steps.plan.outputs.lint_mode }}
           BUILD_MODE: ${{ steps.plan.outputs.build }}
           SMOKE_MODE: ${{ steps.plan.outputs.smoke }}
+          WINDOWS_MODE: ${{ steps.plan.outputs.windows }}
+          SERVER_NATIVE: ${{ steps.plan.outputs.server_native }}
         run: |
           {
             echo "### CI impact plan"
@@ -73,6 +77,8 @@ jobs:
             echo "- Client lint: \`${LINT_MODE}\`"
             echo "- Client build: \`${BUILD_MODE}\`"
             echo "- Server smoke: \`${SMOKE_MODE}\`"
+            echo "- Windows server tests: \`${WINDOWS_MODE}\`"
+            echo "- Server native rebuild: \`${SERVER_NATIVE}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
   server:
@@ -99,23 +105,34 @@ jobs:
 
       # server/.npmrc pins ignore-scripts=true, so the native deps npm skipped
       # need the explicit allowlist rebuild to be usable (node-pty et al).
+      # Always-run-only plans (prompt-upgrade + changelog fragment guards)
+      # import no native addons, so skip the rebuild there.
       - name: Rebuild trusted native dependencies
+        if: needs.impact.outputs.server_native == 'true'
         run: node scripts/trusted-rebuilds.js server
 
       - name: Check server entry-point syntax
         run: node --check server/index.js
 
       - name: Run server tests
+        if: needs.impact.outputs.server_mode != 'skip'
         env:
           CI_TEST_MODE: ${{ needs.impact.outputs.server_mode }}
           CI_TEST_FILES: ${{ needs.impact.outputs.server_files }}
           CI_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: node scripts/run-ci-tests.js server
 
+      # Smoke-boot does not need Postgres: NODE_ENV=test selects the file
+      # backend. It does need the native rebuild (server boot loads node-pty),
+      # which is why it lives on this job rather than a third installer.
+      - name: Smoke-boot server
+        if: needs.impact.outputs.smoke == 'true'
+        run: npm run smoke
+
   client:
     name: Client tests and build
     needs: impact
-    if: needs.impact.outputs.client_mode != 'skip' || needs.impact.outputs.build == 'true'
+    if: needs.impact.outputs.client_mode != 'skip' || needs.impact.outputs.build == 'true' || needs.impact.outputs.lint_mode != 'skip'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -132,6 +149,13 @@ jobs:
       - name: Install client dependencies
         run: npm ci --prefix client
 
+      - name: Lint client
+        if: needs.impact.outputs.lint_mode != 'skip'
+        env:
+          CI_LINT_MODE: ${{ needs.impact.outputs.lint_mode }}
+          CI_LINT_FILES: ${{ needs.impact.outputs.lint_files }}
+        run: node scripts/run-ci-lint.js
+
       - name: Run client tests
         if: needs.impact.outputs.client_mode != 'skip'
         env:
@@ -145,9 +169,9 @@ jobs:
         run: npm run build --prefix client
 
   database:
-    name: DB tests and server smoke
+    name: DB tests
     needs: impact
-    if: needs.impact.outputs.db == 'true' || needs.impact.outputs.smoke == 'true'
+    if: needs.impact.outputs.db == 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -181,54 +205,46 @@ jobs:
       - name: Install server dependencies
         run: npm ci --prefix server
 
-      # server/.npmrc pins ignore-scripts=true — the smoke-boot below needs the
-      # native bindings, so run the explicit allowlist rebuild first.
+      # server/.npmrc pins ignore-scripts=true — DB suites that touch sharp /
+      # node-pty still need the explicit allowlist rebuild.
       - name: Rebuild trusted native dependencies
         run: node scripts/trusted-rebuilds.js server
 
       - name: Provision test database (portos_test)
-        if: needs.impact.outputs.db == 'true'
         run: npm run setup:db:test --prefix server
 
       - name: Run DB-backed tests (portos_test)
-        if: needs.impact.outputs.db == 'true'
         run: npm run test:db:ci --prefix server
         env:
           PGDATABASE: portos_test
 
-      - name: Smoke-boot server
-        if: needs.impact.outputs.smoke == 'true'
-        run: npm run smoke
-
   lint:
-    # Preserve the historical required-check context during the CI migration.
+    # Historical required-check name. Lint itself now runs inside the client
+    # job so we do not pay a second `npm ci --prefix client`. This job only
+    # mirrors that result so branch protection can keep requiring "lint".
     name: lint
-    needs: impact
-    if: needs.impact.outputs.lint_mode != 'skip'
+    needs: [impact, client]
+    if: always() && needs.impact.result == 'success'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-
-      - name: Use Node.js 24.x
-        uses: actions/setup-node@v7
-        with:
-          node-version: 24.x
-          cache: npm
-          cache-dependency-path: client/package-lock.json
-
-      - name: Install client dependencies
-        run: npm ci --prefix client
-
-      - name: Lint client
+      - name: Require client-job lint when it was selected
+        if: needs.impact.outputs.lint_mode != 'skip'
         env:
-          CI_LINT_MODE: ${{ needs.impact.outputs.lint_mode }}
-          CI_LINT_FILES: ${{ needs.impact.outputs.lint_files }}
-        run: node scripts/run-ci-lint.js
+          CLIENT_RESULT: ${{ needs.client.result }}
+        run: |
+          if [ "$CLIENT_RESULT" != "success" ]; then
+            echo "Lint ran inside the client job, which did not succeed ($CLIENT_RESULT)."
+            exit 1
+          fi
+
+      - name: Lint not selected
+        if: needs.impact.outputs.lint_mode == 'skip'
+        run: echo "Lint skipped by impact plan"
 
   windows-server:
     name: Windows server unit tests
     needs: impact
-    if: needs.impact.outputs.server_mode != 'skip'
+    if: needs.impact.outputs.windows == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7

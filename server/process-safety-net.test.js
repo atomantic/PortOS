@@ -15,20 +15,6 @@ const read = (rel) => readFileSync(join(__dirname, rel), 'utf8');
 // server.listen) and rather than by importing the helper and mutating the live
 // test process's listener set.
 describe('process-level safety net (#1878)', () => {
-  it('shared helper registers both unhandledRejection and uncaughtException', () => {
-    const src = read('lib/errorHandler.js');
-    expect(src).toMatch(/export function setupProcessErrorHandlers/);
-    expect(src).toMatch(/process\.on\(\s*['"]unhandledRejection['"]/);
-    expect(src).toMatch(/process\.on\(\s*['"]uncaughtException['"]/);
-  });
-
-  it('shared helper normalizes arbitrary (non-Error) rejection reasons', () => {
-    // Guards against the raw `reason.stack.split()` footgun — non-Error throw
-    // values must not make the safety-net handler itself throw.
-    const src = read('lib/errorHandler.js');
-    expect(src).toMatch(/normalizeError/);
-  });
-
   // The main server wires the net from its boot sequence (services/bootstrap.js,
   // extracted from index.js in #2839) inside the httpServer.listen callback.
   for (const rel of ['services/bootstrap.js', 'cos-runner/index.js']) {
@@ -47,7 +33,7 @@ describe('process-level safety net (#1878)', () => {
   // (`throw null`) has no `.stack`, and a deref there would mask the original and
   // skip the clean exit/flush. Invoke the actual registered uncaughtException
   // listener with `null`, with the exit timer stubbed so the test process survives.
-  it('uncaughtException handler tolerates a non-Error throw value (e.g. null)', () => {
+  it('handlers tolerate a non-Error throw / rejection reason (e.g. null)', () => {
     const setTimeoutSpy = vi.spyOn(global, 'setTimeout').mockImplementation(() => 0);
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const newListeners = (event, before) =>
@@ -59,7 +45,9 @@ describe('process-level safety net (#1878)', () => {
     const addedRej = newListeners('unhandledRejection', beforeRej);
     try {
       expect(addedExc).toHaveLength(1);
+      expect(addedRej).toHaveLength(1);
       expect(() => addedExc[0](null)).not.toThrow();
+      expect(() => addedRej[0](null, Promise.resolve())).not.toThrow();
     } finally {
       addedExc.forEach((l) => process.removeListener('uncaughtException', l));
       addedRej.forEach((l) => process.removeListener('unhandledRejection', l));

@@ -14,6 +14,7 @@ import { createInterface } from 'readline';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { parseEnvFile, upsertEnvKey } from './lib/envFile.js';
+import { parseDockerPort, parseNativePort, resolveStorageMenuChoice } from './lib/setupDbChoice.js';
 import { resolveBashBinary } from '../server/lib/bashResolver.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -24,26 +25,14 @@ const envFile = parseEnvFile(join(rootDir, '.env'));
 // user who sets PGPASSWORD in .env (without exporting it into the shell) is
 // respected the same way getMode() respects PGMODE in .env.
 const envVar = (key, fallback) => process.env[key] ?? envFile[key] ?? fallback;
-// Tolerate accidental whitespace / inline comments / non-numeric junk in
-// .env values — fall back to the canonical native port (5432) on anything
-// that doesn't parse to a finite integer, instead of letting NaN flow into
-// `psql -p` and the success log.
-const parsePgPort = (value) => {
-  const parsed = Number.parseInt(String(value).trim(), 10);
-  return Number.isFinite(parsed) ? parsed : 5432;
-};
 const PG_USER = envVar('PGUSER', 'portos');
 const PG_DATABASE = envVar('PGDATABASE', 'portos');
 const PG_PASSWORD = envVar('PGPASSWORD', 'portos');
-const PG_PORT_NATIVE = parsePgPort(envVar('PGPORT', 5432));
+const PG_PORT_NATIVE = parseNativePort(envVar('PGPORT', 5432));
 // Docker host-port mapping (docker-compose.yml maps `${PGPORT_DOCKER:-5561}:5432`).
 // Resolve it the same tolerant way so the "ready on port N" log can't lie when a
 // user overrides PGPORT_DOCKER — a misleading success port is exactly the kind of
 // "looks fine but points at the wrong place" footgun this script exists to avoid.
-const parseDockerPort = (value) => {
-  const parsed = Number.parseInt(String(value).trim(), 10);
-  return Number.isFinite(parsed) ? parsed : 5561;
-};
 const PG_PORT_DOCKER = parseDockerPort(envVar('PGPORT_DOCKER', 5561));
 
 // Environment to pass to `db.sh` and other psql-wrapping subprocesses, so
@@ -250,9 +239,7 @@ function promptStorageChoice(message, hint) {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     rl.question('   Enter choice [1/2]: ', (answer) => {
       rl.close();
-      const trimmed = answer.trim();
-      if (trimmed === '2') resolve('native');
-      else resolve('exit'); // 1 or default = they want docker, so exit to install it
+      resolve(resolveStorageMenuChoice(answer));
     });
   });
 }
