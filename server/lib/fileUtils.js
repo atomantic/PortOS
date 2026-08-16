@@ -1815,9 +1815,21 @@ export async function listDirectoryByExtension(dir, { extensions, mapEntry, requ
 // node's recursive readdir on large trees (hundreds of GB / 200k+ files).
 // Returns 0 + logs on failure (missing tool, permission denied, timeout) so
 // the Media Models endpoint stays responsive even on unusual systems instead
-// of throwing and 500ing the whole route.
-export async function dirSize(path) {
-  if (!existsSync(path)) return 0;
+// of throwing and 500ing the whole route. Counted/reporting callers can pass
+// `{ strict: true }` to reject instead, preserving failed-vs-legitimately-empty.
+export async function dirSize(path, { strict = false } = {}) {
+  if (strict) {
+    const present = await stat(path).then(
+      () => true,
+      (err) => {
+        if (err?.code === 'ENOENT') return false;
+        throw err;
+      },
+    );
+    if (!present) return 0;
+  } else if (!existsSync(path)) {
+    return 0;
+  }
   if (IS_WIN) {
     // Pass the path via an env var so a literal apostrophe in the path can't
     // close the PowerShell string and inject commands.
@@ -1826,17 +1838,28 @@ export async function dirSize(path) {
       '(Get-ChildItem -Recurse -File $Env:DIRSIZE_TARGET | Measure-Object -Property Length -Sum).Sum',
     ], { encoding: 'utf8', timeout: 60_000, env: { ...process.env, DIRSIZE_TARGET: path } }).catch((err) => ({ error: err }));
     if (result.error) {
+      if (strict) throw result.error;
       console.log(`⚠️ dirSize(${path}) failed: ${result.error.message}`);
       return 0;
     }
-    return parseInt(result.stdout.trim(), 10) || 0;
+    const bytes = parseInt(result.stdout.trim(), 10);
+    if (!Number.isFinite(bytes) || bytes < 0) {
+      if (strict) throw new Error(`Could not parse directory size for ${path}`);
+      return 0;
+    }
+    return bytes;
   }
   const result = await execFileAsync('du', ['-sk', path], { encoding: 'utf8', timeout: 60_000 }).catch((err) => ({ error: err }));
   if (result.error) {
+    if (strict) throw result.error;
     console.log(`⚠️ dirSize(${path}) failed: ${result.error.message}`);
     return 0;
   }
-  const kb = parseInt(result.stdout.split('\t')[0], 10) || 0;
+  const kb = parseInt(result.stdout.split('\t')[0], 10);
+  if (!Number.isFinite(kb) || kb < 0) {
+    if (strict) throw new Error(`Could not parse directory size for ${path}`);
+    return 0;
+  }
   return kb * 1024;
 }
 

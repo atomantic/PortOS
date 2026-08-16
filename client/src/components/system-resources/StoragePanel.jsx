@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Bot, CheckCircle2, Database, HardDrive, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react';
 import { Link } from 'react-router';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
@@ -153,6 +153,7 @@ function CandidateRows({ candidates, cleanup }) {
             <CleanupControl
               candidate={candidate}
               busy={cleanup.busyId === candidate.id}
+              disabled={cleanup.locked}
               confirming={cleanup.isConfirming(candidate.id)}
               onRequest={() => cleanup.request(candidate.id)}
               onCancel={cleanup.cancel}
@@ -169,16 +170,25 @@ function AiTriage({ report, onReport }) {
   const [effort, setEffort] = useState('');
   const [running, setRunning] = useState(false);
   const [triage, setTriage] = useState(null);
+  const reportGeneratedAtRef = useRef(report.generatedAt);
+  reportGeneratedAtRef.current = report.generatedAt;
   const {
     providers, selectedProviderId, selectedModel, availableModels,
     setSelectedProviderId, setSelectedModel, loading,
   } = useProviderModels({ silent: true, withEffort: true });
+
+  useEffect(() => {
+    setTriage((current) => (
+      current && current.reportGeneratedAt !== report.generatedAt ? null : current
+    ));
+  }, [report.generatedAt]);
 
   const run = async () => {
     if (!selectedProviderId) {
       toast.error('Choose an enabled AI provider first');
       return;
     }
+    const startingReportGeneratedAt = reportGeneratedAtRef.current;
     setRunning(true);
     const result = await api.triageSystemResources({
       providerId: selectedProviderId,
@@ -189,8 +199,8 @@ function AiTriage({ report, onReport }) {
       return null;
     });
     setRunning(false);
-    if (!result) return;
-    setTriage(result.triage);
+    if (!result || reportGeneratedAtRef.current !== startingReportGeneratedAt) return;
+    setTriage({ reportGeneratedAt: result.report.generatedAt, result: result.triage });
     onReport(result.report);
   };
 
@@ -232,8 +242,8 @@ function AiTriage({ report, onReport }) {
 
       {triage && (
         <div className="mt-5 space-y-3 border-t border-purple-500/20 pt-4">
-          <p className="text-sm leading-relaxed text-gray-200">{triage.summary}</p>
-          {triage.recommendations.map((item, index) => (
+          <p className="text-sm leading-relaxed text-gray-200">{triage.result.summary}</p>
+          {triage.result.recommendations.map((item, index) => (
             <div key={item.candidate.id} className="rounded-xl border border-port-border bg-port-bg/50 p-3">
               <div className="flex items-start gap-2">
                 <span className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full bg-purple-500/20 text-[11px] font-bold text-purple-300">{index + 1}</span>
@@ -249,9 +259,9 @@ function AiTriage({ report, onReport }) {
               </div>
             </div>
           ))}
-          {triage.cautions.length > 0 && (
+          {triage.result.cautions.length > 0 && (
             <div className="rounded-xl bg-port-warning/10 p-3 text-xs text-port-warning">
-              {triage.cautions.map((caution) => <div key={caution}>• {caution}</div>)}
+              {triage.result.cautions.map((caution) => <div key={caution}>• {caution}</div>)}
             </div>
           )}
         </div>
@@ -273,7 +283,7 @@ export default function StoragePanel({ report, loading, onRunReport, onReport, c
         <button
           type="button"
           onClick={onRunReport}
-          disabled={loading}
+          disabled={loading || cleanup.locked}
           className="inline-flex min-h-[40px] items-center justify-center gap-2 rounded-lg border border-port-border px-3 py-2 text-sm text-gray-300 transition-colors hover:bg-port-border/40 disabled:opacity-50"
         >
           <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />

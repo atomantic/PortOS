@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { useSearchParams } from 'react-router';
 import { Play, ChevronDown, ChevronRight } from 'lucide-react';
 import toast from '../../ui/Toast';
 import {
@@ -16,7 +17,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import * as api from '../../../services/api';
-import TaskItem from './TaskItem';
+import TaskItem, { taskRowId } from './TaskItem';
 import SortableTaskItem from './SortableTaskItem';
 import TaskAddForm from '../TaskAddForm';
 import { MicroGlyph, SchematicLabel } from '../../micrographics';
@@ -37,6 +38,7 @@ function SectionGlyph({ status }) {
 }
 
 export default function TasksTab({ tasks, onRefresh, providers, apps }) {
+  const [searchParams] = useSearchParams();
   const [userTasksLocal, setUserTasksLocal] = useState([]);
   const [durations, setDurations] = useState(null);
   const [showCompletedUserTasks, setShowCompletedUserTasks] = useState(false);
@@ -52,6 +54,18 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
   // Memoize task arrays to prevent unnecessary re-renders
   const userTasks = useMemo(() => tasks.user?.tasks || [], [tasks.user?.tasks]);
   const cosTasks = useMemo(() => tasks.cos?.tasks || [], [tasks.cos?.tasks]);
+  const selectedTaskId = searchParams.get('task');
+  const requestedSource = searchParams.get('source');
+  const selectedTaskSource = useMemo(() => {
+    if (!selectedTaskId) return null;
+    if (requestedSource === 'user' || requestedSource === 'internal') return requestedSource;
+    if (userTasks.some((task) => task.id === selectedTaskId)) return 'user';
+    if (cosTasks.some((task) => task.id === selectedTaskId)) return 'internal';
+    return null;
+  }, [cosTasks, requestedSource, selectedTaskId, userTasks]);
+  const isTaskSelected = (task, source) => (
+    task.id === selectedTaskId && source === selectedTaskSource
+  );
 
   // Split tasks by status for system tasks
   const pendingSystemTasks = useMemo(() =>
@@ -99,6 +113,33 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
   useEffect(() => {
     setUserTasksLocal(userTasks);
   }, [userTasks]);
+
+  // Queue summary links identify one concrete task. Completed sections are
+  // collapsed by default, so open the relevant one before attempting to focus
+  // and center the row.
+  useEffect(() => {
+    if (!selectedTaskId || !selectedTaskSource) return;
+    const selected = (selectedTaskSource === 'user' ? userTasks : cosTasks)
+      .find((task) => task.id === selectedTaskId);
+    if (selected?.status !== 'completed') return;
+    if (selectedTaskSource === 'user') setShowCompletedUserTasks(true);
+    else setShowCompletedSystemTasks(true);
+  }, [cosTasks, selectedTaskId, selectedTaskSource, userTasks]);
+
+  useEffect(() => {
+    if (!selectedTaskId || !selectedTaskSource) return;
+    const row = document.getElementById(taskRowId(selectedTaskId, selectedTaskSource));
+    if (!row) return;
+    row.scrollIntoView?.({ block: 'center' });
+    row.focus({ preventScroll: true });
+  }, [
+    cosTasks,
+    selectedTaskId,
+    selectedTaskSource,
+    showCompletedSystemTasks,
+    showCompletedUserTasks,
+    userTasksLocal,
+  ]);
 
   // Drag and drop sensors
   const sensors = useSensors(
@@ -190,7 +231,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                     >
                       <div className="space-y-1.5">
                         {pendingUserTasksLocal.map(task => (
-                          <SortableTaskItem key={task.id} task={task} onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} />
+                          <SortableTaskItem key={task.id} task={task} selected={isTaskSelected(task, 'user')} onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} />
                         ))}
                       </div>
                     </SortableContext>
@@ -210,7 +251,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                 </div>
                 <div className="p-2 space-y-1.5">
                   {activeUserTasksLocal.map(task => (
-                    <TaskItem key={task.id} task={task} onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} />
+                    <TaskItem key={task.id} task={task} selected={isTaskSelected(task, 'user')} onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} />
                   ))}
                 </div>
               </div>
@@ -227,7 +268,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                 </div>
                 <div className="p-2 space-y-1.5">
                   {blockedUserTasksLocal.map(task => (
-                    <TaskItem key={task.id} task={task} onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} />
+                    <TaskItem key={task.id} task={task} selected={isTaskSelected(task, 'user')} onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} />
                   ))}
                 </div>
               </div>
@@ -250,7 +291,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                 {showCompletedUserTasks && (
                   <div className="p-2 space-y-1.5">
                     {completedUserTasksLocal.map(task => (
-                      <TaskItem key={task.id} task={task} onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} />
+                      <TaskItem key={task.id} task={task} selected={isTaskSelected(task, 'user')} onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} />
                     ))}
                   </div>
                 )}
@@ -283,7 +324,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                 </div>
                 <div className="p-2 space-y-1.5">
                   {pendingSystemTasks.map(task => (
-                    <TaskItem key={task.id} task={task} isSystem onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} />
+                    <TaskItem key={task.id} task={task} isSystem selected={isTaskSelected(task, 'internal')} onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} />
                   ))}
                 </div>
               </div>
@@ -300,7 +341,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                 </div>
                 <div className="p-2 space-y-1.5">
                   {activeSystemTasks.map(task => (
-                    <TaskItem key={task.id} task={task} isSystem onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} />
+                    <TaskItem key={task.id} task={task} isSystem selected={isTaskSelected(task, 'internal')} onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} />
                   ))}
                 </div>
               </div>
@@ -317,7 +358,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                 </div>
                 <div className="p-2 space-y-1.5">
                   {blockedSystemTasks.map(task => (
-                    <TaskItem key={task.id} task={task} isSystem onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} />
+                    <TaskItem key={task.id} task={task} isSystem selected={isTaskSelected(task, 'internal')} onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} />
                   ))}
                 </div>
               </div>
@@ -340,7 +381,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                 {showCompletedSystemTasks && (
                   <div className="p-2 space-y-1.5">
                     {completedSystemTasks.map(task => (
-                      <TaskItem key={task.id} task={task} isSystem onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} />
+                      <TaskItem key={task.id} task={task} isSystem selected={isTaskSelected(task, 'internal')} onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} />
                     ))}
                   </div>
                 )}

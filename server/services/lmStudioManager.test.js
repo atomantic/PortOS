@@ -25,6 +25,7 @@ afterEach(() => {
   if (originalUrl === undefined) delete process.env.LM_STUDIO_URL;
   else process.env.LM_STUDIO_URL = originalUrl;
   fs.rmSync(tempDir, { recursive: true, force: true });
+  vi.unstubAllGlobals();
 });
 
 const writeFile = (rel, content = 'gguf') => {
@@ -61,6 +62,30 @@ describe('lmStudioManager local model resolution', () => {
       isMlx: false,
       isSharded: false
     });
+  });
+});
+
+describe('lmStudioManager stored model inventory', () => {
+  it('reports one folder-scoped row for a repo containing multiple quantizations', async () => {
+    writeFile('example/model-GGUF/model-Q4_K_M.gguf', 'q4');
+    writeFile('example/model-GGUF/model-Q8_0.gguf', 'q8');
+    const { listStoredModels } = await import('./lmStudioManager.js');
+
+    const rows = await listStoredModels();
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ id: 'example/model-GGUF', name: 'model-GGUF' });
+    expect(rows[0].size).toBeGreaterThan(0);
+  });
+});
+
+describe('lmStudioManager residency status', () => {
+  it('keeps a failed loaded-model probe distinct from a trustworthy empty list', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline'); }));
+    const { getLoadedModels, getLastLoadedModelsError } = await import('./lmStudioManager.js');
+
+    await expect(getLoadedModels(true)).resolves.toEqual([]);
+    expect(getLastLoadedModelsError()).toMatch(/offline|unavailable/i);
   });
 });
 

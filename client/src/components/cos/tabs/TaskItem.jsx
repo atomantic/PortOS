@@ -57,6 +57,8 @@ const getTaskEditData = (task) => ({
   provider: task.metadata?.provider || ''
 });
 
+export const taskRowId = (taskId, source) => `cos-task-${source}-${encodeURIComponent(taskId)}`;
+
 // Get success rate styling based on percentage
 function getSuccessRateStyle(rate) {
   if (rate >= 70) return { bg: 'bg-port-success/15', text: 'text-port-success', label: 'high' };
@@ -64,7 +66,7 @@ function getSuccessRateStyle(rate) {
   return { bg: 'bg-port-error/15', text: 'text-port-error', label: 'low' };
 }
 
-export default function TaskItem({ task, isSystem, onRefresh, providers, durations, dragHandleProps, apps, onEditingChange }) {
+export default function TaskItem({ task, isSystem, selected = false, onRefresh, providers, durations, dragHandleProps, apps, onEditingChange }) {
   // System tasks are persisted in COS-TASKS.md. Every task
   // mutation must name that source; otherwise the API's user-queue default
   // searches TASKS.md and reports the system task as missing.
@@ -269,9 +271,16 @@ export default function TaskItem({ task, isSystem, onRefresh, providers, duratio
   };
 
   return (
-    <div className={`bg-port-card border rounded-lg p-4 ${
-      requiresApproval ? 'border-yellow-500/50' : 'border-port-border'
-    }`}>
+    <div
+      id={taskRowId(task.id, taskSource)}
+      tabIndex={selected ? -1 : undefined}
+      aria-current={selected ? 'true' : undefined}
+      className={`bg-port-card border rounded-lg p-4 ${
+        selected
+          ? 'border-port-accent ring-2 ring-port-accent/30'
+          : requiresApproval ? 'border-yellow-500/50' : 'border-port-border'
+      }`}
+    >
       <div className="flex items-start gap-3">
         {/* Drag handle - only show for user tasks. */}
         {dragHandleProps && !isSystem && (

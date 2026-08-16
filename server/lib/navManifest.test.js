@@ -137,6 +137,12 @@ describe('resolveNavCommand — fuzzy matching', () => {
     expect(resolveNavCommand('goals')?.path).toBe('/goals/list');
   });
 
+  it('resolves every canonical System Resources section name', () => {
+    expect(resolveNavCommand('system resources')?.path).toBe('/system-resources/overview');
+    expect(resolveNavCommand('model resources')?.path).toBe('/system-resources/models');
+    expect(resolveNavCommand('active queues')?.path).toBe('/system-resources/queues');
+  });
+
   it('resolves Universe Builder to the /universes index path', () => {
     // Promoted out of /media/universe-builder; renamed to /universes when the
     // list/table index landed (command id stays nav.create.universe-builder).

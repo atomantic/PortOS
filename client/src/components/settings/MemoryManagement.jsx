@@ -4,7 +4,7 @@
 //
 // Sources of residency this panel covers:
 //   - Ollama models (multiple can be loaded simultaneously) → /api/local-llm/loaded
-//   - LM Studio models → /api/lmstudio/models
+//   - LM Studio models → /api/local-llm/loaded
 //   - Whisper STT (PM2 process `portos-whisper`) → /api/voice/status + /api/voice/whisper
 //   - Kokoro TTS (in-process kokoro-js) → /api/voice/tts/status + /api/voice/tts/unload
 //
@@ -21,7 +21,7 @@
 // apiCore's default toast doesn't fire underneath; per the CLAUDE.md
 // "Silent vs. toasting API requests" rule, custom catch ⇒ silent: true.
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Cpu, Mic, Volume2, Trash2, Power, PowerOff, RefreshCw, AlertTriangle } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
@@ -39,6 +39,22 @@ const SILENT = { silent: true };
 
 const POLL_MS = 5000;
 
+const EMPTY_SNAPSHOT = {
+  loadedOllama: [],
+  loadedLmStudio: [],
+  ttsState: { state: 'lazy', loadedKey: null },
+  whisperRunning: false,
+  sttEngine: 'whisper',
+  unavailableSources: [],
+};
+
+const SOURCE_LABELS = {
+  ollama: 'Ollama',
+  lmstudio: 'LM Studio',
+  tts: 'text-to-speech',
+  voice: 'voice services',
+};
+
 const btnClass = 'flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded transition-colors disabled:opacity-50';
 
 function Row({ icon: Icon, title, subtitle, status, action, danger }) {
@@ -55,7 +71,7 @@ function Row({ icon: Icon, title, subtitle, status, action, danger }) {
   );
 }
 
-export default function MemoryManagement() {
+export default function MemoryManagement({ onLoadedModelsChange } = {}) {
   const [loadedOllama, setLoadedOllama] = useState([]);
   const [loadedLmStudio, setLoadedLmStudio] = useState([]);
   const [ttsState, setTtsState] = useState({ state: 'lazy', loadedKey: null });
@@ -63,44 +79,85 @@ export default function MemoryManagement() {
   const [sttEngine, setSttEngine] = useState('whisper');
   const [loading, setLoading] = useState(true);
   const [lastFetched, setLastFetched] = useState(0);
+  const [unavailableSources, setUnavailableSources] = useState([]);
   // Guards the polled setState calls — a late /voice/status response that
   // resolves after unmount would otherwise call setState on a dead tree.
   // useMounted resets the ref to true on every mount so React 18 StrictMode's
   // mount→cleanup→remount cycle doesn't leave it permanently false (which
   // would otherwise keep the panel stuck on "Loading memory status…" in dev).
   const mountedRef = useMounted();
+  const snapshotRef = useRef(EMPTY_SNAPSHOT);
+  const refreshGenerationRef = useRef(0);
+  const priorityRefreshRef = useRef(false);
 
   // Returns the fresh snapshot so callers (notably freeAll) can act on the
   // values without waiting for React's async setState to flush — reading
   // component state immediately after `await refresh()` would still see
   // the prior poll's snapshot.
-  const refresh = useCallback(async () => {
-    const [llm, tts, voice] = await Promise.all([
-      getLoadedLlmModels(SILENT).catch(() => ({ ollama: [], lmstudio: [] })),
-      getTtsStatus(SILENT).catch(() => ({ kokoro: { state: 'lazy', loadedKey: null } })),
-      getVoiceStatus(SILENT).catch(() => null),
+  const refresh = useCallback(async (options = {}) => {
+    const priority = options?.priority === true;
+    // "Free everything" needs one authoritative pre-action snapshot. Do not
+    // let the 5s interval start a newer poll while that priority refresh is in
+    // flight, or the caller would have to act on an older last-known snapshot.
+    if (!priority && priorityRefreshRef.current) return snapshotRef.current;
+    if (priority) priorityRefreshRef.current = true;
+    const generation = ++refreshGenerationRef.current;
+    const [llmResult, ttsResult, voiceResult] = await Promise.allSettled([
+      getLoadedLlmModels(SILENT),
+      getTtsStatus(SILENT),
+      getVoiceStatus(SILENT),
     ]);
+    // A later-started poll/action refresh owns the UI. Return its current
+    // snapshot to stale callers instead of letting an old response resurrect a
+    // model that was just unloaded.
+    if (generation !== refreshGenerationRef.current) {
+      if (priority) priorityRefreshRef.current = false;
+      return snapshotRef.current;
+    }
+
+    const previous = snapshotRef.current;
+    const llm = llmResult.status === 'fulfilled' ? llmResult.value : null;
+    const tts = ttsResult.status === 'fulfilled' ? ttsResult.value : null;
+    const voice = voiceResult.status === 'fulfilled' ? voiceResult.value : null;
+    const llmValid = Array.isArray(llm?.ollama) && Array.isArray(llm?.lmstudio);
+    const ttsValid = typeof tts?.kokoro?.state === 'string';
+    const voiceValid = voice != null && typeof voice === 'object';
+    const llmSourceErrors = llmValid && Array.isArray(llm.sourceErrors) ? llm.sourceErrors : [];
+    const failedSources = [
+      ...(!llmValid ? ['ollama', 'lmstudio'] : llmSourceErrors),
+      ...(!ttsValid ? ['tts'] : []),
+      ...(!voiceValid ? ['voice'] : []),
+    ];
     const snapshot = {
-      loadedOllama: Array.isArray(llm?.ollama) ? llm.ollama : [],
-      loadedLmStudio: Array.isArray(llm?.lmstudio) ? llm.lmstudio : [],
-      ttsState: tts?.kokoro || { state: 'lazy', loadedKey: null },
+      loadedOllama: llmValid && !llmSourceErrors.includes('ollama') ? llm.ollama : previous.loadedOllama,
+      loadedLmStudio: llmValid && !llmSourceErrors.includes('lmstudio') ? llm.lmstudio : previous.loadedLmStudio,
+      ttsState: ttsValid ? tts.kokoro : previous.ttsState,
       // voice.services.whisper.ok is the "PM2 process responsive" probe in
       // checkAll(). When the service block is missing (status fetch failed)
       // we default to "not running" — false negatives just mean the Stop
       // button briefly hides, which the next poll corrects.
-      whisperRunning: Boolean(voice?.services?.whisper?.ok),
-      sttEngine: voice?.sttEngine || 'whisper',
+      whisperRunning: voiceValid ? Boolean(voice.services?.whisper?.ok) : previous.whisperRunning,
+      sttEngine: voiceValid ? (voice.sttEngine || 'whisper') : previous.sttEngine,
+      unavailableSources: [...new Set(failedSources)],
     };
+    snapshotRef.current = snapshot;
+    if (priority) priorityRefreshRef.current = false;
     if (!mountedRef.current) return snapshot;
     setLoadedOllama(snapshot.loadedOllama);
     setLoadedLmStudio(snapshot.loadedLmStudio);
     setTtsState(snapshot.ttsState);
     setWhisperRunning(snapshot.whisperRunning);
     setSttEngine(snapshot.sttEngine);
+    setUnavailableSources(snapshot.unavailableSources);
     setLoading(false);
     setLastFetched(Date.now());
+    onLoadedModelsChange?.({
+      ollama: snapshot.loadedOllama,
+      lmstudio: snapshot.loadedLmStudio,
+      sourceErrors: snapshot.unavailableSources.filter((source) => source === 'ollama' || source === 'lmstudio'),
+    });
     return snapshot;
-  }, []);
+  }, [mountedRef, onLoadedModelsChange]);
 
   useEffect(() => {
     refresh();
@@ -140,22 +197,24 @@ export default function MemoryManagement() {
     // snapshot rather than component state — React's async setState in
     // refresh() won't have flushed by the time `loadedOllama` etc. is
     // referenced in this same closure.
-    const fresh = (await refresh()) || {
-      loadedOllama: [], loadedLmStudio: [], whisperRunning: false, ttsState: { state: 'lazy' },
-    };
+    const fresh = (await refresh({ priority: true })) || EMPTY_SNAPSHOT;
+    const sourceUnknown = (source) => fresh.unavailableSources.includes(source);
     // Fan out in parallel — the operations don't depend on each other and
     // doing them serially would visibly stall on whisper's PM2-delete step.
     // Per-step errors get swallowed here because freeAll is the "best effort"
     // path; the trailing refresh() then shows what actually got freed.
     // Per-step toasts would also stack four-deep on success which is noise.
     const results = await Promise.allSettled([
-      ...fresh.loadedOllama.map((m) => unloadOllamaModel(m.id, SILENT)),
-      ...fresh.loadedLmStudio.map((m) => unloadLmStudioModel(m.id, SILENT)),
-      fresh.whisperRunning ? controlWhisper('stop', SILENT) : Promise.resolve(),
-      fresh.ttsState.state !== 'lazy' ? unloadKokoroTts(SILENT) : Promise.resolve(),
+      ...(!sourceUnknown('ollama') ? fresh.loadedOllama.map((m) => unloadOllamaModel(m.id, SILENT)) : []),
+      ...(!sourceUnknown('lmstudio') ? fresh.loadedLmStudio.map((m) => unloadLmStudioModel(m.id, SILENT)) : []),
+      !sourceUnknown('voice') && fresh.whisperRunning ? controlWhisper('stop', SILENT) : Promise.resolve(),
+      !sourceUnknown('tts') && fresh.ttsState.state !== 'lazy' ? unloadKokoroTts(SILENT) : Promise.resolve(),
     ]);
     const failed = results.filter((r) => r.status === 'rejected').length;
-    if (failed) toast.error(`Freed most resources — ${failed} action(s) failed`);
+    if (fresh.unavailableSources.length > 0) {
+      const labels = fresh.unavailableSources.map((source) => SOURCE_LABELS[source] || source).join(', ');
+      toast.error(`Freed verified resources only — could not verify ${labels}`);
+    } else if (failed) toast.error(`Freed most resources — ${failed} action(s) failed`);
     else toast.success('Freed all memory-resident models');
     await refresh();
   });
@@ -176,7 +235,7 @@ export default function MemoryManagement() {
     unloadingModel || unloadingLmStudio || unloadingKokoro || stoppingWhisper || startingWhisper || freeingAll;
 
   return (
-    <div className="bg-port-card border border-port-border rounded mb-4">
+      <div className="bg-port-card border border-port-border rounded mb-4">
       <div className="flex items-center justify-between px-3 py-2 border-b border-port-border">
         <div>
           <div className="text-sm font-semibold text-gray-200">Memory Management</div>
@@ -207,8 +266,18 @@ export default function MemoryManagement() {
         </div>
       </div>
 
+      {unavailableSources.length > 0 && (
+        <div className="mx-3 mt-3 flex items-start gap-2 rounded border border-port-warning/30 bg-port-warning/10 px-3 py-2 text-xs text-port-warning">
+          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+          <span>
+            Status unavailable for {unavailableSources.map((source) => SOURCE_LABELS[source] || source).join(', ')}.
+            Last known values remain visible; unknown resources are excluded from Free everything.
+          </span>
+        </div>
+      )}
+
       {loadedOllama.length === 0 && loadedLmStudio.length === 0
-        && !whisperRunning && ttsState.state === 'lazy' ? (
+        && !whisperRunning && ttsState.state === 'lazy' && unavailableSources.length === 0 ? (
         <div className="px-3 py-3 text-xs text-gray-500 italic">
           Nothing memory-resident — full unified memory is available for diffusion.
         </div>
@@ -298,7 +367,7 @@ export default function MemoryManagement() {
         </div>
       )}
 
-      {!whisperRunning && sttEngine === 'whisper' && (
+      {!whisperRunning && sttEngine === 'whisper' && !unavailableSources.includes('voice') && (
         <div className="px-3 py-2 border-t border-port-border/50 flex items-center gap-2 text-xs text-gray-500">
           <AlertTriangle className="w-3 h-3 text-port-warning shrink-0" />
           <span className="flex-1">Whisper is stopped — voice transcription is offline.</span>

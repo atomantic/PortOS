@@ -23,6 +23,7 @@ vi.mock('fs/promises', async (importOriginal) => {
     readFile: vi.fn((...args) => actual.readFile(...args)),
     rename: vi.fn((...args) => actual.rename(...args)),
     readdir: vi.fn((...args) => actual.readdir(...args)),
+    stat: vi.fn((...args) => actual.stat(...args)),
   };
 });
 import {
@@ -47,6 +48,7 @@ import {
   writeJSONLines,
   formatDuration,
   readFileTail,
+  dirSize,
   sha256File,
   resolveImageInputPath,
   resolveScreenshot,
@@ -77,7 +79,7 @@ beforeAll(async () => {
 });
 
 const restoreFsMocks = () => {
-  for (const name of ['readFile', 'rename', 'readdir', 'mkdir']) {
+  for (const name of ['readFile', 'rename', 'readdir', 'mkdir', 'stat']) {
     fsPromises[name].mockReset();
     fsPromises[name].mockImplementation((...args) => realFsPromises[name](...args));
   }
@@ -1005,6 +1007,23 @@ describe('fileUtils', () => {
       await expect(
         listDirectoryByExtension(tmpRoot, { extensions: ['.png'] }),
       ).rejects.toThrow(/mapEntry must be a function/);
+    });
+  });
+
+  describe('dirSize strict scans', () => {
+    afterEach(() => restoreFsMocks());
+
+    it('rejects an unreadable path instead of reporting a real zero', async () => {
+      const error = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      fsPromises.stat.mockRejectedValue(error);
+
+      await expect(dirSize('/example/unreadable', { strict: true })).rejects.toBe(error);
+    });
+
+    it('treats a confirmed missing path as an empty directory', async () => {
+      fsPromises.stat.mockRejectedValue(Object.assign(new Error('missing'), { code: 'ENOENT' }));
+
+      await expect(dirSize('/example/missing', { strict: true })).resolves.toBe(0);
     });
   });
 

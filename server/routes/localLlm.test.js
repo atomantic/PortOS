@@ -35,11 +35,13 @@ vi.mock('../services/localLlmPlayground.js', () => ({
 }));
 
 vi.mock('../services/ollamaManager.js', () => ({
+  getLastLoadedModelsError: vi.fn(() => null),
   getLoadedModels: vi.fn(async () => []),
   unloadModel: vi.fn(),
 }));
 
 vi.mock('../services/lmStudioManager.js', () => ({
+  getLastLoadedModelsError: vi.fn(() => null),
   getLoadedModels: vi.fn(async () => []),
 }));
 
@@ -253,9 +255,9 @@ describe('local LLM memory-management routes', () => {
     const res = await request(makeApp()).get('/api/local-llm/loaded');
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ollama: [resident], lmstudio: [lmStudioResident] });
+    expect(res.body).toEqual({ ollama: [resident], lmstudio: [lmStudioResident], sourceErrors: [] });
     expect(getLoadedModels).toHaveBeenCalledTimes(1);
-    expect(getLoadedLmStudioModels).toHaveBeenCalledTimes(1);
+    expect(getLoadedLmStudioModels).toHaveBeenCalledWith(true);
   });
 
   it('POST /unload evicts a resident model and echoes the service result', async () => {

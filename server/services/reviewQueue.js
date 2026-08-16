@@ -300,7 +300,9 @@ const PRODUCERS = [
         summary: (alert.detail || alert.message || '').slice(0, 200),
         timestamp: alert.timestamp || null,
         severity: alert.severity === 'critical' ? 'critical' : 'high',
-        drillTo: alert.link || '/system-resources/overview',
+        drillTo: alert.type === 'system_resource'
+          ? '/system-resources/overview'
+          : alert.link || '/system-resources/overview',
         ...(alertType ? { meta: { alertType } } : {})
       };
     }

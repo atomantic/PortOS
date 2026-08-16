@@ -77,11 +77,23 @@ function modelLabel(params) {
 export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' }) {
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [hasSnapshot, setHasSnapshot] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [showRecent, setShowRecent] = useState(false);
 
   const fetchJobs = useCallback(async () => {
-    const data = await listMediaJobs(kind ? { kind } : {}).catch(() => null);
-    if (data) setJobs(data);
+    const outcome = await listMediaJobs(kind ? { kind } : {}).then(
+      (value) => ({ value }),
+      () => ({ error: true }),
+    );
+    if (outcome.error || !Array.isArray(outcome.value)) {
+      setLoadError(true);
+      setLoading(false);
+      return;
+    }
+    setJobs(outcome.value);
+    setHasSnapshot(true);
+    setLoadError(false);
     setLoading(false);
   }, [kind]);
 
@@ -166,7 +178,9 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
         <div className="flex items-center gap-2 min-w-0">
           <ListOrdered className="w-4 h-4 text-port-accent shrink-0" />
           <h2 className="text-xs font-medium text-gray-400 uppercase tracking-wide truncate">{headerLabel}</h2>
-          <span className="text-xs text-port-text-muted">{formatCounts(live, recent, failedCount)}</span>
+          <span className="text-xs text-port-text-muted">
+            {loadError && !hasSnapshot ? 'status unavailable' : formatCounts(live, recent, failedCount)}
+          </span>
         </div>
         <div className="flex items-center gap-1 shrink-0">
           {queuedCount > 0 && (
@@ -189,8 +203,16 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
         </div>
       </div>
 
-      {loading ? (
+      {loadError && hasSnapshot && (
+        <div className="rounded border border-port-warning/30 bg-port-warning/10 px-3 py-2 text-xs text-port-warning">
+          Queue refresh failed. Showing the last known snapshot.
+        </div>
+      )}
+
+      {loading && !hasSnapshot ? (
         <div className="text-xs"><BrailleSpinner text="Loading…" /></div>
+      ) : loadError && !hasSnapshot ? (
+        <div className="text-xs text-port-warning">Queue status unavailable.</div>
       ) : live.length === 0 && recent.length === 0 ? (
         <div className="text-port-text-muted text-xs">
           No {kind || 'media'} {kind === 'training' ? 'runs' : 'renders'} queued.

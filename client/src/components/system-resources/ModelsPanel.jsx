@@ -1,6 +1,8 @@
-import { Box, Download, HardDrive, RefreshCw } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { AlertTriangle, Box, Download, HardDrive, RefreshCw } from 'lucide-react';
 import { Link } from 'react-router';
 import MemoryManagement from '../settings/MemoryManagement.jsx';
+import Banner from '../ui/Banner.jsx';
 import CleanupControl from './CleanupControl.jsx';
 import { formatBytes } from '../../utils/formatters.js';
 
@@ -10,6 +12,13 @@ const BACKEND_LABEL = {
   ollama: 'Ollama',
   lmstudio: 'LM Studio',
 };
+
+const normalizeLmStudioRepo = (value) => String(value || '')
+  .split('/').pop()
+  .trim()
+  .toLowerCase()
+  .replace(/[-.]gguf$/i, '')
+  .replace(/[-.]mlx[-.].*$/i, '');
 
 function InventoryEmpty({ loading, onRun }) {
   return (
@@ -31,11 +40,25 @@ function InventoryEmpty({ loading, onRun }) {
 }
 
 export default function ModelsPanel({ report, loading, onRunReport, cleanup }) {
+  const [residency, setResidency] = useState(null);
   const candidates = new Map((report?.cleanupCandidates || []).map((item) => [item.id, item]));
+  const loaded = useMemo(() => ({
+    ollama: new Set((residency?.ollama || []).flatMap((model) => [model.id, model.name]).filter(Boolean)),
+    lmstudio: new Set((residency?.lmstudio || []).flatMap((model) => [
+      model.id,
+      normalizeLmStudioRepo(model.id),
+    ]).filter(Boolean)),
+  }), [residency]);
+  const modelSourceErrors = (report?.sourceErrors || []).filter((source) => (
+    source.startsWith('ollama')
+    || source.startsWith('lmstudio')
+    || source === 'huggingface'
+    || source === 'loras'
+  ));
 
   return (
     <div className="space-y-4">
-      <MemoryManagement />
+      <MemoryManagement onLoadedModelsChange={setResidency} />
 
       {!report ? <InventoryEmpty loading={loading} onRun={onRunReport} /> : (
         <section className="rounded-2xl border border-port-border bg-port-card p-4 sm:p-5">
@@ -46,7 +69,7 @@ export default function ModelsPanel({ report, loading, onRunReport, cleanup }) {
                 <h3 className="font-semibold text-white">Downloaded model inventory</h3>
               </div>
               <p className="mt-1 text-xs text-gray-500">
-                {report.models.downloaded.length} item{report.models.downloaded.length === 1 ? '' : 's'} · {formatBytes(report.models.totals.all)} known model storage
+                {report.models.downloaded.length} item{report.models.downloaded.length === 1 ? '' : 's'} · {Number.isFinite(report.models.totals.all) ? formatBytes(report.models.totals.all) : 'size unavailable'}
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -55,7 +78,7 @@ export default function ModelsPanel({ report, loading, onRunReport, cleanup }) {
               <button
                 type="button"
                 onClick={onRunReport}
-                disabled={loading}
+                disabled={loading || cleanup.locked}
                 className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-port-border px-3 py-2 text-xs text-gray-300 hover:bg-port-border/40 disabled:opacity-50"
               >
                 <RefreshCw size={13} className={loading ? 'animate-spin' : ''} /> Refresh
@@ -63,17 +86,48 @@ export default function ModelsPanel({ report, loading, onRunReport, cleanup }) {
             </div>
           </div>
 
+          {modelSourceErrors.length > 0 && (
+            <Banner className="mt-4" tone="warning" icon={AlertTriangle}>
+              Some model sources are unavailable: {modelSourceErrors.join(', ')}. Visible rows may be partial, and uncertain models cannot be removed.
+            </Banner>
+          )}
+
           <div className="mt-4 space-y-2">
             {report.models.downloaded.length === 0 ? (
-              <p className="rounded-xl bg-port-bg/40 p-4 text-sm text-gray-500">No downloaded models were found in the known stores.</p>
+              <p className="rounded-xl bg-port-bg/40 p-4 text-sm text-gray-500">
+                {modelSourceErrors.length > 0
+                  ? 'No model inventory is available from the sources that responded.'
+                  : 'No downloaded models were found in the known stores.'}
+              </p>
             ) : report.models.downloaded.map((model) => {
-              const candidate = candidates.get(model.id) || {
+              const reportCandidate = candidates.get(model.id) || {
                 ...model,
                 label: model.name,
                 estimatedBytes: model.sizeBytes,
                 action: null,
                 manualOnly: true,
               };
+              const isLocal = model.backend === 'ollama' || model.backend === 'lmstudio';
+              const sourceUnknown = isLocal && residency?.sourceErrors?.includes(model.backend);
+              const liveKnown = isLocal && residency != null && !sourceUnknown;
+              const liveLoaded = model.backend === 'ollama'
+                ? loaded.ollama.has(model.action?.modelId || model.id.replace(/^ollama:/, ''))
+                : loaded.lmstudio.has(model.action?.modelId || model.id.replace(/^lmstudio:/, ''))
+                  || loaded.lmstudio.has(normalizeLmStudioRepo(model.action?.modelId || model.id));
+              const effectiveLoaded = liveKnown ? liveLoaded : Boolean(model.loaded);
+              const residencyUnknown = sourceUnknown || (!liveKnown && Boolean(model.residencyUnknown));
+              const action = isLocal
+                ? (!effectiveLoaded && !residencyUnknown && !model.inventoryUnknown
+                    ? (liveKnown ? (model.action || reportCandidate.action) : reportCandidate.action)
+                    : null)
+                : reportCandidate.action;
+              const candidate = isLocal ? {
+                ...reportCandidate,
+                loaded: effectiveLoaded,
+                busy: effectiveLoaded || residencyUnknown,
+                manualOnly: !action,
+                action,
+              } : reportCandidate;
               return (
                 <div key={model.id} className="flex flex-col gap-3 rounded-xl bg-port-bg/40 p-3 sm:flex-row sm:items-center">
                   <div className="rounded-lg bg-port-accent/10 p-2 text-port-accent"><Box size={16} /></div>
@@ -81,7 +135,8 @@ export default function ModelsPanel({ report, loading, onRunReport, cleanup }) {
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="truncate font-medium text-gray-200">{model.name}</span>
                       <span className="rounded bg-port-border px-1.5 py-0.5 text-[10px] uppercase text-gray-400">{BACKEND_LABEL[model.backend] || model.backend}</span>
-                      {model.loaded && <span className="rounded bg-purple-500/10 px-1.5 py-0.5 text-[10px] uppercase text-purple-300">loaded</span>}
+                      {effectiveLoaded && <span className="rounded bg-purple-500/10 px-1.5 py-0.5 text-[10px] uppercase text-purple-300">loaded</span>}
+                      {residencyUnknown && <span className="rounded bg-port-warning/10 px-1.5 py-0.5 text-[10px] uppercase text-port-warning">status unknown</span>}
                     </div>
                     {model.detail && <p className="mt-0.5 truncate text-xs text-gray-500">{model.detail}</p>}
                   </div>
@@ -91,6 +146,7 @@ export default function ModelsPanel({ report, loading, onRunReport, cleanup }) {
                   <CleanupControl
                     candidate={candidate}
                     busy={cleanup.busyId === candidate.id}
+                    disabled={cleanup.locked}
                     confirming={cleanup.isConfirming(candidate.id)}
                     onRequest={() => cleanup.request(candidate.id)}
                     onCancel={cleanup.cancel}

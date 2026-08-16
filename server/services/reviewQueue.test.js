@@ -142,7 +142,7 @@ describe('reviewQueue.buildQueue', () => {
     const queue = await buildQueue();
     const healthRows = queue.items.filter(i => i.source === 'health');
     expect(healthRows).toHaveLength(1);
-    expect(healthRows[0]).toMatchObject({ severity: 'critical', summary: '95% used', drillTo: '/apps' });
+    expect(healthRows[0]).toMatchObject({ severity: 'critical', summary: '95% used', drillTo: '/system-resources/overview' });
     expect(queue.items.find(i => i.source === 'backup')).toMatchObject({ title: 'Backup failed', summary: 'disk full' });
   });
 

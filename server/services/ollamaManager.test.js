@@ -87,6 +87,22 @@ async function loadManager() {
 
 const loadPullModel = () => loadManager().then((mod) => mod.pullModel)
 
+describe('ollamaManager residency status', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('keeps a failed /api/ps probe distinct from a trustworthy empty list', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      if (String(url).endsWith('/api/version')) return versionResponse()
+      if (String(url).endsWith('/api/ps')) throw new Error('ps offline')
+      throw new Error(`unexpected fetch: ${url}`)
+    }))
+    const { getLoadedModels, getLastLoadedModelsError } = await loadManager()
+
+    await expect(getLoadedModels()).resolves.toEqual([])
+    expect(getLastLoadedModelsError()).toMatch(/ps offline/i)
+  })
+})
+
 describe('ollamaManager.pullModel transient-error retry', () => {
   beforeEach(() => { vi.useFakeTimers() })
   afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals() })
@@ -294,6 +310,25 @@ describe('ollamaManager HF pull recovery', () => {
       expect(isPullDeadlineError('read ECONNRESET')).toBe(false)
       expect(isPullDeadlineError('pull model manifest: file does not exist')).toBe(false)
       expect(isPullDeadlineError(null)).toBe(false)
+    })
+  })
+
+  describe('listStoredModels', () => {
+    it('enumerates manifests from disk while the daemon is stopped', async () => {
+      await mkdir(join(modelsDir, 'manifests', 'registry.ollama.ai', 'library', 'example'), { recursive: true })
+      await writeFile(
+        join(modelsDir, 'manifests', 'registry.ollama.ai', 'library', 'example', 'latest'),
+        JSON.stringify(manifest()),
+      )
+      const { listStoredModels } = await loadManager()
+
+      const rows = await listStoredModels()
+
+      expect(rows).toEqual([expect.objectContaining({
+        id: 'example:latest',
+        name: 'example:latest',
+        size: configBody.length + weightsBody.length,
+      })])
     })
   })
 

@@ -10,6 +10,8 @@ import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
+import { onClientDisconnect } from '../lib/sseDownload.js';
+import { stopRun } from '../services/runner.js';
 import { getSystemResourceReport, triageSystemResources } from '../services/systemResources.js';
 
 const router = Router();
@@ -34,7 +36,27 @@ router.post('/report', asyncHandler(async (req, res) => {
 
 router.post('/triage', asyncHandler(async (req, res) => {
   const input = validateRequest(systemResourceTriageSchema, req.body || {});
-  res.json(await triageSystemResources(input));
+  const activeRunIds = new Set();
+  let clientGone = false;
+  const stop = (runId) => stopRun(runId).catch((err) => {
+    console.error(`❌ Failed to stop disconnected system-resource triage run ${runId}: ${err.message}`);
+  });
+  onClientDisconnect(req, res, () => {
+    clientGone = true;
+    for (const runId of activeRunIds) stop(runId);
+  });
+  const result = await triageSystemResources({
+    ...input,
+    onRunCreated: (runId) => {
+      activeRunIds.add(runId);
+      if (clientGone) stop(runId);
+    },
+    onRunSettled: (runId) => activeRunIds.delete(runId),
+  }).catch((err) => {
+    if (clientGone) return null;
+    throw err;
+  });
+  if (!clientGone && result && !res.writableEnded && !res.destroyed) res.json(result);
 }));
 
 export default router;

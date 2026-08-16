@@ -949,9 +949,23 @@ export async function installModel(backend, modelId, onProgress) {
 export async function deleteModel(backend, modelId) {
   if (!isBackend(backend)) return { success: false, error: `Unknown backend: ${backend}` }
   if (backend === 'ollama') {
+    const loaded = await ollamaManager.getLoadedModels()
+    if (ollamaManager.getLastLoadedModelsError()) {
+      return { success: false, error: 'Could not verify Ollama model residency; refresh the backend before deleting.', modelId }
+    }
+    if (loaded.some((model) => model.id === modelId || model.name === modelId)) {
+      return { success: false, error: 'Model is loaded; unload it before deleting.', modelId }
+    }
     const result = await ollamaManager.deleteModel(modelId)
     if (result.success) refreshOllamaBackedProviders()
     return result
+  }
+  const loaded = await lmStudioManager.getLoadedModels(true)
+  if (lmStudioManager.getLastLoadedModelsError()) {
+    return { success: false, error: 'Could not verify LM Studio model residency; refresh the backend before deleting.', modelId }
+  }
+  if (loaded.some((model) => lmStudioManager.modelIdsReferToSameRepo(model.id, modelId))) {
+    return { success: false, error: 'Model is loaded; unload it before deleting.', modelId }
   }
   // LM Studio has no delete in its REST API and the `lms` CLI has no `rm`
   // command — deleteModel removes the model's on-disk folder directly.

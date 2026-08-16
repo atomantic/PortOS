@@ -3,9 +3,17 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
+const lifecycle = vi.hoisted(() => ({ onDisconnect: null, stopRun: vi.fn(async () => true) }));
+
 vi.mock('../services/systemResources.js', () => ({
   getSystemResourceReport: vi.fn(),
   triageSystemResources: vi.fn(),
+}));
+vi.mock('../lib/sseDownload.js', () => ({
+  onClientDisconnect: vi.fn((_req, _res, callback) => { lifecycle.onDisconnect = callback; }),
+}));
+vi.mock('../services/runner.js', () => ({
+  stopRun: lifecycle.stopRun,
 }));
 
 const resources = await import('../services/systemResources.js');
@@ -20,7 +28,10 @@ const makeApp = () => {
 };
 
 describe('system resources routes', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    lifecycle.onDisconnect = null;
+  });
 
   it('runs a fresh report only when explicitly requested', async () => {
     resources.getSystemResourceReport.mockResolvedValue({ generatedAt: '2026-08-16T00:00:00.000Z' });
@@ -43,11 +54,34 @@ describe('system resources routes', () => {
       effort: '',
     });
     expect(response.status).toBe(200);
-    expect(resources.triageSystemResources).toHaveBeenCalledWith({
+    expect(resources.triageSystemResources).toHaveBeenCalledWith(expect.objectContaining({
       providerId: 'codex',
       model: undefined,
       effort: undefined,
+      onRunCreated: expect.any(Function),
+      onRunSettled: expect.any(Function),
+    }));
+  });
+
+  it('stops active and late-created AI runs after a client disconnect', async () => {
+    let hooks;
+    resources.triageSystemResources.mockImplementation(async (input) => {
+      hooks = input;
+      input.onRunCreated('run-active');
+      return { triage: { summary: 'Healthy' } };
     });
+
+    const response = await request(makeApp()).post('/api/system-resources/triage').send({ providerId: 'codex' });
+    expect(response.status).toBe(200);
+
+    lifecycle.onDisconnect();
+    hooks.onRunCreated('run-late');
+    await Promise.resolve();
+
+    expect(lifecycle.stopRun).toHaveBeenCalledWith('run-active');
+    expect(lifecycle.stopRun).toHaveBeenCalledWith('run-late');
+    hooks.onRunSettled('run-active');
+    hooks.onRunSettled('run-late');
   });
 
   it('rejects unsupported effort and unknown fields', async () => {

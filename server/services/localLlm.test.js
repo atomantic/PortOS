@@ -24,6 +24,8 @@ const mocks = vi.hoisted(() => ({
     getModelCapabilities: vi.fn(async () => []),
     pullModel: vi.fn(async (id) => ({ success: true, modelId: id })),
     deleteModel: vi.fn(async (id) => ({ success: true, modelId: id })),
+    getLoadedModels: vi.fn(async () => []),
+    getLastLoadedModelsError: vi.fn(() => null),
     getStatus: vi.fn(async () => ({ available: true, baseUrl: 'x', version: '1', modelCount: 0, models: [] })),
     startServer: vi.fn(async () => ({ success: true, running: true })),
     stopServer: vi.fn(async () => ({ success: true, running: false })),
@@ -36,6 +38,11 @@ const mocks = vi.hoisted(() => ({
   },
   lmstudio: {
     getAvailableModels: vi.fn(async () => []),
+    getLoadedModels: vi.fn(async () => []),
+    getLastLoadedModelsError: vi.fn(() => null),
+    modelIdsReferToSameRepo: vi.fn((left, right) => String(left).split('/').pop().replace(/-GGUF$/i, '').toLowerCase()
+      === String(right).split('/').pop().replace(/-GGUF$/i, '').toLowerCase()),
+    deleteModel: vi.fn(async (id) => ({ success: true, modelId: id })),
     downloadModel: vi.fn(async (id) => ({ success: true, modelId: id })),
     getStatus: vi.fn(async () => ({ available: false, baseUrl: 'y', loadedModels: 0 })),
     resetCache: vi.fn(),
@@ -218,6 +225,38 @@ describe('localLlm', () => {
     it('routes Ollama delete to deleteModel', async () => {
       await svc.deleteModel('ollama', 'llama3.2');
       expect(mocks.ollama.deleteModel).toHaveBeenCalledWith('llama3.2');
+    });
+    it('refuses to delete a model whose live residency check says loaded', async () => {
+      mocks.ollama.getLoadedModels.mockResolvedValueOnce([{ id: 'llama3.2', name: 'llama3.2' }]);
+
+      const result = await svc.deleteModel('ollama', 'llama3.2');
+
+      expect(result).toMatchObject({ success: false, error: expect.stringContaining('unload') });
+      expect(mocks.ollama.deleteModel).not.toHaveBeenCalled();
+    });
+    it('fails closed when model residency could not be verified', async () => {
+      mocks.ollama.getLastLoadedModelsError.mockReturnValueOnce('probe failed');
+
+      const result = await svc.deleteModel('ollama', 'llama3.2');
+
+      expect(result).toMatchObject({ success: false, error: expect.stringContaining('verify') });
+      expect(mocks.ollama.deleteModel).not.toHaveBeenCalled();
+    });
+    it('refuses an LM Studio folder delete when a normalized API alias is loaded', async () => {
+      mocks.lmstudio.getLoadedModels.mockResolvedValueOnce([{ id: 'openai/example-model' }]);
+
+      const result = await svc.deleteModel('lmstudio', 'lmstudio-community/example-model-GGUF');
+
+      expect(result).toMatchObject({ success: false, error: expect.stringContaining('unload') });
+      expect(mocks.lmstudio.deleteModel).not.toHaveBeenCalled();
+    });
+    it('fails closed when LM Studio residency could not be verified', async () => {
+      mocks.lmstudio.getLastLoadedModelsError.mockReturnValueOnce('probe failed');
+
+      const result = await svc.deleteModel('lmstudio', 'example/model-GGUF');
+
+      expect(result).toMatchObject({ success: false, error: expect.stringContaining('verify') });
+      expect(mocks.lmstudio.deleteModel).not.toHaveBeenCalled();
     });
     it('rejects an unknown backend', async () => {
       expect((await svc.installModel('nope', 'x')).success).toBe(false);

@@ -62,22 +62,35 @@ export default function SystemResourcesPage() {
   const [report, setReport] = useState(null);
   const [reportLoading, setReportLoading] = useState(false);
   const [cleanupBusyId, setCleanupBusyId] = useState(null);
+  const reportRequestGenerationRef = useRef(0);
+  const cleanupBusyRef = useRef(null);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   const runReport = useCallback(async () => {
+    const generation = ++reportRequestGenerationRef.current;
+    cancelDelete();
     setReportLoading(true);
-    const result = await api.runSystemResourceReport({ silent: true }).catch((error) => {
-      toast.error(error?.message || 'System report failed');
-      return null;
-    });
+    const outcome = await api.runSystemResourceReport({ silent: true }).then(
+      (value) => ({ value }),
+      (error) => ({ error }),
+    );
+    // Explicit refreshes and post-cleanup reconciliation can overlap. Only the
+    // newest request may own the report or loading state; an older disk scan
+    // must not resurrect candidates the newer scan already removed.
+    if (generation !== reportRequestGenerationRef.current) return outcome.value || null;
     setReportLoading(false);
-    if (result) setReport(result);
-    return result;
-  }, []);
+    if (outcome.error) {
+      toast.error(outcome.error?.message || 'System report failed');
+      return null;
+    }
+    if (outcome.value) setReport(outcome.value);
+    return outcome.value || null;
+  }, [cancelDelete]);
 
   const removeCandidate = useCallback(async (candidate) => {
     const action = candidate.action;
-    if (!action) return;
+    if (!action || cleanupBusyRef.current) return;
+    cleanupBusyRef.current = candidate.id;
     setCleanupBusyId(candidate.id);
     const result = await (async () => {
       if (action.type === 'data-category') {
@@ -97,14 +110,24 @@ export default function SystemResourcesPage() {
       toast.error(error?.message || `Could not remove ${candidate.label}`);
       return null;
     });
-    setCleanupBusyId(null);
-    if (!result) return;
+    if (!result) {
+      cleanupBusyRef.current = null;
+      setCleanupBusyId(null);
+      return;
+    }
+    // Invalidate every server-issued action immediately. The old row must not
+    // become clickable again during the follow-up scan, and unmounting Storage
+    // also drops any AI recommendations tied to the obsolete report.
+    setReport(null);
     toast.success(`${candidate.label} removed`);
     await runReport();
+    cleanupBusyRef.current = null;
+    setCleanupBusyId(null);
   }, [runReport]);
 
   const cleanup = {
     busyId: cleanupBusyId,
+    locked: cleanupBusyId != null || reportLoading,
     isConfirming,
     request: requestDelete,
     cancel: cancelDelete,

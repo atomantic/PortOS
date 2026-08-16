@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 
@@ -23,6 +23,10 @@ vi.mock('../services/api', () => ({
   updateHealthThresholds: vi.fn(() => Promise.resolve({})),
   runSystemResourceReport: vi.fn(),
   triageSystemResources: vi.fn(),
+  purgeDataCategory: vi.fn(),
+  deleteCachedModel: vi.fn(),
+  deleteLora: vi.fn(),
+  deleteLocalLlmModel: vi.fn(),
 }));
 
 vi.mock('../hooks/useProviderModels', () => ({
@@ -142,5 +146,54 @@ describe('SystemHealthPage remediation links', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Run system report' }));
     await waitFor(() => expect(api.runSystemResourceReport).toHaveBeenCalledWith({ silent: true }));
     expect(await screen.findByText('Known storage areas')).toBeInTheDocument();
+  });
+
+  it('locks every cleanup action and invalidates stale rows until reconciliation finishes', async () => {
+    let finishRemoval;
+    let finishRescan;
+    const removal = new Promise((resolve) => { finishRemoval = resolve; });
+    const rescan = new Promise((resolve) => { finishRescan = resolve; });
+    const candidate = (key) => ({
+      id: `data:${key}`,
+      label: `Cache ${key.toUpperCase()}`,
+      kind: 'data',
+      estimatedBytes: 100,
+      risk: 'low',
+      reason: 'Reproducible cache.',
+      loaded: false,
+      busy: false,
+      manualOnly: false,
+      managePath: '/data',
+      action: { type: 'data-category', key },
+    });
+    const firstReport = {
+      generatedAt: '2026-08-16T00:00:00.000Z',
+      filesystem: { totalBytes: 1000, usedBytes: 750, freeBytes: 250, usagePercent: 75 },
+      summary: { managedReclaimableBytes: 200 },
+      storageAreas: [],
+      cleanupCandidates: [candidate('a'), candidate('b')],
+      sourceErrors: [],
+      models: { downloaded: [], loaded: [], totals: { all: 0 } },
+      queues: { media: { queued: 0, running: 0 }, agents: null },
+    };
+    api.runSystemResourceReport
+      .mockResolvedValueOnce(firstReport)
+      .mockReturnValueOnce(rescan);
+    api.purgeDataCategory.mockReturnValue(removal);
+    renderPage('/system-resources/storage');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run system report' }));
+    expect(await screen.findByRole('button', { name: 'Remove Cache A' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Cache A' }));
+    fireEvent.click(within(screen.getByRole('group', { name: 'Confirm removal of Cache A' })).getByRole('button', { name: 'Remove' }));
+
+    await waitFor(() => expect(api.purgeDataCategory).toHaveBeenCalledWith('a', {}, { silent: true }));
+    expect(screen.getByRole('button', { name: 'Remove Cache B' })).toBeDisabled();
+
+    await act(async () => { finishRemoval({ success: true }); });
+    await waitFor(() => expect(screen.queryByText('Cache A')).not.toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: 'Remove Cache B' })).not.toBeInTheDocument();
+
+    await act(async () => { finishRescan({ ...firstReport, generatedAt: '2026-08-16T00:01:00.000Z', cleanupCandidates: [] }); });
   });
 });

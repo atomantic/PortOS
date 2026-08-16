@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react';
-import { Bot, ExternalLink, ListOrdered, PauseCircle, Play, RefreshCw } from 'lucide-react';
+import { useCallback, useMemo, useState } from 'react';
+import { AlertTriangle, Bot, ExternalLink, ListOrdered, PauseCircle, Play, RefreshCw } from 'lucide-react';
 import { Link } from 'react-router';
 import MediaJobsQueue from '../media/MediaJobsQueue.jsx';
 import BrailleSpinner from '../BrailleSpinner.jsx';
+import Banner from '../ui/Banner.jsx';
 import toast from '../ui/Toast.jsx';
 import { useAutoRefetch } from '../../hooks/useAutoRefetch.js';
 import * as api from '../../services/api.js';
@@ -20,8 +21,19 @@ function CountCard({ label, value, tone = 'text-white' }) {
 
 export default function QueuesPanel() {
   const [spawningId, setSpawningId] = useState(null);
+  const [queueError, setQueueError] = useState(null);
+  const fetchTasks = useCallback(() => api.getCosTasks({ silent: true }).then(
+    (next) => {
+      setQueueError(null);
+      return next;
+    },
+    (error) => {
+      setQueueError(error?.message || 'Agent queue status is unavailable');
+      throw error;
+    },
+  ), []);
   const { data, loading, refetch } = useAutoRefetch(
-    () => api.getCosTasks({ silent: true }),
+    fetchTasks,
     5000,
   );
   const tasks = useMemo(() => {
@@ -35,6 +47,7 @@ export default function QueuesPanel() {
   const pending = tasks.filter((task) => task.status === 'pending');
   const running = tasks.filter((task) => task.status === 'in_progress');
   const awaitingApproval = pending.filter((task) => task.approvalRequired);
+  const queueKnown = data != null;
 
   const runNow = async (task) => {
     setSpawningId(task.id);
@@ -51,10 +64,10 @@ export default function QueuesPanel() {
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <CountCard label="Agent pending" value={pending.length} tone={pending.length ? 'text-port-warning' : 'text-port-success'} />
-        <CountCard label="Agent running" value={running.length} tone={running.length ? 'text-port-accent' : 'text-white'} />
-        <CountCard label="Need approval" value={awaitingApproval.length} tone={awaitingApproval.length ? 'text-purple-300' : 'text-white'} />
-        <CountCard label="Queue sources" value="2" />
+        <CountCard label="Agent pending" value={queueKnown ? pending.length : '—'} tone={queueKnown && pending.length ? 'text-port-warning' : 'text-white'} />
+        <CountCard label="Agent running" value={queueKnown ? running.length : '—'} tone={queueKnown && running.length ? 'text-port-accent' : 'text-white'} />
+        <CountCard label="Need approval" value={queueKnown ? awaitingApproval.length : '—'} tone={queueKnown && awaitingApproval.length ? 'text-purple-300' : 'text-white'} />
+        <CountCard label="Queue sources" value={queueKnown ? '2' : '—'} />
       </div>
 
       <MediaJobsQueue className="min-h-[120px]" />
@@ -78,8 +91,18 @@ export default function QueuesPanel() {
           </div>
         </div>
 
-        {loading ? (
+        {queueError && (
+          <Banner className="mt-4" tone="warning" icon={AlertTriangle}>
+            Agent queue refresh failed. {queueKnown ? 'Showing the last known snapshot.' : 'Counts and pending work are unknown.'}
+          </Banner>
+        )}
+
+        {loading && !queueKnown ? (
           <div className="mt-4 text-sm text-gray-400"><BrailleSpinner text="Loading agent queue…" /></div>
+        ) : !queueKnown ? (
+          <div className="mt-4 rounded-xl bg-port-warning/5 p-4 text-sm text-port-warning">
+            Agent queue status is unavailable.
+          </div>
         ) : pending.length === 0 ? (
           <div className="mt-4 flex items-center gap-2 rounded-xl bg-port-success/5 p-4 text-sm text-port-success">
             <ListOrdered size={16} /> No pending agent tasks.
@@ -97,7 +120,11 @@ export default function QueuesPanel() {
                   <p className="mt-1 line-clamp-2 text-sm text-gray-200">{taskLabel(task)}</p>
                 </div>
                 {task.approvalRequired ? (
-                  <Link to="/cos/tasks" className="inline-flex min-h-[36px] items-center justify-center gap-1 rounded-lg border border-purple-500/30 px-3 py-1.5 text-xs text-purple-300 hover:bg-purple-500/10">
+                  <Link
+                    to={`/cos/tasks?task=${encodeURIComponent(task.id)}&source=${task.source}`}
+                    aria-label={`Review task ${task.id}`}
+                    className="inline-flex min-h-[36px] items-center justify-center gap-1 rounded-lg border border-purple-500/30 px-3 py-1.5 text-xs text-purple-300 hover:bg-purple-500/10"
+                  >
                     <PauseCircle size={13} /> Review
                   </Link>
                 ) : (
@@ -105,6 +132,7 @@ export default function QueuesPanel() {
                     type="button"
                     onClick={() => runNow(task)}
                     disabled={spawningId != null}
+                    aria-label={spawningId === task.id ? `Starting task ${task.id}` : `Run task ${task.id} now`}
                     className="inline-flex min-h-[36px] items-center justify-center gap-1.5 rounded-lg bg-port-accent/15 px-3 py-1.5 text-xs font-medium text-port-accent hover:bg-port-accent/25 disabled:opacity-50"
                   >
                     <Play size={13} /> {spawningId === task.id ? 'Starting…' : 'Run now'}

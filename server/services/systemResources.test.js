@@ -53,13 +53,19 @@ vi.mock('./mediaModelStorage.js', () => ({
   })),
 }));
 vi.mock('./ollamaManager.js', () => ({
-  getStatus: vi.fn(async () => ({ models: [{ id: 'example:latest', name: 'Example', size: 100 }] })),
+  getStatus: vi.fn(async () => ({ available: true, models: [{ id: 'example:latest', name: 'Example', size: 100 }] })),
+  listStoredModels: vi.fn(async () => [{ id: 'example:latest', name: 'Example', size: 100 }]),
   getLoadedModels: vi.fn(async () => [{ id: 'example:latest', name: 'Example', sizeVram: 80 }]),
+  getLastLoadedModelsError: vi.fn(() => null),
   getModelsDir: vi.fn(() => '/example/ollama'),
 }));
 vi.mock('./lmStudioManager.js', () => ({
+  checkLMStudioAvailable: vi.fn(async () => true),
   getAvailableModels: vi.fn(async () => [{ id: 'example/lmstudio', name: 'LM Example', size: 120 }]),
+  listStoredModels: vi.fn(async () => [{ id: 'example/lmstudio', name: 'lmstudio', size: 120 }]),
   getLoadedModels: vi.fn(async () => []),
+  getLastLoadedModelsError: vi.fn(() => null),
+  getLastListError: vi.fn(() => null),
   getModelsDir: vi.fn(async () => '/example/lmstudio'),
 }));
 vi.mock('./mediaJobQueue/index.js', () => ({
@@ -80,6 +86,9 @@ vi.mock('./cos.js', () => ({
 }));
 
 const promptRunner = await import('../lib/promptRunner.js');
+const fileUtils = await import('../lib/fileUtils.js');
+const ollamaManager = await import('./ollamaManager.js');
+const lmStudioManager = await import('./lmStudioManager.js');
 const {
   buildCleanupCandidates,
   buildSystemResourceReport,
@@ -92,6 +101,20 @@ describe('system resource reporting', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetSystemResourceReportCache();
+    fileUtils.dirSize.mockImplementation(async (path) => path.includes('Downloads') ? 900 : 100);
+    ollamaManager.getStatus.mockResolvedValue({
+      available: true,
+      models: [{ id: 'example:latest', name: 'Example', size: 100 }],
+    });
+    ollamaManager.listStoredModels.mockResolvedValue([{ id: 'example:latest', name: 'Example', size: 100 }]);
+    ollamaManager.getLoadedModels.mockResolvedValue([{ id: 'example:latest', name: 'Example', sizeVram: 80 }]);
+    ollamaManager.getLastLoadedModelsError.mockReturnValue(null);
+    lmStudioManager.checkLMStudioAvailable.mockResolvedValue(true);
+    lmStudioManager.getAvailableModels.mockResolvedValue([{ id: 'example/lmstudio', name: 'LM Example', size: 120 }]);
+    lmStudioManager.listStoredModels.mockResolvedValue([{ id: 'example/lmstudio', name: 'lmstudio', size: 120 }]);
+    lmStudioManager.getLoadedModels.mockResolvedValue([]);
+    lmStudioManager.getLastLoadedModelsError.mockReturnValue(null);
+    lmStudioManager.getLastListError.mockReturnValue(null);
   });
 
   it('combines storage, model residency, and live queue summaries', async () => {
@@ -127,6 +150,51 @@ describe('system resource reporting', () => {
     });
     expect(candidates.find((item) => item.id === 'data:cache').action).toEqual({ type: 'data-category', key: 'cache' });
     expect(candidates.find((item) => item.id === 'data:backup').action).toBeNull();
+  });
+
+  it('keeps downloaded models visible while an offline backend blocks unsafe cleanup', async () => {
+    ollamaManager.getStatus.mockResolvedValue({ available: false, models: [] });
+    ollamaManager.getLoadedModels.mockResolvedValue([]);
+    ollamaManager.getLastLoadedModelsError.mockReturnValue('backend unavailable');
+
+    const report = await buildSystemResourceReport();
+    const model = report.models.downloaded.find((item) => item.id === 'ollama:example:latest');
+    const candidate = report.cleanupCandidates.find((item) => item.id === model.id);
+
+    expect(model).toMatchObject({ name: 'Example', residencyUnknown: true });
+    expect(candidate).toMatchObject({ busy: true, manualOnly: true, action: null });
+    expect(report.sourceErrors).toEqual(expect.arrayContaining(['ollama-backend', 'ollama-residency']));
+  });
+
+  it('aggregates LM Studio quantizations into one folder-scoped cleanup row', async () => {
+    lmStudioManager.getAvailableModels.mockResolvedValue([
+      { id: 'example/lmstudio', quantization: 'Q4_K_M', state: 'not-loaded' },
+      { id: 'example/lmstudio', quantization: 'Q8_0', state: 'not-loaded' },
+    ]);
+
+    const report = await buildSystemResourceReport();
+    const rows = report.models.downloaded.filter((item) => item.backend === 'lmstudio');
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      id: 'lmstudio:example/lmstudio',
+      action: { type: 'local-model', backend: 'lmstudio', modelId: 'example/lmstudio' },
+    });
+    expect(rows[0].detail).toContain('2 quantizations');
+    expect(rows[0].detail).toContain('whole model folder');
+  });
+
+  it('surfaces strict size-scan failures instead of reporting a ready zero', async () => {
+    fileUtils.dirSize.mockImplementation(async (path) => {
+      if (path === '/example/portos/node_modules') return null;
+      return path.includes('Downloads') ? 900 : 100;
+    });
+
+    const report = await buildSystemResourceReport();
+    const dependencies = report.storageAreas.find((area) => area.id === 'dependencies');
+
+    expect(dependencies).toMatchObject({ status: 'unavailable' });
+    expect(report.sourceErrors).toContain('dependencies');
   });
 
   it('keeps model names, ids, filenames, and paths out of the AI prompt', async () => {

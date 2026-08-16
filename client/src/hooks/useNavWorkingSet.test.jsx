@@ -42,6 +42,14 @@ describe('useNavWorkingSet', () => {
     expect(result.current.pinned.map((r) => r.path)).toEqual(['/b']);
   });
 
+  it('migrates the legacy System Health pin to System Resources', () => {
+    localStorage.setItem(PINNED_KEY, JSON.stringify(['/system-health']));
+    const { result } = renderHook(() => useNavWorkingSet(resolveNavEntry), { wrapper });
+
+    expect(result.current.pinned.map((row) => row.path)).toEqual(['/system-resources']);
+    expect(result.current.isPinned('/system-resources')).toBe(true);
+  });
+
   it('excludes pinned and the current path from recent', () => {
     localStorage.setItem(RECENT_KEY, JSON.stringify(['/start', '/x', '/y']));
     localStorage.setItem(PINNED_KEY, JSON.stringify(['/x']));

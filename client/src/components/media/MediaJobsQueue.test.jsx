@@ -82,6 +82,17 @@ const failedCodexDefaultEffortJob = {
   params: { prompt: 'a fox', mode: 'codex', model: 'gpt-5.6-luna' },
 };
 
+describe('MediaJobsQueue — unavailable state', () => {
+  it('does not report a failed queue probe as an empty queue', async () => {
+    listMediaJobs.mockRejectedValue(new Error('offline'));
+
+    render(<MediaJobsQueue kind="image" />);
+
+    expect(await screen.findByText('Queue status unavailable.')).toBeInTheDocument();
+    expect(screen.queryByText('No image renders queued.')).not.toBeInTheDocument();
+  });
+});
+
 describe('MediaJobsQueue — Codex reasoning-effort retry control', () => {
   it('surfaces the job effort in the row label', async () => {
     const user = userEvent.setup();

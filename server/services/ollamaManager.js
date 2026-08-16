@@ -82,6 +82,7 @@ let isAvailable = null
 // null sentinel (not `.length`) lets a genuine "0 models installed" result cache
 // too — otherwise the catalog-overlay path re-hits /api/tags on every keystroke.
 let installedModels = null
+let lastLoadedModelsError = null
 let lastCheckAt = null
 let managedProcess = null
 let managedProcessPid = null
@@ -212,6 +213,7 @@ function resetAvailabilityCache() {
   isAvailable = null
   lastCheckAt = null
   installedModels = null
+  lastLoadedModelsError = null
 }
 
 async function waitForAvailability(expected, timeoutMs) {
@@ -768,9 +770,16 @@ async function getEmbeddings(text, options = {}) {
  * @returns {Promise<Array<{ id, name, size, sizeVram, expiresAt }>>}
  */
 async function getLoadedModels() {
-  if (!(await checkOllamaAvailable())) return []
-  const data = await ollamaRequest('/api/ps').catch(() => null)
-  if (!Array.isArray(data?.models)) return []
+  if (!(await checkOllamaAvailable())) {
+    lastLoadedModelsError = status.lastError || 'Ollama is unavailable'
+    return []
+  }
+  const data = await ollamaRequest('/api/ps').catch((err) => ({ _err: err.message }))
+  if (!Array.isArray(data?.models)) {
+    lastLoadedModelsError = data?._err || 'Ollama residency endpoint returned no model list'
+    return []
+  }
+  lastLoadedModelsError = null
   return data.models.map((m) => ({
     id: m.name || m.model,
     name: m.name || m.model,
@@ -778,6 +787,11 @@ async function getLoadedModels() {
     sizeVram: m.size_vram ?? null,
     expiresAt: m.expires_at || null
   }))
+}
+
+/** Last `/api/ps` error (null only after a trustworthy residency list). */
+function getLastLoadedModelsError() {
+  return lastLoadedModelsError
 }
 
 /**
@@ -801,6 +815,9 @@ async function unloadModel(modelName) {
     return { unloaded: false, reason: 'Ollama unreachable' }
   }
   const loaded = await getLoadedModels()
+  if (getLastLoadedModelsError()) {
+    return { unloaded: false, reason: 'Could not verify whether the model is loaded' }
+  }
   if (!loaded.some((m) => m.id === modelName || m.name === modelName)) {
     return { unloaded: false, reason: 'not loaded' }
   }
@@ -1045,6 +1062,57 @@ function getModelsDir() {
   return process.env.OLLAMA_MODELS || join(homedir(), '.ollama', 'models')
 }
 
+/**
+ * Enumerate Ollama manifests directly from disk so a stopped daemon does not
+ * erase downloaded inventory. A corrupt or unreadable manifest rejects the
+ * scan: counted UI must not turn unreadable state into a trustworthy empty.
+ */
+async function listStoredModels() {
+  const manifestsDir = join(getModelsDir(), 'manifests')
+  const root = await stat(manifestsDir).then((entry) => entry.isDirectory(), (err) => {
+    if (err?.code === 'ENOENT') return false
+    throw err
+  })
+  if (!root) return []
+
+  const registries = (await readdir(manifestsDir, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory())
+  const models = []
+  for (const registry of registries) {
+    const registryDir = join(manifestsDir, registry.name)
+    const namespaces = (await readdir(registryDir, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory())
+    for (const namespace of namespaces) {
+      const namespaceDir = join(registryDir, namespace.name)
+      const names = (await readdir(namespaceDir, { withFileTypes: true }))
+        .filter((entry) => entry.isDirectory())
+      for (const name of names) {
+        const nameDir = join(namespaceDir, name.name)
+        const tags = (await readdir(nameDir, { withFileTypes: true }))
+          .filter((entry) => entry.isFile())
+        for (const tag of tags) {
+          const manifest = await readJSONFile(join(nameDir, tag.name), null, { logError: false, strict: true })
+          if (!manifest) throw new Error(`Ollama manifest disappeared during inventory: ${tag.name}`)
+          const sizes = manifestBlobRefs(manifest).map((blob) => blob.size)
+          const size = sizes.length > 0 && sizes.every(Number.isFinite)
+            ? sizes.reduce((sum, value) => sum + value, 0)
+            : null
+          const localRegistry = registry.name === 'registry.ollama.ai'
+          const localNamespace = namespace.name === 'library'
+          const base = localRegistry && localNamespace
+            ? name.name
+            : localRegistry
+              ? `${namespace.name}/${name.name}`
+              : `${registry.name}/${namespace.name}/${name.name}`
+          const id = `${base}:${tag.name}`
+          models.push({ id, name: id, size })
+        }
+      }
+    }
+  }
+  return models.sort((a, b) => (b.size || 0) - (a.size || 0))
+}
+
 const fileExists = (p) => stat(p).then((s) => s.isFile()).catch(() => false)
 const readManifest = (p) => readJSONFile(p, null, { logError: false })
 // One expression for the canonical manifest path, so the recovery writer and
@@ -1268,6 +1336,7 @@ export {
   getInstalledModels,
   getModelCapabilities,
   getLoadedModels,
+  getLastLoadedModelsError,
   unloadModel,
   pullModel,
   deleteModel,
@@ -1286,6 +1355,7 @@ export {
   isOllamaProvider,
   getServiceStatus,
   getModelsDir,
+  listStoredModels,
   getEmbeddings,
   isBootstrapConflictError,
   isPullDeadlineError,

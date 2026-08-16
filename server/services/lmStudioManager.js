@@ -9,7 +9,7 @@ import { homedir } from 'os'
 import { join, basename, resolve, relative, isAbsolute, sep } from 'path'
 import { existsSync } from 'fs'
 import { readdir, stat, copyFile, link, rm, rmdir } from 'fs/promises'
-import { ensureDir } from '../lib/fileUtils.js'
+import { dirSize, ensureDir } from '../lib/fileUtils.js'
 import { cosEvents } from './cosEvents.js'
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
 import {
@@ -36,6 +36,7 @@ let isAvailable = null
 // availableModels below so an idle LM Studio (server up, 0 models loaded)
 // doesn't re-hit /api/v0/models on every status poll.
 let loadedModels = null
+let lastLoadedModelsError = null
 // null = not yet fetched; any array (even empty) = a cached result. Lets the
 // catalog-overlay path (queried per keystroke) reuse the list instead of
 // re-hitting /api/v0/models each time. Busted to null by resetCache().
@@ -82,11 +83,11 @@ async function lmStudioRequest(endpoint, options = {}) {
  * Check if LM Studio is available
  * @returns {Promise<boolean>} - True if available
  */
-async function checkLMStudioAvailable() {
+async function checkLMStudioAvailable(forceRefresh = false) {
   const now = Date.now()
 
-  // Use cached result if recent (within AVAILABILITY_CACHE_TTL_MS)
-  if (lastCheckAt && now - lastCheckAt < AVAILABILITY_CACHE_TTL_MS && isAvailable !== null) {
+  // Use cached result if recent (within AVAILABILITY_CACHE_TTL_MS).
+  if (!forceRefresh && lastCheckAt && now - lastCheckAt < AVAILABILITY_CACHE_TTL_MS && isAvailable !== null) {
     return isAvailable
   }
 
@@ -117,15 +118,17 @@ async function getLoadedModels(forceRefresh = false) {
     return loadedModels
   }
 
-  const available = await checkLMStudioAvailable()
+  const available = await checkLMStudioAvailable(forceRefresh)
   if (!available) {
     // Don't cache — unavailable is transient, so the next call re-probes.
+    lastLoadedModelsError = status.lastError || 'LM Studio is unavailable'
     return []
   }
 
   // Use native REST API for richer model info (type, state, architecture)
-  const nativeModels = await lmStudioRequest('/api/v0/models').catch(() => null)
+  const nativeModels = await lmStudioRequest('/api/v0/models').catch((err) => ({ _err: err.message }))
   if (nativeModels?.data) {
+    lastLoadedModelsError = null
     loadedModels = nativeModels.data
       .filter(model => model.state === 'loaded')
       .map(model => ({
@@ -142,8 +145,9 @@ async function getLoadedModels(forceRefresh = false) {
   }
 
   // Fallback to OpenAI-compat endpoint
-  const response = await lmStudioRequest('/v1/models').catch(() => null)
+  const response = await lmStudioRequest('/v1/models').catch((err) => ({ _err: err.message }))
   if (response?.data) {
+    lastLoadedModelsError = null
     loadedModels = response.data.map(model => ({
       id: model.id,
       object: model.object,
@@ -155,7 +159,13 @@ async function getLoadedModels(forceRefresh = false) {
 
   // Both list endpoints failed — return empty WITHOUT caching (loadedModels
   // stays null) so the next call retries instead of pinning a bogus empty.
+  lastLoadedModelsError = nativeModels?._err || response?._err || 'LM Studio loaded-model endpoints returned no data'
   return []
+}
+
+/** Last loaded-model probe error (null only after a trustworthy list). */
+function getLastLoadedModelsError() {
+  return lastLoadedModelsError
 }
 
 /**
@@ -478,6 +488,7 @@ function updateConfig(newConfig) {
 function resetCache() {
   isAvailable = null
   loadedModels = null
+  lastLoadedModelsError = null
   availableModels = null
   lastListError = null
   lastCheckAt = null
@@ -507,12 +518,50 @@ async function getModelsDir() {
   return candidates[1] // sensible default even if it doesn't exist yet
 }
 
+/**
+ * Enumerate the exact `<publisher>/<repo>` folders LM Studio can delete.
+ * This is disk-native so a stopped daemon does not erase downloaded inventory,
+ * and one row always represents the whole repo folder (including every quant).
+ */
+async function listStoredModels() {
+  const modelsDir = await getModelsDir()
+  const root = await stat(modelsDir).then((entry) => entry.isDirectory(), (err) => {
+    if (err?.code === 'ENOENT') return false
+    throw err
+  })
+  if (!root) return []
+
+  const publishers = (await readdir(modelsDir, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory())
+  const nested = await Promise.all(publishers.map(async (publisher) => {
+    const publisherDir = join(modelsDir, publisher.name)
+    const repos = (await readdir(publisherDir, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory())
+    return Promise.all(repos.map(async (repo) => {
+      const id = `${publisher.name}/${repo.name}`
+      return {
+        id,
+        publisher: publisher.name,
+        name: repo.name,
+        size: await dirSize(join(publisherDir, repo.name), { strict: true }),
+      }
+    }))
+  }))
+  return nested.flat().sort((a, b) => b.size - a.size)
+}
+
 const normalizeRepoKey = (s) => String(s || '')
   .split('/').pop()
   .trim()
   .toLowerCase()
   .replace(/[-.]gguf$/i, '')
   .replace(/[-.]mlx[-.].*$/i, '')
+
+function modelIdsReferToSameRepo(left, right) {
+  const leftKey = normalizeRepoKey(left)
+  const rightKey = normalizeRepoKey(right)
+  return Boolean(leftKey && rightKey && leftKey === rightKey)
+}
 
 async function findModelDir(modelsDir, modelId) {
   // Reject `.`/`..` traversal segments before joining — mirrors the stricter
@@ -686,6 +735,7 @@ async function importModelFromGguf({ lmstudioId, ggufPath, projectorPath, mode =
 export {
   checkLMStudioAvailable,
   getLoadedModels,
+  getLastLoadedModelsError,
   getAvailableModels,
   downloadModel,
   loadModel,
@@ -700,6 +750,8 @@ export {
   isAppInstalled,
   getLastListError,
   getModelsDir,
+  listStoredModels,
+  modelIdsReferToSameRepo,
   resolveLocalModel,
   importModelFromGguf,
   deleteModel,

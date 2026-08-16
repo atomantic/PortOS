@@ -35,9 +35,18 @@ const buildAppModels = () => {
 
 const APP_MODELS = buildAppModels();
 
-export async function listHfModelStorage() {
+export async function listHfModelStorage({ strict = false } = {}) {
   const hubDir = getHfCacheRoot();
-  const entries = existsSync(hubDir)
+  const hubPresent = strict
+    ? await stat(hubDir).then(
+        (entry) => entry.isDirectory(),
+        (err) => {
+          if (err?.code === 'ENOENT') return false;
+          throw err;
+        },
+      )
+    : existsSync(hubDir);
+  const entries = hubPresent
     ? (await readdir(hubDir)).filter((name) => name.startsWith('models--'))
     : [];
 
@@ -45,7 +54,7 @@ export async function listHfModelStorage() {
     const modelKey = dirName.replace('models--', '');
     const [org, ...nameParts] = modelKey.split('--');
     const name = nameParts.join('--');
-    const size = await dirSize(join(hubDir, dirName));
+    const size = await dirSize(join(hubDir, dirName), { strict });
     return {
       id: dirName,
       org,
@@ -65,8 +74,17 @@ export async function listHfModelStorage() {
   };
 }
 
-export async function listLoraStorage() {
-  if (!existsSync(PATHS.loras)) return { loras: [], totalBytes: 0 };
+export async function listLoraStorage({ strict = false } = {}) {
+  const rootPresent = strict
+    ? await stat(PATHS.loras).then(
+        (entry) => entry.isDirectory(),
+        (err) => {
+          if (err?.code === 'ENOENT') return false;
+          throw err;
+        },
+      )
+    : existsSync(PATHS.loras);
+  if (!rootPresent) return { loras: [], totalBytes: 0 };
   const loras = [];
   for (const filename of await readdir(PATHS.loras)) {
     if (!filename.endsWith('.safetensors')) continue;

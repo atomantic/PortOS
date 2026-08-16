@@ -16,6 +16,13 @@ const readList = (key) => {
 // in-memory React state still updates and the app never crashes on a write.
 const writeList = (key, list) => safeWriteStorage(key, JSON.stringify(list));
 
+const LEGACY_NAV_PATHS = {
+  '/system-health': '/system-resources',
+};
+
+const migratePath = (path) => LEGACY_NAV_PATHS[path] || path;
+const migratePaths = (paths) => [...new Set(paths.map(migratePath))];
+
 /**
  * Sidebar working-set state (Pinned + Recent), persisted to localStorage.
  * @param {(path: string) => ({ path, label, icon } | null)} resolveNavEntry
@@ -29,11 +36,11 @@ export function useNavWorkingSet(resolveNavEntry) {
   // Record the initial visit synchronously so it's present on first render.
   // The useEffect below handles subsequent navigations only.
   const [recentPaths, setRecentPaths] = useState(() => {
-    const initial = recordVisit(location.pathname, readList(RECENT_KEY));
+    const initial = recordVisit(location.pathname, migratePaths(readList(RECENT_KEY)));
     writeList(RECENT_KEY, initial);
     return initial;
   });
-  const [pinnedPaths, setPinnedPaths] = useState(() => readList(PINNED_KEY));
+  const [pinnedPaths, setPinnedPaths] = useState(() => migratePaths(readList(PINNED_KEY)));
 
   // Track the last recorded path to skip the initial effect (already handled above).
   const lastRecordedRef = useRef(location.pathname);

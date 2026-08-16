@@ -5,6 +5,7 @@ import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 export default function CleanupControl({
   candidate,
   busy,
+  disabled = false,
   confirming,
   onRequest,
   onCancel,
@@ -16,7 +17,7 @@ export default function CleanupControl({
         prompt="Remove?"
         confirmText="Remove"
         busyText="Removing"
-        busy={busy}
+        busy={busy || disabled}
         confirmIcon={Trash2}
         ariaLabel={`Confirm removal of ${candidate.label}`}
         onConfirm={onConfirm}
@@ -30,7 +31,7 @@ export default function CleanupControl({
       <button
         type="button"
         onClick={onRequest}
-        disabled={busy}
+        disabled={busy || disabled}
         aria-label={`Remove ${candidate.label}`}
         className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-port-error/40 px-2.5 py-1.5 text-xs text-port-error transition-colors hover:bg-port-error/10 disabled:opacity-50"
       >

@@ -138,6 +138,16 @@ describe('Layout — pinned single nav rows', () => {
   });
 });
 
+describe('Layout — System Resources location state', () => {
+  it('keeps Dev Tools expanded and System Resources active on every subtab', async () => {
+    await renderLayout('/system-resources/storage');
+
+    const link = screen.getByRole('link', { name: 'System Resources' });
+    expect(link).toHaveAttribute('href', '/system-resources');
+    expect(link.className).toContain('text-port-accent');
+  });
+});
+
 describe('Layout — persistent mobile touch targets', () => {
   const expectAtLeast44px = (element) => {
     expect(element.className).toContain('min-w-[44px]');
