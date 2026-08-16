@@ -103,12 +103,14 @@ describe('cos-runner durable TUI ownership (#3202)', () => {
     const childEnvIdx = RUNNER_SRC.indexOf('const childEnv = buildCliChildEnv({ before: envVars, cwd });');
     const resolveIdx = RUNNER_SRC.indexOf('const executable = findCommandOnPath(command, { env: childEnv, cwd });');
     const prepareProbeIdx = RUNNER_SRC.indexOf("const versionProbe = prepareCliSpawn(executable, ['--version'], childEnv);");
-    const probeIdx = RUNNER_SRC.indexOf('const runnable = await commandExists(versionProbe.command, versionProbe.args, { env: childEnv, cwd });');
+    const probeIdx = RUNNER_SRC.indexOf('const runnable = await commandExists(versionProbe.command, versionProbe.args, {');
     const spawnIdx = RUNNER_SRC.indexOf('pty.spawn(ptyCommand, ptyArgs');
     expect(resolveIdx, 'runner must resolve the command against childEnv').toBeGreaterThan(childEnvIdx);
     expect(prepareProbeIdx, 'runner must prepare a Windows-safe version probe').toBeGreaterThan(resolveIdx);
     expect(probeIdx, 'runner must capability-check the prepared command').toBeGreaterThan(prepareProbeIdx);
     expect(spawnIdx, 'runner must open the PTY after the executable probe').toBeGreaterThan(probeIdx);
+    expect(RUNNER_SRC).toContain('const TUI_CAPABILITY_PROBE_TIMEOUT_MS = 15 * 1000;');
+    expect(RUNNER_SRC).toMatch(/timeoutMs:\s*TUI_CAPABILITY_PROBE_TIMEOUT_MS/);
     expect(RUNNER_SRC).toContain('Command executable unavailable: ${basename(command)} is not on the CoS Runner PATH');
     expect(RUNNER_SRC).toContain('Command executable unavailable: ${basename(command)} did not pass the CoS Runner capability check');
     expect(RUNNER_SRC).toContain('const { command: ptyCommand, args: ptyArgs } = prepareCliSpawn(executable, args, childEnv);');

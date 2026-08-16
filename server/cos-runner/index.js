@@ -51,6 +51,11 @@ const SIGKILL_GRACE_MS = 5000;       // wait after SIGTERM before forcing SIGKIL
 const ORPHAN_CLEANUP_DELAY_MS = 3000; // delay on boot before reaping orphaned agents
 const SHUTDOWN_DRAIN_MS = 5000;       // SIGTERM drain window before closing the server
 const TUI_DONE_POLL_MS = 2000;
+// Agentic CLIs can spend several seconds loading config/plugins before their
+// lightweight version command returns. Keep this aligned with commandExists'
+// documented heavy-CLI probe budget so a cold but runnable provider is not
+// rejected before its PTY opens.
+const TUI_CAPABILITY_PROBE_TIMEOUT_MS = 15 * 1000;
 
 // Path + listen constants. These lived adjacent to the command allowlist before
 // it was extracted to ./allowedCommands.js; they must stay here — they're
@@ -192,7 +197,11 @@ app.post('/spawn-tui', async (req, res) => {
   // shim must run through cmd.exe, while on POSIX it remains the direct binary.
   // That prevents node-pty from reducing an immediate CLI error to a blank exit.
   const versionProbe = prepareCliSpawn(executable, ['--version'], childEnv);
-  const runnable = await commandExists(versionProbe.command, versionProbe.args, { env: childEnv, cwd });
+  const runnable = await commandExists(versionProbe.command, versionProbe.args, {
+    timeoutMs: TUI_CAPABILITY_PROBE_TIMEOUT_MS,
+    env: childEnv,
+    cwd,
+  });
   if (!runnable) {
     return res.status(422).json({
       error: `Command executable unavailable: ${basename(command)} did not pass the CoS Runner capability check. Reinstall it or update the provider command.`

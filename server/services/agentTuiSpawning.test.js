@@ -1647,6 +1647,36 @@ describe('spawnTuiAgent runtime', () => {
     expect(rawTail).toBeDefined();
   });
 
+  it('does not revive an agent when the durable runner exits before its spawn response', async () => {
+    let resolveRunnerSession;
+    let exitPromise;
+    const session = {
+      sessionId: SESSION_ID,
+      pid: 4321,
+      ptyProcess: { pid: 4321, kill: vi.fn() },
+    };
+    vi.mocked(spawnTuiSessionViaRunner).mockImplementationOnce((options) => {
+      capturedOnData = options.onData;
+      capturedOnExit = options.onExit;
+      // The socket relay registers this callback before its POST resolves, so
+      // a CLI that exits immediately can finalize while the response is held.
+      exitPromise = options.onExit({ exitCode: 1, killed: false, outputTail: 'startup failed' });
+      return new Promise((resolve) => { resolveRunnerSession = resolve; });
+    });
+
+    const spawnPromise = runSpawn({ useDurableRunner: true });
+    await flushMicrotasks();
+    resolveRunnerSession(session);
+
+    await spawnPromise;
+    await exitPromise;
+
+    expect(activeAgents.has('agent-1')).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(shellService.killSession).toHaveBeenCalledWith(SESSION_ID);
+    expect(cosAgentLifecycle.updateAgent).not.toHaveBeenCalled();
+  });
+
   // ── 4. Killed / user-terminated path ────────────────────────────────────────
   it('user-terminated: finalizeAgent receives terminatedByUser:true + error=Agent terminated by user', async () => {
     // Mark agent as user-terminated before the exit fires

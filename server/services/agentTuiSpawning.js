@@ -1313,6 +1313,16 @@ export async function spawnTuiAgent({
   }
   sessionId = session.sessionId;
 
+  // A durable runner can emit tui:exit before its spawn POST response reaches
+  // this process. handleExit() then finalizes the run while createAgentTuiSession
+  // is still awaiting that response. Do not revive the finalized agent by
+  // registering its returned session, timers, or active-agent record; release
+  // the external shell session that was registered during the late response.
+  if (finalized) {
+    if (sessionId && shellService.getSession(sessionId)) shellService.killSession(sessionId);
+    return null;
+  }
+
   if (!sessionId) {
     await finish({ success: false, exitCode: 1, error: 'Failed to create TUI shell session', reason: 'spawn-error' });
     return null;
