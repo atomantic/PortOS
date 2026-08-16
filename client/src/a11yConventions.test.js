@@ -91,6 +91,48 @@ function openingTagAt(src, index) {
   return end === -1 ? null : src.slice(index, end + 1);
 }
 
+// The tag-name pattern for "any element", for callers that scan every tag
+// rather than one named element.
+const ANY_TAG_NAME = '[A-Za-z][\\w.-]*';
+
+/**
+ * Every `<Name …>` in `src`, as `{ tag, index, contentStart }` — the one place
+ * the file spells out the exec/`openingTagAt`/`lastIndex` walk that ten
+ * scanners used to re-derive a line at a time.
+ *
+ * The `re.lastIndex = contentStart` advance is the load-bearing part: without
+ * it the next `exec` resumes INSIDE the tag just read, so a `<label` written in
+ * an attribute value (`title="<label>"`) or an attribute expression matches as
+ * an element. The `if (!tag) continue` beside it deliberately does NOT advance
+ * — an unterminated tag has no end to advance past, and stepping over just the
+ * `<` is what lets the walk reach the next real tag instead of stopping there.
+ * That asymmetry reads as a typo every time it is re-derived, which is how
+ * #4318 and #4327 each taught one copy something the others never learned.
+ *
+ * `name` is spliced into the pattern verbatim, so a caller that wants any
+ * element at all passes `ANY_TAG_NAME`.
+ *
+ * `closers: true` additionally yields each `</Name>` as `{ closing: true, index }`
+ * — no `tag`/`contentStart`, since a closing tag has neither attributes nor
+ * children. Only `openWrapperInstancesAt` asks for them, to keep an open/close
+ * stack; every other caller is a flat walk and leaves them off.
+ */
+function* forEachOpeningTag(src, name, { closers = false } = {}) {
+  const re = new RegExp(`<${closers ? '/?' : ''}${name}\\b`, 'g');
+  let match;
+  while ((match = re.exec(src))) {
+    if (match[0][1] === '/') {
+      yield { closing: true, index: match.index };
+      continue;
+    }
+    const tag = openingTagAt(src, match.index);
+    if (!tag) continue;
+    const contentStart = match.index + tag.length;
+    re.lastIndex = contentStart;
+    yield { closing: false, tag, index: match.index, contentStart };
+  }
+}
+
 const lineOf = (src, index) => src.slice(0, index).split('\n').length;
 
 // Index of the last non-whitespace character before `from`, stopping at `floor`
@@ -594,13 +636,9 @@ function maskComments(src, { startMode = 'code' } = {}) {
 }
 
 function hasMatchingLabelElement(src, id) {
-  const re = /<label\b/g;
-  let match;
-  while ((match = re.exec(src))) {
-    const tag = openingTagAt(src, match.index);
-    if (!tag) continue;
+  for (const { tag, index } of forEachOpeningTag(src, 'label')) {
     const htmlFor = normalizedAttributeValue(attributeValue(tag, 'htmlFor'));
-    if (htmlFor !== id || !hasUsableElementText(src, match.index, tag)) continue;
+    if (htmlFor !== id || !hasUsableElementText(src, index, tag)) continue;
     return true;
   }
   return false;
@@ -635,12 +673,7 @@ function hasUsableLabelProp(tag, labelProp) {
 // their control just as well. See `wrapperShapes` for how the shape is proved.
 function forwardsLabelForId(src, { id }, { idProp, labelProp }, name) {
   if (!id) return false;
-  const re = new RegExp(`<${name}\\b`, 'g');
-  let match;
-  while ((match = re.exec(src))) {
-    const tag = openingTagAt(src, match.index);
-    if (!tag) continue;
-    re.lastIndex = match.index + tag.length;
+  for (const { tag, index } of forEachOpeningTag(src, name)) {
     if (normalizedAttributeValue(attributeValue(tag, idProp)) !== id) continue;
     // A forwarder can take its text as JSX children rather than a prop
     // (`<FieldLabel htmlFor="world-logline">Logline</FieldLabel>`), in which
@@ -649,7 +682,7 @@ function forwardsLabelForId(src, { id }, { idProp, labelProp }, name) {
     // Without this branch every children-shaped forwarder looked unnamed and
     // its controls stayed on the allowlist.
     if (labelProp === 'children') {
-      if (hasUsableElementText(src, match.index, tag)) return true;
+      if (hasUsableElementText(src, index, tag)) return true;
       continue;
     }
     if (hasUsableLabelProp(tag, labelProp)) return true;
@@ -760,20 +793,15 @@ function isDirectElementInExpression(src, start, index) {
 // name the control. `contentStart` is where that instance's children begin, for
 // callers that need to walk the body.
 function openWrapperInstancesAt(src, name, index) {
-  const re = new RegExp(`</?${name}\\b`, 'g');
   const open = [];
-  let match;
-  while ((match = re.exec(src)) && match.index < index) {
-    if (match[0].startsWith('</')) {
+  for (const instance of forEachOpeningTag(src, name, { closers: true })) {
+    if (instance.index >= index) break;
+    if (instance.closing) {
       open.pop();
       continue;
     }
-    const tag = openingTagAt(src, match.index);
-    if (!tag) continue;
-    const contentStart = match.index + tag.length;
-    re.lastIndex = contentStart;
-    if (/\/\s*>$/.test(tag)) continue;
-    open.push({ tag, index: match.index, contentStart });
+    if (/\/\s*>$/.test(instance.tag)) continue;
+    open.push({ tag: instance.tag, index: instance.index, contentStart: instance.contentStart });
   }
   return open;
 }
@@ -955,13 +983,8 @@ function arrowBodyAt(src, from) {
 // Every `<label>` element in a component body, as `{ tag, inner }`. A
 // self-closing `<label />` wraps nothing and carries no text, so it is skipped.
 function* labelElements(body) {
-  const re = /<label\b/g;
-  let match;
-  while ((match = re.exec(body))) {
-    const tag = openingTagAt(body, match.index);
-    if (!tag || /\/\s*>$/.test(tag)) continue;
-    const contentStart = match.index + tag.length;
-    re.lastIndex = contentStart;
+  for (const { tag, contentStart } of forEachOpeningTag(body, 'label')) {
+    if (/\/\s*>$/.test(tag)) continue;
     const close = body.indexOf('</label>', contentStart);
     if (close === -1) continue;
     yield { tag, inner: body.slice(contentStart, close) };
@@ -1375,14 +1398,10 @@ function hasUsableAriaLabelledByReference(src, tag) {
   const value = normalizedAttributeValue(raw);
   if (!value || !/^[A-Za-z][\w:.-]*(?:\s+[A-Za-z][\w:.-]*)*$/.test(value)) return false;
   return value.split(/\s+/).every((id) => {
-    const re = /<[A-Za-z][\w.-]*\b/g;
-    let match;
-    while ((match = re.exec(src))) {
-      const referencedTag = openingTagAt(src, match.index);
-      if (!referencedTag) continue;
+    for (const { tag: referencedTag, index } of forEachOpeningTag(src, ANY_TAG_NAME)) {
       if (normalizedAttributeValue(attributeValue(referencedTag, 'id')) !== id) continue;
       if (/\baria-hidden\s*=\s*['"`]true['"`]/.test(referencedTag)) return false;
-      if (hasUsableElementText(src, match.index, referencedTag)) return true;
+      if (hasUsableElementText(src, index, referencedTag)) return true;
     }
     return false;
   });
@@ -1623,14 +1642,10 @@ describe('a11y conventions', () => {
     const offenders = [];
     for (const file of trackedJsxFiles()) {
       const src = readFileSync(join(CLIENT_ROOT, file), 'utf8');
-      const re = /<button\b/g;
-      let m;
-      while ((m = re.exec(src))) {
-        const tag = openingTagAt(src, m.index);
-        if (!tag) continue;
+      for (const { tag, index } of forEachOpeningTag(src, 'button')) {
         if (!/rounded-full/.test(tag) || !TRACK_SIZES.test(tag)) continue;
         if (/role="switch"/.test(tag)) continue;
-        offenders.push(`${file}:${lineOf(src, m.index)}`);
+        offenders.push(`${file}:${lineOf(src, index)}`);
       }
     }
     expect(offenders, `Toggle-switch button without role="switch" + aria-checked — prefer components/ToggleSwitch.jsx:\n${offenders.join('\n')}`).toEqual([]);
@@ -1649,20 +1664,17 @@ describe('a11y conventions', () => {
     const offenders = [];
     for (const file of trackedSourceFiles()) {
       const src = readFileSync(join(CLIENT_ROOT, file), 'utf8');
-      const re = /<input\b/g;
-      let m;
-      while ((m = re.exec(src))) {
-        const tag = openingTagAt(src, m.index);
+      for (const { tag, index } of forEachOpeningTag(src, 'input')) {
         // Match against the whole opening tag, not a quoted-attribute-shaped
         // regex: `type='file'` / `type={'file'}` and a `hidden` arriving via a
         // template literal or ternary (`className={cond ? 'hidden' : ''}`) are
         // the same bug, and a quote-specific pattern waves them through.
-        if (!tag || !/\btype\s*=\s*[{'"]*\s*['"]?file\b/.test(tag)) continue;
+        if (!/\btype\s*=\s*[{'"]*\s*['"]?file\b/.test(tag)) continue;
         const hidden = /\bhidden\b/.test(tag) || /display:\s*['"]?none/.test(tag);
         const ariaHidden = /aria-hidden/.test(tag);
         const untabbable = /tabIndex\s*=\s*\{\s*-1\s*\}/.test(tag);
         if (!hidden && !ariaHidden && !untabbable) continue;
-        offenders.push(`${file}:${lineOf(src, m.index)}`);
+        offenders.push(`${file}:${lineOf(src, index)}`);
       }
     }
     expect(offenders, `File input hidden from keyboard/AT — use components/ui/FilePickerButton.jsx (sr-only input + native <label for> activation), never className="hidden" / aria-hidden / tabIndex={-1} / display:none:\n${offenders.join('\n')}`).toEqual([]);
@@ -1737,13 +1749,10 @@ describe('a11y conventions', () => {
     const offenders = [];
     for (const file of trackedJsxFiles()) {
       const src = readFileSync(join(CLIENT_ROOT, file), 'utf8');
-      const re = /<button\b/g;
-      let m;
-      while ((m = re.exec(src))) {
-        const tag = openingTagAt(src, m.index);
-        if (!tag || !/role="switch"/.test(tag)) continue;
+      for (const { tag, index } of forEachOpeningTag(src, 'button')) {
+        if (!/role="switch"/.test(tag)) continue;
         if (/aria-checked/.test(tag)) continue;
-        offenders.push(`${file}:${lineOf(src, m.index)}`);
+        offenders.push(`${file}:${lineOf(src, index)}`);
       }
     }
     expect(offenders, `role="switch" without aria-checked:\n${offenders.join('\n')}`).toEqual([]);
@@ -1761,16 +1770,12 @@ describe('a11y conventions', () => {
     const offenders = [];
     for (const file of trackedJsxFiles()) {
       const src = readFileSync(join(CLIENT_ROOT, file), 'utf8');
-      const re = /<button\b/g;
-      let m;
-      while ((m = re.exec(src))) {
-        const tag = openingTagAt(src, m.index);
-        if (!tag || tag.endsWith('/>')) continue; // self-closing — no body to judge
+      for (const { tag, index, contentStart } of forEachOpeningTag(src, 'button')) {
+        if (tag.endsWith('/>')) continue; // self-closing — no body to judge
         if (/\baria-label\s*=/.test(tag) || /\baria-labelledby\s*=/.test(tag)) continue;
-        const openEnd = m.index + tag.length;
-        const body = findButtonBody(src, openEnd);
+        const body = findButtonBody(src, contentStart);
         if (body === null || !isIconOnlyBody(body)) continue;
-        offenders.push(`${file}:${lineOf(src, m.index)}`);
+        offenders.push(`${file}:${lineOf(src, index)}`);
       }
     }
     expect(offenders, `Icon-only <button> with no aria-label/aria-labelledby — title alone isn't touch-discoverable and isn't reliably read as the accessible name; see media/MediaCard.jsx's Annotate button for the convention:\n${offenders.join('\n')}`).toEqual([]);
@@ -1788,12 +1793,9 @@ describe('a11y conventions', () => {
     const anchors = new Set();
     for (const file of trackedJsxFiles()) {
       const scanSrc = maskedSourceOf(file);
-      const re = controlTagRe(tagName);
-      let m;
-      while ((m = re.exec(scanSrc))) {
-        const tag = openingTagAt(scanSrc, m.index);
-        if (!tag || hasAccessibleControlName(scanSrc, tag, m.index, tagName, file)) continue;
-        anchors.add(controlSourceAnchor(file, scanSrc, m.index, tagName));
+      for (const { tag, index } of forEachOpeningTag(scanSrc, tagName)) {
+        if (hasAccessibleControlName(scanSrc, tag, index, tagName, file)) continue;
+        anchors.add(controlSourceAnchor(file, scanSrc, index, tagName));
       }
     }
     unnamedAnchorsByTag.set(tagName, anchors);
@@ -2091,6 +2093,20 @@ describe('a11y conventions', () => {
     const nested = (wrapper, name) => `${wrapper}<${name}>\n  <${name} label="Rounds">\n    <select><option>a</option></select>\n  </${name}>\n</${name}>`;
     expect(isNamed(nested(implicitWrapper, 'Field'), 'select')).toBe(true);
     expect(isNamed(nested(clonedWrapper, 'FormField'), 'select')).toBe(true);
+  });
+
+  it('resumes every tag walk after the tag, not inside it (#4337)', () => {
+    // `forEachOpeningTag` owns the `re.lastIndex = contentStart` advance that
+    // each scanner used to re-derive — and one of them (`hasMatchingLabelElement`)
+    // never had it, so its walk re-entered the tag it had just read and matched
+    // markup written in an attribute VALUE as an element. That is a false
+    // POSITIVE in a guard: a control with no label of its own is credited by
+    // label-shaped prose belonging to some other element, and drops off the
+    // offender list silently.
+    expect(isNamed('<label htmlFor="other" title=\'<label htmlFor="x">Rounds</label>\'>Other</label>\n<input id="x" type="text" />')).toBe(false);
+    // The advance must not cost a real label that FOLLOWS such a tag — the walk
+    // resumes at the tag's end, not past its whole element.
+    expect(isNamed('<label htmlFor="other" title=\'<label>\'>Other</label>\n<label htmlFor="x">Rounds</label>\n<input id="x" type="text" />')).toBe(true);
   });
 
   it('reads a quoted attribute as a string, not as tag structure (#4333)', () => {
@@ -2537,16 +2553,13 @@ describe('a11y conventions', () => {
     const offenders = [];
     for (const file of trackedJsxFiles()) {
       const src = readFileSync(join(CLIENT_ROOT, file), 'utf8');
-      const re = /<button\b/g;
-      let m;
-      while ((m = re.exec(src))) {
-        const tag = openingTagAt(src, m.index);
-        if (!tag || !CLOSE_LABEL_RE.test(tag)) continue;
+      for (const { tag, index } of forEachOpeningTag(src, 'button')) {
+        if (!CLOSE_LABEL_RE.test(tag)) continue;
         if (/\binset-0\b/.test(tag)) continue;
         const clsMatch = tag.match(/className\s*=\s*"([^"]*)"/);
         if (!clsMatch) continue; // dynamic className — reviewed by hand, not scanned here
         if (hasFortyFourMinTouchTarget(clsMatch[1])) continue;
-        offenders.push(`${file}:${lineOf(src, m.index)}`);
+        offenders.push(`${file}:${lineOf(src, index)}`);
       }
     }
     expect(offenders, `Close button under the 44px touch-target minimum — add min-h-[44px] min-w-[44px] + flex items-center justify-center (see Drawer.jsx:106):\n${offenders.join('\n')}`).toEqual([]);
