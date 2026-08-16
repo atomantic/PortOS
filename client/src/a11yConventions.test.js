@@ -91,48 +91,65 @@ function openingTagAt(src, index) {
   return end === -1 ? null : src.slice(index, end + 1);
 }
 
-// The tag-name pattern for "any element", for callers that scan every tag
-// rather than one named element.
+// The tag-name pattern a walk falls back to when no name is given.
 const ANY_TAG_NAME = '[A-Za-z][\\w.-]*';
 
+// Element names reach these walks from SOURCE — `relativeImportBindings` hands
+// over whatever identifier the file bound — and a JS identifier may hold `$`,
+// which is an ANCHOR in a pattern: spliced in raw, `<Btn$1` compiles to a regex
+// that can never match, so the wrapper goes invisible and the controls it names
+// drop off the offender list with no error.
+//
+// No verdict moves today, because the two sides disagree in the same direction:
+// `relativeImportBindings` admits `$` (`[A-Z][\w$]*`) while
+// `forEachLocalComponent` does not (`[A-Z][\w]*`), so such a wrapper is unseen
+// either way and no fixture can witness the difference. Escaping is what keeps
+// the WALK from being the reason if the detectors are ever reconciled — which
+// is the direction they should move, since `$` is a legal identifier character.
+const escapeForPattern = (name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 /**
- * Every `<Name …>` in `src`, as `{ tag, index, contentStart }` — the one place
- * the file spells out the exec/`openingTagAt`/`lastIndex` walk that ten
- * scanners used to re-derive a line at a time.
+ * Every `<Name …>` in `src`, as `{ tag, index, contentStart }` — the walk that
+ * ten scanners used to re-derive a line at a time. (`callSiteIdVerdicts` is the
+ * one holdout, and says why at its own definition.) Omit `name` to walk every
+ * element; a name given is matched literally, never as a pattern.
  *
  * The `re.lastIndex = contentStart` advance is the load-bearing part: without
  * it the next `exec` resumes INSIDE the tag just read, so a `<label` written in
- * an attribute value (`title="<label>"`) or an attribute expression matches as
- * an element. The `if (!tag) continue` beside it deliberately does NOT advance
- * — an unterminated tag has no end to advance past, and stepping over just the
- * `<` is what lets the walk reach the next real tag instead of stopping there.
- * That asymmetry reads as a typo every time it is re-derived, which is how
- * #4318 and #4327 each taught one copy something the others never learned.
+ * an attribute value (`title="<label>"`) matches as an element. `if (!tag)
+ * continue` beside it deliberately does NOT advance — an unterminated tag has
+ * no end to advance past, and stepping over just the `<` is what lets the walk
+ * reach the next real tag instead of stopping there. That asymmetry reads as a
+ * typo every time it is re-derived, which is how #4318 and #4327 each taught
+ * one copy something the others never learned.
  *
- * `name` is spliced into the pattern verbatim, so a caller that wants any
- * element at all passes `ANY_TAG_NAME`.
- *
- * The advance steps over the WHOLE opening tag, so an element written inside an
+ * The advance steps over the whole opening tag, so an element written inside an
  * attribute EXPRESSION (`<Foo render={<span id="notes-h">Notes</span>} />`) is
- * not visited. That only reaches a caller scanning `ANY_TAG_NAME`, since a
- * name-specific walk lands on the nested tag directly unless it is nested in a
- * same-named tag — which is the false positive this advance exists to stop. No
- * such shape is in the tree today, and the failure direction is the safe one:
- * an id the walk cannot see reads as UNRESOLVED, so the control lands on the
- * offender list and the rule goes red, rather than being credited a name it
- * does not have. Teaching the walk to descend into attribute expressions is a
- * scanner of its own; do not "fix" it by dropping the advance.
+ * not visited — reachable only from an `ANY_TAG_NAME` scan, since a name-
+ * specific walk lands on the nested tag directly unless it sits inside a
+ * same-named tag, which is the false positive the advance exists to stop. No
+ * such shape is in the tree today, and it fails LOUD: an id the walk cannot see
+ * reads as unresolved, so the control lands on the offender list rather than
+ * being credited a name it does not have. Descending into attribute
+ * expressions is a scanner of its own; do not "fix" it by dropping the advance.
  *
- * `closers: true` additionally yields each `</Name>` as `{ closing: true, index }`
- * — no `tag`/`contentStart`, since a closing tag has neither attributes nor
- * children. Only `openWrapperInstancesAt` asks for them, to keep an open/close
- * stack; every other caller is a flat walk and leaves them off.
+ * `closers: true` also yields each `</Name>` as `{ closing: true, index }` — no
+ * `tag`/`contentStart`, since a closing tag has neither attributes nor
+ * children. Only `openWrapperInstancesAt` wants them, for its open/close stack.
  */
 function* forEachOpeningTag(src, name, { closers = false } = {}) {
-  const re = new RegExp(`<${closers ? '/?' : ''}${name}\\b`, 'g');
+  // Built per call, and it has to stay that way: these walks interleave — the
+  // control scan is mid-walk when it asks `hasMatchingLabelElement` for the
+  // same `'label'`, and two wrapper walks can be open on one name at once. A
+  // hoisted or memoized `/g` regex is shared mutable `lastIndex`, so the inner
+  // walk would leave the outer one wherever it finished. Constructing costs
+  // ~60ns against per-match work three orders of magnitude larger; the obvious
+  // "cache the regex" optimization buys nothing and breaks re-entrancy.
+  const pattern = name === undefined ? ANY_TAG_NAME : escapeForPattern(name);
+  const re = new RegExp(`<${closers ? '/?' : ''}${pattern}\\b`, 'g');
   let match;
   while ((match = re.exec(src))) {
-    if (match[0][1] === '/') {
+    if (match[0].startsWith('</')) {
       yield { closing: true, index: match.index };
       continue;
     }
@@ -805,14 +822,14 @@ function isDirectElementInExpression(src, start, index) {
 // callers that need to walk the body.
 function openWrapperInstancesAt(src, name, index) {
   const open = [];
-  for (const instance of forEachOpeningTag(src, name, { closers: true })) {
-    if (instance.index >= index) break;
-    if (instance.closing) {
+  for (const { closing, tag, index: at, contentStart } of forEachOpeningTag(src, name, { closers: true })) {
+    if (at >= index) break;
+    if (closing) {
       open.pop();
       continue;
     }
-    if (/\/\s*>$/.test(instance.tag)) continue;
-    open.push({ tag: instance.tag, index: instance.index, contentStart: instance.contentStart });
+    if (/\/\s*>$/.test(tag)) continue;
+    open.push({ tag, index: at, contentStart });
   }
   return open;
 }
@@ -1253,7 +1270,7 @@ function wrapperRegistry(src, file) {
   if (file !== undefined) {
     for (const [localName, { file: importedFile, exportedName }] of relativeImportBindings(src, file)) {
       // Only pay to read a file whose component this one actually renders.
-      if (!new RegExp(`<${localName}\\b`).test(src)) continue;
+      if (!new RegExp(`<${escapeForPattern(localName)}\\b`).test(src)) continue;
       add(localName, importedComponentShapes(importedFile, exportedName));
     }
   }
@@ -1346,9 +1363,15 @@ function exportedNamesOf(src, name) {
 // value AND pair a <label htmlFor> carrying text for it? Both halves are
 // required — an id with no label names nothing, and a label with no id names
 // something else.
+//
+// The one tag walk NOT folded onto `forEachOpeningTag`: the caller quantifies
+// over these verdicts, so an unterminated tag has to contribute a `false`
+// rather than drop out of the count. The generator skips it — correct for a
+// scanner asking "which tags are there", wrong for one asking "did every call
+// site do its half", which would quietly weaken to "every PARSEABLE call site".
 function callSiteIdVerdicts(src, name, idProp) {
   const verdicts = [];
-  const re = new RegExp(`<${name}\\b`, 'g');
+  const re = new RegExp(`<${escapeForPattern(name)}\\b`, 'g');
   let match;
   while ((match = re.exec(src))) {
     const tag = openingTagAt(src, match.index);
@@ -1409,7 +1432,7 @@ function hasUsableAriaLabelledByReference(src, tag) {
   const value = normalizedAttributeValue(raw);
   if (!value || !/^[A-Za-z][\w:.-]*(?:\s+[A-Za-z][\w:.-]*)*$/.test(value)) return false;
   return value.split(/\s+/).every((id) => {
-    for (const { tag: referencedTag, index } of forEachOpeningTag(src, ANY_TAG_NAME)) {
+    for (const { tag: referencedTag, index } of forEachOpeningTag(src)) {
       if (normalizedAttributeValue(attributeValue(referencedTag, 'id')) !== id) continue;
       if (/\baria-hidden\s*=\s*['"`]true['"`]/.test(referencedTag)) return false;
       if (hasUsableElementText(src, index, referencedTag)) return true;
@@ -1452,16 +1475,20 @@ function controlSemanticAnchor(tag) {
   }).filter(Boolean).join('|');
 }
 
-const controlTagRe = (tagName) => new RegExp(`<${tagName}\\b`, 'g');
-
+// The anchor has to enumerate controls the same way the scan that produced
+// `index` did, or `matching.indexOf(index)` numbers occurrences against a set
+// the scan never visited: a `<input` written in an attribute VALUE is not a
+// control, but a walk without the advance counts it, and one ghost whose
+// semantic anchor collides renames every later occurrence — silently
+// invalidating the hand-maintained allowlist row keyed on the old name. Same
+// walk on both sides is what keeps the key stable.
 function controlSourceAnchor(file, src, index, tagName) {
   const tag = openingTagAt(src, index);
   if (!tag) return `${file}|${tagName}|unknown`;
   const semantic = controlSemanticAnchor(tag);
   const matching = [];
-  for (const match of src.matchAll(controlTagRe(tagName))) {
-    const otherTag = openingTagAt(src, match.index);
-    if (otherTag && controlSemanticAnchor(otherTag) === semantic) matching.push(match.index);
+  for (const { tag: otherTag, index: otherIndex } of forEachOpeningTag(src, tagName)) {
+    if (controlSemanticAnchor(otherTag) === semantic) matching.push(otherIndex);
   }
   const base = `${file}|${tagName}|${semantic}`;
   if (matching.length === 1) return base;
@@ -2115,9 +2142,26 @@ describe('a11y conventions', () => {
     // label-shaped prose belonging to some other element, and drops off the
     // offender list silently.
     expect(isNamed('<label htmlFor="other" title=\'<label htmlFor="x">Rounds</label>\'>Other</label>\n<input id="x" type="text" />')).toBe(false);
-    // The advance must not cost a real label that FOLLOWS such a tag — the walk
-    // resumes at the tag's end, not past its whole element.
-    expect(isNamed('<label htmlFor="other" title=\'<label>\'>Other</label>\n<label htmlFor="x">Rounds</label>\n<input id="x" type="text" />')).toBe(true);
+    // The walk resumes at the opening tag's END, not past the whole ELEMENT, so
+    // a real label nested in that tag's body is still found. Nesting it is what
+    // makes this discriminate: a label written after `</label>` would be found
+    // under either policy, so it would prove nothing.
+    expect(isNamed('<label htmlFor="other" title=\'<label>\'>Other <label htmlFor="x">Rounds</label></label>\n<input id="x" type="text" />')).toBe(true);
+  });
+
+  it('does not credit a name written inside an attribute expression (#4337)', () => {
+    // The advance steps over a whole opening tag, so an element inside an
+    // attribute EXPRESSION is not visited — `notes-h` is never resolved and the
+    // textarea reads UNNAMED. This pins the boundary rather than endorsing it:
+    // the failure direction is the safe one (a control lands on the offender
+    // list instead of being credited a name it does not have), and the day the
+    // walk learns to descend into expressions, this test says so out loud
+    // instead of a comment quietly going stale.
+    expect(isNamed('<Foo render={<span id="notes-h">Notes</span>} />\n<textarea aria-labelledby="notes-h" />', 'textarea')).toBe(false);
+    // The same id written as a real sibling element IS resolved — proof the
+    // assertion above is about expression nesting, not about aria-labelledby
+    // being broken outright.
+    expect(isNamed('<span id="notes-h">Notes</span>\n<textarea aria-labelledby="notes-h" />', 'textarea')).toBe(true);
   });
 
   it('reads a quoted attribute as a string, not as tag structure (#4333)', () => {
