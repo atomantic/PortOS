@@ -26,8 +26,7 @@
 import { spawn } from './childProcess.js';
 import { join } from 'node:path';
 import {
-  resolveFlux2Python, isFlux2VenvHealthy,
-  resolveAcestepPython, resolveAudioldm2Python, resolveMusicgenPython,
+  resolveFlux2Python, isFlux2VenvHealthy, HF_HUB_PYTHON_RESOLVERS,
 } from './pythonSetup.js';
 import { PATHS } from './fileUtils.js';
 import { getHfTokenInfo } from './hfToken.js';
@@ -165,8 +164,30 @@ export async function resolveHfDownloadPython(preferredPython = null) {
   if (flux2 && await isFlux2VenvHealthy()) return flux2;
   const settings = await getSettings();
   if (settings?.imageGen?.local?.pythonPath) return settings.imageGen.local.pythonPath;
-  // Music venvs are a valid hf_hub host — used when only music gen is set up.
-  return resolveAcestepPython() || resolveAudioldm2Python() || resolveMusicgenPython() || null;
+  // Any provisioned music venv is a valid hf_hub host — used when only music
+  // gen is set up. pythonSetup owns the list so it can't drift out of step with
+  // the resolvers themselves (see HF_HUB_PYTHON_RESOLVERS).
+  for (const resolve of HF_HUB_PYTHON_RESOLVERS) {
+    const found = resolve();
+    if (found) return found;
+  }
+  return null;
+}
+
+// Argv for scripts/hf_download_repo.py. Pure and exported so the flag contract
+// is unit-tested without spawning python — the same split as buildSidecarArgs in
+// services/pipeline/musicGen.js. Returns `onlyFiles` too because the caller
+// branches its progress copy on single-file mode.
+export function buildHfDownloadArgs({ repo, revision = null, only = null, ignore = null, tokenEnv = 'HF_TOKEN' }) {
+  const globList = (v) => (Array.isArray(v) ? v.filter((f) => typeof f === 'string' && f.length > 0) : []);
+  const args = [HELPER_SCRIPT, '--repo', repo, '--token-env', tokenEnv];
+  if (revision) args.push('--revision', revision);
+  const onlyFiles = globList(only);
+  for (const f of onlyFiles) args.push('--only', f);
+  // The helper hard-errors on --only with --ignore (single-file mode never
+  // enumerates the repo, so there is nothing to filter). Single-file mode wins.
+  if (!onlyFiles.length) for (const pat of globList(ignore)) args.push('--ignore', pat);
+  return { args, onlyFiles };
 }
 
 // Returns `{ promise, kill }`. The promise resolves with `{ ok, sizeBytes,
@@ -178,7 +199,13 @@ export async function resolveHfDownloadPython(preferredPython = null) {
 // files. This is MANDATORY for aggregate repos — `DeepBeepMeep/LTX-2` mirrors
 // every LTX weight in one ~708 GB repo, so a snapshot would fill the user's
 // disk to pull one 1.3 GB IC-LoRA (see server/lib/icLoraWeights.js).
-export function downloadHfRepo({ repo, revision = null, only = null, pythonPath: preferredPython = null, onEvent }) {
+//
+// `ignore` is an array of fnmatch globs dropped from the enumerated file list —
+// the inverse tool, for repos that ship extra checkpoint formats the runtime
+// never loads (MiniMax Music 3 carries a 20 GB captioning model and 10 GB of
+// original-format .pth beside the 29 GB the diffusers pipeline actually reads).
+// It is ignored in single-file mode, where the helper never enumerates at all.
+export function downloadHfRepo({ repo, revision = null, only = null, ignore = null, pythonPath: preferredPython = null, onEvent }) {
   let proc = null;
   let killed = false;
   let errorKind = null;
@@ -208,10 +235,7 @@ export function downloadHfRepo({ repo, revision = null, only = null, pythonPath:
     if (token) env.HF_TOKEN = token;
     else delete env.HF_TOKEN;
 
-    const args = [HELPER_SCRIPT, '--repo', repo, '--token-env', 'HF_TOKEN'];
-    if (revision) args.push('--revision', revision);
-    const onlyFiles = Array.isArray(only) ? only.filter((f) => typeof f === 'string' && f.length > 0) : [];
-    for (const f of onlyFiles) args.push('--only', f);
+    const { args, onlyFiles } = buildHfDownloadArgs({ repo, revision, only, ignore });
 
     onEvent({
       type: 'stage',

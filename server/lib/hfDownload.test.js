@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseHfDownloadLine } from './hfDownload.js';
+import { buildHfDownloadArgs, parseHfDownloadLine } from './hfDownload.js';
 
 describe('parseHfDownloadLine', () => {
   it('treats an empty line as ignore', () => {
@@ -99,5 +99,40 @@ describe('parseHfDownloadLine', () => {
       type: 'event',
       event: { type: 'log', message: 'still going' },
     });
+  });
+});
+
+describe('buildHfDownloadArgs', () => {
+  const flags = (opts) => buildHfDownloadArgs(opts).args.slice(1); // drop the helper path
+
+  it('passes ignore globs through for a snapshot pull', () => {
+    expect(flags({ repo: 'org/bundle', ignore: ['extra/*', 'legacy.pth'] })).toEqual([
+      '--repo', 'org/bundle', '--token-env', 'HF_TOKEN',
+      '--ignore', 'extra/*', '--ignore', 'legacy.pth',
+    ]);
+  });
+
+  // scripts/hf_download_repo.py hard-errors on the two together (--only never
+  // enumerates the repo, so there is nothing for a glob to filter), so an argv
+  // carrying both would fail the download outright.
+  it('drops ignore when only is set, rather than emitting both', () => {
+    const { args, onlyFiles } = buildHfDownloadArgs({ repo: 'org/bundle', only: ['weight.safetensors'], ignore: ['extra/*'] });
+    expect(args).toContain('--only');
+    expect(args).not.toContain('--ignore');
+    expect(onlyFiles).toEqual(['weight.safetensors']);
+  });
+
+  it('skips empty and non-string entries in both lists', () => {
+    expect(flags({ repo: 'org/x', only: ['', null, 'a.bin'] })).toEqual([
+      '--repo', 'org/x', '--token-env', 'HF_TOKEN', '--only', 'a.bin',
+    ]);
+    expect(flags({ repo: 'org/x', ignore: ['', undefined] })).toEqual([
+      '--repo', 'org/x', '--token-env', 'HF_TOKEN',
+    ]);
+  });
+
+  it('adds --revision only when one is pinned', () => {
+    expect(flags({ repo: 'org/x', revision: 'abc123' })).toContain('--revision');
+    expect(flags({ repo: 'org/x' })).not.toContain('--revision');
   });
 });

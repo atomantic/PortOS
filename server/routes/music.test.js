@@ -23,12 +23,13 @@ vi.mock('../services/pipeline/musicGen.js', () => {
     musicgen: { id: 'musicgen', name: 'MusicGen', models: [{ id: 'm', name: 'M' }], defaultModelId: 'm', minDurationSec: 1, maxDurationSec: 30, defaultDurationSec: 12, installEnv: 'INSTALL_MUSICGEN', venvDefault: '/v/mg', resolvePython: () => (gen.ready ? '/v/mg/bin/python3' : null), customModels: true },
     acestep: { id: 'acestep', name: 'ACE-Step', models: [{ id: 'a', name: 'A' }], defaultModelId: 'a', minDurationSec: 1, maxDurationSec: 240, defaultDurationSec: 60, installEnv: 'INSTALL_ACESTEP', venvDefault: '/v/ace', resolvePython: () => (gen.ready ? '/v/ace/bin/python3' : null), lyrics: true, customModels: false },
     acestep15: { id: 'acestep15', name: 'ACE-Step 1.5', models: [{ id: 'ace-step-v1.5', repo: 'ACE-Step/Ace-Step1.5', name: 'ACE-Step 1.5' }], defaultModelId: 'ace-step-v1.5', minDurationSec: 1, maxDurationSec: 240, defaultDurationSec: 60, installEnv: 'INSTALL_ACESTEP15', venvDefault: '/v/ace15', resolvePython: () => (gen.ready ? '/v/ace15/bin/python3' : null), lyrics: true, customModels: false, fixedModelInstall: true },
-    'minimax-music3': { id: 'minimax-music3', name: 'MiniMax Music 3', models: [{ id: 'minimax-music3', repo: 'MiniMaxAI/MiniMax-Music3', name: 'MiniMax Music 3' }], defaultModelId: 'minimax-music3', minDurationSec: 1, maxDurationSec: 300, defaultDurationSec: 60, installEnv: 'INSTALL_MINIMAX_MUSIC3', venvDefault: '/v/minimax', resolvePython: () => (gen.ready ? '/v/minimax/bin/python3' : null), lyrics: true, customModels: false, fixedModelInstall: true, cudaRequired: true, autoDuration: true },
+    'minimax-music3': { id: 'minimax-music3', name: 'MiniMax Music 3', models: [{ id: 'minimax-music3', repo: 'MiniMaxAI/MiniMax-Music3', name: 'MiniMax Music 3', downloadIgnore: ['qwen_7B/*', 'flowmatching_vae.pth', 'dav.pth', 'figures/*'], downloadSizeGb: 29 }], defaultModelId: 'minimax-music3', minDurationSec: 1, maxDurationSec: 300, defaultDurationSec: 60, installEnv: 'INSTALL_MINIMAX_MUSIC3', venvDefault: '/v/minimax', resolvePython: () => (gen.ready ? '/v/minimax/bin/python3' : null), lyrics: true, customModels: false, fixedModelInstall: true, cudaRequired: true, autoDuration: true },
   };
   return {
     ENGINES,
     DEFAULT_ENGINE_ID: 'musicgen',
     getEngine: (id) => ENGINES[id] || ENGINES.musicgen,
+    getEngineModel: (id, modelId) => (ENGINES[id] || ENGINES.musicgen).models.find((m) => m.id === modelId) || null,
     isEngineReady: (engineId) => (gen.readyByEngine ? gen.readyByEngine[engineId] === true : gen.ready),
     // The route reads readiness through isEngineHealthy (the import probe), so
     // `gen.healthyByEngine` / `gen.healthy` drive it; both default to the same
@@ -287,6 +288,9 @@ describe('music routes', () => {
     const supported = await request(app).get('/api/music/engines');
     expect(supported.body.engines.find((e) => e.id === 'minimax-music3')).toMatchObject({
       cudaState: 'available', fixedModelInstall: true, modelReady: false, runtimeReady: true, ready: false,
+      // The UI puts this on the install button so the user knows the size of the
+      // pull before starting it.
+      modelSizeGb: 29,
     });
 
     cuda.status = 'absent';
@@ -398,9 +402,28 @@ describe('music routes', () => {
     models.add.mockResolvedValueOnce({ id: 'facebook/musicgen-large', repo: 'facebook/musicgen-large', name: 'musicgen-large' });
     const r = await request(app).post('/api/music/models').send({ engine: 'musicgen', repo: 'facebook/musicgen-large' });
     expect(r.status).toBe(200);
-    expect(sse.run).toHaveBeenCalledWith(expect.objectContaining({ repo: 'facebook/musicgen-large' }));
+    // A user-added repo has no shipped contract about which paths matter, so it
+    // gets the full snapshot (no ignore patterns).
+    expect(sse.run).toHaveBeenCalledWith(expect.objectContaining({
+      repos: [{ repo: 'facebook/musicgen-large', ignore: [] }],
+    }));
     // Registered only AFTER the download landed in the cache.
     expect(models.add).toHaveBeenCalledWith({ engine: 'musicgen', repo: 'facebook/musicgen-large', name: undefined });
+  });
+
+  it('POST /models forwards a shipped fixed model\'s downloadIgnore to the download stream', async () => {
+    const r = await request(app).post('/api/music/models').send({ engine: 'minimax-music3', repo: 'MiniMaxAI/MiniMax-Music3' });
+    expect(r.status).toBe(200);
+    // Skipping the bundled captioner and original-format checkpoints keeps the
+    // roughly 29 GB the diffusers pipeline actually loads on the user's disk.
+    expect(sse.run).toHaveBeenCalledWith(expect.objectContaining({
+      repos: [{
+        repo: 'MiniMaxAI/MiniMax-Music3',
+        ignore: ['qwen_7B/*', 'flowmatching_vae.pth', 'dav.pth', 'figures/*'],
+      }],
+    }));
+    // A shipped model is already in the engine's list — nothing to register.
+    expect(models.add).not.toHaveBeenCalled();
   });
 
   it('POST /models rolls back the registration when the download did not land', async () => {

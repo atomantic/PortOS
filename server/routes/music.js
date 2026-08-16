@@ -31,7 +31,7 @@ import { validateRequest } from '../lib/validation.js';
 import { createLineReader } from '../lib/streamLines.js';
 import { SETUP_IMAGE_VIDEO_SCRIPT, spawnSetupScript, stopSetupScript } from '../lib/setupScriptRunner.js';
 import {
-  ENGINES, DEFAULT_ENGINE_ID, getEngine, isEngineHealthy, isEnginePlatformSupported,
+  ENGINES, DEFAULT_ENGINE_ID, getEngine, getEngineModel, isEngineHealthy, isEnginePlatformSupported,
   enginePlatformLabel, generateMusic,
 } from '../services/pipeline/musicGen.js';
 import { listEngineModels, addAudioModel, removeAudioModel, isValidRepoId } from '../services/audioModels.js';
@@ -52,7 +52,11 @@ const router = Router();
 router.get('/engines', asyncHandler(async (_req, res) => {
   const cuda = await getCudaCapability();
   const engines = await Promise.all(Object.values(ENGINES).map(async (engine) => {
-    const modelCache = engine.fixedModelInstall ? await inspectModelCache(engine.models[0].repo).catch(() => ({ cached: false })) : null;
+    // The one checkpoint a fixed-model engine installs. Resolved by
+    // defaultModelId, not position, so readiness + size stay attached to the
+    // model the client actually downloads and renders with.
+    const fixedModel = engine.fixedModelInstall ? getEngineModel(engine.id, engine.defaultModelId) : null;
+    const modelCache = fixedModel ? await inspectModelCache(fixedModel.repo).catch(() => ({ cached: false })) : null;
     // isEngineHealthy, not isEngineReady: a half-built venv (install died
     // mid-pip) still has its interpreter, and reporting that as runtimeReady
     // hides the install affordance on a backend that cannot generate.
@@ -73,6 +77,9 @@ router.get('/engines', asyncHandler(async (_req, res) => {
       customModels: engine.customModels === true,
       fixedModelInstall: engine.fixedModelInstall === true,
       modelReady: modelCache ? modelCache.cached === true : true,
+      // Rough download footprint for the fixed weights, so the install button can
+      // say how big the pull is before the user commits to it.
+      modelSizeGb: fixedModel?.downloadSizeGb ?? null,
       runtimeReady,
       cudaRequired: engine.cudaRequired === true,
       // false when this host can never run the backend (e.g. MLX MusicGen off
@@ -256,7 +263,7 @@ router.post('/models', asyncHandler(async (req, res) => {
   // ACE-Step, which uses a fixed checkpoint_dir) — otherwise a downloaded repo
   // would register as selectable but the sidecar would ignore it.
   const engine = ENGINES[body.engine];
-  const fixedModel = engine.fixedModelInstall && engine.models.some((model) => model.repo === body.repo);
+  const fixedModel = engine.fixedModelInstall ? engine.models.find((model) => model.repo === body.repo) || null : null;
   if (!engine.customModels && !fixedModel) {
     throw new ServerError(`${ENGINES[body.engine].name} does not support custom HuggingFace models`, { status: 400, code: 'AUDIO_MODEL_ENGINE_FIXED' });
   }
@@ -265,7 +272,14 @@ router.post('/models', asyncHandler(async (req, res) => {
   if (!fixedModel) await addAudioModel({ engine: body.engine, repo: body.repo, name: body.name });
   // Hand the response to the shared SSE driver — it owns writeHead/end + the
   // in-flight dedupe + client-disconnect kill. Resolves after the stream ends.
-  await startHfDownloadStream({ req, res, repo: body.repo });
+  // A shipped fixed model may declare `downloadIgnore` to skip repo paths its
+  // runtime never loads (see MINIMAX_MUSIC3_MODELS) — a user-added repo has no
+  // such contract, so it always gets the full snapshot.
+  await startHfDownloadStream({
+    req,
+    res,
+    repos: [{ repo: body.repo, ignore: fixedModel?.downloadIgnore ?? [] }],
+  });
   // Roll back if the weights aren't actually present now (failed/cancelled
   // download) so a bogus repo doesn't persist. Best-effort: a rollback failure
   // is logged by the service, not surfaced (the response already closed).

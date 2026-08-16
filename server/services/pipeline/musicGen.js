@@ -108,8 +108,22 @@ export const ACESTEP15_MODELS = Object.freeze([
   { id: 'ace-step-v1.5', repo: 'ACE-Step/Ace-Step1.5', name: 'ACE-Step 1.5 (full song + vocals)' },
 ]);
 export const DEFAULT_ACESTEP15_MODEL_ID = 'ace-step-v1.5';
+// MiniMax Music 3 weights. The HF repo is ~57 GB, but `ModularPipeline`
+// (what scripts/generate_minimax_music3.py loads) reads only the seven
+// components named in the repo's modular_model_index.json: condition_encoder,
+// language_model, rvq_depth_decoder, scheduler, tokenizer, transformer,
+// vocoder — about 29 GB. The rest is the sglang-omni serving path: a bundled
+// 20 GB Qwen-7B captioner under qwen_7B/ plus the original-format
+// flowmatching_vae.pth / dav.pth checkpoints. `downloadIgnore` keeps those off
+// the user's disk; it is fnmatch (not glob), so `*` spans `/` as well.
 export const MINIMAX_MUSIC3_MODELS = Object.freeze([
-  { id: 'minimax-music3', repo: 'MiniMaxAI/MiniMax-Music3', name: 'MiniMax Music 3 (CUDA, up to 5 minutes)' },
+  {
+    id: 'minimax-music3',
+    repo: 'MiniMaxAI/MiniMax-Music3',
+    name: 'MiniMax Music 3 (CUDA, up to 5 minutes)',
+    downloadIgnore: Object.freeze(['qwen_7B/*', 'flowmatching_vae.pth', 'dav.pth', 'figures/*']),
+    downloadSizeGb: 29,
+  },
 ]);
 
 /**

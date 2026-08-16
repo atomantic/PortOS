@@ -1,15 +1,23 @@
 /**
  * MusicGenPanel — on-device music generation for the Track editor.
  *
- * Lets the user pick a generation engine (MusicGen / AudioLDM2 / ACE-Step),
- * pick or install a model, and Generate audio from the track's prompt (+ lyrics
- * for lyric-aware engines like ACE-Step). On success the parent receives the
- * updated track (the server attaches the audio + gen metadata).
+ * Lets the user pick a generation engine (MusicGen / AudioLDM2 / ACE-Step /
+ * MiniMax Music 3), pick or install a model, and Generate audio from the track's
+ * prompt (+ lyrics for lyric-aware engines like ACE-Step and MiniMax Music 3).
+ * On success the parent receives the updated track (the server attaches the
+ * audio + gen metadata).
  *
  * Engines that aren't provisioned (their opt-in venv is missing) are shown with
  * an in-app install action and the Generate button is gated — mirroring the FLUX.2
  * venv gate in image gen. Additional HuggingFace checkpoints can be installed
  * inline (streamed download), then selected immediately.
+ *
+ * A fixed-model engine (MiniMax Music 3) needs BOTH a runtime venv and a fixed
+ * weights download, and neither is useful alone. The setup banner therefore
+ * carries ONE action that installs whatever is still missing: it opens the
+ * runtime installer first when that's absent, then — once the refreshed engine
+ * list confirms the venv landed — chains straight into the weights download
+ * without the user having to find a second button.
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -21,18 +29,43 @@ import { formatDurationSec } from '../../utils/formatters.js';
 import {
   listMusicEngines, generateMusic, installAudioModel, removeAudioModel,
 } from '../../services/api';
+import { formatDownloadGb } from '../../utils/formatters';
 import RuntimeInstallModal from '../install/RuntimeInstallModal';
 
-function engineSetupMessage(engine) {
-  // Host-incompatible comes first: it is the only reason that no amount of
-  // installing will fix, so it must not be worded as a setup step.
-  if (engine.platformSupported === false) return `${engine.name} requires ${engine.platformLabel || 'a different host'} and is unavailable on this machine.`;
-  if (engine.cudaRequired && engine.cudaState === 'absent') return `${engine.name} requires an NVIDIA CUDA GPU and is unavailable on this host.`;
-  if (engine.cudaRequired && engine.cudaState === 'unknown') return `${engine.name} is disabled because CUDA availability could not be determined.`;
-  if (engine.runtimeReady === false && engine.fixedModelInstall && engine.modelReady === false) return `${engine.name} needs its runtime and model weights before generation.`;
-  if (engine.runtimeReady === false) return `${engine.name} needs its runtime before generation.`;
-  if (engine.fixedModelInstall && engine.modelReady === false) return `${engine.name} model weights are not installed yet.`;
-  return `${engine.name} is not installed yet. Install the runtime to enable generation.`;
+/**
+ * What an engine still needs, the sentence explaining it, and the label for the
+ * one button that fixes it. Single derivation so the banner text and the button
+ * can't disagree, and so the handlers branch on the same flags the UI shows
+ * rather than re-deriving them.
+ *
+ * `label` is null when there's nothing to install — the engine is provisioned,
+ * or it's CUDA-only on a host with no usable NVIDIA GPU, where an install button
+ * would just be a slower way to fail.
+ */
+function engineSetupState(engine) {
+  if (!engine) return null;
+  const needsRuntime = engine.runtimeReady !== true;
+  const needsWeights = engine.fixedModelInstall === true && engine.modelReady === false;
+  const blocked = engine.platformSupported === false
+    || (engine.cudaRequired === true && engine.cudaState !== 'available');
+
+  let message;
+  if (engine.platformSupported === false) message = `${engine.name} requires ${engine.platformLabel || 'a different host'} and is unavailable on this machine.`;
+  else if (engine.cudaRequired === true && engine.cudaState === 'unknown') message = `${engine.name} is disabled because CUDA availability could not be determined.`;
+  else if (engine.cudaRequired === true && engine.cudaState !== 'available') message = `${engine.name} requires an NVIDIA CUDA GPU and is unavailable on this host.`;
+  else if (engine.runtimeReady === false && needsWeights) message = `${engine.name} needs its runtime and model weights before generation.`;
+  else if (engine.runtimeReady === false) message = `${engine.name} needs its runtime before generation.`;
+  else if (needsWeights) message = `${engine.name} model weights are not installed yet.`;
+  else message = `${engine.name} is not installed yet. Install the runtime to enable generation.`;
+
+  const size = formatDownloadGb(engine.modelSizeGb);
+  const suffix = size ? ` (${size})` : '';
+  let label = null;
+  if (!blocked && needsRuntime && needsWeights) label = `Install runtime + weights${suffix}`;
+  else if (!blocked && needsRuntime) label = 'Install runtime';
+  else if (!blocked && needsWeights) label = `Download model weights${suffix}`;
+
+  return { needsRuntime, needsWeights, blocked, message, label };
 }
 
 function supportsAutoDuration(engine) {
@@ -55,13 +88,20 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
   const [installRepo, setInstallRepo] = useState('');
   const [installing, setInstalling] = useState(false);
   const [installProgress, setInstallProgress] = useState(null);
+  // Progress for the setup action (runtime/fixed weights), rendered under the
+  // setup banner. Kept apart from `installProgress`, which belongs to the
+  // custom-HuggingFace-repo field further down.
+  const [setupProgress, setSetupProgress] = useState(null);
   const [runtimeInstallEngine, setRuntimeInstallEngine] = useState(null);
   const [userSelectedEngine, setUserSelectedEngine] = useState(false);
   const mountedRef = useMounted();
 
+  // Returns the freshly-fetched list as well as storing it: the post-runtime
+  // chain below needs the NEW engine record, and reading `engine` off state
+  // right after setEngines() would still see the pre-install one.
   const loadEngines = async () => {
     const data = await listMusicEngines({ silent: true }).catch(() => null);
-    if (!mountedRef.current) return;
+    if (!mountedRef.current) return [];
     const list = Array.isArray(data?.engines) ? data.engines : [];
     setEngines(list);
     setLoading(false);
@@ -71,6 +111,7 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
       const pick = ready || list.find((e) => e.id === data.defaultEngine) || list[0];
       setEngineId(pick.id);
     }
+    return list;
   };
 
   useEffect(() => { loadEngines(); }, []);
@@ -126,23 +167,49 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
   }, [engine?.id, engine?.models]);
 
   const canGenerate = !!engine?.ready && !!prompt?.trim() && !generating;
+  const setup = engineSetupState(engine);
 
-  const handleFixedModelInstall = async () => {
-    const model = engine?.models?.find((item) => item.id === engine.defaultModelId) || engine?.models?.[0];
-    if (!engine || !model?.repo) return;
+  // `target` is the engine record to install for — passed explicitly by the
+  // post-runtime chain, which holds a fresher record than component state does.
+  const installFixedModel = async (target) => {
+    const eng = target || engine;
+    const model = eng?.models?.find((item) => item.id === eng.defaultModelId) || eng?.models?.[0];
+    if (!eng || !model?.repo) return;
     setInstalling(true);
-    setInstallProgress({ message: `Starting ${model.name}…` });
+    setSetupProgress({ message: `Starting ${model.name}…` });
     let failed = false;
-    await installAudioModel({ engine: engine.id, repo: model.repo }, (ev) => {
+    await installAudioModel({ engine: eng.id, repo: model.repo }, (ev) => {
       if (!mountedRef.current) return;
-      if (ev.type === 'progress') setInstallProgress({ message: `${ev.file || 'downloading'} — ${Math.round((ev.progress || 0) * 100)}%`, progress: ev.progress });
-      else if (ev.type === 'stage') setInstallProgress({ message: ev.stage });
+      if (ev.type === 'progress') setSetupProgress({ message: `${ev.file || 'downloading'} — ${Math.round((ev.progress || 0) * 100)}%`, progress: ev.progress });
+      else if (ev.type === 'stage') setSetupProgress({ message: ev.stage });
       else if (ev.type === 'error') { failed = true; toast.error(ev.message || 'Download failed'); }
     }).catch((err) => { failed = true; if (mountedRef.current) toast.error(err.message || 'Install failed'); });
     if (!mountedRef.current) return;
     setInstalling(false);
-    setInstallProgress(null);
+    setSetupProgress(null);
     if (!failed) { await loadEngines(); toast.success(`${model.name} installed`); }
+  };
+
+  // The banner's one setup action. Runtime first when it's missing — weights are
+  // useless without an interpreter to load them — otherwise straight to weights.
+  const handleSetupInstall = async () => {
+    if (!setup || setup.blocked) return;
+    if (setup.needsRuntime) { setRuntimeInstallEngine(engine); return; }
+    await installFixedModel(engine);
+  };
+
+  // Runtime installer closed: refresh, then continue into the weights — but only
+  // once the refreshed record shows the venv actually landed, so a cancelled or
+  // failed runtime install can't kick off a multi-GB pull with nothing to run it.
+  const handleRuntimeInstallClose = async () => {
+    setRuntimeInstallEngine(null);
+    const list = await loadEngines();
+    if (!mountedRef.current) return;
+    const fresh = list.find((e) => e.id === engineId);
+    const freshSetup = engineSetupState(fresh);
+    if (freshSetup && !freshSetup.blocked && !freshSetup.needsRuntime && freshSetup.needsWeights) {
+      await installFixedModel(fresh);
+    }
   };
 
   const handleGenerate = async () => {
@@ -210,9 +277,6 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
 
   const selectedUserModel = engine?.models?.find((m) => m.id === modelId && m.userAdded);
   const showRuntimeInstallHint = !!engine && !engine.ready && (!!prompt?.trim() || userSelectedEngine);
-  const canInstallRuntime = engine?.runtimeReady !== true
-    && engine?.platformSupported !== false
-    && (!engine?.cudaRequired || engine?.cudaState === 'available');
 
   return (
     <div className="space-y-2 border border-port-border rounded-lg p-3 bg-port-bg/40">
@@ -316,26 +380,22 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
       {showRuntimeInstallHint ? (
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 rounded-lg border border-port-warning/30 bg-port-warning/10 px-3 py-2">
           <p className="text-[11px] text-port-warning">
-            {engineSetupMessage(engine)}
+            {setup.message}
           </p>
-          {canInstallRuntime ? <button
+          {setup.label ? <button
             type="button"
-            onClick={() => setRuntimeInstallEngine(engine)}
-            className="inline-flex items-center justify-center gap-2 px-3 py-1.5 rounded-lg bg-port-bg border border-port-warning/50 text-port-warning text-xs font-medium hover:border-port-warning disabled:opacity-50"
+            onClick={handleSetupInstall}
+            disabled={installing}
+            className="inline-flex items-center justify-center gap-2 whitespace-nowrap px-3 py-1.5 rounded-lg bg-port-bg border border-port-warning/50 text-port-warning text-xs font-medium hover:border-port-warning disabled:opacity-50"
           >
-            <Download size={13} />
-            Install runtime
+            {installing ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
+            {setup.label}
           </button>
           : null}
         </div>
       ) : null}
-      {engine?.fixedModelInstall && !engine.modelReady && engine.platformSupported !== false && engine.cudaState === 'available' ? (
-        <div className="rounded-lg border border-port-border px-3 py-2">
-          <button type="button" onClick={handleFixedModelInstall} disabled={installing} className="inline-flex items-center gap-2 text-xs text-port-accent disabled:opacity-50">
-            {installing ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />} Install model
-          </button>
-          {installProgress ? <p className="mt-1 truncate text-[11px] text-gray-500">{installProgress.message}</p> : null}
-        </div>
+      {setupProgress ? (
+        <p className="truncate text-[11px] text-gray-500">{setupProgress.message}</p>
       ) : null}
       {engine?.lyrics ? (
         <p className="text-[11px] text-gray-500">This engine uses the track’s lyrics as conditioning.</p>
@@ -418,8 +478,7 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
         label={runtimeInstallEngine?.name}
         installUrlBase="/api/music/setup/runtime-install"
         description="Installing the music runtime and python packages. Large downloads may take several minutes."
-        onClose={() => setRuntimeInstallEngine(null)}
-        onComplete={() => loadEngines()}
+        onClose={handleRuntimeInstallClose}
       />
     </div>
   );

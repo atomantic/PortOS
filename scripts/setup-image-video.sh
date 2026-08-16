@@ -19,11 +19,17 @@
 #   INSTALL_AUDIOLDM2 '1' to bootstrap a venv at ~/.portos/venv-audioldm2 (torch + diffusers) for local AudioLDM2 long-form background-music generation (pipeline audio stage, second backend alongside MusicGen). Default: 0; opt in with INSTALL_AUDIOLDM2=1 (runs on MPS / CUDA / CPU).
 #   INSTALL_ACESTEP '1' to bootstrap a venv at ~/.portos/venv-acestep (torch + the acestep package) for local ACE-Step full-song generation with vocals (Music studio, third backend). Default: 0; opt in with INSTALL_ACESTEP=1 (runs on MPS / CUDA / CPU; checkpoints auto-download to ~/.cache/ace-step on first run).
 #   INSTALL_ACESTEP15 '1' to bootstrap a venv at ~/.portos/venv-acestep15 (the ACE-Step 1.5 package + torch) for local ACE-Step 1.5 full-song generation (Music studio). Default: 0; opt in with INSTALL_ACESTEP15=1 (runs on MPS / CUDA / CPU; model weights are installed separately from Music).
+#   INSTALL_MINIMAX_MUSIC3 '1' to bootstrap a venv at ~/.portos/venv-minimax-music3 (CUDA torch + a pinned diffusers) for local MiniMax Music 3 full-song generation up to five minutes (Music studio, fourth backend). Default: 0; opt in with INSTALL_MINIMAX_MUSIC3=1 (NVIDIA CUDA only; the ~29 GB of weights install separately from Music → Generate).
 #   INSTALL_MUSCRIPTOR '1' to bootstrap a venv at ~/.portos/venv-muscriptor (the muscriptor pip package + its torch stack) for local audio → MIDI transcription (Rounds reference audio + Music Video parsing). Default: 0; opt in with INSTALL_MUSCRIPTOR=1 (runs on MPS / CUDA / CPU; model weights auto-download from HuggingFace on first transcription).
 
 set -euo pipefail
 
 PYTHON_BIN="${PYTHON_BIN:-python3}"
+# CUDA wheel index for every runtime that needs torch on Windows, where the
+# default PyPI wheel is CPU-only. One definition: a cu126 → cu130 bump has to
+# move in lockstep with WIN_TORCH_CUDA_INDEX in server/lib/pythonSetup.js, and
+# a per-block copy makes that a grep instead of an edit.
+TORCH_CUDA_INDEX="${PORTOS_TORCH_CUDA_INDEX:-https://download.pytorch.org/whl/cu126}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PORTOS_DATA="${PORTOS_DATA:-${REPO_ROOT}/data}"
@@ -484,10 +490,9 @@ if [[ "$INSTALL_MINIMAX_H3_CUDA" == "1" ]]; then
   # Windows wheel is CPU-only, which on a 33B model is not "slower" but
   # unusable. Linux's PyPI torch already bundles CUDA, so it needs no swap.
   # Mirrors WIN_TORCH_CUDA_INDEX in server/lib/pythonSetup.js.
-  MINIMAX_H3_TORCH_INDEX="${PORTOS_TORCH_CUDA_INDEX:-https://download.pytorch.org/whl/cu126}"
   if is_windows; then
-    echo "📦 Installing CUDA torch from ${MINIMAX_H3_TORCH_INDEX}..."
-    "$MINIMAX_H3_CUDA_PY" -m pip install --upgrade --index-url "$MINIMAX_H3_TORCH_INDEX" torch
+    echo "📦 Installing CUDA torch from ${TORCH_CUDA_INDEX}..."
+    "$MINIMAX_H3_CUDA_PY" -m pip install --upgrade --index-url "$TORCH_CUDA_INDEX" torch
   else
     echo "📦 Installing torch..."
     "$MINIMAX_H3_CUDA_PY" -m pip install --upgrade torch
@@ -752,6 +757,14 @@ fi
 
 INSTALL_MINIMAX_MUSIC3="${INSTALL_MINIMAX_MUSIC3:-0}"
 if [[ "$INSTALL_MINIMAX_MUSIC3" == "1" ]]; then
+  # MiniMax Music 3 (Music studio, CUDA-only) — full songs with vocals up to five
+  # minutes. diffusers is pinned to a git commit until a release carries the
+  # MiniMax-Music3 modular pipeline, so pip needs git to build that wheel. Say so
+  # up front rather than failing several minutes into a torch download.
+  if ! have git; then
+    echo "❌ INSTALL_MINIMAX_MUSIC3=1 requires git (the diffusers pin is a git commit)." >&2
+    exit 1
+  fi
   MINIMAX_MUSIC3_VENV="${HOME}/.portos/venv-minimax-music3"
   mkdir -p "${HOME}/.portos"
   # A venv built from a conda/anaconda base is the sticky Windows failure: pip
@@ -803,6 +816,7 @@ if [[ "$INSTALL_MINIMAX_MUSIC3" == "1" ]]; then
     'diffusers @ git+https://github.com/huggingface/diffusers.git@2da7040be1a2e5f2fcbc8b985083342a308f5a86'
   "$MINIMAX_MUSIC3_PY" -c "import torch; from diffusers import ModularPipeline; assert torch.cuda.is_available()"
   echo "✅ MiniMax Music 3 venv ready: $MINIMAX_MUSIC3_PY"
+  echo "   Model weights (~29 GB) install separately from Music → Generate."
 fi
 
 INSTALL_MUSCRIPTOR="${INSTALL_MUSCRIPTOR:-0}"

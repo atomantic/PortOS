@@ -12,7 +12,12 @@ vi.mock('../../services/api', () => ({
 }));
 
 vi.mock('../install/RuntimeInstallModal', () => ({
-  default: ({ open, label }) => (open ? <div>Installing {label}</div> : null),
+  default: ({ open, label, onClose }) => (open ? (
+    <div>
+      Installing {label}
+      <button type="button" onClick={onClose}>close installer</button>
+    </div>
+  ) : null),
 }));
 
 const engine = (overrides) => ({
@@ -26,6 +31,26 @@ const engine = (overrides) => ({
   lyrics: false,
   customModels: true,
   ready: true,
+  ...overrides,
+});
+
+// MiniMax Music 3 as the server reports it: CUDA-only, one fixed checkpoint,
+// and a runtime venv installed separately from the weights.
+const minimax = (overrides) => engine({
+  id: 'minimax-music3',
+  name: 'MiniMax Music 3 (CUDA only)',
+  models: [{ id: 'minimax-music3', repo: 'MiniMaxAI/MiniMax-Music3', name: 'MiniMax Music 3' }],
+  defaultModelId: 'minimax-music3',
+  maxDurationSec: 300,
+  defaultDurationSec: 60,
+  lyrics: true,
+  customModels: false,
+  fixedModelInstall: true,
+  modelReady: false,
+  modelSizeGb: 29,
+  cudaRequired: true,
+  cudaState: 'available',
+  ready: false,
   ...overrides,
 });
 
@@ -128,8 +153,8 @@ describe('MusicGenPanel', () => {
     render(<MusicGenPanel track={{ id: 'track-1' }} prompt="cinematic score" lyrics="Example lyrics" />);
 
     expect(await screen.findByText(/requires an NVIDIA CUDA GPU/i)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /install runtime/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /install model/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /install/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /download model weights/i })).not.toBeInTheDocument();
   });
 
   it('generates an unsaved standalone track without requiring a title or associations', async () => {
@@ -272,20 +297,63 @@ describe('MusicGenPanel', () => {
   it('offers the fixed-model install without suggesting a runtime reinstall', async () => {
     api.listMusicEngines.mockResolvedValue({
       defaultEngine: 'minimax-music3',
-      engines: [engine({
-        id: 'minimax-music3', name: 'MiniMax Music 3 (CUDA only)', ready: false,
-        runtimeReady: true, modelReady: false, fixedModelInstall: true,
-        cudaRequired: true, cudaState: 'available', customModels: false,
-        models: [{ id: 'minimax-music3', repo: 'MiniMaxAI/MiniMax-Music3', name: 'MiniMax Music 3' }],
-        defaultModelId: 'minimax-music3',
-      })],
+      engines: [minimax({ runtimeReady: true })],
     });
+    api.installAudioModel.mockResolvedValue({});
 
     render(<MusicGenPanel prompt="cinematic score" lyrics="" />);
 
     expect(await screen.findByText(/model weights are not installed yet/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /install model/i })).toBeInTheDocument();
+    // Runtime is already there, so the one action is the weights pull — sized,
+    // because the user is about to spend 29 GB of disk on it.
+    const install = screen.getByRole('button', { name: /download model weights \(~29 GB\)/i });
     expect(screen.queryByRole('button', { name: /install runtime/i })).not.toBeInTheDocument();
+
+    fireEvent.click(install);
+    await waitFor(() => expect(api.installAudioModel).toHaveBeenCalledWith(
+      { engine: 'minimax-music3', repo: 'MiniMaxAI/MiniMax-Music3' },
+      expect.any(Function),
+    ));
+  });
+
+  // Runtime and weights are separate installs, but a user who picks MiniMax
+  // wants the engine, not a two-step scavenger hunt: the missing-runtime state
+  // used to offer "Install runtime" and leave the weights to a second button
+  // elsewhere in the panel.
+  it('installs runtime and weights from one action when both are missing', async () => {
+    api.listMusicEngines
+      .mockResolvedValueOnce({ defaultEngine: 'minimax-music3', engines: [minimax({ runtimeReady: false })] })
+      .mockResolvedValue({ defaultEngine: 'minimax-music3', engines: [minimax({ runtimeReady: true })] });
+    api.installAudioModel.mockResolvedValue({});
+
+    render(<MusicGenPanel prompt="cinematic score" lyrics="" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /install runtime \+ weights \(~29 GB\)/i }));
+    expect(await screen.findByText(/Installing MiniMax Music 3/i)).toBeInTheDocument();
+    expect(api.installAudioModel).not.toHaveBeenCalled(); // weights wait for the venv
+
+    fireEvent.click(screen.getByRole('button', { name: /close installer/i }));
+    await waitFor(() => expect(api.installAudioModel).toHaveBeenCalledWith(
+      { engine: 'minimax-music3', repo: 'MiniMaxAI/MiniMax-Music3' },
+      expect.any(Function),
+    ));
+  });
+
+  // A cancelled or failed runtime install must not start a 29 GB download that
+  // has no interpreter to load it.
+  it('does not chain into the weights download when the runtime install did not land', async () => {
+    api.listMusicEngines.mockResolvedValue({
+      defaultEngine: 'minimax-music3',
+      engines: [minimax({ runtimeReady: false })],
+    });
+
+    render(<MusicGenPanel prompt="cinematic score" lyrics="" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /install runtime \+ weights/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /close installer/i }));
+
+    await waitFor(() => expect(api.listMusicEngines).toHaveBeenCalledTimes(2));
+    expect(api.installAudioModel).not.toHaveBeenCalled();
   });
 
   it('shows honest elapsed GPU feedback while MiniMax generation is running', async () => {

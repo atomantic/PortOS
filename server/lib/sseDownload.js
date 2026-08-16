@@ -72,6 +72,10 @@ export async function startHfDownloadStream({ req, res, repo, repos, fallbacks, 
   // helper's single-file mode — MANDATORY for aggregate repos where a snapshot is
   // catastrophic (the ~708 GB DeepBeepMeep/LTX-2 mirror).
   //
+  // `ignore` (array of fnmatch globs, per entry) is the inverse: still snapshot
+  // the repo, but drop paths the runtime never loads — extra checkpoint formats
+  // or a bundled sibling model. Ignored when `only` is set for the same entry.
+  //
   // `cachedFile` is the "is it already here?" predicate for a single-file pull:
   // `inspectModelCache` reports the whole repo cached as soon as ANY weight is
   // resident, which for an aggregate mirror is true after the first unrelated
@@ -81,16 +85,19 @@ export async function startHfDownloadStream({ req, res, repo, repos, fallbacks, 
   const normalizeOnly = (v) => (Array.isArray(v) ? v.filter((f) => typeof f === 'string' && f.length > 0) : []);
   const normalizeRevision = (v) => (typeof v === 'string' && v.length > 0 ? v : null);
   const normalizeTarget = (target) => {
-    if (typeof target === 'string' && target.length > 0) return { repo: target, only: [], revision: null };
+    if (typeof target === 'string' && target.length > 0) return { repo: target, only: [], ignore: [], revision: null };
     if (!target || typeof target.repo !== 'string' || target.repo.length === 0) return null;
-    return { repo: target.repo, only: normalizeOnly(target.only), revision: normalizeRevision(target.revision) };
+    return {
+      repo: target.repo,
+      only: normalizeOnly(target.only),
+      ignore: normalizeOnly(target.ignore),
+      revision: normalizeRevision(target.revision),
+    };
   };
   const firstSuccessWins = Array.isArray(fallbacks);
-  const targets = firstSuccessWins
-    ? fallbacks
-      .filter((t) => t && typeof t.repo === 'string' && t.repo.length > 0)
-      .map((t) => ({ repo: t.repo, only: normalizeOnly(t.only), revision: normalizeRevision(t.revision) }))
-    : (Array.isArray(repos) ? repos : [repo]).map(normalizeTarget).filter(Boolean);
+  const targets = (firstSuccessWins ? fallbacks : (Array.isArray(repos) ? repos : [repo]))
+    .map(normalizeTarget)
+    .filter(Boolean);
   const { send, safeEnd } = openSseStream(res);
 
   if (targets.length === 0) {
@@ -122,7 +129,7 @@ export async function startHfDownloadStream({ req, res, repo, repos, fallbacks, 
   let succeededRepo = null;
   const attemptErrors = [];
   for (let i = 0; i < targets.length; i += 1) {
-    const { repo: r, only: onlyFiles, revision } = targets[i];
+    const { repo: r, only: onlyFiles, ignore: ignorePatterns, revision } = targets[i];
     const isLastTarget = i === targets.length - 1;
     if (aborted) return;
     // For a single-file pull the repo-wide cache verdict is both the wrong
@@ -184,6 +191,7 @@ export async function startHfDownloadStream({ req, res, repo, repos, fallbacks, 
       repo: r,
       revision,
       only: singleFile ? onlyFiles : null,
+      ignore: ignorePatterns,
       pythonPath,
       onEvent: (ev) => {
         // File-start frames only. Byte ticks arrive several times a second on
