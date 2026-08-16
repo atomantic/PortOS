@@ -125,31 +125,30 @@ export const MINIMAX_MUSIC3_MODELS = Object.freeze([
   {
     id: 'minimax-music3',
     repo: 'MiniMaxAI/MiniMax-Music3',
-    name: 'MiniMax Music 3 (CUDA, up to 5 minutes)',
+    name: 'MiniMax-Music3 (CUDA, up to 5 minutes)',
     downloadIgnore: Object.freeze(['qwen_7B/*', 'flowmatching_vae.pth', 'dav.pth', 'figures/*']),
     downloadSizeGb: 29,
   },
 ]);
 
 // These are immutable HF revisions because a shipped model must not silently
-// change underneath an existing install. The 8-bit conversion is the safer
+// change underneath an existing install. The 8-bit conversion is the practical
 // default for general Apple-Silicon installs (~14 GB); BF16 remains selectable
-// as the larger unquantized reference (~29 GB), which is a comfortable fit on
-// the user's 128 GB Mac when fidelity is the priority.
+// as the larger unquantized reference (~29 GB) for high-memory systems.
 export const MINIMAX_MUSIC3_MLX_MODELS = Object.freeze([
   {
     id: 'minimax-music3-mlx-8bit',
     repo: 'mlx-community/MiniMax-Music3-8bit',
     revision: '10aa4ca578d04c6f5256c1bc22fc8405a09602b5',
     downloadSizeGb: 14,
-    name: 'MiniMax Music 3 MLX 8-bit (~14 GB, recommended default)',
+    name: 'MiniMax-Music3 MLX 8-bit (~14 GB, lower-memory default)',
   },
   {
     id: 'minimax-music3-mlx-bf16',
     repo: 'mlx-community/MiniMax-Music3-bf16',
     revision: '83a5f2d365673689df5c8f36e21e108751fd92ea',
     downloadSizeGb: 29,
-    name: 'MiniMax Music 3 MLX BF16 (~29 GB, reference quality)',
+    name: 'MiniMax-Music3 MLX BF16 (~29 GB, unquantized reference)',
   },
 ]);
 
@@ -269,7 +268,7 @@ export const ENGINES = Object.freeze({
   },
   'minimax-music3': {
     id: 'minimax-music3',
-    name: 'MiniMax Music 3 (CUDA only)',
+    name: 'MiniMax-Music3 (CUDA only)',
     models: MINIMAX_MUSIC3_MODELS,
     defaultModelId: 'minimax-music3',
     minDurationSec: 1,
@@ -301,7 +300,7 @@ export const ENGINES = Object.freeze({
   },
   'minimax-music3-mlx': {
     id: 'minimax-music3-mlx',
-    name: 'MiniMax Music 3 (MLX, Apple Silicon)',
+    name: 'MiniMax-Music3 (MLX, Apple Silicon)',
     models: MINIMAX_MUSIC3_MLX_MODELS,
     defaultModelId: 'minimax-music3-mlx-8bit',
     minDurationSec: 1,
@@ -538,10 +537,10 @@ export function buildMusicGenArgs({ pythonPath, scriptPath = SIDECAR_SCRIPT, run
  * (500) when the sidecar exits non-zero / produces no result.
  *
  * `engine` selects the backend (`musicgen` | `audioldm2` | `acestep` |
- * `acestep15`); unknown
+ * `acestep15` | `minimax-music3` | `minimax-music3-mlx`); unknown
  * ids fall back to the default. `modelId` is resolved within that engine's
- * registry. `lyrics` is forwarded only to lyric-aware engines (ACE-Step); other
- * engines ignore it. `signal` (optional AbortSignal) SIGTERMs the child — wired
+ * registry. `lyrics` is forwarded only to lyric-aware engines; other engines
+ * ignore it. `signal` (optional AbortSignal) SIGTERMs the child — wired
  * through so a cancel button can abort a long render. `onActivity` (optional)
  * fires once per `STAGE:` line the sidecar emits — the media-job queue's
  * generic idle watchdog resets its timer off it via the audio job-kind

@@ -112,6 +112,7 @@ describe('ENGINES backend registry', () => {
   it('offers both pinned MLX MiniMax variants with 8-bit as the default', () => {
     expect(ENGINES['minimax-music3-mlx']).toMatchObject({
       id: 'minimax-music3-mlx',
+      name: expect.stringContaining('MiniMax-Music3'),
       defaultModelId: 'minimax-music3-mlx-8bit',
       installEnv: 'INSTALL_MINIMAX_MUSIC3_MLX',
       lyrics: true,

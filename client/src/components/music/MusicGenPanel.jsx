@@ -12,7 +12,7 @@
  * venv gate in image gen. Additional HuggingFace checkpoints can be installed
  * inline (streamed download), then selected immediately.
  *
- * A fixed-model engine (MiniMax Music 3) needs BOTH a runtime venv and a fixed
+ * A fixed-model engine (MiniMax-Music3) needs BOTH a runtime venv and a fixed
  * weights download, and neither is useful alone. The setup banner therefore
  * carries ONE action that installs whatever is still missing: it opens the
  * runtime installer first when that's absent, then — once the refreshed engine

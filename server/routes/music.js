@@ -12,7 +12,7 @@
  * fires them on its own (AI Provider Usage Policy).
  *
  * Generation runs the engine-agnostic `generateMusic` (server/services/pipeline/
- * musicGen.js) — MusicGen / AudioLDM2 / ACE-Step behind one contract — lands the
+ * musicGen.js) — MusicGen / AudioLDM2 / ACE-Step / MiniMax-Music3 behind one contract — lands the
  * WAV in the shared music library (data/music/), then creates a new Track (or
  * updates an existing one via `trackId`) with the audio pointer + the prompt /
  * lyrics / engine / model / duration metadata. The pipeline audio stage has its
