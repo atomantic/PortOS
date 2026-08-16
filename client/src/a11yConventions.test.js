@@ -819,9 +819,17 @@ function hasUsableElementText(src, node) {
   if (!body) return false;
   const staticText = body.replace(/\{[^{}]*\}/g, ' ').trim();
   if (staticText) return true;
-  return [...body.matchAll(/\{([^{}]*)\}/g)].some(([, expression]) => (
-    !/^(?:''|""|``|null|undefined|false)\s*$/.test(expression.trim())
-  ));
+  // An EMPTY expression belongs with the literals that render nothing:
+  // `<span id="notes-h">{}</span>` and `<span id="notes-h">{/* todo */}</span>`
+  // (a comment, masked to spaces by the line above) put no text in the DOM, so
+  // an `aria-labelledby` pointing at one names nothing. Reading them as text
+  // credited a control that has no name — and this walk now reaches such an
+  // element inside an attribute expression too, so the gap widened before it
+  // was closed.
+  return [...body.matchAll(/\{([^{}]*)\}/g)].some(([, expression]) => {
+    const rendered = expression.trim();
+    return rendered !== '' && !/^(?:''|""|``|null|undefined|false)$/.test(rendered);
+  });
 }
 
 function isNestedInLabel(src, index) {
@@ -2261,8 +2269,37 @@ describe('a11y conventions', () => {
     expect(isNamed('<Foo render=\'<span id="notes-h">Notes</span>\' />\n<textarea aria-labelledby="notes-h" />', 'textarea')).toBe(false);
     // An id that resolves to an element carrying no text still names nothing,
     // wherever it is written — the descent widened which elements are seen, not
-    // what counts as a name.
+    // what counts as a name. An EMPTY expression body is one of those: it
+    // renders nothing, and reading it as text credited a control with no name.
     expect(isNamed('<Foo render={<span id="notes-h" />} />\n<textarea aria-labelledby="notes-h" />', 'textarea')).toBe(false);
+    expect(isNamed('<span id="notes-h">{}</span>\n<textarea aria-labelledby="notes-h" />', 'textarea')).toBe(false);
+    expect(isNamed('<span id="notes-h">{/* todo */}</span>\n<textarea aria-labelledby="notes-h" />', 'textarea')).toBe(false);
+    // A non-empty expression is still text, or the fix would have swung past it.
+    expect(isNamed('<span id="notes-h">{heading}</span>\n<textarea aria-labelledby="notes-h" />', 'textarea')).toBe(true);
+
+    // Descending into an expression must not make a wrapper opened INSIDE one
+    // an ancestor of anything outside it: the nested `<Field label>` opens and
+    // closes within `title={…}`, so the input is still nested only in the
+    // UNLABELED outer wrapper and stays on the offender list.
+    const field = 'function Field({ label, children }) {\n  return <label>{label}{children}</label>;\n}';
+    expect(isNamed(`${field}\n<Field>\n<Header title={<Field label="Helper"><span>T</span></Field>} />\n<input id="x" type="text" />\n</Field>`)).toBe(false);
+    // …and the labeled outer wrapper does name it, so the assertion above is
+    // about where the label sits, not about the shape failing to parse.
+    expect(isNamed(`${field}\n<Field label="Helper">\n<input id="x" type="text" />\n</Field>`)).toBe(true);
+  });
+
+  it('does not read a tag out of a comment (#4341)', () => {
+    // The regex walk matched `<label` anywhere, comment text included, so a
+    // commented-out label named a live control — a false NEGATIVE, the
+    // direction that actually ships a bug. Masking hid it from the control scan
+    // but not from the rules that read raw source. The scanner hands a comment
+    // back as one span, so no walk can see into it, whether or not the caller
+    // masked first.
+    expect(isNamed('/* <label htmlFor="u">Commented</label> */\n<input id="u" type="text" />')).toBe(false);
+    expect(isNamed('// <label htmlFor="u">Commented</label>\n<input id="u" type="text" />')).toBe(false);
+    // The same label written as real markup names it, so this is about the
+    // comment and not about the label going unread.
+    expect(isNamed('<label htmlFor="u">Live</label>\n<input id="u" type="text" />')).toBe(true);
   });
 
   it('reads self-closing from the scanner, not off the end of the tag (#4341)', () => {
