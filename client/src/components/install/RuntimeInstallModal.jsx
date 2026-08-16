@@ -3,8 +3,8 @@
  * from a setup endpoint (SSE) and shows raw bash output line-by-line so the
  * user sees git/uv/pip progress while scripts/setup-image-video.sh runs.
  *
- * Closing the modal mid-install terminates the EventSource, which the server
- * interprets as a cancel and SIGTERMs the underlying bash child.
+ * Closing the modal mid-install terminates its EventSource or fetch stream,
+ * which the server interprets as a cancel and SIGTERMs the underlying child.
  */
 
 import { useEffect, useState } from 'react';
@@ -26,13 +26,18 @@ export default function RuntimeInstallModal({
   // (e.g. TRELLIS.2's `repair=1`, which re-runs setup.sh over an existing install
   // to rebuild backends that failed to compile the first time — #2952).
   params,
+  // EventSource is GET-only. Installers that mutate host state use POST via the
+  // hook's fetch-stream mode so a dropped connection cannot auto-retry work.
+  streamMethod = 'GET',
+  // Chatty installers keep the rendered log stable by batching lines.
+  flushMs = 100,
 }) {
   const [confirmingCancel, setConfirmingCancel] = useState(false);
   const query = new URLSearchParams({ runtime: runtime ?? '', ...(params || {}) });
   const url = open && runtime ? `${installUrlBase}?${query}` : null;
   const { logs, done, error, streamStarted, logsEndRef, close } = useInstallStream(
     url,
-    { enabled: open && !!runtime, onComplete, maxLogLines: MAX_LOG_LINES, flushMs: 100 },
+    { enabled: open && !!runtime, onComplete, maxLogLines: MAX_LOG_LINES, flushMs, method: streamMethod },
   );
 
   useEffect(() => { if (!open || !runtime) setConfirmingCancel(false); }, [open, runtime]);

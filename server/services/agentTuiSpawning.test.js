@@ -1628,6 +1628,25 @@ describe('spawnTuiAgent runtime', () => {
     );
   });
 
+  it('spools the runner exit tail when an immediate exit beat live TUI output', async () => {
+    const { appendFile } = await import('fs/promises');
+    const spawnPromise = runSpawn({ useDurableRunner: true });
+    await flushMicrotasks();
+
+    await capturedOnExit({
+      exitCode: 1,
+      killed: false,
+      outputTail: 'OpenCode startup error: configured model is unavailable',
+    });
+    await flushMicrotasks();
+    await spawnPromise;
+
+    const rawTail = vi.mocked(appendFile).mock.calls.find(
+      ([path, contents]) => typeof path === 'string' && path.endsWith('raw.txt') && String(contents).includes('OpenCode startup error'),
+    );
+    expect(rawTail).toBeDefined();
+  });
+
   // ── 4. Killed / user-terminated path ────────────────────────────────────────
   it('user-terminated: finalizeAgent receives terminatedByUser:true + error=Agent terminated by user', async () => {
     // Mark agent as user-terminated before the exit fires
@@ -2022,6 +2041,23 @@ describe('spawnTuiAgent runtime', () => {
           success: false,
           completionReason: 'spawn-rejected',
           error: expect.stringContaining(expectedFragment),
+        })
+      );
+    });
+
+    it('classifies a runner executable preflight failure as command-not-found', async () => {
+      vi.mocked(spawnTuiSessionViaRunner).mockRejectedValueOnce(
+        new Error('Command executable unavailable: opencode did not pass the CoS Runner capability check. Reinstall it or update the provider command.'),
+      );
+
+      await expect(runSpawn({ useDurableRunner: true })).resolves.toBeNull();
+
+      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: 'agent-1',
+          success: false,
+          completionReason: 'command-not-found',
+          error: expect.stringContaining('did not pass the CoS Runner capability check'),
         })
       );
     });

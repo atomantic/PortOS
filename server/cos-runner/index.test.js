@@ -91,12 +91,44 @@ describe('cos-runner termination — Windows tree-kill for cmd.exe-wrapped shims
 });
 
 describe('cos-runner durable TUI ownership (#3202)', () => {
-  it('spawns the PTY in the runner and keeps Windows npm shims behind cmd.exe', () => {
+  it('checks the TUI executable against its child PATH before opening a PTY', () => {
+    // node-pty otherwise turns a missing binary into exit 1 with no transcript,
+    // which loses the real configuration error to a generic startup failure.
+    expect(RUNNER_SRC).toMatch(
+      /import\s*\{[^}]*\bfindCommandOnPath\b[^}]*\}\s*from\s*'\.\.\/lib\/processEnv\.js';/
+    );
+    expect(RUNNER_SRC).toMatch(
+      /import\s*\{[^}]*\bcommandExists\b[^}]*\}\s*from\s*'\.\.\/lib\/commandExists\.js';/
+    );
+    const childEnvIdx = RUNNER_SRC.indexOf('const childEnv = buildCliChildEnv({ before: envVars, cwd });');
+    const resolveIdx = RUNNER_SRC.indexOf('const executable = findCommandOnPath(command, { env: childEnv, cwd });');
+    const prepareProbeIdx = RUNNER_SRC.indexOf("const versionProbe = prepareCliSpawn(executable, ['--version'], childEnv);");
+    const probeIdx = RUNNER_SRC.indexOf('const runnable = await commandExists(versionProbe.command, versionProbe.args, { env: childEnv, cwd });');
+    const spawnIdx = RUNNER_SRC.indexOf('pty.spawn(ptyCommand, ptyArgs');
+    expect(resolveIdx, 'runner must resolve the command against childEnv').toBeGreaterThan(childEnvIdx);
+    expect(prepareProbeIdx, 'runner must prepare a Windows-safe version probe').toBeGreaterThan(resolveIdx);
+    expect(probeIdx, 'runner must capability-check the prepared command').toBeGreaterThan(prepareProbeIdx);
+    expect(spawnIdx, 'runner must open the PTY after the executable probe').toBeGreaterThan(probeIdx);
+    expect(RUNNER_SRC).toContain('Command executable unavailable: ${basename(command)} is not on the CoS Runner PATH');
+    expect(RUNNER_SRC).toContain('Command executable unavailable: ${basename(command)} did not pass the CoS Runner capability check');
+    expect(RUNNER_SRC).toContain('const { command: ptyCommand, args: ptyArgs } = prepareCliSpawn(executable, args, childEnv);');
+  });
+
+  it('spawns the PTY through the shared Windows-safe CLI wrapper', () => {
     expect(RUNNER_SRC).toMatch(/app\.post\('\/spawn-tui'/);
-    expect(RUNNER_SRC).toMatch(/const ptyCommand = process\.platform === 'win32'/);
+    expect(RUNNER_SRC).toMatch(/prepareCliSpawn\(executable, args, childEnv\)/);
     expect(RUNNER_SRC).toMatch(/pty\.spawn\(ptyCommand,\s*ptyArgs/);
     expect(RUNNER_SRC).toMatch(/io\.emit\('tui:output'/);
     expect(RUNNER_SRC).toMatch(/parseSentinelPayload\(contents\)/);
     expect(RUNNER_SRC).toMatch(/emitToServer\('agent:completed'/);
+  });
+
+  it('includes a bounded terminal output tail with TUI exit telemetry', () => {
+    // The live tui:output event can lose a race to an immediate process exit.
+    // Its terminal companion must retain a diagnostic tail for the spawner's
+    // raw-transcript failure analysis path.
+    expect(RUNNER_SRC).toContain('const TUI_EXIT_OUTPUT_TAIL_CHARS = 16 * 1024;');
+    expect(RUNNER_SRC).toMatch(/const outputTail = current\.outputBuffer\.slice\(-TUI_EXIT_OUTPUT_TAIL_CHARS\);/);
+    expect(RUNNER_SRC).toMatch(/io\.emit\('tui:exit',[\s\S]{0,350}?\.\.\.\(outputTail \? \{ outputTail \} : \{\}\)/);
   });
 });

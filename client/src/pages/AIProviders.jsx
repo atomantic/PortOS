@@ -836,6 +836,8 @@ export default function AIProviders() {
         onClose={() => setShowOpenCodeInstaller(false)}
         onComplete={handleOpenCodeInstallComplete}
         installUrlBase="/api/providers/opencode/install"
+        streamMethod="POST"
+        flushMs={250}
         description="Installing the OpenCode CLI with npm. This downloads the current OpenCode package."
       />
       </div>

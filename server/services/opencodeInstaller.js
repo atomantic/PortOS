@@ -9,6 +9,7 @@
 
 import { spawn } from '../lib/childProcess.js';
 import { killProcessTree, prepareCliSpawn } from '../lib/bufferedSpawn.js';
+import { commandExists } from '../lib/commandExists.js';
 import { safeChildProcessEnv, safeChildProcessOptions, whichFirst } from '../lib/processEnv.js';
 
 const IS_WIN = process.platform === 'win32';
@@ -18,21 +19,26 @@ export const OPENCODE_NPM_PACKAGE = 'opencode-ai@latest';
 export const OPENCODE_NPM_INSTALL_ARGS = Object.freeze([
   'install',
   '--global',
+  // npm's carriage-return progress renderer can emit hundreds of repaint
+  // frames per second. The installer streams stdout to the browser, so keep
+  // the useful package messages without turning the modal into a re-render
+  // storm.
+  '--no-progress',
   OPENCODE_NPM_PACKAGE,
 ]);
 
 /**
- * Report only runnable-path availability, never the discovered absolute paths.
+ * Report only runnable availability, never the discovered absolute paths.
  * Paths can contain the machine account name and are not useful to the browser;
  * the boolean is the exact question the Providers page needs to answer.
  */
-export async function getOpenCodeInstallStatus({ findCommand = whichFirst } = {}) {
+export async function getOpenCodeInstallStatus({ findCommand = whichFirst, probeCommand = commandExists } = {}) {
   const [opencode, npm] = await Promise.all([
     findCommand(OPENCODE_COMMAND),
     findCommand('npm'),
   ]);
   return {
-    installed: Boolean(opencode),
+    installed: Boolean(opencode) && Boolean(await probeCommand(opencode)),
     npmAvailable: Boolean(npm),
   };
 }

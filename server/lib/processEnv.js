@@ -12,6 +12,8 @@
 // stripping the prefix is a no-op on Linux/Windows.
 import { execFile, execFileSync } from './childProcess.js';
 import { promisify } from 'util';
+import { accessSync, constants, statSync } from 'fs';
+import { delimiter, isAbsolute, join, resolve } from 'path';
 
 const execFileAsync = promisify(execFile);
 const IS_WIN = process.platform === 'win32';
@@ -60,4 +62,63 @@ export async function whichFirst(name) {
   const { stdout } = await execFileAsync(cmd, [name], safeChildProcessOptions({ timeout: 5000 }))
     .catch(() => ({ stdout: '' }));
   return stdout.trim().split(/\r?\n/)[0] || null;
+}
+
+const canExecute = (candidate) => {
+  try {
+    if (!statSync(candidate).isFile()) return false;
+    // Windows does not use POSIX execute bits. Its command processor decides
+    // launchability from the extension, which the caller checks below.
+    if (!IS_WIN) accessSync(candidate, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Resolve an executable using the exact PATH a child process will receive.
+ *
+ * Unlike `whichFirst`, this does not launch `which`/`where`: a provider may
+ * deliberately override PATH with only its own bin directory, leaving no
+ * system `which` binary available to perform the probe. It returns an absolute
+ * path suitable for a direct spawn, or null when the command cannot run.
+ *
+ * @param {string} name
+ * @param {{env?: NodeJS.ProcessEnv|object, cwd?: string}} [options]
+ * @returns {string|null}
+ */
+export function findCommandOnPath(name, { env = process.env, cwd = process.cwd() } = {}) {
+  if (!name || typeof name !== 'string') return null;
+
+  // An explicit path is resolved relative to the child cwd (matching spawn),
+  // not this server's cwd. This branch also avoids splitting a Windows path on
+  // the platform's PATH delimiter.
+  if (isAbsolute(name) || /[\\/]/.test(name)) {
+    const candidate = isAbsolute(name) ? name : resolve(cwd, name);
+    return canExecute(candidate) ? candidate : null;
+  }
+
+  const pathValue = env.PATH || env.Path || '';
+  const pathDirs = pathValue.split(delimiter);
+  const hasExtension = /\.[^./\\]+$/.test(name);
+  const extensions = IS_WIN && !hasExtension
+    // Do not test an extensionless sibling first: npm installs one for POSIX
+    // shells next to its Windows .cmd shim, but it is not natively launchable
+    // by a Windows PTY. PATHEXT names exactly the candidates cmd.exe can run.
+    ? (env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)
+    : [''];
+
+  for (const rawDir of pathDirs) {
+    const configuredDir = rawDir.replace(/^"(.*)"$/, '$1') || cwd;
+    // A relative PATH entry is relative to the child process's cwd, not the
+    // server's own cwd. Return an absolute path so the following probe and PTY
+    // launch use the same executable regardless of the runner's cwd.
+    const dir = isAbsolute(configuredDir) ? configuredDir : resolve(cwd, configuredDir);
+    for (const extension of extensions) {
+      const candidate = join(dir, `${name}${extension}`);
+      if (canExecute(candidate)) return candidate;
+    }
+  }
+  return null;
 }

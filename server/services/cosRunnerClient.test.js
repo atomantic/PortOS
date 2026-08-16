@@ -297,10 +297,19 @@ describe('cosRunnerClient', () => {
       capturedSocketListeners['tui:output']({ sessionId: session.sessionId, data: 'working' });
       session.ptyProcess.write('hello');
       session.ptyProcess.resize(120, 40);
-      capturedSocketListeners['tui:exit']({ sessionId: session.sessionId, exitCode: 0, signal: 0 });
+      capturedSocketListeners['tui:exit']({
+        sessionId: session.sessionId,
+        exitCode: 0,
+        signal: 0,
+        outputTail: 'immediate startup error',
+      });
 
       expect(onData).toHaveBeenCalledWith('working');
-      expect(onExit).toHaveBeenCalledWith({ exitCode: 0, signal: 0 });
+      expect(onExit).toHaveBeenCalledWith({
+        exitCode: 0,
+        signal: 0,
+        outputTail: 'immediate startup error',
+      });
       expect(capturedSocket.emit).toHaveBeenCalledWith('tui:input', {
         sessionId: 'agent-tui-1',
         data: 'hello',

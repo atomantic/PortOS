@@ -737,6 +737,12 @@ export async function spawnTuiAgent({
   let firstOutputAt = null;
   let lastOutputAt = Date.now();
   let sessionId = null;
+  // The runner's `tui:output` socket messages are live telemetry. An OpenCode
+  // CLI that prints one startup error and exits can race that delivery, while
+  // its `tui:exit` arrives reliably enough to finish the session. Track whether
+  // we received any ordinary chunk so the runner-provided exit tail is spooled
+  // only as a recovery path, never duplicated into raw.txt.
+  let receivedTuiOutput = false;
 
   // The paste-attempt / max-runtime / wrap-up-grace machinery (postPasteBuffer,
   // pasteEnterTimer, pasteVerifyTimer, submitEnterTimer, maxRuntimeTimer,
@@ -1123,6 +1129,7 @@ export async function spawnTuiAgent({
       // The String(...) coerces defensively in case a future caller wires
       // a Buffer-emitting encoding.
       const text = typeof data === 'string' ? data : String(data);
+      if (text) receivedTuiOutput = true;
       const stripped = streamingStrip(text);
       pushRaw(text);
       // Accumulate the ANSI-STRIPPED chunk (not the raw text): the paste marker
@@ -1205,8 +1212,16 @@ export async function spawnTuiAgent({
     }
   };
 
-  const handleExit = async ({ exitCode, killed, signal = null }) => {
+  const handleExit = async ({ exitCode, killed, signal = null, outputTail = '' }) => {
     if (finalized) return;
+    // A durable runner can retain a startup error even when its matching
+    // `tui:output` socket event lost the race with process exit. Preserve its
+    // bounded tail before finish() drains raw.txt for error analysis. Cap again
+    // at this trust boundary so a malformed runner event cannot grow the spool.
+    if (!receivedTuiOutput && typeof outputTail === 'string' && outputTail) {
+      receivedTuiOutput = true;
+      pushRaw(outputTail.slice(-16 * 1024));
+    }
     // A host restart reaches here as a plain PTY exit (pm2's TreeKill walks
     // portos-server's descendants), which the `success` reading below would
     // record as a completed run. finish() intercepts that case — see its
@@ -1281,11 +1296,18 @@ export async function spawnTuiAgent({
   } catch (err) {
     const message = err?.message || String(err);
     appendLine(`❌ Failed to start ${provider.name || provider.id} TUI: ${message}`);
+    // The durable runner probes the configured executable before it opens a
+    // PTY. Distinguish that deterministic configuration failure from a runner
+    // outage/refusal so it is blocked with the existing actionable
+    // command-not-found guidance rather than retried as a transient rejection.
+    const reason = useDurableRunner && /^Command executable unavailable:/i.test(message)
+      ? 'command-not-found'
+      : useDurableRunner ? 'spawn-rejected' : 'spawn-error';
     await finish({
       success: false,
       exitCode: 1,
       error: `Failed to start TUI session: ${message}`,
-      reason: useDurableRunner ? 'spawn-rejected' : 'spawn-error',
+      reason,
     });
     return null;
   }

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
+import { renderHook, act, waitFor } from '@testing-library/react';
 import { useInstallStream } from './useInstallStream';
 import { MockEventSource, lastEventSource as last } from '../test/mockEventSource';
 
@@ -11,6 +11,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   delete global.EventSource;
   vi.useRealTimers();
 });
@@ -30,6 +31,41 @@ describe('useInstallStream', () => {
     const { result } = renderHook(() => useInstallStream('/api/install', { enabled: true }));
     expect(last().url).toBe('/api/install');
     expect(result.current.streamStarted).toBe(true);
+  });
+
+  it('reads a POST installer stream with fetch instead of a reconnecting EventSource', async () => {
+    const encoder = new TextEncoder();
+    const read = vi.fn()
+      .mockResolvedValueOnce({
+        done: false,
+        value: encoder.encode('data: {"type":"log","message":"Installing"}\n\ndata: {"type":"complete","message":"Ready"}\n\n'),
+      })
+      .mockResolvedValueOnce({ done: true });
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      body: { getReader: () => ({ read, cancel }) },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { result } = renderHook(() => useInstallStream('/api/providers/opencode/install', {
+      enabled: true,
+      method: 'POST',
+    }));
+
+    await waitFor(() => expect(result.current.done).toBe(true));
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/providers/opencode/install',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(MockEventSource.instances).toHaveLength(0);
+    expect(result.current.logs).toEqual([
+      { kind: 'log', text: 'Installing' },
+      { kind: 'success', text: 'Ready' },
+    ]);
+    await waitFor(() => expect(cancel).toHaveBeenCalledOnce());
   });
 
   it('tracks stages and logs them', () => {

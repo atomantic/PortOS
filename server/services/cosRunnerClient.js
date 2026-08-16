@@ -44,7 +44,11 @@ const dispatchTuiEvent = (event, data) => {
     try {
       const result = handler(event === 'tui:output'
         ? data.data
-        : { exitCode: data.exitCode, signal: data.signal });
+        : {
+          exitCode: data.exitCode,
+          signal: data.signal,
+          ...(typeof data.outputTail === 'string' && data.outputTail ? { outputTail: data.outputTail } : {}),
+        });
       if (result && typeof result.then === 'function') {
         result.catch(err => console.error(`🔌 CoS runner ${event} handler rejected: ${err.message}`));
       }

@@ -16,9 +16,14 @@ const execFileAsync = promisify(execFile);
  *
  * @param {string} cmd
  * @param {string[]} [args] - defaults to `['--version']`, the common probe
- * @param {{timeoutMs?: number}} [opts]
+ * @param {{timeoutMs?: number, env?: object, cwd?: string}} [opts]
  * @returns {Promise<boolean>}
  */
-export async function commandExists(cmd, args = ['--version'], { timeoutMs = 5_000 } = {}) {
-  return execFileAsync(cmd, args, { timeout: timeoutMs }).then(() => true).catch(() => false);
+export async function commandExists(cmd, args = ['--version'], { timeoutMs = 5_000, env, cwd } = {}) {
+  const options = {
+    timeout: timeoutMs,
+    ...(env === undefined ? {} : { env }),
+    ...(cwd === undefined ? {} : { cwd }),
+  };
+  return execFileAsync(cmd, args, options).then(() => true).catch(() => false);
 }

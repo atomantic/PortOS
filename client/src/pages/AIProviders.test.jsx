@@ -40,7 +40,7 @@ vi.mock('../components/providers/CodeReviewDefaultsPanel', () => ({
   default: () => <div data-testid="code-review-defaults-panel" />,
 }));
 vi.mock('../components/install/RuntimeInstallModal', () => ({
-  default: ({ open }) => open ? <div data-testid="opencode-install-modal" /> : null,
+  default: ({ open, streamMethod, flushMs }) => open ? <div data-testid="opencode-install-modal" data-stream-method={streamMethod} data-flush-ms={flushMs} /> : null,
 }));
 
 import AIProviders from './AIProviders';
@@ -69,7 +69,9 @@ describe('AIProviders page load error handling', () => {
     const install = screen.getByRole('button', { name: 'Install OpenCode' });
     expect(install).toBeEnabled();
     fireEvent.click(install);
-    expect(screen.getByTestId('opencode-install-modal')).toBeInTheDocument();
+    const modal = screen.getByTestId('opencode-install-modal');
+    expect(modal).toHaveAttribute('data-stream-method', 'POST');
+    expect(modal).toHaveAttribute('data-flush-ms', '250');
   });
 
   it('reports OpenCode as ready instead of offering another install', async () => {

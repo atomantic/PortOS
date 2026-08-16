@@ -20,6 +20,8 @@ import { ensureDir, PATHS, sleep } from '../lib/fileUtils.js';
 import { prepareCliSpawn, killProcessTree } from '../lib/bufferedSpawn.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
+import { commandExists } from '../lib/commandExists.js';
+import { findCommandOnPath } from '../lib/processEnv.js';
 import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
 import { createStreamJsonParser } from './streamJsonParser.js';
 import { loadState, saveState, withState } from './runnerState.js';
@@ -62,6 +64,12 @@ const HOST = process.env.HOST || '127.0.0.1';
 
 // Active agent processes (in memory)
 const activeAgents = new Map();
+// `tui:output` is live telemetry, so an immediate process exit can beat its
+// socket delivery. Keep a small terminal tail with the exit event: the PortOS
+// spawner owns failure analysis and can persist it when no ordinary TUI chunk
+// arrived. This is deliberately much smaller than the runner's 512 KiB live
+// buffer and is enough to carry a CLI's startup diagnostic.
+const TUI_EXIT_OUTPUT_TAIL_CHARS = 16 * 1024;
 const TUI_SIGNALS = new Set(['SIGTERM', 'SIGKILL', 'SIGINT']);
 
 const terminateRunnerProcess = (agent, signal = 'SIGTERM') => {
@@ -169,11 +177,30 @@ app.post('/spawn-tui', async (req, res) => {
 
   const cwd = workspacePath && typeof workspacePath === 'string' ? workspacePath : ROOT_DIR;
   const childEnv = buildCliChildEnv({ before: envVars, cwd });
-  // Windows coding CLIs are commonly npm .cmd shims. ConPTY cannot execute a
-  // batch shim directly, so keep it behind cmd.exe; POSIX can own the CLI
-  // process directly.
-  const ptyCommand = process.platform === 'win32' ? (process.env.COMSPEC || 'cmd.exe') : command;
-  const ptyArgs = process.platform === 'win32' ? ['/d', '/s', '/c', command, ...args] : args;
+  // node-pty reports a missing executable as an immediate exit with no data.
+  // Check the exact child PATH first so the caller gets a usable configuration
+  // error instead of a generic startup-failure after a blank PTY transcript.
+  // Keep the resolved path private: it may include the local account name.
+  const executable = findCommandOnPath(command, { env: childEnv, cwd });
+  if (!executable) {
+    return res.status(422).json({
+      error: `Command executable unavailable: ${basename(command)} is not on the CoS Runner PATH. Install it or update the provider command.`
+    });
+  }
+  // A PATH hit can still be a broken npm shim or an incomplete CLI install.
+  // Probe the same launch shape that the PTY will use: on Windows a .cmd/.bat
+  // shim must run through cmd.exe, while on POSIX it remains the direct binary.
+  // That prevents node-pty from reducing an immediate CLI error to a blank exit.
+  const versionProbe = prepareCliSpawn(executable, ['--version'], childEnv);
+  const runnable = await commandExists(versionProbe.command, versionProbe.args, { env: childEnv, cwd });
+  if (!runnable) {
+    return res.status(422).json({
+      error: `Command executable unavailable: ${basename(command)} did not pass the CoS Runner capability check. Reinstall it or update the provider command.`
+    });
+  }
+  // Use the same safe wrapper for the actual PTY launch. In particular, this
+  // preserves the shared escaping contract for paths/args passed to cmd.exe.
+  const { command: ptyCommand, args: ptyArgs } = prepareCliSpawn(executable, args, childEnv);
   const tuiProcess = pty.spawn(ptyCommand, ptyArgs, {
     name: 'xterm-256color',
     cols,
@@ -217,7 +244,14 @@ app.post('/spawn-tui', async (req, res) => {
       const success = current.completedBySentinel;
       const effectiveExitCode = success ? 0 : exitCode;
       const effectiveSignal = success ? 0 : signal;
-      io.emit('tui:exit', { sessionId, agentId, exitCode: effectiveExitCode, signal: effectiveSignal });
+      const outputTail = current.outputBuffer.slice(-TUI_EXIT_OUTPUT_TAIL_CHARS);
+      io.emit('tui:exit', {
+        sessionId,
+        agentId,
+        exitCode: effectiveExitCode,
+        signal: effectiveSignal,
+        ...(outputTail ? { outputTail } : {}),
+      });
       emitToServer('agent:completed', {
         agentId,
         taskId,

@@ -41,4 +41,14 @@ describe('commandExists', () => {
     await commandExists('codex', undefined, { timeoutMs: 15_000 })
     expect(seenOpts.timeout).toBe(15_000)
   })
+
+  it('uses the supplied child environment and working directory', async () => {
+    let seenOpts = null
+    execFileMock.impl = (_cmd, _args, opts, cb) => { seenOpts = opts; cb(null, { stdout: '', stderr: '' }) }
+    const env = { PATH: '/example/bin' }
+
+    await commandExists('opencode', undefined, { env, cwd: '/example/workspace' })
+
+    expect(seenOpts).toEqual({ timeout: 5_000, env, cwd: '/example/workspace' })
+  })
 })

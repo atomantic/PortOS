@@ -6,15 +6,28 @@ import {
 } from './opencodeInstaller.js';
 
 describe('OpenCode installer', () => {
-  it('reports path availability as booleans without returning local paths', async () => {
+  it('reports runnable availability as booleans without returning local paths', async () => {
     const findCommand = vi.fn(async (command) => command === 'opencode' ? '/example/opencode' : null);
+    const probeCommand = vi.fn(async () => true);
 
-    await expect(getOpenCodeInstallStatus({ findCommand })).resolves.toEqual({
+    await expect(getOpenCodeInstallStatus({ findCommand, probeCommand })).resolves.toEqual({
       installed: true,
       npmAvailable: false,
     });
     expect(findCommand).toHaveBeenCalledWith('opencode');
     expect(findCommand).toHaveBeenCalledWith('npm');
+    expect(probeCommand).toHaveBeenCalledWith('/example/opencode');
+  });
+
+  it('reports a PATH-resolved but broken OpenCode CLI as unavailable', async () => {
+    const findCommand = vi.fn(async (command) => command === 'opencode' ? '/example/opencode' : '/example/npm');
+    const probeCommand = vi.fn(async () => false);
+
+    await expect(getOpenCodeInstallStatus({ findCommand, probeCommand })).resolves.toEqual({
+      installed: false,
+      npmAvailable: true,
+    });
+    expect(probeCommand).toHaveBeenCalledWith('/example/opencode');
   });
 
   it('spawns only the fixed npm global package install without a shell', () => {
@@ -31,5 +44,6 @@ describe('OpenCode installer', () => {
         detached: process.platform !== 'win32',
       }),
     );
+    expect(OPENCODE_NPM_INSTALL_ARGS).toContain('--no-progress');
   });
 });

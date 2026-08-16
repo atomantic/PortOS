@@ -129,10 +129,14 @@ export function createPortOSProviderRoutes(aiToolkit) {
     res.json(await getOpenCodeInstallStatus());
   }));
 
-  // EventSource can only issue GET requests, matching the app's existing
-  // in-product runtime installers. The fixed command is npm install --global
-  // opencode-ai@latest; no request input reaches a shell or package argument.
-  router.get('/opencode/install', asyncHandler(async (req, res) => {
+  // Installing a global CLI mutates host state, so this stays a POST even
+  // though the response is SSE-encoded. The client reads it with fetch rather
+  // than EventSource: EventSource would auto-reconnect after a dropped stream
+  // and could launch another non-idempotent npm install.
+  //
+  // The fixed command is npm install --global opencode-ai@latest; no request
+  // input reaches a shell or package argument.
+  router.post('/opencode/install', asyncHandler(async (req, res) => {
     const { send, safeEnd } = openSseStream(res);
     const installLog = createInstallLogger({ installer: 'OpenCode CLI', target: 'npm global prefix' });
     const emit = (event) => { installLog.onEvent(event); send(event); };
@@ -187,8 +191,12 @@ export function createPortOSProviderRoutes(aiToolkit) {
       const text = line.trimEnd();
       if (text) emit({ type: 'log', message: text });
     };
-    const stdoutReader = createLineReader(onLine, { splitRe: /[\r\n]+/ });
-    const stderrReader = createLineReader(onLine, { splitRe: /[\r\n]+/ });
+    // `--no-progress` suppresses npm's usual redraws. Keep the default
+    // newline-only reader as a defensive second layer: a lifecycle child that
+    // still writes bare carriage returns cannot turn every redraw into a
+    // browser log frame and a full modal re-render.
+    const stdoutReader = createLineReader(onLine);
+    const stderrReader = createLineReader(onLine);
     child.stdout.on('data', stdoutReader.push);
     child.stderr.on('data', stderrReader.push);
     child.on('error', (err) => {
@@ -212,7 +220,7 @@ export function createPortOSProviderRoutes(aiToolkit) {
         if (installed) {
           emit({ type: 'complete', message: 'OpenCode is installed and available to PortOS.' });
         } else if (code === 0) {
-          emit({ type: 'error', message: 'npm completed, but OpenCode is not on PortOS\'s PATH. Restart PortOS or add npm\'s global bin directory to PATH, then try again.' });
+          emit({ type: 'error', message: 'npm completed, but OpenCode is not runnable by PortOS. Restart PortOS or reinstall OpenCode so its postinstall script can complete, then try again.' });
         } else {
           emit({ type: 'error', message: `OpenCode installer exited with code ${code}.` });
         }

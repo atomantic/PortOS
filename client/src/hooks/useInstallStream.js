@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { safeParseJSON } from '../lib/genUtils';
+import { maybeRedirectToLogin } from '../services/apiCore';
 
 /**
- * Shared EventSource lifecycle for the BYO runtime install modals
+ * Shared streaming lifecycle for the BYO runtime install modals
  * (Flux2InstallModal, RuntimeInstallModal). Both streamed the same shape of
  * SSE install log — open on `open`, dispatch `stage`/`log`/`complete`/`error`
  * frames, cap the retained log, surface a "connection lost" error when the
@@ -16,8 +17,9 @@ import { safeParseJSON } from '../lib/genUtils';
  *   { type: 'complete', message }          → done=true, onComplete(), closes
  *   { type: 'error',    message }          → error set, closes
  *
- * Closing the EventSource (via `close()` on cancel, or unmount/disable) is what
- * the server interprets as a cancel — it SIGTERMs the underlying pip/bash child.
+ * Closing the EventSource or aborting the fetch stream (via `close()` on
+ * cancel, or unmount/disable) is what the server interprets as a cancel — it
+ * SIGTERMs the underlying pip/bash child.
  *
  * Deliberately NOT built on `useSseProgress`: this needs kind-tagged log
  * accumulation with a cap + optional debounced flush, stage tracking, a
@@ -36,6 +38,8 @@ import { safeParseJSON } from '../lib/genUtils';
  * @param {() => void} [opts.onComplete] - fired once on the `complete` frame.
  * @param {number} [opts.maxLogLines=500] - cap on retained log lines.
  * @param {number} [opts.flushMs=0] - 0 = per-line flush; >0 = debounce window.
+ * @param {'GET'|'POST'} [opts.method='GET'] - GET uses EventSource; POST uses
+ *   a single fetch-read SSE response for a non-idempotent install.
  * @returns {{ logs, currentStage, done, error, streamStarted, logsEndRef, close }}
  */
 
@@ -47,6 +51,7 @@ export function useInstallStream(url, {
   onComplete,
   maxLogLines = DEFAULT_MAX_LOG_LINES,
   flushMs = 0,
+  method = 'GET',
 } = {}) {
   const [logs, setLogs] = useState([]);
   const [currentStage, setCurrentStage] = useState(null);
@@ -55,6 +60,7 @@ export function useInstallStream(url, {
   const [streamStarted, setStreamStarted] = useState(false);
   const logsEndRef = useRef(null);
   const esRef = useRef(null);
+  const abortRef = useRef(null);
   // Mirror `done` into a ref so es.onerror reads the latest value — the effect
   // closure captures the initial done=false and never refreshes, so without
   // this the modal can flash "Connection lost" when the server cleanly closes
@@ -99,6 +105,7 @@ export function useInstallStream(url, {
     };
     const closeStream = () => {
       if (esRef.current) { esRef.current.close(); esRef.current = null; }
+      if (abortRef.current) { abortRef.current.abort(); abortRef.current = null; }
     };
 
     if (!enabled || !url) {
@@ -123,17 +130,7 @@ export function useInstallStream(url, {
     doneRef.current = false;
     setError(null);
     setStreamStarted(true);
-    const es = new EventSource(url);
-    esRef.current = es;
-    // Close the instance that fired this event, not whatever esRef currently
-    // points at — so a late callback from a superseded stream can't tear down
-    // (or null out) a newer one after a url/enabled change.
-    const closeThis = () => { if (esRef.current === es) esRef.current = null; es.close(); };
-
-    es.onmessage = (ev) => {
-      if (esRef.current !== es) return; // stale callback from a superseded stream
-      const msg = safeParseJSON(ev.data);
-      if (!msg) return;
+    const handleMessage = (msg, closeThis) => {
       if (msg.type === 'stage') {
         setCurrentStage(msg.stage);
         appendLog({ kind: 'stage', text: msg.message || msg.stage });
@@ -147,11 +144,96 @@ export function useInstallStream(url, {
         closeThis();
         onCompleteRef.current?.();
       } else if (msg.type === 'error') {
-        setError(msg.message);
-        appendLog({ kind: 'error', text: msg.message });
+        const message = msg.message || 'Installer failed.';
+        setError(message);
+        appendLog({ kind: 'error', text: message });
         flush();
         closeThis();
       }
+    };
+
+    // A global CLI install changes host state. EventSource transparently
+    // reconnects after a transport drop, which would replay a non-idempotent
+    // request. POST callers use exactly one fetch stream instead. Delay the
+    // fetch one task turn so React's development-only strict-effect probe
+    // tears down before any request leaves the browser; otherwise its setup →
+    // cleanup → setup cycle can briefly start and cancel the same install.
+    if (String(method).toUpperCase() === 'POST') {
+      const controller = new AbortController();
+      abortRef.current = controller;
+      const isCurrent = () => abortRef.current === controller && !controller.signal.aborted;
+      const closeThis = () => {
+        if (abortRef.current === controller) abortRef.current = null;
+        controller.abort();
+      };
+      const startTimer = setTimeout(() => {
+        if (!isCurrent()) return;
+        const run = async () => {
+          let reader = null;
+          try {
+            const response = await fetch(url, { method: 'POST', signal: controller.signal });
+            if (!response.ok || !response.body?.getReader) {
+              const err = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+              maybeRedirectToLogin(response, err);
+              throw new Error(err.error || `HTTP ${response.status}`);
+            }
+
+            reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let terminalFrame = false;
+            const consumeFrame = (frame) => {
+              const dataLine = frame.split(/\r?\n/).find(line => line.startsWith('data:'));
+              if (!dataLine || !isCurrent()) return;
+              const msg = safeParseJSON(dataLine.slice('data:'.length).trim());
+              if (!msg) return;
+              terminalFrame ||= msg.type === 'complete' || msg.type === 'error';
+              handleMessage(msg, closeThis);
+            };
+
+            for (;;) {
+              const { done: streamDone, value } = await reader.read();
+              if (streamDone) break;
+              buffer += decoder.decode(value, { stream: true });
+              const frames = buffer.split(/\r?\n\r?\n/);
+              buffer = frames.pop() || '';
+              for (const frame of frames) consumeFrame(frame);
+              if (!isCurrent()) break;
+            }
+            buffer += decoder.decode();
+            if (isCurrent() && buffer.trim()) consumeFrame(buffer);
+            if (isCurrent() && !terminalFrame && !doneRef.current) {
+              setError((prev) => prev ?? CONNECTION_LOST_MESSAGE);
+            }
+          } catch (err) {
+            if (isCurrent()) setError((prev) => prev ?? (err?.message || CONNECTION_LOST_MESSAGE));
+          } finally {
+            if (reader) await reader.cancel().catch(() => {});
+            if (abortRef.current === controller) abortRef.current = null;
+          }
+        };
+        run();
+      }, 0);
+
+      return () => {
+        clearTimeout(startTimer);
+        clearFlush();
+        closeThis();
+      };
+    }
+
+    const es = new EventSource(url);
+    esRef.current = es;
+    // Close the instance that fired this event, not whatever esRef currently
+    // points at — so a late callback from a superseded stream can't tear down
+    // (or null out) a newer one after a url/enabled change.
+    const closeThis = () => { if (esRef.current === es) esRef.current = null; es.close(); };
+
+    es.onmessage = (ev) => {
+      if (esRef.current !== es) return; // stale callback from a superseded stream
+      const msg = safeParseJSON(ev.data);
+      if (!msg) return;
+      handleMessage(msg, closeThis);
     };
 
     es.onerror = () => {
@@ -168,7 +250,7 @@ export function useInstallStream(url, {
       closeThis();
     };
     // onComplete intentionally excluded — it lives in onCompleteRef.
-  }, [url, enabled, maxLogLines, flushMs]);
+  }, [url, enabled, maxLogLines, flushMs, method]);
 
   // Auto-scroll on every new line. behavior:'auto' (instant) avoids queueing
   // hundreds of smooth-scroll animations during a chatty install.
@@ -180,6 +262,7 @@ export function useInstallStream(url, {
 
   const close = () => {
     if (esRef.current) { esRef.current.close(); esRef.current = null; }
+    if (abortRef.current) { abortRef.current.abort(); abortRef.current = null; }
   };
 
   return { logs, currentStage, done, error, streamStarted, logsEndRef, close };

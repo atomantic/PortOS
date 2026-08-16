@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { basename } from 'path';
-import { safeChildProcessEnv, stripDebugMallocEnv, whichFirst } from './processEnv.js';
+import { basename, dirname } from 'path';
+import { findCommandOnPath, safeChildProcessEnv, stripDebugMallocEnv, whichFirst } from './processEnv.js';
 
 describe('stripDebugMallocEnv', () => {
   it('drops every key that starts with "Malloc"', () => {
@@ -83,5 +83,29 @@ describe('whichFirst', () => {
   it('returns null for a binary that is not on PATH', async () => {
     const resolved = await whichFirst('portos-nonexistent-binary-xyz-2392');
     expect(resolved).toBeNull();
+  });
+});
+
+describe('findCommandOnPath', () => {
+  it('resolves against the supplied child PATH without needing which/where', () => {
+    const nodePath = process.execPath;
+    const resolved = findCommandOnPath(basename(nodePath), {
+      env: { PATH: dirname(nodePath), Path: dirname(nodePath) },
+    });
+    expect(resolved).toBe(nodePath);
+  });
+
+  it('returns null when the child PATH excludes the command', () => {
+    const resolved = findCommandOnPath(basename(process.execPath), { env: { PATH: '', Path: '' } });
+    expect(resolved).toBeNull();
+  });
+
+  it('resolves a relative child PATH entry from the child working directory', () => {
+    const nodePath = process.execPath;
+    const resolved = findCommandOnPath(basename(nodePath), {
+      env: { PATH: '.' },
+      cwd: dirname(nodePath),
+    });
+    expect(resolved).toBe(nodePath);
   });
 });
