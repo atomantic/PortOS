@@ -152,7 +152,7 @@ function commentEnd(src, from) {
 // is the single most common shape in this tree, and reading its `/` as division
 // puts the literal's own characters back into the JavaScript walk.
 const REGEX_PRECEDERS = '=([{,;:!&|?>';
-const REGEX_KEYWORDS = /(?:^|[^\w$])(?:return|typeof|instanceof|case|in|of|new|delete|void|yield|await|do|else)$/;
+const REGEX_KEYWORDS = /(?:^|[^\w$])(?:return|throw|typeof|instanceof|case|default|in|of|new|delete|void|yield|await|do|else)$/;
 
 // Index of the `/` closing the regex literal opening at `src[from]`, or -1 when
 // that `/` is division. A regex body may hold any of `{ } ' " \` < >` — and a
@@ -178,7 +178,11 @@ function regexEnd(src, from, previous) {
   for (let i = from + 1; i < src.length; i++) {
     const c = src[i];
     if (c === '\n') return -1;
-    if (c === '\\') { i++; continue; }
+    // A backslash escapes the next character but never the line bound — a `\`
+    // before a newline is a syntax error, not a continuation. Stepping over it
+    // blind walked straight past the bound, so a `/` on a later line closed the
+    // "literal" with everything in between swallowed as one token.
+    if (c === '\\') { if (src[i + 1] === '\n') return -1; i++; continue; }
     if (c === '[') inClass = true;
     else if (c === ']') inClass = false;
     else if (c === '/' && !inClass) return i;
@@ -271,8 +275,13 @@ function* jsxScanner(src, { from = 0, mode: startMode = 'code' } = {}) {
   // are not. Deciding whether a `/` opens a regex, or a `<` opens a tag, means
   // asking what came before it, and a backward walk over raw source answers
   // that wrong: it stops at the `/` of a `*/` and calls `x = /* why */ /a|b/`
-  // a division. Only the forward pass knows the comment was not a token. Seeded
-  // from the text before `from`, since a slice still has a context.
+  // a division. Only the forward pass knows the comment was not a token.
+  //
+  // The SEED is the exception, and stays one: reading backwards cannot lex a
+  // comment (`*/` and `* /` are indistinguishable without a forward pass from
+  // the start of the file), and every caller that passes `from > 0` points it at
+  // a structural character — a `{`, a `(`, or the position just after a `?` —
+  // never at the token following a comment.
   let previous = previousSignificant(src, from, -1);
 
   for (let i = from; i < src.length; i++) {
@@ -325,7 +334,17 @@ function* jsxScanner(src, { from = 0, mode: startMode = 'code' } = {}) {
       continue;
     }
 
-    yield { kind: 'char', index: i, char: c, mode, depth: braceFrames.length };
+    yield {
+      kind: 'char',
+      index: i,
+      char: c,
+      mode,
+      depth: braceFrames.length,
+      // Only meaningful on a tag's closing `>`. It rides along because `before`
+      // is the last TOKEN, and a caller asking from outside can only find the
+      // last character — which is the `/` of a `*/` in `<Foo /* note */ >`.
+      selfClosing: mode === 'jsx-tag' && c === '>' && before >= from && src[before] === '/',
+    };
 
     if (mode === 'jsx-text') {
       if (opensJsxTagInText(src, i)) {
@@ -342,13 +361,11 @@ function* jsxScanner(src, { from = 0, mode: startMode = 'code' } = {}) {
         // element, so the pop may come back empty — fall back to JavaScript.
         const entry = jsxStack.pop();
         mode = entry?.root ? 'code' : (jsxStack.length ? 'jsx-text' : 'code');
+      } else if (before >= from && src[before] === '/') {
+        mode = tag.parentMode;
       } else {
-        if (before >= from && src[before] === '/') {
-          mode = tag.parentMode;
-        } else {
-          jsxStack.push({ root: tag.parentMode === 'code' });
-          mode = 'jsx-text';
-        }
+        jsxStack.push({ root: tag.parentMode === 'code' });
+        mode = 'jsx-text';
       }
       tag = null;
       continue;
@@ -369,24 +386,24 @@ function matchingBraceEnd(s, idx) {
   return -1;
 }
 
-// Index of the `>` closing the tag that opens at `s[idx]` (`<`), or -1: the
+// The boundary of the tag that opens at `s[idx]` (`<`), or null: it ends at the
 // first `>` still in TAG context at brace depth 0. A quoted value's `>` never
 // reaches this walk at all, and an attribute expression can hold a whole element
 // (`render={<span>don't</span>}`) whose own `>` is in tag context too — the
-// depth is what tells the two apart.
-function tagEndAt(s, idx) {
+// depth is what tells the two apart. `end` is the index just past `>`.
+function tagBoundaryAt(s, idx) {
   for (const token of jsxScanner(s, { from: idx + 1, mode: 'jsx-tag' })) {
-    if (token.kind === 'char' && token.char === '>' && token.mode === 'jsx-tag' && token.depth === 0) return token.index;
+    if (token.kind === 'char' && token.char === '>' && token.mode === 'jsx-tag' && token.depth === 0) {
+      return { end: token.index + 1, selfClosing: token.selfClosing };
+    }
   }
-  return -1;
+  return null;
 }
 
-// The same boundary the icon rules need, plus whether the tag closed itself.
-// Returns `{ end, selfClosing }`, `end` being the index just past `>`.
-function tagBoundaryAt(s, idx) {
-  const end = tagEndAt(s, idx);
-  if (end === -1) return null;
-  return { end: end + 1, selfClosing: s[previousSignificant(s, end, idx)] === '/' };
+// Index of that closing `>`, for the callers that only need the slice.
+function tagEndAt(s, idx) {
+  const boundary = tagBoundaryAt(s, idx);
+  return boundary ? boundary.end - 1 : -1;
 }
 
 const stripJsxComments = (s) => s.replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, '');
@@ -2244,6 +2261,29 @@ describe('a11y conventions', () => {
     const commented = 'const el = /* why */ <label htmlFor="r">see // docs</label>;\n<input id="r" type="text" />';
     expect(maskComments(commented)).toBe(commented.replace('/* why */', '         '));
     expect(isNamed(commented)).toBe(true);
+    // And it decides whether a tag closed itself, where the character before the
+    // `>` is the `/` of a `*/` — an opening tag that reads as self-closing takes
+    // its whole body out of every rule that walks children.
+    expect(tagBoundaryAt('<Foo /* note */ >', 0)).toEqual({ end: 17, selfClosing: false });
+    expect(tagBoundaryAt('<Foo /* note */ />', 0)).toEqual({ end: 18, selfClosing: true });
+  });
+
+  it('bounds a regex literal at the line, and reads the keywords that open one (#4333)', () => {
+    // Latent today — no tracked file hits either — so both are pinned on the
+    // helper directly rather than through a rule that would pass for the wrong
+    // reason. Getting either wrong hands the literal's own characters back to
+    // the JavaScript walk, which is what the state exists to prevent.
+    //
+    // A `\` escapes the next character but never the line bound, so a trailing
+    // one is a syntax error, not a continuation. Stepping over it blind let a
+    // `/` on a later line close the "literal".
+    expect(regexEnd('x = /a\\\n/;', 4, 2)).toBe(-1);
+    expect(regexEnd('x = /a\\//;', 4, 2)).toBe(8);
+    // `throw` and `default` open a regex exactly as `return` does.
+    expect(regexEnd('throw /[<>]/;', 6, 4)).toBe(11);
+    expect(regexEnd('export default /[<>]/;', 15, 13)).toBe(20);
+    // A `/` after a VALUE is still division, keyword-shaped names included.
+    expect(regexEnd('const rethrow = a / b;', 18, 16)).toBe(-1);
   });
 
   it('keeps the mask in the same index space as the source (#4333)', () => {
