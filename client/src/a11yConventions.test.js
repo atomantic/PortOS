@@ -94,9 +94,13 @@ function openingTagAt(src, index) {
 const lineOf = (src, index) => src.slice(0, index).split('\n').length;
 
 // Index of the last non-whitespace character before `from`, stopping at `floor`
-// rather than walking past it. Four walks spelled this out — deciding whether a
-// `<` opens a tag, whether a `/` opens a regex, and (twice) whether a tag closed
-// itself — each with its own idea of how far back it was allowed to look.
+// rather than walking past it. Four walks spelled this out, each with its own
+// idea of how far back it was allowed to look.
+//
+// This answers "what character precedes this one", which is only the same as
+// "what token precedes this one" when no comment sits between them. Inside the
+// scanner that distinction matters, so it tracks the previous TOKEN forward and
+// uses this only to seed the walk; the one caller left needs the character.
 const previousSignificant = (src, from, floor) => {
   let i = from - 1;
   while (i > floor && /\s/.test(src[i])) i--;
@@ -144,7 +148,10 @@ function commentEnd(src, from) {
 // Characters after which a `/` starts a regex literal rather than a division.
 // Deliberately none of `)`, `]`, or an identifier/number character: those end a
 // VALUE, and a `/` after a value is always division. Keywords cover the rest.
-const REGEX_PRECEDERS = '=([{,;:!&|?';
+// `>` is here for `=>` — an arrow function returning a literal (`(d) => /a|b/`)
+// is the single most common shape in this tree, and reading its `/` as division
+// puts the literal's own characters back into the JavaScript walk.
+const REGEX_PRECEDERS = '=([{,;:!&|?>';
 const REGEX_KEYWORDS = /(?:^|[^\w$])(?:return|typeof|instanceof|case|in|of|new|delete|void|yield|await|do|else)$/;
 
 // Index of the `/` closing the regex literal opening at `src[from]`, or -1 when
@@ -157,8 +164,12 @@ const REGEX_KEYWORDS = /(?:^|[^\w$])(?:return|typeof|instanceof|case|in|of|new|d
 // this was division after all and the walk continues from the next character.
 // That bound is what makes guessing safe: a wrong guess costs one character,
 // never the rest of the file.
-function regexEnd(src, from) {
-  const previous = previousSignificant(src, from, -1);
+//
+// `previous` is the last significant index the SCANNER saw, not one found by
+// walking back over raw source: a backward walk stops at the `/` of a `*/` and
+// calls `x = /* why */ /a|b/` a division. Only the forward pass knows that the
+// comment was not a token.
+function regexEnd(src, from, previous) {
   if (previous >= 0
     && !REGEX_PRECEDERS.includes(src[previous])
     && !REGEX_KEYWORDS.test(src.slice(Math.max(0, previous - 11), previous + 1))) return -1;
@@ -206,9 +217,8 @@ const opensJsxTagInText = (src, index) => src[index] === '<'
 // In JavaScript the same `<` also has to sit where an expression may start.
 // Built on the text predicate so `matchingBraceEnd` and `maskComments` cannot
 // drift on where the JavaScript/JSX line falls — widening one widens both.
-const looksLikeJsxTagStart = (src, index) => {
+const looksLikeJsxTagStart = (src, index, previous) => {
   if (!opensJsxTagInText(src, index)) return false;
-  const previous = previousSignificant(src, index, -1);
   if (previous < 0 || '=([{,:;!?&|>'.includes(src[previous])) return true;
   return /(?:return|yield|=>)\s*$/.test(src.slice(Math.max(0, index - 12), index));
 };
@@ -257,6 +267,13 @@ function* jsxScanner(src, { from = 0, mode: startMode = 'code' } = {}) {
   // One entry per open element, marking whether it was opened from JavaScript.
   // Its closing tag hands back there rather than to an enclosing element's text.
   const jsxStack = [];
+  // Index of the last token that was really a token — whitespace and COMMENTS
+  // are not. Deciding whether a `/` opens a regex, or a `<` opens a tag, means
+  // asking what came before it, and a backward walk over raw source answers
+  // that wrong: it stops at the `/` of a `*/` and calls `x = /* why */ /a|b/`
+  // a division. Only the forward pass knows the comment was not a token. Seeded
+  // from the text before `from`, since a slice still has a context.
+  let previous = previousSignificant(src, from, -1);
 
   for (let i = from; i < src.length; i++) {
     const c = src[i];
@@ -275,17 +292,21 @@ function* jsxScanner(src, { from = 0, mode: startMode = 'code' } = {}) {
         const end = skipString(src, i);
         yield { kind: 'string', index: i, end: Math.min(end, src.length - 1), mode };
         i = end;
+        previous = Math.min(end, src.length - 1);
         continue;
       }
       if (mode === 'code' && c === '/') {
-        const end = regexEnd(src, i);
+        const end = regexEnd(src, i, previous);
         if (end !== -1) {
           yield { kind: 'regex', index: i, end, mode };
           i = end;
+          previous = end;
           continue;
         }
       }
     }
+    const before = previous;
+    if (!/\s/.test(c)) previous = i;
 
     // Braces nest the same way in all three contexts, so they are handled once.
     if (c === '{') {
@@ -322,7 +343,7 @@ function* jsxScanner(src, { from = 0, mode: startMode = 'code' } = {}) {
         const entry = jsxStack.pop();
         mode = entry?.root ? 'code' : (jsxStack.length ? 'jsx-text' : 'code');
       } else {
-        if (src[previousSignificant(src, i, from)] === '/') {
+        if (before >= from && src[before] === '/') {
           mode = tag.parentMode;
         } else {
           jsxStack.push({ root: tag.parentMode === 'code' });
@@ -333,7 +354,7 @@ function* jsxScanner(src, { from = 0, mode: startMode = 'code' } = {}) {
       continue;
     }
 
-    if (c === '<' && looksLikeJsxTagStart(src, i)) {
+    if (c === '<' && looksLikeJsxTagStart(src, i, before)) {
       tag = { closing: src.startsWith('</', i), parentMode: 'code' };
       mode = 'jsx-tag';
     }
@@ -2196,6 +2217,33 @@ describe('a11y conventions', () => {
       .toBe('const r = (a) / b;        \nconst s = c[0] / d;');
     expect(maskComments('const r = x = / not a regex\nconst s = 1; // note'))
       .toBe('const r = x = / not a regex\nconst s = 1;        ');
+  });
+
+  it('asks what TOKEN precedes a slash, not what character does (#4333)', () => {
+    // Whether a `/` opens a regex — and whether a `<` opens a tag — is a
+    // question about the preceding TOKEN. Two shapes where that is not the
+    // preceding CHARACTER, each putting the literal's own `<>` back into the
+    // JavaScript walk, where it opens a tag that never closes and leaves the
+    // rest of the expression lexing as element text.
+    const isIconOnly = (body) => {
+      const src = `<button onClick={run}>${body}</button>`;
+      const open = src.indexOf('<button');
+      return isIconOnlyBody(findButtonBody(src, open + openingTagAt(src, open).length));
+    };
+    // 1. An arrow function returning a literal — the most common regex shape in
+    //    this tree. The preceding character is the `>` of `=>`, which ends no
+    //    value, so `>` has to count as a regex preceder.
+    expect(isIconOnly('{ ((d) => /[<>]/.test(d))(x) ? <Up /> : <Down /> }')).toBe(true);
+    // 2. A comment between the operator and the literal. A backward walk over
+    //    raw source stops at the `/` of the `*/` and calls this division; only
+    //    the forward pass knows the comment was not a token.
+    expect(isIconOnly('{ /* why */ /[<>]/.test(d) ? <Up /> : <Down /> }')).toBe(true);
+    // The same blind spot decided whether a `<` opened a tag, so a comment
+    // before an element left the lexer in JavaScript — and the visible text of
+    // a correctly labeled control masked away as code.
+    const commented = 'const el = /* why */ <label htmlFor="r">see // docs</label>;\n<input id="r" type="text" />';
+    expect(maskComments(commented)).toBe(commented.replace('/* why */', '         '));
+    expect(isNamed(commented)).toBe(true);
   });
 
   it('keeps the mask in the same index space as the source (#4333)', () => {
