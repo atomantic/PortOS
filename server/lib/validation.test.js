@@ -1432,6 +1432,25 @@ describe('validation.js', () => {
     });
   });
 
+  describe('buildReviewWithArgs — per-reviewer ~effort=<level> selector', () => {
+    it('emits ~effort=<level> for tokens carrying an effort pin', () => {
+      expect(buildReviewWithArgs(['claude', 'codex'], { reviewerEfforts: { claude: 'high', codex: 'max' } }))
+        .toBe('--review-with claude~effort=high,codex~effort=max');
+    });
+
+    it('combines model brackets, ~opt, ~max, and ~effort in canonical order', () => {
+      expect(buildReviewWithArgs(['ollama'], { optionalReviewers: ['ollama'], reviewerMaxRounds: { ollama: 1 }, reviewerModels: { ollama: 'qwen2.5:7b' }, reviewerEfforts: { ollama: 'low' } }))
+        .toBe('--review-with ollama[qwen2.5:7b]~opt~max=1~effort=low');
+    });
+  });
+
+  describe('buildReviewersCsv — per-reviewer ~effort=<level> selector', () => {
+    it('carries ~effort=<level> into the claim prompts\' {reviewers} token', () => {
+      expect(buildReviewersCsv(['codex', 'claude'], [], [], {}, {}, { codex: 'high' }))
+        .toBe('codex~effort=high,claude');
+    });
+  });
+
   describe('createCosTaskSchema reviewers fields', () => {
     it('accepts an explicit PR completion policy and rejects unknown values', () => {
       expect(createCosTaskSchema.safeParse({ description: 'inspect', prCompletion: 'leave-open' }).success).toBe(true);

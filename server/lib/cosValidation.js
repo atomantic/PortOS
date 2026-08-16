@@ -764,27 +764,38 @@ function reviewerModelLookup(reviewerModels) {
 }
 
 /**
+ * Build a lowercased-token → effort-level lookup for the builders. Tolerates the raw
+ * (unnormalized) map. A `Map` for the same reasons as the cap and model lookups.
+ */
+function reviewerEffortLookup(reviewerEfforts) {
+  const normalized = normalizeReviewerEfforts(reviewerEfforts) || {};
+  return new Map(Object.entries(normalized).map(([token, effort]) => [token.toLowerCase(), effort]));
+}
+
+/**
  * Render one emitted `--review-with` entry: the reviewer token, its optional
  * `[<model>]` selector, then slashdo's per-entry suffixes in canonical storage
- * order — `~opt`, then `~max=<n>`.
+ * order — `~opt`, `~max=<n>`, then `~effort=<level>`.
  *
  * Order matters. slashdo's grammar is
- * `entry := ( <agent> [ "[" <model> "]" ] | "@" <login> ) ( "~opt" | "~max=" <n> )*`
+ * `entry := ( <agent> [ "[" <model> "]" ] | "@" <login> ) ( "~opt" | "~max=" <n> | "~effort=" <level> )*`
  * and its parser strips the `~` suffixes from the RIGHT before reading the
  * bracket — so the bracket has to sit between the slug and the suffixes.
  *
  * A reviewer with no pinned model emits no bracket, which is what leaves that
  * reviewer's own default in place; likewise a reviewer with no cap emits no
- * `~max` at all (`~max=0` is a real, distinct value meaning "loop until clean").
+ * `~max` at all (`~max=0` is a real, distinct value meaning "loop until clean"), and
+ * a reviewer with no effort level emits no `~effort`.
  * Only BRACKET_MODEL_REVIEWERS get a bracket — `copilot`/`@login` reject one, and
  * PortOS's `lmstudio` reviewer has no slashdo slug at all (its model rides in the
  * `POST /api/code-review/local` body instead).
  */
-function markSuffixes(token, optSet, maxLookup, modelLookup) {
+function markSuffixes(token, optSet, maxLookup, modelLookup, effortLookup) {
   const key = token.toLowerCase();
   const max = maxLookup?.get(key);
   const model = BRACKET_MODEL_REVIEWERS.includes(key) ? modelLookup?.get(key) : undefined;
-  return `${token}${model ? `[${model}]` : ''}${optSet.has(key) ? '~opt' : ''}${max === undefined ? '' : `~max=${max}`}`;
+  const effort = effortLookup?.get(key);
+  return `${token}${model ? `[${model}]` : ''}${optSet.has(key) ? '~opt' : ''}${max === undefined ? '' : `~max=${max}`}${effort ? `~effort=${effort}` : ''}`;
 }
 
 /**
@@ -840,17 +851,19 @@ export function resolveKeyedReviewers(reviewers, hasUsernames) {
  * Reviewers in `optionalReviewers` get slashdo's `~opt` non-blocking suffix, and
  * reviewers carrying a `reviewerMaxRounds` cap get `~max=<n>` after it. A
  * reviewer with a `reviewerModels` pin gets slashdo's `[<model>]` selector
- * between the slug and those suffixes.
+ * between the slug and those suffixes, and a reviewer with a `reviewerEfforts` pin
+ * gets `~effort=<level>`.
  * The flag-string variant is `buildReviewWithArgs`.
  */
-export function buildReviewersCsv(reviewers, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewerModels = {}) {
+export function buildReviewersCsv(reviewers, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewerModels = {}, reviewerEfforts = {}) {
   const keyed = Array.isArray(reviewers) && reviewers.length ? reviewers : [...DEFAULT_REVIEWERS];
   const users = normalizeReviewUsernames(usernames);
   const optSet = optionalReviewerSet(optionalReviewers);
   const maxLookup = reviewerMaxRoundsLookup(reviewerMaxRounds);
   const modelLookup = reviewerModelLookup(reviewerModels);
+  const effortLookup = reviewerEffortLookup(reviewerEfforts);
   const combined = [...keyed, ...users.map(u => `@${u}`)];
-  return combined.map(t => markSuffixes(t, optSet, maxLookup, modelLookup)).join(',');
+  return combined.map(t => markSuffixes(t, optSet, maxLookup, modelLookup, effortLookup)).join(',');
 }
 
 /**
@@ -865,18 +878,16 @@ export function buildReviewersCsv(reviewers, usernames = [], optionalReviewers =
  *   username reviewer is an external PR reviewer, not a CLI that applies fixes).
  * - Reviewers in `optionalReviewers` get slashdo's `~opt` non-blocking suffix on
  *   their emitted token, so an inconclusive verdict from them doesn't gate the
- *   merge. Reviewers with a `reviewerMaxRounds` cap get `~max=<n>` after it, and
- *   a reviewer with a `reviewerModels` pin gets a `[<model>]` selector before both.
- *   A lone default `copilot` that is marked optional OR carries a cap DOES force
- *   the flag on (otherwise the suffix — the whole point — would be dropped with
- *   the flag). A model pin can't trigger that exemption because `copilot[…]` isn't
- *   a legal slashdo entry (see BRACKET_MODEL_REVIEWERS) — so a lone copilot with a
- *   stray pin emits nothing extra, exactly as before.
+ *   merge. Reviewers with a `reviewerMaxRounds` cap get `~max=<n>` after it,
+ *   a reviewer with a `reviewerModels` pin gets a `[<model>]` selector before both,
+ *   and a reviewer with a `reviewerEfforts` pin gets `~effort=<level>`.
+ *   A lone default `copilot` that is marked optional, carries a cap, or carries an
+ *   effort DOES force the flag on (otherwise the suffix — the whole point — would be
+ *   dropped with the flag).
  *
  * Everything past `reviewers` is an options object: the two reviewer-name lists
- * (`usernames` / `optionalReviewers`) and the two per-reviewer lookup maps
- * (`reviewerMaxRounds` / `reviewerModels`) are same-shaped and were silently
- * transposable as positionals.
+ * (`usernames` / `optionalReviewers`) and the three per-reviewer lookup maps
+ * (`reviewerMaxRounds` / `reviewerModels` / `reviewerEfforts`) are same-shaped.
  *
  * @param {string[]} reviewers - ordered keyed reviewer slugs
  * @param {Object} [options]
@@ -886,6 +897,7 @@ export function buildReviewersCsv(reviewers, usernames = [], optionalReviewers =
  * @param {string[]} [options.optionalReviewers] - reviewers that get the `~opt` suffix
  * @param {Object<string, number>} [options.reviewerMaxRounds] - per-reviewer `~max=<n>` caps
  * @param {Object<string, string>} [options.reviewerModels] - per-reviewer `[<model>]` pins
+ * @param {Object<string, string>} [options.reviewerEfforts] - per-reviewer `~effort=<level>` pins
  * @returns {string} the slashdo review flag string (possibly empty)
  */
 export function buildReviewWithArgs(reviewers, {
@@ -895,6 +907,7 @@ export function buildReviewWithArgs(reviewers, {
   optionalReviewers = [],
   reviewerMaxRounds = {},
   reviewerModels = {},
+  reviewerEfforts = {},
 } = {}) {
   const users = normalizeReviewUsernames(usernames);
   const keyed = resolveKeyedReviewers(reviewers, users.length > 0);
@@ -902,14 +915,16 @@ export function buildReviewWithArgs(reviewers, {
   const optSet = optionalReviewerSet(optionalReviewers);
   const maxLookup = reviewerMaxRoundsLookup(reviewerMaxRounds);
   const modelLookup = reviewerModelLookup(reviewerModels);
+  const effortLookup = reviewerEffortLookup(reviewerEfforts);
   // The lone-default-copilot suppression only applies when copilot carries NO
-  // per-entry suffix — a `copilot~opt` / `copilot~max=2`-only list must still
+  // per-entry suffix — a `copilot~opt` / `copilot~max=2` / `copilot~effort=high` list must still
   // emit the flag to carry that suffix.
   const isDefaultOnly = combined.length === 1 && combined[0] === DEFAULT_REVIEWER
-    && !optSet.has(DEFAULT_REVIEWER) && maxLookup.get(DEFAULT_REVIEWER) === undefined;
+    && !optSet.has(DEFAULT_REVIEWER) && maxLookup.get(DEFAULT_REVIEWER) === undefined
+    && effortLookup.get(DEFAULT_REVIEWER) === undefined;
   const hasNonCopilot = keyed.some(r => r !== DEFAULT_REVIEWER);
   const parts = [];
-  if (!isDefaultOnly) parts.push(`--review-with ${combined.map(t => markSuffixes(t, optSet, maxLookup, modelLookup)).join(',')}`);
+  if (!isDefaultOnly) parts.push(`--review-with ${combined.map(t => markSuffixes(t, optSet, maxLookup, modelLookup, effortLookup)).join(',')}`);
   if (combined.length >= 2) {
     if (stopMode === 'on-findings') parts.push('--review-stop-on-findings');
     else if (stopMode === 'on-clean') parts.push('--review-stop-on-clean');

@@ -549,7 +549,7 @@ async function applySlashdoInvocation(task, {
     : null;
 
   const reviewWith = skipIncludes.length
-    ? buildReviewersCsv(resolvedReviewers, resolvedUsernames, resolvedOptional, resolvedMaxRounds, resolvedModels)
+    ? buildReviewersCsv(resolvedReviewers, resolvedUsernames, resolvedOptional, resolvedMaxRounds, resolvedModels, resolvedEfforts)
     : '';
   // Unlike `reviewWith` this is NOT gated on pruning: the workflow drives its own
   // review loop, so a pinned effort has no other route to the reviewer CLI it
@@ -2230,7 +2230,7 @@ function buildPostPRMergeSteps(startStep, { prCompletion = PR_COMPLETIONS.REVIEW
 function resolveReviewInvocation({ willOpenPR, runsReviewLoop, reviewers, usernames, optionalReviewers, reviewerMaxRounds, reviewerModels, reviewerEfforts, reviewStopMode, reviewerApplies }) {
   const reviewUsernames = normalizeReviewUsernames(usernames);
   const reviewArgs = willOpenPR
-    ? (runsReviewLoop ? buildReviewWithArgs(reviewers, { stopMode: reviewStopMode, reviewerApplies, usernames: reviewUsernames, optionalReviewers, reviewerMaxRounds, reviewerModels }) : '--review-with none')
+    ? (runsReviewLoop ? buildReviewWithArgs(reviewers, { stopMode: reviewStopMode, reviewerApplies, usernames: reviewUsernames, optionalReviewers, reviewerMaxRounds, reviewerModels, reviewerEfforts }) : '--review-with none')
     : '';
   // Effort pins can't ride `--review-with` (no suffix for them in slashdo's
   // grammar), so they're stated as an instruction on the invocation instead.

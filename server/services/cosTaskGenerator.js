@@ -463,7 +463,7 @@ export async function buildClaimWorkTask(app, { issueAuthorFilter, reviewers, us
     reviewerModels: reviewerModels ?? metadata.reviewerModels,
     reviewerEfforts: reviewerEfforts ?? metadata.reviewerEfforts,
   }, codeReviewDefaults);
-  const reviewersCsv = buildReviewersCsv(reviewersList, promptUsernames, promptOptionalReviewers, promptReviewerMaxRounds, promptReviewerModels);
+  const reviewersCsv = buildReviewersCsv(reviewersList, promptUsernames, promptOptionalReviewers, promptReviewerMaxRounds, promptReviewerModels, promptReviewerEfforts);
   const issueAuthorFilterBlock = resolveIssueAuthorFilterBlock(promptTaskType, resolvedAuthorFilter);
   // Swarm mode (`/do:next --swarm`) is prepended (not an in-template
   // placeholder) so it stays an opt-in orchestration wrapper that needs no
@@ -519,7 +519,7 @@ async function resolveClaimReviewerPrompt() {
   // invocations.
   const { reviewerModels, reviewerEfforts } = resolveReviewerPins(null, codeReviewDefaults);
   return {
-    csv: buildReviewersCsv(list, codeReviewDefaults?.usernames, codeReviewDefaults?.optionalReviewers, codeReviewDefaults?.reviewerMaxRounds, reviewerModels),
+    csv: buildReviewersCsv(list, codeReviewDefaults?.usernames, codeReviewDefaults?.optionalReviewers, codeReviewDefaults?.reviewerMaxRounds, reviewerModels, reviewerEfforts),
     effortBlock: appendReviewerEffortBlock(list, reviewerEfforts),
   };
 }
@@ -2623,7 +2623,7 @@ async function buildImprovementTaskDescription({ promptTemplate, app, promptTask
   // suffix for them.
   const { reviewerModels: promptReviewerModels, reviewerEfforts: promptReviewerEfforts } =
     resolveReviewerPins(metadata, codeReviewDefaults);
-  const reviewersCsv = buildReviewersCsv(promptReviewers, promptUsernames, promptOptionalReviewers, promptReviewerMaxRounds, promptReviewerModels);
+  const reviewersCsv = buildReviewersCsv(promptReviewers, promptUsernames, promptOptionalReviewers, promptReviewerMaxRounds, promptReviewerModels, promptReviewerEfforts);
   // {issueAuthorFilter} directive — the filter was already merged (global →
   // per-app override) and value-constrained by sanitizeTaskMetadata, so read it
   // from `metadata` (default 'self', the slashdo `/do:next --self` security
