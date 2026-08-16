@@ -81,25 +81,35 @@ function maskedSourceOf(file) {
  * Slice out the full opening tag starting at `index`, tolerating `>` inside
  * JSX expression containers (`className={`a > b`}`) by tracking brace depth.
  *
- * Quoted regions are skipped whole, because everything between the tag name and
- * its `>` is either an attribute value or a JavaScript expression — never JSX
- * text, so a quote here always opens a string. Without that, ordinary prose in
- * an attribute breaks the file's busiest scanner (18 call sites) two ways:
- * a `>` ends the tag early, so `<input placeholder="a > b" aria-label="Search"/>`
- * loses the `aria-label` and reads as UNNAMED; and a lone `{` or `}` drives the
- * depth negative and returns null, which every call site treats as `continue` —
- * dropping the control (or its <label>) out of the scan entirely. Both are
- * false negatives in a guard, and the first already triggers on product code:
- * `pages/Instances.jsx` has a `>` inside a `title` attribute.
+ * A quoted ATTRIBUTE VALUE is skipped whole: at tag level a quote always opens
+ * a string. Counting braces alone made ordinary prose in an attribute break the
+ * file's busiest scanner (18 call sites) two ways — a `>` ended the tag early,
+ * so `<input placeholder="a > b" aria-label="Search"/>` lost its `aria-label`
+ * and read as UNNAMED; and a lone `{` or `}` drove the depth negative and
+ * returned null, which every call site treats as `continue`, dropping the
+ * control (or its <label>) out of the scan entirely. Both are false negatives
+ * in a guard, and the first already triggers on product code: `pages/
+ * Instances.jsx` has a `>` inside a `title` attribute.
+ *
+ * An expression container is handed to `matchingBraceEnd` and skipped whole,
+ * rather than having its quotes read here. Inside `{…}` the context is no
+ * longer "tag": `render={<span>don't</span>}` puts JSX TEXT in the middle of a
+ * tag, where an apostrophe is an ordinary character. Reading it as a string
+ * opener runs the scan off the end of the file and returns null — trading the
+ * bug above for the same bug in a rarer shape. `matchingBraceEnd` already
+ * tracks that nesting; this scanner just has to not second-guess it.
  */
 function openingTagAt(src, index, nameLength) {
-  let depth = 0;
   for (let i = index + nameLength; i < src.length; i++) {
     const c = src[i];
     if (c === '"' || c === '\'' || c === '`') { i = skipString(src, i); continue; }
-    if (c === '{') depth++;
-    else if (c === '}') depth--;
-    else if (c === '>' && depth === 0) return src.slice(index, i + 1);
+    if (c === '{') {
+      const end = matchingBraceEnd(src, i);
+      if (end === -1) return null;
+      i = end;
+      continue;
+    }
+    if (c === '>') return src.slice(index, i + 1);
   }
   return null;
 }
@@ -291,14 +301,21 @@ function matchingBraceEnd(s, idx) {
 // respecting `{...}` attribute-expression nesting and quoted strings inside
 // them. Returns `{ end, selfClosing }`, `end` being the index just past `>`.
 function tagBoundaryAt(s, idx) {
-  let depth = 0;
   for (let i = idx + 1; i < s.length; i++) {
     const c = s[i];
-    if (c === '{') depth++;
-    else if (c === '}') depth--;
-    else if ((c === '"' || c === '\'' || c === '`') && depth > 0) {
-      i = skipString(s, i);
-    } else if (c === '>' && depth === 0) {
+    // Same two contexts, same handling, as `openingTagAt` — see its comment.
+    // This scanner skipped strings only at `depth > 0`, so a `>` in a top-level
+    // attribute value (`<Icon title="a > b" />`) ended the tag at the wrong
+    // character AND reported `selfClosing: false`, which is how a self-closing
+    // icon stops looking self-closing to `isIconOnlyBody`.
+    if (c === '"' || c === '\'' || c === '`') { i = skipString(s, i); continue; }
+    if (c === '{') {
+      const end = matchingBraceEnd(s, i);
+      if (end === -1) return null;
+      i = end;
+      continue;
+    }
+    if (c === '>') {
       let back = i - 1;
       while (back > idx && /\s/.test(s[back])) back--;
       return { end: i + 1, selfClosing: s[back] === '/' };
@@ -499,6 +516,11 @@ function maskComments(src, { startMode = 'code' } = {}) {
   // lexer in `code` mode where the following `</select>` reads as a
   // less-than, never pops, and strands the rest of the file in `jsx-text`.
   const jsxStack = [];
+  // Where a comment hands back when it ends. A comment can open from JavaScript
+  // OR from inside a tag (`<Icon // note\n name={x} />`), and resetting to
+  // 'code' on exit dropped the lexer out of the half-read tag — every later
+  // `>` and quote in that tag then read in the wrong context.
+  let commentParentMode = 'code';
 
   // The mask is the only caller that needs the tag's identity as well as its
   // direction — it stacks the name to decide what a `</…>` closes.
@@ -513,7 +535,7 @@ function maskComments(src, { startMode = 'code' } = {}) {
     const c = chars[i];
 
     if (mode === 'line-comment') {
-      if (c === '\n') mode = 'code';
+      if (c === '\n') mode = commentParentMode;
       else chars[i] = ' ';
       continue;
     }
@@ -521,7 +543,7 @@ function maskComments(src, { startMode = 'code' } = {}) {
       if (c === '*' && chars[i + 1] === '/') {
         chars[i] = ' ';
         chars[++i] = ' ';
-        mode = 'code';
+        mode = commentParentMode;
       } else if (c !== '\n') {
         chars[i] = ' ';
       }
@@ -548,12 +570,14 @@ function maskComments(src, { startMode = 'code' } = {}) {
       if (c === '/' && chars[i + 1] === '/') {
         chars[i] = ' ';
         chars[++i] = ' ';
+        commentParentMode = mode;
         mode = 'line-comment';
         continue;
       }
       if (c === '/' && chars[i + 1] === '*') {
         chars[i] = ' ';
         chars[++i] = ' ';
+        commentParentMode = mode;
         mode = 'block-comment';
         continue;
       }
@@ -596,12 +620,14 @@ function maskComments(src, { startMode = 'code' } = {}) {
     if (c === '/' && chars[i + 1] === '/') {
       chars[i] = ' ';
       chars[++i] = ' ';
+      commentParentMode = mode;
       mode = 'line-comment';
       continue;
     }
     if (c === '/' && chars[i + 1] === '*') {
       chars[i] = ' ';
       chars[++i] = ' ';
+      commentParentMode = mode;
       mode = 'block-comment';
       continue;
     }
@@ -2150,6 +2176,40 @@ describe('a11y conventions', () => {
     // The fix must not credit a control that still has no name: `placeholder`
     // is an anchor attribute, never an accessible name.
     expect(isNamed('<input type="text" placeholder="a > b" />')).toBe(false);
+
+    // Inside `{…}` the context is no longer "tag", so the quote skip must NOT
+    // apply there: `render={<span>don't</span>}` puts JSX text mid-tag, where an
+    // apostrophe is an ordinary character. Reading it as a string opener runs
+    // off the end of the file and returns null — the same class of bug, one
+    // shape rarer. The expression is handed to `matchingBraceEnd` instead.
+    const attrExpressions = [
+      "<Foo render={<span>don't</span>} />",
+      "<Foo x={/* don't */ 1} />",
+      '<Foo c={`a > b`} />', // the case the original brace counting existed for
+    ];
+    for (const shape of attrExpressions) expect(openingTagAt(shape, 0, 4)).toBe(shape);
+
+    // `tagBoundaryAt` answers the same question for the icon rules and skipped
+    // strings only at depth > 0, so a `>` in a top-level attribute value ended
+    // the tag at the wrong character AND reported `selfClosing: false` — which
+    // is how a self-closing icon stops looking self-closing.
+    const iconTag = '<Icon title="a > b" />';
+    expect(tagBoundaryAt(iconTag, 0)).toEqual({ end: iconTag.length, selfClosing: true });
+  });
+
+  it('hands a comment back to the context that opened it (#4333)', () => {
+    // A comment can open from JavaScript or from inside a TAG. `maskComments`
+    // reset to 'code' on exit either way, which dropped the lexer out of the
+    // half-read tag: the tag's `>` no longer closed it, the element never
+    // reached 'jsx-text', and the visible text after it was lexed as JavaScript
+    // — so a `//` in ordinary label text got masked away. That is the #4318
+    // failure again, reached through the comment states instead.
+    for (const opener of ['// note\n', '/* note */']) {
+      const src = `<Foo ${opener} bar="x">see // docs</Foo>`;
+      expect(maskComments(src).endsWith('>see // docs</Foo>')).toBe(true);
+    }
+    // A comment opened from JavaScript still hands back to JavaScript.
+    expect(maskComments('const a = 1; // note\nconst b = 2;')).toBe('const a = 1;        \nconst b = 2;');
   });
 
   it('reads a ternary operator through quoted attributes and strings (#4333)', () => {
