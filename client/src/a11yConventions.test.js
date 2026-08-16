@@ -78,9 +78,9 @@ function maskedSourceOf(file) {
 }
 
 /**
- * Slice out the full opening tag starting at `index` — the file's busiest
- * scanner, at 20-odd call sites, every one of which reads `null` as `continue`
- * and drops the control (or its <label>) out of the scan entirely.
+ * Slice out the full opening tag starting at `index`, or null when it never
+ * closes. The walks below read this off the shared tag index instead; what is
+ * left are the callers that already hold an index and only want the slice.
  *
  * Everything it has to see through — a `>` or a brace inside a quoted attribute
  * value, a whole element inside an attribute expression, a comment mid-tag — is
@@ -91,74 +91,111 @@ function openingTagAt(src, index) {
   return end === -1 ? null : src.slice(index, end + 1);
 }
 
-// The tag-name pattern a walk falls back to when no name is given.
-const ANY_TAG_NAME = '[A-Za-z][\\w.-]*';
-
-// Element names reach these walks from SOURCE — `relativeImportBindings` hands
-// over whatever identifier the file bound — and a JS identifier may hold `$`,
-// which is an ANCHOR in a pattern: spliced in raw, `<Btn$1` compiles to a regex
-// that can never match, so the wrapper goes invisible and the controls it names
-// drop off the offender list with no error.
-//
-// No verdict moves today, because the two sides disagree in the same direction:
-// `relativeImportBindings` admits `$` (`[A-Z][\w$]*`) while
-// `forEachLocalComponent` does not (`[A-Z][\w]*`), so such a wrapper is unseen
-// either way and no fixture can witness the difference. Escaping is what keeps
-// the WALK from being the reason if the detectors are ever reconciled — which
-// is the direction they should move, since `$` is a legal identifier character.
-const escapeForPattern = (name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// How an element name is spelled, wherever one is read out of source. `$` is a
+// legal JS identifier character, so a `Fi$ld` wrapper is a real component; the
+// class admitting it here is what lets `relativeImportBindings` (`[A-Z][\w$]*`)
+// and `forEachLocalComponent` agree with the walk about which names exist.
+// Reading names literally also means no element name is ever spliced into a
+// pattern, so a `$` in one can no longer compile to an anchor that matches
+// nothing and silently hides the controls that wrapper names.
+const TAG_NAME_PATTERN = '[A-Za-z][\\w$.-]*';
+const LEADING_TAG_NAME = new RegExp(`^(${TAG_NAME_PATTERN})`);
 
 /**
- * Every `<Name …>` in `src`, as `{ tag, index, contentStart }` — the walk that
- * ten scanners used to re-derive a line at a time. (`callSiteIdVerdicts` is the
- * one holdout, and says why at its own definition.) Omit `name` to walk every
- * element; a name given is matched literally, never as a pattern.
+ * Every tag in `src`, in source order, built in ONE `jsxScanner` pass and
+ * memoized by source — `hasUsableAriaLabelledByReference` used to re-sweep the
+ * whole file per referenced id, the same waste `maskedSourceOf` memoizes away
+ * for `maskComments`.
  *
- * The `re.lastIndex = contentStart` advance is the load-bearing part: without
- * it the next `exec` resumes INSIDE the tag just read, so a `<label` written in
- * an attribute value (`title="<label>"`) matches as an element. `if (!tag)
- * continue` beside it deliberately does NOT advance — an unterminated tag has
- * no end to advance past, and stepping over just the `<` is what lets the walk
- * reach the next real tag instead of stopping there. That asymmetry reads as a
- * typo every time it is re-derived, which is how #4318 and #4327 each taught
- * one copy something the others never learned.
+ * A tag start is exactly a `<` that enters `jsx-tag` mode, so everything the
+ * old regex walk had to approximate falls out by construction: a `<label`
+ * written in a quoted attribute value is inside a string token and never
+ * visited, and an element written in an attribute EXPRESSION
+ * (`<Foo render={<span id="notes-h">Notes</span>} />`) IS visited, which the
+ * regex walk's `lastIndex` advance stepped over. The scanner saves and restores
+ * its half-read tag across brace frames, so `tagStart` pairs each `>` with the
+ * `<` it really closes rather than with whatever the innermost open tag is.
  *
- * The advance steps over the whole opening tag, so an element written inside an
- * attribute EXPRESSION (`<Foo render={<span id="notes-h">Notes</span>} />`) is
- * not visited — reachable only from an `ANY_TAG_NAME` scan, since a name-
- * specific walk lands on the nested tag directly unless it sits inside a
- * same-named tag, which is the false positive the advance exists to stop. No
- * such shape is in the tree today, and it fails LOUD: an id the walk cannot see
- * reads as unresolved, so the control lands on the offender list rather than
- * being credited a name it does not have. Descending into attribute
- * expressions is a scanner of its own; do not "fix" it by dropping the advance.
+ * Each entry is `{ closing, name, index, tag, contentStart, selfClosing }`.
+ * An unterminated tag keeps `tag: null` — the walk reports it rather than
+ * dropping it, because "is there a tag here" and "should an unreadable one
+ * count" are different questions and only the caller knows the second.
  *
- * `closers: true` also yields each `</Name>` as `{ closing: true, index }` — no
- * `tag`/`contentStart`, since a closing tag has neither attributes nor
- * children. Only `openWrapperInstancesAt` wants them, for its open/close stack.
+ * Keyed by SOURCE, not by path, so it is a pure-function cache with nothing to
+ * invalidate: a probe's stand-in source and the real file it stands in for are
+ * different strings, and no entry can ever answer for the other.
  */
-function* forEachOpeningTag(src, name, { closers = false } = {}) {
-  // Built per call, and it has to stay that way: these walks interleave — the
-  // control scan is mid-walk when it asks `hasMatchingLabelElement` for the
-  // same `'label'`, and two wrapper walks can be open on one name at once. A
-  // hoisted or memoized `/g` regex is shared mutable `lastIndex`, so the inner
-  // walk would leave the outer one wherever it finished. Constructing costs
-  // ~60ns against per-match work three orders of magnitude larger; the obvious
-  // "cache the regex" optimization buys nothing and breaks re-entrancy.
-  const pattern = name === undefined ? ANY_TAG_NAME : escapeForPattern(name);
-  const re = new RegExp(`<${closers ? '/?' : ''}${pattern}\\b`, 'g');
-  let match;
-  while ((match = re.exec(src))) {
-    if (match[0].startsWith('</')) {
-      yield { closing: true, index: match.index };
+const tagIndexBySource = new Map();
+
+function tagIndexOf(src) {
+  const cached = tagIndexBySource.get(src);
+  if (cached) return cached;
+  const nodes = [];
+  const slotByStart = new Map();
+  // Sticky rather than sliced: reading the name off a `src.slice(index)` would
+  // allocate a copy of the rest of the file once per tag.
+  const nameRe = new RegExp(TAG_NAME_PATTERN, 'y');
+  for (const token of jsxScanner(src)) {
+    if (token.kind !== 'char') continue;
+    if (token.opensTag) {
+      const closing = src.startsWith('</', token.index);
+      nameRe.lastIndex = token.index + (closing ? 2 : 1);
+      slotByStart.set(token.index, nodes.length);
+      nodes.push({
+        closing,
+        name: nameRe.exec(src)?.[0] ?? null,
+        index: token.index,
+        tag: null,
+        contentStart: null,
+        selfClosing: false,
+      });
       continue;
     }
-    const tag = openingTagAt(src, match.index);
-    if (!tag) continue;
-    const contentStart = match.index + tag.length;
-    re.lastIndex = contentStart;
-    yield { closing: false, tag, index: match.index, contentStart };
+    if (token.char !== '>' || token.mode !== 'jsx-tag') continue;
+    const slot = slotByStart.get(token.tagStart);
+    if (slot === undefined) continue;
+    const node = nodes[slot];
+    node.tag = src.slice(node.index, token.index + 1);
+    node.contentStart = token.index + 1;
+    node.selfClosing = token.selfClosing;
   }
+  tagIndexBySource.set(src, nodes);
+  return nodes;
+}
+
+// Every tag named `name` — closers and unterminated tags included. Omit `name`
+// to walk every element; a name is matched literally against the name the
+// scanner read, never as a pattern.
+function* forEachTag(src, name) {
+  for (const node of tagIndexOf(src)) {
+    if (name === undefined || node.name === name) yield node;
+  }
+}
+
+// What almost every caller wants: openers only, and only those whose `>` was
+// found. `openWrapperInstancesAt` and `callSiteIdVerdicts` are the two that
+// want more — one needs closers for its open/close stack, the other needs an
+// unreadable tag to contribute a `false` rather than vanish — and both walk
+// `forEachTag` instead. Keeping that choice in a filter rather than inside the
+// walk is what let the last hand-rolled scanner fold onto this one.
+function* forEachOpeningTag(src, name) {
+  for (const node of forEachTag(src, name)) {
+    if (!node.closing && node.tag !== null) yield node;
+  }
+}
+
+// Which element names this source renders at all — the "is it worth reading the
+// imported file" precheck, memoized alongside the index it is derived from.
+const renderedNamesBySource = new Map();
+
+function renderedTagNames(src) {
+  let names = renderedNamesBySource.get(src);
+  if (!names) {
+    names = new Set();
+    for (const node of tagIndexOf(src)) if (!node.closing && node.name) names.add(node.name);
+    renderedNamesBySource.set(src, names);
+  }
+  return names;
 }
 
 const lineOf = (src, index) => src.slice(0, index).split('\n').length;
@@ -291,9 +328,16 @@ const opensJsxTagInText = (src, index) => src[index] === '<'
 // In JavaScript the same `<` also has to sit where an expression may start.
 // Built on the text predicate so `matchingBraceEnd` and `maskComments` cannot
 // drift on where the JavaScript/JSX line falls — widening one widens both.
+// `}` is in the preceder set for the same reason `;` is: it ENDS a statement, so
+// what follows is a fresh expression position. The other reading — an object
+// literal compared with less-than (`{a: 1} < b`) — is not something JavaScript
+// is written to say, while `function Wrapper() {…}` followed by the JSX that
+// renders it is the shape every wrapper probe in this file is built from. Since
+// the tag walks became scanner-driven this predicate is what decides whether
+// such a tag exists at all, where the old regex walk found it either way.
 const looksLikeJsxTagStart = (src, index, previous) => {
   if (!opensJsxTagInText(src, index)) return false;
-  if (previous < 0 || '=([{,:;!?&|>'.includes(src[previous])) return true;
+  if (previous < 0 || '=([{},:;!?&|>'.includes(src[previous])) return true;
   return /(?:return|yield|=>)\s*$/.test(src.slice(Math.max(0, index - 12), index));
 };
 
@@ -309,10 +353,17 @@ const looksLikeJsxTagStart = (src, index, previous) => {
  * read into one by accident.
  *
  * Tokens:
- *   { kind: 'char',    index, char, mode, depth }
+ *   { kind: 'char',    index, char, mode, depth, opensTag, tagStart, selfClosing }
  *   { kind: 'string',  index, end,  mode }   — `end` is the closing quote
  *   { kind: 'comment', index, end,  mode }   — `end` is the comment's last char
  *   { kind: 'regex',   index, end,  mode }   — `end` is the closing slash
+ *
+ * `opensTag` marks the `<` that enters a tag — the one fact a tag walk needs
+ * and the one thing no caller can decide for itself, since whether a `<` is a
+ * tag or a less-than depends on the context this machine is tracking.
+ * `tagStart` rides on every `jsx-tag` character and names the `<` of the tag
+ * being read, so a `>` can be paired with its own opener even after an
+ * attribute expression parked that tag on the brace stack.
  *
  * `mode` is where the character sits: `'code'` (a JavaScript expression),
  * `'jsx-tag'` (between a tag's `<` and the `>` that closes it), or `'jsx-text'`
@@ -330,7 +381,7 @@ function* jsxScanner(src, { from = 0, mode: startMode = 'code' } = {}) {
   // The tag being read whenever `mode` is 'jsx-tag'; `parentMode` is where a
   // self-closing tag hands back to. A caller that starts mid-tag gets a stand-in
   // so the first `>` still closes something.
-  let tag = startMode === 'jsx-tag' ? { closing: false, parentMode: 'code' } : null;
+  let tag = startMode === 'jsx-tag' ? { closing: false, parentMode: 'code', start: null } : null;
   // One frame per open brace, holding the state to resume when it closes: an
   // attribute expression returns to the tag holding it, a child expression to
   // the element's text. The half-read tag rides along, because an attribute
@@ -404,12 +455,24 @@ function* jsxScanner(src, { from = 0, mode: startMode = 'code' } = {}) {
       continue;
     }
 
+    // Decided here rather than by each walk for itself: `mode` and `before` are
+    // this machine's state, and every past defect in this file came from a
+    // scanner ruling on a `<` without them.
+    const opensTag = c === '<' && (mode === 'jsx-text'
+      ? opensJsxTagInText(src, i)
+      : mode === 'code' && looksLikeJsxTagStart(src, i, before));
+
     yield {
       kind: 'char',
       index: i,
       char: c,
       mode,
       depth: braceFrames.length,
+      opensTag,
+      // The `<` of the tag this character belongs to, so a `>` pairs with its
+      // own opener: an attribute expression parks the half-read tag on the
+      // brace stack, and the innermost tag SEEN is not always the one closing.
+      tagStart: mode === 'jsx-tag' ? tag?.start ?? null : null,
       // Only meaningful on a tag's closing `>`. It rides along because `before`
       // is the last TOKEN, and a caller asking from outside can only find the
       // last character — which is the `/` of a `*/` in `<Foo /* note */ >`.
@@ -417,8 +480,8 @@ function* jsxScanner(src, { from = 0, mode: startMode = 'code' } = {}) {
     };
 
     if (mode === 'jsx-text') {
-      if (opensJsxTagInText(src, i)) {
-        tag = { closing: src.startsWith('</', i), parentMode: 'jsx-text' };
+      if (opensTag) {
+        tag = { closing: src.startsWith('</', i), parentMode: 'jsx-text', start: i };
         mode = 'jsx-tag';
       }
       continue;
@@ -441,8 +504,8 @@ function* jsxScanner(src, { from = 0, mode: startMode = 'code' } = {}) {
       continue;
     }
 
-    if (c === '<' && looksLikeJsxTagStart(src, i, before)) {
-      tag = { closing: src.startsWith('</', i), parentMode: 'code' };
+    if (opensTag) {
+      tag = { closing: src.startsWith('</', i), parentMode: 'code', start: i };
       mode = 'jsx-tag';
     }
   }
@@ -577,6 +640,19 @@ function findButtonBody(src, openEnd) {
   return closeIdx === -1 ? null : src.slice(openEnd, closeIdx);
 }
 
+// Is this <button> node an icon-only button with nothing to name it? Named
+// rather than inlined in the rule so the `selfClosing` it reads is testable:
+// this rule scans UNMASKED source, where a comment survives to the end of the
+// tag — `<button /* pause */>` ends in `*/>`, which the old `endsWith('/>')`
+// re-derivation called self-closing, skipping a button that has a body and
+// needs a name.
+function isUnnamedIconOnlyButton(src, { tag, contentStart, selfClosing }) {
+  if (selfClosing) return false; // no body to judge
+  if (/\baria-label\s*=/.test(tag) || /\baria-labelledby\s*=/.test(tag)) return false;
+  const body = findButtonBody(src, contentStart);
+  return body !== null && isIconOnlyBody(body);
+}
+
 // Tailwind `h-`/`w-`/`min-h-`/`min-w-` token → px, for both an arbitrary
 // value (`min-h-[44px]`) and the spacing scale (`h-11` = 11 * 4px = 44px).
 function tokenPx(token) {
@@ -664,9 +740,9 @@ function maskComments(src, { startMode = 'code' } = {}) {
 }
 
 function hasMatchingLabelElement(src, id) {
-  for (const { tag, index } of forEachOpeningTag(src, 'label')) {
-    const htmlFor = normalizedAttributeValue(attributeValue(tag, 'htmlFor'));
-    if (htmlFor !== id || !hasUsableElementText(src, index, tag)) continue;
+  for (const node of forEachOpeningTag(src, 'label')) {
+    const htmlFor = normalizedAttributeValue(attributeValue(node.tag, 'htmlFor'));
+    if (htmlFor !== id || !hasUsableElementText(src, node)) continue;
     return true;
   }
   return false;
@@ -701,8 +777,8 @@ function hasUsableLabelProp(tag, labelProp) {
 // their control just as well. See `wrapperShapes` for how the shape is proved.
 function forwardsLabelForId(src, { id }, { idProp, labelProp }, name) {
   if (!id) return false;
-  for (const { tag, index } of forEachOpeningTag(src, name)) {
-    if (normalizedAttributeValue(attributeValue(tag, idProp)) !== id) continue;
+  for (const node of forEachOpeningTag(src, name)) {
+    if (normalizedAttributeValue(attributeValue(node.tag, idProp)) !== id) continue;
     // A forwarder can take its text as JSX children rather than a prop
     // (`<FieldLabel htmlFor="world-logline">Logline</FieldLabel>`), in which
     // case there is no same-named attribute to read — the name is the element's
@@ -710,10 +786,10 @@ function forwardsLabelForId(src, { id }, { idProp, labelProp }, name) {
     // Without this branch every children-shaped forwarder looked unnamed and
     // its controls stayed on the allowlist.
     if (labelProp === 'children') {
-      if (hasUsableElementText(src, index, tag)) return true;
+      if (hasUsableElementText(src, node)) return true;
       continue;
     }
-    if (hasUsableLabelProp(tag, labelProp)) return true;
+    if (hasUsableLabelProp(node.tag, labelProp)) return true;
   }
   return false;
 }
@@ -721,14 +797,18 @@ function forwardsLabelForId(src, { id }, { idProp, labelProp }, name) {
 function stripHiddenElementContent(body) {
   const hiddenAttribute = String.raw`(?:aria-hidden\s*=\s*(?:["']true["']|\{\s*true\s*\})|\bhidden(?:\s*=\s*(?:["']true["']|\{\s*true\s*\}))?)`;
   return body
-    .replace(new RegExp(`<([A-Za-z][\\w.-]*)\\b[^>]*${hiddenAttribute}[^>]*/\\s*>`, 'gi'), ' ')
-    .replace(new RegExp(`<([A-Za-z][\\w.-]*)\\b[^>]*${hiddenAttribute}[^>]*>[\\s\\S]*?<\\/\\1\\s*>`, 'gi'), ' ');
+    .replace(new RegExp(`<(${TAG_NAME_PATTERN})\\b[^>]*${hiddenAttribute}[^>]*/\\s*>`, 'gi'), ' ')
+    .replace(new RegExp(`<(${TAG_NAME_PATTERN})\\b[^>]*${hiddenAttribute}[^>]*>[\\s\\S]*?<\\/\\1\\s*>`, 'gi'), ' ');
 }
 
-function hasUsableElementText(src, index, tag) {
+// `node` is a tag-index entry: its `selfClosing` and `name` come from the
+// scanner, so a comment mid-tag (`<Foo /* note */ >`) can no longer read as a
+// self-closing element on unmasked source the way a `/\/\s*>$/` re-derivation
+// did.
+function hasUsableElementText(src, node) {
+  const { tag, index, name, selfClosing } = node;
   if (hasUsableAccessibleNameAttribute(tag, 'aria-label')) return true;
-  if (/\/\s*>$/.test(tag)) return false;
-  const name = tag.match(/^<([A-Za-z][\w.-]*)\b/)?.[1];
+  if (selfClosing) return false;
   if (!name) return false;
   const closeIndex = src.indexOf(`</${name}>`, index + tag.length);
   if (closeIndex === -1) return false;
@@ -746,7 +826,7 @@ function hasUsableElementText(src, index, tag) {
 
 function isNestedInLabel(src, index) {
   return openWrapperInstancesAt(src, 'label', index)
-    .some(({ index: labelIndex, tag }) => hasUsableElementText(src, labelIndex, tag));
+    .some((node) => hasUsableElementText(src, node));
 }
 
 function hasUsableAccessibleNameAttribute(tag, name) {
@@ -822,14 +902,16 @@ function isDirectElementInExpression(src, start, index) {
 // callers that need to walk the body.
 function openWrapperInstancesAt(src, name, index) {
   const open = [];
-  for (const { closing, tag, index: at, contentStart } of forEachOpeningTag(src, name, { closers: true })) {
-    if (at >= index) break;
-    if (closing) {
+  for (const node of forEachTag(src, name)) {
+    if (node.index >= index) break;
+    if (node.closing) {
       open.pop();
       continue;
     }
-    if (/\/\s*>$/.test(tag)) continue;
-    open.push({ tag, index: at, contentStart });
+    // An unterminated tag has no children to be nested in, and a self-closing
+    // one wraps nothing.
+    if (node.tag === null || node.selfClosing) continue;
+    open.push(node);
   }
   return open;
 }
@@ -885,7 +967,7 @@ function isFirstDirectChild(src, openContentStart, index) {
     }
 
     const closing = src.startsWith('</', cursor);
-    const name = src.slice(cursor + (closing ? 2 : 1)).match(/^([A-Za-z][\w.-]*)/)?.[1];
+    const name = src.slice(cursor + (closing ? 2 : 1)).match(LEADING_TAG_NAME)?.[1];
     if (!name) {
       if (src.startsWith('<>', cursor)) {
         if (depth === 0) sawPrecedingChild = true;
@@ -963,8 +1045,13 @@ function isNestedInLabeledCloner(src, { index }, { labelProp }, wrapperName) {
 // A concise arrow body that is neither `{…}` nor `(…)` (`= (p) => <label…>`) is
 // still skipped — there is no cheap end boundary for it, and the repo wraps
 // multi-line JSX in parens.
+// `[\w$]` matches `relativeImportBindings` on the other side of the import: `$`
+// is a legal identifier character, and a detector that admits `Fi$ld` as an
+// imported binding while this one refuses to declare it left such a wrapper
+// invisible from both directions at once — which is why no fixture could
+// witness the disagreement.
 function forEachLocalComponent(src, visit) {
-  const re = /(?:function\s+([A-Z][\w]*)\s*\(|(?:const|let|var)\s+([A-Z][\w]*)\s*=\s*(?:async\s+)?\()/g;
+  const re = /(?:function\s+([A-Z][\w$]*)\s*\(|(?:const|let|var)\s+([A-Z][\w$]*)\s*=\s*(?:async\s+)?\()/g;
   let match;
   while ((match = re.exec(src))) {
     // Skip the parameter list with the string-aware scanner — a default value
@@ -1011,8 +1098,8 @@ function arrowBodyAt(src, from) {
 // Every `<label>` element in a component body, as `{ tag, inner }`. A
 // self-closing `<label />` wraps nothing and carries no text, so it is skipped.
 function* labelElements(body) {
-  for (const { tag, contentStart } of forEachOpeningTag(body, 'label')) {
-    if (/\/\s*>$/.test(tag)) continue;
+  for (const { tag, contentStart, selfClosing } of forEachOpeningTag(body, 'label')) {
+    if (selfClosing) continue;
     const close = body.indexOf('</label>', contentStart);
     if (close === -1) continue;
     yield { tag, inner: body.slice(contentStart, close) };
@@ -1269,8 +1356,11 @@ function wrapperRegistry(src, file) {
   forEachLocalComponent(src, (name, body, params) => add(name, wrapperShapes(body, params)));
   if (file !== undefined) {
     for (const [localName, { file: importedFile, exportedName }] of relativeImportBindings(src, file)) {
-      // Only pay to read a file whose component this one actually renders.
-      if (!new RegExp(`<${escapeForPattern(localName)}\\b`).test(src)) continue;
+      // Only pay to read a file whose component this one actually renders. Asked
+      // of the tag index rather than a pattern: the index already knows every
+      // element name in this source, and reading the binding literally is what
+      // keeps a `$` in it from compiling to an anchor that matches nothing.
+      if (!renderedTagNames(src).has(localName)) continue;
       add(localName, importedComponentShapes(importedFile, exportedName));
     }
   }
@@ -1364,22 +1454,21 @@ function exportedNamesOf(src, name) {
 // required — an id with no label names nothing, and a label with no id names
 // something else.
 //
-// The one tag walk NOT folded onto `forEachOpeningTag`: the caller quantifies
-// over these verdicts, so an unterminated tag has to contribute a `false`
-// rather than drop out of the count. The generator skips it — correct for a
+// The one caller that walks `forEachTag` rather than `forEachOpeningTag`: it
+// quantifies over these verdicts, so an unreadable tag has to contribute a
+// `false` rather than drop out of the count. Skipping it is correct for a
 // scanner asking "which tags are there", wrong for one asking "did every call
 // site do its half", which would quietly weaken to "every PARSEABLE call site".
+// That is exactly why the walk yields unterminated tags instead of deciding for
+// its callers what to do with one.
 function callSiteIdVerdicts(src, name, idProp) {
   const verdicts = [];
-  const re = new RegExp(`<${escapeForPattern(name)}\\b`, 'g');
-  let match;
-  while ((match = re.exec(src))) {
-    const tag = openingTagAt(src, match.index);
-    if (!tag) {
+  for (const { closing, tag } of forEachTag(src, name)) {
+    if (closing) continue;
+    if (tag === null) {
       verdicts.push(false);
       continue;
     }
-    re.lastIndex = match.index + tag.length;
     const id = normalizedAttributeValue(attributeValue(tag, idProp));
     verdicts.push(id !== null && id !== '' && hasMatchingLabelElement(src, id));
   }
@@ -1431,11 +1520,12 @@ function hasUsableAriaLabelledByReference(src, tag) {
   const raw = attributeValue(tag, 'aria-labelledby');
   const value = normalizedAttributeValue(raw);
   if (!value || !/^[A-Za-z][\w:.-]*(?:\s+[A-Za-z][\w:.-]*)*$/.test(value)) return false;
+  // One pass over the memoized tag index per id, not a fresh lex of the file.
   return value.split(/\s+/).every((id) => {
-    for (const { tag: referencedTag, index } of forEachOpeningTag(src)) {
-      if (normalizedAttributeValue(attributeValue(referencedTag, 'id')) !== id) continue;
-      if (/\baria-hidden\s*=\s*['"`]true['"`]/.test(referencedTag)) return false;
-      if (hasUsableElementText(src, index, referencedTag)) return true;
+    for (const node of forEachOpeningTag(src)) {
+      if (normalizedAttributeValue(attributeValue(node.tag, 'id')) !== id) continue;
+      if (/\baria-hidden\s*=\s*['"`]true['"`]/.test(node.tag)) return false;
+      if (hasUsableElementText(src, node)) return true;
     }
     return false;
   });
@@ -1808,12 +1898,9 @@ describe('a11y conventions', () => {
     const offenders = [];
     for (const file of trackedJsxFiles()) {
       const src = readFileSync(join(CLIENT_ROOT, file), 'utf8');
-      for (const { tag, index, contentStart } of forEachOpeningTag(src, 'button')) {
-        if (tag.endsWith('/>')) continue; // self-closing — no body to judge
-        if (/\baria-label\s*=/.test(tag) || /\baria-labelledby\s*=/.test(tag)) continue;
-        const body = findButtonBody(src, contentStart);
-        if (body === null || !isIconOnlyBody(body)) continue;
-        offenders.push(`${file}:${lineOf(src, index)}`);
+      for (const node of forEachOpeningTag(src, 'button')) {
+        if (!isUnnamedIconOnlyButton(src, node)) continue;
+        offenders.push(`${file}:${lineOf(src, node.index)}`);
       }
     }
     expect(offenders, `Icon-only <button> with no aria-label/aria-labelledby — title alone isn't touch-discoverable and isn't reliably read as the accessible name; see media/MediaCard.jsx's Annotate button for the convention:\n${offenders.join('\n')}`).toEqual([]);
@@ -2043,6 +2130,14 @@ describe('a11y conventions', () => {
     // borrow one from a caller that does not exist.
     expect(credits()).toBe(false);
 
+    // An UNREADABLE call site is a `false`, not a skipped one. This is the
+    // reason the shared walk yields unterminated tags instead of deciding for
+    // its callers (#4341): every other walk wants "which tags are there" and
+    // drops it, this one asks "did every call site do its half" and cannot.
+    const unterminated = '<label htmlFor="rounds">Rounds</label>\n<Combo inputId="rounds"';
+    expect(credits(site(unterminated))).toBe(false);
+    expect(credits(site(labeled), site(unterminated))).toBe(false);
+
     // The id has to be CALLER-supplied. A locally generated one is not the
     // caller's to name — `<Combo inputId="rounds">` would then exempt an input
     // whose id the caller never saw — so a non-parameter id is not this shape.
@@ -2149,19 +2244,89 @@ describe('a11y conventions', () => {
     expect(isNamed('<label htmlFor="other" title=\'<label>\'>Other <label htmlFor="x">Rounds</label></label>\n<input id="x" type="text" />')).toBe(true);
   });
 
-  it('does not credit a name written inside an attribute expression (#4337)', () => {
-    // The advance steps over a whole opening tag, so an element inside an
-    // attribute EXPRESSION is not visited — `notes-h` is never resolved and the
-    // textarea reads UNNAMED. This pins the boundary rather than endorsing it:
-    // the failure direction is the safe one (a control lands on the offender
-    // list instead of being credited a name it does not have), and the day the
-    // walk learns to descend into expressions, this test says so out loud
-    // instead of a comment quietly going stale.
-    expect(isNamed('<Foo render={<span id="notes-h">Notes</span>} />\n<textarea aria-labelledby="notes-h" />', 'textarea')).toBe(false);
-    // The same id written as a real sibling element IS resolved — proof the
-    // assertion above is about expression nesting, not about aria-labelledby
-    // being broken outright.
+  it('credits a name written inside an attribute expression (#4341)', () => {
+    // The boundary #4337 documented, now crossed. The regex walk's
+    // `re.lastIndex = contentStart` advance stepped over a whole opening tag, so
+    // an element written inside an attribute EXPRESSION was never visited and
+    // `notes-h` never resolved. The scanner enters that expression the same way
+    // React does, so the <span> really does render and really does name the
+    // textarea.
+    expect(isNamed('<Foo render={<span id="notes-h">Notes</span>} />\n<textarea aria-labelledby="notes-h" />', 'textarea')).toBe(true);
+    // The same id written as a real sibling element resolves too — the walk
+    // gained a shape rather than trading one for another.
     expect(isNamed('<span id="notes-h">Notes</span>\n<textarea aria-labelledby="notes-h" />', 'textarea')).toBe(true);
+    // What the advance actually existed to stop is still stopped, and by
+    // construction now: markup in a quoted attribute VALUE is a string to the
+    // scanner, so it names nothing.
+    expect(isNamed('<Foo render=\'<span id="notes-h">Notes</span>\' />\n<textarea aria-labelledby="notes-h" />', 'textarea')).toBe(false);
+    // An id that resolves to an element carrying no text still names nothing,
+    // wherever it is written — the descent widened which elements are seen, not
+    // what counts as a name.
+    expect(isNamed('<Foo render={<span id="notes-h" />} />\n<textarea aria-labelledby="notes-h" />', 'textarea')).toBe(false);
+  });
+
+  it('reads self-closing from the scanner, not off the end of the tag (#4341)', () => {
+    // `tagEndAt` used to throw away `tagBoundaryAt`'s `selfClosing`, so four
+    // callers re-derived it from the tag TEXT — and on UNMASKED source, which
+    // two rules scan, a comment survives to the last two characters. Both
+    // re-derivations then read a tag that has a body as self-closing and skip
+    // it, which is a control dropping silently off the offender list.
+    const commented = '<button /* pause */>{on ? <IconA /> : <IconB />}</button>';
+    const [button] = [...forEachOpeningTag(commented, 'button')];
+    expect(button.tag.endsWith('/>')).toBe(true); // what the rule used to ask
+    expect(button.selfClosing).toBe(false); // what the scanner knows
+    expect(isUnnamedIconOnlyButton(commented, button)).toBe(true);
+    // The same shape through `hasUsableElementText`, whose re-derivation was the
+    // `/\/\s*>$/` spelling: a commented <label> stops naming its input.
+    expect(isNamed('<label htmlFor="rounds" /* which */ >Rounds</label>\n<input id="rounds" type="text" />')).toBe(true);
+
+    // A genuinely self-closing tag still reads as one, or the fix would just
+    // have moved the failure to the other direction.
+    const [selfClosed] = [...forEachOpeningTag('<button />', 'button')];
+    expect(selfClosed.selfClosing).toBe(true);
+    expect(isUnnamedIconOnlyButton('<button />', selfClosed)).toBe(false);
+    expect(isNamed('<label htmlFor="rounds" />\n<input id="rounds" type="text" />')).toBe(false);
+  });
+
+  it('sees a component whose name holds a `$` (#4341)', () => {
+    // `relativeImportBindings` admitted `$` and `forEachLocalComponent` did not,
+    // so a `Fi$ld` wrapper was invisible from both directions at once and no
+    // fixture could witness the disagreement. Now every detector — and the walk,
+    // which matches names literally instead of splicing them into a pattern
+    // where `$` is an anchor — spells an identifier the same way.
+    const wrapper = 'function Fi$ld({ label, children }) {\n  return (<label className="block"><span>{label}</span>{children}</label>);\n}';
+    expect(isNamed(`${wrapper}\n<Fi$ld label="Rounds"><select value={v} /></Fi$ld>`, 'select')).toBe(true);
+    // …and it is the wrapper's LABEL doing the naming, not its name being seen.
+    expect(isNamed(`${wrapper}\n<Fi$ld><select value={v} /></Fi$ld>`, 'select')).toBe(false);
+  });
+
+  it('starts a tag after a statement brace, but not after a value (#4341)', () => {
+    // Since the walks became scanner-driven, `looksLikeJsxTagStart` is the only
+    // thing standing between a wrapper and the registry — the regex walk found
+    // the tag either way — so both directions of it need pinning.
+    const wrapper = 'function Field({ label, children }) {\n  return (<label>{label}{children}</label>);\n}';
+    expect(isNamed(`${wrapper}\n<Field label="Rounds"><select value={v} /></Field>`, 'select')).toBe(true);
+    // A `<` after a VALUE is a comparison. Reading it as a tag would open a
+    // phantom element that swallows source up to the next `>`, taking every
+    // real tag in between out of the scan with it.
+    expect([...forEachTag('const ok = size() <limit;')].map((node) => node.name)).toEqual([]);
+  });
+
+  it('builds one tag index per source and shares it between interleaved walks (#4341)', () => {
+    // The regex walk had to construct a fresh `/g` regex per call: these walks
+    // genuinely interleave — the control scan is mid-walk when it asks
+    // `hasMatchingLabelElement` about the same `'label'` — and a shared
+    // `lastIndex` would leave the outer walk wherever the inner one finished.
+    // An index is immutable, so re-entrancy costs nothing and the file is lexed
+    // once instead of once per walk.
+    const src = '<label htmlFor="a">A</label>\n<label htmlFor="b">B</label>';
+    expect(tagIndexOf(src)).toBe(tagIndexOf(src));
+    const outer = [];
+    for (const node of forEachOpeningTag(src, 'label')) {
+      outer.push(node.index);
+      expect([...forEachOpeningTag(src, 'label')]).toHaveLength(2);
+    }
+    expect(outer).toHaveLength(2);
   });
 
   it('reads a quoted attribute as a string, not as tag structure (#4333)', () => {
