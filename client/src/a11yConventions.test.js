@@ -80,11 +80,23 @@ function maskedSourceOf(file) {
 /**
  * Slice out the full opening tag starting at `index`, tolerating `>` inside
  * JSX expression containers (`className={`a > b`}`) by tracking brace depth.
+ *
+ * Quoted regions are skipped whole, because everything between the tag name and
+ * its `>` is either an attribute value or a JavaScript expression — never JSX
+ * text, so a quote here always opens a string. Without that, ordinary prose in
+ * an attribute breaks the file's busiest scanner (18 call sites) two ways:
+ * a `>` ends the tag early, so `<input placeholder="a > b" aria-label="Search"/>`
+ * loses the `aria-label` and reads as UNNAMED; and a lone `{` or `}` drives the
+ * depth negative and returns null, which every call site treats as `continue` —
+ * dropping the control (or its <label>) out of the scan entirely. Both are
+ * false negatives in a guard, and the first already triggers on product code:
+ * `pages/Instances.jsx` has a `>` inside a `title` attribute.
  */
 function openingTagAt(src, index, nameLength) {
   let depth = 0;
   for (let i = index + nameLength; i < src.length; i++) {
     const c = src[i];
+    if (c === '"' || c === '\'' || c === '`') { i = skipString(src, i); continue; }
     if (c === '{') depth++;
     else if (c === '}') depth--;
     else if (c === '>' && depth === 0) return src.slice(index, i + 1);
@@ -102,6 +114,29 @@ function skipString(src, from) {
   let i = from + 1;
   for (; i < src.length && src[i] !== src[from]; i++) if (src[i] === '\\') i++;
   return i;
+}
+
+// Index of the LAST character of the comment opening at `src[from]`, or -1 when
+// no comment opens there — the same "land on the last char, let the caller's
+// `for` step past" contract as `skipString`. An unterminated comment returns
+// `src.length`, ending the walk.
+//
+// A `/` in JavaScript can also be division or a regex delimiter, but neither
+// can be followed by `/` or `*` (an empty regex `//` IS a line comment, and a
+// regex may not start with a quantifier), so the two-character check is exact.
+// Only JavaScript and tag-interior context may call this: inside JSX element
+// text a `//` is ordinary visible text.
+function commentEnd(src, from) {
+  if (src[from] !== '/') return -1;
+  if (src[from + 1] === '/') {
+    const newline = src.indexOf('\n', from + 2);
+    return newline === -1 ? src.length : newline - 1;
+  }
+  if (src[from + 1] === '*') {
+    const close = src.indexOf('*/', from + 2);
+    return close === -1 ? src.length : close + 1;
+  }
+  return -1;
 }
 
 /**
@@ -197,6 +232,8 @@ function matchingBraceEnd(s, idx) {
     }
 
     if (mode === 'jsx-tag') {
+      const comment = commentEnd(s, i);
+      if (comment !== -1) { i = comment; continue; }
       if (c === '"' || c === '\'' || c === '`') { i = skipString(s, i); continue; }
       if (c === '{') { openBrace(); continue; }
       if (c !== '>') continue;
@@ -219,6 +256,16 @@ function matchingBraceEnd(s, idx) {
       continue;
     }
 
+    // JavaScript-expression context. `maskComments` has line/block-comment
+    // states and this walk did not, yet it is reached from UNMASKED source
+    // (`findButtonBody` → `isIconOnlyBody` → `soleTopLevelNode`, which strips
+    // only `{/* … */}`). So a `//` or inline `/* */` inside the expression
+    // survived to here: `{ // don't\n open ? <Up/> : <Down/> }` returned -1 (the
+    // apostrophe opened a string that never closed) and the button was silently
+    // dropped from the icon-only rule, while `{ /* } */ <Icon/> }` returned the
+    // comment's brace — wrong bounds, no error.
+    const codeComment = commentEnd(s, i);
+    if (codeComment !== -1) { i = codeComment; continue; }
     if (c === '"' || c === '\'' || c === '`') { i = skipString(s, i); continue; }
     if (c === '{') { openBrace(); continue; }
     if (c === '}') {
@@ -285,24 +332,34 @@ function soleTopLevelNode(rawBody) {
   return null; // bare text at top level
 }
 
-function matchTernaryIcons(inner) {
+// Index of the first `char` at bracket depth 0 in a JavaScript expression, or
+// -1. Quoted regions are skipped whole: `inner` is an expression, so a `?` or
+// `:` inside a string is not the ternary's — `mode === 'a?b' ? <IconA/> :
+// <IconB/>` and `cond ? <IconA title="a:b"/> : <IconB/>` both used to read as
+// "not a ternary", quietly dropping an icon-only button from the rule that
+// requires it to have a name.
+const topLevelOperatorIn = (inner, char, from) => {
   let depth = 0;
-  let qIdx = -1;
-  for (let i = 0; i < inner.length; i++) {
+  for (let i = from; i < inner.length; i++) {
     const c = inner[i];
+    // `inner` is raw expression source — `soleTopLevelNode` strips only
+    // `{/* … */}` — so a comment can hold an apostrophe (`// don't`) that would
+    // otherwise open a string swallowing the rest of the expression.
+    const comment = commentEnd(inner, i);
+    if (comment !== -1) { i = comment; continue; }
+    if (c === '"' || c === '\'' || c === '`') { i = skipString(inner, i); continue; }
     if (c === '(' || c === '{' || c === '[') depth++;
     else if (c === ')' || c === '}' || c === ']') depth--;
-    else if (c === '?' && depth === 0 && inner[i + 1] !== '.') { qIdx = i; break; }
+    // `?.` is optional chaining, not the start of a ternary.
+    else if (c === char && depth === 0 && !(char === '?' && inner[i + 1] === '.')) return i;
   }
+  return -1;
+};
+
+function matchTernaryIcons(inner) {
+  const qIdx = topLevelOperatorIn(inner, '?', 0);
   if (qIdx === -1) return false;
-  depth = 0;
-  let cIdx = -1;
-  for (let i = qIdx + 1; i < inner.length; i++) {
-    const c = inner[i];
-    if (c === '(' || c === '{' || c === '[') depth++;
-    else if (c === ')' || c === '}' || c === ']') depth--;
-    else if (c === ':' && depth === 0) { cIdx = i; break; }
-  }
+  const cIdx = topLevelOperatorIn(inner, ':', qIdx + 1);
   if (cIdx === -1) return false;
   const a = inner.slice(qIdx + 1, cIdx).trim();
   const b = inner.slice(cIdx + 1).trim();
@@ -410,9 +467,17 @@ function normalizedAttributeValue(value) {
 // examples. This is a small lexer rather than a quote-only scan: apostrophes,
 // slashes, and URLs are ordinary JSX text and must not put the rest of a file
 // into a fake JavaScript string/comment state.
-function maskComments(src) {
+//
+// `startMode` is where the slice BEGINS. A whole file starts in `'code'` (the
+// default), but a mid-file slice need not: an element's body is JSX text, and
+// masking it as code opens a fake line comment on the first `//` of visible
+// label text — `<label htmlFor="x">// see docs</label>` masked to
+// `'// see docs'` → `'           '` reports a correctly labeled input as
+// unnamed. That is #4318's defect exactly: the machine has to be told where it
+// is, and the caller is the only one that knows.
+function maskComments(src, { startMode = 'code' } = {}) {
   const chars = [...src];
-  let mode = 'code';
+  let mode = startMode;
   let quote = null;
   let braceDepth = 0;
   let tagBraceDepth = 0;
@@ -631,7 +696,8 @@ function hasUsableElementText(src, index, tag) {
   if (!name) return false;
   const closeIndex = src.indexOf(`</${name}>`, index + tag.length);
   if (closeIndex === -1) return false;
-  const body = stripHiddenElementContent(maskComments(src.slice(index + tag.length, closeIndex)))
+  // The slice is the element's BODY — JSX text, not code. See `maskComments`.
+  const body = stripHiddenElementContent(maskComments(src.slice(index + tag.length, closeIndex), { startMode: 'jsx-text' }))
     .replace(/<\/?[A-Za-z][^>]*>/g, ' ')
     .trim();
   if (!body) return false;
@@ -2060,6 +2126,86 @@ describe('a11y conventions', () => {
     const nested = (wrapper, name) => `${wrapper}<${name}>\n  <${name} label="Rounds">\n    <select><option>a</option></select>\n  </${name}>\n</${name}>`;
     expect(isNamed(nested(implicitWrapper, 'Field'), 'select')).toBe(true);
     expect(isNamed(nested(clonedWrapper, 'FormField'), 'select')).toBe(true);
+  });
+
+  it('reads a quoted attribute as a string, not as tag structure (#4333)', () => {
+    // Between a tag name and its `>` there is only attribute-value or
+    // expression context, so a quote there always opens a string. Prose in an
+    // attribute used to break `openingTagAt` two ways — both FALSE NEGATIVES,
+    // which is why the suite stayed green with them present.
+    // 1. A `>` ended the tag early, losing every attribute after it.
+    expect(isNamed('<input type="text" placeholder="a > b" aria-label="Search" />')).toBe(true);
+    // 2. A lone brace drove the depth negative and returned null. All 18 call
+    //    sites read null as `continue`, so the <label> left the scan entirely
+    //    and the input it names read as unnamed.
+    expect(isNamed('<label htmlFor="a" title="use { to open">Rounds</label>\n<input id="a" type="text" />')).toBe(true);
+    //    Same when the unbalanced brace is on the CONTROL's own tag.
+    expect(isNamed('<input id="b" title="a } brace" aria-label="Search" />')).toBe(true);
+    // The fix must not credit a control that still has no name: `placeholder`
+    // is an anchor attribute, never an accessible name.
+    expect(isNamed('<input type="text" placeholder="a > b" />')).toBe(false);
+  });
+
+  it('reads a ternary operator through quoted attributes and strings (#4333)', () => {
+    // An icon-only button whose ternary carries a `?` or `:` inside a string
+    // used to read as "not a ternary" and drop out of the rule that requires it
+    // to have a name — a false negative in a guard.
+    const isIconOnly = (body) => {
+      const src = `<button onClick={run}>${body}</button>`;
+      const open = src.indexOf('<button');
+      const tag = openingTagAt(src, open, '<button'.length);
+      return isIconOnlyBody(findButtonBody(src, open + tag.length));
+    };
+    expect(isIconOnly("{mode === 'a?b' ? <IconA /> : <IconB />}")).toBe(true);
+    expect(isIconOnly('{cond ? <IconA title="a:b" /> : <IconB />}')).toBe(true);
+    // Optional chaining is still not a ternary, and a non-icon branch still
+    // disqualifies the shape — the string skip must not widen either.
+    expect(isIconOnly('{cond ? <IconA /> : "Save"}')).toBe(false);
+    expect(isIconOnly('{icons?.primary}')).toBe(false);
+  });
+
+  it('masks an element body as JSX text, not as code (#4333)', () => {
+    // `hasUsableElementText` hands `maskComments` a mid-file slice that is an
+    // element BODY. Started in 'code' the machine opened a fake line comment on
+    // the first `//` of visible label text, blanking the rest of the line — so a
+    // correctly labeled input was reported UNNAMED.
+    expect(maskComments('Discount 50 // 50', { startMode: 'jsx-text' })).toBe('Discount 50 // 50');
+    expect(maskComments('Discount 50 // 50')).toBe('Discount 50      ');
+    expect(isNamed('<label htmlFor="x">// see docs</label>\n<input id="x" type="text" />')).toBe(true);
+    // A genuinely empty label still names nothing.
+    expect(isNamed('<label htmlFor="y"></label>\n<input id="y" type="text" />')).toBe(false);
+  });
+
+  it('reads comments inside a brace expression as comments (#4333)', () => {
+    // `matchingBraceEnd` is reached from UNMASKED source, and `soleTopLevelNode`
+    // strips only `{/* … */}` — so a `//` or inline `/* */` inside the
+    // expression reaches this walk raw. Both cases are silent: no error, just a
+    // button that leaves the icon-only rule.
+    const isIconOnly = (body) => {
+      const src = `<button onClick={run}>${body}</button>`;
+      const open = src.indexOf('<button');
+      const tag = openingTagAt(src, open, '<button'.length);
+      return isIconOnlyBody(findButtonBody(src, open + tag.length));
+    };
+    // A line comment whose text holds an apostrophe used to open a string that
+    // never closed, so `matchingBraceEnd` returned -1 and the button vanished
+    // from the rule entirely — a live false negative.
+    expect(isIconOnly("{ // don't\n  open ? <Up /> : <Down /> }")).toBe(true);
+    // A `}` inside a block comment used to be read as the closing brace: wrong
+    // bounds with no error. This one is latent — no verdict flips today, since
+    // a bare `{<Icon />}` is not an icon-only shape either way — so it is
+    // pinned on the helper directly rather than through a rule that would pass
+    // for the wrong reason.
+    const blockComment = '{ /* } */ <Icon /> }';
+    expect(matchingBraceEnd(blockComment, 0)).toBe(blockComment.length - 1);
+    // Same inside a TAG, the walk's other JavaScript-ish context: an apostrophe
+    // in the comment opened a string that ran to the end of the slice, and a
+    // `>` in the comment ended the tag early and left the walk in element text.
+    const tagComments = ["{ <Up /* don't */ /> }", '{ <Up /* a > b */ /> }'];
+    for (const shape of tagComments) expect(matchingBraceEnd(shape, 0)).toBe(shape.length - 1);
+    // Division and regex literals must not be mistaken for comment openers.
+    expect(isIconOnly('{ ratio / 2 > 1 ? <Up /> : <Down /> }')).toBe(true);
+    expect(isIconOnly('{ /up/.test(dir) ? <Up /> : <Down /> }')).toBe(true);
   });
 
   it('reads an apostrophe in JSX text as text, not a string opener (#4318)', () => {
