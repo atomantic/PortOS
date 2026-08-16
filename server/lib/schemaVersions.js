@@ -179,7 +179,7 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // receiver ignores the unknown key (review just doesn't reach it) and ships
   // no review back, so the newer peer's `if (manuscriptReview)` receive guard
   // is a no-op and the local review is preserved. Bumping `pipelineSeries` here
-  // would be actively harmful — it would 412-reject the ENTIRE series push
+  // would be actively harmful — it would 409-reject the ENTIRE series push
   // (record + issues) to every not-yet-upgraded peer over an OPTIONAL doc that
   // degrades fine. Registering a brand-new gated category would hit the same
   // whole-payload footgun documented for `videoHistory` below. So manuscript-
@@ -205,7 +205,7 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // per-record peer-sync push pipeline (record kind `author`, sync category
   // `authors`). A brand-NEW synced record type like `storyBuilder` below, so it
   // gets its own per-category gate: a v1 sender pushing to a ≤v0 (pre-feature)
-  // receiver is sender-ahead on `authors` and gets a 412 (the older peer's
+  // receiver is sender-ahead on `authors` and gets a 409 (the older peer's
   // `sanitizeAuthor` would silently strip any future field and LWW it back) —
   // only the authors category pauses; every other category keeps flowing
   // (per-category gate via scopeVersionDiff). A v1 receiver still accepts a ≤v0
@@ -261,7 +261,7 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // whether other categories are version-locked. Older peers are
   // sender-behind on `catalog` (not ahead), so the receiver still accepts
   // their pushes; newer peers pushing to older receivers are sender-ahead
-  // and get 412. `cat-ingredient` and `cat-scrap` record kinds map back
+  // and get 409. `cat-ingredient` and `cat-scrap` record kinds map back
   // here via RECORD_KIND_SCHEMA_CATEGORIES.
   //
   // NOT bumped for the per-record `payload.schemaVersion` stamp added by
@@ -276,7 +276,7 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v4 = `catalog_ingredient_relations` table (ingredient↔ingredient edges)
   // + a new `relations: [...]` block in the catalog sync envelope. An older
   // (≤v3) receiver doesn't understand the relations block, so a v4 sender
-  // pushing to it is sender-ahead on `catalog` and gets a 412 — correct,
+  // pushing to it is sender-ahead on `catalog` and gets a 409 — correct,
   // since the older peer would silently drop every relation edge. v4 receivers
   // still accept ≤v3 senders (sender-behind): those envelopes simply carry no
   // `relations` block and the receiver applies the other four kinds as before.
@@ -284,7 +284,7 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // parent_id?, created_at, sync_sequence) + a new `tags: [...]` block in the
   // catalog sync envelope. Same gating rationale as v4: a ≤v4 receiver doesn't
   // understand the `tags` block, so a v5 sender pushing to it is sender-ahead
-  // and gets a 412 (otherwise the older peer would silently drop every canonical
+  // and gets a 409 (otherwise the older peer would silently drop every canonical
   // tag row + its parent hierarchy). The freeform `catalog_ingredients.tags
   // TEXT[]` column is unchanged — canonical tag rows are an additive index, so
   // a v5 receiver still accepts ≤v4 ingredient/scrap/ref/relation pushes; those
@@ -295,7 +295,7 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // library (data/images + history.jsonl sidecar) — never the bytes. Same
   // gating rationale as v4/v5: a ≤v5 receiver doesn't understand the `media`
   // block, so a v6 sender pushing to it is sender-ahead on `catalog` and gets
-  // a 412 (otherwise the older peer would silently drop every attachment). A v6
+  // a 409 (otherwise the older peer would silently drop every attachment). A v6
   // receiver still accepts ≤v5 senders (sender-behind); those envelopes carry
   // no `media` block. Media keys that don't resolve against the receiver's own
   // library surface via the metadata-missing integrity endpoint rather than
@@ -304,7 +304,7 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // chunks into a parent + N child rows; the extractor unions per-child drafts).
   // Both fields ride the scrap sync envelope. Same gating rationale as v4–v6: a
   // ≤v6 receiver doesn't understand child scrap rows, so a v7 sender pushing to
-  // it is sender-ahead and gets a 412. A v7 receiver still accepts ≤v6 senders
+  // it is sender-ahead and gets a 409. A v7 receiver still accepts ≤v6 senders
   // (their scraps carry no chunk fields → chunkIndex 0 / parentScrapId null).
   // v8 = user-defined ingredient types. The definitions are persisted in the
   // catalogUserTypes store (`catalog_user_types` as of #1001; settings.json
@@ -314,7 +314,7 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // catalog sync envelope (LWW-merged into the receiver's own user-type store).
   // Same gating rationale as v4–v7: a ≤v7 receiver doesn't understand the
   // `catalogTypes` block, so a v8 sender pushing to it is sender-ahead and gets
-  // a 412 (otherwise the older peer would silently drop every user-type
+  // a 409 (otherwise the older peer would silently drop every user-type
   // definition, then reject every ingredient row carrying one of those unknown
   // types). A v8 receiver still accepts ≤v7 senders (sender-behind); their
   // envelopes carry no `catalogTypes` block and the receiver applies the other
@@ -327,7 +327,7 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // per-category gate: a sender ahead on `storyBuilder` would push a session
   // shape an older receiver's `sanitizeSession` would silently strip and then
   // LWW back, so a v1 sender pushing to a ≤v0 (pre-feature) receiver is
-  // sender-ahead on `storyBuilder` and gets a 412 — only the storyBuilder
+  // sender-ahead on `storyBuilder` and gets a 409 — only the storyBuilder
   // category pauses; every other category keeps flowing (per-category gate via
   // scopeVersionDiff). A v1 receiver still accepts a ≤v0 sender (sender-behind):
   // pre-feature peers never send a `storyBuilder` snapshot at all, so there's
@@ -340,7 +340,7 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // `creativeDirectorProject`, sync category `creativeDirectorProjects`, #1564).
   // A brand-NEW synced record type like `authors`/`storyBuilder`, so it gets its
   // own per-category gate: a v1 sender pushing to a ≤v0 (pre-feature) receiver is
-  // sender-ahead on `creativeDirectorProjects` and gets a 412 — only that
+  // sender-ahead on `creativeDirectorProjects` and gets a 409 — only that
   // category pauses; every other keeps flowing (per-category gate via
   // scopeVersionDiff). A v1 receiver still accepts a ≤v0 sender (sender-behind):
   // pre-feature peers never push a `creativeDirectorProject` at all, so there's
@@ -371,7 +371,7 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // would dispatch the literal `{{…}}` as e.g. a seriesId, fail/re-plan, and
   // LWW-push the damaged plan back onto the v3 peer — corrupting the newer peer's
   // healthy project. Bumping makes the v2 receiver reject the ahead-version
-  // transfer (per-category 412) until it upgrades, so it never mis-executes a
+  // transfer (per-category 409) until it upgrades, so it never mis-executes a
   // syntax it can't resolve. No record rewrite needed — reference-free projects
   // are unchanged; the bump only gates cross-version CD-project sync.
   creativeDirectorProjects: 3,
@@ -379,7 +379,7 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // peer-sync push pipeline (record kind `moodBoard`, sync category `moodBoards`,
   // #1564). Same posture as `creativeDirectorProjects` above: a brand-NEW synced
   // record type with its own per-category gate — a v1 sender pushing to a ≤v0
-  // (pre-feature) receiver is sender-ahead on `moodBoards` and gets a 412 (only
+  // (pre-feature) receiver is sender-ahead on `moodBoards` and gets a 409 (only
   // that category pauses); a v1 receiver still accepts a ≤v0 sender (pre-feature
   // peers never push a `moodBoard`). The board body (name/description/items) is
   // LWW-overwritten whole; referenced image bytes ride the asset manifest.
@@ -388,7 +388,7 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // item shapes through verbatim): a v1 renderer treats a non-image item as a
   // text note (blank card), and its updateItem gates a 'video' item onto the
   // text editable-keys — so a v1 peer that edits the board can mangle video
-  // items and LWW the damage back. Bumping makes the v1 receiver 412-reject
+  // items and LWW the damage back. Bumping makes the v1 receiver 409-reject
   // the ahead-version push until it upgrades. Video bytes ride the existing
   // asset manifest (`video:<filename>` ref → PATHS.videos, receiver regenerates
   // the poster thumbnail on pull).
@@ -399,7 +399,7 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // #1565). Same posture as `creativeDirectorProjects`/`moodBoards`: a brand-NEW
   // synced record type with its own per-category gate — a v1 sender pushing to a
   // ≤v0 (pre-feature) receiver is sender-ahead on `writersRoomWorks` and gets a
-  // 412 (only that category pauses); a v1 receiver still accepts a ≤v0 sender
+  // 409 (only that category pauses); a v1 receiver still accepts a ≤v0 sender
   // (pre-feature peers never push a `writersRoomWork`). The FIRST incompatible
   // work-shape change MUST bump this to 2 then. The work manifest (metadata +
   // decomposed draft-version metadata in drafts[]) is LWW-overwritten whole; the
@@ -411,7 +411,7 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // #1645 — follow-up to #1565). Same posture as `writersRoomWorks`: a brand-NEW
   // synced record type with its own per-category gate, so a v1 sender pushing to
   // a ≤v0 (pre-feature) receiver is sender-ahead on `writersRoomFolders` and gets
-  // a 412 (only that category pauses); a v1 receiver still accepts a ≤v0 sender.
+  // a 409 (only that category pauses); a v1 receiver still accepts a ≤v0 sender.
   // Folders are body-less (no file-primary `.md`, no asset manifest) and
   // LWW-overwritten whole. The FIRST incompatible folder-shape change MUST bump
   // this to 2. Federating folders requires the soft-delete tombstone columns
@@ -431,7 +431,7 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // category `musicVideoProjects`, #1770 — follow-up to #1760 Phase 1). Same
   // posture as `creativeDirectorProjects`/`writersRoomFolders`: a brand-NEW synced
   // record type with its own per-category gate — a v1 sender pushing to a ≤v0
-  // (pre-feature) receiver is sender-ahead on `musicVideoProjects` and gets a 412
+  // (pre-feature) receiver is sender-ahead on `musicVideoProjects` and gets a 409
   // (only that category pauses); a v1 receiver still accepts a ≤v0 sender
   // (pre-feature peers never push a `musicVideoProject`). The project body
   // (metadata + beat-aligned scenes) is LWW-overwritten whole; referenced media
@@ -477,7 +477,7 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // advertises at GET /api/peer-sync/library-manifest. The receiver-pull sweep
   // (syncMediaLibraryFromPeer) reads the sender's advertised `schemaVersion` and
   // GENTLY SKIPS (logs, no reject) a sender ahead of its local `mediaLibrary` —
-  // unlike the push gate's hard 412, because a library sweep is best-effort
+  // unlike the push gate's hard 409, because a library sweep is best-effort
   // background convergence, not an authoritative record transfer. The asset
   // BYTES themselves are version-agnostic (an image is an image); only the
   // MANIFEST envelope shape is gated, so the FIRST incompatible manifest-shape
