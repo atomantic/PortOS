@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  listRelatedCwd,
   parseVitestListOutput,
   shouldSkipRelatedList,
   toRunnerPath,
@@ -69,6 +70,14 @@ describe('shouldSkipRelatedList', () => {
     expect(shouldSkipRelatedList('related', [
       'server/services/taskPromptDefaults.test.js',
     ])).toBe(false);
+  });
+});
+
+describe('listRelatedCwd', () => {
+  it('lists from the workspace that owns the Vitest config, not the repo root', () => {
+    expect(listRelatedCwd('server')).toMatch(/[/\\]server$/);
+    expect(listRelatedCwd('client')).toMatch(/[/\\]client$/);
+    expect(listRelatedCwd('server')).not.toMatch(/[/\\]server[/\\]server$/);
   });
 });
 

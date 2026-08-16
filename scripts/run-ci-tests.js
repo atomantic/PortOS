@@ -79,15 +79,23 @@ function spawnNpm(scope, extraArgs, label) {
   return result.status ?? 1;
 }
 
+export function listRelatedCwd(scope) {
+  // `npm exec --prefix server` still inherits this process cwd, and Vitest
+  // resolves its config + --changed graph from cwd — so listing from the
+  // repo root would miss server/vitest.config.js and silently drop related
+  // tests. Run the list from the workspace that owns the runner.
+  return join(repoRoot, scope);
+}
+
 function listRelatedFiles(scope, baseSha) {
   const { command, args } = prepareCliSpawn('npm', [
-    'exec', '--prefix', scope, '--',
+    'exec', '--',
     'vitest', 'list', '--changed', baseSha, '--silent',
   ]);
   const result = spawnSync(command, args, {
     encoding: 'utf8',
     env: process.env,
-    cwd: repoRoot,
+    cwd: listRelatedCwd(scope),
   });
   if (result.error || result.status !== 0) {
     const detail = result.error?.message || result.stderr || `exit ${result.status}`;
