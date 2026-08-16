@@ -77,6 +77,25 @@ function maskedSourceOf(file) {
   return masked;
 }
 
+// The rules that read UNMASKED source — the toggle, file-input, role=switch and
+// icon-only scans — each used to `readFileSync` the same file again. That was
+// always redundant disk I/O, but it costs more now that the tag index is keyed
+// by source STRING: a freshly-allocated string carries no cached hash, so every
+// index lookup re-hashes the whole ~10KB key, and a second copy of a file gets
+// a second index. One string per file per run makes both keys deterministic.
+// Deliberately NOT virtual-source-aware, unlike `maskedSourceOf`: these rules
+// only ever walk `trackedJsxFiles()`, which no stand-in path appears in.
+const rawSourceByFile = new Map();
+
+function rawSourceOf(file) {
+  let raw = rawSourceByFile.get(file);
+  if (raw === undefined) {
+    raw = readFileSync(join(CLIENT_ROOT, file), 'utf8');
+    rawSourceByFile.set(file, raw);
+  }
+  return raw;
+}
+
 /**
  * Slice out the full opening tag starting at `index`, or null when it never
  * closes. The walks below read this off the shared tag index instead; what is
@@ -99,7 +118,18 @@ function openingTagAt(src, index) {
 // pattern, so a `$` in one can no longer compile to an anchor that matches
 // nothing and silently hides the controls that wrapper names.
 const TAG_NAME_PATTERN = '[A-Za-z][\\w$.-]*';
-const LEADING_TAG_NAME = new RegExp(`^(${TAG_NAME_PATTERN})`);
+
+// The element name starting at `from` (the index just past `<` or `</`), or
+// null. Sticky rather than `src.slice(from).match(…)`: every caller runs this
+// per tag over whole files, and the slice allocates a copy of the rest of the
+// file each time. Safe to hoist despite the mutable `lastIndex` — nothing is
+// called between the assignment and the `exec`, so no walk can interleave.
+const TAG_NAME_AT = new RegExp(TAG_NAME_PATTERN, 'y');
+
+function tagNameAt(src, from) {
+  TAG_NAME_AT.lastIndex = from;
+  return TAG_NAME_AT.exec(src)?.[0] ?? null;
+}
 
 /**
  * Every tag in `src`, in source order, built in ONE `jsxScanner` pass and
@@ -131,30 +161,29 @@ function tagIndexOf(src) {
   const cached = tagIndexBySource.get(src);
   if (cached) return cached;
   const nodes = [];
-  const slotByStart = new Map();
-  // Sticky rather than sliced: reading the name off a `src.slice(index)` would
-  // allocate a copy of the rest of the file once per tag.
-  const nameRe = new RegExp(TAG_NAME_PATTERN, 'y');
+  const openByStart = new Map();
   for (const token of jsxScanner(src)) {
     if (token.kind !== 'char') continue;
     if (token.opensTag) {
       const closing = src.startsWith('</', token.index);
-      nameRe.lastIndex = token.index + (closing ? 2 : 1);
-      slotByStart.set(token.index, nodes.length);
-      nodes.push({
+      const node = {
         closing,
-        name: nameRe.exec(src)?.[0] ?? null,
+        name: tagNameAt(src, token.index + (closing ? 2 : 1)),
         index: token.index,
         tag: null,
         contentStart: null,
         selfClosing: false,
-      });
+      };
+      // Pushed at its `<`, so entries stay in ascending `index` even though a
+      // tag nested in an attribute expression is COMPLETED first — which
+      // `openWrapperInstancesAt` relies on for its `break` and its stack.
+      nodes.push(node);
+      openByStart.set(token.index, node);
       continue;
     }
     if (token.char !== '>' || token.mode !== 'jsx-tag') continue;
-    const slot = slotByStart.get(token.tagStart);
-    if (slot === undefined) continue;
-    const node = nodes[slot];
+    const node = openByStart.get(token.tagStart);
+    if (!node) continue;
     node.tag = src.slice(node.index, token.index + 1);
     node.contentStart = token.index + 1;
     node.selfClosing = token.selfClosing;
@@ -167,6 +196,14 @@ function tagIndexOf(src) {
 // to walk every element; a name is matched literally against the name the
 // scanner read, never as a pattern.
 function* forEachTag(src, name) {
+  // Lexing a whole file to look for a name that does not occur in it is the
+  // one cost this walk added over the regex it replaced: a named regex walk
+  // scanned natively and boundary-scanned only its own matches, where the index
+  // lexes every tag. A substring test is sound as a pre-filter because `name`
+  // is read literally out of the source right after the `<` — if the element is
+  // there, the substring is — and it skips the ~30% of tracked files that hold
+  // no `<button` or `<input` at all.
+  if (name !== undefined && !src.includes(name)) return;
   for (const node of tagIndexOf(src)) {
     if (name === undefined || node.name === name) yield node;
   }
@@ -185,18 +222,11 @@ function* forEachOpeningTag(src, name) {
 }
 
 // Which element names this source renders at all — the "is it worth reading the
-// imported file" precheck, memoized alongside the index it is derived from.
-const renderedNamesBySource = new Map();
-
-function renderedTagNames(src) {
-  let names = renderedNamesBySource.get(src);
-  if (!names) {
-    names = new Set();
-    for (const node of tagIndexOf(src)) if (!node.closing && node.name) names.add(node.name);
-    renderedNamesBySource.set(src, names);
-  }
-  return names;
-}
+// imported file" precheck. Built from the memoized index rather than memoized
+// itself: its one caller is `wrapperRegistry`, which is already cached per file.
+const renderedTagNames = (src) => new Set(
+  tagIndexOf(src).filter((node) => !node.closing && node.name).map((node) => node.name),
+);
 
 const lineOf = (src, index) => src.slice(0, index).split('\n').length;
 
@@ -472,7 +502,7 @@ function* jsxScanner(src, { from = 0, mode: startMode = 'code' } = {}) {
       // The `<` of the tag this character belongs to, so a `>` pairs with its
       // own opener: an attribute expression parks the half-read tag on the
       // brace stack, and the innermost tag SEEN is not always the one closing.
-      tagStart: mode === 'jsx-tag' ? tag?.start ?? null : null,
+      tagStart: mode === 'jsx-tag' ? tag.start : null,
       // Only meaningful on a tag's closing `>`. It rides along because `before`
       // is the last TOKEN, and a caller asking from outside can only find the
       // last character — which is the `/` of a `*/` in `<Foo /* note */ >`.
@@ -819,20 +849,18 @@ function hasUsableElementText(src, node) {
   if (!body) return false;
   const staticText = body.replace(/\{[^{}]*\}/g, ' ').trim();
   if (staticText) return true;
-  // Everything React renders as nothing has to be rejected, and this set had
-  // drifted from the one `isUsableLabelAttributeValue` keeps for the same
-  // question one attribute over — which already spells out that `{true}` puts
-  // no text in the DOM. Missing from here were `true` and the EMPTY expression:
-  // `<span id="notes-h">{}</span>` and `<span id="notes-h">{/* todo */}</span>`
-  // (a comment, masked to spaces by the line above) render nothing, so an
-  // `aria-labelledby` pointing at one names nothing. Reading either as text
-  // credited a control that has none — and this walk now reaches such an
-  // element inside an attribute expression too, so the gap widened before it
-  // was closed.
-  return [...body.matchAll(/\{([^{}]*)\}/g)].some(([, expression]) => {
-    const rendered = expression.trim();
-    return rendered !== '' && !/^(?:''|""|``|null|undefined|false|true)$/.test(rendered);
-  });
+  // "Does this expression render any text" is the same question
+  // `isUsableLabelAttributeValue` answers for a `label` prop, so it is asked
+  // there rather than respelled here — this copy had already drifted off it,
+  // missing `true` (whose comment over there says exactly why `<label>{true}
+  // </label>` names nothing) and the EMPTY expression. `<span id="x">{}</span>`
+  // and `<span id="x">{/* todo */}</span>` (a comment, masked to spaces above)
+  // render nothing, so an `aria-labelledby` pointing at one names nothing —
+  // and this walk now reaches such an element inside an attribute expression
+  // too, so the gap widened before it was closed.
+  return [...body.matchAll(/\{([^{}]*)\}/g)].some(([, expression]) => (
+    isUsableLabelAttributeValue(normalizedAttributeValue(expression))
+  ));
 }
 
 function isNestedInLabel(src, index) {
@@ -978,7 +1006,7 @@ function isFirstDirectChild(src, openContentStart, index) {
     }
 
     const closing = src.startsWith('</', cursor);
-    const name = src.slice(cursor + (closing ? 2 : 1)).match(LEADING_TAG_NAME)?.[1];
+    const name = tagNameAt(src, cursor + (closing ? 2 : 1));
     if (!name) {
       if (src.startsWith('<>', cursor)) {
         if (depth === 0) sawPrecedingChild = true;
@@ -1366,12 +1394,13 @@ function wrapperRegistry(src, file) {
   };
   forEachLocalComponent(src, (name, body, params) => add(name, wrapperShapes(body, params)));
   if (file !== undefined) {
+    // Only pay to read a file whose component this one actually renders. Asked
+    // of the tag index rather than a pattern: the index already knows every
+    // element name in this source, and reading the binding literally is what
+    // keeps a `$` in it from compiling to an anchor that matches nothing.
+    const rendered = renderedTagNames(src);
     for (const [localName, { file: importedFile, exportedName }] of relativeImportBindings(src, file)) {
-      // Only pay to read a file whose component this one actually renders. Asked
-      // of the tag index rather than a pattern: the index already knows every
-      // element name in this source, and reading the binding literally is what
-      // keeps a `$` in it from compiling to an anchor that matches nothing.
-      if (!renderedTagNames(src).has(localName)) continue;
+      if (!rendered.has(localName)) continue;
       add(localName, importedComponentShapes(importedFile, exportedName));
     }
   }
@@ -1577,14 +1606,14 @@ function controlSemanticAnchor(tag) {
 }
 
 // The anchor has to enumerate controls the same way the scan that produced
-// `index` did, or `matching.indexOf(index)` numbers occurrences against a set
-// the scan never visited: a `<input` written in an attribute VALUE is not a
-// control, but a walk without the advance counts it, and one ghost whose
-// semantic anchor collides renames every later occurrence — silently
-// invalidating the hand-maintained allowlist row keyed on the old name. Same
-// walk on both sides is what keeps the key stable.
-function controlSourceAnchor(file, src, index, tagName) {
-  const tag = openingTagAt(src, index);
+// `node` did, or `matching.indexOf(node.index)` numbers occurrences against a
+// set the scan never visited: a `<input` written in an attribute VALUE is not a
+// control, and one ghost whose semantic anchor collides renames every later
+// occurrence — silently invalidating the hand-maintained allowlist row keyed on
+// the old name. Both sides read the one tag index, so they cannot disagree.
+// `node` rather than a bare index for the same reason: re-slicing the tag it
+// was handed is a second answer to a question already settled.
+function controlSourceAnchor(file, src, { tag, index }, tagName) {
   if (!tag) return `${file}|${tagName}|unknown`;
   const semantic = controlSemanticAnchor(tag);
   const matching = [];
@@ -1760,7 +1789,7 @@ describe('a11y conventions', () => {
     const offenders = [];
     for (const file of trackedJsxFiles()) {
       if (MODAL_BACKDROP_ALLOWLIST.has(file)) continue;
-      const src = readFileSync(join(CLIENT_ROOT, file), 'utf8');
+      const src = rawSourceOf(file);
       // Only a dimming backdrop counts — `fixed inset-0` alone is also used for
       // non-modal chrome (HUD panels, drag overlays, canvas layers).
       const re = /fixed inset-0[^"'`]*bg-black\//g;
@@ -1780,7 +1809,7 @@ describe('a11y conventions', () => {
     const TRACK_SIZES = /\b(h-6 w-11|w-11 h-6|w-10 h-5|h-5 w-10|h-5 w-9|w-9 h-5|h-8 w-14|w-14 h-8|h-7 w-12|w-12 h-7)\b/;
     const offenders = [];
     for (const file of trackedJsxFiles()) {
-      const src = readFileSync(join(CLIENT_ROOT, file), 'utf8');
+      const src = rawSourceOf(file);
       for (const { tag, index } of forEachOpeningTag(src, 'button')) {
         if (!/rounded-full/.test(tag) || !TRACK_SIZES.test(tag)) continue;
         if (/role="switch"/.test(tag)) continue;
@@ -1802,7 +1831,7 @@ describe('a11y conventions', () => {
     // idiom from creeping back in one component at a time.
     const offenders = [];
     for (const file of trackedSourceFiles()) {
-      const src = readFileSync(join(CLIENT_ROOT, file), 'utf8');
+      const src = rawSourceOf(file);
       for (const { tag, index } of forEachOpeningTag(src, 'input')) {
         // Match against the whole opening tag, not a quoted-attribute-shaped
         // regex: `type='file'` / `type={'file'}` and a `hidden` arriving via a
@@ -1830,7 +1859,7 @@ describe('a11y conventions', () => {
     const offenders = [];
     for (const file of trackedSourceFiles()) {
       if (REF_CLICK_ALLOWLIST.has(file)) continue;
-      const src = readFileSync(join(CLIENT_ROOT, file), 'utf8');
+      const src = rawSourceOf(file);
       const re = /\.current\s*\??\.\s*click\(\)/g;
       let m;
       while ((m = re.exec(src))) {
@@ -1850,7 +1879,7 @@ describe('a11y conventions', () => {
     // complains, so this is the only thing that catches it.
     const offenders = [];
     for (const file of trackedSourceFiles()) {
-      const src = readFileSync(join(CLIENT_ROOT, file), 'utf8');
+      const src = rawSourceOf(file);
       const re = /\btoast(?:\.\w+)?\s*\(/g;
       let m;
       while ((m = re.exec(src))) {
@@ -1887,7 +1916,7 @@ describe('a11y conventions', () => {
   it('gives every role="switch" an aria-checked state', () => {
     const offenders = [];
     for (const file of trackedJsxFiles()) {
-      const src = readFileSync(join(CLIENT_ROOT, file), 'utf8');
+      const src = rawSourceOf(file);
       for (const { tag, index } of forEachOpeningTag(src, 'button')) {
         if (!/role="switch"/.test(tag)) continue;
         if (/aria-checked/.test(tag)) continue;
@@ -1908,7 +1937,7 @@ describe('a11y conventions', () => {
     // aria-label) is the existing convention.
     const offenders = [];
     for (const file of trackedJsxFiles()) {
-      const src = readFileSync(join(CLIENT_ROOT, file), 'utf8');
+      const src = rawSourceOf(file);
       for (const node of forEachOpeningTag(src, 'button')) {
         if (!isUnnamedIconOnlyButton(src, node)) continue;
         offenders.push(`${file}:${lineOf(src, node.index)}`);
@@ -1929,9 +1958,9 @@ describe('a11y conventions', () => {
     const anchors = new Set();
     for (const file of trackedJsxFiles()) {
       const scanSrc = maskedSourceOf(file);
-      for (const { tag, index } of forEachOpeningTag(scanSrc, tagName)) {
-        if (hasAccessibleControlName(scanSrc, tag, index, tagName, file)) continue;
-        anchors.add(controlSourceAnchor(file, scanSrc, index, tagName));
+      for (const node of forEachOpeningTag(scanSrc, tagName)) {
+        if (hasAccessibleControlName(scanSrc, node.tag, node.index, tagName, file)) continue;
+        anchors.add(controlSourceAnchor(file, scanSrc, node, tagName));
       }
     }
     unnamedAnchorsByTag.set(tagName, anchors);
@@ -2239,14 +2268,16 @@ describe('a11y conventions', () => {
     expect(isNamed(nested(clonedWrapper, 'FormField'), 'select')).toBe(true);
   });
 
-  it('resumes every tag walk after the tag, not inside it (#4337)', () => {
-    // `forEachOpeningTag` owns the `re.lastIndex = contentStart` advance that
-    // each scanner used to re-derive — and one of them (`hasMatchingLabelElement`)
-    // never had it, so its walk re-entered the tag it had just read and matched
-    // markup written in an attribute VALUE as an element. That is a false
-    // POSITIVE in a guard: a control with no label of its own is credited by
-    // label-shaped prose belonging to some other element, and drops off the
-    // offender list silently.
+  it('never reads markup out of an attribute value (#4337)', () => {
+    // Each scanner used to re-derive a `re.lastIndex = contentStart` advance to
+    // keep its walk out of the tag it had just read — and one of them
+    // (`hasMatchingLabelElement`) never had it, so it matched markup written in
+    // an attribute VALUE as an element. That is a false POSITIVE in a guard: a
+    // control with no label of its own is credited by label-shaped prose
+    // belonging to some other element, and drops off the offender list
+    // silently. #4341 retired the advance along with the regex walk — an
+    // attribute value is a string token now, so no walk can enter one at all —
+    // but the verdicts it protected are the same, and still pinned here.
     expect(isNamed('<label htmlFor="other" title=\'<label htmlFor="x">Rounds</label>\'>Other</label>\n<input id="x" type="text" />')).toBe(false);
     // The walk resumes at the opening tag's END, not past the whole ELEMENT, so
     // a real label nested in that tag's body is still found. Nesting it is what
@@ -2353,6 +2384,11 @@ describe('a11y conventions', () => {
     // phantom element that swallows source up to the next `>`, taking every
     // real tag in between out of the scan with it.
     expect([...forEachTag('const ok = size() <limit;')].map((node) => node.name)).toEqual([]);
+    // The `}` widening's own risky direction — an object literal rather than a
+    // statement — is bounded by the text predicate underneath it: a `<` only
+    // opens a tag when a name, `/`, or `>` follows it immediately, and the
+    // comparison this could be confused with is written with a space.
+    expect([...forEachTag('const m = { a: 1 } < limit;')].map((node) => node.name)).toEqual([]);
   });
 
   it('builds one tag index per source and shares it between interleaved walks (#4341)', () => {
@@ -2815,7 +2851,7 @@ describe('a11y conventions', () => {
     const CLOSE_LABEL_RE = /aria-label\s*=\s*(?:"Close[^"]*"|\{[^}]*(?:['"`]Close|[Cc]loseLabel)[^}]*\})/;
     const offenders = [];
     for (const file of trackedJsxFiles()) {
-      const src = readFileSync(join(CLIENT_ROOT, file), 'utf8');
+      const src = rawSourceOf(file);
       for (const { tag, index } of forEachOpeningTag(src, 'button')) {
         if (!CLOSE_LABEL_RE.test(tag)) continue;
         if (/\binset-0\b/.test(tag)) continue;
