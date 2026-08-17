@@ -1623,7 +1623,11 @@ describe('createCachedStore', () => {
 });
 
 describe('watchForFile', () => {
-  it('detects a newly written file without interval polling', async () => {
+  // Node 24's Windows libuv watcher can abort the worker in src/win/fs-event.c
+  // after a watched temp directory is removed, even after FSWatcher emits
+  // `close`. Linux covers the native integration; agentTuiSpawning tests cover
+  // the close-event and process-exit races with a platform-neutral watcher.
+  it.skipIf(process.platform === 'win32')('detects a newly written file without interval polling', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'watch-file-test-'));
     const target = join(dir, 'done.sentinel');
     const detected = new Promise((resolve) => watchForFile(target, resolve, { settleMs: 0 }));
