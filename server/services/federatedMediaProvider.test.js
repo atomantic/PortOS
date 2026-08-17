@@ -30,6 +30,7 @@ vi.mock('./musicEngineCapabilities.js', () => ({
 
 vi.mock('./mediaJobQueue/index.js', () => ({
   listJobs: vi.fn(() => state.jobs),
+  isRemoteMediaJob: (job) => job?.kind === 'audio' && job.params?.remoteMedia !== undefined,
   getJob: vi.fn((id) => state.jobs.find((job) => job.id === id) || null),
   enqueueJob: vi.fn(({ kind, owner, params }) => {
     const suffix = String(state.nextId++).padStart(12, '0');
@@ -208,6 +209,23 @@ describe('federated media provider capacity and idempotency', () => {
       callerId: 'peer-example', config: config(), input: input(), idempotencyKey: 'commission-2',
     })).rejects.toMatchObject({ status: 429, code: 'MEDIA_PROVIDER_BUSY' });
     expect(enqueueJob).not.toHaveBeenCalled();
+  });
+
+  it('does not count outgoing proxy jobs against this machine provider capacity', async () => {
+    state.jobs = [
+      {
+        id: 'remote-outgoing',
+        kind: 'audio',
+        owner: null,
+        status: 'running',
+        params: { remoteMedia: { wireVersion: 1, peerId: '00000000-0000-4000-8000-000000000001' } },
+      },
+      { id: 'local-1', kind: 'video', owner: null, status: 'running', params: {} },
+    ];
+
+    await expect(submitFederatedMediaJob({
+      callerId: 'peer-example', config: config(), input: input(), idempotencyKey: 'commission-remote-capacity',
+    })).resolves.toMatchObject({ replayed: false, job: { status: 'queued' } });
   });
 
   it('fails closed when CUDA readiness is unknown', async () => {

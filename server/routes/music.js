@@ -40,7 +40,10 @@ import { startHfDownloadStream, openSseStream } from '../lib/sseDownload.js';
 import { createInstallLogger } from '../lib/installLogger.js';
 import { inspectModelCache } from '../lib/hfCache.js';
 import { getCudaCapability } from '../lib/cudaCapability.js';
+import { FEDERATED_MEDIA_WIRE_VERSION } from '../lib/federatedMediaWire.js';
 import { enqueueJob, listJobs } from '../services/mediaJobQueue/index.js';
+import { resolveFederatedMediaProvider } from '../services/federatedMediaConsumer.js';
+import { getPeers } from '../services/instances.js';
 import * as tracks from '../services/tracks/index.js';
 
 const router = Router();
@@ -339,8 +342,11 @@ const generateSchema = z.object({
   // A render-level override: ignore even supplied lyrics without clearing the
   // track's saved lyric field when the completed audio is attached.
   instrumentalOnly: z.boolean().optional().default(false),
-  engine: z.string().trim().max(60).optional(),
-  modelId: z.string().trim().max(120).optional(),
+  engine: z.string().trim().min(1).max(80).optional(),
+  modelId: z.string().trim().min(1).max(256).optional(),
+  // The peer record id is machine-local routing intent. It never crosses the
+  // provider boundary; only the explicit engine/model and generation text do.
+  mediaProviderPeerId: z.string().uuid().optional(),
   durationSec: z.number().positive().max(600).optional(),
   durationMode: z.enum(['auto', 'manual']).optional(),
   // Attach the result to an existing track (else a new one is created). The
@@ -350,61 +356,28 @@ const generateSchema = z.object({
   artistId: z.string().trim().max(80).optional().default(''),
   artist: z.string().trim().max(120).optional().default(''),
   albumId: z.string().trim().max(80).optional().default(''),
+}).superRefine((value, ctx) => {
+  if (!value.mediaProviderPeerId) return;
+  if (!value.engine) {
+    ctx.addIssue({ code: 'custom', path: ['engine'], message: 'engine is required for a remote media provider' });
+  }
+  if (!value.modelId) {
+    ctx.addIssue({ code: 'custom', path: ['modelId'], message: 'modelId is required for a remote media provider' });
+  }
 });
 
 const INSTRUMENTAL_ONLY_GUIDANCE = 'Instrumental only. Do not include sung, spoken, chanted, choir, or background vocals. Carry the lead melody with the described instruments or textures.';
 
 router.post('/generate', asyncHandler(async (req, res) => {
   const body = validateRequest(generateSchema, req.body ?? {});
-  // Reject an unknown engine explicitly rather than letting getEngine() fall
-  // back to the default — a typo/stale client (`acestep-v2`) would otherwise
-  // burn a render producing the WRONG backend's output + metadata. An ABSENT
-  // engine is allowed (uses the default).
-  if (body.engine !== undefined && !ENGINES[body.engine]) {
-    throw new ServerError(`Unknown audio engine: ${body.engine}`, { status: 400, code: 'PIPELINE_MUSIC_UNKNOWN_ENGINE' });
-  }
-  const engine = getEngine(body.engine);
 
-  // Validate the target track BEFORE the (minutes-long) render so a stale/
-  // deleted trackId fails fast instead of wasting a render + orphaning a WAV.
-  let existing = null;
+  // Validate local destination and duplicate state before any peer probe. A
+  // stale track or duplicate request should not generate needless federation
+  // traffic, even though the probe itself does not start provider work.
   if (body.trackId) {
-    existing = await tracks.getTrack(body.trackId);
+    const existing = await tracks.getTrack(body.trackId);
     if (!existing) throw new ServerError('Track not found', { status: 404, code: 'NOT_FOUND' });
   }
-
-  // Resolve the requested model against the engine's merged list. An unknown
-  // modelId (stale UI selection, removed model) must FAIL FAST — otherwise
-  // `repo` stays undefined and generateMusic silently renders the engine default,
-  // spending minutes producing audio from the wrong checkpoint. A user-installed
-  // id resolves to its HF repo (passed to the sidecar); a shipped id leaves
-  // `repo` undefined (generateMusic uses its own registry for shipped models).
-  let repo;
-  if (body.modelId) {
-    const merged = await listEngineModels(engine.id);
-    const picked = merged.find((m) => m.id === body.modelId);
-    if (!picked) {
-      throw new ServerError(`Unknown model for ${engine.name}: ${body.modelId}`, { status: 400, code: 'PIPELINE_MUSIC_UNKNOWN_MODEL' });
-    }
-    if (picked.userAdded) repo = picked.repo || picked.id;
-  }
-
-  // Make the render-level override explicit in BOTH conditioning inputs. Merely
-  // dropping lyrics is not enough when the authored caption itself mentions a
-  // vocalist. Keep it idempotent so remixing an instrumental take does not append
-  // the same directive repeatedly.
-  const usedPrompt = body.instrumentalOnly && !body.prompt.includes(INSTRUMENTAL_ONLY_GUIDANCE)
-    ? `${body.prompt}\n\n${INSTRUMENTAL_ONLY_GUIDANCE}`
-    : body.prompt;
-
-  // The lyrics that actually CONDITION this render: what the caller sent for a
-  // lyric-aware engine ('' = render without lyrics), nothing for a non-lyric
-  // engine. The same value drives the generation call AND the render snapshot,
-  // so a render card can never claim conditioning text the audio wasn't built
-  // from (an absent-lyrics lyric render is genuinely un-conditioned, not "the
-  // track's old words").
-  const usedLyrics = engine.lyrics && !body.instrumentalOnly ? (body.lyrics ?? '') : '';
-
   const liveJobs = listJobs({ kind: 'audio' }).filter((job) => job.status === 'queued' || job.status === 'running');
   const duplicate = liveJobs.find((job) => {
     const tag = job.params?.musicStudio;
@@ -418,16 +391,117 @@ router.post('/generate', asyncHandler(async (req, res) => {
     });
   }
 
+  let engine;
+  let repo;
+  let remoteMedia;
+
+  if (body.mediaProviderPeerId) {
+    const peers = await getPeers();
+    const peer = peers.find((candidate) => candidate.id === body.mediaProviderPeerId);
+    if (!peer) {
+      throw new ServerError('Selected media provider peer was not found', {
+        status: 404,
+        code: 'MEDIA_PROVIDER_PEER_NOT_FOUND',
+      });
+    }
+    const resolved = await resolveFederatedMediaProvider(peer, {
+      kind: 'audio',
+      engine: body.engine,
+      modelId: body.modelId,
+    });
+    const capability = resolved.capability;
+    if (body.durationMode === 'auto' && !capability.autoDuration) {
+      throw new ServerError('Selected remote engine does not support automatic duration', {
+        status: 400,
+        code: 'MEDIA_PROVIDER_AUTO_DURATION_UNSUPPORTED',
+      });
+    }
+    if (body.durationSec !== undefined
+      && ((Number.isFinite(capability.minDurationSec) && body.durationSec < capability.minDurationSec)
+        || (Number.isFinite(capability.maxDurationSec) && body.durationSec > capability.maxDurationSec))) {
+      throw new ServerError('Requested duration is outside the remote engine limits', {
+        status: 400,
+        code: 'MEDIA_PROVIDER_DURATION_UNSUPPORTED',
+        context: {
+          minDurationSec: capability.minDurationSec,
+          maxDurationSec: capability.maxDurationSec,
+        },
+      });
+    }
+    engine = {
+      id: capability.engine,
+      name: capability.engineName,
+      lyrics: capability.lyrics,
+    };
+    remoteMedia = {
+      wireVersion: FEDERATED_MEDIA_WIRE_VERSION,
+      peerId: peer.id,
+      reconcile: false,
+      cancelRequested: false,
+    };
+  } else {
+    // Reject an unknown engine explicitly rather than letting getEngine() fall
+    // back to the default — a typo/stale client would otherwise render with the
+    // wrong local backend. An absent engine still selects the local default.
+    if (body.engine !== undefined && !ENGINES[body.engine]) {
+      throw new ServerError(`Unknown audio engine: ${body.engine}`, { status: 400, code: 'PIPELINE_MUSIC_UNKNOWN_ENGINE' });
+    }
+    engine = getEngine(body.engine);
+
+    // Resolve a local user-installed model to its HF repo. Remote models are
+    // validated against the peer's exact allowlist and never interpreted as a
+    // path or local repository on this machine.
+    if (body.modelId) {
+      const merged = await listEngineModels(engine.id);
+      const picked = merged.find((m) => m.id === body.modelId);
+      if (!picked) {
+        throw new ServerError(`Unknown model for ${engine.name}: ${body.modelId}`, { status: 400, code: 'PIPELINE_MUSIC_UNKNOWN_MODEL' });
+      }
+      if (picked.userAdded) repo = picked.repo || picked.id;
+    }
+  }
+
+  // The lyrics that actually CONDITION this render: what the caller sent for a
+  // lyric-aware engine ('' = render without lyrics), nothing for a non-lyric
+  // engine. The same value drives the generation call AND the render snapshot,
+  // so a render card can never claim conditioning text the audio wasn't built
+  // from (an absent-lyrics lyric render is genuinely un-conditioned, not "the
+  // track's old words").
+  // Make the render-level override explicit in BOTH conditioning inputs. Merely
+  // dropping lyrics is not enough when the authored caption itself mentions a
+  // vocalist. Keep it idempotent so remixing an instrumental take does not append
+  // the same directive repeatedly.
+  const usedPrompt = body.instrumentalOnly && !body.prompt.includes(INSTRUMENTAL_ONLY_GUIDANCE)
+    ? `${body.prompt}\n\n${INSTRUMENTAL_ONLY_GUIDANCE}`
+    : body.prompt;
+  const usedLyrics = engine.lyrics && !body.instrumentalOnly ? (body.lyrics ?? '') : '';
+  if (remoteMedia) {
+    remoteMedia.request = {
+      prompt: usedPrompt,
+      lyrics: usedLyrics,
+      engine: engine.id,
+      modelId: body.modelId,
+      ...(body.durationSec !== undefined ? { durationSec: body.durationSec } : {}),
+      ...(body.durationMode !== undefined ? { durationMode: body.durationMode } : {}),
+    };
+  }
+
   const result = enqueueJob({
     kind: 'audio',
     params: {
-      prompt: usedPrompt,
-      lyrics: usedLyrics,
+      // Keep the actual request under the versioned remote marker. An older
+      // PortOS that does not understand remoteMedia will route an audio job to
+      // the local adapter; an empty prompt makes that rollback fail closed
+      // before starting a duplicate local render. Public projections and the
+      // completion hook restore the request text from the validated marker.
+      prompt: remoteMedia ? '' : usedPrompt,
+      lyrics: remoteMedia ? '' : usedLyrics,
       engine: engine.id,
       modelId: body.modelId,
       repo,
       durationSec: body.durationSec,
       durationMode: body.durationMode,
+      ...(remoteMedia ? { remoteMedia } : {}),
       musicStudio: {
         trackId: body.trackId || null,
         title: body.title || body.prompt.slice(0, 60),

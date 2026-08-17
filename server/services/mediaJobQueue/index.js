@@ -1,5 +1,5 @@
 /**
- * Media Job Queue — two-lane FIFO for image + video gen jobs.
+ * Media Job Queue — lane-aware FIFO for media generation jobs.
  *
  * Why this exists: video gen (mlx_video) and local image gen (mflux/diffusers)
  * both spawn heavy GPU/Metal child processes. Running two simultaneously OOMs
@@ -8,10 +8,9 @@
  * to retry/backoff. This queue serializes submissions so callers always get
  * an immediate `queued` ack and watch progress via SSE.
  *
- * Lanes: GPU jobs (video + local image) drain serially through `running` since
- * they share the MLX runtime. Codex image jobs run in a parallel `cloudRunning`
- * lane — they shell out to an external CLI and don't compete for GPU memory,
- * so a long video render never blocks a Codex storyboard generation.
+ * Lanes: GPU jobs drain serially through `running`; cloud CLI jobs use the
+ * bounded `cloudRunning` lane; federated audio uses `remoteRunning` so work on
+ * another machine never occupies this machine's GPU slot.
  *
  * Scope: gates `videoGen/local#generateVideo` (always),
  * `imageGen/local#generateImage` (when imageGen mode === 'local'), and
@@ -22,8 +21,8 @@
  * constraint to absorb.
  *
  * Persistence: data/media-jobs.json holds queued + running + recently-finished
- * jobs. On boot, any 'running' is reclassified as 'failed (interrupted by
- * restart)' since the spawned child died with the previous server process.
+ * jobs. On boot, local child-process jobs fail as interrupted; detached
+ * training and idempotent remote jobs reconcile against their surviving work.
  * Completed/failed/canceled entries older than 24h or beyond the 500-most-
  * recent are pruned to keep the file small.
  */
@@ -57,6 +56,19 @@ import { IMAGE_GEN_MODE, CLOUD_IMAGE_GEN_MODES } from '../imageGen/modes.js';
 const isCloudImageJob = (j) =>
   (j.kind === 'image' && CLOUD_IMAGE_GEN_MODES.includes(j.params?.mode))
   || (j.kind === 'video' && j.params?.mode === IMAGE_GEN_MODE.GROK);
+
+// Presence, not truthiness of individual nested fields, selects the remote
+// adapter. Persisted queue state is user-editable; a malformed marker must fail
+// closed in audioGen/remote rather than accidentally falling through to a local
+// engine with a remote-only model id.
+export const isRemoteMediaJob = (job) =>
+  job?.kind === 'audio' && job.params?.remoteMedia !== undefined;
+
+const jobLane = (job) => {
+  if (isRemoteMediaJob(job)) return 'remote';
+  if (isCloudImageJob(job)) return 'cloud';
+  return 'gpu';
+};
 
 const JOBS_FILE = join(PATHS.data, 'media-jobs.json');
 const COMPLETED_TTL_MS = 24 * 60 * 60 * 1000;
@@ -135,6 +147,7 @@ function getGenModuleForJob(job) {
   if (job.kind === 'video' && job.params?.mode === IMAGE_GEN_MODE.GROK) return import('../videoGen/grok.js');
   if (job.kind === 'video') return import('../videoGen/local.js');
   if (job.kind === 'training') return import('../loraTraining/index.js');
+  if (isRemoteMediaJob(job)) return import('../audioGen/remote.js');
   if (job.kind === 'audio') return import('../audioGen/local.js');
   if (job.kind === 'image' && job.params?.mode === IMAGE_GEN_MODE.CODEX) return import('../imageGen/codex.js');
   if (job.kind === 'image' && job.params?.mode === IMAGE_GEN_MODE.GROK) return import('../imageGen/grok.js');
@@ -185,16 +198,20 @@ export const mediaJobEvents = new EventEmitter();
 // emitters already set (imageGenEvents 200, videoGenEvents 50).
 mediaJobEvents.setMaxListeners(100);
 
-// GPU lane: serialized — `running` holds at most one job (the MLX runtime can't
-// share VRAM). Codex lane: up to `codexParallelLimit` jobs in `cloudRunning[]`
-// since each call shells out to its own external child process. `queue` is
-// shared submission order. `archive` is recently-finished jobs (~24h TTL),
-// including canceled ones so /api/media-jobs?status=canceled and the recent-
-// reel UI can still find them within the 24h window.
+// GPU lane: serialized — `running` holds at most one job. Cloud CLI and remote
+// provider lanes are parallel because neither consumes the local GPU. `queue`
+// preserves submission order across lanes; positions are lane-scoped.
 const queue = [];
 let running = null;
 const cloudRunning = [];
+const remoteRunning = [];
 const archive = [];
+
+// One install can route to several peers, while each provider remains the
+// authority on its own capacity. This bound prevents corrupted persisted state
+// from creating unbounded local polling loops without serializing independent
+// peers behind the local GPU lane.
+export const REMOTE_MEDIA_PARALLEL_LIMIT = 20;
 
 export const CODEX_PARALLEL_MIN = 1;
 export const CODEX_PARALLEL_MAX = 10;
@@ -238,6 +255,8 @@ function findJob(jobId) {
   if (running && running.id === jobId) return running;
   const codexHit = cloudRunning.find((j) => j.id === jobId);
   if (codexHit) return codexHit;
+  const remoteHit = remoteRunning.find((j) => j.id === jobId);
+  if (remoteHit) return remoteHit;
   const inQueue = queue.find((j) => j.id === jobId);
   if (inQueue) return inQueue;
   return archive.find((j) => j.id === jobId) || null;
@@ -266,6 +285,7 @@ export function listJobs({ status, kind, owner } = {}) {
   const all = [
     ...(running ? [running] : []),
     ...cloudRunning,
+    ...remoteRunning,
     ...queue,
     ...archive,
   ];
@@ -309,6 +329,7 @@ async function persistImpl() {
   const live = [
     ...(running ? [running] : []),
     ...cloudRunning,
+    ...remoteRunning,
     ...queue,
     ...archive,
   ];
@@ -363,6 +384,27 @@ export async function initMediaJobQueue() {
 
     for (const j of persistedJobs) {
       if (j.status === 'running') {
+        // A remote provider job survives this process: its local queue id is
+        // also the stable Idempotency-Key. Re-enqueue the same record and let
+        // the remote adapter replay the submission, recover the provider job,
+        // and continue polling (or deliver a persisted cancellation intent).
+        if (isRemoteMediaJob(j)) {
+          const marker = j.params?.remoteMedia;
+          queue.push({
+            ...j,
+            status: 'queued',
+            cancelRequested: marker?.cancelRequested === true,
+            params: {
+              ...j.params,
+              remoteMedia: {
+                ...(marker && typeof marker === 'object' && !Array.isArray(marker) ? marker : {}),
+                reconcile: true,
+              },
+            },
+          });
+          console.log(`🔁 media-job [${j.id.slice(0, 8)}] remote audio interrupted — re-enqueued for reconciliation`);
+          continue;
+        }
         // #1332: a LoRA trainer is a detached child (spawnDetached) that can
         // SURVIVE this restart. If its run still has a live (or just-finished-
         // but-unprocessed) trainer, re-enqueue the SAME job flagged for
@@ -412,14 +454,11 @@ export async function initMediaJobQueue() {
     // event report accurate slots. Positions are lane-scoped: Codex image
     // jobs and GPU jobs each get their own counter so a queued Codex job
     // behind a running GPU job is restored as position 1 (not position 2).
-    let cloudCounter = 0;
-    let gpuCounter = 0;
+    const counters = { cloud: 0, gpu: 0, remote: 0 };
     for (const q of queue) {
-      if (isCloudImageJob(q)) {
-        q.position = ++cloudCounter;
-      } else {
-        q.position = ++gpuCounter;
-      }
+      const lane = jobLane(q);
+      counters[lane] += 1;
+      q.position = counters[lane];
     }
     if (persistedJobs.length) {
       console.log(`📦 mediaJobQueue restored: ${queue.length} queued, ${archive.length} archived`);
@@ -460,11 +499,9 @@ function startWorker() {
   });
 }
 
-// Both lanes use fire-and-forget so the poll loop is never blocked by a
-// running job. This lets a Codex job that arrives while a GPU render is in
-// flight be picked up immediately on the next 150 ms tick instead of having
-// to wait for the entire GPU job to finish first.
-function startLaneJob(job, { isCloud }) {
+// Every lane uses fire-and-forget so the poll loop is never blocked by a
+// running job in another lane.
+function startLaneJob(job, { lane }) {
   // If the job isn't in the queue, it was already promoted (e.g. by a parallel
   // runJobNow). Skip — promoting again would double-start the job and corrupt
   // the lane (push it onto cloudRunning/running twice). Silently splice(-1)
@@ -480,13 +517,17 @@ function startLaneJob(job, { isCloud }) {
   job.position = 1;
   job.progress = typeof job.progress === 'number' && Number.isFinite(job.progress) ? job.progress : 0;
   job.statusMsg = job.statusMsg || 'Starting';
-  if (isCloud) {
+  if (lane === 'cloud') {
     cloudRunning.push(job);
+  } else if (lane === 'remote') {
+    remoteRunning.push(job);
   } else {
     running = job;
   }
   recomputeQueuePositions();
-  const label = isCloud ? (job.params?.mode || 'cloud') : job.kind;
+  const label = lane === 'cloud'
+    ? (job.params?.mode || 'cloud')
+    : lane === 'remote' ? 'remote audio' : job.kind;
   persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on ${label} start failed: ${e.message}`));
   broadcastSse(ensureSseEntry(job.id), { type: 'started', kind: job.kind });
   mediaJobEvents.emit('started', job);
@@ -507,9 +548,12 @@ function startLaneJob(job, { isCloud }) {
         mediaJobEvents.emit('failed', job);
       }
     }
-    if (isCloud) {
+    if (lane === 'cloud') {
       const idx = cloudRunning.indexOf(job);
       if (idx >= 0) cloudRunning.splice(idx, 1);
+    } else if (lane === 'remote') {
+      const idx = remoteRunning.indexOf(job);
+      if (idx >= 0) remoteRunning.splice(idx, 1);
     } else {
       running = null;
     }
@@ -524,22 +568,28 @@ function startLaneJob(job, { isCloud }) {
 
 async function drainLoop() {
   while (true) {
-    // Single queue scan, promote eligible codex jobs while there's room and a
-    // GPU job if the lane is open. Stops cleanly on an empty queue.
+    // Single queue scan, promoting work independently into each open lane.
     let gpuOpen = !running;
     let cloudSlots = codexParallelLimit - cloudRunning.length;
-    if ((gpuOpen || cloudSlots > 0) && queue.length > 0) {
+    let remoteSlots = REMOTE_MEDIA_PARALLEL_LIMIT - remoteRunning.length;
+    if ((gpuOpen || cloudSlots > 0 || remoteSlots > 0) && queue.length > 0) {
       for (const job of queue.slice()) {
-        if (isCloudImageJob(job)) {
+        const lane = jobLane(job);
+        if (lane === 'remote') {
+          if (remoteSlots > 0) {
+            startLaneJob(job, { lane });
+            remoteSlots -= 1;
+          }
+        } else if (lane === 'cloud') {
           if (cloudSlots > 0) {
-            startLaneJob(job, { isCloud: true });
+            startLaneJob(job, { lane });
             cloudSlots -= 1;
           }
         } else if (gpuOpen) {
-          startLaneJob(job, { isCloud: false });
+          startLaneJob(job, { lane });
           gpuOpen = false;
         }
-        if (!gpuOpen && cloudSlots <= 0) break;
+        if (!gpuOpen && cloudSlots <= 0 && remoteSlots <= 0) break;
       }
     }
     await sleep(150);
@@ -577,7 +627,7 @@ export function runJobNow(jobId) {
   if (!isCloudImageJob(job)) {
     return { ok: false, code: 'NOT_CODEX', error: 'Only cloud-CLI image jobs can be run now; GPU jobs serialize on the MLX runtime' };
   }
-  startLaneJob(job, { isCloud: true });
+  startLaneJob(job, { lane: 'cloud' });
   return { ok: true, status: 'running' };
 }
 
@@ -588,10 +638,20 @@ export function runJobNow(jobId) {
 // frame even after the line ahead of it cleared.
 function recomputeQueuePositions() {
   const cloudJobs = queue.filter(isCloudImageJob);
-  const gpuJobs = queue.filter((j) => !isCloudImageJob(j));
+  const remoteJobs = queue.filter(isRemoteMediaJob);
+  const gpuJobs = queue.filter((j) => jobLane(j) === 'gpu');
 
   cloudJobs.forEach((q, i) => {
     const newPosition = i + 1 + cloudRunning.length;
+    if (q.position !== newPosition) {
+      q.position = newPosition;
+      const entry = sseJobs.get(q.id);
+      if (entry) broadcastSse(entry, { type: 'queued', position: newPosition });
+    }
+  });
+
+  remoteJobs.forEach((q, i) => {
+    const newPosition = i + 1 + remoteRunning.length;
     if (q.position !== newPosition) {
       q.position = newPosition;
       const entry = sseJobs.get(q.id);
@@ -940,6 +1000,13 @@ async function runJob(job) {
     } else if (job.kind === 'training') {
       await mod.runTraining({ ...safeParams, jobId: job.id });
     } else if (job.kind === 'audio') {
+      if (isRemoteMediaJob(job)) {
+        safeParams.remoteMedia = {
+          ...(safeParams.remoteMedia && typeof safeParams.remoteMedia === 'object'
+            ? safeParams.remoteMedia : {}),
+          cancelRequested: job.params?.remoteMedia?.cancelRequested === true,
+        };
+      }
       await mod.generateAudio({ ...safeParams, jobId: job.id });
     } else {
       await mod.generateImage({ ...safeParams, jobId: job.id });
@@ -980,12 +1047,15 @@ export function enqueueJob({ kind, params, owner = null }) {
     queuedAt: new Date().toISOString(),
     params,
     // position counts "where you sit in your lane" — a running job in the
-    // same lane occupies slot 1, then same-lane queued jobs follow. Codex
-    // jobs only count Codex ahead-of-them; GPU jobs only count GPU jobs.
+    // same lane occupies slot 1, then same-lane queued jobs follow.
     position: (() => {
-      const isCloud = isCloudImageJob({ kind, params });
-      const laneQueue = queue.filter((j) => isCloudImageJob(j) === isCloud);
-      return laneQueue.length + (isCloud ? cloudRunning.length : (running ? 1 : 0)) + 1;
+      const candidate = { kind, params };
+      const lane = jobLane(candidate);
+      const laneQueue = queue.filter((j) => jobLane(j) === lane);
+      const liveCount = lane === 'cloud'
+        ? cloudRunning.length
+        : lane === 'remote' ? remoteRunning.length : (running ? 1 : 0);
+      return laneQueue.length + liveCount + 1;
     })(),
   };
   queue.push(job);
@@ -1057,9 +1127,10 @@ export async function cancelJob(jobId) {
     console.log(`🛑 media-job [${jobId.slice(0, 8)}] canceled (was queued)`);
     return { ok: true, status: 'canceled' };
   }
-  // Cancel-while-running — check the GPU slot and every parallel codex slot.
+  // Cancel-while-running — check every lane.
   const runningJob = (running?.id === jobId ? running : null)
     ?? cloudRunning.find((j) => j.id === jobId)
+    ?? remoteRunning.find((j) => j.id === jobId)
     ?? null;
   if (runningJob) {
     // A terminal transition already started (completed/failed/watchdog): its
@@ -1072,6 +1143,18 @@ export async function cancelJob(jobId) {
     // cancelRequested flips the dispatcher's `failed` handler into the
     // `canceled` branch instead of marking it failed.
     runningJob.cancelRequested = true;
+    if (isRemoteMediaJob(runningJob)) {
+      // Remote cancellation can outlive this process when the peer is down.
+      // Persist the intent before signaling the adapter so boot reconciliation
+      // replays the stable submission and resumes cancellation instead of
+      // silently resurrecting the render.
+      runningJob.params.remoteMedia = {
+        ...(runningJob.params.remoteMedia && typeof runningJob.params.remoteMedia === 'object'
+          ? runningJob.params.remoteMedia : {}),
+        cancelRequested: true,
+      };
+      await persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on remote cancel failed: ${e.message}`));
+    }
     const mod = await getGenModuleForJob(runningJob);
     if (mod?.cancel) mod.cancel(jobId);
     console.log(`🛑 media-job [${jobId.slice(0, 8)}] cancel signal sent (was running)`);
@@ -1144,6 +1227,7 @@ export function __resetForTests() {
   // `cloudRunning` is a const array — clear it in place rather than reassigning,
   // which would throw TypeError and break `findJob()` (.find on null).
   cloudRunning.length = 0;
+  remoteRunning.length = 0;
   archive.length = 0;
   sseJobs.clear();
   workerStarted = false;

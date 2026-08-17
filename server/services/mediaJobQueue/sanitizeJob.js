@@ -25,6 +25,14 @@ export function sanitizeJob(job) {
           : value,
       ]))
     : undefined;
+  // Remote jobs keep the real prompt inside their versioned marker so an
+  // older binary fails closed on the empty top-level prompt instead of
+  // duplicating the render locally. Preserve the existing public projection
+  // without exposing the rest of the private routing marker.
+  const remotePrompt = job.params?.remoteMedia?.request?.prompt;
+  if (safeParams && typeof remotePrompt === 'string' && remotePrompt.trim() && remotePrompt.length <= 8000) {
+    safeParams.prompt = remotePrompt;
+  }
   return {
     id: job.id,
     kind: job.kind,

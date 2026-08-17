@@ -1,9 +1,8 @@
 /**
  * Consumer-side discovery and selection for federated media providers.
  *
- * This module deliberately stops before job proxying: it establishes the
- * explicit per-peer allowlist and fail-closed capacity preflight that every
- * remote executor must pass before it can submit work.
+ * This module establishes the explicit per-peer allowlist and fail-closed
+ * capacity preflight used by remote executors before they submit work.
  */
 
 import { ServerError } from '../lib/errorHandler.js';

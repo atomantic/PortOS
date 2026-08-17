@@ -51,6 +51,39 @@ export const federatedMediaProviderStatusSchema = z.object({
   capabilities: z.array(federatedMediaCapabilitySchema).max(300),
 });
 
+const federatedMediaResultSchema = z.object({
+  available: z.literal(true),
+  mimeType: z.literal('audio/wav'),
+  sizeBytes: z.number().int().positive().max(4_294_967_296),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  downloadUrl: z.string().trim().min(1).max(500),
+  engine: z.string().trim().min(1).max(80).nullable(),
+  modelId: z.string().trim().min(1).max(256).nullable(),
+  durationSec: z.number().finite().positive().max(3600).nullable(),
+});
+
+// Consumer-side job reconciliation validates every provider response against
+// this projection before acting on status, progress, or result metadata. The
+// result URL is still advisory: consumers derive the fixed v1 result endpoint
+// from the validated job id rather than following provider-supplied URLs.
+export const federatedMediaProviderJobSchema = z.object({
+  wireVersion: z.literal(FEDERATED_MEDIA_WIRE_VERSION),
+  id: z.string().uuid(),
+  kind: mediaKindSchema,
+  status: z.enum(['queued', 'running', 'completed', 'failed', 'canceled']),
+  queuedAt: z.string().datetime(),
+  startedAt: z.string().datetime().nullable(),
+  completedAt: z.string().datetime().nullable(),
+  position: z.number().int().positive().nullable(),
+  progress: z.number().finite().min(0).max(1).nullable(),
+  etaMs: z.number().finite().nonnegative().nullable(),
+  failure: z.object({
+    code: z.string().trim().min(1).max(120),
+    message: z.string().trim().min(1).max(500),
+  }).optional(),
+  result: federatedMediaResultSchema.optional(),
+});
+
 /**
  * Check a validated provider snapshot against the consumer's clock.
  * A timestamp too far in the future is unknown rather than fresh: accepting it

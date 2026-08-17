@@ -9,11 +9,12 @@ import { request, maybeRedirectToLogin } from './apiCore.js';
 // and a `ready` flag (the opt-in venv is provisioned) → { engines, defaultEngine }.
 export const listMusicEngines = (options = {}) => request('/music/engines', options);
 
-// Generate a track. body: { prompt, lyrics?, instrumentalOnly?, engine?, modelId?, durationSec?,
-// durationMode?: 'auto'|'manual',
-// trackId? (update) | title?/artistId?/artist?/albumId? (create) }. New servers
-// acknowledge with HTTP 202 + { jobId, position, status }; an older rolling-
-// upgrade peer may still return { track }. Callers own their loading UI.
+// Generate a queued track job. body: { prompt, lyrics?, instrumentalOnly?, engine?, modelId?,
+// durationSec?, durationMode?: 'auto'|'manual', mediaProviderPeerId?,
+// trackId? (update) | title?/artistId?/artist?/albumId? (create) }. Resolves to
+// { jobId, position, status }; callers watch the shared media-job SSE lifecycle.
+// A remote peer id requires an explicit engine + model and is preflighted by
+// the server before this request is acknowledged.
 export const generateMusic = (body, requestOptions = {}) => request('/music/generate', {
   method: 'POST',
   body: JSON.stringify(body),

@@ -2,7 +2,7 @@
 
 PortOS can opt in to serving local media-generation capacity to another registered PortOS peer. The first wire contract, `/api/federation/media/v1`, supports queued audio generation through the existing durable `mediaJobQueue` and local music engines.
 
-Provider-side queued audio and consumer-side capacity discovery/selection are available. Remote proxy-job execution, failover, and consumer-side commission reconciliation remain later slices of issue #4348.
+Provider-side queued audio, consumer-side capacity discovery, and durable remote audio execution are available. Multi-provider scheduling, image/video transfer, and higher-level commission routing remain later slices of issue #4348.
 
 ## Enable a provider
 
@@ -49,6 +49,19 @@ This configuration and the last sanitized capacity snapshot live only on the loc
 
 The Instances card reports the provider's ready/busy/unavailable state, shared active-job count, queue depth, and advertised model readiness. A consumer preflight accepts a model only when the peer is explicitly enabled, the exact model is locally allowlisted, the wire response validates, the capacity timestamp is fresh, the queue is accepting, and runtime/model/CUDA readiness is positive. Unknown, malformed, clock-skewed, or stale status blocks assignment. The provider remains authoritative and repeats admission checks when a later executor submits the job.
 
+An API caller deliberately selects remote execution on Music generation by sending the local peer-record id together with an explicit advertised engine and model:
+
+```json
+{
+  "prompt": "A fictional slow synthetic pulse",
+  "engine": "minimax-music3",
+  "modelId": "minimax-music3",
+  "mediaProviderPeerId": "00000000-0000-4000-8000-000000000001"
+}
+```
+
+`POST /api/music/generate` performs the fresh capacity preflight before returning the normal queued media-job response. Omitting `mediaProviderPeerId` keeps the existing local-engine behavior. The peer id is local routing state and is not included in the provider submission.
+
 ## Authentication and identity
 
 Every request requires both:
@@ -78,7 +91,7 @@ All successful JSON responses include `wireVersion: 1`. The version is also fixe
 
 CUDA has three states: `available`, `absent`, and `unknown`. A CUDA model is ready only when the state is positively `available`; a failed or ambiguous probe blocks admission. Runtime, host-platform, exact fixed-checkpoint readiness, and queue capacity are similarly fail-closed.
 
-The configured `maxQueuedJobs` is conservative: all currently queued/running local and remote media work counts against it. This prevents a reachable route from advertising spare capacity while the machine's shared media lane is already occupied.
+The configured `maxQueuedJobs` is conservative: all queued/running work that consumes this machine's media resources counts against it. Outgoing proxy jobs are excluded because they consume another peer's capacity; counting them could make two idle peers report busy while waiting on each other.
 
 Status never includes prompts, lyrics, credentials, local paths, commission records, or private creative metadata.
 
@@ -109,6 +122,14 @@ A completed job projection includes `result.sha256`, `result.sizeBytes`, `result
 
 Provider filesystem paths and original filenames never cross the API boundary.
 
+### Consumer reconciliation
+
+Remote audio jobs use a dedicated non-GPU lane in the consumer's durable media queue. The local job UUID is also the stable provider `Idempotency-Key`. If the consumer restarts while the job is running, it requeues that same local record, replays the submission to recover the provider job id, and resumes status/progress polling. Temporary peer and provider outages remain queued rather than creating duplicate work.
+
+Cancellation intent is persisted before the consumer contacts the provider. After a restart it is replayed against the recovered provider job instead of resurrecting the render. A provider restart is handled by its own durable media queue; the consumer continues polling the owner-scoped wire job.
+
+On completion, the consumer ignores the advisory download URL and derives the fixed owner-scoped v1 result endpoint from the validated provider job id. It streams into a local partial file, verifies `Content-Length`, MIME type, both advertised digests, actual byte count, and SHA-256, then atomically promotes the WAV into the local Music library. Only that verified local filename is handed to the normal Music Studio completion hook.
+
 ## Current boundary
 
-Wire v1 currently provides audio only. Consumers can discover and explicitly allowlist a peer/model, but PortOS does not yet submit a local proxy job through that selection. Still remaining from #4348 are consumer-side job proxying and restart reconciliation, converting the Music studio's synchronous generation route to the durable queue, multi-provider fairness/failover, remote image/video jobs and input-asset transfer, and aggregate provider health on System Health.
+Wire v1 currently provides audio only, and remote selection is exposed through the generation API rather than a Music-page peer picker. Still remaining from #4348 are that Music UI, multi-provider fairness/failover, remote image/video jobs and input-asset transfer, Creative Commission routing/UX, and aggregate provider health on System Health.

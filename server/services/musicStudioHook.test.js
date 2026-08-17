@@ -126,4 +126,28 @@ describe('music studio completion hook', () => {
     await new Promise((resolve) => setImmediate(resolve));
     expect(trackStore.updateTrack).not.toHaveBeenCalledWith('deleted-track', expect.anything());
   });
+
+  it('files the versioned remote request text instead of the rollback-safe empty prompt', async () => {
+    trackStore.getTrack.mockResolvedValue({ id: 'track-1', renders: [] });
+    queue.events.emit('completed', {
+      id: 'job-remote', kind: 'audio', queuedAt: new Date().toISOString(),
+      params: {
+        prompt: '',
+        lyrics: '',
+        remoteMedia: {
+          wireVersion: 1,
+          peerId: '00000000-0000-4000-8000-000000000001',
+          request: { prompt: 'remote fictional pulse', lyrics: '[verse] example', engine: 'remote-audio', modelId: 'example/model' },
+        },
+        musicStudio: { trackId: 'track-1', lyricsEnabled: true, lyricsProvided: true },
+      },
+      result: { filename: 'remote.wav', durationSec: 30, engine: 'remote-audio', modelId: 'example/model' },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(trackStore.buildRenderAppend).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      prompt: 'remote fictional pulse',
+      lyrics: '[verse] example',
+    }));
+  });
 });

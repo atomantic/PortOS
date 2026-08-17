@@ -22,14 +22,15 @@ const hook = createMediaJobImageHook({
     const tag = job.params.musicStudio;
     const authoredPrompt = typeof tag.authoredPrompt === 'string' ? tag.authoredPrompt : job.params.prompt;
     const authoredLyrics = typeof tag.authoredLyrics === 'string' ? tag.authoredLyrics : job.params.lyrics;
+    const remoteRequest = job.params.remoteMedia?.request;
     return {
       filename,
       durationSec: Number.isFinite(job.result?.durationSec) ? Math.round(job.result.durationSec) : null,
       engine: typeof job.result?.engine === 'string' ? job.result.engine : null,
       modelId: typeof job.result?.modelId === 'string' ? job.result.modelId : null,
-      prompt: job.params.prompt,
+      prompt: typeof remoteRequest?.prompt === 'string' ? remoteRequest.prompt : job.params.prompt,
       authoredPrompt,
-      lyrics: job.params.lyrics,
+      lyrics: typeof remoteRequest?.lyrics === 'string' ? remoteRequest.lyrics : job.params.lyrics,
       authoredLyrics,
       lyricsEnabled: tag.lyricsEnabled === true,
       lyricsProvided: tag.lyricsProvided === true,

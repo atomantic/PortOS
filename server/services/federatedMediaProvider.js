@@ -17,7 +17,13 @@ import {
   FEDERATED_MEDIA_WIRE_VERSION,
 } from '../lib/federatedMediaWire.js';
 import { getSettings } from './settings.js';
-import { enqueueJob, getJob, listJobs, cancelJob } from './mediaJobQueue/index.js';
+import {
+  cancelJob,
+  enqueueJob,
+  getJob,
+  isRemoteMediaJob,
+  listJobs,
+} from './mediaJobQueue/index.js';
 import { listMusicEngineCapabilities } from './musicEngineCapabilities.js';
 import { readCallerInstanceId } from './sharing/peerPullAuthorization.js';
 import { findPeerById } from './sharing/peerSyncShared.js';
@@ -134,7 +140,13 @@ async function configuredAudioCapabilities(config) {
 }
 
 function activeQueueSnapshot(config) {
-  const active = listJobs().filter((job) => ACTIVE_STATUSES.has(job.status));
+  // Outgoing proxy jobs consume a remote peer's capacity, not this provider's
+  // local generation resources. Counting them here can create a federation
+  // deadlock where two otherwise-idle peers both report busy while waiting on
+  // each other.
+  const active = listJobs().filter((job) =>
+    ACTIVE_STATUSES.has(job.status) && !isRemoteMediaJob(job),
+  );
   const providerActive = active.filter((job) => job.owner?.startsWith(OWNER_PREFIX));
   return {
     totalActive: active.length,

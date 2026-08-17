@@ -13,6 +13,7 @@ const gen = vi.hoisted(() => ({
   unsupportedPlatform: null,
 }));
 const mediaQueue = vi.hoisted(() => ({ jobs: [], enqueue: vi.fn() }));
+const remoteProvider = vi.hoisted(() => ({ peers: [], resolve: vi.fn() }));
 const cuda = vi.hoisted(() => ({ status: 'available', maxVramGb: 40 }));
 vi.mock('../lib/cudaCapability.js', () => ({
   getCudaCapability: vi.fn(async () => ({ status: cuda.status, gpus: [], maxVramGb: cuda.maxVramGb, error: null })),
@@ -76,6 +77,12 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
   listJobs: () => mediaQueue.jobs,
   JOB_KINDS: ['video', 'image', 'training', 'audio'],
   JOB_STATUSES: ['queued', 'running', 'completed', 'failed', 'canceled'],
+}));
+vi.mock('../services/instances.js', () => ({
+  getPeers: vi.fn(async () => remoteProvider.peers),
+}));
+vi.mock('../services/federatedMediaConsumer.js', () => ({
+  resolveFederatedMediaProvider: (...args) => remoteProvider.resolve(...args),
 }));
 
 // The install route shells out to scripts/setup-image-video.sh. Stand in a child
@@ -173,6 +180,8 @@ describe('music routes', () => {
     app = makeApp();
     mediaQueue.enqueue.mockReset().mockImplementation(() => ({ jobId: 'job-1', position: 1, status: 'queued' }));
     mediaQueue.jobs = [];
+    remoteProvider.peers = [];
+    remoteProvider.resolve.mockReset();
     models.list.mockReset();
     // add/remove return promises by default so the route's `.catch()` chains
     // don't throw on an undefined return (mockReset clears the impl).
@@ -546,6 +555,86 @@ describe('music routes', () => {
     expect(mediaQueue.enqueue).toHaveBeenCalledWith(expect.objectContaining({
       kind: 'audio', params: expect.objectContaining({ prompt: 'warm folk', lyrics: '[verse] hi', engine: 'acestep' }),
     }));
+  });
+
+  it('POST /generate queues an explicitly selected remote model without resolving it locally', async () => {
+    const peer = { id: '00000000-0000-4000-8000-000000000001', enabled: true };
+    remoteProvider.peers = [peer];
+    remoteProvider.resolve.mockResolvedValueOnce({
+      peer,
+      capability: {
+        kind: 'audio',
+        engine: 'remote-audio',
+        engineName: 'Remote Audio',
+        modelId: 'example/model',
+        lyrics: true,
+        autoDuration: false,
+        minDurationSec: 10,
+        maxDurationSec: 120,
+      },
+    });
+
+    const r = await request(app).post('/api/music/generate').send({
+      prompt: 'slow synthetic pulse',
+      lyrics: '[verse] example words',
+      engine: 'remote-audio',
+      modelId: 'example/model',
+      durationSec: 30,
+      mediaProviderPeerId: peer.id,
+    });
+
+    expect(r.status).toBe(202);
+    expect(remoteProvider.resolve).toHaveBeenCalledWith(peer, {
+      kind: 'audio', engine: 'remote-audio', modelId: 'example/model',
+    });
+    expect(models.list).not.toHaveBeenCalled();
+    expect(mediaQueue.enqueue).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'audio',
+      params: expect.objectContaining({
+        engine: 'remote-audio',
+        modelId: 'example/model',
+        prompt: '',
+        lyrics: '',
+        remoteMedia: {
+          wireVersion: 1,
+          peerId: peer.id,
+          reconcile: false,
+          cancelRequested: false,
+          request: {
+            prompt: 'slow synthetic pulse',
+            lyrics: '[verse] example words',
+            engine: 'remote-audio',
+            modelId: 'example/model',
+            durationSec: 30,
+          },
+        },
+        musicStudio: expect.objectContaining({ lyricsEnabled: true }),
+      }),
+    }));
+  });
+
+  it('POST /generate fails before queueing when remote routing is incomplete or unavailable', async () => {
+    const peer = { id: '00000000-0000-4000-8000-000000000001', enabled: true };
+    remoteProvider.peers = [peer];
+
+    const incomplete = await request(app).post('/api/music/generate').send({
+      prompt: 'pulse', engine: 'remote-audio', mediaProviderPeerId: peer.id,
+    });
+    expect(incomplete.status).toBe(400);
+
+    remoteProvider.resolve.mockRejectedValueOnce(new ServerError('Provider busy', {
+      status: 429,
+      code: 'MEDIA_PROVIDER_BUSY',
+    }));
+    const busy = await request(app).post('/api/music/generate').send({
+      prompt: 'pulse',
+      engine: 'remote-audio',
+      modelId: 'example/model',
+      mediaProviderPeerId: peer.id,
+    });
+    expect(busy.status).toBe(429);
+    expect(busy.body.code).toBe('MEDIA_PROVIDER_BUSY');
+    expect(mediaQueue.enqueue).not.toHaveBeenCalled();
   });
 
   it('POST /generate forwards MiniMax auto duration mode to the queue', async () => {
