@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  BACKENDS, isBackend, LOCAL_LLM_CATALOG, LOCAL_LLM_CATEGORIES, getCatalog, searchCatalog, mapModelToBackend
+  BACKENDS, isBackend, LOCAL_LLM_CATALOG, LOCAL_LLM_CATEGORIES, getCatalog, searchCatalog,
+  mapModelToBackend, getOllamaImportSpec
 } from './localLlmCatalog.js';
 
 describe('localLlmCatalog', () => {
@@ -76,7 +77,14 @@ describe('localLlmCatalog', () => {
       expect(getCatalog('lmstudio', ['orcarouter/Qwen3.8-27B-Uncensored-MLX'], { appleSilicon: true })
         .find((m) => m.key === uncensoredKey)?.installed).toBe(true);
       expect(getCatalog('lmstudio', [], { appleSilicon: false }).some((m) => m.key === uncensoredKey)).toBe(false);
-      expect(getCatalog('ollama', [], { appleSilicon: true }).some((m) => m.key === uncensoredKey)).toBe(false);
+      expect(getCatalog('ollama', [], { appleSilicon: true }).find((m) => m.key === uncensoredKey)).toMatchObject({
+        format: 'mlx',
+        id: 'orcarouter/qwen3.8-27b-uncensored-mlx:4bit',
+        size: '15.0 GB'
+      });
+      expect(getCatalog('ollama', ['orcarouter/qwen3.8-27b-uncensored-mlx:4bit'], { appleSilicon: true })
+        .find((m) => m.key === uncensoredKey)?.installed).toBe(true);
+      expect(getCatalog('ollama', [], { appleSilicon: false }).some((m) => m.key === uncensoredKey)).toBe(false);
     });
 
     it('returns [] for an unknown backend', () => {
@@ -177,9 +185,11 @@ describe('localLlmCatalog', () => {
         .toEqual({ targetId: 'mlx-community/Qwen3.8-27B-4bit', exact: true });
     });
 
-    it('does not invent an Ollama target for the LM Studio-only uncensored MLX build', () => {
+    it('maps the uncensored MLX build to its curated local Ollama import name', () => {
       expect(mapModelToBackend('lmstudio', 'orcarouter/Qwen3.8-27B-Uncensored-MLX', 'ollama'))
-        .toEqual({ targetId: null, exact: false });
+        .toEqual({ targetId: 'orcarouter/qwen3.8-27b-uncensored-mlx:4bit', exact: true });
+      expect(mapModelToBackend('ollama', 'orcarouter/qwen3.8-27b-uncensored-mlx:4bit', 'lmstudio'))
+        .toEqual({ targetId: 'https://huggingface.co/orcarouter/Qwen3.8-27B-Uncensored-MLX', exact: true });
     });
 
     it('returns null (skip) when mapping an unknown model TO LM Studio', () => {
@@ -190,6 +200,19 @@ describe('localLlmCatalog', () => {
     it('refuses same-backend or unknown-backend mappings', () => {
       expect(mapModelToBackend('ollama', 'llama3.2', 'ollama')).toEqual({ targetId: null, exact: false });
       expect(mapModelToBackend('ollama', 'llama3.2', 'nope')).toEqual({ targetId: null, exact: false });
+    });
+  });
+
+  describe('getOllamaImportSpec', () => {
+    it('returns only the trusted recipe attached to the curated install id', () => {
+      expect(getOllamaImportSpec('orcarouter/qwen3.8-27b-uncensored-mlx:4bit')).toEqual({
+        modelId: 'orcarouter/qwen3.8-27b-uncensored-mlx:4bit',
+        repo: 'orcarouter/Qwen3.8-27B-Uncensored-MLX',
+        subdir: '4-bit',
+        minVersion: '0.19.0'
+      });
+      expect(getOllamaImportSpec('ORCAROUTER/QWEN3.8-27B-UNCENSORED-MLX:4BIT')).not.toBeNull();
+      expect(getOllamaImportSpec('someone/untrusted-model:latest')).toBeNull();
     });
   });
 });

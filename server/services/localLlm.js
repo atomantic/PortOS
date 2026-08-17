@@ -29,7 +29,7 @@ import { pipeline } from 'stream/promises'
 import { Readable } from 'stream'
 import { PATHS, atomicWrite, ensureDir, pathExists, sleep } from '../lib/fileUtils.js'
 import { compareSemver } from '../lib/versionUtils.js'
-import { isBackend, mapModelToBackend } from '../lib/localLlmCatalog.js'
+import { isBackend, mapModelToBackend, getOllamaImportSpec } from '../lib/localLlmCatalog.js'
 import { sanitizeOllamaName } from '../lib/localLlmDisk.js'
 import { recommendEditorialModel, isVisionModel, isVisionCapableCliProvider, isToolUseModel } from '../lib/localModelHeuristics.js'
 import { commandExists } from '../lib/commandExists.js'
@@ -924,7 +924,10 @@ export function describeInstallProgress(p) {
 export async function installModel(backend, modelId, onProgress) {
   if (!isBackend(backend)) return { success: false, error: `Unknown backend: ${backend}` }
   if (backend === 'ollama') {
-    const result = await ollamaManager.pullModel(modelId, onProgress)
+    const importSpec = getOllamaImportSpec(modelId)
+    const result = importSpec
+      ? await ollamaManager.importModelFromHfSafetensors(importSpec, onProgress)
+      : await ollamaManager.pullModel(modelId, onProgress)
     if (result.success) refreshOllamaBackedProviders()
     return result
   }

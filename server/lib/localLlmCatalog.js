@@ -39,7 +39,7 @@ export const LOCAL_LLM_CATEGORIES = [
 
 // Each entry: { key, name, category, recommendedFor?, featured?, params, size,
 //               family, description, note?, capabilities, context?, format?,
-//               appleSiliconOnly?, ollama?, lmstudio?, ollamaAliases?,
+//               appleSiliconOnly?, ollama?, lmstudio?, ollamaImport?, ollamaAliases?,
 //               lmstudioAliases? }
 //
 // `category` is the one primary lane that groups a model in the unfiltered
@@ -49,6 +49,8 @@ export const LOCAL_LLM_CATEGORIES = [
 // It must include the primary category. `featured` is reserved for a deliberate
 // first-choice recommendation, not a measure of raw benchmark scores.
 // `ollama` / `lmstudio` are the exact pull/download ids for that backend.
+// `ollamaImport` marks a curated Hugging Face Safetensors directory that PortOS
+// imports with `ollama create` instead of trying to pull from Ollama's registry.
 // A missing id means there is no well-known build of that model for that
 // backend (the user can still free-text install one).
 // `ollamaAliases` / `lmstudioAliases` preserve recognized ids retired by an
@@ -308,14 +310,20 @@ export const LOCAL_LLM_CATALOG = [
     category: 'general',
     recommendedFor: ['general', 'coding', 'reasoning', 'vision', 'multilingual'],
     params: '27B',
-    size: 'varies',
+    size: '15.0 GB',
     family: 'qwen',
     description: 'OrcaRouter’s abliterated Qwen3.8 variant for red-team and unrestricted local evaluation, with 2-, 4-, 6-, and 8-bit MLX builds plus vision, tools, reasoning, and multilingual support.',
-    note: 'Gated on Hugging Face — accept the repository terms and authenticate in LM Studio before installing; LM Studio selects the quantization for this machine.',
+    note: 'Gated on Hugging Face — accept the repository terms and configure a Hugging Face token in Settings. Ollama imports the 4-bit build; LM Studio can select another quantization.',
     capabilities: ['chat', 'code', 'reasoning', 'tools', 'vision', 'multilingual'],
     context: 262144,
     format: 'mlx',
     appleSiliconOnly: true,
+    ollama: 'orcarouter/qwen3.8-27b-uncensored-mlx:4bit',
+    ollamaImport: {
+      repo: 'orcarouter/Qwen3.8-27B-Uncensored-MLX',
+      subdir: '4-bit',
+      minVersion: '0.19.0'
+    },
     lmstudio: 'https://huggingface.co/orcarouter/Qwen3.8-27B-Uncensored-MLX',
     lmstudioAliases: ['orcarouter/Qwen3.8-27B-Uncensored-MLX']
   },
@@ -697,6 +705,18 @@ const entryIdsForBackend = (entry, backend) => [
 
 const entryMatchesBackendId = (entry, backend, normalizedId) =>
   entryIdsForBackend(entry, backend).some((id) => normalizeFor(backend, id) === normalizedId);
+
+/**
+ * Return the trusted local-Safetensors import recipe for a curated Ollama id.
+ * Unknown/free-text ids return null and continue through the normal pull path.
+ */
+export function getOllamaImportSpec(modelId) {
+  const normalizedId = normalizeOllamaId(modelId);
+  const entry = LOCAL_LLM_CATALOG.find((candidate) => (
+    candidate.ollamaImport && entryMatchesBackendId(candidate, 'ollama', normalizedId)
+  ));
+  return entry ? { modelId: entry.ollama, ...entry.ollamaImport } : null;
+}
 
 /**
  * Return the catalog projected onto a single backend: only entries that ship

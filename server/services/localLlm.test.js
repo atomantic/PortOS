@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
     getInstalledModels: vi.fn(async () => []),
     getModelCapabilities: vi.fn(async () => []),
     pullModel: vi.fn(async (id) => ({ success: true, modelId: id })),
+    importModelFromHfSafetensors: vi.fn(async ({ modelId }) => ({ success: true, modelId })),
     deleteModel: vi.fn(async (id) => ({ success: true, modelId: id })),
     getLoadedModels: vi.fn(async () => []),
     getLastLoadedModelsError: vi.fn(() => null),
@@ -223,6 +224,17 @@ describe('localLlm', () => {
     it('routes Ollama install to pullModel', async () => {
       await svc.installModel('ollama', 'llama3.2');
       expect(mocks.ollama.pullModel).toHaveBeenCalledWith('llama3.2', undefined);
+    });
+    it('routes a curated Safetensors model through Ollama create instead of registry pull', async () => {
+      const onProgress = vi.fn();
+      await svc.installModel('ollama', 'orcarouter/qwen3.8-27b-uncensored-mlx:4bit', onProgress);
+      expect(mocks.ollama.importModelFromHfSafetensors).toHaveBeenCalledWith({
+        modelId: 'orcarouter/qwen3.8-27b-uncensored-mlx:4bit',
+        repo: 'orcarouter/Qwen3.8-27B-Uncensored-MLX',
+        subdir: '4-bit',
+        minVersion: '0.19.0'
+      }, onProgress);
+      expect(mocks.ollama.pullModel).not.toHaveBeenCalled();
     });
     it('routes Ollama delete to deleteModel', async () => {
       await svc.deleteModel('ollama', 'llama3.2');

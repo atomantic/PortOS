@@ -530,10 +530,11 @@ function isInstalled(backend, result, installedIds) {
 
 // ---- MLX (Apple Silicon) ----------------------------------------------------
 // MLX is Apple's native ML format. It ships sharded `.safetensors` + a config
-// (no single GGUF), and is installable ONLY via LM Studio (`lms get <repo>`) on
-// Apple Silicon — Ollama packages supported native MLX builds through its own
-// registry and can't pull arbitrary HF safetensors repos, so MLX is never surfaced
-// for the Ollama backend (the search gates the whole MLX query on LM Studio + Apple Silicon).
+// (no single GGUF). Live Hub discovery remains LM Studio-only: `lms get <repo>`
+// understands an arbitrary result, whereas Ollama requires a supported local
+// Safetensors import and a deliberate local model name. Curated Ollama imports
+// are declared in localLlmCatalog.js instead of making every search result look
+// one-click compatible.
 const MLX_PUBLISHER = 'mlx-community'
 const SAFETENSORS_RE = /\.safetensors$/i
 
@@ -1006,10 +1007,11 @@ export async function searchHuggingFaceModels({ backend, query = '', category = 
   // surfaces MLX repos, not just hand-typed queries that happen to match one.
   const mlxSearch = normalizeText(query) || CATEGORY_SEARCH[requestedCategory]?.replace(/\bgguf\b/gi, 'mlx') || 'mlx'
   const fetchLimit = Math.max(limit * 3, 30)
-  // MLX is only installable via LM Studio on Apple Silicon (see toMlxResult), so
-  // run the extra MLX query only there — never for Ollama, non-Apple hosts, or
-  // the audio category. `appleSilicon` is injected by the route (default false),
-  // keeping the service deterministic for tests regardless of the test host.
+  // Arbitrary live MLX results are installable only through LM Studio (see
+  // toMlxResult); trusted Ollama imports come from the curated catalog. Run this
+  // discovery query only for LM Studio on Apple Silicon, never for Ollama,
+  // non-Apple hosts, or audio. `appleSilicon` is route-injected (default false),
+  // keeping tests deterministic regardless of their host.
   const wantMlx = appleSilicon && backend === 'lmstudio' && requestedCategory !== 'audio'
   const [ggufModelsRaw, mlxModelsRaw] = await Promise.all([
     fetchModels(search, fetchLimit, ggufOnly ? 'gguf' : null),

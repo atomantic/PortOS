@@ -25,8 +25,8 @@ LM Studio from its JavaScript server and does not own an MLX Python inference
 loop where replacing operators would have an effect.
 
 There is therefore no useful PortOS feature to add for `mlx.fast` itself. The
-native MLX model is the correct integration boundary; MLX/LM Studio own the
-operator implementation and can update it independently.
+native MLX model is the correct integration boundary; Ollama or LM Studio owns
+the operator implementation and can update it independently.
 
 ## Why the linked MTP repos are not catalog installs
 
@@ -58,15 +58,19 @@ operator choice.
 
 PortOS also catalogs `orcarouter/Qwen3.8-27B-Uncensored-MLX` for explicit
 red-team and unrestricted local evaluation. The repository is gated on Hugging
-Face and publishes several quantizations under one repository, so it is an
-Apple-Silicon LM Studio entry rather than an Ollama pull target. Users must
-accept the repository terms and authenticate in LM Studio before installing;
-LM Studio resolves the appropriate available quantization.
+Face and publishes several quantizations under one repository. The shared
+catalog recommends it on both Apple-Silicon backends: PortOS downloads the
+self-contained 15.0 GB `4-bit/` checkpoint and imports it with `ollama create`,
+while LM Studio can select another available quantization. Users must accept
+the repository terms and configure a Hugging Face token before installing.
 
 ## PortOS behavior
 
 - Ollama on Apple Silicon: recommends and pulls the packaged
-  `qwen3.8:27b-mlx` model through Ollama's native MLX engine.
+  `qwen3.8:27b-mlx` model through Ollama's native MLX engine. It also offers the
+  curated OrcaRouter uncensored build, downloading its gated 4-bit Safetensors
+  directory and importing it under
+  `orcarouter/qwen3.8-27b-uncensored-mlx:4bit` with Ollama 0.19 or newer.
 - LM Studio on Apple Silicon: recommends and installs the complete 4-bit MLX
   target through the existing model-install endpoint.
 - LM Studio on Intel macOS and non-macOS hosts: hides the MLX recommendation;
@@ -74,13 +78,14 @@ LM Studio resolves the appropriate available quantization.
 - Ollama on non-Apple hosts: hides the MLX recommendation; the existing GGUF
   entry remains available.
 - Migration: the known backend-specific MLX ids map exactly so switching
-  backends re-pulls the equivalent package instead of guessing a model name.
+  backends installs the equivalent package instead of guessing a model name.
 
 ## Sources
 
 - [`mlx.core.fast` documentation](https://ml-explore.github.io/mlx/build/html/python/fast.html)
 - [MLX-LM](https://github.com/ml-explore/mlx-lm)
 - [Ollama's MLX engine announcement](https://ollama.com/blog/mlx)
+- [Ollama Safetensors import](https://docs.ollama.com/import)
 - [Complete Qwen3.8 27B MLX 4-bit checkpoint](https://huggingface.co/mlx-community/Qwen3.8-27B-4bit)
 - [OrcaRouter Qwen3.8 27B Uncensored MLX](https://huggingface.co/orcarouter/Qwen3.8-27B-Uncensored-MLX)
 - [Qwen3.8 27B MTP 4-bit drafter](https://huggingface.co/mlx-community/Qwen3.8-27B-MTP-4bit)

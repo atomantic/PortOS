@@ -560,6 +560,98 @@ describe('ollamaManager.isBootstrapConflictError', () => {
   })
 })
 
+describe('ollamaManager curated Hugging Face Safetensors import', () => {
+  const spec = {
+    modelId: 'example/qwen-mlx:4bit',
+    repo: 'example/Qwen-MLX',
+    subdir: '4-bit',
+    minVersion: '0.19.0'
+  }
+
+  afterEach(() => {
+    hfTokenMock.token = null
+    execMock.impl = () => {}
+    vi.unstubAllGlobals()
+  })
+
+  it('downloads the selected checkpoint and creates a local Ollama model', async () => {
+    hfTokenMock.token = 'hf_example_token'
+    const config = Buffer.from('{"model_type":"qwen3_8"}')
+    const weights = Buffer.from('example safetensors bytes')
+    const requested = []
+    vi.stubGlobal('fetch', vi.fn(async (url, init) => {
+      const href = String(url)
+      requested.push({ href, init })
+      if (href.endsWith('/api/version')) return versionResponse()
+      if (href.includes('/api/models/example/Qwen-MLX')) {
+        return new Response(JSON.stringify({ siblings: [
+          { rfilename: '4-bit/config.json', size: config.length },
+          { rfilename: '4-bit/model.safetensors', lfs: { size: weights.length } },
+          { rfilename: '4-bit/../outside.safetensors', lfs: { size: 10 } },
+          { rfilename: '4-bit/..\\outside.safetensors', lfs: { size: 10 } },
+          { rfilename: '8-bit/model.safetensors', lfs: { size: 999 } }
+        ] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      if (href.includes('/resolve/main/4-bit/config.json')) return new Response(config)
+      if (href.includes('/resolve/main/4-bit/model.safetensors')) return new Response(weights)
+      throw new Error(`unexpected fetch: ${href}`)
+    }))
+    let createCall
+    execMock.impl = (cmd, args, _opts, cb) => {
+      if (cmd === 'ollama' && args.join(' ') === '--version') return cb(null, { stdout: 'ollama 0.31.0', stderr: '' })
+      if (cmd === 'ollama' && args[0] === 'create') {
+        createCall = { cmd, args }
+        readFile(args[3], 'utf8').then((modelfile) => {
+          createCall.modelfile = modelfile
+          cb(null, { stdout: '', stderr: '' })
+        }, cb)
+        return undefined
+      }
+      return cb(new Error(`unexpected exec: ${cmd} ${args.join(' ')}`))
+    }
+    const onProgress = vi.fn()
+    const { importModelFromHfSafetensors } = await loadManager()
+
+    const result = await importModelFromHfSafetensors(spec, onProgress)
+
+    expect(result).toEqual({ success: true, modelId: spec.modelId })
+    expect(createCall.args.slice(0, 2)).toEqual(['create', spec.modelId])
+    expect(createCall.modelfile.replace(/\\/g, '/')).toMatch(/^FROM .*\/model\n$/)
+    await expect(stat(createCall.args[3])).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(requested.some(({ href }) => href.includes('8-bit/model.safetensors'))).toBe(false)
+    expect(requested.some(({ href }) => href.includes('outside.safetensors'))).toBe(false)
+    expect(requested.filter(({ href }) => href.includes('huggingface.co'))
+      .every(({ init }) => init?.headers?.Authorization === 'Bearer hf_example_token')).toBe(true)
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ status: 'downloading MLX checkpoint', percent: 100 }))
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ importing: true }))
+  })
+
+  it('fails before downloading when the gated repository has no token', async () => {
+    stubFetch([])
+    const { importModelFromHfSafetensors } = await loadManager()
+
+    const result = await importModelFromHfSafetensors(spec)
+
+    expect(result).toMatchObject({ success: false, code: 'HF_TOKEN_REQUIRED' })
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2) // availability + installed-version probes only
+  })
+
+  it('requires an Ollama release with Safetensors create support', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      if (String(url).endsWith('/api/version')) {
+        const body = { version: '0.18.9' }
+        return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) }
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    }))
+    const { importModelFromHfSafetensors } = await loadManager()
+
+    const result = await importModelFromHfSafetensors(spec)
+
+    expect(result).toMatchObject({ success: false, code: 'OLLAMA_OUTDATED' })
+  })
+})
+
 describe('ollamaManager.startPersistentService bootstrap recovery (homebrew)', () => {
   let restorePlatform = () => {}
   beforeEach(() => {

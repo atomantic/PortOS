@@ -14,10 +14,13 @@
  *   DELETE /api/delete   → { name }
  */
 
-import { homedir } from 'os'
+import { homedir, tmpdir } from 'os'
 import { join, dirname } from 'path'
-import { readdir, stat, link, unlink } from 'fs/promises'
+import { createWriteStream } from 'fs'
+import { readdir, stat, link, unlink, mkdtemp, rm } from 'fs/promises'
 import { createHash } from 'crypto'
+import { Readable, Transform } from 'stream'
+import { pipeline } from 'stream/promises'
 import { execFile, spawn } from '../lib/childProcess.js';import { promisify } from 'util'
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
 import { readResponseJson } from '../lib/readResponseJson.js'
@@ -27,10 +30,12 @@ import {
   parseOllamaManifest, parseOllamaModelRef, ollamaManifestRelPath, digestToBlobFilename, buildModelfile,
   manifestBlobRefs, huggingFaceRegistryBase
 } from '../lib/localLlmDisk.js'
-import { buildHfAuthHeaders } from '../lib/huggingfaceLora.js'
+import { buildHfAuthHeaders, buildHfResolveUrl, HF_API } from '../lib/huggingfaceLora.js'
 import { isEmbeddingModel } from '../lib/localModelHeuristics.js'
 import { commandExists } from '../lib/commandExists.js'
 import { OLLAMA_AGENT_MIN_CONTEXT, OLLAMA_CONTEXT_ENV_VAR, withOllamaContextEnv } from '../lib/ollamaContext.js'
+import { compareSemver } from '../lib/versionUtils.js'
+import { isSafeHfRepoRelativePath } from '../lib/hfCache.js'
 
 const execFileAsync = promisify(execFile)
 const AVAILABILITY_CACHE_TTL_MS = 30_000
@@ -63,6 +68,7 @@ const START_TIMEOUT_MS = 12_000
 const STOP_TIMEOUT_MS = 8_000
 const SERVICE_COMMAND_TIMEOUT_MS = 20_000
 const PROCESS_IDENTITY_TIMEOUT_MS = 2_000
+const HF_IMPORT_METADATA_TIMEOUT_MS = 180_000
 
 const DEFAULT_CONFIG = {
   // Ollama uses OLLAMA_HOST (host:port, no scheme) by convention; also accept
@@ -970,6 +976,124 @@ async function pullModel(modelId, onProgress) {
   return { success: false, error: lastError, modelId, ...(code ? { code } : {}) }
 }
 
+function hfImportError(status, statusText) {
+  if (status === 401 || status === 403) {
+    return 'Hugging Face denied access. Accept the repository terms, then configure a Hugging Face token in Settings.'
+  }
+  return `Hugging Face request failed: ${status} ${statusText}`
+}
+
+async function downloadHfImportFile({ repo, remotePath, destination, headers, progress }) {
+  const url = buildHfResolveUrl(repo, 'main', remotePath)
+  const response = await fetchWithTimeout(url, { headers }, 0)
+  if (!response.ok || !response.body) throw new Error(hfImportError(response.status, response.statusText))
+  await ensureDir(dirname(destination))
+  const tracker = new Transform({
+    transform(chunk, _encoding, callback) {
+      progress(chunk.length)
+      callback(null, chunk)
+    }
+  })
+  await pipeline(Readable.fromWeb(response.body), tracker, createWriteStream(destination))
+}
+
+/**
+ * Download a curated Hugging Face Safetensors subdirectory and import it through
+ * Ollama's supported `ollama create` path. The caller supplies only catalog-owned
+ * recipes; arbitrary free-text ids continue through pullModel instead.
+ *
+ * @param {{ modelId: string, repo: string, subdir: string, minVersion?: string }} spec
+ * @param {(p: { status: string, percent: number|null, completed?: number, total?: number, importing?: boolean }) => void} [onProgress]
+ */
+async function importModelFromHfSafetensors(spec, onProgress) {
+  const { modelId, repo, subdir, minVersion = '0.19.0' } = spec
+  if (!(await checkOllamaAvailable())) {
+    return { success: false, error: 'Ollama not available', modelId }
+  }
+  const version = await getVersion()
+  if (!version || compareSemver(version.replace(/^v/, ''), minVersion.replace(/^v/, '')) < 0) {
+    return {
+      success: false,
+      error: `This MLX import requires Ollama ${minVersion} or newer${version ? ` (installed: ${version})` : ''}.`,
+      modelId,
+      code: 'OLLAMA_OUTDATED'
+    }
+  }
+  const { getHfToken } = await import('../lib/hfToken.js')
+  const token = await getHfToken()
+  if (!token) {
+    return {
+      success: false,
+      error: 'This gated model requires a Hugging Face token. Accept the repository terms, then configure a token in Settings.',
+      modelId,
+      code: 'HF_TOKEN_REQUIRED'
+    }
+  }
+  if (!(await commandExists('ollama', ['--version']))) {
+    return { success: false, error: 'The Ollama CLI is required to import Safetensors models.', modelId }
+  }
+
+  const headers = buildHfAuthHeaders(token)
+  const metadataUrl = `${HF_API}/${repo}?blobs=true`
+  const metadataResponse = await fetchWithTimeout(metadataUrl, { headers }, HF_IMPORT_METADATA_TIMEOUT_MS)
+    .catch((err) => ({ _err: describeFetchError(err) }))
+  if (metadataResponse._err) return { success: false, error: metadataResponse._err, modelId }
+  if (!metadataResponse.ok) {
+    return { success: false, error: hfImportError(metadataResponse.status, metadataResponse.statusText), modelId }
+  }
+  const metadata = await metadataResponse.json().catch(() => null)
+  const prefix = `${subdir.replace(/\/+$/, '')}/`
+  const files = (metadata?.siblings || [])
+    .filter((file) => typeof file.rfilename === 'string' && file.rfilename.startsWith(prefix))
+    .map((file) => ({
+      remotePath: file.rfilename,
+      relativePath: file.rfilename.slice(prefix.length),
+      size: Number(file.lfs?.size ?? file.size) || 0
+    }))
+    .filter((file) => isSafeHfRepoRelativePath(file.relativePath))
+  if (!files.some((file) => file.relativePath.endsWith('.safetensors')) || !files.some((file) => file.relativePath === 'config.json')) {
+    return { success: false, error: `The ${subdir} checkpoint is incomplete or unavailable on Hugging Face.`, modelId }
+  }
+
+  const tempRoot = await mkdtemp(join(tmpdir(), 'portos-ollama-hf-import-'))
+  const modelDir = join(tempRoot, 'model')
+  const total = files.reduce((sum, file) => sum + file.size, 0)
+  let completed = 0
+  let lastPercent = -1
+  const reportBytes = (bytes) => {
+    completed += bytes
+    const percent = total > 0 ? Math.min(100, Math.floor((completed / total) * 100)) : null
+    if (percent === lastPercent) return
+    lastPercent = percent
+    if (typeof onProgress === 'function') onProgress({ status: 'downloading MLX checkpoint', percent, completed, total })
+  }
+  const performImport = async () => {
+    for (const file of files) {
+      await downloadHfImportFile({
+        repo,
+        remotePath: file.remotePath,
+        destination: join(modelDir, ...file.relativePath.split('/')),
+        headers,
+        progress: reportBytes
+      })
+    }
+    const modelfile = join(tempRoot, 'Modelfile')
+    await atomicWrite(modelfile, `FROM ${modelDir}\n`)
+    if (typeof onProgress === 'function') {
+      onProgress({ status: 'importing checkpoint into Ollama', percent: null, importing: true })
+    }
+    await execFileAsync('ollama', ['create', modelId, '-f', modelfile], { timeout: 0, maxBuffer: 64 * 1024 * 1024 })
+    installedModels = null
+    console.log(`✅ Ollama Safetensors import complete: ${modelId}`)
+    return { success: true, modelId }
+  }
+  return performImport()
+    .catch((err) => ({ success: false, error: err.stderr || err.message, modelId }))
+    .finally(() => rm(tempRoot, { recursive: true, force: true }).catch((err) => {
+      console.error(`⚠️ Ollama Safetensors import cleanup failed: ${err.message}`)
+    }))
+}
+
 /**
  * Detect the Go-runtime deadline Ollama reports when a registry request outlives
  * its internal per-request budget: `context deadline exceeded`. Distinctive
@@ -1418,6 +1542,7 @@ export {
   getLastLoadedModelsError,
   unloadModel,
   pullModel,
+  importModelFromHfSafetensors,
   deleteModel,
   getStatus,
   getBaseUrl,
