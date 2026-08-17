@@ -87,6 +87,12 @@ function supportsAutoDuration(engine) {
   return engine?.autoDuration === true;
 }
 
+function formatExecutionProfile(profile) {
+  if (profile === 'cuda-bf16-full') return 'CUDA BF16 (full GPU)';
+  if (profile === 'cuda-bf16-component-offload') return 'CUDA BF16 (component offload)';
+  return profile || '';
+}
+
 export default function MusicGenPanel({ track, title = '', artistId = '', artist = '', albumId = '', prompt, lyrics, onGenerated, remix }) {
   const [engines, setEngines] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -256,6 +262,10 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
   const canGenerate = !!engine?.ready && selectedModelReady && !!prompt?.trim() && !isGenerating;
   const selectedModelSizeGb = engine?.modelSizeGbById?.[selectedModelId] ?? null;
   const setup = engineSetupState(engine, selectedModelReady, selectedModelSizeGb);
+  const activeRender = track?.renders?.find((render) => render.audioFilename === track.audioFilename);
+  const effectiveExecutionProfile = activeRender && activeRender.engine === engine?.id
+    ? activeRender.executionProfile
+    : null;
 
   // `target` is the engine record to install for — passed explicitly by the
   // post-runtime chain, which holds a fresher record than component state does.
@@ -437,6 +447,16 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
           </select>
         </label>
       </div>
+
+      {effectiveExecutionProfile ? (
+        <p className="text-[11px] text-gray-400">
+          Active render profile: <span className="text-gray-300">{formatExecutionProfile(effectiveExecutionProfile)}</span>
+        </p>
+      ) : engine?.executionProfile ? (
+        <p className="text-[11px] text-gray-500">
+          Execution profile: {engine.vramProfileLabel || formatExecutionProfile(engine.executionProfile)}
+        </p>
+      ) : null}
 
       <div className={autoDurationAvailable ? 'grid grid-cols-2 gap-2' : undefined}>
         {autoDurationAvailable ? (

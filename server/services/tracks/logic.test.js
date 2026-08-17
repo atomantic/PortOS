@@ -127,10 +127,12 @@ describe('tracks logic', () => {
     it('makeRender stamps the caller-supplied id + now', () => {
       const r = makeRender({
         audioFilename: 'a.wav', engine: 'musicgen', authoredPrompt: 'source prompt', instrumentalOnly: true,
+        executionProfile: 'cuda-bf16-component-offload',
       }, { id: 'render-7', now: '2026-03-03T00:00:00.000Z' });
       expect(r).toMatchObject({
         id: 'render-7', audioFilename: 'a.wav', engine: 'musicgen', authoredPrompt: 'source prompt',
-        instrumentalOnly: true, createdAt: '2026-03-03T00:00:00.000Z',
+        instrumentalOnly: true, executionProfile: 'cuda-bf16-component-offload',
+        createdAt: '2026-03-03T00:00:00.000Z',
       });
     });
 

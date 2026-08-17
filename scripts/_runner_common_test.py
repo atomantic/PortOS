@@ -6,6 +6,7 @@ Run: ./data/python/venv/bin/python scripts/_runner_common_test.py
 Exits non-zero on first failure. Mirrors the runnable-test style of
 scripts/train_mflux_lora_test.py.
 """
+import os
 import sys
 from pathlib import Path
 
@@ -15,8 +16,10 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _runner_common as runner_common  # noqa: E402
 from _runner_common import (  # noqa: E402
     apply_memory_optimizations,
+    choose_cuda_pipeline_placement,
     empty_device_cache,
     set_vae_tiling,
     _VAE_TILING_MIN_PIXELS,
@@ -156,6 +159,49 @@ check("set_vae_tiling(False) falls back to vae.disable_tiling", p.calls == ["vae
 p = _BareRecorder()
 set_vae_tiling(p, False)
 check("set_vae_tiling on bare pipe is a no-op (no crash)", p.calls == [])
+
+
+# --- shared live-VRAM placement decision ------------------------------------
+class _FakeCudaMemory:
+    def __init__(self, free_gb, total_gb):
+        self.free_gb = free_gb
+        self.total_gb = total_gb
+
+    def mem_get_info(self):
+        gb = 1024 ** 3
+        return self.free_gb * gb, self.total_gb * gb
+
+
+class _PlacementTorch:
+    def __init__(self, free_gb, total_gb):
+        self.cuda = _FakeCudaMemory(free_gb, total_gb)
+
+
+_original_weight_bytes = runner_common._pipeline_weight_bytes
+runner_common._pipeline_weight_bytes = lambda _pipe: 20 * 1024 ** 3
+try:
+    os.environ.pop("PORTOS_TEST_OFFLOAD", None)
+    _fits = choose_cuda_pipeline_placement(
+        object(), _PlacementTorch(24, 24), override_env="PORTOS_TEST_OFFLOAD",
+        offload_vram_fraction=None, log_label="test",
+    )
+    check("placement keeps full CUDA when weights plus reserve fit", not _fits["use_offload"])
+
+    _low_free = choose_cuda_pipeline_placement(
+        object(), _PlacementTorch(22, 24), override_env="PORTOS_TEST_OFFLOAD",
+        offload_vram_fraction=None, log_label="test",
+    )
+    check("placement offloads when live free VRAM lacks the reserve", _low_free["use_offload"])
+
+    os.environ["PORTOS_TEST_OFFLOAD"] = "0"
+    _forced_full = choose_cuda_pipeline_placement(
+        object(), _PlacementTorch(8, 24), override_env="PORTOS_TEST_OFFLOAD",
+        offload_vram_fraction=None, log_label="test",
+    )
+    check("pipeline-specific override can force full CUDA", not _forced_full["use_offload"])
+finally:
+    os.environ.pop("PORTOS_TEST_OFFLOAD", None)
+    runner_common._pipeline_weight_bytes = _original_weight_bytes
 
 
 # --- empty_device_cache: dispatches on the RESOLVED device, not on capability -

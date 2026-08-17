@@ -140,9 +140,9 @@ describe('ENGINES backend registry', () => {
 
   it('declares MiniMax VRAM requirements per execution profile', () => {
     const engine = ENGINES['minimax-music3'];
-    expect(engine.executionProfile).toBe('cuda-bf16-single-gpu');
+    expect(engine.executionProfile).toBe('cuda-bf16-auto-experimental');
     expect(engine.vramProfiles[engine.executionProfile]).toMatchObject({
-      label: 'CUDA BF16 (single GPU)',
+      label: 'CUDA BF16 (experimental automatic placement)',
       minVramGb: null,
       recommendedVramGb: null,
     });
@@ -169,11 +169,12 @@ describe('VRAM readiness', () => {
       .toBe(MUSIC_VRAM_READINESS.UNKNOWN_SIZE);
   });
 
-  it('keeps an unmeasured CUDA execution profile unknown-size', () => {
+  it('keeps the experimental CUDA execution profile unknown-size', () => {
     expect(resolveEngineVramReadiness('minimax-music3', {
       status: 'available', maxVramGb: 80,
     })).toMatchObject({
       state: MUSIC_VRAM_READINESS.UNKNOWN_SIZE,
+      executionProfile: 'cuda-bf16-auto-experimental',
       minVramGb: null,
       recommendedVramGb: null,
       maxVramGb: 80,
@@ -512,12 +513,18 @@ describe('generateMusic backend selection', () => {
     expect(res.filename).toMatch(/^music-gen-.*\.wav$/);
   });
 
-  it('blocks MiniMax when its CUDA profile has no measured VRAM floor', async () => {
+  it('returns an optional effective execution profile reported by a sidecar', async () => {
+    h.mockStdout = 'STAGE:done\nRESULT:{"durationSec":12.5,"executionProfile":"cuda-bf16-component-offload"}\n';
+    const result = await generateMusic({ prompt: 'warm cinematic pop' });
+    expect(result.executionProfile).toBe('cuda-bf16-component-offload');
+    expect(spawnCalls).toHaveLength(1);
+  });
+
+  it('blocks MiniMax while its experimental CUDA profile has no measured VRAM floor', async () => {
     await expect(generateMusic({
       prompt: 'warm cinematic pop',
-      lyrics: `[verse]\n${'word '.repeat(150)}\n[outro]`,
+      lyrics: '[verse]\nExample words\n[outro]',
       engine: 'minimax-music3',
-      durationMode: 'auto',
     })).rejects.toMatchObject({
       status: 503,
       code: 'PIPELINE_MUSIC_VRAM_UNKNOWN',

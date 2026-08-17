@@ -26,7 +26,7 @@
  *                     the studio can show each render as a card and re-select an
  *                     earlier one. Each entry is `{ id, audioFilename, prompt,
  *                     authoredPrompt, lyrics, instrumentalOnly, engine,
- *                     modelId, durationSec, createdAt }`. The
+ *                     modelId, executionProfile, durationSec, createdAt }`. The
  *                     top-level `audioFilename`/`engine`/`modelId`/`durationSec`
  *                     point at whichever render is currently ACTIVE (selected).
  *
@@ -52,6 +52,7 @@ export const LYRICS_MAX = 20000;
 export const PROMPT_MAX = 8000;
 export const ENGINE_MAX = 60;
 export const MODEL_ID_MAX = 120;
+export const EXECUTION_PROFILE_MAX = 80;
 export const AUDIO_FILENAME_MAX = 256;
 export const RENDER_ID_MAX = 80;
 // Cap the render history per track so a runaway generate loop can't grow the
@@ -107,6 +108,7 @@ export function sanitizeRender(raw) {
     instrumentalOnly: typeof raw.instrumentalOnly === 'boolean' ? raw.instrumentalOnly : null,
     engine: trimTo(raw.engine, ENGINE_MAX),
     modelId: trimTo(raw.modelId, MODEL_ID_MAX),
+    executionProfile: trimTo(raw.executionProfile, EXECUTION_PROFILE_MAX),
     durationSec: sanitizeDuration(raw.durationSec),
     createdAt: isStr(raw.createdAt) && raw.createdAt ? raw.createdAt : new Date().toISOString(),
   };
@@ -163,6 +165,7 @@ export function sanitizeTrack(raw) {
       instrumentalOnly: null,
       engine,
       modelId,
+      executionProfile: '',
       durationSec,
       createdAt,
     }];

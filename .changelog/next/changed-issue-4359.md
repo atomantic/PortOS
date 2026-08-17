@@ -1,0 +1,1 @@
+- record and display the effective execution profile used for Music Studio renders

@@ -406,6 +406,53 @@ def _pipeline_weight_bytes(pipe) -> int:
     return total
 
 
+def choose_cuda_pipeline_placement(
+    pipe,
+    torch,
+    *,
+    override_env: str,
+    offload_vram_fraction=None,
+    log_label: str,
+) -> dict:
+    """Choose full CUDA residency or CPU offload from live VRAM state.
+
+    The model weights plus a fixed activation reserve must fit in *currently
+    free* VRAM. Callers may additionally provide a total-card fraction to avoid
+    Windows sysmem fallback for pipelines that leave too little proportional
+    headroom. ``override_env`` is deliberately caller-owned so one pipeline's
+    override cannot change another pipeline family.
+    """
+    override = os.environ.get(override_env, "").strip().lower()
+    if override in ("0", "false", "never"):
+        return {"use_offload": False, "reason": f"{override_env}=0"}
+    if override in ("1", "true", "force", "always"):
+        return {"use_offload": True, "reason": f"{override_env}=1"}
+
+    weight_bytes = _pipeline_weight_bytes(pipe)
+    free_bytes, total_bytes = torch.cuda.mem_get_info()
+    fits_now = (weight_bytes + _ACTIVATION_RESERVE_BYTES) <= free_bytes
+    fills_card = (
+        offload_vram_fraction is not None
+        and weight_bytes > offload_vram_fraction * total_bytes
+    )
+    use_offload = fills_card or not fits_now
+    reason = "fills card" if fills_card else ("low free VRAM" if not fits_now else "fits")
+    gb = 1024 ** 3
+    print(
+        f"🧮 {log_label} VRAM: weights ~{weight_bytes / gb:.1f}GB, "
+        f"free ~{free_bytes / gb:.1f}GB, total ~{total_bytes / gb:.1f}GB ({reason}) → "
+        f"{'CPU offload' if use_offload else 'full GPU residency'}",
+        file=sys.stderr, flush=True,
+    )
+    return {
+        "use_offload": use_offload,
+        "reason": reason,
+        "weight_bytes": weight_bytes,
+        "free_bytes": free_bytes,
+        "total_bytes": total_bytes,
+    }
+
+
 def place_pipeline(pipe, device: str) -> str:
     """Move a loaded diffusers pipeline onto the compute device, choosing
     between full-GPU residency and model CPU offload based on free VRAM.
@@ -433,26 +480,15 @@ def place_pipeline(pipe, device: str) -> str:
 
     import torch
 
-    override = os.environ.get("PORTOS_IMAGE_OFFLOAD", "").strip().lower()
     can_offload = hasattr(pipe, "enable_model_cpu_offload")
-    if override in ("0", "false", "never"):
-        force_offload = False
-    elif override in ("1", "true", "force", "always"):
-        force_offload = True
-    else:
-        weight_bytes = _pipeline_weight_bytes(pipe)
-        free_bytes, total_bytes = torch.cuda.mem_get_info()
-        fits_now = (weight_bytes + _ACTIVATION_RESERVE_BYTES) <= free_bytes
-        fills_card = weight_bytes > _OFFLOAD_VRAM_FRACTION * total_bytes
-        force_offload = fills_card or not fits_now
-        gb = 1024 ** 3
-        reason = "fills card" if fills_card else ("low free VRAM" if not fits_now else "fits")
-        print(
-            f"🧮 image-gen VRAM: weights ~{weight_bytes / gb:.1f}GB, "
-            f"free ~{free_bytes / gb:.1f}GB, total ~{total_bytes / gb:.1f}GB ({reason}) → "
-            f"{'model CPU offload' if force_offload else 'full GPU residency'}",
-            file=sys.stderr, flush=True,
-        )
+    placement = choose_cuda_pipeline_placement(
+        pipe,
+        torch,
+        override_env="PORTOS_IMAGE_OFFLOAD",
+        offload_vram_fraction=_OFFLOAD_VRAM_FRACTION,
+        log_label="image-gen",
+    )
+    force_offload = placement["use_offload"]
 
     if force_offload and can_offload:
         pipe.enable_model_cpu_offload()

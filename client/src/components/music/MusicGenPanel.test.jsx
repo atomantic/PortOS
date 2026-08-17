@@ -204,6 +204,32 @@ describe('MusicGenPanel', () => {
     expect(screen.queryByRole('button', { name: /install/i })).not.toBeInTheDocument();
   });
 
+  it('shows the configured profile and the active render effective placement', async () => {
+    api.listMusicEngines.mockResolvedValue({
+      defaultEngine: 'minimax-music3',
+      engines: [minimax({
+        ready: true,
+        runtimeReady: true,
+        modelReady: true,
+        vramState: 'sufficient',
+        executionProfile: 'cuda-bf16-auto-experimental',
+        vramProfileLabel: 'CUDA BF16 (experimental automatic placement)',
+      })],
+    });
+    const track = {
+      id: 'track-1',
+      audioFilename: 'fake.wav',
+      renders: [{
+        id: 'render-1', audioFilename: 'fake.wav', engine: 'minimax-music3',
+        executionProfile: 'cuda-bf16-component-offload',
+      }],
+    };
+
+    render(<MusicGenPanel track={track} prompt="cinematic score" lyrics="Example lyrics" />);
+
+    expect(await screen.findByText(/Active render profile:/i)).toHaveTextContent('CUDA BF16 (component offload)');
+  });
+
   it('generates an unsaved standalone track without requiring a title or associations', async () => {
     api.listMusicEngines.mockResolvedValue({
       defaultEngine: 'musicgen',

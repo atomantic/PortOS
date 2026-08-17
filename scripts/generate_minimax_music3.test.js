@@ -27,6 +27,8 @@ const hasNumpy = (() => {
 
 const PRELUDE = [
   'import importlib.util, json, sys',
+  'from pathlib import Path',
+  'sys.path.insert(0, str(Path(sys.argv[1]).parent))',
   'import numpy as np',
   'spec = importlib.util.spec_from_file_location("mm3", sys.argv[1])',
   'mod = importlib.util.module_from_spec(spec)',
@@ -48,6 +50,8 @@ const runPython = (body) => execFileSync(pyBin, ['-c', `${PRELUDE}\n${body}`, sc
 }).trim();
 const runPythonWithoutNumpy = (body) => execFileSync(pyBin, ['-c', [
   'import importlib.util, json, sys',
+  'from pathlib import Path',
+  'sys.path.insert(0, str(Path(sys.argv[1]).parent))',
   'spec = importlib.util.spec_from_file_location("mm3", sys.argv[1])',
   'mod = importlib.util.module_from_spec(spec)',
   'spec.loader.exec_module(mod)',
@@ -146,5 +150,59 @@ describe.skipIf(!pyBin)('generate_minimax_music3 deterministic benchmark hook', 
       'print(json.dumps(mod.seeded_generation_kwargs(Unsupported(), object(), 17)))',
     ].join('\n'));
     expect(JSON.parse(out)).toEqual({});
+  });
+});
+
+describe.skipIf(!pyBin)('generate_minimax_music3 CUDA placement', () => {
+  it('uses the ComponentsManager auto-offload hook and reports the effective profile', () => {
+    const out = runPythonWithoutNumpy([
+      'mod.choose_cuda_pipeline_placement = lambda *args, **kwargs: {"use_offload": True}',
+      'class Pipe:',
+      '    def to(self, device): raise AssertionError("full placement must not run")',
+      'class Manager:',
+      '    def enable_auto_cpu_offload(self, **kwargs): self.kwargs = kwargs',
+      'manager = Manager()',
+      'profile = mod.place_minimax_pipeline(Pipe(), manager, object())',
+      'print(json.dumps({"profile": profile, "device": manager.kwargs["device"], "strategy": manager.kwargs["offload_strategy"].__name__}))',
+    ].join('\n'));
+    expect(JSON.parse(out)).toEqual({
+      profile: 'cuda-bf16-component-offload',
+      device: 'cuda',
+      strategy: 'minimax_offload_strategy',
+    });
+  });
+
+  it('keeps full CUDA residency when the measured reserve fits', () => {
+    const out = runPythonWithoutNumpy([
+      'mod.choose_cuda_pipeline_placement = lambda *args, **kwargs: {"use_offload": False}',
+      'class Pipe:',
+      '    def to(self, device): self.device = device',
+      'pipe = Pipe()',
+      'profile = mod.place_minimax_pipeline(pipe, object(), object())',
+      'print(json.dumps({"profile": profile, "device": pipe.device}))',
+    ].join('\n'));
+    expect(JSON.parse(out)).toEqual({ profile: 'cuda-bf16-full', device: 'cuda' });
+  });
+
+  it('fails instead of pretending to offload when the runtime hook is unavailable', () => {
+    expect(() => runPythonWithoutNumpy([
+      'mod.choose_cuda_pipeline_placement = lambda *args, **kwargs: {"use_offload": True}',
+      'mod.place_minimax_pipeline(object(), object(), object())',
+    ].join('\n'))).toThrow();
+  });
+
+  it('preserves the autoregressive pair while evicting unrelated phases', () => {
+    const out = runPythonWithoutNumpy([
+      'class Hook:',
+      '    def __init__(self, model_id): self.model_id = model_id',
+      'hooks = [Hook("condition_encoder_101"), Hook("language_model_102"), Hook("rvq_depth_decoder_103")]',
+      'pair = [h.model_id for h in mod.minimax_offload_strategy(hooks, "rvq_depth_decoder_103", None, None)]',
+      'other = [h.model_id for h in mod.minimax_offload_strategy(hooks, "transformer", None, None)]',
+      'print(json.dumps({"pair": pair, "other": other}))',
+    ].join('\n'));
+    expect(JSON.parse(out)).toEqual({
+      pair: ['condition_encoder_101'],
+      other: ['condition_encoder_101', 'language_model_102', 'rvq_depth_decoder_103'],
+    });
   });
 });

@@ -5,7 +5,66 @@ import inspect
 import json
 import os
 import sys
+import time
 import wave
+
+from _runner_common import choose_cuda_pipeline_placement
+
+
+FULL_CUDA_PROFILE = 'cuda-bf16-full'
+OFFLOAD_CUDA_PROFILE = 'cuda-bf16-component-offload'
+AUTOREGRESSIVE_COMPONENTS = frozenset({'language_model', 'rvq_depth_decoder'})
+
+
+def managed_component_name(model_id):
+    """Remove ComponentsManager's runtime object-id suffix from a hook id."""
+    name, separator, suffix = model_id.rpartition('_')
+    return name if separator and suffix.isdigit() else model_id
+
+
+def minimax_offload_strategy(hooks, model_id, model, execution_device):
+    """Keep MiniMax's mandatory autoregressive pair resident together.
+
+    Diffusers invokes the language model and RVQ decoder together for every
+    generated frame. Its generic size-based strategy can evict the first while
+    loading the second. For those two incoming components, evict only unrelated
+    phases; for every other phase, evict all resident managed components.
+    """
+    del model, execution_device
+    if managed_component_name(model_id) in AUTOREGRESSIVE_COMPONENTS:
+        return [
+            hook for hook in hooks
+            if managed_component_name(hook.model_id) not in AUTOREGRESSIVE_COMPONENTS
+        ]
+    return hooks
+
+
+def place_minimax_pipeline(pipe, components_manager, torch):
+    """Apply MiniMax's experimental CUDA placement and return its effective profile."""
+    placement = choose_cuda_pipeline_placement(
+        pipe,
+        torch,
+        override_env='PORTOS_MINIMAX_MUSIC3_OFFLOAD',
+        # MiniMax keeps full CUDA residency whenever weights plus the shared
+        # activation reserve fit. Unlike image pipelines, there is no separate
+        # proportional trigger while this profile remains experimental.
+        offload_vram_fraction=None,
+        log_label='minimax-music3',
+    )
+    if placement['use_offload']:
+        enable_offload = getattr(components_manager, 'enable_auto_cpu_offload', None)
+        if not callable(enable_offload):
+            raise RuntimeError(
+                'MiniMax Music 3 selected component offload, but this Diffusers runtime '
+                'does not expose ComponentsManager.enable_auto_cpu_offload()'
+            )
+        # The ComponentsManager API documents workflow-specific strategy
+        # callables for component sets whose co-residency requirements cannot
+        # be inferred from individual weight footprints.
+        enable_offload(device='cuda', offload_strategy=minimax_offload_strategy)
+        return OFFLOAD_CUDA_PROFILE
+    pipe.to('cuda')
+    return FULL_CUDA_PROFILE
 
 
 def to_numpy(audio, np, torch):
@@ -47,6 +106,7 @@ def seeded_generation_kwargs(pipe, torch, seed):
 
 
 def main():
+    started_at = time.perf_counter()
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', required=True)
     parser.add_argument('--text', required=True)
@@ -65,14 +125,17 @@ def main():
     import numpy as np
     import torch
     from diffusers import ModularPipeline
+    from diffusers.modular_pipelines import ComponentsManager
 
     if not torch.cuda.is_available():
         raise RuntimeError('MiniMax Music 3 requires CUDA')
     print('STAGE:load-model', file=sys.stderr, flush=True)
-    pipe = ModularPipeline.from_pretrained(args.model)
+    components_manager = ComponentsManager()
+    pipe = ModularPipeline.from_pretrained(args.model, components_manager=components_manager)
     pipe.load_components(dtype=torch.bfloat16)
-    pipe.to('cuda')
+    execution_profile = place_minimax_pipeline(pipe, components_manager, torch)
     print('STAGE:generate', file=sys.stderr, flush=True)
+    torch.cuda.reset_peak_memory_stats()
     generation_kwargs = seeded_generation_kwargs(pipe, torch, args.seed)
     if args.seed is not None and not generation_kwargs:
         raise RuntimeError('this Diffusers pipeline does not support deterministic --seed generation')
@@ -84,6 +147,9 @@ def main():
         **generation_kwargs,
     )[0], np, torch)
     audio = to_stereo(audio, np)
+    torch.cuda.synchronize()
+    peak_vram_allocated_gb = torch.cuda.max_memory_allocated() / (1024 ** 3)
+    peak_vram_reserved_gb = torch.cuda.max_memory_reserved() / (1024 ** 3)
     source_rate = int(pipe.sampling_rate)
     if source_rate != 32000:
         source_x = np.arange(audio.shape[1], dtype=np.float64)
@@ -96,6 +162,12 @@ def main():
         wav.setnchannels(2); wav.setsampwidth(2); wav.setframerate(32000); wav.writeframes(pcm.tobytes())
     print('RESULT:' + json.dumps({
         'durationSec': len(pcm) / 32000,
+        'executionProfile': execution_profile,
+        # Reserved is the conservative device-memory bound; allocated remains
+        # useful for distinguishing model/activation use from allocator cache.
+        'peakVramGb': round(peak_vram_reserved_gb, 3),
+        'peakVramAllocatedGb': round(peak_vram_allocated_gb, 3),
+        'totalTimeSec': round(time.perf_counter() - started_at, 3),
         **({'seed': args.seed, 'seedApplied': True} if args.seed is not None else {}),
     }), flush=True)
 

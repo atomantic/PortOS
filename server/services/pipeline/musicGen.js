@@ -138,18 +138,17 @@ export const MINIMAX_MUSIC3_MODELS = Object.freeze([
 ]);
 
 // VRAM requirements belong to the execution profile, not the model name. The
-// current CUDA sidecar has no reproducible PortOS memory benchmark yet, so its
-// contract deliberately carries null floors and remains unknown-size until the
-// measured profile is recorded. A missing measurement must not be interpreted
-// as zero VRAM or as permission to start a run that will fail during loading.
+// experimental automatic profile has passed only a short smoke render; the
+// full-length benchmark and listening gate remain incomplete. Null floors keep
+// app-driven CUDA generation blocked until that evidence exists.
 export const MUSIC_VRAM_READINESS = Object.freeze({
   SUFFICIENT: 'sufficient',
   INSUFFICIENT: 'insufficient',
   UNKNOWN_SIZE: 'unknown-size',
 });
 export const MINIMAX_MUSIC3_VRAM_PROFILES = Object.freeze({
-  'cuda-bf16-single-gpu': Object.freeze({
-    label: 'CUDA BF16 (single GPU)',
+  'cuda-bf16-auto-experimental': Object.freeze({
+    label: 'CUDA BF16 (experimental automatic placement)',
     minVramGb: null,
     recommendedVramGb: null,
   }),
@@ -321,7 +320,7 @@ export const ENGINES = Object.freeze({
     customModels: false,
     fixedModelInstall: true,
     cudaRequired: true,
-    executionProfile: 'cuda-bf16-single-gpu',
+    executionProfile: 'cuda-bf16-auto-experimental',
     vramProfiles: MINIMAX_MUSIC3_VRAM_PROFILES,
     benchmarkGuide: MUSIC_RENDERER_BENCHMARK_GUIDE,
     requiresFullLengthListening: true,
@@ -716,6 +715,9 @@ export async function generateMusic({ prompt, lyrics, engine: engineId = DEFAULT
   // attaches a dangling/empty track.
   const parsed = result.ok ? parseSidecarResult(result.stdout) : null;
   const wroteFile = existsSync(outputPath) && statSync(outputPath).size > 0;
+  const executionProfile = typeof parsed?.executionProfile === 'string'
+    ? parsed.executionProfile
+    : null;
   if (!result.ok || !parsed || !wroteFile) {
     await unlink(outputPath).catch(() => {});
     const reason = !result.ok ? result.reason : (!wroteFile ? 'sidecar wrote no audio' : 'sidecar returned no result');
@@ -729,6 +731,7 @@ export async function generateMusic({ prompt, lyrics, engine: engineId = DEFAULT
     modelId: model.id,
     model: model.name,
     engine: engine.id,
+    ...(executionProfile ? { executionProfile } : {}),
     ...(provenance ? { provenance } : {}),
   };
 }

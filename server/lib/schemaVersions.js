@@ -252,7 +252,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // tracks v5 = render-history entries gained `authoredPrompt` and the explicit
   // nullable `instrumentalOnly` decision. A <=v4 peer would strip both, then LWW
   // the ambiguous render back and make a later remix silently change vocal mode.
-  tracks: 5,
+  // tracks v6 = render history entries preserve the effective generation
+  // executionProfile. Older peers would strip the measured placement on sync.
+  tracks: 6,
   // v1 = creative ingredients catalog (Postgres tables: catalog_scraps,
   // catalog_ingredients, catalog_ingredient_sources, catalog_ingredient_refs).
   // v2 = `catalog_ingredients.search_tsv` expanded to also index the

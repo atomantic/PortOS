@@ -37,10 +37,13 @@ describe('music studio completion hook', () => {
     queue.events.emit('completed', {
       id: 'job-1', kind: 'audio', queuedAt: new Date().toISOString(),
       params: { prompt: 'fake prompt', lyrics: '[verse] fake', musicStudio: { trackId: 'track-1', lyricsEnabled: true, lyricsProvided: true } },
-      result: { filename: 'fake.wav', durationSec: 12, engine: 'acestep', modelId: 'a' },
+      result: { filename: 'fake.wav', durationSec: 12, engine: 'acestep', modelId: 'a', executionProfile: 'cuda-bf16-component-offload' },
     });
     await new Promise((resolve) => setImmediate(resolve));
     expect(trackStore.updateTrack).toHaveBeenCalledWith('track-1', expect.objectContaining({ audioFilename: 'fake.wav', lyrics: '[verse] fake' }));
+    expect(trackStore.buildRenderAppend).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      executionProfile: 'cuda-bf16-component-offload',
+    }));
     expect(queue.updateJobResult).toHaveBeenCalledWith('job-1', { trackId: 'track-1' });
   });
 
