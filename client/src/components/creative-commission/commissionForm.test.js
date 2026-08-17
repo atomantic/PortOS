@@ -197,6 +197,14 @@ describe('commissionForm helpers', () => {
       expect(generationToPayload('image', { quality: 'standard', aspectRatio: '1:1', imageCount: '3' }))
         .toEqual({ quality: 'standard', aspectRatio: '1:1', imageCount: 3, imageMode: 'auto', imageModelId: null });
       expect(generationToPayload('music', { lengthSeconds: '45' })).toEqual({ lengthSeconds: 45 });
+      expect(generationToPayload('video', {
+        quality: 'standard', aspectRatio: '16:9', durationMode: 'auto', targetDurationSeconds: 45,
+      })).toEqual({ quality: 'standard', aspectRatio: '16:9', durationMode: 'auto', videoMode: 'auto', videoModelId: null });
+    });
+
+    it('keeps legacy video records pinned while blank forms use automatic duration', () => {
+      expect(toForm({}).generation.durationMode).toBe('auto');
+      expect(toForm({ targetAbility: 'video', generation: { targetDurationSeconds: 20 } }).generation.durationMode).toBe('manual');
     });
 
     it('toPayload round-trips a non-video commission', () => {

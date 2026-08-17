@@ -85,6 +85,7 @@ export const GENERATION_KEY_DEFS = Object.freeze({
   quality: { type: 'enum', values: CREATIVE_COMMISSION_QUALITIES, default: 'standard' },
   aspectRatio: { type: 'enum', values: CREATIVE_COMMISSION_ASPECT_RATIOS, default: '16:9' },
   targetDurationSeconds: { type: 'int', min: 5, max: 600, default: 10 },
+  durationMode: { type: 'enum', values: ['auto', 'manual'], default: 'manual' },
   imageCount: { type: 'int', min: 1, max: 6, default: 1 },
   lengthSeconds: { type: 'int', min: 5, max: 600, default: 30 },
   episodeCount: { type: 'int', min: 1, max: 6, default: 1 },
@@ -113,10 +114,10 @@ export const GENERATION_KEY_DEFS = Object.freeze({
 // it too). `music` and `series` carry neither — a series' per-issue renders are
 // pinned on the pipeline series/stage records, not here.
 const ABILITY_GENERATION_KEYS = Object.freeze({
-  video: ['quality', 'aspectRatio', 'targetDurationSeconds', 'videoMode', 'videoModelId'],
+  video: ['quality', 'aspectRatio', 'targetDurationSeconds', 'durationMode', 'videoMode', 'videoModelId'],
   image: ['quality', 'aspectRatio', 'imageCount', 'imageMode', 'imageModelId'],
   music: ['lengthSeconds'],
-  'music-video': ['quality', 'aspectRatio', 'targetDurationSeconds', 'videoMode', 'videoModelId', 'imageMode', 'imageModelId'],
+  'music-video': ['quality', 'aspectRatio', 'targetDurationSeconds', 'durationMode', 'videoMode', 'videoModelId', 'imageMode', 'imageModelId'],
   series: ['episodeCount'],
 });
 

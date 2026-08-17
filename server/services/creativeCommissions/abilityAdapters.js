@@ -153,7 +153,12 @@ function buildVideoGeometryParams(commission, { defaultVideoModelId } = {}) {
     // (lib/creativeDirectorPrompts.js) and the teaser tool inherits. Neither set
     // ⇒ the install default, exactly as before.
     modelId: gen?.videoModelId || gen?.model || (typeof defaultVideoModelId === 'function' ? defaultVideoModelId() : undefined),
-    targetDurationSeconds: gen?.targetDurationSeconds || gen?.lengthSeconds || 10,
+    // Auto mode lets the planner choose a per-step duration; retain a valid
+    // project fallback for plans that omit one. Music-video commissions still
+    // use their legacy audio length as the manual fallback.
+    targetDurationSeconds: gen?.durationMode === 'auto'
+      ? 10
+      : (gen?.targetDurationSeconds || gen?.lengthSeconds || 10),
     // Only passed when the commission actually pinned a backend (#3135), so an
     // unpinned commission's createProject call is byte-identical to a hand-made
     // project's — both omit the arg and buildProjectRecord stores `null`, exactly
@@ -173,7 +178,9 @@ const videoAdapter = {
   sanitizeGeneration: (raw) => sanitizeGenerationFor('video', raw),
   buildProjectParams: buildVideoGeometryParams,
   buildDirective(commission) {
-    const { lines, digest, constraints } = briefContext(commission, 'Create a short-form video piece.');
+    const duration = commission?.generation?.durationMode === 'auto'
+      ? ' Choose an appropriate duration between 5 and 600 seconds for the brief.' : '';
+    const { lines, digest, constraints } = briefContext(commission, `Create a short-form video piece.${duration}`);
     return { goal: composeDirectiveGoal(lines, digest), deliverables: ['One rendered video matching the brief'], constraints };
   },
 };
@@ -221,7 +228,9 @@ const musicVideoAdapter = {
   sanitizeGeneration: (raw) => sanitizeGenerationFor('music-video', raw),
   buildProjectParams: buildVideoGeometryParams,
   buildDirective(commission) {
-    const lead = 'Create a short-form music video: generate an original music bed AND a matching video scored to it.';
+    const duration = commission?.generation?.durationMode === 'auto'
+      ? ' Choose an appropriate video duration between 5 and 600 seconds for the brief.' : '';
+    const lead = `Create a short-form music video:${duration} Generate an original music bed AND a matching video scored to it.`;
     const { lines, digest, constraints } = briefContext(commission, lead);
     return {
       goal: composeDirectiveGoal(lines, digest),

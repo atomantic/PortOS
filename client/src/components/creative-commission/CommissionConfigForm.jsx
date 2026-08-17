@@ -257,6 +257,7 @@ function GenerationSection({ ability, generation, patchForm }) {
       <h3 className="text-sm font-semibold text-gray-200">Generation ({abilityLabel})</h3>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         {fields.map((field) => {
+          if (field.key === 'targetDurationSeconds' && generation?.durationMode === 'auto') return null;
           const id = `commission-gen-${field.key}`;
           const value = generation?.[field.key] ?? '';
           return (
@@ -281,6 +282,9 @@ function GenerationSection({ ability, generation, patchForm }) {
                   value={value}
                   onChange={(e) => patchForm(['generation', field.key], e.target.value)}
                 />
+              )}
+              {field.key === 'durationMode' && value === 'auto' && (
+                <p className="text-xs text-gray-500 mt-1">The Creative Director selects a suitable length for each commission.</p>
               )}
             </div>
           );

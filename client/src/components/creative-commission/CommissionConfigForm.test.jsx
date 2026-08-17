@@ -100,3 +100,24 @@ describe('CommissionConfigForm music taste controls', () => {
     expect(screen.getByLabelText('Creative output')).toHaveValue('music');
   });
 });
+
+describe('CommissionConfigForm video duration controls', () => {
+  it('defaults to Creative Director choice and reveals a manual length when selected', () => {
+    function VideoHarness() {
+      const [form, setForm] = useState(toForm({ brief: { intent: 'a drifting city' } }));
+      return (
+        <CommissionConfigForm
+          form={form}
+          patchForm={(path, value) => setForm((prev) => patchFormState(prev, path, value))}
+          saving={false}
+          onSave={() => {}}
+        />
+      );
+    }
+    render(<VideoHarness />);
+    expect(screen.getByLabelText('Video length')).toHaveValue('auto');
+    expect(screen.queryByLabelText('Duration (sec)')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Video length'), { target: { value: 'manual' } });
+    expect(screen.getByLabelText('Duration (sec)')).toHaveValue(10);
+  });
+});

@@ -175,6 +175,13 @@ describe('buildProjectParams — every type yields well-formed render settings',
     expect(p).toEqual({ aspectRatio: '1:1', quality: 'draft', modelId: 'ltx-default', targetDurationSeconds: 15 });
   });
 
+  it('lets the Creative Director choose the video length in auto mode', () => {
+    const commission = { targetAbility: 'video', generation: { durationMode: 'auto' }, brief: { intent: 'a drifting city' } };
+    const p = getAbilityAdapter('video').buildProjectParams(commission, ctx);
+    expect(p.targetDurationSeconds).toBe(10);
+    expect(buildCommissionDirective(commission).goal).toMatch(/choose an appropriate duration between 5 and 600 seconds/i);
+  });
+
   it('the pinned local video model becomes the project model', () => {
     // `project.modelId` is what the CD planner prompt reports to the LLM and what
     // the teaser tool inherits, so a videoModelId that stopped at
