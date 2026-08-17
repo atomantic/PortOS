@@ -384,10 +384,10 @@ function SystemHealthOverview() {
             <span className="text-xs text-gray-500">Tune to your machine. Defaults: 85/95 mem, 90/98 disk.</span>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <ThresholdField label="Memory warn %" value={draft?.memoryWarn} onChange={(v) => setDraft(d => ({ ...d, memoryWarn: v }))} />
-            <ThresholdField label="Memory critical %" value={draft?.memoryCritical} onChange={(v) => setDraft(d => ({ ...d, memoryCritical: v }))} />
-            <ThresholdField label="Disk warn %" value={draft?.diskWarn} onChange={(v) => setDraft(d => ({ ...d, diskWarn: v }))} />
-            <ThresholdField label="Disk critical %" value={draft?.diskCritical} onChange={(v) => setDraft(d => ({ ...d, diskCritical: v }))} />
+            <ThresholdField id="system-health-memory-warn" label="Memory warn %" value={draft?.memoryWarn} onChange={(v) => setDraft(d => ({ ...d, memoryWarn: v }))} />
+            <ThresholdField id="system-health-memory-critical" label="Memory critical %" value={draft?.memoryCritical} onChange={(v) => setDraft(d => ({ ...d, memoryCritical: v }))} />
+            <ThresholdField id="system-health-disk-warn" label="Disk warn %" value={draft?.diskWarn} onChange={(v) => setDraft(d => ({ ...d, diskWarn: v }))} />
+            <ThresholdField id="system-health-disk-critical" label="Disk critical %" value={draft?.diskCritical} onChange={(v) => setDraft(d => ({ ...d, diskCritical: v }))} />
           </div>
           {!draftValid && (
             <p className="mt-2 text-xs text-port-error">Warn thresholds must be lower than critical thresholds.</p>
@@ -431,11 +431,12 @@ function ResourceCard({ icon: Icon, label, pct, warn, critical, sub }) {
   );
 }
 
-function ThresholdField({ label, value, onChange }) {
+function ThresholdField({ id, label, value, onChange }) {
   return (
-    <label className="flex flex-col gap-1 text-xs text-gray-400">
+    <label htmlFor={id} className="flex flex-col gap-1 text-xs text-gray-400">
       <span>{label}</span>
       <input
+        id={id}
         type="number"
         min={50}
         max={99}
