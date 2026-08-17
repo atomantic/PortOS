@@ -15,3 +15,4 @@ describe('LearningTab runsLabel', () => {
     expect(runsLabel({ completed: 55 }, 'tasks')).toBe('55 tasks');
   });
 });
+// @vitest-environment node

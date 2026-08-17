@@ -242,3 +242,4 @@ describe('resolveTopicForDrillType client mirror', () => {
     expect(resolveTopicForDrillType('nope')).toBeNull();
   });
 });
+// @vitest-environment node

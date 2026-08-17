@@ -120,3 +120,4 @@ describe('MS_PER_DAY', () => {
     expect(MS_PER_DAY).toBe(24 * 60 * 60 * 1000);
   });
 });
+// @vitest-environment node

@@ -117,3 +117,4 @@ describe('computeImageVariantGroup', () => {
     expect(computeImageVariantGroup(other, [orig, cleaned, other])).toBeNull();
   });
 });
+// @vitest-environment node

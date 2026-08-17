@@ -150,3 +150,4 @@ describe('cross-links to other music records (#4103)', () => {
     expect(songLinks({ links: [{ type: 'round', id: 'r1' }] })).toEqual([{ type: 'round', id: 'r1' }]);
   });
 });
+// @vitest-environment node

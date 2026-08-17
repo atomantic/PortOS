@@ -217,3 +217,4 @@ describe('reviewerLabel', () => {
     expect(reviewerLabel('@octocat')).toBe('@octocat');
   });
 });
+// @vitest-environment node

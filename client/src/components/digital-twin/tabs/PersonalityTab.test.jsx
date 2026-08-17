@@ -62,3 +62,4 @@ describe('PersonalityTab helpers', () => {
     expect(alignmentColor(0.1)).toBe('text-port-error');
   });
 });
+// @vitest-environment node

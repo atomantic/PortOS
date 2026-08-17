@@ -189,3 +189,4 @@ describe('coverageTone', () => {
     expect(coverageTone(2, 5).bar).toBe('bg-port-warning');
   });
 });
+// @vitest-environment node

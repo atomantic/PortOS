@@ -47,3 +47,4 @@ describe('computeCameraDistance', () => {
     expect(computeCameraDistance({ width: 1280, height: undefined }, z)).toBeNull();
   });
 });
+// @vitest-environment node

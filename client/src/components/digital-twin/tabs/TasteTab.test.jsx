@@ -45,3 +45,4 @@ describe('TasteTab "Go deeper" reporting', () => {
     });
   });
 });
+// @vitest-environment node

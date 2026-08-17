@@ -299,3 +299,4 @@ describe('citySynthMusic', () => {
     expect(fakeCtx.oscillators.map(o => o.stop.mock.calls.length)).toEqual(stopCallCounts);
   });
 });
+// @vitest-environment node

@@ -25,3 +25,4 @@ describe('transcriptTeaser', () => {
     expect(transcriptTeaser('Short note.')).toBe('Short note.');
   });
 });
+// @vitest-environment node

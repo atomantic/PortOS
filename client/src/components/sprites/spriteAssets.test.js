@@ -82,3 +82,4 @@ describe('assetVersionToken', () => {
     expect(assetVersionToken(asset)).toBeUndefined();
   });
 });
+// @vitest-environment node

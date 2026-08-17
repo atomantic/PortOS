@@ -326,3 +326,4 @@ describe('quality-preset gates', () => {
     expect(cityShowInteriorWindows({ effectiveTier: 'ultra' })).toBe(true);
   });
 });
+// @vitest-environment node

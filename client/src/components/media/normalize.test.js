@@ -291,3 +291,4 @@ describe('getRenderConfigForItem - video', () => {
     expect(cfg.mode).toBe('text');
   });
 });
+// @vitest-environment node

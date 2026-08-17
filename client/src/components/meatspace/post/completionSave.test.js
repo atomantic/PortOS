@@ -42,3 +42,4 @@ describe('completion saves', () => {
     expect(flaky).toHaveBeenCalledTimes(2);
   });
 });
+// @vitest-environment node

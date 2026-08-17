@@ -207,3 +207,4 @@ describe('applyOrganizationSuggestion — failure reporting and toast layering',
     expect(api.applyGoalOrganization).toHaveBeenCalledWith(expect.anything(), { silent: true });
   });
 });
+// @vitest-environment node

@@ -68,3 +68,4 @@ describe('reorderLinksInBucket', () => {
     expect(renumbered.map(r => r.id)).toEqual(['b', 'a']);
   });
 });
+// @vitest-environment node

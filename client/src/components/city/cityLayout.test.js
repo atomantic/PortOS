@@ -92,3 +92,4 @@ describe('computeCityLayout', () => {
     expect(pos.get('stopped')).toMatchObject({ x: 12, z: 0, district: 'downtown' });
   });
 });
+// @vitest-environment node

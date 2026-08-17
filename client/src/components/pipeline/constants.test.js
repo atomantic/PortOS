@@ -55,3 +55,4 @@ describe('pipeline severity palette', () => {
     expect(src).not.toContain(SEVERITY_COLORS.low);
   });
 });
+// @vitest-environment node
