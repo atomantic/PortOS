@@ -1,8 +1,8 @@
 import { spawn } from '../lib/childProcess.js';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
-import { listWorktrees } from './worktreeManager.js';
+import { safeJSONParse, PATHS, sleep } from '../lib/fileUtils.js';
+import { isGitLockError, listWorktrees } from './worktreeManager.js';
 import { execGit } from '../lib/execGit.js';
 import {
   parseStatus,
@@ -183,9 +183,22 @@ export async function getRemote(dir) {
 /**
  * Fetch from origin
  */
-export async function fetchOrigin(dir) {
-  await execGit(['fetch', 'origin'], dir);
-  return true;
+const FETCH_MAX_ATTEMPTS = 4;
+const FETCH_RETRY_DELAY_MS = 250;
+
+function fetchOriginAttempt(dir, attempt) {
+  return execGit(['fetch', 'origin'], dir).then(
+    () => true,
+    (err) => {
+      // Another PortOS surface or agent may advance the same remote ref mid-fetch.
+      if (attempt >= FETCH_MAX_ATTEMPTS || !isGitLockError(err.message)) throw err;
+      return sleep(FETCH_RETRY_DELAY_MS).then(() => fetchOriginAttempt(dir, attempt + 1));
+    }
+  );
+}
+
+export function fetchOrigin(dir) {
+  return fetchOriginAttempt(dir, 1);
 }
 
 /**

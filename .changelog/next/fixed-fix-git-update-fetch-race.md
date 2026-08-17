@@ -1,0 +1,1 @@
+- Retry transient Git ref-lock races from the Apps Git Update action
