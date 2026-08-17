@@ -5,14 +5,15 @@ import { readFileSync, existsSync } from 'fs';
 import { resolve } from 'path';
 
 const ANALYZE_BUNDLE = process.env.ANALYZE === 'true';
+const CONFIG_DIR = import.meta.dirname;
 
-const rootPkg = JSON.parse(readFileSync(resolve(__dirname, '../package.json'), 'utf-8'));
+const rootPkg = JSON.parse(readFileSync(resolve(CONFIG_DIR, '../package.json'), 'utf-8'));
 
 // Dev proxy target: probe for the self-signed/LE cert under data/certs/. If the
 // server is running HTTPS, the dev proxy must target HTTPS too (or requests
 // through Vite return "socket hang up"). `secure: false` accepts the cert
 // whether it's the trusted LE one or the self-signed fallback.
-const CERT_PATH = resolve(__dirname, '..', 'data', 'certs', 'cert.pem');
+const CERT_PATH = resolve(CONFIG_DIR, '..', 'data', 'certs', 'cert.pem');
 const API_SCHEME = existsSync(CERT_PATH) ? 'https' : 'http';
 
 export default defineConfig(({ mode }) => {

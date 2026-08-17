@@ -81,7 +81,9 @@ export default function useTheme() {
       .catch((err) => {
         // request() collapses an aborted fetch into a generic error, so check
         // the controller too — an unmount/StrictMode remount isn't a failure.
-        if (controller.signal.aborted || err.name === 'AbortError') return;
+        // The unauthenticated login screen also mounts ThemeProvider. Its
+        // AUTH_REQUIRED response is the expected gate, not a theme failure.
+        if (controller.signal.aborted || err.name === 'AbortError' || err.code === 'AUTH_REQUIRED') return;
         console.warn(`⚠️ Theme fetch failed, using localStorage fallback: ${err.message}`);
       });
     return () => controller.abort();

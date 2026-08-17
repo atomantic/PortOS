@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
+import { renderHook, act, waitFor } from '@testing-library/react';
 import useTheme from './useTheme.js';
 import { DEFAULT_THEME_ID, THEME_IDS } from '../themes/portosThemes.js';
 
@@ -16,6 +16,7 @@ afterEach(() => {
   document.documentElement.removeAttribute('style');
   document.documentElement.removeAttribute('data-port-theme');
   window.localStorage.clear();
+  window.history.replaceState({}, '', '/');
 });
 
 describe('useTheme localStorage resilience', () => {
@@ -61,5 +62,24 @@ describe('useTheme localStorage resilience', () => {
     window.localStorage.setItem('portos-theme', OTHER_THEME_ID);
     const { result } = renderHook(() => useTheme());
     expect(result.current.themeId).toBe(OTHER_THEME_ID);
+  });
+
+  it('does not warn when the login screen receives the expected auth challenge', async () => {
+    window.history.replaceState({}, '', '/login');
+    globalThis.fetch.mockResolvedValue({
+      ok: false,
+      status: 401,
+      json: async () => ({ error: 'Authentication required', code: 'AUTH_REQUIRED' })
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    renderHook(() => useTheme());
+
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(warn).not.toHaveBeenCalled();
   });
 });
