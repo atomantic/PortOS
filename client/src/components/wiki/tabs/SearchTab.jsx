@@ -1,11 +1,12 @@
 import { useState, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router';
+import { useNavigate, useSearchParams } from 'react-router';
 import * as api from '../../../services/api';
 import { Search, FileText, X, RefreshCw, Tag } from 'lucide-react';
 import OfflineNotesNotice from '../../OfflineNotesNotice.jsx';
 
 export default function SearchTab({ vaultId }) {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [query, setQuery] = useState('');
   const [results, setResults] = useState(null);
   const [searching, setSearching] = useState(false);
@@ -20,7 +21,9 @@ export default function SearchTab({ vaultId }) {
   }, [query, vaultId]);
 
   const openNote = (notePath) => {
-    navigate('/wiki/browse', { state: { openNote: notePath } });
+    const next = new URLSearchParams(searchParams);
+    next.set('note', notePath);
+    navigate({ pathname: '/wiki/browse', search: next.toString() });
   };
 
   return (

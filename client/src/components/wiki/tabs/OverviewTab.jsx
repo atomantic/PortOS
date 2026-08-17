@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useNavigate } from 'react-router';
+import { useNavigate, useSearchParams } from 'react-router';
 import * as api from '../../../services/api';
 import { FolderOpen, RefreshCw, AlertTriangle } from 'lucide-react';
 import { timeAgo } from '../../../utils/formatters';
@@ -7,10 +7,17 @@ import { WIKI_CATEGORIES, PageTypeIcon } from '../constants.jsx';
 
 export default function OverviewTab({ vaultId, stats, notes, allNotes, onRefresh }) {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [lintReport, setLintReport] = useState(null);
   const [loadingLint, setLoadingLint] = useState(false);
 
   const lintExists = allNotes?.some(n => n.path === 'wiki/lint-report.md');
+
+  const openNote = (notePath) => {
+    const next = new URLSearchParams(searchParams);
+    next.set('note', notePath);
+    navigate({ pathname: '/wiki/browse', search: next.toString() });
+  };
 
   useEffect(() => {
     if (lintExists) loadLintReport();
@@ -62,7 +69,7 @@ export default function OverviewTab({ vaultId, stats, notes, allNotes, onRefresh
             ) : recentPages.map(note => (
               <button
                 key={note.path}
-                onClick={() => navigate('/wiki/browse', { state: { openNote: note.path } })}
+                onClick={() => openNote(note.path)}
                 className="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-port-bg/50 transition-colors"
               >
                 <PageTypeIcon folder={note.folder} />

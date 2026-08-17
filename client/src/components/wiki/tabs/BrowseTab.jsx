@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useLocation } from 'react-router';
+import { useSearchParams } from 'react-router';
 import * as api from '../../../services/api';
 import {FileText, FolderOpen,
   ChevronDown, ChevronRight, ArrowLeft, Tag, Link2, Edit3, Save,
@@ -17,7 +17,8 @@ const WIKI_FOLDERS = WIKI_CATEGORIES.map(c => ({ key: c.folder, label: c.label, 
 const RAW_FOLDERS = [{ key: 'raw', label: 'Raw Sources', icon: FolderOpen, color: 'text-gray-400' }];
 
 export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefresh }) {
-  const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const noteParam = searchParams.get('note');
   const [selectedNote, setSelectedNote] = useState(null);
   const [noteContent, setNoteContent] = useState('');
   const [editing, setEditing] = useState(false);
@@ -38,14 +39,28 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
     content: noteContent
   });
 
-  // Handle deep-link from overview
+  const updateNoteParam = (notePath, options) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      // URLSearchParams percent-encodes slashes in the serialized URL.
+      if (notePath) next.set('note', notePath);
+      else next.delete('note');
+      return next;
+    }, options);
+  };
+
+  // Handle deep-link from the URL.
   useEffect(() => {
-    if (location.state?.openNote) {
-      handleSelectNote(location.state.openNote);
+    if (noteParam && !loadingNote) {
+      // URLSearchParams already decodes the serialized query value. Keeping
+      // the returned path intact also preserves literal percent signs in note paths.
+      const notePath = noteParam;
+      if (selectedNote?.path !== notePath) handleSelectNote(notePath);
     }
-  }, [location.state]);
+  }, [noteParam, selectedNote?.path, loadingNote]);
 
   const handleSelectNote = async (notePath) => {
+    updateNoteParam(notePath);
     setLoadingNote(true);
     setEditing(false);
     const data = await api.getNote(vaultId, notePath).catch(() => null);
@@ -72,6 +87,7 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
     toast.success('Note deleted');
     setConfirmDelete(null);
     if (selectedNote?.path === notePath) setSelectedNote(null);
+    if (noteParam === notePath) updateNoteParam(null, { replace: true });
     onRefresh();
   };
 
@@ -220,7 +236,7 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
             {/* Note header */}
             <div className="px-4 py-3 border-b border-port-border flex items-center gap-3">
               <button
-                onClick={() => setSelectedNote(null)}
+                onClick={() => { setSelectedNote(null); updateNoteParam(null, { replace: true }); }}
                 aria-label="Back to list"
                 className="p-1 rounded hover:bg-port-card text-gray-400 hover:text-white md:hidden"
               >

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useNavigate } from 'react-router';
+import { useNavigate, useSearchParams } from 'react-router';
 import * as api from '../../../services/api';
 import { RefreshCw, Network, ZoomIn, ZoomOut } from 'lucide-react';
 import { WIKI_CATEGORIES } from '../constants.jsx';
@@ -8,6 +8,7 @@ import OfflineNotesNotice from '../../OfflineNotesNotice.jsx';
 
 export default function GraphTab({ vaultId }) {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const canvasRef = useRef(null);
   const [graphData, setGraphData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -177,9 +178,11 @@ export default function GraphTab({ vaultId }) {
 
   const handleClick = useCallback(() => {
     if (hoveredNode) {
-      navigate('/wiki/browse', { state: { openNote: hoveredNode } });
+      const next = new URLSearchParams(searchParams);
+      next.set('note', hoveredNode);
+      navigate({ pathname: '/wiki/browse', search: next.toString() });
     }
-  }, [hoveredNode, navigate]);
+  }, [hoveredNode, navigate, searchParams]);
 
   if (loading) {
     return (

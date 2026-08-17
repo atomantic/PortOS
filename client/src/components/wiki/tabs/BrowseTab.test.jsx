@@ -1,5 +1,5 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, useLocation } from 'react-router';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import BrowseTab from './BrowseTab';
 import * as api from '../../../services/api';
@@ -24,10 +24,16 @@ const notes = [
   { path: 'wiki/sources/example.md', name: 'Example Source', folder: 'wiki/sources' },
 ];
 
-function renderTab() {
+function LocationProbe() {
+  const location = useLocation();
+  return <output data-testid="location">{location.pathname}{location.search}</output>;
+}
+
+function renderTab(initialEntries = ['/wiki/browse']) {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={initialEntries}>
       <BrowseTab vaultId="v1" notes={notes} rawNotes={[]} allNotes={notes} onRefresh={() => {}} />
+      <LocationProbe />
     </MemoryRouter>
   );
 }
@@ -63,7 +69,18 @@ describe('BrowseTab responsive list/detail', () => {
     expect(back.className).toContain('md:hidden');
 
     fireEvent.click(back);
-    await waitFor(() => expect(screen.getByText('Select a page to view')).toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Example Source' })).toBeNull());
+    expect(screen.getByTestId('location')).toHaveTextContent('/wiki/browse');
+  });
+
+  it('opens a note from the URL and removes the note param when closed', async () => {
+    renderTab(['/wiki/browse?vault=v1&note=wiki%2Fsources%2Fexample.md']);
+
+    await waitFor(() => expect(api.getNote).toHaveBeenCalledWith('v1', 'wiki/sources/example.md'));
+    expect(await screen.findByRole('heading', { name: 'Example Source' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to list' }));
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/wiki/browse?vault=v1'));
   });
 });
 
