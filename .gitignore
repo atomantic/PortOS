@@ -59,6 +59,10 @@ Thumbs.db
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
 
+# Agent completion sentinels (consumed and cleaned up by the orchestrator)
+/.agent-done
+/.agent-done-*
+
 # BTW messages (ephemeral agent context, cleaned up after ingestion)
 BTW.md
 
