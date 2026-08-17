@@ -24,7 +24,7 @@ export const ACCEPTED_OLD_MD5 = {
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'cd-plan.md': 'ef0d96f6ebde43af6c4579969d31cfb7', // post-199 (cross-step result references)
+  'cd-plan.md': '41a61590896d1327df2c6915557361de', // post-277 (commission/model controls)
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({
