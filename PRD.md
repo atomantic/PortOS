@@ -86,6 +86,7 @@ Reused verbatim (condensed to objective statements) from [GOALS.md](./GOALS.md)'
 | FR-17 | The system MUST support multiple named personas with one marked active at a time. | Must | Switching the active persona changes which trait set is briefed to downstream AI calls. |
 | FR-18 | The system MUST provide a conversational "Ask Yourself" interface grounded in identity, goals, memory, and Brain captures. | Must | A question posed to Ask Yourself returns an answer that cites or is consistent with at least one grounding source. |
 | FR-19 | The system SHOULD support AI-assisted goal decomposition into phases with accept/reject per phase. | Should | Generating phases for a goal returns a phase list the user can selectively accept, and accepted phases persist as sub-goals. |
+| FR-58 | The system MUST surface cross-domain insights connecting genome, health, taste, and identity data into narrative patterns and a goal scorecard. | Must | `/insights/cross-domain` renders computed correlations, and `POST /api/insights/narrative/refresh` regenerates the narrative from current source data rather than serving a static placeholder. |
 
 ### Creative Production Suite
 
@@ -99,6 +100,8 @@ Reused verbatim (condensed to objective statements) from [GOALS.md](./GOALS.md)'
 | FR-25 | The system MUST support importing external prose/screenplay/comic content into structured Universes or Pipeline series. | Must | An imported document produces a populated Universe or series draft, not just raw stored text. |
 | FR-26 | The system MUST support exporting finished creative work via cloud-synced Sharing buckets to other PortOS instances. | Must | A shared universe/series is retrievable and importable from a subscribed peer instance. |
 | FR-27 | The system SHOULD brief every creative-generation call with the active Digital Twin's voice/taste profile. | Should | Generated prose/treatment output reflects twin-configured tone preferences (verifiable via prompt inspection, not subjective judgment alone). |
+| FR-56 | The system MUST support local music/audio generation (Music Studio) with engine setup, model management, and generation from a text description or lyrics. | Must | Submitting a description via `POST /api/music/generate` produces an audio asset using an installed model from `GET /api/music/models/:engine`; the endpoint rejects generation against an engine with no runtime installed. |
+| FR-57 | The system MUST support Mood Boards for collecting visual/textual references and a Media Annotation canvas for marking up generated images before re-rendering. | Must | Creating a mood board at `/mood-boards` persists and is retrievable at `/mood-boards/:id`; opening `/media/annotate/:mediaKey` loads the annotation canvas against the referenced media asset. |
 
 ### Developer Productivity Toolkit
 
@@ -212,12 +215,10 @@ Reused verbatim (condensed to objective statements) from [GOALS.md](./GOALS.md)'
 - **ORM or heavyweight database tooling** — deliberate plain-SQL usage against Postgres; no query builder or ORM layer.
 - **Cloud hosting** — runs on the user's own hardware; not offered as a hosted service.
 - **General-purpose external-user onboarding** — no CODE_OF_CONDUCT.md; [CONTRIBUTING.md](./docs/CONTRIBUTING.md) sets contribution expectations, but the project is not structured to actively onboard outside contributors even though it accepts PRs.
-- **Music & audio production (MusicGen-style local generation, podcast studio)** — deferred until higher-memory local hardware is available.
+- **Podcast/recording studio** — full audio-recording production tooling beyond generative music (Music Studio, FR-56, is implemented; a dedicated recording/podcast workflow is not).
 - **Federated peer-to-peer sharing beyond bucket-based Sharing** — direct P2P distribution between instances is a secondary goal, not yet built.
 - **Federated media-provider routing for image/video generation** — the queued-job delegation contract (FR-52/FR-53) is implemented and live for audio/music generation today; extending the same provider/consumer contract to image and video generation is tracked separately (issue #4348), not yet built.
 - **User-directed assignment of a CoS task to a specific federated peer instance** — task coordination across peers is currently opportunistic only (first peer to see a synced task claims it via the existing lease mechanism); an explicit "run this task on instance X" control is a decided, ready-to-work follow-up (issue #4520), not yet implemented.
-- **Cross-domain insights engine (genome ↔ health ↔ taste ↔ identity ↔ creative output)** — planned (GOALS.md M42 P5) but not yet implemented in this version.
-- **Inspiration/mood board and sketch/annotation canvas** — planned secondary goals, not yet built.
 
 ---
 
