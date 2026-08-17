@@ -113,7 +113,15 @@ vi.mock('fs', () => ({
   // Default: no .agent-done sentinel on disk. The completion-sentinel test
   // overrides this to true. Re-set in beforeEach so it can't leak between tests.
   existsSync: vi.fn().mockReturnValue(false),
-  watch: vi.fn(() => ({ close: vi.fn() })),
+  watch: vi.fn(() => {
+    let onClose;
+    return {
+      once: vi.fn((event, callback) => {
+        if (event === 'close') onClose = callback;
+      }),
+      close: vi.fn(() => onClose?.()),
+    };
+  }),
 }));
 
 vi.mock('fs/promises', () => ({
