@@ -93,6 +93,26 @@ describe('MediaJobsQueue — unavailable state', () => {
   });
 });
 
+describe('MediaJobsQueue — Creative Director renders', () => {
+  it('surfaces a Creative Director-owned video job in the live queue', async () => {
+    listMediaJobs.mockResolvedValue([{
+      id: 'cdvideo0000live',
+      kind: 'video',
+      owner: 'cd:example-project',
+      status: 'queued',
+      position: 2,
+      queuedAt: '2026-06-19T10:00:00Z',
+      params: { prompt: 'an invented establishing shot', modelId: 'example-video-model' },
+    }]);
+
+    render(<MediaJobsQueue kind="video" />);
+
+    await waitFor(() => expect(screen.getByText(/Creative Director/)).toBeInTheDocument());
+    expect(screen.getByText(/#2 in queue/)).toBeInTheDocument();
+    expect(screen.getByText(/an invented establishing shot/)).toBeInTheDocument();
+  });
+});
+
 describe('MediaJobsQueue — Codex reasoning-effort retry control', () => {
   it('surfaces the job effort in the row label', async () => {
     const user = userEvent.setup();

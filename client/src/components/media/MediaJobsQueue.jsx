@@ -24,6 +24,16 @@ const STATUS_BADGE = {
 
 const KIND_ICON = { video: Film, image: ImageIcon, training: Cpu };
 
+// Creative Director scene renders use the same durable media queue as manual
+// Video Gen renders, but carry an owner tag so the orchestrator can reconcile
+// completion. Keep that ownership visible in the shared queue: otherwise an
+// agent-enqueued render looks like an unrelated anonymous video job (or, when
+// the prompt is absent on a malformed projection, like no useful row at all).
+const isCreativeDirectorJob = (job) => typeof job?.owner === 'string'
+  && (job.owner.startsWith('cd:') || job.owner.startsWith('creative-director:'));
+
+const ownerLabel = (job) => isCreativeDirectorJob(job) ? 'Creative Director' : job?.owner;
+
 // Safe-read a Codex job's stored reasoning effort. Mirrors codex.js's server-side
 // guard (`typeof effort === 'string' && effort.trim()`): a non-string value from
 // hand-edited media-jobs.json returns '' instead of throwing on `.trim()`, and a
@@ -379,7 +389,7 @@ function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
               {job.kind === 'training'
                 ? trainingSummary(job.params)
                 : (job.params?.prompt ? `"${job.params.prompt.slice(0, 80)}${job.params.prompt.length > 80 ? '…' : ''}"` : 'no prompt')}
-              {job.owner && <span> · {job.owner}</span>}
+              {ownerLabel(job) && <span> · {ownerLabel(job)}</span>}
             </div>
           </div>
         </div>
