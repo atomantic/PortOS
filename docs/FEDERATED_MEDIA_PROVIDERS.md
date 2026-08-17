@@ -49,18 +49,25 @@ This configuration and the last sanitized capacity snapshot live only on the loc
 
 The Instances card reports the provider's ready/busy/unavailable state, shared active-job count, queue depth, and advertised model readiness. A consumer preflight accepts a model only when the peer is explicitly enabled, the exact model is locally allowlisted, the wire response validates, the capacity timestamp is fresh, the queue is accepting, and runtime/model/CUDA readiness is positive. Unknown, malformed, clock-skewed, or stale status blocks assignment. The provider remains authoritative and repeats admission checks when a later executor submits the job.
 
-An API caller deliberately selects remote execution on Music generation by sending the local peer-record id together with an explicit advertised engine and model:
+An API caller deliberately selects remote execution on Music generation by sending the local peer-record id together with an explicit advertised engine/model and a fixed-vocabulary instrumental profile:
 
 ```json
 {
   "prompt": "A fictional slow synthetic pulse",
   "engine": "minimax-music3",
   "modelId": "minimax-music3",
-  "mediaProviderPeerId": "00000000-0000-4000-8000-000000000001"
+  "mediaProviderPeerId": "00000000-0000-4000-8000-000000000001",
+  "remoteMusicProfile": {
+    "style": "cinematic",
+    "mood": "dreamy",
+    "tempo": "slow",
+    "energy": "medium",
+    "instruments": ["strings", "synthesizer"]
+  }
 }
 ```
 
-`POST /api/music/generate` performs the fresh capacity preflight before returning the normal queued media-job response. Omitting `mediaProviderPeerId` keeps the existing local-engine behavior. The peer id is local routing state and is not included in the provider submission.
+`POST /api/music/generate` performs the fresh capacity preflight before returning the normal queued media-job response. Omitting `mediaProviderPeerId` keeps the existing local-engine behavior. The peer id and free-form `prompt` stay local. The worker renders the provider prompt only from the profile's enum values; non-empty remote lyrics are rejected so arbitrary personal text cannot cross the federation boundary.
 
 ## Authentication and identity
 
@@ -97,24 +104,23 @@ Status never includes prompts, lyrics, credentials, local paths, commission reco
 
 ### Submit a job
 
-Send a unique, stable `Idempotency-Key` header with the text-only request:
+Send a unique, stable `Idempotency-Key` header with the canonical instrumental request rendered by the consumer:
 
 ```json
 {
   "engine": "minimax-music3",
   "modelId": "minimax-music3",
-  "prompt": "A fictional cinematic synth theme",
-  "lyrics": "[instrumental]",
+  "prompt": "Instrumental cinematic music with a dreamy mood, slow tempo, medium energy, featuring strings and synthesizer. No vocals or spoken words.",
   "durationSec": 60,
   "durationMode": "manual"
 }
 ```
 
-Unknown fields are rejected. The contract accepts no source URL, filesystem path, shell argument, provider credential, or arbitrary proxy target.
+Unknown fields, free-form prompts, and non-empty lyrics are rejected. The contract accepts no source URL, filesystem path, shell argument, provider credential, or arbitrary proxy target. Keeping the wire shape as prompt text lets an older wire-v1 provider accept a newer consumer, while the canonical grammar lets a newer provider fail closed on arbitrary text from an older consumer.
 
 Within the queue's retained job window, repeating the same caller/key/body returns the original job without enqueuing again. Reusing that key with a different body returns `409 MEDIA_PROVIDER_IDEMPOTENCY_CONFLICT`. Job lookup and cancellation return the same not-found response for an unknown id and another peer's id.
 
-The provider persists accepted work in the existing machine-local `data/media-jobs.json` queue. No commission, CoS, schedule, taste, or Digital Twin record is copied to the provider. The submitted prompt/lyrics exist only in the provider's local queue record needed to execute that explicit job.
+The provider persists accepted work in the existing machine-local `data/media-jobs.json` queue. No commission, CoS, schedule, taste, Digital Twin record, free-form prompt, or lyrics are copied to the provider. Its queue contains only the canonical instrumental prompt derived from fixed musical descriptors.
 
 ### Download and verify a result
 
@@ -132,4 +138,4 @@ On completion, the consumer ignores the advisory download URL and derives the fi
 
 ## Current boundary
 
-Wire v1 currently provides audio only, and remote selection is exposed through the generation API rather than a Music-page peer picker. Still remaining from #4348 are that Music UI, multi-provider fairness/failover, remote image/video jobs and input-asset transfer, Creative Commission routing/UX, and aggregate provider health on System Health.
+Wire v1 currently provides instrumental audio only, and remote selection is exposed through the generation API rather than a Music-page peer picker. Still remaining from #4348 are that Music UI, a privacy-preserving design for remote lyrical conditioning, multi-provider fairness/failover, remote image/video jobs and input-asset transfer, Creative Commission routing/UX, and aggregate provider health on System Health.

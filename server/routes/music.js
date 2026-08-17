@@ -40,7 +40,10 @@ import { startHfDownloadStream, openSseStream } from '../lib/sseDownload.js';
 import { createInstallLogger } from '../lib/installLogger.js';
 import { inspectModelCache } from '../lib/hfCache.js';
 import { getCudaCapability } from '../lib/cudaCapability.js';
-import { FEDERATED_MEDIA_WIRE_VERSION } from '../lib/federatedMediaWire.js';
+import {
+  FEDERATED_MEDIA_WIRE_VERSION,
+  federatedMediaAudioProfileSchema,
+} from '../lib/federatedMediaWire.js';
 import { enqueueJob, listJobs } from '../services/mediaJobQueue/index.js';
 import { resolveFederatedMediaProvider } from '../services/federatedMediaConsumer.js';
 import { getPeers } from '../services/instances.js';
@@ -345,8 +348,10 @@ const generateSchema = z.object({
   engine: z.string().trim().min(1).max(80).optional(),
   modelId: z.string().trim().min(1).max(256).optional(),
   // The peer record id is machine-local routing intent. It never crosses the
-  // provider boundary; only the explicit engine/model and generation text do.
+  // provider boundary. Free-form text stays local too: remote execution uses a
+  // fixed-vocabulary instrumental profile rendered by the worker.
   mediaProviderPeerId: z.string().uuid().optional(),
+  remoteMusicProfile: federatedMediaAudioProfileSchema.optional(),
   durationSec: z.number().positive().max(600).optional(),
   durationMode: z.enum(['auto', 'manual']).optional(),
   // Attach the result to an existing track (else a new one is created). The
@@ -357,12 +362,31 @@ const generateSchema = z.object({
   artist: z.string().trim().max(120).optional().default(''),
   albumId: z.string().trim().max(80).optional().default(''),
 }).superRefine((value, ctx) => {
-  if (!value.mediaProviderPeerId) return;
+  if (!value.mediaProviderPeerId) {
+    if (value.remoteMusicProfile) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['remoteMusicProfile'],
+        message: 'remoteMusicProfile requires a remote media provider',
+      });
+    }
+    return;
+  }
   if (!value.engine) {
     ctx.addIssue({ code: 'custom', path: ['engine'], message: 'engine is required for a remote media provider' });
   }
   if (!value.modelId) {
     ctx.addIssue({ code: 'custom', path: ['modelId'], message: 'modelId is required for a remote media provider' });
+  }
+  if (!value.remoteMusicProfile) {
+    ctx.addIssue({ code: 'custom', path: ['remoteMusicProfile'], message: 'remoteMusicProfile is required for a remote media provider' });
+  }
+  if (value.lyrics) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['lyrics'],
+      message: 'Remote media generation is instrumental only so personal lyrics stay machine-local',
+    });
   }
 });
 
@@ -438,6 +462,7 @@ router.post('/generate', asyncHandler(async (req, res) => {
       peerId: peer.id,
       reconcile: false,
       cancelRequested: false,
+      profile: body.remoteMusicProfile,
     };
   } else {
     // Reject an unknown engine explicitly rather than letting getEngine() fall
@@ -477,8 +502,6 @@ router.post('/generate', asyncHandler(async (req, res) => {
   const usedLyrics = engine.lyrics && !body.instrumentalOnly ? (body.lyrics ?? '') : '';
   if (remoteMedia) {
     remoteMedia.request = {
-      prompt: usedPrompt,
-      lyrics: usedLyrics,
       engine: engine.id,
       modelId: body.modelId,
       ...(body.durationSec !== undefined ? { durationSec: body.durationSec } : {}),
@@ -489,11 +512,11 @@ router.post('/generate', asyncHandler(async (req, res) => {
   const result = enqueueJob({
     kind: 'audio',
     params: {
-      // Keep the actual request under the versioned remote marker. An older
-      // PortOS that does not understand remoteMedia will route an audio job to
-      // the local adapter; an empty prompt makes that rollback fail closed
-      // before starting a duplicate local render. Public projections and the
-      // completion hook restore the request text from the validated marker.
+      // Keep only the fixed-vocabulary profile and routing request under the
+      // versioned remote marker. An older PortOS that does not understand
+      // remoteMedia will route this audio job to the local adapter; the empty
+      // prompt makes that rollback fail closed before a duplicate local render.
+      // New consumers derive the safe provider prompt from the profile.
       prompt: remoteMedia ? '' : usedPrompt,
       lyrics: remoteMedia ? '' : usedLyrics,
       engine: engine.id,

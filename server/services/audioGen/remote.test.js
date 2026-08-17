@@ -44,6 +44,7 @@ import {
 const LOCAL_JOB_ID = '00000000-0000-4000-8000-000000000010';
 const REMOTE_JOB_ID = '00000000-0000-4000-8000-000000000020';
 const PEER_ID = '00000000-0000-4000-8000-000000000030';
+const SAFE_PROMPT = 'Instrumental cinematic music with a dreamy mood, slow tempo, medium energy, featuring strings and synthesizer. No vocals or spoken words.';
 const peer = {
   id: PEER_ID,
   enabled: true,
@@ -84,9 +85,14 @@ const params = (overrides = {}) => ({
   remoteMedia: {
     wireVersion: 1,
     peerId: PEER_ID,
+    profile: {
+      style: 'cinematic',
+      mood: 'dreamy',
+      tempo: 'slow',
+      energy: 'medium',
+      instruments: ['strings', 'synthesizer'],
+    },
     request: {
-      prompt: 'measured synthetic pulse',
-      lyrics: '',
       engine: 'remote-audio',
       modelId: 'example/model',
       durationSec: 30,
@@ -189,6 +195,14 @@ describe('federated audio consumer adapter', () => {
       }),
       peer,
     );
+    const submission = transport.fetch.mock.calls.find(([url, options]) =>
+      url.endsWith('/jobs') && options.method === 'POST');
+    expect(JSON.parse(submission[1].body)).toEqual({
+      engine: 'remote-audio',
+      modelId: 'example/model',
+      prompt: SAFE_PROMPT,
+      durationSec: 30,
+    });
   });
 
   it('replays an uncertain submission with the same idempotency key', async () => {
@@ -228,9 +242,14 @@ describe('federated audio consumer adapter', () => {
         wireVersion: 1,
         peerId: PEER_ID,
         reconcile: true,
+        profile: {
+          style: 'cinematic',
+          mood: 'dreamy',
+          tempo: 'slow',
+          energy: 'medium',
+          instruments: ['strings', 'synthesizer'],
+        },
         request: {
-          prompt: 'measured synthetic pulse',
-          lyrics: '',
           engine: 'remote-audio',
           modelId: 'example/model',
           durationSec: 30,

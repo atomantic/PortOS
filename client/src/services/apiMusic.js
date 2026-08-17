@@ -11,10 +11,12 @@ export const listMusicEngines = (options = {}) => request('/music/engines', opti
 
 // Generate a queued track job. body: { prompt, lyrics?, instrumentalOnly?, engine?, modelId?,
 // durationSec?, durationMode?: 'auto'|'manual', mediaProviderPeerId?,
+// remoteMusicProfile?: { style, mood, tempo?, energy?, instruments? },
 // trackId? (update) | title?/artistId?/artist?/albumId? (create) }. Resolves to
 // { jobId, position, status }; callers watch the shared media-job SSE lifecycle.
-// A remote peer id requires an explicit engine + model and is preflighted by
-// the server before this request is acknowledged.
+// A remote peer id requires an explicit engine, model, and fixed-vocabulary
+// instrumental profile. The free-form prompt remains local; non-empty remote
+// lyrics are rejected.
 export const generateMusic = (body, requestOptions = {}) => request('/music/generate', {
   method: 'POST',
   body: JSON.stringify(body),

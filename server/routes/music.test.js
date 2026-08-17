@@ -575,12 +575,18 @@ describe('music routes', () => {
     });
 
     const r = await request(app).post('/api/music/generate').send({
-      prompt: 'slow synthetic pulse',
-      lyrics: '[verse] example words',
+      prompt: 'private idea for alice@example.com',
       engine: 'remote-audio',
       modelId: 'example/model',
       durationSec: 30,
       mediaProviderPeerId: peer.id,
+      remoteMusicProfile: {
+        style: 'cinematic',
+        mood: 'dreamy',
+        tempo: 'slow',
+        energy: 'medium',
+        instruments: ['strings', 'synthesizer'],
+      },
     });
 
     expect(r.status).toBe(202);
@@ -600,9 +606,14 @@ describe('music routes', () => {
           peerId: peer.id,
           reconcile: false,
           cancelRequested: false,
+          profile: {
+            style: 'cinematic',
+            mood: 'dreamy',
+            tempo: 'slow',
+            energy: 'medium',
+            instruments: ['strings', 'synthesizer'],
+          },
           request: {
-            prompt: 'slow synthetic pulse',
-            lyrics: '[verse] example words',
             engine: 'remote-audio',
             modelId: 'example/model',
             durationSec: 30,
@@ -611,6 +622,8 @@ describe('music routes', () => {
         musicStudio: expect.objectContaining({ lyricsEnabled: true }),
       }),
     }));
+    const remoteMarker = mediaQueue.enqueue.mock.calls[0][0].params.remoteMedia;
+    expect(JSON.stringify(remoteMarker)).not.toContain('alice@example.com');
   });
 
   it('POST /generate fails before queueing when remote routing is incomplete or unavailable', async () => {
@@ -631,9 +644,28 @@ describe('music routes', () => {
       engine: 'remote-audio',
       modelId: 'example/model',
       mediaProviderPeerId: peer.id,
+      remoteMusicProfile: { style: 'ambient', mood: 'calm' },
     });
     expect(busy.status).toBe(429);
     expect(busy.body.code).toBe('MEDIA_PROVIDER_BUSY');
+    expect(mediaQueue.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('POST /generate rejects free-form lyrics before probing a remote provider', async () => {
+    const peer = { id: '00000000-0000-4000-8000-000000000001', enabled: true };
+    remoteProvider.peers = [peer];
+
+    const r = await request(app).post('/api/music/generate').send({
+      prompt: 'private concept',
+      lyrics: 'Call alice@example.com',
+      engine: 'remote-audio',
+      modelId: 'example/model',
+      mediaProviderPeerId: peer.id,
+      remoteMusicProfile: { style: 'ambient', mood: 'calm' },
+    });
+
+    expect(r.status).toBe(400);
+    expect(remoteProvider.resolve).not.toHaveBeenCalled();
     expect(mediaQueue.enqueue).not.toHaveBeenCalled();
   });
 

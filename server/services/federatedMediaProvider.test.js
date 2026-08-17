@@ -78,7 +78,9 @@ afterAll(() => {
 
 const selection = { engine: 'minimax-music3', modelId: 'minimax-music3' };
 const config = () => ({ enabled: true, maxQueuedJobs: 2, audioModels: [selection] });
-const input = () => ({ ...selection, prompt: 'slow synthwave', durationSec: 60, durationMode: 'manual' });
+const SAFE_PROMPT = 'Instrumental synthwave music with a dreamy mood, slow tempo, medium energy. No vocals or spoken words.';
+const OTHER_SAFE_PROMPT = 'Instrumental ambient music with a calm mood, slow tempo, low energy. No vocals or spoken words.';
+const input = () => ({ ...selection, prompt: SAFE_PROMPT, durationSec: 60, durationMode: 'manual' });
 
 function readyEngine(overrides = {}) {
   return {
@@ -174,7 +176,7 @@ describe('federated media provider capacity and idempotency', () => {
     expect(enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
       kind: 'audio', owner: 'federated-media:peer-example',
       params: expect.objectContaining({
-        prompt: 'slow synthwave', engine: 'minimax-music3', modelId: 'minimax-music3',
+        prompt: SAFE_PROMPT, engine: 'minimax-music3', modelId: 'minimax-music3',
         durationMode: 'manual',
         federatedMedia: expect.objectContaining({
           callerInstanceId: 'peer-example', idempotencyKey: 'commission-1',
@@ -196,7 +198,7 @@ describe('federated media provider capacity and idempotency', () => {
 
     await expect(submitFederatedMediaJob({
       callerId: 'peer-example', config: config(),
-      input: { ...input(), prompt: 'different' }, idempotencyKey: 'commission-1',
+      input: { ...input(), prompt: OTHER_SAFE_PROMPT }, idempotencyKey: 'commission-1',
     })).rejects.toMatchObject({ status: 409, code: 'MEDIA_PROVIDER_IDEMPOTENCY_CONFLICT' });
   });
 

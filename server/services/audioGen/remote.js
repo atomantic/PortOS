@@ -18,12 +18,14 @@ import { z } from 'zod';
 import { PATHS, sha256File } from '../../lib/fileUtils.js';
 import {
   FEDERATED_MEDIA_WIRE_VERSION,
+  federatedMediaAudioProfileSchema,
   federatedMediaProviderJobSchema,
+  renderFederatedMediaAudioPrompt,
 } from '../../lib/federatedMediaWire.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
 import { readResponseJson } from '../../lib/readResponseJson.js';
-import { federatedMediaJobSubmissionSchema } from '../../lib/validation.js';
+import { federatedMediaJobRoutingSchema } from '../../lib/validation.js';
 import { resolveFederatedMediaProvider } from '../federatedMediaConsumer.js';
 import { getPeers } from '../instances.js';
 import { audioGenEvents } from './events.js';
@@ -33,9 +35,12 @@ const remoteMediaMarkerSchema = z.object({
   peerId: z.string().uuid(),
   reconcile: z.boolean().optional(),
   cancelRequested: z.boolean().optional(),
-  // Parse the persisted request with the exact provider submission schema so
-  // consumer and provider validation cannot drift across the same wire version.
-  request: federatedMediaJobSubmissionSchema,
+  profile: federatedMediaAudioProfileSchema,
+  // Free-form prompt/lyrics are deliberately absent from persisted routing
+  // state. The adapter renders a fixed-vocabulary instrumental prompt from the
+  // profile immediately before submission, so hand-edited queue state cannot
+  // smuggle personal text onto the federation wire.
+  request: federatedMediaJobRoutingSchema,
 }).passthrough();
 
 const RETRYABLE_HTTP_STATUSES = new Set([408, 425, 429]);
@@ -397,7 +402,14 @@ async function downloadResult(state, remoteJob) {
   }
 }
 
-async function runRemoteAudio(state, request, marker) {
+async function runRemoteAudio(state, routingRequest, profile, marker) {
+  const prompt = renderFederatedMediaAudioPrompt(profile);
+  if (!prompt) {
+    throw remoteError('Remote audio job has an invalid privacy-safe profile', {
+      code: 'MEDIA_PROVIDER_AUDIO_PROFILE_INVALID',
+    });
+  }
+  const request = { ...routingRequest, prompt };
   const selection = { kind: 'audio', engine: request.engine, modelId: request.modelId };
   if (!marker.reconcile) await preflight(state, selection);
   if (state.cancelRequested && !marker.reconcile && !state.submissionMayExist) throw canceledError();
@@ -439,7 +451,7 @@ export async function generateAudio(params) {
   };
   activeJobs.set(params.jobId, state);
   try {
-    const result = await runRemoteAudio(state, marker.data.request, marker.data);
+    const result = await runRemoteAudio(state, marker.data.request, marker.data.profile, marker.data);
     audioGenEvents.emit('completed', { generationId: params.jobId, ...result });
   } catch (error) {
     audioGenEvents.emit('failed', {

@@ -109,6 +109,13 @@ const flush = async () => {
   await mediaJobQueue?.__drainForTests();
 };
 
+const remoteMediaParams = () => ({
+  wireVersion: 1,
+  peerId: '00000000-0000-4000-8000-000000000001',
+  profile: { style: 'ambient', mood: 'calm', tempo: 'slow', energy: 'low', instruments: [] },
+  request: { engine: 'remote-audio', modelId: 'example/model' },
+});
+
 beforeEach(async () => {
   tempDataDir = mkdtempSync(join(tmpdir(), 'mediaJobQueue-test-'));
   Object.values(stubs).forEach((fn) => fn.mockReset());
@@ -824,10 +831,10 @@ describe('Audio kind (#1928)', () => {
     const remote = mediaJobQueue.enqueueJob({
       kind: 'audio',
       params: {
-        prompt: 'remote render',
+        prompt: '',
         engine: 'remote-audio',
         modelId: 'example/model',
-        remoteMedia: { wireVersion: 1, peerId: '00000000-0000-4000-8000-000000000001' },
+        remoteMedia: remoteMediaParams(),
       },
     });
 
@@ -847,8 +854,8 @@ describe('Audio kind (#1928)', () => {
     const remote = mediaJobQueue.enqueueJob({
       kind: 'audio',
       params: {
-        prompt: 'cancel remote',
-        remoteMedia: { wireVersion: 1, peerId: '00000000-0000-4000-8000-000000000001' },
+        prompt: '',
+        remoteMedia: remoteMediaParams(),
       },
     });
     await waitFor(() => stubs.generateAudioRemote.mock.calls.length === 1);
@@ -872,10 +879,10 @@ describe('Audio kind (#1928)', () => {
         queuedAt: '2026-08-17T12:00:00.000Z',
         startedAt: '2026-08-17T12:00:01.000Z',
         params: {
-          prompt: 'resume remote',
+          prompt: '',
           engine: 'remote-audio',
           modelId: 'example/model',
-          remoteMedia: { wireVersion: 1, peerId: '00000000-0000-4000-8000-000000000001' },
+          remoteMedia: remoteMediaParams(),
         },
       }],
     }));

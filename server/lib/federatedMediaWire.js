@@ -4,6 +4,70 @@ export const FEDERATED_MEDIA_WIRE_VERSION = 1;
 export const FEDERATED_MEDIA_STALE_AFTER_MS = 60_000;
 export const FEDERATED_MEDIA_MAX_CLOCK_SKEW_MS = 30_000;
 
+const FEDERATED_AUDIO_STYLES = [
+  'ambient', 'cinematic', 'classical', 'electronic', 'folk', 'hip-hop',
+  'jazz', 'metal', 'orchestral', 'pop', 'rock', 'synthwave',
+];
+const FEDERATED_AUDIO_MOODS = [
+  'bright', 'calm', 'dark', 'dreamy', 'energetic', 'hopeful',
+  'melancholic', 'mysterious', 'playful', 'tense', 'triumphant', 'warm',
+];
+const FEDERATED_AUDIO_INSTRUMENTS = [
+  'acoustic-guitar', 'bass', 'brass', 'cello', 'drums', 'electric-guitar',
+  'flute', 'piano', 'strings', 'synthesizer', 'violin', 'woodwinds',
+];
+
+// Free-form text can contain PII and therefore cannot cross the federation
+// boundary. Consumers select only these fixed musical descriptors; the remote
+// adapter renders the provider prompt locally from this validated profile.
+export const federatedMediaAudioProfileSchema = z.object({
+  style: z.enum(FEDERATED_AUDIO_STYLES),
+  mood: z.enum(FEDERATED_AUDIO_MOODS),
+  tempo: z.enum(['slow', 'moderate', 'fast']).default('moderate'),
+  energy: z.enum(['low', 'medium', 'high']).default('medium'),
+  instruments: z.array(z.enum(FEDERATED_AUDIO_INSTRUMENTS)).max(6).default([])
+    .refine((items) => new Set(items).size === items.length, {
+      message: 'instruments must not contain duplicates',
+    }),
+}).strict();
+
+const words = (value) => value.replaceAll('-', ' ');
+const styleByWords = new Map(FEDERATED_AUDIO_STYLES.map((value) => [words(value), value]));
+const instrumentByWords = new Map(FEDERATED_AUDIO_INSTRUMENTS.map((value) => [words(value), value]));
+const AUDIO_PROMPT_RE = /^Instrumental ([a-z ]+) music with a ([a-z]+) mood, (slow|moderate|fast) tempo, (low|medium|high) energy(?:, featuring ([a-z ]+(?: and [a-z ]+){0,5}))?\. No vocals or spoken words\.$/;
+
+export function renderFederatedMediaAudioPrompt(profile) {
+  const parsed = federatedMediaAudioProfileSchema.safeParse(profile);
+  if (!parsed.success) return null;
+  const { style, mood, tempo, energy, instruments } = parsed.data;
+  const instrumentation = instruments.length > 0
+    ? `, featuring ${instruments.map(words).join(' and ')}`
+    : '';
+  return `Instrumental ${words(style)} music with a ${mood} mood, ${tempo} tempo, ${energy} energy${instrumentation}. No vocals or spoken words.`;
+}
+
+// Provider-side validation receives only the rendered text (not the local
+// profile) so older wire-v1 providers can still accept newer consumers. Parse
+// the canonical grammar back into fixed tokens and require an exact round trip;
+// arbitrary prose, names, lyrics, and redaction-sensitive fields fail closed.
+export function isFederatedMediaAudioPrompt(value) {
+  if (typeof value !== 'string') return false;
+  const match = AUDIO_PROMPT_RE.exec(value);
+  if (!match) return false;
+  const style = styleByWords.get(match[1]);
+  const instruments = match[5]
+    ? match[5].split(' and ').map((item) => instrumentByWords.get(item))
+    : [];
+  if (!style || instruments.some((item) => !item)) return false;
+  return renderFederatedMediaAudioPrompt({
+    style,
+    mood: match[2],
+    tempo: match[3],
+    energy: match[4],
+    instruments,
+  }) === value;
+}
+
 // Wire v1 intentionally exposes audio only. Later media kinds get their own
 // versioned capability shape instead of being accepted against audio-specific
 // readiness fields by an older consumer.

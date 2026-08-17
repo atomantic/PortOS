@@ -34,9 +34,14 @@ describe('sanitizeJob', () => {
         remoteMedia: {
           wireVersion: 1,
           peerId: '00000000-0000-4000-8000-000000000001',
+          profile: {
+            style: 'orchestral',
+            mood: 'triumphant',
+            tempo: 'moderate',
+            energy: 'high',
+            instruments: ['brass', 'strings'],
+          },
           request: {
-            prompt: 'fictional orchestral pulse',
-            lyrics: '[instrumental]',
             engine: 'remote-audio',
             modelId: 'example/model',
           },
@@ -45,7 +50,7 @@ describe('sanitizeJob', () => {
     });
 
     expect(sanitized.params).toEqual({
-      prompt: 'fictional orchestral pulse',
+      prompt: 'Instrumental orchestral music with a triumphant mood, moderate tempo, high energy, featuring brass and strings. No vocals or spoken words.',
       modelId: 'example/model',
     });
     expect(sanitized.params).not.toHaveProperty('remoteMedia');

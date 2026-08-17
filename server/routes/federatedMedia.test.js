@@ -61,11 +61,12 @@ function buildApp() {
 }
 
 const jobId = '00000000-0000-4000-8000-000000000001';
+const safePrompt = 'Instrumental synthwave music with a dreamy mood, moderate tempo, medium energy. No vocals or spoken words.';
 
 describe('federated media routes', () => {
   it('requires an Idempotency-Key before submitting work', async () => {
     const response = await request(buildApp()).post('/api/federation/media/v1/jobs').send({
-      engine: 'minimax-music3', modelId: 'minimax-music3', prompt: 'test prompt',
+      engine: 'minimax-music3', modelId: 'minimax-music3', prompt: safePrompt,
     });
     expect(response.status).toBe(400);
     expect(response.body.code).toBe('VALIDATION_ERROR');
@@ -73,7 +74,7 @@ describe('federated media routes', () => {
   });
 
   it('returns 202 for a new job and 200 for an idempotent replay', async () => {
-    const body = { engine: 'minimax-music3', modelId: 'minimax-music3', prompt: 'test prompt' };
+    const body = { engine: 'minimax-music3', modelId: 'minimax-music3', prompt: safePrompt };
     const created = await request(buildApp()).post('/api/federation/media/v1/jobs')
       .set('Idempotency-Key', 'commission-1').send(body);
     expect(created.status).toBe(202);
@@ -90,10 +91,25 @@ describe('federated media routes', () => {
   it('rejects unknown request fields so paths and URLs cannot become an implicit proxy', async () => {
     const response = await request(buildApp()).post('/api/federation/media/v1/jobs')
       .set('Idempotency-Key', 'commission-1').send({
-        engine: 'minimax-music3', modelId: 'minimax-music3', prompt: 'test',
+        engine: 'minimax-music3', modelId: 'minimax-music3', prompt: safePrompt,
         sourcePath: '/tmp/private.wav',
       });
     expect(response.status).toBe(400);
+    expect(provider.submit).not.toHaveBeenCalled();
+  });
+
+  it('rejects free-form prompts and lyrics at the provider boundary', async () => {
+    const freeform = await request(buildApp()).post('/api/federation/media/v1/jobs')
+      .set('Idempotency-Key', 'commission-private').send({
+        engine: 'minimax-music3', modelId: 'minimax-music3', prompt: 'Write about alice@example.com',
+      });
+    const lyrics = await request(buildApp()).post('/api/federation/media/v1/jobs')
+      .set('Idempotency-Key', 'commission-private-lyrics').send({
+        engine: 'minimax-music3', modelId: 'minimax-music3', prompt: safePrompt, lyrics: 'Private words',
+      });
+
+    expect(freeform.status).toBe(400);
+    expect(lyrics.status).toBe(400);
     expect(provider.submit).not.toHaveBeenCalled();
   });
 
