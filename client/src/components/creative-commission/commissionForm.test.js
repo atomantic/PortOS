@@ -18,7 +18,7 @@ describe('commissionForm helpers', () => {
       expect(f.schedule.kind).toBe('DAILY');
       expect(f.schedule.atLocalTime).toBe('02:00');
       expect(f.generation).toEqual({
-        quality: 'standard', aspectRatio: '16:9', targetDurationSeconds: 10,
+        quality: 'standard', aspectRatio: '16:9', targetDurationSeconds: 10, durationMode: 'auto',
         videoMode: 'auto', videoModelId: null,
       });
       expect(f.assignment).toEqual({ providerId: '', model: '' });
