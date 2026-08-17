@@ -16,7 +16,7 @@ export default function PromptEditor({ config, promptValue, setPromptValue, edit
     return (
       <div>
         <div className="flex items-center justify-between mb-2">
-          <label className="text-sm text-gray-400">Task Prompt</label>
+          <span className="text-sm text-gray-400">Task Prompt</span>
           {!editingPrompt && (
             <button onClick={() => setEditingPrompt(true)} className="text-xs text-port-accent hover:text-port-accent/80">Edit</button>
           )}
@@ -59,7 +59,7 @@ export default function PromptEditor({ config, promptValue, setPromptValue, edit
   // Pipeline tabbed prompt viewer
   return (
     <div>
-      <label className="text-sm text-gray-400 block mb-2">Stage Prompts</label>
+      <span className="text-sm text-gray-400 block mb-2">Stage Prompts</span>
       <div className="border border-port-border rounded-lg overflow-hidden">
         <div className="flex border-b border-port-border bg-port-card">
           {stages.map((stage, i) => (

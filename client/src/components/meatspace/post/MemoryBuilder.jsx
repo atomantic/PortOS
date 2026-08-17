@@ -188,7 +188,7 @@ export default function MemoryBuilder({ onBack, onSelectItem, onReviewItem = onS
           </FormField>
 
           <div>
-            <label className="block text-gray-400 text-xs mb-1.5">Type</label>
+            <span className="block text-gray-400 text-xs mb-1.5">Type</span>
             <div className="flex flex-wrap gap-2">
               {ITEM_TYPES.map(t => (
                 <button

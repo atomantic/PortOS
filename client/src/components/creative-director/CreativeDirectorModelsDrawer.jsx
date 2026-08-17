@@ -284,7 +284,7 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
                 <p className="text-xs text-gray-500">{stage.help}</p>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <label className="flex flex-col gap-1">
+                  <div className="flex flex-col gap-1">
                     <span className="text-[11px] uppercase tracking-wide text-gray-500">Provider</span>
                     <select
                       value={draft.providerId}
@@ -306,9 +306,9 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
                       <option value="">{isGlobal ? 'System default' : 'Inherit default'}</option>
                       {providerOptions.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                     </select>
-                  </label>
+                  </div>
 
-                  <label className="flex flex-col gap-1">
+                  <div className="flex flex-col gap-1">
                     <span className="text-[11px] uppercase tracking-wide text-gray-500">Model</span>
                     {!pinned ? (
                       <div className="text-sm text-gray-600 py-2">—</div>
@@ -343,7 +343,7 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
                         className="bg-port-card border border-port-border rounded px-2 py-2 text-sm text-white placeholder-gray-600"
                       />
                     )}
-                  </label>
+                  </div>
                 </div>
 
                 {noVisionModels && (

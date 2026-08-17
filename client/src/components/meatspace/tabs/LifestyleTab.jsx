@@ -95,7 +95,7 @@ export default function LifestyleTab() {
         </div>
         <div>
           <div className="flex items-center justify-between mb-2">
-            <label className="block text-xs text-gray-500 uppercase">Biological Sex</label>
+            <span className="block text-xs text-gray-500 uppercase">Biological Sex</span>
             {config?.sexSource && (
               <span className="text-[10px] text-gray-600 italic">
                 {config.sexSource === 'genome' ? 'auto-detected from genome' : `source: ${config.sexSource}`}

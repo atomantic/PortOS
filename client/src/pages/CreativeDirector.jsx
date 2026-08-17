@@ -352,9 +352,10 @@ export default function CreativeDirector() {
             </div>
           )}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <label className="block text-sm">
+            <label htmlFor="creative-director-name" className="block text-sm">
               <span className="text-port-text-muted">Name</span>
               <input
+                id="creative-director-name"
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
                 placeholder="My Episode"
@@ -362,7 +363,7 @@ export default function CreativeDirector() {
                 maxLength={200}
               />
             </label>
-            <label className="block text-sm">
+            <div className="block text-sm">
               <span className="text-port-text-muted">Model</span>
               <ModelSelect
                 models={models}
@@ -371,7 +372,7 @@ export default function CreativeDirector() {
                 getLabel={(m) => m.name || m.id}
                 className="w-full mt-1 bg-port-bg border border-port-border rounded px-2 py-1 text-sm"
               />
-            </label>
+            </div>
             <label className="block text-sm">
               <span className="text-port-text-muted">Aspect ratio</span>
               <select

@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import AppIcon from './AppIcon';
 
 export default function AppContextPicker({
@@ -17,6 +18,7 @@ export default function AppContextPicker({
   // override this — the default text would lie about what happens.
   emptyRepoText = 'using default PortOS context'
 }) {
+  const selectId = useId();
   const selectedApp = apps.find(app => app.id === value);
   const sortedApps = [...apps].sort((a, b) =>
     (a?.name || '').localeCompare(b?.name || '', undefined, { sensitivity: 'base' })
@@ -25,6 +27,7 @@ export default function AppContextPicker({
   const content = (
     <div className="space-y-2">
       <select
+        id={selectId}
         value={value}
         onChange={(event) => onChange?.(event.target.value)}
         className={selectClassName}
@@ -65,10 +68,10 @@ export default function AppContextPicker({
   return (
     <div className={className}>
       {label ? (
-        <label className="block text-xs text-gray-400">
-          {label}
+        <>
+          <label htmlFor={selectId} className="block text-xs text-gray-400">{label}</label>
           <div className="mt-1">{content}</div>
-        </label>
+        </>
       ) : content}
     </div>
   );

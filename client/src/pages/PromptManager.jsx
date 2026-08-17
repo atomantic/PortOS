@@ -680,7 +680,7 @@ export default function PromptManager() {
                   <div className="space-y-4 mb-4">
                     <div>
                       <div className="flex items-center gap-2 mb-2">
-                        <label className="text-sm text-gray-400">Model</label>
+                        <span className="text-sm text-gray-400">Model</span>
                         <div className="flex gap-1">
                           <button
                             onClick={() => setStageConfig({ ...stageConfig, provider: null, model: 'default' })}
@@ -733,7 +733,7 @@ export default function PromptManager() {
                       onCommit={(ms) => setStageConfig({ ...stageConfig, timeout: ms })}
                     />
                     <div>
-                      <label className="block text-sm text-gray-400 mb-1">Variables Used</label>
+                      <span className="block text-sm text-gray-400 mb-1">Variables Used</span>
                       <div className="text-sm text-gray-300">
                         {(stageConfig.variables || []).join(', ') || 'None'}
                       </div>
@@ -1089,7 +1089,7 @@ export default function PromptManager() {
               <div className="space-y-4">
                 <div>
                   <div className="flex items-center gap-2 mb-2">
-                    <label className="text-sm text-gray-400">Model</label>
+                    <span className="text-sm text-gray-400">Model</span>
                     <div className="flex gap-1">
                       <button
                         type="button"

@@ -129,7 +129,7 @@ export default function ExercisePanel({ activeWork, onClose }) {
       {!active && (
         <div className="px-3 py-3 space-y-3">
           <div>
-            <label className="block text-[10px] uppercase tracking-wider text-gray-500 mb-1">Duration</label>
+            <span className="block text-[10px] uppercase tracking-wider text-gray-500 mb-1">Duration</span>
             <div className="flex flex-wrap gap-1">
               {DURATION_PRESETS.map(({ label, seconds }) => (
                 <button

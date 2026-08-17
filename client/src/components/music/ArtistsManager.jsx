@@ -14,6 +14,7 @@ import BrailleSpinner from '../BrailleSpinner';
 import toast from '../ui/Toast';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
+import Field from '../ui/FormField';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { DEFAULT_NEGATIVE_PROMPT } from '../../lib/imageGenDefaults';
@@ -50,16 +51,6 @@ const buildPortraitPrompt = (f) => {
   const subject = desc ? `Music artist portrait. ${desc}` : 'Music artist promotional portrait.';
   return style ? `${subject} ${style}` : subject;
 };
-
-function Field({ label, hint, children }) {
-  return (
-    <label className="block">
-      <span className="block text-xs uppercase tracking-wider text-gray-500 mb-1">{label}</span>
-      {children}
-      {hint ? <span className="block text-[11px] text-gray-500 mt-1">{hint}</span> : null}
-    </label>
-  );
-}
 
 export default function ArtistsManager() {
   const navigate = useNavigate();
@@ -269,7 +260,7 @@ export default function ArtistsManager() {
             <div className="text-gray-500 text-sm">Select an artist to edit, or create a new one.</div>
           ) : (
             <div className="space-y-3">
-              <Field label="Name">
+              <Field compact label="Name">
                 <input
                   value={form.name}
                   onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
@@ -279,7 +270,7 @@ export default function ArtistsManager() {
                   autoFocus
                 />
               </Field>
-              <Field label="Genre" hint="Primary genre(s) — e.g. 'indie folk, dream pop'.">
+              <Field compact label="Genre" hint="Primary genre(s) — e.g. 'indie folk, dream pop'.">
                 <input
                   value={form.genre}
                   onChange={(e) => setForm((f) => ({ ...f, genre: e.target.value }))}
@@ -288,7 +279,7 @@ export default function ArtistsManager() {
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
                 />
               </Field>
-              <Field label="Musical style" hint="Voice / production / instrumentation notes — fed into music-gen prompts.">
+              <Field compact label="Musical style" hint="Voice / production / instrumentation notes — fed into music-gen prompts.">
                 <textarea
                   value={form.musicalStyle}
                   onChange={(e) => setForm((f) => ({ ...f, musicalStyle: e.target.value }))}
@@ -298,7 +289,7 @@ export default function ArtistsManager() {
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
                 />
               </Field>
-              <Field label="Bio" hint="About-the-artist blurb.">
+              <Field compact label="Bio" hint="About-the-artist blurb.">
                 <textarea
                   value={form.bio}
                   onChange={(e) => setForm((f) => ({ ...f, bio: e.target.value }))}
@@ -308,7 +299,7 @@ export default function ArtistsManager() {
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
                 />
               </Field>
-              <Field label="Physical description" hint="Subject of the portrait — appearance, age, expression, wardrobe.">
+              <Field compact label="Physical description" hint="Subject of the portrait — appearance, age, expression, wardrobe.">
                 <textarea
                   value={form.physicalDescription}
                   onChange={(e) => setForm((f) => ({ ...f, physicalDescription: e.target.value }))}
@@ -318,7 +309,7 @@ export default function ArtistsManager() {
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
                 />
               </Field>
-              <Field label="Portrait style" hint="Art / photography direction for the portrait render.">
+              <Field compact label="Portrait style" hint="Art / photography direction for the portrait render.">
                 <textarea
                   value={form.portraitStyle}
                   onChange={(e) => setForm((f) => ({ ...f, portraitStyle: e.target.value }))}
@@ -328,7 +319,7 @@ export default function ArtistsManager() {
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
                 />
               </Field>
-              <Field label="Portrait image" hint="Optional — generate from the description + style, choose or upload one via the gallery, or paste a URL.">
+              <Field compact label="Portrait image" hint="Optional — generate from the description + style, choose or upload one via the gallery, or paste a URL.">
                 <div className="flex items-start gap-3">
                   {isGenerating ? (
                     <div className="relative w-20 h-20 rounded border border-port-border bg-port-bg overflow-hidden flex items-center justify-center shrink-0">
@@ -393,6 +384,7 @@ export default function ArtistsManager() {
                       </button>
                     </div>
                     <input
+                      aria-label="Portrait image URL"
                       value={form.portraitImageUrl}
                       onChange={(e) => setPortrait(e.target.value)}
                       disabled={isGenerating}

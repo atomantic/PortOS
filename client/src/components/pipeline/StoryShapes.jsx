@@ -107,7 +107,7 @@ export function ArcShapeSparkline({ shape, width = 64, height = 24, className = 
 export function ArcShapePicker({ value, onChange, disabled = false }) {
   return (
     <div className="space-y-1.5">
-      <label className="text-[10px] uppercase tracking-wider text-gray-500">Story shape (Vonnegut)</label>
+      <span className="text-[10px] uppercase tracking-wider text-gray-500">Story shape (Vonnegut)</span>
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
         {STORY_SHAPES.map((s) => {
           const selected = value === s.id;

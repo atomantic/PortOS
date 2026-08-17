@@ -294,7 +294,7 @@ export default function AccountsTab() {
 
           {/* Platform selector */}
           <div>
-            <label className="block text-xs text-gray-500 mb-1">Platform</label>
+            <span className="block text-xs text-gray-500 mb-1">Platform</span>
             <div className="grid grid-cols-4 sm:grid-cols-7 gap-2">
               {platforms.filter(p => p.id !== 'other').map(platform => {
                 const Icon = PLATFORM_ICONS[platform.id] || Link;

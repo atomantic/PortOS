@@ -19,6 +19,7 @@ import BrailleSpinner from '../BrailleSpinner';
 import toast from '../ui/Toast';
 import FilePickerButton from '../ui/FilePickerButton';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
+import Field from '../ui/FormField';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { formatBytes, formatTimecode } from '../../utils/formatters';
 import ArtistPicker from './ArtistPicker';
@@ -52,16 +53,6 @@ const formFromTrack = (t) => ({
   prompt: t.prompt || '',
   audioFilename: t.audioFilename || '',
 });
-
-function Field({ label, hint, children }) {
-  return (
-    <label className="block">
-      <span className="block text-xs uppercase tracking-wider text-gray-500 mb-1">{label}</span>
-      {children}
-      {hint ? <span className="block text-[11px] text-gray-500 mt-1">{hint}</span> : null}
-    </label>
-  );
-}
 
 export default function TracksManager() {
   const navigate = useNavigate();
@@ -440,7 +431,7 @@ export default function TracksManager() {
                   {openingDesigner ? 'Opening designer…' : (isCreate ? 'Save & design with AI' : 'Design with AI')}
                 </button>
               </div>
-              <Field label="Title">
+              <Field compact label="Title">
                 <input
                   value={form.title}
                   onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
@@ -450,7 +441,7 @@ export default function TracksManager() {
                   autoFocus
                 />
               </Field>
-              <Field label="Artist">
+              <Field compact label="Artist">
                 <ArtistPicker
                   id="track-artist"
                   value={form.artistId}
@@ -458,7 +449,7 @@ export default function TracksManager() {
                   onChange={(artistId, artist) => setForm((f) => ({ ...f, artistId, artist }))}
                 />
               </Field>
-              <Field label="Album" hint="Optional — none means a standalone single. Saving syncs the album's tracklist.">
+              <Field compact label="Album" hint="Optional — none means a standalone single. Saving syncs the album's tracklist.">
                 <select
                   id="track-album"
                   value={form.albumId}
@@ -474,7 +465,7 @@ export default function TracksManager() {
                   ) : null}
                 </select>
               </Field>
-              <Field label="Prompt" hint="Text/style prompt used by the on-device generators.">
+              <Field compact label="Prompt" hint="Text/style prompt used by the on-device generators.">
                 <textarea
                   value={form.prompt}
                   onChange={(e) => setForm((f) => ({ ...f, prompt: e.target.value }))}
@@ -484,7 +475,7 @@ export default function TracksManager() {
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
                 />
               </Field>
-              <Field label="Lyrics" hint="Full lyrics — also the conditioning text for lyric-aware generators (Ace-Step).">
+              <Field compact label="Lyrics" hint="Full lyrics — also the conditioning text for lyric-aware generators (Ace-Step).">
                 <textarea
                   value={form.lyrics}
                   onChange={(e) => setForm((f) => ({ ...f, lyrics: e.target.value }))}

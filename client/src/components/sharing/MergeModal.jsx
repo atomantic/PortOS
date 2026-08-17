@@ -51,7 +51,7 @@ export default function MergeModal({ merge, setMerge, onExecute, onRepreview, on
         <h2 className="text-lg font-semibold text-white flex items-center gap-2"><GitMerge size={18} /> Merge {kind}</h2>
 
         <div>
-          <label className="block text-xs text-gray-400 mb-1">Keep (survivor)</label>
+          <span className="block text-xs text-gray-400 mb-1">Keep (survivor)</span>
           <div className="grid gap-2">
             {records.map((r) => (
               <label key={r.id} className={`flex items-center gap-2 px-3 py-2 rounded border cursor-pointer text-sm ${r.id === survivorId ? 'border-port-accent bg-port-accent/10 text-white' : 'border-port-border text-gray-400'}`}>
@@ -65,7 +65,7 @@ export default function MergeModal({ merge, setMerge, onExecute, onRepreview, on
 
         {multi ? (
           <div>
-            <label className="block text-xs text-gray-400 mb-1">Fold in (this merge folds one copy at a time — repeat for the rest)</label>
+            <span className="block text-xs text-gray-400 mb-1">Fold in (this merge folds one copy at a time — repeat for the rest)</span>
             <div className="grid gap-2">
               {records.filter((r) => r.id !== survivorId).map((r) => (
                 <label key={r.id} className={`flex items-center gap-2 px-3 py-2 rounded border cursor-pointer text-sm ${r.id === loserId ? 'border-port-error/60 bg-port-error/10 text-white' : 'border-port-border text-gray-400'}`}>
@@ -84,7 +84,7 @@ export default function MergeModal({ merge, setMerge, onExecute, onRepreview, on
         {preview && conflicts.length > 0 && (
           <div>
             <div className="flex items-center justify-between mb-2 gap-2">
-              <label className="block text-xs text-gray-400">{conflicts.length} conflicting field(s) — pick which value wins:</label>
+              <span className="block text-xs text-gray-400">{conflicts.length} conflicting field(s) — pick which value wins:</span>
               {onAIMerge && aiEligible && (
                 <button
                   type="button"

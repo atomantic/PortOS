@@ -40,10 +40,10 @@ export default function ReferenceImagePicker({
 }) {
   return (
     <div>
-      <label className="block text-xs font-medium text-gray-400 mb-1">
+      <span className="block text-xs font-medium text-gray-400 mb-1">
         Reference images
         {caption ? <span className="text-gray-500 font-normal"> ({caption})</span> : null}
-      </label>
+      </span>
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
         {referenceImages.map((slot, i) => {
           const slotId = `ref-image-${i}`;

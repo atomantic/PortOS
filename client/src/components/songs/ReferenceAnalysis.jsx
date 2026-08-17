@@ -786,7 +786,7 @@ export default function ReferenceAnalysis({
                     <option value="">— Layer —</option>
                     {layers.map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
                   </select>
-                  <label className="flex items-center gap-1 text-xs text-gray-400">
+                  <div className="flex items-center gap-1 text-xs text-gray-400">
                     <span>from</span>
                     <SecondsInput
                       key={`start-${seg.startMs}`}
@@ -795,11 +795,11 @@ export default function ReferenceAnalysis({
                       ariaLabel="Segment start (seconds)"
                     />
                     <span>s</span>
-                  </label>
+                  </div>
                   <button type="button" onClick={() => updateSegment(idx, { startMs: currentMs() })} title="Set start from playhead" aria-label="Set segment start from playhead" className="p-1 text-gray-500 hover:text-port-accent">
                     <Flag size={14} />
                   </button>
-                  <label className="flex items-center gap-1 text-xs text-gray-400">
+                  <div className="flex items-center gap-1 text-xs text-gray-400">
                     <span>to</span>
                     <SecondsInput
                       key={`end-${seg.endMs}`}
@@ -808,7 +808,7 @@ export default function ReferenceAnalysis({
                       ariaLabel="Segment end (seconds)"
                     />
                     <span>s</span>
-                  </label>
+                  </div>
                   <button type="button" onClick={() => updateSegment(idx, { endMs: currentMs() })} title="Set end from playhead" aria-label="Set segment end from playhead" className="p-1 text-gray-500 hover:text-port-accent">
                     <FlagOff size={14} />
                   </button>
@@ -852,7 +852,7 @@ export default function ReferenceAnalysis({
                 {isStacked(seg) && (
                   <div className="flex flex-wrap items-center gap-2 pl-1 border-l-2 border-port-accent/40 ml-1">
                     <span className="flex items-center gap-1 text-xs text-port-accent"><Layers size={12} /> Backing ref</span>
-                    <label className="flex items-center gap-1 text-xs text-gray-400">
+                    <div className="flex items-center gap-1 text-xs text-gray-400">
                       <span>from</span>
                       <SecondsInput
                         key={`bg-start-${seg.bgStartMs}`}
@@ -861,11 +861,11 @@ export default function ReferenceAnalysis({
                         ariaLabel="Backing reference start (seconds)"
                       />
                       <span>s</span>
-                    </label>
+                    </div>
                     <button type="button" onClick={() => commitBacking(idx, 'bgStartMs', currentMs())} title="Set backing start from playhead" aria-label="Set backing start from playhead" className="p-1 text-gray-500 hover:text-port-accent">
                       <Flag size={14} />
                     </button>
-                    <label className="flex items-center gap-1 text-xs text-gray-400">
+                    <div className="flex items-center gap-1 text-xs text-gray-400">
                       <span>to</span>
                       <SecondsInput
                         key={`bg-end-${seg.bgEndMs}`}
@@ -874,7 +874,7 @@ export default function ReferenceAnalysis({
                         ariaLabel="Backing reference end (seconds)"
                       />
                       <span>s</span>
-                    </label>
+                    </div>
                     <button type="button" onClick={() => commitBacking(idx, 'bgEndMs', currentMs())} title="Set backing end from playhead" aria-label="Set backing end from playhead" className="p-1 text-gray-500 hover:text-port-accent">
                       <FlagOff size={14} />
                     </button>

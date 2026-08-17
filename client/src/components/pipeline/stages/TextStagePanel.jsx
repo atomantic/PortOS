@@ -462,26 +462,31 @@ export default function TextStagePanel({
         </label>
       ) : null}
 
-      <label className="block">
-        <span className="block text-xs uppercase tracking-wider text-gray-500 mb-1">Output</span>
-        {proseEditor ? (
+      {proseEditor ? (
+        <div className="block">
+          <span className="block text-xs uppercase tracking-wider text-gray-500 mb-1">Output</span>
           <ProseEditor
             value={draftOutput}
             onChange={(e) => setDraftOutput(e.target.value)}
             placeholder={outputPlaceholder}
+            aria-label="Output"
             rows={24}
             className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
           />
-        ) : (
-          <textarea
-            value={draftOutput}
-            onChange={(e) => setDraftOutput(e.target.value)}
-            placeholder={outputPlaceholder}
-            rows={24}
-            className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm font-mono leading-relaxed"
-          />
-        )}
+        </div>
+      ) : (
+      <label htmlFor={`pipeline-stage-${stageId}-output`} className="block">
+        <span className="block text-xs uppercase tracking-wider text-gray-500 mb-1">Output</span>
+        <textarea
+          id={`pipeline-stage-${stageId}-output`}
+          value={draftOutput}
+          onChange={(e) => setDraftOutput(e.target.value)}
+          placeholder={outputPlaceholder}
+          rows={24}
+          className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm font-mono leading-relaxed"
+        />
       </label>
+      )}
 
       {stage.errorMessage ? (
         <div className="text-xs text-port-error">{stage.errorMessage}</div>

@@ -278,12 +278,12 @@ function BibleEditor({ workId, item, config, onSaved, onDeleted, onCancel }) {
         </button>
       </div>
       {fields.map((f) => (
-        <label key={f.key} className="block">
+        <label key={f.key} htmlFor={`bible-field-${f.key}`} className="block">
           <span className="text-[9px] uppercase tracking-wider text-gray-500">{f.label}</span>
           {f.kind === 'multiline' ? (
-            <textarea value={draft[f.key]} onChange={set(f.key)} placeholder={f.placeholder} rows={f.rows || 2} className={`${inputCls} font-sans resize-y`} />
+            <textarea id={`bible-field-${f.key}`} value={draft[f.key]} onChange={set(f.key)} placeholder={f.placeholder} rows={f.rows || 2} className={`${inputCls} font-sans resize-y`} />
           ) : (
-            <input value={draft[f.key]} onChange={set(f.key)} placeholder={f.placeholder} className={inputCls} />
+            <input id={`bible-field-${f.key}`} value={draft[f.key]} onChange={set(f.key)} placeholder={f.placeholder} className={inputCls} />
           )}
         </label>
       ))}

@@ -33,12 +33,12 @@ export default function InitImagePicker({
     : backend === 'local' ? '(image-to-image — Flux only)' : '(image-to-image)';
   return (
     <div>
-      <label className="block text-xs font-medium text-gray-400 mb-1">
+      <span className="block text-xs font-medium text-gray-400 mb-1">
         {editOnly ? 'Source image' : 'Init image'}{' '}
         <span className={`font-normal ${editOnly ? 'text-port-warning' : 'text-gray-500'}`}>
           {subtitle}
         </span>
-      </label>
+      </span>
       {initImage.previewUrl ? (
         <div className="flex items-start gap-3">
           <div className="relative shrink-0">

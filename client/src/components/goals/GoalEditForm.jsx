@@ -101,7 +101,7 @@ export default function GoalEditForm({
         />
       </FormField>
       <div>
-        <label className="text-xs text-gray-500">Time Block Config</label>
+        <span className="text-xs text-gray-500">Time Block Config</span>
         <div className="mt-1 space-y-2">
           <div>
             <span className="text-[10px] text-gray-600">Preferred days</span>
@@ -165,7 +165,7 @@ export default function GoalEditForm({
         </div>
       </div>
       <div>
-        <label className="text-xs text-gray-500">Tags</label>
+        <span className="text-xs text-gray-500">Tags</span>
         <div className="flex flex-wrap gap-1 mt-1 mb-2">
           {form.tags.map(tag => (
             <Pill key={tag} tone="bare" bordered={false} className="bg-port-accent/20 text-port-accent">
@@ -196,7 +196,7 @@ export default function GoalEditForm({
         </div>
       </div>
       <div>
-        <label id="feature-areas-label" className="text-xs text-gray-500">Daily Driver Feature Areas</label>
+        <span id="feature-areas-label" className="text-xs text-gray-500">Daily Driver Feature Areas</span>
         <p className="text-[10px] text-gray-600 mt-0.5">
           Pin which PortOS areas the Daily Driver deep-links to for this goal. Leave empty to use the category default.
         </p>

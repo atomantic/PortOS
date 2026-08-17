@@ -23,9 +23,10 @@ import { useId, Children, cloneElement, isValidElement } from 'react';
 export function FormField({
   label,
   hint,
-  children,
-  className = '',
+ children,
+ className = '',
   labelClassName = 'block text-sm text-gray-400 mb-1',
+  compact = false,
 }) {
   const generatedId = useId();
   // The label must point at whatever id the first control actually has: reuse
@@ -41,8 +42,8 @@ export function FormField({
   });
   return (
     <div className={className}>
-      {label != null && <label htmlFor={controlId} className={labelClassName}>{label}</label>}
-      {hint != null && <p className="text-xs text-gray-500 mb-1">{hint}</p>}
+      {label != null && <label htmlFor={controlId} className={compact ? 'block text-xs uppercase tracking-wider text-gray-500 mb-1' : labelClassName}>{label}</label>}
+      {hint != null && <p className={compact ? 'block text-[11px] text-gray-500 mt-1' : 'text-xs text-gray-500 mb-1'}>{hint}</p>}
       {augmented}
     </div>
   );

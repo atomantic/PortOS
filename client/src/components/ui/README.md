@@ -17,7 +17,7 @@ accessibility). Feature-specific components live under their own feature directo
 | `CopyableId` | Click-to-copy record-id badge — short prefix shown, full id copied. |
 | `diffRuns` | Renders `{ text, changed }` runs from `diffWords` as highlighted nodes (shared by the diff views). |
 | `FilePickerButton` | Opens the OS file picker, styled as a button or as a whole drop target. |
-| `FormField` | Accessible config-field wrapper — generates an id and wires `<label htmlFor>` to the input. |
+| `FormField` | Accessible config-field wrapper — generates an id and wires `<label htmlFor>` to the input; `compact` preserves dense editor-label styling. |
 | `HunkDiff` | Hunked side-by-side diff for long texts, with unchanged runs collapsed. |
 | `ImageThumb` | List-card thumbnail with an icon fallback when the ref is missing or 404s. |
 | `InfoTooltip` | Focusable info/help tooltip — hover, keyboard focus, or tap; Esc to dismiss. |

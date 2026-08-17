@@ -197,7 +197,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1.5">
-          <label className="text-sm text-gray-400">Global Pause</label>
+          <span className="text-sm text-gray-400">Global Pause</span>
           <InfoTooltip label="What does Global Pause do?">
             When paused, no scheduled runs will execute for this task — even if individual apps are enabled.
           </InfoTooltip>
@@ -244,7 +244,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
 
       {selectedType === 'perpetual' && (
         <div>
-          <label className="text-sm text-gray-400 block mb-2">Recheck Cadence</label>
+          <span className="text-sm text-gray-400 block mb-2">Recheck Cadence</span>
           {(recheckEditing || config.recheckCron) ? (
             <CronInput
               value={config.recheckCron || '0 9 * * *'}
@@ -444,7 +444,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
       />
 
       <div>
-        <label className="text-sm text-gray-400 block mb-2">Agent Options</label>
+        <span className="text-sm text-gray-400 block mb-2">Agent Options</span>
         <div className="space-y-2">
           {AGENT_OPTIONS.map(({ field, label, description }) => {
             const enabled = config.taskMetadata?.[field] ?? false;
@@ -529,7 +529,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
 
       {allTaskTypes?.length > 1 && (
         <div>
-          <label className="text-sm text-gray-400 block mb-2">Run After (dependencies)</label>
+          <span className="text-sm text-gray-400 block mb-2">Run After (dependencies)</span>
           <div className="flex flex-wrap gap-2">
             {allTaskTypes.filter(t => t !== taskType).map(dep => {
               const isSelected = (config.runAfter || []).includes(dep);

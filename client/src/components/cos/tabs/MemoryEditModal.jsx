@@ -121,7 +121,7 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Type */}
           <div>
-            <label className="block text-sm text-gray-400 mb-2">Type</label>
+            <span className="block text-sm text-gray-400 mb-2">Type</span>
             <div className="flex flex-wrap gap-2">
               {MEMORY_TYPES.map(type => (
                 <button
@@ -205,7 +205,7 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
 
           {/* Tags */}
           <div>
-            <label className="block text-sm text-gray-400 mb-2">Tags</label>
+            <span className="block text-sm text-gray-400 mb-2">Tags</span>
             <div className="flex flex-wrap gap-2 mb-3">
               {formData.tags.map(tag => (
                 <span

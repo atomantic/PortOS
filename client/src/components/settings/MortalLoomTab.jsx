@@ -113,7 +113,7 @@ const IMPORT_FAILURE_MESSAGES = {
         </div>
 
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <label className="text-sm text-gray-400">Enabled</label>
+          <span className="text-sm text-gray-400">Enabled</span>
           <ToggleSwitch
             enabled={enabled}
             onChange={() => setEnabled(!enabled)}

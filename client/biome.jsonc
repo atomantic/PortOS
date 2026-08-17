@@ -80,7 +80,8 @@
       "a11y": {
         "useAltText": "error",
         "useAriaPropsForRole": "error",
-        "useValidAriaProps": "error"
+        "useValidAriaProps": "error",
+        "noLabelWithoutControl": "error"
       },
       "complexity": {
         // eslint: no-regex-spaces

@@ -16,6 +16,7 @@ import BrailleSpinner from '../BrailleSpinner';
 import toast from '../ui/Toast';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
+import Field from '../ui/FormField';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { DEFAULT_NEGATIVE_PROMPT } from '../../lib/imageGenDefaults';
@@ -59,16 +60,6 @@ const buildCoverPrompt = (f) => {
   ].filter(Boolean);
   return bits.join(' ');
 };
-
-function Field({ label, hint, children }) {
-  return (
-    <label className="block">
-      <span className="block text-xs uppercase tracking-wider text-gray-500 mb-1">{label}</span>
-      {children}
-      {hint ? <span className="block text-[11px] text-gray-500 mt-1">{hint}</span> : null}
-    </label>
-  );
-}
 
 export default function AlbumsManager() {
   const navigate = useNavigate();
@@ -324,7 +315,7 @@ export default function AlbumsManager() {
                   )}
                 </div>
                 <div className="flex-1 space-y-2">
-                  <Field label="Title">
+                  <Field compact label="Title">
                     <input value={form.title} onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))} placeholder="Album title" maxLength={ALBUM_TITLE_MAX} className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white" autoFocus />
                   </Field>
                   <div className="flex items-center gap-2 flex-wrap">
@@ -338,22 +329,22 @@ export default function AlbumsManager() {
                 </div>
               </div>
 
-              <Field label="Artist">
+              <Field compact label="Artist">
                 <ArtistPicker id="album-artist" value={form.artistId} name={form.artist} onChange={(artistId, artist) => setForm((f) => ({ ...f, artistId, artist }))} />
               </Field>
               <div className="grid grid-cols-2 gap-3">
-                <Field label="Genre">
+                <Field compact label="Genre">
                   <input value={form.genre} onChange={(e) => setForm((f) => ({ ...f, genre: e.target.value }))} placeholder="dream pop" maxLength={ALBUM_GENRE_MAX} className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm" />
                 </Field>
-                <Field label="Release year">
+                <Field compact label="Release year">
                   <input type="number" value={form.releaseYear} onChange={(e) => setForm((f) => ({ ...f, releaseYear: e.target.value }))} placeholder="2026" min={ALBUM_RELEASE_YEAR_MIN} max={ALBUM_RELEASE_YEAR_MAX} className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm" />
                 </Field>
               </div>
-              <Field label="Description" hint="Liner notes / blurb.">
+              <Field compact label="Description" hint="Liner notes / blurb.">
                 <textarea value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} rows={3} maxLength={ALBUM_DESCRIPTION_MAX} className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm" />
               </Field>
 
-              <Field label="Tracks" hint="Ordered — reorder with the arrows. Add from your existing tracks.">
+              <Field compact label="Tracks" hint="Ordered — reorder with the arrows. Add from your existing tracks.">
                 {form.trackIds.length === 0 ? (
                   <p className="text-xs text-gray-500">No tracks on this album yet.</p>
                 ) : (
@@ -375,6 +366,7 @@ export default function AlbumsManager() {
                 )}
                 {availableTracks.length > 0 ? (
                   <select
+                    aria-label="Add a track"
                     value=""
                     onChange={(e) => { if (e.target.value) addTrack(e.target.value); }}
                     className="mt-2 w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"

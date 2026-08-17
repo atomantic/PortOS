@@ -16,6 +16,7 @@ import { FilePen, Plus, Loader2, Trash2, Save, ImageIcon, Sparkles, X } from 'lu
 import BrailleSpinner from '../components/BrailleSpinner';
 import toast from '../components/ui/Toast';
 import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
+import Field from '../components/ui/FormField';
 import useMediaJobProgress from '../hooks/useMediaJobProgress';
 import { DEFAULT_NEGATIVE_PROMPT } from '../lib/imageGenDefaults';
 import {
@@ -50,16 +51,6 @@ const buildHeadshotPrompt = (f) => {
   const subject = desc ? `Author headshot portrait. ${desc}` : 'Professional author headshot portrait.';
   return style ? `${subject} ${style}` : subject;
 };
-
-function Field({ label, hint, children }) {
-  return (
-    <label className="block">
-      <span className="block text-xs uppercase tracking-wider text-gray-500 mb-1">{label}</span>
-      {children}
-      {hint ? <span className="block text-[11px] text-gray-500 mt-1">{hint}</span> : null}
-    </label>
-  );
-}
 
 export default function Authors() {
   const navigate = useNavigate();
@@ -296,7 +287,7 @@ export default function Authors() {
             <div className="text-gray-500 text-sm">Select an author to edit, or create a new one.</div>
           ) : (
             <div className="space-y-3">
-              <Field label="Name">
+              <Field compact label="Name">
                 <input
                   value={form.name}
                   onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
@@ -306,7 +297,7 @@ export default function Authors() {
                   autoFocus
                 />
               </Field>
-              <Field label="Writing style" hint="Voice / tone / craft notes — fed into stage prompts.">
+              <Field compact label="Writing style" hint="Voice / tone / craft notes — fed into stage prompts.">
                 <textarea
                   value={form.writingStyle}
                   onChange={(e) => setForm((f) => ({ ...f, writingStyle: e.target.value }))}
@@ -316,7 +307,7 @@ export default function Authors() {
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
                 />
               </Field>
-              <Field label="Bio" hint="About-the-author blurb for the back cover.">
+              <Field compact label="Bio" hint="About-the-author blurb for the back cover.">
                 <textarea
                   value={form.bio}
                   onChange={(e) => setForm((f) => ({ ...f, bio: e.target.value }))}
@@ -326,7 +317,7 @@ export default function Authors() {
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
                 />
               </Field>
-              <Field label="Physical description" hint="Subject of the cover headshot — appearance, age, expression.">
+              <Field compact label="Physical description" hint="Subject of the cover headshot — appearance, age, expression.">
                 <textarea
                   value={form.physicalDescription}
                   onChange={(e) => setForm((f) => ({ ...f, physicalDescription: e.target.value }))}
@@ -336,7 +327,7 @@ export default function Authors() {
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
                 />
               </Field>
-              <Field label="Headshot style" hint="Art / photography direction for the headshot render.">
+              <Field compact label="Headshot style" hint="Art / photography direction for the headshot render.">
                 <textarea
                   value={form.headshotStyle}
                   onChange={(e) => setForm((f) => ({ ...f, headshotStyle: e.target.value }))}
@@ -346,7 +337,7 @@ export default function Authors() {
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
                 />
               </Field>
-              <Field label="Headshot image" hint="Optional — generate from the description + style, choose or upload one via the gallery, or paste a URL. Used on covers.">
+              <Field compact label="Headshot image" hint="Optional — generate from the description + style, choose or upload one via the gallery, or paste a URL. Used on covers.">
                 <div className="flex items-start gap-3">
                   {isGenerating ? (
                     <div className="relative w-20 h-20 rounded border border-port-border bg-port-bg overflow-hidden flex items-center justify-center shrink-0">
@@ -411,6 +402,7 @@ export default function Authors() {
                       </button>
                     </div>
                     <input
+                      aria-label="Headshot image URL"
                       value={form.headshotImageUrl}
                       onChange={(e) => setHeadshot(e.target.value)}
                       disabled={isGenerating}

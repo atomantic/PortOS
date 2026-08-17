@@ -68,12 +68,12 @@ export default function LoraPicker({
   return (
     <div>
       <div className="flex items-center justify-between mb-1">
-        <label className="block text-xs font-medium text-gray-400">
+        <span className="block text-xs font-medium text-gray-400">
           LoRAs <span className="text-gray-600 font-normal">
             ({compatible.length}/{availableLoras.length} compatible
             {selected.length > 0 ? ` · ${selected.length}/${MAX_SELECTED_LORAS} selected` : ''})
           </span>
-        </label>
+        </span>
         <Link to="/media/loras" className="text-[11px] text-port-accent hover:underline">Manage →</Link>
       </div>
       {compatible.length === 0 ? (

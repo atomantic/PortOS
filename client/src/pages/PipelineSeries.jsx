@@ -23,6 +23,7 @@ import AutopilotPanel from '../components/pipeline/AutopilotPanel';
 import SeriesReviewPanel from '../components/pipeline/SeriesReviewPanel';
 import CatalogCastPanel from '../components/CatalogCastPanel';
 import TabPills from '../components/ui/TabPills';
+import Field from '../components/ui/FormField';
 import {
   getPipelineSeries, updatePipelineSeries,
   listPipelineIssues,
@@ -335,7 +336,7 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
         </button>
       </div>
 
-      <Field label="Name">
+      <Field compact label="Name">
         <input
           value={series.name || ''}
           onChange={(e) => patchSeries({ name: e.target.value })}
@@ -343,14 +344,14 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
           maxLength={200}
         />
       </Field>
-      <Field label="Author (cover byline + title screen)">
+      <Field compact label="Author (cover byline + title screen)">
         <AuthorPicker
           value={series.authorId}
           byline={series.author}
           onChange={(authorId, name) => patchSeries({ authorId: authorId || null, author: name })}
         />
       </Field>
-      <Field label="Logline">
+      <Field compact label="Logline">
         <input
           value={series.logline || ''}
           onChange={(e) => patchSeries({ logline: e.target.value })}
@@ -359,9 +360,10 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
           maxLength={500}
         />
       </Field>
-      <Field label="Target issues / episodes">
+      <Field compact label="Target issues / episodes">
         <div className="flex items-center gap-3 flex-wrap">
           <input
+            aria-label="Target issues or episodes"
             type="number"
             min={0}
             max={999}
@@ -373,10 +375,11 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
         </div>
       </Field>
 
-      <Field label="Primary manuscript format (source of truth)">
+      <Field compact label="Primary manuscript format (source of truth)">
         <div className="flex items-center gap-2">
           <select
             id="series-primary-manuscript"
+            aria-label="Primary manuscript format"
             value={series.primaryManuscriptType || ''}
             onChange={async (e) => {
               const value = e.target.value || null;
@@ -405,7 +408,7 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
         </p>
       </Field>
 
-      <Field label="Premise (the bible — fed into every stage's prompt context)">
+      <Field compact label="Premise (the bible — fed into every stage's prompt context)">
         <textarea
           value={series.premise || ''}
           onChange={(e) => patchSeries({ premise: e.target.value })}
@@ -416,7 +419,7 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
         />
       </Field>
 
-      <Field label="Style notes (tonal / visual)">
+      <Field compact label="Style notes (tonal / visual)">
         <textarea
           value={series.styleNotes || ''}
           onChange={(e) => patchSeries({ styleNotes: e.target.value })}
@@ -466,9 +469,10 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
         </p>
       </div>
 
-      <Field label="Linked Universe">
+      <Field compact label="Linked Universe">
         <div className="flex items-center gap-2">
           <select
+            aria-label="Linked universe"
             value={series.universeId || ''}
             onChange={(e) => patchSeries({ universeId: e.target.value })}
             className="flex-1 px-3 py-2 bg-port-bg border border-port-border rounded text-white"
@@ -488,7 +492,7 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
         </div>
       </Field>
 
-      <Field label="Universe style override (this series only)">
+      <Field compact label="Universe style override (this series only)">
         <div className="mb-2">
           <TabPills
             variant="pills"
@@ -503,6 +507,7 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
           />
         </div>
         <textarea
+          aria-label="Universe style override"
           value={series.stylePromptOverride || ''}
           onChange={(e) => patchSeries({ stylePromptOverride: e.target.value })}
           rows={2}
@@ -515,7 +520,7 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
         </p>
       </Field>
 
-      <Field label="Render backend (this series only)">
+      <Field compact label="Render backend (this series only)">
         {/* Per-record render pin (#3231 Phase 3) — this series' default image
             backend + model for storyboards, comic pages, and covers. */}
         <RecordRenderPinRow
@@ -1047,15 +1052,6 @@ function SgSelect({ id, label, value, options, onChange }) {
         {options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
       </select>
     </div>
-  );
-}
-
-function Field({ label, children }) {
-  return (
-    <label className="block">
-      <span className="block text-xs uppercase tracking-wider text-gray-500 mb-1">{label}</span>
-      {children}
-    </label>
   );
 }
 
