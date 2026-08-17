@@ -115,13 +115,13 @@ describe('CommissionConfigForm video duration controls', () => {
       );
     }
     render(<VideoHarness />);
-    expect(screen.getByLabelText('Video length')).toHaveValue('auto');
-    expect(screen.queryByLabelText('Duration (sec)')).not.toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('Video length'), { target: { value: 'manual' } });
-    expect(screen.getByLabelText('Duration (sec)')).toHaveValue(10);
     await waitFor(() => {
       expect(api.getProviders).toHaveBeenCalled();
       expect(api.getSettings).toHaveBeenCalled();
     });
+    expect(screen.getByLabelText('Video length')).toHaveValue('auto');
+    expect(screen.queryByLabelText('Duration (sec)')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Video length'), { target: { value: 'manual' } });
+    expect(screen.getByLabelText('Duration (sec)')).toHaveValue(10);
   });
 });
