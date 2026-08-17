@@ -1,3 +1,5 @@
+// @vitest-environment node
+
 // Resume-window race guard for the score players. Lives in its own file because
 // the module memoizes one shared AudioContext on first use — a fresh module
 // registry (per Vitest file) lets the first play() create a *suspended* context

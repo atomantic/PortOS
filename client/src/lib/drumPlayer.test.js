@@ -1,3 +1,5 @@
+// @vitest-environment node
+
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { parseDrumChart } from './drumNotation.js';
 import { createDrumPlayer } from './drumPlayback.js';

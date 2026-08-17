@@ -1,3 +1,5 @@
+// @vitest-environment node
+
 // Schedule + audio-session tests for the chiptune preview (#2911). Most of this
 // file exercises the Web-Audio-free exports (buildChiptuneSchedule /
 // parseChiptunePitch); the timing semantics there MUST agree with

@@ -1,3 +1,5 @@
+// @vitest-environment node
+
 import { describe, it, expect, vi } from 'vitest';
 
 // RunsHistoryPage pulls in the API barrel transitively; stub it so importing the
