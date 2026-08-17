@@ -1,3 +1,5 @@
+// @vitest-environment node
+
 /**
  * Repo-wide guard: `hooks/useMounted.js` is the only mounted-guard ref.
  *
