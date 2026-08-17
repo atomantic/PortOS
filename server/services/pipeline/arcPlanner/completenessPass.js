@@ -3,6 +3,7 @@
  * (findings + optional edit generation). Built on ./context.js.
  */
 
+import { createHash } from 'crypto';
 import { resolveStageContext, runStagedLLM } from '../../../lib/stageRunner.js';
 import {
   estimateTokens, planManuscriptPass, fitContextToManuscriptFloor,
@@ -11,7 +12,8 @@ import {
 import { getSeries } from '../series.js';
 import { STAGE_OUTPUT_MAX } from '../issues.js';
 import { getSeriesCanon } from '../seriesCanon.js';
-import { ERR_VALIDATION, MANUSCRIPT_STAGES, VERIFY_SEVERITIES, buildArcBaseContext, collectManuscriptSections, makeErr, manuscriptSectionHeader, manuscriptSourceHash, sectionsCorpus } from './context.js';
+import { canonicalStringify } from '../../../lib/objects.js';
+import { ERR_VALIDATION, MANUSCRIPT_STAGES, VERIFY_SEVERITIES, buildArcBaseContext, collectManuscriptSections, makeErr, manuscriptSectionHeader, sectionsCorpus } from './context.js';
 
 // ── Manuscript completeness ("finish the draft") ──────────────────────────
 // Unlike verifyArc/verifyVolume (which read synopsis/beats from idea.input /
@@ -96,6 +98,15 @@ export async function buildCompletenessContext(series, manuscript, preloadedWorl
     existingObjectsJson: JSON.stringify(canon.objects, null, 2),
   };
 }
+
+// Completeness advice depends on every reference projection the model sees,
+// not just the manuscript. Hash the complete, untrimmed context deterministically
+// so an arc, premise, world, or canon edit makes prior advice stale even when the
+// drafted pages themselves have not changed. The read path rebuilds this same
+// context and calls this one helper, preventing seed/read fingerprint drift.
+export const completenessSourceHash = (context) => createHash('sha256')
+  .update(canonicalStringify(context ?? {}) || '')
+  .digest('hex');
 
 export const COMPLETENESS_STAGE = 'pipeline-manuscript-completeness';
 
@@ -209,12 +220,6 @@ export async function analyzeManuscriptCompleteness(seriesId, options = {}) {
       ERR_VALIDATION,
     );
   }
-  // Pin every finding from this pass to the complete source corpus, including
-  // findings emitted from individual chunks. If any issue manuscript changes,
-  // the review can then mark the old advice stale instead of presenting it as
-  // if it still described the current draft.
-  const sourceContentHash = manuscriptSourceHash(sectionsCorpus(sections));
-
   const withEdits = !!options.withEdits;
   const onProgress = typeof options.onProgress === 'function' ? options.onProgress : () => {};
   const signal = options.signal || null;
@@ -226,6 +231,10 @@ export async function analyzeManuscriptCompleteness(seriesId, options = {}) {
   //   1. hard-cap the canon reference (window-independent), then
   //   2. window-aware-trim it so the manuscript always keeps a budget floor.
   const baseCtx = await buildCompletenessContext(series, '', options.preloadedWorld);
+  const sourceContentHash = completenessSourceHash({
+    ...baseCtx,
+    manuscript: sectionsCorpus(sections),
+  });
   const { contextWindow } = await resolveStageContext(COMPLETENESS_STAGE, {
     providerOverride: options.providerOverride,
     providerDefault: options.providerDefault,

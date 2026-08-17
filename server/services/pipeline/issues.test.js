@@ -263,6 +263,69 @@ describe('pipeline issues service', () => {
     expect(coverRefresh.refreshSeriesCoverImage).toHaveBeenCalledWith('ser-1');
   });
 
+  it('refreshes once when a batch replaces a rendered issue cover', async () => {
+    const issue = await svc.createIssue({ seriesId: 'ser-1', title: 'First' });
+    await svc.updateStage(issue.id, 'comicPages', {
+      status: 'ready',
+      cover: { finalImage: { filename: 'old-cover.png', fromProof: false } },
+    });
+    coverRefresh.refreshSeriesCoverImage.mockClear();
+
+    await svc.updateStagesWithLatest('ser-1', [
+      {
+        issueId: issue.id,
+        stageId: 'comicPages',
+        computeFn: (stage) => ({
+          cover: {
+            ...stage.cover,
+            finalImage: { filename: 'new-cover.png', fromProof: false },
+          },
+        }),
+      },
+    ]);
+
+    expect(coverRefresh.refreshSeriesCoverImage).toHaveBeenCalledOnce();
+    expect(coverRefresh.refreshSeriesCoverImage).toHaveBeenCalledWith('ser-1');
+  });
+
+  it('refreshes once when a batch clears a rendered issue cover', async () => {
+    const issue = await svc.createIssue({ seriesId: 'ser-1', title: 'First' });
+    await svc.updateStage(issue.id, 'comicPages', {
+      status: 'ready',
+      cover: { finalImage: { filename: 'old-cover.png', fromProof: false } },
+    });
+    coverRefresh.refreshSeriesCoverImage.mockClear();
+
+    await svc.updateStagesWithLatest('ser-1', [{
+      issueId: issue.id,
+      stageId: 'comicPages',
+      computeFn: () => ({ cover: null }),
+    }]);
+
+    expect(coverRefresh.refreshSeriesCoverImage).toHaveBeenCalledOnce();
+    expect(coverRefresh.refreshSeriesCoverImage).toHaveBeenCalledWith('ser-1');
+  });
+
+  it('does not refresh after a batch patch that preserves the rendered cover filename', async () => {
+    const issue = await svc.createIssue({ seriesId: 'ser-1', title: 'First' });
+    await svc.updateStage(issue.id, 'comicPages', {
+      status: 'ready',
+      cover: {
+        script: 'old concept',
+        finalImage: { filename: 'same-cover.png', fromProof: false },
+      },
+    });
+    coverRefresh.refreshSeriesCoverImage.mockClear();
+
+    await svc.updateStagesWithLatest('ser-1', [{
+      issueId: issue.id,
+      stageId: 'comicPages',
+      computeFn: (stage) => ({ cover: { ...stage.cover, script: 'new concept' } }),
+    }]);
+
+    expect(coverRefresh.refreshSeriesCoverImage).not.toHaveBeenCalled();
+  });
+
   describe('runHistory snapshots', () => {
     const seedFirstRun = async () => {
       const i = await svc.createIssue({ seriesId: 'ser-1', title: 'Pilot' });
@@ -686,12 +749,41 @@ describe('pipeline issues service', () => {
     const i = await svc.createIssue({ seriesId: 'ser-1', title: 'Clear cover' });
     await svc.updateStage(i.id, 'comicPages', {
       status: 'edited',
-      cover: { script: 'concept', imageJobId: null, prompt: null },
+      cover: {
+        script: 'concept',
+        imageJobId: null,
+        prompt: null,
+        finalImage: { filename: 'rendered-cover.png', fromProof: false },
+      },
     });
+    coverRefresh.refreshSeriesCoverImage.mockClear();
     const updated = await svc.updateIssue(i.id, {
       stages: { comicPages: { cover: null } },
     });
     expect(updated.stages.comicPages.cover).toBeNull();
+    expect(coverRefresh.refreshSeriesCoverImage).toHaveBeenCalledOnce();
+    expect(coverRefresh.refreshSeriesCoverImage).toHaveBeenCalledWith('ser-1');
+  });
+
+  it('refreshes after a rendered cover replacement in the renumbering update path', async () => {
+    const i = await svc.createIssue({ seriesId: 'ser-1', title: 'Move and replace' });
+    await svc.updateStage(i.id, 'comicPages', {
+      status: 'edited',
+      cover: { finalImage: { filename: 'before.png', fromProof: false } },
+    });
+    coverRefresh.refreshSeriesCoverImage.mockClear();
+
+    await svc.updateIssue(i.id, {
+      arcPosition: 2,
+      stages: {
+        comicPages: {
+          cover: { finalImage: { filename: 'after.png', fromProof: false } },
+        },
+      },
+    });
+
+    expect(coverRefresh.refreshSeriesCoverImage).toHaveBeenCalledOnce();
+    expect(coverRefresh.refreshSeriesCoverImage).toHaveBeenCalledWith('ser-1');
   });
 
   it('clears errorMessage when a stage patch transitions out of error state', async () => {

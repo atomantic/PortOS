@@ -126,6 +126,11 @@ describe('checkIssueCanonReadiness (matches the visual source)', () => {
     const report = await checkIssueCanonReadiness(issue.id);
     expect(report.ready).toBe(false);
     expect(report.missingSourceStages).toEqual(['teleplay']);
+
+    const comicOnly = await checkIssueCanonReadiness(issue.id, { sourceStages: ['comicScript'] });
+    expect(comicOnly.ready).toBe(true);
+    expect(comicOnly.sourceStages).toEqual(['comicScript']);
+    expect(comicOnly.missingSourceStages).toEqual([]);
   });
 
   it('does not flag a character named only in dialogue body (not drawn)', async () => {

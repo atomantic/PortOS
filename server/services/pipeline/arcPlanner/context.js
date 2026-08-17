@@ -7,7 +7,6 @@
  * the other arcPlanner modules — they all import from here.
  */
 
-import { createHash } from 'crypto';
 import { MANUSCRIPT_TYPES } from '../series.js';
 import { listIssues, STAGE_INPUT_MAX } from '../issues.js';
 import { ARC_LIMITS, ARC_ROLES as ARC_ROLE_LIST, ARC_SHAPE_IDS, READER_MAP_BEAT_KINDS, buildSeason, renderArcShapeGuidance, renderTickingClock, sanitizeSeasonList } from '../../../lib/storyArc.js';
@@ -15,7 +14,7 @@ import { trimToClause } from '../../../lib/storyBible.js';
 import { composeStyleNotes } from '../../../lib/styleGuide.js';
 import { CHARACTER_ARC_LIMITS, renderCharacterArcsForPrompt } from '../../../lib/seriesCharacterArc.js';
 import { describeStructure, recommendStructure } from '../../../lib/seasonStructure.js';
-import { DEFAULT_LENGTH_PROFILE, LENGTH_PROFILE_NAMES } from '../../../lib/issueLength.js';
+import { computeIssueTargets, DEFAULT_LENGTH_PROFILE, LENGTH_PROFILE_NAMES } from '../../../lib/issueLength.js';
 import { getUniverse } from '../../universeBuilder.js';
 import { getSeriesPlanningCanon, scopeCanonForSeries } from '../seriesCanon.js';
 import { renderCanonForPrompt, renderCategoriesForPrompt, renderCompositesForPrompt, renderEntitiesSummary } from '../../../lib/universePromptRenderers.js';
@@ -260,15 +259,6 @@ export const manuscriptSectionHeader = (s) => `# Issue ${s.number}${s.title ? ` 
 // completeness pass, and manuscriptFix so the LLM-visible text never drifts.
 export const sectionsCorpus = (sections) =>
   sections.map((s) => `${manuscriptSectionHeader(s)}\n\n${s.content || ''}`).join('\n\n---\n\n');
-
-// Completeness findings have no registry checkId, but they still need the same
-// source-staleness contract as editorial-check findings. A manuscript-only
-// registry check fingerprints one named segment (`manuscript=<corpus>`), so
-// keep that exact projection here for both the completeness seed and review
-// read paths. Centralizing it prevents the two paths from drifting byte-wise.
-export const manuscriptSourceHash = (manuscript) => createHash('sha256')
-  .update(`manuscript=${manuscript || ''}`)
-  .digest('hex');
 
 export async function collectIssueSourceText(seriesId, { stageOrder = SOURCE_STAGE_ORDER } = {}) {
   if (!seriesId) return '';
@@ -532,15 +522,20 @@ export function groupIssuesBySeasonTree(seasons, issues, { renderLeaf, seasonFie
 //
 // `synopsis` (not `beats`) matches the prompt's existing language; it is sourced
 // from idea.input, which carries the LLM's logline+synopsis.
-export const renderVerifyIssueLeaf = (iss) => ({
-  number: iss.number,
-  title: iss.title,
-  status: iss.status,
-  arcPosition: iss.arcPosition,
-  arcRole: iss.arcRole || null,
-  lengthProfile: iss.lengthProfile || null,
-  synopsis: (iss.stages?.idea?.input || '').trim() || null,
-});
+export const renderVerifyIssueLeaf = (iss) => {
+  const targets = computeIssueTargets(iss);
+  return {
+    number: iss.number,
+    title: iss.title,
+    status: iss.status,
+    arcPosition: iss.arcPosition,
+    arcRole: iss.arcRole || null,
+    lengthProfile: iss.lengthProfile || null,
+    pageTarget: targets.pageTarget,
+    minutesTarget: targets.minutesTarget,
+    synopsis: (iss.stages?.idea?.input || '').trim() || null,
+  };
+};
 
 // The volume node the arc-verify prompt scores. Exported for the same contract
 // test as `renderVerifyIssueLeaf` — checks #3/#4/#7 read `endingHook`,
@@ -650,6 +645,7 @@ export function shapeEpisodeResolutions(rawEpisodes) {
 export function renderVolumeIssue(iss, { synopsisOnly = false } = {}) {
   const beats = synopsisOnly ? '' : (iss.stages?.idea?.output || '').trim();
   const synopsis = (iss.stages?.idea?.input || '').trim();
+  const targets = computeIssueTargets(iss);
   const base = {
     number: iss.number,
     title: iss.title,
@@ -657,6 +653,8 @@ export function renderVolumeIssue(iss, { synopsisOnly = false } = {}) {
     arcPosition: iss.arcPosition,
     arcRole: iss.arcRole || null,
     lengthProfile: iss.lengthProfile || null,
+    pageTarget: targets.pageTarget,
+    minutesTarget: targets.minutesTarget,
   };
   if (beats) return { ...base, beats };
   return { ...base, synopsis: synopsis || null };

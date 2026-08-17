@@ -1,5 +1,7 @@
-import { readFileSync } from 'fs';
-import { describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { repoRoot, runPromptMigrationTests } from './_testHelpers.js';
 import migration, {
@@ -9,6 +11,14 @@ import migration, {
 } from './275-pipeline-planning-economy.js';
 
 describe('migration 275 — pipeline planning economy', () => {
+  let warningRoot = null;
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (warningRoot) rmSync(warningRoot, { recursive: true, force: true });
+    warningRoot = null;
+  });
+
   runPromptMigrationTests({
     migration,
     applyMigration,
@@ -35,5 +45,24 @@ describe('migration 275 — pipeline planning economy', () => {
     }
     expect(arcVerify).toContain('Premise-engine continuity');
     expect(volumeVerify).toContain('Active story engines');
+  });
+
+  it('gives customized resolver owners the resolver-specific manual upgrade', async () => {
+    warningRoot = mkdtempSync(join(tmpdir(), 'migration-275-customized-warning-'));
+    const stagesDir = join(warningRoot, 'data', 'prompts', 'stages');
+    mkdirSync(stagesDir, { recursive: true });
+    for (const filename of Object.keys(NEW_SHIPPED_MD5)) {
+      writeFileSync(join(stagesDir, filename), `# customized ${filename}\n`);
+    }
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await migration.up({ rootDir: warningRoot });
+
+    const resolverWarning = warn.mock.calls
+      .map(([message]) => String(message))
+      .find((message) => message.includes('pipeline-arc-resolve.md'));
+    expect(resolverWarning).toContain('4,000-character');
+    expect(resolverWarning).toContain('replace or compact');
+    expect(resolverWarning).toContain('instead of appending');
   });
 });

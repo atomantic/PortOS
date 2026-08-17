@@ -4238,7 +4238,7 @@ describe('autopilot conductor', () => {
     const { seriesId } = await seedComplete();
     await autopilot.startSeriesAutopilot(seriesId, { includeVisual: true });
     await waitFor(runFinished(seriesId));
-    expect(checkSeriesCanonReadiness).toHaveBeenCalled();
+    expect(checkSeriesCanonReadiness).toHaveBeenCalledWith(seriesId, { sourceStages: ['comicScript'] });
     expect(visualSpies.enqueueComicCover).toHaveBeenCalled();
     expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
   });

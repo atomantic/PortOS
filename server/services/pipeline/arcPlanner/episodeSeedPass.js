@@ -110,7 +110,7 @@ export function shapeEpisodes(rawEpisodes) {
     out.push({
       number,
       title,
-      logline: typeof raw?.logline === 'string' ? raw.logline.trim().slice(0, 500) : '',
+      logline: trimToClause(raw?.logline, ARC_LIMITS.EPISODE_LOGLINE_MAX),
       synopsis: trimToClause(raw?.synopsis, ARC_LIMITS.EPISODE_SYNOPSIS_MAX),
       primaryCharacters,
       arcRole,

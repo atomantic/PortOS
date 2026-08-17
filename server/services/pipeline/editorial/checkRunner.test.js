@@ -3,7 +3,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Mock the data sources + LLM + seed, but use the REAL registry so the runner
 // exercises the actual reference checks (deterministic naming + LLM info-dump).
 vi.mock('../../settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
-vi.mock('../series.js', () => ({ getSeries: vi.fn(async () => ({ id: 's1', universeId: 'u1' })) }));
+let seriesState = { id: 's1', universeId: 'u1', premise: 'A fragile alliance.', arc: { summary: 'The alliance holds.' } };
+vi.mock('../series.js', () => ({
+  getSeries: vi.fn(async () => seriesState),
+  MANUSCRIPT_TYPES: ['comicScript', 'teleplay', 'prose'],
+}));
 // Issues source — backed by a mutable fixture so the storyboard.shots continuity
 // check (#1315) can be exercised; default empty so the check is gated off unless a
 // test populates issues carrying storyboard scenes. The runner reads the UNCAPPED
@@ -11,22 +15,37 @@ vi.mock('../series.js', () => ({ getSeries: vi.fn(async () => ({ id: 's1', unive
 let issuesState = [];
 vi.mock('../issues.js', () => ({
   listIssuesForSeries: vi.fn(async (seriesId) => issuesState.filter((i) => i.seriesId === seriesId)),
+  listIssues: vi.fn(async () => []),
+  STAGE_INPUT_MAX: 200_000,
+  STAGE_OUTPUT_MAX: 200_000,
 }));
-vi.mock('../seriesCanon.js', () => ({
-  getSeriesCanon: vi.fn(async () => ({
+let canonState = {
     characters: [{ name: 'Alina' }, { name: 'Alana' }, { name: 'Zog' }],
     places: [],
     objects: [],
-  })),
+};
+vi.mock('../seriesCanon.js', () => ({
+  getSeriesCanon: vi.fn(async () => canonState),
+  getSeriesPlanningCanon: vi.fn(async () => canonState),
+  scopeCanonForSeries: vi.fn((world) => world),
 }));
-vi.mock('../arcPlanner.js', () => ({
-  collectManuscriptSections: vi.fn(async () => [
-    { number: 1, title: 'Pilot', stageId: 'prose', content: 'As you know, Bob, the kingdom fell.' },
-  ]),
-  sectionsCorpus: vi.fn((sections) => sections.map((s) => s.content).join('\n')),
-  manuscriptSectionHeader: vi.fn((s) => `# Issue ${s.number}`),
-  manuscriptSourceHash: vi.fn((manuscript) => `manuscript-hash:${manuscript}`),
-}));
+vi.mock('../../universeBuilder.js', () => ({ getUniverse: vi.fn(async () => null) }));
+const defaultSections = [
+  { number: 1, title: 'Pilot', stageId: 'prose', content: 'As you know, Bob, the kingdom fell.' },
+];
+vi.mock('../arcPlanner.js', async () => {
+  const [context, completeness] = await Promise.all([
+    vi.importActual('../arcPlanner/context.js'),
+    vi.importActual('../arcPlanner/completenessPass.js'),
+  ]);
+  return {
+    collectManuscriptSections: vi.fn(async () => defaultSections),
+    sectionsCorpus: context.sectionsCorpus,
+    manuscriptSectionHeader: context.manuscriptSectionHeader,
+    buildCompletenessContext: completeness.buildCompletenessContext,
+    completenessSourceHash: completeness.completenessSourceHash,
+  };
+});
 vi.mock('../../../lib/stageRunner.js', () => ({
   runStagedLLM: vi.fn(async () => ({
     runId: 'llm-run',
@@ -79,7 +98,7 @@ vi.mock('../editorialAnalysis.js', () => ({ getSeriesEditorial: vi.fn(async () =
 
 const { runEditorialChecks, buildEditorialCheckPlan, getReviewWithStaleness, enabledChecksConsumeReverseOutline, buildReverseOutlineGateContext, summarizeCheckErrors, previewCustomCheck, buildScopedPriorFindings, effectiveCheckSources, __testing: checkRunnerTesting } = await import('./checkRunner.js');
 const { runStagedLLM, resolveStageContext } = await import('../../../lib/stageRunner.js');
-const { collectManuscriptSections } = await import('../arcPlanner.js');
+const { buildCompletenessContext, collectManuscriptSections, completenessSourceHash, sectionsCorpus } = await import('../arcPlanner.js');
 const { getSeriesCanon } = await import('../seriesCanon.js');
 const { getSeries } = await import('../series.js');
 const { getSettings } = await import('../../settings.js');
@@ -96,6 +115,12 @@ const disableWhere = (predicate) => ({
 });
 
 beforeEach(() => {
+  seriesState = { id: 's1', universeId: 'u1', premise: 'A fragile alliance.', arc: { summary: 'The alliance holds.' } };
+  canonState = {
+    characters: [{ name: 'Alina' }, { name: 'Alana' }, { name: 'Zog' }],
+    places: [],
+    objects: [],
+  };
   seedStore.length = 0;
   reviewState = { comments: [] };
   outlineState = { scenes: [] };
@@ -106,6 +131,7 @@ beforeEach(() => {
   resolveStageContext.mockClear();
   collectManuscriptSections.mockClear();
   getSeriesCanon.mockClear();
+  getSeries.mockClear();
   listIssuesForSeries.mockClear();
 });
 
@@ -959,10 +985,14 @@ describe('getReviewWithStaleness (#1345)', () => {
   });
 
   it('evaluates hash-stamped completeness comments while leaving legacy and unknown checks unannotated', async () => {
+    const sourceContentHash = completenessSourceHash(await buildCompletenessContext(
+      seriesState,
+      sectionsCorpus(defaultSections),
+    ));
     reviewState = {
       comments: [
         { id: 'a', checkId: 'naming.dissimilar-names', anchorQuote: 'x', problem: 'legacy', status: 'open' }, // no hash
-        { id: 'b', checkId: null, anchorQuote: 'y', problem: 'completeness', status: 'open', sourceContentHash: 'manuscript-hash:As you know, Bob, the kingdom fell.' },
+        { id: 'b', checkId: null, anchorQuote: 'y', problem: 'completeness', status: 'open', sourceContentHash },
         { id: 'c', checkId: 'does.not-exist', anchorQuote: 'z', problem: 'unknown check', status: 'open', sourceContentHash: 'abc' },
       ],
     };
@@ -971,7 +1001,74 @@ describe('getReviewWithStaleness (#1345)', () => {
     expect(review.comments.find((c) => c.id === 'a')).not.toHaveProperty('stale');
     expect(review.comments.find((c) => c.id === 'c')).not.toHaveProperty('stale');
     expect(collectManuscriptSections).toHaveBeenCalledWith('s1');
-    expect(getSeriesCanon).not.toHaveBeenCalled();
+
+    collectManuscriptSections.mockResolvedValueOnce([
+      { number: 1, title: 'Pilot', stageId: 'prose', content: 'The manuscript has changed.' },
+    ]);
+    const stale = await getReviewWithStaleness('s1');
+    expect(stale.comments.find((c) => c.id === 'b').stale).toBe(true);
+    expect(getSeriesCanon).toHaveBeenCalled();
+  });
+
+  it('stales completeness advice when the intended arc or canon changes without a manuscript edit', async () => {
+    const manuscript = sectionsCorpus(defaultSections);
+    const sourceContentHash = completenessSourceHash(await buildCompletenessContext(seriesState, manuscript));
+    reviewState = {
+      comments: [{
+        id: 'b', checkId: null, anchorQuote: 'y', problem: 'completeness',
+        status: 'open', sourceContentHash,
+      }],
+    };
+
+    const fresh = await getReviewWithStaleness('s1');
+    expect(fresh.comments[0].stale).toBe(false);
+
+    seriesState = { ...seriesState, arc: { summary: 'The alliance shatters.' } };
+    const arcStale = await getReviewWithStaleness('s1');
+    expect(arcStale.comments[0].stale).toBe(true);
+
+    seriesState = { ...seriesState, arc: { summary: 'The alliance holds.' } };
+    canonState = { ...canonState, places: [{ name: 'The New Citadel' }] };
+    const canonStale = await getReviewWithStaleness('s1');
+    expect(canonStale.comments[0].stale).toBe(true);
+  });
+
+  it('recomputes named-check and completeness fingerprints together in a mixed review', async () => {
+    const run = await runEditorialChecks('s1');
+    const naming = run.findings.find((finding) => finding.checkId === 'naming.dissimilar-names');
+    const completenessHash = completenessSourceHash(await buildCompletenessContext(
+      seriesState,
+      sectionsCorpus(defaultSections),
+    ));
+    reviewState = {
+      comments: [
+        {
+          id: 'named', checkId: naming.checkId, anchorQuote: naming.anchorQuote,
+          problem: naming.problem, status: 'open', sourceContentHash: naming.sourceContentHash,
+        },
+        {
+          id: 'completeness', checkId: null, anchorQuote: 'kingdom fell',
+          problem: 'arc gap', status: 'open', sourceContentHash: completenessHash,
+        },
+      ],
+    };
+
+    const fresh = await getReviewWithStaleness('s1');
+    expect(fresh.comments.find((comment) => comment.id === 'named').stale).toBe(false);
+    expect(fresh.comments.find((comment) => comment.id === 'completeness').stale).toBe(false);
+
+    collectManuscriptSections.mockResolvedValueOnce([{
+      ...defaultSections[0],
+      content: 'The manuscript changed while the canon names stayed fixed.',
+    }]);
+    const manuscriptStale = await getReviewWithStaleness('s1');
+    expect(manuscriptStale.comments.find((comment) => comment.id === 'completeness').stale).toBe(true);
+    expect(manuscriptStale.comments.find((comment) => comment.id === 'named').stale).toBe(false);
+
+    seriesState = { ...seriesState, arc: { summary: 'The alliance shatters.' } };
+    const arcStale = await getReviewWithStaleness('s1');
+    expect(arcStale.comments.find((comment) => comment.id === 'completeness').stale).toBe(true);
+    expect(arcStale.comments.find((comment) => comment.id === 'named').stale).toBe(false);
   });
 });
 

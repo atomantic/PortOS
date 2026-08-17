@@ -175,7 +175,11 @@ export async function runVisualDraft(sId, issueId, record) {
 // has no description (it can't be drawn). Marks canonVerified when clean so the
 // run proceeds to visual drafting.
 export async function runCanonVerify(sId, record) {
-  let report = await checkSeriesCanonReadiness(sId);
+  // This gate only precedes comic-page rendering. A hybrid run may be scoped to
+  // comics and intentionally omit teleplays, so judge the source this step will
+  // actually render; the general series review still requires both formats.
+  const readinessOptions = { sourceStages: ['comicScript'] };
+  let report = await checkSeriesCanonReadiness(sId, readinessOptions);
   if (!report.ready) {
     const series = await getSeries(sId);
     const providerOpts = providerOverrideOpts(record);
@@ -232,7 +236,7 @@ export async function runCanonVerify(sId, record) {
     }
     // Re-read after every issue-local repair. Shared canon means one fill can
     // clear the same noun across many later issues without another LLM call.
-    report = await checkSeriesCanonReadiness(sId);
+    report = await checkSeriesCanonReadiness(sId, readinessOptions);
   }
   broadcast(sId, {
     type: 'verify:round', scope: 'canon', round: 1,

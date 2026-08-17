@@ -482,6 +482,31 @@ describe('renderArc — episode-list budget', () => {
     expect(out).not.toContain('omitted to fit the prompt budget');
   });
 
+  it('renders authored episode metadata and exact synopsis word counts', () => {
+    const issues = [
+      {
+        number: 1,
+        seasonId: 'sea-1',
+        title: 'Opening',
+        arcRole: 'pilot',
+        lengthProfile: 'teaser',
+        stages: { idea: { input: 'Three deliberate words' } },
+      },
+      {
+        number: 2,
+        seasonId: 'sea-1',
+        title: 'Finale',
+        arcRole: 'finale',
+        lengthProfile: 'custom',
+        stages: { idea: { input: '' } },
+      },
+    ];
+
+    const out = __testing.renderArc(bigSeries, issues);
+    expect(out).toContain('#1 Opening [role=pilot, length=teaser, 3 synopsis words]: Three deliberate words');
+    expect(out).toContain('#2 Finale [role=finale, length=custom, 0 synopsis words]: (no synopsis)');
+  });
+
   it('drops whole trailing episode lines to fit, keeping the plan spine intact', () => {
     const out = __testing.renderArc(bigSeries, manyIssues, { maxChars: 4_000 });
     // Spine survives: arc header, volume logline/synopsis/hook, authored arcs.

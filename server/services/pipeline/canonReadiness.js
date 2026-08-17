@@ -200,6 +200,14 @@ const requiredVisualStages = (targetFormat) => {
   return ['comicScript', 'teleplay'];
 };
 
+const resolveVisualStages = (targetFormat, sourceStages) => {
+  if (!Array.isArray(sourceStages) || sourceStages.length === 0) {
+    return requiredVisualStages(targetFormat);
+  }
+  const scoped = [...new Set(sourceStages.filter((stageId) => stageId === 'comicScript' || stageId === 'teleplay'))];
+  return scoped.length > 0 ? scoped : requiredVisualStages(targetFormat);
+};
+
 function mergeGrades(grades) {
   const none = new Map();
   const thin = new Map();
@@ -228,20 +236,26 @@ function mergeGrades(grades) {
  * dialogue speakers) so an off-page character named only in dialogue body
  * isn't a false blocker. TV sources grade the teleplay. A prose draft or empty
  * outline is not a visual source and therefore cannot produce a vacuous
- * `ready:true`; hybrid series require both parallel-format scripts.
+ * `ready:true`; hybrid series require both parallel-format scripts unless a
+ * caller explicitly scopes `sourceStages` to the format it is about to render.
  */
-export async function checkIssueCanonReadiness(issueId, { canon = null, series = null, thinChars = CANON_THIN_CHARS } = {}) {
+export async function checkIssueCanonReadiness(issueId, {
+  canon = null,
+  series = null,
+  thinChars = CANON_THIN_CHARS,
+  sourceStages = null,
+} = {}) {
   const issue = await getIssue(issueId);
   const ser = series || await getSeries(issue.seriesId).catch(() => null);
   const c = canon || (ser ? await getSeriesCanon(ser).catch(() => null) : null) || { characters: [], places: [], objects: [] };
   const fmt = ser?.targetFormat || 'comic+tv';
-  const sourceStages = requiredVisualStages(fmt);
-  const sourceText = Object.fromEntries(sourceStages.map((stageId) => [
+  const visualStages = resolveVisualStages(fmt, sourceStages);
+  const sourceText = Object.fromEntries(visualStages.map((stageId) => [
     stageId,
     (issue.stages?.[stageId]?.output || '').trim(),
   ]));
-  const missingSourceStages = sourceStages.filter((stageId) => !sourceText[stageId]);
-  const grades = sourceStages.flatMap((stageId) => {
+  const missingSourceStages = visualStages.filter((stageId) => !sourceText[stageId]);
+  const grades = visualStages.flatMap((stageId) => {
     const text = sourceText[stageId];
     if (!text) return [];
     return [stageId === 'comicScript'
@@ -258,7 +272,7 @@ export async function checkIssueCanonReadiness(issueId, { canon = null, series =
     none: graded.none,
     thin: graded.thin,
     ready,
-    sourceStages,
+    sourceStages: visualStages,
     missingSourceStages,
     blockingReason: missingSourceStages.length > 0
       ? 'missing-visual-source'
@@ -271,13 +285,15 @@ export async function checkIssueCanonReadiness(issueId, { canon = null, series =
  * series-level roll-up: `ready` (no issue has an undescribed drawn noun),
  * `blockingIssues[]`, and the de-duplicated `undescribed[]` noun list.
  */
-export async function checkSeriesCanonReadiness(seriesId, { thinChars = CANON_THIN_CHARS } = {}) {
+export async function checkSeriesCanonReadiness(seriesId, { thinChars = CANON_THIN_CHARS, sourceStages = null } = {}) {
   const series = await getSeries(seriesId);
   const canon = await getSeriesCanon(series).catch(() => ({ characters: [], places: [], objects: [] }));
   const issues = await listIssues({ seriesId });
   const perIssue = [];
   for (const issue of issues) {
-    perIssue.push(await checkIssueCanonReadiness(issue.id, { canon, series, thinChars }));
+    perIssue.push(await checkIssueCanonReadiness(issue.id, {
+      canon, series, thinChars, sourceStages,
+    }));
   }
   const blocking = perIssue.filter((r) => !r.ready);
   const noneById = new Map();

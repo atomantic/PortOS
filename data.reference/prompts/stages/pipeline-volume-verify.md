@@ -114,14 +114,17 @@ Walk the volume in issue / episode order. Score each issue against the volume's 
     concern unless the issue truly carries unusual complexity, and above 700 is
     high. Flag append-only continuity caveats, duplicated facts, and minor
     procedure that buries the turn. The title, `arcRole`, and `lengthProfile`
-    must match the issue's actual function.
+    must match the issue's actual function. The numeric `pageTarget` and
+    `minutesTarget` are the materialized scope for both presets and custom
+    profiles; judge whether the planned action fits that space without padding
+    or compression.
 12. **Active story engines.** Every major quest or promise active at the start
     of this volume must advance, be consciously traded off, or receive a clear
     deferral beat before the ending. A louder survival or institutional plot
     must not make a co-equal search, mystery, relationship, or personal need
     disappear between issues.
 
-DO NOT flag problems that are properly cross-volume in nature (a character introduced in volume 1 paying off in volume 4 — that's the arc verify's job, not yours). Stay inside this volume's walls; the only outside-the-walls checks allowed are #5 (boundary continuity with the immediate neighbors shown above).
+DO NOT flag problems that are properly cross-volume in nature (a character introduced in volume 1 paying off in volume 4 — that's the arc verify's job, not yours). Stay inside this volume's walls; the only outside-the-walls checks allowed are #5 (boundary continuity with the immediate neighbors shown above) and #12 solely to identify engines explicitly established as active in the supplied full-arc or volume-entry context. Do not judge a payoff scheduled for a later volume.
 
 ## Output contract
 

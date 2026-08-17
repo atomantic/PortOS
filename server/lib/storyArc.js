@@ -46,6 +46,7 @@ export const ARC_LIMITS = Object.freeze({
   // every continuity exception the verifier has ever raised. Keep the value in
   // the shared arc limits so initial episode generation and later arc repairs
   // cannot silently disagree about how much text one episode may own.
+  EPISODE_LOGLINE_MAX: 500,
   EPISODE_SYNOPSIS_MAX: 4000,
 });
 

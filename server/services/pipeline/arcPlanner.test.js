@@ -407,6 +407,20 @@ describe('arcPlanner — generateSeasonEpisodes', () => {
     expect(out.episodes[0].synopsis).not.toContain('This tail must be removed');
   });
 
+  it('keeps generated episode loglines within their budget at a word boundary', async () => {
+    const { series, seasons } = await setupSeriesWithSeasons();
+    const overlong = `${'A consequential choice changes the pursuit without ending it. '.repeat(12)}consequence`;
+    stageRunnerSpy = vi.fn(async () => ({
+      content: { episodes: [{ number: 1, title: 'Budgeted', logline: overlong, arcRole: 'pilot' }] },
+      runId: 'r1', providerId: 'p', model: 'm',
+    }));
+
+    const out = await planner.generateSeasonEpisodes(series.id, seasons[0].id);
+    expect(out.episodes[0].logline.length).toBeLessThanOrEqual(500);
+    expect(overlong.split(' ')).toContain(out.episodes[0].logline.split(' ').pop());
+    expect(out.episodes[0].logline).not.toMatch(/conseque$/);
+  });
+
   it('rejects the `custom` length sentinel and derives a finale-role fallback to `finale`', async () => {
     const { series, seasons } = await setupSeriesWithSeasons();
     stageRunnerSpy = vi.fn(async () => ({
@@ -3336,6 +3350,27 @@ describe('arcPlanner — refineArc', () => {
 });
 
 describe('arcPlanner — manuscript completeness + derive-from-manuscript', () => {
+  it('fingerprints manuscript completeness context canonically and includes narrative references', () => {
+    const initial = {
+      manuscript: 'A short draft.',
+      series: { premise: 'An alliance must hold.', name: 'Example' },
+      arc: { summary: 'The alliance survives.' },
+      existingCharactersJson: '[{"name":"Ari"}]',
+    };
+    const reordered = {
+      existingCharactersJson: '[{"name":"Ari"}]',
+      arc: { summary: 'The alliance survives.' },
+      series: { name: 'Example', premise: 'An alliance must hold.' },
+      manuscript: 'A short draft.',
+    };
+
+    expect(planner.completenessSourceHash(reordered)).toBe(planner.completenessSourceHash(initial));
+    expect(planner.completenessSourceHash({
+      ...initial,
+      arc: { summary: 'The alliance shatters.' },
+    })).not.toBe(planner.completenessSourceHash(initial));
+  });
+
   beforeEach(() => {
     fileStore.clear();
     uuidCounter = 0;

@@ -133,7 +133,9 @@ Score each volume + each episode against the arc. Specifically check:
     append-only caveats, duplicated facts, or minor procedures that bury the
     dramatic turn. The title, `arcRole`, and `lengthProfile` must describe what
     the episode actually does — especially pilot, midpoint, all-is-lost, and
-    finale labels.
+    finale labels. The numeric `pageTarget` and `minutesTarget` are the
+    materialized scope for both presets and custom profiles; judge whether the
+    planned action can actually fill that space without padding or compression.
 12. **Premise-engine continuity.** Track every major quest or promise in the
     originating premise across the whole series. A survival, rescue, romance,
     or institutional subplot must not silently erase a co-equal search, mystery,

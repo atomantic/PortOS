@@ -10,6 +10,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { pickRenderedFilename } from '../../lib/renderSlot.js';
 import { isStr, trimTo } from '../../lib/storyBible.js';
 import { UNSCOPED_ANCHOR } from '../../lib/pipelineIssueOrder.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
@@ -423,6 +424,19 @@ function mergeIssuePatch(cur, patch = {}) {
   return merged;
 }
 
+const frontCoverFilename = (issue) => pickRenderedFilename(issue?.stages?.comicPages?.cover);
+
+async function returnIssueAfterCoverRefresh({ issue, frontCoverChanged }) {
+  if (frontCoverChanged) {
+    // General issue PATCHes can clear or replace comicPages.cover without
+    // passing through the stage helpers. Refresh after the serialized write so
+    // series.coverImage always derives from the freshly persisted issue set.
+    const { refreshSeriesCoverImage } = await import('./seriesCoverImage.js');
+    await refreshSeriesCoverImage(issue.seriesId).catch(() => {});
+  }
+  return issue;
+}
+
 export function updateIssue(id, patch = {}, { skipRenumber = false } = {}) {
   const needsRenumber = !skipRenumber && ('seasonId' in patch || 'arcPosition' in patch);
   if (!needsRenumber) {
@@ -438,9 +452,12 @@ export function updateIssue(id, patch = {}, { skipRenumber = false } = {}) {
         const merged = mergeIssuePatch(cur, patch);
         await saveIssueNow(merged);
         emitRecordUpdated('series', merged.seriesId);
-        return merged;
+        return {
+          issue: merged,
+          frontCoverChanged: frontCoverFilename(cur) !== frontCoverFilename(merged),
+        };
       }),
-    );
+    ).then(returnIssueAfterCoverRefresh);
   }
 
   return getIssue(id, { includeDeleted: true }).then((existing) =>
@@ -463,9 +480,12 @@ export function updateIssue(id, patch = {}, { skipRenumber = false } = {}) {
       // Issues are exported as part of their parent series — re-export the
       // series so any active subscription picks up the issue change.
       emitRecordUpdated('series', merged.seriesId);
-      return merged;
+      return {
+        issue: merged,
+        frontCoverChanged: frontCoverFilename(cur) !== frontCoverFilename(merged),
+      };
     })
-  );
+  ).then(returnIssueAfterCoverRefresh);
 }
 
 export function deleteIssue(id) {

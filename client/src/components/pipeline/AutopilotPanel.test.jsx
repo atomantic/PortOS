@@ -1047,4 +1047,25 @@ describe('AutopilotPanel', () => {
     expect(screen.getByRole('link', { name: /#2 Threshold/i }))
       .toHaveAttribute('href', '/pipeline/issues/iss-2/comicScript');
   });
+
+  it('shows visual-source and canon-noun blockers for the same issue', async () => {
+    getPipelineSeriesCanonReadiness.mockResolvedValue({
+      ready: false,
+      undescribed: [{ id: 'c1', name: 'Kai', kind: 'character' }],
+      blockingIssues: [{
+        issueId: 'iss-2', number: 2, title: 'Threshold',
+        none: [{ id: 'c1', name: 'Kai', kind: 'character' }],
+        blockingReason: 'missing-visual-source', missingSourceStages: ['teleplay'],
+      }],
+    });
+    renderPanel({ id: 's1', targetFormat: 'hybrid' });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: /^check$/i }));
+
+    expect(await screen.findByText(/Kai \(character\)/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Threshold — visual script/i }))
+      .toHaveAttribute('href', '/pipeline/issues/iss-2/teleplay');
+    expect(screen.getByRole('link', { name: /Threshold — canon nouns/i }))
+      .toHaveAttribute('href', '/pipeline/issues/iss-2/nouns');
+  });
 });

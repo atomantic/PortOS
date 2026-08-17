@@ -62,6 +62,19 @@ describe('pipeline-arc-verify prompt ↔ buildVerifyContext leaf contract', () =
       .filter((token) => !NON_FIELD_TOKENS.has(token) && !leafWithoutArcRole.has(token));
     expect(unrenderable).toEqual(['arcRole']);
   });
+
+  it('materializes custom numeric targets for metadata-fit checks', () => {
+    expect(renderVerifyIssueLeaf({
+      lengthProfile: 'custom',
+      pageTarget: 4,
+      minutesTarget: 120,
+      stages: {},
+    })).toMatchObject({
+      lengthProfile: 'custom',
+      pageTarget: 4,
+      minutesTarget: 120,
+    });
+  });
 });
 
 describe('pipeline-arc-verify ↔ pipeline-arc-resolve world parity', () => {
