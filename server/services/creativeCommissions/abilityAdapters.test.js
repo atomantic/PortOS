@@ -138,7 +138,7 @@ describe('sanitizeGeneration — fills defaults and preserves only the type keys
     const g = getAbilityAdapter('video').sanitizeGeneration({ quality: 'high', aspectRatio: '9:16', targetDurationSeconds: 20, imageCount: 5, model: ' ltx ' });
     expect(g).toEqual({
       model: 'ltx', quality: 'high', aspectRatio: '9:16', targetDurationSeconds: 20,
-      videoMode: 'auto', videoModelId: null,
+      durationMode: 'manual', videoMode: 'auto', videoModelId: null,
     });
   });
 
