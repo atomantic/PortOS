@@ -285,6 +285,7 @@ router.post('/:id/retry', asyncHandler(async (req, res) => {
   for (const key of ['seed', 'steps', 'guidanceScale', 'imageStrength']) {
     if (rawOverrides[key] === null) delete params[key];
   }
+  if (rawOverrides.chunks === 1) delete params.chunkPrompts;
   // Grok video jobs use `mode` as the cloud-dispatch discriminator, not the
   // local semantic mode validated by prepareParams.
   if (job.kind === 'video' && params.mode !== 'grok') await validateVideoRetryParams(params);

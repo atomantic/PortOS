@@ -59,6 +59,9 @@ import {
 import { videoModeContractError, videoChainUnsupportedError } from './modeContract.js';
 import { resolveByovRuntimeLoraCapable, videoLoraUnsupportedError } from './runtimes.js';
 
+// Retries reuse persisted worker parameters instead of passing through the
+// multipart preparation path. Keep the model/mode gates here so a model edit
+// cannot delete the original history row before the replacement is renderable.
 export async function validateVideoRetryParams(params = {}) {
   const modelId = params.modelId || defaultVideoModelId();
   const model = listVideoModels().find((entry) => entry.id === modelId);
