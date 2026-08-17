@@ -201,6 +201,13 @@ describe('tracks routes', () => {
     expect(tracks.updateTrack).toHaveBeenCalledWith('track-1', { prompt: 'warm folk' });
   });
 
+  it('PATCH /:id accepts a saved music-designer concept', async () => {
+    tracks.getTrack.mockResolvedValue({ id: 'track-1', title: 'Intro' });
+    const r = await request(app).patch('/api/tracks/track-1').send({ concept: 'A dusk-time pulse' });
+    expect(r.status).toBe(200);
+    expect(tracks.updateTrack).toHaveBeenCalledWith('track-1', { concept: 'A dusk-time pulse' });
+  });
+
   it('DELETE /:id soft-deletes a track', async () => {
     tracks.getTrack.mockResolvedValue({ id: 'track-1', title: 'Intro' });
     const r = await request(app).delete('/api/tracks/track-1');

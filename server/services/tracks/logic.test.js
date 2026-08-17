@@ -71,6 +71,13 @@ describe('tracks logic', () => {
       expect(mergeTrackRecord(local, { ...local, title: 'New', updatedAt: '2099-01-01T00:00:00.000Z' }).remoteWins).toBe(true);
       expect(mergeTrackRecord(local, { ...local, title: 'Old', updatedAt: '2000-01-01T00:00:00.000Z' }).remoteWins).toBe(false);
     });
+
+    it('preserves a local concept when an older peer omits the additive field', () => {
+      const authored = buildTrackRecord({ title: 'Local', concept: 'A dusk-time pulse' }, { id: 'track-1', now: '2026-06-01T00:00:00.000Z' });
+      const remote = { ...authored, title: 'Remote', updatedAt: '2099-01-01T00:00:00.000Z' };
+      delete remote.concept;
+      expect(mergeTrackRecord(authored, remote).next.concept).toBe('A dusk-time pulse');
+    });
   });
 
   describe('render history', () => {
