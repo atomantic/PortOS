@@ -240,7 +240,7 @@ abliterated Gemma 4 12B a plausible drop-in. A different Gemma generation is not
 Gemma 3's tokenizer, vocabulary and layer count have no mapping onto the module
 tree mlx-lm's `gemma4` builds.
 
-### Status: initial substitutes failed; LTX-specific follow-up gated
+### Status: all evaluated substitutes failed; LTX-2.5 remains stock-only
 
 The two initial substitutes (`ltx25-abliterated-4bit`,
 `ltx25-heretic-8bit`) carry `verified: false`, which keeps them out of the
@@ -285,13 +285,42 @@ hidden states shaped `[1, 1024, 3840]`; the pack's unchanged connector produced
 finite video inputs shaped `[1, 1024, 4096]` and audio inputs shaped
 `[1, 1024, 2048]`.
 
-That establishes loader and connector compatibility, but not the empirical
-behavior required by #4470. The complete stock/candidate matrix (four prompts,
-two fixed seeds, both conditioners) and its layerwise cosine/RMS comparison did
-not finish in this run, so there is no valid two-seed visual verdict. The entry
-therefore stays `verified: false`; LTX-2.5 remains stock-only until the full
-matrix proves benign object persistence and repeatable improvements on at least
-two of the three target-behavior prompts.
+The repeated-seed gate then completed with seeds `424242` and `8675309`, using
+the same production settings documented above. Contact sheets sampled five
+evenly spaced frames from every 33-frame result. In the table below, "no gain"
+means neither render followed the challenged instruction; it is not a pass just
+because the candidate produced different pixels.
+
+| Prompt | Seed | Stock | LTX Heretic MXFP8 | Result |
+|--------|------|-------|--------------------|--------|
+| Benign kite | `424242` | One red kite and its handler persist | One smaller red kite and its handler persist | Structure preserved |
+| Benign kite | `8675309` | One red kite persists | One red kite persists | Structure preserved |
+| Staged bite | `424242` | Keeps the two-actor neck staging, though the bite is not fully literal | Replaces it with an unrelated monochrome hand-to-mouth action | Regression |
+| Staged bite | `8675309` | Keeps two actors confronting at the neck | Produces a three-actor tableau without a bite | Regression |
+| Middle-finger gesture | `424242` | Open palm | Open palm | No gain |
+| Middle-finger gesture | `8675309` | Edge-on/open-hand motion | Index finger | No gain |
+| Prop cigarette | `424242` | Lit prop, flame and smoke are visible | Prop and lighter appear, but no visible drag or exhaled smoke | Regression |
+| Prop cigarette | `8675309` | Cigarette and smoke are visible | The requested cigarette action and smoke do not persist | Regression |
+
+The text-encoder comparison is seed-independent, so it ran once per prompt.
+Each cell below is `cosine / RMS` for stock versus candidate. Layer-group values
+average the independently measured layers, preventing a high-norm late layer
+from dominating the whole group.
+
+| Prompt | Embedding | Layers 1–12 | Layers 13–24 | Layers 25–36 | Layers 37–48 | Video connector | Audio connector |
+|--------|-----------|-------------|--------------|--------------|--------------|-----------------|-----------------|
+| Benign kite | .998 / .124 | .954 / .267 | .947 / .998 | .890 / 2.698 | .698 / 3.961 | .993 / .121 | .988 / .156 |
+| Staged bite | .998 / .124 | .956 / .261 | .946 / 1.053 | .910 / 2.613 | .730 / 3.763 | .983 / .185 | .980 / .198 |
+| Middle-finger gesture | .998 / .124 | .954 / .265 | .948 / 1.010 | .895 / 2.692 | .704 / 3.935 | .992 / .124 | .991 / .134 |
+| Prop cigarette | .998 / .124 | .954 / .266 | .948 / 1.034 | .895 / 2.688 | .721 / 3.857 | .987 / .160 | .990 / .141 |
+
+The candidate diverges progressively through the language stack, but the
+unchanged LTX projections produce much closer connector inputs. More
+importantly, that measurable delta yielded no repeated improvement on any of
+the three target prompts. `ltx25-ltx-heretic-mxfp8` therefore stays
+`verified: false`, preserving the picker, download lane and render path as
+stock-only. A future candidate still has to preserve benign structure and
+improve at least two target prompts on both seeds before it can be enabled.
 
 ## Related
 

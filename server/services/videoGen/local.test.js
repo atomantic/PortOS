@@ -1108,7 +1108,7 @@ describe('generateVideo — LTX-2.5 sibling runtime spawn', () => {
     expect(args.filter((arg) => String(arg).startsWith('--text-encoder'))).toEqual([]);
   });
 
-  // Every ltx25 substitute is still gated behind the coherence check, so the
+  // Every ltx25 substitute failed its empirical gate, so the
   // route/service path must reject its id rather than half-wire a render.
   it.each([
     'ltx25-abliterated-4bit',

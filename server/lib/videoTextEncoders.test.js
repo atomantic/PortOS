@@ -107,7 +107,7 @@ describe('videoTextEncoders', () => {
     expect(finalNormKey.startsWith('model.language_model.')).toBe(false);
   });
 
-  // Failed or not-yet-complete ltx25 gates remain unreachable: not in the
+  // Failed ltx25 gates remain unreachable: not in the
   // picker, not accepted by route validation, and not downloadable. Declaring
   // a pinned candidate is not permission to spend 11-13 GB on weights a render
   // still cannot select.

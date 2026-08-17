@@ -233,8 +233,8 @@ const TEXT_ENCODERS_BY_RUNTIME = Object.freeze({
   // `sizeBytes` is their exact published total.
   //
   // The first two substitutes failed the 2026-08-16 coherence/behavior gate
-  // described in the docblock. The third is the LTX-specific follow-up being
-  // evaluated in #4470. All remain pinned provenance records, while
+  // described in the docblock. The LTX-specific follow-up failed the two-seed
+  // gate in #4470. All remain pinned provenance records, while
   // `verified: false` keeps every non-passing entry out of both public lanes.
   ltx25: Object.freeze([
     STOCK_LTX25,
@@ -315,11 +315,11 @@ const TEXT_ENCODERS_BY_RUNTIME = Object.freeze({
       label: 'LTX Heretic uncensored — Gemma 4 12B MXFP8',
       description:
         'The Heretic language backbone used by an LTX-2.5-specific conditioner conversion, '
-        + 'paired with the model pack\'s original LTX connector. Gated pending the repeated-seed render matrix.',
-      // #4470: the production technical gate passes (strict language load,
-      // exact geometry, finite connector outputs, immutable MXFP8 metadata).
-      // Keep this false until the full repeated-seed render matrix proves
-      // benign coherence and repeatable behavior gains.
+        + 'paired with the model pack\'s original LTX connector. Retained as a gated candidate record '
+        + 'after the repeated-seed render matrix showed no target-behavior gain.',
+      // Failed #4470: the production technical gate passed, but both fixed
+      // seeds regressed on the bite and prop-cigarette prompts and produced no
+      // middle-finger improvement. The benign kite remained coherent.
       verified: false,
       repo: 'nightmedia/gemma-4-12B-it-uncensored-heretic-mxfp8-mlx',
       revision: '20c9f4b167e56f3f749ea3e428188a5e7a35318a',
