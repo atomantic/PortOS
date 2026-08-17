@@ -11,8 +11,13 @@ vi.mock('../../ui/Toast', () => ({
 }));
 
 import PracticePlan from './PracticePlan';
+import { POST_TOPICS } from './constants';
 import { updatePostConfig, getMemoryItems } from '../../../services/api';
 import toast from '../../ui/Toast';
+
+const drillTypesForModule = (module) => [...new Set(
+  POST_TOPICS.filter(topic => topic.module === module).flatMap(topic => topic.drillTypes)
+)].sort();
 
 // A config shaped like what the server actually hands the client: DEFAULT_CONFIG
 // deep-merged over whatever is saved. Deliberately carries NO `topics` key, so
@@ -179,10 +184,10 @@ describe('PracticePlan save', () => {
 
     await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
     const [patch] = updatePostConfig.mock.calls[0];
-    expect(Object.keys(patch.llmDrills.drillTypes)).toHaveLength(14);
-    expect(Object.keys(patch.mentalMath.drillTypes)).toHaveLength(5);
-    expect(Object.keys(patch.cognitive.drillTypes)).toHaveLength(9);
-    expect(Object.keys(patch.memory.drillTypes)).toHaveLength(3);
+    expect(Object.keys(patch.llmDrills.drillTypes).sort()).toEqual(drillTypesForModule('llm-drills'));
+    expect(Object.keys(patch.mentalMath.drillTypes).sort()).toEqual(drillTypesForModule('mental-math'));
+    expect(Object.keys(patch.cognitive.drillTypes).sort()).toEqual(drillTypesForModule('cognitive'));
+    expect(Object.keys(patch.memory.drillTypes).sort()).toEqual(drillTypesForModule('memory'));
     // A drill type absent from the saved config is persisted as disabled — the
     // launcher already ignored it, so seeding must not silently switch it on.
     expect(patch.llmDrills.drillTypes['bridge-word']).toEqual({ enabled: false });
