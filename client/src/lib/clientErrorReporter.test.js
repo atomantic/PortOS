@@ -231,3 +231,4 @@ describe('browser-extension errors', () => {
     expect(body.message).toBe('Genuine PortOS failure');
   });
 });
+// @vitest-environment node

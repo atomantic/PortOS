@@ -193,3 +193,4 @@ describe('groupSpriteAssetsByRole', () => {
     expect(group.assets[0]).toMatchObject({ size: 12, facets: { direction: 'east', runId: 'walk-east-abc12345' } });
   });
 });
+// @vitest-environment node

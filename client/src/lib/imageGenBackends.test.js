@@ -189,3 +189,4 @@ describe('applyRecordRenderPin', () => {
     expect(out.cloudModel).toBe('gpt-5.6-luna');
   });
 });
+// @vitest-environment node

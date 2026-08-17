@@ -71,3 +71,4 @@ describe('alignSingToVerify', () => {
     expect(rows[3].grade).toBe(GRADE.PENDING);
   });
 });
+// @vitest-environment node

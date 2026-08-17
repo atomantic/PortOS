@@ -281,3 +281,4 @@ describe('clampClickVolume', () => {
     expect(DEFAULT_CLICK_VOLUME).toBe(1); // the fallback is FULL, never silence
   });
 });
+// @vitest-environment node

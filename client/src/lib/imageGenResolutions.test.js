@@ -84,3 +84,4 @@ describe('clampImageDimensions', () => {
     expect(clampImageDimensions(undefined, undefined)).toBeNull();
   });
 });
+// @vitest-environment node

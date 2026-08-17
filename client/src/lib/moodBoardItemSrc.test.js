@@ -83,3 +83,4 @@ describe('moodBoardItemAnalysisSource (#4188 Phase 3)', () => {
     expect(moodBoardItemAnalysisSource(null)).toBeNull();
   });
 });
+// @vitest-environment node

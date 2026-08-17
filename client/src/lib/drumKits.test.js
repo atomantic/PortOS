@@ -119,3 +119,4 @@ describe('drumKits', () => {
     for (const id of DRUM_KIT_IDS) expect(DRUM_KITS[id].voices.click).toBeUndefined();
   });
 });
+// @vitest-environment node

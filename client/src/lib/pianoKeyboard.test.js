@@ -95,3 +95,4 @@ describe('buildKeyboardLayout', () => {
     expect(lastWhite).toBeLessThan(firstBlack);
   });
 });
+// @vitest-environment node

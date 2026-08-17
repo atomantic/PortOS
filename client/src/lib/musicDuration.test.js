@@ -46,3 +46,4 @@ describe('music duration recommendations', () => {
     expect(result.suggestedDurationSec).toBe(30);
   });
 });
+// @vitest-environment node

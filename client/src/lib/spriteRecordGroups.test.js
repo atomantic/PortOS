@@ -81,3 +81,4 @@ describe('exported constants', () => {
     expect(NEW_SPRITE_KINDS.map((k) => k.value)).toEqual(['character', 'place', 'object']);
   });
 });
+// @vitest-environment node

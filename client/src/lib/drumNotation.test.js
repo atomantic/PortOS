@@ -417,3 +417,4 @@ describe('describeDrumPosition', () => {
     expect(describeDrumPosition(1, 5, 5)).toBe('bar 1, count “2”');
   });
 });
+// @vitest-environment node

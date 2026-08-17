@@ -340,3 +340,4 @@ describe('mergeExpandIntoDraft', () => {
     expect(Object.keys(expandedDraft.categories).sort()).toEqual(['defaultBucket', 'weapons']);
   });
 });
+// @vitest-environment node

@@ -122,3 +122,4 @@ describe('classifyByWordCount', () => {
     expect(classifyByWordCount(39999).id).toBe('novella');
   });
 });
+// @vitest-environment node

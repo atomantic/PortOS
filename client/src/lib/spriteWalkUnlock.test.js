@@ -78,3 +78,4 @@ describe('walkUnlockCopy', () => {
     expect(WALK_UNLOCK_TOAST).toMatch(/unlocked/);
   });
 });
+// @vitest-environment node

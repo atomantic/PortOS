@@ -97,3 +97,4 @@ describe('describeMicAvailability', () => {
     expect(describeMicAvailability()).toEqual({ available: false, reason: 'insecure-context' });
   });
 });
+// @vitest-environment node

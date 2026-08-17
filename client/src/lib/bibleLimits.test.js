@@ -49,3 +49,4 @@ describe('appendImageRefById', () => {
     expect(appendImageRefById([{ id: 'a' }], 'a', null)).toBeNull();
   });
 });
+// @vitest-environment node

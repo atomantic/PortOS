@@ -53,3 +53,4 @@ describe('pipelineImageCfgToRenderOpts', () => {
       .toBeUndefined();
   });
 });
+// @vitest-environment node

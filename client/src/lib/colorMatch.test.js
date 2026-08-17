@@ -226,3 +226,4 @@ describe('gradesFromPerNote', () => {
     expect(gradesFromPerNote(tl)).toEqual({});
   });
 });
+// @vitest-environment node

@@ -143,3 +143,4 @@ describe('mergeFrameIntoCityProps', () => {
     }
   });
 });
+// @vitest-environment node

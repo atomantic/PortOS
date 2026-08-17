@@ -238,3 +238,4 @@ describe('shipped stage catalog', () => {
     expect(groups[groups.length - 1].label).toBe(OTHER_GROUP_LABEL);
   });
 });
+// @vitest-environment node

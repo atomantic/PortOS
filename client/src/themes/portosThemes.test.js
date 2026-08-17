@@ -116,3 +116,4 @@ describe('DEFAULT_AVATAR_COLOR', () => {
     expect(DEFAULT_AVATAR_COLOR).toBe(`#${hex}`);
   });
 });
+// @vitest-environment node

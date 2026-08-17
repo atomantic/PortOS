@@ -504,3 +504,4 @@ describe('transposeText', () => {
     expect(transposeText('C G', NaN)).toBe('C G');
   });
 });
+// @vitest-environment node

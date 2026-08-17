@@ -86,3 +86,4 @@ describe('flows.json', () => {
     }
   });
 });
+// @vitest-environment node

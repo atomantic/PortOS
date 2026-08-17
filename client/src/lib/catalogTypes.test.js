@@ -67,3 +67,4 @@ describe('catalogTypes — character sheet sections', () => {
     expect(Object.isFrozen(CATALOG_TYPES)).toBe(true);
   });
 });
+// @vitest-environment node

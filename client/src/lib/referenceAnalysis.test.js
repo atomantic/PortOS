@@ -259,3 +259,4 @@ describe('proposeStackedSegmentScore', () => {
     expect(STACKED_CLARITY_THRESHOLD).toBeLessThan(1);
   });
 });
+// @vitest-environment node

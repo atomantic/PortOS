@@ -159,3 +159,4 @@ describe('matchesStatusFilter', () => {
     expect(STATUS_FILTER_IDS.every((id) => Boolean(STATUS_FILTER_LABELS[id]))).toBe(true);
   });
 });
+// @vitest-environment node

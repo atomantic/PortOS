@@ -218,3 +218,4 @@ describe('trimFor', () => {
     expect(build().trimFor(asset('runtime/v3/example-v3.png'))).toBeNull();
   });
 });
+// @vitest-environment node

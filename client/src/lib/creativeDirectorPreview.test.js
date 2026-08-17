@@ -300,3 +300,4 @@ describe('selectProjectPreview', () => {
     expect(selectProjectPreview({ plan: { steps: [null, undefined] } }).kind).toBe('none');
   });
 });
+// @vitest-environment node

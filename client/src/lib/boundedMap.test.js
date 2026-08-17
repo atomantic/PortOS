@@ -53,3 +53,4 @@ describe('evictOldest', () => {
     expect(ORPHAN_BUFFER_MAX).toBe(64);
   });
 });
+// @vitest-environment node

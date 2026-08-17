@@ -325,3 +325,4 @@ describe('shouldMarkBeatAligned', () => {
     expect(shouldMarkBeatAligned({ kind: 'move', snapped: true, wasPersisted: true })).toBe(true);
   });
 });
+// @vitest-environment node

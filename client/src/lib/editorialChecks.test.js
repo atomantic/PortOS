@@ -467,3 +467,4 @@ describe('canon entity references in findings (#1631)', () => {
     expect(canonEntityLink(null)).toBeNull();
   });
 });
+// @vitest-environment node

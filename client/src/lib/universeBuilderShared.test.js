@@ -181,3 +181,4 @@ describe('adoptServerCategoryIds', () => {
     expect(adoptServerCategoryIds(local, null)).toBe(local);
   });
 });
+// @vitest-environment node

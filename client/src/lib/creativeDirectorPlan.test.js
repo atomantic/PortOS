@@ -135,3 +135,4 @@ describe('isDirectiveProject / DELIVERABLE_OPTIONS', () => {
     expect(DELIVERABLE_OPTIONS.map((o) => o.id)).toContain('video-teaser');
   });
 });
+// @vitest-environment node

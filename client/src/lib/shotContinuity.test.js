@@ -102,3 +102,4 @@ describe('sceneShotWarnings', () => {
     expect(sceneShotWarnings(null)).toEqual([]);
   });
 });
+// @vitest-environment node
