@@ -38,7 +38,7 @@ export const LOCAL_LLM_CATEGORIES = [
 ];
 
 // Each entry: { key, name, category, recommendedFor?, featured?, params, size,
-//               family, description, capabilities, context?, format?,
+//               family, description, note?, capabilities, context?, format?,
 //               appleSiliconOnly?, ollama?, lmstudio?, ollamaAliases?,
 //               lmstudioAliases? }
 //
@@ -288,7 +288,7 @@ export const LOCAL_LLM_CATALOG = [
     recommendedFor: ['general', 'coding', 'reasoning', 'vision', 'multilingual'],
     featured: {
       label: 'Fast on Apple Silicon',
-      description: 'Recommended native-MLX Qwen3.8 install for LM Studio on Apple Silicon.'
+      description: 'Recommended native-MLX Qwen3.8 install on Apple Silicon.'
     },
     params: '27B',
     size: '15.0 GB',
@@ -298,8 +298,26 @@ export const LOCAL_LLM_CATALOG = [
     context: 262144,
     format: 'mlx',
     appleSiliconOnly: true,
+    ollama: 'qwen3.8:27b-mlx',
     lmstudio: 'mlx-community/Qwen3.8-27B-4bit',
     lmstudioAliases: ['lmstudio-community/Qwen3.8-27B-MLX-4bit']
+  },
+  {
+    key: 'qwen3.8-27b-uncensored-mlx',
+    name: 'Qwen3.8 27B Uncensored MLX',
+    category: 'general',
+    recommendedFor: ['general', 'coding', 'reasoning', 'vision', 'multilingual'],
+    params: '27B',
+    size: 'varies',
+    family: 'qwen',
+    description: 'OrcaRouter’s abliterated Qwen3.8 variant for red-team and unrestricted local evaluation, with 2-, 4-, 6-, and 8-bit MLX builds plus vision, tools, reasoning, and multilingual support.',
+    note: 'Gated on Hugging Face — accept the repository terms and authenticate in LM Studio before installing; LM Studio selects the quantization for this machine.',
+    capabilities: ['chat', 'code', 'reasoning', 'tools', 'vision', 'multilingual'],
+    context: 262144,
+    format: 'mlx',
+    appleSiliconOnly: true,
+    lmstudio: 'https://huggingface.co/orcarouter/Qwen3.8-27B-Uncensored-MLX',
+    lmstudioAliases: ['orcarouter/Qwen3.8-27B-Uncensored-MLX']
   },
   {
     key: 'qwen3.8-27b',
@@ -688,7 +706,7 @@ const entryMatchesBackendId = (entry, backend, normalizedId) =>
  * @param {string} backend - 'ollama' | 'lmstudio'
  * @param {string[]} [installedIds] - ids currently installed on that backend
  * @param {{ appleSilicon?: boolean }} [options] - host capabilities used for platform-gated entries
- * @returns {Array<{ id, key, name, category, recommendedFor, featured, params, size, family, description, capabilities, format, contextLength, installed }>}
+ * @returns {Array<{ id, key, name, category, recommendedFor, featured, params, size, family, description, note, capabilities, format, contextLength, installed }>}
  */
 export function getCatalog(backend, installedIds = [], { appleSilicon } = {}) {
   if (!isBackend(backend)) return [];
@@ -710,6 +728,7 @@ export function getCatalog(backend, installedIds = [], { appleSilicon } = {}) {
         size: entry.size,
         family: entry.family,
         description: entry.description,
+        note: entry.note || null,
         capabilities: entry.capabilities,
         format: entry.format || null,
         // Native context window (tokens), when it's a documented spec; null otherwise.

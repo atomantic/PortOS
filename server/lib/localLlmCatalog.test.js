@@ -50,17 +50,33 @@ describe('localLlmCatalog', () => {
       expect(list.find((m) => m.key === 'gemma4-12b').installed).toBe(true);
     });
 
-    it('gates the current MLX Community Qwen recommendation to Apple Silicon', () => {
+    it('gates the current Qwen MLX recommendations to Apple Silicon', () => {
       const mlxKey = 'qwen3.8-27b-mlx-4bit';
+      const uncensoredKey = 'qwen3.8-27b-uncensored-mlx';
       expect(getCatalog('lmstudio').find((m) => m.key === mlxKey)).toMatchObject({
         format: 'mlx',
         id: 'mlx-community/Qwen3.8-27B-4bit'
       });
+      expect(getCatalog('ollama', [], { appleSilicon: true }).find((m) => m.key === mlxKey)).toMatchObject({
+        format: 'mlx',
+        id: 'qwen3.8:27b-mlx'
+      });
+      expect(getCatalog('ollama', ['qwen3.8:27b-mlx'], { appleSilicon: true })
+        .find((m) => m.key === mlxKey)?.installed).toBe(true);
       expect(getCatalog('lmstudio', ['lmstudio-community/Qwen3.8-27B-MLX-4bit'])
         .find((m) => m.key === mlxKey)?.installed).toBe(true);
       expect(getCatalog('lmstudio', [], { appleSilicon: true }).some((m) => m.key === mlxKey)).toBe(true);
       expect(getCatalog('lmstudio', [], { appleSilicon: false }).some((m) => m.key === mlxKey)).toBe(false);
-      expect(getCatalog('ollama', [], { appleSilicon: true }).some((m) => m.key === mlxKey)).toBe(false);
+      expect(getCatalog('ollama', [], { appleSilicon: false }).some((m) => m.key === mlxKey)).toBe(false);
+      expect(getCatalog('lmstudio', [], { appleSilicon: true }).find((m) => m.key === uncensoredKey)).toMatchObject({
+        format: 'mlx',
+        id: 'https://huggingface.co/orcarouter/Qwen3.8-27B-Uncensored-MLX',
+        note: expect.stringContaining('Gated on Hugging Face')
+      });
+      expect(getCatalog('lmstudio', ['orcarouter/Qwen3.8-27B-Uncensored-MLX'], { appleSilicon: true })
+        .find((m) => m.key === uncensoredKey)?.installed).toBe(true);
+      expect(getCatalog('lmstudio', [], { appleSilicon: false }).some((m) => m.key === uncensoredKey)).toBe(false);
+      expect(getCatalog('ollama', [], { appleSilicon: true }).some((m) => m.key === uncensoredKey)).toBe(false);
     });
 
     it('returns [] for an unknown backend', () => {
@@ -152,10 +168,17 @@ describe('localLlmCatalog', () => {
       expect(r.targetId).toBe('mystery-model');
     });
 
-    it('does not invent an Ollama target for a known LM Studio-only MLX build', () => {
+    it('maps the known Qwen MLX build across backend-specific registries', () => {
       expect(mapModelToBackend('lmstudio', 'mlx-community/Qwen3.8-27B-4bit', 'ollama'))
-        .toEqual({ targetId: null, exact: false });
+        .toEqual({ targetId: 'qwen3.8:27b-mlx', exact: true });
       expect(mapModelToBackend('lmstudio', 'lmstudio-community/Qwen3.8-27B-MLX-4bit', 'ollama'))
+        .toEqual({ targetId: 'qwen3.8:27b-mlx', exact: true });
+      expect(mapModelToBackend('ollama', 'qwen3.8:27b-mlx', 'lmstudio'))
+        .toEqual({ targetId: 'mlx-community/Qwen3.8-27B-4bit', exact: true });
+    });
+
+    it('does not invent an Ollama target for the LM Studio-only uncensored MLX build', () => {
+      expect(mapModelToBackend('lmstudio', 'orcarouter/Qwen3.8-27B-Uncensored-MLX', 'ollama'))
         .toEqual({ targetId: null, exact: false });
     });
 

@@ -6,10 +6,11 @@ multi-token-prediction (MTP) decoding. It exposes OpenAI-compatible and
 Anthropic-compatible local APIs; PortOS uses its OpenAI-compatible endpoint.
 
 This is an additional runtime, not an Ollama replacement. PortOS offers
-**Qwen3.8 27B** through the Ollama GGUF path and, on Apple Silicon, recommends
-the LM Studio MLX 4-bit build as the native-format install path. MTPLX's
-native-MTP checkpoints, MLX builds, and Ollama GGUF models are distinct
-formats, so neither PortOS nor Ollama attempts to load one as the other.
+**Qwen3.8 27B** through Ollama's GGUF path on supported hosts and, on Apple
+Silicon, recommends native MLX builds for both Ollama and LM Studio. MTPLX's
+native-MTP checkpoints remain a distinct runtime: PortOS maps only the known
+packaged Ollama and LM Studio MLX equivalents and does not treat an MTP sidecar
+as a standalone chat model.
 
 ## What PortOS adds
 

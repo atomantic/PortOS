@@ -139,9 +139,10 @@ router.get('/huggingface-search', asyncHandler(async (req, res) => {
   // fit verdicts. On unified-memory Macs this pool also backs the GPU, so a big
   // box can default to a higher-fidelity build than the old Q4-always pick.
   const systemMemoryBytes = os.totalmem()
-  // MLX models surface only on Apple Silicon (and only for LM Studio) — gate the
-  // extra MLX query on the host so non-Apple installs don't see un-installable
-  // results. Detected here at the route boundary; the service stays deterministic.
+  // Live Hugging Face MLX results surface only on Apple Silicon through LM Studio;
+  // packaged Ollama MLX tags live in the curated catalog above. Gate this extra
+  // Hub query so non-Apple installs don't see un-installable results. Detected at
+  // the route boundary so the service stays deterministic.
   const appleSilicon = isAppleSilicon()
   const models = await searchHuggingFaceModels({ backend, query: q, category, limit, installedIds: installed, installedAudioRepos, systemMemoryBytes, appleSilicon })
   res.json({ backend, source: 'huggingface', models, systemMemoryGb: Math.round(systemMemoryBytes / 1024 ** 3), appleSilicon })

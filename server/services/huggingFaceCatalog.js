@@ -531,9 +531,9 @@ function isInstalled(backend, result, installedIds) {
 // ---- MLX (Apple Silicon) ----------------------------------------------------
 // MLX is Apple's native ML format. It ships sharded `.safetensors` + a config
 // (no single GGUF), and is installable ONLY via LM Studio (`lms get <repo>`) on
-// Apple Silicon — Ollama's MLX path accelerates GGUF from its own registry and
-// can't pull arbitrary HF safetensors repos, so MLX is never surfaced for the
-// Ollama backend (the search gates the whole MLX query on lmstudio+Apple Silicon).
+// Apple Silicon — Ollama packages supported native MLX builds through its own
+// registry and can't pull arbitrary HF safetensors repos, so MLX is never surfaced
+// for the Ollama backend (the search gates the whole MLX query on LM Studio + Apple Silicon).
 const MLX_PUBLISHER = 'mlx-community'
 const SAFETENSORS_RE = /\.safetensors$/i
 
@@ -1076,7 +1076,10 @@ export async function searchHuggingFaceModels({ backend, query = '', category = 
 // from the Ollama registry tags/manifests instead (see applyOllamaRegistryVariants).
 function catalogRepoForBackend(backend, id) {
   const raw = String(id || '')
-  if (backend === 'lmstudio') return raw.includes('/') ? raw.split('@')[0] : null
+  if (backend === 'lmstudio') {
+    const hfUrl = raw.match(/^https?:\/\/(?:www\.)?huggingface\.co\/([^/?#]+\/[^/?#]+)/i)
+    return hfUrl?.[1] || (raw.includes('/') ? raw.split('@')[0] : null)
+  }
   const m = raw.match(/^hf\.co\/(.+)$/i)
   return m ? m[1].split(':')[0] : null
 }

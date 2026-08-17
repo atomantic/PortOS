@@ -799,6 +799,36 @@ describe('huggingFaceCatalog', () => {
       })])
     })
 
+    it('enriches an exact Hugging Face URL while keeping it as the LM Studio install id', async () => {
+      const repo = 'orcarouter/Qwen3.8-27B-Uncensored-MLX'
+      const url = `https://huggingface.co/${repo}`
+      fetch.mockResolvedValueOnce(blobs(repo, {
+        '4-bit/model-00001-of-00002.safetensors': 7_000_000_000,
+        '4-bit/model-00002-of-00002.safetensors': 7_000_000_000,
+      }))
+
+      const catalog = [{
+        id: url,
+        key: 'qwen3.8-27b-uncensored-mlx',
+        name: 'Qwen3.8 27B Uncensored MLX',
+        category: 'general',
+        format: 'mlx',
+        size: 'varies'
+      }]
+      await enrichCatalogWithVariants(catalog, {
+        backend: 'lmstudio',
+        systemMemoryBytes: 128 * 1024 ** 3,
+        installedIds: []
+      })
+
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining(`/api/models/${repo}?blobs=true`),
+        expect.any(Object)
+      )
+      expect(catalog[0]).toMatchObject({ id: url, repository: repo, format: 'mlx' })
+      expect(catalog[0].variants).toEqual([expect.objectContaining({ installId: url })])
+    })
+
     it('enriches an Ollama hf.co curated id and keeps the hf.co install ids', async () => {
       const repo = 'unsloth/Curated-Devstral-GGUF'
       fetch.mockResolvedValueOnce(blobs(repo, {

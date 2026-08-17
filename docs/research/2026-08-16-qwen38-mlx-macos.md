@@ -4,11 +4,11 @@ Date: 2026-08-16
 
 ## Recommendation
 
-Recommend `lmstudio-community/Qwen3.8-27B-MLX-4bit` as PortOS's fast macOS
-install option for Qwen3.8 27B. It is a complete MLX checkpoint, is published
-by the LM Studio community for its Apple-Silicon MLX engine, and fits the
-existing LM Studio `lms get` installation path. The catalog exposes it only on
-Apple Silicon and marks it as **Fast on Apple Silicon**.
+Recommend the native Qwen3.8 27B MLX build through both supported local
+backends on Apple Silicon: `qwen3.8:27b-mlx` for Ollama and
+`mlx-community/Qwen3.8-27B-4bit` for LM Studio. Both are complete MLX
+checkpoints and fit the backends' existing installation paths. The catalog
+exposes them only on Apple Silicon and marks them as **Fast on Apple Silicon**.
 
 This is a format/runtime recommendation, not a promise of a fixed tokens-per-
 second improvement. MLX versus GGUF speed depends on the Mac, memory pressure,
@@ -54,22 +54,35 @@ install or launch `mlx-vlm`, MTPLX, or an MTP sidecar runtime on the user's
 behalf. The existing MTPLX integration remains an explicit, separately managed
 operator choice.
 
+## Uncensored evaluation variant
+
+PortOS also catalogs `orcarouter/Qwen3.8-27B-Uncensored-MLX` for explicit
+red-team and unrestricted local evaluation. The repository is gated on Hugging
+Face and publishes several quantizations under one repository, so it is an
+Apple-Silicon LM Studio entry rather than an Ollama pull target. Users must
+accept the repository terms and authenticate in LM Studio before installing;
+LM Studio resolves the appropriate available quantization.
+
 ## PortOS behavior
 
+- Ollama on Apple Silicon: recommends and pulls the packaged
+  `qwen3.8:27b-mlx` model through Ollama's native MLX engine.
 - LM Studio on Apple Silicon: recommends and installs the complete 4-bit MLX
   target through the existing model-install endpoint.
 - LM Studio on Intel macOS and non-macOS hosts: hides the MLX recommendation;
   the existing GGUF catalog remains available.
-- Ollama: retains the existing Qwen3.8 GGUF entry. Ollama cannot install an
-  arbitrary Hugging Face MLX safetensors repository through this catalog.
-- Migration: a known LM Studio-only MLX entry is not guessed into an Ollama
-  model name.
+- Ollama on non-Apple hosts: hides the MLX recommendation; the existing GGUF
+  entry remains available.
+- Migration: the known backend-specific MLX ids map exactly so switching
+  backends re-pulls the equivalent package instead of guessing a model name.
 
 ## Sources
 
 - [`mlx.core.fast` documentation](https://ml-explore.github.io/mlx/build/html/python/fast.html)
 - [MLX-LM](https://github.com/ml-explore/mlx-lm)
-- [Complete Qwen3.8 27B MLX 4-bit checkpoint](https://huggingface.co/lmstudio-community/Qwen3.8-27B-MLX-4bit)
+- [Ollama's MLX engine announcement](https://ollama.com/blog/mlx)
+- [Complete Qwen3.8 27B MLX 4-bit checkpoint](https://huggingface.co/mlx-community/Qwen3.8-27B-4bit)
+- [OrcaRouter Qwen3.8 27B Uncensored MLX](https://huggingface.co/orcarouter/Qwen3.8-27B-Uncensored-MLX)
 - [Qwen3.8 27B MTP 4-bit drafter](https://huggingface.co/mlx-community/Qwen3.8-27B-MTP-4bit)
 - [Qwen3.8 27B MTP 8-bit drafter](https://huggingface.co/mlx-community/Qwen3.8-27B-MTP-8bit)
 - [MLX-VLM speculative decoding](https://github.com/Blaizzy/mlx-vlm)
