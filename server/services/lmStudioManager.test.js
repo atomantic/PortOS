@@ -77,6 +77,22 @@ describe('lmStudioManager stored model inventory', () => {
     expect(rows[0]).toMatchObject({ id: 'example/model-GGUF', name: 'model-GGUF' });
     expect(rows[0].size).toBeGreaterThan(0);
   });
+
+  it('re-probes availability when a caller force-refreshes the inventory', async () => {
+    const fetchMock = vi.fn(async (url) => ({
+      ok: true,
+      json: async () => ({ data: [] }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { getAvailableModels } = await import('./lmStudioManager.js');
+
+    await getAvailableModels();
+    await getAvailableModels(true);
+
+    const availabilityCalls = fetchMock.mock.calls
+      .filter(([url]) => String(url).endsWith('/v1/models'));
+    expect(availabilityCalls).toHaveLength(2);
+  });
 });
 
 describe('lmStudioManager residency status', () => {

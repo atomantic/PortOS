@@ -176,7 +176,7 @@ function getLastLoadedModelsError() {
  */
 async function getAvailableModels(forceRefresh = false) {
   if (!forceRefresh && availableModels !== null) return availableModels
-  const available = await checkLMStudioAvailable()
+  const available = await checkLMStudioAvailable(forceRefresh)
   if (!available) {
     // Unreachable is surfaced by the availability probe (`available`), not here.
     lastListError = null

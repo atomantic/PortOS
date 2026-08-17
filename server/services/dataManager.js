@@ -166,29 +166,42 @@ export async function resolveCategoryBusy(categoryKey) {
 // Validate category key contains only safe characters
 const SAFE_NAME = /^[a-z0-9_-]+$/;
 
-async function getDirSizeAndCount(dirPath) {
+async function getDirSizeAndCount(dirPath, { strict = false } = {}) {
   if (!existsSync(dirPath)) return { size: 0, fileCount: 0 };
   const [duOut, findOut] = await Promise.all([
     execFileAsync('du', ['-sk', dirPath], { timeout: 30000 })
       .then(r => r.stdout.trim())
-      .catch(() => '0'),
+      .catch((err) => {
+        if (strict) throw err;
+        return '0';
+      }),
     execFileAsync('find', [dirPath, '-type', 'f'], { timeout: 30000 })
       .then(r => r.stdout.trim().split('\n').filter(Boolean).length)
-      .catch(() => 0)
+      .catch((err) => {
+        if (strict) throw err;
+        return 0;
+      })
   ]);
-  const kb = typeof duOut === 'string' ? (parseInt(duOut.split('\t')[0], 10) || 0) : 0;
+  const kb = typeof duOut === 'string' ? parseInt(duOut.split('\t')[0], 10) : NaN;
+  if (!Number.isFinite(kb) || kb < 0) {
+    if (strict) throw new Error(`Could not parse directory size for ${dirPath}`);
+    return { size: 0, fileCount: typeof findOut === 'number' ? findOut : 0 };
+  }
   const fileCount = typeof findOut === 'number' ? findOut : (parseInt(findOut, 10) || 0);
   return { size: kb * 1024, fileCount };
 }
 
-export async function getDataOverview() {
-  const entries = await readdir(DATA_DIR, { withFileTypes: true }).catch(() => []);
+export async function getDataOverview({ strict = false } = {}) {
+  const entries = await readdir(DATA_DIR, { withFileTypes: true }).catch((err) => {
+    if (strict) throw err;
+    return [];
+  });
   const dirs = entries.filter(e => e.isDirectory());
 
   // Parallel: get total size + per-directory sizes in one batch
   const [totalResult, ...dirResults] = await Promise.all([
-    getDirSizeAndCount(DATA_DIR),
-    ...dirs.map(d => getDirSizeAndCount(join(DATA_DIR, d.name)))
+    getDirSizeAndCount(DATA_DIR, { strict }),
+    ...dirs.map(d => getDirSizeAndCount(join(DATA_DIR, d.name), { strict }))
   ]);
 
   // Busy state ships with the overview so the Data Manager can drop the Purge

@@ -86,9 +86,13 @@ vi.mock('./cos.js', () => ({
 }));
 
 const promptRunner = await import('../lib/promptRunner.js');
+const db = await import('../lib/db.js');
 const fileUtils = await import('../lib/fileUtils.js');
+const dataManager = await import('./dataManager.js');
+const mediaModelStorage = await import('./mediaModelStorage.js');
 const ollamaManager = await import('./ollamaManager.js');
 const lmStudioManager = await import('./lmStudioManager.js');
+const cos = await import('./cos.js');
 const {
   buildCleanupCandidates,
   buildSystemResourceReport,
@@ -119,6 +123,9 @@ describe('system resource reporting', () => {
 
   it('combines storage, model residency, and live queue summaries', async () => {
     const report = await buildSystemResourceReport();
+    expect(dataManager.getDataOverview).toHaveBeenCalledWith({ strict: true });
+    expect(lmStudioManager.checkLMStudioAvailable).toHaveBeenCalledWith(true);
+    expect(lmStudioManager.getAvailableModels).toHaveBeenCalledWith(true);
     expect(report.filesystem).toEqual({
       totalBytes: 100000,
       usedBytes: 75000,
@@ -195,6 +202,55 @@ describe('system resource reporting', () => {
 
     expect(dependencies).toMatchObject({ status: 'unavailable' });
     expect(report.sourceErrors).toContain('dependencies');
+  });
+
+  it('marks an unreadable PortOS data scan unavailable', async () => {
+    dataManager.getDataOverview.mockRejectedValueOnce(new Error('permission denied'));
+
+    const report = await buildSystemResourceReport();
+    const dataArea = report.storageAreas.find((area) => area.id === 'portos-data');
+
+    expect(dataArea).toMatchObject({ sizeBytes: null, status: 'unavailable' });
+    expect(report.sourceErrors).toContain('portos-data');
+    expect(report.cleanupCandidates.some((candidate) => candidate.kind === 'data')).toBe(false);
+  });
+
+  it('preserves failed agent queue and status probes as unknown', async () => {
+    cos.getAllTasks.mockRejectedValueOnce(new Error('task store unavailable'));
+    cos.getStatus.mockRejectedValueOnce(new Error('daemon status unavailable'));
+
+    const report = await buildSystemResourceReport();
+
+    expect(report.queues.agents).toBeNull();
+    expect(report.summary).toMatchObject({ queuedJobs: null, runningJobs: null });
+    expect(report.sourceErrors).toEqual(expect.arrayContaining(['agent-queue', 'agent-status']));
+  });
+
+  it('keeps daemon status unknown when only the COS status probe fails', async () => {
+    cos.getStatus.mockRejectedValueOnce(new Error('daemon status unavailable'));
+
+    const report = await buildSystemResourceReport();
+
+    expect(report.queues.agents).toMatchObject({
+      activeAgents: null,
+      pausedAgents: null,
+      daemonRunning: null,
+      daemonPaused: null,
+    });
+    expect(report.sourceErrors).toContain('agent-status');
+  });
+
+  it('returns an unknown footprint instead of zero when every area scan fails', async () => {
+    dataManager.getDataOverview.mockRejectedValueOnce(new Error('data unavailable'));
+    db.query.mockRejectedValueOnce(new Error('database unavailable'));
+    mediaModelStorage.listHfModelStorage.mockRejectedValueOnce(new Error('cache unavailable'));
+    mediaModelStorage.listLoraStorage.mockRejectedValueOnce(new Error('lora store unavailable'));
+    fileUtils.dirSize.mockResolvedValue(null);
+
+    const report = await buildSystemResourceReport();
+
+    expect(report.storageAreas.every((area) => area.sizeBytes == null)).toBe(true);
+    expect(report.summary.knownFootprintBytes).toBeNull();
   });
 
   it('keeps model names, ids, filenames, and paths out of the AI prompt', async () => {

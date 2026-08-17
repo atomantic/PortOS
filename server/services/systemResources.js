@@ -54,6 +54,7 @@ const TRIAGE_RESPONSE_SCHEMA = z.object({
 }).strict();
 
 const finiteOrNull = (value) => {
+  if (value == null || value === '') return null;
   const number = Number(value);
   return Number.isFinite(number) && number >= 0 ? number : null;
 };
@@ -326,8 +327,8 @@ function agentQueueSummary(tasks, status) {
     awaitingApproval: tasks.cos?.awaitingApproval?.length || 0,
     inProgress: (tasks.user?.grouped?.in_progress?.length || 0)
       + (tasks.cos?.grouped?.in_progress?.length || 0),
-    activeAgents: status?.activeAgents || 0,
-    pausedAgents: status?.pausedAgents || 0,
+    activeAgents: status ? status.activeAgents || 0 : null,
+    pausedAgents: status ? status.pausedAgents || 0 : null,
     daemonRunning: status?.running ?? null,
     daemonPaused: status?.paused ?? null,
   };
@@ -363,7 +364,7 @@ export async function buildSystemResourceReport() {
     cosStatus,
   ] = await Promise.all([
     statfs('/').catch(() => null),
-    getDataOverview().catch(() => null),
+    getDataOverview({ strict: true }).catch(() => null),
     query('SELECT pg_database_size(current_database()) AS bytes')
       .then((result) => result.rows[0] || null)
       .catch(() => null),
@@ -373,7 +374,7 @@ export async function buildSystemResourceReport() {
     ollamaManager.listStoredModels().catch(() => null),
     ollamaManager.getLoadedModels().catch(() => null),
     dirSize(ollamaManager.getModelsDir(), { strict: true }).catch(() => null),
-    lmStudioManager.checkLMStudioAvailable().catch(() => null),
+    lmStudioManager.checkLMStudioAvailable(true).catch(() => null),
     lmStudioManager.getAvailableModels(true).catch(() => null),
     lmStudioManager.listStoredModels().catch(() => null),
     lmStudioManager.getLoadedModels(true).catch(() => null),
@@ -488,6 +489,8 @@ export async function buildSystemResourceReport() {
     ...(lmStudioStored == null ? ['lmstudio-inventory'] : []),
     ...(lmStudioListError ? ['lmstudio-catalog'] : []),
     ...(lmStudioResidencyError ? ['lmstudio-residency'] : []),
+    ...(cosTasks == null ? ['agent-queue'] : []),
+    ...(cosStatus == null ? ['agent-status'] : []),
   ])];
   const managedReclaimableBytes = sumBytes(cleanupCandidates
     .filter((candidate) => candidate.risk === 'low' && candidate.action)
@@ -503,15 +506,15 @@ export async function buildSystemResourceReport() {
     generatedAt: new Date().toISOString(),
     filesystem,
     summary: {
-      knownFootprintBytes: sumBytes(storageAreas.map((area) => area.sizeBytes)),
+      knownFootprintBytes: sumKnownBytes(storageAreas.map((area) => area.sizeBytes)),
       footprintMayOverlap: true,
       portosDataBytes: finiteOrNull(dataOverview?.totalSize),
       databaseBytes,
       modelBytes,
       managedReclaimableBytes,
       loadedModels: loadedModels.length,
-      queuedJobs: mediaQueue.queued + queuedAgents,
-      runningJobs: mediaQueue.running + (agentQueue?.inProgress || 0),
+      queuedJobs: agentQueue ? mediaQueue.queued + queuedAgents : null,
+      runningJobs: agentQueue ? mediaQueue.running + agentQueue.inProgress : null,
     },
     storageAreas,
     dataCategories: categories,
