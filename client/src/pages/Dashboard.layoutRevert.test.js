@@ -1,3 +1,5 @@
+// @vitest-environment node
+
 import { describe, it, expect } from 'vitest';
 
 // Faithful inline model of Dashboard.jsx's active-layout switch+revert state

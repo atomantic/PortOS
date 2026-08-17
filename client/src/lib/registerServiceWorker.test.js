@@ -1,3 +1,5 @@
+// @vitest-environment node
+
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { registerServiceWorker, unregisterServiceWorkers } from './registerServiceWorker.js';
 
