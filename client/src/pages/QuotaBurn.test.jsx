@@ -1,8 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
-import QuotaBurn from './QuotaBurn';
+import QuotaBurn, { SAVE_DEBOUNCE_MS } from './QuotaBurn';
 import { sleep } from '../utils/sleep';
 
 vi.mock('../services/api', () => ({
@@ -86,6 +86,9 @@ const renderPage = (path = '/devtools/quota-burn') => render(
   </MemoryRouter>,
 );
 
+const setupSaveUser = () => userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+const flushSave = () => act(async () => { await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS); });
+
 // Mirrors UNSAVED_PATCH_KEY in the page — the session-scoped stash holding a
 // patch the server never accepted.
 const STASH_KEY = 'quotaBurn:unsavedPatch';
@@ -99,6 +102,8 @@ beforeEach(() => {
   api.runQuotaBurn.mockResolvedValue({ result: { dispatched: false, reason: 'nothing to burn' } });
   api.rearmQuotaBurn.mockResolvedValue({ config, status });
 });
+
+afterEach(() => vi.useRealTimers());
 
 describe('QuotaBurn page', () => {
   it('shows each family\'s live window or the reason it will not burn', async () => {
@@ -157,12 +162,14 @@ describe('QuotaBurn page', () => {
   it('sends the unlimited sentinel rather than a 0 the server would reject', async () => {
     // Stepping the cap below 1 is "fewer restrictions", and 0 is not a value the
     // PUT accepts — collapsing it to -1 keeps the spinner from 400ing the save.
-    const user = userEvent.setup();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = setupSaveUser();
     renderPage('/devtools/quota-burn/grok');
     const cap = await screen.findByLabelText(/Dispatch cap per window/);
     await user.clear(cap);
     await user.type(cap, '0');
-    await waitFor(() => expect(api.saveQuotaBurn).toHaveBeenCalled());
+    await flushSave();
+    expect(api.saveQuotaBurn).toHaveBeenCalled();
     expect(api.saveQuotaBurn.mock.calls[0][0].families.grok.maxDispatchesPerWindow).toBe(-1);
   });
 
@@ -190,10 +197,12 @@ describe('QuotaBurn page', () => {
   });
 
   it('saves the master switch as a partial patch', async () => {
-    const user = userEvent.setup();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = setupSaveUser();
     renderPage();
     await user.click(await screen.findByLabelText(/Run the quota-burn loop automatically/));
-    await waitFor(() => expect(api.saveQuotaBurn).toHaveBeenCalledWith({ enabled: true }, { silent: true }));
+    await flushSave();
+    expect(api.saveQuotaBurn).toHaveBeenCalledWith({ enabled: true }, { silent: true });
   });
 
   it('drives the expanded family from the URL, not local state', async () => {
@@ -217,10 +226,12 @@ describe('QuotaBurn page', () => {
   });
 
   it('adds a fully-configured job from a preset, inheriting the plan\'s app', async () => {
-    const user = userEvent.setup();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = setupSaveUser();
     renderPage('/devtools/quota-burn/grok');
     await user.selectOptions(await screen.findByLabelText(/Add a preset job/), 'ux-audit');
-    await waitFor(() => expect(api.saveQuotaBurn).toHaveBeenCalled());
+    await flushSave();
+    expect(api.saveQuotaBurn).toHaveBeenCalled();
     const [patch] = api.saveQuotaBurn.mock.calls.at(-1);
     const added = patch.families.grok.jobs.at(-1);
     expect(added.jobType).toBe('agent-prompt');
@@ -289,11 +300,13 @@ describe('QuotaBurn page', () => {
     // Pending counts live on the STATUS side and reach JobRow as their own prop.
     // If they were merged into the job objects they would have to be stripped
     // back off before every save — the PUT schema is strict and would 400.
-    const user = userEvent.setup();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = setupSaveUser();
     renderPage('/devtools/quota-burn/grok');
     await user.click(await screen.findByLabelText('Name for step 1'));
     await user.keyboard('!');
-    await waitFor(() => expect(api.saveQuotaBurn).toHaveBeenCalled());
+    await flushSave();
+    expect(api.saveQuotaBurn).toHaveBeenCalled();
     const [patch] = api.saveQuotaBurn.mock.calls.at(-1);
     expect(patch.families.grok.jobs[0]).not.toHaveProperty('pending');
     expect(patch.families.grok.jobs[0]).not.toHaveProperty('ranAt');
@@ -319,10 +332,12 @@ describe('QuotaBurn run-once steps', () => {
   };
 
   it('saves the run-once choice as part of the job', async () => {
-    const user = userEvent.setup();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = setupSaveUser();
     renderPage('/devtools/quota-burn/grok');
     await user.click(await screen.findByLabelText('Run once'));
-    await waitFor(() => expect(api.saveQuotaBurn).toHaveBeenCalled());
+    await flushSave();
+    expect(api.saveQuotaBurn).toHaveBeenCalled();
     expect(api.saveQuotaBurn.mock.calls.at(-1)[0].families.grok.jobs[0].runOnce).toBe(true);
   });
 
@@ -437,7 +452,8 @@ describe('QuotaBurn save debounce', () => {
   it('folds a burst of edits into ONE PUT and blocks runs until it lands', async () => {
     // Per-keystroke saving also re-read the status, and a universe-bible-images
     // pending probe walks every bible — one full scan per character typed.
-    const user = userEvent.setup();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = setupSaveUser();
     renderPage('/devtools/quota-burn/grok');
     const nameInput = await screen.findByLabelText('Name for step 1');
     await user.click(nameInput);
@@ -449,7 +465,8 @@ describe('QuotaBurn save debounce', () => {
     expect(screen.getByRole('button', { name: /Evaluate now/ })).toBeDisabled();
     expect(screen.getByLabelText('Run step 1 now')).toBeDisabled();
 
-    await waitFor(() => expect(api.saveQuotaBurn).toHaveBeenCalledTimes(1));
+    await flushSave();
+    expect(api.saveQuotaBurn).toHaveBeenCalledTimes(1);
     expect(api.saveQuotaBurn.mock.calls[0][0].families.grok.jobs[0].label).toBe('Bible imagesabc');
     await waitFor(() => expect(screen.getByRole('button', { name: /Evaluate now/ })).not.toBeDisabled());
   });
@@ -464,12 +481,14 @@ describe('QuotaBurn save races', () => {
     // controlled input mid-typing and the character is silently lost.
     const gate = deferred();
     api.saveQuotaBurn.mockReturnValueOnce(gate.promise);
-    const user = userEvent.setup();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = setupSaveUser();
     renderPage('/devtools/quota-burn/grok');
     const nameInput = await screen.findByLabelText('Name for step 1');
     await user.clear(nameInput);
     await user.type(nameInput, 'AB');
-    await waitFor(() => expect(api.saveQuotaBurn).toHaveBeenCalledTimes(1));
+    await flushSave();
+    expect(api.saveQuotaBurn).toHaveBeenCalledTimes(1);
 
     // Type again while the first PUT is still open, then let it land carrying
     // the OLD value the server normalized.
@@ -484,16 +503,18 @@ describe('QuotaBurn save races', () => {
     // the previous model.
     const gate = deferred();
     api.saveQuotaBurn.mockReturnValueOnce(gate.promise);
-    const user = userEvent.setup();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = setupSaveUser();
     renderPage('/devtools/quota-burn/grok');
     const nameInput = await screen.findByLabelText('Name for step 1');
     await user.type(nameInput, 'X');
-    await waitFor(() => expect(api.saveQuotaBurn).toHaveBeenCalledTimes(1));
+    await flushSave();
+    expect(api.saveQuotaBurn).toHaveBeenCalledTimes(1);
     await user.type(nameInput, 'Y');
     gate.resolve({ config });
 
     // Let the resolved save settle, but stay inside the second edit's debounce.
-    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(50); });
     expect(screen.getByRole('button', { name: /Evaluate now/ })).toBeDisabled();
   });
 
@@ -501,15 +522,18 @@ describe('QuotaBurn save races', () => {
     // `pendingRef` was cleared before the request, so a 400 discarded every
     // edit coalesced into that body, unrecoverably.
     api.saveQuotaBurn.mockRejectedValueOnce(new Error('400'));
-    const user = userEvent.setup();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = setupSaveUser();
     renderPage('/devtools/quota-burn/grok');
     await user.type(await screen.findByLabelText('Name for step 1'), 'Z');
-    await waitFor(() => expect(api.saveQuotaBurn).toHaveBeenCalledTimes(1));
+    await flushSave();
+    expect(api.saveQuotaBurn).toHaveBeenCalledTimes(1);
 
     // Still unsaved, and the next flush re-sends the retained edit.
     await waitFor(() => expect(screen.getByRole('button', { name: /Evaluate now/ })).toBeDisabled());
     await user.type(screen.getByLabelText('Name for step 1'), '!');
-    await waitFor(() => expect(api.saveQuotaBurn).toHaveBeenCalledTimes(2));
+    await flushSave();
+    expect(api.saveQuotaBurn).toHaveBeenCalledTimes(2);
     expect(api.saveQuotaBurn.mock.calls[1][0].families.grok.jobs[0].label).toContain('Z!');
   });
 
@@ -518,17 +542,21 @@ describe('QuotaBurn save races', () => {
     // persistence (there is no Save button). Leaving it on "Saving changes…"
     // after both attempts failed asserts progress that is not happening.
     api.saveQuotaBurn.mockRejectedValue(new Error('400'));
-    const user = userEvent.setup();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = setupSaveUser();
     renderPage('/devtools/quota-burn/grok');
     await user.type(await screen.findByLabelText('Name for step 1'), 'Z');
-    await waitFor(() => expect(api.saveQuotaBurn).toHaveBeenCalledTimes(2));
+    await flushSave();
+    await flushSave();
+    expect(api.saveQuotaBurn).toHaveBeenCalledTimes(2);
     expect(await screen.findByText('Not saved — edit a field to retry')).toBeInTheDocument();
 
     // The next edit re-arms the debounce, so the give-up no longer applies.
     api.saveQuotaBurn.mockResolvedValue({ config });
     await user.type(screen.getByLabelText('Name for step 1'), '!');
     expect(screen.getByText('Saving changes…')).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText('Changes save automatically')).toBeInTheDocument());
+    await flushSave();
+    expect(screen.getByText('Changes save automatically')).toBeInTheDocument();
   });
 
   it('flushes a pending edit on unmount instead of dropping it', async () => {
@@ -557,6 +585,7 @@ describe('QuotaBurn save races', () => {
   });
 
   it('restores a stashed patch on the next visit and re-saves it', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     globalThis.sessionStorage.setItem(STASH_KEY, JSON.stringify({ checkIntervalMinutes: 45 }));
     renderPage();
 
@@ -564,7 +593,8 @@ describe('QuotaBurn save races', () => {
     // the value would leave the server holding the pre-edit plan until the
     // user retyped the field.
     expect(await screen.findByDisplayValue('45')).toBeInTheDocument();
-    await waitFor(() => expect(api.saveQuotaBurn).toHaveBeenCalledTimes(1));
+    await flushSave();
+    expect(api.saveQuotaBurn).toHaveBeenCalledTimes(1);
     expect(api.saveQuotaBurn.mock.calls[0][0].checkIntervalMinutes).toBe(45);
     expect(globalThis.sessionStorage.getItem(STASH_KEY)).toBeNull();
   });

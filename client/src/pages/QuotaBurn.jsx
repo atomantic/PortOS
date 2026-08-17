@@ -31,7 +31,7 @@ import { timeAgo } from '../utils/formatters';
 // Trailing-edge window for the config PUT. A per-keystroke save would also
 // re-read the status, and a `universe-bible-images` job's pending probe walks
 // every universe bible — one full scan per character typed.
-const SAVE_DEBOUNCE_MS = 500;
+export const SAVE_DEBOUNCE_MS = 500;
 
 // How often to re-ask while a family's quota scrape is still running. A scrape
 // is a 10-20s PTY spawn, so this is a handful of polls, not a busy loop.
