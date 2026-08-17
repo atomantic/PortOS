@@ -12,8 +12,7 @@ PortOS is a highly opinionated, personal project — a single developer's "every
 ## Getting set up
 
 ```bash
-npm run install:all   # installs both workspaces + git submodules
-npm run setup:db      # provisions PostgreSQL (mandatory — see docs/STORAGE.md)
+npm run install:all   # installs both workspaces + git submodules, provisions PostgreSQL (mandatory — see docs/STORAGE.md)
 ```
 
 See the root [`CLAUDE.md`](./CLAUDE.md) for the full command reference, architecture notes, and the security/storage model this codebase assumes (private Tailscale network, single-user trust model — see [GOALS.md](./GOALS.md#non-goals) for what's deliberately out of scope). [`docs/README.md`](./docs/README.md) indexes the rest of the docs, including [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) and [`docs/API.md`](./docs/API.md).
