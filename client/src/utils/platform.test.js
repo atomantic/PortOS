@@ -1,3 +1,5 @@
+// @vitest-environment node
+
 import { describe, it, expect, afterEach, vi } from 'vitest';
 
 // `isMac`/`modKey` are evaluated once at module load, so every case has to
