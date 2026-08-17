@@ -49,11 +49,15 @@ const okPayload = (issues) => ({
   remedy: null,
 });
 
-const renderTab = () => render(
-  <MemoryRouter>
-    <IssuesTab appId="app-1" appName="Widget" />
-  </MemoryRouter>
-);
+const renderTab = async () => {
+  const result = render(
+    <MemoryRouter>
+      <IssuesTab appId="app-1" appName="Widget" />
+    </MemoryRouter>
+  );
+  await act(async () => {});
+  return result;
+};
 
 beforeEach(() => {
   socketHandlers.clear();
@@ -72,7 +76,7 @@ afterEach(() => {
 
 describe('IssuesTab', () => {
   it('auto-queries open issues on mount and renders title, labels, and assignees', async () => {
-    renderTab();
+    await renderTab();
 
     expect(await screen.findByText('Crash on save')).toBeInTheDocument();
     expect(api.getAppIssues).toHaveBeenCalledWith('app-1');
@@ -83,7 +87,7 @@ describe('IssuesTab', () => {
   });
 
   it('keeps the description collapsed until the user expands it', async () => {
-    renderTab();
+    await renderTab();
 
     const title = await screen.findByText('Crash on save');
     expect(screen.queryByText(/Repro: open the editor/)).not.toBeInTheDocument();
@@ -96,7 +100,7 @@ describe('IssuesTab', () => {
   });
 
   it('claims an issue with its prefetched content pinned to the /do:next task', async () => {
-    renderTab();
+    await renderTab();
 
     fireEvent.click(await screen.findByRole('button', { name: /Claim/ }));
 
@@ -115,7 +119,7 @@ describe('IssuesTab', () => {
   });
 
   it('tracks the claimed task from queued through active and completed over the CoS socket', async () => {
-    renderTab();
+    await renderTab();
 
     fireEvent.click(await screen.findByRole('button', { name: /Claim/ }));
     expect(await screen.findByRole('link', { name: /Queued/ })).toBeInTheDocument();
@@ -134,7 +138,7 @@ describe('IssuesTab', () => {
   it('does not lose an active socket update that arrives before the POST response', async () => {
     let resolveClaim;
     api.createSlashdoTask.mockImplementation(() => new Promise(resolve => { resolveClaim = resolve; }));
-    renderTab();
+    await renderTab();
 
     fireEvent.click(await screen.findByRole('button', { name: /Claim/ }));
     act(() => socketHandlers.get('cos:tasks:changed')({
@@ -158,7 +162,7 @@ describe('IssuesTab', () => {
         models: ['claude-opus-5', 'claude-sonnet-5'], defaultModel: 'claude-sonnet-5',
       }],
     });
-    renderTab();
+    await renderTab();
 
     await screen.findByText('Crash on save');
     fireEvent.change(await screen.findByLabelText('Provider'), { target: { value: 'claude' } });
@@ -185,7 +189,7 @@ describe('IssuesTab', () => {
   });
 
   it('sends optional override context with the selected claim', async () => {
-    renderTab();
+    await renderTab();
 
     await screen.findByText('Crash on save');
     fireEvent.change(screen.getByLabelText(/Override context or instructions/), {
@@ -205,7 +209,7 @@ describe('IssuesTab', () => {
 
   it('re-enables the Claim button when queuing fails, instead of stranding it', async () => {
     api.createSlashdoTask.mockRejectedValue(new Error('CoS is not running'));
-    renderTab();
+    await renderTab();
 
     fireEvent.click(await screen.findByRole('button', { name: /Claim/ }));
 
@@ -218,7 +222,7 @@ describe('IssuesTab', () => {
       ISSUE,
       { ...ISSUE, number: 43, title: 'Add CSV export', labels: [], assignees: [] },
     ]));
-    renderTab();
+    await renderTab();
 
     await screen.findByText('Crash on save');
     fireEvent.change(screen.getByLabelText('Filter issues'), { target: { value: 'csv' } });
@@ -241,6 +245,7 @@ describe('IssuesTab', () => {
     rerender(
       <MemoryRouter><IssuesTab appId="app-2" appName="Other" /></MemoryRouter>
     );
+    await act(async () => {});
     expect(await screen.findByText('Second app issue')).toBeInTheDocument();
 
     // The first app's response arrives late — it must be discarded.
@@ -254,7 +259,7 @@ describe('IssuesTab', () => {
       forge: 'github', fullName: 'acme/widget', issues: [],
       reason: 'gh-unauthenticated', transient: true, remedy: 'run gh auth login',
     });
-    renderTab();
+    await renderTab();
 
     expect(await screen.findByText(/Couldn't reach GitHub/)).toBeInTheDocument();
     expect(screen.getByText(/run gh auth login/)).toBeInTheDocument();
@@ -265,7 +270,7 @@ describe('IssuesTab', () => {
     api.getAppIssues.mockResolvedValue({
       forge: null, fullName: null, issues: [], reason: 'unsupported-forge', transient: false, remedy: null,
     });
-    renderTab();
+    await renderTab();
 
     expect(await screen.findByText(/isn't GitHub or GitLab/)).toBeInTheDocument();
   });
@@ -276,7 +281,7 @@ describe('IssuesTab', () => {
       forge: null, tracker: 'jira', fullName: null, issues: [],
       reason: 'tracker-not-a-forge', transient: false, remedy: null,
     });
-    renderTab();
+    await renderTab();
 
     expect(await screen.findByText(/Work Tracker isn't a forge issue tracker/)).toBeInTheDocument();
     // No issues ⇒ no Claim button that would queue a mis-routed run.
