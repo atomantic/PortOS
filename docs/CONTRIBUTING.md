@@ -1,5 +1,14 @@
 # Contributing Guide
 
+PortOS is a highly opinionated, personal project — a single developer's "everything app," built and maintained for that developer's own machine and workflow. It's MIT-licensed and open to the public, but it is **not** built or governed as a general-purpose open source project: there's no roadmap vote, no maintainer team, and no commitment to stability for anyone else's deployment. Read this before opening a PR so expectations are clear going in.
+
+## Before You Open a PR
+
+- **The project prioritizes the author's own needs first.** A PR that's a great idea in the abstract may still be declined or reworked if it doesn't fit how the author actually uses PortOS.
+- **Breaking changes ship without warning.** There's no deprecation cycle for external consumers. If you're running a fork, expect to reconcile changes yourself on each pull.
+- **Small, focused PRs are far more likely to land than large ones.** If you're proposing a new feature area rather than a fix, consider opening an issue first to check it's a direction the project wants, before investing significant time.
+- **Bug fixes, docs corrections, and small quality-of-life improvements are the easiest path in.**
+
 ## Development Setup
 
 ```bash
@@ -140,3 +149,11 @@ full CI gate succeeds.
 ## API Documentation
 
 See [API.md](./API.md) for the complete REST API and WebSocket event reference.
+
+## Reporting Bugs / Proposing Features
+
+Open a GitHub issue. There's no formal triage SLA — this is a side project run by one person — but clear repro steps or a concrete, scoped proposal are much more likely to get picked up than a vague one.
+
+## License
+
+MIT — see [LICENSE](../LICENSE).

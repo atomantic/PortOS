@@ -42,7 +42,7 @@ Reused verbatim (condensed to objective statements) from [GOALS.md](./GOALS.md)'
 
 ### External Contributor (out-of-band, low priority)
 - **Needs:** a working MIT-licensed codebase to read, fork, or occasionally PR against.
-- **Context:** not onboarded — no CODE_OF_CONDUCT.md exists; [CONTRIBUTING.md](./CONTRIBUTING.md) documents contribution expectations, but PRs are welcome without a dedicated onboarding path, and the project explicitly does not optimize for this persona's needs over the owner-operator's.
+- **Context:** not onboarded — no CODE_OF_CONDUCT.md exists; [CONTRIBUTING.md](./docs/CONTRIBUTING.md) documents contribution expectations, but PRs are welcome without a dedicated onboarding path, and the project explicitly does not optimize for this persona's needs over the owner-operator's.
 
 ---
 
@@ -55,7 +55,7 @@ Reused verbatim (condensed to objective statements) from [GOALS.md](./GOALS.md)'
 | FR-1 | The system MUST support full CRUD + archive/unarchive lifecycle for tracked apps. | Must | Creating, editing, archiving, and unarchiving an app via the API round-trips through the app list without data loss. |
 | FR-2 | The system MUST manage PM2-backed app lifecycle actions (start/stop/restart/update/build/status/logs). | Must | Each lifecycle action returns success/failure state and streams logs for the target app within its running duration. |
 | FR-3 | The system MUST detect port conflicts against the canonical `PORTS` registry before allocation. | Must | Requesting a port already claimed by another app returns a conflict, not a silent overwrite. |
-| FR-4 | The system SHOULD expose configurable system-health thresholds. | Should | `PUT /health/thresholds` persists new thresholds and subsequent `/health` checks use them. |
+| FR-4 | The system SHOULD expose configurable system-health thresholds. | Should | `PUT /api/system/health/thresholds` persists new thresholds and subsequent `GET /api/system/health` checks use them. |
 
 ### AI Agent Orchestration (CoS)
 
@@ -138,8 +138,8 @@ Reused verbatim (condensed to objective statements) from [GOALS.md](./GOALS.md)'
 | FR-39 | The system MUST support opt-in HTTPS provisioning with a loopback-only HTTP mirror for local tooling. | Must | After running cert setup, `:5555` serves TLS and `:5553` remains reachable only from loopback. |
 | FR-40 | The system MUST support federation with an unbounded number of peer instances (announce/connect/sync), each with its own per-peer Basic-auth credential for password-gated peers. | Must | Registering a third, fourth, or Nth peer works identically to registering the second — no fixed two-peer assumption anywhere in the peer registry (`data/instances.json`) or sync path. |
 | FR-41 | The system MUST support cross-instance data sharing via export buckets with an inbox promote/dismiss workflow on the receiving side. | Must | A record pushed to a subscribed peer's sharing inbox is neither auto-applied nor lost — it requires explicit promote or dismiss. |
-| FR-52 | The system MUST support delegating queued media-generation jobs to a federated peer's local compute, gated behind that peer's opt-in enablement, model allowlist, and live capacity. | Must | Submitting a job to a peer that is enabled, has the requested model allowlisted, and has queue headroom returns a queued job the caller can poll/cancel/download; a peer at capacity or without the model allowlisted rejects the submission rather than silently queuing it. |
-| FR-53 | The system MUST let a user assign a media-generation job to a specific federated peer from the web UI, choosing among currently enabled and reachable peer providers. | Must | The provider picker only lists peers the user has explicitly enabled as media providers and that currently report ready status; selecting one routes the job to that peer, not an arbitrary one. |
+| FR-52 | The system MUST support delegating queued audio/music-generation jobs to a federated peer's local compute, gated behind that peer's opt-in enablement, model allowlist, and live capacity. (Image/video generation is not yet covered — see Out of Scope.) | Must | Submitting an audio/music job to a peer that is enabled, has the requested model allowlisted, and has queue headroom returns a queued job the caller can poll/cancel/download; a peer at capacity or without the model allowlisted rejects the submission rather than silently queuing it. |
+| FR-53 | The system MUST let a user assign an audio/music-generation job to a specific federated peer from the web UI, choosing among currently enabled and reachable peer providers. | Must | The provider picker only lists peers the user has explicitly enabled as media providers and that currently report ready status; selecting one routes the job to that peer, not an arbitrary one. |
 
 ### Health & Longevity (MeatSpace)
 
@@ -211,7 +211,7 @@ Reused verbatim (condensed to objective statements) from [GOALS.md](./GOALS.md)'
 - **Public internet deployment / public-facing hardening** — runs on a private Tailscale network only; HTTPS support exists for browser-API/cert-trust convenience, not public exposure.
 - **ORM or heavyweight database tooling** — deliberate plain-SQL usage against Postgres; no query builder or ORM layer.
 - **Cloud hosting** — runs on the user's own hardware; not offered as a hosted service.
-- **General-purpose external-user onboarding** — no CODE_OF_CONDUCT.md; [CONTRIBUTING.md](./CONTRIBUTING.md) sets contribution expectations, but the project is not structured to actively onboard outside contributors even though it accepts PRs.
+- **General-purpose external-user onboarding** — no CODE_OF_CONDUCT.md; [CONTRIBUTING.md](./docs/CONTRIBUTING.md) sets contribution expectations, but the project is not structured to actively onboard outside contributors even though it accepts PRs.
 - **Music & audio production (MusicGen-style local generation, podcast studio)** — deferred until higher-memory local hardware is available.
 - **Federated peer-to-peer sharing beyond bucket-based Sharing** — direct P2P distribution between instances is a secondary goal, not yet built.
 - **Federated media-provider routing for image/video generation** — the queued-job delegation contract (FR-52/FR-53) is implemented and live for audio/music generation today; extending the same provider/consumer contract to image and video generation is tracked separately (issue #4348), not yet built.
@@ -227,7 +227,7 @@ Reused verbatim (condensed to objective statements) from [GOALS.md](./GOALS.md)'
 - The user operates on a private Tailscale network; the network boundary, not application-layer auth, is the default trust boundary.
 - The user maintains an arbitrary, unbounded number of federated PortOS installs (including local-inference machines) as sync peers and, where enabled, spare generation capacity — not a single fixed primary/secondary pair.
 - AI provider costs are assumed to run primarily through flat-rate subscriptions (Claude Max, Codex, Google AI Pro, SuperGrok) plus local Ollama/LM Studio inference, not metered per-call billing — this shapes the "no cold-bootstrap LLM calls" policy.
-- The project accepts external PRs but does not guarantee backward compatibility of its own conventions for third-party contributors; breaking changes may ship without notice, mitigated only by the mandatory migration/versioning discipline for on-disk data (NFR-5–NFR-8). Contribution expectations are documented in [CONTRIBUTING.md](./CONTRIBUTING.md).
+- The project accepts external PRs but does not guarantee backward compatibility of its own conventions for third-party contributors; breaking changes may ship without notice, mitigated only by the mandatory migration/versioning discipline for on-disk data (NFR-5–NFR-8). Contribution expectations are documented in [CONTRIBUTING.md](./docs/CONTRIBUTING.md).
 - MIT license; no funding/sponsorship model in place.
 - The `server/` and `client/` sub-package `version` fields are informational only and drift independently from the root `package.json` version — no release, build, or deployment tooling reads them, so their skew is not a compatibility risk.
 
@@ -248,7 +248,7 @@ Reused verbatim (condensed to objective statements) from [GOALS.md](./GOALS.md)'
 - **Image/video federated media-provider routing is unbuilt** — the audio/music delegation contract (FR-52/FR-53) is live, but extending it to image/video generation is tracked separately (#4348).
 - **Explicit peer task assignment is unbuilt** — CoS task coordination across peers is opportunistic (claim-based) only today; directed "run on instance X" assignment is a decided, ready-to-work follow-up (#4520).
 
-No other open questions remain unresolved as of this revision. Video generation pipeline reliability, the workspace package-version skew, and the absence of contributor documentation were the other items previously tracked here — video generation is now stable, the version skew was confirmed cosmetic (see Assumptions & Constraints), and [CONTRIBUTING.md](./CONTRIBUTING.md) now exists.
+No other open questions remain unresolved as of this revision. Video generation pipeline reliability, the workspace package-version skew, and the absence of contributor documentation were the other items previously tracked here — video generation is now stable, the version skew was confirmed cosmetic (see Assumptions & Constraints), and [CONTRIBUTING.md](./docs/CONTRIBUTING.md) now exists.
 
 ---
 
