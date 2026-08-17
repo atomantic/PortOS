@@ -1630,6 +1630,10 @@ describe('watchForFile', () => {
     await new Promise((resolve) => setImmediate(resolve));
     await writeFile(target, 'done');
     await expect(detected).resolves.toBeUndefined();
+    // FSWatcher emits `close` before libuv's Windows endgame has fully released
+    // the directory handle. Let that native cleanup finish before removing the
+    // watched temp directory, or Node can abort in src/win/fs-event.c.
+    await new Promise((resolve) => setImmediate(resolve));
     rmSync(dir, { recursive: true, force: true });
   });
 });
