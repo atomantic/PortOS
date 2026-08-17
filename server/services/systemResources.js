@@ -482,6 +482,7 @@ export async function buildSystemResourceReport() {
     .map((area) => area.id);
   const sourceErrors = [...new Set([
     ...storageErrors,
+    ...(!filesystem ? ['filesystem'] : []),
     ...(!ollamaStatus?.available ? ['ollama-backend'] : []),
     ...(ollamaStored == null ? ['ollama-inventory'] : []),
     ...(ollamaResidencyError ? ['ollama-residency'] : []),

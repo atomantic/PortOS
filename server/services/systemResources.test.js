@@ -86,6 +86,7 @@ vi.mock('./cos.js', () => ({
 }));
 
 const promptRunner = await import('../lib/promptRunner.js');
+const fsPromises = await import('fs/promises');
 const db = await import('../lib/db.js');
 const fileUtils = await import('../lib/fileUtils.js');
 const dataManager = await import('./dataManager.js');
@@ -202,6 +203,15 @@ describe('system resource reporting', () => {
 
     expect(dependencies).toMatchObject({ status: 'unavailable' });
     expect(report.sourceErrors).toContain('dependencies');
+  });
+
+  it('surfaces a failed filesystem capacity probe as unknown', async () => {
+    fsPromises.statfs.mockRejectedValueOnce(new Error('statfs unavailable'));
+
+    const report = await buildSystemResourceReport();
+
+    expect(report.filesystem).toBeNull();
+    expect(report.sourceErrors).toContain('filesystem');
   });
 
   it('marks an unreadable PortOS data scan unavailable', async () => {

@@ -4,9 +4,21 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
-const mocks = vi.hoisted(() => ({ execFile: vi.fn() }));
+const mocks = vi.hoisted(() => ({ execFile: vi.fn(), statErrorPath: null }));
 const testDataRoot = mkdtempSync(join(tmpdir(), 'datamanager-strict-test-'));
 
+vi.mock('fs/promises', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    stat: vi.fn((path, ...args) => {
+      if (path === mocks.statErrorPath) {
+        return Promise.reject(Object.assign(new Error('stat access denied'), { code: 'EACCES' }));
+      }
+      return actual.stat(path, ...args);
+    }),
+  };
+});
 vi.mock('../lib/childProcess.js', () => ({ execFile: mocks.execFile }));
 vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   const actual = await importOriginal();
@@ -23,6 +35,7 @@ const { getDataOverview } = await import('./dataManager.js');
 afterAll(() => rmSync(testDataRoot, { recursive: true, force: true }));
 
 beforeEach(() => {
+  mocks.statErrorPath = null;
   rmSync(testDataRoot, { recursive: true, force: true });
   mkdirSync(join(testDataRoot, 'cache'), { recursive: true });
   mkdirSync(join(testDataRoot, 'runs'), { recursive: true });
@@ -51,5 +64,11 @@ describe('dataManager strict overview', () => {
 
   it('rejects the same failed category scan for fail-closed report callers', async () => {
     await expect(getDataOverview({ strict: true })).rejects.toThrow('permission denied');
+  });
+
+  it('preserves access failures during strict existence checks as unknown', async () => {
+    mocks.statErrorPath = join(testDataRoot, 'runs');
+
+    await expect(getDataOverview({ strict: true })).rejects.toThrow('stat access denied');
   });
 });

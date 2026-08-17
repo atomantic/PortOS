@@ -167,7 +167,18 @@ export async function resolveCategoryBusy(categoryKey) {
 const SAFE_NAME = /^[a-z0-9_-]+$/;
 
 async function getDirSizeAndCount(dirPath, { strict = false } = {}) {
-  if (!existsSync(dirPath)) return { size: 0, fileCount: 0 };
+  if (strict) {
+    const present = await stat(dirPath).then(
+      () => true,
+      (err) => {
+        if (err?.code === 'ENOENT') return false;
+        throw err;
+      },
+    );
+    if (!present) return { size: 0, fileCount: 0 };
+  } else if (!existsSync(dirPath)) {
+    return { size: 0, fileCount: 0 };
+  }
   const [duOut, findOut] = await Promise.all([
     execFileAsync('du', ['-sk', dirPath], { timeout: 30000 })
       .then(r => r.stdout.trim())
