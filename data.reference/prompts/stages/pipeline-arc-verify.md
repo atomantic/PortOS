@@ -120,6 +120,25 @@ Score each volume + each episode against the arc. Specifically check:
    - resource quantities, deadlines, extensions, and who approves them;
    - the issue/episode where each irreversible character choice happens, so a milestone is neither spent early nor repeated;
    - issue/episode load, so independent climaxes have room for setup, resistance, choice, and consequence.
+10. **Dramatic economy.** Once episodes exist, each synopsis needs a concrete
+    goal, obstacle, consequential choice, and changed situation. Flag a plan
+    dominated by permissions, ledgers, clauses, exceptions, or repeated
+    statements of what nobody may do. Procedural precision can support a turn;
+    it is not a substitute for one. Adjacent episodes must not resolve the same
+    conflict by making another authority relinquish control.
+11. **Planning altitude and metadata fit.** An episode synopsis is a drafting
+    seed, not a near-manuscript or a running continuity appendix. Roughly
+    150–300 words is usually enough; above 450 words is a medium concern unless
+    the episode demonstrably needs the complexity, and above 700 is high. Flag
+    append-only caveats, duplicated facts, or minor procedures that bury the
+    dramatic turn. The title, `arcRole`, and `lengthProfile` must describe what
+    the episode actually does — especially pilot, midpoint, all-is-lost, and
+    finale labels.
+12. **Premise-engine continuity.** Track every major quest or promise in the
+    originating premise across the whole series. A survival, rescue, romance,
+    or institutional subplot must not silently erase a co-equal search, mystery,
+    relationship, or personal need. The finale may defer an engine only through
+    a visible choice that preserves a credible next step or payoff.
 
 ## Output contract
 

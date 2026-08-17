@@ -7,9 +7,11 @@
  * the other arcPlanner modules — they all import from here.
  */
 
+import { createHash } from 'crypto';
 import { MANUSCRIPT_TYPES } from '../series.js';
 import { listIssues, STAGE_INPUT_MAX } from '../issues.js';
 import { ARC_LIMITS, ARC_ROLES as ARC_ROLE_LIST, ARC_SHAPE_IDS, READER_MAP_BEAT_KINDS, buildSeason, renderArcShapeGuidance, renderTickingClock, sanitizeSeasonList } from '../../../lib/storyArc.js';
+import { trimToClause } from '../../../lib/storyBible.js';
 import { composeStyleNotes } from '../../../lib/styleGuide.js';
 import { CHARACTER_ARC_LIMITS, renderCharacterArcsForPrompt } from '../../../lib/seriesCharacterArc.js';
 import { describeStructure, recommendStructure } from '../../../lib/seasonStructure.js';
@@ -258,6 +260,15 @@ export const manuscriptSectionHeader = (s) => `# Issue ${s.number}${s.title ? ` 
 // completeness pass, and manuscriptFix so the LLM-visible text never drifts.
 export const sectionsCorpus = (sections) =>
   sections.map((s) => `${manuscriptSectionHeader(s)}\n\n${s.content || ''}`).join('\n\n---\n\n');
+
+// Completeness findings have no registry checkId, but they still need the same
+// source-staleness contract as editorial-check findings. A manuscript-only
+// registry check fingerprints one named segment (`manuscript=<corpus>`), so
+// keep that exact projection here for both the completeness seed and review
+// read paths. Centralizing it prevents the two paths from drifting byte-wise.
+export const manuscriptSourceHash = (manuscript) => createHash('sha256')
+  .update(`manuscript=${manuscript || ''}`)
+  .digest('hex');
 
 export async function collectIssueSourceText(seriesId, { stageOrder = SOURCE_STAGE_ORDER } = {}) {
   if (!seriesId) return '';
@@ -527,6 +538,7 @@ export const renderVerifyIssueLeaf = (iss) => ({
   status: iss.status,
   arcPosition: iss.arcPosition,
   arcRole: iss.arcRole || null,
+  lengthProfile: iss.lengthProfile || null,
   synopsis: (iss.stages?.idea?.input || '').trim() || null,
 });
 
@@ -613,7 +625,12 @@ export function shapeEpisodeResolutions(rawEpisodes) {
     out.push({
       seasonNumber: Number.isInteger(seasonNumberRaw) ? seasonNumberRaw : null,
       episodeNumber,
-      synopsis: synopsis.slice(0, STAGE_INPUT_MAX),
+      // A resolver correction must obey the same episode-plan budget as the
+      // generator that created the synopsis. The old STAGE_INPUT_MAX ceiling
+      // (200k) let a sequence of continuity repairs turn a compact plan into a
+      // near-manuscript. Boundary-aware trimming avoids manufacturing the
+      // half-sentence that the next verification round would immediately flag.
+      synopsis: trimToClause(synopsis, ARC_LIMITS.EPISODE_SYNOPSIS_MAX),
     });
     if (out.length >= RESOLVE_EPISODE_MAX) break;
   }
@@ -638,6 +655,8 @@ export function renderVolumeIssue(iss, { synopsisOnly = false } = {}) {
     title: iss.title,
     status: iss.status,
     arcPosition: iss.arcPosition,
+    arcRole: iss.arcRole || null,
+    lengthProfile: iss.lengthProfile || null,
   };
   if (beats) return { ...base, beats };
   return { ...base, synopsis: synopsis || null };

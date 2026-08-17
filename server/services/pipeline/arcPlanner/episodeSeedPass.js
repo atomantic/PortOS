@@ -12,6 +12,8 @@ import { extractCanonFromProse } from '../../universeCanon.js';
 import { resolveSeriesLlmOverride } from '../../../lib/seriesLlmOverride.js';
 import { getSeriesPlanningCanon } from '../seriesCanon.js';
 import { ARC_ROLES, ERR_VALIDATION, SEASON_LENGTH_PRESETS, SHAPE_GUIDANCE_NONE, appendCharacterFirstArcGuidance, appendTickingClock, lengthProfileForArcRole, makeErr, renderPriorSeason, resolveWorldContext } from './context.js';
+import { ARC_LIMITS } from '../../../lib/storyArc.js';
+import { trimToClause } from '../../../lib/storyBible.js';
 
 /**
  * Build the context for one season's episode breakdown. `priorSeasonsContext`
@@ -109,7 +111,7 @@ export function shapeEpisodes(rawEpisodes) {
       number,
       title,
       logline: typeof raw?.logline === 'string' ? raw.logline.trim().slice(0, 500) : '',
-      synopsis: typeof raw?.synopsis === 'string' ? raw.synopsis.trim().slice(0, 4000) : '',
+      synopsis: trimToClause(raw?.synopsis, ARC_LIMITS.EPISODE_SYNOPSIS_MAX),
       primaryCharacters,
       arcRole,
       lengthProfile,

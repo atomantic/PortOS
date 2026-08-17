@@ -1525,15 +1525,31 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
             </p>
           ) : (
             <div className="mt-2 space-y-2">
-              <p className="text-xs text-port-warning">
-                {canon.undescribed.length} noun(s) appear where they&apos;d be drawn but have no description — fix before generating art:
-              </p>
-              {canon.blockingIssues.map((bi) => (
+              {(canon.blockingIssues || []).some((bi) => bi.blockingReason === 'missing-visual-source') ? (
+                <p className="text-xs text-port-warning">
+                  Some issues have no finished visual script yet. An outline or prose draft cannot prove canon is ready for rendering.
+                </p>
+              ) : null}
+              {(canon.undescribed || []).length > 0 ? (
+                <p className="text-xs text-port-warning">
+                  {canon.undescribed.length} noun(s) appear where they&apos;d be drawn but have no description — fix before generating art:
+                </p>
+              ) : null}
+              {(canon.blockingIssues || []).map((bi) => (
                 <div key={bi.issueId} className="text-xs">
-                  <Link to={`/pipeline/issues/${bi.issueId}/nouns`} className="text-port-accent hover:underline">
+                  <Link
+                    to={bi.blockingReason === 'missing-visual-source'
+                      ? `/pipeline/issues/${bi.issueId}/${bi.missingSourceStages?.[0] || 'idea'}`
+                      : `/pipeline/issues/${bi.issueId}/nouns`}
+                    className="text-port-accent hover:underline"
+                  >
                     #{bi.number} {bi.title || ''} →
                   </Link>
-                  <span className="text-gray-400"> {bi.none.map((n) => `${n.name} (${n.kind})`).join(', ')}</span>
+                  <span className="text-gray-400">
+                    {' '}{bi.blockingReason === 'missing-visual-source'
+                      ? `missing ${(bi.missingSourceStages || []).join(' + ')}`
+                      : (bi.none || []).map((n) => `${n.name} (${n.kind})`).join(', ')}
+                  </span>
                 </div>
               ))}
             </div>

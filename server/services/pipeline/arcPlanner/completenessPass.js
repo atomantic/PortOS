@@ -11,7 +11,7 @@ import {
 import { getSeries } from '../series.js';
 import { STAGE_OUTPUT_MAX } from '../issues.js';
 import { getSeriesCanon } from '../seriesCanon.js';
-import { ERR_VALIDATION, MANUSCRIPT_STAGES, VERIFY_SEVERITIES, buildArcBaseContext, collectManuscriptSections, makeErr, manuscriptSectionHeader, sectionsCorpus } from './context.js';
+import { ERR_VALIDATION, MANUSCRIPT_STAGES, VERIFY_SEVERITIES, buildArcBaseContext, collectManuscriptSections, makeErr, manuscriptSectionHeader, manuscriptSourceHash, sectionsCorpus } from './context.js';
 
 // ── Manuscript completeness ("finish the draft") ──────────────────────────
 // Unlike verifyArc/verifyVolume (which read synopsis/beats from idea.input /
@@ -43,7 +43,7 @@ export const replacementStrategyForCategory = (category) =>
 // the fix path's per-edit replace ceiling so a long page rewrite isn't clipped.
 export const COMPLETENESS_REPLACE_MAX = STAGE_OUTPUT_MAX;
 
-export function shapeCompletenessFindings(rawIssues, { withEdits = false } = {}) {
+export function shapeCompletenessFindings(rawIssues, { withEdits = false, sourceContentHash = null } = {}) {
   if (!Array.isArray(rawIssues)) return [];
   const out = [];
   for (const raw of rawIssues) {
@@ -68,6 +68,7 @@ export function shapeCompletenessFindings(rawIssues, { withEdits = false } = {})
       // un-anchorable findings still render (just without click-to-jump).
       issueNumber: Number.isInteger(raw?.issueNumber) ? raw.issueNumber : null,
       anchorQuote: typeof raw?.anchorQuote === 'string' ? raw.anchorQuote.trim().slice(0, 400) : '',
+      ...(sourceContentHash ? { sourceContentHash } : {}),
     };
     // With-edits pass: carry the concrete in-place rewrite so the editor can seed
     // each comment's `fix` from { find: anchorQuote, replace } without a separate
@@ -208,6 +209,11 @@ export async function analyzeManuscriptCompleteness(seriesId, options = {}) {
       ERR_VALIDATION,
     );
   }
+  // Pin every finding from this pass to the complete source corpus, including
+  // findings emitted from individual chunks. If any issue manuscript changes,
+  // the review can then mark the old advice stale instead of presenting it as
+  // if it still described the current draft.
+  const sourceContentHash = manuscriptSourceHash(sectionsCorpus(sections));
 
   const withEdits = !!options.withEdits;
   const onProgress = typeof options.onProgress === 'function' ? options.onProgress : () => {};
@@ -277,7 +283,7 @@ export async function analyzeManuscriptCompleteness(seriesId, options = {}) {
     onProgress({ type: 'chunk:start', done: 0, total: 1 });
     const { content, runId, providerId, model } = await runOne(sectionsCorpus(sections).slice(0, plan.usableChars));
     onProgress({ type: 'chunk:complete', done: 1, total: 1 });
-    return { issues: shapeCompletenessFindings(content?.issues, { withEdits }), raw: content, runId, providerId, model, chunked: false, chunkCount: 1 };
+    return { issues: shapeCompletenessFindings(content?.issues, { withEdits, sourceContentHash }), raw: content, runId, providerId, model, chunked: false, chunkCount: 1 };
   }
 
   console.log(`📚 completeness: chunked review series=${String(seriesId).slice(0, 12)} chunks=${plan.chunks.length} window=${contextWindow ?? 'floor'}`);
@@ -295,7 +301,7 @@ export async function analyzeManuscriptCompleteness(seriesId, options = {}) {
     const corpus = sectionsCorpus(chunk.sections).slice(0, plan.usableChars);
     const result = await runOne(`${digest}${corpus}`);
     if (!first) first = result;
-    for (const f of shapeCompletenessFindings(result.content?.issues, { withEdits })) {
+    for (const f of shapeCompletenessFindings(result.content?.issues, { withEdits, sourceContentHash })) {
       const k = findingKey(f);
       if (!merged.has(k)) merged.set(k, f);
     }

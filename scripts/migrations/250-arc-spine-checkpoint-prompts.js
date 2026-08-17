@@ -18,7 +18,7 @@ export const ACCEPTED_OLD_MD5 = {
 
 export const NEW_SHIPPED_MD5 = {
   'pipeline-arc-overview.md': '5ed760caaf3cf88916ec28b220e2f590',
-  'pipeline-arc-verify.md': '9f32e91bd33b97d30e1cbb2e697f4fc3', // post-263 world category canon
+  'pipeline-arc-verify.md': '90712f66ec68061ebed2147044e5baee', // post-274 planning economy
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

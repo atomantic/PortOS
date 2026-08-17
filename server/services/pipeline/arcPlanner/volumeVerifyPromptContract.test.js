@@ -72,6 +72,8 @@ const SCOPED_CITATIONS = [
   ['beats', 'issue leaf', issueLeafFields],
   ['synopsis', 'issue leaf', issueLeafFields],
   ['arcPosition', 'issue leaf', issueLeafFields],
+  ['arcRole', 'issue leaf', issueLeafFields],
+  ['lengthProfile', 'issue leaf', issueLeafFields],
   // Checks #1/#4/#5 read these off the volume node.
   ['logline', 'volume node', volumeNodeFields],
   ['synopsis', 'volume node', volumeNodeFields],
@@ -157,13 +159,15 @@ describe('renderVolumeIssue depth selection', () => {
 
   it('renders beats (and never synopsis) once the expand pass has run', () => {
     expect(renderVolumeIssue(issue)).toEqual({
-      number: 4, title: 'Example Issue', status: 'draft', arcPosition: 4, beats: 'beat sheet',
+      number: 4, title: 'Example Issue', status: 'draft', arcPosition: 4,
+      arcRole: null, lengthProfile: null, beats: 'beat sheet',
     });
   });
 
   it('renders synopsis (and never beats) when synopsisOnly is requested', () => {
     expect(renderVolumeIssue(issue, { synopsisOnly: true })).toEqual({
-      number: 4, title: 'Example Issue', status: 'draft', arcPosition: 4, synopsis: 'seed synopsis',
+      number: 4, title: 'Example Issue', status: 'draft', arcPosition: 4,
+      arcRole: null, lengthProfile: null, synopsis: 'seed synopsis',
     });
   });
 

@@ -104,6 +104,30 @@ describe('checkIssueCanonReadiness (matches the visual source)', () => {
     expect(report.none.map((n) => n.name)).toContain('Aria');
   });
 
+  it('does not declare an outline-only comic issue visually ready', async () => {
+    const series = await seriesSvc.createSeries({ name: 'S', logline: 'L', premise: 'P', targetFormat: 'comic' });
+    const issue = await issuesSvc.createIssue({ seriesId: series.id, title: 'Outline', number: 1 });
+    await issuesSvc.updateStage(issue.id, 'idea', { status: 'edited', input: 'Aria finds the door.' });
+
+    const report = await checkIssueCanonReadiness(issue.id);
+    expect(report).toMatchObject({
+      ready: false,
+      referenced: 0,
+      blockingReason: 'missing-visual-source',
+      missingSourceStages: ['comicScript'],
+    });
+  });
+
+  it('requires both visual scripts for a hybrid series', async () => {
+    const series = await seriesSvc.createSeries({ name: 'S', logline: 'L', premise: 'P', targetFormat: 'comic+tv' });
+    const issue = await issuesSvc.createIssue({ seriesId: series.id, title: 'Hybrid', number: 1 });
+    await issuesSvc.updateStage(issue.id, 'comicScript', { status: 'ready', output: 'PAGE 1\nPANEL 1\nAn empty room.' });
+
+    const report = await checkIssueCanonReadiness(issue.id);
+    expect(report.ready).toBe(false);
+    expect(report.missingSourceStages).toEqual(['teleplay']);
+  });
+
   it('does not flag a character named only in dialogue body (not drawn)', async () => {
     canon = { characters: [
       { id: 'c1', name: 'Maggie', physicalDescription: '' },

@@ -166,6 +166,8 @@ export function foundationInputs(series, universe, issues = []) {
       seasonId: issue?.seasonId || '',
       number: issue?.number ?? null,
       title: issue?.title || '',
+      arcRole: issue?.arcRole || null,
+      lengthProfile: issue?.lengthProfile || null,
       synopsis: issue?.stages?.idea?.input || '',
     }));
   return {
@@ -638,7 +640,16 @@ function renderArc(series, issues = [], { maxChars = Infinity, includeArcTransit
     if (season.endingHook) detail.push(`    Ending hook: ${season.endingHook}`);
     const episodes = orderedIssues
       .filter((issue) => issue?.seasonId === season.id)
-      .map((issue) => `    #${issue.number ?? '?'} ${issue.title || 'Untitled'}: ${issue?.stages?.idea?.input || '(no synopsis)'}`);
+      .map((issue) => {
+        const synopsis = issue?.stages?.idea?.input || '(no synopsis)';
+        const words = synopsis === '(no synopsis)' ? 0 : synopsis.trim().split(/\s+/).filter(Boolean).length;
+        const metadata = [
+          issue.arcRole ? `role=${issue.arcRole}` : 'role=unset',
+          issue.lengthProfile ? `length=${issue.lengthProfile}` : 'length=unset',
+          `${words} synopsis words`,
+        ].join(', ');
+        return `    #${issue.number ?? '?'} ${issue.title || 'Untitled'} [${metadata}]: ${synopsis}`;
+      });
     return { logline, detail, episodes };
   });
   const characterArcs = Array.isArray(series?.characterArcs) ? series.characterArcs : [];

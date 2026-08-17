@@ -24,7 +24,7 @@ import { getSettings } from '../../settings.js';
 import { getSeries } from '../series.js';
 import { listIssuesForSeries } from '../issues.js';
 import { getSeriesCanon } from '../seriesCanon.js';
-import { collectManuscriptSections, sectionsCorpus, manuscriptSectionHeader } from '../arcPlanner.js';
+import { collectManuscriptSections, sectionsCorpus, manuscriptSectionHeader, manuscriptSourceHash } from '../arcPlanner.js';
 import { getReverseOutline } from '../reverseOutline.js';
 import { getFactsLedger } from '../continuityBible.js';
 import { getSeriesEditorial } from '../editorialAnalysis.js';
@@ -937,9 +937,11 @@ export async function buildReverseOutlineGateContext(seriesId, { outline } = {})
  * `stale` flag (#1345): true when the content the check analyzed has changed
  * since the finding was seeded. Mirrors `editorialAnalysis.isSnapshotStale` —
  * recompute the current source hash and compare against the one stamped on the
- * finding. Findings without a `sourceContentHash` (completeness-pass comments,
- * older peers, legacy records) or whose check is no longer registered are left
- * unannotated → the UI treats absent `stale` as not-stale.
+ * finding. Completeness-pass comments have no registry `checkId`, so their
+ * manuscript-only hash is evaluated directly. Findings without a
+ * `sourceContentHash` (older peers / legacy records), or whose named check is
+ * no longer registered, are left unannotated → the UI treats absent `stale` as
+ * not-stale.
  *
  * Staleness is derived per-read (never stored), so it stays local to each
  * install's current content and never rides the synced review document.
@@ -952,10 +954,24 @@ export async function getReviewWithStaleness(seriesId) {
   const settings = await getSettings();
   const byId = new Map(getAllChecks(settings).map((c) => [c.id, c]));
   const checkFor = (id) => byId.get(id) || null;
-  // Only recompute hashes when there's at least one hash-stamped finding from a
-  // still-registered check — a pure completeness review pays no extra I/O.
+  // Completeness comments deliberately have no checkId; a hash on one of those
+  // identifies the manuscript-only completeness pass. Named checks still need
+  // to exist in the active registry before they can be evaluated.
   const evaluable = review.comments.filter((c) => c.checkId && c.sourceContentHash && checkFor(c.checkId));
-  if (!evaluable.length) return review;
+  const completeness = review.comments.filter((c) => !c.checkId && c.sourceContentHash);
+  if (!evaluable.length && !completeness.length) return review;
+  if (!evaluable.length) {
+    // Completeness-only reviews need one manuscript read and none of the canon,
+    // series, outline, or registry-check source plumbing below.
+    const sections = await collectManuscriptSections(seriesId);
+    const current = manuscriptSourceHash(sectionsCorpus(sections));
+    return {
+      ...review,
+      comments: review.comments.map((c) => (!c.checkId && c.sourceContentHash
+        ? { ...c, stale: c.sourceContentHash !== current }
+        : c)),
+    };
+  }
   // Re-fingerprint each finding against its check's EFFECTIVE sources — own plus
   // declared-dependency sources (#1627) — exactly as the seed path stamped it, so a
   // dependency-consuming finding's hash is computed against the same content on read
@@ -964,7 +980,8 @@ export async function getReviewWithStaleness(seriesId) {
   // Only pay the manuscript-collection I/O when an evaluable check declares it as
   // a source (mirrors the run path's gate, now source-derived rather than the bare
   // needsManuscript flag so it stays correct as the source vocabulary grows).
-  const needsManuscript = evaluable.some((c) => sourcesFor(c.checkId).includes('manuscript'));
+  const needsManuscript = completeness.length > 0
+    || evaluable.some((c) => sourcesFor(c.checkId).includes('manuscript'));
   const needsReverseOutline = evaluable.some((c) => {
     const sources = sourcesFor(c.checkId);
     return sources.includes('reverseOutline') || sources.includes('reverseOutline.plotlines');
@@ -1012,6 +1029,9 @@ export async function getReviewWithStaleness(seriesId) {
   return {
     ...review,
     comments: review.comments.map((c) => {
+      if (!c.checkId && c.sourceContentHash) {
+        return { ...c, stale: c.sourceContentHash !== manuscriptSourceHash(resolvedSources.manuscript) };
+      }
       const check = c.checkId && c.sourceContentHash ? checkFor(c.checkId) : null;
       if (!check) return c;
       const current = fingerprintForCheck(check, resolvedSources, byId);

@@ -103,6 +103,23 @@ Walk the volume in issue / episode order. Score each issue against the volume's 
 7. **World entity drift (volume scope).** This volume's issues name factions / characters / locations that don't exist in the linked world (suggest renaming to a real entity).
 8. **Length-vs-weight mismatch.** Issue count target says 8 but the synopsis is summarizable in 3 beats, or vice versa. (Cross-volume pass already checks the whole arc — only flag here when it's obvious from this volume in isolation.)
 9. **Volume-internal shape adherence.** If a Vonnegut shape was selected (see "Story shape" above — skip this check if none was selected), this volume's beats must trace the segment of the curve described under "This volume's expected emotional placement." Flag a volume whose final issue lands at a fortune level that contradicts the curve placement (e.g. a "rags-to-riches" volume 2 of 3 ending lower than it opened, or a "man-in-hole" midpoint volume that never reaches the nadir).
+10. **Dramatic economy.** Each synopsis needs a concrete goal, obstacle,
+    consequential choice, and changed situation. Flag issues dominated by
+    permissions, ledgers, clauses, exceptions, or repeated statements of what
+    nobody may do. Procedure can sharpen a conflict; it cannot replace action
+    and choice. Adjacent issues should not solve the same dramatic problem with
+    cosmetically different rules.
+11. **Planning altitude and metadata fit.** A synopsis is a compact drafting
+    seed. Roughly 150–300 words is usually enough; above 450 words is a medium
+    concern unless the issue truly carries unusual complexity, and above 700 is
+    high. Flag append-only continuity caveats, duplicated facts, and minor
+    procedure that buries the turn. The title, `arcRole`, and `lengthProfile`
+    must match the issue's actual function.
+12. **Active story engines.** Every major quest or promise active at the start
+    of this volume must advance, be consciously traded off, or receive a clear
+    deferral beat before the ending. A louder survival or institutional plot
+    must not make a co-equal search, mystery, relationship, or personal need
+    disappear between issues.
 
 DO NOT flag problems that are properly cross-volume in nature (a character introduced in volume 1 paying off in volume 4 — that's the arc verify's job, not yours). Stay inside this volume's walls; the only outside-the-walls checks allowed are #5 (boundary continuity with the immediate neighbors shown above).
 

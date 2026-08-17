@@ -25,6 +25,7 @@ vi.mock('../arcPlanner.js', () => ({
   ]),
   sectionsCorpus: vi.fn((sections) => sections.map((s) => s.content).join('\n')),
   manuscriptSectionHeader: vi.fn((s) => `# Issue ${s.number}`),
+  manuscriptSourceHash: vi.fn((manuscript) => `manuscript-hash:${manuscript}`),
 }));
 vi.mock('../../../lib/stageRunner.js', () => ({
   runStagedLLM: vi.fn(async () => ({
@@ -957,18 +958,19 @@ describe('getReviewWithStaleness (#1345)', () => {
     expect(stale.comments.find((c) => c.checkId === 'custom.anachronism').stale).toBe(true);
   });
 
-  it('leaves legacy findings (no hash), completeness comments (no checkId), and unknown checks unannotated', async () => {
+  it('evaluates hash-stamped completeness comments while leaving legacy and unknown checks unannotated', async () => {
     reviewState = {
       comments: [
         { id: 'a', checkId: 'naming.dissimilar-names', anchorQuote: 'x', problem: 'legacy', status: 'open' }, // no hash
-        { id: 'b', checkId: null, anchorQuote: 'y', problem: 'completeness', status: 'open', sourceContentHash: 'abc' },
+        { id: 'b', checkId: null, anchorQuote: 'y', problem: 'completeness', status: 'open', sourceContentHash: 'manuscript-hash:As you know, Bob, the kingdom fell.' },
         { id: 'c', checkId: 'does.not-exist', anchorQuote: 'z', problem: 'unknown check', status: 'open', sourceContentHash: 'abc' },
       ],
     };
     const review = await getReviewWithStaleness('s1');
-    // No evaluable comment → passthrough, no recompute, no `stale` key added.
-    for (const c of review.comments) expect(c).not.toHaveProperty('stale');
-    expect(collectManuscriptSections).not.toHaveBeenCalled();
+    expect(review.comments.find((c) => c.id === 'b').stale).toBe(false);
+    expect(review.comments.find((c) => c.id === 'a')).not.toHaveProperty('stale');
+    expect(review.comments.find((c) => c.id === 'c')).not.toHaveProperty('stale');
+    expect(collectManuscriptSections).toHaveBeenCalledWith('s1');
     expect(getSeriesCanon).not.toHaveBeenCalled();
   });
 });

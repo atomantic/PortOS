@@ -1029,4 +1029,22 @@ describe('AutopilotPanel', () => {
     const link = screen.getByRole('link', { name: /#3 Backdoor/i });
     expect(link).toHaveAttribute('href', '/pipeline/issues/iss-9/nouns');
   });
+
+  it('explains that outline-only issues are missing a visual source', async () => {
+    getPipelineSeriesCanonReadiness.mockResolvedValue({
+      ready: false,
+      undescribed: [],
+      blockingIssues: [{
+        issueId: 'iss-2', number: 2, title: 'Threshold', none: [],
+        blockingReason: 'missing-visual-source', missingSourceStages: ['comicScript'],
+      }],
+    });
+    renderPanel({ id: 's1', targetFormat: 'comic' });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: /^check$/i }));
+
+    expect(await screen.findByText(/outline or prose draft cannot prove canon is ready/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /#2 Threshold/i }))
+      .toHaveAttribute('href', '/pipeline/issues/iss-2/comicScript');
+  });
 });

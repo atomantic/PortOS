@@ -6,6 +6,7 @@ const fileStore = new Map();
 // first atomicWrite whose (path, data) matches is held for `ms` before landing,
 // letting a test force a specific read→write interleaving deterministically.
 let pendingWriteDelay = null;
+const coverRefresh = vi.hoisted(() => ({ refreshSeriesCoverImage: vi.fn(async () => {}) }));
 
 vi.mock('../../lib/fileUtils.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
@@ -30,6 +31,7 @@ vi.mock('crypto', async () => {
 
 vi.mock('../instances.js', () => mockNoPeers());
 vi.mock('../sharing/peerSync.js', () => mockNoPeerSync());
+vi.mock('./seriesCoverImage.js', () => coverRefresh);
 
 const svc = await import('./issues.js');
 const seriesSvc = await import('./series.js');
@@ -42,6 +44,7 @@ describe('pipeline issues service', () => {
     fileStore.clear();
     uuidCounter = 0;
     pendingWriteDelay = null;
+    coverRefresh.refreshSeriesCoverImage.mockClear();
   });
 
   it('createIssue assigns iss- id and auto-numbers within a series', async () => {
@@ -244,6 +247,20 @@ describe('pipeline issues service', () => {
     });
     expect(stage.pages).toHaveLength(1);
     expect(stage.pages[0].panels[0].imageJobId).toBe('j1');
+  });
+
+  it('refreshes the series thumbnail when a rendered issue cover is cleared', async () => {
+    const i = await svc.createIssue({ seriesId: 'ser-1', title: 'First' });
+    await svc.updateStage(i.id, 'comicPages', {
+      status: 'ready',
+      cover: { finalImage: { filename: 'old-cover.png', fromProof: false } },
+    });
+    coverRefresh.refreshSeriesCoverImage.mockClear();
+
+    await svc.updateStage(i.id, 'comicPages', { status: 'empty', cover: null });
+
+    expect(coverRefresh.refreshSeriesCoverImage).toHaveBeenCalledOnce();
+    expect(coverRefresh.refreshSeriesCoverImage).toHaveBeenCalledWith('ser-1');
   });
 
   describe('runHistory snapshots', () => {

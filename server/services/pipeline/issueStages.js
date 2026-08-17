@@ -10,6 +10,7 @@
 
 import { isPlainObject } from '../../lib/objects.js';
 import { isStr } from '../../lib/storyBible.js';
+import { pickRenderedFilename } from '../../lib/renderSlot.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
 import { getIssue } from './issueCrud.js';
 import {
@@ -62,6 +63,7 @@ export function updateStagesWithLatest(seriesId, updates = [], { snapshotPrior =
     }
   }
 
+  let frontCoverChanged = false;
   return queueSeriesIssuesWrite(seriesId, async () => {
     const state = await readState();
     const results = [];
@@ -83,6 +85,10 @@ export function updateStagesWithLatest(seriesId, updates = [], { snapshotPrior =
         continue;
       }
       const nextStage = mergeStagePatch(currentStage, update.stageId, patch, { snapshotPrior });
+      if (update.stageId === 'comicPages'
+        && pickRenderedFilename(currentStage?.cover) !== pickRenderedFilename(nextStage?.cover)) {
+        frontCoverChanged = true;
+      }
       const mergedIssue = sanitizeIssue({
         ...cur,
         stages: { ...cur.stages, [update.stageId]: nextStage },
@@ -96,6 +102,15 @@ export function updateStagesWithLatest(seriesId, updates = [], { snapshotPrior =
     if (changed) {
       await saveIssuesNow(state.issues.filter((i) => i.seriesId === seriesId));
       emitRecordUpdated('series', seriesId);
+    }
+    return results;
+  }).then(async (results) => {
+    if (frontCoverChanged) {
+      // A manual clear/replacement does not pass through the media filename
+      // hook, so it previously left series.coverImage pointing at stale art.
+      // Recompute after the serialized issue write and outside its queue.
+      const { refreshSeriesCoverImage } = await import('./seriesCoverImage.js');
+      await refreshSeriesCoverImage(seriesId).catch(() => {});
     }
     return results;
   });
@@ -157,6 +172,7 @@ export function updateStageWithLatest(issueId, stageId, computeFn, { snapshotPri
   // see CLAUDE.md "single tail per shared file". seriesId is immutable, so read
   // it outside the lock to pick the queue, then re-read the issue INSIDE the
   // lock for the freshest stage.
+  let frontCoverChanged = false;
   const work = async () => {
     const cur = await store().loadOne(issueId);
     if (!cur) throw makeErr(`Issue not found: ${issueId}`, ERR_NOT_FOUND);
@@ -174,6 +190,10 @@ export function updateStageWithLatest(issueId, stageId, computeFn, { snapshotPri
     // patch carries a fresh lastRunId (i.e. a generate just replaced prior
     // content). Computed BEFORE the spread so it reads pre-merge state.
     const next = mergeStagePatch(currentStage, stageId, patch, { snapshotPrior });
+    if (stageId === 'comicPages'
+      && pickRenderedFilename(currentStage?.cover) !== pickRenderedFilename(next?.cover)) {
+      frontCoverChanged = true;
+    }
     const mergedIssue = sanitizeIssue({
       ...cur,
       stages: { ...cur.stages, [stageId]: next },
@@ -184,6 +204,12 @@ export function updateStageWithLatest(issueId, stageId, computeFn, { snapshotPri
     return { issue: mergedIssue, stage: mergedIssue.stages[stageId] };
   };
   return getIssue(issueId, { includeDeleted: true }).then((existing) =>
-    queueSeriesIssuesWrite(existing.seriesId, work),
+    queueSeriesIssuesWrite(existing.seriesId, work).then(async (result) => {
+      if (frontCoverChanged) {
+        const { refreshSeriesCoverImage } = await import('./seriesCoverImage.js');
+        await refreshSeriesCoverImage(result.issue.seriesId).catch(() => {});
+      }
+      return result;
+    }),
   );
 }

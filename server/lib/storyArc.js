@@ -41,6 +41,12 @@ export const ARC_LIMITS = Object.freeze({
   SEASON_NUMBER_MAX: 99,
   SEASON_EPISODE_COUNT_MAX: 999,
   SEASONS_PER_SERIES_MAX: 50,
+  // One issue/episode planning synopsis. This is deliberately smaller than a
+  // whole-volume synopsis: it is a drafting seed, not a place to accumulate
+  // every continuity exception the verifier has ever raised. Keep the value in
+  // the shared arc limits so initial episode generation and later arc repairs
+  // cannot silently disagree about how much text one episode may own.
+  EPISODE_SYNOPSIS_MAX: 4000,
 });
 
 export const ARC_STATUSES = Object.freeze(['draft', 'verified']);
