@@ -16,7 +16,7 @@ import { createOutputSpooler } from './agentTuiSpawning/outputSpooler.js';
 import { resolveErrorAnalysis } from './agentTuiSpawning/finalizeHelpers.js';
 import { finalizeAgent, releaseAgentLane } from './agentFinalization.js';
 import { activeAgents, userTerminatedAgents, pausedAgents, registerSpawnedAgent, unregisterSpawnedAgent } from './agentState.js';
-import { PATHS } from '../lib/fileUtils.js';
+import { PATHS, watchForFile } from '../lib/fileUtils.js';
 import { doneSentinelName, doneSentinelPath as resolveDoneSentinelPath, parseSentinelPayload } from '../lib/agentSentinel.js';
 import { shouldAbandonForHostShutdown, HOST_SHUTDOWN_REASON } from '../lib/hostShutdown.js';
 import { SENTINEL_COMPLETION_MARKER } from '../lib/agentOutputMarkers.js';
@@ -74,12 +74,11 @@ const PROVIDER_SIGNAL_POLL_MS = 5000;
 // RAW_TAIL_ANALYSIS_BYTES) live in
 // ./agentTuiSpawning/ so spawnTuiAgent stays a thin orchestrator.
 
-// Sentinel-file polling. TUI agents write `.agent-done` in their workspace
-// when they've finished /simplify + /do:pr (or /do:push) — we poll for it
-// here so the agent gets cleanly finalized as soon as the work is done,
-// without waiting for a shell exit.
+// Sentinel-file watching. TUI agents write `.agent-done` in their workspace
+// when they've finished /simplify + /do:pr (or /do:push) — watch for it here
+// so the agent gets cleanly finalized as soon as the work is done, without
+// waiting for a shell exit or repeatedly touching the filesystem.
 // The filename is per agent instance — see doneSentinelName in ../lib/agentSentinel.js.
-const DONE_POLL_INTERVAL_MS = 2000;
 
 /**
  * Thin wrapper around `shellService.createShellSession` for the agent TUI
@@ -538,7 +537,7 @@ export async function spawnTuiAgent({
   const cwd = workspacePath && typeof workspacePath === 'string' ? workspacePath : PATHS.root;
   // The agent writes `.agent-done` in its workspace to signal completion (see
   // the sentinel watcher below) and then stops — it does NOT run `/quit` (that
-  // is a UI command the agent can't invoke). The 2s poll is the primary
+  // is a UI command the agent can't invoke). The file watcher is the primary
   // finalize path; finish() also ingests the sentinel directly so the summary
   // is captured even if some other path (shell exit) finalizes first. Computed
   // up front so both the watcher AND finish() can read it (see ingestDoneSentinel).
@@ -681,7 +680,7 @@ export async function spawnTuiAgent({
     const agentData = activeAgents.get(agentId);
     if (agentData?.providerSignalTimer) clearInterval(agentData.providerSignalTimer);
     if (agentData?.promptTimer) clearInterval(agentData.promptTimer);
-    if (agentData?.doneSentinelTimer) clearInterval(agentData.doneSentinelTimer);
+    agentData?.doneSentinelWatcher?.();
     // Cancels the paste-attempt timers and releases the post-paste accumulator
     // even when the run ends mid-paste-window — see
     // createPasteRetryController's own cancel() for why each is safe to clear
@@ -723,8 +722,8 @@ export async function spawnTuiAgent({
     // Ingest the .agent-done sentinel BEFORE draining, so its markdown summary
     // lands in outputBuffer/output.txt regardless of WHICH path finalized the
     // agent. The completion workflow writes the sentinel and stops; the 2s
-    // doneSentinelTimer poll is what normally calls finish(). Reading it here
-    // (not just in the poll) keeps the resolution captured even when shell exit
+    // doneSentinelWatcher is what normally calls finish(). Reading it here
+    // (not just in the watcher) keeps the resolution captured even when shell exit
     // finalizes first. Idempotent
     // via `sentinelIngested`.
     await ingestDoneSentinel();
@@ -901,7 +900,7 @@ export async function spawnTuiAgent({
    * agent named in it, and requeues the task as *interrupted* — resumable, and
    * without charging it orphan-retry budget.
    *
-   * Sets `finalized` so every other path (provider-signal timer, sentinel poll, paste
+   * Sets `finalized` so every other path (provider-signal timer, sentinel watcher, paste
    * retry) becomes a no-op for the rest of this process's life.
    */
   const abandonForHostShutdown = async () => {
@@ -1393,24 +1392,16 @@ export async function spawnTuiAgent({
   // Sentinel-file watcher. The agent's prompt instructs it to write
   // .agent-done in the workspace after running /simplify + /do:pr and then
   // stop (it does NOT `/quit` — that is a UI command it can't invoke). This
-  // poll is the PRIMARY finalize path: it fires finish() within DONE_POLL_
-  // INTERVAL_MS of the sentinel appearing, and finish()'s own cleanup kills
+  // watcher is the PRIMARY finalize path: it fires finish() shortly after the
+  // sentinel appears, and finish()'s own cleanup kills
   // the still-running TUI session. The actual sentinel READ happens in finish()
   // (via ingestDoneSentinel) so the resolution is captured no matter which path
   // finalizes. A normal shell exit or explicit provider failure handles agents
   // that do not write the sentinel.
-  const doneSentinelTimer = doneSentinelPath ? setInterval(() => {
-    try {
-      if (finalized) return;
-      if (!sentinelPresent()) return;
-      clearInterval(doneSentinelTimer);
-      finish({ success: true, exitCode: 0, reason: 'agent-signaled-done' }).catch(err => {
-        emitLog('error', `Failed to finalize TUI agent ${agentId} after sentinel: ${err.message}`, { agentId });
-      });
-    } catch (err) {
-      console.error(`❌ doneSentinelTimer interval callback failed: ${err.message}`);
-    }
-  }, DONE_POLL_INTERVAL_MS) : null;
+  const doneSentinelWatcher = doneSentinelPath ? watchForFile(doneSentinelPath, async () => {
+    if (finalized) return;
+    await finish({ success: true, exitCode: 0, reason: 'agent-signaled-done' });
+  }) : null;
 
   activeAgents.set(agentId, {
     process: ptyProcess || { kill: () => shellService.killSession(sessionId) },
@@ -1424,7 +1415,7 @@ export async function spawnTuiAgent({
     tuiSessionId: sessionId,
     providerSignalTimer,
     promptTimer,
-    doneSentinelTimer
+    doneSentinelWatcher
   });
 
   // Identify which TUI binary this session is running so consumers can gate

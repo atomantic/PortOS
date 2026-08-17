@@ -1425,7 +1425,7 @@ export function buildProgrammaticOutputCompletionSection(sentinelPath) {
     '## Completion (Reasoning-Only Task)',
     'This is a reasoning task, not a code change. The worktree you are in is **discarded on exit** — any commits, pushes, or PRs are thrown away and have no effect. Do NOT run `/do:push`, `/do:pr`, `git commit`, `git push`, or open a pull request.',
     '',
-    `When you have finished reasoning, write your result to \`${sentinelPath}\` in the exact payload format described in your task instructions, then stop. PortOS polls this sentinel every 2s, finalizes the run, and closes the session for you — do NOT run \`/quit\` and do NOT wait for anything after writing the sentinel.`
+    `When you have finished reasoning, write your result to \`${sentinelPath}\` in the exact payload format described in your task instructions, then stop. PortOS watches this sentinel and finalizes the run shortly after it appears — do NOT run \`/quit\` and do NOT wait for anything after writing the sentinel.`
   ].join('\n');
 }
 
@@ -1434,8 +1434,8 @@ export function buildProgrammaticOutputCompletionSection(sentinelPath) {
  * scan stage). The agent must NOT commit/push/modify source; its real output is
  * recorded elsewhere DURING the run (a tracker issue, PLAN.md, a report).
  *
- * A TUI agent still needs a `.agent-done` sentinel to signal completion — the 2s
- * sentinel poll in `spawnTuiAgent` is the primary finalize path and the channel
+ * A TUI agent still needs a `.agent-done` sentinel to signal completion — the
+ * sentinel watcher in `spawnTuiAgent` is the primary finalize path and the channel
  * that ingests the run summary. Without it a read-only TUI run relies on shell
  * exit, so the resolution summary is not captured cleanly (the bug this
  * repairs). CLI/API read-only agents complete on process exit and never poll a
@@ -1447,7 +1447,7 @@ export function buildReadOnlyCompletionSection({ isTui = false, sentinelPath = n
   return [
     notice,
     '',
-    `When you have finished, write a short markdown summary of what you found (and where you recorded it) to \`${sentinelPath}\`, then stop. PortOS polls this sentinel every 2s, finalizes the run, and closes the session for you — do NOT run \`/quit\` and do NOT wait for anything after writing the sentinel.`
+    `When you have finished, write a short markdown summary of what you found (and where you recorded it) to \`${sentinelPath}\`, then stop. PortOS watches this sentinel and finalizes the run shortly after it appears — do NOT run \`/quit\` and do NOT wait for anything after writing the sentinel.`
   ].join('\n');
 }
 
@@ -1459,7 +1459,7 @@ export function buildReadOnlyCompletionSection({ isTui = false, sentinelPath = n
  * nothing to commit or push, and telling the agent to run `/do:push` just makes it
  * load that skill for no reason (and can contradict the task prompt's own
  * "on a 200 your task is complete"). A TUI agent still writes a `.agent-done`
- * sentinel so the 2s poll finalizes it promptly instead of waiting for a runtime
+ * sentinel so the watcher finalizes it promptly instead of waiting for a runtime
  * reaper.
  */
 export function buildActionOutputCompletionSection({ isTui = false, sentinelPath = null } = {}) {
@@ -1468,7 +1468,7 @@ export function buildActionOutputCompletionSection({ isTui = false, sentinelPath
   return [
     notice,
     '',
-    `Your task is complete once that request succeeds. Then write a one-line summary to \`${sentinelPath}\` and stop — PortOS polls this sentinel every 2s, finalizes the run, and closes the session for you. Do NOT run \`/quit\` and do NOT wait for anything after writing the sentinel.`
+    `Your task is complete once that request succeeds. Then write a one-line summary to \`${sentinelPath}\` and stop — PortOS watches this sentinel and finalizes the run shortly after it appears. Do NOT run \`/quit\` and do NOT wait for anything after writing the sentinel.`
   ].join('\n');
 }
 
@@ -1741,7 +1741,7 @@ After completing your work and before committing, ${simplifyInstruction}. Fix an
   // both prompt paths emit byte-identical workflows. (Background: TUI owns
   // its own `/simplify` → `/do:pr|/do:push` → sentinel sequence because the
   // slashdo submodule mounts those commands at project level. Writing the
-  // sentinel is the done signal — PortOS finalizes via the 2s poll and kills
+  // sentinel is the done signal — PortOS finalizes via the watcher and kills
   // the session, so the prompt does NOT ask the agent to `/quit` (it's a UI
   // command the agent can't invoke). See `buildTuiCompletionSection` below.)
   const tuiCompletionCommand = willOpenPR ? '/do:pr' : '/do:push';
@@ -2387,7 +2387,7 @@ function resolveReviewInvocation({ willOpenPR, runsReviewLoop, reviewers, userna
  */
 function buildSentinelWriteSteps(stepNumber, sentinelPath, sentinelTail) {
   return [
-    `${stepNumber}. Write a short markdown summary (~5–15 lines) to the completion sentinel, then stop — this sentinel is the done signal. PortOS polls it every 2s, finalizes the run, and closes the session for you. Do NOT run \`/quit\` (it's a UI command, not something you can invoke) and do NOT wait for anything after writing the sentinel.`,
+    `${stepNumber}. Write a short markdown summary (~5–15 lines) to the completion sentinel, then stop — this sentinel is the done signal. PortOS watches it and finalizes the run shortly after it appears. Do NOT run \`/quit\` (it's a UI command, not something you can invoke) and do NOT wait for anything after writing the sentinel.`,
     '',
     '   ```bash',
     `   cat > "${sentinelPath}" <<'EOF'`,

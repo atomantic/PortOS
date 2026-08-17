@@ -64,6 +64,7 @@ import {
   saveBase64Upload,
   saveImageUpload,
   serveLocalFile,
+  watchForFile,
 } from './fileUtils.js';
 import { copyFileSync, existsSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
@@ -1618,6 +1619,18 @@ describe('createCachedStore', () => {
     await writeFile(file, JSON.stringify({ n: 42 }));
     store.invalidateCache();
     expect((await store.load()).n).toBe(42);
+  });
+});
+
+describe('watchForFile', () => {
+  it('detects a newly written file without interval polling', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'watch-file-test-'));
+    const target = join(dir, 'done.sentinel');
+    const detected = new Promise((resolve) => watchForFile(target, resolve, { settleMs: 0 }));
+    await new Promise((resolve) => setImmediate(resolve));
+    await writeFile(target, 'done');
+    await expect(detected).resolves.toBeUndefined();
+    rmSync(dir, { recursive: true, force: true });
   });
 });
 

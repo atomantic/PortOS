@@ -113,6 +113,7 @@ vi.mock('fs', () => ({
   // Default: no .agent-done sentinel on disk. The completion-sentinel test
   // overrides this to true. Re-set in beforeEach so it can't leak between tests.
   existsSync: vi.fn().mockReturnValue(false),
+  watch: vi.fn(() => ({ close: vi.fn() })),
 }));
 
 vi.mock('fs/promises', () => ({
@@ -1816,14 +1817,14 @@ describe('spawnTuiAgent runtime', () => {
 
   // ── 10. Completion-sentinel ingestion on the shell-exit path ─────────────────
   // The completion workflow has the agent write `.agent-done` and then stop
-  // (it does NOT `/quit`). Normally the 2s doneSentinelTimer poll finalizes the
+  // (it does NOT `/quit`). Normally the doneSentinelWatcher finalizes the
   // agent, but the TUI process can also exit on its own (or be killed) before
-  // the poll ticks — when that shell-exit path wins the race, finish() MUST
+  // the watcher fires — when that shell-exit path wins the race, finish() MUST
   // still ingest the sentinel so its markdown resolution lands in outputBuffer /
   // output.txt and shows up in the completed-agent details view. Regression
   // guard for the lost-resolution bug where the summary only got ingested by
-  // the poll path.
-  it('shell-exit after sentinel write: ingests .agent-done summary into the persisted output (process exit beats the 2s poll)', async () => {
+  // the watcher path.
+  it('shell-exit after sentinel write: ingests .agent-done summary into the persisted output (process exit beats the watcher)', async () => {
     const { appendFile } = await import('fs/promises');
     const sentinel = '## Summary\nImplemented the fix.\n\n## PR\nhttps://example.com/pr/42';
     vi.mocked(existsSync).mockReturnValue(true);

@@ -1047,12 +1047,12 @@ describe('buildLightContextPrompt', () => {
         '/r', null, isTruthyMeta, { isTui: true });
       expect(prompt).toMatch(/Read-Only Task/);
       expect(prompt).not.toMatch(/## Completion Workflow/);
-      // A read-only TUI agent must still be told to write .agent-done — the 2s
-      // sentinel poll is its only clean finalize/summary path (regression: the
+      // A read-only TUI agent must still be told to write .agent-done — the
+      // sentinel watcher is its only clean finalize/summary path (regression: the
       // read-only branch used to emit the bare notice with no sentinel, so
       // reference-watch runs never signaled completion).
       expect(prompt).toMatch(/\.agent-done/);
-      expect(prompt).toMatch(/polls this sentinel/);
+      expect(prompt).toMatch(/watches this sentinel/);
     });
 
     it('read-only on a non-TUI (CLI) provider gets the bare notice, no sentinel', () => {

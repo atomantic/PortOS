@@ -16,7 +16,7 @@ import { writeFile, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import http from 'http';
 import { Server as SocketServer } from 'socket.io';
-import { ensureDir, PATHS, sleep } from '../lib/fileUtils.js';
+import { ensureDir, PATHS, sleep, watchForFile } from '../lib/fileUtils.js';
 import { prepareCliSpawn, killProcessTree } from '../lib/bufferedSpawn.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
@@ -50,7 +50,6 @@ setupProcessErrorHandlers();
 const SIGKILL_GRACE_MS = 5000;       // wait after SIGTERM before forcing SIGKILL
 const ORPHAN_CLEANUP_DELAY_MS = 3000; // delay on boot before reaping orphaned agents
 const SHUTDOWN_DRAIN_MS = 5000;       // SIGTERM drain window before closing the server
-const TUI_DONE_POLL_MS = 2000;
 // Agentic CLIs can spend several seconds loading config/plugins before their
 // lightweight version command returns. Keep this aligned with commandExists'
 // documented heavy-CLI probe budget so a cold but runnable provider is not
@@ -230,7 +229,7 @@ app.post('/spawn-tui', async (req, res) => {
     command,
     doneSentinelPath,
     completedBySentinel: false,
-    doneTimer: null,
+    doneWatcher: null,
   };
   activeAgents.set(agentId, agent);
 
@@ -248,7 +247,7 @@ app.post('/spawn-tui', async (req, res) => {
     try {
       const current = activeAgents.get(agentId);
       if (!current) return;
-      if (current.doneTimer) clearInterval(current.doneTimer);
+      current.doneWatcher?.();
       const duration = Date.now() - current.startedAt;
       const success = current.completedBySentinel;
       const effectiveExitCode = success ? 0 : exitCode;
@@ -283,29 +282,23 @@ app.post('/spawn-tui', async (req, res) => {
   });
 
   if (doneSentinelPath) {
-    agent.doneTimer = setInterval(async () => {
-      try {
-        const current = activeAgents.get(agentId);
-        if (!current || !existsSync(doneSentinelPath)) return;
-        current.completedBySentinel = true;
-        clearInterval(current.doneTimer);
-        current.doneTimer = null;
-        const contents = await readFile(doneSentinelPath, 'utf8').catch(err => {
-          console.error(`❌ TUI agent ${agentId} sentinel read failed: ${err.message}`);
-          return '';
+    agent.doneWatcher = watchForFile(doneSentinelPath, async () => {
+      const current = activeAgents.get(agentId);
+      if (!current) return;
+      current.completedBySentinel = true;
+      const contents = await readFile(doneSentinelPath, 'utf8').catch(err => {
+        console.error(`❌ TUI agent ${agentId} sentinel read failed: ${err.message}`);
+        return '';
+      });
+      const { summary } = parseSentinelPayload(contents);
+      if (summary) {
+        emitToServer('agent:output', {
+          agentId,
+          text: `${SENTINEL_COMPLETION_MARKER}\n${summary.slice(0, 4096)}\n`,
         });
-        const { summary } = parseSentinelPayload(contents);
-        if (summary) {
-          emitToServer('agent:output', {
-            agentId,
-            text: `${SENTINEL_COMPLETION_MARKER}\n${summary.slice(0, 4096)}\n`,
-          });
-        }
-        current.process.kill();
-      } catch (err) {
-        console.error(`❌ TUI agent ${agentId} sentinel poll failed: ${err.message}`);
       }
-    }, TUI_DONE_POLL_MS);
+      current.process.kill();
+    });
   }
 
   await withState((state) => {

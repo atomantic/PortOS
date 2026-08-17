@@ -2,7 +2,7 @@
  * The `.agent-done` completion sentinel — shared naming + parser.
  *
  * A finishing agent writes this file into its workspace to signal completion
- * (see agentTuiSpawning's sentinel poll). The file is named per agent instance
+ * (see agentTuiSpawning's sentinel watcher). The file is named per agent instance
  * (`.agent-done-<agentId>`, see `doneSentinelName`) because worktree-less runs
  * share one workspace and would otherwise clobber each other's signal.
  *
@@ -50,7 +50,7 @@ export function doneSentinelName(agentId) {
  * The one path this run's sentinel lives at — `null` without a workspace.
  *
  * Every producer and consumer resolves it here: the prompt the agent is given
- * (agentPromptBuilder), the 2s poll and the durable runner's watch
+ * (agentPromptBuilder), the sentinel watchers and the durable runner's watch
  * (agentTuiSpawning), the CLI exit check (agentCliSpawning), and the
  * output-hook payload read (agentFinalization). One path, not a candidate list:
  * a second accepted name would give those pollers different answers to "did
