@@ -361,3 +361,4 @@ describe('computeAiCore with afterglow ops', () => {
     expect(vm.activeCount).toBe(0);
   });
 });
+// @vitest-environment node

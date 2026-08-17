@@ -178,3 +178,4 @@ describe('computeChronotypeEnergy — display modifiers', () => {
     expect(Object.keys(mod)).toEqual(['computeChronotypeEnergy']);
   });
 });
+// @vitest-environment node

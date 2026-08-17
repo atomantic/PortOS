@@ -154,3 +154,4 @@ describe('dropsMarkupWhenFlattened', () => {
     expect(dropsMarkupWhenFlattened(42)).toBe(false);
   });
 });
+// @vitest-environment node

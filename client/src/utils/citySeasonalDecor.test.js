@@ -128,3 +128,4 @@ describe('computeSeasonalDecor', () => {
     expect(vm.base).toEqual(SEASONAL_DECOR.base);
   });
 });
+// @vitest-environment node

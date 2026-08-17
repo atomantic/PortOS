@@ -117,3 +117,4 @@ describe('buildTimelineBuckets', () => {
     expect(msgs).toEqual(['good']);
   });
 });
+// @vitest-environment node

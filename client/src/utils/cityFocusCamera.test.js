@@ -73,3 +73,4 @@ describe('computeFocusCamera', () => {
     expect(a.distance).toBeCloseTo(b.distance, 6);
   });
 });
+// @vitest-environment node

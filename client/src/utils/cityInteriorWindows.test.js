@@ -99,3 +99,4 @@ describe('computeWindowGrid', () => {
     expect(computeWindowGrid({ width: 2, depth: 2, height: 1, seed: 1 })).toEqual([]);
   });
 });
+// @vitest-environment node

@@ -1126,3 +1126,4 @@ describe('AI Assignments option helpers', () => {
     });
   });
 });
+// @vitest-environment node

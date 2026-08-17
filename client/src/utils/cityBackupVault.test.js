@@ -131,3 +131,4 @@ describe('computeBackupVault', () => {
     expect(computeBackupVault({ status: 'never' }, NOW).lastRun).toBeNull();
   });
 });
+// @vitest-environment node

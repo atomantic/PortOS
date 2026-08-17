@@ -159,3 +159,4 @@ describe('computeTaskFlowRiver — idle resilience', () => {
     }
   });
 });
+// @vitest-environment node

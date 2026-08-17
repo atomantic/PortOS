@@ -130,3 +130,4 @@ describe('harbor sits inside the world', () => {
     expect(Math.abs(z)).toBeLessThanOrEqual(WORLD.bound);
   });
 });
+// @vitest-environment node

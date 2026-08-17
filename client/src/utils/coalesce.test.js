@@ -72,3 +72,4 @@ describe('coalesce', () => {
     expect(fn).toHaveBeenCalledTimes(1);
   });
 });
+// @vitest-environment node

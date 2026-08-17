@@ -541,3 +541,4 @@ describe('canonical date/time formatters (#3870)', () => {
     });
   });
 });
+// @vitest-environment node

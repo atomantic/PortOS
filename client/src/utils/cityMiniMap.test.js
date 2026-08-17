@@ -252,3 +252,4 @@ describe('projectGeography', () => {
     expect(geo.harbor.ny).toBeLessThan(geo.shorelineY);
   });
 });
+// @vitest-environment node

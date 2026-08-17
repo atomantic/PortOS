@@ -142,3 +142,4 @@ describe('computeTrailColors', () => {
     }
   });
 });
+// @vitest-environment node
