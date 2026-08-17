@@ -62,6 +62,8 @@ export function buildQuickDrillConfig({ cfg = {}, source, memoryItemId } = {}) {
       bases: cfg.bases,
       maxExponent: cfg.maxExponent,
       tolerancePct: cfg.tolerancePct,
+      difficulty: cfg.difficulty,
+      family: cfg.family,
     };
   }
   if (source === 'cognitive') {

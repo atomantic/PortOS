@@ -89,10 +89,28 @@ const DRILL_META = {
       { key: 'tolerancePct', label: 'Tolerance %', type: 'number', min: 1, max: 50 },
       { key: 'timeLimitSec', label: 'Time Limit (sec)', type: 'number', min: 10, max: 600 }
     ]
+  },
+  'applied-numeracy': {
+    label: 'Applied Numeracy',
+    desc: 'Everyday percentages, ratios, units, rates, and estimation',
+    fields: [
+      { key: 'count', label: 'Questions', type: 'number', min: 1, max: 20 },
+      { key: 'difficulty', label: 'Complexity Level', type: 'number', min: 1, max: 3 },
+      { key: 'family', label: 'Scenario Family', type: 'select', options: [
+        { value: 'mixed', label: 'Mixed' },
+        { value: 'percentage', label: 'Percentages' },
+        { value: 'ratio', label: 'Ratios' },
+        { value: 'unit', label: 'Units' },
+        { value: 'rate', label: 'Rates' },
+        { value: 'estimate', label: 'Estimation' },
+      ] },
+      { key: 'timeLimitSec', label: 'Time Limit (sec)', type: 'number', min: 10, max: 600 }
+    ]
   }
 };
 
 const MATH_TYPES = Object.keys(DRILL_META);
+const MATH_STRING_FIELDS = new Set(['family']);
 
 // LLM drill config meta for all 14 generatable types.
 // `defaults.count` mirrors the server (`server/services/meatspacePostLlm.js`,
@@ -716,7 +734,7 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
   function updateField(type, key, value) {
     const coerced = value === '' || value === null || value === undefined
       ? undefined
-      : Number(value);
+      : MATH_STRING_FIELDS.has(key) ? value : Number(value);
     setDrillTypes(prev => ({
       ...prev,
       [type]: { ...prev[type], [key]: coerced }

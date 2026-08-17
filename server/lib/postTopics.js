@@ -38,7 +38,7 @@ export const POST_TOPICS = [
     label: 'Mental Math',
     module: 'mental-math',
     surface: 'session',
-    drillTypes: ['doubling-chain', 'serial-subtraction', 'multiplication', 'powers', 'estimation'],
+    drillTypes: ['doubling-chain', 'serial-subtraction', 'multiplication', 'powers', 'estimation', 'applied-numeracy'],
   },
   {
     id: 'memory',

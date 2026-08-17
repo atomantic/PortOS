@@ -80,7 +80,7 @@ const llmResponseSchema = z.object({
 });
 
 // Drill type configuration
-const MATH_DRILL_TYPES = ['doubling-chain', 'serial-subtraction', 'multiplication', 'powers', 'estimation'];
+const MATH_DRILL_TYPES = ['doubling-chain', 'serial-subtraction', 'multiplication', 'powers', 'estimation', 'applied-numeracy'];
 const LLM_DRILL_TYPES = ['word-association', 'story-recall', 'verbal-fluency', 'wit-comeback', 'pun-wordplay', 'compound-chain', 'bridge-word', 'double-meaning', 'idiom-twist', 'what-if', 'alternative-uses', 'story-prompt', 'invention-pitch', 'reframe'];
 const MEMORY_DRILL_TYPES = ['memory-fill-blank', 'memory-sequence', 'memory-element-flash'];
 // Memory drills supported by the POST runner (client-side scoring with string
@@ -149,6 +149,11 @@ const drillTypeConfigSchema = z.object({
   bases: z.array(z.number().int().min(2).max(20)).min(1).optional(),
   maxExponent: z.number().int().min(2).max(20).optional(),
   tolerancePct: z.number().min(1).max(50).optional(),
+  // Applied Numeracy's immutable replay key and complexity-first ladder. The
+  // server ignores client answer keys and regenerates questions from this seed.
+  seed: z.number().int().min(0).max(0xFFFFFFFF).optional(),
+  difficulty: z.number().int().min(1).max(3).optional(),
+  family: z.enum(['percentage', 'ratio', 'unit', 'rate', 'estimate', 'mixed']).optional(),
   // --- Cognitive drill knobs (n-back / digit-span / stroop) ---
   // Bounds match the generator clamps in meatspacePostCognitive.js so the UI /
   // API can't accept a value the generator will silently narrow. Exception:

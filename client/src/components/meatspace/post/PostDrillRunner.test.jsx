@@ -23,6 +23,48 @@ describe('PostDrillRunner Powers training feedback', () => {
   });
 });
 
+describe('PostDrillRunner Applied Numeracy', () => {
+  it('uses a mobile-friendly unit input and explains the method after an answer', () => {
+    render(<PostDrillRunner session={{
+      currentDrill: { type: 'applied-numeracy', questions: [{ prompt: 'Convert 1.5 km to m.' }], timeLimitSec: 90 },
+      currentQuestionIndex: 0,
+      currentDrillIndex: 0,
+      drillCount: 1,
+      state: 'drilling',
+      isTraining: true,
+      lastAnswer: {
+        prompt: 'Convert 1.5 km to m.', expected: '1500 m', answered: '1.5 km', correct: true,
+        method: 'Use 1 km = 1000 m, then multiply 1.5 by 1000.',
+      },
+      submitAnswer: vi.fn(),
+      skipQuestion: vi.fn(),
+      acknowledgeAnswer: vi.fn(),
+      timeExpired: vi.fn(),
+    }} />);
+
+    expect(screen.getByText('Shortest method')).toBeInTheDocument();
+    expect(screen.getByText(/1 km = 1000 m/)).toBeInTheDocument();
+
+    render(<PostDrillRunner session={{
+      currentDrill: { type: 'applied-numeracy', questions: [{ prompt: 'Convert 1.5 km to m.' }], timeLimitSec: 90 },
+      currentQuestionIndex: 0,
+      currentDrillIndex: 0,
+      drillCount: 1,
+      state: 'drilling',
+      isTraining: false,
+      lastAnswer: null,
+      submitAnswer: vi.fn(),
+      skipQuestion: vi.fn(),
+      acknowledgeAnswer: vi.fn(),
+      timeExpired: vi.fn(),
+    }} />);
+
+    const input = screen.getByLabelText('Your numeric answer and unit when requested');
+    expect(input).toHaveAttribute('type', 'text');
+    expect(input).toHaveAttribute('inputmode', 'decimal');
+  });
+});
+
 describe('PostDrillRunner multi-blank recall', () => {
   it('renders one labeled input per blank and submits indexed values', () => {
     const submitAnswer = vi.fn();

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   computeDomainAverages, domainLabel, computeGoalProgress, hasGoals,
   POST_TOPICS, DOMAINS, DRILL_TO_DOMAIN, composedSessionDrillTypes,
-  isTopicEnabled, isMemoryItemEnabled, resolveTopicForDrillType,
+  isTopicEnabled, isMemoryItemEnabled, resolveTopicForDrillType, appliedNumeracyAnswerCorrect,
 } from './constants';
 
 describe('domainLabel', () => {
@@ -17,6 +17,25 @@ describe('domainLabel', () => {
 
   it('falls back to the raw key for unknown domains', () => {
     expect(domainLabel('mystery')).toBe('mystery');
+  });
+});
+
+describe('appliedNumeracyAnswerCorrect', () => {
+  const unitQuestion = {
+    expected: 1500,
+    unit: 'm',
+    unitOptions: { m: 1, km: 1000 },
+    unitAliases: { meters: 'm', kilometers: 'km' },
+  };
+
+  it('accepts a compatible equivalent unit and rejects a missing unit', () => {
+    expect(appliedNumeracyAnswerCorrect('1.5 km', unitQuestion)).toBe(true);
+    expect(appliedNumeracyAnswerCorrect('1500', unitQuestion)).toBe(false);
+  });
+
+  it('accepts an equivalent fraction and rejects a zero denominator', () => {
+    expect(appliedNumeracyAnswerCorrect('2/4', { expected: 0.5 })).toBe(true);
+    expect(appliedNumeracyAnswerCorrect('2/0', { expected: 0.5 })).toBe(false);
   });
 });
 

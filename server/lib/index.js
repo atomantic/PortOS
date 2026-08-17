@@ -285,6 +285,7 @@ export * from './providerFamilies.js';
 export * from './personaTraitBlend.js';
 export * from './pipelineIssueOrder.js';
 export * from './postAdaptive.js';
+export * from './postAppliedNumeracy.js';
 export * from './postMultiplicationLadder.js';
 export * from './postPowersLadder.js';
 export * from './postProgression.js';

@@ -109,6 +109,19 @@ async function saveConfig() {
 }
 
 describe('PostDrillConfig', () => {
+  it('persists Applied Numeracy complexity and scenario family settings', async () => {
+    await renderConfig(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText('Complexity Level'), { target: { value: '3' } });
+    fireEvent.change(screen.getByLabelText('Scenario Family'), { target: { value: 'unit' } });
+
+    await saveConfig();
+
+    expect(updatePostConfig.mock.calls[0][0].mentalMath.drillTypes['applied-numeracy']).toMatchObject({
+      difficulty: 3,
+      family: 'unit',
+    });
+  });
+
   it('renders a card for every one of the 14 LLM drill types', async () => {
     await renderConfig(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
     for (const type of ALL_LLM_TYPES) {

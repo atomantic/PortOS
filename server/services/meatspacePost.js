@@ -14,6 +14,12 @@ import { LLM_DRILL_TYPES, MEMORY_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES } from
 import { normalizeHistoricalPostLlmEvaluation, normalizePostLlmEvaluation } from '../lib/postLlmContracts.js';
 import { resolveTopicForDrillType, isTopicEnabled, isMemoryItemEnabled } from '../lib/postTopics.js';
 import { adaptDrillConfig, ADAPTIVE_SPECS, ADAPTIVE_DEFAULTS } from '../lib/postAdaptive.js';
+import {
+  APPLIED_NUMERACY_DRILL_TYPE,
+  APPLIED_NUMERACY_DIFFICULTIES,
+  generateAppliedNumeracyDrill,
+  scoreAppliedNumeracyDrill,
+} from '../lib/postAppliedNumeracy.js';
 import { resolveMultiplicationLevel, MASTERY_DEFAULTS } from '../lib/postMultiplicationLadder.js';
 import {
   POWERS_MASTERY_DEFAULTS,
@@ -88,7 +94,11 @@ const DEFAULT_CONFIG = {
       // a user turns the progressive ladder off.
       'multiplication': { enabled: true, count: 10, maxDigits: 2, progressive: true, timeLimitSec: 120 },
       'powers': { enabled: true, bases: [2, 3, 5], maxExponent: 10, count: 8, progressive: true, timeLimitSec: 90 },
-      'estimation': { enabled: true, count: 5, tolerancePct: 10, timeLimitSec: 120 }
+      'estimation': { enabled: true, count: 5, tolerancePct: 10, timeLimitSec: 120 },
+      // Pure, seeded everyday numeracy scenarios. No provider call or
+      // high-stakes domain is involved; the returned seed is stored with each
+      // session so the server can rebuild answer keys on submit.
+      'applied-numeracy': { enabled: true, count: 5, difficulty: 1, timeLimitSec: 150 }
     }
   },
   llmDrills: {
@@ -473,6 +483,45 @@ export async function submitPostSession(sessionData) {
 // count as a genuine re-verification (mirrors COGNITIVE_MASTERY_DEFAULTS
 // minCompletion). Below it, the review is recorded as failed rather than passed.
 const MIN_REVIEW_COMPLETION = 0.75;
+const APPLIED_NUMERACY_MASTERY = { minSamples: 3, accuracy: 0.8, completion: 0.75 };
+
+/**
+ * Aggregate complexity-level evidence for Applied Numeracy. Its rungs measure
+ * representation changes, units, and multi-step transforms rather than larger
+ * operands, so retention can schedule a targeted rep at the earned level.
+ */
+export async function getAppliedNumeracyProgress() {
+  const sessions = await getPostSessions();
+  const buckets = Object.fromEntries([1, 2, 3].map(level => [level, { samples: 0, accuracy: 0, completion: 0 }]));
+  for (const session of sessions) {
+    for (const task of session.tasks || []) {
+      if (task.type !== APPLIED_NUMERACY_DRILL_TYPE) continue;
+      const level = APPLIED_NUMERACY_DIFFICULTIES.includes(task.config?.difficulty) ? task.config.difficulty : 1;
+      const accuracy = deriveTaskAccuracy(task);
+      const completion = deriveTaskCompletion(task);
+      if (accuracy == null) continue;
+      buckets[level].samples += 1;
+      buckets[level].accuracy += accuracy;
+      buckets[level].completion += completion ?? 1;
+    }
+  }
+  return {
+    levels: Object.entries(buckets).map(([level, bucket]) => {
+      const samples = bucket.samples;
+      const accuracy = samples ? bucket.accuracy / samples : 0;
+      const completion = samples ? bucket.completion / samples : 0;
+      return {
+        level: Number(level),
+        samples,
+        accuracy,
+        completion,
+        mastered: samples >= APPLIED_NUMERACY_MASTERY.minSamples
+          && accuracy >= APPLIED_NUMERACY_MASTERY.accuracy
+          && completion >= APPLIED_NUMERACY_MASTERY.completion,
+      };
+    }),
+  };
+}
 
 /**
  * Current mastered-but-inactive skills eligible for re-verification tracking:
@@ -486,7 +535,12 @@ const MIN_REVIEW_COMPLETION = 0.75;
 export async function getMasteredSkills() {
   const skills = [];
 
-  const mul = await getMultiplicationProgress();
+  const [mul, powers, cog, numeracy] = await Promise.all([
+    getMultiplicationProgress(),
+    getPowersProgress(),
+    getCognitiveProgress(),
+    getAppliedNumeracyProgress(),
+  ]);
   for (const rung of mul.levels || []) {
     if (rung.mastered && rung.level < mul.level) {
       skills.push({
@@ -501,7 +555,6 @@ export async function getMasteredSkills() {
     }
   }
 
-  const powers = await getPowersProgress();
   for (const rung of powers.levels || []) {
     if (rung.mastered && rung.level < powers.level) {
       skills.push({
@@ -516,7 +569,6 @@ export async function getMasteredSkills() {
     }
   }
 
-  const cog = await getCognitiveProgress();
   for (const [type, prog] of Object.entries(cog)) {
     if (!prog) continue;
     for (const rung of prog.levels || []) {
@@ -532,6 +584,18 @@ export async function getMasteredSkills() {
         });
       }
     }
+  }
+
+  for (const rung of numeracy.levels || []) {
+    if (!rung.mastered) continue;
+    skills.push({
+      skillId: `applied-numeracy:D${rung.level}`,
+      kind: APPLIED_NUMERACY_DRILL_TYPE,
+      label: `Applied Numeracy level ${rung.level}`,
+      drillType: APPLIED_NUMERACY_DRILL_TYPE,
+      module: 'mental-math',
+      difficulty: rung.level,
+    });
   }
 
   return skills;
@@ -569,6 +633,9 @@ export function getSessionSkillContext(session) {
       practicedSkillIds.add(`powers:L${cfg.level}`);
     } else if (cognitiveLadder(task.type) && Number.isInteger(cfg.level)) {
       practicedSkillIds.add(`cognitive:${task.type}:L${cfg.level}`);
+    } else if (task.type === APPLIED_NUMERACY_DRILL_TYPE) {
+      const difficulty = APPLIED_NUMERACY_DIFFICULTIES.includes(cfg.difficulty) ? cfg.difficulty : 1;
+      practicedSkillIds.add(`applied-numeracy:D${difficulty}`);
     } else if (task.memoryItemId) {
       for (const q of task.questions || []) {
         if (q?.chunkId) practicedSkillIds.add(`memory:${task.memoryItemId}:${q.chunkId}`);
@@ -635,6 +702,15 @@ export async function getPostReviewReps(now = new Date(), limit = 2) {
         module: 'cognitive',
         type: entry.drillType,
         config: { ...(entry.config || cognitiveLevelConfig(entry.drillType, entry.level)), level: entry.level, review: true, reviewSkillId: entry.skillId },
+      });
+    } else if (entry.kind === APPLIED_NUMERACY_DRILL_TYPE) {
+      reps.push({
+        skillId: entry.skillId,
+        label: entry.label,
+        state: entry.status === 'needs-refresh' ? 'needs-refresh' : 'due',
+        module: 'mental-math',
+        type: APPLIED_NUMERACY_DRILL_TYPE,
+        config: { count: 5, difficulty: entry.difficulty, review: true, reviewSkillId: entry.skillId },
       });
     }
   }
@@ -1679,6 +1755,13 @@ export function generateDrill(type, config = {}) {
       return generatePowers(config.bases, config.maxExponent, config.count, config.level, config.review);
     case 'estimation':
       return generateEstimation(config.count, config.tolerancePct);
+    case APPLIED_NUMERACY_DRILL_TYPE:
+      return generateAppliedNumeracyDrill({
+        ...config,
+        // The generator itself is pure for a seed. New runs get a seed once;
+        // it is stamped into the returned config and becomes the score key.
+        seed: config.seed ?? Math.floor(Math.random() * 0x100000000),
+      });
     case 'n-back':
     case 'digit-span':
     case 'stroop':
@@ -2122,6 +2205,9 @@ export function computeExpectedFromPrompt(prompt) {
 }
 
 export function scoreDrill(type, questions, timeLimitMs, config = {}) {
+  if (type === APPLIED_NUMERACY_DRILL_TYPE) {
+    return scoreAppliedNumeracyDrill(questions, timeLimitMs, config);
+  }
   if (!questions?.length) {
     return { score: 0, questions, accuracy: null, completion: null, avgResponseMs: null, answeredCount: 0, totalCount: 0 };
   }

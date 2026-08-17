@@ -82,6 +82,30 @@ describe('postConfigUpdateSchema cognitive compatibility', () => {
   });
 });
 
+describe('Applied Numeracy validation', () => {
+  it('accepts the persisted replay key and complexity configuration', () => {
+    const parsed = postConfigUpdateSchema.parse({
+      mentalMath: {
+        drillTypes: Object.fromEntries(
+          getTopic('math').drillTypes.map(type => [type, type === 'applied-numeracy'
+            ? { enabled: true, count: 5, difficulty: 3, family: 'unit', seed: 4443, timeLimitSec: 150 }
+            : { enabled: true, count: 5, timeLimitSec: 120 }])
+        ),
+      },
+    });
+    expect(parsed.mentalMath.drillTypes['applied-numeracy']).toMatchObject({ difficulty: 3, family: 'unit', seed: 4443 });
+  });
+
+  it('rejects an out-of-range seed, difficulty, or family', () => {
+    const withApplied = (entry) => ({
+      mentalMath: { drillTypes: Object.fromEntries(getTopic('math').drillTypes.map(type => [type, type === 'applied-numeracy' ? entry : { enabled: true }])) },
+    });
+    expect(() => postConfigUpdateSchema.parse(withApplied({ seed: -1 }))).toThrow();
+    expect(() => postConfigUpdateSchema.parse(withApplied({ difficulty: 4 }))).toThrow();
+    expect(() => postConfigUpdateSchema.parse(withApplied({ family: 'tax' }))).toThrow();
+  });
+});
+
 describe('Morse drill types stay scoped to the training log', () => {
   // Regression: MORSE_DRILL_TYPES must never be spliced into the shared
   // DRILL_TYPES array — that array also backs the *scored* session submit

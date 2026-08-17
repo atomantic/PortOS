@@ -319,7 +319,9 @@ export default function PostSessionLauncher({
         startRange: cfg.startRange,
         bases: cfg.bases,
         maxExponent: cfg.maxExponent,
-        tolerancePct: cfg.tolerancePct
+        tolerancePct: cfg.tolerancePct,
+        difficulty: cfg.difficulty,
+        family: cfg.family,
       },
       timeLimitSec: cfg.timeLimitSec || 120
     }));
@@ -462,6 +464,8 @@ export default function PostSessionLauncher({
         bases: cfg.bases,
         maxExponent: cfg.maxExponent,
         tolerancePct: cfg.tolerancePct,
+        difficulty: cfg.difficulty,
+        family: cfg.family,
       };
     } else if (source === 'cognitive') {
       focusConfig = cognitiveDrillConfig(cfg);

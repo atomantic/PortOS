@@ -4,7 +4,7 @@ import toast from '../components/ui/Toast';
 import { uuidv4 } from '../lib/uuid.js';
 import {
   LLM_DRILL_TYPES, MEMORY_DRILL_TYPES, DRILL_TO_DOMAIN, countLlmCorrect,
-  WORDPLAY_LLM_DRILL_TYPES, LLM_TRAINING_CORRECT_THRESHOLD,
+  WORDPLAY_LLM_DRILL_TYPES, LLM_TRAINING_CORRECT_THRESHOLD, appliedNumeracyAnswerCorrect,
 } from '../components/meatspace/post/constants';
 
 // sessionStorage key for the single in-progress run. Single-user tool → one
@@ -308,7 +308,8 @@ export function usePostSession() {
     if (!q) return;
     const responseMs = Date.now() - questionStartRef.current;
     const hasFillBlankAnswers = Array.isArray(q.answers) && q.answers.length > 0;
-    const isTextAnswer = typeof q.expected === 'string' || hasFillBlankAnswers;
+    const isAppliedNumeracy = currentDrill.type === 'applied-numeracy';
+    const isTextAnswer = typeof q.expected === 'string' || hasFillBlankAnswers || isAppliedNumeracy;
 
     // For estimation drills, check within tolerance
     let correct;
@@ -319,7 +320,9 @@ export function usePostSession() {
       correct = entries.length > 0 && entries.every(entry => entry.correct);
     } else if (isTextAnswer) {
       answered = value;
-      correct = value !== null && String(value).toLowerCase().trim() === String(q.expected).toLowerCase().trim();
+      correct = isAppliedNumeracy
+        ? appliedNumeracyAnswerCorrect(value, q)
+        : value !== null && String(value).toLowerCase().trim() === String(q.expected).toLowerCase().trim();
     } else if (currentDrill.type === 'estimation') {
       const raw = (value === null || String(value).trim() === '') ? null : Number(value);
       answered = (raw !== null && isNaN(raw)) ? null : raw;
@@ -333,10 +336,11 @@ export function usePostSession() {
 
     const answer = {
       prompt: q.prompt,
-      expected: q.expected,
+      expected: q.answerDisplay || q.expected,
       answered,
       correct,
       responseMs,
+      ...(q.method ? { method: q.method } : {}),
       ...memoryAttribution(q),
     };
 
@@ -403,10 +407,11 @@ export function usePostSession() {
       const answered = hasFillBlankAnswers ? buildFillBlankAnswerEntries(q, null) : null;
       return {
         prompt: q.prompt,
-        expected: q.expected,
+        expected: q.answerDisplay || q.expected,
         answered,
         correct: false,
         responseMs: 0,
+        ...(q.method ? { method: q.method } : {}),
         ...memoryAttribution(q)
       };
     });
@@ -522,7 +527,7 @@ export function usePostSession() {
           ? (r.responses || []).length
           : (r.questions || []).filter((question) => question?.answered != null).length;
         const inputMode = r.inputMode || (
-          isLlmDrill || MEMORY_DRILL_TYPES.includes(r.type)
+          isLlmDrill || MEMORY_DRILL_TYPES.includes(r.type) || r.type === 'applied-numeracy'
             ? 'text'
             : r.module === 'cognitive' ? 'interactive' : 'numeric'
         );

@@ -17,6 +17,16 @@ function PowersLesson({ prompt }) {
   );
 }
 
+function AppliedNumeracyLesson({ method }) {
+  if (!method) return null;
+  return (
+    <div className="mt-3 w-full max-w-md rounded-lg border border-port-accent/30 bg-port-bg p-3 text-left text-sm text-gray-300">
+      <div className="mb-1 text-xs font-semibold text-port-accent">Shortest method</div>
+      {method}
+    </div>
+  );
+}
+
 export default function PostDrillRunner({ session }) {
   const {
     currentDrill,
@@ -112,6 +122,7 @@ export default function PostDrillRunner({ session }) {
   // MEMORY_DRILL_TYPES now includes 'memory-fill-blank' (issue #2099/#2116),
   // so the explicit extra check this used to need is gone.
   const isTextDrill = MEMORY_DRILL_TYPES.includes(currentDrill.type);
+  const isAppliedNumeracy = currentDrill.type === 'applied-numeracy';
   const timePct = timeLimitMs > 0 ? (timeLeft / timeLimitMs) * 100 : 0;
   const progressPct = totalQuestions > 0 ? ((currentQuestionIndex + 1) / totalQuestions) * 100 : 0;
 
@@ -179,6 +190,7 @@ export default function PostDrillRunner({ session }) {
               )}
             </div>
           )}
+          <AppliedNumeracyLesson method={lastAnswer.method} />
         </div>
 
         <button
@@ -270,12 +282,12 @@ export default function PostDrillRunner({ session }) {
         ) : (
           <input
             ref={inputRef}
-            type={isTextDrill ? 'text' : 'number'}
-            inputMode={isTextDrill ? 'text' : 'numeric'}
+            type={isTextDrill || isAppliedNumeracy ? 'text' : 'number'}
+            inputMode={isTextDrill ? 'text' : isAppliedNumeracy ? 'decimal' : 'numeric'}
             value={inputValue}
             onChange={e => setInputValue(e.target.value)}
-            placeholder="Answer"
-            aria-label="Your answer"
+            placeholder={isAppliedNumeracy ? 'Number and unit when requested' : 'Answer'}
+            aria-label={isAppliedNumeracy ? 'Your numeric answer and unit when requested' : 'Your answer'}
             autoFocus
             className="w-full bg-port-bg border border-port-border rounded-lg px-4 py-3 text-xl font-mono text-white text-center placeholder-gray-600 focus:border-port-accent focus:outline-none"
           />

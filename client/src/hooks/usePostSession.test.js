@@ -12,6 +12,60 @@ vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: v
 import { generatePostDrill, submitPostSession, scorePostLlmDrill, submitTrainingRun } from '../services/api';
 import { usePostSession } from './usePostSession';
 
+describe('usePostSession — Applied Numeracy', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sessionStorage.clear();
+  });
+
+  it('restores a seeded unit drill and keeps equivalent-unit feedback correct', async () => {
+    generatePostDrill.mockResolvedValue({
+      type: 'applied-numeracy',
+      config: { seed: 4443, difficulty: 2, family: 'unit' },
+      questions: [{
+        prompt: 'Convert 1500 m to km.', expected: 1.5, answerDisplay: '1.5 km', unit: 'km',
+        unitOptions: { m: 1, km: 1000 }, unitAliases: { kilometer: 'km', kilometers: 'km' },
+        method: 'Divide meters by 1000 to get kilometers.',
+      }],
+    });
+
+    const first = renderHook(() => usePostSession());
+    await act(async () => {
+      await first.result.current.startSession([{ type: 'applied-numeracy', config: {}, timeLimitSec: 60 }]);
+    });
+    first.unmount();
+
+    const second = renderHook(() => usePostSession());
+    expect(second.result.current.currentDrill?.config.seed).toBe(4443);
+    act(() => { second.result.current.submitAnswer('1500 m'); });
+
+    const task = second.result.current.drillResults[0];
+    expect(task.config).toMatchObject({ seed: 4443, difficulty: 2, family: 'unit' });
+    expect(task.questions[0]).toMatchObject({ correct: true, expected: '1.5 km', method: 'Divide meters by 1000 to get kilometers.' });
+  });
+
+  it('records unanswered applied-numeracy questions when the timer expires', async () => {
+    generatePostDrill.mockResolvedValue({
+      type: 'applied-numeracy', config: { seed: 44, difficulty: 1 },
+      questions: [
+        { prompt: 'Convert 2 km to m.', expected: 2000, answerDisplay: '2000 m' },
+        { prompt: 'Convert 3 l to ml.', expected: 3000, answerDisplay: '3000 ml' },
+      ],
+    });
+
+    const { result } = renderHook(() => usePostSession());
+    await act(async () => {
+      await result.current.startSession([{ type: 'applied-numeracy', config: {}, timeLimitSec: 60 }]);
+    });
+    act(() => { result.current.timeExpired(); });
+
+    expect(result.current.drillResults[0].questions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ answered: null, correct: false, expected: '2000 m' }),
+      expect.objectContaining({ answered: null, correct: false, expected: '3000 ml' }),
+    ]));
+  });
+});
+
 // Covers issue #2010: a memory drill completed inside a POST session must
 // carry its memoryItemId through to the submitted task (so the server can
 // advance that item's spaced-repetition schedule) and use the `memory`
