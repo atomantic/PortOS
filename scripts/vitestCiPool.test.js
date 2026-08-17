@@ -1,10 +1,14 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { vitestCiPool } from './vitestCiPool.js';
 
 describe('vitestCiPool', () => {
   const originalCi = process.env.CI;
   const originalRunnerOs = process.env.RUNNER_OS;
+
+  beforeEach(() => {
+    delete process.env.RUNNER_OS;
+  });
 
   afterEach(() => {
     if (originalCi === undefined) delete process.env.CI;
@@ -31,6 +35,6 @@ describe('vitestCiPool', () => {
   it('uses one worker on Windows CI', () => {
     process.env.CI = 'true';
     process.env.RUNNER_OS = 'Windows';
-    expect(vitestCiPool()).toEqual({ maxWorkers: 1 });
+    expect(vitestCiPool()).toEqual({ maxWorkers: 1, pool: 'threads' });
   });
 });
