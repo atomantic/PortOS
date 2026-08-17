@@ -20,29 +20,36 @@ const hook = createMediaJobImageHook({
     const filename = job.result?.filename;
     if (typeof filename !== 'string' || !filename) return null;
     const tag = job.params.musicStudio;
+    const authoredPrompt = typeof tag.authoredPrompt === 'string' ? tag.authoredPrompt : job.params.prompt;
+    const authoredLyrics = typeof tag.authoredLyrics === 'string' ? tag.authoredLyrics : job.params.lyrics;
     return {
       filename,
       durationSec: Number.isFinite(job.result?.durationSec) ? Math.round(job.result.durationSec) : null,
       engine: typeof job.result?.engine === 'string' ? job.result.engine : null,
       modelId: typeof job.result?.modelId === 'string' ? job.result.modelId : null,
       prompt: job.params.prompt,
+      authoredPrompt,
       lyrics: job.params.lyrics,
+      authoredLyrics,
       lyricsEnabled: tag.lyricsEnabled === true,
       lyricsProvided: tag.lyricsProvided === true,
+      instrumentalOnly: typeof tag.instrumentalOnly === 'boolean' ? tag.instrumentalOnly : null,
       title: tag.title,
       artistId: tag.artistId,
       artist: tag.artist,
       albumId: tag.albumId,
     };
   },
-  attach: async ({ job, trackId, filename, durationSec, engine, modelId, prompt, lyrics, lyricsEnabled, lyricsProvided, title, artistId, artist, albumId }) => {
+  attach: async ({ job, trackId, filename, durationSec, engine, modelId, prompt, authoredPrompt, lyrics, authoredLyrics, lyricsEnabled, lyricsProvided, instrumentalOnly, title, artistId, artist, albumId }) => {
     const current = trackId ? await tracks.getTrack(trackId) : null;
     // A deleted target is a successful render but no longer an attach target.
     if (trackId && !current) return null;
     const { renders } = tracks.buildRenderAppend(current, {
       audioFilename: filename,
       prompt,
+      authoredPrompt,
       lyrics: lyricsEnabled ? lyrics : '',
+      instrumentalOnly,
       engine,
       modelId,
       durationSec,
@@ -52,18 +59,21 @@ const hook = createMediaJobImageHook({
       engine,
       modelId,
       durationSec,
-      prompt,
+      prompt: authoredPrompt,
       renders,
     };
-    if (lyricsEnabled && lyricsProvided) meta.lyrics = lyrics;
+    // Existing instrumental renders preserve the track's saved lyric draft;
+    // a standalone render has no prior record, so retain its authored lyrics.
+    const shouldPersistLyrics = lyricsEnabled && lyricsProvided && (instrumentalOnly !== true || !trackId);
+    if (shouldPersistLyrics) meta.lyrics = authoredLyrics;
     const track = trackId
       ? await tracks.updateTrack(trackId, meta)
       : await tracks.createTrack({
-        title: title || prompt.slice(0, 60),
+        title: title || authoredPrompt.slice(0, 60),
         artistId,
         artist,
         albumId,
-        ...(lyricsEnabled && lyricsProvided ? { lyrics } : {}),
+        ...(shouldPersistLyrics ? { lyrics: authoredLyrics } : {}),
         ...meta,
       });
     if (!trackId && track?.albumId) {

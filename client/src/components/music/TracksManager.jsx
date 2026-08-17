@@ -354,10 +354,18 @@ export default function TracksManager() {
     setGenMode('audio');
     setForm((f) => ({
       ...f,
-      ...(render.prompt ? { prompt: render.prompt } : {}),
+      ...((render.authoredPrompt || render.prompt) ? { prompt: render.authoredPrompt || render.prompt } : {}),
       ...(render.lyrics ? { lyrics: render.lyrics } : {}),
     }));
-    setRemix({ engineId: render.engine, modelId: render.modelId, durationSec: render.durationSec, nonce: remixNonceRef.current });
+    setRemix({
+      engineId: render.engine,
+      modelId: render.modelId,
+      durationSec: render.durationSec,
+      // Only new renders carry an explicit vocal-mode decision. Legacy empty
+      // lyric snapshots are ambiguous and must not be reclassified as no-vocals.
+      ...(typeof render.instrumentalOnly === 'boolean' ? { instrumentalOnly: render.instrumentalOnly } : {}),
+      nonce: remixNonceRef.current,
+    });
   };
 
   return (

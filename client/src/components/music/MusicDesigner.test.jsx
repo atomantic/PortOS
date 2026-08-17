@@ -176,6 +176,8 @@ describe('<MusicDesigner>', () => {
 
       const box = screen.getByLabelText(/music description/i);
       expect(box).toHaveValue('Lush pads over a broken beat.');
+      expect(screen.getByText(/MiniMax structured caption/i)).toBeInTheDocument();
+      expect(screen.getByText(/meter or time signature/i)).toBeInTheDocument();
       fireEvent.change(box, { target: { value: 'My own words.' } });
       expect(box).toHaveValue('My own words.');
       await waitFor(() => expect(api.updateTrack).toHaveBeenCalledWith(
@@ -234,7 +236,7 @@ describe('<MusicDesigner>', () => {
       expect(screen.getByTestId('location')).toHaveTextContent('/music/generate/lyrics');
     });
 
-    it('is skippable — an instrumental reaches the generator with empty lyrics', async () => {
+    it('lets the user continue without lyrics while leaving vocal intent for the render step', async () => {
       api.describeMusic.mockResolvedValue({ description: 'Lush pads over a broken beat.', llm: {} });
       renderAt('/music/generate/concept');
 
@@ -243,7 +245,8 @@ describe('<MusicDesigner>', () => {
       await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/music/generate/description'));
       fireEvent.click(screen.getByRole('button', { name: /next: lyrics/i }));
 
-      fireEvent.click(screen.getByRole('button', { name: /skip — make it instrumental/i }));
+      expect(screen.getByText(/enable instrumental only to prohibit wordless or background vocals/i)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /continue without lyrics/i }));
 
       const panel = await screen.findByTestId('gen-panel');
       expect(panel).toHaveAttribute('data-prompt', 'Lush pads over a broken beat.');

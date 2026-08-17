@@ -51,10 +51,33 @@ describe('prompt builders', () => {
     expect(buildDescribePrompt({ concept: 'x' })).not.toContain('ADDITIONAL GUIDANCE');
   });
 
+  it('requests the MiniMax structured-caption contract with deliberate timing detail', () => {
+    const prompt = buildDescribePrompt({ concept: 'an instrumental night drive in 6/8' });
+    const globalIndex = prompt.indexOf('Global Metadata');
+    const vocalIndex = prompt.indexOf('Vocal Details');
+    const arrangementIndex = prompt.indexOf('Arrangement');
+
+    expect(prompt).toMatch(/meter or time signature/i);
+    expect(prompt).toMatch(/250–450 English words/i);
+    expect(prompt).toMatch(/instrumental.*lead melodic/i);
+    expect(globalIndex).toBeGreaterThan(-1);
+    expect(vocalIndex).toBeGreaterThan(globalIndex);
+    expect(arrangementIndex).toBeGreaterThan(vocalIndex);
+  });
+
+  it('keeps music controls in the caption and requires standalone lyric tags', () => {
+    const prompt = buildLyricsPrompt({ description: 'slow compound-meter soul' });
+    expect(prompt).toMatch(/every tag must sit alone on its own line/i);
+    expect(prompt).toContain('[instrumental]');
+    expect(prompt).toContain('[solo]');
+    expect(prompt).toMatch(/tempo, meter, key, arrangement, and production instructions in the musical description/i);
+  });
+
   it('keeps the output-format instruction outside the overridable template', () => {
     // An override tunes the creative brief, not the wire format — a fenced or
     // preambled response would land verbatim in the user's textarea.
     expect(buildLyricsPrompt({ description: 'x', template: 'Whatever.' })).toContain('no markdown fence');
+    expect(buildDescribePrompt({ concept: 'x', template: 'Whatever.' })).toContain('Global Metadata');
   });
 });
 

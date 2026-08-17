@@ -25,7 +25,8 @@
  *   - renders       — the full render history (every generated/uploaded take), so
  *                     the studio can show each render as a card and re-select an
  *                     earlier one. Each entry is `{ id, audioFilename, prompt,
- *                     lyrics, engine, modelId, durationSec, createdAt }`. The
+ *                     authoredPrompt, lyrics, instrumentalOnly, engine,
+ *                     modelId, durationSec, createdAt }`. The
  *                     top-level `audioFilename`/`engine`/`modelId`/`durationSec`
  *                     point at whichever render is currently ACTIVE (selected).
  *
@@ -99,7 +100,11 @@ export function sanitizeRender(raw) {
     id,
     audioFilename,
     prompt: trimTo(raw.prompt, PROMPT_MAX),
+    authoredPrompt: trimTo(raw.authoredPrompt, PROMPT_MAX),
     lyrics: trimTo(raw.lyrics, LYRICS_MAX),
+    // null means a legacy/uploaded render never recorded the choice. Preserve
+    // that sentinel so remixing cannot infer vocal intent from empty lyrics.
+    instrumentalOnly: typeof raw.instrumentalOnly === 'boolean' ? raw.instrumentalOnly : null,
     engine: trimTo(raw.engine, ENGINE_MAX),
     modelId: trimTo(raw.modelId, MODEL_ID_MAX),
     durationSec: sanitizeDuration(raw.durationSec),
@@ -153,7 +158,9 @@ export function sanitizeTrack(raw) {
       id: legacyRenderId(audioFilename),
       audioFilename,
       prompt,
+      authoredPrompt: prompt,
       lyrics,
+      instrumentalOnly: null,
       engine,
       modelId,
       durationSec,

@@ -1,0 +1,2 @@
+- Music generation now offers an instrumental-only option that leaves saved track lyrics intact.
+- Music Designer now creates MiniMax-ready structured captions with tempo, meter, vocal, production, and section-by-section arrangement guidance.

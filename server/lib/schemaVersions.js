@@ -249,7 +249,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // tracks v4 = `track.concept` for resumable stepped music-designer drafts.
   // Older peers must reject the record rather than round-trip it through a
   // concept-unaware sanitizer and silently erase the saved creative brief.
-  tracks: 4,
+  // tracks v5 = render-history entries gained `authoredPrompt` and the explicit
+  // nullable `instrumentalOnly` decision. A <=v4 peer would strip both, then LWW
+  // the ambiguous render back and make a later remix silently change vocal mode.
+  tracks: 5,
   // v1 = creative ingredients catalog (Postgres tables: catalog_scraps,
   // catalog_ingredients, catalog_ingredient_sources, catalog_ingredient_refs).
   // v2 = `catalog_ingredients.search_tsv` expanded to also index the

@@ -44,6 +44,68 @@ describe('music studio completion hook', () => {
     expect(queue.updateJobResult).toHaveBeenCalledWith('job-1', { trackId: 'track-1' });
   });
 
+  it('records an instrumental render without replacing saved track lyrics', async () => {
+    trackStore.getTrack.mockResolvedValue({ id: 'track-1', lyrics: 'keep these words', renders: [] });
+    queue.events.emit('completed', {
+      id: 'job-instrumental', kind: 'audio', queuedAt: new Date().toISOString(),
+      params: {
+        prompt: 'warm folk\n\nInstrumental only. Do not include vocals.',
+        lyrics: '',
+        musicStudio: {
+          trackId: 'track-1',
+          authoredPrompt: 'warm folk',
+          authoredLyrics: 'keep these words',
+          lyricsEnabled: true,
+          lyricsProvided: true,
+          instrumentalOnly: true,
+        },
+      },
+      result: { filename: 'instrumental.wav', durationSec: 60, engine: 'acestep', modelId: 'a' },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(trackStore.buildRenderAppend).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'track-1' }),
+      expect.objectContaining({
+        prompt: expect.stringContaining('Instrumental only.'),
+        authoredPrompt: 'warm folk',
+        lyrics: '',
+        instrumentalOnly: true,
+      }),
+    );
+    const update = trackStore.updateTrack.mock.calls[0][1];
+    expect(update.prompt).toBe('warm folk');
+    expect(update).not.toHaveProperty('lyrics');
+    expect(queue.updateJobResult).toHaveBeenCalledWith('job-instrumental', { trackId: 'track-1' });
+  });
+
+  it('keeps authored lyrics when an instrumental render creates a standalone track', async () => {
+    queue.events.emit('completed', {
+      id: 'job-standalone-instrumental', kind: 'audio', queuedAt: new Date().toISOString(),
+      params: {
+        prompt: 'cinematic score\n\nInstrumental only. Do not include vocals.',
+        lyrics: '',
+        musicStudio: {
+          trackId: null,
+          title: 'Fake score',
+          authoredPrompt: 'cinematic score',
+          authoredLyrics: '[verse]\nSaved draft words',
+          lyricsEnabled: true,
+          lyricsProvided: true,
+          instrumentalOnly: true,
+        },
+      },
+      result: { filename: 'standalone.wav', durationSec: 60, engine: 'acestep', modelId: 'a' },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(trackStore.createTrack).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Fake score',
+      prompt: 'cinematic score',
+      lyrics: '[verse]\nSaved draft words',
+    }));
+  });
+
   it('creates a standalone track, appends its album, and does not crash when target is deleted', async () => {
     trackStore.createTrack.mockResolvedValue({ id: 'track-new', albumId: 'album-1' });
     queue.events.emit('completed', {

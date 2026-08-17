@@ -83,6 +83,7 @@ describe('tracks logic', () => {
       expect(t.renders).toHaveLength(1);
       expect(t.renders[0]).toMatchObject({
         audioFilename: 'music-abc.wav', engine: 'musicgen', modelId: 'musicgen-medium', durationSec: 12, prompt: 'warm folk',
+        authoredPrompt: 'warm folk', instrumentalOnly: null,
         createdAt: '2026-01-02T00:00:00.000Z',
       });
       // Deterministic id derived from the filename — re-sanitizing (the DB read
@@ -111,12 +112,19 @@ describe('tracks logic', () => {
     it('sanitizeRender drops entries without usable audio bytes', () => {
       expect(sanitizeRender({ id: 'r1' })).toBeNull();
       expect(sanitizeRender({ id: 'r1', audioFilename: '../x.wav' })).toBeNull();
-      expect(sanitizeRender({ audioFilename: 'a.wav' }).id).toMatch(/^r-/); // deterministic fallback id
+      const legacy = sanitizeRender({ audioFilename: 'a.wav' });
+      expect(legacy.id).toMatch(/^r-/); // deterministic fallback id
+      expect(legacy.instrumentalOnly).toBeNull();
     });
 
     it('makeRender stamps the caller-supplied id + now', () => {
-      const r = makeRender({ audioFilename: 'a.wav', engine: 'musicgen' }, { id: 'render-7', now: '2026-03-03T00:00:00.000Z' });
-      expect(r).toMatchObject({ id: 'render-7', audioFilename: 'a.wav', engine: 'musicgen', createdAt: '2026-03-03T00:00:00.000Z' });
+      const r = makeRender({
+        audioFilename: 'a.wav', engine: 'musicgen', authoredPrompt: 'source prompt', instrumentalOnly: true,
+      }, { id: 'render-7', now: '2026-03-03T00:00:00.000Z' });
+      expect(r).toMatchObject({
+        id: 'render-7', audioFilename: 'a.wav', engine: 'musicgen', authoredPrompt: 'source prompt',
+        instrumentalOnly: true, createdAt: '2026-03-03T00:00:00.000Z',
+      });
     });
 
     it('selectRenderPatch points the active fields at the chosen render, not prompt/lyrics', () => {

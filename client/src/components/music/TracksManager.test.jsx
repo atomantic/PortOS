@@ -2,12 +2,19 @@ import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-li
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const musicGenProps = vi.hoisted(() => ({ current: null }));
+
 // Stub the heavy children — this suite pins the MIDI read-through wiring
 // (#2477 follow-up), not the editor/generation internals.
 vi.mock('./ArtistPicker', () => ({ default: () => <div data-testid="artist-picker" /> }));
-vi.mock('./MusicGenPanel', () => ({ default: () => <div data-testid="gen-panel" /> }));
+vi.mock('./MusicGenPanel', () => ({ default: (props) => {
+  musicGenProps.current = props;
+  return <div data-testid="gen-panel" />;
+} }));
 vi.mock('./ChiptunePanel', () => ({ default: () => <div data-testid="chiptune-panel" /> }));
-vi.mock('./TrackRenderCard', () => ({ default: () => <div data-testid="render-card" /> }));
+vi.mock('./TrackRenderCard', () => ({ default: ({ render: item, onRemix }) => (
+  <button type="button" data-testid="render-card" onClick={() => onRemix(item)}>Remix {item.id}</button>
+) }));
 vi.mock('./TrackRenderModal', () => ({ default: () => null }));
 vi.mock('../songs/MidiVisualization.jsx', () => ({
   default: ({ url, model }) => <div data-testid="midi-viz" data-url={url} data-model={model} />,
@@ -196,6 +203,34 @@ describe('<TracksManager> generative workflow hand-off', () => {
       { silent: true },
     ));
     expect(await screen.findByTestId('location')).toHaveTextContent('/music/generate/concept?trackId=track-1');
+  });
+
+  it('remixes only explicit instrumental modes and restores the authored prompt', async () => {
+    listTracks.mockResolvedValue([{
+      ...TRACK,
+      prompt: 'Current source',
+      lyrics: 'Current lyrics',
+      renders: [
+        {
+          id: 'render-explicit', audioFilename: 'explicit.wav', engine: 'acestep', prompt: 'Conditioned prompt',
+          authoredPrompt: 'Authored prompt', lyrics: '', instrumentalOnly: true, createdAt: '2026-01-02T00:00:00Z',
+        },
+        {
+          id: 'render-legacy', audioFilename: 'legacy.wav', engine: 'acestep', prompt: 'Legacy vocal texture',
+          lyrics: '', createdAt: '2026-01-01T00:00:00Z',
+        },
+      ],
+    }]);
+    musicGenProps.current = null;
+    renderAt('track-1');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Remix render-explicit' }));
+    await waitFor(() => expect(musicGenProps.current?.remix).toEqual(expect.objectContaining({ instrumentalOnly: true })));
+    expect(musicGenProps.current.prompt).toBe('Authored prompt');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remix render-legacy' }));
+    await waitFor(() => expect(musicGenProps.current?.remix?.nonce).toBe(2));
+    expect(musicGenProps.current.remix).not.toHaveProperty('instrumentalOnly');
   });
 });
 

@@ -330,6 +330,9 @@ const generateSchema = z.object({
   // No default: distinguish ABSENT (don't touch the track's lyrics) from a
   // present '' (the user cleared them and generated without — persist the clear).
   lyrics: z.string().trim().max(20000).optional(),
+  // A render-level override: ignore even supplied lyrics without clearing the
+  // track's saved lyric field when the completed audio is attached.
+  instrumentalOnly: z.boolean().optional().default(false),
   engine: z.string().trim().max(60).optional(),
   modelId: z.string().trim().max(120).optional(),
   durationSec: z.number().positive().max(600).optional(),
@@ -342,6 +345,8 @@ const generateSchema = z.object({
   artist: z.string().trim().max(120).optional().default(''),
   albumId: z.string().trim().max(80).optional().default(''),
 });
+
+const INSTRUMENTAL_ONLY_GUIDANCE = 'Instrumental only. Do not include sung, spoken, chanted, choir, or background vocals. Carry the lead melody with the described instruments or textures.';
 
 router.post('/generate', asyncHandler(async (req, res) => {
   const body = validateRequest(generateSchema, req.body ?? {});
@@ -378,13 +383,21 @@ router.post('/generate', asyncHandler(async (req, res) => {
     if (picked.userAdded) repo = picked.repo || picked.id;
   }
 
+  // Make the render-level override explicit in BOTH conditioning inputs. Merely
+  // dropping lyrics is not enough when the authored caption itself mentions a
+  // vocalist. Keep it idempotent so remixing an instrumental take does not append
+  // the same directive repeatedly.
+  const usedPrompt = body.instrumentalOnly && !body.prompt.includes(INSTRUMENTAL_ONLY_GUIDANCE)
+    ? `${body.prompt}\n\n${INSTRUMENTAL_ONLY_GUIDANCE}`
+    : body.prompt;
+
   // The lyrics that actually CONDITION this render: what the caller sent for a
   // lyric-aware engine ('' = render without lyrics), nothing for a non-lyric
   // engine. The same value drives the generation call AND the render snapshot,
   // so a render card can never claim conditioning text the audio wasn't built
   // from (an absent-lyrics lyric render is genuinely un-conditioned, not "the
   // track's old words").
-  const usedLyrics = engine.lyrics ? (body.lyrics ?? '') : '';
+  const usedLyrics = engine.lyrics && !body.instrumentalOnly ? (body.lyrics ?? '') : '';
 
   const liveJobs = listJobs({ kind: 'audio' }).filter((job) => job.status === 'queued' || job.status === 'running');
   const duplicate = liveJobs.find((job) => {
@@ -402,7 +415,7 @@ router.post('/generate', asyncHandler(async (req, res) => {
   const result = enqueueJob({
     kind: 'audio',
     params: {
-      prompt: body.prompt,
+      prompt: usedPrompt,
       lyrics: usedLyrics,
       engine: engine.id,
       modelId: body.modelId,
@@ -415,8 +428,13 @@ router.post('/generate', asyncHandler(async (req, res) => {
         artistId: body.artistId,
         artist: body.artist,
         albumId: body.albumId,
+        // Keep editable source text distinct from the augmented prompt and
+        // empty lyric payload that actually condition an instrumental render.
+        authoredPrompt: body.prompt,
+        authoredLyrics: engine.lyrics === true ? body.lyrics : undefined,
         lyricsEnabled: engine.lyrics === true,
-        lyricsProvided: body.lyrics !== undefined,
+        lyricsProvided: engine.lyrics === true && body.lyrics !== undefined,
+        instrumentalOnly: body.instrumentalOnly,
       },
     },
   });

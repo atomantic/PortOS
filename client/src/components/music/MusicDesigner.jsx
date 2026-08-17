@@ -49,13 +49,11 @@ const FIRST_STEP = STEP_IDS[0];
 const DRAFT_TITLE = 'Untitled music draft';
 const ACTIVE_DRAFT_KEY = 'portos.musicDesigner.activeDraft';
 
-// Display-only mirrors of the shipped meta-prompts in
-// `server/services/musicDesigner.js`. They are rendered as placeholder text so
-// the user can see what they're overriding; the SERVER is the authority — an
-// empty override field sends no `template` at all and the server falls back to
-// its own constant, so drift here is cosmetic and can never change what runs.
-const DESCRIBE_PLACEHOLDER = 'Describe the given musical reference and description in richer detail in English, focusing primarily on the sound, instruments, feel, and the overall atmosphere. Also briefly describe the composition, instrumentation, beats, lyrical or instrumental style (maybe it doesn\'t have lyrics), and aesthetic. Keep it concise and genre-focused rather than overly technical.';
-const LYRICS_PLACEHOLDER = 'Write original song lyrics that fit the musical description below. Use the section syntax the audio engine expects: a bracketed section tag alone on its line ([verse], [chorus], [bridge], [outro]) with that section\'s lines beneath it. Match the mood, genre, energy, and vocal style implied by the description, and keep the phrasing singable. Keep the lyrics original (do not reproduce copyrighted lyrics verbatim).';
+// Display-only summaries of the shipped meta-prompts in
+// `server/services/musicDesigner.js`. The SERVER is the authority — an empty
+// override sends no `template` and uses the complete shipped instruction.
+const DESCRIBE_PLACEHOLDER = 'Rewrite the musical reference into a detailed, generation-oriented structured caption in English. Preserve explicit requirements and exclusions while developing genre and subgenres, emotional arc, imagery, sonics, production character, core instruments, and spatial feel. Describe approximate tempo, meter or time signature, rhythmic subdivision, and groove when they matter. Use exact BPM, key, scale, or time signature only when deliberately requested. State the vocal plan explicitly; for instrumental music, rule out vocals and name the lead melodic instrument. Treat the arrangement as a continuous section-by-section timeline with plausible entrances, exits, changes, and transitions. Keep lyric words out of the caption.';
+const LYRICS_PLACEHOLDER = 'Write original, singable song lyrics that fit the musical description. Put every bracketed section tag alone on its own line, using useful tags such as [intro], [verse], [pre-chorus], [chorus], [post-chorus], [bridge], [instrumental], [solo], and [outro], with words beginning on the following line. Build enough sections for the intended song length. Keep tempo, meter, key, arrangement, and production instructions in the separate musical description.';
 
 const FIELD_CLASS = 'w-full rounded border border-port-border bg-port-bg px-3 py-2 text-sm text-white';
 const LABEL_CLASS = 'mb-1 block text-xs uppercase tracking-wider text-gray-500';
@@ -281,7 +279,7 @@ export default function MusicDesigner() {
       <div>
         <h2 className="text-lg font-semibold text-white">Design a tune</h2>
         <p className="text-sm text-gray-400">
-          Start from a reference or a vibe. AI drafts the musical description and the lyrics — you edit both before anything is rendered.
+          Start from a reference or a vibe. AI drafts a structured musical caption and optional lyrics — you edit both before anything is rendered.
         </p>
       </div>
 
@@ -319,7 +317,7 @@ export default function MusicDesigner() {
               onChange={(event) => setConceptGuidance(event.target.value)}
               disabled={draftLoading}
               maxLength={4000}
-              placeholder="Keep it under 100 BPM, no vocals in the intro…"
+              placeholder="90–96 BPM, 6/8 meter, D minor, instrumental only with a cello lead…"
               className={FIELD_CLASS}
             />
           </label>
@@ -342,7 +340,7 @@ export default function MusicDesigner() {
             {advancedOpen && (
               <div className="space-y-3 border-t border-port-border p-3">
                 <p className="text-xs text-gray-500">
-                  Leave a field blank to use the shipped instruction shown in it.
+                  Leave a field blank to use the complete shipped instruction summarized by its placeholder.
                 </p>
                 <div>
                   <div className="flex items-center justify-between gap-2">
@@ -425,11 +423,19 @@ export default function MusicDesigner() {
               disabled={draftLoading}
               rows={8}
               maxLength={8000}
-              placeholder="Warm instrumental soul, relaxed pocket, Rhodes piano, 92 BPM…"
+              placeholder={'Global Metadata\nBasic Attributes: 92 BPM, 6/8 meter, warm instrumental soul…\n\nVocal Details\nInstrumental only; the Rhodes carries the lead melody…\n\nArrangement\nIntro: sparse keys enter first…'}
               className={FIELD_CLASS}
             />
           </label>
-          <p className="text-xs text-gray-500">This is what conditions the render — edit it freely.</p>
+          <div className="rounded border border-port-border bg-port-bg/60 p-3 text-xs text-gray-400">
+            <p className="mb-2 font-medium text-gray-300">MiniMax structured caption</p>
+            <ul className="list-disc space-y-1 pl-4">
+              <li><span className="text-gray-300">Global Metadata</span> — genre, tempo/BPM, meter or time signature, groove, emotional arc, imagery, and mix profile.</li>
+              <li><span className="text-gray-300">Vocal Details</span> — explicit vocal performance, or “instrumental” plus the lead melodic instrument or texture.</li>
+              <li><span className="text-gray-300">Arrangement</span> — a section-by-section timeline of entrances, exits, transitions, texture, and energy.</li>
+            </ul>
+            <p className="mt-2 text-gray-500">Use exact BPM, key, scale, or meter only when you mean it. This entire caption conditions the render.</p>
+          </div>
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
@@ -491,11 +497,12 @@ export default function MusicDesigner() {
           </div>
           <div className="rounded border border-port-border bg-port-bg/60 p-3 text-xs text-gray-400">
             <p className="mb-2 font-medium text-gray-300">Manual composition structure</p>
-            <p className="mb-2">Put one section tag on its own line, then its singable lines. A useful arc is: intro → verse → pre-chorus → chorus → verse 2 → chorus → bridge → final chorus → outro.</p>
+            <p className="mb-2">Put one section tag on its own line, then begin its singable words on the next line. A useful arc is: intro → verse → pre-chorus → chorus → verse 2 → chorus → bridge → final chorus → outro.</p>
             <ul className="mb-3 list-disc space-y-1 pl-4">
               <li>Use 4–8 short lines for a verse and 2–4 lines for a pre-chorus or bridge.</li>
               <li>Give the chorus a repeated hook; repeat the tag when the chorus returns.</li>
-              <li>Leave a blank line between sections and keep tags lowercase, such as <code className="text-gray-300">[verse]</code> and <code className="text-gray-300">[chorus]</code>.</li>
+              <li>Use tags such as <code className="text-gray-300">[instrumental]</code> and <code className="text-gray-300">[solo]</code> for wordless sections; keep tempo, meter, and production direction in the description.</li>
+              <li>Include enough sections for the intended duration—MiniMax can end early when the lyric structure runs out.</li>
             </ul>
             <pre className="overflow-x-auto rounded bg-port-bg p-2 font-mono text-[11px] text-gray-300">{`[verse]\nShort image, short line\nA second line to sing\n\n[pre-chorus]\nBuild the thought\nTurn toward the hook\n\n[chorus]\nA repeatable hook\nA repeatable hook`}</pre>
           </div>
@@ -514,8 +521,13 @@ export default function MusicDesigner() {
             />
           </label>
           <button type="button" onClick={() => { saveDraft({ prompt: description.trim(), lyrics: lyrics.trim() }); goTo('render'); }} disabled={busy || !draftReady} className={PRIMARY_BTN}>
-            {lyrics.trim() ? 'Next: render' : 'Skip — make it instrumental'}
+            {lyrics.trim() ? 'Next: render' : 'Continue without lyrics'}
           </button>
+          {!lyrics.trim() && (
+            <p className="text-xs text-gray-500">
+              On the render step, enable Instrumental only to prohibit wordless or background vocals too.
+            </p>
+          )}
         </div>
       )}
 

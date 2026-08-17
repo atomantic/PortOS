@@ -184,16 +184,98 @@ describe('MusicGenPanel', () => {
     expect(onGenerated).toHaveBeenCalledWith(expect.objectContaining({ id: 'generated-track' }));
   });
 
+  it('can render instrumentally without conditioning on or clearing the track lyrics', async () => {
+    api.listMusicEngines.mockResolvedValue({
+      defaultEngine: 'acestep',
+      engines: [engine({
+        id: 'acestep',
+        name: 'ACE-Step (full song + vocals)',
+        models: [{ id: 'ace-step-v1-3.5b', name: 'ACE-Step v1 3.5B', userAdded: false }],
+        defaultModelId: 'ace-step-v1-3.5b',
+        maxDurationSec: 240,
+        defaultDurationSec: 60,
+        lyrics: true,
+        customModels: false,
+        ready: true,
+      })],
+    });
+    api.generateMusic.mockResolvedValue({ track: { id: 'track-1' } });
+
+    render(<MusicGenPanel track={{ id: 'track-1' }} prompt="warm folk" lyrics={'[verse]\nKeep these words'} />);
+
+    const instrumental = await screen.findByRole('checkbox', { name: /instrumental only/i });
+    expect(instrumental).not.toBeChecked();
+    expect(instrumental).toBeEnabled();
+    fireEvent.click(instrumental);
+    expect(screen.getByText(/saved lyrics will not condition this render/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^generate$/i }));
+
+    await waitFor(() => expect(api.generateMusic).toHaveBeenCalled());
+    const requestBody = api.generateMusic.mock.calls[0][0];
+    expect(requestBody).toEqual(expect.objectContaining({
+      trackId: 'track-1',
+      instrumentalOnly: true,
+      lyrics: '[verse]\nKeep these words',
+    }));
+  });
+
+  it('keeps lyricless vocal textures possible until instrumental mode is explicitly selected', async () => {
+    api.listMusicEngines.mockResolvedValue({
+      defaultEngine: 'acestep',
+      engines: [engine({
+        id: 'acestep',
+        name: 'ACE-Step (full song + vocals)',
+        models: [{ id: 'ace-step-v1-3.5b', name: 'ACE-Step v1 3.5B', userAdded: false }],
+        defaultModelId: 'ace-step-v1-3.5b',
+        lyrics: true,
+        customModels: false,
+        ready: true,
+      })],
+    });
+    api.generateMusic.mockResolvedValue({ track: { id: 'track-1' } });
+
+    render(<MusicGenPanel track={{ id: 'track-1' }} prompt="distant wordless choir" lyrics="" />);
+
+    const instrumental = await screen.findByRole('checkbox', { name: /instrumental only/i });
+    expect(instrumental).not.toBeChecked();
+    expect(instrumental).toBeEnabled();
+    expect(screen.getByText(/vocals may still follow the prompt/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^generate$/i }));
+
+    await waitFor(() => expect(api.generateMusic).toHaveBeenCalledWith(expect.objectContaining({
+      instrumentalOnly: false,
+      lyrics: '',
+    }), { silent: true }));
+  });
+
+  it('offers instrumental-only conditioning for engines without a separate lyrics input', async () => {
+    api.listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
+    api.generateMusic.mockResolvedValue({ track: { id: 'track-1' } });
+
+    render(<MusicGenPanel track={{ id: 'track-1' }} prompt="ambient choir textures" lyrics="" />);
+
+    const instrumental = await screen.findByRole('checkbox', { name: /instrumental only/i });
+    fireEvent.click(instrumental);
+    fireEvent.click(screen.getByRole('button', { name: /^generate$/i }));
+
+    await waitFor(() => expect(api.generateMusic).toHaveBeenCalled());
+    const requestBody = api.generateMusic.mock.calls[0][0];
+    expect(requestBody.instrumentalOnly).toBe(true);
+    expect(requestBody).not.toHaveProperty('lyrics');
+  });
+
   it('rehydrates a running Music Studio job when the panel remounts', async () => {
     api.listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
     api.getActiveProcessing.mockResolvedValue({ jobs: [{
       id: 'job-remounted', kind: 'audio', status: 'running', startedAt: new Date(Date.now() - 5000).toISOString(),
-      params: { musicStudio: { trackId: 'track-1' } },
+      params: { musicStudio: { trackId: 'track-1', instrumentalOnly: true } },
     }] });
     api.getMediaJob.mockResolvedValue({ status: 'running', startedAt: new Date(Date.now() - 5000).toISOString() });
     render(<MusicGenPanel track={{ id: 'track-1' }} prompt="warm folk" lyrics="" />);
     expect(await screen.findByText(/processing on the gpu|rendering audio/i)).toBeInTheDocument();
     expect(screen.getByRole('status')).toHaveTextContent(/elapsed/);
+    expect(screen.getByRole('checkbox', { name: /instrumental only/i })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /instrumental only/i })).toBeDisabled();
   });
 
   it('suggests a lyric-aware MiniMax ceiling and sends Auto mode', async () => {

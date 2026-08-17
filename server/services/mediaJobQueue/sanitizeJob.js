@@ -10,7 +10,7 @@ const PARAM_ALLOWLIST = new Set([
 ]);
 
 const MUSIC_STUDIO_KEYS = new Set([
-  'trackId', 'title', 'artistId', 'artist', 'albumId', 'lyricsEnabled', 'lyricsProvided',
+  'trackId', 'title', 'artistId', 'artist', 'albumId', 'lyricsEnabled', 'lyricsProvided', 'instrumentalOnly',
 ]);
 
 export function sanitizeJob(job) {

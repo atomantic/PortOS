@@ -2,8 +2,8 @@
  * Music designer — the two LLM steps behind the Music studio's stepped
  * Generate tab (#4305).
  *
- *   describeMusic()  short reference/vibe  → a rich, genre-dense musical
- *                    description suitable as an ACE-Step conditioning prompt.
+ *   describeMusic()  short reference/vibe  → a detailed structured caption
+ *                    suitable for MiniMax Music 3 and the other generators.
  *   writeLyrics()    that description (+ the user's extra guidance) → original
  *                    lyrics in the `[verse]` / `[chorus]` section syntax the
  *                    lyric-aware engines expect.
@@ -33,9 +33,37 @@ const MAX_TEMPLATE = 8000;
 const MAX_DESCRIPTION = 8000;
 const MAX_LYRICS = 20000;
 
-export const DEFAULT_DESCRIBE_TEMPLATE = 'Describe the given musical reference and description in richer detail in English, focusing primarily on the sound, instruments, feel, and the overall atmosphere. Also briefly describe the composition, instrumentation, beats, lyrical or instrumental style (maybe it doesn\'t have lyrics), and aesthetic. Keep it concise and genre-focused rather than overly technical.';
+// Caption shape follows MiniMax Music 3's official music-caption-rewriter
+// contract. Keep it model-neutral enough to remain useful for ACE-Step and the
+// other text-conditioned engines in the same picker.
+export const DEFAULT_DESCRIBE_TEMPLATE = [
+  'Rewrite the musical reference into a detailed, generation-oriented structured caption in English.',
+  'Preserve every explicit requirement and exclusion while developing genre and subgenres, emotional arc, imagery, sonics, production character, core instruments, and spatial feel.',
+  'Describe approximate tempo, meter or time signature, rhythmic subdivision, and groove when they matter. Use an exact BPM, key, scale, or time signature only when the user supplied it or clearly wants that precision; otherwise use a range or qualitative musical language.',
+  'State the vocal plan explicitly. For instrumental music, say that it is instrumental, rule out vocals, and name the instrument or texture carrying the lead melodic role. For vocal music, describe lead configuration, timbre, register, delivery, harmonies, and restrained vocal effects.',
+  'Treat the arrangement as a continuous section-by-section timeline: explain what enters, exits, changes, strips back, or intensifies, and keep transitions and instrument lifecycles musically plausible.',
+  'Keep lyric words and lyrical subject matter out of the caption; the separate lyrics input owns them. Prefer concrete musical changes over decorative prose.',
+].join(' ');
 
-export const DEFAULT_LYRICS_TEMPLATE = 'Write original song lyrics that fit the musical description below. Use the section syntax the audio engine expects: a bracketed section tag alone on its line ([verse], [chorus], [bridge], [outro]) with that section\'s lines beneath it. Match the mood, genre, energy, and vocal style implied by the description, and keep the phrasing singable. Keep the lyrics original (do not reproduce copyrighted lyrics verbatim).';
+export const DEFAULT_LYRICS_TEMPLATE = [
+  'Write original, singable song lyrics that fit the musical description below.',
+  'Use only useful bracketed section tags such as [intro], [verse], [pre-chorus], [chorus], [post-chorus], [bridge], [instrumental], [solo], and [outro]. Every tag must sit alone on its own line, with any singable words beginning on the following line.',
+  'Build a complete emotional and structural arc with enough sections for the intended song length; short lyrics can cause the music engine to end early.',
+  'Keep tempo, meter, key, arrangement, and production instructions in the musical description rather than mixing them into lyric lines.',
+  'Keep the lyrics original and do not reproduce copyrighted lyrics verbatim.',
+].join(' ');
+
+const DESCRIBE_OUTPUT_CONTRACT = [
+  'Return ONLY the structured caption as plain text, normally 250–450 English words.',
+  'Use exactly these three top-level headings in this order, each alone on its own line and without markdown markers:',
+  'Global Metadata',
+  'Cover basic attributes (genre, tempo, meter/groove, and only deliberate key/scale details), the global emotional progression, application imagery, and the sonic/production profile.',
+  'Vocal Details',
+  'Describe the vocal configuration and performance, or explicitly declare the piece instrumental and identify its lead melodic instrument or texture.',
+  'Arrangement',
+  'Describe primary and secondary instrument lifecycles, groove development, and a section-by-section energy timeline with concrete entrances, exits, transitions, textures, and spatial effects.',
+  'No preamble, bullet list, song title, quoted lyrics, reasoning trace, or markdown fence.',
+].join('\n');
 
 const clean = (value, max) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
 
@@ -54,7 +82,7 @@ export function buildDescribePrompt({ concept, guidance, template } = {}) {
     pickTemplate(template, DEFAULT_DESCRIBE_TEMPLATE),
     section('MUSICAL REFERENCE / VIBE', clean(concept, MAX_CONCEPT) || '(none given)'),
     section('ADDITIONAL GUIDANCE FROM THE USER', clean(guidance, MAX_GUIDANCE)),
-    '\n\nReturn ONLY the description as plain prose. No preamble, no headings, no bullet list, no markdown fence.',
+    `\n\n${DESCRIBE_OUTPUT_CONTRACT}`,
   ].join('');
 }
 
