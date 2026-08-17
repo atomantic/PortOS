@@ -47,29 +47,29 @@ export function watchForFile(filePath, onDetected, { settleMs = 50 } = {}) {
   let detected = false;
   let settleTimer = null;
 
-  const close = () => {
+  const notify = () => {
+    Promise.resolve(onDetected()).catch((err) => {
+      console.error(`❌ File watcher callback failed: ${err.message}`);
+    });
+  };
+  const close = (onClosed) => {
     if (closed) return;
     closed = true;
     if (settleTimer) clearTimeout(settleTimer);
+    if (onClosed) watcher.once('close', onClosed);
     watcher.close();
   };
   const detect = (settle = true) => {
     if (closed || detected || !existsSync(filePath)) return;
     detected = true;
     if (!settle) {
-      close();
-      Promise.resolve(onDetected()).catch((err) => {
-        console.error(`❌ File watcher callback failed: ${err.message}`);
-      });
+      close(notify);
       return;
     }
     settleTimer = setTimeout(() => {
       settleTimer = null;
       if (closed) return;
-      close();
-      Promise.resolve(onDetected()).catch((err) => {
-        console.error(`❌ File watcher callback failed: ${err.message}`);
-      });
+      close(notify);
     }, settleMs);
   };
   const watcher = watchFileSystem(targetDir, (_eventType, changedName) => {

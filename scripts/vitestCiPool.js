@@ -1,8 +1,6 @@
 /**
  * Vitest worker caps for GitHub Actions. Standard hosted runners are 2 vCPU /
  * 7GB; uncapped forks oversubscribe those cores during transform and swap.
- * Windows uses one thread because long-lived fork workers can exit during
- * teardown after the full server suite even when every assertion passes.
  * Local `npm test` stays unbounded so a developer machine can use every core.
  *
  * fileParallelism stays at Vitest's default (true): two workers stay busy on
@@ -13,8 +11,5 @@
  */
 export function vitestCiPool() {
   if (!process.env.CI) return {};
-  if (process.env.RUNNER_OS === 'Windows') {
-    return { maxWorkers: 1, pool: 'threads' };
-  }
   return { maxWorkers: 2 };
 }
