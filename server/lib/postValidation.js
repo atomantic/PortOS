@@ -149,9 +149,13 @@ const drillTypeConfigSchema = z.object({
   bases: z.array(z.number().int().min(2).max(20)).min(1).optional(),
   maxExponent: z.number().int().min(2).max(20).optional(),
   tolerancePct: z.number().min(1).max(50).optional(),
-  // Applied Numeracy's immutable replay key and complexity-first ladder. The
-  // server ignores client answer keys and regenerates questions from this seed.
-  seed: z.number().int().min(0).max(0xFFFFFFFF).optional(),
+  // Applied Numeracy uses an unsigned numeric replay key while the cognitive
+  // generators use bounded string seeds. This shared config must preserve both
+  // shapes on the request and scored-session round-trips.
+  seed: z.union([
+    z.string().max(100),
+    z.number().int().min(0).max(0xFFFFFFFF),
+  ]).optional(),
   difficulty: z.number().int().min(1).max(3).optional(),
   family: z.enum(['percentage', 'ratio', 'unit', 'rate', 'estimate', 'mixed']).optional(),
   // --- Cognitive drill knobs (n-back / digit-span / stroop) ---
@@ -185,7 +189,6 @@ const drillTypeConfigSchema = z.object({
   minDelayMs: z.number().int().min(300).max(5000).optional(),
   maxDelayMs: z.number().int().min(300).max(8000).optional(),
   choices: z.number().int().min(2).max(4).optional(),
-  seed: z.string().max(100).optional(),
   ruleCount: z.number().int().min(2).max(3).optional(),
   switchRatePct: z.number().int().min(0).max(100).optional(),
   cueStimulusIntervalMs: z.number().int().min(100).max(2000).optional(),
