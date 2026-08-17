@@ -42,7 +42,7 @@ Reused verbatim (condensed to objective statements) from [GOALS.md](./GOALS.md)'
 
 ### External Contributor (out-of-band, low priority)
 - **Needs:** a working MIT-licensed codebase to read, fork, or occasionally PR against.
-- **Context:** not onboarded — no CONTRIBUTING.md or CODE_OF_CONDUCT.md exists; PRs are welcome but the project explicitly does not optimize for this persona's needs over the owner-operator's.
+- **Context:** not onboarded — no CODE_OF_CONDUCT.md exists; [CONTRIBUTING.md](./CONTRIBUTING.md) documents contribution expectations, but PRs are welcome without a dedicated onboarding path, and the project explicitly does not optimize for this persona's needs over the owner-operator's.
 
 ---
 
@@ -211,7 +211,7 @@ Reused verbatim (condensed to objective statements) from [GOALS.md](./GOALS.md)'
 - **Public internet deployment / public-facing hardening** — runs on a private Tailscale network only; HTTPS support exists for browser-API/cert-trust convenience, not public exposure.
 - **ORM or heavyweight database tooling** — deliberate plain-SQL usage against Postgres; no query builder or ORM layer.
 - **Cloud hosting** — runs on the user's own hardware; not offered as a hosted service.
-- **General-purpose external-user onboarding** — no CONTRIBUTING.md/CODE_OF_CONDUCT.md; the project is not structured to onboard outside contributors even though it accepts PRs.
+- **General-purpose external-user onboarding** — no CODE_OF_CONDUCT.md; [CONTRIBUTING.md](./CONTRIBUTING.md) sets contribution expectations, but the project is not structured to actively onboard outside contributors even though it accepts PRs.
 - **Music & audio production (MusicGen-style local generation, podcast studio)** — deferred until higher-memory local hardware is available.
 - **Federated peer-to-peer sharing beyond bucket-based Sharing** — direct P2P distribution between instances is a secondary goal, not yet built.
 - **Federated media-provider routing for image/video generation** — the queued-job delegation contract (FR-52/FR-53) is implemented and live for audio/music generation today; extending the same provider/consumer contract to image and video generation is tracked separately (issue #4348), not yet built.
