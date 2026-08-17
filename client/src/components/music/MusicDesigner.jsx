@@ -103,7 +103,7 @@ export default function MusicDesigner() {
   const hydrateDraft = (track) => {
     setTrackId(track.id);
     if (track.title === DRAFT_TITLE) window.localStorage.setItem(ACTIVE_DRAFT_KEY, track.id);
-    else window.localStorage.removeItem(ACTIVE_DRAFT_KEY);
+    else if (window.localStorage.getItem(ACTIVE_DRAFT_KEY) === track.id) window.localStorage.removeItem(ACTIVE_DRAFT_KEY);
     setConcept(track.concept || '');
     setDescription(track.prompt || '');
     setLyrics(track.lyrics || '');

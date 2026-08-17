@@ -1,5 +1,5 @@
 import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, Routes, Route } from 'react-router';
+import { MemoryRouter, Routes, Route, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Stub the heavy children — this suite pins the MIDI read-through wiring
@@ -36,10 +36,16 @@ import { listMusicVideoProjects } from '../../services/apiMusicVideo.js';
 
 const TRACK = { id: 'track-1', title: 'Example Song', audioFilename: 'example.mp3', renders: [] };
 
+function LocationDisplay() {
+  const location = useLocation();
+  return <div data-testid="location">{location.pathname}{location.search}</div>;
+}
+
 const renderAt = (id) => render(
   <MemoryRouter initialEntries={[`/music/tracks/${id}`]}>
     <Routes>
       <Route path="/music/tracks/:id" element={<TracksManager />} />
+      <Route path="/music/generate/:step" element={<LocationDisplay />} />
     </Routes>
   </MemoryRouter>,
 );
@@ -155,6 +161,41 @@ describe('<TracksManager> generator mode toggle', () => {
 
     expect(await screen.findByTestId('gen-panel')).toBeInTheDocument();
     expect(screen.queryByTestId('chiptune-panel')).toBeNull();
+  });
+});
+
+describe('<TracksManager> generative workflow hand-off', () => {
+  beforeEach(() => {
+    listTracks.mockResolvedValue([TRACK]);
+    listAlbums.mockResolvedValue([]);
+    listMusicVideoProjects.mockResolvedValue([]);
+  });
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it('saves open edits before loading the same track in the stepped designer', async () => {
+    updateTrack.mockResolvedValue({ ...TRACK, prompt: 'A patient analog pulse.' });
+    renderAt('track-1');
+
+    const prompt = await screen.findByLabelText(/^Prompt/);
+    fireEvent.change(prompt, { target: { value: 'A patient analog pulse.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Design with AI' }));
+
+    await waitFor(() => expect(updateTrack).toHaveBeenCalledWith(
+      'track-1',
+      {
+        title: 'Example Song',
+        artistId: '',
+        artist: '',
+        lyrics: '',
+        prompt: 'A patient analog pulse.',
+        audioFilename: 'example.mp3',
+      },
+      { silent: true },
+    ));
+    expect(await screen.findByTestId('location')).toHaveTextContent('/music/generate/concept?trackId=track-1');
   });
 });
 

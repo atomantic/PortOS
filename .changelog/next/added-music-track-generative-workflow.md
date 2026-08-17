@@ -1,0 +1,1 @@
+- Music track editors can now save directly into the full AI Concept → Description → Lyrics → Render workflow.

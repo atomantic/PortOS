@@ -132,6 +132,18 @@ describe('<MusicDesigner>', () => {
       expect(await screen.findByLabelText('Lyrics')).toHaveValue('[verse]\nKeep moving');
       expect(screen.getByLabelText('Lyrics')).toHaveValue('[verse]\nKeep moving');
       expect(api.getTrack).toHaveBeenCalledWith('track-saved', { silent: true });
+      expect(api.createTrack).not.toHaveBeenCalled();
+    });
+
+    it('keeps an unrelated unnamed draft resumable while designing a saved track', async () => {
+      window.localStorage.setItem('portos.musicDesigner.activeDraft', 'track-draft');
+      api.getTrack.mockResolvedValue({
+        id: 'track-saved', title: 'Named Track', concept: '', prompt: '', lyrics: '',
+      });
+      renderAt('/music/generate/concept?trackId=track-saved');
+
+      await screen.findByLabelText(/what do you want to hear/i);
+      expect(window.localStorage.getItem('portos.musicDesigner.activeDraft')).toBe('track-draft');
     });
   });
 
