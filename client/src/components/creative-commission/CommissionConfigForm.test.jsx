@@ -102,7 +102,7 @@ describe('CommissionConfigForm music taste controls', () => {
 });
 
 describe('CommissionConfigForm video duration controls', () => {
-  it('defaults to Creative Director choice and reveals a manual length when selected', () => {
+  it('defaults to Creative Director choice and reveals a manual length when selected', async () => {
     function VideoHarness() {
       const [form, setForm] = useState(toForm({ brief: { intent: 'a drifting city' } }));
       return (
@@ -119,5 +119,9 @@ describe('CommissionConfigForm video duration controls', () => {
     expect(screen.queryByLabelText('Duration (sec)')).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Video length'), { target: { value: 'manual' } });
     expect(screen.getByLabelText('Duration (sec)')).toHaveValue(10);
+    await waitFor(() => {
+      expect(api.getProviders).toHaveBeenCalled();
+      expect(api.getSettings).toHaveBeenCalled();
+    });
   });
 });
