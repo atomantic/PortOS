@@ -50,3 +50,4 @@ describe('apiGames', () => {
     expect(request).toHaveBeenCalledWith('/games/game%2F1/integrity', { silent: true });
   });
 });
+// @vitest-environment node

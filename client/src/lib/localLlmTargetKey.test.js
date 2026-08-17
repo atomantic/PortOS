@@ -23,3 +23,4 @@ describe('localLlmTargetKey', () => {
     expect(targets.map(localLlmTargetKey)).toEqual(['ollama\nm1', 'lmstudio\nm2']);
   });
 });
+// @vitest-environment node

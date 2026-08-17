@@ -133,3 +133,4 @@ describe('songCraft reference data', () => {
     expect(harmonyPartOrder('custom-unknown')).toBe(99);
   });
 });
+// @vitest-environment node

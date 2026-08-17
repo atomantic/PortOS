@@ -82,3 +82,4 @@ describe('drawStrokes renderer', () => {
     expect(ctx.stroke).not.toHaveBeenCalled();
   });
 });
+// @vitest-environment node

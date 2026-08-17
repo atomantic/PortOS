@@ -47,3 +47,4 @@ describe('organizeGoals', () => {
     expect(toastError).toHaveBeenCalledTimes(1);
   });
 });
+// @vitest-environment node

@@ -67,3 +67,4 @@ describe('resolveImporterDeepLink', () => {
     expect(resolveImporterDeepLink({ universes, series })).toEqual({ universeName: '', seriesName: '' });
   });
 });
+// @vitest-environment node

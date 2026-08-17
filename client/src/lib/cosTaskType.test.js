@@ -59,3 +59,4 @@ describe('extractCosTaskType', () => {
       .toBe(EXTERNAL_UNTYPED_TASK_TYPE);
   });
 });
+// @vitest-environment node

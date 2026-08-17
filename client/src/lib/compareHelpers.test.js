@@ -108,3 +108,4 @@ describe('equalListByKeys', () => {
     expect(equalListByKeys([], [], ['id'])).toBe(true);
   });
 });
+// @vitest-environment node

@@ -140,3 +140,4 @@ describe('dispatch cap helpers', () => {
     expect(dispatchCapInput(50)).toBe(50);
   });
 });
+// @vitest-environment node

@@ -66,3 +66,4 @@ describe('interactive Spotify import wrappers', () => {
     expect(JSON.parse(options.body)).toEqual({ providerId: 'local', model: 'example-model' });
   });
 });
+// @vitest-environment node

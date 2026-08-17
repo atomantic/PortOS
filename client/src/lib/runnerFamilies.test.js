@@ -61,3 +61,4 @@ describe('runnerFamilies mirror', () => {
     expect(isVideoLoraFamily(null)).toBe(false);
   });
 });
+// @vitest-environment node

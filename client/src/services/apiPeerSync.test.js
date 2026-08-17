@@ -133,3 +133,4 @@ describe('pullMissingMetadata', () => {
     expect(result).toEqual({ attempted: 5001, recovered: 11 });
   });
 });
+// @vitest-environment node

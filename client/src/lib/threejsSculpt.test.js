@@ -121,3 +121,4 @@ describe('sculptMaterialProps', () => {
     expect(props).toEqual({ color: '#ffffff', opacity: 1, transparent: false, wireframe: false });
   });
 });
+// @vitest-environment node

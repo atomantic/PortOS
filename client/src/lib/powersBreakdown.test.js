@@ -23,3 +23,4 @@ describe('powersBreakdown', () => {
     expect(powersBreakdownFromPrompt('not a power')).toBeNull();
   });
 });
+// @vitest-environment node

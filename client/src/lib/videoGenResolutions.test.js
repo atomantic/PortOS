@@ -70,3 +70,4 @@ describe('model-specific video resolutions', () => {
     expect(defaultResolutionForModel({})).toEqual(DEFAULT_VIDEO_RESOLUTION);
   });
 });
+// @vitest-environment node

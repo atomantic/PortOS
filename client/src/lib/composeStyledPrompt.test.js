@@ -56,3 +56,4 @@ describe('composeCanonStyledPrompt', () => {
     expect(out).toEqual({ prompt: 'Vale: detective', negativePrompt: 'lowres' });
   });
 });
+// @vitest-environment node

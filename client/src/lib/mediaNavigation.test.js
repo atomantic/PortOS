@@ -42,3 +42,4 @@ describe('getMediaNavProps', () => {
     expect(onSelect.mock.calls).toEqual([[{ key: 'one' }], [{ key: 'three' }]]);
   });
 });
+// @vitest-environment node

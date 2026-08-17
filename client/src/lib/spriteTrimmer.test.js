@@ -130,3 +130,4 @@ describe('buildTrimmerSources', () => {
     expect(buildTrimmerSources({ runs: [] }, null)).toEqual([]);
   });
 });
+// @vitest-environment node

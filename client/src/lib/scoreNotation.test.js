@@ -238,3 +238,4 @@ describe('scoreHasMusic', () => {
     expect(scoreHasMusic('')).toBe(false);
   });
 });
+// @vitest-environment node

@@ -91,3 +91,4 @@ describe('diffLineBlocks', () => {
     expect(LINE_DIFF_CELL_CAP).toBe(4_000_000);
   });
 });
+// @vitest-environment node

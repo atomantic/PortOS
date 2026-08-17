@@ -100,3 +100,4 @@ describe('describeDirectional', () => {
       .toEqual({ state: 'pending', text: 'checking…' });
   });
 });
+// @vitest-environment node

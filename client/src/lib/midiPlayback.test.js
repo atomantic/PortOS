@@ -155,3 +155,4 @@ describe('createMidiPlayer', () => {
     expect(ended).toHaveBeenCalledTimes(1);
   });
 });
+// @vitest-environment node

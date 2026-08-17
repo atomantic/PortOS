@@ -51,3 +51,4 @@ describe('formatVoiceLabel', () => {
     expect(formatVoiceLabel({ engine: 'elevenlabs', id: 'elevenlabs:rachel' })).toBe('elevenlabs:rachel');
   });
 });
+// @vitest-environment node

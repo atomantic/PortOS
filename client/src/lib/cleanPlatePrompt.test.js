@@ -81,3 +81,4 @@ describe('composeCleanPlatePrompt', () => {
     expect(out.prompt).toContain('a rooftop helipad');
   });
 });
+// @vitest-environment node

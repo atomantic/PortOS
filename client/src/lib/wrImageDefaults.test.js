@@ -35,3 +35,4 @@ describe('buildSceneRenderPayload', () => {
     expect(payload).not.toHaveProperty('writersRoom');
   });
 });
+// @vitest-environment node

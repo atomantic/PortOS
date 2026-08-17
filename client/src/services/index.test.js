@@ -31,3 +31,4 @@ describe('client/src/services/ catalog', () => {
     }
   });
 });
+// @vitest-environment node

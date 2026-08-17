@@ -24,3 +24,4 @@ describe('upsertByIdPrepend', () => {
     expect(list).toEqual([{ id: 'a' }, { id: 'b' }]);
   });
 });
+// @vitest-environment node

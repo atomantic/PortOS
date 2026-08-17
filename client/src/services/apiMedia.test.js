@@ -101,3 +101,4 @@ describe('saveCleanResult', () => {
     expect(out.filename).toBe('upload-abc.png');
   });
 });
+// @vitest-environment node

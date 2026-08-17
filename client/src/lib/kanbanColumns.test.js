@@ -115,3 +115,4 @@ describe('columnConfig', () => {
     expect(columnConfig({ name: 'Mystery', category: 'Weird' }).dot).toBe('bg-port-accent');
   });
 });
+// @vitest-environment node

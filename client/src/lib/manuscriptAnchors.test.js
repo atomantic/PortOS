@@ -96,3 +96,4 @@ describe('buildHighlightSegments', () => {
     expect(segs[0]).toEqual({ text: 'ab', commentIds: ['x'], topSeverity: 'low' });
   });
 });
+// @vitest-environment node

@@ -150,3 +150,4 @@ describe('buildClinicianReport + reportToMarkdown', () => {
     expect(conditionRow.match(/(?<!\\)\|/g)).toHaveLength(4);
   });
 });
+// @vitest-environment node

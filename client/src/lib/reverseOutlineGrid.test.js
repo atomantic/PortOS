@@ -52,3 +52,4 @@ describe('sceneComponentCount', () => {
     expect(sceneComponentCount(null)).toBe(0);
   });
 });
+// @vitest-environment node

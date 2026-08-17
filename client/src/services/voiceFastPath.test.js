@@ -249,3 +249,4 @@ describe('resolveTurn', () => {
     expect(promptNano).not.toHaveBeenCalled();
   });
 });
+// @vitest-environment node

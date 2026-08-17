@@ -282,3 +282,4 @@ describe('computeExplodeLayout', () => {
     expect(buildPartSelectionIndex(undefined).owners).toEqual({});
   });
 });
+// @vitest-environment node

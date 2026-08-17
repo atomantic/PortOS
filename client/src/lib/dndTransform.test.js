@@ -27,3 +27,4 @@ describe('dndTransformToCss', () => {
     expect(dndTransformToCss(undefined)).toBeUndefined();
   });
 });
+// @vitest-environment node

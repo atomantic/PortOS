@@ -119,3 +119,4 @@ describe('buildTerminalTheme', () => {
     }
   });
 });
+// @vitest-environment node

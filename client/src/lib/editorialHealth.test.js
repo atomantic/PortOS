@@ -227,3 +227,4 @@ describe('snapshotDiff', () => {
     expect(snapshotDiff(noChecks, prev).bySeverity.length).toBeGreaterThan(0);
   });
 });
+// @vitest-environment node

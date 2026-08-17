@@ -27,3 +27,4 @@ describe('client/src/lib/ barrel', () => {
     }
   });
 });
+// @vitest-environment node

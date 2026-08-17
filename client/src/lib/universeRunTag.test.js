@@ -28,3 +28,4 @@ describe('buildUniverseSectionRenderTag', () => {
     expect(buildUniverseSectionRenderTag(universe, '', entry)).toBeNull(); // no kindKey
   });
 });
+// @vitest-environment node

@@ -173,3 +173,4 @@ describe('getCharacter query building (#2676)', () => {
     expect(request.mock.calls[0][1]).toEqual({ silent: true });
   });
 });
+// @vitest-environment node

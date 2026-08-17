@@ -51,3 +51,4 @@ describe('summarizeThreejsArticulation', () => {
     expect(Object.getPrototypeOf(summary.jointsByPartId)).toBeNull();
   });
 });
+// @vitest-environment node

@@ -49,3 +49,4 @@ describe('projectAnalyzedPoints', () => {
     expect(projectAnalyzedPoints()).toEqual([]);
   });
 });
+// @vitest-environment node

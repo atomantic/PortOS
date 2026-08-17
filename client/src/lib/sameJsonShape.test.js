@@ -30,3 +30,4 @@ describe('sameJsonShape', () => {
     expect(sameJsonShape(null, null)).toBe(true);
   });
 });
+// @vitest-environment node

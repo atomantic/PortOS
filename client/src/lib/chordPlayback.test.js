@@ -172,3 +172,4 @@ describe('resolveChordPlayhead', () => {
     expect(resolveChordPlayhead(null, 1)).toBeNull();
   });
 });
+// @vitest-environment node

@@ -93,3 +93,4 @@ describe('getCatalogFacets (#1762)', () => {
     expect(request).toHaveBeenCalledWith('/catalog/facets', undefined);
   });
 });
+// @vitest-environment node

@@ -32,3 +32,4 @@ describe('buildUnsortedCollection', () => {
     expect(result.synthetic).toBe(true);
   });
 });
+// @vitest-environment node

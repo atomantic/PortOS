@@ -47,3 +47,4 @@ describe('letteringDensity (client mirror)', () => {
     expect(analyzeComicLettering([{ panels: [{ dialogue: [balloon('A', 8)], caption: 'A beat.' }] }])).toEqual([]);
   });
 });
+// @vitest-environment node

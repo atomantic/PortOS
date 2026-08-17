@@ -94,3 +94,4 @@ describe('sceneAtCursor', () => {
     expect(sceneAtCursor(dupScenes, dupBody, firstCaret)?.scene.id).toBe('a');
   });
 });
+// @vitest-environment node

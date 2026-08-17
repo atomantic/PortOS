@@ -247,3 +247,4 @@ describe('formatManuscript — whitespace hygiene (all stages)', () => {
     expect(formatManuscript(null, 'prose')).toBe('');
   });
 });
+// @vitest-environment node

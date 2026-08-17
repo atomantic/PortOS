@@ -150,3 +150,4 @@ describe('createChordPlayer', () => {
     expect(ended).toHaveBeenCalled();
   });
 });
+// @vitest-environment node

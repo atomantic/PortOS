@@ -77,3 +77,4 @@ describe('filterByQuery', () => {
     expect(filterByQuery(items, 'neon sdxl')).toHaveLength(0);
   });
 });
+// @vitest-environment node

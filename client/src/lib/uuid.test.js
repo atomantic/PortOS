@@ -53,3 +53,4 @@ describe('uuidv4', () => {
     });
   });
 });
+// @vitest-environment node

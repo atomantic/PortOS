@@ -261,3 +261,4 @@ describe('createMultiScorePlayer', () => {
     expect(ended).toHaveBeenCalled();
   });
 });
+// @vitest-environment node

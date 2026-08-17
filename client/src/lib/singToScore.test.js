@@ -221,3 +221,4 @@ describe('transcribePitchTrack (round-trip)', () => {
     expect(transcribePitchTrack(synth([{ note: null, durMs: 1000 }]), { bpm: 120 })).toBe('');
   });
 });
+// @vitest-environment node

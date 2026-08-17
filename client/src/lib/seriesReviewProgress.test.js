@@ -116,3 +116,4 @@ describe('summarizeReviewProgress', () => {
     expect(s.headline).toBe(`${REVIEW_STEP_LABELS.canon}…`);
   });
 });
+// @vitest-environment node

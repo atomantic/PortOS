@@ -85,3 +85,4 @@ describe('tribeCadence — cadence rules (semantics preserved from #2032)', () =
     expect(clientCadenceStatus({ ring: 'core', lastContact: daysAgo(13), cadenceDays: 21 }).state).toBe('steady');
   });
 });
+// @vitest-environment node

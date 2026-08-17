@@ -159,3 +159,4 @@ describe('applyCollectionView', () => {
     expect(applyCollectionView([])).toEqual([]);
   });
 });
+// @vitest-environment node

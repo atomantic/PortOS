@@ -92,3 +92,4 @@ describe('universeBuilderCounts — scopedPromptCount', () => {
     expect(scopedPromptCount(world(), scope)).toBe(5);
   });
 });
+// @vitest-environment node

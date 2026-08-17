@@ -77,3 +77,4 @@ describe('postQuickSession', () => {
     })).toMatchObject({ count: 5, steps: 4, maxDigits: 2 });
   });
 });
+// @vitest-environment node

@@ -175,3 +175,4 @@ describe('autopilotMarkerTerminal (#4140)', () => {
     expect(statuses(rows).foundationGate).toBe(MILESTONE_STATUS.BLOCKED);
   });
 });
+// @vitest-environment node

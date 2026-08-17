@@ -76,3 +76,4 @@ describe('getCreativeDirectorProjectsByIds', () => {
     expect(request.mock.calls[0][1]).toEqual({ silent: true });
   });
 });
+// @vitest-environment node

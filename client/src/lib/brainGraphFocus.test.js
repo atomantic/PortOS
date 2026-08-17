@@ -54,3 +54,4 @@ describe('currentFocusId', () => {
     expect(currentFocusId([{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }])).toBe('b');
   });
 });
+// @vitest-environment node

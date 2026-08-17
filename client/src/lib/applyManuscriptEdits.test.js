@@ -72,3 +72,4 @@ describe('planManuscriptEdits', () => {
     expect(plan).toMatchObject({ applied: 2, notFound: 0, overlapping: 0 });
   });
 });
+// @vitest-environment node

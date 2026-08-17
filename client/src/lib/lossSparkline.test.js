@@ -50,3 +50,4 @@ describe('lossSparklineGeometry', () => {
     expect(lossSparklineGeometry(undefined)).toMatchObject({ points: '', last: null });
   });
 });
+// @vitest-environment node

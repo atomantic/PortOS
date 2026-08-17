@@ -50,3 +50,4 @@ describe('healthProvenance', () => {
     expect(getProvenanceLevel(42)).toBe(PROVENANCE_LEVELS.inferred);
   });
 });
+// @vitest-environment node

@@ -82,3 +82,4 @@ describe('apiMeatspace double-toast wrappers forward options', () => {
     expect(options.method).toBe('POST');
   });
 });
+// @vitest-environment node

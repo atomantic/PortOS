@@ -1,0 +1,1 @@
+- Run browser-independent client tests in Node to reduce PR CI setup time

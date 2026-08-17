@@ -92,3 +92,4 @@ describe('clickableProps', () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 });
+// @vitest-environment node
