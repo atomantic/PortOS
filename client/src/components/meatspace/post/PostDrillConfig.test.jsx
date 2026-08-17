@@ -104,6 +104,10 @@ async function renderConfig(ui) {
   return result;
 }
 
+async function saveConfig() {
+  await act(async () => { fireEvent.click(screen.getByText('Save')); });
+}
+
 describe('PostDrillConfig', () => {
   it('renders a card for every one of the 14 LLM drill types', async () => {
     await renderConfig(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
@@ -121,8 +125,8 @@ describe('PostDrillConfig', () => {
 
   it('persists all 14 LLM drill types on save, with the 9 newly-exposed drills defaulting off', async () => {
     await renderConfig(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
-    fireEvent.click(screen.getByText('Save'));
-    await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+    await saveConfig();
+    expect(updatePostConfig).toHaveBeenCalled();
 
     const payload = updatePostConfig.mock.calls[0][0];
     const saved = payload.llmDrills.drillTypes;
@@ -143,8 +147,8 @@ describe('PostDrillConfig', () => {
     // Set a streak-target goal, then include AI drills in composed sessions.
     fireEvent.change(screen.getByLabelText(/Streak/i), { target: { value: '10' } });
     fireEvent.click(screen.getByRole('checkbox', { name: 'Wit & Memory (AI)' }));
-    fireEvent.click(screen.getByText('Save'));
-    await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+    await saveConfig();
+    expect(updatePostConfig).toHaveBeenCalled();
     const payload = updatePostConfig.mock.calls[0][0];
     expect(payload.goals).toEqual({ streakTarget: 10 });
     expect(payload.sessionModules).toContain('llm-drills');
@@ -156,8 +160,8 @@ describe('PostDrillConfig', () => {
     const memory = await screen.findByRole('checkbox', { name: 'Memory' });
     expect(memory.disabled).toBe(false);
     fireEvent.click(memory);
-    fireEvent.click(screen.getByText('Save'));
-    await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+    await saveConfig();
+    expect(updatePostConfig).toHaveBeenCalled();
     expect(updatePostConfig.mock.calls[0][0].sessionModules).toContain('memory');
   });
 
@@ -191,8 +195,8 @@ describe('PostDrillConfig', () => {
   it('clears a previously-set goal to an empty goals patch on save', async () => {
     await renderConfig(<PostDrillConfig config={{ ...config, goals: { streakTarget: 5 } }} onSaved={vi.fn()} onBack={vi.fn()} />);
     fireEvent.change(screen.getByLabelText(/Streak/i), { target: { value: '' } });
-    fireEvent.click(screen.getByText('Save'));
-    await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+    await saveConfig();
+    expect(updatePostConfig).toHaveBeenCalled();
     expect(updatePostConfig.mock.calls[0][0].goals).toEqual({});
   });
 
@@ -200,8 +204,8 @@ describe('PostDrillConfig', () => {
     await renderConfig(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
     // Toggle the "What If?" card (a previously-inaccessible imagination drill) on.
     fireEvent.click(screen.getByRole('switch', { name: 'What If?' }));
-    fireEvent.click(screen.getByText('Save'));
-    await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+    await saveConfig();
+    expect(updatePostConfig).toHaveBeenCalled();
 
     const saved = updatePostConfig.mock.calls[0][0].llmDrills.drillTypes;
     expect(saved['what-if'].enabled).toBe(true);
@@ -222,8 +226,8 @@ describe('PostDrillConfig', () => {
     };
     await renderConfig(<PostDrillConfig config={withPresentNewType} onSaved={vi.fn()} onBack={vi.fn()} />);
     expect(screen.getByRole('switch', { name: 'What If?' }).getAttribute('aria-checked')).toBe('true');
-    fireEvent.click(screen.getByText('Save'));
-    await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+    await saveConfig();
+    expect(updatePostConfig).toHaveBeenCalled();
     expect(updatePostConfig.mock.calls[0][0].llmDrills.drillTypes['what-if'].enabled).toBe(true);
   });
 
@@ -238,8 +242,8 @@ describe('PostDrillConfig', () => {
     await renderConfig(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
     const toggle = screen.getByRole('switch', { name: 'Adaptive difficulty' });
     expect(toggle.getAttribute('aria-checked')).toBe('false');
-    fireEvent.click(screen.getByText('Save'));
-    await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+    await saveConfig();
+    expect(updatePostConfig).toHaveBeenCalled();
     expect(updatePostConfig.mock.calls[0][0].adaptive).toEqual({ enabled: false });
   });
 
@@ -300,8 +304,8 @@ describe('PostDrillConfig', () => {
     await renderConfig(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
     fireEvent.click(screen.getByRole('switch', { name: 'Progressive difficulty — Multiplication' }));
     expect(screen.getByText('Max Digits')).toBeTruthy();
-    fireEvent.click(screen.getByText('Save'));
-    await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+    await saveConfig();
+    expect(updatePostConfig).toHaveBeenCalled();
     expect(updatePostConfig.mock.calls[0][0].mentalMath.drillTypes.multiplication.progressive).toBe(false);
   });
 
@@ -315,8 +319,8 @@ describe('PostDrillConfig', () => {
 
     fireEvent.click(toggle);
     expect(screen.getByText('Max Exponent')).toBeTruthy();
-    fireEvent.click(screen.getByText('Save'));
-    await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+    await saveConfig();
+    expect(updatePostConfig).toHaveBeenCalled();
     expect(updatePostConfig.mock.calls[0][0].mentalMath.drillTypes.powers.progressive).toBe(false);
   });
 
@@ -339,8 +343,8 @@ describe('PostDrillConfig', () => {
     await renderConfig(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
     fireEvent.click(screen.getByRole('switch', { name: 'Progressive difficulty — N-Back' }));
     expect(screen.getByText('Stimulus (ms)')).toBeTruthy();
-    fireEvent.click(screen.getByText('Save'));
-    await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+    await saveConfig();
+    expect(updatePostConfig).toHaveBeenCalled();
     expect(updatePostConfig.mock.calls[0][0].cognitive.drillTypes['n-back'].progressive).toBe(false);
   });
 
@@ -352,8 +356,8 @@ describe('PostDrillConfig', () => {
     expect(screen.getByText('Rotation Range')).toBeTruthy();
     expect(screen.getByText('Answer Options')).toBeTruthy();
 
-    fireEvent.click(screen.getByText('Save'));
-    await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+    await saveConfig();
+    expect(updatePostConfig).toHaveBeenCalled();
     const cognitive = updatePostConfig.mock.calls[0][0].cognitive.drillTypes;
     expect(cognitive.stroop).toMatchObject({ progressive: false, incongruentPct: 75 });
     expect(cognitive['mental-rotation']).toMatchObject({ progressive: false, rotationComplexity: 3, optionCount: 4 });
@@ -362,8 +366,8 @@ describe('PostDrillConfig', () => {
   it('toggling Adaptive on persists enabled=true', async () => {
     await renderConfig(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
     fireEvent.click(screen.getByRole('switch', { name: 'Adaptive difficulty' }));
-    fireEvent.click(screen.getByText('Save'));
-    await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+    await saveConfig();
+    expect(updatePostConfig).toHaveBeenCalled();
     expect(updatePostConfig.mock.calls[0][0].adaptive).toEqual({ enabled: true });
   });
 
@@ -372,8 +376,8 @@ describe('PostDrillConfig', () => {
     const toggle = screen.getByRole('switch', { name: 'Daily reminder' });
     expect(toggle.getAttribute('aria-checked')).toBe('false');
     expect(screen.queryByLabelText('Remind me at')).toBeNull();
-    fireEvent.click(screen.getByText('Save'));
-    await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+    await saveConfig();
+    expect(updatePostConfig).toHaveBeenCalled();
     expect(updatePostConfig.mock.calls[0][0].reminder).toEqual({ enabled: false, time: '09:00' });
   });
 
@@ -382,8 +386,8 @@ describe('PostDrillConfig', () => {
     fireEvent.click(screen.getByRole('switch', { name: 'Daily reminder' }));
     const timeInput = screen.getByLabelText('Remind me at');
     fireEvent.change(timeInput, { target: { value: '18:30' } });
-    fireEvent.click(screen.getByText('Save'));
-    await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+    await saveConfig();
+    expect(updatePostConfig).toHaveBeenCalled();
     expect(updatePostConfig.mock.calls[0][0].reminder).toEqual({ enabled: true, time: '18:30' });
   });
 
@@ -409,8 +413,8 @@ describe('PostDrillConfig', () => {
       expect(screen.getByRole('switch', { name: 'Wit & Memory (LLM) drills' }).getAttribute('aria-checked')).toBe('false');
       expect(screen.queryByText('AI Provider')).toBeNull();
 
-      fireEvent.click(screen.getByText('Save'));
-      await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+      await saveConfig();
+      expect(updatePostConfig).toHaveBeenCalled();
       const payload = updatePostConfig.mock.calls[0][0];
       expect(payload.mentalMath.drillTypes.multiplication.enabled).toBe(true);
       expect(payload.mentalMath.drillTypes.estimation.enabled).toBe(true);
@@ -484,8 +488,8 @@ describe('PostDrillConfig', () => {
       fireEvent.click(screen.getByLabelText('Enable all Cognitive drills'));
       expect(screen.getByRole('switch', { name: 'Cognitive drills' }).getAttribute('aria-checked')).toBe('true');
       expect(screen.getByRole('switch', { name: 'Digit Span' }).getAttribute('aria-checked')).toBe('true');
-      fireEvent.click(screen.getByText('Save'));
-      await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+      await saveConfig();
+      expect(updatePostConfig).toHaveBeenCalled();
       const payload = updatePostConfig.mock.calls[0][0];
       expect(payload.cognitive.enabled).toBe(true);
       expect(payload.cognitive.drillTypes['digit-span'].enabled).toBe(true);
