@@ -194,7 +194,7 @@ describe('system resource reporting', () => {
 
   it('surfaces strict size-scan failures instead of reporting a ready zero', async () => {
     fileUtils.dirSize.mockImplementation(async (path) => {
-      if (path === '/example/portos/node_modules') return null;
+      if (String(path).replaceAll('\\', '/') === '/example/portos/node_modules') return null;
       return path.includes('Downloads') ? 900 : 100;
     });
 

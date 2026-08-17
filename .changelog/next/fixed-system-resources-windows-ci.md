@@ -1,0 +1,1 @@
+- System Resources strict-scan coverage now passes consistently on Windows runners.
