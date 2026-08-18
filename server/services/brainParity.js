@@ -324,7 +324,6 @@ export async function runBrainParityCheck({ peerId } = {}) {
     return { reports: [{ peerId, available: false, reason: 'peer-not-found', checkedAt: new Date().toISOString() }] };
   }
 
-  const stored = await loadReports();
   const reports = [];
 
   // Sequential, not Promise.all: each peer costs a manifest fetch plus a full
@@ -333,14 +332,22 @@ export async function runBrainParityCheck({ peerId } = {}) {
   for (const peer of targets) {
     const report = await checkPeerBrainParity(peer);
     reports.push(report);
+    // Read-modify-write per peer rather than once around the whole sweep. A
+    // sweep can span minutes (each peer gets its own 30s fetch budget), and
+    // holding one in-memory copy across all of it would drop a report the user
+    // triggered from a peer card mid-sweep — and would lose every result if the
+    // sweep were interrupted before the final write.
     const key = report.peerInstanceId || report.peerId;
-    if (key) stored[key] = forStorage(report);
+    if (key) {
+      const stored = await loadReports();
+      stored[key] = forStorage(report);
+      await saveReports(stored);
+    }
     const detail = report.available
       ? `${report.summary[INTEGRITY_STATUS.LOCAL_ONLY]} local-only, ${report.summary[INTEGRITY_STATUS.PEER_ONLY]} peer-only, ${report.summary[INTEGRITY_STATUS.DIVERGED]} diverged`
       : report.reason;
     console.log(`🧠🔍 Brain parity vs ${peer.name || peer.id}: ${detail}`);
   }
 
-  if (reports.length > 0) await saveReports(stored);
   return { reports };
 }

@@ -67,7 +67,9 @@ function peerRoutes(routes) {
 beforeEach(() => {
   vi.clearAllMocks();
   brainReconcile.getBrainChecksum.mockResolvedValue('local-checksum');
-  readJSONFile.mockResolvedValue({});
+  // Fresh object per read: the service does a read-modify-write per peer, so a
+  // shared literal would let one write alias another and hide the per-peer save.
+  readJSONFile.mockImplementation(async () => ({}));
   stores();
 });
 
@@ -358,6 +360,29 @@ describe('runBrainParityCheck', () => {
     const { reports } = await runBrainParityCheck();
 
     expect(reports.map((r) => r.peerId)).toEqual(['peer-local-1', 'peer-local-2']);
+  });
+
+  it('files an un-probed peer under its local registry id', async () => {
+    getPeers.mockResolvedValue([{ ...PEER, instanceId: null }]);
+    peerFetch.mockResolvedValue(null);
+
+    await runBrainParityCheck({ peerId: 'peer-local-1' });
+
+    expect(Object.keys(atomicWrite.mock.calls[0][1])).toEqual(['peer-local-1']);
+  });
+
+  it('persists each peer as it finishes rather than once at the end', async () => {
+    getPeers.mockResolvedValue([
+      PEER,
+      { id: 'peer-local-2', instanceId: 'inst-peer-2', name: 'Second Peer', host: 'peer2.example.com', syncEnabled: true },
+    ]);
+    peerFetch.mockResolvedValue(null);
+
+    await runBrainParityCheck();
+
+    // One write per peer — an interrupted sweep keeps the peers it got through.
+    expect(atomicWrite).toHaveBeenCalledTimes(2);
+    expect(Object.keys(atomicWrite.mock.calls[0][1])).toEqual(['inst-peer-1']);
   });
 
   it('preserves reports for peers this run did not check', async () => {

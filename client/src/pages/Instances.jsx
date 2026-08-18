@@ -1460,13 +1460,17 @@ export default function Instances() {
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             {peers.map(peer => (
+              // Reports key on instanceId (the stable federation identity), but
+              // a peer audited before it was ever probed files under its local
+              // registry id — mirror that fallback here or its report reads as
+              // "not checked".
               <PeerCard
                 key={peer.id}
                 peer={peer}
                 onRefresh={fetchData}
                 syncStatus={syncStatus}
                 tailnetInfo={tailnetInfo}
-                parityReport={parityReports[peer.instanceId] ?? null}
+                parityReport={parityReports[peer.instanceId] ?? parityReports[peer.id] ?? null}
               />
             ))}
           </div>

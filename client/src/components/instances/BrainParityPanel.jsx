@@ -135,9 +135,9 @@ export default function BrainParityPanel({ peer, report: storedReport }) {
           {report?.available && (
             <>
               <div className="flex flex-wrap items-center gap-1.5">
-                <Pill tone="muted" size="xs" bordered={false}>{report.summary.total} records compared</Pill>
+                <Pill tone="muted" size="xs" bordered={false}>{report.summary?.total ?? 0} records compared</Pill>
                 {STATUS_META.map(({ key, label: statusLabel, tone: statusTone }) => (
-                  report.summary[key] > 0 && (
+                  report.summary?.[key] > 0 && (
                     <Pill key={key} tone={statusTone} size="xs" bordered={false}>
                       {report.summary[key]} {statusLabel}
                     </Pill>
