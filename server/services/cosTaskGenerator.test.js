@@ -171,11 +171,12 @@ describe('applyOnDemandConsent', () => {
       approvalRequired: true,
       autoApproved: false,
       approvalReason: 'safety-kind:publish',
-      metadata: { analysisType: 'release-check' }
+      metadata: { analysisType: 'release-check', approvalReason: 'safety-kind:publish' }
     };
     expect(applyOnDemandConsent(task)).toBe(task);
     expect(task).toMatchObject({ approvalRequired: false, autoApproved: true });
     expect(task.approvalReason).toBeUndefined();
+    expect(task.metadata.approvalReason).toBeUndefined();
   });
 
   it('leaves a requireApproval task gated so the schedule toggle still holds Run Now', () => {
@@ -205,6 +206,13 @@ describe('isConfiguredApprovalRequired', () => {
     expect(isConfiguredApprovalRequired({ requireApproval: false })).toBe(false);
     expect(isConfiguredApprovalRequired({ analysisType: 'release-check' })).toBe(false);
     expect(isConfiguredApprovalRequired(undefined)).toBe(false);
+  });
+
+  it('both generators stamp approvalReason onto metadata so the hint survives COS-TASKS.md', () => {
+    const selfStart = GEN_SRC.indexOf('export async function generateSelfImprovementTaskForType');
+    const appStart = GEN_SRC.indexOf('export async function generateManagedAppImprovementTaskForType');
+    expect(GEN_SRC.slice(selfStart, selfStart + 2500)).toContain('stampApprovalReason(metadata, approval)');
+    expect(GEN_SRC.slice(appStart, appStart + 9000)).toContain('stampApprovalReason(metadata, approval)');
   });
 
   it('resolveConfidenceApproval consults the toggle before safety-kind and confidence', () => {

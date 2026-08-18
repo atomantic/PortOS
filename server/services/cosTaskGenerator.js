@@ -1890,7 +1890,15 @@ export function applyOnDemandConsent(task) {
   task.approvalRequired = false;
   task.autoApproved = true;
   if ('approvalReason' in task) delete task.approvalReason;
+  // The hint TaskItem reads lives on metadata — COS-TASKS.md only persists
+  // that bag. Clear both so a consented Run Now does not keep a stale reason.
+  if (task.metadata && 'approvalReason' in task.metadata) delete task.metadata.approvalReason;
   return task;
+}
+
+function stampApprovalReason(metadata, approval) {
+  if (approval?.approvalReason) metadata.approvalReason = approval.approvalReason;
+  else delete metadata.approvalReason;
 }
 
 /**
@@ -1936,6 +1944,7 @@ export async function generateSelfImprovementTaskForType(taskType, state) {
   }
 
   const approval = await resolveConfidenceApproval(state, `self-improve:${taskType}`, `Task self-improve:${taskType}`, metadata);
+  stampApprovalReason(metadata, approval);
 
   const task = {
     id: `self-improve-${taskType}-${Date.now().toString(36)}`,
@@ -3055,6 +3064,7 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   applyProviderModelPins(metadata, interval, hookOverride);
 
   const approval = await resolveConfidenceApproval(state, `app-improve:${taskType}`, `Task app-improve:${taskType} for ${app.name}`, metadata);
+  stampApprovalReason(metadata, approval);
 
   // All gates passed — stamp the buildTaskInput hook's metadata bag, record the
   // rotation-pointer advance, and emit the generation log. Deferred from the top
