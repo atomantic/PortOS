@@ -259,19 +259,19 @@ describe('both on-demand engines apply consent before addTask', () => {
   });
 });
 
-// #1650: once a peer's claim/lease is visible via task-record federation, a
-// task whose live lease belongs to ANOTHER instance must be skipped during
-// candidate selection — BEFORE the engine emits `task:ready` + trackSpawn.
-// Otherwise that peer-claimed task (often the highest-priority pick) consumes
-// this instance's spawn slot every cycle (the spawn guard then returns null,
-// spawning nothing) and starves later unclaimed tasks. Both spawn engines
-// (dequeueNextTask in cos.js, evaluateTasks here) must apply it, in both their
-// execute loops AND their dry-run plan.
-describe('peer-claim skip during candidate selection (#1650)', () => {
-  it('both engines import isHeldByOther from the shared claim module', () => {
+// #1650/#4520: a task this instance must not run — a live lease held by ANOTHER
+// instance, or a pin naming another instance — must be skipped during candidate
+// selection, BEFORE the engine emits `task:ready` + trackSpawn. Otherwise that
+// task (often the highest-priority pick) consumes this instance's spawn slot
+// every cycle (the spawn guard then returns null, spawning nothing) and starves
+// later runnable tasks. Both spawn engines (dequeueNextTask in cos.js,
+// evaluateTasks here) must apply it, in both their execute loops AND their
+// dry-run plan. `getSkipReason` answers both halves in one call.
+describe('not-runnable-here skip during candidate selection (#1650, #4520)', () => {
+  it('both engines import getSkipReason from the shared claim module', () => {
     expect(COS_SRC).toContain("from './cosTaskClaim.js'");
-    expect(COS_SRC).toMatch(/import\s*\{[^}]*isHeldByOther[^}]*\}\s*from\s*'\.\/cosTaskClaim\.js'/);
-    expect(GEN_SRC).toMatch(/import\s*\{[^}]*isHeldByOther[^}]*\}\s*from\s*'\.\/cosTaskClaim\.js'/);
+    expect(COS_SRC).toMatch(/import\s*\{[^}]*getSkipReason[^}]*\}\s*from\s*'\.\/cosTaskClaim\.js'/);
+    expect(GEN_SRC).toMatch(/import\s*\{[^}]*getSkipReason[^}]*\}\s*from\s*'\.\/cosTaskClaim\.js'/);
   });
 
   it('both engines resolve this instance id once per cycle via ensureInstanceId', () => {
@@ -279,18 +279,20 @@ describe('peer-claim skip during candidate selection (#1650)', () => {
     expect(GEN_SRC).toContain('const instanceId = await ensureInstanceId();');
   });
 
-  it('both engines skip peer-held tasks in their EXECUTE candidate loops', () => {
-    // Each engine must have the live-lease skip in BOTH the user-task and the
-    // auto-approved tiers — at least two execute-path skip sites per engine.
-    const cosSkips = COS_SRC.match(/if\s*\(isHeldByOther\(task\.metadata,\s*instanceId\)\)/g) || [];
-    const genSkips = GEN_SRC.match(/if\s*\(isHeldByOther\(task\.metadata,\s*instanceId\)\)/g) || [];
+  it('both engines skip not-runnable-here tasks in their EXECUTE candidate loops', () => {
+    // Each engine must have the skip in BOTH the user-task and the auto-approved
+    // tiers — at least two execute-path skip sites per engine.
+    const cosSkips = COS_SRC.match(/getSkipReason\(task\.metadata,\s*instanceId\);\n\s*if \(skipReason\)/g) || [];
+    const genSkips = GEN_SRC.match(/getSkipReason\(task\.metadata,\s*instanceId\);\n\s*if \(skipReason\)/g) || [];
     expect(cosSkips.length).toBeGreaterThanOrEqual(2);
     expect(genSkips.length).toBeGreaterThanOrEqual(2);
   });
 
-  it('both engines pass heldByOther into their dry-run plan so it matches execute', () => {
-    expect(COS_SRC).toContain('heldByOther: (task) => isHeldByOther(task.metadata, instanceId)');
-    expect(GEN_SRC).toContain('heldByOther: (task) => isHeldByOther(task.metadata, instanceId)');
+  it('both engines pass notRunnableHere into their dry-run plan so it matches execute', () => {
+    // Covers BOTH reasons this instance passes over a task at spawn time: a
+    // peer's live lease (#1650) and a pin to another instance (#4520).
+    expect(COS_SRC).toContain('notRunnableHere: (task) => getSkipReason(task.metadata, instanceId) !== null');
+    expect(GEN_SRC).toContain('notRunnableHere: (task) => getSkipReason(task.metadata, instanceId) !== null');
   });
 });
 
@@ -902,7 +904,7 @@ describe('selectDryRunAutoApproved', () => {
     const tasks = [task('1', { claimedBy: 'peer' }), task('2'), task('3', { claimedBy: 'peer' })];
     const out = await selectDryRunAutoApproved(tasks, {
       ...baseCtx,
-      heldByOther: (t) => t.metadata?.claimedBy === 'peer'
+      notRunnableHere: (t) => t.metadata?.claimedBy === 'peer'
     });
     expect(out.map(t => t.id)).toEqual(['2']);
   });
@@ -914,7 +916,7 @@ describe('selectDryRunAutoApproved', () => {
     const out = await selectDryRunAutoApproved(tasks, {
       ...baseCtx,
       perProjectLimit: 1,
-      heldByOther: (t) => t.metadata?.claimedBy === 'peer'
+      notRunnableHere: (t) => t.metadata?.claimedBy === 'peer'
     });
     expect(out.map(t => t.id)).toEqual(['2']);
   });

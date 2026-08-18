@@ -8,7 +8,11 @@ import {
   isHeldByOther,
   buildClaim,
   buildRenewal,
-  buildRelease
+  buildRelease,
+  TARGET_INSTANCE_KEY,
+  getTargetInstance,
+  isTargetedElsewhere,
+  getSkipReason
 } from './cosTaskClaim.js';
 
 const A = 'instance-aaaa';
@@ -161,5 +165,69 @@ describe('two-instance claim simulation (#1563 acceptance criterion 5)', () => {
     task.metadata = applyPatch(task.metadata, buildRelease());
     for (const key of CLAIM_METADATA_KEYS) expect(key in task.metadata).toBe(false);
     expect(isClaimableBy(task.metadata, B, T0)).toBe(true);
+  });
+});
+
+describe('targeted assignment (#4520)', () => {
+  describe('getTargetInstance', () => {
+    it('returns the pinned instance, or null when unpinned', () => {
+      expect(getTargetInstance({ [TARGET_INSTANCE_KEY]: A })).toBe(A);
+      expect(getTargetInstance({})).toBeNull();
+      expect(getTargetInstance(null)).toBeNull();
+    });
+    it('treats a blank / whitespace-only / non-string pin as unpinned', () => {
+      // A pin no instance can match would strand the task unrunnable everywhere,
+      // so an empty value must read as "any instance", not as a target.
+      expect(getTargetInstance({ [TARGET_INSTANCE_KEY]: '' })).toBeNull();
+      expect(getTargetInstance({ [TARGET_INSTANCE_KEY]: '   ' })).toBeNull();
+      expect(getTargetInstance({ [TARGET_INSTANCE_KEY]: 42 })).toBeNull();
+    });
+    it('trims a padded pin so it still matches its instance id', () => {
+      expect(getTargetInstance({ [TARGET_INSTANCE_KEY]: `  ${A}  ` })).toBe(A);
+    });
+  });
+
+  describe('isTargetedElsewhere', () => {
+    it('false for an unpinned task — the pre-#4520 default is unchanged', () => {
+      expect(isTargetedElsewhere({}, A)).toBe(false);
+      expect(isTargetedElsewhere({ claimedBy: B }, A)).toBe(false);
+    });
+    it('false on the instance the task is pinned to', () => {
+      expect(isTargetedElsewhere({ [TARGET_INSTANCE_KEY]: A }, A)).toBe(false);
+    });
+    it('true on every other instance', () => {
+      expect(isTargetedElsewhere({ [TARGET_INSTANCE_KEY]: B }, A)).toBe(true);
+    });
+  });
+
+  describe('getSkipReason', () => {
+    it('null for an unclaimed, unpinned task', () => {
+      expect(getSkipReason({}, A, T0)).toBeNull();
+    });
+    it('null for a task pinned here, even while this instance holds the lease', () => {
+      const metadata = { ...buildClaim(A, { now: T0 }), [TARGET_INSTANCE_KEY]: A };
+      expect(getSkipReason(metadata, A, T0)).toBeNull();
+    });
+    it('names the pin when the task belongs to another instance', () => {
+      expect(getSkipReason({ [TARGET_INSTANCE_KEY]: B }, A, T0)).toContain(B);
+    });
+    it('skips a task pinned elsewhere even when it is idle and unclaimed', () => {
+      // Acceptance criterion 1: peer A must pass over peer B's task while both
+      // are idle — the pin, not the lease, is what holds it back.
+      expect(getSkipReason({ [TARGET_INSTANCE_KEY]: B }, A, T0)).not.toBeNull();
+    });
+    it('names the lease when an unpinned task is held by a peer', () => {
+      const reason = getSkipReason(buildClaim(B, { now: T0 }), A, T0);
+      expect(reason).toContain(B);
+      expect(reason).toContain('lease');
+    });
+    it('reports the pin ahead of the lease when both apply', () => {
+      const metadata = { ...buildClaim(B, { now: T0 }), [TARGET_INSTANCE_KEY]: B };
+      expect(getSkipReason(metadata, A, T0)).not.toContain('lease');
+    });
+    it('null once a peer lease expires on an unpinned task', () => {
+      const metadata = buildClaim(B, { now: T0 });
+      expect(getSkipReason(metadata, A, T0 + LEASE_DURATION_MS + 1)).toBeNull();
+    });
   });
 });

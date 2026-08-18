@@ -133,6 +133,14 @@ router.get('/', asyncHandler(async (req, res) => {
   res.json({ self, peers: peers.map(instances.sanitizePeerForClient), syncStatus });
 }));
 
+// GET /api/instances/assignable — id/name pairs a CoS task may be pinned to
+// (#4520). Deliberately narrower than GET / above: no addresses, no sync state,
+// no peer that has yet to advertise a federation identity — just what the task
+// form's instance picker renders.
+router.get('/assignable', asyncHandler(async (req, res) => {
+  res.json({ instances: await instances.getAssignableInstances() });
+}));
+
 // GET /api/instances/sync-status — local sync sequences + checksums (used by peers during probe)
 // A probing peer may pass `?forPeer=<its instanceId>` to also receive OUR cursor
 // into its data (`cursorForYou`) — how far we've pulled from it. That cursor is

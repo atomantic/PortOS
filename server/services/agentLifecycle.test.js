@@ -624,6 +624,27 @@ describe('runAgentSpawn source — instance provenance + claim ordering (#1563)'
     expect(guardIdx, 'the claim guard must run BEFORE registering the agent').toBeLessThan(registerIdx);
   });
 
+  // #4520: a task pinned to a specific federated instance runs ONLY there. The
+  // pin is a standing decision, so it gates the spawn ahead of the opportunistic
+  // lease check — and is re-checked against the fresh record, because a
+  // reassignment can sync in between the dequeue and the claim.
+  it('refuses to spawn a task pinned to another instance, before the lease check', () => {
+    const targetIdx = RUN_SPAWN_BODY.indexOf('isTargetedElsewhere(task.metadata, instanceId)');
+    const leaseIdx = RUN_SPAWN_BODY.indexOf('isClaimableBy(task.metadata, instanceId)');
+    const registerIdx = RUN_SPAWN_BODY.indexOf('registerAgent(agentId, task.id, {');
+    expect(targetIdx, 'must gate the spawn on isTargetedElsewhere').toBeGreaterThan(-1);
+    expect(targetIdx, 'the pin guard must run BEFORE the lease guard').toBeLessThan(leaseIdx);
+    expect(targetIdx, 'the pin guard must run BEFORE registering the agent').toBeLessThan(registerIdx);
+  });
+
+  it('re-checks the pin against the freshest task, before claiming it', () => {
+    const rereadIdx = RUN_SPAWN_BODY.indexOf('await getTaskById(task.id)');
+    const recheckIdx = RUN_SPAWN_BODY.indexOf('isTargetedElsewhere(freshTask.metadata, instanceId)');
+    const acquireIdx = RUN_SPAWN_BODY.indexOf('metadata: buildClaim(instanceId)');
+    expect(recheckIdx, 'must re-check the pin against the fresh metadata').toBeGreaterThan(rereadIdx);
+    expect(recheckIdx, 'the fresh pin re-check must precede taking the claim').toBeLessThan(acquireIdx);
+  });
+
   it('stamps the federation claim into the in_progress task update', () => {
     expect(AGENT_LIFECYCLE_SRC).toMatch(/\.\.\.buildClaim\(instanceId\)/);
   });

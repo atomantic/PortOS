@@ -323,6 +323,31 @@ describe('cosTaskStore.addTask', () => {
     expect(mock.events.some(e => e.name === 'tasks:changed' && e.payload.action === 'added' && e.payload.type === 'user')).toBe(true);
   });
 
+  describe('targeted instance pin (#4520)', () => {
+    it('persists targetInstanceId and round-trips it through markdown', async () => {
+      const created = await addTask({ description: 'gpu work', id: 'task-pin', targetInstanceId: 'instance-bbbb' }, 'user');
+      expect(created.metadata.targetInstanceId).toBe('instance-bbbb');
+      expect((await getTaskById('task-pin')).metadata.targetInstanceId).toBe('instance-bbbb');
+    });
+
+    it('omits the key entirely when unpinned, so the default stays opportunistic', async () => {
+      const created = await addTask({ description: 'anywhere', id: 'task-nopin' }, 'user');
+      expect('targetInstanceId' in created.metadata).toBe(false);
+    });
+
+    it('treats a blank pin as unpinned rather than a target nothing can match', async () => {
+      const created = await addTask({ description: 'blank', id: 'task-blankpin', targetInstanceId: '   ' }, 'user');
+      expect('targetInstanceId' in created.metadata).toBe(false);
+    });
+
+    it('clears the pin when an update passes it as undefined', async () => {
+      await addTask({ description: 'repin', id: 'task-repin', targetInstanceId: 'instance-bbbb' }, 'user');
+      const cleared = await updateTask('task-repin', { metadata: { targetInstanceId: undefined } }, 'user');
+      expect('targetInstanceId' in cleared.metadata).toBe(false);
+      expect((await getTaskById('task-repin')).metadata.targetInstanceId).toBeUndefined();
+    });
+  });
+
   describe('prompt / context split (#4153)', () => {
     const AGENT_BODY = 'Improve Example App\n\n## Phase 1\nRead PLAN.md.';
 

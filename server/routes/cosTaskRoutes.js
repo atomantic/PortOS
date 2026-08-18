@@ -9,6 +9,7 @@ import * as taskWatcher from '../services/taskWatcher.js';
 import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
 import { buildClaimWorkTask, buildJiraTicketTask } from '../services/cosTaskGenerator.js';
 import { getAppById } from '../services/apps.js';
+import { getAssignableInstances } from '../services/instances.js';
 import { workTrackerLabel } from '../lib/workTracker.js';
 import { getSlashdoWorkflow, slashdoWorkflowAppliesTo, SLASHDO_COMMAND_NAMES } from '../lib/slashdoCatalog.js';
 import { NON_PM2_TYPES } from '../services/streamingDetect.js';
@@ -35,6 +36,17 @@ const jiraTicketTaskSchema = z.object({
   app: z.string().min(1),
   ticketKey: z.string().trim().regex(/^[A-Za-z][A-Za-z0-9]*-\d+$/, 'Invalid JIRA ticket key'),
 });
+
+// Reject a task pinned to an instance this install does not know (#4520). The
+// picker only offers registry members, so this catches the two ways a bad pin
+// still arrives: a hand-crafted request, and a peer removed between the form
+// render and the submit. A pin no instance matches is worse than none — every
+// peer would pass over the task and it would sit pending forever.
+async function assertAssignableInstance(instanceId) {
+  const assignable = await getAssignableInstances();
+  if (assignable.some(i => i.instanceId === instanceId)) return;
+  throw new ServerError('Unknown instance — pick one of this install\'s federated instances', { status: 400, code: 'UNKNOWN_INSTANCE' });
+}
 
 const router = Router();
 
@@ -292,6 +304,7 @@ router.post('/tasks', asyncHandler(async (req, res) => {
   const parsed = createCosTaskSchema.safeParse(req.body);
   if (!parsed.success) failValidation(parsed);
   const { type, ...taskData } = parsed.data;
+  if (taskData.targetInstanceId) await assertAssignableInstance(taskData.targetInstanceId);
   const result = await cos.addTask(taskData, type);
 
   if (result?.duplicate) {
@@ -321,9 +334,19 @@ router.put('/tasks/:id', asyncHandler(async (req, res) => {
   if (fields.thinking !== undefined) updates.thinking = fields.thinking;
   if (fields.app !== undefined) updates.app = fields.app;
 
+  // Re-pin (or unpin) the federated instance this task runs on (#4520). `null`
+  // is the explicit clear the schema preserves — it lands as `undefined` in the
+  // metadata patch, which the store's undefined-stripping turns into a real key
+  // removal, restoring opportunistic first-claim-wins. Absent leaves the pin
+  // untouched (absent-vs-cleared, CLAUDE.md).
+  if (fields.targetInstanceId !== undefined) {
+    if (fields.targetInstanceId !== null) await assertAssignableInstance(fields.targetInstanceId);
+    updates.metadata = { ...updates.metadata, targetInstanceId: fields.targetInstanceId ?? undefined };
+  }
+
   // Set blocker metadata when marking as blocked
   if (fields.status === 'blocked' && blockedReason) {
-    updates.metadata = { blocker: blockedReason };
+    updates.metadata = { ...updates.metadata, blocker: blockedReason };
   }
 
   const result = await cos.updateTask(id, updates, type);

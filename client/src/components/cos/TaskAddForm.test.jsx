@@ -13,6 +13,10 @@ const api = vi.hoisted(() => ({
   addCosTask: vi.fn()
 }));
 
+// useAssignableInstances reads the instance registry straight off apiSystem, so
+// the picker (#4520) has to be driven from there rather than the `api` barrel.
+const apiSystem = vi.hoisted(() => ({ getAssignableInstances: vi.fn() }));
+vi.mock('../../services/apiSystem', () => apiSystem);
 vi.mock('../../services/api', () => api);
 
 describe('TaskAddForm responsive layout', () => {
@@ -23,6 +27,7 @@ describe('TaskAddForm responsive layout', () => {
     api.getLocalLlmStatus.mockResolvedValue({ ollama: { models: [] }, lmstudio: { models: [] } });
     api.getProviders.mockResolvedValue({ providers: [] });
     api.applyCosTaskTemplate.mockResolvedValue({ success: true });
+    apiSystem.getAssignableInstances.mockResolvedValue({ instances: [] });
   });
 
   it('keeps PR completion controls full-width on mobile', async () => {
@@ -210,5 +215,51 @@ describe('TaskAddForm quick templates — deliverable posture', () => {
     await user.click(screen.getByRole('button', { name: /^Add$/ }));
     await waitFor(() => expect(api.addCosTask).toHaveBeenCalled());
     expect('worktreeChangesExpected' in api.addCosTask.mock.calls.at(-1)[0]).toBe(false);
+  });
+});
+
+// #4520: on a federated install the form offers "which machine runs this?".
+describe('TaskAddForm federated instance picker (#4520)', () => {
+  const PEER = 'peer-instance-id';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getCosPopularTemplates.mockResolvedValue({ templates: [] });
+    api.getCodeReviewDefaults.mockResolvedValue(null);
+    api.getLocalLlmStatus.mockResolvedValue({ ollama: { models: [] }, lmstudio: { models: [] } });
+    api.getProviders.mockResolvedValue({ providers: [] });
+    api.addCosTask.mockResolvedValue({ success: true });
+  });
+
+  it('is hidden on a single-instance install — there is nothing to choose', async () => {
+    apiSystem.getAssignableInstances.mockResolvedValue({
+      instances: [{ instanceId: 'self-instance-id', name: 'workstation', isSelf: true }],
+    });
+    render(<TaskAddForm providers={[]} apps={[]} onTaskAdded={vi.fn()} />);
+    await waitFor(() => expect(apiSystem.getAssignableInstances).toHaveBeenCalled());
+    expect(screen.queryByLabelText('Run on')).toBeNull();
+  });
+
+  it('sends the picked instance with the task, and omits it for "Any instance"', async () => {
+    const user = userEvent.setup();
+    apiSystem.getAssignableInstances.mockResolvedValue({
+      instances: [
+        { instanceId: 'self-instance-id', name: 'workstation', isSelf: true },
+        { instanceId: PEER, name: 'render-box', isSelf: false },
+      ],
+    });
+    render(<TaskAddForm providers={[]} apps={[]} onTaskAdded={vi.fn()} />);
+    await waitFor(() => expect(screen.getByLabelText('Run on')).toBeInTheDocument());
+
+    await user.type(screen.getByPlaceholderText('Task description *'), 'Render the shot');
+    await user.click(screen.getByRole('button', { name: /^Add$/ }));
+    await waitFor(() => expect(api.addCosTask).toHaveBeenCalled());
+    expect(api.addCosTask.mock.calls[0][0].targetInstanceId).toBeUndefined();
+
+    await user.selectOptions(screen.getByLabelText('Run on'), PEER);
+    await user.type(screen.getByPlaceholderText('Task description *'), 'Render the other shot');
+    await user.click(screen.getByRole('button', { name: /^Add$/ }));
+    await waitFor(() => expect(api.addCosTask).toHaveBeenCalledTimes(2));
+    expect(api.addCosTask.mock.calls[1][0].targetInstanceId).toBe(PEER);
   });
 });

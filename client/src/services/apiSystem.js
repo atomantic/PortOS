@@ -235,6 +235,8 @@ export const navigateBrowser = (url, options = {}) => request('/browser/navigate
 // Instances (Federation)
 export const getInstances = (options) => request('/instances', options);
 export const getSelfInstance = (options) => request('/instances/self', options);
+// Federated instances a CoS task may be pinned to (#4520): id/name/isSelf only.
+export const getAssignableInstances = (options) => request('/instances/assignable', options);
 export const updateSelfInstance = (data) => request('/instances/self', { method: 'PUT', body: JSON.stringify(data) });
 export const addPeer = (data) => request('/instances/peers', { method: 'POST', body: JSON.stringify(data) });
 export const updatePeer = (id, data) => request(`/instances/peers/${id}`, { method: 'PUT', body: JSON.stringify(data) });

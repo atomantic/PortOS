@@ -12,8 +12,10 @@ import { DEFAULT_PR_COMPLETION, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, PR_
 import { clickableProps } from '../../lib/a11yKeyboard';
 import { slashdoLabel } from '../../lib/slashdoCatalog';
 import ReviewerPicker from './ReviewerPicker';
+import InstancePicker from './InstancePicker';
 import EffortSelect from './EffortSelect';
 import useReviewerModelOptions from '../../hooks/useReviewerModelOptions';
+import useAssignableInstances from '../../hooks/useAssignableInstances';
 import { reviewerModelsFromDefaults, reviewerEffortsFromDefaults } from '../../lib/reviewerModels';
 
 export default function TaskAddForm({ providers, apps, onTaskAdded, compact = false, defaultExpanded = false, defaultApp = '' }) {
@@ -38,6 +40,10 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
   const [reviewStopMode, setReviewStopMode] = useState(DEFAULT_REVIEW_STOP_MODE);
   const [reviewerApplies, setReviewerApplies] = useState(false);
   const [reviewerCliInstalled, setReviewerCliInstalled] = useState({});
+  // Which federated instance runs this task (#4520). '' = any instance, the
+  // opportunistic default. Hidden entirely on a single-instance install.
+  const [targetInstanceId, setTargetInstanceId] = useState('');
+  const { instances: assignableInstances, isFederated } = useAssignableInstances();
   const [createJiraTicket, setCreateJiraTicket] = useState(false);
   const [screenshots, setScreenshots] = useState([]);
   const [attachments, setAttachments] = useState([]);
@@ -337,6 +343,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
       temperature: newTask.temperature === '' ? undefined : Number(newTask.temperature),
       thinking: newTask.thinking === '' ? undefined : newTask.thinking === 'true',
       app: newTask.app || undefined,
+      targetInstanceId: targetInstanceId || undefined,
       slashdoCommand: slashdoCommand || undefined,
       createJiraTicket,
       useWorktree,
@@ -532,6 +539,14 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
             label="Target application"
             placeholder="PortOS (default)"
             showRepoPath
+          />
+        )}
+        {isFederated && (
+          <InstancePicker
+            id="task-target-instance"
+            value={targetInstanceId}
+            onChange={setTargetInstanceId}
+            instances={assignableInstances}
           />
         )}
         <div className="grid grid-cols-1 sm:flex sm:items-center gap-x-4 gap-y-1 sm:flex-wrap">

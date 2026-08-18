@@ -65,6 +65,7 @@ import {
   getInstanceId,
   updateSelf,
   getPeers,
+  getAssignableInstances,
   addPeer,
   removePeer,
   updatePeer,
@@ -202,6 +203,43 @@ describe('instances.js', () => {
       const result = await updateSelf('name');
 
       expect(result).toBeNull();
+    });
+  });
+
+  // --- Assignable instances (#4520) ---
+
+  describe('getAssignableInstances', () => {
+    it('lists self plus every peer that has advertised a federation identity', async () => {
+      readJSONFile.mockResolvedValue({
+        self: { instanceId: 'self-id', name: 'workstation' },
+        peers: [
+          { id: 'p1', instanceId: 'peer-id', name: 'render-box', address: '192.0.2.10' },
+          // Never probed: no federation identity yet, so pinning to it would
+          // strand the task unrunnable on every peer.
+          { id: 'p2', instanceId: null, name: 'not-yet-connected', address: '192.0.2.11' }
+        ]
+      });
+      expect(await getAssignableInstances()).toEqual([
+        { instanceId: 'self-id', name: 'workstation', isSelf: true },
+        { instanceId: 'peer-id', name: 'render-box', isSelf: false }
+      ]);
+    });
+
+    it('is empty before this install has an identity of its own', async () => {
+      readJSONFile.mockResolvedValue({ self: null, peers: [] });
+      expect(await getAssignableInstances()).toEqual([]);
+    });
+
+    it('falls back to a peer address, then its id, when the peer is unnamed', async () => {
+      readJSONFile.mockResolvedValue({
+        self: { instanceId: 'self-id', name: 'workstation' },
+        peers: [
+          { id: 'p1', instanceId: 'peer-a', name: '', address: '192.0.2.10' },
+          { id: 'p2', instanceId: 'peer-b', name: '', address: '' }
+        ]
+      });
+      const assignable = await getAssignableInstances();
+      expect(assignable.map(i => i.name)).toEqual(['workstation', '192.0.2.10', 'peer-b']);
     });
   });
 

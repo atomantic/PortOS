@@ -26,6 +26,7 @@ import {
   buildReviewersCsv,
   buildReviewWithArgs,
   createCosTaskSchema,
+  updateCosTaskSchema,
   featureProviderConfigSchema,
   codeReviewSettingsSchema,
   locationSettingsSchema,
@@ -1459,6 +1460,30 @@ describe('validation.js', () => {
     it('carries ~effort=<level> into the claim prompts\' {reviewers} token', () => {
       expect(buildReviewersCsv(['codex', 'claude'], [], [], {}, {}, { codex: 'high' }))
         .toBe('codex~effort=high,claude');
+    });
+  });
+
+  // #4520: pinning a CoS task to one federated instance. Create treats '' as
+  // "any instance" (no pin persisted); update must preserve ''/null as an
+  // explicit CLEAR, or a pin set once could never be removed through the API.
+  describe('targetInstanceId (#4520)', () => {
+    it('create: keeps a real id and drops the empty picker value', () => {
+      expect(createCosTaskSchema.safeParse({ description: 'x', targetInstanceId: 'instance-bbbb' }).data.targetInstanceId).toBe('instance-bbbb');
+      expect(createCosTaskSchema.safeParse({ description: 'x', targetInstanceId: '' }).data.targetInstanceId).toBeUndefined();
+      expect('targetInstanceId' in createCosTaskSchema.safeParse({ description: 'x' }).data).toBe(false);
+    });
+
+    it('create: rejects an over-long id rather than persisting it', () => {
+      expect(createCosTaskSchema.safeParse({ description: 'x', targetInstanceId: 'a'.repeat(129) }).success).toBe(false);
+    });
+
+    it('update: blank and null both survive as null (the explicit unpin)', () => {
+      expect(updateCosTaskSchema.safeParse({ targetInstanceId: '' }).data.targetInstanceId).toBeNull();
+      expect(updateCosTaskSchema.safeParse({ targetInstanceId: null }).data.targetInstanceId).toBeNull();
+    });
+
+    it('update: an absent field stays absent, so an unrelated edit never unpins', () => {
+      expect('targetInstanceId' in updateCosTaskSchema.safeParse({ description: 'x' }).data).toBe(false);
     });
   });
 

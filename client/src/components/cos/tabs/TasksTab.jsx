@@ -21,6 +21,7 @@ import TaskItem, { taskRowId } from './TaskItem';
 import SortableTaskItem from './SortableTaskItem';
 import TaskAddForm from '../TaskAddForm';
 import { MicroGlyph, SchematicLabel } from '../../micrographics';
+import useAssignableInstances from '../../../hooks/useAssignableInstances';
 
 // Maps a task-section status → micrographic glyph spec. Animation only on
 // states where motion communicates real work happening (running tasks).
@@ -43,6 +44,9 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
   const [durations, setDurations] = useState(null);
   const [showCompletedUserTasks, setShowCompletedUserTasks] = useState(false);
   const [showCompletedSystemTasks, setShowCompletedSystemTasks] = useState(false);
+  // Fetched once for the whole list (#4520) — every row renders its instance pin
+  // from this, so a long backlog never issues one request per task.
+  const { instances: assignableInstances } = useAssignableInstances();
 
   // Fetch task duration estimates
   useEffect(() => {
@@ -231,7 +235,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                     >
                       <div className="space-y-1.5">
                         {pendingUserTasksLocal.map(task => (
-                          <SortableTaskItem key={task.id} task={task} selected={isTaskSelected(task, 'user')} onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} />
+                          <SortableTaskItem key={task.id} task={task} selected={isTaskSelected(task, 'user')} onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} instances={assignableInstances} />
                         ))}
                       </div>
                     </SortableContext>
@@ -251,7 +255,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                 </div>
                 <div className="p-2 space-y-1.5">
                   {activeUserTasksLocal.map(task => (
-                    <TaskItem key={task.id} task={task} selected={isTaskSelected(task, 'user')} onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} />
+                    <TaskItem key={task.id} task={task} selected={isTaskSelected(task, 'user')} onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} instances={assignableInstances} />
                   ))}
                 </div>
               </div>
@@ -268,7 +272,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                 </div>
                 <div className="p-2 space-y-1.5">
                   {blockedUserTasksLocal.map(task => (
-                    <TaskItem key={task.id} task={task} selected={isTaskSelected(task, 'user')} onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} />
+                    <TaskItem key={task.id} task={task} selected={isTaskSelected(task, 'user')} onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} instances={assignableInstances} />
                   ))}
                 </div>
               </div>
@@ -291,7 +295,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                 {showCompletedUserTasks && (
                   <div className="p-2 space-y-1.5">
                     {completedUserTasksLocal.map(task => (
-                      <TaskItem key={task.id} task={task} selected={isTaskSelected(task, 'user')} onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} />
+                      <TaskItem key={task.id} task={task} selected={isTaskSelected(task, 'user')} onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} instances={assignableInstances} />
                     ))}
                   </div>
                 )}
@@ -324,7 +328,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                 </div>
                 <div className="p-2 space-y-1.5">
                   {pendingSystemTasks.map(task => (
-                    <TaskItem key={task.id} task={task} isSystem selected={isTaskSelected(task, 'internal')} onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} />
+                    <TaskItem key={task.id} task={task} isSystem selected={isTaskSelected(task, 'internal')} onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} instances={assignableInstances} />
                   ))}
                 </div>
               </div>
@@ -341,7 +345,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                 </div>
                 <div className="p-2 space-y-1.5">
                   {activeSystemTasks.map(task => (
-                    <TaskItem key={task.id} task={task} isSystem selected={isTaskSelected(task, 'internal')} onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} />
+                    <TaskItem key={task.id} task={task} isSystem selected={isTaskSelected(task, 'internal')} onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} instances={assignableInstances} />
                   ))}
                 </div>
               </div>
@@ -358,7 +362,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                 </div>
                 <div className="p-2 space-y-1.5">
                   {blockedSystemTasks.map(task => (
-                    <TaskItem key={task.id} task={task} isSystem selected={isTaskSelected(task, 'internal')} onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} />
+                    <TaskItem key={task.id} task={task} isSystem selected={isTaskSelected(task, 'internal')} onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} instances={assignableInstances} />
                   ))}
                 </div>
               </div>
@@ -381,7 +385,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                 {showCompletedSystemTasks && (
                   <div className="p-2 space-y-1.5">
                     {completedSystemTasks.map(task => (
-                      <TaskItem key={task.id} task={task} isSystem selected={isTaskSelected(task, 'internal')} onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} />
+                      <TaskItem key={task.id} task={task} isSystem selected={isTaskSelected(task, 'internal')} onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} instances={assignableInstances} />
                     ))}
                   </div>
                 )}

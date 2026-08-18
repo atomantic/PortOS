@@ -77,7 +77,7 @@ export { runHealthCheck, getHealthStatus };
 import { firstLine, getUserTasks, getCosTasks, getAllTasks, getTasks, getTaskById, addTask, updateTask, reviveBlockedTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck, sweepResolvedFailureTasks } from './cosTaskStore.js';
 export { firstLine, getUserTasks, getCosTasks, getAllTasks, getTasks, getTaskById, addTask, updateTask, reviveBlockedTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck, sweepResolvedFailureTasks };
 import { ensureInstanceId } from './instances.js';
-import { isHeldByOther, buildRenewal, buildClaim, getClaimOwner } from './cosTaskClaim.js';
+import { isHeldByOther, buildRenewal, buildClaim, getClaimOwner, getSkipReason } from './cosTaskClaim.js';
 import { retryTasksResolvedByInvestigation } from './investigationRetry.js';
 import { notifyIfPrLeftOrphaned } from './orphanedPrNotifier.js';
 
@@ -967,12 +967,14 @@ async function spawnDequeuePriority1UserTasks(ctx) {
 
   for (const task of pendingUserTasks) {
     if (capacity.spawned >= capacity.availableSlots) break;
-    // A federated peer holds a live lease on this task (#1650) — it's being
-    // worked on the other machine. Skip it during candidate selection so it
-    // doesn't consume this cycle's spawn slot (the spawn guard would return
-    // null anyway) and starve later unclaimed tasks.
-    if (isHeldByOther(task.metadata, instanceId)) {
-      emitLog('debug', `Skipping user task ${task.id} — live lease held by peer instance ${getClaimOwner(task.metadata)}`, { taskId: task.id });
+    // Not runnable here: the task is pinned to another instance (#4520), or a
+    // federated peer holds a live lease on it (#1650) and is working it on the
+    // other machine. Skip it during candidate selection so it doesn't consume
+    // this cycle's spawn slot (the spawn guard would return null anyway) and
+    // starve later runnable tasks.
+    const skipReason = getSkipReason(task.metadata, instanceId);
+    if (skipReason) {
+      emitLog('debug', `Skipping user task ${task.id} — ${skipReason}`, { taskId: task.id });
       continue;
     }
     if (await blockIfExceedsMaxSpawns(task, 'user')) continue;
@@ -1050,7 +1052,7 @@ async function spawnDequeuePriority2AutoApproved(ctx) {
         isOnCooldown: (appId) => isAppOnCooldown(appId, state.config.appReviewCooldownMs),
         cooldownExempt: isCooldownExemptTask,
         extraSkip: isDisabledAnalysisType,
-        heldByOther: (task) => isHeldByOther(task.metadata, instanceId)
+        notRunnableHere: (task) => getSkipReason(task.metadata, instanceId) !== null
       });
       for (const task of wouldSpawn) {
         emitLog('info', `[dry-run] CoS auto-run would spawn system task: ${task.id}`, { taskId: task.id, domainAutonomy: 'cos' });
@@ -1059,11 +1061,12 @@ async function spawnDequeuePriority2AutoApproved(ctx) {
   } else {
     for (const task of autoApproved) {
       if (capacity.spawned >= autonomousSpawnCeiling) break;
-      // A federated peer holds a live lease on this task (#1650) — skip it
-      // during candidate selection so it doesn't consume an autonomous slot
-      // the spawn guard would just reject.
-      if (isHeldByOther(task.metadata, instanceId)) {
-        emitLog('debug', `Skipping system task ${task.id} — live lease held by peer instance ${getClaimOwner(task.metadata)}`, { taskId: task.id });
+      // Pinned to another instance (#4520), or a federated peer holds a live
+      // lease on it (#1650) — skip it during candidate selection so it doesn't
+      // consume an autonomous slot the spawn guard would just reject.
+      const skipReason = getSkipReason(task.metadata, instanceId);
+      if (skipReason) {
+        emitLog('debug', `Skipping system task ${task.id} — ${skipReason}`, { taskId: task.id });
         continue;
       }
       if (await blockIfExceedsMaxSpawns(task, 'internal')) continue;

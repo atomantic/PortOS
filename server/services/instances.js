@@ -224,6 +224,28 @@ export async function ensureInstanceId() {
   return instanceId;
 }
 
+/**
+ * The instances this install can direct a CoS task at (#4520): this machine
+ * plus every peer whose federation identity is known. A peer that has never
+ * completed a probe/connect still carries `instanceId: null` — it has no
+ * addressable identity yet, so offering it would let a user pin a task to a
+ * target no instance can ever match, stranding it unrunnable on every peer.
+ * Returns only the id/name/isSelf triple the picker needs; no addresses, no
+ * credentials.
+ */
+export async function getAssignableInstances() {
+  const data = await loadData();
+  const assignable = [];
+  if (data.self?.instanceId) {
+    assignable.push({ instanceId: data.self.instanceId, name: data.self.name || 'This instance', isSelf: true });
+  }
+  for (const peer of data.peers || []) {
+    if (!peer.instanceId) continue;
+    assignable.push({ instanceId: peer.instanceId, name: peer.name || peer.address || peer.instanceId, isSelf: false });
+  }
+  return assignable;
+}
+
 export async function updateSelf(name, { defaultPeerFullSync } = {}) {
   return withData(async (data) => {
     if (!data.self) return null;

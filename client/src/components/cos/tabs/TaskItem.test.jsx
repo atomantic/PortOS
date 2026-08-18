@@ -579,3 +579,78 @@ describe('TaskItem investigation approval hint (#3714)', () => {
     expect(approve).toHaveAttribute('title', expect.stringContaining('Require approval'));
   });
 });
+
+// #4520: a task can be pinned to one federated instance. The row shows where it
+// will run; the editor changes it — but only on an install that actually has
+// more than one instance to choose between.
+describe('TaskItem federated instance pin (#4520)', () => {
+  const SELF = 'self-instance-id';
+  const PEER = 'peer-instance-id';
+  const instances = [
+    { instanceId: SELF, name: 'workstation', isSelf: true },
+    { instanceId: PEER, name: 'render-box', isSelf: false },
+  ];
+  const pinned = { ...task, metadata: { ...task.metadata, targetInstanceId: PEER } };
+
+  it('badges the pinned instance by name', () => {
+    render(<TaskItem task={pinned} providers={providers} instances={instances} onRefresh={vi.fn()} />);
+    expect(screen.getByText('render-box')).toBeTruthy();
+  });
+
+  it('badges a pin whose instance has left the registry, rather than hiding it', () => {
+    // The task nothing will ever run is exactly the one that must stay visible.
+    const orphaned = { ...task, metadata: { ...task.metadata, targetInstanceId: 'ghost-instance-id' } };
+    render(<TaskItem task={orphaned} providers={providers} instances={instances} onRefresh={vi.fn()} />);
+    expect(screen.getByText('unknown instance')).toBeTruthy();
+  });
+
+  it('shows no badge for an unpinned task', () => {
+    render(<TaskItem task={task} providers={providers} instances={instances} onRefresh={vi.fn()} />);
+    expect(screen.queryByText('render-box')).toBeNull();
+  });
+
+  it('saves a re-pin from the editor', async () => {
+    render(<TaskItem task={task} providers={providers} instances={instances} onRefresh={vi.fn()} />);
+    fireEvent.click(screen.getByLabelText("Edit task"));
+    fireEvent.change(screen.getByLabelText('Run on'), { target: { value: PEER } });
+    fireEvent.click(screen.getByText('Save'));
+    await waitFor(() => expect(api.updateCosTask).toHaveBeenCalled());
+    expect(api.updateCosTask.mock.calls[0][1].targetInstanceId).toBe(PEER);
+  });
+
+  it('sends null when the editor selects "Any instance" — the explicit unpin', async () => {
+    render(<TaskItem task={pinned} providers={providers} instances={instances} onRefresh={vi.fn()} />);
+    fireEvent.click(screen.getByLabelText("Edit task"));
+    fireEvent.change(screen.getByLabelText('Run on'), { target: { value: '' } });
+    fireEvent.click(screen.getByText('Save'));
+    await waitFor(() => expect(api.updateCosTask).toHaveBeenCalled());
+    expect(api.updateCosTask.mock.calls[0][1].targetInstanceId).toBeNull();
+  });
+
+  it('hides the picker AND withholds the field on a single-instance install', async () => {
+    // Otherwise an edit made here would silently unpin a task another machine
+    // pinned — the field would ride along as `null` on every save.
+    render(<TaskItem task={pinned} providers={providers} instances={[{ instanceId: SELF, name: 'workstation', isSelf: true }]} onRefresh={vi.fn()} />);
+    fireEvent.click(screen.getByLabelText("Edit task"));
+    expect(screen.queryByLabelText('Run on')).toBeNull();
+    fireEvent.click(screen.getByText('Save'));
+    await waitFor(() => expect(api.updateCosTask).toHaveBeenCalled());
+    expect('targetInstanceId' in api.updateCosTask.mock.calls[0][1]).toBe(false);
+  });
+});
+
+// A row must not claim a pin points at an "unknown instance" merely because the
+// registry read hasn't landed yet — `null` is not-fetched, `[]` is fetched-empty.
+describe('TaskItem instance registry — not-fetched vs fetched-empty (#4520)', () => {
+  const pinned = { ...task, metadata: { ...task.metadata, targetInstanceId: 'peer-instance-id' } };
+
+  it('renders no pin badge while the registry is still loading', () => {
+    render(<TaskItem task={pinned} providers={providers} onRefresh={vi.fn()} />);
+    expect(screen.queryByText('unknown instance')).toBeNull();
+  });
+
+  it('renders the orphaned-pin badge once the registry is known to be empty', () => {
+    render(<TaskItem task={pinned} providers={providers} instances={[]} onRefresh={vi.fn()} />);
+    expect(screen.getByText('unknown instance')).toBeTruthy();
+  });
+});

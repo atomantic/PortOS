@@ -128,3 +128,57 @@ export function buildRenewal(metadata, instanceId, { now = Date.now(), leaseMs =
 export function buildRelease() {
   return Object.fromEntries(CLAIM_METADATA_KEYS.map((k) => [k, undefined]));
 }
+
+// ── Targeted assignment (issue #4520) ────────────────────────────────────────
+//
+// The claim/lease above is OPPORTUNISTIC: whichever peer evaluates a shared task
+// first takes it. `metadata.targetInstanceId` is the opt-in override — the user
+// pins a task to ONE federated instance ("run this generation task on the GPU
+// box, not the laptop") and every other peer passes over it on sight. Absent
+// (the default) restores the opportunistic behavior exactly.
+//
+// This is a cheap read-only guard alongside the lease check, NOT a second
+// locking primitive: it decides *eligibility*, the lease still decides *who is
+// currently running it*. A task pinned to an instance that has left the
+// federation stops being spawnable anywhere — deliberate, and recoverable by
+// clearing the assignment from the task editor.
+export const TARGET_INSTANCE_KEY = 'targetInstanceId';
+
+/**
+ * The instance this task is pinned to, or null when it is unpinned (runnable by
+ * any peer). Trims so a whitespace-only value reads as unpinned rather than as
+ * a target no instance can ever match.
+ */
+export function getTargetInstance(metadata) {
+  const target = metadata?.[TARGET_INSTANCE_KEY];
+  if (typeof target !== 'string') return null;
+  const trimmed = target.trim();
+  return trimmed === '' ? null : trimmed;
+}
+
+/**
+ * Is this task pinned to a DIFFERENT instance than `instanceId`? An unpinned
+ * task is never "elsewhere", so a non-federated install answers false for every
+ * task and behaves exactly as it did before the field existed.
+ */
+export function isTargetedElsewhere(metadata, instanceId) {
+  const target = getTargetInstance(metadata);
+  return target !== null && target !== instanceId;
+}
+
+/**
+ * Why should THIS instance pass over the task during candidate selection, as a
+ * log-ready phrase — or null when the task is a candidate here.
+ *
+ * Both spawn engines (`dequeueNextTask` in cos.js, `evaluateTasks` in
+ * cosTaskGenerator.js) ask this same two-part question at four call sites, so it
+ * lives here rather than being re-expressed at each one. Order matters only for
+ * the message: the pin is a standing decision, the lease is transient, so the
+ * pin is reported first when both apply.
+ */
+export function getSkipReason(metadata, instanceId, now = Date.now()) {
+  const target = getTargetInstance(metadata);
+  if (target !== null && target !== instanceId) return `assigned to instance ${target}`;
+  if (isHeldByOther(metadata, instanceId, now)) return `live lease held by peer instance ${getClaimOwner(metadata)}`;
+  return null;
+}

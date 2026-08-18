@@ -12,6 +12,7 @@ vi.mock('../services/syncOrchestrator.js', () => ({
 vi.mock('../services/instances.js', () => ({
   updatePeer: vi.fn(),
   sanitizePeerForClient: vi.fn((peer) => peer),
+  getAssignableInstances: vi.fn(),
 }));
 vi.mock('../services/sharing/peerSync.js', () => ({
   getFullSyncCoverageForPeer: vi.fn(),
@@ -34,6 +35,31 @@ const buildApp = () => {
   app.use(errorMiddleware);
   return app;
 };
+
+// #4520: the CoS task form's instance picker reads this. It is deliberately
+// narrower than GET /api/instances — no addresses, no sync state, no peer that
+// has yet to advertise a federation identity.
+describe('GET /api/instances/assignable', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns the assignable id/name pairs the picker renders', async () => {
+    const assignable = [
+      { instanceId: 'self-id', name: 'workstation', isSelf: true },
+      { instanceId: 'peer-id', name: 'render-box', isSelf: false }
+    ];
+    instances.getAssignableInstances.mockResolvedValue(assignable);
+    const res = await request(buildApp()).get('/api/instances/assignable');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ instances: assignable });
+  });
+
+  it('is not shadowed by the peer routes — a real handler answers it', async () => {
+    instances.getAssignableInstances.mockResolvedValue([]);
+    const res = await request(buildApp()).get('/api/instances/assignable');
+    expect(res.status).toBe(200);
+    expect(instances.getAssignableInstances).toHaveBeenCalled();
+  });
+});
 
 describe('GET /api/instances/sync-status — forPeer scoping', () => {
   beforeEach(() => {

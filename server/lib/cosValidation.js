@@ -968,6 +968,15 @@ const cosTaskDiagnosticsSchema = z.object({
 // permanent through the API.
 const effortInputSchema = z.preprocess(emptyToUndefined, z.enum(EFFORT_LEVELS).optional());
 const effortUpdateSchema = z.preprocess(emptyToNull, z.enum(EFFORT_LEVELS).nullable().optional());
+// Federated instance this task is PINNED to (#4520) — only that instance's CoS
+// evaluator claims and runs it. On create, '' from the picker's "Any instance"
+// option → undefined (no pin persisted). On update, ''/null must survive as null
+// so the route can clear an existing pin (absent-vs-cleared, CLAUDE.md).
+// Bounded-but-format-free on purpose: the id vocabulary is whatever the peers in
+// this install's registry advertise, and the route is what checks membership.
+const INSTANCE_ID_MAX_LENGTH = 128;
+const targetInstanceIdInputSchema = z.preprocess(emptyToUndefined, z.string().trim().min(1).max(INSTANCE_ID_MAX_LENGTH).optional());
+const targetInstanceIdUpdateSchema = z.preprocess(emptyToNull, z.string().trim().min(1).max(INSTANCE_ID_MAX_LENGTH).nullable().optional());
 const taskTemperatureInputSchema = z.number().min(0).max(2).optional();
 const taskTemperatureUpdateSchema = z.number().min(0).max(2).nullable().optional();
 
@@ -1013,6 +1022,7 @@ export const createCosTaskSchema = z.object({
   temperature: taskTemperatureInputSchema,
   thinking: z.boolean().optional(),
   app: z.string().optional(),
+  targetInstanceId: targetInstanceIdInputSchema,
   type: z.string().optional().default('user'),
   approvalRequired: z.boolean().optional(),
   screenshots: z.array(z.string()).optional(),
@@ -1125,6 +1135,7 @@ export const updateCosTaskSchema = z.object({
   temperature: taskTemperatureUpdateSchema,
   thinking: z.boolean().nullable().optional(),
   app: z.string().optional(),
+  targetInstanceId: targetInstanceIdUpdateSchema,
   blockedReason: z.string().optional(),
   type: z.string().optional().default('user'),
 });

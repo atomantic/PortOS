@@ -11,6 +11,7 @@
 export { default as useAnchorReveal } from './useAnchorReveal.js';
 export { default as useAudioSessionClaim } from './useAudioSessionClaim.js';
 export { default as useAsyncCaptureGuard } from './useAsyncCaptureGuard.js';
+export { default as useAssignableInstances } from './useAssignableInstances.js';
 export { default as useAutoscroll } from './useAutoscroll.js';
 export { default as useCityAudio } from './useCityAudio.js';
 export { default as useClonedGltf } from './useClonedGltf.jsx';

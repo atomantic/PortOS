@@ -17,7 +17,8 @@ import {
   TrendingUp,
   Play,
   Scale,
-  Unlock
+  Unlock,
+  Server
 } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
@@ -28,6 +29,7 @@ import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import Modal from '../../ui/Modal';
 import CollapsibleText from '../../ui/CollapsibleText';
 import { extractCosTaskType } from '../../../lib/cosTaskType';
+import InstancePicker from '../InstancePicker';
 
 const statusIcons = {
   pending: <Clock size={16} aria-hidden="true" className="text-yellow-500" />,
@@ -56,7 +58,9 @@ const getTaskEditData = (task) => ({
   prompt: task.metadata?.prompt || '',
   context: task.metadata?.context || '',
   model: task.metadata?.model || '',
-  provider: task.metadata?.provider || ''
+  provider: task.metadata?.provider || '',
+  // '' = "Any instance" (#4520) — no pin, the opportunistic default.
+  targetInstanceId: task.metadata?.targetInstanceId || ''
 });
 
 export const taskRowId = (taskId, source) => `cos-task-${source}-${encodeURIComponent(taskId)}`;
@@ -68,7 +72,7 @@ function getSuccessRateStyle(rate) {
   return { bg: 'bg-port-error/15', text: 'text-port-error', label: 'low' };
 }
 
-export default function TaskItem({ task, isSystem, selected = false, onRefresh, providers, durations, dragHandleProps, apps, onEditingChange }) {
+export default function TaskItem({ task, isSystem, selected = false, onRefresh, providers, durations, dragHandleProps, apps, instances = null, onEditingChange }) {
   // System tasks are persisted in COS-TASKS.md. Every task
   // mutation must name that source; otherwise the API's user-queue default
   // searches TASKS.md and reports the system task as missing.
@@ -91,6 +95,20 @@ export default function TaskItem({ task, isSystem, selected = false, onRefresh, 
   // task actually carries one, and is omitted from the PATCH otherwise rather
   // than writing an empty `prompt` key onto every task the user edits.
   const hasPromptField = typeof task.metadata?.prompt === 'string';
+  // Instance pinning (#4520) is only meaningful once this install federates with
+  // at least one identified peer. Below that, the picker is hidden AND the field
+  // is withheld from the PATCH, so editing a task here can never silently clear
+  // a pin another machine set.
+  // `null` means the registry has not been read yet — distinct from a read that
+  // found nothing — so a row never flashes "unknown instance" before the list lands.
+  const knownInstances = instances || [];
+  const canPinInstance = knownInstances.length > 1;
+  const targetInstanceId = task.metadata?.targetInstanceId || '';
+  // A pin naming an instance that has left the registry still renders — silently
+  // dropping the badge would hide exactly the task nothing will ever run.
+  const targetInstanceName = targetInstanceId && instances
+    ? (knownInstances.find(i => i.instanceId === targetInstanceId)?.name || 'unknown instance')
+    : '';
   const taskPrompt = task.metadata?.prompt || '';
   const taskContext = task.metadata?.context || '';
   const taskModel = task.metadata?.model || '';
@@ -208,8 +226,15 @@ export default function TaskItem({ task, isSystem, selected = false, onRefresh, 
   };
 
   const handleSave = async () => {
-    const { prompt, ...rest } = editData;
-    const payload = hasPromptField ? { ...rest, prompt, type: taskSource } : { ...rest, type: taskSource };
+    const { prompt, targetInstanceId: draftInstanceId, ...rest } = editData;
+    const payload = {
+      ...rest,
+      type: taskSource,
+      ...(hasPromptField ? { prompt } : {}),
+      // '' is the picker's "Any instance" → null, the explicit unpin the update
+      // schema preserves (absent would leave the pin untouched).
+      ...(canPinInstance ? { targetInstanceId: draftInstanceId || null } : {})
+    };
     const result = await api.updateCosTask(task.id, payload, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
@@ -228,7 +253,8 @@ export default function TaskItem({ task, isSystem, selected = false, onRefresh, 
     (hasPromptField && editData.prompt !== (task.metadata?.prompt || '')) ||
     editData.context !== (task.metadata?.context || '') ||
     editData.model !== (task.metadata?.model || '') ||
-    editData.provider !== (task.metadata?.provider || '');
+    editData.provider !== (task.metadata?.provider || '') ||
+    editData.targetInstanceId !== targetInstanceId;
 
   const handleCancelEdit = () => {
     if (hasUnsavedEdits) {
@@ -330,6 +356,15 @@ export default function TaskItem({ task, isSystem, selected = false, onRefresh, 
                 {apps.find(a => a.id === task.metadata.app).name}
               </span>
             )}
+            {targetInstanceName && (
+              <span
+                className="flex items-center gap-1 px-1.5 py-0.5 text-xs bg-port-accent-2/20 text-port-accent-2 rounded shrink-0"
+                title={`Pinned to instance ${targetInstanceId} — only that instance runs this task`}
+              >
+                <Server size={10} aria-hidden="true" />
+                {targetInstanceName}
+              </span>
+            )}
             {/* Duration estimate for pending tasks */}
             {durationEstimate && (
               <span
@@ -426,6 +461,14 @@ export default function TaskItem({ task, isSystem, selected = false, onRefresh, 
                   </select>
                 )}
               </div>
+              {canPinInstance && (
+                <InstancePicker
+                  id={`task-target-instance-${idScope}-${task.id}`}
+                  value={editData.targetInstanceId}
+                  onChange={(next) => setEditData(d => ({ ...d, targetInstanceId: next }))}
+                  instances={knownInstances}
+                />
+              )}
               {isConfirmingDiscard(task.id) ? (
                 <ConfirmButtonPair
                   prompt="Discard unsaved changes?"
