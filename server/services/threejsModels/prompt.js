@@ -193,6 +193,15 @@ Rules, all enforced — a spec that breaks one is rejected outright:
 - Channels are the only animation surface. Do not animate materials, lights, the camera, or
   geometry parameters, and do not return JavaScript, keyframe arrays, or curve definitions.
 
+Also checked after generation, and fed back as refinement notes rather than rejected:
+- A "loop": true clip returns to where it began — its last endpoint on a channel equals that
+  channel's first one — or it snaps back on every repeat. An "idle" clip is repeating motion by
+  definition, so give it "loop": true.
+- Every declared cue is fired by at least one sequence; a cue nothing fires asks for a sound that
+  never plays.
+- "durationSeconds" ends near where the motion does. A short hold on the final pose is good; a
+  clip that finishes in its first half and then sits still for seconds is a mistyped duration.
+
 Prefer a short, legible set: a "deploy" clip and its "retract" mirror explain a mechanism better
 than eight speculative ones. Author each clip against the model's assembled pose — sequence one
 starts from exactly the "position"/"rotationDegrees"/"scale" the part carries in "parts".

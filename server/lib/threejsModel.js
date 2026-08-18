@@ -10,6 +10,7 @@
 import { z } from 'zod';
 
 import { failValidation } from './errorHandler.js';
+import { THREEJS_PLAYER_SOURCE } from './threejsModelPlayerSource.js';
 
 const idSchema = z.string().trim().min(1).max(80).regex(/^[A-Za-z][A-Za-z0-9_-]*$/);
 const colorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/);
@@ -1247,16 +1248,16 @@ export function ${factoryName}() {
     articulation: spec.articulation || null,
     // Declared clips, or null for a static assembly. Data only: the parse above
     // proves every sequence names a real part, stays inside its clip, and never
-    // fights another sequence for the same channel, so a consumer can drive the
-    // nodes above from it — PortOS ships no player in the exported factory and
-    // never executes anything the provider authored.
+    // fights another sequence for the same channel, so createSculptAnimationPlayer
+    // below can drive the nodes above from it — PortOS-authored playback over
+    // provider-authored DATA, never anything the provider wrote as code.
     animation: spec.animation || null,
     detailInventory: spec.detailInventory,
     limitations: spec.limitations,
   };
   return root;
 }
-
+${THREEJS_PLAYER_SOURCE}
 export { spec };
 `;
 }

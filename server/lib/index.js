@@ -54,6 +54,7 @@ export * from './threejsModelAnimation.js';
 export * from './threejsModelCoverage.js';
 export * from './threejsModelFamilies.js';
 export * from './threejsModelPenetration.js';
+export * from './threejsModelPlayerSource.js';
 export * from './threejsModelRig.js';
 
 // === Story & narrative ===

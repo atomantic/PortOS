@@ -740,5 +740,69 @@ describe('Three.js model clip inventory', () => {
     // The clips survive the parse onto the record, so the export and the preview
     // play the same sequences the inventory counted.
     expect(current.spec.animation.clips[0].sequences).toHaveLength(1);
+    // A clip authored against the pose the assembly builds has nothing to fix,
+    // so a refinement of it is not steered toward the clips at all.
+    expect(current.animation.findings).toEqual([]);
+  });
+
+  it('steers an unsteered refinement at a clip that will not play cleanly', async () => {
+    const jumpingSpec = {
+      ...spec,
+      animation: {
+        cues: [{ id: 'latchRelease', label: 'Latch lets go', kind: 'latch' }],
+        clips: [{
+          id: 'deploy',
+          name: 'Deploy',
+          role: 'deploy',
+          durationSeconds: 1.5,
+          sequences: [{
+            id: 'raiseLens',
+            name: 'Raise lens',
+            partId: 'lens',
+            startSeconds: 0,
+            endSeconds: 1,
+            // The assembly builds the lens at the origin, so this clip
+            // teleports it the instant it opens.
+            channels: { position: { from: [0, 0.9, 0], to: [0, 0.6, 0] } },
+            cueId: 'latchRelease',
+          }],
+        }],
+      },
+    };
+    let current = {
+      id: 'threejs-clip-feedback',
+      name: 'Example Beacon',
+      sourceImage: { filename: 'example.png' },
+      providerId: 'vision-api',
+      model: null,
+      prompt: '',
+      status: 'draft',
+      spec: null,
+      animation: null,
+      runs: [],
+    };
+    store.getModel.mockImplementation(async () => current);
+    store.mutateModel.mockImplementation(async (_id, mutate) => {
+      const next = mutate(current);
+      if (next) current = next;
+      return current;
+    });
+    runPromptThroughProvider.mockResolvedValue({
+      text: JSON.stringify(jumpingSpec),
+      runId: 'run-clip-feedback',
+      provider: { id: 'vision-api' },
+      model: null,
+    });
+
+    await startGeneration(current.id, { providerId: 'vision-api' });
+    await vi.waitFor(() => expect(current.status).toBe('ready'));
+    expect(current.animation.findings.map((finding) => finding.code)).toEqual(['clip-start-pose-mismatch']);
+    // A clip finding never rejects the generation — the model is still ready and
+    // its spec is stored verbatim.
+    expect(current.spec.animation.clips[0].sequences[0].channels.position.from).toEqual([0, 0.9, 0]);
+
+    await startGeneration(current.id, { providerId: 'vision-api' });
+    expect(current.runs.at(-1).feedback).toContain('will not play cleanly');
+    expect(current.runs.at(-1).feedback).toContain('Lens.position opens at [0, 0.9, 0]');
   });
 });

@@ -22,6 +22,10 @@
  * The schema guarantees the invariants this relies on (windows inside the clip,
  * no two sequences on one part+channel at once, every `partId` real), so there
  * is no conflict resolution here to get wrong.
+ *
+ * These semantics are MIRRORED by the player PortOS emits into an exported
+ * factory (`server/lib/threejsModelPlayerSource.js`), so a clip poses identically
+ * in the preview and in a consumer's own scene. Change one and change the other.
  */
 
 import { EASING_CURVES, linear } from '../utils/easing.js';

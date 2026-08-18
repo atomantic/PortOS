@@ -409,6 +409,12 @@ export default function ThreejsModelDetail() {
   const materialFindings = Array.isArray(record.materialPlausibility?.findings)
     ? record.materialPlausibility.findings
     : null;
+  // Clip findings only mean something for a model that declared clips: a static
+  // assembly evaluates to an empty list, and rendering a clean "clip playback"
+  // panel on every static model would be noise about a feature it never used.
+  const animationFindings = Array.isArray(record.animation?.findings) && record.animation?.animated
+    ? record.animation.findings
+    : null;
   // Undecided contact is a note the reader is meant to judge, never something a
   // refinement is told to fix — so the footer only promises a refinement when
   // there is an actual defect above it.
@@ -645,6 +651,19 @@ export default function ThreejsModelDetail() {
         <ClipInventoryPanel
           animation={record.animation && typeof record.animation === 'object' ? record.animation : null}
           spec={record.spec}
+        />
+      )}
+
+      {animationFindings && (
+        <GatePanel
+          title="Clip playback"
+          findings={animationFindings}
+          cleanLabel="Clips open, hand over, and loop cleanly"
+          footer={`The schema already proves a clip is well formed, so this check asks whether it will actually play: a clip authored against a pose the assembly does not build jumps the instant it opens, a handover between sequences that do not meet jumps mid-clip, and a loop that ends somewhere else snaps on every repeat.${
+            animationFindings.length > 0
+              ? ' Refining without your own feedback will also ask for clips that start from the assembled pose and close their loops.'
+              : ''
+          }`}
         />
       )}
 

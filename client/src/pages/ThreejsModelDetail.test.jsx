@@ -530,6 +530,41 @@ describe('ThreejsModelDetail clip inventory', () => {
     expect(screen.getByText('1s · 1 sequence')).toBeInTheDocument();
   });
 
+  it('renders the clip-playback gate for a model whose clips will not play cleanly', async () => {
+    getThreejsModel.mockResolvedValue({
+      ...baseRecord,
+      animation: {
+        animated: true,
+        clipCount: 1,
+        warningCount: 1,
+        clips: [{ id: 'deploy', name: 'Deploy', role: 'deploy', durationSeconds: 2, sequenceCount: 1, cueCount: 0 }],
+        findings: [{
+          code: 'clip-start-pose-mismatch',
+          severity: 'warning',
+          message: 'clip Deploy is authored against a pose the assembly does not build',
+        }],
+      },
+    });
+    renderDetail();
+
+    await waitFor(() => expect(screen.getByText('Clip playback')).toBeInTheDocument());
+    expect(screen.getByText(/clip Deploy is authored against a pose/)).toBeInTheDocument();
+    expect(screen.getByText('0 error · 1 warning · 0 note')).toBeInTheDocument();
+  });
+
+  // A static assembly evaluates to an empty finding list, which is not a verdict
+  // about clips — it never declared any.
+  it('shows no clip-playback gate for a static assembly that was evaluated', async () => {
+    getThreejsModel.mockResolvedValue({
+      ...baseRecord,
+      animation: { animated: false, clipCount: 0, warningCount: 0, clips: [], findings: [] },
+    });
+    renderDetail();
+
+    await waitFor(() => expect(screen.getByText('Rig readiness')).toBeInTheDocument());
+    expect(screen.queryByText('Clip playback')).not.toBeInTheDocument();
+  });
+
   it('shows no clip panel for a static assembly', async () => {
     getThreejsModel.mockResolvedValue({ ...baseRecord, animation: null });
     renderDetail();
