@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
-import { rmSync, existsSync } from 'fs';
+import { rmSync, existsSync, mkdirSync, writeFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { createTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
@@ -318,6 +318,37 @@ describe('cancellation', () => {
     const stored = await svc.loadAssessments();
     expect(stored).toHaveLength(1);
     expect(stored[0].performance.meanCharsPerSecond).toBe(150);
+  });
+});
+
+describe('an unreadable store', () => {
+  const corrupt = () => {
+    mkdirSync(join(tempRoot, 'local-llm'), { recursive: true });
+    writeFileSync(STORE, '{ this is not json');
+  };
+
+  it('reports the read error instead of claiming nothing was assessed', async () => {
+    corrupt();
+    expect((await svc.getAssessmentReport()).readError).toBeTruthy();
+  });
+
+  it('parks the bad file rather than overwriting it with a single new record', async () => {
+    corrupt();
+    runLocalLlmTest.mockResolvedValue(okRun());
+    await svc.runAssessment({ backend: 'ollama', modelId: 'example-model:7b', contextTokens: [512] });
+
+    // Writing straight through would have replaced whatever the old file held
+    // with just this record — a read failure destroying minutes of measured
+    // compute. The old bytes survive alongside a fresh, working store.
+    const parked = readdirSync(join(tempRoot, 'local-llm')).filter((f) => f.includes('.corrupt-'));
+    expect(parked).toHaveLength(1);
+    expect(await svc.loadAssessments()).toHaveLength(1);
+  });
+
+  it('refuses to rewrite the file on a delete it cannot read', async () => {
+    corrupt();
+    expect(await svc.deleteAssessment('ollama', 'example-model:7b')).toEqual({ deleted: false });
+    expect(existsSync(STORE)).toBe(true);
   });
 });
 

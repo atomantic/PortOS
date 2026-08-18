@@ -332,6 +332,11 @@ export function rankByIntent(assessments, intent = 'balanced') {
       coverage,
       scores,
       performance: assessment?.performance || null,
+      // The measured footprint feeds the memory axis, so it has to travel WITH
+      // the ranked entry — a consumer that renders it from the entry alone would
+      // otherwise show "not measured" for every model /api/ps actually measured.
+      residentGb: Number.isFinite(assessment?.residentGb) ? assessment.residentGb : null,
+      params: assessment?.params ?? null,
       assessedAt: assessment?.assessedAt || null,
       explanation: explainAssessment(assessment, resolvedIntent),
     });

@@ -43,6 +43,8 @@ const rankedEntry = (overrides = {}) => ({
     samplesRun: 3,
     samplesOk: 3,
   },
+  residentGb: 5,
+  params: '7B',
   assessedAt: '2026-01-01T00:00:00.000Z',
   explanation: '120 chars/s measured, ran at up to 4,096 tokens of context.',
   ...overrides,
@@ -68,6 +70,9 @@ describe('LocalModelAssessments', () => {
     expect(await screen.findByText('example-model:7b')).toBeInTheDocument();
     expect(screen.getByText('120 chars/s')).toBeInTheDocument();
     expect(screen.getByText('4k tokens')).toBeInTheDocument();
+    // Resident size is measured by /api/ps and must survive into the ranked
+    // entry — rendering "not measured" here would hide a real measurement.
+    expect(screen.getByText('5.0 GB')).toBeInTheDocument();
     expect(screen.getByText('Fits')).toBeInTheDocument();
   });
 

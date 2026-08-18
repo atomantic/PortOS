@@ -279,6 +279,20 @@ describe('rankByIntent', () => {
     expect(ranked[0].coverage).toBeGreaterThan(ranked[1].coverage);
   });
 
+  it('carries the measured resident size into the ranked entry', () => {
+    // The memory axis is scored FROM residentGb, so dropping it from the entry
+    // makes a consumer render "not measured" for a value that was measured.
+    const models = [assessment('example-model:7b', 'fits', { meanCharsPerSecond: 120, contextDegradation: 1 }, { residentGb: 5, params: '7B' })];
+    const { ranked } = rankByIntent(models, 'balanced');
+    expect(ranked[0].residentGb).toBe(5);
+    expect(ranked[0].params).toBe('7B');
+  });
+
+  it('keeps residentGb null when it was never measured', () => {
+    const models = [assessment('example-model:7b', 'fits', { meanCharsPerSecond: 120, contextDegradation: 1 })];
+    expect(rankByIntent(models, 'balanced').ranked[0].residentGb).toBeNull();
+  });
+
   it('is empty and safe on no input', () => {
     expect(rankByIntent(undefined, 'balanced')).toEqual({ intent: 'balanced', ranked: [], excluded: [] });
   });

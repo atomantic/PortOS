@@ -47,6 +47,7 @@
  */
 
 import { join } from 'path';
+import { rename } from 'fs/promises';
 import os from 'os';
 import { PATHS, atomicWrite, ensureDir, tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
 import { getAvailableMemoryGb } from '../lib/localMemory.js';
@@ -159,6 +160,16 @@ export async function loadAssessments() {
   return (await loadStore()).assessments;
 }
 
+// Move an unparseable store aside so a fresh one can be written without losing
+// whatever the old file held. Best-effort: if the rename fails there is nothing
+// further to preserve, and refusing the write outright would leave assessments
+// permanently unusable.
+async function quarantineStore(reason) {
+  const parked = `${ASSESSMENTS_FILE}.corrupt-${Date.now()}`;
+  const moved = await rename(ASSESSMENTS_FILE, parked).then(() => true).catch(() => false);
+  console.error(`❌ Local LLM: ${reason} — ${moved ? `parked the old file as ${parked.split('/').pop()}` : 'could not park the old file'}`);
+}
+
 async function loadStore() {
   const raw = await tryReadFile(ASSESSMENTS_FILE);
   // Never read = an empty store, not an error: the file simply doesn't exist
@@ -176,7 +187,13 @@ async function loadStore() {
 const assessmentKey = (backend, modelId) => `${backend}:${modelId}`;
 
 async function saveAssessment(assessment) {
-  const { assessments } = await loadStore();
+  const { assessments, readError } = await loadStore();
+  // An unreadable store reports zero assessments, and writing on top of that
+  // would replace every prior measurement with this one record — a read failure
+  // silently destroying data the user spent minutes of compute on. Quarantine
+  // the unreadable file instead: nothing is lost, and the feature keeps working
+  // rather than wedging on a file the user has no way to repair from the UI.
+  if (readError) await quarantineStore(readError);
   const key = assessmentKey(assessment.backend, assessment.modelId);
   // One record per (backend, model): the newest measurement supersedes the old
   // one. History is not kept — a stale reading from a different memory state is
@@ -193,7 +210,10 @@ async function saveAssessment(assessment) {
  * so the caller can 404 rather than reporting a phantom success.
  */
 export async function deleteAssessment(backend, modelId) {
-  const { assessments } = await loadStore();
+  const { assessments, readError } = await loadStore();
+  // Same hazard as saveAssessment: rewriting from an empty in-memory list would
+  // wipe the file. A delete against an unreadable store has nothing to remove.
+  if (readError) return { deleted: false };
   const key = assessmentKey(backend, modelId);
   const next = assessments.filter((a) => assessmentKey(a?.backend, a?.modelId) !== key);
   if (next.length === assessments.length) return { deleted: false };
