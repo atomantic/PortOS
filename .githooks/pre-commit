@@ -37,7 +37,11 @@ printf -- "\n🔎 pre-commit: validating staged PortOS changes\n"
 
 if [ "$run_server" = true ]; then
   printf -- "- running server tests...\n"
-  npm test --prefix server
+  # NODE_ENV=test is what points the suite at the file storage backend instead
+  # of the developer's live Postgres. server/vitest.config.js now forces it, but
+  # a commit fired from a PortOS-spawned shell inherits NODE_ENV=development
+  # from PM2, so state it here too — the hook must be correct on its own (#4554).
+  NODE_ENV=test npm test --prefix server
 fi
 
 if [ "$run_client" = true ]; then

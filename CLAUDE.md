@@ -13,6 +13,9 @@ npm run install:all   # includes git submodule update --init --recursive
 # per workspace to scope to one — both are Vitest, with different environments:
 cd server && npm test            # Vitest (node) — ALSO globs ../scripts, ../lib, ../autofixer
 cd client && npm test            # Vitest (jsdom) — component/unit tests
+# No NODE_ENV prefix needed: server/vitest.config.js FORCES NODE_ENV=test (#4554).
+# Vitest only defaults it when unset, and PortOS runs under PM2 with
+# NODE_ENV=development — a suite run that inherits that aims at the real Postgres.
 npm run test:db                  # DB-backed suites → portos_test ONLY (see Security Model)
 ```
 

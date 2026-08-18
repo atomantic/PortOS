@@ -15,6 +15,7 @@ import { rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { execGit } from './execGit.js';
+import { assertTempPath } from './tempPathGuard.js';
 
 export const SKIP_HEAVY_INTEGRATION = ['1', 'true', 'yes'].includes(
   String(process.env.VITEST_FAST || '').toLowerCase(),
@@ -39,12 +40,14 @@ async function copyTree(src, dest) {
 }
 
 async function configureIdentity(repo, identity = DEFAULT_IDENTITY) {
+  assertTempPath(repo, 'git config on a fixture repo');
   await execGit(['config', 'user.email', identity.email], repo);
   await execGit(['config', 'user.name', identity.name], repo);
   await execGit(['config', 'commit.gpgsign', 'false'], repo);
 }
 
 async function stripOrigin(repo) {
+  assertTempPath(repo, 'git remote surgery on a fixture repo');
   await execGit(['remote', 'remove', 'origin'], repo, { ignoreExitCode: true });
   await execGit(['branch', '--unset-upstream'], repo, { ignoreExitCode: true });
 }
@@ -75,6 +78,7 @@ async function buildTemplate() {
   const scratch = await mkdtemp(join(tmpdir(), TEMPLATE_PREFIX));
   const repo = join(scratch, 'primary');
   const origin = join(scratch, 'origin.git');
+  assertTempPath(scratch, 'git init for the fixture template');
   await execGit(['init', '-b', 'main', repo], scratch);
   await configureIdentity(repo);
   await writeFile(join(repo, 'initial.txt'), 'initial');
@@ -107,6 +111,7 @@ export async function makeGitSandbox({
 } = {}) {
   const template = await getTemplate();
   const scratch = await mkdtemp(join(tmpdir(), prefix));
+  assertTempPath(scratch, 'git sandbox creation');
   const repo = join(scratch, 'primary');
   await cp(template.repo, repo, { recursive: true, force: true });
   if (identity) await configureIdentity(repo, identity);
@@ -128,6 +133,8 @@ export async function makeGitSandbox({
  * publish those commits.
  */
 export async function attachBareOrigin(scratch, repo) {
+  assertTempPath(scratch, 'bare-origin attach');
+  assertTempPath(repo, 'bare-origin attach');
   const template = await getTemplate();
   const originPath = join(scratch, 'origin.git');
   await cp(template.origin, originPath, { recursive: true, force: true });
@@ -142,6 +149,7 @@ export async function attachBareOrigin(scratch, repo) {
  * temp dir — `git worktree list` spelling / realpath checks.
  */
 export async function materializeGitRepo(dest, { identity } = {}) {
+  assertTempPath(dest, 'git repo materialization');
   const template = await getTemplate();
   await copyTree(template.repo, dest);
   await stripOrigin(dest);
@@ -151,5 +159,6 @@ export async function materializeGitRepo(dest, { identity } = {}) {
 
 export async function destroyGitSandbox(scratch) {
   if (!scratch) return;
+  assertTempPath(scratch, 'recursive sandbox delete');
   await rm(scratch, { recursive: true, force: true }).catch(() => {});
 }

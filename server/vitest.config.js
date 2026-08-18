@@ -8,9 +8,24 @@ if (process.env.npm_lifecycle_event === 'test:fast') {
   process.env.VITEST_FAST = '1';
 }
 
+// The suite REQUIRES NODE_ENV=test: it is what selects the file storage backend
+// (memoryBackend.js and every store facade) so no suite talks to the real
+// Postgres. Vitest only DEFAULTS NODE_ENV to 'test' when it is unset, and PortOS
+// runs under PM2 with NODE_ENV=development — so any commit made from a
+// PortOS-spawned shell fires .githooks/pre-commit -> 'npm test --prefix server'
+// with NODE_ENV=development inherited, and hundreds of suites then aim at the
+// developer's live database (#4554). Forcing it here, rather than prefixing the
+// npm script, keeps every entry point correct — 'npm test --prefix server', a
+// bare 'npx vitest run', an IDE runner, the git hook — and stays Windows-safe
+// (cmd.exe parses 'NODE_ENV=test vitest' as an executable name, which is why
+// VITEST_FAST is set here too).
+process.env.NODE_ENV = 'test';
+
 export default defineConfig({
   test: {
     ...vitestCiPool(),
+    // Workers get their own process.env — set it there as well as above.
+    env: { NODE_ENV: 'test' },
     testTimeout: process.platform === 'win32' ? 30000 : 10000,
     // hookTimeout tracks testTimeout for the same reason: Windows fs + module
     // resolution is markedly slower, and vitest's 10s DEFAULT applies to hooks

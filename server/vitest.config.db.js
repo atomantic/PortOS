@@ -1,5 +1,11 @@
 import { defineConfig } from 'vitest/config';
 
+// Same reason as vitest.config.js: an inherited NODE_ENV (PM2 exports
+// 'development') is NOT overridden by vitest's own default, and the DB guards
+// in lib/db.js key on it. Force it so `npm run test:db` behaves identically
+// wherever it is launched from (#4554).
+process.env.NODE_ENV = 'test';
+
 /**
  * The DB-backed test files, relative to this config's root (server/). Exported
  * as the single source of truth: this config's `include` uses it, and the drift
@@ -59,6 +65,7 @@ export default defineConfig({
     // One file at a time — these suites assume exclusive access to their tables.
     fileParallelism: false,
     env: {
+      NODE_ENV: 'test',
       PGDATABASE: process.env.PGTESTDATABASE || 'portos_test',
     },
     include: DB_TEST_INCLUDE,

@@ -348,7 +348,16 @@ export function validateProposedDiff(diff, opts = {}) {
  * an error shape instead.
  */
 export function execGit(gitArgs, cwd) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    // A missing cwd makes `spawn` fall back to `process.cwd()` — which for the
+    // autofixer suite is the PortOS checkout itself, so a fixture that lost its
+    // temp dir would `git init` / `git config` the developer's real repo.
+    // This is a caller bug, not a git failure, so it rejects rather than
+    // resolving with the `{ code: -1 }` shape reserved for spawn errors (#4554).
+    if (typeof cwd !== 'string' || cwd.trim() === '') {
+      reject(new Error(`execGit requires a working directory: git ${gitArgs.join(' ')}`));
+      return;
+    }
     const child = spawn('git', gitArgs, { cwd, windowsHide: true });
     let stdout = '';
     let stderr = '';

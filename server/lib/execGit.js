@@ -8,7 +8,8 @@ import { spawn } from './childProcess.js';
 /**
  * Execute a git command safely using spawn (prevents shell injection).
  * @param {string[]} args - Git command arguments
- * @param {string} cwd - Working directory
+ * @param {string} cwd - Working directory (required — an absent cwd would
+ *   silently resolve to process.cwd(), i.e. PortOS's own checkout)
  * @param {object} options - Additional options
  * @param {number} [options.maxBuffer] - Max output buffer size in bytes (default 10 MB)
  * @param {number} [options.timeout] - Timeout in ms (default 30s)
@@ -17,6 +18,14 @@ import { spawn } from './childProcess.js';
  */
 export function execGit(args, cwd, options = {}) {
   return new Promise((resolve, reject) => {
+    // `spawn` treats a missing cwd as `process.cwd()`, so a caller whose repo
+    // path came back undefined (a fixture whose temp-dir setup failed, a
+    // config lookup that returned nothing) would run `git init` / `git config`
+    // against PortOS's own checkout instead of failing. Refuse loudly (#4554).
+    if (typeof cwd !== 'string' || cwd.trim() === '') {
+      reject(new Error(`❌ execGit requires a working directory: git ${args.join(' ')}`));
+      return;
+    }
     const maxBuffer = options.maxBuffer || 10 * 1024 * 1024;
     const timeout = options.timeout || 30000;
     // Always disable the shell to keep this helper a hard boundary against

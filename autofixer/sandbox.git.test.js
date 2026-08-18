@@ -15,6 +15,11 @@ import {
   applyDiffToLive,
   execGit,
 } from './sandbox.js';
+// The autofixer package has no runner of its own — these specs run under the
+// server vitest config's '../autofixer/**' glob — and tempPathGuard.js imports
+// nothing but node builtins, so reusing it here keeps ONE definition of "is
+// this really a throwaway dir" rather than a second copy (#4554).
+import { assertTempPath } from '../server/lib/tempPathGuard.js';
 
 // Exercises the disposable-worktree isolation + promotion helpers against a
 // real throwaway git repo. These prove the agent's edits land in an isolated
@@ -25,6 +30,10 @@ describe('git worktree isolation (integration)', () => {
 
   beforeEach(async () => {
     scratch = await mkdtemp(join(tmpdir(), 'autofix-git-'));
+    // The 'git config user.email test@test' lines below are what corrupted a
+    // real checkout once, so prove the target is disposable before running any
+    // of them — never let a bad path fall through to process.cwd() (#4554).
+    assertTempPath(scratch, 'autofixer git fixture setup');
     repo = join(scratch, 'repo');
     await mkdir(repo, { recursive: true });
     await execGit(['init', '-q'], repo);
@@ -37,6 +46,7 @@ describe('git worktree isolation (integration)', () => {
   });
 
   afterEach(async () => {
+    assertTempPath(scratch, 'autofixer git fixture teardown');
     await rm(scratch, { recursive: true, force: true }).catch(() => {});
   });
 
