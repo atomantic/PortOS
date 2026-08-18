@@ -694,3 +694,25 @@ describe('ThreejsModelPreview clip framing and looping', () => {
     expect(onCue).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('ThreejsModelPreview clip refresh', () => {
+  it('rewinds and stops when a refinement rewrites the open clip under the same id', () => {
+    const { rerender } = renderPreview(<ThreejsModelPreview spec={clipSpec()} />);
+    scrub(1.2);
+    expect(screen.getByText('1.20/2.00s')).toBeInTheDocument();
+
+    // The detail page re-fetches every 2s while a generation runs: an equivalent
+    // snapshot must not throw away where the user scrubbed to.
+    rerender(<ThreejsModelPreview spec={clipSpec()} />);
+    expect(screen.getByText('1.20/2.00s')).toBeInTheDocument();
+
+    // A refinement that hands back a rewritten `deploy` is a different clip
+    // wearing the same id — evaluating it at the old playhead would pose the
+    // model somewhere the new clip never authored.
+    const refined = clipSpec();
+    refined.animation.clips[0].durationSeconds = 5;
+    refined.animation.clips[0].sequences[0].endSeconds = 3;
+    rerender(<ThreejsModelPreview spec={refined} />);
+    expect(screen.getByText('0.00/5.00s')).toBeInTheDocument();
+  });
+});

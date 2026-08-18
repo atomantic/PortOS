@@ -346,7 +346,6 @@ function useClipPlayback({ clip, cuesById, onCue }) {
   const timeRef = useRef(0);
   const onCueRef = useRef(onCue);
   const duration = getThreejsClipDuration(clip);
-  const clipId = clip?.id || null;
 
   const setPlayhead = useCallback((value) => {
     timeRef.current = value;
@@ -355,10 +354,19 @@ function useClipPlayback({ clip, cuesById, onCue }) {
 
   // A different clip starts at its own beginning, stopped — carrying a playhead
   // across clips would drop the model into a pose the new clip never authored.
+  //
+  // Keyed on the clip's CONTENT, not its id: a refinement can hand back a
+  // rewritten `deploy` whose sequences and duration are new, and evaluating that
+  // at the old playhead would pose the model mid-nowhere and fire the new clip's
+  // cues from the middle. The detail page re-fetches the record every 2s while a
+  // generation runs, so an equivalent snapshot must NOT reset it — which is why
+  // this compares the content rather than the object identity, the same way the
+  // part and model signatures above do.
+  const clipSignature = useMemo(() => JSON.stringify(clip ?? null), [clip]);
   useEffect(() => {
     setPlaying(false);
     setPlayhead(0);
-  }, [clipId, setPlayhead]);
+  }, [clipSignature, setPlayhead]);
 
   // Held in a ref so a caller passing an inline handler cannot restart the loop
   // on every render.
