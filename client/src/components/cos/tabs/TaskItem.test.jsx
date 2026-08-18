@@ -627,10 +627,30 @@ describe('TaskItem federated instance pin (#4520)', () => {
     expect(api.updateCosTask.mock.calls[0][1].targetInstanceId).toBeNull();
   });
 
-  it('hides the picker AND withholds the field on a single-instance install', async () => {
+  it('hides the picker AND withholds the field for an UNPINNED task on a single-instance install', async () => {
     // Otherwise an edit made here would silently unpin a task another machine
     // pinned — the field would ride along as `null` on every save.
+    render(<TaskItem task={task} providers={providers} instances={[{ instanceId: SELF, name: 'workstation', isSelf: true }]} onRefresh={vi.fn()} />);
+    fireEvent.click(screen.getByLabelText("Edit task"));
+    expect(screen.queryByLabelText('Run on')).toBeNull();
+    fireEvent.click(screen.getByText('Save'));
+    await waitFor(() => expect(api.updateCosTask).toHaveBeenCalled());
+    expect('targetInstanceId' in api.updateCosTask.mock.calls[0][1]).toBe(false);
+  });
+
+  it('still offers the picker for an ALREADY-pinned task after the last peer is removed', async () => {
+    // Hiding it there would leave the pin permanently unclearable and the task
+    // unrunnable on every instance.
     render(<TaskItem task={pinned} providers={providers} instances={[{ instanceId: SELF, name: 'workstation', isSelf: true }]} onRefresh={vi.fn()} />);
+    fireEvent.click(screen.getByLabelText("Edit task"));
+    fireEvent.change(screen.getByLabelText('Run on'), { target: { value: '' } });
+    fireEvent.click(screen.getByText('Save'));
+    await waitFor(() => expect(api.updateCosTask).toHaveBeenCalled());
+    expect(api.updateCosTask.mock.calls[0][1].targetInstanceId).toBeNull();
+  });
+
+  it('hides the picker until the registry read lands, so an edit mid-load cannot unpin', async () => {
+    render(<TaskItem task={pinned} providers={providers} onRefresh={vi.fn()} />);
     fireEvent.click(screen.getByLabelText("Edit task"));
     expect(screen.queryByLabelText('Run on')).toBeNull();
     fireEvent.click(screen.getByText('Save'));

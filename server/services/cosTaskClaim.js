@@ -148,9 +148,14 @@ export const TARGET_INSTANCE_KEY = 'targetInstanceId';
  * The instance this task is pinned to, or null when it is unpinned (runnable by
  * any peer). Trims so a whitespace-only value reads as unpinned rather than as
  * a target no instance can ever match.
+ *
+ * `source` is anything carrying the key: a task's `metadata` (every read path)
+ * or an `addTask` payload, which passes it top-level alongside `app`/`model`
+ * before the store folds it into metadata. One reader for both keeps the create
+ * path's normalization identical to the guards'.
  */
-export function getTargetInstance(metadata) {
-  const target = metadata?.[TARGET_INSTANCE_KEY];
+export function getTargetInstance(source) {
+  const target = source?.[TARGET_INSTANCE_KEY];
   if (typeof target !== 'string') return null;
   const trimmed = target.trim();
   return trimmed === '' ? null : trimmed;

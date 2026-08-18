@@ -95,18 +95,22 @@ export default function TaskItem({ task, isSystem, selected = false, onRefresh, 
   // task actually carries one, and is omitted from the PATCH otherwise rather
   // than writing an empty `prompt` key onto every task the user edits.
   const hasPromptField = typeof task.metadata?.prompt === 'string';
-  // Instance pinning (#4520) is only meaningful once this install federates with
-  // at least one identified peer. Below that, the picker is hidden AND the field
-  // is withheld from the PATCH, so editing a task here can never silently clear
-  // a pin another machine set.
   // `null` means the registry has not been read yet — distinct from a read that
-  // found nothing — so a row never flashes "unknown instance" before the list lands.
+  // found nothing — so a row never flashes "unknown instance" before the list lands,
+  // and the editor never offers a picker built from a list it does not have.
+  const registryLoaded = instances !== null;
   const knownInstances = instances || [];
-  const canPinInstance = knownInstances.length > 1;
   const targetInstanceId = task.metadata?.targetInstanceId || '';
+  // Instance pinning (#4520) is only meaningful once this install federates.
+  // Below that the picker is hidden AND the field is withheld from the PATCH, so
+  // editing a task here can never silently clear a pin another machine set — with
+  // one exception: a task that ALREADY carries a pin always gets the picker, or
+  // removing the last peer would leave that pin permanently unclearable and the
+  // task unrunnable on every instance.
+  const canPinInstance = registryLoaded && (knownInstances.length > 1 || Boolean(targetInstanceId));
   // A pin naming an instance that has left the registry still renders — silently
   // dropping the badge would hide exactly the task nothing will ever run.
-  const targetInstanceName = targetInstanceId && instances
+  const targetInstanceName = targetInstanceId && registryLoaded
     ? (knownInstances.find(i => i.instanceId === targetInstanceId)?.name || 'unknown instance')
     : '';
   const taskPrompt = task.metadata?.prompt || '';

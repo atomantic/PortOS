@@ -209,19 +209,36 @@ describe('instances.js', () => {
   // --- Assignable instances (#4520) ---
 
   describe('getAssignableInstances', () => {
-    it('lists self plus every peer that has advertised a federation identity', async () => {
+    it('lists self plus every enabled full-sync peer that has advertised an identity', async () => {
       readJSONFile.mockResolvedValue({
         self: { instanceId: 'self-id', name: 'workstation' },
         peers: [
-          { id: 'p1', instanceId: 'peer-id', name: 'render-box', address: '192.0.2.10' },
+          { id: 'p1', instanceId: 'peer-id', name: 'render-box', address: '192.0.2.10', fullSync: true, enabled: true },
           // Never probed: no federation identity yet, so pinning to it would
           // strand the task unrunnable on every peer.
-          { id: 'p2', instanceId: null, name: 'not-yet-connected', address: '192.0.2.11' }
+          { id: 'p2', instanceId: null, name: 'not-yet-connected', address: '192.0.2.11', fullSync: true }
         ]
       });
       expect(await getAssignableInstances()).toEqual([
         { instanceId: 'self-id', name: 'workstation', isSelf: true },
         { instanceId: 'peer-id', name: 'render-box', isSelf: false }
+      ]);
+    });
+
+    it('omits peers the CoS task sweep never reaches (not full-sync, or disabled)', async () => {
+      // peerCosSync only sweeps `fullSync === true && enabled !== false` peers, so
+      // pinning to any other peer strands the task: it never leaves this machine,
+      // and this machine skips it for being pinned elsewhere.
+      readJSONFile.mockResolvedValue({
+        self: { instanceId: 'self-id', name: 'workstation' },
+        peers: [
+          { id: 'p1', instanceId: 'category-sync-peer', name: 'partial', fullSync: false, enabled: true },
+          { id: 'p2', instanceId: 'disabled-peer', name: 'paused', fullSync: true, enabled: false },
+          { id: 'p3', instanceId: 'legacy-peer', name: 'legacy-no-flag' }
+        ]
+      });
+      expect(await getAssignableInstances()).toEqual([
+        { instanceId: 'self-id', name: 'workstation', isSelf: true }
       ]);
     });
 
@@ -234,8 +251,8 @@ describe('instances.js', () => {
       readJSONFile.mockResolvedValue({
         self: { instanceId: 'self-id', name: 'workstation' },
         peers: [
-          { id: 'p1', instanceId: 'peer-a', name: '', address: '192.0.2.10' },
-          { id: 'p2', instanceId: 'peer-b', name: '', address: '' }
+          { id: 'p1', instanceId: 'peer-a', name: '', address: '192.0.2.10', fullSync: true },
+          { id: 'p2', instanceId: 'peer-b', name: '', address: '', fullSync: true }
         ]
       });
       const assignable = await getAssignableInstances();
