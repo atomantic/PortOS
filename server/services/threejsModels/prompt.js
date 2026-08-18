@@ -142,6 +142,62 @@ bones for parts the reference does not clearly show. A short, defensible graph b
 speculative one, and omitting the key is better than guessing.
 `;
 
+// Clips are DATA, not code: named windows over parts the spec already builds,
+// with an easing NAME rather than a curve, so PortOS can scrub them
+// deterministically and never has to run anything the provider wrote. The block
+// is offered for every subject — a deployable can be an object, a character, or
+// a hybrid — but the default answer is silence: an assembly with no mechanism
+// the reference actually shows is a static model, and inventing motion for it is
+// worse than omitting the key.
+const animationContract = `
+ANIMATION CLIPS (optional, any subject):
+Return an "animation" object ONLY if the reference clearly shows a mechanism that deploys,
+retracts, opens, folds, spins, or comes apart. Omit the key entirely for a static subject —
+a static assembly is a complete answer, and invented motion is not.
+
+"animation": {
+  "clips": [{
+    "id":"deploy","name":"Deploy","role":"deploy"|"retract"|"assemble"|"destroy"|"idle"|"custom",
+    "durationSeconds":0.05..120,"loop":false,
+    "sequences": [{
+      "id":"stableSequenceId","name":"Readable step name","partId":"partId",
+      "startSeconds":n,"endSeconds":n,
+      "easing":"linear"|"easeIn"|"easeOut"|"easeInOut",
+      "channels": {
+        "position":{"from":[x,y,z],"to":[x,y,z]},
+        "rotationDegrees":{"from":[x,y,z],"to":[x,y,z]},
+        "scale":{"from":[sx,sy,sz],"to":[sx,sy,sz]},
+        "opacity":{"from":0..1,"to":0..1},
+        "visible":{"from":true,"to":false}
+      },
+      "cueId":"cueId"
+    }]
+  }],
+  "cues": [{"id":"cueId","label":"What is heard","kind":"mechanical"|"servo"|"latch"|"hydraulic"|"impact"|"electronic"|"ambient"}]
+}
+
+Rules, all enforced — a spec that breaks one is rejected outright:
+- Every "partId" names a real part. A sequence moves that part and everything parented to it.
+- "endSeconds" is strictly greater than "startSeconds", and no sequence ends after its clip's
+  "durationSeconds". A clip may hold its final pose after the last sequence finishes.
+- Every sequence changes at least one channel: a "from" equal to its "to" moves nothing.
+- Two sequences may not drive the same channel of the same part at overlapping times. Chain them
+  end-to-start instead, and start the next one from where the previous one ended so the part does
+  not jump.
+- "visible" is a step, not a fade: the part holds "from" for the whole window and takes "to" the
+  instant the sequence ends. To make a part appear part-way through, give it its own short
+  sequence ending at that moment.
+- Every "cueId" names an entry in "cues", and a cue may only ride a sequence that changes
+  position, rotationDegrees, or scale — a sound has to have movement to synchronize to. Cues are
+  identifiers only: never a filename, a URL, or audio data. PortOS plays no sound for them.
+- Channels are the only animation surface. Do not animate materials, lights, the camera, or
+  geometry parameters, and do not return JavaScript, keyframe arrays, or curve definitions.
+
+Prefer a short, legible set: a "deploy" clip and its "retract" mirror explain a mechanism better
+than eight speculative ones. Author each clip against the model's assembled pose — sequence one
+starts from exactly the "position"/"rotationDegrees"/"scale" the part carries in "parts".
+`;
+
 export function buildThreejsGenerationPrompt({
   sourcePath,
   name,
@@ -204,5 +260,5 @@ QUALITY GATE:
   under-observed the reference.` : ''}
 
 ${geometryContract}
-${outputContract}${articulation}`;
+${outputContract}${articulation}${animationContract}`;
 }

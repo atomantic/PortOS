@@ -484,3 +484,57 @@ describe('ThreejsModelDetail rig readiness fallbacks', () => {
     expect(screen.queryByText(/undefined/)).not.toBeInTheDocument();
   });
 });
+
+describe('ThreejsModelDetail clip inventory', () => {
+  beforeEach(resetMocks);
+
+  it('lists the clips the server inventoried, with role, duration and cue count', async () => {
+    getThreejsModel.mockResolvedValue({
+      ...baseRecord,
+      animation: {
+        animated: true,
+        clipCount: 1,
+        clips: [{ id: 'deploy', name: 'Deploy', role: 'deploy', durationSeconds: 2, sequenceCount: 3, cueCount: 1 }],
+      },
+    });
+    renderDetail();
+
+    await waitFor(() => expect(screen.getByText('Animation clips')).toBeInTheDocument());
+    expect(screen.getByText('Deploy')).toBeInTheDocument();
+    expect(screen.getByText('2s · 3 sequences · 1 sound cue')).toBeInTheDocument();
+  });
+
+  // A record generated before the inventory shipped still has the clips in its
+  // spec, so the panel derives them rather than claiming the model is static.
+  it('derives the list from the spec when the record carries no inventory', async () => {
+    getThreejsModel.mockResolvedValue({
+      ...baseRecord,
+      animation: undefined,
+      spec: {
+        ...baseRecord.spec,
+        animation: {
+          cues: [],
+          clips: [{
+            id: 'retract',
+            name: 'Retract',
+            role: 'retract',
+            durationSeconds: 1,
+            sequences: [{ id: 'fold', cueId: null }],
+          }],
+        },
+      },
+    });
+    renderDetail();
+
+    await waitFor(() => expect(screen.getByText('Animation clips')).toBeInTheDocument());
+    expect(screen.getByText('1s · 1 sequence')).toBeInTheDocument();
+  });
+
+  it('shows no clip panel for a static assembly', async () => {
+    getThreejsModel.mockResolvedValue({ ...baseRecord, animation: null });
+    renderDetail();
+
+    await waitFor(() => expect(screen.getByText('Rig readiness')).toBeInTheDocument());
+    expect(screen.queryByText('Animation clips')).not.toBeInTheDocument();
+  });
+});

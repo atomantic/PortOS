@@ -50,6 +50,7 @@ export * from './validation.js';
 // same objects — same identity, so the collision detector is satisfied.
 export * from './sharedSchemas.js';
 export * from './threejsModel.js';
+export * from './threejsModelAnimation.js';
 export * from './threejsModelCoverage.js';
 export * from './threejsModelFamilies.js';
 export * from './threejsModelPenetration.js';

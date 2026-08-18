@@ -1,6 +1,6 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@react-three/fiber', () => ({
   Canvas: ({ children, ...props }) => (
@@ -412,5 +412,223 @@ describe('ThreejsModelPreview articulation status', () => {
     fireEvent.click(container.querySelector('group[name="Handle"] mesh'));
     expect(screen.getByText('Handle')).toBeInTheDocument();
     expect(screen.queryByText(/^joint /)).not.toBeInTheDocument();
+  });
+});
+
+const clipSpec = () => ({
+  ...knifeSpec(),
+  animation: {
+    cues: [{ id: 'latchRelease', label: 'Latch lets go', kind: 'latch' }],
+    clips: [
+      {
+        id: 'deploy',
+        name: 'Deploy',
+        role: 'deploy',
+        durationSeconds: 2,
+        loop: false,
+        sequences: [
+          {
+            id: 'swingBlade',
+            name: 'Swing blade',
+            partId: 'blade',
+            startSeconds: 0,
+            endSeconds: 1,
+            easing: 'linear',
+            channels: { position: { from: [-1, 0, 0], to: [-1, 4, 0] } },
+            cueId: 'latchRelease',
+          },
+          {
+            id: 'dropHandle',
+            name: 'Drop handle',
+            partId: 'handle',
+            startSeconds: 1,
+            endSeconds: 2,
+            easing: 'linear',
+            channels: { visible: { from: true, to: false }, opacity: { from: 1, to: 0 } },
+            cueId: null,
+          },
+        ],
+      },
+      {
+        id: 'retract',
+        name: 'Retract',
+        role: 'retract',
+        durationSeconds: 1,
+        loop: false,
+        sequences: [{
+          id: 'foldBlade',
+          name: 'Fold blade',
+          partId: 'blade',
+          startSeconds: 0,
+          endSeconds: 1,
+          easing: 'linear',
+          channels: { position: { from: [-1, 4, 0], to: [-1, 0, 0] } },
+          cueId: null,
+        }],
+      },
+    ],
+  },
+});
+
+const scrub = (value) => fireEvent.change(screen.getByLabelText('Time'), { target: { value: String(value) } });
+const opacityOf = (container, name) =>
+  container.querySelector(`group[name="${name}"] meshStandardMaterial`).getAttribute('opacity');
+
+describe('ThreejsModelPreview clips', () => {
+  let frames = [];
+  let nowMs = 0;
+
+  beforeEach(() => {
+    frames = [];
+    nowMs = 0;
+    // A hand-driven frame queue, so playback is stepped deterministically
+    // instead of waiting on the browser's own rAF cadence.
+    vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation((callback) => frames.push(callback));
+    vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => {});
+    vi.spyOn(performance, 'now').mockImplementation(() => nowMs);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const advance = (ms) => {
+    nowMs += ms;
+    const pending = frames.splice(0);
+    act(() => {
+      for (const callback of pending) callback(nowMs);
+    });
+  };
+
+  it('shows no transport for a model that declares no clips', () => {
+    renderPreview(<ThreejsModelPreview spec={knifeSpec()} />);
+    expect(screen.queryByLabelText('Clip')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Play clip')).not.toBeInTheDocument();
+  });
+
+  it('renders a declared clip at its start pose and keeps undriven parts as authored', () => {
+    const { container } = renderPreview(<ThreejsModelPreview spec={clipSpec()} />);
+
+    expect(screen.getByLabelText('Clip')).toHaveValue('deploy');
+    expect(positionOf(container, 'Blade')).toEqual([-1, 0, 0]);
+    // Undriven at t=0: the handle keeps the authored material, with no opacity
+    // override in sight.
+    expect(opacityOf(container, 'Handle')).toBe('1');
+  });
+
+  it('scrubs to any time deterministically, including the visibility step at a window end', () => {
+    const { container } = renderPreview(<ThreejsModelPreview spec={clipSpec()} />);
+
+    scrub(0.5);
+    expect(positionOf(container, 'Blade')).toEqual([-1, 2, 0]);
+    expect(screen.getByText('Swing blade')).toBeInTheDocument();
+
+    scrub(1.5);
+    // Past its window the blade holds where its sequence left it, while the
+    // handle is half faded through the window that is still running. (The
+    // `visible` step riding the same sequence is asserted in the evaluator's own
+    // suite — React drops a boolean prop on an unrecognized element, so the DOM
+    // stand-in for a three.js group cannot show it.)
+    expect(positionOf(container, 'Blade')).toEqual([-1, 4, 0]);
+    expect(opacityOf(container, 'Handle')).toBe('0.5');
+
+    scrub(2);
+    expect(opacityOf(container, 'Handle')).toBe('0');
+  });
+
+  it('never fires a cue while scrubbing', () => {
+    const onCue = vi.fn();
+    renderPreview(<ThreejsModelPreview spec={clipSpec()} onCue={onCue} />);
+
+    scrub(0.5);
+    scrub(0);
+    scrub(1.2);
+    expect(onCue).not.toHaveBeenCalled();
+  });
+
+  it('plays the clip forward, fires each crossed cue once, and stops at the end', () => {
+    const onCue = vi.fn();
+    const { container } = renderPreview(<ThreejsModelPreview spec={clipSpec()} onCue={onCue} />);
+
+    fireEvent.click(screen.getByLabelText('Play clip'));
+    advance(500);
+    expect(positionOf(container, 'Blade')).toEqual([-1, 2, 0]);
+    expect(onCue).toHaveBeenCalledTimes(1);
+    expect(onCue).toHaveBeenCalledWith(expect.objectContaining({
+      cueId: 'latchRelease',
+      sequenceId: 'swingBlade',
+      partId: 'blade',
+      clipId: 'deploy',
+      cue: expect.objectContaining({ label: 'Latch lets go', kind: 'latch' }),
+    }));
+
+    advance(500);
+    expect(onCue).toHaveBeenCalledTimes(1);
+
+    // Past the authored duration the clip stops on its final pose instead of
+    // running on, and the transport flips back to offering Play.
+    advance(2_000);
+    expect(screen.getByLabelText('Play clip')).toBeInTheDocument();
+    expect(screen.getByText('2.00/2.00s')).toBeInTheDocument();
+    expect(frames).toHaveLength(0);
+  });
+
+  it('applies the speed multiplier to the playhead', () => {
+    renderPreview(<ThreejsModelPreview spec={clipSpec()} />);
+
+    fireEvent.change(screen.getByLabelText('Speed'), { target: { value: '2' } });
+    fireEvent.click(screen.getByLabelText('Play clip'));
+    advance(500);
+    expect(screen.getByText('1.00/2.00s')).toBeInTheDocument();
+  });
+
+  it('stops back to the clip start and releases the frame loop on unmount', () => {
+    const { unmount } = renderPreview(<ThreejsModelPreview spec={clipSpec()} />);
+
+    fireEvent.click(screen.getByLabelText('Play clip'));
+    advance(500);
+    fireEvent.click(screen.getByLabelText('Stop clip'));
+    expect(screen.getByText('0.00/2.00s')).toBeInTheDocument();
+    expect(globalThis.cancelAnimationFrame).toHaveBeenCalled();
+
+    fireEvent.click(screen.getByLabelText('Play clip'));
+    globalThis.cancelAnimationFrame.mockClear();
+    unmount();
+    expect(globalThis.cancelAnimationFrame).toHaveBeenCalled();
+  });
+
+  it('keeps the open clip in the URL and rewinds when it changes', () => {
+    const { container } = renderPreview(
+      <><ThreejsModelPreview spec={clipSpec()} /><LocationProbe /></>,
+      '/?clip=retract',
+    );
+
+    expect(screen.getByLabelText('Clip')).toHaveValue('retract');
+    expect(positionOf(container, 'Blade')).toEqual([-1, 4, 0]);
+
+    scrub(0.5);
+    fireEvent.change(screen.getByLabelText('Clip'), { target: { value: 'deploy' } });
+    expect(screen.getByTestId('location-probe')).toHaveTextContent('clip=deploy');
+    expect(screen.getByText('0.00/2.00s')).toBeInTheDocument();
+  });
+
+  it('falls back to the first clip when the URL names one this model does not have', () => {
+    renderPreview(<ThreejsModelPreview spec={clipSpec()} />, '/?clip=noSuchClip');
+    expect(screen.getByLabelText('Clip')).toHaveValue('deploy');
+  });
+
+  it('leaves explode and part picking working while a clip is posed', () => {
+    const { container } = renderPreview(<ThreejsModelPreview spec={clipSpec()} />);
+
+    scrub(1);
+    setExplode(1);
+    // The clip's pose and the disassembly offset compose rather than replacing
+    // each other: the blade sits at its posed Y with the explode offset on top.
+    const [bladeX, bladeY] = positionOf(container, 'Blade');
+    expect(bladeY).toBe(4);
+    expect(bladeX).toBeCloseTo(-2.18, 6);
+
+    fireEvent.click(container.querySelector('group[name="Blade"] mesh'));
+    expect(screen.getByText('Blade')).toBeInTheDocument();
   });
 });

@@ -16,6 +16,7 @@ import {
   evaluateThreejsMaterialPlausibility,
   threejsSculptSpecSchema,
 } from '../../lib/threejsModel.js';
+import { summarizeThreejsAnimation } from '../../lib/threejsModelAnimation.js';
 import { buildThreejsCoverageFeedback, evaluateThreejsPartCoverage } from '../../lib/threejsModelCoverage.js';
 import { buildThreejsPenetrationFeedback, evaluateThreejsPenetration } from '../../lib/threejsModelPenetration.js';
 import { evaluateThreejsRigReadiness } from '../../lib/threejsModelRig.js';
@@ -126,6 +127,10 @@ async function executeGeneration({
     // when it did not, the reason. A model with no graph reports not-ready with
     // reasons rather than passing silently.
     const rig = evaluateThreejsRigReadiness(spec);
+    // What the spec DECLARED it can play. Nothing is skinned and no clip is
+    // executed here — this is the inventory, so the record answers "static
+    // assembly" versus "3 clips" without re-deriving it on every read.
+    const animation = summarizeThreejsAnimation(spec);
     const completedAt = new Date().toISOString();
     const effectiveProvider = result.provider?.id || result.fallbackProvider?.id || provider.id;
     const effectiveModel = result.model || requestedModel || provider.defaultModel || null;
@@ -142,6 +147,7 @@ async function executeGeneration({
         flatness,
         penetration,
         rig,
+        animation,
         materialPlausibility,
         error: null,
         generationOperationId: null,
@@ -167,6 +173,9 @@ async function executeGeneration({
     }
     if (materialPlausibility.warningCount > 0) {
       console.warn(`⚠️ Three.js model ${id} material plausibility: ${materialPlausibility.warningCount} of ${materialPlausibility.matchedMaterialCount} recognized material(s) carry values their substance does not support`);
+    }
+    if (animation.animated) {
+      console.log(`🎬 Three.js model ${id} declares ${animation.clipCount} clip(s) over ${animation.movingPartCount} moving part(s), longest ${animation.longestClipSeconds}s`);
     }
     if (rig.articulationReady) {
       console.log(`🦴 Three.js model ${id} declares an articulation graph: ${rig.jointCount} joint(s), ${rig.socketCount} pivot socket(s)`);

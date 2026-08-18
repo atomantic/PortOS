@@ -859,3 +859,169 @@ describe('buildThreejsMaterialFeedback', () => {
     expect(feedback).toContain('steelPlate');
   });
 });
+
+const animatedSpec = () => {
+  const spec = validSpec();
+  spec.animation = {
+    cues: [{ id: 'latchRelease', label: 'Latch lets go', kind: 'latch' }],
+    clips: [{
+      id: 'deploy',
+      name: 'Deploy',
+      role: 'deploy',
+      durationSeconds: 2,
+      sequences: [
+        {
+          id: 'liftLid',
+          name: 'Lift lid',
+          partId: 'frontTrim',
+          startSeconds: 0,
+          endSeconds: 1,
+          easing: 'easeOut',
+          channels: { position: { from: [0, 0, 0.64], to: [0, 0.6, 0.64] } },
+          cueId: 'latchRelease',
+        },
+        {
+          id: 'hideTrim',
+          name: 'Hide trim',
+          partId: 'frontTrim',
+          startSeconds: 1,
+          endSeconds: 2,
+          channels: { visible: { from: true, to: false } },
+        },
+      ],
+    }],
+  };
+  return spec;
+};
+
+const animationIssues = (mutate) => {
+  const spec = animatedSpec();
+  mutate(spec);
+  const result = threejsSculptSpecSchema.safeParse(spec);
+  expect(result.success).toBe(false);
+  return result.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`);
+};
+
+describe('threejsSculptSpecSchema animation', () => {
+  it('accepts a well-formed clip and fills the optional sequence fields', () => {
+    const parsed = threejsSculptSpecSchema.parse(animatedSpec());
+    expect(parsed.animation.clips[0].loop).toBe(false);
+    expect(parsed.animation.clips[0].sequences[1].easing).toBe('easeInOut');
+    expect(parsed.animation.clips[0].sequences[1].cueId).toBeNull();
+    expect(parsed.animation.cues[0].kind).toBe('latch');
+  });
+
+  // The whole point of the field being optional: a record written before clips
+  // existed has no key at all, and must not acquire one on read.
+  it('leaves a spec that declares no animation without the key, on both contracts', () => {
+    expect(threejsSculptSpecSchema.parse(validSpec()).animation).toBeUndefined();
+    expect(storedThreejsSculptSpecSchema.parse(validSpec()).animation).toBeUndefined();
+  });
+
+  it('accepts a stored animated spec whose part scale predates the authoring floor', () => {
+    const spec = animatedSpec();
+    spec.parts[0].scale = [1, 0, 1];
+    spec.animation.clips[0].sequences[0].channels.scale = { from: [1, 0, 1], to: [1, 1, 1] };
+    expect(threejsSculptSpecSchema.safeParse(spec).success).toBe(false);
+    expect(storedThreejsSculptSpecSchema.safeParse(spec).success).toBe(true);
+  });
+
+  it('rejects a sequence pointed at a part that does not exist, naming the path', () => {
+    expect(animationIssues((spec) => {
+      spec.animation.clips[0].sequences[0].partId = 'notARealPart';
+    })).toEqual(expect.arrayContaining([
+      'animation.clips.0.sequences.0.partId: unknown sequence part: notARealPart',
+    ]));
+  });
+
+  it('rejects a window that ends before it starts and one that outruns its clip', () => {
+    expect(animationIssues((spec) => {
+      spec.animation.clips[0].sequences[0].endSeconds = 0;
+    })).toEqual(expect.arrayContaining([
+      'animation.clips.0.sequences.0.endSeconds: a sequence must end after it starts',
+    ]));
+    expect(animationIssues((spec) => {
+      spec.animation.clips[0].sequences[1].endSeconds = 9;
+    })).toEqual(expect.arrayContaining([
+      'animation.clips.0.sequences.1.endSeconds: sequence hideTrim ends at 9s, past the clip\'s 2s duration',
+    ]));
+  });
+
+  it('rejects an easing name it does not implement', () => {
+    expect(animationIssues((spec) => {
+      spec.animation.clips[0].sequences[0].easing = 'elasticOut';
+    })).toEqual(expect.arrayContaining([expect.stringContaining('animation.clips.0.sequences.0.easing')]));
+  });
+
+  it('rejects a sequence whose endpoints are equal, which occupies time and moves nothing', () => {
+    expect(animationIssues((spec) => {
+      spec.animation.clips[0].sequences[0].channels = { position: { from: [0, 0, 0.64], to: [0, 0, 0.64] } };
+    })).toEqual(expect.arrayContaining([
+      'animation.clips.0.sequences.0.channels: a sequence must change at least one channel',
+    ]));
+  });
+
+  it('rejects a cue on a sequence that only fades or hides — a sound needs motion to ride', () => {
+    expect(animationIssues((spec) => {
+      spec.animation.clips[0].sequences[1].cueId = 'latchRelease';
+    })).toEqual(expect.arrayContaining([
+      'animation.clips.0.sequences.1.cueId: sequence hideTrim fires cue latchRelease without moving the part — attach a cue to a sequence that changes position, rotation, or scale',
+    ]));
+    expect(animationIssues((spec) => {
+      spec.animation.clips[0].sequences[0].channels = { opacity: { from: 1, to: 0 } };
+    })).toEqual(expect.arrayContaining([expect.stringContaining('without moving the part')]));
+  });
+
+  it('rejects a cue nothing declared', () => {
+    expect(animationIssues((spec) => {
+      spec.animation.cues = [];
+    })).toEqual(expect.arrayContaining([
+      'animation.clips.0.sequences.0.cueId: unknown cue: latchRelease',
+    ]));
+  });
+
+  it('rejects two sequences driving one part+channel at overlapping times', () => {
+    expect(animationIssues((spec) => {
+      spec.animation.clips[0].sequences[1].channels = { position: { from: [0, 0.6, 0.64], to: [0, 0, 0.64] } };
+      spec.animation.clips[0].sequences[1].startSeconds = 0.5;
+    })).toEqual(expect.arrayContaining([
+      'animation.clips.0.sequences.1.channels.position: sequences liftLid and hideTrim both drive position of part frontTrim at the same time',
+    ]));
+  });
+
+  // Handing one window off to the next at a shared instant is how a multi-step
+  // deployment is authored, so it must NOT read as an overlap.
+  it('accepts two windows on one channel that meet end-to-start', () => {
+    const spec = animatedSpec();
+    spec.animation.clips[0].sequences[1].channels = { position: { from: [0, 0.6, 0.64], to: [0, 0, 0.64] } };
+    expect(threejsSculptSpecSchema.safeParse(spec).success).toBe(true);
+  });
+
+  it('rejects duplicate clip, sequence, and cue ids', () => {
+    expect(animationIssues((spec) => {
+      spec.animation.clips[0].sequences[1].id = 'liftLid';
+    })).toEqual(expect.arrayContaining([
+      'animation.clips.0.sequences.1.id: duplicate sequence id: liftLid',
+    ]));
+    expect(animationIssues((spec) => {
+      spec.animation.clips.push({ ...spec.animation.clips[0] });
+    })).toEqual(expect.arrayContaining(['animation.clips.1.id: duplicate clip id: deploy']));
+    expect(animationIssues((spec) => {
+      spec.animation.cues.push({ ...spec.animation.cues[0] });
+    })).toEqual(expect.arrayContaining(['animation.cues.1.id: duplicate cue id: latchRelease']));
+  });
+});
+
+describe('buildThreejsFactorySource animation', () => {
+  it('carries validated clips into the exported runtime metadata as data', () => {
+    const source = buildThreejsFactorySource(animatedSpec());
+    expect(source).toContain('animation: spec.animation || null,');
+    expect(source.replace(/\s+/g, '')).toContain('"cueId":"latchRelease"');
+  });
+
+  it('exports null animation for a static spec, and never invents a clip', () => {
+    const source = buildThreejsFactorySource(validSpec());
+    expect(source).toContain('animation: spec.animation || null,');
+    expect(source).not.toContain('"sequences"');
+  });
+});

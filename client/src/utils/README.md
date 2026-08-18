@@ -34,7 +34,7 @@ grep -i "what you want to do" client/src/utils/README.md
 |---|---|
 | `animationClips` | Treadmill helpers for rigged GLB clips: `withInPlaceClips` synthesizes root-translation-stripped ("in place") variants of root-motion walk/run clips so a fixed-frame avatar can't drift; `inPlaceClipName` routes a clip name to its variant. Framework-agnostic (caller passes the root-motion names + suffix). |
 | `coalesce` | Trailing-edge coalescer: wraps a function so rapid calls collapse into one deferred invocation. |
-| `easing` | `smoothstep` interpolation easing curve. |
+| `easing` | Interpolation easing curves — `linear`, `easeIn`, `easeOut`, `smoothstep` (ease in/out), plus the `EASING_CURVES` map keyed by the declarative Three.js clip contract's easing enum. Extend here rather than re-defining an easing inline. |
 | `hashString` | Deterministic string → 32-bit hash (stable colors, keys, seeds). |
 | `modelFit` | `fitModelToHeight(object, { targetHeight, feetOnGround, yOffset })` — normalize a loaded GLB to a fixed on-screen height and anchor it vertically, either by bounding-box center (portrait framing) or by its lowest point (a figure standing on a ground plane). Recenters x/z, guards a zero-height model against an infinite scale, leaves a geometry-less object or a non-finite `targetHeight` untouched rather than writing `NaN`/`Infinity` through the transform, and resets to identity before measuring so a repeat call (StrictMode's double mount effect) converges instead of blowing the model back up. Call from an effect, never during render — a skinned mesh measures wrong before `useAnimations` binds the skeleton. |
 | `sleep` | `sleep(ms)` — promise-returning `setTimeout` for retry backoffs and race timeouts. Use instead of re-declaring a local `delay`. |

@@ -4,8 +4,17 @@ import { Canvas, useFrame } from '@react-three/fiber';
 import { Bounds, OrbitControls, useBounds } from '@react-three/drei';
 import * as THREE from 'three';
 import { createSculptBufferGeometry, needsSculptBufferGeometry, sculptMaterialProps } from '../../lib/threejsSculpt';
+import {
+  collectThreejsCues,
+  evaluateThreejsClipPose,
+  getThreejsClipDuration,
+  listThreejsClips,
+  listThreejsCues,
+  resolveThreejsClip,
+} from '../../lib/threejsAnimation';
 import { buildPartSelectionIndex, computeExplodeLayout, isReliefPart } from '../../lib/threejsExplode';
 import { summarizeThreejsArticulation } from '../../lib/threejsRig';
+import ThreejsClipTransport from './ThreejsClipTransport';
 import {
   createRenderBudget,
   getEffectiveTier,
@@ -120,14 +129,21 @@ function Geometry({ definition }) {
   }
 }
 
-function Material({ definition, highlighted = false, auditMode = 'final', partId }) {
+function Material({ definition, highlighted = false, auditMode = 'final', partId, opacity }) {
   if (auditMode === 'normals') return <meshNormalMaterial />;
   if (auditMode === 'wireframe') return <meshBasicMaterial color="#cbd5e1" wireframe />;
   if (auditMode === 'boundaries') {
     return <meshStandardMaterial color={auditPartColor(partId)} metalness={0} roughness={0.62} />;
   }
   if (auditMode === 'neutral') return <meshStandardMaterial color="#a8b0bd" metalness={0} roughness={0.72} />;
-  const props = sculptMaterialProps(definition);
+  const authored = sculptMaterialProps(definition);
+  // A clip's opacity channel overrides the authored value for as long as the
+  // clip drives it. `transparent` has to come with it — Three.js ignores an
+  // opacity below 1 on an opaque material — but the authored flag still wins
+  // when the material was already transparent.
+  const props = typeof opacity === 'number'
+    ? { ...authored, opacity, transparent: authored.transparent || opacity < 1 }
+    : authored;
   // Basic materials are unlit and have no emissive channel, so the only way to
   // show them as selected is the base color.
   if (definition.type === 'basic') {
@@ -145,12 +161,19 @@ function Material({ definition, highlighted = false, auditMode = 'final', partId
 const offsetPosition = (position = [0, 0, 0], offset) =>
   (Array.isArray(offset) ? position.map((value, axis) => value + offset[axis]) : position);
 
-function Part({ part, materials, layout, selection, selectedId, onSelect, auditMode }) {
+function Part({ part, materials, layout, selection, selectedId, onSelect, auditMode, pose }) {
+  // The clip's pose for this part, or nothing — a part no sequence drives keeps
+  // exactly the transform the spec authored, which is also what every part of a
+  // model with no clips at all gets.
+  const posed = pose[part.id];
   const transform = {
     name: part.name,
-    position: offsetPosition(part.position, layout.offsets[part.id]),
-    rotation: rotation(part.rotationDegrees),
-    scale: part.scale,
+    position: offsetPosition(posed?.position || part.position, layout.offsets[part.id]),
+    rotation: rotation(posed?.rotationDegrees || part.rotationDegrees),
+    scale: posed?.scale || part.scale,
+    // Hides the whole subtree, which is what a retracted or destroyed component
+    // means — its relief and children go with it.
+    visible: posed?.visible !== false,
   };
   // The whole selected subtree lights up, so selecting a container reads as one
   // component rather than one lonely mesh inside it.
@@ -168,11 +191,11 @@ function Part({ part, materials, layout, selection, selectedId, onSelect, auditM
       {part.geometry && (
         <mesh castShadow={part.castShadow} receiveShadow={part.receiveShadow} onClick={select}>
           <Geometry definition={part.geometry} />
-          <Material definition={materials[part.material]} highlighted={highlighted} auditMode={auditMode} partId={part.id} />
+          <Material definition={materials[part.material]} highlighted={highlighted} auditMode={auditMode} partId={part.id} opacity={posed?.opacity} />
         </mesh>
       )}
       {part.children.filter(isReliefPart).map((child) => (
-        <Part key={child.id} part={child} materials={materials} layout={layout} selection={selection} selectedId={selectedId} onSelect={onSelect} auditMode={auditMode} />
+        <Part key={child.id} part={child} materials={materials} layout={layout} selection={selection} selectedId={selectedId} onSelect={onSelect} auditMode={auditMode} pose={pose} />
       ))}
     </>
   );
@@ -190,6 +213,7 @@ function Part({ part, materials, layout, selection, selectedId, onSelect, auditM
           selectedId={selectedId}
           onSelect={onSelect}
           auditMode={auditMode}
+          pose={pose}
         />
       ))}
     </group>
@@ -259,7 +283,7 @@ function SceneLight({ light }) {
   return <directionalLight color={light.color} intensity={light.intensity} position={light.position} castShadow />;
 }
 
-function ProceduralScene({ spec, background, layout, selection, selectedId, onSelect, auditMode }) {
+function ProceduralScene({ spec, background, layout, selection, selectedId, onSelect, auditMode, pose }) {
   return (
     <>
       {background && <color attach="background" args={[background]} />}
@@ -280,6 +304,7 @@ function ProceduralScene({ spec, background, layout, selection, selectedId, onSe
               selectedId={selectedId}
               onSelect={onSelect}
               auditMode={auditMode}
+              pose={pose}
             />
           ))}
         </group>
@@ -297,7 +322,104 @@ function ProceduralScene({ spec, background, layout, selection, selectedId, onSe
   );
 }
 
-export default function ThreejsModelPreview({ spec, family = null, className = '' }) {
+/**
+ * Playhead for one declared clip.
+ *
+ * The time lives in a ref as well as in state because the play loop needs the
+ * PREVIOUS frame's time to ask which cues it just crossed — deriving that inside
+ * a state updater would make firing a cue a side effect of rendering, which
+ * double-fires the moment React replays the updater.
+ *
+ * Scrubbing moves the same playhead and fires nothing: only this loop collects
+ * cues, which is the entire difference between silent scrubbing and playback.
+ */
+function useClipPlayback({ clip, cuesById, onCue }) {
+  const [timeSeconds, setTimeSeconds] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [speed, setSpeed] = useState(1);
+  const timeRef = useRef(0);
+  const onCueRef = useRef(onCue);
+  const duration = getThreejsClipDuration(clip);
+  const clipId = clip?.id || null;
+
+  const setPlayhead = useCallback((value) => {
+    timeRef.current = value;
+    setTimeSeconds(value);
+  }, []);
+
+  // A different clip starts at its own beginning, stopped — carrying a playhead
+  // across clips would drop the model into a pose the new clip never authored.
+  useEffect(() => {
+    setPlaying(false);
+    setPlayhead(0);
+  }, [clipId, setPlayhead]);
+
+  // Held in a ref so a caller passing an inline handler cannot restart the loop
+  // on every render.
+  useEffect(() => {
+    onCueRef.current = onCue;
+  }, [onCue]);
+
+  useEffect(() => {
+    if (!playing || !clip || !(duration > 0)) return undefined;
+    let frame = 0;
+    let last = performance.now();
+    const fire = (from, to) => {
+      const handler = onCueRef.current;
+      if (!handler) return;
+      for (const crossed of collectThreejsCues(clip, from, to)) {
+        // The handler runs outside React's render and outside any request
+        // lifecycle: an uncaught throw here would break the rAF chain and stop
+        // playback dead with no way to restart it.
+        try {
+          handler({ ...crossed, clipId: clip.id, cue: cuesById[crossed.cueId] || null });
+        } catch (error) {
+          console.error(`❌ Three.js clip cue handler failed: ${error.message}`);
+        }
+      }
+    };
+    const step = (now) => {
+      const delta = Math.max(0, (now - last) / 1000) * speed;
+      last = now;
+      const from = timeRef.current;
+      const raw = from + delta;
+      if (raw < duration) {
+        fire(from, raw);
+        setPlayhead(raw);
+      } else if (clip.loop) {
+        fire(from, duration);
+        const wrapped = raw % duration;
+        fire(0, wrapped);
+        setPlayhead(wrapped);
+      } else {
+        fire(from, duration);
+        setPlayhead(duration);
+        setPlaying(false);
+        return;
+      }
+      frame = requestAnimationFrame(step);
+    };
+    frame = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(frame);
+  }, [playing, clip, duration, speed, cuesById, setPlayhead]);
+
+  const togglePlay = useCallback(() => {
+    // Pressing play on a finished clip replays it rather than sitting on the
+    // last frame doing nothing. Read from state rather than an updater — moving
+    // the playhead from inside one makes it a side effect React may replay.
+    if (!playing && timeRef.current >= duration) setPlayhead(0);
+    setPlaying(!playing);
+  }, [playing, duration, setPlayhead]);
+
+  const stop = useCallback(() => {
+    setPlaying(false);
+    setPlayhead(0);
+  }, [setPlayhead]);
+
+  return { timeSeconds, playing, speed, setSpeed, togglePlay, stop, setPlayhead, duration };
+}
+
+export default function ThreejsModelPreview({ spec, family = null, className = '', onCue = null }) {
   const [background, setBackground] = useState(() => spec?.background || '#000000');
   const [explode, setExplode] = useState(0);
   const [qualityMode, setQualityMode] = useState('auto');
@@ -356,6 +478,30 @@ export default function ThreejsModelPreview({ spec, family = null, className = '
   const requestedAuditMode = searchParams.get('auditMode');
   const auditMode = isAuditRenderMode(requestedAuditMode) ? requestedAuditMode : 'final';
   const auditCameraPosition = getAuditCameraPosition(spec, auditCamera);
+  // Which clip is open is part of what the URL describes, the same way the audit
+  // camera and inspection mode are — a clip a model does not declare degrades to
+  // its first one rather than to an empty transport.
+  const clips = useMemo(() => listThreejsClips(spec), [spec]);
+  // Keyed on the requested id rather than the params object: picking a part
+  // rewrites the URL, and a fresh `searchParams` identity would hand the play
+  // loop a new clip object and restart it mid-playback.
+  const requestedClipId = searchParams.get('clip');
+  const clip = useMemo(() => resolveThreejsClip(spec, requestedClipId), [spec, requestedClipId]);
+  const cuesById = useMemo(() => {
+    // Null-prototype: cue ids are provider-authored and the id schema accepts
+    // `toString`, so a bare lookup on a plain object can hand back a function.
+    const map = Object.create(null);
+    for (const cue of listThreejsCues(spec)) map[cue.id] = cue;
+    return map;
+  }, [spec]);
+  const playback = useClipPlayback({ clip, cuesById, onCue });
+  const { pose, activeSequenceIds } = useMemo(
+    () => evaluateThreejsClipPose(clip, playback.timeSeconds),
+    [clip, playback.timeSeconds],
+  );
+  const activeSequenceNames = (clip?.sequences || [])
+    .filter((sequence) => activeSequenceIds.includes(sequence.id))
+    .map((sequence) => sequence.name);
   const handleSelect = useCallback((partId) => {
     setSearchParams((previous) => {
       const next = new URLSearchParams(previous);
@@ -364,7 +510,7 @@ export default function ThreejsModelPreview({ spec, family = null, className = '
       return next;
     }, { replace: true });
   }, [setSearchParams]);
-  const setAuditParam = useCallback((key, value) => {
+  const setPreviewParam = useCallback((key, value) => {
     setSearchParams((previous) => {
       const next = new URLSearchParams(previous);
       next.set(key, value);
@@ -406,6 +552,7 @@ export default function ThreejsModelPreview({ spec, family = null, className = '
           selectedId={selectedId}
           onSelect={handleSelect}
           auditMode={auditMode}
+          pose={pose}
         />
       </Canvas>
       <div className="port-media-overlay absolute left-2 top-2 flex max-w-[calc(100%-1rem)] flex-wrap items-center gap-1.5 rounded-lg px-2 py-1.5 text-[10px]">
@@ -488,7 +635,7 @@ export default function ThreejsModelPreview({ spec, family = null, className = '
                 aria-pressed={auditCamera === camera.id}
                 disabled={unavailable}
                 title={unavailable ? 'Choose a subject family to enable family review' : undefined}
-                onClick={() => setAuditParam('auditCamera', camera.id)}
+                onClick={() => setPreviewParam('auditCamera', camera.id)}
                 className="port-media-overlay-item rounded px-1.5 py-1 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {camera.label}
@@ -505,7 +652,7 @@ export default function ThreejsModelPreview({ spec, family = null, className = '
               type="button"
               aria-label={mode.label}
               aria-pressed={auditMode === mode.id}
-              onClick={() => setAuditParam('auditMode', mode.id)}
+              onClick={() => setPreviewParam('auditMode', mode.id)}
               className="port-media-overlay-item rounded px-1.5 py-1"
             >
               {mode.label}
@@ -538,6 +685,20 @@ export default function ThreejsModelPreview({ spec, family = null, className = '
         </div>
       )}
       <div className="pointer-events-none absolute bottom-2 left-2 flex max-w-[calc(100%-1rem)] flex-wrap items-center gap-1.5 text-[10px]">
+        <ThreejsClipTransport
+          clips={clips}
+          clip={clip}
+          duration={playback.duration}
+          time={playback.timeSeconds}
+          playing={playback.playing}
+          speed={playback.speed}
+          activeSequenceNames={activeSequenceNames}
+          onSelectClip={(clipId) => setPreviewParam('clip', clipId)}
+          onTogglePlay={playback.togglePlay}
+          onStop={playback.stop}
+          onScrub={playback.setPlayhead}
+          onSpeedChange={playback.setSpeed}
+        />
         <span className="port-media-overlay rounded px-2 py-1">
           Drag to orbit · scroll to zoom · click a part to identify it · audit controls never change the saved model
         </span>

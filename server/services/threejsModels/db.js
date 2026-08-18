@@ -95,6 +95,12 @@ export async function createModel(input) {
     // which every consumer renders as an unevaluated STATIC assembly — never as
     // "articulation-ready".
     rig: null,
+    // Clip inventory for `spec.animation`, written alongside it by
+    // `summarizeThreejsAnimation`. Same additive-field contract as `coverage`
+    // and `rig`: a record written before clips shipped reads back undefined,
+    // which every consumer renders as an unevaluated STATIC assembly with
+    // nothing to play — never as "no clips were declared".
+    animation: null,
     // Material-plausibility findings for `spec`, written alongside it by
     // `evaluateThreejsMaterialPlausibility`. Same additive-field contract as
     // `coverage` and `flatness`: an older record reads back undefined, which

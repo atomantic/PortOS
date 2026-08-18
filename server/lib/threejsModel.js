@@ -359,7 +359,169 @@ const detailSchema = z.object({
   priority: z.enum(['identity', 'major', 'minor']).default('major'),
 });
 
-const makeSpecSchema = (partSchema) => z.object({
+// Animation clips. PortOS still builds STATIC assemblies — nothing here is
+// skinned, bound, or deformed, and no provider-authored JavaScript ever runs.
+// A clip is a DECLARATION of transforms over time: named sequences that carry
+// one part from one authored pose to another inside a bounded window, so a
+// deployable can demonstrate assembly, retraction, or destruction and a
+// timeline can scrub it deterministically.
+//
+// Absent `animation` means "static assembly", exactly the way absent
+// `articulation` means "no declared joints" — a spec written before clips
+// shipped keeps parsing, rendering, and exporting unchanged.
+export const THREEJS_CLIP_EASINGS = ['linear', 'easeIn', 'easeOut', 'easeInOut'];
+export const THREEJS_CLIP_ROLES = ['deploy', 'retract', 'assemble', 'destroy', 'idle', 'custom'];
+// Cue KINDS, not sounds: PortOS ships no audio and loads none. A cue is a data
+// identifier a host may map to its own sample, and the kind is the only hint
+// about what it should sound like.
+export const THREEJS_CUE_KINDS = ['mechanical', 'servo', 'latch', 'hydraulic', 'impact', 'electronic', 'ambient'];
+
+const MAX_CLIP_SECONDS = 120;
+const MIN_CLIP_SECONDS = 0.05;
+const clipSeconds = z.number().finite().min(0).max(MAX_CLIP_SECONDS);
+const unitInterval = z.number().finite().min(0).max(1);
+
+// Every channel is a bounded pair of authored endpoints. There are no keyframe
+// arrays and no provider-authored curves: an easing NAME picks one of four
+// interpolations PortOS implements, which is what keeps playback deterministic
+// and the contract small enough to validate exhaustively.
+const rangeSchema = (valueSchema) => z.object({ from: valueSchema, to: valueSchema });
+
+const cueSchema = z.object({
+  id: idSchema,
+  label: z.string().trim().min(1).max(120),
+  kind: z.enum(THREEJS_CUE_KINDS).default('mechanical'),
+});
+
+// `visible` is a STEP, not an interpolation: the part holds `from` for the whole
+// window and takes `to` the instant the sequence completes. A part that should
+// appear part-way through a clip is authored as its own short sequence ending at
+// that instant — which keeps the evaluator a pure function of time with no
+// hidden fade semantics.
+const CHANNEL_KEYS = ['position', 'rotationDegrees', 'scale', 'opacity', 'visible'];
+// A sound cue synchronizes to MOVEMENT. A fade or a visibility flip has no
+// mechanism behind it to hear, so it cannot be what a cue is attached to.
+const MOTION_CHANNEL_KEYS = ['position', 'rotationDegrees', 'scale'];
+
+const rangeChanges = (range) => {
+  if (!range) return false;
+  const { from, to } = range;
+  if (Array.isArray(from) && Array.isArray(to)) return from.some((value, axis) => value !== to[axis]);
+  return from !== to;
+};
+
+const makeSequenceSchema = (scaleSchema) => z.object({
+  id: idSchema,
+  name: z.string().trim().min(1).max(120),
+  partId: idSchema,
+  startSeconds: clipSeconds,
+  endSeconds: clipSeconds,
+  easing: z.enum(THREEJS_CLIP_EASINGS).default('easeInOut'),
+  channels: z.object({
+    position: rangeSchema(vec3Schema).optional(),
+    rotationDegrees: rangeSchema(vec3Schema).optional(),
+    scale: rangeSchema(scaleSchema).optional(),
+    opacity: rangeSchema(unitInterval).optional(),
+    visible: rangeSchema(z.boolean()).optional(),
+  }),
+  // The cue this sequence fires when the playhead crosses its start during
+  // PLAYBACK. Scrubbing never fires anything — that split is the whole reason
+  // the cue is data rather than an embedded sound.
+  cueId: idSchema.nullable().default(null),
+}).superRefine((sequence, ctx) => {
+  if (!(sequence.endSeconds > sequence.startSeconds)) {
+    ctx.addIssue({ code: 'custom', message: 'a sequence must end after it starts', path: ['endSeconds'] });
+  }
+  const changed = CHANNEL_KEYS.filter((key) => rangeChanges(sequence.channels[key]));
+  if (changed.length === 0) {
+    // A sequence whose endpoints are equal occupies a window on the timeline and
+    // moves nothing — indistinguishable from a modeling slip, and it would make
+    // the overlap rule below reject a real sequence in the same window.
+    ctx.addIssue({ code: 'custom', message: 'a sequence must change at least one channel', path: ['channels'] });
+  }
+  if (sequence.cueId && !changed.some((key) => MOTION_CHANNEL_KEYS.includes(key))) {
+    ctx.addIssue({
+      code: 'custom',
+      message: `sequence ${sequence.id} fires cue ${sequence.cueId} without moving the part — attach a cue to a sequence that changes position, rotation, or scale`,
+      path: ['cueId'],
+    });
+  }
+});
+
+const makeClipSchema = (scaleSchema) => z.object({
+  id: idSchema,
+  name: z.string().trim().min(1).max(120),
+  role: z.enum(THREEJS_CLIP_ROLES).default('custom'),
+  durationSeconds: z.number().finite().min(MIN_CLIP_SECONDS).max(MAX_CLIP_SECONDS),
+  loop: z.boolean().default(false),
+  sequences: z.array(makeSequenceSchema(scaleSchema)).min(1).max(120),
+}).superRefine((clip, ctx) => {
+  const sequenceIds = new Set();
+  // One window per part per channel. Two sequences driving the same channel of
+  // the same part at the same time have no defined result — whichever the
+  // evaluator happened to visit last would win, so the ambiguity is rejected at
+  // authoring time instead of resolved by declaration order.
+  const windows = new Map();
+  clip.sequences.forEach((sequence, index) => {
+    if (sequenceIds.has(sequence.id)) {
+      ctx.addIssue({ code: 'custom', message: `duplicate sequence id: ${sequence.id}`, path: ['sequences', index, 'id'] });
+    }
+    sequenceIds.add(sequence.id);
+    if (sequence.endSeconds > clip.durationSeconds) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `sequence ${sequence.id} ends at ${sequence.endSeconds}s, past the clip's ${clip.durationSeconds}s duration`,
+        path: ['sequences', index, 'endSeconds'],
+      });
+    }
+    for (const channel of CHANNEL_KEYS) {
+      if (!sequence.channels[channel]) continue;
+      const key = `${sequence.partId}|${channel}`;
+      const claimed = windows.get(key) || [];
+      const clash = claimed.find((other) => sequence.startSeconds < other.endSeconds && other.startSeconds < sequence.endSeconds);
+      if (clash) {
+        ctx.addIssue({
+          code: 'custom',
+          message: `sequences ${clash.id} and ${sequence.id} both drive ${channel} of part ${sequence.partId} at the same time`,
+          path: ['sequences', index, 'channels', channel],
+        });
+      }
+      claimed.push(sequence);
+      windows.set(key, claimed);
+    }
+  });
+});
+
+const makeAnimationSchema = (scaleSchema) => z.object({
+  clips: z.array(makeClipSchema(scaleSchema)).min(1).max(12),
+  cues: z.array(cueSchema).max(24).default([]),
+}).superRefine((animation, ctx) => {
+  const cueIds = new Set();
+  animation.cues.forEach((cue, index) => {
+    if (cueIds.has(cue.id)) {
+      ctx.addIssue({ code: 'custom', message: `duplicate cue id: ${cue.id}`, path: ['cues', index, 'id'] });
+    }
+    cueIds.add(cue.id);
+  });
+  const clipIds = new Set();
+  animation.clips.forEach((clip, clipIndex) => {
+    if (clipIds.has(clip.id)) {
+      ctx.addIssue({ code: 'custom', message: `duplicate clip id: ${clip.id}`, path: ['clips', clipIndex, 'id'] });
+    }
+    clipIds.add(clip.id);
+    clip.sequences.forEach((sequence, index) => {
+      if (sequence.cueId && !cueIds.has(sequence.cueId)) {
+        ctx.addIssue({
+          code: 'custom',
+          message: `unknown cue: ${sequence.cueId}`,
+          path: ['clips', clipIndex, 'sequences', index, 'cueId'],
+        });
+      }
+    });
+  });
+});
+
+const makeSpecSchema = (scaleSchema) => z.object({
   schemaVersion: z.literal(1),
   name: z.string().trim().min(1).max(120),
   summary: z.string().trim().min(1).max(1_000),
@@ -375,11 +537,14 @@ const makeSpecSchema = (partSchema) => z.object({
     .refine((materials) => Object.keys(materials).length > 0, 'at least one material is required')
     .refine((materials) => Object.keys(materials).length <= 50, 'at most 50 materials are allowed'),
   lights: z.array(lightSchema).min(1).max(8),
-  parts: z.array(partSchema).min(1).max(40),
+  parts: z.array(makePartSchema(scaleSchema)).min(1).max(40),
   sockets: z.array(socketSchema).max(40).default([]),
   // Optional and additive: a spec written before articulation shipped simply has
   // no key, which every consumer reads as "static assembly", never as "rigged".
   articulation: articulationSchema.optional(),
+  // Same contract: absent means the model is a static assembly with nothing to
+  // play, which is what every spec authored before clips shipped says.
+  animation: makeAnimationSchema(scaleSchema).optional(),
   detailInventory: z.array(detailSchema).min(1).max(80),
 }).superRefine((spec, ctx) => {
   const materialIds = new Set(Object.keys(spec.materials));
@@ -472,6 +637,20 @@ const makeSpecSchema = (partSchema) => z.object({
     }
   }
 
+  if (spec.animation) {
+    for (const [clipIndex, clip] of spec.animation.clips.entries()) {
+      for (const [index, sequence] of clip.sequences.entries()) {
+        if (!partIds.has(sequence.partId)) {
+          ctx.addIssue({
+            code: 'custom',
+            message: `unknown sequence part: ${sequence.partId}`,
+            path: ['animation', 'clips', clipIndex, 'sequences', index, 'partId'],
+          });
+        }
+      }
+    }
+  }
+
   for (const [index, detail] of spec.detailInventory.entries()) {
     for (const [partIndex, id] of detail.implementationPartIds.entries()) {
       if (!partIds.has(id)) {
@@ -486,7 +665,7 @@ const makeSpecSchema = (partSchema) => z.object({
  * floored here, so a spec that would render a part reflected or collapsed is
  * rejected at the one moment the model can still be asked for another pass.
  */
-export const threejsSculptSpecSchema = makeSpecSchema(makePartSchema(scale3Schema));
+export const threejsSculptSpecSchema = makeSpecSchema(scale3Schema);
 
 /**
  * The READ contract for a spec an install has already stored. Identical except
@@ -501,7 +680,7 @@ export const threejsSculptSpecSchema = makeSpecSchema(makePartSchema(scale3Schem
  * this schema is entitled to make, so an existing record exports exactly as it
  * renders, while the bound above keeps any NEW spec from acquiring the problem.
  */
-export const storedThreejsSculptSpecSchema = makeSpecSchema(makePartSchema(vec3Schema));
+export const storedThreejsSculptSpecSchema = makeSpecSchema(vec3Schema);
 
 const MAX_NAMES_IN_MESSAGE = 8;
 
@@ -1066,6 +1245,12 @@ export function ${factoryName}() {
     // known single-rooted, acyclic, and pointed at real parts and sockets. It is
     // NOT a skeleton: nothing here is skinned, bound, or deformed.
     articulation: spec.articulation || null,
+    // Declared clips, or null for a static assembly. Data only: the parse above
+    // proves every sequence names a real part, stays inside its clip, and never
+    // fights another sequence for the same channel, so a consumer can drive the
+    // nodes above from it — PortOS ships no player in the exported factory and
+    // never executes anything the provider authored.
+    animation: spec.animation || null,
     detailInventory: spec.detailInventory,
     limitations: spec.limitations,
   };

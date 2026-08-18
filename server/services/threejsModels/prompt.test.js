@@ -136,3 +136,42 @@ describe('buildThreejsGenerationPrompt articulation gating fallbacks', () => {
     expect(unknownUnderCharacter).not.toContain('ARTICULATION');
   });
 });
+
+describe('buildThreejsGenerationPrompt animation clips', () => {
+  // Offered for every subject: a deployable can be an object, a character, or a
+  // hybrid, so the clip contract is not gated the way articulation is.
+  it('offers the clip contract whatever the subject is, and tells the model to omit it by default', () => {
+    for (const overrides of [
+      {},
+      { family: 'vehicle' },
+      { family: 'character', currentSpec: { schemaVersion: 1, name: 'Example Model', subjectType: 'character' } },
+    ]) {
+      const prompt = build(overrides);
+      expect(prompt).toContain('ANIMATION CLIPS (optional, any subject)');
+      expect(prompt).toContain('Omit the key entirely for a static subject');
+    }
+  });
+
+  it('states the rules the schema actually enforces, so a rejection is never a surprise', () => {
+    const prompt = build();
+    expect(prompt).toContain('Every sequence changes at least one channel');
+    expect(prompt).toContain('may not drive the same channel of the same part at overlapping times');
+    expect(prompt).toContain('"visible" is a step, not a fade');
+    expect(prompt).toContain('a cue may only ride a sequence that changes');
+    expect(prompt).toContain('do not return JavaScript, keyframe arrays, or curve definitions');
+  });
+
+  it('names every easing and clip role the schema accepts', () => {
+    const prompt = build();
+    for (const easing of ['linear', 'easeIn', 'easeOut', 'easeInOut']) {
+      expect(prompt).toContain(`"${easing}"`);
+    }
+    for (const role of ['deploy', 'retract', 'assemble', 'destroy', 'idle']) {
+      expect(prompt).toContain(`"${role}"`);
+    }
+  });
+
+  it('says a cue is an identifier, never audio PortOS would load', () => {
+    expect(build()).toContain('never a filename, a URL, or audio data');
+  });
+});

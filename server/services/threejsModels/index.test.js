@@ -145,6 +145,9 @@ describe('Three.js model generation orchestration', () => {
     // not-ready WITH a reason rather than passing silently.
     expect(current.rig).toMatchObject({ articulationReady: false, jointCount: 0, socketCount: 0 });
     expect(current.rig.reasons).toHaveLength(1);
+    // Likewise for clips: a spec that declared none is recorded as a static
+    // assembly with nothing to play, never left unevaluated.
+    expect(current.animation).toMatchObject({ animated: false, clipCount: 0, sequenceCount: 0 });
     expect(current.runs.at(-1)).toMatchObject({
       status: 'completed',
       runId: 'run-example',
@@ -661,5 +664,81 @@ describe('Three.js model generation orchestration', () => {
       await startGeneration('threejs-family', { providerId: 'vision-api' });
       expect(read().runs.at(-1).feedback).toContain('device / machine checklist expects');
     });
+  });
+});
+
+describe('Three.js model clip inventory', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getProviderById.mockResolvedValue({
+      id: 'vision-api',
+      name: 'Vision API',
+      type: 'api',
+      enabled: true,
+      defaultModel: 'vision-default',
+    });
+  });
+
+  it('persists the declared clips alongside the spec, and keeps them on the record', async () => {
+    const animatedSpec = {
+      ...spec,
+      animation: {
+        cues: [{ id: 'latchRelease', label: 'Latch lets go', kind: 'latch' }],
+        clips: [{
+          id: 'deploy',
+          name: 'Deploy',
+          role: 'deploy',
+          durationSeconds: 1.5,
+          sequences: [{
+            id: 'raiseLens',
+            name: 'Raise lens',
+            partId: 'lens',
+            startSeconds: 0,
+            endSeconds: 1,
+            channels: { position: { from: [0, 0, 0], to: [0, 0.6, 0] } },
+            cueId: 'latchRelease',
+          }],
+        }],
+      },
+    };
+    let current = {
+      id: 'threejs-animated',
+      name: 'Example Beacon',
+      sourceImage: { filename: 'example.png' },
+      providerId: 'vision-api',
+      model: null,
+      prompt: '',
+      status: 'draft',
+      spec: null,
+      runs: [],
+    };
+    store.getModel.mockResolvedValue(current);
+    store.mutateModel.mockImplementation(async (_id, mutate) => {
+      const next = mutate(current);
+      if (next) current = next;
+      return current;
+    });
+    runPromptThroughProvider.mockResolvedValue({
+      text: JSON.stringify(animatedSpec),
+      runId: 'run-animated',
+      provider: { id: 'vision-api' },
+      model: null,
+    });
+
+    await startGeneration(current.id, { providerId: 'vision-api' });
+    await vi.waitFor(() => expect(current.status).toBe('ready'));
+
+    expect(current.animation).toMatchObject({
+      animated: true,
+      clipCount: 1,
+      cueCount: 1,
+      sequenceCount: 1,
+      movingPartCount: 1,
+      longestClipSeconds: 1.5,
+    });
+    expect(current.animation.clips[0]).toMatchObject({ id: 'deploy', role: 'deploy', cueCount: 1 });
+    // The clips survive the parse onto the record, so the export and the preview
+    // play the same sequences the inventory counted.
+    expect(current.spec.animation.clips[0].sequences).toHaveLength(1);
   });
 });
