@@ -21,6 +21,9 @@ vi.mock('../../services/socket', () => ({
 }));
 // The memory panel owns its own 5s poll + voice/TTS endpoints — irrelevant here.
 vi.mock('./MemoryManagement.jsx', () => ({ default: () => <div data-testid="memory-management" /> }));
+// Same for the assessments panel — it fetches its own report on mount and is
+// covered by LocalModelAssessments.test.jsx.
+vi.mock('./LocalModelAssessments.jsx', () => ({ default: () => <div data-testid="local-model-assessments" /> }));
 vi.mock('../ui/Toast', () => ({
   default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() }),
 }));

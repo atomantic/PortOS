@@ -175,6 +175,20 @@ export const localLlmTestSchema = localLlmPlaygroundOptionsSchema.extend({
   modelId: localLlmModelIdSchema,
   prompt: z.string().trim().min(1).max(50000),
 });
+// Measured local-model assessment (server/services/localModelAssessments.js). One
+// request runs ONE model across up to 5 nominal context sizes; the cap keeps a
+// single user click from turning into an unbounded, minutes-long provider job.
+// 131072 is the largest context any shipped local model advertises.
+export const localLlmAssessmentRunSchema = z.object({
+  backend: localLlmBackendSchema,
+  modelId: localLlmModelIdSchema,
+  contextTokens: z.array(z.coerce.number().int().min(64).max(131072)).min(1).max(5).optional(),
+});
+export const localLlmAssessmentIntentSchema = z.object({
+  intent: z.enum(['balanced', 'smartest', 'fastest', 'lightweight']).optional().default('balanced'),
+});
+export const localLlmAssessmentDeleteSchema = localLlmInstallSchema;
+
 export const localLlmCompareSchema = z.object({
   mode: z.enum(['round-robin', 'parallel']).optional().default('round-robin'),
   prompt: z.string().trim().min(1).max(50000),

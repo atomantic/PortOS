@@ -147,3 +147,24 @@ export async function streamLocalLlmTest(payload, { signal, onToken } = {}) {
   if (!result && !signal?.aborted) throw new Error('Stream ended before a result was received');
   return result;
 }
+
+// === Measured local-model assessments ========================================
+// The catalog fit badge is a size estimate; these run the model and record what
+// it actually did. GET is disk-only and safe to call on mount; the run endpoint
+// calls a provider and must only fire from a deliberate user action (root
+// CLAUDE.md, "AI Provider Usage Policy").
+
+// Persisted assessments + the intent-ranked recommendation + which installed
+// models have no evidence yet. Zero LLM calls, so it's safe to load with the tab.
+export const getLocalLlmAssessments = (intent = 'balanced', options) =>
+  request(`/local-llm/assessments?intent=${encodeURIComponent(intent)}`, options);
+
+// Measure ONE model. Minutes-long by nature (one bounded generation per context
+// size), so callers pass a `signal` to abort when the user navigates away.
+export const runLocalLlmAssessment = (payload, options) =>
+  request('/local-llm/assessments/run', { method: 'POST', body: JSON.stringify(payload), ...options });
+
+// Drop a stale measurement — after a RAM upgrade or a backend update the
+// recorded evidence describes a machine that no longer exists.
+export const deleteLocalLlmAssessment = (backend, modelId, options) =>
+  request('/local-llm/assessments/delete', { method: 'POST', body: JSON.stringify({ backend, modelId }), ...options });

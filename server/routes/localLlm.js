@@ -22,7 +22,10 @@ import {
   localLlmOllamaServiceSchema,
   localLlmHuggingFaceSearchSchema,
   localLlmTestSchema,
-  localLlmCompareSchema
+  localLlmCompareSchema,
+  localLlmAssessmentRunSchema,
+  localLlmAssessmentIntentSchema,
+  localLlmAssessmentDeleteSchema
 } from '../lib/validation.js'
 import { getCatalog, searchCatalog, isBackend } from '../lib/localLlmCatalog.js'
 import { isAppleSilicon } from '../lib/platform.js'
@@ -33,6 +36,7 @@ import {
 } from '../services/localLlm.js'
 import { getSettings } from '../services/settings.js'
 import { runLocalLlmTest, compareLocalLlmModels } from '../services/localLlmPlayground.js'
+import { getAssessmentReport, runAssessment, deleteAssessment } from '../services/localModelAssessments.js'
 import { listUserModels } from '../services/audioModels.js'
 import { ENGINES } from '../services/pipeline/musicGen.js'
 import { abortSignalFromResponse } from '../lib/requestAbort.js'
@@ -405,6 +409,43 @@ router.post('/test/stream', asyncHandler(async (req, res) => {
 router.post('/compare', asyncHandler(async (req, res) => {
   const body = validateRequest(localLlmCompareSchema, req.body)
   res.json(await compareLocalLlmModels({ ...body, signal: abortSignalFromResponse(res) }))
+}))
+
+// === Measured local-model assessments ========================================
+// PortOS's catalog fit badge is a size estimate that never runs the model. These
+// endpoints back the measured alternative: run a model at several context sizes
+// and rank installed models on the evidence.
+//
+// The read/run split is the AI Provider Usage Policy boundary (root CLAUDE.md):
+// GET touches disk only and is safe to poll; POST /run is the ONLY path that
+// reaches a provider, and it fires solely from a deliberate user action whose
+// UI names the backend, model, and run count first. Do not add a boot hook, a
+// scheduler, or an "assess everything" sweep here.
+
+// GET /api/local-llm/assessments?intent=balanced — persisted results, the
+// intent-ranked recommendation, and which installed models have no evidence yet.
+// Zero LLM calls.
+router.get('/assessments', asyncHandler(async (req, res) => {
+  const { intent } = validateRequest(localLlmAssessmentIntentSchema, req.query)
+  res.json(await getAssessmentReport({ intent }))
+}))
+
+// POST /api/local-llm/assessments/run — measure ONE model. User-triggered only.
+// Long-running by nature (one bounded generation per context size), so the
+// client's abort signal is threaded through to stop mid-run on disconnect.
+router.post('/assessments/run', asyncHandler(async (req, res) => {
+  const { backend, modelId, contextTokens } = validateRequest(localLlmAssessmentRunSchema, req.body)
+  res.json(await runAssessment({ backend, modelId, contextTokens, signal: abortSignalFromResponse(res) }))
+}))
+
+// POST /api/local-llm/assessments/delete — drop one stale measurement (e.g. after
+// a RAM upgrade or a backend update makes the recorded evidence misleading).
+// 404s when nothing was removed rather than reporting a phantom success.
+router.post('/assessments/delete', asyncHandler(async (req, res) => {
+  const { backend, modelId } = validateRequest(localLlmAssessmentDeleteSchema, req.body)
+  const result = await deleteAssessment(backend, modelId)
+  if (!result.deleted) throw new ServerError('No assessment recorded for that model', { status: 404, context: { backend, modelId } })
+  res.json({ success: true, backend, modelId })
 }))
 
 export default router

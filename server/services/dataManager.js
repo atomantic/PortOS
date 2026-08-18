@@ -74,6 +74,10 @@ export const CATEGORIES = {
   'jira-reports': { label: 'Jira Reports', description: 'Generated Jira reports — regenerable from Jira', archivable: true, deletable: true, purgeScope: 'category' },
   'loops': { label: 'Loops', description: 'Output history from scheduled loop runs', archivable: true, deletable: false },
   'lora-datasets': { label: 'LoRA Datasets', description: 'Training images and captions for LoRA runs — uploaded source material, not regenerable', archivable: false, deletable: false },
+  // Measured local-model assessments. Deletable: every record is reproducible by
+  // re-running the assessment, and a stale one (taken before a RAM upgrade or a
+  // backend update) actively misleads the picker.
+  'local-llm': { label: 'Local Model Assessments', description: 'Measured fit and performance results for installed local models — re-runnable, and stale after a hardware or backend change', archivable: true, deletable: true, purgeScope: 'category' },
   'loras': { label: 'LoRAs', description: 'Trained LoRA adapters — excluded from backups and not regenerable without hours of GPU retraining', archivable: false, deletable: false },
   'meatspace': { label: 'MeatSpace', description: 'Body metrics, blood tests, eyes', archivable: true, deletable: false },
   'media-collections': { label: 'Media Collections', description: 'Media collection records', archivable: true, deletable: false },
