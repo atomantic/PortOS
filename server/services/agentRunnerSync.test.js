@@ -34,6 +34,12 @@ vi.mock('./cosAgentLifecycle.js', () => ({
   getAgent: vi.fn(),
 }));
 
+// The lifecycle ledger is a real file writer (data/cos/run-events.jsonl) —
+// mocked so recovery telemetry lands in a spy rather than the developing
+// install's ledger, and so the boundary assertion below can read the envelope.
+const { appendRunEvent } = vi.hoisted(() => ({ appendRunEvent: vi.fn(async () => ({ appended: true })) }));
+vi.mock('./agentRunEventLog.js', () => ({ appendRunEvent }));
+
 import { connectTuiSessionViaRunner, getActiveAgentsFromRunner } from './cosRunnerClient.js';
 import * as shellService from './shell.js';
 import { getAgent } from './cosAgentLifecycle.js';
@@ -113,6 +119,14 @@ describe('syncRunnerAgents runner-owned TUI recovery', () => {
 
     await expect(syncRunnerAgents()).resolves.toBe(1);
     expect(runnerAgents.get('agent-2')).toMatchObject({ runId: null });
+    // Today the unbilled-run warning exists only as a console line nothing
+    // retains; the ledger is what makes it answerable after the fact (#4540).
+    expect(appendRunEvent).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'run.runner-recovered',
+      agentId: 'agent-2',
+      runId: null,
+      data: expect.objectContaining({ hasRunId: false })
+    }));
   });
 
   // A live runner-TUI is owned by this process's spawnTuiAgent closure, which

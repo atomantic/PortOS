@@ -6,7 +6,10 @@
 
 import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
+import { validateRequest } from '../lib/validation.js';
+import { runEventsQuerySchema, runEventProjectionsQuerySchema, runEventProjectionIdSchema } from '../lib/cosValidation.js';
 import * as agentActivity from '../services/agentActivity.js';
+import * as runEventLog from '../services/agentRunEventLog.js';
 
 const router = Router();
 
@@ -66,6 +69,41 @@ router.post('/cleanup', asyncHandler(async (req, res) => {
 
   const deletedCount = await agentActivity.cleanupOldActivity(daysToKeep);
   res.json({ success: true, deletedCount });
+}));
+
+// ---------------------------------------------------------------------------
+// Run event ledger — read-only diagnostics (#4540)
+//
+// A literal `/run-events` prefix, disjoint from every path above it — the only
+// parameterized route here is `/agent/:agentId`, so registration order is not
+// load-bearing and these can stay at the bottom of the file.
+// Every handler is a pure read: the ledger is append-only and is written from
+// the agent lifecycle, never from HTTP. Payloads were redacted at append time
+// (see `lib/agentRunEvents.js`), so nothing here re-redacts — a route that had
+// to redact on read would mean unredacted bytes were already on disk.
+// ---------------------------------------------------------------------------
+
+// GET /run-events - Raw lifecycle events in append order (newest-N window)
+router.get('/run-events', asyncHandler(async (req, res) => {
+  const query = validateRequest(runEventsQuerySchema, req.query);
+  res.json(await runEventLog.readRunEvents(query));
+}));
+
+// GET /run-events/stats - Ledger size + the retention bound it is held to
+router.get('/run-events/stats', asyncHandler(async (req, res) => {
+  res.json(await runEventLog.getRunEventLedgerStats());
+}));
+
+// GET /run-events/projections - Current run status DERIVED from the stream
+router.get('/run-events/projections', asyncHandler(async (req, res) => {
+  const query = validateRequest(runEventProjectionsQuerySchema, req.query);
+  res.json(await runEventLog.getRunProjections(query));
+}));
+
+// GET /run-events/run/:id - One run's projection plus the events behind it
+router.get('/run-events/run/:id', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(runEventProjectionIdSchema, req.params);
+  res.json(await runEventLog.getRunDiagnostic(id));
 }));
 
 export default router;

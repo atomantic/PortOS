@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { extractErrorFromOutput } from './agentRunTracking.js';
 
+// The lifecycle ledger is a real file writer (data/cos/run-events.jsonl). Mocked
+// so these suites do not append test telemetry to the developing install's
+// ledger — and so the boundary assertion below can read the envelope.
+const { appendRunEvent } = vi.hoisted(() => ({ appendRunEvent: vi.fn(async () => ({ appended: true })) }));
+vi.mock('./agentRunEventLog.js', () => ({ appendRunEvent }));
+
 // extractErrorFromOutput is the real home of the exit-code → message mapping
 // and the output error-pattern scan. subAgentSpawner.test.js used to assert an
 // inline `exitCodeMessages` literal copy that exercised no production code.
@@ -159,5 +165,64 @@ describe('completeAgentRun idempotency', () => {
       expect.objectContaining({ id: 'run-failed', success: false }),
       'partial output',
     );
+  });
+});
+
+// The run record is mutated in place, so after a finalize it can no longer say
+// how the run got there. The ledger entry is what preserves that (#4540).
+describe('completeAgentRun lifecycle ledger', () => {
+  it('records the RESOLVED verdict, not the raw exit code', async () => {
+    vi.resetModules();
+    appendRunEvent.mockClear();
+    vi.doMock('../lib/fileUtils.js', async (importOriginal) => ({
+      ...(await importOriginal()),
+      readJSONFile: vi.fn().mockResolvedValue({
+        id: 'run-overridden',
+        endTime: null,
+        agentId: 'agent-1',
+        taskId: 'task-1',
+        startTime: '2026-07-29T00:00:00.000Z',
+        providerId: null,
+      }),
+      atomicWrite: vi.fn(),
+    }));
+    vi.doMock('fs/promises', async (importOriginal) => ({
+      ...(await importOriginal()),
+      writeFile: vi.fn(),
+    }));
+    const { completeAgentRun } = await import('./agentRunTracking.js');
+
+    // Exit 0, but the caller's successOverride says the deliverable never landed
+    // (#3358) — the ledger must agree with the run record, not with the process.
+    await completeAgentRun('run-overridden', 'output', 0, 4200, null, false);
+
+    expect(appendRunEvent).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'run.finalized',
+      runId: 'run-overridden',
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      data: expect.objectContaining({
+        success: false,
+        exitCode: 0,
+        durationMs: 4200,
+        successOverridden: true,
+      }),
+    }));
+  });
+
+  it('appends nothing for a run that was already closed', async () => {
+    vi.resetModules();
+    appendRunEvent.mockClear();
+    vi.doMock('../lib/fileUtils.js', async (importOriginal) => ({
+      ...(await importOriginal()),
+      readJSONFile: vi.fn().mockResolvedValue({ id: 'run-closed', endTime: '2026-07-29T00:00:00.000Z' }),
+      atomicWrite: vi.fn(),
+    }));
+    const { completeAgentRun } = await import('./agentRunTracking.js');
+
+    await completeAgentRun('run-closed', 'output', 1, 100);
+    await completeAgentRun(null, 'output', 1, 100);
+
+    expect(appendRunEvent).not.toHaveBeenCalled();
   });
 });

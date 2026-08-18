@@ -1,0 +1,391 @@
+/**
+ * CoS run event envelope — pure schema, redaction, and projection.
+ *
+ * The append-only ledger this describes is the *ordered* record of how a CoS
+ * agent run reached its current state. It exists alongside the mutable run
+ * record (`data/runs/{id}/metadata.json`), never instead of it: the record says
+ * what a run is now, the ledger says how it got there, which is the question
+ * the in-place record can never answer after an interruption or a recovery.
+ *
+ * Three properties make the stream trustworthy, and all three live here rather
+ * than in the I/O service so they can be exercised without touching disk:
+ *
+ * - **Idempotent ids.** `buildRunEvent` derives `eventId` from the envelope's
+ *   own content, so a boundary that fires twice for one logical transition (a
+ *   retried orphan sweep, a duplicated runner completion) mints the SAME id and
+ *   the ledger suppresses the second copy. A random id would have made every
+ *   redelivery a new "fact" and quietly doubled every count derived from it.
+ * - **Redaction at construction.** `redactRunEventData` runs inside
+ *   `buildRunEvent`, so an unredacted payload can never reach the append path
+ *   even if a future caller forgets. Prompts and record bodies are dropped, not
+ *   truncated — a truncated prompt is still a prompt.
+ * - **A pure fold.** `projectRunStates` derives status from the stream with no
+ *   I/O and no clock, so "replay after restart" is the same code path as "read
+ *   the current status", and a test can assert both with one call.
+ *
+ * The ledger is machine-local and never federated (see `docs/STORAGE.md`).
+ * I/O, rotation, and the seen-id sets live in
+ * `server/services/agentRunEventLog.js`.
+ */
+
+import { z } from 'zod';
+import { homedir } from 'os';
+import { sha256Text } from './fileUtils.js';
+import { canonicalStringify, POLLUTING_KEYS } from './objects.js';
+import { redactOutput } from './commandSecurity.js';
+
+/**
+ * Envelope schema version. Bump when the envelope SHAPE changes in a way a
+ * reader must notice; adding a new value to `AGENT_RUN_EVENT_KINDS` is not
+ * such a change (unknown kinds fold into the projection as no-ops).
+ *
+ * This is deliberately NOT a `PORTOS_SCHEMA_VERSIONS` entry: the ledger never
+ * crosses the wire, so no peer ever has to agree with this number.
+ */
+export const AGENT_RUN_EVENT_SCHEMA_VERSION = 1;
+
+/**
+ * The lifecycle boundaries this slice records. Kept a closed vocabulary so the
+ * projection below can be exhaustive and a typo in a call site fails schema
+ * validation instead of silently writing an event nothing ever folds.
+ */
+export const AGENT_RUN_EVENT_KINDS = Object.freeze([
+  // A run was created and its process handed off (createAgentRun).
+  'run.spawned',
+  // A run was closed with a verdict (completeAgentRun) — including the closes
+  // driven by orphan cleanup, so `finalized` is genuinely terminal.
+  'run.finalized',
+  // A "running" agent record was found with no live process and reaped
+  // (cleanupOrphanedAgents). Distinguishes a crash/restart from a clean exit.
+  'run.orphan-recovered',
+  // A restart survivor was re-adopted from the CoS Runner (syncRunnerAgents).
+  'run.runner-recovered'
+]);
+
+const KIND_SET = new Set(AGENT_RUN_EVENT_KINDS);
+
+// ---------------------------------------------------------------------------
+// Redaction
+// ---------------------------------------------------------------------------
+
+/**
+ * Keys whose values are prompts, model output, or record bodies. Dropped
+ * wholesale — replaced by a `{ redacted, chars }` stub that preserves the one
+ * diagnostically useful fact (how much there was) without preserving any of it.
+ *
+ * Matched case-insensitively so `taskDescription` and `promptText` are covered
+ * by their stems.
+ */
+const DROPPED_KEY_PATTERNS = [
+  /prompt/i,
+  /description/i,
+  /^output/i,
+  /^content$/i,
+  /^body$/i,
+  /^text$/i,
+  /^notes?$/i,
+  /^summary$/i,
+  /^title$/i,
+  /^result$/i,
+  /^params$/i,
+  /^payload$/i,
+  /^transcript/i
+];
+
+/** Bounds. A ledger line must stay a diagnostic, not become a record copy. */
+export const RUN_EVENT_LIMITS = Object.freeze({
+  maxStringChars: 200,
+  maxArrayItems: 20,
+  maxObjectKeys: 40,
+  maxDepth: 3
+});
+
+const isDroppedKey = (key) => DROPPED_KEY_PATTERNS.some((re) => re.test(key));
+
+/**
+ * Replace the user's home directory prefix with `~` anywhere in a string.
+ *
+ * Workspace paths are the most common thing a lifecycle payload carries, and
+ * `/Users/<name>/…` embeds the OS username. The ledger is machine-local, but a
+ * diagnostic is exactly the thing a user pastes into a bug report, so the
+ * username never gets written down in the first place.
+ */
+export function scrubHomePath(value) {
+  const home = homedir();
+  if (typeof value !== 'string' || !home) return value;
+  return value.split(home).join('~');
+}
+
+/**
+ * Scrub + bound one free-form string: home path, then the shared secret filter,
+ * then a hard length cap.
+ */
+function scrubString(value) {
+  const scrubbed = redactOutput(scrubHomePath(value)) ?? '';
+  return scrubbed.length > RUN_EVENT_LIMITS.maxStringChars
+    ? `${scrubbed.slice(0, RUN_EVENT_LIMITS.maxStringChars)}…`
+    : scrubbed;
+}
+
+/**
+ * Redact an event payload for the ledger.
+ *
+ * Recursive, bounded on every axis (depth, key count, array length, string
+ * length), and it drops prototype-polluting keys the way every other sanitizer
+ * in the codebase does. Non-JSON values (functions, symbols, undefined) are
+ * dropped rather than stringified — a ledger line must round-trip through JSON.
+ *
+ * @param {*} data - arbitrary payload from a lifecycle call site
+ * @param {number} [depth] - internal recursion depth
+ * @returns {object} redacted, JSON-safe payload
+ */
+export function redactRunEventData(data, depth = 0) {
+  if (data === null || data === undefined) return {};
+  // The envelope's `data` is always an object (the schema is `z.record`), so a
+  // scalar or array payload is boxed rather than rejected — a call site passing
+  // one is imprecise, not a reason to lose the event.
+  if (typeof data !== 'object') return { value: redactScalar(data) };
+  if (Array.isArray(data)) return { items: redactValue(data, depth) };
+  return redactValue(data, depth);
+}
+
+function redactScalar(value) {
+  if (typeof value === 'string') return scrubString(value);
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'boolean') return value;
+  return null;
+}
+
+function redactValue(value, depth) {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'object') return redactScalar(value);
+  // A value nested past the depth cap is summarized, not walked — the cap is
+  // what keeps a whole record from arriving as one deeply nested payload.
+  if (depth >= RUN_EVENT_LIMITS.maxDepth) return { redacted: 'depth' };
+
+  if (Array.isArray(value)) {
+    const kept = value.slice(0, RUN_EVENT_LIMITS.maxArrayItems).map((item) => redactValue(item, depth + 1));
+    return value.length > RUN_EVENT_LIMITS.maxArrayItems
+      ? [...kept, { redacted: 'truncated', dropped: value.length - RUN_EVENT_LIMITS.maxArrayItems }]
+      : kept;
+  }
+
+  const out = {};
+  let kept = 0;
+  for (const [key, raw] of Object.entries(value)) {
+    if (POLLUTING_KEYS.has(key)) continue;
+    if (typeof raw === 'function' || typeof raw === 'symbol' || raw === undefined) continue;
+    if (kept >= RUN_EVENT_LIMITS.maxObjectKeys) {
+      out.redacted = 'keys';
+      break;
+    }
+    // Only content-bearing values are dropped. A NUMBER or boolean under a
+    // dropped key is a size or a flag (`promptChars`, `hasOutput`), never the
+    // content itself — stubbing those out would delete the only part of the
+    // payload that was already safe.
+    if (isDroppedKey(key) && (typeof raw === 'string' || (raw !== null && typeof raw === 'object'))) {
+      out[key] = { redacted: 'content', chars: typeof raw === 'string' ? raw.length : null };
+    } else {
+      out[key] = redactValue(raw, depth + 1);
+    }
+    kept += 1;
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Envelope
+// ---------------------------------------------------------------------------
+
+/**
+ * Zod schema for one ledger line. `.strict()` so a call site cannot smuggle an
+ * extra top-level field past redaction (redaction only walks `data`).
+ */
+export const agentRunEventSchema = z.object({
+  schemaVersion: z.literal(AGENT_RUN_EVENT_SCHEMA_VERSION),
+  eventId: z.string().min(1).max(128),
+  kind: z.enum(AGENT_RUN_EVENT_KINDS),
+  runId: z.string().min(1).max(128).nullable(),
+  agentId: z.string().min(1).max(128).nullable(),
+  taskId: z.string().min(1).max(128).nullable(),
+  at: z.string().datetime(),
+  data: z.record(z.unknown())
+}).strict();
+
+const nullableId = (value) => (typeof value === 'string' && value.trim() ? value.trim().slice(0, 128) : null);
+
+/**
+ * Build a validated, redacted ledger envelope.
+ *
+ * `eventId` is content-derived by default: the sha256 of the canonicalized
+ * envelope (kind + ids + timestamp + redacted data), truncated to 32 hex chars.
+ * Two deliveries of the same logical transition therefore collide by design and
+ * the ledger keeps one. Pass an explicit `eventId` only when a call site has a
+ * better natural key than its own content.
+ *
+ * Throws on an invalid envelope — a malformed event is a bug at the call site,
+ * and the append path (which owns the "never break a run for telemetry" rule)
+ * is where that throw gets absorbed.
+ *
+ * @param {object} input
+ * @param {string} input.kind - one of AGENT_RUN_EVENT_KINDS
+ * @param {string} [input.runId]
+ * @param {string} [input.agentId]
+ * @param {string} [input.taskId]
+ * @param {string|Date} [input.at] - defaults to now
+ * @param {object} [input.data] - redacted before it is hashed or stored
+ * @param {string} [input.eventId] - explicit idempotency key
+ * @returns {object} validated envelope
+ */
+export function buildRunEvent({ kind, runId, agentId, taskId, at, data, eventId } = {}) {
+  const timestamp = at instanceof Date ? at.toISOString() : (typeof at === 'string' && at ? at : new Date().toISOString());
+  const core = {
+    schemaVersion: AGENT_RUN_EVENT_SCHEMA_VERSION,
+    kind,
+    runId: nullableId(runId),
+    agentId: nullableId(agentId),
+    taskId: nullableId(taskId),
+    at: timestamp,
+    data: redactRunEventData(data)
+  };
+  const envelope = {
+    ...core,
+    eventId: typeof eventId === 'string' && eventId ? eventId.slice(0, 128) : deriveEventId(core)
+  };
+  return agentRunEventSchema.parse(envelope);
+}
+
+/** Content-derived idempotency key for an envelope (sans its own id). */
+export function deriveEventId(core) {
+  return sha256Text(canonicalStringify(core) ?? '').slice(0, 32);
+}
+
+/** Is this parsed line a well-formed ledger event? Used by the read path. */
+export function isValidRunEvent(value) {
+  return agentRunEventSchema.safeParse(value).success;
+}
+
+/** Does this kind belong to the closed vocabulary? */
+export function isKnownRunEventKind(kind) {
+  return KIND_SET.has(kind);
+}
+
+// ---------------------------------------------------------------------------
+// Projection
+// ---------------------------------------------------------------------------
+
+/**
+ * The projection key for an event.
+ *
+ * Prefers `runId` — the durable identity a run keeps across restarts. Events
+ * that legitimately have no run id (an orphan reaped before its run record was
+ * written, or one whose `runId` never made it onto the agent record) fall back
+ * to the agent, so they surface in diagnostics instead of vanishing. That case
+ * is the exact failure this ledger exists to explain, so it must not be the one
+ * the projection drops.
+ */
+export function runEventKey(event) {
+  if (event?.runId) return event.runId;
+  if (event?.agentId) return `agent:${event.agentId}`;
+  return null;
+}
+
+const emptyProjection = (id) => ({
+  id,
+  runId: null,
+  agentId: null,
+  taskId: null,
+  status: 'unknown',
+  startedAt: null,
+  endedAt: null,
+  durationMs: null,
+  exitCode: null,
+  success: null,
+  orphaned: false,
+  recoveryCount: 0,
+  eventCount: 0,
+  firstEventAt: null,
+  lastEventAt: null,
+  trace: []
+});
+
+/**
+ * Fold an ordered event stream into per-run current state.
+ *
+ * Pure and clock-free: replaying the ledger after a restart produces exactly
+ * the state the live process had, which is the whole point of the ledger. Later
+ * events win on every field, so `run.finalized` correctly overrides an earlier
+ * `run.orphan-recovered` (orphan cleanup emits both, in that order).
+ *
+ * Unknown kinds still count toward `eventCount` and the trace but leave status
+ * alone, so a ledger written by a newer install replays on an older one.
+ *
+ * @param {object[]} events - ledger events in append order
+ * @returns {object[]} projections, newest activity first
+ */
+export function projectRunStates(events) {
+  const byKey = new Map();
+
+  for (const event of Array.isArray(events) ? events : []) {
+    const key = runEventKey(event);
+    if (!key) continue;
+
+    const state = byKey.get(key) ?? emptyProjection(key);
+    if (!byKey.has(key)) byKey.set(key, state);
+
+    // Ids are sticky: an event that omits one must not erase what an earlier
+    // event established (the finalize path carries no taskId, for instance).
+    state.runId = event.runId ?? state.runId;
+    state.agentId = event.agentId ?? state.agentId;
+    state.taskId = event.taskId ?? state.taskId;
+    state.eventCount += 1;
+    state.firstEventAt = state.firstEventAt ?? event.at;
+    state.lastEventAt = event.at;
+    state.trace.push({ eventId: event.eventId, kind: event.kind, at: event.at });
+
+    applyKind(state, event);
+  }
+
+  return [...byKey.values()].sort((a, b) => String(b.lastEventAt).localeCompare(String(a.lastEventAt)));
+}
+
+function applyKind(state, event) {
+  const data = event.data ?? {};
+  switch (event.kind) {
+    case 'run.spawned':
+      state.status = 'running';
+      state.startedAt = event.at;
+      if (typeof data.providerId === 'string') state.providerId = data.providerId;
+      if (typeof data.model === 'string') state.model = data.model;
+      break;
+    case 'run.runner-recovered':
+      // A survivor is still running — recovery is an annotation on a live run,
+      // not a terminal state. Only the count changes so a diagnostic can show
+      // "this run has been re-adopted N times".
+      if (state.status !== 'completed' && state.status !== 'failed') state.status = 'running';
+      state.recoveryCount += 1;
+      break;
+    case 'run.orphan-recovered':
+      state.orphaned = true;
+      if (state.status !== 'completed' && state.status !== 'failed') state.status = 'orphaned';
+      break;
+    case 'run.finalized': {
+      const success = data.success === true;
+      state.status = success ? 'completed' : 'failed';
+      state.success = success;
+      state.endedAt = event.at;
+      state.exitCode = Number.isFinite(data.exitCode) ? data.exitCode : null;
+      state.durationMs = Number.isFinite(data.durationMs) ? data.durationMs : null;
+      if (typeof data.errorCategory === 'string') state.errorCategory = data.errorCategory;
+      break;
+    }
+    default:
+      // Unknown kind from a newer install — counted, not interpreted.
+      break;
+  }
+}
+
+/** Project a single key out of a stream (`runId`, or `agent:<agentId>`). */
+export function projectRunState(events, id) {
+  return projectRunStates(events).find((state) => state.id === id) ?? null;
+}

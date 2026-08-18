@@ -407,6 +407,10 @@ See [Agent Context (MCP)](./features/agent-context.md) for setup, transport head
 | GET | `/agents/activity/agent/:agentId` | Get agent's activity |
 | GET | `/agents/activity/agent/:agentId/stats` | Get agent statistics |
 | POST | `/agents/activity/cleanup` | Clean up old activity logs |
+| GET | `/agents/activity/run-events` | Read the append-only CoS run lifecycle ledger (filters: `runId`, `agentId`, `taskId`, `kind`, `since`, `limit`) |
+| GET | `/agents/activity/run-events/stats` | Ledger generation sizes and the retention bound |
+| GET | `/agents/activity/run-events/projections` | Current run status derived by replaying the ledger |
+| GET | `/agents/activity/run-events/run/:id` | One run's projection plus the events behind it |
 
 ### Notifications
 

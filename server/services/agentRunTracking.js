@@ -11,6 +11,7 @@ import { recordSession } from './usage.js';
 import { recordCompletedRunUsage } from './usageReconciler.js';
 import { committedDuringRun } from '../lib/gitCommitProbe.js';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { appendRunEvent } from './agentRunEventLog.js';
 
 const RUNS_DIR = PATHS.runs;
 
@@ -64,6 +65,26 @@ export async function createAgentRun({ agentId, task, model, provider, workspace
   // Record usage session for CoS agent
   recordSession(provider.id, provider.name, model || provider.defaultModel).catch(err => {
     console.error(`❌ Failed to record usage session: ${err.message}`);
+  });
+
+  // Open the run's entry in the append-only lifecycle ledger (#4540). Additive:
+  // `metadata.json` above remains the durable run record; this is the ordered
+  // trace that survives the in-place updates. Deliberately NOT given the task
+  // description — the ledger redacts prompts, so passing one would only produce
+  // a `{ redacted }` stub. `appendRunEvent` never rejects.
+  await appendRunEvent({
+    kind: 'run.spawned',
+    runId,
+    agentId,
+    taskId: task.id,
+    at: metadata.startTime,
+    data: {
+      providerId: provider.id,
+      model: metadata.model,
+      workspacePath,
+      workspaceName: metadata.workspaceName,
+      promptChars: metadata.promptLength
+    }
   });
 
   return { runId, runDir };
@@ -140,6 +161,28 @@ export async function completeAgentRun(runId, output, exitCode, duration, errorA
   if (metadata.providerId && metadata.model) {
     recordCompletedRunUsage(metadata, output);
   }
+
+  // Close the run's ledger entry (#4540). This is the terminal event for every
+  // exit path — clean exits, spawn errors, and the orphan sweep all land here —
+  // so `projectRunStates` can trust `run.finalized` to outrank an earlier
+  // `run.orphan-recovered`. The verdict recorded is the RESOLVED one (after the
+  // commit rescue and the `successOverride`), not the raw exit code, because
+  // that is the verdict the run record now carries.
+  await appendRunEvent({
+    kind: 'run.finalized',
+    runId,
+    agentId: metadata.agentId,
+    taskId: metadata.taskId,
+    at: metadata.endTime,
+    data: {
+      success,
+      exitCode,
+      durationMs: Number.isFinite(duration) ? duration : null,
+      outputBytes: metadata.outputSize,
+      errorCategory: metadata.errorCategory ?? null,
+      successOverridden: successOverride === false
+    }
+  });
 }
 
 /**
