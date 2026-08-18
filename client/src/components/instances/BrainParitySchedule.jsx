@@ -17,7 +17,7 @@
  * a user is looking when they wonder whether their brains actually agree.
  */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { CalendarClock, ToggleLeft, ToggleRight } from 'lucide-react';
 import toast from '../ui/Toast';
 import { getCosJob, toggleCosJob, updateCosJob } from '../../services/api';
@@ -27,22 +27,60 @@ import { timeAgo } from '../../utils/formatters';
 export const PARITY_SWEEP_JOB_ID = 'job-brain-parity-sweep';
 
 export default function BrainParitySchedule() {
-  // `undefined` = not loaded yet, `null` = this install has no such job (a
-  // server too old to ship it). Distinct states so a pending fetch never
-  // renders as "unsupported" — and an unsupported install renders nothing
-  // rather than a control whose writes would 404.
+  // `undefined` = not loaded yet, `null` = this install genuinely has no such
+  // job (a 404 from a server too old to ship it). Distinct states so a pending
+  // fetch never renders as "unsupported", and an unsupported install renders
+  // nothing rather than a control whose writes would 404.
   const [job, setJob] = useState(undefined);
+  // A transient read failure is NOT the same as "unsupported". Folding both
+  // into `null` would make the control vanish on a dropped connection with no
+  // way back short of a page reload, so a non-404 failure keeps a retry.
+  const [loadFailed, setLoadFailed] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  const load = useCallback(() => {
+    // `silent` — an install without the job is an expected outcome here, not an
+    // error worth toasting on every Instances page load.
+    return getCosJob(PARITY_SWEEP_JOB_ID, { silent: true }).then(
+      (data) => ({ job: data ?? null, failed: false }),
+      (err) => ({ job: null, failed: err?.status !== 404 })
+    );
+  }, []);
 
   useEffect(() => {
     let active = true;
-    // `silent` — an install without the job is an expected outcome here, not an
-    // error worth toasting on every Instances page load.
-    getCosJob(PARITY_SWEEP_JOB_ID, { silent: true })
-      .then((data) => { if (active) setJob(data ?? null); })
-      .catch(() => { if (active) setJob(null); });
+    load().then(({ job: next, failed }) => {
+      if (!active) return;
+      setJob(next);
+      setLoadFailed(failed);
+    });
     return () => { active = false; };
-  }, []);
+  }, [load]);
+
+  const retry = async () => {
+    setSaving(true);
+    const { job: next, failed } = await load();
+    setJob(next);
+    setLoadFailed(failed);
+    setSaving(false);
+  };
+
+  if (loadFailed) {
+    return (
+      <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-port-border bg-port-card/40 px-3 py-2">
+        <CalendarClock size={14} className="text-gray-500 shrink-0" />
+        <p className="text-xs text-gray-500 flex-1">Could not read the scheduled parity sweep setting.</p>
+        <button
+          type="button"
+          onClick={retry}
+          disabled={saving}
+          className="text-[11px] text-port-accent hover:underline disabled:opacity-50"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
 
   if (job === undefined || job === null) return null;
 

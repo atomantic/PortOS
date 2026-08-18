@@ -44,10 +44,25 @@ describe('BrainParitySchedule', () => {
   });
 
   it('renders nothing on a server too old to ship the job', async () => {
-    getCosJob.mockRejectedValue(new Error('Job not found'));
+    const err = new Error('Job not found');
+    err.status = 404;
+    getCosJob.mockRejectedValue(err);
     const { container } = render(<BrainParitySchedule />);
     await waitFor(() => expect(getCosJob).toHaveBeenCalled());
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it('offers a retry on a transient read failure rather than vanishing like an unsupported server', async () => {
+    // A dropped connection must not read as "this install has no such job" —
+    // that would hide the control with no way back short of a page reload.
+    const err = new Error('Server unreachable');
+    getCosJob.mockRejectedValueOnce(err).mockResolvedValueOnce(job());
+    render(<BrainParitySchedule />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+
+    expect(await screen.findByText('Off')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
   });
 
   it('enables the sweep through the job toggle and reflects the server result', async () => {
