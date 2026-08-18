@@ -55,6 +55,10 @@ describe('git worktree isolation (integration)', () => {
     const nonRepo = join(scratch, 'plain');
     await mkdir(nonRepo, { recursive: true });
     expect(await isGitRepo(nonRepo)).toBe(false);
+    // A missing path answers false rather than asking git about process.cwd(),
+    // which for this suite is the PortOS checkout itself (#4554).
+    expect(await isGitRepo(undefined)).toBe(false);
+    expect(await isGitRepo('')).toBe(false);
   });
 
   it('runs an edit in the worktree, collects a diff, and promotes it to live', async () => {

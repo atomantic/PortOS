@@ -368,8 +368,10 @@ export function execGit(gitArgs, cwd) {
   });
 }
 
-/** True when repoPath is inside a git work tree. */
+/** True when repoPath is inside a git work tree. A missing path is a definite
+ * no — never a reason to ask git about the autofixer's own cwd (#4554). */
 export async function isGitRepo(repoPath) {
+  if (typeof repoPath !== 'string' || repoPath.trim() === '') return false;
   const { code, stdout } = await execGit(['rev-parse', '--is-inside-work-tree'], repoPath);
   return code === 0 && stdout.trim() === 'true';
 }
@@ -384,6 +386,9 @@ export async function isGitRepo(repoPath) {
  * @param {string} id        unique session id
  */
 export async function createDisposableWorktree(repoPath, parentDir, id) {
+  if (typeof repoPath !== 'string' || repoPath.trim() === '') {
+    return { error: 'no repo path — refusing to isolate against the autofixer\u2019s own working directory' };
+  }
   const path = join(parentDir, id);
   await mkdir(parentDir, { recursive: true }).catch(() => {});
   const { code, stderr } = await execGit(['worktree', 'add', '--detach', path, 'HEAD'], repoPath);

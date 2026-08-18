@@ -36,8 +36,15 @@ function tempRoots() {
   return real === raw ? [raw] : [raw, real];
 }
 
-const isUnder = (child, parent) =>
-  child === parent || child.startsWith(parent.endsWith(sep) ? parent : `${parent}${sep}`);
+// Windows paths compare case-insensitively, and a TEMP env var spelled with
+// different casing than a resolved path would otherwise read as "not temp".
+const comparable = (value) => (process.platform === 'win32' ? value.toLowerCase() : value);
+
+function isUnder(child, parent) {
+  const c = comparable(child);
+  const p = comparable(parent);
+  return c === p || c.startsWith(p.endsWith(sep) ? p : `${p}${sep}`);
+}
 
 /**
  * True when `target` is an absolute path inside the OS temp dir.
@@ -47,9 +54,8 @@ const isUnder = (child, parent) =>
 export function isTempPath(target) {
   if (typeof target !== 'string' || target.length === 0 || !isAbsolute(target)) return false;
   const resolved = resolve(target);
-  const candidates = resolved === realpathOrSelf(resolved)
-    ? [resolved]
-    : [resolved, realpathOrSelf(resolved)];
+  const real = realpathOrSelf(resolved);
+  const candidates = real === resolved ? [resolved] : [resolved, real];
   return tempRoots().some((root) => candidates.some((candidate) => isUnder(candidate, root)));
 }
 
