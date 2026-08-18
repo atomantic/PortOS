@@ -23,7 +23,14 @@ const listModels = vi.fn();
 vi.mock('./localLlm.js', () => ({ listModels: (...args) => listModels(...args) }));
 
 const getLoadedModels = vi.fn();
-vi.mock('./ollamaManager.js', () => ({ getLoadedModels: (...args) => getLoadedModels(...args) }));
+const getOllamaListError = vi.fn();
+vi.mock('./ollamaManager.js', () => ({
+  getLoadedModels: (...args) => getLoadedModels(...args),
+  getLastInstalledModelsError: () => getOllamaListError(),
+}));
+
+const getLmStudioListError = vi.fn();
+vi.mock('./lmStudioManager.js', () => ({ getLastListError: () => getLmStudioListError() }));
 
 // A fixed, generous memory budget so the memory axis is deterministic.
 vi.mock('../lib/localMemory.js', () => ({ getAvailableMemoryGb: async () => 64 }));
@@ -44,6 +51,8 @@ beforeEach(() => {
   runLocalLlmTest.mockReset();
   listModels.mockReset().mockResolvedValue([{ id: 'example-model:7b', params: '7B' }]);
   getLoadedModels.mockReset().mockResolvedValue([{ id: 'example-model:7b', name: 'example-model:7b', size: 5 * 2 ** 30 }]);
+  getOllamaListError.mockReset().mockReturnValue(null);
+  getLmStudioListError.mockReset().mockReturnValue(null);
 });
 
 describe('buildSamplePrompt', () => {
@@ -125,13 +134,22 @@ describe('loadAssessments / getAssessmentReport (read path)', () => {
     expect(report.unassessed).toContainEqual({ backend: 'ollama', modelId: 'example-model:7b', params: '7B' });
   });
 
-  it('flags a backend whose model list could not be read, rather than reporting it empty', async () => {
-    listModels.mockImplementation(async (backend) => {
-      if (backend === 'lmstudio') throw new Error('LM Studio unreachable');
-      return [{ id: 'example-model:7b', params: '7B' }];
-    });
+  it('flags a backend whose model list could not be read, even though it returned []', async () => {
+    // Both managers cache an EMPTY list on a failed read instead of throwing, so
+    // the manager's own error getter is the only signal that separates "no
+    // models installed" from "the list could not be read".
+    listModels.mockImplementation(async (backend) => (backend === 'lmstudio' ? [] : [{ id: 'example-model:7b', params: '7B' }]));
+    getLmStudioListError.mockReturnValue('LM Studio is unavailable');
     const report = await svc.getAssessmentReport();
     expect(report.listErrors).toEqual(['lmstudio']);
+  });
+
+  it('still flags a backend when the model list throws outright', async () => {
+    listModels.mockImplementation(async (backend) => {
+      if (backend === 'ollama') throw new Error('Ollama unreachable');
+      return [];
+    });
+    expect((await svc.getAssessmentReport()).listErrors).toEqual(['ollama']);
   });
 
   it('falls back to the balanced intent for an unrecognized one', async () => {
@@ -238,6 +256,68 @@ describe('runAssessment', () => {
     // The stub lists the same model under both backends, so only the ollama
     // copy leaves the unassessed list — assessments are per (backend, model).
     expect(report.unassessed).toEqual([{ backend: 'lmstudio', modelId: 'example-model:7b', params: '7B' }]);
+  });
+});
+
+describe('uninstalled models', () => {
+  it('stops recommending a model the user has since deleted', async () => {
+    runLocalLlmTest.mockResolvedValue(okRun());
+    await svc.runAssessment({ backend: 'ollama', modelId: 'example-model:7b', contextTokens: [512, 4096] });
+
+    listModels.mockResolvedValue([]);
+    const report = await svc.getAssessmentReport();
+    // It can no longer run, so it must not be ranked — but the measurement stays
+    // on disk so a re-install doesn't cost another run.
+    expect(report.ranked).toEqual([]);
+    expect(report.uninstalled).toContainEqual({ backend: 'ollama', modelId: 'example-model:7b' });
+    expect(report.assessments).toHaveLength(1);
+  });
+
+  it('keeps recommending when the backend list is UNTRUSTWORTHY rather than wiping it', async () => {
+    runLocalLlmTest.mockResolvedValue(okRun());
+    await svc.runAssessment({ backend: 'ollama', modelId: 'example-model:7b', contextTokens: [512, 4096] });
+
+    // An unreadable list returning [] must not be read as "everything was
+    // uninstalled" — that is the same failed-read-as-empty mistake.
+    listModels.mockResolvedValue([]);
+    getOllamaListError.mockReturnValue('Ollama is unavailable');
+    const report = await svc.getAssessmentReport();
+    expect(report.ranked.map((r) => r.modelId)).toEqual(['example-model:7b']);
+    expect(report.uninstalled).toEqual([]);
+  });
+});
+
+describe('cancellation', () => {
+  it('does not persist a run the client aborted mid-way', async () => {
+    // runLocalLlmTest turns a client disconnect into the same "Timed out" result
+    // a real resource failure produces. Persisting it would record the user
+    // closing the tab as `does-not-fit`.
+    const controller = new AbortController();
+    runLocalLlmTest.mockImplementation(async () => {
+      controller.abort();
+      return { text: '', error: 'Timed out after 120000ms' };
+    });
+
+    const result = await svc.runAssessment({
+      backend: 'ollama', modelId: 'example-model:7b', contextTokens: [512, 4096], signal: controller.signal,
+    });
+    expect(result.cancelled).toBe(true);
+    expect(await svc.loadAssessments()).toEqual([]);
+  });
+
+  it('leaves an earlier measurement intact when a re-run is cancelled', async () => {
+    runLocalLlmTest.mockResolvedValue(okRun(40, 150));
+    await svc.runAssessment({ backend: 'ollama', modelId: 'example-model:7b', contextTokens: [512] });
+
+    const controller = new AbortController();
+    controller.abort();
+    await svc.runAssessment({
+      backend: 'ollama', modelId: 'example-model:7b', contextTokens: [512], signal: controller.signal,
+    });
+
+    const stored = await svc.loadAssessments();
+    expect(stored).toHaveLength(1);
+    expect(stored[0].performance.meanCharsPerSecond).toBe(150);
   });
 });
 

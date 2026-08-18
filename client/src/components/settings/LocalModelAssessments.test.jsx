@@ -11,6 +11,7 @@ vi.mock('../../services/api', () => ({
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
 import { getLocalLlmAssessments, runLocalLlmAssessment, deleteLocalLlmAssessment } from '../../services/api';
+import toast from '../ui/Toast';
 import LocalModelAssessments from './LocalModelAssessments.jsx';
 
 const report = (overrides = {}) => ({
@@ -103,7 +104,7 @@ describe('LocalModelAssessments', () => {
     await user.click(screen.getByRole('button', { name: /run assessment/i }));
     await waitFor(() => expect(runLocalLlmAssessment).toHaveBeenCalledWith(
       { backend: 'ollama', modelId: 'example-model:7b' },
-      { silent: true },
+      expect.objectContaining({ silent: true, signal: expect.any(AbortSignal) }),
     ));
   });
 
@@ -149,6 +150,53 @@ describe('LocalModelAssessments', () => {
     await user.click(await screen.findByRole('button', { name: /discard the measurement/i }));
     await waitFor(() => expect(screen.getByText(/Not yet measured \(1\)/)).toBeInTheDocument());
     expect(deleteLocalLlmAssessment).toHaveBeenCalledWith('ollama', 'example-model:7b', { silent: true });
+  });
+
+  it('aborts an in-flight run when the user stops it, without toasting a failure', async () => {
+    const user = userEvent.setup();
+    getLocalLlmAssessments.mockResolvedValue(report({
+      unassessed: [{ backend: 'ollama', modelId: 'example-model:7b', params: '7B' }],
+    }));
+    // A run occupies the local provider for minutes; the modal's only exit must
+    // stay live and actually abort, not merely close over a job still running.
+    let capturedSignal;
+    runLocalLlmAssessment.mockImplementation((_payload, options) => {
+      capturedSignal = options.signal;
+      return new Promise((_resolve, reject) => {
+        options.signal.addEventListener('abort', () => reject(new Error('Server unreachable')));
+      });
+    });
+    render(<LocalModelAssessments />);
+
+    await user.click(await screen.findByRole('button', { name: /measure/i }));
+    await user.click(screen.getByRole('button', { name: /run assessment/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /stop/i })).toBeInTheDocument());
+
+    await user.click(screen.getByRole('button', { name: /stop/i }));
+    await waitFor(() => expect(capturedSignal.aborted).toBe(true));
+    // The abort is what the user asked for — it must not surface as an error.
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('aborts a run in flight when the panel unmounts', async () => {
+    const user = userEvent.setup();
+    getLocalLlmAssessments.mockResolvedValue(report({
+      unassessed: [{ backend: 'ollama', modelId: 'example-model:7b', params: '7B' }],
+    }));
+    let capturedSignal;
+    runLocalLlmAssessment.mockImplementation((_payload, options) => {
+      capturedSignal = options.signal;
+      return new Promise(() => {});
+    });
+    const { unmount } = render(<LocalModelAssessments />);
+
+    await user.click(await screen.findByRole('button', { name: /measure/i }));
+    await user.click(screen.getByRole('button', { name: /run assessment/i }));
+    await waitFor(() => expect(capturedSignal).toBeDefined());
+
+    unmount();
+    expect(capturedSignal.aborted).toBe(true);
   });
 
   it('explains a model that ran but was excluded from the ranking', async () => {

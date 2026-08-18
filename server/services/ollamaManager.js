@@ -90,6 +90,12 @@ let isAvailable = null
 // too — otherwise the catalog-overlay path re-hits /api/tags on every keystroke.
 let installedModels = null
 let lastLoadedModelsError = null
+// Why /api/tags last returned nothing. `getInstalledModels` deliberately caches
+// an empty list on failure (see its comment), so `[]` alone cannot distinguish
+// "Ollama has no models installed" from "the list could not be read" — callers
+// that must not present a failed read as an empty backend consult this.
+// Mirrors lmStudioManager's `getLastListError`.
+let lastInstalledModelsError = null
 let lastCheckAt = null
 let managedProcess = null
 let managedProcessPid = null
@@ -692,16 +698,21 @@ async function stopServer() {
  */
 async function getInstalledModels(forceRefresh = false) {
   if (!forceRefresh && installedModels !== null) return installedModels
-  if (!(await checkOllamaAvailable())) return []
+  if (!(await checkOllamaAvailable())) {
+    lastInstalledModelsError = status.lastError || 'Ollama is unavailable'
+    return []
+  }
 
   const data = await ollamaRequest('/api/tags').catch(() => null)
   if (!data?.models) {
     // Cache the empty result so a /api/tags failure while Ollama stays up for
     // /api/version (the availability probe) doesn't re-hit on every catalog
     // keystroke; a forceRefresh (status refresh / pull / delete) recovers it.
+    lastInstalledModelsError = 'Ollama model list (/api/tags) returned no data'
     installedModels = []
     return installedModels
   }
+  lastInstalledModelsError = null
 
   installedModels = data.models.map((m) => ({
     id: m.name || m.model,
@@ -872,6 +883,11 @@ async function getLoadedModels() {
     sizeVram: m.size_vram ?? null,
     expiresAt: m.expires_at || null
   }))
+}
+
+/** Last `/api/tags` error (null only after a trustworthy installed list). */
+function getLastInstalledModelsError() {
+  return lastInstalledModelsError
 }
 
 /** Last `/api/ps` error (null only after a trustworthy residency list). */
@@ -1539,6 +1555,7 @@ export {
   getInstalledModels,
   getModelCapabilities,
   getLoadedModels,
+  getLastInstalledModelsError,
   getLastLoadedModelsError,
   unloadModel,
   pullModel,

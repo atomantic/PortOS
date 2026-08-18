@@ -95,6 +95,18 @@ describe('summarizePerformance', () => {
     expect(perf.contextDegradation).toBe(0.5);
   });
 
+  it('measures degradation at the LONGEST context, not at the slowest sample', () => {
+    // Results are not monotonic in practice. A mid-range dip must not be
+    // reported as the long-context behavior — the number is rendered as
+    // "held X% of peak at its longest context", so it has to mean that.
+    const perf = summarizePerformance([okSample(512, 100), okSample(4096, 50), okSample(16384, 80)]);
+    expect(perf.contextDegradation).toBe(0.8);
+  });
+
+  it('clamps degradation at 1 when the longest context measured above the others', () => {
+    expect(summarizePerformance([okSample(512, 80), okSample(4096, 100)]).contextDegradation).toBe(1);
+  });
+
   it('does not fake a degradation trend from a single sample', () => {
     // Reporting 1 here would claim "throughput held flat across contexts" on
     // the strength of one data point.

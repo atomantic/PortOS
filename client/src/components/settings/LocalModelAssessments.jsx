@@ -17,7 +17,7 @@
  *    choice. Same for an axis that wasn't measured: it is omitted, not zeroed.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Gauge, RefreshCw, Trash2, Play, AlertTriangle } from 'lucide-react';
 import Modal from '../ui/Modal';
 import BrailleSpinner from '../BrailleSpinner';
@@ -85,12 +85,14 @@ function AssessmentConsentModal({ target, contextTokens, onCancel, onConfirm, ru
           loads the model into memory. The result stays on this machine and is never synced to a peer.
         </p>
         <div className="flex gap-3 pt-1">
+          {/* Stays enabled while the run is in flight — it aborts the request
+              rather than merely closing the modal, so the user is never stuck
+              watching a multi-minute job they no longer want. */}
           <button
             onClick={onCancel}
-            disabled={running}
-            className="flex-1 px-4 py-2 bg-port-card border border-port-border hover:border-port-accent text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+            className="flex-1 px-4 py-2 bg-port-card border border-port-border hover:border-port-accent text-white text-sm font-medium rounded-lg transition-colors"
           >
-            Cancel
+            {running ? 'Stop' : 'Cancel'}
           </button>
           <button
             onClick={onConfirm}
@@ -219,15 +221,30 @@ export function LocalModelAssessments() {
 
   useEffect(() => { load(intent); }, [load, intent]);
 
+  // A run occupies the local provider for minutes. Without an abort, leaving
+  // the page (or changing your mind) leaves it running with nobody listening —
+  // the server drops the assessment on an aborted signal rather than recording a
+  // cancel as a `does-not-fit`.
+  const runControllerRef = useRef(null);
+  useEffect(() => () => runControllerRef.current?.abort(), []);
+
   const [runAssessment, running] = useAsyncAction(async (target) => {
+    const controller = new AbortController();
+    runControllerRef.current = controller;
+    // An aborted fetch rejects with the generic "Server unreachable" message.
+    // That is OUR abort, not a failure, so swallow it here rather than letting
+    // useAsyncAction toast an error the user just asked for.
     const result = await runLocalLlmAssessment(
       { backend: target.backend, modelId: target.modelId },
-      { silent: true },
-    );
-    // Reactive update rather than a refetch of the whole report — except the
-    // ranking itself is server-derived, so pull the fresh ranking once the run
-    // lands. Keeping the local swap would mean re-implementing the scoring here.
-    await load(intent);
+      { silent: true, signal: controller.signal },
+    ).catch((err) => {
+      if (controller.signal.aborted) return { cancelled: true };
+      throw err;
+    }).finally(() => { runControllerRef.current = null; });
+    // The ranking is server-derived, so pull the fresh report once a run lands
+    // rather than re-implementing the scoring here. A cancelled run recorded
+    // nothing, so there is nothing new to fetch.
+    if (!result?.cancelled) await load(intent);
     return result;
   }, { errorMessage: 'Assessment failed' });
 
@@ -235,7 +252,10 @@ export function LocalModelAssessments() {
     const target = pendingTarget;
     const result = await runAssessment(target);
     setPendingTarget(null);
-    if (result) {
+// An aborted run recorded nothing on either side, so there is no verdict
+    // to report — marked `cancelled` by the abort catch above, or by the server
+    // when it saw the signal drop mid-run.
+    if (result && !result.cancelled) {
       const verdict = VERDICT_META[result.verdict]?.label || result.verdict;
       toast.success(`${target.modelId}: ${verdict}`);
     }
@@ -251,6 +271,11 @@ export function LocalModelAssessments() {
     } : prev));
     return true;
   }, { errorMessage: 'Could not discard that measurement' });
+
+  const cancelRun = () => {
+    runControllerRef.current?.abort();
+    setPendingTarget(null);
+  };
 
   const busy = running || removing;
   const activeIntent = INTENTS.find((i) => i.id === intent);
@@ -378,7 +403,7 @@ export function LocalModelAssessments() {
         target={pendingTarget}
         contextTokens={report?.defaultContextTokens || []}
         running={running}
-        onCancel={() => (running ? null : setPendingTarget(null))}
+        onCancel={cancelRun}
         onConfirm={confirmRun}
       />
     </div>

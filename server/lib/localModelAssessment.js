@@ -125,18 +125,31 @@ function meanOf(samples, field) {
 /**
  * Collapse the per-context samples into one performance summary.
  *
- * `contextDegradation` is the ratio of the slowest measured throughput to the
- * fastest (0..1]; 1 means throughput held flat across every context length,
- * 0.25 means the longest context ran at a quarter of the shortest. `null` when
- * fewer than two context lengths produced throughput — a single sample cannot
- * describe a trend, and reporting `1` there would fake perfect scaling.
+ * `contextDegradation` is the ratio of the throughput at the LARGEST working
+ * context to the peak throughput across all contexts (0..1]; 1 means the longest
+ * context ran as fast as the fastest one did, 0.25 means it ran at a quarter of
+ * that.
+ *
+ * It is deliberately anchored to the longest context rather than to the slowest
+ * sample. Results are not always monotonic — a mid-range context can dip below
+ * both its neighbours from an unrelated hiccup — and a min-based ratio would
+ * both contradict what this number is reported as ("held X% of peak throughput
+ * at its longest context") and penalize the ranking for a one-off intermediate
+ * outlier instead of for the long-context behavior the axis is about.
+ *
+ * `null` when fewer than two context lengths produced throughput: a single
+ * sample cannot describe a trend, and reporting `1` there would fake perfect
+ * scaling.
  *
  * @param {Array<object>} samples
  */
 export function summarizePerformance(samples) {
-  const throughputs = okSamples(samples).map((s) => s.charsPerSecond).filter((v) => isMeasured(v) && v > 0);
-  const fastest = throughputs.length ? Math.max(...throughputs) : null;
-  const slowest = throughputs.length ? Math.min(...throughputs) : null;
+  const measured = okSamples(samples)
+    .filter((s) => isMeasured(s.charsPerSecond) && s.charsPerSecond > 0 && isMeasured(s.contextTokens));
+  const fastest = measured.length ? Math.max(...measured.map((s) => s.charsPerSecond)) : null;
+  const atLongest = measured.length
+    ? measured.reduce((longest, s) => (s.contextTokens > longest.contextTokens ? s : longest)).charsPerSecond
+    : null;
   return {
     samplesRun: Array.isArray(samples) ? samples.length : 0,
     samplesOk: okSamples(samples).length,
@@ -144,8 +157,10 @@ export function summarizePerformance(samples) {
     meanTtftMs: meanOf(samples, 'ttftMs'),
     peakCharsPerSecond: fastest,
     maxWorkingContextTokens: maxWorkingContextTokens(samples),
+    // Clamped: the longest context can measure marginally ABOVE the peak of the
+    // others only through noise, and a >1 "degradation" is meaningless.
     contextDegradation:
-      throughputs.length >= 2 && fastest > 0 ? Number((slowest / fastest).toFixed(3)) : null,
+      measured.length >= 2 && fastest > 0 ? Number(Math.min(1, atLongest / fastest).toFixed(3)) : null,
   };
 }
 

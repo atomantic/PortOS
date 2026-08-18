@@ -59,7 +59,11 @@ import {
 } from '../lib/localModelAssessment.js';
 import { runLocalLlmTest } from './localLlmPlayground.js';
 import { listModels } from './localLlm.js';
-import { getLoadedModels as getLoadedOllamaModels } from './ollamaManager.js';
+import {
+  getLoadedModels as getLoadedOllamaModels,
+  getLastInstalledModelsError as getOllamaListError,
+} from './ollamaManager.js';
+import { getLastListError as getLmStudioListError } from './lmStudioManager.js';
 
 const ASSESSMENTS_DIR = join(PATHS.data, 'local-llm');
 const ASSESSMENTS_FILE = join(ASSESSMENTS_DIR, 'assessments.json');
@@ -311,6 +315,18 @@ export async function runAssessment({ backend, modelId, contextTokens = DEFAULT_
     performance: summarizePerformance(samples),
   };
 
+  // A cancelled run is NOT evidence. `runLocalLlmTest` converts a client
+  // disconnect into the same "Timed out after Nms" result a genuine resource
+  // failure produces, so persisting here would record a user closing the tab as
+  // `does-not-fit` — or, if they cancelled before the first sample landed, as an
+  // `unknown` that silently removes the model from the "not yet measured" list.
+  // Return the partial record so the caller can show what was gathered, but
+  // leave the store untouched.
+  if (signal?.aborted) {
+    console.log(`📏 Local LLM: ${backend}/${modelId} assessment cancelled — not recorded`);
+    return { ...assessment, cancelled: true };
+  }
+
   console.log(`📏 Local LLM: ${backend}/${modelId} → ${verdict} (${assessment.performance.samplesOk}/${samples.length} samples ok)`);
   return saveAssessment(assessment);
 }
@@ -328,20 +344,42 @@ export async function getAssessmentReport({ intent = 'balanced' } = {}) {
   const { assessments, readError } = await loadStore();
   const resolvedIntent = ASSESSMENT_INTENTS.includes(intent) ? intent : 'balanced';
 
-  const installedByBackend = Object.fromEntries(
-    await Promise.all(
-      ['ollama', 'lmstudio'].map(async (backend) => [backend, await listModels(backend).catch(() => null)])
-    )
+  // Both managers cache an EMPTY list on a failed read rather than throwing, so
+  // `[]` alone cannot distinguish "this backend has no models" from "the list
+  // could not be read" — and presenting the second as the first would silently
+  // hide every assessable model plus the reason. Each manager's own list-error
+  // getter is the authoritative signal; a `.catch` here is only the backstop.
+  const listed = Object.fromEntries(await Promise.all(
+    ['ollama', 'lmstudio'].map(async (backend) => {
+      const models = await listModels(backend).catch((err) => ({ error: err?.message || 'model list failed' }));
+      if (!Array.isArray(models)) return [backend, { models: null, error: models.error }];
+      const error = backend === 'ollama' ? getOllamaListError() : getLmStudioListError();
+      return [backend, { models, error: error || null }];
+    })
+  ));
+
+  const listErrors = Object.entries(listed).filter(([, r]) => r.error).map(([backend]) => backend);
+  const installedKeys = new Set(
+    Object.entries(listed).flatMap(([backend, r]) => (r.models || []).map((m) => assessmentKey(backend, m?.id)))
   );
 
-  const { ranked, excluded } = rankByIntent(assessments, resolvedIntent);
+  // A model the user has since deleted must not keep showing up as a
+  // recommendation — it cannot run. But only drop it when the backend's list is
+  // TRUSTWORTHY: an unreadable list would otherwise wipe every recommendation
+  // for that backend, which is the same "failed read read as empty" mistake.
+  const trusted = new Set(Object.entries(listed).filter(([, r]) => Array.isArray(r.models) && !r.error).map(([backend]) => backend));
+  const isStillInstalled = (a) =>
+    !trusted.has(a?.backend) || installedKeys.has(assessmentKey(a?.backend, a?.modelId));
+  const stillInstalled = assessments.filter(isStillInstalled);
+  const uninstalled = assessments
+    .filter((a) => !isStillInstalled(a))
+    .map((a) => ({ backend: a?.backend || null, modelId: a?.modelId || null }));
+
+  const { ranked, excluded } = rankByIntent(stillInstalled, resolvedIntent);
 
   const assessedKeys = new Set(assessments.map((a) => assessmentKey(a?.backend, a?.modelId)));
   const unassessed = [];
-  for (const [backend, models] of Object.entries(installedByBackend)) {
-    // `null` = the backend's model list could not be read. Reporting it as `[]`
-    // would claim "this backend has nothing to assess", which is a different
-    // (and wrong) statement — skip it instead.
+  for (const [backend, { models }] of Object.entries(listed)) {
     if (!Array.isArray(models)) continue;
     for (const model of models) {
       if (model?.id && !assessedKeys.has(assessmentKey(backend, model.id))) {
@@ -356,10 +394,12 @@ export async function getAssessmentReport({ intent = 'balanced' } = {}) {
     defaultContextTokens: DEFAULT_CONTEXT_TOKENS,
     assessments,
     unassessed,
-    // Which backends could not be listed at all — distinct from "listed, empty".
-    listErrors: Object.entries(installedByBackend)
-      .filter(([, models]) => !Array.isArray(models))
-      .map(([backend]) => backend),
+    // Backends whose model list could not be trusted — distinct from "listed,
+    // and legitimately empty".
+    listErrors,
+    // Measurements for models that are no longer installed. Kept on disk (a
+    // re-install should not cost another run) but excluded from the ranking.
+    uninstalled,
     readError,
     ranked,
     excluded,
