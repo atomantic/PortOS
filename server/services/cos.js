@@ -110,6 +110,7 @@ import {
   queueEligibleImprovementTasks,
   generateSelfImprovementTaskForType,
   generateManagedAppImprovementTaskForType,
+  applyOnDemandConsent,
   emitOnDemandEmpty,
   blockIfExceedsMaxSpawns,
   selectDryRunAutoApproved,
@@ -911,6 +912,7 @@ async function spawnDequeuePriority0OnDemand(ctx) {
       task = await generateSelfImprovementTaskForType(request.taskType, state);
     }
 
+    applyOnDemandConsent(task);
     if (task && capacity.canSpawn(task)) {
       // Mark this as a MANUAL (on-demand) run so a completed perpetual drain
       // continues in the same user-initiated lane instead of the auto-run-gated

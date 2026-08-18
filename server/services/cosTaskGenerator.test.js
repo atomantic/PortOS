@@ -42,6 +42,8 @@ import {
   resolveSwarmBlock,
   isCooldownExemptTask,
   emitOnDemandEmpty,
+  applyOnDemandConsent,
+  isConfiguredApprovalRequired,
   recordPerpetualTransient,
   buildJiraTicketTask,
   buildImprovementDedupSets,
@@ -160,6 +162,92 @@ describe('both on-demand engines stamp metadata.onDemand', () => {
   it('dequeueNextTask engine (spawnDequeuePriority0OnDemand) stamps onDemand before addTask', () => {
     const engine = onDemandStamp(COS_SRC, 'async function spawnDequeuePriority0OnDemand');
     expect(/task\.metadata = \{ \.\.\.\(task\.metadata \|\| \{\}\), onDemand: true \}/.test(engine)).toBe(true);
+  });
+});
+
+describe('applyOnDemandConsent', () => {
+  it('flips an approval-gated task to AUTO and drops the hold reason', () => {
+    const task = {
+      approvalRequired: true,
+      autoApproved: false,
+      approvalReason: 'safety-kind:publish',
+      metadata: { analysisType: 'release-check' }
+    };
+    expect(applyOnDemandConsent(task)).toBe(task);
+    expect(task).toMatchObject({ approvalRequired: false, autoApproved: true });
+    expect(task.approvalReason).toBeUndefined();
+  });
+
+  it('leaves a requireApproval task gated so the schedule toggle still holds Run Now', () => {
+    const task = {
+      approvalRequired: true,
+      autoApproved: false,
+      approvalReason: 'config:requireApproval',
+      metadata: { analysisType: 'release-check', requireApproval: true }
+    };
+    applyOnDemandConsent(task);
+    expect(task).toMatchObject({
+      approvalRequired: true,
+      autoApproved: false,
+      approvalReason: 'config:requireApproval'
+    });
+  });
+
+  it('is a no-op on a missing task so callers can apply it unconditionally', () => {
+    expect(applyOnDemandConsent(null)).toBeNull();
+    expect(applyOnDemandConsent(undefined)).toBeUndefined();
+  });
+});
+
+describe('isConfiguredApprovalRequired', () => {
+  it('is true only for an explicit requireApproval: true', () => {
+    expect(isConfiguredApprovalRequired({ requireApproval: true })).toBe(true);
+    expect(isConfiguredApprovalRequired({ requireApproval: false })).toBe(false);
+    expect(isConfiguredApprovalRequired({ analysisType: 'release-check' })).toBe(false);
+    expect(isConfiguredApprovalRequired(undefined)).toBe(false);
+  });
+
+  it('resolveConfidenceApproval consults the toggle before safety-kind and confidence', () => {
+    const start = GEN_SRC.indexOf('async function resolveConfidenceApproval');
+    expect(start).toBeGreaterThan(-1);
+    const body = GEN_SRC.slice(start, start + 1800);
+    const configIdx = body.indexOf('isConfiguredApprovalRequired(metadata)');
+    const safetyIdx = body.indexOf('safety.outwardFacing && requiresSafetyApproval');
+    expect(configIdx).toBeGreaterThan(-1);
+    expect(safetyIdx).toBeGreaterThan(configIdx);
+    expect(body).toContain("approvalReason: 'config:requireApproval'");
+  });
+});
+
+describe('both on-demand engines apply consent before addTask', () => {
+  // Run Now is the user's sign-off. Without this flip, a safety-kind or
+  // low-confidence type (release-check used to match `\brelease\b`) is
+  // persisted as APPROVAL, Priority 2 will not pick it, and force-spawn
+  // refuses it — so "Run Now" sits in awaiting-approve forever.
+  const engineBody = (src, engineFn) => {
+    const start = src.indexOf(engineFn);
+    expect(start, `${engineFn} must exist`).toBeGreaterThan(-1);
+    const next = src.indexOf('\nasync function ', start + 1);
+    return src.slice(start, next === -1 ? src.length : next);
+  };
+
+  it('evaluateTasks engine consents before canSpawn / addTask', () => {
+    const engine = engineBody(GEN_SRC, 'async function spawnPriority0OnDemand');
+    expect(engine.indexOf('applyOnDemandConsent(task)')).toBeGreaterThan(-1);
+    expect(engine.indexOf('applyOnDemandConsent(task)')).toBeLessThan(engine.indexOf('canSpawnTask(task)'));
+  });
+
+  it('dequeueNextTask engine consents before canSpawn / addTask', () => {
+    const engine = engineBody(COS_SRC, 'async function spawnDequeuePriority0OnDemand');
+    expect(engine.indexOf('applyOnDemandConsent(task)')).toBeGreaterThan(-1);
+    expect(engine.indexOf('applyOnDemandConsent(task)')).toBeLessThan(engine.indexOf('capacity.canSpawn(task)'));
+  });
+
+  it('idle-review steal path consents when it drains an on-demand request', () => {
+    const start = GEN_SRC.indexOf('async function generateManagedAppImprovementTask(app, state');
+    expect(start).toBeGreaterThan(-1);
+    const body = GEN_SRC.slice(start, start + 3500);
+    expect(body).toMatch(/selectionReason === 'on-demand'\) applyOnDemandConsent\(task\)/);
   });
 });
 

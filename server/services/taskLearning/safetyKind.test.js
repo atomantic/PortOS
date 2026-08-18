@@ -58,8 +58,24 @@ describe('classifySafetyKind (#2440)', () => {
     expect(classifySafetyKind({ taskTypeKey: 'app-improve:federate-records' }).kind).toBe('federation');
     expect(classifySafetyKind({ taskTypeKey: 'open-upstream-pr' }).kind).toBe('external-pr');
     expect(classifySafetyKind({ taskTypeKey: 'publish-release' }).kind).toBe('publish');
+    expect(classifySafetyKind({ taskTypeKey: 'cut-release' }).kind).toBe('publish');
     expect(classifySafetyKind({ metadata: { taskDescription: 'Deploy the site to production' } }).kind).toBe('publish');
     expect(classifySafetyKind({ metadata: { taskDescription: 'Draft a social-media post' } }).kind).toBe('content');
+  });
+
+  it('does not treat release-check (or pre-release) as a publish action', () => {
+    // `\brelease\b` used to match `release-check` and force every Run Now into
+    // awaiting-approve. The type is a readiness coordinator, not a ship.
+    for (const input of [
+      { taskTypeKey: 'app-improve:release-check' },
+      { taskTypeKey: 'self-improve:release-check' },
+      { metadata: { analysisType: 'release-check' } },
+      { taskTypeKey: 'pre-release-audit' }
+    ]) {
+      const out = classifySafetyKind(input);
+      expect(out.kind).toBe(REVERSIBLE_SAFETY_KIND);
+      expect(out.outwardFacing).toBe(false);
+    }
   });
 
   it('all outward classifications set outwardFacing true; reversible sets false', () => {
@@ -123,6 +139,7 @@ describe('safety-kind override branch (#2440) — composed decision', () => {
 
   it('leaves reversible internal tasks to the confidence gate (no override)', () => {
     expect(wouldForceApproval({ taskTypeKey: 'self-improve:code-review' }, {})).toBe(false);
+    expect(wouldForceApproval({ taskTypeKey: 'app-improve:release-check' }, {})).toBe(false);
   });
 
   it('lets the user disable the safety override entirely', () => {

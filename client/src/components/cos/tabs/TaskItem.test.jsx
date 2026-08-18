@@ -567,4 +567,15 @@ describe('TaskItem investigation approval hint (#3714)', () => {
     const approve = screen.getByRole('button', { name: 'Approve task sys-approve-plain' });
     expect(approve).not.toHaveAttribute('title');
   });
+
+  it('names the schedule Require approval toggle on the APPROVE button', () => {
+    const gated = {
+      ...held,
+      id: 'sys-require-approval',
+      metadata: { requireApproval: true, approvalReason: 'config:requireApproval' },
+    };
+    render(<TaskItem task={gated} isSystem onRefresh={vi.fn()} providers={providers} />);
+    const approve = screen.getByRole('button', { name: /^Approve task sys-require-approval — / });
+    expect(approve).toHaveAttribute('title', expect.stringContaining('Require approval'));
+  });
 });

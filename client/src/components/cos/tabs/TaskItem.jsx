@@ -47,7 +47,8 @@ const statusIcons = {
 // their own entries here rather than a parallel field.
 const APPROVAL_REASON_HINTS = {
   'investigation-loop:repeat-fingerprint': 'Held for you: this same failure cause was investigated within the last 24 hours and came back.',
-  'investigation-loop:failure-storm': 'Held for you: this hour is nearly out of investigation budget — failures are cascading, not isolated.'
+  'investigation-loop:failure-storm': 'Held for you: this hour is nearly out of investigation budget — failures are cascading, not isolated.',
+  'config:requireApproval': 'Held for you: this scheduled task type has Require approval turned on.'
 };
 
 const getTaskEditData = (task) => ({

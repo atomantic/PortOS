@@ -1415,7 +1415,11 @@ const ALLOWED_TASK_METADATA_KEYS = [
   'worktreeChangesExpected',
   // Audit-type toggle: file tracker issues (no code) vs implement the fix.
   // Dispatch stamps `noCodeOutput` when this is true. See server/lib/auditCatalog.js.
-  'fileIssues'
+  'fileIssues',
+  // Dispatch gate: when true, the generated system task is always awaiting-
+  // approve — including an explicit Run Now. Absent/false keeps the default
+  // (Run Now consents; unattended runs follow confidence/safety-kind).
+  'requireApproval'
 ];
 
 // pr-watcher author-gate values. 'self' = PRs opened by the gh-authenticated

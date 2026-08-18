@@ -1055,6 +1055,7 @@ async function spawnPriority0OnDemand(ctx) {
         task = await generateSelfImprovementTaskForType(request.taskType, state);
       }
 
+      applyOnDemandConsent(task);
       if (task && canSpawnTask(task)) {
         // Mark this a MANUAL (on-demand) run so its perpetual drain continues in
         // the on-demand lane (see perpetualRefillPlan in cos.js). BOTH on-demand
@@ -1822,9 +1823,26 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, { ignore
  * to spread into task objects — `safetyKind` + `approvalReason` surface WHY a
  * high-confidence task still needs approval on the task record and in the UI.
  */
+export function isConfiguredApprovalRequired(metadata) {
+  return metadata?.requireApproval === true;
+}
+
 async function resolveConfidenceApproval(state, taskTypeKey, logLabel, metadata = {}) {
   const safety = classifySafetyKind({ taskTypeKey, metadata });
   const safetyConfig = state?.config?.safetyKindApproval ?? {};
+
+  // Explicit per-type/per-app toggle wins over every automatic gate. The user
+  // turned "Require approval" on for this scheduled type; do not second-guess
+  // that with confidence or a Run Now consent flip.
+  if (isConfiguredApprovalRequired(metadata)) {
+    emitLog('info', `🔒 ${logLabel} requires approval (task metadata requireApproval)`, {}, '[Approval]');
+    return {
+      autoApproved: false,
+      approvalRequired: true,
+      safetyKind: safety.kind,
+      approvalReason: 'config:requireApproval'
+    };
+  }
 
   // Safety-kind override runs BEFORE (and independent of) the confidence gate.
   if (safety.outwardFacing && requiresSafetyApproval(safety.kind, safetyConfig)) {
@@ -1852,6 +1870,27 @@ async function resolveConfidenceApproval(state, taskTypeKey, logLabel, metadata 
     safetyKind: safety.kind,
     ...(confidence.autoApprove ? {} : { approvalReason: `confidence:${confidence.tier}` })
   };
+}
+
+/**
+ * Clicking Run (or a refill of that run) is the user's consent. Safety-kind
+ * and confidence gates exist so UNATTENDED queue-path work can't ship
+ * irreversible actions on its own — they must not re-hold a task the user
+ * just asked to run, or "Run Now" lands in awaiting-approve and never
+ * auto-spawns (Priority 2 only picks AUTO tasks; force-spawn refuses
+ * APPROVAL tasks).
+ *
+ * `metadata.requireApproval` is the escape hatch: a type the user marked
+ * "always ask" (e.g. release-check when they want to review the merge)
+ * keeps the hold even on Run Now.
+ */
+export function applyOnDemandConsent(task) {
+  if (!task) return task;
+  if (isConfiguredApprovalRequired(task.metadata)) return task;
+  task.approvalRequired = false;
+  task.autoApproved = true;
+  if ('approvalReason' in task) delete task.approvalReason;
+  return task;
 }
 
 /**
@@ -2093,7 +2132,11 @@ async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = nu
   // with the literal {prData}/{referenceData} markers and never poll. The
   // recordExecution + activity bump above already accounted for the idle
   // spawn; the per-type generator does not record execution itself.
-  return generateManagedAppImprovementTaskForType(nextType, app, state, { ignoreTaskId });
+  const task = await generateManagedAppImprovementTaskForType(nextType, app, state, { ignoreTaskId });
+  // Idle-review can steal a queued on-demand request for this app. That
+  // request is still a user Run — apply the same consent as Priority 0.
+  if (selectionReason === 'on-demand') applyOnDemandConsent(task);
+  return task;
 }
 
 /**

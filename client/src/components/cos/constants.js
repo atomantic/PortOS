@@ -189,8 +189,9 @@ export const STATE_MESSAGES = {
   ideating: "Analyzing options...",
 };
 
-// Agent option toggles for task metadata (useWorktree, openPR, simplify).
+// Agent option toggles for task metadata (useWorktree, openPR, simplify, requireApproval).
 export const AGENT_OPTIONS = [
+  { field: 'requireApproval', label: 'Require approval', shortLabel: 'Apr', description: 'Queue as awaiting-approve and do not auto-run — including Run Now — until you approve. Off (default): Run Now starts immediately; scheduled runs still follow the confidence and safety gates.' },
   { field: 'useWorktree', label: 'Worktree', shortLabel: 'WT', description: 'Work in an isolated git worktree on a feature branch. If unchecked, commits directly to the default branch.' },
   { field: 'openPR', label: 'Open PR', shortLabel: 'PR', description: 'Open a pull request to the default branch (implies worktree). Choose whether PortOS reviews and merges it, merges on green CI, or leaves it open. If unchecked with worktree enabled, auto-merges to the default branch on completion.' },
   { field: 'simplify', label: 'Run /simplify', shortLabel: '/s', description: 'Review code for reuse and quality before committing' }

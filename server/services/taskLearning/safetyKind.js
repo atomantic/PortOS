@@ -39,11 +39,17 @@ const OUTWARD_KIND_SET = new Set(OUTWARD_SAFETY_KINDS);
  * asks the user to review a task that may not have needed it (safe direction);
  * a false negative would auto-approve genuinely outward work (the dangerous one
  * this feature exists to prevent).
+ *
+ * Bare `\brelease\b` is intentionally NOT a publish signal. It matches
+ * `release-check` (a readiness coordinator the user clicks Run on) and
+ * `pre-release` (a check, not a ship). Shipping names still match via
+ * `\bpublish\b` (`publish-release`) or the explicit `cut/create/ship/do-release`
+ * forms below.
  */
 const KIND_SIGNATURES = [
   { kind: 'federation', re: /federat|peer[-\s]?sync|sync[-\s]?peer|fan[-\s]?out[-\s]?record/ },
   { kind: 'external-pr', re: /external[-\s]?pr|upstream[-\s]?pr|fork[-\s]?pr/ },
-  { kind: 'publish', re: /\bpublish\b|\bdeploy\b|\brelease\b|go[-\s]?live|auto[-\s]?send|outbound[-\s]?message/ },
+  { kind: 'publish', re: /\bpublish\b|\bdeploy\b|\b(cut|create|ship|do)[- ]release\b|go[-\s]?live|auto[-\s]?send|outbound[-\s]?message/ },
   { kind: 'content', re: /social[-\s]?media|newsletter|\bblog\b|generate[-\s]?content/ }
 ];
 

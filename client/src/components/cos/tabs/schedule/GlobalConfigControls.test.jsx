@@ -149,6 +149,27 @@ describe('GlobalConfigControls — branch-reconcile batch size', () => {
   });
 });
 
+describe('GlobalConfigControls — require approval', () => {
+  it('toggles requireApproval on the task metadata', () => {
+    const onUpdate = renderControls({ taskType: 'release-check', taskMetadata: { useWorktree: false, openPR: false } });
+    fireEvent.click(screen.getByRole('button', { name: /Require approval/i }));
+    expect(onUpdate).toHaveBeenCalledWith('release-check', {
+      taskMetadata: { useWorktree: false, openPR: false, requireApproval: true },
+    });
+  });
+
+  it('turns requireApproval off when it is already on', () => {
+    const onUpdate = renderControls({
+      taskType: 'release-check',
+      taskMetadata: { requireApproval: true },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Require approval/i }));
+    expect(onUpdate).toHaveBeenCalledWith('release-check', {
+      taskMetadata: { requireApproval: false },
+    });
+  });
+});
+
 describe('GlobalConfigControls — file issues only', () => {
   it('is hidden for non-audit tasks', () => {
     renderControls();

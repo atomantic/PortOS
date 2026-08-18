@@ -846,6 +846,12 @@ describe('validation.js', () => {
       expect(sanitizeTaskMetadata({ fileIssues: 'true' })).toBeNull();
     });
 
+    it('should accept requireApproval as an allowed boolean key', () => {
+      expect(sanitizeTaskMetadata({ requireApproval: true })).toEqual({ requireApproval: true });
+      expect(sanitizeTaskMetadata({ requireApproval: false })).toEqual({ requireApproval: false });
+      expect(sanitizeTaskMetadata({ requireApproval: 'true' })).toBeNull();
+    });
+
     it('should accept only known PR completion metadata', () => {
       expect(sanitizeTaskMetadata({ prCompletion: 'review-then-merge' }))
         .toEqual({ prCompletion: 'review-then-merge' });
