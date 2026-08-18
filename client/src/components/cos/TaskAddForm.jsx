@@ -388,6 +388,9 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
     // Only clear form inputs after successful submission
     setNewTask(t => ({ ...t, description: '' }));
     setSlashdoCommand('');
+    // targetInstanceId deliberately SURVIVES the clear, like app/model/provider
+    // and the worktree toggles: it is a run setting, and someone queueing work
+    // onto the GPU box is usually queueing more than one item.
     // The posture belongs to the workflow the cleared template pinned, so it
     // must not survive into the next, template-less task.
     setWorktreeChangesExpected(undefined);

@@ -654,3 +654,29 @@ describe('TaskItem instance registry — not-fetched vs fetched-empty (#4520)', 
     expect(screen.getByText('unknown instance')).toBeTruthy();
   });
 });
+
+// An orphaned pin must stay editable: without its own <option> the select falls
+// back to showing "Any instance" while still submitting the dead id, and the
+// server rejects every save with no visible cause.
+describe('TaskItem editing a pin whose instance has left the registry (#4520)', () => {
+  const instances = [
+    { instanceId: 'self-instance-id', name: 'workstation', isSelf: true },
+    { instanceId: 'peer-instance-id', name: 'render-box', isSelf: false },
+  ];
+  const orphaned = { ...task, metadata: { ...task.metadata, targetInstanceId: 'ghost-instance-id' } };
+
+  it('shows the dead pin as the selected option rather than a misleading "Any instance"', () => {
+    render(<TaskItem task={orphaned} providers={providers} instances={instances} onRefresh={vi.fn()} />);
+    fireEvent.click(screen.getByLabelText('Edit task'));
+    expect(screen.getByLabelText('Run on').value).toBe('ghost-instance-id');
+  });
+
+  it('lets the user move the task to a live instance', async () => {
+    render(<TaskItem task={orphaned} providers={providers} instances={instances} onRefresh={vi.fn()} />);
+    fireEvent.click(screen.getByLabelText('Edit task'));
+    fireEvent.change(screen.getByLabelText('Run on'), { target: { value: 'peer-instance-id' } });
+    fireEvent.click(screen.getByText('Save'));
+    await waitFor(() => expect(api.updateCosTask).toHaveBeenCalled());
+    expect(api.updateCosTask.mock.calls[0][1].targetInstanceId).toBe('peer-instance-id');
+  });
+});

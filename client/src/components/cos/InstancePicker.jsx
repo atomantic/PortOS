@@ -8,7 +8,12 @@ import { Server } from 'lucide-react';
 // Presentational on purpose — the instance list is fetched once by the owning
 // view (`useAssignableInstances`) and passed in, so a list of task rows doesn't
 // issue one request per row.
-export default function InstancePicker({ id, value, onChange, instances, label = 'Run on' }) {
+export default function InstancePicker({ id, value, onChange, instances = [], label = 'Run on' }) {
+  // A pin whose instance has left the registry has no <option> to match, so the
+  // control would show "Any instance" while still holding — and submitting — the
+  // stale id, which the server then rejects. Surface it as its own option so what
+  // is shown is what is sent, and the user can move the task to a live instance.
+  const orphanedValue = value && !instances.some((i) => i.instanceId === value) ? value : '';
   return (
     <label htmlFor={id} className="flex items-center gap-2 py-1">
       <span className="flex items-center gap-1.5 text-sm text-gray-400 whitespace-nowrap">
@@ -23,6 +28,7 @@ export default function InstancePicker({ id, value, onChange, instances, label =
         className="min-w-44 rounded border border-port-border bg-port-bg px-2 py-1 text-sm text-white focus:border-port-accent focus:outline-hidden"
       >
         <option value="">Any instance</option>
+        {orphanedValue ? <option value={orphanedValue}>unknown instance ({orphanedValue})</option> : null}
         {instances.map((instance) => (
           <option key={instance.instanceId} value={instance.instanceId}>
             {instance.isSelf ? `${instance.name} (this instance)` : instance.name}
