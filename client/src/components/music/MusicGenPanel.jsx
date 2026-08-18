@@ -637,7 +637,7 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
             <p className="mt-1 text-gray-500">No structured lyric sections detected. Add tags such as [intro], [verse], [chorus], and [outro] so MiniMax can pace the composition more reliably.</p>
           ) : null}
           {lyricDuration.sectionCount > 0 && !lyricDuration.hasOutro && lyricDuration.hasLyrics ? (
-            <p className="mt-1 text-gray-500">No [outro] section detected. Auto leaves extra room, but an explicit [outro] marker gives the ending clearer structure.</p>
+            <p className="mt-1 text-gray-500">No [outro] section detected. PortOS appends a closing cue for you, but adding your own [outro] marker gives you control over exactly where the ending lands.</p>
           ) : null}
           {lyricDuration.isCapped ? (
             <p className="mt-1 text-port-warning">These lyrics estimate beyond MiniMax’s five-minute limit, so the final lines may still need to be shortened or split into another render.</p>

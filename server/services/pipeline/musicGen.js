@@ -311,20 +311,21 @@ export const ENGINES = Object.freeze({
     // documented section tags. Engines without this field (ACE-Step) accept an
     // empty string and render an instrumental themselves.
     //
-     // The sheet is built per-render rather than fixed, because `audio_duration`
-     // is only a CEILING for this engine — see buildMinimaxInstrumentalLyrics.
-     instrumentalLyrics: buildMinimaxInstrumentalLyrics,
-     // Guarantee a closing section on the sheet (see ensureClosingSection) so the
-     // model resolves its ending instead of cutting off mid-phrase at an
-     // arbitrary time. Applied only to this engine — it is the one whose
-     // resolution point is an end-token the user's draft may not cue.
-     ensureOutro: true,
-     // Auto mode sizes that ceiling from lyric words/sections and leaves room
-     // for an ending. MiniMax may still stop earlier by design.
-     autoDuration: true,
-     customModels: false,
-     fixedModelInstall: true,
-     cudaRequired: true,
+    // The sheet is built per-render rather than fixed, because `audio_duration`
+    // is only a CEILING for this engine — see buildMinimaxInstrumentalLyrics.
+    instrumentalLyrics: buildMinimaxInstrumentalLyrics,
+    // Guarantee a closing section on the sheet (see ensureClosingSection) so the
+    // model resolves its ending instead of cutting off mid-phrase at an
+    // arbitrary time. Applied to both MiniMax Music 3 variants below (not
+    // ACE-Step) — MiniMax is the one whose resolution point is an end-token
+    // the user's draft may not cue.
+    ensureOutro: true,
+    // Auto mode sizes that ceiling from lyric words/sections and leaves room
+    // for an ending. MiniMax may still stop earlier by design.
+    autoDuration: true,
+    customModels: false,
+    fixedModelInstall: true,
+    cudaRequired: true,
     executionProfile: 'cuda-bf16-auto-experimental',
     vramProfiles: MINIMAX_MUSIC3_VRAM_PROFILES,
     benchmarkGuide: MUSIC_RENDERER_BENCHMARK_GUIDE,
@@ -343,7 +344,7 @@ export const ENGINES = Object.freeze({
     resolvePython: resolveMinimaxMusic3MlxPython,
     venvDefault: MINIMAX_MUSIC3_MLX_VENV_DEFAULT,
     installEnv: 'INSTALL_MINIMAX_MUSIC3_MLX',
-     healthProbe: 'import mlx; from mlx_audio.music import load',
+    healthProbe: 'import mlx; from mlx_audio.music import load',
     lyrics: true,
     instrumentalLyrics: buildMinimaxInstrumentalLyrics,
     ensureOutro: true,
@@ -583,17 +584,18 @@ const MINIMAX_OUTRO_TAG = /^outro\b/i;
  * abruptly, no conclusion" report. Appending an explicit `[outro]` hands the
  * model a closing structure without touching any section the user wrote.
  *
- * Idempotent: a sheet that already carries an outro tag is returned unchanged, so
- * the instrumental fallback (which already closes with `[outro]`) is untouched and
- * a user's own `[outro]` is never duplicated.
+ * Idempotent: a sheet whose LAST section already carries an outro tag is returned
+ * unchanged, so the instrumental fallback (which already closes with `[outro]`)
+ * is untouched and a user's own closing `[outro]` is never duplicated.
  */
 export function ensureClosingSection(lyrics) {
   const text = typeof lyrics === 'string' ? lyrics : '';
-  const hasOutro = text.split(/\r?\n/).some((raw) => {
-    const tag = MINIMAX_LEADING_TAG.exec(raw.trim());
-    return tag && MINIMAX_OUTRO_TAG.test(tag[1]);
-  });
-  if (hasOutro) return text;
+  const lastTag = text
+    .split(/\r?\n/)
+    .map((raw) => MINIMAX_LEADING_TAG.exec(raw.trim()))
+    .filter(Boolean)
+    .at(-1);
+  if (lastTag && MINIMAX_OUTRO_TAG.test(lastTag[1].trim())) return text;
   const trimmed = text.replace(/\s+$/, '');
   return trimmed ? `${trimmed}\n[outro]` : '[outro]';
 }
@@ -626,20 +628,20 @@ export function buildSidecarArgs({ engineId = DEFAULT_ENGINE_ID, pythonPath, scr
     '--runtime-dir', runtimeDir ?? engine.runtimeDir,
   ];
   if (engine.lyrics) {
-     // Preserve the caller's string verbatim when they supplied one; substitute
-     // only when it is absent or whitespace, and only for an engine that cannot
-     // accept empty lyrics (see instrumentalLyrics). The substitute may be a
-     // builder that sizes the sheet to the render length.
+    // Preserve the caller's string when they supplied one; substitute only when
+    // it is absent or whitespace, and only for an engine that cannot accept
+    // empty lyrics (see instrumentalLyrics). The substitute may be a builder
+    // that sizes the sheet to the render length. `ensureOutro` engines may
+    // still append a closing section to either sheet below.
     const provided = typeof lyrics === 'string' ? lyrics : '';
     const fallback = typeof engine.instrumentalLyrics === 'function'
-       ? engine.instrumentalLyrics(seconds)
-       : (engine.instrumentalLyrics || '');
-     const sheet = provided.trim() ? provided : fallback;
-      // For engines whose resolution point is an end-token the draft may not cue
-      // (see ensureClosingSection), guarantee a closing section on whatever sheet
-      // reaches the model — a caller's or the fallback's — idempotently.
+      ? engine.instrumentalLyrics(seconds)
+      : (engine.instrumentalLyrics || '');
+    const sheet = provided.trim() ? provided : fallback;
+    // ensureOutro engines resolve on an end-token the draft may not cue —
+    // guarantee one on whatever sheet reaches the model, idempotently.
     args.push('--lyrics', engine.ensureOutro ? ensureClosingSection(sheet) : sheet);
-   }
+  }
   return { bin: pythonPath, args };
 }
 
