@@ -632,3 +632,65 @@ describe('ThreejsModelPreview clips', () => {
     expect(screen.getByText('Blade')).toBeInTheDocument();
   });
 });
+
+describe('ThreejsModelPreview clip framing and looping', () => {
+  let frames = [];
+  let nowMs = 0;
+
+  beforeEach(() => {
+    frames = [];
+    nowMs = 0;
+    boundsApi.fit.mockClear();
+    vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation((callback) => frames.push(callback));
+    vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => {});
+    vi.spyOn(performance, 'now').mockImplementation(() => nowMs);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const advance = (ms) => {
+    nowMs += ms;
+    const pending = frames.splice(0);
+    act(() => {
+      for (const callback of pending) callback(nowMs);
+    });
+  };
+
+  it('re-frames when a different clip opens, but never chases a playing one', () => {
+    renderPreview(<ThreejsModelPreview spec={clipSpec()} />);
+    boundsApi.fit.mockClear();
+
+    // Scrubbing and playing move parts every frame — a camera that re-fit on
+    // each of them would chase the mechanism instead of watching it.
+    scrub(0.5);
+    fireEvent.click(screen.getByLabelText('Play clip'));
+    advance(300);
+    expect(boundsApi.fit).not.toHaveBeenCalled();
+
+    // Opening another clip is a discrete jump to a pose that can sit well
+    // outside the assembled one, so that one does re-frame.
+    fireEvent.change(screen.getByLabelText('Clip'), { target: { value: 'retract' } });
+    expect(boundsApi.fit).toHaveBeenCalled();
+  });
+
+  it('fires every cue once across a frame gap longer than a looping clip', () => {
+    const spec = clipSpec();
+    spec.animation.clips[0].loop = true;
+    const onCue = vi.fn();
+    renderPreview(<ThreejsModelPreview spec={spec} onCue={onCue} />);
+
+    fireEvent.click(screen.getByLabelText('Play clip'));
+    // 7s on a 2s loop: three and a half cycles skipped in one frame. Every cue
+    // fires once for the gap — not once per skipped cycle, and not zero times.
+    advance(7_000);
+    expect(onCue).toHaveBeenCalledTimes(1);
+    expect(onCue).toHaveBeenCalledWith(expect.objectContaining({ cueId: 'latchRelease' }));
+    // ...and the clip keeps running from where it wrapped to.
+    expect(screen.getByText('1.00/2.00s')).toBeInTheDocument();
+
+    advance(1_500);
+    expect(onCue).toHaveBeenCalledTimes(2);
+  });
+});

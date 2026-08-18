@@ -224,11 +224,17 @@ function Part({ part, materials, layout, selection, selectedId, onSelect, auditM
 // without remounting anything, so re-fit whenever the layout ACTUALLY grew —
 // measured from the moved parts, not guessed from the slider — and the camera
 // frames the disassembly instead of clipping it.
-function ExplodeRefit({ growth }) {
+//
+// Opening a different clip is the other discrete moment worth re-framing on: its
+// starting pose can sit well outside the assembled one. Playing or scrubbing is
+// deliberately NOT one — re-fitting on every posed frame turns the camera into
+// something that chases the mechanism, which is far worse to watch than a part
+// that swings past the edge of a frame the viewer chose.
+function SceneRefit({ growth, clipId }) {
   const bounds = useBounds();
   useEffect(() => {
     bounds?.refresh().clip().fit();
-  }, [bounds, growth]);
+  }, [bounds, growth, clipId]);
   return null;
 }
 
@@ -283,13 +289,13 @@ function SceneLight({ light }) {
   return <directionalLight color={light.color} intensity={light.intensity} position={light.position} castShadow />;
 }
 
-function ProceduralScene({ spec, background, layout, selection, selectedId, onSelect, auditMode, pose }) {
+function ProceduralScene({ spec, background, layout, selection, selectedId, onSelect, auditMode, pose, clipId }) {
   return (
     <>
       {background && <color attach="background" args={[background]} />}
       {spec.lights.map((light, index) => <SceneLight key={`${light.type}-${index}`} light={light} />)}
       <Bounds fit clip observe margin={1.25}>
-        <ExplodeRefit growth={layout.growth} />
+        <SceneRefit growth={layout.growth} clipId={clipId} />
         {/* Clicking past the model clears the selection, the way a file list
             does — but only when there is one, so a stray click on empty canvas
             doesn't push a URL write and re-render the page around us. */}
@@ -387,9 +393,18 @@ function useClipPlayback({ clip, cuesById, onCue }) {
         fire(from, raw);
         setPlayhead(raw);
       } else if (clip.loop) {
-        fire(from, duration);
         const wrapped = raw % duration;
-        fire(0, wrapped);
+        if (raw - from >= duration) {
+          // A frame gap longer than the whole clip — a backgrounded tab, a stall
+          // — crossed every cue in it. Fire each of them ONCE for the gap
+          // instead of replaying a backlog per skipped cycle: a resumed tab must
+          // not burst N copies of the same sound, and dropping the skipped
+          // cycles entirely would silently under-fire the contract.
+          fire(0, duration);
+        } else {
+          fire(from, duration);
+          fire(0, wrapped);
+        }
         setPlayhead(wrapped);
       } else {
         fire(from, duration);
@@ -553,6 +568,7 @@ export default function ThreejsModelPreview({ spec, family = null, className = '
           onSelect={handleSelect}
           auditMode={auditMode}
           pose={pose}
+          clipId={clip?.id || null}
         />
       </Canvas>
       <div className="port-media-overlay absolute left-2 top-2 flex max-w-[calc(100%-1rem)] flex-wrap items-center gap-1.5 rounded-lg px-2 py-1.5 text-[10px]">
