@@ -5,7 +5,8 @@ import {
   parseBranchVerboseLine,
   parseSubmoduleStatusLine,
   SUBMODULE_STATUS_RE,
-  extractAgentSummary
+  extractAgentSummary,
+  isBenignConcurrentFetchRefRace
 } from './gitOutputParsers.js';
 
 describe('parseStatus', () => {
@@ -269,5 +270,69 @@ describe('extractAgentSummary', () => {
     expect(extractAgentSummary(output)).toBe(
       'Reworked the retry backoff so a wedged provider is reaped instead of spun on.'
     );
+  });
+});
+
+describe('isBenignConcurrentFetchRefRace', () => {
+  // Verbatim shape of a real lost compare-and-swap: another fetch against the
+  // same .git advanced origin/main to f485411 — exactly what this fetch wanted
+  // to write — between this one reading f538668 and updating the ref.
+  const raced = [
+    "error: cannot lock ref 'refs/remotes/origin/main': is at f485411c6fcc274d9c298f0476ef91990748ad0a but expected f538668661cc298c15abeb6cf78e886b71eae623",
+    'From github.com:example/example',
+    ' ! f538668..f485411  main       -> origin/main  (unable to update local ref)',
+    ' * [new branch]      claim/issue-1234 -> origin/claim/issue-1234'
+  ].join('\n');
+
+  it('treats a ref already holding the fetched value as success', () => {
+    expect(isBenignConcurrentFetchRefRace(raced)).toBe(true);
+  });
+
+  it('accepts the forced-update spelling of the paired line', () => {
+    expect(isBenignConcurrentFetchRefRace([
+      "error: cannot lock ref 'refs/remotes/origin/main': is at f485411c6fcc274d9c298f0476ef91990748ad0a but expected f538668661cc298c15abeb6cf78e886b71eae623",
+      ' ! f538668...f485411  main       -> origin/main  (forced update) (unable to update local ref)'
+    ].join('\n'))).toBe(true);
+  });
+
+  it('rejects a ref left at a value the fetch did not want', () => {
+    // Local rollback, not a concurrent fetch: the ref sits at some third commit,
+    // so the fetch genuinely did not achieve its goal.
+    expect(isBenignConcurrentFetchRefRace([
+      "error: cannot lock ref 'refs/remotes/origin/main': is at 9999999999999999999999999999999999999999 but expected f538668661cc298c15abeb6cf78e886b71eae623",
+      ' ! f538668..f485411  main       -> origin/main  (unable to update local ref)'
+    ].join('\n'))).toBe(false);
+  });
+
+  it('rejects a locked ref with no paired line to confirm the intended value', () => {
+    expect(isBenignConcurrentFetchRefRace(
+      "error: cannot lock ref 'refs/remotes/origin/main': is at f485411c6fcc274d9c298f0476ef91990748ad0a but expected f538668661cc298c15abeb6cf78e886b71eae623"
+    )).toBe(false);
+  });
+
+  it('rejects plain index.lock contention so it still retries', () => {
+    expect(isBenignConcurrentFetchRefRace(
+      "fatal: Unable to create '/repo/.git/index.lock': File exists."
+    )).toBe(false);
+  });
+
+  it('does not swallow a real failure riding alongside the race', () => {
+    expect(isBenignConcurrentFetchRefRace(`${raced}\nfatal: could not read from remote repository`))
+      .toBe(false);
+  });
+
+  it('checks every locked ref, not just the first', () => {
+    expect(isBenignConcurrentFetchRefRace([
+      "error: cannot lock ref 'refs/remotes/origin/main': is at f485411c6fcc274d9c298f0476ef91990748ad0a but expected f538668661cc298c15abeb6cf78e886b71eae623",
+      "error: cannot lock ref 'refs/remotes/origin/release': is at 9999999999999999999999999999999999999999 but expected 1111111111111111111111111111111111111111",
+      ' ! f538668..f485411  main       -> origin/main  (unable to update local ref)',
+      ' ! 1111111..2222222  release    -> origin/release  (unable to update local ref)'
+    ].join('\n'))).toBe(false);
+  });
+
+  it('returns false for empty or clean output', () => {
+    expect(isBenignConcurrentFetchRefRace('')).toBe(false);
+    expect(isBenignConcurrentFetchRefRace(undefined)).toBe(false);
+    expect(isBenignConcurrentFetchRefRace('From github.com:example/example\n * [new branch] x -> origin/x')).toBe(false);
   });
 });
