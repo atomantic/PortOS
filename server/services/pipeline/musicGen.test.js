@@ -18,6 +18,7 @@ import {
   buildMusicGenArgs,
   buildSidecarArgs,
   buildMinimaxInstrumentalLyrics,
+  ensureClosingSection,
   clampDuration,
   getMusicgenModel,
   getEngine,
@@ -240,8 +241,11 @@ describe('buildSidecarArgs', () => {
     });
     expect(args).toContain('MiniMaxAI/MiniMax-Music3');
     expect(args.slice(args.indexOf('--duration'), args.indexOf('--duration') + 2)).toEqual(['--duration', '300']);
-    expect(args.slice(args.indexOf('--lyrics'), args.indexOf('--lyrics') + 2)).toEqual(['--lyrics', 'Example lyrics']);
-  });
+      // A sheet with no closing section gets an [outro] cue appended so the model
+      // resolves its ending; the caller's words still lead the sheet.
+    expect(args.slice(args.indexOf('--lyrics'), args.indexOf('--lyrics') + 2))
+         .toEqual(['--lyrics', 'Example lyrics\n[outro]']);
+    });
 
   it('pins the selected MLX checkpoint revision in the sidecar args', () => {
     const { args } = buildSidecarArgs({
@@ -765,17 +769,31 @@ describe('instrumental lyrics fallback', () => {
     expect(sections(lyricsFor(60))).toBeLessThan(sections(lyricsFor(240)));
   });
 
-  it('never touches lyrics the caller actually supplied', () => {
+  it('preserves the caller\'s words but guarantees a closing section', () => {
+      // A caller sheet that resolves mid-phrase would make the model end abruptly;
+      // append the [outro] cue without disturbing any content the caller wrote.
     const words = '[verse]\nExample words here';
     const { args } = buildSidecarArgs({ ...base, engineId: 'minimax-music3', repo: 'MiniMaxAI/MiniMax-Music3', lyrics: words });
+    const sheet = lyricsArg(args);
+    expect(sheet).toBe(`${words}\n[outro]`);
+      // The user's text is preserved verbatim as the leading content, and the
+      // cue sits on its own closing line.
+    expect(sheet.startsWith(words)).toBe(true);
+    expect(sheet.split('\n').at(-1)).toBe('[outro]');
+    });
+
+  it('does not duplicate a closing section the caller already supplied', () => {
+     // The cue is idempotent — a sheet that already ends on [outro] is untouched.
+    const words = '[intro]\n[verse]\nsing\n[outro]';
+    const { args } = buildSidecarArgs({ ...base, engineId: 'minimax-music3', repo: 'MiniMaxAI/MiniMax-Music3', lyrics: words });
     expect(lyricsArg(args)).toBe(words);
-  });
+   });
 
   it('leaves ACE-Step empty — it renders an instrumental from empty lyrics itself', () => {
     expect(ENGINES.acestep.instrumentalLyrics).toBeUndefined();
     const { args } = buildSidecarArgs({ ...base, engineId: 'acestep', repo: 'ACE-Step/ACE-Step-v1-3.5B', lyrics: '' });
     expect(lyricsArg(args)).toBe('');
-  });
+   });
 });
 
 describe('buildMinimaxInstrumentalLyrics', () => {
@@ -820,6 +838,43 @@ describe('buildMinimaxInstrumentalLyrics', () => {
   });
 
   it('caps the sheet so a 5-minute render does not emit an unbounded tag wall', () => {
-    expect(tags(buildMinimaxInstrumentalLyrics(300)).length).toBeLessThanOrEqual(14);
-  });
+     expect(tags(buildMinimaxInstrumentalLyrics(300)).length).toBeLessThanOrEqual(14);
+     });
+});
+
+describe('ensureClosingSection', () => {
+  it('appends an [outro] cue to a sheet that has no closing section', () => {
+     expect(ensureClosingSection('[verse]\nhello world')).toBe('[verse]\nhello world\n[outro]');
+    });
+
+  it('returns a sheet that already closes on [outro] unchanged (idempotent)', () => {
+     const withOutro = '[intro]\n[verse]\nsing\n[outro]';
+     expect(ensureClosingSection(withOutro)).toBe(withOutro);
+    });
+
+  it('matches a closing section case-insensitively on the tag name', () => {
+     expect(ensureClosingSection('[VERSE]\n[OUTRO]')).toBe('[VERSE]\n[OUTRO]');
+    });
+
+  it('treats an outro with trailing words as a closing section', () => {
+     expect(ensureClosingSection('[verse]\nfinal\n[outro fade out]')).toBe('[verse]\nfinal\n[outro fade out]');
+    });
+
+  it('does not treat a non-boundary lookalike as a closing section', () => {
+       // "outroduction" has no word boundary after "outro", so it is a different
+       // tag — matching the hasOutro detection in server/lib/musicDuration.js.
+     expect(ensureClosingSection('[outroduction]')).toBe('[outroduction]\n[outro]');
+     expect(ensureClosingSection('\n[final-outro]')).toBe('\n[final-outro]\n[outro]');
+      });
+
+  it('recognizes an inline outro tag and a bare word', () => {
+     expect(ensureClosingSection('no tags at all\n[outro]')).toBe('no tags at all\n[outro]');
+     expect(ensureClosingSection('outro')).toBe('outro\n[outro]');
+    });
+
+  it('trims trailing whitespace before appending and emits a single cue', () => {
+     expect(ensureClosingSection('[verse]\nsing\n\n   ')).toBe('[verse]\nsing\n[outro]');
+     expect(ensureClosingSection('')).toBe('[outro]');
+     expect(ensureClosingSection('   \n  ')).toBe('[outro]');
+    });
 });
