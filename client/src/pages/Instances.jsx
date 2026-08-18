@@ -18,11 +18,13 @@ import {
   getNetworkExposure,
   listPeerSubscriptions,
   getPeerFullSyncCoverage,
+  getBrainParityReports,
 } from '../services/api';
 import PeerAppsList from '../components/instances/PeerAppsList';
 import PeerAgentsSection from '../components/instances/PeerAgentsSection';
 import { SchemaGapBadge } from '../components/instances/SchemaGapBadge';
 import PeerMediaProviderPanel from '../components/instances/PeerMediaProviderPanel';
+import BrainParityPanel from '../components/instances/BrainParityPanel';
 import { timeAgo, timeUntil } from '../utils/formatters';
 import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
 import { directionalCounts, describeDirectional } from '../lib/syncCounts';
@@ -1093,7 +1095,7 @@ function PeerAuthEditor({ peer, onRefresh }) {
   );
 }
 
-function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo }) {
+function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityReport }) {
   const [editingName, setEditingName] = useState(false);
   const [name, setName] = useState('');
   const [probing, setProbing] = useState(false);
@@ -1365,6 +1367,8 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo }) {
 
       <SyncStatusSection peer={peer} syncStatus={syncStatus} peerSubs={peerSubs} peerSubsLoaded={peerSubsLoaded} syncing={syncing} />
 
+      <BrainParityPanel peer={peer} report={parityReport} />
+
       <PeerAppsList apps={peer.lastApps} peerAddress={peer.address} peerHost={peer.host} />
       {peer.status === 'online' && (
         <PeerAgentsSection peerId={peer.id} peerName={peer.name} />
@@ -1379,6 +1383,10 @@ export default function Instances() {
   const [syncStatus, setSyncStatus] = useState(null);
   const [tailnetInfo, setTailnetInfo] = useState(null);
   const [networkExposure, setNetworkExposure] = useState(null);
+  // Last stored brain-parity audit per peer, keyed by peer instanceId. Read
+  // once here rather than per card: it's a single local-file read, and every
+  // card needs a slice of it. Running a check is on-demand per card.
+  const [parityReports, setParityReports] = useState({});
   const [loading, setLoading] = useState(true);
 
   const fetchData = useCallback(async () => {
@@ -1398,7 +1406,11 @@ export default function Instances() {
     Promise.all([
       fetchData(),
       getTailnetInfo().then(setTailnetInfo).catch(() => setTailnetInfo(null)),
-      getNetworkExposure({ silent: true }).then(setNetworkExposure).catch(() => setNetworkExposure(null))
+      getNetworkExposure({ silent: true }).then(setNetworkExposure).catch(() => setNetworkExposure(null)),
+      // Stored results only — the audit itself never runs on page load.
+      getBrainParityReports({ silent: true })
+        .then((data) => setParityReports(data?.reports ?? {}))
+        .catch(() => setParityReports({}))
     ]).finally(() => setLoading(false));
 
     socket.emit('instances:subscribe');
@@ -1448,7 +1460,14 @@ export default function Instances() {
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             {peers.map(peer => (
-              <PeerCard key={peer.id} peer={peer} onRefresh={fetchData} syncStatus={syncStatus} tailnetInfo={tailnetInfo} />
+              <PeerCard
+                key={peer.id}
+                peer={peer}
+                onRefresh={fetchData}
+                syncStatus={syncStatus}
+                tailnetInfo={tailnetInfo}
+                parityReport={parityReports[peer.instanceId] ?? null}
+              />
             ))}
           </div>
         </div>

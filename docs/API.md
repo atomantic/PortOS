@@ -299,6 +299,9 @@ See [Agent Context (MCP)](./features/agent-context.md) for setup, transport head
 | GET | `/brain/settings` | Get Brain settings |
 | PUT | `/brain/settings` | Update Brain settings |
 | GET | `/brain/summary` | Get brain statistics summary |
+| GET | `/brain/reconcile/manifest` | Per-record parity manifest (`{ id, updatedAt, deleted }` per entity type) a peer audits against — ids and clocks only, no record bodies |
+| GET | `/brain/reconcile/parity` | Last stored parity report per peer (local read, no peer I/O) |
+| POST | `/brain/reconcile/parity` | Run the record-level parity audit — body `{ peerId? }`, omitted sweeps every federating peer |
 
 ### Brain Links
 

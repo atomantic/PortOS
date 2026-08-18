@@ -365,3 +365,15 @@ export const updateYoutubeIngestSettings = (settings, options = {}) => request('
 });
 export const youtubeIngestEventsUrl = (jobId) =>
   `/api/brain/youtube/ingest/${encodeURIComponent(jobId)}/events`;
+
+// --- Brain federation parity audit (#4519) ---
+// `getBrainParityReports` reads the last stored per-peer result (no peer I/O);
+// `runBrainParityCheck` performs the audit — pass a local peer id for one peer,
+// omit it to sweep every federating peer. `silent: true` is available for
+// callers that own their error UI.
+export const getBrainParityReports = (options = {}) => request('/brain/reconcile/parity', options);
+export const runBrainParityCheck = (peerId, options = {}) => request('/brain/reconcile/parity', {
+  method: 'POST',
+  body: JSON.stringify(peerId ? { peerId } : {}),
+  ...options
+});

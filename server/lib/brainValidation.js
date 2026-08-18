@@ -545,6 +545,14 @@ export const brainSyncPushSchema = z.object({
   changes: z.array(brainSyncChangeSchema).min(1).max(1000)
 });
 
+// Brain parity check body (POST /api/brain/reconcile/parity). `peerId` is the
+// LOCAL peer-registry id (the same id `/api/instances/peers/:id/sync` takes, so
+// the Instances card can pass the peer it already holds). Omitted runs the sweep
+// across every federating peer.
+export const brainParityCheckSchema = z.object({
+  peerId: z.string().min(1).max(200).optional()
+});
+
 // Brain bridge-sync body (POST /api/brain/bridge-sync). `refresh` forces a
 // re-embed of already-mapped records — the recovery path for memory entries
 // that diverged before the per-record sync:applied signal existed (issue

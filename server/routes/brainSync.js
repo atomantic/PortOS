@@ -11,12 +11,14 @@ import { validateRequest } from '../lib/validation.js';
 import {
   brainSyncQuerySchema,
   brainSyncPushSchema,
-  brainBridgeSyncSchema
+  brainBridgeSyncSchema,
+  brainParityCheckSchema
 } from '../lib/brainValidation.js';
 import { syncAllBrainData, getEmbeddingCoverage } from '../services/brainMemoryBridge.js';
 import * as brainSyncLog from '../services/brainSyncLog.js';
 import * as brainSync from '../services/brainSync.js';
 import * as brainReconcile from '../services/brainReconcile.js';
+import * as brainParity from '../services/brainParity.js';
 
 const router = Router();
 
@@ -86,6 +88,39 @@ router.get('/reconcile/checksum', asyncHandler(async (req, res) => {
 router.get('/reconcile/snapshot', asyncHandler(async (req, res) => {
   const snapshot = await brainReconcile.getBrainSnapshot();
   res.json(snapshot);
+}));
+
+/**
+ * GET /api/brain/reconcile/manifest
+ * Per-record parity manifest for a peer's audit run — #4519. One row per record
+ * per entity type, `{ id, updatedAt, deleted }`, tombstones included. Ids and
+ * LWW clocks ONLY: no record bodies, no names, so a peer auditing parity never
+ * pulls brain content it wouldn't otherwise receive. Far cheaper than
+ * /reconcile/snapshot, which older peers fall back to.
+ */
+router.get('/reconcile/manifest', asyncHandler(async (_req, res) => {
+  res.json(await brainParity.buildBrainManifest());
+}));
+
+/**
+ * GET /api/brain/reconcile/parity
+ * The last stored parity report per peer, keyed by peer instanceId. Reads a
+ * local file — no peer I/O — so the Instances page can render parity state on
+ * load without fanning out to every peer.
+ */
+router.get('/reconcile/parity', asyncHandler(async (_req, res) => {
+  res.json({ reports: await brainParity.getBrainParityReports() });
+}));
+
+/**
+ * POST /api/brain/reconcile/parity
+ * Run a record-level parity audit. Body `{ peerId? }` — one peer, or every
+ * federating peer when omitted. Distinct from the sync cycle by design: a
+ * routine sync must never pay for a full manifest exchange.
+ */
+router.post('/reconcile/parity', asyncHandler(async (req, res) => {
+  const { peerId } = validateRequest(brainParityCheckSchema, req.body ?? {});
+  res.json(await brainParity.runBrainParityCheck({ peerId }));
 }));
 
 export default router;

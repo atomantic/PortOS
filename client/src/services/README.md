@@ -70,7 +70,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 
 | File | Purpose |
 |---|---|
-| `apiBrain.js` | Brain (second-brain) search + ingest + edit. |
+| `apiBrain.js` | Brain (second-brain) search + ingest + edit, plus the federation parity audit (`getBrainParityReports`, `runBrainParityCheck`). |
 | `apiMemory.js` | Memory CRUD. |
 | `apiNotes.js` | Notes vault. |
 | `apiDigitalTwin.js` | Digital twin status + summary. |
