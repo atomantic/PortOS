@@ -95,6 +95,61 @@ describe('BrainParityPanel', () => {
     expect(screen.getByText(/rec-only-here, rec-only-there/)).toBeInTheDocument();
   });
 
+  it('does not claim parity when the peer returned no checksum', async () => {
+    // Ids and clocks matched, but bodies were never compared — reporting green
+    // here would claim a verification that did not happen.
+    const user = userEvent.setup();
+    render(
+      <BrainParityPanel
+        peer={PEER}
+        report={report({
+          summary: summary({ total: 5, 'in-parity': 5 }),
+          checksums: { local: 'a', peer: null, match: null },
+        })}
+      />,
+    );
+
+    expect(screen.getByText('unverified')).toBeInTheDocument();
+    expect(screen.queryByText('in parity')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /Brain parity/ }));
+    expect(screen.getByText(/no brain checksum/)).toBeInTheDocument();
+    expect(screen.queryByText('every record matches')).not.toBeInTheDocument();
+  });
+
+  it('says a content mismatch will NOT self-heal — equal clocks defeat last-writer-wins', async () => {
+    const user = userEvent.setup();
+    render(
+      <BrainParityPanel
+        peer={PEER}
+        report={report({
+          summary: summary({ total: 5, 'in-parity': 5 }),
+          checksums: { local: 'a', peer: 'b', match: false },
+        })}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Brain parity/ }));
+    expect(screen.getByText(/last-writer-wins skips the peer/)).toBeInTheDocument();
+    expect(screen.getByText(/Edit the record on the side you want to win/)).toBeInTheDocument();
+  });
+
+  it('drops a fresh report when the peer identity behind the card changes', async () => {
+    const user = userEvent.setup();
+    runBrainParityCheck.mockResolvedValue({
+      reports: [report({ summary: summary({ total: 4, 'in-parity': 3, 'peer-only': 1 }) })],
+    });
+
+    const { rerender } = render(<BrainParityPanel peer={PEER} report={null} />);
+    await user.click(screen.getByRole('button', { name: /Check/ }));
+    await waitFor(() => expect(screen.getByText('1 out of parity')).toBeInTheDocument());
+
+    // The install behind this address was replaced: same local peer id, new
+    // instanceId. The old install's verdict must not carry over.
+    rerender(<BrainParityPanel peer={{ ...PEER, instanceId: 'inst-peer-2' }} report={null} />);
+
+    await waitFor(() => expect(screen.getByText('not checked')).toBeInTheDocument());
+  });
+
   it('explains an unreachable peer instead of reporting divergence', async () => {
     const user = userEvent.setup();
     render(<BrainParityPanel peer={PEER} report={{ available: false, reason: 'peer-unreachable' }} />);

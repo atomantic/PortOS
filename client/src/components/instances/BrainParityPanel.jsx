@@ -12,7 +12,7 @@
  * immediately on load; the button re-runs it.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ChevronDown, ChevronRight, ScanSearch, RefreshCw } from 'lucide-react';
 import Pill from '../ui/Pill';
 import { runBrainParityCheck } from '../../services/api';
@@ -46,9 +46,14 @@ const outOfParityCount = (summary) =>
 /**
  * One-line verdict for the collapsed header.
  *
- * A checksum mismatch with zero out-of-parity records is its own finding, not a
- * clean result: the two sides hold the same record ids with the same clocks but
- * different contents, which only the whole-brain checksum can see.
+ * Three distinct clean-ish outcomes, never collapsed into one green pill:
+ *   - `content mismatch` — the manifest agrees on every id AND clock, but the
+ *     whole-brain checksums differ, so at least one record BODY differs. Only
+ *     the checksum can see this.
+ *   - `unverified` — ids and clocks agree but the peer returned no checksum
+ *     (too old, or the fetch failed), so bodies were never compared. Reporting
+ *     "in parity" here would claim a verification that did not happen.
+ *   - `in parity` — ids, clocks, AND the checksum all agree.
  */
 function verdict(report) {
   if (!report) return { label: 'not checked', tone: 'note' };
@@ -56,6 +61,7 @@ function verdict(report) {
   const outOfParity = outOfParityCount(report.summary);
   if (outOfParity > 0) return { label: `${outOfParity} out of parity`, tone: 'warning' };
   if (report.checksums?.match === false) return { label: 'content mismatch', tone: 'warning' };
+  if (report.checksums?.match !== true) return { label: 'unverified', tone: 'note' };
   return { label: 'in parity', tone: 'success' };
 }
 
@@ -67,6 +73,16 @@ export default function BrainParityPanel({ peer, report: storedReport }) {
   // audit result, not peer configuration.
   const [freshReport, setFreshReport] = useState(null);
   const [error, setError] = useState(null);
+
+  // A card is keyed by the LOCAL peer id, which survives the remote install
+  // behind that address being replaced (`handleAnnounce` swaps `instanceId` in
+  // place). Without this, the previous install's fresh report would keep
+  // out-ranking the new peer's stored one until the page remounted — a parity
+  // verdict attributed to the wrong machine.
+  useEffect(() => {
+    setFreshReport(null);
+    setError(null);
+  }, [peer.instanceId]);
 
   const report = freshReport ?? storedReport ?? null;
   const { label, tone } = verdict(report);
@@ -144,14 +160,25 @@ export default function BrainParityPanel({ peer, report: storedReport }) {
                   )
                 ))}
                 {outOfParityCount(report.summary) === 0 && (
-                  <Pill tone="success" size="xs" bordered={false}>every record matches</Pill>
+                  report.checksums?.match === true
+                    ? <Pill tone="success" size="xs" bordered={false}>every record matches</Pill>
+                    : <Pill tone="muted" size="xs" bordered={false}>every record id and clock matches</Pill>
                 )}
               </div>
 
               {report.checksums?.match === false && outOfParityCount(report.summary) === 0 && (
                 <p className="text-port-warning">
                   Every record id and timestamp matches, but the whole-brain checksums differ — at least one record
-                  body differs between the two installs. The next sync cycle will pull the peer&apos;s copy.
+                  body differs between the two installs. Anti-entropy reconcile will <strong>not</strong> resolve this
+                  on its own: with equal timestamps, last-writer-wins skips the peer&apos;s copy in both directions.
+                  Edit the record on the side you want to win so its clock advances, then re-check.
+                </p>
+              )}
+
+              {report.checksums?.match !== true && report.checksums?.match !== false && (
+                <p className="text-gray-500">
+                  Record ids and timestamps were compared, but this peer returned no brain checksum, so record
+                  <em> contents</em> were not verified. Two records can share an id and a timestamp and still differ.
                 </p>
               )}
 
