@@ -16,6 +16,7 @@ import { runGoalCheckIn } from '../goalCheckIn.js'
 import { cleanupOrphanedWorktrees, reapMergedWorktrees } from '../worktreeManager.js'
 import { getActiveAgentIds } from '../agentState.js'
 import { runSelfDiagnostics } from './selfDiagnostics.js'
+import { runBrainParitySweep } from './brainParitySweep.js'
 
 /**
  * Run the moltworld-explore.mjs script as a child process (no AI agent needed).
@@ -143,7 +144,11 @@ const SCRIPT_HANDLERS = {
   // Daily self-diagnostics (#2464): reads task-learning per-category metrics and
   // files a single `monitoring`-labeled GitHub summary of failing self-healing
   // categories. Deterministic — no LLM calls (cold-bootstrap-safe).
-  'self-diagnostics': runSelfDiagnostics
+  'self-diagnostics': runSelfDiagnostics,
+  // Federation brain-parity sweep (#4519): audits every federating peer for
+  // record-level divergence the cursor-based sync cycle cannot see. Default
+  // job ships disabled — deterministic, no LLM calls.
+  'brain-parity-sweep': runBrainParitySweep
   // 'layered-intelligence' retired here (#2322): LI is now a per-app scheduled
   // task, not a global autonomous-job sweep. It runs as a normal reasoning agent
   // with programmatic-I/O hooks — see taskTypeHooks.js +

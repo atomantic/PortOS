@@ -25,6 +25,7 @@ import PeerAgentsSection from '../components/instances/PeerAgentsSection';
 import { SchemaGapBadge } from '../components/instances/SchemaGapBadge';
 import PeerMediaProviderPanel from '../components/instances/PeerMediaProviderPanel';
 import BrainParityPanel from '../components/instances/BrainParityPanel';
+import BrainParitySchedule from '../components/instances/BrainParitySchedule';
 import { timeAgo, timeUntil } from '../utils/formatters';
 import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
 import { directionalCounts, describeDirectional } from '../lib/syncCounts';
@@ -1458,6 +1459,7 @@ export default function Instances() {
           <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">
             Peers ({peers.length})
           </h2>
+          <BrainParitySchedule />
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             {peers.map(peer => (
               // Reports key on instanceId (the stable federation identity), but

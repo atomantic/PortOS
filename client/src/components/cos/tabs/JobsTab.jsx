@@ -3,7 +3,7 @@ import { Plus, RefreshCw, Play, Trash2, ChevronDown, ChevronUp, Clock, ToggleLef
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import { timeAgo, formatDateTime, formatDateNumeric } from '../../../utils/formatters';
-import { CRON_PRESETS, DEFAULT_CRON, describeCron } from '../../../utils/cronHelpers';
+import { CRON_PRESETS, DEFAULT_CRON, describeCron, JOB_INTERVAL_OPTIONS as INTERVAL_OPTIONS } from '../../../utils/cronHelpers';
 import WeekdayTimePicker from '../../WeekdayTimePicker';
 import { effectiveModelFor, effortAwareModelOptions } from '../../../utils/providers';
 import ProviderModelSelector from '../../ProviderModelSelector';
@@ -11,17 +11,6 @@ import EffortSelect from '../EffortSelect';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import FormField from '../../ui/FormField';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
-
-const INTERVAL_OPTIONS = [
-  { value: 'hourly', label: 'Every Hour' },
-  { value: 'every-2-hours', label: 'Every 2 Hours' },
-  { value: 'every-4-hours', label: 'Every 4 Hours' },
-  { value: 'every-8-hours', label: 'Every 8 Hours' },
-  { value: 'daily', label: 'Daily' },
-  { value: 'weekly', label: 'Weekly' },
-  { value: 'biweekly', label: 'Every 2 Weeks' },
-  { value: 'monthly', label: 'Monthly' }
-];
 
 const SCHEDULE_MODE_OPTIONS = [
   { value: 'interval', label: 'Interval' },

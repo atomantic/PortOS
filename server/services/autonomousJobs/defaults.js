@@ -272,6 +272,23 @@ Phase 4 — Report:
     createdAt: null,
     updatedAt: null
   },
+  {
+    id: 'job-brain-parity-sweep',
+    name: 'Brain Parity Sweep',
+    description: 'Audit record-level brain parity against every federating peer. The sync cycle only advances delta-log cursors, so a record silently dropped on one side leaves both installs reading "synced"; this compares ids, clocks, and a whole-brain checksum and names what diverged. Deterministic — no AI calls.',
+    category: 'brain-parity',
+    interval: 'weekly',
+    intervalMs: WEEK,
+    scheduledTime: '06:00',
+    enabled: false,
+    priority: 'LOW',
+    type: 'script',
+    scriptHandler: 'brain-parity-sweep',
+    lastRun: null,
+    runCount: 0,
+    createdAt: null,
+    updatedAt: null
+  },
   // 'job-layered-intelligence' removed (#2322): Layered Intelligence is now a
   // per-app HANDLER-BACKED scheduled task (CoS → Schedule) rather than a global
   // autonomous-job sweep. Migration 184 tombstones the persisted job record and

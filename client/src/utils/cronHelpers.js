@@ -108,3 +108,20 @@ export function describeCron(expr) {
   }
   return segments.join(' ');
 }
+
+// Interval-mode cadences for autonomous jobs — the client mirror of
+// `INTERVAL_OPTIONS` in `server/services/autonomousJobs/constants.js`. Values
+// must stay in lockstep with `resolveIntervalMs` there, since the server
+// recomputes `intervalMs` from whichever value a picker submits. Lives here
+// rather than in a component so a second job-scheduling surface doesn't fork
+// its own copy of the list.
+export const JOB_INTERVAL_OPTIONS = [
+  { value: 'hourly', label: 'Every Hour' },
+  { value: 'every-2-hours', label: 'Every 2 Hours' },
+  { value: 'every-4-hours', label: 'Every 4 Hours' },
+  { value: 'every-8-hours', label: 'Every 8 Hours' },
+  { value: 'daily', label: 'Daily' },
+  { value: 'weekly', label: 'Weekly' },
+  { value: 'biweekly', label: 'Every 2 Weeks' },
+  { value: 'monthly', label: 'Monthly' }
+];

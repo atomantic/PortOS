@@ -276,7 +276,7 @@ export const getCosJobs = (options = {}) => request('/cos/jobs', options);
 export const getCosJobsDue = () => request('/cos/jobs/due');
 export const getCosJobIntervals = () => request('/cos/jobs/intervals');
 export const getCosJobAllowedCommands = () => request('/cos/jobs/allowed-commands');
-export const getCosJob = (id) => request(`/cos/jobs/${id}`);
+export const getCosJob = (id, options = {}) => request(`/cos/jobs/${id}`, options);
 export const createCosJob = (data, options = {}) => request('/cos/jobs', {
   method: 'POST',
   body: JSON.stringify(data),
