@@ -16,30 +16,40 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-const CONFIGS = ['./vitest.config.js', './vitest.config.db.js'];
-
 beforeEach(() => {
   vi.resetModules();
 });
 
 afterEach(() => {
+  vi.doUnmock('./vitest.config.db.js');
   // Restores the pre-stub value even though the config under test reassigns
   // process.env.NODE_ENV directly.
   vi.unstubAllEnvs();
 });
 
-describe.each(CONFIGS)('%s', (configPath) => {
-  it('overrides an inherited non-test NODE_ENV when the config loads', async () => {
-    vi.stubEnv('NODE_ENV', 'development');
-    expect(process.env.NODE_ENV).toBe('development'); // bypass probe: really unset
+/** Assert the just-loaded config both forced the value and pinned it for workers. */
+async function expectForces(configPath) {
+  vi.stubEnv('NODE_ENV', 'development');
+  expect(process.env.NODE_ENV).toBe('development'); // bypass probe: the stub took
 
-    await import(configPath);
+  const config = (await import(configPath)).default;
 
-    expect(process.env.NODE_ENV).toBe('test');
+  expect(process.env.NODE_ENV).toBe('test');
+  expect(config.test.env.NODE_ENV).toBe('test');
+}
+
+describe('vitest.config.js', () => {
+  it('forces NODE_ENV=test on its own, not via the db config it imports', async () => {
+    // It pulls DB_TEST_INCLUDE from vitest.config.db.js, and THAT module forces
+    // NODE_ENV at its own top level — so without stubbing the import out, this
+    // case would still pass with vitest.config.js's assignment deleted.
+    vi.doMock('./vitest.config.db.js', () => ({ DB_TEST_INCLUDE: [] }));
+    await expectForces('./vitest.config.js');
   });
+});
 
-  it('pins NODE_ENV=test for the worker processes too', async () => {
-    const config = (await import(configPath)).default;
-    expect(config.test.env.NODE_ENV).toBe('test');
+describe('vitest.config.db.js', () => {
+  it('forces NODE_ENV=test when loaded directly by npm run test:db', async () => {
+    await expectForces('./vitest.config.db.js');
   });
 });

@@ -10,53 +10,71 @@
  * live `.git/config` (`core.bare = true`, commits re-attributed to
  * `test <test@test>`).
  *
- * These helpers turn that silent fallback into a loud throw: resolve the target
- * and refuse anything that is not an absolute path under the OS temp dir.
- * Both the raw `os.tmpdir()` and its realpath count as roots, because macOS
- * reports `/var/folders/...` while `realpath` yields `/private/var/folders/...`.
+ * These helpers turn that silent fallback into a loud throw. Three properties
+ * carry the whole guarantee, and none of them is optional:
+ *
+ *  - The target is judged by its CANONICAL path, not its spelling. A symlink
+ *    sitting inside the temp dir and pointing at a real checkout is where the
+ *    filesystem would actually operate, so that is what gets checked.
+ *  - `..` is refused outright rather than modeled — `path.resolve` collapses it
+ *    lexically, which is the wrong answer the moment a symlinked ancestor is
+ *    involved.
+ *  - The target must be a STRICT descendant of the temp dir. `os.tmpdir()`
+ *    itself is not an acceptable target: `destroyGitSandbox(tmpdir())` would
+ *    recursively delete the whole system temp directory.
  */
 import { realpathSync } from 'fs';
 import { tmpdir } from 'os';
-import { isAbsolute, resolve, sep } from 'path';
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'path';
 
-const realpathOrSelf = (candidate) => {
-  try {
-    return realpathSync(candidate);
-  } catch {
-    // Not created yet (a fixture's `scratch/primary`) — the resolved path is
-    // the best answer we have, and its temp-ness is decided by its ancestors.
-    return candidate;
+/**
+ * The path the filesystem would really act on: realpath of the deepest existing
+ * ancestor, plus the not-yet-created tail (a fixture's `scratch/primary` does
+ * not exist yet, and a path component that does not exist cannot be a symlink).
+ */
+function canonicalize(resolved) {
+  const tail = [];
+  let existing = resolved;
+  for (;;) {
+    try {
+      return join(realpathSync(existing), ...tail);
+    } catch {
+      const parent = dirname(existing);
+      if (parent === existing) return resolved; // hit the root; nothing resolved
+      tail.unshift(basename(existing));
+      existing = parent;
+    }
   }
-};
+}
 
 function tempRoots() {
   // Read `tmpdir()` on every call: TMPDIR is per-process env, and tests stub it.
   const raw = resolve(tmpdir());
-  const real = realpathOrSelf(raw);
-  return real === raw ? [raw] : [raw, real];
+  return [...new Set([raw, canonicalize(raw)])];
 }
 
 // Windows paths compare case-insensitively, and a TEMP env var spelled with
 // different casing than a resolved path would otherwise read as "not temp".
 const comparable = (value) => (process.platform === 'win32' ? value.toLowerCase() : value);
 
-function isUnder(child, parent) {
+/** Strict descendant — deliberately NOT `child === parent`; see the header. */
+function isStrictlyUnder(child, parent) {
   const c = comparable(child);
   const p = comparable(parent);
-  return c === p || c.startsWith(p.endsWith(sep) ? p : `${p}${sep}`);
+  return c.startsWith(p.endsWith(sep) ? p : `${p}${sep}`) && c.length > p.length;
 }
 
 /**
- * True when `target` is an absolute path inside the OS temp dir.
- * A non-string, empty, or relative `target` is always false — those are the
- * shapes that would otherwise be resolved against `process.cwd()`.
+ * True when `target` is an absolute path strictly inside the OS temp dir, after
+ * symlinks are resolved. A non-string, empty, relative, or `..`-bearing
+ * `target` is always false — those are the shapes that would otherwise be
+ * resolved against `process.cwd()` or climb out through a symlinked ancestor.
  */
 export function isTempPath(target) {
   if (typeof target !== 'string' || target.length === 0 || !isAbsolute(target)) return false;
-  const resolved = resolve(target);
-  const real = realpathOrSelf(resolved);
-  const candidates = real === resolved ? [resolved] : [resolved, real];
-  return tempRoots().some((root) => candidates.some((candidate) => isUnder(candidate, root)));
+  if (target.split(/[\\/]+/).includes('..')) return false;
+  const canonical = canonicalize(resolve(target));
+  return tempRoots().some((root) => isStrictlyUnder(canonical, root));
 }
 
 /**
@@ -71,7 +89,8 @@ export function assertTempPath(target, operation = 'this operation') {
   if (isTempPath(target)) return target;
   throw new Error(
     `❌ refusing to run ${operation} outside ${tmpdir()} — got ${JSON.stringify(target)}. `
-    + 'Test git fixtures must target a directory created under os.tmpdir(); '
-    + 'a missing or relative path would fall back to process.cwd() and mutate the real checkout.',
+    + 'Test git fixtures must target a directory created UNDER os.tmpdir() (the temp dir '
+    + 'itself, a relative or `..`-bearing path, and a symlink out of the temp dir are all '
+    + 'refused); anything else would mutate the real checkout.',
   );
 }

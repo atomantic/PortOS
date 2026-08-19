@@ -15,10 +15,10 @@
  * suite never writes outside the OS temp dir, and never near a real checkout.
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, writeFile, readFile, readdir } from 'fs/promises';
+import { mkdtemp, rm, writeFile, readFile, readdir, symlink } from 'fs/promises';
 import { existsSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, sep } from 'path';
 import { isTempPath, assertTempPath } from './tempPathGuard.js';
 import { execGit } from './execGit.js';
 import {
@@ -78,6 +78,39 @@ describe('isTempPath', () => {
     const outside = await scratchDir();
     pretendTmpdirIs(await scratchDir());
     expect(isTempPath(outside)).toBe(false);
+  });
+
+  it('rejects the temp dir ITSELF — an rm -rf there would wipe every process\u2019s scratch', async () => {
+    const root = await scratchDir();
+    pretendTmpdirIs(root);
+    // Bypass probe: a child of the same root is accepted, so the rejection
+    // below is the strict-descendant rule and not a broken root comparison.
+    expect(isTempPath(join(root, 'child'))).toBe(true);
+    expect(isTempPath(root)).toBe(false);
+    expect(isTempPath(tmpdir())).toBe(false);
+  });
+
+  it('judges a symlink by where it POINTS, not where it sits', async () => {
+    const outside = await scratchDir();
+    const root = await scratchDir();
+    const escape = join(root, 'escape');
+    await symlink(outside, escape, 'dir');
+    pretendTmpdirIs(root);
+
+    // Bypass probe: a real directory in exactly the same place is accepted, so
+    // the rejections below are the symlink target being followed.
+    expect(isTempPath(join(root, 'escape-but-real'))).toBe(true);
+    expect(isTempPath(escape)).toBe(false);
+    expect(isTempPath(join(escape, 'repo'))).toBe(false);
+  });
+
+  it('rejects a path that climbs out with ..', async () => {
+    const root = await scratchDir();
+    pretendTmpdirIs(root);
+    // Built by hand: path.join would collapse the '..' before the guard sees it,
+    // and a lexical collapse is exactly the wrong answer through a symlink.
+    expect(isTempPath(`${root}${sep}sub${sep}..${sep}sub`)).toBe(false);
+    expect(isTempPath(join(root, 'sub'))).toBe(true); // bypass probe
   });
 });
 
