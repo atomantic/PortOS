@@ -37,11 +37,14 @@ const normalizeReviewerValue = (value) => normalizeReviewerSlug(value);
  *   agent invokes directly, `<reviewer> --model <id>`). Only rendered for
  *   MODEL_SELECTABLE_REVIEWERS. The option lists are OWNED BY THE CALLER (see
  *   `modelOptions`) so this component does no fetching.
- * - **Effort** → the reviewer's reasoning-effort tier. Unlike the others this
- *   maps to NO slashdo token (its entry grammar has no effort suffix) — it rides
- *   the invocation instead: `claude --effort high` / `codex -c
- *   model_reasoning_effort=high` for a CLI reviewer, `"effort"` in the
- *   `/api/code-review/local` body for a local one. Only rendered for
+ * - **Effort** → the reviewer's reasoning-effort tier, emitted as slashdo's
+ *   `~effort=<level>` entry suffix and, where PortOS spells the invocation out
+ *   itself, as the flag that CLI actually takes: `claude --effort high` /
+ *   `codex -c model_reasoning_effort=high`, `"effort"` in the
+ *   `/api/code-review/local` body for a local reviewer, and — for `cursor`,
+ *   whose CLI has no `--effort` flag at all — folded into the model id as
+ *   Cursor's own variant syntax (`--model gpt-5[effort=max]`), which needs the
+ *   row's Model cell filled in to have anything to attach to. Only rendered for
  *   EFFORT_SELECTABLE_REVIEWERS, and each row offers only the levels its own CLI
  *   accepts (`agy` rejects `--effort max`).
  * - **Optional** → the `~opt` non-blocking marker.

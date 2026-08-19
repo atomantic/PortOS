@@ -1376,6 +1376,27 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/antigravity --effort/);
     });
 
+    it('folds a cursor effort into its --model — the follow-up must never print `cursor-agent --effort`', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: {
+          reviewLoopFollowUp: true,
+          reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
+          reviewLoopPRBranch: 'b',
+          reviewLoopPRNumber: 9,
+          reviewLoopReviewers: ['cursor'],
+          reviewLoopReviewerModels: { cursor: 'gpt-5' },
+          reviewLoopReviewerEfforts: { cursor: 'max' },
+          sourceTaskId: 'task-src-cursor-effort',
+        }}),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta);
+      // This is a literal command line the agent runs; `cursor-agent --effort max`
+      // exits non-zero, so the level has to ride the model variant instead.
+      expect(prompt).toMatch(/cursor-agent --model gpt-5\[effort=max\]/);
+      expect(prompt).not.toMatch(/cursor-agent[^\n]*--effort/);
+    });
+
     it('names a pinned local-LLM effort as an /api/code-review/local body key', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: {

@@ -33,16 +33,21 @@
  * default sentinel — it exposes a real `auto` model id (its own server-side
  * router, and the binary's own default), so `auto` is stored as `defaultModel`
  * and passed through as a normal `--model auto`. Effort is baked into the model
- * ids themselves (`…-low` / `…-high` / `…-xhigh` / `…-max`) rather than exposed
- * as a flag, so cursor has no `--effort` control and `effortLevelsForProvider`
- * correctly reports none for it.
+ * ids themselves rather than exposed as a flag: there is no `--effort` (cursor
+ * exits non-zero on one), and a level is instead a parameter of the model id in
+ * Cursor's own variant syntax — `gpt-5[effort=max]`,
+ * `claude-opus-4-7[thinking=true,effort=high]`. So cursor DOES advertise an
+ * effort ladder (`effortLevelsForProvider` → `CURSOR_EFFORT_LEVELS`) while
+ * `buildEffortArgs` emits nothing for it; every cursor argv builder folds the
+ * level into `--model` via `foldCursorEffortIntoModel` instead. An effort with
+ * no model to attach to is dropped — there is nothing to fold it into.
  *
  * Dependency-light on purpose: imports only `providerModels.js` helpers,
  * mirroring `grok.js`/`kimi.js`/`antigravity.js` so it stays importable from the
  * standalone autofixer.
  */
 
-import { argvHasFlag, commandBasename, hasModelFlag } from './providerModels.js';
+import { argvHasFlag, commandBasename, foldCursorEffortIntoModel, hasModelFlag } from './providerModels.js';
 
 /** The binary basename. Deliberately NOT `cursor` — that is the GUI editor. */
 export const CURSOR_COMMAND = 'cursor-agent';
@@ -106,20 +111,24 @@ function ensureCursorPosture(out) {
  *                      neither exits on the trust block nor stalls on a prompt.
  *                      See `ensureCursorPosture` for how a user-pinned posture
  *                      narrows this to just the gate they left uncovered.
- *   - `--model <id>` — gated on `model` being set AND no user-baked model flag.
+ *   - `--model <id>` — gated on `model` being set AND no user-baked model flag,
+ *                      carrying `effort` as a folded model variant when pinned
+ *                      (cursor has no `--effort` flag — see the file header).
  * The prompt itself is NOT added here — it rides on stdin at spawn time.
  * @param {string[]} baseArgs - user/legacy args (already model-flag-sanitized)
  * @param {string|null|undefined} model - defaultModel to pin, or null to omit
+ * @param {string|null|undefined} [effort] - reasoning level to fold into the model id
  * @returns {string[]}
  */
-export function ensureCursorHeadlessArgs(baseArgs = [], model) {
+export function ensureCursorHeadlessArgs(baseArgs = [], model, effort) {
   const out = [...baseArgs];
   if (!argvHasFlag(out, PRINT_FLAGS)) {
     out.push('--print');
   }
   ensureCursorPosture(out);
-  if (model && !hasModelFlag(out)) {
-    out.push('--model', model);
+  const pinnedModel = foldCursorEffortIntoModel(model, effort);
+  if (pinnedModel && !hasModelFlag(out)) {
+    out.push('--model', pinnedModel);
   }
   return out;
 }

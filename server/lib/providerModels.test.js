@@ -26,8 +26,11 @@ import {
   CLAUDE_EFFORT_LEVELS,
   CODEX_EFFORT_LEVELS,
   ANTIGRAVITY_EFFORT_LEVELS,
+  CURSOR_EFFORT_LEVELS,
   EFFORT_LEVELS,
   isAntigravityProvider,
+  isCursorProvider,
+  foldCursorEffortIntoModel,
   effortLevelsForProvider,
   resolveCliEffort,
   hasEffortFlag,
@@ -233,6 +236,14 @@ describe('providerModels', () => {
       expect(effortLevelsForProvider({ id: 'opencode-ollama', command: 'opencode' })).toBeNull();
     });
 
+    it('returns the cursor ladder for cursor ids and the cursor-agent command', () => {
+      expect(effortLevelsForProvider({ id: 'cursor-cli', command: 'cursor-agent' })).toBe(CURSOR_EFFORT_LEVELS);
+      expect(effortLevelsForProvider({ id: 'cursor-tui' })).toBe(CURSOR_EFFORT_LEVELS);
+      expect(effortLevelsForProvider({ id: 'custom', command: '/Users/x/.local/bin/cursor-agent' })).toBe(CURSOR_EFFORT_LEVELS);
+      // A bare `cursor` is the GUI editor, not the agent — no ladder.
+      expect(effortLevelsForProvider({ id: 'custom', command: 'cursor' })).toBeNull();
+    });
+
     it('returns null for providers without an effort control (and does NOT default blank commands to claude)', () => {
       expect(effortLevelsForProvider({ id: 'grok-cli', command: 'grok' })).toBeNull();
       expect(effortLevelsForProvider({ id: 'ollama' })).toBeNull();
@@ -384,11 +395,62 @@ describe('providerModels', () => {
       expect(buildEffortArgs('max', { id: 'claude-code', command: 'claude' }, ['--effort', 'low'])).toEqual([]);
     });
 
+    it('NEVER emits --effort for cursor, at any level — the level rides --model', () => {
+      // `cursor-agent --effort <level>` exits non-zero. Cursor advertises a
+      // ladder so the level is pickable; `foldCursorEffortIntoModel` carries it.
+      const cursor = { id: 'cursor-cli', command: 'cursor-agent' };
+      for (const level of CURSOR_EFFORT_LEVELS) {
+        expect(buildEffortArgs(level, cursor), level).toEqual([]);
+      }
+      expect(buildEffortArgs('max', { id: 'cursor-tui' })).toEqual([]);
+      expect(buildEffortArgs('minimal', cursor)).toEqual([]);
+    });
+
     it('honors the per-model agy ladder when a model is supplied', () => {
       const agy = { id: 'antigravity-cli', command: 'agy', models: AGY_CATALOG };
       expect(buildEffortArgs('medium', agy, [], 'gemini-3.6-flash')).toEqual(['--effort', 'medium']);
       expect(buildEffortArgs('medium', agy, [], 'gemini-3.1-pro')).toEqual(['--effort', 'low']);
       expect(buildEffortArgs('high', agy, [], 'claude-sonnet-4-6')).toEqual([]);
+    });
+  });
+
+  describe('isCursorProvider', () => {
+    it('matches the shipped ids and the cursor-agent command, never the GUI `cursor`', () => {
+      expect(isCursorProvider({ id: 'cursor-cli' })).toBe(true);
+      expect(isCursorProvider({ id: 'cursor-tui' })).toBe(true);
+      expect(isCursorProvider({ id: 'custom', command: '/Users/x/.local/bin/cursor-agent' })).toBe(true);
+      expect(isCursorProvider({ id: 'custom', command: 'cursor-agent.exe' })).toBe(true);
+      expect(isCursorProvider({ id: 'custom', command: 'cursor' })).toBe(false);
+      expect(isCursorProvider({ id: 'codex', command: 'codex' })).toBe(false);
+      expect(isCursorProvider(null)).toBe(false);
+    });
+  });
+
+  describe('foldCursorEffortIntoModel', () => {
+    it('appends the variant to a bare model id', () => {
+      expect(foldCursorEffortIntoModel('gpt-5', 'max')).toBe('gpt-5[effort=max]');
+      expect(foldCursorEffortIntoModel(' gpt-5 ', ' high ')).toBe('gpt-5[effort=high]');
+    });
+
+    it('extends an existing variant bracket rather than opening a second one', () => {
+      expect(foldCursorEffortIntoModel('claude-opus-4-7[thinking=true]', 'high'))
+        .toBe('claude-opus-4-7[thinking=true,effort=high]');
+    });
+
+    it('leaves a model that already names an effort alone', () => {
+      expect(foldCursorEffortIntoModel('gpt-5[effort=low]', 'max')).toBe('gpt-5[effort=low]');
+      expect(foldCursorEffortIntoModel('claude-opus-4-7[thinking=true,effort=high]', 'low'))
+        .toBe('claude-opus-4-7[thinking=true,effort=high]');
+    });
+
+    it('returns the model unchanged with no effort, and null with no model', () => {
+      expect(foldCursorEffortIntoModel('gpt-5', null)).toBe('gpt-5');
+      expect(foldCursorEffortIntoModel('gpt-5', '')).toBe('gpt-5');
+      // Nothing to attach the variant to — the pin is dropped, not emitted as a
+      // flag cursor would reject.
+      expect(foldCursorEffortIntoModel('', 'max')).toBeNull();
+      expect(foldCursorEffortIntoModel(null, 'max')).toBeNull();
+      expect(foldCursorEffortIntoModel(undefined, undefined)).toBeNull();
     });
   });
 

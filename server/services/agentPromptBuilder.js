@@ -17,7 +17,7 @@ import { getActiveProvider } from './providers.js';
 import { runPromptThroughProvider } from '../lib/promptRunner.js';
 import { readJSONFile, PATHS, tryReadFile, expandHome } from '../lib/fileUtils.js';
 import { loadSlashdoFile, loadSlashdoLib, writeResolvedSlashdoBody } from '../lib/slashdoLoader.js';
-import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, LOCAL_LLM_REVIEWERS, MODEL_CAPABLE_CLI_REVIEWERS, describeReviewerCli, isCliReviewer, reviewerCliBinary, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, resolveReviewerConfig, reviewerEffortArgs, buildReviewerEffortNote, resolveKeyedReviewers, buildReviewWithArgs, buildReviewersCsv } from '../lib/validation.js';
+import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, LOCAL_LLM_REVIEWERS, MODEL_CAPABLE_CLI_REVIEWERS, describeReviewerCli, isCliReviewer, reviewerCliBinary, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, resolveReviewerConfig, reviewerEffortArgs, reviewerModelArg, buildReviewerEffortNote, resolveKeyedReviewers, buildReviewWithArgs, buildReviewersCsv } from '../lib/validation.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { doneSentinelName } from '../lib/agentSentinel.js';
 import { canTypeSlashCommands, agentOwnsPrWorkflow, resolveSlashdoInvocation, buildSlashdoSection, oversizedBodyPointer, unreachableReviewerIncludes, SLASHDO_INLINE_BUDGET_CHARS } from '../lib/slashdoInvocation.js';
@@ -663,7 +663,7 @@ async function applySlashdoInvocation(task, {
   // resolves reviewers itself and the note is the pin's only route to the CLI it
   // spawns (the `/do:pr` completion step further down is a different invocation
   // entirely, and for a slashdo-backed task usually isn't reached).
-  const reviewerEffortNote = buildReviewerEffortNote(resolvedReviewers, resolvedEfforts, { reviewWith });
+  const reviewerEffortNote = buildReviewerEffortNote(resolvedReviewers, resolvedEfforts, { reviewWith, reviewerModels: resolvedModels });
   const section = buildSlashdoSection(resolved, body, { bodyPath, reviewWith, reviewerEffortNote });
   return { ...task, description: `${task.description}\n\n${section}` };
 }
@@ -778,7 +778,8 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   // Optional per-reviewer reasoning-effort pins, same two sources as the models.
   // A CLI reviewer's effort becomes a flag on the command line the agent runs
   // (`--effort high` for claude/agy, `-c model_reasoning_effort=high` for codex —
-  // `reviewerEffortArgs` owns that shape); a local-LLM reviewer's becomes the
+  // `reviewerEffortArgs` owns that shape, and returns nothing for cursor, whose
+  // level is folded into `--model` by `reviewerModelArg`); a local-LLM reviewer's becomes the
   // `reasoning_effort` field of its `/api/code-review/local` body (below). There is
   // no slashdo `--review-with` suffix for effort, which is why it rides the
   // invocation rather than `equivArgs`.
@@ -802,7 +803,11 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
       // reason: the user configures the id their environment needs (a Bedrock-form id
       // on a Bedrock box, an installed Ollama model for an Ollama-backed `claude`).
       if (MODEL_CAPABLE_CLI_REVIEWERS.includes(r) && typeof reviewerModelMap[r] === 'string' && reviewerModelMap[r]) {
-        flags.push(`--model ${reviewerModelMap[r]}`);
+        // `reviewerModelArg` (not the raw id) because cursor carries its
+        // reasoning effort INSIDE the model id — `gpt-5[effort=max]` — so the
+        // pinned pair must render as ONE `--model`, never a `--effort` cursor
+        // rejects. Every other reviewer gets the id back verbatim.
+        flags.push(`--model ${reviewerModelArg(r, reviewerModelMap[r], reviewerEffortMap[r])}`);
       }
       const effortArgs = reviewerEffortArgs(r, reviewerEffortMap[r]);
       if (effortArgs.length) flags.push(effortArgs.join(' '));
@@ -2390,7 +2395,7 @@ function resolveReviewInvocation({ willOpenPR, runsReviewLoop, reviewers, userna
   // the prose note is suppressed whenever that suffix is present — it only speaks
   // for an invocation that pins no reviewer list (see buildReviewerEffortNote).
   const effortNote = willOpenPR && runsReviewLoop
-    ? buildReviewerEffortNote(reviewers, reviewerEfforts, { reviewWith: reviewArgs })
+    ? buildReviewerEffortNote(reviewers, reviewerEfforts, { reviewWith: reviewArgs, reviewerModels })
     : '';
   return { reviewUsernames, reviewArgs, effortNote };
 }

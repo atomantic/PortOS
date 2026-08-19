@@ -1,7 +1,8 @@
 import {
   CLAUDE_EFFORT_LEVELS,
   CODEX_EFFORT_LEVELS,
-  ANTIGRAVITY_EFFORT_LEVELS
+  ANTIGRAVITY_EFFORT_LEVELS,
+  CURSOR_EFFORT_LEVELS
 } from '../utils/providers';
 
 /**
@@ -27,9 +28,10 @@ import {
 
 // CLI reviewers whose binary takes a `--model <id>` tier. Mirror of
 // MODEL_CAPABLE_CLI_REVIEWERS (`antigravity` runs `agy --model <id>`, `grok` runs
-// `grok --model <id>`, and Cursor runs `cursor-agent --model <id>` — the latter
-// two take a model but no separate effort flag, so this roster is
-// deliberately wider than EFFORT_SELECTABLE_REVIEWERS below).
+// `grok --model <id>`, and Cursor runs `cursor-agent --model <id>` — `grok` takes
+// a model but no effort at all, so this roster is deliberately wider than
+// EFFORT_SELECTABLE_REVIEWERS below; Cursor takes both, but carries its effort
+// INSIDE the model id rather than as a separate flag).
 export const MODEL_CAPABLE_CLI_REVIEWERS = ['codex', 'claude', 'antigravity', 'grok', 'cursor'];
 
 // The local-LLM backends, which take both a model and an effort.
@@ -51,8 +53,11 @@ export const MAX_REVIEWER_MODEL_LENGTH = 200;
 export const LOCAL_LLM_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high']);
 
 // The effort ladder each reviewer offers, or absent when it has no effort control
-// (`copilot` is a GitHub review, `grok`'s CLI takes no effort flag, and an
-// `@username` reviewer is a person). The CLI ladders come from the same
+// (`copilot` is a GitHub review, `grok`'s CLI has no effort control at all, and an
+// `@username` reviewer is a person). A ladder means the level is PICKABLE, not
+// that the CLI takes an `--effort` flag — `cursor` accepts one only as a
+// parameter of its model id, which the server folds in when it builds the
+// invocation. The CLI ladders come from the same
 // providers.js constants the server derives its own from, so the picker can only
 // offer a level the reviewer's binary actually accepts (`agy` really does reject
 // `--effort max`).
@@ -60,6 +65,7 @@ export const REVIEWER_EFFORT_LEVELS = Object.freeze({
   claude: CLAUDE_EFFORT_LEVELS,
   codex: CODEX_EFFORT_LEVELS,
   antigravity: ANTIGRAVITY_EFFORT_LEVELS,
+  cursor: CURSOR_EFFORT_LEVELS,
   lmstudio: LOCAL_LLM_EFFORT_LEVELS,
   ollama: LOCAL_LLM_EFFORT_LEVELS,
 });

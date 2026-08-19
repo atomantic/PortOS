@@ -367,9 +367,12 @@ describe('{reviewers} interpolation honors Code Review Defaults', () => {
     // invocation: the agent spawns each reviewer itself, so the CSV's suffix
     // reaches no parser and the sentence is the pin's only route. No claim path
     // may start passing `reviewWith` and mute itself.
-    expect(GEN_SRC).toContain('appendReviewerEffortBlock(reviewersList, promptReviewerEfforts)');
-    expect(GEN_SRC).toContain('appendReviewerEffortBlock(list, reviewerEfforts)');
-    expect(GEN_SRC).toContain('appendReviewerEffortBlock(promptReviewers, promptReviewerEfforts)');
+    // The models ride along because cursor's effort is a variant of its model id
+    // rather than a flag — without them a cursor pin would have no invocation to
+    // name (see `reviewerModelArg`).
+    expect(GEN_SRC).toContain('appendReviewerEffortBlock(reviewersList, promptReviewerEfforts, promptReviewerModels)');
+    expect(GEN_SRC).toContain('appendReviewerEffortBlock(list, reviewerEfforts, reviewerModels)');
+    expect(GEN_SRC).toContain('appendReviewerEffortBlock(promptReviewers, promptReviewerEfforts, promptReviewerModels)');
     expect(GEN_SRC).not.toMatch(/buildReviewerEffortNote\([^)]*reviewWith/);
   });
 

@@ -699,10 +699,24 @@ describe('tuiHandshake.buildTuiInvocation', () => {
     expect(out.args).toEqual(['--force']);
   });
 
-  it('emits no --effort for cursor — its reasoning tier is baked into the model id', () => {
+  it('emits no --effort for cursor — the tier is a parameter of the model id', () => {
     const provider = { id: 'cursor-tui', command: 'cursor-agent', args: ['--force'], effort: 'high' };
     const out = buildTuiInvocation(provider, 'claude-opus-5-thinking-high');
     expect(out.args).not.toContain('--effort');
+    // …and it is not dropped either: cursor's own variant syntax carries it.
+    expect(out.args).toEqual(['--force', '--model', 'claude-opus-5-thinking-high[effort=high]']);
+  });
+
+  it('extends an existing cursor model variant rather than opening a second bracket', () => {
+    const provider = { id: 'cursor-tui', command: 'cursor-agent', args: ['--force'], effort: 'max' };
+    const out = buildTuiInvocation(provider, 'claude-opus-4-7[thinking=true]');
+    expect(out.args).toEqual(['--force', '--model', 'claude-opus-4-7[thinking=true,effort=max]']);
+  });
+
+  it('leaves a cursor model that already names its own effort alone', () => {
+    const provider = { id: 'cursor-tui', command: 'cursor-agent', args: ['--force'], effort: 'low' };
+    const out = buildTuiInvocation(provider, 'gpt-5[effort=max]');
+    expect(out.args).toEqual(['--force', '--model', 'gpt-5[effort=max]']);
   });
 
   it('does not Bedrock-map a cursor model id that merely contains "claude"', () => {

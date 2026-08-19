@@ -11,8 +11,9 @@
 import { z } from 'zod';
 import { emptyToUndefined, emptyToNull } from './zodCompat.js';
 import { isPlainObject } from './objects.js';
-import { EFFORT_LEVELS, effortLevelsForProvider, buildEffortArgs, splitAntigravityModel } from './providerModels.js';
+import { EFFORT_LEVELS, effortLevelsForProvider, buildEffortArgs, foldCursorEffortIntoModel, splitAntigravityModel } from './providerModels.js';
 import { ANTIGRAVITY_COMMAND } from './antigravity.js';
+import { CURSOR_COMMAND } from './cursor.js';
 import { isValidSlashdoCommand } from './slashdoInvocation.js';
 import { PR_COMPLETION_VALUES } from './prDisposition.js';
 import { AGENT_RUN_EVENT_KINDS, RUN_EVENT_READ_LIMITS } from './agentRunEvents.js';
@@ -45,8 +46,11 @@ export const LOCAL_LLM_REVIEWERS = ['lmstudio', 'ollama'];
 // local Ollama model. `antigravity` runs `agy --model <id>`; an effort-suffixed
 // agy id is reconciled with the effort pin by `pairReviewerModelsAndEfforts`.
 // `grok` runs `grok --model <id>` (slashdo's `grok[<model>]` bracket); it takes a
-// model but NO effort, which is why this roster and EFFORT_SELECTABLE_REVIEWERS
-// are genuinely different sets rather than two names for one list.
+// model but NO effort at all, which is why this roster and
+// EFFORT_SELECTABLE_REVIEWERS are genuinely different sets rather than two names
+// for one list. `cursor` runs `cursor-agent --model <id>` and DOES take an
+// effort — but as a parameter of the model id (`gpt-5[effort=max]`), not a flag,
+// so its pin rides this roster's `--model` rather than an `--effort` argv.
 // Copilot/local-LLM reviewers are excluded — the former has no CLI, the latter
 // get their model injected server-side by `POST /api/code-review/local`. Add a
 // reviewer here when its CLI gains model selection; the `<reviewer>Model`
@@ -75,7 +79,7 @@ export const REVIEWER_CLI_BINARIES = {
   antigravity: ANTIGRAVITY_COMMAND,
   codex: 'codex',
   grok: 'grok',
-  cursor: 'cursor-agent',
+  cursor: CURSOR_COMMAND,
 };
 
 /**
@@ -460,7 +464,12 @@ export const LOCAL_LLM_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high']);
 /**
  * Reviewer slug → the reasoning-effort ladder that reviewer accepts. Only
  * reviewers WITH an effort control appear: `copilot` is a GitHub review, `grok`'s
- * CLI takes no effort flag, and an `@username` reviewer is a person.
+ * CLI has no effort control of any kind, and an `@username` reviewer is a person.
+ *
+ * A ladder here means "the user can PICK a level", not "the CLI takes an
+ * `--effort` flag" — `cursor` accepts a level only as a variant baked into its
+ * model id, so it appears here while `reviewerEffortArgs` returns `[]` for it
+ * and `reviewerModelArg` folds the level into `--model` instead.
  *
  * Built once at module load and DERIVED from `effortLevelsForProvider` rather
  * than restated, so a reviewer's ladder here is exactly the one
@@ -484,7 +493,7 @@ export const REVIEWER_EFFORT_LEVELS = Object.freeze(Object.fromEntries(
 
 /**
  * Every reviewer the user can pick an effort for — the effort-capable CLIs
- * (`claude`, `codex`, `antigravity`) plus the local-LLM backends.
+ * (`claude`, `codex`, `antigravity`, `cursor`) plus the local-LLM backends.
  */
 export const EFFORT_SELECTABLE_REVIEWERS = Object.freeze(Object.keys(REVIEWER_EFFORT_LEVELS));
 
@@ -684,6 +693,12 @@ export function reviewerEffortsFromDefaults(defaults) {
  * for codex, `[]` for everything else. Delegates to `buildEffortArgs` so the flag
  * shape has exactly one home (the spawn builders use the same one).
  *
+ * **`cursor` is deliberately `[]` despite having a ladder.** `cursor-agent` has
+ * no `--effort` flag and exits non-zero on one, so its level rides `--model`
+ * instead — build that with `reviewerModelArg`. Anything that renders a cursor
+ * invocation must call BOTH, or it will silently drop the pin (or, worse,
+ * hand-roll the `--effort` this returns nothing for).
+ *
  * **Normalizes first, deliberately.** `buildEffortArgs` CLAMPS an out-of-ladder
  * value (`agy` + `max` → `--effort high`), which is right for a provider pin the
  * user set against a different provider, but wrong here: a reviewer effort is
@@ -708,6 +723,34 @@ export function reviewerEffortArgs(reviewer, effort) {
 }
 
 /**
+ * The id a CLI reviewer's `--model` flag should carry, or `null` when there is
+ * no model to pin. The twin of `reviewerEffortArgs`: together they are the whole
+ * invocation a pinned reviewer needs, and the ONLY place that knows which of the
+ * two carries a cursor effort.
+ *
+ * For every reviewer but `cursor` this is just the pinned id, threaded verbatim
+ * (the id is environment-specific free text — see `normalizeReviewerModels`).
+ * For `cursor` the effort is folded in as Cursor's native model variant
+ * (`gpt-5` + `max` → `gpt-5[effort=max]`), matching slashdo's own fold, because
+ * `cursor-agent` has no `--effort` flag. A cursor effort with no model pinned
+ * returns `null` — there is nothing to attach the variant to, and emitting a
+ * flag cursor rejects is worse than letting it use its default tier.
+ *
+ * @param {string} reviewer - reviewer slug
+ * @param {string|null|undefined} model - the pinned model id
+ * @param {string|null|undefined} [effort] - the pinned effort (cursor only)
+ * @returns {string|null}
+ */
+export function reviewerModelArg(reviewer, model, effort) {
+  const id = typeof model === 'string' ? model.trim() : '';
+  if (!id) return null;
+  const slug = typeof reviewer === 'string' ? reviewer.trim().toLowerCase() : '';
+  if ((REVIEWER_ALIASES[slug] ?? slug) !== 'cursor') return id;
+  const level = normalizeReviewerEffort(effort, 'cursor');
+  return level ? foldCursorEffortIntoModel(id, level) : id;
+}
+
+/**
  * Prose instruction carrying the per-reviewer effort pins into a prompt whose
  * agent spawns the reviewer CLI ITSELF — the claim flows (which run each
  * configured reviewer by hand, no `--review-with` anywhere in the prompt) and a
@@ -724,20 +767,38 @@ export function reviewerEffortArgs(reviewer, effort) {
  * Scoped to CLI reviewers on purpose — `ollama`/`lmstudio` have no binary to
  * name (their effort rides the `POST /api/code-review/local` body instead).
  *
+ * `cursor` needs its MODEL to say anything at all: its level is a variant of the
+ * model id, never a flag, so pass `reviewerModels` — a cursor pin with no model
+ * emits nothing rather than an `--effort` its CLI rejects.
+ *
  * @param {string[]} reviewers - the reviewer slugs the invocation emits
  * @param {Object<string, string>} [reviewerEfforts] - token-keyed effort pins
  * @param {Object} [options]
  * @param {string} [options.reviewWith] - the `--review-with` text this prompt
  *   emits, if any. A `~effort=` in it means slashdo already carries the pin.
+ * @param {Object<string, string>} [options.reviewerModels] - token-keyed model
+ *   pins, needed only to render a cursor invocation (see above)
  * @returns {string} a single sentence, or '' when nothing is left to say
  */
-export function buildReviewerEffortNote(reviewers, reviewerEfforts = {}, { reviewWith = '' } = {}) {
+export function buildReviewerEffortNote(reviewers, reviewerEfforts = {}, { reviewWith = '', reviewerModels = {} } = {}) {
   if (typeof reviewWith === 'string' && reviewWith.includes('~effort=')) return '';
   const efforts = normalizeReviewerEfforts(reviewerEfforts) || {};
+  const models = normalizeReviewerModels(reviewerModels) || {};
   const entries = (Array.isArray(reviewers) ? reviewers : [])
     .map((r) => {
+      // No binary, nothing to name: `lmstudio`/`ollama` reach their backend over
+      // HTTP, and copilot/@username aren't commands at all. Checked FIRST so no
+      // branch below can render a `null` command into a prompt.
+      const binary = reviewerCliBinary(r);
+      if (!binary) return null;
       const args = reviewerEffortArgs(r, efforts[r]);
-      return args.length ? `\`${reviewerCliBinary(r)} ${args.join(' ')}\`` : null;
+      if (args.length) return `\`${binary} ${args.join(' ')}\``;
+      // No effort ARGV, but the reviewer may still carry the level inside
+      // --model (cursor). Gated on the effort pin so this stays an effort note:
+      // a model-only pin is not this sentence's business.
+      if (!normalizeReviewerEffort(efforts[r], r)) return null;
+      const model = reviewerModelArg(r, models[r], efforts[r]);
+      return model ? `\`${binary} --model ${model}\`` : null;
     })
     .filter(Boolean);
   if (!entries.length) return '';

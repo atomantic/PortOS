@@ -224,6 +224,25 @@ describe('cliProviderArgs', () => {
       expect(args).toEqual(['--print', '--auto-review', '--trust']);
     });
 
+    it('carries a per-run effort inside --model, never as an --effort flag', () => {
+      // cursor-agent exposes no --effort and exits non-zero on one; its effort is
+      // a model-variant parameter (`gpt-5[effort=max]`).
+      const args = buildCliArgs({ id: 'cursor-cli', command: 'cursor-agent', args: [], defaultModel: 'gpt-5', effort: 'max' });
+      expect(args).toEqual(['--print', '--force', '--model', 'gpt-5[effort=max]']);
+      expect(args).not.toContain('--effort');
+    });
+
+    it('clamps an out-of-ladder effort rather than passing it through', () => {
+      // `minimal` sits below cursor's ladder, so it resolves to its weakest level.
+      const args = buildCliArgs({ id: 'cursor-cli', command: 'cursor-agent', args: [], defaultModel: 'gpt-5', effort: 'minimal' });
+      expect(args).toEqual(['--print', '--force', '--model', 'gpt-5[effort=low]']);
+    });
+
+    it('drops an effort with no model to fold it into', () => {
+      const args = buildCliArgs({ id: 'cursor-cli', command: 'cursor-agent', args: [], defaultModel: null, effort: 'max' });
+      expect(args).toEqual(['--print', '--force']);
+    });
+
     it('delivers the prompt over stdin (useStdin true) — cursor reads raw stdin in print mode', () => {
       const built = buildCliArgs({ id: 'cursor-cli', command: 'cursor-agent', args: ['--print', '--force'], defaultModel: 'auto' });
       const { args, useStdin } = prepareCliPrompt('cursor-agent', built, 'write a haiku');

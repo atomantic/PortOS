@@ -94,6 +94,15 @@ export const ANTIGRAVITY_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high']
 // OpenCode forwards this narrow OpenAI-compatible ladder as `reasoningEffort`
 // to a local Ollama model. Keep it separate from vendor-CLI-only levels.
 export const OPENCODE_OLLAMA_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high']);
+// Cursor Agent's ladder. Cursor has NO `--effort` flag — the level is a
+// parameter of the model id itself (`gpt-5[effort=max]`), folded in by
+// `foldCursorEffortIntoModel` — so `buildEffortArgs` deliberately emits nothing
+// for cursor while this ladder still drives every picker. The tier NAMES are
+// slashdo's documented `~effort=<level>` set (`low|medium|high|xhigh|max`), which
+// is what `--review-with cursor[gpt-5]~effort=max` parses; keeping them
+// identical is the point, since the same pin has to survive a round trip
+// through slashdo.
+export const CURSOR_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
 
 // Effort values no CLI ladder accepts any more, kept ACCEPTED as stored/API
 // input so records saved under an older ladder still validate after an install
@@ -107,6 +116,7 @@ export const EFFORT_LEVELS = Object.freeze([...new Set([
   ...CODEX_EFFORT_LEVELS,
   ...CLAUDE_EFFORT_LEVELS,
   ...ANTIGRAVITY_EFFORT_LEVELS,
+  ...CURSOR_EFFORT_LEVELS,
   ...LEGACY_EFFORT_LEVELS,
 ])]);
 
@@ -272,6 +282,56 @@ export function isAntigravityProvider(provider) {
 }
 
 /**
+ * True when a provider is Cursor-Agent-flavored — the shipped `cursor-cli` /
+ * `cursor-tui` ids or any provider whose launch command basename is
+ * `cursor-agent` (path/exe tolerant). The provider-shaped companion to
+ * `isCursorCommand` in cursor.js; lives here (rather than there) for the same
+ * reason `isAntigravityProvider` does — so `effortLevelsForProvider` and
+ * `buildEffortArgs` can key on it without this dependency-light module importing
+ * a sibling vendor file that already imports IT.
+ *
+ * Deliberately never matches a bare `cursor` command: that is Cursor's GUI
+ * editor launcher, not the agent binary (see cursor.js).
+ * Mirrored in client/src/utils/providers.js — keep in lockstep.
+ * @param {{id?:string, command?:string}|null|undefined} provider
+ * @returns {boolean}
+ */
+export function isCursorProvider(provider) {
+  if (!provider) return false;
+  const id = String(provider.id || '').toLowerCase();
+  return id === 'cursor-cli' || id === 'cursor-tui' || commandBasename(provider.command) === 'cursor-agent';
+}
+
+/**
+ * Fold a reasoning-effort level into a Cursor model id using Cursor's own
+ * model-variant syntax, because `cursor-agent` has NO `--effort` flag and exits
+ * non-zero when passed one. Three cases, matching slashdo's fold in
+ * `lib/local-agent-review-loop.md` exactly (the same pin has to mean the same
+ * invocation whether PortOS or slashdo builds it):
+ *
+ *   - `gpt-5` + `max`                       → `gpt-5[effort=max]`
+ *   - `claude-opus-4-7[thinking=true]` + `high` → `claude-opus-4-7[thinking=true,effort=high]`
+ *   - a model that ALREADY names `effort=`  → returned unchanged (the explicit
+ *     variant the user typed wins over the ladder pin)
+ *
+ * Returns the model unchanged when there is no effort, and `null` when there is
+ * no model — an effort with nothing to attach to is dropped rather than emitted
+ * as a flag Cursor would reject.
+ * @param {string|null|undefined} model
+ * @param {string|null|undefined} effort
+ * @returns {string|null}
+ */
+export function foldCursorEffortIntoModel(model, effort) {
+  const id = typeof model === 'string' ? model.trim() : '';
+  if (!id) return null;
+  const level = typeof effort === 'string' ? effort.trim() : '';
+  if (!level) return id;
+  if (id.includes('effort=')) return id;
+  if (id.endsWith(']')) return `${id.slice(0, -1)},effort=${level}]`;
+  return `${id}[effort=${level}]`;
+}
+
+/**
  * The effort levels a provider's CLI accepts, or null when the provider has no
  * effort control (opencode, grok, kimi, HTTP API providers). Keyed on the
  * launch command basename (plus the shipped provider ids) so path-configured or
@@ -285,6 +345,11 @@ export function isAntigravityProvider(provider) {
  * `provider.models`. Omit it — or leave the catalog empty — to get the full
  * low/medium/high ladder. Returns null for an Antigravity model the catalog
  * says has no tiers at all (`claude-sonnet-4-6`), so no `--effort` is emitted.
+ *
+ * A ladder here does NOT imply an `--effort` flag: cursor advertises levels but
+ * carries them inside `--model` (`foldCursorEffortIntoModel`), so
+ * `buildEffortArgs` returns `[]` for it. Ask this function "can the user pick a
+ * level?", and `buildEffortArgs` "what argv does that level become?".
  * @param {{id?:string, command?:string, models?:unknown[]}|null|undefined} provider
  * @param {string|null} [model]
  * @returns {readonly string[]|null}
@@ -298,6 +363,7 @@ export function effortLevelsForProvider(provider, model = null) {
     if (perModel === null) return ANTIGRAVITY_EFFORT_LEVELS;
     return perModel.length ? perModel : null;
   }
+  if (isCursorProvider(provider)) return CURSOR_EFFORT_LEVELS;
   if (isClaudeProvider(provider)) return CLAUDE_EFFORT_LEVELS;
   return null;
 }
@@ -369,6 +435,11 @@ export function hasEffortFlag(args) {
  * effort control, or a user-baked pin already sits in `existingArgs`). The one
  * home for both the detection AND the arg shape, so the two can't drift — spawn
  * builders just spread the result.
+ *
+ * **Cursor always gets `[]`, even though it HAS a ladder.** `cursor-agent`
+ * exposes no `--effort` flag and exits non-zero when handed one; its effort is a
+ * model-variant parameter, so cursor spawn builders fold the level into
+ * `--model` with `foldCursorEffortIntoModel` instead of spreading this.
  * @param {string|null|undefined} effort
  * @param {{id?:string, command?:string, models?:unknown[]}|null|undefined} provider
  * @param {unknown[]} [existingArgs]
@@ -378,6 +449,7 @@ export function hasEffortFlag(args) {
 export function buildEffortArgs(effort, provider, existingArgs = [], model = null) {
   const effectiveEffort = resolveCliEffort(effort, provider, model);
   if (!effectiveEffort || hasEffortFlag(existingArgs)) return [];
+  if (isCursorProvider(provider)) return []; // rides `--model`, not a flag — see above
   return isCodexProvider(provider)
     ? ['-c', `${CODEX_EFFORT_KEY}=${effectiveEffort}`]
     : ['--effort', effectiveEffort];

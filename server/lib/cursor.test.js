@@ -37,6 +37,19 @@ describe('ensureCursorHeadlessArgs', () => {
     expect(ensureCursorHeadlessArgs([], '')).toEqual(['--print', '--force']);
   });
 
+  it('folds a pinned effort into --model instead of emitting an --effort flag', () => {
+    // cursor-agent has no --effort; passing one exits non-zero.
+    expect(ensureCursorHeadlessArgs([], 'gpt-5', 'max'))
+      .toEqual(['--print', '--force', '--model', 'gpt-5[effort=max]']);
+    expect(ensureCursorHeadlessArgs([], 'claude-opus-4-7[thinking=true]', 'high'))
+      .toEqual(['--print', '--force', '--model', 'claude-opus-4-7[thinking=true,effort=high]']);
+    expect(ensureCursorHeadlessArgs([], 'gpt-5', 'max')).not.toContain('--effort');
+  });
+
+  it('drops an effort with no model to attach it to', () => {
+    expect(ensureCursorHeadlessArgs([], null, 'max')).toEqual(['--print', '--force']);
+  });
+
   it('does not duplicate print mode pinned in either form', () => {
     expect(ensureCursorHeadlessArgs(['--print'], null)).toEqual(['--print', '--force']);
     expect(ensureCursorHeadlessArgs(['-p'], null)).toEqual(['-p', '--force']);

@@ -516,7 +516,7 @@ export async function buildClaimWorkTask(app, {
     + appendTargetWorkItemBlock(promptTaskType, targetRef)
     + appendPrefetchedIssueContext(promptTaskType, targetRef, issueContext)
     + appendClaimOverrideContext(overrideContext)
-    + appendReviewerEffortBlock(reviewersList, promptReviewerEfforts)
+    + appendReviewerEffortBlock(reviewersList, promptReviewerEfforts, promptReviewerModels)
     + buildLocalReviewerInstructions(reviewersList, promptReviewerModels, promptReviewerEfforts);
 
   // Mirror the scheduler: inherit the delegated flow's isolation posture so the
@@ -553,7 +553,7 @@ async function resolveClaimReviewerPrompt() {
   const { reviewerModels, reviewerEfforts } = resolveReviewerPins(null, codeReviewDefaults);
   return {
     csv: buildReviewersCsv(list, codeReviewDefaults?.usernames, codeReviewDefaults?.optionalReviewers, codeReviewDefaults?.reviewerMaxRounds, reviewerModels, reviewerEfforts),
-    effortBlock: appendReviewerEffortBlock(list, reviewerEfforts),
+    effortBlock: appendReviewerEffortBlock(list, reviewerEfforts, reviewerModels),
     localReviewerBlock: buildLocalReviewerInstructions(list, reviewerModels, reviewerEfforts),
   };
 }
@@ -703,9 +703,13 @@ const appendTargetWorkItemBlock = (promptTaskType, ref) => {
  * `swarmBlock` is prepended) — and prose because the claim agent invokes each
  * reviewer CLI directly: this flow emits no `--review-with`, so the CSV's
  * `~effort=` suffix reaches no parser. Empty when no reviewer in the list pins one.
+ *
+ * The MODELS ride along because cursor's effort is a variant of its model id
+ * rather than a flag — without them a pinned `cursor[<id>]~effort=<level>` would
+ * have no invocation to name here at all.
  */
-const appendReviewerEffortBlock = (reviewers, reviewerEfforts) => {
-  const note = buildReviewerEffortNote(reviewers, reviewerEfforts);
+const appendReviewerEffortBlock = (reviewers, reviewerEfforts, reviewerModels) => {
+  const note = buildReviewerEffortNote(reviewers, reviewerEfforts, { reviewerModels });
   return note ? `\n\n${note}` : '';
 };
 
@@ -2897,7 +2901,7 @@ async function buildImprovementTaskDescription({ promptTemplate, app, promptTask
     // step — appending here too would print the same sentence twice and give one
     // instruction two owners to drift apart.
     + (/\{reviewers\}/.test(promptTemplate)
-        ? appendReviewerEffortBlock(promptReviewers, promptReviewerEfforts)
+        ? appendReviewerEffortBlock(promptReviewers, promptReviewerEfforts, promptReviewerModels)
         : '')
     + (/\{reviewers\}/.test(promptTemplate)
         ? buildLocalReviewerInstructions(promptReviewers, promptReviewerModels, promptReviewerEfforts)

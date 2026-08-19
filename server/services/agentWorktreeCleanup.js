@@ -821,7 +821,8 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
   const narrowedReviewerModels = narrowPins(reviewerModels, MODEL_SELECTABLE_REVIEWERS);
   // Reviewer-keyed reasoning-effort map, narrowed the same way. The prompt turns a
   // CLI reviewer's effort into a flag on its command line (`--effort high` /
-  // `-c model_reasoning_effort=high`) and a local-LLM reviewer's into the
+  // `-c model_reasoning_effort=high`, or a folded `--model gpt-5[effort=max]` for
+  // cursor, whose CLI has no effort flag) and a local-LLM reviewer's into the
   // `reasoning_effort` field of its `/api/code-review/local` body.
   const narrowedReviewerEfforts = narrowPins(reviewerEfforts, EFFORT_SELECTABLE_REVIEWERS);
 

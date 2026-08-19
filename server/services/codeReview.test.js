@@ -31,7 +31,7 @@ import {
   __resetCodeReviewDefaultsCache,
   __resetReviewerCliInstalledCache,
 } from './codeReview.js'
-import { MODEL_SELECTABLE_REVIEWERS } from '../lib/cosValidation.js'
+import { MODEL_SELECTABLE_REVIEWERS, EFFORT_SELECTABLE_REVIEWERS } from '../lib/cosValidation.js'
 
 // Minimal stand-ins for the deps resolveReviewLoopOptions is handed by its
 // callers (agentCliSpawning / agentCompletionCleanup) — kept trivial so the
@@ -62,15 +62,12 @@ describe('codeReview helpers', () => {
   })
 
   describe('pickCodeReviewDefaults', () => {
-    // Every effort-capable reviewer reports `null` when nothing is configured;
-    // spread rather than pasted so the roster only has to change in one place.
-    const NO_EFFORTS = {
-      claudeEffort: null,
-      codexEffort: null,
-      antigravityEffort: null,
-      lmstudioEffort: null,
-      ollamaEffort: null,
-    }
+    // Every effort-capable reviewer reports `null` when nothing is configured.
+    // Derived from the roster for the same reason NO_MODELS below is: the keys
+    // `pickCodeReviewDefaults` emits come from that roster too, so a hand-listed
+    // copy would need editing in lockstep with every future addition (`cursor`
+    // joined when its ladder landed) and says nothing extra when it is.
+    const NO_EFFORTS = Object.fromEntries(EFFORT_SELECTABLE_REVIEWERS.map((r) => [`${r}Effort`, null]))
     // Same for every model-selectable reviewer — `antigravity` joined the roster
     // when agy's `--model` became pinnable (#3728), `grok` when `grok --model`
     // did (#3729). Derived from the roster, because `pickCodeReviewDefaults`

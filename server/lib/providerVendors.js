@@ -56,6 +56,9 @@
 
 import {
   resolveCliModel,
+  resolveCliEffort,
+  foldCursorEffortIntoModel,
+  isCursorProvider,
   hasModelFlag,
   resolveInjectedTuiModel,
   resolveBedrockCliModel,
@@ -215,8 +218,13 @@ const KIMI = {
 
 // ─── cursor ─────────────────────────────────────────────────────────────────
 
-function cursorCliArgs(baseArgs, { model }) {
-  return ensureCursorHeadlessArgs(baseArgs, model);
+function cursorCliArgs(baseArgs, { model, effort }) {
+  // cursor-agent has no `--effort` flag (it exits non-zero on one), so the level
+  // is folded into the model id instead — resolved through cursor's ladder first
+  // so an out-of-range value clamps the way every other CLI's does. Resolved
+  // against the CLI this row IS, not `provider`, so a provider that reaches this
+  // row by id alone still gets its level applied.
+  return ensureCursorHeadlessArgs(baseArgs, model, resolveCliEffort(effort, { command: CURSOR_COMMAND }));
 }
 
 const CURSOR = {
@@ -394,6 +402,16 @@ export function injectTuiModelAndEffort(command, baseArgs, provider, model, effo
     const resolved = resolveAntigravityModelAndEffort(baseArgs, { model, effort, models: provider?.models });
     const withModel = resolved.model ? [...baseArgs, '--model', resolved.model] : baseArgs;
     return [...withModel, ...buildEffortArgs(resolved.effort, resolved.provider, withModel, resolved.base)];
+  }
+  if (isCursorProvider({ id: provider?.id, command })) {
+    // Cursor's effort is a model-variant parameter, not a flag — fold it in so
+    // the TUI honors a pinned level instead of dropping it (buildEffortArgs
+    // emits nothing for cursor by design).
+    const cursorModel = foldCursorEffortIntoModel(
+      resolveCliModel(model),
+      resolveCliEffort(effort, { id: provider?.id, command })
+    );
+    return (cursorModel && !hasModelFlag(baseArgs)) ? [...baseArgs, '--model', cursorModel] : baseArgs;
   }
   const effectiveModel = resolveCliModel(model);
   const shouldInject = !!effectiveModel && !hasModelFlag(baseArgs);
