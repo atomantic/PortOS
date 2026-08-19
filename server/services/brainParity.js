@@ -99,9 +99,10 @@ export async function buildBrainManifest() {
  * store we don't have yet is not divergence, it's a version gap.
  */
 function normalizeRemoteManifest(body) {
+  if (!body || typeof body !== 'object') return null;
+  const types = body.types;
+  if (!types || typeof types !== 'object' || Array.isArray(types)) return null;
   const out = {};
-  const types = body?.types;
-  if (!types || typeof types !== 'object') return out;
   for (const type of BRAIN_ENTITY_TYPES) {
     const rows = types[type];
     if (!Array.isArray(rows)) continue;
@@ -121,12 +122,13 @@ function normalizeRemoteManifest(body) {
  * every peer that supports reconcile at all, not just upgraded ones.
  */
 function manifestFromSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') return null;
+  const records = snapshot.records;
+  if (!records || typeof records !== 'object' || Array.isArray(records)) return null;
   const out = {};
-  const records = snapshot?.records;
-  if (!records || typeof records !== 'object') return out;
   for (const type of BRAIN_ENTITY_TYPES) {
     const byId = records[type];
-    if (!byId || typeof byId !== 'object') continue;
+    if (!byId || typeof byId !== 'object' || Array.isArray(byId)) continue;
     out[type] = Object.entries(byId)
       .filter(([, rec]) => rec && typeof rec === 'object')
       .map(([id, rec]) => ({ id, updatedAt: rec.updatedAt ?? null, deleted: rec._deleted === true }));
@@ -157,7 +159,11 @@ async function fetchPeerJson(peer, path) {
  */
 async function fetchRemoteManifest(peer) {
   const direct = await fetchPeerJson(peer, '/api/brain/reconcile/manifest');
-  if (!direct.reason) return { reason: null, byType: normalizeRemoteManifest(direct.body) };
+  if (!direct.reason) {
+    const normalized = normalizeRemoteManifest(direct.body);
+    if (!normalized) return { reason: 'fetch-failed', byType: null };
+    return { reason: null, byType: normalized };
+  }
   if (direct.reason !== 'peer-too-old') return { reason: direct.reason, byType: null };
 
   const snapshot = await fetchPeerJson(peer, '/api/brain/reconcile/snapshot');
@@ -166,7 +172,9 @@ async function fetchRemoteManifest(peer) {
     // all — still "too old", just further back.
     return { reason: snapshot.reason === 'peer-too-old' ? 'peer-too-old' : snapshot.reason, byType: null };
   }
-  return { reason: null, byType: manifestFromSnapshot(snapshot.body) };
+  const normalized = manifestFromSnapshot(snapshot.body);
+  if (!normalized) return { reason: 'fetch-failed', byType: null };
+  return { reason: null, byType: normalized };
 }
 
 const emptyCounts = () => ({
