@@ -181,11 +181,14 @@ const CODEX_MODEL_DEFAULTS = {
 };
 const ANTIGRAVITY_MODEL_KEYS = ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel'];
 // agy exposes a per-session `--model` flag and lists its catalog via
-// `agy models`. This is the shipped fallback list (agy 2026-07) used to seed a
+// `agy models`. This is the shipped fallback list (agy 2026-08) used to seed a
 // fresh install and when the live `agy models` probe can't run; the AI Providers
 // "Refresh models" button replaces it with whatever the installed binary
 // reports, which is the authoritative list for that user's plan.
 const ANTIGRAVITY_MODELS = [
+  'gemini-3.7-flash-high',
+  'gemini-3.7-flash-medium',
+  'gemini-3.7-flash-low',
   'gemini-3.6-flash-high',
   'gemini-3.6-flash-medium',
   'gemini-3.6-flash-low',
@@ -204,6 +207,23 @@ const ANTIGRAVITY_MODELS = [
 // the task/schedule model pickers (which filter the sentinel out) can offer a
 // per-run override.
 const ANTIGRAVITY_MODEL_CATALOG = [ANTIGRAVITY_CONFIGURED_DEFAULT, ...ANTIGRAVITY_MODELS];
+const PRIOR_ANTIGRAVITY_MODEL_CATALOGS = [
+  // Prior 2026-07 catalog without gemini-3.7
+  [
+    ANTIGRAVITY_CONFIGURED_DEFAULT,
+    'gemini-3.6-flash-high',
+    'gemini-3.6-flash-medium',
+    'gemini-3.6-flash-low',
+    'gemini-3.5-flash-high',
+    'gemini-3.5-flash-medium',
+    'gemini-3.5-flash-low',
+    'gemini-3.1-pro-high',
+    'gemini-3.1-pro-low',
+    'claude-sonnet-4-6',
+    'claude-opus-4-6-thinking',
+    'gpt-oss-120b-medium',
+  ],
+];
 const CODEX_CONTEXT_WINDOW = 1_000_000;
 const GEMINI_CONTEXT_WINDOW = 1_048_576;
 const STALE_GENERIC_CONTEXT_WINDOW = 128_000;
@@ -325,12 +345,12 @@ function migrateAntigravityProviders(data) {
   return changed;
 }
 
-// Installs that already migrated to `agy` carry the sentinel-only model list
-// from before agy grew a `--model` flag. Widen it to the shipped catalog so the
-// task/schedule pickers have something to offer. Guarded on "sentinel-only" so a
-// user's own list (or one already refreshed from `agy models`) is never
-// overwritten, and the `*Model` keys are left alone so run behavior is unchanged
-// until the user actually picks a model.
+// Installs that carry the sentinel-only model list from before agy grew a
+// `--model` flag, or the prior shipped catalog before gemini-3.7 was released,
+// are widened/updated to the current shipped catalog so pickers have the new
+// model options. Guarded so a user's own customized list (or one already
+// refreshed from `agy models`) is never overwritten, and the `*Model` keys are
+// left alone so run behavior is unchanged until the user actually picks a model.
 function migrateAntigravityModelCatalog(data) {
   if (!data?.providers) return false;
   let changed = false;
@@ -342,7 +362,13 @@ function migrateAntigravityModelCatalog(data) {
     const isSentinelOnly = Array.isArray(provider.models)
       && provider.models.length === 1
       && provider.models[0] === ANTIGRAVITY_CONFIGURED_DEFAULT;
-    if (!isSentinelOnly) continue;
+
+    const isPriorSeededList = Array.isArray(provider.models)
+      && PRIOR_ANTIGRAVITY_MODEL_CATALOGS.some(
+        (prior) => prior.length === provider.models.length && prior.every((m, i) => m === provider.models[i]),
+      );
+
+    if (!isSentinelOnly && !isPriorSeededList) continue;
 
     provider.models = [...ANTIGRAVITY_MODEL_CATALOG];
     changed = true;
