@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildThreejsFactorySource } from './threejsModel.js';
+import { THREEJS_PLAYER_SOURCE } from './threejsModelPlayerSource.js';
 
 // The emitted player is only worth shipping if it actually runs, so the suite
 // EXECUTES it rather than grepping the string: the module is imported with the
@@ -135,6 +136,19 @@ const mountPlayer = async (input = spec(), options = undefined) => {
   const root = { userData: { sculptRuntime: { nodes, animation: input.animation || null } } };
   return { module, nodes, player: module.createSculptAnimationPlayer(root, options) };
 };
+
+describe('THREEJS_PLAYER_SOURCE', () => {
+  // The player lives inside a template literal, so an unescaped backtick in one
+  // of its comments closes the string early and truncates the rest of the player
+  // with no syntax error anywhere — the emitted module just quietly stops
+  // exporting a player. This is the cheap tripwire for that.
+  it('carries the whole player, with every backtick in it escaped', () => {
+    for (const symbol of ['evaluateSculptClipPose', 'collectSculptCues', 'createSculptAnimationPlayer']) {
+      expect(THREEJS_PLAYER_SOURCE).toContain(`export function ${symbol}(`);
+    }
+    expect(THREEJS_PLAYER_SOURCE).toContain('return player;');
+  });
+});
 
 describe('emitted clip player', () => {
   it('poses the node map from a scrub without firing a cue', async () => {

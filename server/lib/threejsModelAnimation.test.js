@@ -207,6 +207,9 @@ describe('summarizeThreejsAnimation playback findings', () => {
     // toward motion it never showed.
     expect(codesOf({ parts: parts() })).toEqual([]);
     expect(codesOf({ parts: parts(), articulation: { joints: [{ id: 'root', partId: 'panel' }] } })).toEqual([]);
+    // An animation block that arrived with an empty clip list demonstrates
+    // exactly as much motion as no block at all.
+    expect(codesOf({ ...articulated, animation: { clips: [], cues: [] } })).toEqual(['articulation-without-clips']);
   });
 });
 

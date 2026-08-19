@@ -172,7 +172,12 @@ function evaluateAnimationFindings(spec) {
   const animation = spec?.animation || null;
   const joints = Array.isArray(spec?.articulation?.joints) ? spec.articulation.joints : [];
 
-  if (!animation) {
+  const clips = Array.isArray(animation?.clips) ? animation.clips : [];
+
+  // Keyed on having no clip to play rather than on a missing `animation` key: a
+  // block that arrived with an empty clip list demonstrates exactly as much
+  // motion as no block at all.
+  if (clips.length === 0) {
     // Narrow on purpose: a static object declares no joints and gets no finding,
     // so nothing here pushes every model toward motion it never showed.
     if (joints.length >= MIN_JOINTS_EXPECTING_MOTION) {
@@ -186,7 +191,6 @@ function evaluateAnimationFindings(spec) {
   }
 
   const partsById = indexParts(spec?.parts);
-  const clips = Array.isArray(animation.clips) ? animation.clips : [];
   const findings = clips.flatMap((clip) => evaluateClipFindings(clip, partsById));
 
   const firedCueIds = new Set(

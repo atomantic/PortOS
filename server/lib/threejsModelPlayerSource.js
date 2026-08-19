@@ -127,7 +127,9 @@ export function collectSculptCues(clip, fromSeconds, toSeconds) {
 }
 
 const indexAuthoredPose = (parts, into) => {
-  for (const part of parts) {
+  // Defensive fallback for a hand-repaired spec whose leaf omits its empty
+  // children array — the parse this module is emitted from always fills it.
+  for (const part of parts || []) {
     into[part.id] = { position: part.position, rotationDegrees: part.rotationDegrees, scale: part.scale };
     indexAuthoredPose(part.children, into);
   }
