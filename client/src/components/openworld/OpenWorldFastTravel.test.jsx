@@ -8,7 +8,6 @@ const renderPanel = (props = {}) => render(
     open
     onClose={vi.fn()}
     onTravel={vi.fn()}
-    onOpenPage={vi.fn()}
     activeRegionId={null}
     onLeaveRegion={vi.fn()}
     {...props}
@@ -57,16 +56,11 @@ describe('OpenWorldFastTravel', () => {
     expect(screen.getByText(/NO REGION MATCHES/)).toBeInTheDocument();
   });
 
-  it('opens the PortOS page a region stands for without warping', () => {
-    const onOpenPage = vi.fn();
-    const onTravel = vi.fn();
-    renderPanel({ onOpenPage, onTravel });
+  it('does not offer a PortOS page escape hatch', () => {
+    renderPanel();
 
-    fireEvent.change(screen.getByLabelText('Search regions'), { target: { value: 'memory' } });
-    fireEvent.click(screen.getByTitle('Open /brain/inbox'));
-
-    expect(onOpenPage).toHaveBeenCalledWith('/brain/inbox');
-    expect(onTravel).not.toHaveBeenCalled();
+    expect(screen.queryByText('OPEN')).not.toBeInTheDocument();
+    expect(screen.queryByTitle(/Open\s+\//)).not.toBeInTheDocument();
   });
 
   it('omits the OPEN affordance for a region with no page behind it', () => {
@@ -89,7 +83,6 @@ describe('OpenWorldFastTravel', () => {
         open
         onClose={onClose}
         onTravel={vi.fn()}
-        onOpenPage={vi.fn()}
         onLeaveRegion={onLeaveRegion}
         activeRegionId="memory"
       />
@@ -106,7 +99,7 @@ describe('OpenWorldFastTravel', () => {
 
     const dialog = screen.getByRole('dialog');
     expect(dialog).toHaveAttribute('aria-modal', 'true');
-    expect(dialog).toHaveAttribute('aria-label', 'Fast travel');
+    expect(dialog).toHaveAttribute('aria-label', 'World map');
 
     fireEvent.click(dialog.parentElement);
     expect(onClose).toHaveBeenCalledTimes(1);
@@ -119,9 +112,9 @@ describe('OpenWorldFastTravel', () => {
     const onTravel = vi.fn();
     renderPanel({ onTravel });
     for (const region of OPEN_WORLD_REGIONS) {
-      expect(screen.getByLabelText(`Travel to ${region.label}`)).toBeInTheDocument();
+      expect(screen.getByLabelText(`Teleport to ${region.label}`)).toBeInTheDocument();
     }
-    fireEvent.click(screen.getByLabelText('Travel to Data Harbor'));
+    fireEvent.click(screen.getByLabelText('Teleport to Data Harbor'));
     expect(onTravel.mock.calls[0][0].id).toBe('data-harbor');
   });
 });

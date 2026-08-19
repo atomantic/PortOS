@@ -17,7 +17,8 @@ import { PARCELS } from './openWorldPlan';
 
 // Ordered for the fast-travel list: the two places you look at most first, then a clockwise
 // sweep of the outer districts, then the far shore. `parcel` keys into PARCELS for geography;
-// `appPath` is the 2D PortOS page the region visualizes (null for pure set dressing).
+// `appPath` is semantic metadata for the PortOS area the region visualizes (null for pure set
+// dressing). OpenWorld uses the region id for in-world travel and never follows this path.
 //
 // `district` marks a region whose real extent is DATA-DRIVEN — the downtown and archive grids
 // grow with the install's app count, so their PARCELS footprint is only a nominal size. It

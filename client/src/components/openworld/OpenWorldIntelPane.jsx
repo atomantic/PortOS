@@ -1,5 +1,4 @@
 import { useMemo, useRef, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router';
 import { formatClockTime } from '../../utils/formatters';
 import { computeActivityDensity, buildTimelineBuckets } from '../../utils/openWorldTimeline';
 import useDrawerTab from '../../hooks/useDrawerTab';
@@ -23,7 +22,7 @@ export function buildAttentionItems({ apps, cosAgents, reviewCounts, instances, 
         severity: 'critical',
         label: `${app.name || app.id}`,
         detail: 'Stopped',
-        to: `/apps/${app.id}`,
+        appId: app.id,
         category: 'app',
       });
     }
@@ -35,7 +34,7 @@ export function buildAttentionItems({ apps, cosAgents, reviewCounts, instances, 
           severity: 'critical',
           label: `${app.name || app.id} · ${procName}`,
           detail: 'Process errored',
-          to: `/apps/${app.id}`,
+          appId: app.id,
           category: 'app',
         });
       }
@@ -50,7 +49,7 @@ export function buildAttentionItems({ apps, cosAgents, reviewCounts, instances, 
         severity: sev,
         label: w.message || `System: ${w.type}`,
         detail: 'System health',
-        to: '/',
+        regionId: 'wellness',
         category: 'system',
       });
     });
@@ -62,7 +61,7 @@ export function buildAttentionItems({ apps, cosAgents, reviewCounts, instances, 
       severity: 'critical',
       label: `${reviewCounts.alert} alert${reviewCounts.alert === 1 ? '' : 's'}`,
       detail: 'Review hub',
-      to: '/review',
+      regionId: 'task-queue',
       category: 'review',
     });
   }
@@ -72,7 +71,7 @@ export function buildAttentionItems({ apps, cosAgents, reviewCounts, instances, 
       severity: 'warning',
       label: `${reviewCounts.total} pending review${reviewCounts.total === 1 ? '' : 's'}`,
       detail: 'Review hub',
-      to: '/review',
+      regionId: 'task-queue',
       category: 'review',
     });
   }
@@ -85,7 +84,7 @@ export function buildAttentionItems({ apps, cosAgents, reviewCounts, instances, 
       severity: 'warning',
       label: `${offlinePeers.length} of ${peers.length} peer${peers.length === 1 ? '' : 's'} offline`,
       detail: 'Federation',
-      to: '/instances',
+      regionId: 'data-harbor',
       category: 'federation',
     });
   }
@@ -99,7 +98,7 @@ export function buildAttentionItems({ apps, cosAgents, reviewCounts, instances, 
       severity: 'warning',
       label: agent.task || agent.taskTitle || `Agent ${agent.agentId?.slice(0, 8) || ''}`,
       detail: 'Agent failed',
-      to: '/cos',
+      regionId: 'ai-core',
       category: 'agent',
     });
   });
@@ -111,7 +110,7 @@ export function buildAttentionItems({ apps, cosAgents, reviewCounts, instances, 
       severity: 'info',
       label: `${unread} unread notification${unread === 1 ? '' : 's'}`,
       detail: 'Open dashboard alerts',
-      to: '/',
+      regionId: 'downtown',
       category: 'notifications',
     });
   }
@@ -119,9 +118,7 @@ export function buildAttentionItems({ apps, cosAgents, reviewCounts, instances, 
   return items.sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]);
 }
 
-function AttentionList({ items }) {
-  const navigate = useNavigate();
-
+function AttentionList({ items, onItemActivate }) {
   if (items.length === 0) {
     return (
       <div className="flex-1 flex items-center justify-center px-3 py-6">
@@ -141,7 +138,7 @@ function AttentionList({ items }) {
           <button
             key={item.id}
             type="button"
-            onClick={() => item.to && navigate(item.to)}
+            onClick={() => onItemActivate?.(item)}
             className={`w-full text-left flex items-start gap-2 px-2 py-1.5 rounded border ${colors.border} bg-black/40 hover:bg-cyan-500/10 transition-colors`}
             title={`${item.label} — ${item.detail}`}
           >
@@ -245,8 +242,7 @@ const relativeAge = (ms) => {
 // Temporal view of the event stream: a density sparkbar (when did bursts of
 // activity happen) over relative-age buckets (what happened, newest first).
 // Reads the same `eventLogs` the ACTIVITY tab does — no new data wiring.
-function TimelineView({ logs }) {
-  const navigate = useNavigate();
+function TimelineView({ logs, onOpenFastTravel }) {
   // Tick `now` every 15s so "2m" ages forward without re-fetching anything.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -326,10 +322,10 @@ function TimelineView({ logs }) {
 
       <button
         type="button"
-        onClick={() => navigate('/cos')}
+        onClick={onOpenFastTravel}
         className="w-full font-pixel text-[8px] text-cyan-500/40 hover:text-cyan-400 tracking-wider py-1 transition-colors"
       >
-        OPEN CHIEF OF STAFF {'>'}
+        OPEN WORLD MAP {'>'}
       </button>
     </div>
   );
@@ -347,13 +343,13 @@ export const CITY_INTEL_TABS = [
 // Renders just the body for a given intel tab — reused by the desktop cockpit pane
 // and the compact/phone disclosure sheet so both show identical content. The parent
 // must be a bounded `flex flex-col` container (the lists are `flex-1`).
-export function OpenWorldIntelContent({ tab, items, eventLogs }) {
-  if (tab === 'timeline') return <TimelineView logs={eventLogs} />;
+export function OpenWorldIntelContent({ tab, items, eventLogs, onItemActivate, onOpenFastTravel }) {
+  if (tab === 'timeline') return <TimelineView logs={eventLogs} onOpenFastTravel={onOpenFastTravel} />;
   if (tab === 'activity') return <ActivityLogList logs={eventLogs} />;
-  return <AttentionList items={items} />;
+  return <AttentionList items={items} onItemActivate={onItemActivate} />;
 }
 
-export default function OpenWorldIntelPane({ apps, cosAgents, reviewCounts, instances, systemHealth, notificationCounts, eventLogs }) {
+export default function OpenWorldIntelPane({ apps, cosAgents, reviewCounts, instances, systemHealth, notificationCounts, eventLogs, onItemActivate, onOpenFastTravel }) {
   // The active tab is URL-addressable via `openWorldPane` (shared with the compact
   // layout), so a reload / back-forward restores it and a deep link opens it.
   // `vitals`/`map`/etc. aren't intel tabs, so anything outside the intel subset
@@ -464,7 +460,7 @@ export default function OpenWorldIntelPane({ apps, cosAgents, reviewCounts, inst
             tabIndex={0}
             className="flex-1 min-h-0 flex flex-col focus:outline-none focus-visible:ring-1 focus-visible:ring-cyan-400/60"
           >
-            <OpenWorldIntelContent tab={tab} items={items} eventLogs={eventLogs} />
+            <OpenWorldIntelContent tab={tab} items={items} eventLogs={eventLogs} onItemActivate={onItemActivate} onOpenFastTravel={onOpenFastTravel} />
           </div>
         )}
       </div>

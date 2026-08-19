@@ -10,8 +10,8 @@ import { computeMiniMap } from '../../utils/openWorldMiniMap';
 // matches its building's color exactly.
 //
 // Click-to-select reuses the existing building-click plumbing: `onSelectApp(app)` is the same
-// callback OpenWorldScene fires on a building click (OpenWorld navigates to /apps/:id). When no
-// callback is supplied the map is purely informational.
+// callback OpenWorldScene fires on a building click (OpenWorld focuses the building in-world).
+// When no callback is supplied the map is purely informational.
 //
 // Hidden on very small screens (per OpenWorldHud conventions — the right-side intel pane and
 // bottom agent bar already crowd a phone viewport). It's flow-positioned (no absolute) so it

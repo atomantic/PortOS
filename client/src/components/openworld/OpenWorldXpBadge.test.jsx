@@ -22,7 +22,7 @@ describe('OpenWorldXpBadge birth-date CTA (#2757)', () => {
     renderBadge({ level: null, ageYears: null, birthDateStatus: 'unset' });
     expect(screen.getByText('LV —')).toBeInTheDocument();
     expect(screen.getByText('SET BIRTH DATE')).toBeInTheDocument();
-    expect(screen.getByTitle('Set your birth date')).toBeInTheDocument();
+    expect(screen.getByTitle('Teleport to Goal Monuments')).toBeInTheDocument();
   });
 
   it('shows the FIX prompt (LV !) in the warning style for a present-but-unusable date', () => {

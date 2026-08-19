@@ -34,8 +34,8 @@ const _lookTarget = new THREE.Vector3();
 
 // Exploration-mode player rig. One mutable rig object is the single source of truth for
 // the player's pose; both camera modes (and the third-person avatar) read from it:
-//   - 'first' (V to toggle): the classic invisible first-person camera.
-//   - 'third' (default): a damped follow camera behind a visible cyber-runner, with
+//   - 'first' (default): the classic invisible first-person camera.
+//   - 'third' (V to toggle): a damped follow camera behind a visible cyber-runner, with
 //     building-aware boom shortening (openWorldPlayerRig.js owns all the math).
 // All original behavior is preserved: WASD/arrows, shift sprint, E/Q vertical, F interact,
 // pointer-lock mouselook, per-building cylinder collision below flyover height, world
@@ -50,7 +50,7 @@ export default function PlayerController({
   apps,
   active,
   transitioning = false,
-  cameraView = 'third',
+  cameraView = 'first',
   teleport = null,
   warpPads = [],
   onWarpPadInteract,

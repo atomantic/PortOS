@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router';
+import { Map as MapIcon } from 'lucide-react';
 import OpenWorldIntelPane from './OpenWorldIntelPane';
 import OpenWorldFocusPanel from './OpenWorldFocusPanel';
 import OpenWorldAgentBar from './OpenWorldAgentBar';
@@ -33,7 +34,7 @@ function ControlsHint({ visible }) {
     <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none animate-in fade-in duration-500">
       <div className="bg-black/85 border border-cyan-500/40 rounded-lg px-6 py-4 text-center">
         <div className="font-pixel text-[11px] text-cyan-400 tracking-wider mb-3" style={{ textShadow: '0 0 8px rgba(6,182,212,0.5)' }}>
-          EXPLORATION MODE
+          FIRST-PERSON EXPLORATION
         </div>
         <div className="grid grid-cols-3 gap-1 w-fit mx-auto mb-3">
           <div />
@@ -47,9 +48,9 @@ function ControlsHint({ visible }) {
           <div>MOUSE: LOOK AROUND (CLICK TO LOCK)</div>
           <div>WASD: MOVE · Q/E: DOWN/UP</div>
           <div>SHIFT: SPRINT</div>
-          <div>F: INTERACT WITH BUILDING</div>
-          <div>M: FAST TRAVEL</div>
-          <div>TAB: FLY OUT</div>
+          <div>F: FOCUS BUILDING / WARP PAD</div>
+          <div>M: WORLD MAP</div>
+          <div>TAB: ORBITAL OVERVIEW · V: THIRD PERSON</div>
         </div>
       </div>
     </div>
@@ -70,7 +71,7 @@ function Crosshair() {
   );
 }
 
-export default function OpenWorldHud({ cosStatus, cosAgents, agentMap, eventLogs, connected, apps, reviewCounts, instances, productivityData, systemHealth, notificationCounts, character, filter, onFilterChange, onJumpToFirst, matchCount, onToggleExploration, explorationMode, onSelectApp, onEnterPhotoMode, onEnterPlayback, focusedAppId, focusedApp, focusNotFound, focusAgents, onCloseFocus, onOpenApp, onOpenFastTravel, activeRegion }) {
+export default function OpenWorldHud({ cosStatus, cosAgents, agentMap, eventLogs, connected, apps, reviewCounts, instances, productivityData, systemHealth, notificationCounts, character, filter, onFilterChange, onJumpToFirst, matchCount, onToggleExploration, explorationMode, onSelectApp, onEnterPhotoMode, onEnterPlayback, focusedAppId, focusedApp, focusNotFound, focusAgents, onCloseFocus, onFocusInWorld, onOpenFastTravel, onOpenDestination, onAttentionItem, activeRegion }) {
   const isFocused = Boolean(focusedApp || focusNotFound);
   const navigate = useNavigate();
   const location = useLocation();
@@ -134,6 +135,7 @@ export default function OpenWorldHud({ cosStatus, cosAgents, agentMap, eventLogs
     productivityData,
     activeApps,
     totalApps,
+    onOpenDestination,
   };
 
   return (
@@ -221,7 +223,7 @@ export default function OpenWorldHud({ cosStatus, cosAgents, agentMap, eventLogs
               notFound={focusNotFound}
               agents={focusAgents}
               onClose={onCloseFocus}
-              onOpenApp={onOpenApp}
+              onFocusInWorld={onFocusInWorld}
               isDesktop
             />
           ) : (
@@ -233,6 +235,8 @@ export default function OpenWorldHud({ cosStatus, cosAgents, agentMap, eventLogs
               systemHealth={systemHealth}
               notificationCounts={notificationCounts}
               eventLogs={eventLogs}
+              onItemActivate={onAttentionItem}
+              onOpenFastTravel={onOpenFastTravel}
             />
           )}
 
@@ -240,7 +244,7 @@ export default function OpenWorldHud({ cosStatus, cosAgents, agentMap, eventLogs
           <OpenWorldAgentBar cosAgents={cosAgents} agentMap={agentMap} />
 
           {/* Bottom-right: character level / XP HUD badge (roadmap 2.11) */}
-          <OpenWorldXpBadge character={character} />
+          <OpenWorldXpBadge character={character} onOpenDestination={onOpenDestination} />
 
           {/* Bottom-left: mini-map + Settings gear + legend + corner decoration */}
           <div className="absolute bottom-16 left-3">
@@ -268,17 +272,20 @@ export default function OpenWorldHud({ cosStatus, cosAgents, agentMap, eventLogs
               </div>
             </div>
 
-            {/* Fast travel (M) — warp to any named region of the world */}
+            {/* World map (M) — warp to any named region without leaving the game */}
             {onOpenFastTravel && (
               <button
+                type="button"
                 onClick={onOpenFastTravel}
                 className="pointer-events-auto mb-2 relative bg-black/85 backdrop-blur-sm border border-cyan-500/30 rounded-lg px-3 py-2 hover:border-cyan-400/60 hover:bg-cyan-500/10 transition-all w-full"
-                title="Fast travel to a region (M)"
+                title="World map — teleport to a region (M)"
+                aria-label="World map — teleport to a region"
               >
                 <HudCorner position="tl" />
                 <HudCorner position="br" />
-                <div className="font-pixel text-[10px] text-cyan-400 tracking-wider truncate" style={{ textShadow: '0 0 6px rgba(6,182,212,0.4)' }}>
-                  [ FAST TRAVEL ]
+                <div className="flex items-center justify-center gap-2 font-pixel text-[10px] text-cyan-400 tracking-wider truncate" style={{ textShadow: '0 0 6px rgba(6,182,212,0.4)' }}>
+                  <MapIcon size={15} aria-hidden="true" />
+                  <span>[ WORLD MAP ]</span>
                 </div>
                 <div className="font-pixel text-[7px] text-cyan-500/40 tracking-wide mt-0.5 text-center truncate">
                   {activeRegion ? activeRegion.label.toUpperCase() : '(M)'}
@@ -387,8 +394,10 @@ export default function OpenWorldHud({ cosStatus, cosAgents, agentMap, eventLogs
           focusNotFound={focusNotFound}
           focusAgents={focusAgents}
           onCloseFocus={onCloseFocus}
-          onOpenApp={onOpenApp}
+          onFocusInWorld={onFocusInWorld}
           onOpenFastTravel={onOpenFastTravel}
+          onOpenDestination={onOpenDestination}
+          onAttentionItem={onAttentionItem}
         />
       )}
 

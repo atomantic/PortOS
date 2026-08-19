@@ -106,6 +106,16 @@ describe('OpenWorld — fast travel wiring', () => {
     expect(sceneProps.current.focusedRegion.anchor).toBeDefined();
   });
 
+  it('arms the first-person arrival point for a direct region deep link', () => {
+    renderAt('/openworld/region/memory');
+    expect(sceneProps.current.playerTeleport).toMatchObject({
+      x: expect.any(Number),
+      z: expect.any(Number),
+      regionId: 'memory',
+      token: 1,
+    });
+  });
+
   it('hands the scene a null region for an unknown id rather than crashing', () => {
     renderAt('/openworld/region/atlantis');
     expect(sceneProps.current.focusedRegion).toBeNull();
@@ -130,7 +140,7 @@ describe('OpenWorld — fast travel wiring', () => {
     renderAt('/openworld');
     act(() => { fireEvent.keyDown(window, { key: 'm' }); });
 
-    fireEvent.click(screen.getByLabelText('Travel to Memory Quarter'));
+    fireEvent.click(screen.getByLabelText('Teleport to Memory Quarter'));
 
     expect(screen.getByTestId('path')).toHaveTextContent('/openworld/region/memory');
     expect(sceneProps.current.focusedRegion.id).toBe('memory');
@@ -139,7 +149,7 @@ describe('OpenWorld — fast travel wiring', () => {
   it('opens fast travel from the HUD button too', () => {
     renderAt('/openworld');
     fireEvent.click(screen.getByText('hud-fast-travel'));
-    expect(screen.getByLabelText('Travel to Memory Quarter')).toBeInTheDocument();
+    expect(screen.getByLabelText('Teleport to Memory Quarter')).toBeInTheDocument();
   });
 
   it('closes fast travel with Escape', () => {
@@ -162,7 +172,7 @@ describe('OpenWorld — fast travel wiring', () => {
     // land at the region rather than the old spawn.
     renderAt('/openworld');
     act(() => { fireEvent.keyDown(window, { key: 'm' }); });
-    fireEvent.click(screen.getByLabelText('Travel to Memory Quarter'));
+    fireEvent.click(screen.getByLabelText('Teleport to Memory Quarter'));
 
     const teleport = sceneProps.current.playerTeleport;
     expect(teleport).toMatchObject({ x: expect.any(Number), z: expect.any(Number) });
@@ -173,7 +183,7 @@ describe('OpenWorld — fast travel wiring', () => {
     localStorage.setItem('portos-city-settings', JSON.stringify({ explorationMode: true }));
     renderAt('/openworld');
     act(() => { fireEvent.keyDown(window, { key: 'm' }); });
-    fireEvent.click(screen.getByLabelText('Travel to Memory Quarter'));
+    fireEvent.click(screen.getByLabelText('Teleport to Memory Quarter'));
 
     const teleport = sceneProps.current.playerTeleport;
     expect(teleport).toMatchObject({ x: expect.any(Number), z: expect.any(Number) });
@@ -184,11 +194,11 @@ describe('OpenWorld — fast travel wiring', () => {
     renderAt('/openworld');
 
     act(() => { fireEvent.keyDown(window, { key: 'm' }); });
-    fireEvent.click(screen.getByLabelText('Travel to Memory Quarter'));
+    fireEvent.click(screen.getByLabelText('Teleport to Memory Quarter'));
     expect(sceneProps.current.playerTeleport.token).toBe(1);
 
     act(() => { fireEvent.keyDown(window, { key: 'm' }); });
-    fireEvent.click(screen.getByLabelText('Travel to Memory Quarter'));
+    fireEvent.click(screen.getByLabelText('Teleport to Memory Quarter'));
     // Same destination, new warp — a plain {x,z} identity check would have swallowed this.
     expect(sceneProps.current.playerTeleport.token).toBe(2);
   });
@@ -211,11 +221,11 @@ describe('OpenWorld — fast travel wiring', () => {
     expect(screen.getByTestId('hud-region')).toHaveTextContent('data-harbor');
   });
 
-  it('opens the PortOS page a region stands for', () => {
+  it('keeps map interactions inside OpenWorld', () => {
     renderAt('/openworld/region/memory');
     act(() => { fireEvent.keyDown(window, { key: 'm' }); });
-    fireEvent.click(screen.getByTitle('Open /brain/inbox'));
-    expect(screen.getByTestId('path')).toHaveTextContent('/brain/inbox');
+    expect(screen.queryByTitle(/Open\s+\//)).not.toBeInTheDocument();
+    expect(screen.getByTestId('path')).toHaveTextContent('/openworld/region/memory');
   });
 
   it('returns to the overview from the panel', () => {

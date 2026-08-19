@@ -90,7 +90,7 @@ export default function OpenWorldScene({ apps, agentMap, onBuildingClick, onTogg
   // DoF preview). Null whenever DoF isn't mounted — capture then falls back to a plain render.
   const photoComposerRef = useRef(null);
 
-  const explorationMode = settings?.explorationMode || false;
+  const explorationMode = settings?.explorationMode ?? true;
   // Art direction gate, read off the palette every other themed surface already consumes
   // (Building, ProcessBuilding, OpenWorldLandscape) rather than re-resolving the style from
   // settings — one bit, one channel. The neon-night layers below (galaxy spheremap,
@@ -349,7 +349,7 @@ export default function OpenWorldScene({ apps, agentMap, onBuildingClick, onTogg
           apps={apps}
           active={explorationMode}
           transitioning={transitioning}
-          cameraView={settings?.cameraView ?? 'third'}
+          cameraView={settings?.cameraView ?? 'first'}
           teleport={playerTeleport}
           warpPads={warpRegions}
           onWarpPadInteract={onTravelToRegion}

@@ -39,11 +39,11 @@ describe('OpenWorldFocusPanel', () => {
     expect(screen.queryByText('Old done task')).toBeNull();
   });
 
-  it('fires onOpenApp with the app id from the explicit Open app action', () => {
-    const onOpenApp = vi.fn();
-    render(<OpenWorldFocusPanel app={app} agents={[]} onOpenApp={onOpenApp} />);
-    fireEvent.click(screen.getByTitle('Open the app detail page'));
-    expect(onOpenApp).toHaveBeenCalledWith('alpha');
+  it('fires onFocusInWorld with the app id from the explicit in-world action', () => {
+    const onFocusInWorld = vi.fn();
+    render(<OpenWorldFocusPanel app={app} agents={[]} onFocusInWorld={onFocusInWorld} />);
+    fireEvent.click(screen.getByTitle('Focus this building in the world'));
+    expect(onFocusInWorld).toHaveBeenCalledWith('alpha');
   });
 
   it('fires onClose from the close and back actions', () => {

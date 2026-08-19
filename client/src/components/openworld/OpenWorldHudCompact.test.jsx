@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import OpenWorldHudCompact from './OpenWorldHudCompact';
@@ -50,6 +50,8 @@ const baseProps = {
   onSelectApp: () => {},
   onEnterPhotoMode: () => {},
   onEnterPlayback: () => {},
+  onOpenFastTravel: () => {},
+  onOpenDestination: () => {},
 };
 
 const renderCompact = (search = '', props = {}) =>
@@ -77,6 +79,13 @@ describe('OpenWorldHudCompact', () => {
     expect(screen.getByTestId('loc').textContent).toContain('openWorldPane=attention');
     // The sheet header for the opened pane appears.
     expect(screen.getByText('ATTENTION')).toBeInTheDocument();
+  });
+
+  it('uses the map icon to open the in-world teleport map', () => {
+    const onOpenFastTravel = vi.fn();
+    renderCompact('', { onOpenFastTravel });
+    fireEvent.click(screen.getByLabelText('World map — teleport to a region'));
+    expect(onOpenFastTravel).toHaveBeenCalledTimes(1);
   });
 
   it('restores the open pane from the URL on load', () => {

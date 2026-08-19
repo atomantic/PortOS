@@ -5,10 +5,10 @@ import { listRegions, searchRegions } from '../../utils/openWorldRegions';
 import { WORLD } from '../../utils/openWorldPlan';
 import useOpenWorldViewport from '../../hooks/useOpenWorldViewport';
 
-// OpenWorld's fast-travel panel — the thing that makes this an open world rather than one
-// city you pan around. Every named region is a warp destination: pick one and the camera
-// (or, in exploration mode, the player) travels there, and each region carries a door into
-// the 2D PortOS page it visualizes.
+// OpenWorld's world map — the thing that makes this an open world rather than one city you pan
+// around. Every named region is a warp destination: pick one and the camera (or, in exploration
+// mode, the player) travels there. The region metadata describes the PortOS area represented by
+// the district; this panel never opens that area as a separate page.
 //
 // Selection is NOT held here. Clicking a region navigates to `/openworld/region/:regionId`
 // and the route param drives the camera — the same URL-is-the-source-of-truth rule building
@@ -33,7 +33,7 @@ const MAP_BOUNDS = {
 // disagree about where the bay starts.
 const GEOGRAPHY = projectGeography(MAP_BOUNDS, MINI_MAP_PADDING);
 
-export default function OpenWorldFastTravel({ open, onClose, onTravel, activeRegionId, onOpenPage, onLeaveRegion }) {
+export default function OpenWorldFastTravel({ open, onClose, onTravel, activeRegionId, onLeaveRegion }) {
   const [query, setQuery] = useState('');
   const inputRef = useRef(null);
   const { isCondensed } = useOpenWorldViewport();
@@ -75,11 +75,11 @@ export default function OpenWorldFastTravel({ open, onClose, onTravel, activeReg
       onClose={onClose}
       size="none"
       usePortal
-      ariaLabel="Fast travel"
+      ariaLabel="World map"
       panelClassName="w-full max-w-3xl max-h-[85vh] rounded-xl border port-media-overlay flex flex-col overflow-hidden"
     >
       <div className="flex items-center gap-3 px-4 py-3 border-b border-current/10">
-        <div className="font-pixel text-[12px] tracking-widest">FAST TRAVEL</div>
+        <div className="font-pixel text-[12px] tracking-widest">WORLD MAP</div>
         <input
           ref={inputRef}
           type="text"
@@ -135,7 +135,7 @@ export default function OpenWorldFastTravel({ open, onClose, onTravel, activeReg
                 key={region.id}
                 type="button"
                 title={region.label}
-                aria-label={`Travel to ${region.label}`}
+                aria-label={`Teleport to ${region.label}`}
                 onClick={() => travel(region)}
                 className={`absolute -translate-x-1/2 -translate-y-1/2 rounded-full border transition-all flex items-center justify-center ${
                   isActive
@@ -171,16 +171,6 @@ export default function OpenWorldFastTravel({ open, onClose, onTravel, activeReg
                   <div className="font-pixel text-[11px] tracking-wide truncate">{region.label}</div>
                   <div className="text-[11px] opacity-70 truncate">{region.blurb}</div>
                 </button>
-                {region.appPath && onOpenPage && (
-                  <button
-                    type="button"
-                    onClick={() => onOpenPage(region.appPath)}
-                    title={`Open ${region.appPath}`}
-                    className="port-media-overlay-item shrink-0 font-pixel text-[9px] px-2 py-2 rounded border border-current/20 tracking-wide"
-                  >
-                    OPEN
-                  </button>
-                )}
               </div>
             </li>
           ))}

@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router';
-import { Gauge, Bell, Clock, Activity, Map as MapIcon, Filter, Palette, Compass, Camera, History, Settings, Navigation, X } from 'lucide-react';
+import { Gauge, Bell, Clock, Activity, Map as MapIcon, Filter, Palette, Compass, Camera, History, Settings, X } from 'lucide-react';
 import useDrawerTab from '../../hooks/useDrawerTab';
 import { buildAttentionItems, OpenWorldIntelContent } from './OpenWorldIntelPane';
 import OpenWorldVitalsList from './OpenWorldVitalsList';
@@ -85,12 +85,14 @@ export default function OpenWorldHudCompact({
   onEnterPhotoMode,
   onEnterPlayback,
   onOpenFastTravel,
+  onOpenDestination,
+  onAttentionItem,
   focusedAppId,
   focusedApp,
   focusNotFound,
   focusAgents,
   onCloseFocus,
-  onOpenApp,
+  onFocusInWorld,
 }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -114,10 +116,10 @@ export default function OpenWorldHudCompact({
 
   const renderPaneBody = () => {
     if (CITY_INTEL_PANE_IDS.includes(activePane)) {
-      return <OpenWorldIntelContent tab={activePane} items={items} eventLogs={eventLogs} />;
+      return <OpenWorldIntelContent tab={activePane} items={items} eventLogs={eventLogs} onItemActivate={onAttentionItem} onOpenFastTravel={onOpenFastTravel} />;
     }
     if (activePane === 'vitals') {
-      return <div className="p-3"><OpenWorldVitalsList {...vitals} /></div>;
+      return <div className="p-3"><OpenWorldVitalsList {...vitals} onOpenDestination={onOpenDestination} /></div>;
     }
     if (activePane === 'map') {
       return hasApps
@@ -180,22 +182,22 @@ export default function OpenWorldHudCompact({
         {character?.level != null ? (
           <button
             type="button"
-            onClick={() => navigate('/character')}
-            aria-label={`Character sheet — level ${character.level}`}
-            title="Open character sheet"
+            onClick={() => onOpenDestination?.('artifacts')}
+            aria-label={`Teleport to Hall of Achievements — level ${character.level}`}
+            title="Teleport to Hall of Achievements"
             className="bg-black/85 backdrop-blur-sm border border-cyan-500/40 rounded-lg px-2.5 min-h-[44px] flex items-center font-pixel text-[11px] text-cyan-300 tracking-wider"
           >
             LV {character.level}
           </button>
         ) : birthCta ? (
           // Character loaded but no usable level (age-based, #2673). Prompt the user to set the
-          // birth date — or FIX it when present-but-unusable (#2757) — routing to the age editor
-          // where the field lives.
+          // birth date — or FIX it when present-but-unusable (#2757). The CTA points to a
+          // nearby in-world district so the game remains the active surface.
           <button
             type="button"
-            onClick={() => navigate(birthCta.path)}
-            aria-label={`${birthCta.title} to show your level`}
-            title={birthCta.title}
+            onClick={() => onOpenDestination?.('goals')}
+            aria-label={`${birthCta.title} — teleport to Goal Monuments`}
+            title="Teleport to Goal Monuments"
             // A present-but-unusable date (invalid/future/unreadable) renders in the warning color,
             // matching the CharacterSheet "fix" prompt and the changelog's promise (#2757).
             className={`bg-black/85 backdrop-blur-sm rounded-lg px-2.5 min-h-[44px] flex items-center font-pixel text-[11px] tracking-wider border ${
@@ -217,7 +219,7 @@ export default function OpenWorldHudCompact({
           notFound={focusNotFound}
           agents={focusAgents}
           onClose={onCloseFocus}
-          onOpenApp={onOpenApp}
+          onFocusInWorld={onFocusInWorld}
           isDesktop={false}
         />
       )}
@@ -258,7 +260,11 @@ export default function OpenWorldHudCompact({
           <DockButton icon={Bell} label="Attention" active={activePane === 'attention'} badge={items.length} badgeCritical={criticalCount > 0} onClick={() => togglePane('attention')} />
           <DockButton icon={Clock} label="Timeline" active={activePane === 'timeline'} onClick={() => togglePane('timeline')} />
           <DockButton icon={Activity} label="Activity log" active={activePane === 'activity'} onClick={() => togglePane('activity')} />
-          {hasApps && <DockButton icon={MapIcon} label="Map" active={activePane === 'map'} onClick={() => togglePane('map')} />}
+          {onOpenFastTravel ? (
+            <DockButton icon={MapIcon} label="World map — teleport to a region" onClick={onOpenFastTravel} />
+          ) : hasApps && (
+            <DockButton icon={MapIcon} label="Building map" active={activePane === 'map'} onClick={() => togglePane('map')} />
+          )}
           <DockButton icon={Filter} label="Filter apps" active={activePane === 'filter'} onClick={() => togglePane('filter')} />
           <DockButton icon={Palette} label="Legend" active={activePane === 'legend'} onClick={() => togglePane('legend')} />
 
@@ -270,7 +276,6 @@ export default function OpenWorldHudCompact({
             active={explorationMode}
             onClick={onToggleExploration}
           />
-          {onOpenFastTravel && <DockButton icon={Navigation} label="Fast travel" onClick={onOpenFastTravel} />}
           {onEnterPhotoMode && <DockButton icon={Camera} label="Photo mode" onClick={onEnterPhotoMode} />}
           {onEnterPlayback && <DockButton icon={History} label="History playback" onClick={onEnterPlayback} />}
           <DockButton icon={Settings} label="OpenWorld settings" active={onSettings} onClick={goSettings} />

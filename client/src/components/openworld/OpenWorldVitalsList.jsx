@@ -1,4 +1,3 @@
-import { useNavigate } from 'react-router';
 import { formatDurationMs, formatMonthDay } from '../../utils/formatters';
 import { StatButton, metricColor } from './openWorldHudBits';
 
@@ -22,9 +21,8 @@ export default function OpenWorldVitalsList({
   totalNodes,
   notificationCounts,
   productivityData,
+  onOpenDestination,
 }) {
-  const navigate = useNavigate();
-
   return (
     <div className="space-y-1.5">
       <div className="font-pixel text-[10px] text-cyan-500/70 tracking-wider mb-1">
@@ -41,10 +39,10 @@ export default function OpenWorldVitalsList({
 
       <button
         type="button"
-        onClick={() => navigate('/')}
+        onClick={() => onOpenDestination?.('wellness')}
         className="w-full flex items-center justify-between gap-3 -mx-1 px-1 py-1 min-h-[44px] sm:min-h-0 rounded hover:bg-cyan-500/5 transition-colors"
-        title={warnings?.length ? warnings.map(w => w.message).join(' · ') : 'System health — click to open dashboard'}
-        aria-label="System health — open dashboard"
+        title={warnings?.length ? warnings.map(w => w.message).join(' · ') : 'Teleport to Wellness District'}
+        aria-label="System health — teleport to Wellness District"
       >
         <span className="font-pixel text-[10px] text-gray-400 tracking-wide flex items-center gap-1.5">
           <span className={`w-1.5 h-1.5 rounded-full ${sentinel.dot} shadow-[0_0_4px_currentColor]`} />
@@ -68,16 +66,16 @@ export default function OpenWorldVitalsList({
         valueClass={activeAgentCount > 0 ? 'text-emerald-400' : 'text-gray-600'}
         value={`${activeAgentCount} ACTIVE`}
         prefix={activeAgentCount > 0 ? <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1 animate-pulse" /> : null}
-        onClick={() => navigate('/cos')}
-        title="Open Chief of Staff"
+        onClick={() => onOpenDestination?.('ai-core')}
+        title="Teleport to AI Core"
       />
 
       {stoppedApps > 0 && (
-        <StatButton label="STOPPED" valueClass="text-red-400" value={stoppedApps} onClick={() => navigate('/apps')} title="View apps" />
+        <StatButton label="STOPPED" valueClass="text-red-400" value={stoppedApps} onClick={() => onOpenDestination?.('downtown')} title="Teleport to Downtown" />
       )}
 
       {archivedApps > 0 && (
-        <StatButton label="ARCHIVED" valueClass="text-gray-500" value={archivedApps} onClick={() => navigate('/apps')} title="View apps" />
+        <StatButton label="ARCHIVED" valueClass="text-gray-500" value={archivedApps} onClick={() => onOpenDestination?.('downtown')} title="Teleport to Downtown" />
       )}
 
       {(pendingReview > 0 || alertCount > 0) && (
@@ -85,8 +83,8 @@ export default function OpenWorldVitalsList({
           label="REVIEW"
           valueClass={alertCount > 0 ? 'text-orange-400' : 'text-cyan-400'}
           value={`${pendingReview} PENDING${alertCount > 0 ? ` · ${alertCount} ALERT${alertCount === 1 ? '' : 'S'}` : ''}`}
-          onClick={() => navigate('/review')}
-          title="Open Review Hub"
+          onClick={() => onOpenDestination?.('task-queue')}
+          title="Teleport to Task Queue"
         />
       )}
 
@@ -94,16 +92,16 @@ export default function OpenWorldVitalsList({
         label="NODES"
         valueClass={onlinePeers > 0 ? 'text-violet-400' : 'text-gray-500'}
         value={`${onlinePeers}/${totalNodes} LINKED`}
-        onClick={() => navigate('/instances')}
-        title="Open Federation / Instances"
+        onClick={() => onOpenDestination?.('data-harbor')}
+        title="Teleport to Data Harbor"
       />
 
       {notificationCounts?.unread > 0 && (
-        <StatButton label="NOTIFS" valueClass="text-cyan-400" value={`${notificationCounts.unread} UNREAD`} onClick={() => navigate('/')} title="Open dashboard alerts" />
+        <StatButton label="NOTIFS" valueClass="text-cyan-400" value={`${notificationCounts.unread} UNREAD`} onClick={() => onOpenDestination?.('downtown')} title="Teleport to Downtown" />
       )}
 
       {productivityData?.todaySucceeded > 0 && (
-        <StatButton label="TASKS" valueClass="text-purple-400" value={`${productivityData.todaySucceeded} TODAY`} onClick={() => navigate('/cos')} title="Open Chief of Staff" />
+        <StatButton label="TASKS" valueClass="text-purple-400" value={`${productivityData.todaySucceeded} TODAY`} onClick={() => onOpenDestination?.('productivity')} title="Teleport to Productivity" />
       )}
 
       {productivityData?.currentDailyStreak > 0 && (
@@ -111,8 +109,8 @@ export default function OpenWorldVitalsList({
           label="STREAK"
           valueClass={productivityData.currentDailyStreak >= 3 ? 'text-orange-400' : 'text-gray-400'}
           value={`${productivityData.currentDailyStreak}d`}
-          onClick={() => navigate('/cos')}
-          title="Open Chief of Staff"
+          onClick={() => onOpenDestination?.('productivity')}
+          title="Teleport to Productivity"
         />
       )}
 

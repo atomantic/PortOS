@@ -3,8 +3,8 @@ import { useMemo } from 'react';
 // Building-detail panel shown while a borough is focused (issue #2593). It REPLACES the Intel pane
 // (desktop) / renders as a bottom sheet (compact) — never overlapping it — and surfaces the app's
 // live state from data OpenWorld already has: status, process summary + unhealthy processes, and the
-// agents assigned to the app. Two explicit actions: Open app (routes to /apps/:id) and Close
-// (returns to the /city overview). Also renders the stale/deleted-id "not found" fallback.
+// agents assigned to the app. Two explicit actions: focus the building in the world and Close
+// (returns to the OpenWorld overview). It never opens the represented PortOS page.
 
 const STATUS_STYLES = {
   online: { text: 'text-port-success', dot: 'bg-port-success', label: 'ONLINE' },
@@ -25,7 +25,7 @@ function StatBlock({ label, value, tone = 'text-cyan-300' }) {
   );
 }
 
-export default function OpenWorldFocusPanel({ app, notFound = false, agents = [], onClose, onOpenApp, isDesktop = true }) {
+export default function OpenWorldFocusPanel({ app, notFound = false, agents = [], onClose, onFocusInWorld, isDesktop = true }) {
   // Desktop: occupy the Intel-pane slot. Compact: a bottom sheet above the dock.
   const containerClass = isDesktop
     ? 'absolute top-16 right-3 bottom-20 w-72 pointer-events-auto'
@@ -158,11 +158,11 @@ export default function OpenWorldFocusPanel({ app, notFound = false, agents = []
         <div className="flex items-center gap-2 px-3 py-2 border-t border-cyan-500/20 shrink-0">
           <button
             type="button"
-            onClick={() => onOpenApp?.(app.id)}
+            onClick={() => onFocusInWorld?.(app.id)}
             className="flex-1 min-h-[44px] font-pixel text-[10px] text-cyan-400 tracking-wider border border-cyan-500/40 rounded px-2 py-2 hover:bg-cyan-500/10 transition-colors"
-            title="Open the app detail page"
+            title="Focus this building in the world"
           >
-            OPEN APP {'>'}
+            FOCUS BUILDING {'>'}
           </button>
           <button
             type="button"

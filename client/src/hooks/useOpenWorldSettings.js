@@ -55,8 +55,10 @@ const DEFAULT_SETTINGS = {
   // land on the new default — deliberate, this IS the world's new look — and the picker in
   // the Visual tab switches back with no migration.
   worldStyle: 'vibes',
-  explorationMode: false,
-  cameraView: 'third', // exploration camera: 'third' follows the cyber-runner; 'first' is classic FPS (V toggles)
+  // OpenWorld opens as a game, not an orbital dashboard. Users can still press Tab (or the
+  // HUD control) to pull back to the planning view, but a fresh visit starts in first person.
+  explorationMode: true,
+  cameraView: 'first', // exploration camera: 'first' is the default FPS view; 'third' is optional
   ...QUALITY_PRESETS.high,
 };
 

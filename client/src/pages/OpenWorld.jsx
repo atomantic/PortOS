@@ -176,27 +176,54 @@ function OpenWorldInner() {
 
   const keysRef = useKeyboardControls(handleToggleExploration);
 
-  // --- Fast travel ----------------------------------------------------------
-  // Warping navigates to `/openworld/region/:regionId`; the route param then drives the
-  // camera (OpenWorldFocusCamera) and, on foot, the player rig. Only the panel's open/closed
-  // state is local — the destination itself always lives in the URL.
+  // --- World map / fast travel ----------------------------------------------
+  // Warping stays under `/openworld/region/:regionId`; the route param drives the orbital
+  // camera and, on foot, the player rig. The destination is still shareable, but it never
+  // sends the player to the 2D page represented by that district.
   const [fastTravelOpen, setFastTravelOpen] = useState(false);
   // The walking player's arrival point for the latest warp, carrying a monotonic token so
   // PlayerController can tell "warp again to the same place" from a re-render with equal
-  // coordinates — which is why it isn't derived from the region id. Set on every warp, not
-  // only while exploring: PlayerController mounts only in exploration mode and applies the
-  // current token on mount, so arming it unconditionally also means warping in the orbital
-  // overview and THEN dropping in (Tab) lands you at the region you were looking at,
+  // coordinates — which is why it isn't derived from the region id. Direct region deep links
+  // seed the first arrival synchronously; later route changes arm the same handoff in an effect.
+  // Set on every warp, not only while exploring: PlayerController mounts only in exploration mode
+  // and applies the current token on mount, so arming it unconditionally also means warping in the
+  // orbital overview and THEN dropping in (Tab) lands you at the region you were looking at,
   // instead of back at your old spawn.
-  const [playerTeleport, setPlayerTeleport] = useState(null);
+  const [playerTeleport, setPlayerTeleport] = useState(() => {
+    if (!focusedRegion) return null;
+    const arrival = regionArrivalPoint(focusedRegion);
+    return arrival ? { ...arrival, regionId: focusedRegion.id, token: 1 } : null;
+  });
+  const lastRoutedRegionIdRef = useRef(regionId);
+
+  const armPlayerTeleport = useCallback((region, force = false) => {
+    const arrival = regionArrivalPoint(region);
+    if (!arrival) return;
+    setPlayerTeleport(prev => {
+      if (!force && prev?.regionId === region.id) return prev;
+      return { ...arrival, regionId: region.id, token: (prev?.token ?? 0) + 1 };
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!focusedRegion) {
+      lastRoutedRegionIdRef.current = regionId;
+      return;
+    }
+    if (lastRoutedRegionIdRef.current === regionId) return;
+    lastRoutedRegionIdRef.current = regionId;
+    armPlayerTeleport(focusedRegion);
+  }, [armPlayerTeleport, focusedRegion, regionId]);
 
   const handleTravelToRegion = useCallback((region) => {
     if (!region?.id) return;
     navigate(regionPath(region.id));
-    const arrival = regionArrivalPoint(region);
-    if (arrival) setPlayerTeleport(prev => ({ ...arrival, token: (prev?.token ?? 0) + 1 }));
+    // A map pick is an explicit warp even when the destination matches the current route (or
+    // stale route state), so always re-arm it; browser back/forward and direct deep links are
+    // armed by the effect above.
+    armPlayerTeleport(region, true);
     playSfx?.('dataPulse');
-  }, [navigate, playSfx]);
+  }, [armPlayerTeleport, navigate, playSfx]);
 
   const openFastTravel = useCallback(() => setFastTravelOpen(true), []);
 
@@ -383,25 +410,44 @@ function OpenWorldInner() {
   );
 
   // Selecting a building focuses it in-place (issue #2593) — the URL becomes /openworld/apps/:id and the
-  // camera flies to frame the borough WITHOUT leaving OpenWorld. In street-level exploration the old
-  // behavior stands (walking up to a building and interacting opens the app page).
+  // camera/HUD stay inside OpenWorld. This is also the interaction target for the first-person player:
+  // walking up to a building and pressing F opens its live status panel, never the 2D app page.
   const handleBuildingClick = useCallback((app) => {
     if (!app?.id) return;
-    if (settings?.explorationMode) navigate(`/apps/${app.id}`);
-    else navigate(`/openworld/apps/${app.id}`);
-  }, [navigate, settings?.explorationMode]);
+    navigate(`/openworld/apps/${app.id}`);
+  }, [navigate]);
 
   const handleJumpToFirst = useCallback(() => {
     const first = filterResult.matches[0];
     if (!first?.id) return;
-    // Mirror handleBuildingClick: focus in-place from the overview, open the app page in exploration.
-    if (settings?.explorationMode) navigate(`/apps/${first.id}`);
-    else navigate(`/openworld/apps/${first.id}`);
-  }, [filterResult.matches, navigate, settings?.explorationMode]);
+    handleBuildingClick(first);
+  }, [filterResult.matches, handleBuildingClick]);
 
-  // Close focus → back to the plain overview. Open app → the existing app detail page (explicit).
+  const handleTravelToRegionId = useCallback((id) => {
+    const region = getRegion(id);
+    if (region) handleTravelToRegion(region);
+  }, [handleTravelToRegion]);
+
+  // Every HUD attention item resolves to a building/region in the world. There is no external
+  // page fallback: an item without a more specific destination opens the world map instead.
+  const handleAttentionItem = useCallback((item) => {
+    if (item?.appId) {
+      handleBuildingClick({ id: item.appId });
+      return;
+    }
+    if (item?.regionId) {
+      handleTravelToRegionId(item.regionId);
+      return;
+    }
+    openFastTravel();
+  }, [handleBuildingClick, handleTravelToRegionId, openFastTravel]);
+
+  // Close focus → back to the plain in-world overview. The panel's primary action also
+  // re-focuses the building in OpenWorld rather than opening a separate PortOS page.
   const handleCloseFocus = useCallback(() => navigate('/openworld'), [navigate]);
-  const handleOpenApp = useCallback((id) => { if (id) navigate(`/apps/${id}`); }, [navigate]);
+  const handleFocusInWorld = useCallback((id) => {
+    if (id) handleBuildingClick({ id });
+  }, [handleBuildingClick]);
 
   // Headline numbers baked onto a captured city postcard. Derived from data the page already
   // has — no extra fetch. buildPostcardStats (in the overlay) omits absent/zero fields.
@@ -525,8 +571,10 @@ function OpenWorldInner() {
           focusNotFound={focusNotFound}
           focusAgents={focusAgents}
           onCloseFocus={handleCloseFocus}
-          onOpenApp={handleOpenApp}
+          onFocusInWorld={handleFocusInWorld}
           onOpenFastTravel={openFastTravel}
+          onOpenDestination={handleTravelToRegionId}
+          onAttentionItem={handleAttentionItem}
           activeRegion={focusedRegion}
         />
       )}
@@ -556,14 +604,13 @@ function OpenWorldInner() {
         onCycleSpeed={playback.cycleSpeed}
         onExit={playback.exit}
       />
-      {/* Fast travel (M). Hidden in photo + playback mode, which own the camera and would
+      {/* World map (M). Hidden in photo + playback mode, which own the camera and would
           fight a warp. Mounted OUTSIDE the HUD's pointer-events-none shell so it can take
           clicks, and above the CRT overlay so its panel isn't scanlined. */}
       <OpenWorldFastTravel
         open={fastTravelOpen && !photoMode && !playback.active}
         onClose={() => setFastTravelOpen(false)}
         onTravel={handleTravelToRegion}
-        onOpenPage={(path) => navigate(path)}
         activeRegionId={focusedRegion?.id || null}
         onLeaveRegion={() => navigate('/openworld')}
       />
