@@ -63,6 +63,8 @@ export default function OpenWorldScene({ apps, agentMap, onBuildingClick, onTogg
   const [proximityApp, setProximityApp] = useState(null);
   const [transitioning, setTransitioning] = useState(false);
   const [webglLost, setWebglLost] = useState(false);
+  const [canvasRevision, setCanvasRevision] = useState(0);
+  const [contextRecoveryMode, setContextRecoveryMode] = useState(false);
   const [startupSettled, setStartupSettled] = useState(false);
   // Visibility-aware frameloop (issue #2592): pause the live OpenWorld render loop while the
   // tab is hidden, resume (with a fresh warm-up) when it's shown again. `resumeToken`
@@ -80,11 +82,12 @@ export default function OpenWorldScene({ apps, agentMap, onBuildingClick, onTogg
     setDocumentHidden(hidden);
     if (!hidden) setResumeToken(t => t + 1);
   }, []));
-  const prevExplorationRef = useRef(false);
+  const prevExplorationRef = useRef(null);
   const orbitRef = useRef(null);
   const contextCleanupRef = useRef(null);
   const contextLostTimerRef = useRef(null);
   const activeCanvasRef = useRef(null);
+  const contextRecoveryRef = useRef(0);
   // Shared between OpenWorldDepthOfField (which owns the EffectComposer while photo mode is on) and
   // OpenWorldPhotoCamera (whose capture path renders through that composer so the postcard matches the
   // DoF preview). Null whenever DoF isn't mounted — capture then falls back to a plain render.
@@ -113,7 +116,7 @@ export default function OpenWorldScene({ apps, agentMap, onBuildingClick, onTogg
   }, [apps.length, photoMode, resumeToken]);
 
   const renderSettings = useMemo(() => {
-    if (photoMode || startupSettled) return settings;
+    if (!contextRecoveryMode && (photoMode || startupSettled)) return settings;
     // During the startup (and post-visibility-resume) warm-up, drop to the cheapest
     // render path. `effectiveTier: 'low'` also suppresses set dressing + the ray-marched
     // interior-window shader via openWorldShowDetail/openWorldShowInteriorWindows — previously the
@@ -122,10 +125,10 @@ export default function OpenWorldScene({ apps, agentMap, onBuildingClick, onTogg
       ...settings,
       effectiveTier: 'low',
       reflectionsEnabled: false,
-      particleDensity: Math.min(settings?.particleDensity ?? 1, STARTUP_PARTICLE_DENSITY),
+      particleDensity: Math.min(settings?.particleDensity ?? 1, contextRecoveryMode ? 0.25 : STARTUP_PARTICLE_DENSITY),
       dpr: [1, 1],
     };
-  }, [photoMode, settings, startupSettled]);
+  }, [contextRecoveryMode, photoMode, settings, startupSettled]);
 
   const clearContextTimer = useCallback(() => {
     if (contextLostTimerRef.current) {
@@ -150,8 +153,14 @@ export default function OpenWorldScene({ apps, agentMap, onBuildingClick, onTogg
     contextCleanupRef.current?.();
   }, [clearContextTimer]);
 
-  // Set transitioning=true when exploration mode toggles
+  // Set transitioning=true when exploration mode toggles. The initial mount is
+  // already in the requested mode; starting a transition there briefly hands the
+  // camera to the orbital framing before the player rig takes over.
   useEffect(() => {
+    if (prevExplorationRef.current === null) {
+      prevExplorationRef.current = explorationMode;
+      return;
+    }
     if (prevExplorationRef.current !== explorationMode) {
       setTransitioning(true);
       prevExplorationRef.current = explorationMode;
@@ -205,7 +214,18 @@ export default function OpenWorldScene({ apps, agentMap, onBuildingClick, onTogg
         if (activeCanvasRef.current !== canvas || !canvas.isConnected) return;
         const context = gl.getContext?.();
         if (context?.isContextLost?.()) {
-          setWebglLost(true);
+          // A transient mobile GPU reset can recover if the renderer is recreated
+          // at the cheap tier. Give it one bounded retry instead of leaving the
+          // player with an invisible Canvas forever. If the replacement also loses
+          // its context, keep the fallback visible and stop retrying.
+          if (contextRecoveryRef.current < 1) {
+            contextRecoveryRef.current += 1;
+            setContextRecoveryMode(true);
+            setWebglLost(false);
+            setCanvasRevision(revision => revision + 1);
+          } else {
+            setWebglLost(true);
+          }
         }
       }, 750);
     };
@@ -229,7 +249,7 @@ export default function OpenWorldScene({ apps, agentMap, onBuildingClick, onTogg
   return (
     <div className="absolute inset-0" style={{ background: fallbackBackground }}>
       <Canvas
-        key={photoMode ? 'photo' : 'live'}
+        key={`${photoMode ? 'photo' : 'live'}-${canvasRevision}`}
         camera={{ position: [0, 25, 45], fov: 50 }}
         dpr={dpr}
         shadows={false}
@@ -245,7 +265,7 @@ export default function OpenWorldScene({ apps, agentMap, onBuildingClick, onTogg
         // preserveDrawingBuffer is only needed while taking postcards. Keeping it
         // always-on makes Chromium's WebGL context much easier to lose in the live
         // dashboard, which reads as a blank white scene.
-        gl={{ antialias: true, preserveDrawingBuffer: Boolean(photoMode), alpha: false, powerPreference: 'high-performance' }}
+        gl={{ antialias: !contextRecoveryMode, preserveDrawingBuffer: Boolean(photoMode), alpha: false, powerPreference: contextRecoveryMode ? 'default' : 'high-performance' }}
       >
       {/* Re-provide the themed palette INSIDE the Canvas — react-three-fiber runs its
           own reconciler, so the provider in OpenWorldInner doesn't reach these scene

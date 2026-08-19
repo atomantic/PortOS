@@ -12,8 +12,12 @@ export default function CameraTransition({ active, targetPos, targetLookAt, onTr
   const progressRef = useRef(0);
   const startPosRef = useRef(new THREE.Vector3());
   const startTargetRef = useRef(new THREE.Vector3());
-  const wasActiveRef = useRef(false);
-  const completedRef = useRef(false);
+  // The player controller already owns the initial exploration camera. Starting a
+  // transition from the Canvas' orbital camera makes the world visibly sweep past
+  // the player on load, and on a phone that can leave the first frame aimed at the
+  // sky. Only animate when the user actually changes modes after mount.
+  const wasActiveRef = useRef(active);
+  const completedRef = useRef(true);
 
   useFrame((_, delta) => {
     // Detect transition start

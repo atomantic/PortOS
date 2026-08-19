@@ -20,6 +20,7 @@ const PROXIMITY_DISTANCE = 6;
 const MAX_CAMERA_HEIGHT = 160;
 const BUILDING_FLYOVER_HEIGHT = 12; // above this the player clears rooftops, so skip collision
 const AIRBORNE_HEIGHT = EYE_HEIGHT + 0.6; // above this the avatar reads as flying (hover state)
+const DEFAULT_SPAWN_Z = 36; // clear the central AI Core when an install has few/no app buildings
 const MOUSE_SENSITIVITY = 0.002;
 const PITCH_LIMIT = Math.PI / 2 - 0.02;
 
@@ -99,7 +100,11 @@ export default function PlayerController({
       positions?.forEach((pos) => {
         if (pos.z > maxZ) maxZ = pos.z;
       });
-      rig.position.set(0, EYE_HEIGHT, maxZ + 8);
+      // With an empty or single-app install, `maxZ + 8` places the rover inside the
+      // central plaza's sightline and the AI Core fills the entire mobile viewport.
+      // Keep the same north-facing drop-in, but start far enough back to reveal the
+      // playable streets and landmarks before the player drives toward downtown.
+      rig.position.set(0, EYE_HEIGHT, Math.max(maxZ + 8, DEFAULT_SPAWN_Z));
       rig.yaw = 0; // Forward = (0, 0, -1), facing toward city center
       rig.pitch = 0;
       rig.facing = 0;
