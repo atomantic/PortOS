@@ -114,6 +114,11 @@ function ensureCursorPosture(out) {
  *   - `--model <id>` — gated on `model` being set AND no user-baked model flag,
  *                      carrying `effort` as a folded model variant when pinned
  *                      (cursor has no `--effort` flag — see the file header).
+ *                      A user-baked `--model` therefore also owns the effort:
+ *                      unlike claude/codex, where the two are separate flags and
+ *                      a baked model still gets `--effort` appended, cursor has
+ *                      nowhere else to put the level, and rewriting the argv the
+ *                      user pinned by hand would be worse than honoring it.
  * The prompt itself is NOT added here — it rides on stdin at spawn time.
  * @param {string[]} baseArgs - user/legacy args (already model-flag-sanitized)
  * @param {string|null|undefined} model - defaultModel to pin, or null to omit

@@ -276,13 +276,20 @@ export default function ReviewerPicker({
     // something is stored, so a pin made before the model changed (or on another
     // machine) stays visible and clearable rather than vanishing behind the dash.
     if (!levels.length && !stored) return renderNoPinCell(`${subject}'s pinned model offers no reasoning-effort tiers`);
+    // Cursor's level is a PARAMETER OF ITS MODEL ID (`gpt-5[effort=max]`) — its
+    // CLI has no `--effort` flag — so a level with no Model pin has nothing to
+    // attach to and is dropped when the invocation is built. Say so here rather
+    // than let the row display a tier the review will not run at.
+    const cursorNeedsModel = normalizeReviewerValue(token) === 'cursor' && !models.get(token);
     return renderPinSelect({
       selectId: `${id}-effort-${token}`,
       value: stored,
       options: levels,
       onChange: (level) => setEffort(token, level),
       ariaLabel: `Reasoning effort for ${subject}`,
-      title: stored
+      title: cursorNeedsModel
+        ? `${subject} carries its reasoning effort inside the model id, so pin a Model too — a tier with no model is not passed to the CLI.`
+        : stored
         ? `${subject} reviews at ${stored} reasoning effort. Choose "default" to let it decide.`
         : `${subject} reasons at its own default. Pick a tier to make it think harder (slower, pricier) or lighter.`,
       staleSuffix: '(unsupported)',

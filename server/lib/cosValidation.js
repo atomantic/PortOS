@@ -734,7 +734,14 @@ export function reviewerEffortArgs(reviewer, effort) {
  * (`gpt-5` + `max` → `gpt-5[effort=max]`), matching slashdo's own fold, because
  * `cursor-agent` has no `--effort` flag. A cursor effort with no model pinned
  * returns `null` — there is nothing to attach the variant to, and emitting a
- * flag cursor rejects is worse than letting it use its default tier.
+ * flag cursor rejects is worse than letting it use its default tier. (The picker
+ * says so on the row, so the dropped tier isn't silent to the user.)
+ *
+ * The extend-an-existing-bracket and leave-an-`effort=`-alone arms of the fold
+ * can't be reached by a STORED reviewer pin today — `normalizeReviewerModel`
+ * rejects `[`/`]`/`,` because they're structural in the emitted `--review-with`
+ * token. They serve the paths that don't go through that gate: a provider's own
+ * `defaultModel` and hand-written task metadata.
  *
  * @param {string} reviewer - reviewer slug
  * @param {string|null|undefined} model - the pinned model id

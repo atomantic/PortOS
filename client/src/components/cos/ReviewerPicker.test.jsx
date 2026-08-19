@@ -436,6 +436,17 @@ describe('ReviewerPicker', () => {
         expect(screen.getByRole('option', { name: 'xhigh' })).toBeInTheDocument();
       });
 
+      it('tells a cursor row its tier needs a Model pin to reach the CLI', () => {
+        // cursor-agent has no --effort flag: the level rides inside the model id,
+        // so a tier with no model is dropped when the invocation is built.
+        const { rerender } = render(<ReviewerPicker reviewers={['cursor']} reviewerEfforts={{ cursor: 'max' }} onChange={() => {}} />);
+        expect(screen.getByLabelText('Reasoning effort for Cursor Agent'))
+          .toHaveAttribute('title', expect.stringContaining('pin a Model too'));
+        rerender(<ReviewerPicker reviewers={['cursor']} reviewerEfforts={{ cursor: 'max' }} reviewerModels={{ cursor: 'gpt-5' }} onChange={() => {}} />);
+        expect(screen.getByLabelText('Reasoning effort for Cursor Agent'))
+          .not.toHaveAttribute('title', expect.stringContaining('pin a Model too'));
+      });
+
       it('renders no Effort control for a reviewer with no effort knob', () => {
         render(<ReviewerPicker reviewers={['copilot', 'grok']} usernames={['flaky-bot']} onChange={() => {}} />);
         expect(screen.queryByLabelText('Reasoning effort for Copilot')).not.toBeInTheDocument();
