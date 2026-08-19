@@ -54,6 +54,8 @@ export default function PlayerController({
   teleport = null,
   warpPads = [],
   onWarpPadInteract,
+  mobileInputRef = null,
+  playerActionRef = null,
 }) {
   const { camera, gl } = useThree();
   const rigRef = useRef({
@@ -174,14 +176,21 @@ export default function PlayerController({
 
   // F interacts with the nearby building; V swaps first/third person; R returns to the
   // current drop-in point. (E is vertical-up in the free-look controls, so neither shadows movement.)
+  const interact = useCallback(() => {
+    if (!active) return;
+    if (proximityWarpPadRef.current) {
+      onWarpPadInteract?.(proximityWarpPadRef.current);
+    } else if (proximityAppRef.current) {
+      onBuildingClick?.(proximityAppRef.current);
+    }
+  }, [active, onBuildingClick, onWarpPadInteract]);
+
   useEffect(() => {
     if (!active) return;
     const handleKeyDown = (e) => {
       const key = e.key.toLowerCase();
-      if (key === 'f' && proximityWarpPadRef.current) {
-        onWarpPadInteract?.(proximityWarpPadRef.current);
-      } else if (key === 'f' && proximityAppRef.current) {
-        onBuildingClick?.(proximityAppRef.current);
+      if (key === 'f') {
+        interact();
       } else if (key === 'v') {
         onToggleCameraView?.();
       } else if (key === 'r' && lastSpawnRef.current) {
@@ -196,7 +205,15 @@ export default function PlayerController({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [active, onBuildingClick, onToggleCameraView]);
+  }, [active, interact, onToggleCameraView]);
+
+  useEffect(() => {
+    if (!playerActionRef) return undefined;
+    playerActionRef.current = { interact };
+    return () => {
+      if (playerActionRef.current?.interact === interact) playerActionRef.current = null;
+    };
+  }, [interact, playerActionRef]);
 
   // In exploration mode, Space is the jump key — capture it before it bubbles to the
   // global voice push-to-talk hotkey (VoiceWidget listens for the same key on `window`).
@@ -236,7 +253,17 @@ export default function PlayerController({
     const rig = rigRef.current;
 
     const keys = keysRef.current;
-    const isSprinting = keys.has('shift');
+    const mobileInput = mobileInputRef?.current;
+    if (mobileInput) {
+      const lookDeltaX = mobileInput.lookDeltaX || 0;
+      const lookDeltaY = mobileInput.lookDeltaY || 0;
+      mobileInput.lookDeltaX = 0;
+      mobileInput.lookDeltaY = 0;
+      rig.yaw -= lookDeltaX * MOUSE_SENSITIVITY;
+      rig.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, rig.pitch - lookDeltaY * MOUSE_SENSITIVITY));
+    }
+
+    const isSprinting = keys.has('shift') || Boolean(mobileInput?.boost);
     const speed = (isSprinting ? SPRINT_SPEED : WALK_SPEED) * delta;
     const verticalSpeed = (isSprinting ? SPRINT_SPEED : VERTICAL_SPEED) * delta;
 
@@ -244,10 +271,12 @@ export default function PlayerController({
     const forward = _forward.set(-Math.sin(rig.yaw), 0, -Math.cos(rig.yaw));
     const right = _right.set(-forward.z, 0, forward.x);
 
-    const forwardInput = (keys.has('w') || keys.has('arrowup') ? 1 : 0)
+    const keyboardForward = (keys.has('w') || keys.has('arrowup') ? 1 : 0)
       - (keys.has('s') || keys.has('arrowdown') ? 1 : 0);
-    const strafeInput = (keys.has('d') || keys.has('arrowright') ? 1 : 0)
+    const keyboardStrafe = (keys.has('d') || keys.has('arrowright') ? 1 : 0)
       - (keys.has('a') || keys.has('arrowleft') ? 1 : 0);
+    const forwardInput = THREE.MathUtils.clamp(keyboardForward - (mobileInput?.moveY || 0), -1, 1);
+    const strafeInput = THREE.MathUtils.clamp(keyboardStrafe + (mobileInput?.moveX || 0), -1, 1);
     const moveDir = _moveDir.set(0, 0, 0)
       .addScaledVector(forward, forwardInput)
       .addScaledVector(right, strafeInput);
@@ -267,7 +296,7 @@ export default function PlayerController({
       rig.vy = 0;
       dy = flyDir * verticalSpeed;
     } else {
-      if (keys.has(' ') && grounded && !rig.jumping) { rig.vy = JUMP_SPEED; rig.jumping = true; } // launch
+      if ((keys.has(' ') || mobileInput?.jump) && grounded && !rig.jumping) { rig.vy = JUMP_SPEED; rig.jumping = true; } // launch
       if (rig.jumping) {
         rig.vy += GRAVITY * delta; // gravity through the arc
         dy = rig.vy * delta;

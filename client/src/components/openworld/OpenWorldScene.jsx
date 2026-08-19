@@ -58,7 +58,7 @@ import { useVisibilityEvent } from '../../hooks/useVisibilityEvent';
 
 const STARTUP_PARTICLE_DENSITY = 0.49;
 
-export default function OpenWorldScene({ apps, agentMap, onBuildingClick, onToggleCameraView, cosStatus, reviewCounts, instances, backupStatus, cosTasks, healthMetrics, voiceState, aiActivity, productivityData, activityCalendar, goals, character, chronotype, memoryGraph, inboxDepth, jiraTickets, introspection, playback = false, photoMode, photoPresetId, photoDof, onPhotoCaptureReady, settings, playSfx, keysRef, dimmedAppIds, focusedAppId, focusedRegion, playerTeleport, hudSafe, background, palette, onTravelToRegion, autoQuality = false, autoStartTier = 'high', autoResetToken = 0, diagnosticsEnabled = false, onAutoTierChange, onAutoDiagnostics }) {
+export default function OpenWorldScene({ apps, agentMap, onBuildingClick, onToggleCameraView, cosStatus, reviewCounts, instances, backupStatus, cosTasks, healthMetrics, voiceState, aiActivity, productivityData, activityCalendar, goals, character, chronotype, memoryGraph, inboxDepth, jiraTickets, introspection, playback = false, photoMode, photoPresetId, photoDof, onPhotoCaptureReady, settings, playSfx, keysRef, mobileInputRef, playerActionRef, dimmedAppIds, focusedAppId, focusedRegion, playerTeleport, hudSafe, background, palette, onTravelToRegion, autoQuality = false, autoStartTier = 'high', autoResetToken = 0, diagnosticsEnabled = false, onAutoTierChange, onAutoDiagnostics }) {
   const [positions, setPositions] = useState(null);
   const [proximityApp, setProximityApp] = useState(null);
   const [transitioning, setTransitioning] = useState(false);
@@ -353,6 +353,8 @@ export default function OpenWorldScene({ apps, agentMap, onBuildingClick, onTogg
           teleport={playerTeleport}
           warpPads={warpRegions}
           onWarpPadInteract={onTravelToRegion}
+          mobileInputRef={mobileInputRef}
+          playerActionRef={playerActionRef}
         />
       )}
       {!explorationMode && !transitioning && !photoMode && (

@@ -10,6 +10,7 @@ import { mergeFrameIntoOpenWorldProps } from '../lib/openWorldPlaybackFrame';
 import * as api from '../services/api';
 import OpenWorldScene from '../components/openworld/OpenWorldScene';
 import OpenWorldHud from '../components/openworld/OpenWorldHud';
+import OpenWorldMobileControls from '../components/openworld/OpenWorldMobileControls';
 import OpenWorldScanlines from '../components/openworld/OpenWorldScanlines';
 import OpenWorldPhotoOverlay from '../components/openworld/OpenWorldPhotoOverlay';
 import OpenWorldPlaybackOverlay from '../components/openworld/OpenWorldPlaybackOverlay';
@@ -175,6 +176,15 @@ function OpenWorldInner() {
   }, [updateSetting, settings?.cameraView]);
 
   const keysRef = useKeyboardControls(handleToggleExploration);
+  const mobileInputRef = useRef({
+    moveX: 0,
+    moveY: 0,
+    lookDeltaX: 0,
+    lookDeltaY: 0,
+    boost: false,
+    jump: false,
+  });
+  const playerActionRef = useRef(null);
 
   // --- World map / fast travel ----------------------------------------------
   // Warping stays under `/openworld/region/:regionId`; the route param drives the orbital
@@ -528,6 +538,8 @@ function OpenWorldInner() {
         settings={sceneSettings}
         playSfx={playSfx}
         keysRef={keysRef}
+        mobileInputRef={mobileInputRef}
+        playerActionRef={playerActionRef}
         dimmedAppIds={filterResult.dimmed}
         autoQuality={qualityMode === 'auto'}
         autoStartTier="high"
@@ -576,6 +588,14 @@ function OpenWorldInner() {
           onOpenDestination={handleTravelToRegionId}
           onAttentionItem={handleAttentionItem}
           activeRegion={focusedRegion}
+        />
+      )}
+      {!photoMode && !playback.active && !isDesktop && settings?.explorationMode && !showSettings && !fastTravelOpen && (
+        <OpenWorldMobileControls
+          mobileInputRef={mobileInputRef}
+          playerActionRef={playerActionRef}
+          onToggleCameraView={handleToggleCameraView}
+          onToggleExploration={handleToggleExploration}
         />
       )}
       <OpenWorldPhotoOverlay

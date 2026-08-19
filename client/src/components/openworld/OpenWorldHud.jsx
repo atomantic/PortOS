@@ -14,7 +14,7 @@ import { formatClockTime } from '../../utils/formatters';
 
 // The first drop-in hint is intentionally a small invitation, not a manual. The full
 // control reference remains discoverable from the settings drawer and keyboard behavior.
-function ControlsHint({ visible }) {
+function ControlsHint({ visible, isDesktop }) {
   const [show, setShow] = useState(false);
   const hasShownRef = useRef(false);
 
@@ -28,7 +28,7 @@ function ControlsHint({ visible }) {
     if (!visible) setShow(false);
   }, [visible]);
 
-  if (!show) return null;
+  if (!show || !isDesktop) return null;
 
   return (
     <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none animate-in fade-in duration-500">
@@ -276,7 +276,7 @@ export default function OpenWorldHud({ cosStatus, cosAgents, agentMap, eventLogs
       )}
 
       {explorationMode && <Crosshair />}
-      <ControlsHint visible={explorationMode} />
+      <ControlsHint visible={explorationMode} isDesktop={isDesktop} />
     </div>
   );
 }

@@ -1279,6 +1279,173 @@ html[data-port-theme] .openworld-themed [class~="hover:bg-cyan-500/5"]:hover { b
   .openworld-hud-action { min-height: 2.75rem; min-width: 2.75rem; }
 }
 
+/* === OpenWorld mobile game controls ===
+   The compact HUD owns information and navigation panels. These controls own the
+   game loop, so a phone can drive, look, jump, interact, and exit without a keyboard. */
+.openworld-mobile-controls {
+  isolation: isolate;
+  user-select: none;
+}
+
+.openworld-mobile-look-zone {
+  position: absolute;
+  right: 0.4rem;
+  bottom: calc(6.3rem + env(safe-area-inset-bottom));
+  width: 48%;
+  height: 46%;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.openworld-mobile-look-hint {
+  position: absolute;
+  top: 50%;
+  right: 1.25rem;
+  color: var(--ow-muted);
+  font-family: var(--font-pixel, monospace);
+  font-size: 0.5rem;
+  letter-spacing: 0.16em;
+  opacity: 0;
+  transform: translateY(-50%);
+  transition: opacity 160ms ease;
+}
+
+.openworld-mobile-look-zone:active .openworld-mobile-look-hint,
+.openworld-mobile-look-zone:focus-visible .openworld-mobile-look-hint {
+  opacity: 0.7;
+}
+
+.openworld-mobile-joystick {
+  position: absolute;
+  left: 1rem;
+  bottom: calc(5.8rem + env(safe-area-inset-bottom));
+  width: 7rem;
+  height: 7rem;
+  border: 1px solid rgb(var(--port-accent) / 0.34);
+  border-radius: 50%;
+  background: radial-gradient(circle, rgb(var(--port-accent) / 0.14), rgb(var(--port-bg) / 0.42));
+  box-shadow: 0 12px 30px rgb(0 0 0 / 0.2), inset 0 1px 0 rgb(255 255 255 / 0.08);
+  backdrop-filter: blur(12px) saturate(1.08);
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.openworld-mobile-joystick::before,
+.openworld-mobile-joystick::after {
+  position: absolute;
+  content: '';
+  background: rgb(var(--port-accent) / 0.16);
+}
+
+.openworld-mobile-joystick::before {
+  top: 50%;
+  left: 1rem;
+  right: 1rem;
+  height: 1px;
+}
+
+.openworld-mobile-joystick::after {
+  top: 1rem;
+  bottom: 1rem;
+  left: 50%;
+  width: 1px;
+}
+
+.openworld-mobile-joystick-knob {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 3rem;
+  height: 3rem;
+  border: 1px solid rgb(var(--port-accent) / 0.6);
+  border-radius: 50%;
+  background: linear-gradient(145deg, rgb(var(--port-accent) / 0.32), rgb(var(--port-bg) / 0.62));
+  box-shadow: 0 0 18px rgb(var(--port-accent) / 0.16), inset 0 1px 0 rgb(255 255 255 / 0.12);
+  transition: transform 80ms ease-out;
+  z-index: 1;
+}
+
+.openworld-mobile-joystick-label {
+  position: absolute;
+  right: 0;
+  bottom: 0.95rem;
+  left: 0;
+  color: var(--ow-muted);
+  font-family: var(--font-pixel, monospace);
+  font-size: 0.48rem;
+  letter-spacing: 0.16em;
+  text-align: center;
+  pointer-events: none;
+}
+
+.openworld-mobile-actions {
+  position: absolute;
+  right: 0.5rem;
+  bottom: calc(5.8rem + env(safe-area-inset-bottom));
+  display: flex;
+  align-items: flex-end;
+  gap: 0.2rem;
+  max-width: calc(100vw - 8.75rem);
+  overflow: visible;
+  padding: 0.2rem;
+  scrollbar-width: none;
+}
+
+.openworld-mobile-actions::-webkit-scrollbar {
+  display: none;
+}
+
+.openworld-mobile-action {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 2.65rem;
+  height: 3.05rem;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 0.15rem;
+  border: 1px solid rgb(var(--port-accent) / 0.38);
+  border-radius: 1rem;
+  background: var(--ow-panel-soft);
+  color: var(--ow-ink);
+  font-family: var(--font-pixel, monospace);
+  font-size: 0.46rem;
+  letter-spacing: 0.1em;
+  line-height: 1;
+  box-shadow: 0 12px 28px rgb(0 0 0 / 0.18), inset 0 1px 0 rgb(255 255 255 / 0.08);
+  backdrop-filter: blur(16px) saturate(1.08);
+  touch-action: none;
+}
+
+.openworld-mobile-action:active,
+.openworld-mobile-action:focus-visible {
+  border-color: rgb(var(--port-accent) / 0.78);
+  background: rgb(var(--port-accent) / 0.2);
+  color: var(--ow-accent);
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.openworld-mobile-action small {
+  color: var(--ow-muted);
+  font-size: 0.4rem;
+  letter-spacing: 0.08em;
+}
+
+.openworld-mobile-action--wide {
+  width: 3.4rem;
+  border-color: rgb(var(--port-accent) / 0.54);
+  background: linear-gradient(145deg, rgb(var(--port-accent) / 0.2), var(--ow-panel-soft));
+}
+
+.openworld-mobile-action--exit {
+  color: var(--ow-muted);
+}
+
+@media (min-width: 768px) {
+  .openworld-mobile-controls { display: none; }
+}
+
 /* === Lumen Glass Day === */
 /* Same card set as the base elevation rule above — every fill opacity, not just
    `/50` — so this theme's softened border lands on all of its cards. */
