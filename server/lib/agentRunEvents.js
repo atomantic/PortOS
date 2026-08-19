@@ -125,7 +125,10 @@ const isDroppedKey = (key) => DROPPED_KEY_PATTERNS.some((re) => re.test(key));
  */
 export function scrubHomePath(value) {
   const home = homedir();
-  if (typeof value !== 'string' || !home) return value;
+  // A root-user container reports `/` as the home directory. Substituting on
+  // that would rewrite every separator in every path (`/var/log` → `~var~log`),
+  // destroying the diagnostic to protect a username that isn't in the string.
+  if (typeof value !== 'string' || !home || home === '/' || home === '\\') return value;
   return value.split(home).join('~');
 }
 

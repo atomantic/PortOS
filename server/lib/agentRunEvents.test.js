@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { homedir } from 'os';
 import {
   AGENT_RUN_EVENT_KINDS,
@@ -135,6 +135,18 @@ describe('redactRunEventData — privacy', () => {
     const home = homedir();
     expect(scrubHomePath(`from ${home}/a to ${home}/b`)).toBe('from ~/a to ~/b');
     expect(scrubHomePath(42)).toBe(42);
+  });
+
+  it('scrubHomePath leaves paths alone when home is the filesystem root', async () => {
+    // A root-user container reports `/`. Substituting on it would rewrite every
+    // separator (`/var/log` → `~var~log`), destroying the diagnostic to protect
+    // a username that is not in the string.
+    vi.resetModules();
+    vi.doMock('os', async (importOriginal) => ({ ...(await importOriginal()), homedir: () => '/' }));
+    const { scrubHomePath: rootScrub } = await import('./agentRunEvents.js');
+    expect(rootScrub('/var/log/example.log')).toBe('/var/log/example.log');
+    vi.doUnmock('os');
+    vi.resetModules();
   });
 
   it('redacts sensitive env values via the shared secret filter', () => {
