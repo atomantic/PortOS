@@ -1,19 +1,19 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router';
-import { Map as MapIcon } from 'lucide-react';
+import { Camera, Compass, History, Map as MapIcon, Settings } from 'lucide-react';
 import OpenWorldIntelPane from './OpenWorldIntelPane';
 import OpenWorldFocusPanel from './OpenWorldFocusPanel';
 import OpenWorldAgentBar from './OpenWorldAgentBar';
 import OpenWorldFilterBar from './OpenWorldFilterBar';
 import OpenWorldXpBadge from './OpenWorldXpBadge';
 import OpenWorldMiniMap from './OpenWorldMiniMap';
-import OpenWorldVitalsList from './OpenWorldVitalsList';
 import OpenWorldHudCompact from './OpenWorldHudCompact';
-import { HudCorner, HealthBar, getHealthSentinel } from './openWorldHudBits';
+import { HealthBar, getHealthSentinel } from './openWorldHudBits';
 import useOpenWorldViewport from '../../hooks/useOpenWorldViewport';
 import { formatClockTime } from '../../utils/formatters';
 
-// WASD controls hint shown briefly on first exploration entry
+// The first drop-in hint is intentionally a small invitation, not a manual. The full
+// control reference remains discoverable from the settings drawer and keyboard behavior.
 function ControlsHint({ visible }) {
   const [show, setShow] = useState(false);
   const hasShownRef = useRef(false);
@@ -22,7 +22,7 @@ function ControlsHint({ visible }) {
     if (visible && !hasShownRef.current) {
       hasShownRef.current = true;
       setShow(true);
-      const timer = setTimeout(() => setShow(false), 5000);
+      const timer = setTimeout(() => setShow(false), 4500);
       return () => clearTimeout(timer);
     }
     if (!visible) setShow(false);
@@ -31,26 +31,18 @@ function ControlsHint({ visible }) {
   if (!show) return null;
 
   return (
-    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none animate-in fade-in duration-500">
-      <div className="bg-black/85 border border-cyan-500/40 rounded-lg px-6 py-4 text-center">
-        <div className="font-pixel text-[11px] text-cyan-400 tracking-wider mb-3" style={{ textShadow: '0 0 8px rgba(6,182,212,0.5)' }}>
-          FIRST-PERSON EXPLORATION
+    <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none animate-in fade-in duration-500">
+      <div className="openworld-hud-panel px-5 py-4 text-center">
+        <div className="openworld-hud-eyebrow mb-3">FREE ROAM</div>
+        <div className="mb-3 flex items-center justify-center gap-1.5">
+          {['W', 'A', 'S', 'D'].map((key) => (
+            <span key={key} className="flex h-7 w-7 items-center justify-center rounded-lg border border-[rgb(var(--port-accent)/.28)] bg-[rgb(var(--port-accent)/.08)] font-pixel text-[10px] text-[rgb(var(--port-text))]">
+              {key}
+            </span>
+          ))}
         </div>
-        <div className="grid grid-cols-3 gap-1 w-fit mx-auto mb-3">
-          <div />
-          <div className="font-pixel text-[10px] text-gray-300 bg-gray-800/60 border border-gray-600/40 rounded px-2 py-1 text-center">W</div>
-          <div />
-          <div className="font-pixel text-[10px] text-gray-300 bg-gray-800/60 border border-gray-600/40 rounded px-2 py-1 text-center">A</div>
-          <div className="font-pixel text-[10px] text-gray-300 bg-gray-800/60 border border-gray-600/40 rounded px-2 py-1 text-center">S</div>
-          <div className="font-pixel text-[10px] text-gray-300 bg-gray-800/60 border border-gray-600/40 rounded px-2 py-1 text-center">D</div>
-        </div>
-        <div className="font-pixel text-[8px] text-gray-500 tracking-wide space-y-1">
-          <div>MOUSE: LOOK AROUND (CLICK TO LOCK)</div>
-          <div>WASD: MOVE · Q/E: DOWN/UP</div>
-          <div>SHIFT: SPRINT</div>
-          <div>F: FOCUS BUILDING / WARP PAD</div>
-          <div>M: WORLD MAP</div>
-          <div>TAB: ORBITAL OVERVIEW · V: THIRD PERSON</div>
+        <div className="font-pixel text-[8px] tracking-wide text-[rgb(var(--port-text-muted))]">
+          WASD DRIVE <span className="mx-1 opacity-50">·</span> SHIFT BOOST <span className="mx-1 opacity-50">·</span> SPACE JUMP <span className="mx-1 opacity-50">·</span> M MAP
         </div>
       </div>
     </div>
@@ -59,15 +51,26 @@ function ControlsHint({ visible }) {
 
 function Crosshair() {
   return (
-    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none">
-      <div className="relative w-6 h-6">
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-px h-2 bg-cyan-400/60" />
-        <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-px h-2 bg-cyan-400/60" />
-        <div className="absolute left-0 top-1/2 -translate-y-1/2 w-2 h-px bg-cyan-400/60" />
-        <div className="absolute right-0 top-1/2 -translate-y-1/2 w-2 h-px bg-cyan-400/60" />
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-1 h-1 rounded-full bg-cyan-400/40" />
-      </div>
+    <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none">
+      <div className="openworld-hud-crosshair" />
     </div>
+  );
+}
+
+function HudAction({ icon: Icon, label, hint, active, primary = false, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      aria-pressed={active === undefined ? undefined : active}
+      className={`openworld-hud-action ${primary ? 'openworld-hud-action--primary' : ''}`}
+    >
+      <Icon size={16} strokeWidth={1.8} aria-hidden="true" />
+      <span className="openworld-hud-action-copy">{label}</span>
+      {hint && <span className="openworld-hud-action-hint">{hint}</span>}
+    </button>
   );
 }
 
@@ -78,6 +81,7 @@ export default function OpenWorldHud({ cosStatus, cosAgents, agentMap, eventLogs
   const { isDesktop } = useOpenWorldViewport();
   const [time, setTime] = useState(new Date());
   const [uptimeSeconds, setUptimeSeconds] = useState(0);
+
   useEffect(() => {
     const interval = setInterval(() => {
       setTime(new Date());
@@ -115,8 +119,6 @@ export default function OpenWorldHud({ cosStatus, cosAgents, agentMap, eventLogs
     a.status === 'running' || a.state === 'coding' || a.state === 'thinking' || a.state === 'investigating'
   ).length;
 
-  // The shared vitals payload — backs both the desktop cockpit's vitals panel and
-  // the compact/phone `vitals` disclosure surface (via <OpenWorldVitalsList>).
   const vitals = {
     uptimeSeconds,
     sentinel,
@@ -139,49 +141,31 @@ export default function OpenWorldHud({ cosStatus, cosAgents, agentMap, eventLogs
   };
 
   return (
-    // z-20 keeps the HUD above the OpenWorldScanlines CRT overlay (z-10) so the vignette
-    // + scanline-multiply + chromatic-aberration glow stay on the 3D scene and don't
-    // haze the (now theme-colored) HUD panels.
-    <div className="absolute inset-0 pointer-events-none overflow-hidden z-20">
+    <div className="absolute inset-0 z-20 pointer-events-none openworld-hud-shell overflow-hidden">
       {isDesktop ? (
         <>
-          {/* Top-left: Clock + system status + vitals */}
-          <div className="absolute top-3 left-3 pointer-events-auto">
-            <div className="relative bg-black/85 backdrop-blur-sm border border-cyan-500/40 rounded-lg px-4 py-3 overflow-hidden">
-              <HudCorner position="tl" />
-              <HudCorner position="tr" />
-              <HudCorner position="bl" />
-              <HudCorner position="br" />
-
-              <div className="font-pixel text-cyan-400 text-xl tracking-wider" style={{ textShadow: '0 0 10px rgba(6,182,212,0.6)' }}>
-                {formatClockTime(time)}
+          <div className="absolute left-4 top-4 pointer-events-auto">
+            <div className="openworld-hud-panel w-[min(17rem,calc(100vw-2rem))] px-4 py-3.5">
+              <div className="flex items-center justify-between gap-4">
+                <span className="openworld-hud-eyebrow">OpenWorld / free roam</span>
+                <span className={`h-2.5 w-2.5 rounded-full ${sentinel.dot}`} title={sentinel.label} aria-label={`World health ${sentinel.label}`} />
               </div>
-              <div className="font-pixel text-[11px] text-cyan-500 tracking-wide mt-0.5">
-                {activeApps}/{totalApps} SYSTEMS ONLINE
+              <div className="mt-2 flex items-end justify-between gap-4">
+                <span className="font-pixel text-2xl tracking-[0.12em] text-[rgb(var(--port-text))]">{formatClockTime(time, { seconds: false })}</span>
+                <span className="font-pixel text-[9px] tracking-[0.12em] text-[rgb(var(--port-accent))]">{activeApps}/{totalApps} ACTIVE</span>
               </div>
-
-              {/* System health bar */}
               <div className="mt-2">
-                <HealthBar value={activeApps} max={totalApps} color="#06b6d4" />
+                <HealthBar value={activeApps} max={totalApps} color="rgb(var(--port-accent))" />
               </div>
-            </div>
-
-            {/* System Vitals panel */}
-            <div className="relative mt-2 bg-black/85 backdrop-blur-sm border border-cyan-500/30 rounded-lg px-3 py-2.5 overflow-hidden">
-              <HudCorner position="tl" />
-              <HudCorner position="tr" />
-              <HudCorner position="bl" />
-              <HudCorner position="br" />
-
-              {/* Animated scan line (CSS-only, no React re-renders) */}
-              <div className="absolute left-0 right-0 h-px bg-cyan-400/15 pointer-events-none animate-scanline" />
-
-              <OpenWorldVitalsList {...vitals} />
+              <div className="mt-2 flex items-center justify-between gap-3 font-pixel text-[8px] tracking-[0.12em] text-[rgb(var(--port-text-muted))]">
+                <span className="truncate">{activeRegion?.label || 'DOWNTOWN'}</span>
+                <span className={sentinel.text}>{sentinel.label}</span>
+              </div>
             </div>
           </div>
 
           {filter && onFilterChange && (
-            <div className="absolute top-3 left-1/2 -translate-x-1/2">
+            <div className="absolute left-1/2 top-4 -translate-x-1/2">
               <OpenWorldFilterBar
                 filter={filter}
                 onChange={onFilterChange}
@@ -191,32 +175,22 @@ export default function OpenWorldHud({ cosStatus, cosAgents, agentMap, eventLogs
             </div>
           )}
 
-          {/* Top-right: Connection + CoS status */}
-          <div className="absolute top-3 right-3 pointer-events-auto">
-            <div className="relative bg-black/85 backdrop-blur-sm border border-cyan-500/40 rounded-lg px-4 py-2.5 flex items-center gap-4">
-              <HudCorner position="tl" />
-              <HudCorner position="tr" />
-              <HudCorner position="bl" />
-              <HudCorner position="br" />
-
+          <div className="absolute right-4 top-4 pointer-events-auto">
+            <div className="openworld-hud-panel openworld-hud-panel--quiet flex items-center gap-3 px-3.5 py-2.5">
               <div className="flex items-center gap-2">
-                <span className={`w-2.5 h-2.5 rounded-full ${connected ? 'bg-port-success shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-port-error shadow-[0_0_8px_rgba(239,68,68,0.6)] animate-pulse'}`} />
-                <span className={`font-pixel text-[11px] tracking-wide ${connected ? 'text-gray-300' : 'text-port-error'}`}>
-                  {connected ? 'LINK' : 'OFFLINE'}
+                <span className={`h-2 w-2 rounded-full ${connected ? 'bg-port-success' : 'bg-port-error animate-pulse'}`} />
+                <span className={`font-pixel text-[9px] tracking-[0.12em] ${connected ? 'text-[rgb(var(--port-text-muted))]' : 'text-port-error'}`}>
+                  {connected ? 'SYNCED' : 'OFFLINE'}
                 </span>
               </div>
-              <div className="w-px h-5 bg-cyan-500/25" />
+              <span className="h-4 w-px bg-[rgb(var(--port-accent)/.22)]" />
               <div className="flex items-center gap-2">
-                <span className={`w-2.5 h-2.5 rounded-full ${cosStatus?.running ? 'bg-cyan-400 animate-pulse shadow-[0_0_8px_rgba(6,182,212,0.6)]' : 'bg-gray-600'}`} />
-                <span className={`font-pixel text-[11px] tracking-wide ${cosStatus?.running ? 'text-cyan-400' : 'text-gray-500'}`}>
-                  CoS {cosStatus?.running ? 'RUN' : 'IDLE'}
-                </span>
+                <span className={`h-2 w-2 rounded-full ${cosStatus?.running ? 'bg-[rgb(var(--port-accent))] animate-pulse' : 'bg-[rgb(var(--port-text-muted)/.45)]'}`} />
+                <span className="font-pixel text-[9px] tracking-[0.12em] text-[rgb(var(--port-text-muted))]">CoS {cosStatus?.running ? 'RUN' : 'IDLE'}</span>
               </div>
             </div>
           </div>
 
-          {/* Right side: focus detail panel while a borough is focused (issue #2593),
-              otherwise the Intel pane. The focus panel REPLACES the intel pane — never overlaps. */}
           {isFocused ? (
             <OpenWorldFocusPanel
               app={focusedApp}
@@ -240,129 +214,29 @@ export default function OpenWorldHud({ cosStatus, cosAgents, agentMap, eventLogs
             />
           )}
 
-          {/* Bottom: Agent status bar */}
           <OpenWorldAgentBar cosAgents={cosAgents} agentMap={agentMap} />
-
-          {/* Bottom-right: character level / XP HUD badge (roadmap 2.11) */}
           <OpenWorldXpBadge character={character} onOpenDestination={onOpenDestination} />
 
-          {/* Bottom-left: mini-map + Settings gear + legend + corner decoration */}
-          <div className="absolute bottom-16 left-3">
-            {/* Top-down mini-map of every building (roadmap 2.8) */}
+          <div className="absolute bottom-4 left-4 pointer-events-auto">
             <OpenWorldMiniMap apps={apps} onSelectApp={onSelectApp} selectedAppId={focusedAppId} />
-
-            {/* Status legend */}
-            <div className="pointer-events-none mb-2 bg-black/70 backdrop-blur-sm border border-cyan-500/15 rounded-lg px-2.5 py-2 space-y-1">
-              <div className="font-pixel text-[8px] text-cyan-500/50 tracking-wider mb-1">LEGEND</div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-xs bg-cyan-500" />
-                <span className="font-pixel text-[8px] text-gray-400 tracking-wide">ONLINE</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-xs bg-red-500" />
-                <span className="font-pixel text-[8px] text-gray-400 tracking-wide">STOPPED</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-xs bg-violet-500" />
-                <span className="font-pixel text-[8px] text-gray-400 tracking-wide">NOT STARTED</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-xs bg-slate-500" />
-                <span className="font-pixel text-[8px] text-gray-400 tracking-wide">ARCHIVED</span>
-              </div>
-            </div>
-
-            {/* World map (M) — warp to any named region without leaving the game */}
-            {onOpenFastTravel && (
-              <button
-                type="button"
-                onClick={onOpenFastTravel}
-                className="pointer-events-auto mb-2 relative bg-black/85 backdrop-blur-sm border border-cyan-500/30 rounded-lg px-3 py-2 hover:border-cyan-400/60 hover:bg-cyan-500/10 transition-all w-full"
-                title="World map — teleport to a region (M)"
-                aria-label="World map — teleport to a region"
-              >
-                <HudCorner position="tl" />
-                <HudCorner position="br" />
-                <div className="flex items-center justify-center gap-2 font-pixel text-[10px] text-cyan-400 tracking-wider truncate" style={{ textShadow: '0 0 6px rgba(6,182,212,0.4)' }}>
-                  <MapIcon size={15} aria-hidden="true" />
-                  <span>[ WORLD MAP ]</span>
-                </div>
-                <div className="font-pixel text-[7px] text-cyan-500/40 tracking-wide mt-0.5 text-center truncate">
-                  {activeRegion ? activeRegion.label.toUpperCase() : '(M)'}
-                </div>
-              </button>
-            )}
-
-            {/* Drop In / Fly Out button */}
-            <button
-              onClick={onToggleExploration}
-              className={`pointer-events-auto mb-2 relative bg-black/85 backdrop-blur-sm border rounded-lg px-3 py-2 hover:bg-cyan-500/10 transition-all group ${
-                explorationMode
-                  ? 'border-cyan-400/60 shadow-[0_0_8px_rgba(6,182,212,0.3)]'
-                  : 'border-cyan-500/30 hover:border-cyan-400/60'
-              }`}
-              title={explorationMode ? 'Return to orbital view (Tab)' : 'Enter street-level exploration (Tab)'}
-            >
-              <HudCorner position="tl" />
-              <HudCorner position="br" />
-              <div className="font-pixel text-[10px] text-cyan-400 tracking-wider" style={{ textShadow: '0 0 6px rgba(6,182,212,0.4)' }}>
-                {explorationMode ? '[ FLY OUT ]' : '[ DROP IN ]'}
-              </div>
-              <div className="font-pixel text-[7px] text-cyan-500/40 tracking-wide mt-0.5 text-center">(Tab)</div>
-            </button>
-
-            {/* Photo mode — cinematic camera + postcard capture */}
-            {onEnterPhotoMode && (
-              <button
-                onClick={onEnterPhotoMode}
-                className="pointer-events-auto mb-2 relative bg-black/85 backdrop-blur-sm border border-cyan-500/30 rounded-lg w-10 h-10 flex items-center justify-center hover:border-cyan-400/60 hover:bg-cyan-500/10 transition-all group"
-                title="Photo mode — cinematic camera & screenshots"
-              >
-                <HudCorner position="tl" />
-                <HudCorner position="br" />
-                <svg className="w-4.5 h-4.5 text-cyan-500/70 group-hover:text-cyan-400 transition-colors" style={{ filter: 'drop-shadow(0 0 6px rgba(6,182,212,0.4))' }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
-                </svg>
-              </button>
-            )}
-
-            {/* History / playback mode — scrub recorded city-state snapshots */}
-            {onEnterPlayback && (
-              <button
-                onClick={onEnterPlayback}
-                className="pointer-events-auto mb-2 relative bg-black/85 backdrop-blur-sm border border-cyan-500/30 rounded-lg w-10 h-10 flex items-center justify-center hover:border-cyan-400/60 hover:bg-cyan-500/10 transition-all group"
-                title="History — scrub back through past city states"
-              >
-                <HudCorner position="tl" />
-                <HudCorner position="br" />
-                <svg className="w-4.5 h-4.5 text-cyan-500/70 group-hover:text-cyan-400 transition-colors" style={{ filter: 'drop-shadow(0 0 6px rgba(6,182,212,0.4))' }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 3v5h5" />
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M3.05 13A9 9 0 106 5.3L3 8" />
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 7v5l3 2" />
-                </svg>
-              </button>
-            )}
-
-            <button
-              onClick={() => navigate(location.pathname === '/openworld/settings' ? `/openworld${location.search}` : `/openworld/settings${location.search}`)}
-              className="pointer-events-auto mb-2 relative bg-black/85 backdrop-blur-sm border border-cyan-500/30 rounded-lg w-10 h-10 flex items-center justify-center hover:border-cyan-400/60 hover:bg-cyan-500/10 transition-all group"
-              title="Settings"
-              aria-label="OpenWorld settings"
-            >
-              <HudCorner position="tl" />
-              <HudCorner position="br" />
-              <svg className="w-4.5 h-4.5 text-cyan-500/70 group-hover:text-cyan-400 transition-colors" style={{ filter: 'drop-shadow(0 0 6px rgba(6,182,212,0.4))' }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
-            </button>
-            <div className="pointer-events-none">
-              <div className="font-pixel text-[8px] text-cyan-500/20 tracking-widest leading-tight">
-                {'>'} SYS.INIT<br/>
-                {'>'} NET.LINK<br/>
-                {'>'} HUD.READY
-              </div>
+            <div className="openworld-hud-action-rail">
+              {onOpenFastTravel && <HudAction icon={MapIcon} label="World map" hint="M" onClick={onOpenFastTravel} />}
+              <HudAction
+                icon={Compass}
+                label={explorationMode ? 'Fly out' : 'Drop in'}
+                hint="TAB"
+                active={explorationMode}
+                primary
+                onClick={onToggleExploration}
+              />
+              {onEnterPhotoMode && <HudAction icon={Camera} label="Photo mode" onClick={onEnterPhotoMode} />}
+              {onEnterPlayback && <HudAction icon={History} label="History" onClick={onEnterPlayback} />}
+              <HudAction
+                icon={Settings}
+                label="OpenWorld settings"
+                active={location.pathname === '/openworld/settings'}
+                onClick={() => navigate(location.pathname === '/openworld/settings' ? `/openworld${location.search}` : `/openworld/settings${location.search}`)}
+              />
             </div>
           </div>
         </>
@@ -401,10 +275,7 @@ export default function OpenWorldHud({ cosStatus, cosAgents, agentMap, eventLogs
         />
       )}
 
-      {/* Center crosshair in exploration mode (shared by both layouts) */}
       {explorationMode && <Crosshair />}
-
-      {/* Controls hint overlay (shared) */}
       <ControlsHint visible={explorationMode} />
     </div>
   );

@@ -35,12 +35,12 @@ const _lookTarget = new THREE.Vector3();
 // Exploration-mode player rig. One mutable rig object is the single source of truth for
 // the player's pose; both camera modes (and the third-person avatar) read from it:
 //   - 'first' (default): the classic invisible first-person camera.
-//   - 'third' (V to toggle): a damped follow camera behind a visible cyber-runner, with
+//   - 'third' (V to toggle): a damped follow camera behind a visible low-poly rover, with
 //     building-aware boom shortening (openWorldPlayerRig.js owns all the math).
-// All original behavior is preserved: WASD/arrows, shift sprint, E/Q vertical, F interact,
-// pointer-lock mouselook, per-building cylinder collision below flyover height, world
-// bounds, spawn persistence. New: ground movement can't walk into the bay (the harbor
-// piers stay walkable — see isWalkable in openWorldPlan.js).
+// All original behavior is preserved: WASD/arrows, shift boost, E/Q vertical, F interact,
+// R respawn, pointer-lock mouselook, per-building cylinder collision below flyover height,
+// world bounds, and spawn persistence. Ground movement can't enter the bay (the harbor piers
+// stay walkable — see isWalkable in openWorldPlan.js).
 export default function PlayerController({
   keysRef,
   positions,
@@ -101,6 +101,7 @@ export default function PlayerController({
       rig.yaw = 0; // Forward = (0, 0, -1), facing toward city center
       rig.pitch = 0;
       rig.facing = 0;
+      lastSpawnRef.current = rig.position.clone();
     }
     lookInitRef.current = false;
   }, [active, positions]);
@@ -171,8 +172,8 @@ export default function PlayerController({
     };
   }, [active, gl.domElement, handleClick, handlePointerLockChange, handleMouseMove]);
 
-  // F interacts with the nearby building; V swaps first/third person. (E is vertical-up
-  // in the free-look controls, so neither shadows movement.)
+  // F interacts with the nearby building; V swaps first/third person; R returns to the
+  // current drop-in point. (E is vertical-up in the free-look controls, so neither shadows movement.)
   useEffect(() => {
     if (!active) return;
     const handleKeyDown = (e) => {
@@ -183,6 +184,14 @@ export default function PlayerController({
         onBuildingClick?.(proximityAppRef.current);
       } else if (key === 'v') {
         onToggleCameraView?.();
+      } else if (key === 'r' && lastSpawnRef.current) {
+        rigRef.current.position.copy(lastSpawnRef.current);
+        rigRef.current.yaw = 0;
+        rigRef.current.pitch = 0;
+        rigRef.current.facing = 0;
+        rigRef.current.vy = 0;
+        rigRef.current.jumping = false;
+        lookInitRef.current = false;
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -411,12 +420,9 @@ export default function PlayerController({
 
   if (!active) return null;
 
-  // The visible character exists only in third person — first person stays the
-  // classic invisible camera (and can't self-clip). PlayerAvatar loads a rigged GLB
-  // (useGLTF suspends), so it's wrapped: Suspense keeps the streaming model from
-  // blanking the whole city canvas, and the error boundary degrades to "no visible
-  // runner" if the GLB is missing/corrupt (e.g. a checkout without `npm run setup:data`)
-  // rather than crashing the scene.
+  // The visible vehicle exists only in third person — first person stays the classic
+  // invisible camera (and can't self-clip). The procedural actor is still wrapped by the
+  // existing boundaries so the scene keeps its defensive mount contract.
   if (cameraView !== 'third') return null;
   return (
     <ErrorBoundary fallback={null}>

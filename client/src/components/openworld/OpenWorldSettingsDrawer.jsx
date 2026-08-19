@@ -370,7 +370,7 @@ export default function OpenWorldSettingsDrawer({ open, onClose, qualityMode = '
       {activeTab === 'explore' && (
         <div className="space-y-5">
           <div>
-            <SectionHeader title="EXPLORATION" subtitle="Street-level character mode" />
+            <SectionHeader title="EXPLORATION" subtitle="Street-level rover mode" />
             <SettingToggle
               id="city-exploration-mode"
               label="DROP IN MODE"
@@ -380,12 +380,12 @@ export default function OpenWorldSettingsDrawer({ open, onClose, qualityMode = '
             />
             <SettingSegment
               options={[
-                { key: 'third', label: 'CHARACTER' },
+                { key: 'third', label: 'ROVER' },
                 { key: 'first', label: 'FIRST PERSON' },
               ]}
-              value={settings.cameraView ?? 'first'}
+                value={settings.cameraView ?? 'third'}
               onChange={(key) => updateSetting('cameraView', key)}
-              hint="CAMERA WHILE EXPLORING (V SWAPS IN-WORLD)"
+              hint="CAMERA WHILE DRIVING (V SWAPS IN-WORLD)"
             />
           </div>
           <button

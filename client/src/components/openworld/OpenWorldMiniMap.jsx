@@ -32,8 +32,8 @@ export default function OpenWorldMiniMap({ apps, onSelectApp, selectedAppId = nu
   if (view.empty) return null;
 
   return (
-    <div className={`${alwaysShow ? 'block' : 'hidden md:block'} mb-2 pointer-events-auto`}>
-      <div className="relative bg-black/85 backdrop-blur-sm border border-cyan-500/30 rounded-lg p-2">
+    <div className={`${alwaysShow ? 'block' : 'hidden md:block'} mb-2 w-fit pointer-events-auto`}>
+      <div className="openworld-hud-panel openworld-hud-map relative w-fit p-2">
         <div className="flex items-center justify-between mb-1.5 px-0.5">
           <span className="font-pixel text-[8px] text-cyan-500/60 tracking-wider">MAP</span>
           <span className="font-pixel text-[8px] text-cyan-400/80 tracking-wider">{view.count}</span>

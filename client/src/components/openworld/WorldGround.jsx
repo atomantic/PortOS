@@ -65,7 +65,7 @@ function RollingFog({ dayMix = 0 }) {
 }
 
 export default function WorldGround({ settings }) {
-  const { ground, neonAccents } = useOpenWorldPalette();
+  const { ground, neonAccents, lowPoly } = useOpenWorldPalette();
   const reflectionsEnabled = settings?.reflectionsEnabled ?? true;
   const groundMatRef = useRef();
 
@@ -82,8 +82,15 @@ export default function WorldGround({ settings }) {
   // theme). At night they read as accent neon; by day the grid mutes to faint pavement
   // lines and the glow fog fades out.
   const accent = ground;
-  const gridSectionColor = mixHex(accent, '#bcc4cc', dayMix);
-  const gridCellColor = mixHex(mixHex(accent, '#0a1420', 0.5), '#a7afb8', dayMix);
+  // The original cyber grid is useful orientation in the neon world, but a dense
+  // cyan debug grid fights the open-air Vibes landscape. Keep a sparse, low-contrast
+  // field there so the player can still read distance without feeling boxed into a UI.
+  const gridSectionColor = lowPoly
+    ? mixHex('#6d8f77', '#c5a77d', dayMix)
+    : mixHex(accent, '#bcc4cc', dayMix);
+  const gridCellColor = lowPoly
+    ? mixHex('#557866', '#9eb39a', dayMix)
+    : mixHex(mixHex(accent, '#0a1420', 0.5), '#a7afb8', dayMix);
   const groundFogOpacity = 0.045 * (1 - dayMix);
 
   useFrame((_, delta) => {
@@ -129,14 +136,14 @@ export default function WorldGround({ settings }) {
 
       <Grid
         args={[GROUND_HALF * 2, GROUND_DEPTH]}
-        cellSize={2}
-        sectionSize={6}
+        cellSize={lowPoly ? 4 : 2}
+        sectionSize={lowPoly ? 16 : 6}
         cellColor={gridCellColor}
         sectionColor={gridSectionColor}
-        cellThickness={0.6}
-        sectionThickness={1.4}
+        cellThickness={lowPoly ? 0.22 : 0.6}
+        sectionThickness={lowPoly ? 0.55 : 1.4}
         fadeDistance={80}
-        fadeStrength={0.6}
+        fadeStrength={lowPoly ? 0.8 : 0.6}
         position={[0, -0.01, GROUND_CENTER_Z]}
       />
 

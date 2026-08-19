@@ -64,12 +64,12 @@ export default function OpenWorldXpBadge({ character, onOpenDestination }) {
   const fixState = cta?.kind === 'fix';
 
   return (
-    <div className="absolute bottom-16 right-3 pointer-events-auto">
+    <div className="absolute bottom-4 right-4 pointer-events-auto">
       <button
         type="button"
         onClick={() => onOpenDestination?.(destination)}
         title={view.hasBirthDate ? 'Teleport to Hall of Achievements' : 'Teleport to Goal Monuments'}
-        className={`relative block w-40 sm:w-48 bg-black/85 backdrop-blur-sm border rounded-lg px-3 py-2.5 overflow-hidden text-left transition-all duration-300 hover:bg-cyan-500/10 ${
+        className={`openworld-hud-panel relative block w-40 sm:w-48 px-3 py-2.5 overflow-hidden text-left transition-all duration-300 hover:bg-cyan-500/10 ${
           leveling
             ? 'border-amber-400/70 shadow-[0_0_16px_rgba(245,158,11,0.5)]'
             : fixState

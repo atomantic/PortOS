@@ -15,6 +15,7 @@ const DEFAULT_COLOR = '#06b6d4';
 
 export default function AgentEntity({ agent, position, index = 0, settings }) {
   const bodyRef = useRef();
+  const ringRef = useRef();
   const trailRef = useRef();
 
   const state = agent.state || agent.status || 'coding';
@@ -58,6 +59,7 @@ export default function AgentEntity({ agent, position, index = 0, settings }) {
       const material = bodyRef.current.children[0]?.material;
       if (material) material.emissiveIntensity = 0.5 + Math.sin(t * 3) * 0.3;
     }
+    if (ringRef.current) ringRef.current.rotation.z = -t * 0.55 - index * 0.4;
 
     if (trailRef.current && trailSamples > 0) {
       const attr = trailRef.current.geometry.getAttribute('position');
@@ -76,7 +78,7 @@ export default function AgentEntity({ agent, position, index = 0, settings }) {
           <lineBasicMaterial
             vertexColors
             transparent
-            opacity={0.7}
+            opacity={0.38}
             blending={THREE.AdditiveBlending}
             depthWrite={false}
           />
@@ -84,23 +86,32 @@ export default function AgentEntity({ agent, position, index = 0, settings }) {
       )}
       <group ref={bodyRef}>
         <mesh>
-          <octahedronGeometry args={[0.3, 0]} />
+          <icosahedronGeometry args={[0.3, 1]} />
           <meshStandardMaterial
             color={color}
             emissive={color}
             emissiveIntensity={0.5}
-            wireframe
             transparent
-            opacity={0.8}
+            opacity={0.9}
+            roughness={0.32}
+            metalness={0.18}
           />
         </mesh>
+        <mesh ref={ringRef} rotation={[Math.PI / 2, 0, 0]}>
+          <torusGeometry args={[0.46, 0.016, 6, 20]} />
+          <meshBasicMaterial color={color} transparent opacity={0.46} />
+        </mesh>
+        <mesh position={[0, 0.34, 0]}>
+          <sphereGeometry args={[0.045, 8, 6]} />
+          <meshBasicMaterial color={color} transparent opacity={0.9} />
+        </mesh>
         <Sparkles
-          count={15}
-          scale={0.8}
-          size={1}
-          speed={0.5}
+          count={8}
+          scale={0.68}
+          size={0.7}
+          speed={0.35}
           color={color}
-          opacity={0.6}
+          opacity={0.34}
         />
       </group>
     </group>

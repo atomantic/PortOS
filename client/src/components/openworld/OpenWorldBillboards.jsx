@@ -217,7 +217,7 @@ function Billboard({ position, rotation, messages, color, width = 3.5, height = 
 }
 
 export default function OpenWorldBillboards({ positions, apps, cosStatus, reviewCounts, instances, productivityData }) {
-  const { neonAccents } = useOpenWorldPalette();
+  const { neonAccents, neonLayers } = useOpenWorldPalette();
   // Build billboard messages from real system data
   const billboardConfig = useMemo(() => {
     if (!positions || positions.size < 2) return [];
@@ -323,7 +323,10 @@ export default function OpenWorldBillboards({ positions, apps, cosStatus, review
     return billboards;
   }, [positions, apps, cosStatus, reviewCounts, instances, productivityData, neonAccents]);
 
-  if (billboardConfig.length === 0) return null;
+  // Floating system billboards belong to the cyber style. The default Vibes world
+  // communicates through landmarks and focused building signals instead of turning
+  // the horizon into a second dashboard.
+  if (!neonLayers || billboardConfig.length === 0) return null;
 
   return (
     <group>

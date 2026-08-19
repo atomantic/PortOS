@@ -391,8 +391,8 @@ export default function OpenWorldIntelPane({ apps, cosAgents, reviewCounts, inst
   };
 
   return (
-    <div className={`absolute top-16 right-3 ${collapsed ? '' : 'bottom-20'} w-72 pointer-events-auto`}>
-      <div className={`${collapsed ? '' : 'h-full'} bg-black/85 backdrop-blur-sm border border-cyan-500/30 rounded-lg overflow-hidden flex flex-col`}>
+    <div className={`absolute top-20 right-4 ${collapsed ? '' : 'bottom-24'} w-[19rem] pointer-events-auto`}>
+      <div className={`${collapsed ? '' : 'h-full'} openworld-intel-surface overflow-hidden flex flex-col`}>
         <div className="flex items-stretch border-b border-cyan-500/20">
           {/* Deliberately NOT `ui/TabPills`: this bar wears the immersive OpenWorld
               HUD skin (cyan-on-black, `font-pixel` micro-caps, per-tab severity-tinted

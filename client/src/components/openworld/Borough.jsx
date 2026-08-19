@@ -62,7 +62,6 @@ export default function Borough({ app, position, agentMap, onBuildingClick, play
       {processPositions.map(({ x, z, rotation, seed, process: proc }) => (
         <ProcessBuilding
           key={proc.name}
-          process={proc}
           pm2Status={pm2Status[proc.name]}
           position={[position.x + x, 0, position.z + z, rotation]}
           seed={seed}

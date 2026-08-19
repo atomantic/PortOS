@@ -1,169 +1,139 @@
-import { useRef, useMemo, useEffect, useCallback } from 'react';
+import { useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import { useOpenWorldPalette } from './OpenWorldPaletteContext';
 import { dampFactor, EYE_HEIGHT } from '../../utils/openWorldPlayerRig';
-import { withInPlaceClips, inPlaceClipName } from '../../utils/animationClips';
-import { fitModelToHeight } from '../../utils/modelFit';
-import useClonedGltf, { GltfPrimitive } from '../../hooks/useClonedGltf';
-// The root-motion clip set + treadmill suffix are model-level facts about the bundled
-// RobotExpressive GLB, so import the single source of truth rather than redeclaring it —
-// a divergent copy would silently break in-place routing in one avatar and not the other.
-import { MUSE_ROOT_MOTION_CLIPS as ROOT_MOTION_CLIPS, MUSE_IN_PLACE_SUFFIX as IN_PLACE_SUFFIX } from '../cos/constants';
+import { mixHex } from './openWorldConstants';
 
-// The exploration-mode player, rendered in third person with the bundled rigged GLB
-// (three.js's RobotExpressive by default — data/avatar/model.glb, the same model the CoS
-// "Cyber Muse" avatar uses). The character keeps its own textures/colors; the only city
-// tint is a themed ground-glow disc under its feet so it still reads as "our runner."
-//
-// It reads the PlayerController's mutable rig every frame (no React state on the hot path)
-// and crossfades the GLB's skeletal clips by rig.state:
-//   idle  → Idle
-//   walk  → Walking (in place)
-//   run   → Running (in place)
-//   hover → Jump (flyover: legs off the ground, body floated toward the camera anchor)
-// Walking/Running carry root translation (they'd walk the model out from under the rig,
-// which OWNS world position); we route them to the synthesized "in place" treadmill
-// variants (see withInPlaceClips) so the gait animates while the rig drives movement.
-
-const MODEL_URL = '/api/avatar/model.glb';
-const TARGET_HEIGHT = 1.7; // world units, matches the old procedural runner
-const FADE = 0.25;         // crossfade seconds between state clips
-// The bundled RobotExpressive model is authored facing +Z; the rig's forward is -Z
-// (rig.facing 0 → -z), so we add a 180° yaw so the runner faces its travel direction.
-// If a user swaps in a GLB with a different forward axis, the runner would face the wrong
-// way — this offset is the one model-orientation assumption, called out so it's greppable.
-const MODEL_FACING_OFFSET = Math.PI;
-const buildPlayerAnimations = (animations) => (
-  withInPlaceClips(animations, ROOT_MOTION_CLIPS, IN_PLACE_SUFFIX)
-);
-
-// rig.state → { desired GLB clip, playback rate }. The clip is auto-routed to its
-// in-place variant when it's a root-motion clip. Rates lean a touch fast so the gait
-// reads energetic and foot-skate against the rig's move speed stays subtle.
-const STATE_CLIP = {
-  idle:  { clip: 'Idle',    timeScale: 1.0 },
-  walk:  { clip: 'Walking', timeScale: 1.3 },
-  run:   { clip: 'Running', timeScale: 1.5 },
-  hover: { clip: 'Jump',    timeScale: 1.0 },
-};
+// A small, procedural low-poly rover keeps the third-person actor local to OpenWorld.
+// It is intentionally made from primitives instead of another downloaded GLB: the car
+// inherits the active theme, loads instantly, and stays readable while sprinting, jumping,
+// or flying above the city.
+const CAR_LENGTH = 1.85;
+const CAR_WIDTH = 1.06;
+const WHEEL_RADIUS = 0.24;
+const WHEEL_X = CAR_WIDTH * 0.57;
+const WHEEL_Z = CAR_LENGTH * 0.31;
+const _rootTarget = new THREE.Vector3();
 
 export default function PlayerAvatar({ rigRef }) {
-  const { accent } = useOpenWorldPalette();
-  // Append neutralized in-place variants of the root-motion clips so walk/run
-  // cycles the legs without translating the model off the rig-driven position.
-  const { scene, actions, names } = useClonedGltf(MODEL_URL, buildPlayerAnimations);
-  const hasClips = names.length > 0;
-
+  const { accent, surface } = useOpenWorldPalette();
   const rootRef = useRef();
-  const groundOffsetRef = useRef(-EYE_HEIGHT);
-  const activeClipRef = useRef(null);
-  const discMatRef = useRef();
+  const bodyRef = useRef();
+  const hoverRingRef = useRef();
+  const underglowRef = useRef();
+  const wheelRefs = useRef([]);
 
-  // Fit the model to TARGET_HEIGHT with feet at y=0 and centered on x/z, mutating the
-  // scene directly. This MUST run in an effect (not a render-time useMemo): the bounding
-  // box is only correct after useAnimations has set up the skeleton/mixer — measuring
-  // during render sees an unposed rig and yields a wildly wrong (≈34×) size, shrinking the
-  // model to an invisible speck. Frustum culling is off because animated poses (jump, arms
-  // out) exceed the bind-pose box; shadows off to match the CoS avatar. Runs once per
-  // loaded scene (absolute transform — re-running on state changes would pop the size).
-  useEffect(() => {
-    scene.traverse((obj) => {
-      if (!obj.isMesh) return;
-      obj.frustumCulled = false;
-      obj.castShadow = false;
-      obj.receiveShadow = false;
-    });
-    fitModelToHeight(scene, { targetHeight: TARGET_HEIGHT, feetOnGround: true });
-  }, [scene]);
-
-  // Precompute each rig.state → the concrete clip present on the loaded GLB (root-motion →
-  // in-place variant; fall back through the routed name → Idle → first clip). This only
-  // depends on the loaded clip set, so resolving it once here keeps the per-frame loop to a
-  // single object lookup instead of re-scanning `names` every frame.
-  const clipByState = useMemo(() => {
-    if (!hasClips) return null;
-    const resolve = (state) => {
-      const wanted = (STATE_CLIP[state] || STATE_CLIP.idle).clip;
-      const routed = inPlaceClipName(wanted, ROOT_MOTION_CLIPS, IN_PLACE_SUFFIX);
-      if (names.includes(routed)) return routed;
-      if (names.includes('Idle')) return 'Idle';
-      return names[0] || null;
-    };
-    return Object.fromEntries(Object.keys(STATE_CLIP).map((s) => [s, resolve(s)]));
-  }, [hasClips, names]);
-
-  // Crossfade to `clipName` at the given rate. No-op if it's already the active clip,
-  // so this is safe to call every frame.
-  const fadeTo = useCallback((clipName, timeScale) => {
-    if (!clipName || clipName === activeClipRef.current) return;
-    const next = actions[clipName];
-    if (!next) return;
-    const prev = actions[activeClipRef.current];
-    next.reset();
-    next.enabled = true;
-    next.setEffectiveTimeScale(timeScale ?? 1);
-    next.setEffectiveWeight(1);
-    next.setLoop(THREE.LoopRepeat, Infinity);
-    next.fadeIn(FADE).play();
-    if (prev && prev !== next) prev.fadeOut(FADE);
-    activeClipRef.current = clipName;
-  }, [actions]);
+  const bodyColor = mixHex('#e7825c', accent, 0.22);
+  const bodyShadow = mixHex('#263447', accent, 0.16);
+  const glassColor = mixHex('#15243a', accent, 0.25);
+  const wheelColor = '#17212d';
 
   useFrame(({ clock }, delta) => {
     const root = rootRef.current;
+    const body = bodyRef.current;
     const rig = rigRef?.current;
-    if (!root || !rig) return;
-    const f = dampFactor(8, delta);
-    const state = rig.state;
-    const hovering = state === 'hover';
+    if (!root || !body || !rig) return;
 
-    // Root follows the rig: feet on the ground normally (rig.position.y is eye height, so
-    // subtract EYE_HEIGHT to drop the feet to the plane); in hover the body floats up
-    // toward the camera anchor with a gentle bob so a flyover reads as airborne.
     const t = clock.getElapsedTime();
-    const targetOffset = hovering ? -1.05 : -EYE_HEIGHT;
-    groundOffsetRef.current += (targetOffset - groundOffsetRef.current) * f;
-    const bob = hovering ? Math.sin(t * 2.2) * 0.06 : 0;
-    root.position.set(rig.position.x, rig.position.y + groundOffsetRef.current + bob, rig.position.z);
+    const hovering = rig.state === 'hover';
+    const moving = rig.state === 'walk' || rig.state === 'run';
+    const running = rig.state === 'run';
+    const follow = dampFactor(10, delta);
+    const targetY = rig.position.y - EYE_HEIGHT + (hovering ? 0.25 : 0);
 
-    // Face the travel direction (see MODEL_FACING_OFFSET); bank leans into turns.
-    root.rotation.y = rig.facing + MODEL_FACING_OFFSET;
-    root.rotation.z = rig.bank;
+    root.position.lerp(_rootTarget.set(rig.position.x, targetY, rig.position.z), follow);
+    root.rotation.y = rig.facing;
+    root.rotation.z = rig.bank * 0.38;
 
-    // Drive the skeleton from the mutable rig state (crossfades only on change).
-    if (clipByState) {
-      const cfg = STATE_CLIP[state] || STATE_CLIP.idle;
-      fadeTo(clipByState[state] || clipByState.idle, cfg.timeScale);
+    const bob = hovering ? 0.2 + Math.sin(t * 2.4) * 0.07 : 0;
+    body.position.y += (bob - body.position.y) * follow;
+    body.rotation.x = hovering ? Math.sin(t * 2.1) * 0.045 : 0;
+    body.rotation.z = rig.bank * 0.32;
+
+    const wheelSpeed = running ? 15 : moving ? 8 : 0;
+    wheelRefs.current.forEach((wheel) => {
+      if (!wheel) return;
+      wheel.rotation.x -= wheelSpeed * delta;
+      wheel.rotation.y = hovering ? Math.sin(t * 2) * 0.08 : 0;
+    });
+
+    if (hoverRingRef.current) {
+      hoverRingRef.current.rotation.z = t * 0.75;
+      hoverRingRef.current.material.opacity = hovering ? 0.72 : 0.22;
+      hoverRingRef.current.scale.setScalar(hovering ? 1 + Math.sin(t * 3) * 0.08 : 1);
     }
-
-    // Brighten the footprint disc slightly while flying.
-    if (discMatRef.current) discMatRef.current.opacity = hovering ? 0.3 : 0.16;
+    if (underglowRef.current) {
+      underglowRef.current.material.opacity = (hovering ? 0.42 : moving ? 0.26 : 0.16) + Math.sin(t * 4) * 0.025;
+    }
   });
+
+  const setWheelRef = (index) => (node) => {
+    wheelRefs.current[index] = node;
+  };
 
   return (
     <group ref={rootRef}>
-      {/* scene carries its own fit scale/position (applied in the effect above). */}
-      <GltfPrimitive object={scene} />
-      {/* Accent-tinted ground glow — the runner's neon footprint. Declared as JSX so R3F
-          owns the geometry/material lifecycle; `color` tracks the theme reactively and the
-          per-frame opacity write goes through discMatRef. */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.02, 0]}>
-        <circleGeometry args={[0.45, 18]} />
-        <meshBasicMaterial
-          ref={discMatRef}
-          color={accent}
-          transparent
-          opacity={0.16}
-          blending={THREE.AdditiveBlending}
-          depthWrite={false}
-          side={THREE.DoubleSide}
-        />
+      <group ref={bodyRef}>
+        {/* Low-poly body and cabin */}
+        <mesh position={[0, 0.48, 0]}>
+          <boxGeometry args={[CAR_WIDTH, 0.42, CAR_LENGTH]} />
+          <meshStandardMaterial {...surface} color={bodyColor} roughness={0.58} metalness={0.22} />
+        </mesh>
+        <mesh position={[0, 0.74, 0.08]}>
+          <boxGeometry args={[CAR_WIDTH * 0.72, 0.26, CAR_LENGTH * 0.46]} />
+          <meshStandardMaterial {...surface} color={glassColor} roughness={0.24} metalness={0.36} transparent opacity={0.92} />
+        </mesh>
+        <mesh position={[0, 0.39, -CAR_LENGTH * 0.53]}>
+          <boxGeometry args={[CAR_WIDTH * 0.88, 0.08, 0.1]} />
+          <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={0.45} />
+        </mesh>
+        <mesh position={[0, 0.4, CAR_LENGTH * 0.53]}>
+          <boxGeometry args={[CAR_WIDTH * 0.82, 0.07, 0.08]} />
+          <meshStandardMaterial color="#ef5252" emissive="#ef5252" emissiveIntensity={0.28} />
+        </mesh>
+
+        {/* Front lamps and the small roof beacon make the vehicle readable in both views. */}
+        {[-1, 1].map((side) => (
+          <mesh key={`lamp-${side}`} position={[side * CAR_WIDTH * 0.3, 0.55, -CAR_LENGTH * 0.53]}>
+            <boxGeometry args={[0.13, 0.08, 0.035]} />
+            <meshBasicMaterial color="#fff5cf" toneMapped={false} />
+          </mesh>
+        ))}
+        <mesh position={[0, 0.96, 0.08]}>
+          <sphereGeometry args={[0.055, 8, 6]} />
+          <meshBasicMaterial color={accent} toneMapped={false} />
+        </mesh>
+
+        {/* Wheels are deliberately chunky: the actor should read as a vehicle at a glance. */}
+        {[
+          [-WHEEL_X, WHEEL_Z],
+          [WHEEL_X, WHEEL_Z],
+          [-WHEEL_X, -WHEEL_Z],
+          [WHEEL_X, -WHEEL_Z],
+        ].map(([x, z], index) => (
+          <group key={`wheel-${index}`} ref={setWheelRef(index)} position={[x, WHEEL_RADIUS, z]} rotation={[0, 0, Math.PI / 2]}>
+            <mesh>
+              <cylinderGeometry args={[WHEEL_RADIUS, WHEEL_RADIUS, 0.16, 12]} />
+              <meshStandardMaterial color={wheelColor} roughness={0.88} metalness={0.08} />
+            </mesh>
+            <mesh rotation={[0, Math.PI / 2, 0]}>
+              <cylinderGeometry args={[WHEEL_RADIUS * 0.44, WHEEL_RADIUS * 0.44, 0.17, 10]} />
+              <meshStandardMaterial color={bodyShadow} roughness={0.48} metalness={0.4} />
+            </mesh>
+          </group>
+        ))}
+      </group>
+
+      {/* Ground feedback is intentionally simpler than the old robot's large footprint. */}
+      <mesh ref={underglowRef} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.025, 0]}>
+        <circleGeometry args={[0.9, 24]} />
+        <meshBasicMaterial color={accent} transparent opacity={0.16} blending={THREE.AdditiveBlending} depthWrite={false} side={THREE.DoubleSide} />
+      </mesh>
+      <mesh ref={hoverRingRef} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.04, 0]}>
+        <torusGeometry args={[0.82, 0.025, 6, 24]} />
+        <meshBasicMaterial color={accent} transparent opacity={0.22} blending={THREE.AdditiveBlending} depthWrite={false} />
       </mesh>
     </group>
   );
 }
-
-// Warm the loader cache once the URL is known (matches MuseCoSAvatar).
-useGLTF.preload(MODEL_URL);

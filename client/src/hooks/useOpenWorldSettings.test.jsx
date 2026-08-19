@@ -56,7 +56,7 @@ describe('useOpenWorldSettings localStorage resilience', () => {
     expect(settings.qualityMode).toBe('auto');
     expect(settings.qualityPreset).toBe('high');
     expect(settings.explorationMode).toBe(true);
-    expect(settings.cameraView).toBe('first');
+    expect(settings.cameraView).toBe('third');
   });
 
   it('loads an existing pre-Auto payload as Manual, keeping its preset', () => {
@@ -98,7 +98,7 @@ describe('useOpenWorldSettings localStorage resilience', () => {
     const [settings] = result.current;
     expect(settings.qualityMode).toBe('auto'); // reset restores Auto default
     expect(settings.explorationMode).toBe(true);
-    expect(settings.cameraView).toBe('first');
+    expect(settings.cameraView).toBe('third');
   });
 
   it('handles the time-of-day-auto event without throwing when writes fail', () => {

@@ -394,6 +394,38 @@ function FloorLightBands({ width, depth, height, color, accentColor, seed, dimMu
   );
 }
 
+// A small, always-readable status marker replaces the old wall of floating holograms.
+// It gives each building a game-like "beacon" without turning every facade into a UI panel.
+function StatusBeacon({ height, color, accentColor, active = false, dimMul = 1 }) {
+  const ringRef = useRef();
+  const glowRef = useRef();
+
+  useFrame(({ clock }) => {
+    const t = clock.getElapsedTime();
+    if (ringRef.current) ringRef.current.rotation.z = t * (active ? 0.9 : 0.35);
+    if (glowRef.current) {
+      glowRef.current.material.opacity = (active ? 0.5 + Math.sin(t * 3) * 0.15 : 0.28) * dimMul;
+    }
+  });
+
+  return (
+    <group position={[0, height + 0.08, 0]}>
+      <mesh position={[0, 0.02, 0]}>
+        <cylinderGeometry args={[0.16, 0.25, 0.06, 6]} />
+        <meshBasicMaterial color={color} transparent opacity={0.42 * dimMul} />
+      </mesh>
+      <mesh ref={ringRef} rotation={[Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[0.32, 0.018, 6, 18]} />
+        <meshBasicMaterial color={accentColor} transparent opacity={(active ? 0.72 : 0.34) * dimMul} />
+      </mesh>
+      <mesh ref={glowRef} position={[0, 0.18, 0]}>
+        <octahedronGeometry args={[0.09, 0]} />
+        <meshBasicMaterial color={accentColor} transparent opacity={0.35 * dimMul} />
+      </mesh>
+    </group>
+  );
+}
+
 // The Vibes facade is a small cluster of matte, faceted masses rather than one cyber-era
 // slab. The seed comes from the app name, so the silhouette is stable across live updates
 // and playback. The main mass keeps the existing status-driven height/color semantics while
@@ -462,7 +494,7 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
 
   // `surface` carries the world style's finish (flat shading + matte under the low-poly
   // style); spread last on the facade material so it wins over the cyber defaults.
-  const { getBuildingColor, getAccentColor, tintStructure, surface, lowPoly } = useOpenWorldPalette();
+  const { getBuildingColor, getAccentColor, tintStructure, surface, lowPoly, neonLayers } = useOpenWorldPalette();
   const height = getBuildingHeight(app);
   const edgeColor = getBuildingColor(app.overallStatus, app.archived);
   const accentColor = getAccentColor(app);
@@ -481,6 +513,8 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
   // `!daytime`-gated mounts (halo/strips/glow/ground-lines) to opacity fades too so a
   // partial dayMix degrades gracefully instead of popping at 0.5.
   const daytime = dayMix > 0.5;
+  const showNightFx = neonLayers && !daytime;
+  const showBuildingSignal = !dimmed && (hovered || isProximity || focused);
   // Mid-tone facade (not near-white) so strong daylight lands around a clean gray
   // rather than clipping to white; a touch of the status color keeps variety.
   const dayFacade = mixHex('#9aa0ac', edgeColor, 0.12);
@@ -516,8 +550,8 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
   // would rasterize a full canvas per building (nested fillRect loops, ~1–2k 2D ops each)
   // at scene mount and again on every theme-accent change, and bind none of them.
   const windowTexture = useMemo(
-    () => (daytime ? null : createWindowTexture(accentColor, width, height, seed, tintStructure)),
-    [daytime, accentColor, width, height, seed, tintStructure]
+    () => (showNightFx ? createWindowTexture(accentColor, width, height, seed, tintStructure) : null),
+    [showNightFx, accentColor, width, height, seed, tintStructure]
   );
 
   // R3F does NOT dispose a CanvasTexture handed in via `map`/`emissiveMap` — it
@@ -642,7 +676,7 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
       {/* Interior-mapped window panes (InteriorMappingMaterial) — parallax fake-3D lit
           rooms on selected online towers. Night-only (by day the tower reads as a
           sunlit solid) and gated to the high quality preset by the caller. */}
-      {!daytime && interiorWindows && buildingHasInteriorWindows(app, height) && (
+      {showNightFx && interiorWindows && buildingHasInteriorWindows(app, height) && (
         <BuildingWindows
           width={width}
           depth={depth}
@@ -660,7 +694,7 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
         <lineBasicMaterial
           color={edgeLineColor}
           transparent
-          opacity={((app.archived ? 0.5 : 0.9) - dayMix * 0.55) * dimMul}
+          opacity={(neonLayers ? (app.archived ? 0.5 : 0.9) - dayMix * 0.55 : (focused || hovered ? 0.55 : 0.22)) * dimMul}
         />
       </lineSegments>
 
@@ -687,8 +721,18 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
       {/* Rooftop fixtures — deterministic per app name; off on the low preset */}
       {rooftops && <RooftopKit name={app.name || app.id} width={width} y={height} />}
 
+      {!app.archived && (
+        <StatusBeacon
+          height={height}
+          color={edgeColor}
+          accentColor={accentColor}
+          active={isProximity || focused || hovered}
+          dimMul={dimMul}
+        />
+      )}
+
       {/* Glow halo wireframe - slightly larger than building (night only) */}
-      {!app.archived && !daytime && (
+      {!app.archived && showNightFx && (
         <lineSegments ref={haloRef} position={[0, height / 2, 0]} geometry={haloEdgesGeom}>
           <lineBasicMaterial
             color={accentColor}
@@ -699,7 +743,7 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
       )}
 
       {/* Vertical neon edge strips on corners (night only) */}
-      {!app.archived && !daytime && (
+      {!app.archived && showNightFx && (
         <>
           <NeonEdgeStrip position={[width / 2, height / 2, depth / 2]} height={height} color={accentColor} delay={0} dimMul={dimMul} />
           <NeonEdgeStrip position={[-width / 2, height / 2, depth / 2]} height={height} color={accentColor} delay={1} dimMul={dimMul} />
@@ -709,7 +753,7 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
       )}
 
       {/* Lit floor bands stay on even for archived buildings so dark towers remain readable. */}
-      {!daytime && (
+      {showNightFx && (
         <FloorLightBands
           width={width}
           depth={depth}
@@ -736,38 +780,6 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
         {displayName}
       </OpenWorldLabel>
 
-      {/* Building name on back face */}
-      <OpenWorldLabel
-        position={[0, height * 0.88, -(depth / 2 + 0.02)]}
-        fontSize={0.2}
-        color={edgeColor}
-        dayMix={dayMix}
-        fillOpacity={dimMul}
-        anchorX="center"
-        anchorY="middle"
-        rotation={[0, Math.PI, 0]}
-        font={PIXEL_FONT_URL}
-        maxWidth={width * 0.9}
-      >
-        {displayName}
-      </OpenWorldLabel>
-
-      {/* Name on left side */}
-      <OpenWorldLabel
-        position={[-(width / 2 + 0.02), height * 0.88, 0]}
-        fontSize={0.18}
-        color={accentColor}
-        dayMix={dayMix}
-        fillOpacity={dimMul}
-        anchorX="center"
-        anchorY="middle"
-        rotation={[0, -Math.PI / 2, 0]}
-        font={PIXEL_FONT_URL}
-        maxWidth={depth * 0.85}
-      >
-        {displayName}
-      </OpenWorldLabel>
-
       {/* Focus selection ring (issue #2593) — a bright accent ring at the base marking the
           URL-focused borough. Rendered day AND night (unlike the neon glow) so the selected
           building is unambiguously distinguished in any lighting. */}
@@ -779,7 +791,7 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
       )}
 
       {/* Base glow circle - wider and brighter (night only) */}
-      {!daytime && (
+      {showNightFx && (
         <mesh ref={glowRef} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, 0]}>
           <circleGeometry args={[1.8, 32]} />
           <meshBasicMaterial
@@ -792,7 +804,7 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
       )}
 
       {/* Neon ground line accents (night only) */}
-      {!app.archived && !daytime && (
+      {!app.archived && showNightFx && (
         <>
           <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.02, depth / 2 + 0.3]}>
             <planeGeometry args={[width + 0.5, 0.05]} />
@@ -817,10 +829,9 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
         />
       )}
 
-      {/* Floating hologram and label hide entirely when dimmed — they read as
-          "this app isn't your focus right now". Major sub-meshes above already
-          fade via dimMul; suppressing these keeps the dim effect unambiguous. */}
-      {!dimmed && (
+      {/* A signal appears only when the player is actually looking at a building. This
+          keeps the world legible at a distance and makes proximity feel rewarding. */}
+      {showBuildingSignal && (
         <BuildingHologram
           position={[0, height + 0.8, 0]}
           color={accentColor}
@@ -828,7 +839,7 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
         />
       )}
 
-      {!dimmed && (hovered || isOnline || app.archived || isProximity || focused) && (
+      {showBuildingSignal && (
         <HolographicPanel
           app={app}
           agentCount={agentCount}

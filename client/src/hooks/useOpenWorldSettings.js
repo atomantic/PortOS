@@ -56,9 +56,9 @@ const DEFAULT_SETTINGS = {
   // the Visual tab switches back with no migration.
   worldStyle: 'vibes',
   // OpenWorld opens as a game, not an orbital dashboard. Users can still press Tab (or the
-  // HUD control) to pull back to the planning view, but a fresh visit starts in first person.
+  // HUD control) to pull back to the planning view, while V / settings can switch to first person.
   explorationMode: true,
-  cameraView: 'first', // exploration camera: 'first' is the default FPS view; 'third' is optional
+  cameraView: 'third', // the rover is the default actor; first person remains an explicit option
   ...QUALITY_PRESETS.high,
 };
 

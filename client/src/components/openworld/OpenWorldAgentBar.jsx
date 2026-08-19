@@ -17,8 +17,8 @@ export default function OpenWorldAgentBar({ cosAgents, agentMap }) {
   };
 
   return (
-    <div className="absolute bottom-3 left-3 right-3 pointer-events-auto">
-      <div className="bg-black/80 backdrop-blur-sm border border-cyan-500/25 rounded-lg px-3 py-2.5">
+    <div className="absolute bottom-20 left-1/2 -translate-x-1/2 w-fit max-w-[calc(100vw-2rem)] pointer-events-auto">
+      <div className="openworld-hud-panel openworld-hud-panel--quiet px-3 py-2.5">
         <div className="flex items-center gap-3 overflow-x-auto" style={{ scrollbarWidth: 'thin', scrollbarColor: 'rgba(6,182,212,0.2) transparent' }}>
           <span className="text-cyan-400 text-[11px] font-pixel tracking-wider font-bold shrink-0">AGENTS</span>
           <div className="w-px h-4 bg-cyan-500/20 shrink-0" />

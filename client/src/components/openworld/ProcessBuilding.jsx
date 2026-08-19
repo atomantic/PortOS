@@ -1,9 +1,8 @@
 import { useRef, useMemo, useEffect } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { PROCESS_BUILDING_PARAMS, PIXEL_FONT_URL, mixHex } from './openWorldConstants';
+import { PROCESS_BUILDING_PARAMS, mixHex } from './openWorldConstants';
 import { useOpenWorldPalette } from './OpenWorldPaletteContext';
-import OpenWorldLabel from './OpenWorldLabel';
 
 // Process status → color, unified with the themed building map (so 'online' follows
 // the active theme accent and the semantic colors match a stopped/missing *app*):
@@ -21,14 +20,16 @@ const getProcessColor = (status, building) => {
   }
 };
 
-export default function ProcessBuilding({ process, pm2Status, position, seed, dimmed = false, dayMix = 0 }) {
+export default function ProcessBuilding({ pm2Status, position, seed, dimmed = false, dayMix = 0 }) {
   const { building, buildingBody, surface } = useOpenWorldPalette();
   const blinkRef = useRef();
   const glowRef = useRef();
+  const ringRef = useRef();
 
   const status = pm2Status?.status || 'not_found';
   const color = getProcessColor(status, building);
   const { width, depth } = PROCESS_BUILDING_PARAMS;
+  const radius = Math.max(width, depth) * 0.58;
   const dimMul = dimmed ? 0.25 : 1;
   // Match the main Building's daytime treatment — sheds neon, lightens to a lit solid.
   const bodyColor = mixHex(buildingBody, mixHex('#9aa0ac', color, 0.12), dayMix);
@@ -42,8 +43,8 @@ export default function ProcessBuilding({ process, pm2Status, position, seed, di
     return 1.5;
   }, [status, seed]);
 
-  const boxGeom = useMemo(() => new THREE.BoxGeometry(width, height, depth), [width, height, depth]);
-  const edgesGeom = useMemo(() => new THREE.EdgesGeometry(boxGeom), [boxGeom]);
+  const bodyGeom = useMemo(() => new THREE.CylinderGeometry(radius * 0.82, radius, height, 6), [radius, height]);
+  const edgesGeom = useMemo(() => new THREE.EdgesGeometry(bodyGeom), [bodyGeom]);
 
   // edgesGeom is handed to <lineSegments> via a `geometry` prop, so R3F does not
   // manage its disposal the way it would a JSX <edgesGeometry> child. `height`
@@ -52,14 +53,10 @@ export default function ProcessBuilding({ process, pm2Status, position, seed, di
   // previous geometry's GPU buffers, same leak class as Building.jsx's windowTexture.
   useEffect(() => {
     return () => {
-      boxGeom.dispose();
+      bodyGeom.dispose();
       edgesGeom.dispose();
     };
-  }, [boxGeom, edgesGeom]);
-
-  const displayName = useMemo(() => {
-    return (process.name || '').replace(/[-_.]/g, ' ').toUpperCase();
-  }, [process.name]);
+  }, [bodyGeom, edgesGeom]);
 
   // Rotation to face center (passed via position array)
   const rotation = position[3] || 0;
@@ -75,15 +72,15 @@ export default function ProcessBuilding({ process, pm2Status, position, seed, di
         : 0.08;
       glowRef.current.material.opacity = base * dimMul * neonFade;
     }
+    if (ringRef.current) ringRef.current.rotation.z = t * 0.45 + seed;
   });
 
   return (
     <group position={[position[0], 0, position[2]]} rotation={[0, rotation, 0]}>
-      {/* Building body */}
-      <mesh position={[0, height / 2, 0]}>
-        <boxGeometry args={[width, height, depth]} />
+      {/* Hexagonal process pylon: a readable status token rather than a second tiny building. */}
+      <mesh position={[0, height / 2, 0]} geometry={bodyGeom}>
         <meshStandardMaterial
-        {...surface}
+          {...surface}
           color={bodyColor}
           emissive={color}
           emissiveIntensity={(status === 'online' ? 0.2 : 0.08) * dimMul * (1 - dayMix * 0.9)}
@@ -99,25 +96,17 @@ export default function ProcessBuilding({ process, pm2Status, position, seed, di
       </lineSegments>
 
       {/* Neon top cap */}
-      <mesh position={[0, height + 0.01, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-        <planeGeometry args={[width + 0.05, depth + 0.05]} />
+      <mesh position={[0, height + 0.01, 0]}>
+        <cylinderGeometry args={[radius * 0.86, radius * 0.86, 0.05, 6]} />
         <meshBasicMaterial color={color} transparent opacity={0.4 * dimMul * (1 - dayMix * 0.6)} />
       </mesh>
 
-      {/* Process name on front face (dark ink + halo by day) */}
-      <OpenWorldLabel
-        position={[0, height * 0.7, depth / 2 + 0.02]}
-        fontSize={0.1}
-        color={color}
-        dayMix={dayMix}
-        fillOpacity={dimMul}
-        anchorX="center"
-        anchorY="middle"
-        font={PIXEL_FONT_URL}
-        maxWidth={width * 0.85}
-      >
-        {displayName}
-      </OpenWorldLabel>
+      {/* A quiet rotating ring makes the pylon readable at a glance while keeping labels
+          reserved for the focused main building. */}
+      <mesh ref={ringRef} rotation={[Math.PI / 2, 0, 0]} position={[0, 0.09, 0]}>
+        <torusGeometry args={[radius * 0.78, 0.014, 6, 12]} />
+        <meshBasicMaterial color={color} transparent opacity={0.42 * dimMul * (0.35 + neonFade * 0.65)} />
+      </mesh>
 
       {/* Blinking tip light */}
       <mesh ref={blinkRef} position={[0, height + 0.12, 0]}>

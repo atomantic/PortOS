@@ -28,7 +28,7 @@ function StatBlock({ label, value, tone = 'text-cyan-300' }) {
 export default function OpenWorldFocusPanel({ app, notFound = false, agents = [], onClose, onFocusInWorld, isDesktop = true }) {
   // Desktop: occupy the Intel-pane slot. Compact: a bottom sheet above the dock.
   const containerClass = isDesktop
-    ? 'absolute top-16 right-3 bottom-20 w-72 pointer-events-auto'
+    ? 'absolute top-20 right-4 bottom-24 w-[19rem] pointer-events-auto'
     : 'absolute inset-x-2 bottom-16 pointer-events-auto';
 
   const procSummary = useMemo(() => {
@@ -53,7 +53,7 @@ export default function OpenWorldFocusPanel({ app, notFound = false, agents = []
     return (
       <div className={containerClass}>
         <div
-          className="bg-black/85 backdrop-blur-sm border border-port-warning/40 rounded-lg overflow-hidden flex flex-col"
+          className="openworld-intel-surface overflow-hidden flex flex-col"
           role="region"
           aria-label="Building not found"
         >
@@ -82,7 +82,7 @@ export default function OpenWorldFocusPanel({ app, notFound = false, agents = []
   return (
     <div className={containerClass}>
       <div
-        className={`${isDesktop ? 'h-full' : 'max-h-[55vh]'} bg-black/85 backdrop-blur-sm border border-cyan-500/40 rounded-lg overflow-hidden flex flex-col`}
+        className={`${isDesktop ? 'h-full' : 'max-h-[55vh]'} openworld-intel-surface overflow-hidden flex flex-col`}
         role="region"
         aria-label={`Focused building: ${title}`}
       >

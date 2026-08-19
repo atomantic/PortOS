@@ -21,11 +21,7 @@ function DockButton({ icon: Icon, label, active, badge = 0, badgeCritical = fals
       title={label}
       aria-label={label}
       aria-pressed={active === undefined ? undefined : active}
-      className={`relative shrink-0 w-11 h-11 flex items-center justify-center rounded-md border transition-colors ${
-        active
-          ? 'border-cyan-400/70 bg-cyan-500/15 text-cyan-300 shadow-[0_0_6px_rgba(6,182,212,0.3)]'
-          : 'border-cyan-500/25 text-cyan-500/70 hover:text-cyan-300 hover:border-cyan-400/50'
-      }`}
+      className="openworld-hud-action relative shrink-0 w-11 h-11"
     >
       <Icon size={18} aria-hidden="true" />
       {badge > 0 && (
@@ -157,9 +153,7 @@ export default function OpenWorldHudCompact({
           onClick={() => togglePane('vitals')}
           aria-label="Time and system vitals"
           aria-pressed={activePane === 'vitals'}
-          className={`relative bg-black/85 backdrop-blur-sm border rounded-lg px-3 min-h-[44px] flex items-center gap-2 transition-colors ${
-            activePane === 'vitals' ? 'border-cyan-400/70' : 'border-cyan-500/40'
-          }`}
+          className="openworld-hud-chip openworld-hud-action relative px-3 min-h-[44px] flex items-center gap-2"
         >
           <span className={`w-2 h-2 rounded-full ${vitals.sentinel.dot} shadow-[0_0_4px_currentColor]`} />
           <span className="font-pixel text-cyan-400 text-sm tracking-wider" style={{ textShadow: '0 0 8px rgba(6,182,212,0.5)' }}>
@@ -172,7 +166,7 @@ export default function OpenWorldHudCompact({
       {/* Top-right: connection + CoS + level */}
       <div className="absolute top-2 right-2 pointer-events-auto flex items-center gap-1.5">
         <div
-          className="bg-black/85 backdrop-blur-sm border border-cyan-500/40 rounded-lg px-2.5 min-h-[44px] flex items-center gap-2"
+          className="openworld-hud-chip px-2.5 min-h-[44px] flex items-center gap-2"
           role="status"
           aria-label={`Link ${connected ? 'online' : 'offline'}, Chief of Staff ${cosStatus?.running ? 'running' : 'idle'}`}
         >
@@ -185,7 +179,7 @@ export default function OpenWorldHudCompact({
             onClick={() => onOpenDestination?.('artifacts')}
             aria-label={`Teleport to Hall of Achievements — level ${character.level}`}
             title="Teleport to Hall of Achievements"
-            className="bg-black/85 backdrop-blur-sm border border-cyan-500/40 rounded-lg px-2.5 min-h-[44px] flex items-center font-pixel text-[11px] text-cyan-300 tracking-wider"
+            className="openworld-hud-chip openworld-hud-action px-2.5 min-h-[44px] flex items-center font-pixel text-[11px] text-cyan-300 tracking-wider"
           >
             LV {character.level}
           </button>
@@ -200,10 +194,10 @@ export default function OpenWorldHudCompact({
             title="Teleport to Goal Monuments"
             // A present-but-unusable date (invalid/future/unreadable) renders in the warning color,
             // matching the CharacterSheet "fix" prompt and the changelog's promise (#2757).
-            className={`bg-black/85 backdrop-blur-sm rounded-lg px-2.5 min-h-[44px] flex items-center font-pixel text-[11px] tracking-wider border ${
+            className={`openworld-hud-chip openworld-hud-action px-2.5 min-h-[44px] flex items-center font-pixel text-[11px] tracking-wider ${
               birthCta.kind === 'fix'
                 ? 'border-port-warning/50 text-port-warning'
-                : 'border-cyan-500/40 text-cyan-300/70'
+                : 'text-cyan-300/70'
             }`}
           >
             {birthCta.badgeLabel}
@@ -227,7 +221,7 @@ export default function OpenWorldHudCompact({
       {/* Disclosure sheet — one surface at a time, above the dock */}
       {!isFocused && activePane && (
         <div className="absolute inset-x-2 bottom-16 pointer-events-auto">
-          <div className="bg-black/90 backdrop-blur-md border border-cyan-500/35 rounded-lg flex flex-col max-h-[55vh] overflow-hidden">
+          <div className="openworld-intel-surface flex flex-col max-h-[55vh] overflow-hidden">
             <div className="flex items-center justify-between pl-3 pr-1 py-1.5 border-b border-cyan-500/20 shrink-0">
               <span className="font-pixel text-[11px] text-cyan-400 tracking-widest" style={{ textShadow: '0 0 8px rgba(6,182,212,0.4)' }}>
                 {(CITY_PANE_LABELS[activePane] || '').toUpperCase()}
@@ -252,7 +246,7 @@ export default function OpenWorldHudCompact({
       {/* Bottom dock — every HUD function within two taps */}
       <div className="absolute bottom-2 left-2 right-2 pointer-events-auto">
         <div
-          className="flex items-center gap-1.5 bg-black/85 backdrop-blur-sm border border-cyan-500/30 rounded-lg px-1.5 py-1.5 overflow-x-auto scrollbar-hide touch-pan-x"
+          className="openworld-hud-dock overflow-x-auto scrollbar-hide touch-pan-x"
           role="toolbar"
           aria-label="OpenWorld controls"
         >
