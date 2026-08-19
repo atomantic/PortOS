@@ -199,6 +199,21 @@ describe('readRunEvents', () => {
     expect((await readRunEvents()).map((e) => e.eventId)).toEqual(all.map((e) => e.eventId));
   });
 
+  it('keeps a line whose KIND this build does not know', async () => {
+    // A newer install's ledger (or this one's, before a downgrade) must still
+    // read here — dropping unknown kinds would lose the trace and renumber
+    // eventCount, which the projection's unknown-kind tolerance already avoids.
+    const known = await readRunEvents({ runId: 'r1' });
+    const future = { ...known[0], eventId: 'future-1', kind: 'run.from-the-future', at: '2026-08-18T10:20:00.000Z' };
+    writeFileSync(ACTIVE, `${readFileSync(ACTIVE, 'utf8')}${JSON.stringify(future)}\n`);
+    restartServer();
+
+    expect((await readRunEvents()).map((e) => e.kind)).toContain('run.from-the-future');
+    const [state] = await getRunProjections({ runId: 'r1' });
+    expect(state.eventCount).toBe(3);
+    expect(state.status).toBe('completed'); // unknown kind counted, not interpreted
+  });
+
   it('drops a corrupt line instead of poisoning the whole read', async () => {
     writeFileSync(ACTIVE, `${readFileSync(ACTIVE, 'utf8')}{"eventId":"x","kind":"nope"}\nnot json at all\n`);
     restartServer();

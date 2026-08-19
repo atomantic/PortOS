@@ -15,7 +15,7 @@ import { EFFORT_LEVELS, effortLevelsForProvider, buildEffortArgs, splitAntigravi
 import { ANTIGRAVITY_COMMAND } from './antigravity.js';
 import { isValidSlashdoCommand } from './slashdoInvocation.js';
 import { PR_COMPLETION_VALUES } from './prDisposition.js';
-import { AGENT_RUN_EVENT_KINDS } from './agentRunEvents.js';
+import { AGENT_RUN_EVENT_KINDS, RUN_EVENT_READ_LIMITS } from './agentRunEvents.js';
 
 // =============================================================================
 // COS TASK SCHEMAS
@@ -1643,22 +1643,22 @@ export function sanitizeTaskMetadata(raw) {
 
 // Query bounds for the read-only run-event diagnostics under
 // `/api/agents/activity/run-events`. `z.coerce` because these arrive as query
-// strings; the `limit` ceiling mirrors MAX_READ_LIMIT in
-// `services/agentRunEventLog.js` so a caller cannot ask the route to load and
-// serialize an unbounded slice of the ledger.
+// strings; the `limit` ceiling IS the ledger's own `RUN_EVENT_READ_LIMITS.max`
+// (imported, not copied — a literal here would drift into 400-ing requests the
+// service would happily serve, or clamping ones it would refuse).
 export const runEventsQuerySchema = z.object({
   runId: z.string().min(1).max(128).optional(),
   agentId: z.string().min(1).max(128).optional(),
   taskId: z.string().min(1).max(128).optional(),
   kind: z.enum(AGENT_RUN_EVENT_KINDS).optional(),
   since: z.string().datetime().optional(),
-  limit: z.coerce.number().int().min(1).max(1000).optional()
+  limit: z.coerce.number().int().min(1).max(RUN_EVENT_READ_LIMITS.max).optional()
 }).strict();
 
 export const runEventProjectionsQuerySchema = z.object({
   runId: z.string().min(1).max(128).optional(),
   agentId: z.string().min(1).max(128).optional(),
-  limit: z.coerce.number().int().min(1).max(1000).optional()
+  limit: z.coerce.number().int().min(1).max(RUN_EVENT_READ_LIMITS.max).optional()
 }).strict();
 
 // A projection id is either a run id or the `agent:<agentId>` fallback key a

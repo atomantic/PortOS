@@ -100,6 +100,19 @@ export const RUN_EVENT_LIMITS = Object.freeze({
   maxDepth: 3
 });
 
+/**
+ * Read-page bounds, here in the pure module rather than in the ledger service
+ * because BOTH the service and the route's Zod schema must agree on them. A
+ * route capped below the service's ceiling would 400 a request the service
+ * would happily serve; a route capped above it would silently clamp instead.
+ * `lib/cosValidation.js` imports these — a lib module must not reach into
+ * `services/`, so the constants live on this side of that edge.
+ */
+export const RUN_EVENT_READ_LIMITS = Object.freeze({
+  default: 200,
+  max: 1000
+});
+
 const isDroppedKey = (key) => DROPPED_KEY_PATTERNS.some((re) => re.test(key));
 
 /**
@@ -212,6 +225,27 @@ export const agentRunEventSchema = z.object({
   data: z.record(z.unknown())
 }).strict();
 
+/**
+ * Structural envelope check for the READ path.
+ *
+ * Identical to `agentRunEventSchema` except `kind` is any bounded string rather
+ * than the closed enum. A ledger file can outlive the build that wrote it — a
+ * peer install, or this install before a downgrade, may have written kinds this
+ * build has never heard of. Validating reads against the closed enum would drop
+ * those lines, which both loses the trace and silently renumbers `eventCount`,
+ * contradicting the forward-compatibility the projection already provides (it
+ * folds unknown kinds as no-ops). Writes stay strict — a typo at a call site is
+ * still a bug, and `buildRunEvent` is where it gets caught.
+ */
+export const storedRunEventSchema = agentRunEventSchema.extend({
+  kind: z.string().min(1).max(64)
+});
+
+/** Is this parsed line a structurally sound ledger line? Used by the read path. */
+export function isStoredRunEvent(value) {
+  return storedRunEventSchema.safeParse(value).success;
+}
+
 const nullableId = (value) => (typeof value === 'string' && value.trim() ? value.trim().slice(0, 128) : null);
 
 /**
@@ -220,8 +254,15 @@ const nullableId = (value) => (typeof value === 'string' && value.trim() ? value
  * `eventId` is content-derived by default: the sha256 of the canonicalized
  * envelope (kind + ids + timestamp + redacted data), truncated to 32 hex chars.
  * Two deliveries of the same logical transition therefore collide by design and
- * the ledger keeps one. Pass an explicit `eventId` only when a call site has a
- * better natural key than its own content.
+ * the ledger keeps one.
+ *
+ * **The timestamp is part of that hash**, so the content-derived id only dedupes
+ * a redelivery when the caller passes the SAME `at` — which is the normal case,
+ * because the stable lifecycle boundaries read theirs off the run record
+ * (`metadata.startTime` / `metadata.endTime`). A caller that lets `at` default
+ * to the wall clock is asserting that each occurrence is a distinct fact. When
+ * it isn't — a sweep that can re-observe the same dead agent — pass an explicit
+ * `eventId` naming the natural key instead.
  *
  * Throws on an invalid envelope — a malformed event is a bug at the call site,
  * and the append path (which owns the "never break a run for telemetry" rule)

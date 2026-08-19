@@ -39,9 +39,10 @@ import {
 } from '../lib/fileUtils.js';
 import {
   buildRunEvent,
-  isValidRunEvent,
+  isStoredRunEvent,
   projectRunStates,
-  AGENT_RUN_EVENT_KINDS
+  AGENT_RUN_EVENT_KINDS,
+  RUN_EVENT_READ_LIMITS
 } from '../lib/agentRunEvents.js';
 
 const ACTIVE_PATH = join(PATHS.cos, 'run-events.jsonl');
@@ -53,9 +54,11 @@ const ARCHIVE_PATH = join(PATHS.cos, 'run-events.1.jsonl');
  */
 export const MAX_ACTIVE_EVENTS = 5000;
 
-/** Default page size for the read API, and the ceiling a caller can request. */
-export const DEFAULT_READ_LIMIT = 200;
-export const MAX_READ_LIMIT = 1000;
+// Default page size for the read API, and the ceiling a caller can request.
+// Defined in the pure module so the route's Zod schema can share them without a
+// lib → services import (see RUN_EVENT_READ_LIMITS).
+export const DEFAULT_READ_LIMIT = RUN_EVENT_READ_LIMITS.default;
+export const MAX_READ_LIMIT = RUN_EVENT_READ_LIMITS.max;
 
 // Lazily hydrated on first append/read. `null` (not an empty Set) is the
 // "never loaded" sentinel, so a genuinely empty ledger caches as empty instead
@@ -155,9 +158,11 @@ export async function readRunEvents({ runId, agentId, taskId, kind, since, limit
     readJSONLFile(ARCHIVE_PATH),
     readJSONLFile(ACTIVE_PATH)
   ]);
-  // A line that fails validation is a corrupt/truncated write, not data —
-  // dropping it keeps one bad line from poisoning the whole projection.
-  let events = [...archive, ...active].filter(isValidRunEvent);
+  // A line that fails the STRUCTURAL check is a corrupt/truncated write, not
+  // data — dropping it keeps one bad line from poisoning the whole projection.
+  // The check deliberately admits kinds this build does not know (see
+  // `isStoredRunEvent`): a newer install's ledger must still read here.
+  let events = [...archive, ...active].filter(isStoredRunEvent);
 
   if (runId) events = events.filter((e) => e.runId === runId);
   if (agentId) events = events.filter((e) => e.agentId === agentId);

@@ -93,9 +93,14 @@ export async function syncRunnerAgents() {
       if (!recoveredRunId) {
         console.warn(`⚠️ Recovered agent ${agent.id} has no run id on record — its run stays open and unbilled`);
       }
-      // Record the re-adoption in the lifecycle ledger (#4540). `recoveryCount`
-      // in the projection is what turns "this run has been running for nine
-      // hours" into "this run has survived three restarts", and `hasRunId:false`
+      // Record the re-adoption in the lifecycle ledger (#4540). No explicit
+      // idempotency key here, unlike the orphan sweep: `runnerAgents.set` above
+      // has already made this agent locally owned, so the `isAgentOwnedLocally`
+      // guard stops this branch re-firing within the process. A SECOND
+      // re-adoption therefore means a second server lifetime — a genuinely
+      // distinct recovery, which `recoveryCount` is supposed to count — and that
+      // count is what turns "this run has been running for nine
+      // hours" into "this run has survived three restarts". `hasRunId:false`
       // is the durable trace of the unbilled-run warning above — today that
       // warning only exists in a console line nothing retains.
       await appendRunEvent({

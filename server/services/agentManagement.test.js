@@ -1152,6 +1152,22 @@ describe('orphan retries resume what the dead run left behind', () => {
     }));
   });
 
+  // The sweep re-runs every 15 minutes and can re-observe the same dead agent if
+  // the completeAgent write never landed. The ledger's default id covers the
+  // wall-clock timestamp, so without an explicit natural key a retry would file
+  // a second "this agent died" fact for one death.
+  it('keys the reap on the agent life, so a repeated sweep dedupes', async () => {
+    await cleanupOrphanedAgents();
+    await cleanupOrphanedAgents();
+
+    const ids = appendRunEvent.mock.calls
+      .filter(([e]) => e.kind === 'run.orphan-recovered')
+      .map(([e]) => e.eventId);
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(1);
+    expect(ids[0]).toContain('agent-dead');
+  });
+
   it('hands the dead agent’s worktree metadata from the sweep to the retry handler', async () => {
     await cleanupOrphanedAgents();
 

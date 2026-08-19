@@ -11,6 +11,7 @@ import {
   projectRunState,
   projectRunStates,
   redactRunEventData,
+  isStoredRunEvent,
   runEventKey,
   scrubHomePath
 } from './agentRunEvents.js';
@@ -44,6 +45,22 @@ describe('buildRunEvent — envelope schema', () => {
   it('isValidRunEvent rejects a line missing required fields', () => {
     expect(isValidRunEvent({ kind: 'run.spawned' })).toBe(false);
     expect(isValidRunEvent(buildRunEvent({ kind: 'run.spawned', runId: 'r1', at: AT }))).toBe(true);
+  });
+
+  it('admits an UNKNOWN kind on the read path while refusing it on the write path', () => {
+    // A ledger file outlives the build that wrote it. Validating reads against
+    // the closed enum would drop a newer install's lines, losing the trace AND
+    // renumbering eventCount — the projection already folds unknown kinds as
+    // no-ops, so the read check only has to be structural.
+    const future = { ...buildRunEvent({ kind: 'run.spawned', runId: 'r1', at: AT }), kind: 'run.from-the-future' };
+    expect(isStoredRunEvent(future)).toBe(true);
+    expect(isValidRunEvent(future)).toBe(false);
+  });
+
+  it('still refuses a structurally broken line on the read path', () => {
+    expect(isStoredRunEvent({ kind: 'run.spawned' })).toBe(false);
+    expect(isStoredRunEvent({ ...buildRunEvent({ kind: 'run.spawned', runId: 'r1', at: AT }), at: 'not-a-date' })).toBe(false);
+    expect(isStoredRunEvent({ ...buildRunEvent({ kind: 'run.spawned', runId: 'r1', at: AT }), extra: 1 })).toBe(false);
   });
 
   it('isKnownRunEventKind tracks the exported vocabulary', () => {

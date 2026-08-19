@@ -954,6 +954,13 @@ export async function cleanupOrphanedAgents() {
         // so it keys off the agent instead of disappearing.
         await appendRunEvent({
           kind: 'run.orphan-recovered',
+          // Explicit natural key rather than the content-derived default: this
+          // sweep runs every 15 minutes and can re-observe the same dead agent
+          // if the `completeAgent` write below ever fails to land, and the
+          // content hash covers the wall-clock `at`, so a retry would otherwise
+          // mint a second "this agent died" fact. An agent dies once per life,
+          // and `id + startedAt` names exactly that.
+          eventId: `orphan:${agent.id}:${agent.startedAt || 'unknown'}`,
           runId: agent.metadata?.runId,
           agentId: agent.id,
           taskId: agent.taskId,
