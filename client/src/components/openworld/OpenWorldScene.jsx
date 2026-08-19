@@ -349,7 +349,7 @@ export default function OpenWorldScene({ apps, agentMap, onBuildingClick, onTogg
           apps={apps}
           active={explorationMode}
           transitioning={transitioning}
-          cameraView={settings?.cameraView ?? 'first'}
+          cameraView={settings?.cameraView ?? 'third'}
           teleport={playerTeleport}
           warpPads={warpRegions}
           onWarpPadInteract={onTravelToRegion}

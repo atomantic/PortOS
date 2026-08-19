@@ -34,9 +34,9 @@ const _lookTarget = new THREE.Vector3();
 
 // Exploration-mode player rig. One mutable rig object is the single source of truth for
 // the player's pose; both camera modes (and the third-person avatar) read from it:
-//   - 'first' (default): the classic invisible first-person camera.
-//   - 'third' (V to toggle): a damped follow camera behind a visible low-poly rover, with
+//   - 'third' (default): a damped follow camera behind a visible low-poly rover, with
 //     building-aware boom shortening (openWorldPlayerRig.js owns all the math).
+//   - 'first' (V to toggle): the classic invisible first-person camera.
 // All original behavior is preserved: WASD/arrows, shift boost, E/Q vertical, F interact,
 // R respawn, pointer-lock mouselook, per-building cylinder collision below flyover height,
 // world bounds, and spawn persistence. Ground movement can't enter the bay (the harbor piers
@@ -50,7 +50,7 @@ export default function PlayerController({
   apps,
   active,
   transitioning = false,
-  cameraView = 'first',
+  cameraView = 'third',
   teleport = null,
   warpPads = [],
   onWarpPadInteract,
