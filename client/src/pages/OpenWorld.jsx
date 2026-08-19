@@ -4,6 +4,7 @@ import { useCityData } from '../hooks/useCityData';
 import { useCityPlayback } from '../hooks/useCityPlayback';
 import useCityAudio from '../hooks/useCityAudio';
 import useKeyboardControls from '../hooks/useKeyboardControls';
+import useKeyboardShortcuts from '../hooks/useKeyboardShortcuts';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import { mergeFrameIntoCityProps } from '../lib/cityPlaybackFrame';
 import * as api from '../services/api';
@@ -20,11 +21,13 @@ import { resolveCityFocus } from '../utils/cityFocusState';
 import useCityViewport from '../hooks/useCityViewport';
 import { DEFAULT_PRESET_ID, cyclePreset } from '../utils/cityPhotoMode';
 import { computeSoundscape } from '../utils/citySoundscape';
-import { CITY_COLORS, deriveCityPalette, resolveCityTimeOfDay } from '../components/city/cityConstants';
+import { deriveCityPalette, getTimeOfDayPreset, resolveCityTimeOfDay, resolveWorldStyle } from '../components/city/cityConstants';
+import OpenWorldFastTravel from '../components/city/OpenWorldFastTravel';
+import { getRegion, regionArrivalPoint, regionPath } from '../utils/openWorldRegions';
 import { CityPaletteProvider } from '../components/city/CityPaletteContext';
 import { useThemeContext } from '../components/ThemeContext';
 
-function CyberCityInner() {
+function OpenWorldInner() {
   const { apps, cosAgents, cosStatus, eventLogs, agentMap, reviewCounts, instances, systemHealth, notificationCounts, backupStatus, cosTasks, healthMetrics, voiceState, character, aiActivity, loading, connected } = useCityData();
   const { settings, updateSetting, resetNonce } = useCitySettingsContext();
 
@@ -41,15 +44,21 @@ function CyberCityInner() {
   const { playSfx } = useCityAudio(settings, soundscape);
   const navigate = useNavigate();
   const location = useLocation();
-  const { appId } = useParams();
+  const { appId, regionId } = useParams();
   const { isDesktop } = useCityViewport();
 
-  // URL-addressed building focus (issue #2593). The `/city/apps/:appId` route param is the single
-  // source of truth for "which borough is focused" — reload/back-forward/deep-link all restore it.
+  // URL-addressed building focus (issue #2593). The `/openworld/apps/:appId` route param is the
+  // single source of truth for "which borough is focused" — reload/back-forward/deep-link all
+  // restore it.
   const { hasFocus, focusedApp, notFound: focusNotFound } = useMemo(
     () => resolveCityFocus(appId, apps, { loading }),
     [appId, apps, loading],
   );
+  // Fast travel: `/openworld/region/:regionId` is the same contract one level out — the URL says
+  // which region you warped to, so a warp is shareable, bookmarkable, and reachable from ⌘K and
+  // voice. The registry is static (no loading race), and an unknown id resolves to null, which
+  // simply leaves the camera on the overview.
+  const focusedRegion = useMemo(() => getRegion(regionId), [regionId]);
   const focusAgents = useMemo(() => agentMap?.get?.(appId)?.agents || [], [agentMap, appId]);
   // HUD safe area the focus camera frames around: the detail panel sits on the right (desktop) or
   // as a bottom sheet (compact), so keep the borough clear of it.
@@ -58,21 +67,28 @@ function CyberCityInner() {
     [isDesktop],
   );
 
-  // CyberCity follows the active PortOS theme: the HUD recolors via the
+  // OpenWorld follows the active PortOS theme: the HUD recolors via the
   // `cybercity-themed` CSS scope (see index.css) and the 3D scene's brand colors
   // + surround are derived from the same theme here.
   const { theme: cityTheme } = useThemeContext();
+  // Art direction — 'vibes' (bright low-poly open world, the default) or 'cyber' (the
+  // original neon night). It selects the time-of-day preset pair and the palette's
+  // structural/decorative surfaces, so it must resolve before either.
+  const worldStyle = resolveWorldStyle(settings?.worldStyle);
   // Pure: derive the themed palette and hand it down through CityPaletteContext (and,
   // inside <Canvas>, a second provider in CityScene since r3f's reconciler doesn't
   // bridge context). No more during-render mutation of a shared singleton.
-  const cityPalette = useMemo(() => deriveCityPalette(cityTheme), [cityTheme]);
+  const cityPalette = useMemo(() => deriveCityPalette(cityTheme, worldStyle), [cityTheme, worldStyle]);
 
-  // The city renders day or night, following the theme mode by default (see
+  // The world renders day or night, following the theme mode by default (see
   // resolveCityTimeOfDay). The resolved preset key is handed to the scene via a
-  // settings override (CitySky/CityLights/CityGround read settings.timeOfDay), and
-  // the backdrop swaps between the blue day sky and the dark night void to match.
-  const cityTimeOfDay = resolveCityTimeOfDay(settings?.timeOfDay, cityPalette.isDay);
-  const sceneBackground = cityTimeOfDay.daytime ? CITY_COLORS.timeOfDay.noon.midSky : cityPalette.nightBackground;
+  // settings override (CitySky/CityLights/CityGround read settings.timeOfDay), and the
+  // backdrop takes the matching preset's mid-sky band so the DOM surround behind the
+  // canvas agrees with the sky the scene actually paints, in either art direction.
+  const cityTimeOfDay = resolveCityTimeOfDay(settings?.timeOfDay, cityPalette.isDay, worldStyle);
+  const sceneBackground = cityTimeOfDay.daytime
+    ? getTimeOfDayPreset(cityTimeOfDay.presetKey).midSky
+    : cityPalette.nightBackground;
 
   // Auto quality mode (issue #2592). In Auto, an adaptive render budget picks the
   // effective tier at runtime (starting at High); in Manual, the effective tier is the
@@ -139,13 +155,13 @@ function CyberCityInner() {
     [apps, agentMap, filter.status, filter.search]
   );
 
-  const showSettings = location.pathname === '/city/settings';
+  const showSettings = location.pathname === '/openworld/settings';
 
   // Mode precedence (issue #2593): entering exploration/photo/history while a borough is focused
   // clears the focused route first, so the focus camera + detail panel stand down deterministically
   // before the new mode takes the camera. `hasFocus` reads the URL, the single source of truth.
   const clearFocusRoute = useCallback(() => {
-    if (hasFocus) navigate('/city');
+    if (hasFocus) navigate('/openworld');
   }, [hasFocus, navigate]);
 
   const handleToggleExploration = useCallback(() => {
@@ -159,6 +175,30 @@ function CyberCityInner() {
   }, [updateSetting, settings?.cameraView]);
 
   const keysRef = useKeyboardControls(handleToggleExploration);
+
+  // --- Fast travel ----------------------------------------------------------
+  // Warping navigates to `/openworld/region/:regionId`; the route param then drives the
+  // camera (CityFocusCamera) and, on foot, the player rig. Only the panel's open/closed
+  // state is local — the destination itself always lives in the URL.
+  const [fastTravelOpen, setFastTravelOpen] = useState(false);
+  // The walking player's arrival point for the latest warp, carrying a monotonic token so
+  // PlayerController can tell "warp again to the same place" from a re-render with equal
+  // coordinates — which is why it isn't derived from the region id. Set on every warp, not
+  // only while exploring: PlayerController mounts only in exploration mode and applies the
+  // current token on mount, so arming it unconditionally also means warping in the orbital
+  // overview and THEN dropping in (Tab) lands you at the region you were looking at,
+  // instead of back at your old spawn.
+  const [playerTeleport, setPlayerTeleport] = useState(null);
+
+  const handleTravelToRegion = useCallback((region) => {
+    if (!region?.id) return;
+    navigate(regionPath(region.id));
+    const arrival = regionArrivalPoint(region);
+    if (arrival) setPlayerTeleport(prev => ({ ...arrival, token: (prev?.token ?? 0) + 1 }));
+    playSfx?.('dataPulse');
+  }, [navigate, playSfx]);
+
+  const openFastTravel = useCallback(() => setFastTravelOpen(true), []);
 
   // Photo mode (roadmap 3.3): a cinematic capture mode with framing presets and a postcard
   // screenshot. The in-canvas CityPhotoCamera registers its capture function here via a ref so
@@ -175,6 +215,16 @@ function CyberCityInner() {
   // Transport state lives in the hook; the page swaps the current frame's data
   // into the scene props below. Mutually exclusive with photo mode.
   const playback = useCityPlayback();
+
+  // M opens the fast-travel map. Deliberately open-only, not a toggle: the panel is a
+  // <Modal>, which owns Esc/backdrop dismissal — and the shared shortcut hook suppresses
+  // itself while any `aria-modal` dialog is up, so a toggle binding could never have
+  // fired the close half anyway. The hook also drops ⌘/Ctrl/Alt chords, auto-repeat, and
+  // keystrokes typed into a field, so the HUD filter and the panel's own search box keep
+  // their letters. Inactive in photo and playback mode: those own the camera and hide the
+  // panel, so a live binding there would only bank an "open" that springs the panel the
+  // moment the user returns to the live view.
+  useKeyboardShortcuts(!photoMode && !playback.active, { m: openFastTravel, M: openFastTravel });
 
   // Entering photo mode leaves exploration + playback; they're mutually exclusive modes.
   const enterPhotoMode = useCallback(() => {
@@ -338,7 +388,7 @@ function CyberCityInner() {
   const handleBuildingClick = useCallback((app) => {
     if (!app?.id) return;
     if (settings?.explorationMode) navigate(`/apps/${app.id}`);
-    else navigate(`/city/apps/${app.id}`);
+    else navigate(`/openworld/apps/${app.id}`);
   }, [navigate, settings?.explorationMode]);
 
   const handleJumpToFirst = useCallback(() => {
@@ -346,11 +396,11 @@ function CyberCityInner() {
     if (!first?.id) return;
     // Mirror handleBuildingClick: focus in-place from the overview, open the app page in exploration.
     if (settings?.explorationMode) navigate(`/apps/${first.id}`);
-    else navigate(`/city/apps/${first.id}`);
+    else navigate(`/openworld/apps/${first.id}`);
   }, [filterResult.matches, navigate, settings?.explorationMode]);
 
   // Close focus → back to the plain overview. Open app → the existing app detail page (explicit).
-  const handleCloseFocus = useCallback(() => navigate('/city'), [navigate]);
+  const handleCloseFocus = useCallback(() => navigate('/openworld'), [navigate]);
   const handleOpenApp = useCallback((id) => { if (id) navigate(`/apps/${id}`); }, [navigate]);
 
   // Headline numbers baked onto a captured city postcard. Derived from data the page already
@@ -386,13 +436,13 @@ function CyberCityInner() {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-4 cybercity-themed" style={{ background: cityPalette.background }}>
         <div className="font-pixel text-cyan-400 text-lg tracking-widest animate-pulse" style={{ textShadow: '0 0 12px rgba(6,182,212,0.5)' }}>
-          INITIALIZING CITY
+          ENTERING OPENWORLD
         </div>
         <div className="w-48 h-1 bg-gray-800 rounded-full overflow-hidden">
           <div className="h-full bg-cyan-500 rounded-full animate-pulse" style={{ width: '60%', boxShadow: '0 0 8px rgba(6,182,212,0.5)' }} />
         </div>
         <div className="font-pixel text-[10px] text-cyan-500/40 tracking-wider">
-          LOADING SYSTEMS...
+          LOADING WORLD...
         </div>
       </div>
     );
@@ -450,6 +500,8 @@ function CyberCityInner() {
         onAutoTierChange={setAutoTier}
         onAutoDiagnostics={setAutoDiagnostics}
         focusedAppId={appId || null}
+        focusedRegion={focusedRegion}
+        playerTeleport={playerTeleport}
         hudSafe={focusHudSafe}
       />
       {/* The full HUD hides in photo + playback mode so the view is clean; each
@@ -483,6 +535,8 @@ function CyberCityInner() {
           focusAgents={focusAgents}
           onCloseFocus={handleCloseFocus}
           onOpenApp={handleOpenApp}
+          onOpenFastTravel={openFastTravel}
+          activeRegion={focusedRegion}
         />
       )}
       <CityPhotoOverlay
@@ -511,13 +565,24 @@ function CyberCityInner() {
         onCycleSpeed={playback.cycleSpeed}
         onExit={playback.exit}
       />
+      {/* Fast travel (M). Hidden in photo + playback mode, which own the camera and would
+          fight a warp. Mounted OUTSIDE the HUD's pointer-events-none shell so it can take
+          clicks, and above the CRT overlay so its panel isn't scanlined. */}
+      <OpenWorldFastTravel
+        open={fastTravelOpen && !photoMode && !playback.active}
+        onClose={() => setFastTravelOpen(false)}
+        onTravel={handleTravelToRegion}
+        onOpenPage={(path) => navigate(path)}
+        activeRegionId={focusedRegion?.id || null}
+        onLeaveRegion={() => navigate('/openworld')}
+      />
       <CityScanlines settings={settings} crt={cityPalette.crt} />
       {/* Settings on the shared Drawer (issue #2591). Closing preserves other query
           params (e.g. an open cityPane) so the disclosure state survives. The Auto-quality
           props (#2592) drive the Performance tab's effective-tier label + local diagnostics. */}
       <CitySettingsDrawer
         open={showSettings}
-        onClose={() => navigate(`/city${location.search}`)}
+        onClose={() => navigate(`/openworld${location.search}`)}
         qualityMode={qualityMode}
         effectiveTier={effectiveTier}
         diagnostics={qualityMode === 'auto' ? autoDiagnostics : null}
@@ -527,10 +592,10 @@ function CyberCityInner() {
   );
 }
 
-export default function CyberCity() {
+export default function OpenWorld() {
   return (
     <CitySettingsProvider>
-      <CyberCityInner />
+      <OpenWorldInner />
     </CitySettingsProvider>
   );
 }

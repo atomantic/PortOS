@@ -54,7 +54,7 @@ const baseProps = {
 
 const renderCompact = (search = '', props = {}) =>
   render(
-    <MemoryRouter initialEntries={[`/city${search}`]}>
+    <MemoryRouter initialEntries={[`/openworld${search}`]}>
       <CityHudCompact {...baseProps} {...props} />
       <Loc />
     </MemoryRouter>,

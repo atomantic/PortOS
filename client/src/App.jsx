@@ -24,7 +24,7 @@ const AgentsPage = lazyWithReload(() => import('./pages/DevTools').then(m => ({ 
 const DataDog = lazyWithReload(() => import('./pages/DataDog'));
 const FlowsDoc = lazyWithReload(() => import('./pages/FlowsDoc'));
 const GitHub = lazyWithReload(() => import('./pages/GitHub'));
-const CyberCity = lazyWithReload(() => import('./pages/CyberCity'));
+const OpenWorld = lazyWithReload(() => import('./pages/OpenWorld'));
 const AppDetail = lazyWithReload(() => import('./pages/AppDetail'));
 const FeatureAgents = lazyWithReload(() => import('./pages/FeatureAgents'));
 const FeatureAgentDetail = lazyWithReload(() => import('./pages/FeatureAgentDetail'));
@@ -195,6 +195,10 @@ const MEDIA_3D_PREFIX = /^\/media\/3d/;
 // is what a bookmark, a typed URL, or a half-remembered path lands on — alias it
 // rather than letting the catch-all swallow it (issue #3793).
 const ANNOTATE_PREFIX = /^\/annotate/;
+// CyberCity became OpenWorld. Bookmarks, pinned sidebar entries, stored palette
+// history, and peers' deep links all still say /city — alias the whole prefix
+// (including /city/settings and /city/apps/:appId) rather than 404ing them.
+const CITY_PREFIX = /^\/city/;
 
 // Normalize a tab-less /creative-director/:id URL to its overview tab while
 // preserving any query string + hash. A bare `<Navigate to="overview">` would
@@ -342,9 +346,12 @@ export default function App() {
           <Route path="jira" element={<Navigate to="/devtools/jira" replace />} />
           <Route path="devtools/jira" element={<Jira />} />
           <Route path="devtools/jira/reports" element={<JiraReports />} />
-          <Route path="city" element={<CyberCity />} />
-          <Route path="city/settings" element={<CyberCity />} />
-          <Route path="city/apps/:appId" element={<CyberCity />} />
+          <Route path="openworld" element={<OpenWorld />} />
+          <Route path="openworld/settings" element={<OpenWorld />} />
+          <Route path="openworld/apps/:appId" element={<OpenWorld />} />
+          <Route path="openworld/region/:regionId" element={<OpenWorld />} />
+          <Route path="city" element={<PrefixRedirect from={CITY_PREFIX} to="/openworld" />} />
+          <Route path="city/*" element={<PrefixRedirect from={CITY_PREFIX} to="/openworld" />} />
           <Route path="data" element={<DataManager />} />
           <Route path="character" element={<CharacterSheet />} />
           <Route path="ask" element={<Ask />} />

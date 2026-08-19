@@ -5,11 +5,48 @@
 
 import { PORTOS_APP_ID } from './appIdentity.js';
 
+// Fast-travel destinations — one command per region in the client's OPEN_WORLD_REGIONS
+// registry (client/src/utils/openWorldRegions.js), so ⌘K and voice ("take me to the
+// memory quarter") can warp straight into the world. The list is duplicated rather than
+// imported because a server lib can't reach into client code; navManifest.test.js scrapes
+// the registry and fails on drift in the paths, the labels, AND the aliases.
+// Written as [id, label, aliases] tuples so the axis that varies is the only thing repeated.
+//
+// Aliases are authored in the human phrasing the fast-travel search box uses ("memory
+// quarter") and registered KEBAB-CASED, because resolveNavCommand normalizes its input to
+// kebab before matching: a space-separated alias can never be hit. Registering them raw
+// didn't just fail to resolve — the fallback tiers matched a substring against an unrelated
+// command, so "memory quarter" landed on /brain/memory and "voice beacon" on /settings/voice.
+const OPEN_WORLD_REGION_COMMANDS = [
+  ['downtown', 'Downtown', ['downtown', 'apps district', 'app towers']],
+  ['ai-core', 'AI Core Plaza', ['ai core', 'core plaza', 'the core', 'reactor']],
+  ['task-queue', 'Task Queue', ['task queue', 'queue', 'cos queue']],
+  ['wellness', 'Wellness Tower', ['wellness tower', 'health tower', 'vitals tower']],
+  ['archive', 'Archive District', ['archive district', 'warehouse', 'cold storage']],
+  ['quiet-corner', 'Quiet Corner', ['quiet corner', 'easter eggs']],
+  ['productivity', 'Productivity Terrace', ['productivity terrace', 'productivity', 'streak district']],
+  ['backup-vault', 'Backup Vault', ['backup vault', 'the vault']],
+  ['memory', 'Memory Quarter', ['memory quarter', 'memory district', 'knowledge district']],
+  ['sprint-yard', 'Sprint Yard', ['sprint yard', 'jira yard', 'sprint district']],
+  ['voice', 'Voice Beacon', ['voice beacon', 'the beacon']],
+  ['goals', 'Goal Monuments', ['goal monuments', 'monuments', 'goals district']],
+  ['artifacts', 'Hall of Achievements', ['hall of achievements', 'artifact hall', 'achievements hall']],
+  ['data-harbor', 'Data Harbor', ['data harbor', 'the harbor', 'piers']],
+].map(([id, label, aliases]) => ({
+  id: `nav.openworld.region.${id}`,
+  path: `/openworld/region/${id}`,
+  label,
+  section: 'Main',
+  aliases: aliases.map((a) => a.replace(/\s+/g, '-')),
+  keywords: ['openworld', 'fast travel', 'warp', 'region', 'teleport'],
+}));
+
 export const NAV_COMMANDS = [
   { id: 'nav.dashboard', path: '/', label: 'Dashboard', section: 'Main', aliases: ['dashboard', 'home'], keywords: ['overview', 'start'] },
   { id: 'nav.review-hub', path: '/review', label: 'Review Hub', section: 'Main', aliases: ['review', 'review-hub'] },
-  { id: 'nav.cybercity', path: '/city', label: 'City', section: 'Main', aliases: ['city', 'cybercity'], keywords: ['3d', 'visualization', 'cybercity'] },
-  { id: 'nav.cybercity.settings', path: '/city/settings', label: 'City Settings', section: 'Main', aliases: ['city settings', 'cybercity settings', 'city-settings', 'cybercity-config'], keywords: ['cybercity', 'settings', '3d', 'configure'] },
+  { id: 'nav.cybercity', path: '/openworld', label: 'OpenWorld', section: 'Main', aliases: ['openworld', 'open world', 'open-world', 'city', 'cybercity'], keywords: ['3d', 'visualization', 'cybercity', 'game', 'map', 'explore'] },
+  { id: 'nav.cybercity.settings', path: '/openworld/settings', label: 'OpenWorld Settings', section: 'Main', aliases: ['openworld settings', 'open world settings', 'world settings', 'city settings', 'cybercity settings', 'city-settings', 'cybercity-config'], keywords: ['cybercity', 'openworld', 'settings', '3d', 'configure', 'world style', 'low poly'] },
+  ...OPEN_WORLD_REGION_COMMANDS,
   { id: 'nav.apps', path: '/apps', label: 'Apps', section: 'Main', aliases: ['apps'] },
   // Submodules are per-app (a tab on the app detail page), so this entry is
   // explicitly PortOS's own — the only repo whose app id is a fixed constant.

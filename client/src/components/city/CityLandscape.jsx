@@ -62,14 +62,17 @@ const TERRAIN_FRAG = `
   }
 `;
 
-function TerrainPlane({ dayMix, accent }) {
+function TerrainPlane({ dayMix, accent, terrain }) {
   const material = useMemo(() => new THREE.ShaderMaterial({
     vertexShader: TERRAIN_VERT,
     fragmentShader: TERRAIN_FRAG,
     uniforms: {
-      uInner: { value: new THREE.Color(mixHex('#202426', '#686d68', dayMix)) },
-      uMeadow: { value: new THREE.Color(mixHex('#172719', '#6f8758', dayMix)) },
-      uRidge: { value: new THREE.Color(mixHex('#111827', '#8d937f', dayMix)) },
+      // Night bands are shared; the daytime bands come from the active world style's
+      // terrain trio (WORLD_STYLE_DEFS in cityConstants), so retuning a style's ground
+      // doesn't mean grepping raw hexes across two files.
+      uInner: { value: new THREE.Color(mixHex('#202426', terrain.inner, dayMix)) },
+      uMeadow: { value: new THREE.Color(mixHex('#172719', terrain.meadow, dayMix)) },
+      uRidge: { value: new THREE.Color(mixHex('#111827', terrain.ridge, dayMix)) },
       uAccent: { value: new THREE.Color(accent) },
       uDayMix: { value: dayMix },
     },
@@ -78,7 +81,7 @@ function TerrainPlane({ dayMix, accent }) {
     // accent intentionally NOT a dep — a theme switch updates the uniform in
     // place (effect below) rather than recompiling the GLSL program. Matches the
     // imperative-uniform pattern in CitySky / CityBillboards / CityVolumetricLights.
-  }), [dayMix]);
+  }), [dayMix, terrain]);
 
   // Push the accent into the existing material on theme change — no rebuild.
   useEffect(() => { material.uniforms.uAccent.value.set(accent); }, [material, accent]);
@@ -99,7 +102,7 @@ function TerrainPlane({ dayMix, accent }) {
   );
 }
 
-function Mountain({ mountain, dayMix }) {
+function Mountain({ mountain, dayMix, surface }) {
   const geometry = useMemo(() => {
     const geom = new THREE.ConeGeometry(mountain.radius, mountain.height, mountain.sides, 6);
     const position = geom.getAttribute('position');
@@ -136,6 +139,7 @@ function Mountain({ mountain, dayMix }) {
           roughness={0.92}
           metalness={0}
           depthWrite
+          {...surface}
         />
       </mesh>
     </group>
@@ -143,7 +147,7 @@ function Mountain({ mountain, dayMix }) {
 }
 
 export default function CityLandscape({ settings }) {
-  const { accent } = useCityPalette();
+  const { accent, terrain, surface } = useCityPalette();
   const dayMix = cityDayMix(settings);
 
   const mountains = useMemo(() => {
@@ -174,10 +178,10 @@ export default function CityLandscape({ settings }) {
 
   return (
     <group>
-      <TerrainPlane dayMix={dayMix} accent={accent} />
+      <TerrainPlane dayMix={dayMix} accent={accent} terrain={terrain} />
       <group>
         {mountains.map((mountain) => (
-          <Mountain key={mountain.id} mountain={mountain} dayMix={dayMix} />
+          <Mountain key={mountain.id} mountain={mountain} dayMix={dayMix} surface={surface} />
         ))}
       </group>
     </group>

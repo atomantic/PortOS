@@ -82,8 +82,8 @@ its tunable constants and placement helpers.
 | `cityEasterEggs` | Unlockable easter eggs from context (date/character/goals) → placements (`computeEasterEggs`). |
 | `cityFederation` | Sync-peer reachability horizon: status color/opacity, bridge state, peer placement (`computeFederationHorizon`). |
 | `cityFilter` | Status-filter definitions and app-filtering result (`computeFilterResult`). |
-| `cityFocusCamera` | Pure camera-framing math for building focus mode: orbital `position`/`target` that frame one borough for a given aspect ratio + HUD safe area (`computeFocusCamera`). |
-| `cityFocusState` | Resolve the `/city/apps/:appId` route param + app list into `{ hasFocus, focusedApp, notFound }`, deferring the not-found flag until apps finish loading (`resolveCityFocus`). |
+| `cityFocusCamera` | Pure camera-framing math for OpenWorld's camera targets: orbital `position`/`target` framing one borough (`computeFocusCamera`) or a whole fast-travel region (`computeRegionCamera`) for a given aspect ratio + HUD safe area. |
+| `cityFocusState` | Resolve the `/openworld/apps/:appId` route param + app list into `{ hasFocus, focusedApp, notFound }`, deferring the not-found flag until apps finish loading (`resolveCityFocus`). |
 | `cityFlowLines` | Inter-building flow-line connections between active/agent nodes (`computeFlowConnections`). |
 | `cityGoalMonuments` | Goal monuments & forest: stall detection, milestone segments, placement (`computeGoalMonuments`, `computeGoalForest`). |
 | `cityHealthTower` | Health-metric tower segments from the latest health entry (`computeHealthTower`). |
@@ -93,6 +93,7 @@ its tunable constants and placement helpers.
 | `cityMiniMap` | Mini-map projection of building positions into 2D bounds, plus opt-in waterfront geography (bay/shoreline/harbor) read from `cityPlan` (`computeMiniMap`, `projectPoint`, `geographyWorldPoints`, `projectGeography`). |
 | `cityPhotoMode` | Photo-mode camera presets, the demand-loop fly stepper, postcard stats, and screenshot filename (`getPreset`, `cyclePreset`, `stepFly`). |
 | `cityPlan` | Master town plan: district parcels, shoreline/bay, plaza, transit loop, street network (`PARCELS`, `WORLD`, `computeStreets`, `computeStreetProps`, `isInWater`). |
+| `openWorldRegions` | OpenWorld fast-travel registry: named regions over the `cityPlan` parcels, each mapped to the PortOS page it visualizes (`OPEN_WORLD_REGIONS`, `getRegion`, `listRegions`, `searchRegions`, `regionArrivalPoint`, `regionPath`). |
 | `cityPlayerRig` | Exploration player-rig math: third-person follow camera, boom collision, damping, facing, avatar state (`thirdPersonCamera`, `resolveBoom`, `dampAngle`, `moveFacing`, `avatarState`). |
 | `cityRenderBudget` | Pure Auto-quality render-budget state machine: p75 frame-time windows, hysteresis, cooldown, warm-up/gap rejection (`createRenderBudget`, `recordFrame`, `restartWarmup`, `resetRenderBudget`, `getEffectiveTier`, `QUALITY_TIERS`, `DEFAULT_RENDER_BUDGET_CONFIG`). |
 | `cityRooftops` | Deterministic rooftop fixture kits (antenna/tank/AC/dish) per app name (`computeRooftopKit`). |

@@ -22,7 +22,7 @@ const getProcessColor = (status, building) => {
 };
 
 export default function ProcessBuilding({ process, pm2Status, position, seed, dimmed = false, dayMix = 0 }) {
-  const { building, buildingBody } = useCityPalette();
+  const { building, buildingBody, surface } = useCityPalette();
   const blinkRef = useRef();
   const glowRef = useRef();
 
@@ -83,6 +83,7 @@ export default function ProcessBuilding({ process, pm2Status, position, seed, di
       <mesh position={[0, height / 2, 0]}>
         <boxGeometry args={[width, height, depth]} />
         <meshStandardMaterial
+        {...surface}
           color={bodyColor}
           emissive={color}
           emissiveIntensity={(status === 'online' ? 0.2 : 0.08) * dimMul * (1 - dayMix * 0.9)}

@@ -49,14 +49,15 @@ import CityFocusCamera from './CityFocusCamera';
 import CityPhotoCamera from './CityPhotoCamera';
 import CityDepthOfField from './CityDepthOfField';
 import CityAdaptiveQuality from './CityAdaptiveQuality';
-import { cityDayMix } from './cityConstants';
+import { cityDayMix, getTimeOfDayPreset } from './cityConstants';
+import { CITY_MAX_ORBIT_DISTANCE } from '../../utils/cityFocusCamera';
 import { CityPaletteProvider } from './CityPaletteContext';
 import ErrorBoundary from '../ErrorBoundary';
 import { useVisibilityEvent } from '../../hooks/useVisibilityEvent';
 
 const STARTUP_PARTICLE_DENSITY = 0.49;
 
-export default function CityScene({ apps, agentMap, onBuildingClick, onToggleCameraView, cosStatus, reviewCounts, instances, backupStatus, cosTasks, healthMetrics, voiceState, aiActivity, productivityData, activityCalendar, goals, character, chronotype, memoryGraph, inboxDepth, jiraTickets, introspection, playback = false, photoMode, photoPresetId, photoDof, onPhotoCaptureReady, settings, playSfx, keysRef, dimmedAppIds, focusedAppId, hudSafe, background, palette, autoQuality = false, autoStartTier = 'high', autoResetToken = 0, diagnosticsEnabled = false, onAutoTierChange, onAutoDiagnostics }) {
+export default function CityScene({ apps, agentMap, onBuildingClick, onToggleCameraView, cosStatus, reviewCounts, instances, backupStatus, cosTasks, healthMetrics, voiceState, aiActivity, productivityData, activityCalendar, goals, character, chronotype, memoryGraph, inboxDepth, jiraTickets, introspection, playback = false, photoMode, photoPresetId, photoDof, onPhotoCaptureReady, settings, playSfx, keysRef, dimmedAppIds, focusedAppId, focusedRegion, playerTeleport, hudSafe, background, palette, autoQuality = false, autoStartTier = 'high', autoResetToken = 0, diagnosticsEnabled = false, onAutoTierChange, onAutoDiagnostics }) {
   const [positions, setPositions] = useState(null);
   const [proximityApp, setProximityApp] = useState(null);
   const [transitioning, setTransitioning] = useState(false);
@@ -89,6 +90,13 @@ export default function CityScene({ apps, agentMap, onBuildingClick, onToggleCam
   const photoComposerRef = useRef(null);
 
   const explorationMode = settings?.explorationMode || false;
+  // Art direction gate, read off the palette every other themed surface already consumes
+  // (Building, ProcessBuilding, CityLandscape) rather than re-resolving the style from
+  // settings — one bit, one channel. The neon-night layers below (galaxy spheremap,
+  // starfield/shooting stars, data rain, embers, volumetric light cones, neon signage)
+  // belong to the CyberCity style; over the Vibes world's sunlit low-poly landscape they
+  // read as haze and grain, so they don't mount at all rather than fading per-frame.
+  const neonLayers = Boolean(palette?.neonLayers);
 
   useEffect(() => {
     if (photoMode) {
@@ -174,8 +182,12 @@ export default function CityScene({ apps, agentMap, onBuildingClick, onToggleCam
   const dpr = rawDpr.map(value => Math.min(value, dprLimit));
   const showGradientBackground = cityDayMix(renderSettings) > 0.5;
   const sceneClearColor = background || '#030308';
+  // The pre-canvas / WebGL-lost backdrop. Under CyberCity's daylight it's the blue sky
+  // gradient; under the Vibes style the sky is warm at the horizon, so it takes its bands
+  // from the resolved scene color rather than the hardcoded cyber gradient.
+  const skyPreset = getTimeOfDayPreset(renderSettings?.timeOfDay ?? 'sunset');
   const fallbackBackground = showGradientBackground
-    ? 'linear-gradient(180deg, #0f4f9a 0%, #1e78bf 48%, #58a9dc 100%)'
+    ? `linear-gradient(180deg, ${skyPreset.zenith} 0%, ${skyPreset.midSky} 48%, ${skyPreset.horizonLow} 100%)`
     : sceneClearColor;
 
   const handleCanvasCreated = useCallback(({ gl }) => {
@@ -237,22 +249,23 @@ export default function CityScene({ apps, agentMap, onBuildingClick, onToggleCam
           own reconciler, so the provider in CyberCityInner doesn't reach these scene
           components. Plain React Context.Provider works across the r3f tree. */}
       <CityPaletteProvider palette={palette}>
-      {/* By day, the solid clear color is the scene background. At night, the galaxy
-          Environment below owns scene.background (the equirectangular spheremap), so we
-          must NOT also drive <color attach="background"> — both write scene.background and
-          would fight every frame. */}
-      {showGradientBackground && <color attach="background" args={[sceneClearColor]} />}
-      {/* Mount the galaxy environment only at night — keeps its 2.8MB panorama from being
-          fetched/decoded (and PMREM-processed) in full daylight, where it's faded out
-          anyway. Suspense keeps the texture load from suspending the whole canvas while it
-          streams in; the error boundary degrades to the plain dark sky if the texture is
+      {/* Exactly one owner for scene.background, written as a ternary so the invariant is
+          structural rather than two conditions a reader has to De Morgan: the galaxy
+          Environment (the equirectangular spheremap) and a solid <color attach="background">
+          both write scene.background and would fight every frame. The galaxy mounts only for
+          the neon-night style at night — which also keeps its 2.8MB panorama from being
+          fetched/decoded (and PMREM-processed) in daylight, where it's faded out anyway.
+          Suspense keeps the texture load from suspending the whole canvas while it streams
+          in; the error boundary degrades to the plain solid sky if the texture is
           missing/corrupt (e.g. a partial checkout) instead of crashing. */}
-      {!showGradientBackground && (
+      {neonLayers && !showGradientBackground ? (
         <ErrorBoundary fallback={null}>
           <Suspense fallback={null}>
             <CityGalaxySky settings={renderSettings} />
           </Suspense>
         </ErrorBoundary>
+      ) : (
+        <color attach="background" args={[sceneClearColor]} />
       )}
       <CitySky settings={renderSettings} />
       {/* `lightingTier` is the SETTLED tier, deliberately not the warm-up-clamped
@@ -263,8 +276,8 @@ export default function CityScene({ apps, agentMap, onBuildingClick, onToggleCam
       <CityLandscape settings={renderSettings} />
       <CityWater settings={renderSettings} />
       <CityEnergyOverlay chronotype={chronotype} settings={renderSettings} />
-      <CityStarfield settings={renderSettings} />
-      <CityShootingStars playSfx={playSfx} settings={renderSettings} />
+      {neonLayers && <CityStarfield settings={renderSettings} />}
+      {neonLayers && <CityShootingStars playSfx={playSfx} settings={renderSettings} />}
       {!explorationMode && <CityCelestial settings={renderSettings} />}
       <CitySkyline settings={renderSettings} />
       <CityFederationHorizon instances={instances} settings={renderSettings} />
@@ -311,11 +324,11 @@ export default function CityScene({ apps, agentMap, onBuildingClick, onToggleCam
         productivityData={productivityData}
       />
       <CitySignalBeacons positions={positions} reviewCounts={reviewCounts} instances={instances} settings={renderSettings} />
-      <CityVolumetricLights positions={positions} settings={renderSettings} />
-      <CityNeonSigns positions={positions} />
+      {neonLayers && <CityVolumetricLights positions={positions} settings={renderSettings} />}
+      {neonLayers && <CityNeonSigns positions={positions} />}
       <CityWeather stoppedCount={stoppedCount} totalCount={totalCount} playSfx={playSfx} />
-      <CityDataRain settings={renderSettings} />
-      <CityEmbers settings={renderSettings} />
+      {neonLayers && <CityDataRain settings={renderSettings} />}
+      {neonLayers && <CityEmbers settings={renderSettings} />}
       <CityParticles settings={renderSettings} />
       {explorationMode && (
         <PlayerController
@@ -328,6 +341,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, onToggleCam
           active={explorationMode}
           transitioning={transitioning}
           cameraView={settings?.cameraView ?? 'third'}
+          teleport={playerTeleport}
         />
       )}
       {!explorationMode && !transitioning && !photoMode && (
@@ -344,7 +358,9 @@ export default function CityScene({ apps, agentMap, onBuildingClick, onToggleCam
           keyPanSpeed={24}
           maxPolarAngle={Math.PI / 2.2}
           minDistance={5}
-          maxDistance={120}
+          // Shared with the framing math (see CITY_MAX_ORBIT_DISTANCE) so a fast-travel fly
+          // never ends past a distance the controls would immediately snap back.
+          maxDistance={CITY_MAX_ORBIT_DISTANCE}
           enableDamping
           dampingFactor={0.05}
           mouseButtons={{ LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE }}
@@ -375,6 +391,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, onToggleCam
       {!explorationMode && !photoMode && (
         <CityFocusCamera
           focusedAppId={focusedAppId}
+          focusedRegion={focusedRegion}
           positions={positions}
           orbitRef={orbitRef}
           active={!explorationMode && !photoMode}

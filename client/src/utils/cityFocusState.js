@@ -1,5 +1,5 @@
-// Pure resolver for CyberCity's URL-addressed building focus (issue #2593). Maps the
-// `/city/apps/:appId` route param + the live app list into a concrete render state.
+// Pure resolver for OpenWorld's URL-addressed building focus (issue #2593). Maps the
+// `/openworld/apps/:appId` route param + the live app list into a concrete render state.
 //
 // The key subtlety: a valid deep link whose app list is still loading must NOT flash the
 // "building not found" fallback. So `notFound` is only true once the list has finished loading

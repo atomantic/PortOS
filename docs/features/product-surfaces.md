@@ -22,7 +22,7 @@ PortOS is a local-first operating system for a developer's machines, work, and p
 - **Writers Room, Authors, and Story Builder** — Draft prose, manage works and versions, and develop a story through guided stages. See [Writers Room](./writers-room.md).
 - **Universe Builder and Catalog** — Build a world bible, establish canon, and reuse its characters, places, objects, and lore throughout the Create suite.
 - **Series Pipeline** — Plan a serial production, write and review issues, generate storyboards, and track editorial readiness.
-- **Image, video, 3D, LoRA, and media libraries** — Generate or organize visual assets, models, collections, mood boards, timelines, and annotations. The [Sprite Export Contract](./sprite-export-contract.md) documents the game-sprite handoff; [CyberCity](./cybercity-v2.md) covers the 3D operational view.
+- **Image, video, 3D, LoRA, and media libraries** — Generate or organize visual assets, models, collections, mood boards, timelines, and annotations. The [Sprite Export Contract](./sprite-export-contract.md) documents the game-sprite handoff; [OpenWorld](./openworld.md) covers the 3D operational world.
 - **Creative Director, Creative Commissions, and Music Video** — Turn a brief or track into a treatment, plan, renders, and reviewable media project.
 - **Music, SongBook, Rounds, and Ambient** — Create and organize artists, albums, tracks, musical rounds, song references, and ambient sound work.
 - **Importer and Sharing** — Convert an outside manuscript into a PortOS project and exchange supported creative records through configured share buckets.

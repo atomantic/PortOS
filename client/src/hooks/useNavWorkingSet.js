@@ -20,7 +20,24 @@ const LEGACY_NAV_PATHS = {
   '/system-health': '/system-resources',
 };
 
-const migratePath = (path) => LEGACY_NAV_PATHS[path] || path;
+// Whole-subtree renames: a stored path AT or UNDER the key moves to the value, keeping
+// whatever followed. `/city` → `/openworld` (the 3D world's rename) covers `/city`,
+// `/city/settings`, and `/city/apps/:id` in one rule, mirroring App.jsx's PrefixRedirect.
+// Without it the browser URL redirects but the *stored* path doesn't, so a pinned `/city`
+// row no longer resolves against the manifest and silently disappears on upgrade.
+const LEGACY_NAV_PREFIXES = [
+  ['/city', '/openworld'],
+];
+
+const migratePath = (path) => {
+  const exact = LEGACY_NAV_PATHS[path];
+  if (exact) return exact;
+  for (const [from, to] of LEGACY_NAV_PREFIXES) {
+    // Segment-anchored so a sibling route like `/cityscape` is never rewritten.
+    if (path === from || path.startsWith(`${from}/`)) return `${to}${path.slice(from.length)}`;
+  }
+  return path;
+};
 const migratePaths = (paths) => [...new Set(paths.map(migratePath))];
 
 /**

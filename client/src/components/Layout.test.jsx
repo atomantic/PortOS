@@ -6,7 +6,7 @@ import * as api from '../services/api';
 
 // This suite locks the *integration* path that SingleNavRow.test.jsx can't reach:
 // pinning a top-level `single: true` row (Dashboard `/`, Review Hub `/review`,
-// City `/city`, Goals `/goals/list`) must make it render in the sidebar Pinned
+// OpenWorld `/openworld`, Goals `/goals/list`) must make it render in the sidebar Pinned
 // section. That resolution lives in Layout itself — `navEntryByPath` indexes
 // `item.single` leaves, `resolveNavEntry` maps a stored path to a row, and
 // `useNavWorkingSet` feeds the Pinned-section render. We exercise the real
@@ -107,13 +107,13 @@ describe('Layout — pinned single nav rows', () => {
   });
 
   it('resolves every top-level single row by path into the Pinned section', async () => {
-    localStorage.setItem(PINNED_KEY, JSON.stringify(['/', '/review', '/city', '/goals/list']));
+    localStorage.setItem(PINNED_KEY, JSON.stringify(['/', '/review', '/openworld', '/goals/list']));
     await renderLayout();
 
     const pinned = pinnedSection();
     expect(within(pinned).getByRole('link', { name: /Dashboard/i })).toHaveAttribute('href', '/');
     expect(within(pinned).getByRole('link', { name: /Review Hub/i })).toHaveAttribute('href', '/review');
-    expect(within(pinned).getByRole('link', { name: /City/i })).toHaveAttribute('href', '/city');
+    expect(within(pinned).getByRole('link', { name: /OpenWorld/i })).toHaveAttribute('href', '/openworld');
     expect(within(pinned).getByRole('link', { name: /Goals/i })).toHaveAttribute('href', '/goals/list');
   });
 
@@ -127,12 +127,12 @@ describe('Layout — pinned single nav rows', () => {
     // null and is dropped by resolveNavEntry; a known path beside it still renders.
     // Asserting the survivor (not just absence) proves the filter, not merely that
     // the section failed to render.
-    localStorage.setItem(PINNED_KEY, JSON.stringify(['/this/path/does/not/exist', '/city']));
+    localStorage.setItem(PINNED_KEY, JSON.stringify(['/this/path/does/not/exist', '/openworld']));
     await renderLayout();
 
     const pinned = pinnedSection();
     expect(pinned).toBeTruthy();
-    expect(within(pinned).getByRole('link', { name: /City/i })).toHaveAttribute('href', '/city');
+    expect(within(pinned).getByRole('link', { name: /OpenWorld/i })).toHaveAttribute('href', '/openworld');
     // The unknown path contributes no row.
     expect(within(pinned).getAllByRole('link')).toHaveLength(1);
   });

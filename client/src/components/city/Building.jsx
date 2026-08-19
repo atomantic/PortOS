@@ -416,7 +416,9 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
   const displayedColorRef = useRef(null);
   const targetColorRef = useRef(null);
 
-  const { getBuildingColor, getAccentColor, tintStructure } = useCityPalette();
+  // `surface` carries the world style's finish (flat shading + matte under the low-poly
+  // style); spread last on the facade material so it wins over the cyber defaults.
+  const { getBuildingColor, getAccentColor, tintStructure, surface } = useCityPalette();
   const height = getBuildingHeight(app);
   const edgeColor = getBuildingColor(app.overallStatus, app.archived);
   const accentColor = getAccentColor(app);
@@ -464,17 +466,21 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
   );
   useEffect(() => () => haloEdgesGeom.dispose(), [haloEdgesGeom]);
 
-  // Window texture with pixel art icon
+  // Window texture with pixel art icon. Built ONLY when the facade will actually bind it:
+  // the daytime material drops `map`/`emissiveMap` entirely, and the Vibes world style is
+  // daytime at both times of day — so without this gate every install on the default style
+  // would rasterize a full canvas per building (nested fillRect loops, ~1–2k 2D ops each)
+  // at scene mount and again on every theme-accent change, and bind none of them.
   const windowTexture = useMemo(
-    () => createWindowTexture(accentColor, width, height, seed, tintStructure),
-    [accentColor, width, height, seed, tintStructure]
+    () => (daytime ? null : createWindowTexture(accentColor, width, height, seed, tintStructure)),
+    [daytime, accentColor, width, height, seed, tintStructure]
   );
 
   // R3F does NOT dispose a CanvasTexture handed in via `map`/`emissiveMap` — it
   // only frees objects it owns on unmount. Since the city no longer remounts on
   // theme switch (issue-1064), each recolor recreates this texture and would
   // strand the previous one in VRAM per building. Dispose it on replace + unmount.
-  useEffect(() => () => windowTexture.dispose(), [windowTexture]);
+  useEffect(() => () => windowTexture?.dispose(), [windowTexture]);
 
   // Format name for building face
   const displayName = useMemo(() => {
@@ -561,10 +567,11 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
           color={daytime ? bodyColor : '#ffffff'}
           emissive={edgeColor}
           emissiveIntensity={0.7 * neonBrightness * dimMul * (1 - dayMix * 0.88)}
-          map={daytime ? undefined : windowTexture}
-          emissiveMap={daytime ? undefined : windowTexture}
+          map={windowTexture || undefined}
+          emissiveMap={windowTexture || undefined}
           roughness={daytime ? 0.9 : 0.78}
           metalness={daytime ? 0.05 : 0.08}
+          {...surface}
           transparent
           opacity={(app.archived ? 0.78 : 1) * dimMul}
         />

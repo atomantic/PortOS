@@ -11,7 +11,7 @@ function Loc() {
 
 const renderDrawer = (search = '', onClose = () => {}) =>
   render(
-    <MemoryRouter initialEntries={[`/city/settings${search}`]}>
+    <MemoryRouter initialEntries={[`/openworld/settings${search}`]}>
       <CitySettingsProvider>
         <CitySettingsDrawer open onClose={onClose} />
       </CitySettingsProvider>
@@ -40,7 +40,7 @@ describe('CitySettingsDrawer', () => {
 
   it('shows the Auto effective-tier label and local diagnostics when in Auto mode', () => {
     render(
-      <MemoryRouter initialEntries={['/city/settings']}>
+      <MemoryRouter initialEntries={['/openworld/settings']}>
         <CitySettingsProvider>
           <CitySettingsDrawer
             open
@@ -97,7 +97,7 @@ describe('CitySettingsDrawer', () => {
 
   it('renders nothing when closed', () => {
     const { container } = render(
-      <MemoryRouter initialEntries={['/city']}>
+      <MemoryRouter initialEntries={['/openworld']}>
         <CitySettingsProvider>
           <CitySettingsDrawer open={false} onClose={() => {}} />
         </CitySettingsProvider>

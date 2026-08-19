@@ -50,6 +50,11 @@ const DEFAULT_SETTINGS = {
   qualityMode: 'auto', // 'auto' = adaptive render budget; 'manual' = fixed preset
   qualityPreset: 'high',
   timeOfDay: 'auto', // 'auto' follows the active theme's day/night mode; 'day'/'night' force it
+  // Art direction: 'vibes' is the low-poly bright open world (default); 'cyber' restores
+  // the original neon-night CyberCity look. Existing installs have no stored value and so
+  // land on the new default — deliberate, this IS the world's new look — and the picker in
+  // the Visual tab switches back with no migration.
+  worldStyle: 'vibes',
   explorationMode: false,
   cameraView: 'third', // exploration camera: 'third' follows the cyber-runner; 'first' is classic FPS (V toggles)
   ...QUALITY_PRESETS.high,

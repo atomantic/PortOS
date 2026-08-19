@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router';
-import { Gauge, Bell, Clock, Activity, Map as MapIcon, Filter, Palette, Compass, Camera, History, Settings, X } from 'lucide-react';
+import { Gauge, Bell, Clock, Activity, Map as MapIcon, Filter, Palette, Compass, Camera, History, Settings, Navigation, X } from 'lucide-react';
 import useDrawerTab from '../../hooks/useDrawerTab';
 import { buildAttentionItems, CityIntelContent } from './CityIntelPane';
 import CityVitalsList from './CityVitalsList';
@@ -84,6 +84,7 @@ export default function CityHudCompact({
   onSelectApp,
   onEnterPhotoMode,
   onEnterPlayback,
+  onOpenFastTravel,
   focusedAppId,
   focusedApp,
   focusNotFound,
@@ -108,8 +109,8 @@ export default function CityHudCompact({
   // set a date they already entered (#2757). Null when a real level exists.
   const birthCta = character && character.level == null ? birthDateCta(character.birthDateStatus) : null;
 
-  const onSettings = location.pathname === '/city/settings';
-  const goSettings = () => navigate(onSettings ? `/city${location.search}` : `/city/settings${location.search}`);
+  const onSettings = location.pathname === '/openworld/settings';
+  const goSettings = () => navigate(onSettings ? `/openworld${location.search}` : `/openworld/settings${location.search}`);
 
   const renderPaneBody = () => {
     if (CITY_INTEL_PANE_IDS.includes(activePane)) {
@@ -269,9 +270,10 @@ export default function CityHudCompact({
             active={explorationMode}
             onClick={onToggleExploration}
           />
+          {onOpenFastTravel && <DockButton icon={Navigation} label="Fast travel" onClick={onOpenFastTravel} />}
           {onEnterPhotoMode && <DockButton icon={Camera} label="Photo mode" onClick={onEnterPhotoMode} />}
           {onEnterPlayback && <DockButton icon={History} label="History playback" onClick={onEnterPlayback} />}
-          <DockButton icon={Settings} label="City settings" active={onSettings} onClick={goSettings} />
+          <DockButton icon={Settings} label="OpenWorld settings" active={onSettings} onClick={goSettings} />
         </div>
       </div>
     </>

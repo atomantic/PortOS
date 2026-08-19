@@ -48,6 +48,7 @@ function ControlsHint({ visible }) {
           <div>WASD: MOVE · Q/E: DOWN/UP</div>
           <div>SHIFT: SPRINT</div>
           <div>F: INTERACT WITH BUILDING</div>
+          <div>M: FAST TRAVEL</div>
           <div>TAB: FLY OUT</div>
         </div>
       </div>
@@ -69,7 +70,7 @@ function Crosshair() {
   );
 }
 
-export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, connected, apps, reviewCounts, instances, productivityData, systemHealth, notificationCounts, character, filter, onFilterChange, onJumpToFirst, matchCount, onToggleExploration, explorationMode, onSelectApp, onEnterPhotoMode, onEnterPlayback, focusedAppId, focusedApp, focusNotFound, focusAgents, onCloseFocus, onOpenApp }) {
+export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, connected, apps, reviewCounts, instances, productivityData, systemHealth, notificationCounts, character, filter, onFilterChange, onJumpToFirst, matchCount, onToggleExploration, explorationMode, onSelectApp, onEnterPhotoMode, onEnterPlayback, focusedAppId, focusedApp, focusNotFound, focusAgents, onCloseFocus, onOpenApp, onOpenFastTravel, activeRegion }) {
   const isFocused = Boolean(focusedApp || focusNotFound);
   const navigate = useNavigate();
   const location = useLocation();
@@ -267,6 +268,24 @@ export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, con
               </div>
             </div>
 
+            {/* Fast travel (M) — warp to any named region of the world */}
+            {onOpenFastTravel && (
+              <button
+                onClick={onOpenFastTravel}
+                className="pointer-events-auto mb-2 relative bg-black/85 backdrop-blur-sm border border-cyan-500/30 rounded-lg px-3 py-2 hover:border-cyan-400/60 hover:bg-cyan-500/10 transition-all w-full"
+                title="Fast travel to a region (M)"
+              >
+                <HudCorner position="tl" />
+                <HudCorner position="br" />
+                <div className="font-pixel text-[10px] text-cyan-400 tracking-wider truncate" style={{ textShadow: '0 0 6px rgba(6,182,212,0.4)' }}>
+                  [ FAST TRAVEL ]
+                </div>
+                <div className="font-pixel text-[7px] text-cyan-500/40 tracking-wide mt-0.5 text-center truncate">
+                  {activeRegion ? activeRegion.label.toUpperCase() : '(M)'}
+                </div>
+              </button>
+            )}
+
             {/* Drop In / Fly Out button */}
             <button
               onClick={onToggleExploration}
@@ -319,10 +338,10 @@ export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, con
             )}
 
             <button
-              onClick={() => navigate(location.pathname === '/city/settings' ? `/city${location.search}` : `/city/settings${location.search}`)}
+              onClick={() => navigate(location.pathname === '/openworld/settings' ? `/openworld${location.search}` : `/openworld/settings${location.search}`)}
               className="pointer-events-auto mb-2 relative bg-black/85 backdrop-blur-sm border border-cyan-500/30 rounded-lg w-10 h-10 flex items-center justify-center hover:border-cyan-400/60 hover:bg-cyan-500/10 transition-all group"
               title="Settings"
-              aria-label="City settings"
+              aria-label="OpenWorld settings"
             >
               <HudCorner position="tl" />
               <HudCorner position="br" />
@@ -369,6 +388,7 @@ export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, con
           focusAgents={focusAgents}
           onCloseFocus={onCloseFocus}
           onOpenApp={onOpenApp}
+          onOpenFastTravel={onOpenFastTravel}
         />
       )}
 

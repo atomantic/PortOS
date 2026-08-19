@@ -3,6 +3,10 @@ import useDrawerTab from '../../hooks/useDrawerTab';
 import { useCitySettingsContext } from './CitySettingsContext';
 import { QUALITY_PRESETS } from '../../hooks/useCitySettings';
 import { SOUNDSCAPE_MOODS, isSoundscapeMood } from '../../utils/citySoundscape';
+import { WORLD_STYLE_DEFS, WORLD_STYLES, resolveWorldStyle } from './cityConstants';
+
+// Derived from the style table, so registering a style makes it pickable — no second list.
+const WORLD_STYLE_OPTIONS = WORLD_STYLES.map((key) => ({ key, label: WORLD_STYLE_DEFS[key].label }));
 
 // The soundscape override's "no override" option. A `<select>` can't carry `null`, so the
 // auto choice rides as the empty string and the change handler maps it back to the `null`
@@ -337,6 +341,13 @@ export default function CitySettingsDrawer({ open, onClose, qualityMode = 'manua
               step={0.1}
               format={(v) => `${v.toFixed(1)}x`}
               description="Brightness of neon lights and building glow"
+            />
+            <SettingSegment
+              label="WORLD STYLE"
+              options={WORLD_STYLE_OPTIONS}
+              value={resolveWorldStyle(settings.worldStyle)}
+              onChange={(key) => updateSetting('worldStyle', key)}
+              hint="OPEN WORLD IS THE BRIGHT LOW-POLY LOOK; CYBER CITY IS THE NEON NIGHT"
             />
             <SettingSegment
               label="TIME OF DAY"

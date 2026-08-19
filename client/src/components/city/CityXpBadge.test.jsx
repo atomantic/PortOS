@@ -5,7 +5,7 @@ import CityXpBadge from './CityXpBadge';
 
 const renderBadge = (character) =>
   render(
-    <MemoryRouter initialEntries={['/city']}>
+    <MemoryRouter initialEntries={['/openworld']}>
       <CityXpBadge character={character} />
     </MemoryRouter>,
   );

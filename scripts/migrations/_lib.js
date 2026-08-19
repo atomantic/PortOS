@@ -111,7 +111,7 @@ const splitReadJsonTolerant = async (path) => {
 // filesystem, and tmp sits in the same dir as its target, so the swap is safe.
 // Also used by the provider-seed family, where a truncated `data/providers.json`
 // would cost the user every stored apiKey and provider customization.
-const writeJsonAtomic = async (path, value) => {
+export const writeJsonAtomic = async (path, value) => {
   const tmp = `${path}.tmp-${process.pid}`;
   await writeFile(tmp, JSON.stringify(value, null, 2) + '\n');
   await rename(tmp, path);
@@ -772,7 +772,7 @@ const PROVIDERS_REL_PATH = 'data/providers.json';
  * while the read shell is shared. `err` carries the parse failure for the
  * `'unreadable'` message.
  */
-async function readProvidersDoc({ rootDir }) {
+export async function readProvidersDoc({ rootDir }) {
   const path = join(rootDir, PROVIDERS_REL_PATH);
   const raw = await readFile(path, 'utf-8').catch((err) => {
     if (err.code === 'ENOENT') return null;

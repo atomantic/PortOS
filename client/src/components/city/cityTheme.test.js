@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { deriveCityPalette, resolveCityTimeOfDay, cityLabelColors, tintTowardAccent, tintStructure, CITY_COLORS, getBuildingColor, getAccentColor, seededRand, smoothstepRange, cityDayMix, getTimeOfDayPreset, cityShowDetail, cityShowInteriorWindows } from './cityConstants';
+import { deriveCityPalette, resolveCityTimeOfDay, cityLabelColors, tintTowardAccent, tintStructure, CITY_COLORS, getBuildingColor, getAccentColor, seededRand, smoothstepRange, cityDayMix, getTimeOfDayPreset, cityShowDetail, cityShowInteriorWindows, resolveWorldStyle, getWorldStyle, WORLD_STYLE_DEFS, WORLD_STYLES, DEFAULT_WORLD_STYLE } from './cityConstants';
 
 const hexLum = (hex) => {
   const n = parseInt(hex.slice(1), 16);
@@ -23,7 +23,7 @@ describe('deriveCityPalette', () => {
 
   it('exposes a dark night void and a bright day sky, both accent-tinted', () => {
     const phosphor = getTheme('black-ice-terminal-day'); // accent #0a7a4a
-    const p = deriveCityPalette(phosphor);
+    const p = deriveCityPalette(phosphor, 'cyber');
     expect(p.nightBackground).toBe('#010c07'); // #0a7a4a * 0.1
     expect(p.dayBackground).toBe('#badacc');   // #0a7a4a lightened 0.72 toward white
     // A day theme's default surround (loading screen) is the bright day sky.
@@ -33,14 +33,14 @@ describe('deriveCityPalette', () => {
 
   it('defaults a night theme surround to the dark void', () => {
     const midnight = getTheme('classic-midnight'); // accent #3b82f6
-    const p = deriveCityPalette(midnight);
+    const p = deriveCityPalette(midnight, 'cyber');
     expect(p.isDay).toBe(false);
     expect(p.background).toBe('#060d19'); // nightBackground = #3b82f6 * 0.1
     expect(p.dayBackground).toBe('#c8dcfc');
   });
 
   it('falls back to defaults for a missing/invalid theme', () => {
-    const p = deriveCityPalette(undefined);
+    const p = deriveCityPalette(undefined, 'cyber');
     expect(p.themeId).toBe('classic-midnight');
     expect(p.accent).toBe('#06b6d4'); // original cyan brand
     expect(p.background).toBe('#011215'); // night theme default -> #06b6d4 * 0.1
@@ -48,15 +48,36 @@ describe('deriveCityPalette', () => {
 
   it('resolves time of day, following theme mode for auto/legacy and honoring explicit overrides', () => {
     // auto follows the theme mode
-    expect(resolveCityTimeOfDay('auto', true)).toEqual({ daytime: true, presetKey: 'noon' });
-    expect(resolveCityTimeOfDay('auto', false)).toEqual({ daytime: false, presetKey: 'sunset' });
-    expect(resolveCityTimeOfDay(undefined, true)).toEqual({ daytime: true, presetKey: 'noon' });
+    expect(resolveCityTimeOfDay('auto', true, 'cyber')).toEqual({ daytime: true, presetKey: 'noon' });
+    expect(resolveCityTimeOfDay('auto', false, 'cyber')).toEqual({ daytime: false, presetKey: 'sunset' });
+    expect(resolveCityTimeOfDay(undefined, true, 'cyber')).toEqual({ daytime: true, presetKey: 'noon' });
     // legacy stored presets are treated as auto (follow the theme)
-    expect(resolveCityTimeOfDay('sunset', true)).toEqual({ daytime: true, presetKey: 'noon' });
-    expect(resolveCityTimeOfDay('midnight', true)).toEqual({ daytime: true, presetKey: 'noon' });
+    expect(resolveCityTimeOfDay('sunset', true, 'cyber')).toEqual({ daytime: true, presetKey: 'noon' });
+    expect(resolveCityTimeOfDay('midnight', true, 'cyber')).toEqual({ daytime: true, presetKey: 'noon' });
     // explicit overrides win regardless of theme mode
-    expect(resolveCityTimeOfDay('day', false)).toEqual({ daytime: true, presetKey: 'noon' });
-    expect(resolveCityTimeOfDay('night', true)).toEqual({ daytime: false, presetKey: 'sunset' });
+    expect(resolveCityTimeOfDay('day', false, 'cyber')).toEqual({ daytime: true, presetKey: 'noon' });
+    expect(resolveCityTimeOfDay('night', true, 'cyber')).toEqual({ daytime: false, presetKey: 'sunset' });
+  });
+
+  it('picks the Vibes preset pair by default, and for any unrecognized style', () => {
+    // The default world style is 'vibes' — an absent, legacy, or misspelled value must
+    // resolve there rather than falling through to an undefined preset key.
+    expect(resolveCityTimeOfDay('auto', true)).toEqual({ daytime: true, presetKey: 'vibesDay' });
+    expect(resolveCityTimeOfDay('auto', false)).toEqual({ daytime: false, presetKey: 'vibesDusk' });
+    expect(resolveCityTimeOfDay('day', false, 'nonsense')).toEqual({ daytime: true, presetKey: 'vibesDay' });
+    expect(resolveCityTimeOfDay('night', true, undefined)).toEqual({ daytime: false, presetKey: 'vibesDusk' });
+  });
+
+  it('keeps both Vibes presets bright, so neither reads as the neon-night look', () => {
+    // Every dayMix-driven surface (grid, fog, puddles, neon albedo, label ink) lerps on
+    // daylightFactor. If dusk dropped low the world would silently fall back to the cyber
+    // night grade under a Vibes sky.
+    for (const key of ['vibesDay', 'vibesDusk']) {
+      const preset = getTimeOfDayPreset(key);
+      expect(preset.daylightFactor).toBeGreaterThan(0.8);
+      expect(preset.isMoon).toBe(false);
+      expect(cityDayMix({ timeOfDay: key })).toBeGreaterThan(0.9);
+    }
   });
 
   it('derives a valid palette for every shipped theme (4 day + 4 night)', () => {
@@ -68,7 +89,7 @@ describe('deriveCityPalette', () => {
     expect(night).toHaveLength(4);
 
     for (const theme of themes) {
-      const p = deriveCityPalette(theme);
+      const p = deriveCityPalette(theme, 'cyber');
       expect(p.themeId).toBe(theme.id);
       expect(p.isDay).toBe(theme.mode === 'day');
       // Accent is parsed to a concrete hex (never left as a raw triplet/empty).
@@ -82,19 +103,28 @@ describe('deriveCityPalette', () => {
     }
   });
 
-  it('opts CRT effects in per theme family', () => {
+  it('opts CRT effects in per theme family under the cyber style', () => {
     // terminal (Phosphor) — full CRT
-    expect(deriveCityPalette(getTheme('black-ice-terminal-day')).crt)
+    expect(deriveCityPalette(getTheme('black-ice-terminal-day'), 'cyber').crt)
       .toEqual({ scanlines: true, glow: true, vignette: true });
     // classic — cyber glow + vignette, but no scanlines
-    expect(deriveCityPalette(getTheme('classic-midnight')).crt)
+    expect(deriveCityPalette(getTheme('classic-midnight'), 'cyber').crt)
       .toEqual({ scanlines: false, glow: true, vignette: true });
     // blueprint — vignette only
-    expect(deriveCityPalette(getTheme('blueprint-ops')).crt)
+    expect(deriveCityPalette(getTheme('blueprint-ops'), 'cyber').crt)
       .toEqual({ scanlines: false, glow: false, vignette: true });
     // glass — fully clean, no CRT
-    expect(deriveCityPalette(getTheme('lumen-glass')).crt)
+    expect(deriveCityPalette(getTheme('lumen-glass'), 'cyber').crt)
       .toEqual({ scanlines: false, glow: false, vignette: false });
+  });
+
+  it('turns the CRT overlay off entirely in the Vibes world, whatever the theme family', () => {
+    // Scanlines/glow/vignette are cyber-terminal affectations; over a sunlit low-poly
+    // landscape they read as a dirty screen, so no theme family opts them back in.
+    for (const id of ['black-ice-terminal-day', 'classic-midnight', 'blueprint-ops', 'lumen-glass']) {
+      expect(deriveCityPalette(getTheme(id), 'vibes').crt)
+        .toEqual({ scanlines: false, glow: false, vignette: false });
+    }
   });
 });
 
@@ -178,6 +208,50 @@ describe('tintTowardAccent / tintStructure', () => {
   });
 });
 
+describe('deriveCityPalette — world style', () => {
+  it('reports the resolved style and its low-poly flag', () => {
+    expect(deriveCityPalette(getTheme('classic-midnight'), 'cyber')).toMatchObject({ worldStyle: 'cyber', lowPoly: false });
+    expect(deriveCityPalette(getTheme('classic-midnight'), 'vibes')).toMatchObject({ worldStyle: 'vibes', lowPoly: true });
+    // Absent / unrecognized falls back to the default rather than an undefined style.
+    expect(deriveCityPalette(getTheme('classic-midnight'))).toMatchObject({ worldStyle: 'vibes', lowPoly: true });
+    expect(deriveCityPalette(getTheme('classic-midnight'), 'neon-noir')).toMatchObject({ worldStyle: 'vibes', lowPoly: true });
+  });
+
+  it('gives the Vibes world a bright surround at BOTH times of day', () => {
+    // The cyber world needs darkness for its additive neon; the Vibes world has none, and
+    // its "night" is a golden dusk — so neither surround may be a near-black void.
+    const p = deriveCityPalette(getTheme('classic-midnight'), 'vibes');
+    expect(hexLum(p.nightBackground)).toBeGreaterThan(80);
+    expect(hexLum(p.dayBackground)).toBeGreaterThan(80);
+  });
+
+  it('lightens the structural body relative to the cyber world', () => {
+    const theme = getTheme('classic-midnight');
+    const cyber = deriveCityPalette(theme, 'cyber');
+    const vibes = deriveCityPalette(theme, 'vibes');
+    expect(hexLum(vibes.buildingBody)).toBeGreaterThan(hexLum(cyber.buildingBody));
+  });
+
+  it('swaps the decorative spread but keeps the theme accent leading, in both styles', () => {
+    const theme = getTheme('classic-midnight');
+    const cyber = deriveCityPalette(theme, 'cyber');
+    const vibes = deriveCityPalette(theme, 'vibes');
+    expect(vibes.neonAccents[0]).toBe(vibes.accent);
+    expect(cyber.neonAccents[0]).toBe(cyber.accent);
+    expect(vibes.neonAccents.slice(1)).not.toEqual(cyber.neonAccents.slice(1));
+    expect(vibes.neonAccents).toHaveLength(cyber.neonAccents.length);
+  });
+
+  it('keeps status colors semantic in both styles', () => {
+    const theme = getTheme('classic-midnight');
+    for (const style of ['cyber', 'vibes']) {
+      const p = deriveCityPalette(theme, style);
+      expect(p.getBuildingColor('stopped')).toBe(CITY_COLORS.building.stopped);
+      expect(p.getBuildingColor('online', true)).toBe(CITY_COLORS.building.archived);
+    }
+  });
+});
+
 describe('deriveCityPalette brand surfaces', () => {
   it('carries themed brand surfaces derived from the accent', () => {
     const p = deriveCityPalette(getTheme('black-ice-terminal-day'));
@@ -199,7 +273,7 @@ describe('deriveCityPalette brand surfaces', () => {
 
   it('re-tints the building body toward the accent, preserving its darkness', () => {
     const ORIGINAL_BODY = '#0c0c24';
-    const p = deriveCityPalette(getTheme('black-ice-terminal-day')); // green accent
+    const p = deriveCityPalette(getTheme('black-ice-terminal-day'), 'cyber'); // green accent
     expect(p.buildingBody).not.toBe(ORIGINAL_BODY); // picked up the theme
     expect(hexLum(p.buildingBody)).toBeCloseTo(hexLum(ORIGINAL_BODY), 0); // still a dark body
   });
@@ -327,3 +401,64 @@ describe('quality-preset gates', () => {
   });
 });
 // @vitest-environment node
+
+describe('resolveWorldStyle / getWorldStyle', () => {
+  it('passes through a known style', () => {
+    for (const style of WORLD_STYLES) expect(resolveWorldStyle(style)).toBe(style);
+  });
+
+  it('falls back to the default for absent, legacy, or malformed values', () => {
+    for (const bad of [undefined, null, '', 'CYBER', 'neon', 0, {}]) {
+      expect(resolveWorldStyle(bad)).toBe(DEFAULT_WORLD_STYLE);
+    }
+  });
+
+  it('always returns a real definition, even for a bad style', () => {
+    for (const bad of [undefined, null, '', 'neon', 0, {}]) {
+      expect(getWorldStyle(bad)).toBe(WORLD_STYLE_DEFS[DEFAULT_WORLD_STYLE]);
+    }
+  });
+
+  it('gates the neon-only scene layers on the cyber style alone', () => {
+    // CityScene mounts the galaxy spheremap, starfield, data rain, embers, volumetric
+    // cones, and neon signage on palette.neonLayers. An absent style must NOT read as
+    // cyber — that would haze the default bright world.
+    expect(deriveCityPalette(undefined, 'cyber').neonLayers).toBe(true);
+    expect(deriveCityPalette(undefined, 'vibes').neonLayers).toBe(false);
+    expect(deriveCityPalette(undefined).neonLayers).toBe(false);
+    expect(deriveCityPalette(undefined, 'nonsense').neonLayers).toBe(false);
+  });
+
+  it('every style definition is complete, so a new row cannot half-register', () => {
+    for (const [id, def] of Object.entries(WORLD_STYLE_DEFS)) {
+      expect(def.id).toBe(id);
+      expect(def.label).toBeTruthy();
+      // Both preset keys must name a real time-of-day preset, or the sky renders undefined.
+      expect(getTimeOfDayPreset(def.presets.day)).toBeDefined();
+      expect(getTimeOfDayPreset(def.presets.night)).toBeDefined();
+      expect(CITY_COLORS.timeOfDay[def.presets.day]).toBeDefined();
+      expect(CITY_COLORS.timeOfDay[def.presets.night]).toBeDefined();
+      expect(typeof def.lowPoly).toBe('boolean');
+      expect(typeof def.neonLayers).toBe('boolean');
+      expect(typeof def.themeCrt).toBe('boolean');
+      expect(def.accents.length).toBeGreaterThan(1);
+      expect(def.buildingBody).toMatch(/^#[0-9a-f]{6}$/i);
+      for (const band of ['inner', 'meadow', 'ridge']) {
+        expect(def.terrain[band]).toMatch(/^#[0-9a-f]{6}$/i);
+      }
+    }
+  });
+
+  it('carries a style-appropriate material surface for structural meshes', () => {
+    // flatShading is part of three.js's shader program cache key, so this must be a
+    // concrete boolean on both styles rather than absent on one of them.
+    expect(deriveCityPalette(undefined, 'vibes').surface)
+      .toEqual({ flatShading: true, roughness: 0.95, metalness: 0 });
+    expect(deriveCityPalette(undefined, 'cyber').surface).toEqual({ flatShading: false });
+  });
+
+  it('exposes the style terrain bands so components do not hardcode hexes', () => {
+    expect(deriveCityPalette(undefined, 'vibes').terrain).toEqual(WORLD_STYLE_DEFS.vibes.terrain);
+    expect(deriveCityPalette(undefined, 'cyber').terrain).toEqual(WORLD_STYLE_DEFS.cyber.terrain);
+  });
+});

@@ -50,6 +50,7 @@ export default function PlayerController({
   active,
   transitioning = false,
   cameraView = 'third',
+  teleport = null,
 }) {
   const { camera, gl } = useThree();
   const rigRef = useRef({
@@ -95,6 +96,28 @@ export default function PlayerController({
     }
     lookInitRef.current = false;
   }, [active, positions]);
+
+  // Fast travel while on foot: warping to a region drops the player at its arrival point
+  // instead of moving only the orbital camera. `teleport.token` is the trigger — the same
+  // destination can be re-selected, and a plain {x,z} identity check would swallow the
+  // second warp. Keyed on the token alone so a re-render with an equal object is a no-op.
+  const teleportToken = teleport?.token ?? null;
+  useEffect(() => {
+    if (!active || teleportToken === null || !teleport) return;
+    const rig = rigRef.current;
+    rig.position.set(teleport.x, EYE_HEIGHT, teleport.z);
+    // Face the destination: the arrival point sits on the +Z side of the district, so
+    // looking down -Z (yaw 0) puts the region in front of the player.
+    rig.yaw = 0;
+    rig.pitch = 0;
+    rig.facing = 0;
+    rig.vy = 0;
+    rig.jumping = false;
+    lastSpawnRef.current = rig.position.clone();
+    lookInitRef.current = false;
+    // `teleport` is read for its coordinates but is not the trigger — see above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, teleportToken]);
 
   // Pointer lock management
   const handleClick = useCallback(() => {

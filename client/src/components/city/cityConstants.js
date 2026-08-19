@@ -126,6 +126,58 @@ export const CITY_COLORS = {
       ambientColor: '#0a0a1a',
       ambientIntensity: 0.1,
     },
+    // --- Vibes world style ---------------------------------------------------
+    // The low-poly bright look: a warm, high-key outdoor world rather than a neon
+    // night city. Colors mirror the Vibes open-world reference palette (teal-blue
+    // zenith → warm sand horizon, warm sun, cool sky bounce) so the two worlds read
+    // as the same art direction. `daylightFactor: 1` puts every dayMix-driven surface
+    // (grid, fog, puddles, neon albedo, label ink) fully into its bright form.
+    vibesDay: {
+      hour: 12,
+      zenith: '#4a9ec2',
+      midSky: '#5faebf',
+      horizonHigh: '#a8cfc4',
+      horizonLow: '#f3af78',
+      sunCore: '#fff4e2',
+      sunGlow: '#ffe4ba',
+      sunLight: '#ffe0b8',
+      sunIntensity: 1.5,
+      sunScale: 0.8,
+      isMoon: false,
+      daylightFactor: 1.0,
+      // Meadow green rather than pavement — the ground plane is a landscape here.
+      groundColor: '#628b6d',
+      groundRoughness: 0.95,
+      hemiSkyColor: '#b9e3d8',
+      hemiGroundColor: '#3f5c4a',
+      hemiIntensity: 1.05,
+      ambientColor: '#ffceae',
+      ambientIntensity: 0.4,
+    },
+    // The "night" half of the Vibes style. Deliberately still bright — a golden-hour
+    // dusk, not a blackout — so the world keeps its low-poly readability. daylightFactor
+    // stays high (0.9) so dayMix ≈ 0.99 and the neon-night surfaces stay suppressed.
+    vibesDusk: {
+      hour: 18,
+      zenith: '#2f6f92',
+      midSky: '#71a2b0',
+      horizonHigh: '#f0a46f',
+      horizonLow: '#f07f6d',
+      sunCore: '#ffd9a8',
+      sunGlow: '#ffb27a',
+      sunLight: '#ffc48f',
+      sunIntensity: 1.2,
+      sunScale: 1.0,
+      isMoon: false,
+      daylightFactor: 0.9,
+      groundColor: '#57755f',
+      groundRoughness: 0.95,
+      hemiSkyColor: '#9fc7cd',
+      hemiGroundColor: '#3a4a3c',
+      hemiIntensity: 0.95,
+      ambientColor: '#ffc9a2',
+      ambientIntensity: 0.45,
+    },
   },
   // The City uses one canonical cyber sky. Legacy stored skyTheme values are
   // ignored by the scene and fall back to these presets.
@@ -364,17 +416,82 @@ export const seededRand = (seed) => {
   };
 };
 
-// The city renders just two times of day — day and night — and follows the active
+// --- World style -------------------------------------------------------------
+// OpenWorld renders in one of two art directions, and the style is DATA rather than a
+// binary tested in four places: every consumer reads a field off the def below instead of
+// asking "is this cyber?". Adding a third style means adding a row here, not editing the
+// sky resolver, the palette, the layer gates, and the settings picker.
+//
+// - presets      the time-of-day pair fed to CitySky / CityLights / CityGround. Through
+//                each preset's daylightFactor → cityDayMix, this alone carries most of the
+//                look: every surface that already lerped night→day follows it for free.
+// - lowPoly      flat-shaded, matte structural surfaces (see the palette's `surface`).
+// - neonLayers   whether the neon-night scene layers (galaxy spheremap, starfield, shooting
+//                stars, data rain, embers, volumetric light cones, neon signage) mount at
+//                all. Over a sunlit low-poly landscape they read as haze and grain, so they
+//                are gated out rather than faded per-frame.
+// - themeCrt     whether the CRT overlay is opted in per theme family (deriveCrtProfile) or
+//                simply off — a scanline multiply over a sunlit landscape reads as a dirty
+//                screen, whatever the theme.
+// - accents      the decorative spread for windows/props. The lead slot is always replaced
+//                by the live theme accent, so the world follows the UI in either style.
+// - buildingBody the structural body color, re-tinted toward the theme accent.
+// - terrain      the daytime bands CityLandscape's terrain shader mixes between.
+//
+// 'cyber' is kept as a real option, not nostalgia: it keeps the whole neon layer exercised
+// by the suite instead of bit-rotting behind a default nobody selects.
+export const WORLD_STYLE_DEFS = {
+  vibes: {
+    id: 'vibes',
+    label: 'OPEN WORLD',
+    presets: { day: 'vibesDay', night: 'vibesDusk' },
+    lowPoly: true,
+    neonLayers: false,
+    themeCrt: false,
+    // Warm sand / coral / teal / sage / amber instead of the cyberpunk neon set, so the
+    // bright low-poly world doesn't wear night-club colors.
+    accents: ['#63f2db', '#f07f6d', '#d7b98c', '#9873b9', '#f3b562', '#57c9c0', '#8c7169', '#dde4df'],
+    // Warm stone rather than the cyber world's near-black slab.
+    buildingBody: '#a87868',
+    terrain: { inner: '#8c7169', meadow: '#628b6d', ridge: '#51666a' },
+  },
+  cyber: {
+    id: 'cyber',
+    label: 'CYBER CITY',
+    presets: { day: 'noon', night: 'sunset' },
+    lowPoly: false,
+    neonLayers: true,
+    themeCrt: true,
+    accents: CITY_COLORS.neonAccents,
+    buildingBody: ORIGINAL_BUILDING_BODY,
+    terrain: { inner: '#686d68', meadow: '#6f8758', ridge: '#8d937f' },
+  },
+};
+
+export const WORLD_STYLES = Object.keys(WORLD_STYLE_DEFS);
+export const DEFAULT_WORLD_STYLE = 'vibes';
+
+// Sentinel-safe: an absent / legacy / misspelled stored value resolves to the default
+// rather than silently selecting an undefined style.
+export const resolveWorldStyle = (style) => (
+  Object.hasOwn(WORLD_STYLE_DEFS, style) ? style : DEFAULT_WORLD_STYLE
+);
+
+// The style's definition, always a real one.
+export const getWorldStyle = (style) => WORLD_STYLE_DEFS[resolveWorldStyle(style)];
+
+// OpenWorld renders just two times of day — day and night — and follows the active
 // theme's mode by default ('auto'). The user can still force 'day'/'night'. Legacy
 // stored values (sunrise/noon/sunset/midnight) are treated as 'auto' so existing
-// installs pick up theme coupling without a migration. Returns the daytime flag
-// plus the concrete preset key the sky/lights/ground consume (noon vs sunset —
-// sunset preserves the established dark-theme look users already have).
-export const resolveCityTimeOfDay = (setting, themeIsDay) => {
+// installs pick up theme coupling without a migration. Returns the daytime flag plus
+// the concrete preset key the sky/lights/ground consume, taken from the world style's
+// own pair — so picking 'cyber' restores the established noon/moonlit-night look exactly.
+export const resolveCityTimeOfDay = (setting, themeIsDay, worldStyle) => {
   const daytime = setting === 'day' ? true
     : setting === 'night' ? false
     : !!themeIsDay;
-  return { daytime, presetKey: daytime ? 'noon' : 'sunset' };
+  const { presets } = getWorldStyle(worldStyle);
+  return { daytime, presetKey: daytime ? presets.day : presets.night };
 };
 
 // The CRT overlay (scanlines / neon edge-glow / vignette in CityScanlines) is a
@@ -389,8 +506,12 @@ const deriveCrtProfile = (family) => ({
   vignette: family !== 'glass',
 });
 
-// Derive the city palette from a PortOS theme object (a THEMES entry). Pure.
-export const deriveCityPalette = (theme) => {
+// Derive the OpenWorld palette from a PortOS theme object (a THEMES entry) and the
+// active world style. Pure. The style swaps the decorative/structural brand surfaces
+// (nothing semantic): status colors stay semantic in both worlds.
+export const deriveCityPalette = (theme, worldStyle) => {
+  const style = getWorldStyle(worldStyle);
+  const { lowPoly } = style;
   const accent = tripletToHex(theme?.colors?.['--port-accent']) || ORIGINAL_GROUND;
   const isDay = theme?.mode === 'day';
   // Night backdrop: a near-black, accent-tinted void — the neon's additive/bloom
@@ -398,28 +519,53 @@ export const deriveCityPalette = (theme) => {
   // sky (the daytime preset dims the neon, so a light surround is safe and reads as
   // actual daytime). The scene picks one based on the resolved time of day; the HUD
   // panels follow the light/dark theme independently (see .cybercity-themed CSS).
-  const nightBackground = darkenHex(accent, 0.1);
-  const dayBackground = lightenHex(accent, 0.72);
+  // In the Vibes world there is no neon to protect, and "night" is a golden dusk — so
+  // both surrounds are bright sky rather than a near-black void.
+  const nightBackground = lowPoly
+    ? getTimeOfDayPreset(style.presets.night).midSky
+    : darkenHex(accent, 0.1);
+  const dayBackground = lowPoly
+    ? getTimeOfDayPreset(style.presets.day).midSky
+    : lightenHex(accent, 0.72);
 
   // Themed brand surfaces — recomputed from the theme accent each time, so switching
   // back and forth never compounds. The lead neonAccents entry tracks the accent;
-  // the rest of the palette is the static decorative spread. The dark building body
-  // is re-tinted toward the accent (luminance preserved) so structures track the
-  // theme too, not just the neon surfaces. Status colors stay semantic.
-  const neonAccents = [accent, ...CITY_COLORS.neonAccents.slice(1)];
+  // the rest of the spread is the world style's decorative palette. The structural
+  // body color is re-tinted toward the accent (luminance preserved) so structures
+  // track the theme too, not just the accent surfaces. Status colors stay semantic.
+  const neonAccents = [accent, ...style.accents.slice(1)];
   const building = { ...CITY_COLORS.building, online: accent };
-  const buildingBody = tintStructure(ORIGINAL_BUILDING_BODY, accent);
+  const buildingBody = tintStructure(style.buildingBody, accent);
 
   return {
     themeId: theme?.id || 'classic-midnight',
     mode: theme?.mode || 'night',
     isDay,
+    // The active art direction. Scene components read these off the palette they already
+    // consume rather than re-resolving the style from settings — one bit, one channel.
+    worldStyle: style.id,
+    lowPoly,
+    neonLayers: style.neonLayers,
+    terrain: style.terrain,
+    // Material props every structural world mesh spreads so it inherits the art direction
+    // instead of hardcoding a finish: `<meshStandardMaterial … {...surface} />`, spread
+    // AFTER the mesh's own roughness/metalness so the style wins where it has an opinion.
+    // Low-poly worlds read by their facets — flat shading gives each face one normal — and
+    // a matte, non-metallic finish keeps buildings looking painted rather than wet like the
+    // cyber city's glass. Derived here (not per render) so its identity is stable and r3f
+    // never sees a changed material prop; `flatShading` is part of three.js's shader program
+    // cache key, so a value that flipped per render would recompile every lit material.
+    surface: lowPoly
+      ? { flatShading: true, roughness: 0.95, metalness: 0 }
+      : { flatShading: false },
     accent,
     nightBackground,
     dayBackground,
     // Default surround by theme mode — used for the loading screen before settings resolve.
     background: isDay ? dayBackground : nightBackground,
-    crt: deriveCrtProfile(theme?.family),
+    crt: style.themeCrt
+      ? deriveCrtProfile(theme?.family)
+      : { scanlines: false, glow: false, vignette: false },
     // Brand surfaces the 3D scene reads via useCityPalette() instead of the old
     // mutated singleton. `ground`/`particles` are the accent; `building`/`buildingBody`/
     // `neonAccents` carry the themed maps.

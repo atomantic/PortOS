@@ -50,6 +50,32 @@ describe('useNavWorkingSet', () => {
     expect(result.current.isPinned('/system-resources')).toBe(true);
   });
 
+  it('migrates the whole legacy /city subtree to /openworld', () => {
+    // The 3D world moved from /city to /openworld. App.jsx redirects the browser URL, but
+    // the STORED path is what pinned/recent resolve against — without a migration a pinned
+    // "City" row stops matching the manifest and silently vanishes on upgrade.
+    localStorage.setItem(PINNED_KEY, JSON.stringify(['/city', '/city/settings', '/city/apps/portos']));
+    const { result } = renderHook(() => useNavWorkingSet(resolveNavEntry), { wrapper });
+
+    expect(result.current.pinned.map((row) => row.path)).toEqual([
+      '/openworld', '/openworld/settings', '/openworld/apps/portos',
+    ]);
+    expect(result.current.isPinned('/openworld')).toBe(true);
+  });
+
+  it('leaves a sibling route that merely starts with the legacy prefix alone', () => {
+    // The rewrite is segment-anchored: /cityscape is a different page, not /city.
+    localStorage.setItem(PINNED_KEY, JSON.stringify(['/cityscape']));
+    const { result } = renderHook(() => useNavWorkingSet(resolveNavEntry), { wrapper });
+    expect(result.current.pinned.map((row) => row.path)).toEqual(['/cityscape']);
+  });
+
+  it('collapses a legacy path onto its already-migrated twin instead of duplicating', () => {
+    localStorage.setItem(PINNED_KEY, JSON.stringify(['/city', '/openworld']));
+    const { result } = renderHook(() => useNavWorkingSet(resolveNavEntry), { wrapper });
+    expect(result.current.pinned.map((row) => row.path)).toEqual(['/openworld']);
+  });
+
   it('excludes pinned and the current path from recent', () => {
     localStorage.setItem(RECENT_KEY, JSON.stringify(['/start', '/x', '/y']));
     localStorage.setItem(PINNED_KEY, JSON.stringify(['/x']));

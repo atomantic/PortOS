@@ -43,7 +43,7 @@ import {
   SquareTerminal,
   Globe,
   Newspaper,
-  Building2,
+  Globe2,
   Ticket,
   Network,
   Flame,
@@ -144,7 +144,7 @@ import * as api from '../services/api';
 const navItems = [
   { to: '/', label: 'Dashboard', icon: Home, single: true },
   { to: '/review', label: 'Review Hub', icon: ClipboardList, single: true },
-  { to: '/city', label: 'City', icon: Building2, single: true },
+  { to: '/openworld', label: 'OpenWorld', icon: Globe2, single: true },
   { separator: true },
   { label: 'Apps', icon: Package, dynamic: 'apps', defaultTo: '/apps', children: [] },
   {
@@ -545,7 +545,7 @@ const FULL_WIDTH_PATH_PREFIXES = [
   '/writers-room',
   '/agents',
   '/shell/',
-  '/city',
+  '/openworld',
   '/timeline/',
   // Every SongBook route — index (/songbook), import (/songbook/import),
   // and viewer (/songbook/:id) — is full-bleed and owns its own scroll
