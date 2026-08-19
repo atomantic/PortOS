@@ -748,7 +748,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
         )}
         {apiOnlyProviders && (
           <div className="px-3 py-2 bg-port-warning/10 border border-port-warning/40 rounded-lg text-xs text-port-warning">
-            Your enabled providers are HTTP API providers with no file-writing harness, so they can't run agent tasks. Enable <span className="font-semibold">Claude Ollama</span> for Ollama, or <span className="font-semibold">OpenCode MTPLX</span> for a separately running MTPLX server, on the AI Providers page to run file-writing tasks on a local model.
+            Your enabled providers are HTTP API providers with no file-writing harness, so they can't run agent tasks. Enable <span className="font-semibold">Claude Ollama</span> for Ollama, <span className="font-semibold">OpenCode llama TUI</span> for llama.cpp / DFlash, or <span className="font-semibold">OpenCode MTPLX</span> for a separately running MTPLX server, on the AI Providers page to run file-writing tasks on a local model.
           </div>
         )}
         {/* Screenshot and Attachment Upload */}

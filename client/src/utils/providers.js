@@ -514,7 +514,7 @@ export const isVisionCapableCliProvider = (provider) =>
 export const isToolUseModel = (id) =>
   typeof id === 'string' && id.length > 0 &&
   // Mirror of TOOL_USE_RE in server/lib/localModelHeuristics.js — keep in lockstep.
-  /qwen|llama-?3\.[1-9]|llama-?4|mistral|mixtral|ministral|codestral|devstral|magistral|command-?r|command-?a|north-mini-code|firefunction|functionary|watt-tool|hermes|functiongemma|glm-?4|granite-?[34]|(?:^|[-_/:])gemma-?4|gpt-oss|nemotron|olmo-?3|lfm2|ornith|muse-glimmer|nex-n2|smollm2|deepseek-v3|deepseek-r1|deepseek-v4/i.test(id);
+  /qwen|llama-?3\.[1-9]|llama-?4|mistral|mixtral|ministral|codestral|devstral|magistral|command-?r|command-?a|north-mini-code|firefunction|functionary|watt-tool|hermes|functiongemma|glm-?4|granite-?[34]|(?:^|[-_/:])gemma-?4|gpt-oss|nemotron|olmo-?3|lfm2|ornith|muse-glimmer|nex-n2|smollm2|dflash|deepseek-v3|deepseek-r1|deepseek-v4/i.test(id);
 
 /**
  * Agent-picker tool-use annotation for a model id. Agent / CoS tasks (the CD
@@ -562,7 +562,7 @@ export const isToolUseModel = (id) =>
  * @returns {{toolCapable:boolean}|null}
  */
 export const localToolUseHint = (id, provider, toolUseIdsByProvider = null) =>
-  (localBackendForProvider(provider) || isOllamaBackedProvider(provider))
+  (localBackendForProvider(provider) || isOllamaBackedProvider(provider) || provider?.mtplxBacked === true || provider?.llamaBacked === true)
     && typeof id === 'string' && id.length > 0
     ? { toolCapable: toolUseIdsByProvider?.[provider?.id]?.has(id) === true || isToolUseModel(id) }
     : null;

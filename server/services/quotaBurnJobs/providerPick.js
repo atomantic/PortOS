@@ -40,7 +40,7 @@ import { commandBasename } from '../../lib/providerModels.js';
  */
 export function providerForFamily(providers, { familyId, providerId, prefer = 'tui' }) {
   const available = (providers || []).filter((provider) =>
-    provider?.enabled && provider.ollamaBacked !== true && provider.mtplxBacked !== true
+    provider?.enabled && provider.ollamaBacked !== true && provider.mtplxBacked !== true && provider.llamaBacked !== true
     && (provider.type === 'cli' || provider.type === 'tui'));
   if (providerId) return available.find((provider) => provider.id === providerId) || null;
   const inFamily = available.filter((provider) => matchesFamily(provider, familyId));

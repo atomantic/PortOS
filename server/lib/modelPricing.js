@@ -297,7 +297,7 @@ export function isFreeProvider(providerOrId) {
   if (providerOrId == null) return false;
   if (typeof providerOrId === 'string') return FREE_ID.test(providerOrId);
   const p = providerOrId;
-  if (p.ollamaBacked === true || p.mtplxBacked === true) return true;
+  if (p.ollamaBacked === true || p.mtplxBacked === true || p.llamaBacked === true) return true;
   if (FREE_ID.test(p.id || '') || FREE_ID.test(p.command || '')) return true;
   if (typeof p.endpoint === 'string' && LOCALHOST_ENDPOINT.test(p.endpoint.trim())) return true;
   return false;

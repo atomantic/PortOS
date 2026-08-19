@@ -230,6 +230,25 @@
       "secretEnvVars": [],
       "tuiPromptDelayMs": 2500
     },
+    "opencode-llama-tui": {
+      "id": "opencode-llama-tui",
+      "name": "OpenCode llama TUI",
+      "type": "tui",
+      "command": "opencode",
+      "args": [],
+      "endpoint": "http://127.0.0.1:8080/v1",
+      "models": ["dflash", "qwen3.8-27b-dflash2", "Muse-Glimmer-30B-DFlash2"],
+      "defaultModel": "dflash",
+      "llamaBacked": true,
+      "timeout": 600000,
+      "enabled": true,
+      "envVars": {
+        "OPENCODE_CONFIG_CONTENT": "{\"permission\":\"allow\",\"provider\":{\"llama\":{\"npm\":\"@ai-sdk/openai-compatible\",\"name\":\"llama.cpp (local)\",\"options\":{\"baseURL\":\"http://127.0.0.1:8080/v1\"}}}}"
+      },
+      "secretEnvVars": [],
+      "tuiPromptDelayMs": 2500,
+      "tuiIdleTimeoutMs": 180000
+    },
     "orcarouter": {
       "id": "orcarouter",
       "name": "OrcaRouter",

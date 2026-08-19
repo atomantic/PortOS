@@ -411,6 +411,9 @@ export const providerSchema = z.object({
   // Kept in schema parity with aiToolkit's provider schema. Marks OpenCode
   // wrappers for a separately started local MTPLX native-MTP server.
   mtplxBacked: z.boolean().optional(),
+  // Marks an OpenCode CLI/TUI wrapper for a separately started local llama.cpp
+  // server (e.g. DFlash 2 speculative decoding).
+  llamaBacked: z.boolean().optional(),
   // Marks an OpenCode CLI/TUI wrapper for the OrcaRouter OpenAI-compatible
   // gateway; the sibling API record owns its key.
   orcarouterBacked: z.boolean().optional(),

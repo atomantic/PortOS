@@ -71,6 +71,14 @@ export const MODEL_FETCHERS = [
     fetch: '_fetchMtplxModels',
   },
   {
+    key: 'llama',
+    // llama.cpp / llama-server exposes its active models through its OpenAI-compatible
+    // `/v1/models` endpoint.
+    cliMatch: (p) => p?.llamaBacked === true,
+    tuiMatch: (p) => p?.llamaBacked === true,
+    fetch: '_fetchLlamaModels',
+  },
+  {
     key: 'orcarouter',
     // OrcaRouter-backed OpenCode wrappers probe the sibling API provider's
     // OpenAI-compatible `/models` endpoint, never `opencode models`.

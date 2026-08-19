@@ -103,6 +103,20 @@ describe('buildOpencodeConfig', () => {
     });
   });
 
+  it('declares llama models under provider.llama with its local endpoint', () => {
+    const cfg = buildOpencodeConfig(['llama/dflash', 'llama/qwen3.8-27b-dflash2'], null, 'llama');
+    expect(cfg.provider.ollama).toBeUndefined();
+    expect(cfg.provider.llama).toMatchObject({
+      npm: '@ai-sdk/openai-compatible',
+      name: 'llama.cpp (local)',
+      options: { baseURL: 'http://127.0.0.1:8080/v1' },
+    });
+    expect(cfg.provider.llama.models).toEqual({
+      dflash: { name: 'dflash', tool_call: true },
+      'qwen3.8-27b-dflash2': { name: 'qwen3.8-27b-dflash2', tool_call: true },
+    });
+  });
+
   it('declares OrcaRouter models under unchanged keys and its gateway endpoint', () => {
     const cfg = buildOpencodeConfig(['orcarouter/auto', 'anthropic/claude-sonnet-4.6'], null, 'orcarouter');
     expect(cfg.provider.orcarouter).toMatchObject({

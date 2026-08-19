@@ -151,6 +151,7 @@ const TOOL_USE_RE = new RegExp([
   'olmo-?3',
   'lfm2', 'ornith', 'muse-glimmer', 'nex-n2',
   'smollm2',
+  'dflash',
   'deepseek-v3', 'deepseek-r1', 'deepseek-v4',
 ].join('|'), 'i');
 
@@ -578,6 +579,7 @@ export function createProviderService(config = {}) {
         // backend. Preserve this marker so OpenCode receives the `mtplx/`
         // namespace and model refresh probes its local endpoint.
         ...(providerData.mtplxBacked === true ? { mtplxBacked: true } : {}),
+        ...(providerData.llamaBacked === true ? { llamaBacked: true } : {}),
         ...(providerData.orcarouterBacked === true ? { orcarouterBacked: true } : {}),
         // Explicit opt-in to send the API key to an arbitrary (non-local,
         // non-allowlisted) endpoint — see internal/endpointGuard.js. Only
@@ -1060,6 +1062,11 @@ export function createProviderService(config = {}) {
      * @returns {Promise<string[]>}
      */
     async _fetchMtplxModels(provider) {
+      return this._refreshAPIProviderModels(provider);
+    },
+
+    /** Fetch the llama-server catalog for OpenCode llama CLI/TUI wrappers. */
+    async _fetchLlamaModels(provider) {
       return this._refreshAPIProviderModels(provider);
     },
 

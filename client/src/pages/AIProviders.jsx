@@ -421,6 +421,16 @@ export default function AIProviders() {
                       <span className={`text-xs px-2 py-0.5 rounded ${providerTypeClass(provider.type)}`}>
                         {provider.type.toUpperCase()}
                       </span>
+                      {provider.llamaBacked && (
+                        <span className="text-xs px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                          LLAMA.CPP / DFLASH
+                        </span>
+                      )}
+                      {provider.mtplxBacked && (
+                        <span className="text-xs px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30">
+                          MTPLX
+                        </span>
+                      )}
                       {!provider.enabled && (
                         <span className="text-xs px-2 py-0.5 rounded bg-gray-500/20 text-gray-400">
                           DISABLED
@@ -580,6 +590,16 @@ export default function AIProviders() {
                           DEFAULT
                         </span>
                       )}
+                      {provider.llamaBacked && (
+                        <span className="text-xs px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                          LLAMA.CPP / DFLASH
+                        </span>
+                      )}
+                      {provider.mtplxBacked && (
+                        <span className="text-xs px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30">
+                          MTPLX
+                        </span>
+                      )}
                       {!provider.enabled && (
                         <span className="text-xs px-2 py-0.5 rounded bg-gray-500/20 text-gray-400">
                           DISABLED
@@ -631,6 +651,11 @@ export default function AIProviders() {
                     )}
 
                     <div className="mt-2 text-sm text-gray-400 space-y-1">
+                      {provider.llamaBacked && (
+                        <p className="text-xs text-purple-300/90">
+                          Local llama.cpp / llama-server harness (endpoint: <code className="text-purple-200">{provider.endpoint}</code>) — supports DFlash 2 speculative drafting.
+                        </p>
+                      )}
                       {isProcessProvider(provider) && (
                         <p className="break-words">Command: <code className="text-gray-300 break-all">{provider.command} {provider.args?.join(' ')}</code></p>
                       )}

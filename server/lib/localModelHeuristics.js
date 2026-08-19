@@ -143,6 +143,7 @@ const TOOL_USE_RE = new RegExp([
   'olmo-?3',
   'lfm2', 'ornith', 'muse-glimmer', 'nex-n2',
   'smollm2',
+  'dflash',
   'deepseek-v3', 'deepseek-r1', 'deepseek-v4',
 ].join('|'), 'i');
 

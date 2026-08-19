@@ -57,6 +57,6 @@ export const familyLabel = (id) => PROVIDER_FAMILIES.find((f) => f.id === id)?.l
  * provider's spend to the subscription that actually covered it.
  */
 export function familyForProvider(provider) {
-  if (!provider || provider.ollamaBacked === true || provider.mtplxBacked === true) return null;
+  if (!provider || provider.ollamaBacked === true || provider.mtplxBacked === true || provider.llamaBacked === true) return null;
   return PROVIDER_FAMILIES.find((f) => f.matches(provider))?.id ?? null;
 }

@@ -18,6 +18,7 @@ const SHIPPED_REFRESHABLE = [
   'antigravity-cli', 'antigravity-tui', 'cerebras', 'claude-code',
   'claude-code-bedrock', 'claude-ollama', 'claude-ollama-tui', 'cursor-cli',
   'cursor-tui', 'grok', 'lmstudio', 'mtplx', 'nvidia-kimi', 'ollama',
+  'opencode-llama-tui',
   'opencode-mtplx', 'opencode-mtplx-tui', 'opencode-ollama', 'opencode-ollama-tui',
   'opencode-orcarouter', 'opencode-orcarouter-tui', 'orcarouter',
 ];
@@ -128,6 +129,11 @@ describe('resolveModelFetcher — the ordering the old chains encoded in prose',
   it('routes an MTPLX-backed OpenCode CLI to the MTPLX endpoint fetcher', () => {
     const p = { id: 'opencode-mtplx', type: 'cli', command: 'opencode', mtplxBacked: true };
     expect(resolveModelFetcher(p).fetch).toBe('_fetchMtplxModels');
+  });
+
+  it('routes a llama-backed OpenCode TUI to the llama endpoint fetcher', () => {
+    const p = { id: 'opencode-llama-tui', type: 'tui', command: 'opencode', llamaBacked: true };
+    expect(resolveModelFetcher(p).fetch).toBe('_fetchLlamaModels');
   });
 
   it('lets a command beat a display name — a renamed cursor still reaches cursor-agent', () => {

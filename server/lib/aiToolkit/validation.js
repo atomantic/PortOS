@@ -104,6 +104,9 @@ export const providerSchema = z.object({
   // server. This is intentionally distinct from `ollamaBacked`: model weights
   // and runtime protocol configuration are not interchangeable.
   mtplxBacked: z.boolean().optional(),
+  // Marks an OpenCode CLI/TUI wrapper for a separately started local llama.cpp
+  // server (e.g. DFlash 2 speculative decoding).
+  llamaBacked: z.boolean().optional(),
   // Marks an OpenCode CLI/TUI wrapper for the OrcaRouter OpenAI-compatible
   // gateway. Its API key is read from the sibling `orcarouter` API record at
   // spawn/refresh time and is never stored in this wrapper's config.

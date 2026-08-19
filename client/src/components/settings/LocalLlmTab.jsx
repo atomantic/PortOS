@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { Cpu, Box, ArrowRightLeft, Download, Trash2, RefreshCw, Search, Plus, ExternalLink, Star, Link2, Copy, Play, Square, Power, PowerOff, Eye, Wrench, Brain, Code2, MessageSquare, Boxes, AlertTriangle, FlaskConical, Music, ArrowUpCircle } from 'lucide-react';
+import { Cpu, Box, ArrowRightLeft, Download, Trash2, RefreshCw, Search, Plus, ExternalLink, Star, Link2, Copy, Play, Square, Power, PowerOff, Eye, Wrench, Brain, Code2, MessageSquare, Boxes, AlertTriangle, FlaskConical, Music, ArrowUpCircle, Zap } from 'lucide-react';
 import toast from '../ui/Toast';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import BrailleSpinner from '../BrailleSpinner';
@@ -773,6 +773,38 @@ export function LocalLlmTab() {
         ) : (
           <p className="text-sm text-gray-500">Unable to load local LLM status</p>
         )}
+      </div>
+
+      {/* Speculative Decoding & Custom Runtimes (DFlash 2 / llama.cpp) */}
+      <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-3">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div className="flex items-center gap-2">
+            <Zap size={16} className="text-port-accent" />
+            <h2 className="text-sm font-medium text-gray-300">Speculative Decoding & Custom Runtimes (DFlash 2 / llama.cpp)</h2>
+          </div>
+          <Link
+            to="/ai"
+            className="text-xs text-port-accent hover:underline flex items-center gap-1"
+          >
+            OpenCode llama TUI in AI Providers <ExternalLink size={11} />
+          </Link>
+        </div>
+        <p className="text-xs text-gray-400 leading-relaxed">
+          DFlash 2 enables multi-token speculative drafting (yielding 2.5–3× speedups on local models like Qwen 2.5 / Qwen 3.8 and Muse-Glimmer). Run a standalone <code className="text-gray-300">llama-server</code> paired with a DFlash 2 draft model and connect via the enabled <strong className="text-white">OpenCode llama TUI</strong> provider.
+        </p>
+        <div className="bg-port-bg border border-port-border/70 rounded-lg p-3 space-y-2 text-xs">
+          <div className="flex items-center justify-between text-gray-400 font-medium">
+            <span>Example: Run llama-server with DFlash 2 Drafter</span>
+          </div>
+          <pre className="text-[11px] text-gray-300 bg-port-card/80 p-2.5 rounded overflow-x-auto font-mono whitespace-pre-wrap">
+            {`llama-server -m models/Qwen3.8-27B-Instruct-Q4_K_M.gguf \\
+  --draft-model models/Qwen3.8-27B-DFlash2-Q4_K_M.gguf \\
+  --spec-type draft-dflash --port 8080 --host 127.0.0.1`}
+          </pre>
+          <p className="text-[11px] text-gray-500">
+            OpenCode targets <code className="text-gray-400">http://127.0.0.1:8080/v1</code> with tool use and agent harness support enabled.
+          </p>
+        </div>
       </div>
 
       {/* Models — backend picker + catalog/install + installed list */}

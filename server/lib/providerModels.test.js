@@ -145,6 +145,12 @@ describe('providerModels', () => {
       expect(prefixOpencodeModel(mtplx, 'mtplx/mtplx')).toBe('mtplx/mtplx');
     });
 
+    it('namespaces a bare llama id under llama/ for llama-backed OpenCode providers', () => {
+      const llama = { command: 'opencode', llamaBacked: true };
+      expect(prefixOpencodeModel(llama, 'dflash')).toBe('llama/dflash');
+      expect(prefixOpencodeModel(llama, 'llama/dflash')).toBe('llama/dflash');
+    });
+
     it('keeps the OrcaRouter stored id in the models map but double-prefixes the OpenCode argv id', () => {
       const orca = { command: 'opencode', orcarouterBacked: true };
       expect(prefixOpencodeModel(orca, 'orcarouter/auto')).toBe('orcarouter/orcarouter/auto');
@@ -184,6 +190,7 @@ describe('providerModels', () => {
     it('uses explicit markers and keeps Ollama as the malformed dual-marker fallback', () => {
       expect(getOpencodeLocalProviderNamespace({ ollamaBacked: true })).toBe('ollama');
       expect(getOpencodeLocalProviderNamespace({ mtplxBacked: true })).toBe('mtplx');
+      expect(getOpencodeLocalProviderNamespace({ llamaBacked: true })).toBe('llama');
       expect(getOpencodeLocalProviderNamespace({ orcarouterBacked: true })).toBe('orcarouter');
       expect(getOpencodeLocalProviderNamespace({ ollamaBacked: true, mtplxBacked: true })).toBe('ollama');
       expect(getOpencodeLocalProviderNamespace({})).toBeNull();
