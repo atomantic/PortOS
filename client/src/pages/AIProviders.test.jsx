@@ -427,6 +427,33 @@ describe('OpenCode OrcaRouter key hint', () => {
     expect(screen.getByText(/OrcaRouter key: not set/)).toBeInTheDocument();
    });
 
+  it('opens the sibling API provider so the user can paste the OrcaRouter key', async () => {
+    api.getProviders.mockResolvedValue({
+      providers: [
+        {
+          id: 'opencode-orcarouter',
+          name: 'OpenCode OrcaRouter',
+          type: 'cli',
+          command: 'opencode',
+          enabled: true,
+          orcarouterBacked: true,
+          models: ['orcarouter/auto'],
+          defaultModel: 'orcarouter/auto',
+        },
+        { id: 'orcarouter', name: 'OrcaRouter', type: 'api', enabled: false, endpoint: 'https://api.orcarouter.ai/v1', hasApiKey: false },
+      ],
+      activeProvider: 'opencode-orcarouter',
+    });
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit OrcaRouter API provider' }));
+
+    expect(await screen.findByRole('heading', { name: 'Edit Provider' })).toBeInTheDocument();
+    expect(screen.getByLabelText('API Key')).toBeInTheDocument();
+    expect(screen.getByText(/ORCAROUTER_API_KEY/)).toBeInTheDocument();
+  });
+
   it('reports the inherited key as set when the sibling API provider has one', async () => {
     api.getProviders.mockResolvedValue({
       providers: [

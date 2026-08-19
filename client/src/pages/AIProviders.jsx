@@ -48,7 +48,7 @@ disable_codebase_upload = true`}</pre>
 // their own — at spawn time the server copies the key from the sibling
 // `orcarouter` API provider. This answers "where do I put the API key?" from the
 // card/form: it's on the API provider, not here.
-function OrcaRouterKeyHint({ sibling, className = '' }) {
+function OrcaRouterKeyHint({ sibling, className = '', onEdit }) {
   const hasKey = Boolean(sibling?.hasApiKey);
   return (
     <div className={`text-xs rounded-md border border-port-border bg-port-bg/60 px-2.5 py-2 leading-relaxed ${className}`}>
@@ -56,11 +56,24 @@ function OrcaRouterKeyHint({ sibling, className = '' }) {
         API key is inherited from the <code className="font-mono">OrcaRouter</code> API provider
         {" "}at run time — this wrapper has no key field of its own.
       </span>
-      <div className="mt-1">
+      <p className="mt-1 text-gray-400">
+        You do not need to add an environment variable. PortOS supplies{' '}
+        <code className="font-mono">ORCAROUTER_API_KEY</code> to OpenCode automatically.
+      </p>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
         {hasKey ? (
           <span className="text-port-success">OrcaRouter key: set</span>
         ) : (
-          <span className="text-port-warning">OrcaRouter key: not set — Edit the OrcaRouter API provider to paste one</span>
+          <span className="text-port-warning">OrcaRouter key: not set</span>
+        )}
+        {sibling && onEdit && (
+          <button
+            type="button"
+            onClick={() => onEdit(sibling)}
+            className="text-port-accent hover:text-port-accent/80 underline underline-offset-2"
+          >
+            Edit OrcaRouter API provider
+          </button>
         )}
       </div>
     </div>
@@ -758,6 +771,7 @@ export default function AIProviders() {
                        {isOrcaRouterBackedProvider(provider) && (
                          <OrcaRouterKeyHint
                           sibling={providers.find(p => p.id === 'orcarouter')}
+                          onEdit={(sibling) => { setEditingProvider(sibling); setShowForm(true); }}
                           className="mt-2"
                           />
                         )}
@@ -877,9 +891,14 @@ export default function AIProviders() {
       {/* Provider Form Modal */}
       {showForm && (
         <ProviderForm
+          key={editingProvider?.id || 'new'}
           provider={editingProvider}
           allProviders={providers}
           runnerAllowedCommands={runnerAllowedCommands}
+          onEditProvider={(providerToEdit) => {
+            setEditingProvider(providerToEdit);
+            setShowForm(true);
+          }}
           onClose={() => { setShowForm(false); setEditingProvider(null); }}
           onSave={() => { setShowForm(false); setEditingProvider(null); loadData(); }}
         />
@@ -900,7 +919,7 @@ export default function AIProviders() {
   );
 }
 
-function ProviderForm({ provider, onClose, onSave, allProviders = [], runnerAllowedCommands = null }) {
+function ProviderForm({ provider, onClose, onSave, onEditProvider, allProviders = [], runnerAllowedCommands = null }) {
   const [formData, setFormData] = useState({
     name: provider?.name || '',
     type: provider?.type || 'cli',
@@ -1646,6 +1665,7 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [], runnerAllo
            {isOrcaRouterBackedProvider(provider) && (
              <OrcaRouterKeyHint
               sibling={allProviders.find(p => p.id === 'orcarouter')}
+              onEdit={onEditProvider}
              />
            )}
 
