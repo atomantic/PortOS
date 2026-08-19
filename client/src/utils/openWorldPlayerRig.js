@@ -13,14 +13,17 @@ export const EYE_HEIGHT = 1.6;
 export const BUILDING_COLLISION_RADIUS = 3.5;
 
 export const THIRD_PERSON = {
-  boom: 6.5, // camera distance behind the character
-  shoulder: 0.6, // lateral over-the-shoulder offset (positive = right)
-  height: 2.4, // camera rise above the character's feet at pitch 0
+  boom: 13, // camera distance behind the character
+  shoulder: 0.9, // lateral over-the-shoulder offset (positive = right)
+  height: 3.2, // camera rise above the character's feet at pitch 0
+  isometricYaw: Math.PI / 12, // slight diagonal framing keeps the downtown avenue in view
+  isometricPitch: 0.52, // about 30° above the landscape, keeping landmarks in the frame
+  fov: 38, // tighter perspective keeps the city readable from the elevated angle
   minPitch: -0.45, // looking up from under the character — floor-limited
   maxPitch: 1.15, // looking down over the character
   minCamY: 0.6, // the camera never dips into the pavement
-  lookAhead: 2, // lookAt leads the character so the view reads forward
-  lookHeight: 1.4, // aim at the chest, not the feet
+  lookAhead: 0.8, // keep the rover on-screen while the road opens ahead
+  lookHeight: 0.8, // aim near the rover's roof so it stays clear of the mobile controls
   camDampRate: 8, // camera position smoothing (lower = floatier)
   lookDampRate: 12, // aim smoothing (tighter than position so aim stays crisp)
 };
@@ -30,8 +33,14 @@ export const clampPitch = (pitch) =>
 
 // Desired third-person camera + aim point for a rig pose. Pure — collision is applied
 // separately via resolveBoom so callers can damp toward the resolved point.
-export function thirdPersonCamera({ pos, yaw, pitch, boom = THIRD_PERSON.boom }) {
-  const p = clampPitch(pitch);
+export function thirdPersonCamera({
+  pos,
+  yaw,
+  pitch,
+  boom = THIRD_PERSON.boom,
+  pitchOffset = 0,
+}) {
+  const p = clampPitch(pitch + pitchOffset);
   const back = boom * Math.cos(p);
   const sinYaw = Math.sin(yaw);
   const cosYaw = Math.cos(yaw);

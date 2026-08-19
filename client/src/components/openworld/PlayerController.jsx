@@ -20,7 +20,7 @@ const PROXIMITY_DISTANCE = 6;
 const MAX_CAMERA_HEIGHT = 160;
 const BUILDING_FLYOVER_HEIGHT = 12; // above this the player clears rooftops, so skip collision
 const AIRBORNE_HEIGHT = EYE_HEIGHT + 0.6; // above this the avatar reads as flying (hover state)
-const DEFAULT_SPAWN_Z = 36; // clear the central AI Core when an install has few/no app buildings
+const DEFAULT_SPAWN_Z = 42; // clear the central AI Core when an install has few/no app buildings
 const MOUSE_SENSITIVITY = 0.002;
 const PITCH_LIMIT = Math.PI / 2 - 0.02;
 
@@ -61,9 +61,9 @@ export default function PlayerController({
   const { camera, gl } = useThree();
   const rigRef = useRef({
     position: new THREE.Vector3(0, EYE_HEIGHT, 0),
-    yaw: 0, // camera heading; forward is (-sin yaw, 0, -cos yaw)
+    yaw: THIRD_PERSON.isometricYaw, // camera heading; forward is (-sin yaw, 0, -cos yaw)
     pitch: 0,
-    facing: 0, // the character's body heading (damped toward movement direction)
+    facing: THIRD_PERSON.isometricYaw, // the character's body heading (damped toward movement direction)
     bank: 0, // lean into turns
     vy: 0, // vertical velocity for the Space jump arc (E/Q free-fly zeroes it)
     jumping: false, // an active Space jump arc — gates gravity so E/Q free-fly holds altitude
@@ -102,12 +102,12 @@ export default function PlayerController({
       });
       // With an empty or single-app install, `maxZ + 8` places the rover inside the
       // central plaza's sightline and the AI Core fills the entire mobile viewport.
-      // Keep the same north-facing drop-in, but start far enough back to reveal the
+      // Keep the same city-facing drop-in, but start far enough back to reveal the
       // playable streets and landmarks before the player drives toward downtown.
       rig.position.set(0, EYE_HEIGHT, Math.max(maxZ + 8, DEFAULT_SPAWN_Z));
-      rig.yaw = 0; // Forward = (0, 0, -1), facing toward city center
+      rig.yaw = THIRD_PERSON.isometricYaw;
       rig.pitch = 0;
-      rig.facing = 0;
+      rig.facing = THIRD_PERSON.isometricYaw;
       lastSpawnRef.current = rig.position.clone();
     }
     lookInitRef.current = false;
@@ -122,11 +122,10 @@ export default function PlayerController({
     if (!active || teleportToken === null || !teleport) return;
     const rig = rigRef.current;
     rig.position.set(teleport.x, EYE_HEIGHT, teleport.z);
-    // Face the destination: the arrival point sits on the +Z side of the district, so
-    // looking down -Z (yaw 0) puts the region in front of the player.
-    rig.yaw = 0;
+    // Face the destination from the same diagonal heading as the default isometric view.
+    rig.yaw = THIRD_PERSON.isometricYaw;
     rig.pitch = 0;
-    rig.facing = 0;
+    rig.facing = THIRD_PERSON.isometricYaw;
     rig.vy = 0;
     rig.jumping = false;
     lastSpawnRef.current = rig.position.clone();
@@ -200,9 +199,9 @@ export default function PlayerController({
         onToggleCameraView?.();
       } else if (key === 'r' && lastSpawnRef.current) {
         rigRef.current.position.copy(lastSpawnRef.current);
-        rigRef.current.yaw = 0;
+        rigRef.current.yaw = THIRD_PERSON.isometricYaw;
         rigRef.current.pitch = 0;
-        rigRef.current.facing = 0;
+        rigRef.current.facing = THIRD_PERSON.isometricYaw;
         rigRef.current.vy = 0;
         rigRef.current.jumping = false;
         lookInitRef.current = false;
@@ -435,7 +434,12 @@ export default function PlayerController({
 
     // Third person: boom behind the camera yaw, shortened when it would clip a building,
     // damped so the camera glides while the aim stays tight.
-    const desired = thirdPersonCamera({ pos: rig.position, yaw: rig.yaw, pitch: rig.pitch });
+    const desired = thirdPersonCamera({
+      pos: rig.position,
+      yaw: rig.yaw,
+      pitch: rig.pitch,
+      pitchOffset: THIRD_PERSON.isometricPitch,
+    });
     const anchor = { x: rig.position.x, y: rig.position.y + THIRD_PERSON.lookHeight, z: rig.position.z };
     const { point: resolvedCam } = resolveBoom({ anchor, camera: desired.camera, buildings: buildingList });
 

@@ -41,8 +41,11 @@ export default function CameraTransition({ active, targetPos, targetLookAt, onTr
 
     const t = smoothstep(Math.min(progressRef.current, 1));
 
-    const endPos = active ? (targetPos || new THREE.Vector3(0, 2, 15)) : ORBITAL_POS;
-    const endTarget = active ? (targetLookAt || new THREE.Vector3(0, 1.4, 10)) : ORBITAL_TARGET;
+    // Match the elevated diagonal exploration framing while the player rig takes over.
+    // The transition target is only a short hand-off; PlayerController then tracks the
+    // actual rover position and applies the same isometric offset every frame.
+    const endPos = active ? (targetPos || new THREE.Vector3(0, 10, 20)) : ORBITAL_POS;
+    const endTarget = active ? (targetLookAt || new THREE.Vector3(-2, 1.2, 8)) : ORBITAL_TARGET;
 
     camera.position.lerpVectors(startPosRef.current, endPos, t);
 

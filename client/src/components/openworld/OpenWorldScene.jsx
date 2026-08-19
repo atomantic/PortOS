@@ -51,6 +51,7 @@ import OpenWorldDepthOfField from './OpenWorldDepthOfField';
 import OpenWorldAdaptiveQuality from './OpenWorldAdaptiveQuality';
 import { openWorldDayMix, getTimeOfDayPreset } from './openWorldConstants';
 import { CITY_MAX_ORBIT_DISTANCE } from '../../utils/openWorldFocusCamera';
+import { THIRD_PERSON } from '../../utils/openWorldPlayerRig';
 import { listRegions } from '../../utils/openWorldRegions';
 import { OpenWorldPaletteProvider } from './OpenWorldPaletteContext';
 import ErrorBoundary from '../ErrorBoundary';
@@ -250,7 +251,7 @@ export default function OpenWorldScene({ apps, agentMap, onBuildingClick, onTogg
     <div className="absolute inset-0" style={{ background: fallbackBackground }}>
       <Canvas
         key={`${photoMode ? 'photo' : 'live'}-${canvasRevision}`}
-        camera={{ position: [0, 25, 45], fov: 50 }}
+        camera={{ position: [0, 25, 45], fov: THIRD_PERSON.fov }}
         dpr={dpr}
         shadows={false}
         // Photo mode freezes the scene for a clean still (roadmap 3.6): "demand" stops the

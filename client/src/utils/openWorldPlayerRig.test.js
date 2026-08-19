@@ -34,6 +34,18 @@ describe('thirdPersonCamera', () => {
     expect(clampPitch(-9)).toBe(THIRD_PERSON.minPitch);
   });
 
+  it('supports a separate isometric tilt without changing the rig pitch', () => {
+    const level = thirdPersonCamera({ pos, yaw: 0, pitch: 0 });
+    const tilted = thirdPersonCamera({
+      pos,
+      yaw: 0,
+      pitch: 0,
+      pitchOffset: THIRD_PERSON.isometricPitch,
+    });
+    expect(tilted.camera.y).toBeGreaterThan(level.camera.y);
+    expect(tilted.camera.z).toBeLessThan(level.camera.z);
+  });
+
   it('never dips the camera into the pavement', () => {
     const { camera } = thirdPersonCamera({ pos: { x: 0, y: 1.6, z: 0 }, yaw: 0, pitch: -0.45 });
     expect(camera.y).toBeGreaterThanOrEqual(THIRD_PERSON.minCamY);
