@@ -352,6 +352,34 @@ describe('checkPeerBrainParity', () => {
 });
 
 describe('runBrainParityCheck', () => {
+  it('flags an unreadable peer registry instead of reporting a peerless sweep', async () => {
+    getPeers.mockRejectedValue(new Error('peer registry read failed'));
+
+    const result = await runBrainParityCheck();
+
+    expect(result.peerRegistryUnavailable).toBe(true);
+    expect(result.reports).toEqual([]);
+    expect(peerFetch).not.toHaveBeenCalled();
+  });
+
+  it('treats a non-array peer registry as unreadable rather than throwing on filter', async () => {
+    getPeers.mockResolvedValue(undefined);
+
+    const result = await runBrainParityCheck();
+
+    expect(result.peerRegistryUnavailable).toBe(true);
+    expect(result.reports).toEqual([]);
+  });
+
+  it('leaves peerRegistryUnavailable unset for a genuinely peerless install', async () => {
+    getPeers.mockResolvedValue([]);
+
+    const result = await runBrainParityCheck();
+
+    expect(result.peerRegistryUnavailable).toBeUndefined();
+    expect(result.reports).toEqual([]);
+  });
+
   it('returns peer-not-found for an unknown peer id without contacting anyone', async () => {
     getPeers.mockResolvedValue([PEER]);
 

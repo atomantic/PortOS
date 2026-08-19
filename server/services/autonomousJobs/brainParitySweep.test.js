@@ -101,6 +101,23 @@ describe('runBrainParitySweep', () => {
     const check = vi.fn().mockResolvedValue(null)
     await expect(runBrainParitySweep({ check })).resolves.toMatchObject({ peersChecked: 0 })
   })
+
+  it('surfaces an unreadable peer registry distinctly from a peerless install', async () => {
+    // Both check nothing and report zero peers. Only one of them means the
+    // audit actually ran, so a scheduled sweep must not record "all clear"
+    // for a registry it could not read.
+    const unreadable = await runBrainParitySweep({
+      check: vi.fn().mockResolvedValue({ reports: [], peerRegistryUnavailable: true })
+    })
+    const peerless = await runBrainParitySweep({
+      check: vi.fn().mockResolvedValue({ reports: [] })
+    })
+
+    expect(unreadable.peerRegistryUnavailable).toBe(true)
+    expect(peerless.peerRegistryUnavailable).toBe(false)
+    expect(unreadable.peersChecked).toBe(0)
+    expect(peerless.peersChecked).toBe(0)
+  })
 })
 
 describe('job-brain-parity-sweep registration', () => {

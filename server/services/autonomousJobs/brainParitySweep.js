@@ -66,7 +66,7 @@ function summarizePeer(report) {
  *
  * @param {object} [deps]
  * @param {(opts?: object) => Promise<{ reports: object[] }>} [deps.check] - sweep runner (test seam)
- * @returns {Promise<{ peersChecked: number, peersUnavailable: number, peersOutOfParity: number, outOfParityRecords: number, peers: object[] }>}
+ * @returns {Promise<{ peersChecked: number, peersUnavailable: number, peersOutOfParity: number, outOfParityRecords: number, peerRegistryUnavailable: boolean, peers: object[] }>}
  */
 export async function runBrainParitySweep({ check } = {}) {
   // Imported lazily so the scriptHandlers registry — loaded on every jobs read —
@@ -79,6 +79,10 @@ export async function runBrainParitySweep({ check } = {}) {
 
   const result = await run({})
   const reports = Array.isArray(result?.reports) ? result.reports : []
+  // A sweep that could not read the peer registry checked nothing; it did not
+  // find nothing. Kept distinct so a scheduled run can't record "all clear"
+  // for an audit that never ran.
+  const peerRegistryUnavailable = result?.peerRegistryUnavailable === true
   const peers = reports.map(summarizePeer)
 
   const peersUnavailable = peers.filter((p) => !p.available).length
@@ -94,10 +98,13 @@ export async function runBrainParitySweep({ check } = {}) {
     peersUnavailable,
     peersOutOfParity: outOfParityPeers.length,
     outOfParityRecords,
+    peerRegistryUnavailable,
     peers
   }
 
-  if (peers.length === 0) {
+  if (peerRegistryUnavailable) {
+    console.log('🧠🔍 Brain parity sweep: peer registry unreadable — no peers were checked, parity is unknown')
+  } else if (peers.length === 0) {
     console.log('🧠🔍 Brain parity sweep: no federating peers to check')
   } else if (outOfParityPeers.length === 0) {
     console.log(`🧠🔍 Brain parity sweep: ${peers.length} peer(s) checked, none out of parity (${peersUnavailable} unavailable)`)

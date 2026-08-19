@@ -315,10 +315,25 @@ export async function getBrainParityReports() {
  *
  * @param {{ peerId?: string }} [opts] - Local peer-registry id. Omitted runs
  *   every federating peer.
- * @returns {Promise<{ reports: object[] }>}
+ * @returns {Promise<{ reports: object[], peerRegistryUnavailable?: true }>}
+ *   `peerRegistryUnavailable` is set only when the peer registry could not be
+ *   read, so a caller can tell that apart from a genuinely peerless install.
  */
 export async function runBrainParityCheck({ peerId } = {}) {
-  const peers = await getPeers().catch(() => []);
+  // Sentinel, not `.catch(() => [])`: an unreadable peer registry must not look
+  // like "this install federates with nobody". Both collapse to zero reports,
+  // and the sweep job then logs a clean "no federating peers to check" run —
+  // the same absent-vs-empty conflation this module's manifest parsers guard
+  // against. A non-array return (corrupt `data.peers`) is a read failure too,
+  // and would otherwise throw on the `.filter` below.
+  const peers = await getPeers().then(
+    (list) => (Array.isArray(list) ? list : null),
+    () => null,
+  );
+  if (!peers) {
+    console.error('🧠🔍 Brain parity: peer registry unreadable — sweep skipped, parity is unknown');
+    return { reports: [], peerRegistryUnavailable: true };
+  }
   // The sweep deliberately does NOT filter on the peer's brain sync CATEGORY.
   // A peer whose brain category was turned off (or never turned on) is exactly
   // where silent divergence accumulates — filtering it out would hide the case
