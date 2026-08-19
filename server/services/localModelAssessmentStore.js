@@ -97,6 +97,33 @@ export async function captureEnvironment({ backend } = {}) {
   };
 }
 
+// A backend UPDATE is one of the things that invalidates a measurement, so the
+// read paths have to see the live version too — but the catalog path runs on
+// every debounced keystroke, and an unconditional probe there would be one
+// loopback GET per keystroke. Cache it briefly instead.
+//
+// `fetched` is the sentinel that keeps "never probed" distinct from "probed and
+// Ollama is down" (a legitimate `null`); without it a down backend would be
+// re-probed on every single call.
+const VERSION_CACHE_MS = 60000;
+let versionCache = { value: null, at: 0, fetched: false };
+
+async function liveBackendVersion(backend) {
+  // Only Ollama reports a version; LM Studio exposes none, so `null` there is
+  // "not recorded", and a comparison against it is skipped rather than failed.
+  if (backend !== 'ollama') return null;
+  const now = Date.now();
+  if (versionCache.fetched && now - versionCache.at < VERSION_CACHE_MS) return versionCache.value;
+  const value = await getOllamaVersion().catch(() => null);
+  versionCache = { value, at: now, fetched: true };
+  return value;
+}
+
+/** Test seam: drop the cached backend version so a suite can re-probe. */
+export function __resetBackendVersionCache() {
+  versionCache = { value: null, at: 0, fetched: false };
+}
+
 /**
  * Live environment for a STALENESS comparison, including the backend version.
  * Costs one loopback GET for Ollama, so it belongs on paths that already talk to
@@ -109,7 +136,7 @@ export async function captureLiveEnvironments({ backends = ['ollama', 'lmstudio'
   const durable = captureDurableEnvironment();
   const entries = await Promise.all(backends.map(async (backend) => [
     backend,
-    { ...durable, backendVersion: backend === 'ollama' ? await getOllamaVersion().catch(() => null) : null },
+    { ...durable, backendVersion: await liveBackendVersion(backend) },
   ]));
   return Object.fromEntries(entries);
 }
@@ -212,17 +239,16 @@ export function withStaleness(assessment, liveEnvironment) {
  * Compact measured-fit records the catalog badge and the editorial
  * recommendation fold in, keyed by model id for one backend.
  *
- * Disk only, and the staleness check uses the FREE durable environment (no
- * subprocess, no HTTP) because this runs on the catalog path, which is hit on
- * every debounced keystroke. A backend-version change therefore doesn't register
- * here — it does on the assessments report, which can afford the probe.
+ * Disk only apart from a 60s-cached backend-version probe: the memory/CPU facts
+ * are free to read, and the version is what catches a backend update, which is
+ * just as stale-making as a RAM change.
  *
  * @param {string} backend
  * @returns {Promise<Record<string, {fit:string|null, verdict:string, assessedAt:string|null, stale:boolean, staleReason:string|null, meanCharsPerSecond:number|null, residentGb:number|null}>>}
  */
 export async function getMeasuredFits(backend) {
   const { assessments } = await loadStore();
-  const live = captureDurableEnvironment();
+  const live = { ...captureDurableEnvironment(), backendVersion: await liveBackendVersion(backend) };
   const out = {};
   for (const assessment of assessments) {
     if (assessment?.backend !== backend || !assessment?.modelId) continue;
@@ -239,6 +265,12 @@ export async function getMeasuredFits(backend) {
         ? assessment.performance.meanCharsPerSecond
         : null,
       residentGb: Number.isFinite(assessment.residentGb) ? assessment.residentGb : null,
+      // LM Studio model ids are repo-level and carry no quant, so the quant the
+      // measurement actually ran has to travel separately or a Q4 reading would
+      // decorate every quant of the repo. `null` = the record predates this
+      // field (or the backend reported none), and a consumer must then decline
+      // to match a quantized variant rather than guess.
+      quantization: assessment.quantization ?? null,
     };
   }
   return out;

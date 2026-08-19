@@ -423,3 +423,50 @@ describe('reconcileFit', () => {
     expect(reconcileFit(null, measurement)).toMatchObject({ fit: 'too-large', fitSource: 'measured', disagrees: false });
   });
 });
+
+describe('rankByIntent staleness', () => {
+  const assessment = (modelId, charsPerSecond, staleness) => ({
+    backend: 'ollama',
+    modelId,
+    verdict: 'fits',
+    params: '14B',
+    residentGb: 8,
+    environment: { memoryBudgetGb: 40 },
+    performance: {
+      meanCharsPerSecond: charsPerSecond,
+      contextDegradation: 0.9,
+      maxWorkingContextTokens: 4096,
+      samplesRun: 2,
+      samplesOk: 2,
+    },
+    staleness,
+  });
+
+  it('never lets a stale reading outrank a fresh one, however good its numbers', () => {
+    const { ranked } = rankByIntent([
+      assessment('stale-but-fast:14b', 240, { comparable: true, stale: true, changes: [{ field: 'totalMemoryGb', label: 'installed memory', from: 128, to: 32 }] }),
+      assessment('fresh-but-slow:14b', 20, { comparable: true, stale: false, changes: [] }),
+    ], 'fastest');
+    expect(ranked.map((r) => r.modelId)).toEqual(['fresh-but-slow:14b', 'stale-but-fast:14b']);
+    // Still listed, though — this panel is where the user re-runs it.
+    expect(ranked[1].staleness.stale).toBe(true);
+  });
+
+  it('ranks on score alone when nothing is stale', () => {
+    const { ranked } = rankByIntent([
+      assessment('slow:14b', 20, { comparable: true, stale: false, changes: [] }),
+      assessment('fast:14b', 240, { comparable: true, stale: false, changes: [] }),
+    ], 'fastest');
+    expect(ranked.map((r) => r.modelId)).toEqual(['fast:14b', 'slow:14b']);
+  });
+
+  it('treats a record with no staleness annotation as un-demoted', () => {
+    // `staleness: null` means the caller never compared — that is not evidence
+    // of staleness, so it must not push the entry down the list.
+    const { ranked } = rankByIntent([
+      assessment('unannotated:14b', 240, undefined),
+      assessment('fresh:14b', 20, { comparable: true, stale: false, changes: [] }),
+    ], 'fastest');
+    expect(ranked[0].modelId).toBe('unannotated:14b');
+  });
+});

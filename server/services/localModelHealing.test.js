@@ -17,6 +17,9 @@ vi.mock('./notifications.js', () => ({
 }));
 vi.mock('./ollamaManager.js', () => ({
   getInstalledModels: mocks.ollamaInstalled,
+  // The assessment store records/compares the backend version, so the module
+  // graph now reaches this export on the self-heal path.
+  getVersion: async () => '0.0.0-test',
   getBaseUrl: () => 'http://localhost:11434',
   // Mirror the real predicate so localBackendForProvider classifies correctly.
   isOllamaProvider: (p) => p?.id === 'ollama' ||
@@ -113,6 +116,50 @@ describe('chooseFallbackModel', () => {
   it('returns null when given nothing', () => {
     expect(chooseFallbackModel([])).toBeNull();
     expect(chooseFallbackModel(null)).toBeNull();
+  });
+
+  describe('measured evidence', () => {
+    const models = [
+      { id: 'qwen3.6:35b', params: '35B' },
+      { id: 'gemma4:9b', params: '9B' },
+    ];
+
+    it('never falls back onto a model measured NOT to run here', () => {
+      expect(chooseFallbackModel(models, {
+        measured: { 'qwen3.6:35b': { verdict: 'does-not-fit', stale: false } },
+      })).toBe('gemma4:9b');
+    });
+
+    it('honours measurement in the LOOSE tier too, not just the recommender', () => {
+      // Every candidate is a code model, so the editorial recommender returns
+      // null and the generic non-embedding tier decides — that tier must apply
+      // the same evidence or a proven-broken model gets repointed onto anyway.
+      const coders = [
+        { id: 'qwen3-coder:30b', params: '30B' },
+        { id: 'codegemma:7b', params: '7B' },
+      ];
+      expect(chooseFallbackModel(coders)).toBe('qwen3-coder:30b');
+      expect(chooseFallbackModel(coders, {
+        measured: { 'qwen3-coder:30b': { verdict: 'incompatible', stale: false } },
+      })).toBe('codegemma:7b');
+    });
+
+    it('still picks something when measurement rules out everything installed', () => {
+      // A doomed pick beats leaving the provider on a model that is not even
+      // installed — the retry fails either way, but the config stops being wrong.
+      expect(chooseFallbackModel(models, {
+        measured: {
+          'qwen3.6:35b': { verdict: 'does-not-fit', stale: false },
+          'gemma4:9b': { verdict: 'does-not-fit', stale: false },
+        },
+      })).toBe('qwen3.6:35b');
+    });
+
+    it('ignores a stale measurement', () => {
+      expect(chooseFallbackModel(models, {
+        measured: { 'qwen3.6:35b': { verdict: 'does-not-fit', stale: true } },
+      })).toBe('qwen3.6:35b');
+    });
   });
 });
 

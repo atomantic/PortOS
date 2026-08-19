@@ -477,3 +477,45 @@ describe('getMeasuredFits', () => {
     expect(fits['example-model:7b'].staleReason).toMatch(/CPU count/i);
   });
 });
+
+describe('backend-version staleness on the read paths', () => {
+  beforeEach(() => store.__resetBackendVersionCache());
+
+  it('marks a measurement stale after the backend is updated under it', async () => {
+    ollamaVersion.mockResolvedValue('0.1.0');
+    runLocalLlmTest.mockResolvedValue(okRun());
+    await svc.runAssessment({ backend: 'ollama', modelId: 'example-model:7b', contextTokens: [512] });
+    expect((await store.getMeasuredFits('ollama'))['example-model:7b'].stale).toBe(false);
+
+    store.__resetBackendVersionCache();
+    ollamaVersion.mockResolvedValue('0.2.0');
+    const fits = await store.getMeasuredFits('ollama');
+    expect(fits['example-model:7b'].stale).toBe(true);
+    expect(fits['example-model:7b'].staleReason).toMatch(/backend version 0\.1\.0 → 0\.2\.0/);
+  });
+
+  it('probes the version at most once per cache window, not once per keystroke', async () => {
+    // The catalog path calls this on every debounced keystroke; an unconditional
+    // probe there would be one loopback GET per character typed.
+    ollamaVersion.mockClear();
+    await store.getMeasuredFits('ollama');
+    await store.getMeasuredFits('ollama');
+    await store.getMeasuredFits('ollama');
+    expect(ollamaVersion).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not re-probe a backend that is down — null is a fetched answer', async () => {
+    store.__resetBackendVersionCache();
+    ollamaVersion.mockClear().mockResolvedValue(null);
+    await store.getMeasuredFits('ollama');
+    await store.getMeasuredFits('ollama');
+    expect(ollamaVersion).toHaveBeenCalledTimes(1);
+  });
+
+  it('never probes for LM Studio, which reports no version at all', async () => {
+    store.__resetBackendVersionCache();
+    ollamaVersion.mockClear();
+    await store.getMeasuredFits('lmstudio');
+    expect(ollamaVersion).not.toHaveBeenCalled();
+  });
+});

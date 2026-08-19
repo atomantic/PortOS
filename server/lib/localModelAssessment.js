@@ -347,9 +347,21 @@ export function rankByIntent(assessments, intent = 'balanced') {
     });
   }
 
-  // Higher score first; ties broken by evidence coverage so a fully-measured
-  // model outranks one scored on a single axis, then by model id for stability.
-  ranked.sort((a, b) => (b.score - a.score) || (b.coverage - a.coverage) || String(a.modelId).localeCompare(String(b.modelId)));
+  // FRESH evidence outranks stale evidence outright, before score is even
+  // considered: a reading taken before a RAM upgrade or a backend update
+  // describes a machine that no longer exists, so it must never be the top
+  // recommendation — the same rule `reconcileFit` and the editorial recommender
+  // apply. Stale rows stay in the list (labelled) rather than vanishing, because
+  // this panel is where the user goes to see and re-run them.
+  // Then: higher score first; ties broken by evidence coverage so a
+  // fully-measured model outranks one scored on a single axis, then by model id
+  // for stability.
+  const isStale = (entry) => (entry.staleness?.stale ? 1 : 0);
+  ranked.sort((a, b) =>
+    (isStale(a) - isStale(b))
+    || (b.score - a.score)
+    || (b.coverage - a.coverage)
+    || String(a.modelId).localeCompare(String(b.modelId)));
   return { intent: resolvedIntent, ranked, excluded };
 }
 

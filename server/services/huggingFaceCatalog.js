@@ -1231,6 +1231,24 @@ export async function enrichCatalogWithVariants(catalog, { backend, systemMemory
   return catalog
 }
 
+// Does a stored measurement describe THIS installable variant?
+//
+// Ollama: the install id carries the quant in its tag, so the same normalization
+// `installed` uses is exactly right.
+//
+// LM Studio: the id is repo-level and the quant lives beside it on the record
+// (`quantization`). Both must agree — including "both absent". A record written
+// before `quantization` was captured therefore matches only a quant-less
+// variant, which is the honest answer: it cannot say which build it measured.
+function measurementMatches(backend, installId, measuredId, measurement) {
+  if (backend === 'ollama') return installIdInstalled(backend, installId, [measuredId])
+  const variant = lmStudioParts(installId)
+  const stored = lmStudioParts(measuredId)
+  if (variant.base !== stored.base) return false
+  const storedQuant = stored.quant || normalizeText(measurement?.quantization).toLowerCase()
+  return variant.quant === storedQuant
+}
+
 /**
  * Fold MEASURED evidence into the estimated fit badge.
  *
@@ -1241,10 +1259,13 @@ export async function enrichCatalogWithVariants(catalog, { backend, systemMemory
  * measurement is the better answer, and where the two DISAGREE is the most
  * useful thing this data can say — so both are kept on the variant.
  *
- * Matching reuses `installIdInstalled`, the exact normalization that decides the
- * `installed` flag (Ollama's `hf.co/<repo>:<quant>` casing/`:latest`, LM Studio's
- * quant-aware `<repo>@<quant>`). A separate matcher here would eventually drift
- * and mark a variant "installed" while showing someone else's measurement.
+ * Matching shares `installIdInstalled`'s normalization for Ollama (casing and a
+ * trailing `:latest`), but is STRICTER about quantization than the installed
+ * flag is. `installIdInstalled` deliberately treats a quant-less id as matching
+ * any quant — right for "is this repo installed", wrong here: an LM Studio
+ * measurement is stored against a repo-level id, so a loose match would stamp
+ * one quant's measured verdict onto every quant of the repo. A measurement
+ * therefore only lands on a variant whose quant it actually names.
  *
  * Mutates in place (the catalog builders already do) and returns `models`.
  *
@@ -1257,10 +1278,9 @@ export function applyMeasuredFit(models, { backend, measured } = {}) {
   const list = Array.isArray(models) ? models : []
   const measuredIds = measured ? Object.keys(measured) : []
   if (!measuredIds.length) return list
-  // One id at a time so the backend-specific normalization decides the match.
   const measurementFor = (installId) => {
     if (!installId) return null
-    const hit = measuredIds.find((id) => installIdInstalled(backend, installId, [id]))
+    const hit = measuredIds.find((id) => measurementMatches(backend, installId, id, measured[id]))
     return hit ? measured[hit] : null
   }
   for (const model of list) {

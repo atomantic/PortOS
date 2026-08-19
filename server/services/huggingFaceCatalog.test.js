@@ -1297,16 +1297,37 @@ describe('applyMeasuredFit', () => {
     expect(models[0].variants[0]).toMatchObject({ fit: 'comfortable', fitSource: 'estimated', measuredFit: 'too-large', stale: true })
   })
 
-  it('matches LM Studio ids quant-aware, the same way `installed` does', () => {
+  it('lands an LM Studio measurement only on the quant it actually measured', () => {
+    // LM Studio ids are repo-level, so the measured quant travels beside the
+    // record. Without that check one quant's verdict would stamp every quant of
+    // the repo — which is exactly what the `installed` flag's looser matching does.
+    const models = [{
+      id: 'example-org/Example-14B-GGUF',
+      variants: [
+        { quant: 'Q4_K_M', installId: 'example-org/Example-14B-GGUF@Q4_K_M', fit: 'comfortable' },
+        { quant: 'Q8_0', installId: 'example-org/Example-14B-GGUF@Q8_0', fit: 'comfortable' }
+      ]
+    }]
+    applyMeasuredFit(models, {
+      backend: 'lmstudio',
+      measured: { 'example-org/Example-14B-GGUF': { fit: 'tight', verdict: 'fits', stale: false, quantization: 'Q4_K_M' } }
+    })
+    expect(models[0].variants[0]).toMatchObject({ fit: 'tight', fitSource: 'measured' })
+    expect(models[0].variants[1]).toMatchObject({ fit: 'comfortable', fitSource: 'estimated' })
+  })
+
+  it('declines to decorate a quantized variant from a record that never captured a quant', () => {
+    // Records written before `quantization` was stored cannot say WHICH build ran,
+    // so they must decorate nothing rather than guess — absent is not a wildcard.
     const models = [{
       id: 'example-org/Example-14B-GGUF',
       variants: [{ quant: 'Q4_K_M', installId: 'example-org/Example-14B-GGUF@Q4_K_M', fit: 'comfortable' }]
     }]
     applyMeasuredFit(models, {
       backend: 'lmstudio',
-      measured: { 'example-org/Example-14B-GGUF': { fit: 'tight', verdict: 'fits', stale: false } }
+      measured: { 'example-org/Example-14B-GGUF': { fit: 'tight', verdict: 'fits', stale: false, quantization: null } }
     })
-    expect(models[0].variants[0]).toMatchObject({ fit: 'tight', fitSource: 'measured' })
+    expect(models[0].variants[0]).toMatchObject({ fit: 'comfortable', fitSource: 'estimated' })
   })
 
   it('annotates a variant-less entry, where the measurement is the only evidence there is', () => {

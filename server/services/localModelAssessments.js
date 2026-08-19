@@ -259,6 +259,11 @@ export async function runAssessment({ backend, modelId, contextTokens = DEFAULT_
     backend,
     modelId,
     params: card?.params ?? null,
+    // LM Studio serves one quant per install but reports a repo-level id, so the
+    // quant has to be recorded separately for a catalog badge to know WHICH
+    // build was measured. `null` on Ollama (its id already carries the tag) and
+    // whenever the backend reported none.
+    quantization: card?.quantization ?? null,
     // `null` = never measured; the LM Studio path legitimately reports null.
     residentGb: verdict === 'fits' ? await residentGbFor(backend, modelId) : null,
     assessedAt: new Date().toISOString(),

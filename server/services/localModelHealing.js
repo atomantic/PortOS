@@ -82,8 +82,22 @@ export function isModelNotFoundError(text) {
 export function chooseFallbackModel(models, { measured = {} } = {}) {
   const recommended = recommendEditorialModel(models, { measured });
   if (recommended?.id) return recommended.id;
-  const usable = (models || []).find((m) => m?.id && !isEmbeddingModel(m.id));
-  return usable?.id || (models || [])[0]?.id || null;
+  // The recommender can come back empty (every candidate is an embedding /
+  // code / media model, or measurement ruled them all out). The looser tiers
+  // below must honour the same measured evidence, or a model PROVEN not to run
+  // here gets repointed onto anyway and the next run fails identically.
+  // A stale reading is not evidence — same rule as the recommender.
+  const ruledOut = (id) => {
+    const record = measured?.[id];
+    return Boolean(record) && !record.stale && ['does-not-fit', 'incompatible'].includes(record.verdict);
+  };
+  const list = (models || []).filter((m) => m?.id);
+  const runnable = list.filter((m) => !ruledOut(m.id));
+  const usable = runnable.find((m) => !isEmbeddingModel(m.id));
+  // Last resort keeps the pre-measurement behavior: when EVERY installed model
+  // is ruled out, a doomed pick still beats leaving the provider pointed at a
+  // model that is not installed at all.
+  return usable?.id || runnable[0]?.id || list[0]?.id || null;
 }
 
 /**
