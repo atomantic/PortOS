@@ -70,6 +70,13 @@ vi.mock('../services/localModelAssessments.js', () => ({
   deleteAssessment: vi.fn(async () => ({ deleted: true })),
 }));
 
+vi.mock('../services/llamaServerManager.js', () => ({
+  getLlamaServerStatus: vi.fn(async () => ({ installed: true, running: false })),
+  startLlamaServer: vi.fn(async () => ({ success: true, pid: 123 })),
+  stopLlamaServer: vi.fn(async () => ({ success: true })),
+  installLlamaServer: vi.fn(async () => ({ success: true, message: 'installed' })),
+}));
+
 // /loaded reads getSettings() to honor a user's intentionally-disabled backends,
 // so mock it (defaults to no backends disabled; the disabled-case test flips it).
 vi.mock('../services/settings.js', () => ({
@@ -462,5 +469,40 @@ describe('measured assessments wiring', () => {
     expect(app.get('io').emit).toHaveBeenCalledWith('localLlm:progress', {
       scope: 'assessment', backend: 'ollama', modelId: 'example-model:14b', event: 'start', sampleIndex: 1, sampleCount: 3,
     });
+  });
+});
+
+describe('llama-server routes', () => {
+  it('GET /api/local-llm/llama-server/status returns status', async () => {
+    const res = await request(makeApp()).get('/api/local-llm/llama-server/status');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ installed: true, running: false });
+  });
+
+  it('POST /api/local-llm/llama-server/start launches server with valid payload', async () => {
+    const res = await request(makeApp())
+      .post('/api/local-llm/llama-server/start')
+      .send({ model: 'models/Qwen3.8-27B.gguf', draftModel: 'models/DFlash.gguf' });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, pid: 123 });
+  });
+
+  it('POST /api/local-llm/llama-server/start rejects invalid payload', async () => {
+    const res = await request(makeApp())
+      .post('/api/local-llm/llama-server/start')
+      .send({});
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/local-llm/llama-server/stop stops server', async () => {
+    const res = await request(makeApp()).post('/api/local-llm/llama-server/stop');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true });
+  });
+
+  it('POST /api/local-llm/llama-server/install triggers install', async () => {
+    const res = await request(makeApp()).post('/api/local-llm/llama-server/install');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, message: 'installed' });
   });
 });

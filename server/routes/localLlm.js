@@ -25,8 +25,10 @@ import {
   localLlmCompareSchema,
   localLlmAssessmentRunSchema,
   localLlmAssessmentIntentSchema,
-  localLlmAssessmentDeleteSchema
+  localLlmAssessmentDeleteSchema,
+  localLlmLlamaServerStartSchema
 } from '../lib/validation.js'
+import { getLlamaServerStatus, startLlamaServer, stopLlamaServer, installLlamaServer } from '../services/llamaServerManager.js'
 import { getCatalog, searchCatalog, isBackend } from '../lib/localLlmCatalog.js'
 import { isAppleSilicon } from '../lib/platform.js'
 import { searchHuggingFaceModels, enrichCatalogWithVariants, applyMeasuredFit } from '../services/huggingFaceCatalog.js'
@@ -458,6 +460,30 @@ router.post('/assessments/delete', asyncHandler(async (req, res) => {
   const result = await deleteAssessment(backend, modelId)
   if (!result.deleted) throw new ServerError('No assessment recorded for that model', { status: 404, context: { backend, modelId } })
   res.json({ success: true, backend, modelId })
+}))
+
+// === llama-server (DFlash 2 / Speculative Decoding) ==========================
+// GET /api/local-llm/llama-server/status — binary availability, process state, logs
+router.get('/llama-server/status', asyncHandler(async (_req, res) => {
+  res.json(await getLlamaServerStatus())
+}))
+
+// POST /api/local-llm/llama-server/start — launch llama-server
+router.post('/llama-server/start', asyncHandler(async (req, res) => {
+  const options = validateRequest(localLlmLlamaServerStartSchema, req.body)
+  res.json(await startLlamaServer(options))
+}))
+
+// POST /api/local-llm/llama-server/stop — stop managed llama-server
+router.post('/llama-server/stop', asyncHandler(async (_req, res) => {
+  res.json(await stopLlamaServer())
+}))
+
+// POST /api/local-llm/llama-server/install — install llama.cpp via Homebrew
+router.post('/llama-server/install', asyncHandler(async (req, res) => {
+  const io = req.app.get('io')
+  const onProgress = (data) => io?.emit('localLlm:progress', data)
+  res.json(await installLlamaServer({ onProgress }))
 }))
 
 export default router

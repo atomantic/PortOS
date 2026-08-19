@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { Cpu, Box, ArrowRightLeft, Download, Trash2, RefreshCw, Search, Plus, ExternalLink, Star, Link2, Copy, Play, Square, Power, PowerOff, Eye, Wrench, Brain, Code2, MessageSquare, Boxes, AlertTriangle, FlaskConical, Music, ArrowUpCircle, Zap } from 'lucide-react';
+import { Cpu, Box, ArrowRightLeft, Download, Trash2, RefreshCw, Search, Plus, ExternalLink, Star, Link2, Copy, Play, Square, Power, PowerOff, Eye, Wrench, Brain, Code2, MessageSquare, Boxes, AlertTriangle, FlaskConical, Music, ArrowUpCircle, Zap, ChevronDown, ChevronUp, Terminal } from 'lucide-react';
 import toast from '../ui/Toast';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import BrailleSpinner from '../BrailleSpinner';
@@ -10,7 +10,7 @@ import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import {
   getLocalLlmStatus, getLocalLlmCatalog, getLocalLlmHuggingFaceSearch, installLocalLlmModel,
   deleteLocalLlmModel, switchLocalLlmBackend, migrateLocalLlmBackend, installLocalLlmBackend, upgradeLocalLlmBackend, controlOllamaService,
-  installAudioModel, patchSettingsSlice
+  installAudioModel, patchSettingsSlice, getLlamaServerStatus, startLlamaServer, stopLlamaServer, installLlamaServer
 } from '../../services/api';
 import socket from '../../services/socket';
 import MemoryManagement from './MemoryManagement.jsx';
@@ -21,6 +21,30 @@ const BACKENDS = [
   { id: 'lmstudio', label: 'LM Studio', icon: Box }
 ];
 const labelFor = (id) => BACKENDS.find((b) => b.id === id)?.label || id;
+
+const DFLASH_PRESETS = [
+  {
+    id: 'qwen3.8-27b',
+    label: 'Qwen 3.8 27B + DFlash 2 Drafter (Recommended)',
+    model: 'models/Qwen3.8-27B-Instruct-Q4_K_M.gguf',
+    draftModel: 'models/Qwen3.8-27B-DFlash2-Q4_K_M.gguf',
+    specType: 'draft-dflash',
+  },
+  {
+    id: 'muse-glimmer-30b',
+    label: 'Muse-Glimmer 30B + DFlash 2 Drafter',
+    model: 'models/Muse-Glimmer-30B-Instruct-Q4_K_M.gguf',
+    draftModel: 'models/Muse-Glimmer-30B-DFlash2-Q4_K_M.gguf',
+    specType: 'draft-dflash',
+  },
+  {
+    id: 'custom',
+    label: 'Custom GGUF / Manual Paths',
+    model: '',
+    draftModel: '',
+    specType: 'draft-dflash',
+  },
+];
 
 const btnClass = 'flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded transition-colors disabled:opacity-50';
 
@@ -382,9 +406,33 @@ export function LocalLlmTab() {
   const catalogRequestId = useRef(0);
   const selectedInitialized = useRef(false);
 
+  const [llamaStatus, setLlamaStatus] = useState(null);
+  const [llamaLoading, setLlamaLoading] = useState(false);
+  const [llamaForm, setLlamaForm] = useState({
+    model: '',
+    draftModel: '',
+    specType: 'draft-dflash',
+    port: 8080,
+    host: '127.0.0.1',
+    ctxSize: 32768,
+    nGpuLayers: 99,
+    alias: 'dflash',
+  });
+  const [showLlamaAdvanced, setShowLlamaAdvanced] = useState(false);
+  const [showLlamaLogs, setShowLlamaLogs] = useState(false);
+
+  const loadLlamaStatus = useCallback(() => {
+    return getLlamaServerStatus({ silent: true })
+      .then((res) => {
+        if (res) setLlamaStatus(res);
+      })
+      .catch(() => {});
+  }, []);
+
   const loadStatus = useCallback(() => {
     const requestId = ++statusRequestId.current;
     setLoading(true);
+    loadLlamaStatus();
     return getLocalLlmStatus({ silent: true })
       .then((s) => {
         if (requestId !== statusRequestId.current) return;
@@ -401,7 +449,7 @@ export function LocalLlmTab() {
       .finally(() => {
         if (requestId === statusRequestId.current) setLoading(false);
       });
-  }, []);
+  }, [loadLlamaStatus]);
 
   // `source` and `category` are required rather than defaulted from state: a
   // state default would put them in the dep list, so `loadCatalog`'s identity
@@ -667,6 +715,74 @@ export function LocalLlmTab() {
     });
   };
 
+  const handleStartLlama = async (e) => {
+    e?.preventDefault?.();
+    if (!llamaForm.model?.trim()) {
+      toast.error('Please specify a base model path (e.g. models/Qwen3.8-27B-Instruct-Q4_K_M.gguf)');
+      return;
+    }
+    setLlamaLoading(true);
+    try {
+      const res = await startLlamaServer(llamaForm);
+      if (res?.success) {
+        toast.success(`llama-server started (PID ${res.pid}) on port ${llamaForm.port || 8080}`);
+      }
+      loadLlamaStatus();
+    } catch (err) {
+      toast.error(err?.message || 'Failed to start llama-server');
+      loadLlamaStatus();
+    } finally {
+      setLlamaLoading(false);
+    }
+  };
+
+  const handleStopLlama = async () => {
+    setLlamaLoading(true);
+    try {
+      const res = await stopLlamaServer();
+      if (res?.success) {
+        toast.success(res.message || 'llama-server stopped');
+      } else {
+        toast.error(res?.message || 'Could not stop server');
+      }
+      loadLlamaStatus();
+    } catch (err) {
+      toast.error(err?.message || 'Failed to stop llama-server');
+      loadLlamaStatus();
+    } finally {
+      setLlamaLoading(false);
+    }
+  };
+
+  const handleInstallLlama = async () => {
+    setLlamaLoading(true);
+    try {
+      const res = await installLlamaServer();
+      if (res?.success) {
+        toast.success(res.message || 'llama.cpp installed successfully');
+      }
+      loadLlamaStatus();
+    } catch (err) {
+      toast.error(err?.message || 'Failed to install llama.cpp');
+      loadLlamaStatus();
+    } finally {
+      setLlamaLoading(false);
+    }
+  };
+
+  const handlePresetSelect = (presetId) => {
+    const preset = DFLASH_PRESETS.find((p) => p.id === presetId);
+    if (!preset) return;
+    if (preset.id !== 'custom') {
+      setLlamaForm((prev) => ({
+        ...prev,
+        model: preset.model,
+        draftModel: preset.draftModel,
+        specType: preset.specType,
+      }));
+    }
+  };
+
   return (
     <div className="space-y-4">
       <MemoryManagement />
@@ -776,35 +892,223 @@ export function LocalLlmTab() {
       </div>
 
       {/* Speculative Decoding & Custom Runtimes (DFlash 2 / llama.cpp) */}
-      <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-3">
+      <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-4">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-2">
             <Zap size={16} className="text-port-accent" />
             <h2 className="text-sm font-medium text-gray-300">Speculative Decoding & Custom Runtimes (DFlash 2 / llama.cpp)</h2>
+            {llamaStatus?.running && llamaStatus?.managed && (
+              <span className="px-2 py-0.5 text-xs rounded bg-port-success/20 text-port-success flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-port-success animate-pulse" />
+                Running (PID {llamaStatus.pid})
+              </span>
+            )}
+            {llamaStatus?.running && !llamaStatus?.managed && (
+              <span className="px-2 py-0.5 text-xs rounded bg-blue-500/20 text-blue-300 flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-blue-400" />
+                Active on {llamaStatus.endpoint} (External)
+              </span>
+            )}
+            {!llamaStatus?.running && llamaStatus?.installed && (
+              <span className="px-2 py-0.5 text-xs rounded bg-gray-500/20 text-gray-400">
+                Stopped
+              </span>
+            )}
+            {!llamaStatus?.installed && (
+              <span className="px-2 py-0.5 text-xs rounded bg-port-warning/20 text-port-warning" title="Install via Homebrew: brew install llama.cpp or compile with DFlash2 support">
+                llama-server not found on PATH
+              </span>
+            )}
           </div>
-          <Link
-            to="/ai"
-            className="text-xs text-port-accent hover:underline flex items-center gap-1"
-          >
-            OpenCode llama TUI in AI Providers <ExternalLink size={11} />
-          </Link>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={loadLlamaStatus}
+              disabled={llamaLoading}
+              className="p-1 text-gray-400 hover:text-white transition-colors"
+              title="Refresh llama-server status"
+            >
+              <RefreshCw size={13} className={llamaLoading ? 'animate-spin' : ''} />
+            </button>
+            <Link
+              to="/ai"
+              className="text-xs text-port-accent hover:underline flex items-center gap-1"
+            >
+              OpenCode llama TUI in AI Providers <ExternalLink size={11} />
+            </Link>
+          </div>
         </div>
+
         <p className="text-xs text-gray-400 leading-relaxed">
-          DFlash 2 enables multi-token speculative drafting (yielding 2.5–3× speedups on local models like Qwen 2.5 / Qwen 3.8 and Muse-Glimmer). Run a standalone <code className="text-gray-300">llama-server</code> paired with a DFlash 2 draft model and connect via the enabled <strong className="text-white">OpenCode llama TUI</strong> provider.
+          DFlash 2 enables multi-token speculative drafting (yielding 2.5–3× speedups on local models like Qwen 2.5 / Qwen 3.8 and Muse-Glimmer). You can launch and manage a local <code className="text-gray-300">llama-server</code> with DFlash 2 speculative drafting directly from PortOS and connect using the <strong className="text-white">OpenCode llama TUI</strong> provider.
         </p>
-        <div className="bg-port-bg border border-port-border/70 rounded-lg p-3 space-y-2 text-xs">
-          <div className="flex items-center justify-between text-gray-400 font-medium">
-            <span>Example: Run llama-server with DFlash 2 Drafter</span>
+
+        {llamaStatus?.running ? (
+          <div className="bg-port-bg border border-port-success/30 rounded-lg p-3 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="text-xs text-gray-300 space-y-1">
+                <p><span className="text-gray-500">Endpoint:</span> <code className="text-port-success">{llamaStatus.endpoint}</code></p>
+                {llamaStatus.config?.model && (
+                  <p><span className="text-gray-500">Base Model:</span> <code className="text-gray-300">{llamaStatus.config.model}</code></p>
+                )}
+                {llamaStatus.config?.draftModel && (
+                  <p><span className="text-gray-500">DFlash Drafter:</span> <code className="text-port-accent">{llamaStatus.config.draftModel}</code> ({llamaStatus.config.specType || 'draft-dflash'})</p>
+                )}
+              </div>
+              {llamaStatus.managed ? (
+                <button
+                  onClick={handleStopLlama}
+                  disabled={llamaLoading}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-port-error/20 hover:bg-port-error/30 text-port-error text-xs font-medium rounded-lg transition-colors disabled:opacity-50 shrink-0"
+                >
+                  {llamaLoading ? <BrailleSpinner /> : <PowerOff size={13} />}
+                  Stop Server
+                </button>
+              ) : (
+                <span className="text-xs text-gray-500 italic">
+                  Running as external process
+                </span>
+              )}
+            </div>
           </div>
-          <pre className="text-[11px] text-gray-300 bg-port-card/80 p-2.5 rounded overflow-x-auto font-mono whitespace-pre-wrap">
-            {`llama-server -m models/Qwen3.8-27B-Instruct-Q4_K_M.gguf \\
-  --draft-model models/Qwen3.8-27B-DFlash2-Q4_K_M.gguf \\
-  --spec-type draft-dflash --port 8080 --host 127.0.0.1`}
-          </pre>
-          <p className="text-[11px] text-gray-500">
-            OpenCode targets <code className="text-gray-400">http://127.0.0.1:8080/v1</code> with tool use and agent harness support enabled.
-          </p>
-        </div>
+        ) : llamaStatus?.installed ? (
+          <form onSubmit={handleStartLlama} className="bg-port-bg border border-port-border/70 rounded-lg p-3 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <span className="text-xs font-medium text-gray-300">Launch Speculative Decoding Server</span>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] text-gray-500">Preset:</span>
+                <select
+                  onChange={(e) => handlePresetSelect(e.target.value)}
+                  defaultValue="qwen3.8-27b"
+                  className="bg-port-card border border-port-border rounded px-2 py-1 text-xs text-port-accent focus:outline-none"
+                >
+                  {DFLASH_PRESETS.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div>
+                <label className="text-[11px] text-gray-400 block mb-1">Target Base Model (GGUF Path) *</label>
+                <input
+                  type="text"
+                  value={llamaForm.model}
+                  onChange={(e) => setLlamaForm((prev) => ({ ...prev, model: e.target.value }))}
+                  placeholder="models/Qwen3.8-27B-Instruct-Q4_K_M.gguf"
+                  className="w-full bg-port-card border border-port-border rounded px-2.5 py-1.5 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-port-accent"
+                />
+              </div>
+              <div>
+                <label className="text-[11px] text-gray-400 block mb-1">DFlash 2 Draft Model (Optional)</label>
+                <input
+                  type="text"
+                  value={llamaForm.draftModel}
+                  onChange={(e) => setLlamaForm((prev) => ({ ...prev, draftModel: e.target.value }))}
+                  placeholder="models/Qwen3.8-27B-DFlash2-Q4_K_M.gguf"
+                  className="w-full bg-port-card border border-port-border rounded px-2.5 py-1.5 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-port-accent"
+                />
+              </div>
+            </div>
+
+            {showLlamaAdvanced && (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 border-t border-port-border/40 text-xs">
+                <div>
+                  <label className="text-[11px] text-gray-400 block mb-1">Port</label>
+                  <input
+                    type="number"
+                    value={llamaForm.port}
+                    onChange={(e) => setLlamaForm((prev) => ({ ...prev, port: parseInt(e.target.value, 10) || 8080 }))}
+                    className="w-full bg-port-card border border-port-border rounded px-2 py-1 text-xs text-white"
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] text-gray-400 block mb-1">Context Size</label>
+                  <input
+                    type="number"
+                    value={llamaForm.ctxSize}
+                    onChange={(e) => setLlamaForm((prev) => ({ ...prev, ctxSize: parseInt(e.target.value, 10) || 32768 }))}
+                    className="w-full bg-port-card border border-port-border rounded px-2 py-1 text-xs text-white"
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] text-gray-400 block mb-1">GPU Layers (-ngl)</label>
+                  <input
+                    type="number"
+                    value={llamaForm.nGpuLayers}
+                    onChange={(e) => setLlamaForm((prev) => ({ ...prev, nGpuLayers: parseInt(e.target.value, 10) ?? 99 }))}
+                    className="w-full bg-port-card border border-port-border rounded px-2 py-1 text-xs text-white"
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] text-gray-400 block mb-1">Spec Type</label>
+                  <input
+                    type="text"
+                    value={llamaForm.specType}
+                    onChange={(e) => setLlamaForm((prev) => ({ ...prev, specType: e.target.value }))}
+                    className="w-full bg-port-card border border-port-border rounded px-2 py-1 text-xs text-white"
+                  />
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setShowLlamaAdvanced((prev) => !prev)}
+                className="text-[11px] text-gray-500 hover:text-gray-300 flex items-center gap-1"
+              >
+                {showLlamaAdvanced ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                {showLlamaAdvanced ? 'Hide options' : 'Advanced options (port, ctx, GPU layers)'}
+              </button>
+              <button
+                type="submit"
+                disabled={llamaLoading || !llamaForm.model.trim()}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent text-xs font-medium rounded-lg transition-colors disabled:opacity-50"
+              >
+                {llamaLoading ? <BrailleSpinner /> : <Power size={13} />}
+                Start Speculative Server
+              </button>
+            </div>
+          </form>
+        ) : (
+          <div className="bg-port-warning/10 border border-port-warning/30 rounded-lg p-3 text-xs text-port-warning flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="space-y-1">
+              <p className="font-semibold">llama-server was not detected on system PATH.</p>
+              <p className="text-gray-300">
+                Install via Homebrew or compile the DFlash 2-enabled branch from source.
+              </p>
+            </div>
+            <button
+              onClick={handleInstallLlama}
+              disabled={llamaLoading}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent text-xs font-medium rounded-lg transition-colors disabled:opacity-50 shrink-0"
+            >
+              {llamaLoading ? <BrailleSpinner /> : <Download size={13} />}
+              Install llama.cpp
+            </button>
+          </div>
+        )}
+
+        {llamaStatus?.recentLogs?.length > 0 && (
+          <div className="space-y-1">
+            <button
+              type="button"
+              onClick={() => setShowLlamaLogs((prev) => !prev)}
+              className="text-[11px] text-gray-500 hover:text-gray-300 flex items-center gap-1"
+            >
+              <Terminal size={11} />
+              {showLlamaLogs ? 'Hide server logs' : `View server logs (${llamaStatus.recentLogs.length} lines)`}
+            </button>
+            {showLlamaLogs && (
+              <pre className="text-[10px] text-gray-400 bg-port-bg border border-port-border/60 p-2.5 rounded max-h-40 overflow-y-auto font-mono whitespace-pre-wrap">
+                {llamaStatus.recentLogs.join('\n')}
+              </pre>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Models — backend picker + catalog/install + installed list */}

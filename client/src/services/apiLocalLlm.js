@@ -45,6 +45,19 @@ export const upgradeLocalLlmBackend = (backend) =>
 export const controlOllamaService = (action) =>
   request('/local-llm/ollama-service', { method: 'POST', body: JSON.stringify({ action }) });
 
+// llama-server (DFlash 2 / Speculative Decoding) process controls
+export const getLlamaServerStatus = (options) =>
+  request('/local-llm/llama-server/status', options);
+
+export const startLlamaServer = (config) =>
+  request('/local-llm/llama-server/start', { method: 'POST', body: JSON.stringify(config) });
+
+export const stopLlamaServer = () =>
+  request('/local-llm/llama-server/stop', { method: 'POST' });
+
+export const installLlamaServer = () =>
+  request('/local-llm/llama-server/install', { method: 'POST' });
+
 // Set the default backend (which one PortOS routes local runs to) — does not move models.
 export const switchLocalLlmBackend = (to) =>
   request('/local-llm/switch', { method: 'POST', body: JSON.stringify({ to }) });

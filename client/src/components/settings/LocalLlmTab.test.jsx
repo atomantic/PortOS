@@ -15,6 +15,10 @@ vi.mock('../../services/api', () => ({
   controlOllamaService: vi.fn(),
   installAudioModel: vi.fn(),
   patchSettingsSlice: vi.fn(),
+  getLlamaServerStatus: vi.fn().mockResolvedValue({ installed: false, running: false }),
+  startLlamaServer: vi.fn(),
+  stopLlamaServer: vi.fn(),
+  installLlamaServer: vi.fn().mockResolvedValue({ success: true }),
 }));
 vi.mock('../../services/socket', () => ({
   default: { on: vi.fn(), off: vi.fn() },
@@ -260,5 +264,74 @@ describe('LocalLlmTab measured fit badge', () => {
     await renderTab();
 
     expect(await screen.findByText(/backend refused it \(measured\)/)).toBeInTheDocument();
+  });
+});
+
+describe('LocalLlmTab llama-server management', () => {
+  it('renders start form and launches server when llama-server is installed', async () => {
+    const { getLlamaServerStatus, startLlamaServer } = await import('../../services/api');
+    getLlamaServerStatus.mockResolvedValueOnce({
+      installed: true,
+      running: false,
+      managed: false,
+    });
+    startLlamaServer.mockResolvedValueOnce({ success: true, pid: 12345 });
+
+    await renderTab();
+
+    expect(await screen.findByText(/Launch Speculative Decoding Server/)).toBeInTheDocument();
+    const modelInput = screen.getByPlaceholderText(/models\/Qwen3\.8-27B-Instruct/);
+    fireEvent.change(modelInput, { target: { value: 'models/my-model.gguf' } });
+
+    const startBtn = screen.getByRole('button', { name: /Start Speculative Server/ });
+    fireEvent.click(startBtn);
+
+    await waitFor(() => {
+      expect(startLlamaServer).toHaveBeenCalledWith(expect.objectContaining({
+        model: 'models/my-model.gguf',
+      }));
+    });
+  });
+
+  it('renders install button and triggers install when llama-server is not installed', async () => {
+    const { getLlamaServerStatus, installLlamaServer } = await import('../../services/api');
+    getLlamaServerStatus.mockResolvedValueOnce({
+      installed: false,
+      running: false,
+      managed: false,
+    });
+
+    await renderTab();
+
+    const installBtn = await screen.findByRole('button', { name: /Install llama\.cpp/ });
+    expect(installBtn).toBeInTheDocument();
+    fireEvent.click(installBtn);
+
+    await waitFor(() => {
+      expect(installLlamaServer).toHaveBeenCalled();
+    });
+  });
+
+  it('renders running badge and stops server when llama-server is managed', async () => {
+    const { getLlamaServerStatus, stopLlamaServer } = await import('../../services/api');
+    getLlamaServerStatus.mockResolvedValueOnce({
+      installed: true,
+      running: true,
+      managed: true,
+      pid: 9999,
+      endpoint: 'http://127.0.0.1:8080/v1',
+      config: { model: 'models/base.gguf', draftModel: 'models/draft.gguf', specType: 'draft-dflash' },
+    });
+    stopLlamaServer.mockResolvedValueOnce({ success: true });
+
+    await renderTab();
+
+    expect(await screen.findByText(/Running \(PID 9999\)/)).toBeInTheDocument();
+    const stopBtn = screen.getByRole('button', { name: /Stop Server/ });
+    fireEvent.click(stopBtn);
+
+    await waitFor(() => {
+      expect(stopLlamaServer).toHaveBeenCalled();
+    });
   });
 });
