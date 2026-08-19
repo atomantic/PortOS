@@ -171,7 +171,7 @@ function OpenWorldInner() {
 
   // V (in exploration mode) swaps the follow-camera character view and first person.
   const handleToggleCameraView = useCallback(() => {
-    updateSetting('cameraView', settings?.cameraView === 'first' ? 'third' : 'first');
+    updateSetting('cameraView', (settings?.cameraView ?? 'third') === 'first' ? 'third' : 'first');
   }, [updateSetting, settings?.cameraView]);
 
   const keysRef = useKeyboardControls(handleToggleExploration);

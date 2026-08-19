@@ -383,7 +383,7 @@ export default function OpenWorldSettingsDrawer({ open, onClose, qualityMode = '
                 { key: 'third', label: 'ROVER' },
                 { key: 'first', label: 'FIRST PERSON' },
               ]}
-                value={settings.cameraView ?? 'third'}
+              value={settings.cameraView ?? 'third'}
               onChange={(key) => updateSetting('cameraView', key)}
               hint="CAMERA WHILE DRIVING (V SWAPS IN-WORLD)"
             />
