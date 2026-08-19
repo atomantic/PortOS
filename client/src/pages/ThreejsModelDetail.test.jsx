@@ -552,6 +552,29 @@ describe('ThreejsModelDetail clip inventory', () => {
     expect(screen.getByText('0 error · 1 warning · 0 note')).toBeInTheDocument();
   });
 
+  // The gate also reports an articulation graph with no clip to play it, which
+  // by definition arrives on a model that declared no clips at all.
+  it('renders a clip finding raised against a model with no clips', async () => {
+    getThreejsModel.mockResolvedValue({
+      ...baseRecord,
+      animation: {
+        animated: false,
+        clipCount: 0,
+        warningCount: 1,
+        clips: [],
+        findings: [{
+          code: 'articulation-without-clips',
+          severity: 'warning',
+          message: 'the spec declares an articulation graph over 4 joints but no animation clip',
+        }],
+      },
+    });
+    renderDetail();
+
+    await waitFor(() => expect(screen.getByText('Clip playback')).toBeInTheDocument());
+    expect(screen.getByText(/declares an articulation graph over 4 joints/)).toBeInTheDocument();
+  });
+
   // A static assembly evaluates to an empty finding list, which is not a verdict
   // about clips — it never declared any.
   it('shows no clip-playback gate for a static assembly that was evaluated', async () => {

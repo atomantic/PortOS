@@ -161,7 +161,7 @@ function evaluateClipFindings(clip, partsById) {
     findings.push({
       code: 'clip-holds-still',
       severity: 'warning',
-      message: `clip ${clipLabel} finishes moving at ${lastEnd}s and then holds still for ${Number(tail.toFixed(2))}s of its ${clip.durationSeconds}s duration`,
+      message: `clip ${clipLabel} finishes its last sequence at ${lastEnd}s and then holds still for ${Number(tail.toFixed(2))}s of its ${clip.durationSeconds}s duration`,
     });
   }
 

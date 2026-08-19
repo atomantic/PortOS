@@ -304,33 +304,36 @@ export function createSculptAnimationPlayer(root, options) {
       const total = duration();
       if (!playing || !clip || !(total > 0) || !Number.isFinite(deltaSeconds) || deltaSeconds <= 0) return [];
       const from = timeSeconds;
-      let to = from + (deltaSeconds * speed);
+      const raw = from + (deltaSeconds * speed);
       let crossed;
-      if (to < total) {
-        crossed = collectSculptCues(clip, from, to);
+      if (raw < total) {
+        crossed = collectSculptCues(clip, from, raw);
+        timeSeconds = raw;
       } else if (clip.loop) {
-        // A frame gap longer than the whole clip — a backgrounded tab, a stall —
-        // crossed every cue in it. Fire each ONCE for the gap rather than
-        // replaying the clip's audio for every lap it skipped.
-        crossed = collectSculptCues(clip, from, total);
-        const wrapped = ((to - total) % total + total) % total;
-        const fired = new Set(crossed.map((event) => event.sequenceId));
-        for (const event of collectSculptCues(clip, 0, wrapped)) {
-          if (!fired.has(event.sequenceId)) crossed.push(event);
-        }
-        to = wrapped;
+        crossed = raw - from >= total
+          // A frame gap at least as long as the whole clip — a backgrounded tab,
+          // a stall — crossed every cue in it. Fire each ONCE for the gap
+          // instead of replaying a backlog per skipped cycle: a resumed tab must
+          // not burst N copies of the same sound, and reporting only the tail
+          // and the wrapped remainder would silently drop the cues in between.
+          ? collectSculptCues(clip, 0, total)
+          : [...collectSculptCues(clip, from, total), ...collectSculptCues(clip, 0, raw % total)];
+        timeSeconds = raw % total;
       } else {
         crossed = collectSculptCues(clip, from, total);
-        to = total;
+        timeSeconds = total;
         playing = false;
       }
-      timeSeconds = to;
       applyPose();
       emit(crossed);
       return crossed;
     },
 
-    /** Put the assembly back exactly as the factory built it, and stop. */
+    /**
+     * Put the assembly back exactly as the factory built it, and stop. The
+     * player poses the model at frame 0 of its first clip when it is created,
+     * so this is how a consumer gets the un-posed assembly back.
+     */
     restore() {
       playing = false;
       timeSeconds = 0;
@@ -339,6 +342,10 @@ export function createSculptAnimationPlayer(root, options) {
     },
   };
 
+  // Frame 0 of the first clip, the way the preview opens a transport. Without
+  // this the model would sit at its authored pose while the player reported
+  // \`timeSeconds: 0\` of a clip whose opening frame hides or fades a part.
+  applyPose();
   return player;
 }
 `;

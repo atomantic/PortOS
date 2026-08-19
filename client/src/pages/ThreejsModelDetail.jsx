@@ -409,10 +409,13 @@ export default function ThreejsModelDetail() {
   const materialFindings = Array.isArray(record.materialPlausibility?.findings)
     ? record.materialPlausibility.findings
     : null;
-  // Clip findings only mean something for a model that declared clips: a static
-  // assembly evaluates to an empty list, and rendering a clean "clip playback"
-  // panel on every static model would be noise about a feature it never used.
-  const animationFindings = Array.isArray(record.animation?.findings) && record.animation?.animated
+  // A clean verdict only means something for a model that declared clips —
+  // rendering "clips play cleanly" on every static model would be noise about a
+  // feature it never used. A finding is worth showing either way: the gate also
+  // reports an articulation graph that declares motion with no clip to play it,
+  // which by definition arrives on a model with no clips.
+  const animationFindings = Array.isArray(record.animation?.findings)
+    && (record.animation.animated || record.animation.findings.length > 0)
     ? record.animation.findings
     : null;
   // Undecided contact is a note the reader is meant to judge, never something a

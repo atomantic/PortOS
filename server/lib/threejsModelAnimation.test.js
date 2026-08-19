@@ -183,7 +183,7 @@ describe('summarizeThreejsAnimation playback findings', () => {
     const spec = animatedSpec();
     spec.animation.clips[0].durationSeconds = 20;
     const finding = summarizeThreejsAnimation(spec).findings.find((entry) => entry.code === 'clip-holds-still');
-    expect(finding.message).toContain('finishes moving at 2s and then holds still for 18s of its 20s duration');
+    expect(finding.message).toContain('finishes its last sequence at 2s and then holds still for 18s of its 20s duration');
   });
 
   it('leaves a clip that holds its final pose briefly alone', () => {

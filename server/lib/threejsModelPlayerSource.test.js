@@ -186,6 +186,44 @@ describe('emitted clip player', () => {
     expect(player.timeSeconds).toBeCloseTo(2, 6);
   });
 
+  it('fires the cues a wrap skipped over, not just the ones either side of it', async () => {
+    const looping = spec();
+    looping.animation.clips[0].loop = true;
+    const cues = [];
+    const { player } = await mountPlayer(looping, { onCue: (event) => cues.push(event) });
+
+    player.seek(3);
+    player.play();
+    // A 10s gap from 3s of a 4s clip laps it twice. The cue at 2s sits in the
+    // skipped interval — neither in the tail [3, 4) nor in the wrapped [0, 1).
+    const crossed = player.update(10);
+    expect(crossed.map((event) => event.sequenceId)).toEqual(['lift', 'swing']);
+    expect(cues).toHaveLength(2);
+    expect(player.timeSeconds).toBeCloseTo(1, 6);
+  });
+
+  it('crosses the loop point within a single lap without firing a cue twice', async () => {
+    const looping = spec();
+    looping.animation.clips[0].loop = true;
+    const { player } = await mountPlayer(looping);
+
+    player.seek(3);
+    player.play();
+    // [3, 4) holds nothing; the wrapped [0, 0.5) picks up the cue at 0.
+    const crossed = player.update(1.5);
+    expect(crossed.map((event) => event.sequenceId)).toEqual(['lift']);
+    expect(player.timeSeconds).toBeCloseTo(0.5, 6);
+  });
+
+  it('poses the model at frame 0 of its first clip as soon as it is created', async () => {
+    const opening = spec();
+    // A clip whose opening frame is not the assembled pose: the panel starts
+    // hidden and appears part-way through.
+    opening.animation.clips[0].sequences[0].channels.visible = { from: false, to: true };
+    const { nodes } = await mountPlayer(opening);
+    expect(nodes.panel.visible).toBe(false);
+  });
+
   it('clones a shared material before driving opacity, and gives it back on restore', async () => {
     const { nodes, player } = await mountPlayer();
     const sharedPanelMaterial = nodes.panel.material;
