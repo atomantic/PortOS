@@ -209,3 +209,56 @@ describe('LocalLlmTab runtime context window', () => {
     expect(screen.queryByTitle(/Loaded models are running at/)).toBeNull();
   });
 });
+
+describe('LocalLlmTab measured fit badge', () => {
+  const catalogEntry = (overrides = {}) => ({
+    key: 'example-14b',
+    id: 'example-model:14b',
+    name: 'Example 14B',
+    params: '14B',
+    description: 'An example instruct model.',
+    category: 'general',
+    size: '9 GB',
+    sizeBytes: 9_000_000_000,
+    source: 'catalog',
+    ...overrides,
+  });
+
+  it('marks a measured verdict as measured and keeps the estimate it overruled in the tooltip', async () => {
+    getLocalLlmCatalog.mockResolvedValue({
+      models: [catalogEntry({
+        fit: 'too-large',
+        fitSource: 'measured',
+        estimatedFit: 'comfortable',
+        measuredFit: 'too-large',
+        disagrees: true,
+        assessedAt: '2026-01-02T00:00:00.000Z',
+      })],
+    });
+    await renderTab();
+
+    const badge = await screen.findByText(/exceeds RAM \(measured\)/);
+    expect(badge).toBeInTheDocument();
+    expect(badge.getAttribute('title')).toMatch(/Measured on this machine/);
+    // The disagreement is the point — the reader must see what the estimate claimed.
+    expect(badge.getAttribute('title')).toMatch(/fits comfortably/);
+  });
+
+  it('labels an unmeasured verdict as the estimate it is', async () => {
+    getLocalLlmCatalog.mockResolvedValue({ models: [catalogEntry({ fit: 'comfortable', fitSource: 'estimated', estimatedFit: 'comfortable', measuredFit: null })] });
+    await renderTab();
+
+    const badge = await screen.findByText('fits comfortably');
+    expect(badge.getAttribute('title')).toMatch(/Estimated fit/);
+    expect(badge.textContent).not.toMatch(/measured/);
+  });
+
+  it('renders the measurement-only verdict the size estimate can never produce', async () => {
+    // No amount of free RAM fixes a backend refusing a model, so `incompatible`
+    // only ever comes from a real run.
+    getLocalLlmCatalog.mockResolvedValue({ models: [catalogEntry({ fit: 'incompatible', fitSource: 'measured', estimatedFit: 'comfortable', measuredFit: 'incompatible', disagrees: true })] });
+    await renderTab();
+
+    expect(await screen.findByText(/backend refused it \(measured\)/)).toBeInTheDocument();
+  });
+});

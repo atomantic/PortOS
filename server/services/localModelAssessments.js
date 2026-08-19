@@ -31,26 +31,15 @@
  * background sweep. Do not add one: a fresh install must be silent on the LLM
  * front until the user asks.
  *
- * ## Privacy
+ * ## Where the pieces live
  *
- * The recorded environment is deliberately coarse — platform, arch, CPU count,
- * total/available memory, backend name. It never captures a hostname, a
- * username, a path, or any other machine identity, because assessments are
- * user-visible and end up in bug reports.
- *
- * ## Storage (docs/STORAGE.md)
- *
- * `file-primary`, **intentionally machine-local — never federated.** An
- * assessment is a statement about THIS machine's hardware; a peer's copy would
- * be actively misleading (a peer's 8 GB laptop must not inherit a 128 GB box's
- * "fits" verdict). No sync cursor, no tombstone, no schema-version entry.
+ * The durable store, the environment capture, and the privacy/storage contract
+ * moved to `localModelAssessmentStore.js` — that module has no path to a
+ * provider, so read-only consumers (the catalog fit badge, `localLlm.getStatus`)
+ * can import it without importing this one, and without an import cycle through
+ * `localLlm.js`.
  */
 
-import { join } from 'path';
-import { rename } from 'fs/promises';
-import os from 'os';
-import { PATHS, atomicWrite, ensureDir, tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
-import { getAvailableMemoryGb } from '../lib/localMemory.js';
 import {
   ASSESSMENT_INTENTS,
   classifyFitVerdict,
@@ -58,6 +47,16 @@ import {
   rankByIntent,
   summarizePerformance,
 } from '../lib/localModelAssessment.js';
+import {
+  assessmentKey,
+  captureEnvironment,
+  captureLiveEnvironments,
+  deleteAssessment,
+  loadAssessments,
+  loadStore,
+  saveAssessment,
+  withStaleness,
+} from './localModelAssessmentStore.js';
 import { runLocalLlmTest } from './localLlmPlayground.js';
 import { listModels } from './localLlm.js';
 import {
@@ -66,12 +65,9 @@ import {
 } from './ollamaManager.js';
 import { getLastListError as getLmStudioListError } from './lmStudioManager.js';
 
-const ASSESSMENTS_DIR = join(PATHS.data, 'local-llm');
-const ASSESSMENTS_FILE = join(ASSESSMENTS_DIR, 'assessments.json');
-
-// Storage-layout version for the on-disk file. Bump only when the persisted
-// shape changes in a way a reader must branch on.
-const STORE_SCHEMA_VERSION = 1;
+// Re-exported so the store split stays an implementation detail for callers that
+// only ever wanted "the assessments feature".
+export { captureEnvironment, deleteAssessment, loadAssessments };
 
 const GB = 2 ** 30;
 
@@ -120,107 +116,6 @@ function buildFillerPrompt(contextTokens) {
 export function buildSamplePrompt(contextTokens) {
   const filler = buildFillerPrompt(contextTokens);
   return `${filler}\nIgnoring every reference item above, what is 2 + 2? Answer with the number only.`;
-}
-
-/**
- * Coarse description of the machine the measurement was taken on. Deliberately
- * carries NO machine identity (see the privacy note at the top of this file).
- */
-export async function captureEnvironment() {
-  const totalGb = os.totalmem() / GB;
-  // `null` (not `0`) when the probe fails — an unknown budget must not read as
-  // "no memory available", which would make every model look like it fits
-  // nothing.
-  const availableGb = await getAvailableMemoryGb().catch(() => null);
-  return {
-    platform: os.platform(),
-    arch: os.arch(),
-    cpuCount: os.cpus()?.length ?? null,
-    totalMemoryGb: Number(totalGb.toFixed(1)),
-    availableMemoryGb: Number.isFinite(availableGb) ? Number(availableGb.toFixed(1)) : null,
-    // The budget the fit verdict is scored against: never more than what is
-    // actually free right now, never more than the box has.
-    memoryBudgetGb: Number.isFinite(availableGb)
-      ? Number(Math.min(totalGb, availableGb).toFixed(1))
-      : null,
-  };
-}
-
-// ---- store ------------------------------------------------------------------
-
-/**
- * Read the persisted assessments. Disk only — never calls a provider, so this is
- * safe from boot, a poll, or any read path.
- *
- * @returns {Promise<Array<object>>} `[]` means "no assessments recorded", which
- *   is a real, measured-empty answer — distinct from a read failure, which is
- *   surfaced by `loadStore().readError`.
- */
-export async function loadAssessments() {
-  return (await loadStore()).assessments;
-}
-
-// Move an unparseable store aside so a fresh one can be written without losing
-// whatever the old file held. Best-effort: if the rename fails there is nothing
-// further to preserve, and refusing the write outright would leave assessments
-// permanently unusable.
-async function quarantineStore(reason) {
-  const parked = `${ASSESSMENTS_FILE}.corrupt-${Date.now()}`;
-  const moved = await rename(ASSESSMENTS_FILE, parked).then(() => true).catch(() => false);
-  console.error(`❌ Local LLM: ${reason} — ${moved ? `parked the old file as ${parked.split('/').pop()}` : 'could not park the old file'}`);
-}
-
-async function loadStore() {
-  const raw = await tryReadFile(ASSESSMENTS_FILE);
-  // Never read = an empty store, not an error: the file simply doesn't exist
-  // until the first assessment runs.
-  if (raw == null) return { schemaVersion: STORE_SCHEMA_VERSION, assessments: [], readError: null };
-  const parsed = safeJSONParse(raw, null);
-  if (!parsed || !Array.isArray(parsed.assessments)) {
-    // Present but unparseable is NOT an empty store — say so rather than
-    // silently reporting "nothing assessed" and letting a re-run overwrite it.
-    return { schemaVersion: STORE_SCHEMA_VERSION, assessments: [], readError: 'assessments file is unreadable or malformed' };
-  }
-  return { schemaVersion: parsed.schemaVersion ?? STORE_SCHEMA_VERSION, assessments: parsed.assessments, readError: null };
-}
-
-const assessmentKey = (backend, modelId) => `${backend}:${modelId}`;
-
-async function saveAssessment(assessment) {
-  const { assessments, readError } = await loadStore();
-  // An unreadable store reports zero assessments, and writing on top of that
-  // would replace every prior measurement with this one record — a read failure
-  // silently destroying data the user spent minutes of compute on. Quarantine
-  // the unreadable file instead: nothing is lost, and the feature keeps working
-  // rather than wedging on a file the user has no way to repair from the UI.
-  if (readError) await quarantineStore(readError);
-  const key = assessmentKey(assessment.backend, assessment.modelId);
-  // One record per (backend, model): the newest measurement supersedes the old
-  // one. History is not kept — a stale reading from a different memory state is
-  // worse than no reading, and the run is cheap to repeat.
-  const next = assessments.filter((a) => assessmentKey(a?.backend, a?.modelId) !== key);
-  next.push(assessment);
-  await ensureDir(ASSESSMENTS_DIR);
-  await atomicWrite(ASSESSMENTS_FILE, { schemaVersion: STORE_SCHEMA_VERSION, assessments: next });
-  return assessment;
-}
-
-/**
- * Drop one recorded assessment. Returns whether a record was actually removed,
- * so the caller can 404 rather than reporting a phantom success.
- */
-export async function deleteAssessment(backend, modelId) {
-  const { assessments, readError } = await loadStore();
-  // Same hazard as saveAssessment: rewriting from an empty in-memory list would
-  // wipe the file. A delete against an unreadable store has nothing to remove.
-  if (readError) return { deleted: false };
-  const key = assessmentKey(backend, modelId);
-  const next = assessments.filter((a) => assessmentKey(a?.backend, a?.modelId) !== key);
-  if (next.length === assessments.length) return { deleted: false };
-  await ensureDir(ASSESSMENTS_DIR);
-  await atomicWrite(ASSESSMENTS_FILE, { schemaVersion: STORE_SCHEMA_VERSION, assessments: next });
-  console.log(`🧹 Local LLM: dropped assessment for ${backend}/${modelId}`);
-  return { deleted: true };
 }
 
 // ---- measurement ------------------------------------------------------------
@@ -287,19 +182,45 @@ function describeVerdict(verdict, samples) {
  * @param {string} options.modelId
  * @param {number[]} [options.contextTokens] nominal context sizes to sample
  * @param {AbortSignal} [options.signal] client disconnect
+ * @param {(frame: object) => void} [options.onProgress] per-sample progress.
+ *   A run is minutes long on a large model, so the caller (the route) forwards
+ *   these to the `localLlm:progress` socket event the pull/migrate paths already
+ *   use. Frames carry `backend` + `modelId` so a listener can tell a frame from
+ *   THIS run apart from an unrelated model install streaming on the same event.
  * @returns {Promise<object>} the persisted assessment record
  */
-export async function runAssessment({ backend, modelId, contextTokens = DEFAULT_CONTEXT_TOKENS, signal } = {}) {
+export async function runAssessment({ backend, modelId, contextTokens = DEFAULT_CONTEXT_TOKENS, signal, onProgress } = {}) {
   const contexts = [...new Set(contextTokens)].filter((n) => Number.isFinite(n) && n > 0).sort((a, b) => a - b);
-  const environment = await captureEnvironment();
+  // The listener runs outside the request lifecycle's error path in some callers
+  // (a socket emit can throw on a closed io), and a broken progress consumer must
+  // never abort a measurement the user is paying minutes for.
+  const emit = (frame) => {
+    if (typeof onProgress !== 'function') return;
+    try { onProgress({ scope: 'assessment', backend, modelId, ...frame }); }
+    catch (err) { console.error(`❌ Local LLM: assessment progress listener failed: ${err.message}`); }
+  };
+  const environment = await captureEnvironment({ backend });
   const installed = await listModels(backend).catch(() => []);
   const card = installed.find((m) => m?.id === modelId) || null;
 
   console.log(`📏 Local LLM: assessing ${backend}/${modelId} across ${contexts.length} context sizes`);
+  emit({
+    event: 'start',
+    sampleIndex: 0,
+    sampleCount: contexts.length,
+    message: `Measuring ${modelId} — ${contexts.length} generation${contexts.length === 1 ? '' : 's'}…`,
+  });
 
   const samples = [];
   for (const context of contexts) {
     if (signal?.aborted) break;
+    emit({
+      event: 'start',
+      sampleIndex: samples.length,
+      sampleCount: contexts.length,
+      contextTokens: context,
+      message: `${modelId}: sample ${samples.length + 1}/${contexts.length} at ${context.toLocaleString('en-US')} tokens of context…`,
+    });
     // runLocalLlmTest resolves (never throws) for in-stream failures, but can
     // still throw before the stream opens — an unconfigured provider. Catch that
     // into the same result shape so one bad backend records a failed sample
@@ -317,6 +238,19 @@ export async function runAssessment({ backend, modelId, contextTokens = DEFAULT_
 
     const sample = toSample(context, result);
     samples.push(sample);
+    // Report what the sample actually measured, not just that it finished — a
+    // multi-minute run should show throughput accumulating rather than a bar
+    // that only moves between contexts.
+    emit({
+      event: 'start',
+      sampleIndex: samples.length,
+      sampleCount: contexts.length,
+      contextTokens: context,
+      sample,
+      message: sample.ok
+        ? `${modelId}: ${context.toLocaleString('en-US')} tokens → ${sample.charsPerSecond ?? '?'} chars/s`
+        : `${modelId}: ${context.toLocaleString('en-US')} tokens → failed (${sample.error})`,
+    });
     if (!sample.ok && classifySampleFailure(sample)) break;
   }
 
@@ -344,10 +278,18 @@ export async function runAssessment({ backend, modelId, contextTokens = DEFAULT_
   // leave the store untouched.
   if (signal?.aborted) {
     console.log(`📏 Local LLM: ${backend}/${modelId} assessment cancelled — not recorded`);
+    // A terminal frame either way, or a listener's banner sits on the last
+    // sample forever. `cancelled` is NOT `error` — nothing failed.
+    emit({ event: 'complete', cancelled: true, message: `${modelId}: assessment cancelled — nothing recorded` });
     return { ...assessment, cancelled: true };
   }
 
   console.log(`📏 Local LLM: ${backend}/${modelId} → ${verdict} (${assessment.performance.samplesOk}/${samples.length} samples ok)`);
+  emit({
+    event: 'complete',
+    verdict,
+    message: `${modelId}: ${verdict} (${assessment.performance.samplesOk}/${samples.length} samples ok)`,
+  });
   return saveAssessment(assessment);
 }
 
@@ -361,8 +303,17 @@ export async function runAssessment({ backend, modelId, contextTokens = DEFAULT_
  * @param {{ intent?: string }} [options]
  */
 export async function getAssessmentReport({ intent = 'balanced' } = {}) {
-  const { assessments, readError } = await loadStore();
+  const { assessments: stored, readError } = await loadStore();
   const resolvedIntent = ASSESSMENT_INTENTS.includes(intent) ? intent : 'balanced';
+
+  // Every stored record is compared against the machine as it is NOW. A reading
+  // taken before a RAM upgrade or a backend update describes hardware that no
+  // longer exists, and nothing else on this page would ever say so — the user
+  // would have to remember. This path can afford the backend-version probe (it
+  // already lists models from both backends); the catalog badge path cannot, and
+  // uses the free durable-fields comparison instead.
+  const liveEnvironments = await captureLiveEnvironments();
+  const assessments = stored.map((a) => withStaleness(a, liveEnvironments[a?.backend] || null));
 
   // Both managers cache an EMPTY list on a failed read rather than throwing, so
   // `[]` alone cannot distinguish "this backend has no models" from "the list
@@ -423,5 +374,9 @@ export async function getAssessmentReport({ intent = 'balanced' } = {}) {
     readError,
     ranked,
     excluded,
+    // The machine as it is now, so the panel can name the difference rather than
+    // just flagging "stale". Keyed by backend because the backend version is
+    // part of what makes a reading stale.
+    liveEnvironments,
   };
 }

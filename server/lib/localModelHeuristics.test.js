@@ -251,5 +251,69 @@ describe('localModelHeuristics', () => {
       expect(recommendEditorialModel(['nomic-embed-text:latest', 'mxbai-embed-large'])).toBeNull();
       expect(recommendEditorialModel(null)).toBeNull();
     });
+
+    describe('with measured evidence', () => {
+      const models = [
+        { id: 'qwen3.6:35b', params: '35B' },
+        { id: 'gemma4:9b', params: '9B' },
+      ];
+
+      it('drops a model measured not to run here, however good its name looks', () => {
+        const rec = recommendEditorialModel(models, {
+          measured: { 'qwen3.6:35b': { verdict: 'does-not-fit', stale: false } },
+        });
+        expect(rec?.id).toBe('gemma4:9b');
+        expect(rec.ruledOutByMeasurement).toEqual(['qwen3.6:35b']);
+        expect(rec.reason).toMatch(/ruled out by measurement/i);
+      });
+
+      it('drops a model the backend refused outright', () => {
+        const rec = recommendEditorialModel(models, {
+          measured: { 'qwen3.6:35b': { verdict: 'incompatible', stale: false } },
+        });
+        expect(rec?.id).toBe('gemma4:9b');
+      });
+
+      it('ignores a STALE measurement — it describes a machine that no longer exists', () => {
+        const rec = recommendEditorialModel(models, {
+          measured: { 'qwen3.6:35b': { verdict: 'does-not-fit', stale: true } },
+        });
+        expect(rec?.id).toBe('qwen3.6:35b');
+        expect(rec.evidence).toBe('estimated');
+      });
+
+      it('lets a proven model beat a merely-plausible one of similar standing', () => {
+        const close = [
+          { id: 'qwen3.6:14b', params: '14B' },
+          { id: 'llama3.3:14b', params: '14B' },
+        ];
+        // Without evidence the family ranking picks Qwen.
+        expect(recommendEditorialModel(close)?.id).toBe('qwen3.6:14b');
+        // A fresh "fits" on the runner-up is enough to flip it.
+        const rec = recommendEditorialModel(close, {
+          measured: { 'llama3.3:14b': { verdict: 'fits', stale: false } },
+        });
+        expect(rec?.id).toBe('llama3.3:14b');
+        expect(rec.evidence).toBe('measured');
+        expect(rec.reason).toMatch(/it runs here/i);
+      });
+
+      it('leaves an unmeasured model untouched — unknown is not a mark against it', () => {
+        const rec = recommendEditorialModel(models, { measured: {} });
+        expect(rec?.id).toBe('qwen3.6:35b');
+        expect(rec.evidence).toBe('estimated');
+        expect(rec.ruledOutByMeasurement).toEqual([]);
+      });
+
+      it('returns null when measurement rules out everything installed', () => {
+        const rec = recommendEditorialModel(models, {
+          measured: {
+            'qwen3.6:35b': { verdict: 'does-not-fit', stale: false },
+            'gemma4:9b': { verdict: 'incompatible', stale: false },
+          },
+        });
+        expect(rec).toBeNull();
+      });
+    });
   });
 });

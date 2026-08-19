@@ -20,6 +20,7 @@ import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from './notifica
 import * as ollamaManager from './ollamaManager.js';
 import * as lmStudioManager from './lmStudioManager.js';
 import { recommendEditorialModel, isEmbeddingModel } from '../lib/localModelHeuristics.js';
+import { getMeasuredFits } from './localModelAssessmentStore.js';
 
 // Default OpenAI-compatible ports for the two local backends. An endpoint-only
 // provider (no id/name) pointed at one of these on the local instance maps to
@@ -72,13 +73,14 @@ export function isModelNotFoundError(text) {
 
 /**
  * Pick the best installed model to fall back to. Prefers the editorial
- * recommender (family + size ranking, already drops embeddings/media weights);
+ * recommender (family + size ranking, already drops embeddings/media weights,
+ * and — given `measured` — refuses a model measured as not running here);
  * if it finds nothing usable, takes the first non-embedding model, then any —
  * embeddings can't serve a chat completion, so never auto-pick one.
  * @returns {string|null}
  */
-export function chooseFallbackModel(models) {
-  const recommended = recommendEditorialModel(models);
+export function chooseFallbackModel(models, { measured = {} } = {}) {
+  const recommended = recommendEditorialModel(models, { measured });
   if (recommended?.id) return recommended.id;
   const usable = (models || []).find((m) => m?.id && !isEmbeddingModel(m.id));
   return usable?.id || (models || [])[0]?.id || null;
@@ -188,7 +190,12 @@ export async function healMissingLocalModel({ provider, requestedModel }) {
   const installedIds = installed.map((m) => m.id);
   if (requestedModel && installedIds.includes(requestedModel)) return null; // present after all
 
-  const fallback = chooseFallbackModel(installed);
+  // Self-healing onto a model that was MEASURED not to run on this machine just
+  // swaps one broken run for another, so feed the recorded evidence in. Disk
+  // only, and a read failure degrades to the name-based guess rather than
+  // blocking the heal.
+  const measured = await getMeasuredFits(backend).catch(() => ({}));
+  const fallback = chooseFallbackModel(installed, { measured });
   if (!fallback || fallback === requestedModel) return null;
 
   // Persist the repoint so future runs use the real model. Track success: a

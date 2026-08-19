@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
-import { rmSync, existsSync, mkdirSync, writeFileSync, readdirSync } from 'fs';
+import { rmSync, existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { createTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
@@ -24,9 +24,13 @@ vi.mock('./localLlm.js', () => ({ listModels: (...args) => listModels(...args) }
 
 const getLoadedModels = vi.fn();
 const getOllamaListError = vi.fn();
+const ollamaVersion = vi.fn(async () => '0.0.0-test');
 vi.mock('./ollamaManager.js', () => ({
   getLoadedModels: (...args) => getLoadedModels(...args),
   getLastInstalledModelsError: () => getOllamaListError(),
+  // Recorded with each assessment so a backend UPDATE can later be detected as
+  // staleness — see localModelAssessmentStore.captureEnvironment.
+  getVersion: (...args) => ollamaVersion(...args),
 }));
 
 const getLmStudioListError = vi.fn();
@@ -36,6 +40,9 @@ vi.mock('./lmStudioManager.js', () => ({ getLastListError: () => getLmStudioList
 vi.mock('../lib/localMemory.js', () => ({ getAvailableMemoryGb: async () => 64 }));
 
 const svc = await import('./localModelAssessments.js');
+// The durable store is a separate module (no path to a provider); the read-only
+// projections the catalog badge consumes live there.
+const store = await import('./localModelAssessmentStore.js');
 
 const STORE = join(tempRoot, 'local-llm', 'assessments.json');
 
@@ -362,5 +369,111 @@ describe('deleteAssessment', () => {
 
   it('reports a miss rather than a phantom success', async () => {
     expect(await svc.deleteAssessment('ollama', 'example-model:404')).toEqual({ deleted: false });
+  });
+});
+
+describe('progress streaming', () => {
+  it('reports each sample as it lands, then one terminal complete frame', async () => {
+    runLocalLlmTest.mockResolvedValue(okRun());
+    const frames = [];
+    await svc.runAssessment({
+      backend: 'ollama',
+      modelId: 'example-model:7b',
+      contextTokens: [512, 4096],
+      onProgress: (frame) => frames.push(frame),
+    });
+
+    // Every frame carries enough to be correlated on a channel shared with
+    // model pulls and migrations.
+    expect(frames.every((f) => f.scope === 'assessment' && f.backend === 'ollama' && f.modelId === 'example-model:7b')).toBe(true);
+    expect(frames.filter((f) => f.event === 'complete')).toHaveLength(1);
+    expect(frames.at(-1)).toMatchObject({ event: 'complete', verdict: 'fits' });
+    // Per-sample: one "about to run" and one "here is what it measured" each.
+    const withContext = frames.filter((f) => f.contextTokens);
+    expect(withContext.map((f) => f.contextTokens)).toEqual([512, 512, 4096, 4096]);
+    expect(withContext.every((f) => f.sampleCount === 2)).toBe(true);
+  });
+
+  it('emits a terminal frame for a cancelled run so a listener never hangs', async () => {
+    const controller = new AbortController();
+    runLocalLlmTest.mockImplementation(async () => { controller.abort(); return okRun(); });
+    const frames = [];
+    await svc.runAssessment({
+      backend: 'ollama',
+      modelId: 'example-model:7b',
+      contextTokens: [512],
+      signal: controller.signal,
+      onProgress: (frame) => frames.push(frame),
+    });
+    expect(frames.at(-1)).toMatchObject({ event: 'complete', cancelled: true });
+  });
+
+  it('does not let a broken progress listener abort the measurement', async () => {
+    // The listener runs outside the request error path; a throw there must not
+    // cost the user the minutes of compute already spent.
+    runLocalLlmTest.mockResolvedValue(okRun());
+    const result = await svc.runAssessment({
+      backend: 'ollama',
+      modelId: 'example-model:7b',
+      contextTokens: [512],
+      onProgress: () => { throw new Error('listener exploded'); },
+    });
+    expect(result.verdict).toBe('fits');
+  });
+});
+
+describe('staleness', () => {
+  it('flags a stored reading taken on a different machine state', async () => {
+    runLocalLlmTest.mockResolvedValue(okRun());
+    await svc.runAssessment({ backend: 'ollama', modelId: 'example-model:7b', contextTokens: [512] });
+
+    // Rewrite the recorded environment as if the box had half the RAM then.
+    const store = JSON.parse(readFileSync(STORE, 'utf8'));
+    store.assessments[0].environment.totalMemoryGb = 1;
+    writeFileSync(STORE, JSON.stringify(store));
+
+    const report = await svc.getAssessmentReport({});
+    expect(report.assessments[0].staleness.stale).toBe(true);
+    expect(report.assessments[0].staleness.description).toMatch(/installed memory/i);
+    // And it travels with the ranked entry, so the panel doesn't recompute it.
+    expect(report.ranked[0].staleness.stale).toBe(true);
+  });
+
+  it('does not flag a reading taken on the machine as it is now', async () => {
+    runLocalLlmTest.mockResolvedValue(okRun());
+    await svc.runAssessment({ backend: 'ollama', modelId: 'example-model:7b', contextTokens: [512] });
+    const report = await svc.getAssessmentReport({});
+    expect(report.assessments[0].staleness.stale).toBe(false);
+    expect(report.liveEnvironments.ollama.platform).toBe(process.platform);
+  });
+});
+
+describe('getMeasuredFits', () => {
+  it('projects a stored assessment into the catalog fit vocabulary', async () => {
+    runLocalLlmTest.mockResolvedValue(okRun());
+    await svc.runAssessment({ backend: 'ollama', modelId: 'example-model:7b', contextTokens: [512] });
+
+    const fits = await store.getMeasuredFits('ollama');
+    expect(fits['example-model:7b']).toMatchObject({
+      fit: 'comfortable', verdict: 'fits', stale: false, meanCharsPerSecond: 120, residentGb: 5,
+    });
+    // Scoped to the backend — an Ollama measurement says nothing about LM Studio.
+    expect(await store.getMeasuredFits('lmstudio')).toEqual({});
+  });
+
+  it('returns an empty map when nothing has been measured', async () => {
+    expect(await store.getMeasuredFits('ollama')).toEqual({});
+  });
+
+  it('marks a reading from a different machine state stale rather than hiding it', async () => {
+    runLocalLlmTest.mockResolvedValue(okRun());
+    await svc.runAssessment({ backend: 'ollama', modelId: 'example-model:7b', contextTokens: [512] });
+    const raw = JSON.parse(readFileSync(STORE, 'utf8'));
+    raw.assessments[0].environment.cpuCount = 1;
+    writeFileSync(STORE, JSON.stringify(raw));
+
+    const fits = await store.getMeasuredFits('ollama');
+    expect(fits['example-model:7b'].stale).toBe(true);
+    expect(fits['example-model:7b'].staleReason).toMatch(/CPU count/i);
   });
 });

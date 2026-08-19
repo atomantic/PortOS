@@ -74,7 +74,30 @@ const FIT_META = {
   comfortable: { label: 'fits comfortably', cls: 'text-port-success' },
   tight: { label: 'tight fit', cls: 'text-port-warning' },
   'too-large': { label: 'exceeds RAM', cls: 'text-port-error' },
+  // Only ever produced by a MEASUREMENT — the size estimate cannot know that a
+  // backend refuses a model outright, and no amount of free RAM changes it.
+  incompatible: { label: 'backend refused it', cls: 'text-port-error' },
 };
+
+// The fit badge is a size ESTIMATE (weights + ~20% overhead vs. usable memory)
+// until the model has actually been run here, at which point the measurement
+// replaces it. The tooltip has to say which one the reader is looking at —
+// "fits comfortably" from arithmetic and "fits comfortably" from a real run are
+// very different claims — and it names the disagreement when there is one,
+// because that is the most useful thing the measurement can say.
+function fitTitle(source, entry) {
+  if (source !== 'measured') {
+    const stale = entry?.measuredFit && entry?.stale
+      ? ` A previous measurement (${FIT_META[entry.measuredFit]?.label || entry.measuredFit}) was taken on a different machine state, so the estimate stands.`
+      : '';
+    return `Estimated fit on this machine — model weights + ~20% overhead vs. usable memory.${stale}`;
+  }
+  const measuredAt = entry?.assessedAt ? ` on ${new Date(entry.assessedAt).toLocaleDateString()}` : '';
+  const disagree = entry?.disagrees
+    ? ` The size estimate said "${FIT_META[entry.estimatedFit]?.label || entry.estimatedFit}".`
+    : '';
+  return `Measured on this machine${measuredAt} — PortOS ran this model rather than estimating from its file size.${disagree}`;
+}
 
 // Model format badge — GGUF (llama.cpp, cross-backend) vs. MLX (Apple's native
 // format, LM Studio on Apple Silicon only). Shown so the user knows what they're
@@ -923,8 +946,14 @@ export function LocalLlmTab() {
                   const chosenUnsupported = chosenVariant?.unsupportedReason ?? null;
                   const size = chosenVariant?.size || m.size;
                   const sizeBytes = chosenVariant?.sizeBytes ?? m.sizeBytes;
-                  const fit = chosenVariant?.fit;
+                  // Curated entries fetched without `?variants=1` carry no
+                  // variant list at all — the server puts a measured fit on the
+                  // model itself there, so fall back to it rather than dropping
+                  // the only evidence that exists.
+                  const fitEntry = chosenVariant || m;
+                  const fit = fitEntry?.fit;
                   const fitMeta = fit ? FIT_META[fit] : null;
+                  const fitMeasured = fitEntry?.fitSource === 'measured';
                   const ram = recommendedRamGb(sizeBytes, size);
                   const ctxLabel = formatContextLength(m.contextLength);
                   const createdMs = new Date(m.createdAt).getTime();
@@ -978,11 +1007,15 @@ export function LocalLlmTab() {
                           >
                             {variants.map((v) => (
                               <option key={v.installId} value={v.installId}>
-                                {v.quant}{v.size ? ` · ${v.size}` : ''}{v.installed ? ' · installed' : ''}{v.recommended ? ' · recommended' : ''}{v.fit === 'too-large' ? ' · exceeds RAM' : ''}{v.unsupported === 'sharded' ? ' · sharded (not on Ollama)' : ''}
+                                {v.quant}{v.size ? ` · ${v.size}` : ''}{v.installed ? ' · installed' : ''}{v.recommended ? ' · recommended' : ''}{v.fit === 'too-large' ? ' · exceeds RAM' : ''}{v.fit === 'incompatible' ? ' · backend refused it' : ''}{v.fitSource === 'measured' ? ' · measured' : ''}{v.unsupported === 'sharded' ? ' · sharded (not on Ollama)' : ''}
                               </option>
                             ))}
                           </select>
-                          {fitMeta && <span className={`text-[11px] ${fitMeta.cls}`} title="Fit on this machine — model weights + ~20% overhead vs. usable memory">{fitMeta.label}</span>}
+                          {fitMeta && (
+                            <span className={`text-[11px] ${fitMeta.cls}`} title={fitTitle(fitEntry?.fitSource, fitEntry)}>
+                              {fitMeta.label}{fitMeasured ? ' (measured)' : ''}
+                            </span>
+                          )}
                         </div>
                       )}
                       <div className="flex items-center gap-1.5 flex-wrap text-[11px] text-gray-600 mt-1">
@@ -991,7 +1024,9 @@ export function LocalLlmTab() {
                         {/* Single-variant cards (e.g. MLX) have no quant picker, so
                             surface the RAM-fit hint here instead of in the picker row. */}
                         {fitMeta && !hasVariantPicker && (
-                          <span className={fitMeta.cls} title="Fit on this machine — model weights + ~20% overhead vs. usable memory">{fitMeta.label}</span>
+                          <span className={fitMeta.cls} title={fitTitle(fitEntry?.fitSource, fitEntry)}>
+                            {fitMeta.label}{fitMeasured ? ' (measured)' : ''}
+                          </span>
                         )}
                         {ctxLabel && (
                           <span title="Native context window (max tokens)">{ctxLabel}</span>

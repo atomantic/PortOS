@@ -228,29 +228,71 @@ function familyScore(id) {
   return 1.0 - (idx / EDITORIAL_FAMILY_RANK.length) * 0.5; // [1.0 .. 0.5], best-first
 }
 
+// How much a fresh, successful measurement is worth against the family/size
+// guess. Big enough that a model PROVEN to run here beats an equally-plausible
+// guess, small enough that it can't drag a poor editorial family (a coder model,
+// a 1B toy) past a strong one just for having been benchmarked.
+const MEASURED_FITS_BONUS = 0.12;
+
 /**
  * Recommend the best installed model for editorial feedback / line editing.
  *
+ * The family/size heuristic is a guess from a model's name. When a MEASUREMENT
+ * exists for a model (`services/localModelAssessmentStore.js#getMeasuredFits`)
+ * it overrules the guess in the two places evidence is decisive:
+ *
+ *   - a model measured `does-not-fit` / `incompatible` is dropped outright — the
+ *     name says it would be a great editor, the machine says it cannot run it;
+ *   - a model measured `fits` gets a bonus, so proven beats plausible.
+ *
+ * A STALE measurement (taken before a RAM upgrade or a backend update) does
+ * neither: it describes a machine that no longer exists, so the guess stands.
+ * An UNMEASURED model is untouched — unknown is not a mark against it.
+ *
  * @param {Array<string|{id?:string,name?:string,params?:string,family?:string}>} models
- * @returns {{ id: string, reason: string }|null} null when nothing is suitable
+ * @param {{ measured?: Record<string, {verdict?:string, stale?:boolean}> }} [options]
+ *   `measured` is keyed by model id; a missing key means "never measured".
+ * @returns {{ id: string, reason: string, evidence: 'measured'|'estimated',
+ *   ruledOutByMeasurement: string[] }|null} null when nothing is suitable
  */
-export function recommendEditorialModel(models) {
-  const candidates = (models || [])
+export function recommendEditorialModel(models, { measured = {} } = {}) {
+  const editorial = (models || [])
     .map((m) => (typeof m === 'string' ? { id: m } : m))
     .filter((m) => m?.id && !NON_EDITORIAL_RE.test(m.id));
+
+  // Trusted only when fresh — a stale reading is not evidence about this machine.
+  const trustedVerdict = (id) => {
+    const record = measured?.[id];
+    return record && !record.stale ? record.verdict : null;
+  };
+  const ruledOutByMeasurement = editorial
+    .filter((m) => ['does-not-fit', 'incompatible'].includes(trustedVerdict(m.id)))
+    .map((m) => m.id);
+  const ruledOut = new Set(ruledOutByMeasurement);
+
+  const candidates = editorial.filter((m) => !ruledOut.has(m.id));
   if (!candidates.length) return null;
 
   let best = null;
   for (const m of candidates) {
     const paramsB = parseParamsB(m);
-    const score = familyScore(m.id) * 0.6 + sizeScore(paramsB) * 0.4;
-    if (!best || score > best.score) best = { id: m.id, score, paramsB };
+    const fits = trustedVerdict(m.id) === 'fits';
+    const score = familyScore(m.id) * 0.6 + sizeScore(paramsB) * 0.4 + (fits ? MEASURED_FITS_BONUS : 0);
+    if (!best || score > best.score) best = { id: m.id, score, paramsB, fits };
   }
   if (!best) return null;
 
   const sizeLabel = best.paramsB ? `${best.paramsB}B params` : 'size unknown';
+  const measuredNote = best.fits ? ' Measured on this machine: it runs here.' : '';
+  const ruledOutNote = ruledOutByMeasurement.length
+    ? ` ${ruledOutByMeasurement.length} otherwise-preferred model${ruledOutByMeasurement.length === 1 ? '' : 's'} ruled out by measurement (${ruledOutByMeasurement.join(', ')}).`
+    : '';
   return {
     id: best.id,
-    reason: `Best installed fit for editorial review/editing (${sizeLabel}) — tight instruction-following and clean, constrained output for generating fixes.`,
+    reason: `Best installed fit for editorial review/editing (${sizeLabel}) — tight instruction-following and clean, constrained output for generating fixes.${measuredNote}${ruledOutNote}`,
+    // Says which kind of answer this is, so a caller never presents a guess with
+    // the confidence of a measurement.
+    evidence: best.fits ? 'measured' : 'estimated',
+    ruledOutByMeasurement,
   };
 }

@@ -29,7 +29,8 @@ import {
 } from '../lib/validation.js'
 import { getCatalog, searchCatalog, isBackend } from '../lib/localLlmCatalog.js'
 import { isAppleSilicon } from '../lib/platform.js'
-import { searchHuggingFaceModels, enrichCatalogWithVariants } from '../services/huggingFaceCatalog.js'
+import { searchHuggingFaceModels, enrichCatalogWithVariants, applyMeasuredFit } from '../services/huggingFaceCatalog.js'
+import { getMeasuredFits } from '../services/localModelAssessmentStore.js'
 import {
   getStatus, listModels, listVisionModels, listToolUseModels, installModel, deleteModel, switchBackend, migrateBackend, installBackend, upgradeBackend, controlOllamaServer,
   describeInstallProgress
@@ -117,6 +118,10 @@ router.get('/catalog', asyncHandler(async (req, res) => {
   if (variants === '1' || variants === 'true') {
     await enrichCatalogWithVariants(models, { backend, systemMemoryBytes, installedIds: installedForVariants })
   }
+  // Measured evidence overrules the size estimate wherever a model has actually
+  // been run here. Disk-only read — a catalog listing must never trigger a
+  // measurement (AI Provider Usage Policy).
+  applyMeasuredFit(models, { backend, measured: await getMeasuredFits(backend).catch(() => ({})) })
   res.json({ backend, models, systemMemoryGb: Math.round(systemMemoryBytes / 1024 ** 3) })
 }))
 
@@ -150,6 +155,7 @@ router.get('/huggingface-search', asyncHandler(async (req, res) => {
   // the route boundary so the service stays deterministic.
   const appleSilicon = isAppleSilicon()
   const models = await searchHuggingFaceModels({ backend, query: q, category, limit, installedIds: installed, installedAudioRepos, systemMemoryBytes, appleSilicon })
+  applyMeasuredFit(models, { backend, measured: await getMeasuredFits(backend).catch(() => ({})) })
   res.json({ backend, source: 'huggingface', models, systemMemoryGb: Math.round(systemMemoryBytes / 1024 ** 3), appleSilicon })
 }))
 
@@ -435,7 +441,13 @@ router.get('/assessments', asyncHandler(async (req, res) => {
 // client's abort signal is threaded through to stop mid-run on disconnect.
 router.post('/assessments/run', asyncHandler(async (req, res) => {
   const { backend, modelId, contextTokens } = validateRequest(localLlmAssessmentRunSchema, req.body)
-  res.json(await runAssessment({ backend, modelId, contextTokens, signal: abortSignalFromResponse(res) }))
+  const io = req.app.get('io')
+  // Same `localLlm:progress` channel the pull/migrate paths use, so one banner
+  // renders every long local-LLM operation. The extra fields (`scope`, `backend`,
+  // `modelId`, `sampleIndex`/`sampleCount`) let a listener tell an assessment
+  // frame from a model pull streaming on the same event.
+  const onProgress = (frame) => io?.emit('localLlm:progress', frame)
+  res.json(await runAssessment({ backend, modelId, contextTokens, signal: abortSignalFromResponse(res), onProgress }))
 }))
 
 // POST /api/local-llm/assessments/delete — drop one stale measurement (e.g. after

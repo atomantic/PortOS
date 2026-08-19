@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 vi.mock('../../services/api', () => ({
@@ -10,8 +10,15 @@ vi.mock('../../services/api', () => ({
 
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
+// Per-sample run progress arrives on the shared `localLlm:progress` socket
+// event; the tests below replay frames through the registered handler.
+vi.mock('../../services/socket', () => ({
+  default: { on: vi.fn(), off: vi.fn() },
+}));
+
 import { getLocalLlmAssessments, runLocalLlmAssessment, deleteLocalLlmAssessment } from '../../services/api';
 import toast from '../ui/Toast';
+import socket from '../../services/socket';
 import LocalModelAssessments from './LocalModelAssessments.jsx';
 
 const report = (overrides = {}) => ({
@@ -218,5 +225,103 @@ describe('LocalModelAssessments', () => {
     getLocalLlmAssessments.mockResolvedValue(report({ listErrors: ['lmstudio'] }));
     render(<LocalModelAssessments />);
     expect(await screen.findByText(/Could not list installed models for LM Studio/)).toBeInTheDocument();
+  });
+
+  describe('stale measurements', () => {
+    it('flags a reading taken on a different machine state and says what changed', async () => {
+      getLocalLlmAssessments.mockResolvedValue(report({
+        ranked: [rankedEntry({
+          staleness: {
+            comparable: true,
+            stale: true,
+            changes: [{ field: 'totalMemoryGb', label: 'installed memory', from: 32, to: 64 }],
+            description: 'Measured on a different machine state — installed memory 32 → 64.',
+          },
+        })],
+      }));
+      render(<LocalModelAssessments />);
+
+      expect(await screen.findByText('stale')).toBeInTheDocument();
+      expect(screen.getByText(/installed memory 32 → 64/)).toBeInTheDocument();
+      expect(screen.getByText(/Measure again to refresh it/)).toBeInTheDocument();
+    });
+
+    it('says nothing when the reading still matches this machine', async () => {
+      getLocalLlmAssessments.mockResolvedValue(report({
+        ranked: [rankedEntry({ staleness: { comparable: true, stale: false, changes: [], description: null } })],
+      }));
+      render(<LocalModelAssessments />);
+
+      await screen.findByText('example-model:7b');
+      expect(screen.queryByText('stale')).not.toBeInTheDocument();
+    });
+
+    it('does not claim freshness for a record nothing could be compared against', async () => {
+      // `comparable: false` is UNKNOWN, not current — it must not render a
+      // stale warning either way.
+      getLocalLlmAssessments.mockResolvedValue(report({
+        ranked: [rankedEntry({ staleness: { comparable: false, stale: false, changes: [], description: null } })],
+      }));
+      render(<LocalModelAssessments />);
+
+      await screen.findByText('example-model:7b');
+      expect(screen.queryByText('stale')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('run progress', () => {
+    const emitProgress = (frame) => {
+      // Replay whatever handler the component registered on the shared event.
+      for (const [event, handler] of socket.on.mock.calls) {
+        if (event === 'localLlm:progress') act(() => handler(frame));
+      }
+    };
+
+    const startRun = async () => {
+      const user = userEvent.setup();
+      getLocalLlmAssessments.mockResolvedValue(report({
+        unassessed: [{ backend: 'ollama', modelId: 'example-model:7b', params: '7B' }],
+      }));
+      // Never resolves during the test — the run stays in flight so progress renders.
+      runLocalLlmAssessment.mockImplementation(() => new Promise(() => {}));
+      render(<LocalModelAssessments />);
+      await user.click(await screen.findByRole('button', { name: /measure/i }));
+      await user.click(await screen.findByRole('button', { name: /run assessment/i }));
+      return user;
+    };
+
+    it('renders per-sample progress from the shared localLlm:progress event', async () => {
+      await startRun();
+      emitProgress({
+        scope: 'assessment', backend: 'ollama', modelId: 'example-model:7b',
+        event: 'start', sampleIndex: 1, sampleCount: 3, message: 'example-model:7b: sample 2/3 at 4,096 tokens of context…',
+      });
+      expect(await screen.findByText(/sample 2\/3 at 4,096 tokens/)).toBeInTheDocument();
+    });
+
+    it('ignores frames from an unrelated model pull on the same channel', async () => {
+      await startRun();
+      emitProgress({ event: 'start', message: 'other-model:70b: pulling 42%' });
+      emitProgress({
+        scope: 'assessment', backend: 'ollama', modelId: 'some-other-model:3b',
+        event: 'start', sampleIndex: 1, sampleCount: 3, message: 'some-other-model:3b: sample 2/3',
+      });
+      await waitFor(() => expect(screen.queryByText(/pulling 42%/)).not.toBeInTheDocument());
+      expect(screen.queryByText(/some-other-model/)).not.toBeInTheDocument();
+      // …and the panel is still live: its OWN frame renders right after.
+      emitProgress({
+        scope: 'assessment', backend: 'ollama', modelId: 'example-model:7b',
+        event: 'start', sampleIndex: 0, sampleCount: 3, message: 'example-model:7b: sample 1/3',
+      });
+      expect(await screen.findByText(/sample 1\/3/)).toBeInTheDocument();
+    });
+
+    it('unsubscribes on unmount so a late frame cannot update a dead panel', async () => {
+      getLocalLlmAssessments.mockResolvedValue(report());
+      const { unmount } = render(<LocalModelAssessments />);
+      await screen.findByText(/Nothing measured yet/);
+      unmount();
+      expect(socket.off).toHaveBeenCalledWith('localLlm:progress', expect.any(Function));
+    });
   });
 });

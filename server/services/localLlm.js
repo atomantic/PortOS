@@ -32,6 +32,10 @@ import { compareSemver } from '../lib/versionUtils.js'
 import { isBackend, mapModelToBackend, getOllamaImportSpec } from '../lib/localLlmCatalog.js'
 import { sanitizeOllamaName } from '../lib/localLlmDisk.js'
 import { recommendEditorialModel, isVisionModel, isVisionCapableCliProvider, isToolUseModel } from '../lib/localModelHeuristics.js'
+// Disk-only read of the measured assessments (`localModelAssessmentStore.js` has no
+// path to a provider, so this cannot turn a status poll into an LLM call), and
+// no import cycle: the store deliberately does not import this module.
+import { getMeasuredFits } from './localModelAssessmentStore.js'
 import { commandExists } from '../lib/commandExists.js'
 import * as ollamaManager from './ollamaManager.js'
 import * as lmStudioManager from './lmStudioManager.js'
@@ -688,7 +692,7 @@ export async function listModels(backend, forceRefresh = false) {
  * Combined status for both backends plus the active marker.
  */
 export async function getStatus() {
-  const [ollamaStatus, ollamaCli, lmStudioStatus, lmsCli, lmStudioModels, latestOllamaVersion, settings] = await Promise.all([
+  const [ollamaStatus, ollamaCli, lmStudioStatus, lmsCli, lmStudioModels, latestOllamaVersion, settings, measuredOllama, measuredLmStudio] = await Promise.all([
     ollamaManager.getStatus(true),
     commandExists('ollama', ['--version']),
     lmStudioManager.getStatus(),
@@ -697,11 +701,16 @@ export async function getStatus() {
     listModels('lmstudio', true).catch(() => []),
     // Cached (6h) — never blocks the steady-state UI on a GitHub round-trip.
     getLatestOllamaVersion().catch(() => null),
-    getSettings()
+    getSettings(),
+    // Measured evidence, so the editorial pick can prefer a model that PROVABLY
+    // runs here over one whose name merely looks right. Disk-only; a status poll
+    // must never trigger a measurement.
+    getMeasuredFits('ollama').catch(() => ({})),
+    getMeasuredFits('lmstudio').catch(() => ({}))
   ])
 
   const ollamaModels = normalizeModels('ollama', ollamaStatus.models)
-  const lmStudioRecommendation = recommendEditorialModel(lmStudioModels)
+  const lmStudioRecommendation = recommendEditorialModel(lmStudioModels, { measured: measuredLmStudio })
   // An update is "available" only when we know BOTH the installed version (Ollama
   // must be running for /api/version to answer) and the latest, and latest is
   // newer. canUpgrade (canAutoUpgrade) gates the in-app updater to the platforms
@@ -724,7 +733,7 @@ export async function getStatus() {
       models: ollamaModels,
       // Best installed model for editorial review/editing, surfaced so the
       // manuscript editor can suggest it (and warn against the embedding model).
-      recommendations: { editorial: recommendEditorialModel(ollamaModels) },
+      recommendations: { editorial: recommendEditorialModel(ollamaModels, { measured: measuredOllama }) },
       canControl: ollamaCli || ollamaStatus.available,
       service: ollamaStatus.service,
       canAutoInstall: canAutoInstall('ollama'),

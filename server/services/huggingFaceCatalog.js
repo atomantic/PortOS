@@ -8,6 +8,7 @@ import { readCachedRepoModel, writeCachedRepoModel } from './huggingFaceRepoCach
 import { LOCAL_LLM_CATEGORIES, isBackend } from '../lib/localLlmCatalog.js'
 import { ENGINES } from './pipeline/musicGen.js'
 import { fetchOllamaRegistryVariants } from './ollamaRegistryCatalog.js'
+import { reconcileFit } from '../lib/localModelAssessment.js'
 
 const HF_API_BASE = 'https://huggingface.co/api/models'
 const HF_TIMEOUT_MS = 12_000
@@ -512,7 +513,7 @@ function lmStudioParts(id) {
 // the repo name, e.g. `mlx-community/Foo-4bit`), so it must still match an installed
 // `mlx-community/Foo-4bit@4bit`. GGUF variants always carry a quant, so this never
 // loosens per-quant GGUF matching; it only adds the missing repo-level case.
-function installIdInstalled(backend, installId, repository, installedIds) {
+function installIdInstalled(backend, installId, installedIds) {
   if (backend === 'ollama') {
     const target = normalizeOllamaInstalled(installId)
     return installedIds.some((id) => normalizeOllamaInstalled(id) === target)
@@ -525,7 +526,7 @@ function installIdInstalled(backend, installId, repository, installedIds) {
 }
 
 function isInstalled(backend, result, installedIds) {
-  return installIdInstalled(backend, result.id, result.repository, installedIds)
+  return installIdInstalled(backend, result.id, installedIds)
 }
 
 // ---- MLX (Apple Silicon) ----------------------------------------------------
@@ -612,7 +613,7 @@ function toMlxResult(model, requestedCategory, installedIds) {
     score: scoreModel(model, category, null),
     installable: true
   }
-  result.installed = installIdInstalled('lmstudio', repoId, repoId, installedIds)
+  result.installed = installIdInstalled('lmstudio', repoId, installedIds)
   return result
 }
 
@@ -898,7 +899,7 @@ function applyGgufVariants(result, model, { backend, usableBytes, installedIds, 
   if (variants.length === 0) return false
   // Per-quant installed state — Ollama tracks each quant separately, so the card
   // must gate Install on the *selected* variant, not one repo-wide flag.
-  for (const v of variants) v.installed = installIdInstalled(backend, v.installId, result.repository, installedIds)
+  for (const v of variants) v.installed = installIdInstalled(backend, v.installId, installedIds)
   applyChosenVariant(result, variants, { usableBytes, rewriteInstallId })
   return true
 }
@@ -922,7 +923,7 @@ function applyMlxVariant(result, model, { backend, usableBytes, installedIds }) 
     sizeBytes: Number.isFinite(result.sizeBytes) ? result.sizeBytes : null,
     size: formatBytes(result.sizeBytes) || result.size || (quant ? quant.toUpperCase() : 'MLX'),
     fit: classifyFit(result.sizeBytes, usableBytes),
-    installed: installIdInstalled(backend, result.id, result.repository, installedIds),
+    installed: installIdInstalled(backend, result.id, installedIds),
     recommended: true
   }
   result.format = 'mlx'
@@ -1128,7 +1129,7 @@ async function applyOllamaRegistryVariants(entry, { usableBytes, installedIds })
     .sort((a, b) => (b.sizeBytes || 0) - (a.sizeBytes || 0))
   // Per-quant installed state — Ollama tracks each `<name>:<tag>` build separately,
   // so the card gates Install on the selected variant (matches applyGgufVariants).
-  for (const v of variants) v.installed = installIdInstalled('ollama', v.installId, entry.repository, installedIds)
+  for (const v of variants) v.installed = installIdInstalled('ollama', v.installId, installedIds)
   // The discovered quant variants use exact `<name>:<tag>` ids that never include the
   // default `:latest` alias, so an already-installed default build matches none of them.
   // The card gates Install on the SELECTED variant's `installed` (LocalLlmTab uses
@@ -1228,4 +1229,52 @@ export async function enrichCatalogWithVariants(catalog, { backend, systemMemory
     await work
   }
   return catalog
+}
+
+/**
+ * Fold MEASURED evidence into the estimated fit badge.
+ *
+ * `classifyFit` above answers from file size alone: weight bytes × 1.2 against a
+ * usable-memory budget. It never runs the model, so it cannot see a build that
+ * loads and then thrashes, nor one the backend refuses outright. Once an
+ * assessment exists for a model (`services/localModelAssessmentStore.js`) the
+ * measurement is the better answer, and where the two DISAGREE is the most
+ * useful thing this data can say — so both are kept on the variant.
+ *
+ * Matching reuses `installIdInstalled`, the exact normalization that decides the
+ * `installed` flag (Ollama's `hf.co/<repo>:<quant>` casing/`:latest`, LM Studio's
+ * quant-aware `<repo>@<quant>`). A separate matcher here would eventually drift
+ * and mark a variant "installed" while showing someone else's measurement.
+ *
+ * Mutates in place (the catalog builders already do) and returns `models`.
+ *
+ * @param {Array<object>} models catalog/search results
+ * @param {{ backend: string, measured?: Record<string, object> }} options
+ *   `measured` comes from `getMeasuredFits(backend)`; `{}` means nothing has been
+ *   measured, which leaves every estimate exactly as it was.
+ */
+export function applyMeasuredFit(models, { backend, measured } = {}) {
+  const list = Array.isArray(models) ? models : []
+  const measuredIds = measured ? Object.keys(measured) : []
+  if (!measuredIds.length) return list
+  // One id at a time so the backend-specific normalization decides the match.
+  const measurementFor = (installId) => {
+    if (!installId) return null
+    const hit = measuredIds.find((id) => installIdInstalled(backend, installId, [id]))
+    return hit ? measured[hit] : null
+  }
+  for (const model of list) {
+    // Audio/music entries install into the shared audio registry, not a local
+    // LLM backend, so a chat-model measurement can never describe them.
+    if (model?.category === 'audio') continue
+    const variants = Array.isArray(model?.variants) ? model.variants : []
+    for (const variant of variants) {
+      Object.assign(variant, reconcileFit(variant.fit, measurementFor(variant.installId)))
+    }
+    // Entries with no variant list (curated results without `?variants=1`) carry
+    // no estimated fit at all — a measurement is then the ONLY thing that can
+    // say anything, so surface it rather than leaving the card blank.
+    if (!variants.length) Object.assign(model, reconcileFit(model?.fit ?? null, measurementFor(model?.id)))
+  }
+  return list
 }

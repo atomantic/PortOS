@@ -11,6 +11,10 @@ import {
   scoreAssessment,
   scoreForIntent,
   summarizePerformance,
+  compareEnvironments,
+  describeStaleness,
+  measuredFitVerdict,
+  reconcileFit,
 } from './localModelAssessment.js';
 
 const okSample = (contextTokens, charsPerSecond, ttftMs = 300) => ({
@@ -299,5 +303,123 @@ describe('rankByIntent', () => {
 
   it('falls back to the balanced intent for an unknown one', () => {
     expect(rankByIntent([], 'nonsense').intent).toBe('balanced');
+  });
+});
+
+describe('compareEnvironments', () => {
+  const recorded = { platform: 'darwin', arch: 'arm64', cpuCount: 12, totalMemoryGb: 64, backendVersion: '1.2.3' };
+
+  it('reports current when every comparable field matches', () => {
+    expect(compareEnvironments(recorded, { ...recorded })).toEqual({ comparable: true, stale: false, changes: [] });
+  });
+
+  it('flags a RAM change — the case the badge exists for', () => {
+    const result = compareEnvironments(recorded, { ...recorded, totalMemoryGb: 128 });
+    expect(result.stale).toBe(true);
+    expect(result.changes).toEqual([{ field: 'totalMemoryGb', label: 'installed memory', from: 64, to: 128 }]);
+    expect(describeStaleness(result)).toContain('installed memory 64 → 128');
+  });
+
+  it('flags a backend update', () => {
+    const result = compareEnvironments(recorded, { ...recorded, backendVersion: '1.3.0' });
+    expect(result.stale).toBe(true);
+    expect(result.changes[0].field).toBe('backendVersion');
+  });
+
+  it('ignores sub-tolerance memory reporting jitter', () => {
+    expect(compareEnvironments(recorded, { ...recorded, totalMemoryGb: 64.3 }).stale).toBe(false);
+  });
+
+  it('never treats a field absent on either side as a change', () => {
+    // Records written before `backendVersion` was captured, and LM Studio (which
+    // exposes no version at all), must not read as "the backend changed".
+    const legacy = { platform: 'darwin', arch: 'arm64', cpuCount: 12, totalMemoryGb: 64 };
+    const result = compareEnvironments(legacy, { ...legacy, backendVersion: '1.3.0' });
+    expect(result.stale).toBe(false);
+    expect(result.comparable).toBe(true);
+  });
+
+  it('reports not-comparable rather than fresh when there is nothing to compare', () => {
+    // `comparable: false` is UNKNOWN. A caller must not render it as a clean bill
+    // of health — that is the absent-vs-empty sentinel rule.
+    expect(compareEnvironments(null, null)).toEqual({ comparable: false, stale: false, changes: [] });
+    expect(describeStaleness({ comparable: false, stale: false, changes: [] })).toBeNull();
+  });
+
+  it('does not compare transient available memory, which swings constantly', () => {
+    const result = compareEnvironments(
+      { ...recorded, availableMemoryGb: 40, memoryBudgetGb: 40 },
+      { ...recorded, availableMemoryGb: 3, memoryBudgetGb: 3 },
+    );
+    expect(result.stale).toBe(false);
+  });
+});
+
+describe('measuredFitVerdict', () => {
+  it('reads a comfortable fit when the footprint is well under the budget', () => {
+    expect(measuredFitVerdict({
+      verdict: 'fits', residentGb: 8, environment: { memoryBudgetGb: 40 },
+    })).toBe('comfortable');
+  });
+
+  it('reads tight past the same 60% threshold the estimate uses', () => {
+    expect(measuredFitVerdict({
+      verdict: 'fits', residentGb: 30, environment: { memoryBudgetGb: 40 },
+    })).toBe('tight');
+  });
+
+  it('says comfortable when it ran but the footprint is unmeasured (LM Studio)', () => {
+    expect(measuredFitVerdict({ verdict: 'fits', residentGb: null, environment: {} })).toBe('comfortable');
+  });
+
+  it('maps the failure verdicts onto the badge vocabulary', () => {
+    expect(measuredFitVerdict({ verdict: 'does-not-fit' })).toBe('too-large');
+    expect(measuredFitVerdict({ verdict: 'incompatible' })).toBe('incompatible');
+  });
+
+  it('says nothing at all for an unknown verdict or a missing assessment', () => {
+    // null ≠ 'unknown': 'unknown' is a badge the ESTIMATE also produces, so
+    // collapsing them would make an unmeasured model look measured.
+    expect(measuredFitVerdict({ verdict: 'unknown' })).toBeNull();
+    expect(measuredFitVerdict(null)).toBeNull();
+  });
+});
+
+describe('reconcileFit', () => {
+  const measurement = { fit: 'too-large', verdict: 'does-not-fit', assessedAt: '2026-01-02T00:00:00.000Z', stale: false };
+
+  it('leaves the estimate alone when nothing was measured', () => {
+    const result = reconcileFit('comfortable', null);
+    expect(result).toMatchObject({ fit: 'comfortable', fitSource: 'estimated', measuredFit: null, disagrees: false });
+  });
+
+  it('prefers the measurement and records the disagreement', () => {
+    const result = reconcileFit('comfortable', measurement);
+    expect(result).toMatchObject({
+      fit: 'too-large',
+      fitSource: 'measured',
+      estimatedFit: 'comfortable',
+      measuredFit: 'too-large',
+      disagrees: true,
+      verdict: 'does-not-fit',
+    });
+  });
+
+  it('does not flag a disagreement when both sides agree', () => {
+    expect(reconcileFit('too-large', measurement).disagrees).toBe(false);
+  });
+
+  it('keeps the estimate when the measurement is stale, but still reports it', () => {
+    const result = reconcileFit('comfortable', { ...measurement, stale: true, staleReason: 'RAM changed' });
+    expect(result.fit).toBe('comfortable');
+    expect(result.fitSource).toBe('estimated');
+    expect(result.measuredFit).toBe('too-large');
+    expect(result.stale).toBe(true);
+    expect(result.staleReason).toBe('RAM changed');
+  });
+
+  it('does not claim a disagreement against an unknown estimate', () => {
+    expect(reconcileFit('unknown', measurement).disagrees).toBe(false);
+    expect(reconcileFit(null, measurement)).toMatchObject({ fit: 'too-large', fitSource: 'measured', disagrees: false });
   });
 });

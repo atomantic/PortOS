@@ -338,6 +338,11 @@ export function rankByIntent(assessments, intent = 'balanced') {
       residentGb: Number.isFinite(assessment?.residentGb) ? assessment.residentGb : null,
       params: assessment?.params ?? null,
       assessedAt: assessment?.assessedAt || null,
+      // Travels with the entry so the UI can mark a reading taken before a RAM
+      // upgrade / backend update WITHOUT re-deriving the comparison client-side.
+      // `null` = the caller did not annotate staleness, which is not the same as
+      // "compared and current".
+      staleness: assessment?.staleness || null,
       explanation: explainAssessment(assessment, resolvedIntent),
     });
   }
@@ -346,4 +351,140 @@ export function rankByIntent(assessments, intent = 'balanced') {
   // model outranks one scored on a single axis, then by model id for stability.
   ranked.sort((a, b) => (b.score - a.score) || (b.coverage - a.coverage) || String(a.modelId).localeCompare(String(b.modelId)));
   return { intent: resolvedIntent, ranked, excluded };
+}
+
+// ---- staleness ---------------------------------------------------------------
+
+/**
+ * Machine facts a measurement is only valid FOR. These are the durable ones: a
+ * RAM upgrade, a CPU swap, an OS/arch move, or a backend update all invalidate a
+ * recorded reading, and none of them announce themselves to the user.
+ *
+ * Transient state is deliberately NOT here. `availableMemoryGb` swings by
+ * gigabytes minute to minute on any working machine, so comparing it would flag
+ * essentially every assessment as stale and the badge would mean nothing.
+ */
+const ENVIRONMENT_FIELDS = [
+  { field: 'platform', label: 'operating system' },
+  { field: 'arch', label: 'CPU architecture' },
+  { field: 'cpuCount', label: 'CPU count' },
+  { field: 'totalMemoryGb', label: 'installed memory', unit: ' GB', toleranceGb: 0.5 },
+  { field: 'backendVersion', label: 'backend version' },
+];
+
+// Absent on EITHER side is not-comparable, never a change: an older record
+// predates a captured field (`backendVersion` landed after the first
+// assessments), and LM Studio reports no version at all. Reading either as
+// "changed" would mark every legacy record stale on sight.
+const present = (v) => v !== null && v !== undefined && v !== '';
+
+/**
+ * Compare a recorded assessment environment against the live one.
+ *
+ * @param {object|null} recorded environment stored with the assessment
+ * @param {object|null} live environment captured now
+ * @returns {{ comparable: boolean, stale: boolean, changes: Array<{field:string,label:string,from:*,to:*}> }}
+ *   `comparable: false` means no field could be compared — that is UNKNOWN, not
+ *   fresh, and callers must not render it as a clean bill of health.
+ */
+export function compareEnvironments(recorded, live) {
+  const changes = [];
+  let compared = 0;
+  for (const { field, label, toleranceGb } of ENVIRONMENT_FIELDS) {
+    const from = recorded?.[field];
+    const to = live?.[field];
+    if (!present(from) || !present(to)) continue;
+    compared += 1;
+    const changed = typeof toleranceGb === 'number' && typeof from === 'number' && typeof to === 'number'
+      ? Math.abs(from - to) > toleranceGb
+      : from !== to;
+    if (changed) changes.push({ field, label, from, to });
+  }
+  return { comparable: compared > 0, stale: changes.length > 0, changes };
+}
+
+/**
+ * One human sentence naming what changed since the measurement, or `null` when
+ * nothing did (or nothing could be compared).
+ */
+export function describeStaleness(staleness) {
+  const changes = staleness?.changes;
+  if (!Array.isArray(changes) || changes.length === 0) return null;
+  const parts = changes.map(({ label, from, to }) => `${label} ${from} → ${to}`);
+  return `Measured on a different machine state — ${parts.join('; ')}.`;
+}
+
+// ---- folding measured evidence into the estimated fit badge ------------------
+
+// The catalog's estimate calls a model "tight" once its projected resident size
+// passes 60% of the usable budget (`huggingFaceCatalog.js#classifyFit`). The
+// measured verdict uses the SAME threshold against the measured footprint so the
+// two vocabularies stay comparable — a badge that flips from `comfortable` to
+// `tight` must mean the same thing whichever source produced it.
+const TIGHT_FRACTION = 0.6;
+
+/**
+ * Translate a stored assessment into the catalog's fit vocabulary.
+ *
+ * `null` means the measurement says nothing about fit (`unknown` verdict, or no
+ * assessment at all) — it must NOT collapse into `'unknown'`, which is a real
+ * badge value the estimate also produces.
+ *
+ * @param {object|null} assessment
+ * @returns {'comfortable'|'tight'|'too-large'|'incompatible'|null}
+ */
+export function measuredFitVerdict(assessment) {
+  switch (assessment?.verdict) {
+    case 'fits': {
+      const resident = assessment?.residentGb;
+      const budget = assessment?.environment?.memoryBudgetGb;
+      // Footprint unknown (LM Studio reports none) — it RAN, so `comfortable`
+      // is the honest read; we just can't say how close to the edge it was.
+      if (!Number.isFinite(resident) || !Number.isFinite(budget) || budget <= 0) return 'comfortable';
+      return resident > budget * TIGHT_FRACTION ? 'tight' : 'comfortable';
+    }
+    case 'does-not-fit': return 'too-large';
+    case 'incompatible': return 'incompatible';
+    default: return null;
+  }
+}
+
+/**
+ * Reconcile the size ESTIMATE with the MEASUREMENT for one model.
+ *
+ * Rules, in order:
+ *   1. No usable measurement → the estimate stands, unchanged.
+ *   2. A STALE measurement never overrides the estimate. It describes a machine
+ *      that no longer exists (RAM changed, backend updated), so trusting it over
+ *      a fresh estimate would be worse than the estimate alone — but it is still
+ *      reported, because "we measured this before your upgrade" is information.
+ *   3. Otherwise the measurement wins. It ran the model; the estimate multiplied
+ *      a file size by 1.2.
+ *
+ * `disagrees` is the point of the whole exercise: it marks the models where
+ * running the thing contradicted the arithmetic, which is the most useful thing
+ * this data can say.
+ *
+ * @param {string|null} estimatedFit the catalog's `classifyFit` result
+ * @param {object|null} measurement compact record from the assessments store:
+ *   `{ fit, verdict, assessedAt, stale, staleReason }`
+ */
+export function reconcileFit(estimatedFit, measurement) {
+  const estimated = estimatedFit || null;
+  const measuredFit = measurement?.fit || null;
+  const base = {
+    fit: estimated,
+    fitSource: 'estimated',
+    estimatedFit: estimated,
+    measuredFit,
+    verdict: measurement?.verdict || null,
+    assessedAt: measurement?.assessedAt || null,
+    // `disagrees` is only meaningful when BOTH sides have an opinion; an
+    // unmeasured or unestimated model disagrees with nothing.
+    disagrees: Boolean(measuredFit && estimated && estimated !== 'unknown' && measuredFit !== estimated),
+    stale: Boolean(measurement?.stale),
+    staleReason: measurement?.staleReason || null,
+  };
+  if (!measuredFit || measurement?.stale) return base;
+  return { ...base, fit: measuredFit, fitSource: 'measured' };
 }

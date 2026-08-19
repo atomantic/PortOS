@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { searchHuggingFaceModels, enrichCatalogWithVariants } from './huggingFaceCatalog.js'
+import { searchHuggingFaceModels, enrichCatalogWithVariants, applyMeasuredFit } from './huggingFaceCatalog.js'
 import { __resetOllamaRegistryCache } from './ollamaRegistryCatalog.js'
 
 // The disk cache resolves its file from the REAL PATHS.data, and fetchRepoModel
@@ -1247,5 +1247,86 @@ describe('huggingFaceCatalog', () => {
       expect(blobCalls).toBe(1)
       expect(catalogs.every((c) => c[0].format === 'gguf')).toBe(true)
     })
+  })
+})
+
+describe('applyMeasuredFit', () => {
+  // Ollama's HF install ids and the assessment's recorded model id are the same
+  // string modulo case and a `:latest` tag, so matching must go through the same
+  // normalization that decides `installed`.
+  const ollamaModel = () => ({
+    id: 'hf.co/example-org/Example-14B-GGUF:Q4_K_M',
+    variants: [
+      { quant: 'Q4_K_M', installId: 'hf.co/example-org/Example-14B-GGUF:Q4_K_M', fit: 'comfortable' },
+      { quant: 'Q8_0', installId: 'hf.co/example-org/Example-14B-GGUF:Q8_0', fit: 'tight' }
+    ]
+  })
+
+  it('replaces the estimate with the measurement and keeps the disagreement', () => {
+    const models = [ollamaModel()]
+    applyMeasuredFit(models, {
+      backend: 'ollama',
+      measured: {
+        'hf.co/example-org/example-14b-gguf:Q4_K_M': {
+          fit: 'too-large', verdict: 'does-not-fit', assessedAt: '2026-01-02T00:00:00.000Z', stale: false
+        }
+      }
+    })
+    expect(models[0].variants[0]).toMatchObject({
+      fit: 'too-large', fitSource: 'measured', estimatedFit: 'comfortable', disagrees: true
+    })
+    // The unmeasured sibling quant keeps its estimate untouched.
+    expect(models[0].variants[1]).toMatchObject({ fit: 'tight', fitSource: 'estimated', measuredFit: null })
+  })
+
+  it('leaves every estimate alone when nothing has been measured', () => {
+    const models = [ollamaModel()]
+    applyMeasuredFit(models, { backend: 'ollama', measured: {} })
+    expect(models[0].variants.map((v) => v.fit)).toEqual(['comfortable', 'tight'])
+    expect(models[0].variants[0].fitSource).toBeUndefined()
+  })
+
+  it('keeps the estimate when the measurement is stale, but still reports it', () => {
+    const models = [ollamaModel()]
+    applyMeasuredFit(models, {
+      backend: 'ollama',
+      measured: {
+        'hf.co/example-org/Example-14B-GGUF:Q4_K_M': { fit: 'too-large', verdict: 'does-not-fit', stale: true, staleReason: 'installed memory 32 → 64' }
+      }
+    })
+    expect(models[0].variants[0]).toMatchObject({ fit: 'comfortable', fitSource: 'estimated', measuredFit: 'too-large', stale: true })
+  })
+
+  it('matches LM Studio ids quant-aware, the same way `installed` does', () => {
+    const models = [{
+      id: 'example-org/Example-14B-GGUF',
+      variants: [{ quant: 'Q4_K_M', installId: 'example-org/Example-14B-GGUF@Q4_K_M', fit: 'comfortable' }]
+    }]
+    applyMeasuredFit(models, {
+      backend: 'lmstudio',
+      measured: { 'example-org/Example-14B-GGUF': { fit: 'tight', verdict: 'fits', stale: false } }
+    })
+    expect(models[0].variants[0]).toMatchObject({ fit: 'tight', fitSource: 'measured' })
+  })
+
+  it('annotates a variant-less entry, where the measurement is the only evidence there is', () => {
+    const models = [{ id: 'example-model:14b' }]
+    applyMeasuredFit(models, {
+      backend: 'ollama',
+      measured: { 'example-model:14b': { fit: 'comfortable', verdict: 'fits', stale: false } }
+    })
+    expect(models[0]).toMatchObject({ fit: 'comfortable', fitSource: 'measured', estimatedFit: null, disagrees: false })
+  })
+
+  it('never applies a chat-model measurement to an audio entry', () => {
+    // Audio/music models install into the shared audio registry, not a local LLM
+    // backend — a same-named chat measurement could not describe them.
+    const models = [{ id: 'example-model:14b', category: 'audio', fit: 'comfortable' }]
+    applyMeasuredFit(models, {
+      backend: 'ollama',
+      measured: { 'example-model:14b': { fit: 'too-large', verdict: 'does-not-fit', stale: false } }
+    })
+    expect(models[0].fit).toBe('comfortable')
+    expect(models[0].fitSource).toBeUndefined()
   })
 })

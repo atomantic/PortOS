@@ -726,7 +726,13 @@ async function getInstalledModels(forceRefresh = false) {
   return installedModels
 }
 
-async function getVersion() {
+/**
+ * Ollama's reported version, or `null` when it isn't answering. Exported so the
+ * assessment store can record WHICH backend build a measurement was taken
+ * against — a backend update is one of the things that makes a stored reading
+ * stale, and there is no other way to notice it after the fact.
+ */
+export async function getVersion() {
   const data = await ollamaRequest('/api/version', { timeout: AVAILABILITY_PROBE_TIMEOUT_MS }).catch(() => null)
   return data?.version || null
 }

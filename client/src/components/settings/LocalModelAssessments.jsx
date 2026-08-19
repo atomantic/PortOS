@@ -18,11 +18,13 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Gauge, RefreshCw, Trash2, Play, AlertTriangle } from 'lucide-react';
+import { Gauge, RefreshCw, Trash2, Play, AlertTriangle, History } from 'lucide-react';
+import socket from '../../services/socket';
 import Modal from '../ui/Modal';
 import BrailleSpinner from '../BrailleSpinner';
 import toast from '../ui/Toast';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
+import useMounted from '../../hooks/useMounted';
 import { formatDurationMs } from '../../utils/formatters';
 import {
   getLocalLlmAssessments, runLocalLlmAssessment, deleteLocalLlmAssessment,
@@ -55,6 +57,21 @@ const Measured = ({ value, suffix = '', digits = 0 }) =>
     ? <>{value.toFixed(digits)}{suffix}</>
     : <span className="text-gray-600 italic">not measured</span>);
 
+// A measurement only describes the machine it was taken on. When the recorded
+// environment no longer matches the live one — a RAM upgrade, a backend update —
+// the reading is silently misleading, and nothing else on this page would say so.
+function StalePill({ staleness }) {
+  if (!staleness?.stale) return null;
+  return (
+    <span
+      className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium rounded border text-port-warning border-port-warning/50"
+      title={staleness.description || 'Measured on a different machine state.'}
+    >
+      <History size={9} /> stale
+    </span>
+  );
+}
+
 function VerdictPill({ verdict }) {
   const meta = VERDICT_META[verdict] || VERDICT_META.unknown;
   return (
@@ -65,7 +82,7 @@ function VerdictPill({ verdict }) {
 // Consent gate. PortOS never calls a provider the user didn't knowingly ask for,
 // so this names the exact backend, model, and generation count before the first
 // request goes out — the same contract as the POST drill cache's fill modal.
-function AssessmentConsentModal({ target, contextTokens, onCancel, onConfirm, running }) {
+function AssessmentConsentModal({ target, contextTokens, onCancel, onConfirm, running, progress }) {
   if (!target) return null;
   return (
     <Modal open onClose={onCancel} size="sm" ariaLabel="Run local model assessment" closeOnBackdrop={!running}>
@@ -84,6 +101,22 @@ function AssessmentConsentModal({ target, contextTokens, onCancel, onConfirm, ru
           Nothing else on this page calls a model. This can take several minutes on a large model, and it
           loads the model into memory. The result stays on this machine and is never synced to a peer.
         </p>
+        {/* Live per-sample progress off the `localLlm:progress` socket event, so a
+            multi-minute run reports which sample it is on instead of a bare spinner.
+            Absent until the first frame arrives — never a fake 0%. */}
+        {running && progress && (
+          <div className="space-y-1" aria-live="polite">
+            {Number.isFinite(progress.sampleCount) && progress.sampleCount > 0 && (
+              <div className="h-1 rounded bg-port-border overflow-hidden">
+                <div
+                  className="h-full bg-port-accent transition-all"
+                  style={{ width: `${Math.round((Math.min(progress.sampleIndex ?? 0, progress.sampleCount) / progress.sampleCount) * 100)}%` }}
+                />
+              </div>
+            )}
+            <p className="text-[11px] text-gray-400 break-words">{progress.message}</p>
+          </div>
+        )}
         <div className="flex gap-3 pt-1">
           {/* Stays enabled while the run is in flight — it aborts the request
               rather than merely closing the modal, so the user is never stuck
@@ -117,8 +150,14 @@ function RankedRow({ entry, onRemeasure, onDelete, busy }) {
             <span className="text-sm text-white font-mono break-all">{entry.modelId}</span>
             <span className="text-[10px] text-gray-500">{BACKEND_LABEL[entry.backend] || entry.backend}</span>
             <VerdictPill verdict={entry.verdict} />
+            <StalePill staleness={entry.staleness} />
           </div>
           <p className="text-xs text-gray-400 mt-1">{entry.explanation}</p>
+          {entry.staleness?.stale && (
+            <p className="text-[11px] text-port-warning mt-0.5">
+              {entry.staleness.description} Measure again to refresh it.
+            </p>
+          )}
           {/* The score renormalizes over MEASURED axes, so a model with partial
               evidence can outrank a fully-measured one. Say so rather than
               presenting the rank as though it rested on the same footing. */}
@@ -209,6 +248,9 @@ export function LocalModelAssessments() {
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(true);
   const [pendingTarget, setPendingTarget] = useState(null);
+  // Per-sample progress for the run in flight. `null` = no frame yet, which is
+  // rendered as "no progress bar" rather than as 0 of N.
+  const [progress, setProgress] = useState(null);
 
   const load = useCallback(async (nextIntent) => {
     setLoading(true);
@@ -220,6 +262,38 @@ export function LocalModelAssessments() {
   }, []);
 
   useEffect(() => { load(intent); }, [load, intent]);
+
+  // Which model this panel is currently measuring. A ref, not state: the socket
+  // handler subscribes once and must read the CURRENT target, not the one
+  // captured when it was registered.
+  const activeTargetRef = useRef(null);
+  // Re-arms on every mount, so StrictMode's dev mount→cleanup→mount cycle does
+  // not leave the panel permanently deaf to progress frames.
+  const mountedRef = useMounted();
+
+  // A run is one blocking POST, so without this the UI shows a spinner for
+  // minutes. The server streams per-sample frames over the same
+  // `localLlm:progress` event model pulls and migrations use — hence the strict
+  // filtering below, or a background model download would drive this bar.
+  useEffect(() => {
+    const handleProgress = (frame) => {
+      if (!mountedRef.current) return;
+      if (frame?.scope !== 'assessment') return;
+      const target = activeTargetRef.current;
+      // Frames for a model this panel is not measuring (another tab measuring
+      // something else, a run the user already cancelled) are dropped rather
+      // than rendered — a stale message is worse than none.
+      if (!target || frame.backend !== target.backend || frame.modelId !== target.modelId) return;
+      if (frame.event === 'complete') { setProgress(null); return; }
+      setProgress({
+        message: frame.message || '',
+        sampleIndex: Number.isFinite(frame.sampleIndex) ? frame.sampleIndex : null,
+        sampleCount: Number.isFinite(frame.sampleCount) ? frame.sampleCount : null,
+      });
+    };
+    socket.on('localLlm:progress', handleProgress);
+    return () => socket.off('localLlm:progress', handleProgress);
+  }, []);
 
   // A run occupies the local provider for minutes. Without an abort, leaving
   // the page (or changing your mind) leaves it running with nobody listening —
@@ -250,7 +324,11 @@ export function LocalModelAssessments() {
 
   const confirmRun = async () => {
     const target = pendingTarget;
+    activeTargetRef.current = target;
+    setProgress(null);
     const result = await runAssessment(target);
+    activeTargetRef.current = null;
+    setProgress(null);
     setPendingTarget(null);
 // An aborted run recorded nothing on either side, so there is no verdict
     // to report — marked `cancelled` by the abort catch above, or by the server
@@ -274,6 +352,10 @@ export function LocalModelAssessments() {
 
   const cancelRun = () => {
     runControllerRef.current?.abort();
+    // Stop accepting frames for the abandoned run BEFORE the modal closes, or a
+    // late frame would repopulate a progress bar with nothing behind it.
+    activeTargetRef.current = null;
+    setProgress(null);
     setPendingTarget(null);
   };
 
@@ -403,6 +485,7 @@ export function LocalModelAssessments() {
         target={pendingTarget}
         contextTokens={report?.defaultContextTokens || []}
         running={running}
+        progress={progress}
         onCancel={cancelRun}
         onConfirm={confirmRun}
       />

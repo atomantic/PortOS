@@ -4,7 +4,9 @@ import { request } from '../lib/testHelper.js';
 import localLlmRoutes from './localLlm.js';
 import { runLocalLlmTest, compareLocalLlmModels } from '../services/localLlmPlayground.js';
 import { listModels, listVisionModels, listToolUseModels } from '../services/localLlm.js';
-import { enrichCatalogWithVariants } from '../services/huggingFaceCatalog.js';
+import { enrichCatalogWithVariants, applyMeasuredFit } from '../services/huggingFaceCatalog.js';
+import { getMeasuredFits } from '../services/localModelAssessmentStore.js';
+import { runAssessment } from '../services/localModelAssessments.js';
 import { getLoadedModels, unloadModel } from '../services/ollamaManager.js';
 import { getLoadedModels as getLoadedLmStudioModels, getLastLoadedModelsError as getLmStudioResidencyError } from '../services/lmStudioManager.js';
 import { getSettings } from '../services/settings.js';
@@ -53,6 +55,19 @@ vi.mock('../services/lmStudioManager.js', () => ({
 vi.mock('../services/huggingFaceCatalog.js', () => ({
   searchHuggingFaceModels: vi.fn(async () => []),
   enrichCatalogWithVariants: vi.fn(async (catalog) => catalog),
+  applyMeasuredFit: vi.fn((models) => models),
+}));
+
+// Measured assessments are folded into the catalog fit badge. Disk-only in
+// production; mocked here so a catalog listing test never touches the store.
+vi.mock('../services/localModelAssessmentStore.js', () => ({
+  getMeasuredFits: vi.fn(async () => ({})),
+}));
+
+vi.mock('../services/localModelAssessments.js', () => ({
+  getAssessmentReport: vi.fn(async () => ({ ranked: [], excluded: [] })),
+  runAssessment: vi.fn(async () => ({ verdict: 'fits' })),
+  deleteAssessment: vi.fn(async () => ({ deleted: true })),
 }));
 
 // /loaded reads getSettings() to honor a user's intentionally-disabled backends,
@@ -405,5 +420,47 @@ describe('local LLM capability routes', () => {
 
     expect(vision.body.models.map((m) => m.id)).toEqual(['qwen2.5-vl:7b']);
     expect(tools.body.models.map((m) => m.id)).toEqual(['phi4-mini:latest']);
+  });
+});
+
+describe('measured assessments wiring', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('folds measured evidence into the catalog fit badge', async () => {
+    getMeasuredFits.mockResolvedValue({ 'example-model:14b': { fit: 'too-large', verdict: 'does-not-fit', stale: false } });
+    const res = await request(makeApp()).get('/api/local-llm/catalog?backend=ollama');
+
+    expect(res.status).toBe(200);
+    expect(getMeasuredFits).toHaveBeenCalledWith('ollama');
+    // The overlay runs against the SAME backend the listing was built for —
+    // an LM Studio measurement must never decorate an Ollama card.
+    expect(applyMeasuredFit).toHaveBeenCalledWith(res.body.models, {
+      backend: 'ollama',
+      measured: { 'example-model:14b': { fit: 'too-large', verdict: 'does-not-fit', stale: false } },
+    });
+  });
+
+  it('still serves the catalog when the assessments store cannot be read', async () => {
+    // A broken measurement file must not take the install picker down with it.
+    getMeasuredFits.mockRejectedValue(new Error('disk on fire'));
+    const res = await request(makeApp()).get('/api/local-llm/catalog?backend=ollama');
+    expect(res.status).toBe(200);
+    expect(applyMeasuredFit).toHaveBeenCalledWith(expect.anything(), { backend: 'ollama', measured: {} });
+  });
+
+  it('forwards assessment progress to the shared localLlm:progress socket event', async () => {
+    runAssessment.mockImplementation(async ({ onProgress }) => {
+      onProgress({ scope: 'assessment', backend: 'ollama', modelId: 'example-model:14b', event: 'start', sampleIndex: 1, sampleCount: 3 });
+      return { verdict: 'fits' };
+    });
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/local-llm/assessments/run')
+      .send({ backend: 'ollama', modelId: 'example-model:14b' });
+
+    expect(res.status).toBe(200);
+    expect(app.get('io').emit).toHaveBeenCalledWith('localLlm:progress', {
+      scope: 'assessment', backend: 'ollama', modelId: 'example-model:14b', event: 'start', sampleIndex: 1, sampleCount: 3,
+    });
   });
 });
