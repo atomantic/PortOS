@@ -107,7 +107,7 @@ function normalizeRemoteManifest(body) {
     const rows = types[type];
     if (!Array.isArray(rows)) continue;
     out[type] = rows
-      .filter((r) => r && typeof r === 'object' && isNonEmptyStr(r.id))
+      .filter((r) => r && typeof r === 'object' && !Array.isArray(r) && isNonEmptyStr(r.id))
       .map((r) => ({ id: r.id, updatedAt: r.updatedAt ?? null, deleted: r.deleted === true }));
   }
   return out;
@@ -130,7 +130,7 @@ function manifestFromSnapshot(snapshot) {
     const byId = records[type];
     if (!byId || typeof byId !== 'object' || Array.isArray(byId)) continue;
     out[type] = Object.entries(byId)
-      .filter(([, rec]) => rec && typeof rec === 'object')
+      .filter(([, rec]) => rec && typeof rec === 'object' && !Array.isArray(rec))
       .map(([id, rec]) => ({ id, updatedAt: rec.updatedAt ?? null, deleted: rec._deleted === true }));
   }
   return out;
