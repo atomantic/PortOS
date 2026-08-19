@@ -168,3 +168,90 @@ export function extractAgentSummary(output) {
 
   return summary;
 }
+
+// A ref-update failure git reports as
+//   error: cannot lock ref '<ref>': is at <current> but expected <expected>
+// This is NOT lock contention (no `.lock` file was in the way) — it is a failed
+// compare-and-swap: git read <expected> when the fetch began, and by the time it
+// went to write the ref another process had already moved it to <current>.
+const CANNOT_LOCK_REF_RE =
+  /cannot lock ref '([^']+)':\s*is at ([0-9a-f]+) but expected ([0-9a-f]+)/gi;
+
+// The paired per-ref line in `git fetch` output naming the value the fetch WANTED
+// to write:  ` ! <old>..<new>  <src> -> <dst>  (unable to update local ref)`
+// `..` for a fast-forward, `...` for a forced update. Any other parenthetical
+// git annotates the line with is skipped rather than assumed absent.
+const UNABLE_TO_UPDATE_REF_RE =
+  /^\s*!\s+([0-9a-f]+)\.{2,3}([0-9a-f]+)\s+\S+\s+->\s+(\S+)\s+(?:\([^)]*\)\s*)*\(unable to update local ref\)/gim;
+
+/** Two object names refer to the same commit when either abbreviates the other. */
+function sameObject(a, b) {
+  if (!a || !b) return false;
+  const x = a.toLowerCase();
+  const y = b.toLowerCase();
+  return x.startsWith(y) || y.startsWith(x);
+}
+
+/**
+ * True when a `git fetch` failure is ONLY the benign "someone else already
+ * fetched this" race: every ref git could not lock already holds exactly the
+ * value this fetch was trying to write, so the fetch's goal is satisfied and
+ * the local remote-tracking refs are correct.
+ *
+ * PortOS hits this constantly because several writers share one `.git`: the Git
+ * tab's update button (`updateBranches` → `fetchOrigin`), the same tab's remote
+ * branch list (`getRemoteBranches` → `git fetch origin --prune`), and every CoS
+ * agent worktree. When two fetches overlap, the loser reports a non-zero exit
+ * for work the winner already completed.
+ *
+ * Retrying that is the wrong remedy — the ref is already correct, so a retry
+ * spends another full network fetch to discover there is nothing to do, and on
+ * a busy repo (agents pushing branches) every attempt can lose the same race and
+ * surface a red error for a fetch that actually succeeded. Callers treat a true
+ * return as success instead. Distinguishing "already applied by another writer"
+ * from "failed" is the sentinel-and-validate rule in CLAUDE.md.
+ *
+ * Deliberately strict — it returns false, leaving the existing retry/throw path
+ * in charge, when:
+ *   - there is no compare-and-swap failure at all (plain `index.lock` contention),
+ *   - a locked ref's current value is NOT what the fetch wanted (e.g. the ref was
+ *     rolled back locally), so the fetch genuinely did not achieve its goal,
+ *   - a locked ref has no paired `(unable to update local ref)` line to confirm
+ *     the intended value against, or
+ *   - the output carries any other `error:`/`fatal:` line, so a real failure
+ *     riding alongside the race is never swallowed.
+ *
+ * @param {string} stderr - Combined stderr from `git fetch`
+ * @returns {boolean}
+ */
+export function isBenignConcurrentFetchRefRace(stderr) {
+  if (!stderr) return false;
+
+  const locked = [...stderr.matchAll(CANNOT_LOCK_REF_RE)]
+    .map(([, ref, current]) => ({ ref, current }));
+  if (!locked.length) return false;
+
+  // Intended value per ref, keyed on the short `origin/main` form git prints in
+  // the `!` line as well as on the full `refs/remotes/origin/main` the lock error
+  // names, so either spelling resolves.
+  const intended = new Map();
+  for (const [, , next, dst] of stderr.matchAll(UNABLE_TO_UPDATE_REF_RE)) {
+    intended.set(dst, next);
+    intended.set(`refs/remotes/${dst}`, next);
+  }
+
+  const everyRefAlreadyCorrect = locked.every(({ ref, current }) => {
+    const want = intended.get(ref) ?? intended.get(ref.replace(/^refs\/remotes\//, ''));
+    return sameObject(current, want);
+  });
+  if (!everyRefAlreadyCorrect) return false;
+
+  // Any diagnostic that is not one of the two lines this race produces means
+  // something else also went wrong — defer to the caller's error handling.
+  // Uses a non-global copy: `.test()` on a /g regex advances its lastIndex and
+  // would skip every other line.
+  const casLine = new RegExp(CANNOT_LOCK_REF_RE.source, 'i');
+  return !stderr.split('\n').some(
+    line => /^\s*(error|fatal):/i.test(line) && !casLine.test(line)
+  );
+}

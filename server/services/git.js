@@ -9,7 +9,8 @@ import {
   parseDiffStat,
   parseBranchVerboseLine,
   parseSubmoduleStatusLine,
-  extractAgentSummary
+  extractAgentSummary,
+  isBenignConcurrentFetchRefRace
 } from '../lib/gitOutputParsers.js';
 import {
   parseGitRemote,
@@ -190,6 +191,13 @@ function fetchOriginAttempt(dir, attempt) {
   return execGit(['fetch', 'origin'], dir).then(
     () => true,
     (err) => {
+      // A concurrent fetch that already wrote the exact refs this one wanted is
+      // a SUCCESS reported as a failure — git exits non-zero on the lost
+      // compare-and-swap even though the remote-tracking refs now hold the
+      // right commits. Retrying re-runs a whole network fetch to learn there is
+      // nothing to do, and on a busy repo every attempt loses the same race, so
+      // the caller surfaced a red error for work that had actually completed.
+      if (isBenignConcurrentFetchRefRace(err.message)) return true;
       // Another PortOS surface or agent may advance the same remote ref mid-fetch.
       if (attempt >= FETCH_MAX_ATTEMPTS || !isGitLockError(err.message)) throw err;
       return sleep(FETCH_RETRY_DELAY_MS).then(() => fetchOriginAttempt(dir, attempt + 1));

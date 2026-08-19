@@ -32,6 +32,19 @@ describe('fetchOrigin', () => {
     expect(execGitMock).toHaveBeenNthCalledWith(2, ['fetch', 'origin'], '/repo');
   });
 
+  it('accepts a lost compare-and-swap without a second fetch', async () => {
+    // The concurrent winner already wrote origin/main to the very commit this
+    // fetch wanted, so the refs are correct and there is nothing left to do.
+    execGitMock.mockRejectedValueOnce(new Error([
+      "error: cannot lock ref 'refs/remotes/origin/main': is at f485411c6fcc274d9c298f0476ef91990748ad0a but expected f538668661cc298c15abeb6cf78e886b71eae623",
+      'From github.com:example/example',
+      ' ! f538668..f485411  main       -> origin/main  (unable to update local ref)'
+    ].join('\n')));
+
+    await expect(fetchOrigin('/repo')).resolves.toBe(true);
+    expect(execGitMock).toHaveBeenCalledTimes(1);
+  });
+
   it('does not retry a permanent fetch failure', async () => {
     execGitMock.mockRejectedValueOnce(new Error('fatal: repository not found'));
 
