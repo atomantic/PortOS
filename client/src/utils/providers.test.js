@@ -42,6 +42,7 @@ import {
   resolveCliEffort,
   CLAUDE_EFFORT_LEVELS,
   CODEX_EFFORT_LEVELS,
+  CURSOR_EFFORT_LEVELS,
   ANTIGRAVITY_EFFORT_LEVELS,
   isConfiguredDefaultModel,
   configuredDefaultIn,
@@ -860,9 +861,17 @@ describe('supportsModelRefresh', () => {
 });
 
 describe('cursor providers', () => {
-  it('offers no effort ladder — cursor bakes the reasoning tier into the model id', () => {
-    expect(effortLevelsForProvider({ id: 'cursor-cli', command: 'cursor-agent' })).toBeNull();
-    expect(effortLevelsForProvider({ id: 'cursor-tui', command: 'cursor-agent' }, 'claude-opus-5-thinking-high')).toBeNull();
+  it('offers the cursor effort ladder — the level rides --model, not an --effort flag', () => {
+    expect(effortLevelsForProvider({ id: 'cursor-cli', command: 'cursor-agent' })).toBe(CURSOR_EFFORT_LEVELS);
+    expect(effortLevelsForProvider({ id: 'cursor-tui', command: 'cursor-agent' }, 'claude-opus-5-thinking-high')).toBe(
+      CURSOR_EFFORT_LEVELS,
+    );
+    // The GUI editor launcher is not the agent binary, so it keeps no ladder.
+    expect(effortLevelsForProvider({ id: 'custom', command: 'cursor' })).toBeNull();
+  });
+
+  it('keeps the cursor ladder in lockstep with the server', () => {
+    expect(CURSOR_EFFORT_LEVELS).toEqual(serverEffortLevelsForProvider({ id: 'cursor-cli', command: 'cursor-agent' }));
   });
 
   it('is not mistaken for a claude/codex/antigravity provider by its model ids', () => {
