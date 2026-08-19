@@ -3,17 +3,17 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from 'fs'
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-import migration from './279-opencode-llama-tui-provider.js';
+import migration from './280-opencode-llama-tui-provider.js';
 
 const writeJson = (path, value) => writeFileSync(path, JSON.stringify(value, null, 2) + '\n');
 const readJson = (path) => JSON.parse(readFileSync(path, 'utf-8'));
 
-describe('migration 279 — OpenCode llama TUI provider', () => {
+describe('migration 280 — OpenCode llama TUI provider', () => {
   let rootDir;
   let providersPath;
 
   beforeEach(() => {
-    rootDir = mkdtempSync(join(tmpdir(), 'migration-279-'));
+    rootDir = mkdtempSync(join(tmpdir(), 'migration-280-'));
     mkdirSync(join(rootDir, 'data'), { recursive: true });
     providersPath = join(rootDir, 'data/providers.json');
   });

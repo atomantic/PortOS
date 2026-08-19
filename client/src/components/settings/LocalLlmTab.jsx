@@ -926,6 +926,7 @@ export function LocalLlmTab() {
               disabled={llamaLoading}
               className="p-1 text-gray-400 hover:text-white transition-colors"
               title="Refresh llama-server status"
+              aria-label="Refresh llama-server status"
             >
               <RefreshCw size={13} className={llamaLoading ? 'animate-spin' : ''} />
             </button>
@@ -975,8 +976,10 @@ export function LocalLlmTab() {
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <span className="text-xs font-medium text-gray-300">Launch Speculative Decoding Server</span>
               <div className="flex items-center gap-1.5">
-                <span className="text-[11px] text-gray-500">Preset:</span>
+                <label htmlFor="llama-preset-select" className="text-[11px] text-gray-500">Preset:</label>
                 <select
+                  id="llama-preset-select"
+                  aria-label="Preset"
                   onChange={(e) => handlePresetSelect(e.target.value)}
                   defaultValue="qwen3.8-27b"
                   className="bg-port-card border border-port-border rounded px-2 py-1 text-xs text-port-accent focus:outline-none"
@@ -992,8 +995,10 @@ export function LocalLlmTab() {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <div>
-                <label className="text-[11px] text-gray-400 block mb-1">Target Base Model (GGUF Path) *</label>
+                <label htmlFor="llama-base-model" className="text-[11px] text-gray-400 block mb-1">Target Base Model (GGUF Path) *</label>
                 <input
+                  id="llama-base-model"
+                  aria-label="Target Base Model (GGUF Path)"
                   type="text"
                   value={llamaForm.model}
                   onChange={(e) => setLlamaForm((prev) => ({ ...prev, model: e.target.value }))}
@@ -1002,8 +1007,10 @@ export function LocalLlmTab() {
                 />
               </div>
               <div>
-                <label className="text-[11px] text-gray-400 block mb-1">DFlash 2 Draft Model (Optional)</label>
+                <label htmlFor="llama-draft-model" className="text-[11px] text-gray-400 block mb-1">DFlash 2 Draft Model (Optional)</label>
                 <input
+                  id="llama-draft-model"
+                  aria-label="DFlash 2 Draft Model (Optional)"
                   type="text"
                   value={llamaForm.draftModel}
                   onChange={(e) => setLlamaForm((prev) => ({ ...prev, draftModel: e.target.value }))}
@@ -1016,8 +1023,10 @@ export function LocalLlmTab() {
             {showLlamaAdvanced && (
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 border-t border-port-border/40 text-xs">
                 <div>
-                  <label className="text-[11px] text-gray-400 block mb-1">Port</label>
+                  <label htmlFor="llama-port" className="text-[11px] text-gray-400 block mb-1">Port</label>
                   <input
+                    id="llama-port"
+                    aria-label="Port"
                     type="number"
                     value={llamaForm.port}
                     onChange={(e) => setLlamaForm((prev) => ({ ...prev, port: parseInt(e.target.value, 10) || 8080 }))}
@@ -1025,8 +1034,10 @@ export function LocalLlmTab() {
                   />
                 </div>
                 <div>
-                  <label className="text-[11px] text-gray-400 block mb-1">Context Size</label>
+                  <label htmlFor="llama-ctx-size" className="text-[11px] text-gray-400 block mb-1">Context Size</label>
                   <input
+                    id="llama-ctx-size"
+                    aria-label="Context Size"
                     type="number"
                     value={llamaForm.ctxSize}
                     onChange={(e) => setLlamaForm((prev) => ({ ...prev, ctxSize: parseInt(e.target.value, 10) || 32768 }))}
@@ -1034,8 +1045,10 @@ export function LocalLlmTab() {
                   />
                 </div>
                 <div>
-                  <label className="text-[11px] text-gray-400 block mb-1">GPU Layers (-ngl)</label>
+                  <label htmlFor="llama-gpu-layers" className="text-[11px] text-gray-400 block mb-1">GPU Layers (-ngl)</label>
                   <input
+                    id="llama-gpu-layers"
+                    aria-label="GPU Layers (-ngl)"
                     type="number"
                     value={llamaForm.nGpuLayers}
                     onChange={(e) => setLlamaForm((prev) => ({ ...prev, nGpuLayers: parseInt(e.target.value, 10) ?? 99 }))}
@@ -1043,8 +1056,10 @@ export function LocalLlmTab() {
                   />
                 </div>
                 <div>
-                  <label className="text-[11px] text-gray-400 block mb-1">Spec Type</label>
+                  <label htmlFor="llama-spec-type" className="text-[11px] text-gray-400 block mb-1">Spec Type</label>
                   <input
+                    id="llama-spec-type"
+                    aria-label="Spec Type"
                     type="text"
                     value={llamaForm.specType}
                     onChange={(e) => setLlamaForm((prev) => ({ ...prev, specType: e.target.value }))}
