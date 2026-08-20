@@ -12,7 +12,7 @@ import {
   DEFAULT_THREEJS_ENVIRONMENT,
   THREEJS_RENDER_PROFILE,
   createSculptEnvironmentScene,
-  createSculptEnvironmentTexture,
+  createSculptEnvironmentTarget,
   disposeSculptEnvironmentScene,
   resolveSculptEnvironment,
 } from './threejsEnvironment.js';
@@ -81,22 +81,36 @@ describe('createSculptEnvironmentScene', () => {
   });
 
   it('releases every geometry and material the preset allocated', () => {
-    const scene = createSculptEnvironmentScene('studio');
-    const geometries = [];
-    const materials = [];
+    for (const preset of ['neutral', 'studio']) {
+      const scene = createSculptEnvironmentScene(preset);
+      const spies = [];
+      scene.traverse((node) => {
+        if (node.geometry) spies.push(vi.spyOn(node.geometry, 'dispose'));
+        if (node.material) spies.push(vi.spyOn(node.material, 'dispose'));
+      });
+      disposeSculptEnvironmentScene(scene);
+      expect(spies.length).toBeGreaterThan(0);
+      for (const spy of spies) expect(spy).toHaveBeenCalled();
+    }
+  });
+
+  // RoomEnvironment is built from InstancedMesh, whose per-instance matrix
+  // buffer is uploaded separately and survives disposing geometry + material.
+  it('releases an instanced mesh’s own GPU buffers too', () => {
+    const scene = createSculptEnvironmentScene('neutral');
+    const instanced = [];
     scene.traverse((node) => {
-      if (node.geometry) geometries.push(vi.spyOn(node.geometry, 'dispose'));
-      if (node.material) materials.push(vi.spyOn(node.material, 'dispose'));
+      if (node.isInstancedMesh) instanced.push(vi.spyOn(node, 'dispose'));
     });
+    expect(instanced.length).toBeGreaterThan(0);
     disposeSculptEnvironmentScene(scene);
-    expect(geometries.length).toBeGreaterThan(0);
-    for (const spy of [...geometries, ...materials]) expect(spy).toHaveBeenCalled();
+    for (const spy of instanced) expect(spy).toHaveBeenCalled();
   });
 });
 
-describe('createSculptEnvironmentTexture', () => {
+describe('createSculptEnvironmentTarget', () => {
   it('returns null without building anything for none or a missing renderer', () => {
-    expect(createSculptEnvironmentTexture(null, 'studio')).toBeNull();
-    expect(createSculptEnvironmentTexture({}, 'none')).toBeNull();
+    expect(createSculptEnvironmentTarget(null, 'studio')).toBeNull();
+    expect(createSculptEnvironmentTarget({}, 'none')).toBeNull();
   });
 });

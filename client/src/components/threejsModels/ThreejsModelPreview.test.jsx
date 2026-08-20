@@ -13,11 +13,13 @@ vi.mock('../../lib/threejsEnvironment', async (importOriginal) => {
   return {
     ...actual,
     // PMREM needs a real renderer; what matters here is WHICH preset the preview
-    // asked for and that the texture it got is released again.
-    createSculptEnvironmentTexture: (_renderer, preset) => {
-      const texture = { preset, dispose: vi.fn() };
-      environmentBuilds.push(texture);
-      return texture;
+    // asked for, that its texture reached the scene, and that the whole render
+    // TARGET is released again — disposing the texture alone leaks the
+    // framebuffer behind it.
+    createSculptEnvironmentTarget: (_renderer, preset) => {
+      const target = { preset, texture: { preset }, dispose: vi.fn() };
+      environmentBuilds.push(target);
+      return target;
     },
   };
 });
@@ -290,8 +292,8 @@ describe('ThreejsModelPreview environment', () => {
   it('assigns the authored preset to the scene and forwards its intensity to the material', () => {
     const { container } = renderPreview(<ThreejsModelPreview spec={metalSpec({ preset: 'studio', intensity: 2 })} />);
 
-    expect(environmentBuilds.map((texture) => texture.preset)).toEqual(['studio']);
-    expect(threeState.scene.environment).toBe(environmentBuilds[0]);
+    expect(environmentBuilds.map((target) => target.preset)).toEqual(['studio']);
+    expect(threeState.scene.environment).toBe(environmentBuilds[0].texture);
     expect(intensityOf(container)).toBe('2');
   });
 
@@ -305,22 +307,22 @@ describe('ThreejsModelPreview environment', () => {
     expect(intensityOf(container)).toBe('1');
   });
 
-  it('swaps presets without leaking the previous PMREM texture', () => {
+  it('swaps presets without leaking the previous PMREM target', () => {
     const { rerender } = renderPreview(<ThreejsModelPreview spec={metalSpec({ preset: 'neutral', intensity: 1 })} />);
     const [first] = environmentBuilds;
 
     rerender(<ThreejsModelPreview spec={metalSpec({ preset: 'studio', intensity: 1 })} />);
     expect(first.dispose).toHaveBeenCalled();
-    expect(threeState.scene.environment).toBe(environmentBuilds[1]);
+    expect(threeState.scene.environment).toBe(environmentBuilds[1].texture);
     expect(environmentBuilds[1].preset).toBe('studio');
   });
 
-  it('releases the texture and clears the scene on unmount', () => {
+  it('releases the render target and clears the scene on unmount', () => {
     const { unmount } = renderPreview(<ThreejsModelPreview spec={metalSpec({ preset: 'studio', intensity: 1 })} />);
-    const [texture] = environmentBuilds;
+    const [target] = environmentBuilds;
 
     unmount();
-    expect(texture.dispose).toHaveBeenCalled();
+    expect(target.dispose).toHaveBeenCalled();
     expect(threeState.scene.environment).toBeNull();
   });
 });

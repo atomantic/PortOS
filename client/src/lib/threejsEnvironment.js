@@ -113,31 +113,43 @@ export function createSculptEnvironmentScene(preset) {
   return null;
 }
 
-/** Release every geometry and material a preset scene allocated. */
+/**
+ * Release everything a preset scene allocated on the GPU. `node.dispose()` is
+ * the one that matters for `RoomEnvironment`: it is built from `InstancedMesh`,
+ * whose per-instance matrix buffer is uploaded separately from the geometry and
+ * is not freed by disposing geometry and material alone.
+ */
 export function disposeSculptEnvironmentScene(scene) {
   scene?.traverse?.((node) => {
     node.geometry?.dispose?.();
     const material = node.material;
     if (Array.isArray(material)) material.forEach((entry) => entry?.dispose?.());
     else material?.dispose?.();
+    node.dispose?.();
   });
 }
 
 /**
- * PMREM-prefilter a preset into the texture `scene.environment` wants, or null
- * for `none`. The source scene and the generator are both released here; the
- * CALLER owns the returned texture and must dispose it.
+ * PMREM-prefilter a preset into the render target whose `.texture` is what
+ * `scene.environment` wants, or null for `none`. The source scene and the
+ * generator are both released here; the CALLER owns the returned target and must
+ * `dispose()` it.
+ *
+ * The TARGET is returned rather than the texture because the framebuffer and
+ * depth attachment behind it are only freed by `WebGLRenderTarget.dispose()` —
+ * disposing the texture alone leaks them on every preset swap. Same ownership
+ * shape as `OpenWorldGalaxySky`'s PMREM effect.
  *
  * @param {THREE.WebGLRenderer} renderer the live renderer (PMREM needs a GL context)
  * @param {string} preset one of `THREEJS_ENVIRONMENT_PRESETS`
  */
-export function createSculptEnvironmentTexture(renderer, preset) {
+export function createSculptEnvironmentTarget(renderer, preset) {
   if (!renderer) return null;
   const scene = createSculptEnvironmentScene(preset);
   if (!scene) return null;
   const pmrem = new THREE.PMREMGenerator(renderer);
-  const texture = pmrem.fromScene(scene, 0.04).texture;
+  const target = pmrem.fromScene(scene, 0.04);
   pmrem.dispose();
   disposeSculptEnvironmentScene(scene);
-  return texture;
+  return target;
 }

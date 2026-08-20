@@ -4,7 +4,7 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Bounds, OrbitControls, useBounds } from '@react-three/drei';
 import * as THREE from 'three';
 import { createSculptBufferGeometry, needsSculptBufferGeometry, sculptMaterialProps } from '../../lib/threejsSculpt';
-import { createSculptEnvironmentTexture, resolveSculptEnvironment, THREEJS_RENDER_PROFILE } from '../../lib/threejsEnvironment';
+import { createSculptEnvironmentTarget, resolveSculptEnvironment, THREEJS_RENDER_PROFILE } from '../../lib/threejsEnvironment';
 import {
   collectThreejsCues,
   evaluateThreejsClipPose,
@@ -306,13 +306,15 @@ function SceneEnvironment({ preset }) {
   const scene = useThree((state) => state.scene);
   useEffect(() => {
     if (!scene) return undefined;
-    const texture = preset === 'none' ? null : createSculptEnvironmentTexture(gl, preset);
-    scene.environment = texture;
+    // The render TARGET, not just its texture: disposing the texture alone
+    // leaves the framebuffer behind it allocated on every preset swap.
+    const target = preset === 'none' ? null : createSculptEnvironmentTarget(gl, preset);
+    scene.environment = target?.texture || null;
     return () => {
       // Only clear what this effect set — a later effect may already have
       // installed the next preset's texture.
-      if (scene.environment === texture) scene.environment = null;
-      texture?.dispose();
+      if (scene.environment === (target?.texture || null)) scene.environment = null;
+      target?.dispose();
     };
   }, [gl, scene, preset]);
   return null;
