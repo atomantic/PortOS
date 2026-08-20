@@ -47,6 +47,11 @@ describe('ShellSessionTabs labels', () => {
     expect(screen.getByText('abcdef')).toBeTruthy();
   });
 
+  it('keeps the drive segment for a Windows drive root', () => {
+    renderTabs([session({ cwd: 'I:\\' })]);
+    expect(screen.getByText('I:')).toBeTruthy();
+  });
+
   it('prefers an explicit label over the cwd', () => {
     renderTabs([session({ label: 'Claude Code TUI' })]);
     expect(screen.getByText('Claude Code TUI')).toBeTruthy();

@@ -6,8 +6,9 @@ const shortId = (id) => id?.slice(0, 6) ?? '';
 
 // Separator-agnostic basename for the tab label. A Windows cwd (`I:\code\example-app`)
 // contains no `/`, so a POSIX-only split leaves the whole path in the tab and blows
-// out its width. `filter(Boolean)` drops the empty tail a trailing separator leaves,
-// and yields undefined for a bare root so the caller falls through to the short id.
+// out its width. `filter(Boolean)` drops the empty tail a trailing separator leaves.
+// POSIX `/` has no segment left and yields undefined, so the caller falls through to
+// the short id; a Windows drive root keeps its `C:` segment, which reads fine as a label.
 const folderName = (cwd) => cwd?.split(/[\\/]/).filter(Boolean).pop();
 
 // Presentational session-tab strip for the Shell page. External TUI runs get a
