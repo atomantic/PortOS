@@ -90,10 +90,16 @@ const endpointHost = (endpoint) => {
  * in lockstep. A host that cannot be parsed reads as NOT private, keeping the
  * stricter of the two answers for input we don't understand.
  *
- * The two disagree only on compact loopback spellings (`http://127.1`), which
- * `URL` expands and the client's cheap regex does not. That no longer reaches
- * the card: the client consumes THIS answer when the server publishes one, and
- * falls back to its own regex only against a server too old to publish.
+ * The two disagree only where the client's cheap regex and a real URL parser
+ * read a host differently, and in both directions THIS answer is the one that
+ * reaches the card (the client consumes it when the server publishes, falling
+ * back to its own regex only against a server too old to publish):
+ *   - `http://127.1` — `URL` expands the compact form to `127.0.0.1` and this
+ *     calls it private; the client's four-octet regex does not. Node's own
+ *     fetch expands it the same way, so private is the correct answer.
+ *   - `http://::1:11434` — an IPv6 literal without brackets, which `URL`
+ *     rejects and the client regex accepts. Unparseable reads as NOT private
+ *     here, per the rule above; nothing can connect to that endpoint anyway.
  */
 export const isPrivateNetworkEndpoint = (endpoint) => {
   const host = endpointHost(endpoint);

@@ -63,6 +63,17 @@ describe('isPrivateNetworkEndpoint', () => {
   ])('treats %s as NOT private', (endpoint) => {
     expect(isPrivateNetworkEndpoint(endpoint)).toBe(false);
   });
+
+  // The two documented places this parser and the client's cheap regex read a
+  // host differently. Pinned so a future edit to either has to decide about
+  // them rather than flip one by accident.
+  it('expands a compact loopback form the client regex misses', () => {
+    expect(isPrivateNetworkEndpoint('http://127.1:11434')).toBe(true);
+  });
+
+  it('rejects an IPv6 literal without brackets, which no client can connect to anyway', () => {
+    expect(isPrivateNetworkEndpoint('http://::1:11434')).toBe(false);
+  });
 });
 
 describe('providerPrerequisites', () => {

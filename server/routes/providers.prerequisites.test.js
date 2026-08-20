@@ -13,6 +13,7 @@ vi.mock('../services/providerRuntimeInstaller.js', async (importOriginal) => ({
   })),
 }));
 
+const { peekProviderRuntimeStatuses } = await import('../services/providerRuntimeInstaller.js');
 const { createPortOSProviderRoutes } = await import('./providers.js');
 
 const CODEX = { id: 'codex', name: 'Codex CLI', type: 'cli', command: 'codex', envVars: {} };
@@ -59,6 +60,18 @@ describe('#4611: GET /api/providers publishes each provider\'s prerequisites', (
     expect(byId.openai.prerequisitesMet).toBe(true);
     expect(byId.openai.apiKey).toBeUndefined();
     expect(byId.openai.hasApiKey).toBe(true);
+  });
+
+  // The route never awaits the probe — a cold cache must publish NO runtime
+  // finding rather than an accusation, and the page's own /runtimes fetch fills
+  // that gap on the card.
+  it('publishes an empty finding list on a cold runtime cache', async () => {
+    peekProviderRuntimeStatuses.mockReturnValueOnce({});
+
+    const byId = providersById(await request(appWith([CODEX])).get('/api/providers'));
+
+    expect(byId.codex.prerequisitesMet).toBe(true);
+    expect(byId.codex.missingPrerequisites).toEqual([]);
   });
 
   it('still strips secrets and keeps the existing decorations', async () => {
