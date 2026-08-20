@@ -5,11 +5,11 @@ import {
   buildThreejsMaterialFeedback,
   evaluateThreejsFlatness,
   evaluateThreejsMaterialPlausibility,
-  resolveThreejsEnvironment,
   storedThreejsSculptSpecSchema,
   threejsGeometrySchema,
   threejsSculptSpecSchema,
 } from './threejsModel.js';
+import { resolveThreejsEnvironment } from './threejsModelEnvironment.js';
 
 const squareOutline = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
 const validExtrude = () => ({

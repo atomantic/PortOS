@@ -52,6 +52,7 @@ export * from './sharedSchemas.js';
 export * from './threejsModel.js';
 export * from './threejsModelAnimation.js';
 export * from './threejsModelCoverage.js';
+export * from './threejsModelEnvironment.js';
 export * from './threejsModelFamilies.js';
 export * from './threejsModelPenetration.js';
 export * from './threejsModelPhysicalAudit.js';

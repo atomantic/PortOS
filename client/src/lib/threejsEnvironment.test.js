@@ -33,7 +33,7 @@ import {
   DEFAULT_THREEJS_ENVIRONMENT as SERVER_DEFAULT,
   THREEJS_RENDER_PROFILE as SERVER_RENDER_PROFILE,
   resolveThreejsEnvironment,
-} from '../../../server/lib/threejsModel.js';
+} from '../../../server/lib/threejsModelEnvironment.js';
 import {
   THREEJS_ENVIRONMENT_PRESETS,
   DEFAULT_THREEJS_ENVIRONMENT,
