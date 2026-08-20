@@ -5,10 +5,11 @@ import { useOpenWorldPalette } from './OpenWorldPaletteContext';
 import { computeStreets, computeStreetProps } from '../../utils/openWorldPlan';
 
 // Street furniture from the master plan: lamp posts pooling light along every street and
-// holo-trees ringing the AI Core plaza. Everything is instanced — five draw calls cover
+// planting trees ringing the AI Core plaza. Everything is instanced — five draw calls cover
 // the whole town regardless of lamp count. Lamp light pools are faked with emissive heads
 // + additive ground discs (the city's established no-real-point-lights pattern).
-// Quality-gated: the low preset renders streets only (this component returns null).
+// Adaptive-quality gated: lamps and their light pools are detail-only, while the plaza grove
+// remains at every tier because it is part of the city's navigation and sense of place.
 
 const dummy = new THREE.Object3D();
 
@@ -18,7 +19,8 @@ const POLE_POS = [0, 1.7, 0];
 const HEAD_POS = [0, 3.45, 0];
 const POOL_POS = [0, 0.035, 0];
 const TRUNK_POS = [0, 0.55, 0];
-const CANOPY_POS = [0, 1.9, 0];
+const CANOPY_POS = [0, 1.55, 0];
+const CANOPY_TOP_POS = [0, 2.12, 0, 0.72];
 
 // One instanced mesh whose matrices are written once from `placements`. `flat` lays the
 // geometry into the ground plane (used by the light-pool discs).
@@ -26,10 +28,11 @@ function Instances({ placements, geometry, geometryArgs, position, flat = false,
   const ref = useRef();
   useLayoutEffect(() => {
     if (!ref.current) return;
+    const scaleMultiplier = position[3] ?? 1;
     placements.forEach((p, i) => {
       dummy.position.set(p.x + position[0], position[1], p.z + position[2]);
       dummy.rotation.set(flat ? -Math.PI / 2 : 0, !flat && p.seed != null ? (p.seed * 1.7) % (Math.PI * 2) : 0, 0);
-      dummy.scale.setScalar(p.scale ?? 1);
+      dummy.scale.setScalar((p.scale ?? 1) * scaleMultiplier);
       dummy.updateMatrix();
       ref.current.setMatrixAt(i, dummy.matrix);
     });
@@ -57,8 +60,10 @@ export default function OpenWorldStreetProps({ settings }) {
     return computeStreetProps(streets, density);
   }, [density]);
 
-  // Low preset: streets only, no furniture.
-  if (!openWorldShowDetail(settings) || (props.lamps.length === 0 && props.trees.length === 0)) return null;
+  // Keep the plaza grove even on the low tier: it is cheap, anchors the center of the map,
+  // and gives the bright world a sense of scale. Lamps and their additive pools remain detail-only.
+  const showLamps = openWorldShowDetail(settings);
+  if (!showLamps && props.trees.length === 0) return null;
 
   const lampGlow = mixHex(accent, '#ffe2a6', 0.58);
   const headOpacity = 0.95 * (1 - dayMix) + 0.4 * dayMix; // lamps rest by day
@@ -70,35 +75,47 @@ export default function OpenWorldStreetProps({ settings }) {
 
   return (
     <group>
-      {/* Lamp poles */}
-      <Instances placements={props.lamps} geometry="cylinder" geometryArgs={[0.05, 0.08, 3.4, 6]} position={POLE_POS}>
-        <meshStandardMaterial {...surface} color={structureColor} roughness={0.7} metalness={lowPoly ? 0 : 0.45} />
-      </Instances>
-      {/* Lamp heads — emissive spheres standing in for point lights */}
-      <Instances placements={props.lamps} geometry="sphere" geometryArgs={[0.16, 10, 10]} position={HEAD_POS}>
-        <meshBasicMaterial color={lampGlow} transparent opacity={headOpacity} toneMapped={false} />
-      </Instances>
-      {/* Faked light pools on the pavement */}
-      {poolOpacity > 0.005 && (
-        <Instances placements={props.lamps} geometry="circle" geometryArgs={[1.7, 16]} position={POOL_POS} flat>
-          <meshBasicMaterial
-            color={lampGlow}
-            transparent
-            opacity={poolOpacity}
-            blending={THREE.AdditiveBlending}
-            depthWrite={false}
-          />
-        </Instances>
+      {showLamps && (
+        <>
+          {/* Lamp poles */}
+          <Instances placements={props.lamps} geometry="cylinder" geometryArgs={[0.05, 0.08, 3.4, 6]} position={POLE_POS}>
+            <meshStandardMaterial {...surface} color={structureColor} roughness={0.7} metalness={lowPoly ? 0 : 0.45} />
+          </Instances>
+          {/* Lamp heads — emissive spheres standing in for point lights */}
+          <Instances placements={props.lamps} geometry="sphere" geometryArgs={[0.16, 10, 10]} position={HEAD_POS}>
+            <meshBasicMaterial color={lampGlow} transparent opacity={headOpacity} toneMapped={false} />
+          </Instances>
+          {/* Faked light pools on the pavement */}
+          {poolOpacity > 0.005 && (
+            <Instances placements={props.lamps} geometry="circle" geometryArgs={[1.7, 16]} position={POOL_POS} flat>
+              <meshBasicMaterial
+                color={lampGlow}
+                transparent
+                opacity={poolOpacity}
+                blending={THREE.AdditiveBlending}
+                depthWrite={false}
+              />
+            </Instances>
+          )}
+        </>
       )}
-      {/* Holo-tree trunks around the plaza */}
+      {/* Tree trunks around the plaza */}
       <Instances placements={props.trees} geometry="cylinder" geometryArgs={[0.07, 0.1, 1.1, 5]} position={TRUNK_POS}>
         <meshStandardMaterial {...surface} color={structureColor} roughness={0.8} />
       </Instances>
-      {/* Vibes uses solid faceted foliage; cyber keeps the established wireframe holo-trees. */}
-      <Instances placements={props.trees} geometry="icosahedron" geometryArgs={[0.8, 1]} position={CANOPY_POS}>
-        {lowPoly ? (
-          <meshStandardMaterial {...surface} color={foliageColor} roughness={0.98} transparent opacity={0.94} />
-        ) : (
+      {/* Vibes uses two broad faceted leaf layers so the grove reads as trees rather than
+          floating gems; Cyber keeps the established wireframe treatment. */}
+      {lowPoly ? (
+        <>
+          <Instances placements={props.trees} geometry="sphere" geometryArgs={[0.9, 8, 5]} position={CANOPY_POS}>
+            <meshStandardMaterial {...surface} color={foliageColor} roughness={0.98} />
+          </Instances>
+          <Instances placements={props.trees} geometry="sphere" geometryArgs={[0.68, 8, 5]} position={CANOPY_TOP_POS}>
+            <meshStandardMaterial {...surface} color={mixHex(foliageColor, '#d5e7a4', 0.28)} roughness={0.98} />
+          </Instances>
+        </>
+      ) : (
+        <Instances placements={props.trees} geometry="icosahedron" geometryArgs={[0.8, 1]} position={CANOPY_POS}>
           <meshBasicMaterial
             color={mixHex(accent, '#22c55e', 0.45)}
             wireframe
@@ -106,8 +123,8 @@ export default function OpenWorldStreetProps({ settings }) {
             opacity={0.5 * (1 - dayMix) + 0.3 * dayMix}
             toneMapped={false}
           />
-        )}
-      </Instances>
+        </Instances>
+      )}
     </group>
   );
 }

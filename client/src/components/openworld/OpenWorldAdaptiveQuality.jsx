@@ -10,7 +10,7 @@ import {
 
 // In-Canvas driver for Auto quality mode (issue #2592). It samples per-frame delta
 // times via useFrame, feeds them to the pure render-budget state machine, and lifts
-// tier changes + (throttled) diagnostics back up to OpenWorld through callbacks.
+// tier changes back up to OpenWorld through a callback.
 // It renders nothing. All impurity (timers, refs, frame loop) lives here so the
 // state machine stays pure and unit-tested.
 //
@@ -18,16 +18,12 @@ import {
 // - `startTier`: the tier to (re)start the budget at when Auto engages.
 // - `resumeToken`: bumped by OpenWorldScene when the frameloop resumes after the tab was
 //   hidden — re-arms the warm-up so post-resume jank doesn't drive a bogus decision.
-// - `diagnosticsEnabled`: only push diagnostics upward while the settings panel is
-//   open, so the 0.5Hz readout doesn't re-render the scene when nobody's watching.
 export default function OpenWorldAdaptiveQuality({
   enabled,
   startTier = 'high',
   resumeToken = 0,
   resetToken = 0,
-  diagnosticsEnabled = false,
   onTierChange,
-  onDiagnostics,
 }) {
   const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : 0);
   const stateRef = useRef(null);
@@ -65,11 +61,6 @@ export default function OpenWorldAdaptiveQuality({
     stateRef.current = recordFrame(stateRef.current, { now, dt: delta * 1000 });
     const nextTier = getEffectiveTier(stateRef.current);
     if (nextTier !== prevTier) onTierChange?.(nextTier);
-    // Diagnostics refresh only when a window closes (~0.5Hz) and only if someone's
-    // watching — keeps the hot loop from re-rendering the page.
-    if (diagnosticsEnabled && stateRef.current.windowClosed) {
-      onDiagnostics?.(stateRef.current.diagnostics);
-    }
   });
 
   return null;

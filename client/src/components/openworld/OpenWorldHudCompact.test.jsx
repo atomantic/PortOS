@@ -88,6 +88,13 @@ describe('OpenWorldHudCompact', () => {
     expect(onOpenFastTravel).toHaveBeenCalledTimes(1);
   });
 
+  it('explains the nearby warp-pad action', () => {
+    renderCompact('', { explorationMode: true, proximityTarget: { type: 'warpPad', id: 'memory', label: 'Memory Quarter' } });
+    expect(screen.getByTestId('openworld-interaction-prompt')).toHaveTextContent('WARP GATE');
+    expect(screen.getByTestId('openworld-interaction-prompt')).toHaveTextContent('Memory Quarter');
+    expect(screen.getByTestId('openworld-interaction-prompt')).toHaveTextContent('ACTION');
+  });
+
   it('restores the open pane from the URL on load', () => {
     renderCompact('?openWorldPane=vitals');
     expect(screen.getByText('SYSTEM VITALS')).toBeInTheDocument();

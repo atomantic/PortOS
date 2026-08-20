@@ -66,7 +66,6 @@ export * from './openWorldPlayerRig.js';
 export * from './openWorldRenderBudget.js';
 export * from './openWorldRooftops.js';
 export * from './openWorldProductivity.js';
-export * from './openWorldSeasonalDecor.js';
 export * from './openWorldSoundscape.js';
 export * from './openWorldTaskFlowRiver.js';
 export * from './openWorldTaskQueue.js';

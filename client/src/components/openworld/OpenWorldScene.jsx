@@ -24,7 +24,6 @@ import OpenWorldActivityHeatmap from './OpenWorldActivityHeatmap';
 import OpenWorldTaskFlowRiver from './OpenWorldTaskFlowRiver';
 import OpenWorldGoalMonuments from './OpenWorldGoalMonuments';
 import OpenWorldArtifacts from './OpenWorldArtifacts';
-import OpenWorldSeasonalDecor from './OpenWorldSeasonalDecor';
 import OpenWorldEasterEggs from './OpenWorldEasterEggs';
 import OpenWorldVoiceMarker from './OpenWorldVoiceMarker';
 import OpenWorldMemoryDistrict from './OpenWorldMemoryDistrict';
@@ -38,6 +37,7 @@ import OpenWorldSignalBeacons from './OpenWorldSignalBeacons';
 import OpenWorldSky from './OpenWorldSky';
 import OpenWorldGalaxySky from './OpenWorldGalaxySky';
 import OpenWorldLandscape from './OpenWorldLandscape';
+import OpenWorldNature from './OpenWorldNature';
 import OpenWorldWater from './OpenWorldWater';
 import OpenWorldStreets from './OpenWorldStreets';
 import OpenWorldStreetProps from './OpenWorldStreetProps';
@@ -59,9 +59,10 @@ import { useVisibilityEvent } from '../../hooks/useVisibilityEvent';
 
 const STARTUP_PARTICLE_DENSITY = 0.49;
 
-export default function OpenWorldScene({ apps, agentMap, onBuildingClick, onToggleCameraView, cosStatus, reviewCounts, instances, backupStatus, cosTasks, healthMetrics, voiceState, aiActivity, productivityData, activityCalendar, goals, character, chronotype, memoryGraph, inboxDepth, jiraTickets, introspection, playback = false, photoMode, photoPresetId, photoDof, onPhotoCaptureReady, settings, playSfx, keysRef, mobileInputRef, playerActionRef, dimmedAppIds, focusedAppId, focusedRegion, playerTeleport, hudSafe, background, palette, onTravelToRegion, autoQuality = false, autoStartTier = 'high', autoResetToken = 0, diagnosticsEnabled = false, onAutoTierChange, onAutoDiagnostics }) {
+export default function OpenWorldScene({ apps, agentMap, onBuildingClick, onToggleCameraView, cosStatus, reviewCounts, instances, backupStatus, cosTasks, healthMetrics, voiceState, aiActivity, productivityData, activityCalendar, goals, character, chronotype, memoryGraph, inboxDepth, jiraTickets, introspection, playback = false, photoMode, photoPresetId, photoDof, onPhotoCaptureReady, settings, playSfx, keysRef, mobileInputRef, playerActionRef, dimmedAppIds, focusedAppId, focusedRegion, playerTeleport, hudSafe, background, palette, onTravelToRegion, onProximityChange, autoQuality = false, autoStartTier = 'high', autoResetToken = 0, onAutoTierChange }) {
   const [positions, setPositions] = useState(null);
   const [proximityApp, setProximityApp] = useState(null);
+  const [proximityWarpPad, setProximityWarpPad] = useState(null);
   const [transitioning, setTransitioning] = useState(false);
   const [webglLost, setWebglLost] = useState(false);
   const [canvasRevision, setCanvasRevision] = useState(0);
@@ -125,7 +126,6 @@ export default function OpenWorldScene({ apps, agentMap, onBuildingClick, onTogg
     return {
       ...settings,
       effectiveTier: 'low',
-      reflectionsEnabled: false,
       particleDensity: Math.min(settings?.particleDensity ?? 1, contextRecoveryMode ? 0.25 : STARTUP_PARTICLE_DENSITY),
       dpr: [1, 1],
     };
@@ -175,6 +175,28 @@ export default function OpenWorldScene({ apps, agentMap, onBuildingClick, onTogg
   const handleBuildingProximity = useCallback((app) => {
     setProximityApp(app);
   }, []);
+
+  const handleWarpPadProximity = useCallback((region) => {
+    setProximityWarpPad(region);
+  }, []);
+
+  useEffect(() => {
+    if (explorationMode) return;
+    setProximityApp(null);
+    setProximityWarpPad(null);
+  }, [explorationMode]);
+
+  useEffect(() => {
+    if (!explorationMode) {
+      onProximityChange?.(null);
+      return;
+    }
+    if (proximityWarpPad) {
+      onProximityChange?.({ type: 'warpPad', id: proximityWarpPad.id, label: proximityWarpPad.label });
+      return;
+    }
+    onProximityChange?.(proximityApp ? { type: 'building', id: proximityApp.id, label: proximityApp.name } : null);
+  }, [explorationMode, onProximityChange, proximityApp, proximityWarpPad]);
 
   const handleTransitionComplete = useCallback(() => {
     setTransitioning(false);
@@ -297,6 +319,7 @@ export default function OpenWorldScene({ apps, agentMap, onBuildingClick, onTogg
           would recompile every lit material 1.2s into each load. */}
       <OpenWorldLights settings={renderSettings} lightingTier={settings?.effectiveTier} />
       <OpenWorldLandscape settings={renderSettings} />
+      <OpenWorldNature settings={renderSettings} />
       <OpenWorldWater settings={renderSettings} />
       <OpenWorldEnergyOverlay chronotype={chronotype} settings={renderSettings} />
       {neonLayers && <OpenWorldStarfield settings={renderSettings} />}
@@ -312,7 +335,6 @@ export default function OpenWorldScene({ apps, agentMap, onBuildingClick, onTogg
       <OpenWorldTaskFlowRiver cosTasks={cosTasks} productivityData={productivityData} calendarData={activityCalendar} settings={renderSettings} />
       <OpenWorldGoalMonuments goals={goals} settings={renderSettings} />
       <OpenWorldArtifacts character={character} goals={goals} productivityData={productivityData} settings={renderSettings} />
-      <OpenWorldSeasonalDecor settings={renderSettings} />
       <OpenWorldEasterEggs character={character} goals={goals} productivityData={productivityData} settings={renderSettings} />
       <OpenWorldVoiceMarker voiceState={voiceState} settings={renderSettings} />
       <OpenWorldMemoryDistrict memoryGraph={memoryGraph} inboxDepth={inboxDepth} settings={renderSettings} />
@@ -365,6 +387,7 @@ export default function OpenWorldScene({ apps, agentMap, onBuildingClick, onTogg
           keysRef={keysRef}
           positions={positions}
           onBuildingProximity={handleBuildingProximity}
+          onWarpPadProximity={handleWarpPadProximity}
           onBuildingClick={onBuildingClick}
           onToggleCameraView={onToggleCameraView}
           apps={apps}
@@ -410,9 +433,7 @@ export default function OpenWorldScene({ apps, agentMap, onBuildingClick, onTogg
           startTier={autoStartTier}
           resumeToken={budgetRearmToken}
           resetToken={autoResetToken}
-          diagnosticsEnabled={diagnosticsEnabled}
           onTierChange={onAutoTierChange}
-          onDiagnostics={onAutoDiagnostics}
         />
       )}
       <CameraTransition

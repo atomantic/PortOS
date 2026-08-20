@@ -268,8 +268,8 @@ export const openWorldDayMix = (settings) => {
 };
 
 // Explicit tier rank for the detail gates below. `settings.effectiveTier` is the
-// runtime tier (Auto mode's adaptive tier, or the Manual preset) — a first-class
-// signal that replaces the old `particleDensity`-as-quality-proxy (issue #2592).
+// runtime tier selected by the adaptive render budget — a first-class signal that
+// replaces the old `particleDensity`-as-quality-proxy (issue #2592).
 // When it's absent (older payloads, tests, or code that never set it) we fall back
 // to the legacy particleDensity thresholds so behavior is unchanged.
 const DETAIL_TIER_RANK = { low: 0, medium: 1, high: 2, ultra: 3 };
@@ -293,8 +293,8 @@ export const openWorldShowInteriorWindows = (settings) => (
 );
 
 // Drei <Text> props for an informational in-world label that stays legible in both
-// the night-neon scene AND the bright daytime scene. At night (dayMix→0) the label
-// keeps its neon fill with no outline, so the established look is untouched. As day
+// the night-neon scene AND the bright daytime scene. At night (dayMix→0) the label keeps
+// its neon fill with a hairline dark keyline so it survives the bright grid and props. As day
 // ramps up (dayMix→1) the fill lerps toward a dark ink — readable against the bright
 // sky and sunlit mid-tone facades where a glowing neon fill just washes out — and a
 // light outline halo fades in to lift the glyphs off whatever's behind them. The ink
@@ -307,11 +307,11 @@ export const openWorldLabelColors = (neonColor, dayMix = 0) => {
   const darkInk = mixHex('#0d1422', neonColor, 0.22);
   return {
     color: mixHex(neonColor, darkInk, d),
-    outlineColor: '#eef4ff',
-    // Percentage strings are relative to fontSize, so the halo scales with each label.
-    // At night d=0 → "0.00%", which drei treats as a zero-width (i.e. no) outline.
-    outlineWidth: `${(d * 9).toFixed(2)}%`,
-    outlineOpacity: d * 0.85,
+    outlineColor: d > 0 ? '#eef4ff' : '#020817',
+    // Percentage strings are relative to fontSize, so the keyline scales with each label.
+    // The tiny night keyline is intentionally subdued; daylight gets the stronger halo.
+    outlineWidth: `${(0.9 + d * 10.1).toFixed(2)}%`,
+    outlineOpacity: 0.45 + d * 0.37,
   };
 };
 
@@ -430,9 +430,6 @@ export const seededRand = (seed) => {
 //                stars, data rain, embers, volumetric light cones, neon signage) mount at
 //                all. Over a sunlit low-poly landscape they read as haze and grain, so they
 //                are gated out rather than faded per-frame.
-// - themeCrt     whether the CRT overlay is opted in per theme family (deriveCrtProfile) or
-//                simply off — a scanline multiply over a sunlit landscape reads as a dirty
-//                screen, whatever the theme.
 // - accents      the decorative spread for windows/props. The lead slot is always replaced
 //                by the live theme accent, so the world follows the UI in either style.
 // - buildingBody the structural body color, re-tinted toward the theme accent.
@@ -447,7 +444,6 @@ export const WORLD_STYLE_DEFS = {
     presets: { day: 'vibesDay', night: 'vibesDusk' },
     lowPoly: true,
     neonLayers: false,
-    themeCrt: false,
     // Warm sand / coral / teal / sage / amber instead of the cyberpunk neon set, so the
     // bright low-poly world doesn't wear night-club colors.
     accents: ['#63f2db', '#f07f6d', '#d7b98c', '#9873b9', '#f3b562', '#57c9c0', '#8c7169', '#dde4df'],
@@ -462,7 +458,6 @@ export const WORLD_STYLE_DEFS = {
     presets: { day: 'noon', night: 'sunset' },
     lowPoly: false,
     neonLayers: true,
-    themeCrt: true,
     accents: CITY_COLORS.neonAccents,
     buildingBody: ORIGINAL_BUILDING_BODY,
     terrain: { inner: '#686d68', meadow: '#6f8758', ridge: '#8d937f' },
@@ -484,28 +479,21 @@ export const getWorldStyle = (style) => WORLD_STYLE_DEFS[resolveWorldStyle(style
 // OpenWorld renders just two times of day — day and night — and follows the active
 // theme's mode by default ('auto'). The user can still force 'day'/'night'. Legacy
 // stored values (sunrise/noon/sunset/midnight) are treated as 'auto' so existing
-// installs pick up theme coupling without a migration. Returns the daytime flag plus
-// the concrete preset key the sky/lights/ground consume, taken from the world style's
-// own pair — so picking 'cyber' restores the established noon/moonlit-night look exactly.
+// installs pick up theme coupling without a migration. Open World uses its selected
+// preset pair; Cyber City is intentionally locked to its moonlit-night preset because
+// its neon materials are authored for darkness.
 export const resolveOpenWorldTimeOfDay = (setting, themeIsDay, worldStyle) => {
+  const style = getWorldStyle(worldStyle);
+  // Cyber City is an explicitly nocturnal art direction. Keeping that invariant here means
+  // a theme switch, an old stored time-of-day value, and the settings drawer can never put
+  // its neon materials under a daylight preset.
+  if (style.id === 'cyber') return { daytime: false, presetKey: style.presets.night };
+
   const daytime = setting === 'day' ? true
     : setting === 'night' ? false
     : !!themeIsDay;
-  const { presets } = getWorldStyle(worldStyle);
-  return { daytime, presetKey: daytime ? presets.day : presets.night };
+  return { daytime, presetKey: daytime ? style.presets.day : style.presets.night };
 };
-
-// The CRT overlay (scanlines / neon edge-glow / vignette in OpenWorldScanlines) is a
-// cyber-terminal affectation, not a universal effect — so each piece is opted in
-// per theme family. Scanlines are the most style-specific (terminal only); the
-// neon edge glow suits the cyber-leaning families (terminal + the classic
-// cyberpunk default); the cinematic vignette applies everywhere except the clean
-// "glass" family. Glow color itself is themed via the live --port-accent var.
-const deriveCrtProfile = (family) => ({
-  scanlines: family === 'terminal',
-  glow: family === 'terminal' || family === 'classic',
-  vignette: family !== 'glass',
-});
 
 // Derive the OpenWorld palette from a PortOS theme object (a THEMES entry) and the
 // active world style. Pure. The style swaps the decorative/structural brand surfaces
@@ -564,9 +552,6 @@ export const deriveOpenWorldPalette = (theme, worldStyle) => {
     dayBackground,
     // Default surround by theme mode — used for the loading screen before settings resolve.
     background: isDay ? dayBackground : nightBackground,
-    crt: style.themeCrt
-      ? deriveCrtProfile(theme?.family)
-      : { scanlines: false, glow: false, vignette: false },
     // Brand surfaces the 3D scene reads via useOpenWorldPalette() instead of the old
     // mutated singleton. `ground`/`particles` are the accent; `building`/`buildingBody`/
     // `neonAccents` carry the themed maps.

@@ -1110,6 +1110,41 @@ html[data-port-theme] .openworld-themed [class~="hover:bg-cyan-500/5"]:hover { b
   --ow-accent: rgb(var(--port-accent));
   --ow-line: rgb(var(--port-accent) / 0.28);
   --ow-soft: rgb(var(--port-accent) / 0.1);
+  --ow-ui-font: var(--port-font-ui);
+  --ow-micro-font: var(--port-font-mono);
+  font-family: var(--ow-ui-font);
+}
+
+/* The pixel face is useful for a title or a deliberately diegetic sign, but it made
+   OpenWorld's live controls and status copy hard to scan. Keep the game UI in the same
+   readable face as the reference's control panel; reserve the mono face for small labels. */
+.openworld-themed .font-pixel,
+.openworld-themed .font-pixel-grid {
+  font-family: var(--ow-ui-font);
+  letter-spacing: 0.01em;
+}
+
+.openworld-themed .openworld-hud-eyebrow,
+.openworld-themed .openworld-hud-action-hint,
+.openworld-themed .openworld-mobile-look-hint {
+  font-family: var(--ow-micro-font);
+}
+
+/* Existing HUD components use compact utility sizes. Nudge only the smallest game-facing
+   copy upward so it remains legible without changing the global typography scale. */
+.openworld-hud-shell [class~="text-[8px]"],
+.openworld-settings-portal [class~="text-[8px]"] {
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+
+.openworld-settings-portal [class~="text-[9px]"] {
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.openworld-settings-portal .font-mono {
+  letter-spacing: 0.08em;
 }
 
 .openworld-hud-shell {
@@ -1258,6 +1293,68 @@ html[data-port-theme] .openworld-themed [class~="hover:bg-cyan-500/5"]:hover { b
   border-right: 1px solid rgb(var(--port-accent) / 0.72);
   border-bottom: 0;
   border-left: 1px solid rgb(var(--port-accent) / 0.72);
+}
+
+.openworld-interaction-prompt {
+  position: absolute;
+  left: 50%;
+  bottom: 5.6rem;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.48rem 0.7rem;
+  border: 1px solid rgb(var(--port-accent) / 0.34);
+  border-radius: 12px;
+  background: var(--ow-panel-soft);
+  box-shadow: 0 12px 28px rgb(0 0 0 / 0.18), inset 0 1px 0 rgb(255 255 255 / 0.07);
+  backdrop-filter: blur(16px) saturate(1.08);
+  color: var(--ow-ink);
+  font-family: var(--font-pixel, monospace);
+  font-size: 0.56rem;
+  letter-spacing: 0.08em;
+  pointer-events: none;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+.openworld-interaction-prompt__label {
+  max-width: min(18rem, 36vw);
+  overflow: hidden;
+  color: var(--ow-ink);
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+}
+
+.openworld-interaction-prompt__action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--ow-accent);
+}
+
+.openworld-interaction-prompt kbd {
+  min-width: 1.35rem;
+  padding: 0.2rem 0.28rem;
+  border: 1px solid rgb(var(--port-accent) / 0.4);
+  border-radius: 5px;
+  background: rgb(var(--port-accent) / 0.12);
+  color: var(--ow-ink);
+  font: inherit;
+  font-size: 0.5rem;
+  text-align: center;
+}
+
+.openworld-interaction-prompt--compact {
+  bottom: calc(13.35rem + env(safe-area-inset-bottom));
+  max-width: calc(100vw - 2rem);
+  gap: 0.45rem;
+  padding: 0.42rem 0.58rem;
+  font-size: 0.5rem;
+}
+
+.openworld-interaction-prompt--compact .openworld-interaction-prompt__label {
+  max-width: 34vw;
 }
 
 .openworld-intel-surface {

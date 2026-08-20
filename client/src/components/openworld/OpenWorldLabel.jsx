@@ -14,10 +14,15 @@ import { openWorldLabelColors } from './openWorldConstants';
 // dim in daylight like the real thing.
 const OpenWorldLabel = forwardRef(function OpenWorldLabel({ color, dayMix = 0, outlineColor, ...props }, ref) {
   const themed = openWorldLabelColors(color, dayMix);
+  // Small tracking and a consistent line box keep stacked labels from collapsing into
+  // the pixel glyphs. A slight depth bias prevents facades and signs from eating the ink.
   return (
     <Text
       ref={ref}
       {...props}
+      letterSpacing={props.letterSpacing ?? 0.01}
+      lineHeight={props.lineHeight ?? 1.1}
+      depthOffset={props.depthOffset ?? -1}
       color={themed.color}
       outlineColor={outlineColor ?? themed.outlineColor}
       outlineWidth={themed.outlineWidth}

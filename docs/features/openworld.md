@@ -4,8 +4,7 @@
 > **OpenWorld** at `/openworld`; the whole `/city` prefix (including `/city/settings`
 > and `/city/apps/:appId`) redirects, so old bookmarks, pinned sidebar rows, stored ⌘K
 > history, and peers' deep links keep working. The nav-command **ids** are deliberately
-> unchanged (`nav.cybercity`) — they're opaque and persisted in palette history — and the
-> module/file prefix is still `city*` pending a separate mechanical sweep (#4571).
+> unchanged (`nav.cybercity`) — they're opaque and persisted in palette history.
 
 ## Intent
 
@@ -19,10 +18,10 @@ It does three jobs:
    where is review pressure piling up, what needs your attention right now.
 2. **Provide a fast spatial front-end to PortOS** — search any app, jump into
    any detail page, take action on any building.
-3. **Be a memorable, distinctive aesthetic layer** — a cyberpunk city you
-   actually enjoy spending time in, with personality that grows over use.
+3. **Be a memorable, distinctive aesthetic layer** — a bright low-poly OpenWorld
+   or a neon-night Cyber City that feels good to spend time in.
 
-## Current State (as of 2026-04-29)
+## Current State (as of 2026-08-19)
 
 Strong rendering shell already exists: 3D scene with apps as buildings (PM2-driven),
 boroughs, archive district, weather, traffic, particles, neon signs, billboards,
@@ -33,25 +32,22 @@ Tech: React Three Fiber + Three.js (no postprocessing _library_ — bloom is cus
 emissive/additive materials, not a composer pass). The one composited effect is
 photo mode's depth-of-field, which mounts an `EffectComposer` + `BokehPass` from
 three's bundled addons (no extra npm dependency) only while photo mode is active —
-see `CityDepthOfField.jsx`.
+see `OpenWorldDepthOfField.jsx`.
 
-What it lacks:
+Current gaps:
 
-- **Per-building real-time signal** — buildings show only binary online/stopped;
-  CPU/memory/error rate are invisible.
-- **Findability** — no search, no filter, scrolling through ~50 buildings is
-  the only way to locate one.
-- **Drill-down / actionability** — buildings click straight to `/apps/{id}`;
-  HUD stats are not interactive; no hover preview, no quick actions.
-- **Holistic coverage** — AI runs, CoS task queue depth, federation peers,
-  backups, voice agent state, notifications all invisible.
-- **Mobile** — desktop-only despite project mandate; no touch controls.
-- **Mutation surface** — the city is read-only today, but it is the natural
-  place to restart a stopped app or kick off a deploy without leaving the view.
+- **Per-building real-time signal** — the world maps app status and process presence,
+  but CPU/memory/error-rate telemetry is not yet shown on each building.
+- **Mutation surface** — the city remains read-only; explicit restart, deploy, and log
+  actions still belong to the canonical app surfaces.
+- **Geometry breadth** — the shared app-building grammar still carries much of the live
+  city; district-specific assets can continue replacing generic filler as the world grows.
+- **High-frequency update budget** — noisy socket bursts should eventually be coalesced
+  before they trigger scene-wide reconciliation.
 
 ## Design Rules
 
-CyberCity is an **interactive systems map**.
+OpenWorld is an **interactive systems map**.
 
 Allowed:
 
@@ -131,20 +127,20 @@ what's healthy, what's not, find a specific app, and take action.
 | ID | Item | Effort |
 |----|------|--------|
 | **1.1** | **Per-building health glyph** — vertical CPU/MEM/ERR strip on every building façade, cyan→amber→red mapped from `/api/system/health/details` + PM2 metrics. The single highest-leverage change: every building tells you what it's doing right now. | M |
-| **1.2** | **Stress smoke / sparks** — reuse `CityEmbers` per-building. Persistent CPU spike = smoke trail; recent crash = sparks. Brings global weather vocabulary down to the per-building level. | S |
+| **1.2** | **Stress smoke / sparks** — reuse `OpenWorldEmbers` per-building. Persistent CPU spike = smoke trail; recent crash = sparks. Brings global weather vocabulary down to the per-building level. | S |
 | **1.3** | **Health card replaces cryptic weather glyph** — HUD shows plain `CPU 34% / MEM 71% / DISK 88%` with a sentinel dot. Atmospheric weather effect stays. | XS |
 | **1.4** | **System Health as City Atmosphere** — pipe `/api/system/health/details` into existing weather/fog/ground texture so the sky reflects real state. | S |
-| **1.5** | **Notification beacons** — extend `CitySignalBeacons` with notification backlog from `/api/notifications/counts`; brightness = unread count, color = type, click = navigate. | S |
+| **1.5** | **Notification beacons** — extend `OpenWorldSignalBeacons` with notification backlog from `/api/notifications/counts`; brightness = unread count, color = type, click = navigate. | S |
 | **1.6** | **Brain inbox pulse** — central spire glow tracks `/api/brain/inbox` depth; new captures pulse the spire. | S |
 | **1.7** | **"Needs attention" pane** — replace the right-side `cos:log` stream with a structured list ranked by urgency: stopped/errored apps, high CPU/mem, pending reviews, stale backups, failed agent runs, federation sync failures, unread notifications. Every item clickable. Live log demoted to a tab. | S |
-| **1.8** | **Building search overlay** — press `/` to filter buildings by name/tag/status; non-matches dim, matches stay lit, Enter focuses camera. Local substring match against name/id/tags in `client/src/utils/cityFilter.js`. | S |
+| **1.8** | **Building search overlay** — press `/` to filter buildings by name/tag/status; non-matches dim, matches stay lit, Enter focuses camera. Local substring match against name/id/tags in `client/src/utils/openWorldFilter.js`. | S |
 | **1.9** | **Status filter chips in HUD** — All / Online / Stopped / Errored / Has-Agent / Has-Pending-Review pill row above legend. Persists per-session. | S |
 | **1.10** | **Hover preview card with quick actions** — show status / uptime / CPU / MEM / err / recent log line, with **Logs / Restart / Deploy / Open** buttons. Restart and Deploy POST to existing endpoints with explicit confirmation. | M |
 | **1.11** | **Clickable HUD stats** — every count routes somewhere: PENDING REVIEWS → `/review`, AGENTS → `/cos`, NODES → `/instances`, etc. | XS |
 | **1.12** | **Richer billboards** — rotate today's briefing headline, productivity streak, top actionable insight, recent agent completion summary, goal progress. | S |
 | **1.13** | **Agent → building tether** — visible light from `AgentEntity` to its assigned building; color = agent state. Plus window-pulse animation on the building. | M |
 | **1.14** | **Mobile / touch support** — `pointer: coarse` detection, single-finger orbit, two-finger pinch zoom, tap-to-select. Below 640px collapse HUD into a bottom sheet with search + filters + needs-attention. WASD exploration disables. CLAUDE.md mandate. | M |
-| **1.15** | **Quality auto-detection** — default low/medium for mobile or weak hardware; settings panel still allows override. | XS |
+| **1.15** | **Adaptive render budget** — the scene selects an internal detail tier from sustained frame time; player settings do not expose renderer knobs. | XS |
 
 ### Phase 2 — Holistic Coverage
 
@@ -174,7 +170,7 @@ Goal: the city feels alive, distinctive, and earned.
 | **3.2** | **Memory / knowledge district** — categories as crystal clusters, graph edges as light bridges, brain inbox as a glowing well. Driven by `/api/memory/graph`. | L |
 | **3.3** | **Photo mode / cinematic camera** — pause animations, cinematic presets, depth-of-field, vignette, high-res screenshots, "city postcard" with stats overlay. | M |
 | **3.4** | **Ambient soundscape tied to data** — base key/tempo follows system health; agent activity adds rhythmic voices; completed tasks chime. Extends existing synth music. | L |
-| **3.5** | **Earned artifacts & achievements** — milestone statues, streak trophies, seasonal decorations, easter eggs. | M |
+| **3.5** | **Earned artifacts & achievements** — milestone statues, streak trophies, easter eggs. | M |
 | **3.6** | **Historical timeline scrubber** — scrub back to past city states; buildings appear/disappear via construction animations. Requires snapshot data. | L |
 | **3.7** | **JIRA sprint district** — current sprint tickets as crates / under-construction / completed structures. | M |
 | **3.8** | **Throttle expensive socket-driven repaints** — coalesce noisy event bursts into a 100ms tick. Becomes load-bearing once Phase 2's beams/vehicles ship. | S |
@@ -184,8 +180,9 @@ Goal: the city feels alive, distinctive, and earned.
 - Default to lower quality on `pointer: coarse` and `hardwareConcurrency < 8`
 - Coalesce socket events into a render tick to avoid bursty repaints
 - Lazy-load heavy effects (volumetric lights, postprocessing, particle storms)
-  on the basis of the active quality preset
-- All new components must respect the existing settings panel quality dial
+  on the basis of the internally selected render tier
+- Keep player-facing settings focused on world style, time, sound, and controls;
+  renderer detail adapts without a quality dial
 
 ## Fast travel (regions)
 
@@ -195,7 +192,7 @@ visualizes — Memory Quarter → `/brain/inbox`, Sprint Yard → `/devtools/jir
 → `/data`, and so on.
 
 - **Registry:** `client/src/utils/openWorldRegions.js`. Geography is *not* re-declared —
-  each region names a parcel in `cityPlan.js` and reads its anchor/footprint from there, so
+  each region names a parcel in `openWorldPlan.js` and reads its anchor/footprint from there, so
   moving a district on the plan moves its warp marker with it.
 - **Route:** `/openworld/region/:regionId`. The URL is the single source of truth for
   "where you warped to" — same contract as building focus — so a warp is shareable,
@@ -216,16 +213,17 @@ settings and switchable from the Visual tab of the settings drawer.
 | Style | Look | Time-of-day presets |
 |-------|------|---------------------|
 | `vibes` (default) | Bright low-poly open world — teal-to-warm sky, meadow ground, flat-shaded facades, warm sun | `vibesDay` / `vibesDusk` |
-| `cyber` | The original neon-night CyberCity | `noon` / `sunset` |
+| `cyber` | The original neon-night Cyber City | `sunset` only |
 
-The style is a single lever with three effects, all in `cityConstants.js`:
+The style is a single lever with three effects, all in `openWorldConstants.js`:
 
-1. `resolveCityTimeOfDay` picks the preset pair, which feeds `CitySky`, `CityLights`, and
-   `CityGround` — and, through `daylightFactor` → `cityDayMix`, every surface that already
+1. `resolveOpenWorldTimeOfDay` picks the preset pair. Open World follows the selected
+   day/night setting; Cyber City is always nocturnal. The result feeds `OpenWorldSky`,
+   `OpenWorldLights`, and `WorldGround` — and, through `daylightFactor`, every surface that already
    lerps between its night and day form.
-2. `deriveCityPalette` swaps the *decorative and structural* surfaces (accent spread,
-   building body, both surrounds, the CRT profile). Status colors stay semantic in both.
-3. `isCyberStyle` gates the neon-only scene layers — galaxy spheremap, starfield, shooting
+2. `deriveOpenWorldPalette` swaps the *decorative and structural* surfaces (accent spread,
+   building body, and surrounds). Status colors stay semantic in both.
+3. `palette.neonLayers` gates the neon-only scene layers — galaxy spheremap, starfield, shooting
    stars, data rain, embers, volumetric light cones, neon signage — so they don't mount at
    all under `vibes` rather than being faded out per frame. `palette.lowPoly` turns on flat
    shading for facades and terrain.
@@ -233,27 +231,27 @@ The style is a single lever with three effects, all in `cityConstants.js`:
 Keeping `cyber` as a real option isn't only nostalgia: it keeps the whole neon layer
 exercised by the suite instead of bit-rotting behind a default nobody selects.
 
-What the style change does NOT do is replace the world's *geometry* — buildings are still
-the cyber-era extruded slabs, and only three meshes so far spread the palette's `surface`.
-The low-poly asset pass is #4572; diegetic in-world warp pads are #4573; a touch-sized
-fast-travel map for phones is #4574.
+The style change keeps the operational geometry and live data mappings stable while changing
+their material language. The Vibes pass now adds grounded nature patches, a varied plaza grove,
+and planter-framed warp pads; the shared app-building grammar remains intentionally recognizable
+across both styles so a status means the same thing in either world.
 
 ## Critical Files
 
 - `client/src/pages/OpenWorld.jsx` — page wrapper
 - `client/src/utils/openWorldRegions.js` — fast-travel region registry (also the nav-guard source)
-- `client/src/components/city/OpenWorldFastTravel.jsx` — the warp panel (M)
-- `client/src/utils/cityFocusCamera.js` — framing math for a borough (`computeFocusCamera`) and a region (`computeRegionCamera`)
-- `client/src/components/city/cityConstants.js` — world styles, time-of-day presets, palette derivation
-- `client/src/components/city/CityScene.jsx` — Canvas, 3D containers, controls
-- `client/src/components/city/CityHud.jsx` — overlay HUD (most Phase 1 UX changes)
-- `client/src/components/city/Building.jsx`, `Borough.jsx` — façade work (1.1, 1.2, 1.13)
-- `client/src/components/city/AgentEntity.jsx` — tether (1.13)
-- `client/src/components/city/CityTraffic.jsx`, `CityDataStreams.jsx` — meaningful traffic (2.10)
-- `client/src/components/city/CitySignalBeacons.jsx` — extend for notifications (1.5) + landmarks (2.x)
-- `client/src/components/city/CityBillboards.jsx` — richer content (1.12)
-- `client/src/hooks/useCityData.js` — data layer; extend with new endpoints
-- `client/src/utils/cityFilter.js` — pure status/search filter logic (1.8, 1.9)
+- `client/src/components/openworld/OpenWorldFastTravel.jsx` — the warp panel (M)
+- `client/src/utils/openWorldFocusCamera.js` — framing math for a borough (`computeFocusCamera`) and a region (`computeRegionCamera`)
+- `client/src/components/openworld/openWorldConstants.js` — world styles, time-of-day presets, palette derivation
+- `client/src/components/openworld/OpenWorldScene.jsx` — Canvas, 3D containers, controls
+- `client/src/components/openworld/OpenWorldHud.jsx` — overlay HUD (most Phase 1 UX changes)
+- `client/src/components/openworld/Building.jsx`, `Borough.jsx` — façade work (1.1, 1.2, 1.13)
+- `client/src/components/openworld/AgentEntity.jsx` — tether (1.13)
+- `client/src/components/openworld/OpenWorldTraffic.jsx`, `OpenWorldDataStreams.jsx` — meaningful traffic (2.10)
+- `client/src/components/openworld/OpenWorldSignalBeacons.jsx` — landmarks and warp pads
+- `client/src/components/openworld/OpenWorldBillboards.jsx` — richer content (1.12)
+- `client/src/hooks/useOpenWorldData.js` — data layer; extend with new endpoints
+- `client/src/utils/openWorldFilter.js` — pure status/search filter logic (1.8, 1.9)
 - `client/src/utils/formatters.js` — reuse formatters; do not duplicate
 
 ## Endpoints used / to use

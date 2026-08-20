@@ -20,49 +20,36 @@ const renderDrawer = (search = '', onClose = () => {}) =>
   );
 
 describe('OpenWorldSettingsDrawer', () => {
-  it('renders the shared Drawer with the four grouped tabs', () => {
+  it('renders the shared Drawer with focused player-choice tabs', () => {
     renderDrawer();
     expect(screen.getByRole('dialog', { name: 'OpenWorld Settings' })).toBeInTheDocument();
-    ['Performance', 'Audio', 'Visual', 'Explore'].forEach(label => {
+    ['Audio', 'Visual', 'Controls'].forEach(label => {
       expect(screen.getByRole('tab', { name: label })).toBeInTheDocument();
     });
     // Default tab content.
-    expect(screen.getByText('QUALITY')).toBeInTheDocument();
+    expect(screen.getByText('MUSIC')).toBeInTheDocument();
   });
 
   it('switches tabs and persists the active tab in the URL', () => {
     renderDrawer();
-    fireEvent.click(screen.getByRole('tab', { name: 'Audio' }));
-    expect(screen.getByText('MUSIC')).toBeInTheDocument();
-    expect(screen.queryByText('QUALITY')).not.toBeInTheDocument();
-    expect(screen.getByTestId('loc').textContent).toContain('openWorldTab=audio');
+    fireEvent.click(screen.getByRole('tab', { name: 'Controls' }));
+    expect(screen.getByText('MOVEMENT')).toBeInTheDocument();
+    expect(screen.queryByText('MUSIC')).not.toBeInTheDocument();
+    expect(screen.getByTestId('loc').textContent).toContain('openWorldTab=controls');
   });
 
-  it('shows the Auto effective-tier label and local diagnostics when in Auto mode', () => {
-    render(
-      <MemoryRouter initialEntries={['/openworld/settings']}>
-        <OpenWorldSettingsProvider>
-          <OpenWorldSettingsDrawer
-            open
-            onClose={() => {}}
-            qualityMode="auto"
-            effectiveTier="medium"
-            diagnostics={{ fps: 58, p75: 16.2 }}
-          />
-        </OpenWorldSettingsProvider>
-      </MemoryRouter>,
-    );
-    // AUTO button reflects the effective tier, and the local diagnostics readout renders.
-    expect(screen.getByRole('button', { name: /AUTO · MEDIUM/ })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByText('58 FPS')).toBeInTheDocument();
-    expect(screen.getByText('P75 16.2ms')).toBeInTheDocument();
-    // The Auto-controlled particle-density slider is disabled.
-    expect(screen.getByLabelText('PARTICLE DENSITY')).toBeDisabled();
+  it('shows the actual exploration controls without legacy renderer knobs', () => {
+    renderDrawer('?openWorldTab=controls');
+    expect(screen.getByText('MOVEMENT')).toBeInTheDocument();
+    expect(screen.getByText('Drop in / fly out')).toBeInTheDocument();
+    expect(screen.getByText('SPACE')).toBeInTheDocument();
+    expect(screen.queryByText('QUALITY')).not.toBeInTheDocument();
+    expect(screen.queryByText('PARTICLE DENSITY')).not.toBeInTheDocument();
   });
 
   it('deep-links the active tab from the URL param', () => {
     renderDrawer('?openWorldTab=visual');
-    expect(screen.getByText('VISUAL FX')).toBeInTheDocument();
+    expect(screen.getByText('WORLD')).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Visual', selected: true })).toBeInTheDocument();
   });
 

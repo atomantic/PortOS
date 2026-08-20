@@ -8,6 +8,7 @@ import OpenWorldFilterBar from './OpenWorldFilterBar';
 import OpenWorldXpBadge from './OpenWorldXpBadge';
 import OpenWorldMiniMap from './OpenWorldMiniMap';
 import OpenWorldHudCompact from './OpenWorldHudCompact';
+import OpenWorldInteractionPrompt from './OpenWorldInteractionPrompt';
 import { HealthBar, getHealthSentinel } from './openWorldHudBits';
 import useOpenWorldViewport from '../../hooks/useOpenWorldViewport';
 import { formatClockTime } from '../../utils/formatters';
@@ -42,7 +43,7 @@ function ControlsHint({ visible, isDesktop }) {
           ))}
         </div>
         <div className="font-pixel text-[8px] tracking-wide text-[rgb(var(--port-text-muted))]">
-          WASD DRIVE <span className="mx-1 opacity-50">·</span> SHIFT BOOST <span className="mx-1 opacity-50">·</span> SPACE JUMP <span className="mx-1 opacity-50">·</span> M MAP
+          WASD MOVE <span className="mx-1 opacity-50">·</span> SHIFT BOOST <span className="mx-1 opacity-50">·</span> SPACE JUMP <span className="mx-1 opacity-50">·</span> M MAP
         </div>
       </div>
     </div>
@@ -74,7 +75,7 @@ function HudAction({ icon: Icon, label, hint, active, primary = false, onClick }
   );
 }
 
-export default function OpenWorldHud({ cosStatus, cosAgents, agentMap, eventLogs, connected, apps, reviewCounts, instances, productivityData, systemHealth, notificationCounts, character, filter, onFilterChange, onJumpToFirst, matchCount, onToggleExploration, explorationMode, onSelectApp, onEnterPhotoMode, onEnterPlayback, focusedAppId, focusedApp, focusNotFound, focusAgents, onCloseFocus, onFocusInWorld, onOpenFastTravel, onOpenDestination, onAttentionItem, activeRegion }) {
+export default function OpenWorldHud({ cosStatus, cosAgents, agentMap, eventLogs, connected, apps, reviewCounts, instances, productivityData, systemHealth, notificationCounts, character, filter, onFilterChange, onJumpToFirst, matchCount, onToggleExploration, explorationMode, onSelectApp, onEnterPhotoMode, onEnterPlayback, focusedAppId, focusedApp, focusNotFound, focusAgents, onCloseFocus, onFocusInWorld, onOpenFastTravel, onOpenDestination, onAttentionItem, activeRegion, proximityTarget }) {
   const isFocused = Boolean(focusedApp || focusNotFound);
   const navigate = useNavigate();
   const location = useLocation();
@@ -272,10 +273,12 @@ export default function OpenWorldHud({ cosStatus, cosAgents, agentMap, eventLogs
           onOpenFastTravel={onOpenFastTravel}
           onOpenDestination={onOpenDestination}
           onAttentionItem={onAttentionItem}
+          proximityTarget={proximityTarget}
         />
       )}
 
       {explorationMode && <Crosshair />}
+      {explorationMode && isDesktop && <OpenWorldInteractionPrompt target={proximityTarget} />}
       <ControlsHint visible={explorationMode} isDesktop={isDesktop} />
     </div>
   );

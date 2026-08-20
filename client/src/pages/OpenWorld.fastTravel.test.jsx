@@ -23,7 +23,6 @@ vi.mock('../components/openworld/OpenWorldHud', () => ({
     </div>
   ),
 }));
-vi.mock('../components/openworld/OpenWorldScanlines', () => ({ default: () => null }));
 vi.mock('../components/openworld/OpenWorldPhotoOverlay', () => ({ default: () => null }));
 vi.mock('../components/openworld/OpenWorldPlaybackOverlay', () => ({ default: () => null }));
 vi.mock('../components/openworld/OpenWorldSettingsDrawer', () => ({ default: () => null }));
@@ -132,7 +131,7 @@ describe('OpenWorld — fast travel wiring', () => {
     localStorage.setItem('portos-city-settings', JSON.stringify({ worldStyle: 'cyber' }));
     renderAt('/openworld');
     expect(sceneProps.current.settings.worldStyle).toBe('cyber');
-    expect(['noon', 'sunset']).toContain(sceneProps.current.settings.timeOfDay);
+    expect(sceneProps.current.settings.timeOfDay).toBe('sunset');
     expect(sceneProps.current.palette.lowPoly).toBe(false);
   });
 

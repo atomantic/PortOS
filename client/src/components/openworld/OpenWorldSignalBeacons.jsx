@@ -6,6 +6,7 @@ import { listRegions, regionWarpPadPosition } from '../../utils/openWorldRegions
 import { PIXEL_FONT_URL, openWorldDayMix, openWorldShowDetail, mixHex } from './openWorldConstants';
 import { useOpenWorldPalette } from './OpenWorldPaletteContext';
 import OpenWorldLabel from './OpenWorldLabel';
+import { PlantCluster } from './OpenWorldNature';
 
 function SignalBeacon({ position, color, label, sublabel, intensity = 1, dayMix = 0 }) {
   const { tintStructure } = useOpenWorldPalette();
@@ -88,6 +89,7 @@ function WarpPad({ region, active, detailed, dayMix, onTravel }) {
   const color = active ? '#fff4d6' : accent;
   const padRadius = active ? 1.8 : 1.55;
   const ringRadius = active ? 1.2 : 1.02;
+  const gardenScale = detailed ? 0.66 : 0.38;
   const position = regionWarpPadPosition(region);
 
   useFrame(({ clock }) => {
@@ -143,6 +145,27 @@ function WarpPad({ region, active, detailed, dayMix, onTravel }) {
           <cylinderGeometry args={[0.08, 0.72, 6.2, 12, 1, true]} />
           <meshBasicMaterial color={color} transparent opacity={0.1} blending={THREE.AdditiveBlending} depthWrite={false} side={THREE.DoubleSide} />
         </mesh>
+      )}
+      {/* These small planting beds frame the warp pad so the destination reads as a
+          place to use, not a random glowing disc dropped onto the lawn. They are detail-tier
+          dressing; the pad and label remain available on the low tier as the wayfinding cue. */}
+      {detailed && (
+        <group>
+          <PlantCluster
+            position={[padRadius + 0.9, 0, 0.18]}
+            scale={gardenScale}
+            variant={region.id.length % 3}
+            dayMix={dayMix}
+            container
+          />
+          <PlantCluster
+            position={[-padRadius - 0.9, 0, 0.18]}
+            scale={gardenScale}
+            variant={(region.id.length + 1) % 3}
+            dayMix={dayMix}
+            container
+          />
+        </group>
       )}
       <OpenWorldLabel
         position={[0, detailed ? 6.45 : 2, 0]}

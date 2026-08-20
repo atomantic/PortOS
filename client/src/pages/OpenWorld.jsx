@@ -11,11 +11,9 @@ import * as api from '../services/api';
 import OpenWorldScene from '../components/openworld/OpenWorldScene';
 import OpenWorldHud from '../components/openworld/OpenWorldHud';
 import OpenWorldMobileControls from '../components/openworld/OpenWorldMobileControls';
-import OpenWorldScanlines from '../components/openworld/OpenWorldScanlines';
 import OpenWorldPhotoOverlay from '../components/openworld/OpenWorldPhotoOverlay';
 import OpenWorldPlaybackOverlay from '../components/openworld/OpenWorldPlaybackOverlay';
 import { OpenWorldSettingsProvider, useOpenWorldSettingsContext } from '../components/openworld/OpenWorldSettingsContext';
-import { QUALITY_PRESETS } from '../hooks/useOpenWorldSettings';
 import OpenWorldSettingsDrawer from '../components/openworld/OpenWorldSettingsDrawer';
 import { computeFilterResult } from '../utils/openWorldFilter';
 import { resolveOpenWorldFocus } from '../utils/openWorldFocusState';
@@ -27,6 +25,16 @@ import OpenWorldFastTravel from '../components/openworld/OpenWorldFastTravel';
 import { getRegion, regionArrivalPoint, regionPath } from '../utils/openWorldRegions';
 import { OpenWorldPaletteProvider } from '../components/openworld/OpenWorldPaletteContext';
 import { useThemeContext } from '../components/ThemeContext';
+
+// Internal render budgets only. These tiers are selected from sustained frame time and are
+// deliberately not persisted or exposed as player settings; art direction stays coherent while
+// the renderer sheds work on slower hardware.
+const RENDER_TIERS = {
+  low: { particleDensity: 0.5, dpr: [1, 1] },
+  medium: { particleDensity: 0.75, dpr: [1, 1.25] },
+  high: { particleDensity: 1, dpr: [1, 1.25] },
+  ultra: { particleDensity: 1.5, dpr: [1, 1.5] },
+};
 
 function OpenWorldInner() {
   const { apps, cosAgents, cosStatus, eventLogs, agentMap, reviewCounts, instances, systemHealth, notificationCounts, backupStatus, cosTasks, healthMetrics, voiceState, character, aiActivity, loading, connected } = useOpenWorldData();
@@ -81,8 +89,8 @@ function OpenWorldInner() {
   // bridge context). No more during-render mutation of a shared singleton.
   const openWorldPalette = useMemo(() => deriveOpenWorldPalette(openWorldTheme, worldStyle), [openWorldTheme, worldStyle]);
 
-  // The world renders day or night, following the theme mode by default (see
-  // resolveOpenWorldTimeOfDay). The resolved preset key is handed to the scene via a
+  // Open World renders day or night, following the theme mode by default; Cyber City is
+  // always night (see resolveOpenWorldTimeOfDay). The resolved preset key is handed to the scene via a
   // settings override (OpenWorldSky/OpenWorldLights/OpenWorldGround read settings.timeOfDay), and the
   // backdrop takes the matching preset's mid-sky band so the DOM surround behind the
   // canvas agrees with the sky the scene actually paints, in either art direction.
@@ -91,35 +99,28 @@ function OpenWorldInner() {
     ? getTimeOfDayPreset(openWorldTimeOfDay.presetKey).midSky
     : openWorldPalette.nightBackground;
 
-  // Auto quality mode (issue #2592). In Auto, an adaptive render budget picks the
-  // effective tier at runtime (starting at High); in Manual, the effective tier is the
-  // saved preset. The runtime tier is deliberately separate from persisted settings —
-  // adaptation never rewrites localStorage. `autoDiagnostics` is a local-only readout
-  // (never persisted or transmitted). Auto always *starts* at High per the spec, even
-  // if the user last had a different manual preset.
-  const qualityMode = settings?.qualityMode === 'auto' ? 'auto' : 'manual';
+  // Rendering adapts silently. The player gets a stable art direction and the renderer
+  // chooses its detail tier from sustained frame time; low/medium/high/ultra are internal
+  // budgets, not design settings. This keeps the settings drawer focused on choices a player
+  // can actually feel (world style, audio, and controls).
   const [autoTier, setAutoTier] = useState('high');
-  const [autoDiagnostics, setAutoDiagnostics] = useState(null);
-  const effectiveTier = qualityMode === 'auto' ? autoTier : (settings?.qualityPreset ?? 'high');
-
-  // Clear the stale local diagnostics readout whenever the budget re-arms: a RESET DEFAULTS
-  // (resetNonce) or a quality-mode transition (Manual↔Auto). The adaptive budget itself
-  // re-arms via OpenWorldScene and re-reports tier + fresh samples on the next window.
-  useEffect(() => { setAutoDiagnostics(null); }, [resetNonce, qualityMode]);
+  const effectiveTier = autoTier;
 
   const sceneSettings = useMemo(() => {
-    const base = { ...settings, effectiveTier, skyTheme: 'cyberpunk', timeOfDay: openWorldTimeOfDay.presetKey };
-    if (qualityMode !== 'auto') return base;
-    // Derive the render-affecting fields (reflections, particle density, DPR) from the
-    // adaptive tier; leave user-tuned lighting/scanline toggles untouched.
-    const tierCfg = QUALITY_PRESETS[effectiveTier] || QUALITY_PRESETS.high;
+    // Derive render-affecting fields from the adaptive tier. The settings store contains
+    // player choices only, so old renderer knobs cannot override the coherent world look.
+    const tierCfg = RENDER_TIERS[effectiveTier] || RENDER_TIERS.high;
     return {
-      ...base,
-      reflectionsEnabled: tierCfg.reflectionsEnabled,
+      ...settings,
+      effectiveTier,
+      skyTheme: 'cyberpunk',
+      timeOfDay: openWorldTimeOfDay.presetKey,
       particleDensity: tierCfg.particleDensity,
       dpr: tierCfg.dpr,
+      ambientBrightness: 1,
+      neonBrightness: worldStyle === 'cyber' ? 1.1 : 1,
     };
-  }, [settings, effectiveTier, qualityMode, openWorldTimeOfDay.presetKey]);
+  }, [settings, effectiveTier, openWorldTimeOfDay.presetKey, worldStyle]);
 
   const [filter, setFilter] = useState(() => {
     // try/catch is necessary because sessionStorage values are external state
@@ -185,6 +186,7 @@ function OpenWorldInner() {
     jump: false,
   });
   const playerActionRef = useRef(null);
+  const [proximityTarget, setProximityTarget] = useState(null);
 
   // --- World map / fast travel ----------------------------------------------
   // Warping stays under `/openworld/region/:regionId`; the route param drives the orbital
@@ -541,17 +543,16 @@ function OpenWorldInner() {
         mobileInputRef={mobileInputRef}
         playerActionRef={playerActionRef}
         dimmedAppIds={filterResult.dimmed}
-        autoQuality={qualityMode === 'auto'}
+        autoQuality
         autoStartTier="high"
         autoResetToken={resetNonce}
-        diagnosticsEnabled={showSettings}
         onAutoTierChange={setAutoTier}
-        onAutoDiagnostics={setAutoDiagnostics}
         focusedAppId={appId || null}
         focusedRegion={focusedRegion}
         playerTeleport={playerTeleport}
         hudSafe={focusHudSafe}
         onTravelToRegion={handleTravelToRegion}
+        onProximityChange={setProximityTarget}
       />
       {/* The full HUD hides in photo + playback mode so the view is clean; each
           mode's overlay replaces it. */}
@@ -588,6 +589,7 @@ function OpenWorldInner() {
           onOpenDestination={handleTravelToRegionId}
           onAttentionItem={handleAttentionItem}
           activeRegion={focusedRegion}
+          proximityTarget={proximityTarget}
         />
       )}
       {!photoMode && !playback.active && !isDesktop && settings?.explorationMode && !showSettings && !fastTravelOpen && (
@@ -634,16 +636,12 @@ function OpenWorldInner() {
         activeRegionId={focusedRegion?.id || null}
         onLeaveRegion={() => navigate('/openworld')}
       />
-      <OpenWorldScanlines settings={settings} crt={openWorldPalette.crt} />
-      {/* Settings on the shared Drawer (issue #2591). Closing preserves other query
-          params (e.g. an open openWorldPane) so the disclosure state survives. The Auto-quality
-          props (#2592) drive the Performance tab's effective-tier label + local diagnostics. */}
+      {/* Settings on the shared Drawer. Closing preserves other query params (e.g. an open
+          openWorldPane) so the disclosure state survives. Rendering quality is automatic and
+          intentionally absent from this player-facing surface. */}
       <OpenWorldSettingsDrawer
         open={showSettings}
         onClose={() => navigate(`/openworld${location.search}`)}
-        qualityMode={qualityMode}
-        effectiveTier={effectiveTier}
-        diagnostics={qualityMode === 'auto' ? autoDiagnostics : null}
       />
     </div>
     </OpenWorldPaletteProvider>

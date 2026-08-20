@@ -46,17 +46,18 @@ describe('deriveOpenWorldPalette', () => {
     expect(p.background).toBe('#011215'); // night theme default -> #06b6d4 * 0.1
   });
 
-  it('resolves time of day, following theme mode for auto/legacy and honoring explicit overrides', () => {
-    // auto follows the theme mode
-    expect(resolveOpenWorldTimeOfDay('auto', true, 'cyber')).toEqual({ daytime: true, presetKey: 'noon' });
-    expect(resolveOpenWorldTimeOfDay('auto', false, 'cyber')).toEqual({ daytime: false, presetKey: 'sunset' });
-    expect(resolveOpenWorldTimeOfDay(undefined, true, 'cyber')).toEqual({ daytime: true, presetKey: 'noon' });
-    // legacy stored presets are treated as auto (follow the theme)
-    expect(resolveOpenWorldTimeOfDay('sunset', true, 'cyber')).toEqual({ daytime: true, presetKey: 'noon' });
-    expect(resolveOpenWorldTimeOfDay('midnight', true, 'cyber')).toEqual({ daytime: true, presetKey: 'noon' });
-    // explicit overrides win regardless of theme mode
-    expect(resolveOpenWorldTimeOfDay('day', false, 'cyber')).toEqual({ daytime: true, presetKey: 'noon' });
-    expect(resolveOpenWorldTimeOfDay('night', true, 'cyber')).toEqual({ daytime: false, presetKey: 'sunset' });
+  it('keeps Cyber City nocturnal regardless of theme or legacy time settings', () => {
+    for (const setting of ['auto', undefined, 'sunrise', 'noon', 'sunset', 'midnight', 'day', 'night']) {
+      expect(resolveOpenWorldTimeOfDay(setting, true, 'cyber')).toEqual({ daytime: false, presetKey: 'sunset' });
+      expect(resolveOpenWorldTimeOfDay(setting, false, 'cyber')).toEqual({ daytime: false, presetKey: 'sunset' });
+    }
+  });
+
+  it('follows the selected day/night mode for Open World', () => {
+    expect(resolveOpenWorldTimeOfDay('auto', true, 'vibes')).toEqual({ daytime: true, presetKey: 'vibesDay' });
+    expect(resolveOpenWorldTimeOfDay('auto', false, 'vibes')).toEqual({ daytime: false, presetKey: 'vibesDusk' });
+    expect(resolveOpenWorldTimeOfDay('day', false, 'vibes')).toEqual({ daytime: true, presetKey: 'vibesDay' });
+    expect(resolveOpenWorldTimeOfDay('night', true, 'vibes')).toEqual({ daytime: false, presetKey: 'vibesDusk' });
   });
 
   it('picks the Vibes preset pair by default, and for any unrecognized style', () => {
@@ -103,29 +104,6 @@ describe('deriveOpenWorldPalette', () => {
     }
   });
 
-  it('opts CRT effects in per theme family under the cyber style', () => {
-    // terminal (Phosphor) — full CRT
-    expect(deriveOpenWorldPalette(getTheme('black-ice-terminal-day'), 'cyber').crt)
-      .toEqual({ scanlines: true, glow: true, vignette: true });
-    // classic — cyber glow + vignette, but no scanlines
-    expect(deriveOpenWorldPalette(getTheme('classic-midnight'), 'cyber').crt)
-      .toEqual({ scanlines: false, glow: true, vignette: true });
-    // blueprint — vignette only
-    expect(deriveOpenWorldPalette(getTheme('blueprint-ops'), 'cyber').crt)
-      .toEqual({ scanlines: false, glow: false, vignette: true });
-    // glass — fully clean, no CRT
-    expect(deriveOpenWorldPalette(getTheme('lumen-glass'), 'cyber').crt)
-      .toEqual({ scanlines: false, glow: false, vignette: false });
-  });
-
-  it('turns the CRT overlay off entirely in the Vibes world, whatever the theme family', () => {
-    // Scanlines/glow/vignette are cyber-terminal affectations; over a sunlit low-poly
-    // landscape they read as a dirty screen, so no theme family opts them back in.
-    for (const id of ['black-ice-terminal-day', 'classic-midnight', 'blueprint-ops', 'lumen-glass']) {
-      expect(deriveOpenWorldPalette(getTheme(id), 'vibes').crt)
-        .toEqual({ scanlines: false, glow: false, vignette: false });
-    }
-  });
 });
 
 describe('city sky visibility', () => {
@@ -149,11 +127,12 @@ describe('city sky visibility', () => {
 });
 
 describe('openWorldLabelColors', () => {
-  it('keeps the neon fill and adds no outline at night (dayMix 0)', () => {
+  it('keeps the neon fill with a hairline keyline at night (dayMix 0)', () => {
     const c = openWorldLabelColors('#06b6d4', 0);
     expect(c.color).toBe('#06b6d4'); // untouched neon
-    expect(c.outlineWidth).toBe('0.00%'); // drei reads a 0% outline as none
-    expect(c.outlineOpacity).toBe(0);
+    expect(c.outlineColor).toBe('#020817');
+    expect(c.outlineWidth).toBe('0.90%');
+    expect(c.outlineOpacity).toBeCloseTo(0.45);
   });
 
   it('darkens the fill toward ink and fades in a light outline by day (dayMix 1)', () => {
@@ -164,13 +143,13 @@ describe('openWorldLabelColors', () => {
     const lum = parseInt(c.color.slice(1, 3), 16) + parseInt(c.color.slice(3, 5), 16) + parseInt(c.color.slice(5, 7), 16);
     expect(lum).toBeLessThan(180); // dark ink (~140), far below the neon's ~400
     expect(c.outlineColor).toBe('#eef4ff');
-    expect(c.outlineWidth).toBe('9.00%');
-    expect(c.outlineOpacity).toBeCloseTo(0.85);
+    expect(c.outlineWidth).toBe('11.00%');
+    expect(c.outlineOpacity).toBeCloseTo(0.82);
   });
 
   it('clamps out-of-range / missing dayMix', () => {
-    expect(openWorldLabelColors('#06b6d4', 2).outlineOpacity).toBeCloseTo(0.85);
-    expect(openWorldLabelColors('#06b6d4', -1).outlineWidth).toBe('0.00%');
+    expect(openWorldLabelColors('#06b6d4', 2).outlineOpacity).toBeCloseTo(0.82);
+    expect(openWorldLabelColors('#06b6d4', -1).outlineWidth).toBe('0.90%');
     expect(openWorldLabelColors('#06b6d4').color).toBe('#06b6d4'); // undefined → night
   });
 });
@@ -373,9 +352,9 @@ describe('openWorldDayMix', () => {
   });
 });
 
-describe('quality-preset gates', () => {
-  // Preset densities: low 0.5, medium 0.75, high 1.0, ultra 1.5.
-  it('openWorldShowDetail turns on above the low preset', () => {
+describe('adaptive render-tier gates', () => {
+  // Internal tier densities: low 0.5, medium 0.75, high 1.0, ultra 1.5.
+  it('openWorldShowDetail turns on above the low tier', () => {
     expect(openWorldShowDetail({ particleDensity: 0.5 })).toBe(false);
     expect(openWorldShowDetail({ particleDensity: 0.75 })).toBe(true);
     expect(openWorldShowDetail(undefined)).toBe(true); // defaults to 1
@@ -440,7 +419,6 @@ describe('resolveWorldStyle / getWorldStyle', () => {
       expect(CITY_COLORS.timeOfDay[def.presets.night]).toBeDefined();
       expect(typeof def.lowPoly).toBe('boolean');
       expect(typeof def.neonLayers).toBe('boolean');
-      expect(typeof def.themeCrt).toBe('boolean');
       expect(def.accents.length).toBeGreaterThan(1);
       expect(def.buildingBody).toMatch(/^#[0-9a-f]{6}$/i);
       for (const band of ['inner', 'meadow', 'ridge']) {

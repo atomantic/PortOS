@@ -54,6 +54,7 @@ export default function PlayerController({
   teleport = null,
   warpPads = [],
   onWarpPadInteract,
+  onWarpPadProximity,
   mobileInputRef = null,
   playerActionRef = null,
 }) {
@@ -414,7 +415,10 @@ export default function PlayerController({
         nearestWarpPad = region;
       }
     }
-    proximityWarpPadRef.current = nearestWarpPad;
+    if (nearestWarpPad !== proximityWarpPadRef.current) {
+      proximityWarpPadRef.current = nearestWarpPad;
+      onWarpPadProximity?.(nearestWarpPad);
+    }
 
     // Camera application. While CameraTransition flies the camera (exploration toggle),
     // it is the sole camera writer — explicit gate instead of relying on mount order.

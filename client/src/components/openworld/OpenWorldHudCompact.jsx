@@ -7,6 +7,7 @@ import OpenWorldVitalsList from './OpenWorldVitalsList';
 import OpenWorldMiniMap from './OpenWorldMiniMap';
 import OpenWorldFilterBar from './OpenWorldFilterBar';
 import OpenWorldFocusPanel from './OpenWorldFocusPanel';
+import OpenWorldInteractionPrompt from './OpenWorldInteractionPrompt';
 import { CITY_PANE_IDS, CITY_INTEL_PANE_IDS, CITY_PANE_LABELS } from './openWorldPanes';
 import { birthDateCta } from '../../utils/characterXp';
 import { formatClockTime } from '../../utils/formatters';
@@ -89,6 +90,7 @@ export default function OpenWorldHudCompact({
   focusAgents,
   onCloseFocus,
   onFocusInWorld,
+  proximityTarget,
 }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -146,6 +148,7 @@ export default function OpenWorldHudCompact({
 
   return (
     <>
+      {explorationMode && <OpenWorldInteractionPrompt target={proximityTarget} compact />}
       {/* Top-left: compact clock + health → opens vitals */}
       <div className="absolute top-2 left-2 pointer-events-auto">
         <button

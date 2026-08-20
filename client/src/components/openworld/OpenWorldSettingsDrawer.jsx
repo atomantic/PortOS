@@ -1,15 +1,14 @@
 import Drawer from '../Drawer';
 import useDrawerTab from '../../hooks/useDrawerTab';
 import { useOpenWorldSettingsContext } from './OpenWorldSettingsContext';
-import { QUALITY_PRESETS } from '../../hooks/useOpenWorldSettings';
 import { SOUNDSCAPE_MOODS, isSoundscapeMood } from '../../utils/openWorldSoundscape';
 import { WORLD_STYLE_DEFS, WORLD_STYLES, resolveWorldStyle } from './openWorldConstants';
 
 // Derived from the style table, so registering a style makes it pickable — no second list.
 const WORLD_STYLE_OPTIONS = WORLD_STYLES.map((key) => ({ key, label: WORLD_STYLE_DEFS[key].label }));
 
-// The soundscape override's "no override" option. A `<select>` can't carry `null`, so the
-// auto choice rides as the empty string and the change handler maps it back to the `null`
+// The soundscape override's "no override" option. A <select> cannot carry null, so the
+// auto choice rides as the empty string and the change handler maps it back to the null
 // sentinel — keeping "following live state" distinct from "pinned to a mood".
 const SOUNDSCAPE_AUTO = '';
 const SOUNDSCAPE_OPTIONS = [
@@ -17,17 +16,15 @@ const SOUNDSCAPE_OPTIONS = [
   ...SOUNDSCAPE_MOODS.map(mood => ({ value: mood, label: mood.toUpperCase() })),
 ];
 
-// OpenWorld settings migrated onto the shared tabbed <Drawer> (issue #2591) — replaces
-// the old bespoke bottom-right 19rem page-length scroller. Grouped into
-// Performance / Audio / Visual / Explore so no single tab is a long scroll, with the
-// active tab deep-linked through the `openWorldTab` URL param (useDrawerTab). All mutable
-// state lives in OpenWorldSettingsContext ABOVE this remounting body, so switching tabs
-// (which remounts the body) never drops an edit.
+// OpenWorld settings stay on the shared Drawer, but the surface is intentionally small:
+// world style, sound, and controls are player choices. Render quality, scanlines, reflections,
+// and brightness sliders were implementation leftovers from earlier versions of the world and
+// are now resolved by the scene's art direction and adaptive renderer.
 
 function SettingToggle({ id, label, value, onChange, description, disabled = false }) {
   return (
     <div className={`flex items-center justify-between py-2 group ${disabled ? 'opacity-40' : ''}`} title={description}>
-      <label htmlFor={id} className={`font-pixel text-[11px] text-gray-300 tracking-wide ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
+      <label htmlFor={id} className={`font-sans text-[12px] text-gray-300 tracking-wide ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
         {label}
       </label>
       <button
@@ -53,8 +50,8 @@ function SettingSlider({ id, label, value, onChange, min = 0, max = 1, step = 0.
   return (
     <div className={`py-2 ${disabled ? 'opacity-40' : ''}`} title={description}>
       <div className="flex items-center justify-between mb-1.5">
-        <label htmlFor={id} className="font-pixel text-[11px] text-gray-300 tracking-wide">{label}</label>
-        <span className="font-pixel text-[10px] text-cyan-400/70">{displayValue}</span>
+        <label htmlFor={id} className="font-sans text-[12px] text-gray-300 tracking-wide">{label}</label>
+        <span className="font-mono text-[11px] text-cyan-400/70">{displayValue}</span>
       </div>
       <input
         id={id}
@@ -80,18 +77,18 @@ function SettingSlider({ id, label, value, onChange, min = 0, max = 1, step = 0.
 function SettingSelect({ id, label, value, onChange, options, hint, description }) {
   return (
     <div className="py-2" title={description}>
-      <label htmlFor={id} className="block font-pixel text-[11px] text-gray-300 tracking-wide mb-1.5">{label}</label>
+      <label htmlFor={id} className="block font-sans text-[12px] text-gray-300 tracking-wide mb-1.5">{label}</label>
       <select
         id={id}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full font-pixel text-[10px] min-h-[44px] px-2 rounded border border-gray-700/40 bg-gray-800/40 text-gray-300 tracking-wide focus:border-cyan-500/50 focus:outline-none"
+        className="w-full font-sans text-[12px] min-h-[44px] px-2 rounded border border-gray-700/40 bg-gray-800/40 text-gray-300 tracking-wide focus:border-cyan-500/50 focus:outline-none"
       >
         {options.map(({ value: optionValue, label: optionLabel }) => (
           <option key={optionValue} value={optionValue}>{optionLabel}</option>
         ))}
       </select>
-      {hint && <div className="font-pixel text-[8px] text-gray-500 tracking-wide mt-1.5">{hint}</div>}
+      {hint && <div className="font-mono text-[10px] text-gray-500 tracking-wide mt-1.5">{hint}</div>}
     </div>
   );
 }
@@ -102,7 +99,7 @@ function SettingSegment({ label, options, value, onChange, hint, isActive }) {
   const activeFor = isActive ?? ((key) => value === key);
   return (
     <div className="py-2">
-      {label && <div className="font-pixel text-[11px] text-gray-300 tracking-wide mb-2">{label}</div>}
+      {label && <div className="font-sans text-[12px] text-gray-300 tracking-wide mb-2">{label}</div>}
       <div className={`grid gap-1.5 ${options.length === 2 ? 'grid-cols-2' : 'grid-cols-3'}`} role="group" aria-label={label}>
         {options.map(({ key, label: optionLabel }) => (
           <button
@@ -110,7 +107,7 @@ function SettingSegment({ label, options, value, onChange, hint, isActive }) {
             type="button"
             aria-pressed={activeFor(key)}
             onClick={() => onChange(key)}
-            className={`font-pixel text-[10px] min-h-[44px] rounded border transition-all tracking-wide ${
+            className={`font-sans text-[11px] min-h-[44px] rounded border transition-all tracking-wide ${
               activeFor(key)
                 ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-400 shadow-[0_0_8px_rgba(6,182,212,0.2)]'
                 : 'bg-gray-800/40 border-gray-700/40 text-gray-400 hover:border-gray-600 hover:text-gray-300'
@@ -120,7 +117,7 @@ function SettingSegment({ label, options, value, onChange, hint, isActive }) {
           </button>
         ))}
       </div>
-      {hint && <div className="font-pixel text-[8px] text-gray-500 tracking-wide mt-1.5">{hint}</div>}
+      {hint && <div className="font-mono text-[10px] text-gray-500 tracking-wide mt-1.5">{hint}</div>}
     </div>
   );
 }
@@ -128,43 +125,51 @@ function SettingSegment({ label, options, value, onChange, hint, isActive }) {
 function SectionHeader({ title, subtitle }) {
   return (
     <div className="mb-2">
-      <div className="font-pixel text-[10px] text-cyan-500/70 tracking-wider">{title}</div>
-      {subtitle && <div className="font-pixel text-[8px] text-gray-500 tracking-wide mt-0.5">{subtitle}</div>}
+      <div className="font-mono text-[10px] font-semibold text-cyan-500/70 tracking-[0.14em]">{title}</div>
+      {subtitle && <div className="font-sans text-[11px] text-gray-500 tracking-wide mt-0.5">{subtitle}</div>}
+    </div>
+  );
+}
+
+function KeyCaps({ keys }) {
+  return (
+    <span className="flex shrink-0 items-center gap-1" aria-label={keys.join(' / ')}>
+      {keys.map(key => (
+        <kbd key={key} className="inline-flex min-w-[28px] min-h-[26px] items-center justify-center rounded-md border border-cyan-500/25 bg-cyan-500/[0.08] px-1.5 font-mono text-[10px] font-semibold text-cyan-300">
+          {key}
+        </kbd>
+      ))}
+    </span>
+  );
+}
+
+function ControlRow({ keys, label, hint }) {
+  return (
+    <div className="flex items-center justify-between gap-3 border-b border-gray-700/30 py-2.5 last:border-b-0">
+      <div className="min-w-0">
+        <div className="font-sans text-[12px] text-gray-200">{label}</div>
+        {hint && <div className="font-sans text-[10px] text-gray-500 mt-0.5">{hint}</div>}
+      </div>
+      <KeyCaps keys={keys} />
     </div>
   );
 }
 
 export const CITY_SETTINGS_TABS = [
-  { id: 'performance', label: 'Performance' },
   { id: 'audio', label: 'Audio' },
   { id: 'visual', label: 'Visual' },
-  { id: 'explore', label: 'Explore' },
+  { id: 'controls', label: 'Controls' },
 ];
 const TAB_IDS = CITY_SETTINGS_TABS.map(t => t.id);
 
-// Format a diagnostics number, guarding the not-yet-measured (null) case.
-function fmt(value, digits = 0) {
-  return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits) : '—';
-}
-
-export default function OpenWorldSettingsDrawer({ open, onClose, qualityMode = 'manual', effectiveTier = 'high', diagnostics = null }) {
+export default function OpenWorldSettingsDrawer({ open, onClose }) {
   const { settings, updateSetting, resetSettings } = useOpenWorldSettingsContext();
-  const [activeTab, setActiveTab] = useDrawerTab('openWorldTab', 'performance', TAB_IDS);
+  const [activeTab, setActiveTab] = useDrawerTab('openWorldTab', 'audio', TAB_IDS);
 
   if (!open || !settings) return null;
 
-  // Auto quality mode (#2592). 'auto' engages the adaptive render budget; picking a named
-  // preset pins Manual (handled in useOpenWorldSettings). In Auto the scene derives reflections +
-  // particle density from the effective tier, so those (disabled) controls display the
-  // effective preset's values and follow live tier changes rather than a stale manual value.
-  const isAuto = qualityMode === 'auto';
-  const effectivePreset = isAuto ? (QUALITY_PRESETS[effectiveTier] || QUALITY_PRESETS.high) : null;
-  const reflectionsValue = effectivePreset ? effectivePreset.reflectionsEnabled : settings.reflectionsEnabled;
-  const particleValue = effectivePreset ? effectivePreset.particleDensity : settings.particleDensity;
-  const setQuality = (key) => {
-    if (key === 'auto') updateSetting('qualityMode', 'auto');
-    else updateSetting('qualityPreset', key);
-  };
+  const worldStyle = resolveWorldStyle(settings.worldStyle);
+  const isCyberCity = worldStyle === 'cyber';
 
   return (
     <Drawer
@@ -176,72 +181,10 @@ export default function OpenWorldSettingsDrawer({ open, onClose, qualityMode = '
       activeTab={activeTab}
       onTabChange={setActiveTab}
       closeLabel="Close city settings"
-      // Drawer portals to <body>, which leaves the page's `.openworld-themed`
-      // root behind — and the OpenWorld HUD palette remap in index.css is written as
-      // `.openworld-themed <utility>` descendant selectors. Re-apply the class
-      // inside the portal so the panel keeps its themed ink/surfaces.
-      portalClassName="openworld-themed"
+      // Drawer portals to <body>, so re-apply the page scope for the themed panel and its
+      // typography. The extra hook is useful for drawer-only spacing without touching all HUD.
+      portalClassName="openworld-themed openworld-settings-portal"
     >
-      {activeTab === 'performance' && (
-        <div className="space-y-5">
-          <div>
-            <SectionHeader
-              title="QUALITY"
-              subtitle={isAuto ? `AUTO · ${String(effectiveTier).toUpperCase()}` : `MANUAL · ${String(settings.qualityPreset || 'high').toUpperCase()}`}
-            />
-            {/* AUTO adapts the effective tier to sustained frame pressure (#2592). */}
-            <button
-              type="button"
-              aria-pressed={isAuto}
-              onClick={() => setQuality('auto')}
-              className={`w-full font-pixel text-[10px] min-h-[44px] mb-1.5 rounded border transition-all tracking-wide ${
-                isAuto
-                  ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-400 shadow-[0_0_8px_rgba(6,182,212,0.2)]'
-                  : 'bg-gray-800/40 border-gray-700/40 text-gray-400 hover:border-gray-600 hover:text-gray-300'
-              }`}
-            >
-              AUTO {isAuto ? `· ${String(effectiveTier).toUpperCase()}` : ''}
-            </button>
-            <div className="grid grid-cols-4 gap-1.5" role="group" aria-label="Quality preset">
-              {Object.keys(QUALITY_PRESETS).map(preset => (
-                <button
-                  key={preset}
-                  type="button"
-                  aria-pressed={!isAuto && settings.qualityPreset === preset}
-                  onClick={() => setQuality(preset)}
-                  className={`font-pixel text-[10px] min-h-[44px] rounded border transition-all tracking-wide ${
-                    !isAuto && settings.qualityPreset === preset
-                      ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-400 shadow-[0_0_8px_rgba(6,182,212,0.2)]'
-                      : 'bg-gray-800/40 border-gray-700/40 text-gray-400 hover:border-gray-600 hover:text-gray-300'
-                  }`}
-                >
-                  {preset.toUpperCase()}
-                </button>
-              ))}
-            </div>
-            {/* Local-only diagnostics — never persisted or transmitted (#2592). */}
-            {isAuto && (
-              <div className="mt-2 px-2 py-1.5 rounded bg-black/40 border border-cyan-500/10 font-pixel text-[9px] text-gray-400 tracking-wide flex items-center justify-between">
-                <span>TIER <span className="text-cyan-400/70">{String(effectiveTier).toUpperCase()}</span></span>
-                <span>{fmt(diagnostics?.fps)} FPS</span>
-                <span>P75 {fmt(diagnostics?.p75, 1)}ms</span>
-              </div>
-            )}
-          </div>
-          <SettingSlider
-            id="city-particle-density"
-            label="PARTICLE DENSITY"
-            value={particleValue}
-            onChange={(v) => updateSetting('particleDensity', v)}
-            min={0.25}
-            max={2}
-            step={0.25}
-            description={isAuto ? 'Set automatically by Auto quality' : 'Amount of floating particles in the scene'}
-            disabled={isAuto}
-          />
-        </div>
-      )}
-
       {activeTab === 'audio' && (
         <div className="space-y-5">
           <div>
@@ -262,8 +205,6 @@ export default function OpenWorldSettingsDrawer({ open, onClose, qualityMode = '
                   onChange={(v) => updateSetting('musicVolume', v)}
                   description="Music playback volume"
                 />
-                {/* Manual mood override (#3395). AUTO is the empty-string option, mapped back to
-                    the `null` sentinel — distinct from a pinned mood, never conflated with one. */}
                 <SettingSelect
                   id="city-soundscape-override"
                   label="SOUNDSCAPE"
@@ -301,76 +242,50 @@ export default function OpenWorldSettingsDrawer({ open, onClose, qualityMode = '
       {activeTab === 'visual' && (
         <div className="space-y-5">
           <div>
-            <SectionHeader title="VISUAL FX" subtitle="Reflections and atmosphere" />
-            <SettingToggle
-              id="city-reflections"
-              label="REFLECTIONS"
-              value={reflectionsValue}
-              onChange={(v) => updateSetting('reflectionsEnabled', v)}
-              description={isAuto ? 'Set automatically by Auto quality' : 'Wet street reflections and puddles'}
-              disabled={isAuto}
-            />
-            <SettingToggle
-              id="city-scanlines"
-              label="SCANLINES"
-              value={settings.scanlineOverlay}
-              onChange={(v) => updateSetting('scanlineOverlay', v)}
-              description="CRT monitor scanline overlay"
-            />
-          </div>
-          <div>
-            <SectionHeader title="SCENE LIGHTING" subtitle="Brightness and time of day" />
-            <SettingSlider
-              id="city-ambient-brightness"
-              label="AMBIENT BRIGHTNESS"
-              value={settings.ambientBrightness}
-              onChange={(v) => updateSetting('ambientBrightness', v)}
-              min={0.5}
-              max={2.5}
-              step={0.1}
-              format={(v) => `${v.toFixed(1)}x`}
-              description="Overall scene ambient light level"
-            />
-            <SettingSlider
-              id="city-neon-brightness"
-              label="NEON BRIGHTNESS"
-              value={settings.neonBrightness}
-              onChange={(v) => updateSetting('neonBrightness', v)}
-              min={0.5}
-              max={2.5}
-              step={0.1}
-              format={(v) => `${v.toFixed(1)}x`}
-              description="Brightness of neon lights and building glow"
-            />
+            <SectionHeader title="WORLD" subtitle="Choose the world’s art direction" />
             <SettingSegment
               label="WORLD STYLE"
               options={WORLD_STYLE_OPTIONS}
-              value={resolveWorldStyle(settings.worldStyle)}
+              value={worldStyle}
               onChange={(key) => updateSetting('worldStyle', key)}
-              hint="OPEN WORLD IS THE BRIGHT LOW-POLY LOOK; CYBER CITY IS THE NEON NIGHT"
+              hint="OPEN WORLD IS BRIGHT AND LOW-POLY; CYBER CITY IS NEON AFTER DARK"
             />
-            <SettingSegment
-              label="TIME OF DAY"
-              options={[
-                { key: 'auto', label: 'AUTO' },
-                { key: 'day', label: 'DAY' },
-                { key: 'night', label: 'NIGHT' },
-              ]}
-              value={settings.timeOfDay}
-              onChange={(key) => updateSetting('timeOfDay', key)}
-              hint="AUTO FOLLOWS YOUR THEME (DAY / NIGHT)"
-              isActive={(key) => (settings.timeOfDay === 'day' || settings.timeOfDay === 'night')
-                ? settings.timeOfDay === key
-                : key === 'auto'}
-            />
+          </div>
+          <div>
+            <SectionHeader title="TIME" subtitle={isCyberCity ? 'Cyber City keeps its nocturnal identity' : 'Open World can follow your PortOS theme'} />
+            {isCyberCity ? (
+              <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/[0.06] px-3 py-3">
+                <div className="font-mono text-[10px] font-semibold tracking-[0.14em] text-cyan-300">ALWAYS NIGHT</div>
+                <p className="mt-1 font-sans text-[11px] leading-5 text-gray-400">Neon materials and the moonlit sky are designed as one scene, so daylight is not offered in this style.</p>
+              </div>
+            ) : (
+              <SettingSegment
+                label="TIME OF DAY"
+                options={[
+                  { key: 'auto', label: 'AUTO' },
+                  { key: 'day', label: 'DAY' },
+                  { key: 'night', label: 'NIGHT' },
+                ]}
+                value={settings.timeOfDay}
+                onChange={(key) => updateSetting('timeOfDay', key)}
+                hint="AUTO FOLLOWS YOUR PORTOS THEME"
+                isActive={(key) => (settings.timeOfDay === 'day' || settings.timeOfDay === 'night')
+                  ? settings.timeOfDay === key
+                  : key === 'auto'}
+              />
+            )}
+          </div>
+          <div className="rounded-xl border border-gray-700/35 bg-black/10 px-3 py-3">
+            <div className="font-sans text-[12px] text-gray-200">A focused visual language</div>
+            <p className="mt-1 font-sans text-[11px] leading-5 text-gray-500">The renderer now adapts detail automatically. The scene keeps its lighting, ground, and atmosphere coherent on every tier.</p>
           </div>
         </div>
       )}
 
-      {activeTab === 'explore' && (
+      {activeTab === 'controls' && (
         <div className="space-y-5">
           <div>
-            <SectionHeader title="EXPLORATION" subtitle="Street-level rover mode" />
+            <SectionHeader title="PLAY MODE" subtitle="Switch between the map and street level" />
             <SettingToggle
               id="city-exploration-mode"
               label="DROP IN MODE"
@@ -379,19 +294,35 @@ export default function OpenWorldSettingsDrawer({ open, onClose, qualityMode = '
               description="Toggle street-level exploration (Tab)"
             />
             <SettingSegment
+              label="CAMERA"
               options={[
                 { key: 'third', label: 'ROVER' },
                 { key: 'first', label: 'FIRST PERSON' },
               ]}
               value={settings.cameraView ?? 'third'}
               onChange={(key) => updateSetting('cameraView', key)}
-              hint="CAMERA WHILE DRIVING (V SWAPS IN-WORLD)"
+              hint="V SWITCHES CAMERA WHILE EXPLORING"
             />
+          </div>
+          <div>
+            <SectionHeader title="MOVEMENT" subtitle="Keyboard and mouse controls" />
+            <div className="rounded-xl border border-gray-700/35 bg-black/10 px-3">
+              <ControlRow keys={['W', 'A', 'S', 'D']} label="Move" hint="Arrow keys also work" />
+              <ControlRow keys={['SHIFT']} label="Boost" />
+              <ControlRow keys={['SPACE']} label="Jump" />
+              <ControlRow keys={['E', 'Q']} label="Fly up / down" hint="Free-fly vertical movement" />
+              <ControlRow keys={['F']} label="Interact" hint="Buildings and warp pads" />
+              <ControlRow keys={['R']} label="Respawn" hint="Return to your drop-in point" />
+              <ControlRow keys={['V']} label="Switch camera" />
+              <ControlRow keys={['TAB']} label="Drop in / fly out" />
+              <ControlRow keys={['M']} label="World map" />
+              <ControlRow keys={['DRAG']} label="Look around" hint="Click the scene to capture the mouse" />
+            </div>
           </div>
           <button
             type="button"
             onClick={resetSettings}
-            className="w-full font-pixel text-[10px] min-h-[44px] rounded border border-port-error/30 text-port-error/70 hover:bg-port-error/10 hover:text-port-error transition-all tracking-wider"
+            className="w-full font-sans text-[12px] min-h-[44px] rounded border border-port-error/30 text-port-error/70 hover:bg-port-error/10 hover:text-port-error transition-all tracking-wider"
           >
             RESET DEFAULTS
           </button>

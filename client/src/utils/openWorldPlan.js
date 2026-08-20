@@ -190,7 +190,7 @@ export function computeStreets() {
 }
 
 // ---------------------------------------------------------------------------
-// Street props: lamp posts along every street, holo-trees ringing the plaza.
+// Street props: lamp posts along every street, planting trees ringing the plaza.
 // ---------------------------------------------------------------------------
 
 const LAMP_SPACING = 11; // world units between lamp pairs along a street
@@ -221,8 +221,9 @@ export function computeStreetProps(streets, density = 1) {
     }
   }
 
-  // Holo-trees around the plaza sidewalk, skipping the avenue mouth (north) so the
-  // walkway to the harbor stays open.
+  // Trees around the plaza sidewalk, skipping the avenue mouth (north) so the walkway
+  // to the harbor stays open. The stable scale variation keeps the grove from reading
+  // as a repeated ring of identical icons.
   const treeCount = Math.round(10 * Math.min(1.5, density));
   const treeRadius = (streets.plazaRing.inner + streets.plazaRing.outer) / 2 + 0.6;
   for (let i = 0; i < treeCount; i++) {
@@ -230,7 +231,7 @@ export function computeStreetProps(streets, density = 1) {
     const x = Math.cos(a) * treeRadius;
     const z = Math.sin(a) * treeRadius;
     if (z < -treeRadius * 0.86) continue; // the avenue mouth
-    trees.push({ x, z, seed: i });
+    trees.push({ x, z, seed: i, scale: 0.86 + ((i * 7) % 5) * 0.07 });
   }
 
   return { lamps, trees };

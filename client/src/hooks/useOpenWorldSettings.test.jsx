@@ -22,14 +22,14 @@ describe('useOpenWorldSettings localStorage resilience', () => {
 
     const [settings] = result.current;
     expect(settings.timeOfDay).toBe('auto');
-    expect(settings.qualityPreset).toBe('high');
+    expect(settings.worldStyle).toBe('vibes');
   });
 
   it('initializes to defaults when stored JSON is corrupt', () => {
     window.localStorage.setItem(STORAGE_KEY, '{ not valid json');
     const { result } = renderHook(() => useOpenWorldSettings());
     const [settings] = result.current;
-    expect(settings.qualityPreset).toBe('high');
+    expect(settings.worldStyle).toBe('vibes');
   });
 
   it('keeps in-memory setting updates working when writes throw', () => {
@@ -50,41 +50,36 @@ describe('useOpenWorldSettings localStorage resilience', () => {
     expect(settings.timeOfDay).toBe('night');
   });
 
-  it('defaults a fresh install to Auto quality beginning at High', () => {
+  it('defaults a fresh install to player-facing world settings', () => {
     const { result } = renderHook(() => useOpenWorldSettings());
     const [settings] = result.current;
-    expect(settings.qualityMode).toBe('auto');
-    expect(settings.qualityPreset).toBe('high');
     expect(settings.explorationMode).toBe(true);
     expect(settings.cameraView).toBe('third');
+    expect(settings.worldStyle).toBe('vibes');
+    expect(settings.qualityMode).toBeUndefined();
+    expect(settings.qualityPreset).toBeUndefined();
+    expect(settings.reflectionsEnabled).toBeUndefined();
+    expect(settings.scanlineOverlay).toBeUndefined();
   });
 
-  it('loads an existing pre-Auto payload as Manual, keeping its preset', () => {
-    // A stored payload from before Auto mode has no `qualityMode` key.
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ qualityPreset: 'ultra' }));
+  it('drops legacy renderer controls when loading an existing payload', () => {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      worldStyle: 'cyber',
+      qualityMode: 'manual',
+      qualityPreset: 'ultra',
+      reflectionsEnabled: true,
+      scanlineOverlay: true,
+      ambientBrightness: 2,
+      neonBrightness: 2,
+      particleDensity: 2,
+      dpr: [1, 2],
+    }));
     const { result } = renderHook(() => useOpenWorldSettings());
     const [settings] = result.current;
-    expect(settings.qualityMode).toBe('manual');
-    expect(settings.qualityPreset).toBe('ultra');
-  });
-
-  it('preserves a stored qualityMode of auto (present-but-set, not absent)', () => {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ qualityMode: 'auto', qualityPreset: 'medium' }));
-    const { result } = renderHook(() => useOpenWorldSettings());
-    const [settings] = result.current;
-    expect(settings.qualityMode).toBe('auto');
-  });
-
-  it('picking a manual preset pins Manual mode', () => {
-    const { result } = renderHook(() => useOpenWorldSettings());
-    act(() => {
-      const [, updateSetting] = result.current;
-      updateSetting('qualityPreset', 'low');
-    });
-    const [settings] = result.current;
-    expect(settings.qualityMode).toBe('manual');
-    expect(settings.qualityPreset).toBe('low');
-    expect(settings.reflectionsEnabled).toBe(false); // low preset bulk-applied
+    expect(settings.worldStyle).toBe('cyber');
+    for (const key of ['qualityMode', 'qualityPreset', 'reflectionsEnabled', 'scanlineOverlay', 'ambientBrightness', 'neonBrightness', 'particleDensity', 'dpr']) {
+      expect(settings[key]).toBeUndefined();
+    }
   });
 
   it('bumps resetNonce on reset so the runtime budget can re-arm', () => {
@@ -96,7 +91,6 @@ describe('useOpenWorldSettings localStorage resilience', () => {
     });
     expect(result.current[3]).toBe(before + 1);
     const [settings] = result.current;
-    expect(settings.qualityMode).toBe('auto'); // reset restores Auto default
     expect(settings.explorationMode).toBe(true);
     expect(settings.cameraView).toBe('third');
   });

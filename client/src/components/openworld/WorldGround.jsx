@@ -66,7 +66,12 @@ function RollingFog({ dayMix = 0 }) {
 
 export default function WorldGround({ settings }) {
   const { ground, neonAccents, lowPoly } = useOpenWorldPalette();
-  const reflectionsEnabled = settings?.reflectionsEnabled ?? true;
+  // Wet-night dressing is now an art-direction/performance decision, not a user-facing
+  // toggle. The ground itself must always render: the old REFLECTIONS setting accidentally
+  // removed the base plane on low quality, leaving only the debug-like grid underneath the
+  // player. Vibes stays clean and matte; Cyber City keeps a small wet-night layer above the
+  // always-present pavement.
+  const wetEffectsEnabled = !lowPoly && settings?.effectiveTier !== 'low';
   const groundMatRef = useRef();
 
   const timeOfDay = settings?.timeOfDay ?? 'sunset';
@@ -105,7 +110,7 @@ export default function WorldGround({ settings }) {
     const result = [];
     const rand = seededRand(137);
     const colors = neonAccents;
-    const count = reflectionsEnabled ? 40 : 20;
+    const count = wetEffectsEnabled ? 40 : 0;
 
     for (let i = 0; i < count; i++) {
       result.push({
@@ -116,23 +121,22 @@ export default function WorldGround({ settings }) {
       });
     }
     return result;
-  }, [reflectionsEnabled, neonAccents]);
+  }, [wetEffectsEnabled, neonAccents]);
 
   return (
     <group>
-      {/* Reflective dark ground plane */}
-      {reflectionsEnabled && (
-        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, WORLD.groundY, GROUND_CENTER_Z]}>
-          <planeGeometry args={[GROUND_HALF * 2, GROUND_DEPTH]} />
-          <meshStandardMaterial
-            ref={groundMatRef}
-            color={preset.groundColor ?? '#0a0a20'}
-            metalness={targetMetalness}
-            roughness={0.7}
-            side={THREE.DoubleSide}
-          />
-        </mesh>
-      )}
+      {/* Always-present ground plane. Surface finish follows the active world style and
+          preset; it is never removed by a quality choice. */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, WORLD.groundY, GROUND_CENTER_Z]}>
+        <planeGeometry args={[GROUND_HALF * 2, GROUND_DEPTH]} />
+        <meshStandardMaterial
+          ref={groundMatRef}
+          color={preset.groundColor ?? '#0a0a20'}
+          metalness={targetMetalness}
+          roughness={0.7}
+          side={THREE.DoubleSide}
+        />
+      </mesh>
 
       <Grid
         args={[GROUND_HALF * 2, GROUND_DEPTH]}
@@ -167,7 +171,7 @@ export default function WorldGround({ settings }) {
       )}
 
       {/* Rolling fog layer at street level */}
-      {reflectionsEnabled && <RollingFog dayMix={dayMix} />}
+      {wetEffectsEnabled && <RollingFog dayMix={dayMix} />}
     </group>
   );
 }

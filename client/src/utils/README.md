@@ -98,7 +98,6 @@ its tunable constants and placement helpers.
 | `openWorldRenderBudget` | Pure Auto-quality render-budget state machine: p75 frame-time windows, hysteresis, cooldown, warm-up/gap rejection (`createRenderBudget`, `recordFrame`, `restartWarmup`, `resetRenderBudget`, `getEffectiveTier`, `QUALITY_TIERS`, `DEFAULT_RENDER_BUDGET_CONFIG`). |
 | `openWorldRooftops` | Deterministic rooftop fixture kits (antenna/tank/AC/dish) per app name (`computeRooftopKit`). |
 | `openWorldProductivity` | Productivity monument from streak/velocity tiers (`computeProductivityMonument`). |
-| `openWorldSeasonalDecor` | Season/holiday resolution → seasonal decoration placements (`computeSeasonalDecor`). |
 | `openWorldSoundscape` | Ambient soundscape: mood/energy classification, chord selection (`computeSoundscape`), and the manual mood override (`applyMoodOverride`). |
 | `openWorldTaskFlowRiver` | Task-flow river width/speed from backlog & throughput (`computeTaskFlowRiver`). |
 | `openWorldTaskQueue` | Task-queue state/color from status counts (`computeTaskQueue`). |
