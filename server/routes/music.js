@@ -350,6 +350,8 @@ const generateSchema = z.object({
   // The peer record id is machine-local routing intent. It never crosses the
   // provider boundary. Free-form text stays local too: remote execution uses a
   // fixed-vocabulary instrumental profile rendered by the worker.
+  // Why audio alone is restricted that way:
+  // docs/decisions/2026-08-20-federated-visual-prompts.md
   mediaProviderPeerId: z.string().uuid().optional(),
   remoteMusicProfile: federatedMediaAudioProfileSchema.optional(),
   durationSec: z.number().positive().max(600).optional(),

@@ -87,16 +87,10 @@ the first two so the boundary fails loudly rather than eroding.
 `CLAUDE.md` summarizes this decision as the flat rule that **PII must not ride
 the federation layer at all**, and for Privacy Center records that is exact and
 unconditional. The rule governs *records* — what one instance replicates to
-another, and what a status or capability payload may disclose about the data
-this machine holds. It is not a rule that no user-authored text may ever be
-addressed to a peer: a federated media job body carries the prompt the user
-asked to render, because the render is not possible otherwise. That single
-scoped carve-out — submitted image/video job bodies travelling to a peer this
-install has allowlisted for that work — is recorded in ADR
-[federated visual prompts](./2026-08-20-federated-visual-prompts.md) (#4682),
-which also fixes what stays absolutely prompt-free (status and capability
-payloads) and why audio is restricted to a fixed vocabulary instead. Read the
-two together; neither weakens the other.
+another, and what a status or capability payload may disclose. It is not a rule
+that no user-authored text may ever be addressed to a peer: its one scoped
+carve-out, submitted image/video job bodies, is decided in ADR
+[federated visual prompts](./2026-08-20-federated-visual-prompts.md) (#4682).
 
 ### Why not "federate, but gate it on HTTPS + the instance password"
 

@@ -518,45 +518,126 @@ describe('federated media provider — image/video kinds', () => {
     expect(described.result).toMatchObject({ available: true, mimeType: 'image/png', sizeBytes: bytes.length });
   });
 
-  // ADR docs/decisions/2026-08-20-federated-visual-prompts.md draws the line at
-  // payload class, not at the prompt: a submitted job body may carry the prompt
-  // the peer is being asked to render, but a status/capability payload and the
-  // read-back job projection must never carry prompt or record content. A
-  // visual prompt is generated from project records, so a leak here would put
-  // universe canon and character names into a payload the ADR says is
-  // absolutely prompt-free.
-  it('keeps the prompt out of the status payload and the job projection', async () => {
-    const PROMPT_SENTINEL = 'a lighthouse at dawn over Example Bay';
-    state.settings = {
-      federation: { mediaProvider: imageConfig() },
-      imageGen: { local: { pythonPath: '/usr/bin/python3' } },
-    };
-    state.cachedRepos = new Set(['black-forest-labs/FLUX.1-dev']);
+});
+
+// ADR docs/decisions/2026-08-20-federated-visual-prompts.md draws the privacy
+// line at payload *class*, not at the prompt: a submitted job body may carry
+// the prompt the peer is being asked to render, but a status/capability payload
+// and the read-back job projection must never carry prompt or record content.
+// A prompt is generated from project records, so a leak here would put universe
+// canon and character names into a payload the ADR says is absolutely
+// prompt-free. Both guarded paths (getFederatedMediaProviderStatus,
+// describeFederatedMediaJob) are kind-agnostic allowlists, so every kind is
+// exercised — a per-kind field added to either is exactly the regression.
+describe('federated media provider — prompt-free status and projection payloads', () => {
+  const IMAGE_PROMPT = 'a lighthouse at dawn over Example Bay';
+  const VIDEO_PROMPT = 'a tram climbing a hill in Example City';
+
+  const kinds = [
+    {
+      kind: 'audio',
+      // Audio prompts are already restricted to a canonical profile string, so
+      // the sentinel is a fragment of that rather than free text.
+      sentinel: 'dreamy',
+      resultDir: () => tempMusicPath,
+      resultName: (id) => `music-gen-${id}.wav`,
+      setup: () => {
+        state.settings = { federation: { mediaProvider: config() } };
+      },
+      config: () => config(),
+      input: () => input(),
+    },
+    {
+      kind: 'image',
+      sentinel: IMAGE_PROMPT,
+      resultDir: () => tempImagesPath,
+      resultName: (id) => `${id}.png`,
+      setup: () => {
+        state.imageModels = [{ id: 'flux-dev', name: 'FLUX.1 dev', repo: 'black-forest-labs/FLUX.1-dev' }];
+        state.cachedRepos = new Set(['black-forest-labs/FLUX.1-dev']);
+        state.settings = {
+          federation: { mediaProvider: imagePrivacyConfig() },
+          imageGen: { local: { pythonPath: '/usr/bin/python3' } },
+        };
+      },
+      config: () => imagePrivacyConfig(),
+      input: () => ({
+        engine: 'local', modelId: 'flux-dev', kind: 'image',
+        prompt: IMAGE_PROMPT, width: 1024, height: 1024,
+      }),
+    },
+    {
+      kind: 'video',
+      sentinel: VIDEO_PROMPT,
+      resultDir: () => tempVideosPath,
+      resultName: (id) => `${id}.mp4`,
+      setup: () => {
+        state.videoModels = [{
+          id: 'ltx2', name: 'LTX2', runtime: 'ltx2', repo: 'example/ltx2', supportedModes: ['text'],
+        }];
+        state.cachedRepos = new Set(['example/ltx2']);
+        state.settings = { federation: { mediaProvider: videoPrivacyConfig() } };
+      },
+      config: () => videoPrivacyConfig(),
+      input: () => ({ engine: 'local', modelId: 'ltx2', kind: 'video', prompt: VIDEO_PROMPT }),
+    },
+  ];
+
+  const imagePrivacyConfig = () => ({
+    enabled: true, maxQueuedJobs: 2, audioModels: [],
+    imageModels: [{ engine: 'local', modelId: 'flux-dev' }], videoModels: [],
+  });
+  const videoPrivacyConfig = () => ({
+    enabled: true, maxQueuedJobs: 2, audioModels: [], imageModels: [],
+    videoModels: [{ engine: 'local', modelId: 'ltx2' }],
+  });
+
+  it.each(kinds)('keeps the $kind prompt out of the status payload and both job projections', async (scenario) => {
+    scenario.setup();
     const created = await submitFederatedMediaJob({
       callerId: 'peer-example',
-      config: imageConfig(),
-      input: { ...imageInput(), prompt: PROMPT_SENTINEL },
-      idempotencyKey: 'commission-image-privacy',
+      config: scenario.config(),
+      input: scenario.input(),
+      idempotencyKey: `privacy-${scenario.kind}`,
     });
-    const carriesPrompt = (payload) => JSON.stringify(payload ?? null).includes(PROMPT_SENTINEL);
+    const payload = (value) => JSON.stringify(value ?? null);
 
-    // Bypass probe: the detector only means something if it fires on a payload
-    // that genuinely does carry the prompt. The queued job params legitimately
-    // do — that is the local render input, not a wire payload.
-    expect(carriesPrompt(enqueueJob.mock.calls.at(-1)[0].params)).toBe(true);
+    // Bypass probe: these assertions only mean something if the sentinel is
+    // findable at all. The queued job params legitimately carry it — that is
+    // the local render input, not a wire payload.
+    expect(payload(enqueueJob.mock.calls.at(-1)[0].params)).toContain(scenario.sentinel);
 
-    expect(carriesPrompt(created.job)).toBe(false);
-    expect(carriesPrompt(await getFederatedMediaProviderStatus(imageConfig(), { kinds: ['image'] }))).toBe(false);
-    expect(carriesPrompt(await describeFederatedMediaJob('peer-example', created.job.id))).toBe(false);
+    // submitFederatedMediaJob returns describeFederatedMediaJob's projection,
+    // so this is both the submit response and the queued poll response.
+    expect(payload(created.job)).not.toContain(scenario.sentinel);
 
+    const status = await getFederatedMediaProviderStatus(scenario.config(), { kinds: [scenario.kind] });
+    expect(payload(status)).not.toContain(scenario.sentinel);
+    // The underscore-prefixed internals publicCapability strips are not prompts,
+    // but _pythonPath is an absolute local interpreter path — record content by
+    // the same rule, and the one field this payload could realistically regress
+    // into leaking if that map is ever dropped.
+    expect(status.capabilities[0]).not.toHaveProperty('_pythonPath');
+    expect(status.capabilities[0]).not.toHaveProperty('_model');
+
+    // The completed projection is the third payload class: it gains a result
+    // block built per kind from the rendered file, which must not reintroduce
+    // the prompt.
     const job = state.jobs.find((candidate) => candidate.id === created.job.id);
-    const filename = `${job.id}.png`;
-    writeFileSync(join(tempImagesPath, filename), Buffer.from('fake-png-bytes'));
+    const filename = scenario.resultName(job.id);
+    const resultPath = join(scenario.resultDir(), filename);
+    // Job ids restart at 1 per test while the temp dirs live for the whole
+    // file, so an earlier test's render can already sit at this path — drop it,
+    // or this case would still pass with its own write removed.
+    rmSync(resultPath, { force: true });
+    writeFileSync(resultPath, Buffer.from('fake-media-bytes'));
     Object.assign(job, {
       status: 'completed',
       completedAt: '2026-08-16T00:02:00.000Z',
-      result: { filename, engine: 'local', modelId: 'flux-dev' },
+      result: { filename, engine: scenario.input().engine, modelId: scenario.input().modelId },
     });
-    expect(carriesPrompt(await describeFederatedMediaJob('peer-example', job.id))).toBe(false);
+    const completed = await describeFederatedMediaJob('peer-example', job.id);
+    expect(completed.result).toMatchObject({ available: true });
+    expect(payload(completed)).not.toContain(scenario.sentinel);
   });
 });

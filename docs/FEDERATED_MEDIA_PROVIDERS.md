@@ -106,18 +106,10 @@ return a plausible render of the wrong thing. Input-asset transfer is a later
 slice.
 
 Unlike audio, image and video prompts cross as submitted rather than being
-re-rendered from a fixed vocabulary. There is no closed taxonomy for arbitrary
-visual content the way audio has a finite style/mood/instrument alphabet, and a
-federation peer is an authenticated, explicitly registered instance — typically
-the same user's other machine. The privacy line this project draws is that
-*status and capability payloads* never carry prompt or record content; a
-submitted job body is not a status payload.
-
-That boundary is recorded as ADR
-[federated visual prompts](./decisions/2026-08-20-federated-visual-prompts.md),
-which also states what a future standing (unattended) route may not do: fan out
-beyond the peer the operator named, fall back to a different peer on failure, or
-route to a peer that is not a tailnet host.
+re-rendered from a fixed vocabulary. Why that is not a hole in the "no PII on
+federation" rule, what stays absolutely prompt-free, and what a future standing
+(unattended) route may not do are all decided in ADR
+[federated visual prompts](./decisions/2026-08-20-federated-visual-prompts.md).
 
 ## Authentication and identity
 

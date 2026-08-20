@@ -184,9 +184,8 @@ const generateSchema = z.object({
   // peer by naming one here. mediaProviderEngine names the provider-side
   // engine within that allowlist; local image/video generation registers as
   // 'local', which is the only engine a provider can currently advertise.
-  // Naming a peer here sends this prompt to it; what may and may not cross is
-  // ADR docs/decisions/2026-08-20-federated-visual-prompts.md, which also fixes
-  // the extra constraint a future standing/unattended route has to satisfy.
+  // What may cross to a peer, and what may not:
+  // docs/decisions/2026-08-20-federated-visual-prompts.md
   mediaProviderPeerId: z.string().uuid().optional(),
   mediaProviderEngine: z.string().trim().min(1).max(80).optional(),
 }).refine(refineImagePixelCap, { message: PIXEL_CAP_MESSAGE, path: ['width'] });

@@ -89,28 +89,23 @@ Concretely:
    benefits every federated surface and is tracked with the transport work, not
    here.
 
-5. **Unattended routing does not widen this boundary.** A configured route names
-   one peer, one kind and one model; the operator opts in per kind, exactly as
-   they opt in per job today. What changes is review cadence, not audience — the
-   same prompts go to the same allowlisted machine. An unattended route may never
-   fan out to peers the user did not name, may never fall back to a different
-   peer on failure, and may never relax rules 1–3.
+5. **Unattended routing does not widen the audience, but it must be gated on a
+   tailnet peer.** A configured route names one peer, one kind and one model, so
+   the same prompts reach the same allowlisted machine — what changes is review
+   cadence. It may never fan out to peers the allowlist does not cover, never
+   fall back to a different peer on failure, and never relax rules 1–3.
 
-6. **Unattended routes require a tailnet peer.** Where an interactive render is
-   routed by a human who picked that peer for that job, a standing route exports
-   every future prompt of its kind without review, so a misconfigured
-   counterparty is a permanent leak rather than a one-time one. `peerFetch` sets
-   `rejectUnauthorized: false` ("Tailnet is the trust boundary"): between two
-   tailnet nodes WireGuard already supplies mutual authentication, but a
-   plain-LAN or non-`.ts.net` peer gets **no server authentication** — nothing
-   proves the far end is the machine whose record the user allowlisted.
-   Authentication does not save this: the prompt rides the request body, so an
-   impostor holding the connection reads it before it fails to answer. That is
-   an acceptable risk for a per-job human decision and not for a standing one.
-   When unattended
-   routing ships, configuring a route to a peer that
-   `peerRequiresTailscale()`-style detection does not recognize as a tailnet host
-   must be refused, naming the reason. Interactive routing is unchanged.
+   One thing does change enough to need its own gate. A standing route exports
+   every future prompt of its kind without a human looking, so a misconfigured
+   counterparty is a permanent leak where an interactive mistake is a one-time
+   one — and `peerFetch`'s `rejectUnauthorized: false` posture leaves a plain-LAN
+   or non-`.ts.net` peer with no server authentication at all (see the HTTPS
+   bullet in `CLAUDE.md`). Authentication does not save this: the prompt rides
+   the request body, so an impostor holding the connection reads it before it
+   fails to answer. When unattended routing ships, a route whose peer is not
+   recognized as a tailnet host must be refused, naming the reason (see
+   Consequences for why that check needs its own predicate rather than a
+   re-export of the probe-deferral one). Interactive routing is unchanged.
 
 ### Local input assets are out of scope, and stay out
 
@@ -141,11 +136,9 @@ later slice of #4348 and must revisit this ADR before shipping.
   produces that after verifying the instance password, so a provider running the
   default passwordless posture rejects every federated job with
   `MEDIA_PROVIDER_PEER_AUTH_REQUIRED`. No prompt crosses to an unauthenticated
-  install today, and this ADR does not relax that. What it deliberately does
-  *not* do is make a stronger per-peer cryptographic binding a precondition for
-  the visual carve-out: that gap applies equally to audio and to every other
-  federated surface, so blocking this decision on it would fix nothing specific
-  to prompts.
+  install today, and this ADR does not relax that. It also does not make the
+  stronger per-peer binding described in rule 4 a precondition — that gap is not
+  prompt-specific, so blocking this decision on it would fix nothing here.
 
 - **Forbid federated visual rendering entirely.** Rejected: it deletes the
   feature to protect data from the user's own second machine, which is where the
@@ -154,18 +147,20 @@ later slice of #4348 and must revisit this ADR before shipping.
 
 ## Consequences
 
-- The flat "no PII on federation" rule in `CLAUDE.md` now reads with one scoped
-  carve-out attached: *submitted job bodies for image/video rendering*. The
-  privacy-records ADR cross-references this record so the two are read together.
-  Privacy Center records remain machine-local and unaffected — nothing here adds
-  a federated kind, a sync category, or a wire version.
-- The schemas and route branches stop restating the rationale inline and point
-  at this ADR instead, so the argument lives in one place and a reviewer's
-  objection has a citable answer.
-- Implementing rule 6 means `peerRequiresTailscale()` (currently module-private
-  in `server/services/instances.js`) has to become reachable from wherever an
-  unattended route is validated. That is left to the slice that ships unattended
-  routing rather than exported ahead of a consumer.
+- Privacy Center records are unaffected: nothing here adds a federated kind, a
+  sync category, or a wire version. `CLAUDE.md` and the privacy-records ADR link
+  here rather than re-arguing the carve-out, and the schemas and route fields
+  stop restating the rationale inline, so a reviewer's objection has one citable
+  answer instead of four paraphrases.
+- Rule 5's tailnet gate needs a predicate of its own. `peerRequiresTailscale()`
+  (`server/services/instances.js`) is the right *shape*, but it is module-private
+  and its job is probe deferral — an availability heuristic that a future
+  polling-noise fix is free to loosen. Re-exporting it as a security gate would
+  let that loosening silently widen this boundary, so the slice shipping
+  unattended routing owns a deliberate predicate rather than a borrowed one.
+- Rule 3 is enforced, not just asserted: a guard in
+  `server/services/federatedMediaProvider.test.js` submits a job per kind and
+  fails if its prompt reaches the status payload or either job projection.
 - Any future federated kind must be classified against rules 1–3 before it
   ships: is its payload a *submission* (may carry what the work is) or a *status*
   (may not carry anything)? A kind whose free-form content has a privacy-safe
@@ -173,9 +168,6 @@ later slice of #4348 and must revisit this ADR before shipping.
 
 ## Revisiting
 
-This carve-out is scoped to submitted image/video job bodies travelling to an
-peer this install has enabled and allowlisted for that kind, on a private
-network. Widening it — input-asset transfer, routing to peers the local
-allowlist does not cover, relaying through a non-PortOS service, or any path
-where the counterparty is not one of the user's own registered instances —
-requires a new ADR, not a reading of this one.
+Widening the carve-out requires a new ADR, not a reading of this one — in
+particular input-asset transfer, or relaying through anything that is not a
+PortOS instance this install has allowlisted for that kind of work.
