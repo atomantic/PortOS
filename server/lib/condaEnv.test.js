@@ -5,28 +5,29 @@ import { condaEnvPythonCandidates, resolveCondaEnvPython } from './condaEnv.js';
 describe('conda environment python resolution', () => {
   const CONDA = '/opt/conda';
   const envPy = (root, name) => `${root}/envs/${name}/bin/python`;
+  // The resolver composes paths with `join()`, which emits backslashes on Windows, so
+  // EVERY comparison against a forward-slash literal has to normalize first — a raw
+  // `toBe(envPy(...))` here passed on macOS and failed the Windows CI job.
+  const candidatesFor = (name, env) => condaEnvPythonCandidates(name, { env }).map(posixPath);
 
   it('probes the machine-declared roots first, then the standard install locations', () => {
-    const candidates = condaEnvPythonCandidates('trellis2', { env: { CONDA_ROOT: CONDA } });
+    const candidates = candidatesFor('trellis2', { CONDA_ROOT: CONDA });
     expect(candidates[0]).toBe(envPy(CONDA, 'trellis2'));
     // Every candidate targets the requested env, never another one.
-    expect(candidates.every((p) => posixPath(p).includes('/envs/trellis2/'))).toBe(true);
-    expect(candidates.some((p) => posixPath(p).startsWith('/opt/conda/'))).toBe(true);
+    expect(candidates.every((p) => p.includes('/envs/trellis2/'))).toBe(true);
+    expect(candidates.some((p) => p.startsWith('/opt/conda/'))).toBe(true);
   });
 
   it('walks up from an active envs/<name> CONDA_PREFIX to recover the root', () => {
     // The subtle case this helper exists to centralize: PortOS itself running under a
     // DIFFERENT conda env must still locate the target env, not look inside its own.
-    const candidates = condaEnvPythonCandidates('pixal3d', {
-      env: { CONDA_PREFIX: `${CONDA}/envs/portos` },
-    }).map(posixPath);
+    const candidates = candidatesFor('pixal3d', { CONDA_PREFIX: `${CONDA}/envs/portos` });
     expect(candidates).toContain(envPy(CONDA, 'pixal3d'));
     expect(candidates.some((p) => p.includes('/envs/portos/'))).toBe(false);
   });
 
   it('uses a base-install CONDA_PREFIX as the root directly', () => {
-    const candidates = condaEnvPythonCandidates('trellis2', { env: { CONDA_PREFIX: CONDA } });
-    expect(candidates.map(posixPath)).toContain(envPy(CONDA, 'trellis2'));
+    expect(candidatesFor('trellis2', { CONDA_PREFIX: CONDA })).toContain(envPy(CONDA, 'trellis2'));
   });
 
   it('keeps each env name separate', () => {
