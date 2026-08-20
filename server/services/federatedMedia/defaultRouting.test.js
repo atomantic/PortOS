@@ -280,3 +280,28 @@ describe('non-text video pipelines', () => {
       .resolves.toMatchObject({ peer: { id: 'peer-1' } });
   });
 });
+
+// `params.mode` on a video job is overloaded — a backend token OR a pipeline
+// semantic — and the two need opposite treatment.
+describe('overloaded video mode token', () => {
+  const route = { peerId: 'peer-1', engine: 'comfy', modelId: 'wan-remote' };
+
+  beforeEach(() => {
+    getSettings.mockResolvedValue({ federation: { mediaRouting: { video: route } } });
+  });
+
+  it('routes a job carrying the local backend token, which states where it would have run', async () => {
+    await expect(resolveDefaultMediaRoute({ kind: 'video', params: { prompt: 'p', mode: 'local' } }))
+      .resolves.toMatchObject({ peer: { id: 'peer-1' } });
+  });
+
+  it('refuses a grok-pinned job rather than substituting the peer model for the cloud render', async () => {
+    await expect(resolveDefaultMediaRoute({ kind: 'video', params: { prompt: 'p', mode: 'grok' } }))
+      .rejects.toThrow(/grok backend/);
+  });
+
+  it('still refuses a genuine non-text pipeline semantic', async () => {
+    await expect(resolveDefaultMediaRoute({ kind: 'video', params: { prompt: 'p', mode: 'fflf' } }))
+      .rejects.toThrow(/non-text render mode/);
+  });
+});

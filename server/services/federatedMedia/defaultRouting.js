@@ -28,6 +28,7 @@
 import { ServerError } from '../../lib/errorHandler.js';
 import { buildFederatedMediaRequest } from '../../lib/federatedMediaRequest.js';
 import { getSettings } from '../settings.js';
+import { CLOUD_VIDEO_GEN_MODES, VIDEO_GEN_MODES } from '../videoGen/modes.js';
 
 // Only the visual kinds. See the audio note in the module docblock.
 export const ROUTABLE_MEDIA_KINDS = Object.freeze(['image', 'video']);
@@ -110,14 +111,27 @@ function assertRoutableConditioning(kind, params) {
   // silently gets the opposite of what it asked for. Only a truthy value is a
   // conflict — the common `false` is the provider's own default anyway.
   if (kind === 'video' && params?.disableAudio === true) unsupported.push('a silent (audio-disabled) render');
-  // For LOCAL video, `mode` is the pipeline semantic for the lane (t2v / i2v /
-  // first-last-frame / audio-to-video), not a backend selector — and only
-  // text-to-video crosses the wire. Because `routedJobParams` drops `mode`
-  // outright, an unguarded 'fflf' or 'a2v' job would come back as a plain
-  // text-to-video clip: a valid-looking render of the wrong pipeline. Mirrors
-  // the interactive route's non-text-mode rejection.
-  if (kind === 'video' && params?.mode !== undefined && params.mode !== 'text') {
-    unsupported.push(`a non-text render mode ('${params.mode}')`);
+  // `params.mode` on a video job is OVERLOADED: it is either a backend token
+  // ('local' / 'grok', what enforceRenderBackendPin writes) or, for the local
+  // lane, the pipeline semantic (t2v / i2v / first-last-frame / audio-to-video).
+  // The two need opposite treatment, and conflating them either rejects every
+  // routable Grok-pinned job or silently renders the wrong pipeline.
+  if (kind === 'video' && params?.mode !== undefined) {
+    const mode = params.mode;
+    if (CLOUD_VIDEO_GEN_MODES.includes(mode)) {
+      // A cloud-CLI render spends that provider's quota with its own model and
+      // its own duration vocabulary, none of which the wire carries. Refuse
+      // rather than quietly substituting the peer's model — the interactive
+      // route rejects a federated Grok render for the same reason.
+      unsupported.push(`the ${mode} backend`);
+    } else if (!VIDEO_GEN_MODES.includes(mode) && mode !== 'text') {
+      // A genuine pipeline semantic other than text-to-video. `routedJobParams`
+      // drops `mode`, so an unguarded 'fflf' or 'a2v' job would come back as a
+      // plain text-to-video clip: a valid-looking render of a different thing.
+      unsupported.push(`a non-text render mode ('${mode}')`);
+    }
+    // A bare 'local' backend token falls through: it states where the job would
+    // have run, not what pipeline it is, and routedJobParams strips it.
   }
   if (!unsupported.length) return;
   throw new ServerError(

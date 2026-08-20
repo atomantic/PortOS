@@ -4,6 +4,7 @@ import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import { getAuthStatus, getMediaShareCandidates, getSettings, listMusicEngines, updateSettings } from '../../services/api';
 
+const isRecord = (value) => value && typeof value === 'object' && !Array.isArray(value);
 const modelKey = ({ engine, modelId }) => `${engine}\u0000${modelId}`;
 
 // Image and video share one shape: a flat candidate list from the server, each
@@ -151,7 +152,10 @@ export function SharingTab() {
 
   const handleStrictPullToggle = async (next) => {
     setStrictPullSaving(true);
-    const federation = { ...federationSettings, strictPullAuthorization: next };
+    // Same whole-slice replacement hazard as the provider save below.
+    const fresh = await getSettings({ silent: true }).catch(() => null);
+    const base = isRecord(fresh?.federation) ? fresh.federation : federationSettings;
+    const federation = { ...base, strictPullAuthorization: next };
     const merged = await updateSettings({ federation }).catch(() => null);
     setStrictPullSaving(false);
     if (!merged) return;
@@ -201,8 +205,16 @@ export function SharingTab() {
       audioModels: normalizeSelectedModels(providerModels),
       ...Object.fromEntries(VISUAL_KINDS.map(({ kind, field }) => [field, visualSelections[kind]])),
     };
-    const federation = { ...federationSettings, mediaProvider };
     setProviderSaving(true);
+    // /api/settings replaces the top-level `federation` slice wholesale, so this
+    // write has to carry everything else in it. Re-read immediately before
+    // saving rather than trusting the mount-time snapshot: the Instances page
+    // owns `mediaRouting`, and a Settings tab left open across a routing change
+    // would otherwise write back the slice as it looked before, silently
+    // clearing the route and sending unattended renders back to local.
+    const fresh = await getSettings({ silent: true }).catch(() => null);
+    const base = isRecord(fresh?.federation) ? fresh.federation : federationSettings;
+    const federation = { ...base, mediaProvider };
     const merged = await updateSettings({ federation }, { silent: true }).catch(() => null);
     setProviderSaving(false);
     if (!merged) {

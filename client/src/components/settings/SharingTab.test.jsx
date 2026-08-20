@@ -209,3 +209,47 @@ describe('SharingTab — visual provider models', () => {
     expect(screen.getByText(/no longer installed/)).toBeInTheDocument();
   });
 });
+
+// /api/settings replaces the whole `federation` slice, and the Instances page
+// owns mediaRouting — a tab left open across a routing change must not write
+// back the slice as it looked before.
+describe('SharingTab — writes against the freshest federation slice', () => {
+  it('preserves a route added elsewhere after this tab loaded', async () => {
+    getMediaShareCandidates.mockResolvedValue({ image: [], video: [] });
+    getAuthStatus.mockResolvedValue({ enabled: true });
+    // Start enabled, then turn sharing OFF — disabling needs no model selection,
+    // so the save actually reaches updateSettings.
+    getSettings.mockResolvedValueOnce({
+      sharingDisplayName: '', sharingBio: '',
+      federation: {
+        mediaProvider: {
+          enabled: true, maxQueuedJobs: 2,
+          audioModels: [{ engine: 'minimax-music3', modelId: 'minimax-music3' }],
+        },
+      },
+    });
+
+    render(<SharingTab />);
+    const toggle = await screen.findByLabelText(/Accept audio generation jobs/i);
+
+    // The Instances page saves a route while this tab is sitting open.
+    const route = { peerId: 'peer-1', engine: 'comfy', modelId: 'sdxl-base' };
+    getSettings.mockResolvedValueOnce({
+      federation: {
+        mediaProvider: {
+          enabled: true, maxQueuedJobs: 2,
+          audioModels: [{ engine: 'minimax-music3', modelId: 'minimax-music3' }],
+        },
+        mediaRouting: { image: route },
+      },
+    });
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole('button', { name: 'Save provider' }));
+
+    // Writing the mount-time snapshot would have dropped mediaRouting entirely,
+    // silently sending every unattended render back to local.
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({
+      federation: expect.objectContaining({ mediaRouting: { image: route } }),
+    }, { silent: true }));
+  });
+});
