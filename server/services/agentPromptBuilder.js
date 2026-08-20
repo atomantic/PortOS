@@ -1643,8 +1643,15 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
       : buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTruthyMetaFn, lightOptions);
   }
 
-  // Full path: API providers don't read CLAUDE.md natively, so always include it.
-  const skipClaudeMd = false;
+  // Creative Director tasks (scene evaluation, treatment/plan run via API) judge
+  // generated content rather than writing PortOS code — shared below by both
+  // `skipClaudeMd` (the repo's dev-oriented CLAUDE.md files are pure noise for
+  // that prompt) and `noCodeOutput` (the deliverable is an HTTP PATCH, not a
+  // commit).
+  const isCreativeDirectorTask = !!task.metadata?.creativeDirector;
+  // Full path: API providers don't read CLAUDE.md natively, so always include it —
+  // except for Creative Director tasks, per above.
+  const skipClaudeMd = isCreativeDirectorTask;
   // Fetch independent context sections in parallel
   const [memorySection, claudeMdSection, digitalTwinSection] = await Promise.all([
     getMemorySection(task, { maxTokens: config.memory?.maxContextTokens || 2000 })
@@ -1673,7 +1680,7 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   // derive from a CD task's own `creativeDirector` marker so tasks queued as
   // `pending` BEFORE this flag existed (persisted across an upgrade) are still
   // recognized without a metadata migration.
-  const noCodeOutput = isTruthyMetaFn(task.metadata?.noCodeOutput) || !!task.metadata?.creativeDirector;
+  const noCodeOutput = isTruthyMetaFn(task.metadata?.noCodeOutput) || isCreativeDirectorTask;
   const isWorktreeOnExistingBranch = isPrBranchWorktree(task, worktreeInfo);
   const worktreeSection = worktreeInfo ? `
 ## Git Worktree Context

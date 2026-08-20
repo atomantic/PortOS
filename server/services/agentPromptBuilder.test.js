@@ -2212,6 +2212,15 @@ describe('discardWorktree (reasoning-only) completion contract', () => {
       expect(builderAuthored).toMatch(/Do NOT commit, push, or open a PR/);
     });
 
+    it('a Creative Director task on the full (api) path never splices CLAUDE.md — the fixture is reachable but irrelevant to a content-judging prompt', async () => {
+      const cdTask = makeTask({
+        metadata: { creativeDirector: { projectId: 'p', kind: 'evaluate' }, useWorktree: false, openPR: false },
+      });
+      const prompt = await buildAgentPrompt(cdTask, {}, '/r', null, isTruthyMeta, { providerType: 'api' });
+      expect(prompt).not.toMatch(/## CLAUDE\.md Instructions/);
+      expect(prompt).not.toMatch(/Example Global Instructions/);
+    });
+
     it('light TUI path suppresses the merge instruction and never splices the global CLAUDE.md at all', () => {
       // `openPR: true` on purpose: this is the shape where merge suppression has
       // to do work — the task metadata asks for a PR, and discardWorktree must
