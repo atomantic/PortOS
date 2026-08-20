@@ -162,6 +162,51 @@ describe('image-to-3d routes', () => {
     expect(trellis2.probeMetalToolchain).not.toHaveBeenCalled();
   });
 
+  // The `degraded` projection is what the CLIENT actually renders (badge, help panel,
+  // Repair button); `textureBake` above is retained only for API back-compat and has no
+  // in-repo reader. These cases pin the live contract, which was previously untested.
+  it('GET /targets projects a degraded bake into the normalized `degraded` shape', async () => {
+    trellis2.isTrellis2Installed.mockReturnValueOnce(true);
+    trellis2.probeTrellis2TextureBake.mockResolvedValueOnce({
+      quality: 'fallback', missing: ['mtldiffrast'], degradedQuality: [], modules: {}, help: 'fix it',
+    });
+    const res = await request(makeApp()).get('/api/image-to-3d/targets');
+    expect(res.body.targets[0].degraded).toEqual({
+      label: 'degraded textures', help: 'fix it', repairable: true,
+    });
+  });
+
+  it('GET /targets carries repairable:false into `degraded` when nothing PortOS runs can fix it', async () => {
+    trellis2.isTrellis2Installed.mockReturnValueOnce(true);
+    trellis2.probeTrellis2TextureBake.mockResolvedValueOnce({
+      quality: 'fallback', missing: ['mtldiffrast'], degradedQuality: [], modules: {}, help: 'fix it',
+    });
+    trellis2.probeMetalToolchain.mockResolvedValueOnce({
+      available: false, installable: false, blocker: 'requires-xcode', hint: 'install Xcode',
+    });
+    const res = await request(makeApp()).get('/api/image-to-3d/targets');
+    // The inversion here (`repairable !== false`) is easy to get backwards, and getting
+    // it backwards offers a Repair button that cannot work.
+    expect(res.body.targets[0].degraded).toMatchObject({ repairable: false, help: 'install Xcode' });
+  });
+
+  it('GET /targets omits `degraded` when the bake probe could not determine anything', async () => {
+    // The sentinel that matters: 'unknown' must NOT read as degraded, or a probe that
+    // simply failed makes a healthy install look broken.
+    trellis2.isTrellis2Installed.mockReturnValueOnce(true);
+    trellis2.probeTrellis2TextureBake.mockResolvedValueOnce({
+      quality: 'unknown', missing: [], degradedQuality: [], modules: {},
+    });
+    const res = await request(makeApp()).get('/api/image-to-3d/targets');
+    expect(res.body.targets[0].degraded).toBeUndefined();
+  });
+
+  it('GET /targets omits `degraded` for a healthy bake', async () => {
+    trellis2.isTrellis2Installed.mockReturnValueOnce(true);
+    const res = await request(makeApp()).get('/api/image-to-3d/targets');
+    expect(res.body.targets[0].degraded).toBeUndefined();
+  });
+
   it('GET /targets skips the bake probe entirely when trellis2 is not installed', async () => {
     trellis2.probeTrellis2TextureBake.mockClear();
     trellis2.isTrellis2Installed.mockReturnValueOnce(false);

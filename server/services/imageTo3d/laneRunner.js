@@ -18,10 +18,57 @@
  * (CLAUDE.md child-process exception).
  */
 
-import { spawn } from '../../lib/childProcess.js';
+import { execFile, spawn } from '../../lib/childProcess.js';
 import { sleep as defaultSleep } from '../../lib/fileUtils.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { createLineReader } from '../../lib/streamLines.js';
+
+/** The one-liner the module probe runs; `find_spec` resolves without importing. */
+export const PYTHON_MODULE_PROBE_SOURCE = 'import importlib.util as u,json,sys;'
+  + 'print(json.dumps({m: u.find_spec(m) is not None for m in sys.argv[1:]}))';
+
+/**
+ * Which of `modules` resolve inside a target's python environment.
+ *
+ * Uses `importlib.util.find_spec`, which locates a module WITHOUT importing it — so
+ * the probe costs ~20-30 ms and never pulls in torch. That is what makes it cheap
+ * enough to run on every `GET /targets` request; a real `import` would cost seconds.
+ *
+ * Shared because every lane needs the same question answered about a different module
+ * set, and only the CLASSIFICATION of the answer is lane-specific (TRELLIS.2 maps it
+ * to a texture-bake quality, Pixal3D to a NAF availability). Returns `null` — never a
+ * partial map — when the probe could not run, so callers can keep "failed to
+ * determine" distinct from "determined to be missing" (CLAUDE.md sentinel rule).
+ *
+ * Child-process boundary outside the request lifecycle: every failure path resolves.
+ * Note the JSON parse happens AFTER the callback resolves rather than inside it — a
+ * throw inside an `execFile` callback escapes the enclosing promise entirely and
+ * reaches the event loop, which would crash the process rather than degrade the probe.
+ *
+ * @param {{python: string, modules: string[], execFileImpl?: Function, timeoutMs?: number}} opts
+ * @returns {Promise<Record<string, boolean>|null>}
+ */
+export async function probePythonModules({
+  python,
+  modules,
+  execFileImpl = execFile,
+  timeoutMs = 15000,
+} = {}) {
+  if (!python || !Array.isArray(modules) || !modules.length) return null;
+  const stdout = await new Promise((resolve) => {
+    execFileImpl(python, ['-c', PYTHON_MODULE_PROBE_SOURCE, ...modules], { timeout: timeoutMs },
+      (err, out) => resolve(err ? null : String(out ?? '')));
+  }).catch(() => null);
+  if (stdout === null) return null;
+  const parsed = (() => {
+    try {
+      return JSON.parse(stdout.trim() || 'null');
+    } catch {
+      return null;
+    }
+  })();
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+}
 
 /**
  * Build a case-insensitive predicate testing text against an alternation of signature

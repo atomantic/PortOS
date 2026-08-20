@@ -714,11 +714,20 @@ export const isHfAuthError = textMatcher([
  * @returns {string}
  */
 export function hfGatedRepoHelp(targetId) {
-  const repos = getTarget(targetId)?.gatedRepos ?? [];
-  const repoHelp = repos
-    .map(({ label, url }) => `${label} at ${url}`)
-    .join(' and ') || 'the required model at https://huggingface.co';
-  return 'TRELLIS.2 could not download a gated model dependency from '
+  const target = getTarget(targetId);
+  const name = target?.label || 'This model';
+  const repos = target?.gatedRepos ?? [];
+  // A target with NO gated repos still reaches here on an auth failure — but telling
+  // that user to "accept the terms" for an unnamed model is advice they cannot act on.
+  // For those targets the realistic cause is an unauthenticated rate limit, so say so.
+  if (!repos.length) {
+    return `${name} could not download a model from Hugging Face. It has no gated `
+      + 'dependencies, so this is most likely an unauthenticated rate limit — add your '
+      + 'Hugging Face token on the 3D page (or set HF_TOKEN / run `huggingface-cli login`) '
+      + 'and try again.';
+  }
+  const repoHelp = repos.map(({ label, url }) => `${label} at ${url}`).join(' and ');
+  return `${name} could not download a gated model dependency from `
     + `Hugging Face. Accept the terms for ${repoHelp}, then add your `
     + 'Hugging Face token on the 3D page (or set HF_TOKEN / run `huggingface-cli login`) '
     + 'and try again.';

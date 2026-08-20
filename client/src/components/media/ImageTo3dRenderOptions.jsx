@@ -7,6 +7,10 @@ import { SEED_MAX, STEPS_PRESETS } from '../../lib/imageTo3dRenderOptions';
 // Image-to-3D-specific by design: the presets bake in TRELLIS.2's 12-step
 // default and the keying toggle has no analogue in image/video gen.
 //
+// Not every target honors every knob — Pixal3D's upstream CLI has no per-phase step
+// override — so `stepsSupported={false}` disables the Quality control and says why,
+// rather than offering a setting the runner silently drops.
+//
 // Value conventions (see lib/imageTo3dRenderOptions.js for the body mapping):
 //  - steps: '' = pipeline default, else a preset number string.
 //  - seed:  '' = a fresh random seed every render; a value pins this run.
@@ -23,15 +27,20 @@ export default function ImageTo3dRenderOptions({
   keyBackground,
   onKeyBackgroundChange,
   disabled = false,
+  stepsSupported = true,
 }) {
   return (
     <div className="flex flex-col gap-2">
       <div className="grid gap-3 sm:grid-cols-3">
-        <FormField label="Quality" labelClassName={FIELD_LABEL_CLASS}>
+        <FormField
+          label="Quality"
+          labelClassName={FIELD_LABEL_CLASS}
+          hint={stepsSupported ? undefined : 'This model has no step control'}
+        >
           <select
-            value={steps}
+            value={stepsSupported ? steps : ''}
             onChange={(e) => onStepsChange(e.target.value)}
-            disabled={disabled}
+            disabled={disabled || !stepsSupported}
             className={FIELD_INPUT_CLASS}
           >
             {STEPS_PRESETS.map((preset) => (

@@ -69,14 +69,48 @@ export function normalizeRenderOptions(input = {}) {
  * @returns {string[]}
  */
 export function renderOptionArgs(label, { steps = null, seed = null } = {}) {
+  validateRenderOptions(label, { steps, seed });
+  return [
+    ...(seed !== null ? ['--seed', String(seed)] : []),
+    ...(steps !== null ? ['--steps', String(steps)] : []),
+  ];
+}
+
+/**
+ * The bounds half of `renderOptionArgs`, for a lane that must validate an option it
+ * cannot emit. Pixal3D is the case: upstream's `inference.py` has no per-phase step
+ * override, so its builder has to reject an out-of-range `steps` at the same boundary
+ * as the other lanes while emitting no `--steps` flag. Calling `renderOptionArgs` and
+ * discarding the result would work, but it reads like a dropped return value AND
+ * tempts the caller into re-spelling `--seed` locally — which is exactly the flag-name
+ * drift this module exists to prevent. Throws with the caller's label.
+ * @param {string} label
+ * @param {{steps?: number|null, seed?: number|null}} [opts]
+ */
+export function validateRenderOptions(label, { steps = null, seed = null } = {}) {
   if (steps !== null && !isValidRenderSteps(steps)) {
     throw new Error(`${label}: steps must be an integer in [${RENDER_STEPS_MIN}, ${RENDER_STEPS_MAX}]`);
   }
   if (seed !== null && !isValidRenderSeed(seed)) {
     throw new Error(`${label}: seed must be an integer in [0, ${RENDER_SEED_MAX}]`);
   }
-  return [
-    ...(seed !== null ? ['--seed', String(seed)] : []),
-    ...(steps !== null ? ['--steps', String(steps)] : []),
-  ];
+}
+
+/**
+ * Drop the options a target's runner will not honor, so the persisted run entry
+ * records what the subprocess ACTUALLY received rather than what the user asked for.
+ *
+ * This module's contract is that a run entry holds "the concrete values the subprocess
+ * received (the truthful, reproducible record)" — a target whose runner silently drops
+ * an option would otherwise break that invariant and log a quality setting that never
+ * applied. `support` is the target descriptor's `supportsRenderOptions`; absent means
+ * everything is honored, so existing targets need no entry.
+ *
+ * @param {{steps: number|null, seed: number|null, keyBackground: boolean}} options
+ * @param {{steps?: boolean}} [support]
+ * @returns {{steps: number|null, seed: number|null, keyBackground: boolean}}
+ */
+export function honorTargetRenderSupport(options, support) {
+  if (!support) return options;
+  return { ...options, ...(support.steps === false ? { steps: null } : {}) };
 }

@@ -42,13 +42,17 @@
  *    `Ruicheng/moge-2-vitl`, both ungated. Its descriptor therefore declares no
  *    `gatedRepos` — a token still helps with rate limits, but nothing needs accepting.
  *
- * Clone layout: `~/.portos/pixal3d/{TRELLIS.2,Pixal3D}`, conda env `pixal3d`.
+ * Clone layout: `~/.portos/pixal3d/{TRELLIS.2,Pixal3D}`, conda env `pixal3d`. The env's
+ * interpreter is resolved by the shared `resolveCondaEnvPython` (`lib/condaEnv.js`),
+ * which both CUDA lanes use — the `CONDA_PREFIX` walk-up it encodes is subtle enough
+ * that a second copy would be a liability.
  */
 
 import { existsSync } from 'node:fs';
 import { cpus, homedir } from 'node:os';
 import { join } from 'node:path';
-import { execFile, spawn } from '../../lib/childProcess.js';
+import { spawn } from '../../lib/childProcess.js';
+import { resolveCondaEnvPython } from '../../lib/condaEnv.js';
 import { rewriteGlbMaterialsOpaque } from './glbMaterials.js';
 import {
   hfGatedRepoHelp,
@@ -57,8 +61,10 @@ import {
   parseGenerateProgress,
 } from './trellis2.js';
 import { isCudaOomError, TRELLIS2_CUDA_REPO } from './trellis2Cuda.js';
-import { textMatcher, runInstallSteps, runGenerateSubprocess } from './laneRunner.js';
-import { renderOptionArgs } from './renderOptions.js';
+import {
+  textMatcher, runInstallSteps, runGenerateSubprocess, probePythonModules,
+} from './laneRunner.js';
+import { validateRenderOptions } from './renderOptions.js';
 
 const HOME = homedir();
 
@@ -100,49 +106,23 @@ export function pixal3dTrellisDir(base) {
 }
 
 /** Where Pixal3D itself is cloned — the code this lane actually runs. */
-export function pixal3dRepoDir(base) {
+function pixal3dRepoDir(base) {
   return join(pixal3dRoot(base), 'Pixal3D');
 }
 
 /** Upstream's shipped entrypoint. */
-export function pixal3dInferenceScript(base) {
+function pixal3dInferenceScript(base) {
   return join(pixal3dRepoDir(base), 'inference.py');
 }
 
 /**
- * Where the `pixal3d` conda environment may live. Same ordered candidate probe as
- * `trellis2CudaPythonCandidates` (and `resolveFlux2Python` before it): the machine's
- * own answer first (`CONDA_PREFIX`/`CONDA_ROOT`), then the standard install roots.
- *
- * Linux-only paths (`bin/python`) — the descriptor gates this lane to a Linux host, and
- * a Windows machine reaches it through WSL2, which reports as Linux.
- *
- * @param {{env?: object}} [opts]
- * @returns {string[]}
- */
-export function pixal3dPythonCandidates({ env = process.env } = {}) {
-  const roots = [
-    env.CONDA_PREFIX && /[/\\]envs[/\\][^/\\]+$/.test(env.CONDA_PREFIX)
-      ? join(env.CONDA_PREFIX, '..', '..')
-      : env.CONDA_PREFIX,
-    env.CONDA_ROOT,
-    join(HOME, 'miniconda3'),
-    join(HOME, 'anaconda3'),
-    join(HOME, 'miniforge3'),
-    join(HOME, 'mambaforge'),
-    '/opt/conda',
-  ].filter(Boolean);
-  return roots.map((root) => join(root, 'envs', PIXAL3D_CONDA_ENV, 'bin', 'python'));
-}
-
-/**
- * The conda Python for this lane, or null when no candidate exists. `exists` is
- * injectable so the probe is deterministic in tests.
+ * The conda Python for this lane, or null when its env doesn't exist. A one-line
+ * wrapper over the shared resolver so the env name lives in exactly one place.
  * @param {{exists?: (p: string) => boolean, env?: object}} [opts]
  * @returns {string|null}
  */
 export function pixal3dPython({ exists = existsSync, env } = {}) {
-  return pixal3dPythonCandidates({ env }).find((p) => exists(p)) || null;
+  return resolveCondaEnvPython(PIXAL3D_CONDA_ENV, { exists, env });
 }
 
 /**
@@ -187,11 +167,9 @@ export function nattenWorkerCount(cpuCount = cpus().length) {
  * rely on. `conda create` is skipped when the env's Python is already present, and
  * each clone is skipped when its `.git` is there.
  *
- * **`setup.sh` is SOURCED in a login shell after activating our env.** Upstream
- * documents `. ./setup.sh` because the script installs into the *active* conda env;
- * `bash setup.sh` would give `conda activate` no shell hooks and land the packages in
- * the wrong interpreter. `bash -lc` loads the profile `conda init` wrote, which is
- * what makes `conda activate` work in a non-interactive child.
+ * Same sourcing mechanics as `buildCudaInstallSteps` (`. ./setup.sh` inside `bash -lc`,
+ * so `conda activate` has the hooks `conda init` wrote); the one difference is that our
+ * env is activated FIRST, because `--new-env` is omitted — see the file header.
  *
  * **The NATTEN step is `optional`.** It compiles CUDA kernels for a specific arch, and
  * a failure there is survivable: without NATTEN the pipeline takes upstream's
@@ -201,17 +179,21 @@ export function nattenWorkerCount(cpuCount = cpus().length) {
  * `detectCudaComputeCapability()`; when it could not be determined the env var is
  * omitted entirely rather than guessed, letting NATTEN pick its own default.
  *
+ * `env` is threaded through so the "does the conda env already exist?" question gets
+ * the SAME answer here as in the install's `verify` hook — reading `process.env` here
+ * while `verify` reads an injected env would let this prepend a redundant `conda create`
+ * that `verify` then disagrees with.
+ *
  * @param {string} [base]
- * @param {{exists?: (p: string) => boolean, computeCap?: string|null, workers?: number}} [opts]
+ * @param {{exists?: (p: string) => boolean, env?: object, computeCap?: string|null}} [opts]
  * @returns {Array<{stage: string, command: string, args: string[], cwd?: string, optional?: boolean}>}
  */
-export function buildPixal3dInstallSteps(base, { exists = existsSync, computeCap = null, workers } = {}) {
-  const root = pixal3dRoot(base);
+export function buildPixal3dInstallSteps(base, { exists = existsSync, env, computeCap = null } = {}) {
   const trellisDir = pixal3dTrellisDir(base);
   const repoDir = pixal3dRepoDir(base);
   const steps = [];
 
-  if (!pixal3dPython({ exists })) {
+  if (!pixal3dPython({ exists, env })) {
     steps.push({
       stage: 'env',
       command: 'conda',
@@ -230,53 +212,52 @@ export function buildPixal3dInstallSteps(base, { exists = existsSync, computeCap
   if (!exists(join(repoDir, '.git'))) {
     steps.push({ stage: 'clone', command: 'git', args: ['clone', PIXAL3D_REPO, repoDir] });
   }
-  steps.push({
-    stage: 'setup',
+  // Every remaining step is "activate our env, then run one command", so only the
+  // command, the cwd and the optional-ness are worth reading per step.
+  const condaStep = (stage, script, extra = {}) => ({
+    stage,
     command: 'bash',
-    args: ['-lc', `conda activate ${PIXAL3D_CONDA_ENV} && . ./setup.sh ${PIXAL3D_SETUP_FLAGS.join(' ')}`],
-    cwd: trellisDir,
-  });
-  steps.push({
-    stage: 'deps',
-    command: 'bash',
-    args: ['-lc', `conda activate ${PIXAL3D_CONDA_ENV} && pip install -r requirements.txt`],
+    args: ['-lc', `conda activate ${PIXAL3D_CONDA_ENV} && ${script}`],
     cwd: repoDir,
+    ...extra,
   });
   const nattenEnv = [
     ...(computeCap ? [`NATTEN_CUDA_ARCH=${computeCap}`] : []),
-    `NATTEN_N_WORKERS=${workers ?? nattenWorkerCount()}`,
+    `NATTEN_N_WORKERS=${nattenWorkerCount()}`,
   ].join(' ');
-  steps.push({
-    stage: 'natten',
-    command: 'bash',
-    args: ['-lc',
-      `conda activate ${PIXAL3D_CONDA_ENV} && ${nattenEnv} `
-      + `pip install natten==${PIXAL3D_NATTEN_VERSION} --no-build-isolation`],
-    cwd: repoDir,
-    optional: true,
-  });
-  steps.push({
-    stage: 'utils3d',
-    command: 'bash',
-    args: ['-lc', `conda activate ${PIXAL3D_CONDA_ENV} && pip install ${PIXAL3D_UTILS3D_WHEEL}`],
-    cwd: repoDir,
-  });
+  steps.push(
+    condaStep('setup', `. ./setup.sh ${PIXAL3D_SETUP_FLAGS.join(' ')}`, { cwd: trellisDir }),
+    condaStep('deps', 'pip install -r requirements.txt'),
+    condaStep(
+      'natten',
+      `${nattenEnv} pip install natten==${PIXAL3D_NATTEN_VERSION} --no-build-isolation`,
+      { optional: true },
+    ),
+    condaStep('utils3d', `pip install ${PIXAL3D_UTILS3D_WHEEL}`),
+  );
   return steps;
 }
 
+export const PIXAL3D_STANDARD_MODE_MIN_VRAM_GB = 36;
+export const PIXAL3D_HIGH_RES_MIN_VRAM_GB = 24;
+/** Upstream's two supported pipeline resolutions, low to high. */
+export const PIXAL3D_RESOLUTIONS = [1024, 1536];
+const [PIXAL3D_RES_FLOOR, PIXAL3D_RES_FULL] = PIXAL3D_RESOLUTIONS;
+
 /**
- * Resolution / offload lanes, picked from the card's VRAM.
+ * Resolution / offload lane, picked from the card's VRAM.
  *
  * Upstream documents three usable combinations, and they are genuinely three tiers
  * rather than a single quality knob (Pixal3D issue #7 measured "18–36 GB depending on
- * settings"; the merged low-VRAM PR brings peak down to ~10–12 GB by loading one
- * pipeline stage onto the GPU at a time):
+ * settings"; the merged low-VRAM PR brings peak to ~10–12 GB by loading one pipeline
+ * stage onto the GPU at a time):
  *
- *  - `>= 36 GB` → standard mode at 1536. No offload, so it is also the fastest.
- *  - `>= 24 GB` → 1536 with `--low_vram`. Upstream explicitly supports forcing the
- *    full resolution in low-VRAM mode; the stage-at-a-time offload pays for it in
- *    wall-clock rather than quality.
- *  - otherwise  → 1024 with `--low_vram`, the floor this lane supports at all.
+ *  - `>= PIXAL3D_STANDARD_MODE_MIN_VRAM_GB` → standard mode at full resolution. No
+ *    offload, so it is also the fastest.
+ *  - `>= PIXAL3D_HIGH_RES_MIN_VRAM_GB` → full resolution with `--low_vram`. Upstream
+ *    explicitly supports forcing full resolution in low-VRAM mode; the stage-at-a-time
+ *    offload pays for it in wall-clock rather than quality.
+ *  - otherwise → the floor resolution with `--low_vram`, the least this lane supports.
  *
  * An unknown/unparseable VRAM reading degrades to the floor rather than overcommitting
  * a card we failed to size (CLAUDE.md sentinel rule).
@@ -284,15 +265,11 @@ export function buildPixal3dInstallSteps(base, { exists = existsSync, computeCap
  * @param {number|null} vramGb
  * @returns {{lowVram: boolean, resolution: number}}
  */
-export const PIXAL3D_STANDARD_MODE_MIN_VRAM_GB = 36;
-export const PIXAL3D_HIGH_RES_MIN_VRAM_GB = 24;
-export const PIXAL3D_RESOLUTIONS = [1024, 1536];
-
 export function selectPixal3dRenderBudget(vramGb) {
   const gb = Number(vramGb);
-  if (gb >= PIXAL3D_STANDARD_MODE_MIN_VRAM_GB) return { lowVram: false, resolution: 1536 };
-  if (gb >= PIXAL3D_HIGH_RES_MIN_VRAM_GB) return { lowVram: true, resolution: 1536 };
-  return { lowVram: true, resolution: 1024 };
+  if (gb >= PIXAL3D_STANDARD_MODE_MIN_VRAM_GB) return { lowVram: false, resolution: PIXAL3D_RES_FULL };
+  if (gb >= PIXAL3D_HIGH_RES_MIN_VRAM_GB) return { lowVram: true, resolution: PIXAL3D_RES_FULL };
+  return { lowVram: true, resolution: PIXAL3D_RES_FLOOR };
 }
 
 /**
@@ -306,13 +283,15 @@ export function selectPixal3dRenderBudget(vramGb) {
  * `outputPath` is passed THROUGH, not reduced to a stem: `inference.py --output` is a
  * full file path (see the file header).
  *
- * `steps`/`seed` reuse the shared `renderOptionArgs` contract so the ranges and flag
- * names cannot drift from the TRELLIS.2 lanes — but note upstream's `inference.py`
- * exposes no per-phase step override, so a non-null `steps` is validated and then
- * dropped rather than being emitted as an unrecognized flag.
+ * `steps`/`seed` are validated against the shared ranges so they cannot drift from the
+ * TRELLIS.2 lanes — but upstream's `inference.py` exposes no per-phase step override, so
+ * `steps` is validated and NOT emitted (an unrecognized flag would make argparse abort a
+ * job we already queued). The target descriptor declares that with
+ * `supportsRenderOptions.steps: false`, which is what stops the UI offering a control
+ * that does nothing and stops the run ledger recording a value that never applied.
  *
  * @param {{imagePath: string, outputPath?: string, base?: string, python?: string,
- *          resolution?: number, lowVram?: boolean, fov?: number|null,
+ *          resolution?: number, lowVram?: boolean,
  *          steps?: number|null, seed?: number|null}} opts
  * @returns {{command: string, args: string[]}}
  */
@@ -321,9 +300,8 @@ export function buildPixal3dGenerateArgs({
   outputPath,
   base,
   python,
-  resolution = 1024,
+  resolution = PIXAL3D_RES_FLOOR,
   lowVram = true,
-  fov = null,
   steps = null,
   seed = null,
 } = {}) {
@@ -333,12 +311,8 @@ export function buildPixal3dGenerateArgs({
       `buildPixal3dGenerateArgs: resolution must be one of ${PIXAL3D_RESOLUTIONS.join(', ')}`,
     );
   }
-  // Validate BOTH against the shared ranges (throws on an out-of-range value, so a
-  // mistyped steps count is still rejected at the same boundary as the other lanes) …
-  renderOptionArgs('buildPixal3dGenerateArgs', { steps, seed });
-  // … but emit only `--seed`: upstream's `inference.py` has no per-phase step override,
-  // and passing an unrecognized flag would make argparse abort a queued job.
-  const seedArgs = seed !== null ? ['--seed', String(seed)] : [];
+  // Both are range-checked at the same boundary as the other lanes; only seed is emitted.
+  validateRenderOptions('buildPixal3dGenerateArgs', { steps, seed });
   const args = [
     pixal3dInferenceScript(base),
     '--image', imagePath,
@@ -346,8 +320,7 @@ export function buildPixal3dGenerateArgs({
   ];
   if (outputPath) args.push('--output', outputPath);
   if (lowVram) args.push('--low_vram');
-  if (fov !== null) args.push('--fov', String(fov));
-  args.push(...seedArgs);
+  if (seed !== null) args.push('--seed', String(seed));
   return { command: python || pixal3dPython({}) || 'python', args };
 }
 
@@ -398,18 +371,16 @@ export function parsePixal3dProgress(line) {
 
 /**
  * Modules Pixal3D imports directly — absent means the install did not complete, not
- * that quality degrades. `pixal3d` is upstream's own package (it runs from the clone,
- * so this resolves only with the repo root on `sys.path`); `o_voxel` is the GLB
- * exporter and `flex_gemm` the sparse GEMM its autotuner configures on import.
+ * that quality degrades. `o_voxel` is the GLB exporter and `flex_gemm` the sparse GEMM
+ * its autotuner configures on import. Upstream's own `pixal3d` package is deliberately
+ * NOT probed: it resolves only with the clone root on `sys.path`, which the render
+ * subprocess gets from its `cwd` and this probe does not, so it would always read as
+ * missing.
  */
 export const PIXAL3D_REQUIRED_MODULES = ['o_voxel', 'flex_gemm'];
 
 /** NATTEN backs the NAF upsampler. Absent ⇒ renders take upstream's fallback path. */
 export const PIXAL3D_NAF_MODULES = ['natten'];
-
-/** The shell probe that reports which modules resolve inside the env. */
-const MODULE_PROBE_SOURCE = 'import importlib.util as u,json,sys;'
-  + 'print(json.dumps({m: u.find_spec(m) is not None for m in sys.argv[1:]}))';
 
 export const PIXAL3D_NAF_FALLBACK_HELP = 'Pixal3D is installed, but NATTEN is missing, '
   + 'so its NAF refinement step falls back to DINO projection features — slower, and '
@@ -417,11 +388,9 @@ export const PIXAL3D_NAF_FALLBACK_HELP = 'Pixal3D is installed, but NATTEN is mi
   + 'NATTEN for this GPU; your downloaded models are kept.';
 
 /**
- * Probe which of the env's modules resolve, for the install-state card.
- *
- * Uses `importlib.util.find_spec`, which resolves a module WITHOUT importing it — so
- * the probe costs ~20 ms and never pulls in torch, which is what makes it safe to run
- * on every `/targets` request (the same reason `probeTrellis2TextureBake` uses it).
+ * Probe which of the env's modules resolve, for the install-state card. The spawn and
+ * its find_spec one-liner are shared (`probePythonModules`); only the classification
+ * below is Pixal3D-specific.
  *
  * **`naf: 'available'` means the NATTEN PACKAGE resolves — it does NOT prove the CUDA
  * `libnatten` kernels built.** Confirming that needs `import natten` to read
@@ -432,37 +401,25 @@ export const PIXAL3D_NAF_FALLBACK_HELP = 'Pixal3D is installed, but NATTEN is mi
  * `'unavailable'`, so a broken probe never renders a warning about a fine install
  * (CLAUDE.md sentinel rule: "failed to determine" ≠ "determined to be bad").
  *
- * @param {{base?: string, execFileImpl?: Function, exists?: (p: string) => boolean,
+ * @param {{execFileImpl?: Function, exists?: (p: string) => boolean,
  *          env?: NodeJS.ProcessEnv}} [opts]
- * @returns {Promise<{naf: 'available'|'unavailable'|'unknown', modules: Record<string, boolean>,
- *                    missing: string[], help?: string}>}
+ * @returns {Promise<{naf: 'available'|'unavailable'|'unknown', missing: string[], help?: string}>}
  */
 export async function probePixal3dModules({
-  base,
-  execFileImpl = execFile,
+  execFileImpl,
   exists = existsSync,
   env,
 } = {}) {
-  const python = pixal3dPython({ exists, env });
-  if (!python) return { naf: 'unknown', modules: {}, missing: [] };
-  const probed = [...PIXAL3D_REQUIRED_MODULES, ...PIXAL3D_NAF_MODULES];
-  // Subprocess boundary outside the request lifecycle — a probe failure must degrade
-  // to 'unknown', never reject into the route (CLAUDE.md child-process exception).
-  const modules = await new Promise((resolve) => {
-    execFileImpl(python, ['-c', MODULE_PROBE_SOURCE, ...probed], { timeout: 15000 }, (err, stdout) => {
-      if (err) return resolve(null);
-      const parsed = JSON.parse(String(stdout || '').trim() || 'null');
-      resolve(parsed && typeof parsed === 'object' ? parsed : null);
-    });
-  }).catch(() => null);
-
-  if (!modules) return { naf: 'unknown', modules: {}, missing: [] };
-  const missing = PIXAL3D_REQUIRED_MODULES.filter((m) => !modules[m]);
+  const modules = await probePythonModules({
+    python: pixal3dPython({ exists, env }),
+    modules: [...PIXAL3D_REQUIRED_MODULES, ...PIXAL3D_NAF_MODULES],
+    execFileImpl,
+  });
+  if (!modules) return { naf: 'unknown', missing: [] };
   const nafPresent = PIXAL3D_NAF_MODULES.every((m) => modules[m]);
   return {
     naf: nafPresent ? 'available' : 'unavailable',
-    modules,
-    missing,
+    missing: PIXAL3D_REQUIRED_MODULES.filter((m) => !modules[m]),
     ...(nafPresent ? {} : { help: PIXAL3D_NAF_FALLBACK_HELP }),
   };
 }
@@ -510,7 +467,7 @@ const CUDA_OOM_HELP = 'The GPU ran out of memory during this render. Close other
  * @param {{base?: string, onEvent?: (ev: object) => void, spawnImpl?: Function,
  *          maxRetries?: number, sleep?: (ms: number) => Promise<void>,
  *          exists?: (p: string) => boolean, env?: NodeJS.ProcessEnv,
- *          computeCap?: string|null, workers?: number}} [opts]
+ *          computeCap?: string|null}} [opts]
  * @returns {{promise: Promise<{ok: true}>, kill: () => void}}
  */
 export function installPixal3dCuda({
@@ -522,10 +479,9 @@ export function installPixal3dCuda({
   exists = existsSync,
   env,
   computeCap = null,
-  workers,
 } = {}) {
   return runInstallSteps({
-    steps: buildPixal3dInstallSteps(base, { exists, computeCap, workers }),
+    steps: buildPixal3dInstallSteps(base, { exists, env, computeCap }),
     label: LABEL,
     codePrefix: CODE_PREFIX,
     isTransient: isTransientInstallError,
@@ -552,15 +508,15 @@ export function installPixal3dCuda({
 }
 
 /**
- * Run a single image→GLB generation. The one real-subprocess boundary — GUARDED:
- * rejects `PIXAL3D_CUDA_NOT_INSTALLED` unless the environment is present, so it can
- * never run from a cold boot. `spawnImpl`/`exists` are injectable so the wiring is
- * unit-testable without a real render.
+ * Run a single image→GLB generation. Same contract as `runTrellis2CudaGenerate`: the one
+ * real-subprocess boundary, GUARDED (rejects `PIXAL3D_CUDA_NOT_INSTALLED` unless the
+ * environment is present, so it can never run from a cold boot), returning
+ * `{ promise, kill }` so a caller can terminate the render mid-flight, and normalizing
+ * the result to opaque so low-alpha prediction noise doesn't become visible holes.
+ * `spawnImpl`/`exists` are injectable so the wiring is unit-testable without a render.
  *
- * Returns `{ promise, kill }` so a caller can terminate the render mid-flight — e.g.
- * when the user deletes the record while its GLB is still rendering. That matters more
- * here than on the TRELLIS.2 lanes: a full-quality Pixal3D render is measured in
- * minutes, not seconds.
+ * Cancellation matters more here than on the TRELLIS.2 lanes: a full-quality Pixal3D
+ * render is measured in minutes, not seconds.
  *
  * `vramGb` is the size of the card this host will render on, passed down from the host
  * capabilities resolved at the request boundary; it selects the resolution/offload
@@ -570,12 +526,8 @@ export function installPixal3dCuda({
  * `inference.py` imports its own `pixal3d` package relative to the checkout and writes
  * its `flex_gemm` autotune cache next to the script.
  *
- * A successful render is normalized to opaque before it resolves, for the same reason
- * both TRELLIS.2 lanes do it: prediction noise in low-alpha texels otherwise turns
- * into visible holes in PortOS and in downloaded GLBs.
- *
  * @param {{imagePath: string, outputPath?: string, base?: string, resolution?: number,
- *          lowVram?: boolean, vramGb?: number|null, fov?: number|null,
+ *          lowVram?: boolean, vramGb?: number|null,
  *          steps?: number|null, seed?: number|null,
  *          onProgress?: (frame: object) => void, spawnImpl?: Function,
  *          exists?: (p: string) => boolean, env?: NodeJS.ProcessEnv,
@@ -589,7 +541,6 @@ export function runPixal3dCudaGenerate({
   resolution,
   lowVram,
   vramGb = null,
-  fov = null,
   steps = null,
   seed = null,
   onProgress,
@@ -613,7 +564,6 @@ export function runPixal3dCudaGenerate({
     python,
     resolution: resolution ?? budget.resolution,
     lowVram: lowVram ?? budget.lowVram,
-    fov,
     steps,
     seed,
   });

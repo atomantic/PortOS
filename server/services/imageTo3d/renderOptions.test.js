@@ -8,6 +8,8 @@ import {
   normalizeRenderOptions,
   randomRenderSeed,
   renderOptionArgs,
+  validateRenderOptions,
+  honorTargetRenderSupport,
 } from './renderOptions.js';
 
 describe('normalizeRenderOptions', () => {
@@ -65,5 +67,45 @@ describe('validators', () => {
     expect(isValidRenderSeed(RENDER_SEED_MAX)).toBe(true);
     expect(isValidRenderSeed(-1)).toBe(false);
     expect(isValidRenderSeed(RENDER_SEED_MAX + 1)).toBe(false);
+  });
+});
+
+describe('validateRenderOptions', () => {
+  it('enforces the same bounds as renderOptionArgs without emitting flags', () => {
+    expect(() => validateRenderOptions('x', { steps: 0 })).toThrow(/steps must be an integer/);
+    expect(() => validateRenderOptions('x', { steps: 65 })).toThrow(/steps must be an integer/);
+    expect(() => validateRenderOptions('x', { seed: -1 })).toThrow(/seed must be an integer/);
+    expect(() => validateRenderOptions('x', { seed: 2147483648 })).toThrow(/seed must be an integer/);
+    expect(validateRenderOptions('x', { steps: 12, seed: 7 })).toBeUndefined();
+    expect(validateRenderOptions('x')).toBeUndefined();
+  });
+
+  it('names the caller in the error, so a lane-specific builder reads as the thrower', () => {
+    expect(() => validateRenderOptions('buildPixal3dGenerateArgs', { steps: 999 }))
+      .toThrow(/^buildPixal3dGenerateArgs:/);
+  });
+});
+
+describe('honorTargetRenderSupport', () => {
+  const opts = { steps: 24, seed: 7, keyBackground: true };
+
+  it('passes everything through for a target that declares no limits', () => {
+    // Absent support must mean "honors everything", so existing targets need no entry.
+    expect(honorTargetRenderSupport(opts, undefined)).toBe(opts);
+    expect(honorTargetRenderSupport(opts, null)).toBe(opts);
+  });
+
+  it('nulls only the unsupported knob, leaving the rest intact', () => {
+    expect(honorTargetRenderSupport(opts, { steps: false }))
+      .toEqual({ steps: null, seed: 7, keyBackground: true });
+  });
+
+  it('leaves a knob alone when support is explicitly true', () => {
+    expect(honorTargetRenderSupport(opts, { steps: true })).toEqual(opts);
+  });
+
+  it('does not mutate its input', () => {
+    honorTargetRenderSupport(opts, { steps: false });
+    expect(opts.steps).toBe(24);
   });
 });

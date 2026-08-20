@@ -22,6 +22,7 @@ vi.mock('./targets.js', () => ({
       ? { targetId: 'trellis2', target: { id: 'trellis2', label: 'TRELLIS.2' }, available: true, reason: null }
       : { targetId: id, target: null, available: false, reason: 'unknown-target' }
   )),
+  renderOptionSupportFor: vi.fn(() => null),
 }));
 
 vi.mock('./trellis2.js', () => ({
@@ -65,7 +66,7 @@ vi.mock('./db.js', () => ({
 
 import { rm } from 'node:fs/promises';
 import { ensureDir } from '../../lib/fileUtils.js';
-import { resolveTarget } from './targets.js';
+import { resolveTarget, renderOptionSupportFor } from './targets.js';
 import { isTrellis2Installed, runTrellis2Generate } from './trellis2.js';
 import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
 import { prepareSourceImage } from './sourceKeying.js';
@@ -346,6 +347,20 @@ describe('render options and source keying', () => {
     expect(current.runs.at(-1)).toMatchObject({ steps: 24, seed: 7 });
     // Options are per-run parameters, not a stored record preference.
     expect(current.renderOptions).toBeUndefined();
+  });
+
+  // The run entry is the reproducible record of what the subprocess RECEIVED. A target
+  // whose runner drops a knob (Pixal3D has no per-phase step override) must therefore
+  // record it as unset AND not hand it to the runner — logging the requested value
+  // would make the ledger lie about a setting that never applied.
+  it('drops an unsupported render option from BOTH the runner call and the run entry', async () => {
+    renderOptionSupportFor.mockReturnValueOnce({ steps: false });
+    await createModel({ name: 'Beacon', filename: 'example.png', steps: 48, seed: 7 });
+    await vi.waitFor(() => expect(current.status).toBe('ready'));
+
+    const [generateArgs] = runTrellis2Generate.mock.calls[0];
+    expect(generateArgs.steps).toBeNull();
+    expect(current.runs.at(-1)).toMatchObject({ steps: null, seed: 7 });
   });
 
   it('a re-generate without options gets defaults, not the previous run’s values', async () => {

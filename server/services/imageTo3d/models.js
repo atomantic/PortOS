@@ -23,9 +23,13 @@ import { PATHS, resolveGalleryImage, ensureDir } from '../../lib/fileUtils.js';
 import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
 import { prepareLocalMemory } from '../../lib/localMemory.js';
 import { slugifyForFilename } from '../../lib/civitai.js';
-import { detectHostCapabilities, resolveTarget, DEFAULT_IMAGE_TO_3D_TARGET } from './targets.js';
+import {
+  detectHostCapabilities, resolveTarget, renderOptionSupportFor, DEFAULT_IMAGE_TO_3D_TARGET,
+} from './targets.js';
 import { getTargetAdapter } from './adapters.js';
-import { normalizeRenderOptions, randomRenderSeed } from './renderOptions.js';
+import {
+  normalizeRenderOptions, randomRenderSeed, honorTargetRenderSupport,
+} from './renderOptions.js';
 import { prepareSourceImage } from './sourceKeying.js';
 import * as store from './db.js';
 
@@ -321,7 +325,14 @@ async function beginRender(record, adapter, sourcePath, caps, requestOptions) {
   const operationId = randomUUID();
   const startedAt = new Date().toISOString();
   const normalized = normalizeRenderOptions(requestOptions);
-  const options = { ...normalized, seed: normalized.seed ?? randomRenderSeed() };
+  // Drop knobs this target's runner won't honor BEFORE the run entry is written, so the
+  // persisted record is what the subprocess actually received rather than what was
+  // asked for (renderOptions.js's stated invariant). Pixal3D is the case in point: its
+  // `inference.py` has no step override, so a recorded `steps: 48` would be a lie.
+  const options = honorTargetRenderSupport(
+    { ...normalized, seed: normalized.seed ?? randomRenderSeed() },
+    renderOptionSupportFor(record.target),
+  );
   const next = await store.mutateModel(id, (fresh) => {
     if (fresh.status === 'generating') {
       throw new ServerError('This model is already generating', { status: 409, code: 'MODEL_BUSY' });

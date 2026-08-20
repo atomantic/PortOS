@@ -397,6 +397,7 @@ export default function Media3D() {
           )}
 
           <ImageTo3dRenderOptions
+            stepsSupported={selectedTarget?.supportsRenderOptions?.steps !== false}
             steps={steps}
             onStepsChange={setSteps}
             seed={seed}
@@ -530,9 +531,18 @@ export default function Media3D() {
         // Copy comes from the target descriptor, never hard-coded here: this modal is
         // shared by every target, so TRELLIS.2-specific prose would misdescribe the
         // others. A degraded target explains its own remedy via `degraded.help`.
+        // `undefined` rather than '' when a target has nothing to say, so
+        // RuntimeInstallModal's own default description applies instead of a blank panel.
         description={installTarget?.degraded
-          ? `${installTarget.degraded.help} Re-running install keeps your already-downloaded models, and no password is required.`
-          : `${installTarget?.installNotes || ''}${gatedRepoCount ? ` It also pulls ${gatedRepoCount} gated Hugging Face ${gatedRepoCount === 1 ? 'model' : 'models'} on first render — accept their terms and add a Hugging Face token above (see the note on the 3D page).` : ''}`}
+          // The degraded help text owns the whole message (both targets' already end by
+          // saying downloaded models are kept) — appending to it would repeat that.
+          ? installTarget.degraded.help
+          : [
+            installTarget?.installNotes,
+            gatedRepoCount
+              ? `It also pulls ${gatedRepoCount} gated Hugging Face ${gatedRepoCount === 1 ? 'model' : 'models'} on first render — accept their terms and add a Hugging Face token above (see the note on the 3D page).`
+              : null,
+          ].filter(Boolean).join(' ') || undefined}
         onClose={() => setInstallTarget(null)}
         onComplete={() => { setInstallTarget(null); load(); }}
       />

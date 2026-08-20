@@ -24,6 +24,7 @@ vi.mock('./targets.js', () => ({
   resolveTarget: vi.fn((id) => ({
     targetId: id, target: { id, label: id }, available: true, reason: null,
   })),
+  renderOptionSupportFor: () => null,
 }));
 
 vi.mock('../../lib/hfToken.js', () => ({

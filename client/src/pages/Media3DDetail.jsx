@@ -169,6 +169,7 @@ export default function Media3DDetail() {
 
       <div className="mb-4 rounded-lg border border-port-border bg-port-card p-3">
         <ImageTo3dRenderOptions
+          stepsSupported={record.supportsRenderOptions?.steps !== false}
           steps={steps}
           onStepsChange={setSteps}
           seed={seed}

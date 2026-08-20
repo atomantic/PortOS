@@ -17,8 +17,10 @@
  * 1. **Conda, not a venv.** Upstream's `setup.sh` creates and activates a conda
  *    environment named `trellis2` (PyTorch 2.6 / CUDA 12.4) rather than a `.venv`
  *    inside the clone. So "installed" is resolved by probing the usual conda roots
- *    for `envs/trellis2/bin/python` instead of a fixed path under the repo — the
- *    same candidate-probe shape `pythonSetup.js#resolveFlux2Python` already uses.
+ *    for `envs/trellis2/bin/python` instead of a fixed path under the repo — via the
+ *    shared `resolveCondaEnvPython` (`lib/condaEnv.js`), which the Pixal3D CUDA
+ *    lane uses too. (Distinct from that file's venv resolvers like
+ *    `resolveFlux2Python`, which probe a different layout entirely.)
  *
  * 2. **Upstream ships no CLI.** `microsoft/TRELLIS.2` has only `example.py`, a demo
  *    with hard-coded paths — there is no `generate.py` to shell into the way the mac
@@ -37,6 +39,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from '../../lib/childProcess.js';
+import { resolveCondaEnvPython } from '../../lib/condaEnv.js';
 import { rewriteGlbMaterialsOpaque } from './glbMaterials.js';
 import {
   hfGatedRepoHelp,
@@ -71,44 +74,15 @@ function trellis2CudaPackageDir(base) {
 }
 
 /**
- * Where `setup.sh --new-env` may have put the `trellis2` conda environment. Probed
- * as an ordered candidate list rather than configured separately, mirroring
- * `resolveFlux2Python`. `CONDA_PREFIX` (when PortOS itself runs under conda) and
- * `CONDA_ROOT` come first because they are the machine's actual answer; the rest are
- * the standard miniconda/anaconda/miniforge install locations.
- *
- * Linux-only paths (`bin/python`) — the CUDA lane is gated to a Linux host by the
- * target descriptor's `linuxHost` requirement, so there is no Windows branch here to
- * bit-rot. A Windows machine reaches this lane through WSL2, which is Linux.
- *
- * @param {{env?: object}} [opts]
- * @returns {string[]}
- */
-export function trellis2CudaPythonCandidates({ env = process.env } = {}) {
-  const roots = [
-    // `CONDA_PREFIX` points at the ACTIVE env, which may itself be `envs/trellis2`
-    // or the base install — handle both by walking up from an `envs/<name>` prefix.
-    env.CONDA_PREFIX && /[/\\]envs[/\\][^/\\]+$/.test(env.CONDA_PREFIX)
-      ? join(env.CONDA_PREFIX, '..', '..')
-      : env.CONDA_PREFIX,
-    env.CONDA_ROOT,
-    join(HOME, 'miniconda3'),
-    join(HOME, 'anaconda3'),
-    join(HOME, 'miniforge3'),
-    join(HOME, 'mambaforge'),
-    '/opt/conda',
-  ].filter(Boolean);
-  return roots.map((root) => join(root, 'envs', TRELLIS2_CUDA_CONDA_ENV, 'bin', 'python'));
-}
-
-/**
- * The conda Python upstream's `setup.sh` built, or null when no candidate exists.
+ * The conda Python upstream's `setup.sh --new-env` built, or null when its env doesn't
+ * exist. A one-line wrapper over the shared resolver (`lib/condaEnv.js`), which owns
+ * the conda-root candidate list and the `CONDA_PREFIX` walk-up both CUDA lanes need.
  * `exists` is injectable so the probe is deterministic in tests.
  * @param {{exists?: (p: string) => boolean, env?: object}} [opts]
  * @returns {string|null}
  */
 export function trellis2CudaPython({ exists = existsSync, env } = {}) {
-  return trellis2CudaPythonCandidates({ env }).find((p) => exists(p)) || null;
+  return resolveCondaEnvPython(TRELLIS2_CUDA_CONDA_ENV, { exists, env });
 }
 
 /** PortOS's own generate entrypoint (upstream ships only a hard-coded `example.py`). */

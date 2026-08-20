@@ -1,6 +1,9 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
-import { runGenerateSubprocess } from './laneRunner.js';
+import {
+  runGenerateSubprocess,
+  probePythonModules,
+} from './laneRunner.js';
 
 const makeChild = () => {
   const child = new EventEmitter();
@@ -111,5 +114,49 @@ describe('runGenerateSubprocess line buffering', () => {
     child.stderr.emit('data', 'memory. Tried to allocate 2.00 GiB');
     child.emit('close', 1);
     await expect(promise).rejects.toMatchObject({ code: 'TEST_OOM' });
+  });
+});
+
+describe('probePythonModules', () => {
+  const ok = (payload) => (_py, _args, _opts, cb) => cb(null, JSON.stringify(payload));
+
+  it('reports which modules resolve', async () => {
+    const res = await probePythonModules({
+      python: '/py', modules: ['a', 'b'], execFileImpl: ok({ a: true, b: false }),
+    });
+    expect(res).toEqual({ a: true, b: false });
+  });
+
+  it('passes the find_spec one-liner and the module list to the interpreter', async () => {
+    const seen = [];
+    await probePythonModules({
+      python: '/py',
+      modules: ['o_voxel', 'natten'],
+      execFileImpl: (py, args, _o, cb) => { seen.push(py, args); cb(null, '{}'); },
+    });
+    expect(seen[0]).toBe('/py');
+    // find_spec, NOT import — the probe must never pull torch into the request path.
+    expect(seen[1][1]).toContain('find_spec');
+    expect(seen[1].slice(2)).toEqual(['o_voxel', 'natten']);
+  });
+
+  it('returns null — never a partial map — when the probe cannot run', async () => {
+    // "Failed to determine" must stay distinct from "determined to be missing", or a
+    // broken probe reports a healthy install as degraded.
+    expect(await probePythonModules({
+      python: '/py', modules: ['a'], execFileImpl: (_p, _a, _o, cb) => cb(new Error('boom')),
+    })).toBeNull();
+    expect(await probePythonModules({ python: null, modules: ['a'] })).toBeNull();
+    expect(await probePythonModules({ python: '/py', modules: [] })).toBeNull();
+  });
+
+  it('degrades rather than crashing on unparseable output', async () => {
+    // Regression guard: parsing inside the execFile callback would let a throw escape
+    // the enclosing promise and reach the event loop, killing the process.
+    for (const bad of ['not json', '', 'null', '[1,2]', '  ']) {
+      await expect(probePythonModules({
+        python: '/py', modules: ['a'], execFileImpl: (_p, _a, _o, cb) => cb(null, bad),
+      })).resolves.toBeNull();
+    }
   });
 });

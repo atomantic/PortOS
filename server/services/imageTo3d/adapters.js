@@ -39,9 +39,13 @@
  *    **A degraded-but-working install reports `fields.degraded`**:
  *    `{ label, help, repairable }`. This is the ONE shape the client renders, so the
  *    badge / help panel / Repair button work for any target without a per-target
- *    branch — a target-specific field (`textureBake`, `modules`) may also be returned
- *    for diagnostics, but the UI must not key off it. `repairable: false` means
- *    re-running install cannot fix it and no Repair button is offered.
+ *    branch. `repairable: false` means re-running install cannot fix it and no Repair
+ *    button is offered.
+ *
+ *    A target may also return its own narrow diagnostic field, but keep it small and
+ *    keep the UI off it. `trellis2` still returns `textureBake` with **no in-repo
+ *    reader** — retained purely for API back-compat, since an older client on a newer
+ *    server reads that field and PortOS installs update independently.
  */
 
 import { hfChildEnv } from '../../lib/hfToken.js';
@@ -87,7 +91,8 @@ export const TARGET_ADAPTERS = Object.freeze({
     run: runTrellis2Generate,
     async describeInstallState() {
       const bake = await probeTrellis2TextureBake();
-      const toolchain = bake.quality === 'fallback' ? await probeMetalToolchain() : null;
+      const degradedBake = bake.quality === 'fallback';
+      const toolchain = degradedBake ? await probeMetalToolchain() : null;
       // A degraded bake has two very different remedies, and the card must not
       // offer the wrong one: when the Metal Toolchain is merely missing, Repair
       // install fetches it and rebuilds (#3041); when only the Command Line Tools
@@ -95,14 +100,14 @@ export const TARGET_ADAPTERS = Object.freeze({
       // Xcode first.
       const textureBake = toolchain?.blocker
         ? { ...bake, repairable: false, blocker: toolchain.blocker, help: toolchain.hint }
-        : { ...bake, ...(bake.quality === 'fallback' ? { repairable: true } : {}) };
+        : { ...bake, ...(degradedBake ? { repairable: true } : {}) };
       return {
         fields: {
           textureBake,
           // Normalized degraded-state projection — see the `degraded` note in this
           // file's adapter contract. The client renders THIS, not `textureBake`, so a
           // target with a different kind of degradation needs no new UI branch.
-          ...(textureBake.quality === 'fallback' ? {
+          ...(degradedBake ? {
             degraded: {
               label: 'degraded textures',
               help: textureBake.help,
@@ -110,7 +115,7 @@ export const TARGET_ADAPTERS = Object.freeze({
             },
           } : {}),
         },
-        warnings: textureBake.quality === 'fallback' ? [textureBake.help] : [],
+        warnings: degradedBake ? [textureBake.help] : [],
       };
     },
   }),
@@ -170,7 +175,9 @@ export const TARGET_ADAPTERS = Object.freeze({
       const nafFallback = probe.naf === 'unavailable';
       return {
         fields: {
-          modules: probe,
+          // Narrow on purpose: shipping the whole probe made the wire shape
+          // `target.modules.modules` (a raw find_spec map) with no consumer.
+          naf: probe.naf,
           // Same normalized shape the TRELLIS.2 adapter emits. Repair install re-runs
           // the NATTEN build step, so this degradation genuinely is repairable —
           // unlike the Metal-Toolchain-blocked case on the MPS lane.

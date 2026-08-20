@@ -31,6 +31,57 @@ import { execFile } from './childProcess.js';
  * `0, NVIDIA GeForce RTX 3090, 24576, 596.36` for the fuller query — this narrower
  * one emits `NVIDIA GeForce RTX 3090, 24576`.
  */
+/**
+ * Spawn `nvidia-smi` with `queryArgs` and triage the outcome, without interpreting the
+ * rows. The three probes below differ only in their columns and their parser, so the
+ * shell they share — the callback-to-promise wrapper and the `ENOENT` ⇒ real-negative
+ * vs anything-else ⇒ `'unknown'` triage — lives here once.
+ *
+ * `status` is null when the command SUCCEEDED and the caller should parse `stdout`.
+ * Module-private on purpose: it is a shape-sharing device, not a new public probe, so
+ * it adds no `server/lib/` barrel or README obligation.
+ *
+ * @param {string[]} queryArgs
+ * @param {{execFileImpl?: Function, timeoutMs?: number}} [opts]
+ * `error` follows the majority contract (null on `ENOENT`, since absent hardware is an
+ * answer rather than a failure); `rawError` always carries the underlying message, so
+ * the one probe with a different historical contract can keep it.
+ *
+ * @returns {Promise<{status: 'absent'|'unknown'|null, stdout: string,
+ *                    error: string|null, rawError: string|null}>}
+ */
+async function queryNvidiaSmi(queryArgs, { execFileImpl = execFile, timeoutMs } = {}) {
+  const result = await new Promise((resolve) => {
+    execFileImpl('nvidia-smi', [...queryArgs], { timeout: timeoutMs },
+      (err, stdout) => resolve({ err, stdout: String(stdout ?? '') }));
+  }).catch((err) => ({ err, stdout: '' }));
+  if (!result.err) return { status: null, stdout: result.stdout, error: null, rawError: null };
+  const rawError = result.err.message || null;
+  // `nvidia-smi` isn't installed at all ⇒ no NVIDIA driver on this host. That is a real
+  // negative answer, not a failed probe — the binary ships with the driver.
+  if (result.err.code === 'ENOENT') return { status: 'absent', stdout: '', error: null, rawError };
+  // It exists but wouldn't answer (driver/library mismatch, timeout, a driver too old
+  // for one of these columns). We genuinely do not know what hardware is here.
+  return { status: 'unknown', stdout: '', error: rawError || 'nvidia-smi failed', rawError };
+}
+
+/**
+ * MiB → whole GB, or null when the column didn't parse.
+ *
+ * Rounded rather than floored because a "24 GB" card reports a hair under 24 GiB and
+ * must not trip a 24 GB floor. Shared by both row parsers so this policy is stated
+ * once — it matters more since the CUDA image-to-3D lanes have DIFFERENT VRAM floors
+ * (12 GB and 24 GB), and a rounding change that reached only one parser would move one
+ * lane's gate and not the other's.
+ *
+ * @param {string|number} mib
+ * @returns {number|null}
+ */
+function vramGbFromMib(mib) {
+  const vramMib = Number(mib);
+  return Number.isFinite(vramMib) && vramMib > 0 ? Math.round(vramMib / 1024) : null;
+}
+
 export const NVIDIA_SMI_QUERY_ARGS = Object.freeze([
   '--query-gpu=name,memory.total',
   '--format=csv,noheader,nounits',
@@ -59,14 +110,13 @@ export function parseNvidiaSmiUtilization(stdout) {
 }
 
 export async function detectCudaUtilization({ execFileImpl = execFile, timeoutMs = 2000 } = {}) {
-  const result = await new Promise((resolve) => {
-    execFileImpl('nvidia-smi', [...NVIDIA_SMI_UTILIZATION_QUERY_ARGS], { timeout: timeoutMs },
-      (err, stdout) => resolve({ err, stdout: String(stdout ?? '') }));
-  }).catch((err) => ({ err, stdout: '' }));
-  if (result.err) {
-    return { status: result.err.code === 'ENOENT' ? 'absent' : 'unknown', gpus: [], error: result.err.message || null };
-  }
-  const gpus = parseNvidiaSmiUtilization(result.stdout);
+  const probe = await queryNvidiaSmi(NVIDIA_SMI_UTILIZATION_QUERY_ARGS, { execFileImpl, timeoutMs });
+  // NOTE: this probe reports the raw `error` message even on ENOENT, where the other
+  // two report null. That asymmetry is pre-existing, so it reads `rawError` to preserve
+  // its exact contract — sharing the spawn shell must not silently change what a
+  // caller returns.
+  if (probe.status) return { status: probe.status, gpus: [], error: probe.rawError };
+  const gpus = parseNvidiaSmiUtilization(probe.stdout);
   return { status: gpus.length ? 'available' : 'absent', gpus, error: null };
 }
 
@@ -107,9 +157,7 @@ export function parseNvidiaSmiComputeCaps(stdout) {
     // `8.6` / `12.0` — a bare major.minor. Anything else is an unreadable column, not
     // an arch we should hand to a compiler flag.
     const computeCap = /^\d+\.\d+$/.test(cap || '') ? cap : null;
-    const vramMib = Number(mib);
-    const sized = Number.isFinite(vramMib) && vramMib > 0;
-    gpus.push({ name, computeCap, vramGb: sized ? Math.round(vramMib / 1024) : null });
+    gpus.push({ name, computeCap, vramGb: vramGbFromMib(mib) });
   }
   return gpus;
 }
@@ -129,29 +177,13 @@ export function parseNvidiaSmiComputeCaps(stdout) {
  *                    primaryComputeCap: string|null, error: string|null}>}
  */
 export async function detectCudaComputeCapability({ execFileImpl = execFile, timeoutMs = 8000 } = {}) {
-  const result = await new Promise((resolve) => {
-    execFileImpl(
-      'nvidia-smi',
-      [...NVIDIA_SMI_COMPUTE_CAP_QUERY_ARGS],
-      { timeout: timeoutMs },
-      (err, stdout) => resolve({ err, stdout: String(stdout ?? '') }),
-    );
-  }).catch((err) => ({ err, stdout: '' }));
-
-  if (result.err) {
-    if (result.err.code === 'ENOENT') {
-      return { status: 'absent', gpus: [], primaryComputeCap: null, error: null };
-    }
-    // Includes "old driver rejected --query-gpu=compute_cap" — genuinely unknown.
-    return {
-      status: 'unknown',
-      gpus: [],
-      primaryComputeCap: null,
-      error: result.err.message || 'nvidia-smi failed',
-    };
+  // A driver too old for `compute_cap` lands in `'unknown'` via the shared triage.
+  const probe = await queryNvidiaSmi(NVIDIA_SMI_COMPUTE_CAP_QUERY_ARGS, { execFileImpl, timeoutMs });
+  if (probe.status) {
+    return { status: probe.status, gpus: [], primaryComputeCap: null, error: probe.error };
   }
 
-  const gpus = parseNvidiaSmiComputeCaps(result.stdout);
+  const gpus = parseNvidiaSmiComputeCaps(probe.stdout);
   if (!gpus.length) return { status: 'absent', gpus: [], primaryComputeCap: null, error: null };
   // Largest card first (unsized cards sort last), then take its arch.
   const ranked = [...gpus].sort((a, b) => (b.vramGb ?? -1) - (a.vramGb ?? -1));
@@ -186,14 +218,11 @@ export function parseNvidiaSmiGpus(stdout) {
     // two columns and ignore any extra the query might grow.
     const [name, mib] = line.split(',').map((cell) => cell.trim());
     if (!name) continue;
-    const vramMib = Number(mib);
-    const sized = Number.isFinite(vramMib) && vramMib > 0;
+    const vramGb = vramGbFromMib(mib);
     gpus.push({
       name,
-      vramMib: sized ? vramMib : null,
-      // Round to whole GB for the same reason unified memory is rounded: a "24 GB"
-      // card reports a hair under 24 GiB and must not trip a 24 GB floor.
-      vramGb: sized ? Math.round(vramMib / 1024) : null,
+      vramMib: vramGb === null ? null : Number(mib),
+      vramGb,
     });
   }
   return gpus;
@@ -209,32 +238,12 @@ export function parseNvidiaSmiGpus(stdout) {
  *                    gpus: Array<object>, maxVramGb: number|null, error: string|null}>}
  */
 export async function detectCudaGpus({ execFileImpl = execFile, timeoutMs = 8000 } = {}) {
-  const result = await new Promise((resolve) => {
-    execFileImpl(
-      'nvidia-smi',
-      [...NVIDIA_SMI_QUERY_ARGS],
-      { timeout: timeoutMs },
-      (err, stdout) => resolve({ err, stdout: String(stdout ?? '') }),
-    );
-  }).catch((err) => ({ err, stdout: '' }));
-
-  if (result.err) {
-    // `nvidia-smi` isn't installed at all ⇒ no NVIDIA driver on this host. That is a
-    // real negative answer, not a failed probe — the binary ships with the driver.
-    if (result.err.code === 'ENOENT') {
-      return { status: 'absent', gpus: [], maxVramGb: null, error: null };
-    }
-    // It exists but wouldn't answer (driver/library mismatch, timeout, old driver
-    // without --query-gpu). We genuinely do not know what hardware is here.
-    return {
-      status: 'unknown',
-      gpus: [],
-      maxVramGb: null,
-      error: result.err.message || 'nvidia-smi failed',
-    };
+  const probe = await queryNvidiaSmi(NVIDIA_SMI_QUERY_ARGS, { execFileImpl, timeoutMs });
+  if (probe.status) {
+    return { status: probe.status, gpus: [], maxVramGb: null, error: probe.error };
   }
 
-  const gpus = parseNvidiaSmiGpus(result.stdout);
+  const gpus = parseNvidiaSmiGpus(probe.stdout);
   if (!gpus.length) {
     // Exit 0 with no rows: the driver is installed and reports zero GPUs.
     return { status: 'absent', gpus: [], maxVramGb: null, error: null };

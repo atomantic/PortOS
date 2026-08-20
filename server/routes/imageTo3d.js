@@ -3,14 +3,7 @@ import { createReadStream } from 'node:fs';
 import { z } from 'zod';
 import { asyncHandler, ServerError, sendErrorResponse } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
-import {
-  getTarget,
-  listTargets,
-  detectHostCapabilities,
-  unavailableReason,
-  unavailableReasonLabel,
-  IMAGE_TO_3D_TARGET_IDS,
-} from '../services/imageTo3d/targets.js';
+import { getTarget, listTargets, detectHostCapabilities, unavailableReason, unavailableReasonLabel, IMAGE_TO_3D_TARGET_IDS, renderOptionSupportFor } from '../services/imageTo3d/targets.js';
 import { getTargetAdapter } from '../services/imageTo3d/adapters.js';
 import {
   listModels,
@@ -287,7 +280,12 @@ router.get('/models/:id/asset', asyncHandler(async (req, res) => {
 router.get('/models/:id', asyncHandler(async (req, res) => {
   const model = await getModel(req.params.id);
   if (!model) throw new ServerError('Image-to-3D model not found', { status: 404, code: 'NOT_FOUND' });
-  res.json(model);
+  // Projected at the response boundary (not stored): the detail view loads a record
+  // rather than the target list, and still has to know which per-run knobs this
+  // record's target actually honors. Derived from the descriptor on every read, so it
+  // cannot go stale against a target whose support changed.
+  const supportsRenderOptions = renderOptionSupportFor(model.target);
+  res.json(supportsRenderOptions ? { ...model, supportsRenderOptions } : model);
 }));
 
 router.post('/models/:id/generate', asyncHandler(async (req, res) => {

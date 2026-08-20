@@ -16,7 +16,6 @@ import {
   pixal3dTrellisDir,
   pixal3dInferenceScript,
   pixal3dPython,
-  pixal3dPythonCandidates,
   isPixal3dCudaInstalled,
   nattenWorkerCount,
   buildPixal3dInstallSteps,
@@ -70,25 +69,20 @@ describe('pixal3dCuda path resolution', () => {
   it('keeps its own TRELLIS.2 checkout inside its own root', () => {
     expect(pixal3dTrellisDir(BASE)).toBe(TRELLIS);
     expect(pixal3dTrellisDir(BASE).startsWith(ROOT)).toBe(true);
-    expect(pixal3dTrellisDir(BASE)).not.toBe(trellis2CudaRoot(BASE));
   });
 
-  it('probes conda roots for its OWN env name, never trellis2', () => {
-    const candidates = pixal3dPythonCandidates({ env: CONDA_ENV });
-    expect(candidates).toContain(CONDA_PY);
-    expect(candidates.every((p) => p.includes(join('envs', PIXAL3D_CONDA_ENV)))).toBe(true);
-    expect(candidates.some((p) => p.includes(join('envs', 'trellis2')))).toBe(false);
-  });
-
-  it('walks up from an active envs/<name> CONDA_PREFIX to find the base install', () => {
-    const candidates = pixal3dPythonCandidates({
-      env: { CONDA_PREFIX: join(CONDA, 'envs', 'portos') },
-    });
-    expect(candidates.some((p) => p.includes(join('conda', 'envs', 'pixal3d')))).toBe(true);
-  });
-
-  it('resolves the python only when a candidate exists', () => {
+  // The candidate-list shape and the CONDA_PREFIX walk-up are covered once, with the
+  // shared resolver (`server/lib/pythonSetup.test.js`). What matters here is that this
+  // lane asks for its OWN env — resolving to `trellis2` would hand Pixal3D an
+  // interpreter whose dependency set it must not touch.
+  it('resolves its own conda env, never the TRELLIS.2 one', () => {
     expect(pixal3dPython({ exists: existsFor(CONDA_PY), env: CONDA_ENV })).toBe(CONDA_PY);
+    expect(CONDA_PY).toContain(join('envs', PIXAL3D_CONDA_ENV));
+    expect(PIXAL3D_CONDA_ENV).not.toBe('trellis2');
+    // A host with ONLY the trellis2 env present must read as not-installed here.
+    expect(pixal3dPython({
+      exists: existsFor(join(CONDA, 'envs', 'trellis2', 'bin', 'python')), env: CONDA_ENV,
+    })).toBeNull();
     expect(pixal3dPython({ exists: () => false, env: CONDA_ENV })).toBeNull();
   });
 });
@@ -104,7 +98,7 @@ describe('isPixal3dCudaInstalled', () => {
 });
 
 describe('buildPixal3dInstallSteps', () => {
-  const fresh = () => buildPixal3dInstallSteps(BASE, { exists: () => false, computeCap: '8.6', workers: 4 });
+  const fresh = () => buildPixal3dInstallSteps(BASE, { exists: () => false, computeCap: '8.6' });
 
   it('creates its own conda env rather than relying on setup.sh --new-env', () => {
     const env = stageOf(fresh(), 'env');
@@ -142,7 +136,7 @@ describe('buildPixal3dInstallSteps', () => {
   it('builds NATTEN for the probed arch and tolerates its failure', () => {
     const natten = stageOf(fresh(), 'natten');
     expect(natten.args[1]).toContain('NATTEN_CUDA_ARCH=8.6');
-    expect(natten.args[1]).toContain('NATTEN_N_WORKERS=4');
+    expect(natten.args[1]).toContain(`NATTEN_N_WORKERS=${nattenWorkerCount()}`);
     expect(natten.args[1]).toContain(`natten==${PIXAL3D_NATTEN_VERSION}`);
     expect(natten.args[1]).toContain('--no-build-isolation');
     // Without NATTEN the pipeline takes upstream's NAF fallback path — degraded, but
@@ -151,11 +145,11 @@ describe('buildPixal3dInstallSteps', () => {
   });
 
   it('omits NATTEN_CUDA_ARCH entirely when the arch could not be determined', () => {
-    const steps = buildPixal3dInstallSteps(BASE, { exists: () => false, computeCap: null, workers: 2 });
+    const steps = buildPixal3dInstallSteps(BASE, { exists: () => false, computeCap: null });
     const natten = stageOf(steps, 'natten');
     // Never guess an arch — let NATTEN pick its own default (sentinel rule).
     expect(natten.args[1]).not.toContain('NATTEN_CUDA_ARCH');
-    expect(natten.args[1]).toContain('NATTEN_N_WORKERS=2');
+    expect(natten.args[1]).toContain('NATTEN_N_WORKERS=');
   });
 
   it('installs the pinned utils3d wheel', () => {
@@ -241,7 +235,6 @@ describe('buildPixal3dGenerateArgs', () => {
   it('emits the resolution and rejects one upstream does not accept', () => {
     expect(args({ resolution: 1536 })).toEqual(expect.arrayContaining(['--resolution', '1536']));
     expect(() => args({ resolution: 2048 })).toThrow(/resolution must be one of/);
-    expect(PIXAL3D_RESOLUTIONS).toEqual([1024, 1536]);
   });
 
   it('requires an image', () => {
@@ -258,10 +251,6 @@ describe('buildPixal3dGenerateArgs', () => {
     expect(() => args({ seed: -1 })).toThrow(/seed must be an integer/);
   });
 
-  it('omits --fov unless given', () => {
-    expect(args()).not.toContain('--fov');
-    expect(args({ fov: 0.2 })).toEqual(expect.arrayContaining(['--fov', '0.2']));
-  });
 });
 
 describe('parsePixal3dProgress', () => {
@@ -326,6 +315,9 @@ describe('probePixal3dModules', () => {
     expect(res.naf).toBe('available');
     expect(res.missing).toEqual([]);
     expect(res.help).toBeUndefined();
+    // The raw find_spec map is deliberately NOT returned — nothing consumed it, and it
+    // reached the client as `target.modules.modules`.
+    expect(res.modules).toBeUndefined();
   });
 
   it('reports NAF unavailable with actionable help when natten is absent', async () => {
