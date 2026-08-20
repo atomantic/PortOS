@@ -15,6 +15,7 @@ import {
   POST_QUICK_DURATION_MINUTES,
   postQuickSessionPlanSchema,
   postBenchmarkSchema,
+  postConditionsSchema,
 } from './postValidation.js';
 import { getTopic, POST_TOPICS } from './postTopics.js';
 
@@ -43,6 +44,69 @@ describe('postBenchmarkSchema', () => {
         totalMs: 100,
       }],
     }).benchmark).toBeUndefined();
+  });
+});
+
+// Structured session conditions (issue #4442) — fixed enums instead of the
+// legacy free-text `tags` map, so values are filterable/comparable.
+describe('postConditionsSchema', () => {
+  it('accepts every field set', () => {
+    expect(postConditionsSchema.parse({
+      sleepQuality: 'good',
+      caffeine: 'moderate',
+      stress: 'low',
+      note: 'felt sharp today',
+    })).toEqual({
+      sleepQuality: 'good',
+      caffeine: 'moderate',
+      stress: 'low',
+      note: 'felt sharp today',
+    });
+  });
+
+  it('accepts an empty object — every field is optional', () => {
+    expect(postConditionsSchema.parse({})).toEqual({});
+  });
+
+  it('rejects a value outside the fixed enum', () => {
+    expect(() => postConditionsSchema.parse({ sleepQuality: 'terrible' })).toThrow();
+    expect(() => postConditionsSchema.parse({ caffeine: '1 cup' })).toThrow();
+    expect(() => postConditionsSchema.parse({ stress: 'extreme' })).toThrow();
+  });
+
+  it('trims the note and rejects one over 500 chars', () => {
+    expect(postConditionsSchema.parse({ note: '  short  ' }).note).toBe('short');
+    expect(() => postConditionsSchema.parse({ note: 'x'.repeat(501) })).toThrow();
+  });
+
+  it('flows through postSessionSubmitSchema as an optional field', () => {
+    const parsed = postSessionSubmitSchema.parse({
+      modules: ['mental-math'],
+      tasks: [{
+        module: 'mental-math',
+        type: 'doubling-chain',
+        questions: [{ prompt: '2 x 2', expected: 4, answered: 4, responseMs: 100 }],
+        totalMs: 100,
+      }],
+      conditions: { sleepQuality: 'poor', stress: 'high' },
+    });
+    expect(parsed.conditions).toEqual({ sleepQuality: 'poor', stress: 'high' });
+  });
+
+  it('legacy tags and structured conditions coexist independently', () => {
+    const parsed = postSessionSubmitSchema.parse({
+      modules: ['mental-math'],
+      tasks: [{
+        module: 'mental-math',
+        type: 'doubling-chain',
+        questions: [{ prompt: '2 x 2', expected: 4, answered: 4, responseMs: 100 }],
+        totalMs: 100,
+      }],
+      tags: { sleep: 'ok-ish, hand-typed' },
+      conditions: { sleepQuality: 'fair' },
+    });
+    expect(parsed.tags).toEqual({ sleep: 'ok-ish, hand-typed' });
+    expect(parsed.conditions).toEqual({ sleepQuality: 'fair' });
   });
 });
 

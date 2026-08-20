@@ -117,6 +117,15 @@ export default function PostProgress({ subtab, onBack }) {
     () => (progress?.series?.byDay || []).map(p => ({ date: p.date, minutes: p.minutes })),
     [progress]
   );
+  // Protocol-scoped benchmark trend (issue #4442) — only sessions run under
+  // the CURRENT fixed protocol/scorer version, separate from the blended
+  // "Score Trend" above which includes every scored session. `excludedCount`
+  // is surfaced explicitly rather than silently omitted.
+  const benchmark = progress?.series?.benchmark || null;
+  const benchmarkScoreData = useMemo(
+    () => (benchmark?.byDay || []).filter(p => p.score != null).map(p => ({ date: p.date, score: p.score })),
+    [benchmark]
+  );
 
   // Sub-view: the full session-list table (reuses PostHistory), deep-linked at
   // /post/progress/sessions.
@@ -262,6 +271,33 @@ export default function PostProgress({ subtab, onBack }) {
               emptyText="No training time logged yet."
             />
           </div>
+
+          {/* Benchmark trend — a narrower, protocol-scoped comparison than the
+              blended "Score Trend" above. Only counts sessions run under the
+              CURRENT registered protocol/scorer version (issue #4442); a
+              retired protocol/scorer version or an ordinary Quick/Test/Train
+              session never contributes here, and the excluded count says so
+              instead of quietly under-reporting. */}
+          {benchmark && (
+            <div className="grid grid-cols-1 gap-4 sm:gap-6">
+              <div>
+                <TrendChart
+                  title={`Benchmark Trend — ${benchmark.protocolId} v${benchmark.protocolVersion}`}
+                  data={benchmarkScoreData}
+                  dataKey="score"
+                  domainRange={[0, 100]}
+                  stroke={chartColors.accent}
+                  chartColors={chartColors}
+                  emptyText="No compatible benchmark runs yet — start one from the launcher."
+                />
+                {benchmark.excludedCount > 0 && (
+                  <p className="text-xs text-gray-500 mt-2">
+                    {benchmark.excludedCount} earlier benchmark {benchmark.excludedCount === 1 ? 'run' : 'runs'} excluded — different protocol/scoring version, not comparable to the current battery.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Mastery panel */}
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 sm:gap-6">

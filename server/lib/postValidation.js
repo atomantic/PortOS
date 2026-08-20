@@ -9,8 +9,23 @@ import { POST_LLM_MAX_SEMANTIC_CANDIDATES, postLlmEvaluationSchema } from './pos
 // POST (Power On Self Test) VALIDATION SCHEMAS
 // =============================================================================
 
-// Tags for session conditions (sleep, caffeine, stress, etc.)
+// Legacy free-text tags for session conditions (sleep, caffeine, stress, etc.).
+// Superseded by `postConditionsSchema` below — kept only so historical session
+// records (and any client that still sends it) remain valid; the launcher no
+// longer writes free-text values here.
 export const postTagsSchema = z.record(z.string().max(200));
+
+// Structured session conditions (issue #4442): fixed enums instead of free
+// text so values are filterable/comparable across sessions, plus an optional
+// note for anything the enums don't capture. Every field is optional — a
+// session with no conditions filled in submits `{}`/`undefined`, not a
+// placeholder-filled object.
+export const postConditionsSchema = z.object({
+  sleepQuality: z.enum(['poor', 'fair', 'good']).optional(),
+  caffeine: z.enum(['none', 'low', 'moderate', 'high']).optional(),
+  stress: z.enum(['low', 'moderate', 'high']).optional(),
+  note: z.string().trim().max(500).optional(),
+});
 
 // 24h "HH:MM" time-of-day — HHMM_STRICT_RE is timezone.js's single source of
 // truth for this exact zero-padded pattern (shared with dashboardLayouts.js's
@@ -306,6 +321,7 @@ export const postSessionSubmitSchema = z.object({
   modules: z.array(z.enum(POST_MODULES)).min(1),
   tasks: z.array(taskResultSchema).min(1),
   tags: postTagsSchema.optional().default({}),
+  conditions: postConditionsSchema.optional(),
   startedAt: z.string().datetime().optional(),
   plan: postQuickSessionPlanSchema.optional(),
   benchmark: postBenchmarkSchema.optional(),

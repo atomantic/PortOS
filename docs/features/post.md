@@ -67,6 +67,18 @@ Configurable memory training for songs, poems, sequences, speeches, or any order
 - **Wordplay/Verbal/Imagination**: LLM-scored against per-drill rubrics (e.g. wit-comeback: humor 40% / cleverness 30% / relevance 30%), blended as quality 80% + speed bonus 20% (`server/services/meatspacePostLlm.js`).
 - **Session score**: per-module weighted mean across completed drills (`computeSessionScore`, weights from `config.scoring.weights`, issue #2099). Every module defaults to weight `1.0`, so an unconfigured install still gets the plain arithmetic mean; a module absent from a saved `weights` map also defaults to `1.0` rather than dropping out.
 
+## Benchmark vs. Training (issue #4442)
+
+An ordinary **Test** session (above) scores whatever drills the user's current, possibly adaptive, configuration happens to select — useful for daily practice, but not a stable measurement, since two Test sessions can differ in composition, difficulty rung, or drill order and still get compared as if they were the same instrument. A **Benchmark** run is a separate, fixed-form assessment:
+
+- Composition, drill order, difficulty, and timing come entirely from a registered protocol (`POST_BENCHMARK_PROTOCOL`, `server/services/meatspacePost.js`), never from the user's adaptive/training configuration — no progressive ladder, no random Quick composition, no due maintenance reps, no hints or training feedback.
+- Every run stores `protocolId`, `protocolVersion`, `scorerVersion`, and `formId` on its durable session record (`postBenchmarkSchema`, `server/lib/postValidation.js`), and the server rejects a submission whose tasks/config don't match the form it claims (`assertBenchmarkSession`) — a benchmark result can't be silently produced by a mismatched or hand-edited config.
+- The protocol offers a small set of alternate **forms** (`GET /api/meatspace/post/benchmark/protocol`), rotated without immediate repetition so back-to-back runs don't reuse the same generated shapes; each form's tasks are deterministic/seeded, so a stored run is reproducible from its identity alone.
+- **Trend comparisons stay protocol-scoped.** `getPostProgress`'s `series.benchmark` includes only sessions whose `protocolId`/`protocolVersion`/`scorerVersion` match the *currently registered* protocol; a run under a retired protocol/scorer version, or an ordinary Test/Train/Quick session, is excluded from that series (never silently blended in) and counted in `excludedCount` so the Progress UI can say why a session doesn't appear. The general `series.byDay` "Score Trend" is unchanged and still blends every scored session — it answers "how active/well am I doing generally," not "is this benchmark-comparable."
+- This is a training aid, not a clinical, diagnostic, IQ, or generalized-cognitive-transfer instrument — no such claim is made or implied by a benchmark score.
+
+Session **conditions** (optional, set at launch — `PostSessionLauncher.jsx`) are structured rather than free text: `sleepQuality` (poor/fair/good), `caffeine` (none/low/moderate/high), `stress` (low/moderate/high), plus an optional free-text note (`postConditionsSchema`). This makes conditions filterable/comparable across sessions instead of the prior unconstrained strings; historical sessions recorded before this change keep whatever free-text `tags` they were saved with as legacy metadata, which the server still accepts but the launcher no longer writes.
+
 ## Adaptive Difficulty
 
 Opt-in adaptive tuning for math drills (`server/lib/postAdaptive.js`): recent test and training attempts both inform skill evidence and nudge drill parameters, with a transparent preview of what would change (`GET /api/meatspace/post/adaptive-preview`). Training also feeds domain/drill progress, recommendations, progressive-ladder mastery, and mastered-skill retention scheduling. Benchmark/test history remains isolated: training never increments scored-session counts or changes the benchmark headline/overall score. Multiplication is a special case: whenever the progressive ladder is on (the default), it owns multiplication's difficulty entirely and the preview reflects the ladder rung, not the generic `maxDigits` knob — the two are mutually exclusive per drill type, never blended.
@@ -95,6 +107,8 @@ All under `/api/meatspace` (`server/routes/meatspacePostRoutes.js`):
 - `GET/PUT /post/config` — drill configuration
 - `GET/POST /post/sessions`, `GET /post/sessions/:id` — scored session history
 - `GET /post/stats` — rolling averages
+- `GET /post/benchmark/protocol` — the next fixed-form benchmark battery and its versioned scoring contract
+- `GET /post/progress` — time-series trends, including the protocol-scoped `series.benchmark`
 - `POST /post/drill` — generate a drill (dispatches math / LLM / memory / cognitive)
 - `GET /post/adaptive-preview` — adaptive-difficulty preview
 - `POST /post/score-llm` — score LLM drill responses

@@ -36,7 +36,7 @@ function makeSession(overrides = {}) {
 
 function renderResults(overrides = {}) {
   return render(
-    <PostSessionResults session={makeSession(overrides)} tags={{}} onSaved={() => {}} onBack={() => {}} />
+    <PostSessionResults session={makeSession(overrides)} conditions={{}} onSaved={() => {}} onBack={() => {}} />
   );
 }
 
@@ -119,7 +119,7 @@ describe('PostSessionResults daily routine actions', () => {
     render(
       <PostSessionResults
         session={makeSession({ saveSession })}
-        tags={{}}
+        conditions={{}}
         onSaved={onSaved}
         onBack={() => {}}
       />

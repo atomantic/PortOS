@@ -920,7 +920,7 @@ describe('usePostSession — refresh-safe run + idempotent submit (issue #2098)'
       drills: [{ type: 'compound-chain' }], currentDrillIndex: 0, currentDrill: null,
       currentQuestionIndex: 0, answers: [],
       drillResults: [{ module: 'llm-drills', type: 'compound-chain', score: 90 }],
-      sessionScore: 90, tags: {},
+      sessionScore: 90, conditions: {},
     }));
     const { result } = renderHook(() => usePostSession());
     expect(result.current.state).toBe('complete');

@@ -125,6 +125,22 @@ export async function getPostBenchmarkProtocol() {
   return { ...cloneBenchmarkProtocol(POST_BENCHMARK_PROTOCOL), nextFormId: nextForm.formId };
 }
 
+// A benchmark session is "compatible" only when its stored protocol/version/
+// scorer triple exactly matches the CURRENTLY registered protocol — never
+// fabricated, never inferred by shape. `null` marks a plain (non-benchmark)
+// session so trend code can tell "not a benchmark run" apart from "a
+// benchmark run under a retired protocol/scorer version" (issue #4442);
+// both are excluded from the compatible series, but for different reasons.
+export function benchmarkCompatibility(session) {
+  const benchmark = session?.benchmark;
+  if (!benchmark) return null;
+  return benchmark.protocolId === POST_BENCHMARK_PROTOCOL.protocolId
+    && benchmark.protocolVersion === POST_BENCHMARK_PROTOCOL.protocolVersion
+    && benchmark.scorerVersion === POST_BENCHMARK_PROTOCOL.scorerVersion
+    ? 'compatible'
+    : 'legacy';
+}
+
 function assertBenchmarkSession(benchmark, tasks, modules) {
   if (!benchmark) return;
   const form = benchmark.protocolId === POST_BENCHMARK_PROTOCOL.protocolId
@@ -497,6 +513,9 @@ export async function submitPostSession(sessionData) {
     tasks: rescoredTasks,
     score: computeSessionScore(rescoredTasks, config.scoring?.weights),
     tags: sessionData.tags || {},
+    ...(sessionData.conditions && Object.keys(sessionData.conditions).length
+      ? { conditions: sessionData.conditions }
+      : {}),
     ...(sessionData.plan ? { plan: sessionData.plan } : {}),
     ...(sessionData.benchmark ? { benchmark: sessionData.benchmark } : {}),
   };
@@ -1044,7 +1063,10 @@ function pushMetricSeries(map, key, date, score, accuracy, avgResponseMs) {
 }
 
 // Finalize a `key -> (date -> bucket)` map into `key -> [{ date, score,
-// accuracy, avgResponseMs }]`, chronologically sorted.
+// accuracy, avgResponseMs, count }]`, chronologically sorted. `count` is the
+// number of score samples bucketed into that day — for a series pushed once
+// per session (e.g. the benchmark trend) that's the session count; for a
+// series pushed once per task (byDomain/byDrill) it's the task count.
 function finalizeMetricSeries(map) {
   const out = {};
   for (const [key, byDate] of map) {
@@ -1059,6 +1081,7 @@ function finalizeMetricSeries(map) {
           score: score == null ? null : Math.round(score),
           accuracy: acc == null ? null : acc,
           avgResponseMs: resp == null ? null : Math.round(resp),
+          count: b.scores.length,
         };
       });
   }
@@ -1073,6 +1096,11 @@ function finalizeMetricSeries(map) {
  *   accuracy, avg response time, minutes, and session count.
  * - `series.byDomain`  per-day series keyed by coarse module (`mental-math`, …).
  * - `series.byDrill`   per-day series keyed by drill type (`multiplication`, …).
+ * - `series.benchmark` protocol-scoped trend: only sessions run under the
+ *   CURRENT `POST_BENCHMARK_PROTOCOL` (protocolId+protocolVersion+
+ *   scorerVersion), with `excludedCount` covering benchmark runs under a
+ *   retired protocol/scorer version (issue #4442). Ordinary Quick/Test/Train
+ *   sessions never appear here at all.
  * - `totals`           minutes trained (sessions + practice), session count,
  *   practice-entry count over the window.
  * - `streak`           ONE unified streak (sessions OR training-log activity),
@@ -1116,6 +1144,17 @@ export async function getPostProgress({ days = 90 } = {}) {
   const dayMap = new Map();      // date -> { scores, accs, resp, minutes, sessions }
   const domainMap = new Map();   // module -> Map(date -> metric bucket)
   const drillMap = new Map();    // type   -> Map(date -> metric bucket)
+  // Protocol-scoped series (issue #4442): pushed through the SAME date-bucket
+  // aggregator as byDomain/byDrill below, under a single constant key, so a
+  // benchmark trend is "filter + reuse the existing bucketer" rather than a
+  // bespoke Map/ensure/finalize block. Only sessions run under the CURRENT
+  // POST_BENCHMARK_PROTOCOL contribute, so the trend never blends across a
+  // protocol/scorer version change or with ordinary Quick/Test/Train
+  // sessions. `excludedCount` surfaces what was left out (benchmark runs
+  // under a retired version) so the UI can say so rather than silently
+  // under-counting.
+  const benchmarkMap = new Map();
+  let benchmarkExcludedCount = 0;
 
   const ensureDay = (date) => {
     let d = dayMap.get(date);
@@ -1130,6 +1169,13 @@ export async function getPostProgress({ days = 90 } = {}) {
     day.sessions += 1;
     day.minutes += (s.durationMs || 0) / 60000;
     if (typeof s.score === 'number' && !Number.isNaN(s.score)) day.scores.push(s.score);
+
+    const compat = benchmarkCompatibility(s);
+    if (compat === 'compatible') {
+      pushMetricSeries(benchmarkMap, 'benchmark', date, s.score, null, null);
+    } else if (compat === 'legacy') {
+      benchmarkExcludedCount += 1;
+    }
 
     const sessionAccs = [];
     const sessionResp = [];
@@ -1178,6 +1224,9 @@ export async function getPostProgress({ days = 90 } = {}) {
       };
     });
 
+  const benchmarkByDay = (finalizeMetricSeries(benchmarkMap).benchmark || [])
+    .map(({ date, score, count }) => ({ date, score, sessions: count }));
+
   const sessionMs = sessions.reduce((sum, s) => sum + (s.durationMs || 0), 0);
   const trainingMs = training.reduce((sum, e) => sum + (e.totalMs || 0), 0);
 
@@ -1201,6 +1250,19 @@ export async function getPostProgress({ days = 90 } = {}) {
       byDay,
       byDomain: finalizeMetricSeries(domainMap),
       byDrill: finalizeMetricSeries(drillMap),
+      // Protocol-scoped benchmark trend (issue #4442) — additive, does not
+      // change `byDay`'s existing blended-score semantics. `byDay` above
+      // stays the general activity headline; this is the narrower "only
+      // compatible, versioned benchmark runs" comparison the issue's
+      // acceptance criteria require, with legacy/incompatible sessions
+      // visibly excluded via `excludedCount` rather than silently dropped.
+      benchmark: {
+        protocolId: POST_BENCHMARK_PROTOCOL.protocolId,
+        protocolVersion: POST_BENCHMARK_PROTOCOL.protocolVersion,
+        scorerVersion: POST_BENCHMARK_PROTOCOL.scorerVersion,
+        byDay: benchmarkByDay,
+        excludedCount: benchmarkExcludedCount,
+      },
     },
     totals: {
       minutesTrained: Math.round((sessionMs + trainingMs) / 60000),

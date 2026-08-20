@@ -104,6 +104,53 @@ describe('Fixed POST benchmark protocol', () => {
   });
 });
 
+// Structured session conditions (issue #4442) — sleepQuality/caffeine/stress
+// enums plus an optional note, persisted independently of the legacy
+// free-text `tags` map.
+describe('submitPostSession — structured conditions', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    readJSONFile.mockImplementation((path, defaultValue) => Promise.resolve(defaultValue));
+  });
+
+  const baseSession = (overrides = {}) => ({
+    modules: ['mental-math'],
+    tasks: [{
+      module: 'mental-math',
+      type: 'doubling-chain',
+      questions: [{ prompt: '2 x 2', expected: 4, answered: 4, responseMs: 100 }],
+      totalMs: 100,
+    }],
+    ...overrides,
+  });
+
+  it('persists a filled-in conditions object', async () => {
+    const session = await submitPostSession(baseSession({
+      conditions: { sleepQuality: 'good', caffeine: 'low', stress: 'moderate', note: 'felt sharp' },
+    }));
+    expect(session.conditions).toEqual({ sleepQuality: 'good', caffeine: 'low', stress: 'moderate', note: 'felt sharp' });
+  });
+
+  it('omits the conditions field entirely when nothing was set', async () => {
+    const session = await submitPostSession(baseSession({ conditions: {} }));
+    expect(session.conditions).toBeUndefined();
+  });
+
+  it('omits conditions when the field is absent altogether', async () => {
+    const session = await submitPostSession(baseSession());
+    expect(session.conditions).toBeUndefined();
+  });
+
+  it('keeps legacy tags and structured conditions independent when both are present', async () => {
+    const session = await submitPostSession(baseSession({
+      tags: { sleep: 'hand-typed legacy value' },
+      conditions: { sleepQuality: 'fair' },
+    }));
+    expect(session.tags).toEqual({ sleep: 'hand-typed legacy value' });
+    expect(session.conditions).toEqual({ sleepQuality: 'fair' });
+  });
+});
+
 function llmTaskResult(score, overrides = {}) {
   const responses = overrides.responses || [{ response: 'example', responseMs: 1000, llmScore: score }];
   return {

@@ -2,11 +2,11 @@ import { ArrowLeft } from 'lucide-react';
 import PostSessionSummary from './PostSessionSummary';
 import PostCompletionActions from './PostCompletionActions';
 
-export default function PostSessionResults({ session, tags = {}, onSaved, onBack }) {
+export default function PostSessionResults({ session, conditions = {}, onSaved, onBack }) {
   const { drillResults, sessionScore, state, saveSession, isTraining, sessionPlan, benchmark, savedSession } = session;
 
   async function handleSave(continueDaily) {
-    const savedSession = await saveSession(tags);
+    const savedSession = await saveSession(conditions);
     if (savedSession) onSaved(savedSession, { continueDaily });
   }
 

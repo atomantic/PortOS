@@ -70,16 +70,33 @@ export function cognitiveSummary(type, cfg) {
   return cfg.count ? `${cfg.count} trials` : '';
 }
 
-// Pure: sanitizes the optional condition-tags map before submit — drops
-// empty/whitespace-only values so a session with no conditions filled in
-// doesn't persist `{ sleep: '', caffeine: '', stress: '' }` to history.
-// `tags` is passed explicitly (lifted from the component's `tags` state).
-export function buildCleanTags(tags) {
-  const cleanTags = {};
-  for (const [k, v] of Object.entries(tags)) {
-    if (v.trim()) cleanTags[k] = v.trim();
-  }
-  return cleanTags;
+// Structured session-condition options (issue #4442) — fixed enums instead
+// of free text, so values are filterable/comparable across sessions rather
+// than the prior "good/poor", "1 cup" free-text guesswork.
+export const SLEEP_QUALITY_OPTIONS = ['poor', 'fair', 'good'];
+export const CAFFEINE_OPTIONS = ['none', 'low', 'moderate', 'high'];
+export const STRESS_OPTIONS = ['low', 'moderate', 'high'];
+
+// Drives the three condition <select>s below — one entry per enum field, so
+// adding/renaming a field is a one-line change instead of a copy-pasted block.
+const CONDITION_SELECT_FIELDS = [
+  { key: 'sleepQuality', label: 'Sleep', options: SLEEP_QUALITY_OPTIONS },
+  { key: 'caffeine', label: 'Caffeine', options: CAFFEINE_OPTIONS },
+  { key: 'stress', label: 'Stress', options: STRESS_OPTIONS },
+];
+
+// Pure: sanitizes the optional conditions object before submit — drops unset
+// enum fields and an empty/whitespace-only note, so a session with nothing
+// filled in submits `{}` (server treats an empty object as "no conditions"),
+// not a placeholder-filled record. `conditions` is passed explicitly (lifted
+// from the component's `conditions` state).
+export function buildCleanConditions(conditions) {
+  const clean = {};
+  if (conditions.sleepQuality) clean.sleepQuality = conditions.sleepQuality;
+  if (conditions.caffeine) clean.caffeine = conditions.caffeine;
+  if (conditions.stress) clean.stress = conditions.stress;
+  if (conditions.note?.trim()) clean.note = conditions.note.trim();
+  return clean;
 }
 
 function AutoStartRecommendation({ action, onConsumed, onNavigate }) {
@@ -115,10 +132,10 @@ export default function PostSessionLauncher({
   // windows POST records on the configured local day (issue #2681). Deriving it
   // from `new Date().toISOString()` (UTC) would disagree near local/UTC midnight.
   const timezone = useUserTimezone();
-  const [tags, setTags] = useState({ sleep: '', caffeine: '', stress: '' });
+  const [conditions, setConditions] = useState({ sleepQuality: '', caffeine: '', stress: '', note: '' });
   // Conditions is optional metadata, so it starts collapsed and the start
-  // buttons stay above the fold (issue #3249). Purely presentational — `tags`
-  // lives above it, so collapsing never discards typed values.
+  // buttons stay above the fold (issue #3249). Purely presentational —
+  // `conditions` lives above it, so collapsing never discards typed values.
   const [showConditions, setShowConditions] = useState(false);
   const [mode, setMode] = useState('test'); // 'test' | 'train'
   const [quickDurationMin, setQuickDurationMin] = useState(() => normalizeQuickDurationMinutes(config?.quickDurationMin));
@@ -357,7 +374,7 @@ export default function PostSessionLauncher({
     // for better retention (issue #2100). Full coverage is preserved — every
     // enabled drill still runs, just reordered.
     const drillConfigs = interleaveByDomain([...mathConfigs, ...llmConfigs, ...cognitiveConfigs, ...memoryConfigs]);
-    onStart(drillConfigs, buildCleanTags(tags), mode === 'train');
+    onStart(drillConfigs, buildCleanConditions(conditions), mode === 'train');
   }
 
   // Build domain → enabled drills map for quick session
@@ -440,7 +457,7 @@ export default function PostSessionLauncher({
       return drillConfig;
     });
     if (!drillConfigs.length) return;
-    onStart(drillConfigs, buildCleanTags(tags), mode === 'train', {
+    onStart(drillConfigs, buildCleanConditions(conditions), mode === 'train', {
       targetDurationSec: quickPlan.targetDurationSec,
       estimatedDurationSec: quickPlan.estimatedDurationSec,
       toleranceSec: quickPlan.toleranceSec,
@@ -463,7 +480,7 @@ export default function PostSessionLauncher({
           config: { ...task.config },
           timeLimitSec: task.timeLimitSec,
         }));
-        onStart(drillConfigs, buildCleanTags(tags), false, null, {
+        onStart(drillConfigs, buildCleanConditions(conditions), false, null, {
           protocolId: protocol.protocolId,
           protocolVersion: protocol.protocolVersion,
           scorerVersion: protocol.scorerVersion,
@@ -519,7 +536,7 @@ export default function PostSessionLauncher({
   function handleFocusDomain(domainKey) {
     const drills = enabledDomains[domainKey];
     if (!drills || drills.length === 0) return;
-    onStart(drills.map(d => buildFocusDrillConfig(d, domainKey)), buildCleanTags(tags), mode === 'train');
+    onStart(drills.map(d => buildFocusDrillConfig(d, domainKey)), buildCleanConditions(conditions), mode === 'train');
   }
 
   // Start a session with exactly ONE recommended drill (issue #2100): an Up next
@@ -528,7 +545,7 @@ export default function PostSessionLauncher({
   function startDrillByType(type) {
     const entry = allEnabledDrills.find(d => d.type === type);
     if (!entry) return;
-    onStart([buildFocusDrillConfig(entry)], buildCleanTags(tags), mode === 'train');
+    onStart([buildFocusDrillConfig(entry)], buildCleanConditions(conditions), mode === 'train');
   }
 
   // Launch a single due maintenance-review rep from an "Up next" skill-review
@@ -555,7 +572,7 @@ export default function PostSessionLauncher({
       reviewLabel: rep.label,
       ...(rep.providerId && { providerId: rep.providerId }),
     };
-    onStart([drillConfig], buildCleanTags(tags), mode === 'train');
+    onStart([drillConfig], buildCleanConditions(conditions), mode === 'train');
   }
 
   const hasAnyDrills = enabledMathDrills.length > 0 || enabledLlmDrills.length > 0 || enabledCognitiveDrills.length > 0 || enabledMemoryDrills.length > 0;
@@ -613,8 +630,10 @@ export default function PostSessionLauncher({
       : null);
 
   // Count of condition fields filled in, surfaced on the collapsed disclosure so
-  // entered values aren't invisible once it's closed.
-  const filledTagCount = Object.values(tags).filter(v => v.trim()).length;
+  // entered values aren't invisible once it's closed. Reuses the same
+  // sanitizer the submit path uses, so "filled in" can't drift from "actually
+  // sent".
+  const filledConditionCount = Object.keys(buildCleanConditions(conditions)).length;
 
   // The CTA renders as a <Link> for a routed rec and a <button> for an in-page
   // start, but is otherwise identical — so build the shared parts once. A
@@ -864,7 +883,9 @@ export default function PostSessionLauncher({
 
             {/* Conditions — optional session metadata, collapsed by default so it
                 can't push the start buttons below the fold. Values are held in
-                `tags` above, so collapsing never discards what was typed. */}
+                `conditions` above, so collapsing never discards what was set.
+                Fixed enums (issue #4442) instead of free text so values are
+                filterable/comparable across sessions. */}
             {mode === 'test' && (
               <div className="border-t border-port-border pt-3">
                 <button
@@ -875,23 +896,34 @@ export default function PostSessionLauncher({
                 >
                   <ChevronRight size={14} className={`transition-transform ${showConditions ? 'rotate-90' : ''}`} />
                   Conditions (optional)
-                  {!showConditions && filledTagCount > 0 && (
-                    <span className="text-port-accent">· {filledTagCount} set</span>
+                  {!showConditions && filledConditionCount > 0 && (
+                    <span className="text-port-accent">· {filledConditionCount} set</span>
                   )}
                 </button>
                 {showConditions && (
                   <div className="grid grid-cols-3 gap-3 mt-3">
-                    {Object.entries(tags).map(([key, value]) => (
-                      <FormField key={key} labelClassName="text-xs text-gray-500 mb-1 block capitalize" label={key}>
-                        <input
-                          type="text"
-                          value={value}
-                          onChange={e => setTags(prev => ({ ...prev, [key]: e.target.value }))}
-                          placeholder={key === 'sleep' ? 'good/poor' : key === 'caffeine' ? '1 cup' : 'low/high'}
-                          className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white placeholder-gray-600 focus:border-port-accent focus:outline-none"
-                        />
+                    {CONDITION_SELECT_FIELDS.map(({ key, label, options }) => (
+                      <FormField key={key} labelClassName="text-xs text-gray-500 mb-1 block" label={label}>
+                        <select
+                          value={conditions[key]}
+                          onChange={e => setConditions(prev => ({ ...prev, [key]: e.target.value }))}
+                          className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white focus:border-port-accent focus:outline-none capitalize"
+                        >
+                          <option value="">—</option>
+                          {options.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                        </select>
                       </FormField>
                     ))}
+                    <FormField className="col-span-3" labelClassName="text-xs text-gray-500 mb-1 block" label="Note">
+                      <input
+                        type="text"
+                        value={conditions.note}
+                        onChange={e => setConditions(prev => ({ ...prev, note: e.target.value }))}
+                        placeholder="Anything else worth remembering about this session"
+                        maxLength={500}
+                        className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white placeholder-gray-600 focus:border-port-accent focus:outline-none"
+                      />
+                    </FormField>
                   </div>
                 )}
               </div>

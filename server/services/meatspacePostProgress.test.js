@@ -26,7 +26,7 @@ vi.mock('../services/settings.js', () => ({
   getSettings: () => Promise.resolve(settingsState),
 }));
 
-import { getPostProgress, getPostStats } from './meatspacePost.js';
+import { getPostProgress, getPostStats, benchmarkCompatibility, POST_BENCHMARK_PROTOCOL } from './meatspacePost.js';
 import { getTrainingStats, getAllTrainingEntries } from './meatspacePostTraining.js';
 import { getUnifiedActivityStreak } from './postActivityStreak.js';
 import { postProgressQuerySchema } from '../lib/postValidation.js';
@@ -204,6 +204,103 @@ describe('getPostProgress bucketing', () => {
     expect(mine).toMatchObject({ id: 'm1', title: 'Elements', overallPct: 42 });
     // Past-due nextReview → dueCount 1.
     expect(mine.dueCount).toBe(1);
+  });
+});
+
+// Protocol-scoped benchmark trend (issue #4442): getPostProgress's `benchmark`
+// series only counts sessions run under the CURRENTLY registered protocol —
+// separate from `byDay`'s blended score, which every session above already
+// exercises.
+describe('benchmarkCompatibility', () => {
+  const currentBenchmark = () => ({
+    protocolId: POST_BENCHMARK_PROTOCOL.protocolId,
+    protocolVersion: POST_BENCHMARK_PROTOCOL.protocolVersion,
+    scorerVersion: POST_BENCHMARK_PROTOCOL.scorerVersion,
+    formId: 'a',
+  });
+
+  it('returns null for a session with no benchmark field', () => {
+    expect(benchmarkCompatibility({ score: 80 })).toBeNull();
+  });
+
+  it('returns "compatible" when protocol/version/scorer match the current registration', () => {
+    expect(benchmarkCompatibility({ benchmark: currentBenchmark() })).toBe('compatible');
+  });
+
+  it('returns "legacy" when the protocol version has moved on', () => {
+    expect(benchmarkCompatibility({ benchmark: { ...currentBenchmark(), protocolVersion: 0 } })).toBe('legacy');
+  });
+
+  it('returns "legacy" when the scorer version has moved on', () => {
+    expect(benchmarkCompatibility({ benchmark: { ...currentBenchmark(), scorerVersion: 'retired-scorer' } })).toBe('legacy');
+  });
+
+  it('returns "legacy" for an unrecognized protocolId', () => {
+    expect(benchmarkCompatibility({ benchmark: { ...currentBenchmark(), protocolId: 'some-other-battery' } })).toBe('legacy');
+  });
+});
+
+describe('getPostProgress — protocol-scoped benchmark series', () => {
+  const currentBenchmark = () => ({
+    protocolId: POST_BENCHMARK_PROTOCOL.protocolId,
+    protocolVersion: POST_BENCHMARK_PROTOCOL.protocolVersion,
+    scorerVersion: POST_BENCHMARK_PROTOCOL.scorerVersion,
+    formId: 'a',
+  });
+
+  it('names the current protocol and returns an empty byDay/excludedCount with no sessions', async () => {
+    const p = await getPostProgress({ days: 90 });
+    expect(p.series.benchmark).toMatchObject({
+      protocolId: POST_BENCHMARK_PROTOCOL.protocolId,
+      protocolVersion: POST_BENCHMARK_PROTOCOL.protocolVersion,
+      scorerVersion: POST_BENCHMARK_PROTOCOL.scorerVersion,
+      byDay: [],
+      excludedCount: 0,
+    });
+  });
+
+  it('includes a session run under the current protocol in byDay', async () => {
+    const d = todayStr();
+    state.sessions = [
+      { date: d, durationMs: 60000, score: 85, tasks: [mathTask(85, [q(true)])], benchmark: currentBenchmark() },
+    ];
+    const p = await getPostProgress({ days: 90 });
+    expect(p.series.benchmark.byDay).toEqual([{ date: d, score: 85, sessions: 1 }]);
+    expect(p.series.benchmark.excludedCount).toBe(0);
+  });
+
+  it('excludes a benchmark session run under a retired protocol version and counts it', async () => {
+    const d = todayStr();
+    state.sessions = [
+      {
+        date: d, durationMs: 60000, score: 40, tasks: [mathTask(40, [q(false)])],
+        benchmark: { ...currentBenchmark(), protocolVersion: 0 },
+      },
+    ];
+    const p = await getPostProgress({ days: 90 });
+    expect(p.series.benchmark.byDay).toEqual([]);
+    expect(p.series.benchmark.excludedCount).toBe(1);
+  });
+
+  it('excludes an ordinary (non-benchmark) session without counting it as excluded', async () => {
+    const d = todayStr();
+    state.sessions = [
+      { date: d, durationMs: 60000, score: 70, tasks: [mathTask(70, [q(true)])] },
+    ];
+    const p = await getPostProgress({ days: 90 });
+    expect(p.series.benchmark.byDay).toEqual([]);
+    // Not a benchmark run at all — nothing to exclude, unlike a stale-version one.
+    expect(p.series.benchmark.excludedCount).toBe(0);
+  });
+
+  it('averages multiple same-day compatible benchmark sessions, mirroring byDay', async () => {
+    const d = todayStr();
+    state.sessions = [
+      { date: d, durationMs: 60000, score: 80, tasks: [mathTask(80, [q(true)])], benchmark: currentBenchmark() },
+      { date: d, durationMs: 60000, score: 60, tasks: [mathTask(60, [q(false)])], benchmark: currentBenchmark() },
+    ];
+    const p = await getPostProgress({ days: 90 });
+    expect(p.series.benchmark.byDay).toEqual([{ date: d, score: 70, sessions: 2 }]);
   });
 });
 

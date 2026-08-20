@@ -114,3 +114,51 @@ describe('PostProgress', () => {
     expect(getPostProgress).not.toHaveBeenCalled();
   });
 });
+
+// Protocol-scoped benchmark trend (issue #4442) — a narrower comparison than
+// the blended Score Trend above, visibly separate from legacy/excluded runs.
+describe('PostProgress — benchmark trend', () => {
+  it('renders the benchmark trend chart with its protocol id/version in the title', async () => {
+    getPostProgress.mockResolvedValue({
+      ...PROGRESS,
+      series: {
+        ...PROGRESS.series,
+        benchmark: {
+          protocolId: 'post-foundation-battery',
+          protocolVersion: 1,
+          scorerVersion: 'post-deterministic-v1',
+          byDay: [{ date: '2026-06-03', score: 88, sessions: 1 }],
+          excludedCount: 0,
+        },
+      },
+    });
+    renderProgress();
+    await waitFor(() => expect(screen.getByText(/Benchmark Trend/)).toBeInTheDocument());
+    expect(screen.getByText(/post-foundation-battery v1/)).toBeInTheDocument();
+  });
+
+  it('surfaces the excluded-legacy-runs note when excludedCount is set', async () => {
+    getPostProgress.mockResolvedValue({
+      ...PROGRESS,
+      series: {
+        ...PROGRESS.series,
+        benchmark: {
+          protocolId: 'post-foundation-battery',
+          protocolVersion: 1,
+          scorerVersion: 'post-deterministic-v1',
+          byDay: [],
+          excludedCount: 2,
+        },
+      },
+    });
+    renderProgress();
+    await waitFor(() => expect(screen.getByText(/Benchmark Trend/)).toBeInTheDocument());
+    expect(screen.getByText(/2 earlier benchmark runs excluded/)).toBeInTheDocument();
+  });
+
+  it('omits the benchmark trend section entirely when the server sends no benchmark field', async () => {
+    renderProgress();
+    await waitFor(() => expect(screen.getByText('Score Trend')).toBeInTheDocument());
+    expect(screen.queryByText(/Benchmark Trend/)).not.toBeInTheDocument();
+  });
+});

@@ -35,37 +35,39 @@ vi.mock('../../../services/api', () => ({
   getSettings: vi.fn().mockResolvedValue({ timezone: 'UTC' }),
 }));
 
-import PostSessionLauncher, { buildCleanTags, cognitiveSummary, interleaveByDomain } from './PostSessionLauncher';
+import PostSessionLauncher, { buildCleanConditions, cognitiveSummary, interleaveByDomain } from './PostSessionLauncher';
 import { getPostRecommendations, getMorseProgress, getPostProgress, getPostReviewReps, getPostBenchmarkProtocol, getMemoryItems, updatePostConfig } from '../../../services/api';
 
 // Pure-function tests for PostSessionLauncher's pre-submit helpers (issue
-// #2102 gap #10). Both were lifted from component-body closures to module
-// scope with explicit parameters (`tags` for buildCleanTags) so they can be
-// tested directly without rendering the launcher or its provider fetch.
+// #2102 gap #10; structured conditions issue #4442). Both were lifted from
+// component-body closures to module scope with explicit parameters
+// (`conditions` for buildCleanConditions) so they can be tested directly
+// without rendering the launcher or its provider fetch.
 
-describe('buildCleanTags', () => {
-  it('keeps a filled-in value, trimmed', () => {
-    expect(buildCleanTags({ sleep: '  good  ', caffeine: '', stress: '' })).toEqual({ sleep: 'good' });
+describe('buildCleanConditions', () => {
+  it('keeps set enum fields and a trimmed note', () => {
+    expect(buildCleanConditions({ sleepQuality: 'good', caffeine: '', stress: '', note: '  slept well  ' }))
+      .toEqual({ sleepQuality: 'good', note: 'slept well' });
   });
 
-  it('drops empty-string values', () => {
-    expect(buildCleanTags({ sleep: '', caffeine: '', stress: '' })).toEqual({});
+  it('drops unset enum fields', () => {
+    expect(buildCleanConditions({ sleepQuality: '', caffeine: '', stress: '', note: '' })).toEqual({});
   });
 
-  it('drops whitespace-only values', () => {
-    expect(buildCleanTags({ sleep: '   ', caffeine: '\t', stress: '' })).toEqual({});
+  it('drops a whitespace-only note', () => {
+    expect(buildCleanConditions({ sleepQuality: '', caffeine: '', stress: '', note: '   ' })).toEqual({});
   });
 
-  it('keeps multiple filled-in values, each trimmed independently', () => {
-    expect(buildCleanTags({ sleep: 'poor', caffeine: ' 2 cups ', stress: 'high' })).toEqual({
-      sleep: 'poor',
-      caffeine: '2 cups',
+  it('keeps multiple set fields', () => {
+    expect(buildCleanConditions({ sleepQuality: 'poor', caffeine: 'high', stress: 'high', note: '' })).toEqual({
+      sleepQuality: 'poor',
+      caffeine: 'high',
       stress: 'high',
     });
   });
 
-  it('returns an empty object for an empty tags map', () => {
-    expect(buildCleanTags({})).toEqual({});
+  it('returns an empty object for an empty conditions map', () => {
+    expect(buildCleanConditions({})).toEqual({});
   });
 });
 
@@ -521,23 +523,23 @@ describe('PostSessionLauncher — Start card (issue #3249)', () => {
     expect(onStart.mock.calls[0][0].length).toBeGreaterThan(1);
   });
 
-  it('collapses Conditions by default and keeps typed values when re-collapsed', async () => {
+  it('collapses Conditions by default and keeps a set value when re-collapsed', async () => {
     renderLauncher();
     await waitFor(() => expect(screen.getByText(/Conditions \(optional\)/)).toBeTruthy());
-    // Collapsed: no inputs rendered.
-    expect(screen.queryByPlaceholderText('good/poor')).toBeNull();
+    // Collapsed: no select rendered.
+    expect(screen.queryByLabelText('Sleep')).toBeNull();
 
     const toggle = screen.getByText(/Conditions \(optional\)/).closest('button');
     fireEvent.click(toggle);
-    const sleep = screen.getByPlaceholderText('good/poor');
+    const sleep = screen.getByLabelText('Sleep');
     fireEvent.change(sleep, { target: { value: 'poor' } });
 
     // Re-collapse, then re-expand — the value survives (state lives above it).
     fireEvent.click(toggle);
-    expect(screen.queryByPlaceholderText('good/poor')).toBeNull();
+    expect(screen.queryByLabelText('Sleep')).toBeNull();
     expect(screen.getByText('· 1 set')).toBeTruthy();
     fireEvent.click(toggle);
-    expect(screen.getByPlaceholderText('good/poor').value).toBe('poor');
+    expect(screen.getByLabelText('Sleep').value).toBe('poor');
   });
 });
 
