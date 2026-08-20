@@ -40,7 +40,7 @@ import {
 import { hfChildEnv } from '../../lib/hfToken.js';
 import { inspectModelCache, findCachedRepoFile, findCachedRepoFiles } from '../../lib/hfCache.js';
 import { safeChildProcessEnv, safeChildProcessOptions } from '../../lib/processEnv.js';
-import { makeVideoGenLineHandler, finalizeGeneratedVideo, isWatchdogSuccess, describeSignalDeath, describeRenderConditioning, RENDER_INPUTS_VERSION } from './generateVideoHelpers.js';
+import { makeVideoGenLineHandler, finalizeGeneratedVideo, isWatchdogSuccess, describeSignalDeath, describeRenderConditioning, planPromptEncodingRetry, RENDER_INPUTS_VERSION } from './generateVideoHelpers.js';
 import { assertSafeLoraFilename, getLoraKeyLayout } from '../loras.js';
 import { videoLoraFamily, isLtx2FamilyRuntime } from '../../lib/runners.js';
 import {
@@ -116,6 +116,12 @@ const AV_LORA_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_av_lora.py')
 const execFileAsync = promisify(execFile);
 
 const MODULE_NOT_FOUND_RE = /ModuleNotFoundError: No module named ['"]([^'"]+)['"]/;
+// How many stderr lines of a render child are kept for post-mortem
+// classification (see planPromptEncodingRetry). A Metal abort prints its banner
+// as the last thing before the process dies, so a short tail always carries it,
+// while the bound keeps a chatty runtime from growing the buffer for the whole
+// render.
+const STDERR_TAIL_LINES = 40;
 // Shared-gallery uploads use the upload filename stem as their history id.
 // Rendered clips retain their UUID ids, so service callers may act on either
 // form after route validation.
@@ -208,6 +214,12 @@ export const defaultVideoModelId = () => getDefaultVideoModelId();
 
 const jobs = new Map();
 let activeProcess = null;
+// Bumped on every cancel() call. A render relaunch (the prompt-encode retry in
+// generateVideo) clears activeProcess before it awaits the replacement spawn, so
+// for that one window cancel() has nothing to kill and returns false. Comparing
+// this counter across the await is what lets the relaunch notice the cancel it
+// could not otherwise see, and abandon the replacement child.
+let cancelEpoch = 0;
 // Chain state for multi-chunk renders. cancel() flips `stopped` so the chain
 // loop bails before kicking off the next chunk; the in-flight chunk's child
 // is killed via the existing activeProcess SIGTERM path. There is at most
@@ -217,6 +229,7 @@ let activeChain = null;
 export const attachSseClient = (jobId, res) => attachSse(jobs, jobId, res);
 
 export const cancel = () => {
+  cancelEpoch += 1;
   // Flag the chain (if any) so the loop stops between chunks. We still
   // kill the in-flight child below — without that the current chunk would
   // run to completion before the chain saw the stop flag.
@@ -1571,8 +1584,17 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   }
   const releaseHeavyClaim = () => heavyClaim.release()
     .catch((err) => console.error(`❌ Video generation claim release [${jobId.slice(0, 8)}]: ${err.message}`));
-  let proc;
+  // The first render child. Named apart from the `proc` each wireRenderChild()
+  // call binds, so a relaunch cannot be confused with the original.
+  let firstProc;
   let claimHandedOff = false;
+  // Prompt-encode relaunches already spent on this job. Exactly one is allowed:
+  // a second watchdog abort at the reduced budget is a real failure the user has
+  // to see, not something to keep grinding the GPU over.
+  let promptEncodingRetriesUsed = 0;
+  // Hoisted out of the try so a relaunch can respawn with the SAME child env
+  // plus a lowered Gemma budget, instead of rebuilding it from scratch.
+  let childEnv;
   try {
     const memoryReport = await prepareLocalMemory();
     if (memoryReport.unloaded.length) console.log(`🧹 Video generation [${jobId.slice(0, 8)}] freed ${memoryReport.unloaded.length} resident model(s)`);
@@ -1606,7 +1628,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     // python helpers can authenticate snapshot_download() against gated repos
     // (mirrors the imageGen child-spawn pattern). LTX-2 doesn't currently use
     // a gated repo, but the merge is harmless when no token is configured.
-    const childEnv = runtimeIsCacheOnly(model.runtime)
+    childEnv = runtimeIsCacheOnly(model.runtime)
       ? safeChildProcessEnv()
       : await hfChildEnv();
     delete childEnv.PYTHONPATH;
@@ -1633,283 +1655,455 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     // still `proc.kill()` it directly by PID on cancel / watchdog. `cleanup: true`
     // lets the helper drop that scratch dir on every terminal path (close/error)
     // so it can't accumulate under data/videos.
-    proc = await spawnDetached(bin, args, {
+    firstProc = await spawnDetached(bin, args, {
       env: childEnv,
       controlDir: join(PATHS.videos, '.detached', jobId),
       cleanup: true,
       killProcessGroup: runtimeNeedsProcessGroupKill(model.runtime),
     });
-    activeProcess = proc;
-    await heavyClaim.handoffTo?.(proc.pid);
+    activeProcess = firstProc;
+    await heavyClaim.handoffTo?.(firstProc.pid);
     claimHandedOff = true;
   } catch (err) {
     if (!claimHandedOff) await releaseHeavyClaim();
     throw err;
   }
 
-  // Panel-side completion watchdog. Armed once we see the render's completion
-  // marker on stdout; SIGKILLs the child if it hasn't exited after the grace
-  // window. clearCompletionWatchdog() runs in every terminal path ('close',
-  // 'error') so the timer can't outlive this child or fire against a recycled
-  // PID. Armed at most once per child (re-seeing the marker is a no-op).
-  let completionWatchdog = null;
-  // Set when the watchdog itself fires the SIGKILL. The 'close' handler reads
-  // it so it can treat that kill as success (the render already wrote its file —
-  // we only killed a post-completion teardown hang) rather than reporting the
-  // generic "killed, likely OOM" failure.
-  let completionWatchdogFired = false;
-  const clearCompletionWatchdog = () => {
-    if (completionWatchdog) {
-      clearTimeout(completionWatchdog);
-      completionWatchdog = null;
-    }
-  };
-  const armCompletionWatchdog = () => {
-    if (completionWatchdog) return;
-    completionWatchdog = setTimeout(() => {
-      // Runs outside the Express request lifecycle — an uncaught throw here
-      // would crash the Node process, so guard the whole body.
-      try {
+  // ── one render child, fully wired ──────────────────────────────────────────
+  // Everything per-CHILD lives in here — the process handle, both watchdogs, the
+  // line readers, the close handler — so the same job can be relaunched once
+  // without minting a new one. Everything job-level (jobId, args, seed, meta,
+  // history entry, heavy claim, staged temp files) is closed over and survives
+  // the relaunch. The only thing that relaunches a render is a Metal
+  // command-buffer watchdog abort inside the Gemma prompt encoder; see
+  // maybeRelaunchForPromptEncoding below.
+  const wireRenderChild = (proc) => {
+    // The prompt-encode phase belongs to ONE child, but `job` outlives the
+    // relaunch — reset it explicitly so a phase left open by the child that just
+    // died can never be read as the replacement child's state.
+    job.promptEncodePhase = null;
+    // Panel-side completion watchdog. Armed once we see the render's completion
+    // marker on stdout; SIGKILLs the child if it hasn't exited after the grace
+    // window. clearCompletionWatchdog() runs in every terminal path ('close',
+    // 'error') so the timer can't outlive this child or fire against a recycled
+    // PID. Armed at most once per child (re-seeing the marker is a no-op).
+    let completionWatchdog = null;
+    // Set when the watchdog itself fires the SIGKILL. The 'close' handler reads
+    // it so it can treat that kill as success (the render already wrote its file —
+    // we only killed a post-completion teardown hang) rather than reporting the
+    // generic "killed, likely OOM" failure.
+    let completionWatchdogFired = false;
+    const clearCompletionWatchdog = () => {
+      if (completionWatchdog) {
+        clearTimeout(completionWatchdog);
         completionWatchdog = null;
-        // proc.killed covers a manual-cancel SIGTERM that hasn't reached close
-        // yet (killWithEscalation sets it before exitCode/signalCode populate).
-        if (activeProcess !== proc || proc.killed || proc.exitCode !== null || proc.signalCode !== null) return;
-        console.log(`⚠️ video child reported completion but never exited — SIGKILL [${jobId.slice(0, 8)}]`);
-        completionWatchdogFired = true;
-        proc.kill('SIGKILL');
-      } catch (err) {
-        console.error(`❌ completion watchdog failed [${jobId.slice(0, 8)}]: ${err.message}`);
       }
-    }, COMPLETION_WATCHDOG_GRACE_MS);
-    // Don't let the watchdog timer keep the event loop alive on its own.
-    if (typeof completionWatchdog.unref === 'function') completionWatchdog.unref();
-  };
+    };
+    const armCompletionWatchdog = () => {
+      if (completionWatchdog) return;
+      completionWatchdog = setTimeout(() => {
+        // Runs outside the Express request lifecycle — an uncaught throw here
+        // would crash the Node process, so guard the whole body.
+        try {
+          completionWatchdog = null;
+          // proc.killed covers a manual-cancel SIGTERM that hasn't reached close
+          // yet (killWithEscalation sets it before exitCode/signalCode populate).
+          if (activeProcess !== proc || proc.killed || proc.exitCode !== null || proc.signalCode !== null) return;
+          console.log(`⚠️ video child reported completion but never exited — SIGKILL [${jobId.slice(0, 8)}]`);
+          completionWatchdogFired = true;
+          proc.kill('SIGKILL');
+        } catch (err) {
+          console.error(`❌ completion watchdog failed [${jobId.slice(0, 8)}]: ${err.message}`);
+        }
+      }, COMPLETION_WATCHDOG_GRACE_MS);
+      // Don't let the watchdog timer keep the event loop alive on its own.
+      if (typeof completionWatchdog.unref === 'function') completionWatchdog.unref();
+    };
 
-  // Pre-output idle-stall deadline. Armed at spawn and reset on every child
-  // output line (stdout OR stderr — a render loading weights logs to stderr via
-  // loguru/tqdm well before any stdout progress). If it fires, the render has
-  // produced NO output for the whole generous window — treat it as wedged,
-  // SIGKILL it, and let the 'close' handler surface a failed job so the
-  // serialized GPU lane frees. Cleared in every terminal path alongside the
-  // completion watchdog so it can't fire against a recycled PID.
-  let idleStallTimer = null;
-  // Set when THIS timer fires the SIGKILL so the 'close' handler reports a
-  // clear "stalled — no output" reason instead of the generic "killed, likely
-  // OOM" message a bare SIGKILL would otherwise produce.
-  let idleStallFired = false;
-  const clearIdleStallTimer = () => {
-    if (idleStallTimer) {
-      clearTimeout(idleStallTimer);
-      idleStallTimer = null;
-    }
-  };
-  const armIdleStallTimer = () => {
-    idleStallTimer = setTimeout(() => {
-      // Outside the Express request lifecycle — guard so an uncaught throw
-      // can't crash the Node process.
-      try {
+    // Pre-output idle-stall deadline. Armed at spawn and reset on every child
+    // output line (stdout OR stderr — a render loading weights logs to stderr via
+    // loguru/tqdm well before any stdout progress). If it fires, the render has
+    // produced NO output for the whole generous window — treat it as wedged,
+    // SIGKILL it, and let the 'close' handler surface a failed job so the
+    // serialized GPU lane frees. Cleared in every terminal path alongside the
+    // completion watchdog so it can't fire against a recycled PID.
+    let idleStallTimer = null;
+    // Set when THIS timer fires the SIGKILL so the 'close' handler reports a
+    // clear "stalled — no output" reason instead of the generic "killed, likely
+    // OOM" message a bare SIGKILL would otherwise produce.
+    let idleStallFired = false;
+    const clearIdleStallTimer = () => {
+      if (idleStallTimer) {
+        clearTimeout(idleStallTimer);
         idleStallTimer = null;
-        // Also bail if the child is already being torn down by a manual
-        // cancel: killWithEscalation() sends SIGTERM and sets `proc.killed`
-        // BEFORE exitCode/signalCode populate on close. Without this check the
-        // idle timer could still fire, set idleStallFired, and SIGKILL — and
-        // the close handler would then finalize a user-canceled render (whose
-        // partial .mp4 is on disk) as a SUCCESS instead of canceled/failed.
-        if (activeProcess !== proc || proc.killed || proc.exitCode !== null || proc.signalCode !== null) return;
-        console.log(`⚠️ video child produced no output for ${IDLE_STALL_DEADLINE_MS}ms — stalled, SIGKILL [${jobId.slice(0, 8)}]`);
-        idleStallFired = true;
-        proc.kill('SIGKILL');
-      } catch (err) {
-        console.error(`❌ idle-stall watchdog failed [${jobId.slice(0, 8)}]: ${err.message}`);
       }
-    }, IDLE_STALL_DEADLINE_MS);
-    if (typeof idleStallTimer.unref === 'function') idleStallTimer.unref();
-  };
-  // Every output line means the render is alive — restart the countdown.
-  const resetIdleStallTimer = () => {
-    clearIdleStallTimer();
+    };
+    const armIdleStallTimer = () => {
+      idleStallTimer = setTimeout(() => {
+        // Outside the Express request lifecycle — guard so an uncaught throw
+        // can't crash the Node process.
+        try {
+          idleStallTimer = null;
+          // Also bail if the child is already being torn down by a manual
+          // cancel: killWithEscalation() sends SIGTERM and sets `proc.killed`
+          // BEFORE exitCode/signalCode populate on close. Without this check the
+          // idle timer could still fire, set idleStallFired, and SIGKILL — and
+          // the close handler would then finalize a user-canceled render (whose
+          // partial .mp4 is on disk) as a SUCCESS instead of canceled/failed.
+          if (activeProcess !== proc || proc.killed || proc.exitCode !== null || proc.signalCode !== null) return;
+          console.log(`⚠️ video child produced no output for ${IDLE_STALL_DEADLINE_MS}ms — stalled, SIGKILL [${jobId.slice(0, 8)}]`);
+          idleStallFired = true;
+          proc.kill('SIGKILL');
+        } catch (err) {
+          console.error(`❌ idle-stall watchdog failed [${jobId.slice(0, 8)}]: ${err.message}`);
+        }
+      }, IDLE_STALL_DEADLINE_MS);
+      if (typeof idleStallTimer.unref === 'function') idleStallTimer.unref();
+    };
+    // Every output line means the render is alive — restart the countdown.
+    const resetIdleStallTimer = () => {
+      clearIdleStallTimer();
+      armIdleStallTimer();
+    };
+    // Arm immediately: the highest-risk stall is a job that never emits its FIRST
+    // line (weights load / kernel compile hangs), so the clock starts at spawn.
     armIdleStallTimer();
-  };
-  // Arm immediately: the highest-risk stall is a job that never emits its FIRST
-  // line (weights load / kernel compile hangs), so the clock starts at spawn.
-  armIdleStallTimer();
 
-  // Hold a sleep-prevention lock for the lifetime of the python child, so a
-  // 90s+ render doesn't get aborted by sleep on a laptop. `-s` blocks system
-  // sleep (lid-close / low-power), `-i` blocks idle sleep, `-d` blocks display
-  // sleep — together they survive everything short of the user forcing sleep
-  // from the Apple menu. `-w` makes caffeinate self-exit when our pid does, so
-  // no manual cleanup is needed and a server crash mid-render still releases
-  // the assertion. macOS-only — `caffeinate` is a darwin binary.
-  if (process.platform === 'darwin' && proc.pid) {
-    spawn('caffeinate', ['-dis', '-w', String(proc.pid)], { stdio: 'ignore', detached: false }).on('error', () => {});
-  }
-  // Without an 'error' handler, a missing/non-executable pythonPath would
-  // crash the server with an unhandled error event.
-  proc.on('error', (err) => {
-    clearCompletionWatchdog();
-    clearIdleStallTimer();
-    job.status = 'error';
-    const reason = `Failed to spawn ${bin}: ${err.message}`;
-    console.log(`❌ Video generation spawn error [${jobId.slice(0, 8)}]: ${reason}`);
-    broadcastSse(job, { type: 'error', error: reason });
-    videoGenEvents.emit('failed', { generationId: jobId, error: reason });
-    activeProcess = null;
-    void releaseHeavyClaim();
-    // Spawn failed, so proc.on('close') will never fire — clean up every
-    // temp file we own here, including the multipart upload, otherwise
-    // ENOENT/permission errors leak files in os.tmpdir().
-    // Defensive cleanup includes audio passed directly without the route's
-    // uploadedTempPaths tracking. Duplicate unlinks remain harmless.
-    void cleanupTempFiles({ includeUploads: true, includeUntrackedAudio: true });
-    closeJobAfterDelay(jobs, jobId);
-  });
-
-  let missingPyModule = null;
-
-  // The python child's STATUS:/STAGE:/DOWNLOAD:/tqdm → SSE-frame parser lives
-  // in generateVideoHelpers.js so it can be unit-tested without a real child.
-  // Returns true for a recognized progress/status/noise line (suppress raw
-  // logging), false for an unhandled line worth raw-logging.
-  const handleLine = makeVideoGenLineHandler({ job, jobId, pythonNoiseRe: PYTHON_NOISE_RE });
-
-  // Per-stream line readers carry the partial trailing line across chunk
-  // boundaries and decode through a StringDecoder, so a marker (or multibyte
-  // char) split across a pipe chunk can't tear an event — and the final
-  // unterminated line is emitted on 'close' via flush().
-  const stdoutReader = createLineReader((raw) => {
-    const line = raw.trim();
-    if (!line) return;
-    // mlx_video emits one JSON line on stdout when finished — capture it
-    // for the result metadata; otherwise raw-log so we can debug failures.
-    try {
-      const parsed = JSON.parse(line);
-      if (parsed.video_path) {
-        job.resultJson = parsed;
-        // The result JSON is the strongest "work is done" signal — arm the
-        // watchdog so a post-completion teardown hang can't wedge the job.
-        armCompletionWatchdog();
-      }
-      return;
-    } catch { /* not JSON */ }
-    // Some runtimes don't print the result JSON but do log the final
-    // decode+mux line right before they should exit — treat it the same way.
-    if (MUXING_DONE_RE.test(line)) armCompletionWatchdog();
-    console.log(`🐍-out [${jobId.slice(0, 8)}] ${line}`);
-  });
-  const stderrReader = createLineReader((raw) => {
-    // Record the root-cause module only — downstream imports in the same
-    // traceback raise the same error against later names.
-    if (!missingPyModule) {
-      const m = raw.match(MODULE_NOT_FOUND_RE);
-      if (m) missingPyModule = m[1];
+    // Hold a sleep-prevention lock for the lifetime of the python child, so a
+    // 90s+ render doesn't get aborted by sleep on a laptop. `-s` blocks system
+    // sleep (lid-close / low-power), `-i` blocks idle sleep, `-d` blocks display
+    // sleep — together they survive everything short of the user forcing sleep
+    // from the Apple menu. `-w` makes caffeinate self-exit when our pid does, so
+    // no manual cleanup is needed and a server crash mid-render still releases
+    // the assertion. macOS-only — `caffeinate` is a darwin binary.
+    if (process.platform === 'darwin' && proc.pid) {
+      spawn('caffeinate', ['-dis', '-w', String(proc.pid)], { stdio: 'ignore', detached: false }).on('error', () => {});
     }
-    if (!handleLine(raw)) console.log(`🐍 [${jobId.slice(0, 8)}] ${raw.trim()}`);
-  }, { splitRe: /[\n\r]+/ });
-
-  proc.stdout.on('data', (chunk) => {
-    // Any output proves the render is progressing — restart the idle-stall
-    // countdown before parsing so a slow-but-alive render is never killed.
-    resetIdleStallTimer();
-    stdoutReader.push(chunk);
-  });
-
-  proc.stderr.on('data', (chunk) => {
-    // Weight-load / kernel-compile progress often streams to stderr (loguru,
-    // tqdm) long before the first stdout line — count it as liveness too.
-    resetIdleStallTimer();
-    stderrReader.push(chunk);
-  });
-
-  proc.on('close', async (code, signal) => {
-    // Flush any final unterminated line each stream buffered (the JSON result,
-    // a missing-module trace) BEFORE clearing the watchdogs, so a flush that
-    // captures the result JSON and re-arms the completion watchdog is then
-    // immediately cancelled by clearCompletionWatchdog() rather than firing a
-    // stray SIGKILL during teardown.
-    stdoutReader.flush();
-    stderrReader.flush();
-    clearCompletionWatchdog();
-    clearIdleStallTimer();
-    activeProcess = null;
-    // The child has exited, so its accelerator allocation is gone. Release
-    // before emitting the terminal completion event: an extend chain starts its
-    // next child from that event and must be able to acquire the machine claim.
-    await releaseHeavyClaim();
-    // Wrap the whole teardown so a throw from finalizeGeneratedVideo (history
-    // save, thumbnail, file move) can't leak as an unhandled rejection — on
-    // Node ≥15 that kills the process AND strands the media job `running` with
-    // no terminal SSE. The catch routes any failure through the job's error
-    // finalizer so the client still gets a terminal 'failed' event.
-    try {
-      // Cleanup the resized temp images if we made them. Track via flags rather
-      // than a path-prefix check — tmpdir() can return a symlinked path
-      // (macOS /var → /private/var) so startsWith() can silently miss.
-      // Cleanup internally generated resize/reference files, route-staged
-      // uploads, and direct-call audio through the same ownership-aware helper.
-      await cleanupTempFiles({ includeUploads: true, includeUntrackedAudio: true });
-
-      // A PortOS-fired SIGKILL (completion-teardown watchdog OR idle-stall
-      // deadline) is a SUCCESS when the output file is already on disk and
-      // non-empty — e.g. a runtime that wrote its .mp4 but never printed a
-      // recognized completion marker, then hung: the idle timer kills it, but
-      // the finished video must be kept, not discarded as "no output". A kill
-      // with no output on disk (a genuine pre-output stall, or a marker from a
-      // malformed runtime that wrote nothing) still fails loudly below.
-      const watchdogSuccess = isWatchdogSuccess({ completionWatchdogFired, idleStallFired, signal, outputPath });
-
-      if (code !== 0 && !watchdogSuccess) {
-        job.status = 'error';
-        let reason;
-        if (missingPyModule) {
-          const runtimeInfo = BYOV_RUNTIME_INFO[model.runtime];
-          if (runtimeInfo) {
-            // The probe believed the venv was ready but a runtime import
-            // disagreed — drop the cached "ready" so the next /runtime-status
-            // re-probes and the install banner re-appears.
-            invalidateByovReadyCache(runtimeInfo.id);
-            reason = `Python module '${missingPyModule}' is missing from the ${runtimeInfo.label} runtime. Use Install / Repair in Video Gen's model setup panel.`;
-          } else {
-            reason = `Python module '${missingPyModule}' is missing. Install it into the configured Python environment and retry.`;
-          }
-        } else if (idleStallFired) {
-          // Distinguish a stall-kill from a real OOM kill — both arrive as
-          // SIGKILL, but this one means the render produced NO output for the
-          // whole idle window and we terminated it to free the GPU lane.
-          reason = `Render stalled — no output for ${Math.round(IDLE_STALL_DEADLINE_MS / 1000)}s; terminated to free the GPU queue (raise VIDEOGEN_IDLE_STALL_MS if this was a legitimately slow render)`;
-        } else if (signal) {
-          // Signal → actionable cause (SIGABRT = the macOS Metal command-buffer
-          // watchdog, SIGBUS/SIGSEGV = a native MLX/Metal crash, SIGKILL = OOM),
-          // stamped with the runtime fingerprint that died so the report is
-          // self-documenting. See describeSignalDeath in generateVideoHelpers.js.
-          reason = describeSignalDeath(signal, {
-            fingerprint: await pickDeathFingerprint({ emitted: job.runtime, runtimeId: model.runtime }),
-          });
-        } else {
-          reason = `Exit code ${code}`;
-        }
-        console.log(`❌ Video generation failed [${jobId.slice(0, 8)}]: ${reason}`);
-        broadcastSse(job, { type: 'error', error: `Generation failed: ${reason}` });
-        videoGenEvents.emit('failed', { generationId: jobId, error: reason });
-      } else {
-        if (watchdogSuccess) {
-          const killCause = idleStallFired ? 'idle-stall deadline' : 'completion teardown hang';
-          console.log(`⚠️ video child force-killed (${killCause}) — output is intact [${jobId.slice(0, 8)}]`);
-        }
-        await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, mutateHistory: mutateVideoHistory });
-      }
-    } catch (err) {
-      // Finalize/teardown threw — fail the job loudly instead of crashing the
-      // process. The job may already be partway through finalize, so force the
-      // error state and emit the terminal event the client is waiting on.
+    // Without an 'error' handler, a missing/non-executable pythonPath would
+    // crash the server with an unhandled error event.
+    proc.on('error', (err) => {
+      clearCompletionWatchdog();
+      clearIdleStallTimer();
       job.status = 'error';
-      console.error(`❌ Video close handler failed [${jobId.slice(0, 8)}]: ${err.message}`);
-      broadcastSse(job, { type: 'error', error: `Generation failed: ${err.message}` });
-      videoGenEvents.emit('failed', { generationId: jobId, error: err.message });
-    } finally {
+      const reason = `Failed to spawn ${bin}: ${err.message}`;
+      console.log(`❌ Video generation spawn error [${jobId.slice(0, 8)}]: ${reason}`);
+      broadcastSse(job, { type: 'error', error: reason });
+      videoGenEvents.emit('failed', { generationId: jobId, error: reason });
+      activeProcess = null;
+      void releaseHeavyClaim();
+      // Spawn failed, so proc.on('close') will never fire — clean up every
+      // temp file we own here, including the multipart upload, otherwise
+      // ENOENT/permission errors leak files in os.tmpdir().
+      // Defensive cleanup includes audio passed directly without the route's
+      // uploadedTempPaths tracking. Duplicate unlinks remain harmless.
+      void cleanupTempFiles({ includeUploads: true, includeUntrackedAudio: true });
       closeJobAfterDelay(jobs, jobId);
+    });
+
+    let missingPyModule = null;
+    // Rolling tail of this child's stderr. The Metal abort text is the only
+    // evidence of WHY the watchdog fired and it is not a protocol line, so
+    // nothing else on the path retains it. Bounded so a chatty runtime cannot
+    // grow it without limit; the abort banner is the last thing printed before
+    // the process dies, so the tail always holds it.
+    const stderrTail = [];
+    const recordStderrTail = (raw) => {
+      stderrTail.push(raw);
+      if (stderrTail.length > STDERR_TAIL_LINES) stderrTail.shift();
+    };
+
+    // The python child's STATUS:/STAGE:/DOWNLOAD:/tqdm → SSE-frame parser lives
+    // in generateVideoHelpers.js so it can be unit-tested without a real child.
+    // Returns true for a recognized progress/status/noise line (suppress raw
+    // logging), false for an unhandled line worth raw-logging.
+    const handleLine = makeVideoGenLineHandler({ job, jobId, pythonNoiseRe: PYTHON_NOISE_RE });
+
+    // Per-stream line readers carry the partial trailing line across chunk
+    // boundaries and decode through a StringDecoder, so a marker (or multibyte
+    // char) split across a pipe chunk can't tear an event — and the final
+    // unterminated line is emitted on 'close' via flush().
+    const stdoutReader = createLineReader((raw) => {
+      const line = raw.trim();
+      if (!line) return;
+      // mlx_video emits one JSON line on stdout when finished — capture it
+      // for the result metadata; otherwise raw-log so we can debug failures.
+      try {
+        const parsed = JSON.parse(line);
+        if (parsed.video_path) {
+          job.resultJson = parsed;
+          // The result JSON is the strongest "work is done" signal — arm the
+          // watchdog so a post-completion teardown hang can't wedge the job.
+          armCompletionWatchdog();
+        }
+        return;
+      } catch { /* not JSON */ }
+      // Some runtimes don't print the result JSON but do log the final
+      // decode+mux line right before they should exit — treat it the same way.
+      if (MUXING_DONE_RE.test(line)) armCompletionWatchdog();
+      console.log(`🐍-out [${jobId.slice(0, 8)}] ${line}`);
+    });
+    const stderrReader = createLineReader((raw) => {
+      recordStderrTail(raw);
+      // Record the root-cause module only — downstream imports in the same
+      // traceback raise the same error against later names.
+      if (!missingPyModule) {
+        const m = raw.match(MODULE_NOT_FOUND_RE);
+        if (m) missingPyModule = m[1];
+      }
+      if (!handleLine(raw)) console.log(`🐍 [${jobId.slice(0, 8)}] ${raw.trim()}`);
+    }, { splitRe: /[\n\r]+/ });
+
+    proc.stdout.on('data', (chunk) => {
+      // Any output proves the render is progressing — restart the idle-stall
+      // countdown before parsing so a slow-but-alive render is never killed.
+      resetIdleStallTimer();
+      stdoutReader.push(chunk);
+    });
+
+    proc.stderr.on('data', (chunk) => {
+      // Weight-load / kernel-compile progress often streams to stderr (loguru,
+      // tqdm) long before the first stdout line — count it as liveness too.
+      resetIdleStallTimer();
+      stderrReader.push(chunk);
+    });
+
+    // Guards the ONE terminal run of this child's teardown. The relaunch path
+    // may have to drive handleChildClose() by hand (a replacement that died
+    // before its listener was attached), and that must not double-release the
+    // claim, double-clean the temp files, or emit two terminal events if the
+    // real event lands as well.
+    let closeHandled = false;
+    const handleChildClose = async (code, signal) => {
+      if (closeHandled) return;
+      closeHandled = true;
+      // Flush any final unterminated line each stream buffered (the JSON result,
+      // a missing-module trace) BEFORE clearing the watchdogs, so a flush that
+      // captures the result JSON and re-arms the completion watchdog is then
+      // immediately cancelled by clearCompletionWatchdog() rather than firing a
+      // stray SIGKILL during teardown.
+      stdoutReader.flush();
+      stderrReader.flush();
+      clearCompletionWatchdog();
+      clearIdleStallTimer();
+      // The relaunch window opens the instant activeProcess is cleared: until a
+      // replacement child is tracked, cancel() has nothing to kill and silently
+      // reports false. Snapshot the epoch at exactly that boundary so the
+      // relaunch can observe a cancel it otherwise could not see — and so the
+      // guard survives anyone later putting an await between the two.
+      const cancelEpochAtClose = cancelEpoch;
+      activeProcess = null;
+      // One-shot relaunch for a Metal command-buffer watchdog abort that landed
+      // INSIDE the Gemma prompt encoder (issue #4589). Decided here, ahead of
+      // the claim release and the temp-file cleanup below, because a relaunch
+      // has to keep both: it renders the SAME job off the SAME staged inputs and
+      // must not surrender the GPU lane between the two children.
+      if (await maybeRelaunchForPromptEncoding({ code, signal, childKilled: proc.killed, cancelEpochAtClose, stderr: stderrTail.join('\n') })) return;
+      // The child has exited, so its accelerator allocation is gone. Release
+      // before emitting the terminal completion event: an extend chain starts its
+      // next child from that event and must be able to acquire the machine claim.
+      await releaseHeavyClaim();
+      // Wrap the whole teardown so a throw from finalizeGeneratedVideo (history
+      // save, thumbnail, file move) can't leak as an unhandled rejection — on
+      // Node ≥15 that kills the process AND strands the media job `running` with
+      // no terminal SSE. The catch routes any failure through the job's error
+      // finalizer so the client still gets a terminal 'failed' event.
+      try {
+        // Cleanup the resized temp images if we made them. Track via flags rather
+        // than a path-prefix check — tmpdir() can return a symlinked path
+        // (macOS /var → /private/var) so startsWith() can silently miss.
+        // Cleanup internally generated resize/reference files, route-staged
+        // uploads, and direct-call audio through the same ownership-aware helper.
+        await cleanupTempFiles({ includeUploads: true, includeUntrackedAudio: true });
+
+        // A PortOS-fired SIGKILL (completion-teardown watchdog OR idle-stall
+        // deadline) is a SUCCESS when the output file is already on disk and
+        // non-empty — e.g. a runtime that wrote its .mp4 but never printed a
+        // recognized completion marker, then hung: the idle timer kills it, but
+        // the finished video must be kept, not discarded as "no output". A kill
+        // with no output on disk (a genuine pre-output stall, or a marker from a
+        // malformed runtime that wrote nothing) still fails loudly below.
+        const watchdogSuccess = isWatchdogSuccess({ completionWatchdogFired, idleStallFired, signal, outputPath });
+
+        if (code !== 0 && !watchdogSuccess) {
+          job.status = 'error';
+          let reason;
+          if (missingPyModule) {
+            const runtimeInfo = BYOV_RUNTIME_INFO[model.runtime];
+            if (runtimeInfo) {
+              // The probe believed the venv was ready but a runtime import
+              // disagreed — drop the cached "ready" so the next /runtime-status
+              // re-probes and the install banner re-appears.
+              invalidateByovReadyCache(runtimeInfo.id);
+              reason = `Python module '${missingPyModule}' is missing from the ${runtimeInfo.label} runtime. Use Install / Repair in Video Gen's model setup panel.`;
+            } else {
+              reason = `Python module '${missingPyModule}' is missing. Install it into the configured Python environment and retry.`;
+            }
+          } else if (idleStallFired) {
+            // Distinguish a stall-kill from a real OOM kill — both arrive as
+            // SIGKILL, but this one means the render produced NO output for the
+            // whole idle window and we terminated it to free the GPU lane.
+            reason = `Render stalled — no output for ${Math.round(IDLE_STALL_DEADLINE_MS / 1000)}s; terminated to free the GPU queue (raise VIDEOGEN_IDLE_STALL_MS if this was a legitimately slow render)`;
+          } else if (signal) {
+            // Signal → actionable cause (SIGABRT = the macOS Metal command-buffer
+            // watchdog, SIGBUS/SIGSEGV = a native MLX/Metal crash, SIGKILL = OOM),
+            // stamped with the runtime fingerprint that died so the report is
+            // self-documenting. See describeSignalDeath in generateVideoHelpers.js.
+            reason = describeSignalDeath(signal, {
+              fingerprint: await pickDeathFingerprint({ emitted: job.runtime, runtimeId: model.runtime }),
+            });
+          } else {
+            reason = `Exit code ${code}`;
+          }
+          console.log(`❌ Video generation failed [${jobId.slice(0, 8)}]: ${reason}`);
+          broadcastSse(job, { type: 'error', error: `Generation failed: ${reason}` });
+          videoGenEvents.emit('failed', { generationId: jobId, error: reason });
+        } else {
+          if (watchdogSuccess) {
+            const killCause = idleStallFired ? 'idle-stall deadline' : 'completion teardown hang';
+            console.log(`⚠️ video child force-killed (${killCause}) — output is intact [${jobId.slice(0, 8)}]`);
+          }
+          await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, mutateHistory: mutateVideoHistory });
+        }
+      } catch (err) {
+        // Finalize/teardown threw — fail the job loudly instead of crashing the
+        // process. The job may already be partway through finalize, so force the
+        // error state and emit the terminal event the client is waiting on.
+        job.status = 'error';
+        console.error(`❌ Video close handler failed [${jobId.slice(0, 8)}]: ${err.message}`);
+        broadcastSse(job, { type: 'error', error: `Generation failed: ${err.message}` });
+        videoGenEvents.emit('failed', { generationId: jobId, error: err.message });
+      } finally {
+        closeJobAfterDelay(jobs, jobId);
+      }
+    };
+    proc.on('close', handleChildClose);
+    return handleChildClose;
+  };
+
+  // Whether a cancel landed while the relaunch was awaiting something, and if so
+  // stop the replacement child. Checked after EVERY await in the relaunch: until
+  // activeProcess points at it, cancel() has no handle on this child and bumping
+  // the epoch is the only trace the cancel leaves.
+  const canceledDuringRelaunch = (cancelEpochAtClose, retryProc) => {
+    if (cancelEpoch === cancelEpochAtClose) return false;
+    // Fall through to the normal failure path, so the job still reports a
+    // terminal event instead of quietly running to completion after a cancel.
+    console.log(`🛑 canceled during the prompt-encode relaunch — stopping the replacement child [${jobId.slice(0, 8)}]`);
+    stopAbandonedRetryChild(retryProc);
+    return true;
+  };
+
+  // Stop a replacement child that was spawned but will never be wired up —
+  // canceled mid-relaunch, or abandoned because a later setup step threw. It has
+  // no close/error listeners by then, so nothing else would ever reap it.
+  // Tolerant of a null handle (the spawn itself threw) and of a kill that throws
+  // on an already-dead PID, because this runs on the failure path of a failure
+  // path and must not replace the real error with its own.
+  const stopAbandonedRetryChild = (child) => {
+    if (!child) return;
+    try {
+      child.kill('SIGTERM');
+    } catch (err) {
+      console.error(`❌ abandoned prompt-encode retry child would not stop [${jobId.slice(0, 8)}]: ${err.message}`);
     }
-  });
+  };
+
+  // Relaunch this render once when the macOS Metal command-buffer watchdog
+  // aborted the child while the Gemma prompt encoder was running, with a lowered
+  // prompt-encode budget so each encoder command buffer finishes inside the
+  // watchdog window. Returns true when a replacement child owns the job (the
+  // caller must then leave the failure path alone), false when the render should
+  // fail normally.
+  //
+  // Everything the render is defined by — jobId, seed, output path, history
+  // metadata, staged source images/audio — is closed over and reused verbatim, so
+  // the relaunch is the same render at a smaller prompt budget, not a new job.
+  // Deliberately NOT gated on a runtime allowlist: the phase markers the decision
+  // reads are emitted by scripts/generate_ltx2.py alone, so every other runtime is
+  // excluded by construction rather than by a list that could drift.
+  const maybeRelaunchForPromptEncoding = async ({ code, signal, childKilled, cancelEpochAtClose, stderr }) => {
+    if (code === 0) return false;
+    // A child PortOS killed on purpose — a user cancel, or either watchdog — is
+    // never a spontaneous Metal abort to recover from, whatever signal it
+    // finally landed on. Without this a cancel that raced an in-flight abort
+    // would be answered by relaunching the render the user just stopped.
+    if (childKilled) return false;
+    const plan = planPromptEncodingRetry({
+      signal,
+      stderr,
+      promptEncodePhase: job.promptEncodePhase,
+      retriesUsed: promptEncodingRetriesUsed,
+      platform: process.platform,
+    });
+    if (!plan) return false;
+    // Runs from a child 'close' handler, outside the Express request lifecycle —
+    // an uncaught throw here would crash the process, and a failed relaunch must
+    // degrade into the normal failure report rather than strand the job.
+    // Declared outside the try so the catch can stop a child that was spawned
+    // before a later step threw — an unwired child has no listeners and nothing
+    // left to reap it. `retryWired` is the cut-off: past that point the child
+    // owns the job and reports its own terminal event, so the catch must leave
+    // it alone.
+    let retryProc = null;
+    let retryWired = false;
+    try {
+      promptEncodingRetriesUsed += 1;
+      const retryArgs = [...args, '--gemma-max-length', String(plan.gemmaMaxLength)];
+      const message = `Metal watchdog aborted the prompt encoder — retrying once at ${plan.gemmaMaxLength} Gemma tokens`;
+      console.log(`♻️ ${message} [${jobId.slice(0, 8)}]`);
+      broadcastSse(job, { type: 'status', message });
+      videoGenEvents.emit('status', { generationId: jobId, message });
+      retryProc = await spawnDetached(bin, retryArgs, {
+        env: childEnv,
+        controlDir: join(PATHS.videos, '.detached', `${jobId}-retry`),
+        cleanup: true,
+        killProcessGroup: runtimeNeedsProcessGroupKill(model.runtime),
+      });
+      if (canceledDuringRelaunch(cancelEpochAtClose, retryProc)) return false;
+      // Both awaits finish BEFORE activeProcess starts pointing at the
+      // replacement, and the two statements that follow them are synchronous.
+      // That ordering is load-bearing twice over:
+      //   - cancel() can never reach a child that has no close listener yet, so
+      //     no exit can be emitted into the void and strand the job `running`;
+      //   - the child therefore cannot run its close handler (and release the
+      //     accelerator claim) while this handoff is still in flight, which would
+      //     otherwise let the handoff re-write the claim file with a dead PID and
+      //     wedge every later render.
+      await heavyClaim.handoffTo?.(retryProc.pid);
+      if (canceledDuringRelaunch(cancelEpochAtClose, retryProc)) return false;
+      activeProcess = retryProc;
+      // Re-stamp the render clock: eta.js calibrates future estimates from
+      // spawn → finalize, and charging the aborted child's wall time to the
+      // render that actually produced the video would poison every later
+      // estimate for this model.
+      job.renderStartedAtMs = Date.now();
+      const handleRetryClose = wireRenderChild(retryProc);
+      retryWired = true;
+      // The handoff above yields to the event loop, so a replacement child that
+      // died in that window emitted its 'close' with nobody listening — the job
+      // would sit `running` forever, holding the accelerator claim. Read the
+      // corpse's exit state and drive the terminal path by hand; the handler is
+      // guarded against a double run, so a real 'close' that also lands is a
+      // no-op.
+      if (retryProc.exitCode !== null || retryProc.signalCode !== null) {
+        console.log(`⚠️ prompt-encode replacement child exited before it was wired [${jobId.slice(0, 8)}]`);
+        await handleRetryClose(retryProc.exitCode, retryProc.signalCode);
+      }
+      return true;
+    } catch (err) {
+      console.error(`❌ prompt-encode retry failed to spawn [${jobId.slice(0, 8)}]: ${err.message}`);
+      // Wired means the child owns the job and will report its own terminal
+      // event, so nothing here may kill it. Unwired, it can never report at all.
+      if (retryWired) return true;
+      stopAbandonedRetryChild(retryProc);
+      // Nothing is running under this job any more; leave the invariant cancel()
+      // reads (activeProcess === the live child, or null) intact.
+      activeProcess = null;
+      return false;
+    }
+  };
+
+  wireRenderChild(firstProc);
 
   return { jobId, generationId: jobId, filename, mode: 'local', model: modelId };
 }

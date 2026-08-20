@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { makeVideoGenLineHandler, isWatchdogSuccess, finalizeGeneratedVideo, parseByteProgress, formatBytes, formatDownloadMessage, describeSignalDeath, formatRuntimeFingerprint, describeRenderConditioning, RENDER_INPUTS_VERSION } from './generateVideoHelpers.js';
+import { makeVideoGenLineHandler, isWatchdogSuccess, finalizeGeneratedVideo, parseByteProgress, formatBytes, formatDownloadMessage, describeSignalDeath, formatRuntimeFingerprint, describeRenderConditioning, isPromptEncodingMetalWatchdog, planPromptEncodingRetry, DEFAULT_GEMMA_MAX_LENGTH, RETRY_GEMMA_MAX_LENGTH, RENDER_INPUTS_VERSION } from './generateVideoHelpers.js';
 
 describe('parseByteProgress', () => {
   it('parses single byte value (e.g., "2.5G")', () => {
@@ -119,6 +119,30 @@ describe('makeVideoGenLineHandler', () => {
 
   const sseFrames = () => sse.mock.calls.map((c) => c[1]);
   const eventsOfType = (t) => emitted.filter((e) => e.type === t).map((e) => e.payload);
+
+  // Prompt-encode phase (#4589) — the signal that decides whether a later
+  // SIGABRT is worth one relaunch at a smaller Gemma budget.
+  it('tracks the Gemma prompt-encode phase as three distinct states', () => {
+    // Never reported: every runtime other than the LTX-2 MLX helper stays here,
+    // and an unstamped field must not read as "encoding right now".
+    expect(job.promptEncodePhase).toBeUndefined();
+    handle('STAGE:load-pipeline');
+    expect(job.promptEncodePhase).toBeUndefined();
+
+    handle('STAGE:encode-prompt');
+    expect(job.promptEncodePhase).toBe('active');
+
+    // The end marker is a PREFIX EXTENSION of the begin marker, so a startsWith
+    // comparison would read the end of the encode as another beginning and leave
+    // the phase open forever.
+    handle('STAGE:encode-prompt-done');
+    expect(job.promptEncodePhase).toBe('done');
+  });
+
+  it('still surfaces the prompt-encode markers to the client as status frames', () => {
+    handle('STAGE:encode-prompt');
+    expect(eventsOfType('status')).toContainEqual({ generationId: 'job-12345678', message: 'encode-prompt' });
+  });
 
   it('repeats the job ETA on every progress frame, and omits it when absent (#3801)', () => {
     // No estimate on the job → the key must be absent, never etaMs: 0.
@@ -444,5 +468,106 @@ describe('isWatchdogSuccess', () => {
     } finally {
       rmSync(p, { force: true });
     }
+  });
+});
+
+// ── Gemma prompt-encode watchdog retry (#4589) ──────────────────────────────
+// A real Metal abort cannot be reproduced in a unit test, so the coverage here
+// is over the two decisions PortOS actually makes from the wreckage: which
+// abort text counts as a prompt-encode watchdog kill, and whether the render
+// may be relaunched.
+describe('isPromptEncodingMetalWatchdog', () => {
+  // The abort banner MLX prints on the way down, in the two shapes the watchdog
+  // uses. The impacting-interactivity one is what newer Apple silicon / macOS
+  // report where older combinations reported a timeout — matching only the
+  // timeout wording is exactly the portability bug this classifier fixes.
+  const TIMEOUT_ABORT = 'libc++abi: terminating due to uncaught exception of type std::runtime_error: [METAL] Command buffer execution failed: Caused GPU Timeout Error (00000002:kIOGPUCommandBufferCallbackErrorTimeout)';
+  const INTERACTIVITY_ABORT = 'libc++abi: terminating due to uncaught exception of type std::runtime_error: [METAL] Command buffer execution failed: (00000004:kIOGPUCommandBufferCallbackErrorImpactingInteractivity)';
+  const OOM_ABORT = '[METAL] Command buffer execution failed: (00000008:kIOGPUCommandBufferCallbackErrorOutOfMemory)';
+  const VICTIM_ABORT = '[METAL] Command buffer execution failed: (00000006:kIOGPUCommandBufferCallbackErrorInnocentVictim)';
+
+  it.each([
+    ['the classic timeout signature', TIMEOUT_ABORT],
+    ['the impacting-interactivity signature newer macOS reports instead', INTERACTIVITY_ABORT],
+  ])('recognizes %s', (_label, stderr) => {
+    expect(isPromptEncodingMetalWatchdog({ signal: 'SIGABRT', stderr, promptEncodePhase: 'active' })).toBe(true);
+  });
+
+  // Neither is a "this buffer ran too long" kill, so neither is fixed by a
+  // shorter prompt: OOM means the machine is out of headroom, and an innocent
+  // victim was killed for some OTHER process wedging the GPU.
+  it.each([
+    ['an out-of-memory abort', OOM_ABORT],
+    ['an innocent-victim abort', VICTIM_ABORT],
+  ])('excludes %s', (_label, stderr) => {
+    expect(isPromptEncodingMetalWatchdog({ signal: 'SIGABRT', stderr, promptEncodePhase: 'active' })).toBe(false);
+  });
+
+  // A mixed abort is the case where the timeout is a downstream symptom of the
+  // real cause, so the veto wins rather than the match.
+  it('excludes an abort that carries both a timeout and an out-of-memory cause', () => {
+    expect(isPromptEncodingMetalWatchdog({
+      signal: 'SIGABRT',
+      stderr: `${TIMEOUT_ABORT}\n${OOM_ABORT}`,
+      promptEncodePhase: 'active',
+    })).toBe(false);
+  });
+
+  // The three phase states must stay distinct: "never reported" is every
+  // non-LTX-2 runtime and must never read as "encoding right now".
+  it.each([
+    ['done — the abort landed in the denoise loop, which a shorter prompt cannot fix', 'done'],
+    ['null — this runner never reported an encode boundary at all', null],
+    ['undefined — same, expressed as an unstamped job field', undefined],
+  ])('refuses to fire when the prompt-encode phase is %s', (_label, promptEncodePhase) => {
+    expect(isPromptEncodingMetalWatchdog({ signal: 'SIGABRT', stderr: TIMEOUT_ABORT, promptEncodePhase })).toBe(false);
+  });
+
+  // A watchdog kill always arrives as SIGABRT (the Metal layer raises a C++
+  // exception that terminate() converts), never as a clean non-zero exit or an
+  // OOM SIGKILL.
+  it.each([[null], ['SIGKILL'], ['SIGTERM'], ['SIGSEGV']])('refuses to fire on signal %s', (signal) => {
+    expect(isPromptEncodingMetalWatchdog({ signal, stderr: TIMEOUT_ABORT, promptEncodePhase: 'active' })).toBe(false);
+  });
+
+  it('tolerates a missing/blank stderr tail and an empty call', () => {
+    expect(isPromptEncodingMetalWatchdog()).toBe(false);
+    expect(isPromptEncodingMetalWatchdog({ signal: 'SIGABRT', promptEncodePhase: 'active' })).toBe(false);
+    expect(isPromptEncodingMetalWatchdog({ signal: 'SIGABRT', stderr: null, promptEncodePhase: 'active' })).toBe(false);
+  });
+});
+
+describe('planPromptEncodingRetry', () => {
+  const WATCHDOG_ABORT = '[METAL] Command buffer execution failed: (00000004:kIOGPUCommandBufferCallbackErrorImpactingInteractivity)';
+  const qualifying = {
+    signal: 'SIGABRT',
+    stderr: WATCHDOG_ABORT,
+    promptEncodePhase: 'active',
+    retriesUsed: 0,
+    platform: 'darwin',
+  };
+
+  it('plans one relaunch at the reduced Gemma budget', () => {
+    expect(planPromptEncodingRetry(qualifying)).toEqual({ gemmaMaxLength: RETRY_GEMMA_MAX_LENGTH });
+    // The reduced budget is a real cut from what upstream would otherwise use —
+    // a plan that handed back the default would relaunch into the same abort.
+    expect(RETRY_GEMMA_MAX_LENGTH).toBeLessThan(DEFAULT_GEMMA_MAX_LENGTH);
+  });
+
+  it('allows exactly one — a second abort at the reduced budget is a real failure', () => {
+    expect(planPromptEncodingRetry({ ...qualifying, retriesUsed: 1 })).toBeNull();
+    expect(planPromptEncodingRetry({ ...qualifying, retriesUsed: 2 })).toBeNull();
+  });
+
+  // The command-buffer watchdog is a macOS construct; a Windows/CUDA render that
+  // somehow produced a matching string must not be relaunched with an
+  // Apple-specific mitigation.
+  it.each([['win32'], ['linux']])('never fires on %s', (platform) => {
+    expect(planPromptEncodingRetry({ ...qualifying, platform })).toBeNull();
+  });
+
+  it('passes the classifier verdict straight through', () => {
+    expect(planPromptEncodingRetry({ ...qualifying, promptEncodePhase: 'done' })).toBeNull();
+    expect(planPromptEncodingRetry({ ...qualifying, signal: 'SIGKILL' })).toBeNull();
   });
 });

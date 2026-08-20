@@ -10,12 +10,18 @@ import { basename, join } from 'path';
 import { tmpdir, totalmem } from 'os';
 import { randomUUID } from 'crypto';
 
-const { heavyClaimRelease, mockPrepareLocalMemory } = vi.hoisted(() => ({
+const { heavyClaimRelease, heavyClaimHandoff, mockPrepareLocalMemory } = vi.hoisted(() => ({
   heavyClaimRelease: vi.fn(async () => {}),
+  // Repointing the machine claim at the render child's PID. Stubbed rather than
+  // omitted so a test can make it fail, which is how the relaunch path's
+  // spawned-but-never-wired child becomes observable.
+  heavyClaimHandoff: vi.fn(async () => {}),
   mockPrepareLocalMemory: vi.fn(async () => ({ unloaded: [], availableGb: 64, totalGb: 64, budgetGb: 64 })),
 }));
 vi.mock('../../lib/heavyJobClaim.js', () => ({
-  claimHeavyLocalJob: vi.fn(async () => ({ ok: true, holder: {}, release: heavyClaimRelease })),
+  claimHeavyLocalJob: vi.fn(async () => ({
+    ok: true, holder: {}, release: heavyClaimRelease, handoffTo: heavyClaimHandoff,
+  })),
 }));
 vi.mock('../../lib/localMemory.js', () => ({
   prepareLocalMemory: mockPrepareLocalMemory,
@@ -3846,5 +3852,409 @@ describe('generateVideo — MiniMax H3 CUDA contract', () => {
 
     const [, args] = cudaCall(spawnMock);
     expect(args).not.toContain('--offload-profile');
+  });
+});
+
+// ── one-shot prompt-encode relaunch after a Metal watchdog abort (#4589) ─────
+// A real Metal abort can't be produced here, so the child is driven directly:
+// the marker lines and the abort banner are pushed onto its stderr, then it is
+// closed on SIGABRT exactly as the OS would. What is under test is the decision
+// generateVideo makes from that wreckage — relaunch or fail — plus the argv the
+// relaunch carries.
+describe('generateVideo — Gemma prompt-encode watchdog relaunch', () => {
+  const TIMEOUT_ABORT = 'libc++abi: terminating due to uncaught exception of type std::runtime_error: [METAL] Command buffer execution failed: Caused GPU Timeout Error (00000002:kIOGPUCommandBufferCallbackErrorTimeout)';
+  const INTERACTIVITY_ABORT = 'libc++abi: terminating due to uncaught exception: [METAL] Command buffer execution failed: (00000004:kIOGPUCommandBufferCallbackErrorImpactingInteractivity)';
+  const OOM_ABORT = '[METAL] Command buffer execution failed: (00000008:kIOGPUCommandBufferCallbackErrorOutOfMemory)';
+
+  // A child whose stderr and terminal signal the test drives by hand. The
+  // shared makeProc() closes itself on exit 0, which is the opposite of every
+  // case here.
+  const makeDrivenProc = (pid, { failWiring = false } = {}) => {
+    const listeners = {};
+    const onData = {};
+    const proc = {
+      pid,
+      exitCode: null,
+      signalCode: null,
+      killed: false,
+      stdout: {
+        on: vi.fn((event, fn) => {
+          if (failWiring) throw new Error('stdout stream vanished');
+          onData[`stdout:${event}`] = fn;
+        }),
+      },
+      stderr: { on: vi.fn((event, fn) => { onData[`stderr:${event}`] = fn; }) },
+      on(event, fn) { listeners[event] = fn; return proc; },
+      kill: vi.fn(),
+    };
+    return {
+      proc,
+      // The listener that decides whether this child can ever report a terminal
+      // event. Its presence is the whole point of wiring before the handoff.
+      isWired: () => typeof listeners.close === 'function',
+      stderr: (text) => onData['stderr:data']?.(Buffer.from(`${text}\n`)),
+      close: async (code, signal) => {
+        proc.exitCode = code;
+        proc.signalCode = signal;
+        await listeners.close?.(code, signal);
+      },
+      abort: async (signal = 'SIGABRT') => {
+        proc.signalCode = signal;
+        await listeners.close?.(null, signal);
+      },
+      finish: async () => {
+        proc.exitCode = 0;
+        await listeners.close?.(0, null);
+      },
+    };
+  };
+
+  let restorePlatform = () => {};
+  let failures;
+  let onFailed;
+
+  beforeEach(async () => {
+    // The command-buffer watchdog is a macOS construct and generateVideo gates
+    // the relaunch on the real platform, so pin it — otherwise this whole
+    // describe would silently assert "never relaunches" on Windows CI.
+    // Pinned inside the hook, never at module scope: local.js is already
+    // imported by then.
+    const { pinPlatform } = await import('../../lib/testHelper.js');
+    restorePlatform = pinPlatform('darwin');
+    failures = [];
+    onFailed = (payload) => failures.push(payload);
+    videoGenEvents.on('failed', onFailed);
+  });
+
+  afterEach(() => {
+    videoGenEvents.off('failed', onFailed);
+    restorePlatform();
+  });
+
+  const startRender = async (jobId, children) => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    spawnMock.mockClear();
+    for (const child of children) spawnMock.mockResolvedValueOnce(child.proc);
+    await generateVideo({
+      jobId,
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified',
+      prompt: 'a lighthouse in fog',
+      width: 512,
+      height: 512,
+      numFrames: 25,
+      fps: 24,
+      seed: 987654,
+    });
+    return spawnMock;
+  };
+
+  const ltx2Calls = (spawnMock) => spawnMock.mock.calls.filter(([bin]) => isLtx2Python(bin));
+  const flagValue = (args, flag) => args[args.indexOf(flag) + 1];
+
+  it.each([
+    ['the classic timeout signature', TIMEOUT_ABORT],
+    ['the impacting-interactivity signature newer macOS reports', INTERACTIVITY_ABORT],
+  ])('relaunches once at a reduced Gemma budget on %s', async (_label, abort) => {
+    const first = makeDrivenProc(101);
+    const second = makeDrivenProc(102);
+    const spawnMock = await startRender(`pe-${abort.length}`, [first, second]);
+
+    first.stderr('STAGE:encode-prompt');
+    first.stderr(abort);
+    await first.abort();
+
+    const calls = ltx2Calls(spawnMock);
+    expect(calls).toHaveLength(2);
+    const [firstArgs, retryArgs] = calls.map(([, args]) => args);
+    // The original render never carries the flag — the reduced budget exists
+    // only as the mitigation, not as a new default.
+    expect(firstArgs).not.toContain('--gemma-max-length');
+    expect(flagValue(retryArgs, '--gemma-max-length')).toBe('512');
+    // Same render, smaller prompt budget: seed and output must survive verbatim
+    // or the relaunch silently produces a different clip than the user asked for.
+    expect(flagValue(retryArgs, '--seed')).toBe(flagValue(firstArgs, '--seed'));
+    expect(flagValue(retryArgs, '--seed')).toBe('987654');
+    expect(flagValue(retryArgs, '--output')).toBe(flagValue(firstArgs, '--output'));
+    expect(flagValue(retryArgs, '--prompt')).toBe(flagValue(firstArgs, '--prompt'));
+    // The aborted child must not surface as a terminal failure — the job is
+    // still running, on its replacement child.
+    expect(failures).toHaveLength(0);
+
+    await second.finish();
+  });
+
+  // The bypass probe for the phase gate: identical abort, identical signal, one
+  // extra marker line. If the gate were dropped this case would relaunch too.
+  it('does not relaunch once the prompt encode has finished', async () => {
+    const first = makeDrivenProc(103);
+    const spawnMock = await startRender('pe-after-encode', [first]);
+
+    first.stderr('STAGE:encode-prompt');
+    first.stderr('STAGE:encode-prompt-done');
+    first.stderr(TIMEOUT_ABORT);
+    await first.abort();
+
+    expect(ltx2Calls(spawnMock)).toHaveLength(1);
+    expect(failures).toHaveLength(1);
+    expect(failures[0].error).toMatch(/SIGABRT/);
+  });
+
+  // An OOM abort is not a watchdog timeout: a shorter prompt does not fix it,
+  // and relaunching burns another model load on a machine already out of room.
+  it('does not relaunch on an out-of-memory abort inside the encoder', async () => {
+    const first = makeDrivenProc(104);
+    const spawnMock = await startRender('pe-oom', [first]);
+
+    first.stderr('STAGE:encode-prompt');
+    first.stderr(OOM_ABORT);
+    await first.abort();
+
+    expect(ltx2Calls(spawnMock)).toHaveLength(1);
+    expect(failures).toHaveLength(1);
+  });
+
+  it('relaunches at most once — a second abort at the reduced budget fails the job', async () => {
+    const first = makeDrivenProc(105);
+    const second = makeDrivenProc(106);
+    const spawnMock = await startRender('pe-twice', [first, second]);
+
+    first.stderr('STAGE:encode-prompt');
+    first.stderr(TIMEOUT_ABORT);
+    await first.abort();
+    expect(ltx2Calls(spawnMock)).toHaveLength(2);
+
+    second.stderr('STAGE:encode-prompt');
+    second.stderr(TIMEOUT_ABORT);
+    await second.abort();
+
+    expect(ltx2Calls(spawnMock)).toHaveLength(2);
+    expect(failures).toHaveLength(1);
+  });
+
+  it('never relaunches off macOS, where the command-buffer watchdog does not exist', async () => {
+    restorePlatform();
+    const { pinPlatform } = await import('../../lib/testHelper.js');
+    restorePlatform = pinPlatform('win32');
+    const first = makeDrivenProc(107);
+    const spawnMock = await startRender('pe-win32', [first]);
+
+    first.stderr('STAGE:encode-prompt');
+    first.stderr(TIMEOUT_ABORT);
+    await first.abort();
+
+    expect(ltx2Calls(spawnMock)).toHaveLength(1);
+    expect(failures).toHaveLength(1);
+  });
+
+  // A cancel is answered by SIGTERM, so the child normally dies on a signal the
+  // classifier already ignores — but a cancel that RACES an abort already in
+  // flight still arrives as SIGABRT. Relaunching there would restart the render
+  // the user just stopped.
+  it('does not relaunch a child PortOS killed on purpose, even on SIGABRT', async () => {
+    const first = makeDrivenProc(108);
+    const spawnMock = await startRender('pe-killed', [first]);
+
+    first.stderr('STAGE:encode-prompt');
+    first.stderr(TIMEOUT_ABORT);
+    // What killWithEscalation() leaves behind on the handle when cancel() fires.
+    first.proc.killed = true;
+    await first.abort();
+
+    expect(ltx2Calls(spawnMock)).toHaveLength(1);
+    expect(failures).toHaveLength(1);
+  });
+
+  // The relaunch clears activeProcess before it awaits the replacement spawn, so
+  // for that window cancel() has nothing to kill and reports false. The epoch
+  // check is the only thing that notices — without it the replacement child runs
+  // to completion after the user asked to stop.
+  it('abandons the replacement child when a cancel lands during the relaunch spawn', async () => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const { cancel } = await import('./local.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    const first = makeDrivenProc(109);
+    const second = makeDrivenProc(110);
+    spawnMock.mockClear();
+    spawnMock.mockResolvedValueOnce(first.proc);
+    // Cancel from INSIDE the spawn await — the exact window activeProcess is null.
+    spawnMock.mockImplementationOnce(async () => {
+      cancel();
+      return second.proc;
+    });
+    await generateVideo({
+      jobId: 'pe-cancel-race',
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified',
+      prompt: 'a lighthouse in fog',
+      width: 512,
+      height: 512,
+      numFrames: 25,
+      fps: 24,
+      seed: 987654,
+    });
+
+    first.stderr('STAGE:encode-prompt');
+    first.stderr(TIMEOUT_ABORT);
+    await first.abort();
+
+    // The replacement was spawned, then stopped rather than left running…
+    expect(ltx2Calls(spawnMock)).toHaveLength(2);
+    expect(second.proc.kill).toHaveBeenCalledWith('SIGTERM');
+    // …and the job still reports a terminal failure instead of hanging.
+    expect(failures).toHaveLength(1);
+  });
+
+  // A replacement child that never gets its close listener can never report a
+  // terminal event, so it must not be left running.
+  it('stops the replacement child when wiring it throws', async () => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    const first = makeDrivenProc(111);
+    const second = makeDrivenProc(112, { failWiring: true });
+    spawnMock.mockClear();
+    spawnMock.mockResolvedValueOnce(first.proc).mockResolvedValueOnce(second.proc);
+    await generateVideo({
+      jobId: 'pe-wire-throws',
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified',
+      prompt: 'a lighthouse in fog',
+      width: 512,
+      height: 512,
+      numFrames: 25,
+      fps: 24,
+      seed: 987654,
+    });
+
+    first.stderr('STAGE:encode-prompt');
+    first.stderr(TIMEOUT_ABORT);
+    await first.abort();
+
+    expect(second.proc.kill).toHaveBeenCalledWith('SIGTERM');
+    // The job still ends, reporting the abort that started all this.
+    expect(failures).toHaveLength(1);
+  });
+
+  // The replacement must not be reachable by cancel() until it is wired: an
+  // unwired child killed mid-handoff emits its exit into the void and strands the
+  // job `running`, and its close handler could otherwise release the accelerator
+  // claim while the handoff is still in flight — which would then rewrite the
+  // claim file with a dead PID and wedge every later render.
+  it('finishes the claim handoff before the replacement child is trackable', async () => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    const first = makeDrivenProc(113);
+    const second = makeDrivenProc(114);
+    spawnMock.mockClear();
+    spawnMock.mockResolvedValueOnce(first.proc).mockResolvedValueOnce(second.proc);
+    await generateVideo({
+      jobId: 'pe-wire-order',
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified',
+      prompt: 'a lighthouse in fog',
+      width: 512,
+      height: 512,
+      numFrames: 25,
+      fps: 24,
+      seed: 987654,
+    });
+    // Sampled from inside the handoff — the window where a wired-and-tracked
+    // child could run its close handler against the in-flight claim write.
+    let wiredDuringHandoff = null;
+    heavyClaimHandoff.mockImplementationOnce(async (pid) => {
+      if (pid === 114) wiredDuringHandoff = second.isWired();
+    });
+
+    first.stderr('STAGE:encode-prompt');
+    first.stderr(TIMEOUT_ABORT);
+    await first.abort();
+
+    expect(wiredDuringHandoff).toBe(false);
+    // …and the wiring does land right after, so the replacement can finalize.
+    expect(second.isWired()).toBe(true);
+    await second.finish();
+    expect(failures).toHaveLength(0);
+  });
+
+  // The cancel window does not close when the spawn resolves — the handoff is
+  // awaited too, and activeProcess is still null across it, so cancel() again
+  // leaves nothing behind but the epoch bump.
+  it('abandons the replacement child when a cancel lands during the claim handoff', async () => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const { cancel } = await import('./local.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    const first = makeDrivenProc(115);
+    const second = makeDrivenProc(116);
+    spawnMock.mockClear();
+    spawnMock.mockResolvedValueOnce(first.proc).mockResolvedValueOnce(second.proc);
+    await generateVideo({
+      jobId: 'pe-cancel-handoff',
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified',
+      prompt: 'a lighthouse in fog',
+      width: 512,
+      height: 512,
+      numFrames: 25,
+      fps: 24,
+      seed: 987654,
+    });
+    heavyClaimHandoff.mockImplementationOnce(async (pid) => {
+      if (pid === 116) cancel();
+    });
+
+    first.stderr('STAGE:encode-prompt');
+    first.stderr(TIMEOUT_ABORT);
+    await first.abort();
+
+    expect(second.proc.kill).toHaveBeenCalledWith('SIGTERM');
+    // Never wired, so it could not have reported anything — the job's terminal
+    // event has to come from the original abort instead.
+    expect(second.isWired()).toBe(false);
+    expect(failures).toHaveLength(1);
+  });
+
+  // The claim handoff yields to the event loop, so a replacement that dies in
+  // that window emits its 'close' before anything is listening. Nothing would
+  // ever reap it: the job would sit `running` forever, still holding the
+  // accelerator claim, with no terminal SSE or queue event.
+  it('reaps a replacement child that died before its listener was attached', async () => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    const first = makeDrivenProc(117);
+    const second = makeDrivenProc(118);
+    spawnMock.mockClear();
+    spawnMock.mockResolvedValueOnce(first.proc).mockResolvedValueOnce(second.proc);
+    await generateVideo({
+      jobId: 'pe-early-death',
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified',
+      prompt: 'a lighthouse in fog',
+      width: 512,
+      height: 512,
+      numFrames: 25,
+      fps: 24,
+      seed: 987654,
+    });
+    // Dies during the handoff, and its close() fires into the void — modelled by
+    // setting the exit state without invoking any listener.
+    heavyClaimHandoff.mockImplementationOnce(async (pid) => {
+      if (pid === 118) second.proc.exitCode = 3;
+    });
+
+    first.stderr('STAGE:encode-prompt');
+    first.stderr(TIMEOUT_ABORT);
+    await first.abort();
+
+    expect(failures).toHaveLength(1);
+    expect(failures[0].error).toMatch(/Exit code 3/);
+    expect(heavyClaimRelease).toHaveBeenCalled();
+
+    // …and the real 'close' arriving late — carrying that same exit status —
+    // is absorbed rather than re-running the whole teardown and reporting the
+    // job as failed a second time.
+    await second.close(3, null);
+    expect(failures).toHaveLength(1);
+    expect(heavyClaimRelease).toHaveBeenCalledTimes(1);
   });
 });

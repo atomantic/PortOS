@@ -341,4 +341,131 @@ describe.skipIf(!pyBin)('generate_ltx2.py', () => {
     expect(output).toMatch(/needs an LTX-2\.5 pack whose own conditioner is gemma4/);
     expect(output).toMatch(/GemmaLanguageModel/);
   });
+
+  // ── Gemma prompt-encode budget + boundary markers (#4589) ──────────────────
+  // The markers are what lets PortOS tell "the Metal watchdog killed the prompt
+  // encoder" (worth one relaunch at a smaller budget) from "it killed the
+  // denoise loop" (not worth anything), so their exact text and their emission
+  // on BOTH the success and the failure path are load-bearing.
+  const stubPromptEncoderModule = (body) => [
+    'import sys, types',
+    'pkg = types.ModuleType("ltx_pipelines_mlx")',
+    'utils = types.ModuleType("ltx_pipelines_mlx.utils")',
+    'blocks = types.ModuleType("ltx_pipelines_mlx.utils.blocks")',
+    'class PromptEncoder:',
+    ...body,
+    'blocks.PromptEncoder = PromptEncoder',
+    'sys.modules["ltx_pipelines_mlx"] = pkg',
+    'sys.modules["ltx_pipelines_mlx.utils"] = utils',
+    'sys.modules["ltx_pipelines_mlx.utils.blocks"] = blocks',
+  ];
+
+  it('brackets a successful prompt encode with the two markers, once per install', () => {
+    const output = runPython(`${importRunner}\n${[
+      ...stubPromptEncoderModule([
+        '    def encode(self, prompt):',
+        '        print("ENCODED:" + prompt)',
+        '        return ("video", "audio")',
+      ]),
+      'import contextlib',
+      // Installed twice on purpose: main() runs once, but an idempotent patch is
+      // what keeps a future second install from nesting the brackets and
+      // emitting the begin marker twice for one encode.
+      'runner.install_prompt_encode_markers()',
+      'runner.install_prompt_encode_markers()',
+      'with contextlib.redirect_stderr(sys.stdout):',
+      '    result = PromptEncoder().encode("a cat")',
+      'print(result)',
+    ].join('\n')}`);
+    const lines = output.trim().split(/\r?\n/);
+    expect(lines).toEqual([
+      'STAGE:encode-prompt',
+      'ENCODED:a cat',
+      'STAGE:encode-prompt-done',
+      "('video', 'audio')",
+    ]);
+  });
+
+  // The end marker means "control left the encoder", not "the encode succeeded".
+  // Emitting it from `finally` biases PortOS AWAY from relaunching, which is the
+  // safe direction — a hard Metal abort kills the process outright, so `finally`
+  // never runs and the phase correctly stays open.
+  it('still emits the end marker when the encode raises', () => {
+    const output = runPython(`${importRunner}\n${[
+      ...stubPromptEncoderModule([
+        '    def encode(self, prompt):',
+        '        raise RuntimeError("gemma exploded")',
+      ]),
+      'import contextlib',
+      'runner.install_prompt_encode_markers()',
+      'with contextlib.redirect_stderr(sys.stdout):',
+      '    try:',
+      '        PromptEncoder().encode("a cat")',
+      '    except RuntimeError as exc:',
+      '        print("RAISED:" + str(exc))',
+    ].join('\n')}`);
+    expect(output.trim().split(/\r?\n/)).toEqual([
+      'STAGE:encode-prompt',
+      'STAGE:encode-prompt-done',
+      'RAISED:gemma exploded',
+    ]);
+  });
+
+  // A pin without PromptEncoder must not crash the render — PortOS simply never
+  // sees an encode phase there, and so never arms the retry.
+  it('is a no-op when the pin exposes no PromptEncoder', () => {
+    const output = runPython(`${importRunner}\n${[
+      'import sys',
+      'sys.modules.pop("ltx_pipelines_mlx.utils.blocks", None)',
+      'runner.install_prompt_encode_markers()',
+      'print("ok")',
+    ].join('\n')}`);
+    expect(output.trim()).toBe('ok');
+  });
+
+  // ltx-2-mlx reads LTX2_GEMMA_MAX_LENGTH at encode time and defaults it to
+  // 1024, so the flag has to ASSIGN — a setdefault would be swallowed by the
+  // ambient value the parent already exported and the relaunch would re-run at
+  // the budget that just aborted.
+  it.each([
+    ['None', 'None', null, '1024'],
+    ['a lowered budget', '512', null, '512'],
+    ['a lowered budget over an ambient value', '512', '1024', '512'],
+  ])('configure_gemma_max_length(%s) resolves LTX2_GEMMA_MAX_LENGTH to the expected value', (_label, flag, ambient, expected) => {
+    const output = runPython(`${importRunner}\n${[
+      'import os',
+      ambient === null
+        ? 'os.environ.pop("LTX2_GEMMA_MAX_LENGTH", None)'
+        : `os.environ["LTX2_GEMMA_MAX_LENGTH"] = ${JSON.stringify(ambient)}`,
+      `runner.configure_gemma_max_length(${flag})`,
+      // Read back through the same default upstream applies, so "unset" and
+      // "explicitly 1024" are both expressed as the value the encoder would use.
+      'print(os.environ.get("LTX2_GEMMA_MAX_LENGTH", "1024"))',
+    ].join('\n')}`);
+    expect(output.trim()).toBe(expected);
+  });
+
+  it.each([['0'], ['-1']])('rejects a non-positive --gemma-max-length (%s)', (value) => {
+    const output = runPython(`${importRunner}\n${[
+      'try:',
+      `    runner.configure_gemma_max_length(${value})`,
+      'except SystemExit as exc:',
+      '    print(str(exc))',
+      'else:',
+      '    raise SystemExit("a non-positive gemma budget was accepted")',
+    ].join('\n')}`);
+    expect(output).toMatch(/must be a positive integer/);
+  });
+
+  it.each([
+    ['omitted', [], 'None'],
+    ['given', ['--gemma-max-length', '512'], '512'],
+  ])('parses --gemma-max-length when %s', (_label, extra, expected) => {
+    const output = runPython(`${importRunner}\n${[
+      'import sys',
+      `sys.argv = ["generate_ltx2.py", "--mode", "text", "--prompt", "p", "--output", "/tmp/o.mp4", "--model", "m"] + ${JSON.stringify(extra)}`,
+      'print(runner.parse_args().gemma_max_length)',
+    ].join('\n')}`);
+    expect(output.trim()).toBe(expected);
+  });
 });

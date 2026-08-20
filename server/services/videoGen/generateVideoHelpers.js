@@ -80,6 +80,15 @@ export function formatDownloadMessage(rawText, byteInfo) {
 }
 
 /**
+ * Boundary markers `scripts/generate_ltx2.py` prints on stderr around the Gemma
+ * prompt encode (`install_prompt_encode_markers`). Matched EXACTLY, never by
+ * prefix — `STAGE:encode-prompt-done` starts with `STAGE:encode-prompt`, so a
+ * `startsWith` test would read the end of the encode as its beginning.
+ */
+export const PROMPT_ENCODE_BEGIN_MARKER = 'STAGE:encode-prompt';
+export const PROMPT_ENCODE_END_MARKER = 'STAGE:encode-prompt-done';
+
+/**
  * Build the stdout/stderr line handler for one generation. Parses the
  * python child's STATUS:/STAGE:/DOWNLOAD:/tqdm protocol into SSE frames
  * (`broadcastSse`) + queue-dispatcher events (`videoGenEvents`).
@@ -139,6 +148,14 @@ export function makeVideoGenLineHandler({ job, jobId, pythonNoiseRe }) {
       return true;
     }
     if (line.startsWith('STAGE:')) {
+      // Gemma prompt-encode boundary (scripts/generate_ltx2.py). Stamped on the
+      // job as a three-state phase — absent = this runner never reports one,
+      // 'active' = encoding right now, 'done' = finished — so a later SIGABRT can
+      // be attributed to the encode without conflating "never reported" with
+      // "finished". Compared exactly: the '-done' marker is a prefix extension of
+      // the begin marker. See planPromptEncodingRetry.
+      if (line === PROMPT_ENCODE_BEGIN_MARKER) job.promptEncodePhase = 'active';
+      else if (line === PROMPT_ENCODE_END_MARKER) job.promptEncodePhase = 'done';
       const parts = line.split(':');
       // Track phase for tqdm bar formatting — STAGE:download* sets download mode,
       // other phases (inference, encode, decode, etc.) clear it.
@@ -336,6 +353,95 @@ export function describeSignalDeath(signal, { fingerprint = null } = {}) {
   const cause = SIGNAL_DEATH_CAUSES[signal] || `Killed by signal ${signal}`;
   const fp = formatRuntimeFingerprint(fingerprint);
   return fp ? `${cause} [runtime: ${fp}]` : cause;
+}
+
+/**
+ * Gemma prompt-encode sequence length. `LTX2_GEMMA_MAX_LENGTH` is read by
+ * ltx-2-mlx at encode time (`utils/blocks.py#PromptEncoder.encode`) and defaults
+ * to 1024 there; the retry halves it so the encoder's attention matrices are a
+ * quarter the size and each Metal command buffer finishes well inside the
+ * watchdog window. Halving (rather than a deeper cut) keeps a long prompt's
+ * tail intact — the tokenizer truncates from the LEFT, so a smaller budget
+ * silently drops the START of the prompt, which is where the subject usually
+ * is.
+ */
+export const DEFAULT_GEMMA_MAX_LENGTH = 1024;
+export const RETRY_GEMMA_MAX_LENGTH = 512;
+
+// The macOS Metal command-buffer watchdog reports WHY it killed a buffer via a
+// `kIOGPUCommandBufferCallbackError*` enum name in the abort text. Two of those
+// mean "this buffer ran too long for the compositor to stay responsive", which
+// is the failure a smaller prompt-encode buffer actually fixes:
+//   - ...ErrorTimeout                — the classic signature
+//   - ...ErrorImpactingInteractivity — what newer Apple silicon / macOS report
+//     instead, and the reason a Timeout-only match never armed the retry there.
+// MLX also surfaces the timeout case in prose ("Caused GPU Timeout Error"), so
+// that phrasing is accepted too.
+const METAL_WATCHDOG_RE = /kIOGPUCommandBufferCallbackError(?:Timeout|ImpactingInteractivity)|Caused GPU Timeout Error/i;
+// ...and two that must NOT arm it. An out-of-memory abort is not a watchdog
+// timeout — a shorter prompt does not fix it, and retrying burns another model
+// load on a machine that is already out of headroom. An innocent victim was
+// killed because SOME OTHER process wedged the GPU, so this render's prompt
+// length is irrelevant. Either name anywhere in the captured text vetoes the
+// retry, even alongside a timeout: a mixed abort is exactly the case where the
+// timeout is a downstream symptom rather than the cause.
+const METAL_WATCHDOG_VETO_RE = /kIOGPUCommandBufferCallbackError(?:OutOfMemory|InnocentVictim)/i;
+
+/**
+ * Whether a render child died to the macOS Metal command-buffer watchdog WHILE
+ * the Gemma prompt encoder was running. Pure.
+ *
+ * `promptEncodePhase` is a three-state sentinel, and all three states are
+ * distinct on purpose:
+ *   - `null`     — the runner never reported an encode boundary. Every runtime
+ *                  other than the LTX-2 MLX helper is permanently here, so an
+ *                  unreported phase can never be mistaken for a live encode.
+ *   - `'active'` — the encode began and never finished. The ONLY qualifying
+ *                  state: the child died mid-encode, before any denoise step.
+ *   - `'done'`   — the encode finished. Anything that aborts after this is a
+ *                  denoise/decode failure that a shorter prompt cannot fix.
+ *
+ * @param {object} [opts]
+ * @param {string|null} [opts.signal] - signal name from `proc.on('close')`
+ * @param {string} [opts.stderr] - captured stderr tail from the dead child
+ * @param {'active'|'done'|null} [opts.promptEncodePhase]
+ * @returns {boolean}
+ */
+export function isPromptEncodingMetalWatchdog({ signal = null, stderr = '', promptEncodePhase = null } = {}) {
+  // The Metal layer raises a C++ exception that terminate() turns into SIGABRT;
+  // a watchdog kill never arrives as a clean non-zero exit.
+  if (signal !== 'SIGABRT') return false;
+  if (promptEncodePhase !== 'active') return false;
+  const text = typeof stderr === 'string' ? stderr : '';
+  if (METAL_WATCHDOG_VETO_RE.test(text)) return false;
+  return METAL_WATCHDOG_RE.test(text);
+}
+
+/**
+ * Decide whether one render may be relaunched after a prompt-encode watchdog
+ * abort, and with what Gemma budget. Pure — returns the plan, never acts.
+ *
+ * Returns `null` for "do not retry" and `{ gemmaMaxLength }` for "relaunch this
+ * same job once with that budget". Exactly one retry is ever allowed: a second
+ * watchdog abort at the reduced budget is a real failure the user must see, not
+ * something to keep grinding the GPU over.
+ *
+ * @param {object} [opts]
+ * @param {string|null} [opts.signal]
+ * @param {string} [opts.stderr]
+ * @param {'active'|'done'|null} [opts.promptEncodePhase]
+ * @param {number} [opts.retriesUsed] - retries already spent on this job
+ * @param {string} [opts.platform] - `process.platform` of the host
+ * @returns {{ gemmaMaxLength: number }|null}
+ */
+export function planPromptEncodingRetry({ signal = null, stderr = '', promptEncodePhase = null, retriesUsed = 0, platform = process.platform } = {}) {
+  // The command-buffer watchdog is a macOS construct. A Windows/CUDA render
+  // that somehow produced a matching string must not be relaunched with an
+  // Apple-specific mitigation.
+  if (platform !== 'darwin') return null;
+  if (!Number.isInteger(retriesUsed) || retriesUsed > 0) return null;
+  if (!isPromptEncodingMetalWatchdog({ signal, stderr, promptEncodePhase })) return null;
+  return { gemmaMaxLength: RETRY_GEMMA_MAX_LENGTH };
 }
 
 /**

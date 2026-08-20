@@ -56,6 +56,7 @@ Exit strategy — os._exit(0) in main():
 from __future__ import annotations
 
 import argparse
+import functools
 import importlib
 import inspect
 import json
@@ -361,6 +362,75 @@ def configure_negative_prompt(negative_prompt: str) -> None:
         emit_status("Using custom negative prompt")
 
 
+# Boundary markers bracketing the Gemma prompt encode. PortOS reads these off
+# stderr (generateVideoHelpers.js) to tell a render that died INSIDE the encoder
+# from one that died in the denoise loop — only the former is worth relaunching
+# with a smaller prompt budget. Kept as module constants so the shape is
+# assertable from the test suite rather than duplicated as literals.
+PROMPT_ENCODE_BEGIN_MARKER = "STAGE:encode-prompt"
+PROMPT_ENCODE_END_MARKER = "STAGE:encode-prompt-done"
+
+
+def configure_gemma_max_length(max_length: int | None) -> None:
+    """Pin the Gemma prompt-encode sequence length for this run.
+
+    ltx-2-mlx reads ``LTX2_GEMMA_MAX_LENGTH`` at encode time
+    (``ltx_pipelines_mlx.utils.blocks.PromptEncoder.encode``, and again in
+    ``_base`` for Prompt Relay token ranges), defaulting to 1024. PortOS passes a
+    lowered value on its one-shot relaunch after the macOS Metal command-buffer
+    watchdog aborts the encoder, so this ASSIGNS rather than ``setdefault``s: an
+    explicit flag has to beat whatever the parent environment already carried.
+
+    No-op when the flag is absent, which leaves upstream's own default in force.
+    """
+    if max_length is None:
+        return
+    if max_length < 1:
+        raise SystemExit(f"--gemma-max-length must be a positive integer; got {max_length}.")
+    os.environ["LTX2_GEMMA_MAX_LENGTH"] = str(max_length)
+    emit_status(f"Gemma prompt-encode capped at {max_length} tokens")
+
+
+def install_prompt_encode_markers() -> None:
+    """Bracket every Gemma prompt encode with the two STAGE: markers.
+
+    ``PromptEncoder.encode`` is the single chokepoint every mode's prompt
+    conditioning routes through (``__call__`` fans out to it for both the single
+    and batched shapes), so patching it on the CLASS covers text/image/fflf/
+    extend/a2v/ic without touching a runner. Same shape as
+    ``install_ltx25_encoder_override`` above, and idempotent via the marker
+    attribute so a double install can't nest the brackets.
+
+    The end marker means "control left the encoder", not "the encode succeeded":
+    it is emitted from ``finally``, so a Python-level encode failure also clears
+    the phase. That biases PortOS AWAY from relaunching, which is the safe
+    direction — a hard Metal abort kills the process outright, so ``finally``
+    never runs and the phase correctly stays open.
+
+    Silently skipped on a pin that does not expose ``PromptEncoder``; PortOS then
+    simply never sees an encode phase and never arms the retry.
+    """
+    try:
+        from ltx_pipelines_mlx.utils.blocks import PromptEncoder
+    except ImportError:
+        return
+
+    original = getattr(PromptEncoder, "encode", None)
+    if original is None or getattr(original, "_portos_prompt_encode_markers", False):
+        return
+
+    @functools.wraps(original)
+    def encode(self, *args, **kwargs):
+        print(PROMPT_ENCODE_BEGIN_MARKER, file=sys.stderr, flush=True)
+        try:
+            return original(self, *args, **kwargs)
+        finally:
+            print(PROMPT_ENCODE_END_MARKER, file=sys.stderr, flush=True)
+
+    encode._portos_prompt_encode_markers = True
+    PromptEncoder.encode = encode
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="PortOS ltx-2-mlx bridge")
     p.add_argument("--mode", required=True, choices=["text", "image", "fflf", "extend", "a2v", "ic"])
@@ -469,6 +539,12 @@ def parse_args() -> argparse.Namespace:
                    help="rel_l1_thresh for TeaCache on extend/a2v Stage 1. Higher = more "
                         "skipping = faster but lower fidelity (~1.2x at 0.5, up to ~3x at 1.5). "
                         "Omit to use the pipeline default (0.5).")
+    p.add_argument("--gemma-max-length", type=int, default=None,
+                   help="Gemma prompt-encode sequence length (LTX2_GEMMA_MAX_LENGTH; "
+                        "upstream default 1024). PortOS lowers this on its one-shot "
+                        "relaunch after the macOS Metal command-buffer watchdog aborts "
+                        "the prompt encoder. An explicit value always wins over the "
+                        "ambient environment.")
     return p.parse_args()
 
 
@@ -1236,6 +1312,8 @@ def main() -> NoReturn:
     # before any model load). Each run_* sets pipe._pending_loras from this.
     args.user_lora_specs = parse_user_loras(args.user_loras)
     configure_negative_prompt(args.negative_prompt)
+    configure_gemma_max_length(args.gemma_max_length)
+    install_prompt_encode_markers()
 
     runners = {
         "text": run_text,
