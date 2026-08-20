@@ -34,6 +34,7 @@ import {
   TRELLIS2_HIGH_QUALITY_MIN_MEMORY_GB,
   selectTrellis2PipelineType,
   selectTrellis2TextureSize,
+  hfGatedRepoHelp,
 } from './trellis2.js';
 import { getTarget } from './targets.js';
 
@@ -1043,5 +1044,35 @@ describe('installTrellis2', () => {
     children[0].emit('close', 0); // step 1 finishes, but canceled flag stops step 2
     await expect(promise).rejects.toMatchObject({ code: 'TRELLIS2_INSTALL_CANCELED' });
     expect(i).toBe(1); // the second step never spawned
+  });
+});
+
+describe('hfGatedRepoHelp', () => {
+  it('names the target whose auth failed, not always TRELLIS.2', () => {
+    // It takes a target id, so it must not hardcode one product's name: a Pixal3D
+    // auth failure previously read "TRELLIS.2 could not download…".
+    expect(hfGatedRepoHelp('trellis2')).toContain('TRELLIS.2');
+    expect(hfGatedRepoHelp('pixal3dCuda')).toContain('Pixal3D (CUDA)');
+    expect(hfGatedRepoHelp('pixal3dCuda')).not.toContain('TRELLIS.2');
+  });
+
+  it('lists the gated repos to accept when the target has them', () => {
+    const help = hfGatedRepoHelp('trellis2');
+    expect(help).toContain('facebook/dinov3-vitl16-pretrain-lvd1689m');
+    expect(help).toContain('briaai/RMBG-2.0');
+    expect(help).toContain('Accept the terms');
+  });
+
+  it('gives rate-limit advice — not "accept the terms" — for a target with no gated repos', () => {
+    // Pixal3D loads DINOv3 from an ungated mirror, so there are no terms to accept;
+    // telling the user to accept terms for an unnamed model is advice they cannot act on.
+    const help = hfGatedRepoHelp('pixal3dCuda');
+    expect(help).toContain('rate limit');
+    expect(help).not.toContain('Accept the terms');
+    expect(help).toContain('HF_TOKEN');
+  });
+
+  it('degrades to a generic name for an unknown target id', () => {
+    expect(hfGatedRepoHelp('nope')).toContain('This model');
   });
 });

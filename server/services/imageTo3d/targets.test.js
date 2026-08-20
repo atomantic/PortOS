@@ -11,6 +11,7 @@ import {
   resolveTarget,
   listTargets,
   detectHostCapabilities,
+  renderOptionSupportFor,
 } from './targets.js';
 
 // A host that can run TRELLIS.2's local-MPS lane, and one that can't.
@@ -323,5 +324,22 @@ describe('detectHostCapabilities', () => {
     const caps = await detectHostCapabilities({ cuda: false, totalMemBytes: 8 * 1024 ** 3 });
     expect(caps.cudaProbe).toBe('absent');
     expect(caps.cudaVramGb).toBeNull();
+  });
+});
+
+describe('renderOptionSupportFor', () => {
+  it('reports the unsupported knobs a target declares', () => {
+    // Pixal3D's runner drops `steps`; the descriptor is what tells the UI to disable
+    // the control and `beginRender` to record null instead of the requested value.
+    expect(renderOptionSupportFor('pixal3dCuda')).toEqual({ steps: false });
+  });
+
+  it('returns null for a target that honors every knob, and for an unknown id', () => {
+    // Absent must mean "all supported", so existing targets need no descriptor entry
+    // and an unknown id can't be mistaken for "supports nothing".
+    expect(renderOptionSupportFor('trellis2')).toBeNull();
+    expect(renderOptionSupportFor('trellis2Cuda')).toBeNull();
+    expect(renderOptionSupportFor('nope')).toBeNull();
+    expect(renderOptionSupportFor(undefined)).toBeNull();
   });
 });

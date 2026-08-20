@@ -162,6 +162,37 @@ describe('image-to-3d routes', () => {
     expect(trellis2.probeMetalToolchain).not.toHaveBeenCalled();
   });
 
+  // FINDING: the render-option projection had no route coverage at all, and the client
+  // does `setRecord(next)` with the POST bodies — so a create/re-render response that
+  // omitted the field blanked the disabled Quality control until the next poll.
+  describe('supportsRenderOptions projection', () => {
+    const record = (target) => ({ id: 'image3d-1', target, status: 'ready', runs: [] });
+
+    it('projects the field onto GET, create, and re-render responses', async () => {
+      const app = makeApp();
+      models.getModel.mockResolvedValue(record('pixal3dCuda'));
+      models.createModel.mockResolvedValue(record('pixal3dCuda'));
+      models.startGeneration.mockResolvedValue(record('pixal3dCuda'));
+
+      const get = await request(app).get('/api/image-to-3d/models/image3d-1');
+      expect(get.body.supportsRenderOptions).toEqual({ steps: false });
+
+      const created = await request(app).post('/api/image-to-3d/models')
+        .send({ filename: 'example.png', name: 'x' });
+      expect(created.body.supportsRenderOptions).toEqual({ steps: false });
+
+      const regen = await request(app).post('/api/image-to-3d/models/image3d-1/generate').send({});
+      expect(regen.body.supportsRenderOptions).toEqual({ steps: false });
+    });
+
+    it('omits the field for a target that honors every knob', async () => {
+      // Absent must mean "all supported" so existing targets need no descriptor entry.
+      models.getModel.mockResolvedValue(record('trellis2'));
+      const res = await request(makeApp()).get('/api/image-to-3d/models/image3d-1');
+      expect(res.body.supportsRenderOptions).toBeUndefined();
+    });
+  });
+
   // The `degraded` projection is what the CLIENT actually renders (badge, help panel,
   // Repair button); `textureBake` above is retained only for API back-compat and has no
   // in-repo reader. These cases pin the live contract, which was previously untested.

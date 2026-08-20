@@ -26,12 +26,6 @@
 import { execFile } from './childProcess.js';
 
 /**
- * One CSV row per GPU: `<name>, <total VRAM in MiB>`. `nounits` strips the " MiB"
- * suffix so the column parses as a bare number. Verified against a real driver:
- * `0, NVIDIA GeForce RTX 3090, 24576, 596.36` for the fuller query — this narrower
- * one emits `NVIDIA GeForce RTX 3090, 24576`.
- */
-/**
  * Spawn `nvidia-smi` with `queryArgs` and triage the outcome, without interpreting the
  * rows. The three probes below differ only in their columns and their parser, so the
  * shell they share — the callback-to-promise wrapper and the `ENOENT` ⇒ real-negative
@@ -82,6 +76,12 @@ function vramGbFromMib(mib) {
   return Number.isFinite(vramMib) && vramMib > 0 ? Math.round(vramMib / 1024) : null;
 }
 
+/**
+ * One CSV row per GPU: `<name>, <total VRAM in MiB>`. `nounits` strips the " MiB"
+ * suffix so the column parses as a bare number. Verified against a real driver:
+ * `0, NVIDIA GeForce RTX 3090, 24576, 596.36` for the fuller query — this narrower
+ * one emits `NVIDIA GeForce RTX 3090, 24576`.
+ */
 export const NVIDIA_SMI_QUERY_ARGS = Object.freeze([
   '--query-gpu=name,memory.total',
   '--format=csv,noheader,nounits',

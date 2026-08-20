@@ -9,6 +9,7 @@ import {
   parseNvidiaSmiComputeCaps,
   detectCudaComputeCapability,
   NVIDIA_SMI_COMPUTE_CAP_QUERY_ARGS,
+  detectCudaUtilization,
 } from './cudaCapability.js';
 
 // Real output from `nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits`
@@ -247,5 +248,36 @@ describe('detectCudaComputeCapability', () => {
   it('says absent on exit 0 with no rows', async () => {
     const res = await detectCudaComputeCapability({ execFileImpl: smi('\n') });
     expect(res).toMatchObject({ status: 'absent', primaryComputeCap: null });
+  });
+});
+
+describe('detectCudaUtilization', () => {
+  it('parses utilization rows', async () => {
+    const res = await detectCudaUtilization({
+      execFileImpl: (_b, _a, _o, cb) => cb(null, 'NVIDIA L40S, 42, 1024, 46068\n'),
+    });
+    expect(res.status).toBe('available');
+    expect(res.gpus[0]).toEqual({
+      name: 'NVIDIA L40S', utilizationPercent: 42, memoryUsedMib: 1024, memoryTotalMib: 46068,
+    });
+  });
+
+  it('keeps its divergent ENOENT error contract', async () => {
+    // This probe reports the RAW error message on ENOENT where detectCudaGpus and
+    // detectCudaComputeCapability both report null. That asymmetry is pre-existing and
+    // is the sole reason the shared nvidia-smi shell carries a separate `rawError`
+    // field — pin it, so a later "simplification" that folds rawError into error can't
+    // change this payload with a green suite.
+    const err = Object.assign(new Error('spawn nvidia-smi ENOENT'), { code: 'ENOENT' });
+    const util = await detectCudaUtilization({ execFileImpl: (_b, _a, _o, cb) => cb(err) });
+    expect(util).toMatchObject({ status: 'absent', error: 'spawn nvidia-smi ENOENT' });
+    // The contrast that makes the divergence explicit:
+    expect((await detectCudaGpus({ execFileImpl: (_b, _a, _o, cb) => cb(err) })).error).toBeNull();
+  });
+
+  it('says unknown when nvidia-smi exists but fails', async () => {
+    const err = Object.assign(new Error('driver mismatch'), { code: 1 });
+    const res = await detectCudaUtilization({ execFileImpl: (_b, _a, _o, cb) => cb(err) });
+    expect(res).toMatchObject({ status: 'unknown', error: 'driver mismatch' });
   });
 });

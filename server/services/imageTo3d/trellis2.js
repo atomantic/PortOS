@@ -25,7 +25,12 @@ import { fileURLToPath } from 'node:url';
 import { spawn, execFile } from '../../lib/childProcess.js';
 import { rewriteGlbMaterialsOpaque } from './glbMaterials.js';
 import { getTarget } from './targets.js';
-import { textMatcher, runInstallSteps, runGenerateSubprocess } from './laneRunner.js';
+import {
+  textMatcher,
+  runInstallSteps,
+  runGenerateSubprocess,
+  probePythonModules,
+} from './laneRunner.js';
 import { renderOptionArgs } from './renderOptions.js';
 
 const HOME = homedir();
@@ -125,10 +130,6 @@ export const TRELLIS2_FALLBACK_BAKE_HELP = 'TRELLIS.2 is installed, but its Meta
   + 'install fetches the missing build dependencies and rebuilds the Metal backends — '
   + 'your downloaded models are kept.';
 
-/** The shell probe that reports which bake modules resolve inside the venv. */
-const BAKE_PROBE_SOURCE = 'import importlib.util as u,json,sys;'
-  + 'print(json.dumps({m: u.find_spec(m) is not None for m in sys.argv[1:]}))';
-
 /**
  * Probe whether the venv can take `generate.py`'s Metal texture-baking path.
  *
@@ -156,16 +157,17 @@ export async function probeTrellis2TextureBake({
   if (!exists(python)) {
     return { quality: 'unknown', modules: {}, missing: [], degradedQuality: [] };
   }
-  const probed = [...TRELLIS2_METAL_BAKE_MODULES, ...TRELLIS2_BAKE_QUALITY_MODULES];
-  // Subprocess boundary outside the request lifecycle — a probe failure must degrade
-  // to 'unknown', never reject into the route (CLAUDE.md child-process exception).
-  const modules = await new Promise((resolve) => {
-    execFileImpl(python, ['-c', BAKE_PROBE_SOURCE, ...probed], { timeout: 15000 }, (err, stdout) => {
-      if (err) return resolve(null);
-      const parsed = JSON.parse(String(stdout || '').trim() || 'null');
-      resolve(parsed && typeof parsed === 'object' ? parsed : null);
-    });
-  }).catch(() => null);
+  // Shared spawn + parse (`probePythonModules`). Was an inline copy whose `JSON.parse`
+  // ran INSIDE the execFile callback, where a throw escapes the enclosing promise —
+  // the `.catch()` fires on a later tick and cannot see it — and reaches the event
+  // loop, killing the process. Any non-JSON on stdout from a healthy venv (a
+  // `sitecustomize`/`.pth` print, a conda activation hook) turned a `/3d` page load
+  // into a server restart. The shared helper parses after the callback resolves.
+  const modules = await probePythonModules({
+    python,
+    modules: [...TRELLIS2_METAL_BAKE_MODULES, ...TRELLIS2_BAKE_QUALITY_MODULES],
+    execFileImpl,
+  });
 
   if (!modules) return { quality: 'unknown', modules: {}, missing: [], degradedQuality: [] };
 

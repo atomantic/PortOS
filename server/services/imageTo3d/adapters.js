@@ -172,23 +172,36 @@ export const TARGET_ADAPTERS = Object.freeze({
     }),
     async describeInstallState() {
       const probe = await probePixal3dModules();
+      // A REQUIRED module missing means the install did not COMPLETE — `setup.sh` is
+      // sourced and can exit 0 with a failed extension build, and `installPixal3dCuda`'s
+      // `verify` hook only checks the interpreter and the entrypoint, never the compiled
+      // extensions. So this is the only place that can surface it: without this, a
+      // half-built install reads plain "Ready" and the first render dies deep in the GLB
+      // exporter as an unclassified failure.
+      const incomplete = probe.missing?.length ? probe.missing : null;
       const nafFallback = probe.naf === 'unavailable';
+      // An incomplete install outranks a NAF fallback — it is the more severe problem,
+      // and the same Repair action addresses both, so only the worse one is reported.
+      const degraded = incomplete
+        ? {
+          label: 'incomplete install',
+          help: `Pixal3D is installed but ${incomplete.join(' and ')} did not build, so renders `
+            + 'will fail in the mesh exporter. Repair install rebuilds the CUDA extensions; '
+            + 'your downloaded models are kept.',
+          repairable: true,
+        }
+        : nafFallback
+          ? { label: 'NAF fallback', help: probe.help, repairable: true }
+          : null;
       return {
         fields: {
           // Narrow on purpose: shipping the whole probe made the wire shape
           // `target.modules.modules` (a raw find_spec map) with no consumer.
           naf: probe.naf,
-          // Same normalized shape the TRELLIS.2 adapter emits. Repair install re-runs
-          // the NATTEN build step, so this degradation genuinely is repairable —
-          // unlike the Metal-Toolchain-blocked case on the MPS lane.
-          ...(nafFallback ? {
-            degraded: { label: 'NAF fallback', help: probe.help, repairable: true },
-          } : {}),
+          // The normalized shape the client renders — see the adapter contract above.
+          ...(degraded ? { degraded } : {}),
         },
-        // Only the NAF fallback is worth interrupting the user for. A missing REQUIRED
-        // module means the install is broken rather than degraded, and the install
-        // route's own verify step already reports that.
-        warnings: nafFallback && probe.help ? [probe.help] : [],
+        warnings: degraded?.help ? [degraded.help] : [],
       };
     },
   }),
