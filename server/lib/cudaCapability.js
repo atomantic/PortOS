@@ -71,6 +71,99 @@ export async function detectCudaUtilization({ execFileImpl = execFile, timeoutMs
 }
 
 /**
+ * One CSV row per GPU: `<name>, <compute capability>, <total VRAM in MiB>` — e.g.
+ * `NVIDIA GeForce RTX 3090, 8.6, 24576`.
+ *
+ * **Deliberately a SECOND query rather than extra columns on `NVIDIA_SMI_QUERY_ARGS`.**
+ * `compute_cap` needs a reasonably modern `nvidia-smi`; asking an older driver for it
+ * fails the WHOLE query, which would turn every host with an old driver into a global
+ * `'unknown'` and take the working `local-cuda` lane down with it. Compute capability
+ * is only needed at Pixal3D install time (to build NATTEN for the right arch), so it
+ * gets its own probe whose failure is contained to that one installer.
+ */
+export const NVIDIA_SMI_COMPUTE_CAP_QUERY_ARGS = Object.freeze([
+  '--query-gpu=name,compute_cap,memory.total',
+  '--format=csv,noheader,nounits',
+]);
+
+/**
+ * Parse the compute-capability query into GPU descriptors. Pure.
+ *
+ * A row whose `compute_cap` column doesn't parse carries `computeCap: null` (the same
+ * "present but unmeasured" sentinel `parseNvidiaSmiGpus` uses for VRAM) rather than
+ * being dropped — a card we cannot classify is still a card, and callers gate on the
+ * null instead of being told there is no GPU.
+ *
+ * @param {string} stdout
+ * @returns {Array<{name: string, computeCap: string|null, vramGb: number|null}>}
+ */
+export function parseNvidiaSmiComputeCaps(stdout) {
+  const gpus = [];
+  for (const raw of String(stdout ?? '').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    const [name, cap, mib] = line.split(',').map((cell) => cell.trim());
+    if (!name) continue;
+    // `8.6` / `12.0` — a bare major.minor. Anything else is an unreadable column, not
+    // an arch we should hand to a compiler flag.
+    const computeCap = /^\d+\.\d+$/.test(cap || '') ? cap : null;
+    const vramMib = Number(mib);
+    const sized = Number.isFinite(vramMib) && vramMib > 0;
+    gpus.push({ name, computeCap, vramGb: sized ? Math.round(vramMib / 1024) : null });
+  }
+  return gpus;
+}
+
+/**
+ * Probe the CUDA compute capability of this host's GPUs. Always resolves, with the
+ * same three-state `status` contract as `detectCudaGpus` (see the file header).
+ *
+ * `primaryComputeCap` is the arch of the LARGEST card, not the highest arch: a render
+ * runs on one GPU and the lane picks the biggest one, so the build flag must describe
+ * that same card. Ties resolve to the first row. `null` when no row carried a
+ * readable arch — callers must treat that as "could not determine" and fall back to a
+ * compiler default, never guess an arch.
+ *
+ * @param {{execFileImpl?: Function, timeoutMs?: number}} [opts]
+ * @returns {Promise<{status: 'available'|'absent'|'unknown', gpus: Array<object>,
+ *                    primaryComputeCap: string|null, error: string|null}>}
+ */
+export async function detectCudaComputeCapability({ execFileImpl = execFile, timeoutMs = 8000 } = {}) {
+  const result = await new Promise((resolve) => {
+    execFileImpl(
+      'nvidia-smi',
+      [...NVIDIA_SMI_COMPUTE_CAP_QUERY_ARGS],
+      { timeout: timeoutMs },
+      (err, stdout) => resolve({ err, stdout: String(stdout ?? '') }),
+    );
+  }).catch((err) => ({ err, stdout: '' }));
+
+  if (result.err) {
+    if (result.err.code === 'ENOENT') {
+      return { status: 'absent', gpus: [], primaryComputeCap: null, error: null };
+    }
+    // Includes "old driver rejected --query-gpu=compute_cap" — genuinely unknown.
+    return {
+      status: 'unknown',
+      gpus: [],
+      primaryComputeCap: null,
+      error: result.err.message || 'nvidia-smi failed',
+    };
+  }
+
+  const gpus = parseNvidiaSmiComputeCaps(result.stdout);
+  if (!gpus.length) return { status: 'absent', gpus: [], primaryComputeCap: null, error: null };
+  // Largest card first (unsized cards sort last), then take its arch.
+  const ranked = [...gpus].sort((a, b) => (b.vramGb ?? -1) - (a.vramGb ?? -1));
+  return {
+    status: 'available',
+    gpus,
+    primaryComputeCap: ranked.find((g) => g.computeCap)?.computeCap ?? null,
+    error: null,
+  };
+}
+
+/**
  * Parse `nvidia-smi --query-gpu=name,memory.total` CSV output into GPU descriptors.
  * Pure, so the format is covered deterministically instead of depending on whatever
  * card the test host happens to have.

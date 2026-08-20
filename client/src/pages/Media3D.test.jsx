@@ -112,6 +112,7 @@ describe('Media3D — models & install', () => {
       targets: [target({
         installed: true,
         textureBake: { quality: 'fallback', missing: ['mtldiffrast'], help: 'Install the Metal Toolchain.' },
+        degraded: { label: 'degraded textures', help: 'Install the Metal Toolchain.', repairable: true },
       })],
     });
     renderAt();
@@ -130,12 +131,35 @@ describe('Media3D — models & install', () => {
           quality: 'fallback', missing: ['mtldiffrast'], repairable: false,
           blocker: 'requires-xcode', help: 'Install Xcode from the App Store.',
         },
+        degraded: {
+          label: 'degraded textures', help: 'Install Xcode from the App Store.', repairable: false,
+        },
       })],
     });
     renderAt();
     expect(await screen.findByText(/degraded textures/i)).toBeInTheDocument();
     expect(screen.getByText('Install Xcode from the App Store.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /install/i })).toBeNull();
+  });
+
+  // The degraded projection is normalized server-side, so a target degraded for an
+  // entirely different reason (Pixal3D with no NATTEN) renders through the same path
+  // with no per-target UI branch.
+  it('renders a non-TRELLIS degradation through the same badge and Repair button', async () => {
+    getImageTo3dTargets.mockResolvedValue({
+      targets: [target({
+        id: 'pixal3dCuda',
+        label: 'Pixal3D (CUDA)',
+        installed: true,
+        degraded: { label: 'NAF fallback', help: 'NATTEN is missing.', repairable: true },
+      })],
+    });
+    renderAt();
+    expect(await screen.findByText(/NAF fallback/i)).toBeInTheDocument();
+    expect(screen.getByText('NATTEN is missing.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /repair install/i })).toBeInTheDocument();
+    // Must NOT leak the other lane's copy.
+    expect(screen.queryByText(/metal toolchain/i)).toBeNull();
   });
 
   it('stays plain Ready when the bake probe could not determine anything', async () => {

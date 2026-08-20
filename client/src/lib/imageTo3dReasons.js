@@ -21,7 +21,12 @@ export const UNAVAILABLE_REASONS = Object.freeze({
   // its CUDA extensions against a POSIX toolchain and is Linux-only, so WSL2 is the
   // supported route — name it, since this blocker is the one the user can act on.
   'requires-linux-host': 'Requires a Linux host (use WSL2 on Windows)',
-  'insufficient-vram': 'Needs a 24 GB+ NVIDIA GPU',
+  // Deliberately carries NO GB figure. It used to read "Needs a 24 GB+ NVIDIA GPU"
+  // when every CUDA target shared that floor; `pixal3dCuda` runs from 12 GB, so a
+  // single number here would be wrong for one lane or the other. The per-target
+  // requirement travels to the client on the descriptor (`requires.minVramGb`) for a
+  // UI that wants to name it.
+  'insufficient-vram': 'This NVIDIA GPU has too little VRAM',
   // The probe itself failed — say so rather than claiming the GPU isn't there.
   'cuda-probe-failed': 'Could not detect this host’s GPU',
 });

@@ -175,8 +175,25 @@ describe('listTargets', () => {
 
   it('applies that hiding symmetrically, not just to the newer lane', () => {
     // The mirror of the case above: an NVIDIA box is no more able to grow an Apple
-    // Silicon chip than a Mac is to grow a GPU, so neither gets a dead card.
-    expect(listTargets(CUDA_BOX).map((t) => t.id)).toEqual(['trellis2Cuda']);
+    // Silicon chip than a Mac is to grow a GPU, so neither gets a dead card. Asserted
+    // as "no MPS target" rather than an exact list, so registering another CUDA target
+    // doesn't churn this test — the property under test is the hiding, not the roster.
+    const ids = listTargets(CUDA_BOX).map((t) => t.id);
+    expect(ids).not.toContain('trellis2');
+    expect(ids).toContain('trellis2Cuda');
+  });
+
+  it('lists the CUDA targets independently, per their diverged VRAM floors', () => {
+    // The two CUDA lanes no longer share a floor: TRELLIS.2 needs 24 GB, while
+    // Pixal3D's low-VRAM mode renders from 12. A 16 GB card must therefore see
+    // exactly one of them — the whole reason `insufficient-vram` stopped naming a
+    // single GB figure.
+    const small = listTargets({ ...CUDA_BOX, cudaVramGb: 16 }).map((t) => t.id);
+    expect(small).toContain('pixal3dCuda');
+    expect(small).not.toContain('trellis2Cuda');
+
+    const big = listTargets({ ...CUDA_BOX, cudaVramGb: 48 }).map((t) => t.id);
+    expect(big).toEqual(expect.arrayContaining(['trellis2Cuda', 'pixal3dCuda']));
   });
 
   it('still SHOWS a target when the blocker is one the user can fix', () => {

@@ -71,6 +71,14 @@ export const IMAGE_TO_3D_TARGETS = Object.freeze({
     // Community MPS port that makes the CUDA-only upstream run on Apple Silicon.
     port: 'https://github.com/shivampkumar/trellis-mac',
     weightsRepo: 'microsoft/TRELLIS.2-4B',
+    // Fresh-install copy for the shared install modal. Lives on the descriptor, not
+    // in the page, so registering a target does not mean editing UI prose — the page
+    // would otherwise show TRELLIS.2's text for every target.
+    installNotes:
+      'Cloning the TRELLIS.2 (Apple Silicon) port and installing its Python '
+      + 'environment (~15 GB on first run). Missing build dependencies (the Xcode '
+      + "Metal Toolchain, the mesh baker's Eigen submodule) are fetched first, so "
+      + 'textures bake at full quality.',
     // Optional user-actionable prerequisites. The target descriptor is the source
     // for both the API/UI notice and runner auth guidance, so new targets do not
     // need their gated Hugging Face dependencies duplicated in either consumer.
@@ -108,6 +116,11 @@ export const IMAGE_TO_3D_TARGETS = Object.freeze({
     }),
     upstream: 'https://github.com/microsoft/TRELLIS.2',
     weightsRepo: 'microsoft/TRELLIS.2-4B',
+    installNotes:
+      'Cloning microsoft/TRELLIS.2 with its CUDA extension submodules and running '
+      + 'upstream setup.sh, which builds flash-attn, nvdiffrast, nvdiffrec and cumesh '
+      + 'from source into a new `trellis2` conda environment (~15 GB, and the compile '
+      + 'takes a while).',
     // The 4B model conditions on DINOv3, which is gated. Unlike the MPS port this
     // lane does not use RMBG-2.0 (upstream's own example feeds the image straight
     // to the pipeline), so it is deliberately absent here rather than copied over.
@@ -117,6 +130,42 @@ export const IMAGE_TO_3D_TARGETS = Object.freeze({
         url: 'https://huggingface.co/facebook/dinov3-vitl16-pretrain-lvd1689m',
       }),
     ]),
+  }),
+  pixal3dCuda: Object.freeze({
+    id: 'pixal3dCuda',
+    label: 'Pixal3D (CUDA)',
+    description:
+      'TencentARC Pixal3D — pixel-aligned single image to a PBR-textured GLB mesh, run '
+      + 'on-device on an NVIDIA GPU. Built on the TRELLIS.2 backbone, with higher '
+      + 'geometry fidelity at a longer render time.',
+    executionLane: EXECUTION_LANE.LOCAL_CUDA,
+    outputKind: OUTPUT_KIND.GLB_MESH,
+    // The floor is DELIBERATELY lower than the TRELLIS.2 CUDA lane's 24 GB, not an
+    // oversight: upstream's merged low-VRAM mode loads one pipeline stage onto the GPU
+    // at a time, bringing peak to ~10-12 GB at 1024 (Pixal3D issue #12). Full-quality 1536
+    // wants up to ~36 GB, but that is a QUALITY tier the runner selects from the card's
+    // actual VRAM (`selectPixal3dRenderBudget`) — not an availability gate, because a
+    // 12 GB card still produces a real mesh. `diskGb` covers ~24 GB of Pixal3D weights
+    // plus its own TRELLIS.2 checkout and conda env.
+    requires: Object.freeze({
+      cuda: true,
+      minVramGb: 12,
+      linuxHost: true,
+      diskGb: 40,
+      python: '3.10',
+    }),
+    upstream: 'https://github.com/TencentARC/Pixal3D',
+    weightsRepo: 'TencentARC/Pixal3D',
+    installNotes:
+      'Creating a dedicated `pixal3d` conda environment (kept separate so Pixal3D\u2019s '
+      + 'pinned dependencies cannot disturb the TRELLIS.2 target), cloning both repos, '
+      + 'building the CUDA extensions and NATTEN for this GPU, then fetching ~24 GB of '
+      + 'weights. Budget ~40 GB of disk and a long first build.',
+    // No `gatedRepos`, and that is verified rather than assumed: `inference.py` loads
+    // DINOv3 from the ungated `camenduru/dinov3-vitl16-pretrain-lvd1689m` mirror and
+    // MoGe from `Ruicheng/moge-2-vitl`, so unlike `trellis2Cuda` nothing here needs
+    // terms accepted. A Hugging Face token still helps with download rate limits,
+    // which is why the adapter still resolves one.
   }),
 });
 
@@ -211,8 +260,17 @@ export const UNAVAILABLE_REASONS = Object.freeze({
   // Shown on a Windows host that HAS a qualifying card: upstream TRELLIS.2 builds
   // its CUDA extensions against a POSIX toolchain and is Linux-only, so WSL2 is the
   // supported route — name it, since this blocker is the one the user can act on.
+  // Caveat this label cannot express (it is per-CODE, not per-target): WSL2 gets the
+  // TRELLIS.2 lane running, but Pixal3D has a known NAF-upsampler driver fault there
+  // (Pixal3D issue #31). That one surfaces at render time via
+  // `PIXAL3D_CUDA_NAF_DEVICE_NOT_READY`, whose help text names native Linux.
   'requires-linux-host': 'Requires a Linux host (use WSL2 on Windows)',
-  'insufficient-vram': 'Needs a 24 GB+ NVIDIA GPU',
+  // Deliberately carries NO GB figure. It used to read "Needs a 24 GB+ NVIDIA GPU"
+  // when every CUDA target shared that floor; `pixal3dCuda` runs from 12 GB, so a
+  // single number here would be wrong for one lane or the other. The per-target
+  // requirement travels to the client on the descriptor (`requires.minVramGb`) for a
+  // UI that wants to name it.
+  'insufficient-vram': 'This NVIDIA GPU has too little VRAM',
   // The probe itself failed — say so rather than claiming the GPU isn't there.
   'cuda-probe-failed': 'Could not detect this host’s GPU',
 });

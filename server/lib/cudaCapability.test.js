@@ -6,6 +6,9 @@ import {
   getCudaCapability,
   resetCudaCapabilityCache,
   CUDA_UNKNOWN_RETRY_MS,
+  parseNvidiaSmiComputeCaps,
+  detectCudaComputeCapability,
+  NVIDIA_SMI_COMPUTE_CAP_QUERY_ARGS,
 } from './cudaCapability.js';
 
 // Real output from `nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits`
@@ -173,5 +176,76 @@ describe('getCudaCapability caching', () => {
     clock += CUDA_UNKNOWN_RETRY_MS * 100;
     await getCudaCapability({ execFileImpl: recovered, now });
     expect(recovered).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('parseNvidiaSmiComputeCaps', () => {
+  it('parses name, compute capability and VRAM per row', () => {
+    const gpus = parseNvidiaSmiComputeCaps(
+      'NVIDIA GeForce RTX 3090, 8.6, 24576\nNVIDIA L40S, 8.9, 46068\n',
+    );
+    expect(gpus).toEqual([
+      { name: 'NVIDIA GeForce RTX 3090', computeCap: '8.6', vramGb: 24 },
+      { name: 'NVIDIA L40S', computeCap: '8.9', vramGb: 45 },
+    ]);
+  });
+
+  it('keeps a card whose arch column is unreadable, with a null sentinel', () => {
+    // Present but unclassifiable is NOT the same as absent — dropping the row would
+    // under-report the host as having no GPU.
+    const gpus = parseNvidiaSmiComputeCaps('NVIDIA A100-SXM4-40GB, [N/A], 40960\n');
+    expect(gpus).toEqual([{ name: 'NVIDIA A100-SXM4-40GB', computeCap: null, vramGb: 40 }]);
+  });
+
+  it('ignores blank lines and rows with no name', () => {
+    expect(parseNvidiaSmiComputeCaps('\n\n  \n')).toEqual([]);
+    expect(parseNvidiaSmiComputeCaps(null)).toEqual([]);
+  });
+});
+
+describe('detectCudaComputeCapability', () => {
+  const smi = (stdout) => (_bin, _args, _opts, cb) => cb(null, stdout);
+
+  it('reports the arch of the LARGEST card, not the highest arch', async () => {
+    // A render runs on one GPU and the lane picks the biggest one, so the build flag
+    // must describe THAT card even when a smaller card has a newer arch.
+    const res = await detectCudaComputeCapability({
+      execFileImpl: smi('NVIDIA RTX 5090, 12.0, 32768\nNVIDIA L40S, 8.9, 46068\n'),
+    });
+    expect(res.status).toBe('available');
+    expect(res.primaryComputeCap).toBe('8.9');
+  });
+
+  it('queries compute_cap separately from the VRAM probe', () => {
+    // Folding compute_cap into NVIDIA_SMI_QUERY_ARGS would make an old driver fail the
+    // whole probe and take the working local-cuda lane down with it.
+    expect(NVIDIA_SMI_COMPUTE_CAP_QUERY_ARGS.join(' ')).toContain('compute_cap');
+    expect(NVIDIA_SMI_QUERY_ARGS.join(' ')).not.toContain('compute_cap');
+  });
+
+  it('says absent when nvidia-smi is not installed', async () => {
+    const err = Object.assign(new Error('nope'), { code: 'ENOENT' });
+    const res = await detectCudaComputeCapability({ execFileImpl: (_b, _a, _o, cb) => cb(err) });
+    expect(res).toMatchObject({ status: 'absent', primaryComputeCap: null });
+  });
+
+  it('says unknown — not absent — when an old driver rejects the query', async () => {
+    const err = Object.assign(new Error('invalid field'), { code: 1 });
+    const res = await detectCudaComputeCapability({ execFileImpl: (_b, _a, _o, cb) => cb(err) });
+    expect(res.status).toBe('unknown');
+    expect(res.primaryComputeCap).toBeNull();
+  });
+
+  it('reports null arch (never a guess) when no row carries a readable one', async () => {
+    const res = await detectCudaComputeCapability({
+      execFileImpl: smi('NVIDIA A100-SXM4-40GB, [N/A], 40960\n'),
+    });
+    expect(res.status).toBe('available');
+    expect(res.primaryComputeCap).toBeNull();
+  });
+
+  it('says absent on exit 0 with no rows', async () => {
+    const res = await detectCudaComputeCapability({ execFileImpl: smi('\n') });
+    expect(res).toMatchObject({ status: 'absent', primaryComputeCap: null });
   });
 });

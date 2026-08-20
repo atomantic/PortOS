@@ -89,14 +89,16 @@ function StatusBadge({ target }) {
     );
   }
   if (target.installed) {
-    // An installed target whose Metal texture bake is missing still renders — the
-    // geometry is fine — but the surface comes out scrambled, so "Ready" alone
-    // would be a lie. `quality:'unknown'` (the probe couldn't run) stays Ready
-    // rather than crying wolf about an install that is probably fine.
-    if (target.textureBake?.quality === 'fallback') {
+    // An installed-but-degraded target still renders — TRELLIS.2 with no Metal bake
+    // produces correct geometry with a scrambled surface; Pixal3D with no NATTEN
+    // falls back to DINO projection features — so "Ready" alone would be a lie. The
+    // server normalizes every such case into `degraded` (see the adapter contract),
+    // and a probe that could NOT run reports nothing here rather than crying wolf
+    // about an install that is probably fine.
+    if (target.degraded) {
       return (
         <span className="inline-flex items-center gap-1.5 text-xs font-medium text-port-warning">
-          <AlertTriangle className="w-3.5 h-3.5" /> Ready · degraded textures
+          <AlertTriangle className="w-3.5 h-3.5" /> Ready · {target.degraded.label}
         </span>
       );
     }
@@ -113,12 +115,12 @@ function TargetCard({ target, onInstall }) {
   // Install only applies to targets with a local install concept (installed is a
   // boolean); hosted targets report installed:null and are Ready when available.
   const canInstall = target.available && target.installed === false;
-  const degradedBake = target.textureBake?.quality === 'fallback';
-  // Repair install re-runs setup, which now downloads the Metal Toolchain itself
-  // (#3041) — but only offer it when the server says it can actually fix this. On a
-  // Command-Line-Tools-only host `repairable` is false and the remedy is installing
-  // Xcode, so a Repair button would just fail the same way and read as broken.
-  const canRepair = degradedBake && target.textureBake?.repairable !== false;
+  const degraded = target.degraded;
+  // Repair install re-runs setup — but only offer it when the server says it can
+  // actually fix this. On a Command-Line-Tools-only host `repairable` is false and the
+  // remedy is installing Xcode, so a Repair button would just fail the same way and
+  // read as broken.
+  const canRepair = !!degraded && degraded.repairable !== false;
 
   return (
     <div className="rounded-lg border border-port-border bg-port-card p-4">
@@ -164,9 +166,9 @@ function TargetCard({ target, onInstall }) {
           )}
         </div>
       </div>
-      {degradedBake && target.textureBake?.help && (
+      {degraded?.help && (
         <p className="mt-3 rounded border border-port-warning/40 bg-port-warning/10 p-2 text-[11px] leading-relaxed text-port-warning">
-          {target.textureBake.help}
+          {degraded.help}
         </p>
       )}
     </div>
@@ -520,15 +522,17 @@ export default function Media3D() {
         runtime={installTarget?.id}
         label={installTarget?.label}
         installUrlBase={installTarget ? `/api/image-to-3d/targets/${installTarget.id}/install` : undefined}
-        // Repairing an already-installed target must re-run setup.sh rather than
-        // short-circuit on "already installed" — that re-run is what rebuilds the Metal
-        // texture-baking backends once their build deps are present: the Metal Toolchain
-        // (#2952/#3041) and trellis2-apple's Eigen submodule, which upstream's setup.sh
-        // never fetches, so o_voxel could never compile without the apple-deps step.
-        params={installTarget?.textureBake?.quality === 'fallback' ? { repair: '1' } : undefined}
-        description={installTarget?.textureBake?.quality === 'fallback'
-          ? 'Fetching whichever build dependency is missing — the Xcode Metal Toolchain, the Eigen submodule the mesh baker compiles against, or both — then re-running the TRELLIS.2 setup to rebuild its Metal texture-baking backends. Your already-downloaded models are kept, and no password is required.'
-          : `Cloning the TRELLIS.2 (Apple Silicon) port and installing its Python environment (~15 GB on first run). Missing build dependencies (the Xcode Metal Toolchain, the mesh baker's Eigen submodule) are fetched first, so textures bake at full quality.${gatedRepoCount ? ` It also pulls ${gatedRepoCount} gated Hugging Face ${gatedRepoCount === 1 ? 'model' : 'models'} on first render — accept their terms and add a Hugging Face token above (see the note on the 3D page).` : ''}`}
+        // Repairing an already-installed target must re-run its setup rather than
+        // short-circuit on "already installed" — that re-run is what rebuilds whatever
+        // was missing (TRELLIS.2's Metal backends, Pixal3D's NATTEN kernels) now that
+        // its build deps are present.
+        params={installTarget?.degraded ? { repair: '1' } : undefined}
+        // Copy comes from the target descriptor, never hard-coded here: this modal is
+        // shared by every target, so TRELLIS.2-specific prose would misdescribe the
+        // others. A degraded target explains its own remedy via `degraded.help`.
+        description={installTarget?.degraded
+          ? `${installTarget.degraded.help} Re-running install keeps your already-downloaded models, and no password is required.`
+          : `${installTarget?.installNotes || ''}${gatedRepoCount ? ` It also pulls ${gatedRepoCount} gated Hugging Face ${gatedRepoCount === 1 ? 'model' : 'models'} on first render — accept their terms and add a Hugging Face token above (see the note on the 3D page).` : ''}`}
         onClose={() => setInstallTarget(null)}
         onComplete={() => { setInstallTarget(null); load(); }}
       />
