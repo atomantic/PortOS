@@ -143,16 +143,16 @@ describe('ENGINES backend registry', () => {
     const engine = ENGINES['minimax-music3'];
     expect(engine.executionProfile).toBe('cuda-bf16-auto-experimental');
     expect(engine.vramProfiles[engine.executionProfile]).toMatchObject({
-      label: 'CUDA BF16 (experimental automatic placement)',
-      minVramGb: null,
-      recommendedVramGb: null,
+      label: 'CUDA BF16 (automatic full-residency/offload placement)',
+      minVramGb: 20,
+      recommendedVramGb: 24,
     });
   });
 
-  it('keeps MiniMax profile support gated on technical checks plus full-length listening', () => {
+  it('records that MiniMax profile support has cleared technical checks plus full-length listening', () => {
     expect(ENGINES['minimax-music3']).toMatchObject({
       benchmarkGuide: MUSIC_RENDERER_BENCHMARK_GUIDE,
-      requiresFullLengthListening: true,
+      requiresFullLengthListening: false,
     });
     expect(MUSIC_RENDERER_BENCHMARK_GUIDE).toBe('docs/features/music-renderer-benchmarks.md');
   });
@@ -170,15 +170,27 @@ describe('VRAM readiness', () => {
       .toBe(MUSIC_VRAM_READINESS.UNKNOWN_SIZE);
   });
 
-  it('keeps the experimental CUDA execution profile unknown-size', () => {
+  it('reports the measured MiniMax CUDA execution profile as sufficient on a large card', () => {
     expect(resolveEngineVramReadiness('minimax-music3', {
       status: 'available', maxVramGb: 80,
     })).toMatchObject({
-      state: MUSIC_VRAM_READINESS.UNKNOWN_SIZE,
+      state: MUSIC_VRAM_READINESS.SUFFICIENT,
       executionProfile: 'cuda-bf16-auto-experimental',
-      minVramGb: null,
-      recommendedVramGb: null,
+      minVramGb: 20,
+      recommendedVramGb: 24,
       maxVramGb: 80,
+    });
+  });
+
+  it('reports the measured MiniMax CUDA execution profile as insufficient below its measured floor', () => {
+    expect(resolveEngineVramReadiness('minimax-music3', {
+      status: 'available', maxVramGb: 12,
+    })).toMatchObject({
+      state: MUSIC_VRAM_READINESS.INSUFFICIENT,
+      executionProfile: 'cuda-bf16-auto-experimental',
+      minVramGb: 20,
+      recommendedVramGb: 24,
+      maxVramGb: 12,
     });
   });
 });
@@ -527,14 +539,24 @@ describe('generateMusic backend selection', () => {
     expect(spawnCalls).toHaveLength(1);
   });
 
-  it('blocks MiniMax while its experimental CUDA profile has no measured VRAM floor', async () => {
+  it('runs MiniMax on a card meeting its measured VRAM floor', async () => {
+    await generateMusic({
+      prompt: 'warm cinematic pop',
+      lyrics: '[verse]\nExample words\n[outro]',
+      engine: 'minimax-music3',
+    });
+    expect(spawnCalls).toHaveLength(1);
+  });
+
+  it('blocks MiniMax on a card below its measured VRAM floor', async () => {
+    cuda.maxVramGb = 12;
     await expect(generateMusic({
       prompt: 'warm cinematic pop',
       lyrics: '[verse]\nExample words\n[outro]',
       engine: 'minimax-music3',
     })).rejects.toMatchObject({
       status: 503,
-      code: 'PIPELINE_MUSIC_VRAM_UNKNOWN',
+      code: 'PIPELINE_MUSIC_VRAM_INSUFFICIENT',
     });
     expect(spawnCalls).toHaveLength(0);
   });

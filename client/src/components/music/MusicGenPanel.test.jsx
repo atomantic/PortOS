@@ -215,7 +215,7 @@ describe('MusicGenPanel', () => {
         modelReady: true,
         vramState: 'sufficient',
         executionProfile: 'cuda-bf16-auto-experimental',
-        vramProfileLabel: 'CUDA BF16 (experimental automatic placement)',
+        vramProfileLabel: 'CUDA BF16 (automatic full-residency/offload placement)',
       })],
     });
     const track = {

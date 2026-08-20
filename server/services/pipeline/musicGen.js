@@ -137,20 +137,24 @@ export const MINIMAX_MUSIC3_MODELS = Object.freeze([
   },
 ]);
 
-// VRAM requirements belong to the execution profile, not the model name. The
-// experimental automatic profile has passed only a short smoke render; the
-// full-length benchmark and listening gate remain incomplete. Null floors keep
-// app-driven CUDA generation blocked until that evidence exists.
+// VRAM requirements belong to the execution profile, not the model name.
 export const MUSIC_VRAM_READINESS = Object.freeze({
   SUFFICIENT: 'sufficient',
   INSUFFICIENT: 'insufficient',
   UNKNOWN_SIZE: 'unknown-size',
 });
+// Measured on an RTX 3090 (24 GB): a fixed-seed, production-shaped full-length
+// render (default 60s ceiling, natural length 41s) passed the technical
+// benchmark (scripts/music_benchmark.py — clean WAV, negligible clipping, no
+// truncation) with 18.3-18.7 GB peak reserved VRAM, plus a positive full-length
+// listening review (issue #4359). `minVramGb` is set above the observed peak
+// for desktop/driver headroom; only this card class has been validated, so
+// `recommendedVramGb` matches it rather than claiming a lower comfortable tier.
 export const MINIMAX_MUSIC3_VRAM_PROFILES = Object.freeze({
   'cuda-bf16-auto-experimental': Object.freeze({
-    label: 'CUDA BF16 (experimental automatic placement)',
-    minVramGb: null,
-    recommendedVramGb: null,
+    label: 'CUDA BF16 (automatic full-residency/offload placement)',
+    minVramGb: 20,
+    recommendedVramGb: 24,
   }),
 });
 
@@ -329,7 +333,7 @@ export const ENGINES = Object.freeze({
     executionProfile: 'cuda-bf16-auto-experimental',
     vramProfiles: MINIMAX_MUSIC3_VRAM_PROFILES,
     benchmarkGuide: MUSIC_RENDERER_BENCHMARK_GUIDE,
-    requiresFullLengthListening: true,
+    requiresFullLengthListening: false,
   },
   'minimax-music3-mlx': {
     id: 'minimax-music3-mlx',
