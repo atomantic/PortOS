@@ -517,4 +517,46 @@ describe('federated media provider — image/video kinds', () => {
     expect(described.kind).toBe('image');
     expect(described.result).toMatchObject({ available: true, mimeType: 'image/png', sizeBytes: bytes.length });
   });
+
+  // ADR docs/decisions/2026-08-20-federated-visual-prompts.md draws the line at
+  // payload class, not at the prompt: a submitted job body may carry the prompt
+  // the peer is being asked to render, but a status/capability payload and the
+  // read-back job projection must never carry prompt or record content. A
+  // visual prompt is generated from project records, so a leak here would put
+  // universe canon and character names into a payload the ADR says is
+  // absolutely prompt-free.
+  it('keeps the prompt out of the status payload and the job projection', async () => {
+    const PROMPT_SENTINEL = 'a lighthouse at dawn over Example Bay';
+    state.settings = {
+      federation: { mediaProvider: imageConfig() },
+      imageGen: { local: { pythonPath: '/usr/bin/python3' } },
+    };
+    state.cachedRepos = new Set(['black-forest-labs/FLUX.1-dev']);
+    const created = await submitFederatedMediaJob({
+      callerId: 'peer-example',
+      config: imageConfig(),
+      input: { ...imageInput(), prompt: PROMPT_SENTINEL },
+      idempotencyKey: 'commission-image-privacy',
+    });
+    const carriesPrompt = (payload) => JSON.stringify(payload ?? null).includes(PROMPT_SENTINEL);
+
+    // Bypass probe: the detector only means something if it fires on a payload
+    // that genuinely does carry the prompt. The queued job params legitimately
+    // do — that is the local render input, not a wire payload.
+    expect(carriesPrompt(enqueueJob.mock.calls.at(-1)[0].params)).toBe(true);
+
+    expect(carriesPrompt(created.job)).toBe(false);
+    expect(carriesPrompt(await getFederatedMediaProviderStatus(imageConfig(), { kinds: ['image'] }))).toBe(false);
+    expect(carriesPrompt(await describeFederatedMediaJob('peer-example', created.job.id))).toBe(false);
+
+    const job = state.jobs.find((candidate) => candidate.id === created.job.id);
+    const filename = `${job.id}.png`;
+    writeFileSync(join(tempImagesPath, filename), Buffer.from('fake-png-bytes'));
+    Object.assign(job, {
+      status: 'completed',
+      completedAt: '2026-08-16T00:02:00.000Z',
+      result: { filename, engine: 'local', modelId: 'flux-dev' },
+    });
+    expect(carriesPrompt(await describeFederatedMediaJob('peer-example', job.id))).toBe(false);
+  });
 });

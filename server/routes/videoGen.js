@@ -326,6 +326,9 @@ const generateBodySchema = z.object({
   // the per-peer allowlist, so naming a peer here cannot route work to one the
   // local user never opted into. `mediaProviderEngine` names the provider-side
   // engine inside that allowlist (local generation registers as 'local').
+  // Naming a peer here sends this prompt to it; what may and may not cross is
+  // ADR docs/decisions/2026-08-20-federated-visual-prompts.md, which also fixes
+  // the extra constraint a future standing/unattended route has to satisfy.
   mediaProviderPeerId: z.string().guid().optional(),
   mediaProviderEngine: z.string().trim().min(1).max(80).optional(),
 });

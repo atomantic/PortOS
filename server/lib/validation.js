@@ -760,6 +760,8 @@ export const federatedMediaJobRoutingSchema = z.object({
 // canonical fixed-vocabulary instrumental prompt. Free-form prompt/lyrics can
 // contain PII and must remain on the consumer; URLs, paths, commands, provider
 // credentials, and unknown fields are excluded by the strict object as before.
+// Why audio is restricted here where image/video below is not:
+// docs/decisions/2026-08-20-federated-visual-prompts.md
 const federatedMediaAudioJobSubmissionSchema = federatedMediaJobRoutingSchema.extend({
   kind: z.literal('audio'),
   prompt: z.string().trim().min(1).max(8000),
@@ -781,15 +783,13 @@ const federatedMediaAudioJobSubmissionSchema = federatedMediaJobRoutingSchema.ex
   }
 });
 
-// Image/video prompts get no fixed-vocabulary rendering like audio's lyrics
-// ban: there is no closed taxonomy for arbitrary visual/motion content the
-// way audio has a finite style/mood/instrument alphabet, and a federation
-// peer is an authenticated, explicitly-registered instance (typically the
-// same user's own other machine) rather than an anonymous third party. The
-// PII line this project actually draws is status/capability payloads never
-// carrying prompt or record content (see the acceptance criteria on #4348) —
-// a submitted job body is not a status payload. Local input assets (init/
-// reference images, LoRAs) stay out of scope for this slice; see the PR body.
+// Image/video prompts cross as submitted, with no fixed-vocabulary rendering
+// like audio's. That boundary — a submitted job body is not a status payload,
+// status/capability payloads stay absolutely prompt-free, and unattended
+// routing does not widen either — is recorded in
+// docs/decisions/2026-08-20-federated-visual-prompts.md. Read it before
+// loosening or tightening what these two schemas accept. Local input assets
+// (init/reference images, LoRAs) are refused by the routes, not here.
 export const federatedMediaImageJobSubmissionSchema = federatedMediaJobRoutingSchema.omit({
   durationSec: true, durationMode: true,
 }).extend({

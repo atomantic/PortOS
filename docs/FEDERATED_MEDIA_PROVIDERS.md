@@ -113,6 +113,12 @@ the same user's other machine. The privacy line this project draws is that
 *status and capability payloads* never carry prompt or record content; a
 submitted job body is not a status payload.
 
+That boundary is recorded as ADR
+[federated visual prompts](./decisions/2026-08-20-federated-visual-prompts.md),
+which also states what a future standing (unattended) route may not do: fan out
+beyond the peer the operator named, fall back to a different peer on failure, or
+route to a peer that is not a tailnet host.
+
 ## Authentication and identity
 
 Every request requires both:
