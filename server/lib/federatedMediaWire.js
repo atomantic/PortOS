@@ -81,10 +81,43 @@ export function isFederatedMediaAudioPrompt(value) {
   }) === value;
 }
 
-// Wire v1 intentionally exposes audio only. Later media kinds get their own
-// versioned capability shape instead of being accepted against audio-specific
-// readiness fields by an older consumer.
-const mediaKindSchema = z.literal('audio');
+// Wire v1 started audio-only; image and video share the same capability/job/
+// result projection (duration and lyrics fields simply go null/false for
+// kinds they don't apply to) rather than forking a second schema shape.
+//
+// Backward compatibility for kinds an ALREADY-DEPLOYED older consumer cannot
+// parse is handled at the transport layer, not by narrowing this enum: an
+// older consumer's own copy of this file still validates `kinds`/`capabilities`
+// against a literal('audio') schema and can never be patched retroactively, so
+// GET /status only reports non-audio kinds when the caller explicitly opts in
+// via `?kinds=` (see normalizeRequestedMediaKinds below). A caller that never
+// asks — every already-shipped consumer — gets back the exact audio-only shape
+// it has always understood.
+export const KNOWN_MEDIA_KINDS = Object.freeze(['audio', 'image', 'video']);
+const mediaKindSchema = z.enum(KNOWN_MEDIA_KINDS);
+
+/**
+ * Parse a requested-kinds value (a comma-separated query string or an array)
+ * down to the known, deduplicated subset, defaulting to `['audio']` when the
+ * input is absent, empty, or names nothing this build understands. The
+ * default is deliberate: an older consumer never sends this parameter, so it
+ * always gets the original audio-only status projection.
+ */
+export function normalizeRequestedMediaKinds(raw) {
+  const list = typeof raw === 'string' ? raw.split(',') : Array.isArray(raw) ? raw : [];
+  const kinds = [...new Set(list.map((value) => (typeof value === 'string' ? value.trim() : '')))]
+    .filter((value) => KNOWN_MEDIA_KINDS.includes(value));
+  return kinds.length ? kinds : ['audio'];
+}
+
+// { mimeType -> file extension } for the result Content-Disposition header
+// and any provider-side filename validation. One source so a new result kind
+// can't drift the two.
+export const FEDERATED_MEDIA_RESULT_EXTENSION = Object.freeze({
+  'audio/wav': 'wav',
+  'image/png': 'png',
+  'video/mp4': 'mp4',
+});
 
 const federatedMediaCapabilitySchema = z.object({
   kind: mediaKindSchema,
@@ -123,14 +156,14 @@ export const federatedMediaProviderStatusSchema = z.object({
   generatedAt: z.string().datetime(),
   staleAfterMs: z.number().int().positive().max(300_000),
   status: z.enum(['ready', 'busy', 'unavailable']),
-  kinds: z.array(mediaKindSchema).max(1),
+  kinds: z.array(mediaKindSchema).max(KNOWN_MEDIA_KINDS.length),
   queue: federatedMediaQueueStatusSchema,
   capabilities: z.array(federatedMediaCapabilitySchema).max(300),
 });
 
 const federatedMediaResultSchema = z.object({
   available: z.literal(true),
-  mimeType: z.literal('audio/wav'),
+  mimeType: z.enum(Object.keys(FEDERATED_MEDIA_RESULT_EXTENSION)),
   sizeBytes: z.number().int().positive().max(4_294_967_296),
   sha256: z.string().regex(/^[a-f0-9]{64}$/),
   downloadUrl: z.string().trim().min(1).max(500),

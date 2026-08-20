@@ -9,8 +9,10 @@ import {
   federatedMediaIdempotencyKeySchema,
   federatedMediaJobParamsSchema,
   federatedMediaJobSubmissionSchema,
+  federatedMediaStatusQuerySchema,
   validateRequest,
 } from '../lib/validation.js';
+import { FEDERATED_MEDIA_RESULT_EXTENSION, normalizeRequestedMediaKinds } from '../lib/federatedMediaWire.js';
 import {
   authorizeFederatedMediaPeer,
   cancelFederatedMediaJob,
@@ -24,7 +26,9 @@ const router = Router();
 
 router.get('/status', asyncHandler(async (req, res) => {
   const { config } = await authorizeFederatedMediaPeer(req);
-  res.json(await getFederatedMediaProviderStatus(config));
+  const { kinds: kindsParam } = validateRequest(federatedMediaStatusQuerySchema, req.query);
+  const kinds = normalizeRequestedMediaKinds(kindsParam);
+  res.json(await getFederatedMediaProviderStatus(config, { kinds }));
 }));
 
 router.post('/jobs', asyncHandler(async (req, res) => {
@@ -54,9 +58,10 @@ router.get('/jobs/:id/result', asyncHandler(async (req, res, next) => {
   const { callerId } = await authorizeFederatedMediaPeer(req);
   const { id } = validateRequest(federatedMediaJobParamsSchema, req.params);
   const result = await getFederatedMediaResult(callerId, id);
+  const extension = FEDERATED_MEDIA_RESULT_EXTENSION[result.metadata.mimeType] || 'bin';
   res.set({
     'Cache-Control': 'private, no-store',
-    'Content-Disposition': `attachment; filename="${id}.wav"`,
+    'Content-Disposition': `attachment; filename="${id}.${extension}"`,
     'Content-Length': String(result.metadata.sizeBytes),
     'Content-Type': result.metadata.mimeType,
     'X-Content-SHA256': result.metadata.sha256,

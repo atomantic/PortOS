@@ -79,7 +79,9 @@ beforeEach(() => {
 
 describe('federated media consumer configuration', () => {
   it('defaults old peer records to disabled with no allowlisted models', () => {
-    expect(normalizePeerMediaProviderConfig({})).toEqual({ enabled: false, audioModels: [] });
+    expect(normalizePeerMediaProviderConfig({})).toEqual({
+      enabled: false, audioModels: [], imageModels: [], videoModels: [],
+    });
   });
 
   it('preserves future config/model fields while normalizing and de-duplicating known pairs', () => {
@@ -98,6 +100,8 @@ describe('federated media consumer configuration', () => {
       enabled: true,
       future: 'keep',
       audioModels: [{ engine: 'minimax-music3', modelId: 'minimax-music3', futureModel: 'keep-too' }],
+      imageModels: [],
+      videoModels: [],
     });
   });
 
@@ -154,10 +158,10 @@ describe('federated media provider discovery', () => {
     });
   });
 
-  it('rejects future media kinds against the audio-only wire-v1 shape', async () => {
+  it('rejects a media kind outside the known wire-v1 alphabet', async () => {
     const futureStatus = readyStatus({
-      kinds: ['image'],
-      capabilities: [{ ...readyStatus().capabilities[0], kind: 'image' }],
+      kinds: ['holo'],
+      capabilities: [{ ...readyStatus().capabilities[0], kind: 'holo' }],
     });
     peerFetch.mockResolvedValue(response(futureStatus));
 
@@ -166,6 +170,31 @@ describe('federated media provider discovery', () => {
       reason: 'invalid-wire-response',
       snapshot: null,
     });
+  });
+
+  it('only asks a peer for image/video status once this install allowlists a model for that kind', async () => {
+    peerFetch.mockResolvedValue(response(readyStatus()));
+
+    await probeFederatedMediaProvider(peer(), { now: NOW });
+    expect(peerFetch).toHaveBeenLastCalledWith(
+      'http://192.0.2.10:5555/api/federation/media/v1/status',
+      { signal: undefined },
+      expect.anything(),
+    );
+
+    const withImage = peer({
+      mediaProvider: {
+        enabled: true,
+        audioModels: [],
+        imageModels: [{ engine: 'local', modelId: 'flux-dev' }],
+      },
+    });
+    await probeFederatedMediaProvider(withImage, { now: NOW });
+    expect(peerFetch).toHaveBeenLastCalledWith(
+      'http://192.0.2.10:5555/api/federation/media/v1/status?kinds=image',
+      { signal: undefined },
+      expect.anything(),
+    );
   });
 });
 
@@ -223,5 +252,27 @@ describe('federated media provider selection', () => {
       code: 'MEDIA_PROVIDER_UNAVAILABLE',
       context: { reason: 'invalid-wire-response' },
     }));
+  });
+
+  it('keeps each media kind on its own allowlist — an audio-only peer cannot be selected for image', () => {
+    const probe = { state: 'ready', reason: null, snapshot: readyStatus() };
+    expect(() => assertFederatedMediaProviderSelection(
+      peer(), { kind: 'image', engine: 'local', modelId: 'flux-dev' }, probe, { now: NOW },
+    )).toThrow(expect.objectContaining({ code: 'MEDIA_PROVIDER_MODEL_NOT_ALLOWED', status: 403 }));
+  });
+
+  it('resolves an allowlisted image model against an image capability', () => {
+    const imageSelection = { kind: 'image', engine: 'local', modelId: 'flux-dev' };
+    const configured = peer({
+      mediaProvider: { enabled: true, audioModels: [], imageModels: [{ engine: 'local', modelId: 'flux-dev' }] },
+    });
+    const status = readyStatus({
+      kinds: ['image'],
+      capabilities: [{ ...readyStatus().capabilities[0], kind: 'image', engine: 'local', modelId: 'flux-dev' }],
+    });
+    const probe = { state: 'ready', reason: null, snapshot: status };
+
+    const resolved = assertFederatedMediaProviderSelection(configured, imageSelection, probe, { now: NOW });
+    expect(resolved.capability).toMatchObject(imageSelection);
   });
 });

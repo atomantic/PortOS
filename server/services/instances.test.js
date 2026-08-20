@@ -599,6 +599,8 @@ describe('instances.js', () => {
         enabled: false,
         futureField: 'keep',
         audioModels: [{ engine: 'minimax-music3', modelId: 'minimax-music3', futureModel: 'keep-too' }],
+        imageModels: [],
+        videoModels: [],
       });
       expect(fetch).not.toHaveBeenCalled();
     });

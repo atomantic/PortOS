@@ -79,7 +79,7 @@ describe('federated media routes', () => {
       .set('Idempotency-Key', 'commission-1').send(body);
     expect(created.status).toBe(202);
     expect(provider.submit).toHaveBeenCalledWith(expect.objectContaining({
-      callerId: 'peer-example', idempotencyKey: 'commission-1', input: body,
+      callerId: 'peer-example', idempotencyKey: 'commission-1', input: { ...body, kind: 'audio' },
     }));
 
     provider.replayed = true;
@@ -119,5 +119,53 @@ describe('federated media routes', () => {
     expect(response.headers['content-type']).toContain('audio/wav');
     expect(response.headers['x-content-sha256']).toBe('a'.repeat(64));
     expect(response.headers['content-disposition']).toContain(`${jobId}.wav`);
+  });
+
+  it('serves an image result under its own filename extension', async () => {
+    provider.result.mockResolvedValueOnce({
+      path: provider.resultPath,
+      metadata: { mimeType: 'image/png', sizeBytes: 4, sha256: 'b'.repeat(64) },
+    });
+    const response = await request(buildApp()).get(`/api/federation/media/v1/jobs/${jobId}/result`);
+    expect(response.headers['content-type']).toContain('image/png');
+    expect(response.headers['content-disposition']).toContain(`${jobId}.png`);
+  });
+
+  it('defaults GET /status to the audio-only kinds an unopted-in caller understands', async () => {
+    await request(buildApp()).get('/api/federation/media/v1/status');
+    expect(provider.status).toHaveBeenCalledWith(expect.anything(), { kinds: ['audio'] });
+  });
+
+  it('parses an explicit ?kinds= request into the known-kind subset', async () => {
+    await request(buildApp()).get('/api/federation/media/v1/status?kinds=audio,image,holo');
+    expect(provider.status).toHaveBeenCalledWith(expect.anything(), { kinds: ['audio', 'image'] });
+  });
+
+  it('defaults a kind-less submission to audio so an older consumer body keeps working', async () => {
+    const body = { engine: 'minimax-music3', modelId: 'minimax-music3', prompt: safePrompt };
+    await request(buildApp()).post('/api/federation/media/v1/jobs')
+      .set('Idempotency-Key', 'commission-legacy').send(body);
+    expect(provider.submit).toHaveBeenCalledWith(expect.objectContaining({
+      input: expect.objectContaining({ kind: 'audio' }),
+    }));
+  });
+
+  it('accepts an explicit image job submission', async () => {
+    const body = { kind: 'image', engine: 'local', modelId: 'flux-dev', prompt: 'a lighthouse at dawn' };
+    const response = await request(buildApp()).post('/api/federation/media/v1/jobs')
+      .set('Idempotency-Key', 'commission-image').send(body);
+    expect(response.status).toBe(202);
+    expect(provider.submit).toHaveBeenCalledWith(expect.objectContaining({
+      input: expect.objectContaining({ kind: 'image', prompt: 'a lighthouse at dawn' }),
+    }));
+  });
+
+  it('rejects an image submission carrying audio-only fields', async () => {
+    const response = await request(buildApp()).post('/api/federation/media/v1/jobs')
+      .set('Idempotency-Key', 'commission-image-bad').send({
+        kind: 'image', engine: 'local', modelId: 'flux-dev', prompt: 'a lighthouse at dawn', lyrics: 'nope',
+      });
+    expect(response.status).toBe(400);
+    expect(provider.submit).not.toHaveBeenCalled();
   });
 });

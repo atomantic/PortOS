@@ -9,6 +9,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import {
   federatedMediaProviderStatusSchema,
   inspectFederatedMediaStatusFreshness,
+  KNOWN_MEDIA_KINDS,
 } from '../lib/federatedMediaWire.js';
 import { peerFetch } from '../lib/peerHttpClient.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
@@ -17,6 +18,8 @@ import { readResponseJson } from '../lib/readResponseJson.js';
 export const DEFAULT_FEDERATED_MEDIA_PEER_CONFIG = Object.freeze({
   enabled: false,
   audioModels: Object.freeze([]),
+  imageModels: Object.freeze([]),
+  videoModels: Object.freeze([]),
 });
 
 const isRecord = (value) => value && typeof value === 'object' && !Array.isArray(value);
@@ -43,11 +46,13 @@ function sanitizeModels(models, { preserveUnknown = false } = {}) {
 export function normalizePeerMediaProviderConfig(peer) {
   const raw = peer?.mediaProvider;
   if (!isRecord(raw)) {
-    return { ...DEFAULT_FEDERATED_MEDIA_PEER_CONFIG, audioModels: [] };
+    return { ...DEFAULT_FEDERATED_MEDIA_PEER_CONFIG, audioModels: [], imageModels: [], videoModels: [] };
   }
   return {
     enabled: raw.enabled === true,
     audioModels: sanitizeModels(raw.audioModels),
+    imageModels: sanitizeModels(raw.imageModels),
+    videoModels: sanitizeModels(raw.videoModels),
   };
 }
 
@@ -64,6 +69,8 @@ export function mergePeerMediaProviderConfig(current, patch) {
     ...merged,
     enabled: merged.enabled === true,
     audioModels: sanitizeModels(merged.audioModels, { preserveUnknown: true }),
+    imageModels: sanitizeModels(merged.imageModels, { preserveUnknown: true }),
+    videoModels: sanitizeModels(merged.videoModels, { preserveUnknown: true }),
   };
 }
 
@@ -83,6 +90,24 @@ function responseState(response, body) {
   return ['unavailable', body?.code || `http-${response.status || 'error'}`];
 }
 
+// Only ask the peer for kinds this install actually has models allowlisted
+// for. Keep the request byte-identical to the original audio-only endpoint
+// (no query string) when nothing beyond audio is configured — this is the
+// consumer half of the same opt-in negotiation described in
+// normalizeRequestedMediaKinds (federatedMediaWire.js): a peer that has only
+// ever spoken wire-v1 audio never has to learn about the query param at all.
+function requestedKinds(config) {
+  const kinds = KNOWN_MEDIA_KINDS.filter((kind) => config[`${kind}Models`]?.length > 0);
+  return kinds.length ? kinds : ['audio'];
+}
+
+function statusUrl(peer, config) {
+  const base = `${peerBaseUrl(peer)}/api/federation/media/v1/status`;
+  const kinds = requestedKinds(config);
+  if (kinds.length === 1 && kinds[0] === 'audio') return base;
+  return `${base}?kinds=${kinds.join(',')}`;
+}
+
 /**
  * Fetch and sanitize one opted-in peer's live status. All failures become a
  * typed local projection instead of escaping into the background probe loop.
@@ -92,7 +117,7 @@ export async function probeFederatedMediaProvider(peer, { signal, now = Date.now
   if (!config.enabled) return probeResult(now, 'disabled', 'not-configured');
 
   const outcome = await peerFetch(
-    `${peerBaseUrl(peer)}/api/federation/media/v1/status`,
+    statusUrl(peer, config),
     { signal },
     peer,
   ).then((response) => ({ response }), (error) => ({ error }));
@@ -147,12 +172,14 @@ export function assertFederatedMediaProviderSelection(peer, selection, probe, { 
   if (!config.enabled) {
     rejectSelection('Peer is not enabled as a media provider', 'MEDIA_PROVIDER_NOT_CONFIGURED', 409);
   }
-  if (selection?.kind !== 'audio' || typeof selection.engine !== 'string' || typeof selection.modelId !== 'string') {
-    rejectSelection('Only an explicit audio engine and model can be selected', 'MEDIA_PROVIDER_SELECTION_INVALID', 400);
+  if (!KNOWN_MEDIA_KINDS.includes(selection?.kind)
+    || typeof selection.engine !== 'string' || typeof selection.modelId !== 'string') {
+    rejectSelection('Only an explicit media kind, engine, and model can be selected', 'MEDIA_PROVIDER_SELECTION_INVALID', 400);
   }
   const requested = { engine: selection.engine.trim(), modelId: selection.modelId.trim() };
+  const allowlist = config[`${selection.kind}Models`] || [];
   if (!requested.engine || !requested.modelId
-    || !config.audioModels.some((model) => modelKey(model) === modelKey(requested))) {
+    || !allowlist.some((model) => modelKey(model) === modelKey(requested))) {
     rejectSelection('Requested model is not allowlisted for this peer', 'MEDIA_PROVIDER_MODEL_NOT_ALLOWED', 403);
   }
 
@@ -185,7 +212,7 @@ export function assertFederatedMediaProviderSelection(peer, selection, probe, { 
   }
 
   const capability = snapshot.capabilities.find((candidate) =>
-    candidate.kind === 'audio'
+    candidate.kind === selection.kind
     && candidate.engine === requested.engine
     && candidate.modelId === requested.modelId,
   );

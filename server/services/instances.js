@@ -407,7 +407,7 @@ export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, a
       syncCategories: { ...DEFAULT_SYNC_CATEGORIES },
       // Consumer-side routing is explicit and machine-local. Enabling a peer
       // here never changes that peer's provider settings.
-      mediaProvider: { enabled: false, audioModels: [] },
+      mediaProvider: { enabled: false, audioModels: [], imageModels: [], videoModels: [] },
       consecutiveFailures: 0,
       nextProbeAt: null,
       directions: ['outbound']

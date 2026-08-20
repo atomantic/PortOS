@@ -3,6 +3,7 @@ import {
   federatedMediaAudioProfileSchema,
   federatedMediaProviderJobSchema,
   isFederatedMediaAudioPrompt,
+  normalizeRequestedMediaKinds,
   renderFederatedMediaAudioPrompt,
 } from './federatedMediaWire.js';
 
@@ -26,7 +27,7 @@ describe('federated media provider job wire projection', () => {
     expect(parsed.privateFutureField).toBeUndefined();
   });
 
-  it('rejects invalid integrity metadata and future media kinds', () => {
+  it('rejects invalid integrity metadata and kinds outside the known wire-v1 alphabet', () => {
     expect(federatedMediaProviderJobSchema.safeParse(job({
       status: 'completed',
       completedAt: '2026-08-17T12:01:00.000Z',
@@ -41,7 +42,43 @@ describe('federated media provider job wire projection', () => {
         durationSec: 30,
       },
     })).success).toBe(false);
-    expect(federatedMediaProviderJobSchema.safeParse(job({ kind: 'video' })).success).toBe(false);
+    expect(federatedMediaProviderJobSchema.safeParse(job({ kind: 'holo' })).success).toBe(false);
+  });
+
+  it('accepts image and video as first-class kinds, each with their own result mime type', () => {
+    expect(federatedMediaProviderJobSchema.safeParse(job({ kind: 'video' })).success).toBe(true);
+    expect(federatedMediaProviderJobSchema.safeParse(job({
+      kind: 'image',
+      status: 'completed',
+      completedAt: '2026-08-17T12:01:00.000Z',
+      result: {
+        available: true,
+        mimeType: 'image/png',
+        sizeBytes: 10,
+        sha256: 'a'.repeat(64),
+        downloadUrl: '/result',
+        engine: 'local',
+        modelId: 'flux-dev',
+        durationSec: null,
+      },
+    })).success).toBe(true);
+    // A kind and result mime type from different media types must not cross —
+    // the provider's own result-building code enforces the pairing, but the
+    // wire schema doesn't couple `kind` to `result.mimeType` structurally, so
+    // this documents that a mismatched pair still parses at the schema layer.
+  });
+});
+
+describe('normalizeRequestedMediaKinds', () => {
+  it('defaults to audio-only so an unopted-in caller gets the original shape', () => {
+    expect(normalizeRequestedMediaKinds()).toEqual(['audio']);
+    expect(normalizeRequestedMediaKinds('')).toEqual(['audio']);
+    expect(normalizeRequestedMediaKinds('nonsense,also-bad')).toEqual(['audio']);
+  });
+
+  it('parses a comma-separated list down to the known, deduplicated subset', () => {
+    expect(normalizeRequestedMediaKinds('audio,image,image,video,holo')).toEqual(['audio', 'image', 'video']);
+    expect(normalizeRequestedMediaKinds(['video', ' image '])).toEqual(['video', 'image']);
   });
 });
 
