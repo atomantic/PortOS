@@ -57,7 +57,9 @@ import {
   getSessionSkillContext,
   getPostReviewReps,
   getPostBenchmarkProtocol,
+  POST_BENCHMARK_PROTOCOL,
 } from './meatspacePost.js';
+import { generateCognitiveDrill } from './meatspacePostCognitive.js';
 
 describe('Quick POST config', () => {
   it('defaults a new install to the five-minute preset', async () => {
@@ -101,6 +103,91 @@ describe('Fixed POST benchmark protocol', () => {
         formId: 'a',
       },
     })).rejects.toMatchObject({ code: 'INVALID_BENCHMARK', status: 400 });
+  });
+});
+
+// A benchmark's score must be comparable across runs regardless of the
+// user's live scoring.weights config — otherwise two "compatible" (same
+// protocol/version/scorer) runs could land on different scales and the
+// benchmark trend (getPostProgress's series.benchmark) would silently
+// compare apples to oranges (issue #4442 codex review).
+describe('submitPostSession — benchmark scoring ignores config.scoring.weights', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  const FORM_A = POST_BENCHMARK_PROTOCOL.forms.find(f => f.formId === 'a');
+  const MATH_TASK_CONFIG = FORM_A.tasks.find(t => t.type === 'doubling-chain').config;
+  const COGNITIVE_TASK_CONFIG = FORM_A.tasks.find(t => t.type === 'task-switching').config;
+
+  function benchmarkFormATasks() {
+    const cognitiveDrill = generateCognitiveDrill('task-switching', COGNITIVE_TASK_CONFIG);
+    return [
+      {
+        module: 'mental-math',
+        type: 'doubling-chain',
+        config: MATH_TASK_CONFIG,
+        // All 8 answered correctly and fast — deterministically scores ~100.
+        questions: Array.from({ length: 8 }, () => ({ prompt: '2 x 2', expected: 4, answered: 4, responseMs: 100 })),
+        totalMs: 800,
+      },
+      {
+        module: 'cognitive',
+        type: 'task-switching',
+        config: COGNITIVE_TASK_CONFIG,
+        drillData: cognitiveDrill,
+        // Zero trials attempted — deterministically scores 0 (0% completion).
+        questions: [],
+        totalMs: 1000,
+      },
+    ];
+  }
+
+  function benchmarkSubmission() {
+    return {
+      modules: ['mental-math', 'cognitive'],
+      tasks: benchmarkFormATasks(),
+      benchmark: {
+        protocolId: POST_BENCHMARK_PROTOCOL.protocolId,
+        protocolVersion: POST_BENCHMARK_PROTOCOL.protocolVersion,
+        scorerVersion: POST_BENCHMARK_PROTOCOL.scorerVersion,
+        formId: 'a',
+      },
+    };
+  }
+
+  it('scores a plain unweighted mean of the two task scores (100 and 0 → 50)', async () => {
+    readJSONFile.mockImplementation((path, defaultValue) => Promise.resolve(defaultValue));
+    const session = await submitPostSession(benchmarkSubmission());
+    expect(session.score).toBe(50);
+  });
+
+  it('ignores a configured scoring.weights skew that would otherwise shift the score', async () => {
+    readJSONFile.mockImplementation((path, defaultValue) => {
+      const p = String(path);
+      if (p.includes('post-config')) {
+        // Heavily favor cognitive (score 0) over mental-math (score ~100) —
+        // if this leaked through, the blended score would collapse toward 0.
+        return Promise.resolve({ scoring: { weights: { 'mental-math': 0.1, cognitive: 5 } } });
+      }
+      return Promise.resolve(defaultValue);
+    });
+    const session = await submitPostSession(benchmarkSubmission());
+    // Same 50 as the uniform-weights case above — the skewed config never applied.
+    expect(session.score).toBe(50);
+  });
+
+  it('a non-benchmark session with the SAME tasks still honors configured weights', async () => {
+    readJSONFile.mockImplementation((path, defaultValue) => {
+      const p = String(path);
+      if (p.includes('post-config')) {
+        return Promise.resolve({ scoring: { weights: { 'mental-math': 0.1, cognitive: 5 } } });
+      }
+      return Promise.resolve(defaultValue);
+    });
+    const { benchmark: _benchmark, ...plainSubmission } = benchmarkSubmission();
+    const session = await submitPostSession(plainSubmission);
+    // (100*0.1 + 0*5) / (0.1+5) ≈ 1.96 → rounds to 2 — confirms the fixed-weights
+    // behavior above is benchmark-specific, not a global scoring regression.
+    expect(session.score).toBe(2);
   });
 });
 

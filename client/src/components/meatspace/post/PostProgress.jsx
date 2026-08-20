@@ -281,15 +281,31 @@ export default function PostProgress({ subtab, onBack }) {
           {benchmark && (
             <div className="grid grid-cols-1 gap-4 sm:gap-6">
               <div>
-                <TrendChart
-                  title={`Benchmark Trend — ${benchmark.protocolId} v${benchmark.protocolVersion}`}
-                  data={benchmarkScoreData}
-                  dataKey="score"
-                  domainRange={[0, 100]}
-                  stroke={chartColors.accent}
-                  chartColors={chartColors}
-                  emptyText="No compatible benchmark runs yet — start one from the launcher."
-                />
+                {/* TrendChart's line needs 2+ points to plot — a single
+                    compatible run is the common first-use case (issue #4442
+                    codex review), so show its score directly instead of
+                    falling into the chart's "no runs yet" empty state, which
+                    would misreport a real result as none. */}
+                {benchmarkScoreData.length === 1 ? (
+                  <div className="bg-port-card border border-port-border rounded-lg p-4">
+                    <h3 className="text-sm font-medium text-gray-400 mb-3">
+                      {`Benchmark Trend — ${benchmark.protocolId} v${benchmark.protocolVersion}`}
+                    </h3>
+                    <div className="text-sm text-gray-300">
+                      Latest compatible run: <span className="font-mono font-bold text-white">{benchmarkScoreData[0].score}</span> on {benchmarkScoreData[0].date}. Complete another benchmark to chart a trend.
+                    </div>
+                  </div>
+                ) : (
+                  <TrendChart
+                    title={`Benchmark Trend — ${benchmark.protocolId} v${benchmark.protocolVersion}`}
+                    data={benchmarkScoreData}
+                    dataKey="score"
+                    domainRange={[0, 100]}
+                    stroke={chartColors.accent}
+                    chartColors={chartColors}
+                    emptyText="No compatible benchmark runs yet — start one from the launcher."
+                  />
+                )}
                 {benchmark.excludedCount > 0 && (
                   <p className="text-xs text-gray-500 mt-2">
                     {benchmark.excludedCount} earlier benchmark {benchmark.excludedCount === 1 ? 'run' : 'runs'} excluded — different protocol/scoring version, not comparable to the current battery.

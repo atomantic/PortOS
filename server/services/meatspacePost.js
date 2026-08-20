@@ -511,7 +511,12 @@ export async function submitPostSession(sessionData) {
     cadence: sessionData.cadence || 'daily',
     modules: sessionData.modules,
     tasks: rescoredTasks,
-    score: computeSessionScore(rescoredTasks, config.scoring?.weights),
+    // Benchmark scoring is fixed by the protocol, never by the user's live
+    // scoring.weights config — otherwise two "compatible" (same protocol/
+    // version/scorer) runs scored under different weight configs would land
+    // in the same trend as though they were on one scale (issue #4442 codex
+    // review). Quick/Test/Train sessions keep the configured weights.
+    score: computeSessionScore(rescoredTasks, sessionData.benchmark ? undefined : config.scoring?.weights),
     tags: sessionData.tags || {},
     ...(sessionData.conditions && Object.keys(sessionData.conditions).length
       ? { conditions: sessionData.conditions }

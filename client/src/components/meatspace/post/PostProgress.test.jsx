@@ -137,6 +137,29 @@ describe('PostProgress — benchmark trend', () => {
     expect(screen.getByText(/post-foundation-battery v1/)).toBeInTheDocument();
   });
 
+  it('shows a single-point summary instead of the empty state for exactly one compatible run (issue #4442 codex review)', async () => {
+    getPostProgress.mockResolvedValue({
+      ...PROGRESS,
+      series: {
+        ...PROGRESS.series,
+        benchmark: {
+          protocolId: 'post-foundation-battery',
+          protocolVersion: 1,
+          scorerVersion: 'post-deterministic-v1',
+          byDay: [{ date: '2026-06-03', score: 88, sessions: 1 }],
+          excludedCount: 0,
+        },
+      },
+    });
+    renderProgress();
+    await waitFor(() => expect(screen.getByText(/Benchmark Trend/)).toBeInTheDocument());
+    // The one real result must be visible, not masked by the "no runs yet" text
+    // TrendChart's own multi-point chart would otherwise fall back to.
+    expect(screen.getByText('88')).toBeInTheDocument();
+    expect(screen.getByText(/2026-06-03/)).toBeInTheDocument();
+    expect(screen.queryByText(/No compatible benchmark runs yet/)).not.toBeInTheDocument();
+  });
+
   it('surfaces the excluded-legacy-runs note when excludedCount is set', async () => {
     getPostProgress.mockResolvedValue({
       ...PROGRESS,

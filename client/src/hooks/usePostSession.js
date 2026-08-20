@@ -173,6 +173,14 @@ export function usePostSession() {
   // the /post/session/:id results URL — so a saved session's URL === its run id.
   const [runId, setRunId] = useState(restored?.runId ?? null);
   const [conditions, setConditions] = useState(restored?.conditions ?? {}); // session conditions captured at launch
+  // Read-only carrier for a run resumed from a PRE-upgrade snapshot that still
+  // has the legacy free-text `tags` shape (e.g. a mid-session refresh spanning
+  // a deploy). Never written by this session — the launcher only ever produces
+  // `conditions` now — so it's captured once here and submitted verbatim under
+  // the legacy `tags` field on save, rather than silently dropped or coerced
+  // into `conditions`'s fixed enums (its free-text values wouldn't validate as
+  // enum members anyway).
+  const legacyTags = restored?.tags && !restored?.conditions ? restored.tags : null;
   const [sessionPlan, setSessionPlan] = useState(restored?.sessionPlan ?? null);
   const [benchmark, setBenchmark] = useState(restored?.benchmark ?? null);
   const [lastAnswer, setLastAnswer] = useState(null); // { correct, expected, answered } for training feedback
@@ -593,6 +601,7 @@ export function usePostSession() {
       modules,
       tasks: drillResults,
       conditions: finalConditions,
+      ...(legacyTags ? { tags: legacyTags } : {}),
       startedAt: new Date(runStartedAtRef.current).toISOString(),
       ...(sessionPlan ? { plan: sessionPlan } : {}),
       ...(benchmark ? { benchmark } : {}),

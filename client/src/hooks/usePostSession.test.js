@@ -927,6 +927,58 @@ describe('usePostSession — refresh-safe run + idempotent submit (issue #2098)'
     expect(result.current.drillResults).toHaveLength(1);
   });
 
+  it('preserves legacy free-text tags from a run resumed after an app upgrade (issue #4442 codex review)', async () => {
+    // A snapshot written by a PRE-upgrade build still has the old free-text
+    // `tags` shape and no `conditions` key at all — e.g. a mid-session
+    // refresh spanning a deploy. Those values must ride through to the
+    // submitted payload's legacy `tags` field, not be silently dropped.
+    sessionStorage.setItem('post.activeRun', JSON.stringify({
+      runId: '22222222-2222-4222-8222-222222222222', state: 'complete', isTraining: false,
+      drills: [{ type: 'doubling-chain', config: {}, timeLimitSec: 60 }],
+      currentDrillIndex: 0, currentDrill: null, currentQuestionIndex: 0, answers: [],
+      drillResults: [{ module: 'mental-math', type: 'doubling-chain', score: 80 }],
+      sessionScore: 80,
+      tags: { sleep: 'good', caffeine: '1 cup' },
+    }));
+    submitPostSession.mockResolvedValue({ id: 'session-legacy', score: 80 });
+
+    const { result } = renderHook(() => usePostSession());
+    expect(result.current.state).toBe('complete');
+
+    await act(async () => {
+      await result.current.saveSession({});
+    });
+
+    const payload = submitPostSession.mock.calls[0][0];
+    expect(payload.tags).toEqual({ sleep: 'good', caffeine: '1 cup' });
+    expect(payload.conditions).toEqual({});
+  });
+
+  it('does NOT resurrect legacy tags for a run resumed from a snapshot that already has conditions', async () => {
+    sessionStorage.setItem('post.activeRun', JSON.stringify({
+      runId: '33333333-3333-4333-8333-333333333333', state: 'complete', isTraining: false,
+      drills: [{ type: 'doubling-chain', config: {}, timeLimitSec: 60 }],
+      currentDrillIndex: 0, currentDrill: null, currentQuestionIndex: 0, answers: [],
+      drillResults: [{ module: 'mental-math', type: 'doubling-chain', score: 80 }],
+      sessionScore: 80,
+      // Both keys present (shouldn't normally happen, but conditions being
+      // set at all is the signal this is a post-upgrade snapshot) — tags
+      // must not be treated as the legacy carrier here.
+      tags: { sleep: 'good' },
+      conditions: { sleepQuality: 'good' },
+    }));
+    submitPostSession.mockResolvedValue({ id: 'session-new', score: 80 });
+
+    const { result } = renderHook(() => usePostSession());
+    await act(async () => {
+      await result.current.saveSession({});
+    });
+
+    const payload = submitPostSession.mock.calls[0][0];
+    expect(payload.tags).toBeUndefined();
+    expect(payload.conditions).toEqual({ sleepQuality: 'good' });
+  });
+
   it('clears the persisted run on reset (no stale run resumes next mount)', async () => {
     generatePostDrill.mockResolvedValue({
       type: 'doubling-chain', config: { startValue: 2, steps: 1 }, questions: [{ prompt: '2 x 2', expected: 4 }],
