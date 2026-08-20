@@ -1,6 +1,33 @@
 // @vitest-environment node
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
+
+// PMREM prefiltering needs a live WebGL context, which node has none of — so the
+// generator is the one piece stubbed out. Everything the module owns around it
+// (which scene it hands over, and releasing the generator and that scene
+// afterwards) is exercised for real.
+const pmrem = vi.hoisted(() => ({ renderers: [], calls: [], disposals: 0, sceneDisposals: [], fail: false }));
+vi.mock('three', async (importOriginal) => {
+  const actual = await importOriginal();
+  function FakePMREMGenerator(renderer) {
+    pmrem.renderers.push(renderer);
+    return {
+      fromScene(scene, sigma) {
+        // Spy here rather than after the call: the module disposes the scene on
+        // the way out, so this is the last moment its nodes are reachable.
+        scene.traverse((node) => {
+          if (node.geometry) pmrem.sceneDisposals.push(vi.spyOn(node.geometry, 'dispose'));
+          if (node.material) pmrem.sceneDisposals.push(vi.spyOn(node.material, 'dispose'));
+        });
+        pmrem.calls.push({ scene, sigma });
+        if (pmrem.fail) throw new Error('context lost');
+        return { texture: { isTexture: true }, dispose: vi.fn() };
+      },
+      dispose() { pmrem.disposals += 1; },
+    };
+  }
+  return { ...actual, PMREMGenerator: FakePMREMGenerator };
+});
 import {
   THREEJS_ENVIRONMENT_PRESETS as SERVER_PRESETS,
   DEFAULT_THREEJS_ENVIRONMENT as SERVER_DEFAULT,
@@ -109,8 +136,46 @@ describe('createSculptEnvironmentScene', () => {
 });
 
 describe('createSculptEnvironmentTarget', () => {
+  const renderer = { isWebGLRenderer: true };
+
+  beforeEach(() => {
+    pmrem.renderers.length = 0;
+    pmrem.calls.length = 0;
+    pmrem.sceneDisposals.length = 0;
+    pmrem.disposals = 0;
+    pmrem.fail = false;
+  });
+
   it('returns null without building anything for none or a missing renderer', () => {
     expect(createSculptEnvironmentTarget(null, 'studio')).toBeNull();
-    expect(createSculptEnvironmentTarget({}, 'none')).toBeNull();
+    expect(createSculptEnvironmentTarget(renderer, 'none')).toBeNull();
+    expect(pmrem.calls).toHaveLength(0);
+  });
+
+  // The TARGET, not its texture: the framebuffer behind it is only freed by
+  // WebGLRenderTarget.dispose(), so handing back the texture alone would leak it
+  // on every preset swap.
+  it('prefilters the preset scene and hands back the whole render target', () => {
+    const target = createSculptEnvironmentTarget(renderer, 'studio');
+
+    expect(pmrem.renderers).toEqual([renderer]);
+    expect(pmrem.calls).toHaveLength(1);
+    expect(pmrem.calls[0].scene).toBeInstanceOf(THREE.Scene);
+    expect(target.texture.isTexture).toBe(true);
+  });
+
+  it('releases the generator and the source scene, on success and on failure alike', () => {
+    createSculptEnvironmentTarget(renderer, 'studio');
+    expect(pmrem.disposals).toBe(1);
+    expect(pmrem.sceneDisposals.length).toBeGreaterThan(0);
+    for (const spy of pmrem.sceneDisposals) expect(spy).toHaveBeenCalled();
+
+    // A lost GL context still throws through to the caller — but not before the
+    // generator and the scene it was handed are released.
+    pmrem.fail = true;
+    pmrem.sceneDisposals.length = 0;
+    expect(() => createSculptEnvironmentTarget(renderer, 'neutral')).toThrow('context lost');
+    expect(pmrem.disposals).toBe(2);
+    for (const spy of pmrem.sceneDisposals) expect(spy).toHaveBeenCalled();
   });
 });

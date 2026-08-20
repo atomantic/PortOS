@@ -148,8 +148,13 @@ export function createSculptEnvironmentTarget(renderer, preset) {
   const scene = createSculptEnvironmentScene(preset);
   if (!scene) return null;
   const pmrem = new THREE.PMREMGenerator(renderer);
-  const target = pmrem.fromScene(scene, 0.04);
-  pmrem.dispose();
-  disposeSculptEnvironmentScene(scene);
-  return target;
+  // `finally`, not `catch`: a lost GL context still throws through to the
+  // caller, but the generator's own targets and the source scene are released
+  // either way instead of leaking on the failing path.
+  try {
+    return pmrem.fromScene(scene, 0.04);
+  } finally {
+    pmrem.dispose();
+    disposeSculptEnvironmentScene(scene);
+  }
 }
