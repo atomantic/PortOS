@@ -38,6 +38,7 @@ vi.mock('./shell.js', () => ({
   listAllSessions: vi.fn(() => []),
   writeToSession: vi.fn(),
   changeSessionDirectory: vi.fn(() => true),
+  getSession: vi.fn(() => null),
   resizeSession: vi.fn(),
   killSession: vi.fn(),
   unsubscribeSessionList: vi.fn(),
@@ -397,6 +398,19 @@ describe('socket.js — initSocket', () => {
 
     const err = socket.emitted.find(([ev]) => ev === 'shell:error');
     expect(err[1].sessionId).toBe('gone');
+  });
+
+  it('shell:cd says WHY when the target is a live agent run, not a dead session', () => {
+    const socket = makeSocket('shell-cd-run');
+    io.connect(socket);
+    shellService.changeSessionDirectory.mockReturnValueOnce(false);
+    shellService.getSession.mockReturnValueOnce({ external: true });
+
+    socket.handlers['shell:cd']({ sessionId: 'run-1', path: '/home/user/example-app' });
+
+    const err = socket.emitted.find(([ev]) => ev === 'shell:error');
+    expect(err[1].sessionId).toBe('run-1');
+    expect(err[1].error).toMatch(/live agent run/i);
   });
 
   // ===========================================================================

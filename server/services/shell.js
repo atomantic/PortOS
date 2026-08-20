@@ -590,11 +590,17 @@ export function submitToSession(sessionId, line) {
  *
  * @param {string} sessionId
  * @param {string} dirPath
- * @returns {boolean} false when the session is unknown
+ * @returns {boolean} false when the session is unknown or is an external TUI run
  */
 export function changeSessionDirectory(sessionId, dirPath) {
   const session = shellSessions.get(sessionId);
   if (!session) return false;
+  // An external (TUI-run) session has no shell reading that line: the bytes land in
+  // the agent as typed text and the trailing Enter posts them as a message. Refuse
+  // rather than type into someone else's run — socket.js turns this into an error the
+  // Shell page shows. Its `cwd` also stays pinned to the repo the RUN was spawned in,
+  // which is what workspaceContext groups runs by.
+  if (session.external) return false;
   if (!submitToSession(sessionId, buildCdCommand(dirPath, session.shell))) return false;
   // Track the cd optimistically so the Shell tab label and the Workspace Contexts
   // widget follow the session instead of staying pinned to its spawn directory.
@@ -602,13 +608,8 @@ export function changeSessionDirectory(sessionId, dirPath) {
   // come from the managed-apps list, so they exist. Asking the PTY for its REAL cwd
   // would need a per-platform probe plus a round-trip, which is not worth it for a
   // label; a rejected path just leaves the label wrong until the next cd.
-  // …but only for an interactive shell. An external (TUI-run) session has no shell
-  // reading that line — the bytes land in the agent as typed text — and its `cwd` is
-  // the repo the RUN was spawned in, which is what workspaceContext groups runs by.
-  if (!session.external) {
-    session.cwd = dirPath;
-    broadcastSessionList();
-  }
+  session.cwd = dirPath;
+  broadcastSessionList();
   return true;
 }
 

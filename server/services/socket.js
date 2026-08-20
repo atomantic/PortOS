@@ -684,7 +684,13 @@ export function initSocket(io) {
       const validated = validateSocketData(shellCdSchema, rawData, socket, 'shell:cd');
       if (!validated) return;
       if (!shellService.changeSessionDirectory(validated.sessionId, validated.path)) {
-        socket.emit('shell:error', { sessionId: validated.sessionId, error: 'Session not found' });
+        // Two different refusals: the session is gone, or it is a live agent run
+        // whose PTY would read the `cd` as a typed message rather than a command.
+        const isRun = shellService.getSession(validated.sessionId)?.external;
+        socket.emit('shell:error', {
+          sessionId: validated.sessionId,
+          error: isRun ? 'This is a live agent run, not a shell — cd is unavailable here' : 'Session not found'
+        });
       }
     });
 

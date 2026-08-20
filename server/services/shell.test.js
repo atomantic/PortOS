@@ -412,14 +412,15 @@ describe('changeSessionDirectory', () => {
     shell.unsubscribeSessionList(observer);
   });
 
-  it('leaves an external TUI run cwd pinned to the repo it was spawned in', () => {
-    // A cd typed at an agent TUI is text the agent reads, not a shell directory
-    // change — and workspaceContext groups runs by the repo they were spawned in.
+  it('refuses an external TUI run rather than typing the cd into the agent', () => {
+    // The run's PTY has no shell reading that line — it would post as a message —
+    // and workspaceContext groups runs by the repo they were spawned in.
     const sock = makeSocket('sock-ext');
     const pty = makeFakePty();
     shell.registerExternalSession('run-1', pty, { cwd: '/home/user/example', label: 'Claude Code TUI' });
 
-    expect(shell.changeSessionDirectory('run-1', '/home/user/example-app')).toBe(true);
+    expect(shell.changeSessionDirectory('run-1', '/home/user/example-app')).toBe(false);
+    expect(pty.write).not.toHaveBeenCalled();
     expect(shell.listAllSessions(sock).find(s => s.sessionId === 'run-1').cwd).toBe('/home/user/example');
   });
 
