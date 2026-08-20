@@ -56,8 +56,19 @@ describe('diffRunRecord', () => {
     expect(diff).toMatchObject({ finding: 'record-missing', repairable: false });
   });
 
-  it('does not report a missing record for a projection that never saw a spawn', () => {
+  it('reports a missing record even when the spawn event has aged out', () => {
+    // Retention drops the oldest events first, so a run whose `run.spawned` is
+    // gone but whose `run.finalized` is still in the ledger is the NORMAL shape
+    // of an old run — and a finalized run with no record on disk is exactly the
+    // drift worth naming.
+    const finalizeOnly = one([finalized(true)]);
+    expect(finalizeOnly.startedAt).toBeNull();
+    expect(diffRunRecord(finalizeOnly, null)).toMatchObject({ finding: 'record-missing' });
+  });
+
+  it('does not report a missing record for a projection with no status opinion', () => {
     const annotationOnly = one([{ kind: 'run.pr-verified', runId: 'r1', at: AT, data: { verified: true } }]);
+    expect(annotationOnly.status).toBe('unknown');
     expect(diffRunRecord(annotationOnly, null)).toBeNull();
   });
 

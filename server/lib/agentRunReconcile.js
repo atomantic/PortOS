@@ -83,10 +83,14 @@ export function diffRunRecord(projection, record) {
   if (!projection || isAgentFallbackKey(projection.id)) return null;
 
   if (!record) {
-    // Only worth reporting once the ledger believes the run actually started.
-    // A projection built solely from an annotation event (a PR verdict that
-    // outlived its run) has no missing record to speak of.
-    if (!projection.startedAt) return null;
+    // Reported for any projection that has an opinion about the run's state —
+    // NOT only one that saw the spawn. Retention can age out a `run.spawned`
+    // while the `run.finalized` that followed it is still in the ledger, and a
+    // finalized run with no record on disk is exactly the drift worth naming. A
+    // projection built solely from an annotation event (a PR verdict that
+    // outlived its run) folds to `unknown` and is skipped — it makes no claim
+    // that a record should exist.
+    if (projection.status === 'unknown') return null;
     return finding('record-missing', false, { ledgerStatus: projection.status });
   }
 

@@ -192,15 +192,21 @@ async function repairNow({ runId, limit } = {}) {
     // appended event is harmless (a real `run.finalized` outranks it in the
     // fold, and its key dedupes a later retry).
     const fresh = await readRecord(item.runId);
-    if (!planRunRecordRepair(projection, fresh, patch.reconciledAt)) {
+    // Re-planned against the fresh record and the SAME instant, so the plan's
+    // `endTime` — and therefore the event key already in the ledger — is
+    // unchanged, while any field the plan reads off the record (a partial error
+    // the run managed to write) comes from the current copy rather than the
+    // stale one.
+    const finalPatch = planRunRecordRepair(projection, fresh, patch.reconciledAt);
+    if (!finalPatch) {
       skipped += 1;
       continue;
     }
 
-    await atomicWrite(path, { ...fresh, ...patch });
-    console.log(`🩹 Closed run ${item.runId} from the event ledger: ledger read ${item.detail.ledgerStatus}, record now ${patch.success ? 'success' : 'failure'}`);
+    await atomicWrite(path, { ...fresh, ...finalPatch });
+    console.log(`🩹 Closed run ${item.runId} from the event ledger: ledger read ${item.detail.ledgerStatus}, record now ${finalPatch.success ? 'success' : 'failure'}`);
 
-    repaired.push({ runId: item.runId, from: item.detail.ledgerStatus, success: patch.success, endTime: patch.endTime });
+    repaired.push({ runId: item.runId, from: item.detail.ledgerStatus, success: finalPatch.success, endTime: finalPatch.endTime });
   }
 
   return { checkedAt: new Date().toISOString(), repaired, skipped, ...report };
