@@ -3,7 +3,9 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   TRELLIS2_REPO,
+  TRELLIS2_APPLE_REPO,
   trellis2Root,
+  trellis2AppleDepDir,
   trellis2VenvPython,
   trellis2GenerateScript,
   trellis2GenerateRunnerScript,
@@ -74,31 +76,35 @@ describe('isTrellis2Installed', () => {
 describe('buildInstallSteps', () => {
   it('clones the MPS port then runs its setup.sh when nothing is on disk', () => {
     const steps = buildInstallSteps(BASE, { exists: () => false });
-    expect(steps.map((s) => s.stage)).toEqual(['clone', 'setup']);
+    // apple-deps sits between the two for reasons both load-bearing: after the clone
+    // because `git clone <root>` refuses a non-empty root, before setup.sh because that
+    // is what makes upstream's `if [ ! -d deps/trellis2-apple ]` guard skip its clone.
+    expect(steps.map((s) => s.stage)).toEqual(['clone', 'apple-deps', 'setup']);
     expect(steps[0]).toMatchObject({ command: 'git' });
     expect(steps[0].args).toContain(TRELLIS2_REPO);
     expect(steps[0].args).toContain(trellis2Root(BASE));
-    expect(steps[1]).toMatchObject({ command: 'bash', args: ['setup.sh'], cwd: trellis2Root(BASE) });
+    expect(steps[2]).toMatchObject({ command: 'bash', args: ['setup.sh'], cwd: trellis2Root(BASE) });
   });
 
   // #3041: setup.sh compiles the Metal packages from .metal sources, so the
   // toolchain must land BEFORE it runs or those builds fail silently.
   it('leads with the Metal Toolchain step when the toolchain is missing but fetchable', () => {
     const steps = buildInstallSteps(BASE, { exists: () => false, installMetalToolchain: true });
-    expect(steps.map((s) => s.stage)).toEqual(['metal-toolchain', 'clone', 'setup']);
+    expect(steps.map((s) => s.stage)).toEqual(['metal-toolchain', 'clone', 'apple-deps', 'setup']);
     expect(steps[0]).toMatchObject({ command: 'xcodebuild', args: ['-downloadComponent', 'MetalToolchain'] });
   });
 
-  it('marks the toolchain step optional — a missing bake degrades output, it does not break it', () => {
-    const [toolchainStep] = buildInstallSteps(BASE, { exists: () => false, installMetalToolchain: true });
-    expect(toolchainStep.optional).toBe(true);
-    // The required steps stay required, or a real failure would be swallowed.
-    expect(buildInstallSteps(BASE, { exists: () => false }).every((s) => !s.optional)).toBe(true);
+  it('marks the bake-only steps optional — a missing bake degrades output, it does not break it', () => {
+    // Only the two bake-dependency steps degrade. The clone and setup.sh stay
+    // required, or a real failure would be swallowed.
+    const optionalStages = buildInstallSteps(BASE, { exists: () => false, installMetalToolchain: true })
+      .filter((s) => s.optional).map((s) => s.stage);
+    expect(optionalStages).toEqual(['metal-toolchain', 'apple-deps']);
   });
 
   it('omits the toolchain step by default (already present / not macOS / not fetchable)', () => {
     expect(buildInstallSteps(BASE, { exists: () => false }).map((s) => s.stage))
-      .toEqual(['clone', 'setup']);
+      .toEqual(['clone', 'apple-deps', 'setup']);
   });
 
   it('does not let a caller mutate the shared toolchain step template', () => {
@@ -114,8 +120,43 @@ describe('buildInstallSteps', () => {
     // begin at the idempotent setup.sh.
     const gitDir = join(trellis2Root(BASE), '.git');
     const steps = buildInstallSteps(BASE, { exists: (p) => p === gitDir });
-    expect(steps.map((s) => s.stage)).toEqual(['setup']);
-    expect(steps[0]).toMatchObject({ command: 'bash', args: ['setup.sh'], cwd: trellis2Root(BASE) });
+    expect(steps.map((s) => s.stage)).toEqual(['apple-deps', 'setup']);
+    expect(steps[1]).toMatchObject({ command: 'bash', args: ['setup.sh'], cwd: trellis2Root(BASE) });
+  });
+
+  // The bug behind #2952's long tail: o_voxel compiles against Eigen, which
+  // trellis2-apple carries as a submodule. Upstream's clone_dep never fetches it, the
+  // build dies on 'Eigen/Dense' not found, setup.sh swallows it, and the install lands
+  // permanently on the confetti fallback baker — unfixable by installing Xcode.
+  describe('apple-deps (the Eigen submodule upstream never fetches)', () => {
+    const appleGitDir = join(trellis2AppleDepDir(BASE), '.git');
+    const appleStep = (exists) => buildInstallSteps(BASE, { exists })
+      .find((s) => s.stage === 'apple-deps');
+
+    it('clones trellis2-apple WITH submodules when the dep is not on disk', () => {
+      const step = appleStep(() => false);
+      expect(step).toMatchObject({ command: 'git', optional: true });
+      expect(step.args).toContain('--recurse-submodules');
+      // Eigen's full history is ~117 MB against ~10 MB shallow, for zero benefit.
+      expect(step.args).toContain('--shallow-submodules');
+      expect(step.args).toContain(TRELLIS2_APPLE_REPO);
+      expect(step.args).toContain(trellis2AppleDepDir(BASE));
+      // Cloned into place, so there is nothing to cd into yet.
+      expect(step.cwd).toBeUndefined();
+    });
+
+    // Re-cloning over an existing checkout would abort the way the root clone does, so
+    // the repair path updates in place instead. `optional` matters most on THIS branch:
+    // it is the one a user reaches by clicking Repair, and Eigen is the install's only
+    // gitlab.com fetch — the likeliest to be blocked.
+    it('initializes submodules in place when an older setup.sh already cloned it', () => {
+      expect(appleStep((p) => p === appleGitDir)).toMatchObject({
+        command: 'git',
+        args: ['submodule', 'update', '--init', '--recursive', '--depth', '1'],
+        cwd: trellis2AppleDepDir(BASE),
+        optional: true,
+      });
+    });
   });
 });
 
@@ -688,7 +729,7 @@ describe('installTrellis2', () => {
   };
 
   it('runs each install step in order and emits stage + complete events', async () => {
-    const children = [makeChild(), makeChild()];
+    const children = [makeChild(), makeChild(), makeChild()];
     let i = 0;
     const spawnImpl = vi.fn(() => children[i++]);
     const events = [];
@@ -698,11 +739,16 @@ describe('installTrellis2', () => {
     expect(spawnImpl).toHaveBeenNthCalledWith(1, 'git', expect.arrayContaining(['clone']), {});
     children[0].emit('close', 0);
     await flush(); // let the await in the loop (through the retry wrapper) advance
-    expect(spawnImpl).toHaveBeenNthCalledWith(2, 'bash', ['setup.sh'], { cwd: trellis2Root(BASE) });
+    // step 2 (apple-deps) — the submodule-aware clone upstream's setup.sh cannot do.
+    expect(spawnImpl).toHaveBeenNthCalledWith(2, 'git', expect.arrayContaining(['--recurse-submodules']), {});
     children[1].emit('close', 0);
+    await flush();
+    expect(spawnImpl).toHaveBeenNthCalledWith(3, 'bash', ['setup.sh'], { cwd: trellis2Root(BASE) });
+    children[2].emit('close', 0);
     await expect(promise).resolves.toEqual({ ok: true });
 
-    expect(events.filter((e) => e.type === 'stage').map((e) => e.stage)).toEqual(['clone', 'setup']);
+    expect(events.filter((e) => e.type === 'stage').map((e) => e.stage))
+      .toEqual(['clone', 'apple-deps', 'setup']);
     expect(events.at(-1)).toMatchObject({ type: 'complete' });
   });
 
@@ -710,15 +756,17 @@ describe('installTrellis2', () => {
   // install must verify what landed and report it BEFORE the terminal `complete`
   // frame — which closes the client's EventSource (#2952).
   const runToCompletion = async (probeBake) => {
-    const children = [makeChild(), makeChild()];
+    const children = [makeChild(), makeChild(), makeChild()];
     let i = 0;
     const events = [];
     const { promise } = installTrellis2({
       base: BASE, spawnImpl: () => children[i++], onEvent: (e) => events.push(e), probeBake,
     });
-    children[0].emit('close', 0);
+    children[0].emit('close', 0); // clone
     await flush();
-    children[1].emit('close', 0);
+    children[1].emit('close', 0); // apple-deps
+    await flush();
+    children[2].emit('close', 0); // setup
     await promise;
     return events;
   };
@@ -726,7 +774,7 @@ describe('installTrellis2', () => {
   // #3041: the caller (the route) resolves the toolchain situation and passes a
   // plain boolean, so installTrellis2 keeps returning { promise, kill } synchronously.
   it('downloads the Metal Toolchain first when the caller says it is needed', async () => {
-    const children = [makeChild(), makeChild(), makeChild()];
+    const children = [makeChild(), makeChild(), makeChild(), makeChild()];
     let i = 0;
     const spawnImpl = vi.fn(() => children[i++]);
     const { promise } = installTrellis2({
@@ -741,14 +789,16 @@ describe('installTrellis2', () => {
     expect(spawnImpl).toHaveBeenNthCalledWith(2, 'git', expect.arrayContaining(['clone']), {});
     children[1].emit('close', 0);
     await flush();
-    children[2].emit('close', 0);
+    children[2].emit('close', 0); // apple-deps
+    await flush();
+    children[3].emit('close', 0); // setup
     await expect(promise).resolves.toEqual({ ok: true });
   });
 
   it('continues the install when the optional toolchain step fails, and still verifies', async () => {
     // Geometry is unaffected by a missing bake, so a host that cannot fetch the
     // toolchain must still end up with a working (if degraded) install.
-    const children = [makeChild(), makeChild(), makeChild()];
+    const children = [makeChild(), makeChild(), makeChild(), makeChild()];
     let i = 0;
     const events = [];
     const { promise } = installTrellis2({
@@ -760,9 +810,11 @@ describe('installTrellis2', () => {
     });
     children[0].emit('close', 1); // toolchain download failed
     await flush();
-    children[1].emit('close', 0);
+    children[1].emit('close', 0); // clone
     await flush();
-    children[2].emit('close', 0);
+    children[2].emit('close', 0); // apple-deps
+    await flush();
+    children[3].emit('close', 0); // setup
     await expect(promise).resolves.toEqual({ ok: true });
     expect(events.find((e) => e.stage === 'metal-toolchain' && /Optional step/.test(e.message || ''))).toBeTruthy();
     expect(events.find((e) => e.stage === 'verify')?.message).toContain('degraded');
@@ -771,7 +823,7 @@ describe('installTrellis2', () => {
   it('retries a TRANSIENT optional-step failure before giving up on it', async () => {
     // Optional-ness must not short-circuit the retry path — a dropped connection
     // during the toolchain download deserves the same retries as any other step.
-    const children = [makeChild(), makeChild(), makeChild(), makeChild()];
+    const children = [makeChild(), makeChild(), makeChild(), makeChild(), makeChild()];
     let i = 0;
     const spawnImpl = vi.fn(() => children[i++]);
     const { promise } = installTrellis2({
@@ -792,7 +844,9 @@ describe('installTrellis2', () => {
     expect(spawnImpl).toHaveBeenNthCalledWith(3, 'git', expect.arrayContaining(['clone']), {});
     children[2].emit('close', 0);
     await flush();
-    children[3].emit('close', 0);
+    children[3].emit('close', 0); // apple-deps
+    await flush();
+    children[4].emit('close', 0); // setup
     await expect(promise).resolves.toEqual({ ok: true });
   });
 
@@ -831,7 +885,7 @@ describe('installTrellis2', () => {
   });
 
   it('spawns install steps under the caller-supplied env, alongside each step cwd', async () => {
-    const children = [makeChild(), makeChild()];
+    const children = [makeChild(), makeChild(), makeChild()];
     let i = 0;
     const spawnImpl = vi.fn(() => children[i++]);
     const env = { PATH: '/usr/bin', HF_TOKEN: 'hf_test' };
@@ -841,8 +895,12 @@ describe('installTrellis2', () => {
     expect(spawnImpl).toHaveBeenNthCalledWith(1, 'git', expect.arrayContaining(['clone']), { env });
     children[0].emit('close', 0);
     await flush();
-    expect(spawnImpl).toHaveBeenNthCalledWith(2, 'bash', ['setup.sh'], { cwd: trellis2Root(BASE), env });
+    // Same for the apple-deps clone, which also runs without a cwd.
+    expect(spawnImpl).toHaveBeenNthCalledWith(2, 'git', expect.arrayContaining(['--recurse-submodules']), { env });
     children[1].emit('close', 0);
+    await flush();
+    expect(spawnImpl).toHaveBeenNthCalledWith(3, 'bash', ['setup.sh'], { cwd: trellis2Root(BASE), env });
+    children[2].emit('close', 0);
     await expect(promise).resolves.toEqual({ ok: true });
   });
 
@@ -865,22 +923,27 @@ describe('installTrellis2', () => {
 
   it('resumes at setup (no re-clone) when the repo is already on disk', async () => {
     // Re-running Install after a setup-stage failure must NOT re-clone into the
-    // existing root; it must go straight to the idempotent setup.sh.
-    const child = makeChild();
-    const spawnImpl = vi.fn(() => child);
+    // existing root; it must go straight to the apple-deps fix and the idempotent
+    // setup.sh.
+    const children = [makeChild(), makeChild()];
+    let i = 0;
+    const spawnImpl = vi.fn(() => children[i++]);
     const gitDir = join(trellis2Root(BASE), '.git');
     const { promise } = installTrellis2({
       base: BASE, spawnImpl, exists: (p) => p === gitDir, sleep: () => Promise.resolve(),
     });
-    expect(spawnImpl).toHaveBeenCalledTimes(1);
-    expect(spawnImpl).toHaveBeenNthCalledWith(1, 'bash', ['setup.sh'], { cwd: trellis2Root(BASE) });
-    child.emit('close', 0);
+    expect(spawnImpl).not.toHaveBeenCalledWith('git', expect.arrayContaining([TRELLIS2_REPO]), expect.anything());
+    expect(spawnImpl).toHaveBeenNthCalledWith(1, 'git', expect.arrayContaining(['--recurse-submodules']), {});
+    children[0].emit('close', 0);
+    await flush();
+    expect(spawnImpl).toHaveBeenNthCalledWith(2, 'bash', ['setup.sh'], { cwd: trellis2Root(BASE) });
+    children[1].emit('close', 0);
     await expect(promise).resolves.toEqual({ ok: true });
   });
 
   it('retries a transient network failure in place and succeeds on the retry', async () => {
-    // clone attempt 1 (transient fail) → clone attempt 2 (ok) → setup (ok)
-    const children = [makeChild(), makeChild(), makeChild()];
+    // clone attempt 1 (transient fail) → clone attempt 2 (ok) → apple-deps → setup
+    const children = [makeChild(), makeChild(), makeChild(), makeChild()];
     let i = 0;
     const spawnImpl = vi.fn(() => children[i++]);
     const events = [];
@@ -896,7 +959,9 @@ describe('installTrellis2', () => {
     expect(spawnImpl).toHaveBeenNthCalledWith(2, 'git', expect.arrayContaining(['clone']), {});
     children[1].emit('close', 0);
     await flush();
-    children[2].emit('close', 0); // setup
+    children[2].emit('close', 0); // apple-deps
+    await flush();
+    children[3].emit('close', 0); // setup
     await expect(promise).resolves.toEqual({ ok: true });
 
     expect(events.some((e) => e.type === 'log' && /retrying/i.test(e.message))).toBe(true);

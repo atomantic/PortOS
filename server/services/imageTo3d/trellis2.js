@@ -37,9 +37,26 @@ const LABEL = 'TRELLIS.2';
 /** The Apple Silicon MPS port of Microsoft TRELLIS.2. */
 export const TRELLIS2_REPO = 'https://github.com/shivampkumar/trellis-mac';
 
+/**
+ * The one upstream dep PortOS clones itself — not because it is the only one with a
+ * submodule (`deps/mtlmesh` has two), but because it is the only one whose submodule is
+ * load-bearing on Apple Silicon: `mtlmesh`'s `cubvh`/`mtlbvh` feed only its CUDA
+ * extensions, so they stay empty here harmlessly. See `trellis2AppleDepsStep`.
+ */
+export const TRELLIS2_APPLE_REPO = 'https://github.com/pedronaugusto/trellis2-apple.git';
+
 /** Clone/install root. `base` overridable for tests. */
 export function trellis2Root(base = join(HOME, '.portos')) {
   return join(base, 'trellis2');
+}
+
+/**
+ * Where `setup.sh` expects the `trellis2-apple` dep checkout. Its `deps/` is
+ * gitignored in the port, so this is never a submodule of `TRELLIS2_REPO` — it is a
+ * plain directory that upstream clones into, and that PortOS can therefore pre-fill.
+ */
+export function trellis2AppleDepDir(base) {
+  return join(trellis2Root(base), 'deps', 'trellis2-apple');
 }
 
 /** The venv Python the `setup.sh` script builds inside the clone. */
@@ -104,7 +121,7 @@ export const TRELLIS2_BAKE_QUALITY_MODULES = ['flex_gemm'];
 export const TRELLIS2_FALLBACK_BAKE_HELP = 'TRELLIS.2 is installed, but its Metal '
   + 'texture-baking backend is missing, so renders fall back to a low-resolution '
   + 'baker that produces correct geometry with a scrambled, speckled surface. Repair '
-  + 'install downloads the Xcode Metal Toolchain and rebuilds the Metal backends — '
+  + 'install fetches the missing build dependencies and rebuilds the Metal backends — '
   + 'your downloaded models are kept.';
 
 /** The shell probe that reports which bake modules resolve inside the venv. */
@@ -243,6 +260,55 @@ export const TRELLIS2_METAL_TOOLCHAIN_STEP = Object.freeze({
 });
 
 /**
+ * Pre-fetch `deps/trellis2-apple` **with its submodules**, which upstream's `setup.sh`
+ * cannot do for itself.
+ *
+ * `o_voxel` — one of the three modules `TRELLIS2_METAL_BAKE_MODULES` gates the Metal
+ * bake on — compiles against Eigen, which `trellis2-apple` carries as a git submodule
+ * (`o-voxel/third_party/eigen`). Upstream's `clone_dep` runs a bare
+ * `git clone --depth 1` with no `--recurse-submodules`, so `third_party/eigen` lands as
+ * an EMPTY directory and the build dies on `fatal error: 'Eigen/Dense' file not found`.
+ * `setup.sh` swallows that (`|| echo`) and still exits 0 — so the install "succeeds"
+ * while permanently stuck on the confetti fallback baker of
+ * `TRELLIS2_FALLBACK_BAKE_HELP`, and installing Xcode or the Metal Toolchain (what the
+ * warning used to tell users to do) could never fix it.
+ *
+ * PortOS fixes it from outside upstream: `clone_dep`'s guard is a bare
+ * `if [ ! -d "$DEPS_DIR/$dir" ]`, so a directory we cloned ourselves makes upstream skip
+ * its own clone, and its unconditional `o-voxel` install then succeeds on the first
+ * pass — no need to duplicate upstream's uv / `--no-build-isolation` flags here.
+ *
+ * Two shapes, because a repair has to fix an install that is already on disk:
+ *  - **absent** → clone it, submodules and all.
+ *  - **already cloned** by an older `setup.sh`, so Eigen is missing → initialize the
+ *    submodules in place. `setup.sh` re-runs the `o-voxel` install unconditionally, so
+ *    the rebuild follows in the same pass.
+ *
+ * `optional` for the same reason the toolchain step is: a host that cannot reach
+ * gitlab.com for Eigen must still be able to install and render, degraded, rather than
+ * fail the whole install.
+ *
+ * @param {string|undefined} base
+ * @param {(p: string) => boolean} exists
+ * @returns {{stage: string, command: string, args: string[], cwd?: string, optional: boolean}}
+ */
+function trellis2AppleDepsStep(base, exists) {
+  const dir = trellis2AppleDepDir(base);
+  const cloned = exists(join(dir, '.git'));
+  return {
+    stage: 'apple-deps',
+    command: 'git',
+    args: cloned
+      ? ['submodule', 'update', '--init', '--recursive', '--depth', '1']
+      : ['clone', '--depth', '1', '--recurse-submodules', '--shallow-submodules',
+        TRELLIS2_APPLE_REPO, dir],
+    // Only the in-place update needs a cwd; the clone creates `dir` itself.
+    ...(cloned ? { cwd: dir } : {}),
+    optional: true,
+  };
+}
+
+/**
  * The install as an ordered list of `{stage, command, args, cwd?}` steps: shallow-
  * clone the port, then run its `setup.sh` (which builds the venv + fetches weights).
  * Keeping the plan a data structure makes it assertable without running it.
@@ -262,6 +328,12 @@ export const TRELLIS2_METAL_TOOLCHAIN_STEP = Object.freeze({
  * from `probeMetalToolchain()`; a host that already has it, can't have it (Command
  * Line Tools only), or isn't macOS gets no step.
  *
+ * **The `apple-deps` step sits between the clone and `setup.sh`.** Both sides of that
+ * are load-bearing: AFTER the root clone, for the non-empty-target reason above (this
+ * step creates `<root>/deps/…`); and BEFORE `setup.sh`, because that is what makes
+ * upstream's `clone_dep` skip its own submodule-less clone. See
+ * `trellis2AppleDepsStep`.
+ *
  * @param {string} [base]
  * @param {{exists?: (p: string) => boolean, installMetalToolchain?: boolean}} [opts]
  * @returns {Array<{stage: string, command: string, args: string[], cwd?: string, optional?: boolean}>}
@@ -277,6 +349,7 @@ export function buildInstallSteps(base, { exists = existsSync, installMetalToolc
   if (!exists(join(root, '.git'))) {
     steps.push({ stage: 'clone', command: 'git', args: ['clone', '--depth', '1', TRELLIS2_REPO, root] });
   }
+  steps.push(trellis2AppleDepsStep(base, exists));
   steps.push({ stage: 'setup', command: 'bash', args: ['setup.sh'], cwd: root });
   return steps;
 }

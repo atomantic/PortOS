@@ -500,12 +500,14 @@ export default function Media3D() {
         label={installTarget?.label}
         installUrlBase={installTarget ? `/api/image-to-3d/targets/${installTarget.id}/install` : undefined}
         // Repairing an already-installed target must re-run setup.sh rather than
-        // short-circuit on "already installed" — that re-run is what rebuilds the
-        // Metal texture-baking backends once the Metal Toolchain is present (#2952).
+        // short-circuit on "already installed" — that re-run is what rebuilds the Metal
+        // texture-baking backends once their build deps are present: the Metal Toolchain
+        // (#2952/#3041) and trellis2-apple's Eigen submodule, which upstream's setup.sh
+        // never fetches, so o_voxel could never compile without the apple-deps step.
         params={installTarget?.textureBake?.quality === 'fallback' ? { repair: '1' } : undefined}
         description={installTarget?.textureBake?.quality === 'fallback'
-          ? 'Downloading the Xcode Metal Toolchain if it\'s missing, then re-running the TRELLIS.2 setup to rebuild its Metal texture-baking backends. Your already-downloaded models are kept, and no password is required.'
-          : `Cloning the TRELLIS.2 (Apple Silicon) port and installing its Python environment (~15 GB on first run). If the Xcode Metal Toolchain is missing it is downloaded first, so textures bake at full quality.${gatedRepoCount ? ` It also pulls ${gatedRepoCount} gated Hugging Face ${gatedRepoCount === 1 ? 'model' : 'models'} on first render — accept their terms and add a Hugging Face token above (see the note on the 3D page).` : ''}`}
+          ? 'Fetching whichever build dependency is missing — the Xcode Metal Toolchain, the Eigen submodule the mesh baker compiles against, or both — then re-running the TRELLIS.2 setup to rebuild its Metal texture-baking backends. Your already-downloaded models are kept, and no password is required.'
+          : `Cloning the TRELLIS.2 (Apple Silicon) port and installing its Python environment (~15 GB on first run). Missing build dependencies (the Xcode Metal Toolchain, the mesh baker's Eigen submodule) are fetched first, so textures bake at full quality.${gatedRepoCount ? ` It also pulls ${gatedRepoCount} gated Hugging Face ${gatedRepoCount === 1 ? 'model' : 'models'} on first render — accept their terms and add a Hugging Face token above (see the note on the 3D page).` : ''}`}
         onClose={() => setInstallTarget(null)}
         onComplete={() => { setInstallTarget(null); load(); }}
       />
