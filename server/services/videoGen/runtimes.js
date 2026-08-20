@@ -316,32 +316,81 @@ export async function isByovRuntimeReady(runtimeId) {
   // earlier successful probe.
   if (info.expectedRevision && !await isByovRuntimeCurrent(runtimeId)) return false;
   if (readyCache.get(runtimeId) === true) return true;
-  const probeOk = await runVenvProbe(info.venvPython, info.probeArgs || ['-c', info.importProbe]);
+  const probeOk = await runVenvProbe(
+    info.venvPython, info.probeArgs || ['-c', info.importProbe], `${runtimeId} readiness`,
+  );
   if (probeOk) readyCache.set(runtimeId, true);
   return probeOk;
 }
 
+// How much probe stderr to retain. The probes emit single diagnostic lines, so
+// a few KB is generous; an unbounded buffer on a child that wedges mid-spew is
+// its own failure mode. The TAIL is what we keep — Python prints the exception
+// last, under whatever traceback preceded it.
 const VENV_PROBE_STDERR_LIMIT = 4096;
 
+// Collapse captured probe stderr to one log line. An empty capture reports
+// itself explicitly rather than shortening the message: "the probe failed and
+// said nothing" must not read like "the probe was never run".
+const summarizeProbeStderr = (stderr) => stderr.replace(/\s+/g, ' ').trim() || '(no stderr output)';
+
 // Spawn one boolean probe in a BYOV venv. Bounded (30s SIGKILL) so a wedged
-// import can't pin a request open; any spawn/exit failure is `false`.
-function runVenvProbe(venvPython, args) {
+// import can't pin a request open; any spawn/exit/timeout failure is `false`.
+//
+// stderr is piped and echoed on every negative outcome because it is the only
+// channel these probes have: they name the exact import or seam that broke.
+// The resolve contract stays a boolean — the reason goes to the log, not the
+// return value. stdout stays ignored deliberately: nothing reads it, and an
+// unread pipe can fill and block the child.
+//
+// Two negative outcomes, deliberately different icons: a non-zero exit is the
+// probe ANSWERING — for the LoRA probe, "this checkout has no applicator" is
+// the documented normal verdict (see scripts/minimax_h3_lora_probe.py), cached
+// as a legitimate `false` — while a spawn error or timeout means it never
+// answered at all. Calling the first one a failure cries wolf on every healthy
+// install that predates the applicator.
+//
+// `label` names the runtime and which probe ran, so a status request that fans
+// out over several runtimes produces attributable lines. It must never carry a
+// filesystem path — venv paths embed the OS username.
+function runVenvProbe(venvPython, args, label) {
   return new Promise((resolve) => {
     let stderr = '';
+    let settled = false;
+    let timer = null;
+    const finish = (ok, icon, outcome) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (!ok) console.error(`${icon} ${label} probe ${outcome}: ${summarizeProbeStderr(stderr)}`);
+      resolve(ok);
+    };
     const child = spawn(venvPython, args, safeChildProcessOptions({
       stdio: ['ignore', 'ignore', 'pipe'],
     }));
-    child.stderr.on('data', (chunk) => {
-      stderr = `${stderr}${chunk}`.slice(-VENV_PROBE_STDERR_LIMIT);
-    });
-    const timer = setTimeout(() => { if (!child.killed) child.kill('SIGKILL'); resolve(false); }, 30000);
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      const detail = stderr.trim().replace(/\s+/g, ' ');
-      if (code !== 0 && detail) console.error(`❌ BYOV runtime probe failed: ${detail}`);
-      resolve(code === 0);
-    });
-    child.on('error', () => { clearTimeout(timer); resolve(false); });
+    // Decode as text on the stream, so a multi-byte character split across two
+    // chunks survives rather than becoming U+FFFD. Slice per chunk, not once at
+    // the end: that is what bounds the buffer.
+    child.stderr?.setEncoding?.('utf8');
+    child.stderr?.on('data', (chunk) => { stderr = `${stderr}${chunk}`.slice(-VENV_PROBE_STDERR_LIMIT); });
+    // These handlers run outside the request lifecycle, where a throw would
+    // take the process down. Nothing in them can throw today, and nothing that
+    // can may be added without its own guard.
+    //
+    // The timeout settles on the kill rather than waiting for `close`: the 30s
+    // ceiling on the caller is the whole point of the timer, and stderr is
+    // drained as it arrives, so what we hold is already everything the child
+    // flushed.
+    timer = setTimeout(() => {
+      if (!child.killed) child.kill('SIGKILL');
+      finish(false, '❌', 'timed out after 30s');
+    }, 30000);
+    child.on('close', (code, signal) => finish(
+      code === 0, '⚠️', signal ? `was killed by ${signal}` : `exited ${code}`,
+    ));
+    // Node's spawn-error message interpolates the full interpreter path, which
+    // embeds the OS username — the code alone says what went wrong.
+    child.on('error', (err) => finish(false, '❌', `could not be spawned (${err?.code || 'unknown error'})`));
   });
 }
 
@@ -369,7 +418,7 @@ export async function resolveByovRuntimeLoraCapable(runtimeId) {
   if (cached !== undefined) return cached;
   if (!existsSync(info.venvPython)) return false;
   return loraProbeFlight.run(runtimeId, async () => {
-    const capable = await runVenvProbe(info.venvPython, info.loraProbeArgs);
+    const capable = await runVenvProbe(info.venvPython, info.loraProbeArgs, `${runtimeId} LoRA-capability`);
     loraCapabilityCache.set(runtimeId, capable);
     return capable;
   });

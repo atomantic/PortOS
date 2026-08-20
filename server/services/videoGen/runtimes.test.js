@@ -40,16 +40,28 @@ const statusChild = (stdout) => {
   return child;
 };
 
-// Boolean probe child (no stdout), for the LoRA capability probe.
+// Boolean venv-probe child. stdout is never piped by runVenvProbe, so this has
+// none; stderr is, because that is where the probes write their diagnostics.
 const exitChild = (code, stderr = '') => {
   const child = new EventEmitter();
-  child.stderr = new EventEmitter();
+  child.stderr = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
   child.kill = vi.fn();
   queueMicrotask(() => {
-    if (stderr) child.stderr.emit('data', Buffer.from(stderr));
+    // The real stream is switched to utf8, so it hands over decoded strings.
+    if (stderr) child.stderr.emit('data', stderr);
     child.emit('close', code);
   });
   return child;
+};
+
+// Run `probe`, returning every console.error line it produced. Spying rather
+// than asserting on a mock keeps the real console quiet during the suite.
+const captureProbeLogs = async (probe) => {
+  const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const result = await probe();
+  const lines = spy.mock.calls.map(([line]) => line);
+  spy.mockRestore();
+  return { result, lines };
 };
 
 beforeEach(() => {
@@ -92,6 +104,78 @@ describe('isByovRuntimeReady', () => {
   });
 });
 
+describe('venv probe diagnostics', () => {
+  it('pipes stderr (never stdout) and logs the failing probe’s own diagnostic', async () => {
+    runtimeMocks.spawn.mockImplementationOnce(() => exitChild(
+      1, 'ModuleNotFoundError: No module named "diffusers.modular_pipelines.minimax_h3"\n',
+    ));
+
+    const { result, lines } = await captureProbeLogs(() => isByovRuntimeReady('minimax_h3_cuda'));
+
+    expect(result).toBe(false);
+    expect(runtimeMocks.spawn.mock.calls[0][2].stdio).toEqual(['ignore', 'ignore', 'pipe']);
+    // Decoding on the stream is what keeps a multi-byte character split across
+    // two chunks from arriving as U+FFFD.
+    expect(runtimeMocks.spawn.mock.results[0].value.stderr.setEncoding).toHaveBeenCalledWith('utf8');
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('minimax_h3_cuda readiness');
+    expect(lines[0]).toContain('exited 1');
+    expect(lines[0]).toContain('No module named "diffusers.modular_pipelines.minimax_h3"');
+    expect(lines[0]).not.toContain('\n');
+  });
+
+  it('says so explicitly when a failing probe wrote nothing at all', async () => {
+    runtimeMocks.spawn.mockImplementationOnce(() => exitChild(1));
+
+    const { result, lines } = await captureProbeLogs(() => isByovRuntimeReady('minimax_h3_cuda'));
+
+    // "Failed and said nothing" must not go silent — that reads identically to
+    // "the probe never ran", which is the state this whole change removes.
+    expect(result).toBe(false);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('exited 1');
+    expect(lines[0]).toContain('no stderr output');
+  });
+
+  it('logs and resolves false when the venv python cannot be spawned', async () => {
+    runtimeMocks.spawn.mockImplementationOnce(() => {
+      const child = new EventEmitter();
+      child.stderr = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
+      child.kill = vi.fn();
+      // Node's real message interpolates the interpreter path, as here.
+      const err = Object.assign(new Error('spawn /home/example/.portos/x/.venv/bin/python3 ENOENT'), {
+        code: 'ENOENT',
+      });
+      queueMicrotask(() => child.emit('error', err));
+      return child;
+    });
+
+    const { result, lines } = await captureProbeLogs(() => isByovRuntimeReady('minimax_h3_cuda'));
+
+    expect(result).toBe(false);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('could not be spawned (ENOENT)');
+    // The label already says which runtime this was; the venv path would only
+    // add the OS username to the log.
+    expect(lines[0]).not.toContain('/home/example');
+  });
+
+  it('attributes the line to the LoRA probe without calling its verdict a fault', async () => {
+    runtimeMocks.spawn.mockImplementationOnce(() => exitChild(
+      1, 'ModuleNotFoundError: No module named "minimax_h3_mlx.lora"\n',
+    ));
+
+    const { result, lines } = await captureProbeLogs(() => resolveByovRuntimeLoraCapable('minimax_h3'));
+
+    // A checkout with no applicator is the documented normal answer, not a
+    // broken install — so the reason is surfaced, but not under the failure icon.
+    expect(result).toBe(false);
+    expect(lines[0]).toContain('minimax_h3 LoRA-capability');
+    expect(lines[0]).toContain('No module named "minimax_h3_mlx.lora"');
+    expect(lines[0].startsWith('❌')).toBe(false);
+  });
+});
+
 // H3's DiT is quantized, so whether a LoRA can ride along is a property of the
 // installed checkout, not the model entry — hence a probe rather than a
 // hardcoded predicate. The gate must fail CLOSED until that probe has answered.
@@ -104,7 +188,10 @@ describe('MiniMax H3 LoRA capability', () => {
 
   it('reports not capable when the pinned checkout has no LoRA applicator', async () => {
     runtimeMocks.spawn.mockImplementationOnce(() => exitChild(1));
-    await expect(resolveByovRuntimeLoraCapable('minimax_h3')).resolves.toBe(false);
+    // Captured, not asserted on: the verdict now writes a line, and letting it
+    // through would print a scary-looking probe log during an unrelated test.
+    const { result } = await captureProbeLogs(() => resolveByovRuntimeLoraCapable('minimax_h3'));
+    expect(result).toBe(false);
     expect(byovRuntimeLoraCapable('minimax_h3')).toBe(false);
   });
 
@@ -121,7 +208,8 @@ describe('MiniMax H3 LoRA capability', () => {
     expect(runtimeMocks.spawn.mock.calls[0][2].stdio).toEqual(['ignore', 'ignore', 'pipe']);
     expect(message).toContain('missing quant-aware applicator');
     expect(message).not.toContain('\n');
-    expect(message.length).toBeLessThanOrEqual(4096 + '❌ BYOV runtime probe failed: '.length);
+    // Bound the retained tail, not the label prefix, which varies per runtime.
+    expect(message.length).toBeLessThanOrEqual(4096 + 128);
   });
 
   it('caches both outcomes so the probe runs once per process', async () => {
