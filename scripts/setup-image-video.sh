@@ -442,8 +442,15 @@ if [[ "$INSTALL_MINIMAX_H3" == "1" ]]; then
   fi
   echo "📦 Syncing pinned MiniMax H3 MLX packages..."
   "$MINIMAX_H3_UV" pip sync --python "$MINIMAX_H3_PY" "$MINIMAX_H3_LOCK"
-  if ! "$MINIMAX_H3_PY" "${SCRIPT_DIR}/minimax_h3_runtime_probe.py" "$MINIMAX_H3_DIR" 2>/dev/null; then
-    echo "❌ MiniMax H3 MLX synced but its pipeline import failed." >&2
+  # --verify-seams is Install/Repair-only strictness: it also asserts the encoder
+  # seams generate_minimax_h3.py patches, which the readiness probe deliberately
+  # skips (a moved seam must not mark a text-only-capable runtime unready). That
+  # message is then the one thing telling a pin bump apart from a broken sync, so
+  # capture stderr instead of discarding it and show the tail — the exception
+  # line, under whatever traceback preceded it.
+  if ! MINIMAX_H3_PROBE_OUT="$("$MINIMAX_H3_PY" "${SCRIPT_DIR}/minimax_h3_runtime_probe.py" "$MINIMAX_H3_DIR" --verify-seams 2>&1)"; then
+    echo "❌ MiniMax H3 MLX synced but its runtime probe failed." >&2
+    printf '%s\n' "$MINIMAX_H3_PROBE_OUT" | tail -n 5 | sed "s/^/   /" >&2
     echo "   Use Repair / Upgrade from the Video Gen runtime panel to retry." >&2
     exit 1
   fi

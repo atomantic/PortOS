@@ -39,6 +39,10 @@ const importRunner = [
   'spec = importlib.util.spec_from_file_location("generate_minimax_h3", script)',
   'runner = importlib.util.module_from_spec(spec)',
   'spec.loader.exec_module(runner)',
+  // The pin facts live in the module BOTH the runner and the install-time probe
+  // import (_minimax_h3_pin.py), so the cases that stand in for a moved pin have
+  // to rebind them there — rebinding a name on the runner would patch nothing.
+  'pin = sys.modules["_minimax_h3_pin"]',
 ].join('\n');
 
 // validate_args reads the namespace argparse produces, so every field it touches
@@ -85,21 +89,21 @@ const stubPin = (classBody, preamble = []) => [
 // The merge correction guards itself with `inspect.getsource`, which needs a
 // real file — so that stand-in is written out and imported rather than declared
 // inline. Each `encodeBody` entry is a PYTHON expression evaluated against the
-// already-imported runner, so the line under test comes from the runner's own
+// already-imported pin module, so the line under test comes from the shipped
 // constant instead of a copy that could drift from it. The result is carried as
 // a COMMENT: the stub only has to look like the pin to `getsource`, not run.
 const filePin = (encodeBody) => [
   'import atexit, importlib.util, shutil, sys, tempfile, types',
   'temp = tempfile.mkdtemp()',
   'atexit.register(shutil.rmtree, temp, True)',
-  'pin = Path(temp) / "pinned_text_encoder.py"',
-  'pin.write_text("\\n".join([',
+  'pin_file = Path(temp) / "pinned_text_encoder.py"',
+  'pin_file.write_text("\\n".join([',
   '    "class MiniMaxH3TextEncoder:",',
   '    "    def encode(self, prompt, images=None):",',
   ...encodeBody.map((expr) => `    "        # " + ${expr},`),
   '    "        return (\'pinned\', prompt, images)",',
   ']))',
-  'spec = importlib.util.spec_from_file_location("minimax_h3_mlx.text_encoder", pin)',
+  'spec = importlib.util.spec_from_file_location("minimax_h3_mlx.text_encoder", pin_file)',
   'module = importlib.util.module_from_spec(spec)',
   'sys.modules["minimax_h3_mlx"] = types.ModuleType("minimax_h3_mlx")',
   'sys.modules["minimax_h3_mlx.text_encoder"] = module',
@@ -715,9 +719,9 @@ describe.skipIf(!pyBin)('generate_minimax_h3.py', () => {
   // the pinned body with that one line swapped, so it is guarded twice: by the
   // line it replaces, and by a digest over the whole body it copied.
   it('corrects a pin that still merges by broadcast, and hands its text-only path back', () => {
-    const output = runPython(`${importRunner}\n${filePin(["runner.PINNED_BROADCAST_MERGE"])}\n${[
+    const output = runPython(`${importRunner}\n${filePin(["pin.PINNED_BROADCAST_MERGE"])}\n${[
       'import hashlib, inspect',
-      'runner.PINNED_ENCODE_DIGEST = hashlib.sha256(',
+      'pin.PINNED_ENCODE_DIGEST = hashlib.sha256(',
       '    inspect.getsource(MiniMaxH3TextEncoder.encode).encode("utf-8")',
       ').hexdigest()',
       'runner.install_vision_embed_merge()',
@@ -730,14 +734,14 @@ describe.skipIf(!pyBin)('generate_minimax_h3.py', () => {
 
   it.each([
     // Upstream fixed the merge: the correction has to retire, not shadow it.
-    [['runner.PINNED_BROADCAST_MERGE.replace("mx.where", "masked_scatter")'], 'digest-of-this-pin', /no longer merges keyframe embeddings/],
+    [['pin.PINNED_BROADCAST_MERGE.replace("mx.where", "masked_scatter")'], 'digest-of-this-pin', /no longer merges keyframe embeddings/],
     // The merge is untouched but something else in the body moved — the copy is
     // stale in a way matching one line could never see.
-    [['runner.PINNED_BROADCAST_MERGE'], `"${'0'.repeat(64)}"`, /changed MiniMaxH3TextEncoder\.encode outside the merge/],
+    [['pin.PINNED_BROADCAST_MERGE'], `"${'0'.repeat(64)}"`, /changed MiniMaxH3TextEncoder\.encode outside the merge/],
   ])('refuses a pin the copied encode no longer matches (%j)', (body, digest, expected) => {
     const output = runPython(`${importRunner}\n${filePin(body)}\n${[
       'import hashlib, inspect',
-      `runner.PINNED_ENCODE_DIGEST = ${digest === 'digest-of-this-pin'
+      `pin.PINNED_ENCODE_DIGEST = ${digest === 'digest-of-this-pin'
         ? 'hashlib.sha256(inspect.getsource(MiniMaxH3TextEncoder.encode).encode("utf-8")).hexdigest()'
         : digest}`,
       'try:',

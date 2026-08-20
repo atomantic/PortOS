@@ -135,6 +135,13 @@ export const BYOV_RUNTIME_INFO = Object.freeze({
     // The port is source-only rather than pip-installed. The dedicated probe
     // registers only the source package namespace; it never prepends the whole
     // checkout, where an untracked root module could shadow a locked venv dep.
+    // Deliberately WITHOUT the probe's --verify-seams flag: that flag asserts the
+    // encoder seams generate_minimax_h3.py patches, and a moved seam breaks only
+    // the keyframe / substituted-conditioner paths. Failing readiness over it
+    // would set byovGateBlocked and disable Generate for text-only renders too —
+    // the same trap minimax_h3_lora_probe.py is kept a separate probe to avoid.
+    // Install / Repair passes the flag (scripts/setup-image-video.sh), which is
+    // where a pin bump is actionable.
     probeArgs: [MINIMAX_H3_RUNTIME_PROBE_SCRIPT, MINIMAX_H3_REPO_DIR],
     // Separate, OPTIONAL capability probe: can this checkout apply LoRAs to the
     // quantized DiT at runtime? H3's shipped weights are 8-bit, so a LoRA can
