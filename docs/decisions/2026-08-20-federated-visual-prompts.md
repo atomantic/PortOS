@@ -61,12 +61,28 @@ Concretely:
    projection is likewise a sanitized status view. This is the line that must not
    move, and it is the line `CLAUDE.md`'s rule is protecting.
 
-4. **The counterparty is not an anonymous third party.** A federation peer is an
-   explicitly registered instance the local user added by hand, authenticated by
-   a per-peer Basic credential, and reachable only on a private network —
-   typically the same user's own other machine. This is what makes the carve-out
-   scoped rather than general: it authorizes sending a prompt to *a machine the
-   user enrolled*, not to the internet, and not to a cloud provider's account.
+4. **The counterparty is not an anonymous third party.** Sending is gated on
+   *local* configuration, not on the peer asking nicely: the peer record must be
+   enabled, enabled as a media provider, and carry this exact kind/engine/model
+   in the per-peer allowlist the local user configured
+   (`assertFederatedMediaProviderSelection`), and a peer credential can only be
+   entered locally — never learned from an inbound announce
+   (`server/services/instances.js`). On the receiving side the provider surface
+   refuses anything that is not a verified Basic credential from an enabled
+   registered peer (`authorizeFederatedMediaPeer`), which means an install with
+   the optional instance password *off* cannot accept a federated job at all.
+   That is what makes the carve-out scoped rather than general: it authorizes
+   sending a prompt to a machine the local user enrolled and allowlisted for
+   this kind of work, not to the internet and not to a cloud provider's account.
+
+   Two limits of that identity are real and are not fixed by this ADR: the Basic
+   credential authenticates *the install*, not one peer, and the
+   `X-PortOS-Instance-Id` header naming which registered peer is calling is
+   self-asserted. So the guarantee is "a holder of this provider's instance
+   password, on this private network" rather than a cryptographic binding to one
+   enrolled machine — a least-disclosure boundary between cooperating peers, as
+   `docs/FEDERATED_MEDIA_PROVIDERS.md` already states. Tightening it benefits
+   every federated surface and is tracked with the transport work, not here.
 
 5. **Unattended routing does not widen this boundary.** A configured route names
    one peer, one kind and one model; the operator opts in per kind, exactly as
@@ -82,8 +98,10 @@ Concretely:
    `rejectUnauthorized: false` ("Tailnet is the trust boundary"): between two
    tailnet nodes WireGuard already supplies mutual authentication, but a
    plain-LAN or non-`.ts.net` peer gets **no server authentication** — nothing
-   proves the far end is the machine the user enrolled. That is an acceptable
-   risk for a per-job human decision and not for a standing one. When unattended
+   proves the far end is the machine the user enrolled. Authentication does not
+   save this: the prompt rides the request body, so an impostor holding the
+   connection reads it before it fails to answer. That is an acceptable risk for
+   a per-job human decision and not for a standing one. When unattended
    routing ships, configuring a route to a peer that
    `peerRequiresTailscale()`-style detection does not recognize as a tailnet host
    must be refused, naming the reason. Interactive routing is unchanged.
@@ -111,12 +129,17 @@ later slice of #4348 and must revisit this ADR before shipping.
   the same failure mode the wire already refuses to accept for dropped init
   images.
 
-- **Require the instance password before any prompt crosses.** Rejected as a
-  gate, kept as good practice. Authentication is opt-in and off by default
-  (`CLAUDE.md`, Security Model), so making it a precondition would either block
-  the feature for most installs or, worse, invite an "if unset, send anyway"
-  fallback. The tailnet requirement in rule 6 is the narrower gate that actually
-  binds the risk unattended routing adds.
+- **Make the instance password a precondition.** Not an alternative — it
+  already is one, on the receiving side. `authorizeFederatedMediaPeer` demands a
+  `method: 'basic'`, `authenticated: true` context, and `authGate` only ever
+  produces that after verifying the instance password, so a provider running the
+  default passwordless posture rejects every federated job with
+  `MEDIA_PROVIDER_PEER_AUTH_REQUIRED`. No prompt crosses to an unauthenticated
+  install today, and this ADR does not relax that. What it deliberately does
+  *not* do is make a stronger per-peer cryptographic binding a precondition for
+  the visual carve-out: that gap applies equally to audio and to every other
+  federated surface, so blocking this decision on it would fix nothing specific
+  to prompts.
 
 - **Forbid federated visual rendering entirely.** Rejected: it deletes the
   feature to protect data from the user's own second machine, which is where the
