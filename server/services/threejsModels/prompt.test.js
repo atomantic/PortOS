@@ -42,6 +42,13 @@ describe('buildThreejsGenerationPrompt', () => {
     expect(prompt).toContain('must not have every identity part flat along one axis');
   });
 
+  it('teaches the intentional open-shell declaration without weakening the depth gate', () => {
+    const prompt = build();
+    expect(prompt).toContain('"side":"front" | "double"');
+    expect(prompt).toContain('needs a material with "side":"double" or it disappears from behind');
+    expect(prompt).toContain('must not be used to dodge giving a solid part a real cross-section');
+  });
+
   it('carries the reference path, name, and direction into the prompt', () => {
     const prompt = build({ prompt: 'Match the brass finish.' });
     expect(prompt).toContain('/tmp/reference.png');

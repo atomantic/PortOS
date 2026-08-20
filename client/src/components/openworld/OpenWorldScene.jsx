@@ -38,6 +38,7 @@ import OpenWorldSky from './OpenWorldSky';
 import OpenWorldGalaxySky from './OpenWorldGalaxySky';
 import OpenWorldLandscape from './OpenWorldLandscape';
 import OpenWorldNature from './OpenWorldNature';
+import OpenWorldGrass from './OpenWorldGrass';
 import OpenWorldWater from './OpenWorldWater';
 import OpenWorldStreets from './OpenWorldStreets';
 import OpenWorldStreetProps from './OpenWorldStreetProps';
@@ -320,6 +321,7 @@ export default function OpenWorldScene({ apps, agentMap, onBuildingClick, onTogg
       <OpenWorldLights settings={renderSettings} lightingTier={settings?.effectiveTier} />
       <OpenWorldLandscape settings={renderSettings} />
       <OpenWorldNature settings={renderSettings} />
+      <OpenWorldGrass settings={renderSettings} />
       <OpenWorldWater settings={renderSettings} />
       <OpenWorldEnergyOverlay chronotype={chronotype} settings={renderSettings} />
       {neonLayers && <OpenWorldStarfield settings={renderSettings} />}

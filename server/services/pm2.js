@@ -15,6 +15,18 @@ const jlistCache = new Map();
 const jlistInflight = new Map();
 const cacheKey = (pm2Home) => pm2Home || '_default';
 
+/**
+ * Invalidate the jlist TTL cache (e.g. after mutations like start/stop/delete).
+ * @param {string|null} [pm2Home=null]
+ */
+export function clearJlistCache(pm2Home = null) {
+  if (pm2Home !== undefined && pm2Home !== null) {
+    jlistCache.delete(cacheKey(pm2Home));
+  } else {
+    jlistCache.clear();
+  }
+}
+
 // Resolve PM2 CLI binary path from our local dependency using require.resolve
 // to handle hoisted node_modules correctly.
 const require = createRequire(import.meta.url);
@@ -295,7 +307,8 @@ function shapeProcStatus(proc) {
     uptime: proc.pm2_env?.pm_uptime ? Date.now() - proc.pm2_env.pm_uptime : null,
     restarts: proc.pm2_env?.restart_time || 0,
     unstableRestarts: proc.pm2_env?.unstable_restarts || 0,
-    createdAt: proc.pm2_env?.created_at || null
+    createdAt: proc.pm2_env?.created_at || null,
+    args: proc.pm2_env?.args || null
   };
 }
 

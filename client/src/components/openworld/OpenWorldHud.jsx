@@ -43,7 +43,7 @@ function ControlsHint({ visible, isDesktop }) {
           ))}
         </div>
         <div className="font-pixel text-[8px] tracking-wide text-[rgb(var(--port-text-muted))]">
-          WASD MOVE <span className="mx-1 opacity-50">·</span> SHIFT BOOST <span className="mx-1 opacity-50">·</span> SPACE JUMP <span className="mx-1 opacity-50">·</span> M MAP
+          WASD DRIVE <span className="mx-1 opacity-50">·</span> SHIFT BOOST <span className="mx-1 opacity-50">·</span> CTRL BRAKE <span className="mx-1 opacity-50">·</span> SPACE JUMP <span className="mx-1 opacity-50">·</span> M MAP
         </div>
       </div>
     </div>

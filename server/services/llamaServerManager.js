@@ -2,27 +2,28 @@
  * llama-server process manager
  *
  * Provides lifecycle management (status probe, start, stop, recent logs)
- * for a local `llama-server` instance running speculative decoding (e.g. DFlash 2).
+ * for a local `llama-server` instance running speculative decoding (e.g. DFlash 2)
+ * managed as an optional PM2 process (`portos-llama-server`).
  */
 
 import { stat } from 'fs/promises';
 import { spawn } from '../lib/childProcess.js';
 import { commandExists } from '../lib/commandExists.js';
 import { findCommandOnPath, safeChildProcessEnv, safeChildProcessOptions } from '../lib/processEnv.js';
-import { killProcessTree } from '../lib/bufferedSpawn.js';
 import { expandHome, sleep } from '../lib/fileUtils.js';
 import { resolveSpecModelPath } from './specDecodeModels.js';
 import { probeOpenAiModels } from '../lib/openAiModelsProbe.js';
 import { isPortInUse } from '../lib/platform.js';
 import { PORTS } from '../lib/ports.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { execPm2, getAppStatusStrict, clearJlistCache } from './pm2.js';
 
-const IS_WIN = process.platform === 'win32';
+export const LLAMA_APP = 'portos-llama-server';
+
 const MAX_LOG_LINES = 100;
 const PROBE_TIMEOUT_MS = 1500;
 const STARTUP_WAIT_TIMEOUT_MS = 4000;
 
-let managedChild = null;
 let currentConfig = null;
 let recentLogs = [];
 let lastExitError = null;
@@ -39,10 +40,7 @@ function appendLog(line) {
 
 /**
  * Probes whether an OpenAI-compatible endpoint responds at the given host/port.
- * Shares one implementation with the readiness checklist — the timeout bug this
- * used to carry (a `timeout` key inside the fetch init object, which is not a
- * fetch option, leaving a 500ms poll loop on the 15s default) came from having
- * two copies of the same probe.
+ * Shares one implementation with the readiness checklist.
  */
 const probeEndpoint = async (endpoint) =>
   (await probeOpenAiModels(endpoint, { timeoutMs: PROBE_TIMEOUT_MS })).reachable;
@@ -52,13 +50,7 @@ const probeEndpoint = async (endpoint) =>
  *
  * Deliberately a filesystem probe only — `findCommandOnPath` already requires a
  * regular file carrying the execute bit, which is all "is it installed?" means.
- * Do NOT re-add a `commandExists`-style `llama-server --version` probe on top:
- * llama.cpp registers its ggml backends (Metal included) at process start, so
- * the first launch after `brew link` — a cold binary, a loaded machine — blows
- * past `commandExists`'s 5s bound. That made the probe report "not installed"
- * for an installed, working binary, and because the timeout killed the process
- * before it finished warming, every retry from the UI failed the same way:
- * "brew completed but llama-server was not found on PATH".
+ * Do NOT re-add a `commandExists`-style `llama-server --version` probe on top.
  *
  * @returns {string|null} absolute path, or null when it is not on PATH
  */
@@ -68,18 +60,6 @@ function resolveLlamaServerBinary() {
 
 /**
  * Fails the start request when a GGUF the launch line names is not on disk.
- *
- * The weights are a SEPARATE download from the binary — several gigabytes the
- * user fetches from Hugging Face themselves — and that is the single most
- * common reason a freshly-installed llama.cpp still cannot serve anything.
- * Without this check llama-server spawns, exits within a second, and the UI
- * reports "started (PID …)" from a process that is already gone; the real cause
- * is one line deep in the server log.
- *
- * Path resolution goes through `resolveSpecModelPath` — the same helper the
- * downloader writes through — so the check and the download can never disagree
- * about which file a relative or `~`-prefixed path means. (`spawn` does no shell
- * expansion, hence the matching `expandHome` on the argv below.)
  */
 async function assertModelFileExists(label, modelPath) {
   const stats = await stat(resolveSpecModelPath(modelPath)).catch(() => null);
@@ -91,35 +71,100 @@ async function assertModelFileExists(label, modelPath) {
 }
 
 /**
+ * Reconstructs the launch config from PM2 process args if PortOS restarted
+ * while the PM2 process remained online.
+ */
+function parseConfigFromArgs(args) {
+  if (!args) return null;
+  const list = Array.isArray(args) ? args : String(args).split(' ');
+  const getArg = (flag) => {
+    const idx = list.indexOf(flag);
+    return idx !== -1 && idx + 1 < list.length ? list[idx + 1] : null;
+  };
+
+  const model = getArg('-m') || getArg('--model');
+  if (!model) return null;
+
+  const draftModel = getArg('--model-draft') || getArg('--spec-draft-model') || getArg('-md');
+  const specType = getArg('--spec-type') || 'draft-dflash';
+  const port = getArg('--port') ? Number(getArg('--port')) : PORTS.LLAMA_SERVER;
+  const host = getArg('--host') || '127.0.0.1';
+  const ctxSize = getArg('--ctx-size') ? Number(getArg('--ctx-size')) : 32768;
+  const nGpuLayers = getArg('-ngl') !== null ? Number(getArg('-ngl')) : 99;
+  const alias = getArg('--alias') || 'dflash';
+
+  return {
+    model,
+    draftModel,
+    specType,
+    port,
+    host,
+    ctxSize,
+    nGpuLayers,
+    alias,
+  };
+}
+
+/**
  * Returns current status of llama-server (binary availability, running state, config, logs).
  */
 export async function getLlamaServerStatus() {
   const binaryPath = resolveLlamaServerBinary();
   const installed = Boolean(binaryPath);
 
+  const pm2Status = await getAppStatusStrict(LLAMA_APP);
+  const isReadFailed = pm2Status === null;
+  const isManagedActive = Boolean(pm2Status && pm2Status.status === 'online');
+
+  if (!currentConfig && isManagedActive && pm2Status?.args) {
+    currentConfig = parseConfigFromArgs(pm2Status.args);
+  }
+
   const host = currentConfig?.host || '127.0.0.1';
   const port = currentConfig?.port ?? PORTS.LLAMA_SERVER;
   const endpoint = `http://${host}:${port}/v1`;
 
-  const isManagedActive = Boolean(managedChild && !managedChild.killed && managedChild.exitCode === null);
   const reachable = await probeEndpoint(endpoint);
+
+  let logs = [...recentLogs];
+  if (isManagedActive || (pm2Status && pm2Status.status !== 'not_found')) {
+    try {
+      const pm2LogsResult = await execPm2(['logs', LLAMA_APP, '--nostream', '--lines', String(MAX_LOG_LINES)]);
+      const combined = (pm2LogsResult.stdout || '') + '\n' + (pm2LogsResult.stderr || '');
+      const parsedLines = combined.split('\n').map((l) => l.trimEnd()).filter(Boolean);
+      if (parsedLines.length > 0) {
+        const seen = new Set(logs);
+        for (const line of parsedLines) {
+          if (!seen.has(line)) {
+            logs.push(line);
+            seen.add(line);
+          }
+        }
+        if (logs.length > MAX_LOG_LINES) {
+          logs = logs.slice(-MAX_LOG_LINES);
+        }
+      }
+    } catch {
+      // Ignore PM2 log retrieval errors
+    }
+  }
 
   return {
     installed,
     running: isManagedActive || reachable,
-    managed: isManagedActive,
-    pid: isManagedActive ? managedChild.pid : null,
+    managed: isReadFailed ? null : isManagedActive,
+    pid: isManagedActive ? (pm2Status?.pid || null) : null,
     host,
     port,
     endpoint,
     config: isManagedActive ? currentConfig : null,
-    recentLogs: [...recentLogs],
-    lastExitError,
+    recentLogs: logs,
+    lastExitError: isReadFailed ? 'Failed to read PM2 status' : lastExitError,
   };
 }
 
 /**
- * Starts llama-server with the specified model and options.
+ * Starts llama-server with the specified model and options under PM2.
  */
 export async function startLlamaServer(options = {}) {
   const binaryPath = resolveLlamaServerBinary();
@@ -130,8 +175,9 @@ export async function startLlamaServer(options = {}) {
     );
   }
 
-  if (managedChild && !managedChild.killed && managedChild.exitCode === null) {
-    throw new ServerError(`llama-server is already running with PID ${managedChild.pid}`, { status: 409 });
+  const pm2Status = await getAppStatusStrict(LLAMA_APP);
+  if (pm2Status && pm2Status.status === 'online') {
+    throw new ServerError(`llama-server is already running with PID ${pm2Status.pid}`, { status: 409 });
   }
 
   const {
@@ -161,9 +207,7 @@ export async function startLlamaServer(options = {}) {
     );
   }
 
-  // Validate the weights before building the launch line, and hand `spawn` the
-  // EXPANDED paths: it performs no shell expansion, so a `~/models/…` argv entry
-  // would reach llama.cpp as a literal directory named `~`.
+  // Validate the weights before building the launch line
   await assertModelFileExists('The base model', model.trim());
   const draftPath = typeof draftModel === 'string' && draftModel.trim()
     ? draftModel.trim()
@@ -172,13 +216,6 @@ export async function startLlamaServer(options = {}) {
 
   const args = ['-m', expandHome(model.trim())];
   if (draftPath) {
-    // `--model-draft` is the drafter flag llama.cpp parses. Newer builds also
-    // spell it `--spec-draft-model`, but the legacy name (alias `-md`) is the
-    // one every build accepts. `--draft-model` has never existed in any of
-    // them, and an unknown flag is fatal — llama.cpp prints
-    // `error: invalid argument: …` and exits 1 before loading a single weight,
-    // so the typo killed the launch outright rather than quietly dropping
-    // speculative decoding.
     args.push('--model-draft', expandHome(draftPath));
     if (specType) args.push('--spec-type', specType.trim());
   }
@@ -192,16 +229,6 @@ export async function startLlamaServer(options = {}) {
   recentLogs = [];
   appendLog(`Starting: llama-server ${args.join(' ')}`);
 
-  const env = safeChildProcessEnv();
-  const spawnOpts = safeChildProcessOptions({
-    env,
-    shell: false,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    detached: !IS_WIN,
-  });
-
-  const child = spawn(binaryPath, args, spawnOpts);
-  managedChild = child;
   currentConfig = {
     model,
     draftModel: draftModel || null,
@@ -213,58 +240,64 @@ export async function startLlamaServer(options = {}) {
     alias,
   };
 
-  child.stdout?.on('data', (chunk) => {
-    const lines = chunk.toString().split('\n');
-    for (const line of lines) appendLog(line);
-  });
+  // Delete stale PM2 entry so our own previous instance doesn't count as a collision
+  await execPm2(['delete', LLAMA_APP]).catch(() => {});
+  clearJlistCache();
 
-  child.stderr?.on('data', (chunk) => {
-    const lines = chunk.toString().split('\n');
-    for (const line of lines) appendLog(line);
-  });
-
-  child.on('error', (err) => {
-    appendLog(`Process error: ${err.message}`);
-    lastExitError = err.message;
-    if (managedChild === child) managedChild = null;
-  });
-
-  child.on('exit', (code, signal) => {
-    appendLog(`Process exited with code ${code}${signal ? ` (signal ${signal})` : ''}`);
-    if (code !== 0 && code !== null) {
-      lastExitError = `Exited with code ${code}`;
-    }
-    if (managedChild === child) managedChild = null;
-  });
+  await execPm2([
+    'start', binaryPath,
+    '--name', LLAMA_APP,
+    '--interpreter', 'none',
+    '--no-autorestart',
+    '--',
+    ...args,
+  ]);
+  clearJlistCache();
 
   // Wait a short beat and verify probe
   const startTime = Date.now();
   let online = false;
+  let currentProc = null;
   while (Date.now() - startTime < STARTUP_WAIT_TIMEOUT_MS) {
-    if (child.exitCode !== null) break;
     await sleep(500);
+    clearJlistCache();
+    currentProc = await getAppStatusStrict(LLAMA_APP);
+    if (currentProc && (currentProc.status === 'errored' || currentProc.status === 'stopped' || currentProc.status === 'not_found')) {
+      break;
+    }
     online = await probeEndpoint(endpoint);
     if (online) break;
   }
 
-  // A child that has already exited is not a started server. Reporting
-  // `success: true` here put "llama-server started (PID …)" on screen for a
-  // process that died on a bad flag, an unreadable GGUF, or an unsupported
-  // `--spec-type` — the user then went looking for a connection problem in
-  // OpenCode instead of reading the four log lines that explain it.
-  if (child.exitCode !== null || child.signalCode) {
-    const tail = recentLogs.slice(-4).join(' | ');
+  if (currentProc && (currentProc.status === 'errored' || currentProc.status === 'stopped' || currentProc.status === 'not_found')) {
+    let tail = '';
+    try {
+      const pm2Logs = await execPm2(['logs', LLAMA_APP, '--nostream', '--lines', '15']);
+      const combined = (pm2Logs.stderr || pm2Logs.stdout || '').trim();
+      const lines = combined.split('\n').map((l) => l.trimEnd()).filter(Boolean);
+      for (const line of lines) appendLog(line);
+      tail = lines.slice(-4).join(' | ');
+    } catch {
+      tail = recentLogs.slice(-4).join(' | ');
+    }
+
+    lastExitError = `PM2 status: ${currentProc.status}`;
+
+    await execPm2(['delete', LLAMA_APP]).catch(() => {});
+    clearJlistCache();
     throw new ServerError(
       `llama-server exited immediately${lastExitError ? ` (${lastExitError})` : ''}.${tail ? ` Last output: ${tail}` : ''}`,
       { status: 500, code: 'LLAMA_SERVER_EXITED' }
     );
   }
 
+  const finalProc = await getAppStatusStrict(LLAMA_APP);
+
   return {
     success: true,
     running: true,
     managed: true,
-    pid: child.pid,
+    pid: finalProc?.pid || null,
     endpoint,
     online,
     config: currentConfig,
@@ -275,7 +308,10 @@ export async function startLlamaServer(options = {}) {
  * Stops the managed llama-server process.
  */
 export async function stopLlamaServer() {
-  if (!managedChild || managedChild.killed || managedChild.exitCode !== null) {
+  const pm2Status = await getAppStatusStrict(LLAMA_APP);
+  const isManaged = Boolean(pm2Status && pm2Status.status === 'online');
+
+  if (!isManaged) {
     const host = currentConfig?.host || '127.0.0.1';
     const port = currentConfig?.port ?? PORTS.LLAMA_SERVER;
     const endpoint = `http://${host}:${port}/v1`;
@@ -289,17 +325,14 @@ export async function stopLlamaServer() {
     return { success: true, message: 'llama-server is not running' };
   }
 
-  const childToKill = managedChild;
-  managedChild = null;
-  currentConfig = null;
-
-  appendLog(`Stopping llama-server (PID ${childToKill.pid})`);
-  killProcessTree(childToKill, 'SIGTERM', { processGroup: !IS_WIN });
-
-  await sleep(600);
-  if (!childToKill.killed && childToKill.exitCode === null) {
-    killProcessTree(childToKill, 'SIGKILL', { processGroup: !IS_WIN });
+  appendLog(`Stopping ${LLAMA_APP}`);
+  try {
+    await execPm2(['delete', LLAMA_APP]);
+    clearJlistCache();
+  } catch (err) {
+    throw new ServerError(`Failed to stop llama-server: ${err.message}`, { status: 500 });
   }
+  currentConfig = null;
 
   return { success: true, message: 'llama-server stopped' };
 }
@@ -420,11 +453,8 @@ export async function installLlamaServer({ onProgress = () => {} } = {}) {
  * Clears in-memory test state (used by test suites).
  */
 export function _resetLlamaServerStateForTests() {
-  if (managedChild && !managedChild.killed && managedChild.exitCode === null) {
-    try { managedChild.kill('SIGKILL'); } catch {}
-  }
-  managedChild = null;
   currentConfig = null;
   recentLogs = [];
   lastExitError = null;
 }
+

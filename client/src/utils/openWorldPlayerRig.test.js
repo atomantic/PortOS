@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   THIRD_PERSON, clampPitch, thirdPersonCamera, resolveBoom,
-  dampFactor, dampAngle, moveFacing, avatarState, bankAngle,
+  dampFactor, dampAngle, moveFacing, avatarState, bankAngle, stepVehicle,
+  moveWithCollisions, VEHICLE_COLLISION,
 } from './openWorldPlayerRig';
 
 const pos = { x: 0, y: 1.6, z: 0 };
@@ -82,6 +83,62 @@ describe('resolveBoom', () => {
   });
 });
 
+describe('moveWithCollisions', () => {
+  const box = { shape: 'box', x: 0, z: 0, halfWidth: 1, halfDepth: 1 };
+
+  it('stops at a box facade instead of using a large center radius', () => {
+    const result = moveWithCollisions({
+      position: { x: -4, z: 0 },
+      displacement: { x: 4, z: 0 },
+      colliders: [box],
+      body: { type: 'circle', radius: 0.5 },
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.x).toBeCloseTo(-1.5, 2);
+    expect(result.z).toBe(0);
+    expect(Number.isFinite(result.x)).toBe(true);
+  });
+
+  it('slides along a wall while preserving movement on the open axis', () => {
+    const result = moveWithCollisions({
+      position: { x: -3, z: 0 },
+      displacement: { x: 3, z: 0.8 },
+      colliders: [box],
+      body: { type: 'circle', radius: 0.5 },
+    });
+
+    expect(result.blockedAxes.x).toBe(true);
+    expect(result.blockedAxes.z).toBe(false);
+    expect(result.x).toBeCloseTo(-1.5, 2);
+    expect(result.z).toBeCloseTo(0.8, 2);
+  });
+
+  it('uses the rover footprint and heading for box contact', () => {
+    const result = moveWithCollisions({
+      position: { x: -4, z: 0 },
+      displacement: { x: 4, z: 0 },
+      colliders: [box],
+      body: { type: 'vehicle', heading: 0, ...VEHICLE_COLLISION },
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.x).toBeCloseTo(-1 - VEHICLE_COLLISION.halfWidth, 2);
+  });
+
+  it('treats round process pylons as their actual small footprint', () => {
+    const result = moveWithCollisions({
+      position: { x: -3, z: 0 },
+      displacement: { x: 3, z: 0 },
+      colliders: [{ shape: 'circle', x: 0, z: 0, radius: 0.46 }],
+      body: { type: 'circle', radius: 0.5 },
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.x).toBeCloseTo(-0.96, 2);
+  });
+});
+
 describe('dampFactor', () => {
   it('is monotonic in delta and bounded to [0, 1)', () => {
     const a = dampFactor(8, 0.004);
@@ -112,6 +169,30 @@ describe('dampAngle', () => {
     const next = dampAngle(Math.PI - 0.1, -Math.PI + 0.1, 0.5);
     expect(next).toBeGreaterThan(Math.PI - 0.1); // continues past π, not backward
     expect(next - (Math.PI - 0.1)).toBeCloseTo(0.1, 5);
+  });
+});
+
+describe('stepVehicle', () => {
+  it('ramps speed instead of teleporting to the target velocity', () => {
+    const first = stepVehicle({ throttle: 1, delta: 0.016 });
+    expect(first.speed).toBeGreaterThan(0);
+    expect(first.speed).toBeLessThan(24);
+    expect(first.displacement.z).toBeLessThan(0);
+  });
+
+  it('coasts down and brakes faster', () => {
+    const coasting = stepVehicle({ speed: 12, delta: 0.016 });
+    const braking = stepVehicle({ speed: 12, throttle: 1, brake: true, delta: 0.016 });
+    expect(coasting.speed).toBeLessThan(12);
+    expect(braking.speed).toBeLessThan(coasting.speed);
+  });
+
+  it('steers more as speed builds and reverses the turn in reverse', () => {
+    const forward = stepVehicle({ speed: 18, heading: 0, steer: 1, delta: 0.016 });
+    const reverse = stepVehicle({ speed: -8, heading: 0, steer: 1, delta: 0.016 });
+    expect(forward.heading).toBeLessThan(0);
+    expect(reverse.heading).toBeGreaterThan(0);
+    expect(forward.wheelAngle).toBeGreaterThan(0);
   });
 });
 
