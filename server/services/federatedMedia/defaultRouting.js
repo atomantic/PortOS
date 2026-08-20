@@ -27,16 +27,12 @@
 
 import { ServerError } from '../../lib/errorHandler.js';
 import { buildFederatedMediaRequest } from '../../lib/federatedMediaRequest.js';
-import { getSettings } from '../settings.js';
+import { getSettingsWithStatus } from '../settings.js';
 import { isTailnetPeer } from '../../lib/tailnetPeer.js';
 import { CLOUD_VIDEO_GEN_MODES, VIDEO_GEN_MODES } from '../videoGen/modes.js';
 
 // Only the visual kinds. See the audio note in the module docblock.
 export const ROUTABLE_MEDIA_KINDS = Object.freeze(['image', 'video']);
-
-// Distinct from both `null` and `{}` so a failed settings read can never be
-// mistaken for "settings say nothing is routed".
-const UNREADABLE_SETTINGS = Symbol('unreadable-settings');
 
 const isRecord = (value) => value && typeof value === 'object' && !Array.isArray(value);
 const trimmed = (value) => (typeof value === 'string' ? value.trim() : '');
@@ -164,8 +160,13 @@ export async function hasConfiguredMediaRoute(kind) {
   // a local-readiness verdict may skip the render, and skipping is the one
   // outcome that silently discards work. Saying "routed" defers the decision to
   // resolveDefaultMediaRoute, which fails loudly with MEDIA_ROUTING_UNREADABLE.
-  const settings = await getSettings().catch(() => UNREADABLE_SETTINGS);
-  if (settings === UNREADABLE_SETTINGS) return true;
+  //
+  // `getSettingsWithStatus`, not `getSettings`: the latter hands back an empty
+  // object for a corrupt settings.json rather than rejecting, so a `.catch()`
+  // here would never fire and a configured route would read as absent — exactly
+  // the collapse this is guarding against.
+  const { corrupt, settings } = await getSettingsWithStatus().catch(() => ({ corrupt: true, settings: null }));
+  if (corrupt) return true;
   return !!normalizeMediaRoutingConfig(settings)[kind];
 }
 
@@ -188,11 +189,12 @@ export async function resolveDefaultMediaRoute({ kind, params }) {
   // another backend's quota) on work they deliberately sent elsewhere. That is
   // exactly the collapse the project's sentinel rule forbids, so a failed read
   // gets its own typed error rather than a null.
-  const settings = await getSettings().catch((error) => {
+  const { corrupt, settings } = await getSettingsWithStatus().catch((error) => {
     console.error(`❌ Federated media routing could not read settings: ${error.message}`);
-    return UNREADABLE_SETTINGS;
+    return { corrupt: true, settings: null };
   });
-  if (settings === UNREADABLE_SETTINGS) {
+  if (corrupt) {
+    console.error('❌ Federated media routing: settings.json is unreadable or malformed');
     throw new ServerError(
       'Could not read this instance\'s media routing configuration',
       { status: 503, code: 'MEDIA_ROUTING_UNREADABLE' },
@@ -250,7 +252,12 @@ export async function resolveDefaultMediaRoute({ kind, params }) {
   // typed `WAN22_INVALID_FRAME_COUNT` — loud and fail-closed, but it makes that
   // pairing unusable until the capability contract carries the constraint. That
   // negotiation is its own slice; see the follow-up issue.
-  return { peer, request, remoteMedia };
+  // Stamp the marker so the boundary survives the job, not just the enqueue.
+  // The tailnet check above ran against the peer record as it looked NOW; a
+  // queued or reconciling job re-resolves its peer from the registry on every
+  // request, and that record can change (a host edited from a .ts.net name to a
+  // LAN address) between enqueue and submit. The executor re-checks on this bit.
+  return { peer, request, remoteMedia: { ...remoteMedia, standingRoute: true } };
 }
 
 /**

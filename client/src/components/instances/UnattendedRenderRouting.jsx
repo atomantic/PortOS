@@ -116,13 +116,17 @@ export default function UnattendedRenderRouting({ peers }) {
     // the wrong instinct: it is not "better than sending {}", it is a write of
     // known-stale state over whatever is actually on the server, which is how a
     // newer mediaProvider or strictPullAuthorization gets silently reverted.
+    // A SUCCESSFUL response with no `federation` key is a fresh install that has
+    // simply never opted into anything — the correct base is `{}`, and treating
+    // it as unreadable would make the very first route unsavable on every
+    // install. Only a failed request (`null`) aborts.
     const fresh = await getSettings({ silent: true }).catch(() => null);
-    if (!isRecord(fresh?.federation)) {
+    if (fresh === null) {
       setSaving(false);
       toast.error('Could not read current settings — routing not saved');
       return;
     }
-    const base = fresh.federation;
+    const base = isRecord(fresh.federation) ? fresh.federation : {};
     // Merge onto the freshest routing too, so a kind another surface set in the
     // meantime isn't reverted by this one's stale copy.
     const baseRouting = isRecord(base.mediaRouting) ? base.mediaRouting : routing;

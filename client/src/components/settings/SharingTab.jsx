@@ -58,9 +58,9 @@ export function SharingTab() {
   const [saving, setSaving] = useState(false);
   const [strictPull, setStrictPull] = useState(false);
   const [strictPullSaving, setStrictPullSaving] = useState(false);
-  // The settings PATCH shallow-merges top-level keys, so `federation` is
-  // replaced wholesale — carry the rest of the slice forward on every write.
-  const [federationSettings, setFederationSettings] = useState({});
+  // No mount-time copy of the `federation` slice is kept: PATCH replaces that
+  // key wholesale, so every write here re-reads it immediately beforehand rather
+  // than carrying a snapshot that another surface may have superseded.
   const [authEnabled, setAuthEnabled] = useState(false);
   const [musicEngines, setMusicEngines] = useState([]);
   const [providerSettings, setProviderSettings] = useState({});
@@ -106,7 +106,6 @@ export function SharingTab() {
         setSavedDisplayName(display);
         setSavedBio(b);
         const federation = settings?.federation && typeof settings.federation === 'object' ? settings.federation : {};
-        setFederationSettings(federation);
         setStrictPull(federation.strictPullAuthorization === true);
         setAuthEnabled(auth?.enabled === true);
         const provider = federation.mediaProvider && typeof federation.mediaProvider === 'object'
@@ -158,12 +157,16 @@ export function SharingTab() {
     setStrictPullSaving(true);
     // Same whole-slice replacement hazard as the provider save below.
     const fresh = await getSettings({ silent: true }).catch(() => null);
-    const base = isRecord(fresh?.federation) ? fresh.federation : federationSettings;
+    if (fresh === null) {
+      setStrictPullSaving(false);
+      toast.error('Could not read current settings — not saved');
+      return;
+    }
+    const base = isRecord(fresh.federation) ? fresh.federation : {};
     const federation = { ...base, strictPullAuthorization: next };
     const merged = await updateSettings({ federation }).catch(() => null);
     setStrictPullSaving(false);
     if (!merged) return;
-    setFederationSettings(federation);
     setStrictPull(next);
     toast.success(next ? 'Strict pull authorization on' : 'Strict pull authorization off');
   };
@@ -216,8 +219,18 @@ export function SharingTab() {
     // owns `mediaRouting`, and a Settings tab left open across a routing change
     // would otherwise write back the slice as it looked before, silently
     // clearing the route and sending unattended renders back to local.
+    // A failed read ABORTS: PUT /api/settings replaces the whole `federation`
+    // key, so writing the mount-time snapshot over it can erase a route the
+    // Instances page added while this tab sat open. A successful response with
+    // no `federation` key is a different thing entirely — a fresh install — and
+    // correctly bases on `{}`.
     const fresh = await getSettings({ silent: true }).catch(() => null);
-    const base = isRecord(fresh?.federation) ? fresh.federation : federationSettings;
+    if (fresh === null) {
+      setProviderSaving(false);
+      toast.error('Could not read current settings — provider not saved');
+      return;
+    }
+    const base = isRecord(fresh.federation) ? fresh.federation : {};
     const federation = { ...base, mediaProvider };
     const merged = await updateSettings({ federation }, { silent: true }).catch(() => null);
     setProviderSaving(false);
@@ -225,7 +238,6 @@ export function SharingTab() {
       toast.error('Failed to save media provider settings');
       return;
     }
-    setFederationSettings(federation);
     setProviderSettings(mediaProvider);
     setProviderMaxQueuedJobs(maxQueuedJobs);
     setSavedProviderEnabled(providerEnabled);
@@ -320,8 +332,11 @@ export function SharingTab() {
           <h3 className="text-lg font-semibold text-white">Federated media provider</h3>
         </div>
         <p className="text-sm text-gray-400 mb-4">
-          Let registered PortOS peers submit allowlisted audio renders to this machine&apos;s durable media queue.
-          Prompts and job details stay out of capability status, and completed downloads include a SHA-256 integrity hash.
+          Let registered PortOS peers submit allowlisted audio, image, and video renders to this
+          machine&apos;s durable media queue. Only models you allowlist below can be requested.
+          Capability status never carries prompts or job details, and completed downloads include a
+          SHA-256 integrity hash. An image or video peer sends the prompt it wants rendered; an audio
+          peer can only send a fixed musical profile, never free text or lyrics.
         </p>
 
         {!authEnabled && (
@@ -340,7 +355,7 @@ export function SharingTab() {
               onChange={(event) => setProviderEnabled(event.target.checked)}
               className="mt-1 h-4 w-4 accent-port-accent disabled:opacity-40"
             />
-            <span className="text-sm text-white">Accept audio generation jobs from authenticated registered peers</span>
+            <span className="text-sm text-white">Accept media generation jobs from authenticated registered peers</span>
           </label>
 
           <div>

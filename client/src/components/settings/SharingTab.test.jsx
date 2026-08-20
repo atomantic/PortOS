@@ -18,6 +18,7 @@ vi.mock('../ui/Toast', () => ({
 }));
 
 import { getAuthStatus, getMediaShareCandidates, getSettings, listMusicEngines, updateSettings } from '../../services/api';
+import toast from '../ui/Toast';
 import { SharingTab } from './SharingTab';
 
 const strictToggle = () => screen.getByLabelText(/Enforce per-peer sharing settings/i);
@@ -32,7 +33,7 @@ beforeEach(() => {
 });
 
 describe('SharingTab — federated media provider (#4348)', () => {
-  const providerToggle = () => screen.getByLabelText(/Accept audio generation jobs/i);
+  const providerToggle = () => screen.getByLabelText(/Accept media generation jobs/i);
 
   it('keeps provider opt-in disabled until an instance password exists', async () => {
     render(<SharingTab />);
@@ -230,7 +231,7 @@ describe('SharingTab — writes against the freshest federation slice', () => {
     });
 
     render(<SharingTab />);
-    const toggle = await screen.findByLabelText(/Accept audio generation jobs/i);
+    const toggle = await screen.findByLabelText(/Accept media generation jobs/i);
 
     // The Instances page saves a route while this tab is sitting open.
     const route = { peerId: 'peer-1', engine: 'comfy', modelId: 'sdxl-base' };
@@ -278,5 +279,32 @@ describe('SharingTab — a failed candidate fetch is not an empty catalog', () =
 
     render(<SharingTab />);
     expect(await screen.findByText(/No local image models are installed/i)).toBeInTheDocument();
+  });
+});
+
+describe('SharingTab — an absent federation slice is not a failed read', () => {
+  it('aborts a provider save only when the read actually failed', async () => {
+    getMediaShareCandidates.mockResolvedValue({ image: [], video: [] });
+    getAuthStatus.mockResolvedValue({ enabled: true });
+    getSettings.mockResolvedValueOnce({
+      sharingDisplayName: '', sharingBio: '',
+      federation: {
+        mediaProvider: {
+          enabled: true, maxQueuedJobs: 2,
+          audioModels: [{ engine: 'minimax-music3', modelId: 'minimax-music3' }],
+        },
+      },
+    });
+
+    render(<SharingTab />);
+    const toggle = await screen.findByLabelText(/Accept media generation jobs/i);
+
+    getSettings.mockRejectedValueOnce(new Error('offline'));
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole('button', { name: 'Save provider' }));
+
+    await waitFor(() => expect(toast.error)
+      .toHaveBeenCalledWith('Could not read current settings — provider not saved'));
+    expect(updateSettings).not.toHaveBeenCalled();
   });
 });

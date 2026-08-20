@@ -23,6 +23,10 @@ const remoteMediaMarkerSchema = z.object({
   peerId: z.string().uuid(),
   reconcile: z.boolean().optional(),
   cancelRequested: z.boolean().optional(),
+  // Set by the unattended (standing) router, never by an interactive render.
+  // Optional so a marker already queued by an older build still validates; its
+  // absence means "interactive", which is the correct reading of history.
+  standingRoute: z.boolean().optional(),
   profile: federatedMediaAudioProfileSchema,
   // Free-form prompt/lyrics are deliberately absent from persisted routing
   // state. The adapter renders a fixed-vocabulary instrumental prompt from the

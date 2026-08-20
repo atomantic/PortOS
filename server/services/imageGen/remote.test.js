@@ -236,3 +236,21 @@ describe('federated image consumer adapter', () => {
     expect(transport.fetch).not.toHaveBeenCalled();
   });
 });
+
+// #4348 / ADR 2026-08-20-federated-visual-prompts rule 5. The enqueue-time
+// tailnet gate checked the peer record as it looked THEN; a queued or
+// reconciling job re-resolves its peer on every request, and that record can
+// change underneath it. The fixture peer is a plain LAN address — and every
+// OTHER test in this file drives that same peer with an interactive (no
+// standing bit) marker and still passes, which is what pins the other half of
+// this contract: interactive routing is explicitly out of scope for rule 5.
+describe('standing-route tailnet boundary survives the enqueue', () => {
+  it('refuses to submit when a standing route peer is no longer a tailnet host', async () => {
+    const base = params();
+    const settled = captureTerminal(LOCAL_JOB_ID);
+    await generateImage({ ...base, remoteMedia: { ...base.remoteMedia, standingRoute: true } });
+    const outcome = await settled;
+    expect(outcome.type).toBe('failed');
+    expect(outcome.event.error).toMatch(/no longer a Tailscale host/i);
+  });
+});

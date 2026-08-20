@@ -32,6 +32,7 @@ import { peerBaseUrl } from '../../lib/peerUrl.js';
 import { readResponseJson } from '../../lib/readResponseJson.js';
 import { resolveFederatedMediaProvider } from '../federatedMediaConsumer.js';
 import { getPeers } from '../instances.js';
+import { isTailnetPeer } from '../../lib/tailnetPeer.js';
 
 const RETRYABLE_HTTP_STATUSES = new Set([408, 425, 429]);
 const PERMANENT_SELECTION_CODES = new Set([
@@ -132,7 +133,7 @@ export function createRemoteMediaExecutor({
     }
   }
 
-  async function findPeer(peerId) {
+  async function findPeer(peerId, { standingRoute = false } = {}) {
     const peers = await getPeers();
     const peer = peers.find((candidate) => candidate.id === peerId);
     if (!peer || peer.enabled === false) {
@@ -140,11 +141,23 @@ export function createRemoteMediaExecutor({
         code: 'MEDIA_PROVIDER_PEER_UNAVAILABLE',
       });
     }
+    // A standing route's tailnet gate is checked at enqueue, but the peer record
+    // it checked can change while the job sits queued or reconciles across a
+    // restart — a host edited from a .ts.net name to a LAN address would
+    // otherwise carry the visual prompt over an unauthenticated hop on the very
+    // next request. Every request path (submit, poll, cancel, result) resolves
+    // its peer here, so re-checking at this one chokepoint covers all of them.
+    // ADR docs/decisions/2026-08-20-federated-visual-prompts.md, rule 5.
+    if (standingRoute && !isTailnetPeer(peer)) {
+      throw remoteMediaError('Media provider peer is no longer a Tailscale host', {
+        code: 'MEDIA_ROUTING_PEER_NOT_TAILNET',
+      });
+    }
     return peer;
   }
 
   async function requestJson(state, path, options = {}, requestOptions = {}) {
-    const peer = await findPeer(state.peerId);
+    const peer = await findPeer(state.peerId, { standingRoute: state.standingRoute });
     const { response, body } = await withRequest(
       state,
       async (signal) => {
@@ -182,7 +195,7 @@ export function createRemoteMediaExecutor({
   async function preflight(state, selection) {
     while (true) {
       if (state.cancelRequested) throw canceledError();
-      const peer = await findPeer(state.peerId);
+      const peer = await findPeer(state.peerId, { standingRoute: state.standingRoute });
       try {
         await withRequest(
           state,
@@ -333,7 +346,7 @@ export function createRemoteMediaExecutor({
     if (await existingResultMatches(finalPath, metadata)) return { filename, dir, path: finalPath };
     await unlink(partialPath).catch(() => {});
 
-    const peer = await findPeer(state.peerId);
+    const peer = await findPeer(state.peerId, { standingRoute: state.standingRoute });
     // Keep the controller live for the body stream so cancel()/the queue
     // watchdog can interrupt a stalled transfer. There is intentionally no
     // fixed wall-clock timeout: large renders over a slow Tailnet are valid
@@ -460,6 +473,9 @@ export function createRemoteMediaExecutor({
       cancelRequested: marker.data.cancelRequested === true,
       cancelSent: false,
       submissionMayExist: marker.data.reconcile === true,
+      // Absent on an interactive marker (and on any marker queued before this
+      // shipped), which reads correctly as "not a standing route".
+      standingRoute: marker.data.standingRoute === true,
       requestController: null,
       wake: null,
     };

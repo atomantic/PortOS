@@ -27,6 +27,10 @@ const remoteVideoMarkerSchema = z.object({
   peerId: z.string().uuid(),
   reconcile: z.boolean().optional(),
   cancelRequested: z.boolean().optional(),
+  // Set by the unattended (standing) router, never by an interactive render.
+  // Optional so a marker already queued by an older build still validates; its
+  // absence means "interactive", which is the correct reading of history.
+  standingRoute: z.boolean().optional(),
   // Re-validated on every replay — persisted queue state is user-editable, so
   // the body that leaves this machine is the one this schema accepted.
   request: federatedMediaVideoJobSubmissionSchema,

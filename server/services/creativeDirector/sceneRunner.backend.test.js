@@ -18,7 +18,16 @@ vi.mock('../mediaJobQueue/index.js', () => ({
   enqueueJob: vi.fn(() => ({ jobId: 'job-1' })),
   mediaJobEvents: { on: vi.fn(), off: vi.fn() },
 }));
-vi.mock('../settings.js', () => ({ getSettings: vi.fn() }));
+vi.mock('../settings.js', () => ({
+  getSettings: vi.fn(),
+  getSettingsWithStatus: async (...args) => {
+    try {
+      return { corrupt: false, settings: await getSettings(...args) };
+    } catch {
+      return { corrupt: true, settings: null };
+    }
+  },
+}));
 vi.mock('./local.js', () => ({
   updateScene: vi.fn(async () => {}),
   updateProject: vi.fn(async () => {}),

@@ -223,3 +223,21 @@ describe('UnattendedRenderRouting — tailnet gate', () => {
     expect(await screen.findByLabelText('Image')).toBeInTheDocument();
   });
 });
+
+describe('UnattendedRenderRouting — an absent federation slice is not a failed read', () => {
+  // The whole feature is unreachable on a fresh install if this regresses: no
+  // install has a `federation` key until something writes one, so treating its
+  // absence as unreadable makes the FIRST route unsavable, always.
+  it('creates the slice when a successful response has no federation key', async () => {
+    getSettings.mockResolvedValue({});
+    render(<UnattendedRenderRouting peers={[peerWith()]} />);
+
+    const select = await screen.findByLabelText('Image');
+    fireEvent.change(select, { target: { value: JSON.stringify(['peer-1', 'comfy', 'sdxl-base']) } });
+
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({
+      federation: { mediaRouting: { image: { peerId: 'peer-1', engine: 'comfy', modelId: 'sdxl-base' } } },
+    }, { silent: true }));
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+});

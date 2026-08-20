@@ -211,7 +211,20 @@ const save = async (settings) => {
   return cleaned;
 };
 
-export const getSettings = async () => {
+/**
+ * `getSettings`, but reporting whether the snapshot came from a CORRUPT read.
+ *
+ * `getSettings()` deliberately hands back an empty object when settings.json is
+ * malformed or unreadable, which makes "corrupt" indistinguishable from "fresh
+ * install with nothing configured". That is the right default for most readers —
+ * they want a usable object — but it is wrong for any caller whose decision is
+ * spend-bearing or privacy-bearing, where guessing "nothing is configured" can
+ * silently do the opposite of what the user set up (see the federated media
+ * router, which must fail loudly rather than render locally).
+ *
+ * @returns {Promise<{corrupt: boolean, settings: object}>}
+ */
+export const getSettingsWithStatus = async () => {
   if (settingsCache === null) {
     // Route the cold read through the STRICT reader so a corrupt/unreadable
     // settings.json does NOT poison the cache with `{}` (issue #2684). Caching a
@@ -225,17 +238,19 @@ export const getSettings = async () => {
     // A save()/reloadSettings() may have populated the cache via the
     // settings:updated listener while this cold read was awaiting the disk read.
     // Prefer that fresher in-memory value over our (older) on-disk snapshot.
-    if (settingsCache !== null) return structuredClone(settingsCache);
+    if (settingsCache !== null) return { corrupt: false, settings: structuredClone(settingsCache) };
     // On a corrupt read, hand back the empty snapshot WITHOUT caching it, so the
     // very next call re-reads and picks up a repair immediately.
-    if (corrupt) return structuredClone(loaded);
+    if (corrupt) return { corrupt: true, settings: structuredClone(loaded) };
     settingsCache = loaded;
   }
   // Hand out a private deep copy so a caller mutating nested settings in place
   // can't corrupt the shared cache — matching the prior per-call
   // `stripStoreKeys(await loadRaw())` deep-copy semantics, minus the I/O.
-  return structuredClone(settingsCache);
+  return { corrupt: false, settings: structuredClone(settingsCache) };
 };
+
+export const getSettings = async () => (await getSettingsWithStatus()).settings;
 export const saveSettings = (settings) => queueWrite(() => save(settings));
 
 // Merge against the unstripped on-disk snapshot so save() sees every

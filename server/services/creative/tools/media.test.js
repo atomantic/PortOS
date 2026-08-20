@@ -4,7 +4,21 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // boundary — every assertion here is about the params that land on it, because
 // `job.params.mode` is the ONLY thing mediaJobQueue routes the backend on.
 vi.mock('../../mediaJobQueue/index.js', () => ({ enqueueJob: vi.fn(() => ({ jobId: 'mj-test' })) }));
-vi.mock('../../settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
+const getSettings = vi.fn(async () => ({}));
+vi.mock('../../settings.js', () => ({
+  getSettings: (...args) => getSettings(...args),
+  // getSettings() hands back {} for a corrupt settings.json rather than
+  // rejecting, so the router reads through this failure-aware wrapper instead.
+  // Deriving it from the same mock keeps every existing setup working and makes
+  // a mockRejectedValue model a corrupt read, which is what those tests mean.
+  getSettingsWithStatus: async (...args) => {
+    try {
+      return { corrupt: false, settings: await getSettings(...args) };
+    } catch {
+      return { corrupt: true, settings: null };
+    }
+  },
+}));
 vi.mock('../../creativeDirector/local.js', () => ({ getProject: vi.fn(async () => null) }));
 const getCommissionMusicContextForProject = vi.fn(async () => null);
 vi.mock('../../creativeCommissions/store.js', () => ({
@@ -16,7 +30,6 @@ vi.mock('../../federatedMedia/remoteSubmission.js', () => ({
 }));
 
 import { enqueueJob } from '../../mediaJobQueue/index.js';
-import { getSettings } from '../../settings.js';
 import { getProject } from '../../creativeDirector/local.js';
 import { MEDIA_TOOLS, reconcileVideoParamsWithModel } from './media.js';
 

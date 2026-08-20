@@ -3,7 +3,20 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const getSettings = vi.fn();
 const prepareRemoteMediaJob = vi.fn();
 
-vi.mock('../settings.js', () => ({ getSettings: (...args) => getSettings(...args) }));
+vi.mock('../settings.js', () => ({
+  getSettings: (...args) => getSettings(...args),
+  // getSettings() hands back {} for a corrupt settings.json rather than
+  // rejecting, so the router reads through this failure-aware wrapper instead.
+  // Deriving it from the same mock keeps every existing setup working and makes
+  // a mockRejectedValue model a corrupt read, which is what those tests mean.
+  getSettingsWithStatus: async (...args) => {
+    try {
+      return { corrupt: false, settings: await getSettings(...args) };
+    } catch {
+      return { corrupt: true, settings: null };
+    }
+  },
+}));
 vi.mock('./remoteSubmission.js', () => ({
   prepareRemoteMediaJob: (...args) => prepareRemoteMediaJob(...args),
 }));
@@ -375,5 +388,24 @@ describe('standing routes are gated on a tailnet peer', () => {
     }));
     await expect(resolveDefaultMediaRoute({ kind: 'image', params: { prompt: 'p' } }))
       .resolves.toMatchObject({ peer: { id: 'peer-1' } });
+  });
+});
+
+describe('a corrupt settings.json is not "no route"', () => {
+  // getSettings() hands back {} for a corrupt file rather than rejecting, which
+  // is why this reads through getSettingsWithStatus. A .catch() would never fire.
+  it('fails the enqueue when the settings read reports corruption', async () => {
+    getSettings.mockRejectedValue(new Error('malformed JSON'));
+    await expect(resolveDefaultMediaRoute({ kind: 'image', params: { prompt: 'p' } }))
+      .rejects.toMatchObject({ code: 'MEDIA_ROUTING_UNREADABLE' });
+  });
+
+  it('stamps the standing-route bit so the boundary survives the enqueue', async () => {
+    getSettings.mockResolvedValue({
+      federation: { mediaRouting: { image: { peerId: 'peer-1', engine: 'comfy', modelId: 'sdxl-remote' } } },
+    });
+    const resolved = await resolveDefaultMediaRoute({ kind: 'image', params: { prompt: 'p' } });
+    expect(resolved.remoteMedia.standingRoute).toBe(true);
+    expect(routedJobParams({ prompt: 'p' }, resolved).remoteMedia.standingRoute).toBe(true);
   });
 });

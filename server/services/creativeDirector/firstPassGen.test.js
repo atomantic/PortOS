@@ -7,6 +7,13 @@ vi.mock('../mediaJobQueue/index.js', () => ({
 }));
 vi.mock('../settings.js', () => ({
   getSettings: vi.fn(),
+  getSettingsWithStatus: async (...args) => {
+    try {
+      return { corrupt: false, settings: await getSettings(...args) };
+    } catch {
+      return { corrupt: true, settings: null };
+    }
+  },
 }));
 vi.mock('../imageGen/index.js', () => ({
   resolveImageCleaners: vi.fn(() => ({ cleanC2PA: true, denoise: false })),
