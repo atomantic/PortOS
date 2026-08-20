@@ -120,5 +120,16 @@ describe('sculptMaterialProps', () => {
     const props = sculptMaterialProps({ ...definition, type: 'basic' });
     expect(props).toEqual({ color: '#ffffff', opacity: 1, transparent: false, wireframe: false });
   });
+
+  // Without this the spec's environment intensity never reaches a surface, and
+  // every model reflects at exactly 1 whatever it authored.
+  it('forwards the environment intensity to lit materials only', () => {
+    expect(sculptMaterialProps(definition, 2.5).envMapIntensity).toBe(2.5);
+    expect(sculptMaterialProps({ ...definition, type: 'standard' }, 2.5).envMapIntensity).toBe(2.5);
+    expect(sculptMaterialProps({ ...definition, type: 'basic' }, 2.5)).not.toHaveProperty('envMapIntensity');
+    // A caller that has no environment to declare still gets the neutral value,
+    // never `undefined` — three reads that as "leave the material's own".
+    expect(sculptMaterialProps(definition).envMapIntensity).toBe(1);
+  });
 });
 // @vitest-environment node

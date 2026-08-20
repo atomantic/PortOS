@@ -62,8 +62,15 @@ export function createSculptBufferGeometry(definition) {
  * Map a validated material definition to the props for its Three.js material.
  * Physical-only channels are dropped for standard/basic so an authored spec that
  * carries schema defaults cannot leak unsupported props onto the wrong material.
+ *
+ * `envMapIntensity` is the spec-level `environment.intensity` (see
+ * `threejsEnvironment.js`), forwarded to every lit material so the strength the
+ * spec authored actually reaches the surfaces reflecting it. `basic` is unlit
+ * and takes no environment at all. Mirrors `createMaterial()` in
+ * `buildThreejsFactorySource()`, which reads the same value off the exported
+ * render profile — the two must move together.
  */
-export function sculptMaterialProps(definition) {
+export function sculptMaterialProps(definition, envMapIntensity = 1) {
   const unlit = {
     color: definition.color,
     opacity: definition.opacity,
@@ -77,6 +84,7 @@ export function sculptMaterialProps(definition) {
     roughness: definition.roughness,
     emissive: definition.emissive,
     emissiveIntensity: definition.emissiveIntensity,
+    envMapIntensity,
   };
   if (definition.type !== 'physical') return lit;
   return {

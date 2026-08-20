@@ -2,11 +2,35 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// The preview reads the live renderer and scene off the r3f context to install a
+// PMREM environment. There is no GL context under jsdom, so the stand-ins below
+// are what the environment effect writes to — and `scene.environment` is the one
+// observable that says whether a spec's preset reached the scene at all.
+const threeState = vi.hoisted(() => ({ gl: { isWebGLRenderer: true }, scene: { environment: null } }));
+const environmentBuilds = vi.hoisted(() => []);
+vi.mock('../../lib/threejsEnvironment', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    // PMREM needs a real renderer; what matters here is WHICH preset the preview
+    // asked for and that the texture it got is released again.
+    createSculptEnvironmentTexture: (_renderer, preset) => {
+      const texture = { preset, dispose: vi.fn() };
+      environmentBuilds.push(texture);
+      return texture;
+    },
+  };
+});
+
 vi.mock('@react-three/fiber', () => ({
+  useThree: (selector) => selector(threeState),
   Canvas: ({ children, ...props }) => (
     <div
       data-testid="threejs-canvas"
       data-alpha={String(props.gl?.alpha)}
+      data-tone-exposure={String(props.gl?.toneMappingExposure)}
+      data-linear={String(props.linear)}
+      data-flat={String(props.flat)}
       data-dpr={Array.isArray(props.dpr) ? props.dpr.join(',') : String(props.dpr)}
       data-shadows={String(props.shadows)}
       data-camera-position={props.camera?.position?.join(',')}
@@ -47,6 +71,7 @@ vi.mock('../../lib/threejsSculpt', async (importOriginal) => {
   };
 });
 
+import { THREEJS_RENDER_PROFILE } from '../../lib/threejsEnvironment';
 import ThreejsModelPreview from './ThreejsModelPreview';
 
 const SPEC = {
@@ -229,6 +254,74 @@ describe('ThreejsModelPreview', () => {
     const standard = container.querySelector('meshStandardMaterial');
     expect(standard.getAttribute('ior')).toBeNull();
     expect(standard.getAttribute('transmission')).toBeNull();
+  });
+});
+
+// Punctual lights light a surface; only an environment gives it something to
+// REFLECT. Without one, a physically plausible conductor renders near-black and
+// the next refinement pass "fixes" that by authoring implausible values back in.
+describe('ThreejsModelPreview environment', () => {
+  const metalSpec = (environment) => ({
+    ...SPEC,
+    ...(environment ? { environment } : {}),
+    materials: { chrome: material({ metalness: 1, roughness: 0.1 }) },
+    parts: [part('shell', box, 'chrome')],
+  });
+  const intensityOf = (container) =>
+    container.querySelector('meshStandardMaterial').getAttribute('envMapIntensity');
+
+  beforeEach(() => {
+    environmentBuilds.length = 0;
+    threeState.scene.environment = null;
+  });
+
+  // Every export stamps THREEJS_RENDER_PROFILE onto the model as the settings it
+  // was authored against. r3f installs sRGB + ACESFilmic for `linear={false}
+  // flat={false}`, so passing either flag here would quietly make that claim
+  // false; exposure is the one r3f leaves alone, so the preview states it.
+  it('renders at the render profile the export promises', () => {
+    renderPreview(<ThreejsModelPreview spec={SPEC} />);
+    const canvas = screen.getByTestId('threejs-canvas');
+    expect(canvas).toHaveAttribute('data-tone-exposure', String(THREEJS_RENDER_PROFILE.toneMappingExposure));
+    expect(canvas).toHaveAttribute('data-linear', 'undefined');
+    expect(canvas).toHaveAttribute('data-flat', 'undefined');
+  });
+
+  it('assigns the authored preset to the scene and forwards its intensity to the material', () => {
+    const { container } = renderPreview(<ThreejsModelPreview spec={metalSpec({ preset: 'studio', intensity: 2 })} />);
+
+    expect(environmentBuilds.map((texture) => texture.preset)).toEqual(['studio']);
+    expect(threeState.scene.environment).toBe(environmentBuilds[0]);
+    expect(intensityOf(container)).toBe('2');
+  });
+
+  // A record stored before the environment block shipped has no key and was
+  // rendered with none, so it must keep rendering exactly that way.
+  it('builds nothing for a spec that predates the environment block', () => {
+    const { container } = renderPreview(<ThreejsModelPreview spec={metalSpec(null)} />);
+
+    expect(environmentBuilds).toHaveLength(0);
+    expect(threeState.scene.environment).toBeNull();
+    expect(intensityOf(container)).toBe('1');
+  });
+
+  it('swaps presets without leaking the previous PMREM texture', () => {
+    const { rerender } = renderPreview(<ThreejsModelPreview spec={metalSpec({ preset: 'neutral', intensity: 1 })} />);
+    const [first] = environmentBuilds;
+
+    rerender(<ThreejsModelPreview spec={metalSpec({ preset: 'studio', intensity: 1 })} />);
+    expect(first.dispose).toHaveBeenCalled();
+    expect(threeState.scene.environment).toBe(environmentBuilds[1]);
+    expect(environmentBuilds[1].preset).toBe('studio');
+  });
+
+  it('releases the texture and clears the scene on unmount', () => {
+    const { unmount } = renderPreview(<ThreejsModelPreview spec={metalSpec({ preset: 'studio', intensity: 1 })} />);
+    const [texture] = environmentBuilds;
+
+    unmount();
+    expect(texture.dispose).toHaveBeenCalled();
+    expect(threeState.scene.environment).toBeNull();
   });
 });
 

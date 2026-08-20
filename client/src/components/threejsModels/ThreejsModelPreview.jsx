@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
-import { Canvas, useFrame } from '@react-three/fiber';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Bounds, OrbitControls, useBounds } from '@react-three/drei';
 import * as THREE from 'three';
 import { createSculptBufferGeometry, needsSculptBufferGeometry, sculptMaterialProps } from '../../lib/threejsSculpt';
+import { createSculptEnvironmentTexture, resolveSculptEnvironment, THREEJS_RENDER_PROFILE } from '../../lib/threejsEnvironment';
 import {
   collectThreejsCues,
   evaluateThreejsClipPose,
@@ -129,14 +130,14 @@ function Geometry({ definition }) {
   }
 }
 
-function Material({ definition, highlighted = false, auditMode = 'final', partId, opacity }) {
+function Material({ definition, highlighted = false, auditMode = 'final', partId, opacity, envMapIntensity = 1 }) {
   if (auditMode === 'normals') return <meshNormalMaterial />;
   if (auditMode === 'wireframe') return <meshBasicMaterial color="#cbd5e1" wireframe />;
   if (auditMode === 'boundaries') {
     return <meshStandardMaterial color={auditPartColor(partId)} metalness={0} roughness={0.62} />;
   }
   if (auditMode === 'neutral') return <meshStandardMaterial color="#a8b0bd" metalness={0} roughness={0.72} />;
-  const authored = sculptMaterialProps(definition);
+  const authored = sculptMaterialProps(definition, envMapIntensity);
   // A clip's opacity channel overrides the authored value for as long as the
   // clip drives it. `transparent` has to come with it — Three.js ignores an
   // opacity below 1 on an opaque material — but the authored flag still wins
@@ -161,7 +162,7 @@ function Material({ definition, highlighted = false, auditMode = 'final', partId
 const offsetPosition = (position = [0, 0, 0], offset) =>
   (Array.isArray(offset) ? position.map((value, axis) => value + offset[axis]) : position);
 
-function Part({ part, materials, layout, selection, selectedId, onSelect, auditMode, pose }) {
+function Part({ part, materials, layout, selection, selectedId, onSelect, auditMode, pose, envMapIntensity }) {
   // The clip's pose for this part, or nothing — a part no sequence drives keeps
   // exactly the transform the spec authored, which is also what every part of a
   // model with no clips at all gets.
@@ -191,11 +192,11 @@ function Part({ part, materials, layout, selection, selectedId, onSelect, auditM
       {part.geometry && (
         <mesh castShadow={part.castShadow} receiveShadow={part.receiveShadow} onClick={select}>
           <Geometry definition={part.geometry} />
-          <Material definition={materials[part.material]} highlighted={highlighted} auditMode={auditMode} partId={part.id} opacity={posed?.opacity} />
+          <Material definition={materials[part.material]} highlighted={highlighted} auditMode={auditMode} partId={part.id} opacity={posed?.opacity} envMapIntensity={envMapIntensity} />
         </mesh>
       )}
       {part.children.filter(isReliefPart).map((child) => (
-        <Part key={child.id} part={child} materials={materials} layout={layout} selection={selection} selectedId={selectedId} onSelect={onSelect} auditMode={auditMode} pose={pose} />
+        <Part key={child.id} part={child} materials={materials} layout={layout} selection={selection} selectedId={selectedId} onSelect={onSelect} auditMode={auditMode} pose={pose} envMapIntensity={envMapIntensity} />
       ))}
     </>
   );
@@ -214,6 +215,7 @@ function Part({ part, materials, layout, selection, selectedId, onSelect, auditM
           onSelect={onSelect}
           auditMode={auditMode}
           pose={pose}
+          envMapIntensity={envMapIntensity}
         />
       ))}
     </group>
@@ -289,10 +291,39 @@ function SceneLight({ light }) {
   return <directionalLight color={light.color} intensity={light.intensity} position={light.position} castShadow />;
 }
 
+// The image-based lighting `spec.lights` cannot supply. Punctual lights light a
+// surface; only an environment gives it something to REFLECT, so without this a
+// physically plausible conductor renders near-black and transmission, clearcoat
+// and iridescence do nothing — and the next refinement pass "fixes" that by
+// authoring implausible values back in.
+//
+// Assigned imperatively rather than through drei's <Environment preset=…>, which
+// fetches an HDR from a CDN: rendering a local model must make no outbound
+// request. The texture is owned here, so switching presets or unmounting
+// releases the GPU memory the PMREM pass allocated.
+function SceneEnvironment({ preset }) {
+  const gl = useThree((state) => state.gl);
+  const scene = useThree((state) => state.scene);
+  useEffect(() => {
+    if (!scene) return undefined;
+    const texture = preset === 'none' ? null : createSculptEnvironmentTexture(gl, preset);
+    scene.environment = texture;
+    return () => {
+      // Only clear what this effect set — a later effect may already have
+      // installed the next preset's texture.
+      if (scene.environment === texture) scene.environment = null;
+      texture?.dispose();
+    };
+  }, [gl, scene, preset]);
+  return null;
+}
+
 function ProceduralScene({ spec, background, layout, selection, selectedId, onSelect, auditMode, pose, clipId }) {
+  const environment = resolveSculptEnvironment(spec);
   return (
     <>
       {background && <color attach="background" args={[background]} />}
+      <SceneEnvironment preset={environment.preset} />
       {spec.lights.map((light, index) => <SceneLight key={`${light.type}-${index}`} light={light} />)}
       <Bounds fit clip observe margin={1.25}>
         <SceneRefit growth={layout.growth} clipId={clipId} />
@@ -311,6 +342,7 @@ function ProceduralScene({ spec, background, layout, selection, selectedId, onSe
               onSelect={onSelect}
               auditMode={auditMode}
               pose={pose}
+              envMapIntensity={environment.intensity}
             />
           ))}
         </group>
@@ -560,7 +592,12 @@ export default function ThreejsModelPreview({ spec, family = null, className = '
         shadows={quality.shadows}
         camera={{ position: auditCameraPosition, fov: spec.camera.fov, near: 0.01, far: 10_000 }}
         dpr={quality.dpr}
-        gl={{ alpha: transparent }}
+        // The colour-management half of the render profile the export stamps on
+        // every model. outputColorSpace and toneMapping come from r3f own
+        // defaults for linear={false} flat={false} — so neither flag is passed
+        // here — while exposure is the one r3f leaves to three, stated outright
+        // rather than inherited so the exported claim stays true.
+        gl={{ alpha: transparent, toneMappingExposure: THREEJS_RENDER_PROFILE.toneMappingExposure }}
       >
         <PreviewAdaptiveQuality
           enabled={qualityMode === 'auto'}

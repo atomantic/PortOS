@@ -5,6 +5,7 @@ import {
   buildThreejsMaterialFeedback,
   evaluateThreejsFlatness,
   evaluateThreejsMaterialPlausibility,
+  resolveThreejsEnvironment,
   storedThreejsSculptSpecSchema,
   threejsGeometrySchema,
   threejsSculptSpecSchema,
@@ -745,8 +746,13 @@ describe('buildThreejsFactorySource articulation', () => {
 // crate hierarchy and swaps the material map. Every material is parsed through
 // the real schema first, so a fixture can never assert on a value the authoring
 // contract would have rejected anyway.
-const materialSpec = (materials) => threejsSculptSpecSchema.parse({
+// Every case that is about SUBSTANCE plausibility gets a real environment, so the
+// unlit-reflective note never lands in its findings; the environment cases pass
+// null to omit the key entirely, which is what a record stored before the block
+// shipped looks like.
+const materialSpec = (materials, environment = { preset: 'studio', intensity: 1 }) => threejsSculptSpecSchema.parse({
   ...validSpec(),
+  ...(environment ? { environment } : {}),
   materials,
   parts: [{ ...validSpec().parts[0], children: [], material: Object.keys(materials)[0] }],
   sockets: [],
@@ -838,6 +844,124 @@ describe('evaluateThreejsMaterialPlausibility', () => {
       materialCount: 0,
       matchedMaterialCount: 0,
     });
+  });
+});
+
+describe('evaluateThreejsMaterialPlausibility environment', () => {
+  const notes = (result) => result.findings.filter((finding) => finding.severity === 'note');
+
+  // The whole point of the note: metalness 0.95 is exactly what the metal prior
+  // ASKS for, so it draws no substance warning — and in a scene with no
+  // environment it renders near-black anyway.
+  it('notes a plausible conductor that has nothing to reflect', () => {
+    const result = evaluateThreejsMaterialPlausibility(materialSpec({
+      steelPlate: { type: 'standard', color: '#8a8f98', metalness: 0.95, roughness: 0.2 },
+    }, null));
+    expect(result.warningCount).toBe(0);
+    expect(result.noteCount).toBe(1);
+    const [note] = notes(result);
+    expect(note.code).toBe('reflective-material-without-environment');
+    expect(note.materialIds).toEqual(['steelPlate']);
+    expect(note.message).toContain('metalness');
+    expect(note.message).toContain('"none"');
+  });
+
+  it('names transmission, clearcoat, and iridescence as reflective too', () => {
+    const result = evaluateThreejsMaterialPlausibility(materialSpec({
+      windowPane: { type: 'physical', color: '#cfe8ff', metalness: 0, roughness: 0.05, transmission: 0.9, ior: 1.5 },
+      lacquerShell: { type: 'physical', color: '#334155', metalness: 0, roughness: 0.3, clearcoat: 0.8 },
+      pearlInlay: { type: 'physical', color: '#f5f5f4', metalness: 0, roughness: 0.2, iridescence: 0.7 },
+    }, null));
+    const [note] = notes(result);
+    expect(note.materialIds).toEqual(['windowPane', 'lacquerShell', 'pearlInlay']);
+    expect(note.message).toContain('transmission');
+    expect(note.message).toContain('clearcoat');
+    expect(note.message).toContain('iridescence');
+  });
+
+  it('stays silent once the spec authors an environment', () => {
+    const materials = {
+      steelPlate: { type: 'standard', color: '#8a8f98', metalness: 0.95, roughness: 0.2 },
+    };
+    expect(notes(evaluateThreejsMaterialPlausibility(materialSpec(materials, { preset: 'neutral', intensity: 1 })))).toEqual([]);
+    expect(notes(evaluateThreejsMaterialPlausibility(materialSpec(materials, { preset: 'studio', intensity: 2 })))).toEqual([]);
+    // An explicit "none" is the same scene as no key at all, so it still notes.
+    expect(notes(evaluateThreejsMaterialPlausibility(materialSpec(materials, { preset: 'none', intensity: 1 })))).toHaveLength(1);
+  });
+
+  // A channel the material's type never forwards cannot render, so it cannot be
+  // the reason anything looks wrong — and a dielectric with a trace of metalness
+  // has essentially nothing to lose.
+  it('ignores channels the type drops, unlit materials, and non-reflective values', () => {
+    const result = evaluateThreejsMaterialPlausibility(materialSpec({
+      plasticShell: { type: 'standard', color: '#334155', metalness: 0.2, roughness: 0.5, transmission: 1, clearcoat: 1 },
+      decalSticker: { type: 'basic', color: '#8a8f98', metalness: 1, roughness: 0 },
+    }, null));
+    expect(notes(result)).toEqual([]);
+  });
+
+  it('feeds the note back so a refinement fixes the scene instead of the metal', () => {
+    const feedback = buildThreejsMaterialFeedback(evaluateThreejsMaterialPlausibility(materialSpec({
+      steelPlate: { type: 'standard', color: '#8a8f98', metalness: 0.95, roughness: 0.2 },
+    }, null)));
+    expect(feedback).toContain('steelPlate');
+    expect(feedback).toContain('environment');
+    // No substance warning fired, so the feedback must not open with one.
+    expect(feedback).not.toContain('do not match the substance');
+  });
+});
+
+describe('threejsSculptSpecSchema environment', () => {
+  it('accepts a bounded preset and intensity', () => {
+    const parsed = threejsSculptSpecSchema.parse({ ...validSpec(), environment: { preset: 'studio', intensity: 2.5 } });
+    expect(parsed.environment).toEqual({ preset: 'studio', intensity: 2.5 });
+    expect(threejsSculptSpecSchema.safeParse({ ...validSpec(), environment: { preset: 'hdri' } }).success).toBe(false);
+    expect(threejsSculptSpecSchema.safeParse({ ...validSpec(), environment: { preset: 'studio', intensity: 9 } }).success).toBe(false);
+  });
+
+  // Additive-optional, the same contract as `articulation` and `animation`: a
+  // record an install stored before this block shipped must parse untouched, and
+  // must not acquire a key claiming an environment it never had.
+  it('leaves a stored spec that predates it alone, and reads it as none', () => {
+    const legacy = validSpec();
+    const parsed = storedThreejsSculptSpecSchema.parse(legacy);
+    expect(parsed.environment).toBeUndefined();
+    expect(resolveThreejsEnvironment(parsed)).toEqual({ preset: 'none', intensity: 1 });
+  });
+
+  it('reads a partial or unrecognized block as the default for the missing half', () => {
+    // A newer peer's preset name resolves to `none` rather than to a guess.
+    expect(resolveThreejsEnvironment({ environment: { preset: 'hdri', intensity: 2 } })).toEqual({ preset: 'none', intensity: 2 });
+    expect(resolveThreejsEnvironment({ environment: { preset: 'studio' } })).toEqual({ preset: 'studio', intensity: 1 });
+    expect(resolveThreejsEnvironment(null)).toEqual({ preset: 'none', intensity: 1 });
+  });
+});
+
+describe('buildThreejsFactorySource render profile', () => {
+  it('stamps the renderer contract the model was authored against', () => {
+    const source = buildThreejsFactorySource({ ...validSpec(), environment: { preset: 'studio', intensity: 1.5 } });
+    expect(source).toContain('const renderProfile = {');
+    expect(source).toContain('export { spec, renderProfile };');
+    expect(source).toContain('render: renderProfile,');
+    const flat = source.replace(/\s+/g, '');
+    expect(flat).toContain('"outputColorSpace":"srgb"');
+    expect(flat).toContain('"toneMapping":"ACESFilmic"');
+    expect(flat).toContain('"toneMappingExposure":1');
+    expect(flat).toContain('"environment":{"preset":"studio","intensity":1.5}');
+    // The intensity has to REACH the material, or the profile is a claim the
+    // export does not honour.
+    expect(source).toContain('envMapIntensity: renderProfile.environment.intensity,');
+  });
+
+  it('stamps the none profile for a stored spec that predates the environment block', () => {
+    const source = buildThreejsFactorySource(validSpec());
+    expect(source.replace(/\s+/g, '')).toContain('"environment":{"preset":"none","intensity":1}');
+    // …without inventing the key on the serialized spec itself: the ONE
+    // occurrence is the render profile's, so the exported spec still round-trips
+    // as the environment-less record the install actually stored.
+    expect(source.match(/"environment"/g)).toHaveLength(1);
+    expect(buildThreejsFactorySource({ ...validSpec(), environment: { preset: 'neutral', intensity: 1 } })
+      .match(/"environment"/g)).toHaveLength(2);
   });
 });
 

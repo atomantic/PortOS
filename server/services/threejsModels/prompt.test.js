@@ -23,6 +23,16 @@ describe('buildThreejsGenerationPrompt', () => {
     expect(build()).toContain('The model must come apart into readable components');
   });
 
+  // Without this the model authors a physically correct conductor into a scene
+  // with nothing to reflect, sees it render near-black, and "fixes" it next pass
+  // by authoring implausible values back in.
+  it('offers the environment block and gates reflective channels on having one', () => {
+    const prompt = build();
+    expect(prompt).toContain('"environment": {"preset":"none" | "neutral" | "studio","intensity":0..4}');
+    expect(prompt).toContain('reflect an environment or they reflect nothing');
+    expect(prompt).toContain('sets an "environment" preset other than "none"');
+  });
+
   it('says when extrude is the WRONG answer and gates on cross-section', () => {
     const prompt = build();
     // Selling extrude for silhouettes without naming its failure mode is how a

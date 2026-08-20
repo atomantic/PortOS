@@ -316,6 +316,69 @@ const lightSchema = z.object({
   penumbra: z.number().finite().min(0).max(1).default(0.25),
 });
 
+/**
+ * The image-based lighting the spec is authored against.
+ *
+ * `lights` alone are punctual: they light a surface but give it nothing to
+ * REFLECT, and every reflective PBR channel the material schema accepts —
+ * `metalness`, `transmission`, `clearcoat`, `iridescence` — reads off an
+ * environment or reads off nothing at all. A conductor in a scene with no
+ * environment renders near-black however plausible its values are, so a
+ * refinement pass has every incentive to "fix" the look by authoring
+ * implausible values back in.
+ *
+ * Both presets are built locally from three's own primitives (see
+ * `client/src/lib/threejsEnvironment.js`) — PortOS never fetches an HDR to
+ * render a local model.
+ */
+export const THREEJS_ENVIRONMENT_PRESETS = ['none', 'neutral', 'studio'];
+
+const environmentSchema = z.object({
+  preset: z.enum(THREEJS_ENVIRONMENT_PRESETS).default('none'),
+  intensity: z.number().finite().min(0).max(4).default(1),
+});
+
+/**
+ * What a spec with no `environment` key means. A record stored before this block
+ * shipped was authored and rendered with no environment at all, so `none` is the
+ * honest reading of it — not a retroactive claim that it had one.
+ */
+export const DEFAULT_THREEJS_ENVIRONMENT = Object.freeze({ preset: 'none', intensity: 1 });
+
+/**
+ * The spec's environment, normalized for a caller that must not care whether the
+ * key is present. Tolerant of a partially-filled block so a stored record that
+ * predates a field reads as the default for it rather than `undefined`.
+ */
+export const resolveThreejsEnvironment = (spec) => {
+  const environment = spec?.environment;
+  if (!environment || typeof environment !== 'object') return { ...DEFAULT_THREEJS_ENVIRONMENT };
+  return {
+    preset: THREEJS_ENVIRONMENT_PRESETS.includes(environment.preset)
+      ? environment.preset
+      : DEFAULT_THREEJS_ENVIRONMENT.preset,
+    intensity: typeof environment.intensity === 'number' && Number.isFinite(environment.intensity)
+      ? environment.intensity
+      : DEFAULT_THREEJS_ENVIRONMENT.intensity,
+  };
+};
+
+/**
+ * The renderer settings a PortOS-authored spec is composed against, stamped onto
+ * the exported factory so a consumer wiring their own `WebGLRenderer` reproduces
+ * the model instead of a differently tone-mapped approximation of it. These are
+ * the react-three-fiber `<Canvas>` defaults the preview runs on; two renders of
+ * the same spec are only comparable when both sides agree on them.
+ *
+ * Data only. The factory never constructs a renderer, exactly as it never
+ * constructs a scene or a camera.
+ */
+export const THREEJS_RENDER_PROFILE = Object.freeze({
+  outputColorSpace: 'srgb',
+  toneMapping: 'ACESFilmic',
+  toneMappingExposure: 1,
+});
+
 const socketSchema = z.object({
   name: idSchema,
   parentPartId: idSchema,
@@ -538,6 +601,11 @@ const makeSpecSchema = (scaleSchema) => z.object({
     .refine((materials) => Object.keys(materials).length > 0, 'at least one material is required')
     .refine((materials) => Object.keys(materials).length <= 50, 'at most 50 materials are allowed'),
   lights: z.array(lightSchema).min(1).max(8),
+  // Optional and additive, same contract as `articulation` and `animation`: a
+  // spec authored before image-based lighting shipped simply has no key, which
+  // `resolveThreejsEnvironment` reads as the `none` it was actually rendered
+  // with. A newly authored spec is asked for a real preset.
+  environment: environmentSchema.optional(),
   parts: z.array(makePartSchema(scaleSchema)).min(1).max(40),
   sockets: z.array(socketSchema).max(40).default([]),
   // Optional and additive: a spec written before articulation shipped simply has
@@ -989,6 +1057,24 @@ const MATERIAL_CHANNELS_BY_TYPE = {
   physical: ['metalness', 'roughness', 'clearcoat', 'ior', 'transmission', 'sheen'],
 };
 
+// The channels that read off an ENVIRONMENT rather than off the punctual lights:
+// with nothing to reflect, a conductor renders near-black and transmission,
+// clearcoat and iridescence do essentially nothing. Same type filter as above —
+// `basic` is unlit and the physical-only channels are forwarded only by
+// `type: 'physical'` — so the note never names a channel that could not have
+// rendered anyway. The metalness threshold is the metal family's own floor: a
+// dielectric with a little metalness has almost nothing to lose here.
+const REFLECTIVE_METALNESS_FLOOR = 0.6;
+const REFLECTIVE_CHANNELS_BY_TYPE = {
+  basic: [],
+  standard: ['metalness'],
+  physical: ['metalness', 'transmission', 'clearcoat', 'iridescence'],
+};
+
+// A channel counts as authored when it is above the floor its own absence would
+// sit at: metalness has a real threshold, the rest are opt-in from zero.
+const reflectiveChannelFloor = (channel) => (channel === 'metalness' ? REFLECTIVE_METALNESS_FLOOR : 0);
+
 /**
  * Split a material id into lowercase word tokens, breaking on separators AND on
  * camelCase boundaries so `oakTrim` and `oak_trim` tokenize the same. A trailing
@@ -1035,9 +1121,19 @@ const matchMaterialFamily = (id) => {
 export function evaluateThreejsMaterialPlausibility(spec) {
   const materials = (spec?.materials && typeof spec.materials === 'object') ? spec.materials : {};
   const findings = [];
+  const unlitReflective = [];
+  const environment = resolveThreejsEnvironment(spec);
   let matched = 0;
 
   for (const [id, material] of Object.entries(materials)) {
+    if (environment.preset === 'none') {
+      const reflective = (REFLECTIVE_CHANNELS_BY_TYPE[material?.type] || REFLECTIVE_CHANNELS_BY_TYPE.standard)
+        .filter((channel) => {
+          const value = material?.[channel];
+          return typeof value === 'number' && Number.isFinite(value) && value > reflectiveChannelFloor(channel);
+        });
+      if (reflective.length > 0) unlitReflective.push({ id, channels: reflective });
+    }
     const prior = matchMaterialFamily(id);
     if (!prior) continue;
     matched += 1;
@@ -1066,13 +1162,28 @@ export function evaluateThreejsMaterialPlausibility(spec) {
     });
   }
 
+  // One finding per implausible material, so the warning tally is also the count
+  // of materials that failed — no separate tally that could disagree with it.
+  const warningCount = findings.length;
+
+  // One note for the whole spec rather than one per material: the remedy is a
+  // single spec-level choice, and repeating it per material would bury the
+  // substance warnings above it.
+  if (unlitReflective.length > 0) {
+    findings.push({
+      code: 'reflective-material-without-environment',
+      severity: 'note',
+      materialIds: unlitReflective.map((entry) => entry.id),
+      channels: unlitReflective,
+      message: `${listSpecNames(unlitReflective.map((entry) => entry.id))} author reflective channels (${listSpecNames([...new Set(unlitReflective.flatMap((entry) => entry.channels))])}) while "environment.preset" is "none". Those channels read off an environment, so in this scene a conductor renders near-black and transmission, clearcoat and iridescence do essentially nothing — the values cannot be judged as authored. Give the spec an environment ("neutral" or "studio") to see them.`,
+    });
+  }
+
   return {
     findings,
     errorCount: 0,
-    warningCount: findings.length,
-    noteCount: 0,
-    // One finding per implausible material, so `warningCount` is also the count
-    // of materials that failed — no separate tally that could disagree with it.
+    warningCount,
+    noteCount: findings.length - warningCount,
     materialCount: Object.keys(materials).length,
     matchedMaterialCount: matched,
   };
@@ -1080,17 +1191,24 @@ export function evaluateThreejsMaterialPlausibility(spec) {
 
 /**
  * Default refinement feedback derived from a stored material-plausibility
- * result. Returns '' when every recognized material is plausible, so the caller
- * falls through to whatever other feedback it has.
+ * result: the substance warnings, then the unlit-reflective note if the spec
+ * authored reflective channels with no environment. Returns '' when there is
+ * neither, so the caller falls through to whatever other feedback it has.
  */
 export function buildThreejsMaterialFeedback(plausibility) {
-  const warnings = (plausibility?.findings || []).filter((finding) => finding.severity === 'warning');
-  if (warnings.length === 0) return '';
-  return [
+  const findings = plausibility?.findings || [];
+  const warnings = findings.filter((finding) => finding.severity === 'warning');
+  const substance = warnings.length === 0 ? [] : [
     'The previous pass gave some materials values that do not match the substance they are named for:',
     ...warnings.map((finding, index) => `${index + 1}. ${finding.message}`),
     'Set each channel from what the surface actually is — bare metal is metallic and fairly smooth, wood and stone are rough dielectrics, glass transmits — and keep any deliberate stylization you still want.',
-  ].join('\n');
+  ];
+  // The unlit-reflective note is fed back as well as displayed: choosing an
+  // environment preset is a change the next pass can actually make, and leaving
+  // it out is what lets a refinement "fix" a black conductor by dropping its
+  // metalness instead.
+  const unlit = findings.filter((finding) => finding.code === 'reflective-material-without-environment');
+  return [...substance, ...unlit.map((finding) => finding.message)].join('\n');
 }
 
 const toIdentifier = (name) => {
@@ -1114,12 +1232,28 @@ export function buildThreejsFactorySource(input) {
   const spec = parsed.data;
   const factoryName = `create${toIdentifier(spec.name)}Model`;
   const serialized = JSON.stringify(spec, null, 2);
+  // The renderer contract the spec was composed against. Serialized rather than
+  // derived in the emitted source, because the colour-management half of it is
+  // PortOS's viewer contract and is not in the spec at all.
+  const renderProfile = JSON.stringify(
+    { ...THREEJS_RENDER_PROFILE, environment: resolveThreejsEnvironment(spec) },
+    null,
+    2
+  );
 
   return `// Generated by PortOS Three.js Models.
 // Procedural image-to-Three.js workflow inspired by https://github.com/hoainho/img2threejs
 import * as THREE from 'three';
 
 const spec = ${serialized};
+
+// The renderer settings this model was authored against. Configure your own
+// WebGLRenderer and scene to match, or it will not reproduce: without the
+// environment its metals have nothing to reflect, and a different tone map or
+// exposure changes every value on screen. Data only — this module builds no
+// renderer, and the environment preset is yours to construct.
+const renderProfile = ${renderProfile};
+
 const radians = (degrees) => THREE.MathUtils.degToRad(degrees);
 const rotation = (value) => value.map(radians);
 
@@ -1192,6 +1326,9 @@ function createMaterial(definition) {
     roughness: definition.roughness,
     emissive: definition.emissive,
     emissiveIntensity: definition.emissiveIntensity,
+    // The spec's environment intensity, so the reflective channels below read at
+    // the strength they were authored at once you assign the environment.
+    envMapIntensity: renderProfile.environment.intensity,
   };
   if (definition.type === 'physical') {
     return new THREE.MeshPhysicalMaterial({
@@ -1254,10 +1391,13 @@ export function ${factoryName}() {
     animation: spec.animation || null,
     detailInventory: spec.detailInventory,
     limitations: spec.limitations,
+    // The renderer contract above, carried on the model so a consumer that only
+    // ever sees the Group still knows what it has to match to reproduce it.
+    render: renderProfile,
   };
   return root;
 }
 ${THREEJS_PLAYER_SOURCE}
-export { spec };
+export { spec, renderProfile };
 `;
 }

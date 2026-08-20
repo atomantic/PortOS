@@ -66,6 +66,7 @@ Return one raw JSON object and nothing else. It must have exactly this top-level
     "color":"#RRGGBB","groundColor":"#RRGGBB","intensity":n,
     "position":[x,y,z],"angleDegrees":45,"penumbra":0.25
   }],
+  "environment": {"preset":"none" | "neutral" | "studio","intensity":0..4},
   "parts": [{
     "id":"stablePartId","name":"Readable part name",
     "geometry": { ...one allowed geometry... },
@@ -83,6 +84,15 @@ Return one raw JSON object and nothing else. It must have exactly this top-level
     "priority":"identity" | "major" | "minor"
   }]
 }
+
+"environment" is the image-based lighting the scene is composed against, and it is what the
+reflective channels actually read: "metalness", "transmission", "clearcoat" and "iridescence"
+reflect an environment or they reflect nothing, so a physically correct metal in a scene with
+"preset":"none" renders near-black however right its values are. "lights" alone cannot supply
+it. Choose "studio" for anything with bare metal, chrome, gloss, glass or gems — it is a dark
+room with bright softboxes, which gives a conductor high-contrast highlights. Choose "neutral"
+for an evenly-lit subject in matte materials. Choose "none" only for a deliberately flat,
+unreflective look. "intensity" scales how strongly surfaces pick it up; 1 is the neutral value.
 
 Every part "scale" component (sx, sy, sz) must be a strictly positive size multiplier of
 at least 0.0001. Zero collapses the part to an invisible plane and a negative component
@@ -249,7 +259,7 @@ WORKFLOW:
 3. Inventory every identity-defining visible detail: silhouette, proportions, bevels/rounding, seams, trim, controls, fasteners, facial landmarks, limbs, wear, gloss, emissive regions, and attachment points.
 4. Build from a clear parent/child hierarchy. Put moving or attachable pieces in their own named parts. Add sockets for meaningful pivots/attachments. Set "explodeWithParent":true on surface relief — serrations, stria, ridges, trim, engraving, port floors, panel lines and other detail that belongs TO a part rather than being a part — so the viewer takes the model apart into readable components instead of a comb of loose slivers. Leave it false (the default) on anything a person would call a separate component.
 5. Use primitive composition first, then the schema-backed extrude/tube/lathe forms for silhouettes, cutouts, and swept details. Use custom triangles only when no other allowed form can reproduce the shape.
-6. Use physically coherent PBR material channels. Reach for "physical" with ior/transmission/thickness for glass, gems, liquid, and clear plastic, sheen for cloth and velvet, iridescence for oil-slick/soap-film/pearlescent finishes, and anisotropy for brushed metal or spun discs. Do not use textures, external meshes, URLs, downloaded assets, or JavaScript.
+6. Use physically coherent PBR material channels. Reach for "physical" with ior/transmission/thickness for glass, gems, liquid, and clear plastic, sheen for cloth and velvet, iridescence for oil-slick/soap-film/pearlescent finishes, and anisotropy for brushed metal or spun discs. Then choose the "environment" preset those channels need — they read off it, not off "lights". Do not use textures, external meshes, URLs, downloaded assets, or JavaScript.
 7. Center the subject near the origin, keep dimensions internally consistent, and choose a camera that frames the whole model.
 8. Be honest about unseen sides in limitations. Infer conservatively; never claim exact hidden geometry.
 9. Ensure every detailInventory item points to real part ids, every material reference exists, every socket parent exists, all ids are unique, custom indices are in range, extrude rings enclose real area with non-overlapping holes inside the outline, and tube paths never repeat a point.
@@ -262,6 +272,9 @@ QUALITY GATE:
 - Do not spend custom triangles on a shape extrude, tube, or lathe already expresses.
 - A subject that is not genuinely plate-like must not have every identity part flat along one axis: the model has to hold up when it is orbited, not only from the camera you choose.
 - Include useful ambient/hemisphere fill plus at least one directional/key light.
+- Any spec that authors a reflective channel — metalness above 0.6, or any transmission,
+  clearcoat, or iridescence — sets an "environment" preset other than "none". Those values
+  cannot be judged, by you or by anyone reviewing the render, in a scene with nothing to reflect.
 - Keep the full hierarchy at 160 parts or fewer.${familyChecklist ? `
 - Every required component in the subject-family checklist is either built and inventoried, or
   named in limitations with the reason the reference does not support it. Silence on one is a failure.

@@ -653,7 +653,7 @@ export default function ThreejsModelDetail() {
             ? 'Recognized materials match their substance'
             : 'No material named a substance to check'}
           footer={`Every channel here is already inside what Three.js accepts, so this check asks the other question: whether the values suit the substance the material is named for — metallic wood and opaque glass both parse. Only materials whose id names exactly one substance are checked, and nothing is ever adjusted.${
-            materialFindings.length > 0
+            countSeverities(materialFindings).warning > 0
               ? ' Refining without your own feedback will also ask for values that match the substance — keep any deliberate stylization in your own feedback.'
               : ''
           }`}
