@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { ArrowLeft, Boxes, AlertTriangle, Loader2, RefreshCw, Trash2 } from 'lucide-react';
 import { getImageTo3dModel, generateImageTo3dModel, deleteImageTo3dModel, imageTo3dAssetUrl } from '../services/api';
@@ -8,6 +8,8 @@ import { timeAgo } from '../utils/formatters';
 import GlbViewer from '../components/media/GlbViewer';
 import MediaImage from '../components/MediaImage';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
+import ImageTo3dRenderOptions from '../components/media/ImageTo3dRenderOptions';
+import { fieldsFromRun, renderOptionsBody } from '../lib/imageTo3dRenderOptions';
 import { imageTo3dStatusMeta } from '../components/media/imageTo3dStatus';
 import toast from '../components/ui/Toast';
 
@@ -27,6 +29,13 @@ export default function Media3DDetail() {
   const [notFound, setNotFound] = useState(false);
   const [busy, setBusy] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  // Per-run knobs, seeded from the latest run once per id (NOT on every poll
+  // tick — that would clobber in-progress edits). Seed stays blank by design:
+  // see fieldsFromRun.
+  const [steps, setSteps] = useState('');
+  const [seed, setSeed] = useState('');
+  const [keyBackground, setKeyBackground] = useState(true);
+  const optionsSeededFor = useRef(null);
 
   const load = useCallback(async ({ initial = false } = {}) => {
     const next = await getImageTo3dModel(id, { silent: true }).catch((err) => {
@@ -57,16 +66,30 @@ export default function Media3DDetail() {
     enabled: !notFound && record?.status === 'generating',
   });
 
+  // Seed the option fields from the latest run once per id.
+  useEffect(() => {
+    if (!record || optionsSeededFor.current === record.id) return;
+    optionsSeededFor.current = record.id;
+    const fields = fieldsFromRun(record.runs?.at?.(-1));
+    setSteps(fields.steps);
+    setSeed(fields.seed);
+    setKeyBackground(fields.keyBackground);
+  }, [record]);
+
   const handleRegenerate = useCallback(async () => {
     if (busy || record?.status === 'generating') return;
     setBusy(true);
-    const next = await generateImageTo3dModel(id, { silent: true }).catch((err) => {
+    const next = await generateImageTo3dModel(
+      id,
+      renderOptionsBody({ steps, seed, keyBackground }),
+      { silent: true },
+    ).catch((err) => {
       toast.error(err?.message || 'Could not start the render.');
       return null;
     });
     if (mountedRef.current) setBusy(false);
     if (next && mountedRef.current) setRecord(next);
-  }, [busy, record?.status, id, mountedRef]);
+  }, [busy, record?.status, id, steps, seed, keyBackground, mountedRef]);
 
   const handleDelete = useCallback(async () => {
     const ok = await deleteImageTo3dModel(id, { silent: true }).then(() => true).catch((err) => {
@@ -136,9 +159,25 @@ export default function Media3DDetail() {
         </div>
         <p className="mt-1 text-xs text-gray-500">
           {imageTo3dStatusMeta(record.status).label}
-          {isGenerating && percent !== null ? ` · ${percent}%` : ''} · updated {timeAgo(record.updatedAt)}
+          {isGenerating && percent !== null ? ` · ${percent}%` : ''}
+          {Number.isInteger(latestRun?.seed) ? ` · seed ${latestRun.seed}` : ''}
+          {Number.isInteger(latestRun?.steps) ? ` · ${latestRun.steps} steps` : ''}
+          {latestRun?.sourceKeyed ? ' · background keyed' : ''}
+          {' '}· updated {timeAgo(record.updatedAt)}
         </p>
       </header>
+
+      <div className="mb-4 rounded-lg border border-port-border bg-port-card p-3">
+        <ImageTo3dRenderOptions
+          steps={steps}
+          onStepsChange={setSteps}
+          seed={seed}
+          onSeedChange={setSeed}
+          keyBackground={keyBackground}
+          onKeyBackgroundChange={setKeyBackground}
+          disabled={busy || isGenerating}
+        />
+      </div>
 
       {confirmingDelete && (
         <InlineConfirmRow

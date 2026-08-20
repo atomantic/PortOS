@@ -21,9 +21,12 @@ export const createImageTo3dModel = (input, options) =>
   });
 
 // Re-run the render for an existing record (status → generating again).
-export const generateImageTo3dModel = (id, options) =>
+// `input` carries the optional per-render knobs ({ steps, seed, keyBackground });
+// absent keys keep the record's stored options, explicit null clears a pin.
+export const generateImageTo3dModel = (id, input = {}, options) =>
   request(`/image-to-3d/models/${encodeURIComponent(id)}/generate`, {
     method: 'POST',
+    body: JSON.stringify(input),
     ...options,
   });
 

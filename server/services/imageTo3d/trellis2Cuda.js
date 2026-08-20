@@ -46,6 +46,7 @@ import {
   trellis2OutputStem,
 } from './trellis2.js';
 import { textMatcher, runInstallSteps, runGenerateSubprocess } from './laneRunner.js';
+import { renderOptionArgs } from './renderOptions.js';
 
 const HOME = homedir();
 
@@ -241,8 +242,13 @@ export function selectTrellis2CudaExportBudget(vramGb) {
  * disk path, reduced to the stem the runner appends `.glb` to (shared with the MPS
  * lane via `trellis2OutputStem`).
  *
+ * `seed`/`steps` mirror the MPS lane's contract (see `buildGenerateArgs` in
+ * trellis2.js): both optional, `steps: null` omits the flag so the pipeline's
+ * per-phase default applies.
+ *
  * @param {{imagePath: string, outputPath?: string, base?: string, python?: string,
- *          textureSize?: number, decimationTarget?: number}} opts
+ *          textureSize?: number, decimationTarget?: number,
+ *          steps?: number|null, seed?: number|null}} opts
  * @returns {{command: string, args: string[]}}
  */
 export function buildCudaGenerateArgs({
@@ -252,6 +258,8 @@ export function buildCudaGenerateArgs({
   python,
   textureSize = TRELLIS2_CUDA_DEFAULT_TEXTURE_SIZE,
   decimationTarget = TRELLIS2_CUDA_DEFAULT_DECIMATION,
+  steps = null,
+  seed = null,
 } = {}) {
   if (!imagePath) throw new Error('buildCudaGenerateArgs: imagePath is required');
   if (!TRELLIS2_CUDA_TEXTURE_SIZES.includes(textureSize)) {
@@ -259,6 +267,8 @@ export function buildCudaGenerateArgs({
       `buildCudaGenerateArgs: textureSize must be one of ${TRELLIS2_CUDA_TEXTURE_SIZES.join(', ')}`,
     );
   }
+  // Shared validate-and-emit with the MPS lane — see renderOptions.js.
+  const optionArgs = renderOptionArgs('buildCudaGenerateArgs', { steps, seed });
   const args = [
     trellis2CudaGenerateRunnerScript(),
     imagePath,
@@ -267,6 +277,7 @@ export function buildCudaGenerateArgs({
     '--decimation-target', String(decimationTarget),
   ];
   if (outputPath) args.push('--output', trellis2OutputStem(outputPath));
+  args.push(...optionArgs);
   return { command: python || trellis2CudaPython({}) || 'python', args };
 }
 
@@ -348,6 +359,7 @@ export function installTrellis2Cuda({
  *
  * @param {{imagePath: string, outputPath?: string, base?: string, textureSize?: number,
  *          decimationTarget?: number, vramGb?: number|null,
+ *          steps?: number|null, seed?: number|null,
  *          onProgress?: (frame: object) => void, spawnImpl?: Function,
  *          exists?: (p: string) => boolean, env?: NodeJS.ProcessEnv,
  *          postprocessGlb?: (path: string) => void|Promise<void>}} opts
@@ -360,6 +372,8 @@ export function runTrellis2CudaGenerate({
   textureSize,
   decimationTarget,
   vramGb = null,
+  steps = null,
+  seed = null,
   onProgress,
   spawnImpl = spawn,
   exists = existsSync,
@@ -382,6 +396,8 @@ export function runTrellis2CudaGenerate({
     python,
     textureSize: textureSize ?? budget.textureSize,
     decimationTarget: decimationTarget ?? budget.decimationTarget,
+    steps,
+    seed,
   });
   return runGenerateSubprocess({
     command,

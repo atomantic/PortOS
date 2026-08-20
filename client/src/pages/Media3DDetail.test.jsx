@@ -83,4 +83,55 @@ describe('Media3DDetail', () => {
     await waitFor(() => expect(deleteImageTo3dModel).toHaveBeenCalledWith('image3d-1', { silent: true }));
     expect(await screen.findByText('3D index')).toBeInTheDocument();
   });
+
+  it('re-render sends the chosen per-run options (blank seed omitted → server rolls fresh)', async () => {
+    getImageTo3dModel.mockResolvedValue(record());
+    generateImageTo3dModel.mockResolvedValue(record({ status: 'generating' }));
+    renderAt();
+    await screen.findByText('Example Beacon');
+
+    fireEvent.change(screen.getByLabelText(/quality/i), { target: { value: '24' } });
+    fireEvent.click(screen.getByRole('button', { name: /re-render/i }));
+
+    await waitFor(() => expect(generateImageTo3dModel).toHaveBeenCalledWith(
+      'image3d-1',
+      { steps: 24, keyBackground: true },
+      { silent: true },
+    ));
+  });
+
+  it('seeds steps/keying from the latest run but leaves the seed blank (stays random)', async () => {
+    getImageTo3dModel.mockResolvedValue(record({
+      runs: [{ operationId: 'op-1', status: 'completed', percent: 100, steps: 48, seed: 1234, keyBackground: false }],
+    }));
+    generateImageTo3dModel.mockResolvedValue(record({ status: 'generating' }));
+    renderAt();
+    await screen.findByText('Example Beacon');
+
+    // The seeding effect commits one render after the record lands — wait for it.
+    await waitFor(() => expect(screen.getByLabelText(/quality/i)).toHaveValue('48'));
+    // Blank by design — echoing the run's concrete seed back would silently pin
+    // it, reintroducing the deterministic-re-render trap.
+    expect(screen.getByLabelText(/seed/i)).toHaveValue(null);
+    expect(screen.getByLabelText(/key out solid background/i)).not.toBeChecked();
+
+    fireEvent.click(screen.getByRole('button', { name: /re-render/i }));
+    await waitFor(() => expect(generateImageTo3dModel).toHaveBeenCalledWith(
+      'image3d-1',
+      { steps: 48, keyBackground: false },
+      { silent: true },
+    ));
+  });
+
+  it('shows the latest run’s seed, steps, and keyed-background badge in the meta line', async () => {
+    getImageTo3dModel.mockResolvedValue(record({
+      runs: [{ operationId: 'op-1', status: 'completed', percent: 100, seed: 777, steps: 24, sourceKeyed: true }],
+    }));
+    renderAt();
+    await screen.findByText('Example Beacon');
+    // Scope to the meta paragraph — the quality <select> also mentions "24 steps".
+    const meta = screen.getByText(/seed 777/);
+    expect(meta.textContent).toContain('24 steps');
+    expect(meta.textContent).toContain('background keyed');
+  });
 });

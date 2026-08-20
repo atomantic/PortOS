@@ -24,8 +24,11 @@
  *  - `install({ onEvent, env })` — installs (or repairs, when the caller decides
  *    an already-installed target should re-run setup — see the route). Returns
  *    `{ promise, kill }`. Omit for a target with no install step.
- *  - `run({ imagePath, outputPath, onProgress, env })` — renders; returns
- *    `{ promise, kill }`, `promise` resolving `{ assetPath }`.
+ *  - `run({ imagePath, outputPath, onProgress, env, caps, steps, seed })` —
+ *    renders; returns `{ promise, kill }`, `promise` resolving `{ assetPath }`.
+ *    `caps` is the host-capability snapshot resolved at the request boundary;
+ *    `steps`/`seed` are the per-run sampler knobs (null = target default). A
+ *    target may ignore any option key it doesn't understand.
  *  - `describeInstallState?()` — optional extra per-target diagnostics: async,
  *    returns `{ warnings?: string[], fields?: object }`. `warnings` are generic
  *    user-facing strings the route can surface (e.g. on an "already installed"

@@ -20,6 +20,9 @@ import {
   deleteModel,
   getModelAsset,
 } from '../services/imageTo3d/models.js';
+import {
+  RENDER_STEPS_MIN, RENDER_STEPS_MAX, RENDER_SEED_MAX,
+} from '../services/imageTo3d/renderOptions.js';
 import { createInstallLogger } from '../lib/installLogger.js';
 import { openSseStream } from '../lib/sseDownload.js';
 
@@ -28,11 +31,20 @@ const router = Router();
 const galleryFilenameSchema = z.string().trim().min(1).max(256)
   .regex(/^[^/\\]+\.(png|jpe?g|webp)$/i, 'filename must be a gallery image basename');
 
+// PER-RUN sampler knobs, shared by create and re-generate. Nothing persists
+// between runs: absent steps → the pipeline default, absent seed → a fresh
+// random roll for that run, absent keyBackground → keying enabled.
+const renderOptionsSchema = z.object({
+  steps: z.number().int().min(RENDER_STEPS_MIN).max(RENDER_STEPS_MAX).optional(),
+  seed: z.number().int().min(0).max(RENDER_SEED_MAX).optional(),
+  keyBackground: z.boolean().optional(),
+});
+
 const createModelSchema = z.object({
   name: z.string().trim().min(1).max(120),
   filename: galleryFilenameSchema,
   target: z.enum([...IMAGE_TO_3D_TARGET_IDS]).optional(),
-});
+}).extend(renderOptionsSchema.shape);
 
 // Target ids with an install currently running — a rapid double-click would
 // otherwise race two clone/setup processes against the same install dir.
@@ -279,7 +291,10 @@ router.get('/models/:id', asyncHandler(async (req, res) => {
 }));
 
 router.post('/models/:id/generate', asyncHandler(async (req, res) => {
-  const model = await startGeneration(req.params.id);
+  // Re-render accepts the same per-run knobs as create; they apply to this run
+  // only and are recorded on its run entry.
+  const options = validateRequest(renderOptionsSchema, req.body ?? {});
+  const model = await startGeneration(req.params.id, { options });
   res.status(202).json(model);
 }));
 

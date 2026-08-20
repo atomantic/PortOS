@@ -26,6 +26,7 @@ import { spawn, execFile } from '../../lib/childProcess.js';
 import { rewriteGlbMaterialsOpaque } from './glbMaterials.js';
 import { getTarget } from './targets.js';
 import { textMatcher, runInstallSteps, runGenerateSubprocess } from './laneRunner.js';
+import { renderOptionArgs } from './renderOptions.js';
 
 const HOME = homedir();
 const IS_WIN = platform() === 'win32';
@@ -444,7 +445,8 @@ export function selectTrellis2TextureSize(unifiedMemoryGb) {
 
 /**
  * The generate invocation:
- * `<venv-python> [4k-adapter] generate.py <image> [--output <stem>] --texture-size <n>`.
+ * `<venv-python> [4k-adapter] generate.py <image> [--output <stem>] --texture-size <n>
+ *  [--seed <n>] [--steps <n>]`.
  *
  * Pure. Throws when no source image is given (a render with no input is a bug, not
  * an empty run), and when `textureSize` is not one of PortOS's accepted values
@@ -452,8 +454,13 @@ export function selectTrellis2TextureSize(unifiedMemoryGb) {
  * `outputPath` is the desired `.glb` disk path; it is reduced to the stem the port
  * expects (see `trellis2OutputStem`).
  *
+ * `seed` is passed only when provided — callers that care about reproducible runs
+ * (models.js resolves one per run) always pass it; a bare CLI-style call keeps the
+ * port's own default. `steps: null` deliberately omits `--steps` so the pipeline's
+ * per-phase default (12) applies — see renderOptions.js for the sentinel contract.
+ *
  * @param {{imagePath: string, outputPath?: string, base?: string, textureSize?: number,
- *          pipelineType?: string}} opts
+ *          pipelineType?: string, steps?: number|null, seed?: number|null}} opts
  * @returns {{command: string, args: string[]}}
  */
 export function buildGenerateArgs({
@@ -462,6 +469,8 @@ export function buildGenerateArgs({
   base,
   textureSize = TRELLIS2_DEFAULT_TEXTURE_SIZE,
   pipelineType = TRELLIS2_BASELINE_PIPELINE_TYPE,
+  steps = null,
+  seed = null,
 } = {}) {
   if (!imagePath) throw new Error('buildGenerateArgs: imagePath is required');
   if (!TRELLIS2_TEXTURE_SIZES.includes(textureSize)) {
@@ -474,6 +483,9 @@ export function buildGenerateArgs({
       `buildGenerateArgs: pipelineType must be one of ${TRELLIS2_PIPELINE_TYPES.join(', ')}`,
     );
   }
+  // Validates steps/seed and emits their flags — shared with the CUDA lane so
+  // neither the ranges nor the flag names can drift (renderOptions.js).
+  const optionArgs = renderOptionArgs('buildGenerateArgs', { steps, seed });
   const generateScript = trellis2GenerateScript(base);
   const args = textureSize === TRELLIS2_HIGH_QUALITY_TEXTURE_SIZE
     ? [trellis2GenerateRunnerScript(), generateScript, imagePath]
@@ -481,6 +493,7 @@ export function buildGenerateArgs({
   if (outputPath) args.push('--output', trellis2OutputStem(outputPath));
   args.push('--pipeline-type', pipelineType);
   args.push('--texture-size', String(textureSize));
+  args.push(...optionArgs);
   return { command: trellis2VenvPython(base), args };
 }
 
@@ -736,6 +749,7 @@ export function hfGatedRepoHelp(targetId) {
  *
  * @param {{imagePath: string, outputPath?: string, base?: string, textureSize?: number,
  *          pipelineType?: string, unifiedMemoryGb?: number,
+ *          steps?: number|null, seed?: number|null,
  *          onProgress?: (frame: object) => void,
  *          spawnImpl?: Function, exists?: (p: string) => boolean,
  *          env?: NodeJS.ProcessEnv, postprocessGlb?: (path: string) => void|Promise<void>}} opts
@@ -748,6 +762,8 @@ export function runTrellis2Generate({
   textureSize,
   pipelineType,
   unifiedMemoryGb = Math.round(totalmem() / 1024 ** 3),
+  steps = null,
+  seed = null,
   onProgress,
   spawnImpl = spawn,
   exists = existsSync,
@@ -767,6 +783,8 @@ export function runTrellis2Generate({
     base,
     textureSize: resolvedTextureSize,
     pipelineType: resolvedPipelineType,
+    steps,
+    seed,
   });
   return runGenerateSubprocess({
     command,

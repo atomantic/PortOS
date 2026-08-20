@@ -250,6 +250,28 @@ describe('buildGenerateArgs', () => {
   it('throws when no source image is given', () => {
     expect(() => buildGenerateArgs({ base: BASE })).toThrow(/imagePath is required/);
   });
+
+  it('passes --seed and --steps when provided and omits both by default', () => {
+    const { args } = buildGenerateArgs({ imagePath: 'in.png', base: BASE, seed: 1234, steps: 24 });
+    expect(args.slice(-4)).toEqual(['--seed', '1234', '--steps', '24']);
+
+    const { args: defaults } = buildGenerateArgs({ imagePath: 'in.png', base: BASE });
+    expect(defaults).not.toContain('--seed');
+    expect(defaults).not.toContain('--steps');
+  });
+
+  it('rejects out-of-range or non-integer steps and seed instead of letting argparse abort', () => {
+    expect(() => buildGenerateArgs({ imagePath: 'in.png', base: BASE, steps: 0 }))
+      .toThrow(/steps must be an integer/);
+    expect(() => buildGenerateArgs({ imagePath: 'in.png', base: BASE, steps: 65 }))
+      .toThrow(/steps must be an integer/);
+    expect(() => buildGenerateArgs({ imagePath: 'in.png', base: BASE, steps: 12.5 }))
+      .toThrow(/steps must be an integer/);
+    expect(() => buildGenerateArgs({ imagePath: 'in.png', base: BASE, seed: -1 }))
+      .toThrow(/seed must be an integer/);
+    expect(() => buildGenerateArgs({ imagePath: 'in.png', base: BASE, seed: 2147483648 }))
+      .toThrow(/seed must be an integer/);
+  });
 });
 
 describe('selectTrellis2PipelineType', () => {

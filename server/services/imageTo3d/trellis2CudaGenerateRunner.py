@@ -50,6 +50,14 @@ def parse_args():
         default="microsoft/TRELLIS.2-4B",
         help="Hugging Face repo id for the pipeline weights",
     )
+    # Both mirror the Apple-Silicon port's generate.py so the two lanes accept the
+    # same knobs: --seed matches its fixed default, --steps overrides the sampler
+    # step count for all three flow phases (None -> the pipeline JSON default, 12).
+    parser.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
+    parser.add_argument(
+        "--steps", type=int, default=None,
+        help="Override sampler steps for all three flow phases (default: pipeline JSON)",
+    )
     return parser.parse_args()
 
 
@@ -84,11 +92,19 @@ def main():
     pipeline.cuda()
 
     image = Image.open(image_path)
-    log("Generating 3D model...")
+    log(f"Generating 3D model (seed={args.seed})...")
     started = time.time()
     # The pipeline's own sampling loops print tqdm bars; the parent scales those into
-    # its sampling band, so nothing extra is emitted here.
-    mesh = pipeline.run(image)[0]
+    # its sampling band, so nothing extra is emitted here. The sampler override shape
+    # mirrors the Apple-Silicon port's generate.py exactly.
+    sampler_overrides = {"steps": args.steps} if args.steps else {}
+    mesh = pipeline.run(
+        image,
+        seed=args.seed,
+        sparse_structure_sampler_params=sampler_overrides,
+        shape_slat_sampler_params=sampler_overrides,
+        tex_slat_sampler_params=sampler_overrides,
+    )[0]
 
     # nvdiffrast cannot rasterize past 2^24 triangles; upstream simplifies to that
     # ceiling before any export work. This is the hard renderer limit, distinct from

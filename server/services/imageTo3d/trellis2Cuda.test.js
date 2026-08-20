@@ -198,6 +198,21 @@ describe('buildCudaGenerateArgs', () => {
     expect(() => args({ textureSize: 8192 })).toThrow(/must be one of/);
     expect(TRELLIS2_CUDA_TEXTURE_SIZES).not.toContain(8192);
   });
+
+  it('passes --seed and --steps when provided and omits both by default (MPS-lane parity)', () => {
+    const { args: argv } = args({ seed: 1234, steps: 24 });
+    expect(argv[argv.indexOf('--seed') + 1]).toBe('1234');
+    expect(argv[argv.indexOf('--steps') + 1]).toBe('24');
+
+    const { args: defaults } = args();
+    expect(defaults).not.toContain('--seed');
+    expect(defaults).not.toContain('--steps');
+  });
+
+  it('rejects out-of-range steps and seed here rather than in the child’s argparse', () => {
+    expect(() => args({ steps: 0 })).toThrow(/steps must be an integer/);
+    expect(() => args({ seed: -1 })).toThrow(/seed must be an integer/);
+  });
 });
 
 describe('installTrellis2Cuda', () => {

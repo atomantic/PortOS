@@ -13,6 +13,8 @@ import { useHfTokenStatus } from '../hooks/useHfTokenStatus';
 import useUrlParams from '../hooks/useUrlParams';
 import MediaImage from '../components/MediaImage';
 import { imageTo3dStatusMeta } from '../components/media/imageTo3dStatus';
+import ImageTo3dRenderOptions from '../components/media/ImageTo3dRenderOptions';
+import { renderOptionsBody } from '../lib/imageTo3dRenderOptions';
 import { unavailableReasonLabel } from '../lib/imageTo3dReasons';
 
 // Poll cadence while a render is in flight (a real TRELLIS.2 render is multi-minute).
@@ -192,6 +194,10 @@ export default function Media3D() {
   const [genError, setGenError] = useState(null);
   const [genPercent, setGenPercent] = useState(null);
   const [modelId, setModelId] = useState(null);
+  // Per-run sampler knobs (see ImageTo3dRenderOptions for the value conventions).
+  const [steps, setSteps] = useState('');
+  const [seed, setSeed] = useState('');
+  const [keyBackground, setKeyBackground] = useState(true);
   // Existing image-to-3D records (newest-first) so the page doubles as a library:
   // each links to its `/3d/:id` detail view.
   const [records, setRecords] = useState([]);
@@ -284,14 +290,19 @@ export default function Media3D() {
     setGenError(null); setGenPercent(0); setModelId(null);
     updateParams({ glb: '' }); // clear any previously-previewed mesh
     const created = await createImageTo3dModel(
-      { name: nameFromImageFilename(selectedImage.filename), filename: selectedImage.filename, target: selectedTarget.id },
+      {
+        name: nameFromImageFilename(selectedImage.filename),
+        filename: selectedImage.filename,
+        target: selectedTarget.id,
+        ...renderOptionsBody({ steps, seed, keyBackground }),
+      },
       { silent: true },
     ).catch((err) => {
       if (mountedRef.current) setGenError(err?.message || 'Could not start the render.');
       return null;
     });
     if (created && mountedRef.current) { setModelId(created.id); setGenerating(true); patchRecord(created); }
-  }, [selectedImage, selectedTarget, updateParams, mountedRef, patchRecord]);
+  }, [selectedImage, selectedTarget, steps, seed, keyBackground, updateParams, mountedRef, patchRecord]);
 
   // Why the Generate action is blocked, or null when it's ready to run. The runner
   // (POST create → on-device render → landed .glb) is wired, so the terminal state
@@ -382,6 +393,16 @@ export default function Media3D() {
               onSaved={refreshHfToken}
             />
           )}
+
+          <ImageTo3dRenderOptions
+            steps={steps}
+            onStepsChange={setSteps}
+            seed={seed}
+            onSeedChange={setSeed}
+            keyBackground={keyBackground}
+            onKeyBackgroundChange={setKeyBackground}
+            disabled={generating}
+          />
 
           <div className="mt-auto flex flex-col items-start gap-2">
             <button

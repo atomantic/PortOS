@@ -25,6 +25,8 @@ import { prepareLocalMemory } from '../../lib/localMemory.js';
 import { slugifyForFilename } from '../../lib/civitai.js';
 import { detectHostCapabilities, resolveTarget, DEFAULT_IMAGE_TO_3D_TARGET } from './targets.js';
 import { getTargetAdapter } from './adapters.js';
+import { normalizeRenderOptions, randomRenderSeed } from './renderOptions.js';
+import { prepareSourceImage } from './sourceKeying.js';
 import * as store from './db.js';
 
 const MAX_RUNS = 30;
@@ -39,8 +41,12 @@ const cleanError = (error) => String(error?.message || error || 'Render failed')
 
 /** The served URL for a record's exported GLB (static-mounted under /data). */
 const assetUrl = (id) => `/data/image-to-3d/${id}/model.glb`;
+/** A record's render directory on disk. */
+const recordDir = (id) => join(PATHS.imageTo3d, id);
 /** The on-disk destination the runner writes the GLB to. */
-const assetDiskPath = (id) => join(PATHS.imageTo3d, id, 'model.glb');
+const assetDiskPath = (id) => join(recordDir(id), 'model.glb');
+/** Where a background-keyed copy of the source lands (never the gallery file). */
+const keyedSourcePath = (id) => join(recordDir(id), 'source-keyed.png');
 
 /**
  * Remove a record's render directory (the exported GLB + its folder). Used to
@@ -49,8 +55,20 @@ const assetDiskPath = (id) => join(PATHS.imageTo3d, id, 'model.glb');
  * not the render got far enough to emit a file.
  */
 async function cleanupRenderDir(id) {
-  await rm(join(PATHS.imageTo3d, id), { recursive: true, force: true })
+  await rm(recordDir(id), { recursive: true, force: true })
     .catch((err) => console.error(`❌ Image-to-3D cleanup failed for ${id}: ${err.message}`));
+}
+
+/**
+ * Best-effort patch of one run entry (progress-class writes). Guarded on the
+ * operation still owning the record, fire-and-forget — a lost frame must never
+ * fail or stall a render.
+ */
+function patchRun(id, operationId, patch) {
+  void store.mutateModel(id, (current) => {
+    if (current.generationOperationId !== operationId) return null;
+    return { ...current, runs: updateRun(current.runs, operationId, patch) };
+  }).catch(() => {});
 }
 
 /**
@@ -112,12 +130,32 @@ async function failGeneration(id, operationId, error) {
   });
 }
 
-async function executeRender({ id, operationId, adapter, sourcePath, caps }) {
+async function executeRender({ id, operationId, adapter, sourcePath, caps, options }) {
   const outputPath = assetDiskPath(id);
+  // keyBackground is consumed here; the sampler knobs ride through to the
+  // adapter as-is, so a future knob added to the options shape flows without
+  // touching this call chain.
+  const { keyBackground, ...samplerOptions } = options;
   let lastPersistedPercent = -1;
   let heavyClaim = null;
   try {
-    await ensureDir(join(PATHS.imageTo3d, id));
+    await ensureDir(recordDir(id));
+    // Key a solid background out of the source (into THIS record's render dir —
+    // the shared gallery file is never touched) so the pipeline consumes a real
+    // alpha channel instead of matting a green screen. Runs BEFORE the heavy-job
+    // claim: it is CPU-only preprocessing, so other heavy jobs shouldn't queue
+    // behind it and resident models shouldn't be evicted for it. Best-effort: a
+    // keying failure must never fail a render the model could still attempt raw.
+    const keyedPath = keyBackground
+      ? await prepareSourceImage({ sourcePath, targetPath: keyedSourcePath(id) })
+        .catch((err) => {
+          console.error(`❌ Image-to-3D background keying failed for ${id}: ${err.message}`);
+          return null;
+        })
+      : null;
+    if (keyedPath) console.log(`🎨 Image-to-3D keyed a solid background for ${id}`);
+    // Record what the render actually consumed (best-effort, like percent below).
+    patchRun(id, operationId, { sourceKeyed: Boolean(keyedPath) });
     heavyClaim = await claimHeavyLocalJob({ kind: 'image-to-3D generation', id: operationId });
     if (!heavyClaim.ok) {
       throw new ServerError(heavyClaim.message, { status: 409, code: 'HEAVY_LOCAL_JOB_BUSY', context: { holder: heavyClaim.holder } });
@@ -133,9 +171,13 @@ async function executeRender({ id, operationId, adapter, sourcePath, caps }) {
     // the kill handle so deleteModel can SIGTERM this render if the record is deleted
     // mid-flight.
     const { promise, kill } = adapter.run({
-      imagePath: sourcePath,
+      imagePath: keyedPath ?? sourcePath,
       outputPath,
       env,
+      // The per-run sampler knobs resolved in beginRender: `seed` is always a
+      // concrete integer (pinned or freshly rolled), `steps: null` means the
+      // pipeline default.
+      ...samplerOptions,
       // The host capabilities resolved at the request boundary, passed down rather
       // than re-probed: a target whose output budget scales with the hardware (the
       // CUDA lane's atlas size, keyed on VRAM) reads the same values the readiness
@@ -148,10 +190,7 @@ async function executeRender({ id, operationId, adapter, sourcePath, caps }) {
         const percent = Number.isFinite(frame?.percent) ? Math.round(frame.percent) : null;
         if (percent === null || percent <= lastPersistedPercent) return;
         lastPersistedPercent = percent;
-        void store.mutateModel(id, (current) => {
-          if (current.generationOperationId !== operationId) return null;
-          return { ...current, runs: updateRun(current.runs, operationId, { percent }) };
-        }).catch(() => {}); // progress is best-effort; a lost frame is not fatal
+        patchRun(id, operationId, { percent });
       },
     });
     activeRenders.set(operationId, kill);
@@ -243,11 +282,12 @@ export async function createModel(input, { caps } = {}) {
   // Thread the already-validated adapter + resolved source straight into the
   // render — createModel and startGeneration share `beginRender`, so the create
   // path does NOT re-resolve the gallery image, re-assert readiness, or re-fetch
-  // the row it just wrote.
-  return beginRender(created, adapter, sourcePath, hostCaps);
+  // the row it just wrote. `input` carries the optional per-run knobs
+  // (steps/seed/keyBackground); beginRender normalizes them.
+  return beginRender(created, adapter, sourcePath, hostCaps, input);
 }
 
-export async function startGeneration(id, { caps } = {}) {
+export async function startGeneration(id, { caps, options } = {}) {
   const current = await store.getModel(id);
   if (!current) throw new ServerError('Image-to-3D model not found', { status: 404, code: 'NOT_FOUND' });
   if (current.status === 'generating'
@@ -261,7 +301,7 @@ export async function startGeneration(id, { caps } = {}) {
   if (!sourcePath) {
     throw new ServerError('The source gallery image is no longer available', { status: 409, code: 'GALLERY_IMAGE_NOT_FOUND' });
   }
-  return beginRender(current, adapter, sourcePath, hostCaps);
+  return beginRender(current, adapter, sourcePath, hostCaps, options);
 }
 
 /**
@@ -270,11 +310,18 @@ export async function startGeneration(id, { caps } = {}) {
  * validation (target readiness, gallery-image resolution) and pass the resolved
  * adapter + source through. The transactional `status==='generating'` guard here
  * is the authoritative race check (the callers' pre-check is just a fast 409).
+ *
+ * Render options are PER-RUN parameters: normalized from this request alone
+ * (nothing persists between runs), with an unpinned seed rolled fresh so
+ * re-render actually samples a new model. The run entry records the concrete
+ * values the subprocess receives — the truthful, reproducible record.
  */
-async function beginRender(record, adapter, sourcePath, caps) {
+async function beginRender(record, adapter, sourcePath, caps, requestOptions) {
   const { id } = record;
   const operationId = randomUUID();
   const startedAt = new Date().toISOString();
+  const normalized = normalizeRenderOptions(requestOptions);
+  const options = { ...normalized, seed: normalized.seed ?? randomRenderSeed() };
   const next = await store.mutateModel(id, (fresh) => {
     if (fresh.status === 'generating') {
       throw new ServerError('This model is already generating', { status: 409, code: 'MODEL_BUSY' });
@@ -291,6 +338,9 @@ async function beginRender(record, adapter, sourcePath, caps) {
           status: 'running',
           target: fresh.target,
           percent: 0,
+          steps: options.steps,
+          seed: options.seed,
+          keyBackground: options.keyBackground,
           startedAt,
           completedAt: null,
           error: null,
@@ -301,7 +351,7 @@ async function beginRender(record, adapter, sourcePath, caps) {
 
   activeOperations.add(operationId);
   setImmediate(() => {
-    void executeRender({ id, operationId, adapter, sourcePath, caps });
+    void executeRender({ id, operationId, adapter, sourcePath, caps, options });
   });
   return next;
 }

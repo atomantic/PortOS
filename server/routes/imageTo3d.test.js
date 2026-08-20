@@ -371,7 +371,25 @@ describe('image-to-3d model records', () => {
     models.startGeneration.mockResolvedValue({ id: 'image3d-1', status: 'generating' });
     const res = await request(makeApp()).post('/api/image-to-3d/models/image3d-1/generate');
     expect(res.status).toBe(202);
-    expect(models.startGeneration).toHaveBeenCalledWith('image3d-1');
+    // A bodiless re-render forwards empty options — stored renderOptions apply.
+    expect(models.startGeneration).toHaveBeenCalledWith('image3d-1', { options: {} });
+  });
+
+  it('POST /models/:id/generate forwards per-run options and rejects invalid ones', async () => {
+    models.startGeneration.mockResolvedValue({ id: 'image3d-1', status: 'generating' });
+    const res = await request(makeApp())
+      .post('/api/image-to-3d/models/image3d-1/generate')
+      .send({ steps: 24, seed: 7, keyBackground: false });
+    expect(res.status).toBe(202);
+    expect(models.startGeneration).toHaveBeenCalledWith(
+      'image3d-1',
+      { options: { steps: 24, seed: 7, keyBackground: false } },
+    );
+
+    const bad = await request(makeApp())
+      .post('/api/image-to-3d/models/image3d-1/generate')
+      .send({ steps: 999 });
+    expect(bad.status).toBe(400);
   });
 
   it('DELETE /models/:id soft-deletes', async () => {
