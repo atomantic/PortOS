@@ -586,6 +586,8 @@ export function submitToSession(sessionId, line) {
  * because only the server knows which shell this PTY is running — and the command
  * differs per shell. See lib/shellCd.js for why.
  *
+ * Updates `session.cwd` on success — see the body for why that is optimistic.
+ *
  * @param {string} sessionId
  * @param {string} dirPath
  * @returns {boolean} false when the session is unknown
@@ -593,7 +595,16 @@ export function submitToSession(sessionId, line) {
 export function changeSessionDirectory(sessionId, dirPath) {
   const session = shellSessions.get(sessionId);
   if (!session) return false;
-  return submitToSession(sessionId, buildCdCommand(dirPath, session.shell));
+  if (!submitToSession(sessionId, buildCdCommand(dirPath, session.shell))) return false;
+  // Track the cd optimistically so the Shell tab label and the Workspace Contexts
+  // widget follow the session instead of staying pinned to its spawn directory.
+  // `cwd` is display-only after spawn — nothing functional reads it — and the paths
+  // come from the managed-apps list, so they exist. Asking the PTY for its REAL cwd
+  // would need a per-platform probe plus a round-trip, which is not worth it for a
+  // label; a rejected path just leaves the label wrong until the next cd.
+  session.cwd = dirPath;
+  broadcastSessionList();
+  return true;
 }
 
 /**

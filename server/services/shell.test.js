@@ -390,6 +390,35 @@ describe('changeSessionDirectory', () => {
     expect(shell.changeSessionDirectory('missing', '/tmp')).toBe(false);
   });
 
+  it('moves session.cwd to the new directory so the tab label stops showing the spawn dir', () => {
+    const sock = makeSocket('sock-cd');
+    const id = shell.createShellSession(sock, { shell: '/bin/zsh', cwd: '/home/user/example' });
+    expect(shell.listAllSessions(sock).find(s => s.sessionId === id).cwd).toBe('/home/user/example');
+
+    expect(shell.changeSessionDirectory(id, '/home/user/example-app')).toBe(true);
+    expect(shell.listAllSessions(sock).find(s => s.sessionId === id).cwd).toBe('/home/user/example-app');
+  });
+
+  it('broadcasts the refreshed session list so open Shell tabs relabel without a reload', () => {
+    const observer = makeSocket('obs-cd');
+    const id = shell.createShellSession(makeSocket('owner-cd'), { shell: '/bin/zsh', cwd: '/home/user/example' });
+    shell.subscribeSessionList(observer);
+
+    shell.changeSessionDirectory(id, '/home/user/example-app');
+
+    const broadcasts = observer.emit.mock.calls.filter(c => c[0] === 'shell:sessions');
+    expect(broadcasts).toHaveLength(1);
+    expect(broadcasts[0][1].find(s => s.sessionId === id).cwd).toBe('/home/user/example-app');
+    shell.unsubscribeSessionList(observer);
+  });
+
+  it('leaves cwd untouched when the session is gone', () => {
+    const sock = makeSocket('sock-cd-gone');
+    const id = shell.createShellSession(sock, { shell: '/bin/zsh', cwd: '/home/user/example' });
+    shell.killSession(id);
+    expect(shell.changeSessionDirectory(id, '/home/user/example-app')).toBe(false);
+  });
+
   it('records the shell it spawned when the caller names none', () => {
     // The recorded shell is what picks the cd dialect, so a session started from
     // the default must remember which binary that was rather than leaving
