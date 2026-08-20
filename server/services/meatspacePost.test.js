@@ -58,6 +58,7 @@ import {
   getPostReviewReps,
   getPostBenchmarkProtocol,
   POST_BENCHMARK_PROTOCOL,
+  benchmarkCompatibility,
 } from './meatspacePost.js';
 import { generateCognitiveDrill } from './meatspacePostCognitive.js';
 
@@ -226,6 +227,26 @@ describe('submitPostSession — benchmark scoring is fixed by the protocol', () 
     const mathTask = session.tasks.find(t => t.type === 'doubling-chain');
     // Confirms the fixed-time-limit behavior above is benchmark-specific.
     expect(mathTask.score).toBe(82);
+  });
+
+  it('accepts an in-flight run tagged with a RETIRED scorer version instead of losing it (issue #4442 codex review round 3)', async () => {
+    readJSONFile.mockImplementation((path, defaultValue) => Promise.resolve(defaultValue));
+    const submission = benchmarkSubmission();
+    submission.benchmark.scorerVersion = 'post-deterministic-v1'; // client fetched the protocol before the server upgraded
+    const session = await submitPostSession(submission);
+    // Not rejected, still scored under the CURRENT (fixed-weights) rules.
+    expect(session.score).toBe(50);
+    // The retired tag is preserved as submitted, not silently upgraded —
+    // benchmarkCompatibility() still correctly excludes it from the v2 trend.
+    expect(session.benchmark.scorerVersion).toBe('post-deterministic-v1');
+    expect(benchmarkCompatibility(session)).toBe('legacy');
+  });
+
+  it('still rejects a benchmark submission tagged with an unrecognized scorer version', async () => {
+    readJSONFile.mockImplementation((path, defaultValue) => Promise.resolve(defaultValue));
+    const submission = benchmarkSubmission();
+    submission.benchmark.scorerVersion = 'some-made-up-version';
+    await expect(submitPostSession(submission)).rejects.toMatchObject({ code: 'INVALID_BENCHMARK', status: 400 });
   });
 });
 

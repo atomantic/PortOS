@@ -116,6 +116,21 @@ export const POST_BENCHMARK_PROTOCOL = Object.freeze({
   ]),
 });
 
+// Scorer versions retired by a scoring-contract change (e.g. v1 → v2's fixed
+// weights/timeLimit) but still ACCEPTABLE on submit — never rejected/lost —
+// so an in-flight benchmark run started under the old formula (client
+// fetched the old protocol before a server upgrade landed mid-session) can
+// still be saved after the upgrade (issue #4442 codex review; mirrors the
+// PROMPT_VERSIONS/PREVIOUS_DEFAULT_PROMPTS cross-version pattern in
+// taskSchedule.js). Task/config shape is unchanged across scorer versions —
+// only the scoring formula moved — so accepting it costs nothing: the
+// submission is scored under the CURRENT rules regardless (submitPostSession
+// only branches on `sessionData.benchmark` truthiness, not on which scorer
+// version it names), and its stored scorerVersion is preserved as submitted,
+// so benchmarkCompatibility() still correctly excludes it from the current
+// trend as legacy rather than silently blending two formulas together.
+const PREVIOUS_BENCHMARK_SCORER_VERSIONS = Object.freeze(['post-deterministic-v1']);
+
 const cloneBenchmarkProtocol = (protocol) => JSON.parse(JSON.stringify(protocol));
 
 export function getPostBenchmarkForm(formId) {
@@ -151,9 +166,15 @@ export function benchmarkCompatibility(session) {
 
 function assertBenchmarkSession(benchmark, tasks, modules) {
   if (!benchmark) return;
+  // Accept the current scorer version OR a recognized-but-retired one — see
+  // PREVIOUS_BENCHMARK_SCORER_VERSIONS. Rejecting an in-flight run just
+  // because the server's scorer version moved on mid-session would lose the
+  // user's completed work; the form/task shape hasn't changed, only scoring.
+  const versionRecognized = benchmark.scorerVersion === POST_BENCHMARK_PROTOCOL.scorerVersion
+    || PREVIOUS_BENCHMARK_SCORER_VERSIONS.includes(benchmark.scorerVersion);
   const form = benchmark.protocolId === POST_BENCHMARK_PROTOCOL.protocolId
     && benchmark.protocolVersion === POST_BENCHMARK_PROTOCOL.protocolVersion
-    && benchmark.scorerVersion === POST_BENCHMARK_PROTOCOL.scorerVersion
+    && versionRecognized
     ? getPostBenchmarkForm(benchmark.formId)
     : null;
   const expectedModules = form ? [...new Set(form.tasks.map((task) => task.domain))] : [];
