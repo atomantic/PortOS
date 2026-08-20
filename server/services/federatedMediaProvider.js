@@ -14,8 +14,9 @@ import { canonicalStringify } from '../lib/objects.js';
 import {
   PATHS, makePathResolver, resolveGalleryImage, sha256File, sha256Text,
 } from '../lib/fileUtils.js';
-import { inspectModelCache } from '../lib/hfCache.js';
-import { getImageModels, getVideoModels, repoForModel } from '../lib/mediaModels.js';
+import { findCachedRepoFiles, inspectModelCache } from '../lib/hfCache.js';
+import { getImageModels, getVideoModels, isEditOnly, isFlux2, repoForModel } from '../lib/mediaModels.js';
+import { isMiniMaxH3Runtime, usesDiffusersRunner } from '../lib/runners.js';
 import {
   FEDERATED_MEDIA_RESULT_EXTENSION,
   FEDERATED_MEDIA_STALE_AFTER_MS,
@@ -31,6 +32,8 @@ import {
   listJobs,
 } from './mediaJobQueue/index.js';
 import { listMusicEngineCapabilities } from './musicEngineCapabilities.js';
+import { BYOV_VIDEO_RUNTIMES, isByovRuntimeReady } from './videoGen/runtimes.js';
+import { minimaxH3ControlError } from './videoGen/minimaxH3Controls.js';
 import { readCallerInstanceId } from './sharing/peerPullAuthorization.js';
 import { findPeerById } from './sharing/peerSyncShared.js';
 
@@ -61,6 +64,79 @@ const sanitizeModelList = (models) => (Array.isArray(models)
     .map(({ engine, modelId }) => ({ engine, modelId }))
     .filter(({ engine, modelId }) => typeof engine === 'string' && typeof modelId === 'string')
   : []);
+
+const requiresConfiguredPython = (kind, model) => {
+  if (kind === 'image') return !isFlux2(model) && !usesDiffusersRunner(model);
+  if (kind === 'video') return !BYOV_VIDEO_RUNTIMES.has(model?.runtime);
+  return false;
+};
+
+// The federated wire intentionally carries no source image, keyframes, or
+// semantic video mode. Do not advertise a catalog model that cannot render a
+// text-only request through this contract; otherwise the provider accepts the
+// job, persists it, and only rejects it after a worker starts.
+const supportsFederatedInput = (kind, model) => {
+  if (kind === 'image') return !isEditOnly(model);
+  if (kind === 'video') {
+    return !Array.isArray(model?.supportedModes) || model.supportedModes.includes('text');
+  }
+  return true;
+};
+
+const requiredModelCacheGroups = (model) => {
+  const groups = [];
+  if (Array.isArray(model?.repoFiles)) {
+    groups.push({ repo: model.repo, revision: model.revision, files: model.repoFiles });
+  }
+  if (Array.isArray(model?.requiredWeights)) groups.push(...model.requiredWeights);
+  return groups;
+};
+
+const inspectFederatedModelCache = async (model, repo) => {
+  const revision = model?.revision ? { revision: model.revision } : undefined;
+  const base = repo
+    ? await inspectModelCache(repo, revision).catch(() => ({ cached: false }))
+    : { cached: requiredModelCacheGroups(model).length === 0 };
+  if (base.cached !== true) return false;
+
+  // Some video profiles are deliberately selective: the main snapshot is not
+  // sufficient without the exact pinned Wan adapters, H3 checkpoint files, or
+  // H3 CUDA repo-file subset that the runner will load.
+  for (const group of requiredModelCacheGroups(model)) {
+    if (!group || typeof group.repo !== 'string' || !group.repo
+      || !Array.isArray(group.files) || group.files.length === 0
+      || typeof group.revision !== 'string' || !group.revision) return false;
+    if (!await findCachedRepoFiles(group.repo, group.files, { revision: group.revision })) return false;
+  }
+  return true;
+};
+
+const FEDERATED_DEFAULT_VIDEO_FRAMES = 121;
+
+const validateFederatedVideoControls = (input, model) => {
+  if (input.kind !== 'video') return;
+  const numFrames = input.numFrames ?? model.defaultFrames ?? FEDERATED_DEFAULT_VIDEO_FRAMES;
+  const fps = input.fps ?? 24;
+  if (isMiniMaxH3Runtime(model.runtime)) {
+    const controlError = minimaxH3ControlError({
+      model,
+      negativePrompt: input.negativePrompt,
+      numFrames,
+      fps,
+    });
+    if (controlError) throw controlError;
+  }
+  if (model.runtime === 'wan22') {
+    const frameStride = Number(model.frameStride);
+    if (Number.isFinite(frameStride) && frameStride > 0 && (Number(numFrames) - 1) % frameStride !== 0) {
+      unavailable(
+        `${model.name} requires a ${frameStride}n+1 frame count; got ${numFrames}.`,
+        'WAN22_INVALID_FRAME_COUNT',
+        400,
+      );
+    }
+  }
+};
 
 export function normalizeFederatedMediaProviderConfig(settings) {
   const raw = settings?.federation?.mediaProvider;
@@ -174,14 +250,19 @@ async function localGeneratorCapabilities(kind, pythonPath, { models, configured
     const isLocal = selected.engine === 'local';
     const model = isLocal ? modelsById.get(selected.modelId) : null;
     const repo = model ? repoForModel(model) : null;
-    const modelReady = !model ? false
-      : !repo ? true
-        : (await inspectModelCache(repo).catch(() => ({ cached: false }))).cached === true;
+    const modelSupportsInput = supportsFederatedInput(kind, model);
+    const needsPython = requiresConfiguredPython(kind, model);
+    const modelReady = !model ? false : await inspectFederatedModelCache(model, repo);
+    const runtimeReady = !isLocal ? false
+      : needsPython ? !!pythonPath
+        : kind === 'video' ? await isByovRuntimeReady(model?.runtime)
+          : true;
     const reason = !isLocal ? 'unknown-engine'
-      : !pythonPath ? 'runtime-unavailable'
-        : !model ? 'unknown-model'
-          : !modelReady ? 'model-unavailable'
-            : null;
+      : !model ? 'unknown-model'
+        : !modelSupportsInput ? 'unsupported-input'
+          : !runtimeReady ? 'runtime-unavailable'
+            : !modelReady ? 'model-unavailable'
+              : null;
     return {
       kind,
       engine: selected.engine,
@@ -190,7 +271,7 @@ async function localGeneratorCapabilities(kind, pythonPath, { models, configured
       modelName: model?.name ?? selected.modelId,
       ready: reason === null,
       unavailableReason: reason,
-      runtimeReady: isLocal && !!pythonPath,
+      runtimeReady,
       platformSupported: isLocal,
       cudaRequired: false,
       cudaState: 'available',
@@ -299,6 +380,18 @@ function findIdempotentJob(callerId, idempotencyKey) {
   ) || null;
 }
 
+// The audio wire predates the explicit `kind` field. Its old idempotency hash
+// was computed from the kind-less parsed body, while the compatibility
+// preprocessor now adds `kind: 'audio'` before this service sees it. Keep the
+// canonical audio hash kind-less so an ambiguous submission can still replay
+// a queued job across this upgrade; image/video hashes retain their kind to
+// prevent cross-kind key reuse.
+const requestHashInput = (input) => {
+  if (input?.kind !== 'audio') return input;
+  const { kind: _kind, ...legacyAudioInput } = input;
+  return legacyAudioInput;
+};
+
 // Image/video results are named `<queue-job-uuid>.<ext>` by the local
 // generator itself (jobId: job.id passed straight through, same as audio's
 // music-gen-<uuid>.wav). Bind the provider only to that shape, not to
@@ -318,7 +411,10 @@ const RESULT_BY_KIND = {
 
 async function describeResult(job) {
   if (job.status !== 'completed') return null;
-  const shape = RESULT_BY_KIND[job.kind] || RESULT_BY_KIND.audio;
+  const shape = RESULT_BY_KIND[job.kind];
+  if (!shape) {
+    unavailable('Provider result is unavailable', 'MEDIA_PROVIDER_RESULT_UNAVAILABLE', 410);
+  }
   const filename = job.result?.filename;
   // The queue record is persisted and therefore could be hand-edited. Bind a
   // provider job only to the filename shape its own generator creates;
@@ -386,7 +482,7 @@ export async function describeFederatedMediaJob(callerId, jobOrId) {
 
 export async function submitFederatedMediaJob({ callerId, config, input, idempotencyKey }) {
   return withAdmissionLock(async () => {
-    const requestHash = sha256Text(canonicalStringify(input));
+    const requestHash = sha256Text(canonicalStringify(requestHashInput(input)));
     const existing = findIdempotentJob(callerId, idempotencyKey);
     if (existing) {
       if (existing.params?.federatedMedia?.requestHash !== requestHash) {
@@ -416,6 +512,7 @@ export async function submitFederatedMediaJob({ callerId, config, input, idempot
         reason: capability.unavailableReason,
       });
     }
+    validateFederatedVideoControls(input, capability._model);
     if (input.durationMode === 'auto' && !capability.autoDuration) {
       unavailable('Requested engine does not support automatic duration', 'MEDIA_PROVIDER_AUTO_DURATION_UNSUPPORTED', 400);
     }

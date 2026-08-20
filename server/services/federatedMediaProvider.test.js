@@ -22,12 +22,22 @@ vi.mock('./settings.js', () => ({
 vi.mock('../lib/mediaModels.js', () => ({
   getImageModels: vi.fn(() => state.imageModels),
   getVideoModels: vi.fn(() => state.videoModels),
+  isEditOnly: (model) => model?.editOnly === true,
+  isFlux2: (model) => model?.runner === 'flux2',
   repoForModel: (model) => model?.repo ?? null,
 }));
 
 vi.mock('../lib/hfCache.js', () => ({
   inspectModelCache: vi.fn(async (repo) => ({ cached: state.cachedRepos.has(repo) })),
+  findCachedRepoFiles: vi.fn(async (repo, files) => (
+    state.cachedRepos.has(repo) ? files.map((file) => `/cached/${file}`) : null
+  )),
 }));
+
+vi.mock('./videoGen/runtimes.js', async () => {
+  const actual = await vi.importActual('./videoGen/runtimes.js');
+  return { ...actual, isByovRuntimeReady: vi.fn(async () => true) };
+});
 
 vi.mock('./sharing/peerPullAuthorization.js', () => ({
   readCallerInstanceId: (req) => req.headers?.['x-portos-instance-id'] || null,
@@ -75,6 +85,7 @@ import {
 } from './federatedMediaProvider.js';
 import { enqueueJob } from './mediaJobQueue/index.js';
 import { PATHS, sha256Text } from '../lib/fileUtils.js';
+import { canonicalStringify } from '../lib/objects.js';
 
 const originalMusicPath = PATHS.music;
 const originalImagesPath = PATHS.images;
@@ -232,6 +243,33 @@ describe('federated media provider capacity and idempotency', () => {
     })).rejects.toMatchObject({ status: 409, code: 'MEDIA_PROVIDER_IDEMPOTENCY_CONFLICT' });
   });
 
+  it('replays a kind-less audio job created before the explicit kind field existed', async () => {
+    const legacyInput = { ...input() };
+    delete legacyInput.kind;
+    state.jobs = [{
+      id: '00000000-0000-4000-8000-000000000099',
+      kind: 'audio',
+      owner: 'federated-media:peer-example',
+      status: 'queued',
+      queuedAt: '2026-08-16T00:00:00.000Z',
+      params: {
+        federatedMedia: {
+          wireVersion: 1,
+          callerInstanceId: 'peer-example',
+          idempotencyKey: 'legacy-audio',
+          requestHash: sha256Text(canonicalStringify(legacyInput)),
+        },
+      },
+    }];
+
+    const replay = await submitFederatedMediaJob({
+      callerId: 'peer-example', config: config(), input: input(), idempotencyKey: 'legacy-audio',
+    });
+    expect(replay.replayed).toBe(true);
+    expect(replay.job.id).toBe('00000000-0000-4000-8000-000000000099');
+    expect(enqueueJob).not.toHaveBeenCalled();
+  });
+
   it('counts all active local media work against the conservative provider cap', async () => {
     state.jobs = [
       { id: 'local-1', owner: null, status: 'running' },
@@ -349,6 +387,59 @@ describe('federated media provider — image/video kinds', () => {
     const status = await getFederatedMediaProviderStatus(imageConfig(), { kinds: ['image'] });
     expect(status.capabilities[0]).toMatchObject({ ready: true, unavailableReason: null });
     expect(status.status).toBe('ready');
+  });
+
+  it('does not gate bundled image runtimes on the legacy mflux python path', async () => {
+    state.settings = { federation: { mediaProvider: imageConfig() } };
+    state.imageModels = [{
+      id: 'flux-dev', name: 'FLUX.2', runner: 'flux2', repo: 'example/flux2',
+    }];
+    state.cachedRepos = new Set(['example/flux2']);
+    const status = await getFederatedMediaProviderStatus(imageConfig(), { kinds: ['image'] });
+    expect(status.capabilities[0]).toMatchObject({
+      ready: true, runtimeReady: true, unavailableReason: null,
+    });
+  });
+
+  it('does not gate BYOV video runtimes on the legacy mflux python path', async () => {
+    const videoConfig = () => ({
+      enabled: true, maxQueuedJobs: 2, audioModels: [], imageModels: [],
+      videoModels: [{ engine: 'local', modelId: 'ltx2' }],
+    });
+    state.settings = { federation: { mediaProvider: videoConfig() } };
+    state.cachedRepos = new Set(['example/ltx2']);
+    state.videoModels = [{
+      id: 'ltx2', name: 'LTX2', runtime: 'ltx2', repo: 'example/ltx2', supportedModes: ['text'],
+    }];
+    const status = await getFederatedMediaProviderStatus(videoConfig(), { kinds: ['video'] });
+    expect(status.capabilities[0]).toMatchObject({
+      ready: true, runtimeReady: true, unavailableReason: null,
+    });
+  });
+
+  it('does not advertise image-edit or image-only video models for this text-only wire', async () => {
+    const incompatibleImageConfig = () => ({
+      enabled: true, maxQueuedJobs: 2, audioModels: [], videoModels: [],
+      imageModels: [{ engine: 'local', modelId: 'edit-only' }],
+    });
+    state.settings = { federation: { mediaProvider: incompatibleImageConfig() }, imageGen: { local: { pythonPath: '/usr/bin/python3' } } };
+    state.imageModels = [{
+      id: 'edit-only', name: 'Edit only', repo: 'example/edit', editOnly: true,
+    }];
+    state.cachedRepos = new Set(['example/edit']);
+    const imageStatus = await getFederatedMediaProviderStatus(incompatibleImageConfig(), { kinds: ['image'] });
+    expect(imageStatus.capabilities[0]).toMatchObject({ ready: false, unavailableReason: 'unsupported-input' });
+
+    const incompatibleVideoConfig = () => ({
+      enabled: true, maxQueuedJobs: 2, audioModels: [], imageModels: [],
+      videoModels: [{ engine: 'local', modelId: 'image-only' }],
+    });
+    state.videoModels = [{
+      id: 'image-only', name: 'Image only', runtime: 'ltx2', repo: 'example/image-only', supportedModes: ['image'],
+    }];
+    state.cachedRepos = new Set(['example/image-only']);
+    const videoStatus = await getFederatedMediaProviderStatus(incompatibleVideoConfig(), { kinds: ['video'] });
+    expect(videoStatus.capabilities[0]).toMatchObject({ ready: false, unavailableReason: 'unsupported-input' });
   });
 
   it('does not report image/video capabilities unless the caller opts into that kind', async () => {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   federatedMediaAudioProfileSchema,
+  federatedMediaProviderStatusSchema,
   federatedMediaProviderJobSchema,
   isFederatedMediaAudioPrompt,
   normalizeRequestedMediaKinds,
@@ -62,10 +63,52 @@ describe('federated media provider job wire projection', () => {
         durationSec: null,
       },
     })).success).toBe(true);
-    // A kind and result mime type from different media types must not cross —
-    // the provider's own result-building code enforces the pairing, but the
-    // wire schema doesn't couple `kind` to `result.mimeType` structurally, so
-    // this documents that a mismatched pair still parses at the schema layer.
+    expect(federatedMediaProviderJobSchema.safeParse(job({
+      kind: 'image',
+      status: 'completed',
+      completedAt: '2026-08-17T12:01:00.000Z',
+      result: {
+        available: true,
+        mimeType: 'video/mp4',
+        sizeBytes: 10,
+        sha256: 'a'.repeat(64),
+        downloadUrl: '/result',
+        engine: 'local',
+        modelId: 'example/model',
+        durationSec: null,
+      },
+    })).success).toBe(false);
+  });
+});
+
+describe('federated media status kind projection', () => {
+  const status = (overrides = {}) => ({
+    wireVersion: 1,
+    generatedAt: '2026-08-17T12:00:00.000Z',
+    staleAfterMs: 60_000,
+    status: 'ready',
+    kinds: ['audio'],
+    queue: {
+      totalActive: 0,
+      providerActive: 0,
+      queued: 0,
+      running: 0,
+      maxQueuedJobs: 2,
+      accepting: true,
+    },
+    capabilities: [],
+    ...overrides,
+  });
+
+  it('rejects a capability kind omitted from the negotiated projection', () => {
+    expect(federatedMediaProviderStatusSchema.safeParse(status({
+      capabilities: [{
+        kind: 'image', engine: 'local', engineName: 'Local', modelId: 'example/model', modelName: 'Example',
+        ready: true, unavailableReason: null, runtimeReady: true, platformSupported: true,
+        cudaRequired: false, cudaState: 'available', minDurationSec: null, maxDurationSec: null,
+        defaultDurationSec: null, lyrics: false, autoDuration: false,
+      }],
+    })).success).toBe(false);
   });
 });
 

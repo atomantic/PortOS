@@ -796,12 +796,12 @@ const federatedMediaImageJobSubmissionSchema = federatedMediaJobRoutingSchema.om
   kind: z.literal('image'),
   prompt: z.string().trim().min(1).max(4000),
   negativePrompt: z.string().trim().max(4000).optional(),
-  width: z.number().int().min(64).max(4096).optional(),
-  height: z.number().int().min(64).max(4096).optional(),
+  width: imageEdgeSchema,
+  height: imageEdgeSchema,
   steps: z.number().int().min(1).max(150).optional(),
   guidance: z.number().finite().min(0).max(30).optional(),
   seed: z.number().int().min(0).optional(),
-}).strict();
+}).strict().refine(refineImagePixelCap, { message: PIXEL_CAP_MESSAGE, path: ['width'] });
 
 const federatedMediaVideoJobSubmissionSchema = federatedMediaJobRoutingSchema.omit({
   durationSec: true, durationMode: true,

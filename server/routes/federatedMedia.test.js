@@ -168,4 +168,14 @@ describe('federated media routes', () => {
     expect(response.status).toBe(400);
     expect(provider.submit).not.toHaveBeenCalled();
   });
+
+  it('rejects an image submission over the shared pixel ceiling', async () => {
+    const response = await request(buildApp()).post('/api/federation/media/v1/jobs')
+      .set('Idempotency-Key', 'commission-image-too-large').send({
+        kind: 'image', engine: 'local', modelId: 'flux-dev', prompt: 'a lighthouse at dawn',
+        width: 4096, height: 4096,
+      });
+    expect(response.status).toBe(400);
+    expect(provider.submit).not.toHaveBeenCalled();
+  });
 });

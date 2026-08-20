@@ -119,6 +119,12 @@ export const FEDERATED_MEDIA_RESULT_EXTENSION = Object.freeze({
   'video/mp4': 'mp4',
 });
 
+const FEDERATED_MEDIA_RESULT_MIME = Object.freeze({
+  audio: 'audio/wav',
+  image: 'image/png',
+  video: 'video/mp4',
+});
+
 const federatedMediaCapabilitySchema = z.object({
   kind: mediaKindSchema,
   engine: z.string().trim().min(1).max(80),
@@ -159,6 +165,20 @@ export const federatedMediaProviderStatusSchema = z.object({
   kinds: z.array(mediaKindSchema).max(KNOWN_MEDIA_KINDS.length),
   queue: federatedMediaQueueStatusSchema,
   capabilities: z.array(federatedMediaCapabilitySchema).max(300),
+}).superRefine((value, ctx) => {
+  const kinds = new Set(value.kinds);
+  if (kinds.size !== value.kinds.length) {
+    ctx.addIssue({ code: 'custom', path: ['kinds'], message: 'kinds must not contain duplicates' });
+  }
+  value.capabilities.forEach((capability, index) => {
+    if (!kinds.has(capability.kind)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['capabilities', index, 'kind'],
+        message: 'capability kind must be listed in kinds',
+      });
+    }
+  });
 });
 
 const federatedMediaResultSchema = z.object({
@@ -192,6 +212,14 @@ export const federatedMediaProviderJobSchema = z.object({
     message: z.string().trim().min(1).max(500),
   }).optional(),
   result: federatedMediaResultSchema.optional(),
+}).superRefine((value, ctx) => {
+  if (value.result && value.result.mimeType !== FEDERATED_MEDIA_RESULT_MIME[value.kind]) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['result', 'mimeType'],
+      message: 'result mimeType must match the job kind',
+    });
+  }
 });
 
 /**

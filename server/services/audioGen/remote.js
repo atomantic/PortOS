@@ -156,7 +156,7 @@ async function requestJson(state, path, options = {}, requestOptions = {}) {
 
 function parseProviderJob(body, expectedId) {
   const parsed = federatedMediaProviderJobSchema.safeParse(body);
-  if (!parsed.success || (expectedId && parsed.data.id !== expectedId)) {
+  if (!parsed.success || parsed.data.kind !== 'audio' || (expectedId && parsed.data.id !== expectedId)) {
     throw remoteError('Remote media provider returned an invalid wire-v1 job projection', {
       code: 'MEDIA_PROVIDER_INVALID_JOB_RESPONSE',
     });
