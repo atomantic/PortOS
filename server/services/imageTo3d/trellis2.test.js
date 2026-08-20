@@ -130,6 +130,10 @@ describe('buildInstallSteps', () => {
   // permanently on the confetti fallback baker — unfixable by installing Xcode.
   describe('apple-deps (the Eigen submodule upstream never fetches)', () => {
     const appleGitDir = join(trellis2AppleDepDir(BASE), '.git');
+    const appleOVoxelDir = join(trellis2AppleDepDir(BASE), 'o-voxel');
+    // A healthy existing checkout has both the git dir and the subdirectory upstream
+    // pip-installs from.
+    const healthyCheckout = (p) => p === appleGitDir || p === appleOVoxelDir;
     const appleStep = (exists) => buildInstallSteps(BASE, { exists })
       .find((s) => s.stage === 'apple-deps');
 
@@ -150,12 +154,25 @@ describe('buildInstallSteps', () => {
     // it is the one a user reaches by clicking Repair, and Eigen is the install's only
     // gitlab.com fetch — the likeliest to be blocked.
     it('initializes submodules in place when an older setup.sh already cloned it', () => {
-      expect(appleStep((p) => p === appleGitDir)).toMatchObject({
+      expect(appleStep(healthyCheckout)).toMatchObject({
         command: 'git',
         args: ['submodule', 'update', '--init', '--recursive', '--depth', '1'],
         cwd: trellis2AppleDepDir(BASE),
         optional: true,
       });
+    });
+
+    // A clone killed partway can leave `.git` with no worktree. `git submodule update`
+    // cannot restore a missing superproject, so treating that as "already cloned" would
+    // succeed as a no-op while leaving o_voxel unbuildable forever — upstream's `! -d`
+    // guard skips its clone, and its `pip install …/o-voxel` then targets a path that
+    // does not exist. Route it to the clone branch, which fails loudly instead.
+    it('does NOT treat a partial checkout (.git but no o-voxel/) as already cloned', () => {
+      const step = appleStep((p) => p === appleGitDir);
+      expect(step.args).toContain('clone');
+      expect(step.args).toContain('--recurse-submodules');
+      expect(step.args).not.toContain('submodule');
+      expect(step.cwd).toBeUndefined();
     });
   });
 });

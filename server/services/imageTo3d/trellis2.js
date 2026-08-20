@@ -284,6 +284,18 @@ export const TRELLIS2_METAL_TOOLCHAIN_STEP = Object.freeze({
  *    submodules in place. `setup.sh` re-runs the `o-voxel` install unconditionally, so
  *    the rebuild follows in the same pass.
  *
+ * **"Already cloned" needs `o-voxel/` present, not just `.git`.** A clone killed
+ * partway (SIGKILL, power loss) can leave `.git` behind with no worktree. Keying only
+ * on `.git` would then pick the update branch, whose `git submodule update` cannot
+ * restore a missing superproject worktree — it would succeed as a no-op, upstream's
+ * `! -d` guard would skip its own clone, and `pip install deps/trellis2-apple/o-voxel`
+ * would fail on a path that does not exist: silent, permanent degradation, the exact
+ * failure this step exists to remove. Requiring the directory upstream actually
+ * installs from routes that state to the clone branch instead, which fails loudly on
+ * the non-empty target and names the real problem in the log. It does not self-heal
+ * (that needs a re-clone, so it is deliberately left to the operator) but it never
+ * again reports success while leaving `o_voxel` unbuildable.
+ *
  * `optional` for the same reason the toolchain step is: a host that cannot reach
  * gitlab.com for Eigen must still be able to install and render, degraded, rather than
  * fail the whole install.
@@ -294,7 +306,10 @@ export const TRELLIS2_METAL_TOOLCHAIN_STEP = Object.freeze({
  */
 function trellis2AppleDepsStep(base, exists) {
   const dir = trellis2AppleDepDir(base);
-  const cloned = exists(join(dir, '.git'));
+  // Both halves required — see "Already cloned" above. `o-voxel` is the subdirectory
+  // upstream's `setup.sh` pip-installs, so its absence means the checkout is unusable
+  // no matter what `.git` says.
+  const cloned = exists(join(dir, '.git')) && exists(join(dir, 'o-voxel'));
   return {
     stage: 'apple-deps',
     command: 'git',
