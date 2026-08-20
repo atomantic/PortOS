@@ -12,9 +12,10 @@ const { LEDGER_DIR, RUNS_DIR, hooks } = await vi.hoisted(async () => {
   return {
     LEDGER_DIR: mk(j(tmp(), 'portos-reconcile-ledger-')),
     RUNS_DIR: mk(j(tmp(), 'portos-reconcile-runs-')),
-    // A seam for the one test that has to interleave a write between the
-    // service's two reads of the same record. Nothing else installs a hook.
-    hooks: { afterRecordRead: null }
+    // Seams for the two tests that need to interleave a write between the
+    // service's two reads of the same record, or make the ledger append fail.
+    // Nothing else installs a hook.
+    hooks: { afterRecordRead: null, failAppend: false }
   };
 });
 
@@ -27,6 +28,10 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
       const value = await actual.readJSONFile(path, fallback);
       if (hooks.afterRecordRead) await hooks.afterRecordRead(path);
       return value;
+    },
+    appendJSONLine: async (path, line) => {
+      if (hooks.failAppend) throw new Error('ledger disk full');
+      return actual.appendJSONLine(path, line);
     }
   };
 });
@@ -69,6 +74,7 @@ beforeEach(() => {
 
 afterEach(() => {
   hooks.afterRecordRead = null;
+  hooks.failAppend = false;
   vi.useRealTimers();
 });
 afterAll(() => {
@@ -219,6 +225,61 @@ describe('repairRunRecords', () => {
     const record = readRecord('r1');
     expect(record.success).toBe(false);
     expect(record.error).toContain('reconciliation');
+  });
+
+  it('leaves the record open when the repair cannot be recorded in the ledger', async () => {
+    writeRecord('r1', { endTime: null, success: null });
+    await spawn('r1');
+    await finalize('r1', false);
+
+    // Only one order survives a crash (or a failed write) mid-repair. With the
+    // event first, a repair that could not be recorded leaves an open record
+    // the NEXT pass retries. With the record first, the record would be closed
+    // by an event nothing recorded — and for an orphan repair that reads as a
+    // permanent 'ledger-open' finding no later pass can resolve.
+    hooks.failAppend = true;
+    const result = await repairRunRecords();
+    hooks.failAppend = false;
+
+    expect(result.repaired).toEqual([]);
+    expect(result.skipped).toBe(1);
+    expect(readRecord('r1').endTime).toBeNull();
+    expect(await readRunEvents({ runId: 'r1', kind: 'run.reconciled' })).toEqual([]);
+
+    // ...and the next pass still finds the same repairable drift.
+    const retry = await repairRunRecords();
+    expect(retry.repaired).toEqual([{ runId: 'r1', from: 'failed', success: false, endTime: LATER }]);
+  });
+
+  it('skips a run whose record file is not a run record', async () => {
+    mkdirSync(join(RUNS_DIR, 'r1'), { recursive: true });
+    writeFileSync(metaPath('r1'), '["not", "a", "record"]');
+    await spawn('r1');
+    await finalize('r1', false);
+
+    const result = await repairRunRecords();
+    // A corrupt file is unreadable, not an open run — repairing it would have
+    // spread an array into the "repaired" record.
+    expect(result.findings[0].finding).toBe('record-missing');
+    expect(result.repaired).toEqual([]);
+    expect(readFileSync(metaPath('r1'), 'utf8')).toBe('["not", "a", "record"]');
+  });
+
+  it('refuses to follow a run id out of the runs directory', async () => {
+    // A hand-edited or truncated-and-recovered ledger line is the only way this
+    // id gets in — every id the server mints is a uuid — but it would otherwise
+    // become a path.
+    const escaping = '../escape';
+    mkdirSync(join(RUNS_DIR, '..', 'escape'), { recursive: true });
+    const outside = join(RUNS_DIR, '..', 'escape', 'metadata.json');
+    writeFileSync(outside, JSON.stringify({ id: escaping, startTime: AT, endTime: null }));
+    await appendRunEvent({ kind: 'run.spawned', runId: escaping, at: AT, data: {} });
+    await appendRunEvent({ kind: 'run.finalized', runId: escaping, at: LATER, data: { success: false, exitCode: 1 } });
+
+    const result = await repairRunRecords();
+    expect(result.findings.map((f) => f.finding)).toEqual(['record-missing']);
+    expect(result.repaired).toEqual([]);
+    expect(JSON.parse(readFileSync(outside, 'utf8')).endTime).toBeNull();
   });
 
   it('runs one pass at a time', async () => {

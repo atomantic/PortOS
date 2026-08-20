@@ -27,19 +27,46 @@ import { RUN_EVENT_READ_LIMITS } from '../lib/agentRunEvents.js';
 import { reconcileRunRecords, planRunRecordRepair, isAgentFallbackKey } from '../lib/agentRunReconcile.js';
 import { getRunProjections, appendRunEvent } from './agentRunEventLog.js';
 
-const metadataPath = (runId) => join(PATHS.runs, runId, 'metadata.json');
+/**
+ * A run id is about to become a filesystem path, and it arrives from a file on
+ * disk rather than from this process. The ledger's envelope schema bounds ids
+ * by LENGTH only, so a hand-edited or truncated-and-recovered line could carry
+ * `../` and point the read — or the repair write — at a `metadata.json`
+ * outside `data/runs`. Every id the server itself mints is a uuid, so
+ * demanding a single plain path segment costs nothing and closes that.
+ */
+const SAFE_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const metadataPath = (runId) =>
+  (SAFE_RUN_ID.test(runId) && runId !== '.' && runId !== '..' ? join(PATHS.runs, runId, 'metadata.json') : null);
+
+/**
+ * A parsed `metadata.json`, or null if the file held something that is not a
+ * run record. `readJSONFile` returns whatever the file parsed to, and a
+ * truncated or hand-edited file can parse to `[]` or `"…"` — both truthy, both
+ * with no `endTime`, so an unguarded read would call a corrupt file an open run
+ * and then spread an array into the repaired record.
+ */
+const asRecord = (value) =>
+  (value && typeof value === 'object' && !Array.isArray(value) ? value : null);
+
+const readRecord = async (runId) => {
+  const path = metadataPath(runId);
+  return path ? asRecord(await readJSONFile(path, null)) : null;
+};
 
 /**
  * Load the run records the given projections name.
  *
  * Absent records are stored as an explicit `null` rather than left out of the
  * map, so the diff can tell "no record on disk" from "not looked at" — the
- * sentinel-over-truthiness rule that runs through this whole feature.
+ * sentinel-over-truthiness rule that runs through this whole feature. An
+ * unusable id or a corrupt file lands on that same `null`, and so is reported
+ * as `record-missing` — which is what it is from here: no readable run record.
  */
 async function loadRecordsFor(projections) {
   const runIds = projections.map((p) => p.id).filter((id) => id && !isAgentFallbackKey(id));
-  const records = await Promise.all(runIds.map((id) => readJSONFile(metadataPath(id), null)));
-  return new Map(runIds.map((id, index) => [id, records[index] ?? null]));
+  const records = await Promise.all(runIds.map(readRecord));
+  return new Map(runIds.map((id, index) => [id, records[index]]));
 }
 
 const cap = (limit) => Math.min(
@@ -106,22 +133,26 @@ async function repairNow({ runId, limit } = {}) {
     const path = metadataPath(item.runId);
     // Fresh read — the report above may be a few disk reads old, and the run's
     // own completion path is the one writer allowed to win that race.
-    const record = await readJSONFile(path, null);
+    const record = await readRecord(item.runId);
     const patch = planRunRecordRepair(projection, record, new Date().toISOString());
     if (!patch) {
       skipped += 1;
       continue;
     }
 
-    await atomicWrite(path, { ...record, ...patch });
-    console.log(`🩹 Closed run ${item.runId} from the event ledger: ledger read ${item.detail.ledgerStatus}, record now ${patch.success ? 'success' : 'failure'}`);
-
-    // The repair is a lifecycle fact of its own. An explicit natural key rather
-    // than the content-derived default: re-running a repair for the same run
-    // and the same close stamp is the same fact, and the content hash covers
-    // the wall-clock `reconciledAt`, so it would otherwise mint a new event on
-    // every pass.
-    await appendRunEvent({
+    // The ledger entry goes FIRST, and a failed append aborts the repair.
+    //
+    // Order decides which half of a half-finished repair survives a crash, and
+    // only one order is recoverable. Event-then-record: the next pass reads the
+    // run as terminal, the record as still open, plans the same repair, and the
+    // event's natural key dedupes the second append — self-healing. The reverse
+    // leaves a record closed by an event nothing recorded, which for an orphan
+    // repair reads as a permanent `ledger-open` finding no later pass can
+    // resolve, because the record it would have to fix is already closed.
+    //
+    // `appendRunEvent` never rejects; it REPORTS failure, so the result has to
+    // be read rather than awaited and ignored.
+    const appended = await appendRunEvent({
       kind: 'run.reconciled',
       eventId: `reconcile:${item.runId}:${patch.endTime}`,
       runId: item.runId,
@@ -135,6 +166,14 @@ async function repairNow({ runId, limit } = {}) {
         durationMs: patch.duration
       }
     });
+    if (appended?.error) {
+      console.error(`❌ Skipped reconciling run ${item.runId}: could not record the repair (${appended.error})`);
+      skipped += 1;
+      continue;
+    }
+
+    await atomicWrite(path, { ...record, ...patch });
+    console.log(`🩹 Closed run ${item.runId} from the event ledger: ledger read ${item.detail.ledgerStatus}, record now ${patch.success ? 'success' : 'failure'}`);
 
     repaired.push({ runId: item.runId, from: item.detail.ledgerStatus, success: patch.success, endTime: patch.endTime });
   }
