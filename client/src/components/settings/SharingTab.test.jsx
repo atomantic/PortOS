@@ -253,3 +253,30 @@ describe('SharingTab — writes against the freshest federation slice', () => {
     }, { silent: true }));
   });
 });
+
+describe('SharingTab — a failed candidate fetch is not an empty catalog', () => {
+  it('says the list could not load rather than "no models installed"', async () => {
+    getMediaShareCandidates.mockRejectedValue(new Error('offline'));
+    getAuthStatus.mockResolvedValue({ enabled: true });
+    getSettings.mockResolvedValue({
+      sharingDisplayName: '', sharingBio: '',
+      federation: { mediaProvider: { enabled: true, audioModels: [] } },
+    });
+
+    render(<SharingTab />);
+    expect(await screen.findByText(/Could not load the local image model list/i)).toBeInTheDocument();
+    expect(screen.queryByText(/No local image models are installed/i)).not.toBeInTheDocument();
+  });
+
+  it('still reports a genuinely empty catalog as empty', async () => {
+    getMediaShareCandidates.mockResolvedValue({ image: [], video: [] });
+    getAuthStatus.mockResolvedValue({ enabled: true });
+    getSettings.mockResolvedValue({
+      sharingDisplayName: '', sharingBio: '',
+      federation: { mediaProvider: { enabled: true, audioModels: [] } },
+    });
+
+    render(<SharingTab />);
+    expect(await screen.findByText(/No local image models are installed/i)).toBeInTheDocument();
+  });
+});

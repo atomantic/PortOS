@@ -200,9 +200,16 @@ Three properties are worth stating explicitly:
 
 Destination tags on the job (`creativeDirectorSceneImage`, `musicVideo`,
 `catalogAttach`, …) survive routing untouched, so the same completion hooks file
-a federated render exactly where a local one would land. An unreadable settings
-file is treated as "no route configured" — logged, then rendered locally —
-because a transient read error must not hard-fail every autonomous render.
+a federated render exactly where a local one would land.
+
+An **unreadable** settings file fails the enqueue with `MEDIA_ROUTING_UNREADABLE`
+rather than falling back to a local render. It is not the same as a settings file
+that parses and simply configures no route (that renders locally, as it should):
+a failed read cannot tell us whether a route exists, and guessing "no route"
+would silently spend local GPU on work the operator deliberately sent to another
+machine. A provider rejection inside a batch is contained rather than fatal —
+one refused portrait or scene frame is recorded in that run's `skipped` list and
+the rest of the batch still queues.
 
 ## Authentication and identity
 

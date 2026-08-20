@@ -33,6 +33,10 @@ import { CLOUD_VIDEO_GEN_MODES, VIDEO_GEN_MODES } from '../videoGen/modes.js';
 // Only the visual kinds. See the audio note in the module docblock.
 export const ROUTABLE_MEDIA_KINDS = Object.freeze(['image', 'video']);
 
+// Distinct from both `null` and `{}` so a failed settings read can never be
+// mistaken for "settings say nothing is routed".
+const UNREADABLE_SETTINGS = Symbol('unreadable-settings');
+
 const isRecord = (value) => value && typeof value === 'object' && !Array.isArray(value);
 const trimmed = (value) => (typeof value === 'string' ? value.trim() : '');
 
@@ -155,8 +159,13 @@ function assertRoutableConditioning(kind, params) {
  */
 export async function hasConfiguredMediaRoute(kind) {
   if (!ROUTABLE_MEDIA_KINDS.includes(kind)) return false;
-  const settings = await getSettings().catch(() => null);
-  return !!(settings && normalizeMediaRoutingConfig(settings)[kind]);
+  // On an unreadable read, answer TRUE: every caller uses this to decide whether
+  // a local-readiness verdict may skip the render, and skipping is the one
+  // outcome that silently discards work. Saying "routed" defers the decision to
+  // resolveDefaultMediaRoute, which fails loudly with MEDIA_ROUTING_UNREADABLE.
+  const settings = await getSettings().catch(() => UNREADABLE_SETTINGS);
+  if (settings === UNREADABLE_SETTINGS) return true;
+  return !!normalizeMediaRoutingConfig(settings)[kind];
 }
 
 /**
@@ -171,19 +180,23 @@ export async function hasConfiguredMediaRoute(kind) {
  */
 export async function resolveDefaultMediaRoute({ kind, params }) {
   if (!ROUTABLE_MEDIA_KINDS.includes(kind)) return null;
-  // An unreadable settings file is an install-level fault, not a provider
-  // fault: no configuration is knowable at all, which is the same state as a
-  // fresh install. Rendering locally matches what the rest of this enqueue
-  // path already does with an unreadable settings read (the render-backend
-  // pin ladder falls through untouched) — hard-failing every autonomous
-  // render on a transient read error would be a far worse outcome than one
-  // local render. It is logged rather than swallowed so it can never look
-  // like "no route configured".
+  // UNREADABLE is not the same as NO ROUTE. A settings object that parses and
+  // simply has no `mediaRouting` is a fresh install and must render locally; a
+  // settings read that FAILS tells us nothing, and treating it as "no route"
+  // would silently bypass a route the user configured — burning local GPU (or
+  // another backend's quota) on work they deliberately sent elsewhere. That is
+  // exactly the collapse the project's sentinel rule forbids, so a failed read
+  // gets its own typed error rather than a null.
   const settings = await getSettings().catch((error) => {
     console.error(`❌ Federated media routing could not read settings: ${error.message}`);
-    return null;
+    return UNREADABLE_SETTINGS;
   });
-  if (!settings) return null;
+  if (settings === UNREADABLE_SETTINGS) {
+    throw new ServerError(
+      'Could not read this instance\'s media routing configuration',
+      { status: 503, code: 'MEDIA_ROUTING_UNREADABLE' },
+    );
+  }
   const route = normalizeMediaRoutingConfig(settings)[kind];
   if (!route) return null;
 

@@ -92,10 +92,19 @@ export default function UnattendedRenderRouting({ peers }) {
     // it immediately before writing rather than trusting the snapshot taken at
     // mount: the Sharing tab owns mediaProvider and strict-pull, and a page left
     // open across an edit there would otherwise write back the stale values it
-    // captured. Fall back to the mount snapshot only if the re-read fails, which
-    // is still strictly better than sending {}.
+    // captured.
+    //
+    // A FAILED re-read aborts the save. Falling back to the mount snapshot was
+    // the wrong instinct: it is not "better than sending {}", it is a write of
+    // known-stale state over whatever is actually on the server, which is how a
+    // newer mediaProvider or strictPullAuthorization gets silently reverted.
     const fresh = await getSettings({ silent: true }).catch(() => null);
-    const base = isRecord(fresh?.federation) ? fresh.federation : federation;
+    if (!isRecord(fresh?.federation)) {
+      setSaving(false);
+      toast.error('Could not read current settings — routing not saved');
+      return;
+    }
+    const base = fresh.federation;
     // Merge onto the freshest routing too, so a kind another surface set in the
     // meantime isn't reverted by this one's stale copy.
     const baseRouting = isRecord(base.mediaRouting) ? base.mediaRouting : routing;
@@ -121,14 +130,18 @@ export default function UnattendedRenderRouting({ peers }) {
   // and there is no way left to clear it.
   const hasSavedRoute = KINDS.some(({ kind }) => savedRoute(kind));
   const anyOptions = KINDS.some(({ kind }) => optionsByKind[kind].length > 0);
+  // Shown regardless of whether any peer currently advertises a model: a failed
+  // settings read is not the same as "nothing is configured", and hiding it
+  // would leave a persisted route silently failing every enqueue with no
+  // on-screen explanation and no way to clear it.
   if (loadFailed) {
-    return anyOptions ? (
+    return (
       <div className="mb-3 rounded-lg border border-port-border bg-port-bg/40 p-3">
         <p className="text-[11px] text-port-warning">
           Unattended render routing could not load this instance&rsquo;s settings, so it is read-only. Reload to try again.
         </p>
       </div>
-    ) : null;
+    );
   }
   if (routing === null || (!anyOptions && !hasSavedRoute)) return null;
 

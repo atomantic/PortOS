@@ -242,11 +242,9 @@ describe('hasConfiguredMediaRoute', () => {
     expect(prepareRemoteMediaJob).not.toHaveBeenCalled();
   });
 
-  it('reports false for an unroutable kind and for an unreadable settings file', async () => {
+  it('reports false for an unroutable kind', async () => {
     getSettings.mockResolvedValue({ federation: { mediaRouting: { audio: { peerId: 'p', engine: 'e', modelId: 'm' } } } });
     await expect(hasConfiguredMediaRoute('audio')).resolves.toBe(false);
-    getSettings.mockRejectedValue(new Error('unreadable'));
-    await expect(hasConfiguredMediaRoute('image')).resolves.toBe(false);
   });
 });
 
@@ -303,5 +301,36 @@ describe('overloaded video mode token', () => {
   it('still refuses a genuine non-text pipeline semantic', async () => {
     await expect(resolveDefaultMediaRoute({ kind: 'video', params: { prompt: 'p', mode: 'fflf' } }))
       .rejects.toThrow(/non-text render mode/);
+  });
+});
+
+// The project's sentinel rule: absent / failed-to-fetch / invalid must never
+// collapse into the same value as fetched-and-legitimately-empty.
+describe('unreadable settings are not "no route"', () => {
+  it('fails the routed enqueue instead of quietly rendering locally', async () => {
+    getSettings.mockRejectedValue(new Error('EACCES'));
+    await expect(resolveDefaultMediaRoute({ kind: 'image', params: { prompt: 'p' } }))
+      .rejects.toMatchObject({ code: 'MEDIA_ROUTING_UNREADABLE' });
+  });
+
+  it('still treats a parsed settings object with no routing as local', async () => {
+    getSettings.mockResolvedValue({});
+    await expect(resolveDefaultMediaRoute({ kind: 'image', params: { prompt: 'p' } }))
+      .resolves.toBeNull();
+  });
+
+  // Callers use this to decide whether a local-readiness verdict may SKIP the
+  // render. Skipping is the outcome that silently discards work, so an
+  // unreadable read must defer to resolveDefaultMediaRoute's loud failure.
+  it('reports routed on an unreadable read, so no caller skips the render', async () => {
+    getSettings.mockRejectedValue(new Error('EACCES'));
+    await expect(hasConfiguredMediaRoute('image')).resolves.toBe(true);
+  });
+
+  it('propagates the unreadable failure through the shared enqueue helper', async () => {
+    getSettings.mockRejectedValue(new Error('EACCES'));
+    await expect(enqueueUnattendedMediaJob({ kind: 'image', params: { prompt: 'p' } }))
+      .rejects.toMatchObject({ code: 'MEDIA_ROUTING_UNREADABLE' });
+    expect(enqueueJob).not.toHaveBeenCalled();
   });
 });

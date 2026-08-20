@@ -67,7 +67,11 @@ export function SharingTab() {
   const [providerEnabled, setProviderEnabled] = useState(false);
   const [providerMaxQueuedJobs, setProviderMaxQueuedJobs] = useState(2);
   const [providerModels, setProviderModels] = useState([]);
-  const [visualCandidates, setVisualCandidates] = useState({ image: [], video: [] });
+  // `null` per kind = the candidate list could not be fetched, which is NOT the
+  // same as a genuinely empty local catalog — reporting "no models installed"
+  // for a transient API failure would send the user hunting for a model they
+  // already have.
+  const [visualCandidates, setVisualCandidates] = useState({ image: null, video: null });
   const [providerVisualModels, setProviderVisualModels] = useState({ image: [], video: [] });
   const [savedProviderVisualModels, setSavedProviderVisualModels] = useState({ image: [], video: [] });
   const [savedProviderEnabled, setSavedProviderEnabled] = useState(false);
@@ -86,10 +90,10 @@ export function SharingTab() {
     // the model cache, so keep it off the critical path for the other controls.
     getMediaShareCandidates({ silent: true })
       .then((candidates) => setVisualCandidates({
-        image: Array.isArray(candidates?.image) ? candidates.image : [],
-        video: Array.isArray(candidates?.video) ? candidates.video : [],
+        image: Array.isArray(candidates?.image) ? candidates.image : null,
+        video: Array.isArray(candidates?.video) ? candidates.video : null,
       }))
-      .catch(() => setVisualCandidates({ image: [], video: [] }));
+      .catch(() => setVisualCandidates({ image: null, video: null }));
     Promise.all([
       getSettings({ silent: true }),
       getAuthStatus({ silent: true }).catch(() => ({ enabled: false })),
@@ -397,12 +401,17 @@ export function SharingTab() {
           </fieldset>
 
           {VISUAL_KINDS.map(({ kind, label, field }) => {
-            const rows = candidateRows(visualCandidates[kind], providerVisualModels[kind]);
+            const unavailable = visualCandidates[kind] === null;
+            const rows = candidateRows(visualCandidates[kind] || [], providerVisualModels[kind]);
             return (
             <fieldset key={field}>
               <legend className="block text-xs uppercase tracking-wider text-gray-500 mb-2">Allowed {label} models</legend>
               {rows.length === 0 ? (
-                <p className="text-sm text-gray-500">No local {label} models are installed to share.</p>
+                <p className="text-sm text-gray-500">
+                  {unavailable
+                    ? `Could not load the local ${label} model list. Reload to try again.`
+                    : `No local ${label} models are installed to share.`}
+                </p>
               ) : (
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
                   {rows.map((candidate, index) => {

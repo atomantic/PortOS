@@ -224,11 +224,19 @@ describe('render-backend pin — image (#3135)', () => {
     expect(enqueued().params.modelId).toBe('planner-model');
   });
 
-  it('falls through untouched when settings are unreadable', async () => {
+  // The backend PIN still falls through untouched on an unreadable read — but
+  // since #4348 the enqueue itself now fails instead of completing. An
+  // unreadable settings file cannot tell us whether a federated route is
+  // configured, and treating that as "no route" would silently render on local
+  // GPU work the user deliberately sent to another machine. Failing loudly is
+  // the project's sentinel rule (never collapse failed-to-fetch into
+  // legitimately-empty) applied to a spend-bearing decision.
+  it('fails the enqueue rather than guessing at routing when settings are unreadable', async () => {
     getSettings.mockRejectedValue(new Error('settings unavailable'));
     getProject.mockResolvedValue(projectWithPin({ image: { mode: 'grok' } }));
-    await run('media_enqueueImageJob', { prompt: 'p' }, { projectId: 'cd-1' });
-    expect(enqueued().params).toEqual({ prompt: 'p' });
+    await expect(run('media_enqueueImageJob', { prompt: 'p' }, { projectId: 'cd-1' }))
+      .rejects.toMatchObject({ code: 'MEDIA_ROUTING_UNREADABLE' });
+    expect(enqueueJob).not.toHaveBeenCalled();
   });
 });
 

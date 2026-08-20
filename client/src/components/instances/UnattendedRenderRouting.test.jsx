@@ -181,7 +181,10 @@ describe('UnattendedRenderRouting — writes against the freshest settings', () 
     }, { silent: true }));
   });
 
-  it('falls back to the mount snapshot when the re-read fails, never to an empty slice', async () => {
+});
+
+describe('UnattendedRenderRouting — a failed read is not an empty configuration', () => {
+  it('aborts the save rather than writing a known-stale slice over the server', async () => {
     getSettings.mockResolvedValueOnce({ federation: { mediaProvider: { enabled: true } } });
     render(<UnattendedRenderRouting peers={[peerWith()]} />);
     const select = await screen.findByLabelText('Image');
@@ -189,11 +192,14 @@ describe('UnattendedRenderRouting — writes against the freshest settings', () 
     getSettings.mockRejectedValueOnce(new Error('offline'));
     fireEvent.change(select, { target: { value: JSON.stringify(['peer-1', 'comfy', 'sdxl-base']) } });
 
-    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({
-      federation: {
-        mediaProvider: { enabled: true },
-        mediaRouting: { image: { peerId: 'peer-1', engine: 'comfy', modelId: 'sdxl-base' } },
-      },
-    }, { silent: true }));
+    await waitFor(() => expect(toast.error)
+      .toHaveBeenCalledWith('Could not read current settings — routing not saved'));
+    expect(updateSettings).not.toHaveBeenCalled();
+  });
+
+  it('shows the read-only notice even when no peer advertises anything', async () => {
+    getSettings.mockRejectedValue(new Error('offline'));
+    render(<UnattendedRenderRouting peers={[]} />);
+    expect(await screen.findByText(/could not load this instance/i)).toBeInTheDocument();
   });
 });

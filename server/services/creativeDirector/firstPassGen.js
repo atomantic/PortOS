@@ -178,18 +178,29 @@ export async function enqueueFirstPassPortraits(members = [], project = null) {
       skipped.push({ ingredientId, reason: skip });
       continue;
     }
-    const queued = await enqueueUnattendedMediaJob({
-      kind: 'image',
-      params: {
-        ...resolved.jobParams,
-        prompt,
-        // Tag the job so the durable catalogImageAttachHook (#1359) files the
-        // finished render as this ingredient's portrait — no mounted client
-        // required. Explicit `kind: 'portrait'` since this is a deliberate
-        // first-pass portrait, not an ad-hoc reference render.
-        catalogAttach: { ingredientId, kind: 'portrait' },
-      },
-    });
+    // A routed enqueue can reject on provider preflight (busy, stale,
+    // unauthorized, unsupported conditioning) where a local one could not. An
+    // uncaught rejection here would abandon every REMAINING portrait in the
+    // batch over one bad member — record the reason and keep going.
+    let queued;
+    try {
+      queued = await enqueueUnattendedMediaJob({
+        kind: 'image',
+        params: {
+          ...resolved.jobParams,
+          prompt,
+          // Tag the job so the durable catalogImageAttachHook (#1359) files the
+          // finished render as this ingredient's portrait — no mounted client
+          // required. Explicit `kind: 'portrait'` since this is a deliberate
+          // first-pass portrait, not an ad-hoc reference render.
+          catalogAttach: { ingredientId, kind: 'portrait' },
+        },
+      });
+    } catch (error) {
+      console.error(`❌ CD first-pass portrait ${ingredientId}: could not queue: ${error.message}`);
+      skipped.push({ ingredientId, reason: error.code || 'enqueue-failed' });
+      continue;
+    }
     enqueued.push({ ingredientId, jobId: queued.jobId });
   }
   console.log(`🎨 CD first-pass portraits: ${enqueued.length} queued, ${skipped.length} skipped (${resolved.mode})`);
@@ -282,20 +293,29 @@ export async function enqueueFirstPassSceneFrames(project) {
       skipped.push({ sceneId: scene.sceneId, reason: 'no-prompt' });
       continue;
     }
-    const queued = await enqueueUnattendedMediaJob({
-      kind: 'image',
-      params: {
-        ...resolved.jobParams,
-        prompt,
-        width,
-        height,
-        // Tag the job so the durable creativeDirectorSceneImageHook files the
-        // finished render onto this scene's sourceImageFile — no mounted
-        // client required. Mirrors the catalogAttach tag the portrait path
-        // uses for the catalog hook.
-        creativeDirector: { projectId: project.id, sceneId: scene.sceneId },
-      },
-    });
+    // Same reason as the portrait loop: a routed enqueue can reject on provider
+    // preflight, and one bad scene must not abandon the rest of the batch.
+    let queued;
+    try {
+      queued = await enqueueUnattendedMediaJob({
+        kind: 'image',
+        params: {
+          ...resolved.jobParams,
+          prompt,
+          width,
+          height,
+          // Tag the job so the durable creativeDirectorSceneImageHook files the
+          // finished render onto this scene's sourceImageFile — no mounted
+          // client required. Mirrors the catalogAttach tag the portrait path
+          // uses for the catalog hook.
+          creativeDirector: { projectId: project.id, sceneId: scene.sceneId },
+        },
+      });
+    } catch (error) {
+      console.error(`❌ CD first-pass scene ${scene.sceneId}: could not queue: ${error.message}`);
+      skipped.push({ sceneId: scene.sceneId, reason: error.code || 'enqueue-failed' });
+      continue;
+    }
     enqueued.push({ sceneId: scene.sceneId, jobId: queued.jobId });
   }
   console.log(`🎬 CD first-pass scene frames: ${enqueued.length} queued, ${skipped.length} skipped (${resolved.mode})`);
