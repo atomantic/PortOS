@@ -194,6 +194,18 @@ describe('provider runtime installer', () => {
       expect(peeked.codex).toBeUndefined();   // never probed → absent, not false
       expect(findCommand).not.toHaveBeenCalled();
     });
+
+    // A cached "not installed" that has aged out must stop being an answer, or
+    // a CLI the user installed from a terminal stays skipped by routing until
+    // something else happens to re-probe.
+    it('drops a status once its TTL is up, so an expired negative reads as unprobed', async () => {
+      await getProviderRuntimeStatus('codex', { findCommand: async () => null, probeCommand: async () => false });
+      expect(peekProviderRuntimeStatuses().codex.installed).toBe(false);
+
+      vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 61_000);
+      expect(peekProviderRuntimeStatuses().codex).toBeUndefined();
+      vi.restoreAllMocks();
+    });
   });
 
   // #3618's rule: a vendor is one row. A new coding-agent CLI must not land in

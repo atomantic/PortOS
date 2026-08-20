@@ -7,7 +7,7 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 // rather than which CLIs happen to be installed on the machine running it.
 vi.mock('../services/providerRuntimeInstaller.js', async (importOriginal) => ({
   ...(await importOriginal()),
-  getProviderRuntimeStatuses: vi.fn(async () => ({
+  peekProviderRuntimeStatuses: vi.fn(() => ({
     codex: { id: 'codex', label: 'Codex CLI', installed: false },
     claude: { id: 'claude', label: 'Claude Code CLI', installed: true },
   })),

@@ -109,12 +109,17 @@ export function createPortOSProviderRoutes(aiToolkit) {
    * provider can't run and a router that hands it a run can no longer disagree.
    *
    * Computed on the RAW providers, before sanitization: the API-key check reads
-   * `apiKey`, which `sanitizeProvider` replaces with a boolean, and the runtime
-   * probe is TTL-cached so this costs a map lookup on the common path.
+   * `apiKey`, which `sanitizeProvider` replaces with a boolean.
+   *
+   * Synchronous by design — this endpoint is fetched by half the app, so it
+   * reads the runtime probe's cache and lets a cold one refresh in the
+   * background rather than putting a `--version` sweep of every CLI on that
+   * critical path. An unprobed runtime simply publishes no finding, and the
+   * page's own `/runtimes` fetch fills that gap on the card.
    */
   router.get('/', asyncHandler(async (req, res) => {
     const data = await providerService.getAllProviders();
-    const prerequisites = await getProviderPrerequisiteMap(data.providers);
+    const prerequisites = getProviderPrerequisiteMap(data.providers);
     res.json({
       activeProvider: data.activeProvider,
       providers: data.providers.map((provider) => ({

@@ -2,23 +2,32 @@
  * Provider prerequisites, probed.
  *
  * `lib/providerPrerequisites.js` decides what a provider is missing given the
- * facts; this module supplies the facts (the CLI-runtime probe) and exposes the
- * two shapes PortOS needs:
+ * facts; this module supplies the facts and exposes the two shapes PortOS
+ * needs:
  *
- *   - `getProviderPrerequisiteMap(providers)` — async, awaits the (TTL-cached)
- *     runtime probe. Used to decorate `GET /api/providers` so the AI Providers
- *     page reads the same answer the router uses instead of deriving its own.
- *   - `prerequisitesMetForRouting(provider, providers)` — SYNC, for the
- *     fallback-provider chain in `aiToolkit/providerStatus.js`, which is a
- *     synchronous decision. Reads whatever the probe has already cached and
- *     kicks a background refresh when that is cold.
+ *   - `getProviderPrerequisiteMap(providers)` — the whole collection's verdict,
+ *     for decorating `GET /api/providers` so the AI Providers page reads the
+ *     same answer the router uses instead of deriving its own.
+ *   - `prerequisitesMetForRouting(provider, providers)` — the gate the
+ *     fallback-provider chain in `aiToolkit/providerStatus.js` consults.
  *
- * The sync path is deliberately permissive, twice over. An un-probed runtime
- * yields no finding, so the FIRST fallback pick after boot routes exactly as it
- * did before and the refresh it triggers makes every later pick accurate —
- * never the other way round, because a cold cache must not take every CLI
- * provider out of the chain. And it acts only on `ROUTING_BLOCKING_CODES` (the
- * missing binary), not on the credential findings the card also shows.
+ * BOTH are synchronous and read only what the runtime probe has already cached,
+ * kicking a coalesced background refresh when it has nothing current. Routing
+ * has no choice — `getFallbackProvider` is a synchronous decision — and the
+ * route must not await either: `GET /api/providers` is fetched by half the app,
+ * and a cold cache would put a multi-second `--version` sweep of every CLI on
+ * that critical path. The credential checks need no probe at all, so they are
+ * always exact; only the runtime finding waits on the cache.
+ *
+ * The result is permissive in three deliberate ways. An un-probed runtime
+ * yields no finding, so the first pick after boot behaves exactly as it did
+ * before and the refresh it triggers makes later picks accurate. An EXPIRED
+ * probe is likewise no answer, so a CLI installed by hand stops being skipped
+ * within the TTL rather than until the next restart. And routing acts only on
+ * `ROUTING_BLOCKING_CODES` (the missing binary), never on the credential
+ * findings the card also shows. Never the other way round: taking a working
+ * provider out of the fallback chain is worse than the late ENOENT this
+ * prevents.
  *
  * No LLM call is made here. Probing a CLI is a `--version` spawn, so this is
  * safe under the no-cold-bootstrap policy in CLAUDE.md.
@@ -46,29 +55,10 @@ const orcaRouterKeyState = (providers) => {
   return sibling?.hasApiKey === true || Boolean(sibling?.apiKey);
 };
 
-const forProvider = (provider, runtimes, orcaRouterKeySet) => providerPrerequisites(provider, {
-  // `undefined` (no entry in the map) is NOT PROBED — normalize it to the
-  // module's `null` sentinel rather than letting it fall through as a value.
-  runtime: runtimes?.[providerRuntimeKey(provider) ?? ''] ?? null,
-  orcaRouterKeySet,
-});
-
-/**
- * `{ [providerId]: { met, missing } }` for a whole provider collection, one
- * runtime probe for the batch.
- * @param {Array<object>} providers — raw or sanitized provider records
- */
-export async function getProviderPrerequisiteMap(providers) {
-  const list = Array.isArray(providers) ? providers : [];
-  if (list.length === 0) return {};
-  const runtimes = await getProviderRuntimeStatuses();
-  const orcaRouterKeySet = orcaRouterKeyState(list);
-  return Object.fromEntries(list.map((provider) => [provider.id, forProvider(provider, runtimes, orcaRouterKeySet)]));
-}
-
-// Coalesced background refresh for the sync path — one probe in flight at a
-// time, so a failure storm picking a fallback per failed run doesn't fan out a
-// `--version` spawn per CLI per run.
+// Coalesced background refresh — one probe in flight at a time, so a failure
+// storm picking a fallback per failed run doesn't fan out a `--version` spawn
+// per CLI per run. Errors are logged and swallowed: this runs outside the
+// request lifecycle, where an unhandled rejection kills the process.
 let refreshInFlight = null;
 const refreshRuntimesInBackground = () => {
   if (refreshInFlight) return;
@@ -78,26 +68,53 @@ const refreshRuntimesInBackground = () => {
 };
 
 /**
+ * The cached runtime statuses, plus a background refresh for any runtime this
+ * batch wanted and the cache had nothing current for.
+ *
+ * Scoped to runtimes the table actually covers: a custom command will never
+ * appear in the probe's answer, so re-requesting it per call would be a refresh
+ * that can never succeed.
+ */
+const runtimeSnapshotFor = (keys) => {
+  const runtimes = peekProviderRuntimeStatuses();
+  if (keys.some((key) => key && !runtimes[key] && getProviderRuntime(key))) refreshRuntimesInBackground();
+  return runtimes;
+};
+
+const forProvider = (provider, runtimes, orcaRouterKeySet) => providerPrerequisites(provider, {
+  // `undefined` (no entry in the map) is NOT PROBED — normalize it to the
+  // module's `null` sentinel rather than letting it fall through as a value.
+  runtime: runtimes?.[providerRuntimeKey(provider) ?? ''] ?? null,
+  orcaRouterKeySet,
+});
+
+/**
+ * `{ [providerId]: { met, missing } }` for a whole provider collection.
+ * @param {Array<object>} providers — raw or sanitized provider records
+ */
+export function getProviderPrerequisiteMap(providers) {
+  const list = Array.isArray(providers) ? providers : [];
+  if (list.length === 0) return {};
+  const runtimes = runtimeSnapshotFor(list.map(providerRuntimeKey));
+  const orcaRouterKeySet = orcaRouterKeyState(list);
+  return Object.fromEntries(list.map((provider) => [provider.id, forProvider(provider, runtimes, orcaRouterKeySet)]));
+}
+
+/**
  * Can this provider run right now, as far as the already-probed facts say?
  *
  * The gate the fallback chain uses. Returns `true` for anything not KNOWN to be
- * un-runnable — see the sentinel note above, and `ROUTING_BLOCKING_CODES` for
- * why routing acts on a NARROWER set of findings than the card displays. Logs
- * the one line that explains a skip, which is the whole point of the change: a
- * run that used to die on `spawn codex ENOENT` now says which binary is absent
- * and moves on to the next candidate.
+ * un-runnable — see the module note above — and logs the one line that explains
+ * a skip, which is the whole point of the change: a run that used to die on
+ * `spawn codex ENOENT` now says which binary is absent and moves on to the next
+ * candidate.
  *
  * @param {object} provider
  * @param {object|Array} providers — the sibling collection (for inherited keys)
  * @returns {boolean}
  */
 export function prerequisitesMetForRouting(provider, providers) {
-  const runtimes = peekProviderRuntimeStatuses();
-  const key = providerRuntimeKey(provider);
-  // Only for a binary PortOS's runtime table actually covers — a custom command
-  // will never appear in the probe's answer, and re-requesting it per fallback
-  // pick would be a refresh that can never succeed.
-  if (key && !runtimes[key] && getProviderRuntime(key)) refreshRuntimesInBackground();
+  const runtimes = runtimeSnapshotFor([providerRuntimeKey(provider)]);
   const { missing } = forProvider(provider, runtimes, orcaRouterKeyState(providers));
   if (!blocksRouting(missing)) return true;
   console.log(`⛔ Skipping fallback ${provider?.id || 'provider'}: ${describeMissingPrerequisites(missing)}`);

@@ -89,6 +89,11 @@ const endpointHost = (endpoint) => {
  * MIRROR of `isPrivateNetworkEndpoint` in client/src/utils/providers.js — keep
  * in lockstep. A host that cannot be parsed reads as NOT private, keeping the
  * stricter of the two answers for input we don't understand.
+ *
+ * The two disagree only on compact loopback spellings (`http://127.1`), which
+ * `URL` expands and the client's cheap regex does not. That no longer reaches
+ * the card: the client consumes THIS answer when the server publishes one, and
+ * falls back to its own regex only against a server too old to publish.
  */
 export const isPrivateNetworkEndpoint = (endpoint) => {
   const host = endpointHost(endpoint);
@@ -107,12 +112,25 @@ const isProcessProvider = (provider) =>
 
 /**
  * The key a CLI/TUI provider's runtime is published under in the runtimes map
- * from `services/providerRuntimeInstaller.js` — the binary it spawns,
- * basename-normalized so a provider pinned to an absolute path still matches.
- * `null` for a provider with no spawned command (every API provider).
+ * from `services/providerRuntimeInstaller.js`, or `null` when that map has
+ * nothing to say about this provider.
+ *
+ * `null` for an API provider (nothing is spawned) and — unlike the client's
+ * same-named helper, which uses the key to offer an INSTALL button — `null` for
+ * a command carrying an explicit path. The runtime table answers exactly one
+ * question: "does the bare binary resolve on PortOS's PATH?" A provider
+ * configured as `/opt/tools/codex` is not that question: the runner spawns the
+ * configured path against the provider's own env (`buildCliChildEnv`), so
+ * basename-matching it would report a perfectly working CLI as missing and drop
+ * it from the fallback chain. No key means NOT PROBED, which is the honest
+ * answer here.
  */
-export const providerRuntimeKey = (provider) =>
-  (isProcessProvider(provider) && commandBasename(provider?.command)) || null;
+export const providerRuntimeKey = (provider) => {
+  if (!isProcessProvider(provider)) return null;
+  const command = typeof provider?.command === 'string' ? provider.command.trim() : '';
+  if (command === '' || /[\\/]/.test(command)) return null;
+  return commandBasename(command) || null;
+};
 
 /** Does this provider's record hold an API key? Accepts a raw OR a sanitized provider. */
 const providerHasApiKey = (provider) =>

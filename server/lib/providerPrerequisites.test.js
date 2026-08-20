@@ -12,14 +12,25 @@ const cli = (over = {}) => ({ id: 'codex', type: 'cli', command: 'codex', ...ove
 const api = (over = {}) => ({ id: 'openai', type: 'api', endpoint: 'https://api.example.com/v1', ...over });
 
 describe('providerRuntimeKey', () => {
-  it('normalizes a process provider command to its binary basename', () => {
-    expect(providerRuntimeKey(cli({ command: '/opt/example/bin/Codex.exe' }))).toBe('codex');
-    expect(providerRuntimeKey({ type: 'tui', command: 'agy' })).toBe('agy');
+  it('normalizes a bare process-provider command to its binary name', () => {
+    expect(providerRuntimeKey(cli({ command: 'Codex.exe' }))).toBe('codex');
+    expect(providerRuntimeKey({ type: 'tui', command: '  agy  ' })).toBe('agy');
+  });
+
+  // The runtime table only ever answered "does the BARE binary resolve on
+  // PortOS's PATH?". The runner spawns an explicitly-pathed command against the
+  // provider's own env, so lending it the bare binary's verdict would report a
+  // working CLI as missing.
+  it('is null for a command carrying an explicit path', () => {
+    expect(providerRuntimeKey(cli({ command: '/opt/example/bin/codex' }))).toBeNull();
+    expect(providerRuntimeKey(cli({ command: './codex' }))).toBeNull();
+    expect(providerRuntimeKey(cli({ command: 'C:\\tools\\codex.exe' }))).toBeNull();
   });
 
   it('is null for a provider with no spawned command', () => {
     expect(providerRuntimeKey(api())).toBeNull();
     expect(providerRuntimeKey(cli({ command: '' }))).toBeNull();
+    expect(providerRuntimeKey(cli({ command: '   ' }))).toBeNull();
     expect(providerRuntimeKey(null)).toBeNull();
   });
 });
@@ -32,7 +43,7 @@ describe('isPrivateNetworkEndpoint', () => {
     'http://10.0.0.4:1234/v1',
     'http://192.168.1.5:1234/v1',
     'http://172.16.3.4:1234',
-    'http://100.100.0.9:11434',           // Tailscale CGNAT
+    'http://100.64.0.5:11434',            // Tailscale CGNAT
     'http://[fd7a:115c:a1e0::1]:11434',   // Tailscale ULA
     'http://[fe80::1]:11434',             // link-local
     'http://desk.ts.net:11434',
