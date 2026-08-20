@@ -105,12 +105,35 @@ function assertRoutableConditioning(kind, params) {
   // A multi-chunk video is chained locally from its own prior output; the
   // provider renders one clip and knows nothing about the chain.
   if (kind === 'video' && Number(params?.chunks) > 1) unsupported.push('chained chunks');
+  // `disableAudio` is not conditioning but it IS output semantics: the wire
+  // cannot carry it, so a provider renders the clip WITH audio and the caller
+  // silently gets the opposite of what it asked for. Only a truthy value is a
+  // conflict — the common `false` is the provider's own default anyway.
+  if (kind === 'video' && params?.disableAudio === true) unsupported.push('a silent (audio-disabled) render');
   if (!unsupported.length) return;
   throw new ServerError(
     `A federated media provider renders text-to-${kind} only — this ${kind} job uses ${unsupported.join(' and ')}. `
     + `Clear the ${kind} route under Instances to render it locally.`,
     { status: 400, code: 'MEDIA_PROVIDER_INPUT_UNSUPPORTED' },
   );
+}
+
+/**
+ * Is a kind routed at all? Reads settings only — no peer probe, no capacity
+ * preflight.
+ *
+ * Local readiness gates ("no Python runtime, skip the render") run BEFORE the
+ * enqueue, and on a machine that routes its renders precisely because it cannot
+ * render locally, those gates would skip work the peer was going to do. Call
+ * this to decide whether a local-readiness verdict is even relevant.
+ *
+ * @param {'image'|'video'} kind
+ * @returns {Promise<boolean>}
+ */
+export async function hasConfiguredMediaRoute(kind) {
+  if (!ROUTABLE_MEDIA_KINDS.includes(kind)) return false;
+  const settings = await getSettings().catch(() => null);
+  return !!(settings && normalizeMediaRoutingConfig(settings)[kind]);
 }
 
 /**
@@ -191,6 +214,16 @@ const LOCAL_ONLY_ROUTED_PARAMS = Object.freeze([
   'mediaProviderPeerId', 'mediaProviderEngine',
 ]);
 
+// Post-processing passes that run over the produced FILE, not the render. The
+// wire cannot request them and the remote executor does not re-apply them after
+// download, so a routed job comes back without them. They are dropped with a log
+// rather than rejected (as `disableAudio` is) because the distinction is what is
+// rendered vs. how the artifact is polished: dropping a denoise pass still
+// returns the requested image, just less clean, and `cleanC2PA` defaults to true
+// for cloud modes the user never explicitly opted into. Re-applying them
+// consumer-side after download is the real fix; see the follow-up issue.
+const DROPPED_POST_PROCESSING = Object.freeze(['cleanC2PA', 'denoise']);
+
 /**
  * Turn a resolved route plus the planner's params into the job params to
  * enqueue. The prompt is blanked because it rides ONLY inside the versioned
@@ -199,6 +232,11 @@ const LOCAL_ONLY_ROUTED_PARAMS = Object.freeze([
 export function routedJobParams(params, { request, remoteMedia }) {
   const jobParams = { ...(params || {}) };
   for (const key of LOCAL_ONLY_ROUTED_PARAMS) delete jobParams[key];
+  const dropped = DROPPED_POST_PROCESSING.filter((key) => jobParams[key] === true);
+  for (const key of DROPPED_POST_PROCESSING) delete jobParams[key];
+  if (dropped.length) {
+    console.log(`🌐 Federated render: ${dropped.join(' and ')} will not run on a routed job`);
+  }
   return { ...jobParams, prompt: '', modelId: request.modelId, remoteMedia };
 }
 

@@ -162,6 +162,22 @@ rather than being silently rendered without its conditioning — a shot that
 quietly ignores its reference frame is worse unattended than interactively,
 because nobody is watching to notice.
 
+Output semantics the wire cannot express are rejected the same way: a scene
+asking for a silent (audio-disabled) render would come back **with** audio, so it
+is refused rather than rendered wrong. Post-processing passes (`cleanC2PA`,
+`denoise`) are the one thing dropped rather than refused, with a log — they
+polish the produced file rather than change what is rendered, and `cleanC2PA`
+defaults on for cloud modes nobody explicitly chose. Re-applying them after
+download is a follow-up.
+
+A local-readiness gate never suppresses a routed render. "No local Python
+runtime" is exactly the state a machine that routes its renders is in, so the
+Creative Director first-pass and scene paths consult `hasConfiguredMediaRoute`
+before skipping work the peer was going to do. A routed enqueue can also *throw*
+where a local one could not (busy/stale/unauthorized provider); the scene runner
+settles the scene through its normal failure path instead of leaving it stuck in
+`rendering`.
+
 Three properties are worth stating explicitly:
 
 - **Every unattended path routes, or none does.** The Creative Director planner

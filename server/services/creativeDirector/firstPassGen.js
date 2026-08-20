@@ -28,7 +28,7 @@
  * auto-cast request. Autonomy seeds what it can; the director takes over.
  */
 
-import { enqueueUnattendedMediaJob } from '../federatedMedia/defaultRouting.js';
+import { enqueueUnattendedMediaJob, hasConfiguredMediaRoute } from '../federatedMedia/defaultRouting.js';
 import { getSettings } from '../settings.js';
 import { resolveImageCleaners } from '../imageGen/index.js';
 import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
@@ -71,6 +71,23 @@ export function buildPortraitPrompt(ingredient) {
  * (#1867) uses the exact same queue-backed-mode gate as the portrait path
  * rather than re-deriving it.
  */
+/**
+ * `resolveQueueModeParams` answers "can this machine render locally". On an
+ * install that routes its unattended renders to a peer — often precisely
+ * BECAUSE it has no local image runtime — a "not ready" verdict would skip
+ * first-pass work the provider was going to do (#4348).
+ *
+ * When the image kind is routed, the local verdict is irrelevant: the routed
+ * job needs only the prompt and geometry the callers add themselves, so an
+ * unready local lane still yields an empty-but-ready param set.
+ */
+async function resolveOrRouteQueueParams(project = null) {
+  const resolved = await resolveQueueModeParams(project);
+  if (resolved.ready) return resolved;
+  if (!(await hasConfiguredMediaRoute('image'))) return resolved;
+  return { mode: resolved.mode, ready: true, jobParams: {} };
+}
+
 async function resolveQueueModeParams(project = null) {
   const settings = await getSettings();
   // Render-target ladder (#3231): the CD project's persisted renderBackend
@@ -136,7 +153,7 @@ export async function enqueueFirstPassPortraits(members = [], project = null) {
   const list = Array.isArray(members) ? members.filter((m) => m && m.ingredientId) : [];
   if (list.length === 0) return { mode: null, enqueued: [], skipped: [] };
 
-  const resolved = await resolveQueueModeParams(project);
+  const resolved = await resolveOrRouteQueueParams(project);
   if (!resolved.ready) {
     return { mode: resolved.mode, enqueued: [], skipped: [], reason: resolved.reason };
   }
@@ -223,7 +240,7 @@ export async function enqueueFirstPassSceneFrames(project) {
   const scenes = Array.isArray(project?.treatment?.scenes) ? project.treatment.scenes : [];
   if (scenes.length === 0) return { mode: null, enqueued: [], skipped: [] };
 
-  const resolved = await resolveQueueModeParams(project);
+  const resolved = await resolveOrRouteQueueParams(project);
   if (!resolved.ready) {
     return { mode: resolved.mode, enqueued: [], skipped: [], reason: resolved.reason };
   }

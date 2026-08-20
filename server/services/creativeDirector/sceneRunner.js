@@ -37,7 +37,7 @@ import { extractLastFrame, sampleEvaluationFrames } from '../videoGen/local.js';
 import { VIDEO_GEN_MODE } from '../videoGen/modes.js';
 import { grokVideoJobParams, resolveVideoBackendPin } from '../videoGen/backendPin.js';
 import { mediaJobEvents } from '../mediaJobQueue/index.js';
-import { enqueueUnattendedMediaJob } from '../federatedMedia/defaultRouting.js';
+import { enqueueUnattendedMediaJob, hasConfiguredMediaRoute } from '../federatedMedia/defaultRouting.js';
 import { getSettings } from '../settings.js';
 import { updateScene, updateProject, getProject } from './local.js';
 import { dispatchSceneEvaluation } from './sceneEvaluator.js';
@@ -93,7 +93,10 @@ export async function runSceneRender(project, scene) {
   // the user can configure pythonPath and Resume from the UI. Only the local
   // lane needs it — a Grok render shells out to the CLI and never touches
   // Python (the media-job queue gates its own pythonPath check the same way).
-  if (!useGrok && !pythonPath) {
+  // A routed video render never touches local Python — on a machine that
+  // routes precisely BECAUSE it cannot render locally, this gate would fail
+  // every scene the provider was going to handle (#4348).
+  if (!useGrok && !pythonPath && !(await hasConfiguredMediaRoute('video'))) {
     // A pin that named a cloud backend but resolved to local means the ladder
     // degraded it (the backend's `enabled` toggle is off). Say so — otherwise
     // the user reads "configure Python" on a project they explicitly pinned to
@@ -243,7 +246,20 @@ export async function runSceneRender(project, scene) {
   }
 
   const owner = `cd:${project.id}:${scene.sceneId}`;
-  const { jobId } = await enqueueUnattendedMediaJob({ kind: 'video', params, owner });
+  // The scene is ALREADY persisted as 'rendering' by this point, and the
+  // failure/retry listeners below are not wired until after a jobId exists. A
+  // routed enqueue can throw where a local one could not — the provider is
+  // busy, stale, unauthorized, or refuses the conditioning — so an unhandled
+  // throw here leaves the scene stuck in 'rendering' forever with nothing to
+  // advance the project. Settle it through the normal failure path instead.
+  let jobId;
+  try {
+    ({ jobId } = await enqueueUnattendedMediaJob({ kind: 'video', params, owner }));
+  } catch (error) {
+    console.error(`❌ CD scene ${scene.sceneId}: could not queue the render: ${error.message}`);
+    await handleRenderFailed(project.id, scene.sceneId, error.message || 'could not queue the render');
+    return null;
+  }
 
   // Wire one-shot listeners scoped to this jobId so we can hand off to the
   // evaluator on success or schedule a retry on failure. mediaJobEvents

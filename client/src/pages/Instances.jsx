@@ -1455,12 +1455,18 @@ export default function Instances() {
         <AddPeerForm onAdd={fetchData} />
       </div>
 
+      {/* Outside the peer-count guard on purpose: removing the last peer must
+          not hide the only control that can clear a stale saved route, or every
+          unattended render keeps failing its preflight with no way back. The
+          component renders nothing when there is neither an option nor a saved
+          route. */}
+      <UnattendedRenderRouting peers={peers} />
+
       {peers.length > 0 && (
         <div>
           <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">
             Peers ({peers.length})
           </h2>
-          <UnattendedRenderRouting peers={peers} />
           <BrainParitySchedule />
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             {peers.map(peer => (

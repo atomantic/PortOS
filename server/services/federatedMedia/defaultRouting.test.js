@@ -12,7 +12,8 @@ const enqueueJob = vi.fn(() => ({ jobId: 'mj-test' }));
 vi.mock('../mediaJobQueue/index.js', () => ({ enqueueJob: (...args) => enqueueJob(...args) }));
 
 const {
-  normalizeMediaRoutingConfig, resolveDefaultMediaRoute, routedJobParams, enqueueUnattendedMediaJob,
+  normalizeMediaRoutingConfig, resolveDefaultMediaRoute, routedJobParams,
+  enqueueUnattendedMediaJob, hasConfiguredMediaRoute,
 } = await import('./defaultRouting.js');
 
 const route = { peerId: 'peer-1', engine: 'comfy', modelId: 'sdxl-remote' };
@@ -194,5 +195,57 @@ describe('enqueueUnattendedMediaJob', () => {
     await expect(enqueueUnattendedMediaJob({ kind: 'video', params: { prompt: 'p' } }))
       .rejects.toThrow('Media provider is at capacity');
     expect(enqueueJob).not.toHaveBeenCalled();
+  });
+});
+
+describe('semantic controls the wire cannot carry', () => {
+  const route = { peerId: 'peer-1', engine: 'comfy', modelId: 'wan-remote' };
+
+  beforeEach(() => {
+    getSettings.mockResolvedValue({ federation: { mediaRouting: { video: route, image: route } } });
+  });
+
+  // Not conditioning, but still the opposite of what was asked for: the wire
+  // can't say "no audio", so the provider renders a clip WITH audio.
+  it('refuses a routed video that asked for a silent render', async () => {
+    await expect(resolveDefaultMediaRoute({ kind: 'video', params: { prompt: 'p', disableAudio: true } }))
+      .rejects.toMatchObject({ code: 'MEDIA_PROVIDER_INPUT_UNSUPPORTED' });
+  });
+
+  it('allows the common disableAudio:false, which matches the provider default anyway', async () => {
+    await expect(resolveDefaultMediaRoute({ kind: 'video', params: { prompt: 'p', disableAudio: false } }))
+      .resolves.toMatchObject({ peer: { id: 'peer-1' } });
+  });
+
+  // Post-processing over the produced FILE, not the render: dropping it still
+  // returns the requested image, so it is logged rather than refused.
+  it('drops post-processing passes the remote executor will not run', () => {
+    const params = routedJobParams(
+      { prompt: 'p', cleanC2PA: true, denoise: true },
+      { request: { modelId: 'm' }, remoteMedia: {} },
+    );
+    expect(params).not.toHaveProperty('cleanC2PA');
+    expect(params).not.toHaveProperty('denoise');
+  });
+});
+
+describe('hasConfiguredMediaRoute', () => {
+  // Local readiness gates ("no Python, skip the render") run BEFORE the enqueue.
+  // On a machine that routes because it CAN'T render locally, that gate would
+  // skip exactly the work the peer was going to do.
+  it('reports a configured kind without probing the peer', async () => {
+    getSettings.mockResolvedValue({
+      federation: { mediaRouting: { image: { peerId: 'p', engine: 'e', modelId: 'm' } } },
+    });
+    await expect(hasConfiguredMediaRoute('image')).resolves.toBe(true);
+    await expect(hasConfiguredMediaRoute('video')).resolves.toBe(false);
+    expect(prepareRemoteMediaJob).not.toHaveBeenCalled();
+  });
+
+  it('reports false for an unroutable kind and for an unreadable settings file', async () => {
+    getSettings.mockResolvedValue({ federation: { mediaRouting: { audio: { peerId: 'p', engine: 'e', modelId: 'm' } } } });
+    await expect(hasConfiguredMediaRoute('audio')).resolves.toBe(false);
+    getSettings.mockRejectedValue(new Error('unreadable'));
+    await expect(hasConfiguredMediaRoute('image')).resolves.toBe(false);
   });
 });
