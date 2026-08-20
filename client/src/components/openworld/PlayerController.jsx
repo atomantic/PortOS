@@ -403,9 +403,12 @@ export default function PlayerController({
         dy = rig.vy * delta;
       }
     }
-    const moving = hasHorizontal || dy !== 0;
+    const hasMotionIntent = hasHorizontal || dy !== 0;
+    let movedHorizontally = false;
 
-    if (moving) {
+    if (hasMotionIntent) {
+      const startX = rig.position.x;
+      const startZ = rig.position.z;
       const nextPos = _nextPos.copy(rig.position).add(moveDir);
       nextPos.y += dy;
 
@@ -454,10 +457,12 @@ export default function PlayerController({
         rig.vy = 0;
         rig.jumping = false;
       }
+      movedHorizontally = Math.abs(nextPos.x - startX) > 1e-5 || Math.abs(nextPos.z - startZ) > 1e-5;
       rig.position.copy(nextPos);
     }
 
     // Pose classification for the avatar + facing/banking toward movement.
+    const moving = movedHorizontally || dy !== 0;
     rig.state = avatarState({
       moving,
       sprinting: isVehicle ? Math.abs(rig.speed) > 16 || (isSprinting && moving) : isSprinting && moving,
@@ -471,8 +476,8 @@ export default function PlayerController({
       rig.bank += (turnBank - rig.bank) * dampFactor(8, delta);
       // Keep the facing value live even while coasting to a stop; the visual rover should
       // settle into the same heading as the steering math rather than snap at zero speed.
-      if (!hasHorizontal && Math.abs(prevFacing - rig.heading) < 0.001) rig.facing = rig.heading;
-    } else if (hasHorizontal) {
+      if (!movedHorizontally && Math.abs(prevFacing - rig.heading) < 0.001) rig.facing = rig.heading;
+    } else if (movedHorizontally) {
       const target = moveFacing(rig.yaw, { forward: forwardInput, strafe: strafeInput });
       const prevFacing = rig.facing;
       rig.facing = dampAngle(rig.facing, target, dampFactor(10, delta));
