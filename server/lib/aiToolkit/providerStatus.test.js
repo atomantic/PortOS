@@ -359,6 +359,88 @@ describe('Provider Status Service', () => {
     });
   });
 
+  describe('getFallbackProvider — host prerequisite gate', () => {
+    const providers = {
+      'primary-provider': { id: 'primary-provider', enabled: true, fallbackProvider: 'configured-fallback' },
+      'configured-fallback': { id: 'configured-fallback', enabled: true },
+      'fallback-provider-1': { id: 'fallback-provider-1', enabled: true },
+      'fallback-provider-2': { id: 'fallback-provider-2', enabled: true },
+    };
+
+    const withGate = async (prerequisitesMet) => {
+      const svc = createProviderStatusService({
+        dataDir: TEST_DATA_DIR,
+        statusFile: 'gated-status.json',
+        defaultFallbackPriority: ['fallback-provider-1', 'fallback-provider-2'],
+        prerequisitesMet,
+      });
+      await svc.init();
+      return svc;
+    };
+
+    it('skips a CONFIGURED fallback whose prerequisites are unmet', async () => {
+      const svc = await withGate((provider) => provider.id !== 'configured-fallback');
+
+      const result = svc.getFallbackProvider('primary-provider', providers);
+
+      expect(result.provider.id).toBe('fallback-provider-1');
+      expect(result.source).toBe('system');
+    });
+
+    it('skips a TASK-level fallback whose prerequisites are unmet', async () => {
+      const svc = await withGate((provider) => provider.id !== 'fallback-provider-2');
+
+      const result = svc.getFallbackProvider('primary-provider', providers, 'fallback-provider-2');
+
+      expect(result.provider.id).toBe('configured-fallback');
+      expect(result.source).toBe('provider');
+    });
+
+    it('skips SYSTEM-priority candidates whose prerequisites are unmet', async () => {
+      const svc = await withGate((provider) => provider.id === 'fallback-provider-2');
+
+      const result = svc.getFallbackProvider('primary-provider', providers);
+
+      expect(result.provider.id).toBe('fallback-provider-2');
+      expect(result.source).toBe('system');
+    });
+
+    it('returns null when every candidate fails the gate', async () => {
+      const svc = await withGate(() => false);
+
+      expect(svc.getFallbackProvider('primary-provider', providers)).toBeNull();
+    });
+
+    it('passes the whole provider collection so an inherited-key check can see siblings', async () => {
+      const seen = [];
+      const svc = await withGate((provider, all) => { seen.push([provider.id, all]); return true; });
+
+      svc.getFallbackProvider('primary-provider', providers);
+
+      expect(seen[0][0]).toBe('configured-fallback');
+      expect(seen[0][1]).toBe(providers);
+    });
+
+    it('routes exactly as before when the gate is absent or answers non-boolean', async () => {
+      const noGate = await withGate(null);
+      expect(noGate.getFallbackProvider('primary-provider', providers).provider.id).toBe('configured-fallback');
+
+      // Only an explicit `false` may exclude a provider — "unknown" must never
+      // empty the chain (see the sentinel discipline in providerPrerequisites).
+      const vague = await withGate(() => undefined);
+      expect(vague.getFallbackProvider('primary-provider', providers).provider.id).toBe('configured-fallback');
+    });
+
+    it('treats a THROWING gate as "yes" rather than emptying the chain', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const svc = await withGate(() => { throw new Error('probe exploded'); });
+
+      expect(svc.getFallbackProvider('primary-provider', providers).provider.id).toBe('configured-fallback');
+      expect(errorSpy).toHaveBeenCalled();
+      errorSpy.mockRestore();
+    });
+  });
+
   describe('getFallbackProvider — stale model pins', () => {
     // A `fallbackModel` is set on the PRIMARY but resolved against the
     // fallback, so a model bump on the fallback leaves the pin naming an id

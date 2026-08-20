@@ -61,11 +61,40 @@ export function createProviderStatusService(config = {}) {
     defaultUsageLimitWait = 10 * 60 * 1000,
     maxUsageLimitWait = 5 * 60 * 60 * 1000,
     defaultRateLimitWait = 5 * 60 * 1000,
-    onStatusChange = null
+    onStatusChange = null,
+    // Host-supplied `(provider, providers) => boolean` answering "can this
+    // provider run at all right now?" — its CLI binary present, its credential
+    // stored. Enabled + not benched says nothing about either, so without this
+    // the fallback chain happily hands a run to a provider whose binary was
+    // never installed and the run dies at spawn time on a raw ENOENT (#4611).
+    //
+    // Injected rather than computed here because the answer needs host I/O (a
+    // PATH probe) and this directory stays self-contained. It MUST be
+    // synchronous and MUST default to "yes": an unknown answer has to route
+    // exactly as it did before, never take a working provider out of the chain.
+    prerequisitesMet = null
   } = config;
 
   const STATUS_PATH = join(dataDir, statusFile);
   const events = new EventEmitter();
+
+  /**
+   * Does the host vouch for this provider's prerequisites?
+   *
+   * A missing hook, a throwing hook, or a non-boolean answer all read as "yes".
+   * The hook is a best-effort refinement of the routing decision; a broken one
+   * must not silently empty the fallback chain, which is a far worse failure
+   * than the late ENOENT it exists to prevent.
+   */
+  function meetsPrerequisites(provider, providers) {
+    if (typeof prerequisitesMet !== 'function') return true;
+    try {
+      return prerequisitesMet(provider, providers) !== false;
+    } catch (err) {
+      console.error(`❌ Prerequisite check failed for ${provider?.id || 'provider'}: ${err.message}`);
+      return true;
+    }
+  }
 
   let statusCache = {
     providers: {},
@@ -300,10 +329,16 @@ export function createProviderStatusService(config = {}) {
     // default"). It is NEVER the primary's model: a model id resolved against
     // the primary almost never exists on the fallback, and carrying it over is
     // exactly the leak that sent `codex-configured-default` to LM Studio.
+    //
+    // Every candidate must additionally clear `prerequisitesMet` (see the
+    // config option): `enabled` + not benched says the user WANTS this provider
+    // and it hasn't failed lately — neither says its CLI is installed or its
+    // key is stored. Skipping an un-runnable candidate here is what turns a
+    // late `spawn <binary> ENOENT` into "try the next provider instead".
     getFallbackProvider(primaryProviderId, providers, taskFallbackId = null, taskFallbackModelId = null) {
       if (taskFallbackId && taskFallbackId !== primaryProviderId) {
         const taskFallback = providers[taskFallbackId];
-        if (taskFallback?.enabled && this.isAvailable(taskFallback.id)) {
+        if (taskFallback?.enabled && this.isAvailable(taskFallback.id) && meetsPrerequisites(taskFallback, providers)) {
           return { provider: taskFallback, source: 'task', model: usableFallbackModel(taskFallback, taskFallbackModelId) };
         }
       }
@@ -315,7 +350,7 @@ export function createProviderStatusService(config = {}) {
       // primaryProviderId; the configured-fallback path needs its own check.
       if (primaryProvider?.fallbackProvider && primaryProvider.fallbackProvider !== primaryProviderId) {
         const configuredFallback = providers[primaryProvider.fallbackProvider];
-        if (configuredFallback?.enabled && this.isAvailable(configuredFallback.id)) {
+        if (configuredFallback?.enabled && this.isAvailable(configuredFallback.id) && meetsPrerequisites(configuredFallback, providers)) {
           return { provider: configuredFallback, source: 'provider', model: usableFallbackModel(configuredFallback, primaryProvider.fallbackModel) };
         }
       }
@@ -324,7 +359,7 @@ export function createProviderStatusService(config = {}) {
         if (providerId === primaryProviderId) continue;
 
         const provider = providers[providerId];
-        if (provider?.enabled && this.isAvailable(providerId)) {
+        if (provider?.enabled && this.isAvailable(providerId) && meetsPrerequisites(provider, providers)) {
           return { provider, source: 'system', model: null };
         }
       }

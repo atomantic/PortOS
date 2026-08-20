@@ -254,6 +254,29 @@ export async function getProviderRuntimeStatuses(deps = {}) {
   }));
 }
 
+/**
+ * The runtime statuses ALREADY probed, read SYNCHRONOUSLY — no PATH scan, no
+ * child process, no promise. For a caller that must answer "is this binary
+ * here?" inside a synchronous decision (fallback-provider routing, via
+ * `services/providerPrerequisites.js`) and cannot await the real probe.
+ *
+ * Returns `{}` when nothing has been probed yet, and a per-id status object
+ * otherwise, aliases included — so a caller that finds NO entry for its runtime
+ * reads "not probed", never "not installed". Deliberately ignores the TTL: a
+ * minute-old answer about whether a CLI is installed is a far better routing
+ * hint than none, and the async path re-probes on its own schedule.
+ */
+export function peekProviderRuntimeStatuses() {
+  const byId = {};
+  for (const runtime of PROVIDER_RUNTIMES) {
+    const cached = statusCache.get(runtime.id);
+    if (!cached) continue;
+    byId[runtime.id] = cached.status;
+    for (const alias of runtime.aliases) byId[alias] = cached.status;
+  }
+  return byId;
+}
+
 function memoizePerBatch(findCommand) {
   const seen = new Map();
   return (command) => {

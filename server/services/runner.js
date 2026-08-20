@@ -223,6 +223,24 @@ export async function patchRunMetadata(runId, patch) {
 }
 
 /**
+ * A spawn failure phrased for the person reading the run log.
+ *
+ * Node reports a binary that isn't on PATH as `spawn codex ENOENT` — precise,
+ * and meaningless to anyone who doesn't already know that ENOENT is "no such
+ * file". Routing now skips a provider whose CLI is known to be absent (#4611),
+ * so reaching this line means the probe hadn't caught up yet; name the binary
+ * and where to install it rather than leaving the errno as the whole story.
+ * Every other spawn failure keeps its raw message.
+ *
+ * @param {NodeJS.ErrnoException} spawnError
+ * @param {string} command — the provider's configured command
+ */
+const describeSpawnFailure = (spawnError, command) =>
+  spawnError?.code === 'ENOENT'
+    ? `${command || 'The provider CLI'} is not installed on PortOS's PATH — install it from the AI Providers page, then re-run`
+    : `Spawn failed: ${spawnError.message}`;
+
+/**
  * Override executeCliRun.
  *
  * Runs without `shell:true` (never set it here): npm-installed CLI providers
@@ -408,7 +426,7 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
       metadata.outputSize = Buffer.byteLength(output);
 
       if (spawnError) {
-        metadata.error = `Spawn failed: ${spawnError.message}`;
+        metadata.error = describeSpawnFailure(spawnError, provider.command);
         metadata.errorCategory = 'spawn_error';
       } else if (canceled) {
         metadata.canceled = true;

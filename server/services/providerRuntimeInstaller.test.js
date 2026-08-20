@@ -7,6 +7,7 @@ import {
   getProviderRuntimeStatuses,
   NPM_GLOBAL_INSTALL_FLAGS,
   PROVIDER_RUNTIMES,
+  peekProviderRuntimeStatuses,
   spawnRuntimeInstaller,
   __resetRuntimeStatusCache,
 } from './providerRuntimeInstaller.js';
@@ -171,6 +172,28 @@ describe('provider runtime installer', () => {
     // install POST names the runtime the table knows.
     expect(statuses.antigravity).toBe(statuses.agy);
     expect(statuses.antigravity.id).toBe('agy');
+  });
+
+  // The sync read the fallback router depends on (#4611). It must answer
+  // "not probed" — not "not installed" — for anything the async probe has not
+  // reached yet, or a cold cache would take every CLI provider out of routing.
+  describe('peekProviderRuntimeStatuses', () => {
+    it('is empty before anything has been probed', () => {
+      expect(peekProviderRuntimeStatuses()).toEqual({});
+    });
+
+    it('returns a probed runtime, under its aliases too, without probing again', async () => {
+      const findCommand = vi.fn(async () => null);
+      await getProviderRuntimeStatus('agy', { findCommand, probeCommand: async () => false });
+      findCommand.mockClear();
+
+      const peeked = peekProviderRuntimeStatuses();
+
+      expect(peeked.agy.installed).toBe(false);
+      expect(peeked.antigravity).toBe(peeked.agy);
+      expect(peeked.codex).toBeUndefined();   // never probed → absent, not false
+      expect(findCommand).not.toHaveBeenCalled();
+    });
   });
 
   // #3618's rule: a vendor is one row. A new coding-agent CLI must not land in

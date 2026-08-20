@@ -1298,6 +1298,51 @@ describe('providerCardState', () => {
     );
     expect(readiness.missing.map(m => m.code)).toEqual(['runtime', 'apiKey']);
   });
+
+  // The server publishes its own verdict on GET /api/providers and routes the
+  // fallback chain on the same computation (#4611) — the card must read that
+  // rather than re-deriving it, or the badge and the router can disagree.
+  describe('server-published prerequisites', () => {
+    it('paints a blocked card from the published findings', () => {
+      const readiness = providerCardState(cli({
+        missingPrerequisites: [{ code: 'runtime', label: 'OpenCode CLI is not installed' }],
+      }));
+      expect(readiness.state).toBe(PROVIDER_CARD_STATE.BLOCKED);
+      expect(readiness.missing).toEqual([{ code: 'runtime', label: 'OpenCode CLI is not installed' }]);
+    });
+
+    // An EMPTY array is a real answer ("nothing missing"), not an absent one —
+    // so it must SUPPRESS the local derivation, not fall back to it.
+    it('trusts an empty published list over its own credential derivation', () => {
+      expect(providerCardState(cloudApi({ hasApiKey: false, missingPrerequisites: [] })).state)
+        .toBe(PROVIDER_CARD_STATE.READY);
+    });
+
+    it('falls back to deriving locally when the server published nothing', () => {
+      expect(providerCardState(cloudApi({ hasApiKey: false })).state).toBe(PROVIDER_CARD_STATE.BLOCKED);
+      expect(providerCardState(cloudApi({ hasApiKey: false, missingPrerequisites: null })).state)
+        .toBe(PROVIDER_CARD_STATE.BLOCKED);
+    });
+
+    // The local-app runtime shape (an LM Studio / Ollama app installed with no
+    // CLI shim on PATH) is derived from the local-LLM status, which the server's
+    // runtime table does not cover — so it must still be added on top.
+    it('adds a client-only local-app runtime finding to the published list', () => {
+      const readiness = providerCardState(
+        { id: 'lmstudio', type: 'api', endpoint: 'http://localhost:1234/v1', enabled: true, missingPrerequisites: [] },
+        { runtime: { id: 'lmstudio', label: 'LM Studio', installed: false } },
+      );
+      expect(readiness.missing).toEqual([{ code: 'runtime', label: 'LM Studio is not installed' }]);
+    });
+
+    it('does not double-report a runtime both sides found missing', () => {
+      const readiness = providerCardState(
+        cli({ missingPrerequisites: [{ code: 'runtime', label: 'OpenCode CLI is not installed' }] }),
+        { runtime: { label: 'OpenCode CLI', installed: false } },
+      );
+      expect(readiness.missing).toHaveLength(1);
+    });
+  });
 });
 
 describe('isPrivateNetworkEndpoint', () => {

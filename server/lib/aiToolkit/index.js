@@ -55,7 +55,10 @@ export function createAIToolkit(config = {}) {
     hooks = {},
     maxConcurrentRuns = 5,
     enableProviderStatus = true,
-    defaultFallbackPriority = ['claude-code', 'codex', 'nvidia-kimi', 'lmstudio', 'ollama', 'antigravity-cli', 'gemini-cli']
+    defaultFallbackPriority = ['claude-code', 'codex', 'nvidia-kimi', 'lmstudio', 'ollama', 'antigravity-cli', 'gemini-cli'],
+    // Host gate for "can this provider run at all?" — see providerStatus.js.
+    // Unset standalone, so the toolkit routes on enabled + availability alone.
+    prerequisitesMet = null
   } = config;
 
   const providerService = createProviderService({
@@ -70,6 +73,7 @@ export function createAIToolkit(config = {}) {
       dataDir,
       statusFile,
       defaultFallbackPriority,
+      prerequisitesMet,
       onStatusChange: (eventData) => {
         io?.emit('provider:status:changed', eventData);
       }

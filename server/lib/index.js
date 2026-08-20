@@ -137,6 +137,7 @@ export * from './promptSystemStages.js';
 export * from './promptTemplate.js';
 export * from './providerCooldown.js';
 export * from './providerModels.js';
+export * from './providerPrerequisites.js';
 // Namespaced: providerVendors.js re-exports `inferTuiCommand` /
 // `applyCommandDefaults` (from tuiHandshake.js) and `prepareCliPrompt` (from
 // cliProviderArgs.js), which would trip the barrel's duplicate-identifier

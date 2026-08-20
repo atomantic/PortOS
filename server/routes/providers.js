@@ -16,6 +16,7 @@ import {
   stopRuntimeInstaller,
 } from '../services/providerRuntimeInstaller.js';
 import { getProviderReadinessMap, resetProviderReadinessCache } from '../services/providerReadiness.js';
+import { getProviderPrerequisiteMap } from '../services/providerPrerequisites.js';
 import { runLocalRuntimeSetup } from '../services/localRuntimeSetup.js';
 import { localRuntimeForProvider } from '../lib/localProviderRuntime.js';
 
@@ -99,11 +100,28 @@ export function createPortOSProviderRoutes(aiToolkit) {
   const providerStatusService = aiToolkit.services.providerStatus;
 
   // Sanitized GET routes — intercept toolkit GET endpoints to strip secrets
+  /**
+   * The provider list, each record decorated with the SERVER's verdict on its
+   * prerequisites (#4611): `prerequisitesMet` plus the `missingPrerequisites`
+   * findings behind it. The AI Providers page paints its `NEEDS SETUP` cards
+   * from this instead of re-deriving the same rules in the browser, and the
+   * fallback router gates on the same computation — so a card that says a
+   * provider can't run and a router that hands it a run can no longer disagree.
+   *
+   * Computed on the RAW providers, before sanitization: the API-key check reads
+   * `apiKey`, which `sanitizeProvider` replaces with a boolean, and the runtime
+   * probe is TTL-cached so this costs a map lookup on the common path.
+   */
   router.get('/', asyncHandler(async (req, res) => {
     const data = await providerService.getAllProviders();
+    const prerequisites = await getProviderPrerequisiteMap(data.providers);
     res.json({
       activeProvider: data.activeProvider,
-      providers: data.providers.map(presentProvider),
+      providers: data.providers.map((provider) => ({
+        ...presentProvider(provider),
+        prerequisitesMet: prerequisites[provider.id]?.met ?? true,
+        missingPrerequisites: prerequisites[provider.id]?.missing ?? [],
+      })),
       runnerAllowedCommands: RUNNER_ALLOWED_COMMANDS
     });
   }));

@@ -989,13 +989,19 @@ export const PROVIDER_CARD_STATE = Object.freeze({
  * the right model. This decides the card's bucket from its toggle, its
  * credentials and the server's bench status; the two render side by side.
  *
- * PRESENTATION state, not an exec gate: the server routes on
- * `provider.enabled && isAvailable(id)` alone (`getFallbackProvider` in
- * server/lib/aiToolkit/providerStatus.js) and discovers a missing binary at
- * spawn time via ENOENT, so a `blocked` card here is still reachable by the
- * runner. Publishing the prerequisite check server-side so routing can skip
- * un-runnable providers is issue #4611; credentials carried in a secret env var
- * (Bedrock, Ollama auth token) are not covered yet — issue #4612.
+ * The prerequisite half is the SERVER's answer now (#4611): `GET
+ * /api/providers` publishes `missingPrerequisites` per provider from
+ * server/lib/providerPrerequisites.js, and `getFallbackProvider` skips a
+ * provider whose CLI that same computation found missing — so a card blocked on
+ * an uninstalled binary is no longer a routing candidate that dies at spawn
+ * time on a raw ENOENT. (Routing acts only on that finding; a missing stored
+ * key still shows here but stays presentation-only, because a provider can
+ * authenticate through a secret env var — issue #4612, which also covers
+ * DETECTING those env-var credentials so this stops over-reporting them.)
+ *
+ * This function consumes the published list and adds only what the browser
+ * alone can see (the local-app runtime shape below). With an older server
+ * publishing nothing, it falls back to deriving the credential checks itself.
  *
  * Inputs are passed in rather than read from globals so this stays pure:
  *   runtime          — the provider's entry of the `runtimes` map (CLI binary)
@@ -1024,22 +1030,42 @@ export const PROVIDER_CARD_STATE = Object.freeze({
  * @returns {{state: string, missing: {code: string, label: string}[]}}
  */
 export const providerCardState = (provider, { runtime = null, status = null, orcaRouterKeySet = null } = {}) => {
-  const missing = [];
+  // The server publishes its own verdict on `GET /api/providers`
+  // (`missingPrerequisites`, from server/lib/providerPrerequisites.js) and
+  // routes the fallback chain on exactly that computation. Where it has an
+  // answer it WINS, so the card and the router cannot drift.
+  //
+  // An ARRAY is the sentinel for "published" — including the empty array, which
+  // is a real answer ("nothing missing"). Anything else (an older server, a
+  // payload fetched before the field existed) means not published, and the
+  // local derivation below stands in.
+  const published = Array.isArray(provider?.missingPrerequisites) ? provider.missingPrerequisites : null;
+  const missing = published ? [...published] : [];
+  const addMissing = (code, label) => {
+    if (!missing.some((entry) => entry?.code === code)) missing.push({ code, label });
+  };
 
+  // Kept client-side even when the server has published: `runtime` here may be
+  // the LOCAL-APP shape the page derives from the local-LLM status (an LM Studio
+  // / Ollama app installed with no CLI shim on PATH), which the server's runtime
+  // table does not cover. For a plain CLI provider this is the same row the
+  // server probed, and `addMissing` de-dupes it by code.
   if (runtime && runtime.installed === false) {
-    missing.push({ code: 'runtime', label: `${runtime.label || 'Runtime'} is not installed` });
+    addMissing('runtime', `${runtime.label || 'Runtime'} is not installed`);
   }
-  // API providers auth solely via the stored key — but only an endpoint outside
-  // the private network actually needs one. The server attaches `Authorization`
-  // only when a key is stored, so a keyless call to loopback, a LAN box, or a
-  // tailnet peer running LM Studio / Ollama works exactly as configured.
-  if (isApiProvider(provider) && provider?.hasApiKey !== true && !isPrivateNetworkEndpoint(provider?.endpoint)) {
-    missing.push({ code: 'apiKey', label: 'API key is not set' });
-  }
-  // The OpenCode OrcaRouter wrappers carry no key of their own — theirs lives
-  // on the sibling API provider, so that's the prerequisite to report.
-  if (isOrcaRouterBackedProvider(provider) && orcaRouterKeySet === false) {
-    missing.push({ code: 'inheritedApiKey', label: 'OrcaRouter API provider has no API key' });
+  if (!published) {
+    // API providers auth solely via the stored key — but only an endpoint outside
+    // the private network actually needs one. The server attaches `Authorization`
+    // only when a key is stored, so a keyless call to loopback, a LAN box, or a
+    // tailnet peer running LM Studio / Ollama works exactly as configured.
+    if (isApiProvider(provider) && provider?.hasApiKey !== true && !isPrivateNetworkEndpoint(provider?.endpoint)) {
+      addMissing('apiKey', 'API key is not set');
+    }
+    // The OpenCode OrcaRouter wrappers carry no key of their own — theirs lives
+    // on the sibling API provider, so that's the prerequisite to report.
+    if (isOrcaRouterBackedProvider(provider) && orcaRouterKeySet === false) {
+      addMissing('inheritedApiKey', 'OrcaRouter API provider has no API key');
+    }
   }
 
   if (missing.length > 0) return { state: PROVIDER_CARD_STATE.BLOCKED, missing };
