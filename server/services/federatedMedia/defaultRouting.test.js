@@ -249,3 +249,34 @@ describe('hasConfiguredMediaRoute', () => {
     await expect(hasConfiguredMediaRoute('image')).resolves.toBe(false);
   });
 });
+
+describe('non-text video pipelines', () => {
+  const route = { peerId: 'peer-1', engine: 'comfy', modelId: 'wan-remote' };
+
+  beforeEach(() => {
+    getSettings.mockResolvedValue({ federation: { mediaRouting: { video: route } } });
+  });
+
+  // routedJobParams DROPS `mode`, so an unguarded first-last-frame or
+  // audio-to-video job would come back as a plain text-to-video clip — a
+  // valid-looking render of an entirely different pipeline.
+  it.each(['fflf', 'a2v', 'image'])('refuses a routed video in %s mode', async (mode) => {
+    await expect(resolveDefaultMediaRoute({ kind: 'video', params: { prompt: 'p', mode } }))
+      .rejects.toMatchObject({ code: 'MEDIA_PROVIDER_INPUT_UNSUPPORTED' });
+  });
+
+  it('allows an explicit text mode and an absent one', async () => {
+    await expect(resolveDefaultMediaRoute({ kind: 'video', params: { prompt: 'p', mode: 'text' } }))
+      .resolves.toMatchObject({ peer: { id: 'peer-1' } });
+    await expect(resolveDefaultMediaRoute({ kind: 'video', params: { prompt: 'p' } }))
+      .resolves.toMatchObject({ peer: { id: 'peer-1' } });
+  });
+
+  // For images `mode` names the BACKEND (local/codex/grok), not a pipeline, so
+  // it is dropped rather than refused — same as the interactive image route.
+  it('does not apply the video mode guard to images', async () => {
+    getSettings.mockResolvedValue({ federation: { mediaRouting: { image: route } } });
+    await expect(resolveDefaultMediaRoute({ kind: 'image', params: { prompt: 'p', mode: 'codex' } }))
+      .resolves.toMatchObject({ peer: { id: 'peer-1' } });
+  });
+});

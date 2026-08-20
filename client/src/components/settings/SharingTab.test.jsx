@@ -150,3 +150,62 @@ describe('SharingTab — federation pull authorization (#3659)', () => {
     await waitFor(() => expect(strictToggle().checked).toBe(false));
   });
 });
+
+// #4348 — the provider side could not share visual models at all before this,
+// so no peer ever advertised an image/video capability to route at.
+describe('SharingTab — visual provider models', () => {
+  const candidate = (overrides) => ({
+    engine: 'local', ready: true, unavailableReason: null, ...overrides,
+  });
+
+  it('shares a local image model into its own allowlist', async () => {
+    getMediaShareCandidates.mockResolvedValue({
+      image: [candidate({ modelId: 'flux-dev', modelName: 'FLUX dev' })],
+      video: [],
+    });
+    getSettings.mockResolvedValue({
+      sharingDisplayName: '', sharingBio: '',
+      federation: { mediaProvider: { enabled: true, audioModels: [] } },
+    });
+    getAuthStatus.mockResolvedValue({ enabled: true });
+
+    render(<SharingTab />);
+    fireEvent.click(await screen.findByLabelText('FLUX dev'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save provider' }));
+
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({
+      federation: {
+        mediaProvider: {
+          enabled: true,
+          maxQueuedJobs: 2,
+          audioModels: [],
+          imageModels: [{ engine: 'local', modelId: 'flux-dev' }],
+          videoModels: [],
+        },
+      },
+    }, { silent: true }));
+  });
+
+  // Otherwise the provider keeps advertising a stale unknown-model entry with
+  // no checkbox left to clear it.
+  it('keeps an already-shared model listed after it leaves the local catalog', async () => {
+    getMediaShareCandidates.mockResolvedValue({ image: [], video: [] });
+    getSettings.mockResolvedValue({
+      sharingDisplayName: '', sharingBio: '',
+      federation: {
+        mediaProvider: {
+          enabled: true, audioModels: [],
+          imageModels: [{ engine: 'local', modelId: 'uninstalled-model' }],
+        },
+      },
+    });
+    getAuthStatus.mockResolvedValue({ enabled: true });
+
+    render(<SharingTab />);
+    const checkbox = await screen.findByLabelText(/uninstalled-model/);
+    expect(checkbox).toBeChecked();
+    // Togglable despite being unavailable — that is the whole point.
+    expect(checkbox).toBeEnabled();
+    expect(screen.getByText(/no longer installed/)).toBeInTheDocument();
+  });
+});

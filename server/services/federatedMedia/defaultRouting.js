@@ -110,6 +110,15 @@ function assertRoutableConditioning(kind, params) {
   // silently gets the opposite of what it asked for. Only a truthy value is a
   // conflict — the common `false` is the provider's own default anyway.
   if (kind === 'video' && params?.disableAudio === true) unsupported.push('a silent (audio-disabled) render');
+  // For LOCAL video, `mode` is the pipeline semantic for the lane (t2v / i2v /
+  // first-last-frame / audio-to-video), not a backend selector — and only
+  // text-to-video crosses the wire. Because `routedJobParams` drops `mode`
+  // outright, an unguarded 'fflf' or 'a2v' job would come back as a plain
+  // text-to-video clip: a valid-looking render of the wrong pipeline. Mirrors
+  // the interactive route's non-text-mode rejection.
+  if (kind === 'video' && params?.mode !== undefined && params.mode !== 'text') {
+    unsupported.push(`a non-text render mode ('${params.mode}')`);
+  }
   if (!unsupported.length) return;
   throw new ServerError(
     `A federated media provider renders text-to-${kind} only — this ${kind} job uses ${unsupported.join(' and ')}. `

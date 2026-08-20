@@ -157,3 +157,43 @@ describe('UnattendedRenderRouting — failure and staleness handling', () => {
     expect(select.value).toBe('');
   });
 });
+
+describe('UnattendedRenderRouting — writes against the freshest settings', () => {
+  it('re-reads the federation slice at save time instead of writing a mount-time snapshot', async () => {
+    // Mounted before the Sharing tab enabled the provider elsewhere.
+    getSettings.mockResolvedValueOnce({ federation: { mediaProvider: { enabled: false } } });
+    render(<UnattendedRenderRouting peers={[peerWith()]} />);
+    const select = await screen.findByLabelText('Image');
+
+    getSettings.mockResolvedValueOnce({
+      federation: { mediaProvider: { enabled: true }, strictPullAuthorization: true },
+    });
+    fireEvent.change(select, { target: { value: JSON.stringify(['peer-1', 'comfy', 'sdxl-base']) } });
+
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({
+      federation: {
+        // The newer values survive — writing the stale snapshot would have
+        // reverted mediaProvider.enabled and erased strictPullAuthorization.
+        mediaProvider: { enabled: true },
+        strictPullAuthorization: true,
+        mediaRouting: { image: { peerId: 'peer-1', engine: 'comfy', modelId: 'sdxl-base' } },
+      },
+    }, { silent: true }));
+  });
+
+  it('falls back to the mount snapshot when the re-read fails, never to an empty slice', async () => {
+    getSettings.mockResolvedValueOnce({ federation: { mediaProvider: { enabled: true } } });
+    render(<UnattendedRenderRouting peers={[peerWith()]} />);
+    const select = await screen.findByLabelText('Image');
+
+    getSettings.mockRejectedValueOnce(new Error('offline'));
+    fireEvent.change(select, { target: { value: JSON.stringify(['peer-1', 'comfy', 'sdxl-base']) } });
+
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({
+      federation: {
+        mediaProvider: { enabled: true },
+        mediaRouting: { image: { peerId: 'peer-1', engine: 'comfy', modelId: 'sdxl-base' } },
+      },
+    }, { silent: true }));
+  });
+});

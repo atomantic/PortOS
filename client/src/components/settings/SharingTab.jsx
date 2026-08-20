@@ -10,6 +10,27 @@ const modelKey = ({ engine, modelId }) => `${engine}\u0000${modelId}`;
 // entry already carrying the readiness projection the wire status reports. Audio
 // is not in this table — its picker is driven by the music-engine catalog, which
 // nests models under engines.
+// A model the operator already shares must stay visible even after it leaves
+// the local catalog (uninstalled, or newly reported broken), or there is no
+// checkbox left to un-share it and the provider keeps advertising a stale
+// `unknown-model` entry forever. Mirrors the peer panel's `not-advertised` rows.
+function candidateRows(candidates, selected) {
+  const rows = [...candidates];
+  const known = new Set(candidates.map(modelKey));
+  for (const model of selected) {
+    if (!model?.engine || !model.modelId || known.has(modelKey(model))) continue;
+    rows.push({
+      kind: null,
+      engine: model.engine,
+      modelId: model.modelId,
+      modelName: model.modelId,
+      ready: false,
+      unavailableReason: 'no longer installed',
+    });
+  }
+  return rows;
+}
+
 const VISUAL_KINDS = Object.freeze([
   { kind: 'image', label: 'image', field: 'imageModels' },
   { kind: 'video', label: 'video', field: 'videoModels' },
@@ -363,14 +384,16 @@ export function SharingTab() {
             )}
           </fieldset>
 
-          {VISUAL_KINDS.map(({ kind, label, field }) => (
+          {VISUAL_KINDS.map(({ kind, label, field }) => {
+            const rows = candidateRows(visualCandidates[kind], providerVisualModels[kind]);
+            return (
             <fieldset key={field}>
               <legend className="block text-xs uppercase tracking-wider text-gray-500 mb-2">Allowed {label} models</legend>
-              {visualCandidates[kind].length === 0 ? (
+              {rows.length === 0 ? (
                 <p className="text-sm text-gray-500">No local {label} models are installed to share.</p>
               ) : (
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
-                  {visualCandidates[kind].map((candidate, index) => {
+                  {rows.map((candidate, index) => {
                     const checked = providerVisualModels[kind].some((model) => modelKey(model) === modelKey(candidate));
                     const inputId = `federated-media-${kind}-model-${index}`;
                     return (
@@ -396,7 +419,8 @@ export function SharingTab() {
                 </div>
               )}
             </fieldset>
-          ))}
+            );
+          })}
 
           <button
             type="button"

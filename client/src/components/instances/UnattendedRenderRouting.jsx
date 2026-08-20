@@ -87,12 +87,21 @@ export default function UnattendedRenderRouting({ peers }) {
     // replace the whole thing.
     if (!isRecord(federation) || !isRecord(routing)) return;
     setSaving(true);
-    const nextRouting = { ...routing, [kind]: route };
     // The settings PATCH shallow-merges TOP-LEVEL keys, so `federation` is
-    // replaced wholesale — carry the rest of the slice forward or a save here
-    // would drop the provider config the Sharing tab owns.
+    // replaced wholesale — this write has to carry the rest of the slice. Re-read
+    // it immediately before writing rather than trusting the snapshot taken at
+    // mount: the Sharing tab owns mediaProvider and strict-pull, and a page left
+    // open across an edit there would otherwise write back the stale values it
+    // captured. Fall back to the mount snapshot only if the re-read fails, which
+    // is still strictly better than sending {}.
+    const fresh = await getSettings({ silent: true }).catch(() => null);
+    const base = isRecord(fresh?.federation) ? fresh.federation : federation;
+    // Merge onto the freshest routing too, so a kind another surface set in the
+    // meantime isn't reverted by this one's stale copy.
+    const baseRouting = isRecord(base.mediaRouting) ? base.mediaRouting : routing;
+    const nextRouting = { ...baseRouting, [kind]: route };
     const merged = await updateSettings(
-      { federation: { ...federation, mediaRouting: nextRouting } },
+      { federation: { ...base, mediaRouting: nextRouting } },
       { silent: true },
     ).catch(() => null);
     setSaving(false);
@@ -103,7 +112,7 @@ export default function UnattendedRenderRouting({ peers }) {
       return;
     }
     setRouting(nextRouting);
-    setFederation(isRecord(merged.federation) ? merged.federation : { ...federation, mediaRouting: nextRouting });
+    setFederation(isRecord(merged.federation) ? merged.federation : { ...base, mediaRouting: nextRouting });
   };
 
   const savedRoute = (kind) => (isRecord(routing?.[kind]) ? routing[kind] : null);
