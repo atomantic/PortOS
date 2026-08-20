@@ -309,6 +309,7 @@ export default function OpenWorldSettingsDrawer({ open, onClose }) {
             <div className="rounded-xl border border-gray-700/35 bg-black/10 px-3">
               <ControlRow keys={['W', 'A', 'S', 'D']} label="Move" hint="Arrow keys also work" />
               <ControlRow keys={['SHIFT']} label="Boost" />
+              <ControlRow keys={['CTRL']} label="Brake" hint="Hold while steering for a tighter turn" />
               <ControlRow keys={['SPACE']} label="Jump" />
               <ControlRow keys={['E', 'Q']} label="Fly up / down" hint="Free-fly vertical movement" />
               <ControlRow keys={['F']} label="Interact" hint="Buildings and warp pads" />

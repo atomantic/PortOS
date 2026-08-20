@@ -2,15 +2,15 @@ import { useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useOpenWorldPalette } from './OpenWorldPaletteContext';
-import { dampFactor, EYE_HEIGHT } from '../../utils/openWorldPlayerRig';
+import { dampFactor, EYE_HEIGHT, VEHICLE } from '../../utils/openWorldPlayerRig';
 import { mixHex } from './openWorldConstants';
 
 // A small, procedural low-poly rover keeps the third-person actor local to OpenWorld.
 // It is intentionally made from primitives instead of another downloaded GLB: the car
 // inherits the active theme, loads instantly, and stays readable while sprinting, jumping,
 // or flying above the city.
-const CAR_LENGTH = 1.85;
-const CAR_WIDTH = 1.06;
+const CAR_LENGTH = VEHICLE.bodyLength;
+const CAR_WIDTH = VEHICLE.bodyWidth;
 const WHEEL_RADIUS = 0.24;
 const WHEEL_X = CAR_WIDTH * 0.57;
 const WHEEL_Z = CAR_LENGTH * 0.31;
@@ -41,21 +41,27 @@ export default function PlayerAvatar({ rigRef }) {
     const running = rig.state === 'run';
     const follow = dampFactor(10, delta);
     const targetY = rig.position.y - EYE_HEIGHT + (hovering ? 0.25 : 0);
+    const speed = rig.speed || 0;
+    const speedRatio = Math.min(1, Math.abs(speed) / 38);
 
     root.position.lerp(_rootTarget.set(rig.position.x, targetY, rig.position.z), follow);
     root.rotation.y = rig.facing;
-    root.rotation.z = rig.bank * 0.38;
+    root.rotation.z = rig.bank * 0.58;
 
-    const bob = hovering ? 0.2 + Math.sin(t * 2.4) * 0.07 : 0;
+    const bob = hovering
+      ? 0.2 + Math.sin(t * 2.4) * 0.07
+      : Math.sin(t * (7 + speedRatio * 8)) * 0.018 * speedRatio;
     body.position.y += (bob - body.position.y) * follow;
-    body.rotation.x = hovering ? Math.sin(t * 2.1) * 0.045 : 0;
-    body.rotation.z = rig.bank * 0.32;
+    body.rotation.x = hovering ? Math.sin(t * 2.1) * 0.045 : -speedRatio * 0.018;
+    body.rotation.z = rig.bank * 0.34;
 
-    const wheelSpeed = running ? 15 : moving ? 8 : 0;
-    wheelRefs.current.forEach((wheel) => {
+    const wheelSpeed = speed !== 0 ? speed / WHEEL_RADIUS : running ? 15 : moving ? 8 : 0;
+    wheelRefs.current.forEach((wheel, index) => {
       if (!wheel) return;
       wheel.rotation.x -= wheelSpeed * delta;
-      wheel.rotation.y = hovering ? Math.sin(t * 2) * 0.08 : 0;
+      // The front axle follows the damped steering angle. Rear wheels stay planted while
+      // the whole rover banks, which makes steering readable even at low speed.
+      wheel.rotation.y = index >= 2 ? (rig.wheelAngle || 0) : 0;
     });
 
     if (hoverRingRef.current) {
