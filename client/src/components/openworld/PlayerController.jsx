@@ -4,11 +4,13 @@ import * as THREE from 'three';
 import PlayerAvatar from './PlayerAvatar';
 import ErrorBoundary from '../ErrorBoundary';
 import {
-  THIRD_PERSON, EYE_HEIGHT, DEFAULT_SPAWN_Z, BUILDING_COLLISION_RADIUS,
+  THIRD_PERSON, EYE_HEIGHT, DEFAULT_SPAWN_Z,
   thirdPersonCamera, resolveBoom,
-  dampFactor, dampAngle, moveFacing, avatarState, bankAngle,
+  dampFactor, dampAngle, moveFacing, avatarState, bankAngle, stepVehicle,
+  moveWithCollisions, PLAYER_COLLISION_RADIUS, VEHICLE_COLLISION,
 } from '../../utils/openWorldPlayerRig';
 import { isWalkable, WORLD } from '../../utils/openWorldPlan';
+import { BOROUGH_PARAMS, BUILDING_PARAMS, PROCESS_BUILDING_PARAMS } from './openWorldConstants';
 import { regionWarpPadPosition } from '../../utils/openWorldRegions';
 
 const WALK_SPEED = 10;
@@ -34,13 +36,13 @@ const _lookTarget = new THREE.Vector3();
 
 // Exploration-mode player rig. One mutable rig object is the single source of truth for
 // the player's pose; both camera modes (and the third-person avatar) read from it:
-//   - 'third' (default): a damped follow camera behind a visible low-poly rover, with
-//     building-aware boom shortening (openWorldPlayerRig.js owns all the math).
+//   - 'third' (default): a damped follow camera behind a visible low-poly rover with
+//     arcade vehicle handling, building-aware boom shortening, and speed-weighted steering.
 //   - 'first' (V to toggle): the classic invisible first-person camera.
-// All original behavior is preserved: WASD/arrows, shift boost, E/Q vertical, F interact,
-// R respawn, pointer-lock mouselook, per-building cylinder collision below flyover height,
-// world bounds, and spawn persistence. Ground movement can't enter the bay (the harbor piers
-// stay walkable — see isWalkable in openWorldPlan.js).
+// WASD/arrows, shift boost, E/Q vertical, F interact, R respawn, pointer-lock mouselook,
+// shape-aware building/pylon collision below flyover height, world bounds, and spawn
+// persistence remain available. Ground movement can't enter the bay (the harbor piers stay
+// walkable — see isWalkable in openWorldPlan.js).
 export default function PlayerController({
   keysRef,
   positions,
@@ -62,9 +64,13 @@ export default function PlayerController({
   const rigRef = useRef({
     position: new THREE.Vector3(0, EYE_HEIGHT, 0),
     yaw: THIRD_PERSON.isometricYaw, // camera heading; forward is (-sin yaw, 0, -cos yaw)
+    heading: THIRD_PERSON.isometricYaw, // rover heading; camera orbit can look independently
     pitch: 0,
     facing: THIRD_PERSON.isometricYaw, // the character's body heading (damped toward movement direction)
     bank: 0, // lean into turns
+    speed: 0, // signed rover speed; positive forward, negative reverse
+    wheelAngle: 0,
+    skid: 0,
     vy: 0, // vertical velocity for the Space jump arc (E/Q free-fly zeroes it)
     jumping: false, // an active Space jump arc — gates gravity so E/Q free-fly holds altitude
     state: 'idle',
@@ -72,6 +78,38 @@ export default function PlayerController({
   // Stable array view of the positions Map for the per-frame boom collision test —
   // re-collected only when the layout itself changes, never per frame.
   const buildingList = useMemo(() => (positions ? [...positions.values()] : []), [positions]);
+  // Movement colliders mirror the rendered footprint: app buildings are boxes and
+  // process pylons are round. The boom keeps its own larger camera-only padding above.
+  const collisionShapes = useMemo(() => {
+    if (!positions) return [];
+    const appById = new Map((apps || []).map((app) => [app.id, app]));
+    const shapes = [];
+
+    positions.forEach((pos, appId) => {
+      shapes.push({
+        shape: 'box',
+        x: pos.x,
+        z: pos.z,
+        halfWidth: BUILDING_PARAMS.width / 2,
+        halfDepth: BUILDING_PARAMS.depth / 2,
+      });
+
+      const app = appById.get(appId);
+      const processCount = app?.archived || !Array.isArray(app?.processes) ? 0 : app.processes.length;
+      const processRadius = Math.max(PROCESS_BUILDING_PARAMS.width, PROCESS_BUILDING_PARAMS.depth) * 0.58;
+      for (let index = 0; index < processCount; index += 1) {
+        const angle = (index / processCount) * Math.PI * 2;
+        shapes.push({
+          shape: 'circle',
+          x: pos.x + Math.cos(angle) * BOROUGH_PARAMS.processRingRadius,
+          z: pos.z + Math.sin(angle) * BOROUGH_PARAMS.processRingRadius,
+          radius: processRadius,
+        });
+      }
+    });
+
+    return shapes;
+  }, [apps, positions]);
   const warpPadList = useMemo(
     () => warpPads.map((region) => ({ region, position: regionWarpPadPosition(region) })).filter((entry) => entry.position),
     [warpPads],
@@ -86,12 +124,31 @@ export default function PlayerController({
 
   // Re-snap the aim whenever the camera mode flips (V) so the lerp never starts
   // from a stale aim point left by the previous third-person stint.
-  useEffect(() => { lookInitRef.current = false; }, [cameraView]);
+  useEffect(() => {
+    const rig = rigRef.current;
+    // A camera-mode change is also a clean handoff: first person inherits the current
+    // rover heading, and returning to the rover starts with the camera's current aim.
+    rig.heading = rig.yaw;
+    rig.facing = rig.yaw;
+    rig.speed = 0;
+    rig.wheelAngle = 0;
+    rig.skid = 0;
+    lookInitRef.current = false;
+  }, [cameraView]);
 
   // Initialize spawn position
   useEffect(() => {
-    if (!active) return;
     const rig = rigRef.current;
+    if (!active) {
+      // Orbital mode pauses the frame loop. Clear a partially applied throttle so
+      // dropping back into the street never resumes with stale momentum.
+      rig.speed = 0;
+      rig.wheelAngle = 0;
+      rig.skid = 0;
+      rig.vy = 0;
+      rig.jumping = false;
+      return;
+    }
     if (lastSpawnRef.current) {
       rig.position.copy(lastSpawnRef.current);
     } else {
@@ -106,8 +163,12 @@ export default function PlayerController({
       // playable streets and landmarks before the player drives toward downtown.
       rig.position.set(0, EYE_HEIGHT, Math.max(maxZ + 8, DEFAULT_SPAWN_Z));
       rig.yaw = THIRD_PERSON.isometricYaw;
+      rig.heading = THIRD_PERSON.isometricYaw;
       rig.pitch = 0;
       rig.facing = THIRD_PERSON.isometricYaw;
+      rig.speed = 0;
+      rig.wheelAngle = 0;
+      rig.skid = 0;
       lastSpawnRef.current = rig.position.clone();
     }
     lookInitRef.current = false;
@@ -124,8 +185,12 @@ export default function PlayerController({
     rig.position.set(teleport.x, EYE_HEIGHT, teleport.z);
     // Face the destination from the same diagonal heading as the default isometric view.
     rig.yaw = THIRD_PERSON.isometricYaw;
+    rig.heading = THIRD_PERSON.isometricYaw;
     rig.pitch = 0;
     rig.facing = THIRD_PERSON.isometricYaw;
+    rig.speed = 0;
+    rig.wheelAngle = 0;
+    rig.skid = 0;
     rig.vy = 0;
     rig.jumping = false;
     lastSpawnRef.current = rig.position.clone();
@@ -200,8 +265,12 @@ export default function PlayerController({
       } else if (key === 'r' && lastSpawnRef.current) {
         rigRef.current.position.copy(lastSpawnRef.current);
         rigRef.current.yaw = THIRD_PERSON.isometricYaw;
+        rigRef.current.heading = THIRD_PERSON.isometricYaw;
         rigRef.current.pitch = 0;
         rigRef.current.facing = THIRD_PERSON.isometricYaw;
+        rigRef.current.speed = 0;
+        rigRef.current.wheelAngle = 0;
+        rigRef.current.skid = 0;
         rigRef.current.vy = 0;
         rigRef.current.jumping = false;
         lookInitRef.current = false;
@@ -267,24 +336,52 @@ export default function PlayerController({
       rig.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, rig.pitch - lookDeltaY * MOUSE_SENSITIVITY));
     }
 
+    const isVehicle = cameraView === 'third';
     const isSprinting = keys.has('shift') || Boolean(mobileInput?.boost);
     const speed = (isSprinting ? SPRINT_SPEED : WALK_SPEED) * delta;
     const verticalSpeed = (isSprinting ? SPRINT_SPEED : VERTICAL_SPEED) * delta;
-
-    // Movement direction relative to camera yaw
-    const forward = _forward.set(-Math.sin(rig.yaw), 0, -Math.cos(rig.yaw));
-    const right = _right.set(-forward.z, 0, forward.x);
-
     const keyboardForward = (keys.has('w') || keys.has('arrowup') ? 1 : 0)
       - (keys.has('s') || keys.has('arrowdown') ? 1 : 0);
     const keyboardStrafe = (keys.has('d') || keys.has('arrowright') ? 1 : 0)
       - (keys.has('a') || keys.has('arrowleft') ? 1 : 0);
     const forwardInput = THREE.MathUtils.clamp(keyboardForward - (mobileInput?.moveY || 0), -1, 1);
     const strafeInput = THREE.MathUtils.clamp(keyboardStrafe + (mobileInput?.moveX || 0), -1, 1);
-    const moveDir = _moveDir.set(0, 0, 0)
-      .addScaledVector(forward, forwardInput)
-      .addScaledVector(right, strafeInput);
-
+    const brake = keys.has('control') || keys.has('x');
+    const previousHeading = rig.heading;
+    const moveDir = _moveDir.set(0, 0, 0);
+    if (isVehicle) {
+      // Third-person is a rover: left/right steer the nose, while the analog stick's
+      // horizontal axis remains the same steering input on touch devices. The camera yaw
+      // stays independent so a player can look around while carrying speed.
+      const drive = stepVehicle({
+        speed: rig.speed,
+        heading: rig.heading,
+        wheelAngle: rig.wheelAngle,
+        throttle: forwardInput,
+        steer: strafeInput,
+        boost: isSprinting,
+        brake,
+        delta,
+      });
+      rig.speed = drive.speed;
+      rig.heading = drive.heading;
+      rig.wheelAngle = drive.wheelAngle;
+      rig.skid = drive.skid;
+      moveDir.set(drive.displacement.x, 0, drive.displacement.z);
+    } else {
+      // First person remains the useful free-roam inspection mode: movement stays relative
+      // to the mouse aim and keeps the original walk/fly behavior.
+      const forward = _forward.set(-Math.sin(rig.yaw), 0, -Math.cos(rig.yaw));
+      const right = _right.set(-forward.z, 0, forward.x);
+      moveDir
+        .addScaledVector(forward, forwardInput)
+        .addScaledVector(right, strafeInput);
+      if (moveDir.lengthSq() > 0) moveDir.normalize().multiplyScalar(speed);
+      rig.heading = rig.yaw;
+      rig.speed = 0;
+      rig.wheelAngle = 0;
+      rig.skid = 0;
+    }
     const hasHorizontal = moveDir.lengthSq() > 0;
 
     // Vertical: E/Q is direct free-fly and takes precedence — it cancels any jump and
@@ -306,52 +403,49 @@ export default function PlayerController({
         dy = rig.vy * delta;
       }
     }
-    const moving = hasHorizontal || dy !== 0;
+    const hasMotionIntent = hasHorizontal || dy !== 0;
+    let movedHorizontally = false;
 
-    if (moving) {
-      if (hasHorizontal) moveDir.normalize().multiplyScalar(speed);
+    if (hasMotionIntent) {
+      const startX = rig.position.x;
+      const startZ = rig.position.z;
       const nextPos = _nextPos.copy(rig.position).add(moveDir);
       nextPos.y += dy;
 
-      // Collision detection with buildings — skipped above rooftop height so the
-      // player can fly over the city.
+      // Collision detection is skipped above rooftop height so the player can fly over
+      // the city. The resolver stops at the actual facade/pylon contact and preserves
+      // the free axis for a stable wall slide.
       let blocked = false;
       if (hasHorizontal && nextPos.y < BUILDING_FLYOVER_HEIGHT) {
-        positions?.forEach((pos) => {
-          const dx = nextPos.x - pos.x;
-          const dz = nextPos.z - pos.z;
-          const dist = Math.sqrt(dx * dx + dz * dz);
-          if (dist < BUILDING_COLLISION_RADIUS) {
-            // Slide along boundary tangent
-            const nx = dx / dist;
-            const nz = dz / dist;
-            const dot = moveDir.x * nx + moveDir.z * nz;
-            if (dot < 0) {
-              // Moving toward building - project movement onto tangent
-              nextPos.x = rig.position.x + (moveDir.x - dot * nx) * 0.8;
-              nextPos.z = rig.position.z + (moveDir.z - dot * nz) * 0.8;
-              // Re-check distance after slide
-              const dx2 = nextPos.x - pos.x;
-              const dz2 = nextPos.z - pos.z;
-              if (Math.sqrt(dx2 * dx2 + dz2 * dz2) < BUILDING_COLLISION_RADIUS) {
-                blocked = true;
-              }
-            }
-          }
+        const collision = moveWithCollisions({
+          position: rig.position,
+          displacement: { x: moveDir.x, z: moveDir.z },
+          colliders: collisionShapes,
+          body: isVehicle
+            ? { type: 'vehicle', heading: rig.heading, ...VEHICLE_COLLISION }
+            : { type: 'circle', radius: PLAYER_COLLISION_RADIUS },
         });
+        nextPos.x = collision.x;
+        nextPos.z = collision.z;
+        blocked = collision.blocked;
         // The bay is not walkable (the harbor piers are) — a grounded player stops
         // at the shoreline instead of strolling onto open water.
-        if (!isWalkable(nextPos.x, nextPos.z)) blocked = true;
+        if (!isWalkable(nextPos.x, nextPos.z)) {
+          blocked = true;
+          // Water is a hard terrain boundary rather than a wall: undo the whole
+          // attempted move so the player cannot slide diagonally onto the bay.
+          nextPos.x = rig.position.x;
+          nextPos.z = rig.position.z;
+        }
       }
 
       // Vertical (jump/gravity) is independent of horizontal collision: a wall only
-      // stops x/z, never the jump arc. Pinning x/z back to the current position when
-      // blocked — instead of skipping the whole write — lets the hop still rise, fall,
-      // and land (resetting rig.vy) rather than freezing mid-air while vy keeps
-      // integrating downward and then yanking the player down when they turn away.
+      // stops horizontal progress, never the jump arc. The resolver has already placed
+      // the player at the contact point (and kept any tangent slide); terrain boundaries
+      // were reset above. In either case the hop still rises, falls, and lands rather
+      // than freezing mid-air while vy keeps integrating downward.
       if (blocked) {
-        nextPos.x = rig.position.x;
-        nextPos.z = rig.position.z;
+        if (isVehicle) rig.speed = 0;
       }
       // World bounds
       nextPos.x = Math.max(-WORLD.bound, Math.min(WORLD.bound, nextPos.x));
@@ -363,16 +457,27 @@ export default function PlayerController({
         rig.vy = 0;
         rig.jumping = false;
       }
+      movedHorizontally = Math.abs(nextPos.x - startX) > 1e-5 || Math.abs(nextPos.z - startZ) > 1e-5;
       rig.position.copy(nextPos);
     }
 
     // Pose classification for the avatar + facing/banking toward movement.
+    const moving = movedHorizontally || dy !== 0;
     rig.state = avatarState({
       moving,
-      sprinting: isSprinting && moving,
+      sprinting: isVehicle ? Math.abs(rig.speed) > 16 || (isSprinting && moving) : isSprinting && moving,
       airborne: rig.position.y > AIRBORNE_HEIGHT,
     });
-    if (hasHorizontal) {
+    if (isVehicle) {
+      const prevFacing = rig.facing;
+      rig.facing = dampAngle(rig.facing, rig.heading, dampFactor(14, delta));
+      const headingStep = delta > 0 ? (dampAngle(previousHeading, rig.heading, 1) - previousHeading) / delta : 0;
+      const turnBank = bankAngle(headingStep, 0.24, 0.045) + rig.wheelAngle * rig.skid * 0.08;
+      rig.bank += (turnBank - rig.bank) * dampFactor(8, delta);
+      // Keep the facing value live even while coasting to a stop; the visual rover should
+      // settle into the same heading as the steering math rather than snap at zero speed.
+      if (!movedHorizontally && Math.abs(prevFacing - rig.heading) < 0.001) rig.facing = rig.heading;
+    } else if (movedHorizontally) {
       const target = moveFacing(rig.yaw, { forward: forwardInput, strafe: strafeInput });
       const prevFacing = rig.facing;
       rig.facing = dampAngle(rig.facing, target, dampFactor(10, delta));
