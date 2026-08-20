@@ -178,6 +178,20 @@ where a local one could not (busy/stale/unauthorized provider); the scene runner
 settles the scene through its normal failure path instead of leaving it stuck in
 `rendering`.
 
+**A standing route requires a Tailscale peer.** A non-tailnet peer is refused
+with `403 MEDIA_ROUTING_PEER_NOT_TAILNET`, and the Instances picker does not
+offer one. Interactive routing is unchanged — the difference is review cadence:
+a standing route exports every future prompt of its kind with nobody looking, so
+a misconfigured counterparty is a permanent leak rather than a one-time mistake,
+and `peerFetch`'s `rejectUnauthorized: false` leaves a plain-LAN or non-`.ts.net`
+hop with no server authentication at all. Authentication would not save it
+either: the prompt rides the request body, so an impostor holding the connection
+reads it before failing to answer. Required by ADR
+[federated visual prompts](./decisions/2026-08-20-federated-visual-prompts.md)
+(rule 5); the gate is its own fail-closed predicate (`server/lib/tailnetPeer.js`)
+rather than a re-export of the probe-deferral heuristic, so tuning that heuristic
+can never widen this boundary.
+
 Three properties are worth stating explicitly:
 
 - **Every unattended path routes, or none does.** The Creative Director planner

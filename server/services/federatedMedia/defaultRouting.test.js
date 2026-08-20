@@ -24,7 +24,7 @@ beforeEach(() => {
   enqueueJob.mockClear();
   prepareRemoteMediaJob.mockReset();
   prepareRemoteMediaJob.mockImplementation(async ({ peerId, kind, request }) => ({
-    peer: { id: peerId },
+    peer: { id: peerId, name: 'Render Box', host: 'render-box.tailnet-example.ts.net' },
     remoteMedia: { wireVersion: 1, peerId, reconcile: false, cancelRequested: false, request },
   }));
 });
@@ -332,5 +332,48 @@ describe('unreadable settings are not "no route"', () => {
     await expect(enqueueUnattendedMediaJob({ kind: 'image', params: { prompt: 'p' } }))
       .rejects.toMatchObject({ code: 'MEDIA_ROUTING_UNREADABLE' });
     expect(enqueueJob).not.toHaveBeenCalled();
+  });
+});
+
+// ADR docs/decisions/2026-08-20-federated-visual-prompts.md rule 5: a STANDING
+// route exports every future prompt of its kind with nobody reviewing, and
+// peerFetch's rejectUnauthorized:false leaves a non-tailnet hop unauthenticated.
+describe('standing routes are gated on a tailnet peer', () => {
+  const route = { peerId: 'peer-1', engine: 'comfy', modelId: 'sdxl-remote' };
+
+  beforeEach(() => {
+    getSettings.mockResolvedValue({ federation: { mediaRouting: { image: route } } });
+  });
+
+  it('refuses a route whose peer is reachable outside the tailnet', async () => {
+    prepareRemoteMediaJob.mockImplementation(async ({ peerId, request }) => ({
+      peer: { id: peerId, name: 'LAN Box', address: '192.0.2.10' },
+      remoteMedia: { peerId, request },
+    }));
+    await expect(resolveDefaultMediaRoute({ kind: 'image', params: { prompt: 'p' } }))
+      .rejects.toMatchObject({ code: 'MEDIA_ROUTING_PEER_NOT_TAILNET', status: 403 });
+  });
+
+  it('names the peer and the reason so the refusal is actionable', async () => {
+    prepareRemoteMediaJob.mockImplementation(async ({ peerId, request }) => ({
+      peer: { id: peerId, name: 'LAN Box', address: '192.0.2.10' },
+      remoteMedia: { peerId, request },
+    }));
+    await expect(resolveDefaultMediaRoute({ kind: 'image', params: { prompt: 'p' } }))
+      .rejects.toThrow(/LAN Box.*outside the tailnet/s);
+  });
+
+  it('allows a MagicDNS peer', async () => {
+    await expect(resolveDefaultMediaRoute({ kind: 'image', params: { prompt: 'p' } }))
+      .resolves.toMatchObject({ peer: { id: 'peer-1' } });
+  });
+
+  it('allows a CGNAT-addressed peer', async () => {
+    prepareRemoteMediaJob.mockImplementation(async ({ peerId, request }) => ({
+      peer: { id: peerId, address: '100.64.0.5' },
+      remoteMedia: { peerId, request },
+    }));
+    await expect(resolveDefaultMediaRoute({ kind: 'image', params: { prompt: 'p' } }))
+      .resolves.toMatchObject({ peer: { id: 'peer-1' } });
   });
 });

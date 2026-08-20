@@ -28,6 +28,7 @@
 import { ServerError } from '../../lib/errorHandler.js';
 import { buildFederatedMediaRequest } from '../../lib/federatedMediaRequest.js';
 import { getSettings } from '../settings.js';
+import { isTailnetPeer } from '../../lib/tailnetPeer.js';
 import { CLOUD_VIDEO_GEN_MODES, VIDEO_GEN_MODES } from '../videoGen/modes.js';
 
 // Only the visual kinds. See the audio note in the module docblock.
@@ -224,6 +225,23 @@ export async function resolveDefaultMediaRoute({ kind, params }) {
     kind,
     request,
   });
+  // ADR docs/decisions/2026-08-20-federated-visual-prompts.md, rule 5: a
+  // STANDING route must refuse a non-tailnet peer. It exports every future
+  // prompt of its kind with nobody reviewing, so a misconfigured counterparty
+  // is a permanent leak where an interactive mistake is a one-time one — and
+  // peerFetch's rejectUnauthorized:false leaves a plain-LAN or non-.ts.net peer
+  // with no server authentication, so an impostor reads the prompt out of the
+  // request body before failing to answer. Interactive routing is unchanged.
+  //
+  // Checked AFTER prepareRemoteMediaJob so the peer record is the registry's,
+  // not one reconstructed from the route.
+  if (!isTailnetPeer(peer)) {
+    throw new ServerError(
+      `Unattended ${kind} routing requires a Tailscale peer — "${peer.name || peer.id}" is reachable outside the tailnet, `
+      + 'so a standing route would export every future prompt over an unauthenticated hop.',
+      { status: 403, code: 'MEDIA_ROUTING_PEER_NOT_TAILNET' },
+    );
+  }
   // NOTE: the geometry forwarded here was snapped to the LOCAL model catalog by
   // the enqueue path ahead of this resolver, and wire v1's capability payload
   // publishes no frame-stride/canvas constraints to re-snap it against. A

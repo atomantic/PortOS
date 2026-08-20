@@ -20,6 +20,9 @@ const capability = (overrides) => ({ ready: true, unavailableReason: null, ...ov
 const peerWith = (overrides = {}) => ({
   id: 'peer-1',
   name: 'Render Box',
+  // A standing route refuses a non-tailnet peer (ADR rule 5), so the shared
+  // fixture has to be a tailnet host or nothing is offerable.
+  host: 'render-box.tailnet-example.ts.net',
   mediaProvider: {
     enabled: true,
     imageModels: [{ engine: 'comfy', modelId: 'sdxl-base' }],
@@ -201,5 +204,22 @@ describe('UnattendedRenderRouting — a failed read is not an empty configuratio
     getSettings.mockRejectedValue(new Error('offline'));
     render(<UnattendedRenderRouting peers={[]} />);
     expect(await screen.findByText(/could not load this instance/i)).toBeInTheDocument();
+  });
+});
+
+describe('UnattendedRenderRouting — tailnet gate', () => {
+  it('does not offer a peer reachable outside the tailnet', async () => {
+    // The server refuses such a route on every job; offering it here would only
+    // let the user save a configuration that can never run.
+    const lanPeer = peerWith({ host: undefined, address: '192.0.2.10', name: 'LAN Box' });
+    const { container } = render(<UnattendedRenderRouting peers={[lanPeer]} />);
+    await waitFor(() => expect(getSettings).toHaveBeenCalled());
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it('offers a CGNAT-addressed peer', async () => {
+    const cgnatPeer = peerWith({ host: undefined, address: '100.64.0.5' });
+    render(<UnattendedRenderRouting peers={[cgnatPeer]} />);
+    expect(await screen.findByLabelText('Image')).toBeInTheDocument();
   });
 });

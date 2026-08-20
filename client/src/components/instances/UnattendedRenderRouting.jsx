@@ -17,6 +17,21 @@ const isRecord = (value) => value && typeof value === 'object' && !Array.isArray
 const optionValue = ({ peerId, engine, modelId }) => JSON.stringify([peerId, engine, modelId]);
 const modelKey = ({ engine, modelId }) => `${engine}\u0000${modelId}`;
 
+// Mirrors the server's fail-closed `isTailnetPeer` gate (server/lib/tailnetPeer.js).
+// A standing route exports every future prompt of its kind unreviewed, so ADR
+// 2026-08-20-federated-visual-prompts (rule 5) refuses a non-tailnet peer. The
+// server is authoritative; this only keeps the UI from offering a choice it
+// would reject on the first job.
+const isTailnetPeer = (peer) => {
+  const host = typeof peer?.host === 'string' ? peer.host.trim() : '';
+  if (host) return /\.ts\.net$/i.test(host);
+  const address = (typeof peer?.address === 'string' ? peer.address : '').trim().replace(/^\[|\]$/g, '');
+  if (!address) return false;
+  if (/\.ts\.net$/i.test(address) || /^fd7a:115c:a1e0:/i.test(address)) return true;
+  const v4 = address.match(/^100\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/);
+  return !!v4 && Number(v4[1]) >= 64 && Number(v4[1]) <= 127;
+};
+
 // One option per (peer, allowlisted model) pair that the peer currently
 // advertises as a capability. A model the user allowlisted but the peer no
 // longer advertises is deliberately absent: routing unattended work at it would
@@ -30,6 +45,9 @@ function routeOptions(peers, kind, field) {
     // MEDIA_PROVIDER_PEER_DISABLED.
     if (peer?.enabled === false) continue;
     if (peer?.mediaProvider?.enabled !== true) continue;
+    // Offering a non-tailnet peer here would save a route the server refuses on
+    // every job with MEDIA_ROUTING_PEER_NOT_TAILNET.
+    if (!isTailnetPeer(peer)) continue;
     const allowed = new Set((peer.mediaProvider[field] || [])
       .filter((model) => model?.engine && model?.modelId)
       .map(modelKey));
@@ -154,7 +172,8 @@ export default function UnattendedRenderRouting({ peers }) {
       <p className="text-[11px] text-gray-500 mb-2">
         Where Creative Director and Creative Commission send their renders. Agents never choose a peer;
         this instance does. A routed kind fails with the peer&rsquo;s reason rather than quietly rendering
-        locally, so unavailable capacity is visible instead of silent.
+        locally, so unavailable capacity is visible instead of silent. Only Tailscale peers can be
+        chosen &mdash; a standing route exports every future prompt of its kind without review.
       </p>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         {KINDS.map(({ kind, label }) => {
