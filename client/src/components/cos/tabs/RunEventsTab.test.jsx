@@ -243,6 +243,23 @@ describe('RunEventsTab — reconciliation panel', () => {
     expect(api.getRunEventProjections).toHaveBeenCalledTimes(2);
   });
 
+  it('does not report a skipped repair as nothing left to do', async () => {
+    api.getRunReconciliation.mockResolvedValue({
+      ...CLEAN_REPORT,
+      findings: [finding()],
+      summary: { ...CLEAN_REPORT.summary, findings: 1, repairable: 1 },
+    });
+    // The record is still open — saying "nothing left to close" would claim the
+    // drift is gone while it is still listed on screen.
+    api.repairRunRecords.mockResolvedValue({ ...CLEAN_REPORT, repaired: [], skipped: 1 });
+    renderTab();
+
+    await userEvent.click(await screen.findByRole('button', { name: /Close 1 from ledger/ }));
+    await userEvent.click(screen.getByRole('button', { name: 'Close records' }));
+    expect(await screen.findByText(/Left 1 run record alone/)).toBeInTheDocument();
+    expect(screen.queryByText(/Nothing left to close/)).not.toBeInTheDocument();
+  });
+
   it('hides the panel entirely for an empty ledger', async () => {
     api.getRunEventProjections.mockResolvedValue([]);
     api.getRunReconciliation.mockResolvedValue({ ...CLEAN_REPORT, summary: { ...CLEAN_REPORT.summary, checked: 0 } });

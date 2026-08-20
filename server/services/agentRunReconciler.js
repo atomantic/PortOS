@@ -22,7 +22,7 @@
  */
 
 import { join } from 'path';
-import { PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
+import { PATHS, readJSONFile, atomicWrite, sha256Text } from '../lib/fileUtils.js';
 import { RUN_EVENT_READ_LIMITS } from '../lib/agentRunEvents.js';
 import { reconcileRunRecords, planRunRecordRepair, isAgentFallbackKey } from '../lib/agentRunReconcile.js';
 import { getRunProjections, appendRunEvent } from './agentRunEventLog.js';
@@ -68,6 +68,18 @@ async function loadRecordsFor(projections) {
   const records = await Promise.all(runIds.map(readRecord));
   return new Map(runIds.map((id, index) => [id, records[index]]));
 }
+
+/**
+ * The idempotency key for one repair: this run, closed at this instant.
+ *
+ * Hashed rather than spelled out because `buildRunEvent` truncates `eventId` at
+ * 128 characters, and a readable `reconcile:<runId>:<endTime>` key puts the
+ * run id FIRST — so two ids sharing a long prefix would truncate to the same
+ * key and the second repair would be silently suppressed as a duplicate of the
+ * first. A fixed-width digest cannot be truncated into a collision. The
+ * `reconcile:` prefix stays so the key is still recognizable in the ledger.
+ */
+const repairEventId = (runId, endTime) => `reconcile:${sha256Text(`${runId}\u0000${endTime}`).slice(0, 32)}`;
 
 const cap = (limit) => Math.min(
   Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : RUN_EVENT_READ_LIMITS.default,
@@ -154,7 +166,7 @@ async function repairNow({ runId, limit } = {}) {
     // be read rather than awaited and ignored.
     const appended = await appendRunEvent({
       kind: 'run.reconciled',
-      eventId: `reconcile:${item.runId}:${patch.endTime}`,
+      eventId: repairEventId(item.runId, patch.endTime),
       runId: item.runId,
       agentId: item.agentId,
       taskId: item.taskId,
@@ -172,7 +184,20 @@ async function repairNow({ runId, limit } = {}) {
       continue;
     }
 
-    await atomicWrite(path, { ...record, ...patch });
+    // The append did disk I/O of its own, so the record read before it is a
+    // read old again. The LAST read before the write is the one that has to be
+    // current — otherwise a run whose own completion path landed during the
+    // append gets overwritten with a verdict this pass computed before it. A
+    // re-plan that comes back null means the record closed itself; the already
+    // appended event is harmless (a real `run.finalized` outranks it in the
+    // fold, and its key dedupes a later retry).
+    const fresh = await readRecord(item.runId);
+    if (!planRunRecordRepair(projection, fresh, patch.reconciledAt)) {
+      skipped += 1;
+      continue;
+    }
+
+    await atomicWrite(path, { ...fresh, ...patch });
     console.log(`🩹 Closed run ${item.runId} from the event ledger: ledger read ${item.detail.ledgerStatus}, record now ${patch.success ? 'success' : 'failure'}`);
 
     repaired.push({ runId: item.runId, from: item.detail.ledgerStatus, success: patch.success, endTime: patch.endTime });

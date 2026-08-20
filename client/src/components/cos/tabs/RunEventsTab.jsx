@@ -337,13 +337,7 @@ function ReconciliationPanel({ report, onSelect, confirming, onAskRepair, onCanc
         ))}
       </div>
 
-      {result && (
-        <Banner tone={result.repaired?.length ? 'success' : 'info'}>
-          {result.repaired?.length
-            ? `Closed ${result.repaired.length} run record${result.repaired.length === 1 ? '' : 's'} from the ledger.`
-            : 'Nothing left to close — every repairable record had already been closed.'}
-        </Banner>
-      )}
+      {result && <RepairResult result={result} />}
 
       {findings.length === 0 ? (
         <p className="mt-2 text-xs text-port-text-muted">
@@ -374,6 +368,32 @@ function ReconciliationPanel({ report, onSelect, confirming, onAskRepair, onCanc
         </ul>
       )}
     </div>
+  );
+}
+
+/**
+ * What a repair pass actually did.
+ *
+ * "Repaired none" and "repaired none, and N were skipped" are different
+ * outcomes and must not read alike: a skip means the record is still open —
+ * either it closed itself underneath the pass, or the repair could not be
+ * recorded in the ledger — so reporting it as "nothing left to close" would
+ * tell the user the drift is gone while it is still on screen.
+ */
+function RepairResult({ result }) {
+  const closed = result.repaired?.length ?? 0;
+  const skipped = result.skipped ?? 0;
+  const runs = (n) => `${n} run record${n === 1 ? '' : 's'}`;
+
+  if (closed === 0 && skipped === 0) {
+    return <Banner tone="info">Nothing left to close — every repairable record had already been closed.</Banner>;
+  }
+  return (
+    <Banner tone={closed > 0 ? 'success' : 'warning'}>
+      {closed > 0 ? `Closed ${runs(closed)} from the ledger.` : ''}
+      {closed > 0 && skipped > 0 ? ' ' : ''}
+      {skipped > 0 ? `Left ${runs(skipped)} alone — they changed underneath the repair, or it could not be recorded in the ledger.` : ''}
+    </Banner>
   );
 }
 

@@ -282,6 +282,53 @@ describe('repairRunRecords', () => {
     expect(JSON.parse(readFileSync(outside, 'utf8')).endTime).toBeNull();
   });
 
+  it('does not overwrite a record that closed itself while the repair was being recorded', async () => {
+    writeRecord('r1', { endTime: null, success: null });
+    await spawn('r1');
+    await finalize('r1', false);
+
+    // Reads of r1 in one pass: the batch load, the pre-plan read, and the
+    // re-read after the ledger append. The run's own completion path lands
+    // between the second and the third — which is exactly what the third read
+    // exists to notice.
+    let reads = 0;
+    hooks.afterRecordRead = (path) => {
+      if (!path.includes('r1')) return;
+      reads += 1;
+      if (reads === 2) writeRecord('r1', { endTime: LATER, success: true, duration: 7 });
+    };
+
+    const result = await repairRunRecords();
+    hooks.afterRecordRead = null;
+
+    expect(reads).toBe(3);
+    expect(result.repaired).toEqual([]);
+    expect(result.skipped).toBe(1);
+    expect(readRecord('r1')).toMatchObject({ success: true, duration: 7 });
+    expect(readRecord('r1').reconciledFromLedger).toBeUndefined();
+  });
+
+  it('keys repairs by a fixed-width digest so long run ids cannot collide', async () => {
+    // `eventId` is truncated at 128 chars by the envelope schema. A readable
+    // `reconcile:<runId>:<endTime>` key would put the run id first, so two long
+    // ids sharing a prefix would truncate to one key and the second repair
+    // would be suppressed as a duplicate that never happened.
+    const long = (suffix) => `${'a'.repeat(120)}${suffix}`;
+    for (const suffix of ['1', '2']) {
+      const runId = long(suffix);
+      writeRecord(runId, { endTime: null, success: null });
+      await appendRunEvent({ kind: 'run.spawned', runId, at: AT, data: {} });
+      await appendRunEvent({ kind: 'run.finalized', runId, at: LATER, data: { success: false, exitCode: 1 } });
+    }
+
+    const result = await repairRunRecords();
+    expect(result.repaired.map((r) => r.runId).sort()).toEqual([long('1'), long('2')].sort());
+    expect(readRecord(long('1')).endTime).toBe(LATER);
+    expect(readRecord(long('2')).endTime).toBe(LATER);
+    const ids = (await readRunEvents({ kind: 'run.reconciled' })).map((e) => e.eventId);
+    expect(new Set(ids).size).toBe(2);
+  });
+
   it('runs one pass at a time', async () => {
     writeRecord('r1', { endTime: null, success: null });
     await spawn('r1');
