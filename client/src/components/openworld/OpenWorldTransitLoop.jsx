@@ -13,7 +13,7 @@ import { TRANSIT } from '../../utils/openWorldPlan';
 const TRAM_SIZE = [0.9, 0.5, 0.42];
 
 export default function OpenWorldTransitLoop({ settings }) {
-  const { accent, tintStructure } = useOpenWorldPalette();
+  const { accent, tintStructure, lowPoly, surface } = useOpenWorldPalette();
   const dayMix = openWorldDayMix(settings);
   const showTrams = openWorldShowDetail(settings);
 
@@ -41,8 +41,13 @@ export default function OpenWorldTransitLoop({ settings }) {
     });
   });
 
-  const trackColor = mixHex(accent, '#8b9bb0', dayMix);
-  const trackOpacity = 0.5 * (1 - dayMix) + 0.3 * dayMix;
+  const trackColor = lowPoly
+    ? mixHex('#4e7c7f', '#e1c28d', dayMix)
+    : mixHex(accent, '#8b9bb0', dayMix);
+  const trackOpacity = lowPoly
+    ? 0.46 * (1 - dayMix) + 0.62 * dayMix
+    : 0.5 * (1 - dayMix) + 0.3 * dayMix;
+  const pylonColor = lowPoly ? mixHex('#38545a', '#6d887c', dayMix) : tintStructure('#121a2c');
 
   return (
     <group>
@@ -55,7 +60,7 @@ export default function OpenWorldTransitLoop({ settings }) {
         <group key={stop.id} position={[stop.point[0], 0, stop.point[2]]}>
           <mesh position={[0, TRANSIT.y / 2, 0]}>
             <cylinderGeometry args={[0.12, 0.2, TRANSIT.y, 6]} />
-            <meshStandardMaterial color={tintStructure('#121a2c')} roughness={0.7} metalness={0.4} />
+            <meshStandardMaterial {...surface} color={pylonColor} roughness={0.7} metalness={lowPoly ? 0 : 0.4} />
           </mesh>
           <mesh position={[0, TRANSIT.y - 0.35, 0]} rotation={[Math.PI / 2, 0, 0]}>
             <torusGeometry args={[0.55, 0.05, 6, 20]} />
@@ -68,11 +73,12 @@ export default function OpenWorldTransitLoop({ settings }) {
         <mesh key={i} ref={(el) => { if (el) tramRefs.current[i] = el; }}>
           <boxGeometry args={TRAM_SIZE} />
           <meshStandardMaterial
-            color={tintStructure('#1a2440')}
+            {...surface}
+            color={lowPoly ? mixHex('#d57b67', accent, 0.2) : tintStructure('#1a2440')}
             emissive={accent}
             emissiveIntensity={0.5 * (1 - dayMix) + 0.15 * dayMix}
-            metalness={0.5}
-            roughness={0.3}
+            metalness={lowPoly ? 0.05 : 0.5}
+            roughness={lowPoly ? 0.85 : 0.3}
             toneMapped={false}
           />
         </mesh>

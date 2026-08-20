@@ -24,9 +24,9 @@ export default function PlayerAvatar({ rigRef }) {
   const underglowRef = useRef();
   const wheelRefs = useRef([]);
 
-  const bodyColor = mixHex('#e7825c', accent, 0.22);
+  const bodyColor = mixHex('#ee8f68', accent, 0.16);
   const bodyShadow = mixHex('#263447', accent, 0.16);
-  const glassColor = mixHex('#15243a', accent, 0.25);
+  const glassColor = mixHex('#294765', accent, 0.22);
   const wheelColor = '#17212d';
 
   useFrame(({ clock }, delta) => {

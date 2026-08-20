@@ -146,7 +146,7 @@ export const CITY_COLORS = {
       isMoon: false,
       daylightFactor: 1.0,
       // Meadow green rather than pavement — the ground plane is a landscape here.
-      groundColor: '#628b6d',
+      groundColor: '#86b893',
       groundRoughness: 0.95,
       hemiSkyColor: '#b9e3d8',
       hemiGroundColor: '#3f5c4a',
@@ -170,7 +170,7 @@ export const CITY_COLORS = {
       sunScale: 1.0,
       isMoon: false,
       daylightFactor: 0.9,
-      groundColor: '#57755f',
+      groundColor: '#6f9b80',
       groundRoughness: 0.95,
       hemiSkyColor: '#9fc7cd',
       hemiGroundColor: '#3a4a3c',
@@ -451,9 +451,10 @@ export const WORLD_STYLE_DEFS = {
     // Warm sand / coral / teal / sage / amber instead of the cyberpunk neon set, so the
     // bright low-poly world doesn't wear night-club colors.
     accents: ['#63f2db', '#f07f6d', '#d7b98c', '#9873b9', '#f3b562', '#57c9c0', '#8c7169', '#dde4df'],
-    // Warm stone rather than the cyber world's near-black slab.
-    buildingBody: '#a87868',
-    terrain: { inner: '#8c7169', meadow: '#628b6d', ridge: '#51666a' },
+    // A painted coastal palette: blue-green city soil, sage meadows, and cool stone
+    // ridges keep the empty world readable before any live app towers arrive.
+    buildingBody: '#7e9e90',
+    terrain: { inner: '#6d8f8f', meadow: '#91b983', ridge: '#7896a2' },
   },
   cyber: {
     id: 'cyber',

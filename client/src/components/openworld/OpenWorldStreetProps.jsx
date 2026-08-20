@@ -60,15 +60,19 @@ export default function OpenWorldStreetProps({ settings }) {
   // Low preset: streets only, no furniture.
   if (!openWorldShowDetail(settings) || (props.lamps.length === 0 && props.trees.length === 0)) return null;
 
-  const lampGlow = mixHex(accent, '#fff7d6', 0.35);
+  const lampGlow = mixHex(accent, '#ffe2a6', 0.58);
   const headOpacity = 0.95 * (1 - dayMix) + 0.4 * dayMix; // lamps rest by day
   const poolOpacity = 0.1 * (1 - dayMix); // light pools are a night thing
+  const structureColor = lowPoly
+    ? mixHex('#3e5a5f', accent, 0.18)
+    : tintStructure('#141b2c');
+  const foliageColor = mixHex(mixHex('#6fa37f', accent, 0.22), '#d5bd83', dayMix * 0.18);
 
   return (
     <group>
       {/* Lamp poles */}
       <Instances placements={props.lamps} geometry="cylinder" geometryArgs={[0.05, 0.08, 3.4, 6]} position={POLE_POS}>
-        <meshStandardMaterial {...surface} color={tintStructure('#141b2c')} roughness={0.7} metalness={lowPoly ? 0 : 0.45} />
+        <meshStandardMaterial {...surface} color={structureColor} roughness={0.7} metalness={lowPoly ? 0 : 0.45} />
       </Instances>
       {/* Lamp heads — emissive spheres standing in for point lights */}
       <Instances placements={props.lamps} geometry="sphere" geometryArgs={[0.16, 10, 10]} position={HEAD_POS}>
@@ -88,12 +92,12 @@ export default function OpenWorldStreetProps({ settings }) {
       )}
       {/* Holo-tree trunks around the plaza */}
       <Instances placements={props.trees} geometry="cylinder" geometryArgs={[0.07, 0.1, 1.1, 5]} position={TRUNK_POS}>
-        <meshStandardMaterial {...surface} color={tintStructure('#101626')} roughness={0.8} />
+        <meshStandardMaterial {...surface} color={structureColor} roughness={0.8} />
       </Instances>
       {/* Vibes uses solid faceted foliage; cyber keeps the established wireframe holo-trees. */}
       <Instances placements={props.trees} geometry="icosahedron" geometryArgs={[0.8, 1]} position={CANOPY_POS}>
         {lowPoly ? (
-          <meshStandardMaterial {...surface} color={mixHex(accent, '#5d916e', 0.55)} roughness={0.98} transparent opacity={0.9} />
+          <meshStandardMaterial {...surface} color={foliageColor} roughness={0.98} transparent opacity={0.94} />
         ) : (
           <meshBasicMaterial
             color={mixHex(accent, '#22c55e', 0.45)}

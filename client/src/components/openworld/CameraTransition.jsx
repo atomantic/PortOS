@@ -2,9 +2,27 @@ import { useRef } from 'react';
 import { useThree, useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { smoothstep } from '../../utils/easing';
+import { DEFAULT_SPAWN_Z, EYE_HEIGHT, THIRD_PERSON, thirdPersonCamera } from '../../utils/openWorldPlayerRig';
 
 const ORBITAL_POS = new THREE.Vector3(0, 25, 45);
 const ORBITAL_TARGET = new THREE.Vector3(0, 0, 0);
+const DEFAULT_EXPLORATION_RIG = { x: 0, y: EYE_HEIGHT, z: DEFAULT_SPAWN_Z };
+const DEFAULT_EXPLORATION_FRAME = thirdPersonCamera({
+  pos: DEFAULT_EXPLORATION_RIG,
+  yaw: THIRD_PERSON.isometricYaw,
+  pitch: 0,
+  pitchOffset: THIRD_PERSON.isometricPitch,
+});
+const DEFAULT_EXPLORATION_POS = new THREE.Vector3(
+  DEFAULT_EXPLORATION_FRAME.camera.x,
+  DEFAULT_EXPLORATION_FRAME.camera.y,
+  DEFAULT_EXPLORATION_FRAME.camera.z,
+);
+const DEFAULT_EXPLORATION_TARGET = new THREE.Vector3(
+  DEFAULT_EXPLORATION_FRAME.lookAt.x,
+  DEFAULT_EXPLORATION_FRAME.lookAt.y,
+  DEFAULT_EXPLORATION_FRAME.lookAt.z,
+);
 const DURATION = 0.8;
 
 export default function CameraTransition({ active, targetPos, targetLookAt, onTransitionComplete }) {
@@ -44,8 +62,8 @@ export default function CameraTransition({ active, targetPos, targetLookAt, onTr
     // Match the elevated diagonal exploration framing while the player rig takes over.
     // The transition target is only a short hand-off; PlayerController then tracks the
     // actual rover position and applies the same isometric offset every frame.
-    const endPos = active ? (targetPos || new THREE.Vector3(0, 10, 20)) : ORBITAL_POS;
-    const endTarget = active ? (targetLookAt || new THREE.Vector3(-2, 1.2, 8)) : ORBITAL_TARGET;
+    const endPos = active ? (targetPos || DEFAULT_EXPLORATION_POS) : ORBITAL_POS;
+    const endTarget = active ? (targetLookAt || DEFAULT_EXPLORATION_TARGET) : ORBITAL_TARGET;
 
     camera.position.lerpVectors(startPosRef.current, endPos, t);
 

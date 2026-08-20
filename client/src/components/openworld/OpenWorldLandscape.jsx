@@ -7,6 +7,8 @@ import { WORLD } from '../../utils/openWorldPlan';
 const TERRAIN_SIZE = 2400;
 const MOUNTAIN_INNER_RADIUS = 560;
 const MOUNTAIN_RADIUS_SPREAD = 190;
+const NEAR_HILL_INNER_RADIUS = 72;
+const NEAR_HILL_RADIUS_SPREAD = 28;
 
 const TERRAIN_VERT = `
   varying vec2 vUv;
@@ -146,6 +148,42 @@ function Mountain({ mountain, dayMix, surface }) {
   );
 }
 
+function NearHill({ hill, dayMix, surface, terrain }) {
+  const geometry = useMemo(() => {
+    const geom = new THREE.ConeGeometry(hill.radius, hill.height, hill.sides, 4);
+    const position = geom.getAttribute('position');
+    const colors = [];
+    const base = new THREE.Color(mixHex('#304b58', terrain.ridge, dayMix));
+    const lit = new THREE.Color(mixHex('#466b72', terrain.meadow, dayMix));
+    const cap = new THREE.Color(mixHex('#6b7890', '#d5c49c', dayMix));
+
+    for (let i = 0; i < position.count; i += 1) {
+      const y = (position.getY(i) + hill.height / 2) / hill.height;
+      const shoulder = smoothstepRange(0.16, 0.78, y);
+      const capMix = smoothstepRange(0.72, 1, y) * hill.cap;
+      const color = base.clone()
+        .lerp(lit, Math.min(1, hill.light + shoulder * 0.3))
+        .lerp(cap, capMix);
+      colors.push(color.r, color.g, color.b);
+    }
+
+    geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    geom.computeVertexNormals();
+    return geom;
+  }, [dayMix, hill.cap, hill.height, hill.light, hill.radius, hill.sides, terrain]);
+
+  useEffect(() => () => geometry.dispose(), [geometry]);
+
+  return (
+    <group position={hill.position} rotation={[0, hill.rotation, 0]} scale={hill.scale}>
+      <mesh position={[0, hill.height / 2 - 0.08, 0]}>
+        <primitive attach="geometry" object={geometry} />
+        <meshStandardMaterial vertexColors roughness={0.98} metalness={0} depthWrite {...surface} />
+      </mesh>
+    </group>
+  );
+}
+
 export default function OpenWorldLandscape({ settings }) {
   const { accent, terrain, surface } = useOpenWorldPalette();
   const dayMix = openWorldDayMix(settings);
@@ -176,12 +214,71 @@ export default function OpenWorldLandscape({ settings }) {
     return result;
   }, []);
 
+  // A second, closer ring gives the playable city a landscape silhouette. The far
+  // mountain ring is intentionally distant for orbital mode, but without this nearer
+  // ring the empty/offline world reads as a flat plane until live buildings arrive.
+  const nearHills = useMemo(() => {
+    const result = [];
+    const rand = seededRand(8421);
+    const count = 14;
+
+    for (let i = 0; i < count; i++) {
+      const angle = (i / count) * Math.PI * 2 + (rand() - 0.5) * 0.22;
+      const radius = NEAR_HILL_INNER_RADIUS + rand() * NEAR_HILL_RADIUS_SPREAD;
+      const x = Math.cos(angle) * radius;
+      const z = Math.sin(angle) * radius;
+      if (z < WORLD.shorelineZ + 6) continue;
+      result.push({
+        id: `near-hill-${i}`,
+        position: [x, 0, z],
+        rotation: -angle + Math.PI / 2,
+        height: 6 + rand() * 12,
+        radius: 8 + rand() * 10,
+        sides: rand() > 0.45 ? 5 : 6,
+        light: 0.22 + rand() * 0.32,
+        cap: rand() > 0.7 ? 0.55 : 0.12,
+        scale: [1.1 + rand() * 1.4, 0.72 + rand() * 0.28, 0.7 + rand() * 0.9],
+      });
+    }
+
+    return result;
+  }, []);
+
+  const roadsideRocks = useMemo(() => {
+    const rand = seededRand(6112);
+    return Array.from({ length: 10 }, (_, i) => {
+      const side = i % 2 === 0 ? -1 : 1;
+      const row = Math.floor(i / 2);
+      return {
+        id: `roadside-rock-${i}`,
+        position: [side * (6 + rand() * 2.2), 0, 38 + row * 7 + rand() * 2.2],
+        rotation: rand() * Math.PI * 2,
+        height: 0.9 + rand() * 1.2,
+        radius: 0.8 + rand() * 0.7,
+        sides: 5,
+        light: 0.18 + rand() * 0.26,
+        cap: 0,
+        scale: [1.05 + rand() * 0.45, 0.7 + rand() * 0.2, 0.85 + rand() * 0.35],
+      };
+    });
+  }, []);
+
   return (
     <group>
       <TerrainPlane dayMix={dayMix} accent={accent} terrain={terrain} />
       <group>
         {mountains.map((mountain) => (
           <Mountain key={mountain.id} mountain={mountain} dayMix={dayMix} surface={surface} />
+        ))}
+      </group>
+      <group>
+        {nearHills.map((hill) => (
+          <NearHill key={hill.id} hill={hill} dayMix={dayMix} surface={surface} terrain={terrain} />
+        ))}
+      </group>
+      <group>
+        {roadsideRocks.map((rock) => (
+          <NearHill key={rock.id} hill={rock} dayMix={dayMix} surface={surface} terrain={terrain} />
         ))}
       </group>
     </group>

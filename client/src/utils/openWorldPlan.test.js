@@ -144,6 +144,14 @@ describe('computeStreets', () => {
     expect(farEdge).toBeGreaterThanOrEqual(WORLD.shorelineZ);
   });
 
+  it('provides a southern arrival lane for the default rover drop-in', () => {
+    const arrival = streets.segments.find((s) => s.kind === 'arrival');
+    expect(arrival).toBeTruthy();
+    expect(arrival.x).toBe(0);
+    expect(arrival.z + arrival.length / 2).toBeGreaterThan(WORLD.landHalf);
+    expect(arrival.z - arrival.length / 2).toBeGreaterThan(PLAZA.sidewalkOuter);
+  });
+
   it('keeps every street on land', () => {
     for (const seg of streets.segments) {
       const cos = Math.cos(seg.angle);

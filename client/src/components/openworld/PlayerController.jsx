@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import PlayerAvatar from './PlayerAvatar';
 import ErrorBoundary from '../ErrorBoundary';
 import {
-  THIRD_PERSON, EYE_HEIGHT, BUILDING_COLLISION_RADIUS,
+  THIRD_PERSON, EYE_HEIGHT, DEFAULT_SPAWN_Z, BUILDING_COLLISION_RADIUS,
   thirdPersonCamera, resolveBoom,
   dampFactor, dampAngle, moveFacing, avatarState, bankAngle,
 } from '../../utils/openWorldPlayerRig';
@@ -20,7 +20,6 @@ const PROXIMITY_DISTANCE = 6;
 const MAX_CAMERA_HEIGHT = 160;
 const BUILDING_FLYOVER_HEIGHT = 12; // above this the player clears rooftops, so skip collision
 const AIRBORNE_HEIGHT = EYE_HEIGHT + 0.6; // above this the avatar reads as flying (hover state)
-const DEFAULT_SPAWN_Z = 42; // clear the central AI Core when an install has few/no app buildings
 const MOUSE_SENSITIVITY = 0.002;
 const PITCH_LIMIT = Math.PI / 2 - 0.02;
 

@@ -301,7 +301,7 @@ export default function OpenWorldScene({ apps, agentMap, onBuildingClick, onTogg
       <OpenWorldEnergyOverlay chronotype={chronotype} settings={renderSettings} />
       {neonLayers && <OpenWorldStarfield settings={renderSettings} />}
       {neonLayers && <OpenWorldShootingStars playSfx={playSfx} settings={renderSettings} />}
-      {!explorationMode && <OpenWorldCelestial settings={renderSettings} />}
+      {!explorationMode && !palette?.lowPoly && <OpenWorldCelestial settings={renderSettings} />}
       <OpenWorldSkyline settings={renderSettings} />
       <OpenWorldFederationHorizon instances={instances} settings={renderSettings} />
       <OpenWorldBackupVault backupStatus={backupStatus} settings={renderSettings} />

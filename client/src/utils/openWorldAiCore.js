@@ -16,8 +16,8 @@ import { PARCELS } from './openWorldPlan';
 
 export const AI_CORE = {
   position: PARCELS.aiCore.anchor, // city center — the spire rises above the building grid
-  height: 34, // tall enough to clear downtown and read as the central landmark
-  apexY: 34, // beams/glow originate from the apex
+  height: 28, // tall enough to clear downtown while leaving the plaza visible around it
+  apexY: 28, // beams/glow originate from the apex
   maxBeams: 6, // visible activity beams cap
   // How long an op with no terminal (complete/error) event lingers before being pruned,
   // so a dropped/never-finished call can't pin the core "busy" forever.

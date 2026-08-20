@@ -1,6 +1,6 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { PIXEL_FONT_URL, openWorldDayMix } from './openWorldConstants';
+import { PIXEL_FONT_URL, openWorldDayMix, mixHex } from './openWorldConstants';
 import { useOpenWorldPalette } from './OpenWorldPaletteContext';
 import OpenWorldLabel from './OpenWorldLabel';
 import { computeVoiceMarker } from '../../utils/openWorldVoiceMarker';
@@ -11,7 +11,7 @@ import { computeVoiceMarker } from '../../utils/openWorldVoiceMarker';
 // while listening, green while dictating, red on error, and barely-lit when voice mode is
 // off. Keeps to a small footprint so it reads as a district marker, not a landmark.
 export default function OpenWorldVoiceMarker({ voiceState, settings }) {
-  const { tintStructure } = useOpenWorldPalette();
+  const { tintStructure, lowPoly, surface } = useOpenWorldPalette();
   const marker = useMemo(() => computeVoiceMarker(voiceState), [voiceState]);
   const orbRef = useRef();
 
@@ -34,18 +34,20 @@ export default function OpenWorldVoiceMarker({ voiceState, settings }) {
   });
 
   const { position, baseRadius, poleHeight, beaconRadius, color, label } = marker;
+  const baseColor = lowPoly ? mixHex('#426267', '#d1b47f', dayMix) : tintStructure('#0c1620');
+  const poleColor = lowPoly ? mixHex('#38545a', '#718678', dayMix) : '#1a2533';
 
   return (
     <group position={position}>
       {/* Low disc base — anchors the marker to the ground */}
       <mesh position={[0, 0.1, 0]}>
         <cylinderGeometry args={[baseRadius, baseRadius * 1.15, 0.2, 24]} />
-        <meshStandardMaterial color={tintStructure('#0c1620')} emissive={color} emissiveIntensity={0.12} metalness={0.5} roughness={0.6} />
+        <meshStandardMaterial {...surface} color={baseColor} emissive={color} emissiveIntensity={0.12} metalness={lowPoly ? 0 : 0.5} roughness={0.6} />
       </mesh>
       {/* Slim antenna pole */}
       <mesh position={[0, poleHeight / 2, 0]}>
         <cylinderGeometry args={[0.14, 0.18, poleHeight, 12]} />
-        <meshStandardMaterial color="#1a2533" emissive={color} emissiveIntensity={0.15} metalness={0.7} roughness={0.4} />
+        <meshStandardMaterial {...surface} color={poleColor} emissive={color} emissiveIntensity={0.15} metalness={lowPoly ? 0 : 0.7} roughness={0.4} />
       </mesh>
       {/* Beacon orb — the live voice-state indicator */}
       <mesh ref={orbRef} position={[0, poleHeight + beaconRadius * 0.6, 0]}>

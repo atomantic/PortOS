@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import * as THREE from 'three';
 import { openWorldDayMix, seededRand } from './openWorldConstants';
+import { useOpenWorldPalette } from './OpenWorldPaletteContext';
 import { isInWater } from '../../utils/openWorldPlan';
 
 // Distant cyberpunk skyline silhouettes with neon trim
@@ -85,6 +86,7 @@ function DistantBuilding({ position, width, height, color, accent, dayMix }) {
 }
 
 export default function OpenWorldSkyline({ settings }) {
+  const { lowPoly } = useOpenWorldPalette();
   const dayMix = openWorldDayMix(settings);
   const buildings = useMemo(() => {
     const result = [];
@@ -124,6 +126,11 @@ export default function OpenWorldSkyline({ settings }) {
 
     return result;
   }, []);
+
+  // The Vibes world uses the low-poly hill ring as its horizon. The old translucent
+  // cyber skyline reads as floating glass slabs against the clean landscape, so keep
+  // that silhouette layer exclusive to the cyber art direction.
+  if (lowPoly) return null;
 
   return (
     <group>

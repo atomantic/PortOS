@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { openWorldDayMix, mixHex, getAccentColor } from './openWorldConstants';
 import { useOpenWorldPalette } from './OpenWorldPaletteContext';
-import { computeStreets, PARCELS } from '../../utils/openWorldPlan';
+import { computeStreets, PARCELS, PLAZA } from '../../utils/openWorldPlan';
 
 // The street network from the master plan (openWorldPlan.js): an octagonal ring road around
 // downtown, spokes out to every district, the grand avenue to the harbor, a plaza
@@ -69,6 +69,31 @@ export default function OpenWorldStreets({ settings }) {
       pushColored(flatRect(c.x, c.z, c.length, c.width, c.angle, 0.028), paintColor);
     }
 
+    // Dashed center marks make the southern drop-in lane read as a drivable approach
+    // instead of a dark rectangle, especially on the first mobile frame.
+    for (const arrival of streets.segments.filter((segment) => segment.kind === 'arrival')) {
+      const dashLength = 1.5;
+      const dashGap = 3.4;
+      const count = Math.floor(arrival.length / (dashLength + dashGap));
+      const cos = Math.cos(arrival.angle);
+      const sin = Math.sin(arrival.angle);
+      for (let i = 0; i < count; i++) {
+        const along = -arrival.length / 2 + dashLength / 2 + i * (dashLength + dashGap);
+        pushColored(
+          flatRect(arrival.x + cos * along, arrival.z + sin * along, dashLength, 0.12, arrival.angle, 0.032),
+          new THREE.Color(mixHex('#f2d49c', '#ffffff', dayMix * 0.35)),
+        );
+      }
+    }
+
+    // A faceted plaza floor gives the central AI Core a readable stage even when
+    // there are no live app towers yet. The outer sidewalk ring remains separate,
+    // so the avenue and ring road still read as the town's navigation landmarks.
+    const plaza = new THREE.CircleGeometry(PLAZA.radius, 12);
+    plaza.rotateX(-Math.PI / 2);
+    plaza.translate(0, 0.022, 0);
+    pushColored(plaza, new THREE.Color(mixHex('#2e4b55', '#c7b995', dayMix)));
+
     const ring = new THREE.RingGeometry(streets.plazaRing.inner, streets.plazaRing.outer, 48);
     ring.rotateX(-Math.PI / 2);
     ring.translate(0, 0.018, 0);
@@ -92,11 +117,11 @@ export default function OpenWorldStreets({ settings }) {
     paintGeom.dispose();
   }, [asphaltGeom, stripGeom, paintGeom]);
 
-  // Night: near-black asphalt with accent-glow borders. Day: concrete gray, strips
-  // muted to painted lane edges.
-  const asphaltColor = mixHex('#0b0f18', '#566273', dayMix);
+  // Night: deep blue asphalt with accent-glow borders. Day: slate-blue roads keep
+  // their contrast against the sage ground instead of disappearing into a gray slab.
+  const asphaltColor = mixHex('#152536', '#536d7a', dayMix);
   const stripOpacity = 0.55 * (1 - dayMix) + 0.25 * dayMix;
-  const paintOpacity = 0.12 + 0.16 * dayMix;
+  const paintOpacity = 0.16 + 0.18 * dayMix;
 
   return (
     <group>
@@ -104,7 +129,7 @@ export default function OpenWorldStreets({ settings }) {
         <meshStandardMaterial color={asphaltColor} roughness={0.92} metalness={0.08} />
       </mesh>
       <mesh geometry={stripGeom}>
-        <meshBasicMaterial color={mixHex(accent, '#dde6ee', dayMix)} transparent opacity={stripOpacity} toneMapped={false} />
+        <meshBasicMaterial color={mixHex(accent, '#f1d5a5', dayMix)} transparent opacity={stripOpacity} toneMapped={false} />
       </mesh>
       <mesh geometry={paintGeom}>
         <meshBasicMaterial vertexColors transparent opacity={paintOpacity} />

@@ -178,6 +178,14 @@ export function computeStreets() {
     kind: 'avenue',
   });
 
+  // A short southern arrival lane gives the rover a deliberate place to enter the
+  // world when the install has no app data yet. It connects the downtown ring to
+  // the default drop-in area without cutting through the central plaza.
+  segments.push({
+    ...segment(0, PLAZA.sidewalkOuter + 15, 0, WORLD.landHalf + 12, AVENUE_WIDTH),
+    kind: 'arrival',
+  });
+
   return { segments, crosswalks, plazaRing: { inner: PLAZA.radius, outer: PLAZA.sidewalkOuter } };
 }
 

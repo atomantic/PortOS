@@ -11,19 +11,20 @@
 // these (restating them at call sites is how walk collision and camera collision drift).
 export const EYE_HEIGHT = 1.6;
 export const BUILDING_COLLISION_RADIUS = 3.5;
+export const DEFAULT_SPAWN_Z = 52;
 
 export const THIRD_PERSON = {
-  boom: 13, // camera distance behind the character
-  shoulder: 0.9, // lateral over-the-shoulder offset (positive = right)
-  height: 3.2, // camera rise above the character's feet at pitch 0
+  boom: 16.5, // camera distance behind the character
+  shoulder: 0.95, // lateral over-the-shoulder offset (positive = right)
+  height: 3.6, // camera rise above the character's feet at pitch 0
   isometricYaw: Math.PI / 12, // slight diagonal framing keeps the downtown avenue in view
-  isometricPitch: 0.52, // about 30° above the landscape, keeping landmarks in the frame
-  fov: 38, // tighter perspective keeps the city readable from the elevated angle
+  isometricPitch: 0.62, // about 36° above the landscape, keeping landmarks in the frame
+  fov: 42, // broader perspective gives the rover room to move through the landscape
   minPitch: -0.45, // looking up from under the character — floor-limited
   maxPitch: 1.15, // looking down over the character
   minCamY: 0.6, // the camera never dips into the pavement
-  lookAhead: 0.8, // keep the rover on-screen while the road opens ahead
-  lookHeight: 0.8, // aim near the rover's roof so it stays clear of the mobile controls
+  lookAhead: 2.4, // compose the rover against the road and landmarks ahead
+  lookHeight: 0.85, // aim just above the rover so the landscape owns the frame
   camDampRate: 8, // camera position smoothing (lower = floatier)
   lookDampRate: 12, // aim smoothing (tighter than position so aim stays crisp)
 };

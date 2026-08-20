@@ -3,7 +3,7 @@ import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { computeDistrictBounds } from '../../utils/openWorldMiniMap';
 import { listRegions, regionWarpPadPosition } from '../../utils/openWorldRegions';
-import { PIXEL_FONT_URL, openWorldDayMix, openWorldShowDetail } from './openWorldConstants';
+import { PIXEL_FONT_URL, openWorldDayMix, openWorldShowDetail, mixHex } from './openWorldConstants';
 import { useOpenWorldPalette } from './OpenWorldPaletteContext';
 import OpenWorldLabel from './OpenWorldLabel';
 
@@ -86,6 +86,8 @@ function WarpPad({ region, active, detailed, dayMix, onTravel }) {
   const ringRef = useRef();
   const beamRef = useRef();
   const color = active ? '#fff4d6' : accent;
+  const padRadius = active ? 1.8 : 1.55;
+  const ringRadius = active ? 1.2 : 1.02;
   const position = regionWarpPadPosition(region);
 
   useFrame(({ clock }) => {
@@ -97,7 +99,7 @@ function WarpPad({ region, active, detailed, dayMix, onTravel }) {
       ringRef.current.rotation.z = t * 0.35;
       ringRef.current.material.opacity = 0.35 + pulse * 0.25;
     }
-    if (beamRef.current) beamRef.current.material.opacity = detailed ? 0.05 + pulse * 0.07 : 0;
+    if (beamRef.current) beamRef.current.material.opacity = detailed && active ? 0.05 + pulse * 0.07 : 0;
   });
 
   if (!position) return null;
@@ -112,16 +114,31 @@ function WarpPad({ region, active, detailed, dayMix, onTravel }) {
       }}
     >
       {/* The pad is always present, including the low tier, because it is an interaction
-          surface rather than decoration. Its hit area is intentionally larger than the disc. */}
+          surface rather than decoration. The player proximity radius remains larger than
+          the disc so it stays easy to use on foot. */}
       <mesh position={[0, 0, 0]}>
-        <cylinderGeometry args={[2.2, 2.2, 0.16, 24]} />
+        <cylinderGeometry args={[padRadius, padRadius, 0.16, 24]} />
         <meshStandardMaterial color={tintStructure('#13212a')} emissive={color} emissiveIntensity={active ? 1.1 : 0.5} roughness={0.8} metalness={0} />
       </mesh>
+      <mesh position={[0, 0.11, 0]}>
+        <cylinderGeometry args={[padRadius * 0.58, padRadius * 0.66, 0.05, 6]} />
+        <meshStandardMaterial
+          color={mixHex(color, '#183246', 0.42)}
+          emissive={color}
+          emissiveIntensity={active ? 0.75 : 0.3}
+          roughness={0.74}
+          metalness={0.08}
+        />
+      </mesh>
       <mesh ref={ringRef} position={[0, 0.1, 0]} rotation={[0, 0, Math.PI / 4]}>
-        <torusGeometry args={[1.45, 0.08, 8, 4]} />
+        <torusGeometry args={[ringRadius, 0.07, 8, 4]} />
         <meshBasicMaterial color={color} transparent opacity={0.5} blending={THREE.AdditiveBlending} depthWrite={false} />
       </mesh>
-      {detailed && (
+      <mesh position={[0, 0.17, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <circleGeometry args={[0.18, 6]} />
+        <meshBasicMaterial color={color} transparent opacity={0.9} toneMapped={false} />
+      </mesh>
+      {detailed && active && (
         <mesh ref={beamRef} position={[0, 3.2, 0]}>
           <cylinderGeometry args={[0.08, 0.72, 6.2, 12, 1, true]} />
           <meshBasicMaterial color={color} transparent opacity={0.1} blending={THREE.AdditiveBlending} depthWrite={false} side={THREE.DoubleSide} />
@@ -138,7 +155,7 @@ function WarpPad({ region, active, detailed, dayMix, onTravel }) {
       >
         {region.label}
       </OpenWorldLabel>
-      {detailed && (
+      {detailed && active && (
         <OpenWorldLabel
           position={[0, 5.98, 0]}
           fontSize={0.16}
