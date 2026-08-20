@@ -190,6 +190,7 @@ export * from './zipWriter.js';
 export * from './agentGuard/index.js';
 export * from './agentOutputMarkers.js';
 export * from './agentRunEvents.js';
+export * from './agentRunReconcile.js';
 export * from './agentSentinel.js';
 export * from './bareUrl.js';
 export * from './bashResolver.js';

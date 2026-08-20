@@ -7,9 +7,10 @@
 import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
-import { runEventsQuerySchema, runEventProjectionsQuerySchema, runEventProjectionIdSchema } from '../lib/cosValidation.js';
+import { runEventsQuerySchema, runEventProjectionsQuerySchema, runEventProjectionIdSchema, runEventReconcileSchema } from '../lib/cosValidation.js';
 import * as agentActivity from '../services/agentActivity.js';
 import * as runEventLog from '../services/agentRunEventLog.js';
+import * as runReconciler from '../services/agentRunReconciler.js';
 
 const router = Router();
 
@@ -98,6 +99,21 @@ router.get('/run-events/stats', asyncHandler(async (req, res) => {
 router.get('/run-events/projections', asyncHandler(async (req, res) => {
   const query = validateRequest(runEventProjectionsQuerySchema, req.query);
   res.json(await runEventLog.getRunProjections(query));
+}));
+
+// GET /run-events/reconcile - Where the ledger and the run records disagree.
+// Read-only: it reports drift, it never resolves it. The POST below is the only
+// thing that writes, and it is a POST precisely because closing a run record is
+// a mutation a user has to ask for.
+router.get('/run-events/reconcile', asyncHandler(async (req, res) => {
+  const query = validateRequest(runEventReconcileSchema, req.query);
+  res.json(await runReconciler.getRunReconciliation(query));
+}));
+
+// POST /run-events/reconcile - Close the run records the ledger proves are done
+router.post('/run-events/reconcile', asyncHandler(async (req, res) => {
+  const body = validateRequest(runEventReconcileSchema, req.body ?? {});
+  res.json(await runReconciler.repairRunRecords(body));
 }));
 
 // GET /run-events/run/:id - One run's projection plus the events behind it

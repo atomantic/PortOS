@@ -416,6 +416,8 @@ See [Agent Context (MCP)](./features/agent-context.md) for setup, transport head
 | GET | `/agents/activity/run-events/stats` | Ledger generation sizes and the count + age retention bounds |
 | GET | `/agents/activity/run-events/projections` | Current run status derived by replaying the ledger |
 | GET | `/agents/activity/run-events/run/:id` | One run's projection plus the events behind it |
+| GET | `/agents/activity/run-events/reconcile` | Where the ledger and the durable run records disagree (filters: `runId`, `limit`) — read-only |
+| POST | `/agents/activity/run-events/reconcile` | Close the run records the ledger proves are finished; reports what it closed |
 
 ### Notifications
 

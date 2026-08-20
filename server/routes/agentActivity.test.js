@@ -8,9 +8,12 @@ const mocks = vi.hoisted(() => ({
   getRunProjections: vi.fn(),
   getRunDiagnostic: vi.fn(),
   getRunEventLedgerStats: vi.fn(),
+  getRunReconciliation: vi.fn(),
+  repairRunRecords: vi.fn(),
 }));
 
 vi.mock('../services/agentRunEventLog.js', () => mocks);
+vi.mock('../services/agentRunReconciler.js', () => mocks);
 vi.mock('../services/agentActivity.js', () => ({
   getRecentActivities: vi.fn(async () => []),
   getActivityTimeline: vi.fn(async () => []),
@@ -30,6 +33,7 @@ const app = () => {
 };
 
 const get = (path) => request(app()).get(`/api/agents/activity${path}`);
+const post = (path, body) => request(app()).post(`/api/agents/activity${path}`).send(body);
 
 describe('GET /run-events', () => {
   beforeEach(() => {
@@ -117,5 +121,53 @@ describe('GET /run-events/run/:id', () => {
     await get('/run-events/stats');
     expect(mocks.getRunEventLedgerStats).toHaveBeenCalled();
     expect(mocks.getRunDiagnostic).not.toHaveBeenCalled();
+  });
+});
+
+describe('/run-events/reconcile', () => {
+  const emptyReport = { checkedAt: '2026-08-18T13:00:00.000Z', findings: [], summary: { checked: 0 } };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getRunReconciliation.mockResolvedValue(emptyReport);
+    mocks.repairRunRecords.mockResolvedValue({ ...emptyReport, repaired: [], skipped: 0 });
+  });
+
+  it('serves the drift report and forwards the parsed filters', async () => {
+    const res = await get('/run-events/reconcile?runId=r1&limit=25');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(emptyReport);
+    expect(mocks.getRunReconciliation).toHaveBeenCalledWith({ runId: 'r1', limit: 25 });
+  });
+
+  it('rejects an unknown filter rather than silently ignoring it', async () => {
+    expect((await get('/run-events/reconcile?nope=1')).status).toBe(400);
+  });
+
+  it('holds the report to the ledger read ceiling', async () => {
+    expect((await get('/run-events/reconcile?limit=100000')).status).toBe(400);
+    expect((await get('/run-events/reconcile?limit=0')).status).toBe(400);
+  });
+
+  it('never repairs from the GET', async () => {
+    await get('/run-events/reconcile');
+    expect(mocks.repairRunRecords).not.toHaveBeenCalled();
+  });
+
+  it('repairs only from the POST, and validates the body', async () => {
+    const res = await post('/run-events/reconcile', { runId: 'r1', limit: 10 });
+    expect(res.status).toBe(200);
+    expect(res.body.repaired).toEqual([]);
+    expect(mocks.repairRunRecords).toHaveBeenCalledWith({ runId: 'r1', limit: 10 });
+  });
+
+  it('accepts an empty POST body', async () => {
+    const res = await post('/run-events/reconcile');
+    expect(res.status).toBe(200);
+    expect(mocks.repairRunRecords).toHaveBeenCalledWith({});
+  });
+
+  it('rejects an unknown field in the POST body', async () => {
+    expect((await post('/run-events/reconcile', { force: true })).status).toBe(400);
   });
 });

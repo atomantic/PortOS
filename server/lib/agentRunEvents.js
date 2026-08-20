@@ -83,7 +83,14 @@ export const AGENT_RUN_EVENT_KINDS = Object.freeze([
   // — a kill that never took is exactly the discrepancy this ledger explains.
   'run.interrupted',
   // A PR-claim verification verdict was reached for the run's task.
-  'run.pr-verified'
+  'run.pr-verified',
+  // The durable run record was closed FROM this stream, because the ledger held
+  // a verdict the record never received (see `lib/agentRunReconcile.js`). The
+  // repair is itself a lifecycle fact: without it the record would show an
+  // `endTime` that no exit ever produced, and nothing would say where it came
+  // from. Adding this kind is not an envelope shape change — older builds fold
+  // unknown kinds as no-ops — so AGENT_RUN_EVENT_SCHEMA_VERSION stays at 1.
+  'run.reconciled'
 ]);
 
 const KIND_SET = new Set(AGENT_RUN_EVENT_KINDS);
@@ -380,6 +387,8 @@ const emptyProjection = (id) => ({
   outputBytes: null,
   lastOutputAt: null,
   prVerified: null,
+  reconciled: false,
+  reconciledCount: 0,
   eventCount: 0,
   firstEventAt: null,
   lastEventAt: null,
@@ -517,6 +526,21 @@ function applyKind(state, event) {
     case 'run.pr-verified':
       state.prVerified = data.verified === true;
       if (typeof data.prUrl === 'string') state.prUrl = data.prUrl;
+      break;
+    case 'run.reconciled':
+      // The record was closed from the stream. Recorded as a terminal status so
+      // the projection agrees with the record it just repaired — otherwise the
+      // next replay would still read `orphaned` beside a record that now says
+      // `failed`, which is the exact disagreement the repair removed.
+      // `state.orphaned` and `state.interrupted` are untouched, so how it ended
+      // is not lost to how it was closed.
+      state.reconciled = true;
+      state.reconciledCount += 1;
+      state.endedAt = state.endedAt ?? event.at;
+      if (typeof data.success === 'boolean' && !isTerminal(state)) {
+        state.status = data.success ? 'completed' : 'failed';
+        state.success = data.success;
+      }
       break;
     case 'run.finalized': {
       const success = data.success === true;

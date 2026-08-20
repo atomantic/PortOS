@@ -7,11 +7,30 @@ const api = vi.hoisted(() => ({
   getRunEventStats: vi.fn(),
   getRunEventProjections: vi.fn(),
   getRunEventDiagnostic: vi.fn(),
+  getRunReconciliation: vi.fn(),
+  repairRunRecords: vi.fn(),
 }));
 
 vi.mock('../../../services/api', () => api);
 
-import RunEventsTab, { projectionAnnotations, summarizeEventData } from './RunEventsTab';
+import RunEventsTab, { projectionAnnotations, summarizeEventData, describeFinding } from './RunEventsTab';
+
+const CLEAN_REPORT = {
+  checkedAt: '2026-08-18T13:00:00.000Z',
+  findings: [],
+  summary: { checked: 1, agentOnly: 0, findings: 0, repairable: 0, byFinding: {} },
+};
+
+const finding = (overrides = {}) => ({
+  runId: 'run-a',
+  agentId: 'agent-a',
+  taskId: 'task-a',
+  lastEventAt: '2026-08-18T11:00:00.000Z',
+  finding: 'record-open',
+  repairable: true,
+  detail: { ledgerStatus: 'failed', ledgerEndedAt: '2026-08-18T11:00:00.000Z', ledgerSuccess: false },
+  ...overrides,
+});
 
 const STATS = {
   activeEvents: 12,
@@ -61,6 +80,8 @@ describe('RunEventsTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.getRunEventStats.mockResolvedValue(STATS);
+    api.getRunReconciliation.mockResolvedValue(CLEAN_REPORT);
+    api.repairRunRecords.mockResolvedValue({ ...CLEAN_REPORT, repaired: [], skipped: 0 });
     api.getRunEventProjections.mockResolvedValue([projection()]);
     api.getRunEventDiagnostic.mockResolvedValue({
       projection: projection(),
@@ -162,5 +183,88 @@ describe('RunEventsTab — a failed detail fetch is not an empty run', () => {
     renderTab('/cos/run-events?run=run-a');
 
     expect(await screen.findByText(/may have aged out/)).toBeInTheDocument();
+  });
+});
+
+describe('RunEventsTab — reconciliation panel', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getRunEventStats.mockResolvedValue(STATS);
+    api.getRunEventProjections.mockResolvedValue([projection()]);
+    api.getRunEventDiagnostic.mockResolvedValue({ projection: projection(), events: [] });
+    api.getRunReconciliation.mockResolvedValue(CLEAN_REPORT);
+    api.repairRunRecords.mockResolvedValue({ ...CLEAN_REPORT, repaired: [], skipped: 0 });
+  });
+
+  it('says the record and the stream agree when nothing drifted', async () => {
+    renderTab();
+    expect(await screen.findByText('Every run record agrees with the stream that produced it.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /from ledger/ })).not.toBeInTheDocument();
+  });
+
+  it('distinguishes "could not check" from "nothing to fix"', async () => {
+    api.getRunReconciliation.mockRejectedValue(new Error('offline'));
+    renderTab();
+    expect(await screen.findByText(/Could not compare the ledger against the run records/)).toBeInTheDocument();
+  });
+
+  it('lists a drift finding and offers to repair only the repairable one', async () => {
+    api.getRunReconciliation.mockResolvedValue({
+      ...CLEAN_REPORT,
+      findings: [finding(), finding({ runId: 'run-b', finding: 'ledger-open', repairable: false, detail: { ledgerStatus: 'running', recordEndedAt: '2026-08-18T11:00:00.000Z' } })],
+      summary: { ...CLEAN_REPORT.summary, checked: 2, findings: 2, repairable: 1 },
+    });
+    renderTab();
+    expect(await screen.findByText(/Record still open · repairable/)).toBeInTheDocument();
+    expect(screen.getByText('Ledger missed the close')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Close 1 from ledger/ })).toBeInTheDocument();
+  });
+
+  it('confirms before closing any record, and reloads the ledger afterwards', async () => {
+    api.getRunReconciliation.mockResolvedValue({
+      ...CLEAN_REPORT,
+      findings: [finding()],
+      summary: { ...CLEAN_REPORT.summary, findings: 1, repairable: 1 },
+    });
+    api.repairRunRecords.mockResolvedValue({
+      ...CLEAN_REPORT,
+      repaired: [{ runId: 'run-a', from: 'failed', success: false, endTime: '2026-08-18T11:00:00.000Z' }],
+      skipped: 0,
+    });
+    renderTab();
+
+    await userEvent.click(await screen.findByRole('button', { name: /Close 1 from ledger/ }));
+    expect(api.repairRunRecords).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Close records' }));
+    expect(api.repairRunRecords).toHaveBeenCalledWith({ limit: 100 });
+    expect(await screen.findByText('Closed 1 run record from the ledger.')).toBeInTheDocument();
+    // The repair appended an event, so the projections and stats it changed are re-read.
+    expect(api.getRunEventProjections).toHaveBeenCalledTimes(2);
+  });
+
+  it('hides the panel entirely for an empty ledger', async () => {
+    api.getRunEventProjections.mockResolvedValue([]);
+    api.getRunReconciliation.mockResolvedValue({ ...CLEAN_REPORT, summary: { ...CLEAN_REPORT.summary, checked: 0 } });
+    renderTab();
+    expect(await screen.findByText(/No lifecycle events recorded yet/)).toBeInTheDocument();
+    expect(screen.queryByText('Ledger vs. run records')).not.toBeInTheDocument();
+  });
+});
+
+describe('describeFinding', () => {
+  it('names both sides of a verdict disagreement', () => {
+    expect(describeFinding({ finding: 'verdict-mismatch', detail: { ledgerSuccess: true, recordSuccess: false } }))
+      .toBe('ledger success vs record failure');
+  });
+
+  it('says which side is behind for a missing close', () => {
+    expect(describeFinding({ finding: 'ledger-open', detail: { ledgerStatus: 'running' } }))
+      .toBe('ledger running, record closed');
+  });
+
+  it('falls back to the ledger status for the remaining findings', () => {
+    expect(describeFinding({ finding: 'record-open', detail: { ledgerStatus: 'failed' } })).toBe('ledger failed');
+    expect(describeFinding({ finding: 'record-missing', detail: {} })).toBe('ledger unknown');
   });
 });

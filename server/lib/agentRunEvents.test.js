@@ -428,3 +428,43 @@ describe('projectRunStates — the second-slice boundaries (#4540)', () => {
     }
   });
 });
+
+describe('projectRunStates — run.reconciled (#4540)', () => {
+  const at = (hhmm) => `2026-08-18T${hhmm}:00.000Z`;
+
+  it('gives an orphaned run the terminal status its repaired record now carries', () => {
+    const [state] = projectRunStates([
+      buildRunEvent({ kind: 'run.spawned', runId: 'r1', agentId: 'a1', at: at('10:00') }),
+      buildRunEvent({ kind: 'run.orphan-recovered', runId: 'r1', agentId: 'a1', at: at('10:30'), data: { pid: 4242 } }),
+      buildRunEvent({ kind: 'run.reconciled', runId: 'r1', agentId: 'a1', at: at('11:00'), data: { fromStatus: 'orphaned', success: false } })
+    ]);
+    expect(state).toMatchObject({ status: 'failed', success: false, reconciled: true, reconciledCount: 1 });
+    // How it ended is not lost to how it was closed.
+    expect(state.orphaned).toBe(true);
+  });
+
+  it('never overrides a verdict the run reported itself', () => {
+    const [state] = projectRunStates([
+      buildRunEvent({ kind: 'run.spawned', runId: 'r1', at: at('10:00') }),
+      buildRunEvent({ kind: 'run.finalized', runId: 'r1', at: at('10:30'), data: { success: true, exitCode: 0 } }),
+      buildRunEvent({ kind: 'run.reconciled', runId: 'r1', at: at('11:00'), data: { fromStatus: 'orphaned', success: false } })
+    ]);
+    expect(state).toMatchObject({ status: 'completed', success: true, reconciled: true });
+    expect(state.endedAt).toBe(at('10:30'));
+  });
+
+  it('leaves the status alone when the repair carried no verdict', () => {
+    const [state] = projectRunStates([
+      buildRunEvent({ kind: 'run.spawned', runId: 'r1', at: at('10:00') }),
+      buildRunEvent({ kind: 'run.reconciled', runId: 'r1', at: at('11:00'), data: { fromStatus: 'running' } })
+    ]);
+    expect(state.status).toBe('running');
+    expect(state.reconciled).toBe(true);
+    expect(state.success).toBeNull();
+  });
+
+  it('reports no repair on a run that never needed one', () => {
+    const [state] = projectRunStates([buildRunEvent({ kind: 'run.spawned', runId: 'r1', at: at('10:00') })]);
+    expect(state).toMatchObject({ reconciled: false, reconciledCount: 0 });
+  });
+});

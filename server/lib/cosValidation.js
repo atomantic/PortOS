@@ -1734,3 +1734,12 @@ export const runEventProjectionsQuerySchema = z.object({
 export const runEventProjectionIdSchema = z.object({
   id: z.string().min(1).max(140)
 });
+
+// Reconciliation report/repair (#4540). `runId` narrows to one run; `limit`
+// shares the ledger's read ceiling because the projections being reconciled
+// come straight off that read path — a separate ceiling here could only
+// disagree with it.
+export const runEventReconcileSchema = z.object({
+  runId: z.string().min(1).max(128).optional(),
+  limit: z.coerce.number().int().min(1).max(RUN_EVENT_READ_LIMITS.max).optional()
+}).strict();
