@@ -31,6 +31,14 @@ The default is disabled:
 
 An older install without this settings slice behaves exactly like the default above. Known fields are validated while unknown future fields are preserved, so rolling an install back does not erase newer provider settings.
 
+Image and video models are selected the same way as audio, from
+**Settings → Sharing**. Their candidate list comes from
+`GET /api/settings/media-share-candidates`, which enumerates this instance's local
+image/video model catalogs with the same readiness projection the wire status
+reports. That endpoint is **local-only and never exposed to peers** — it lists
+unshared local model inventory, which is exactly what a peer has no business
+reading.
+
 ## Configure a consumer
 
 1. Register the provider under **Instances** and make the relationship mutual so the provider recognizes this consumer's instance id.
@@ -50,6 +58,14 @@ The consumer default is also disabled:
   }
 }
 ```
+
+A probe asks each peer for **every** kind this build knows
+(`?kinds=audio,image,video`), not just the kinds already allowlisted here. Scoping
+the question to the allowlist was a chicken-and-egg bug: a fresh consumer
+allowlists nothing, so it asked for audio only, so the peer advertised no visual
+capabilities, so there was never an image or video row to check. A provider too
+old to know the query parameter ignores it and returns the audio-only projection
+it always did.
 
 This configuration and the last sanitized capacity snapshot live only on the local peer record. They are stripped from announce responses and do not become federation records. Older peers without the wire-v1 endpoint show as **older peer** rather than making the normal instance probe fail.
 
@@ -138,8 +154,22 @@ Set it under **Instances → Unattended render routing**, which offers only
 (peer, model) pairs that are both locally allowlisted and currently advertised
 by that peer. A kind set to `null` (the default) renders locally.
 
+An unattended route inherits the same text-to-image/text-to-video boundary the
+interactive routes enforce. A job carrying an init image, reference images,
+keyframes, a clip to extend, IC-LoRA references, LoRA weights, or chained chunks
+is rejected with `400 MEDIA_PROVIDER_INPUT_UNSUPPORTED` naming what has to go,
+rather than being silently rendered without its conditioning — a shot that
+quietly ignores its reference frame is worse unattended than interactively,
+because nobody is watching to notice.
+
 Three properties are worth stating explicitly:
 
+- **Every unattended path routes, or none does.** The Creative Director planner
+  tool, the scene runner, and first-pass portraits/scene frames all enqueue
+  through one helper (`enqueueUnattendedMediaJob`). A route that applied to a
+  project's planner renders but not its scene renders would be worse than no
+  routing: half the shots would come off the peer's model and half off the local
+  one, with nothing to explain why they don't match.
 - **The agent names nothing.** The planner's own `modelId` is discarded in favour
   of the route's — a peer advertises its own model ids, and a local model name
   would fail the peer's allowlist check with a confusing "not allowlisted".

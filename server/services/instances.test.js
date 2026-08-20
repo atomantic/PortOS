@@ -1163,7 +1163,7 @@ describe('instances.js', () => {
         }
         if (String(url).endsWith('/api/apps')) return { ok: true, json: async () => [] };
         if (String(url).includes('/api/instances/sync-status')) return { ok: true, json: async () => ({}) };
-        if (String(url).endsWith('/api/federation/media/v1/status')) {
+        if (String(url).includes('/api/federation/media/v1/status')) {
           return { ok: true, status: 200, text: async () => JSON.stringify(providerStatus) };
         }
         return { ok: false, status: 404, text: async () => '' };
@@ -1172,8 +1172,11 @@ describe('instances.js', () => {
       const result = await probePeer(target);
 
       expect(result.mediaProviderStatus).toMatchObject({ state: 'ready', reason: null });
+      // Every known kind is requested, not just already-allowlisted ones — a
+      // fresh consumer has no visual allowlist, and scoping the question to it
+      // is what previously made image/video capabilities undiscoverable (#4348).
       expect(fetch).toHaveBeenCalledWith(
-        'http://10.0.0.1:5555/api/federation/media/v1/status',
+        'http://10.0.0.1:5555/api/federation/media/v1/status?kinds=audio,image,video',
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
     });

@@ -65,6 +65,54 @@ export function normalizeMediaRoutingConfig(settings) {
   return config;
 }
 
+// Params that ask for conditioning wire v1 cannot carry. The interactive routes
+// reject these outright rather than dropping them, because "silently dropping
+// the source image a user pinned returns a plausible render of the wrong
+// thing" — and that reasoning is STRONGER here, not weaker: an unattended run
+// has nobody watching to notice the shot came back unconditioned. Keyed by the
+// param a planner actually writes, valued by the noun the error names.
+const UNSUPPORTED_CONDITIONING = Object.freeze({
+  initImagePath: 'an init image',
+  sourceImagePath: 'a source image',
+  sourceImageFile: 'a source image',
+  lastImageFile: 'an end frame',
+  referenceImagePaths: 'reference images',
+  icReferenceVideoIds: 'IC-LoRA references',
+  icReferenceImageFiles: 'IC-LoRA references',
+  keyframes: 'keyframes',
+  extendFromVideoId: 'a source video to extend',
+  loraFilenames: 'LoRA weights',
+  loraPaths: 'LoRA weights',
+});
+
+const isPresent = (value) => (Array.isArray(value) ? value.length > 0 : value !== undefined && value !== null && value !== '');
+
+/**
+ * Refuse a routed job whose conditioning the wire would silently drop.
+ *
+ * `buildFederatedMediaRequest` projects only the text-to-image/text-to-video
+ * fields onto the wire, so an unrecognized param does not fail validation — it
+ * just disappears. Without this guard a scene render conditioned on a reference
+ * frame would come back as an unrelated text-only image and be filed by its
+ * completion hook as though it were correct.
+ */
+function assertRoutableConditioning(kind, params) {
+  const unsupported = [...new Set(
+    Object.entries(UNSUPPORTED_CONDITIONING)
+      .filter(([key]) => isPresent(params?.[key]))
+      .map(([, label]) => label),
+  )];
+  // A multi-chunk video is chained locally from its own prior output; the
+  // provider renders one clip and knows nothing about the chain.
+  if (kind === 'video' && Number(params?.chunks) > 1) unsupported.push('chained chunks');
+  if (!unsupported.length) return;
+  throw new ServerError(
+    `A federated media provider renders text-to-${kind} only — this ${kind} job uses ${unsupported.join(' and ')}. `
+    + `Clear the ${kind} route under Instances to render it locally.`,
+    { status: 400, code: 'MEDIA_PROVIDER_INPUT_UNSUPPORTED' },
+  );
+}
+
 /**
  * Resolve the configured default provider for one unattended job, if any.
  *
@@ -99,6 +147,7 @@ export async function resolveDefaultMediaRoute({ kind, params }) {
       { status: 400, code: 'MEDIA_PROVIDER_PROMPT_REQUIRED' },
     );
   }
+  assertRoutableConditioning(kind, params);
   const request = buildFederatedMediaRequest({
     kind,
     engine: route.engine,
@@ -116,6 +165,14 @@ export async function resolveDefaultMediaRoute({ kind, params }) {
     kind,
     request,
   });
+  // NOTE: the geometry forwarded here was snapped to the LOCAL model catalog by
+  // the enqueue path ahead of this resolver, and wire v1's capability payload
+  // publishes no frame-stride/canvas constraints to re-snap it against. A
+  // provider whose model has its own frame rule (Wan 2.2 needs
+  // `(numFrames - 1) % frameStride === 0`) therefore rejects such a job with a
+  // typed `WAN22_INVALID_FRAME_COUNT` — loud and fail-closed, but it makes that
+  // pairing unusable until the capability contract carries the constraint. That
+  // negotiation is its own slice; see the follow-up issue.
   return { peer, request, remoteMedia };
 }
 
@@ -143,4 +200,33 @@ export function routedJobParams(params, { request, remoteMedia }) {
   const jobParams = { ...(params || {}) };
   for (const key of LOCAL_ONLY_ROUTED_PARAMS) delete jobParams[key];
   return { ...jobParams, prompt: '', modelId: request.modelId, remoteMedia };
+}
+
+/**
+ * THE enqueue entry point for unattended media work.
+ *
+ * Every autonomous render — the Creative Director planner tool, the scene
+ * runner, first-pass portraits and scene frames — must go through here rather
+ * than calling `enqueueJob` directly, or a configured route silently applies to
+ * some of a project's renders and not others. That inconsistency is worse than
+ * no routing at all: half a project renders on the peer's model and half on the
+ * local one, with no indication why the shots don't match.
+ *
+ * Signature-compatible with `enqueueJob` so a call site converts by changing
+ * the function name.
+ *
+ * @param {object} args
+ * @param {'image'|'video'|'audio'} args.kind
+ * @param {object} args.params
+ * @param {string} [args.owner]
+ * @returns {Promise<object>} The queued-job descriptor `enqueueJob` returns.
+ */
+export async function enqueueUnattendedMediaJob({ kind, params, owner }) {
+  const routed = await resolveDefaultMediaRoute({ kind, params });
+  const { enqueueJob } = await import('../mediaJobQueue/index.js');
+  return enqueueJob({
+    kind,
+    params: routed ? routedJobParams(params, routed) : params,
+    ...(owner === undefined ? {} : { owner }),
+  });
 }

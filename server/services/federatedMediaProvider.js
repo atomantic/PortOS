@@ -360,6 +360,40 @@ export async function getFederatedMediaProviderStatus(config, { kinds = ['audio'
   };
 }
 
+/**
+ * Every LOCAL model this instance could offer to share, per visual kind, with
+ * the same readiness projection the wire status uses.
+ *
+ * This is the provider-side answer to a chicken-and-egg problem: the status
+ * endpoint only ever describes models the operator has ALREADY allowlisted, so
+ * it can never tell the Sharing UI what there is to allowlist in the first
+ * place. Audio doesn't need this — its Sharing UI is driven by the music-engine
+ * catalog, which already enumerates candidates.
+ *
+ * LOCAL ONLY. This is exposed under `/api/` for this instance's own settings
+ * screen, never on the peer surface: it enumerates unshared local models, which
+ * is exactly the inventory a peer has no business reading.
+ *
+ * @returns {Promise<{image: object[], video: object[]}>}
+ */
+export async function listLocalMediaShareCandidates() {
+  const pythonPath = await resolveLocalRuntimePythonPath(['image', 'video']);
+  const catalogs = { image: getImageModels(), video: getVideoModels() };
+  const entries = await Promise.all(
+    Object.entries(catalogs).map(async ([kind, models]) => [
+      kind,
+      (await localGeneratorCapabilities(kind, pythonPath, {
+        models,
+        // Offer the whole local catalog as candidates rather than the
+        // configured subset — that subset is what this call exists to help the
+        // operator choose.
+        configuredList: models.map((model) => ({ engine: 'local', modelId: model.id })),
+      })).map(publicCapability),
+    ]),
+  );
+  return Object.fromEntries(entries);
+}
+
 const jobOwner = (callerId) => `${OWNER_PREFIX}${callerId}`;
 const jobBelongsToCaller = (job, callerId) =>
   job?.owner === jobOwner(callerId)

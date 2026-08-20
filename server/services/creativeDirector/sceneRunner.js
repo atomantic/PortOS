@@ -36,7 +36,8 @@ import { CD_MAX_SCENE_RETRIES } from '../../lib/creativeDirectorPrompts.js';
 import { extractLastFrame, sampleEvaluationFrames } from '../videoGen/local.js';
 import { VIDEO_GEN_MODE } from '../videoGen/modes.js';
 import { grokVideoJobParams, resolveVideoBackendPin } from '../videoGen/backendPin.js';
-import { enqueueJob, mediaJobEvents } from '../mediaJobQueue/index.js';
+import { mediaJobEvents } from '../mediaJobQueue/index.js';
+import { enqueueUnattendedMediaJob } from '../federatedMedia/defaultRouting.js';
 import { getSettings } from '../settings.js';
 import { updateScene, updateProject, getProject } from './local.js';
 import { dispatchSceneEvaluation } from './sceneEvaluator.js';
@@ -242,7 +243,7 @@ export async function runSceneRender(project, scene) {
   }
 
   const owner = `cd:${project.id}:${scene.sceneId}`;
-  const { jobId } = enqueueJob({ kind: 'video', params, owner });
+  const { jobId } = await enqueueUnattendedMediaJob({ kind: 'video', params, owner });
 
   // Wire one-shot listeners scoped to this jobId so we can hand off to the
   // evaluator on success or schedule a retry on failure. mediaJobEvents

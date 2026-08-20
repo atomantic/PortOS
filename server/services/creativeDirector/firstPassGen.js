@@ -28,7 +28,7 @@
  * auto-cast request. Autonomy seeds what it can; the director takes over.
  */
 
-import { enqueueJob } from '../mediaJobQueue/index.js';
+import { enqueueUnattendedMediaJob } from '../federatedMedia/defaultRouting.js';
 import { getSettings } from '../settings.js';
 import { resolveImageCleaners } from '../imageGen/index.js';
 import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
@@ -161,7 +161,7 @@ export async function enqueueFirstPassPortraits(members = [], project = null) {
       skipped.push({ ingredientId, reason: skip });
       continue;
     }
-    const queued = enqueueJob({
+    const queued = await enqueueUnattendedMediaJob({
       kind: 'image',
       params: {
         ...resolved.jobParams,
@@ -265,7 +265,7 @@ export async function enqueueFirstPassSceneFrames(project) {
       skipped.push({ sceneId: scene.sceneId, reason: 'no-prompt' });
       continue;
     }
-    const queued = enqueueJob({
+    const queued = await enqueueUnattendedMediaJob({
       kind: 'image',
       params: {
         ...resolved.jobParams,

@@ -6,6 +6,7 @@ vi.mock('../../services/api', () => ({
   getSettings: vi.fn(),
   listMusicEngines: vi.fn(),
   updateSettings: vi.fn(),
+  getMediaShareCandidates: vi.fn(),
 }));
 vi.mock('../ui/Toast', () => ({
   default: Object.assign(vi.fn(), {
@@ -16,7 +17,7 @@ vi.mock('../ui/Toast', () => ({
   }),
 }));
 
-import { getAuthStatus, getSettings, listMusicEngines, updateSettings } from '../../services/api';
+import { getAuthStatus, getMediaShareCandidates, getSettings, listMusicEngines, updateSettings } from '../../services/api';
 import { SharingTab } from './SharingTab';
 
 const strictToggle = () => screen.getByLabelText(/Enforce per-peer sharing settings/i);
@@ -26,6 +27,7 @@ beforeEach(() => {
   getAuthStatus.mockResolvedValue({ enabled: false });
   getSettings.mockResolvedValue({ sharingDisplayName: '', sharingBio: '' });
   listMusicEngines.mockResolvedValue({ engines: [] });
+  getMediaShareCandidates.mockResolvedValue({ image: [], video: [] });
   updateSettings.mockResolvedValue({});
 });
 
@@ -85,6 +87,10 @@ describe('SharingTab — federated media provider (#4348)', () => {
             modelId: 'minimax-music3',
             futureModelField: 'keep-model-too',
           }],
+          // Every kind's list is written on each save, so a peer that shares
+          // only audio still records an explicit empty visual allowlist.
+          imageModels: [],
+          videoModels: [],
           futureField: 'keep-too',
         },
       },

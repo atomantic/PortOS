@@ -113,6 +113,19 @@ router.get('/', asyncHandler(async (req, res) => {
   res.json(sanitizeSettingsForResponse(settings));
 }));
 
+// GET /api/settings/media-share-candidates
+// The local image/video models this instance COULD share as a federated media
+// provider, so the Sharing tab can offer them. The peer-facing status endpoint
+// can't answer this: it only ever describes already-allowlisted models, which
+// is the chicken-and-egg that left imageModels/videoModels unconfigurable.
+// Deliberately local-only (this is unshared local model inventory, which no
+// peer should read) — it lives here, behind the normal /api/* auth gate,
+// rather than on /api/federation/media/v1.
+router.get('/media-share-candidates', asyncHandler(async (_req, res) => {
+  const { listLocalMediaShareCandidates } = await import('../services/federatedMediaProvider.js');
+  res.json(await listLocalMediaShareCandidates());
+}));
+
 // GET /api/settings/ai-assignments
 router.get('/ai-assignments', asyncHandler(async (_req, res) => {
   res.json(await getAiAssignments());

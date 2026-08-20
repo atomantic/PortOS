@@ -8,14 +8,19 @@ vi.mock('./remoteSubmission.js', () => ({
   prepareRemoteMediaJob: (...args) => prepareRemoteMediaJob(...args),
 }));
 
-const { normalizeMediaRoutingConfig, resolveDefaultMediaRoute, routedJobParams } =
-  await import('./defaultRouting.js');
+const enqueueJob = vi.fn(() => ({ jobId: 'mj-test' }));
+vi.mock('../mediaJobQueue/index.js', () => ({ enqueueJob: (...args) => enqueueJob(...args) }));
+
+const {
+  normalizeMediaRoutingConfig, resolveDefaultMediaRoute, routedJobParams, enqueueUnattendedMediaJob,
+} = await import('./defaultRouting.js');
 
 const route = { peerId: 'peer-1', engine: 'comfy', modelId: 'sdxl-remote' };
 const withRoute = (mediaRouting) => ({ federation: { mediaRouting } });
 
 beforeEach(() => {
   getSettings.mockReset();
+  enqueueJob.mockClear();
   prepareRemoteMediaJob.mockReset();
   prepareRemoteMediaJob.mockImplementation(async ({ peerId, kind, request }) => ({
     peer: { id: peerId },
@@ -116,5 +121,78 @@ describe('routedJobParams', () => {
     expect(params.catalogAttach).toEqual({ id: 'ing-1' });
     expect(params.remoteMedia).toEqual({ peerId: 'peer-1' });
     expect(params.modelId).toBe('sdxl-remote');
+  });
+});
+
+// #4348 review follow-ups.
+describe('routed conditioning guard', () => {
+  const route = { peerId: 'peer-1', engine: 'comfy', modelId: 'sdxl-remote' };
+
+  beforeEach(() => {
+    getSettings.mockResolvedValue({ federation: { mediaRouting: { image: route, video: route } } });
+  });
+
+  // The interactive routes reject these rather than dropping them, because a
+  // render that silently ignores its source image comes back plausible and
+  // wrong. Unattended work has nobody watching, so the guard matters more here.
+  it.each([
+    ['initImagePath', { initImagePath: '/x/a.png' }, 'an init image'],
+    ['sourceImagePath', { sourceImagePath: '/x/a.png' }, 'a source image'],
+    ['referenceImagePaths', { referenceImagePaths: ['/x/a.png'] }, 'reference images'],
+    ['loraFilenames', { loraFilenames: ['style.safetensors'] }, 'LoRA weights'],
+    ['keyframes', { keyframes: [{ at: 0 }] }, 'keyframes'],
+  ])('refuses a routed image job carrying %s', async (_name, extra, label) => {
+    await expect(resolveDefaultMediaRoute({ kind: 'image', params: { prompt: 'p', ...extra } }))
+      .rejects.toMatchObject({ code: 'MEDIA_PROVIDER_INPUT_UNSUPPORTED' });
+    await expect(resolveDefaultMediaRoute({ kind: 'image', params: { prompt: 'p', ...extra } }))
+      .rejects.toThrow(new RegExp(label));
+    expect(prepareRemoteMediaJob).not.toHaveBeenCalled();
+  });
+
+  it('refuses a chained multi-chunk video, which the provider cannot continue', async () => {
+    await expect(resolveDefaultMediaRoute({ kind: 'video', params: { prompt: 'p', chunks: 3 } }))
+      .rejects.toThrow(/chained chunks/);
+  });
+
+  it('allows an empty or single-chunk value through', async () => {
+    await expect(resolveDefaultMediaRoute({
+      kind: 'video',
+      params: { prompt: 'p', chunks: 1, referenceImagePaths: [], loraFilenames: [] },
+    })).resolves.toMatchObject({ peer: { id: 'peer-1' } });
+  });
+});
+
+describe('enqueueUnattendedMediaJob', () => {
+  const route = { peerId: 'peer-1', engine: 'comfy', modelId: 'sdxl-remote' };
+
+  // Every autonomous render path funnels through this helper. If one call site
+  // kept calling enqueueJob directly, a configured route would apply to some of
+  // a project's shots and not others, with no indication why they don't match.
+  it('enqueues locally, untouched, when the kind has no route', async () => {
+    getSettings.mockResolvedValue({});
+    await enqueueUnattendedMediaJob({ kind: 'image', params: { prompt: 'p' }, owner: 'cd:1' });
+    expect(enqueueJob).toHaveBeenCalledWith({ kind: 'image', params: { prompt: 'p' }, owner: 'cd:1' });
+  });
+
+  it('enqueues the routed marker when the kind has a route', async () => {
+    getSettings.mockResolvedValue({ federation: { mediaRouting: { image: route } } });
+    await enqueueUnattendedMediaJob({ kind: 'image', params: { prompt: 'p' }, owner: 'cd:1' });
+    const { params } = enqueueJob.mock.calls.at(-1)[0];
+    expect(params.prompt).toBe('');
+    expect(params.remoteMedia.request.prompt).toBe('p');
+  });
+
+  it('omits owner entirely when the caller passed none', async () => {
+    getSettings.mockResolvedValue({});
+    await enqueueUnattendedMediaJob({ kind: 'audio', params: { prompt: 'p' } });
+    expect(enqueueJob.mock.calls.at(-1)[0]).not.toHaveProperty('owner');
+  });
+
+  it('propagates a provider rejection instead of falling back to a local enqueue', async () => {
+    getSettings.mockResolvedValue({ federation: { mediaRouting: { video: route } } });
+    prepareRemoteMediaJob.mockRejectedValue(new Error('Media provider is at capacity'));
+    await expect(enqueueUnattendedMediaJob({ kind: 'video', params: { prompt: 'p' } }))
+      .rejects.toThrow('Media provider is at capacity');
+    expect(enqueueJob).not.toHaveBeenCalled();
   });
 });

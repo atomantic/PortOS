@@ -2,9 +2,18 @@ import { useEffect, useState } from 'react';
 import { Save, Loader2, Users, ShieldCheck, Network } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
-import { getAuthStatus, getSettings, listMusicEngines, updateSettings } from '../../services/api';
+import { getAuthStatus, getMediaShareCandidates, getSettings, listMusicEngines, updateSettings } from '../../services/api';
 
 const modelKey = ({ engine, modelId }) => `${engine}\u0000${modelId}`;
+
+// Image and video share one shape: a flat candidate list from the server, each
+// entry already carrying the readiness projection the wire status reports. Audio
+// is not in this table — its picker is driven by the music-engine catalog, which
+// nests models under engines.
+const VISUAL_KINDS = Object.freeze([
+  { kind: 'image', label: 'image', field: 'imageModels' },
+  { kind: 'video', label: 'video', field: 'videoModels' },
+]);
 const normalizeSelectedModels = (models) => Array.isArray(models)
   ? models.filter((model) => model && typeof model.engine === 'string' && typeof model.modelId === 'string')
     .map((model) => ({ ...model, engine: model.engine, modelId: model.modelId }))
@@ -36,6 +45,9 @@ export function SharingTab() {
   const [providerEnabled, setProviderEnabled] = useState(false);
   const [providerMaxQueuedJobs, setProviderMaxQueuedJobs] = useState(2);
   const [providerModels, setProviderModels] = useState([]);
+  const [visualCandidates, setVisualCandidates] = useState({ image: [], video: [] });
+  const [providerVisualModels, setProviderVisualModels] = useState({ image: [], video: [] });
+  const [savedProviderVisualModels, setSavedProviderVisualModels] = useState({ image: [], video: [] });
   const [savedProviderEnabled, setSavedProviderEnabled] = useState(false);
   const [savedProviderMaxQueuedJobs, setSavedProviderMaxQueuedJobs] = useState(2);
   const [savedProviderModels, setSavedProviderModels] = useState([]);
@@ -48,6 +60,14 @@ export function SharingTab() {
     listMusicEngines({ silent: true })
       .then((music) => setMusicEngines(Array.isArray(music?.engines) ? music.engines : []))
       .catch(() => setMusicEngines([]));
+    // Same rationale as the engine probe above: readiness inspection can touch
+    // the model cache, so keep it off the critical path for the other controls.
+    getMediaShareCandidates({ silent: true })
+      .then((candidates) => setVisualCandidates({
+        image: Array.isArray(candidates?.image) ? candidates.image : [],
+        video: Array.isArray(candidates?.video) ? candidates.video : [],
+      }))
+      .catch(() => setVisualCandidates({ image: [], video: [] }));
     Promise.all([
       getSettings({ silent: true }),
       getAuthStatus({ silent: true }).catch(() => ({ enabled: false })),
@@ -69,6 +89,8 @@ export function SharingTab() {
         const enabled = provider.enabled === true;
         const maxQueuedJobs = Number.isInteger(provider.maxQueuedJobs) ? provider.maxQueuedJobs : 2;
         const models = normalizeSelectedModels(provider.audioModels);
+        const visual = Object.fromEntries(VISUAL_KINDS.map(({ kind, field }) =>
+          [kind, normalizeSelectedModels(provider[field])]));
         setProviderSettings(provider);
         setProviderEnabled(enabled);
         setProviderMaxQueuedJobs(maxQueuedJobs);
@@ -76,6 +98,8 @@ export function SharingTab() {
         setSavedProviderEnabled(enabled);
         setSavedProviderMaxQueuedJobs(maxQueuedJobs);
         setSavedProviderModels(models);
+        setProviderVisualModels(visual);
+        setSavedProviderVisualModels(visual);
       })
       .catch(() => toast.error('Failed to load settings'))
       .finally(() => setLoading(false));
@@ -84,7 +108,9 @@ export function SharingTab() {
   const dirty = displayName !== savedDisplayName || bio !== savedBio;
   const providerDirty = providerEnabled !== savedProviderEnabled
     || providerMaxQueuedJobs !== savedProviderMaxQueuedJobs
-    || stableModels(providerModels) !== stableModels(savedProviderModels);
+    || stableModels(providerModels) !== stableModels(savedProviderModels)
+    || VISUAL_KINDS.some(({ kind }) =>
+      stableModels(providerVisualModels[kind]) !== stableModels(savedProviderVisualModels[kind]));
 
   const handleSave = async () => {
     setSaving(true);
@@ -121,13 +147,29 @@ export function SharingTab() {
       : current.filter((model) => modelKey(model) !== key));
   };
 
+  const toggleVisualModel = (kind, candidate, checked) => {
+    const key = modelKey(candidate);
+    setProviderVisualModels((current) => ({
+      ...current,
+      [kind]: checked
+        ? (current[kind].some((model) => modelKey(model) === key)
+          ? current[kind]
+          : [...current[kind], { engine: candidate.engine, modelId: candidate.modelId }])
+        : current[kind].filter((model) => modelKey(model) !== key),
+    }));
+  };
+
   const handleProviderSave = async () => {
     if (providerEnabled && !authEnabled) {
       toast.error('Enable an instance password before sharing media capacity');
       return;
     }
-    if (providerEnabled && providerModels.length === 0) {
-      toast.error('Select at least one audio model');
+    const visualSelections = Object.fromEntries(VISUAL_KINDS.map(({ kind }) =>
+      [kind, normalizeSelectedModels(providerVisualModels[kind])]));
+    const totalSelected = providerModels.length
+      + VISUAL_KINDS.reduce((sum, { kind }) => sum + visualSelections[kind].length, 0);
+    if (providerEnabled && totalSelected === 0) {
+      toast.error('Select at least one model to share');
       return;
     }
     const maxQueuedJobs = Math.max(1, Math.min(20, Number(providerMaxQueuedJobs) || 1));
@@ -136,6 +178,7 @@ export function SharingTab() {
       enabled: providerEnabled,
       maxQueuedJobs,
       audioModels: normalizeSelectedModels(providerModels),
+      ...Object.fromEntries(VISUAL_KINDS.map(({ kind, field }) => [field, visualSelections[kind]])),
     };
     const federation = { ...federationSettings, mediaProvider };
     setProviderSaving(true);
@@ -151,6 +194,7 @@ export function SharingTab() {
     setSavedProviderEnabled(providerEnabled);
     setSavedProviderMaxQueuedJobs(maxQueuedJobs);
     setSavedProviderModels(normalizeSelectedModels(providerModels));
+    setSavedProviderVisualModels(visualSelections);
     toast.success(providerEnabled ? 'Media provider enabled' : 'Media provider disabled');
   };
 
@@ -319,11 +363,47 @@ export function SharingTab() {
             )}
           </fieldset>
 
+          {VISUAL_KINDS.map(({ kind, label, field }) => (
+            <fieldset key={field}>
+              <legend className="block text-xs uppercase tracking-wider text-gray-500 mb-2">Allowed {label} models</legend>
+              {visualCandidates[kind].length === 0 ? (
+                <p className="text-sm text-gray-500">No local {label} models are installed to share.</p>
+              ) : (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
+                  {visualCandidates[kind].map((candidate, index) => {
+                    const checked = providerVisualModels[kind].some((model) => modelKey(model) === modelKey(candidate));
+                    const inputId = `federated-media-${kind}-model-${index}`;
+                    return (
+                      <label key={modelKey(candidate)} htmlFor={inputId} className="flex items-start gap-2 text-sm cursor-pointer">
+                        <input
+                          id={inputId}
+                          type="checkbox"
+                          checked={checked}
+                          // An already-shared model stays togglable even when it
+                          // reports not-ready, or a model that broke after being
+                          // shared could never be un-shared.
+                          disabled={providerSaving || strictPullSaving || (!candidate.ready && !checked)}
+                          onChange={(event) => toggleVisualModel(kind, candidate, event.target.checked)}
+                          className="mt-0.5 h-4 w-4 accent-port-accent disabled:opacity-40"
+                        />
+                        <span className={candidate.ready ? 'text-gray-200' : 'text-gray-500'}>
+                          {candidate.modelName}
+                          {!candidate.ready && ` (${candidate.unavailableReason || 'not ready'})`}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </fieldset>
+          ))}
+
           <button
             type="button"
             onClick={handleProviderSave}
             disabled={!providerDirty || providerSaving || strictPullSaving
-              || (providerEnabled && (!authEnabled || providerModels.length === 0))}
+              || (providerEnabled && (!authEnabled || (providerModels.length === 0
+                && VISUAL_KINDS.every(({ kind }) => providerVisualModels[kind].length === 0))))}
             className="inline-flex items-center justify-center gap-2 min-h-[40px] px-4 py-2 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {providerSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}

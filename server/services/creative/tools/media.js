@@ -5,8 +5,7 @@
  */
 
 import { z } from 'zod';
-import { enqueueJob } from '../../mediaJobQueue/index.js';
-import { resolveDefaultMediaRoute, routedJobParams } from '../../federatedMedia/defaultRouting.js';
+import { enqueueUnattendedMediaJob } from '../../federatedMedia/defaultRouting.js';
 import { ASPECT_PRESETS, QUALITY_PRESETS, presetToRenderParams } from '../../../lib/creativeDirectorPresets.js';
 import { getSettings } from '../../settings.js';
 import { IMAGE_GEN_MODE, resolveQueueImageMode } from '../../imageGen/modes.js';
@@ -363,19 +362,13 @@ const mediaTool = (kind, label) => ({
     }
     // Unattended jobs never name a peer — the planner is an LLM, and letting
     // it pick one is exactly the arbitrary-peer routing the provider contract
-    // forbids. Routing comes from this instance's own settings instead, and is
-    // resolved LAST so the project/install pin ladder above has already run:
-    // a configured remote provider overrides those local backend choices, and
-    // a job that would have rendered locally is unaffected.
-    const routed = await resolveDefaultMediaRoute({ kind, params });
-    if (routed) {
-      return enqueueJob({
-        kind,
-        params: routedJobParams(params, routed),
-        owner: resolveOwner(args, ctx),
-      });
-    }
-    return enqueueJob({ kind, params, owner: resolveOwner(args, ctx) });
+    // forbids. Routing comes from this instance's own settings instead, applied
+    // by the shared unattended enqueue helper (which every autonomous render
+    // path goes through, so a configured route can't apply to a project's
+    // planner renders but not its scene renders). It resolves LAST, after the
+    // project/install pin ladder above: a configured remote provider overrides
+    // those local backend choices, and an unrouted job is unaffected.
+    return enqueueUnattendedMediaJob({ kind, params, owner: resolveOwner(args, ctx) });
   },
 });
 

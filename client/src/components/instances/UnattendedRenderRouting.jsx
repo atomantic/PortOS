@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Bot } from 'lucide-react';
+import toast from '../ui/Toast';
 import { getSettings, updateSettings } from '../../services/api';
 
 // Only the visual kinds route. A federated audio submission may carry nothing
@@ -14,6 +15,7 @@ const KINDS = Object.freeze([
 
 const isRecord = (value) => value && typeof value === 'object' && !Array.isArray(value);
 const optionValue = ({ peerId, engine, modelId }) => JSON.stringify([peerId, engine, modelId]);
+const modelKey = ({ engine, modelId }) => `${engine}\u0000${modelId}`;
 
 // One option per (peer, allowlisted model) pair that the peer currently
 // advertises as a capability. A model the user allowlisted but the peer no
@@ -22,13 +24,18 @@ const optionValue = ({ peerId, engine, modelId }) => JSON.stringify([peerId, eng
 function routeOptions(peers, kind, field) {
   const options = [];
   for (const peer of peers) {
+    // Both switches matter. `peer.enabled === false` disables the peer wholesale
+    // while leaving its last media capabilities cached on the record — offering
+    // it here would save a route whose every job dies on
+    // MEDIA_PROVIDER_PEER_DISABLED.
+    if (peer?.enabled === false) continue;
     if (peer?.mediaProvider?.enabled !== true) continue;
     const allowed = new Set((peer.mediaProvider[field] || [])
       .filter((model) => model?.engine && model?.modelId)
-      .map((model) => `${model.engine}\u0000${model.modelId}`));
+      .map(modelKey));
     for (const capability of peer.mediaProviderStatus?.snapshot?.capabilities || []) {
       if (capability?.kind !== kind) continue;
-      if (!allowed.has(`${capability.engine}\u0000${capability.modelId}`)) continue;
+      if (!allowed.has(modelKey(capability))) continue;
       options.push({
         peerId: peer.id,
         engine: capability.engine,
@@ -49,8 +56,14 @@ function routeOptions(peers, kind, field) {
  * instance's own settings and the server reads it at enqueue time.
  */
 export default function UnattendedRenderRouting({ peers }) {
+  // `null` = not loaded yet, and NOT the same as `{}` (loaded, nothing routed).
+  // Conflating them is what would let a failed settings read save a `federation`
+  // slice rebuilt from an empty object, wiping mediaProvider and
+  // strictPullAuthorization. `loadFailed` keeps the card visible but read-only
+  // so the failure is legible instead of silently destructive.
   const [routing, setRouting] = useState(null);
-  const [federation, setFederation] = useState({});
+  const [federation, setFederation] = useState(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -60,7 +73,7 @@ export default function UnattendedRenderRouting({ peers }) {
         setFederation(slice);
         setRouting(isRecord(slice.mediaRouting) ? slice.mediaRouting : {});
       })
-      .catch(() => setRouting({}));
+      .catch(() => setLoadFailed(true));
   }, []);
 
   const optionsByKind = useMemo(
@@ -69,6 +82,10 @@ export default function UnattendedRenderRouting({ peers }) {
   );
 
   const save = async (kind, route) => {
+    // Belt and braces with the `disabled` below: without a validated snapshot
+    // there is no federation slice to carry forward, so a save here would
+    // replace the whole thing.
+    if (!isRecord(federation) || !isRecord(routing)) return;
     setSaving(true);
     const nextRouting = { ...routing, [kind]: route };
     // The settings PATCH shallow-merges TOP-LEVEL keys, so `federation` is
@@ -78,17 +95,33 @@ export default function UnattendedRenderRouting({ peers }) {
       { federation: { ...federation, mediaRouting: nextRouting } },
       { silent: true },
     ).catch(() => null);
-    if (merged) {
-      setRouting(nextRouting);
-      setFederation(isRecord(merged.federation) ? merged.federation : { ...federation, mediaRouting: nextRouting });
-    }
     setSaving(false);
+    if (!merged) {
+      // The select is controlled off `routing`, so a failed save silently snaps
+      // it back to the old value. Say why, or it reads as the click not landing.
+      toast.error('Failed to save unattended render routing');
+      return;
+    }
+    setRouting(nextRouting);
+    setFederation(isRecord(merged.federation) ? merged.federation : { ...federation, mediaRouting: nextRouting });
   };
 
-  // Nothing is routable until at least one peer advertises an allowlisted
-  // visual model, and an empty control would read as a broken feature.
+  const savedRoute = (kind) => (isRecord(routing?.[kind]) ? routing[kind] : null);
+  // A persisted route must stay editable even when nothing is advertised for it
+  // any more — otherwise the card hides, the route keeps failing every enqueue,
+  // and there is no way left to clear it.
+  const hasSavedRoute = KINDS.some(({ kind }) => savedRoute(kind));
   const anyOptions = KINDS.some(({ kind }) => optionsByKind[kind].length > 0);
-  if (routing === null || !anyOptions) return null;
+  if (loadFailed) {
+    return anyOptions ? (
+      <div className="mb-3 rounded-lg border border-port-border bg-port-bg/40 p-3">
+        <p className="text-[11px] text-port-warning">
+          Unattended render routing could not load this instance&rsquo;s settings, so it is read-only. Reload to try again.
+        </p>
+      </div>
+    ) : null;
+  }
+  if (routing === null || (!anyOptions && !hasSavedRoute)) return null;
 
   return (
     <div className="mb-3 rounded-lg border border-port-border bg-port-bg/40 p-3">
@@ -104,7 +137,7 @@ export default function UnattendedRenderRouting({ peers }) {
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         {KINDS.map(({ kind, label }) => {
           const options = optionsByKind[kind];
-          const current = isRecord(routing[kind]) ? routing[kind] : null;
+          const current = savedRoute(kind);
           const selectId = `unattended-routing-${kind}`;
           return (
             <label key={kind} className="block" htmlFor={selectId}>
@@ -112,7 +145,9 @@ export default function UnattendedRenderRouting({ peers }) {
               <select
                 id={selectId}
                 value={current ? optionValue(current) : ''}
-                disabled={saving || options.length === 0}
+                // Enabled whenever there is something to choose OR something to
+                // clear; only a kind with neither is inert.
+                disabled={saving || (options.length === 0 && !current)}
                 onChange={(event) => save(kind, event.target.value
                   ? (([peerId, engine, modelId]) => ({ peerId, engine, modelId }))(JSON.parse(event.target.value))
                   : null)}

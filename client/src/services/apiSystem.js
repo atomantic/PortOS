@@ -68,6 +68,10 @@ export const updateSettings = (data, options) => request('/settings', {
   ...options
 });
 export const getAiAssignments = (options) => request('/settings/ai-assignments', options);
+// Local image/video models this instance could offer as a federated media
+// provider — what the Sharing tab lets you pick from. Local-only inventory;
+// the peer-facing status endpoint only ever reports already-shared models.
+export const getMediaShareCandidates = (options) => request('/settings/media-share-candidates', options);
 
 // API Access — the OpenAPI 3.1 spec for the public API surface (built from the
 // exposed entries in apiAccess settings). Rendered by the API Access settings tab.

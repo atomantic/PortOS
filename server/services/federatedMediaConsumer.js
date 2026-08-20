@@ -90,22 +90,27 @@ function responseState(response, body) {
   return ['unavailable', body?.code || `http-${response.status || 'error'}`];
 }
 
-// Only ask the peer for kinds this install actually has models allowlisted
-// for. Keep the request byte-identical to the original audio-only endpoint
-// (no query string) when nothing beyond audio is configured — this is the
-// consumer half of the same opt-in negotiation described in
-// normalizeRequestedMediaKinds (federatedMediaWire.js): a peer that has only
-// ever spoken wire-v1 audio never has to learn about the query param at all.
-function requestedKinds(config) {
-  const kinds = KNOWN_MEDIA_KINDS.filter((kind) => config[`${kind}Models`]?.length > 0);
-  return kinds.length ? kinds : ['audio'];
-}
+// Ask for EVERY kind this build understands, not just the kinds already
+// allowlisted here.
+//
+// Scoping the request to already-allowlisted kinds was a chicken-and-egg bug:
+// a fresh consumer has no visual models allowlisted, so it asked for audio
+// only, so the peer advertised no image/video capabilities, so the Instances
+// panel had no visual rows to check — and re-probing repeated the same
+// audio-only question forever. Nothing could ever seed the first image or
+// video allowlist.
+//
+// Asking for all kinds is safe in both directions of the version skew the
+// opt-in negotiation exists to protect (see normalizeRequestedMediaKinds in
+// federatedMediaWire.js). That negotiation protects an older CONSUMER, whose
+// own copy of the schema validates `kinds` against a literal('audio') and can
+// never be patched retroactively — it does not protect the provider. A
+// provider too old to know the query parameter simply ignores it and returns
+// the audio-only projection it always did.
+const requestedKinds = () => KNOWN_MEDIA_KINDS;
 
-function statusUrl(peer, config) {
-  const base = `${peerBaseUrl(peer)}/api/federation/media/v1/status`;
-  const kinds = requestedKinds(config);
-  if (kinds.length === 1 && kinds[0] === 'audio') return base;
-  return `${base}?kinds=${kinds.join(',')}`;
+function statusUrl(peer) {
+  return `${peerBaseUrl(peer)}/api/federation/media/v1/status?kinds=${requestedKinds().join(',')}`;
 }
 
 /**
@@ -117,7 +122,7 @@ export async function probeFederatedMediaProvider(peer, { signal, now = Date.now
   if (!config.enabled) return probeResult(now, 'disabled', 'not-configured');
 
   const outcome = await peerFetch(
-    statusUrl(peer, config),
+    statusUrl(peer),
     { signal },
     peer,
   ).then((response) => ({ response }), (error) => ({ error }));

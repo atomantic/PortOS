@@ -5,8 +5,14 @@ vi.mock('../../services/api', () => ({
   getSettings: vi.fn(),
   updateSettings: vi.fn(),
 }));
+vi.mock('../ui/Toast', () => ({
+  default: Object.assign(vi.fn(), {
+    success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn(),
+  }),
+}));
 
 import { getSettings, updateSettings } from '../../services/api';
+import toast from '../ui/Toast';
 import UnattendedRenderRouting from './UnattendedRenderRouting';
 
 const capability = (overrides) => ({ ready: true, unavailableReason: null, ...overrides });
@@ -101,5 +107,53 @@ describe('UnattendedRenderRouting', () => {
     const { container } = render(<UnattendedRenderRouting peers={[peer]} />);
     await waitFor(() => expect(getSettings).toHaveBeenCalled());
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+// #4348 review follow-ups.
+describe('UnattendedRenderRouting — failure and staleness handling', () => {
+  it('never rebuilds the federation slice from a failed settings read', async () => {
+    getSettings.mockRejectedValue(new Error('settings unavailable'));
+    render(<UnattendedRenderRouting peers={[peerWith()]} />);
+
+    // Read-only notice instead of a live control: a save from here would send a
+    // federation slice reconstructed from {}, wiping mediaProvider.
+    expect(await screen.findByText(/could not load this instance/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Image')).not.toBeInTheDocument();
+    expect(updateSettings).not.toHaveBeenCalled();
+  });
+
+  it('excludes a peer that is disabled wholesale, even with capabilities still cached', async () => {
+    const { container } = render(<UnattendedRenderRouting peers={[peerWith({ enabled: false })]} />);
+    await waitFor(() => expect(getSettings).toHaveBeenCalled());
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it('keeps a stale saved route clearable after its peer stops offering anything', async () => {
+    getSettings.mockResolvedValue({
+      federation: { mediaRouting: { image: { peerId: 'peer-1', engine: 'comfy', modelId: 'sdxl-base' } } },
+    });
+    // No peers at all — without the saved-route carve-out the card would hide
+    // and the failing route could never be cleared.
+    render(<UnattendedRenderRouting peers={[]} />);
+
+    const select = await screen.findByLabelText('Image');
+    expect(select).toBeEnabled();
+    fireEvent.change(select, { target: { value: '' } });
+
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({
+      federation: { mediaRouting: { image: null } },
+    }, { silent: true }));
+  });
+
+  it('tells the user when a route save fails instead of silently reverting', async () => {
+    updateSettings.mockRejectedValue(new Error('nope'));
+    render(<UnattendedRenderRouting peers={[peerWith()]} />);
+
+    const select = await screen.findByLabelText('Image');
+    fireEvent.change(select, { target: { value: JSON.stringify(['peer-1', 'comfy', 'sdxl-base']) } });
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Failed to save unattended render routing'));
+    expect(select.value).toBe('');
   });
 });

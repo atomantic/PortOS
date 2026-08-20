@@ -130,7 +130,7 @@ describe('federated media provider discovery', () => {
     const result = await probeFederatedMediaProvider(target, { now: NOW });
 
     expect(peerFetch).toHaveBeenCalledWith(
-      'http://192.0.2.10:5555/api/federation/media/v1/status',
+      'http://192.0.2.10:5555/api/federation/media/v1/status?kinds=audio,image,video',
       { signal: undefined },
       target,
     );
@@ -172,16 +172,23 @@ describe('federated media provider discovery', () => {
     });
   });
 
-  it('only asks a peer for image/video status once this install allowlists a model for that kind', async () => {
+  // #4348 — this used to scope the query to already-allowlisted kinds, which was
+  // a chicken-and-egg bug: a fresh consumer allowlists nothing, so it asked for
+  // audio only, so the peer advertised no visual capabilities, so the Instances
+  // panel had no image/video rows to check, so nothing could ever be allowlisted.
+  it('asks every peer for every known kind, so a fresh install can discover visual models at all', async () => {
     peerFetch.mockResolvedValue(response(readyStatus()));
 
     await probeFederatedMediaProvider(peer(), { now: NOW });
     expect(peerFetch).toHaveBeenLastCalledWith(
-      'http://192.0.2.10:5555/api/federation/media/v1/status',
+      'http://192.0.2.10:5555/api/federation/media/v1/status?kinds=audio,image,video',
       { signal: undefined },
       expect.anything(),
     );
+  });
 
+  it('asks for every kind even when only one kind is allowlisted', async () => {
+    peerFetch.mockResolvedValue(response(readyStatus()));
     const withImage = peer({
       mediaProvider: {
         enabled: true,
@@ -189,9 +196,10 @@ describe('federated media provider discovery', () => {
         imageModels: [{ engine: 'local', modelId: 'flux-dev' }],
       },
     });
+
     await probeFederatedMediaProvider(withImage, { now: NOW });
     expect(peerFetch).toHaveBeenLastCalledWith(
-      'http://192.0.2.10:5555/api/federation/media/v1/status?kinds=image',
+      'http://192.0.2.10:5555/api/federation/media/v1/status?kinds=audio,image,video',
       { signal: undefined },
       expect.anything(),
     );
