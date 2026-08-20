@@ -72,22 +72,27 @@ Concretely:
    registered peer (`authorizeFederatedMediaPeer`), which means an install with
    the optional instance password *off* cannot accept a federated job at all.
    That is what makes the carve-out scoped rather than general: it authorizes
-   sending a prompt to a machine the local user enrolled and allowlisted for
-   this kind of work, not to the internet and not to a cloud provider's account.
+   sending a prompt to a peer this install's own settings enable and allowlist
+   for this kind of work, not to the internet and not to a cloud provider's
+   account. The *record* alone is not the consent — an inbound announce can
+   create an enabled peer row on its own. The allowlist is, because an announced
+   peer arrives with no media-provider config and stays refused until the local
+   user gives it one.
 
    Two limits of that identity are real and are not fixed by this ADR: the Basic
    credential authenticates *the install*, not one peer, and the
    `X-PortOS-Instance-Id` header naming which registered peer is calling is
    self-asserted. So the guarantee is "a holder of this provider's instance
-   password, on this private network" rather than a cryptographic binding to one
-   enrolled machine — a least-disclosure boundary between cooperating peers, as
-   `docs/FEDERATED_MEDIA_PROVIDERS.md` already states. Tightening it benefits
-   every federated surface and is tracked with the transport work, not here.
+   password, on this private network" rather than a cryptographic binding to
+   one allowlisted machine — a least-disclosure boundary between cooperating
+   peers, as `docs/FEDERATED_MEDIA_PROVIDERS.md` already states. Tightening that
+   benefits every federated surface and is tracked with the transport work, not
+   here.
 
 5. **Unattended routing does not widen this boundary.** A configured route names
    one peer, one kind and one model; the operator opts in per kind, exactly as
    they opt in per job today. What changes is review cadence, not audience — the
-   same prompts go to the same enrolled machine. An unattended route may never
+   same prompts go to the same allowlisted machine. An unattended route may never
    fan out to peers the user did not name, may never fall back to a different
    peer on failure, and may never relax rules 1–3.
 
@@ -98,10 +103,11 @@ Concretely:
    `rejectUnauthorized: false` ("Tailnet is the trust boundary"): between two
    tailnet nodes WireGuard already supplies mutual authentication, but a
    plain-LAN or non-`.ts.net` peer gets **no server authentication** — nothing
-   proves the far end is the machine the user enrolled. Authentication does not
-   save this: the prompt rides the request body, so an impostor holding the
-   connection reads it before it fails to answer. That is an acceptable risk for
-   a per-job human decision and not for a standing one. When unattended
+   proves the far end is the machine whose record the user allowlisted.
+   Authentication does not save this: the prompt rides the request body, so an
+   impostor holding the connection reads it before it fails to answer. That is
+   an acceptable risk for a per-job human decision and not for a standing one.
+   When unattended
    routing ships, configuring a route to a peer that
    `peerRequiresTailscale()`-style detection does not recognize as a tailnet host
    must be refused, naming the reason. Interactive routing is unchanged.
@@ -143,8 +149,8 @@ later slice of #4348 and must revisit this ADR before shipping.
 
 - **Forbid federated visual rendering entirely.** Rejected: it deletes the
   feature to protect data from the user's own second machine, which is where the
-  data already lives — the peer is enrolled precisely because it is trusted with
-  this project's work.
+  data already lives — the peer is allowlisted for this work precisely because
+  it is trusted with it.
 
 ## Consequences
 
@@ -168,7 +174,8 @@ later slice of #4348 and must revisit this ADR before shipping.
 ## Revisiting
 
 This carve-out is scoped to submitted image/video job bodies travelling to an
-enrolled peer on a private network. Widening it — input-asset transfer, routing
-to peers the user did not enroll, relaying through a non-PortOS service, or any
-path where the counterparty is not the user's own registered instance — requires
-a new ADR, not a reading of this one.
+peer this install has enabled and allowlisted for that kind, on a private
+network. Widening it — input-asset transfer, routing to peers the local
+allowlist does not cover, relaying through a non-PortOS service, or any path
+where the counterparty is not one of the user's own registered instances —
+requires a new ADR, not a reading of this one.

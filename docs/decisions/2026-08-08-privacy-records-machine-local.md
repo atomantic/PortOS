@@ -91,8 +91,8 @@ another, and what a status or capability payload may disclose about the data
 this machine holds. It is not a rule that no user-authored text may ever be
 addressed to a peer: a federated media job body carries the prompt the user
 asked to render, because the render is not possible otherwise. That single
-scoped carve-out — submitted image/video job bodies travelling to an
-explicitly enrolled peer — is recorded in ADR
+scoped carve-out — submitted image/video job bodies travelling to a peer this
+install has allowlisted for that work — is recorded in ADR
 [federated visual prompts](./2026-08-20-federated-visual-prompts.md) (#4682),
 which also fixes what stays absolutely prompt-free (status and capability
 payloads) and why audio is restricted to a fixed vocabulary instead. Read the
