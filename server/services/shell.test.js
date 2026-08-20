@@ -412,6 +412,17 @@ describe('changeSessionDirectory', () => {
     shell.unsubscribeSessionList(observer);
   });
 
+  it('leaves an external TUI run cwd pinned to the repo it was spawned in', () => {
+    // A cd typed at an agent TUI is text the agent reads, not a shell directory
+    // change — and workspaceContext groups runs by the repo they were spawned in.
+    const sock = makeSocket('sock-ext');
+    const pty = makeFakePty();
+    shell.registerExternalSession('run-1', pty, { cwd: '/home/user/example', label: 'Claude Code TUI' });
+
+    expect(shell.changeSessionDirectory('run-1', '/home/user/example-app')).toBe(true);
+    expect(shell.listAllSessions(sock).find(s => s.sessionId === 'run-1').cwd).toBe('/home/user/example');
+  });
+
   it('leaves cwd untouched when the session is gone', () => {
     const sock = makeSocket('sock-cd-gone');
     const id = shell.createShellSession(sock, { shell: '/bin/zsh', cwd: '/home/user/example' });

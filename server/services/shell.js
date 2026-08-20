@@ -602,8 +602,13 @@ export function changeSessionDirectory(sessionId, dirPath) {
   // come from the managed-apps list, so they exist. Asking the PTY for its REAL cwd
   // would need a per-platform probe plus a round-trip, which is not worth it for a
   // label; a rejected path just leaves the label wrong until the next cd.
-  session.cwd = dirPath;
-  broadcastSessionList();
+  // …but only for an interactive shell. An external (TUI-run) session has no shell
+  // reading that line — the bytes land in the agent as typed text — and its `cwd` is
+  // the repo the RUN was spawned in, which is what workspaceContext groups runs by.
+  if (!session.external) {
+    session.cwd = dirPath;
+    broadcastSessionList();
+  }
   return true;
 }
 
