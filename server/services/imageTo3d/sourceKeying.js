@@ -48,6 +48,13 @@ export const KEY_SOFT_BAND = 30;
 export const KEY_MIN_KEYED_RATIO = 0.05;
 export const KEY_MAX_KEYED_RATIO = 0.98;
 
+/** Sources above this pixel count skip Node-side keying entirely: the raw
+ * decode plus the flood/queue/output buffers scale at ~20 bytes per pixel
+ * (a 96 MP gallery image would hold >1 GB and stall the event loop), while
+ * TRELLIS.2 downscales its input to 1024px anyway — the pipeline's own
+ * matting handles oversized sources. */
+export const KEY_MAX_PIXELS = 16_000_000;
+
 // Squared-distance comparisons throughout the hot loops — Math.sqrt only where a
 // real distance is needed (the feather ramp, edge pixels only).
 const KEY_TOLERANCE_SQ = KEY_TOLERANCE ** 2;
@@ -176,9 +183,12 @@ export function keySolidBackground({ data, width, height }) {
  * @returns {Promise<string|null>} the keyed image path, or null to use the original
  */
 export async function prepareSourceImage({ sourcePath, targetPath }) {
-  // Header-only probe: when the source has no alpha channel at all, skip the
-  // full-buffer meaningful-alpha scan (ensureAlpha below fabricates the channel).
-  const { hasAlpha } = await sharp(sourcePath).metadata();
+  // Header-only probe: bail before the full decode when the source is too
+  // large to key affordably (KEY_MAX_PIXELS), and when it has no alpha channel
+  // at all, skip the full-buffer meaningful-alpha scan below (ensureAlpha
+  // fabricates the channel).
+  const { hasAlpha, width, height } = await sharp(sourcePath).metadata();
+  if (!width || !height || width * height > KEY_MAX_PIXELS) return null;
   const { data, info } = await sharp(sourcePath)
     .ensureAlpha()
     .raw()

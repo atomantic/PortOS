@@ -145,4 +145,15 @@ describe('prepareSourceImage', () => {
     const result = await prepareSourceImage({ sourcePath, targetPath: join(await tempDir(), 'never2.png') });
     expect(result).toBeNull();
   });
+
+  it('returns null for a source over the pixel cap without decoding it', async () => {
+    // Just over KEY_MAX_PIXELS (16 MP): 4020×4000. Solid color, so the PNG
+    // itself is tiny — only the header is read before the cap bails.
+    const sourcePath = join(await tempDir(), 'huge.png');
+    await sharp({
+      create: { width: 4020, height: 4000, channels: 4, background: { r: 30, g: 200, b: 40, alpha: 1 } },
+    }).png().toFile(sourcePath);
+    const result = await prepareSourceImage({ sourcePath, targetPath: join(await tempDir(), 'never3.png') });
+    expect(result).toBeNull();
+  });
 });
