@@ -1738,7 +1738,6 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
       void cleanupTempFiles({ includeUploads: true, includeUntrackedAudio: true });
       closeJobAfterDelay(jobs, jobId);
     };
-    proc.on('error', handleChildError);
 
     let missingPyModule = null;
     // Rolling tail of this child's stderr. The Metal abort text is the only
@@ -1910,6 +1909,12 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
         closeJobAfterDelay(jobs, jobId);
       }
     };
+    // Both real subscriptions land here, at the very end. Nothing in this
+    // function awaits, so no event can fire before them — and a throw anywhere
+    // above (a stream handle that vanished) therefore leaves the child with NO
+    // real listeners, so the caller's exit buffer stays its only sink instead of
+    // a half-wired handler reporting the job twice.
+    proc.on('error', handleChildError);
     proc.on('close', handleChildClose);
     return { handleChildClose, handleChildError };
   };
@@ -1924,13 +1929,16 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // that already owns the job must never be mistaken for an abandoned one by
   // the failure path that would otherwise kill it.
   const wireSpawnedChild = (proc, takeEarlyExit) => {
-    // The buffer is the primary catch. Reading the corpse's exit state is the
-    // backstop for a handle that recorded its exit without emitting anything.
+    // Wire first, then read the buffer: wireRenderChild() never awaits, so
+    // nothing can fire between the two — and if it throws, the buffer is still
+    // attached and keeps absorbing this child's events while the caller kills
+    // it. The buffer is the primary catch; reading the corpse's exit state is
+    // the backstop for a handle that recorded its exit without emitting.
+    const { handleChildClose, handleChildError } = wireRenderChild(proc);
     const earlyExit = takeEarlyExit()
       || (proc.exitCode !== null || proc.signalCode !== null
         ? { type: 'close', code: proc.exitCode, signal: proc.signalCode }
         : null);
-    const { handleChildClose, handleChildError } = wireRenderChild(proc);
     const replayEarlyExit = async () => {
       if (!earlyExit) return;
       console.log(`⚠️ video render child exited before it was wired [${jobId.slice(0, 8)}]`);
@@ -2059,6 +2067,25 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     }
   };
 
+  // Every failure before this render child is wired converges here. Nothing
+  // is listening yet, so the child can never report its own terminal event —
+  // without this the job would sit `running` in the jobs map forever, holding
+  // the accelerator claim and its staged temp files, exactly the way #4617's
+  // lost 'close' did. Mirrors the buildArgs failure path above so every
+  // pre-wiring failure looks the same to the client and to the media queue.
+  const abandonBeforeWiring = async (err) => {
+    stopAbandonedChild(firstProc);
+    if (activeProcess === firstProc) activeProcess = null;
+    await releaseHeavyClaim();
+    job.status = 'error';
+    const reason = err.message || 'Video generation failed before the render child was wired';
+    console.log(`❌ Video generation setup error [${jobId.slice(0, 8)}]: ${reason}`);
+    broadcastSse(job, { type: 'error', error: reason });
+    videoGenEvents.emit('failed', { generationId: jobId, error: reason });
+    void cleanupTempFiles({ includeUploads: true, includeUntrackedAudio: true });
+    closeJobAfterDelay(jobs, jobId);
+  };
+
   try {
     const memoryReport = await prepareLocalMemory();
     if (memoryReport.unloaded.length) console.log(`🧹 Video generation [${jobId.slice(0, 8)}] freed ${memoryReport.unloaded.length} resident model(s)`);
@@ -2138,20 +2165,23 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     activeProcess = firstProc;
     await heavyClaim.handoffTo?.(firstProc.pid);
   } catch (err) {
-    // Nothing is wired, so this child can never report a terminal event and
-    // nothing would reap it — and once the handoff pointed the claim at its PID,
-    // nothing would release the claim either. Stop it and release unconditionally
-    // (release() is idempotent and still ours after a handoff).
-    stopAbandonedChild(firstProc);
-    if (activeProcess === firstProc) activeProcess = null;
-    await releaseHeavyClaim();
+    await abandonBeforeWiring(err);
     throw err;
   }
 
   // Terminal listeners go on here, and the buffer hands over anything the child
   // already emitted — so a child that died during the handoff still drives the
   // job to a terminal state and gives the accelerator claim back.
-  const replayEarlyExit = wireSpawnedChild(firstProc, takeEarlyExit);
+  let replayEarlyExit;
+  try {
+    replayEarlyExit = wireSpawnedChild(firstProc, takeEarlyExit);
+  } catch (err) {
+    // Wiring itself threw (a stream handle that vanished under us), so this
+    // child has no terminal handler and never will — the same dead end the
+    // relaunch path guards with `retryWired`.
+    await abandonBeforeWiring(err);
+    throw err;
+  }
   await replayEarlyExit();
 
   return { jobId, generationId: jobId, filename, mode: 'local', model: modelId };

@@ -4277,14 +4277,14 @@ describe('generateVideo — Gemma prompt-encode watchdog relaunch', () => {
 describe('generateVideo — first render child dies during the accelerator handoff', () => {
   // A child that never exits on its own, so the test decides exactly when — and
   // from where — its terminal event fires.
-  const makeSilentProc = (pid) => {
+  const makeSilentProc = (pid, { failWiring = false } = {}) => {
     const listeners = {};
     const proc = {
       pid,
       exitCode: null,
       signalCode: null,
       killed: false,
-      stdout: { on: vi.fn() },
+      stdout: { on: vi.fn(() => { if (failWiring) throw new Error('stdout stream vanished'); }) },
       stderr: { on: vi.fn() },
       on(event, fn) { listeners[event] = fn; return proc; },
       off(event, fn) { if (listeners[event] === fn) delete listeners[event]; return proc; },
@@ -4384,5 +4384,32 @@ describe('generateVideo — first render child dies during the accelerator hando
     // running, and the claim it may already have been handed has to come back.
     expect(child.proc.kill).toHaveBeenCalledWith('SIGTERM');
     expect(heavyClaimRelease).toHaveBeenCalled();
+    // …and the job converges instead of sitting `running` in the jobs map with
+    // its staged temp files, which is the same stranding #4617 is about.
+    expect(failures).toHaveLength(1);
+    expect(failures[0].error).toMatch(/claim file vanished/);
+  });
+
+  it('stops the child and fails the job when the wiring itself throws', async () => {
+    const child = makeSilentProc(204, { failWiring: true });
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    vi.mocked(spawnDetached).mockClear();
+    vi.mocked(spawnDetached).mockResolvedValueOnce(child.proc);
+
+    await expect(generateVideo({
+      jobId: 'first-child-wiring-throws',
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified',
+      prompt: 'a lighthouse in fog',
+      width: 512,
+      height: 512,
+      numFrames: 25,
+      fps: 24,
+      seed: 987654,
+    })).rejects.toThrow('stdout stream vanished');
+
+    expect(child.proc.kill).toHaveBeenCalledWith('SIGTERM');
+    expect(heavyClaimRelease).toHaveBeenCalled();
+    expect(failures).toHaveLength(1);
   });
 });
