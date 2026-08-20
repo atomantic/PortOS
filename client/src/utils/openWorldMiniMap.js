@@ -147,8 +147,9 @@ export function projectPlayer(playerPos, heading = 0, bounds = null, padding = M
     return null;
   }
   const { nx, ny } = projectPoint({ x: playerPos.x, z: playerPos.z }, bounds, padding);
-  // Three.js / rig convention: heading 0 faces north (-Z). Map top is -Z, so rotation matches:
-  const rotationDeg = (heading * 180) / Math.PI;
+  // Three.js / rover heading increases counter-clockwise (0 faces north / -Z; -π/2 faces east / +X).
+  // CSS rotation is clockwise in screen space, so we negate the angle to align the blip's pointer.
+  const rotationDeg = -(heading * 180) / Math.PI;
   return { nx, ny, rotationDeg };
 }
 

@@ -4,7 +4,7 @@
 // increments the session score, and unlocks discovery recognition.
 // No three.js / React imports — pure, testable in node.
 
-import { PARCELS, PLAZA, WORLD } from './openWorldPlan';
+import { WORLD } from './openWorldPlan';
 
 export const SHARD_COLLECTION_RADIUS = 2.4;
 export const DEFAULT_SHARD_Y = 1.0;

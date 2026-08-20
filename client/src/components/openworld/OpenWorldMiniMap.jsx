@@ -26,19 +26,16 @@ export default function OpenWorldMiniMap({
   selectedAppId = null,
   alwaysShow = false,
   playerPose = null,
-  onSelectDestination = null,
 }) {
-  // Status colors track the theme accent for 'online' (the rest stay semantic), so a
-  // dot matches its building exactly. Read from the palette the city page provides.
   const { getBuildingColor, accent } = useOpenWorldPalette();
+  const positions = useMemo(() => computeOpenWorldLayout(Array.isArray(apps) ? apps : []), [apps]);
   const view = useMemo(() => {
-    const positions = computeOpenWorldLayout(Array.isArray(apps) ? apps : []);
     return computeMiniMap(apps, positions, {
       geography: true,
       landmarks: true,
       player: playerPose ? { position: playerPose, heading: playerPose.heading || 0 } : null,
     });
-  }, [apps, playerPose]);
+  }, [apps, positions, playerPose]);
 
   if (view.empty) return null;
 

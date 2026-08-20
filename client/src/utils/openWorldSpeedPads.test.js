@@ -39,6 +39,15 @@ describe('openWorldSpeedPads', () => {
     expect(matched?.id).toBe(pad.id);
   });
 
+  it('checkSpeedPadOverlap returns pad when player is on the rectangular edge', () => {
+    // Pad 0 has length 5.5 (half 2.75). Point at pad.z - 2.5 along the facing direction (-Z)
+    const pad = SPEED_PADS[0]; // angle: -Math.PI / 2 (length extends along -Z / +Z in world space)
+    const playerPos = { x: pad.x, z: pad.z - 2.5 };
+    const matched = checkSpeedPadOverlap(playerPos, SPEED_PADS);
+    expect(matched).toBeDefined();
+    expect(matched?.id).toBe(pad.id);
+  });
+
   it('checkSpeedPadOverlap returns null when player is far away or invalid', () => {
     expect(checkSpeedPadOverlap(null)).toBeNull();
     expect(checkSpeedPadOverlap({ x: 999, z: 999 })).toBeNull();

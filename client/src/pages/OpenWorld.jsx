@@ -201,10 +201,14 @@ function OpenWorldInner() {
       saveCollectedShardIds(next);
       return next;
     });
+    const burstId = `${shard.id}-${Date.now()}`;
     setActiveBursts((prev) => [
-      ...prev.slice(-8),
-      { id: `${shard.id}-${Date.now()}`, x: shard.x, y: shard.y, z: shard.z, color: shard.color, age: 0 },
+      ...prev.slice(-4),
+      { id: burstId, x: shard.x, y: shard.y, z: shard.z, color: shard.color, age: 0 },
     ]);
+    setTimeout(() => {
+      setActiveBursts((prev) => prev.filter((b) => b.id !== burstId));
+    }, 850);
   }, []);
 
   // --- World map / fast travel ----------------------------------------------

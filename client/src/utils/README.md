@@ -77,6 +77,7 @@ its tunable constants and placement helpers.
 | `openWorldArtifacts` | Earned-artifact milestones (level/goal/streak) → placed artifact descriptors (`computeArtifacts`). |
 | `openWorldBackupVault` | Backup-vault health/alerting state and color (`computeBackupVault`, `vaultHealth`). |
 | `openWorldChronotype` | Chronotype energy curve by hour → brightness/tempo modifiers (`computeChronotypeEnergy`). |
+| `openWorldCollectibles` | Deterministic Cyber Shards collectible placement, collection overlap math, and progress tracking (`getCollectiblesList`, `checkShardCollection`, `getCollectionStats`, `CYBER_SHARDS`). |
 | `openWorldDataHarbor` | Data Harbor pier district: DB table silos + data/ domain racks from /api/openworld/introspection (`computeDataHarbor`). |
 | `openWorldDistrictLayout` | Shared district layout math: auto-columns, grid placement, tallying, metric→height scaling. |
 | `openWorldEasterEggs` | Unlockable easter eggs from context (date/character/goals) → placements (`computeEasterEggs`). |
@@ -93,12 +94,14 @@ its tunable constants and placement helpers.
 | `openWorldMiniMap` | Mini-map projection of building positions into 2D bounds, plus opt-in waterfront geography (bay/shoreline/harbor) read from `openWorldPlan` (`computeMiniMap`, `projectPoint`, `geographyWorldPoints`, `projectGeography`). |
 | `openWorldPhotoMode` | Photo-mode camera presets, the demand-loop fly stepper, postcard stats, and screenshot filename (`getPreset`, `cyclePreset`, `stepFly`). |
 | `openWorldPlan` | Master town plan: district parcels, shoreline/bay, plaza, transit loop, street network (`PARCELS`, `WORLD`, `computeStreets`, `computeStreetProps`, `isInWater`). |
+| `openWorldProximity` | Unified player proximity detection across warp pads, buildings, easter eggs, and district landmarks (`detectProximity`, `getResolvedLandmarks`, `WORLD_LANDMARKS`). |
 | `openWorldRegions` | OpenWorld fast-travel registry: named regions over the `openWorldPlan` parcels, each mapped to the PortOS page it visualizes (`OPEN_WORLD_REGIONS`, `getRegion`, `listRegions`, `searchRegions`, `regionArrivalPoint`, `regionPath`). |
 | `openWorldPlayerRig` | Exploration player-rig math: third-person follow camera, boom collision, damping, facing, avatar state (`thirdPersonCamera`, `resolveBoom`, `dampAngle`, `moveFacing`, `avatarState`). |
 | `openWorldRenderBudget` | Pure Auto-quality render-budget state machine: p75 frame-time windows, hysteresis, cooldown, warm-up/gap rejection (`createRenderBudget`, `recordFrame`, `restartWarmup`, `resetRenderBudget`, `getEffectiveTier`, `QUALITY_TIERS`, `DEFAULT_RENDER_BUDGET_CONFIG`). |
 | `openWorldRooftops` | Deterministic rooftop fixture kits (antenna/tank/AC/dish) per app name (`computeRooftopKit`). |
 | `openWorldProductivity` | Productivity monument from streak/velocity tiers (`computeProductivityMonument`). |
 | `openWorldSoundscape` | Ambient soundscape: mood/energy classification, chord selection (`computeSoundscape`), and the manual mood override (`applyMoodOverride`). |
+| `openWorldSpeedPads` | Luminous road speed boost pads placement and geometric local-coordinate overlap detection (`getSpeedPadsList`, `checkSpeedPadOverlap`, `SPEED_PADS`). |
 | `openWorldTaskFlowRiver` | Task-flow river width/speed from backlog & throughput (`computeTaskFlowRiver`). |
 | `openWorldTaskQueue` | Task-queue state/color from status counts (`computeTaskQueue`). |
 | `openWorldTimeline` | Activity-log density bins and timeline buckets (`computeActivityDensity`, `buildTimelineBuckets`). |

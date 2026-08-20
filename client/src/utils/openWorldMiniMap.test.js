@@ -273,14 +273,15 @@ describe('projectGeography', () => {
 describe('projectPlayer', () => {
   const bounds = { minX: -60, maxX: 60, minZ: -70, maxZ: 60 };
 
-  it('projects player position and converts heading to degrees', () => {
+  it('projects player position and converts heading to degrees for clockwise CSS rotation', () => {
     const player = projectPlayer({ x: 0, z: 0 }, 0, bounds);
     expect(player).not.toBeNull();
     expect(player.nx).toBeCloseTo(0.5);
     expect(player.rotationDeg).toBeCloseTo(0);
 
-    const playerRot = projectPlayer({ x: 10, z: -10 }, Math.PI / 2, bounds);
-    expect(playerRot.rotationDeg).toBeCloseTo(90);
+    // Rover heading -π/2 (turning right / east / +X) corresponds to +90° clockwise CSS rotation:
+    const playerEast = projectPlayer({ x: 10, z: -10 }, -Math.PI / 2, bounds);
+    expect(playerEast.rotationDeg).toBeCloseTo(90);
   });
 
   it('returns null on invalid / absent inputs', () => {

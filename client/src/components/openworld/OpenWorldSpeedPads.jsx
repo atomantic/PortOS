@@ -54,9 +54,6 @@ function SpeedPad({ pad, animate }) {
           </mesh>
         ))}
       </group>
-
-      {/* Subtle point light over pad */}
-      <pointLight position={[0, 0.8, 0]} color={color} intensity={0.8} distance={7} />
     </group>
   );
 }

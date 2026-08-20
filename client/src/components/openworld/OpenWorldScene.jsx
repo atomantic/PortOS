@@ -43,6 +43,7 @@ import OpenWorldWater from './OpenWorldWater';
 import OpenWorldStreets from './OpenWorldStreets';
 import OpenWorldStreetProps from './OpenWorldStreetProps';
 import OpenWorldTransitLoop from './OpenWorldTransitLoop';
+import OpenWorldEnergyOverlay from './OpenWorldEnergyOverlay';
 import OpenWorldSpeedPads from './OpenWorldSpeedPads';
 import OpenWorldCollectibles from './OpenWorldCollectibles';
 import PlayerController from './PlayerController';
@@ -55,6 +56,7 @@ import { openWorldDayMix, getTimeOfDayPreset } from './openWorldConstants';
 import { CITY_MAX_ORBIT_DISTANCE } from '../../utils/openWorldFocusCamera';
 import { THIRD_PERSON } from '../../utils/openWorldPlayerRig';
 import { listRegions } from '../../utils/openWorldRegions';
+import { computeEasterEggs } from '../../utils/openWorldEasterEggs';
 import { OpenWorldPaletteProvider } from './OpenWorldPaletteContext';
 import ErrorBoundary from '../ErrorBoundary';
 import { useVisibilityEvent } from '../../hooks/useVisibilityEvent';
@@ -155,6 +157,10 @@ export default function OpenWorldScene({
   // read as haze and grain, so they don't mount at all rather than fading per-frame.
   const neonLayers = Boolean(palette?.neonLayers);
   const warpRegions = useMemo(() => listRegions(), []);
+  const easterEggsList = useMemo(
+    () => computeEasterEggs({ character, goals, productivityData }),
+    [character, goals, productivityData]
+  );
 
   useEffect(() => {
     if (photoMode) {
@@ -456,6 +462,7 @@ export default function OpenWorldScene({
           teleport={playerTeleport}
           warpPads={warpRegions}
           onWarpPadInteract={onTravelToRegion}
+          easterEggs={easterEggsList}
           collectedShardIds={collectedShardIds}
           onCollectShard={onCollectShard}
           onPlayerPoseChange={onPlayerPoseChange}

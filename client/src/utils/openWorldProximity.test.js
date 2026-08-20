@@ -3,7 +3,6 @@ import {
   detectProximity,
   getResolvedLandmarks,
   WORLD_LANDMARKS,
-  PROXIMITY_DISTANCES,
 } from './openWorldProximity';
 
 describe('openWorldProximity', () => {

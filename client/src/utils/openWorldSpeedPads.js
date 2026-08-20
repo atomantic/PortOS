@@ -3,8 +3,6 @@
 // Driving onto a boost pad gives an instant surge of acceleration and plays a turbo SFX.
 // No three.js / React imports — pure, testable in node.
 
-import { WORLD, PARCELS } from './openWorldPlan';
-
 export const DEFAULT_PAD_BOOST_SPEED = 48; // Peak surge velocity in units/s
 export const PAD_TRIGGER_RADIUS = 2.4;
 
@@ -104,18 +102,24 @@ export function getSpeedPadsList() {
   }));
 }
 
-// Check if player position is currently overlapping a speed boost pad
-export function checkSpeedPadOverlap(playerPos, pads = SPEED_PADS, radius = PAD_TRIGGER_RADIUS) {
+// Check if player position is currently overlapping a speed boost pad using oriented box bounds
+export function checkSpeedPadOverlap(playerPos, pads = SPEED_PADS, padding = 0.4) {
   if (!playerPos || typeof playerPos.x !== 'number' || typeof playerPos.z !== 'number') {
     return null;
   }
-  const rSq = radius * radius;
 
   for (const pad of pads) {
     const dx = playerPos.x - pad.x;
     const dz = playerPos.z - pad.z;
-    const distSq = dx * dx + dz * dz;
-    if (distSq <= rSq) {
+    const cos = Math.cos(-pad.angle);
+    const sin = Math.sin(-pad.angle);
+    const localX = cos * dx - sin * dz;
+    const localZ = sin * dx + cos * dz;
+
+    const halfL = (pad.length / 2) + padding;
+    const halfW = (pad.width / 2) + padding;
+
+    if (Math.abs(localX) <= halfL && Math.abs(localZ) <= halfW) {
       return pad;
     }
   }

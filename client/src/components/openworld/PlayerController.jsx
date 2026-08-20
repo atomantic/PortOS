@@ -11,10 +11,10 @@ import {
 } from '../../utils/openWorldPlayerRig';
 import { isWalkable, WORLD } from '../../utils/openWorldPlan';
 import { BOROUGH_PARAMS, BUILDING_PARAMS, PROCESS_BUILDING_PARAMS } from './openWorldConstants';
-import { regionWarpPadPosition } from '../../utils/openWorldRegions';
+import { regionWarpPadPosition, getRegion } from '../../utils/openWorldRegions';
 import { checkSpeedPadOverlap } from '../../utils/openWorldSpeedPads';
 import { checkShardCollection } from '../../utils/openWorldCollectibles';
-import { detectProximity, getResolvedLandmarks } from '../../utils/openWorldProximity';
+import { detectProximity } from '../../utils/openWorldProximity';
 
 const WALK_SPEED = 10;
 const SPRINT_SPEED = 20;
@@ -57,6 +57,7 @@ export default function PlayerController({
   warpPads = [],
   onWarpPadInteract,
   onWarpPadProximity,
+  onProximityChange,
   easterEggs = [],
   collectedShardIds = new Set(),
   onCollectShard,
@@ -121,9 +122,16 @@ export default function PlayerController({
   );
   const proximityTargetRef = useRef(null);
   const lastBoostPadRef = useRef(null);
+  const boostOverrideTimerRef = useRef(0);
+  const localCollectedSetRef = useRef(new Set(collectedShardIds));
   const poseTickRef = useRef(0);
   const lastSpawnRef = useRef(null);
   const pointerLockedRef = useRef(false);
+
+  useEffect(() => {
+    localCollectedSetRef.current = new Set(collectedShardIds);
+  }, [collectedShardIds]);
+
   // Damped third-person aim point — lags the true lookAt so the aim stays smooth.
   const lookRef = useRef(new THREE.Vector3());
   const lookInitRef = useRef(false);
@@ -259,7 +267,10 @@ export default function PlayerController({
     } else if (target.type === 'building') {
       onBuildingClick?.(target.raw);
     } else if (target.type === 'landmark') {
-      if (target.regionId) onWarpPadInteract?.({ id: target.regionId });
+      if (target.regionId) {
+        const region = getRegion(target.regionId);
+        if (region) onWarpPadInteract?.(region);
+      }
     } else if (target.type === 'easterEgg') {
       playSfx?.('eggDiscover');
     }
@@ -462,10 +473,11 @@ export default function PlayerController({
       rig.position.copy(nextPos);
     }
 
-    // Speed boost pads detection
+    // Speed boost pads detection and duration handling
     const activeBoostPad = checkSpeedPadOverlap(rig.position);
     if (activeBoostPad && lastBoostPadRef.current !== activeBoostPad.id) {
       lastBoostPadRef.current = activeBoostPad.id;
+      boostOverrideTimerRef.current = 1.4;
       if (isVehicle) {
         rig.speed = Math.max(rig.speed, activeBoostPad.boostSpeed);
       }
@@ -474,10 +486,15 @@ export default function PlayerController({
       lastBoostPadRef.current = null;
     }
 
+    if (boostOverrideTimerRef.current > 0) {
+      boostOverrideTimerRef.current -= delta;
+    }
+
     // Cyber Shards collectible detection
-    const collectedShards = checkShardCollection(rig.position, undefined, collectedShardIds);
+    const collectedShards = checkShardCollection(rig.position, undefined, localCollectedSetRef.current);
     if (collectedShards.length > 0) {
       collectedShards.forEach((shard) => {
+        localCollectedSetRef.current.add(shard.id);
         onCollectShard?.(shard);
         playSfx?.('collect');
       });
@@ -507,7 +524,6 @@ export default function PlayerController({
       rig.bank += (0 - rig.bank) * dampFactor(6, delta);
     }
 
-    // Proximity detection (unified across warp pads, buildings, easter eggs, landmarks)
     const proxTarget = detectProximity({
       playerPos: rig.position,
       apps,
@@ -523,7 +539,10 @@ export default function PlayerController({
       onProximityChange?.(proxTarget);
     }
 
-    // Live telemetry update for HUD speedometer & Mini-map
+    const reportingSpeed = isVehicle
+      ? rig.speed
+      : (hasHorizontal ? (isSprinting ? SPRINT_SPEED : WALK_SPEED) * (forwardInput < 0 ? -1 : 1) : 0);
+
     poseTickRef.current = (poseTickRef.current || 0) + 1;
     if (poseTickRef.current % 3 === 0) {
       onPlayerPoseChange?.({
@@ -531,7 +550,7 @@ export default function PlayerController({
         y: rig.position.y,
         z: rig.position.z,
         heading: rig.heading,
-        speed: rig.speed,
+        speed: reportingSpeed,
         skid: rig.skid,
         state: rig.state,
         jumping: rig.jumping,

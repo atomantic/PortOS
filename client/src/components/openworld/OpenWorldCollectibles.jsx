@@ -2,11 +2,8 @@ import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { getCollectiblesList } from '../../utils/openWorldCollectibles';
-import { useOpenWorldPalette } from './OpenWorldPaletteContext';
 
-// Floating, glowing Cyber Shards scattered across OpenWorld.
-// Collecting them triggers an energetic particle sparkle and score feedback.
-function ShardMesh({ shard, collected, animate }) {
+function ShardMesh({ shard, animate }) {
   const meshRef = useRef();
   const ringRef = useRef();
   const { color, x, y, z, pulsePhase } = shard;
@@ -25,11 +22,8 @@ function ShardMesh({ shard, collected, animate }) {
     }
   });
 
-  if (collected) return null;
-
   return (
     <group position={[x, 0, z]}>
-      {/* Floating faceted crystal */}
       <mesh ref={meshRef} position={[0, y, 0]}>
         <octahedronGeometry args={[0.55, 0]} />
         <meshStandardMaterial
@@ -42,10 +36,6 @@ function ShardMesh({ shard, collected, animate }) {
         />
       </mesh>
 
-      {/* Point light for nighttime radiance */}
-      <pointLight position={[0, y, 0]} color={color} intensity={0.9} distance={6} />
-
-      {/* Ground marker ring */}
       <mesh ref={ringRef} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.04, 0]}>
         <ringGeometry args={[0.6, 0.72, 16]} />
         <meshBasicMaterial
@@ -61,7 +51,6 @@ function ShardMesh({ shard, collected, animate }) {
   );
 }
 
-// Particle burst effect when a shard is collected
 function CollectionBurst({ burst }) {
   const groupRef = useRef();
 
@@ -102,14 +91,17 @@ export default function OpenWorldCollectibles({
 }) {
   const shards = useMemo(() => getCollectiblesList(), []);
   const animate = (settings?.particleDensity ?? 1) >= 0.5;
+  const visibleShards = useMemo(
+    () => shards.filter((s) => !collectedShardIds.has(s.id)),
+    [shards, collectedShardIds]
+  );
 
   return (
     <group>
-      {shards.map((shard) => (
+      {visibleShards.map((shard) => (
         <ShardMesh
           key={shard.id}
           shard={shard}
-          collected={collectedShardIds.has(shard.id)}
           animate={animate}
         />
       ))}

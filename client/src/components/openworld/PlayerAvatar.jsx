@@ -78,19 +78,16 @@ export default function PlayerAvatar({ rigRef }) {
       underglowRef.current.material.opacity = (hovering ? 0.42 : moving ? 0.26 : 0.16) + Math.sin(t * 4) * 0.025;
     }
 
-    // Nitro Thruster Exhaust Flames
     if (thrusterRef.current) {
       const flameScale = isBoosting ? 1 + Math.sin(t * 28) * 0.3 : 0.001;
       thrusterRef.current.scale.set(flameScale, flameScale, isBoosting ? 1.4 + Math.sin(t * 32) * 0.4 : 0.001);
       thrusterRef.current.visible = isBoosting;
     }
 
-    // Brake Light Intensity
     if (brakeLightRef.current) {
       brakeLightRef.current.material.emissiveIntensity = isBraking ? 1.2 : 0.28;
     }
 
-    // Drift / Skid Smoke Puffs
     if (skidSmokeRef.current) {
       const isSkidding = rig.skid > 0.35 && speedRatio > 0.3;
       skidSmokeRef.current.visible = isSkidding;
@@ -121,13 +118,11 @@ export default function PlayerAvatar({ rigRef }) {
           <boxGeometry args={[CAR_WIDTH * 0.88, 0.08, 0.1]} />
           <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={0.45} />
         </mesh>
-        {/* Rear tail / brake light */}
         <mesh ref={brakeLightRef} position={[0, 0.4, CAR_LENGTH * 0.53]}>
           <boxGeometry args={[CAR_WIDTH * 0.82, 0.07, 0.08]} />
           <meshStandardMaterial color="#ef5252" emissive="#ef5252" emissiveIntensity={0.28} />
         </mesh>
 
-        {/* Nitro boost thruster flames */}
         <group ref={thrusterRef} position={[0, 0.38, CAR_LENGTH * 0.58]} visible={false}>
           {[-CAR_WIDTH * 0.24, CAR_WIDTH * 0.24].map((offsetX, i) => (
             <mesh key={`flame-${i}`} position={[offsetX, 0, 0]} rotation={[Math.PI / 2, 0, 0]}>
@@ -169,7 +164,6 @@ export default function PlayerAvatar({ rigRef }) {
         ))}
       </group>
 
-      {/* Drift skid smoke effect at rear wheels */}
       <group ref={skidSmokeRef} position={[0, 0.08, WHEEL_Z]} visible={false}>
         {[-WHEEL_X, WHEEL_X].map((wx, i) => (
           <mesh key={`smoke-${i}`} position={[wx, 0, 0]}>
