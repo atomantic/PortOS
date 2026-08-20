@@ -289,6 +289,7 @@ const { makeProc } = vi.hoisted(() => ({
       stdout: { on: vi.fn() },
       stderr: { on: vi.fn() },
       on(event, fn) { listeners[event] = fn; return proc; },
+      off(event, fn) { if (listeners[event] === fn) delete listeners[event]; return proc; },
       kill: vi.fn(),
     };
     // fire close(0) async so the caller's .on('close') handler can register first
@@ -653,6 +654,7 @@ describe('generateChainedVideo — continuation strategy (context window vs last
         stdout: { on: vi.fn() },
         stderr: { on: vi.fn() },
         on(event, fn) { listeners[event] = fn; return proc; },
+        off(event, fn) { if (listeners[event] === fn) delete listeners[event]; return proc; },
         kill: vi.fn(),
       };
       setImmediate(() => listeners.close?.(1, null));
@@ -1388,6 +1390,7 @@ describe('generateVideo — panel-side completion watchdog', () => {
       stdout: { on: vi.fn((event, fn) => { if (event === 'data') stdoutData = fn; }) },
       stderr: { on: vi.fn() },
       on(event, fn) { listeners[event] = fn; return proc; },
+      off(event, fn) { if (listeners[event] === fn) delete listeners[event]; return proc; },
       kill: vi.fn((signal) => { proc.killed = true; proc.signalCode = signal; }),
     };
     return {
@@ -1627,6 +1630,7 @@ describe('generateVideo — pre-output idle-stall deadline', () => {
       stdout: { on: vi.fn((event, fn) => { if (event === 'data') stdoutData = fn; }) },
       stderr: { on: vi.fn((event, fn) => { if (event === 'data') stderrData = fn; }) },
       on(event, fn) { listeners[event] = fn; return proc; },
+      off(event, fn) { if (listeners[event] === fn) delete listeners[event]; return proc; },
       kill: vi.fn((signal) => { proc.killed = true; proc.signalCode = signal; }),
     };
     return {
@@ -2128,15 +2132,13 @@ describe('generateVideo — close-handler resilience (issue #1334)', () => {
   // `running` with no terminal SSE — it has to surface as a 'failed' event.
   it('routes a finalize throw to a terminal failed event instead of an unhandled rejection', async () => {
     vi.resetModules();
-    vi.doMock('./generateVideoHelpers.js', () => ({
-      makeVideoGenLineHandler: () => () => true,
+    // Spread the real module rather than enumerating the handful of exports
+    // generateVideo happens to use today: a listed-exports-only mock breaks the
+    // whole file the moment local.js imports one more helper (it did, twice).
+    vi.doMock('./generateVideoHelpers.js', async (importOriginal) => ({
+      ...(await importOriginal()),
       isWatchdogSuccess: () => false,
       finalizeGeneratedVideo: vi.fn(async () => { throw new Error('boom finalize'); }),
-      // Durable re-render inputs (#3696) — generateVideo reads both while
-      // building `meta`, so a partial mock has to carry them or every render
-      // in this file throws on the missing export.
-      describeRenderConditioning: () => [],
-      RENDER_INPUTS_VERSION: 1,
     }));
     const { generateVideo: gv } = await import('./local.js');
     const { videoGenEvents: events } = await import('./events.js');
@@ -2752,6 +2754,7 @@ describe('generateVideo — BYOV missing-python-module failure path (#1833 regre
         stdout: { on: vi.fn() },
         stderr: { on: (event, fn) => { stderrListeners[event] = fn; } },
         on(event, fn) { listeners[event] = fn; return proc; },
+        off(event, fn) { if (listeners[event] === fn) delete listeners[event]; return proc; },
         kill: vi.fn(),
       };
       // Feed the missing-module traceback to the stderr parser, then exit non-zero.
@@ -2825,6 +2828,7 @@ describe('generateVideo — chunk-boundary marker parsing (#2463)', () => {
       stdout: { on: vi.fn((event, fn) => { if (event === 'data') stdoutData = fn; }) },
       stderr: { on: vi.fn((event, fn) => { if (event === 'data') stderrData = fn; }) },
       on(event, fn) { listeners[event] = fn; return proc; },
+      off(event, fn) { if (listeners[event] === fn) delete listeners[event]; return proc; },
       kill: vi.fn((signal) => { proc.killed = true; proc.signalCode = signal; }),
     };
     return {
@@ -2931,6 +2935,7 @@ describe('generateVideo — signal-death diagnosis (#3101)', () => {
       stdout: { on: vi.fn((event, fn) => { if (event === 'data') stdoutData = fn; }) },
       stderr: { on: vi.fn((event, fn) => { if (event === 'data') stderrData = fn; }) },
       on(event, fn) { listeners[event] = fn; return proc; },
+      off(event, fn) { if (listeners[event] === fn) delete listeners[event]; return proc; },
       kill: vi.fn((signal) => { proc.killed = true; proc.signalCode = signal; }),
     };
     return {
@@ -3885,13 +3890,16 @@ describe('generateVideo — Gemma prompt-encode watchdog relaunch', () => {
       },
       stderr: { on: vi.fn((event, fn) => { onData[`stderr:${event}`] = fn; }) },
       on(event, fn) { listeners[event] = fn; return proc; },
+      off(event, fn) { if (listeners[event] === fn) delete listeners[event]; return proc; },
       kill: vi.fn(),
     };
     return {
       proc,
-      // The listener that decides whether this child can ever report a terminal
-      // event. Its presence is the whole point of wiring before the handoff.
-      isWired: () => typeof listeners.close === 'function',
+      // Full wiring — the stdout reader goes on with the real terminal handler,
+      // and only there. The pre-handoff exit buffer subscribes to 'close'/'error'
+      // alone, so this stays false across the handoff window even though the
+      // child's exit can no longer be lost.
+      isWired: () => typeof onData['stdout:data'] === 'function',
       stderr: (text) => onData['stderr:data']?.(Buffer.from(`${text}\n`)),
       close: async (code, signal) => {
         proc.exitCode = code;
@@ -4256,5 +4264,125 @@ describe('generateVideo — Gemma prompt-encode watchdog relaunch', () => {
     await second.close(3, null);
     expect(failures).toHaveLength(1);
     expect(heavyClaimRelease).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── the first render child vs the accelerator handoff (#4617) ────────────────
+// Between `spawnDetached` resolving and the render child's real listeners going
+// on sits the machine-claim handoff — an await on real file I/O. A child that
+// dies inside that window emits with nobody subscribed: a lost 'close' leaves
+// the job `running` forever while still holding the accelerator claim (every
+// later render then 409s), and a lost 'error' is worse, since an EventEmitter
+// with no 'error' listener throws and takes the server down with it.
+describe('generateVideo — first render child dies during the accelerator handoff', () => {
+  // A child that never exits on its own, so the test decides exactly when — and
+  // from where — its terminal event fires.
+  const makeSilentProc = (pid) => {
+    const listeners = {};
+    const proc = {
+      pid,
+      exitCode: null,
+      signalCode: null,
+      killed: false,
+      stdout: { on: vi.fn() },
+      stderr: { on: vi.fn() },
+      on(event, fn) { listeners[event] = fn; return proc; },
+      off(event, fn) { if (listeners[event] === fn) delete listeners[event]; return proc; },
+      kill: vi.fn(),
+    };
+    return {
+      proc,
+      close: (code, signal) => {
+        proc.exitCode = code;
+        proc.signalCode = signal;
+        return listeners.close?.(code, signal);
+      },
+      // A spawn-side failure (no `sh`, no PID recorded) — the handle reports it
+      // as 'error' and never populates exitCode, so nothing but a listener can
+      // observe it.
+      error: (err) => listeners.error?.(err),
+    };
+  };
+
+  let failures;
+  let onFailed;
+
+  beforeEach(() => {
+    failures = [];
+    onFailed = (payload) => failures.push(payload);
+    videoGenEvents.on('failed', onFailed);
+  });
+
+  afterEach(() => {
+    videoGenEvents.off('failed', onFailed);
+  });
+
+  const render = async (jobId, child, duringHandoff) => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    vi.mocked(spawnDetached).mockClear();
+    vi.mocked(spawnDetached).mockResolvedValueOnce(child.proc);
+    heavyClaimHandoff.mockImplementationOnce(async () => duringHandoff());
+    return generateVideo({
+      jobId,
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified',
+      prompt: 'a lighthouse in fog',
+      width: 512,
+      height: 512,
+      numFrames: 25,
+      fps: 24,
+      seed: 987654,
+    });
+  };
+
+  it('reports the exit and hands the accelerator claim back when the close lands unsubscribed', async () => {
+    const child = makeSilentProc(201);
+    await render('first-child-close-in-handoff', child, () => child.close(3, null));
+
+    expect(failures).toHaveLength(1);
+    expect(failures[0].error).toMatch(/Exit code 3/);
+    expect(heavyClaimRelease).toHaveBeenCalled();
+
+    // …and the real 'close' arriving late carries the same status through a
+    // handler that already ran, so the job must not fail (or release) twice.
+    await child.close(3, null);
+    expect(failures).toHaveLength(1);
+    expect(heavyClaimRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a spawn error raised in the same window, which no exit status records', async () => {
+    const child = makeSilentProc(202);
+    await render('first-child-error-in-handoff', child, () => child.error(new Error('detached spawn produced no PID')));
+
+    // exitCode/signalCode stay null on a spawn failure — only a subscriber sees it.
+    expect(child.proc.exitCode).toBeNull();
+    expect(failures).toHaveLength(1);
+    expect(failures[0].error).toMatch(/produced no PID/);
+    expect(heavyClaimRelease).toHaveBeenCalled();
+  });
+
+  it('stops the child and releases the claim when the handoff itself throws', async () => {
+    const child = makeSilentProc(203);
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    vi.mocked(spawnDetached).mockClear();
+    vi.mocked(spawnDetached).mockResolvedValueOnce(child.proc);
+    heavyClaimHandoff.mockImplementationOnce(async () => { throw new Error('claim file vanished'); });
+
+    await expect(generateVideo({
+      jobId: 'first-child-handoff-throws',
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified',
+      prompt: 'a lighthouse in fog',
+      width: 512,
+      height: 512,
+      numFrames: 25,
+      fps: 24,
+      seed: 987654,
+    })).rejects.toThrow('claim file vanished');
+
+    // Never wired, so it could never report anything — it must not be left
+    // running, and the claim it may already have been handed has to come back.
+    expect(child.proc.kill).toHaveBeenCalledWith('SIGTERM');
+    expect(heavyClaimRelease).toHaveBeenCalled();
   });
 });

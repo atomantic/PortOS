@@ -40,7 +40,7 @@ import {
 import { hfChildEnv } from '../../lib/hfToken.js';
 import { inspectModelCache, findCachedRepoFile, findCachedRepoFiles } from '../../lib/hfCache.js';
 import { safeChildProcessEnv, safeChildProcessOptions } from '../../lib/processEnv.js';
-import { makeVideoGenLineHandler, finalizeGeneratedVideo, isWatchdogSuccess, describeSignalDeath, describeRenderConditioning, planPromptEncodingRetry, RENDER_INPUTS_VERSION } from './generateVideoHelpers.js';
+import { makeVideoGenLineHandler, finalizeGeneratedVideo, isWatchdogSuccess, describeSignalDeath, describeRenderConditioning, planPromptEncodingRetry, bufferChildExit, RENDER_INPUTS_VERSION } from './generateVideoHelpers.js';
 import { assertSafeLoraFilename, getLoraKeyLayout } from '../loras.js';
 import { videoLoraFamily, isLtx2FamilyRuntime } from '../../lib/runners.js';
 import {
@@ -1587,7 +1587,9 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // The first render child. Named apart from the `proc` each wireRenderChild()
   // call binds, so a relaunch cannot be confused with the original.
   let firstProc;
-  let claimHandedOff = false;
+  // Reads (and detaches) whatever terminal event the first child emitted before
+  // its real listeners were attached. Set the instant the spawn resolves.
+  let takeEarlyExit = null;
   // Prompt-encode relaunches already spent on this job. Exactly one is allowed:
   // a second watchdog abort at the reduced budget is a real failure the user has
   // to see, not something to keep grinding the GPU over.
@@ -1595,79 +1597,6 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // Hoisted out of the try so a relaunch can respawn with the SAME child env
   // plus a lowered Gemma budget, instead of rebuilding it from scratch.
   let childEnv;
-  try {
-    const memoryReport = await prepareLocalMemory();
-    if (memoryReport.unloaded.length) console.log(`🧹 Video generation [${jobId.slice(0, 8)}] freed ${memoryReport.unloaded.length} resident model(s)`);
-
-    // History-calibrated wall-clock estimate (#3801). `null` when this install
-    // has never measured a render on this model — an explicit "no estimate"
-    // sentinel the UI must render as "unknown", never as 0 or a guess. Stamped
-    // on the job so every progress frame can carry it alongside step progress.
-    const etaEstimate = estimateRenderMs({
-      history: await loadHistory(),
-      modelId,
-      width: w,
-      height: h,
-      numFrames: parsedNumFrames,
-      steps: actualSteps,
-    });
-    job.etaMs = etaEstimate ? etaEstimate.etaMs : null;
-    const etaFields = etaEstimate
-      ? { etaMs: etaEstimate.etaMs, etaBasis: etaEstimate.basis, etaSampleCount: etaEstimate.sampleCount }
-      : { etaMs: null };
-    job.renderStartedAtMs = Date.now();
-
-    console.log(`🎬 Generating video [${jobId.slice(0, 8)}]: ${modelId} ${w}x${h} frames=${parsedNumFrames} steps=${actualSteps} eta=${etaEstimate ? `${Math.round(etaEstimate.etaMs / 1000)}s (${etaEstimate.basis}, n=${etaEstimate.sampleCount})` : 'unknown'}`);
-    videoGenEvents.emit('started', { generationId: jobId, totalSteps: actualSteps, ...meta, ...etaFields });
-
-    // Clear PYTHONPATH so the child uses the venv's own site-packages instead
-    // of the parent shell's PYTHONPATH. Setting to `undefined` in a spread does
-    // NOT unset the var — Node coerces it to the literal string "undefined" —
-    // so build the env explicitly and `delete`.
-    // Build the complete HF child env so the Wan 2.2 / HunyuanVideo
-    // python helpers can authenticate snapshot_download() against gated repos
-    // (mirrors the imageGen child-spawn pattern). LTX-2 doesn't currently use
-    // a gated repo, but the merge is harmless when no token is configured.
-    childEnv = runtimeIsCacheOnly(model.runtime)
-      ? safeChildProcessEnv()
-      : await hfChildEnv();
-    delete childEnv.PYTHONPATH;
-    // Force unbuffered Python I/O so tqdm + loguru + our own STAGE: prints flush
-    // immediately. Without this, child stdio is line-buffered against a pipe and
-    // long inference loops emit nothing to handleLine() for minutes — the UI
-    // looks dead even when the model is making progress.
-    childEnv.PYTHONUNBUFFERED = '1';
-    if (runtimeIsCacheOnly(model.runtime)) {
-      // A cache-only runner never reaches the network. Do not hand it an ambient
-      // saved HF credential it neither needs nor may transmit.
-      delete childEnv.HF_TOKEN;
-      delete childEnv.HUGGING_FACE_HUB_TOKEN;
-      childEnv.HF_HUB_DISABLE_IMPLICIT_TOKEN = '1';
-      childEnv.HF_HUB_OFFLINE = '1';
-      childEnv.TRANSFORMERS_OFFLINE = '1';
-    }
-    // `spawnDetached` double-forks the render child so it reparents to init
-    // (PPID=1) and leaves pm2's process tree — without this a `pm2 restart
-    // portos-server` (e.g. on the memory ceiling) SIGINTs the in-flight render
-    // mid-inference, since pm2's TreeKill walks PPIDs. (This child previously had
-    // no detach at all, so it was fully exposed.) Output streams through on-disk
-    // log files under `data/videos/.detached/<jobId>` that the server tails; we
-    // still `proc.kill()` it directly by PID on cancel / watchdog. `cleanup: true`
-    // lets the helper drop that scratch dir on every terminal path (close/error)
-    // so it can't accumulate under data/videos.
-    firstProc = await spawnDetached(bin, args, {
-      env: childEnv,
-      controlDir: join(PATHS.videos, '.detached', jobId),
-      cleanup: true,
-      killProcessGroup: runtimeNeedsProcessGroupKill(model.runtime),
-    });
-    activeProcess = firstProc;
-    await heavyClaim.handoffTo?.(firstProc.pid);
-    claimHandedOff = true;
-  } catch (err) {
-    if (!claimHandedOff) await releaseHeavyClaim();
-    throw err;
-  }
 
   // ── one render child, fully wired ──────────────────────────────────────────
   // Everything per-CHILD lives in here — the process handle, both watchdogs, the
@@ -1779,9 +1708,19 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     if (process.platform === 'darwin' && proc.pid) {
       spawn('caffeinate', ['-dis', '-w', String(proc.pid)], { stdio: 'ignore', detached: false }).on('error', () => {});
     }
+    // Guards the ONE terminal run of this child's teardown, across BOTH terminal
+    // paths ('error' and 'close'). The caller may have to replay a terminal
+    // event this child emitted before it was wired, and that must not
+    // double-release the accelerator claim, double-clean the temp files, or emit
+    // two terminal events if the real event lands as well.
+    let closeHandled = false;
     // Without an 'error' handler, a missing/non-executable pythonPath would
-    // crash the server with an unhandled error event.
-    proc.on('error', (err) => {
+    // crash the server with an unhandled error event. Named (rather than an
+    // inline arrow) so the caller can replay an 'error' this child emitted
+    // before it was wired.
+    const handleChildError = (err) => {
+      if (closeHandled) return;
+      closeHandled = true;
       clearCompletionWatchdog();
       clearIdleStallTimer();
       job.status = 'error';
@@ -1798,7 +1737,8 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
       // uploadedTempPaths tracking. Duplicate unlinks remain harmless.
       void cleanupTempFiles({ includeUploads: true, includeUntrackedAudio: true });
       closeJobAfterDelay(jobs, jobId);
-    });
+    };
+    proc.on('error', handleChildError);
 
     let missingPyModule = null;
     // Rolling tail of this child's stderr. The Metal abort text is the only
@@ -1867,12 +1807,6 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
       stderrReader.push(chunk);
     });
 
-    // Guards the ONE terminal run of this child's teardown. The relaunch path
-    // may have to drive handleChildClose() by hand (a replacement that died
-    // before its listener was attached), and that must not double-release the
-    // claim, double-clean the temp files, or emit two terminal events if the
-    // real event lands as well.
-    let closeHandled = false;
     const handleChildClose = async (code, signal) => {
       if (closeHandled) return;
       closeHandled = true;
@@ -1977,7 +1911,33 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
       }
     };
     proc.on('close', handleChildClose);
-    return handleChildClose;
+    return { handleChildClose, handleChildError };
+  };
+
+  // Wire a freshly spawned render child and return the replay for whatever
+  // terminal event the exit buffer caught while the claim handoff was in flight.
+  // `takeEarlyExit` is read in the SAME tick the real listeners go on — no await
+  // between — or the gap the buffer exists to close reopens.
+  //
+  // The replay is separated from the wiring so a caller can mark the child
+  // OWNED before awaiting it: the replay runs the full teardown, and a child
+  // that already owns the job must never be mistaken for an abandoned one by
+  // the failure path that would otherwise kill it.
+  const wireSpawnedChild = (proc, takeEarlyExit) => {
+    // The buffer is the primary catch. Reading the corpse's exit state is the
+    // backstop for a handle that recorded its exit without emitting anything.
+    const earlyExit = takeEarlyExit()
+      || (proc.exitCode !== null || proc.signalCode !== null
+        ? { type: 'close', code: proc.exitCode, signal: proc.signalCode }
+        : null);
+    const { handleChildClose, handleChildError } = wireRenderChild(proc);
+    const replayEarlyExit = async () => {
+      if (!earlyExit) return;
+      console.log(`⚠️ video render child exited before it was wired [${jobId.slice(0, 8)}]`);
+      if (earlyExit.type === 'error') handleChildError(earlyExit.error);
+      else await handleChildClose(earlyExit.code, earlyExit.signal);
+    };
+    return replayEarlyExit;
   };
 
   // Whether a cancel landed while the relaunch was awaiting something, and if so
@@ -1989,22 +1949,23 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     // Fall through to the normal failure path, so the job still reports a
     // terminal event instead of quietly running to completion after a cancel.
     console.log(`🛑 canceled during the prompt-encode relaunch — stopping the replacement child [${jobId.slice(0, 8)}]`);
-    stopAbandonedRetryChild(retryProc);
+    stopAbandonedChild(retryProc);
     return true;
   };
 
-  // Stop a replacement child that was spawned but will never be wired up —
-  // canceled mid-relaunch, or abandoned because a later setup step threw. It has
-  // no close/error listeners by then, so nothing else would ever reap it.
+  // Stop a render child that was spawned but will never be wired up — the first
+  // child when its claim handoff threw, or a replacement canceled mid-relaunch /
+  // abandoned because a later setup step threw. It has no real close handler by
+  // then, so nothing else would ever reap it.
   // Tolerant of a null handle (the spawn itself threw) and of a kill that throws
   // on an already-dead PID, because this runs on the failure path of a failure
   // path and must not replace the real error with its own.
-  const stopAbandonedRetryChild = (child) => {
+  const stopAbandonedChild = (child) => {
     if (!child) return;
     try {
       child.kill('SIGTERM');
     } catch (err) {
-      console.error(`❌ abandoned prompt-encode retry child would not stop [${jobId.slice(0, 8)}]: ${err.message}`);
+      console.error(`❌ abandoned video render child would not stop [${jobId.slice(0, 8)}]: ${err.message}`);
     }
   };
 
@@ -2040,10 +2001,10 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     // an uncaught throw here would crash the process, and a failed relaunch must
     // degrade into the normal failure report rather than strand the job.
     // Declared outside the try so the catch can stop a child that was spawned
-    // before a later step threw — an unwired child has no listeners and nothing
-    // left to reap it. `retryWired` is the cut-off: past that point the child
-    // owns the job and reports its own terminal event, so the catch must leave
-    // it alone.
+    // before a later step threw — an unwired child has only the exit buffer
+    // absorbing its events, and nothing that would ever reap it. `retryWired` is
+    // the cut-off: past that point the child owns the job and reports its own
+    // terminal event, so the catch must leave it alone.
     let retryProc = null;
     let retryWired = false;
     try {
@@ -2059,12 +2020,16 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
         cleanup: true,
         killProcessGroup: runtimeNeedsProcessGroupKill(model.runtime),
       });
+      // Catch the replacement's terminal event in the same tick the spawn
+      // resolved — the handoff below yields to the event loop, and a child that
+      // dies in that window would otherwise emit into the void.
+      const takeRetryEarlyExit = bufferChildExit(retryProc);
       if (canceledDuringRelaunch(cancelEpochAtClose, retryProc)) return false;
       // Both awaits finish BEFORE activeProcess starts pointing at the
-      // replacement, and the two statements that follow them are synchronous.
+      // replacement, and the statements that follow them are synchronous.
       // That ordering is load-bearing twice over:
-      //   - cancel() can never reach a child that has no close listener yet, so
-      //     no exit can be emitted into the void and strand the job `running`;
+      //   - cancel() can never reach a child that is not fully wired yet, so no
+      //     exit can be acted on before the job is ready for it;
       //   - the child therefore cannot run its close handler (and release the
       //     accelerator claim) while this handoff is still in flight, which would
       //     otherwise let the handoff re-write the claim file with a dead PID and
@@ -2077,25 +2042,16 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
       // render that actually produced the video would poison every later
       // estimate for this model.
       job.renderStartedAtMs = Date.now();
-      const handleRetryClose = wireRenderChild(retryProc);
+      const replayEarlyExit = wireSpawnedChild(retryProc, takeRetryEarlyExit);
       retryWired = true;
-      // The handoff above yields to the event loop, so a replacement child that
-      // died in that window emitted its 'close' with nobody listening — the job
-      // would sit `running` forever, holding the accelerator claim. Read the
-      // corpse's exit state and drive the terminal path by hand; the handler is
-      // guarded against a double run, so a real 'close' that also lands is a
-      // no-op.
-      if (retryProc.exitCode !== null || retryProc.signalCode !== null) {
-        console.log(`⚠️ prompt-encode replacement child exited before it was wired [${jobId.slice(0, 8)}]`);
-        await handleRetryClose(retryProc.exitCode, retryProc.signalCode);
-      }
+      await replayEarlyExit();
       return true;
     } catch (err) {
       console.error(`❌ prompt-encode retry failed to spawn [${jobId.slice(0, 8)}]: ${err.message}`);
       // Wired means the child owns the job and will report its own terminal
       // event, so nothing here may kill it. Unwired, it can never report at all.
       if (retryWired) return true;
-      stopAbandonedRetryChild(retryProc);
+      stopAbandonedChild(retryProc);
       // Nothing is running under this job any more; leave the invariant cancel()
       // reads (activeProcess === the live child, or null) intact.
       activeProcess = null;
@@ -2103,7 +2059,100 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     }
   };
 
-  wireRenderChild(firstProc);
+  try {
+    const memoryReport = await prepareLocalMemory();
+    if (memoryReport.unloaded.length) console.log(`🧹 Video generation [${jobId.slice(0, 8)}] freed ${memoryReport.unloaded.length} resident model(s)`);
+
+    // History-calibrated wall-clock estimate (#3801). `null` when this install
+    // has never measured a render on this model — an explicit "no estimate"
+    // sentinel the UI must render as "unknown", never as 0 or a guess. Stamped
+    // on the job so every progress frame can carry it alongside step progress.
+    const etaEstimate = estimateRenderMs({
+      history: await loadHistory(),
+      modelId,
+      width: w,
+      height: h,
+      numFrames: parsedNumFrames,
+      steps: actualSteps,
+    });
+    job.etaMs = etaEstimate ? etaEstimate.etaMs : null;
+    const etaFields = etaEstimate
+      ? { etaMs: etaEstimate.etaMs, etaBasis: etaEstimate.basis, etaSampleCount: etaEstimate.sampleCount }
+      : { etaMs: null };
+    job.renderStartedAtMs = Date.now();
+
+    console.log(`🎬 Generating video [${jobId.slice(0, 8)}]: ${modelId} ${w}x${h} frames=${parsedNumFrames} steps=${actualSteps} eta=${etaEstimate ? `${Math.round(etaEstimate.etaMs / 1000)}s (${etaEstimate.basis}, n=${etaEstimate.sampleCount})` : 'unknown'}`);
+    videoGenEvents.emit('started', { generationId: jobId, totalSteps: actualSteps, ...meta, ...etaFields });
+
+    // Clear PYTHONPATH so the child uses the venv's own site-packages instead
+    // of the parent shell's PYTHONPATH. Setting to `undefined` in a spread does
+    // NOT unset the var — Node coerces it to the literal string "undefined" —
+    // so build the env explicitly and `delete`.
+    // Build the complete HF child env so the Wan 2.2 / HunyuanVideo
+    // python helpers can authenticate snapshot_download() against gated repos
+    // (mirrors the imageGen child-spawn pattern). LTX-2 doesn't currently use
+    // a gated repo, but the merge is harmless when no token is configured.
+    childEnv = runtimeIsCacheOnly(model.runtime)
+      ? safeChildProcessEnv()
+      : await hfChildEnv();
+    delete childEnv.PYTHONPATH;
+    // Force unbuffered Python I/O so tqdm + loguru + our own STAGE: prints flush
+    // immediately. Without this, child stdio is line-buffered against a pipe and
+    // long inference loops emit nothing to handleLine() for minutes — the UI
+    // looks dead even when the model is making progress.
+    childEnv.PYTHONUNBUFFERED = '1';
+    if (runtimeIsCacheOnly(model.runtime)) {
+      // A cache-only runner never reaches the network. Do not hand it an ambient
+      // saved HF credential it neither needs nor may transmit.
+      delete childEnv.HF_TOKEN;
+      delete childEnv.HUGGING_FACE_HUB_TOKEN;
+      childEnv.HF_HUB_DISABLE_IMPLICIT_TOKEN = '1';
+      childEnv.HF_HUB_OFFLINE = '1';
+      childEnv.TRANSFORMERS_OFFLINE = '1';
+    }
+    // `spawnDetached` double-forks the render child so it reparents to init
+    // (PPID=1) and leaves pm2's process tree — without this a `pm2 restart
+    // portos-server` (e.g. on the memory ceiling) SIGINTs the in-flight render
+    // mid-inference, since pm2's TreeKill walks PPIDs. (This child previously had
+    // no detach at all, so it was fully exposed.) Output streams through on-disk
+    // log files under `data/videos/.detached/<jobId>` that the server tails; we
+    // still `proc.kill()` it directly by PID on cancel / watchdog. `cleanup: true`
+    // lets the helper drop that scratch dir on every terminal path (close/error)
+    // so it can't accumulate under data/videos.
+    firstProc = await spawnDetached(bin, args, {
+      env: childEnv,
+      controlDir: join(PATHS.videos, '.detached', jobId),
+      cleanup: true,
+      killProcessGroup: runtimeNeedsProcessGroupKill(model.runtime),
+    });
+    // Subscribe in the SAME tick the spawn resolved, before anything below can
+    // yield. spawnDetached defers its first emission to a setImmediate so a
+    // caller that wires synchronously misses nothing — but the claim handoff
+    // below awaits real file I/O, and a child that dies inside that window (a
+    // venv that imports and aborts, an OOM kill, a launcher that never produced
+    // a PID) emits into the void: a lost 'close' strands the job `running`
+    // forever, still holding the accelerator claim, and a lost 'error' is worse
+    // — an EventEmitter with no 'error' listener THROWS and takes the server
+    // with it.
+    takeEarlyExit = bufferChildExit(firstProc);
+    activeProcess = firstProc;
+    await heavyClaim.handoffTo?.(firstProc.pid);
+  } catch (err) {
+    // Nothing is wired, so this child can never report a terminal event and
+    // nothing would reap it — and once the handoff pointed the claim at its PID,
+    // nothing would release the claim either. Stop it and release unconditionally
+    // (release() is idempotent and still ours after a handoff).
+    stopAbandonedChild(firstProc);
+    if (activeProcess === firstProc) activeProcess = null;
+    await releaseHeavyClaim();
+    throw err;
+  }
+
+  // Terminal listeners go on here, and the buffer hands over anything the child
+  // already emitted — so a child that died during the handoff still drives the
+  // job to a terminal state and gives the accelerator claim back.
+  const replayEarlyExit = wireSpawnedChild(firstProc, takeEarlyExit);
+  await replayEarlyExit();
 
   return { jobId, generationId: jobId, filename, mode: 'local', model: modelId };
 }

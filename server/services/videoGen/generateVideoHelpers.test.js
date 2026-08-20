@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { makeVideoGenLineHandler, isWatchdogSuccess, finalizeGeneratedVideo, parseByteProgress, formatBytes, formatDownloadMessage, describeSignalDeath, formatRuntimeFingerprint, describeRenderConditioning, isPromptEncodingMetalWatchdog, planPromptEncodingRetry, DEFAULT_GEMMA_MAX_LENGTH, RETRY_GEMMA_MAX_LENGTH, RENDER_INPUTS_VERSION } from './generateVideoHelpers.js';
+import { EventEmitter } from 'events';
+import { makeVideoGenLineHandler, isWatchdogSuccess, finalizeGeneratedVideo, parseByteProgress, formatBytes, formatDownloadMessage, describeSignalDeath, formatRuntimeFingerprint, describeRenderConditioning, isPromptEncodingMetalWatchdog, planPromptEncodingRetry, DEFAULT_GEMMA_MAX_LENGTH, RETRY_GEMMA_MAX_LENGTH, bufferChildExit, RENDER_INPUTS_VERSION } from './generateVideoHelpers.js';
 
 describe('parseByteProgress', () => {
   it('parses single byte value (e.g., "2.5G")', () => {
@@ -569,5 +570,52 @@ describe('planPromptEncodingRetry', () => {
   it('passes the classifier verdict straight through', () => {
     expect(planPromptEncodingRetry({ ...qualifying, promptEncodePhase: 'done' })).toBeNull();
     expect(planPromptEncodingRetry({ ...qualifying, signal: 'SIGKILL' })).toBeNull();
+  });
+});
+
+// The window between "spawn resolved" and "real listeners attached" is an await
+// on real file I/O (the accelerator claim handoff). A child that dies in it
+// emits unsubscribed — and for 'error' that is not merely lost but fatal, since
+// an EventEmitter with no 'error' listener throws.
+describe('bufferChildExit', () => {
+  it('reports nothing for a child that is still alive', () => {
+    expect(bufferChildExit(new EventEmitter())()).toBeNull();
+  });
+
+  it('holds a close emitted before the real listeners were attached', () => {
+    const proc = new EventEmitter();
+    const take = bufferChildExit(proc);
+    proc.emit('close', 3, null);
+    expect(take()).toEqual({ type: 'close', code: 3, signal: null });
+  });
+
+  it('absorbs an error that would otherwise throw out of the emitter', () => {
+    const proc = new EventEmitter();
+    const take = bufferChildExit(proc);
+    const err = new Error('detached spawn produced no PID');
+    expect(() => proc.emit('error', err)).not.toThrow();
+    expect(take()).toEqual({ type: 'error', error: err });
+  });
+
+  it('keeps the FIRST terminal event — a later one must not rewrite the verdict', () => {
+    const proc = new EventEmitter();
+    const take = bufferChildExit(proc);
+    proc.emit('error', new Error('spawn failed'));
+    proc.emit('close', 0, null);
+    expect(take().type).toBe('error');
+  });
+
+  it('detaches on take, so the real handlers own everything that follows', () => {
+    const proc = new EventEmitter();
+    const take = bufferChildExit(proc);
+    expect(take()).toBeNull();
+    expect(proc.listenerCount('close')).toBe(0);
+    expect(proc.listenerCount('error')).toBe(0);
+  });
+
+  it('stays a sink for a child that is abandoned rather than wired', () => {
+    const proc = new EventEmitter();
+    bufferChildExit(proc);
+    expect(() => proc.emit('error', new Error('abandoned'))).not.toThrow();
   });
 });

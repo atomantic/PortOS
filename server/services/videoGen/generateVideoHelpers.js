@@ -465,6 +465,40 @@ export function isWatchdogSuccess({ completionWatchdogFired, idleStallFired = fa
 }
 
 /**
+ * Hold a freshly spawned render child's terminal event until its real handlers
+ * are wired (#4617).
+ *
+ * `spawnDetached` defers its first emission to a `setImmediate` so a caller that
+ * subscribes synchronously misses nothing — but generateVideo must first hand
+ * the machine accelerator claim to the child's PID, and that await does real
+ * file I/O. A child that dies inside that window (a venv that imports and
+ * aborts, an OOM kill, a launcher that never produced a PID) emits with nobody
+ * listening: the 'close' is lost and the job sits `running` forever still
+ * holding the claim, while a lost 'error' is worse — an EventEmitter with no
+ * 'error' listener THROWS, which outside the request lifecycle takes the whole
+ * server down.
+ *
+ * Attach this in the SAME tick the spawn resolved. It returns a `take()` that
+ * detaches these listeners and hands back the first terminal event seen, or
+ * `null` when the child is still alive — read it immediately before the real
+ * listeners go on, with no await in between, or the gap reopens. Leaving it
+ * attached is also valid: for a child that is being abandoned rather than
+ * wired, it stays a harmless sink that keeps an 'error' from going unhandled.
+ */
+export function bufferChildExit(proc) {
+  let buffered = null;
+  const onClose = (code, signal) => { buffered = buffered || { type: 'close', code, signal }; };
+  const onError = (error) => { buffered = buffered || { type: 'error', error }; };
+  proc.on('close', onClose);
+  proc.on('error', onError);
+  return () => {
+    proc.off?.('close', onClose);
+    proc.off?.('error', onError);
+    return buffered;
+  };
+}
+
+/**
  * Success path of generateVideo's `close` handler: faststart-optimize the
  * output, generate a thumbnail, prepend the history entry, and emit the
  * `complete` SSE frame + `completed` queue event. Mutates `job.status` to
