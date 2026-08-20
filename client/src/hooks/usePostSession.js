@@ -173,14 +173,24 @@ export function usePostSession() {
   // the /post/session/:id results URL — so a saved session's URL === its run id.
   const [runId, setRunId] = useState(restored?.runId ?? null);
   const [conditions, setConditions] = useState(restored?.conditions ?? {}); // session conditions captured at launch
-  // Read-only carrier for a run resumed from a PRE-upgrade snapshot that still
-  // has the legacy free-text `tags` shape (e.g. a mid-session refresh spanning
-  // a deploy). Never written by this session — the launcher only ever produces
-  // `conditions` now — so it's captured once here and submitted verbatim under
-  // the legacy `tags` field on save, rather than silently dropped or coerced
-  // into `conditions`'s fixed enums (its free-text values wouldn't validate as
-  // enum members anyway).
-  const legacyTags = restored?.tags && !restored?.conditions ? restored.tags : null;
+  // Carrier for a run resumed from a PRE-upgrade snapshot that still has the
+  // legacy free-text `tags` shape (e.g. a mid-session refresh spanning a
+  // deploy). Never written by the launcher (which only ever produces
+  // `conditions` now) — captured on restore and submitted verbatim under the
+  // legacy `tags` field on save, rather than silently dropped or coerced into
+  // `conditions`'s fixed enums (its free-text values wouldn't validate as
+  // enum members anyway). Real per-run STATE, not a plain const: it must be
+  // (a) part of the periodic snapshot so a SECOND refresh of the same
+  // resumed run doesn't lose it (the first snapshot write after restore
+  // would otherwise drop it, since it wasn't a key the old writer knew
+  // about), and (b) cleared on `startSession`/`reset` so an abandoned run's
+  // legacy tags can never bleed into an unrelated new session (issue #4442
+  // codex review). `restored.legacyTags` covers a snapshot already written by
+  // this code; the `tags`-without-`conditions` check covers the first-ever
+  // restore of a genuinely pre-upgrade snapshot.
+  const [legacyTags, setLegacyTags] = useState(
+    () => restored?.legacyTags ?? (restored?.tags && !restored?.conditions ? restored.tags : null)
+  );
   const [sessionPlan, setSessionPlan] = useState(restored?.sessionPlan ?? null);
   const [benchmark, setBenchmark] = useState(restored?.benchmark ?? null);
   const [lastAnswer, setLastAnswer] = useState(null); // { correct, expected, answered } for training feedback
@@ -212,7 +222,7 @@ export function usePostSession() {
     if (typeof sessionStorage === 'undefined') return;
     sessionStorage.setItem(RUN_STORAGE_KEY, JSON.stringify({
       runId, state, drills, currentDrillIndex, currentDrill, currentQuestionIndex,
-      answers, drillResults, sessionScore, isTraining, conditions, sessionPlan,
+      answers, drillResults, sessionScore, isTraining, conditions, legacyTags, sessionPlan,
       benchmark,
       // Persist the timing anchors (mutated synchronously on each question/drill
       // transition, just before the state change that fires this effect) so a
@@ -222,7 +232,7 @@ export function usePostSession() {
       runStartedAt: runStartedAtRef.current,
       runCompletedAt: runCompletedAtRef.current,
     }));
-  }, [runId, state, drills, currentDrillIndex, currentDrill, currentQuestionIndex, answers, drillResults, sessionScore, isTraining, conditions, sessionPlan, benchmark]);
+  }, [runId, state, drills, currentDrillIndex, currentDrill, currentQuestionIndex, answers, drillResults, sessionScore, isTraining, conditions, legacyTags, sessionPlan, benchmark]);
 
   const startSession = useCallback(async (drillConfigs, training = false, sessionConditions = {}, plan = null, benchmarkMetadata = null) => {
     // drillConfigs: [{ type, config, timeLimitSec }]
@@ -245,6 +255,9 @@ export function usePostSession() {
     // conditions to submit, so both survive a mid-run refresh via the snapshot.
     setRunId(newRunId());
     setConditions(sessionConditions || {});
+    // A fresh run never inherits a PRIOR (possibly abandoned) run's legacy
+    // tags — those belong only to the resumed run they were restored with.
+    setLegacyTags(null);
 
     const first = drillConfigs[0];
     const drill = await generatePostDrill(first.type, first.config, first.providerId, first.model, { silent: true }).catch(err => {
@@ -623,7 +636,7 @@ export function usePostSession() {
     toast.success(`POST complete — score: ${session.score}`);
     setState(STATES.SAVED);
     return session;
-  }, [drillResults, isTraining, conditions, runId, sessionPlan, benchmark]);
+  }, [drillResults, isTraining, conditions, legacyTags, runId, sessionPlan, benchmark]);
 
   const reset = useCallback(() => {
     setState(STATES.IDLE);
@@ -640,6 +653,7 @@ export function usePostSession() {
     runStartedAtRef.current = null;
     runCompletedAtRef.current = null;
     setConditions({});
+    setLegacyTags(null);
     setSessionPlan(null);
     setBenchmark(null);
     setLastAnswer(null);

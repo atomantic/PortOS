@@ -89,7 +89,15 @@ export const postConfigEvents = new EventEmitter();
 export const POST_BENCHMARK_PROTOCOL = Object.freeze({
   protocolId: 'post-foundation-battery',
   protocolVersion: 1,
-  scorerVersion: 'post-deterministic-v1',
+  // v2: benchmark scoring now ignores the user's live config.scoring.weights
+  // and mentalMath.drillTypes[type].timeLimitSec, using the protocol's fixed
+  // weighting (uniform) and the registered form's timeLimitSec instead — a
+  // scoring-contract change, so the version bumps (issue #4442 codex
+  // review). A v1-scored session (weighted by whatever config was active at
+  // submit time) is no longer "compatible" with a v2 one — benchmarkCompatibility()
+  // correctly buckets it as legacy/excluded rather than blending two
+  // different scoring formulas into one trend.
+  scorerVersion: 'post-deterministic-v2',
   forms: Object.freeze([
     Object.freeze({
       formId: 'a',
@@ -408,6 +416,14 @@ export async function submitPostSession(sessionData) {
   // would then prefer over a questions[] derivation.
   const rawTasks = Array.isArray(sessionData.tasks) ? sessionData.tasks : [];
   assertBenchmarkSession(sessionData.benchmark, rawTasks, sessionData.modules);
+  // A math drill's time limit is normally the user's live, editable
+  // mentalMath.drillTypes[type].timeLimitSec — but a benchmark's speed bonus
+  // must come from the REGISTERED form, or the same protocol/version/scorer
+  // could still score differently across runs if the user edits their
+  // configured time limit in between (issue #4442 codex review). Resolved
+  // once here; assertBenchmarkSession already confirmed the form exists and
+  // matches when sessionData.benchmark is present.
+  const benchmarkForm = sessionData.benchmark ? getPostBenchmarkForm(sessionData.benchmark.formId) : null;
   const rescoredTasks = rawTasks.map(t => {
     const {
       score: _score, correct: _correct,
@@ -470,8 +486,9 @@ export async function submitPostSession(sessionData) {
       const { correct: _qCorrect, ...qRest } = q;
       return qRest;
     });
+    const benchmarkTimeLimitSec = benchmarkForm?.tasks.find(bt => bt.type === rest.type)?.timeLimitSec;
     const drillConfig = config.mentalMath?.drillTypes?.[rest.type] || {};
-    const timeLimitMs = (drillConfig.timeLimitSec || 120) * 1000;
+    const timeLimitMs = (benchmarkTimeLimitSec ?? drillConfig.timeLimitSec ?? 120) * 1000;
     const scored = scoreDrill(rest.type, sanitizedQuestions, timeLimitMs, rest.config || drillConfig);
     return { ...rest, ...scored };
   });

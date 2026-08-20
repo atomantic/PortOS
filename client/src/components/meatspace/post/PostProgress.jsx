@@ -122,8 +122,12 @@ export default function PostProgress({ subtab, onBack }) {
   // "Score Trend" above which includes every scored session. `excludedCount`
   // is surfaced explicitly rather than silently omitted.
   const benchmark = progress?.series?.benchmark || null;
+  // `sessions` carries through so a same-day-average point can be labeled
+  // honestly — getPostProgress buckets by day, so a day with 2+ compatible
+  // runs reports their MEAN, not either individual run's actual score
+  // (issue #4442 codex review).
   const benchmarkScoreData = useMemo(
-    () => (benchmark?.byDay || []).filter(p => p.score != null).map(p => ({ date: p.date, score: p.score })),
+    () => (benchmark?.byDay || []).filter(p => p.score != null).map(p => ({ date: p.date, score: p.score, sessions: p.sessions })),
     [benchmark]
   );
 
@@ -292,7 +296,10 @@ export default function PostProgress({ subtab, onBack }) {
                       {`Benchmark Trend — ${benchmark.protocolId} v${benchmark.protocolVersion}`}
                     </h3>
                     <div className="text-sm text-gray-300">
-                      Latest compatible run: <span className="font-mono font-bold text-white">{benchmarkScoreData[0].score}</span> on {benchmarkScoreData[0].date}. Complete another benchmark to chart a trend.
+                      {benchmarkScoreData[0].sessions > 1
+                        ? <>Day average ({benchmarkScoreData[0].sessions} runs): <span className="font-mono font-bold text-white">{benchmarkScoreData[0].score}</span> on {benchmarkScoreData[0].date}.</>
+                        : <>Latest compatible run: <span className="font-mono font-bold text-white">{benchmarkScoreData[0].score}</span> on {benchmarkScoreData[0].date}.</>}
+                      {' '}Complete another benchmark to chart a trend.
                     </div>
                   </div>
                 ) : (

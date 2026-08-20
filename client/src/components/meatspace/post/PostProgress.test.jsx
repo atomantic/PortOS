@@ -160,6 +160,26 @@ describe('PostProgress — benchmark trend', () => {
     expect(screen.queryByText(/No compatible benchmark runs yet/)).not.toBeInTheDocument();
   });
 
+  it('labels a single displayed point as a day average when it aggregates multiple same-day runs (issue #4442 codex review round 2)', async () => {
+    getPostProgress.mockResolvedValue({
+      ...PROGRESS,
+      series: {
+        ...PROGRESS.series,
+        benchmark: {
+          protocolId: 'post-foundation-battery',
+          protocolVersion: 1,
+          scorerVersion: 'post-deterministic-v2',
+          byDay: [{ date: '2026-06-03', score: 70, sessions: 2 }],
+          excludedCount: 0,
+        },
+      },
+    });
+    renderProgress();
+    await waitFor(() => expect(screen.getByText(/Benchmark Trend/)).toBeInTheDocument());
+    expect(screen.getByText(/Day average \(2 runs\)/)).toBeInTheDocument();
+    expect(screen.queryByText(/Latest compatible run/)).not.toBeInTheDocument();
+  });
+
   it('surfaces the excluded-legacy-runs note when excludedCount is set', async () => {
     getPostProgress.mockResolvedValue({
       ...PROGRESS,
