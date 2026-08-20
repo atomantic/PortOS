@@ -32,6 +32,13 @@ const hasMlx = (() => {
   }
 })();
 
+// The pin facts these corrections guard against moved to `_minimax_h3_mlx_pins.py`
+// so the install-time probe and these render-time guards read one copy. Reach the
+// module the RUNNER imported rather than loading a second one by spec: a private
+// copy would let a rebinding here pass while the code under test still read the
+// shipped digest.
+const importPins = 'pins = sys.modules["_minimax_h3_mlx_pins"]';
+
 const importRunner = [
   'import importlib.util, sys',
   'from pathlib import Path',
@@ -715,9 +722,9 @@ describe.skipIf(!pyBin)('generate_minimax_h3.py', () => {
   // the pinned body with that one line swapped, so it is guarded twice: by the
   // line it replaces, and by a digest over the whole body it copied.
   it('corrects a pin that still merges by broadcast, and hands its text-only path back', () => {
-    const output = runPython(`${importRunner}\n${filePin(["runner.PINNED_BROADCAST_MERGE"])}\n${[
+    const output = runPython(`${importRunner}\n${importPins}\n${filePin(["pins.PINNED_BROADCAST_MERGE"])}\n${[
       'import hashlib, inspect',
-      'runner.PINNED_ENCODE_DIGEST = hashlib.sha256(',
+      'pins.PINNED_ENCODE_DIGEST = hashlib.sha256(',
       '    inspect.getsource(MiniMaxH3TextEncoder.encode).encode("utf-8")',
       ').hexdigest()',
       'runner.install_vision_embed_merge()',
@@ -730,14 +737,14 @@ describe.skipIf(!pyBin)('generate_minimax_h3.py', () => {
 
   it.each([
     // Upstream fixed the merge: the correction has to retire, not shadow it.
-    [['runner.PINNED_BROADCAST_MERGE.replace("mx.where", "masked_scatter")'], 'digest-of-this-pin', /no longer merges keyframe embeddings/],
+    [['pins.PINNED_BROADCAST_MERGE.replace("mx.where", "masked_scatter")'], 'digest-of-this-pin', /no longer merges keyframe embeddings/],
     // The merge is untouched but something else in the body moved — the copy is
     // stale in a way matching one line could never see.
-    [['runner.PINNED_BROADCAST_MERGE'], `"${'0'.repeat(64)}"`, /changed MiniMaxH3TextEncoder\.encode outside the merge/],
+    [['pins.PINNED_BROADCAST_MERGE'], `"${'0'.repeat(64)}"`, /changed MiniMaxH3TextEncoder\.encode outside the merge/],
   ])('refuses a pin the copied encode no longer matches (%j)', (body, digest, expected) => {
-    const output = runPython(`${importRunner}\n${filePin(body)}\n${[
+    const output = runPython(`${importRunner}\n${importPins}\n${filePin(body)}\n${[
       'import hashlib, inspect',
-      `runner.PINNED_ENCODE_DIGEST = ${digest === 'digest-of-this-pin'
+      `pins.PINNED_ENCODE_DIGEST = ${digest === 'digest-of-this-pin'
         ? 'hashlib.sha256(inspect.getsource(MiniMaxH3TextEncoder.encode).encode("utf-8")).hexdigest()'
         : digest}`,
       'try:',

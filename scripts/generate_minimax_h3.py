@@ -14,9 +14,7 @@ Each `--image` needs its own `--anchor`, in the same order.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import importlib.util
-import inspect
 import json
 import re
 import shutil
@@ -33,6 +31,9 @@ from _runner_common import (  # noqa: E402
 from _minimax_h3_common import (  # noqa: E402
     FPS, add_h3_common_args, emit_result, load_keyframes, resolve_cached_snapshot,
     validate_h3_output_args,
+)
+from _minimax_h3_mlx_pins import (  # noqa: E402
+    pinned_encoder_hook, verify_pinned_encode_source,
 )
 
 
@@ -131,15 +132,7 @@ def install_key_prefix_map(rules: list[tuple[str, str]]) -> None:
     Deliberately NOT a source edit: the checkout is verified clean above, and it
     must stay that way.
     """
-    from minimax_h3_mlx.text_encoder import MiniMaxH3TextEncoder
-
-    original = getattr(MiniMaxH3TextEncoder, "_wanted", None)
-    if original is None:
-        raise RuntimeError(
-            "The pinned MiniMax H3 runtime no longer exposes MiniMaxH3TextEncoder._wanted, "
-            "so a substituted text encoder cannot be key-mapped onto it. Render with the "
-            "stock text encoder, or update PortOS for the new pin."
-        )
+    encoder, original = pinned_encoder_hook("_wanted")
 
     def _wanted(self, key: str):
         for source, target in rules:
@@ -148,26 +141,7 @@ def install_key_prefix_map(rules: list[tuple[str, str]]) -> None:
                 break
         return original(self, key)
 
-    MiniMaxH3TextEncoder._wanted = _wanted
-
-
-def pinned_encoder_hook(name: str, consequence: str, kind: type | None = None):
-    """Return one attribute of the pinned text encoder, or say the pin moved.
-
-    Each keyframe correction below wraps a different method of
-    `MiniMaxH3TextEncoder`, and each is only correct against the implementation
-    it was written for — so every one of them checks its hook is still there and
-    still the shape it patches, and reports the same two ways out.
-    """
-    from minimax_h3_mlx.text_encoder import MiniMaxH3TextEncoder
-
-    hook = getattr(MiniMaxH3TextEncoder, name, None)
-    if hook is None or (kind is not None and not isinstance(hook, kind)):
-        raise RuntimeError(
-            f"The pinned MiniMax H3 runtime no longer exposes MiniMaxH3TextEncoder.{name}, so "
-            f"{consequence}. Render text-only, or update PortOS for the new pin."
-        )
-    return MiniMaxH3TextEncoder, hook
+    encoder._wanted = _wanted
 
 
 def torch_image_stack_available() -> bool:
@@ -226,9 +200,7 @@ def install_pil_image_processor() -> None:
     it doesn't use and — deliberately, like the key-prefix map above — leaves the
     pinned checkout untouched, because it is verified clean before this runs.
     """
-    encoder, _ = pinned_encoder_hook(
-        "processor", "a keyframe cannot be encoded without PyTorch", kind=property
-    )
+    encoder, _ = pinned_encoder_hook("processor")
 
     def processor(self):
         if self._processor is None:
@@ -259,9 +231,7 @@ def install_vision_weight_sanitizer() -> None:
     correctly-laid-out tensor as a no-op, so this stays right if a later pin (or a
     later mlx-vlm) starts handing the tower a sanitized weight.
     """
-    encoder, original = pinned_encoder_hook(
-        "_load_weights", "its vision tower cannot be laid out for MLX"
-    )
+    encoder, original = pinned_encoder_hook("_load_weights")
 
     def _load_weights(self, model_dir, dtype, verbose):
         original(self, model_dir, dtype, verbose)
@@ -288,20 +258,6 @@ def sanitize_vision_weights(vision) -> None:
     mx.eval(vision.parameters())
 
 
-# The merge the pinned port performs instead of a scatter. Asserted before the
-# replacement below is installed, so the day upstream fixes this the patch says
-# so loudly rather than shadowing a working implementation forever.
-PINNED_BROADCAST_MERGE = "mx.where(image_mask[..., None], hidden.astype(inputs_embeds.dtype)[None], inputs_embeds)"
-
-# sha256 of the whole pinned `encode`, because the replacement below re-runs its
-# body with one line changed rather than wrapping it. Matching only the merge
-# line would let every OTHER edit a pin bump makes — a new `_hidden_states`
-# argument, a different dtype, an added step — pass silently into a stale copy.
-# Re-record this when bumping MINIMAX_H3_EXPECTED_REVISION, after re-reading
-# `encode` and folding whatever changed into the replacement.
-PINNED_ENCODE_DIGEST = "8047e407e797cd46cd7538024ca09d97402d369d97b1d825757a1590416bda7d"
-
-
 def install_vision_embed_merge() -> None:
     """Scatter a keyframe's vision rows into the tokens that stand for them.
 
@@ -318,21 +274,8 @@ def install_vision_embed_merge() -> None:
     the broadcast could never check). A text-only request never reaches the merge,
     so it is handed straight back to the pinned implementation untouched.
     """
-    encoder, original = pinned_encoder_hook(
-        "encode", "a keyframe cannot be merged into the prompt"
-    )
-    source = inspect.getsource(original)
-    if PINNED_BROADCAST_MERGE not in source:
-        raise RuntimeError(
-            "The pinned MiniMax H3 runtime no longer merges keyframe embeddings the way PortOS "
-            "corrects for; re-check the pin before rendering with a keyframe."
-        )
-    if hashlib.sha256(source.encode("utf-8")).hexdigest() != PINNED_ENCODE_DIGEST:
-        raise RuntimeError(
-            "The pinned MiniMax H3 runtime changed MiniMaxH3TextEncoder.encode outside the merge "
-            "PortOS corrects; fold the change into the replacement and re-record "
-            "PINNED_ENCODE_DIGEST before rendering with a keyframe."
-        )
+    encoder, original = pinned_encoder_hook("encode")
+    verify_pinned_encode_source(original)
 
     def encode(self, prompt: str, images: list | None = None):
         # A text-only request never reaches the merge, so it goes back to the
