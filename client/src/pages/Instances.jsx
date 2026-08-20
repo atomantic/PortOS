@@ -24,6 +24,7 @@ import PeerAppsList from '../components/instances/PeerAppsList';
 import PeerAgentsSection from '../components/instances/PeerAgentsSection';
 import { SchemaGapBadge } from '../components/instances/SchemaGapBadge';
 import PeerMediaProviderPanel from '../components/instances/PeerMediaProviderPanel';
+import UnattendedRenderRouting from '../components/instances/UnattendedRenderRouting';
 import BrainParityPanel from '../components/instances/BrainParityPanel';
 import BrainParitySchedule from '../components/instances/BrainParitySchedule';
 import { timeAgo, timeUntil } from '../utils/formatters';
@@ -1459,6 +1460,7 @@ export default function Instances() {
           <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">
             Peers ({peers.length})
           </h2>
+          <UnattendedRenderRouting peers={peers} />
           <BrainParitySchedule />
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             {peers.map(peer => (

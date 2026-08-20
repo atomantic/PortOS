@@ -6,6 +6,7 @@
 
 import { z } from 'zod';
 import { enqueueJob } from '../../mediaJobQueue/index.js';
+import { resolveDefaultMediaRoute, routedJobParams } from '../../federatedMedia/defaultRouting.js';
 import { ASPECT_PRESETS, QUALITY_PRESETS, presetToRenderParams } from '../../../lib/creativeDirectorPresets.js';
 import { getSettings } from '../../settings.js';
 import { IMAGE_GEN_MODE, resolveQueueImageMode } from '../../imageGen/modes.js';
@@ -359,6 +360,20 @@ const mediaTool = (kind, label) => ({
       if (kind === 'video' && params?.mode !== VIDEO_GEN_MODE.GROK) {
         params = reconcileVideoParamsWithModel(params, project);
       }
+    }
+    // Unattended jobs never name a peer — the planner is an LLM, and letting
+    // it pick one is exactly the arbitrary-peer routing the provider contract
+    // forbids. Routing comes from this instance's own settings instead, and is
+    // resolved LAST so the project/install pin ladder above has already run:
+    // a configured remote provider overrides those local backend choices, and
+    // a job that would have rendered locally is unaffected.
+    const routed = await resolveDefaultMediaRoute({ kind, params });
+    if (routed) {
+      return enqueueJob({
+        kind,
+        params: routedJobParams(params, routed),
+        owner: resolveOwner(args, ctx),
+      });
     }
     return enqueueJob({ kind, params, owner: resolveOwner(args, ctx) });
   },

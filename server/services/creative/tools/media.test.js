@@ -10,6 +10,10 @@ const getCommissionMusicContextForProject = vi.fn(async () => null);
 vi.mock('../../creativeCommissions/store.js', () => ({
   getCommissionMusicContextForProject: (...args) => getCommissionMusicContextForProject(...args),
 }));
+const prepareRemoteMediaJob = vi.fn();
+vi.mock('../../federatedMedia/remoteSubmission.js', () => ({
+  prepareRemoteMediaJob: (...args) => prepareRemoteMediaJob(...args),
+}));
 
 import { enqueueJob } from '../../mediaJobQueue/index.js';
 import { getSettings } from '../../settings.js';
@@ -436,6 +440,73 @@ describe('audio enqueues', () => {
     });
     await expect(run('media_enqueueAudioJob', { prompt: 'planner guess' }, { projectId: 'cd-1' }))
       .rejects.toThrow('taste-commission-prompt-unavailable');
+    expect(enqueueJob).not.toHaveBeenCalled();
+  });
+});
+
+// #4348 — unattended jobs route to a peer only because THIS instance's settings
+// say so. The planner never names a peer, so these assertions are all about
+// what reaches the queue when `federation.mediaRouting` is (and is not) set.
+describe('federated default provider routing (#4348)', () => {
+  const route = { peerId: 'peer-1', engine: 'comfy', modelId: 'sdxl-remote' };
+  const routedSettings = (mediaRouting) => ({ federation: { mediaRouting } });
+
+  beforeEach(() => {
+    prepareRemoteMediaJob.mockReset();
+    prepareRemoteMediaJob.mockImplementation(async ({ peerId, kind, request }) => ({
+      peer: { id: peerId },
+      remoteMedia: { wireVersion: 1, peerId, reconcile: false, cancelRequested: false, request },
+    }));
+  });
+
+  it('renders locally, with its prompt intact, when no route is configured', async () => {
+    getSettings.mockResolvedValue({});
+    await run('media_enqueueImageJob', { prompt: 'a lighthouse' }, { projectId: 'cd-1' });
+    expect(prepareRemoteMediaJob).not.toHaveBeenCalled();
+    expect(enqueued().params.prompt).toBe('a lighthouse');
+    expect(enqueued().params).not.toHaveProperty('remoteMedia');
+  });
+
+  it('routes an image job to the configured peer without the planner naming one', async () => {
+    getSettings.mockResolvedValue(routedSettings({ image: route }));
+    await run('media_enqueueImageJob', { prompt: 'a lighthouse', modelId: 'local-sdxl' }, { projectId: 'cd-1' });
+    expect(prepareRemoteMediaJob).toHaveBeenCalledWith(expect.objectContaining({ peerId: 'peer-1', kind: 'image' }));
+    const { params } = enqueued();
+    // The prompt rides ONLY inside the versioned marker, so a build that cannot
+    // read `remoteMedia` fails closed instead of re-rendering on local hardware.
+    expect(params.prompt).toBe('');
+    expect(params.remoteMedia.request.prompt).toBe('a lighthouse');
+    // The route's model wins: a peer advertises its own ids, not the planner's.
+    expect(params.modelId).toBe('sdxl-remote');
+  });
+
+  it('keeps the owner tag so a routed render stays attributable to its project', async () => {
+    getSettings.mockResolvedValue(routedSettings({ image: route }));
+    await run('media_enqueueImageJob', { prompt: 'a lighthouse' }, { projectId: 'cd-1' });
+    expect(enqueued().owner).toBe('creative-director:cd-1');
+  });
+
+  it('routes a video job independently of the image route', async () => {
+    getSettings.mockResolvedValue(routedSettings({ video: { ...route, modelId: 'wan-remote' } }));
+    await run('media_enqueueVideoJob', { prompt: 'a drifting balloon' }, { projectId: 'cd-1' });
+    expect(prepareRemoteMediaJob).toHaveBeenCalledWith(expect.objectContaining({ kind: 'video' }));
+    expect(enqueued().params.modelId).toBe('wan-remote');
+  });
+
+  it('leaves audio local — free-form music prompts cannot cross the wire', async () => {
+    getSettings.mockResolvedValue(routedSettings({ audio: route, image: route }));
+    await run('media_enqueueAudioJob', { prompt: 'a warm ambient bed' });
+    expect(prepareRemoteMediaJob).not.toHaveBeenCalled();
+    expect(enqueued().params.prompt).toBe('a warm ambient bed');
+  });
+
+  it('fails the enqueue rather than silently burning local GPU when the peer is busy', async () => {
+    getSettings.mockResolvedValue(routedSettings({ image: route }));
+    prepareRemoteMediaJob.mockRejectedValue(
+      Object.assign(new Error('Media provider is at capacity'), { code: 'MEDIA_PROVIDER_BUSY' }),
+    );
+    await expect(run('media_enqueueImageJob', { prompt: 'a lighthouse' }, { projectId: 'cd-1' }))
+      .rejects.toThrow('Media provider is at capacity');
     expect(enqueueJob).not.toHaveBeenCalled();
   });
 });

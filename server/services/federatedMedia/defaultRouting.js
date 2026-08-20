@@ -1,0 +1,146 @@
+/**
+ * Server-owned default provider routing for UNATTENDED media jobs.
+ *
+ * The interactive generate routes route a job because a human picked a peer in
+ * the UI and the server validated that choice. Creative Director and Creative
+ * Commission have no human in the loop at enqueue time, and their planners are
+ * LLMs — so "let the caller name a peer" is exactly the arbitrary-peer routing
+ * the provider contract exists to prevent (#4348). Instead the routing policy
+ * lives in this instance's own settings: `federation.mediaRouting.<kind>` names
+ * one peer and one model, the agent names nothing, and the resolver still runs
+ * the full allowlist + capacity preflight before a job leaves the node.
+ *
+ * Audio is intentionally unroutable here. Its wire body is not a projection of
+ * the local job at all: only a canonical prompt rendered from a fixed enum
+ * profile may cross the boundary, because free-form music prompts and lyrics
+ * carry PII. A Creative Director music bed is free-form by construction, so it
+ * stays local rather than being silently rewritten into a profile the user
+ * never chose.
+ *
+ * FAIL-CLOSED, NEVER FAIL-QUIET: when a kind has a configured route and the
+ * provider is stale, busy, unauthorized, or unavailable, the enqueue FAILS with
+ * the typed reason instead of falling back to a local render. Falling back
+ * would burn hours of local GPU on work the user deliberately routed to another
+ * machine, and would do it invisibly — the opposite of the "show clear
+ * blocked/busy/unavailable states and avoid silently falling back" requirement.
+ */
+
+import { ServerError } from '../../lib/errorHandler.js';
+import { buildFederatedMediaRequest } from '../../lib/federatedMediaRequest.js';
+import { getSettings } from '../settings.js';
+
+// Only the visual kinds. See the audio note in the module docblock.
+export const ROUTABLE_MEDIA_KINDS = Object.freeze(['image', 'video']);
+
+const isRecord = (value) => value && typeof value === 'object' && !Array.isArray(value);
+const trimmed = (value) => (typeof value === 'string' ? value.trim() : '');
+
+function sanitizeRoute(raw) {
+  if (!isRecord(raw)) return null;
+  const peerId = trimmed(raw.peerId);
+  const engine = trimmed(raw.engine);
+  const modelId = trimmed(raw.modelId);
+  // A half-written route is not a route. Requiring all three up front is what
+  // keeps a partially-saved settings blob from resolving to "peer X, whatever
+  // model" — the allowlist check downstream is keyed on the exact pair.
+  if (!peerId || !engine || !modelId) return null;
+  return { peerId, engine, modelId };
+}
+
+/**
+ * Project `settings.federation.mediaRouting` down to the routes this build
+ * understands. Unknown kinds are dropped rather than carried: a route is only
+ * ever consumed by a matching enqueue path, so a kind this version cannot
+ * execute must read as "no route" and stay local.
+ *
+ * @param {object} settings - Full settings record.
+ * @returns {{image: object|null, video: object|null}}
+ */
+export function normalizeMediaRoutingConfig(settings) {
+  const raw = settings?.federation?.mediaRouting;
+  const config = {};
+  for (const kind of ROUTABLE_MEDIA_KINDS) {
+    config[kind] = isRecord(raw) ? sanitizeRoute(raw[kind]) : null;
+  }
+  return config;
+}
+
+/**
+ * Resolve the configured default provider for one unattended job, if any.
+ *
+ * @param {object} args
+ * @param {'image'|'video'} args.kind
+ * @param {object} args.params - Local job params the planner produced.
+ * @returns {Promise<{peer: object, request: object, remoteMedia: object}|null>}
+ *   `null` when this kind has no configured route (render locally). Throws a
+ *   typed ServerError when a route IS configured but cannot be honoured.
+ */
+export async function resolveDefaultMediaRoute({ kind, params }) {
+  if (!ROUTABLE_MEDIA_KINDS.includes(kind)) return null;
+  // An unreadable settings file is an install-level fault, not a provider
+  // fault: no configuration is knowable at all, which is the same state as a
+  // fresh install. Rendering locally matches what the rest of this enqueue
+  // path already does with an unreadable settings read (the render-backend
+  // pin ladder falls through untouched) — hard-failing every autonomous
+  // render on a transient read error would be a far worse outcome than one
+  // local render. It is logged rather than swallowed so it can never look
+  // like "no route configured".
+  const settings = await getSettings().catch((error) => {
+    console.error(`❌ Federated media routing could not read settings: ${error.message}`);
+    return null;
+  });
+  if (!settings) return null;
+  const route = normalizeMediaRoutingConfig(settings)[kind];
+  if (!route) return null;
+
+  if (!trimmed(params?.prompt)) {
+    throw new ServerError(
+      `A federated ${kind} render needs a prompt`,
+      { status: 400, code: 'MEDIA_PROVIDER_PROMPT_REQUIRED' },
+    );
+  }
+  const request = buildFederatedMediaRequest({
+    kind,
+    engine: route.engine,
+    // The route's model wins over whatever the planner wrote: a peer advertises
+    // its own model ids, and a local model name would fail the peer's allowlist
+    // check with a confusing "not allowlisted" rather than an honest mismatch.
+    params: { ...params, modelId: route.modelId },
+  });
+  // Lazy, for the same reason remoteSubmission.js is lazy: the creative tool
+  // module is imported by agent-tool suites that mock the settings/DB layer,
+  // and a static edge to the peer registry would drag that graph into them.
+  const { prepareRemoteMediaJob } = await import('./remoteSubmission.js');
+  const { peer, remoteMedia } = await prepareRemoteMediaJob({
+    peerId: route.peerId,
+    kind,
+    request,
+  });
+  return { peer, request, remoteMedia };
+}
+
+/**
+ * Local params that only mean something to a LOCAL dispatch. Dropping them
+ * mirrors the generate routes: the backend selectors would otherwise ride into
+ * a job no local backend ever runs, and a rollback to a build that cannot read
+ * `remoteMedia` must fail closed rather than re-render the job for real.
+ *
+ * Destination tags (`creativeDirectorSceneImage`, `musicVideo`, `catalogAttach`,
+ * …) deliberately stay: their completion hooks fire off the finished filename
+ * and work identically for a federated render.
+ */
+const LOCAL_ONLY_ROUTED_PARAMS = Object.freeze([
+  'mode', 'cloudModel', 'backend', 'pythonPath',
+  'mediaProviderPeerId', 'mediaProviderEngine',
+]);
+
+/**
+ * Turn a resolved route plus the planner's params into the job params to
+ * enqueue. The prompt is blanked because it rides ONLY inside the versioned
+ * marker (see the generate routes for the same reasoning).
+ */
+export function routedJobParams(params, { request, remoteMedia }) {
+  const jobParams = { ...(params || {}) };
+  for (const key of LOCAL_ONLY_ROUTED_PARAMS) delete jobParams[key];
+  return { ...jobParams, prompt: '', modelId: request.modelId, remoteMedia };
+}

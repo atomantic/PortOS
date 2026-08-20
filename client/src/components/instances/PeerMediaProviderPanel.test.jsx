@@ -16,6 +16,12 @@ const basePeer = {
   status: 'online',
 };
 
+const capability = (overrides) => ({
+  ready: true,
+  unavailableReason: null,
+  ...overrides,
+});
+
 const readyStatus = {
   state: 'ready',
   reason: null,
@@ -23,17 +29,19 @@ const readyStatus = {
   freshUntil: '2026-08-17T12:01:00.000Z',
   snapshot: {
     queue: { running: 1, queued: 2, totalActive: 3, maxQueuedJobs: 4, accepting: true },
-    capabilities: [{
+    capabilities: [capability({
       kind: 'audio',
       engine: 'minimax-music3',
       engineName: 'MiniMax Music 3',
       modelId: 'minimax-music3',
       modelName: 'MiniMax Music 3',
-      ready: true,
-      unavailableReason: null,
-    }],
+    })],
   },
 };
+
+// Every write sends the full per-kind shape, so the expected payload is verbose
+// by design — a patch that omitted a list would only read as "unchanged" by luck.
+const emptyLists = { audioModels: [], imageModels: [], videoModels: [] };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -47,10 +55,10 @@ describe('PeerMediaProviderPanel', () => {
     render(<PeerMediaProviderPanel peer={basePeer} onRefresh={onRefresh} />);
 
     fireEvent.click(screen.getByRole('button', { name: /Remote media provider/i }));
-    fireEvent.click(screen.getByLabelText(/Use this peer for remote audio/i));
+    fireEvent.click(screen.getByLabelText(/Use this peer for remote media/i));
 
     await waitFor(() => expect(updatePeer).toHaveBeenCalledWith('peer-example', {
-      mediaProvider: { enabled: true, audioModels: [] },
+      mediaProvider: { enabled: true, ...emptyLists },
     }));
     await waitFor(() => expect(probePeer).toHaveBeenCalledWith('peer-example'));
     expect(onRefresh).toHaveBeenCalled();
@@ -67,16 +75,67 @@ describe('PeerMediaProviderPanel', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Remote media provider/i }));
     expect(screen.getByText(/1 running · 2 queued · 3\/4 shared slots active/i)).toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText('Allow MiniMax Music 3'));
+    fireEvent.click(screen.getByLabelText('Allow audio model MiniMax Music 3'));
 
     await waitFor(() => expect(updatePeer).toHaveBeenCalledWith('peer-example', {
       mediaProvider: {
         enabled: true,
         futureField: 'keep',
+        ...emptyLists,
         audioModels: [{ engine: 'minimax-music3', modelId: 'minimax-music3' }],
       },
     }));
     expect(probePeer).not.toHaveBeenCalled();
+  });
+
+  // #4348 — image and video landed on the wire before they had any surface to
+  // be allowlisted from, which left federated renders unreachable from the UI.
+  it('allowlists an image model into its own list, leaving the audio list alone', async () => {
+    const peer = {
+      ...basePeer,
+      mediaProvider: {
+        enabled: true,
+        audioModels: [{ engine: 'minimax-music3', modelId: 'minimax-music3' }],
+      },
+      mediaProviderStatus: {
+        ...readyStatus,
+        snapshot: {
+          ...readyStatus.snapshot,
+          capabilities: [
+            ...readyStatus.snapshot.capabilities,
+            capability({
+              kind: 'image', engine: 'comfy', engineName: 'ComfyUI',
+              modelId: 'sdxl-base', modelName: 'SDXL Base',
+            }),
+          ],
+        },
+      },
+    };
+    render(<PeerMediaProviderPanel peer={peer} onRefresh={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Remote media provider/i }));
+    fireEvent.click(screen.getByLabelText('Allow image model SDXL Base'));
+
+    await waitFor(() => expect(updatePeer).toHaveBeenCalledWith('peer-example', {
+      mediaProvider: {
+        enabled: true,
+        audioModels: [{ engine: 'minimax-music3', modelId: 'minimax-music3' }],
+        imageModels: [{ engine: 'comfy', modelId: 'sdxl-base' }],
+        videoModels: [],
+      },
+    }));
+  });
+
+  it('keeps a selected model visible after the peer stops advertising it, so it can be removed', () => {
+    render(<PeerMediaProviderPanel peer={{
+      ...basePeer,
+      mediaProvider: { enabled: true, videoModels: [{ engine: 'wan', modelId: 'wan-2.2' }] },
+      mediaProviderStatus: readyStatus,
+    }} onRefresh={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Remote media provider/i }));
+    expect(screen.getByLabelText('Allow video model wan-2.2')).toBeChecked();
+    expect(screen.getByText(/not-advertised/)).toBeInTheDocument();
   });
 
   it('explains that stale capacity blocks new work', () => {

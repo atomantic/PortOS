@@ -744,9 +744,26 @@ export const federatedMediaPeerSettingsSchema = z.object({
   videoModels: federatedMediaModelListSchema.optional(),
 }).passthrough();
 
+// Where UNATTENDED jobs (Creative Director / Creative Commission) of a given
+// kind render. One peer + one model per kind, chosen by the local operator and
+// stored server-side, so an LLM planner never names a peer. Nullable because
+// clearing a kind is how routing is turned back off — an absent key means
+// "unchanged", an explicit null means "render locally again".
+export const federatedMediaRouteSchema = z.object({
+  peerId: z.string().trim().min(1).max(200),
+  engine: z.string().trim().min(1).max(80),
+  modelId: z.string().trim().min(1).max(256),
+}).strict();
+
+export const federatedMediaRoutingSchema = z.object({
+  image: federatedMediaRouteSchema.nullable().optional(),
+  video: federatedMediaRouteSchema.nullable().optional(),
+}).passthrough();
+
 export const federationSettingsSchema = z.object({
   strictPullAuthorization: z.boolean().optional(),
   mediaProvider: federatedMediaProviderSettingsSchema.optional(),
+  mediaRouting: federatedMediaRoutingSchema.optional(),
 }).passthrough();
 
 export const federatedMediaJobRoutingSchema = z.object({

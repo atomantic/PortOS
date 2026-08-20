@@ -231,6 +231,7 @@ export * from './ytdlp.js';
 export * from './abortTimeout.js';
 export * from './connectivity.js';
 export * from './fetchWithTimeout.js';
+export * from './federatedMediaRequest.js';
 export * from './federatedMediaWire.js';
 export * from './requestAbort.js';
 export * from './httpClient.js';

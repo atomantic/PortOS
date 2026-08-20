@@ -35,8 +35,8 @@ An older install without this settings slice behaves exactly like the default ab
 
 1. Register the provider under **Instances** and make the relationship mutual so the provider recognizes this consumer's instance id.
 2. Store the provider's instance-password credential on its peer card. The normal peer health probe may work without it when provider auth is off, but the federated-media API intentionally does not.
-3. Expand **Remote media provider** on the peer card and enable **Use this peer for remote audio**. PortOS immediately probes the versioned status endpoint through `peerFetch`.
-4. Select the exact advertised engine/model pairs this instance may use. This local allowlist is independent from the provider's sharing allowlist; both sides must permit a model.
+3. Expand **Remote media provider** on the peer card and enable **Use this peer for remote media**. PortOS immediately probes the versioned status endpoint through `peerFetch`.
+4. Select the exact advertised engine/model pairs this instance may use, per kind — the panel lists an **Allowed audio / image / video models** group. This local allowlist is independent from the provider's sharing allowlist; both sides must permit a model.
 
 The consumer default is also disabled:
 
@@ -110,6 +110,53 @@ re-rendered from a fixed vocabulary. Why that is not a hole in the "no PII on
 federation" rule, what stays absolutely prompt-free, and what a future standing
 (unattended) route may not do are all decided in ADR
 [federated visual prompts](./decisions/2026-08-20-federated-visual-prompts.md).
+
+### Unattended renders (Creative Director / Creative Commission)
+
+Everything above is a *per-request* choice: a human picks a peer in the UI and
+the server validates it. Creative Director and Creative Commission have no human
+in the loop at enqueue time, and their planners are LLMs — so "let the caller
+name a peer" would be exactly the arbitrary-peer routing this contract exists to
+prevent. Their routing lives in this instance's own settings instead:
+
+```json
+{
+  "federation": {
+    "mediaRouting": {
+      "image": {
+        "peerId": "00000000-0000-4000-8000-000000000001",
+        "engine": "comfy",
+        "modelId": "sdxl-base"
+      },
+      "video": null
+    }
+  }
+}
+```
+
+Set it under **Instances → Unattended render routing**, which offers only
+(peer, model) pairs that are both locally allowlisted and currently advertised
+by that peer. A kind set to `null` (the default) renders locally.
+
+Three properties are worth stating explicitly:
+
+- **The agent names nothing.** The planner's own `modelId` is discarded in favour
+  of the route's — a peer advertises its own model ids, and a local model name
+  would fail the peer's allowlist check with a confusing "not allowlisted".
+- **A routed kind fails closed, it does not fall back.** When the provider is
+  stale, busy, unauthorized, or unavailable, the enqueue fails with that typed
+  reason. It does not quietly render locally: that would burn hours of local GPU
+  on work deliberately routed to another machine, invisibly.
+- **Audio is deliberately unroutable.** A federated audio submission may carry
+  only a canonical prompt rendered from a fixed enum profile, and a Creative
+  Director music bed is free-form by construction — so it stays local rather
+  than being silently rewritten into a profile the user never chose.
+
+Destination tags on the job (`creativeDirectorSceneImage`, `musicVideo`,
+`catalogAttach`, …) survive routing untouched, so the same completion hooks file
+a federated render exactly where a local one would land. An unreadable settings
+file is treated as "no route configured" — logged, then rendered locally —
+because a transient read error must not hard-fail every autonomous render.
 
 ## Authentication and identity
 
@@ -194,4 +241,4 @@ A remote job's conditioning prompt is persisted **only inside its versioned `rem
 
 ## Current boundary
 
-Wire v1 carries instrumental audio, text-to-image, and text-to-video. Remote selection is exposed through the generation APIs rather than a peer picker on the Image Gen / Video Gen pages. Still remaining from #4348: those pickers, a privacy-preserving design for remote lyrical conditioning, input-asset transfer (init/reference images, LoRAs, chained renders), multi-provider fairness/failover, Creative Commission routing/UX, and aggregate provider health on System Health.
+Wire v1 carries instrumental audio, text-to-image, and text-to-video. Interactive remote selection is exposed through the Music Studio panel and the generation APIs rather than a peer picker on the Image Gen / Video Gen pages; unattended work routes through **Instances → Unattended render routing**. Still remaining from #4348: those Image Gen / Video Gen pickers, a privacy-preserving design for remote lyrical conditioning (which is also what keeps unattended audio local), input-asset transfer (init/reference images, LoRAs, chained renders), multi-provider fairness/failover, and aggregate provider health on System Health.

@@ -14,7 +14,7 @@ import { z } from 'zod';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import { uploadFields } from '../lib/multipart.js';
 import {
-  validateRequest, videoModelTermsSchema, federatedMediaVideoJobSubmissionSchema,
+  validateRequest, videoModelTermsSchema,
 } from '../lib/validation.js';
 import { grokVideoDurationSchema } from '../lib/sharedSchemas.js';
 import { MIN_CONTEXT_FRAMES, MAX_CONTEXT_FRAMES } from '../lib/videoContinuity.js';
@@ -71,6 +71,7 @@ import { createInstallLogger } from '../lib/installLogger.js';
 import { prepareRemoteMediaJob } from '../services/federatedMedia/remoteSubmission.js';
 import { effectiveJobPrompt } from '../lib/federatedMediaWire.js';
 import { isRemoteMediaJob } from '../services/mediaJobQueue/remoteMediaJob.js';
+import { buildFederatedMediaRequest } from '../lib/federatedMediaRequest.js';
 
 const router = Router();
 
@@ -1053,20 +1054,7 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
     // Re-validate against the wire schema rather than trusting this route
     // schema's overlap with it: this object is persisted and replayed on every
     // reconcile, so it must already be a body the provider accepts.
-    const request = validateRequest(federatedMediaVideoJobSubmissionSchema, {
-      kind: 'video',
-      engine: body.mediaProviderEngine || 'local',
-      modelId: body.modelId,
-      prompt: body.prompt,
-      ...(body.negativePrompt ? { negativePrompt: body.negativePrompt } : {}),
-      ...(body.width !== undefined ? { width: body.width } : {}),
-      ...(body.height !== undefined ? { height: body.height } : {}),
-      ...(body.numFrames !== undefined ? { numFrames: body.numFrames } : {}),
-      ...(body.fps !== undefined ? { fps: body.fps } : {}),
-      ...(body.steps !== undefined ? { steps: body.steps } : {}),
-      ...(body.guidanceScale !== undefined ? { guidance: body.guidanceScale } : {}),
-      ...(body.seed !== undefined ? { seed: body.seed } : {}),
-    });
+    const request = buildFederatedMediaRequest({ kind: 'video', params: body });
     const { peer, remoteMedia } = await prepareRemoteMediaJob({
       peerId: body.mediaProviderPeerId,
       kind: 'video',

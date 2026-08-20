@@ -42,8 +42,8 @@ import * as characterService from '../services/character.js';
 import { randomUUID } from 'crypto';
 import { buildUniverseRunTag } from '../services/universeRunTag.js';
 import { getSettings } from '../services/settings.js';
-import { federatedMediaImageJobSubmissionSchema } from '../lib/validation.js';
 import { prepareRemoteMediaJob } from '../services/federatedMedia/remoteSubmission.js';
+import { buildFederatedMediaRequest } from '../lib/federatedMediaRequest.js';
 
 const router = Router();
 
@@ -454,18 +454,7 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     // Re-validate against the wire schema here rather than trusting the route
     // schema's overlap with it: this object is what gets persisted and replayed
     // on every reconcile, so it must already be a body the provider accepts.
-    const request = validateRequest(federatedMediaImageJobSubmissionSchema, {
-      kind: 'image',
-      engine: params.mediaProviderEngine || 'local',
-      modelId: params.modelId,
-      prompt: params.prompt,
-      ...(params.negativePrompt ? { negativePrompt: params.negativePrompt } : {}),
-      ...(params.width !== undefined ? { width: params.width } : {}),
-      ...(params.height !== undefined ? { height: params.height } : {}),
-      ...(params.steps !== undefined ? { steps: params.steps } : {}),
-      ...(params.guidance !== undefined ? { guidance: params.guidance } : {}),
-      ...(params.seed !== undefined ? { seed: params.seed } : {}),
-    });
+    const request = buildFederatedMediaRequest({ kind: 'image', params });
     const { peer, remoteMedia } = await prepareRemoteMediaJob({
       peerId: params.mediaProviderPeerId,
       kind: 'image',
