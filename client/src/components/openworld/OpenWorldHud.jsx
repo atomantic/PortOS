@@ -9,6 +9,7 @@ import OpenWorldXpBadge from './OpenWorldXpBadge';
 import OpenWorldMiniMap from './OpenWorldMiniMap';
 import OpenWorldHudCompact from './OpenWorldHudCompact';
 import OpenWorldInteractionPrompt from './OpenWorldInteractionPrompt';
+import OpenWorldSpeedometer from './OpenWorldSpeedometer';
 import { HealthBar, getHealthSentinel } from './openWorldHudBits';
 import useOpenWorldViewport from '../../hooks/useOpenWorldViewport';
 import { formatClockTime } from '../../utils/formatters';
@@ -75,7 +76,43 @@ function HudAction({ icon: Icon, label, hint, active, primary = false, onClick }
   );
 }
 
-export default function OpenWorldHud({ cosStatus, cosAgents, agentMap, eventLogs, connected, apps, reviewCounts, instances, productivityData, systemHealth, notificationCounts, character, filter, onFilterChange, onJumpToFirst, matchCount, onToggleExploration, explorationMode, onSelectApp, onEnterPhotoMode, onEnterPlayback, focusedAppId, focusedApp, focusNotFound, focusAgents, onCloseFocus, onFocusInWorld, onOpenFastTravel, onOpenDestination, onAttentionItem, activeRegion, proximityTarget }) {
+export default function OpenWorldHud({
+  cosStatus,
+  cosAgents,
+  agentMap,
+  eventLogs,
+  connected,
+  apps,
+  reviewCounts,
+  instances,
+  productivityData,
+  systemHealth,
+  notificationCounts,
+  character,
+  filter,
+  onFilterChange,
+  onJumpToFirst,
+  matchCount,
+  onToggleExploration,
+  explorationMode,
+  onSelectApp,
+  onEnterPhotoMode,
+  onEnterPlayback,
+  focusedAppId,
+  focusedApp,
+  focusNotFound,
+  focusAgents,
+  onCloseFocus,
+  onFocusInWorld,
+  onOpenFastTravel,
+  onOpenDestination,
+  onAttentionItem,
+  activeRegion,
+  proximityTarget,
+  playerPose = null,
+  collectedCount = 0,
+  totalShards = 18,
+}) {
   const isFocused = Boolean(focusedApp || focusNotFound);
   const navigate = useNavigate();
   const location = useLocation();
@@ -218,8 +255,20 @@ export default function OpenWorldHud({ cosStatus, cosAgents, agentMap, eventLogs
           <OpenWorldAgentBar cosAgents={cosAgents} agentMap={agentMap} />
           <OpenWorldXpBadge character={character} onOpenDestination={onOpenDestination} />
 
-          <div className="absolute bottom-4 left-4 pointer-events-auto">
-            <OpenWorldMiniMap apps={apps} onSelectApp={onSelectApp} selectedAppId={focusedAppId} />
+          <div className="absolute bottom-4 left-4 pointer-events-auto flex flex-col gap-2 items-start">
+            <OpenWorldMiniMap
+              apps={apps}
+              onSelectApp={onSelectApp}
+              selectedAppId={focusedAppId}
+              playerPose={playerPose}
+            />
+            {explorationMode && (
+              <OpenWorldSpeedometer
+                playerPose={playerPose}
+                collectedCount={collectedCount}
+                totalShards={totalShards}
+              />
+            )}
             <div className="openworld-hud-action-rail">
               {onOpenFastTravel && <HudAction icon={MapIcon} label="World map" hint="M" onClick={onOpenFastTravel} />}
               <HudAction

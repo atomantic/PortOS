@@ -142,6 +142,144 @@ const playTaskComplete = (ctx, output) => {
   });
 };
 
+// Horn: dual-tone retro-futuristic synth horn
+const playHorn = (ctx, output) => {
+  const now = ctx.currentTime;
+  const freqs = [440, 554.37]; // A4 + C#5 major third interval
+  freqs.forEach((freq) => {
+    const osc = ctx.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(freq, now);
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(1400, now);
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.001, now);
+    gain.gain.exponentialRampToValueAtTime(0.14, now + 0.02);
+    gain.gain.setValueAtTime(0.12, now + 0.22);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+    osc.connect(filter);
+    filter.connect(gain);
+    gain.connect(output);
+    osc.start(now);
+    osc.stop(now + 0.38);
+  });
+};
+
+// Boost: high-energy rising whoosh + resonance sweep
+const playBoost = (ctx, output) => {
+  const now = ctx.currentTime;
+  const noise = ctx.createBufferSource();
+  noise.buffer = createNoiseBuffer(ctx, 0.45);
+  const filter = ctx.createBiquadFilter();
+  filter.type = 'bandpass';
+  filter.Q.value = 3;
+  filter.frequency.setValueAtTime(300, now);
+  filter.frequency.exponentialRampToValueAtTime(1800, now + 0.4);
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(0.001, now);
+  gain.gain.exponentialRampToValueAtTime(0.15, now + 0.04);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
+  noise.connect(filter);
+  filter.connect(gain);
+  gain.connect(output);
+  noise.start(now);
+};
+
+// Boost pad: turbo charged surge
+const playBoostPad = (ctx, output) => {
+  const now = ctx.currentTime;
+  const osc = ctx.createOscillator();
+  osc.type = 'sawtooth';
+  osc.frequency.setValueAtTime(220, now);
+  osc.frequency.exponentialRampToValueAtTime(880, now + 0.25);
+  const filter = ctx.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.setValueAtTime(600, now);
+  filter.frequency.exponentialRampToValueAtTime(3200, now + 0.25);
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(0.001, now);
+  gain.gain.exponentialRampToValueAtTime(0.2, now + 0.03);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+  osc.connect(filter);
+  filter.connect(gain);
+  gain.connect(output);
+  osc.start(now);
+  osc.stop(now + 0.32);
+};
+
+// Jump: springy upward chirp
+const playJump = (ctx, output) => {
+  const now = ctx.currentTime;
+  const osc = ctx.createOscillator();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(260, now);
+  osc.frequency.exponentialRampToValueAtTime(620, now + 0.12);
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(0.15, now);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
+  osc.connect(gain);
+  gain.connect(output);
+  osc.start(now);
+  osc.stop(now + 0.18);
+};
+
+// Land: solid low-end damping thud
+const playLand = (ctx, output) => {
+  const now = ctx.currentTime;
+  const osc = ctx.createOscillator();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(110, now);
+  osc.frequency.exponentialRampToValueAtTime(40, now + 0.14);
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(0.22, now);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+  osc.connect(gain);
+  gain.connect(output);
+  osc.start(now);
+  osc.stop(now + 0.18);
+};
+
+// Collectible shard: sparkling 4-note ascending crystalline arpeggio
+const playCollect = (ctx, output) => {
+  const now = ctx.currentTime;
+  const notes = [1046.5, 1318.51, 1567.98, 2093.0]; // C6, E6, G6, C7
+  notes.forEach((freq, i) => {
+    const t = now + i * 0.055;
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.value = freq;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.001, t);
+    gain.gain.exponentialRampToValueAtTime(0.16, t + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.38);
+    osc.connect(gain);
+    gain.connect(output);
+    osc.start(t);
+    osc.stop(t + 0.4);
+  });
+};
+
+// Easter egg discovery: shimmering mystical chord
+const playEggDiscover = (ctx, output) => {
+  const now = ctx.currentTime;
+  const freqs = [739.99, 932.33, 1108.73, 1396.91]; // F#5, A#5, C#6, F6 (Major 7th sparkle)
+  freqs.forEach((freq, i) => {
+    const t = now + i * 0.04;
+    const osc = ctx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.value = freq;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.001, t);
+    gain.gain.exponentialRampToValueAtTime(0.12, t + 0.08);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.7);
+    osc.connect(gain);
+    gain.connect(output);
+    osc.start(t);
+    osc.stop(t + 0.75);
+  });
+};
+
 const SFX_MAP = {
   buildingHover: playBuildingHover,
   buildingClick: playBuildingClick,
@@ -149,6 +287,13 @@ const SFX_MAP = {
   shootingStar: playShootingStar,
   dataPulse: playDataPulse,
   taskComplete: playTaskComplete,
+  horn: playHorn,
+  boost: playBoost,
+  boostPad: playBoostPad,
+  jump: playJump,
+  land: playLand,
+  collect: playCollect,
+  eggDiscover: playEggDiscover,
 };
 
 export const playSfx = (name) => {

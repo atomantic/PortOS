@@ -140,6 +140,48 @@ export function projectGeography(bounds, padding = MINI_MAP_PADDING) {
   };
 }
 
+// Project the live player pose (position + heading) into normalized mini-map coordinates.
+// Returns null when bounds or player position are absent/invalid.
+export function projectPlayer(playerPos, heading = 0, bounds = null, padding = MINI_MAP_PADDING) {
+  if (!playerPos || typeof playerPos.x !== 'number' || typeof playerPos.z !== 'number' || !bounds) {
+    return null;
+  }
+  const { nx, ny } = projectPoint({ x: playerPos.x, z: playerPos.z }, bounds, padding);
+  // Three.js / rig convention: heading 0 faces north (-Z). Map top is -Z, so rotation matches:
+  const rotationDeg = (heading * 180) / Math.PI;
+  return { nx, ny, rotationDeg };
+}
+
+// Project major district landmarks onto the mini-map
+const MAP_LANDMARKS = [
+  { id: 'ai-core', parcel: 'aiCore', label: 'AI Core', color: '#06b6d4' },
+  { id: 'backup-vault', parcel: 'backupVault', label: 'Vault', color: '#f59e0b' },
+  { id: 'task-queue', parcel: 'taskQueue', label: 'Queue', color: '#f97316' },
+  { id: 'wellness', parcel: 'health', label: 'Health', color: '#10b981' },
+  { id: 'memory', parcel: 'memory', label: 'Memory', color: '#a855f7' },
+  { id: 'goals', parcel: 'goals', label: 'Goals', color: '#eab308' },
+  { id: 'artifacts', parcel: 'artifacts', label: 'Artifacts', color: '#facc15' },
+  { id: 'productivity', parcel: 'productivity', label: 'Productivity', color: '#22c55e' },
+];
+
+export function projectLandmarks(bounds, padding = MINI_MAP_PADDING) {
+  if (!bounds) return [];
+  const results = [];
+  for (const lm of MAP_LANDMARKS) {
+    const parcel = PARCELS[lm.parcel];
+    if (!parcel) continue;
+    const { nx, ny } = projectPoint({ x: parcel.anchor[0], z: parcel.anchor[2] }, bounds, padding);
+    results.push({
+      id: lm.id,
+      label: lm.label,
+      color: lm.color,
+      nx,
+      ny,
+    });
+  }
+  return results;
+}
+
 // Full derived view-model for the mini-map component. Takes the layout `positions` Map (the
 // return value of `computeOpenWorldLayout(apps)`, keyed by app id) plus the `apps` array (for
 // status/name/archived metadata), and produces a flat list of plotted dots with normalized
@@ -153,6 +195,7 @@ export function projectGeography(bounds, padding = MINI_MAP_PADDING) {
 export function computeMiniMap(apps, positions, opts = {}) {
   const padding = opts.padding ?? MINI_MAP_PADDING;
   const includeGeography = opts.geography === true;
+  const includeLandmarks = opts.landmarks === true;
   const appList = Array.isArray(apps) ? apps : [];
   const posMap = positions instanceof Map ? positions : new Map();
 
@@ -181,11 +224,16 @@ export function computeMiniMap(apps, positions, opts = {}) {
     };
   });
 
+  const player = opts.player ? projectPlayer(opts.player.position, opts.player.heading, bounds, padding) : null;
+  const landmarks = includeLandmarks ? projectLandmarks(bounds, padding) : [];
+
   return {
     dots,
     bounds,
     count: dots.length,
     empty: dots.length === 0,
     geography: includeGeography ? projectGeography(bounds, padding) : null,
+    player,
+    landmarks,
   };
 }

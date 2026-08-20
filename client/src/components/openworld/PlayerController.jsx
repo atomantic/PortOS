@@ -12,13 +12,15 @@ import {
 import { isWalkable, WORLD } from '../../utils/openWorldPlan';
 import { BOROUGH_PARAMS, BUILDING_PARAMS, PROCESS_BUILDING_PARAMS } from './openWorldConstants';
 import { regionWarpPadPosition } from '../../utils/openWorldRegions';
+import { checkSpeedPadOverlap } from '../../utils/openWorldSpeedPads';
+import { checkShardCollection } from '../../utils/openWorldCollectibles';
+import { detectProximity, getResolvedLandmarks } from '../../utils/openWorldProximity';
 
 const WALK_SPEED = 10;
 const SPRINT_SPEED = 20;
 const VERTICAL_SPEED = 8;
 const JUMP_SPEED = 10;  // initial upward velocity of a Space jump (units/s)
 const GRAVITY = -26;    // downward acceleration applied through the jump arc (units/s²)
-const PROXIMITY_DISTANCE = 6;
 const MAX_CAMERA_HEIGHT = 160;
 const BUILDING_FLYOVER_HEIGHT = 12; // above this the player clears rooftops, so skip collision
 const AIRBORNE_HEIGHT = EYE_HEIGHT + 0.6; // above this the avatar reads as flying (hover state)
@@ -39,10 +41,8 @@ const _lookTarget = new THREE.Vector3();
 //   - 'third' (default): a damped follow camera behind a visible low-poly rover with
 //     arcade vehicle handling, building-aware boom shortening, and speed-weighted steering.
 //   - 'first' (V to toggle): the classic invisible first-person camera.
-// WASD/arrows, shift boost, E/Q vertical, F interact, R respawn, pointer-lock mouselook,
-// shape-aware building/pylon collision below flyover height, world bounds, and spawn
-// persistence remain available. Ground movement can't enter the bay (the harbor piers stay
-// walkable — see isWalkable in openWorldPlan.js).
+// WASD/arrows, shift boost, E/Q vertical, F interact, R respawn, H horn, pointer-lock mouselook,
+// speed boost pads, cyber shards collection, landmark discovery, and world boundaries.
 export default function PlayerController({
   keysRef,
   positions,
@@ -57,6 +57,11 @@ export default function PlayerController({
   warpPads = [],
   onWarpPadInteract,
   onWarpPadProximity,
+  easterEggs = [],
+  collectedShardIds = new Set(),
+  onCollectShard,
+  onPlayerPoseChange,
+  playSfx,
   mobileInputRef = null,
   playerActionRef = null,
 }) {
@@ -114,10 +119,11 @@ export default function PlayerController({
     () => warpPads.map((region) => ({ region, position: regionWarpPadPosition(region) })).filter((entry) => entry.position),
     [warpPads],
   );
+  const proximityTargetRef = useRef(null);
+  const lastBoostPadRef = useRef(null);
+  const poseTickRef = useRef(0);
   const lastSpawnRef = useRef(null);
   const pointerLockedRef = useRef(false);
-  const proximityAppRef = useRef(null);
-  const proximityWarpPadRef = useRef(null);
   // Damped third-person aim point — lags the true lookAt so the aim stays smooth.
   const lookRef = useRef(new THREE.Vector3());
   const lookInitRef = useRef(false);
@@ -243,16 +249,21 @@ export default function PlayerController({
     };
   }, [active, gl.domElement, handleClick, handlePointerLockChange, handleMouseMove]);
 
-  // F interacts with the nearby building; V swaps first/third person; R returns to the
-  // current drop-in point. (E is vertical-up in the free-look controls, so neither shadows movement.)
+  // F interacts with the nearby target; V swaps first/third person; H plays horn; R returns to drop-in.
   const interact = useCallback(() => {
     if (!active) return;
-    if (proximityWarpPadRef.current) {
-      onWarpPadInteract?.(proximityWarpPadRef.current);
-    } else if (proximityAppRef.current) {
-      onBuildingClick?.(proximityAppRef.current);
+    const target = proximityTargetRef.current;
+    if (!target) return;
+    if (target.type === 'warpPad') {
+      onWarpPadInteract?.(target.raw);
+    } else if (target.type === 'building') {
+      onBuildingClick?.(target.raw);
+    } else if (target.type === 'landmark') {
+      if (target.regionId) onWarpPadInteract?.({ id: target.regionId });
+    } else if (target.type === 'easterEgg') {
+      playSfx?.('eggDiscover');
     }
-  }, [active, onBuildingClick, onWarpPadInteract]);
+  }, [active, onBuildingClick, onWarpPadInteract, playSfx]);
 
   useEffect(() => {
     if (!active) return;
@@ -262,6 +273,8 @@ export default function PlayerController({
         interact();
       } else if (key === 'v') {
         onToggleCameraView?.();
+      } else if (key === 'h') {
+        playSfx?.('horn');
       } else if (key === 'r' && lastSpawnRef.current) {
         rigRef.current.position.copy(lastSpawnRef.current);
         rigRef.current.yaw = THIRD_PERSON.isometricYaw;
@@ -278,7 +291,7 @@ export default function PlayerController({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [active, interact, onToggleCameraView]);
+  }, [active, interact, onToggleCameraView, playSfx]);
 
   useEffect(() => {
     if (!playerActionRef) return undefined;
@@ -290,11 +303,6 @@ export default function PlayerController({
 
   // In exploration mode, Space is the jump key — capture it before it bubbles to the
   // global voice push-to-talk hotkey (VoiceWidget listens for the same key on `window`).
-  // A CAPTURE-phase listener runs ahead of that bubble listener, so stopImmediatePropagation
-  // suppresses the voice toggle (and the page's default space-scroll). Because that also
-  // stops useKeyboardControls' own keydown, we record Space into keysRef here ourselves so
-  // the jump still reads it in the frame loop. Skipped while typing so a focused field keeps
-  // its spaces (matches VoiceWidget's own guard).
   useEffect(() => {
     if (!active) return undefined;
     const isTypingTarget = (el) => {
@@ -351,8 +359,7 @@ export default function PlayerController({
     const moveDir = _moveDir.set(0, 0, 0);
     if (isVehicle) {
       // Third-person is a rover: left/right steer the nose, while the analog stick's
-      // horizontal axis remains the same steering input on touch devices. The camera yaw
-      // stays independent so a player can look around while carrying speed.
+      // horizontal axis remains the same steering input on touch devices.
       const drive = stepVehicle({
         speed: rig.speed,
         heading: rig.heading,
@@ -369,8 +376,7 @@ export default function PlayerController({
       rig.skid = drive.skid;
       moveDir.set(drive.displacement.x, 0, drive.displacement.z);
     } else {
-      // First person remains the useful free-roam inspection mode: movement stays relative
-      // to the mouse aim and keeps the original walk/fly behavior.
+      // First person remains the useful free-roam inspection mode.
       const forward = _forward.set(-Math.sin(rig.yaw), 0, -Math.cos(rig.yaw));
       const right = _right.set(-forward.z, 0, forward.x);
       moveDir
@@ -386,9 +392,7 @@ export default function PlayerController({
 
     // Vertical: E/Q is direct free-fly and takes precedence — it cancels any jump and
     // holds altitude when released (no gravity). Gravity applies ONLY during an active
-    // Space jump arc (rig.jumping), so releasing E mid-air keeps the free-fly hover intact
-    // instead of dropping the player. A jump launches only from the ground; the arc
-    // integrates rig.vy until the landing/ceiling clamp below clears rig.jumping.
+    // Space jump arc.
     const flyDir = (keys.has('e') ? 1 : 0) - (keys.has('q') ? 1 : 0);
     const grounded = rig.position.y <= EYE_HEIGHT + 1e-3;
     let dy = 0;
@@ -397,7 +401,11 @@ export default function PlayerController({
       rig.vy = 0;
       dy = flyDir * verticalSpeed;
     } else {
-      if ((keys.has(' ') || mobileInput?.jump) && grounded && !rig.jumping) { rig.vy = JUMP_SPEED; rig.jumping = true; } // launch
+      if ((keys.has(' ') || mobileInput?.jump) && grounded && !rig.jumping) {
+        rig.vy = JUMP_SPEED;
+        rig.jumping = true;
+        playSfx?.('jump');
+      }
       if (rig.jumping) {
         rig.vy += GRAVITY * delta; // gravity through the arc
         dy = rig.vy * delta;
@@ -413,8 +421,7 @@ export default function PlayerController({
       nextPos.y += dy;
 
       // Collision detection is skipped above rooftop height so the player can fly over
-      // the city. The resolver stops at the actual facade/pylon contact and preserves
-      // the free axis for a stable wall slide.
+      // the city.
       let blocked = false;
       if (hasHorizontal && nextPos.y < BUILDING_FLYOVER_HEIGHT) {
         const collision = moveWithCollisions({
@@ -428,22 +435,13 @@ export default function PlayerController({
         nextPos.x = collision.x;
         nextPos.z = collision.z;
         blocked = collision.blocked;
-        // The bay is not walkable (the harbor piers are) — a grounded player stops
-        // at the shoreline instead of strolling onto open water.
         if (!isWalkable(nextPos.x, nextPos.z)) {
           blocked = true;
-          // Water is a hard terrain boundary rather than a wall: undo the whole
-          // attempted move so the player cannot slide diagonally onto the bay.
           nextPos.x = rig.position.x;
           nextPos.z = rig.position.z;
         }
       }
 
-      // Vertical (jump/gravity) is independent of horizontal collision: a wall only
-      // stops horizontal progress, never the jump arc. The resolver has already placed
-      // the player at the contact point (and kept any tangent slide); terrain boundaries
-      // were reset above. In either case the hop still rises, falls, and lands rather
-      // than freezing mid-air while vy keeps integrating downward.
       if (blocked) {
         if (isVehicle) rig.speed = 0;
       }
@@ -451,14 +449,38 @@ export default function PlayerController({
       nextPos.x = Math.max(-WORLD.bound, Math.min(WORLD.bound, nextPos.x));
       nextPos.y = Math.max(EYE_HEIGHT, Math.min(MAX_CAMERA_HEIGHT, nextPos.y));
       nextPos.z = Math.max(-WORLD.bound, Math.min(WORLD.bound, nextPos.z));
-      // Landed (or hit the ceiling): end the jump arc so gravity stops and Space can
-      // launch again (and so releasing E above ground doesn't inherit a stale arc).
+
+      // Landed
       if (nextPos.y <= EYE_HEIGHT + 1e-3 || nextPos.y >= MAX_CAMERA_HEIGHT) {
+        if (rig.jumping && nextPos.y <= EYE_HEIGHT + 1e-3) {
+          playSfx?.('land');
+        }
         rig.vy = 0;
         rig.jumping = false;
       }
       movedHorizontally = Math.abs(nextPos.x - startX) > 1e-5 || Math.abs(nextPos.z - startZ) > 1e-5;
       rig.position.copy(nextPos);
+    }
+
+    // Speed boost pads detection
+    const activeBoostPad = checkSpeedPadOverlap(rig.position);
+    if (activeBoostPad && lastBoostPadRef.current !== activeBoostPad.id) {
+      lastBoostPadRef.current = activeBoostPad.id;
+      if (isVehicle) {
+        rig.speed = Math.max(rig.speed, activeBoostPad.boostSpeed);
+      }
+      playSfx?.('boostPad');
+    } else if (!activeBoostPad) {
+      lastBoostPadRef.current = null;
+    }
+
+    // Cyber Shards collectible detection
+    const collectedShards = checkShardCollection(rig.position, undefined, collectedShardIds);
+    if (collectedShards.length > 0) {
+      collectedShards.forEach((shard) => {
+        onCollectShard?.(shard);
+        playSfx?.('collect');
+      });
     }
 
     // Pose classification for the avatar + facing/banking toward movement.
@@ -474,8 +496,6 @@ export default function PlayerController({
       const headingStep = delta > 0 ? (dampAngle(previousHeading, rig.heading, 1) - previousHeading) / delta : 0;
       const turnBank = bankAngle(headingStep, 0.24, 0.045) + rig.wheelAngle * rig.skid * 0.08;
       rig.bank += (turnBank - rig.bank) * dampFactor(8, delta);
-      // Keep the facing value live even while coasting to a stop; the visual rover should
-      // settle into the same heading as the steering math rather than snap at zero speed.
       if (!movedHorizontally && Math.abs(prevFacing - rig.heading) < 0.001) rig.facing = rig.heading;
     } else if (movedHorizontally) {
       const target = moveFacing(rig.yaw, { forward: forwardInput, strafe: strafeInput });
@@ -487,46 +507,40 @@ export default function PlayerController({
       rig.bank += (0 - rig.bank) * dampFactor(6, delta);
     }
 
-    // Building proximity detection
-    let nearestApp = null;
-    let nearestDist = PROXIMITY_DISTANCE;
-    positions?.forEach((pos, appId) => {
-      const dx = rig.position.x - pos.x;
-      const dy = rig.position.y - ((pos.height ?? 4) * 0.5);
-      const dz = rig.position.z - pos.z;
-      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      if (dist < nearestDist) {
-        nearestDist = dist;
-        const app = apps?.find(a => a.id === appId);
-        if (app) nearestApp = app;
-      }
+    // Proximity detection (unified across warp pads, buildings, easter eggs, landmarks)
+    const proxTarget = detectProximity({
+      playerPos: rig.position,
+      apps,
+      positions,
+      warpPads: warpPadList,
+      easterEggs,
     });
 
-    if (nearestApp !== proximityAppRef.current) {
-      proximityAppRef.current = nearestApp;
-      onBuildingProximity?.(nearestApp);
+    if (proxTarget?.id !== proximityTargetRef.current?.id || proxTarget?.type !== proximityTargetRef.current?.type) {
+      proximityTargetRef.current = proxTarget;
+      onBuildingProximity?.(proxTarget?.type === 'building' ? proxTarget.raw : null);
+      onWarpPadProximity?.(proxTarget?.type === 'warpPad' ? proxTarget.raw : null);
+      onProximityChange?.(proxTarget);
     }
 
-    let nearestWarpPad = null;
-    let nearestWarpDistance = 3.6;
-    for (const { region, position } of warpPadList) {
-      const [x, y, z] = position;
-      const dx = rig.position.x - x;
-      const dy = rig.position.y - y;
-      const dz = rig.position.z - z;
-      const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      if (distance < nearestWarpDistance) {
-        nearestWarpDistance = distance;
-        nearestWarpPad = region;
-      }
-    }
-    if (nearestWarpPad !== proximityWarpPadRef.current) {
-      proximityWarpPadRef.current = nearestWarpPad;
-      onWarpPadProximity?.(nearestWarpPad);
+    // Live telemetry update for HUD speedometer & Mini-map
+    poseTickRef.current = (poseTickRef.current || 0) + 1;
+    if (poseTickRef.current % 3 === 0) {
+      onPlayerPoseChange?.({
+        x: rig.position.x,
+        y: rig.position.y,
+        z: rig.position.z,
+        heading: rig.heading,
+        speed: rig.speed,
+        skid: rig.skid,
+        state: rig.state,
+        jumping: rig.jumping,
+        airborne: rig.position.y > AIRBORNE_HEIGHT,
+        boosting: isSprinting,
+      });
     }
 
-    // Camera application. While CameraTransition flies the camera (exploration toggle),
-    // it is the sole camera writer — explicit gate instead of relying on mount order.
+    // Camera application
     if (transitioning) return;
 
     if (cameraView === 'first') {
@@ -540,8 +554,7 @@ export default function PlayerController({
       return;
     }
 
-    // Third person: boom behind the camera yaw, shortened when it would clip a building,
-    // damped so the camera glides while the aim stays tight.
+    // Third person: boom behind camera yaw
     const desired = thirdPersonCamera({
       pos: rig.position,
       yaw: rig.yaw,
@@ -552,8 +565,6 @@ export default function PlayerController({
     const { point: resolvedCam } = resolveBoom({ anchor, camera: desired.camera, buildings: buildingList });
 
     if (!lookInitRef.current) {
-      // First third-person frame (mode entry): aim snaps so the camera doesn't swing
-      // through the scene; position still eases in from wherever the camera was.
       lookRef.current.set(desired.lookAt.x, desired.lookAt.y, desired.lookAt.z);
       lookInitRef.current = true;
     }
@@ -566,9 +577,6 @@ export default function PlayerController({
 
   if (!active) return null;
 
-  // The visible vehicle exists only in third person — first person stays the classic
-  // invisible camera (and can't self-clip). The procedural actor is still wrapped by the
-  // existing boundaries so the scene keeps its defensive mount contract.
   if (cameraView !== 'third') return null;
   return (
     <ErrorBoundary fallback={null}>

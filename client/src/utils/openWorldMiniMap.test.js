@@ -7,6 +7,8 @@ import {
   computeMiniMap,
   geographyWorldPoints,
   projectGeography,
+  projectPlayer,
+  projectLandmarks,
   spreadProjectedPoints,
 } from './openWorldMiniMap';
 import { WORLD, PARCELS } from './openWorldPlan';
@@ -264,8 +266,48 @@ describe('projectGeography', () => {
     expect(geo.shorelineY).toBeGreaterThanOrEqual(0);
     expect(geo.shorelineY).toBeLessThanOrEqual(1);
     expect(geo.harbor.label).toBe(PARCELS.dataHarbor.label);
-    // Harbor anchor (z=-64) is north of the shoreline (z=-56) → projects higher (smaller ny).
     expect(geo.harbor.ny).toBeLessThan(geo.shorelineY);
   });
 });
+
+describe('projectPlayer', () => {
+  const bounds = { minX: -60, maxX: 60, minZ: -70, maxZ: 60 };
+
+  it('projects player position and converts heading to degrees', () => {
+    const player = projectPlayer({ x: 0, z: 0 }, 0, bounds);
+    expect(player).not.toBeNull();
+    expect(player.nx).toBeCloseTo(0.5);
+    expect(player.rotationDeg).toBeCloseTo(0);
+
+    const playerRot = projectPlayer({ x: 10, z: -10 }, Math.PI / 2, bounds);
+    expect(playerRot.rotationDeg).toBeCloseTo(90);
+  });
+
+  it('returns null on invalid / absent inputs', () => {
+    expect(projectPlayer(null, 0, bounds)).toBeNull();
+    expect(projectPlayer({ x: 0, z: 0 }, 0, null)).toBeNull();
+  });
+});
+
+describe('projectLandmarks', () => {
+  const bounds = { minX: -60, maxX: 60, minZ: -70, maxZ: 60 };
+
+  it('projects landmarks onto normalized coordinates', () => {
+    const landmarks = projectLandmarks(bounds);
+    expect(landmarks.length).toBeGreaterThanOrEqual(5);
+    landmarks.forEach((lm) => {
+      expect(typeof lm.id).toBe('string');
+      expect(typeof lm.label).toBe('string');
+      expect(lm.nx).toBeGreaterThanOrEqual(0);
+      expect(lm.nx).toBeLessThanOrEqual(1);
+      expect(lm.ny).toBeGreaterThanOrEqual(0);
+      expect(lm.ny).toBeLessThanOrEqual(1);
+    });
+  });
+
+  it('returns empty array when bounds are null', () => {
+    expect(projectLandmarks(null)).toEqual([]);
+  });
+});
+
 // @vitest-environment node

@@ -20,14 +20,25 @@ import { computeMiniMap } from '../../utils/openWorldMiniMap';
 // Map box size in px. Fixed so the projection has a stable target on desktop.
 const MAP_SIZE = 132;
 
-export default function OpenWorldMiniMap({ apps, onSelectApp, selectedAppId = null, alwaysShow = false }) {
+export default function OpenWorldMiniMap({
+  apps,
+  onSelectApp,
+  selectedAppId = null,
+  alwaysShow = false,
+  playerPose = null,
+  onSelectDestination = null,
+}) {
   // Status colors track the theme accent for 'online' (the rest stay semantic), so a
   // dot matches its building exactly. Read from the palette the city page provides.
-  const { getBuildingColor } = useOpenWorldPalette();
+  const { getBuildingColor, accent } = useOpenWorldPalette();
   const view = useMemo(() => {
     const positions = computeOpenWorldLayout(Array.isArray(apps) ? apps : []);
-    return computeMiniMap(apps, positions, { geography: true });
-  }, [apps]);
+    return computeMiniMap(apps, positions, {
+      geography: true,
+      landmarks: true,
+      player: playerPose ? { position: playerPose, heading: playerPose.heading || 0 } : null,
+    });
+  }, [apps, playerPose]);
 
   if (view.empty) return null;
 
@@ -53,11 +64,11 @@ export default function OpenWorldMiniMap({ apps, onSelectApp, selectedAppId = nu
               />
               {/* Data Harbor pier marker. */}
               <div
-                className="absolute w-1 h-1 rounded-[1px] bg-cyan-300/70 -translate-x-1/2 -translate-y-1/2 rotate-45"
+                className="absolute w-1.5 h-1.5 rounded-[1px] bg-cyan-300/70 -translate-x-1/2 -translate-y-1/2 rotate-45"
                 style={{
                   left: `${(view.geography.harbor.nx * 100).toFixed(2)}%`,
                   top: `${(view.geography.harbor.ny * 100).toFixed(2)}%`,
-                  boxShadow: '0 0 3px rgba(103, 232, 249, 0.8)',
+                  boxShadow: '0 0 4px rgba(103, 232, 249, 0.8)',
                 }}
                 title={view.geography.harbor.label}
               />
@@ -70,6 +81,26 @@ export default function OpenWorldMiniMap({ apps, onSelectApp, selectedAppId = nu
             <div className="absolute left-1/2 top-0 bottom-0 w-px bg-cyan-500/10" />
           </div>
 
+          {/* District landmark indicators */}
+          {view.landmarks?.map((lm) => {
+            const left = `${(lm.nx * 100).toFixed(2)}%`;
+            const top = `${(lm.ny * 100).toFixed(2)}%`;
+            return (
+              <span
+                key={lm.id}
+                title={lm.label}
+                className="absolute w-1 h-1 rounded-xs -translate-x-1/2 -translate-y-1/2 opacity-70"
+                style={{
+                  left,
+                  top,
+                  backgroundColor: lm.color,
+                  boxShadow: `0 0 2px ${lm.color}`,
+                }}
+              />
+            );
+          })}
+
+          {/* App building dots */}
           {view.dots.map((dot) => {
             const color = getBuildingColor(dot.status, dot.archived);
             const left = `${(dot.nx * 100).toFixed(2)}%`;
@@ -108,6 +139,25 @@ export default function OpenWorldMiniMap({ apps, onSelectApp, selectedAppId = nu
               />
             );
           })}
+
+          {/* Live Player Pose Blip & Heading Arrow */}
+          {view.player && (
+            <div
+              className="absolute pointer-events-none z-20 -translate-x-1/2 -translate-y-1/2"
+              style={{
+                left: `${(view.player.nx * 100).toFixed(2)}%`,
+                top: `${(view.player.ny * 100).toFixed(2)}%`,
+              }}
+            >
+              <div
+                className="w-0 h-0 border-l-[3.5px] border-l-transparent border-r-[3.5px] border-r-transparent border-b-[8px] filter drop-shadow-[0_0_4px_rgba(6,182,212,0.9)]"
+                style={{
+                  borderBottomColor: accent || '#06b6d4',
+                  transform: `rotate(${view.player.rotationDeg}deg)`,
+                }}
+              />
+            </div>
+          )}
         </div>
       </div>
     </div>

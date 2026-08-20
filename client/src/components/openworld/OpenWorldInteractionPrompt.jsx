@@ -3,8 +3,8 @@ function targetCopy(target) {
   const isWarpPad = target.type === 'warpPad';
   const label = target.label || (isWarpPad ? 'REGION' : 'BUILDING');
   return {
-    eyebrow: isWarpPad ? 'WARP GATE' : 'NEARBY BUILDING',
-    action: isWarpPad ? 'WARP TO' : 'OPEN',
+    eyebrow: target.eyebrow || (isWarpPad ? 'WARP GATE' : 'NEARBY BUILDING'),
+    action: target.action || (isWarpPad ? 'WARP TO' : 'OPEN'),
     label,
   };
 }
