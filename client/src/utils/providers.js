@@ -709,6 +709,17 @@ const PRIVATE_IP_RE = /^(?:10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|169\.254\
  * claim hostnames like `fdrive.example.com`, and `fd::1` expands to a leading
  * hextet of `0x00fd`, which is not in `fc00::/7` at all.
  */
+/**
+ * Gate for {@link PRIVATE_IP_RE}: is this host an IPv4 literal at all?
+ *
+ * The range test above matches a PREFIX, which on its own also claims DNS names
+ * that merely start like one — `10.evil.example` — and would report a keyless
+ * PUBLIC endpoint as needing no key. Hosts arriving there have already been
+ * through `URL`, which canonicalizes any IPv4 spelling to a dotted quad.
+ * Mirror of the server helper in server/lib/providerPrerequisites.js.
+ */
+const isIpv4Literal = (host) => /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host);
+
 const isPrivateIpv6 = (host) => {
   if (!host.includes(':')) return false;
   const first = host.split(':')[0];
@@ -740,7 +751,7 @@ export const isPrivateNetworkEndpoint = (endpoint) => {
   const candidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
   if (!URL.canParse(candidate)) return false;
   const host = new URL(candidate).hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  if (PRIVATE_IP_RE.test(host)) return true;
+  if (isIpv4Literal(host) && PRIVATE_IP_RE.test(host)) return true;
   if (isPrivateIpv6(host)) return true;
   if (/\.(local|internal|lan|home\.arpa|ts\.net)$/.test(host)) return true;
   // A single-label host resolves only inside the local network (`http://nas:11434`).
@@ -910,6 +921,24 @@ export const isRunnerAllowedCommand = (command, allowedCommands) => {
  * through `localBackendForProvider` (which also matches a renamed provider by
  * its endpoint) and get their install state from the local-LLM status.
  */
+/**
+ * Does this provider resolve its binary somewhere PortOS's runtime probe never
+ * looked — an explicit path in `command`, or a `PATH` of its own in
+ * `envVars`?
+ *
+ * The runtime row answers one question, "does the bare binary resolve on
+ * PortOS's PATH?", and neither of these is that question: the runner spawns
+ * such a provider against its own resolution. MIRROR of the same two guards in
+ * `providerRuntimeKey` in server/lib/providerPrerequisites.js, which is what
+ * keeps the card's badge and the server's routing decision agreeing.
+ * @param {{type?:string,command?:string,envVars?:Record<string,string>}} provider
+ */
+export const resolvesOutsidePortosPath = (provider) => {
+  if (!isProcessProvider(provider)) return false;
+  if (/[\\/]/.test(String(provider?.command || '').trim())) return true;
+  return Object.keys(provider?.envVars || {}).some((key) => key.toUpperCase() === 'PATH');
+};
+
 export const providerRuntimeKey = (provider) => {
   if (!isProcessProvider(provider)) return null;
   const command = provider?.command;
@@ -1050,7 +1079,16 @@ export const providerCardState = (provider, { runtime = null, status = null, orc
   // / Ollama app installed with no CLI shim on PATH), which the server's runtime
   // table does not cover. For a plain CLI provider this is the same row the
   // server probed, and `addMissing` de-dupes it by code.
-  if (runtime && runtime.installed === false) {
+  //
+  // Except when the provider resolves its binary somewhere else. The runtime row
+  // answers "does the bare binary resolve on PortOS's PATH?", which says nothing
+  // about a provider configured as `/opt/tools/codex` or one that overrides
+  // `PATH` in its own env — the runner spawns those against their own
+  // resolution. Badging them NEEDS SETUP accuses a working provider, and the
+  // server (which owns the routing decision) already declines to. The install
+  // widget still renders from the same row: "PortOS can install this for you"
+  // remains true and useful either way.
+  if (runtime && runtime.installed === false && !resolvesOutsidePortosPath(provider)) {
     addMissing('runtime', `${runtime.label || 'Runtime'} is not installed`);
   }
   if (!published) {

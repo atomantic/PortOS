@@ -1258,6 +1258,18 @@ describe('providerCardState', () => {
       .toBe(PROVIDER_CARD_STATE.READY);
   });
 
+  // The RFC1918 test matches a prefix; without an IPv4-literal gate it also
+  // claims DNS names that merely start like one, waving a real public endpoint
+  // through as needing no key.
+  it.each([
+    'https://10.evil.example/v1',
+    'https://172.16.evil.example/v1',
+    'https://100.64.evil.example/v1',
+  ])('still demands a key from %s, which only LOOKS like a private range', (endpoint) => {
+    expect(providerCardState({ id: 'spoof', type: 'api', endpoint, enabled: true }).state)
+      .toBe(PROVIDER_CARD_STATE.BLOCKED);
+  });
+
   it('still demands a key from a public endpoint', () => {
     expect(providerCardState({ id: 'cloud', type: 'api', endpoint: 'https://api.example.com/v1', enabled: true }).state)
       .toBe(PROVIDER_CARD_STATE.BLOCKED);
@@ -1333,6 +1345,18 @@ describe('providerCardState', () => {
         { runtime: { id: 'lmstudio', label: 'LM Studio', installed: false } },
       );
       expect(readiness.missing).toEqual([{ code: 'runtime', label: 'LM Studio is not installed' }]);
+    });
+
+    // The runtime row answers "is the BARE binary on PortOS's PATH?" — which is
+    // not this provider's question. The server declines to route on it, so the
+    // badge must not accuse it either.
+    it.each([
+      ['an explicit command path', { command: '/opt/example/bin/opencode' }],
+      ['a PATH of its own in envVars', { envVars: { PATH: '/opt/example/bin' } }],
+    ])('does not badge a provider that resolves outside PortOS PATH — %s', (_label, over) => {
+      const readiness = providerCardState(cli(over), { runtime: { label: 'OpenCode CLI', installed: false } });
+      expect(readiness.state).toBe(PROVIDER_CARD_STATE.READY);
+      expect(readiness.missing).toEqual([]);
     });
 
     it('does not double-report a runtime both sides found missing', () => {

@@ -46,6 +46,17 @@ import { commandBasename } from './providerModels.js';
 const PRIVATE_IP_RE = /^(?:10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|169\.254\.|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/;
 
 /**
+ * Gate for {@link PRIVATE_IP_RE}: is this host an IPv4 literal at all?
+ *
+ * The range test above matches a PREFIX, which on its own also claims DNS names
+ * that merely start like one — `10.evil.example`, `172.16.evil.example` — and
+ * would report a keyless PUBLIC endpoint as needing no key. Hosts arriving here
+ * have already been through `URL`, which canonicalizes any IPv4 spelling to a
+ * dotted quad, so this is the exact shape a real address takes.
+ */
+const isIpv4Literal = (host) => /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host);
+
+/**
  * IPv6 counterpart to {@link PRIVATE_IP_RE}: unique-local (`fc00::/7`) and
  * link-local (`fe80::/10`). Tailscale hands out a ULA address alongside the
  * CGNAT v4 one, so without this a tailnet peer reached over IPv6 reads as a
@@ -105,7 +116,7 @@ export const isPrivateNetworkEndpoint = (endpoint) => {
   const host = endpointHost(endpoint);
   if (host === null) return false;
   if (isLocalInstanceHost(host)) return true;
-  if (PRIVATE_IP_RE.test(host)) return true;
+  if (isIpv4Literal(host) && PRIVATE_IP_RE.test(host)) return true;
   if (isPrivateIpv6(host)) return true;
   if (/\.(local|internal|lan|home\.arpa|ts\.net)$/.test(host)) return true;
   // A single-label host resolves only inside the local network (`http://nas:11434`).
@@ -135,6 +146,10 @@ export const providerRuntimeKey = (provider) => {
   if (!isProcessProvider(provider)) return null;
   const command = typeof provider?.command === 'string' ? provider.command.trim() : '';
   if (command === '' || /[\\/]/.test(command)) return null;
+  // Same reasoning as the explicit path: a provider that overrides `PATH` in its
+  // own env is resolved against THAT path at spawn time (`buildCliChildEnv`),
+  // not the one the table scanned, so the table's answer isn't about it.
+  if (Object.keys(provider?.envVars || {}).some((key) => key.toUpperCase() === 'PATH')) return null;
   return commandBasename(command) || null;
 };
 

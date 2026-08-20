@@ -27,6 +27,14 @@ describe('providerRuntimeKey', () => {
     expect(providerRuntimeKey(cli({ command: 'C:\\tools\\codex.exe' }))).toBeNull();
   });
 
+  // Same reasoning: the runner resolves such a provider against ITS PATH, not
+  // the one the table scanned.
+  it('is null for a provider carrying its own PATH', () => {
+    expect(providerRuntimeKey(cli({ envVars: { PATH: '/opt/example/bin' } }))).toBeNull();
+    expect(providerRuntimeKey(cli({ envVars: { path: '/opt/example/bin' } }))).toBeNull();
+    expect(providerRuntimeKey(cli({ envVars: { ANTHROPIC_BASE_URL: 'http://localhost:11434' } }))).toBe('codex');
+  });
+
   it('is null for a provider with no spawned command', () => {
     expect(providerRuntimeKey(api())).toBeNull();
     expect(providerRuntimeKey(cli({ command: '' }))).toBeNull();
@@ -58,6 +66,9 @@ describe('isPrivateNetworkEndpoint', () => {
     'http://192.0.2.10:1234/v1',   // TEST-NET-1 is routable, not private
     'http://fdrive.example.com',   // must not match the fc00::/7 hextet rule by prefix
     'http://[fd::1]:11434',        // leading hextet 0x00fd is NOT in fc00::/7
+    'https://10.evil.example',     // a DNS name that merely STARTS like RFC1918
+    'https://172.16.evil.example',
+    'https://100.64.evil.example',
     '',
     'not a url at all ::::',
   ])('treats %s as NOT private', (endpoint) => {
