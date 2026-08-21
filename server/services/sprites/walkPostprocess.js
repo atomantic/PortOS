@@ -347,13 +347,13 @@ const MIN_PERIOD_RATIO = 0.8;
  * Returns { lag, strength } or null if motion is flat, too short, or lacks clear periodicity.
  */
 export function estimateMotionPeriod(signatures) {
-  if (!Array.isArray(signatures) || signatures.length < 4) return null;
+  if (!Array.isArray(signatures) || signatures.length < 8) return null;
   const motionSeries = [];
   for (let i = 0; i < signatures.length - 1; i++) {
     motionSeries.push(imageDistance(signatures[i], signatures[i + 1]));
   }
   const L = motionSeries.length;
-  if (L < 4) return null;
+  if (L < 8) return null;
 
   let sum = 0;
   for (let i = 0; i < L; i++) sum += motionSeries[i];
@@ -369,11 +369,14 @@ export function estimateMotionPeriod(signatures) {
   if (variance < 1e-4) return null;
 
   const minLag = 3;
-  const maxLag = Math.min(Math.floor(L * 0.8), L - 2);
+  // Search lags up to half the series length so each lag is supported by at least 2 full cycles
+  const maxLag = Math.min(24, Math.floor(L / 2));
   if (maxLag < minLag) return null;
+  const maxComputedLag = Math.min(maxLag + 1, L - 2);
 
   const correlations = [];
-  for (let lag = minLag; lag <= maxLag; lag++) {
+  for (let lag = minLag - 1; lag <= maxComputedLag; lag++) {
+    if (lag < 1) continue;
     let cov = 0;
     for (let i = 0; i < L - lag; i++) {
       cov += (motionSeries[i] - mean) * (motionSeries[i + lag] - mean);
@@ -382,15 +385,15 @@ export function estimateMotionPeriod(signatures) {
     correlations[lag] = r;
   }
 
-  // Find local peaks in autocorrelation that exceed the minimum strength threshold.
+  // Find strictly interior local peaks in autocorrelation that exceed the minimum strength threshold.
   const MIN_AUTOCORR_STRENGTH = 0.25;
   let bestPeak = null;
   for (let lag = minLag; lag <= maxLag; lag++) {
     const r = correlations[lag];
     if (r < MIN_AUTOCORR_STRENGTH) continue;
-    const prev = lag > minLag ? correlations[lag - 1] : correlations[lag];
-    const next = lag < maxLag ? correlations[lag + 1] : correlations[lag];
-    if (r >= prev && r >= next) {
+    const prev = correlations[lag - 1];
+    const next = correlations[lag + 1];
+    if (prev != null && next != null && r > prev && r >= next) {
       if (!bestPeak || r > bestPeak.strength) {
         bestPeak = { lag, strength: pyRoundTo(r, 4) };
       }
@@ -404,7 +407,7 @@ export function estimateMotionPeriod(signatures) {
   // signatures, elevate to the full stride period so integer-multiple checks don't
   // confuse a 1.5-stride window (3 * half-stride) with a whole cycle.
   const doubleLag = bestPeak.lag * 2;
-  if (doubleLag <= maxLag && (correlations[doubleLag] ?? 0) > MIN_AUTOCORR_STRENGTH) {
+  if (doubleLag <= maxComputedLag && (correlations[doubleLag] ?? 0) > MIN_AUTOCORR_STRENGTH) {
     let d1Sum = 0;
     let d1Count = 0;
     for (let i = 0; i < signatures.length - bestPeak.lag; i++) {
