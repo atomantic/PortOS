@@ -116,6 +116,17 @@ describe('WalkSourceFrames', () => {
     expect(screen.getByText(/motion periodicity suggests 11 frames vs selected 15/)).toBeTruthy();
   });
 
+  it('omits the advisory when period agreement is ok or unavailable', async () => {
+    await renderPanel(payload({
+      cycle: {
+        windowStart: 1, windowLength: 8, windowStartFrame: 3, windowEndFrame: 11,
+        periodEstimate: 8, periodAgreement: 'ok',
+      },
+    }));
+    expandGrid();
+    expect(screen.queryByText(/The loop may not be a whole stride/)).toBeNull();
+  });
+
   // Geometry is deliberately omitted so the server adopts the pinned target: a
   // panel one refetch behind must not 409 on a value the user never chose.
   it('re-derives the SELECTED run by id alone, letting the server adopt the target', async () => {

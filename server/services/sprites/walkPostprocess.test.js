@@ -305,8 +305,7 @@ describe('selectCycleIndices', () => {
     expect(agreedRes.cycle.periodEstimate).toBe(11);
     expect(agreedRes.cycle.periodAgreement).toBe('ok');
 
-    // Production disagree path: symmetric 8-frame gait where a 12-frame window (1.5 strides) is chosen
-    // or when 2 strides (12 frames) are selected for a 6-frame period:
+    // Production disagree path: 2 strides (12 frames) selected for a 6-frame period:
     const period6Sigs = Array.from({ length: 30 }, (_, i) => constSig((i % 6) * 10));
     const disagreeRes = selectCycleIndices(period6Sigs, 12);
     expect(disagreeRes.cycle.windowLength).toBeGreaterThanOrEqual(12);
@@ -336,11 +335,10 @@ describe('estimateMotionPeriod', () => {
   it('elevates half-stride motion lag to full stride period on symmetric gait', () => {
     // 8-frame symmetric gait: motion peaks at half-stride (lag 4), but pose distance
     // at lag 8 is 0 while at lag 4 is non-zero (mirrored leg/arm positions).
-    // Signatures alternate between [10, 0, 0] and [0, 0, 10] across the halves.
+    // Signatures alternate fill extent between 1000 and 2000 bytes across the halves.
     const posePattern = [0, 5, 15, 30, 0, 5, 15, 30];
     const signatures = Array.from({ length: 32 }, (_, i) => {
       const half = Math.floor((i % 8) / 4);
-      // Different color channel for left vs right foot step
       const buf = Buffer.alloc(SIG_LEN, 0);
       buf.fill(posePattern[i % 8], 0, half === 0 ? 1000 : 2000);
       return buf;
