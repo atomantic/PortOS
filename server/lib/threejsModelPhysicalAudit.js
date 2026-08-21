@@ -416,19 +416,26 @@ const unionBounds = (a, b) => {
   return [0, 1, 2].map((axis) => [Math.min(a[axis][0], b[axis][0]), Math.max(a[axis][1], b[axis][1])]);
 };
 
+const isInSubtree = (volume, partId) => volume.id === partId || volume.ancestorIds.includes(partId);
+
 /**
- * World bounds for each part INCLUDING its descendants.
+ * World bounds for one part INCLUDING its descendants, optionally minus one
+ * nested subtree.
  *
  * An anchor is routinely a bare group whose surface is entirely in its children
  * — "head" holding a skull and a jaw — so measuring only the part's own geometry
- * would report a hat as unmeasurable against the head it plainly sits on.
+ * would report a hat as unmeasurable against the head it plainly sits on. But an
+ * attachment is usually parented UNDER its anchor, and folding the attachment's
+ * own geometry into the anchor's bounds would make every nested attachment
+ * measure zero units away from itself: the check would pass a hat at hip height
+ * precisely because it is a child of the head. Hence the exclusion.
  */
-const buildSubtreeBounds = (volumes) => {
-  const bounds = new Map();
+const subtreeBounds = (volumes, partId, excludePartId = null) => {
+  let bounds = null;
   for (const volume of volumes) {
-    for (const id of [volume.id, ...volume.ancestorIds]) {
-      bounds.set(id, unionBounds(bounds.get(id), volume.worldBounds));
-    }
+    if (!isInSubtree(volume, partId)) continue;
+    if (excludePartId && isInSubtree(volume, excludePartId)) continue;
+    bounds = unionBounds(bounds, volume.worldBounds);
   }
   return bounds;
 };
@@ -444,7 +451,7 @@ const formatOffset = (value) => Number(value.toFixed(3));
  * one pose.
  *
  * @returns {{findings: Array, unmeasured: Array<{partId: string, anchorPartId: string|null,
- *   anchorSocket: string|null, reason: string}>}}
+ *   anchorSocket: string|null, reason: string}>, measured: Set<string>}}
  */
 function measureAttachmentAnchors({
   attachments,
@@ -456,15 +463,17 @@ function measureAttachmentAnchors({
 }) {
   const findings = [];
   const unmeasured = [];
-  if (attachments.length === 0) return { findings, unmeasured };
+  // Which attachments this pose could actually put a number on, so a pose that
+  // could not see an anchor never overrides a pose that could.
+  const measured = new Set();
+  if (attachments.length === 0) return { findings, unmeasured, measured };
 
   const measurable = volumes.filter((volume) => volume.visible && volume.opacity > 0);
-  const subtreeBounds = buildSubtreeBounds(measurable);
   const label = (partId) => `"${namesByPartId.get(partId) || partId}"`;
   const { clipName, ...metadata } = context;
 
   for (const attachment of attachments) {
-    const attachmentBounds = subtreeBounds.get(attachment.partId);
+    const attachmentBounds = subtreeBounds(measurable, attachment.partId);
     if (!attachmentBounds) {
       unmeasured.push({
         partId: attachment.partId,
@@ -485,7 +494,7 @@ function measureAttachmentAnchors({
         anchorDescription = `socket "${attachment.anchorSocket}" on ${label(socket.parentPartId)}`;
       }
     } else if (attachment.anchorPartId) {
-      anchorBounds = subtreeBounds.get(attachment.anchorPartId) || null;
+      anchorBounds = subtreeBounds(measurable, attachment.anchorPartId, attachment.partId);
       anchorDescription = label(attachment.anchorPartId);
     }
 
@@ -501,6 +510,7 @@ function measureAttachmentAnchors({
       continue;
     }
 
+    measured.add(attachment.partId);
     const distance = aabbDistance(attachmentBounds, anchorBounds);
     if (distance <= attachment.maxOffset) continue;
 
@@ -524,7 +534,7 @@ function measureAttachmentAnchors({
     });
   }
 
-  return { findings, unmeasured };
+  return { findings, unmeasured, measured };
 }
 
 const collectAnimatedScaleSamples = (part, sequences) => sequences
@@ -597,7 +607,12 @@ export function evaluateThreejsPhysicalAudit(spec) {
     socketsByName,
     namesByPartId,
   });
-  const unmeasuredAttachments = staticAnchorReport.unmeasured;
+  // Accumulated across every pose, and resolved at the end: an attachment
+  // measured in ANY pose was checked, so a clip pose that happens to hide the
+  // anchor must not retroactively report it as unverified — and an attachment no
+  // pose could measure must never read as clean.
+  const measuredAnywhere = new Set(staticAnchorReport.measured);
+  const unmeasuredByPartId = new Map(staticAnchorReport.unmeasured.map((entry) => [entry.partId, entry]));
   const staticAnchorFailures = new Set();
   for (const finding of staticAnchorReport.findings) {
     staticAnchorFailures.add(finding.partIds[0]);
@@ -759,6 +774,10 @@ export function evaluateThreejsPhysicalAudit(spec) {
           namesByPartId,
           context: { clipId: clip.id, clipName: clip.name || clip.id, timeSeconds },
         });
+        for (const partId of report.measured) measuredAnywhere.add(partId);
+        for (const entry of report.unmeasured) {
+          if (!unmeasuredByPartId.has(entry.partId)) unmeasuredByPartId.set(entry.partId, entry);
+        }
         for (const finding of report.findings) {
           const partId = finding.partIds[0];
           // The resting pose already reported this attachment; repeating it per
@@ -811,6 +830,9 @@ export function evaluateThreejsPhysicalAudit(spec) {
       addFinding(finding);
     }
   }
+
+  const unmeasuredAttachments = [...unmeasuredByPartId.values()]
+    .filter((entry) => !measuredAnywhere.has(entry.partId));
 
   const countBy = (severity) => findings.filter((f) => f.severity === severity).length;
 

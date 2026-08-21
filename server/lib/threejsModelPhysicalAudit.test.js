@@ -801,6 +801,60 @@ describe('threejsModelPhysicalAudit attachment anchors', () => {
     expect(res.findings.filter((f) => f.code === 'attachment-far-from-anchor')).toEqual([]);
   });
 
+  // The natural authoring shape, and the one that defeats a naive subtree
+  // measurement: the hat is a CHILD of the head, so folding its own geometry into
+  // the head's bounds would measure it zero units from itself no matter where it
+  // sits. The anchor's bounds exclude the attachment's own subtree.
+  it('measures a nested attachment against its anchor rather than against itself', () => {
+    const nested = {
+      name: 'Figure',
+      materials: { skin: { type: 'standard', color: '#ffffff' } },
+      parts: [{
+        ...box('torso', 'Torso', [0, 1, 0], 1.2),
+        children: [{
+          ...box('head', 'Head', [0, 0.9, 0], 0.5),
+          // Authored on the head but positioned at hip height — the upstream defect.
+          children: [box('hat', 'Hat', [0, -1.5, 0], 0.55)],
+        }],
+      }],
+      sockets: [],
+      articulation: {
+        joints: [{ id: 'rootJoint', partId: 'torso', parentJointId: null, pivotSocket: null }],
+        attachmentPartIds: [],
+        attachments: [{ partId: 'hat', anchorPartId: 'head', anchorSocket: null, maxOffset: 0.25 }],
+      },
+    };
+    const [finding] = evaluateThreejsPhysicalAudit(nested).findings.filter((f) => f.code === 'attachment-far-from-anchor');
+    expect(finding).toBeDefined();
+    expect(finding.distance).toBeGreaterThan(0.25);
+
+    // …and the same hierarchy with the hat actually on the head stays clean.
+    nested.parts[0].children[0].children = [box('hat', 'Hat', [0, 0.4, 0], 0.55)];
+    expect(evaluateThreejsPhysicalAudit(nested).findings.filter((f) => f.code === 'attachment-far-from-anchor')).toEqual([]);
+  });
+
+  // A clip pose that hides the anchor did not disprove the resting-pose
+  // measurement, so it must not turn a checked attachment into an unchecked one.
+  it('keeps an attachment measured in the resting pose out of the unmeasured list', () => {
+    const spec = wornSpec([{ partId: 'hat', anchorPartId: 'head', anchorSocket: null, maxOffset: 0.25 }]);
+    spec.animation = {
+      clips: [{
+        id: 'vanish',
+        name: 'Vanish',
+        durationSeconds: 1,
+        sequences: [{
+          id: 'hideHead',
+          name: 'Hide head',
+          partId: 'head',
+          startSeconds: 0,
+          endSeconds: 1,
+          channels: { visible: { from: true, to: false } },
+        }],
+      }],
+    };
+    expect(evaluateThreejsPhysicalAudit(spec).unmeasuredAttachments).toEqual([]);
+  });
+
   it('catches a clip that carries an attachment away from its anchor mid-clip', () => {
     const spec = wornSpec([{ partId: 'hat', anchorPartId: 'head', anchorSocket: null, maxOffset: 0.25 }]);
     spec.animation = {
