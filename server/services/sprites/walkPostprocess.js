@@ -353,7 +353,6 @@ export function estimateMotionPeriod(signatures) {
     motionSeries.push(imageDistance(signatures[i], signatures[i + 1]));
   }
   const L = motionSeries.length;
-  if (L < 8) return null;
 
   let sum = 0;
   for (let i = 0; i < L; i++) sum += motionSeries[i];
@@ -433,8 +432,8 @@ export function estimateMotionPeriod(signatures) {
 /**
  * Does the chosen cycle window match the estimated single-stride motion period?
  *
- * Accepts single-stride agreement (nearestK === 1) within either ±0.5 frames
- * (integer quantization tolerance) or < 12% relative drift. Multi-stride (k >= 2)
+ * Accepts single-stride agreement (nearestK === 1) within either ±1 frame
+ * (integer sampling / quantization jitter) or < 12% relative drift. Multi-stride (k >= 2)
  * and sub-stride (k < 1) windows are rejected as disagreeing so the advisory
  * alerts the reviewer when a double-speed or fractional stride was packed.
  */
@@ -445,7 +444,7 @@ export function isPeriodAgreement(cycleLength, lag) {
   const ratio = cycleLength / lag;
   const nearestK = Math.round(ratio);
   if (nearestK === 1) {
-    if (Math.abs(cycleLength - lag) <= 0.5 || Math.abs(ratio - 1) < 0.12) return true;
+    if (Math.abs(cycleLength - lag) <= 1 || Math.abs(ratio - 1) < 0.12) return true;
   }
   return false;
 }
@@ -493,7 +492,7 @@ export function findCycleWindow(signatures, frameCount, minLength) {
     if (!period) {
       throw new Error('No detectable moving walk cycle in the source video (motion has no detectable periodicity)');
     }
-    throw new Error('No detectable moving walk cycle in the source video (motion has no detectable periodicity)');
+    throw new Error(`No detectable moving walk cycle in the source video (motion is periodic at ~${period.lag} frames, but no window scored as a clean gait cycle)`);
   }
   const [, start, cycleLength, seam, motion] = best;
   return { start, cycleLength, seam, motion };
