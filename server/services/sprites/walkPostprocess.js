@@ -397,6 +397,33 @@ export function estimateMotionPeriod(signatures) {
     }
   }
 
+  if (!bestPeak) return null;
+
+  // In a symmetric walk, frame-to-frame motion peaks at the half-stride (e.g. lag 4
+  // for an 8-frame gait). If 2 * lag shows stronger full-pose agreement between
+  // signatures, elevate to the full stride period so integer-multiple checks don't
+  // confuse a 1.5-stride window (3 * half-stride) with a whole cycle.
+  const doubleLag = bestPeak.lag * 2;
+  if (doubleLag <= maxLag && (correlations[doubleLag] ?? 0) > MIN_AUTOCORR_STRENGTH) {
+    let d1Sum = 0;
+    let d1Count = 0;
+    for (let i = 0; i < signatures.length - bestPeak.lag; i++) {
+      d1Sum += imageDistance(signatures[i], signatures[i + bestPeak.lag]);
+      d1Count++;
+    }
+    let d2Sum = 0;
+    let d2Count = 0;
+    for (let i = 0; i < signatures.length - doubleLag; i++) {
+      d2Sum += imageDistance(signatures[i], signatures[i + doubleLag]);
+      d2Count++;
+    }
+    const d1 = d1Count > 0 ? d1Sum / d1Count : Infinity;
+    const d2 = d2Count > 0 ? d2Sum / d2Count : Infinity;
+    if (d2 < d1 * 0.85) {
+      bestPeak = { lag: doubleLag, strength: pyRoundTo(correlations[doubleLag], 4) };
+    }
+  }
+
   return bestPeak;
 }
 

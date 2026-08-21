@@ -328,6 +328,28 @@ describe('estimateMotionPeriod', () => {
     expect(est.strength).toBeGreaterThan(0.8);
   });
 
+  it('elevates half-stride motion lag to full stride period on symmetric gait', () => {
+    // 8-frame symmetric gait: motion peaks at half-stride (lag 4), but pose distance
+    // at lag 8 is 0 while at lag 4 is non-zero (mirrored leg/arm positions).
+    // Signatures alternate between [10, 0, 0] and [0, 0, 10] across the halves.
+    const posePattern = [0, 5, 15, 30, 0, 5, 15, 30];
+    const signatures = Array.from({ length: 32 }, (_, i) => {
+      const half = Math.floor((i % 8) / 4);
+      // Different color channel for left vs right foot step
+      const buf = Buffer.alloc(SIG_LEN, 0);
+      buf.fill(posePattern[i % 8], 0, half === 0 ? 1000 : 2000);
+      return buf;
+    });
+    const est = estimateMotionPeriod(signatures);
+    expect(est).not.toBeNull();
+    expect(est.lag).toBe(8); // Full stride, not half-stride 4
+
+    // 12-frame window (1.5 strides) must disagree with 8-frame full period
+    expect(isPeriodAgreement(12, est.lag)).toBe(false);
+    // 8-frame window agrees
+    expect(isPeriodAgreement(8, est.lag)).toBe(true);
+  });
+
   it('returns null for motionless or flat motion series (unavailable)', () => {
     const staticSigs = Array.from({ length: 20 }, () => constSig(5));
     expect(estimateMotionPeriod(staticSigs)).toBeNull();
