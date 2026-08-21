@@ -709,3 +709,180 @@ export async function analyzeAudioFileManual(audioPath, { bpm, offsetSec = 0 }, 
   if (!decoded) return null;
   return buildManualAnalysis(decoded.samples, decoded.sampleRate, { bpm, offsetSec });
 }
+
+// --- Section → beat-grid snapping (#4664) -----------------------------------
+//
+// `segmentSections` above cuts on energy-novelty WINDOW edges
+// (`SECTION_WINDOW_SEC` multiples) — it never consults the beat grid the same
+// analysis produces. The autonomous planner used to stamp `beatAligned: true`
+// on those spans anyway, which `render.js#beatSnapClips` reads as "the director
+// already snapped this, honor it exactly" — so the claim actively suppressed
+// the live snap that would have fixed the cut. `snapSectionsToGrid` makes the
+// flag earn itself: snap the section edges to the grid here, and report per
+// section whether that section's own edges actually landed on it.
+
+// Snap tolerance as a fraction of one beat period. Half a beat is the natural
+// bound: no time can sit further than half a period from SOME beat, so a
+// planned cut lands on the grid for essentially any edge (only one sitting
+// exactly on the midpoint between two beats is ambiguous, and is left alone).
+// Being tempo-relative is the point — ~0.43s at 70 BPM, ~0.17s at 180 BPM. A
+// fixed constant (render.js uses 0.12s for its trim-only snap) would silently
+// stop snapping at fast tempos and over-shoot at slow ones.
+const SNAP_TOLERANCE_BEAT_FRACTION = 0.5;
+// Used only when the grid is too sparse to measure a period (a single beat).
+const SNAP_FALLBACK_TOLERANCE_SEC = 0.12;
+// A snap is refused rather than squeezing a section below this. Real sections
+// arrive at MIN_SECTION_SEC or longer and edges move by well under a beat, so
+// this is a guard for hand-built/legacy analyses, not a normal path.
+const MIN_SNAPPED_SECTION_SEC = 1;
+// Two times closer than this are the same landmark — also the slack for calling
+// an UNMOVED edge "already on the grid".
+const GRID_EPS = 0.005;
+
+const round3 = (t) => Number(t.toFixed(3));
+
+/** Ascending, finite, non-negative times only. */
+function sortedGrid(times) {
+  return (Array.isArray(times) ? times : [])
+    .filter((t) => typeof t === 'number' && Number.isFinite(t) && t >= 0)
+    .sort((a, b) => a - b);
+}
+
+/** Median gap between consecutive grid times, or null when unmeasurable. */
+function medianInterval(times) {
+  if (times.length < 2) return null;
+  const gaps = [];
+  for (let i = 1; i < times.length; i++) gaps.push(times[i] - times[i - 1]);
+  gaps.sort((a, b) => a - b);
+  const mid = Math.floor(gaps.length / 2);
+  const median = gaps.length % 2 === 1 ? gaps[mid] : (gaps[mid - 1] + gaps[mid]) / 2;
+  return median > 0 ? median : null;
+}
+
+/** Nearest grid time to `target`, or null when the nearest is beyond tolerance. */
+function nearestWithin(grid, target, toleranceSec) {
+  let best = null;
+  let bestDist = Infinity;
+  for (const t of grid) {
+    const dist = Math.abs(t - target);
+    if (dist < bestDist) { bestDist = dist; best = t; }
+  }
+  return best != null && bestDist <= toleranceSec ? best : null;
+}
+
+/**
+ * Tempo-relative snap tolerance. Prefers the beat period; a downbeats-only
+ * grid implies 4/4 bars, so its period is quartered back to a beat.
+ */
+function deriveTolerance(beatGrid, downbeatGrid) {
+  const barPeriod = medianInterval(downbeatGrid);
+  const beatPeriod = medianInterval(beatGrid) ?? (barPeriod == null ? null : barPeriod / 4);
+  return beatPeriod == null
+    ? SNAP_FALLBACK_TOLERANCE_SEC
+    : beatPeriod * SNAP_TOLERANCE_BEAT_FRACTION;
+}
+
+/**
+ * Pure: snap a contiguous section map's INTERNAL boundaries onto the analyzed
+ * beat grid, and report which sections ended up genuinely aligned.
+ *
+ * Rules:
+ * - Each internal boundary prefers the nearest **downbeat** within tolerance,
+ *   falls back to the nearest **beat**, and stays put when neither qualifies.
+ * - Boundaries are SHARED: moving section i's end moves section i+1's start, so
+ *   the timeline stays contiguous and gap-free. A non-contiguous input (a gap
+ *   between two sections — possible in a hand-built/legacy analysis) leaves that
+ *   boundary alone rather than inventing a shared edge.
+ * - The first start and the final end are ANCHORS and never move: they are the
+ *   track's own edges, where no cut happens.
+ * - A snap that would push either neighbouring section below `minSceneSec`, or
+ *   that would reorder boundaries, is refused — the edge stays put.
+ *
+ * `beatAligned[i]` is true only when BOTH of section i's own edges sit on the
+ * grid (snapped there, or already there) — anchors count, since there is no cut
+ * to align. An edge that could not snap therefore reports false, handing that
+ * span back to `beatSnapClips`'s live snapping instead of freezing a cut that
+ * ignored the grid. A track with NO grid at all is the one exception, and is
+ * explained inline below.
+ *
+ * @param {Array<{startSec:number,endSec:number}>} sections contiguous, ascending
+ * @param {{ downbeats?: number[], beats?: number[], toleranceSec?: number, minSceneSec?: number }} [opts]
+ * @returns {{ sections: Array<object>, beatAligned: boolean[] }}
+ */
+export function snapSectionsToGrid(sections, {
+  downbeats = [], beats = [], toleranceSec = null, minSceneSec = MIN_SNAPPED_SECTION_SEC,
+} = {}) {
+  const out = (Array.isArray(sections) ? sections : []).map((s) => ({ ...s }));
+  const beatGrid = sortedGrid(beats);
+  const downbeatGrid = sortedGrid(downbeats);
+  // No grid at all — `analyzePcm` found no usable tempo. Nothing to snap to,
+  // and nothing being suppressed either: `beatSnapClips` has no beats to
+  // live-snap against, so refusing the flag here would not hand the span back
+  // for correction, it would simply DISCARD the planned timeline and render each
+  // scene at its raw source-clip length (a 6s clip standing in for a 20s
+  // section). The flag's render contract is "an authored span, do not re-derive
+  // it", and with no grid there is nothing to re-derive from — so the planned
+  // spans stay honored. The dishonesty this helper exists to fix is claiming
+  // alignment while a grid EXISTS that the span never consulted.
+  if (out.length === 0 || (beatGrid.length === 0 && downbeatGrid.length === 0)) {
+    return { sections: out, beatAligned: out.map(() => true) };
+  }
+
+  const tolerance = typeof toleranceSec === 'number' && Number.isFinite(toleranceSec) && toleranceSec >= 0
+    ? toleranceSec
+    : deriveTolerance(beatGrid, downbeatGrid);
+  const onGrid = (t) => nearestWithin(downbeatGrid, t, GRID_EPS) != null
+    || nearestWithin(beatGrid, t, GRID_EPS) != null;
+
+  // Candidate target for every internal boundary, computed up front so the
+  // left-to-right application can bound each snap by where its RIGHT neighbour
+  // could still move to (its candidate, or its original position — whichever is
+  // further left). Without that bound, two snaps could converge and starve the
+  // section between them.
+  const original = out.map((s) => s.endSec);
+  const shared = out.map((s, i) => i > 0 && Math.abs(s.startSec - out[i - 1].endSec) <= GRID_EPS);
+  const candidates = out.map((_, i) => {
+    if (i === 0 || !shared[i]) return null;
+    const edge = out[i - 1].endSec;
+    return nearestWithin(downbeatGrid, edge, tolerance) ?? nearestWithin(beatGrid, edge, tolerance);
+  });
+
+  const alignedStart = out.map(() => false);
+  const alignedEnd = out.map(() => false);
+  // Track anchors: the video starts when the song starts and ends when it ends.
+  alignedStart[0] = true;
+  alignedEnd[out.length - 1] = true;
+
+  for (let i = 1; i < out.length; i++) {
+    if (!shared[i]) {
+      alignedEnd[i - 1] = onGrid(out[i - 1].endSec);
+      alignedStart[i] = onGrid(out[i].startSec);
+      continue;
+    }
+    const target = candidates[i];
+    const prev = out[i - 1].startSec; // already finalized by an earlier pass
+    const nextBound = i + 1 < out.length
+      ? Math.min(original[i], candidates[i + 1] ?? original[i])
+      : out[i].endSec; // final end is an anchor
+    // A strictly-positive floor is what refuses a REORDERING snap as well as a
+    // too-short one: a caller passing minSceneSec: 0 must still not be able to
+    // collapse or invert a section.
+    const floor = Math.max(GRID_EPS, minSceneSec);
+    const accepted = target != null
+      && target - prev >= floor
+      && nextBound - target >= floor;
+    if (accepted) {
+      const snapped = round3(target);
+      out[i - 1].endSec = snapped;
+      out[i].startSec = snapped;
+      alignedEnd[i - 1] = true;
+      alignedStart[i] = true;
+    } else {
+      const aligned = onGrid(out[i - 1].endSec);
+      alignedEnd[i - 1] = aligned;
+      alignedStart[i] = aligned;
+    }
+  }
+
+  return { sections: out, beatAligned: out.map((_, i) => alignedStart[i] && alignedEnd[i]) };
+}

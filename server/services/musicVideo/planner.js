@@ -12,7 +12,9 @@
  * already derives section boundaries from energy-novelty segmentation, so a
  * loud/eventful stretch of the track is already split into more, shorter
  * sections and a calm stretch into fewer, longer ones — each proposed scene
- * simply takes its section's exact span.
+ * takes its section's span, with the internal cuts snapped onto the analyzed
+ * beat grid first (`snapSectionsToGrid`, #4664) so the seeded spans cut on
+ * the music rather than on energy-window edges.
  *
  * Director-first (#1760's core design constraint): this only SEEDS the
  * board with ordinary, fully-editable scene records — it never locks or
@@ -29,6 +31,7 @@
 import { ServerError } from '../../lib/errorHandler.js';
 import { extractJson } from '../../lib/jsonExtract.js';
 import { resolveProviderAndModel, runPromptThroughProvider } from '../../lib/promptRunner.js';
+import { snapSectionsToGrid } from './audioAnalysis.js';
 import { getProject, addProjectScenes } from './projects.js';
 
 const SECTION_LABEL_MAX = 120;
@@ -65,16 +68,33 @@ export function validSections(sections) {
  * order. `sections` must already be filtered via `validSections` — the
  * caller owns that so this stays a straight 1:1 map (no index drift between
  * this and the LLM prompt's section list).
+ *
+ * Section edges come out of energy-novelty segmentation on half-second window
+ * boundaries — they have never touched the beat grid. So before seeding, snap
+ * the internal boundaries onto the analysis's downbeats/beats and take
+ * `beatAligned` from whether each scene's own edges actually landed there
+ * (#4664). Stamping `beatAligned: true` unconditionally, as this used to,
+ * told `render.js#beatSnapClips` to honor an arbitrary window edge exactly
+ * and suppressed the live snap that would otherwise have corrected it.
+ *
+ * An edge that cannot snap reports `beatAligned: false`, handing that span back
+ * to the live snap. A track with NO grid at all keeps its planned spans honored
+ * — there is no live snap to hand them to, and dropping them would render every
+ * scene at its raw source-clip length; see `snapSectionsToGrid`.
+ *
+ * @param {Array<object>} sections
+ * @param {{ downbeats?: number[], beats?: number[], toleranceSec?: number, minSceneSec?: number }} [grid]
  */
-export function planScenesFromSections(sections) {
-  return sections.map((s) => {
+export function planScenesFromSections(sections, grid = {}) {
+  const { sections: snapped, beatAligned } = snapSectionsToGrid(sections, grid);
+  return snapped.map((s, i) => {
     const label = typeof s.label === 'string' ? s.label.slice(0, SECTION_LABEL_MAX) : '';
     return {
       label,
       sectionLabel: label || null,
       startSec: s.startSec,
       endSec: s.endSec,
-      beatAligned: true,
+      beatAligned: beatAligned[i],
     };
   });
 }
@@ -207,7 +227,13 @@ export async function planProject(id, { seedPrompts = true, providerId, model } 
     );
   }
 
-  const sceneInputs = planScenesFromSections(sections);
+  // `buildScenePlanPrompt` below keeps listing the PRE-snap `sections`:
+  // indices still agree 1:1 with `sceneInputs`, and a sub-beat difference in a
+  // section's reported duration does not change the creative direction asked for.
+  const sceneInputs = planScenesFromSections(sections, {
+    downbeats: project.audioAnalysis?.downbeats,
+    beats: project.audioAnalysis?.beats,
+  });
 
   let promptsSeeded = false;
   let promptsSkippedReason = seedPrompts ? null : 'not-requested';

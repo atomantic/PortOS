@@ -25,12 +25,18 @@ const SECTIONS = [
   { label: 'Outro', startSec: 18, endSec: 30, energy: 0.4 },
 ];
 
+// 120 BPM: a beat every 0.5s, a 4/4 downbeat every 2s. Both SECTIONS
+// boundaries (10s, 18s) already sit on a downbeat, so the fixture plans
+// unchanged spans that legitimately earn `beatAligned`.
+const BEATS = Array.from({ length: 81 }, (_, i) => Number((i * 0.5).toFixed(3)));
+const DOWNBEATS = BEATS.filter((_, i) => i % 4 === 0);
+
 function makeProject(overrides = {}) {
   return {
     id: 'mv-1',
     name: 'Neon Nights',
     concept: { prompt: 'cyberpunk chase', style: 'neon, rain-slicked streets' },
-    audioAnalysis: { bpm: 120, beats: [], downbeats: [], sections: SECTIONS, durationSec: 30 },
+    audioAnalysis: { bpm: 120, beats: BEATS, downbeats: DOWNBEATS, sections: SECTIONS, durationSec: 30 },
     scenes: [],
     ...overrides,
   };
@@ -61,8 +67,10 @@ describe('validSections', () => {
 });
 
 describe('planScenesFromSections', () => {
-  it('builds one beat-aligned scene-create input per section, in order', () => {
-    const inputs = planScenesFromSections(SECTIONS);
+  const GRID = { beats: BEATS, downbeats: DOWNBEATS };
+
+  it('builds one scene-create input per section, in order', () => {
+    const inputs = planScenesFromSections(SECTIONS, GRID);
     expect(inputs).toHaveLength(3);
     expect(inputs[0]).toEqual({
       label: 'Intro', sectionLabel: 'Intro', startSec: 0, endSec: 10, beatAligned: true,
@@ -71,15 +79,57 @@ describe('planScenesFromSections', () => {
     expect(inputs[2]).toMatchObject({ label: 'Outro', startSec: 18, endSec: 30 });
   });
 
-  it('each scene duration is exactly its section span (energy-aware via segmentation)', () => {
-    const inputs = planScenesFromSections(SECTIONS);
+  it('each scene duration is its (snapped) section span — energy-aware via segmentation', () => {
+    const inputs = planScenesFromSections(SECTIONS, GRID);
     for (let i = 0; i < SECTIONS.length; i++) {
       expect(inputs[i].endSec - inputs[i].startSec).toBe(SECTIONS[i].endSec - SECTIONS[i].startSec);
     }
   });
 
+  it('snaps off-grid section boundaries onto the beat grid, keeping the timeline contiguous', () => {
+    // Energy-novelty segmentation cuts on 0.5s window edges, so a real analysis
+    // routinely lands a boundary off the beat — 10.3s here snaps to the 10.5s
+    // beat (the 10.0s downbeat is outside the tempo-derived tolerance).
+    const inputs = planScenesFromSections([
+      { label: 'A', startSec: 0, endSec: 10.3 },
+      { label: 'B', startSec: 10.3, endSec: 18.2 },
+      { label: 'C', startSec: 18.2, endSec: 30 },
+    ], GRID);
+    expect(inputs.map((i) => [i.startSec, i.endSec])).toEqual([[0, 10.5], [10.5, 18], [18, 30]]);
+    expect(inputs.every((i) => i.beatAligned)).toBe(true);
+  });
+
+  it('reports beatAligned:false on a scene whose edge could not snap', () => {
+    // Nothing snapped, so the flag must not claim otherwise — render.js's
+    // beatSnapClips then does its own live snapping instead of freezing the span.
+    const inputs = planScenesFromSections([
+      { label: 'A', startSec: 0, endSec: 10.3 },
+      { label: 'B', startSec: 10.3, endSec: 30 },
+    ], { ...GRID, toleranceSec: 0.05 });
+    expect(inputs.every((i) => i.beatAligned === false)).toBe(true);
+    expect(inputs.map((i) => [i.startSec, i.endSec])).toEqual([[0, 10.3], [10.3, 30]]);
+  });
+
+  it('keeps the planned spans honored when the track has no usable tempo', () => {
+    // No grid means no live snap to hand the span back to, so dropping the flag
+    // would leave the render at each clip's raw source duration instead of the
+    // planned section span — the plan would be silently discarded.
+    const inputs = planScenesFromSections(SECTIONS, { beats: [], downbeats: [] });
+    expect(inputs.every((i) => i.beatAligned === true)).toBe(true);
+    expect(inputs.map((i) => [i.startSec, i.endSec])).toEqual([[0, 10], [10, 18], [18, 30]]);
+  });
+
+  it('refuses a snap that would push a scene below the minimum scene length', () => {
+    const inputs = planScenesFromSections([
+      { label: 'A', startSec: 0, endSec: 10.3 },
+      { label: 'B', startSec: 10.3, endSec: 30 },
+    ], { ...GRID, minSceneSec: 25 });
+    expect(inputs.map((i) => [i.startSec, i.endSec])).toEqual([[0, 10.3], [10.3, 30]]);
+    expect(inputs.every((i) => i.beatAligned === false)).toBe(true);
+  });
+
   it('falls back to an empty/null label when a section has no label', () => {
-    const [input] = planScenesFromSections([{ startSec: 0, endSec: 5 }]);
+    const [input] = planScenesFromSections([{ startSec: 0, endSec: 5 }], GRID);
     expect(input.label).toBe('');
     expect(input.sectionLabel).toBeNull();
   });
@@ -266,5 +316,40 @@ Here is my answer:
     expect(result.promptsSkippedReason).toBe('no-provider');
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('toolkit not initialized'));
     warnSpy.mockRestore();
+  });
+
+  it('threads the cached beat grid into the snap, so seeded spans cut on the music', async () => {
+    getProject.mockResolvedValue(makeProject({
+      audioAnalysis: {
+        bpm: 120,
+        beats: BEATS,
+        downbeats: DOWNBEATS,
+        durationSec: 30,
+        sections: [
+          { label: 'A', startSec: 0, endSec: 10.3, energy: 0.2 },
+          { label: 'B', startSec: 10.3, endSec: 30, energy: 0.9 },
+        ],
+      },
+    }));
+    addProjectScenes.mockResolvedValue(freshProjectResult());
+
+    await planProject('mv-1', { seedPrompts: false });
+
+    const seededInputs = addProjectScenes.mock.calls[0][1];
+    expect(seededInputs.map((i) => [i.startSec, i.endSec])).toEqual([[0, 10.5], [10.5, 30]]);
+    expect(seededInputs.every((i) => i.beatAligned)).toBe(true);
+  });
+
+  it('still honors the planned spans when the cached analysis has no beat grid', async () => {
+    getProject.mockResolvedValue(makeProject({
+      audioAnalysis: { bpm: null, beats: [], downbeats: [], sections: SECTIONS, durationSec: 30 },
+    }));
+    addProjectScenes.mockResolvedValue(freshProjectResult());
+
+    await planProject('mv-1', { seedPrompts: false });
+
+    const seededInputs = addProjectScenes.mock.calls[0][1];
+    expect(seededInputs.every((i) => i.beatAligned === true)).toBe(true);
+    expect(seededInputs.map((i) => [i.startSec, i.endSec])).toEqual([[0, 10], [10, 18], [18, 30]]);
   });
 });

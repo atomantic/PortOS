@@ -8,6 +8,7 @@ import {
   decodeAudioToPcm,
   buildManualAnalysis,
   buildManualAnalysisFromCached,
+  snapSectionsToGrid,
   ANALYSIS_SAMPLE_RATE,
 } from './audioAnalysis.js';
 import { findFfmpeg } from '../../lib/ffmpeg.js';
@@ -360,5 +361,164 @@ describe('analyzeAudioFile (ffmpeg decode round-trip)', () => {
   it('returns null for a missing/garbage path', async () => {
     expect(await decodeAudioToPcm('/nonexistent/path/nope.wav')).toBeNull();
     expect(await analyzeAudioFile('')).toBeNull();
+  });
+});
+
+// 120 BPM grid: a beat every 0.5s, a downbeat (4/4) every 2s.
+function grid120({ durationSec = 40 } = {}) {
+  const beats = [];
+  for (let t = 0; t <= durationSec + 1e-9; t += 0.5) beats.push(Number(t.toFixed(3)));
+  return { beats, downbeats: beats.filter((_, i) => i % 4 === 0) };
+}
+
+const spans = (sections) => sections.map((s) => [s.startSec, s.endSec]);
+
+describe('snapSectionsToGrid', () => {
+  const { beats, downbeats } = grid120();
+
+  it('snaps an internal boundary to the nearest downbeat and marks both scenes aligned', () => {
+    // 18.2 sits 0.2s past the 18.0 downbeat — inside the derived tolerance
+    // (half a 0.5s beat period = 0.25s), and closer than the 18.5 beat.
+    const result = snapSectionsToGrid(
+      [{ startSec: 0, endSec: 18.2 }, { startSec: 18.2, endSec: 30 }],
+      { beats, downbeats },
+    );
+    expect(spans(result.sections)).toEqual([[0, 18], [18, 30]]);
+    expect(result.beatAligned).toEqual([true, true]);
+  });
+
+  it('falls back to the nearest beat when the nearest downbeat is out of tolerance', () => {
+    // 10.3 → downbeat 10.0 is 0.3s away (> 0.25s tolerance); beat 10.5 is 0.2s.
+    const result = snapSectionsToGrid(
+      [{ startSec: 0, endSec: 10.3 }, { startSec: 10.3, endSec: 30 }],
+      { beats, downbeats },
+    );
+    expect(spans(result.sections)).toEqual([[0, 10.5], [10.5, 30]]);
+    expect(result.beatAligned).toEqual([true, true]);
+  });
+
+  it('leaves an edge untouched and reports it unaligned when nothing is within tolerance', () => {
+    const result = snapSectionsToGrid(
+      [{ startSec: 0, endSec: 10.3 }, { startSec: 10.3, endSec: 30 }],
+      { beats, downbeats, toleranceSec: 0.05 },
+    );
+    expect(spans(result.sections)).toEqual([[0, 10.3], [10.3, 30]]);
+    expect(result.beatAligned).toEqual([false, false]);
+  });
+
+  it('reports an already-on-grid edge as aligned even though nothing moved', () => {
+    const result = snapSectionsToGrid(
+      [{ startSec: 0, endSec: 12 }, { startSec: 12, endSec: 30 }],
+      { beats, downbeats, toleranceSec: 0 },
+    );
+    expect(spans(result.sections)).toEqual([[0, 12], [12, 30]]);
+    expect(result.beatAligned).toEqual([true, true]);
+  });
+
+  it('keeps the planned spans honored when the track has no usable tempo', () => {
+    // With no grid there is no live snap to hand the span back to — dropping the
+    // flag would make render.js#beatSnapClips fall through to each clip's RAW
+    // source duration (a 6s clip for a 20s section), throwing away the plan.
+    const sections = [{ startSec: 0, endSec: 10.3 }, { startSec: 10.3, endSec: 30 }];
+    const result = snapSectionsToGrid(sections, { beats: [], downbeats: [] });
+    expect(spans(result.sections)).toEqual([[0, 10.3], [10.3, 30]]);
+    expect(result.beatAligned).toEqual([true, true]);
+  });
+
+  it('refuses a snap that would push a section below the minimum scene length', () => {
+    const result = snapSectionsToGrid(
+      [{ startSec: 0, endSec: 10.3 }, { startSec: 10.3, endSec: 30 }],
+      { beats, downbeats, minSceneSec: 20 },
+    );
+    expect(spans(result.sections)).toEqual([[0, 10.3], [10.3, 30]]);
+    expect(result.beatAligned).toEqual([false, false]);
+  });
+
+  it('never moves the first start or the final end, and keeps the timeline contiguous', () => {
+    const result = snapSectionsToGrid(
+      [
+        { startSec: 0, endSec: 9.4 },
+        { startSec: 9.4, endSec: 20.1 },
+        { startSec: 20.1, endSec: 29.3 },
+      ],
+      { beats, downbeats },
+    );
+    const out = result.sections;
+    expect(out[0].startSec).toBe(0);
+    expect(out[out.length - 1].endSec).toBe(29.3);
+    for (let i = 1; i < out.length; i++) expect(out[i].startSec).toBe(out[i - 1].endSec);
+    for (const s of out) expect(s.endSec).toBeGreaterThan(s.startSec);
+  });
+
+  it('preserves non-span section fields and does not mutate the input', () => {
+    const sections = [{ label: 'Intro', energy: 0.2, startSec: 0, endSec: 10.3 }, { label: 'Drop', energy: 1, startSec: 10.3, endSec: 30 }];
+    const result = snapSectionsToGrid(sections, { beats, downbeats });
+    expect(sections[0].endSec).toBe(10.3);
+    expect(result.sections[0]).toMatchObject({ label: 'Intro', energy: 0.2 });
+    expect(result.sections[1]).toMatchObject({ label: 'Drop', energy: 1 });
+  });
+
+  it('leaves a single section untouched — both its edges are track anchors', () => {
+    const result = snapSectionsToGrid([{ startSec: 0, endSec: 30.4 }], { beats, downbeats });
+    expect(spans(result.sections)).toEqual([[0, 30.4]]);
+    expect(result.beatAligned).toEqual([true]);
+  });
+
+  it('returns empty for an empty or non-array section list', () => {
+    expect(snapSectionsToGrid([], { beats, downbeats })).toEqual({ sections: [], beatAligned: [] });
+    expect(snapSectionsToGrid(null, { beats, downbeats })).toEqual({ sections: [], beatAligned: [] });
+  });
+
+  it('leaves a non-contiguous boundary alone rather than inventing a shared edge', () => {
+    const result = snapSectionsToGrid(
+      [{ startSec: 0, endSec: 10.3 }, { startSec: 14.3, endSec: 30 }],
+      { beats, downbeats },
+    );
+    expect(spans(result.sections)).toEqual([[0, 10.3], [14.3, 30]]);
+    expect(result.beatAligned).toEqual([false, false]);
+  });
+
+  it('derives its tolerance from the tempo, so a slow grid may move an edge further than a fast one', () => {
+    const gridAt = (bpm) => {
+      const out = [];
+      for (let t = 0; t <= 40; t += 60 / bpm) out.push(Number(t.toFixed(3)));
+      return out;
+    };
+    // The furthest a full grid can ever move an edge is half a beat period, so
+    // sweeping candidate edges across a beat exposes the tempo-relative bound:
+    // ~0.43s at 70 BPM vs ~0.17s at 180 BPM. A fixed constant would give both
+    // grids the same ceiling.
+    const worstMove = (beats) => {
+      let worst = 0;
+      for (let edge = 9; edge <= 11; edge = Number((edge + 0.01).toFixed(2))) {
+        const { sections } = snapSectionsToGrid(
+          [{ startSec: 0, endSec: edge }, { startSec: edge, endSec: 30 }], { beats, downbeats: [] },
+        );
+        worst = Math.max(worst, Math.abs(sections[0].endSec - edge));
+      }
+      return worst;
+    };
+    expect(worstMove(gridAt(70))).toBeGreaterThan(worstMove(gridAt(180)) + 0.2);
+  });
+
+  it('never collapses or inverts a boundary, even with minSceneSec: 0', () => {
+    // Two adjacent boundaries whose nearest beat is the SAME 10.5s point: the
+    // section between them must survive rather than being snapped to zero width.
+    const result = snapSectionsToGrid(
+      [{ startSec: 0, endSec: 10.3 }, { startSec: 10.3, endSec: 10.4 }, { startSec: 10.4, endSec: 30 }],
+      { beats, downbeats, minSceneSec: 0 },
+    );
+    const out = result.sections;
+    for (let i = 1; i < out.length; i++) expect(out[i].startSec).toBe(out[i - 1].endSec);
+    for (const s of out) expect(s.endSec).toBeGreaterThan(s.startSec);
+  });
+
+  it('snaps a downbeats-only grid (no beats) using the implied 4/4 beat period', () => {
+    const result = snapSectionsToGrid(
+      [{ startSec: 0, endSec: 18.2 }, { startSec: 18.2, endSec: 30 }],
+      { beats: [], downbeats },
+    );
+    expect(spans(result.sections)).toEqual([[0, 18], [18, 30]]);
+    expect(result.beatAligned).toEqual([true, true]);
   });
 });
