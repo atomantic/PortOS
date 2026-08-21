@@ -71,7 +71,7 @@ describe('FableLoom index', () => {
     await user.click(screen.getByRole('button', { name: 'Create loom' }));
 
     await waitFor(() => expect(api.createLoom).toHaveBeenCalledWith({
-      name: 'Gate of Ash', logline: '', premise: '', styleNotes: '', universeId: null, seriesId: null,
+      name: 'Gate of Ash', logline: '', premise: '', styleNotes: '', format: 'prose', universeId: null, seriesId: null,
     }, { silent: true }));
     expect(navigate).toHaveBeenCalledWith('/fableloom/loom-9');
   });

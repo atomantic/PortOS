@@ -20,6 +20,7 @@ import {
   nodeCreateSchema,
   nodePatchSchema,
   playTurnSchema,
+  reformatSchema,
   reviewSchema,
   weaveSchema,
 } from '../lib/fableLoomValidation.js';
@@ -35,6 +36,7 @@ import {
   getLoom,
   listLoomSummaries,
   playTurn,
+  reformatLoom,
   reviewEpisode,
   updateEpisode,
   updateLoom,
@@ -133,6 +135,14 @@ router.post('/:id/episodes/:episodeId/review', asyncHandler(async (req, res) => 
 router.post('/:id/episodes/:episodeId/play', asyncHandler(async (req, res) => {
   const input = validateRequest(playTurnSchema, req.body);
   res.json(await playTurn(req.params.id, req.params.episodeId, input));
+}));
+
+// Rewrite every scene of every episode into another format (prose ⇄ teleplay)
+// and pin the loom to it. Loom-scoped rather than episode-scoped: a story
+// half in screenplay and half in prose is never what the author meant.
+router.post('/:id/reformat', asyncHandler(async (req, res) => {
+  const input = validateRequest(reformatSchema, req.body);
+  res.json(await reformatLoom(req.params.id, input));
 }));
 
 export default router;

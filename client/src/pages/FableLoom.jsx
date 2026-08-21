@@ -18,11 +18,12 @@ import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import { timeAgo } from '../utils/formatters';
 import { fieldClass, labelClass } from '../components/fableloom/fieldStyles';
+import { LOOM_FORMATS, isTeleplayFormat, loomFormatLabel } from '../components/fableloom/loomFormats';
 import {
   createLoom, deleteLoom, listLooms, listPipelineSeries, listUniverses,
 } from '../services/api';
 
-const emptyForm = () => ({ name: '', logline: '', premise: '', styleNotes: '', universeId: '', seriesId: '' });
+const emptyForm = () => ({ name: '', logline: '', premise: '', styleNotes: '', format: 'prose', universeId: '', seriesId: '' });
 
 export default function FableLoom() {
   const navigate = useNavigate();
@@ -48,6 +49,7 @@ export default function FableLoom() {
       logline: form.logline,
       premise: form.premise,
       styleNotes: form.styleNotes,
+      format: form.format,
       universeId: form.universeId || null,
       seriesId: form.seriesId || null,
     }, { silent: true });
@@ -106,6 +108,15 @@ export default function FableLoom() {
                 onChange={(e) => setForm((p) => ({ ...p, logline: e.target.value }))}
                 placeholder="One sentence of premise"
               />
+            </FormField>
+            <FormField label="Scene format" labelClassName={labelClass}>
+              <select
+                className={fieldClass}
+                value={form.format}
+                onChange={(e) => setForm((p) => ({ ...p, format: e.target.value }))}
+              >
+                {LOOM_FORMATS.map((f) => <option key={f.id} value={f.id}>{f.label}</option>)}
+              </select>
             </FormField>
             <FormField label="Universe (canon + style for AI)" labelClassName={labelClass}>
               <select
@@ -212,6 +223,7 @@ export default function FableLoom() {
                 {seriesNames.has(loom.seriesId) && (
                   <Pill tone="muted">{seriesNames.get(loom.seriesId)}</Pill>
                 )}
+                {isTeleplayFormat(loom.format) && <Pill tone="muted">{loomFormatLabel(loom.format)}</Pill>}
                 <span className="ml-auto">{timeAgo(loom.updatedAt)}</span>
               </div>
             </div>

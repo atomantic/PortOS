@@ -20,6 +20,7 @@ import { renderCanonForPrompt } from '../../lib/universePromptRenderers.js';
 import { analyzeEpisodeGraph, describeGraphForPrompt } from '../../lib/fableLoomGraph.js';
 import { getUniverse } from '../universeBuilder.js';
 import { LOOM_LIMITS, findEpisode, findNode, getLoom, mutateLoom } from './records.js';
+import { asLoomFormat, loomFormatLabel, narrationFormatContract, sceneFormatContract } from './formats.js';
 
 const TRANSCRIPT_TURNS_MAX = 12;
 
@@ -35,12 +36,36 @@ const requireLoom = async (loomId) => {
   return loom;
 };
 
-const llmOptions = ({ providerId, model } = {}, source) => ({
+const llmOptions = ({ providerId, model, effort } = {}, source) => ({
   source,
   returnsJson: true,
   ...(providerId ? { providerOverride: providerId } : {}),
   ...(model ? { modelOverride: model } : {}),
+  ...(effort ? { effortOverride: effort } : {}),
 });
+
+/**
+ * Routing for a play turn: an explicit per-call pick beats the loom's saved
+ * play settings, which beat the stage pin. The loom's settings use the HARD
+ * overrides deliberately — the author chose this narrator for this story, so
+ * it outranks a global stage pin the same way a per-call pick does.
+ *
+ * A model id and an effort level are both provider-specific, so the loom's are
+ * inherited only while the EFFECTIVE provider is still the one they were
+ * picked for. A per-call override that switches providers without naming its
+ * own falls through to the new provider's defaults rather than forwarding a
+ * foreign model id that would fail — the same rule as
+ * `resolveSeriesLlmOverride` (server/lib/seriesLlmOverride.js).
+ */
+const playRouting = (loom, { providerId, model, effort } = {}) => {
+  const pinned = loom.playSettings || {};
+  const inherits = !providerId || providerId === pinned.providerId;
+  return {
+    providerId: providerId || pinned.providerId || null,
+    model: model || (inherits ? pinned.model : null) || null,
+    effort: effort || (inherits ? pinned.effort : null) || null,
+  };
+};
 
 /**
  * Render the linked universe's canon as a prompt digest via the shared
@@ -56,6 +81,7 @@ export async function buildCanonDigest(loom) {
 
 const storyContext = (loom, episode) => [
   `Story: ${loom.name}`,
+  `Scene format: ${loomFormatLabel(loom.format)}`,
   loom.logline ? `Logline: ${loom.logline}` : '',
   loom.premise ? `Premise: ${loom.premise}` : '',
   episode ? `Episode ${episode.number}: ${episode.title || 'Untitled'}` : '',
@@ -107,7 +133,7 @@ export function mapGeneratedGraph(parsed) {
 }
 
 export async function weaveEpisode(loomId, episodeId, {
-  guidance = '', nodeTarget, endingTarget, replace = false, providerId, model,
+  guidance = '', nodeTarget, endingTarget, replace = false, providerId, model, effort,
 } = {}) {
   const loom = await requireLoom(loomId);
   const episode = findEpisode(loom, episodeId);
@@ -121,7 +147,8 @@ export async function weaveEpisode(loomId, episodeId, {
     guidance: guidance || '(none)',
     nodeTarget: String(clamp(nodeTarget, 3, 60, 12)),
     endingTarget: String(clamp(endingTarget, 1, 12, 3)),
-  }, llmOptions({ providerId, model }, 'fableloom-weave'));
+    sceneFormatContract: sceneFormatContract(loom.format),
+  }, llmOptions({ providerId, model, effort }, 'fableloom-weave'));
 
   const { nodes, startNodeId } = mapGeneratedGraph(content);
   const updated = await mutateLoom(loomId, (current) => {
@@ -137,7 +164,7 @@ export async function weaveEpisode(loomId, episodeId, {
 // --- Branch: grow new paths out of one scene --------------------------------
 
 export async function branchNode(loomId, episodeId, nodeId, {
-  guidance = '', branchCount, providerId, model,
+  guidance = '', branchCount, providerId, model, effort,
 } = {}) {
   const loom = await requireLoom(loomId);
   const episode = findEpisode(loom, episodeId);
@@ -153,7 +180,8 @@ export async function branchNode(loomId, episodeId, nodeId, {
     sceneProse: node.prose || '(no prose yet)',
     branchCount: String(count),
     guidance: guidance || '(none)',
-  }, llmOptions({ providerId, model }, 'fableloom-branch'));
+    sceneFormatContract: sceneFormatContract(loom.format),
+  }, llmOptions({ providerId, model, effort }, 'fableloom-branch'));
 
   const branches = Array.isArray(content?.branches)
     ? content.branches.filter((b) => b && typeof b === 'object' && b.node && typeof b.node === 'object').slice(0, count)
@@ -184,7 +212,7 @@ export async function branchNode(loomId, episodeId, nodeId, {
 
 const REVIEW_SEVERITIES = new Set(['high', 'medium', 'low']);
 
-export async function reviewEpisode(loomId, episodeId, { providerId, model } = {}) {
+export async function reviewEpisode(loomId, episodeId, { providerId, model, effort } = {}) {
   const loom = await requireLoom(loomId);
   const episode = findEpisode(loom, episodeId);
   const structural = analyzeEpisodeGraph(episode);
@@ -194,7 +222,7 @@ export async function reviewEpisode(loomId, episodeId, { providerId, model } = {
     structuralDigest: structural.issues.length
       ? structural.issues.map((i) => `- [${i.severity}] ${i.message}`).join('\n')
       : '(no structural issues)',
-  }, llmOptions({ providerId, model }, 'fableloom-review'));
+  }, llmOptions({ providerId, model, effort }, 'fableloom-review'));
 
   const nodeIds = new Set(episode.nodes.map((n) => n.id));
   const findings = (Array.isArray(content?.findings) ? content.findings : [])
@@ -232,14 +260,30 @@ const transcriptDigest = (transcript) =>
     .map((t) => `${t.role === 'reader' ? 'Reader' : 'Narrator'}: ${trimTo(t.text, 500)}`)
     .join('\n');
 
+/**
+ * Advance one play turn.
+ *
+ * Two lanes, and the cheap one is the default: when the reader TAPPED a path
+ * (`transitionId`), there is no intent to map, so the move resolves straight
+ * off the graph — no provider call, no latency, no spend. Free text goes
+ * through the play stage, which either matches a path or answers in-world.
+ */
 export async function playTurn(loomId, episodeId, {
-  nodeId, message, transcript = [], providerId, model,
+  nodeId, message, transitionId, transcript = [], providerId, model, effort,
 } = {}) {
   const loom = await requireLoom(loomId);
   const episode = findEpisode(loom, episodeId);
   const node = findNode(episode, nodeId);
   if (node.isEnding || !(node.transitions || []).length) {
-    return { action: 'stay', narration: '', node: publicNode(node), ended: true };
+    return { action: 'stay', narration: '', node: publicNode(node), ended: true, resolvedBy: 'graph' };
+  }
+
+  if (transitionId) {
+    const taken = node.transitions.find((t) => t.id === transitionId);
+    if (!taken) {
+      throw new ServerError('That path is not on this scene', { status: 400, code: 'INVALID_TRANSITION' });
+    }
+    return moveResult(episode, node, taken, { narration: '', resolvedBy: 'choice' });
   }
 
   const choicesDigest = node.transitions.map((t) => [
@@ -249,13 +293,14 @@ export async function playTurn(loomId, episodeId, {
     t.description ? `  leads to: ${t.description}` : null,
   ].filter(Boolean).join('\n')).join('\n');
 
-  const { content } = await runStagedLLM('fableloom-play-turn', {
+  const { content, runId } = await runStagedLLM('fableloom-play-turn', {
     storyContext: storyContext(loom, episode),
     sceneProse: node.prose || node.title || '',
     choicesDigest,
     transcriptDigest: transcriptDigest(transcript) || '(start of the read-through)',
     readerMessage: trimTo(message, 1000),
-  }, llmOptions({ providerId, model }, 'fableloom-play'));
+    narrationFormatContract: narrationFormatContract(loom.format),
+  }, llmOptions(playRouting(loom, { providerId, model, effort }), 'fableloom-play'));
 
   const narration = trimTo(content?.narration, 4000);
   const chosen = content?.action === 'move'
@@ -263,15 +308,86 @@ export async function playTurn(loomId, episodeId, {
     : null;
   // No usable choice — including a dangling edge whose target was deleted —
   // stays in place rather than crashing the read.
-  const next = chosen ? episode.nodes.find((n) => n.id === chosen.targetNodeId) : null;
-  if (!next) {
-    return { action: 'stay', narration, node: publicNode(node), ended: false };
+  if (!chosen) {
+    return { action: 'stay', narration, node: publicNode(node), ended: false, resolvedBy: 'llm', runId };
   }
-  return {
-    action: 'move',
-    transitionId: chosen.id,
-    narration,
-    node: publicNode(next),
-    ended: next.isEnding === true,
-  };
+  return moveResult(episode, node, chosen, { narration, resolvedBy: 'llm', runId });
+}
+
+/**
+ * Resolve a chosen transition to its target scene. A dangling edge (target
+ * deleted since the graph was woven) keeps the reader where they are rather
+ * than ending the read-through on a crash.
+ */
+function moveResult(episode, node, transition, { narration = '', resolvedBy, runId } = {}) {
+  const next = episode.nodes.find((n) => n.id === transition.targetNodeId);
+  const common = { narration, resolvedBy, ...(runId ? { runId } : {}) };
+  return next
+    ? { action: 'move', transitionId: transition.id, node: publicNode(next), ended: next.isEnding === true, ...common }
+    : { action: 'stay', node: publicNode(node), ended: false, ...common };
+}
+
+// --- Reformat: rewrite existing scenes into another format ------------------
+
+// Scenes per LLM call. Small enough that one refusal or truncation costs a
+// handful of scenes rather than the episode, large enough that a 13-scene
+// episode is two calls, not thirteen.
+const REFORMAT_CHUNK = 5;
+
+/**
+ * Rewrite every scene of every episode into `format` (prose ⇄ teleplay) and
+ * pin the loom to it, so later weaves/branches/play turns keep generating in
+ * the same format.
+ *
+ * Each chunk is persisted as it lands: a provider failure halfway through
+ * leaves the already-rewritten scenes rewritten, and re-running finishes the
+ * job rather than starting over.
+ */
+export async function reformatLoom(loomId, { format, providerId, model, effort } = {}) {
+  const target = asLoomFormat(format);
+  // Pin first: the scenes are rewritten INTO this format, so a run that dies
+  // halfway leaves the loom already describing what its rewritten scenes are —
+  // and it saves a second full-record round-trip at the end.
+  const loom = await mutateLoom(loomId, (current) => ({ ...current, format: target }));
+  const canonDigest = await buildCanonDigest(loom);
+  const runIds = [];
+  const sceneCount = loom.episodes.reduce((total, ep) => total + ep.nodes.length, 0);
+  let rewritten = 0;
+
+  for (const episode of loom.episodes) {
+    for (let i = 0; i < episode.nodes.length; i += REFORMAT_CHUNK) {
+      const batch = episode.nodes.slice(i, i + REFORMAT_CHUNK);
+      const { content, runId } = await runStagedLLM('fableloom-reformat-scenes', {
+        storyContext: storyContext(loom, episode),
+        canonDigest: canonDigest || '(none)',
+        formatLabel: loomFormatLabel(target),
+        sceneFormatContract: sceneFormatContract(target),
+        scenesJson: JSON.stringify(batch.map((n) => ({ id: n.id, title: n.title, prose: n.prose })), null, 2),
+      }, llmOptions({ providerId, model, effort }, 'fableloom-reformat'));
+      if (runId) runIds.push(runId);
+
+      const byId = new Map((Array.isArray(content?.scenes) ? content.scenes : [])
+        .filter((sc) => sc && typeof sc === 'object' && isStr(sc.id) && isStr(sc.prose) && sc.prose.trim())
+        .map((sc) => [sc.id, sc]));
+      if (!byId.size) continue;
+      await mutateLoom(loomId, (current) => {
+        const ep = findEpisode(current, episode.id);
+        for (const sceneNode of ep.nodes) {
+          const rewrite = byId.get(sceneNode.id);
+          if (!rewrite) continue;
+          sceneNode.prose = rewrite.prose;
+          if (isStr(rewrite.title) && rewrite.title.trim()) sceneNode.title = rewrite.title;
+        }
+        ep.updatedAt = new Date().toISOString();
+        return current;
+      });
+      rewritten += byId.size;
+    }
+  }
+
+  // A loom with nothing authored yet is a no-op, not a failure — the pin is
+  // still the point. Only a loom that HAD scenes and got none back is a bad
+  // response worth surfacing.
+  if (sceneCount && !rewritten) throw aiShapeError('The model returned no rewritten scenes');
+  return { loom: await getLoom(loomId), format: target, rewritten, runIds };
 }

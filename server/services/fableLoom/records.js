@@ -24,6 +24,7 @@ import {
   writeRaw,
 } from './store.js';
 import { LOOM_LIMITS } from './limits.js';
+import { asLoomFormat } from './formats.js';
 
 export { LOOM_LIMITS };
 
@@ -31,6 +32,24 @@ const isSafeImageFilename = (value) =>
   typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]*\.(png|jpg|jpeg|webp)$/i.test(value);
 
 const nullableRef = (value) => (isStr(value) && value.trim() ? value.trim().slice(0, LOOM_LIMITS.REF_ID_MAX) : null);
+
+/**
+ * The loom's pinned routing for the play stage — which provider/model/effort
+ * turns a reader's free text into a path. Stored as a whole object so an
+ * unset dimension stays unset (null = "fall through to the stage pin / active
+ * provider"), rather than collapsing to an empty string that would read as a
+ * deliberate choice downstream.
+ */
+const sanitizePlaySettings = (raw) => {
+  if (!raw || typeof raw !== 'object') return null;
+  const pick = (value, max) => trimTo(value, max) || null;
+  const settings = {
+    providerId: pick(raw.providerId, LOOM_LIMITS.PROVIDER_ID_MAX),
+    model: pick(raw.model, LOOM_LIMITS.MODEL_ID_MAX),
+    effort: pick(raw.effort, LOOM_LIMITS.EFFORT_MAX),
+  };
+  return Object.values(settings).some(Boolean) ? settings : null;
+};
 
 const sanitizePos = (raw) => (raw && typeof raw === 'object'
   && Number.isFinite(raw.x) && Number.isFinite(raw.y)
@@ -109,6 +128,8 @@ export function sanitizeLoom(raw) {
     logline: trimTo(raw.logline, LOOM_LIMITS.LOGLINE_MAX),
     premise: trimTo(raw.premise, LOOM_LIMITS.PREMISE_MAX),
     styleNotes: trimTo(raw.styleNotes, LOOM_LIMITS.STYLE_NOTES_MAX),
+    format: asLoomFormat(raw.format),
+    playSettings: sanitizePlaySettings(raw.playSettings),
     universeId: nullableRef(raw.universeId),
     seriesId: nullableRef(raw.seriesId),
     episodes: (Array.isArray(raw.episodes) ? raw.episodes : [])
@@ -159,10 +180,11 @@ export async function listLooms() {
  * full records would make the index multi-MB to render three counts.
  */
 export async function listLoomSummaries() {
-  return (await listLooms()).map(({ id, name, logline, universeId, seriesId, createdAt, updatedAt, episodes }) => ({
+  return (await listLooms()).map(({ id, name, logline, format, universeId, seriesId, createdAt, updatedAt, episodes }) => ({
     id,
     name,
     logline,
+    format,
     universeId,
     seriesId,
     createdAt,
@@ -178,7 +200,7 @@ export async function getLoom(id) {
   return sanitizeLoom(await readRaw(id));
 }
 
-export async function createLoom({ name, logline, premise, styleNotes, universeId, seriesId } = {}) {
+export async function createLoom({ name, logline, premise, styleNotes, format, universeId, seriesId } = {}) {
   const now = new Date().toISOString();
   await assertRefsExist({ universeId: nullableRef(universeId), seriesId: nullableRef(seriesId) });
   const loom = sanitizeLoom({
@@ -187,6 +209,7 @@ export async function createLoom({ name, logline, premise, styleNotes, universeI
     logline,
     premise,
     styleNotes,
+    format,
     universeId,
     seriesId,
     episodes: [],
@@ -216,7 +239,7 @@ export function mutateLoom(id, mutator) {
   });
 }
 
-const PATCH_FIELDS = ['name', 'logline', 'premise', 'styleNotes', 'universeId', 'seriesId'];
+const PATCH_FIELDS = ['name', 'logline', 'premise', 'styleNotes', 'format', 'playSettings', 'universeId', 'seriesId'];
 
 export async function updateLoom(id, patch = {}) {
   await assertRefsExist({

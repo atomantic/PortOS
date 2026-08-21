@@ -13,7 +13,7 @@ answers in-world without leaving the scene when nothing matches.
 
 | Term | Meaning |
 |---|---|
-| **Loom** | A branching-narrative story (`loom-*`): name/logline/premise, optional `universeId` + `seriesId` links, episodes. |
+| **Loom** | A branching-narrative story (`loom-*`): name/logline/premise, scene `format`, optional `playSettings` pin, optional `universeId` + `seriesId` links, episodes. |
 | **Episode** | One playable graph (`ep-*`): title, synopsis (feeds generation), `startNodeId`, nodes. |
 | **Scene node** | One story beat (`node-*`): prose, image prompt + rendered image, ending flag/label, transitions. |
 | **Transition** | An intent-labeled edge (`tr-*`): `intent`, `triggers` (example phrasings), spoiler-safe `description`, `targetNodeId`. |
@@ -29,6 +29,37 @@ answers in-world without leaving the scene when nothing matches.
   drawer.
 - **Play drawer** — the reader chat. Sessions are client-side state
   (restart is free; nothing persists server-side).
+- **Story settings drawer** — scene format (plus the rewrite pass), and the
+  narrator's provider/model/effort pin.
+
+## Scene format
+
+A loom is written either as **narrated prose** (second-person interactive
+fiction) or as a **teleplay** (sluglines, action lines, character cues). The
+choice lives on the record as `format` and is rendered into every generative
+stage's prompt by `server/services/fableLoom/formats.js` — so weave, branch,
+and play-turn narration all follow it, and the reader-facing scene cards
+render a teleplay monospaced.
+
+Changing the setting steers *new* generation only. **Story settings → Rewrite
+all N scenes** runs `fableloom-reformat-scenes` over every scene of every
+episode (in chunks, persisted as each chunk lands, so a mid-run failure keeps
+what already succeeded) and re-pins the loom. It rewrites text only: ids,
+transitions, endings, and image prompts are untouched.
+
+## Playing: what costs an LLM call
+
+`POST …/play` takes EITHER `message` (free text the play stage matches to a
+path) or `transitionId` (a path the reader named outright). The second lane
+resolves straight off the authored graph — no provider call, no wait — and
+answers `resolvedBy: 'choice'`. Tapping a chip in the play drawer sends that
+lane, so the common case of "the reader picked one of the offered paths" costs
+nothing; only typed free text reaches `fableloom-play-turn`.
+
+Which provider maps typed input is the loom's own `playSettings`
+(`{ providerId, model, effort }`, set in Story settings). It beats the stage
+pin — the author chose that narrator for that story — and a per-call override
+in the request body beats both.
 
 ## AI lanes (all direct user actions; stage prompts in `data/prompts/stages/`)
 
@@ -38,6 +69,7 @@ answers in-world without leaving the scene when nothing matches.
 | `fableloom-branch-node` | Grows N new intent-labeled branches out of one scene. |
 | `fableloom-play-turn` | Resolves one reader message: `move` through a matched transition or `stay` with in-world narration. |
 | `fableloom-review` | Story-editor critique (intent clarity, branch coherence, ending payoff) layered over the deterministic checks. |
+| `fableloom-reformat-scenes` | Rewrites existing scenes into the loom's other format (prose ⇄ teleplay), preserving every beat and decision point. |
 
 Deterministic graph validation (no LLM) lives in
 `server/lib/fableLoomGraph.js` — reachability from the opening scene, dead

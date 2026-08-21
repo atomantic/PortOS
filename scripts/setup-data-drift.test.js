@@ -55,6 +55,9 @@ const EXPECTED_STAGE_OLD = {
   'pipeline-judge-foundation.md': ['74c0244e641dcf7a73e9c83123ebdee9', '4c0bd349ff4d329048c9f4ac068745d4', 'edf7850d0c724c63761bc9fb667227d9', '02a8e9215ba534b333f3a29f11f3ac4f'],
   'pipeline-observer.md': ['f3dc51ac077050a887c2161ee7438181'],
   'pipeline-self-improve.md': ['ed0b0df42e0690d515b8dd88911931e4'],
+  'fableloom-weave-episode.md': ['1fea11b8c4269008561ac22a30494d46'],
+  'fableloom-branch-node.md': ['f558e4804b056a5961af1ea74fdef2ba'],
+  'fableloom-play-turn.md': ['bb33dc9bc483668d88196ca972d5f364'],
 };
 const EXPECTED_STAGE_NEW = {
   'pipeline-idea-expansion.md': 'a032e4a724251ed3e3495d33c4dbab8e',
@@ -88,6 +91,9 @@ const EXPECTED_STAGE_NEW = {
   'pipeline-judge-foundation.md': 'e44b6c50d741bbd21fc86f481684c410',
   'pipeline-observer.md': '29e0212d2252b1be3278f20e2959eb8e',
   'pipeline-self-improve.md': '95b378832ff78e5976a6a63fcf328090',
+  'fableloom-weave-episode.md': '1b27f5b0073a304c21079aa6e2c71447',
+  'fableloom-branch-node.md': '6279b1c9912c300363a727245d22fe84',
+  'fableloom-play-turn.md': 'e35ad91aae263e3adf28d1e047a46661',
 };
 const EXPECTED_PARTIAL_OLD = {
   'bible-deference.md': ['218f0e85643609ed85a12b1ccc7b5a8d'],

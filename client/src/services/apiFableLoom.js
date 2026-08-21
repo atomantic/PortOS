@@ -53,3 +53,6 @@ export const reviewLoomEpisode = (id, episodeId, body = {}, options = {}) => req
 export const playLoomTurn = (id, episodeId, body, options = {}) => request(episodePath(id, episodeId, '/play'), {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
+export const reformatLoom = (id, body, options = {}) => request(loomPath(id, '/reformat'), {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});

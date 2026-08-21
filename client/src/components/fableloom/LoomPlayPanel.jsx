@@ -6,6 +6,12 @@
  * image) or answers in-world without leaving the scene. The session lives in
  * this panel's state (current scene + transcript) — restarting is free, and
  * nothing persists server-side.
+ *
+ * TAPPING a path costs nothing: the turn carries the transition id, and the
+ * server resolves the move straight off the authored graph — same endpoint,
+ * no provider call, no wait. Only free text the reader typed reaches the play
+ * stage; which provider/model/effort maps it is the loom's own `playSettings`
+ * pin, applied server-side.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -13,11 +19,13 @@ import { Loader2, RotateCcw, Send, Flag } from 'lucide-react';
 import MediaImage from '../MediaImage';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import { playLoomTurn } from '../../services/api';
+import { sceneProseClass } from './fieldStyles';
 
 const findNode = (episode, id) => episode?.nodes.find((n) => n.id === id) || null;
 
-// Reader-facing projection of an authored node (mirrors the server's
-// publicNode shape, for local moves that never hit the API).
+// Reader-facing projection of an authored node — the OPENING scene only, which
+// the panel shows before any turn has been taken. Every later scene arrives
+// from the play endpoint already in this shape (the server's `publicNode`).
 const asPublic = (node) => (node ? {
   id: node.id,
   title: node.title,
@@ -58,10 +66,14 @@ export default function LoomPlayPanel({ loom, episode }) {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [transcript, scene]);
 
-  const [runTurn, sending] = useAsyncAction(async (text, history) => {
+  // One turn, either lane. `transitionId` is the tapped-path lane the server
+  // resolves off the graph with no provider call; `message` is free text the
+  // play stage matches. The panel never resolves a move itself — one owner for
+  // the rule, on the side that holds the authored graph.
+  const [runTurn, sending] = useAsyncAction(async (turn, history) => {
     const result = await playLoomTurn(loom.id, episode.id, {
       nodeId: scene.id,
-      message: text,
+      ...turn,
       // The transcript state also holds scene cards ({ role: 'scene', node })
       // — the API accepts only reader/narrator text turns, so filter first or
       // every turn after the first move fails validation.
@@ -79,13 +91,23 @@ export default function LoomPlayPanel({ loom, episode }) {
     if (additions.length) setTranscript((prev) => [...prev, ...additions]);
   }, { errorMessage: 'The narrator lost the thread — try again' });
 
+  // Tapping a path: the reader already named the transition, so the turn
+  // carries its id and the server moves them without an intent-matching call.
+  const takePath = (choice) => {
+    if (sending || !scene) return;
+    setMessage('');
+    const history = [...transcript, { role: 'reader', text: choice.intent }];
+    setTranscript(history);
+    runTurn({ transitionId: choice.id }, history);
+  };
+
   const send = () => {
     const text = message.trim();
     if (!text || sending || !scene) return;
     setMessage('');
     const history = [...transcript, { role: 'reader', text }];
     setTranscript(history);
-    runTurn(text, history);
+    runTurn({ message: text }, history);
   };
 
   if (!start) {
@@ -99,9 +121,9 @@ export default function LoomPlayPanel({ loom, episode }) {
   return (
     <div className="flex flex-col h-full">
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4">
-        <SceneCard node={start} isOpening />
+        <SceneCard node={start} isOpening format={loom.format} />
         {transcript.map((turn, i) => {
-          if (turn.role === 'scene') return <SceneCard key={i} node={turn.node} />;
+          if (turn.role === 'scene') return <SceneCard key={i} node={turn.node} format={loom.format} />;
           return (
             <div key={i} className={turn.role === 'reader' ? 'text-right' : ''}>
               <div
@@ -130,7 +152,8 @@ export default function LoomPlayPanel({ loom, episode }) {
               <button
                 key={c.id}
                 type="button"
-                onClick={() => setMessage(c.intent)}
+                aria-label={`Take path: ${c.intent}`}
+                onClick={() => takePath(c)}
                 className="text-xs px-2 py-1 rounded-full border border-port-border text-port-text-muted hover:border-port-accent hover:text-port-accent"
               >
                 {c.intent}
@@ -173,7 +196,7 @@ export default function LoomPlayPanel({ loom, episode }) {
   );
 }
 
-function SceneCard({ node, isOpening = false }) {
+function SceneCard({ node, isOpening = false, format }) {
   if (!node) return null;
   return (
     <div className="border border-port-border rounded-lg overflow-hidden bg-port-card">
@@ -184,7 +207,7 @@ function SceneCard({ node, isOpening = false }) {
         <div className="text-xs uppercase tracking-wide text-port-text-muted mb-1">
           {isOpening ? 'Opening' : node.isEnding ? (node.endingLabel || 'Ending') : node.title || 'Scene'}
         </div>
-        <p className="text-sm whitespace-pre-wrap">{node.prose}</p>
+        <p className={sceneProseClass(format)}>{node.prose}</p>
       </div>
     </div>
   );

@@ -22,8 +22,11 @@ You are a branching-narrative designer. Build ONE complete episode of an interac
 - Intents on the same scene must be clearly distinguishable from each other — no two paths a reader could mean with the same sentence.
 - Ending scenes have `isEnding: true`, an `endingLabel` (a short evocative name for that outcome), and NO outgoing paths.
 - Loops back to earlier scenes are allowed when they make narrative sense, but at least one ending must remain reachable from every scene.
-- Each scene's `prose` is 100–250 words of second-person present-tense narration that ends at a decision point (except endings, which resolve).
 - Each scene's `imagePrompt` is one sentence of concrete visual description for an image generator — subject, setting, mood, no character names unless they're in the canon above.
+
+## Scene format
+
+{{sceneFormatContract}}
 
 ## Output contract
 

@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router';
-import { ArrowLeft, BookOpenText, Loader2, Plus, Sparkles, Trash2, Waypoints } from 'lucide-react';
+import { ArrowLeft, BookOpenText, Loader2, Plus, Settings, Sparkles, Trash2, Waypoints } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Drawer from '../components/Drawer';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
@@ -21,6 +21,7 @@ import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import LoomCanvas from '../components/fableloom/LoomCanvas';
 import LoomNodeEditor from '../components/fableloom/LoomNodeEditor';
 import LoomPlayPanel from '../components/fableloom/LoomPlayPanel';
+import LoomSettingsDrawer from '../components/fableloom/LoomSettingsDrawer';
 import LoomValidationPanel from '../components/fableloom/LoomValidationPanel';
 import { fieldClass, labelClass } from '../components/fableloom/fieldStyles';
 import {
@@ -35,6 +36,7 @@ export default function FableLoomStory() {
   const [loom, setLoom] = useState(null);
   const [notFound, setNotFound] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const playOpen = searchParams.get('play') === '1';
 
   useEffect(() => {
@@ -132,8 +134,17 @@ export default function FableLoomStory() {
             <Waypoints size={16} className="text-port-accent shrink-0" />
             <span className="truncate">{loom.name}</span>
           </h1>
-          {episode && (
-            <div className="flex items-center gap-2 ml-auto">
+          <div className="flex items-center gap-2 ml-auto">
+            <button
+              type="button"
+              onClick={() => setSettingsOpen(true)}
+              aria-label="Story settings"
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded border border-port-border text-xs hover:border-port-accent"
+            >
+              <Settings size={13} /> Settings
+            </button>
+            {episode && (
+              <>
               <button
                 type="button"
                 onClick={handleAddNode}
@@ -155,8 +166,9 @@ export default function FableLoomStory() {
               >
                 <BookOpenText size={13} /> Play
               </button>
-            </div>
-          )}
+              </>
+            )}
+          </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           {loom.episodes.length > 0 && (
@@ -271,6 +283,13 @@ export default function FableLoomStory() {
           }}
         />
       )}
+
+      <LoomSettingsDrawer
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        loom={loom}
+        onLoomUpdate={setLoom}
+      />
 
       {episode && (
         <Drawer open={playOpen} onClose={() => setPlayOpen(false)} title="Play" subtitle={loom.name} size="md" bodyClassName="p-0">

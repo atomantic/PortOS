@@ -81,6 +81,21 @@ describe('sanitizeLoom', () => {
     expect(loom.episodes[0].startNodeId).toBe('n1');
   });
 
+  it('defaults the scene format and keeps only a known one', () => {
+    expect(sanitizeLoom({ id: 'loom-1', name: 'X' }).format).toBe('prose');
+    expect(sanitizeLoom({ id: 'loom-1', name: 'X', format: 'teleplay' }).format).toBe('teleplay');
+    expect(sanitizeLoom({ id: 'loom-1', name: 'X', format: 'haiku' }).format).toBe('prose');
+  });
+
+  it('keeps a partial play pin but collapses an all-empty one to null', () => {
+    const pinned = sanitizeLoom({
+      id: 'loom-1', name: 'X', playSettings: { providerId: '  claude  ', model: '', effort: null },
+    });
+    expect(pinned.playSettings).toEqual({ providerId: 'claude', model: null, effort: null });
+    expect(sanitizeLoom({ id: 'loom-1', name: 'X', playSettings: { providerId: '' } }).playSettings).toBeNull();
+    expect(sanitizeLoom({ id: 'loom-1', name: 'X' }).playSettings).toBeNull();
+  });
+
   it('rejects unsafe image filenames', () => {
     const loom = sanitizeLoom({
       id: 'loom-1',

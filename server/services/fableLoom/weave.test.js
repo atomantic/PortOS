@@ -22,10 +22,10 @@ vi.mock('../universeBuilder.js', () => ({ getUniverse: getUniverseMock }));
 const getSeriesMock = vi.hoisted(() => vi.fn(async () => null));
 vi.mock('../pipeline/series.js', () => ({ getSeries: getSeriesMock }));
 
-const { createLoom, addEpisode, addNode, updateNode, getLoom } = await import('./records.js');
+const { createLoom, addEpisode, addNode, updateLoom, updateNode, getLoom } = await import('./records.js');
 const { _resetFableLoomBackend } = await import('./store.js');
 const {
-  branchNode, buildCanonDigest, mapGeneratedGraph, playTurn, reviewEpisode, weaveEpisode,
+  branchNode, buildCanonDigest, mapGeneratedGraph, playTurn, reformatLoom, reviewEpisode, weaveEpisode,
 } = await import('./weave.js');
 
 beforeEach(() => {
@@ -224,6 +224,104 @@ describe('playTurn', () => {
     const result = await playTurn(loomId, episodeId, { nodeId: insideId, message: 'now what' });
     expect(result).toMatchObject({ action: 'stay', ended: true });
     expect(runStagedLLM).not.toHaveBeenCalled();
+  });
+
+  it('takes a named transition off the graph with no LLM call at all', async () => {
+    const { loomId, episodeId, gate, insideId } = await playSetup();
+    const result = await playTurn(loomId, episodeId, {
+      nodeId: gate.id, transitionId: gate.transitions[0].id,
+    });
+    expect(result).toMatchObject({
+      action: 'move', resolvedBy: 'choice', narration: '', ended: true,
+    });
+    expect(result.node.id).toBe(insideId);
+    expect(runStagedLLM).not.toHaveBeenCalled();
+  });
+
+  it('rejects a transition id that is not on the current scene', async () => {
+    const { loomId, episodeId, gate } = await playSetup();
+    await expect(playTurn(loomId, episodeId, { nodeId: gate.id, transitionId: 'tr-bogus' }))
+      .rejects.toMatchObject({ status: 400, code: 'INVALID_TRANSITION' });
+    expect(runStagedLLM).not.toHaveBeenCalled();
+  });
+
+  it("routes typed input through the loom's saved play settings, and lets a per-call pick win", async () => {
+    const { loomId, episodeId, gate } = await playSetup();
+    await updateLoom(loomId, { playSettings: { providerId: 'claude', model: 'opus', effort: 'high' } });
+    runStagedLLM.mockResolvedValue({ content: { action: 'stay', narration: 'Hmm.' } });
+
+    await playTurn(loomId, episodeId, { nodeId: gate.id, message: 'look around' });
+    expect(runStagedLLM.mock.calls[0][2]).toMatchObject({
+      providerOverride: 'claude', modelOverride: 'opus', effortOverride: 'high',
+    });
+
+    // Switching providers per call drops the pinned model and effort with it —
+    // both belong to the provider they were picked for.
+    await playTurn(loomId, episodeId, { nodeId: gate.id, message: 'look around', providerId: 'codex' });
+    expect(runStagedLLM.mock.calls[1][2]).toMatchObject({ providerOverride: 'codex' });
+    expect(runStagedLLM.mock.calls[1][2].modelOverride).toBeUndefined();
+    expect(runStagedLLM.mock.calls[1][2].effortOverride).toBeUndefined();
+
+    // ...but naming the same provider keeps them.
+    await playTurn(loomId, episodeId, { nodeId: gate.id, message: 'look around', providerId: 'claude' });
+    expect(runStagedLLM.mock.calls[2][2]).toMatchObject({
+      providerOverride: 'claude', modelOverride: 'opus', effortOverride: 'high',
+    });
+  });
+
+  it("renders the loom's format into the narration contract", async () => {
+    const { loomId, episodeId, gate } = await playSetup();
+    await updateLoom(loomId, { format: 'teleplay' });
+    runStagedLLM.mockResolvedValue({ content: { action: 'stay', narration: 'Hmm.' } });
+    await playTurn(loomId, episodeId, { nodeId: gate.id, message: 'look around' });
+    const [, variables] = runStagedLLM.mock.calls[0];
+    expect(variables.narrationFormatContract).toContain('teleplay');
+    expect(variables.storyContext).toContain('teleplay');
+  });
+});
+
+describe('reformatLoom', () => {
+  const proseSetup = async () => {
+    const { loomId, episodeId } = await setup();
+    let updated = await addNode(loomId, episodeId, { title: 'The Gate', prose: 'You stand before it.' });
+    const gateId = updated.episodes[0].nodes[0].id;
+    updated = await addNode(loomId, episodeId, { title: 'Inside', prose: 'Torchlight.', fromNodeId: gateId, fromIntent: 'enter' });
+    const insideId = updated.episodes[0].nodes.find((n) => n.title === 'Inside').id;
+    return { loomId, episodeId, gateId, insideId };
+  };
+
+  it('rewrites every returned scene, pins the format, and leaves the graph alone', async () => {
+    const { loomId, gateId, insideId } = await proseSetup();
+    runStagedLLM.mockImplementation(async (stage, variables) => ({
+      content: {
+        scenes: JSON.parse(variables.scenesJson).map((sc) => ({ id: sc.id, prose: `INT. GATE - NIGHT\n\n${sc.prose}` })),
+      },
+      runId: 'run-1',
+    }));
+
+    const result = await reformatLoom(loomId, { format: 'teleplay' });
+    expect(result).toMatchObject({ format: 'teleplay', rewritten: 2 });
+    expect(result.loom.format).toBe('teleplay');
+    const nodes = result.loom.episodes[0].nodes;
+    expect(nodes.find((n) => n.id === gateId).prose).toContain('INT. GATE - NIGHT');
+    expect(nodes.find((n) => n.id === insideId).prose).toContain('Torchlight.');
+    // The rewrite is text-only: the authored edges survive it.
+    expect(nodes.find((n) => n.id === gateId).transitions[0].targetNodeId).toBe(insideId);
+    const [stage, variables] = runStagedLLM.mock.calls[0];
+    expect(stage).toBe('fableloom-reformat-scenes');
+    expect(variables.sceneFormatContract).toContain('slugline');
+  });
+
+  it('ignores scenes the model dropped or blanked, and fails when it returns none', async () => {
+    const { loomId, gateId, insideId } = await proseSetup();
+    runStagedLLM.mockResolvedValue({ content: { scenes: [{ id: gateId, prose: 'INT. GATE' }, { id: insideId, prose: '   ' }] } });
+    const kept = await reformatLoom(loomId, { format: 'teleplay' });
+    expect(kept.rewritten).toBe(1);
+    expect(kept.loom.episodes[0].nodes.find((n) => n.id === insideId).prose).toBe('Torchlight.');
+
+    runStagedLLM.mockResolvedValue({ content: { scenes: [] } });
+    await expect(reformatLoom(loomId, { format: 'prose' }))
+      .rejects.toMatchObject({ code: 'AI_RESPONSE_INVALID' });
   });
 });
 

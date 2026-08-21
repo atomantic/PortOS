@@ -20,7 +20,8 @@ import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import {
   branchLoomNode, deleteLoomNode, generateImage, updateLoomNode,
 } from '../../services/api';
-import { fieldClass, labelClass } from './fieldStyles';
+import { fieldClass, labelClass, sceneFieldClass } from './fieldStyles';
+import { isTeleplayFormat } from './loomFormats';
 
 const toRow = (t) => ({ ...t, triggersText: (t.triggers || []).join('; ') });
 const rowsToTransitions = (rows) => rows
@@ -37,6 +38,9 @@ export default function LoomNodeEditor({ loom, episode, node, onLoomUpdate, onCl
   // disabled until every pending save settles.
   const [pendingSaves, setPendingSaves] = useState(0);
   const del = useConfirmDelete();
+  // A teleplay carries its own line breaks, so the editor gives it a taller
+  // monospaced field — the same surface prose gets, sized for the format.
+  const teleplay = isTeleplayFormat(loom.format);
 
   // Sync from the record on scene switch ONLY (the parent keys this component
   // by node.id, so this is effectively the mount). Re-syncing on every server
@@ -194,10 +198,10 @@ export default function LoomNodeEditor({ loom, episode, node, onLoomUpdate, onCl
         />
       </FormField>
 
-      <FormField label="Scene prose" labelClassName={labelClass}>
+      <FormField label={teleplay ? 'Scene (teleplay)' : 'Scene prose'} labelClassName={labelClass}>
         <textarea
-          rows={7}
-          className={fieldClass}
+          rows={teleplay ? 12 : 7}
+          className={sceneFieldClass(loom.format)}
           value={form.prose}
           onChange={(e) => setForm((p) => ({ ...p, prose: e.target.value }))}
           onBlur={() => saveField('prose', form.prose)}

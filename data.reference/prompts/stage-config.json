@@ -1010,6 +1010,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "fableloom-reformat-scenes": {
+      "name": "FableLoom — Reformat Scenes",
+      "description": "Rewrites existing branching-narrative scenes into another scene format (narrated prose ⇄ teleplay) without changing the story: same beats, same characters, same decision points, same ids. Returns { scenes[] } keyed by node id.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "fableloom-review": {
       "name": "FableLoom — Episode Review",
       "description": "Story-editor critique of a branching episode's narrative layer — intent clarity, branch coherence, ending payoff, scene craft, canon fit — layered over the deterministic graph checks (which run separately and are passed in so the model doesn't repeat them). Returns { summary, findings[] } with node-anchored findings.",

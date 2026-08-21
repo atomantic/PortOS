@@ -24,6 +24,7 @@ export {
   mapGeneratedGraph,
   playTurn,
   publicNode,
+  reformatLoom,
   reviewEpisode,
   weaveEpisode,
 } from './weave.js';
@@ -32,3 +33,9 @@ export {
   isValidLoomId,
   verifySchemaVersion,
 } from './store.js';
+export {
+  LOOM_FORMATS,
+  LOOM_FORMAT_DEFAULT,
+  asLoomFormat,
+  isLoomFormat,
+} from './formats.js';

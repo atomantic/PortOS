@@ -34,7 +34,46 @@ describe('LoomPlayPanel', () => {
   it('renders the opening scene with intent hint chips', () => {
     render(<LoomPlayPanel loom={loom} episode={episode} />);
     expect(screen.getByText('You stand before it.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'enter the gate' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Take path: enter the gate' })).toBeInTheDocument();
+  });
+
+  it('sends a tapped path as a transition id, not as free text to match', async () => {
+    const user = userEvent.setup();
+    playLoomTurn.mockResolvedValue({
+      action: 'move',
+      resolvedBy: 'choice',
+      narration: '',
+      ended: false,
+      node: { id: 'n2', title: 'Inside', prose: 'Torchlight.', isEnding: false, choices: [{ id: 't2', intent: 'retreat' }] },
+    });
+    render(<LoomPlayPanel loom={loom} episode={episode} />);
+    await user.click(screen.getByRole('button', { name: 'Take path: enter the gate' }));
+
+    await waitFor(() => expect(playLoomTurn).toHaveBeenCalledTimes(1));
+    const [, , payload] = playLoomTurn.mock.calls[0];
+    // No `message`: nothing for the play stage to match, so it never runs.
+    expect(payload).toMatchObject({ nodeId: 'n1', transitionId: 't1' });
+    expect(payload.message).toBeUndefined();
+    // The reader's choice reads back in the transcript, and the scene advanced.
+    expect(screen.getByText('enter the gate')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Take path: retreat' })).toBeInTheDocument());
+  });
+
+  it('sends typed text as a message for the play stage to match', async () => {
+    const user = userEvent.setup();
+    playLoomTurn.mockResolvedValue({ action: 'stay', narration: 'You hesitate.', ended: false });
+    render(<LoomPlayPanel loom={loom} episode={episode} />);
+
+    await sendMessage(user, 'look at the lock');
+    await waitFor(() => expect(playLoomTurn).toHaveBeenCalledTimes(1));
+    const [, , payload] = playLoomTurn.mock.calls[0];
+    expect(payload).toMatchObject({ message: 'look at the lock' });
+    expect(payload.transitionId).toBeUndefined();
+  });
+
+  it('renders teleplay scenes monospaced', () => {
+    render(<LoomPlayPanel loom={{ ...loom, format: 'teleplay' }} episode={episode} />);
+    expect(screen.getByText('You stand before it.').className).toContain('font-mono');
   });
 
   it('sends only reader/narrator turns in the transcript after a scene move', async () => {

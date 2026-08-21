@@ -35,6 +35,9 @@
   "fableloom-play-turn": [
     "server/services/fableLoom/weave.js"
   ],
+  "fableloom-reformat-scenes": [
+    "server/services/fableLoom/weave.js"
+  ],
   "fableloom-review": [
     "server/services/fableLoom/weave.js"
   ],

@@ -7,6 +7,8 @@
 
 import { z } from 'zod';
 import { LOOM_LIMITS } from '../services/fableLoom/limits.js';
+import { LOOM_FORMATS } from '../services/fableLoom/formats.js';
+import { EFFORT_LEVELS } from './providerModels.js';
 
 const name = z.string().trim().min(1).max(LOOM_LIMITS.NAME_MAX);
 const logline = z.string().max(LOOM_LIMITS.LOGLINE_MAX);
@@ -16,12 +18,25 @@ const refId = z.string().max(LOOM_LIMITS.REF_ID_MAX).nullable();
 const title = z.string().max(LOOM_LIMITS.EPISODE_TITLE_MAX);
 const synopsis = z.string().max(LOOM_LIMITS.SYNOPSIS_MAX);
 const nodeIdStr = z.string().min(1).max(80);
+const format = z.enum(LOOM_FORMATS);
+// The loom's pinned play routing. Nullable per field ('' from a cleared select
+// is normalized to null by the sanitizer) and nullable as a whole, so the UI
+// can clear the pin outright. `effort` is the shared ladder enum, not a free
+// string — the runner would clamp an unknown level silently, and the door
+// check is where a typo should surface.
+const effort = z.enum(EFFORT_LEVELS);
+const playSettings = z.object({
+  providerId: z.string().max(LOOM_LIMITS.PROVIDER_ID_MAX).nullable().optional(),
+  model: z.string().max(LOOM_LIMITS.MODEL_ID_MAX).nullable().optional(),
+  effort: effort.nullable().optional(),
+}).nullable();
 
 export const loomCreateSchema = z.object({
   name,
   logline: logline.optional(),
   premise: premise.optional(),
   styleNotes: styleNotes.optional(),
+  format: format.optional(),
   universeId: refId.optional(),
   seriesId: refId.optional(),
 });
@@ -31,6 +46,8 @@ export const loomPatchSchema = z.object({
   logline: logline.optional(),
   premise: premise.optional(),
   styleNotes: styleNotes.optional(),
+  format: format.optional(),
+  playSettings: playSettings.optional(),
   universeId: refId.optional(),
   seriesId: refId.optional(),
 });
@@ -75,8 +92,9 @@ export const nodeCreateSchema = z.object({
 export const nodePatchSchema = z.object(nodeFields);
 
 const llmPickFields = {
-  providerId: z.string().max(100).optional(),
-  model: z.string().max(200).optional(),
+  providerId: z.string().max(LOOM_LIMITS.PROVIDER_ID_MAX).optional(),
+  model: z.string().max(LOOM_LIMITS.MODEL_ID_MAX).optional(),
+  effort: effort.optional(),
 };
 
 export const weaveSchema = z.object({
@@ -95,12 +113,24 @@ export const branchSchema = z.object({
 
 export const reviewSchema = z.object({ ...llmPickFields });
 
+// A turn is EITHER a reader's free text (matched to a path by the play stage)
+// or a path the reader took outright — a tapped choice needs no intent
+// mapping, so it carries the transition id and no LLM call happens at all.
 export const playTurnSchema = z.object({
   nodeId: nodeIdStr,
-  message: z.string().min(1).max(1000),
+  message: z.string().min(1).max(1000).optional(),
+  transitionId: z.string().min(1).max(80).optional(),
   transcript: z.array(z.object({
     role: z.enum(['reader', 'narrator']),
     text: z.string().max(4000),
   })).max(50).optional(),
+  ...llmPickFields,
+}).refine((body) => body.message || body.transitionId, {
+  message: 'A play turn needs either a message or a transitionId',
+  path: ['message'],
+});
+
+export const reformatSchema = z.object({
+  format,
   ...llmPickFields,
 });
