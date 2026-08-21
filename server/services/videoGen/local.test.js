@@ -1111,6 +1111,68 @@ describe('generateChainedVideo — continuation strategy (context window vs last
   });
 });
 
+describe('generateChainedVideo — resolved geometry on the outer frames (#4588)', () => {
+  it('carries the chunk geometry on the chain progress frames without a synthetic outer started', async () => {
+    const { readJSONFile } = await import('../../lib/fileUtils.js');
+    const outerJobId = randomUUID();
+    const innerJobIds = [];
+    const startedIds = [];
+    const outerProgress = [];
+    const onStarted = (e) => {
+      startedIds.push(e.generationId);
+      if (e.generationId === outerJobId) return;
+      innerJobIds.push(e.generationId);
+      // Feed the live chunk a progress frame from a microtask: the chain's own
+      // `started` listener is registered AFTER this one, so it has to run (and
+      // record the geometry) before the progress frame goes out — and a
+      // microtask still lands before the chunk's first awaited I/O, while its
+      // per-chunk listeners are attached.
+      queueMicrotask(() => {
+        videoGenEvents.emit('progress', { generationId: e.generationId, progress: 0.5, step: 5, totalSteps: 10 });
+      });
+    };
+    const onProgress = (e) => { if (e.generationId === outerJobId) outerProgress.push(e); };
+    vi.mocked(readJSONFile).mockImplementation(async () =>
+      innerJobIds.map((id) => ({ id, filename: `${id}.mp4` })),
+    );
+    videoGenEvents.on('started', onStarted);
+    videoGenEvents.on('progress', onProgress);
+
+    generateChainedVideo({
+      chunks: 2,
+      jobId: outerJobId,
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified',
+      prompt: 'a chained render',
+      width: 512,
+      height: 512,
+      numFrames: 25,
+      fps: 24,
+    });
+
+    const deadline = Date.now() + 5000;
+    while (outerProgress.length === 0 && Date.now() < deadline) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((r) => setTimeout(r, 10));
+    }
+
+    expect(outerProgress[0]).toMatchObject({
+      generationId: outerJobId, width: 512, height: 512, step: 5, totalSteps: 10,
+    });
+    // No synthetic `started` under the outer id: consumers read that event as
+    // "the run begins", and a chain fires one per chunk.
+    expect(startedIds).not.toContain(outerJobId);
+
+    for (const id of [...innerJobIds]) {
+      videoGenEvents.emit('completed', { generationId: id, filename: `${id}.mp4`, path: `/data/videos/${id}.mp4` });
+    }
+    await waitForStitch();
+
+    videoGenEvents.off('started', onStarted);
+    videoGenEvents.off('progress', onProgress);
+  });
+});
+
 describe('generateChainedVideo — per-chunk prompt beats (#3695)', () => {
   /**
    * Drive a text chain of `totalChunks` and return the `--prompt` value each

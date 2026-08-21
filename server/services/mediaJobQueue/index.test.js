@@ -434,10 +434,37 @@ describe('mediaJobQueue', () => {
     videoGenEvents.emit('progress', { generationId: job.jobId, progress: 0.25 });
     await waitFor(() => frames.some((f) => f.type === 'progress'));
 
+    // A client that attaches AFTER the geometry was announced (the normal case
+    // — the geometry lands before the submitting page's EventSource is even
+    // open) still gets it, replayed from the job rather than from the single
+    // retained slot, which keeps holding the frame that says what the run is
+    // doing.
     const replayed = [];
     expect(mediaJobQueue.attachSseClient(job.jobId, makeRes(replayed))).toBe(true);
-    expect(replayed).toHaveLength(1);
+    expect(replayed).toHaveLength(2);
     expect(replayed[0]).toMatchObject({ type: 'progress', progress: 0.25 });
+    expect(replayed[1]).toEqual({ type: 'render-meta', width: 704, height: 480 });
+
+    // A chained render emits `started` per CHUNK, under ids the queue ignores,
+    // so its geometry rides the outer progress frames instead — same handler,
+    // same dedupe, no second frame for an unchanged geometry.
+    videoGenEvents.emit('progress', { generationId: job.jobId, progress: 0.3, width: 704, height: 480 });
+    videoGenEvents.emit('progress', { generationId: job.jobId, progress: 0.4, width: 1280, height: 704 });
+    await waitFor(() => frames.filter((f) => f.type === 'render-meta').length === 2);
+    expect(frames.filter((f) => f.type === 'render-meta').at(-1))
+      .toEqual({ type: 'render-meta', width: 1280, height: 704 });
+    expect(mediaJobQueue.getJob(job.jobId).render).toEqual({ width: 1280, height: 704 });
+
+    // Restore the original geometry for the persistence assertion below.
+    videoGenEvents.emit('progress', { generationId: job.jobId, progress: 0.5, width: 704, height: 480 });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).render?.width === 704);
+
+    // Survives a server restart too — the geometry is part of the persisted
+    // projection, not just in-memory state.
+    await waitFor(() => {
+      const data = JSON.parse(readFileSync(join(tempDataDir, 'media-jobs.json'), 'utf-8'));
+      return data.jobs.find((j) => j.id === job.jobId)?.render?.width === 704;
+    });
 
     videoGenEvents.emit('completed', { generationId: job.jobId, filename: `${job.jobId}.mp4` });
     await waitFor(() => mediaJobQueue.getJob(job.jobId)?.status === 'completed');
