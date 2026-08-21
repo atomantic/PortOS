@@ -145,7 +145,7 @@ and omit it for a character whose reference does not support a defensible joint 
 
 "articulation": {
   "joints": [{"id":"stableJointId","partId":"partId","parentJointId":null,"pivotSocket":"socketName"}],
-  "attachmentPartIds": ["partId"]
+  "attachments": [{"partId":"partId","anchorPartId":"partId","maxOffset":0.25}]
 }
 
 Rules, all enforced — a spec that breaks one is rejected outright:
@@ -155,8 +155,19 @@ Rules, all enforced — a spec that breaks one is rejected outright:
 - Every "partId" names a real part, and no part is driven by two joints.
 - "pivotSocket" names a real entry in "sockets" — the point the part rotates about. Add that
   socket. The root may use null; every other joint needs one to be considered rig-ready.
-- "attachmentPartIds" lists parts that are CARRIED rather than articulated (packs, weapons,
-  hats, held props). A part may be an attachment or be driven by a joint, never both.
+- "attachments" lists parts that are CARRIED rather than articulated (packs, weapons, hats,
+  held props). A part may be an attachment or be driven by a joint, never both.
+- EVERY attachment must name what it hangs from: exactly one of "anchorPartId" (a real part)
+  or "anchorSocket" (a real entry in "sockets"). An attachment is only meaningful relative to
+  its anchor, and one that names nothing is reported as unanchored rather than accepted.
+- The anchor must be the body part or socket that actually carries the piece — a hat is
+  anchored to the head, a charm to the staff it hangs from. The MODEL ROOT is not an
+  acceptable anchor: it carries no relationship to any body part, which is exactly how a hat
+  ends up rendered at hip height. An anchor may not be the attachment itself, and anchor
+  chains may not cycle.
+- Position each attachment ON its anchor. "maxOffset" (default 0.25, world units) is how far
+  the attachment's bounds may sit from the anchor's surface before the physical audit calls
+  the relationship broken; raise it only for a piece that genuinely hangs at a distance.
 
 This is an intent declaration, not a skeleton: do not invent skinning weights, a bind pose, or
 bones for parts the reference does not clearly show. A short, defensible graph beats a long

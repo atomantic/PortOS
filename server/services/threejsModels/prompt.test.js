@@ -117,7 +117,12 @@ describe('buildThreejsGenerationPrompt articulation', () => {
       const prompt = build({ family });
       expect(prompt).toContain('ARTICULATION (character and hybrid subjects only)');
       expect(prompt).toContain('"parentJointId":null');
-      expect(prompt).toContain('"attachmentPartIds"');
+      expect(prompt).toContain('"attachments"');
+      // An attachment with no anchor is the defect the field exists to remove,
+      // so the contract has to ask for one — and rule out the root by name.
+      expect(prompt).toContain('"anchorPartId"');
+      expect(prompt).toContain('"anchorSocket"');
+      expect(prompt).toContain('MODEL ROOT is not an');
       // The contract has to say what it is NOT, or the model invents weights.
       expect(prompt).toContain('not a skeleton');
     }

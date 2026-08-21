@@ -8,7 +8,8 @@ const spec = (overrides = {}) => ({
       { id: 'rootJoint', partId: 'torso', parentJointId: null, pivotSocket: null },
       { id: 'armJoint', partId: 'arm', parentJointId: 'rootJoint', pivotSocket: 'shoulder' },
     ],
-    attachmentPartIds: ['pack'],
+    attachmentPartIds: [],
+    attachments: [{ partId: 'pack', anchorPartId: 'torso', anchorSocket: null, maxOffset: 0.25 }],
   },
   ...overrides,
 });
@@ -21,6 +22,8 @@ describe('evaluateThreejsRigReadiness', () => {
       jointCount: 2,
       socketCount: 1,
       attachmentCount: 1,
+      anchoredAttachmentCount: 1,
+      unanchoredAttachmentCount: 0,
       rootJointId: 'rootJoint',
       subjectType: 'character',
     });
@@ -69,6 +72,40 @@ describe('evaluateThreejsRigReadiness', () => {
     const report = evaluateThreejsRigReadiness(shared);
     expect(report.jointCount).toBe(3);
     expect(report.socketCount).toBe(1);
+  });
+
+  // The declaration this whole field exists for: a part named as carried, with
+  // nothing naming what carries it, is a relationship the graph does not hold.
+  it('reports a declared attachment that names nothing to hang from', () => {
+    const unanchored = spec();
+    unanchored.articulation.attachments = [];
+    unanchored.articulation.attachmentPartIds = ['pack'];
+    const report = evaluateThreejsRigReadiness(unanchored);
+    expect(report.articulationReady).toBe(false);
+    expect(report.attachmentCount).toBe(1);
+    expect(report.anchoredAttachmentCount).toBe(0);
+    expect(report.unanchoredAttachmentCount).toBe(1);
+    expect(report.reasons[0]).toContain('name nothing to hang from');
+    expect(report.reasons[0]).toContain('pack');
+  });
+
+  it('accepts a socket anchor as an anchor, so a part on a named pivot still counts', () => {
+    const socketAnchored = spec();
+    socketAnchored.articulation.attachments = [{ partId: 'pack', anchorPartId: null, anchorSocket: 'shoulder', maxOffset: 0.25 }];
+    const report = evaluateThreejsRigReadiness(socketAnchored);
+    expect(report.articulationReady).toBe(true);
+    expect(report.anchoredAttachmentCount).toBe(1);
+  });
+
+  // The two forms name the same part, so it is one attachment — and the anchored
+  // entry is the one the author meant.
+  it('merges a part declared in both attachment forms into one anchored entry', () => {
+    const both = spec();
+    both.articulation.attachmentPartIds = ['pack'];
+    const report = evaluateThreejsRigReadiness(both);
+    expect(report.attachmentCount).toBe(1);
+    expect(report.anchoredAttachmentCount).toBe(1);
+    expect(report.unanchoredAttachmentCount).toBe(0);
   });
 
   it('degrades to a not-ready static report for a missing spec instead of throwing', () => {

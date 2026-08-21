@@ -477,6 +477,8 @@ describe('ThreejsModelDetail rig readiness', () => {
         jointCount: 6,
         socketCount: 5,
         attachmentCount: 1,
+        anchoredAttachmentCount: 1,
+        unanchoredAttachmentCount: 0,
         rootJointId: 'rootJoint',
         subjectType: 'character',
       },
@@ -485,7 +487,7 @@ describe('ThreejsModelDetail rig readiness', () => {
 
     await waitFor(() => expect(screen.getByText('Rig readiness')).toBeInTheDocument());
     expect(screen.getByText('Articulation-ready')).toBeInTheDocument();
-    expect(screen.getByText('6 joints · 5 pivot sockets · 1 declared attachment')).toBeInTheDocument();
+    expect(screen.getByText('6 joints · 5 pivot sockets · 1 declared attachment (1 anchored, 0 unanchored)')).toBeInTheDocument();
     // The claim has to stay bounded: readiness is not a rigged mesh.
     expect(screen.getByText(/never a skeleton/)).toBeInTheDocument();
   });
@@ -532,6 +534,32 @@ describe('ThreejsModelDetail rig readiness', () => {
   });
 });
 
+// An attachment whose anchor could not be measured was never checked, and the
+// panel's clean label would otherwise assert that it passed.
+describe('ThreejsModelDetail unmeasured attachments', () => {
+  beforeEach(resetMocks);
+
+  it('renders an unmeasured attachment as a note rather than letting the panel read clean', async () => {
+    getThreejsModel.mockResolvedValue({
+      ...baseRecord,
+      physicalAudit: {
+        findings: [],
+        errorCount: 0,
+        warningCount: 0,
+        noteCount: 0,
+        unmeasuredAttachments: [
+          { partId: 'hat', anchorPartId: 'head', anchorSocket: null, reason: 'the anchor part has no visible geometry to measure' },
+        ],
+      },
+    });
+    renderDetail();
+
+    await waitFor(() => expect(screen.getByText('Physical audit')).toBeInTheDocument());
+    expect(screen.getByText(/Attachment "hat" could not be checked against "head"/)).toBeInTheDocument();
+    expect(screen.queryByText('Assembly satisfies physical attachment, exposure, and coplanarity rules')).not.toBeInTheDocument();
+  });
+});
+
 describe('ThreejsModelDetail rig readiness fallbacks', () => {
   beforeEach(resetMocks);
 
@@ -547,7 +575,8 @@ describe('ThreejsModelDetail rig readiness fallbacks', () => {
             { id: 'rootJoint', partId: 'torso', parentJointId: null, pivotSocket: null },
             { id: 'armJoint', partId: 'arm', parentJointId: 'rootJoint', pivotSocket: 'shoulder' },
           ],
-          attachmentPartIds: ['pack'],
+          attachmentPartIds: [],
+          attachments: [{ partId: 'pack', anchorPartId: 'torso', anchorSocket: null, maxOffset: 0.25 }],
         },
       },
       rig: { articulationReady: true, reasons: [] },
@@ -555,8 +584,33 @@ describe('ThreejsModelDetail rig readiness fallbacks', () => {
     renderDetail();
 
     await waitFor(() => expect(screen.getByText('Rig readiness')).toBeInTheDocument());
-    expect(screen.getByText('2 joints · 1 pivot socket · 1 declared attachment')).toBeInTheDocument();
+    expect(screen.getByText('2 joints · 1 pivot socket · 1 declared attachment (1 anchored, 0 unanchored)')).toBeInTheDocument();
     expect(screen.queryByText(/undefined/)).not.toBeInTheDocument();
+  });
+
+  // A report written before anchors shipped carries a total and no split.
+  // Inferring the split from the total would credit a legacy attachment as
+  // anchored — the exact overstatement the split exists to remove — so the
+  // panel reads the spec instead.
+  it('reads the anchored/unanchored split off the spec when the stored report predates it', async () => {
+    getThreejsModel.mockResolvedValue({
+      ...baseRecord,
+      spec: {
+        ...baseRecord.spec,
+        articulation: {
+          joints: [
+            { id: 'rootJoint', partId: 'torso', parentJointId: null, pivotSocket: null },
+            { id: 'armJoint', partId: 'arm', parentJointId: 'rootJoint', pivotSocket: 'shoulder' },
+          ],
+          attachmentPartIds: ['pack'],
+        },
+      },
+      rig: { articulationReady: false, reasons: [], jointCount: 2, socketCount: 1, attachmentCount: 1 },
+    });
+    renderDetail();
+
+    await waitFor(() => expect(screen.getByText('Rig readiness')).toBeInTheDocument());
+    expect(screen.getByText('2 joints · 1 pivot socket · 1 declared attachment (0 anchored, 1 unanchored)')).toBeInTheDocument();
   });
 });
 

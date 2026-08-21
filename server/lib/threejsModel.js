@@ -358,13 +358,55 @@ const jointSchema = z.object({
 
 const MAX_JOINTS = 64;
 
+// How far an attachment's bounds may sit from its anchor's surface before the
+// physical audit calls the relationship broken. A correctly worn hat overlaps
+// the head it sits on, so the AABB gap is zero; a charm on a short chain is a
+// fraction of a unit away. The default is deliberately tight — a provider that
+// needs slack says so per attachment rather than the gate guessing generously,
+// because the defects this catches (a hat at hip height, a charm below the
+// ground plane) are off by whole model-heights, not by fractions.
+export const DEFAULT_ATTACHMENT_MAX_OFFSET = 0.25;
+const MAX_ATTACHMENT_OFFSET = 10;
+const MAX_ATTACHMENTS = 40;
+
+// An attachment is only meaningful relative to the thing it hangs from, so this
+// entry carries that relationship: the part being carried, and EXACTLY ONE of
+// the part or the socket it is carried by. Declaring an attachment without an
+// anchor is still accepted through the older `attachmentPartIds` list, which is
+// what every spec authored before this field existed uses — those read forward
+// as anchor-less entries and the gates report them as unanchored rather than
+// rejecting a stored record.
+const attachmentSchema = z.object({
+  partId: idSchema,
+  anchorPartId: idSchema.nullable().default(null),
+  anchorSocket: idSchema.nullable().default(null),
+  maxOffset: z.number().finite().min(0).max(MAX_ATTACHMENT_OFFSET).default(DEFAULT_ATTACHMENT_MAX_OFFSET),
+}).superRefine((attachment, ctx) => {
+  const anchors = [attachment.anchorPartId, attachment.anchorSocket].filter((value) => value !== null);
+  if (anchors.length !== 1) {
+    ctx.addIssue({
+      code: 'custom',
+      message: `attachment ${attachment.partId} needs exactly one of anchorPartId or anchorSocket, found ${anchors.length}`,
+      path: ['anchorPartId'],
+    });
+  }
+});
+
 const articulationSchema = z.object({
   joints: z.array(jointSchema).min(1).max(MAX_JOINTS),
   // Parts explicitly declared as carried attachments — a pack, a weapon, a hat.
   // They ride an articulated part rather than articulating, and saying so is the
   // point: without the declaration "not a joint" and "nobody classified it" are
   // the same silence.
-  attachmentPartIds: z.array(idSchema).max(40).default([]),
+  //
+  // Kept unchanged and still accepted: this is the anchor-less form. `attachments`
+  // below is additive, not a replacement, so a stored spec stays valid.
+  attachmentPartIds: z.array(idSchema).max(MAX_ATTACHMENTS).default([]),
+  // The same declaration plus the one thing the list above cannot say: what each
+  // attachment is carried BY. Without it "declared as an attachment" and
+  // "parented at the model root and related to nothing" are indistinguishable,
+  // and every downstream gate credits the second as though it were the first.
+  attachments: z.array(attachmentSchema).max(MAX_ATTACHMENTS).default([]),
 });
 
 const detailSchema = z.object({
@@ -655,6 +697,82 @@ const makeSpecSchema = (scaleSchema) => z.object({
         ctx.addIssue({ code: 'custom', message: `part ${partId} is declared as an attachment and also driven by a joint`, path });
       }
     }
+
+    // The model root carries no relationship to any body part, so anchoring to
+    // it is the literal defect this field exists to catch. PortOS has no scene
+    // root PART — `parts` is an array — so the root is the sole top-level part
+    // when there is exactly one: that part IS the whole assembly. A spec with
+    // several top-level parts has no such container, and each of them is a real
+    // component worth anchoring to.
+    const rootPartId = spec.parts.length === 1 ? spec.parts[0].id : null;
+    const socketParentByName = new Map(spec.sockets.map((socket) => [socket.name, socket.parentPartId]));
+    const anchorPartByAttachment = new Map();
+    const seenAttachmentPartIds = new Set();
+
+    for (const [index, attachment] of spec.articulation.attachments.entries()) {
+      const at = (key) => ['articulation', 'attachments', index, key];
+      if (!partIds.has(attachment.partId)) {
+        ctx.addIssue({ code: 'custom', message: `unknown attachment part: ${attachment.partId}`, path: at('partId') });
+      } else if (jointPartIds.has(attachment.partId)) {
+        ctx.addIssue({ code: 'custom', message: `part ${attachment.partId} is declared as an attachment and also driven by a joint`, path: at('partId') });
+      }
+      if (seenAttachmentPartIds.has(attachment.partId)) {
+        ctx.addIssue({ code: 'custom', message: `duplicate attachment part: ${attachment.partId}`, path: at('partId') });
+      }
+      seenAttachmentPartIds.add(attachment.partId);
+
+      // Resolve whichever anchor form was given down to the part it names, so
+      // self-anchoring, root-anchoring, and cycles are one check apiece rather
+      // than one per form.
+      let anchorPartId = null;
+      if (attachment.anchorPartId !== null) {
+        if (!partIds.has(attachment.anchorPartId)) {
+          ctx.addIssue({ code: 'custom', message: `unknown attachment anchor part: ${attachment.anchorPartId}`, path: at('anchorPartId') });
+        } else {
+          anchorPartId = attachment.anchorPartId;
+        }
+      } else if (attachment.anchorSocket !== null) {
+        if (!socketNames.has(attachment.anchorSocket)) {
+          ctx.addIssue({ code: 'custom', message: `unknown attachment anchor socket: ${attachment.anchorSocket}`, path: at('anchorSocket') });
+        } else {
+          anchorPartId = socketParentByName.get(attachment.anchorSocket) ?? null;
+        }
+      }
+
+      if (anchorPartId !== null) {
+        const anchorPath = attachment.anchorPartId !== null ? at('anchorPartId') : at('anchorSocket');
+        if (anchorPartId === attachment.partId) {
+          ctx.addIssue({ code: 'custom', message: `attachment ${attachment.partId} is anchored to itself`, path: anchorPath });
+        } else if (anchorPartId === rootPartId) {
+          ctx.addIssue({
+            code: 'custom',
+            message: `attachment ${attachment.partId} is anchored to the model root ${anchorPartId}, which names no body part to hang from`,
+            path: anchorPath,
+          });
+        } else {
+          anchorPartByAttachment.set(attachment.partId, { anchorPartId, path: anchorPath });
+        }
+      }
+    }
+
+    // An anchor chain that closes on itself describes no position: a pack on a
+    // strap on the pack. Walk each chain to its end; every hop is an attachment
+    // that was itself anchored, so the walk is bounded by the entry count.
+    for (const [partId, entry] of anchorPartByAttachment) {
+      const visited = new Set([partId]);
+      let cursor = entry.anchorPartId;
+      while (cursor && anchorPartByAttachment.has(cursor) && !visited.has(cursor)) {
+        visited.add(cursor);
+        cursor = anchorPartByAttachment.get(cursor).anchorPartId;
+      }
+      if (cursor && visited.has(cursor)) {
+        ctx.addIssue({
+          code: 'custom',
+          message: `attachment ${partId} sits on an anchor chain that cycles back through ${cursor}`,
+          path: entry.path,
+        });
+      }
+    }
   }
 
   if (spec.animation) {
@@ -701,6 +819,47 @@ export const threejsSculptSpecSchema = makeSpecSchema(scale3Schema);
  * renders, while the bound above keeps any NEW spec from acquiring the problem.
  */
 export const storedThreejsSculptSpecSchema = makeSpecSchema(vec3Schema);
+
+/**
+ * One canonical attachment list from the two forms a spec may declare.
+ *
+ * `attachmentPartIds` (the original, anchor-less form) and `attachments` (the
+ * anchored one) both mean "this part is carried", so every gate that reasons
+ * about attachments reads them through here rather than each picking a form and
+ * disagreeing with the next. An anchored entry wins over a bare id for the same
+ * part — the richer declaration is the one the author meant.
+ *
+ * @param {object|null} articulation a spec's `articulation` object, or null
+ * @returns {Array<{partId: string, anchorPartId: string|null, anchorSocket: string|null, maxOffset: number}>}
+ */
+export function resolveThreejsAttachments(articulation) {
+  const entries = new Map();
+  const bareIds = Array.isArray(articulation?.attachmentPartIds) ? articulation.attachmentPartIds : [];
+  for (const partId of bareIds) {
+    if (typeof partId !== 'string' || entries.has(partId)) continue;
+    entries.set(partId, { partId, anchorPartId: null, anchorSocket: null, maxOffset: DEFAULT_ATTACHMENT_MAX_OFFSET });
+  }
+  const anchored = Array.isArray(articulation?.attachments) ? articulation.attachments : [];
+  for (const attachment of anchored) {
+    if (typeof attachment?.partId !== 'string') continue;
+    entries.set(attachment.partId, {
+      partId: attachment.partId,
+      anchorPartId: attachment.anchorPartId ?? null,
+      anchorSocket: attachment.anchorSocket ?? null,
+      maxOffset: Number.isFinite(attachment.maxOffset) ? attachment.maxOffset : DEFAULT_ATTACHMENT_MAX_OFFSET,
+    });
+  }
+  return [...entries.values()];
+}
+
+/**
+ * Whether a resolved attachment names something to hang from at all.
+ * @param {{anchorPartId: string|null, anchorSocket: string|null}} attachment
+ * @returns {boolean}
+ */
+export const isThreejsAttachmentAnchored = (attachment) => (
+  Boolean(attachment?.anchorPartId) || Boolean(attachment?.anchorSocket)
+);
 
 const MAX_NAMES_IN_MESSAGE = 8;
 

@@ -7,9 +7,19 @@
  * 3. `coplanar-surface`: Sibling or unrelated part pairs sharing a near-coplanar surface (z-fighting).
  * 4. `unprovenanced-transition`: Animated parts that pop into existence in open space without emerging from a parent or ground level.
  * 5. `nonuniform-parent-scale`: A non-relief child inherits a parent's anisotropic scale and may be distorted.
+ * 6. `unanchored-attachment`: A part declared as carried that names nothing it is carried by.
+ * 7. `attachment-far-from-anchor`: A declared attachment measured away from the anchor the spec says it hangs from.
+ *
+ * Checks 6 and 7 exist because `floating-part` and `buried-geometry` both miss
+ * the same defect: a hat that belongs behind the shoulders but is authored at
+ * hip height touches its neighbours, so nothing calls it floating, and it is not
+ * contained by anything, so nothing calls it buried. Only the declared
+ * relationship to its anchor makes the position wrong — which is why an
+ * attachment whose anchor geometry cannot be measured is reported as unmeasured
+ * rather than allowed to read as clean.
  */
 
-import { listSpecNames } from './threejsModel.js';
+import { isThreejsAttachmentAnchored, listSpecNames, resolveThreejsAttachments } from './threejsModel.js';
 
 const EPSILON = 1e-4;
 const COPLANAR_TOLERANCE = 1e-3;
@@ -274,6 +284,9 @@ function getPoseStateResolver(clip, timeSeconds) {
 
 function collectPoseVolumes(spec, getPartState) {
   const volumes = [];
+  // Every part, not only the ones that carry geometry: a socket hangs off its
+  // parent part's world transform, and that parent is routinely a bare group.
+  const transformsByPartId = new Map();
   const walk = (part, parentTransform, ancestorIds) => {
     const state = getPartState ? getPartState(part) : {
       position: part.position,
@@ -284,6 +297,7 @@ function collectPoseVolumes(spec, getPartState) {
     };
 
     const transform = composeTransform(parentTransform, state.position, state.rotationDegrees, state.scale);
+    transformsByPartId.set(part.id, transform);
     const localBounds = getLocalBounds(part.geometry);
 
     if (localBounds) {
@@ -310,7 +324,7 @@ function collectPoseVolumes(spec, getPartState) {
     walk(part, IDENTITY_TRANSFORM, []);
   }
 
-  return volumes;
+  return { volumes, transformsByPartId };
 }
 
 const flattenParts = (parts) => {
@@ -396,6 +410,123 @@ const buildNonuniformParentScaleFinding = (part, scaleSamples, context = {}) => 
   };
 };
 
+const unionBounds = (a, b) => {
+  if (!a) return b;
+  if (!b) return a;
+  return [0, 1, 2].map((axis) => [Math.min(a[axis][0], b[axis][0]), Math.max(a[axis][1], b[axis][1])]);
+};
+
+/**
+ * World bounds for each part INCLUDING its descendants.
+ *
+ * An anchor is routinely a bare group whose surface is entirely in its children
+ * — "head" holding a skull and a jaw — so measuring only the part's own geometry
+ * would report a hat as unmeasurable against the head it plainly sits on.
+ */
+const buildSubtreeBounds = (volumes) => {
+  const bounds = new Map();
+  for (const volume of volumes) {
+    for (const id of [volume.id, ...volume.ancestorIds]) {
+      bounds.set(id, unionBounds(bounds.get(id), volume.worldBounds));
+    }
+  }
+  return bounds;
+};
+
+// A socket is a point, and `aabbDistance` already measures box-to-box, so the
+// point rides in as a degenerate box rather than earning a second routine.
+const pointBounds = ([x, y, z]) => [[x, x], [y, y], [z, z]];
+
+const formatOffset = (value) => Number(value.toFixed(3));
+
+/**
+ * Measure every anchored attachment against the thing it says it hangs from, in
+ * one pose.
+ *
+ * @returns {{findings: Array, unmeasured: Array<{partId: string, anchorPartId: string|null,
+ *   anchorSocket: string|null, reason: string}>}}
+ */
+function measureAttachmentAnchors({
+  attachments,
+  volumes,
+  transformsByPartId,
+  socketsByName,
+  namesByPartId,
+  context = {},
+}) {
+  const findings = [];
+  const unmeasured = [];
+  if (attachments.length === 0) return { findings, unmeasured };
+
+  const measurable = volumes.filter((volume) => volume.visible && volume.opacity > 0);
+  const subtreeBounds = buildSubtreeBounds(measurable);
+  const label = (partId) => `"${namesByPartId.get(partId) || partId}"`;
+  const { clipName, ...metadata } = context;
+
+  for (const attachment of attachments) {
+    const attachmentBounds = subtreeBounds.get(attachment.partId);
+    if (!attachmentBounds) {
+      unmeasured.push({
+        partId: attachment.partId,
+        anchorPartId: attachment.anchorPartId,
+        anchorSocket: attachment.anchorSocket,
+        reason: 'the attachment has no visible geometry to measure',
+      });
+      continue;
+    }
+
+    let anchorBounds = null;
+    let anchorDescription = '';
+    if (attachment.anchorSocket) {
+      const socket = socketsByName.get(attachment.anchorSocket);
+      const transform = socket ? transformsByPartId.get(socket.parentPartId) : null;
+      if (transform) {
+        anchorBounds = pointBounds(applyTransform(transform, socket.position || [0, 0, 0]));
+        anchorDescription = `socket "${attachment.anchorSocket}" on ${label(socket.parentPartId)}`;
+      }
+    } else if (attachment.anchorPartId) {
+      anchorBounds = subtreeBounds.get(attachment.anchorPartId) || null;
+      anchorDescription = label(attachment.anchorPartId);
+    }
+
+    if (!anchorBounds) {
+      unmeasured.push({
+        partId: attachment.partId,
+        anchorPartId: attachment.anchorPartId,
+        anchorSocket: attachment.anchorSocket,
+        reason: attachment.anchorSocket
+          ? 'the anchor socket could not be located in this pose'
+          : 'the anchor part has no visible geometry to measure',
+      });
+      continue;
+    }
+
+    const distance = aabbDistance(attachmentBounds, anchorBounds);
+    if (distance <= attachment.maxOffset) continue;
+
+    const scope = clipName
+      ? `In clip "${clipName}", part ${label(attachment.partId)}`
+      : `Part ${label(attachment.partId)}`;
+    findings.push({
+      code: 'attachment-far-from-anchor',
+      // The spec asserted this relationship itself, so a part measured away from
+      // its own declared anchor is a stated fact the model does not build.
+      severity: 'error',
+      ...metadata,
+      partIds: attachment.anchorPartId
+        ? [attachment.partId, attachment.anchorPartId]
+        : [attachment.partId],
+      anchorPartId: attachment.anchorPartId,
+      anchorSocket: attachment.anchorSocket,
+      distance: formatOffset(distance),
+      maxOffset: attachment.maxOffset,
+      message: `${scope} is declared as an attachment carried by ${anchorDescription}, but it sits ${formatOffset(distance)} units away from it (allowed ${attachment.maxOffset}). Move it onto ${anchorDescription} or re-anchor it to the part it is actually carried by.`,
+    });
+  }
+
+  return { findings, unmeasured };
+}
+
 const collectAnimatedScaleSamples = (part, sequences) => sequences
   .filter((sequence) => sequence.partId === part.id && sequence.channels?.scale)
   .flatMap((sequence) => [
@@ -417,16 +548,21 @@ export function evaluateThreejsPhysicalAudit(spec) {
       noteCount: 0,
       evaluatedPartCount: 0,
       evaluatedPoseCount: 0,
+      unmeasuredAttachments: [],
     };
   }
 
   const materials = spec.materials && typeof spec.materials === 'object' ? spec.materials : {};
-  const attachments = new Set(spec.articulation?.attachmentPartIds || []);
+  const declaredAttachments = resolveThreejsAttachments(spec.articulation);
+  const anchoredAttachments = declaredAttachments.filter(isThreejsAttachmentAnchored);
+  const attachments = new Set(declaredAttachments.map((attachment) => attachment.partId));
   const jointPartIds = new Set((spec.articulation?.joints || []).map((j) => j.partId).filter(Boolean));
+  const socketsByName = new Map((spec.sockets || []).map((socket) => [socket.name, socket]));
 
   const findings = [];
   const seenKeys = new Set();
   const parts = flattenParts(spec.parts);
+  const namesByPartId = new Map(parts.map((part) => [part.id, part.name || part.id]));
   const staticScaleFindings = new Map();
   const strongestAnimatedScaleFindings = new Map();
 
@@ -438,9 +574,35 @@ export function evaluateThreejsPhysicalAudit(spec) {
   };
 
   // 1. Static Resting Pose Evaluation
-  const staticVolumes = collectPoseVolumes(spec, null);
+  const { volumes: staticVolumes, transformsByPartId } = collectPoseVolumes(spec, null);
   const evaluatedPartCount = staticVolumes.length;
   let evaluatedPoseCount = 1;
+
+  // A declaration with no anchor in it cannot be measured at all, so it is
+  // reported before any geometry is looked at.
+  for (const attachment of declaredAttachments) {
+    if (isThreejsAttachmentAnchored(attachment)) continue;
+    addFinding({
+      code: 'unanchored-attachment',
+      severity: 'warning',
+      partIds: [attachment.partId],
+      message: `Part "${namesByPartId.get(attachment.partId) || attachment.partId}" is declared as a carried attachment but names nothing it is carried by, so nothing ties it to the part it hangs from. Declare it in "attachments" with an "anchorPartId" or "anchorSocket".`,
+    });
+  }
+
+  const staticAnchorReport = measureAttachmentAnchors({
+    attachments: anchoredAttachments,
+    volumes: staticVolumes,
+    transformsByPartId,
+    socketsByName,
+    namesByPartId,
+  });
+  const unmeasuredAttachments = staticAnchorReport.unmeasured;
+  const staticAnchorFailures = new Set();
+  for (const finding of staticAnchorReport.findings) {
+    staticAnchorFailures.add(finding.partIds[0]);
+    addFinding(finding);
+  }
 
   for (const part of parts) {
     const finding = buildNonuniformParentScaleFinding(part, [{ scale: part.scale }]);
@@ -581,6 +743,34 @@ export function evaluateThreejsPhysicalAudit(spec) {
     remainingBudget -= timesToTest.length;
     evaluatedPoseCount += timesToTest.length;
 
+    // A clip can carry an attachment away from its anchor without ever breaking
+    // the resting pose, so the same measurement runs over the sampled poses —
+    // reporting the WORST one per attachment rather than the first, so the
+    // refinement feedback names the moment the relationship is most broken.
+    if (anchoredAttachments.length > 0) {
+      const worstByPartId = new Map();
+      for (const timeSeconds of timesToTest) {
+        const pose = collectPoseVolumes(spec, getPoseStateResolver(clip, timeSeconds));
+        const report = measureAttachmentAnchors({
+          attachments: anchoredAttachments,
+          volumes: pose.volumes,
+          transformsByPartId: pose.transformsByPartId,
+          socketsByName,
+          namesByPartId,
+          context: { clipId: clip.id, clipName: clip.name || clip.id, timeSeconds },
+        });
+        for (const finding of report.findings) {
+          const partId = finding.partIds[0];
+          // The resting pose already reported this attachment; repeating it per
+          // clip would bury the clip-only breaks the pose walk exists to find.
+          if (staticAnchorFailures.has(partId)) continue;
+          const current = worstByPartId.get(partId);
+          if (!current || finding.distance > current.distance) worstByPartId.set(partId, finding);
+        }
+      }
+      for (const finding of worstByPartId.values()) addFinding(finding);
+    }
+
     // Check unprovenanced transitions for sequences that toggle visibility/opacity
     for (const seq of sequences) {
       const visCh = seq.channels?.visible;
@@ -590,7 +780,7 @@ export function evaluateThreejsPhysicalAudit(spec) {
 
       if (appears && seq.startSeconds > 0) {
         const getPoseState = getPoseStateResolver(clip, seq.startSeconds);
-        const poseVolumes = collectPoseVolumes(spec, getPoseState);
+        const { volumes: poseVolumes } = collectPoseVolumes(spec, getPoseState);
         const partVolume = poseVolumes.find((v) => v.id === seq.partId);
 
         if (partVolume) {
@@ -631,6 +821,10 @@ export function evaluateThreejsPhysicalAudit(spec) {
     noteCount: countBy('note'),
     evaluatedPartCount,
     evaluatedPoseCount,
+    // Never folded into the clean count: an attachment whose anchor could not be
+    // measured was not checked, and reporting it as passing is the failure this
+    // gate exists to avoid.
+    unmeasuredAttachments,
   };
 }
 
@@ -643,13 +837,27 @@ export function evaluateThreejsPhysicalAudit(spec) {
  */
 export function buildThreejsPhysicalAuditFeedback(physicalAudit) {
   const actionable = (physicalAudit?.findings || []).filter((f) => f.severity === 'error' || f.severity === 'warning');
-  if (actionable.length === 0) return '';
+  const unmeasured = Array.isArray(physicalAudit?.unmeasuredAttachments) ? physicalAudit.unmeasuredAttachments : [];
+  if (actionable.length === 0 && unmeasured.length === 0) return '';
   const hasNonuniformParentScale = actionable.some((finding) => finding.code === 'nonuniform-parent-scale');
+  const attachmentFindings = actionable.filter((finding) => (
+    finding.code === 'unanchored-attachment' || finding.code === 'attachment-far-from-anchor'
+  ));
+  // Name the anchor rather than the defect: the next pass needs somewhere to put
+  // the part, and "this is floating" without a destination is what produced the
+  // hat at hip height in the first place.
+  const anchorNames = [...new Set(attachmentFindings
+    .map((finding) => finding.anchorSocket || finding.anchorPartId)
+    .filter(Boolean))];
   return [
     'The previous pass failed physical conformance audits:',
     ...actionable.map((finding, index) => `${index + 1}. ${finding.message}`),
+    ...unmeasured.map((entry) => `Attachment "${entry.partId}" could not be checked against ${entry.anchorSocket ? `socket "${entry.anchorSocket}"` : `"${entry.anchorPartId}"`} because ${entry.reason} — give both the attachment and its anchor real geometry so the relationship can be verified.`),
     ...(hasNonuniformParentScale ? [
       'For non-uniform parent scale findings, size each part through its own geometry dimensions (for example, box width/height/depth or sphere radius) and keep containers near-uniform instead of squashing a parent that owns other components.',
+    ] : []),
+    ...(attachmentFindings.length > 0 ? [
+      `For attachment findings, every entry in "articulation.attachments" must name the part or socket it hangs from and be positioned against it${anchorNames.length > 0 ? ` (the anchors named above: ${listSpecNames(anchorNames.map((name) => `"${name}"`))})` : ''}. Anchoring to the model root is not acceptable — name the body part that actually carries the piece.`,
     ] : []),
     'Ensure every part is physically attached to a parent, sibling, or ground plane, keep geometry exposed rather than buried inside unrelated parts, avoid exact coplanar surfaces that cause flickering, and make animated parts emerge cleanly from parents or hidden containers.',
   ].join('\n');

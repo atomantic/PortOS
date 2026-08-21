@@ -7,7 +7,8 @@ const spec = () => ({
       { id: 'rootJoint', partId: 'torso', parentJointId: null, pivotSocket: null },
       { id: 'armJoint', partId: 'arm', parentJointId: 'rootJoint', pivotSocket: 'shoulder' },
     ],
-    attachmentPartIds: ['pack'],
+    attachmentPartIds: [],
+    attachments: [{ partId: 'pack', anchorPartId: 'torso', anchorSocket: null, maxOffset: 0.25 }],
   },
 });
 
@@ -18,6 +19,8 @@ describe('summarizeThreejsArticulation', () => {
     expect(summary.jointCount).toBe(2);
     expect(summary.socketCount).toBe(1);
     expect(summary.attachmentCount).toBe(1);
+    expect(summary.anchoredAttachmentCount).toBe(1);
+    expect(summary.unanchoredAttachmentCount).toBe(0);
     expect(summary.jointsByPartId.arm.id).toBe('armJoint');
   });
 
@@ -41,6 +44,28 @@ describe('summarizeThreejsArticulation', () => {
     const unpivoted = spec();
     unpivoted.articulation.joints[1].pivotSocket = null;
     expect(summarizeThreejsArticulation(unpivoted).articulationReady).toBe(false);
+  });
+
+  // Same rule as the server: an attachment naming nothing to hang from is a
+  // declaration with no relationship in it, so it keeps the graph out of ready.
+  it('matches the server rule: a declared attachment with no anchor is not ready', () => {
+    const unanchored = spec();
+    unanchored.articulation.attachments = [];
+    unanchored.articulation.attachmentPartIds = ['pack'];
+    const summary = summarizeThreejsArticulation(unanchored);
+    expect(summary.articulationReady).toBe(false);
+    expect(summary.attachmentCount).toBe(1);
+    expect(summary.anchoredAttachmentCount).toBe(0);
+    expect(summary.unanchoredAttachmentCount).toBe(1);
+  });
+
+  // The two forms name the same part, so it is one attachment.
+  it('merges a part declared in both attachment forms into one anchored entry', () => {
+    const both = spec();
+    both.articulation.attachmentPartIds = ['pack'];
+    const summary = summarizeThreejsArticulation(both);
+    expect(summary.attachmentCount).toBe(1);
+    expect(summary.unanchoredAttachmentCount).toBe(0);
   });
 
   // Part ids are provider-authored; a plain object would resolve `toString` to

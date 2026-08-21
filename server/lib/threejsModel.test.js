@@ -3,8 +3,11 @@ import {
   buildThreejsFactorySource,
   buildThreejsFlatnessFeedback,
   buildThreejsMaterialFeedback,
+  DEFAULT_ATTACHMENT_MAX_OFFSET,
   evaluateThreejsFlatness,
   evaluateThreejsMaterialPlausibility,
+  isThreejsAttachmentAnchored,
+  resolveThreejsAttachments,
   storedThreejsSculptSpecSchema,
   threejsGeometrySchema,
   threejsSculptSpecSchema,
@@ -725,6 +728,47 @@ const articulationIssues = (mutate) => {
   return result.error.issues.map((issue) => issue.message);
 };
 
+// The same graph plus a carried part and the plate it hangs from, both nested
+// under the single top-level part so the model root stays unambiguous.
+const anchoredSpec = () => {
+  const spec = articulatedSpec();
+  const body = spec.parts[0];
+  body.children.push({
+    id: 'backPlate',
+    name: 'Back plate',
+    geometry: { type: 'box', width: 1.6, height: 1, depth: 0.06 },
+    material: 'body',
+    position: [0, 0, -0.63],
+    rotationDegrees: [0, 0, 0],
+    scale: [1, 1, 1],
+    children: [],
+  });
+  body.children.push({
+    id: 'pack',
+    name: 'Pack',
+    geometry: { type: 'box', width: 0.8, height: 0.6, depth: 0.3 },
+    material: 'body',
+    position: [0, 0, -0.8],
+    rotationDegrees: [0, 0, 0],
+    scale: [1, 1, 1],
+    children: [],
+  });
+  spec.sockets = [
+    ...spec.sockets,
+    { name: 'packSocket', parentPartId: 'backPlate', position: [0, 0, -0.03], rotationDegrees: [0, 0, 0] },
+  ];
+  spec.articulation.attachments = [{ partId: 'pack', anchorPartId: 'backPlate' }];
+  return spec;
+};
+
+const anchorIssues = (mutate) => {
+  const spec = anchoredSpec();
+  mutate(spec);
+  const result = threejsSculptSpecSchema.safeParse(spec);
+  expect(result.success).toBe(false);
+  return result.error.issues.map((issue) => issue.message);
+};
+
 describe('threejsSculptSpecSchema articulation', () => {
   it('accepts a well-formed graph and fills the optional joint fields', () => {
     const parsed = threejsSculptSpecSchema.parse(articulatedSpec());
@@ -798,7 +842,143 @@ describe('threejsSculptSpecSchema articulation', () => {
       'part frontTrim is declared as an attachment and also driven by a joint',
     ]));
   });
+
+  // Attachment anchors. `attachmentPartIds` says a part is CARRIED; only an
+  // anchor says what carries it, which is the difference between a hat on a head
+  // and a hat at hip height that every other gate reads as fine.
+  it('accepts an anchored attachment and defaults its offset tolerance', () => {
+    const parsed = threejsSculptSpecSchema.parse(anchoredSpec());
+    expect(parsed.articulation.attachments).toEqual([
+      { partId: 'pack', anchorPartId: 'backPlate', anchorSocket: null, maxOffset: DEFAULT_ATTACHMENT_MAX_OFFSET },
+    ]);
+  });
+
+  // Additive, not a replacement: a spec written before anchors shipped keeps
+  // parsing and simply carries an empty anchored list.
+  it('leaves a legacy attachmentPartIds spec valid, on both the authoring and stored schemas', () => {
+    const legacy = anchoredSpec();
+    legacy.articulation.attachmentPartIds = ['pack'];
+    delete legacy.articulation.attachments;
+    for (const schema of [threejsSculptSpecSchema, storedThreejsSculptSpecSchema]) {
+      const parsed = schema.parse(legacy);
+      expect(parsed.articulation.attachmentPartIds).toEqual(['pack']);
+      expect(parsed.articulation.attachments).toEqual([]);
+    }
+  });
+
+  it('requires exactly one anchor field per attachment', () => {
+    expect(anchorIssues((spec) => {
+      spec.articulation.attachments[0].anchorPartId = null;
+    })).toEqual(expect.arrayContaining([
+      'attachment pack needs exactly one of anchorPartId or anchorSocket, found 0',
+    ]));
+    expect(anchorIssues((spec) => {
+      spec.articulation.attachments[0].anchorSocket = 'packSocket';
+    })).toEqual(expect.arrayContaining([
+      'attachment pack needs exactly one of anchorPartId or anchorSocket, found 2',
+    ]));
+  });
+
+  it('rejects an anchor that names no declared part or socket', () => {
+    expect(anchorIssues((spec) => {
+      spec.articulation.attachments[0].anchorPartId = 'notARealPart';
+    })).toEqual(expect.arrayContaining(['unknown attachment anchor part: notARealPart']));
+    expect(anchorIssues((spec) => {
+      spec.articulation.attachments[0].anchorPartId = null;
+      spec.articulation.attachments[0].anchorSocket = 'notARealSocket';
+    })).toEqual(expect.arrayContaining(['unknown attachment anchor socket: notARealSocket']));
+  });
+
+  it('rejects an attachment anchored to itself', () => {
+    expect(anchorIssues((spec) => {
+      spec.articulation.attachments[0].anchorPartId = 'pack';
+    })).toEqual(expect.arrayContaining(['attachment pack is anchored to itself']));
+  });
+
+  // The literal defect this field exists for: the root carries no relationship
+  // to any body part, so "anchored to the root" is the same silence as no anchor.
+  it('rejects an anchor on the model root, named through a part or through a socket', () => {
+    expect(anchorIssues((spec) => {
+      spec.articulation.attachments[0].anchorPartId = 'crateBody';
+    })).toEqual(expect.arrayContaining([
+      'attachment pack is anchored to the model root crateBody, which names no body part to hang from',
+    ]));
+    expect(anchorIssues((spec) => {
+      spec.articulation.attachments[0].anchorPartId = null;
+      spec.articulation.attachments[0].anchorSocket = 'lidPivot';
+    })).toEqual(expect.arrayContaining([
+      'attachment pack is anchored to the model root crateBody, which names no body part to hang from',
+    ]));
+  });
+
+  // A model with several top-level parts has no single container, so each of
+  // them is a real component worth anchoring to.
+  it('allows a top-level anchor when the spec has more than one top-level part', () => {
+    const spec = anchoredSpec();
+    spec.parts.push({
+      id: 'standAlone',
+      name: 'Stand',
+      geometry: { type: 'box', width: 1, height: 0.2, depth: 1 },
+      material: 'body',
+      position: [0, 0.1, 0],
+      rotationDegrees: [0, 0, 0],
+      scale: [1, 1, 1],
+      children: [],
+    });
+    spec.articulation.attachments[0].anchorPartId = 'crateBody';
+    expect(threejsSculptSpecSchema.safeParse(spec).success).toBe(true);
+  });
+
+  it('rejects an anchor chain that cycles', () => {
+    expect(anchorIssues((spec) => {
+      spec.articulation.attachments = [
+        { partId: 'pack', anchorPartId: 'backPlate' },
+        { partId: 'backPlate', anchorPartId: 'pack' },
+      ];
+    })).toEqual(expect.arrayContaining([
+      expect.stringContaining('sits on an anchor chain that cycles back through'),
+    ]));
+  });
+
+  it('rejects a duplicate attachment entry and one that is also driven by a joint', () => {
+    expect(anchorIssues((spec) => {
+      spec.articulation.attachments.push({ partId: 'pack', anchorPartId: 'backPlate' });
+    })).toEqual(expect.arrayContaining(['duplicate attachment part: pack']));
+    expect(anchorIssues((spec) => {
+      spec.articulation.attachments[0].partId = 'frontTrim';
+    })).toEqual(expect.arrayContaining([
+      'part frontTrim is declared as an attachment and also driven by a joint',
+    ]));
+  });
 });
+
+describe('resolveThreejsAttachments', () => {
+  it('reads the legacy list forward as anchor-less entries', () => {
+    expect(resolveThreejsAttachments({ attachmentPartIds: ['pack'] })).toEqual([
+      { partId: 'pack', anchorPartId: null, anchorSocket: null, maxOffset: DEFAULT_ATTACHMENT_MAX_OFFSET },
+    ]);
+  });
+
+  // The richer declaration is the one the author meant, so it wins rather than
+  // the part being counted twice with contradictory anchors.
+  it('lets an anchored entry win over a bare id for the same part', () => {
+    const resolved = resolveThreejsAttachments({
+      attachmentPartIds: ['pack'],
+      attachments: [{ partId: 'pack', anchorPartId: 'backPlate', anchorSocket: null, maxOffset: 1 }],
+    });
+    expect(resolved).toEqual([
+      { partId: 'pack', anchorPartId: 'backPlate', anchorSocket: null, maxOffset: 1 },
+    ]);
+    expect(resolved.every(isThreejsAttachmentAnchored)).toBe(true);
+  });
+
+  it('reads a missing or malformed articulation as no attachments at all', () => {
+    for (const value of [null, undefined, {}, { attachmentPartIds: 'nope', attachments: 7 }]) {
+      expect(resolveThreejsAttachments(value)).toEqual([]);
+    }
+  });
+});
+
 
 describe('buildThreejsFactorySource articulation', () => {
   it('carries a validated graph into the exported runtime metadata', () => {

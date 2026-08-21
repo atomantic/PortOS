@@ -14,7 +14,7 @@
  * that falls short is still a good model, it is just a static one.
  */
 
-import { listSpecNames } from './threejsModel.js';
+import { isThreejsAttachmentAnchored, listSpecNames, resolveThreejsAttachments } from './threejsModel.js';
 
 // One joint is a root and nothing else — a graph with nothing to rotate against
 // it describes a static assembly with extra words.
@@ -25,16 +25,21 @@ const jointLabel = (joint) => joint.id;
 /**
  * @param {object|null} spec a spec that has already passed a sculpt-spec schema
  * @returns {{articulationReady: boolean, reasons: string[], jointCount: number,
- *   socketCount: number, attachmentCount: number, rootJointId: string|null,
+ *   socketCount: number, attachmentCount: number, anchoredAttachmentCount: number,
+ *   unanchoredAttachmentCount: number, rootJointId: string|null,
  *   subjectType: string|null}}
  */
 export function evaluateThreejsRigReadiness(spec) {
   const subjectType = spec?.subjectType || null;
   const articulation = spec?.articulation || null;
   const joints = Array.isArray(articulation?.joints) ? articulation.joints : [];
-  const attachmentCount = Array.isArray(articulation?.attachmentPartIds)
-    ? articulation.attachmentPartIds.length
-    : 0;
+  // An attachment that names nothing to hang from is a declaration with no
+  // relationship in it, so it is counted separately rather than credited toward
+  // a rig a later export path could actually attach to.
+  const attachments = resolveThreejsAttachments(articulation);
+  const anchored = attachments.filter(isThreejsAttachmentAnchored);
+  const unanchored = attachments.filter((attachment) => !isThreejsAttachmentAnchored(attachment));
+  const attachmentCount = attachments.length;
   const rootJoint = joints.find((joint) => !joint.parentJointId) || null;
   // Distinct sockets, not joint count: two joints naming the same pivot is one
   // usable axis, and reporting two would overstate what the model can be rigged
@@ -56,6 +61,9 @@ export function evaluateThreejsRigReadiness(spec) {
     if (unpivoted.length > 0) {
       reasons.push(`${unpivoted.length} of ${joints.length} joints name no pivot socket, so they have no axis to rotate about (${listSpecNames(unpivoted.map(jointLabel))}).`);
     }
+    if (unanchored.length > 0) {
+      reasons.push(`${unanchored.length} of ${attachmentCount} declared attachments name nothing to hang from, so nothing ties them to the part they are carried by (${listSpecNames(unanchored.map((attachment) => attachment.partId))}).`);
+    }
   }
 
   return {
@@ -64,6 +72,8 @@ export function evaluateThreejsRigReadiness(spec) {
     jointCount: joints.length,
     socketCount,
     attachmentCount,
+    anchoredAttachmentCount: anchored.length,
+    unanchoredAttachmentCount: unanchored.length,
     rootJointId: rootJoint?.id || null,
     subjectType,
   };

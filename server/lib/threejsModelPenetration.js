@@ -34,7 +34,7 @@
  *   reference being followed, not a mistake.
  */
 
-import { listSpecNames } from './threejsModel.js';
+import { listSpecNames, resolveThreejsAttachments } from './threejsModel.js';
 
 // Sampling resolution over a part's local bounding box. 8³ is enough to
 // estimate a containment fraction to a couple of percent, which is all the
@@ -492,7 +492,7 @@ export function evaluateThreejsPenetration(spec) {
   const materials = spec?.materials && typeof spec.materials === 'object' ? spec.materials : {};
   // A declared attachment says outright that this part rides another one, so a
   // pack sunk into the back it is strapped to is the spec working as declared.
-  const attachments = new Set(spec?.articulation?.attachmentPartIds || []);
+  const attachments = new Set(resolveThreejsAttachments(spec?.articulation).map((attachment) => attachment.partId));
 
   const buried = [];
   const overlapping = [];
