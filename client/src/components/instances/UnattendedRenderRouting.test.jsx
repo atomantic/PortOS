@@ -60,7 +60,10 @@ describe('UnattendedRenderRouting', () => {
     expect(screen.queryByLabelText('Audio')).not.toBeInTheDocument();
   });
 
-  it('saves a chosen route while carrying the rest of the federation slice forward', async () => {
+  // #4703 — this page owns `mediaRouting` and nothing else in the slice. It
+  // patches that sub-key alone; the server carries the Sharing tab's sub-keys
+  // forward, so a save here can no longer revert them.
+  it('patches mediaRouting alone rather than rewriting the whole federation slice', async () => {
     getSettings.mockResolvedValue({
       federation: { strictPullAuthorization: true, mediaProvider: { enabled: true } },
     });
@@ -71,8 +74,6 @@ describe('UnattendedRenderRouting', () => {
 
     await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({
       federation: {
-        strictPullAuthorization: true,
-        mediaProvider: { enabled: true },
         mediaRouting: { image: { peerId: 'peer-1', engine: 'comfy', modelId: 'sdxl-base' } },
       },
     }, { silent: true }));
@@ -162,24 +163,26 @@ describe('UnattendedRenderRouting — failure and staleness handling', () => {
 });
 
 describe('UnattendedRenderRouting — writes against the freshest settings', () => {
-  it('re-reads the federation slice at save time instead of writing a mount-time snapshot', async () => {
-    // Mounted before the Sharing tab enabled the provider elsewhere.
-    getSettings.mockResolvedValueOnce({ federation: { mediaProvider: { enabled: false } } });
+  // The server merge is per federation SUB-key, so `mediaRouting` still crosses
+  // whole. The re-read is what keeps a kind routed from another tab of this same
+  // page from being reverted by this one's mount-time copy.
+  it('merges the chosen kind onto the freshest routing map, not the mount-time one', async () => {
+    // Mounted before another tab routed video.
+    getSettings.mockResolvedValueOnce({ federation: { mediaRouting: {} } });
     render(<UnattendedRenderRouting peers={[peerWith()]} />);
     const select = await screen.findByLabelText('Image');
 
-    getSettings.mockResolvedValueOnce({
-      federation: { mediaProvider: { enabled: true }, strictPullAuthorization: true },
-    });
+    const videoRoute = { peerId: 'peer-1', engine: 'comfy', modelId: 'svd' };
+    getSettings.mockResolvedValueOnce({ federation: { mediaRouting: { video: videoRoute } } });
     fireEvent.change(select, { target: { value: JSON.stringify(['peer-1', 'comfy', 'sdxl-base']) } });
 
     await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({
       federation: {
-        // The newer values survive — writing the stale snapshot would have
-        // reverted mediaProvider.enabled and erased strictPullAuthorization.
-        mediaProvider: { enabled: true },
-        strictPullAuthorization: true,
-        mediaRouting: { image: { peerId: 'peer-1', engine: 'comfy', modelId: 'sdxl-base' } },
+        mediaRouting: {
+          // Writing the mount-time map would have cleared this.
+          video: videoRoute,
+          image: { peerId: 'peer-1', engine: 'comfy', modelId: 'sdxl-base' },
+        },
       },
     }, { silent: true }));
   });

@@ -11,8 +11,9 @@ vi.mock('../services/settings.js', () => ({
     store = { ...store, ...patch };
     return { ...store };
   }),
-  // The PUT handler uses updateSettingsWith so it can re-inject persisted
-  // sub-keys this route does not own but the patch omits (see
+  // The PUT handler uses updateSettingsWith so it can merge the multi-owner
+  // federation slice per sub-key and re-inject persisted sub-keys this route
+  // does not own but the patch omits (see mergeFederationSlice /
   // preserveExternallyOwnedKeys).
   updateSettingsWith: vi.fn(async (mutate) => {
     store = await mutate({ ...store });
@@ -134,6 +135,56 @@ describe('Settings routes — agent context and federated media provider slices'
       futureProviderField: 'preserve',
     });
     expect(res.body.federation.futureFederationField).toBe('preserve');
+  });
+
+  // #4703 — Sharing owns federation.mediaProvider + strictPullAuthorization,
+  // Instances owns federation.mediaRouting. Each now patches ONLY the sub-keys
+  // it owns; the server carries the rest of the slice forward. Two saves issued
+  // from the same stale page load must therefore both survive.
+  it('merges federation sub-keys so two writes from the same stale page load both survive', async () => {
+    const app = buildApp();
+    store = { federation: { strictPullAuthorization: false } };
+    const route = { peerId: 'peer-1', engine: 'ltx', modelId: 'ltx-1' };
+
+    const sharing = await request(app)
+      .put('/api/settings')
+      .send({ federation: { strictPullAuthorization: true } });
+    expect(sharing.status).toBe(200);
+
+    // Instances never saw the toggle above — it patches its own sub-key only.
+    const routing = await request(app)
+      .put('/api/settings')
+      .send({ federation: { mediaRouting: { image: route } } });
+    expect(routing.status).toBe(200);
+    expect(routing.body.federation).toEqual({
+      strictPullAuthorization: true,
+      mediaRouting: { image: route },
+    });
+  });
+
+  it('preserves unknown federation sub-keys a patch omits (mixed-version client)', async () => {
+    store = { federation: { futureFederationField: 'preserve', strictPullAuthorization: true } };
+    const res = await request(buildApp())
+      .put('/api/settings')
+      .send({ federation: { mediaProvider: { enabled: true } } });
+    expect(res.status).toBe(200);
+    expect(res.body.federation).toEqual({
+      futureFederationField: 'preserve',
+      strictPullAuthorization: true,
+      mediaProvider: { enabled: true },
+    });
+  });
+
+  it('applies an intentional federation sub-key clear rather than restoring the stored value', async () => {
+    store = { federation: {
+      mediaRouting: { image: { peerId: 'peer-1', engine: 'ltx', modelId: 'ltx-1' } },
+      strictPullAuthorization: true,
+    } };
+    const res = await request(buildApp())
+      .put('/api/settings')
+      .send({ federation: { mediaRouting: {} } });
+    expect(res.status).toBe(200);
+    expect(res.body.federation).toEqual({ mediaRouting: {}, strictPullAuthorization: true });
   });
 
   it('rejects invalid limits and duplicate engine/model pairs', async () => {

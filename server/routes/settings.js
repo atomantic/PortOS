@@ -98,6 +98,27 @@ const preserveExternallyOwnedKeys = (next, current) => {
   return next;
 };
 
+// `federation` is the one top-level slice with more than one owning surface:
+// Settings → Sharing writes `mediaProvider` and `strictPullAuthorization`, while
+// Instances → Unattended render routing writes `mediaRouting`. The generic
+// top-level shallow merge replaces the slice wholesale, so whichever PUT lands
+// second silently reverts the other surface's freshly saved sub-key (#4703).
+// Merging per sub-key here removes that class instead of narrowing it — and
+// because `updateSettingsWith` runs inside the settings write queue, `current`
+// is always the freshest persisted snapshot, not the one the client read.
+//
+// A SHALLOW per-sub-key merge is deliberately enough: every sub-key today has
+// exactly one owning surface, so an incoming sub-key is a complete value for it.
+// "Absent vs present-but-empty" falls straight out of the spread — an omitted
+// sub-key keeps the stored value, while one sent as `{}` or `null` applies the
+// clear the user actually asked for. A FUTURE sub-key written by two surfaces
+// would need its own deeper merge added here.
+const mergeFederationSlice = (next, current) => {
+  if (!isPlainObject(next.federation) || !isPlainObject(current?.federation)) return next;
+  next.federation = { ...current.federation, ...next.federation };
+  return next;
+};
+
 // Single sanitizer every settings response (GET load + PUT save) runs through,
 // so a leak can't reappear on one path after being closed on the other: strip
 // the top-level `secrets` hierarchy, redact external tokens (#1821), then
@@ -310,11 +331,15 @@ router.put('/', asyncHandler(async (req, res) => {
   // would replace the whole map, silently dropping any family the incoming
   // patch didn't mention.
   const { secrets: _ignoredSecrets, catalogUserTypes: _ignoredTypes, subscriptionCosts: subscriptionCostsPatch, ...settingsPatch } = req.body || {};
-  // updateSettingsWith (not updateSettings) so we can re-inject persisted
-  // write-only tokens the incoming patch omits, against the freshest snapshot
-  // inside the write queue (see preserveExternallyOwnedKeys).
+  // updateSettingsWith (not updateSettings) so the multi-owner `federation`
+  // slice merges per sub-key and persisted write-only tokens the incoming patch
+  // omits get re-injected — both against the freshest snapshot inside the write
+  // queue (see mergeFederationSlice / preserveExternallyOwnedKeys).
   let merged = await updateSettingsWith((current) =>
-    preserveExternallyOwnedKeys({ ...current, ...settingsPatch }, current));
+    preserveExternallyOwnedKeys(
+      mergeFederationSlice({ ...current, ...settingsPatch }, current),
+      current,
+    ));
   if (subscriptionCostsPatch !== undefined) {
     const costs = await saveSubscriptionCosts(subscriptionCostsPatch);
     merged = { ...merged, subscriptionCosts: costs };

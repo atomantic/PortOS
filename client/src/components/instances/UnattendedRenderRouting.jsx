@@ -75,12 +75,11 @@ function routeOptions(peers, kind, field) {
  */
 export default function UnattendedRenderRouting({ peers }) {
   // `null` = not loaded yet, and NOT the same as `{}` (loaded, nothing routed).
-  // Conflating them is what would let a failed settings read save a `federation`
-  // slice rebuilt from an empty object, wiping mediaProvider and
-  // strictPullAuthorization. `loadFailed` keeps the card visible but read-only
-  // so the failure is legible instead of silently destructive.
+  // Conflating them is what would let a failed settings read save a routing map
+  // rebuilt from an empty object, clearing a route this page never saw.
+  // `loadFailed` keeps the card visible but read-only so the failure is legible
+  // instead of silently destructive.
   const [routing, setRouting] = useState(null);
-  const [federation, setFederation] = useState(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -88,7 +87,6 @@ export default function UnattendedRenderRouting({ peers }) {
     getSettings({ silent: true })
       .then((settings) => {
         const slice = isRecord(settings?.federation) ? settings.federation : {};
-        setFederation(slice);
         setRouting(isRecord(slice.mediaRouting) ? slice.mediaRouting : {});
       })
       .catch(() => setLoadFailed(true));
@@ -100,26 +98,21 @@ export default function UnattendedRenderRouting({ peers }) {
   );
 
   const save = async (kind, route) => {
-    // Belt and braces with the `disabled` below: without a validated snapshot
-    // there is no federation slice to carry forward, so a save here would
-    // replace the whole thing.
-    if (!isRecord(federation) || !isRecord(routing)) return;
+    // Belt and braces with the `disabled` below: without a loaded routing map
+    // there is nothing to merge this kind onto.
+    if (!isRecord(routing)) return;
     setSaving(true);
-    // The settings PATCH shallow-merges TOP-LEVEL keys, so `federation` is
-    // replaced wholesale — this write has to carry the rest of the slice. Re-read
-    // it immediately before writing rather than trusting the snapshot taken at
-    // mount: the Sharing tab owns mediaProvider and strict-pull, and a page left
-    // open across an edit there would otherwise write back the stale values it
-    // captured.
+    // The server merges the `federation` slice per sub-key (#4703), so this
+    // patch carries `mediaRouting` alone and can no longer revert the Sharing
+    // tab's `mediaProvider` / `strictPullAuthorization`.
     //
-    // A FAILED re-read aborts the save. Falling back to the mount snapshot was
-    // the wrong instinct: it is not "better than sending {}", it is a write of
-    // known-stale state over whatever is actually on the server, which is how a
-    // newer mediaProvider or strictPullAuthorization gets silently reverted.
-    // A SUCCESSFUL response with no `federation` key is a fresh install that has
-    // simply never opted into anything — the correct base is `{}`, and treating
-    // it as unreadable would make the very first route unsavable on every
-    // install. Only a failed request (`null`) aborts.
+    // The re-read is still worth its round trip: it merges this kind onto the
+    // freshest routing map rather than the one captured at mount, and it turns
+    // "settings are unreachable" into a stated error instead of a select that
+    // silently snaps back. A FAILED read (`null`) aborts. A SUCCESSFUL response
+    // with no `federation` key is a fresh install that has simply never opted
+    // into anything — the correct base is `{}`, and treating it as unreadable
+    // would make the very first route unsavable on every install.
     const fresh = await getSettings({ silent: true }).catch(() => null);
     if (fresh === null) {
       setSaving(false);
@@ -127,12 +120,10 @@ export default function UnattendedRenderRouting({ peers }) {
       return;
     }
     const base = isRecord(fresh.federation) ? fresh.federation : {};
-    // Merge onto the freshest routing too, so a kind another surface set in the
-    // meantime isn't reverted by this one's stale copy.
     const baseRouting = isRecord(base.mediaRouting) ? base.mediaRouting : routing;
     const nextRouting = { ...baseRouting, [kind]: route };
     const merged = await updateSettings(
-      { federation: { ...base, mediaRouting: nextRouting } },
+      { federation: { mediaRouting: nextRouting } },
       { silent: true },
     ).catch(() => null);
     setSaving(false);
@@ -142,8 +133,7 @@ export default function UnattendedRenderRouting({ peers }) {
       toast.error('Failed to save unattended render routing');
       return;
     }
-    setRouting(nextRouting);
-    setFederation(isRecord(merged.federation) ? merged.federation : { ...base, mediaRouting: nextRouting });
+    setRouting(isRecord(merged.federation?.mediaRouting) ? merged.federation.mediaRouting : nextRouting);
   };
 
   const savedRoute = (kind) => (isRecord(routing?.[kind]) ? routing[kind] : null);

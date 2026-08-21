@@ -58,9 +58,9 @@ export function SharingTab() {
   const [saving, setSaving] = useState(false);
   const [strictPull, setStrictPull] = useState(false);
   const [strictPullSaving, setStrictPullSaving] = useState(false);
-  // No mount-time copy of the `federation` slice is kept: PATCH replaces that
-  // key wholesale, so every write here re-reads it immediately beforehand rather
-  // than carrying a snapshot that another surface may have superseded.
+  // No mount-time copy of the whole `federation` slice is kept: this tab owns
+  // only `mediaProvider` and `strictPullAuthorization`, and patches those
+  // sub-keys alone (the server merges the slice per sub-key, #4703).
   const [authEnabled, setAuthEnabled] = useState(false);
   const [musicEngines, setMusicEngines] = useState([]);
   const [providerSettings, setProviderSettings] = useState({});
@@ -105,12 +105,10 @@ export function SharingTab() {
         setBio(b);
         setSavedDisplayName(display);
         setSavedBio(b);
-        const federation = settings?.federation && typeof settings.federation === 'object' ? settings.federation : {};
+        const federation = isRecord(settings?.federation) ? settings.federation : {};
         setStrictPull(federation.strictPullAuthorization === true);
         setAuthEnabled(auth?.enabled === true);
-        const provider = federation.mediaProvider && typeof federation.mediaProvider === 'object'
-          ? federation.mediaProvider
-          : {};
+        const provider = isRecord(federation.mediaProvider) ? federation.mediaProvider : {};
         const enabled = provider.enabled === true;
         const maxQueuedJobs = Number.isInteger(provider.maxQueuedJobs) ? provider.maxQueuedJobs : 2;
         const models = normalizeSelectedModels(provider.audioModels);
@@ -155,16 +153,14 @@ export function SharingTab() {
 
   const handleStrictPullToggle = async (next) => {
     setStrictPullSaving(true);
-    // Same whole-slice replacement hazard as the provider save below.
+    // Same reachability precheck as the provider save below.
     const fresh = await getSettings({ silent: true }).catch(() => null);
     if (fresh === null) {
       setStrictPullSaving(false);
       toast.error('Could not read current settings — not saved');
       return;
     }
-    const base = isRecord(fresh.federation) ? fresh.federation : {};
-    const federation = { ...base, strictPullAuthorization: next };
-    const merged = await updateSettings({ federation }).catch(() => null);
+    const merged = await updateSettings({ federation: { strictPullAuthorization: next } }).catch(() => null);
     setStrictPullSaving(false);
     if (!merged) return;
     setStrictPull(next);
@@ -213,26 +209,20 @@ export function SharingTab() {
       ...Object.fromEntries(VISUAL_KINDS.map(({ kind, field }) => [field, visualSelections[kind]])),
     };
     setProviderSaving(true);
-    // /api/settings replaces the top-level `federation` slice wholesale, so this
-    // write has to carry everything else in it. Re-read immediately before
-    // saving rather than trusting the mount-time snapshot: the Instances page
-    // owns `mediaRouting`, and a Settings tab left open across a routing change
-    // would otherwise write back the slice as it looked before, silently
-    // clearing the route and sending unattended renders back to local.
-    // A failed read ABORTS: PUT /api/settings replaces the whole `federation`
-    // key, so writing the mount-time snapshot over it can erase a route the
-    // Instances page added while this tab sat open. A successful response with
-    // no `federation` key is a different thing entirely — a fresh install — and
-    // correctly bases on `{}`.
+    // /api/settings merges the `federation` slice per sub-key (#4703), so this
+    // write carries `mediaProvider` alone and can no longer clear the
+    // `mediaRouting` the Instances page owns.
+    //
+    // The read stays as a reachability precheck: without it an unreachable
+    // server would surface only as a generic save failure, and the user would
+    // not know their earlier edits were never loaded. A failed read aborts.
     const fresh = await getSettings({ silent: true }).catch(() => null);
     if (fresh === null) {
       setProviderSaving(false);
       toast.error('Could not read current settings — provider not saved');
       return;
     }
-    const base = isRecord(fresh.federation) ? fresh.federation : {};
-    const federation = { ...base, mediaProvider };
-    const merged = await updateSettings({ federation }, { silent: true }).catch(() => null);
+    const merged = await updateSettings({ federation: { mediaProvider } }, { silent: true }).catch(() => null);
     setProviderSaving(false);
     if (!merged) {
       toast.error('Failed to save media provider settings');

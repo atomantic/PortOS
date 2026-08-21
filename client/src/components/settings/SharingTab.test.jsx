@@ -42,7 +42,7 @@ describe('SharingTab — federated media provider (#4348)', () => {
     expect(screen.getByText(/instance password is required/i)).toBeInTheDocument();
   });
 
-  it('persists an allowlisted model while preserving the rest of the federation slice', async () => {
+  it('persists an allowlisted model while preserving unknown mediaProvider fields', async () => {
     getAuthStatus.mockResolvedValue({ enabled: true });
     getSettings.mockResolvedValue({
       federation: {
@@ -76,10 +76,10 @@ describe('SharingTab — federated media provider (#4348)', () => {
     fireEvent.click(providerToggle());
     fireEvent.click(screen.getByRole('button', { name: 'Save provider' }));
 
+    // #4703 — the patch carries `mediaProvider` alone; `strictPullAuthorization`
+    // and the unknown `somethingElse` are the server merge's job to carry.
     await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({
       federation: {
-        strictPullAuthorization: false,
-        somethingElse: 'keep-me',
         mediaProvider: {
           enabled: true,
           maxQueuedJobs: 2,
@@ -131,13 +131,13 @@ describe('SharingTab — federation pull authorization (#3659)', () => {
     await waitFor(() => expect(strictToggle().checked).toBe(true));
   });
 
-  it('carries the rest of the federation slice forward on save (shallow top-level merge)', async () => {
+  it('patches the toggle alone and leaves sibling sub-keys to the server merge', async () => {
     getSettings.mockResolvedValue({ federation: { strictPullAuthorization: false, somethingElse: 'keep-me' } });
     render(<SharingTab />);
     await waitFor(() => expect(strictToggle()).toBeInTheDocument());
     fireEvent.click(strictToggle());
     await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({
-      federation: { strictPullAuthorization: true, somethingElse: 'keep-me' },
+      federation: { strictPullAuthorization: true },
     }));
     await waitFor(() => expect(strictToggle().checked).toBe(true));
   });
@@ -211,11 +211,11 @@ describe('SharingTab — visual provider models', () => {
   });
 });
 
-// /api/settings replaces the whole `federation` slice, and the Instances page
-// owns mediaRouting — a tab left open across a routing change must not write
-// back the slice as it looked before.
-describe('SharingTab — writes against the freshest federation slice', () => {
-  it('preserves a route added elsewhere after this tab loaded', async () => {
+// #4703 — the Instances page owns `federation.mediaRouting`. This tab must not
+// name that sub-key at all: a patch that carried it would replace the routing
+// map with whatever this tab happened to read, however stale.
+describe('SharingTab — patches only the federation sub-keys it owns', () => {
+  it('never names mediaRouting in a provider save', async () => {
     getMediaShareCandidates.mockResolvedValue({ image: [], video: [] });
     getAuthStatus.mockResolvedValue({ enabled: true });
     // Start enabled, then turn sharing OFF — disabling needs no model selection,
@@ -247,11 +247,9 @@ describe('SharingTab — writes against the freshest federation slice', () => {
     fireEvent.click(toggle);
     fireEvent.click(screen.getByRole('button', { name: 'Save provider' }));
 
-    // Writing the mount-time snapshot would have dropped mediaRouting entirely,
-    // silently sending every unattended render back to local.
-    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({
-      federation: expect.objectContaining({ mediaRouting: { image: route } }),
-    }, { silent: true }));
+    await waitFor(() => expect(updateSettings).toHaveBeenCalled());
+    const [patch] = updateSettings.mock.calls.at(-1);
+    expect(Object.keys(patch.federation)).toEqual(['mediaProvider']);
   });
 });
 
