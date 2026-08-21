@@ -347,7 +347,7 @@ const MIN_PERIOD_RATIO = 0.8;
  * Returns { lag, strength } or null if motion is flat, too short, or lacks clear periodicity.
  */
 export function estimateMotionPeriod(signatures) {
-  if (!Array.isArray(signatures) || signatures.length < 8) return null;
+  if (!Array.isArray(signatures) || signatures.length < 9) return null;
   const motionSeries = [];
   for (let i = 0; i < signatures.length - 1; i++) {
     motionSeries.push(imageDistance(signatures[i], signatures[i + 1]));
@@ -430,14 +430,22 @@ export function estimateMotionPeriod(signatures) {
   return bestPeak;
 }
 
+/**
+ * Does the chosen cycle window match the estimated single-stride motion period?
+ *
+ * Accepts single-stride agreement (nearestK === 1) within either ±0.5 frames
+ * (integer quantization tolerance) or < 12% relative drift. Multi-stride (k >= 2)
+ * and sub-stride (k < 1) windows are rejected as disagreeing so the advisory
+ * alerts the reviewer when a double-speed or fractional stride was packed.
+ */
 export function isPeriodAgreement(cycleLength, lag) {
   if (!Number.isFinite(cycleLength) || !Number.isFinite(lag) || cycleLength <= 0 || lag <= 0) {
     return false;
   }
   const ratio = cycleLength / lag;
   const nearestK = Math.round(ratio);
-  if (nearestK >= 1) {
-    if (Math.abs(cycleLength - nearestK * lag) <= 0.5 || Math.abs(ratio - nearestK) < 0.12) return true;
+  if (nearestK === 1) {
+    if (Math.abs(cycleLength - lag) <= 0.5 || Math.abs(ratio - 1) < 0.12) return true;
   }
   return false;
 }
@@ -452,11 +460,6 @@ export function isPeriodAgreement(cycleLength, lag) {
 export function findCycleWindow(signatures, frameCount, minLength) {
   const n = signatures.length;
   let best = null; // [score, start, cycleLength, seam, motion]
-  let maxAdjacentMotion = 0;
-  for (let i = 0; i < n - 1; i++) {
-    const d = imageDistance(signatures[i], signatures[i + 1]);
-    if (d > maxAdjacentMotion) maxAdjacentMotion = d;
-  }
   // Widen the ceiling with frameCount so a larger requested count can still find
   // a long-enough gait window.
   const maxLen = Math.min(Math.max(18, frameCount + 6), n - 1);
@@ -475,8 +478,20 @@ export function findCycleWindow(signatures, frameCount, minLength) {
     }
   }
   if (!best) {
-    if (maxAdjacentMotion < MIN_CYCLE_MOTION) {
+    let maxAdjacentMotion = 0;
+    for (let i = 0; i < n - 1; i++) {
+      const d = imageDistance(signatures[i], signatures[i + 1]);
+      if (d > maxAdjacentMotion) maxAdjacentMotion = d;
+    }
+    if (maxAdjacentMotion < 0.01) {
       throw new Error('No detectable moving walk cycle in the source video (no motion detected)');
+    }
+    if (maxAdjacentMotion < MIN_CYCLE_MOTION) {
+      throw new Error('No detectable moving walk cycle in the source video (motion too faint to score as a gait cycle)');
+    }
+    const period = estimateMotionPeriod(signatures);
+    if (!period) {
+      throw new Error('No detectable moving walk cycle in the source video (motion has no detectable periodicity)');
     }
     throw new Error('No detectable moving walk cycle in the source video (motion has no detectable periodicity)');
   }

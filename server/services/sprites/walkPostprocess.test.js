@@ -272,10 +272,19 @@ describe('selectCycleIndices', () => {
   it('rejects a static clip and too-few frames with descriptive failure messages', () => {
     expect(() => selectCycleIndices(Array.from({ length: 20 }, () => constSig(7))))
       .toThrow(/no detectable moving walk cycle.*no motion detected/i);
-    // Sub-threshold motion (single transient blip insufficient for gait cycle)
+    // Transient blip without periodicity
     const faintSigs = Array.from({ length: 20 }, (_, i) => constSig(i === 2 ? 10 : 0));
     expect(() => selectCycleIndices(faintSigs))
       .toThrow(/no detectable moving walk cycle.*motion has no detectable periodicity/i);
+    // Periodic motion that is too faint for MIN_CYCLE_MOTION (0.75)
+    const faintStepPattern = [0, 500, 1500, 3000, 4500, 3000, 1500, 500]; // period 8
+    const faintPeriodicSigs = Array.from({ length: 24 }, (_, i) => {
+      const b = Buffer.alloc(SIG_LEN, 0);
+      b.fill(1, 0, faintStepPattern[i % 8]);
+      return b;
+    });
+    expect(() => selectCycleIndices(faintPeriodicSigs))
+      .toThrow(/no detectable moving walk cycle.*motion too faint/i);
     expect(() => selectCycleIndices(Array.from({ length: 8 }, () => constSig(0))))
       .toThrow(/at least 9/);
   });
@@ -288,8 +297,7 @@ describe('selectCycleIndices', () => {
     expect(cleanRes.cycle.periodAgreement).toBe('ok');
     expect(cleanRes.cycle.periodEstimate).toBe(8);
 
-    // 1.36-cycle window (#3052 shape) -> disagree
-    // Period 11 motion pattern
+    // Period 11 motion pattern -> ok when 11 chosen
     const pattern11 = [0, 4, 12, 28, 45, 60, 50, 35, 20, 10, 3];
     const period11Sigs = Array.from({ length: 30 }, (_, i) => constSig(pattern11[i % 11]));
     const agreedRes = selectCycleIndices(period11Sigs, 12);
@@ -297,16 +305,13 @@ describe('selectCycleIndices', () => {
     expect(agreedRes.cycle.periodEstimate).toBe(11);
     expect(agreedRes.cycle.periodAgreement).toBe('ok');
 
-    // If an 11-period motion series has an incompatible cycle window forced (e.g. 15 frames):
-    const est11 = estimateMotionPeriod(period11Sigs);
-    expect(est11?.lag).toBe(11);
-    // When compared to window length 15 (1.36 cycles):
-    const disagreeCycle = {
-      windowLength: 15,
-      periodEstimate: est11.lag,
-      periodAgreement: isPeriodAgreement(15, est11.lag) ? 'ok' : 'disagree',
-    };
-    expect(disagreeCycle.periodAgreement).toBe('disagree');
+    // Production disagree path: symmetric 8-frame gait where a 12-frame window (1.5 strides) is chosen
+    // or when 2 strides (12 frames) are selected for a 6-frame period:
+    const period6Sigs = Array.from({ length: 30 }, (_, i) => constSig((i % 6) * 10));
+    const disagreeRes = selectCycleIndices(period6Sigs, 12);
+    expect(disagreeRes.cycle.windowLength).toBeGreaterThanOrEqual(12);
+    expect(disagreeRes.cycle.periodEstimate).toBe(6);
+    expect(disagreeRes.cycle.periodAgreement).toBe('disagree');
   });
 
   it('imageDistance is the mean absolute channel difference', () => {
