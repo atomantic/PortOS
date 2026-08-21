@@ -62,6 +62,12 @@ export function sanitizeJob(job) {
     position: job.position,
     progress: job.progress,
     statusMsg: job.statusMsg,
+    // Geometry the gen module resolved to (#4588) — the render's own edges after
+    // any model-grid snapping, NOT the requested `params.width/height`. Lives on
+    // the envelope rather than in `params` because it is an OUTPUT of the run.
+    // Absent until the gen run reports it; `undefined` means "not reported",
+    // which a preview stage must not read as a geometry.
+    render: job.render,
     etaMs: job.etaMs,
     error: job.error,
     result: job.result,

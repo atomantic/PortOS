@@ -51,6 +51,7 @@ export * from './slashdoCatalog.js';
 export * from './videoFinish.js';
 export * from './videoGenParams.js';
 export * from './videoGenResolutions.js';
+export * from './videoStagePreview.js';
 export * from './videoTilingOptions.js';
 export * from './wrImageDefaults.js';
 

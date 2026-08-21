@@ -1285,6 +1285,13 @@ router.get('/active', (_req, res) => {
       generationId: job.id,
       status: job.status,
       position: job.position,
+      // Geometry the running render actually resolved to (#4588). `params`
+      // carries what the form ASKED for; videoGen/local.js snaps both edges
+      // down to the model's resolution grid, so a page that reloads mid-render
+      // has to size its preview stage by this, not by the request. `null` when
+      // the run hasn't reported it yet (still queued, or a runner that never
+      // does) — an explicit "unknown", never a guessed default.
+      render: job.render || null,
       params: pickJobParams(job),
     },
   });

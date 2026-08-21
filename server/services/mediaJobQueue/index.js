@@ -750,6 +750,23 @@ function makeGenDispatcher(emitter, job, handlers) {
       handlers.progress(payload);
     }
   };
+  // The gen module's `started` event carries the geometry the render actually
+  // resolved to — for video, the requested edges snapped DOWN to the model's
+  // resolution grid (videoGen/local.js), so it is routinely not what the client
+  // submitted. A live preview stage has to size itself by the resolved edges or
+  // a portrait render renders into a landscape box. The queue's own `started`
+  // SSE frame is broadcast before the gen run begins and cannot carry this, so
+  // it rides its own frame type (#4588). Guarded on two finite positive edges:
+  // a runner that reports no geometry emits no frame at all, rather than a
+  // zero/NaN ratio the client would have to defend against.
+  const onStarted = (e) => {
+    if (e.generationId !== job.id) return;
+    const width = Number(e.width);
+    const height = Number(e.height);
+    if (!Number.isFinite(width) || width <= 0) return;
+    if (!Number.isFinite(height) || height <= 0) return;
+    handlers.renderMeta?.({ width, height });
+  };
   const onStatus = (e) => {
     // Optional explicit `status` event for gens that want to push a status
     // line independent of progress. Unused today; here so a future emitter
@@ -763,12 +780,14 @@ function makeGenDispatcher(emitter, job, handlers) {
   const onFailed = (e) => { if (e.generationId === job.id) handlers.failed({ error: e.error }); };
   return {
     attach() {
+      emitter.on('started', onStarted);
       emitter.on('progress', onProgress);
       emitter.on('status', onStatus);
       emitter.on('completed', onCompleted);
       emitter.on('failed', onFailed);
     },
     detach() {
+      emitter.off('started', onStarted);
       emitter.off('progress', onProgress);
       emitter.off('status', onStatus);
       emitter.off('completed', onCompleted);
@@ -882,6 +901,18 @@ async function runJob(job) {
       }
       if (didUpdatePersistedProgress) scheduleProgressPersist();
       broadcastSse(sseEntry, payload);
+    },
+    // Geometry the render resolved to (#4588) — see makeGenDispatcher's
+    // onStarted. `retain: false` because there is exactly ONE replay slot on
+    // the SSE entry and it must hold the frame that says what the run is doing;
+    // a reconnecting or reloading client recovers the geometry from the job
+    // projection instead, which is why it is persisted here as well.
+    renderMeta: ({ width, height }) => {
+      if (job.terminating || job.status !== 'running') return;
+      if (job.render?.width === width && job.render?.height === height) return;
+      job.render = { width, height };
+      scheduleProgressPersist();
+      broadcastSse(sseEntry, { type: 'render-meta', width, height }, { retain: false });
     },
     completed: (payload) => {
       trackTerminalOperation(

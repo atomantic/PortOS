@@ -393,6 +393,56 @@ describe('mediaJobQueue', () => {
     await waitFor(() => mediaJobQueue.getJob(job.jobId)?.status === 'completed');
   });
 
+  it('forwards the resolved render geometry, isolated per job and out of the replay slot', async () => {
+    // #4588: a live preview stage must size itself by the geometry the render
+    // RESOLVED to (videoGen snaps both edges down to the model's grid), not by
+    // what the form submitted. The queue's own `started` SSE frame is broadcast
+    // before the gen run begins, so the geometry rides its own frame type.
+    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'geometry', width: 720, height: 484 } });
+    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+    await waitFor(() => mediaJobQueue.getJob(job.jobId)?.status === 'running');
+
+    const frames = [];
+    const makeRes = (sink) => ({
+      writeHead: () => {},
+      write: (msg) => {
+        for (const line of msg.split('\n')) {
+          if (line.startsWith('data: ')) sink.push(JSON.parse(line.slice(6)));
+        }
+      },
+      end: () => {},
+      req: { on: () => {} },
+    });
+    expect(mediaJobQueue.attachSseClient(job.jobId, makeRes(frames))).toBe(true);
+
+    // A `started` event for an unrelated render must not stamp this job.
+    videoGenEvents.emit('started', { generationId: 'some-other-job', width: 1920, height: 1080 });
+    // Neither must a runner that reports no usable geometry — absent/zero edges
+    // emit no frame at all rather than a ratio the client has to defend against.
+    videoGenEvents.emit('started', { generationId: job.jobId, totalSteps: 30 });
+    videoGenEvents.emit('started', { generationId: job.jobId, width: 0, height: 480 });
+    expect(frames.some((f) => f.type === 'render-meta')).toBe(false);
+    expect(mediaJobQueue.getJob(job.jobId)?.render).toBeUndefined();
+
+    videoGenEvents.emit('started', { generationId: job.jobId, totalSteps: 30, width: 704, height: 480 });
+    await waitFor(() => frames.some((f) => f.type === 'render-meta'));
+    expect(frames.find((f) => f.type === 'render-meta')).toEqual({ type: 'render-meta', width: 704, height: 480 });
+    // Persisted on the job so a reload recovers it — the SSE entry keeps only
+    // ONE replay frame and it must hold what the run is doing.
+    expect(mediaJobQueue.getJob(job.jobId).render).toEqual({ width: 704, height: 480 });
+
+    videoGenEvents.emit('progress', { generationId: job.jobId, progress: 0.25 });
+    await waitFor(() => frames.some((f) => f.type === 'progress'));
+
+    const replayed = [];
+    expect(mediaJobQueue.attachSseClient(job.jobId, makeRes(replayed))).toBe(true);
+    expect(replayed).toHaveLength(1);
+    expect(replayed[0]).toMatchObject({ type: 'progress', progress: 0.25 });
+
+    videoGenEvents.emit('completed', { generationId: job.jobId, filename: `${job.jobId}.mp4` });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId)?.status === 'completed');
+  });
+
   it('debounce-persists live progress before a terminal transition', async () => {
     const file = join(tempDataDir, 'media-jobs.json');
     const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'restart snapshot' } });
