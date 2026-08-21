@@ -1,16 +1,19 @@
 /**
  * FableLoom canvas — the visual editor for one episode's scene graph.
  *
- * Renders scene nodes as SVG cards (BFS-layered by `layoutLoomGraph`,
- * author-dragged positions win) with intent-labeled transition edges. Click
- * selects a scene (selection lives in the URL — the parent navigates); drag
- * repositions it and persists `pos` on release. The wrapper owns scrolling in
- * both axes so a wide graph pans instead of clipping.
+ * Renders scene nodes as SVG cards with intent-labeled transition edges —
+ * both the placement and the edge routing come from `layoutLoomGraph`, which
+ * layers the graph, sends backward edges through return lanes under the cards,
+ * and de-collides the labels. Click selects a scene (selection lives in the URL
+ * — the parent navigates); drag repositions it and persists `pos` on release.
+ * Selecting a scene dims every edge that doesn't touch it, so one path stays
+ * readable in a dense graph. The wrapper owns scrolling in both axes so a wide
+ * graph pans instead of clipping.
  */
 
 import { useMemo, useRef } from 'react';
 import { Play, Flag } from 'lucide-react';
-import { layoutLoomGraph, loomEdgePath, LOOM_NODE_W, LOOM_NODE_H } from '../../lib/loomLayout';
+import { layoutLoomGraph, LOOM_EDGE_LABEL_MAX, LOOM_NODE_W, LOOM_NODE_H } from '../../lib/loomLayout';
 
 const DRAG_THRESHOLD_PX = 4;
 
@@ -27,7 +30,7 @@ export default function LoomCanvas({ episode, selectedNodeId, onSelectNode, onMo
   const dragRef = useRef(null);
 
   const layout = useMemo(() => layoutLoomGraph(episode), [episode]);
-  const { positions } = layout;
+  const { positions, edges } = layout;
 
   const nodes = episode?.nodes || [];
 
@@ -79,25 +82,28 @@ export default function LoomCanvas({ episode, selectedNodeId, onSelectNode, onMo
     <div className="overflow-auto h-full w-full" data-testid="loom-canvas">
       <svg width={width} height={height} className="block select-none touch-none">
         <g>
-          {nodes.flatMap((node) => (node.transitions || []).map((tr) => {
-            const from = positions[node.id];
-            const to = positions[tr.targetNodeId];
-            if (!from || !to) return null;
-            const { d, labelX, labelY } = loomEdgePath(from, to);
-            const active = node.id === selectedNodeId;
+          {edges.map((edge) => {
+            // With a scene selected, its own edges come forward and the rest
+            // recede — the only way to read one path through a dense graph.
+            const connected = edge.sourceId === selectedNodeId || edge.targetId === selectedNodeId;
+            const outgoing = edge.sourceId === selectedNodeId;
+            // Labels paint their stroke FIRST, which draws each one its own
+            // background out of the page color — a path running under a label
+            // then doesn't strike through the text.
             return (
-              <g key={tr.id} className={active ? 'opacity-100' : 'opacity-70'}>
-                <path d={d} fill="none" strokeWidth={active ? 2 : 1.5}
-                  className={active ? 'stroke-port-accent' : 'stroke-port-border'} />
-                {tr.intent && (
-                  <text x={labelX} y={labelY - 6} textAnchor="middle"
-                    className="fill-port-text-muted text-[10px] pointer-events-none">
-                    {truncate(tr.intent, 28)}
+              <g key={edge.id} className={!selectedNodeId ? 'opacity-70' : connected ? 'opacity-100' : 'opacity-25'}>
+                <path d={edge.d} fill="none" strokeWidth={connected ? 2 : 1.5}
+                  className={outgoing ? 'stroke-port-accent' : 'stroke-port-border'} />
+                {edge.intent && (
+                  <text x={edge.labelX} y={edge.labelY - 6} textAnchor="middle"
+                    style={{ paintOrder: 'stroke' }} strokeWidth={3} strokeLinejoin="round"
+                    className="fill-port-text-muted stroke-port-bg text-[10px] pointer-events-none">
+                    {truncate(edge.intent, LOOM_EDGE_LABEL_MAX)}
                   </text>
                 )}
               </g>
             );
-          }))}
+          })}
         </g>
         <g>
           {nodes.map((node) => {
