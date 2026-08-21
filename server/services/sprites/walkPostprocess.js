@@ -436,11 +436,6 @@ export function isPeriodAgreement(cycleLength, lag) {
   if (nearestK >= 1) {
     if (Math.abs(cycleLength - nearestK * lag) <= 0.5 || Math.abs(ratio - nearestK) < 0.12) return true;
   }
-  const invRatio = lag / cycleLength;
-  const nearestInvK = Math.round(invRatio);
-  if (nearestInvK >= 1) {
-    if (Math.abs(lag - nearestInvK * cycleLength) <= 0.5 || Math.abs(invRatio - nearestInvK) < 0.12) return true;
-  }
   return false;
 }
 
