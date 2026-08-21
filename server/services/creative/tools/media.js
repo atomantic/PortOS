@@ -5,7 +5,7 @@
  */
 
 import { z } from 'zod';
-import { enqueueUnattendedMediaJob } from '../../federatedMedia/defaultRouting.js';
+import { enqueueUnattendedMediaJob, hasConfiguredMediaRoute } from '../../federatedMedia/defaultRouting.js';
 import { ASPECT_PRESETS, QUALITY_PRESETS, presetToRenderParams } from '../../../lib/creativeDirectorPresets.js';
 import { getSettings } from '../../settings.js';
 import { IMAGE_GEN_MODE, resolveQueueImageMode } from '../../imageGen/modes.js';
@@ -356,7 +356,16 @@ const mediaTool = (kind, label) => ({
       // Gen's visible controls then snap the autonomous job onto that model's
       // canvas/FPS/frame options and remove controls the UI disables (for
       // example MiniMax H3's negative prompt and sampler knobs).
-      if (kind === 'video' && params?.mode !== VIDEO_GEN_MODE.GROK) {
+      //
+      // SKIPPED for a routed job: the local model is not the one rendering, so
+      // snapping to its catalog is meaningless — and actively harmful, because
+      // it DELETES controls that model doesn't support. A dropped
+      // `disableAudio: true` is invisible to the route's own guard, which would
+      // then happily ship a job the peer renders with audio; a dropped
+      // `negativePrompt` just silently changes the render.
+      if (kind === 'video'
+        && params?.mode !== VIDEO_GEN_MODE.GROK
+        && !(await hasConfiguredMediaRoute('video'))) {
         params = reconcileVideoParamsWithModel(params, project);
       }
     }

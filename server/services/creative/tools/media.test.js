@@ -531,3 +531,34 @@ describe('federated default provider routing (#4348)', () => {
     expect(enqueueJob).not.toHaveBeenCalled();
   });
 });
+
+describe('routed video keeps the controls its guard inspects (#4348)', () => {
+  const route = { peerId: 'peer-1', engine: 'comfy', modelId: 'wan-remote' };
+
+  // reconcileVideoParamsWithModel snaps a job onto the LOCAL model's catalog and
+  // DELETES controls that model doesn't support. For a routed job the local
+  // model isn't the one rendering, and a dropped disableAudio is invisible to
+  // the route's own guard — which would then ship a job the peer renders WITH
+  // audio, the exact opposite of what was asked for.
+  it('does not snap a routed job onto the local model, so disableAudio still reaches the guard', async () => {
+    getSettings.mockResolvedValue({ federation: { mediaRouting: { video: route } } });
+    getProject.mockResolvedValue({
+      id: 'cd-1', aspectRatio: '16:9', quality: 'standard', targetDurationSeconds: 10,
+      modelId: 'minimax-h3-example',
+    });
+
+    await expect(run('media_enqueueVideoJob', { prompt: 'p', disableAudio: true }, { projectId: 'cd-1' }))
+      .rejects.toMatchObject({ code: 'MEDIA_PROVIDER_INPUT_UNSUPPORTED' });
+    expect(enqueueJob).not.toHaveBeenCalled();
+  });
+
+  it('still reconciles against the local model when nothing is routed', async () => {
+    getSettings.mockResolvedValue({});
+    getProject.mockResolvedValue({
+      id: 'cd-1', aspectRatio: '16:9', quality: 'standard', targetDurationSeconds: 10,
+    });
+
+    await run('media_enqueueVideoJob', { prompt: 'p', disableAudio: true }, { projectId: 'cd-1' });
+    expect(enqueued().params.disableAudio).toBe(true);
+  });
+});
