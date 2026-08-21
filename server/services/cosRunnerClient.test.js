@@ -307,6 +307,26 @@ describe('cosRunnerClient', () => {
       expect(err.status).toBe(400);
     });
 
+    it('reads a 5xx as AMBIGUOUS — the runner forks the child before its final state write', async () => {
+      // `POST /spawn` registers and spawns, THEN persists state and answers. An
+      // internal error after that point is answered with a process already
+      // running, so a 5xx is no more a refusal than a dropped socket is.
+      routeFetch({ spawn: mockResponse(false, { error: 'state write failed' }, 500), agents: [liveCliAgent] });
+
+      const result = await spawnAgentViaRunner({ agentId: 'a1' });
+
+      expect(result).toEqual({ pid: 4242, adopted: true, adoptedReason: 'state write failed' });
+    });
+
+    it('still fails a 5xx the runner cannot back with a live agent', async () => {
+      routeFetch({ spawn: mockResponse(false, { error: 'state write failed' }, 500), agents: [] });
+
+      const err = await spawnAgentViaRunner({ agentId: 'a1' }).catch(e => e);
+
+      expect(err.message).toBe('state write failed');
+      expect(classifyRunnerSpawnFailure(err)).toBe(RUNNER_SPAWN_AMBIGUOUS);
+    });
+
     it('marks a transport failure as AMBIGUOUS, not a refusal', async () => {
       // No answer at all: the runner may have accepted, forked the child, and
       // lost only the acknowledgement. Recording this as a refusal is what
