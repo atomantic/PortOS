@@ -165,6 +165,103 @@ export function initCosRunnerConnection() {
 }
 
 /**
+ * How a runner SPAWN rpc failed (#4615).
+ *
+ * `refused` — the runner ANSWERED, with a non-2xx: it saw the request and
+ * declined it (command missing from its allowlist, malformed args, an agent id
+ * already running). No child exists and none ever will, so the caller may
+ * safely record that the run never started.
+ *
+ * `ambiguous` — there was no answer at all: a socket reset, the request
+ * timeout, or a response lost after the runner had already accepted and forked
+ * the child. "The runner never got it" and "the runner took it and the
+ * acknowledgement was lost" are indistinguishable from this side, so this must
+ * never be recorded as a refusal — that is what leaves a live agent running in
+ * the runner with nothing on the server tracking it, surfacing ~15 minutes
+ * later as an orphan attributed to the wrong cause.
+ *
+ * Anything UNLABELED classifies as ambiguous: only an explicit non-2xx is
+ * evidence of a refusal, so absence of evidence must not become one.
+ */
+export const RUNNER_SPAWN_REFUSED = 'refused';
+export const RUNNER_SPAWN_AMBIGUOUS = 'ambiguous';
+
+/** @returns {'refused'|'ambiguous'} how a spawn rpc rejection should be read */
+export const classifyRunnerSpawnFailure = (err) =>
+  err?.spawnOutcome === RUNNER_SPAWN_REFUSED ? RUNNER_SPAWN_REFUSED : RUNNER_SPAWN_AMBIGUOUS;
+
+const refusedSpawn = (message, status) =>
+  Object.assign(new Error(message), { spawnOutcome: RUNNER_SPAWN_REFUSED, status });
+
+const ambiguousSpawn = (err) => {
+  const error = err instanceof Error ? err : new Error(String(err));
+  error.spawnOutcome = RUNNER_SPAWN_AMBIGUOUS;
+  return error;
+};
+
+/**
+ * Run a spawn POST, splitting a transport failure from an answer.
+ * `{ response }` — the runner answered (2xx or not). `{ transportError }` — it
+ * did not, which is the ambiguous case above.
+ */
+const postSpawn = (path, body) =>
+  fetchWithTimeout(`${COS_RUNNER_URL}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }, 60000).then(
+    response => ({ response }),
+    err => ({ transportError: ambiguousSpawn(err) })
+  );
+
+/**
+ * Does the runner have this agent after all? (#4615)
+ *
+ * The runner's own `/agents` view is the authority on what it is running —
+ * `syncRunnerAgents` already adopts from it after a server restart, and this is
+ * the same adoption a half-second earlier. A probe that cannot be answered
+ * returns null: an unanswerable question is not evidence the agent is alive,
+ * and the caller falls through to the failure it already had.
+ */
+const findLiveRunnerAgent = async (agentId) => {
+  const agents = await getActiveAgentsFromRunner().catch(err => {
+    console.error(`🔌 CoS runner spawn reconcile failed for ${agentId}: ${err.message}`);
+    return [];
+  });
+  return (Array.isArray(agents) ? agents : []).find(agent => agent?.id === agentId) || null;
+};
+
+/**
+ * Resolve an ambiguous spawn failure by asking the runner (#4615).
+ *
+ * `adopt(live)` builds the caller's normal success value from the runner's
+ * record, or returns null when the record can't be the agent we spawned (a
+ * `kind` mismatch). Adoption is stamped so the caller can record in the ledger
+ * that this handoff was recovered rather than acknowledged. When the runner
+ * does not have the agent, the original transport error is rethrown and the
+ * caller's existing failure path runs unchanged.
+ */
+const reconcileAmbiguousSpawn = async (agentId, transportError, adopt) => {
+  const live = await findLiveRunnerAgent(agentId);
+  const adopted = live ? adopt(live) : null;
+  if (!adopted) throw transportError;
+  console.log(`🔁 CoS runner spawn ack lost for ${agentId} (${transportError.message}); adopted its live process (PID: ${live.pid})`);
+  return { ...adopted, adopted: true, adoptedReason: transportError.message };
+};
+
+/**
+ * Re-key the local relay onto the session id the runner reports and hand back a
+ * proxy over the SAME handler state, so the `onData`/`onExit` callbacks
+ * registered before the lost acknowledgement keep receiving the live PTY.
+ */
+const adoptTuiRelay = (live, sessionId, state) => {
+  const liveSessionId = live.sessionId || sessionId;
+  if (liveSessionId !== sessionId) tuiSessions.delete(sessionId);
+  tuiSessions.set(liveSessionId, state);
+  return createTuiProxy(liveSessionId, live.pid ?? null, state);
+};
+
+/**
  * Spawn a TUI PTY in the durable CoS runner and return a node-pty-compatible
  * proxy used by the existing Shell/TUI orchestration.
  */
@@ -177,18 +274,23 @@ export async function spawnTuiSessionViaRunner(options) {
     pendingControls: [],
   };
   tuiSessions.set(sessionId, state);
-  const response = await fetchWithTimeout(`${COS_RUNNER_URL}/spawn-tui`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...requestOptions, sessionId }),
-  }, 60000).catch(err => {
-    tuiSessions.delete(sessionId);
-    throw err;
-  });
+  const { response, transportError } = await postSpawn('/spawn-tui', { ...requestOptions, sessionId });
+  if (transportError) {
+    // The relay state stays registered across the probe: if the runner DOES
+    // have the PTY, its `tui:output` events must still find these handlers.
+    return reconcileAmbiguousSpawn(
+      requestOptions.agentId || sessionId,
+      transportError,
+      live => (live.kind === 'tui' ? adoptTuiRelay(live, sessionId, state) : null)
+    ).catch(err => {
+      tuiSessions.delete(sessionId);
+      throw err;
+    });
+  }
   if (!response.ok) {
     tuiSessions.delete(sessionId);
     const error = await readRunnerJson(response);
-    throw new Error(error.error || 'Failed to spawn runner-owned TUI session');
+    throw refusedSpawn(error.error || 'Failed to spawn runner-owned TUI session', response.status);
   }
 
   const result = await readRunnerJson(response);
@@ -291,25 +393,31 @@ export async function spawnAgentViaRunner(options) {
     claudePath
   } = options;
 
-  const response = await fetchWithTimeout(`${COS_RUNNER_URL}/spawn`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+  const { response, transportError } = await postSpawn('/spawn', {
+    agentId,
+    taskId,
+    prompt,
+    workspacePath,
+    model,
+    envVars,
+    cliCommand,
+    cliArgs,
+    claudePath
+  });
+
+  // No answer at all — the child may already be running. Ask before letting the
+  // caller record that the run never started (#4615).
+  if (transportError) {
+    return reconcileAmbiguousSpawn(
       agentId,
-      taskId,
-      prompt,
-      workspacePath,
-      model,
-      envVars,
-      cliCommand,
-      cliArgs,
-      claudePath
-    }),
-  }, 60000);
+      transportError,
+      live => (live.kind === 'tui' ? null : { pid: live.pid ?? null })
+    );
+  }
 
   if (!response.ok) {
     const error = await readRunnerJson(response);
-    throw new Error(error.error || 'Failed to spawn agent');
+    throw refusedSpawn(error.error || 'Failed to spawn agent', response.status);
   }
 
   return readRunnerJson(response);

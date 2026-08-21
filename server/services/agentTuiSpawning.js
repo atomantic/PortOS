@@ -27,7 +27,7 @@ import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { normalizeReviewers } from '../lib/validation.js';
 import * as git from './git.js';
 import { resolveReviewLoopOptions } from './codeReview.js';
-import { spawnTuiSessionViaRunner } from './cosRunnerClient.js';
+import { spawnTuiSessionViaRunner, classifyRunnerSpawnFailure, RUNNER_SPAWN_REFUSED, RUNNER_SPAWN_AMBIGUOUS } from './cosRunnerClient.js';
 import { resolveInteractiveShell } from '../lib/interactiveShellResolver.js';
 import { formatShellCommandLine } from '../lib/shellCd.js';
 import { isClaudeCommand, applyLeanClaudeArgs, providerSuppliesGithubToken } from '../lib/providerModels.js';
@@ -1229,17 +1229,28 @@ export async function spawnTuiAgent({
       ? 'command-not-found'
       : useDurableRunner ? 'spawn-rejected' : 'spawn-error';
     if (useDurableRunner) {
-      // A handoff the runner REFUSED (#4540), recorded like the CLI path's. A
+      // A handoff that did not land (#4540), recorded like the CLI path's. A
       // LOCAL PTY that won't open is a host problem, not a handoff, so it is
       // deliberately not recorded here.
+      //
+      // `accepted: false` is reserved for an explicit refusal. An ambiguous
+      // transport failure records the `null` sentinel instead — the spawn rpc
+      // already asked the runner whether it has the PTY (and would have adopted
+      // it), so what is unknown here is the CAUSE, not the outcome (#4615).
+      const refused = classifyRunnerSpawnFailure(err) === RUNNER_SPAWN_REFUSED;
       await appendRunEvent({
         kind: 'run.handoff',
         runId,
         agentId,
         taskId: task.id,
-        eventId: `handoff:${agentId}:${runId || 'no-run'}:rejected`,
-        // Same refusal-vs-lost-acknowledgement conflation as the CLI path (#4615).
-        data: { to: 'none', accepted: false, kind: 'tui', reason: message },
+        eventId: `handoff:${agentId}:${runId || 'no-run'}:${refused ? 'rejected' : 'unconfirmed'}`,
+        data: {
+          to: 'none',
+          accepted: refused ? false : null,
+          outcome: refused ? RUNNER_SPAWN_REFUSED : RUNNER_SPAWN_AMBIGUOUS,
+          kind: 'tui',
+          reason: message,
+        },
       });
     }
     await finish({
@@ -1262,8 +1273,21 @@ export async function spawnTuiAgent({
       agentId,
       taskId: task.id,
       eventId: `handoff:${agentId}:${runId || 'no-run'}:cos-runner`,
-      data: { to: 'cos-runner', accepted: true, kind: 'tui', providerId: provider.id, sessionId: session.sessionId ?? null },
+      data: {
+        to: 'cos-runner',
+        accepted: true,
+        kind: 'tui',
+        providerId: provider.id,
+        sessionId: session.sessionId ?? null,
+        // The handoff landed but its acknowledgement was lost; the relay was
+        // re-attached to the PTY the runner already had (#4615).
+        ...(session.adopted ? { outcome: RUNNER_SPAWN_AMBIGUOUS, adopted: true, reason: session.adoptedReason ?? null } : {}),
+      },
     });
+    if (session.adopted) {
+      appendLine(`🔁 Spawn acknowledgement lost (${session.adoptedReason}) — re-attached to the live runner PTY`);
+      emitLog('warn', `TUI agent ${agentId} spawn acknowledgement was lost; adopted the live runner PTY`, { agentId, taskId: task.id });
+    }
   }
 
   // A durable runner can emit tui:exit before its spawn POST response reaches

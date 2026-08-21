@@ -41,7 +41,7 @@ import { registerAgent, updateAgent, completeAgent } from './cosAgentLifecycle.j
 // metadata.json back). That is megabytes and a disk write on a long TUI run —
 // paid to read one string. Same trap documented at agentWorktreeCleanup.js:562.
 import { getConfig, updateTask, getTaskById, getAgentRecord } from './cos.js';
-import { spawnAgentViaRunner, getRunnerHealth } from './cosRunnerClient.js';
+import { spawnAgentViaRunner, getRunnerHealth, classifyRunnerSpawnFailure, RUNNER_SPAWN_REFUSED, RUNNER_SPAWN_AMBIGUOUS } from './cosRunnerClient.js';
 import { MAX_TOTAL_SPAWNS, normalizeReviewers } from '../lib/validation.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
 import { isRetryHeld } from '../lib/taskRetryHold.js';
@@ -847,6 +847,12 @@ export async function spawnViaRunner(agentId, task, opts) {
   // chain so the TASK is transitioned too — see the catch below. (The TUI arm of
   // this dispatch owns the equivalent handling inside spawnTuiAgent, where
   // `finish()` is the idempotent finalizer that runs the same chain.)
+  //
+  // A throw here therefore means "no child exists": `spawnAgentViaRunner`
+  // reconciles an ambiguous transport failure against the runner's own /agents
+  // view first and RESOLVES (with `adopted: true`) when the spawn had in fact
+  // landed, so the `runnerAgents` entry set above survives and this run is never
+  // finalized as a rejection it cannot know occurred (#4615).
   let result;
   try {
     result = await spawnAgentViaRunner({
@@ -871,9 +877,14 @@ export async function spawnViaRunner(agentId, task, opts) {
     });
   } catch (err) {
     const message = err?.message || String(err);
+    // Reaching here means the spawn rpc's own reconcile found no agent in the
+    // runner, so no child is running under this id either way. What is still
+    // unknown for an ambiguous failure is WHY — see RUNNER_SPAWN_AMBIGUOUS
+    // (#4615).
+    const refused = classifyRunnerSpawnFailure(err) === RUNNER_SPAWN_REFUSED;
     clearTimeout(agentInfo.initializationTimeout);
     runnerAgents.delete(agentId);
-    // A handoff that the runner REFUSED (#4540). Recorded as its own boundary
+    // A handoff that did not land (#4540). Recorded as its own boundary
     // rather than left to the failure the finalize below records: "the run
     // never started because the runner would not take it" and "the run started
     // and failed" produce the same terminal record today, and only the ledger
@@ -883,13 +894,19 @@ export async function spawnViaRunner(agentId, task, opts) {
       runId,
       agentId,
       taskId: task.id,
-      eventId: `handoff:${agentId}:${runId || 'no-run'}:rejected`,
-    // `accepted: false` mirrors what the finalize below already concludes. Note
-    // that the runner spawn path cannot currently tell an explicit refusal from
-    // an ambiguous transport failure (a lost acknowledgement for a spawn the
-    // runner DID accept) — a pre-existing conflation this event inherits rather
-    // than introduces. Tracked in #4615.
-      data: { to: 'none', accepted: false, reason: message },
+      eventId: `handoff:${agentId}:${runId || 'no-run'}:${refused ? 'rejected' : 'unconfirmed'}`,
+      // `accepted: false` is a claim only an explicit refusal earns. An
+      // ambiguous transport failure never got an answer, so it records the
+      // `null` sentinel — "not known to have been accepted" — rather than
+      // asserting a rejection the server cannot actually have observed. A
+      // diagnostic that reads a lost acknowledgement as a refusal sends the
+      // reader after the wrong cause (#4615).
+      data: {
+        to: 'none',
+        accepted: refused ? false : null,
+        outcome: refused ? RUNNER_SPAWN_REFUSED : RUNNER_SPAWN_AMBIGUOUS,
+        reason: message,
+      },
     });
     releaseAgentLane({ agentId, success: false, exitCode: 1, executionId, laneName, errorExecutionMessage: message });
     // Finalize through the SAME chokepoint every other ending uses (#3632).
@@ -959,12 +976,26 @@ export async function spawnViaRunner(agentId, task, opts) {
     agentId,
     taskId: task.id,
     eventId: `handoff:${agentId}:${runId || 'no-run'}:cos-runner`,
-    data: { to: 'cos-runner', accepted: true, pid: result.pid ?? null, providerId: provider.id, laneName: laneName ?? null },
+    data: {
+      to: 'cos-runner',
+      accepted: true,
+      pid: result.pid ?? null,
+      providerId: provider.id,
+      laneName: laneName ?? null,
+      // The acknowledgement was lost and the runner turned out to have the
+      // agent anyway (#4615). The handoff DID land, so `accepted` stays true —
+      // `adopted` is what says the server learned it by asking rather than by
+      // being told.
+      ...(result.adopted ? { outcome: RUNNER_SPAWN_AMBIGUOUS, adopted: true, reason: result.adoptedReason ?? null } : {}),
+    },
   });
 
   // Store PID in persisted state for zombie detection
   await updateAgent(agentId, { pid: result.pid });
 
+  if (result.adopted) {
+    emitLog('warn', `Agent ${agentId} spawn acknowledgement was lost (${result.adoptedReason}); adopted the live runner process (PID: ${result.pid})`, { agentId, taskId: task.id, pid: result.pid });
+  }
   emitLog('info', `Agent ${agentId} spawned via runner (PID: ${result.pid})`, { agentId, pid: result.pid });
   return agentId;
 }

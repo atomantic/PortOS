@@ -14,7 +14,11 @@ vi.mock('./shell.js', () => ({
   registerExternalSession: vi.fn(),
 }));
 
-vi.mock('./cosRunnerClient.js', () => ({
+// Only the spawn rpc is faked. The refusal/ambiguity classifier is the real one
+// (importOriginal): re-implementing it here would make the ledger assertions
+// below agree with a copy of the rule rather than with the rule (#4615).
+vi.mock('./cosRunnerClient.js', async (importOriginal) => ({
+  ...(await importOriginal()),
   spawnTuiSessionViaRunner: vi.fn(),
 }));
 
@@ -216,7 +220,7 @@ import { readFile } from 'fs/promises';
 import { execFile } from '../lib/childProcess.js';
 import { buildTuiSpawnConfig, spawnTuiAgent } from './agentTuiSpawning.js';
 import { releaseRetryHold } from './agentWorktreeCleanup.js';
-import { spawnTuiSessionViaRunner } from './cosRunnerClient.js';
+import { spawnTuiSessionViaRunner, RUNNER_SPAWN_REFUSED, RUNNER_SPAWN_AMBIGUOUS } from './cosRunnerClient.js';
 import * as shellService from './shell.js';
 import * as agentLifecycle from './agentFinalization.js';
 import { ensureOllamaAgentContext } from './ollamaAgentContext.js';
@@ -2080,6 +2084,74 @@ describe('spawnTuiAgent runtime', () => {
           error: expect.stringContaining('did not pass the CoS Runner capability check'),
         })
       );
+    });
+
+    // The ledger has to carry the outcome it actually knows (#4615). A runner
+    // that ANSWERED with a refusal and a transport failure that answered
+    // nothing are different facts, and a diagnostic that reads the second as
+    // the first sends the reader after a rejection that never happened.
+    const handoffs = () => appendRunEvent.mock.calls.map(([e]) => e).filter((e) => e.kind === 'run.handoff');
+
+    it('records a refused handoff as accepted:false', async () => {
+      vi.mocked(spawnTuiSessionViaRunner).mockRejectedValueOnce(
+        Object.assign(new Error('Command not allowed: grok'), { spawnOutcome: RUNNER_SPAWN_REFUSED, status: 400 }),
+      );
+
+      await runSpawn({ useDurableRunner: true });
+
+      expect(handoffs()).toEqual([expect.objectContaining({
+        eventId: 'handoff:agent-1:run-1:rejected',
+        data: expect.objectContaining({ to: 'none', accepted: false, outcome: RUNNER_SPAWN_REFUSED, kind: 'tui' }),
+      })]);
+    });
+
+    it('records an ambiguous handoff as accepted:null with the transport reason', async () => {
+      vi.mocked(spawnTuiSessionViaRunner).mockRejectedValueOnce(
+        Object.assign(new TypeError('fetch failed'), { spawnOutcome: RUNNER_SPAWN_AMBIGUOUS }),
+      );
+
+      await runSpawn({ useDurableRunner: true });
+
+      expect(handoffs()).toEqual([expect.objectContaining({
+        eventId: 'handoff:agent-1:run-1:unconfirmed',
+        data: expect.objectContaining({
+          to: 'none',
+          accepted: null,
+          outcome: RUNNER_SPAWN_AMBIGUOUS,
+          kind: 'tui',
+          reason: 'fetch failed',
+        }),
+      })]);
+    });
+
+    it('records an adopted PTY as an accepted handoff and keeps the run alive', async () => {
+      // The spawn rpc re-attached the relay to a PTY the runner already had, so
+      // this is a live run — it must not be finalized as a failed spawn.
+      const spawnDefault = vi.mocked(spawnTuiSessionViaRunner).getMockImplementation();
+      vi.mocked(spawnTuiSessionViaRunner).mockImplementationOnce(async (options) => ({
+        ...(await spawnDefault(options)),
+        adopted: true,
+        adoptedReason: 'fetch failed',
+      }));
+
+      const spawnPromise = runSpawn({ useDurableRunner: true });
+      await flushMicrotasks();
+
+      expect(handoffs()).toEqual([expect.objectContaining({
+        eventId: 'handoff:agent-1:run-1:cos-runner',
+        data: expect.objectContaining({
+          to: 'cos-runner',
+          accepted: true,
+          adopted: true,
+          outcome: RUNNER_SPAWN_AMBIGUOUS,
+          reason: 'fetch failed',
+        }),
+      })]);
+      expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
+
+      await capturedOnExit({ exitCode: 0, killed: false, signal: null });
+      await flushMicrotasks();
+      await spawnPromise;
     });
 
     it('keeps the actionable spawn-error when the local PTY path throws', async () => {

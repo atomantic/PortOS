@@ -39,6 +39,9 @@ import {
   getAgentOutputFromRunner,
   spawnTuiSessionViaRunner,
   connectTuiSessionViaRunner,
+  classifyRunnerSpawnFailure,
+  RUNNER_SPAWN_REFUSED,
+  RUNNER_SPAWN_AMBIGUOUS,
 } from './cosRunnerClient.js';
 
 // The client reads the body via text() and tolerantly JSON.parses it, so a
@@ -46,8 +49,9 @@ import {
 // { error: <raw text> } instead of crashing with "Unexpected token <".
 // A string `data` is treated as a raw (possibly non-JSON) body; an object is
 // serialized to JSON the way the real runner would respond.
-const mockResponse = (ok, data) => ({
+const mockResponse = (ok, data, status = ok ? 200 : 500) => ({
   ok,
+  status,
   text: vi.fn().mockResolvedValue(typeof data === 'string' ? data : JSON.stringify(data))
 });
 
@@ -273,6 +277,121 @@ describe('cosRunnerClient', () => {
       fetchWithTimeout.mockResolvedValue(mockResponse(true, 'not json'));
       const result = await spawnAgentViaRunner({ agentId: 'a1' });
       expect(result).toEqual({ error: 'not json' });
+    });
+  });
+
+  // ===========================================================================
+  // Spawn failure discrimination + ambiguous-spawn reconcile (#4615)
+  // ===========================================================================
+  describe('spawn failures: refusal vs. lost acknowledgement', () => {
+    // Route by URL so a spawn POST and the /agents reconcile probe can answer
+    // differently within one call.
+    const routeFetch = ({ spawn, agents }) => {
+      fetchWithTimeout.mockImplementation((url) => {
+        if (String(url).includes('/agents')) {
+          return typeof agents === 'function' ? agents() : Promise.resolve(mockResponse(true, agents ?? []));
+        }
+        return typeof spawn === 'function' ? spawn() : Promise.resolve(spawn);
+      });
+    };
+    const transportFailure = () => Promise.reject(new TypeError('fetch failed'));
+    const liveCliAgent = { id: 'a1', taskId: 'task-1', pid: 4242, kind: 'cli' };
+
+    it('marks an explicit non-2xx answer as a REFUSAL, carrying the runner status', async () => {
+      routeFetch({ spawn: mockResponse(false, { error: 'Command not allowed: grok' }, 400) });
+
+      const err = await spawnAgentViaRunner({ agentId: 'a1' }).catch(e => e);
+
+      expect(err.message).toContain('Command not allowed: grok');
+      expect(classifyRunnerSpawnFailure(err)).toBe(RUNNER_SPAWN_REFUSED);
+      expect(err.status).toBe(400);
+    });
+
+    it('marks a transport failure as AMBIGUOUS, not a refusal', async () => {
+      // No answer at all: the runner may have accepted, forked the child, and
+      // lost only the acknowledgement. Recording this as a refusal is what
+      // strands a live agent with nothing on the server tracking it.
+      routeFetch({ spawn: transportFailure, agents: [] });
+
+      const err = await spawnAgentViaRunner({ agentId: 'a1' }).catch(e => e);
+
+      expect(err.message).toContain('fetch failed');
+      expect(classifyRunnerSpawnFailure(err)).toBe(RUNNER_SPAWN_AMBIGUOUS);
+    });
+
+    it('reads an unlabeled error as ambiguous — only a non-2xx proves a refusal', () => {
+      expect(classifyRunnerSpawnFailure(new Error('something else'))).toBe(RUNNER_SPAWN_AMBIGUOUS);
+      expect(classifyRunnerSpawnFailure(null)).toBe(RUNNER_SPAWN_AMBIGUOUS);
+    });
+
+    it('adopts the live agent when the runner turns out to have it', async () => {
+      routeFetch({ spawn: transportFailure, agents: [liveCliAgent] });
+
+      const result = await spawnAgentViaRunner({ agentId: 'a1' });
+
+      expect(result).toEqual({ pid: 4242, adopted: true, adoptedReason: expect.stringContaining('fetch failed') });
+    });
+
+    it('rethrows the transport failure when the runner does not have the agent', async () => {
+      routeFetch({ spawn: transportFailure, agents: [{ id: 'someone-else', kind: 'cli' }] });
+
+      const err = await spawnAgentViaRunner({ agentId: 'a1' }).catch(e => e);
+
+      expect(err.message).toContain('fetch failed');
+      expect(classifyRunnerSpawnFailure(err)).toBe(RUNNER_SPAWN_AMBIGUOUS);
+    });
+
+    it('rethrows when the reconcile probe itself cannot be answered', async () => {
+      // An unanswerable question is not evidence the agent is alive.
+      routeFetch({ spawn: transportFailure, agents: () => Promise.reject(new Error('runner down')) });
+
+      await expect(spawnAgentViaRunner({ agentId: 'a1' })).rejects.toThrow('fetch failed');
+    });
+
+    it('does not adopt a TUI record for a CLI spawn of the same id', async () => {
+      routeFetch({ spawn: transportFailure, agents: [{ id: 'a1', kind: 'tui', sessionId: 'a1', pid: 9 }] });
+
+      await expect(spawnAgentViaRunner({ agentId: 'a1' })).rejects.toThrow('fetch failed');
+    });
+
+    it('never reconciles a refusal — the runner answered, so there is nothing to adopt', async () => {
+      routeFetch({ spawn: mockResponse(false, { error: 'Command not allowed: grok' }, 400), agents: [liveCliAgent] });
+
+      await expect(spawnAgentViaRunner({ agentId: 'a1' })).rejects.toThrow('Command not allowed');
+      expect(fetchWithTimeout.mock.calls.some(([url]) => String(url).includes('/agents'))).toBe(false);
+    });
+
+    it('re-attaches the original TUI handlers to a PTY the runner already had', async () => {
+      routeFetch({
+        spawn: transportFailure,
+        agents: [{ id: 'agent-tui-2', kind: 'tui', sessionId: 'agent-tui-2', pid: 7777 }],
+      });
+      const onData = vi.fn();
+
+      const session = await spawnTuiSessionViaRunner({
+        agentId: 'agent-tui-2',
+        taskId: 'task-1',
+        command: 'codex',
+        args: [],
+        onData,
+      });
+
+      expect(session).toMatchObject({ sessionId: 'agent-tui-2', pid: 7777, adopted: true });
+      // The relay the lost acknowledgement would have discarded is still live:
+      // the handler registered before the spawn still receives runner output.
+      capturedSocketListeners['tui:output']({ sessionId: 'agent-tui-2', data: 'still working' });
+      expect(onData).toHaveBeenCalledWith('still working');
+    });
+
+    it('drops the TUI relay when the runner does not have the PTY', async () => {
+      routeFetch({ spawn: transportFailure, agents: [] });
+      const onData = vi.fn();
+
+      await expect(spawnTuiSessionViaRunner({ agentId: 'agent-tui-3', onData })).rejects.toThrow('fetch failed');
+
+      // Nothing left holding the handlers — a later event for that id is a no-op.
+      capturedSocketListeners['tui:output']({ sessionId: 'agent-tui-3', data: 'ghost' });
+      expect(onData).not.toHaveBeenCalled();
     });
   });
 
