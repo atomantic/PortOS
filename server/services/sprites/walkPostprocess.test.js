@@ -13,7 +13,8 @@ import sharp from 'sharp';
 import {
   pyRound, pyRoundTo, median, sampleBorderKey, validateMeasuredKey,
   isUsableMeasuredKey, longestUsableSpan,
-  recoverAlphaFrame, despillKeyFrame, imageDistance, selectCycleIndices, selectAmbientLoopIndices,
+  recoverAlphaFrame, despillKeyFrame, imageDistance, estimateMotionPeriod, isPeriodAgreement,
+  selectCycleIndices, selectAmbientLoopIndices,
   alphaBbox, rootX, robustBottomRow, alignFrames, packStrip, validateFrames, buildContrastSheet,
   rootBandForManifest, ROOT_BAND_TORSO, ROOT_BAND_HIP, ALIGN_OP_TORSO_X,
   decodeTransparentSpriteSource, prepareWalkAnchorChromaInput,
@@ -268,16 +269,71 @@ describe('selectCycleIndices', () => {
     expect(cycle.heldFrames).toBe(0);
   });
 
-  it('rejects a static clip and too-few frames', () => {
+  it('rejects a static clip and too-few frames with descriptive failure messages', () => {
     expect(() => selectCycleIndices(Array.from({ length: 20 }, () => constSig(7))))
-      .toThrow(/no detectable moving walk cycle/i);
+      .toThrow(/no detectable moving walk cycle.*no motion detected/i);
+    // Sub-threshold motion (single transient blip insufficient for gait cycle)
+    const faintSigs = Array.from({ length: 20 }, (_, i) => constSig(i === 2 ? 10 : 0));
+    expect(() => selectCycleIndices(faintSigs))
+      .toThrow(/no detectable moving walk cycle.*motion has no detectable periodicity/i);
     expect(() => selectCycleIndices(Array.from({ length: 8 }, () => constSig(0))))
       .toThrow(/at least 9/);
+  });
+
+  it('cross-checks period agreement between chosen window and motion periodicity', () => {
+    // Clean 8-frame loop (variable motion period 8) -> ok
+    const cleanPattern = [0, 5, 18, 35, 55, 45, 25, 10];
+    const cleanSigs = Array.from({ length: 25 }, (_, i) => constSig(cleanPattern[i % 8]));
+    const cleanRes = selectCycleIndices(cleanSigs, 8);
+    expect(cleanRes.cycle.periodAgreement).toBe('ok');
+    expect(cleanRes.cycle.periodEstimate).toBe(8);
+
+    // 1.36-cycle window (#3052 shape) -> disagree
+    // Period 11 motion pattern
+    const pattern11 = [0, 4, 12, 28, 45, 60, 50, 35, 20, 10, 3];
+    const period11Sigs = Array.from({ length: 30 }, (_, i) => constSig(pattern11[i % 11]));
+    const agreedRes = selectCycleIndices(period11Sigs, 12);
+    expect(agreedRes.cycle.windowLength).toBe(11);
+    expect(agreedRes.cycle.periodEstimate).toBe(11);
+    expect(agreedRes.cycle.periodAgreement).toBe('ok');
+
+    // If an 11-period motion series has an incompatible cycle window forced (e.g. 15 frames):
+    const est11 = estimateMotionPeriod(period11Sigs);
+    expect(est11?.lag).toBe(11);
+    // When compared to window length 15 (1.36 cycles):
+    const disagreeCycle = {
+      windowLength: 15,
+      periodEstimate: est11.lag,
+      periodAgreement: isPeriodAgreement(15, est11.lag) ? 'ok' : 'disagree',
+    };
+    expect(disagreeCycle.periodAgreement).toBe('disagree');
   });
 
   it('imageDistance is the mean absolute channel difference', () => {
     expect(imageDistance(constSig(10), constSig(10))).toBe(0);
     expect(imageDistance(constSig(0), constSig(30))).toBe(30);
+  });
+});
+
+describe('estimateMotionPeriod', () => {
+  const SIG_LEN = 48 * 48 * 3;
+  const constSig = (v) => Buffer.alloc(SIG_LEN, v);
+
+  it('estimates dominant lag on a clean periodic motion series', () => {
+    const pattern = [0, 4, 12, 28, 45, 60, 50, 35, 20, 10]; // period 10
+    const signatures = Array.from({ length: 30 }, (_, i) => constSig(pattern[i % 10]));
+    const est = estimateMotionPeriod(signatures);
+    expect(est).not.toBeNull();
+    expect(est.lag).toBe(10);
+    expect(est.strength).toBeGreaterThan(0.8);
+  });
+
+  it('returns null for motionless or flat motion series (unavailable)', () => {
+    const staticSigs = Array.from({ length: 20 }, () => constSig(5));
+    expect(estimateMotionPeriod(staticSigs)).toBeNull();
+
+    const shortSigs = [constSig(0), constSig(10)];
+    expect(estimateMotionPeriod(shortSigs)).toBeNull();
   });
 });
 

@@ -1486,6 +1486,7 @@ describe('getWalkSourceFrames', () => {
     const manifest = JSON.parse(await readFile(manifestAbs, 'utf8'));
     manifest.cycleSelection = {
       windowStart: 2, windowLength: 4, endpointSeamScore: 1.25, medianMotionScore: 3.5,
+      periodEstimate: 4, periodAgreement: 'ok',
     };
     manifest.frames = [5, 7].map((index, i) => ({
       sourceFrameIndex: index,
@@ -1523,6 +1524,7 @@ describe('getWalkSourceFrames', () => {
     // (which would be 3, four frames to the left of the frames it covers).
     expect(out.cycle).toMatchObject({
       windowStart: 2, windowLength: 4, windowStartFrame: 5, windowEndFrame: 9,
+      periodEstimate: 4, periodAgreement: 'ok',
     });
     expect(out.cycleProvenance).toBe('verified');
     // Older records predate run.frameCount/run.fps — the packed preview is the

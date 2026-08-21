@@ -1333,6 +1333,8 @@ function cycleWindowOf(packaged) {
     windowStartFrame,
     windowEndFrame: windowStartFrame !== null && windowLength !== null
       ? windowStartFrame + windowLength : null,
+    periodEstimate: Number.isInteger(cycle.periodEstimate) ? cycle.periodEstimate : null,
+    periodAgreement: typeof cycle.periodAgreement === 'string' ? cycle.periodAgreement : null,
   };
 }
 

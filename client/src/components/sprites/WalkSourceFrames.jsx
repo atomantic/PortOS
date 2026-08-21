@@ -279,6 +279,11 @@ function WalkSourceFrames({ recordId, runId, onSaved = () => {} }) {
                 strip&apos;s columns.
               </>
             )}
+            {data.cycle?.periodAgreement === 'disagree' && (
+              <>
+                {' '}The loop may not be a whole stride (motion periodicity suggests {data.cycle.periodEstimate} frames vs selected {data.cycle.windowLength}).
+              </>
+            )}
             {data.cycleProvenance === 'stale' && (
               <>
                 {' '}These frames were re-extracted here and don&apos;t match the ones the packed
