@@ -61,8 +61,11 @@ describe('image-to-3d target registry', () => {
     // Upstream: "An NVIDIA GPU with at least 24GB of memory is necessary" and
     // "currently tested only on Linux".
     expect(t.requires).toMatchObject({ cuda: true, minVramGb: 24, linuxHost: true });
-    // Unlike the MPS port, this lane does not pull RMBG-2.0 — only DINOv3 is gated.
-    expect(t.gatedRepos.map((r) => r.label)).toEqual(['facebook/dinov3-vitl16-pretrain-lvd1689m']);
+    // Same gated repos as the MPS port: both lanes load microsoft/TRELLIS.2-4B, whose
+    // pipeline.json names briaai/RMBG-2.0 as the rembg model, and `run()` preprocesses
+    // by default. Omitting it here left a CUDA user's 401 at load time unexplained.
+    expect(t.gatedRepos.map((r) => r.label))
+      .toEqual(['facebook/dinov3-vitl16-pretrain-lvd1689m', 'briaai/RMBG-2.0']);
   });
 
   it('leaves trellis2 (MPS) as the default target', () => {

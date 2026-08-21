@@ -151,13 +151,22 @@ export const IMAGE_TO_3D_TARGETS = Object.freeze({
       + 'upstream setup.sh, which builds flash-attn, nvdiffrast, nvdiffrec and cumesh '
       + 'from source into a new `trellis2` conda environment (~15 GB, and the compile '
       + 'takes a while).',
-    // The 4B model conditions on DINOv3, which is gated. Unlike the MPS port this
-    // lane does not use RMBG-2.0 (upstream's own example feeds the image straight
-    // to the pipeline), so it is deliberately absent here rather than copied over.
+    // Same two gated repos as the MPS port, because this lane loads the same weights:
+    // `microsoft/TRELLIS.2-4B`'s `pipeline.json` names `briaai/RMBG-2.0` as its
+    // `rembg_model`, and `Trellis2ImageTo3DPipeline.run` defaults `preprocess_image=True`
+    // — so feeding it the raw image (which is what both upstream's example and PortOS's
+    // runner do) is precisely what makes it matte the background with RMBG. An earlier
+    // revision claimed this lane "does not use RMBG-2.0" and omitted the repo, which
+    // would leave a CUDA user whose HF account hasn't accepted the RMBG terms staring at
+    // a 401 at pipeline load with nothing naming the repo to go accept.
     gatedRepos: Object.freeze([
       Object.freeze({
         label: 'facebook/dinov3-vitl16-pretrain-lvd1689m',
         url: 'https://huggingface.co/facebook/dinov3-vitl16-pretrain-lvd1689m',
+      }),
+      Object.freeze({
+        label: 'briaai/RMBG-2.0',
+        url: 'https://huggingface.co/briaai/RMBG-2.0',
       }),
     ]),
   }),
