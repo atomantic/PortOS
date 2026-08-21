@@ -92,7 +92,10 @@ export function fieldsFromRun(run) {
   return {
     steps: Number.isInteger(run?.steps) ? String(run.steps) : '',
     seed: '',
-    keyBackground: typeof run?.keyBackground === 'boolean' ? run.keyBackground : true,
+    // A run predating the field has none; default to OFF, matching the server. Such a
+    // run DID key (the default was on then), but this seeds a NEW render's form, which
+    // should agree with the server default it will actually get.
+    keyBackground: typeof run?.keyBackground === 'boolean' ? run.keyBackground : false,
     // Both carry over like `steps` does — they are deliberate quality choices, not
     // per-run randomness. A run predating these fields has neither, so fall back to
     // the same defaults a fresh form starts at.

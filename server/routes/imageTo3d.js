@@ -27,7 +27,8 @@ const galleryFilenameSchema = z.string().trim().min(1).max(256)
 
 // PER-RUN sampler knobs, shared by create and re-generate. Nothing persists
 // between runs: absent steps → the pipeline default, absent seed → a fresh
-// random roll for that run, absent keyBackground → keying enabled.
+// random roll for that run, absent keyBackground → no keying (the pipeline's own
+// learned matte runs instead).
 const renderOptionsSchema = z.object({
   steps: z.number().int().min(RENDER_STEPS_MIN).max(RENDER_STEPS_MAX).optional(),
   seed: z.number().int().min(0).max(RENDER_SEED_MAX).optional(),

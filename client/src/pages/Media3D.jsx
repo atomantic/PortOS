@@ -199,7 +199,7 @@ export default function Media3D() {
   // Per-run sampler knobs (see ImageTo3dRenderOptions for the value conventions).
   const [steps, setSteps] = useState('');
   const [seed, setSeed] = useState('');
-  const [keyBackground, setKeyBackground] = useState(true);
+  const [keyBackground, setKeyBackground] = useState(false);
   const [detail, setDetail] = useState('auto');
   const [alphaMode, setAlphaMode] = useState('');
   const [normalMap, setNormalMap] = useState(false);

@@ -99,7 +99,7 @@ describe('Media3DDetail', () => {
       // normalMap is sent explicitly rather than omitted. It defaults OFF (the bake
       // can lose a render outright), and stating it keeps the body honest about what
       // the run asked for even if that default ever moves.
-      { steps: 24, keyBackground: true, normalMap: false },
+      { steps: 24, keyBackground: false, normalMap: false },
       { silent: true },
     ));
   });
@@ -117,7 +117,7 @@ describe('Media3DDetail', () => {
     // Blank by design — echoing the run's concrete seed back would silently pin
     // it, reintroducing the deterministic-re-render trap.
     expect(screen.getByLabelText(/seed/i)).toHaveValue(null);
-    expect(screen.getByLabelText(/key out solid background/i)).not.toBeChecked();
+    expect(screen.getByLabelText(/key out flat backdrop/i)).not.toBeChecked();
 
     fireEvent.click(screen.getByRole('button', { name: /re-render/i }));
     await waitFor(() => expect(generateImageTo3dModel).toHaveBeenCalledWith(
@@ -147,7 +147,7 @@ describe('Media3DDetail', () => {
     fireEvent.click(screen.getByRole('button', { name: /re-render/i }));
     await waitFor(() => expect(generateImageTo3dModel).toHaveBeenCalledWith(
       'image3d-1',
-      { keyBackground: true, detail: 'fast', alphaMode: 'auto', normalMap: false },
+      { keyBackground: false, detail: 'fast', alphaMode: 'auto', normalMap: false },
       { silent: true },
     ));
   });

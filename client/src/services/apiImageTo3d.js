@@ -23,7 +23,7 @@ export const createImageTo3dModel = (input, options) =>
 // Re-run the render for an existing record (status → generating again).
 // `input` carries the optional per-run knobs ({ steps, seed, keyBackground }) —
 // they apply to this run only: absent steps → the pipeline default, absent
-// seed → the server rolls a fresh random one, absent keyBackground → enabled.
+// seed → the server rolls a fresh random one, absent keyBackground → no keying.
 export const generateImageTo3dModel = (id, input = {}, options) =>
   request(`/image-to-3d/models/${encodeURIComponent(id)}/generate`, {
     method: 'POST',

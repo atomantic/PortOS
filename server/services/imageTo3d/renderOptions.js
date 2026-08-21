@@ -17,6 +17,8 @@
  *    what every lane did before the knob existed.
  *  - `alphaMode: null` → don't instruct the exporter, and keep PortOS's
  *    force-opaque normalization.
+ *  - `keyBackground: false` (the default) → hand the pipeline the untouched source
+ *    so its own learned matte runs. Opt in only for a flat chroma backdrop.
  *  - `normalMap: false` (the default) → skip the normal-map bake. Opt in to recover
  *    shading detail the decimation discards, accepting the hard-crash risk noted
  *    below.
@@ -98,7 +100,15 @@ export function normalizeRenderOptions(input = {}) {
   return {
     steps: isValidRenderSteps(input.steps) ? input.steps : null,
     seed: isValidRenderSeed(input.seed) ? input.seed : null,
-    keyBackground: input.keyBackground !== false,
+    // Opt-IN. Writing an alpha channel is not a free head start for the pipeline:
+    // TRELLIS.2's `preprocess_image` treats any non-opaque alpha as "already matted"
+    // and skips RMBG-2.0 entirely. So keying does not augment the learned matte, it
+    // REPLACES it with a border flood fill — which structurally cannot remove anything
+    // that isn't near the border color. A subject casting a shadow onto a surface keeps
+    // that shadow opaque, and the decoder reconstructs it as its own disconnected mass.
+    // `keySolidBackground` stays available for a synthetic image on a flat chroma
+    // backdrop, where the caller genuinely knows better than a segmentation model.
+    keyBackground: input.keyBackground === true,
     // `detail` collapses to the explicit 'auto' sentinel rather than null: it is a
     // choosable value, and a run entry recording 'auto' is what actually happened.
     detail: isValidDetailTier(input.detail) ? input.detail : DEFAULT_DETAIL_TIER,
@@ -192,7 +202,7 @@ export function honorTargetRenderSupport(options, support) {
   // invariant and was then silently ignored here — recording a value the subprocess
   // never received, the exact thing this function exists to prevent. Reset to the same
   // sentinel `normalizeRenderOptions` produces for "unset", whatever that key's
-  // sentinel happens to be (`null`, `'auto'`, `true`, or `false`).
+  // sentinel happens to be (`null`, `'auto'`, or `false`).
   const unset = normalizeRenderOptions();
   const dropped = Object.fromEntries(
     Object.entries(support)

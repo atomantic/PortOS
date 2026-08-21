@@ -35,7 +35,17 @@ describe('ImageTo3dRenderOptions', () => {
   it('leaves Seed and the keying toggle usable when only steps are unsupported', () => {
     setup({ stepsSupported: false });
     expect(screen.getByLabelText('Seed')).toBeEnabled();
-    expect(screen.getByRole('checkbox', { name: /key out solid background/i })).toBeEnabled();
+    expect(screen.getByRole('checkbox', { name: /key out flat backdrop/i })).toBeEnabled();
+  });
+
+  // Off by default now: keying writes an alpha channel, which makes the pipeline skip
+  // its own learned matte (#4684). The control has to say what it is FOR, or nobody
+  // can tell when the non-default is the right choice.
+  it('says what the keying toggle is for, since it is no longer the common path', () => {
+    setup({ keyBackground: false });
+    const keying = screen.getByRole('checkbox', { name: /key out flat backdrop/i });
+    expect(keying).not.toBeChecked();
+    expect(keying.closest('label')).toHaveAttribute('title', expect.stringMatching(/chroma backdrop/i));
   });
 
   it('disables everything when the whole form is disabled', () => {

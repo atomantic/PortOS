@@ -23,6 +23,8 @@ import {
 //  - steps: '' = pipeline default, else a preset number string.
 //  - seed:  '' = a fresh random seed every render; a value pins this run.
 //  - keyBackground: key a solid-color backdrop to transparency before render.
+//    Off by default: writing an alpha channel makes the pipeline SKIP its own
+//    learned matte, so keying is a downgrade on anything but a flat chroma backdrop.
 //  - detail: 'auto' = derive the pipeline tier from hardware, else a named tier.
 //  - alphaMode: '' = leave PortOS's force-opaque normalization on (the default);
 //    any explicit value turns it off so a transparent subject can stay transparent.
@@ -129,9 +131,14 @@ export default function ImageTo3dRenderOptions({
         </FormField>
         <div className="flex items-end pb-1.5">
           <div className="flex flex-col gap-1.5">
+            {/* Opt-in, not default-on. Handing the pipeline an alpha channel makes it
+                skip its own learned matte, and a border flood fill can't remove a cast
+                shadow — which then becomes geometry. Only a flat chroma backdrop is
+                better keyed deterministically than matted. */}
             <label
               htmlFor="image-to-3d-key-background"
               className="inline-flex cursor-pointer items-center gap-2 text-xs text-gray-300"
+              title="For a source on a flat chroma backdrop (green/blue screen), where a deterministic key beats automatic matting. Leave off otherwise: keying replaces the model's own background removal, and a flood fill can't remove a cast shadow — which then gets built as geometry."
             >
               <input
                 id="image-to-3d-key-background"
@@ -141,7 +148,7 @@ export default function ImageTo3dRenderOptions({
                 disabled={disabled}
                 className="h-3.5 w-3.5 rounded border-port-border bg-port-bg accent-port-accent disabled:opacity-40"
               />
-              Key out solid background
+              Key out flat backdrop
             </label>
             {/* Opt-in, not default-on. It recovers shading detail the decimation
                 discards, but the bake runs before the GLB is written and builds a BVH
@@ -172,8 +179,9 @@ export default function ImageTo3dRenderOptions({
         <span className="font-medium text-gray-400">Best source images:</span> one subject,
         front or ¾ view, filling the frame, with no parts hidden behind others (tails, wings,
         props) — the model has to guess anything it can’t see. A transparent PNG is used as-is;
-        a solid-color backdrop is keyed out automatically when enabled here; busy backgrounds
-        fall back to automatic matting, which can leave soft edges.
+        anything else is background-removed by the model itself, which also drops cast shadows.
+        Only turn on keying for a flat chroma backdrop — it replaces that automatic removal,
+        and a cast shadow it leaves behind gets built as geometry.
       </p>
     </div>
   );

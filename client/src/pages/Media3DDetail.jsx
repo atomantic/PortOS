@@ -34,7 +34,7 @@ export default function Media3DDetail() {
   // see fieldsFromRun.
   const [steps, setSteps] = useState('');
   const [seed, setSeed] = useState('');
-  const [keyBackground, setKeyBackground] = useState(true);
+  const [keyBackground, setKeyBackground] = useState(false);
   const [detail, setDetail] = useState('auto');
   const [alphaMode, setAlphaMode] = useState('');
   const [normalMap, setNormalMap] = useState(false);

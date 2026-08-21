@@ -1,12 +1,19 @@
 /**
  * Solid-background keying for image-to-3D source images.
  *
- * TRELLIS.2's own preprocessing uses a real alpha channel directly when one is
- * present and only falls back to RMBG-2.0 matting when there isn't — and matting a
- * flat green/blue screen is exactly where it produces soft, uncertain mattes (color
- * spill, fuzzy fur edges) that turn into hallucinated geometry. When the user's
- * source has NO alpha but sits on a detectably solid background, PortOS can key it
- * deterministically before the render and hand the pipeline a real alpha channel.
+ * OPT-IN, and deliberately so. TRELLIS.2's `preprocess_image` uses a real alpha
+ * channel directly when one is present and only falls back to RMBG-2.0 matting when
+ * there isn't — so keying a source does not *augment* the learned matte, it REPLACES
+ * it. That trade is a loss on any ordinary photo or render: a flood fill from the
+ * border cannot remove anything that isn't near the border color, so a cast shadow
+ * survives as opaque mid-grey and the decoder faithfully reconstructs it as its own
+ * disconnected mass of geometry. RMBG-2.0 removes it.
+ *
+ * What remains worth keying is the narrow case the caller knows and the segmentation
+ * model doesn't: a synthetic image on a flat chroma backdrop, where matting produces
+ * soft, uncertain edges (color spill, fuzzy fur) that turn into hallucinated geometry,
+ * and a deterministic key is strictly cleaner. Hence `keyBackground` defaults to
+ * false and this module runs only when a run asks for it.
  *
  * The pixel work is pure (raw RGBA buffers in/out) so it's unit-testable on tiny
  * synthetic images; `prepareSourceImage` is the one sharp/file boundary. The keyed

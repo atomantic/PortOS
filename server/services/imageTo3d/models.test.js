@@ -373,7 +373,7 @@ describe('render options and source keying', () => {
     expect(generateArgs.seed).toBeLessThanOrEqual(2147483647);
     // The run entry records the concrete values the subprocess received.
     expect(current.runs.at(-1)).toMatchObject({
-      seed: generateArgs.seed, steps: null, keyBackground: true,
+      seed: generateArgs.seed, steps: null, keyBackground: false,
     });
   });
 
@@ -419,7 +419,7 @@ describe('render options and source keying', () => {
   it('a keyed source image is what the render consumes', async () => {
     prepareSourceImage.mockImplementation(async ({ targetPath }) => targetPath);
 
-    await createModel({ name: 'Beacon', filename: 'example.png' });
+    await createModel({ name: 'Beacon', filename: 'example.png', keyBackground: true });
     await vi.waitFor(() => expect(current.status).toBe('ready'));
 
     const [generateArgs] = runTrellis2Generate.mock.calls[0];
@@ -428,20 +428,29 @@ describe('render options and source keying', () => {
     expect(current.runs.at(-1).sourceKeyed).toBe(true);
   });
 
-  it('keyBackground:false skips keying entirely', async () => {
-    await createModel({ name: 'Beacon', filename: 'example.png', keyBackground: false });
+  // Keying writes an alpha channel, which makes TRELLIS.2 skip RMBG-2.0 — so the
+  // DEFAULT has to leave the source alone, or a cast shadow the flood fill can't
+  // reach survives into the mesh as geometry (#4684).
+  it.each([
+    ['omitted', {}],
+    ['explicitly false', { keyBackground: false }],
+  ])('keyBackground %s skips keying entirely', async (_label, options) => {
+    await createModel({ name: 'Beacon', filename: 'example.png', ...options });
     await vi.waitFor(() => expect(current.status).toBe('ready'));
 
     expect(prepareSourceImage).not.toHaveBeenCalled();
     const [generateArgs] = runTrellis2Generate.mock.calls[0];
     expect(posixPath(generateArgs.imagePath)).toBe('/mock/data/images/example.png');
     expect(current.runs.at(-1).keyBackground).toBe(false);
+    // `sourceKeyed` stays truthful in BOTH directions — it records what the render
+    // consumed, not what was asked for.
+    expect(current.runs.at(-1).sourceKeyed).toBe(false);
   });
 
   it('a keying failure falls back to the raw source instead of failing the render', async () => {
     prepareSourceImage.mockRejectedValue(new Error('unreadable image'));
 
-    await createModel({ name: 'Beacon', filename: 'example.png' });
+    await createModel({ name: 'Beacon', filename: 'example.png', keyBackground: true });
     await vi.waitFor(() => expect(current.status).toBe('ready'));
 
     const [generateArgs] = runTrellis2Generate.mock.calls[0];

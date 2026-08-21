@@ -17,18 +17,32 @@ import {
 } from './renderOptions.js';
 
 describe('normalizeRenderOptions', () => {
-  it('defaults to unset steps/seed with keying enabled', () => {
-    expect(normalizeRenderOptions()).toEqual({ steps: null, seed: null, keyBackground: true, detail: 'auto', alphaMode: null, normalMap: false });
-    expect(normalizeRenderOptions({})).toEqual({ steps: null, seed: null, keyBackground: true, detail: 'auto', alphaMode: null, normalMap: false });
+  it('defaults to unset steps/seed with keying disabled', () => {
+    expect(normalizeRenderOptions()).toEqual({ steps: null, seed: null, keyBackground: false, detail: 'auto', alphaMode: null, normalMap: false });
+    expect(normalizeRenderOptions({})).toEqual({ steps: null, seed: null, keyBackground: false, detail: 'auto', alphaMode: null, normalMap: false });
   });
 
   it('keeps valid values and collapses invalid ones to the unset sentinel', () => {
     expect(normalizeRenderOptions({ steps: 24, seed: 0, keyBackground: false }))
       .toEqual({ steps: 24, seed: 0, keyBackground: false, detail: 'auto', alphaMode: null, normalMap: false });
     expect(normalizeRenderOptions({ steps: RENDER_STEPS_MAX + 1, seed: RENDER_SEED_MAX + 1 }))
-      .toEqual({ steps: null, seed: null, keyBackground: true, detail: 'auto', alphaMode: null, normalMap: false });
+      .toEqual({ steps: null, seed: null, keyBackground: false, detail: 'auto', alphaMode: null, normalMap: false });
     expect(normalizeRenderOptions({ steps: 12.5, seed: '42' }))
-      .toEqual({ steps: null, seed: null, keyBackground: true, detail: 'auto', alphaMode: null, normalMap: false });
+      .toEqual({ steps: null, seed: null, keyBackground: false, detail: 'auto', alphaMode: null, normalMap: false });
+  });
+
+  // Pinned on its own, not just as a field of a shape assertion, so flipping the
+  // default back is a deliberate test edit rather than a line noise diff. Keying
+  // writes an alpha channel, which makes TRELLIS.2's `preprocess_image` skip
+  // RMBG-2.0 — so default-on silently replaces a learned matte with a flood fill
+  // that cannot remove a cast shadow. See issue #4684.
+  it('leaves background keying OFF unless a run explicitly asks for it', () => {
+    expect(normalizeRenderOptions().keyBackground).toBe(false);
+    expect(normalizeRenderOptions({ keyBackground: undefined }).keyBackground).toBe(false);
+    expect(normalizeRenderOptions({ keyBackground: false }).keyBackground).toBe(false);
+    // Truthy-but-not-true must not enable it either — the wire value is a boolean.
+    expect(normalizeRenderOptions({ keyBackground: 'true' }).keyBackground).toBe(false);
+    expect(normalizeRenderOptions({ keyBackground: true }).keyBackground).toBe(true);
   });
 });
 
@@ -163,6 +177,13 @@ describe('honorTargetRenderSupport', () => {
   it('nulls only the unsupported knob, leaving the rest intact', () => {
     expect(honorTargetRenderSupport(opts, { steps: false }))
       .toEqual({ steps: null, seed: 7, keyBackground: true });
+  });
+
+  it('resets an unsupported knob to ITS OWN unset sentinel, not null', () => {
+    // keyBackground's sentinel is `false`, so a target that cannot key must record
+    // `false` — recording `null` would claim the subprocess got a value it never did.
+    expect(honorTargetRenderSupport(opts, { keyBackground: false }))
+      .toEqual({ steps: 24, seed: 7, keyBackground: false });
   });
 
   it('leaves a knob alone when support is explicitly true', () => {

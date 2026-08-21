@@ -158,12 +158,13 @@ async function executeRender({ id, operationId, adapter, sourcePath, caps, optio
   let heavyClaim = null;
   try {
     await ensureDir(recordDir(id));
-    // Key a solid background out of the source (into THIS record's render dir —
-    // the shared gallery file is never touched) so the pipeline consumes a real
-    // alpha channel instead of matting a green screen. Runs BEFORE the heavy-job
-    // claim: it is CPU-only preprocessing, so other heavy jobs shouldn't queue
-    // behind it and resident models shouldn't be evicted for it. Best-effort: a
-    // keying failure must never fail a render the model could still attempt raw.
+    // Key a solid background out of the source (into THIS record's render dir — the
+    // shared gallery file is never touched). Opt-in, because handing the pipeline an
+    // alpha channel makes it consume that INSTEAD OF running its own learned matte —
+    // see sourceKeying.js. Runs BEFORE the heavy-job claim: it is CPU-only
+    // preprocessing, so other heavy jobs shouldn't queue behind it and resident models
+    // shouldn't be evicted for it. Best-effort: a keying failure must never fail a
+    // render the model could still attempt raw.
     const keyedPath = keyBackground
       ? await prepareSourceImage({ sourcePath, targetPath: keyedSourcePath(id) })
         .catch((err) => {
