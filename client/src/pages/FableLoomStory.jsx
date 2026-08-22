@@ -3,8 +3,11 @@
  *
  * URL is the source of truth: /fableloom/:loomId/:episodeId/:nodeId? — the
  * selected episode and scene are route params, the play drawer rides ?play=1.
- * Left: the scene-graph canvas. Right rail: the selected scene's editor, or
- * the structure/review panel when nothing is selected.
+ * Left: the scene-graph canvas (stacks top-to-bottom under the `lg` rail
+ * breakpoint). Right rail: the selected scene's editor, or the
+ * structure/review panel when nothing is selected. On small screens the
+ * rail sits under the canvas and is height-capped so the graph stays the
+ * thing you scroll.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -221,7 +224,7 @@ export default function FableLoomStory() {
         </div>
       ) : (
         <div className="flex-1 min-h-0 flex flex-col lg:flex-row">
-          <section className="flex-1 min-h-[45vh] lg:min-h-0 relative">
+          <section className="flex-1 min-h-[55vh] lg:min-h-0 min-w-0 relative">
             {episode.nodes.length ? (
               <LoomCanvas
                 episode={episode}
@@ -255,7 +258,7 @@ export default function FableLoomStory() {
               </div>
             )}
           </section>
-          <aside className="lg:w-[380px] lg:shrink-0 border-t lg:border-t-0 lg:border-l border-port-border overflow-y-auto">
+          <aside className="lg:w-[380px] lg:shrink-0 max-h-[45vh] lg:max-h-none border-t lg:border-t-0 lg:border-l border-port-border overflow-y-auto">
             {node ? (
               <LoomNodeEditor
                 key={node.id}

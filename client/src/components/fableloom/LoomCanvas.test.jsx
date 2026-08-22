@@ -46,4 +46,27 @@ describe('LoomCanvas', () => {
     );
     expect(container.firstChild).toBeNull();
   });
+
+  it('selects the target scene from an edge intent label', () => {
+    const onSelectNode = vi.fn();
+    render(<LoomCanvas episode={episode()} selectedNodeId={null} onSelectNode={onSelectNode} />);
+    fireEvent.click(screen.getByLabelText('Path: enter the gate'));
+    expect(onSelectNode).toHaveBeenCalledWith('n2');
+  });
+
+  it('stacks the graph and shows a path strip on a narrow canvas', () => {
+    const onSelectNode = vi.fn();
+    render(
+      <LoomCanvas
+        episode={episode()}
+        selectedNodeId="n1"
+        onSelectNode={onSelectNode}
+        viewportWidth={390}
+      />,
+    );
+    expect(screen.getByTestId('loom-canvas')).toHaveAttribute('data-orientation', 'tb');
+    expect(screen.getByTestId('loom-path-strip')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /enter the gate → Inside/i }));
+    expect(onSelectNode).toHaveBeenCalledWith('n2');
+  });
 });

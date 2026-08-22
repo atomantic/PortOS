@@ -8,7 +8,7 @@ export default function useContainerWidth() {
   const ref = useRef(null);
   const [width, setWidth] = useState(0);
   useEffect(() => {
-    if (!ref.current) return undefined;
+    if (!ref.current || typeof ResizeObserver === 'undefined') return undefined;
     const ro = new ResizeObserver((entries) => {
       const w = entries[0]?.contentRect?.width;
       if (w) setWidth(Math.floor(w));
