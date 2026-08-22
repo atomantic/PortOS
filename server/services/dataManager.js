@@ -94,6 +94,7 @@ export const CATEGORIES = {
   'media-sketches': { label: 'Media Sketches', description: 'Saved sketch canvases used as render inputs', archivable: true, deletable: false },
   'messages': { label: 'Messages', description: 'Email and messaging data', archivable: true, deletable: true, purgeScope: 'category' },
   'model-personality': { label: 'Model Personality', description: 'Model personality probe results and settings', archivable: true, deletable: false },
+  'model-tests': { label: 'Model Capability Tests', description: 'Throwaway agent sandboxes from the capability test suite — recreated per run, safe to purge', archivable: false, deletable: true, purgeScope: 'category' },
   'music': { label: 'Music', description: 'Uploaded and generated background tracks', archivable: true, deletable: false },
   'openclaw': { label: 'OpenClaw', description: 'OpenClaw integration config', archivable: true, deletable: false },
   'pipeline-comparative-rank': { label: 'Comparative Rank', description: 'Cached comparative issue rankings — re-running them costs LLM calls', archivable: true, deletable: false },

@@ -13,6 +13,14 @@ vi.mock('../../services/api', () => ({
   getLocalLlmAssessmentSweep: vi.fn(async () => ({ status: 'idle', total: 0, completed: 0, results: [] })),
   startLocalLlmAssessmentSweep: vi.fn(),
   cancelLocalLlmAssessmentSweep: vi.fn(),
+  // The capability suite panel is a child of this one and loads its report on
+  // mount. Its own behavior has a dedicated suite; here it just has to be quiet.
+  getModelCapabilityTests: vi.fn(async () => ({
+    tests: [], testIds: [], prompts: {}, models: [], runtimes: [],
+    counts: { models: 0, applicable: 0, passed: 0, failed: 0 }, listErrors: [], readError: null,
+  })),
+  runModelCapabilityTest: vi.fn(),
+  deleteModelCapabilityTest: vi.fn(),
 }));
 
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));

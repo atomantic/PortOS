@@ -1,0 +1,32 @@
+{
+  "orders": [
+    {
+      "id": "A-1",
+      "region": "us-ca",
+      "discount": 0,
+      "items": [
+        { "sku": "oyster-knife", "price": 18.5, "qty": 2 },
+        { "sku": "cedar-board", "price": 24, "qty": 1 }
+      ],
+      "expectedTotal": 66.34
+    },
+    {
+      "id": "A-2",
+      "region": "uk",
+      "discount": 5,
+      "items": [
+        { "sku": "tide-chart", "price": 12, "qty": 3 }
+      ],
+      "expectedTotal": 38.2
+    },
+    {
+      "id": "A-3",
+      "region": "mars-1",
+      "discount": 0,
+      "items": [
+        { "sku": "salt-cellar", "price": 9.99, "qty": 1 }
+      ],
+      "expectedTotal": 10.49
+    }
+  ]
+}

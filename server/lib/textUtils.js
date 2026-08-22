@@ -24,3 +24,15 @@ export function countWords(text) {
   const matches = text.trim().match(/\S+/g);
   return matches ? matches.length : 0;
 }
+
+/**
+ * Escape a string for literal use inside a RegExp.
+ *
+ * Exported because this was hand-rolled privately in seven other modules
+ * (markedSection, loraTriggers, loraDataset, scenePrompt, assetMounts,
+ * editorial/cutApplier, editorial/proseTics) — none of them exported it, so the
+ * eighth caller copied it too. This is the one to import.
+ */
+export function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}

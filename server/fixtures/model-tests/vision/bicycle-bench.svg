@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 300" width="1024" height="731">
+  <!-- PortOS vision capability fixture. Flat vector on purpose: every element is
+       a solid, unambiguous shape so the expected description is knowable, and
+       the scorer can be a keyword match rather than a second model.
+       Required: bicycle, bench, street lamp, dog. Bonus: red, blue, the number 3.
+       No <text> element anywhere — glyph rendering depends on the host's fonts,
+       and the digit on the sign has to look the same on every machine. -->
+  <rect x="0" y="0" width="420" height="300" fill="#14202b"/>
+  <circle cx="70" cy="42" r="1.8" fill="#e8eef5" opacity="0.55"/>
+  <circle cx="150" cy="26" r="1.4" fill="#e8eef5" opacity="0.45"/>
+  <circle cx="255" cy="52" r="1.6" fill="#e8eef5" opacity="0.5"/>
+  <circle cx="392" cy="34" r="1.4" fill="#e8eef5" opacity="0.45"/>
+
+  <circle cx="350" cy="95" r="54" fill="#fbbf24" opacity="0.10"/>
+  <circle cx="350" cy="95" r="30" fill="#fbbf24" opacity="0.14"/>
+
+  <rect x="0" y="225" width="420" height="75" fill="#1b2a21"/>
+  <rect x="0" y="225" width="420" height="20" fill="#26362e"/>
+
+  <!-- street lamp, lit -->
+  <rect x="347" y="95" width="6" height="130" fill="#6b7d74"/>
+  <path d="M334 95 L366 95 L359 78 L341 78 Z" fill="#fbbf24"/>
+  <rect x="338" y="221" width="24" height="6" rx="2" fill="#6b7d74"/>
+
+  <!-- sign post carrying the number 3 -->
+  <rect x="298" y="150" width="5" height="75" fill="#6b7d74"/>
+  <rect x="281" y="120" width="39" height="38" rx="5" fill="#22c55e"/>
+  <path d="M293.5 130.5 C296 126.5, 307.5 126, 307.5 133 C307.5 137.6, 302.5 139, 300 139 C302.5 139, 309 140, 309 145.5 C309 152.5, 296 152.5, 293 148"
+        fill="none" stroke="#0d1a12" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- blue bench -->
+  <rect x="155" y="160" width="110" height="7" rx="2" fill="#3b82f6"/>
+  <rect x="155" y="172" width="110" height="7" rx="2" fill="#3b82f6"/>
+  <rect x="152" y="186" width="116" height="8" rx="2" fill="#60a5fa"/>
+  <rect x="160" y="194" width="7" height="31" fill="#2f6fd0"/>
+  <rect x="253" y="194" width="7" height="31" fill="#2f6fd0"/>
+  <rect x="160" y="158" width="6" height="30" fill="#2f6fd0"/>
+  <rect x="254" y="158" width="6" height="30" fill="#2f6fd0"/>
+
+  <!-- dog: floppy ear, snout, four legs and a low tail, so it reads as a dog
+       rather than a cat at thumbnail size -->
+  <ellipse cx="200" cy="212" rx="17" ry="8.5" fill="#e5e7eb"/>
+  <rect x="187" y="217" width="4" height="11" rx="1.6" fill="#e5e7eb"/>
+  <rect x="195" y="217" width="4" height="11" rx="1.6" fill="#e5e7eb"/>
+  <rect x="205" y="217" width="4" height="11" rx="1.6" fill="#e5e7eb"/>
+  <rect x="213" y="217" width="4" height="11" rx="1.6" fill="#e5e7eb"/>
+  <circle cx="220" cy="203" r="8.5" fill="#e5e7eb"/>
+  <ellipse cx="230" cy="206" rx="6.5" ry="4.2" fill="#e5e7eb"/>
+  <circle cx="235" cy="205" r="1.7" fill="#14202b"/>
+  <path d="M215 196 C210 194, 208 202, 211 207 C214 208, 215 202, 216 199 Z" fill="#d1d5db"/>
+  <path d="M183 209 C176 208, 174 202, 177 198" fill="none" stroke="#e5e7eb" stroke-width="3.6" stroke-linecap="round"/>
+
+  <!-- red bicycle -->
+  <circle cx="60" cy="200" r="21" fill="none" stroke="#ef4444" stroke-width="4"/>
+  <circle cx="118" cy="200" r="21" fill="none" stroke="#ef4444" stroke-width="4"/>
+  <path d="M60 200 L84 166 L118 200 M84 166 L96 200 M60 200 L96 200"
+        fill="none" stroke="#ef4444" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M78 162 L92 162" stroke="#ef4444" stroke-width="4" stroke-linecap="round"/>
+  <path d="M118 200 L118 176 L110 171" fill="none" stroke="#ef4444" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M104 169 L122 165" stroke="#ef4444" stroke-width="4" stroke-linecap="round"/>
+</svg>

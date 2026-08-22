@@ -134,11 +134,26 @@ export function resolvePartialOutput({ output = '', reasoning = '' }) {
   return '';
 }
 
-export function buildMessages({ systemPrompt, prompt }) {
+export function buildMessages({ systemPrompt, prompt, images }) {
   const system = String(systemPrompt || '').trim();
+  // A vision request is the same chat call with a multi-part user `content`,
+  // in the OpenAI wire shape. Empty/absent `images` keeps the plain string form
+  // rather than wrapping the prompt in a one-element array — several local
+  // daemons accept only the string shape on a text-only call, so the wrapper is
+  // not free.
+  //
+  // NOTE: this builder feeds BOTH transports. Ollama's native `/api/chat`
+  // (`streamOllamaChat`) wants `{content: string, images: [bare base64]}`, not
+  // `image_url` parts, so `toOllamaMessages` below converts on the way out.
+  // Producing a payload one consumer cannot read is how images end up silently
+  // dropped with no error.
+  const parts = (Array.isArray(images) ? images : []).filter((url) => typeof url === 'string' && url);
+  const content = parts.length
+    ? [...parts.map((url) => ({ type: 'image_url', image_url: { url } })), { type: 'text', text: prompt }]
+    : prompt;
   return [
     ...(system ? [{ role: 'system', content: system }] : []),
-    { role: 'user', content: prompt },
+    { role: 'user', content },
   ];
 }
 
@@ -194,7 +209,7 @@ export async function streamOpenAiChat({
     signal,
     body: JSON.stringify({
       model,
-      messages,
+      messages: toOllamaMessages(messages),
       stream: true,
       temperature,
       max_tokens: maxTokens,
@@ -332,6 +347,30 @@ export async function streamOpenAiChat({
  * @returns {Promise<string>} visible content, or reasoning when content is
  *   absent; an interrupted stream throws with `.partialOutput`.
  */
+/**
+ * OpenAI-shaped messages → Ollama's native `/api/chat` shape.
+ *
+ * The two differ on exactly one thing: an image rides as an `image_url` content
+ * PART on the OpenAI wire and as a sibling `images: [bare base64]` array on
+ * Ollama's, with the text back in `content`. `buildMessages` produces the
+ * OpenAI shape for both transports, so without this the native path posts a
+ * content array Ollama does not read and the images vanish with no error.
+ *
+ * The `data:` wrapper is stripped because Ollama wants raw base64; a text-only
+ * message passes through untouched.
+ */
+export function toOllamaMessages(messages) {
+  return (messages || []).map((message) => {
+    if (!Array.isArray(message?.content)) return message;
+    const text = message.content.filter((part) => part?.type === 'text').map((part) => part.text || '').join('\n');
+    const images = message.content
+      .filter((part) => part?.type === 'image_url')
+      .map((part) => String(part?.image_url?.url || '').replace(/^data:[^;]+;base64,/, ''))
+      .filter(Boolean);
+    return { ...message, content: text, ...(images.length ? { images } : {}) };
+  });
+}
+
 export async function streamOllamaChat({
   endpoint,
   apiKey,

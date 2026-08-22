@@ -577,8 +577,20 @@ const OLLAMA_CAPABILITY_BADGES = {
   thinking: 'reasoning'
 }
 
-function ollamaBadgeCapabilities(rawCapabilities) {
-  return (Array.isArray(rawCapabilities) ? rawCapabilities : [])
+/**
+ * Ollama's reported capabilities → the badge vocabulary.
+ *
+ * `null` for a NON-ARRAY input, which is what `/api/tags` gives: that listing
+ * carries no capability flags at all, so nothing was reported and nothing is
+ * known. Returning `[]` there would collapse "not probed" into "claims
+ * nothing" — the sentinel mistake root CLAUDE.md forbids — which rendered an
+ * empty badge row on the install catalog and made every capability test look
+ * inapplicable. `/api/show` is what actually knows; an EMPTY array from it is a
+ * real answer and stays `[]`.
+ */
+export function ollamaBadgeCapabilities(rawCapabilities) {
+  if (!Array.isArray(rawCapabilities)) return null
+  return rawCapabilities
     .map((c) => OLLAMA_CAPABILITY_BADGES[String(c).toLowerCase()])
     .filter(Boolean)
 }

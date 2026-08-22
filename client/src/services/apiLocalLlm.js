@@ -279,3 +279,35 @@ export const cancelLocalLlmAssessmentSweep = (options) =>
 // several, one per launch tuning. `''` is the backend-defaults record.
 export const deleteLocalLlmAssessment = (backend, modelId, tuningKey = '', options) =>
   request('/local-llm/assessments/delete', { method: 'POST', body: JSON.stringify({ backend, modelId, tuningKey }), ...options });
+
+// === Capability tests ========================================================
+// The assessments above answer "how fast is this model here". These answer the
+// question speed cannot: can it do what its badges claim? Same consent rule —
+// GET is disk-only and safe on mount; the run endpoint calls a model and must
+// only fire from a click that was shown the runtime, model and tests first.
+//
+// There is deliberately no sweep and no schedule endpoint. A capability run is a
+// manual act.
+
+// What each installed model claims, which tests apply to it, and what each one
+// proved last time. Zero LLM calls.
+export const getModelCapabilityTests = (options) =>
+  request('/local-llm/capability-tests', options);
+
+// Run ONE test against ONE model. Minutes-long for the sandbox repair (it drives
+// a real agent loop), so callers pass a `signal` to abort on navigate-away, and
+// watch `localLlm:progress` frames with `scope: 'capability-test'` for the live
+// transcript.
+export const runModelCapabilityTest = (payload, options) =>
+  request('/local-llm/capability-tests/run', { method: 'POST', body: JSON.stringify(payload), ...options });
+
+// ONE stored result in full — the model's output and, for the sandbox test, the
+// agent transcript. The report ships summaries only (those two fields are the
+// bulk of a record), so the drawer fills in the rest when it opens a pairing.
+export const getModelCapabilityTestResult = (backend, modelId, testId, options) =>
+  request(`/local-llm/capability-tests/result?backend=${encodeURIComponent(backend)}&modelId=${encodeURIComponent(modelId)}&testId=${encodeURIComponent(testId)}`, options);
+
+// Drop one recorded result — after re-pulling a model at a different quant, the
+// stored verdict describes weights that are no longer installed.
+export const deleteModelCapabilityTest = (backend, modelId, testId, options) =>
+  request('/local-llm/capability-tests/delete', { method: 'POST', body: JSON.stringify({ backend, modelId, testId }), ...options });

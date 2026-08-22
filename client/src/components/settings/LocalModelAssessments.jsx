@@ -32,11 +32,14 @@ import { useAsyncAction } from '../../hooks/useAsyncAction';
 import useMounted from '../../hooks/useMounted';
 import useUrlParams from '../../hooks/useUrlParams';
 import AssessmentSweepPanel from './AssessmentSweepPanel';
+import ModelCapabilityTests, { TestCell } from './ModelCapabilityTests.jsx';
+import CapabilityBadges from '../models/CapabilityBadges.jsx';
 import ModelThroughputReport from './ModelThroughputReport';
 import { formatContextTokens, formatDurationMs, throughputLabel } from '../../utils/formatters';
 import { tuningNoticeChip } from '../../lib/assessmentTuningNotice';
 import {
   getLocalLlmAssessments, runLocalLlmAssessment, runOpenCodeAgentBenchmark, deleteLocalLlmAssessment,
+  getModelCapabilityTests,
 } from '../../services/api';
 
 const INTENTS = [
@@ -333,7 +336,37 @@ function AssessmentDrawer({
   );
 }
 
-function RankedRow({ entry, runtimeLabel, onRemeasure, onDelete, onSweepTunings, sweepVariants, busy }) {
+/**
+ * What this model has PROVED, beside what it is fast at.
+ *
+ * Only tests that apply are shown. An unclaimed capability is left out entirely
+ * rather than rendered as a grey "n/a" on every row — the matrix in the suite
+ * panel above is where the full grid lives; here it would be columns of nothing
+ * on the models that matter most.
+ *
+ * The chips themselves are the matrix's own `TestCell`, so the two surfaces on
+ * one page cannot drift into rendering the same verdict differently.
+ */
+function CapabilityStrip({ capability, backend, modelId, tests, onOpen }) {
+  if (!capability) return null;
+  const runnable = (capability.tests || []).filter((t) => t.state === 'applicable' || t.state === 'unknown');
+  if (!runnable.length) return null;
+  const labelFor = (testId) => tests?.find((t) => t.id === testId)?.label || testId;
+
+  return (
+    <div className="border-t border-port-border/70 pt-2 flex items-center gap-2 flex-wrap">
+      <span className="text-[11px] text-gray-500">Capability tests</span>
+      {runnable.map((slot) => (
+        <span key={slot.testId} className="flex items-center gap-1.5">
+          <span className="text-[11px] text-gray-400">{labelFor(slot.testId)}</span>
+          <TestCell slot={slot} onOpen={() => onOpen(backend, modelId, slot.testId)} />
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function RankedRow({ entry, runtimeLabel, onRemeasure, onDelete, onSweepTunings, sweepVariants, busy, capability, capabilityTests, onOpenCapabilityTest }) {
   const perf = entry.performance || {};
   return (
     <div className="border border-port-border rounded-lg p-3 space-y-2">
@@ -350,6 +383,10 @@ function RankedRow({ entry, runtimeLabel, onRemeasure, onDelete, onSweepTunings,
             <span className="px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400">
               {entry.tuningLabel || 'backend defaults'}
             </span>
+            {/* What the model CLAIMS, from the same badge component the install
+                catalog renders — the claim is what decides which tests below
+                apply, so the two must never disagree. */}
+            {capability && <CapabilityBadges capabilities={capability.capabilities} />}
           </div>
           {/* No `tuningApplied === false` caveat here on purpose: a reading whose
               configuration never reached the daemon is never RANKED. The server
@@ -467,6 +504,14 @@ function RankedRow({ entry, runtimeLabel, onRemeasure, onDelete, onSweepTunings,
           );
         })}
       </div>
+
+      <CapabilityStrip
+        capability={capability}
+        backend={entry.backend}
+        modelId={entry.modelId}
+        tests={capabilityTests}
+        onOpen={onOpenCapabilityTest}
+      />
     </div>
   );
 }
@@ -633,6 +678,12 @@ export function LocalModelAssessments() {
   // sweep panel because it gates this panel's per-model buttons too.
   const [sweepRunning, setSweepRunning] = useState(false);
   const [agentBenchmarkResults, setAgentBenchmarkResults] = useState({});
+  // Kept beside the assessment report rather than inside the suite panel: the
+  // ranked rows show each model's badges and capability verdicts too, so one
+  // fetch feeds both surfaces and they can never disagree about what a model
+  // claims. Disk-only on the server — safe to load with the tab.
+  const [capabilityReport, setCapabilityReport] = useState(null);
+  const [capabilityLoading, setCapabilityLoading] = useState(true);
 
   const [searchParams, updateParams] = useUrlParams();
   const measureBackend = searchParams.get('measureBackend') || '';
@@ -683,6 +734,30 @@ export function LocalModelAssessments() {
   }, []);
 
   useEffect(() => { load(intent); }, [load, intent]);
+
+  const loadCapabilities = useCallback(async () => {
+    setCapabilityLoading(true);
+    // The panel renders its own empty/error state (client/src/CLAUDE.md: custom
+    // catch ⇒ silent).
+    const data = await getModelCapabilityTests({ silent: true }).catch(() => null);
+    setCapabilityReport(data);
+    setCapabilityLoading(false);
+  }, []);
+
+  useEffect(() => { loadCapabilities(); }, [loadCapabilities]);
+
+  // One lookup shared by every ranked row, rebuilt only when the report changes —
+  // a per-row `find` over every installed model would be quadratic on a box with
+  // thirty models installed.
+  const capabilityByModel = useMemo(() => new Map(
+    (capabilityReport?.models || []).map((m) => [`${m.backend}:${m.modelId}`, m]),
+  ), [capabilityReport]);
+
+  // Both this panel and the suite panel drive the same URL params, so a row's
+  // chip opens the same drawer the matrix does without either owning the other.
+  const openCapabilityTest = useCallback((capBackend, capModel, capTest) => {
+    updateParams({ ...CLOSED_GATE_PARAMS, capBackend, capModel, capTest });
+  }, [updateParams]);
 
   // The row the URL names, once the report can say which one it is — that record
   // is what carries the tuning a re-measure starts from. Matched through
@@ -919,6 +994,16 @@ export function LocalModelAssessments() {
           to press at the end of the day; the results below are what you read the
           next morning. Disabled while a single-model run holds the provider —
           two measurements at once would measure the contention. */}
+      {/* What each model CLAIMS, and what it has proved. Kept above the ranking
+          because "can it do the job" is the question you ask before "how fast is
+          it" — and because the matrix is what sends you into a run. */}
+      <ModelCapabilityTests
+        report={capabilityReport}
+        loading={capabilityLoading}
+        onReload={loadCapabilities}
+        disabled={busy}
+      />
+
       <AssessmentSweepPanel
         counts={report?.sweepScopes}
         contextTokens={report?.defaultContextTokens || []}
@@ -973,6 +1058,9 @@ export function LocalModelAssessments() {
                   onRemeasure={openTarget}
                   onDelete={removeAssessment}
                   onSweepTunings={openSweepTarget}
+                  capability={capabilityByModel.get(`${entry.backend}:${entry.modelId}`) || null}
+                  capabilityTests={capabilityReport?.tests}
+                  onOpenCapabilityTest={openCapabilityTest}
                 />
               ))}
             </div>

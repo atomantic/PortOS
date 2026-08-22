@@ -28,6 +28,9 @@ import {
   localLlmAgentBenchmarkSchema,
   localLlmAssessmentDeleteSchema,
   localLlmAssessmentSweepSchema,
+  localLlmCapabilityTestSchema,
+  localLlmCapabilityTestRunSchema,
+  localLlmCapabilityTestDeleteSchema,
   localLlmLlamaServerStartSchema,
   localLlmLmStudioServiceSchema,
   localLlmMtplxStartSchema,
@@ -56,6 +59,8 @@ import { runLocalLlmTest, compareLocalLlmModels } from '../services/localLlmPlay
 import { getAssessmentReport, runAssessment, deleteAssessment } from '../services/localModelAssessments.js'
 import { startSweep, getSweepStatus, cancelSweep } from '../services/localModelAssessmentSweep.js'
 import { runOpenCodeAgentBenchmark } from '../services/localModelAgentBenchmark.js'
+import { getCapabilityTestReport, getCapabilityTestResult, runCapabilityTest } from '../services/modelCapabilityTests.js'
+import { deleteResult as deleteCapabilityTestResult } from '../services/modelCapabilityTestStore.js'
 import { listUserModels } from '../services/audioModels.js'
 import { ENGINES } from '../services/pipeline/musicGen.js'
 import { abortSignalFromResponse } from '../lib/requestAbort.js'
@@ -546,6 +551,65 @@ router.post('/assessments/delete', asyncHandler(async (req, res) => {
   const result = await deleteAssessment(backend, modelId, tuningKey)
   if (!result.deleted) throw new ServerError('No assessment recorded for that model', { status: 404, context: { backend, modelId, tuningKey } })
   res.json({ success: true, backend, modelId, tuningKey })
+}))
+
+// === Capability tests ========================================================
+// The assessments above answer "how fast is this model here". These answer the
+// question speed cannot: can it do what its badges claim? One test per
+// capability — tool use (repair a module in a sandbox, driven through a real
+// OpenCode TUI), vision (describe a fixture image, scored on required and bonus
+// keywords), and chat/reasoning (a twelve-beat story outline, scored on beat
+// coverage). Every run keeps the model's full output.
+//
+// Same read/run split as the assessments, and for the same reason: GET touches
+// disk only; POST /run is the ONLY path that reaches a model, and it fires from
+// one deliberate click whose gate names the runtime, model and tests first.
+// There is deliberately no sweep and no scheduled entry point here — a
+// capability run is a manual act.
+
+// GET /api/local-llm/capability-tests — what each installed model claims, which
+// tests apply, and what each one proved last time. Zero LLM calls.
+router.get('/capability-tests', asyncHandler(async (_req, res) => {
+  res.json(await getCapabilityTestReport())
+}))
+
+// POST /api/local-llm/capability-tests/run — run ONE test against ONE model.
+// Long-running (a sandbox repair is an agent loop), so the client's abort signal
+// is threaded through to stop mid-run on disconnect.
+router.post('/capability-tests/run', asyncHandler(async (req, res) => {
+  const { backend, modelId, testId } = validateRequest(localLlmCapabilityTestRunSchema, req.body)
+  const io = req.app.get('io')
+  // Same `localLlm:progress` channel every long local-LLM operation uses. The
+  // `scope: 'capability-test'` field plus backend/model/test is what lets a
+  // listener tell these frames from a model pull streaming on the same event —
+  // and the `output` frames are what render the agent transcript live.
+  const onProgress = (frame) => io?.emit('localLlm:progress', frame)
+  res.json(await runCapabilityTest({
+    backend, modelId, testId, onProgress, signal: abortSignalFromResponse(res),
+  }))
+}))
+
+// GET /api/local-llm/capability-tests/result — ONE stored result in full,
+// including the model's output and the agent transcript.
+//
+// Split from the report on purpose: those two fields are the bulk of a record
+// and are read only when the drawer opens one pairing, so the report ships
+// summaries and this fills in the rest. Query params rather than a path because
+// a model id is not one — it carries `/` and `:` (`hf.co/org/repo:Q4_K_M`).
+router.get('/capability-tests/result', asyncHandler(async (req, res) => {
+  const { backend, modelId, testId } = validateRequest(localLlmCapabilityTestSchema, req.query)
+  const result = await getCapabilityTestResult(backend, modelId, testId)
+  if (!result) throw new ServerError('No capability test result recorded for that model', { status: 404, context: { backend, modelId, testId } })
+  res.json(result)
+}))
+
+// POST /api/local-llm/capability-tests/delete — drop one recorded result.
+// 404s when nothing was removed rather than reporting a phantom success.
+router.post('/capability-tests/delete', asyncHandler(async (req, res) => {
+  const { backend, modelId, testId } = validateRequest(localLlmCapabilityTestDeleteSchema, req.body)
+  const result = await deleteCapabilityTestResult(backend, modelId, testId)
+  if (!result.deleted) throw new ServerError('No capability test result recorded for that model', { status: 404, context: { backend, modelId, testId } })
+  res.json({ success: true, backend, modelId, testId })
 }))
 
 // === llama-server (DFlash 2 / Speculative Decoding) ==========================

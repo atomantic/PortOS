@@ -302,6 +302,8 @@ export * from './specDecodePresets.js';
 export * from './localModelHeuristics.js';
 export * from './localModelAssessment.js';
 export * from './localModelTuning.js';
+export * from './modelCapabilityTests.js';
+export * from './opencodeStream.js';
 export * from './ollamaContext.js';
 export * from './loraDataset.js';
 export * from './loraTriggers.js';

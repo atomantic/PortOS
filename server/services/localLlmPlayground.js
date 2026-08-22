@@ -111,7 +111,7 @@ async function resolveLocalProvider(backend) {
   return provider;
 }
 
-async function streamChatCompletion({ provider, backend, modelId, prompt, systemPrompt, temperature, maxTokens, extraBody = {}, signal, onChunk, onStats, nativeOllamaUsage = false }) {
+async function streamChatCompletion({ provider, backend, modelId, prompt, systemPrompt, images, temperature, maxTokens, extraBody = {}, signal, onChunk, onStats, nativeOllamaUsage = false }) {
   if (backend === 'ollama') {
     const ready = await ensureOllamaProviderReady(provider).catch((err) => ({ success: false, error: err.message }));
     if (!ready.success) {
@@ -132,7 +132,7 @@ async function streamChatCompletion({ provider, backend, modelId, prompt, system
     endpoint: provider.endpoint,
     apiKey: provider.apiKey,
     model: modelId,
-    messages: buildMessages({ systemPrompt, prompt }),
+    messages: buildMessages({ systemPrompt, prompt, images }),
     temperature,
     maxTokens,
     // The caller's knobs win over the provider default, so a caller measuring a
@@ -154,6 +154,10 @@ export async function runLocalLlmTest({
   modelId,
   prompt,
   systemPrompt = '',
+  // Base64 data URLs sent alongside the prompt as `image_url` parts — how the
+  // vision capability test asks a model to look at the fixture. Empty for every
+  // text-only caller, which keeps the plain string `content` shape.
+  images,
   temperature = 0.3,
   maxTokens = 1000,
   timeoutMs = 300000,
@@ -210,6 +214,7 @@ export async function runLocalLlmTest({
       modelId,
       prompt,
       systemPrompt,
+      images,
       temperature,
       maxTokens,
       extraBody,
@@ -296,6 +301,8 @@ export async function runEndpointLlmTest({
   modelId,
   prompt,
   systemPrompt = '',
+  // See `runLocalLlmTest` — base64 data URLs for a vision request.
+  images,
   temperature = 0.3,
   maxTokens = 1000,
   timeoutMs = 300000,
@@ -315,7 +322,7 @@ export async function runEndpointLlmTest({
       endpoint,
       apiKey,
       model: modelId,
-      messages: buildMessages({ systemPrompt, prompt }),
+      messages: buildMessages({ systemPrompt, prompt, images }),
       temperature,
       maxTokens,
       extraBody,

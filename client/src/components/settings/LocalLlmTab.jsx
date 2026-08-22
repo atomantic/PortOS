@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { Cpu, Box, ArrowRightLeft, Download, Trash2, RefreshCw, Search, Plus, ExternalLink, Star, Link2, Copy, Play, Power, PowerOff, Eye, Wrench, Brain, Code2, MessageSquare, Boxes, AlertTriangle, FlaskConical, Music, ArrowUpCircle, Zap, ChevronDown, ChevronUp, Terminal } from 'lucide-react';
+import { Cpu, Box, ArrowRightLeft, Download, Trash2, RefreshCw, Search, Plus, ExternalLink, Star, Link2, Copy, Play, Power, PowerOff, AlertTriangle, FlaskConical, ArrowUpCircle, Zap, ChevronDown, ChevronUp, Terminal } from 'lucide-react';
 import toast from '../ui/Toast';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import BrailleSpinner from '../BrailleSpinner';
@@ -16,6 +16,7 @@ import {
   saveRuntimeStartupList
 } from '../../services/api';
 import socket from '../../services/socket';
+import CapabilityBadges from '../models/CapabilityBadges.jsx';
 import SpecDecodeWeightRow from './SpecDecodeWeightRow.jsx';
 import RuntimeServersCard from './RuntimeServersCard.jsx';
 import MtplxServerCard from './MtplxServerCard.jsx';
@@ -86,18 +87,6 @@ const recommendationCategoriesFor = (model) => {
 };
 const isRecommendedForCategory = (model, category) => recommendationCategoriesFor(model).includes(category);
 
-// Render model capabilities as colored icons (LM Studio style) instead of text.
-// `cls` is the icon color; the bordered chip uses the same hue at low opacity.
-const CAPABILITY_META = {
-  chat: { Icon: MessageSquare, label: 'Chat', cls: 'text-gray-400 border-gray-500/50' },
-  code: { Icon: Code2, label: 'Code', cls: 'text-sky-400 border-sky-400/50' },
-  reasoning: { Icon: Brain, label: 'Reasoning', cls: 'text-emerald-400 border-emerald-400/50' },
-  vision: { Icon: Eye, label: 'Vision', cls: 'text-amber-400 border-amber-400/50' },
-  embeddings: { Icon: Boxes, label: 'Embeddings', cls: 'text-violet-400 border-violet-400/50' },
-  tools: { Icon: Wrench, label: 'Tool use', cls: 'text-blue-400 border-blue-400/50' },
-  audio: { Icon: Music, label: 'Audio generation', cls: 'text-pink-400 border-pink-400/50' },
-};
-
 // A model suited to AGENT / CoS tasks (coding agents, the Creative Director
 // treatment/plan agents) needs BOTH native tool calling AND enough coding /
 // instruction-following muscle to drive a multi-step loop. A chat-only
@@ -166,28 +155,6 @@ function summarizeMigrate(r) {
     c.skipped && `${c.skipped} skipped`
   ].filter(Boolean);
   return `${labelFor(r.from)} → ${labelFor(r.to)}: ${parts.join(', ') || 'nothing to move'}`;
-}
-
-// Shared capability-icon row for both catalog/search-result cards and the
-// installed-models list, so the two surfaces render the same badges the same way.
-function CapabilityBadges({ capabilities }) {
-  return (capabilities || []).map((capability) => {
-    const meta = CAPABILITY_META[capability];
-    if (!meta) {
-      return <span key={capability} className="px-1.5 py-0.5 bg-port-border/60 rounded">{capability}</span>;
-    }
-    const Icon = meta.Icon;
-    return (
-      <span
-        key={capability}
-        title={meta.label}
-        aria-label={meta.label}
-        className={`inline-flex items-center justify-center w-5 h-5 rounded border ${meta.cls}`}
-      >
-        <Icon size={12} />
-      </span>
-    );
-  });
 }
 
 function BackendCard({ backend, status, isDefault, busy, actionInProgress, runAction, setConfirmAction }) {

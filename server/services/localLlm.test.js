@@ -633,8 +633,12 @@ describe('localLlm', () => {
       expect(models.find((m) => m.id === 'qwen3.6:35b').capabilities.sort())
         .toEqual(['chat', 'reasoning', 'tools', 'vision']);
       expect(models.find((m) => m.id === 'nomic-embed-text').capabilities).toEqual(['embeddings']);
-      // No reported capabilities → no guessed badges (unlike the vision id heuristic).
-      expect(models.find((m) => m.id === 'legacy-model').capabilities).toEqual([]);
+      // No reported capabilities → `null`, meaning NOT PROBED — /api/tags carries
+      // no capability flags at all, so nothing was reported and nothing is known.
+      // `[]` would say "this model claims nothing", which is a different and
+      // untrue claim: it renders an empty badge row and makes every capability
+      // test look inapplicable. Still no guessing (unlike the vision id heuristic).
+      expect(models.find((m) => m.id === 'legacy-model').capabilities).toBeNull();
     });
 
     it('derives LM Studio badges from the native `type` field plus the shared tool-use id heuristic', async () => {

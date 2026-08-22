@@ -80,6 +80,10 @@ export const DEFAULT_EXCLUDES = [
   // model.glb, which IS backed up), and at ~1 GB per render it would otherwise
   // dominate every snapshot. Overridable, because it is the only copy of the
   // discarded detail and someone archiving finished work may want it.
+  // Anchored, like every entry here. Capability-test sandboxes are throwaway
+  // copies of a fixture that ships in the repo — restoring one would restore a
+  // half-finished agent edit, which is worse than not having it.
+  { path: '/model-tests/sandboxes/', reason: 'Capability-test agent sandboxes — throwaway working copies of a repo fixture, recreated per run', overridable: false },
   { path: '/image-to-3d/*/model.obj', reason: 'TRELLIS.2 full-resolution mesh sidecar — ~1 GB per render, regenerable by re-rendering at the same seed. The exported model.glb and keyed source ARE backed up.', overridable: true },
   // Anchored, like every entry here. Not overridable: these are another
   // machine's conditioning bytes, staged for one federated render and swept on

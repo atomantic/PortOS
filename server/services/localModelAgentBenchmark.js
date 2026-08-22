@@ -21,6 +21,10 @@ import { ServerError } from '../lib/errorHandler.js';
 import { bufferedSpawn, prepareCliSpawn } from '../lib/bufferedSpawn.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { isOpencodeCommand, prefixOpencodeModel } from '../lib/providerModels.js';
+// The stream parser is shared with the capability test suite: two independent
+// parsers of the same OpenCode envelope is how the two end up reporting
+// different tool-call counts for the same run.
+import { summarizeOpenCodeEvents } from '../lib/opencodeStream.js';
 import { getProviderById } from './providers.js';
 
 export const OPENCODE_AGENT_BENCHMARK_TARGETS = Object.freeze({
@@ -65,48 +69,9 @@ const targetFor = (backend, modelId) => {
   return target;
 };
 
-const jsonLines = (output) => String(output || '').split(/\r?\n/).map((line) => {
-  const trimmed = line.trim();
-  if (!trimmed) return null;
-  try { return JSON.parse(trimmed); }
-  catch { return null; }
-}).filter(Boolean);
-
-/**
- * Extract task evidence from OpenCode's `--format json` event stream.
- * OpenCode has used both `type: 'text', part: { text }` and
- * `type: 'message.part.updated', properties: { part: { type: 'text', text } }`
- * shapes, so the parser accepts both without counting tool arguments as answer
- * text. It is pure and exported for fixture-driven tests.
- */
-export function summarizeOpenCodeEvents(output) {
-  let assistantText = '';
-  let toolCalls = 0;
-  let outputTokens = 0;
-  let hasOutputTokens = false;
-
-  for (const event of jsonLines(output)) {
-    const part = event?.part || event?.properties?.part || event?.data?.part || null;
-    const partType = part?.type || event?.type;
-    if (partType === 'text') {
-      const text = typeof part?.text === 'string' ? part.text : event?.text;
-      if (typeof text === 'string') assistantText += text;
-    }
-    if (partType === 'tool' || partType === 'tool_use' || partType === 'tool-call' || event?.type === 'tool_use') toolCalls += 1;
-
-    const candidate = part?.tokens?.output ?? event?.tokens?.output ?? event?.usage?.completion_tokens ?? event?.usage?.output_tokens;
-    if (typeof candidate === 'number' && Number.isFinite(candidate) && candidate >= 0) {
-      outputTokens += candidate;
-      hasOutputTokens = true;
-    }
-  }
-
-  return {
-    assistantChars: assistantText.length,
-    toolCalls,
-    outputTokens: hasOutputTokens ? outputTokens : null,
-  };
-}
+// Re-exported so this module's own callers and suite keep one import site while
+// the envelope itself lives in `lib/opencodeStream.js`.
+export { summarizeOpenCodeEvents };
 
 const validateProvider = (provider, target) => {
   if (!provider) {

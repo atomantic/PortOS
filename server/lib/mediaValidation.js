@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { PORTS } from './ports.js';
 import { ASSESSABLE_RUNTIMES } from './localProviderRuntime.js';
 import { SWEEP_SCOPES } from './localModelAssessment.js';
+import { CAPABILITY_TEST_IDS } from './modelCapabilityTests.js';
 
 // OpenWorld snapshot pipeline (issue #877): how often to capture a city-state
 // frame and how many to retain. Validated as a settings slice on PUT /api/settings;
@@ -321,6 +322,25 @@ export const localLlmAssessmentDeleteSchema = z.object({
   modelId: localLlmModelIdSchema,
   tuningKey: z.string().max(500).optional().default(''),
 });
+
+// Capability tests (server/services/modelCapabilityTests.js). One request runs
+// ONE test against ONE model — deliberately not a batch. A capability run is a
+// manual act with a consent gate in front of it, and an endpoint that could
+// accept a list of models would turn one click into an unbounded, hours-long
+// sequence of provider calls the gate never named.
+//
+// `testId` is validated against the shipped catalog rather than as free text:
+// the id selects which runner executes, so an unknown one must be a 400 at the
+// edge, not a lookup miss deep in the service.
+export const localLlmCapabilityTestSchema = z.object({
+  backend: localLlmRuntimeSchema,
+  modelId: localLlmModelIdSchema,
+  testId: z.enum(CAPABILITY_TEST_IDS),
+});
+// Run, read-one and delete all name exactly one model+test pairing, so they
+// share a schema rather than three copies that could drift apart.
+export const localLlmCapabilityTestRunSchema = localLlmCapabilityTestSchema;
+export const localLlmCapabilityTestDeleteSchema = localLlmCapabilityTestSchema;
 
 export const localLlmCompareSchema = z.object({
   mode: z.enum(['round-robin', 'parallel']).optional().default('round-robin'),
