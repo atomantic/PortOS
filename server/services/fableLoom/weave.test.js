@@ -416,6 +416,26 @@ describe('reformatLoom', () => {
     expect(allNodes.every((n) => n.format === 'teleplay')).toBe(true);
   });
 
+  it('reports scenes the model dropped as remaining, and holds the pin back', async () => {
+    const { loomId, gateId, insideId } = await proseSetup();
+    // The model returns one of the two scenes it was given. The run is under
+    // the chunk ceiling, so nothing but the dropped scene is left over.
+    runStagedLLM.mockResolvedValue({ content: { scenes: [{ id: gateId, prose: 'INT. GATE' }] } });
+
+    const result = await reformatLoom(loomId, { format: 'teleplay' });
+    expect(result).toMatchObject({ rewritten: 1, remaining: 1 });
+    // Claiming teleplay here would point every later weave/branch/play at a
+    // contract the untouched scene isn't written in.
+    expect(result.loom.format).toBe('prose');
+    expect(result.loom.episodes[0].nodes.find((n) => n.id === insideId).format).toBeNull();
+
+    // Finishing the job pins it.
+    runStagedLLM.mockResolvedValue({ content: { scenes: [{ id: insideId, prose: 'INT. INSIDE' }] } });
+    const done = await reformatLoom(loomId, { format: 'teleplay' });
+    expect(done).toMatchObject({ rewritten: 1, remaining: 0 });
+    expect(done.loom.format).toBe('teleplay');
+  });
+
   it('asks the model for the TARGET format, not the one the loom still holds', async () => {
     const { loomId } = await proseSetup();
     runStagedLLM.mockImplementation(async (stage, variables) => ({

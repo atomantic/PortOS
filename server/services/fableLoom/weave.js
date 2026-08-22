@@ -371,15 +371,11 @@ export async function reformatLoom(loomId, { format, providerId, model, effort }
   const sceneCount = pending.reduce((total, e) => total + e.nodes.length, 0);
   let rewritten = 0;
   let chunks = 0;
-  let remaining = 0;
 
   for (const { episode, nodes } of pending) {
     for (let i = 0; i < nodes.length; i += REFORMAT_CHUNK) {
       const batch = nodes.slice(i, i + REFORMAT_CHUNK);
-      if (chunks >= REFORMAT_CHUNKS_MAX) {
-        remaining += batch.length;
-        continue;
-      }
+      if (chunks >= REFORMAT_CHUNKS_MAX) continue;
       chunks += 1;
       const { content, runId } = await runStagedLLM('fableloom-reformat-scenes', {
         // The TARGET format, not the loom's current one: the pin is written
@@ -423,10 +419,18 @@ export async function reformatLoom(loomId, { format, providerId, model, effort }
   // A loom with nothing to rewrite is a no-op, not a failure — the pin is still
   // the point. Only a loom that HAD scenes and got none back is a bad response.
   if (sceneCount && !rewritten) throw aiShapeError('The model returned no rewritten scenes');
-  // Only a fully-converted loom gets the pin; a run that stopped at the ceiling
-  // leaves it alone so the record never claims a format half its scenes lack.
+
+  // Counted off the RECORD rather than accumulated in the loop, because scenes
+  // go unconverted for two unrelated reasons: the per-request ceiling stopped
+  // early, or the model simply didn't return them (it can drop 2 of a 5-scene
+  // batch). Tracking only the first would report a partial rewrite as complete
+  // and pin the loom to a format some of its scenes are not in.
+  const after = await getLoom(loomId);
+  const remaining = after.episodes.reduce((total, ep) => total
+    + ep.nodes.filter((n) => isStr(n.prose) && n.prose.trim() && n.format !== target).length, 0);
+  // Only a fully-converted loom gets the pin.
   const updated = remaining
-    ? await getLoom(loomId)
+    ? after
     : await mutateLoom(loomId, (current) => ({ ...current, format: target }));
   return { loom: updated, format: target, rewritten, remaining, runIds };
 }
