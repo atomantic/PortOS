@@ -25,6 +25,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   return makePathsProxy(actual, { dataRoot: testDataRoot });
 });
 vi.mock('./dataManagerBusy.js', () => ({
+  federatedMediaInboxBusy: vi.fn(async () => ({ busy: false })),
   imageCleanTmpBusy: vi.fn(async () => ({ busy: false })),
   trainingRunsBusy: vi.fn(async () => ({ busy: false })),
   updateDetachedBusy: vi.fn(async () => ({ busy: false })),

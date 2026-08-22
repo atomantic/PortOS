@@ -208,3 +208,77 @@ describe('prepareRemoteMediaJob', () => {
     expect(result.remoteMedia.request.numFrames).toBe(33);
   });
 });
+
+// Every lane — Image Gen, Video Gen, and the unattended router — funnels through
+// prepareRemoteMediaJob, so the conditioning gate lives HERE rather than being
+// written per route. It previously was written per route, and the unattended
+// lane (the one with nobody watching) had no copy at all.
+describe('prepareRemoteMediaJob — conditioning gate', () => {
+  const PEER_ID = '00000000-0000-4000-8000-000000000001';
+  const peer = { id: PEER_ID, enabled: true };
+  const capability = (inputAssets, kind = 'video') => ({
+    kind, engine: 'local', modelId: 'ltx2', modelName: 'LTX-2', inputAssets,
+  });
+  const roles = (...names) => ({
+    roles: names, required: false, maxCount: 8, maxBytes: 1, mimeTypes: ['image/png'],
+  });
+
+  const prepare = (kind, request, inputAssets, cap) => {
+    mockGetPeers.mockResolvedValue([peer]);
+    mockResolveFederatedMediaProvider.mockResolvedValue({ peer, capability: cap });
+    return prepareRemoteMediaJob({ peerId: PEER_ID, kind, request, inputAssets });
+  };
+
+  it('refuses an end frame with no start frame, on every lane at once', async () => {
+    await expect(prepare(
+      'video',
+      { kind: 'video', engine: 'local', modelId: 'ltx2', prompt: 'a harbour' },
+      [{ role: 'lastImage', path: 'end.png' }],
+      capability(roles('sourceImage', 'lastImage')),
+    )).rejects.toMatchObject({ status: 400, code: 'MEDIA_PROVIDER_INPUT_UNSUPPORTED' });
+  });
+
+  it('accepts the pair, and persists the local paths on the marker', async () => {
+    const assets = [
+      { role: 'sourceImage', path: 'start.png' },
+      { role: 'lastImage', path: 'end.png' },
+    ];
+    const result = await prepare(
+      'video',
+      { kind: 'video', engine: 'local', modelId: 'ltx2', prompt: 'a harbour' },
+      assets,
+      capability(roles('sourceImage', 'lastImage')),
+    );
+    // Local paths, never provider asset ids — those name slots in a TTL-swept
+    // area and would reconcile into a reference to bytes that are gone.
+    expect(result.remoteMedia.inputAssets).toEqual(assets);
+  });
+
+  // The remedy has to name the kind the caller is actually rendering; pointing a
+  // blocked VIDEO render at "a text-to-image model" names a control that is not
+  // on their screen.
+  it('names the caller’s own kind when a model needs conditioning it did not get', async () => {
+    await expect(prepare(
+      'video',
+      { kind: 'video', engine: 'local', modelId: 'ltx2', prompt: 'a harbour' },
+      [],
+      capability({ ...roles('sourceImage'), required: true }),
+    )).rejects.toThrow(/text-to-video/);
+
+    await expect(prepare(
+      'image',
+      { kind: 'image', engine: 'local', modelId: 'flux', prompt: 'a lighthouse', width: 512, height: 512 },
+      [],
+      capability({ ...roles('initImage'), required: true }, 'image'),
+    )).rejects.toThrow(/text-to-image/);
+  });
+
+  it('refuses a role the peer model never advertised', async () => {
+    await expect(prepare(
+      'image',
+      { kind: 'image', engine: 'local', modelId: 'flux', prompt: 'a lighthouse', width: 512, height: 512 },
+      [{ role: 'referenceImages', path: 'ref.png' }],
+      capability(roles('initImage'), 'image'),
+    )).rejects.toMatchObject({ status: 400, code: 'MEDIA_PROVIDER_INPUT_UNSUPPORTED' });
+  });
+});

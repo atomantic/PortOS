@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { federatedMediaAssetId } from '../../lib/federatedMediaWire.js';
 
 let tempImageDir;
 const transport = vi.hoisted(() => ({ fetch: vi.fn() }));
@@ -40,6 +41,9 @@ vi.mock('../federatedMediaConsumer.js', () => ({
 
 vi.mock('../instances.js', () => ({
   getPeers: vi.fn(async () => federation.peers),
+  // Used to derive the consumer's own half of a content-addressed asset id, so it
+  // can ask the peer whether bytes are already staged before re-sending them.
+  getInstanceId: vi.fn(async () => 'consumer-instance'),
 }));
 
 import { imageGenEvents } from '../imageGenEvents.js';
@@ -221,7 +225,7 @@ describe('federated image consumer adapter', () => {
       Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
       Buffer.from('init-image-bytes'),
     ]);
-    const ASSET_ID = `${'0'.repeat(16)}-${sha256(png)}`;
+    const ASSET_ID = federatedMediaAssetId('consumer-instance', sha256(png));
 
     const conditionedParams = () => {
       writeFileSync(join(tempImageDir, 'init.png'), png);
@@ -270,6 +274,38 @@ describe('federated image consumer adapter', () => {
       expect(JSON.parse(submission[1].body).initImage).toEqual({ assetId: ASSET_ID });
       // The local path is machine-local routing state and never crosses.
       expect(submission[1].body).not.toContain('init.png');
+    });
+
+    // Content addressing only pays off if BOTH sides can compute the address.
+    // The consumer derives the id from its own instance id and the file digest,
+    // asks, and sends nothing when the peer already has it — which is what makes
+    // a reconcile after a restart, or a second render from the same init image,
+    // cost one small GET instead of up to 32 MiB.
+    it('asks before sending, and skips the upload when the peer already has the bytes', async () => {
+      transport.fetch.mockImplementation(async (url, options) => {
+        if (url.includes('/assets/')) {
+          return jsonResponse({
+            wireVersion: 1,
+            assetId: ASSET_ID,
+            sha256: sha256(png),
+            sizeBytes: png.length,
+            mimeType: 'image/png',
+            expiresAt: '2026-08-22T18:00:00.000Z',
+          });
+        }
+        if (url.endsWith('/jobs') && options.method === 'POST') return jsonResponse(providerJob('canceled'), 202);
+        throw new Error(`Unexpected test URL: ${url}`);
+      });
+
+      const terminal = captureTerminal(LOCAL_JOB_ID);
+      await generateImage(conditionedParams()).catch(() => {});
+      await terminal;
+
+      expect(transport.fetch.mock.calls.some(([url, options]) =>
+        url.endsWith('/assets') && options?.method === 'POST')).toBe(false);
+      const submission = transport.fetch.mock.calls
+        .find(([url, options]) => url.endsWith('/jobs') && options.method === 'POST');
+      expect(JSON.parse(submission[1].body).initImage).toEqual({ assetId: ASSET_ID });
     });
 
     // A provider echoing back a digest that is not ours means the bytes it

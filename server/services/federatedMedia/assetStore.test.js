@@ -3,9 +3,13 @@ import { mkdtempSync, rmSync, writeFileSync, existsSync, utimesSync } from 'node
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PATHS } from '../../lib/fileUtils.js';
-import { FEDERATED_MEDIA_ASSET_TTL_MS } from '../../lib/federatedMediaWire.js';
 import {
-  callerAssetPrefix,
+  FEDERATED_MEDIA_ASSET_TTL_MS,
+  federatedMediaAssetId,
+} from '../../lib/federatedMediaWire.js';
+import {
+  __resetFederatedAssetSweepForTests,
+  collectActiveFederatedAssetBasenames,
   describeFederatedMediaAsset,
   findFederatedMediaAsset,
   storeFederatedMediaAsset,
@@ -27,6 +31,9 @@ beforeEach(() => {
   tempRoot = mkdtempSync(join(tmpdir(), 'portos-federated-inbox-'));
   originalInbox = PATHS.federatedMediaInbox;
   PATHS.federatedMediaInbox = tempRoot;
+  // The sweep throttles itself to one run per few minutes, which is a
+  // duplicate-work guard rather than a behavior these cases are asserting.
+  __resetFederatedAssetSweepForTests();
 });
 
 afterEach(() => {
@@ -54,7 +61,7 @@ describe('federated media asset store', () => {
       sizeBytes: PNG.length,
       mimeType: 'image/png',
     });
-    expect(stored.assetId).toBe(`${callerAssetPrefix('peer-a')}-${await sha256(PNG)}`);
+    expect(stored.assetId).toBe(federatedMediaAssetId('peer-a', await sha256(PNG)));
     await expect(findFederatedMediaAsset('peer-a', stored.assetId)).resolves.toMatchObject({
       mimeType: 'image/png',
       sizeBytes: PNG.length,
@@ -87,7 +94,7 @@ describe('federated media asset store', () => {
   it('rejects a digest that does not match the bytes rather than staging them', async () => {
     await expect(upload('peer-a', PNG, 'image/png', 'f'.repeat(64)))
       .rejects.toMatchObject({ code: 'MEDIA_PROVIDER_ASSET_INTEGRITY' });
-    await expect(sweepFederatedMediaAssets()).resolves.toBe(0);
+    await expect(sweepFederatedMediaAssets({ force: true })).resolves.toBe(0);
   });
 
   // The declared Content-Type is the caller's word for what this is; the magic
@@ -118,13 +125,13 @@ describe('federated media asset store', () => {
     utimesSync(staged, stale, stale);
 
     await expect(findFederatedMediaAsset('peer-a', stored.assetId)).resolves.toBeNull();
-    await expect(sweepFederatedMediaAssets()).resolves.toBe(1);
+    await expect(sweepFederatedMediaAssets({ force: true })).resolves.toBe(1);
     expect(existsSync(staged)).toBe(false);
   });
 
   it('leaves a live asset alone when sweeping', async () => {
     const stored = await upload('peer-a');
-    await expect(sweepFederatedMediaAssets()).resolves.toBe(0);
+    await expect(sweepFederatedMediaAssets({ force: true })).resolves.toBe(0);
     await expect(findFederatedMediaAsset('peer-a', stored.assetId)).resolves.not.toBeNull();
   });
 
@@ -150,6 +157,60 @@ describe('federated media asset store', () => {
 
   it('answers a missing inbox directory with zero swept rather than throwing', async () => {
     rmSync(tempRoot, { recursive: true, force: true });
-    await expect(sweepFederatedMediaAssets()).resolves.toBe(0);
+    await expect(sweepFederatedMediaAssets({ force: true })).resolves.toBe(0);
+  });
+
+  // The age gate is a BACKSTOP, not the safety property — the lesson
+  // imageCleanTmpGc.js records for the structurally identical image-clean-tmp
+  // dir. A federated job queued behind a long render or a first-run model
+  // download can easily sit past the TTL, and deleting its staged init image
+  // leaves the runner unable to open a file the consumer already committed to
+  // and is waiting on. Nothing re-uploads it: the ids were resolved at
+  // admission, and the provider never tells the consumer the bytes went away.
+  describe('active-job pinning', () => {
+    const expire = (path) => {
+      const stale = (Date.now() - FEDERATED_MEDIA_ASSET_TTL_MS - 60_000) / 1000;
+      utimesSync(path, stale, stale);
+    };
+
+    it('spares an expired asset a queued job still depends on', async () => {
+      const stored = await upload('peer-a');
+      const staged = (await findFederatedMediaAsset('peer-a', stored.assetId)).path;
+      expire(staged);
+
+      const jobs = [{ status: 'queued', params: { initImagePath: staged } }];
+      await expect(sweepFederatedMediaAssets({ jobs, force: true })).resolves.toBe(0);
+      expect(existsSync(staged)).toBe(true);
+    });
+
+    it('collects every conditioning slot, from paths and from arrays alike', () => {
+      const keep = collectActiveFederatedAssetBasenames([
+        { status: 'running', params: { initImagePath: '/inbox/a.png' } },
+        { status: 'queued', params: { referenceImagePaths: ['/inbox/b.png', '/inbox/c.png'] } },
+        { status: 'queued', params: { sourceImagePath: '/inbox/d.png', lastImagePath: '/inbox/e.png' } },
+      ]);
+      expect([...keep].sort()).toEqual(['a.png', 'b.png', 'c.png', 'd.png', 'e.png']);
+    });
+
+    // A terminal job has already rendered, so its conditioning is free to go —
+    // otherwise the inbox would only ever grow.
+    it.each([['completed'], ['failed'], ['canceled']])('does not pin a %s job', async (status) => {
+      const stored = await upload('peer-a');
+      const staged = (await findFederatedMediaAsset('peer-a', stored.assetId)).path;
+      expire(staged);
+
+      const jobs = [{ status, params: { initImagePath: staged } }];
+      await expect(sweepFederatedMediaAssets({ jobs, force: true })).resolves.toBe(1);
+      expect(existsSync(staged)).toBe(false);
+    });
+
+    it('tolerates jobs with no conditioning params at all', () => {
+      expect(collectActiveFederatedAssetBasenames([
+        { status: 'queued', params: { prompt: 'a lighthouse' } },
+        { status: 'running' },
+        null,
+      ]).size).toBe(0);
+      expect(collectActiveFederatedAssetBasenames().size).toBe(0);
+    });
   });
 });

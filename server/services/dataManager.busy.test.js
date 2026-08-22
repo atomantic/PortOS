@@ -23,6 +23,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
 const idle = () => Promise.resolve({ busy: false, reason: null });
 
 vi.mock('./dataManagerBusy.js', () => ({
+  federatedMediaInboxBusy: vi.fn(idle),
   imageCleanTmpBusy: vi.fn(idle),
   trainingRunsBusy: vi.fn(idle),
   updateDetachedBusy: vi.fn(idle),

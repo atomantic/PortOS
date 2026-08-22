@@ -29,6 +29,7 @@ import {
   FEDERATED_MEDIA_ASSET_MAX_BYTES,
   FEDERATED_MEDIA_ASSET_MIME_TYPES,
   FEDERATED_MEDIA_WIRE_VERSION,
+  federatedMediaAssetId,
   federatedMediaAssetSchema,
   federatedMediaProviderJobSchema,
 } from '../../lib/federatedMediaWire.js';
@@ -36,7 +37,7 @@ import { peerFetch } from '../../lib/peerHttpClient.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
 import { readResponseJson } from '../../lib/readResponseJson.js';
 import { resolveFederatedMediaProvider } from '../federatedMediaConsumer.js';
-import { getPeers } from '../instances.js';
+import { getInstanceId, getPeers } from '../instances.js';
 import { isTailnetPeer } from '../../lib/tailnetPeer.js';
 
 const RETRYABLE_HTTP_STATUSES = new Set([408, 425, 429]);
@@ -210,15 +211,38 @@ export function createRemoteMediaExecutor({
     // to be one this machine would have rendered from — a bare basename resolves,
     // and anything outside those roots resolves to null and is refused.
     const resolved = resolveImageInputPath(localPath);
-    const body = resolved ? await readFile(resolved).catch(() => null) : null;
-    if (!body) {
+    const info = resolved ? await stat(resolved).catch(() => null) : null;
+    if (!info?.isFile()) {
       throw remoteMediaError('A conditioning image for this render is missing or unreadable', {
         code: 'MEDIA_PROVIDER_INPUT_UNREADABLE',
       });
     }
-    if (body.length > FEDERATED_MEDIA_ASSET_MAX_BYTES) {
+    if (info.size > FEDERATED_MEDIA_ASSET_MAX_BYTES) {
       throw remoteMediaError('A conditioning image for this render is too large to send to a peer', {
         code: 'MEDIA_PROVIDER_ASSET_TOO_LARGE',
+      });
+    }
+    // Streamed above 512 KB, so the ASK-FIRST path below never buffers a
+    // multi-megabyte image just to learn it is already staged.
+    const digest = await sha256File(resolved);
+    const assetId = federatedMediaAssetId(await getInstanceId(), digest);
+
+    // Ask before sending. The id is fully derivable from our own instance id and
+    // the content digest — that is what content addressing buys — so a job
+    // replayed after a restart, or a second render from the same init image,
+    // costs one small GET instead of re-sending up to 32 MiB. A 404 is the
+    // normal miss (never uploaded, or swept), not an error.
+    const staged = await requestJson(state, `/api/federation/media/v1/assets/${assetId}`)
+      .then((body) => federatedMediaAssetSchema.safeParse(body), () => null);
+    if (staged?.success && staged.data.sha256 === digest) {
+      state.assetIds.set(localPath, staged.data.assetId);
+      return staged.data.assetId;
+    }
+
+    const body = await readFile(resolved).catch(() => null);
+    if (!body) {
+      throw remoteMediaError('A conditioning image for this render is missing or unreadable', {
+        code: 'MEDIA_PROVIDER_INPUT_UNREADABLE',
       });
     }
     const detected = detectImageFormat(body);
@@ -227,7 +251,6 @@ export function createRemoteMediaExecutor({
         code: 'MEDIA_PROVIDER_ASSET_TYPE_UNSUPPORTED',
       });
     }
-    const digest = sha256Text(body);
     emitStatus(state.jobId, 'Sending source image to the remote provider');
     const response = await requestJson(state, '/api/federation/media/v1/assets', {
       method: 'POST',
@@ -238,6 +261,9 @@ export function createRemoteMediaExecutor({
       timeoutMs: requestTimeoutMs * 10,
     });
     const parsed = federatedMediaAssetSchema.safeParse(response);
+    // The provider echoes back the digest it computed. A mismatch means the
+    // bytes it stored are not the bytes we sent, and rendering from them would
+    // produce a plausible image of the wrong thing.
     if (!parsed.success || parsed.data.sha256 !== digest) {
       throw remoteMediaError('Remote media provider returned an invalid asset receipt', {
         code: 'MEDIA_PROVIDER_ASSET_INTEGRITY',

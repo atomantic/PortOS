@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
 export const FEDERATED_MEDIA_WIRE_VERSION = 1;
@@ -177,13 +178,46 @@ export const FEDERATED_MEDIA_INPUT_ROLES = Object.freeze([
   'initImage', 'referenceImages', 'sourceImage', 'lastImage',
 ]);
 
-// `<callerHash>-<sha256>`. The caller half is derived provider-side from the
-// AUTHENTICATED caller id and re-checked on every reference, so an asset id is
-// unguessable-by-construction AND unusable across callers even if guessed.
+// Which of those roles hold a LIST rather than a single slot. One home, because
+// both sides read it for opposite halves of the same fact: the consumer decides
+// whether to append or assign when building the body, the provider decides
+// whether to hand the runner an array or a scalar path. Disagreeing produces a
+// shape mismatch that surfaces only as a wrong render.
+export const FEDERATED_MEDIA_MULTI_INPUT_ROLES = Object.freeze(['referenceImages']);
+export const isMultiInputRole = (role) => FEDERATED_MEDIA_MULTI_INPUT_ROLES.includes(role);
+
+// `<callerHash>-<sha256>`. The caller half is derived from the AUTHENTICATED
+// caller id and re-checked provider-side on every reference, so an asset id is
+// unusable across callers even if it leaks.
 export const federatedMediaAssetIdSchema = z.string().trim().regex(
   /^[a-f0-9]{16}-[a-f0-9]{64}$/,
-  'assetId must be a provider-issued <callerHash>-<sha256> pair',
+  'assetId must be a <callerHash>-<sha256> pair',
 );
+
+/**
+ * The caller half of an asset id.
+ *
+ * Lives in the WIRE module, not in the provider's store, because both sides need
+ * it and they must agree exactly: the provider derives it from the authenticated
+ * caller to scope what a peer may reference, and the consumer derives it from
+ * its own instance id so it can name an asset it already uploaded — which is
+ * what lets it check-then-skip instead of re-sending megabytes on every replay.
+ *
+ * @param {string} instanceId - the consumer's PortOS instance id
+ */
+export const federatedMediaAssetOwner = (instanceId) =>
+  createHash('sha256').update(String(instanceId)).digest('hex').slice(0, 16);
+
+/**
+ * The full, fully-derivable asset id for a caller's copy of some bytes. Content
+ * addressing is only useful if BOTH sides can compute the address; otherwise the
+ * consumer has to upload just to learn the name of what it uploaded.
+ *
+ * @param {string} instanceId
+ * @param {string} sha256 - hex digest of the asset bytes
+ */
+export const federatedMediaAssetId = (instanceId, sha256) =>
+  `${federatedMediaAssetOwner(instanceId)}-${sha256}`;
 
 // What a submission carries in place of the bytes. Deliberately just the id:
 // the id embeds the digest the provider verified at upload, so a second copy on

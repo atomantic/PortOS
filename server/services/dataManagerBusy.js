@@ -31,6 +31,7 @@ import { PATHS } from '../lib/fileUtils.js';
 import { isDetachedRunning } from '../lib/detachedSpawn.js';
 import { listJobs } from './mediaJobQueue/index.js';
 import { collectActiveCleanBasenames } from './imageCleanTmpGc.js';
+import { collectActiveFederatedAssetBasenames } from './federatedMedia/assetStore.js';
 
 const IDLE = { busy: false, reason: null };
 
@@ -73,6 +74,37 @@ export async function imageCleanTmpBusy({ jobs = null, entries = null } = {}) {
   return {
     busy: true,
     reason: `An image job is queued or running and ${atRisk.length} working file(s) here belong to it — purge once it finishes.`
+  };
+}
+
+/**
+ * `data/federated-media-inbox` — conditioning images an allowlisted peer
+ * uploaded for a federated render (#4348). Structurally the same case as
+ * `image-clean-tmp`: ephemeral image inputs a queued or running media job is
+ * about to read, reached through the same `initImagePath`-style params.
+ *
+ * The pinned set comes from the SAME predicate the TTL sweep uses
+ * (`collectActiveFederatedAssetBasenames`), so a one-click purge can never be
+ * more permissive than the automatic sweep that deliberately leaves them alone.
+ * Destroying one of these is worse than the local case: the consumer already
+ * committed and is waiting, and nothing re-uploads — the asset ids were resolved
+ * at admission, and this side never tells the peer the bytes went away.
+ *
+ * Not scoped to one kind: image and video jobs both stage conditioning here.
+ *
+ * @param {{ jobs?: Array, entries?: string[] }} [state] - injected job list / directory listing
+ * @returns {Promise<{ busy: boolean, reason: string|null }>}
+ */
+export async function federatedMediaInboxBusy({ jobs = null, entries = null } = {}) {
+  const pinned = collectActiveFederatedAssetBasenames(jobs || listJobs());
+  if (pinned.size === 0) return IDLE;
+  const present = entries
+    || (await listDirEntries(join(PATHS.data, 'federated-media-inbox'))).filter(e => e.isFile()).map(e => e.name);
+  const atRisk = present.filter(name => pinned.has(name));
+  if (atRisk.length === 0) return IDLE;
+  return {
+    busy: true,
+    reason: `A federated render is queued or running and ${atRisk.length} source image(s) here belong to it — purge once it finishes.`
   };
 }
 

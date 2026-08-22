@@ -1048,27 +1048,18 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
         { status: 400, code: 'MEDIA_PROVIDER_INPUT_UNSUPPORTED' },
       );
     }
-    // An end frame with no start frame would render a plain text-to-video clip
-    // and silently discard the frame the caller supplied. The wire schema
-    // refuses the same shape, but it never sees this one: a conditioning image
-    // reaches the request as an asset id resolved at submit time, so by the time
-    // the schema runs the field is simply absent. Refuse here.
-    if (body.lastImageFile && !body.sourceImageFile) {
-      await cleanupMultipartTemp(uploads);
-      throw new ServerError(
-        'A federated first-last-frame render needs both ends — this request supplies only an end frame. Add a start frame, or render locally.',
-        { status: 400, code: 'MEDIA_PROVIDER_INPUT_UNSUPPORTED' },
-      );
-    }
-    const inputAssets = collectRemoteInputAssets({
-      sourceImage: body.sourceImageFile,
-      lastImage: body.lastImageFile,
-    });
+    // An end frame with no start frame is refused — but by the shared
+    // `inputAssetRejection` inside prepareRemoteMediaJob, not here. Every lane
+    // funnels through it, so the rule lives once instead of being written per
+    // route and forgotten on the unattended one. (The wire schema refuses the
+    // same shape but never sees it: a conditioning image reaches the request as
+    // an asset id resolved at submit time.)
+    const inputAssets = collectRemoteInputAssets('video', body);
     // `mode` is resolved by the peer from the conditioning it receives, so a
     // caller-supplied pipeline semantic is redundant at best. Refuse a mode that
     // contradicts what was actually sent instead of rendering the other one.
     const impliedMode = body.lastImageFile ? 'fflf' : body.sourceImageFile ? 'image' : 'text';
-    if (body.mode !== undefined && body.mode !== impliedMode && body.mode !== 'local') {
+    if (body.mode !== undefined && body.mode !== impliedMode) {
       await cleanupMultipartTemp(uploads);
       throw new ServerError(
         `A federated render mode must match its conditioning — this request asks for '${body.mode}' but supplies ${impliedMode === 'text' ? 'no frames' : `a ${impliedMode} frame set`}. Render locally instead.`,

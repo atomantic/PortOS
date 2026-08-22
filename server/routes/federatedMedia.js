@@ -34,6 +34,15 @@ import {
 
 const router = Router();
 
+// Authorize BEFORE the body parser below, not inside the handler after it.
+// Mounted the other way round, an unregistered caller's 32 MiB would be
+// transferred and buffered in full before anything checked whether it was
+// allowed to send it — work that was always going to end in a 403.
+const assetAuth = asyncHandler(async (req, _res, next) => {
+  req.federatedMediaCaller = (await authorizeFederatedMediaPeer(req)).callerId;
+  next();
+});
+
 // Raw bytes, scoped to this one route and to the image types the store accepts.
 // The app-wide express.json() only parses JSON content-types, so an upload
 // passes through it untouched and arrives here as a Buffer. The limit is the
@@ -54,10 +63,9 @@ router.get('/status', asyncHandler(async (req, res) => {
 // filesystem path, and never the bytes inline. Content-addressed, so re-sending
 // identical bytes returns the same id and just refreshes the expiry, which is
 // what makes a reconcile after a restart cheap.
-router.post('/assets', assetBody, asyncHandler(async (req, res) => {
-  const { callerId } = await authorizeFederatedMediaPeer(req);
+router.post('/assets', assetAuth, assetBody, asyncHandler(async (req, res) => {
   const stored = await storeFederatedMediaAsset({
-    callerId,
+    callerId: req.federatedMediaCaller,
     mimeType: (req.get('Content-Type') || '').split(';')[0].trim().toLowerCase(),
     declaredSha256: req.get('X-Content-SHA256'),
     body: req.body,

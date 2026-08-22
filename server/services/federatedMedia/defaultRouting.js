@@ -185,15 +185,11 @@ export async function resolveDefaultMediaRoute({ kind, params }) {
     );
   }
   assertRoutableConditioning(kind, params);
-  // Single-render conditioning DOES cross (rule 1). Collected here so the
-  // unattended lane sends exactly what the interactive routes send — same asset
-  // upload, same capability gate in prepareRemoteMediaJob, same marker shape.
-  // A planner writes image conditioning as `initImagePath`/`referenceImagePaths`
-  // and video conditioning as `sourceImagePath`/`sourceImageFile`, so both
-  // spellings feed the one role.
-  const inputAssets = collectRemoteInputAssets(kind === 'image'
-    ? { initImage: params?.initImagePath, referenceImages: params?.referenceImagePaths }
-    : { sourceImage: params?.sourceImagePath || params?.sourceImageFile, lastImage: params?.lastImageFile });
+  // Single-render conditioning DOES cross (rule 1). Collected through the same
+  // shared reader the interactive routes use, so the unattended lane sends
+  // exactly what they send — same param aliases, same asset upload, same
+  // capability gate in prepareRemoteMediaJob, same marker shape.
+  const inputAssets = collectRemoteInputAssets(kind, params);
   const request = buildFederatedMediaRequest({
     kind,
     engine: route.engine,

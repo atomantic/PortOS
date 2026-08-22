@@ -456,10 +456,7 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     // before submission. The marker keeps these LOCAL paths, never the
     // provider-issued ids, so a reconcile after a restart re-stages the same
     // bytes instead of naming staging slots that have since expired.
-    const inputAssets = collectRemoteInputAssets({
-      initImage: params.initImagePath,
-      referenceImages: params.referenceImagePaths,
-    });
+    const inputAssets = collectRemoteInputAssets('image', params);
     // A peer advertises specific models; it has no notion of 'this caller's
     // default'. Say so rather than letting the wire schema report a bare
     // 'expected string, received undefined' for a field the local path defaults.

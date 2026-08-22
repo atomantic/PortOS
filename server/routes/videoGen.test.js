@@ -2364,20 +2364,27 @@ describe('videoGen routes', () => {
       }));
     });
 
-    // The end frame alone would render a plain text-to-video clip with the
-    // supplied frame silently discarded — a valid-looking render of a different
-    // thing, which is the failure the whole guard exists to prevent.
-    it('refuses an end frame with no start frame', async () => {
+    // Both frames reach the submitter as LOCAL paths for it to stage. The
+    // "an end frame needs a start frame" rule is NOT asserted here: it moved
+    // into the shared inputAssetRejection, which every lane funnels through and
+    // which this suite mocks out — see remoteSubmission.test.js for its guard.
+    it('hands a first-last-frame pair to the submitter as local paths', async () => {
       const r = await request(app).post('/api/video-gen/').send({
         prompt: 'a slow pan across a harbour',
         modelId: 'ltx2',
+        mode: 'fflf',
+        sourceImageFile: 'start.png',
         lastImageFile: 'end.png',
         mediaProviderPeerId: federatedPeerId,
       });
 
-      expect(r.status).toBe(400);
-      expect(r.body.code).toBe('MEDIA_PROVIDER_INPUT_UNSUPPORTED');
-      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      expect(r.status).toBe(200);
+      expect(prepareRemoteMediaJob).toHaveBeenCalledWith(expect.objectContaining({
+        inputAssets: [
+          { role: 'sourceImage', path: 'start.png' },
+          { role: 'lastImage', path: 'end.png' },
+        ],
+      }));
     });
 
     // A LoRA is a MODEL, not conditioning, and remote model installation is out

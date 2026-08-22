@@ -16,7 +16,10 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { PATHS, atomicWrite } from '../../lib/fileUtils.js';
 import { FEDERATED_MEDIA_WIRE_VERSION } from '../../lib/federatedMediaWire.js';
-import { federatedMediaImageJobSubmissionBaseSchema } from '../../lib/validation.js';
+import {
+  federatedMediaImageJobSubmissionBaseSchema,
+  federatedMediaImageJobSubmissionSchema,
+} from '../../lib/validation.js';
 import { createRemoteMediaExecutor } from '../federatedMedia/remoteExecutor.js';
 import { applyRemoteInputAssets, remoteInputAssetsSchema } from '../federatedMedia/inputAssets.js';
 import { imageGenEvents } from '../imageGenEvents.js';
@@ -51,8 +54,9 @@ const executor = createRemoteMediaExecutor({
   label: 'image',
   events: imageGenEvents,
   markerSchema: remoteImageMarkerSchema,
-  buildRequest: (marker, { stageAsset }) =>
-    applyRemoteInputAssets(marker.request, marker.inputAssets, stageAsset),
+  buildRequest: (marker, { stageAsset }) => applyRemoteInputAssets(
+    marker.request, marker.inputAssets, stageAsset, federatedMediaImageJobSubmissionSchema,
+  ),
   // PATHS is read per job (not captured at module load) so a test that swaps
   // the gallery directory still sees its own temp root. The `<jobId>.png`
   // filename is the same shape imageGen/local.js uses, which is what lets the

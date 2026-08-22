@@ -17,7 +17,10 @@ import { z } from 'zod';
 import { PATHS } from '../../lib/fileUtils.js';
 import { generateThumbnail, optimizeForStreaming } from '../../lib/ffmpeg.js';
 import { FEDERATED_MEDIA_WIRE_VERSION } from '../../lib/federatedMediaWire.js';
-import { federatedMediaVideoJobSubmissionBaseSchema } from '../../lib/validation.js';
+import {
+  federatedMediaVideoJobSubmissionBaseSchema,
+  federatedMediaVideoJobSubmissionSchema,
+} from '../../lib/validation.js';
 import { createRemoteMediaExecutor } from '../federatedMedia/remoteExecutor.js';
 import { applyRemoteInputAssets, remoteInputAssetsSchema } from '../federatedMedia/inputAssets.js';
 import { videoGenEvents } from './events.js';
@@ -53,8 +56,9 @@ const executor = createRemoteMediaExecutor({
   label: 'video',
   events: videoGenEvents,
   markerSchema: remoteVideoMarkerSchema,
-  buildRequest: (marker, { stageAsset }) =>
-    applyRemoteInputAssets(marker.request, marker.inputAssets, stageAsset),
+  buildRequest: (marker, { stageAsset }) => applyRemoteInputAssets(
+    marker.request, marker.inputAssets, stageAsset, federatedMediaVideoJobSubmissionSchema,
+  ),
   // `<jobId>.mp4` is videoGen/local.js's own filename shape, which is what the
   // provider-side result guard and the local history row both key on.
   resolveDestination: ({ jobId }) => ({ dir: PATHS.videos, filename: `${jobId}.mp4` }),

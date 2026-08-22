@@ -20,12 +20,12 @@
  * state (rule 4). Neither is conditioning, and neither has a field on the wire.
  */
 
-import { readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { readdir, rm, stat, utimes } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ServerError } from '../../lib/errorHandler.js';
 import {
+  atomicWrite,
   detectImageFormat,
-  ensureDir,
   PATHS,
   resolveFederatedMediaAsset,
   sha256Text,
@@ -36,29 +36,23 @@ import {
   FEDERATED_MEDIA_ASSET_MIME_TYPES,
   FEDERATED_MEDIA_ASSET_TTL_MS,
   FEDERATED_MEDIA_WIRE_VERSION,
+  federatedMediaAssetId,
   federatedMediaAssetIdSchema,
+  federatedMediaAssetOwner,
 } from '../../lib/federatedMediaWire.js';
 
 const reject = (message, code, status = 400, context) => {
   throw new ServerError(message, { status, code, ...(context ? { context } : {}) });
 };
 
-/**
- * The caller half of an asset id. Derived from the authenticated caller id
- * rather than accepted from the request, so it is an authorization check and
- * not merely a namespace.
- */
-export const callerAssetPrefix = (callerId) => sha256Text(String(callerId)).slice(0, 16);
-
 const assetFilename = (assetId, mimeType) => `${assetId}.${FEDERATED_MEDIA_ASSET_EXTENSION[mimeType]}`;
 
-// Every extension this store can produce, for the id -> file lookup. The stored
-// mime type is not part of the id (the id is caller + digest), so finding an
-// asset means trying the extensions rather than being told which one it is.
-const ASSET_EXTENSIONS = [...new Set(Object.values(FEDERATED_MEDIA_ASSET_EXTENSION))];
+// The stored mime type is not part of the id (the id is caller + digest), so
+// finding an asset means trying the extensions rather than being told which one.
 const MIME_BY_EXTENSION = Object.fromEntries(
   FEDERATED_MEDIA_ASSET_MIME_TYPES.map((mime) => [FEDERATED_MEDIA_ASSET_EXTENSION[mime], mime]),
 );
+const ASSET_EXTENSIONS = Object.keys(MIME_BY_EXTENSION);
 
 const expiresAtFor = (mtimeMs) => new Date(mtimeMs + FEDERATED_MEDIA_ASSET_TTL_MS).toISOString();
 
@@ -73,25 +67,28 @@ const expiresAtFor = (mtimeMs) => new Date(mtimeMs + FEDERATED_MEDIA_ASSET_TTL_M
 export async function findFederatedMediaAsset(callerId, assetId, { now = Date.now() } = {}) {
   const parsed = federatedMediaAssetIdSchema.safeParse(assetId);
   if (!parsed.success) return null;
-  if (!parsed.data.startsWith(`${callerAssetPrefix(callerId)}-`)) return null;
+  if (!parsed.data.startsWith(`${federatedMediaAssetOwner(callerId)}-`)) return null;
 
-  for (const extension of ASSET_EXTENSIONS) {
+  // The mime type is not encoded in the id, so the extension has to be probed.
+  // Concurrently: a webp asset would otherwise always pay for two misses first,
+  // and the not-found path (the 410 a consumer acts on) always pays for all of
+  // them.
+  const found = await Promise.all(ASSET_EXTENSIONS.map(async (extension) => {
     // Through the shared resolver, not join(): it basenames and re-anchors at
     // the inbox root, so this stays a single containment check shared with the
     // image runner's own re-validation of the same path.
     const path = resolveFederatedMediaAsset(`${parsed.data}.${extension}`);
-    if (!path) continue;
+    if (!path) return null;
     const info = await stat(path).catch(() => null);
-    if (!info?.isFile()) continue;
-    if (now - info.mtimeMs > FEDERATED_MEDIA_ASSET_TTL_MS) continue;
+    if (!info?.isFile() || now - info.mtimeMs > FEDERATED_MEDIA_ASSET_TTL_MS) return null;
     return {
       path,
       mimeType: MIME_BY_EXTENSION[extension],
       sizeBytes: info.size,
       expiresAt: expiresAtFor(info.mtimeMs),
     };
-  }
-  return null;
+  }));
+  return found.find(Boolean) || null;
 }
 
 /**
@@ -141,13 +138,23 @@ export async function storeFederatedMediaAsset({ callerId, mimeType, declaredSha
     reject('Conditioning image digest does not match its bytes', 'MEDIA_PROVIDER_ASSET_INTEGRITY');
   }
 
-  const assetId = `${callerAssetPrefix(callerId)}-${sha256}`;
-  await ensureDir(PATHS.federatedMediaInbox);
+  const assetId = federatedMediaAssetId(callerId, sha256);
   const path = join(PATHS.federatedMediaInbox, assetFilename(assetId, mimeType));
-  // Unconditional write, even when the same bytes are already staged: the
-  // content is identical by construction (the name IS the digest), and
-  // rewriting is what refreshes the TTL for a replayed submission.
-  await writeFile(path, body);
+  // Already staged? The bytes are identical by construction (the name IS the
+  // digest), so a replay only needs its TTL refreshed — one utimes rather than
+  // rewriting up to 32 MiB to change a timestamp.
+  //
+  // atomicWrite (temp + rename) on the miss, not a plain writeFile: this file's
+  // NAME asserts a digest that findFederatedMediaAsset trusts without re-hashing,
+  // so a torn write would leave a file claiming a hash its bytes do not have —
+  // and the runner would render from a truncated image. It ensures the directory
+  // itself, so no separate ensureDir.
+  const existing = await stat(path).catch(() => null);
+  if (existing?.isFile() && existing.size === body.length) {
+    await utimes(path, new Date(), new Date());
+  } else {
+    await atomicWrite(path, body);
+  }
   return {
     wireVersion: FEDERATED_MEDIA_WIRE_VERSION,
     assetId,
@@ -180,25 +187,84 @@ export async function describeFederatedMediaAsset(callerId, assetId) {
   };
 }
 
+// The queue params a federated job reaches its conditioning through — the same
+// four the provider writes in `buildQueueParams`. Listed here because this is
+// where they have to be READ back to keep them alive.
+const CONDITIONING_PARAMS = ['initImagePath', 'referenceImagePaths', 'sourceImagePath', 'lastImagePath'];
+
 /**
- * Drop expired staged assets. Called opportunistically from the provider's
- * admission path rather than on a timer — a provider that receives no federated
- * work has nothing to sweep, and one that does gets swept on every submission.
+ * Basenames any queued or running job still depends on.
  *
- * Never throws: a sweep failure must not fail the job that triggered it.
+ * The age gate alone is a BACKSTOP, not the safety property — the same lesson
+ * `imageCleanTmpGc.js` records for the structurally identical `image-clean-tmp`
+ * dir. A federated job queued behind a long render or a first-run model
+ * download can easily sit past the TTL, and deleting its staged init image
+ * leaves the runner unable to open a file the consumer already committed to and
+ * is waiting on. Nothing re-uploads it: the ids were resolved at admission, and
+ * the provider never tells the consumer the bytes went away.
  *
+ * Pure over its argument so it is testable without the real queue, and shared
+ * with the Data Manager purge probe so a one-click purge can never be more
+ * permissive than the automatic sweep.
+ *
+ * @param {object[]} jobs
+ * @returns {Set<string>}
+ */
+export function collectActiveFederatedAssetBasenames(jobs = []) {
+  const keep = new Set();
+  for (const job of Array.isArray(jobs) ? jobs : []) {
+    // Only in-flight work pins bytes; a terminal job has already rendered.
+    if (job?.status !== 'queued' && job?.status !== 'running') continue;
+    for (const key of CONDITIONING_PARAMS) {
+      const value = job.params?.[key];
+      for (const path of Array.isArray(value) ? value : [value]) {
+        if (typeof path !== 'string' || !path) continue;
+        const base = path.split(/[/\\]/).pop();
+        if (base) keep.add(base);
+      }
+    }
+  }
+  return keep;
+}
+
+// A sweep only ever finds different files across a TTL boundary, so running one
+// per submission is pure duplicate work when several jobs arrive together.
+// Throttling is a redundancy guard here, not a concurrency control.
+const SWEEP_MIN_INTERVAL_MS = 5 * 60 * 1000;
+let lastSweptAt = 0;
+
+/** @internal — lets a test drive consecutive sweeps without waiting out the throttle. */
+export const __resetFederatedAssetSweepForTests = () => { lastSweptAt = 0; };
+
+/**
+ * Drop expired staged assets that no in-flight job still needs.
+ *
+ * Called opportunistically from the provider's admission path rather than on a
+ * timer: a provider that receives no federated work has nothing to sweep, and
+ * one that does gets swept as work arrives.
+ *
+ * Never throws — a sweep failure must not fail the job that triggered it.
+ *
+ * @param {object} [options]
+ * @param {object[]} [options.jobs] - live queue jobs, for the active-job pin
  * @returns {Promise<number>} files removed
  */
-export async function sweepFederatedMediaAssets({ now = Date.now() } = {}) {
+export async function sweepFederatedMediaAssets({ jobs = [], now = Date.now(), force = false } = {}) {
+  if (!force && now - lastSweptAt < SWEEP_MIN_INTERVAL_MS) return 0;
+  lastSweptAt = now;
   const entries = await readdir(PATHS.federatedMediaInbox).catch(() => null);
   if (!entries) return 0;
-  let removed = 0;
-  for (const name of entries) {
+  const pinned = collectActiveFederatedAssetBasenames(jobs);
+  const candidates = entries.filter((name) => !pinned.has(name));
+  const stats = await Promise.all(candidates.map(async (name) => {
     const path = join(PATHS.federatedMediaInbox, name);
-    const info = await stat(path).catch(() => null);
-    if (!info?.isFile() || now - info.mtimeMs <= FEDERATED_MEDIA_ASSET_TTL_MS) continue;
-    if (await rm(path, { force: true }).then(() => true, () => false)) removed += 1;
-  }
+    return { path, info: await stat(path).catch(() => null) };
+  }));
+  const expired = stats.filter(({ info }) =>
+    info?.isFile() && now - info.mtimeMs > FEDERATED_MEDIA_ASSET_TTL_MS);
+  const results = await Promise.all(expired.map(({ path }) =>
+    rm(path, { force: true }).then(() => true, () => false)));
+  const removed = results.filter(Boolean).length;
   if (removed) console.log(`🧹 Federated media inbox: swept ${removed} expired conditioning image(s)`);
   return removed;
 }

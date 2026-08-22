@@ -24,8 +24,10 @@ import {
   FEDERATED_MEDIA_RESULT_EXTENSION,
   FEDERATED_MEDIA_STALE_AFTER_MS,
   FEDERATED_MEDIA_WIRE_VERSION,
+  isMultiInputRole,
   KNOWN_MEDIA_KINDS,
 } from '../lib/federatedMediaWire.js';
+import { resolveVideoSupportedModes } from '../lib/videoModeProfiles.js';
 import { findFederatedMediaAsset, sweepFederatedMediaAssets } from './federatedMedia/assetStore.js';
 import { getSettings } from './settings.js';
 import {
@@ -100,9 +102,13 @@ function federatedInputProfile(kind, model) {
     };
   }
   if (kind === 'video') {
-    // No declared modes is the historical text-only assumption, not "all modes".
-    const modes = Array.isArray(model.supportedModes) ? model.supportedModes : null;
-    if (!modes) return null;
+    // Through the registry resolver, not a local Array.isArray fallback: it is
+    // the single documented answer to "which modes does this model support?",
+    // and its undeclared-model fallback is the OPPOSITE of a naive null (see
+    // server/services/videoGen/modeContract.js, which rules against restating
+    // this).
+    const modes = resolveVideoSupportedModes(model);
+    if (!Array.isArray(modes) || modes.length === 0) return null;
     const roles = [];
     if (modes.includes('image') || modes.includes('fflf')) roles.push('sourceImage');
     if (modes.includes('fflf')) roles.push('lastImage');
@@ -119,14 +125,15 @@ function federatedInputProfile(kind, model) {
 // `inputAssets.required` so a consumer knows to send one. An older consumer
 // blind to that field submits text-only and gets a typed
 // MEDIA_PROVIDER_INPUT_REQUIRED at admission rather than a stalled job.
+//
+// That leaves only VIDEO with anything to reject here: every image model is now
+// drivable (an edit-only one via its init image), so the old `isEditOnly` filter
+// is gone rather than kept as a condition that can no longer be false. A video
+// model with declared modes but neither `text` nor a frame slot has no way in.
 const supportsFederatedInput = (kind, model) => {
-  if (kind === 'image') return !isEditOnly(model) || !!federatedInputProfile(kind, model);
-  if (kind === 'video') {
-    const modes = model?.supportedModes;
-    if (!Array.isArray(modes) || modes.includes('text')) return true;
-    return !!federatedInputProfile(kind, model);
-  }
-  return true;
+  if (kind !== 'video') return true;
+  if (resolveVideoSupportedModes(model).includes('text')) return true;
+  return !!federatedInputProfile(kind, model);
 };
 
 // The capability's input-asset block. Limits only — never a filename, digest, or
@@ -148,12 +155,12 @@ const federatedInputAssetsBlock = (kind, model) => {
 // param names cannot drift into disagreeing about what a role means.
 const INPUT_ASSET_FIELDS = Object.freeze({
   image: [
-    { role: 'initImage', field: 'initImage', param: 'initImagePath', many: false },
-    { role: 'referenceImages', field: 'referenceImages', param: 'referenceImagePaths', many: true },
+    { role: 'initImage', param: 'initImagePath' },
+    { role: 'referenceImages', param: 'referenceImagePaths' },
   ],
   video: [
-    { role: 'sourceImage', field: 'sourceImage', param: 'sourceImagePath', many: false },
-    { role: 'lastImage', field: 'lastImage', param: 'lastImagePath', many: false },
+    { role: 'sourceImage', param: 'sourceImagePath' },
+    { role: 'lastImage', param: 'lastImagePath' },
   ],
 });
 
@@ -172,12 +179,11 @@ const INPUT_ASSET_FIELDS = Object.freeze({
 async function resolveSubmissionInputAssets({ callerId, input, capability }) {
   const fields = INPUT_ASSET_FIELDS[input.kind] || [];
   const requested = fields
-    .map((entry) => ({
-      ...entry,
-      refs: entry.many
-        ? (Array.isArray(input[entry.field]) ? input[entry.field] : [])
-        : (input[entry.field] ? [input[entry.field]] : []),
-    }))
+    // A role is named for the submission field it lands in, so there is no
+    // second mapping to consult. `.flat()` handles the scalar, array, and
+    // absent shapes without restating which roles are lists — that fact lives
+    // once, in the wire module.
+    .map((entry) => ({ ...entry, refs: [input[entry.role]].flat().filter(Boolean) }))
     .filter((entry) => entry.refs.length > 0);
   const limits = capability.inputAssets;
 
@@ -217,23 +223,24 @@ async function resolveSubmissionInputAssets({ callerId, input, capability }) {
 
   const params = {};
   for (const entry of requested) {
-    const paths = [];
-    for (const ref of entry.refs) {
-      const found = await findFederatedMediaAsset(callerId, ref.assetId);
-      if (!found) {
-        // 410, not 404: the id was well-formed and caller-scoped, so "gone"
-        // (expired, or swept) is the actionable reading — re-upload and retry.
-        // The upload is content-addressed, so the retry keeps the same id.
-        unavailable(
-          'A referenced conditioning image is no longer staged on the provider',
-          'MEDIA_PROVIDER_ASSET_NOT_FOUND',
-          410,
-          { assetId: ref.assetId },
-        );
-      }
-      paths.push(found.path);
+    // Independent lookups; `Promise.all` preserves order, which matters because
+    // reference-image order is conditioning order.
+    const found = await Promise.all(entry.refs.map((ref) =>
+      findFederatedMediaAsset(callerId, ref.assetId)));
+    const missing = entry.refs[found.findIndex((hit) => !hit)];
+    if (missing) {
+      // 410, not 404: the id was well-formed and caller-scoped, so "gone"
+      // (expired, or swept) is the actionable reading — re-upload and retry.
+      // The upload is content-addressed, so the retry keeps the same id.
+      unavailable(
+        'A referenced conditioning image is no longer staged on the provider',
+        'MEDIA_PROVIDER_ASSET_NOT_FOUND',
+        410,
+        { assetId: missing.assetId },
+      );
     }
-    params[entry.param] = entry.many ? paths : paths[0];
+    const paths = found.map((hit) => hit.path);
+    params[entry.param] = isMultiInputRole(entry.role) ? paths : paths[0];
   }
   return params;
 }
@@ -806,7 +813,10 @@ export async function submitFederatedMediaJob({ callerId, config, input, idempot
     // Opportunistic, and only once a submission has actually arrived: a provider
     // nobody sends work to has nothing to sweep, and one that does gets swept on
     // every admission. Never allowed to fail the job it rode in on.
-    sweepFederatedMediaAssets().catch((error) => {
+    // Jobs are passed in so the sweep can PIN an in-flight job's conditioning:
+    // the TTL alone is a backstop, and a job queued behind a long render can
+    // outlive it (imageCleanTmpGc.js records the same lesson for its dir).
+    sweepFederatedMediaAssets({ jobs: listJobs() }).catch((error) => {
       console.error(`❌ Federated media inbox sweep failed: ${error.message}`);
     });
 
