@@ -15,10 +15,22 @@ PortOS talks to `http://127.0.0.1:18020/v1` and nothing more.
 
 **It holds the entire GPU.** The stack occupies roughly 23 GB of the 3090's
 24 GB. Local image and video generation on the same card cannot run alongside
-it. There is no arbitration in PortOS: stop the container before a media job, or
-run media generation on a different machine. This is also why PortOS never
-auto-starts it — a container that came up on boot would silently take the card
-away from whatever else the box does.
+it. There is no arbitration in PortOS — but there is **detection**: every
+GPU-heavy local job (image, video, image-to-3D, LoRA training) probes this
+endpoint first and refuses up front, naming the container and the
+`docker compose --profile single stop` that frees the card, instead of dying
+with an out-of-memory error minutes into its model load (#4766). Stop the
+container before a media job, or run media generation on a different machine.
+
+PortOS will not stop it for you, in either direction: nothing would restart it, an
+agent session attached to it dies with it, and a cold start is ~5–7 minutes. That
+symmetry is also why PortOS never auto-starts it — a container that came up on
+boot would silently take the card away from whatever else the box does.
+
+The probe costs nothing on a machine this does not apply to: it is skipped
+entirely when no `vllmBacked` provider is enabled, and on any host without an
+NVIDIA GPU. A probe that fails or times out means the container is *not* serving,
+so the job proceeds — "couldn't check" never becomes "blocked".
 
 **Apple Silicon is not supported.** DFlash 2 has not been proven on Apple
 Silicon in this project, and this is a CUDA / Marlin / FlashInfer container —

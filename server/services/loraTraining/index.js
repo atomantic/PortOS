@@ -42,7 +42,7 @@ import {
 } from './runtimes.js';
 import { makeTrainingLineHandler } from './progress.js';
 import { makeStallDetector } from './stallDetector.js';
-import { prepareMemoryForTraining, TRAINING_MIN_HEADROOM_GB } from './memoryPrep.js';
+import { prepareMemoryForTraining, gpuBlockersMessage, TRAINING_MIN_HEADROOM_GB } from './memoryPrep.js';
 import { claimHeavyLocalJob, adoptHeavyLocalJob } from '../../lib/heavyJobClaim.js';
 import { classifyTrainingFailure } from './failure.js';
 import { buildTrainedSidecar, trainedLoraFilename } from './sidecar.js';
@@ -530,6 +530,11 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
   // (rather than crash mid-run) when headroom is below the floor. The budget
   // also sizes the mflux quantize/low_ram tier below.
   const memReport = await prepareMemoryForTraining();
+  // A GPU tenant the unload path cannot evict (today: the vLLM Qwen container)
+  // makes the run unwinnable regardless of system-RAM headroom, so it is checked
+  // BEFORE the budget gate below — that gate reports free system RAM, which says
+  // nothing about VRAM on exactly the discrete-GPU host this matters on.
+  if (memReport.blockers.length) return failBeforeSpawn(gpuBlockersMessage(memReport.blockers));
   if (memReport.unloaded.length) {
     console.log(`🧹 training [${shortId(jobId)}] freed ${memReport.unloaded.length} resident model(s): ${memReport.unloaded.join(', ')}`);
   }

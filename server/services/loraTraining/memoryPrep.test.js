@@ -25,7 +25,11 @@ vi.mock('../../services/lmStudioManager.js', () => ({
   unloadModel: (...a) => h.lmUnload(...a),
   getBaseUrl: () => h.lmUrl,
 }));
-vi.mock('os', () => ({
+// Spread the real module: the preflight's own dependency graph reaches other
+// `os` exports (`homedir`, via the vLLM project-dir resolver), and a
+// listed-exports-only mock fails the whole file the moment it reaches one more.
+vi.mock('os', async (importOriginal) => ({
+  ...(await importOriginal()),
   platform: () => h.platform,
   totalmem: () => h.totalBytes,
   freemem: () => h.freeBytes,

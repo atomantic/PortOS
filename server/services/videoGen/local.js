@@ -22,7 +22,7 @@ import { spawnDetached } from '../../lib/detachedSpawn.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { createLineReader } from '../../lib/streamLines.js';
 import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
-import { prepareLocalMemory } from '../../lib/localMemory.js';
+import { prepareLocalMemory, gpuBlockersMessage } from '../../lib/localMemory.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { videoLoraLayoutIssue } from '../../lib/safetensors.js';
 import { videoGenEvents } from './events.js';
@@ -2120,6 +2120,11 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
 
   try {
     const memoryReport = await prepareLocalMemory();
+    // Something else already owns the GPU (today: the vLLM Qwen container). Refuse
+    // here rather than let the render die inside its model load with an OOM that
+    // names neither the tenant nor the fix — the throw converges on
+    // abandonBeforeWiring like every other pre-wiring failure.
+    if (memoryReport.blockers.length) throw new Error(gpuBlockersMessage(memoryReport.blockers));
     if (memoryReport.unloaded.length) console.log(`🧹 Video generation [${jobId.slice(0, 8)}] freed ${memoryReport.unloaded.length} resident model(s)`);
 
     // History-calibrated wall-clock estimate (#3801). `null` when this install

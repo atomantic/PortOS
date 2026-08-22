@@ -16,14 +16,15 @@ const { heavyClaimRelease, heavyClaimHandoff, mockPrepareLocalMemory } = vi.hois
   // omitted so a test can make it fail, which is how the relaunch path's
   // spawned-but-never-wired child becomes observable.
   heavyClaimHandoff: vi.fn(async () => {}),
-  mockPrepareLocalMemory: vi.fn(async () => ({ unloaded: [], availableGb: 64, totalGb: 64, budgetGb: 64 })),
+  mockPrepareLocalMemory: vi.fn(async () => ({ unloaded: [], availableGb: 64, totalGb: 64, budgetGb: 64, blockers: [] })),
 }));
 vi.mock('../../lib/heavyJobClaim.js', () => ({
   claimHeavyLocalJob: vi.fn(async () => ({
     ok: true, holder: {}, release: heavyClaimRelease, handoffTo: heavyClaimHandoff,
   })),
 }));
-vi.mock('../../lib/localMemory.js', () => ({
+vi.mock('../../lib/localMemory.js', async (importOriginal) => ({
+  ...(await importOriginal()),
   prepareLocalMemory: mockPrepareLocalMemory,
 }));
 
@@ -2575,6 +2576,34 @@ describe('generateVideo — heavy claim setup cleanup (#4364)', () => {
       mode: 'text',
     })).rejects.toThrow('memory setup failed');
 
+    expect(heavyClaimRelease).toHaveBeenCalledTimes(1);
+  });
+
+  // #4766 — the vLLM Qwen container holds ~23 GB of a 24 GB card and is invisible
+  // to the resident-model unload, so the render used to die inside its model load
+  // with an OOM naming neither vLLM nor a fix. Refuse up front, with the prose.
+  it('refuses before spawn when something else is holding the GPU', async () => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    vi.mocked(spawnDetached).mockClear();
+    mockPrepareLocalMemory.mockResolvedValueOnce({
+      unloaded: [], availableGb: 64, totalGb: 64, budgetGb: 64,
+      blockers: [{
+        runtime: 'vllm', providerId: 'opencode-vllm-tui', providerName: 'OpenCode vLLM TUI',
+        endpoint: 'http://127.0.0.1:18020/v1',
+        reason: 'vLLM (Qwen3.8-27B) is serving and holds the GPU. Stop it with `docker compose --profile single stop` in /srv/example/qwen-serving.',
+      }],
+    });
+
+    await expect(generateVideo({
+      jobId: 'gpu-blocked',
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified',
+      prompt: 'a clip',
+      width: 512, height: 512, numFrames: 25, fps: 24,
+      mode: 'text',
+    })).rejects.toThrow('docker compose --profile single stop');
+
+    expect(spawnDetached).not.toHaveBeenCalled();
     expect(heavyClaimRelease).toHaveBeenCalledTimes(1);
   });
 });

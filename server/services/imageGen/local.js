@@ -31,7 +31,7 @@ import { extractGatedRepo, isGatedRepoError } from '../../lib/hfErrors.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { createLineReader } from '../../lib/streamLines.js';
 import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
-import { prepareLocalMemory } from '../../lib/localMemory.js';
+import { prepareLocalMemory, gpuBlockersMessage } from '../../lib/localMemory.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { IMAGE_GEN_MODE, LOCAL_IMAGEGEN_DEFAULT_MODEL } from './modes.js';
 import { computePixelDelta } from './regen.js';
@@ -599,6 +599,12 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   let claimHandedOff = false;
   try {
     const memoryReport = await prepareLocalMemory();
+    // Something the unload above cannot evict already owns the GPU (today: the
+    // vLLM Qwen container). Refuse here rather than let mflux die inside its
+    // model load with an OOM that names neither the tenant nor the fix (#4766).
+    if (memoryReport.blockers.length) {
+      throw new ServerError(gpuBlockersMessage(memoryReport.blockers), { status: 409, code: 'GPU_BLOCKED', context: { blockers: memoryReport.blockers } });
+    }
     if (memoryReport.unloaded.length) console.log(`🧹 Image generation [${jobId.slice(0, 8)}] freed ${memoryReport.unloaded.length} resident model(s)`);
 
     console.log(`🎨 Generating image [${jobId.slice(0, 8)}] local: ${modelId} ${width}x${height} steps=${actualSteps}`);
@@ -610,7 +616,14 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     await heavyClaim.handoffTo?.(proc.pid);
     claimHandedOff = true;
   } catch (err) {
-    if (!claimHandedOff) await releaseHeavyClaim();
+    // Nothing is wired to this job yet, so it can never report its own terminal
+    // event — unwind it exactly the way the busy branch above does, or a refusal
+    // strands a `running` entry and its stepwise dir every time.
+    if (!claimHandedOff) {
+      await releaseHeavyClaim();
+      jobs.delete(jobId);
+      await rm(stepwiseDir, { recursive: true, force: true }).catch(() => {});
+    }
     throw err;
   }
   // Spawn ENOENT (missing/non-executable pythonPath) fires BOTH 'error' and

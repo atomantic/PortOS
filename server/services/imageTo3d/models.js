@@ -21,7 +21,7 @@ import { rm, access } from 'node:fs/promises';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS, resolveGalleryImage, ensureDir } from '../../lib/fileUtils.js';
 import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
-import { prepareLocalMemory } from '../../lib/localMemory.js';
+import { prepareLocalMemory, gpuBlockersMessage } from '../../lib/localMemory.js';
 import { slugifyForFilename } from '../../lib/civitai.js';
 import {
   detectHostCapabilities, resolveTarget, renderOptionSupportFor, DEFAULT_IMAGE_TO_3D_TARGET,
@@ -180,6 +180,12 @@ async function executeRender({ id, operationId, adapter, sourcePath, caps, optio
       throw new ServerError(heavyClaim.message, { status: 409, code: 'HEAVY_LOCAL_JOB_BUSY', context: { holder: heavyClaim.holder } });
     }
     const memoryReport = await prepareLocalMemory();
+    // A GPU tenant the unload path cannot evict (today: the vLLM Qwen container)
+    // makes this render unwinnable — refuse before the model load rather than
+    // after minutes of it, with the prose that names the stop command.
+    if (memoryReport.blockers.length) {
+      throw new ServerError(gpuBlockersMessage(memoryReport.blockers), { status: 409, code: 'GPU_BLOCKED', context: { blockers: memoryReport.blockers } });
+    }
     if (memoryReport.unloaded.length) console.log(`🧹 Image-to-3D render freed ${memoryReport.unloaded.length} resident model(s)`);
     // Resolve this target's own credential/env needs via its adapter (e.g.
     // TRELLIS.2 resolves the stored Hugging Face token) — omitted for a target
