@@ -4,7 +4,7 @@ import { AlertTriangle } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
-import { filterSelectableModels, filterGenerationModels, isEmbeddingModel, mergeModelLists, configuredDefaultIn, localBackendForProvider, modelOptionLabel, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isGrokBuildCli, isLocalEndpoint, isLocalInstanceProvider, effectiveModelContextWindow, isRunnerAllowedCommand, effortLevelsForProvider, isOllamaBackedProvider, isOrcaRouterBackedProvider, generationControlsFor, providerRuntimeKey, providerCardState, PROVIDER_CARD_STATE } from '../utils/providers';
+import { filterSelectableModels, filterGenerationModels, isEmbeddingModel, mergeModelLists, configuredDefaultIn, localBackendForProvider, modelOptionLabel, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isGrokBuildCli, isLocalEndpoint, isLocalInstanceProvider, effectiveModelContextWindow, isRunnerAllowedCommand, effortLevelsForProvider, isOllamaBackedProvider, isOrcaRouterBackedProvider, isClaudeCommandProvider, generationControlsFor, providerRuntimeKey, providerCardState, PROVIDER_CARD_STATE } from '../utils/providers';
 import useLocalModels from '../hooks/useLocalModels';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import BrailleSpinner from '../components/BrailleSpinner';
@@ -1254,8 +1254,12 @@ function ProviderForm({ provider, onClose, onSave, onEditProvider, allProviders 
                       />
                       <p className="text-xs text-gray-500 mt-1">
                         SGLang serves unauthenticated unless you started it with <code>--api-key</code>. Leave this
-                        blank in that case — PortOS attaches a key only when one is set, on both the spawned OpenCode
-                        provider and the model-refresh probe.
+                        blank in that case — PortOS attaches a key only when one is set.
+                        {isClaudeCommandProvider(capabilityProvider)
+                          ? <> This <strong>Claude</strong> harness reads it for the model-refresh probe only; the
+                            credential its runs authenticate with is <code>ANTHROPIC_AUTH_TOKEN</code> under
+                            Environment Variables, so set that to the same key too.</>
+                          : <> It rides both the spawned OpenCode provider and the model-refresh probe.</>}
                       </p>
                     </FormField>
                   )}

@@ -25,6 +25,10 @@ const SHIPPED_REFRESHABLE = [
   // SGLang publishes its served catalog through the same OpenAI-compatible
   // `/v1/models` contract as the vLLM pair, so its wrappers refresh too.
   'opencode-sglang', 'opencode-sglang-tui',
+  // The Claude Code pair points at the SAME container through its Anthropic
+  // `/v1/messages` endpoint, but the catalog still comes from the OpenAI-side
+  // listing — the `sglangBacked` marker selects that fetcher, not the command.
+  'claude-sglang', 'claude-sglang-tui',
 ];
 const SHIPPED_NOT_REFRESHABLE = [
   'claude-code-tui', 'claude-code-tui-bedrock', 'codex', 'codex-tui',
