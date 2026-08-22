@@ -86,7 +86,7 @@ import {
 import { claimHeavyLocalJob } from '../lib/heavyJobClaim.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { probeOpenAiModels } from '../lib/openAiModelsProbe.js';
-import { getAllProviders } from './providers.js';
+import { listProviders } from './providers.js';
 import { runEndpointLlmTest, runLocalLlmTest } from './localLlmPlayground.js';
 import {
   captureLlamaServerConfig,
@@ -94,7 +94,8 @@ import {
   relaunchLlamaServerWithTuning,
   restoreLlamaServerConfig,
 } from './llamaServerManager.js';
-import { getMtplxServerEndpoint, relaunchMtplxServerWithTuning } from './mtplxServerManager.js';
+import { getMtplxServerEndpoint, getMtplxServerStatus, relaunchMtplxServerWithTuning } from './mtplxServerManager.js';
+import { getSpecDecodePresetStatus } from './specDecodeModels.js';
 import { listModels } from './localLlm.js';
 import {
   getLoadedModels as getLoadedOllamaModels,
@@ -195,8 +196,11 @@ export async function runtimeEndpoint(runtime) {
  * provider backs which runtime.
  */
 export async function runtimeApiKey(runtime) {
-  const providers = await getAllProviders().catch(() => []);
-  const match = (Array.isArray(providers) ? providers : [])
+  // `listProviders`, not `getAllProviders`: the latter resolves an ENVELOPE
+  // (`{ activeProvider, providers }`), so the `Array.isArray` guard this used to
+  // carry was never true and every runtime silently resolved to no key — a vLLM
+  // behind VLLM_API_KEY then 401'd on every sample.
+  const match = (await listProviders())
     .find((p) => localRuntimeKind(p) === runtime && typeof p?.apiKey === 'string' && p.apiKey !== '');
   return match?.apiKey || '';
 }
@@ -216,6 +220,36 @@ export async function runtimeApiKey(runtime) {
  *   `models: null` means the list could not be read; `[]` means it was read and
  *   is genuinely empty.
  */
+/**
+ * What PortOS knows is installed for a runtime WITHOUT asking the daemon.
+ *
+ * An endpoint runtime that is not running reports nothing over HTTP, but the
+ * weights are still on disk and PortOS already lists them elsewhere (Models →
+ * LLMs). Showing "could not list models" and an empty table hides installed
+ * models behind a daemon the user just needs to start.
+ *
+ * Only consulted when the live probe FAILED, so a healthy install never pays
+ * for it. Every other runtime returns `[]` — vLLM and SGLang are containers the
+ * user runs themselves, and PortOS holds no catalog for them, which is a real
+ * answer rather than a gap to paper over.
+ */
+export async function durableRuntimeModels(runtime) {
+  if (runtime === 'llama') {
+    // A preset whose target GGUF is on disk is a model llama.cpp can serve, and
+    // the preset id IS the alias PortOS starts it under — so this is the same
+    // id a running server would report from /v1/models.
+    const presets = await getSpecDecodePresetStatus().catch(() => []);
+    return presets
+      .filter((preset) => preset?.model?.exists)
+      .map((preset) => ({ id: preset.id, params: null, quantization: preset.model.quant ?? null }));
+  }
+  if (runtime === 'mtplx') {
+    const status = await getMtplxServerStatus().catch(() => null);
+    return (status?.cachedModels || []).map((id) => ({ id, params: null, quantization: null }));
+  }
+  return [];
+}
+
 export async function listRuntimeModels(runtime) {
   if (MANAGED_ASSESSMENT_BACKENDS.includes(runtime)) {
     const models = await listModels(runtime).catch((err) => ({ error: err?.message || 'model list failed' }));
@@ -228,10 +262,21 @@ export async function listRuntimeModels(runtime) {
   }
 
   const endpoint = await runtimeEndpoint(runtime);
-  if (!endpoint) return { models: null, error: 'no endpoint is configured for this runtime' };
+  if (!endpoint) return { models: null, error: 'no endpoint is configured for this runtime', offline: true };
+
+  // A daemon that is down is the common case here, and it is FIXABLE — so fall
+  // back to what is on disk and mark the listing `offline`, rather than
+  // reporting a bare failure that hides installed models. `offline` is what
+  // tells a consumer these came from disk: they are installed, but nothing can
+  // be run against them until the runtime is started.
+  const offlineListing = async (error) => {
+    const models = await durableRuntimeModels(runtime).catch(() => []);
+    return { models: models.length ? models : null, error, offline: true };
+  };
+
   const probe = await probeOpenAiModels(endpoint, { timeoutMs: 2500, apiKey: await runtimeApiKey(runtime) });
-  if (!probe.reachable) return { models: null, error: `not reachable at ${endpoint} (${probe.error})` };
-  if (!probe.models) return { models: null, error: probe.error || 'model listing was not readable' };
+  if (!probe.reachable) return offlineListing(`not reachable at ${endpoint} (${probe.error})`);
+  if (!probe.models) return offlineListing(probe.error || 'model listing was not readable');
   // An endpoint runtime reports ids only — no params, no quantization. `null`
   // there is honest: the capability axis simply goes unscored rather than being
   // guessed from the id.
@@ -818,6 +863,11 @@ export async function getAssessmentReport({ intent = 'balanced' } = {}) {
   const assessedModels = new Set(assessments.map((a) => assessmentKey(a?.backend, a?.modelId)));
   const unassessed = [];
   for (const runtime of ASSESSABLE_RUNTIMES) {
+    // An OFFLINE listing came off disk, not from the daemon. Those models are
+    // installed but cannot be measured until the runtime is running, so they are
+    // not offered here — a Measure button that can only fail is worse than no
+    // row. The capability matrix lists them instead, with the fix attached.
+    if (listed[runtime].offline) continue;
     for (const model of listed[runtime].models || []) {
       if (model?.id && !assessedModels.has(assessmentKey(runtime, model.id))) {
         unassessed.push({ backend: runtime, modelId: model.id, params: model.params ?? null });

@@ -58,7 +58,7 @@ import {
 } from '../lib/modelCapabilityTests.js';
 import { listRuntimeModels, runtimeEndpoint, runtimeApiKey } from './localModelAssessments.js';
 import { runLocalLlmTest, runEndpointLlmTest } from './localLlmPlayground.js';
-import { getAllProviders } from './providers.js';
+import { listProviders } from './providers.js';
 import { resolveOpencodeTuiProvider, runOpencodeTask } from './opencodeTask.js';
 import { ollamaBadgeCapabilities } from './localLlm.js';
 import * as ollamaManager from './ollamaManager.js';
@@ -434,7 +434,7 @@ export async function runCapabilityTest({ backend, modelId, testId, signal, onPr
       emit({ event: 'complete', cancelled: true, message: `${test.label}: cancelled — nothing recorded` });
       return { backend, modelId, testId: test.id, cancelled: true };
     }
-    const providers = test.driver === 'tui' ? await getAllProviders().catch(() => null) : null;
+    const providers = test.driver === 'tui' ? await listProviders() : null;
     outcome = await RUNNERS[test.id]({ backend, modelId, testId: test.id, signal, emit, runId, providers });
   } catch (err) {
     // A terminal frame either way, or the page's banner sits on the last
@@ -509,7 +509,7 @@ export async function getCapabilityTestResult(backend, modelId, testId) {
  * has proved. Disk plus cached loopback capability probes; zero LLM calls.
  */
 export async function getCapabilityTestReport() {
-  const providers = await getAllProviders().catch(() => null);
+  const providers = await listProviders();
   const [{ index, readError }, listed, drivers] = await Promise.all([
     indexResults(),
     Promise.all(ASSESSABLE_RUNTIMES.map(async (runtime) => [runtime, await listRuntimeModels(runtime)]))
@@ -521,6 +521,8 @@ export async function getCapabilityTestReport() {
   // Capability resolution costs one cached `/api/show` per un-probed Ollama
   // model. Sequentially that is one round trip per model on the page-load path;
   // they are independent, so they go together.
+  const offline = Object.fromEntries(ASSESSABLE_RUNTIMES.map((id) => [id, Boolean(listed[id].offline)]));
+
   const models = (await Promise.all(ASSESSABLE_RUNTIMES.flatMap((runtime) =>
     (listed[runtime].models || []).filter((m) => m?.id).map(async (model) => {
       const capabilities = await resolveModelCapabilities(runtime, model);
@@ -530,18 +532,30 @@ export async function getCapabilityTestReport() {
         // can make an otherwise-applicable test unrunnable. Surfaced as its own
         // state so the UI explains "PortOS cannot drive this" rather than
         // implying the model is at fault.
-        const blocked = test.driver === 'tui' && state === 'applicable' && !drivers[runtime].available;
+        // Two things can make an otherwise-applicable test unrunnable, and both
+        // are properties of the RUNTIME rather than of the model — so they are
+        // surfaced as `unavailable` with the reason, never as a failure the
+        // model earned. A stopped daemon wins the explanation: starting it is
+        // the fix, and the missing agent preset may not even be missing once it
+        // is up.
+        const runtimeDown = offline[runtime] && state !== 'not-applicable';
+        const noDriver = test.driver === 'tui' && state === 'applicable' && !drivers[runtime].available;
         return {
           testId: test.id,
-          state: blocked ? 'unavailable' : state,
+          state: runtimeDown || noDriver ? 'unavailable' : state,
           missing,
-          reason: blocked ? drivers[runtime].reason : reason,
+          reason: runtimeDown
+            ? `${runtimeLabel(runtime)} is not running`
+            : (noDriver ? drivers[runtime].reason : reason),
           result: summarizeResult(stored),
         };
       });
       return {
         backend: runtime,
         runtimeLabel: runtimeLabel(runtime),
+        // These came off disk rather than from the daemon: installed, but
+        // nothing can run against them until the runtime is started.
+        offline: Boolean(offline[runtime]),
         // `null` = nothing authoritative reported a badge set. The UI must say
         // "unverified", never render it as an empty badge row.
         capabilities,
@@ -566,12 +580,22 @@ export async function getCapabilityTestReport() {
       passed: countTests((t) => t.result?.verdict === 'passed'),
       failed: countTests((t) => t.result?.verdict === 'failed'),
     },
-    // Runtimes whose model list could not be trusted — distinct from "listed and
-    // legitimately empty". Without this the matrix silently under-reports: a
-    // model that failed to list simply is not there.
+    // Runtimes whose model list could not be read live — distinct from "listed
+    // and legitimately empty". `manageUrl` is what makes this actionable rather
+    // than just a complaint: for the runtimes PortOS can start, it points at the
+    // page that starts them. `recovered` says PortOS listed what is on disk
+    // anyway, so the user knows the models below are real and merely unreachable.
     listErrors: ASSESSABLE_RUNTIMES
       .filter((id) => listed[id].error)
-      .map((id) => ({ id, label: runtimeLabel(id), error: listed[id].error })),
+      .map((id) => ({
+        id,
+        label: runtimeLabel(id),
+        error: listed[id].error,
+        offline: Boolean(listed[id].offline),
+        recovered: Array.isArray(listed[id].models) ? listed[id].models.length : 0,
+        manageUrl: LOCAL_RUNTIMES[id]?.manageUrl || null,
+        docsUrl: LOCAL_RUNTIMES[id]?.docsUrl || null,
+      })),
     readError,
   };
 }

@@ -956,20 +956,13 @@ export function LocalModelAssessments() {
 
   return (
     <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-4">
-      <div className="flex items-center justify-between gap-2 flex-wrap">
-        <div className="flex items-center gap-2">
-          <Gauge size={16} className="text-port-accent" />
-          <h2 className="text-sm font-medium text-gray-300">Measured Model Assessments</h2>
-        </div>
-        <button
-          onClick={() => load(intent)}
-          disabled={loading}
-          className="p-1.5 text-gray-400 hover:text-white transition-colors"
-          title="Refresh"
-          aria-label="Refresh model assessments"
-        >
-          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-        </button>
+      {/* No refresh control: the report loads with the tab and reloads itself
+          after every run, sweep and discard, so a manual refresh only ever
+          re-fetched what was already on screen. */}
+      <div className="flex items-center gap-2">
+        <Gauge size={16} className="text-port-accent" />
+        <h2 className="text-sm font-medium text-gray-300">Measured Model Assessments</h2>
+        {loading && <BrailleSpinner />}
       </div>
 
       <p className="text-xs text-gray-500">

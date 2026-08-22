@@ -33,8 +33,20 @@ vi.mock('../lib/openAiModelsProbe.js', () => ({ probeOpenAiModels: (...args) => 
 
 // `runtimeApiKey` reads the provider registry to authenticate a key-gated
 // runtime (a vLLM container started behind VLLM_API_KEY).
-const getAllProviders = vi.fn();
-vi.mock('./providers.js', () => ({ getAllProviders: (...args) => getAllProviders(...args) }));
+//
+// `getAllProviders` resolves the toolkit ENVELOPE (`{ activeProvider, providers }`)
+// and `listProviders` is the wrapper that unwraps it — mocked in that shape on
+// purpose. A bare-array mock here is what let `runtimeApiKey`'s
+// `Array.isArray(providers)` guard read as satisfied in tests while never being
+// true in production, so a key-gated vLLM silently got no key.
+const getAllProviders = vi.fn(async () => ({ activeProvider: null, providers: [] }));
+vi.mock('./providers.js', () => ({
+  getAllProviders: (...args) => getAllProviders(...args),
+  listProviders: async () => {
+    const data = await getAllProviders().catch(() => null);
+    return Array.isArray(data?.providers) ? data.providers : [];
+  },
+}));
 
 const getLlamaServerEndpoint = vi.fn();
 const relaunchLlamaServerWithTuning = vi.fn();
@@ -52,9 +64,18 @@ vi.mock('./llamaServerManager.js', () => ({
 // and probe their real :8000 — the same reason llama-server is mocked above.
 const getMtplxServerEndpoint = vi.fn(async () => 'http://127.0.0.1:8000/v1');
 const relaunchMtplxServerWithTuning = vi.fn(async () => ({ applied: true, reason: null, config: null }));
+// Consulted only when the live probe fails, to list what is on disk for a
+// runtime that is not running.
+const getMtplxServerStatus = vi.fn(async () => ({ cachedModels: [] }));
 vi.mock('./mtplxServerManager.js', () => ({
   getMtplxServerEndpoint: (...args) => getMtplxServerEndpoint(...args),
+  getMtplxServerStatus: (...args) => getMtplxServerStatus(...args),
   relaunchMtplxServerWithTuning: (...args) => relaunchMtplxServerWithTuning(...args),
+}));
+
+const getSpecDecodePresetStatus = vi.fn(async () => []);
+vi.mock('./specDecodeModels.js', () => ({
+  getSpecDecodePresetStatus: (...args) => getSpecDecodePresetStatus(...args),
 }));
 
 const listModels = vi.fn();
@@ -1004,14 +1025,14 @@ describe('key-gated runtimes', () => {
   // an unauthenticated request. Without the key the listing reads as
   // "unreadable" and every sample fails auth — recorded as a fit verdict.
   it('authenticates the model listing with the provider record\'s key', async () => {
-    getAllProviders.mockResolvedValue([vllmProvider]);
+    getAllProviders.mockResolvedValue({ activeProvider: null, providers: [vllmProvider] });
     probeOpenAiModels.mockResolvedValue({ reachable: true, models: ['qwen'], error: null });
     await svc.listRuntimeModels('vllm');
     expect(probeOpenAiModels).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ apiKey: 'secret-key' }));
   });
 
   it('authenticates the measurement with the same key', async () => {
-    getAllProviders.mockResolvedValue([vllmProvider]);
+    getAllProviders.mockResolvedValue({ activeProvider: null, providers: [vllmProvider] });
     probeOpenAiModels.mockResolvedValue({ reachable: true, models: ['qwen'], error: null });
     runEndpointLlmTest.mockResolvedValue(okRun());
     await svc.runAssessment({ backend: 'vllm', modelId: 'qwen', contextTokens: [512] });
@@ -1021,7 +1042,7 @@ describe('key-gated runtimes', () => {
   // The usual loopback daemon is unauthenticated; attaching a key from an
   // unrelated provider would be worse than sending none.
   it('sends no key when no provider for that runtime carries one', async () => {
-    getAllProviders.mockResolvedValue([{ id: 'ollama', ollamaBacked: true, endpoint: 'http://localhost:11434/v1', apiKey: 'not-mine' }]);
+    getAllProviders.mockResolvedValue({ activeProvider: null, providers: [{ id: 'ollama', ollamaBacked: true, endpoint: 'http://localhost:11434/v1', apiKey: 'not-mine' }] });
     probeOpenAiModels.mockResolvedValue({ reachable: true, models: [], error: null });
     await svc.listRuntimeModels('mtplx');
     expect(probeOpenAiModels).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ apiKey: '' }));

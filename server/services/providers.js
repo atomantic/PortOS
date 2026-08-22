@@ -30,6 +30,26 @@ export async function getAllProviders() {
   return requireToolkit().services.providers.getAllProviders();
 }
 
+/**
+ * Just the provider records, as an array.
+ *
+ * `getAllProviders()` resolves `{ activeProvider, providers: [...] }` — an
+ * ENVELOPE, not a list. Callers that forgot kept writing
+ * `Array.isArray(providers) ? providers : []`, which is never true and so
+ * silently yields an empty list: the capability suite reported "no OpenCode TUI
+ * provider is configured" for every runtime, and `runtimeApiKey` never found a
+ * key for an authenticated vLLM. Both were green in tests that mocked the call
+ * as a bare array.
+ *
+ * A caller that only wants the records should use this and never see the
+ * envelope. `[]` on a failed read is deliberate: no provider is reachable, which
+ * is what an empty list means here.
+ */
+export async function listProviders() {
+  const data = await getAllProviders().catch(() => null);
+  return Array.isArray(data?.providers) ? data.providers : [];
+}
+
 export async function getProviderById(id) {
   return requireToolkit().services.providers.getProviderById(id);
 }

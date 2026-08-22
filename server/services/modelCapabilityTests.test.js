@@ -19,7 +19,20 @@ vi.mock('./localLlmPlayground.js', () => ({
   runLocalLlmTest: vi.fn(),
   runEndpointLlmTest: vi.fn(),
 }));
-vi.mock('./providers.js', () => ({ getAllProviders: vi.fn(async () => []) }));
+// `getAllProviders` resolves the toolkit ENVELOPE (`{ activeProvider, providers }`),
+// and `listProviders` is the wrapper that unwraps it. Mocked in that shape on
+// purpose: a bare-array mock is exactly what let the matcher ship returning null
+// for every runtime while this suite stayed green.
+vi.mock('./providers.js', () => {
+  const getAllProviders = vi.fn(async () => ({ activeProvider: null, providers: [] }));
+  return {
+    getAllProviders,
+    listProviders: async () => {
+      const data = await getAllProviders().catch(() => null);
+      return Array.isArray(data?.providers) ? data.providers : [];
+    },
+  };
+});
 vi.mock('./ollamaManager.js', () => ({ getModelCapabilities: vi.fn(async () => null) }));
 vi.mock('./localLlm.js', () => ({ ollamaBadgeCapabilities: (raw) => raw }));
 vi.mock('../lib/bufferedSpawn.js', () => ({
@@ -67,7 +80,7 @@ beforeEach(async () => {
   await rm(join(TEST_ROOT, 'local-llm'), { recursive: true, force: true });
   await rm(join(TEST_ROOT, 'model-tests'), { recursive: true, force: true });
   listRuntimeModels.mockResolvedValue({ models: [], error: null });
-  getAllProviders.mockResolvedValue([]);
+  getAllProviders.mockResolvedValue({ activeProvider: null, providers: [] });
   claimHeavyLocalJob.mockResolvedValue({ ok: true, holder: null, release: async () => {} });
   __resetFixtureCaches();
 });
@@ -119,7 +132,7 @@ describe('getCapabilityTestReport', () => {
   });
 
   it('offers the tool-use test once a matching TUI provider exists', async () => {
-    getAllProviders.mockResolvedValue([OPENCODE_LLAMA]);
+    getAllProviders.mockResolvedValue({ activeProvider: null, providers: [OPENCODE_LLAMA] });
     installOn('llama', [{ id: 'qwen-local' }]);
     const report = await getCapabilityTestReport();
     const model = report.models.find((m) => m.modelId === 'qwen-local');
@@ -200,7 +213,7 @@ describe('runCapabilityTest — story outline', () => {
 
 describe('runCapabilityTest — sandbox repair', () => {
   beforeEach(() => {
-    getAllProviders.mockResolvedValue([OPENCODE_LLAMA]);
+    getAllProviders.mockResolvedValue({ activeProvider: null, providers: [OPENCODE_LLAMA] });
   });
 
   // The agent is simulated by having the spawn mock edit the sandbox the way a
@@ -278,7 +291,7 @@ export function cartTotal({ items, region, discount = 0 }) {
   });
 
   it('refuses when no agent driver can reach the runtime', async () => {
-    getAllProviders.mockResolvedValue([]);
+    getAllProviders.mockResolvedValue({ activeProvider: null, providers: [] });
     await expect(runCapabilityTest({ backend: 'lmstudio', modelId: 'x', testId: 'sandbox-repair' }))
       .rejects.toThrow(/OpenCode/);
   });
@@ -372,14 +385,16 @@ describe('what the report ships', () => {
       : { models: [], error: null }));
     const report = await getCapabilityTestReport();
     // Missing models must read as "could not look", not as "none installed".
-    expect(report.listErrors).toEqual([{ id: 'ollama', label: 'Ollama', error: 'not reachable at http://127.0.0.1:11434/v1' }]);
+    expect(report.listErrors).toEqual([expect.objectContaining({
+      id: 'ollama', label: 'Ollama', error: 'not reachable at http://127.0.0.1:11434/v1',
+    })]);
   });
 });
 
 describe('sandbox housekeeping', () => {
   it('keeps the newest sandboxes and prunes the rest', async () => {
     const { mkdir, readdir } = await import('fs/promises');
-    getAllProviders.mockResolvedValue([OPENCODE_LLAMA]);
+    getAllProviders.mockResolvedValue({ activeProvider: null, providers: [OPENCODE_LLAMA] });
     const root = join(TEST_ROOT, 'model-tests', 'sandboxes');
     // 25 older runs, named the way runCapabilityTest names them (a base36
     // timestamp of fixed width, so a plain sort is chronological).
@@ -394,5 +409,53 @@ describe('sandbox housekeeping', () => {
     expect(left.length).toBe(20);
     // The run that just happened is never the one pruned.
     expect(left.some((name) => !name.endsWith('-old'))).toBe(true);
+  });
+});
+
+describe('a runtime that is not running', () => {
+  const offlineListing = (models) => {
+    listRuntimeModels.mockImplementation(async (id) => (id === 'llama'
+      ? { models, error: 'not reachable at http://127.0.0.1:5568/v1 (ECONNREFUSED)', offline: true }
+      : { models: [], error: null }));
+  };
+
+  it('still lists what PortOS has on disk, rather than hiding it', async () => {
+    offlineListing([{ id: 'qwen3.8-27b-dspark', params: null, quantization: 'Q4_K_M' }]);
+    const report = await getCapabilityTestReport();
+    const model = report.models.find((m) => m.modelId === 'qwen3.8-27b-dspark');
+
+    expect(model).toBeTruthy();
+    expect(model.offline).toBe(true);
+  });
+
+  it('blocks its tests with the daemon as the reason, not the model', async () => {
+    offlineListing([{ id: 'qwen3.8-27b-dspark' }]);
+    const report = await getCapabilityTestReport();
+    const model = report.models.find((m) => m.modelId === 'qwen3.8-27b-dspark');
+
+    // Nothing can run until it is started — but that is never scored as a
+    // failure the model earned.
+    for (const slot of model.tests) {
+      expect(slot.state).toBe('unavailable');
+      expect(slot.reason).toBe('llama.cpp is not running');
+    }
+  });
+
+  it('carries the fix: where to start it, and how many models it recovered', async () => {
+    offlineListing([{ id: 'a' }, { id: 'b' }]);
+    const report = await getCapabilityTestReport();
+
+    expect(report.listErrors).toEqual([expect.objectContaining({
+      id: 'llama', label: 'llama.cpp', offline: true, recovered: 2, manageUrl: '/models/llms',
+    })]);
+  });
+
+  it('says nothing was recovered when PortOS holds no catalog for it', async () => {
+    // vLLM and SGLang are containers the user runs — an honest zero, not a gap.
+    listRuntimeModels.mockImplementation(async (id) => (id === 'vllm'
+      ? { models: null, error: 'not reachable at http://127.0.0.1:18020/v1 (ECONNREFUSED)', offline: true }
+      : { models: [], error: null }));
+    const report = await getCapabilityTestReport();
+    expect(report.listErrors[0]).toMatchObject({ id: 'vllm', recovered: 0, manageUrl: null });
   });
 });

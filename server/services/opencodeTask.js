@@ -22,7 +22,7 @@ import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { isOpencodeCommand, prefixOpencodeModel, getOpencodeLocalProviderNamespace } from '../lib/providerModels.js';
 import { parseAgentLine } from '../lib/opencodeStream.js';
-import { getAllProviders } from './providers.js';
+import { listProviders } from './providers.js';
 
 /**
  * The configured OpenCode TUI provider that drives a given local runtime.
@@ -33,12 +33,12 @@ import { getAllProviders } from './providers.js';
  * real answer rather than a failure to look harder.
  *
  * @param {string} runtime a local runtime id (`llama`, `ollama`, `mtplx`, …)
- * @param {Array<object>} [providers] pass the already-loaded list when resolving
- *   several runtimes at once — otherwise every call re-scans it.
+ * @param {Array<object>} [providers] the already-loaded RECORDS (see
+ *   `listProviders`), passed in when resolving several runtimes at once so the
+ *   list is read once rather than per runtime.
  */
 export async function resolveOpencodeTuiProvider(runtime, providers) {
-  const list = providers ?? await getAllProviders().catch(() => null);
-  if (!Array.isArray(list)) return null;
+  const list = Array.isArray(providers) ? providers : await listProviders();
   return list.find((p) => p?.type === 'tui'
     && isOpencodeCommand(p.command)
     && getOpencodeLocalProviderNamespace(p) === runtime) || null;

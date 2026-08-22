@@ -24,6 +24,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router';
 import {
   FlaskConical, Play, RefreshCw, Trash2, Check, X, AlertTriangle, Terminal, Eye, BookOpen, Wrench,
 } from 'lucide-react';
@@ -679,14 +680,29 @@ export default function ModelCapabilityTests({ report, loading, onReload, disabl
         </div>
       )}
 
-      {/* A runtime whose model list could not be read is missing from the matrix
-          entirely — without this the table silently under-reports rather than
-          saying it could not look. */}
+      {/* A runtime PortOS could not reach. Every line carries the fix: for the
+          runtimes PortOS can start, a link to the page that starts them; for the
+          ones it cannot (vLLM and SGLang are containers the user runs), the
+          docs. When PortOS listed the weights on disk anyway, it says so — those
+          models ARE in the table below, just not runnable yet. */}
       {report?.listErrors?.length > 0 && (
-        <p className="text-xs text-port-warning flex items-start gap-1.5" role="alert">
-          <AlertTriangle size={12} className="mt-0.5 shrink-0" />
-          Could not list models for {report.listErrors.map((r) => r.label).join(', ')} — models there are missing from this table.
-        </p>
+        <div className="border border-port-warning/30 rounded p-2.5 space-y-1.5" role="alert">
+          {report.listErrors.map((runtime) => (
+            <p key={runtime.id} className="text-[11px] text-gray-400 flex items-start gap-1.5 leading-snug">
+              <AlertTriangle size={12} className="mt-0.5 shrink-0 text-port-warning" />
+              <span>
+                <span className="text-gray-300">{runtime.label}</span>{' '}
+                {runtime.offline ? 'is not running' : 'could not be listed'}
+                {runtime.recovered > 0
+                  ? ` — showing the ${runtime.recovered} model${runtime.recovered === 1 ? '' : 's'} PortOS has on disk for it. Start it to run anything against them.`
+                  : ' — any models it serves are missing from this table.'}
+                {runtime.manageUrl
+                  ? <> <Link to={runtime.manageUrl} className="text-port-accent hover:underline">Start {runtime.label}</Link></>
+                  : (runtime.docsUrl && <> <a href={runtime.docsUrl} target="_blank" rel="noreferrer" className="text-port-accent hover:underline">How to start it</a></>)}
+              </span>
+            </p>
+          ))}
+        </div>
       )}
 
       {report?.readError && (
@@ -720,6 +736,11 @@ export default function ModelCapabilityTests({ report, loading, onReload, disabl
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-xs text-gray-200 font-mono break-all">{m.modelId}</span>
                       <span className="text-[10px] text-gray-500">{m.runtimeLabel}</span>
+                      {m.offline && (
+                        <Pill tone="bare" size="xs" className="border-port-warning/40 text-port-warning" title={`Found on disk — ${m.runtimeLabel} is not running, so nothing can be run against it yet.`}>
+                          not running
+                        </Pill>
+                      )}
                     </div>
                     <div className="flex items-center gap-1 mt-1 flex-wrap">
                       <CapabilityBadges capabilities={m.capabilities} />
