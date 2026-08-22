@@ -197,6 +197,15 @@ describe('buildLayeredIntelligenceScheduleUpdate (per-app task override, #2322)'
       .toEqual({ providerId: 'claude-code', model: 'sonnet' });
   });
 
+  // Third of the three surfaces that write this field. All three now emit the
+  // SAME clear — explicit nulls — so "clear the pin" produces one stored result
+  // no matter where the user did it (#4783).
+  it('clears a stored pin with explicit nulls, like the Automation and Schedule surfaces', () => {
+    const pinned = { ...baseline, providerId: 'claude-code', model: 'sonnet' };
+    expect(buildLayeredIntelligenceScheduleUpdate(pinned, { ...pinned, providerId: '', model: '' }))
+      .toEqual({ providerId: null, model: null });
+  });
+
   it('intervalFieldsFromMs maps standard cadences + falls back to daily', () => {
     expect(intervalFieldsFromMs(86400000)).toEqual({ interval: 'daily', intervalMs: 86400000 });
     expect(intervalFieldsFromMs(7 * 86400000)).toEqual({ interval: 'weekly', intervalMs: 7 * 86400000 });

@@ -230,7 +230,7 @@ describe('isConfiguredApprovalRequired', () => {
     const selfStart = GEN_SRC.indexOf('export async function generateSelfImprovementTaskForType');
     const appStart = GEN_SRC.indexOf('export async function generateManagedAppImprovementTaskForType');
     expect(GEN_SRC.slice(selfStart, selfStart + 2500)).toContain('stampApprovalReason(metadata, approval)');
-    expect(GEN_SRC.slice(appStart, appStart + 9000)).toContain('stampApprovalReason(metadata, approval)');
+    expect(GEN_SRC.slice(appStart, appStart + 11000)).toContain('stampApprovalReason(metadata, approval)');
   });
 
   it('resolveConfidenceApproval consults the toggle before safety-kind and confidence', () => {

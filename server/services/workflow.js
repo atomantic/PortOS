@@ -201,11 +201,10 @@ export async function getWorkflowGraph({ horizonHours = 24, from = new Date() } 
       totalAppCount: info.totalAppCount || 0,
       taskMetadata: info.taskMetadata || null,
       managedAgentOptions: info.managedAgentOptions || null,
-      // The task's provider/model pin plus whether a per-app override of it is
-      // honored — the per-app rows render their "Inherit (…)" label from these.
+      // The task's provider/model pin — the per-app rows render their
+      // "Inherit (…)" label from it and pin over it.
       providerId: info.providerId || null,
-      model: info.model || null,
-      providerOverrideCapable: info.providerOverrideCapable === true
+      model: info.model || null
     });
 
     for (const dep of runAfter) {

@@ -50,20 +50,14 @@ import { isFalsyMeta, isTruthyMeta } from './agentState.js';
 import { TRACKER_FILING_TASK_TYPES, CONCRETE_WORK_TRACKERS } from '../lib/workTracker.js';
 import { isAuditTaskType } from '../lib/auditCatalog.js';
 
-// taskType → { load, honorsPerAppProviderOverride? }. `load` is the module import
-// thunk; a module may export either or both hooks, and a missing export means "no
-// hook of that kind for this type". Capabilities that callers must know WITHOUT
-// paying for the import are declared here on the entry, so this stays the single
-// registration point (a parallel per-capability list would be free to drift).
+// taskType → { load }. `load` is the module import thunk; a module may export
+// either or both hooks, and a missing export means "no hook of that kind for this
+// type". Entries stay objects rather than bare thunks so a capability a caller
+// must know WITHOUT paying for the import can be declared here, keeping this the
+// single registration point (a parallel per-capability list would be free to drift).
 const HOOK_MODULES = {
   'layered-intelligence': {
-    load: () => import('./autonomousJobs/layeredIntelligenceHooks.js'),
-    // Its buildTaskInput hook resolves the app's per-app provider/model override,
-    // and cosTaskGenerator applies the hook's return LAST (applyProviderModelPins)
-    // — so for this type the per-app pin OUTRANKS the global Schedule pin. A type
-    // without this flag reads only `taskMetadata` off the override and takes its
-    // provider from the pin, making a stored per-app provider inert there.
-    honorsPerAppProviderOverride: true
+    load: () => import('./autonomousJobs/layeredIntelligenceHooks.js')
   },
 };
 const PAYLOAD_OPTIONAL_OUTPUT_HOOKS = new Set();
@@ -265,17 +259,6 @@ function isTrackerFilingDispatch(task) {
   if (isFalsyMeta(task?.metadata?.fileIssues) && isAuditTaskType(type)) return false;
   if (TRACKER_FILING_TASK_TYPES.has(type)) return true;
   return CONCRETE_WORK_TRACKERS.includes(task?.metadata?.workTracker);
-}
-
-/**
- * Whether a per-app provider/model override actually reaches the spawn for this
- * task type (and therefore supersedes the global Schedule pin) — read off the
- * type's own registry entry. Synchronous so the schedule-status builder can stamp
- * the capability on every task row.
- */
-export function honorsPerAppProviderOverride(taskType) {
-  return isProgrammaticIoTaskType(taskType)
-    && HOOK_MODULES[taskType].honorsPerAppProviderOverride === true;
 }
 
 /**

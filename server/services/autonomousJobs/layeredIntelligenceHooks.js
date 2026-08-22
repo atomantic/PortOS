@@ -79,6 +79,7 @@ function outcomesTrackerSupported(filer) {
 }
 import { resolveAppWorkTracker } from '../../lib/workTracker.js'
 import { tryReadFile } from '../../lib/fileUtils.js'
+import { resolveAgentProviderPin } from '../appTaskProviderPin.js'
 import { PROGRAMMATIC_OUTPUT_COMPLETION_HEADING } from '../../lib/agentSentinel.js'
 import { join } from 'path'
 
@@ -117,89 +118,37 @@ async function resolveLiContext(app) {
 /**
  * Resolve LI's reasoning-AGENT provider/model — the SINGLE source of truth, so the
  * spawn path's hookOverride carries the fully-resolved choice rather than
- * re-deriving the schedule pin in cosTaskGenerator. Walks per-app → schedule pin →
- * default and applies the "must be a file-writing CLI/TUI harness" filter.
+ * re-deriving the schedule pin in cosTaskGenerator. Delegates the per-app →
+ * schedule-pin → default walk (and the api-harness guard) to the shared
+ * `resolveAgentProviderPin`, which every task type now runs (#4783).
  *
- * The reasoning agent needs a CLI/TUI harness to emit its `.agent-done` sentinel —
- * an HTTP `api` provider (ollama / lmstudio / kimi) has none, so an agent-backed
- * run pinned to one fails provider resolution and the task sits pending forever.
- * Pre-#2322 LI called the API path directly, so an api provider was valid then;
- * migration 184 faithfully carried whatever `layeredIntelligence.providerId` held
- * — INCLUDING ollama/lmstudio/kimi — into the per-app override, which now outranks
- * everything at spawn (cosTaskGenerator applies the hook's providerId LAST). So any
- * install that ran LI on an api provider before #2322 is wedged, and the user's
- * natural fix — picking a CLI/TUI provider on the global Schedule page — silently
- * misses, because that only sets the schedule pin (the FALLBACK) while the stale
- * per-app override still wins.
+ * The guard matters most here because of LI's own history: pre-#2322 LI called the
+ * API path directly, so an api provider was valid then, and migration 184
+ * faithfully carried whatever `layeredIntelligence.providerId` held — INCLUDING
+ * ollama/lmstudio/kimi — into the per-app override, which outranks everything at
+ * spawn. Any install that ran LI on an api provider before #2322 is wedged, and
+ * the user's natural fix (picking a CLI/TUI provider on the global Schedule page)
+ * silently misses because that only sets the FALLBACK. The shared resolver's
+ * self-heal adopts that pin instead of wedging.
  *
- * SELF-HEAL that residue: when the per-app override is api-only but the schedule
- * pin IS a real CLI/TUI provider, adopt the pin (provider + its matched model)
- * instead of wedging — this makes the Schedule page's selection finally take
- * effect. Only when NO CLI/TUI provider is configured anywhere the user chose
- * (per-app api with no usable pin, or an api pin) do we return an actionable
- * `skipReason` — guiding them to pick a real CLI/TUI provider beats silently
- * substituting one they never chose. A null/absent resolved provider is fine: it
- * inherits the default coding agent (a spawn-time api resolution still falls to the
- * lifecycle block).
- *
- * Reads the global schedule pin AT MOST ONCE and mutates nothing — `config` is a
- * read-only input (its `providerId`/`model` are the per-app effective override).
- * Returns `{ providerId, model, skipReason }`; the caller gates on `skipReason`.
+ * `config` is a read-only input (its `providerId`/`model` are the per-app
+ * effective override). Returns `{ providerId, model, skipReason }`; the caller
+ * gates on `skipReason` — LI is the one caller that CAN decline to generate, and
+ * guiding the user to pick a real CLI/TUI provider beats silently substituting one
+ * they never chose.
  */
 async function resolveLiAgentProvider(app, config) {
-  const { getProviderById } = await import('../providers.js')
-  const providerTypeOf = async (id) => {
-    if (!id) return null
-    const provider = await getProviderById(id).catch(() => null)
-    return provider?.type ?? null
-  }
-  // The global schedule pin is LI's provider FALLBACK; read it via the canonical
-  // getTaskInterval (returns a defaulted { providerId: null, ... } when absent).
-  const readPin = async () => {
-    const { getTaskInterval } = await import('../taskSchedule.js')
-    return getTaskInterval('layered-intelligence')
-  }
-
-  let providerId = config.providerId || null
-  let model = config.model ?? null
-  let type = await providerTypeOf(providerId)
-
-  if (type === 'api') {
-    const pin = await readPin()
-    const pinId = pin?.providerId || null
-    const pinType = await providerTypeOf(pinId)
-    // Adopt the pin only when it RESOLVES to a real non-api provider. `pinType` is
-    // null for an unresolvable id (deleted/renamed/typo'd pin) — treating that as
-    // "not api" and adopting it would re-wedge the task on a doomed provider with a
-    // misleading "healed" warning, so require a positively-known type.
-    if (pinId && pinType && pinType !== 'api') {
-      console.warn(`⚠️ Layered Intelligence: ${app.name} per-app provider '${providerId}' is API-only (no coding harness) — using the schedule provider '${pinId}' instead`)
-      // Adopt the pin's model too — provider+model are a matched pair the user set
-      // together on the Schedule page (an api-provider model name may not be valid
-      // for the CLI/TUI provider).
-      providerId = pinId
-      model = pin?.model ?? null
-      type = pinType
-    }
-  } else if (!providerId) {
-    // No per-app override → resolve the schedule pin here so the returned override
-    // carries it, rather than delegating that leg to the generator's
-    // interval.providerId. An api pin still skips; a non-api pin becomes LI's
-    // provider; no pin inherits the default coding agent.
-    const pin = await readPin()
-    const pinId = pin?.providerId || null
-    type = await providerTypeOf(pinId)
-    if (type && type !== 'api') {
-      providerId = pinId
-      // Keep an explicit per-app model if the user set one (provider absent but
-      // model present); only fall back to the pin's model when there's no per-app
-      // model. This matches the pre-refactor net spawn behavior, where the hook's
-      // returned model (the per-app model) overrode the generator's interval.model.
-      model = config.model ?? pin?.model ?? null
-    }
-  }
-
-  if (type === 'api') return { providerId: null, model: null, skipReason: 'provider-not-agent-capable' }
+  const { providerId, model, skipReason } = await resolveAgentProviderPin({
+    appPin: { providerId: config.providerId || null, model: config.model ?? null },
+    // A thunk: an already-usable per-app provider never pays for the schedule read.
+    readSchedulePin: async () => {
+      const { getTaskInterval } = await import('../taskSchedule.js')
+      return getTaskInterval('layered-intelligence')
+    },
+    taskType: 'layered-intelligence',
+    appName: app.name
+  })
+  if (skipReason) return { providerId: null, model: null, skipReason }
   return { providerId, model, skipReason: null }
 }
 

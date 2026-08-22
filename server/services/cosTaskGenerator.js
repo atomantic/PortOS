@@ -34,6 +34,7 @@ import { addTask, updateTask, reviveBlockedTask, getAllTasks, getCosTasks, first
 import { recordDecision, DECISION_TYPES } from './decisionLog.js';
 import { isAppOnCooldown, markAppReviewCooldown, bindAppReviewAgent, markIdleReviewStarted, getNextAppForReview, loadAppActivity, isAppActivityOnCooldown } from './appActivity.js';
 import { getActiveApps, getAppTaskTypeOverrides } from './apps.js';
+import { resolveAgentProviderPin } from './appTaskProviderPin.js';
 import { getTaskTypeConfidence } from './taskLearning.js';
 import { classifySafetyKind, requiresSafetyApproval } from './taskLearning/safetyKind.js';
 import { generateProactiveTasks as generateMissionTasks } from './missions.js';
@@ -2340,11 +2341,13 @@ export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, t
 
 /**
  * Assemble the base improvement-task metadata and layer the sanitized global
- * (schedule interval) + per-app taskMetadata overrides on top. Per-app strips
+ * (schedule interval) + per-app taskMetadata overrides on top. `appOverride` is
+ * this app's stored entry for `taskType` (loaded once by the caller, which also
+ * reads its provider/model pin). Per-app strips
  * managed-agent fields first (see the sibling generateManagedAppTask path for
  * the rationale). Pure assembly — no gating, no early return.
  */
-async function buildImprovementTaskMetadata(taskType, app, interval, taskSchedule) {
+function buildImprovementTaskMetadata(taskType, app, interval, taskSchedule, appOverride) {
   const metadata = {
     app: app.id,
     appName: app.name,
@@ -2361,9 +2364,8 @@ async function buildImprovementTaskMetadata(taskType, app, interval, taskSchedul
   }
 
   // Apply sanitized per-app taskMetadata overrides (merge on top of global).
-  const appOverrides = await getAppTaskTypeOverrides(app.id);
   const strippedAppOverride = taskSchedule.stripManagedAgentOptionsFromOverride(
-    taskType, appOverrides[taskType]?.taskMetadata
+    taskType, appOverride?.taskMetadata
   );
   const sanitizedAppMeta = sanitizeTaskMetadata(strippedAppOverride);
   if (sanitizedAppMeta) {
@@ -2957,15 +2959,41 @@ async function buildImprovementTaskDescription({ promptTemplate, app, promptTask
         : '');
 }
 
+const EMPTY_PROVIDER_PIN = Object.freeze({ providerId: null, model: null });
+
 /**
- * Layer the provider/model/effort pins onto `metadata`: the global schedule
- * interval first, then a buildTaskInput hook's per-app override (the more
- * specific choice wins, so it is applied last). A model is only ever pinned
- * when explicitly configured — otherwise it stays unset so selectModelForTask
- * resolves the active provider's tier/default model at spawn time (see the
- * note in generateSelfImprovementTaskForType).
+ * The app's per-app provider/model pin for this task type, as an overlay to apply
+ * over the global Schedule pin. Runs the shared harness guard
+ * (`resolveAgentProviderPin`) so an api-typed per-app pin — which has no
+ * file-writing harness and could only ever fail at spawn — falls back to the
+ * Schedule pin rather than reaching the agent.
+ *
+ * Returns an EMPTY overlay when nothing resolvable is harness-capable: the
+ * Schedule pin then stands untouched and agentProviderResolution reports its
+ * actionable permanent error, which beats silently rerouting the run onto a
+ * provider the user never chose.
  */
-function applyProviderModelPins(metadata, interval, hookOverride) {
+async function resolveAppProviderPin({ app, taskType, appOverride, interval }) {
+  if (!appOverride?.providerId && !appOverride?.model) return EMPTY_PROVIDER_PIN;
+  const { providerId, model, skipReason } = await resolveAgentProviderPin({
+    appPin: { providerId: appOverride.providerId || null, model: appOverride.model ?? null },
+    readSchedulePin: () => interval,
+    taskType,
+    appName: app.name
+  });
+  return skipReason ? EMPTY_PROVIDER_PIN : { providerId, model };
+}
+
+/**
+ * Layer the provider/model/effort pins onto `metadata`, least specific first:
+ * the global schedule interval, then the app's own per-app pin, then a
+ * buildTaskInput hook's fully-resolved choice. A model is only ever pinned when
+ * explicitly configured — otherwise it stays unset so selectModelForTask resolves
+ * the active provider's tier/default model at spawn time (see the note in
+ * generateSelfImprovementTaskForType).
+ */
+function applyProviderModelPins(metadata, interval, appPin, hookOverride) {
+  // Least specific first: the task's global Schedule pin.
   if (interval.providerId) {
     metadata.provider = interval.providerId;
     metadata.providerId = interval.providerId;
@@ -2976,6 +3004,11 @@ function applyProviderModelPins(metadata, interval, hookOverride) {
   if (interval.effort) {
     metadata.effort = interval.effort;
   }
+  // Then the app's own per-app pin, which is the more specific choice — honored
+  // for EVERY task type (#4783), not just the one whose buildTaskInput hook read it.
+  if (appPin.providerId) { metadata.provider = appPin.providerId; metadata.providerId = appPin.providerId; }
+  if (appPin.model) { metadata.model = appPin.model; }
+  // A buildTaskInput hook's fully-resolved choice wins outright.
   if (hookOverride.providerId) { metadata.provider = hookOverride.providerId; metadata.providerId = hookOverride.providerId; }
   if (hookOverride.model) { metadata.model = hookOverride.model; }
 }
@@ -3000,9 +3033,15 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   // task means rotation advanced; a `return null` short-circuit means it
   // didn't.
 
-  // Get interval settings to determine provider/model and pipeline config
-  const interval = await taskSchedule.getTaskInterval(taskType);
-  const metadata = await buildImprovementTaskMetadata(taskType, app, interval, taskSchedule);
+  // Get interval settings to determine provider/model and pipeline config.
+  // The per-app override entry is loaded ONCE here: it carries both the
+  // taskMetadata merged below and the provider/model pin applied further down.
+  const [interval, appOverrides] = await Promise.all([
+    taskSchedule.getTaskInterval(taskType),
+    getAppTaskTypeOverrides(app.id)
+  ]);
+  const appOverride = appOverrides[taskType] || null;
+  const metadata = buildImprovementTaskMetadata(taskType, app, interval, taskSchedule, appOverride);
 
   initializePipelineMetadata(metadata);
   if (!skipPreconditions && shouldSkipForPrecondition(metadata, app, taskType)) return null;
@@ -3136,7 +3175,15 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
     metadata.openPR = false;
     metadata.simplify = false;
   }
-  applyProviderModelPins(metadata, interval, hookOverride);
+  // The app's per-app provider/model pin (#4783). Resolved through the shared
+  // harness guard, so an api-typed pin falls back to the Schedule pin instead of
+  // reaching the spawn as a permanent provider failure. Skipped when a
+  // buildTaskInput hook already resolved the provider — its return wins anyway, so
+  // re-deriving here would only duplicate the fallback log line.
+  const appPin = hookOverride.providerId
+    ? EMPTY_PROVIDER_PIN
+    : await resolveAppProviderPin({ app, taskType, appOverride, interval });
+  applyProviderModelPins(metadata, interval, appPin, hookOverride);
 
   const approval = await resolveConfidenceApproval(state, `app-improve:${taskType}`, `Task app-improve:${taskType} for ${app.name}`, metadata);
   stampApprovalReason(metadata, approval);

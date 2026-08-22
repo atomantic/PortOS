@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { canRunTaskOutputHookWithoutPayload, getTaskInputHook, getTaskOutputHook, honorsPerAppProviderOverride, isProgrammaticIoTaskType } from './taskTypeHooks.js';
+import { canRunTaskOutputHookWithoutPayload, getTaskInputHook, getTaskOutputHook, isProgrammaticIoTaskType } from './taskTypeHooks.js';
 
 describe('taskTypeHooks registry', () => {
   it('resolves both hooks for layered-intelligence to callables', async () => {
@@ -38,17 +38,5 @@ describe('isProgrammaticIoTaskType (#2700)', () => {
     // A truthiness check on the registry object would let these through.
     expect(isProgrammaticIoTaskType('constructor')).toBe(false);
     expect(isProgrammaticIoTaskType('toString')).toBe(false);
-  });
-});
-
-describe('honorsPerAppProviderOverride', () => {
-  it('is true only for the type whose hook resolves the app pin', () => {
-    expect(honorsPerAppProviderOverride('layered-intelligence')).toBe(true);
-    // A type with no hook at all can't consume a per-app provider/model, so the
-    // UI must not offer one for it.
-    expect(honorsPerAppProviderOverride('security')).toBe(false);
-    // Same inherited-key hazard isProgrammaticIoTaskType guards — the capability
-    // read must not resolve through the prototype either.
-    expect(honorsPerAppProviderOverride('constructor')).toBe(false);
   });
 });

@@ -55,7 +55,6 @@ export default function PerAppOverrideList({ taskType, config, apps, providers, 
             managedAgentOptions={config.managedAgentOptions}
             fileIssuesCapable={config.fileIssuesCapable}
             defaultFileIssues={config.defaultFileIssues}
-            providerOverrideCapable={config.providerOverrideCapable}
             inheritedProviderText={inheritedProviderText}
             providers={providers}
             override={appOverrides[app.id]}

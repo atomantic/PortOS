@@ -458,6 +458,22 @@ export function agentOptionButtonClass(effective, hasOverride) {
     : 'bg-transparent text-gray-600 border-gray-700/50';
 }
 
+// Normalize a per-app provider/model pin (`taskTypeOverrides[<taskType>].providerId`
+// / `.model`) to the ONE shape every write site sends. '' and null both mean
+// "inherit" — the route deletes the key for either — but three surfaces used to
+// clear with three different values ('', null, and '' → null), so the same user
+// action read as three different intents in the diff. Emitting null from all of
+// them is what makes the stored result identical (#4783).
+export function providerPinPatch(providerId, model) {
+  return { providerId: providerId || null, model: model || null };
+}
+
+// Whether an app has pinned anything of its own for a task type (as opposed to
+// inheriting the task's Schedule pin).
+export function hasProviderPin(override) {
+  return !!(override?.providerId || override?.model);
+}
+
 // Compute new taskMetadata after toggling a field in a per-app override.
 // Returns null when all overrides are cleared (inherit everything).
 // Enforces invariant: openPR implies useWorktree (turning on openPR forces

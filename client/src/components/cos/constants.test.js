@@ -16,7 +16,9 @@ import {
   reviewerLabel,
   summarizeHealthIssues,
   healthIssueTone,
-  fresherHealth
+  fresherHealth,
+  providerPinPatch,
+  hasProviderPin
 } from './constants';
 
 // These mirror the server's domainBudgets/domainAutonomy helpers so the UI's
@@ -297,6 +299,35 @@ describe('healthIssueTone', () => {
 
   it('escalates to critical when any issue is an error', () => {
     expect(healthIssueTone([{ type: 'warning' }, { type: 'error' }])).toBe('critical');
+  });
+});
+
+// The per-app provider pin is written from three surfaces (Edit App → Automation,
+// CoS → Schedule rows, Edit App → Intelligence). They used to clear it with three
+// different values ('', null, and '' → null); one normalizer is what makes the
+// stored result identical (#4783).
+describe('providerPinPatch', () => {
+  it('collapses every "inherit" spelling to explicit nulls', () => {
+    expect(providerPinPatch('', '')).toEqual({ providerId: null, model: null });
+    expect(providerPinPatch(null, undefined)).toEqual({ providerId: null, model: null });
+    expect(providerPinPatch(undefined, null)).toEqual({ providerId: null, model: null });
+  });
+
+  it('passes real values through unchanged', () => {
+    expect(providerPinPatch('claude-cli', 'opus')).toEqual({ providerId: 'claude-cli', model: 'opus' });
+  });
+
+  it('keeps a model pinned with no provider (inherit the provider, pin the model)', () => {
+    expect(providerPinPatch('', 'opus')).toEqual({ providerId: null, model: 'opus' });
+  });
+});
+
+describe('hasProviderPin', () => {
+  it('is true for either half of the pin, false for inherit', () => {
+    expect(hasProviderPin({ providerId: 'claude-cli' })).toBe(true);
+    expect(hasProviderPin({ model: 'opus' })).toBe(true);
+    expect(hasProviderPin({ providerId: '', model: null })).toBe(false);
+    expect(hasProviderPin(undefined)).toBe(false);
   });
 });
 

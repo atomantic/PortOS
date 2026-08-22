@@ -35,10 +35,9 @@ const AutomationTab = (await import('./AutomationTab')).default;
 
 const SCHEDULE = {
   tasks: {
-    // Only layered-intelligence honors a per-app provider/model override (the
-    // server stamps providerOverrideCapable from taskTypeHooks) — the other rows
-    // take their provider from this global pin.
-    'layered-intelligence': { type: 'daily', taskMetadata: {}, providerId: 'global-claude', providerOverrideCapable: true },
+    // Every row honors a per-app provider/model pin (#4783); the task's own pin
+    // is what a row inherits when the app pins nothing.
+    'layered-intelligence': { type: 'daily', taskMetadata: {}, providerId: 'global-claude' },
     'app-improvement': { type: 'rotation', taskMetadata: {} },
     security: { type: 'weekly', taskMetadata: { fileIssues: false }, fileIssuesCapable: true, defaultFileIssues: false },
   },
@@ -100,7 +99,7 @@ describe('AutomationTab per-app overrides', () => {
     expect(api.updateAppTaskTypeOverride).toHaveBeenCalledWith(
       'app-1',
       'layered-intelligence',
-      { providerId: 'claude-cli', model: '' },
+      { providerId: 'claude-cli', model: null },
       { silent: true }
     );
   });
@@ -115,7 +114,7 @@ describe('AutomationTab per-app overrides', () => {
     await waitFor(() => expect(api.updateAppTaskTypeOverride).toHaveBeenCalledWith(
       'app-1',
       'layered-intelligence',
-      { model: 'sonnet' },
+      { providerId: 'claude-cli', model: 'sonnet' },
       { silent: true }
     ));
   });
@@ -139,27 +138,25 @@ describe('AutomationTab per-app overrides', () => {
     expect(mockNavigate).toHaveBeenCalledWith('/apps/app-1?edit=1&appTab=intelligence');
   });
 
-  // A per-app provider/model pin is inert for a task type with no buildTaskInput
-  // hook — the picker must not be offered there, or the user sets a provider that
-  // silently never runs.
-  it('offers no provider override on a task type that does not honor one', async () => {
+  // The pin reaches the spawn for EVERY task type now (#4783), so the picker is
+  // offered on every row rather than only where a buildTaskInput hook read it.
+  it('offers the same provider picker on a task type with no hook', async () => {
     await renderTab();
     const row = rowFor('app-improvement');
-    expect(within(row).queryByRole('button', { name: /show provider and model overrides/i })).toBeNull();
+    fireEvent.click(within(row).getByRole('button', { name: /show provider and model overrides/i }));
+    expect(within(row).getByLabelText('Provider override')).toBeInTheDocument();
   });
 
-  it('shows a stored-but-inert override with a way to clear it', async () => {
+  it('clearing the provider sends explicit nulls, matching the other pin surfaces', async () => {
     await renderTab({ 'app-improvement': { providerId: 'claude-cli', model: 'opus' } });
     const row = rowFor('app-improvement');
     fireEvent.click(within(row).getByRole('button', { name: /show provider and model overrides/i }));
-    expect(within(row).getByText(/unused override/i)).toBeInTheDocument();
-    expect(within(row).queryByLabelText('Provider override')).toBeNull();
 
-    fireEvent.click(within(row).getByRole('button', { name: /clear it/i }));
+    fireEvent.change(within(row).getByLabelText('Provider override'), { target: { value: '' } });
     await waitFor(() => expect(api.updateAppTaskTypeOverride).toHaveBeenCalledWith(
       'app-1',
       'app-improvement',
-      { providerId: null, model: '' },
+      { providerId: null, model: null },
       { silent: true }
     ));
   });

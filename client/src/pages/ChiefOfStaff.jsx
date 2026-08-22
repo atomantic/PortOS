@@ -1075,7 +1075,7 @@ export default function ChiefOfStaff() {
         )}
         {activeTab === 'workflow' && (
           <div role="tabpanel" id="tabpanel-workflow" aria-labelledby="tab-workflow">
-            <WorkflowTab apps={apps} />
+            <WorkflowTab apps={apps} providers={providers} />
           </div>
         )}
         {activeTab === 'digest' && (

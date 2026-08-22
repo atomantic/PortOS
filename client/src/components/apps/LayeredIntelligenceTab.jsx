@@ -1,8 +1,8 @@
 import { Plus, Trash2, Brain } from 'lucide-react';
 import Banner from '../ui/Banner';
-import ProviderModelSelector from '../ProviderModelSelector';
+import AppProviderPin from '../cos/AppProviderPin';
+import { providerPinPatch } from '../cos/constants';
 import LayeredIntelligenceOutcomes from './LayeredIntelligenceOutcomes';
-import { filterSelectableModels } from '../../utils/providers';
 import { timeAgo } from '../../utils/formatters';
 import { formatLiReason, liReasonTone } from '../../utils/layeredIntelligenceReasons';
 import { INPUT_CLASS } from './constants';
@@ -201,10 +201,12 @@ export function buildLayeredIntelligenceScheduleUpdate(baseline, current) {
     update.interval = interval;
     update.intervalMs = intervalMs;
   }
-  const curProvider = current.providerId || null;
-  if (curProvider !== (baseline.providerId || null)) update.providerId = curProvider;
-  const curModel = current.model || null;
-  if (curModel !== (baseline.model || null)) update.model = curModel;
+  // Both sides through the shared normalizer so '' and null can't read as a
+  // change, and a clear ships the same null every other surface sends (#4783).
+  const cur = providerPinPatch(current.providerId, current.model);
+  const base = providerPinPatch(baseline.providerId, baseline.model);
+  if (cur.providerId !== base.providerId) update.providerId = cur.providerId;
+  if (cur.model !== base.model) update.model = cur.model;
   return Object.keys(update).length > 0 ? update : null;
 }
 
@@ -243,11 +245,6 @@ export default function LayeredIntelligenceTab({ appId, li, onChange, providers,
 
   const setSources = (patch) => onChange({ sources: { ...sources, ...patch } });
   const setCustom = (next) => setSources({ custom: next });
-
-  const currentProvider = providers.find(p => p.id === li.providerId);
-  const availableModels = currentProvider
-    ? filterSelectableModels(currentProvider.models || [currentProvider.defaultModel])
-    : [];
 
   const toggleScope = (id, on) => {
     const next = on ? [...new Set([...allowedScopes, id])] : allowedScopes.filter(s => s !== id);
@@ -305,17 +302,12 @@ export default function LayeredIntelligenceTab({ appId, li, onChange, providers,
 
       <div>
         <span className="block text-sm text-gray-400 mb-1">AI provider</span>
-        <ProviderModelSelector
+        <AppProviderPin
           providers={providers}
-          selectedProviderId={li.providerId || ''}
-          selectedModel={li.model || ''}
-          availableModels={availableModels}
-          onProviderChange={id => onChange({ providerId: id || null, model: '' })}
-          onModelChange={model => onChange({ model: model || null })}
+          providerId={li.providerId}
+          model={li.model}
+          onChange={onChange}
           label="Provider"
-          emptyProviderOption="Use default provider"
-          emptyModelOption="Default model"
-          alwaysShowModel
         />
         <p className="text-xs text-gray-500 mt-1">Leave on &quot;Use default provider&quot; to run the loop with the active CoS provider.</p>
       </div>
