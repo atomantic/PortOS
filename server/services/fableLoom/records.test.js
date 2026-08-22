@@ -144,6 +144,24 @@ describe('loom CRUD', () => {
   });
 });
 
+describe('format and play settings round-trip', () => {
+  it('keeps them across an unrelated patch, and accepts them at create', async () => {
+    const loom = await makeLoom({ format: 'teleplay', playSettings: { providerId: 'claude', model: 'opus', effort: null } });
+    expect(loom.format).toBe('teleplay');
+    expect(loom.playSettings).toEqual({ providerId: 'claude', model: 'opus', effort: null });
+
+    // A rename must not silently reset the pin or the format — the exact drift
+    // a PATCH_FIELDS / schema mismatch would produce.
+    const renamed = await updateLoom(loom.id, { name: 'Renamed' });
+    expect(renamed.format).toBe('teleplay');
+    expect(renamed.playSettings).toEqual({ providerId: 'claude', model: 'opus', effort: null });
+
+    const cleared = await updateLoom(loom.id, { playSettings: null });
+    expect(cleared.playSettings).toBeNull();
+    expect(cleared.format).toBe('teleplay');
+  });
+});
+
 describe('listLoomSummaries', () => {
   it('projects counts without the episode graphs', async () => {
     const loom = await makeLoom({ logline: 'A crown that remembers.' });

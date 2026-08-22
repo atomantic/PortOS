@@ -129,9 +129,13 @@ export function layoutLoomGraph(episode) {
     cardBottom = Math.max(cardBottom, y + LOOM_NODE_H);
   }
   const edges = routeLoomEdges(nodes, positions, cardBottom);
+  // BOTH extents come from the edges too: a self-loop bows past the card's
+  // right side and its label sits further right still, and the SVG root clips
+  // at these numbers — the scrolling wrapper can't recover what the viewBox cut.
   let height = cardBottom + MARGIN;
   for (const edge of edges) {
     height = Math.max(height, edge.maxY + MARGIN);
+    width = Math.max(width, edge.maxX + MARGIN);
   }
   return { positions, edges, width: Math.max(width, 400), height: Math.max(height, 240) };
 }
@@ -221,6 +225,7 @@ export function placeEdgeLabels(edges) {
     }
     edge.labelY = y;
     edge.maxY = Math.max(edge.maxY, y);
+    edge.maxX = Math.max(edge.maxX, edge.labelX + half);
     placed.push({ x: edge.labelX, y, half });
   }
   return edges;
@@ -245,6 +250,7 @@ export function loomEdgePath(from, to, options = {}) {
       d: `M ${x} ${y - 24} C ${x + 64} ${y - 44}, ${x + 64} ${y + 44}, ${x} ${y + 24}`,
       labelX: x + 46,
       labelY: y,
+      maxX: x + 64,
       maxY: from.y + LOOM_NODE_H,
     };
   }
@@ -258,6 +264,7 @@ export function loomEdgePath(from, to, options = {}) {
       d: `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`,
       labelX: (x1 + x2) / 2,
       labelY: (y1 + y2) / 2,
+      maxX: Math.max(x1, x2),
       maxY: Math.max(y1, y2),
     };
   }
@@ -271,6 +278,7 @@ export function loomEdgePath(from, to, options = {}) {
     labelX: (x1 + x2) / 2,
     // Bottom of the cubic at t=0.5, where the run is flattest.
     labelY: (y1 + y2 + 6 * lane) / 8,
+    maxX: Math.max(x1, x2),
     maxY: lane,
   };
 }

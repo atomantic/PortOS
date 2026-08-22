@@ -12,6 +12,7 @@
     "server/services/brain.js"
   ],
   "catalog-ideas-scenes-concepts": [
+    "server/lib/creativeLatitude.js",
     "server/services/catalogExtraction.js"
   ],
   "cd-evaluate": [
@@ -58,6 +59,7 @@
     "server/services/importer.js"
   ],
   "manuscript-reformat": [
+    "server/lib/creativeLatitude.js",
     "server/services/pipeline/manuscriptFix.js"
   ],
   "memory-evaluate": [
@@ -67,6 +69,7 @@
     "server/services/modelPersonality.js"
   ],
   "model-personality-profile": [
+    "server/lib/creativeLatitude.js",
     "server/services/modelPersonality.js"
   ],
   "multi-turn-consistency-scorer": [

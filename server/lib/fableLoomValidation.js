@@ -37,6 +37,7 @@ export const loomCreateSchema = z.object({
   premise: premise.optional(),
   styleNotes: styleNotes.optional(),
   format: format.optional(),
+  playSettings: playSettings.optional(),
   universeId: refId.optional(),
   seriesId: refId.optional(),
 });

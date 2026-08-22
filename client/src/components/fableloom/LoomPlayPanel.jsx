@@ -88,7 +88,13 @@ export default function LoomPlayPanel({ loom, episode }) {
       setScene(result.node);
       additions.push({ role: 'scene', node: result.node });
     }
-    if (additions.length) setTranscript((prev) => [...prev, ...additions]);
+    // A turn that moves nowhere and says nothing would read as the app
+    // ignoring the reader. It happens for real: a path whose target scene the
+    // author deleted stays on the graph (the editor surfaces it as an error
+    // rather than silently rewriting edges), and the server answers 'stay'
+    // with no narration.
+    if (!additions.length) additions.push({ role: 'narrator', text: 'Nothing comes of it.' });
+    setTranscript((prev) => [...prev, ...additions]);
   }, { errorMessage: 'The narrator lost the thread — try again' });
 
   // Tapping a path: the reader already named the transition, so the turn

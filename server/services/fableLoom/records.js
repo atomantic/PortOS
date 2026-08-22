@@ -200,7 +200,7 @@ export async function getLoom(id) {
   return sanitizeLoom(await readRaw(id));
 }
 
-export async function createLoom({ name, logline, premise, styleNotes, format, universeId, seriesId } = {}) {
+export async function createLoom({ name, logline, premise, styleNotes, format, playSettings, universeId, seriesId } = {}) {
   const now = new Date().toISOString();
   await assertRefsExist({ universeId: nullableRef(universeId), seriesId: nullableRef(seriesId) });
   const loom = sanitizeLoom({
@@ -210,6 +210,7 @@ export async function createLoom({ name, logline, premise, styleNotes, format, u
     premise,
     styleNotes,
     format,
+    playSettings,
     universeId,
     seriesId,
     episodes: [],

@@ -34,20 +34,25 @@ describe('loomGraphLayers', () => {
   });
 
   it('reorders a layer toward its parents so forward edges stop crossing', () => {
-    // a → x, b → y discovered as [y, x]: barycenter pulls x above y to match
-    // the parent order, which is the crossing-free arrangement.
+    // `p` (row 0) reaches a and b; `r` (row 2) and `s` (row 3) also reach a.
+    // BFS discovers [a, b] because p's transitions come first — but a's mean
+    // parent row is (0+2+3)/3 = 1.67 against b's 0, so the crossing-free order
+    // is [b, a]. A plain BFS layering CANNOT produce that, which is what makes
+    // this fixture a real test of the barycenter pass rather than of BFS.
     const layers = loomGraphLayers({
       startNodeId: 'root',
       nodes: [
-        { id: 'root', transitions: [tr('t1', 'a'), tr('t2', 'b')] },
-        { id: 'a', transitions: [tr('t3', 'x')] },
-        { id: 'b', transitions: [tr('t4', 'y')] },
-        { id: 'y', transitions: [] },
-        { id: 'x', transitions: [] },
+        { id: 'root', transitions: [tr('t1', 'p'), tr('t2', 'q'), tr('t3', 'r'), tr('t4', 's')] },
+        { id: 'p', transitions: [tr('t5', 'a'), tr('t6', 'b')] },
+        { id: 'q', transitions: [] },
+        { id: 'r', transitions: [tr('t7', 'a')] },
+        { id: 's', transitions: [tr('t8', 'a')] },
+        { id: 'a', transitions: [] },
+        { id: 'b', transitions: [] },
       ],
     });
-    expect(layers[1]).toEqual(['a', 'b']);
-    expect(layers[2]).toEqual(['x', 'y']);
+    expect(layers[1]).toEqual(['p', 'q', 'r', 's']);
+    expect(layers[2]).toEqual(['b', 'a']);
   });
 });
 
@@ -83,6 +88,18 @@ describe('layoutLoomGraph', () => {
     expect(back.d.startsWith(`M ${positions.n2.x + LOOM_NODE_W / 2} ${positions.n2.y + LOOM_NODE_H}`)).toBe(true);
     expect(back.maxY).toBeGreaterThan(positions.n1.y + LOOM_NODE_H);
     expect(height).toBeGreaterThan(back.maxY);
+  });
+
+  it('grows the canvas past a self-loop and its label, not just the cards', () => {
+    const ep = episode();
+    ep.nodes[3].transitions = [{ id: 't-self', targetNodeId: 'n4', intent: 'wait here quietly for now' }];
+    const { edges, width, positions } = layoutLoomGraph(ep);
+    const loop = edges.find((e) => e.id === 't-self');
+    // The SVG root clips at `width` — the scrolling wrapper can't recover what
+    // the viewport cut, so the extent has to include the bow AND the label.
+    expect(loop.maxX).toBeGreaterThan(positions.n4.x + LOOM_NODE_W);
+    expect(width).toBeGreaterThan(loop.maxX);
+    expect(width).toBeGreaterThan(loop.labelX);
   });
 
   it('drops a transition whose target no longer exists', () => {

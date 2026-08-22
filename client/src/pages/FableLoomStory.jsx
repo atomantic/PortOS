@@ -78,6 +78,16 @@ export default function FableLoomStory() {
     }
   };
 
+  // A rewrite changes scene text server-side (per chunk, so even a failed run
+  // moved some). Re-read the record and drop the scene selection: an open
+  // scene editor still holds the pre-rewrite text and would write it back on
+  // its next blur-save.
+  const handleRewritten = async () => {
+    const fresh = await getLoom(loomId).catch(() => null);
+    if (fresh) setLoom(fresh);
+    if (nodeId) navigate(episodePath(episodeId, null) + (playOpen ? '?play=1' : ''));
+  };
+
   const handleAddNode = async () => {
     const updated = await addLoomNode(loomId, episode.id, { title: 'New scene' }).catch(() => null);
     if (updated) {
@@ -289,6 +299,7 @@ export default function FableLoomStory() {
         onClose={() => setSettingsOpen(false)}
         loom={loom}
         onLoomUpdate={setLoom}
+        onRewritten={handleRewritten}
       />
 
       {episode && (

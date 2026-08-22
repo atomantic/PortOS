@@ -267,6 +267,12 @@ describe('playTurn', () => {
     expect(runStagedLLM.mock.calls[2][2]).toMatchObject({
       providerOverride: 'claude', modelOverride: 'opus', effortOverride: 'high',
     });
+
+    // A per-call model beats the pinned one outright.
+    await playTurn(loomId, episodeId, { nodeId: gate.id, message: 'look around', model: 'sonnet' });
+    expect(runStagedLLM.mock.calls[3][2]).toMatchObject({
+      providerOverride: 'claude', modelOverride: 'sonnet', effortOverride: 'high',
+    });
   });
 
   it("renders the loom's format into the narration contract", async () => {
@@ -310,6 +316,67 @@ describe('reformatLoom', () => {
     const [stage, variables] = runStagedLLM.mock.calls[0];
     expect(stage).toBe('fableloom-reformat-scenes');
     expect(variables.sceneFormatContract).toContain('slugline');
+  });
+
+  it('counts only scenes it actually wrote, not every id the model echoed back', async () => {
+    const { loomId, gateId, insideId } = await proseSetup();
+    // Ids that are not in the batch: invented, or from another episode. The
+    // write applies none of them, so neither may be counted as rewritten.
+    runStagedLLM.mockResolvedValue({
+      content: { scenes: [{ id: 'node-invented', prose: 'INT. NOWHERE' }, { id: gateId, prose: 'INT. GATE' }] },
+    });
+    const result = await reformatLoom(loomId, { format: 'teleplay' });
+    expect(result.rewritten).toBe(1);
+    const nodes = result.loom.episodes[0].nodes;
+    expect(nodes.find((n) => n.id === gateId).prose).toBe('INT. GATE');
+    expect(nodes.find((n) => n.id === insideId).prose).toBe('Torchlight.');
+  });
+
+  it('leaves the format pin alone when the rewrite never landed a scene', async () => {
+    const { loomId } = await proseSetup();
+    runStagedLLM.mockRejectedValue(new Error('provider unreachable'));
+    await expect(reformatLoom(loomId, { format: 'teleplay' })).rejects.toThrow('provider unreachable');
+    // Pinning before the rewrite would leave every later weave/branch/play
+    // generating teleplay against a story still written as prose.
+    expect((await getLoom(loomId)).format).toBe('prose');
+
+    runStagedLLM.mockReset().mockResolvedValue({ content: { scenes: [] } });
+    await expect(reformatLoom(loomId, { format: 'teleplay' })).rejects.toMatchObject({ code: 'AI_RESPONSE_INVALID' });
+    expect((await getLoom(loomId)).format).toBe('prose');
+  });
+
+  it('persists each chunk as it lands, so a later failure keeps the earlier work', async () => {
+    const { loomId, episodeId } = await setup();
+    // Six scenes = two chunks; the second one fails.
+    for (let i = 0; i < 6; i += 1) {
+      await addNode(loomId, episodeId, { title: `Scene ${i}`, prose: `Prose ${i}.` });
+    }
+    let call = 0;
+    runStagedLLM.mockImplementation(async (stage, variables) => {
+      call += 1;
+      if (call > 1) throw new Error('provider died mid-run');
+      return { content: { scenes: JSON.parse(variables.scenesJson).map((sc) => ({ id: sc.id, prose: `INT. ${sc.prose}` })) } };
+    });
+    await expect(reformatLoom(loomId, { format: 'teleplay' })).rejects.toThrow('provider died mid-run');
+
+    const nodes = (await getLoom(loomId)).episodes[0].nodes;
+    expect(nodes.slice(0, 5).every((n) => n.prose.startsWith('INT. '))).toBe(true);
+    expect(nodes[5].prose).toBe('Prose 5.');
+  });
+
+  it('skips title-only scenes rather than asking the model to invent them', async () => {
+    const { loomId, episodeId } = await setup();
+    await addNode(loomId, episodeId, { title: 'Written', prose: 'You stand before it.' });
+    await addNode(loomId, episodeId, { title: 'Placeholder with no prose yet' });
+    runStagedLLM.mockImplementation(async (stage, variables) => ({
+      content: { scenes: JSON.parse(variables.scenesJson).map((sc) => ({ id: sc.id, prose: 'INT. SOMEWHERE' })) },
+    }));
+
+    const result = await reformatLoom(loomId, { format: 'teleplay' });
+    expect(result.rewritten).toBe(1);
+    const sent = JSON.parse(runStagedLLM.mock.calls[0][1].scenesJson);
+    expect(sent).toHaveLength(1);
+    expect(result.loom.episodes[0].nodes.find((n) => n.title.startsWith('Placeholder')).prose).toBe('');
   });
 
   it('ignores scenes the model dropped or blanked, and fails when it returns none', async () => {

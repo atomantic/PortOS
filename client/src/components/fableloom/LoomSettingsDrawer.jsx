@@ -26,7 +26,7 @@ import { reformatLoom, updateLoom } from '../../services/api';
 import { fieldClass, labelClass } from './fieldStyles';
 import { LOOM_FORMATS, loomFormatHint, loomFormatLabel } from './loomFormats';
 
-export default function LoomSettingsDrawer({ open, onClose, loom, onLoomUpdate }) {
+export default function LoomSettingsDrawer({ open, onClose, loom, onLoomUpdate, onRewritten }) {
   const { providers } = useProviderModels({ allowDefault: true, silent: true, withEffort: true });
 
   const format = loom.format || 'prose';
@@ -48,10 +48,17 @@ export default function LoomSettingsDrawer({ open, onClose, loom, onLoomUpdate }
     playSettings: { providerId: play.providerId ?? null, model: play.model ?? null, effort: play.effort ?? null, ...changes },
   });
 
+  // `onRewritten` fires on BOTH paths on purpose. A rewrite persists each
+  // chunk as it lands, so even a run that throws part-way has already changed
+  // scene text on the server — any editor still holding the pre-rewrite text
+  // would write it back on its next blur-save.
   const [runReformat, reformatting] = useAsyncAction(async () => {
-    const result = await reformatLoom(loom.id, { format }, { silent: true });
+    const result = await reformatLoom(loom.id, { format }, { silent: true })
+      .finally(() => onRewritten?.());
     onLoomUpdate(result.loom);
-    toast.success(`Rewrote ${result.rewritten} scene${result.rewritten === 1 ? '' : 's'} as ${loomFormatLabel(format).toLowerCase()}`);
+    toast.success(result.remaining
+      ? `Rewrote ${result.rewritten} scene${result.rewritten === 1 ? '' : 's'} — ${result.remaining} left, run it again to finish`
+      : `Rewrote ${result.rewritten} scene${result.rewritten === 1 ? '' : 's'} as ${loomFormatLabel(format).toLowerCase()}`);
   }, { errorMessage: 'The rewrite failed' });
 
   return (
@@ -104,6 +111,8 @@ export default function LoomSettingsDrawer({ open, onClose, loom, onLoomUpdate }
             onEffortChange={(effort) => savePlay({ effort: effort || null })}
             label="Provider"
             layout="stacked"
+            disabled={saving}
+            modelDisabled={saving}
             emptyProviderOption="Default (whatever the play stage uses)"
             emptyModelOption="Default model"
             alwaysShowModel={!!play.providerId}

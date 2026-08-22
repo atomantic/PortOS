@@ -97,7 +97,25 @@ describe('LoomPlayPanel', () => {
     await waitFor(() => expect(playLoomTurn).toHaveBeenCalledTimes(2));
     const [, , payload] = playLoomTurn.mock.calls[1];
     expect(payload.nodeId).toBe('n2');
-    expect(payload.transcript.every((t) => t.role === 'reader' || t.role === 'narrator')).toBe(true);
-    expect(payload.transcript.every((t) => typeof t.text === 'string')).toBe(true);
+    // Length first: `every()` is vacuously true on an empty array, so a filter
+    // that dropped EVERY turn would pass the role/text assertions below.
+    expect(payload.transcript).toHaveLength(3);
+    expect(payload.transcript).toEqual([
+      { role: 'reader', text: 'go in' },
+      { role: 'narrator', text: 'You step through.' },
+      { role: 'reader', text: 'look around' },
+    ]);
+  });
+
+  it('never leaves a turn silent when the server moves nowhere and says nothing', async () => {
+    const user = userEvent.setup();
+    // A path whose target scene the author deleted: the edge is deliberately
+    // kept on the graph, and the server answers stay-with-no-narration.
+    playLoomTurn.mockResolvedValue({ action: 'stay', narration: '', ended: false });
+    render(<LoomPlayPanel loom={loom} episode={episode} />);
+    await user.click(screen.getByRole('button', { name: 'Take path: enter the gate' }));
+
+    await waitFor(() => expect(playLoomTurn).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByText('Nothing comes of it.')).toBeInTheDocument());
   });
 });
