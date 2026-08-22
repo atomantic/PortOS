@@ -4,6 +4,10 @@ import { posixPath } from './testHelper.js';
 import { buildCliChildEnv, composeProviderEnv } from './cliChildEnv.js';
 import { AGENT_GUARD_BIN } from './agentGuard/index.js';
 import { collectServerSources, readServerSource } from './testHelper.js';
+import { readFileSync } from 'node:fs';
+// Read, not `import … with { type: 'json' }` — the repo avoids JSON import
+// attributes (see promptSystemStages.js).
+const SHIPPED_PROVIDERS = JSON.parse(readFileSync(new URL('../../data.reference/providers.json', import.meta.url), 'utf8'));
 
 // An OpenCode provider that IS ollama-backed — the only shape for which
 // buildOpencodeEnvVars returns anything. Everyone else gets `{}`, which is why
@@ -193,6 +197,28 @@ describe('composeProviderEnv — delta for sites that do not spawn directly', ()
     // runner-spawned agent rejects its own --model.
     const delta = composeProviderEnv({ provider: OLLAMA_OPENCODE, model: 'llama3.1:8b' });
     expect(declaredModels(delta).sort()).toEqual(['llama3.1:8b', 'qwen2.5:7b']);
+  });
+
+  it('hands the shipped Claude SGLang TUI its Anthropic wiring, and no OpenCode config', () => {
+    // Acceptance path for the seeded pair: a CoS task assigned this provider
+    // spawns `claude --dangerously-skip-permissions` with exactly this env.
+    const provider = SHIPPED_PROVIDERS.providers['claude-sglang-tui'];
+    expect(provider.command).toBe('claude');
+    expect(provider.args).toEqual(['--dangerously-skip-permissions']);
+
+    const env = composeProviderEnv({ provider, model: 'qwen3.8-27b' });
+
+    // Without this, Claude Code's per-request attribution hash is the first
+    // token to differ between turns and SGLang re-prefills the whole prompt.
+    expect(env.CLAUDE_CODE_ATTRIBUTION_HEADER).toBe('0');
+    // Server ROOT: the Anthropic SDK appends /v1/messages itself.
+    expect(env.ANTHROPIC_BASE_URL).toBe('http://127.0.0.1:18021');
+    expect(env.ANTHROPIC_BASE_URL).not.toMatch(/\/v\d+\/?$/);
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBe('sglang');
+
+    // `sglangBacked` also marks the OpenCode wrappers, but the OpenCode config
+    // is gated on the COMMAND — a `claude` harness must not receive one.
+    expect(env.OPENCODE_CONFIG_CONTENT).toBeUndefined();
   });
 
   it('is what buildCliChildEnv layers over its base env', () => {

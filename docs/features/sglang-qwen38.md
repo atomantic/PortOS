@@ -4,7 +4,8 @@ The third CUDA path for CoS agents, alongside the Ampere-only
 [vLLM container](./qwen38-rtx3090.md) and the Apple Silicon
 [MTPLX](./mtplx.md) / [DSpark](./dflash2.md) runtimes. It serves Qwen3.8-27B from
 SGLang's official `lmsysorg/sglang:qwen38-27b` image on `127.0.0.1:18021`, behind
-two disabled-by-default OpenCode wrappers.
+disabled-by-default OpenCode and Claude Code wrappers — the container speaks both
+the OpenAI and the Anthropic wire protocols, so either harness can drive it.
 
 **PortOS never starts this container, never pulls the image, and never downloads
 the weights.** It holds the whole GPU, so local image/video generation cannot run
@@ -148,7 +149,7 @@ docker, refuses when the compose file is missing, and refuses when it cannot
 confirm the weights are on disk. It never pulls the image and never downloads
 weights.
 
-## Use it from an agent
+## Use it from an agent (OpenCode)
 
 Migration `290-opencode-sglang-providers` seeds two disabled presets on
 **AI Providers**:
@@ -175,6 +176,59 @@ the same shape MTPLX and llama.cpp take.
 Qwen3.8-27B has thinking **on** by default. CoS coding wants it **off** — that is
 what keeps the tool-call format reliable — but PortOS does not seed the setting,
 so turn it off on the provider yourself.
+
+## Claude Code against the same container
+
+SGLang serves an **Anthropic-compatible `/v1/messages` endpoint on every server**,
+with no extra flag — the same trick Claude Ollama plays with the Ollama daemon. So
+the Claude Code harness can drive this container directly, no LiteLLM in between.
+The vLLM stack cannot: it is OpenAI-only, which is why the 3090 path stays
+OpenCode-only.
+
+Migration `291-claude-sglang-providers` seeds a second disabled pair:
+
+| Preset | Type | Command | `ANTHROPIC_BASE_URL` |
+| --- | --- | --- | --- |
+| `claude-sglang` | cli | `claude --print` | `http://127.0.0.1:18021` |
+| `claude-sglang-tui` | tui | `claude --dangerously-skip-permissions` | `http://127.0.0.1:18021` |
+
+These are **additional**, not a replacement — two harnesses over one daemon, and
+they carry `sglangBacked: true` too, so the readiness checklist, the usage/quota
+skip, and the GPU-exclusivity probe treat all four presets as the same container.
+
+### The env vars that are load-bearing
+
+- **`CLAUDE_CODE_ATTRIBUTION_HEADER=0`** — without it, Claude Code prepends a
+  per-request hash to the system prompt. That hash is the first token to differ
+  between turns, so SGLang's radix prefix cache misses and **re-prefills the whole
+  conversation on every CoS turn**. The 3090 bring-up measured a 24× TTFT
+  difference between a prefix-cache hit and a miss; this flag is what makes that
+  win reachable here. `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is a *different*
+  control and does not remove the attribution block — both are set.
+- **`ANTHROPIC_BASE_URL` is the server root**, `http://127.0.0.1:18021`, with no
+  `/v1`. The Anthropic SDK appends `/v1/messages` itself; append it yourself and
+  the server 404s in a way that reads as "model not found". The `/v1` form lives
+  on the preset's `endpoint` field, which is the OpenAI-compatible listing the
+  readiness probe hits — the two URLs are deliberately different, and swapping
+  them breaks the harness while leaving the checklist green.
+- **`ANTHROPIC_AUTH_TOKEN` must be non-empty.** SGLang accepts any value unless
+  you started it with `--api-key`, but the SDK refuses to send a request with a
+  blank one. It ships as `sglang` and is marked secret.
+- **`API_TIMEOUT_MS=3000000`** — reasoning plus a long CoS prompt runs well past
+  the SDK default.
+
+Tool calls also need **`--tool-call-parser qwen3_coder`** on the serve line (see
+[Why these flags](#why-these-flags)). Without it the schemas are accepted, the
+calls come back as raw text, and Claude Code executes nothing.
+
+**No `[1m]` suffix on the model name.** Native context is 262,144. Claiming Claude
+Code's 1M beta while the serve line does not raise `--context-length` caps the
+window incorrectly in the other direction. Every tier
+(`ANTHROPIC_DEFAULT_HAIKU_MODEL` through `_OPUS_MODEL`, plus
+`ANTHROPIC_SMALL_FAST_MODEL`) points at the one served `qwen3.8-27b`, so a
+haiku-tier sub-call cannot ask the container for a model it has never heard of.
+
+Thinking still rides Qwen's `enable_thinking`, and CoS coding still wants it off.
 
 ## GPU exclusivity
 

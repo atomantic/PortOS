@@ -935,7 +935,8 @@ describe('supportsModelRefresh', () => {
     // have a usable fetcher or stay out of this list.
     expect(withButton).toEqual([
       'antigravity-cli', 'antigravity-tui', 'cerebras', 'claude-code',
-      'claude-code-bedrock', 'claude-ollama', 'claude-ollama-tui', 'cursor-cli',
+      'claude-code-bedrock', 'claude-ollama', 'claude-ollama-tui',
+      'claude-sglang', 'claude-sglang-tui', 'cursor-cli',
       'cursor-tui', 'grok', 'lmstudio', 'mtplx', 'nvidia-kimi', 'ollama',
       'opencode-llama-tui',
       'opencode-mtplx', 'opencode-mtplx-tui', 'opencode-ollama',
