@@ -2992,25 +2992,37 @@ async function resolveAppProviderPin({ app, taskType, appOverride, interval }) {
  * the active provider's tier/default model at spawn time (see the note in
  * generateSelfImprovementTaskForType).
  */
+function applyOneProviderPin(metadata, pin) {
+  // A model pinned with no provider REFINES the layer below (the user picked a
+  // model for the provider that layer resolved), so it applies on its own.
+  if (!pin?.providerId) {
+    if (pin?.model) metadata.model = pin.model;
+    return;
+  }
+  metadata.provider = pin.providerId;
+  metadata.providerId = pin.providerId;
+  // A model is PROVIDER-SCOPED: one chosen for the layer below is not something
+  // the provider that just replaced it can necessarily run, and
+  // agentProviderResolution honors an explicit `metadata.model` as a CLI
+  // pass-through rather than dropping it — so a leaked model ships to the wrong
+  // CLI (`claude --model gemini-…`) and fails on every retry until the task
+  // blocks. Take this layer's model, or none and let selectModelForTask resolve
+  // the new provider's own default.
+  if (pin.model) metadata.model = pin.model;
+  else delete metadata.model;
+}
+
 function applyProviderModelPins(metadata, interval, appPin, hookOverride) {
-  // Least specific first: the task's global Schedule pin.
-  if (interval.providerId) {
-    metadata.provider = interval.providerId;
-    metadata.providerId = interval.providerId;
-  }
-  if (interval.model) {
-    metadata.model = interval.model;
-  }
+  // Least specific first: the task's global Schedule pin. Then the app's own
+  // per-app pin, which is the more specific choice — honored for EVERY task type
+  // (#4783), not just the one whose buildTaskInput hook read it. Then a
+  // buildTaskInput hook's fully-resolved choice, which wins outright.
+  applyOneProviderPin(metadata, { providerId: interval.providerId || null, model: interval.model || null });
   if (interval.effort) {
     metadata.effort = interval.effort;
   }
-  // Then the app's own per-app pin, which is the more specific choice — honored
-  // for EVERY task type (#4783), not just the one whose buildTaskInput hook read it.
-  if (appPin.providerId) { metadata.provider = appPin.providerId; metadata.providerId = appPin.providerId; }
-  if (appPin.model) { metadata.model = appPin.model; }
-  // A buildTaskInput hook's fully-resolved choice wins outright.
-  if (hookOverride.providerId) { metadata.provider = hookOverride.providerId; metadata.providerId = hookOverride.providerId; }
-  if (hookOverride.model) { metadata.model = hookOverride.model; }
+  applyOneProviderPin(metadata, appPin);
+  applyOneProviderPin(metadata, hookOverride);
 }
 
 export async function generateManagedAppImprovementTaskForType(taskType, app, state, { skipPreconditions = false, ignoreTaskId = null } = {}) {

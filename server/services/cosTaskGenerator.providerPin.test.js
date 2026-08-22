@@ -114,6 +114,19 @@ describe('per-app provider/model pin on a task type with no buildTaskInput hook'
     expect(task.metadata.provider).toBe('ollama');
   });
 
+  // A model is provider-scoped. Overriding only the PROVIDER must not leave the
+  // Schedule pin's model behind: agentProviderResolution honors an explicit
+  // metadata.model as a CLI pass-through, so the leak ships the wrong CLI a model
+  // it cannot run and fails on every retry until the task blocks.
+  it('drops the Schedule pin model when the app pins a different provider', async () => {
+    getTaskIntervalMock.mockResolvedValue({ type: 'weekly', taskMetadata: {}, providerId: 'opencode-tui', model: 'qwen-a' });
+    getAppTaskTypeOverridesMock.mockResolvedValue({ ux: { enabled: true, providerId: 'claude-cli' } });
+
+    const task = await generate();
+    expect(task.metadata.provider).toBe('claude-cli');
+    expect(task.metadata.model).toBeUndefined();
+  });
+
   it('honors an app model pinned without an app provider', async () => {
     getTaskIntervalMock.mockResolvedValue({ type: 'weekly', taskMetadata: {}, providerId: 'claude-cli', model: 'opus' });
     getAppTaskTypeOverridesMock.mockResolvedValue({ ux: { enabled: true, model: 'sonnet' } });
