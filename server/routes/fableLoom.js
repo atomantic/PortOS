@@ -41,7 +41,7 @@ import {
   getLoom,
   listLoomSummaries,
   playTurn,
-  reformatLoom,
+  reformatEpisodeScenes,
   reviewEpisode,
   updateEpisode,
   updateLoom,
@@ -174,12 +174,15 @@ router.post('/:id/episodes/:episodeId/play', asyncHandler(async (req, res) => {
   res.json(await playTurn(req.params.id, req.params.episodeId, input));
 }));
 
-// Rewrite every scene of every episode into another format (prose ⇄ teleplay)
-// and pin the loom to it. Loom-scoped rather than episode-scoped: a story
-// half in screenplay and half in prose is never what the author meant.
-router.post('/:id/reformat', asyncHandler(async (req, res) => {
+// Rewrite ONE episode's scenes into another format (prose ⇄ teleplay). The
+// caller walks the episodes; a whole-loom rewrite used to run tens of
+// sequential provider calls behind one held request, long enough for a proxy or
+// fetch timeout to kill the response mid-run (#4794). The invariant that a
+// story is never half screenplay and half prose is kept by the service, which
+// pins the loom to the format only once every episode is converted.
+router.post('/:id/episodes/:episodeId/reformat', asyncHandler(async (req, res) => {
   const input = validateRequest(reformatSchema, req.body);
-  res.json(await reformatLoom(req.params.id, input));
+  res.json(await reformatEpisodeScenes(req.params.id, req.params.episodeId, input));
 }));
 
 export default router;

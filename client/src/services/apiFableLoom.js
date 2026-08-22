@@ -75,6 +75,11 @@ export const reviewLoomEpisode = (id, episodeId, body = {}, options = {}) => req
 export const playLoomTurn = (id, episodeId, body, options = {}) => request(episodePath(id, episodeId, '/play'), {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
-export const reformatLoom = (id, body, options = {}) => request(loomPath(id, '/reformat'), {
-  method: 'POST', body: JSON.stringify(body), ...options,
-});
+// One episode per call. The caller walks the episodes it needs rewritten — a
+// whole-loom rewrite in one request ran long enough to hit a fetch timeout. The
+// server pins the loom to the format once every episode is converted, so an
+// interrupted walk never leaves the loom claiming a format its scenes are not in.
+export const reformatLoomEpisode = (id, episodeId, body, options = {}) =>
+  request(episodePath(id, episodeId, '/reformat'), {
+    method: 'POST', body: JSON.stringify(body), ...options,
+  });

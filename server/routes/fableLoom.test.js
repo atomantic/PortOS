@@ -16,7 +16,7 @@ vi.mock('../services/fableLoom/index.js', () => ({
   getLoom: vi.fn(),
   listLoomSummaries: vi.fn(async () => []),
   playTurn: vi.fn(),
-  reformatLoom: vi.fn(),
+  reformatEpisodeScenes: vi.fn(),
   reviewEpisode: vi.fn(),
   updateEpisode: vi.fn(),
   updateLoom: vi.fn(),
@@ -206,19 +206,27 @@ describe('FableLoom routes', () => {
     expect(fableLoom.playTurn).toHaveBeenCalledWith('loom-1', 'ep-1', { nodeId: 'node-1', transitionId: 'tr-1' });
   });
 
-  it('POST reformat validates the target format and forwards it', async () => {
+  it('POST reformat is episode-scoped, validates the target format, and forwards it', async () => {
     const invalid = await request(makeApp())
-      .post('/api/fableloom/loom-1/reformat')
+      .post('/api/fableloom/loom-1/episodes/ep-1/reformat')
       .send({ format: 'haiku' });
     expect(invalid.status).toBe(400);
-    expect(fableLoom.reformatLoom).not.toHaveBeenCalled();
+    expect(fableLoom.reformatEpisodeScenes).not.toHaveBeenCalled();
 
-    fableLoom.reformatLoom.mockResolvedValueOnce({ loom: { id: 'loom-1' }, rewritten: 3 });
+    fableLoom.reformatEpisodeScenes.mockResolvedValueOnce({ loom: { id: 'loom-1' }, rewritten: 3 });
     const ok = await request(makeApp())
-      .post('/api/fableloom/loom-1/reformat')
+      .post('/api/fableloom/loom-1/episodes/ep-1/reformat')
       .send({ format: 'teleplay', providerId: 'claude' });
     expect(ok.status).toBe(200);
-    expect(fableLoom.reformatLoom).toHaveBeenCalledWith('loom-1', { format: 'teleplay', providerId: 'claude' });
+    expect(fableLoom.reformatEpisodeScenes).toHaveBeenCalledWith('loom-1', 'ep-1', { format: 'teleplay', providerId: 'claude' });
+
+    // The loom-scoped route is gone: one request per episode is the whole point
+    // of the change, so a caller still hitting the old path must fail loudly
+    // rather than quietly rewriting nothing.
+    const legacy = await request(makeApp())
+      .post('/api/fableloom/loom-1/reformat')
+      .send({ format: 'teleplay' });
+    expect(legacy.status).toBe(404);
   });
 
   it('POST play requires a nodeId and message', async () => {

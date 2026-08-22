@@ -63,10 +63,29 @@ and play-turn narration all follow it, and the reader-facing scene cards
 render a teleplay monospaced.
 
 Changing the setting steers *new* generation only. **Story settings → Rewrite
-all N scenes** runs `fableloom-reformat-scenes` over every scene of every
-episode (in chunks, persisted as each chunk lands, so a mid-run failure keeps
-what already succeeded) and re-pins the loom. It rewrites text only: ids,
-transitions, endings, and image prompts are untouched.
+N scenes** runs `fableloom-reformat-scenes` over the scenes not already in the
+target format. It rewrites text only: ids, transitions, endings, and image
+prompts are untouched.
+
+The rewrite is **one request per episode** —
+`POST /api/fableloom/:id/episodes/:episodeId/reformat`, with the drawer walking
+the episodes that still have work and naming the one in flight. A whole-loom
+rewrite used to run every provider call behind a single held request (227s on a
+13-scene loom, and tens of minutes on a large one), long enough for a proxy or
+fetch timeout to kill the response while the server kept writing. Each request
+is capped at 20 scenes; a response that stopped there says `capped: true` and
+the drawer asks the same episode again, so a long episode is several bounded
+requests rather than one open-ended one.
+
+Two properties survive that split:
+
+- **Resumability.** Each chunk of 5 scenes is persisted as it lands and stamped
+  with the format it was written in, so a mid-run failure keeps what already
+  succeeded and re-running rewrites only what is left.
+- **No half-and-half loom.** The loom's `format` pin is written by the *server*,
+  and only once no episode has an unconverted scene left — so a browser closed
+  mid-walk can't leave the loom claiming a format half its story isn't in.
+  Until then the run reports what remains and the drawer says to run it again.
 
 ## Playing: what costs an LLM call
 

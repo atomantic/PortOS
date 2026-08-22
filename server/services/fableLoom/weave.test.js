@@ -25,7 +25,7 @@ vi.mock('../pipeline/series.js', () => ({ getSeries: getSeriesMock }));
 const { createLoom, addEpisode, addNode, mutateLoom, updateLoom, updateNode, getLoom } = await import('./records.js');
 const { _resetFableLoomBackend } = await import('./store.js');
 const {
-  branchNode, buildCanonDigest, mapGeneratedGraph, playTurn, reformatLoom, reviewEpisode, weaveEpisode,
+  branchNode, buildCanonDigest, mapGeneratedGraph, playTurn, reformatEpisodeScenes, reviewEpisode, weaveEpisode,
 } = await import('./weave.js');
 
 beforeEach(() => {
@@ -286,7 +286,7 @@ describe('playTurn', () => {
   });
 });
 
-describe('reformatLoom', () => {
+describe('reformatEpisodeScenes', () => {
   const proseSetup = async () => {
     const { loomId, episodeId } = await setup();
     let updated = await addNode(loomId, episodeId, { title: 'The Gate', prose: 'You stand before it.' });
@@ -297,7 +297,7 @@ describe('reformatLoom', () => {
   };
 
   it('rewrites every returned scene, pins the format, and leaves the graph alone', async () => {
-    const { loomId, gateId, insideId } = await proseSetup();
+    const { loomId, episodeId, gateId, insideId } = await proseSetup();
     runStagedLLM.mockImplementation(async (stage, variables) => ({
       content: {
         scenes: JSON.parse(variables.scenesJson).map((sc) => ({ id: sc.id, prose: `INT. GATE - NIGHT\n\n${sc.prose}` })),
@@ -305,7 +305,7 @@ describe('reformatLoom', () => {
       runId: 'run-1',
     }));
 
-    const result = await reformatLoom(loomId, { format: 'teleplay' });
+    const result = await reformatEpisodeScenes(loomId, episodeId, { format: 'teleplay' });
     expect(result).toMatchObject({ format: 'teleplay', rewritten: 2 });
     expect(result.loom.format).toBe('teleplay');
     const nodes = result.loom.episodes[0].nodes;
@@ -319,13 +319,13 @@ describe('reformatLoom', () => {
   });
 
   it('counts only scenes it actually wrote, not every id the model echoed back', async () => {
-    const { loomId, gateId, insideId } = await proseSetup();
+    const { loomId, episodeId, gateId, insideId } = await proseSetup();
     // Ids that are not in the batch: invented, or from another episode. The
     // write applies none of them, so neither may be counted as rewritten.
     runStagedLLM.mockResolvedValue({
       content: { scenes: [{ id: 'node-invented', prose: 'INT. NOWHERE' }, { id: gateId, prose: 'INT. GATE' }] },
     });
-    const result = await reformatLoom(loomId, { format: 'teleplay' });
+    const result = await reformatEpisodeScenes(loomId, episodeId, { format: 'teleplay' });
     expect(result.rewritten).toBe(1);
     const nodes = result.loom.episodes[0].nodes;
     expect(nodes.find((n) => n.id === gateId).prose).toBe('INT. GATE');
@@ -333,15 +333,15 @@ describe('reformatLoom', () => {
   });
 
   it('leaves the format pin alone when the rewrite never landed a scene', async () => {
-    const { loomId } = await proseSetup();
+    const { loomId, episodeId } = await proseSetup();
     runStagedLLM.mockRejectedValue(new Error('provider unreachable'));
-    await expect(reformatLoom(loomId, { format: 'teleplay' })).rejects.toThrow('provider unreachable');
+    await expect(reformatEpisodeScenes(loomId, episodeId, { format: 'teleplay' })).rejects.toThrow('provider unreachable');
     // Pinning before the rewrite would leave every later weave/branch/play
     // generating teleplay against a story still written as prose.
     expect((await getLoom(loomId)).format).toBe('prose');
 
     runStagedLLM.mockReset().mockResolvedValue({ content: { scenes: [] } });
-    await expect(reformatLoom(loomId, { format: 'teleplay' })).rejects.toMatchObject({ code: 'AI_RESPONSE_INVALID' });
+    await expect(reformatEpisodeScenes(loomId, episodeId, { format: 'teleplay' })).rejects.toMatchObject({ code: 'AI_RESPONSE_INVALID' });
     expect((await getLoom(loomId)).format).toBe('prose');
   });
 
@@ -357,7 +357,7 @@ describe('reformatLoom', () => {
       if (call > 1) throw new Error('provider died mid-run');
       return { content: { scenes: JSON.parse(variables.scenesJson).map((sc) => ({ id: sc.id, prose: `INT. ${sc.prose}` })) } };
     });
-    await expect(reformatLoom(loomId, { format: 'teleplay' })).rejects.toThrow('provider died mid-run');
+    await expect(reformatEpisodeScenes(loomId, episodeId, { format: 'teleplay' })).rejects.toThrow('provider died mid-run');
 
     const nodes = (await getLoom(loomId)).episodes[0].nodes;
     expect(nodes.slice(0, 5).every((n) => n.prose.startsWith('INT. '))).toBe(true);
@@ -372,57 +372,105 @@ describe('reformatLoom', () => {
       content: { scenes: JSON.parse(variables.scenesJson).map((sc) => ({ id: sc.id, prose: 'INT. SOMEWHERE' })) },
     }));
 
-    const result = await reformatLoom(loomId, { format: 'teleplay' });
+    const result = await reformatEpisodeScenes(loomId, episodeId, { format: 'teleplay' });
     expect(result.rewritten).toBe(1);
     const sent = JSON.parse(runStagedLLM.mock.calls[0][1].scenesJson);
     expect(sent).toHaveLength(1);
     expect(result.loom.episodes[0].nodes.find((n) => n.title.startsWith('Placeholder')).prose).toBe('');
   });
 
-  it('stops at the per-request ceiling and genuinely finishes on the next run', async () => {
+  it('stops at the per-request ceiling, flags it, and continues where it stopped', async () => {
     const { loomId, episodeId } = await setup();
-    // The ceiling is 40 chunks x 5 scenes = 200, and NODES_MAX caps ONE episode
-    // at 200 — so only a multi-episode loom can reach it. Two episodes of 105
-    // scenes = 42 chunks: the first run stops 2 chunks short.
-    const withEp2 = await addEpisode(loomId, { title: 'Two' });
-    const episode2Id = withEp2.episodes[1].id;
+    // The ceiling is 4 chunks x 5 scenes = 20 per request. 25 scenes takes two
+    // requests: the first sends 20 and reports 5 it never got to.
     await mutateLoom(loomId, (current) => {
-      for (const [index, epId] of [episodeId, episode2Id].entries()) {
-        const ep = current.episodes.find((e) => e.id === epId);
-        ep.nodes = Array.from({ length: 105 }, (_, i) => ({
-          id: `node-ceiling-${index}-${i}`, title: `Scene ${i}`, prose: `Prose ${index}-${i}.`, transitions: [],
-        }));
-      }
+      const ep = current.episodes.find((e) => e.id === episodeId);
+      ep.nodes = Array.from({ length: 25 }, (_, i) => ({
+        id: `node-ceiling-${i}`, title: `Scene ${i}`, prose: `Prose ${i}.`, transitions: [],
+      }));
       return current;
     });
     runStagedLLM.mockImplementation(async (stage, variables) => ({
       content: { scenes: JSON.parse(variables.scenesJson).map((sc) => ({ id: sc.id, prose: `INT. ${sc.prose}` })) },
     }));
 
-    const first = await reformatLoom(loomId, { format: 'teleplay' });
-    expect(first).toMatchObject({ rewritten: 200, remaining: 10 });
+    const first = await reformatEpisodeScenes(loomId, episodeId, { format: 'teleplay' });
+    expect(runStagedLLM.mock.calls).toHaveLength(4);
+    expect(first).toMatchObject({ rewritten: 20, episodeRemaining: 5, remaining: 5, capped: true });
     // The loom is NOT pinned yet — 5 scenes are still prose.
     expect(first.loom.format).toBe('prose');
 
-    const callsAfterFirst = runStagedLLM.mock.calls.length;
-    const second = await reformatLoom(loomId, { format: 'teleplay' });
-    // Only the 2 leftover chunks are re-sent; the 200 already converted are skipped.
-    expect(runStagedLLM.mock.calls.length - callsAfterFirst).toBe(2);
-    expect(second).toMatchObject({ rewritten: 10, remaining: 0 });
+    const second = await reformatEpisodeScenes(loomId, episodeId, { format: 'teleplay' });
+    // Only the one leftover chunk is re-sent; the 20 already converted are skipped.
+    expect(runStagedLLM.mock.calls).toHaveLength(5);
+    expect(second).toMatchObject({ rewritten: 5, episodeRemaining: 0, remaining: 0, capped: false });
     expect(second.loom.format).toBe('teleplay');
     const allNodes = second.loom.episodes.flatMap((e) => e.nodes);
-    expect(allNodes).toHaveLength(210);
+    expect(allNodes).toHaveLength(25);
     expect(allNodes.every((n) => n.prose.startsWith('INT. '))).toBe(true);
     expect(allNodes.every((n) => n.format === 'teleplay')).toBe(true);
   });
 
+  it('does not flag a run as capped when the model, not the ceiling, left scenes behind', async () => {
+    const { loomId, episodeId, gateId } = await proseSetup();
+    // One of two scenes comes back. Nothing went unsent, so re-requesting would
+    // only re-send a refusal — the caller must NOT loop on this.
+    runStagedLLM.mockResolvedValue({ content: { scenes: [{ id: gateId, prose: 'INT. GATE' }] } });
+    const result = await reformatEpisodeScenes(loomId, episodeId, { format: 'teleplay' });
+    expect(result).toMatchObject({ rewritten: 1, episodeRemaining: 1, capped: false });
+  });
+
+  it('holds the loom pin until EVERY episode is converted, not just the one it rewrote', async () => {
+    const { loomId, episodeId } = await proseSetup();
+    const withEp2 = await addEpisode(loomId, { title: 'Two' });
+    const episode2Id = withEp2.episodes[1].id;
+    await addNode(loomId, episode2Id, { title: 'Elsewhere', prose: 'Rain on the roof.' });
+    runStagedLLM.mockImplementation(async (stage, variables) => ({
+      content: { scenes: JSON.parse(variables.scenesJson).map((sc) => ({ id: sc.id, prose: `INT. ${sc.prose}` })) },
+    }));
+
+    // Episode one is fully converted — but the loom still holds a prose scene in
+    // episode two, and pinning here would point every later weave/branch/play at
+    // a contract that scene isn't written in.
+    const first = await reformatEpisodeScenes(loomId, episodeId, { format: 'teleplay' });
+    expect(first).toMatchObject({ rewritten: 2, episodeRemaining: 0, remaining: 1 });
+    expect(first.loom.format).toBe('prose');
+
+    const second = await reformatEpisodeScenes(loomId, episode2Id, { format: 'teleplay' });
+    expect(second).toMatchObject({ rewritten: 1, episodeRemaining: 0, remaining: 0 });
+    expect(second.loom.format).toBe('teleplay');
+  });
+
+  it('is a no-op on an episode with nothing left to convert, and still pins the loom', async () => {
+    const { loomId, episodeId } = await proseSetup();
+    runStagedLLM.mockImplementation(async (stage, variables) => ({
+      content: { scenes: JSON.parse(variables.scenesJson).map((sc) => ({ id: sc.id, prose: `INT. ${sc.prose}` })) },
+    }));
+    await reformatEpisodeScenes(loomId, episodeId, { format: 'teleplay' });
+    const callsAfterFirst = runStagedLLM.mock.calls.length;
+
+    // The caller walks every episode; one already converted must not cost a
+    // provider call, and must not be mistaken for "the model returned nothing".
+    const again = await reformatEpisodeScenes(loomId, episodeId, { format: 'teleplay' });
+    expect(runStagedLLM.mock.calls).toHaveLength(callsAfterFirst);
+    expect(again).toMatchObject({ rewritten: 0, remaining: 0, capped: false });
+    expect(again.loom.format).toBe('teleplay');
+  });
+
+  it('404s on an episode that is not in the loom', async () => {
+    const { loomId } = await proseSetup();
+    await expect(reformatEpisodeScenes(loomId, 'ep-not-here', { format: 'teleplay' }))
+      .rejects.toMatchObject({ status: 404 });
+    expect(runStagedLLM).not.toHaveBeenCalled();
+  });
+
   it('reports scenes the model dropped as remaining, and holds the pin back', async () => {
-    const { loomId, gateId, insideId } = await proseSetup();
+    const { loomId, episodeId, gateId, insideId } = await proseSetup();
     // The model returns one of the two scenes it was given. The run is under
     // the chunk ceiling, so nothing but the dropped scene is left over.
     runStagedLLM.mockResolvedValue({ content: { scenes: [{ id: gateId, prose: 'INT. GATE' }] } });
 
-    const result = await reformatLoom(loomId, { format: 'teleplay' });
+    const result = await reformatEpisodeScenes(loomId, episodeId, { format: 'teleplay' });
     expect(result).toMatchObject({ rewritten: 1, remaining: 1 });
     // Claiming teleplay here would point every later weave/branch/play at a
     // contract the untouched scene isn't written in.
@@ -431,17 +479,17 @@ describe('reformatLoom', () => {
 
     // Finishing the job pins it.
     runStagedLLM.mockResolvedValue({ content: { scenes: [{ id: insideId, prose: 'INT. INSIDE' }] } });
-    const done = await reformatLoom(loomId, { format: 'teleplay' });
+    const done = await reformatEpisodeScenes(loomId, episodeId, { format: 'teleplay' });
     expect(done).toMatchObject({ rewritten: 1, remaining: 0 });
     expect(done.loom.format).toBe('teleplay');
   });
 
   it('asks the model for the TARGET format, not the one the loom still holds', async () => {
-    const { loomId } = await proseSetup();
+    const { loomId, episodeId } = await proseSetup();
     runStagedLLM.mockImplementation(async (stage, variables) => ({
       content: { scenes: JSON.parse(variables.scenesJson).map((sc) => ({ id: sc.id, prose: 'INT. GATE' })) },
     }));
-    await reformatLoom(loomId, { format: 'teleplay' });
+    await reformatEpisodeScenes(loomId, episodeId, { format: 'teleplay' });
     const [, variables] = runStagedLLM.mock.calls[0];
     // Asserting the source format here as fact would contradict the template's
     // own "Target format" heading in the same prompt.
@@ -450,14 +498,14 @@ describe('reformatLoom', () => {
   });
 
   it('ignores scenes the model dropped or blanked, and fails when it returns none', async () => {
-    const { loomId, gateId, insideId } = await proseSetup();
+    const { loomId, episodeId, gateId, insideId } = await proseSetup();
     runStagedLLM.mockResolvedValue({ content: { scenes: [{ id: gateId, prose: 'INT. GATE' }, { id: insideId, prose: '   ' }] } });
-    const kept = await reformatLoom(loomId, { format: 'teleplay' });
+    const kept = await reformatEpisodeScenes(loomId, episodeId, { format: 'teleplay' });
     expect(kept.rewritten).toBe(1);
     expect(kept.loom.episodes[0].nodes.find((n) => n.id === insideId).prose).toBe('Torchlight.');
 
     runStagedLLM.mockResolvedValue({ content: { scenes: [] } });
-    await expect(reformatLoom(loomId, { format: 'prose' }))
+    await expect(reformatEpisodeScenes(loomId, episodeId, { format: 'prose' }))
       .rejects.toMatchObject({ code: 'AI_RESPONSE_INVALID' });
   });
 });

@@ -333,92 +333,103 @@ function moveResult(episode, node, transition, { narration = '', resolvedBy, run
 
 // Scenes per LLM call. Small enough that one refusal or truncation costs a
 // handful of scenes rather than the episode, large enough that a 13-scene
-// episode is two calls, not thirteen.
+// episode is three calls, not thirteen.
 const REFORMAT_CHUNK = 5;
-// Hard ceiling on provider calls per request. The record caps allow 100
-// episodes x 200 scenes, which at 5 per call is 4,000 sequential calls behind
-// one HTTP request — a spend and timeout hazard nobody asked for. A run that
-// hits the ceiling reports what is left, and re-running genuinely finishes the
-// job: each scene is stamped with the format it was written in as it lands, so
-// the next pass skips what is already converted instead of re-sending it and
-// stopping in the same place forever.
-const REFORMAT_CHUNKS_MAX = 40;
+// Hard ceiling on provider calls per request: 20 scenes. Enough that an
+// ordinary episode is one round trip, few enough that a 200-scene episode (the
+// record's own cap) can't hold a connection open for the 40 sequential calls it
+// would otherwise take. A run that stops here says so with `capped`, and the
+// caller simply asks again: each scene is stamped with the format it was written
+// in as it lands, so the next pass picks up exactly where this one stopped
+// instead of re-sending converted scenes and stalling in the same place forever.
+const REFORMAT_CHUNKS_MAX = 4;
+
+// A scene needs rewriting when it HAS prose and that prose isn't already in the
+// target format. Title-only placeholders are skipped, not sent: a rewrite
+// prompt whose rule is "every beat must survive" has nothing to preserve in an
+// empty scene, so the model invents one and it lands on the node as if authored.
+const needsReformat = (node, target) => isStr(node.prose) && !!node.prose.trim() && node.format !== target;
+
+/** Scenes across the WHOLE loom still waiting to be rewritten into `target`. */
+const unconvertedSceneCount = (loom, target) => loom.episodes.reduce(
+  (total, ep) => total + ep.nodes.filter((n) => needsReformat(n, target)).length, 0,
+);
 
 /**
- * Rewrite every scene of every episode into `format` (prose ⇄ teleplay) and
- * pin the loom to it, so later weaves/branches/play turns keep generating in
- * the same format.
+ * Rewrite one episode's scenes into `format` (prose ⇄ teleplay), and pin the
+ * loom to that format once — and only once — every episode is converted.
+ *
+ * Episode-scoped on purpose: rewriting a whole loom in one request meant tens
+ * of sequential provider calls behind a single held connection, long enough for
+ * a proxy or fetch timeout to kill the response while the server kept writing
+ * (#4794). The client walks the episodes and shows which one is in flight; each
+ * request is bounded by one episode's scenes.
  *
  * Each chunk is persisted as it lands: a provider failure halfway through
  * leaves the already-rewritten scenes rewritten, and re-running finishes the
- * job rather than starting over. The loom's format pin is written LAST and only
- * once EVERY scene is converted — a loom still holding unconverted scenes must
- * not claim a format its story isn't in, or every later weave/branch/play
- * generates against a contract that story doesn't follow.
+ * job rather than starting over. The format pin is written LAST and only once
+ * EVERY scene in the loom is converted — a loom still holding unconverted
+ * scenes must not claim a format its story isn't in, or every later
+ * weave/branch/play generates against a contract that story doesn't follow.
+ * Keeping that check on the server rather than in the client's loop means a
+ * browser closed mid-walk can't leave the loom pinned to a format half its
+ * scenes are not in.
  */
-export async function reformatLoom(loomId, { format, providerId, model, effort } = {}) {
+export async function reformatEpisodeScenes(loomId, episodeId, { format, providerId, model, effort } = {}) {
   const target = asLoomFormat(format);
   const loom = await requireLoom(loomId);
+  const episode = findEpisode(loom, episodeId);
   const canonDigest = await buildCanonDigest(loom);
   const runIds = [];
-  // Title-only placeholder scenes are skipped, not sent: a rewrite prompt whose
-  // rule is "every beat must survive" has nothing to preserve in an empty
-  // scene, so the model invents one and it lands on the node as if authored.
-  const pending = loom.episodes.map((episode) => ({
-    episode,
-    nodes: episode.nodes.filter((n) => isStr(n.prose) && n.prose.trim() && n.format !== target),
-  })).filter((e) => e.nodes.length);
-  const sceneCount = pending.reduce((total, e) => total + e.nodes.length, 0);
+  const nodes = episode.nodes.filter((n) => needsReformat(n, target));
   let rewritten = 0;
   let chunks = 0;
 
-  for (const { episode, nodes } of pending) {
-    for (let i = 0; i < nodes.length; i += REFORMAT_CHUNK) {
-      const batch = nodes.slice(i, i + REFORMAT_CHUNK);
-      if (chunks >= REFORMAT_CHUNKS_MAX) continue;
-      chunks += 1;
-      const { content, runId } = await runStagedLLM('fableloom-reformat-scenes', {
-        // The TARGET format, not the loom's current one: the pin is written
-        // last, so passing `loom` would assert the source format as fact in
-        // the same prompt that asks for the target — and would render
-        // differently on a resumed run than on the first one.
-        storyContext: storyContext({ ...loom, format: target }, episode),
-        canonDigest: canonDigest || '(none)',
-        formatLabel: loomFormatLabel(target),
-        sceneFormatContract: sceneFormatContract(target),
-        scenesJson: JSON.stringify(batch.map((n) => ({ id: n.id, title: n.title, prose: n.prose })), null, 2),
-      }, llmOptions({ providerId, model, effort }, 'fableloom-reformat'));
-      if (runId) runIds.push(runId);
+  for (let i = 0; i < nodes.length && chunks < REFORMAT_CHUNKS_MAX; i += REFORMAT_CHUNK) {
+    const batch = nodes.slice(i, i + REFORMAT_CHUNK);
+    chunks += 1;
+    const { content, runId } = await runStagedLLM('fableloom-reformat-scenes', {
+      // The TARGET format, not the loom's current one: the pin is written
+      // last, so passing `loom` would assert the source format as fact in
+      // the same prompt that asks for the target — and would render
+      // differently on a resumed run than on the first one.
+      storyContext: storyContext({ ...loom, format: target }, episode),
+      canonDigest: canonDigest || '(none)',
+      formatLabel: loomFormatLabel(target),
+      sceneFormatContract: sceneFormatContract(target),
+      scenesJson: JSON.stringify(batch.map((n) => ({ id: n.id, title: n.title, prose: n.prose })), null, 2),
+    }, llmOptions({ providerId, model, effort }, 'fableloom-reformat'));
+    if (runId) runIds.push(runId);
 
-      // Only ids from THIS batch count. A model that invents an id, echoes a
-      // typo, or names a scene from another episode writes nothing — counting
-      // those would report scenes as rewritten that still hold their old prose
-      // and would satisfy the no-response guard below on a total miss.
-      const batchIds = new Set(batch.map((n) => n.id));
-      const byId = new Map((Array.isArray(content?.scenes) ? content.scenes : [])
-        .filter((sc) => sc && typeof sc === 'object' && isStr(sc.id) && batchIds.has(sc.id)
-          && isStr(sc.prose) && sc.prose.trim())
-        .map((sc) => [sc.id, sc]));
-      if (!byId.size) continue;
-      await mutateLoom(loomId, (current) => {
-        const ep = findEpisode(current, episode.id);
-        for (const sceneNode of ep.nodes) {
-          const rewrite = byId.get(sceneNode.id);
-          if (!rewrite) continue;
-          sceneNode.prose = rewrite.prose;
-          sceneNode.format = target;
-          if (isStr(rewrite.title) && rewrite.title.trim()) sceneNode.title = rewrite.title;
-        }
-        ep.updatedAt = new Date().toISOString();
-        return current;
-      });
-      rewritten += byId.size;
-    }
+    // Only ids from THIS batch count. A model that invents an id, echoes a
+    // typo, or names a scene from another episode writes nothing — counting
+    // those would report scenes as rewritten that still hold their old prose
+    // and would satisfy the no-response guard below on a total miss.
+    const batchIds = new Set(batch.map((n) => n.id));
+    const byId = new Map((Array.isArray(content?.scenes) ? content.scenes : [])
+      .filter((sc) => sc && typeof sc === 'object' && isStr(sc.id) && batchIds.has(sc.id)
+        && isStr(sc.prose) && sc.prose.trim())
+      .map((sc) => [sc.id, sc]));
+    if (!byId.size) continue;
+    await mutateLoom(loomId, (current) => {
+      const ep = findEpisode(current, episode.id);
+      for (const sceneNode of ep.nodes) {
+        const rewrite = byId.get(sceneNode.id);
+        if (!rewrite) continue;
+        sceneNode.prose = rewrite.prose;
+        sceneNode.format = target;
+        if (isStr(rewrite.title) && rewrite.title.trim()) sceneNode.title = rewrite.title;
+      }
+      ep.updatedAt = new Date().toISOString();
+      return current;
+    });
+    rewritten += byId.size;
   }
 
-  // A loom with nothing to rewrite is a no-op, not a failure — the pin is still
-  // the point. Only a loom that HAD scenes and got none back is a bad response.
-  if (sceneCount && !rewritten) throw aiShapeError('The model returned no rewritten scenes');
+  // An episode with nothing to rewrite is a no-op, not a failure — the client
+  // walks every episode, and the pin below is still the point. Only an episode
+  // that HAD scenes and got none back is a bad response.
+  if (nodes.length && !rewritten) throw aiShapeError('The model returned no rewritten scenes');
 
   // Counted off the RECORD rather than accumulated in the loop, because scenes
   // go unconverted for two unrelated reasons: the per-request ceiling stopped
@@ -426,11 +437,18 @@ export async function reformatLoom(loomId, { format, providerId, model, effort }
   // batch). Tracking only the first would report a partial rewrite as complete
   // and pin the loom to a format some of its scenes are not in.
   const after = await getLoom(loomId);
-  const remaining = after.episodes.reduce((total, ep) => total
-    + ep.nodes.filter((n) => isStr(n.prose) && n.prose.trim() && n.format !== target).length, 0);
+  const episodeRemaining = findEpisode(after, episodeId).nodes.filter((n) => needsReformat(n, target)).length;
+  const remaining = unconvertedSceneCount(after, target);
+  // `capped` separates the two reasons an episode can come back unfinished: this
+  // run hit its ceiling with scenes it never SENT (ask again and it continues
+  // from there), or the model dropped scenes it was given (asking again just
+  // re-sends them, and a second refusal is an error, not progress). Only the
+  // first earns an automatic follow-up request — and since a capped run always
+  // rewrote at least one scene, following it up strictly makes progress.
+  const capped = nodes.length > chunks * REFORMAT_CHUNK;
   // Only a fully-converted loom gets the pin.
   const updated = remaining
     ? after
     : await mutateLoom(loomId, (current) => ({ ...current, format: target }));
-  return { loom: updated, format: target, rewritten, remaining, runIds };
+  return { loom: updated, format: target, rewritten, episodeRemaining, remaining, capped, runIds };
 }

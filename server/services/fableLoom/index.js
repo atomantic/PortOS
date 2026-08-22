@@ -28,7 +28,7 @@ export {
   mapGeneratedGraph,
   playTurn,
   publicNode,
-  reformatLoom,
+  reformatEpisodeScenes,
   reviewEpisode,
   weaveEpisode,
 } from './weave.js';
