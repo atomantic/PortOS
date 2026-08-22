@@ -779,10 +779,17 @@ export const federatedMediaJobRoutingSchema = z.object({
   durationMode: z.enum(['auto', 'manual']).optional(),
 }).strict();
 
-// Provider submissions intentionally accept model selection plus only the
-// canonical fixed-vocabulary instrumental prompt. Free-form prompt/lyrics can
-// contain PII and must remain on the consumer; URLs, paths, commands, provider
-// credentials, and unknown fields are excluded by the strict object as before.
+// Provider submissions accept model selection, the canonical fixed-vocabulary
+// instrumental prompt, and — since ADR
+// docs/decisions/2026-08-22-federated-media-input-assets.md rule 2 — free-form
+// lyrics. The asymmetry between the two text fields is deliberate rather than
+// inconsistent: a style/mood/instrument profile renders `prompt` with no
+// expressive loss, so the privacy-safe canonical form is required there; lyrics
+// ARE the words, so no alphabet encodes them without discarding them, and they
+// cross verbatim under the same submission-body rule image/video prompts do.
+// The provider still refuses them for a model whose capability reports
+// `lyrics: false`. URLs, paths, commands, provider credentials, and unknown
+// fields are excluded by the strict object as before.
 const federatedMediaAudioJobSubmissionSchema = federatedMediaJobRoutingSchema.extend({
   kind: z.literal('audio'),
   prompt: z.string().trim().min(1).max(8000),
@@ -793,13 +800,6 @@ const federatedMediaAudioJobSubmissionSchema = federatedMediaJobRoutingSchema.ex
       code: 'custom',
       path: ['prompt'],
       message: 'prompt must be rendered from a privacy-safe federated audio profile',
-    });
-  }
-  if (value.lyrics) {
-    ctx.addIssue({
-      code: 'custom',
-      path: ['lyrics'],
-      message: 'federated audio submissions are instrumental only',
     });
   }
 });

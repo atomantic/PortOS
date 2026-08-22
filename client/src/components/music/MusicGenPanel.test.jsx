@@ -266,37 +266,43 @@ describe('MusicGenPanel', () => {
     expect(onGenerated).toHaveBeenCalledWith(expect.objectContaining({ id: 'generated-track' }));
   });
 
-  it('selects a fresh federated audio provider without sending prompt or lyrics as conditioning', async () => {
+  const lyricCapablePeer = (capabilityOverrides = {}) => ({
+    id: 'peer-example',
+    name: 'Example GPU',
+    status: 'online',
+    mediaProvider: { enabled: true, audioModels: [{ engine: 'minimax-music3', modelId: 'minimax-music3' }] },
+    mediaProviderStatus: {
+      state: 'ready',
+      // A capacity claim needs a verifiable freshness window: the panel
+      // re-derives `stale` at render time rather than trusting the state
+      // the probe recorded, so a snapshot with no window reads as stale.
+      checkedAt: new Date().toISOString(),
+      freshUntil: new Date(Date.now() + 60_000).toISOString(),
+      snapshot: {
+        queue: { accepting: true, running: 0, queued: 0 },
+        capabilities: [{
+          kind: 'audio', engine: 'minimax-music3', engineName: 'MiniMax Music 3', modelId: 'minimax-music3',
+          modelName: 'MiniMax Music 3', ready: true, autoDuration: false, lyrics: true,
+          minDurationSec: 10, maxDurationSec: 300, defaultDurationSec: 60,
+          ...capabilityOverrides,
+        }],
+      },
+    },
+  });
+
+  // The mixed-version case, and the reason `acceptsLyrics` exists at all: this
+  // peer's MODEL sings (`lyrics: true`) but its build predates lyrical
+  // federation and never publishes `acceptsLyrics`. Absent must read as false,
+  // or the panel offers a render the peer answers with a 400.
+  it('falls back to an instrumental remote render when the peer build cannot carry lyrics', async () => {
     api.listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
-    api.getInstances.mockResolvedValue({
-      peers: [{
-        id: 'peer-example',
-        name: 'Example GPU',
-        status: 'online',
-        mediaProvider: { enabled: true, audioModels: [{ engine: 'minimax-music3', modelId: 'minimax-music3' }] },
-        mediaProviderStatus: {
-          state: 'ready',
-          // A capacity claim needs a verifiable freshness window: the panel
-          // re-derives `stale` at render time rather than trusting the state
-          // the probe recorded, so a snapshot with no window reads as stale.
-          checkedAt: new Date().toISOString(),
-          freshUntil: new Date(Date.now() + 60_000).toISOString(),
-          snapshot: {
-            queue: { accepting: true, running: 0, queued: 0 },
-            capabilities: [{
-              kind: 'audio', engine: 'minimax-music3', engineName: 'MiniMax Music 3', modelId: 'minimax-music3',
-              modelName: 'MiniMax Music 3', ready: true, autoDuration: false, lyrics: true,
-              minDurationSec: 10, maxDurationSec: 300, defaultDurationSec: 60,
-            }],
-          },
-        },
-      }],
-    });
+    api.getInstances.mockResolvedValue({ peers: [lyricCapablePeer()] });
     api.generateMusic.mockResolvedValue({ track: { id: 'track-1' } });
 
     render(<MusicGenPanel track={{ id: 'track-1' }} prompt="private prompt" lyrics="private lyrics" />);
 
     fireEvent.change(await screen.findByRole('combobox', { name: /generation target/i }), { target: { value: 'peer-example' } });
+    expect(screen.getByLabelText(/instrumental only/i)).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: /^generate$/i }));
 
     await waitFor(() => expect(api.generateMusic).toHaveBeenCalledWith(expect.objectContaining({
@@ -310,6 +316,48 @@ describe('MusicGenPanel', () => {
     }), { silent: true }));
     const requestBody = api.generateMusic.mock.calls[0][0];
     expect(requestBody).not.toHaveProperty('lyrics');
+  });
+
+  // ADR docs/decisions/2026-08-22-federated-media-input-assets.md rule 2: the
+  // words the model sings cross. The free-form style prompt still does not, but
+  // that is the SERVER's doing — it blanks params.prompt and renders the wire
+  // prompt from the profile — so this body legitimately carries it for the
+  // track record. federatedMediaProvider.test.js guards the wire side.
+  it('sends lyrics to a peer that advertises it accepts them', async () => {
+    api.listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
+    api.getInstances.mockResolvedValue({ peers: [lyricCapablePeer({ acceptsLyrics: true })] });
+    api.generateMusic.mockResolvedValue({ track: { id: 'track-1' } });
+
+    render(<MusicGenPanel track={{ id: 'track-1' }} prompt="private prompt" lyrics="private lyrics" />);
+
+    fireEvent.change(await screen.findByRole('combobox', { name: /generation target/i }), { target: { value: 'peer-example' } });
+    // Instrumental is an ordinary choice again once the peer can sing.
+    expect(screen.getByLabelText(/instrumental only/i)).not.toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: /^generate$/i }));
+
+    await waitFor(() => expect(api.generateMusic).toHaveBeenCalledWith(expect.objectContaining({
+      mediaProviderPeerId: 'peer-example',
+      instrumentalOnly: false,
+      lyrics: 'private lyrics',
+    }), { silent: true }));
+  });
+
+  it('drops lyrics from a lyric-capable remote render when instrumental-only is chosen', async () => {
+    api.listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
+    api.getInstances.mockResolvedValue({ peers: [lyricCapablePeer({ acceptsLyrics: true })] });
+    api.generateMusic.mockResolvedValue({ track: { id: 'track-1' } });
+
+    render(<MusicGenPanel track={{ id: 'track-1' }} prompt="private prompt" lyrics="private lyrics" />);
+
+    fireEvent.change(await screen.findByRole('combobox', { name: /generation target/i }), { target: { value: 'peer-example' } });
+    fireEvent.click(screen.getByLabelText(/instrumental only/i));
+    fireEvent.click(screen.getByRole('button', { name: /^generate$/i }));
+
+    // The field still rides along so the track record keeps the authored words;
+    // `instrumentalOnly` is what the server reads to drop the conditioning.
+    await waitFor(() => expect(api.generateMusic).toHaveBeenCalledWith(expect.objectContaining({
+      instrumentalOnly: true,
+    }), { silent: true }));
   });
 
   // The usable branch has no remedy text behind it, so without an assertion

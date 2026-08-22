@@ -28,10 +28,18 @@ const remoteMediaMarkerSchema = z.object({
   // absence means "interactive", which is the correct reading of history.
   standingRoute: z.boolean().optional(),
   profile: federatedMediaAudioProfileSchema,
-  // Free-form prompt/lyrics are deliberately absent from persisted routing
-  // state. The adapter renders a fixed-vocabulary instrumental prompt from the
+  // The free-form STYLE prompt is deliberately absent from persisted routing
+  // state: the adapter renders a fixed-vocabulary instrumental prompt from the
   // profile immediately before submission, so hand-edited queue state cannot
-  // smuggle personal text onto the federation wire.
+  // smuggle personal prose into the prompt field.
+  //
+  // Lyrics are the exception, and are stored — they are the conditioning a
+  // lyrical render exists to carry, and no fixed vocabulary encodes them
+  // without discarding them (ADR
+  // docs/decisions/2026-08-22-federated-media-input-assets.md rule 2). Optional
+  // so a marker queued by an older build still validates; absent means the
+  // instrumental render that build was the only one able to route.
+  lyrics: z.string().max(50_000).optional(),
   request: federatedMediaJobRoutingSchema,
 }).passthrough();
 
@@ -50,7 +58,17 @@ const executor = createRemoteMediaExecutor({
     // No explicit `kind` on the wire: an already-deployed audio-only provider
     // validates this body against a strict schema that predates the field and
     // would reject it. The provider defaults a kind-less body to 'audio'.
-    return { ...marker.request, prompt };
+    //
+    // `lyrics` is omitted entirely when the marker has none, rather than sent
+    // as `''`. An older provider's strict schema knows the field but refuses
+    // any truthy value, so an empty string still validates there — but omitting
+    // it keeps the request hash (and therefore idempotent replay) identical to
+    // what a pre-lyrics build submitted for the same instrumental job.
+    return {
+      ...marker.request,
+      prompt,
+      ...(marker.lyrics ? { lyrics: marker.lyrics } : {}),
+    };
   },
   // PATHS is read per job (not captured at module load) so a test that swaps
   // the music directory still sees its own temp root.

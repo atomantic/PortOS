@@ -166,7 +166,20 @@ export const federatedMediaCapabilitySchema = z.object({
   minDurationSec: z.number().finite().positive().nullable(),
   maxDurationSec: z.number().finite().positive().nullable(),
   defaultDurationSec: z.number().finite().positive().nullable(),
+  // Does the MODEL sing? A property of the engine, and true on providers that
+  // predate lyrical federation entirely — which is why it cannot double as the
+  // consumer's permission to send words.
   lyrics: z.boolean(),
+  // Does THIS PROVIDER's wire accept lyrics for this capability? Added after
+  // wire v1 shipped (ADR
+  // docs/decisions/2026-08-22-federated-media-input-assets.md rule 2), so it is
+  // optional and **absent must read as false**: a provider built before that
+  // ADR advertises `lyrics: true` for MiniMax Music 3 and then rejects the
+  // lyrics field outright at submission. Treating the older signal as consent
+  // would turn every remote lyrical render into a hard 400 the user cannot act
+  // on. Fail closed here and the consumer degrades to an instrumental render it
+  // can explain instead.
+  acceptsLyrics: z.boolean().optional(),
   autoDuration: z.boolean(),
   frameStride: z.number().int().min(1).max(64).nullable().optional(),
   maxNumFrames: z.number().int().min(1).max(600).nullable().optional(),

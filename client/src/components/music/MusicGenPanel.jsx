@@ -241,7 +241,24 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
       : engine.modelReady === true;
   const autoDurationAvailable = supportsAutoDuration(generationEngine);
   const hasLyrics = typeof lyrics === 'string' && lyrics.trim().length > 0;
-  const conditioningLyrics = generationEngine?.lyrics && !instrumentalOnly && !isRemote ? lyrics : '';
+  // Two independent facts, and the server refuses the combination where they
+  // disagree (ADR docs/decisions/2026-08-22-federated-media-input-assets.md
+  // rule 2): `lyrics` is the model's own capability, `acceptsLyrics` is whether
+  // the peer's BUILD carries the words. A peer predating lyrical federation
+  // publishes the first and not the second, so absent must read as false —
+  // otherwise this panel offers a lyric render the peer answers with a 400.
+  const remoteLyricsAvailable = isRemote
+    && generationEngine?.lyrics === true
+    && generationEngine?.acceptsLyrics === true;
+  // Remote renders that cannot carry lyrics are instrumental by construction,
+  // not by choice — the checkbox reflects that rather than pretending the user
+  // picked it. Where the peer CAN sing, it is an ordinary choice again.
+  const forcedInstrumental = isRemote && !remoteLyricsAvailable;
+  const effectiveInstrumentalOnly = forcedInstrumental || instrumentalOnly;
+  const lyricsCondition = !isRemote || remoteLyricsAvailable;
+  const conditioningLyrics = generationEngine?.lyrics && !effectiveInstrumentalOnly && lyricsCondition
+    ? lyrics
+    : '';
   const lyricDuration = useMemo(() => analyzeMusicLyrics(conditioningLyrics, {
     minDurationSec: Math.max(60, generationEngine?.defaultDurationSec || 60),
     maxDurationSec: generationEngine?.maxDurationSec || 300,
@@ -380,11 +397,14 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
       prompt: prompt.trim(),
       engine: generationEngine.id || generationEngine.engine,
       modelId: isRemote ? generationEngine.modelId : selectedModelId,
-      instrumentalOnly: isRemote ? true : instrumentalOnly,
+      instrumentalOnly: effectiveInstrumentalOnly,
     };
     if (isRemote) {
       body.mediaProviderPeerId = selectedRemotePeer.id;
       body.remoteMusicProfile = remoteProfile;
+      // Only when the resolved capability says the peer carries them. Sending
+      // otherwise is the 400 `forcedInstrumental` exists to avoid.
+      if (remoteLyricsAvailable) body.lyrics = lyrics || '';
     } else if (engine.lyrics) {
       // Keep authored lyrics available to the track record even when the server
       // deliberately excludes them from this render's engine conditioning.
@@ -496,7 +516,11 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
             </label>
           ))}
         </div>
-        <p className="text-[10px] text-gray-500">Only this fixed musical profile crosses the peer boundary; your prompt and lyrics remain on this instance.</p>
+        <p className="text-[10px] text-gray-500">
+          {remoteLyricsAvailable
+            ? 'This fixed musical profile crosses the peer boundary in place of your prompt, which stays on this instance. Lyrics are sent as written — they are the words the model sings.'
+            : 'Only this fixed musical profile crosses the peer boundary; your prompt and lyrics remain on this instance.'}
+        </p>
       </RemoteMediaTargetPicker>
 
       {!isRemote && (
@@ -634,9 +658,9 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
           <input
             id="musicgen-instrumental-only"
             type="checkbox"
-            checked={isRemote || instrumentalOnly}
+            checked={effectiveInstrumentalOnly}
             onChange={(event) => setInstrumentalOnly(event.target.checked)}
-            disabled={isGenerating || isRemote}
+            disabled={isGenerating || forcedInstrumental}
             aria-describedby="musicgen-instrumental-only-hint"
             className="h-4 w-4 accent-port-accent"
           />
@@ -645,12 +669,16 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
           </label>
         </div>
         <p id="musicgen-instrumental-only-hint" className="mt-1 text-[11px] text-gray-500">
-          {isRemote
-            ? 'Remote audio is instrumental-only; your prompt and lyrics remain on this instance.'
-            : instrumentalOnly
+          {forcedInstrumental
+            ? generationEngine?.lyrics
+              ? 'This peer runs a PortOS build that cannot carry lyrics, so this render is instrumental. Your prompt and lyrics stay on this instance.'
+              : 'The selected remote model is instrumental-only. Your prompt and lyrics stay on this instance.'
+            : effectiveInstrumentalOnly
             ? `An explicit no-vocals instruction will be added${hasLyrics ? '; saved lyrics will not condition this render' : ''}.`
             : generationEngine?.lyrics && hasLyrics
-              ? 'This engine will use the track’s lyrics as conditioning.'
+              ? isRemote
+                ? 'The track’s lyrics will be sent to this peer as conditioning; your prompt stays on this instance.'
+                : 'This engine will use the track’s lyrics as conditioning.'
               : 'No lyric text will condition this render, but vocals may still follow the prompt unless instrumental mode is enabled.'}
         </p>
       </div>

@@ -292,6 +292,45 @@ describe('federated media provider capacity and idempotency', () => {
     }));
   });
 
+  // ADR docs/decisions/2026-08-22-federated-media-input-assets.md rule 2: lyrics
+  // cross to an allowlisted peer because no fixed vocabulary encodes them
+  // without discarding them — but only into a model that sings.
+  it('renders lyrics on a lyric-capable model and advertises that its wire accepts them', async () => {
+    await submitFederatedMediaJob({
+      callerId: 'peer-example', config: config(),
+      input: { ...input(), lyrics: '[verse]\nwords' }, idempotencyKey: 'commission-lyrics',
+    });
+    expect(enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+      params: expect.objectContaining({ lyrics: '[verse]\nwords' }),
+    }));
+
+    const status = await getFederatedMediaProviderStatus(config());
+    expect(status.capabilities[0]).toMatchObject({ lyrics: true, acceptsLyrics: true });
+  });
+
+  it('refuses lyrics for an instrumental-only model rather than dropping them', async () => {
+    state.capabilities.engines = [readyEngine({ lyrics: false })];
+    await expect(submitFederatedMediaJob({
+      callerId: 'peer-example', config: config(),
+      input: { ...input(), lyrics: '[verse]\nwords' }, idempotencyKey: 'commission-lyrics',
+    })).rejects.toMatchObject({ status: 400, code: 'MEDIA_PROVIDER_LYRICS_UNSUPPORTED' });
+    expect(enqueueJob).not.toHaveBeenCalled();
+
+    const status = await getFederatedMediaProviderStatus(config());
+    expect(status.capabilities[0]).toMatchObject({ lyrics: false, acceptsLyrics: false });
+  });
+
+  // An instrumental take on a lyrical engine sends `lyrics: ''`. Gating on
+  // presence rather than content would refuse a submission carrying no
+  // conditioning at all.
+  it('admits an empty lyrics field on an instrumental-only model', async () => {
+    state.capabilities.engines = [readyEngine({ lyrics: false })];
+    await expect(submitFederatedMediaJob({
+      callerId: 'peer-example', config: config(),
+      input: { ...input(), lyrics: '' }, idempotencyKey: 'commission-instrumental',
+    })).resolves.toMatchObject({ replayed: false });
+  });
+
   it('replays a matching key and rejects a key reused with different input', async () => {
     const first = await submitFederatedMediaJob({
       callerId: 'peer-example', config: config(), input: input(), idempotencyKey: 'commission-1',

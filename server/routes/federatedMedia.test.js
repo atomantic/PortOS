@@ -98,19 +98,32 @@ describe('federated media routes', () => {
     expect(provider.submit).not.toHaveBeenCalled();
   });
 
-  it('rejects free-form prompts and lyrics at the provider boundary', async () => {
+  it('rejects a free-form style prompt at the provider boundary', async () => {
     const freeform = await request(buildApp()).post('/api/federation/media/v1/jobs')
       .set('Idempotency-Key', 'commission-private').send({
         engine: 'minimax-music3', modelId: 'minimax-music3', prompt: 'Write about alice@example.com',
       });
-    const lyrics = await request(buildApp()).post('/api/federation/media/v1/jobs')
-      .set('Idempotency-Key', 'commission-private-lyrics').send({
-        engine: 'minimax-music3', modelId: 'minimax-music3', prompt: safePrompt, lyrics: 'Private words',
-      });
 
     expect(freeform.status).toBe(400);
-    expect(lyrics.status).toBe(400);
     expect(provider.submit).not.toHaveBeenCalled();
+  });
+
+  // The style prompt and the lyrics are governed by opposite halves of the same
+  // rule (ADR docs/decisions/2026-08-22-federated-media-input-assets.md rule 2):
+  // a fixed profile renders the prompt at no expressive cost, so it is required
+  // there; lyrics ARE the words, so no alphabet encodes them without discarding
+  // them. Whether the model may sing is the PROVIDER's call at admission, not
+  // this schema's — so the route must hand them through untouched.
+  it('passes lyrics through to the provider for its own capability check', async () => {
+    const response = await request(buildApp()).post('/api/federation/media/v1/jobs')
+      .set('Idempotency-Key', 'commission-lyrics').send({
+        engine: 'minimax-music3', modelId: 'minimax-music3', prompt: safePrompt, lyrics: '[verse]\nPrivate words',
+      });
+
+    expect(response.status).toBe(202);
+    expect(provider.submit).toHaveBeenCalledWith(expect.objectContaining({
+      input: expect.objectContaining({ kind: 'audio', lyrics: '[verse]\nPrivate words' }),
+    }));
   });
 
   it('serves completed bytes with an integrity header and no source path', async () => {

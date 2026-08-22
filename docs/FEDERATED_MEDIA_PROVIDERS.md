@@ -89,7 +89,18 @@ An API caller deliberately selects remote execution on Music generation by sendi
 }
 ```
 
-`POST /api/music/generate` performs the fresh capacity preflight before returning the normal queued media-job response. Omitting `mediaProviderPeerId` keeps the existing local-engine behavior. The peer id and free-form `prompt` stay local. The worker renders the provider prompt only from the profile's enum values; non-empty remote lyrics are rejected so arbitrary personal text cannot cross the federation boundary.
+`POST /api/music/generate` performs the fresh capacity preflight before returning the normal queued media-job response. Omitting `mediaProviderPeerId` keeps the existing local-engine behavior. The peer id and free-form `prompt` stay local — the worker renders the provider prompt only from the profile's enum values.
+
+**Lyrics do cross**, and the asymmetry between the two text fields is deliberate. A style/mood/instrument profile renders the prompt at no expressive cost, so the privacy-safe canonical form is required there; lyrics *are* the words, so no alphabet encodes them without discarding them (ADR [conditioning crosses to an allowlisted peer](decisions/2026-08-22-federated-media-input-assets.md) rule 2). Add a `lyrics` field alongside the profile to condition a remote render.
+
+Sending them needs **two** capability signals to agree, and the second is the one that matters on a mixed-version tailnet:
+
+| Capability field | Means | Absent |
+|---|---|---|
+| `lyrics` | the **model** sings | — (always present) |
+| `acceptsLyrics` | **this provider's build** carries lyrics on the wire | reads as `false` |
+
+A provider predating lyrical federation advertises `lyrics: true` for MiniMax Music 3 and then rejects the field at submission, so absence must fail closed or every remote lyrical render becomes a 400 the user cannot act on. When it does, `POST /api/music/generate` refuses with `400 MEDIA_PROVIDER_LYRICS_UNSUPPORTED` naming which half is missing, and Music Studio pins Instrumental only with the reason — it never silently renders a wordless take of a song the user wrote words for.
 
 
 ### Remote image and video renders
@@ -423,11 +434,11 @@ Send a unique, stable `Idempotency-Key` header with the canonical instrumental r
 }
 ```
 
-Unknown fields, free-form prompts, and non-empty lyrics are rejected. The contract accepts no source URL, filesystem path, shell argument, provider credential, or arbitrary proxy target. Keeping the wire shape as prompt text lets an older wire-v1 provider accept a newer consumer, while the canonical grammar lets a newer provider fail closed on arbitrary text from an older consumer.
+Unknown fields and free-form style prompts are rejected. Lyrics are accepted for a model whose capability reports `lyrics: true`, and refused with `400 MEDIA_PROVIDER_LYRICS_UNSUPPORTED` otherwise — dropping them would render a plausible take of the wrong thing. The contract accepts no source URL, filesystem path, shell argument, provider credential, or arbitrary proxy target. Keeping the wire shape as prompt text lets an older wire-v1 provider accept a newer consumer, while the canonical grammar lets a newer provider fail closed on arbitrary text from an older consumer.
 
 Within the queue's retained job window, repeating the same caller/key/body returns the original job without enqueuing again. Reusing that key with a different body returns `409 MEDIA_PROVIDER_IDEMPOTENCY_CONFLICT`. Job lookup and cancellation return the same not-found response for an unknown id and another peer's id.
 
-The provider persists accepted work in the existing machine-local `data/media-jobs.json` queue. No commission, CoS, schedule, taste, Digital Twin record, free-form prompt, or lyrics are copied to the provider. Its queue contains only the canonical instrumental prompt derived from fixed musical descriptors.
+The provider persists accepted work in the existing machine-local `data/media-jobs.json` queue. No commission, CoS, schedule, taste, Digital Twin record, or free-form style prompt is copied to the provider — its queue holds the canonical prompt derived from fixed musical descriptors, plus the submitted lyrics when the caller sent them.
 
 ### Download and verify a result
 
@@ -453,8 +464,16 @@ Each kind then registers the render exactly as a local one would, which is what 
 
 The sidecar and history row record the render's provenance as `federatedPeerId` / `federatedJobId` — instance-level identifiers already shared across the federation, never a hostname, address, or credential.
 
-A remote job's conditioning prompt is persisted **only inside its versioned `remoteMedia` marker**, never in top-level job params. That is what makes a rolled-back install fail closed: an older build cannot route the marker, so it falls through to the local generator with an empty prompt and no configured runtime instead of quietly re-rendering the job on local hardware. The queue's public job projection rebuilds the prompt for display without exposing peer routing state.
+A remote job's conditioning — the prompt, and an audio job's lyrics — is persisted **only inside its versioned `remoteMedia` marker**, never in top-level job params. That is what makes a rolled-back install fail closed: an older build cannot route the marker, so it falls through to the local generator with an empty prompt and no configured runtime instead of quietly re-rendering the job on local hardware. The queue's public job projection rebuilds the prompt for display without exposing peer routing state.
 
 ## Current boundary
 
-Wire v1 carries instrumental audio, text-to-image, and text-to-video. Interactive remote selection is exposed on the Image Gen, Video Gen and Music Studio surfaces; unattended work routes through **Instances → Unattended render routing**. Still remaining from #4348: a privacy-preserving design for remote lyrical conditioning (which is also what keeps unattended audio local), input-asset transfer (init/reference images, LoRAs, chained renders), and multi-provider fairness/failover.
+Wire v1 carries lyrical and instrumental audio, text-to-image, and text-to-video. Interactive remote selection is exposed on the Image Gen, Video Gen and Music Studio surfaces; unattended work routes through **Instances → Unattended render routing**.
+
+The boundary's remaining edges are **decisions, not gaps** — see ADR [conditioning crosses to an allowlisted peer](decisions/2026-08-22-federated-media-input-assets.md):
+
+- **LoRA weights never cross** (rule 3). A LoRA is a model, not conditioning, and remote model installation is out of scope for federation. Install it on the provider and allowlist a model that uses it.
+- **Multi-step chain state never crosses** (rule 4) — a source video to extend, chained chunks, IC-LoRA references. The consumer sequences the chain; a provider holding one step of it cannot see the rest.
+- **No automatic fairness or failover** (rule 5). A job that silently re-targets another peer has changed both where the data went and which model produced the result.
+
+Each is refused with `400 MEDIA_PROVIDER_INPUT_UNSUPPORTED` naming what has to go.

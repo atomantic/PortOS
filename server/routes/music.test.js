@@ -651,22 +651,104 @@ describe('music routes', () => {
     expect(mediaQueue.enqueue).not.toHaveBeenCalled();
   });
 
-  it('POST /generate rejects free-form lyrics before probing a remote provider', async () => {
+  // Lyrics reach an allowlisted peer since ADR
+  // docs/decisions/2026-08-22-federated-media-input-assets.md rule 2 — but only
+  // when the resolved capability advertises BOTH that the model sings and that
+  // the peer's build carries the words. The three cases below are the whole
+  // contract: a peer too old to say so, a model that cannot sing, and the one
+  // combination that ships.
+  const remoteLyricRequest = (peer, overrides = {}) => ({
+    prompt: 'private concept',
+    lyrics: '[verse]\nCall alice@example.com',
+    engine: 'remote-audio',
+    modelId: 'example/model',
+    mediaProviderPeerId: peer.id,
+    remoteMusicProfile: { style: 'ambient', mood: 'calm' },
+    ...overrides,
+  });
+  const remoteLyricCapability = (overrides) => ({
+    kind: 'audio',
+    engine: 'remote-audio',
+    engineName: 'Remote Audio',
+    modelId: 'example/model',
+    autoDuration: false,
+    minDurationSec: 10,
+    maxDurationSec: 120,
+    ...overrides,
+  });
+
+  it('POST /generate refuses lyrics when the peer build cannot carry them, rather than rendering instrumental', async () => {
     const peer = { id: '00000000-0000-4000-8000-000000000001', enabled: true };
     remoteProvider.peers = [peer];
-
-    const r = await request(app).post('/api/music/generate').send({
-      prompt: 'private concept',
-      lyrics: 'Call alice@example.com',
-      engine: 'remote-audio',
-      modelId: 'example/model',
-      mediaProviderPeerId: peer.id,
-      remoteMusicProfile: { style: 'ambient', mood: 'calm' },
+    // A provider predating lyrical federation: the MODEL sings, so `lyrics` is
+    // true, but it never publishes `acceptsLyrics` and rejects the field on
+    // submit. Absent must read as false or every such render is a hard 400 from
+    // the peer that the user cannot act on.
+    remoteProvider.resolve.mockResolvedValueOnce({
+      peer, capability: remoteLyricCapability({ lyrics: true }),
     });
 
+    const r = await request(app).post('/api/music/generate').send(remoteLyricRequest(peer));
+
     expect(r.status).toBe(400);
-    expect(remoteProvider.resolve).not.toHaveBeenCalled();
+    expect(r.body.code).toBe('MEDIA_PROVIDER_LYRICS_UNSUPPORTED');
+    expect(r.body.error).toContain('Update the peer');
     expect(mediaQueue.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('POST /generate refuses lyrics for a remote model that renders instrumental only', async () => {
+    const peer = { id: '00000000-0000-4000-8000-000000000001', enabled: true };
+    remoteProvider.peers = [peer];
+    remoteProvider.resolve.mockResolvedValueOnce({
+      peer, capability: remoteLyricCapability({ lyrics: false, acceptsLyrics: false }),
+    });
+
+    const r = await request(app).post('/api/music/generate').send(remoteLyricRequest(peer));
+
+    expect(r.status).toBe(400);
+    expect(r.body.code).toBe('MEDIA_PROVIDER_LYRICS_UNSUPPORTED');
+    expect(r.body.error).toContain('instrumental audio only');
+    expect(mediaQueue.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('POST /generate carries lyrics on the remote marker while the style prompt stays fixed-vocabulary', async () => {
+    const peer = { id: '00000000-0000-4000-8000-000000000001', enabled: true };
+    remoteProvider.peers = [peer];
+    remoteProvider.resolve.mockResolvedValueOnce({
+      peer, capability: remoteLyricCapability({ lyrics: true, acceptsLyrics: true }),
+    });
+
+    const r = await request(app).post('/api/music/generate').send(remoteLyricRequest(peer));
+
+    expect(r.status).toBe(202);
+    const params = mediaQueue.enqueue.mock.calls[0][0].params;
+    expect(params.remoteMedia.lyrics).toContain('Call alice@example.com');
+    // The style prompt is still rendered from the fixed profile, so the
+    // free-form concept text never leaves this machine — only the words the
+    // user asked to be sung do.
+    expect(params.remoteMedia.profile).toMatchObject({ style: 'ambient', mood: 'calm' });
+    expect(params.remoteMedia.request.prompt).toBeUndefined();
+    expect(params.prompt).toBe('');
+    expect(params.lyrics).toBe('');
+    expect(JSON.stringify(params.remoteMedia)).not.toContain('private concept');
+  });
+
+  it('POST /generate omits lyrics from the remote marker for an instrumental-only take', async () => {
+    const peer = { id: '00000000-0000-4000-8000-000000000001', enabled: true };
+    remoteProvider.peers = [peer];
+    remoteProvider.resolve.mockResolvedValueOnce({
+      peer, capability: remoteLyricCapability({ lyrics: true, acceptsLyrics: true }),
+    });
+
+    const r = await request(app).post('/api/music/generate')
+      .send(remoteLyricRequest(peer, { instrumentalOnly: true }));
+
+    // `instrumentalOnly` wins over supplied lyrics on every lane. Omitted (not
+    // empty-stringed) so this submits — and idempotency-hashes — exactly the
+    // body a pre-lyrics build sent for the same job.
+    expect(r.status).toBe(202);
+    expect(mediaQueue.enqueue.mock.calls[0][0].params.remoteMedia)
+      .not.toHaveProperty('lyrics');
   });
 
   it('POST /generate forwards MiniMax auto duration mode to the queue', async () => {

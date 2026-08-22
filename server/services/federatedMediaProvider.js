@@ -221,6 +221,7 @@ async function configuredAudioCapabilities(config) {
       maxDurationSec: engine?.maxDurationSec ?? null,
       defaultDurationSec: engine?.defaultDurationSec ?? null,
       lyrics: engine?.lyrics === true,
+      acceptsLyrics: engine?.lyrics === true,
       autoDuration: engine?.autoDuration === true,
       frameStride: null,
       maxNumFrames: null,
@@ -310,6 +311,7 @@ async function localGeneratorCapabilities(kind, pythonPath, { models, configured
       maxDurationSec: null,
       defaultDurationSec: null,
       lyrics: false,
+      acceptsLyrics: false,
       autoDuration: false,
       frameStride,
       maxNumFrames: Number.isFinite(maxNumFrames) && maxNumFrames > 0 ? maxNumFrames : null,
@@ -624,6 +626,15 @@ export async function submitFederatedMediaJob({ callerId, config, input, idempot
       });
     }
     validateFederatedVideoControls(input, capability._model);
+    // Lyrics reach a lyric-aware model only. `input.lyrics` is checked for a
+    // non-empty string rather than mere presence: a consumer that renders an
+    // instrumental take on a lyrical engine sends `''`, and refusing that would
+    // break a submission carrying no conditioning at all. Rejecting here rather
+    // than dropping the field is the ADR's own rule — a render that silently
+    // discards the words is a plausible render of the wrong thing.
+    if (input.lyrics && !capability.lyrics) {
+      unavailable('Requested model cannot render lyrics', 'MEDIA_PROVIDER_LYRICS_UNSUPPORTED', 400);
+    }
     if (input.durationMode === 'auto' && !capability.autoDuration) {
       unavailable('Requested engine does not support automatic duration', 'MEDIA_PROVIDER_AUTO_DURATION_UNSUPPORTED', 400);
     }
