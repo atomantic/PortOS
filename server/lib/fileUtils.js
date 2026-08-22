@@ -168,6 +168,18 @@ export const PATHS = {
   // A sibling of `images/` — never surfaced by the gallery's flat `.png`
   // enumeration; swept by imageCleanTmpGc.js on an age gate. Not federated.
   imageCleanTmp: join(INSTALL_ROOT, 'data/image-clean-tmp'),
+  // PROVIDER-side staging for conditioning images an allowlisted peer uploaded
+  // ahead of a federated render (ADR
+  // docs/decisions/2026-08-22-federated-media-input-assets.md rule 1). Files are
+  // named `<callerHash>-<sha256>.<ext>` and swept on a TTL.
+  //
+  // Deliberately its own root rather than a corner of `images/` or `uploads/`:
+  // these are ANOTHER machine's bytes, held briefly to run one job. Under
+  // `images/` the gallery would enumerate them and the sync layer would federate
+  // them onward (the failure this repo already hit once with temp files in
+  // data/images). Excluded from backups for the same reason — restoring a peer's
+  // half-hour-old init image is worth nothing.
+  federatedMediaInbox: join(INSTALL_ROOT, 'data/federated-media-inbox'),
   loras: join(INSTALL_ROOT, 'data/loras'),
   // Per-character LoRA training datasets (collectionStore layout:
   // lora-datasets/<id>/index.json + lora-datasets/<id>/images/*.png).
@@ -1718,6 +1730,22 @@ export const resolveImageRef = makePathResolver(() => PATHS.imageRefs);
 export const resolveImageCleanTmp = makePathResolver(() => PATHS.imageCleanTmp);
 
 /**
+ * Resolve a peer-uploaded conditioning image staged under
+ * `PATHS.federatedMediaInbox` to an absolute path. The provider maps an
+ * accepted asset id onto one of these before handing the job to the local
+ * generator, so the runner must accept this root as a valid `initImagePath` /
+ * reference / keyframe source.
+ *
+ * Extension-restricted at the resolver rather than only at upload: the upload
+ * endpoint already MIME-allowlists, but this is the boundary the *runner*
+ * crosses, and a second check here means a hand-written file in the inbox still
+ * cannot become an arbitrary path argument to the generator.
+ */
+export const resolveFederatedMediaAsset = makePathResolver(() => PATHS.federatedMediaInbox, {
+  extensions: ['png', 'jpg', 'jpeg', 'webp'],
+});
+
+/**
  * Resolve a sprite reference asset used as an image-gen init image (issue
  * #2896 — anchors i2i from the locked main reference; uploaded design
  * references). `data/sprites/` is a server-managed NESTED tree, so unlike
@@ -1784,6 +1812,10 @@ const IMAGE_INPUT_RESOLVERS = [
   // Image Cleaner temp init images (issue #2264) — the GPU FLUX round-trip
   // stages sync-cleaned bytes here as the img2img init.
   ['imageCleanTmp', resolveImageCleanTmp],
+  // Peer-uploaded conditioning images (#4348) — an allowlisted peer's init /
+  // reference / keyframe bytes, staged for the one federated render they were
+  // uploaded for.
+  ['federatedMediaInbox', resolveFederatedMediaAsset],
   // Sprite reference assets (issue #2896) — the locked main reference /
   // uploaded design reference as the anchors' i2i init. Absolute-only
   // (returns null on basename input, so the fall-through loop skips it).

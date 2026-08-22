@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -18,6 +18,15 @@ vi.mock('../../lib/fileUtils.js', async () => {
         return target[key];
       },
     }),
+    // The real resolver closes over fileUtils' OWN `PATHS` binding, not the
+    // proxy above, so it would validate a conditioning path against this
+    // machine's actual gallery. Anchor it at the temp gallery instead — its
+    // containment behavior is fileUtils' own suite's job; what matters here is
+    // that the executor resolves before uploading, and refuses when it cannot.
+    resolveImageInputPath: (raw) => {
+      const candidate = join(tempImageDir, raw.split('/').pop());
+      return existsSync(candidate) ? candidate : null;
+    },
   };
 });
 
@@ -200,6 +209,110 @@ describe('federated image consumer adapter', () => {
       seed: 42,
     });
     expect(submission[1].headers['Idempotency-Key']).toBe(LOCAL_JOB_ID);
+  });
+
+  // ADR docs/decisions/2026-08-22-federated-media-input-assets.md rule 1. The
+  // marker persists LOCAL paths; the ids are obtained immediately before
+  // submission. That ordering is the whole point — an id names a slot in the
+  // peer's TTL-swept staging area, so a marker holding one would reconcile after
+  // a restart into a confident reference to bytes that are gone.
+  describe('conditioning images', () => {
+    const png = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.from('init-image-bytes'),
+    ]);
+    const ASSET_ID = `${'0'.repeat(16)}-${sha256(png)}`;
+
+    const conditionedParams = () => {
+      writeFileSync(join(tempImageDir, 'init.png'), png);
+      const base = params();
+      return {
+        ...base,
+        remoteMedia: {
+          ...base.remoteMedia,
+          inputAssets: [{ role: 'initImage', path: 'init.png' }],
+        },
+      };
+    };
+
+    const respondWith = (onSubmit) => {
+      transport.fetch.mockImplementation(async (url, options) => {
+        if (url.endsWith('/assets') && options.method === 'POST') {
+          return jsonResponse({
+            wireVersion: 1,
+            assetId: ASSET_ID,
+            sha256: sha256(png),
+            sizeBytes: png.length,
+            mimeType: 'image/png',
+            expiresAt: '2026-08-22T18:00:00.000Z',
+          }, 201);
+        }
+        if (url.endsWith('/jobs') && options.method === 'POST') return onSubmit(options);
+        throw new Error(`Unexpected test URL: ${url}`);
+      });
+    };
+
+    it('uploads the bytes with their digest, then submits the id in their place', async () => {
+      respondWith(() => jsonResponse(providerJob('canceled'), 202));
+      const terminal = captureTerminal(LOCAL_JOB_ID);
+      await generateImage(conditionedParams()).catch(() => {});
+      await terminal;
+
+      const upload = transport.fetch.mock.calls.find(([url]) => url.endsWith('/assets'));
+      expect(upload[1].headers).toMatchObject({
+        'Content-Type': 'image/png',
+        'X-Content-SHA256': sha256(png),
+      });
+      expect(Buffer.from(upload[1].body)).toEqual(png);
+
+      const submission = transport.fetch.mock.calls
+        .find(([url, options]) => url.endsWith('/jobs') && options.method === 'POST');
+      expect(JSON.parse(submission[1].body).initImage).toEqual({ assetId: ASSET_ID });
+      // The local path is machine-local routing state and never crosses.
+      expect(submission[1].body).not.toContain('init.png');
+    });
+
+    // A provider echoing back a digest that is not ours means the bytes it
+    // stored are not the bytes we sent; rendering from them would produce a
+    // plausible image of the wrong thing.
+    it('fails closed when the provider’s asset receipt does not match the sent bytes', async () => {
+      transport.fetch.mockImplementation(async (url) => {
+        if (!url.endsWith('/assets')) throw new Error(`Unexpected test URL: ${url}`);
+        return jsonResponse({
+          wireVersion: 1,
+          assetId: `${'0'.repeat(16)}-${'b'.repeat(64)}`,
+          sha256: 'b'.repeat(64),
+          sizeBytes: png.length,
+          mimeType: 'image/png',
+          expiresAt: '2026-08-22T18:00:00.000Z',
+        }, 201);
+      });
+
+      const terminal = captureTerminal(LOCAL_JOB_ID);
+      await generateImage(conditionedParams()).catch(() => {});
+      const outcome = await terminal;
+      expect(outcome.type).toBe('failed');
+      expect(transport.fetch.mock.calls.some(([url, options]) =>
+        url.endsWith('/jobs') && options?.method === 'POST')).toBe(false);
+    });
+
+    // The marker is persisted, user-editable queue state, so a path it names
+    // must still resolve inside the approved image roots at submit time.
+    it('refuses to submit when the conditioning image no longer resolves', async () => {
+      respondWith(() => jsonResponse(providerJob('queued'), 202));
+      const base = params();
+      const terminal = captureTerminal(LOCAL_JOB_ID);
+      await generateImage({
+        ...base,
+        remoteMedia: {
+          ...base.remoteMedia,
+          inputAssets: [{ role: 'initImage', path: 'vanished.png' }],
+        },
+      }).catch(() => {});
+      const outcome = await terminal;
+      expect(outcome.type).toBe('failed');
+      expect(transport.fetch).not.toHaveBeenCalled();
+    });
   });
 
   it('rejects a provider response whose kind is not image', async () => {

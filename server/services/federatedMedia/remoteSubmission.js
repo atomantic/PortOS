@@ -14,9 +14,13 @@
 
 import { ServerError } from '../../lib/errorHandler.js';
 import { FEDERATED_MEDIA_WIRE_VERSION } from '../../lib/federatedMediaWire.js';
-import { federatedMediaVideoJobSubmissionSchema } from '../../lib/validation.js';
+import { federatedMediaVideoJobSubmissionBaseSchema } from '../../lib/validation.js';
+import { inputAssetRejection } from './inputAssets.js';
 
-const partialVideoJobSubmissionSchema = federatedMediaVideoJobSubmissionSchema.partial();
+// The BASE (un-refined) schema: this validates a partially-negotiated body,
+// and Zod refuses `.partial()` on a schema carrying cross-field refinements.
+// The full schema still guards the submitted body — see remote.js.
+const partialVideoJobSubmissionSchema = federatedMediaVideoJobSubmissionBaseSchema.partial();
 
 /**
  * Negotiate frame and canvas constraints against the provider capability.
@@ -174,9 +178,12 @@ export function negotiateVideoConstraints(request, capability) {
  * @param {string} args.peerId - Registered peer the user selected.
  * @param {'audio'|'image'|'video'} args.kind
  * @param {object} args.request - Validated wire submission (carries engine/modelId).
+ * @param {Array<{role: string, path: string}>} [args.inputAssets] - Local
+ *   conditioning images for this render, checked against the peer's advertised
+ *   `inputAssets` block here and uploaded by the executor at submit time.
  * @returns {Promise<{peer: object, capability: object, request: object, remoteMedia: object}>}
  */
-export async function prepareRemoteMediaJob({ peerId, kind, request }) {
+export async function prepareRemoteMediaJob({ peerId, kind, request, inputAssets = [] }) {
   // Imported lazily, not statically: the image/video generate routes reach this
   // module, and a static edge to the peer registry would drag it (and its
   // settings/DB dependencies) into every route suite's module graph — where a
@@ -199,6 +206,13 @@ export async function prepareRemoteMediaJob({ peerId, kind, request }) {
     engine: request.engine,
     modelId: request.modelId,
   });
+  // Advisory, like every other check here — the provider re-validates at
+  // admission. Doing it now turns "the peer 400s after the user committed" into
+  // a message on the Generate button naming the input to clear.
+  const rejection = inputAssetRejection(capability, inputAssets);
+  if (rejection) {
+    throw new ServerError(rejection, { status: 400, code: 'MEDIA_PROVIDER_INPUT_UNSUPPORTED' });
+  }
   const effectiveRequest = kind === 'video'
     ? negotiateVideoConstraints(request, capability)
     : request;
@@ -212,6 +226,7 @@ export async function prepareRemoteMediaJob({ peerId, kind, request }) {
       reconcile: false,
       cancelRequested: false,
       request: effectiveRequest,
+      ...(inputAssets.length ? { inputAssets } : {}),
     },
   };
 }

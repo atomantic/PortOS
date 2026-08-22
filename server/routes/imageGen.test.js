@@ -1462,6 +1462,9 @@ describe('Image Gen Routes', () => {
           height: 512,
           seed: 42,
         },
+        // A text-to-image render carries none, but the field is always passed —
+        // an empty list and an absent one must read the same to the submitter.
+        inputAssets: [],
       });
 
       const [{ params }] = mediaJobQueue.enqueueJob.mock.calls[0];

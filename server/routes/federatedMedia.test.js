@@ -1,10 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
+import { PATHS } from '../lib/fileUtils.js';
 
 const provider = vi.hoisted(() => ({
   replayed: false,
@@ -38,14 +40,22 @@ vi.mock('../services/federatedMediaProvider.js', () => ({
 import federatedMediaRoutes from './federatedMedia.js';
 
 let tempRoot;
+let originalInbox;
 
 beforeAll(() => {
   tempRoot = mkdtempSync(join(tmpdir(), 'portos-federated-media-route-'));
   provider.resultPath = join(tempRoot, 'result.wav');
   writeFileSync(provider.resultPath, 'RIFF');
+  // The asset routes use the REAL store (only the provider service is mocked),
+  // so give it a temp inbox rather than the install's data dir.
+  originalInbox = PATHS.federatedMediaInbox;
+  PATHS.federatedMediaInbox = join(tempRoot, 'inbox');
 });
 
-afterAll(() => rmSync(tempRoot, { recursive: true, force: true }));
+afterAll(() => {
+  PATHS.federatedMediaInbox = originalInbox;
+  rmSync(tempRoot, { recursive: true, force: true });
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -124,6 +134,58 @@ describe('federated media routes', () => {
     expect(provider.submit).toHaveBeenCalledWith(expect.objectContaining({
       input: expect.objectContaining({ kind: 'audio', lyrics: '[verse]\nPrivate words' }),
     }));
+  });
+
+  // Conditioning-image upload (ADR
+  // docs/decisions/2026-08-22-federated-media-input-assets.md rule 1). The store
+  // itself is covered by services/federatedMedia/assetStore.test.js; what these
+  // guard is the ROUTE's own contract — that raw bytes reach the store at all
+  // (the app-wide express.json() must not swallow them), and that the peer
+  // authorization gate fires before any byte is written.
+  describe('conditioning-image upload', () => {
+    const png = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.from('portos-test-conditioning-image'),
+    ]);
+    const digest = createHash('sha256').update(png).digest('hex');
+
+    it('stages verified bytes and returns a content-addressed receipt', async () => {
+      const response = await request(buildApp()).post('/api/federation/media/v1/assets')
+        .set('Content-Type', 'image/png')
+        .set('X-Content-SHA256', digest)
+        .send(png);
+
+      expect(response.status).toBe(201);
+      expect(response.body).toMatchObject({
+        wireVersion: 1, sha256: digest, sizeBytes: png.length, mimeType: 'image/png',
+      });
+      expect(response.body.assetId.endsWith(`-${digest}`)).toBe(true);
+
+      // The same peer can then read it back and skip a re-upload after a restart.
+      const described = await request(buildApp())
+        .get(`/api/federation/media/v1/assets/${response.body.assetId}`);
+      expect(described.status).toBe(200);
+      expect(described.body.sha256).toBe(digest);
+    });
+
+    it('refuses an unauthorized peer before writing anything', async () => {
+      provider.authorize.mockRejectedValueOnce(Object.assign(
+        new Error('Verified peer Basic authentication is required'),
+        { status: 403, code: 'MEDIA_PROVIDER_PEER_AUTH_REQUIRED' },
+      ));
+      const response = await request(buildApp()).post('/api/federation/media/v1/assets')
+        .set('Content-Type', 'image/png')
+        .set('X-Content-SHA256', digest)
+        .send(png);
+      expect(response.status).toBe(403);
+    });
+
+    it('refuses a malformed asset id rather than letting it reach the filesystem', async () => {
+      const response = await request(buildApp())
+        .get('/api/federation/media/v1/assets/..%2F..%2Fetc%2Fpasswd');
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('VALIDATION_ERROR');
+    });
   });
 
   it('serves completed bytes with an integrity header and no source path', async () => {

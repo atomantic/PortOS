@@ -136,6 +136,89 @@ export function normalizeRequestedMediaKinds(raw) {
   return kinds.length ? kinds : ['audio'];
 }
 
+// ---------------------------------------------------------------------------
+// Input conditioning assets (ADR
+// docs/decisions/2026-08-22-federated-media-input-assets.md rule 1)
+//
+// A conditioning image is what the render is OF, so it crosses under the same
+// gate as the prompt — but as bytes rather than JSON, through a dedicated
+// authenticated endpoint that verifies the declared digest before storing.
+// Model weights (rule 3) and multi-step chain state (rule 4) are NOT
+// conditioning and never appear here.
+// ---------------------------------------------------------------------------
+
+// { mimeType -> extension }. One source, so the upload endpoint, the on-disk
+// staging name, and the provider's path resolver cannot drift on what an
+// acceptable conditioning image is.
+export const FEDERATED_MEDIA_ASSET_EXTENSION = Object.freeze({
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/webp': 'webp',
+});
+export const FEDERATED_MEDIA_ASSET_MIME_TYPES = Object.freeze(Object.keys(FEDERATED_MEDIA_ASSET_EXTENSION));
+
+// 32 MiB is generous for a conditioning image (a 4096² PNG lands well under it)
+// and small enough that an accidental video upload is refused by size before
+// it is refused by MIME.
+export const FEDERATED_MEDIA_ASSET_MAX_BYTES = 32 * 1024 * 1024;
+// How many assets one submission may reference. Bounded so a reference-image
+// array cannot become a bulk upload channel.
+export const FEDERATED_MEDIA_ASSET_MAX_COUNT = 8;
+// Staged bytes live long enough to survive a provider restart and a queue
+// backlog, and no longer. A reconcile past this simply re-uploads — the upload
+// is content-addressed and idempotent, so that costs one transfer, not a
+// duplicated render.
+export const FEDERATED_MEDIA_ASSET_TTL_MS = 6 * 60 * 60 * 1000;
+
+// Which conditioning slot an asset fills. Named for the submission field it
+// lands in so a capability's `roles` list reads as the set of fields a consumer
+// may send, with no second mapping to keep in sync.
+export const FEDERATED_MEDIA_INPUT_ROLES = Object.freeze([
+  'initImage', 'referenceImages', 'sourceImage', 'lastImage',
+]);
+
+// `<callerHash>-<sha256>`. The caller half is derived provider-side from the
+// AUTHENTICATED caller id and re-checked on every reference, so an asset id is
+// unguessable-by-construction AND unusable across callers even if guessed.
+export const federatedMediaAssetIdSchema = z.string().trim().regex(
+  /^[a-f0-9]{16}-[a-f0-9]{64}$/,
+  'assetId must be a provider-issued <callerHash>-<sha256> pair',
+);
+
+// What a submission carries in place of the bytes. Deliberately just the id:
+// the id embeds the digest the provider verified at upload, so a second copy on
+// the wire would be a second source of truth for the same fact.
+export const federatedMediaInputAssetRefSchema = z.object({
+  assetId: federatedMediaAssetIdSchema,
+}).strict();
+
+// The provider's answer to "may I send conditioning, and of what shape?".
+// Optional and nullable, and **absent must read as unsupported** — a provider
+// predating this ADR omits the block entirely, and treating that as permission
+// would submit assets it refuses. Limits only: no filename, no digest, no
+// prompt (ADR 2026-08-20 rule 3 still governs the status payload).
+export const federatedMediaInputAssetsSchema = z.object({
+  maxBytes: z.number().int().positive().max(1_073_741_824),
+  maxCount: z.number().int().positive().max(64),
+  mimeTypes: z.array(z.enum(FEDERATED_MEDIA_ASSET_MIME_TYPES)).min(1).max(10),
+  roles: z.array(z.enum(FEDERATED_MEDIA_INPUT_ROLES)).min(1).max(FEDERATED_MEDIA_INPUT_ROLES.length),
+  // True for a model that cannot render text-only at all (an edit-only image
+  // model, a video model with no `text` mode). Such a model is federatable ONLY
+  // with conditioning, which is why it was unadvertised before this ADR.
+  required: z.boolean(),
+}).nullable().optional();
+
+// What the upload endpoint answers with, validated by the consumer before it
+// records the id on a job marker.
+export const federatedMediaAssetSchema = z.object({
+  wireVersion: z.literal(FEDERATED_MEDIA_WIRE_VERSION),
+  assetId: federatedMediaAssetIdSchema,
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  sizeBytes: z.number().int().positive().max(FEDERATED_MEDIA_ASSET_MAX_BYTES),
+  mimeType: z.enum(FEDERATED_MEDIA_ASSET_MIME_TYPES),
+  expiresAt: z.string().datetime(),
+});
+
 // { mimeType -> file extension } for the result Content-Disposition header
 // and any provider-side filename validation. One source so a new result kind
 // can't drift the two.
@@ -190,6 +273,7 @@ export const federatedMediaCapabilitySchema = z.object({
     h: z.number().int().min(64).max(2048),
     label: z.string().trim().max(120).optional(),
   })).max(100).nullable().optional(),
+  inputAssets: federatedMediaInputAssetsSchema,
 });
 
 // Per-kind occupancy of the provider's own generation lanes. Counts only —

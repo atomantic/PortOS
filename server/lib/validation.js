@@ -13,7 +13,11 @@ import {
 import { PR_COMPLETION_VALUES } from './prDisposition.js';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { MAX_TIMEOUT as AI_RUN_TIMEOUT_MAX_MS, MIN_TIMEOUT as AI_RUN_TIMEOUT_MIN_MS } from './aiToolkit/constants.js';
-import { isFederatedMediaAudioPrompt } from './federatedMediaWire.js';
+import {
+  FEDERATED_MEDIA_ASSET_MAX_COUNT,
+  federatedMediaInputAssetRefSchema,
+  isFederatedMediaAudioPrompt,
+} from './federatedMediaWire.js';
 import { isPlainObject } from './objects.js';
 
 // gpt-image-2 (codex backend) caps at 3840px per edge and 8,294,400 total
@@ -809,8 +813,15 @@ const federatedMediaAudioJobSubmissionSchema = federatedMediaJobRoutingSchema.ex
 // the way audio has a finite style/mood/instrument alphabet. Why that does not
 // breach the "no PII on federation" rule — a submitted job body is not a status
 // payload, and status/capability payloads stay absolutely prompt-free — is
-// ADR docs/decisions/2026-08-20-federated-visual-prompts.md. Local input assets
-// (init/reference images, LoRAs) are refused by the routes, not here.
+// ADR docs/decisions/2026-08-20-federated-visual-prompts.md.
+//
+// Conditioning IMAGES ride the same rule (ADR
+// docs/decisions/2026-08-22-federated-media-input-assets.md rule 1), by id
+// rather than by value: the bytes went up through the authenticated,
+// digest-verified asset endpoint first. What is still refused here — and refused
+// by the routes, since neither has a field to name it — is a MODEL (LoRA
+// weights, rule 3) and multi-step CHAIN STATE (a video to extend, chained
+// chunks, IC-LoRA references, rule 4).
 export const federatedMediaImageJobSubmissionSchema = federatedMediaJobRoutingSchema.omit({
   durationSec: true, durationMode: true,
 }).extend({
@@ -822,10 +833,28 @@ export const federatedMediaImageJobSubmissionSchema = federatedMediaJobRoutingSc
   steps: z.number().int().min(1).max(150).optional(),
   guidance: z.number().finite().min(0).max(30).optional(),
   seed: z.number().int().min(0).optional(),
-}).strict().refine(refineImagePixelCap, { message: PIXEL_CAP_MESSAGE, path: ['width'] });
+  initImage: federatedMediaInputAssetRefSchema.optional(),
+  initImageStrength: z.number().finite().min(0).max(1).optional(),
+  referenceImages: z.array(federatedMediaInputAssetRefSchema)
+    .max(FEDERATED_MEDIA_ASSET_MAX_COUNT).optional(),
+}).strict()
+  .refine(refineImagePixelCap, { message: PIXEL_CAP_MESSAGE, path: ['width'] })
+  // A strength with nothing to apply it to is a caller bug, not a default to
+  // guess at: silently ignoring it renders at full denoise, which is the
+  // opposite of what a low strength asked for.
+  .refine((value) => value.initImageStrength === undefined || value.initImage !== undefined, {
+    message: 'initImageStrength requires an initImage',
+    path: ['initImageStrength'],
+  });
 
-// Same boundary as the image schema above — see the ADR named there.
-export const federatedMediaVideoJobSubmissionSchema = federatedMediaJobRoutingSchema.omit({
+// Same boundary as the image schema above — see the ADRs named there.
+//
+// Exported UN-REFINED as well: `negotiateVideoConstraints` re-validates a
+// partially-negotiated body against `.partial()`, and Zod refuses `.partial()`
+// on a schema carrying refinements. Splitting the object from its cross-field
+// rule keeps both callers honest instead of dropping the rule to keep the
+// partial working.
+export const federatedMediaVideoJobSubmissionBaseSchema = federatedMediaJobRoutingSchema.omit({
   durationSec: true, durationMode: true,
 }).extend({
   kind: z.literal('video'),
@@ -838,7 +867,17 @@ export const federatedMediaVideoJobSubmissionSchema = federatedMediaJobRoutingSc
   steps: z.number().int().min(1).max(150).optional(),
   guidance: z.number().finite().min(0).max(30).optional(),
   seed: z.number().int().min(0).optional(),
+  sourceImage: federatedMediaInputAssetRefSchema.optional(),
+  lastImage: federatedMediaInputAssetRefSchema.optional(),
 }).strict();
+
+export const federatedMediaVideoJobSubmissionSchema = federatedMediaVideoJobSubmissionBaseSchema
+  // First-last-frame needs both ends. A lone end frame would render a plain
+  // text-to-video clip and quietly discard the frame the caller supplied.
+  .refine((value) => value.lastImage === undefined || value.sourceImage !== undefined, {
+    message: 'lastImage requires a sourceImage (first-last-frame needs both ends)',
+    path: ['lastImage'],
+  });
 
 // An already-shipped consumer's request body never carries `kind` — it only
 // knows the pre-existing audio-only shape. Defaulting the missing field to

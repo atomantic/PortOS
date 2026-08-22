@@ -98,6 +98,7 @@ import { GROK_VIDEO_DURATIONS, GROK_VIDEO_DEFAULT_DURATION } from '../lib/grokVi
 import ResolutionField from '../components/media/ResolutionField';
 import { VIDEO_EDGE_BOUNDS, videoEdgeBoundsForModel, IC_LORA_MODES } from '../lib/videoGenParams.js';
 import { finishTargetForRecord } from '../lib/videoFinish.js';
+import { peerModelAcceptsInput, peerModelRequiresInput } from '../lib/federatedMediaReadiness.js';
 const MODES = [
   { id: 'text',   label: 'Text',   icon: Type,       desc: 'Text-to-video' },
   { id: 'image',  label: 'Image',  icon: ImageIcon,  desc: 'Image-to-video (start frame)' },
@@ -181,18 +182,33 @@ export default function VideoGen() {
     models, status, availableLoras, grokEnabled,
     remoteSubmissionFields: remoteTarget.isRemote ? remoteTarget.submissionFields : null,
   });
-  // Conditioning the federated wire cannot carry. The server refuses a job
+  // Conditioning the selected peer model cannot take. The server refuses a job
   // holding any of it (MEDIA_PROVIDER_INPUT_UNSUPPORTED) rather than silently
   // rendering something else, so the form says so before the user commits.
   // Nothing is cleared on picking a peer: the inputs stay filled and intact
   // for a switch back to This instance.
+  //
+  // Start and end FRAMES now cross when the model advertises the role (ADR
+  // docs/decisions/2026-08-22-federated-media-input-assets.md rule 1) — but only
+  // as a GALLERY pick. An UPLOAD is still staged in the multipart temp dir when
+  // the federated branch runs, so it is not a path the uploader can read; the
+  // remedy is to save it to the gallery first, which is what the message says.
+  //
+  // The rest stay refused, each for a recorded reason: LoRA weights are a MODEL
+  // (rule 3), and keyframes / a clip to extend / IC-LoRA references / chained
+  // chunks are multi-step CHAIN STATE this machine sequences (rule 4).
   const remoteUnsupportedInputs = useMemo(() => {
     if (!remoteTarget.isRemote) return null;
+    const model = remoteTarget.model;
     const present = [
       ['the Grok backend', isGrok],
-      [`${mode} mode`, mode !== 'text'],
-      ['a source image', !!sourceImageFile || !!sourceImageUpload],
-      ['an end frame', !!lastImageFile || !!lastImageUpload],
+      // Each remaining pipeline semantic has its own input listed below, but the
+      // mode can be set before that input is filled — so gate the mode too
+      // rather than letting an a2v render reach the peer as plain text-to-video.
+      [`${mode} mode`, ![undefined, 'text', 'image', 'fflf'].includes(mode)],
+      ['a source image', !!sourceImageFile && !peerModelAcceptsInput(model, 'sourceImage')],
+      ['an end frame', !!lastImageFile && !peerModelAcceptsInput(model, 'lastImage')],
+      ['an uploaded frame (save it to the gallery first)', !!sourceImageUpload || !!lastImageUpload],
       ['keyframes', keyframesActive],
       ['a source clip to extend', !!extendFromVideoId],
       ['an audio track', !!audioFile],
@@ -200,11 +216,20 @@ export default function VideoGen() {
       ['LoRA weights', selectedLoras.length > 0],
       ['chained chunks', chunks > 1],
     ].filter(([, set]) => set).map(([label]) => label);
-    return present.length
-      ? `A federated provider renders text-to-video only — clear ${present.join(', ')} to render on this peer.`
-      : null;
-  }, [remoteTarget.isRemote, isGrok, mode, sourceImageFile, sourceImageUpload, lastImageFile,
-    lastImageUpload, keyframesActive, extendFromVideoId, audioFile, icReferenceFile,
+    if (present.length) {
+      return `The selected peer model cannot take ${present.join(', ')} — clear it to render on this peer.`;
+    }
+    // An end frame alone would render a plain text-to-video clip with the frame
+    // silently discarded — a valid-looking render of a different thing.
+    if (lastImageFile && !sourceImageFile) {
+      return 'A federated first-last-frame render needs both ends — add a start frame, or render on this instance.';
+    }
+    if (peerModelRequiresInput(model) && !sourceImageFile) {
+      return `${model?.modelName || 'The selected peer model'} renders only from a source image — add a start frame, or pick a text-to-video model.`;
+    }
+    return null;
+  }, [remoteTarget.isRemote, remoteTarget.model, isGrok, mode, sourceImageFile, sourceImageUpload,
+    lastImageFile, lastImageUpload, keyframesActive, extendFromVideoId, audioFile, icReferenceFile,
     icReferenceVideoId, icReferenceImageFiles, selectedLoras, chunks]);
   // One reading for the Generate button, the enqueue guard and the caption.
   const remoteBlocked = remoteTarget.isRemote

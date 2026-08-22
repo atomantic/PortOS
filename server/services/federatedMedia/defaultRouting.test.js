@@ -169,21 +169,47 @@ describe('routed conditioning guard', () => {
     getSettings.mockResolvedValue({ federation: { mediaRouting: { image: route, video: route } } });
   });
 
-  // The interactive routes reject these rather than dropping them, because a
-  // render that silently ignores its source image comes back plausible and
-  // wrong. Unattended work has nobody watching, so the guard matters more here.
+  // What still cannot cross, and why each one is a DECISION rather than a gap
+  // (ADR docs/decisions/2026-08-22-federated-media-input-assets.md): a LoRA is
+  // a model, not conditioning (rule 3); keyframes, a video to extend, and
+  // IC-LoRA references are multi-step chain state this machine sequences
+  // (rule 4). Refusing beats dropping — a render that silently ignores its
+  // conditioning comes back plausible and wrong, and unattended work has nobody
+  // watching to notice.
   it.each([
-    ['initImagePath', { initImagePath: '/x/a.png' }, 'an init image'],
-    ['sourceImagePath', { sourceImagePath: '/x/a.png' }, 'a source image'],
-    ['referenceImagePaths', { referenceImagePaths: ['/x/a.png'] }, 'reference images'],
     ['loraFilenames', { loraFilenames: ['style.safetensors'] }, 'LoRA weights'],
     ['keyframes', { keyframes: [{ at: 0 }] }, 'keyframes'],
+    ['extendFromVideoId', { extendFromVideoId: 'clip-1' }, 'a source video to extend'],
+    ['icReferenceVideoIds', { icReferenceVideoIds: ['clip-1'] }, 'IC-LoRA references'],
   ])('refuses a routed image job carrying %s', async (_name, extra, label) => {
     await expect(resolveDefaultMediaRoute({ kind: 'image', params: { prompt: 'p', ...extra } }))
       .rejects.toMatchObject({ code: 'MEDIA_PROVIDER_INPUT_UNSUPPORTED' });
     await expect(resolveDefaultMediaRoute({ kind: 'image', params: { prompt: 'p', ...extra } }))
       .rejects.toThrow(new RegExp(label));
     expect(prepareRemoteMediaJob).not.toHaveBeenCalled();
+  });
+
+  // Single-render conditioning DOES cross now (rule 1), and the unattended lane
+  // must send it the same way the interactive routes do — same marker shape,
+  // same capability gate inside prepareRemoteMediaJob. A route that kept
+  // refusing these would leave every conditioned Creative Director shot local.
+  it.each([
+    ['image', { initImagePath: 'a.png' }, [{ role: 'initImage', path: 'a.png' }]],
+    ['image', { referenceImagePaths: ['a.png', 'b.png'] }, [
+      { role: 'referenceImages', path: 'a.png' },
+      { role: 'referenceImages', path: 'b.png' },
+    ]],
+    ['video', { sourceImagePath: 'a.png' }, [{ role: 'sourceImage', path: 'a.png' }]],
+    ['video', { sourceImageFile: 'a.png', lastImageFile: 'b.png' }, [
+      { role: 'sourceImage', path: 'a.png' },
+      { role: 'lastImage', path: 'b.png' },
+    ]],
+  ])('routes a %s job carrying conditioning, handing its local paths to the submitter', async (kind, extra, expected) => {
+    await expect(resolveDefaultMediaRoute({ kind, params: { prompt: 'p', ...extra } }))
+      .resolves.toMatchObject({ peer: { id: 'peer-1' } });
+    expect(prepareRemoteMediaJob).toHaveBeenCalledWith(
+      expect.objectContaining({ inputAssets: expected }),
+    );
   });
 
   it('refuses a chained multi-chunk video, which the provider cannot continue', async () => {

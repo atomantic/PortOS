@@ -270,3 +270,37 @@ export function federatedMediaModelsForPeer(peer, kind) {
     && allowed.has(federatedMediaModelKey(capability)));
   return matched.length > 0 ? matched : NO_CAPABILITIES;
 }
+
+/**
+ * Does this advertised capability accept a conditioning image in `role`
+ * (`initImage` / `referenceImages` / `sourceImage` / `lastImage`)?
+ *
+ * **Absent reads as NO.** A provider built before ADR
+ * `docs/decisions/2026-08-22-federated-media-input-assets.md` omits the
+ * `inputAssets` block entirely and rejects the fields, so treating a missing
+ * block as unrestricted would offer a render the peer answers with a 400. Same
+ * fail-closed rule the queue-capacity fields follow.
+ *
+ * Mirrors the server's `inputAssetRejection`
+ * (`server/services/federatedMedia/inputAssets.js`) — display only; the route
+ * re-checks and the provider re-checks again at admission.
+ *
+ * @param {object|null} capability - an entry from `federatedMediaModelsForPeer`
+ * @param {string} role
+ * @returns {boolean}
+ */
+export function peerModelAcceptsInput(capability, role) {
+  const roles = capability?.inputAssets?.roles;
+  return Array.isArray(roles) && roles.includes(role);
+}
+
+/**
+ * Can this model render nothing at all without a conditioning image? True for
+ * an edit-only image model or a video model with no text-to-video mode — both
+ * are advertisable only because conditioning now crosses, so a text-only
+ * submission to one is refused rather than queued.
+ *
+ * @param {object|null} capability
+ * @returns {boolean}
+ */
+export const peerModelRequiresInput = (capability) => capability?.inputAssets?.required === true;

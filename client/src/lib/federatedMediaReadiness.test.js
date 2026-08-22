@@ -5,6 +5,8 @@ import {
   federatedMediaModelKey,
   federatedMediaModelsForPeer,
   peerMediaProviderConfig,
+  peerModelAcceptsInput,
+  peerModelRequiresInput,
   resolvePeerMediaReadiness,
   summarizePeerMediaQueue,
 } from './federatedMediaReadiness.js';
@@ -336,5 +338,39 @@ describe('federatedMediaModelsForPeer', () => {
   it('returns one shared array identity when there is nothing to offer', () => {
     const empty = federatedMediaModelsForPeer(null, 'audio');
     expect(federatedMediaModelsForPeer(withCapabilities([], []), 'audio')).toBe(empty);
+  });
+});
+
+// ADR docs/decisions/2026-08-22-federated-media-input-assets.md rule 1. The
+// fail-closed reading is the whole point: a provider built before that ADR
+// advertises no `inputAssets` block AND rejects the fields, so an absent block
+// read as "unrestricted" would offer a render the peer answers with a 400.
+describe('peerModelAcceptsInput / peerModelRequiresInput', () => {
+  const withInput = (inputAssets) => ({ modelName: 'Example', inputAssets });
+
+  it('accepts only the roles the capability actually advertises', () => {
+    const model = withInput({ roles: ['initImage'], required: false, maxCount: 8 });
+    expect(peerModelAcceptsInput(model, 'initImage')).toBe(true);
+    expect(peerModelAcceptsInput(model, 'referenceImages')).toBe(false);
+  });
+
+  it.each([
+    ['an absent block (a provider predating the ADR)', undefined],
+    ['an explicit null', null],
+    ['a block with no roles array', { required: false }],
+    ['a malformed roles value', { roles: 'initImage' }],
+  ])('reads %s as accepting nothing', (_name, inputAssets) => {
+    expect(peerModelAcceptsInput(withInput(inputAssets), 'initImage')).toBe(false);
+    expect(peerModelRequiresInput(withInput(inputAssets))).toBe(false);
+  });
+
+  it('reports a model that cannot render without conditioning', () => {
+    expect(peerModelRequiresInput(withInput({ roles: ['initImage'], required: true }))).toBe(true);
+    expect(peerModelRequiresInput(withInput({ roles: ['initImage'], required: false }))).toBe(false);
+  });
+
+  it('tolerates a null capability rather than throwing on an unpicked model', () => {
+    expect(peerModelAcceptsInput(null, 'initImage')).toBe(false);
+    expect(peerModelRequiresInput(null)).toBe(false);
   });
 });

@@ -124,17 +124,28 @@ queued media-job response, with `mode: null` (no local backend is rendering
 it) and the peer id echoed back as `mediaProviderPeerId`. Omitting
 `mediaProviderPeerId` keeps the existing local/cloud behavior byte for byte.
 
-Wire v1 is **text-to-image and text-to-video only**. A federated request that
-carries an init image, reference images, keyframes, a clip to extend, IC-LoRA
-references, LoRA weights, a chained (multi-chunk) render, or a non-`text` render
-mode is rejected with `400 MEDIA_PROVIDER_INPUT_UNSUPPORTED` naming what has to
-go. That is deliberate: silently dropping the source image a user pinned would
-return a plausible render of the wrong thing. Input-asset transfer is a later
-slice.
+**Conditioning images cross; models and chain state do not.** An init image,
+reference images, and a video start/end frame are what the render is *of*, so
+they travel with it (ADR [conditioning crosses to an allowlisted
+peer](./decisions/2026-08-22-federated-media-input-assets.md) rule 1) — see
+[Upload a conditioning image](#upload-a-conditioning-image) for the mechanism.
+Everything else is still rejected with `400 MEDIA_PROVIDER_INPUT_UNSUPPORTED`
+naming what has to go, and each refusal is a recorded decision rather than a
+missing feature:
+
+| Input | Crosses? | Why |
+|---|---|---|
+| init image, reference images, start/end frame | **yes**, when the model advertises the role | conditioning — the render is defined by it |
+| LoRA weights | no | a LoRA is a **model**; remote model installation is out of scope (rule 3) |
+| keyframes, clip to extend, IC-LoRA refs, chained chunks | no | multi-step **chain state** this machine sequences (rule 4) |
+| an uploaded (not gallery-saved) video frame | no | still in the multipart temp dir when the federated branch runs — save it to the gallery first |
+
+Refusing beats dropping throughout: silently discarding the source image a user
+pinned returns a plausible render of the wrong thing.
 
 Unlike audio, image and video prompts cross as submitted rather than being
 re-rendered from a fixed vocabulary. Why that is not a hole in the "no PII on
-federation" rule, what stays absolutely prompt-free, and what a future standing
+federation" rule, what stays absolutely prompt-free, and what a standing
 (unattended) route may not do are all decided in ADR
 [federated visual prompts](./decisions/2026-08-20-federated-visual-prompts.md).
 
@@ -163,11 +174,14 @@ Two consequences worth knowing:
   and refuses locally rather than letting the peer reject work the user
   already committed to.
 
-Because wire v1 is text-to-image / text-to-video only, a form holding an init
-image, reference images, keyframes, a clip to extend, IC-LoRA references, LoRA
-weights, chained chunks, or a non-`text` mode blocks Generate and names what
-has to be cleared. Nothing is cleared for you: the inputs stay filled, so
-switching the target back to `This instance` renders exactly what was set up.
+A form holding an input the **selected peer model** cannot take blocks Generate
+and names what has to be cleared — per role, against that model's advertised
+`inputAssets`, with an absent block reading as "accepts nothing" so a peer on an
+older build is never offered a render it would reject. The mirror case is
+handled too: a model that can only render FROM an image (an edit-only image
+model, a video model with no text mode) blocks until one is supplied. Nothing is
+cleared for you: the inputs stay filled, so switching the target back to
+`This instance` renders exactly what was set up.
 
 ### Video frame and canvas constraint negotiation
 
@@ -420,6 +434,67 @@ lane as idle that the peer never reported on.
 
 Status never includes prompts, lyrics, credentials, local paths, commission records, or private creative metadata.
 
+### Upload a conditioning image
+
+Conditioning bytes go up **before** the job that references them, through their
+own endpoint — never inline in a job body, and never as a filesystem path (ADR
+[conditioning crosses to an allowlisted peer](./decisions/2026-08-22-federated-media-input-assets.md)
+rule 1):
+
+```
+POST /api/federation/media/v1/assets
+Content-Type: image/png            # png | jpeg | webp
+X-Content-SHA256: <hex digest of the body>
+<raw bytes>
+```
+
+The provider hashes the body itself and refuses a mismatch
+(`MEDIA_PROVIDER_ASSET_INTEGRITY`) — a truncated transfer must fail rather than
+render something subtly different. It also sniffs the magic bytes and refuses a
+body that contradicts its declared type, because the header is the caller's word
+for what this is while the bytes are what the generator will open. The reply is
+a receipt:
+
+```json
+{
+  "wireVersion": 1,
+  "assetId": "1f0c8a3b9d2e4a67-<sha256>",
+  "sha256": "<sha256>",
+  "sizeBytes": 284119,
+  "mimeType": "image/png",
+  "expiresAt": "2026-08-22T18:00:00.000Z"
+}
+```
+
+A job body then names `{ "assetId": "…" }` in `initImage`, `referenceImages`,
+`sourceImage`, or `lastImage` — only roles the capability's `inputAssets.roles`
+advertises, and at most `inputAssets.maxCount` of them. An id that is not staged
+(expired, swept, or never uploaded) fails the submission with
+`410 MEDIA_PROVIDER_ASSET_NOT_FOUND` **before** the job is queued, so the
+consumer can re-upload and retry rather than watching a job die minutes later.
+
+Four properties are worth knowing:
+
+- **Content-addressed.** The id embeds the digest, so re-sending identical bytes
+  returns the same id and refreshes the expiry. That is what makes a reconcile
+  after a restart one transfer rather than a duplicated render.
+- **Caller-scoped.** The id's first half is derived from the *authenticated*
+  caller — re-derived on every reference, never parsed from the request — so one
+  peer cannot reach another's staged asset even given its exact id. Absent,
+  expired, and someone else's all answer the same 404.
+- **TTL-bounded.** Staged bytes live 6 hours under `data/federated-media-inbox/`,
+  swept opportunistically on each admission. That directory sits outside every
+  media root the gallery and the sync layer read, and is excluded from backups —
+  it holds another machine's data, not this install's.
+- **Consumers persist paths, not ids.** A queued job's marker records the LOCAL
+  source paths; ids are obtained immediately before each submission. An id names
+  a slot in a TTL-swept area, so a marker holding one would reconcile into a
+  confident reference to bytes that are gone.
+
+A provider that predates this ADR omits `inputAssets` from its capabilities
+entirely, and **absence reads as unsupported** — a consumer refuses to send
+conditioning rather than discovering at submit time that the peer rejects it.
+
 ### Submit a job
 
 Send a unique, stable `Idempotency-Key` header with the canonical instrumental request rendered by the consumer:
@@ -468,7 +543,7 @@ A remote job's conditioning — the prompt, and an audio job's lyrics — is per
 
 ## Current boundary
 
-Wire v1 carries lyrical and instrumental audio, text-to-image, and text-to-video. Interactive remote selection is exposed on the Image Gen, Video Gen and Music Studio surfaces; unattended work routes through **Instances → Unattended render routing**.
+Wire v1 carries lyrical and instrumental audio, and image/video renders both text-only and conditioned on an init, reference, or start/end frame. Interactive remote selection is exposed on the Image Gen, Video Gen and Music Studio surfaces; unattended work routes through **Instances → Unattended render routing**.
 
 The boundary's remaining edges are **decisions, not gaps** — see ADR [conditioning crosses to an allowlisted peer](decisions/2026-08-22-federated-media-input-assets.md):
 
@@ -476,4 +551,6 @@ The boundary's remaining edges are **decisions, not gaps** — see ADR [conditio
 - **Multi-step chain state never crosses** (rule 4) — a source video to extend, chained chunks, IC-LoRA references. The consumer sequences the chain; a provider holding one step of it cannot see the rest.
 - **No automatic fairness or failover** (rule 5). A job that silently re-targets another peer has changed both where the data went and which model produced the result.
 
-Each is refused with `400 MEDIA_PROVIDER_INPUT_UNSUPPORTED` naming what has to go.
+- **No fixed-vocabulary "visual profile"** (rule 6). Any enum small enough to be privacy-safe cannot express what the user asked for; it would not protect the prompt so much as discard it.
+
+The first two are refused with `400 MEDIA_PROVIDER_INPUT_UNSUPPORTED` naming what has to go. Changing any of them needs a new ADR saying what changed about the reason — not a reading of the existing one.

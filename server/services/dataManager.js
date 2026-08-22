@@ -65,6 +65,13 @@ export const CATEGORIES = {
   'db-dumps': { label: 'DB Dumps', description: 'PostgreSQL database backups', archivable: true, deletable: true, purgeScope: 'category' },
   'digital-twin': { label: 'Digital Twin', description: 'Identity, goals, character data', archivable: true, deletable: false },
   'fableloom': { label: 'FableLoom', description: 'Branching-narrative records (file mirror of the Postgres store)', archivable: true, deletable: false },
+  // Another machine's conditioning images, staged for one federated render and
+  // swept on a TTL (#4348). Not archivable for the same reason it is excluded
+  // from backups: none of it is this install's data, and a restored entry is
+  // either already expired or already rendered. Purgeable as a category —
+  // deleting a staged asset only forces the peer that owns it to re-upload,
+  // which is one transfer, not lost work.
+  'federated-media-inbox': { label: 'Federated Media Inbox', description: 'Source images peers uploaded for federated renders — expire automatically, safe to purge', archivable: false, deletable: true, purgeScope: 'category' },
   'games': { label: 'Games', description: 'Game project records and assets', archivable: true, deletable: false },
   'health': { label: 'Apple Health', description: 'Daily health JSON snapshots', archivable: true, deletable: false },
   'image-clean-tmp': { label: 'Image Cleaner Scratch', description: 'Ephemeral working files for Image Cleaner renders — swept automatically, safe to purge when no render is in flight', archivable: false, deletable: true, purgeScope: 'category', busyCheck: imageCleanTmpBusy },

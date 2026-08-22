@@ -18,11 +18,15 @@ import { findCachedRepoFiles, inspectModelCache } from '../lib/hfCache.js';
 import { getImageModels, getVideoModels, isEditOnly, isFlux2, repoForModel } from '../lib/mediaModels.js';
 import { isMiniMaxH3Runtime, usesDiffusersRunner } from '../lib/runners.js';
 import {
+  FEDERATED_MEDIA_ASSET_MAX_BYTES,
+  FEDERATED_MEDIA_ASSET_MAX_COUNT,
+  FEDERATED_MEDIA_ASSET_MIME_TYPES,
   FEDERATED_MEDIA_RESULT_EXTENSION,
   FEDERATED_MEDIA_STALE_AFTER_MS,
   FEDERATED_MEDIA_WIRE_VERSION,
   KNOWN_MEDIA_KINDS,
 } from '../lib/federatedMediaWire.js';
+import { findFederatedMediaAsset, sweepFederatedMediaAssets } from './federatedMedia/assetStore.js';
 import { getSettings } from './settings.js';
 import {
   cancelJob,
@@ -72,17 +76,167 @@ const requiresConfiguredPython = (kind, model) => {
   return false;
 };
 
-// The federated wire intentionally carries no source image, keyframes, or
-// semantic video mode. Do not advertise a catalog model that cannot render a
-// text-only request through this contract; otherwise the provider accepts the
-// job, persists it, and only rejects it after a worker starts.
-const supportsFederatedInput = (kind, model) => {
-  if (kind === 'image') return !isEditOnly(model);
+/**
+ * Which conditioning slots this model can actually fill, and whether it can
+ * render at all without one (ADR
+ * docs/decisions/2026-08-22-federated-media-input-assets.md rule 1).
+ *
+ * Derived from what the LOCAL RUNNER accepts, not from a wish list: only the
+ * FLUX.2 branch of imageGen/local.js passes `--reference-image`, and a video
+ * model's start/end frame slots follow its declared `supportedModes`. Offering
+ * a role the runner would drop is how a render silently comes back
+ * unconditioned.
+ *
+ * @returns {{roles: string[], required: boolean}|null} `null` when this model
+ *   takes no conditioning at all.
+ */
+function federatedInputProfile(kind, model) {
+  if (!model) return null;
+  if (kind === 'image') {
+    return {
+      roles: isFlux2(model) ? ['initImage', 'referenceImages'] : ['initImage'],
+      // An edit-only model has nothing to edit without one.
+      required: isEditOnly(model),
+    };
+  }
   if (kind === 'video') {
-    return !Array.isArray(model?.supportedModes) || model.supportedModes.includes('text');
+    // No declared modes is the historical text-only assumption, not "all modes".
+    const modes = Array.isArray(model.supportedModes) ? model.supportedModes : null;
+    if (!modes) return null;
+    const roles = [];
+    if (modes.includes('image') || modes.includes('fflf')) roles.push('sourceImage');
+    if (modes.includes('fflf')) roles.push('lastImage');
+    if (!roles.length) return null;
+    return { roles, required: !modes.includes('text') };
+  }
+  return null;
+}
+
+// Do not advertise a catalog model this contract cannot drive; otherwise the
+// provider accepts the job, persists it, and only rejects it after a worker
+// starts. Since conditioning images cross, "can render text-only" is no longer
+// the bar — a model that needs an init image is advertisable, carrying
+// `inputAssets.required` so a consumer knows to send one. An older consumer
+// blind to that field submits text-only and gets a typed
+// MEDIA_PROVIDER_INPUT_REQUIRED at admission rather than a stalled job.
+const supportsFederatedInput = (kind, model) => {
+  if (kind === 'image') return !isEditOnly(model) || !!federatedInputProfile(kind, model);
+  if (kind === 'video') {
+    const modes = model?.supportedModes;
+    if (!Array.isArray(modes) || modes.includes('text')) return true;
+    return !!federatedInputProfile(kind, model);
   }
   return true;
 };
+
+// The capability's input-asset block. Limits only — never a filename, digest, or
+// anything derived from a prompt (ADR 2026-08-20 rule 3 still governs status).
+const federatedInputAssetsBlock = (kind, model) => {
+  const profile = federatedInputProfile(kind, model);
+  if (!profile) return null;
+  return {
+    maxBytes: FEDERATED_MEDIA_ASSET_MAX_BYTES,
+    maxCount: FEDERATED_MEDIA_ASSET_MAX_COUNT,
+    mimeTypes: [...FEDERATED_MEDIA_ASSET_MIME_TYPES],
+    roles: profile.roles,
+    required: profile.required,
+  };
+};
+
+// Which submission field feeds which slot, per kind. One table so the
+// capability's advertised `roles`, this admission check, and the local-runner
+// param names cannot drift into disagreeing about what a role means.
+const INPUT_ASSET_FIELDS = Object.freeze({
+  image: [
+    { role: 'initImage', field: 'initImage', param: 'initImagePath', many: false },
+    { role: 'referenceImages', field: 'referenceImages', param: 'referenceImagePaths', many: true },
+  ],
+  video: [
+    { role: 'sourceImage', field: 'sourceImage', param: 'sourceImagePath', many: false },
+    { role: 'lastImage', field: 'lastImage', param: 'lastImagePath', many: false },
+  ],
+});
+
+/**
+ * Turn a submission's asset REFERENCES into local paths, refusing anything this
+ * capability did not advertise (ADR
+ * docs/decisions/2026-08-22-federated-media-input-assets.md rule 1).
+ *
+ * Resolution happens at admission rather than at render time on purpose: an
+ * expired or never-uploaded asset is a re-upload the consumer can act on right
+ * now, whereas discovering it when a worker starts leaves a queued job that
+ * fails minutes later with the consumer no longer watching.
+ *
+ * @returns {Promise<object>} local generator params for the resolved assets
+ */
+async function resolveSubmissionInputAssets({ callerId, input, capability }) {
+  const fields = INPUT_ASSET_FIELDS[input.kind] || [];
+  const requested = fields
+    .map((entry) => ({
+      ...entry,
+      refs: entry.many
+        ? (Array.isArray(input[entry.field]) ? input[entry.field] : [])
+        : (input[entry.field] ? [input[entry.field]] : []),
+    }))
+    .filter((entry) => entry.refs.length > 0);
+  const limits = capability.inputAssets;
+
+  if (requested.length === 0) {
+    if (limits?.required) {
+      unavailable(
+        'Requested model renders only from a conditioning image; none was supplied',
+        'MEDIA_PROVIDER_INPUT_REQUIRED',
+        400,
+        { roles: limits.roles },
+      );
+    }
+    return {};
+  }
+  if (!limits) {
+    unavailable(
+      'Requested model does not accept conditioning images',
+      'MEDIA_PROVIDER_INPUT_UNSUPPORTED',
+      400,
+    );
+  }
+  const unsupportedRoles = requested.filter((entry) => !limits.roles.includes(entry.role));
+  if (unsupportedRoles.length) {
+    unavailable(
+      `Requested model does not accept ${unsupportedRoles.map((entry) => entry.role).join(' or ')}`,
+      'MEDIA_PROVIDER_INPUT_UNSUPPORTED',
+      400,
+      { roles: limits.roles },
+    );
+  }
+  const total = requested.reduce((sum, entry) => sum + entry.refs.length, 0);
+  if (total > limits.maxCount) {
+    unavailable('Too many conditioning images for one job', 'MEDIA_PROVIDER_INPUT_UNSUPPORTED', 400, {
+      maxCount: limits.maxCount,
+    });
+  }
+
+  const params = {};
+  for (const entry of requested) {
+    const paths = [];
+    for (const ref of entry.refs) {
+      const found = await findFederatedMediaAsset(callerId, ref.assetId);
+      if (!found) {
+        // 410, not 404: the id was well-formed and caller-scoped, so "gone"
+        // (expired, or swept) is the actionable reading — re-upload and retry.
+        // The upload is content-addressed, so the retry keeps the same id.
+        unavailable(
+          'A referenced conditioning image is no longer staged on the provider',
+          'MEDIA_PROVIDER_ASSET_NOT_FOUND',
+          410,
+          { assetId: ref.assetId },
+        );
+      }
+      paths.push(found.path);
+    }
+    params[entry.param] = entry.many ? paths : paths[0];
+  }
+  return params;
+}
 
 const requiredModelCacheGroups = (model) => {
   const groups = [];
@@ -222,6 +376,7 @@ async function configuredAudioCapabilities(config) {
       defaultDurationSec: engine?.defaultDurationSec ?? null,
       lyrics: engine?.lyrics === true,
       acceptsLyrics: engine?.lyrics === true,
+      inputAssets: null,
       autoDuration: engine?.autoDuration === true,
       frameStride: null,
       maxNumFrames: null,
@@ -312,6 +467,7 @@ async function localGeneratorCapabilities(kind, pythonPath, { models, configured
       defaultDurationSec: null,
       lyrics: false,
       acceptsLyrics: false,
+      inputAssets: federatedInputAssetsBlock(kind, model),
       autoDuration: false,
       frameStride,
       maxNumFrames: Number.isFinite(maxNumFrames) && maxNumFrames > 0 ? maxNumFrames : null,
@@ -646,6 +802,14 @@ export async function submitFederatedMediaJob({ callerId, config, input, idempot
       });
     }
 
+    const inputAssetParams = await resolveSubmissionInputAssets({ callerId, input, capability });
+    // Opportunistic, and only once a submission has actually arrived: a provider
+    // nobody sends work to has nothing to sweep, and one that does gets swept on
+    // every admission. Never allowed to fail the job it rode in on.
+    sweepFederatedMediaAssets().catch((error) => {
+      console.error(`❌ Federated media inbox sweep failed: ${error.message}`);
+    });
+
     const federatedMedia = {
       wireVersion: FEDERATED_MEDIA_WIRE_VERSION,
       callerInstanceId: callerId,
@@ -655,7 +819,7 @@ export async function submitFederatedMediaJob({ callerId, config, input, idempot
     const queued = enqueueJob({
       kind: input.kind,
       owner: jobOwner(callerId),
-      params: buildQueueParams(input, capability, federatedMedia),
+      params: buildQueueParams(input, capability, federatedMedia, inputAssetParams),
     });
     return {
       replayed: false,
@@ -672,7 +836,7 @@ export async function submitFederatedMediaJob({ callerId, config, input, idempot
 // image/video params keeps the queue's dispatcher on the local runner (see
 // getGenModuleForJob in mediaJobQueue/index.js): only the cloud-CLI modes
 // (codex/grok/agy) need an explicit mode, and those aren't federatable here.
-function buildQueueParams(input, capability, federatedMedia) {
+function buildQueueParams(input, capability, federatedMedia, inputAssetParams = {}) {
   if (input.kind === 'audio') {
     return {
       prompt: input.prompt,
@@ -697,7 +861,14 @@ function buildQueueParams(input, capability, federatedMedia) {
     federatedMedia,
   };
   if (input.kind === 'image') {
-    return { ...shared, ...(input.guidance !== undefined ? { guidance: input.guidance } : {}) };
+    return {
+      ...shared,
+      ...(input.guidance !== undefined ? { guidance: input.guidance } : {}),
+      ...inputAssetParams,
+      ...(input.initImageStrength !== undefined && inputAssetParams.initImagePath
+        ? { initImageStrength: input.initImageStrength }
+        : {}),
+    };
   }
   // video — videoGen/local.js's generateVideo takes `guidanceScale`, not
   // `guidance` (image's field name).
@@ -706,6 +877,17 @@ function buildQueueParams(input, capability, federatedMedia) {
     ...(input.numFrames !== undefined ? { numFrames: input.numFrames } : {}),
     ...(input.fps !== undefined ? { fps: input.fps } : {}),
     ...(input.guidance !== undefined ? { guidanceScale: input.guidance } : {}),
+    ...inputAssetParams,
+    // `mode` is normally omitted so the queue's dispatcher keeps this on the
+    // LOCAL runner (only the cloud-CLI modes need an explicit one). A
+    // conditioned render must name its pipeline anyway: generateVideo infers
+    // `image` from a bare sourceImagePath, but first-last-frame has to be
+    // explicit or the end frame is silently dropped and the clip comes back as
+    // a plain image-to-video. 'image'/'fflf' are pipeline semantics, not
+    // backend tokens, so neither diverts the dispatcher off the local runner.
+    ...(inputAssetParams.lastImagePath
+      ? { mode: 'fflf' }
+      : inputAssetParams.sourceImagePath ? { mode: 'image' } : {}),
   };
 }
 

@@ -31,6 +31,7 @@ import { getSettingsWithStatus } from '../settings.js';
 import { isTailnetPeer } from '../../lib/tailnetPeer.js';
 import { CLOUD_VIDEO_GEN_MODES, VIDEO_GEN_MODES } from '../videoGen/modes.js';
 import { ROUTABLE_MEDIA_KINDS, normalizeMediaRoutingConfig } from './routingPolicy.js';
+import { collectRemoteInputAssets } from './inputAssets.js';
 
 // The route's shape and its save-time policy live in routingPolicy.js; this
 // module owns only what happens at ENQUEUE time. Re-exported so existing
@@ -39,18 +40,20 @@ export { ROUTABLE_MEDIA_KINDS, normalizeMediaRoutingConfig };
 
 const trimmed = (value) => (typeof value === 'string' ? value.trim() : '');
 
-// Params that ask for conditioning wire v1 cannot carry. The interactive routes
-// reject these outright rather than dropping them, because "silently dropping
-// the source image a user pinned returns a plausible render of the wrong
-// thing" — and that reasoning is STRONGER here, not weaker: an unattended run
-// has nobody watching to notice the shot came back unconditioned. Keyed by the
-// param a planner actually writes, valued by the noun the error names.
+// Params the wire still cannot carry, each for a recorded reason rather than a
+// missing feature: LoRA weights are a MODEL (ADR
+// docs/decisions/2026-08-22-federated-media-input-assets.md rule 3), and
+// IC-LoRA references / keyframes / a video to extend are multi-step CHAIN STATE
+// this machine sequences (rule 4).
+//
+// Refusing beats dropping, because "silently dropping the source image a user
+// pinned returns a plausible render of the wrong thing" — and that reasoning is
+// STRONGER here, not weaker: an unattended run has nobody watching to notice the
+// shot came back unconditioned. Init/reference/start/end frames are absent from
+// this map on purpose: they are single-render conditioning and now cross under
+// rule 1. Keyed by the param a planner actually writes, valued by the noun the
+// error names.
 const UNSUPPORTED_CONDITIONING = Object.freeze({
-  initImagePath: 'an init image',
-  sourceImagePath: 'a source image',
-  sourceImageFile: 'a source image',
-  lastImageFile: 'an end frame',
-  referenceImagePaths: 'reference images',
   icReferenceVideoIds: 'IC-LoRA references',
   icReferenceImageFiles: 'IC-LoRA references',
   keyframes: 'keyframes',
@@ -182,6 +185,15 @@ export async function resolveDefaultMediaRoute({ kind, params }) {
     );
   }
   assertRoutableConditioning(kind, params);
+  // Single-render conditioning DOES cross (rule 1). Collected here so the
+  // unattended lane sends exactly what the interactive routes send — same asset
+  // upload, same capability gate in prepareRemoteMediaJob, same marker shape.
+  // A planner writes image conditioning as `initImagePath`/`referenceImagePaths`
+  // and video conditioning as `sourceImagePath`/`sourceImageFile`, so both
+  // spellings feed the one role.
+  const inputAssets = collectRemoteInputAssets(kind === 'image'
+    ? { initImage: params?.initImagePath, referenceImages: params?.referenceImagePaths }
+    : { sourceImage: params?.sourceImagePath || params?.sourceImageFile, lastImage: params?.lastImageFile });
   const request = buildFederatedMediaRequest({
     kind,
     engine: route.engine,
@@ -198,6 +210,7 @@ export async function resolveDefaultMediaRoute({ kind, params }) {
     peerId: route.peerId,
     kind,
     request,
+    inputAssets,
   });
   // ADR docs/decisions/2026-08-20-federated-visual-prompts.md, rule 5: a
   // STANDING route must refuse a non-tailnet peer. It exports every future

@@ -69,6 +69,7 @@ import { saveUploadedGalleryVideo } from '../services/videoUpload.js';
 import { JSON_BODY_LIMIT_BYTES } from '../lib/uploadLimits.js';
 import { createInstallLogger } from '../lib/installLogger.js';
 import { prepareRemoteMediaJob } from '../services/federatedMedia/remoteSubmission.js';
+import { collectRemoteInputAssets } from '../services/federatedMedia/inputAssets.js';
 import { effectiveJobPrompt } from '../lib/federatedMediaWire.js';
 import { isRemoteMediaJob } from '../services/mediaJobQueue/remoteMediaJob.js';
 import { buildFederatedMediaRequest } from '../lib/federatedMediaRequest.js';
@@ -1016,20 +1017,25 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
   // locally. Handled BEFORE prepareVideoGenParams, which resolves this
   // machine's backend and stages uploads a remote render can never use.
   if (body.mediaProviderPeerId) {
-    // The federated wire is text-to-video only. Every input below changes what
-    // the clip actually is, and none of it can cross — refuse rather than
-    // render something the user didn't ask for.
+    // Start and end FRAMES cross as conditioning (ADR
+    // docs/decisions/2026-08-22-federated-media-input-assets.md rule 1) — but
+    // only when they name an existing gallery image. A multipart upload has been
+    // staged to the OS temp dir by the parser and is not resolvable through the
+    // shared image roots the asset stager reads, so it stays refused here rather
+    // than being silently dropped.
+    //
+    // Everything else below is a decision, not a gap. Model weights are a MODEL
+    // (rule 3), and a video to extend / chained chunks / IC-LoRA references are
+    // multi-step CHAIN STATE whose sequence lives on this machine (rule 4) — a
+    // provider holding one step of a chain cannot see the rest of it.
     const unsupported = [
       ['uploaded files', Object.keys(uploads).length],
-      ['a source image', body.sourceImageFile],
-      ['an end frame', body.lastImageFile],
       ['keyframes', body.keyframes?.length],
       ['a source video to extend', body.extendFromVideoId],
       ['IC-LoRA references', body.icReferenceVideoIds?.length || body.icReferenceImageFiles?.length],
       ['LoRA weights', body.loraFilenames?.length],
       ['chained chunks', body.chunks > 1],
       ['the Grok backend', body.backend === 'grok'],
-      ['a non-text render mode', body.mode !== undefined && body.mode !== 'text'],
       // A director-board render is image-to-video by construction (its scene
       // reference frame conditions the shot), and its project/scene ids are
       // validated inside prepareVideoGenParams, which this branch bypasses.
@@ -1038,7 +1044,34 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
     if (unsupported.length) {
       await cleanupMultipartTemp(uploads);
       throw new ServerError(
-        `A federated media provider renders text-to-video only — this request uses ${unsupported.join(' and ')}. Render locally instead.`,
+        `A federated media provider cannot render this clip — it uses ${unsupported.join(' and ')}. Render locally instead.`,
+        { status: 400, code: 'MEDIA_PROVIDER_INPUT_UNSUPPORTED' },
+      );
+    }
+    // An end frame with no start frame would render a plain text-to-video clip
+    // and silently discard the frame the caller supplied. The wire schema
+    // refuses the same shape, but it never sees this one: a conditioning image
+    // reaches the request as an asset id resolved at submit time, so by the time
+    // the schema runs the field is simply absent. Refuse here.
+    if (body.lastImageFile && !body.sourceImageFile) {
+      await cleanupMultipartTemp(uploads);
+      throw new ServerError(
+        'A federated first-last-frame render needs both ends — this request supplies only an end frame. Add a start frame, or render locally.',
+        { status: 400, code: 'MEDIA_PROVIDER_INPUT_UNSUPPORTED' },
+      );
+    }
+    const inputAssets = collectRemoteInputAssets({
+      sourceImage: body.sourceImageFile,
+      lastImage: body.lastImageFile,
+    });
+    // `mode` is resolved by the peer from the conditioning it receives, so a
+    // caller-supplied pipeline semantic is redundant at best. Refuse a mode that
+    // contradicts what was actually sent instead of rendering the other one.
+    const impliedMode = body.lastImageFile ? 'fflf' : body.sourceImageFile ? 'image' : 'text';
+    if (body.mode !== undefined && body.mode !== impliedMode && body.mode !== 'local') {
+      await cleanupMultipartTemp(uploads);
+      throw new ServerError(
+        `A federated render mode must match its conditioning — this request asks for '${body.mode}' but supplies ${impliedMode === 'text' ? 'no frames' : `a ${impliedMode} frame set`}. Render locally instead.`,
         { status: 400, code: 'MEDIA_PROVIDER_INPUT_UNSUPPORTED' },
       );
     }
@@ -1059,6 +1092,7 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
       peerId: body.mediaProviderPeerId,
       kind: 'video',
       request,
+      inputAssets,
     });
     // Prompt and dials ride only inside the versioned marker: enqueueJob
     // normalizes any job carrying one into the downgrade-safe shape, so a build

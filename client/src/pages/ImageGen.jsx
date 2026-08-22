@@ -43,6 +43,7 @@ import {
 import { composeStyledPrompt } from '../lib/composeStyledPrompt';
 import { isCloudCliMode, deriveAvailableBackends, AGY_IMAGEGEN_DEFAULT_MODEL, IMAGE_GEN_MODE, cloudPromptRequired, isI2iCapableMode, pickI2iMode, modeLabel, referenceSlotsFor, supportsReferenceStrength } from '../lib/imageGenBackends';
 import { clampImageDimensions, clampImageEdge } from '../lib/imageGenResolutions';
+import { peerModelAcceptsInput, peerModelRequiresInput } from '../lib/federatedMediaReadiness.js';
 import { DEFAULT_NEGATIVE_PROMPT } from '../lib/imageGenDefaults';
 import { resolveCleanersFromConfig } from '../lib/imageCleaners';
 import toast from '../components/ui/Toast';
@@ -677,23 +678,37 @@ export default function ImageGen() {
     () => referenceImages.slice(referenceSlotCount).filter((s) => s.file != null).length,
     [referenceImages, referenceSlotCount],
   );
-  // What this form is holding that the federated wire cannot carry. The server
-  // refuses these outright (MEDIA_PROVIDER_INPUT_UNSUPPORTED) rather than
+  // What this form is holding that the SELECTED PEER MODEL cannot take. The
+  // server refuses these outright (MEDIA_PROVIDER_INPUT_UNSUPPORTED) rather than
   // dropping them, so the button says so up front instead of letting the user
   // commit to a render that silently loses its source image. Nothing is cleared
   // on selecting a peer — the pickers stay live so the user can empty them, and
   // still has them intact after switching back to This instance.
+  //
+  // Conditioning images are no longer blanket-refused (ADR
+  // docs/decisions/2026-08-22-federated-media-input-assets.md rule 1): they
+  // cross when the model advertises the role, so the check is per-role and
+  // fails closed on a provider too old to advertise anything. LoRA weights stay
+  // refused on every peer — a LoRA is a MODEL, not conditioning (rule 3).
   const remoteUnsupportedInputs = useMemo(() => {
     if (!remoteTarget.isRemote) return null;
+    const model = remoteTarget.model;
     const present = [
-      ['an init image', initImage.source != null],
-      ['reference images', populatedRefs.length > 0],
+      ['an init image', initImage.source != null && !peerModelAcceptsInput(model, 'initImage')],
+      ['reference images', populatedRefs.length > 0 && !peerModelAcceptsInput(model, 'referenceImages')],
       ['LoRA weights', selectedLoras.length > 0],
     ].filter(([, set]) => set).map(([label]) => label);
-    return present.length
-      ? `A federated provider renders text-to-image only — clear ${present.join(' and ')} to render on this peer.`
-      : null;
-  }, [remoteTarget.isRemote, initImage.source, populatedRefs.length, selectedLoras.length]);
+    if (present.length) {
+      return `The selected peer model cannot take ${present.join(' and ')} — clear it to render on this peer.`;
+    }
+    // The mirror case: a model that renders ONLY from a source image. Advertised
+    // at all only because conditioning crosses now, and a text-only submission
+    // to one is refused rather than queued.
+    if (peerModelRequiresInput(model) && initImage.source == null) {
+      return `${model?.modelName || 'The selected peer model'} renders only from a source image — add an init image, or pick a text-to-image model.`;
+    }
+    return null;
+  }, [remoteTarget.isRemote, remoteTarget.model, initImage.source, populatedRefs.length, selectedLoras.length]);
   // One reading for the submit button and the picker caption alike.
   const remoteBlocked = remoteTarget.isRemote
     ? (remoteTarget.blockedReason || remoteUnsupportedInputs)

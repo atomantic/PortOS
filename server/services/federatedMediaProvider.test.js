@@ -522,7 +522,13 @@ describe('federated media provider — image/video kinds', () => {
     });
   });
 
-  it('does not advertise image-edit or image-only video models for this text-only wire', async () => {
+  // These two models used to be hidden entirely: neither can render text-only,
+  // and the wire carried no conditioning for them to render FROM. Now that
+  // conditioning images cross (ADR
+  // docs/decisions/2026-08-22-federated-media-input-assets.md rule 1) they are
+  // advertisable — but only with `inputAssets.required`, which is what tells a
+  // consumer the model is unusable without an init/source image.
+  it('advertises input-only image and video models as requiring conditioning', async () => {
     const incompatibleImageConfig = () => ({
       enabled: true, maxQueuedJobs: 2, audioModels: [], videoModels: [],
       imageModels: [{ engine: 'local', modelId: 'edit-only' }],
@@ -533,7 +539,11 @@ describe('federated media provider — image/video kinds', () => {
     }];
     state.cachedRepos = new Set(['example/edit']);
     const imageStatus = await getFederatedMediaProviderStatus(incompatibleImageConfig(), { kinds: ['image'] });
-    expect(imageStatus.capabilities[0]).toMatchObject({ ready: false, unavailableReason: 'unsupported-input' });
+    expect(imageStatus.capabilities[0]).toMatchObject({
+      ready: true,
+      unavailableReason: null,
+      inputAssets: expect.objectContaining({ required: true, roles: ['initImage'] }),
+    });
 
     const incompatibleVideoConfig = () => ({
       enabled: true, maxQueuedJobs: 2, audioModels: [], imageModels: [],
@@ -544,7 +554,70 @@ describe('federated media provider — image/video kinds', () => {
     }];
     state.cachedRepos = new Set(['example/image-only']);
     const videoStatus = await getFederatedMediaProviderStatus(incompatibleVideoConfig(), { kinds: ['video'] });
-    expect(videoStatus.capabilities[0]).toMatchObject({ ready: false, unavailableReason: 'unsupported-input' });
+    expect(videoStatus.capabilities[0]).toMatchObject({
+      ready: true,
+      unavailableReason: null,
+      inputAssets: expect.objectContaining({ required: true, roles: ['sourceImage'] }),
+    });
+  });
+
+  // The other half of that trade: an older consumer cannot read `inputAssets`,
+  // so it will submit text-only against a required-input model. It must get a
+  // typed refusal it can surface, not a queued job that dies when a worker
+  // picks it up minutes later.
+  it('refuses a text-only submission to a model that requires conditioning', async () => {
+    const editOnlyConfig = () => ({
+      enabled: true, maxQueuedJobs: 2, audioModels: [], videoModels: [],
+      imageModels: [{ engine: 'local', modelId: 'edit-only' }],
+    });
+    state.settings = { federation: { mediaProvider: editOnlyConfig() }, imageGen: { local: { pythonPath: '/usr/bin/python3' } } };
+    state.imageModels = [{ id: 'edit-only', name: 'Edit only', repo: 'example/edit', editOnly: true }];
+    state.cachedRepos = new Set(['example/edit']);
+
+    await expect(submitFederatedMediaJob({
+      callerId: 'peer-example',
+      config: editOnlyConfig(),
+      input: { kind: 'image', engine: 'local', modelId: 'edit-only', prompt: 'a lighthouse at dawn' },
+      idempotencyKey: 'commission-edit-1',
+    })).rejects.toMatchObject({ status: 400, code: 'MEDIA_PROVIDER_INPUT_REQUIRED' });
+    expect(enqueueJob).not.toHaveBeenCalled();
+  });
+
+  it('refuses a conditioning role the selected model does not advertise', async () => {
+    state.settings = {
+      federation: { mediaProvider: imageConfig() },
+      imageGen: { local: { pythonPath: '/usr/bin/python3' } },
+    };
+    state.cachedRepos = new Set(['black-forest-labs/FLUX.1-dev']);
+    // FLUX.1-dev is not a FLUX.2 model, so only `initImage` is advertised —
+    // its runner branch never passes reference images through.
+    await expect(submitFederatedMediaJob({
+      callerId: 'peer-example',
+      config: imageConfig(),
+      input: {
+        ...imageInput(),
+        referenceImages: [{ assetId: `${'0'.repeat(16)}-${'a'.repeat(64)}` }],
+      },
+      idempotencyKey: 'commission-refs-1',
+    })).rejects.toMatchObject({ status: 400, code: 'MEDIA_PROVIDER_INPUT_UNSUPPORTED' });
+    expect(enqueueJob).not.toHaveBeenCalled();
+  });
+
+  // 410 rather than 404: the id was well-formed and caller-scoped, so "gone"
+  // is the actionable reading — re-upload (same content, same id) and retry.
+  it('refuses a submission naming an asset that is not staged, without queueing it', async () => {
+    state.settings = {
+      federation: { mediaProvider: imageConfig() },
+      imageGen: { local: { pythonPath: '/usr/bin/python3' } },
+    };
+    state.cachedRepos = new Set(['black-forest-labs/FLUX.1-dev']);
+    await expect(submitFederatedMediaJob({
+      callerId: 'peer-example',
+      config: imageConfig(),
+      input: { ...imageInput(), initImage: { assetId: `${'0'.repeat(16)}-${'a'.repeat(64)}` } },
+      idempotencyKey: 'commission-missing-asset',
+    })).rejects.toMatchObject({ status: 410, code: 'MEDIA_PROVIDER_ASSET_NOT_FOUND' });
+    expect(enqueueJob).not.toHaveBeenCalled();
   });
 
   it('does not report image/video capabilities unless the caller opts into that kind', async () => {

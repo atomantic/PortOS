@@ -18,6 +18,7 @@ import { PATHS, atomicWrite } from '../../lib/fileUtils.js';
 import { FEDERATED_MEDIA_WIRE_VERSION } from '../../lib/federatedMediaWire.js';
 import { federatedMediaImageJobSubmissionSchema } from '../../lib/validation.js';
 import { createRemoteMediaExecutor } from '../federatedMedia/remoteExecutor.js';
+import { applyRemoteInputAssets, remoteInputAssetsSchema } from '../federatedMedia/inputAssets.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 
 const remoteImageMarkerSchema = z.object({
@@ -29,10 +30,20 @@ const remoteImageMarkerSchema = z.object({
   // Optional so a marker already queued by an older build still validates; its
   // absence means "interactive", which is the correct reading of history.
   standingRoute: z.boolean().optional(),
-  // The full wire submission, re-validated on every replay. Persisted queue
-  // state is user-editable, so the body that actually leaves this machine is
-  // the one this schema accepted — not whatever the file happens to contain.
+  // The full wire submission MINUS its conditioning refs, re-validated on every
+  // replay. Persisted queue state is user-editable, so the body that actually
+  // leaves this machine is the one this schema accepted — not whatever the file
+  // happens to contain.
   request: federatedMediaImageJobSubmissionSchema,
+  // LOCAL paths for this render's conditioning images, resolved to provider
+  // asset ids immediately before each submission. Ids are NOT persisted here:
+  // they name slots in the peer's TTL-swept staging area, so a reconcile after a
+  // restart re-stages the same bytes instead of referencing bytes that are gone.
+  // The paths themselves never cross the wire. See federatedMedia/inputAssets.js.
+  //
+  // Optional so a marker queued before this shipped still validates; absent
+  // means the text-only render that build was the only one able to route.
+  inputAssets: remoteInputAssetsSchema.optional(),
 }).passthrough();
 
 const executor = createRemoteMediaExecutor({
@@ -40,7 +51,8 @@ const executor = createRemoteMediaExecutor({
   label: 'image',
   events: imageGenEvents,
   markerSchema: remoteImageMarkerSchema,
-  buildRequest: (marker) => marker.request,
+  buildRequest: (marker, { stageAsset }) =>
+    applyRemoteInputAssets(marker.request, marker.inputAssets, stageAsset),
   // PATHS is read per job (not captured at module load) so a test that swaps
   // the gallery directory still sees its own temp root. The `<jobId>.png`
   // filename is the same shape imageGen/local.js uses, which is what lets the

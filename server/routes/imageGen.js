@@ -43,6 +43,7 @@ import { randomUUID } from 'crypto';
 import { buildUniverseRunTag } from '../services/universeRunTag.js';
 import { getSettings } from '../services/settings.js';
 import { prepareRemoteMediaJob } from '../services/federatedMedia/remoteSubmission.js';
+import { collectRemoteInputAssets } from '../services/federatedMedia/inputAssets.js';
 import { buildFederatedMediaRequest } from '../lib/federatedMediaRequest.js';
 
 const router = Router();
@@ -437,22 +438,28 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
   // locally. Checked BEFORE the cloud/local dispatch below — those branches
   // resolve this machine's backends, which a remote render never uses.
   if (params.mediaProviderPeerId) {
-    // The federated wire is text-to-image only: it carries no init image,
-    // reference images, or LoRA weights, and cleaners run on the bytes this
-    // machine renders. Reject rather than silently dropping conditioning the
-    // user asked for — a render that quietly ignores its source image is worse
-    // than one that refuses.
-    const unsupported = [
-      ['an init image', params.initImagePath],
-      ['reference images', params.referenceImagePaths?.length],
-      ['LoRA weights', params.loraFilenames?.length || params.loraPaths?.length],
-    ].filter(([, present]) => present).map(([label]) => label);
-    if (unsupported.length) {
+    // LoRA weights are the one input that still cannot cross, and it is a
+    // decision rather than a gap: a LoRA is a MODEL, not conditioning, and
+    // remote model installation is out of scope for federation (ADR
+    // docs/decisions/2026-08-22-federated-media-input-assets.md rule 3). Refuse
+    // rather than silently dropping it — a render that quietly ignores its LoRA
+    // is worse than one that says why.
+    if (params.loraFilenames?.length || params.loraPaths?.length) {
       throw new ServerError(
-        `A federated media provider renders text-to-image only — this request uses ${unsupported.join(' and ')}. Render locally instead.`,
+        'A federated media provider renders with the models its own operator installed — LoRA weights do not cross. '
+        + 'Render locally, or install the LoRA on the peer and allowlist a model that uses it.',
         { status: 400, code: 'MEDIA_PROVIDER_INPUT_UNSUPPORTED' },
       );
     }
+    // Conditioning images DO cross (rule 1), by id: the bytes go up through the
+    // provider's authenticated, digest-verified asset endpoint immediately
+    // before submission. The marker keeps these LOCAL paths, never the
+    // provider-issued ids, so a reconcile after a restart re-stages the same
+    // bytes instead of naming staging slots that have since expired.
+    const inputAssets = collectRemoteInputAssets({
+      initImage: params.initImagePath,
+      referenceImages: params.referenceImagePaths,
+    });
     // A peer advertises specific models; it has no notion of 'this caller's
     // default'. Say so rather than letting the wire schema report a bare
     // 'expected string, received undefined' for a field the local path defaults.
@@ -470,6 +477,7 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
       peerId: params.mediaProviderPeerId,
       kind: 'image',
       request,
+      inputAssets,
     });
     // Drop every field that only means something to a LOCAL dispatch: the
     // routing inputs consumed above, plus the backend selectors this render

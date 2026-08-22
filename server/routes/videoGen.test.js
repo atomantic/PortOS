@@ -2321,6 +2321,9 @@ describe('videoGen routes', () => {
           numFrames: 121,
           fps: 24,
         },
+        // A text-to-video render carries none, but the field is always passed —
+        // an empty list and an absent one must read the same to the submitter.
+        inputAssets: [],
       });
 
       const [{ params }] = mediaJobQueue.enqueueJob.mock.calls[0];
@@ -2343,7 +2346,11 @@ describe('videoGen routes', () => {
       expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
     });
 
-    it('refuses a federated render that carries conditioning the wire cannot take', async () => {
+    // A start frame is single-render conditioning and now crosses (ADR
+    // docs/decisions/2026-08-22-federated-media-input-assets.md rule 1) — as a
+    // LOCAL path handed to the submitter, which uploads it through the
+    // provider's digest-verified asset endpoint immediately before submitting.
+    it('routes a start frame to the peer as conditioning rather than refusing it', async () => {
       const r = await request(app).post('/api/video-gen/').send({
         prompt: 'a slow pan across a harbour',
         modelId: 'ltx2',
@@ -2351,9 +2358,40 @@ describe('videoGen routes', () => {
         mediaProviderPeerId: federatedPeerId,
       });
 
+      expect(r.status).toBe(200);
+      expect(prepareRemoteMediaJob).toHaveBeenCalledWith(expect.objectContaining({
+        inputAssets: [{ role: 'sourceImage', path: 'frame.png' }],
+      }));
+    });
+
+    // The end frame alone would render a plain text-to-video clip with the
+    // supplied frame silently discarded — a valid-looking render of a different
+    // thing, which is the failure the whole guard exists to prevent.
+    it('refuses an end frame with no start frame', async () => {
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'a slow pan across a harbour',
+        modelId: 'ltx2',
+        lastImageFile: 'end.png',
+        mediaProviderPeerId: federatedPeerId,
+      });
+
       expect(r.status).toBe(400);
       expect(r.body.code).toBe('MEDIA_PROVIDER_INPUT_UNSUPPORTED');
-      expect(r.body.error).toMatch(/source image/);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    // A LoRA is a MODEL, not conditioning, and remote model installation is out
+    // of scope for federation (rule 3). This one stays a refusal on purpose.
+    it('refuses a federated render that carries LoRA weights', async () => {
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'a slow pan across a harbour',
+        modelId: 'ltx2',
+        loraFilenames: ['style.safetensors'],
+        mediaProviderPeerId: federatedPeerId,
+      });
+
+      expect(r.status).toBe(400);
+      expect(r.body.error).toMatch(/LoRA weights/);
       expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
       expect(prepareRemoteMediaJob).not.toHaveBeenCalled();
     });

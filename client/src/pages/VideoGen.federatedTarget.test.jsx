@@ -221,17 +221,36 @@ describe('VideoGen federated render target', () => {
     expect(screen.queryByRole('option', { name: /MiniMax h3-one/ })).not.toBeInTheDocument();
     expect(screen.getByRole('option', { name: /Wan 2\.2 T2V/ })).toBeInTheDocument();
   });
-  // The federated wire is text-to-video only, and the server refuses a body
-  // carrying conditioning rather than rendering something else — so the form
-  // has to say so before the user commits, not after.
-  it('blocks a non-text mode instead of dropping its conditioning', async () => {
+  // Image-to-video is no longer refused outright (ADR
+  // docs/decisions/2026-08-22-federated-media-input-assets.md rule 1): the
+  // FRAME is what has to cross, and whether it can is a per-model question
+  // answered at the moment one is picked. Selecting the mode with no frame yet
+  // conditions nothing, so blocking there would refuse a render that is still
+  // a plain text-to-video job.
+  it('lets image mode be selected on a peer, since a mode alone conditions nothing', async () => {
     await startRender();
     fireEvent.change(await screen.findByRole('combobox', { name: /generation target/i }), { target: { value: 'peer-example' } });
     await waitFor(() => expect(screen.getByRole('button', { name: /^Generate$/ })).toBeEnabled());
 
     fireEvent.click(screen.getByRole('button', { name: /^Image$/ }));
 
-    expect(screen.getByText(/renders text-to-video only/i)).toBeInTheDocument();
+    expect(screen.queryByText(/cannot take/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Generate$/ })).toBeEnabled();
+  });
+
+  // Extend and audio-to-video are multi-step CHAIN STATE and an input the wire
+  // has no field for (rule 4) — still refused, and refused at the MODE rather
+  // than only at the input, since the mode can be set before its input is
+  // filled. Blocking must beat dropping: an a2v render that reached the peer as
+  // plain text-to-video is a valid-looking clip of a different thing.
+  it.each([['Extend'], ['Audio']])('blocks %s mode, which cannot cross at all', async (label) => {
+    await startRender();
+    fireEvent.change(await screen.findByRole('combobox', { name: /generation target/i }), { target: { value: 'peer-example' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Generate$/ })).toBeEnabled());
+
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(`^${label}$`) }));
+
+    expect(screen.getByText(/cannot take/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Generate$/ })).toBeDisabled();
   });
 });
