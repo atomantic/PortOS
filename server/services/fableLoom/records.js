@@ -24,7 +24,7 @@ import {
   writeRaw,
 } from './store.js';
 import { LOOM_LIMITS } from './limits.js';
-import { asLoomFormat } from './formats.js';
+import { asLoomFormat, isLoomFormat } from './formats.js';
 
 export { LOOM_LIMITS };
 
@@ -83,6 +83,12 @@ function sanitizeNode(raw) {
     image: isSafeImageFilename(raw.image) ? raw.image : null,
     imageJobId: isStr(raw.imageJobId) && raw.imageJobId ? raw.imageJobId.slice(0, 200) : null,
     isEnding: raw.isEnding === true,
+    // The format this scene's text is actually WRITTEN in — server-set, not
+    // patchable. `null` means unknown (authored before the field existed, or
+    // by hand), which a reformat treats as "needs converting". Without it a
+    // rewrite that stopped at the per-request ceiling would re-send the scenes
+    // it already converted and never reach the ones it didn't.
+    format: isLoomFormat(raw.format) ? raw.format : null,
     endingLabel: trimTo(raw.endingLabel, LOOM_LIMITS.ENDING_LABEL_MAX),
     transitions: (Array.isArray(raw.transitions) ? raw.transitions : [])
       .map(sanitizeTransition)

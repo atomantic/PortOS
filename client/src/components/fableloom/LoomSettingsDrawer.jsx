@@ -14,6 +14,7 @@
  *     all, so this only governs typed input.
  */
 
+import { useRef } from 'react';
 import { Loader2, Sparkles } from 'lucide-react';
 import Drawer from '../Drawer';
 import ProviderModelSelector from '../ProviderModelSelector';
@@ -42,17 +43,32 @@ export default function LoomSettingsDrawer({ open, onClose, loom, onLoomUpdate, 
     { errorMessage: 'Save failed' },
   );
 
+  // The merge base is a ref, not the render-time props, because the picker can
+  // emit TWO changes in one tick: choosing a model whose provider tier has no
+  // effort ladder also clears the effort. Both callbacks would otherwise build
+  // their payload from the same pre-change props, and since a PATCH replaces
+  // `playSettings` wholesale the second would put the just-picked model back to
+  // what it was. Props re-seed the ref whenever the server echo lands.
+  const pendingPlay = useRef(null);
+  if (!pendingPlay.current || !saving) pendingPlay.current = { providerId: play.providerId ?? null, model: play.model ?? null, effort: play.effort ?? null };
+
   // Clearing the provider clears the model and effort with it — neither is
   // meaningful (or necessarily valid) without the provider that offered them.
-  const savePlay = (changes) => patch({
-    playSettings: { providerId: play.providerId ?? null, model: play.model ?? null, effort: play.effort ?? null, ...changes },
-  });
+  const savePlay = (changes) => {
+    pendingPlay.current = { ...pendingPlay.current, ...changes };
+    return patch({ playSettings: { ...pendingPlay.current } });
+  };
 
   // `onRewritten` fires on BOTH paths on purpose. A rewrite persists each
   // chunk as it lands, so even a run that throws part-way has already changed
   // scene text on the server — any editor still holding the pre-rewrite text
   // would write it back on its next blur-save.
   const [runReformat, reformatting] = useAsyncAction(async () => {
+    // Clear the scene selection UP FRONT. A multi-chunk run takes minutes, and
+    // the page underneath stays interactive — an editor still holding the
+    // pre-rewrite text would write it back on any blur during that window, not
+    // just after the run settles.
+    onRewritten?.({ refetch: false });
     const result = await reformatLoom(loom.id, { format }, { silent: true })
       .finally(() => onRewritten?.());
     onLoomUpdate(result.loom);
@@ -62,7 +78,15 @@ export default function LoomSettingsDrawer({ open, onClose, loom, onLoomUpdate, 
   }, { errorMessage: 'The rewrite failed' });
 
   return (
-    <Drawer open={open} onClose={onClose} title="Story settings" subtitle={loom.name} size="sm">
+    <Drawer
+      open={open}
+      onClose={onClose}
+      title="Story settings"
+      subtitle={loom.name}
+      size="sm"
+      closeOnEsc={!reformatting}
+      closeOnBackdrop={!reformatting}
+    >
       <div className="space-y-5">
         <section className="space-y-2">
           <FormField label="Scene format" labelClassName={labelClass}>

@@ -22,7 +22,7 @@ vi.mock('../universeBuilder.js', () => ({ getUniverse: getUniverseMock }));
 const getSeriesMock = vi.hoisted(() => vi.fn(async () => null));
 vi.mock('../pipeline/series.js', () => ({ getSeries: getSeriesMock }));
 
-const { createLoom, addEpisode, addNode, updateLoom, updateNode, getLoom } = await import('./records.js');
+const { createLoom, addEpisode, addNode, mutateLoom, updateLoom, updateNode, getLoom } = await import('./records.js');
 const { _resetFableLoomBackend } = await import('./store.js');
 const {
   branchNode, buildCanonDigest, mapGeneratedGraph, playTurn, reformatLoom, reviewEpisode, weaveEpisode,
@@ -377,6 +377,56 @@ describe('reformatLoom', () => {
     const sent = JSON.parse(runStagedLLM.mock.calls[0][1].scenesJson);
     expect(sent).toHaveLength(1);
     expect(result.loom.episodes[0].nodes.find((n) => n.title.startsWith('Placeholder')).prose).toBe('');
+  });
+
+  it('stops at the per-request ceiling and genuinely finishes on the next run', async () => {
+    const { loomId, episodeId } = await setup();
+    // The ceiling is 40 chunks x 5 scenes = 200, and NODES_MAX caps ONE episode
+    // at 200 — so only a multi-episode loom can reach it. Two episodes of 105
+    // scenes = 42 chunks: the first run stops 2 chunks short.
+    const withEp2 = await addEpisode(loomId, { title: 'Two' });
+    const episode2Id = withEp2.episodes[1].id;
+    await mutateLoom(loomId, (current) => {
+      for (const [index, epId] of [episodeId, episode2Id].entries()) {
+        const ep = current.episodes.find((e) => e.id === epId);
+        ep.nodes = Array.from({ length: 105 }, (_, i) => ({
+          id: `node-ceiling-${index}-${i}`, title: `Scene ${i}`, prose: `Prose ${index}-${i}.`, transitions: [],
+        }));
+      }
+      return current;
+    });
+    runStagedLLM.mockImplementation(async (stage, variables) => ({
+      content: { scenes: JSON.parse(variables.scenesJson).map((sc) => ({ id: sc.id, prose: `INT. ${sc.prose}` })) },
+    }));
+
+    const first = await reformatLoom(loomId, { format: 'teleplay' });
+    expect(first).toMatchObject({ rewritten: 200, remaining: 10 });
+    // The loom is NOT pinned yet — 5 scenes are still prose.
+    expect(first.loom.format).toBe('prose');
+
+    const callsAfterFirst = runStagedLLM.mock.calls.length;
+    const second = await reformatLoom(loomId, { format: 'teleplay' });
+    // Only the 2 leftover chunks are re-sent; the 200 already converted are skipped.
+    expect(runStagedLLM.mock.calls.length - callsAfterFirst).toBe(2);
+    expect(second).toMatchObject({ rewritten: 10, remaining: 0 });
+    expect(second.loom.format).toBe('teleplay');
+    const allNodes = second.loom.episodes.flatMap((e) => e.nodes);
+    expect(allNodes).toHaveLength(210);
+    expect(allNodes.every((n) => n.prose.startsWith('INT. '))).toBe(true);
+    expect(allNodes.every((n) => n.format === 'teleplay')).toBe(true);
+  });
+
+  it('asks the model for the TARGET format, not the one the loom still holds', async () => {
+    const { loomId } = await proseSetup();
+    runStagedLLM.mockImplementation(async (stage, variables) => ({
+      content: { scenes: JSON.parse(variables.scenesJson).map((sc) => ({ id: sc.id, prose: 'INT. GATE' })) },
+    }));
+    await reformatLoom(loomId, { format: 'teleplay' });
+    const [, variables] = runStagedLLM.mock.calls[0];
+    // Asserting the source format here as fact would contradict the template's
+    // own "Target format" heading in the same prompt.
+    expect(variables.storyContext).toContain('teleplay');
+    expect(variables.storyContext).not.toContain('narrated prose');
   });
 
   it('ignores scenes the model dropped or blanked, and fails when it returns none', async () => {

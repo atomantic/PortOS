@@ -82,10 +82,11 @@ export default function FableLoomStory() {
   // moved some). Re-read the record and drop the scene selection: an open
   // scene editor still holds the pre-rewrite text and would write it back on
   // its next blur-save.
-  const handleRewritten = async () => {
+  const handleRewritten = async ({ refetch = true } = {}) => {
+    if (nodeId) navigate(episodePath(episodeId, null) + (playOpen ? '?play=1' : ''));
+    if (!refetch) return;
     const fresh = await getLoom(loomId).catch(() => null);
     if (fresh) setLoom(fresh);
-    if (nodeId) navigate(episodePath(episodeId, null) + (playOpen ? '?play=1' : ''));
   };
 
   const handleAddNode = async () => {

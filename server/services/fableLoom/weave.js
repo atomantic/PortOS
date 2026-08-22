@@ -153,7 +153,9 @@ export async function weaveEpisode(loomId, episodeId, {
   const { nodes, startNodeId } = mapGeneratedGraph(content);
   const updated = await mutateLoom(loomId, (current) => {
     const ep = findEpisode(current, episodeId);
-    ep.nodes = nodes;
+    // Stamped with the format they were generated in, so a later reformat can
+    // tell them apart from scenes already in the target format.
+    ep.nodes = nodes.map((n) => ({ ...n, format: asLoomFormat(loom.format) }));
     ep.startNodeId = startNodeId;
     ep.updatedAt = new Date().toISOString();
     return current;
@@ -193,7 +195,7 @@ export async function branchNode(loomId, episodeId, nodeId, {
     const source = findNode(ep, nodeId);
     for (const branch of branches) {
       if (ep.nodes.length >= LOOM_LIMITS.NODES_MAX) break;
-      const newNode = { id: `node-${randomUUID()}`, ...generatedNodeFields(branch.node), transitions: [], pos: null };
+      const newNode = { id: `node-${randomUUID()}`, ...generatedNodeFields(branch.node), format: asLoomFormat(loom.format), transitions: [], pos: null };
       ep.nodes.push(newNode);
       source.transitions = [...(source.transitions || []), {
         targetNodeId: newNode.id,
@@ -336,8 +338,10 @@ const REFORMAT_CHUNK = 5;
 // Hard ceiling on provider calls per request. The record caps allow 100
 // episodes x 200 scenes, which at 5 per call is 4,000 sequential calls behind
 // one HTTP request — a spend and timeout hazard nobody asked for. A run that
-// hits the ceiling reports what is left; re-running finishes the job, because
-// scenes already rewritten are skipped as no-ops by the next pass.
+// hits the ceiling reports what is left, and re-running genuinely finishes the
+// job: each scene is stamped with the format it was written in as it lands, so
+// the next pass skips what is already converted instead of re-sending it and
+// stopping in the same place forever.
 const REFORMAT_CHUNKS_MAX = 40;
 
 /**
@@ -347,10 +351,10 @@ const REFORMAT_CHUNKS_MAX = 40;
  *
  * Each chunk is persisted as it lands: a provider failure halfway through
  * leaves the already-rewritten scenes rewritten, and re-running finishes the
- * job rather than starting over. The format pin is written LAST — a run that
- * rewrote nothing must not leave the loom claiming a format its scenes aren't
- * in, or every later weave/branch/play generates against a contract the story
- * doesn't follow.
+ * job rather than starting over. The loom's format pin is written LAST and only
+ * once EVERY scene is converted — a loom still holding unconverted scenes must
+ * not claim a format its story isn't in, or every later weave/branch/play
+ * generates against a contract that story doesn't follow.
  */
 export async function reformatLoom(loomId, { format, providerId, model, effort } = {}) {
   const target = asLoomFormat(format);
@@ -362,7 +366,7 @@ export async function reformatLoom(loomId, { format, providerId, model, effort }
   // scene, so the model invents one and it lands on the node as if authored.
   const pending = loom.episodes.map((episode) => ({
     episode,
-    nodes: episode.nodes.filter((n) => isStr(n.prose) && n.prose.trim()),
+    nodes: episode.nodes.filter((n) => isStr(n.prose) && n.prose.trim() && n.format !== target),
   })).filter((e) => e.nodes.length);
   const sceneCount = pending.reduce((total, e) => total + e.nodes.length, 0);
   let rewritten = 0;
@@ -378,7 +382,11 @@ export async function reformatLoom(loomId, { format, providerId, model, effort }
       }
       chunks += 1;
       const { content, runId } = await runStagedLLM('fableloom-reformat-scenes', {
-        storyContext: storyContext(loom, episode),
+        // The TARGET format, not the loom's current one: the pin is written
+        // last, so passing `loom` would assert the source format as fact in
+        // the same prompt that asks for the target — and would render
+        // differently on a resumed run than on the first one.
+        storyContext: storyContext({ ...loom, format: target }, episode),
         canonDigest: canonDigest || '(none)',
         formatLabel: loomFormatLabel(target),
         sceneFormatContract: sceneFormatContract(target),
@@ -402,6 +410,7 @@ export async function reformatLoom(loomId, { format, providerId, model, effort }
           const rewrite = byId.get(sceneNode.id);
           if (!rewrite) continue;
           sceneNode.prose = rewrite.prose;
+          sceneNode.format = target;
           if (isStr(rewrite.title) && rewrite.title.trim()) sceneNode.title = rewrite.title;
         }
         ep.updatedAt = new Date().toISOString();
@@ -414,6 +423,10 @@ export async function reformatLoom(loomId, { format, providerId, model, effort }
   // A loom with nothing to rewrite is a no-op, not a failure — the pin is still
   // the point. Only a loom that HAD scenes and got none back is a bad response.
   if (sceneCount && !rewritten) throw aiShapeError('The model returned no rewritten scenes');
-  const updated = await mutateLoom(loomId, (current) => ({ ...current, format: target }));
+  // Only a fully-converted loom gets the pin; a run that stopped at the ceiling
+  // leaves it alone so the record never claims a format half its scenes lack.
+  const updated = remaining
+    ? await getLoom(loomId)
+    : await mutateLoom(loomId, (current) => ({ ...current, format: target }));
   return { loom: updated, format: target, rewritten, remaining, runIds };
 }
