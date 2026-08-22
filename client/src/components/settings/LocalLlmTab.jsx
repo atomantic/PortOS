@@ -1830,7 +1830,7 @@ export function LocalLlmTab() {
                           <span
                             title={`Published ${formatDateNumeric(createdMs)}${Number.isFinite(updatedMs) ? ` · updated ${timeAgo(m.updatedAt)}` : ''}`}
                           >
-                            {formatAgeDays(m.createdAt)}
+                            published {formatAgeDays(m.createdAt)}
                           </span>
                         )}
                         {isHf && m.license && <span>{m.license}</span>}

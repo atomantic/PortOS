@@ -225,7 +225,7 @@ export default function MtplxCheckpoints({
                       {Number.isFinite(row.downloads) ? ` · ${row.downloads.toLocaleString()} downloads` : ''}
                       {/* Age in days, not a "3mo ago" bucket: a checkpoint's release
                           date is what says whether it is worth a multi-gigabyte pull. */}
-                      {age && <span title={`Published ${formatDateNumeric(row.publishedAt)}`}>{` · ${age}`}</span>}
+                      {age && <span title={`Published ${formatDateNumeric(row.publishedAt)}`}>{` · published ${age}`}</span>}
                       {row.license ? ` · ${row.license}` : ''}
                     </p>
                   </div>

@@ -20,6 +20,16 @@ const HF_RETRY_DELAY_MS = 250
 // after this budget; in-flight probes keep running and warm the repo cache, so
 // the next load (or a recovered HF) enriches without delay.
 const CATALOG_ENRICH_TIMEOUT_MS = 5_000
+// Budget for the publish-date lookup behind a checkpoint search. Deliberately
+// longer than CATALOG_ENRICH_TIMEOUT_MS: that bound exists because the curated
+// catalog must stay usable with zero enrichment offline, whereas a search's ages
+// ARE the enrichment, and on a cold cache these probes can sit behind the
+// catalog's own fan-out in the shared gate. Still bounded — a hung Hub must not
+// hold the search open indefinitely.
+const PUBLISH_DATE_BUDGET_MS = 15_000
+// Hard cap on repos probed per publish-date lookup, independent of the caller's
+// page size — abandoned probes keep draining through hfGate after the response.
+const MAX_PUBLISH_DATE_PROBES = 24
 
 const CATEGORY_IDS = new Set(LOCAL_LLM_CATEGORIES.map((c) => c.id))
 // Default browse phrases used when the search box is empty (and as the seed when
@@ -1343,8 +1353,14 @@ export function applyMeasuredFit(models, { backend, measured } = {}) {
 // Never throws and never fails the caller's list: a repo the Hub has no answer
 // for (gated, renamed, offline) resolves to `null`, which the UI renders as a
 // missing age rather than an error.
-export async function fetchRepoPublishedDates(repoIds = [], { timeoutMs = CATALOG_ENRICH_TIMEOUT_MS } = {}) {
+export async function fetchRepoPublishedDates(repoIds = [], { timeoutMs = PUBLISH_DATE_BUDGET_MS } = {}) {
+  // Cap the fan-out independently of the caller's page size. The MTPLX search
+  // endpoint accepts limit=100, and every unresolved probe keeps draining through
+  // the shared hfGate after the response returns — starving curated-catalog and
+  // HF-search enrichment on a degraded Hub for as long as it takes. A page of
+  // ages beyond the first two dozen rows is not worth that.
   const unique = [...new Set(repoIds.filter((id) => typeof id === 'string' && id.includes('/')))]
+    .slice(0, MAX_PUBLISH_DATE_PROBES)
   // Seeded with nulls and filled in place, so the budget below can return early
   // with a partial answer instead of an empty one.
   const dates = Object.fromEntries(unique.map((repo) => [repo, null]))
@@ -1352,11 +1368,11 @@ export async function fetchRepoPublishedDates(repoIds = [], { timeoutMs = CATALO
     const model = await fetchRepoModel(repo)
     dates[repo] = model?.createdAt || model?.created_at || null
   }))
-  // Bound the wait exactly as enrichCatalogWithVariants does: a listing of 24
-  // repos is 6 rounds through a gate of 4, each round up to the 12s fetch budget
-  // plus a retry, so an unreachable Hub would otherwise turn an instant search
-  // into a minute-long hang. Whatever resolved in time is already in `dates`; the
-  // rest stay null and their probes keep warming the repo cache for the next search.
+  // Bound the wait the way enrichCatalogWithVariants does, so an unreachable Hub
+  // can never hang a search. Whatever resolved in time is already in `dates`; the
+  // rest stay null and the card simply omits that row's age. Note a TRANSIENT
+  // failure caches nothing (see fetchRepoModel), so those repos are re-probed on
+  // the next search rather than being remembered as dateless.
   if (timeoutMs > 0) {
     let timer
     const budget = new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs); timer.unref?.() })

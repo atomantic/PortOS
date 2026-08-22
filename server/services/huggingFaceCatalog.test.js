@@ -1329,13 +1329,30 @@ describe('fetchRepoPublishedDates', () => {
     })
   })
 
-  it('returns a partial answer rather than hanging the caller when the Hub stalls', async () => {
+  it('returns the dates that arrived in time rather than hanging the caller when the Hub stalls', async () => {
     // A listing of two dozen repos is several rounds through the shared gate, so an
-    // unresponsive Hub must not hold the search open — unanswered repos come back null.
-    fetch.mockImplementation(() => new Promise(() => {}))
+    // unresponsive Hub must not hold the search open. What matters is that the repos
+    // that DID answer keep their dates — dropping them on timeout would leave a whole
+    // page of rows ageless because one repo hung.
+    fetch.mockImplementation(async (url) => (
+      String(url).includes('pub-owner/Fast')
+        ? response({ modelId: 'pub-owner/Fast', createdAt: '2026-01-02T00:00:00.000Z' })
+        : new Promise(() => {})
+    ))
 
-    expect(await fetchRepoPublishedDates(['pub-owner/Slow'], { timeoutMs: 20 }))
-      .toEqual({ 'pub-owner/Slow': null })
+    expect(await fetchRepoPublishedDates(['pub-owner/Fast', 'pub-owner/Slow'], { timeoutMs: 50 }))
+      .toEqual({ 'pub-owner/Fast': '2026-01-02T00:00:00.000Z', 'pub-owner/Slow': null })
+  })
+
+  it('caps the fan-out so one oversized page cannot flood the shared Hub gate', async () => {
+    fetch.mockImplementation(async () => response({ createdAt: '2026-01-02T00:00:00.000Z' }))
+    const repos = Array.from({ length: 40 }, (_, i) => `pub-owner/Repo${i}`)
+
+    const dates = await fetchRepoPublishedDates(repos)
+
+    // 24 probed; the rest are simply absent rather than queued behind the gate.
+    expect(Object.keys(dates)).toHaveLength(24)
+    expect(fetch).toHaveBeenCalledTimes(24)
   })
 
   it('ignores ids that are not owner/name rather than asking the Hub about them', async () => {

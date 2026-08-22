@@ -90,6 +90,27 @@ describe('MtplxServerCard', () => {
     expect(handlers.onRemoveModel).toHaveBeenCalledWith('Example/Cached-MTP');
   });
 
+  it("shows a search hit's age in days, and no age for a repo the Hub had no date for", async () => {
+    // The age is what says whether a checkpoint is worth a multi-gigabyte pull, and
+    // a dateless row must stay silent rather than rendering a placeholder age.
+    const publishedAt = new Date(Date.now() - 5 * 24 * 3600 * 1000).toISOString();
+    await renderCard(
+      { installed: true, running: false, supported: true, cachedModels: [] },
+      {
+        onSearchModels: vi.fn().mockResolvedValue({
+          models: [
+            { repo: 'Example/Dated-MTP', name: 'Dated MTP', owner: 'Example', downloads: 12, publishedAt },
+            { repo: 'Example/Undated-MTP', name: 'Undated MTP', owner: 'Example', downloads: 3, publishedAt: null },
+          ],
+          error: null,
+        }),
+      },
+    );
+
+    expect(await screen.findByText(/published 5 days ago/)).toBeInTheDocument();
+    expect(screen.getByText(/Example\/Undated-MTP/)).not.toHaveTextContent(/published/);
+  });
+
   it('marks an already-cached search hit instead of offering to download it again', async () => {
     await renderCard(
       {

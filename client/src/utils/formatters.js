@@ -234,7 +234,7 @@ export function timeAgo(dateStr, fallback = 'never') {
 }
 
 /**
- * Age of a published thing in whole DAYS — "today", "1 day old", "412 days old".
+ * Age in whole DAYS — "today", "1 day ago", "412 days ago".
  *
  * Distinct from `timeAgo`, which collapses anything past a month into "3mo ago"
  * / "2y ago". Model-download lists want the day count itself: it is the number
@@ -246,12 +246,14 @@ export function timeAgo(dateStr, fallback = 'never') {
  */
 export function formatAgeDays(value, fallback = '') {
   if (value === null || value === undefined || value === '') return fallback;
-  const time = new Date(value).getTime();
+  // toDisplayDate, not `new Date`: a bare "2026-03-05" parses as UTC midnight and
+  // would read a day older than it is everywhere west of Greenwich.
+  const time = toDisplayDate(value).getTime();
   if (!Number.isFinite(time)) return fallback;
   const days = Math.floor((Date.now() - time) / 86400000);
-  // <= 0 covers a clock skew ahead of the publish date — never "-1 days old".
+  // <= 0 covers a clock skew ahead of the publish date — never "-1 days ago".
   if (days <= 0) return 'today';
-  return `${days.toLocaleString()} day${days === 1 ? '' : 's'} old`;
+  return `${days.toLocaleString()} day${days === 1 ? '' : 's'} ago`;
 }
 
 /**

@@ -284,10 +284,16 @@ describe('formatAgeDays', () => {
   });
 
   it('counts whole days rather than collapsing into month/year buckets', () => {
-    expect(formatAgeDays(daysAgo(1))).toBe('1 day old');
-    expect(formatAgeDays(daysAgo(3))).toBe('3 days old');
+    expect(formatAgeDays(daysAgo(1))).toBe('1 day ago');
+    expect(formatAgeDays(daysAgo(3))).toBe('3 days ago');
     // timeAgo would say '13mo ago' here — the day count is the point.
-    expect(formatAgeDays(daysAgo(412))).toBe('412 days old');
+    expect(formatAgeDays(daysAgo(412))).toBe('412 days ago');
+  });
+
+  it('anchors a bare calendar date at local midnight so it never reads a day older', () => {
+    const today = new Date();
+    const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    expect(formatAgeDays(iso)).toBe('today');
   });
 
   it('reads a same-day or future-dated publish as today, never a negative count', () => {
