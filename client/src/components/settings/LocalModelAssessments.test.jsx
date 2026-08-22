@@ -913,6 +913,23 @@ describe('LocalModelAssessments — routable tuning-sweep drawer', () => {
     expect(screen.queryByRole('dialog', { name: 'Sweep tunings' })).not.toBeInTheDocument();
   });
 
+  // ...and dismissing the one on screen closes the page, rather than closing
+  // straight into the gate the same link also named — which would read as the
+  // dismissal not having worked.
+  it('dismisses both targets, not just the one on screen', async () => {
+    const user = userEvent.setup();
+    renderPanel(
+      '/models/performance?measureBackend=llama&measureModel=example-model.gguf'
+      + '&sweepBackend=llama&sweepModel=example-model.gguf',
+    );
+
+    await screen.findByRole('dialog', { name: 'Measure this model' });
+    await user.click(screen.getByRole('button', { name: /^cancel$/i }));
+
+    await waitFor(() => expect(currentUrl()).toBe('/models/performance'));
+    expect(screen.queryByRole('dialog', { name: 'Sweep tunings' })).not.toBeInTheDocument();
+  });
+
   // Opening one clears the other's params, so the URL never accumulates a target
   // for a gate that is not on screen.
   it('drops a stale measure target from the URL when the sweep gate opens', async () => {

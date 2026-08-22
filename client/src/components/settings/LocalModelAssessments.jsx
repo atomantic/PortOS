@@ -113,6 +113,11 @@ const CLOSED_MEASURE_PARAMS = { measureBackend: null, measureModel: null, measur
 // derivable from that pair plus the report.
 const CLOSED_SWEEP_PARAMS = { sweepBackend: null, sweepModel: null };
 
+// Dismissing either gate clears BOTH targets. Only a hand-edited link can name
+// both at once, and having one gate close straight into the other would read as
+// the dismissal not having worked.
+const CLOSED_GATE_PARAMS = { ...CLOSED_MEASURE_PARAMS, ...CLOSED_SWEEP_PARAMS };
+
 // `null` is NOT MEASURED and must render as such — never as 0, and never as a
 // dash the reader could mistake for "measured, none".
 const Measured = ({ value, suffix = '', digits = 0 }) =>
@@ -650,7 +655,7 @@ export function LocalModelAssessments() {
   // `replace` so closing the drawer doesn't leave a Back button that reopens it
   // on a run the user just cancelled.
   const closeTarget = useCallback(() => {
-    updateParams(CLOSED_MEASURE_PARAMS, { replace: true });
+    updateParams(CLOSED_GATE_PARAMS, { replace: true });
     setTuningEdits(null);
   }, [updateParams]);
 
@@ -664,7 +669,7 @@ export function LocalModelAssessments() {
   }), [updateParams]);
 
   const closeSweepTarget = useCallback(
-    () => updateParams(CLOSED_SWEEP_PARAMS, { replace: true }),
+    () => updateParams(CLOSED_GATE_PARAMS, { replace: true }),
     [updateParams],
   );
 
@@ -701,32 +706,32 @@ export function LocalModelAssessments() {
   const tuningDraft = tuningEdits
     ?? (recordTuning && typeof recordTuning === 'object' ? recordTuning : {});
 
-  // The row the sweep URL names. Matched through `modelKey`, not `entryKey`: a
-  // sweep varies the tuning, so a model with three recorded configurations is
-  // still one sweep target, not three.
-  const sweepMatch = useMemo(() => {
-    if (!sweepBackend || !sweepModel) return null;
-    const wanted = modelKey({ backend: sweepBackend, modelId: sweepModel });
-    const hit = (rows) => rows?.find((entry) => modelKey(entry) === wanted);
-    return hit(report?.ranked) || hit(report?.excluded) || hit(report?.unassessed) || null;
-  }, [report, sweepBackend, sweepModel]);
-
-  // The whole gate payload, derived from the pair in the URL plus the report —
-  // the runtime label and the grid are the server's own, never carried in the
-  // link. An id the report no longer lists still opens the gate (the URL is the
-  // source of truth for what's open) and says so, the same as the measure
-  // drawer; with no grid behind it, Start is already off anyway.
+  // The sweep gate's whole payload, derived from the model pair in the URL plus
+  // the report — the runtime label and the grid are the server's own, never
+  // carried in the link, so a shared link describes what would run TODAY.
+  //
+  // The row is matched through `modelKey`, not `entryKey`: a sweep varies the
+  // tuning, so a model with three recorded configurations is still one sweep
+  // target, not three. A pair the report no longer lists still opens the gate —
+  // the URL is the source of truth for what's open — and says so, the same as
+  // the measure drawer; with no grid behind it, Start is already off anyway.
   //
   // The measure drawer wins when a hand-edited link names both: a Drawer assumes
   // it is the only one open (one scroll lock, one focus trap), and the measure
   // gate is the one that can be mid-run.
-  const tuningSweepRequest = useMemo(() => (sweepBackend && sweepModel && !measureOpen ? {
-    backend: sweepBackend,
-    modelId: sweepModel,
-    runtimeLabel: backendLabel(report, sweepBackend),
-    variants: gridFor(report, sweepBackend),
-    unknownTarget: Boolean(report) && !sweepMatch,
-  } : null), [report, sweepBackend, sweepModel, sweepMatch, measureOpen]);
+  const tuningSweepRequest = useMemo(() => {
+    if (!sweepBackend || !sweepModel || measureOpen) return null;
+    const wanted = modelKey({ backend: sweepBackend, modelId: sweepModel });
+    const hit = (rows) => rows?.find((entry) => modelKey(entry) === wanted);
+    const listed = Boolean(hit(report?.ranked) || hit(report?.excluded) || hit(report?.unassessed));
+    return {
+      backend: sweepBackend,
+      modelId: sweepModel,
+      runtimeLabel: backendLabel(report, sweepBackend),
+      variants: gridFor(report, sweepBackend),
+      unknownTarget: Boolean(report) && !listed,
+    };
+  }, [report, sweepBackend, sweepModel, measureOpen]);
 
   // Which model this panel is currently measuring. A ref, not state: the socket
   // handler subscribes once and must read the CURRENT target, not the one
