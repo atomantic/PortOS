@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { searchHuggingFaceModels, enrichCatalogWithVariants, applyMeasuredFit } from './huggingFaceCatalog.js'
+import { searchHuggingFaceModels, enrichCatalogWithVariants, applyMeasuredFit, fetchRepoPublishedDates } from './huggingFaceCatalog.js'
 import { __resetOllamaRegistryCache } from './ollamaRegistryCatalog.js'
 
 // The disk cache resolves its file from the REAL PATHS.data, and fetchRepoModel
@@ -1309,6 +1309,29 @@ describe('huggingFaceCatalog', () => {
       expect(blobCalls).toBe(1)
       expect(catalogs.every((c) => c[0].format === 'gguf')).toBe(true)
     })
+  })
+})
+
+describe('fetchRepoPublishedDates', () => {
+  beforeEach(() => { vi.stubGlobal('fetch', vi.fn()) })
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  it('returns each repo\'s publish date, and null for one the Hub cannot answer for', async () => {
+    fetch.mockImplementation(async (url) => (
+      String(url).includes('pub-owner/Dated')
+        ? response({ modelId: 'pub-owner/Dated', createdAt: '2026-01-02T00:00:00.000Z' })
+        : { ok: false, status: 404, json: vi.fn(async () => null), text: vi.fn(async () => 'not found') }
+    ))
+
+    expect(await fetchRepoPublishedDates(['pub-owner/Dated', 'pub-owner/Gone'])).toEqual({
+      'pub-owner/Dated': '2026-01-02T00:00:00.000Z',
+      'pub-owner/Gone': null
+    })
+  })
+
+  it('ignores ids that are not owner/name rather than asking the Hub about them', async () => {
+    expect(await fetchRepoPublishedDates(['not-a-repo', null, 42])).toEqual({})
+    expect(fetch).not.toHaveBeenCalled()
   })
 })
 

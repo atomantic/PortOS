@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  clamp, formatContextLength, formatDurationMin, formatDurationMs, formatEventDateTime, timeAgo,
+  clamp, formatContextLength, formatDurationMin, formatDurationMs, formatEventDateTime, timeAgo, formatAgeDays,
   formatCooldown, recommendedRamGb, parseTimeoutMs, formatDurationSec, middleTruncate,
   formatWeight, formatPercent, formatUsd, formatBytes,
   formatDateNumeric, formatTimeOfDaySeconds, formatClockTime, formatWeekdayDate,
@@ -271,6 +271,28 @@ describe('timeAgo', () => {
   it('formats a recent past date in days', () => {
     const threeDaysAgo = new Date(Date.now() - 3 * 24 * 3600 * 1000).toISOString();
     expect(timeAgo(threeDaysAgo)).toBe('3d ago');
+  });
+});
+
+describe('formatAgeDays', () => {
+  const daysAgo = (d) => new Date(Date.now() - d * 24 * 3600 * 1000).toISOString();
+
+  it('returns the fallback for a missing or unparseable value', () => {
+    expect(formatAgeDays(null)).toBe('');
+    expect(formatAgeDays('', 'unknown')).toBe('unknown');
+    expect(formatAgeDays('not-a-date', '—')).toBe('—');
+  });
+
+  it('counts whole days rather than collapsing into month/year buckets', () => {
+    expect(formatAgeDays(daysAgo(1))).toBe('1 day old');
+    expect(formatAgeDays(daysAgo(3))).toBe('3 days old');
+    // timeAgo would say '13mo ago' here — the day count is the point.
+    expect(formatAgeDays(daysAgo(412))).toBe('412 days old');
+  });
+
+  it('reads a same-day or future-dated publish as today, never a negative count', () => {
+    expect(formatAgeDays(new Date().toISOString())).toBe('today');
+    expect(formatAgeDays(new Date(Date.now() + 3600 * 1000).toISOString())).toBe('today');
   });
 });
 

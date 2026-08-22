@@ -26,6 +26,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { listMtplxCachedModels } from '../lib/mtplxModels.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
+import { fetchRepoPublishedDates } from './huggingFaceCatalog.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
 
 /** A Hugging Face search is one API call — short, and worth failing fast. */
@@ -109,18 +110,25 @@ export async function searchMtplxCatalog({ query = '', limit = 24, offset = 0 } 
   const parsed = start === -1 ? null : safeJSONParse(text.slice(start), null, { allowArray: true });
   if (!Array.isArray(parsed)) return { models: [], error: '`mtplx forge discover --json` did not return a model list' };
 
-  return {
-    models: parsed
-      .filter((row) => typeof row?.repo === 'string' && row.repo)
-      .map((row) => ({
-        repo: row.repo,
-        name: row.branded_name || row.repo.split('/').pop(),
-        owner: row.owner || row.repo.split('/')[0],
-        downloads: Number.isFinite(row.downloads) ? row.downloads : null,
-        license: row.license || null,
-      })),
-    error: null,
-  };
+  const models = parsed
+    .filter((row) => typeof row?.repo === 'string' && row.repo)
+    .map((row) => ({
+      repo: row.repo,
+      name: row.branded_name || row.repo.split('/').pop(),
+      owner: row.owner || row.repo.split('/')[0],
+      downloads: Number.isFinite(row.downloads) ? row.downloads : null,
+      license: row.license || null,
+    }));
+
+  // `mtplx forge discover` reports downloads and license but no dates, and how
+  // OLD a checkpoint is decides whether it is worth a multi-gigabyte pull. Ask
+  // the Hub itself for the publish date — cached per repo, so a repeated search
+  // is free — and leave `publishedAt: null` when the Hub has no answer rather
+  // than failing a search that is otherwise complete.
+  const published = await fetchRepoPublishedDates(models.map((m) => m.repo));
+  for (const model of models) model.publishedAt = published[model.repo] || null;
+
+  return { models, error: null };
 }
 
 /**

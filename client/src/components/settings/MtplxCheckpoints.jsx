@@ -4,7 +4,7 @@ import BrailleSpinner from '../BrailleSpinner';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import ProgressBar from '../ui/ProgressBar';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
-import { formatBytes } from '../../utils/formatters';
+import { formatAgeDays, formatBytes, formatDateNumeric } from '../../utils/formatters';
 
 /**
  * MTPLX checkpoint manager — search, download, and remove MTP model weights.
@@ -215,6 +215,7 @@ export default function MtplxCheckpoints({
           <ul className="space-y-1.5 max-h-72 overflow-y-auto">
             {results.map((row) => {
               const installed = cachedRepos.has(row.repo);
+              const age = formatAgeDays(row.publishedAt);
               return (
                 <li key={row.repo} className="flex flex-col sm:flex-row sm:items-center gap-2 bg-port-bg border border-port-border rounded-lg px-3 py-2">
                   <div className="min-w-0 flex-1">
@@ -222,6 +223,9 @@ export default function MtplxCheckpoints({
                     <p className="text-[11px] text-gray-500 truncate">
                       {row.repo}
                       {Number.isFinite(row.downloads) ? ` · ${row.downloads.toLocaleString()} downloads` : ''}
+                      {/* Age in days, not a "3mo ago" bucket: a checkpoint's release
+                          date is what says whether it is worth a multi-gigabyte pull. */}
+                      {age && <span title={`Published ${formatDateNumeric(row.publishedAt)}`}>{` · ${age}`}</span>}
                       {row.license ? ` · ${row.license}` : ''}
                     </p>
                   </div>

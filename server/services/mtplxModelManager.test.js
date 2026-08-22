@@ -10,6 +10,7 @@ import * as bufferedSpawnModule from '../lib/bufferedSpawn.js';
 import * as mtplxModels from '../lib/mtplxModels.js';
 import * as processEnv from '../lib/processEnv.js';
 import * as streamingSpawn from '../lib/streamingSpawn.js';
+import * as hfCatalog from './huggingFaceCatalog.js';
 
 const BINARY = '/opt/homebrew/bin/mtplx';
 
@@ -20,6 +21,8 @@ describe('mtplxModelManager', () => {
     vi.restoreAllMocks();
     vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue(BINARY);
     vi.spyOn(mtplxModels, 'listMtplxCachedModels').mockResolvedValue({ models: [], error: null });
+    // Publish dates come from the Hub — no suite may reach it.
+    vi.spyOn(hfCatalog, 'fetchRepoPublishedDates').mockResolvedValue({});
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
   });
@@ -50,7 +53,7 @@ describe('mtplxModelManager', () => {
       const result = await searchMtplxCatalog({});
 
       expect(result).toEqual({
-        models: [{ repo: 'Example/Qwen-MTP', name: 'Qwen MTP', owner: 'Example', downloads: 42, license: 'apache-2.0' }],
+        models: [{ repo: 'Example/Qwen-MTP', name: 'Qwen MTP', owner: 'Example', downloads: 42, license: 'apache-2.0', publishedAt: null }],
         error: null,
       });
       // An empty `--query ''` would search for the empty string instead of
@@ -72,6 +75,21 @@ describe('mtplxModelManager', () => {
         success: false, code: 1, stdout: '', stderr: 'error: huggingface.co unreachable', timedOut: false,
       });
       expect(await searchMtplxCatalog({})).toEqual({ models: [], error: 'error: huggingface.co unreachable' });
+    });
+
+    it("carries each repo's Hub publish date so a card can say how old the checkpoint is", async () => {
+      vi.spyOn(bufferedSpawnModule, 'bufferedSpawn').mockResolvedValue(spawnOk(JSON.stringify([
+        { repo: 'Example/Qwen-MTP', downloads: 42 },
+        { repo: 'Example/Unlisted', downloads: 1 },
+      ])));
+      hfCatalog.fetchRepoPublishedDates.mockResolvedValue({ 'Example/Qwen-MTP': '2026-01-02T00:00:00.000Z' });
+
+      const { models } = await searchMtplxCatalog({});
+
+      expect(models[0].publishedAt).toBe('2026-01-02T00:00:00.000Z');
+      // A repo the Hub has no answer for still lists — the card just omits the age.
+      expect(models[1].publishedAt).toBeNull();
+      expect(hfCatalog.fetchRepoPublishedDates).toHaveBeenCalledWith(['Example/Qwen-MTP', 'Example/Unlisted']);
     });
 
     it('refuses before spawning when MTPLX is not installed', async () => {

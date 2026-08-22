@@ -1331,3 +1331,23 @@ export function applyMeasuredFit(models, { backend, measured } = {}) {
   }
   return list
 }
+
+// Publish dates for a set of Hugging Face repos, as `{ repoId: createdAt|null }`.
+//
+// For lists whose rows come from somewhere OTHER than the Hub's own search — the
+// MTPLX discover listing, which carries downloads and license but no dates — so
+// the card can say how old a checkpoint is. Reuses fetchRepoModel's three tiers
+// (memory → disk → Hub) and its gate, so a repeated search is free and a burst
+// stays inside the same concurrency budget as everything else here.
+//
+// Never throws and never fails the caller's list: a repo the Hub has no answer
+// for (gated, renamed, offline) resolves to `null`, which the UI renders as a
+// missing age rather than an error.
+export async function fetchRepoPublishedDates(repoIds = []) {
+  const unique = [...new Set(repoIds.filter((id) => typeof id === 'string' && id.includes('/')))]
+  const settled = await Promise.allSettled(unique.map((repo) => fetchRepoModel(repo)))
+  return Object.fromEntries(unique.map((repo, i) => {
+    const model = settled[i].status === 'fulfilled' ? settled[i].value : null
+    return [repo, model?.createdAt || model?.created_at || null]
+  }))
+}

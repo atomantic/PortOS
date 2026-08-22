@@ -234,6 +234,27 @@ export function timeAgo(dateStr, fallback = 'never') {
 }
 
 /**
+ * Age of a published thing in whole DAYS — "today", "1 day old", "412 days old".
+ *
+ * Distinct from `timeAgo`, which collapses anything past a month into "3mo ago"
+ * / "2y ago". Model-download lists want the day count itself: it is the number
+ * that says how current a checkpoint is, and a bucket label hides the difference
+ * between a 40-day-old release and a 400-day-old one.
+ * @param {string|number|Date|null} value - ISO timestamp, epoch ms, or Date
+ * @param {string} fallback - Text for null/missing/unparseable values
+ * @returns {string} Day-count label
+ */
+export function formatAgeDays(value, fallback = '') {
+  if (value === null || value === undefined || value === '') return fallback;
+  const time = new Date(value).getTime();
+  if (!Number.isFinite(time)) return fallback;
+  const days = Math.floor((Date.now() - time) / 86400000);
+  if (days < 0) return 'today'; // A clock skew ahead of the publish date is not "-1 days old".
+  if (days === 0) return 'today';
+  return `${days.toLocaleString()} day${days === 1 ? '' : 's'} old`;
+}
+
+/**
  * Format a future timestamp as a relative "in X" string, mirroring timeAgo's
  * bucket thresholds. Returns `fallback` for null/missing or past dates (use
  * timeAgo for past-relative display). Example outputs: "in 5s", "in 3m",

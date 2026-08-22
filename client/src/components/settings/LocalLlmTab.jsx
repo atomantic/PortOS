@@ -4,7 +4,7 @@ import { Cpu, Box, ArrowRightLeft, Download, Trash2, RefreshCw, Search, Plus, Ex
 import toast from '../ui/Toast';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import BrailleSpinner from '../BrailleSpinner';
-import { formatBytes, formatContextLength, timeAgo, recommendedRamGb, formatDateNumeric } from '../../utils/formatters';
+import { formatAgeDays, formatBytes, formatContextLength, timeAgo, recommendedRamGb, formatDateNumeric } from '../../utils/formatters';
 import { localLlmTargetKey } from '../../lib/localLlmTargetKey';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import {
@@ -1830,7 +1830,7 @@ export function LocalLlmTab() {
                           <span
                             title={`Published ${formatDateNumeric(createdMs)}${Number.isFinite(updatedMs) ? ` · updated ${timeAgo(m.updatedAt)}` : ''}`}
                           >
-                            published {timeAgo(m.createdAt)}
+                            {formatAgeDays(m.createdAt)}
                           </span>
                         )}
                         {isHf && m.license && <span>{m.license}</span>}
