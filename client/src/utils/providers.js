@@ -994,6 +994,19 @@ export const isOllamaBackedProvider = (provider) => {
 export const isOrcaRouterBackedProvider = (provider) => provider?.orcarouterBacked === true;
 
 /**
+ * True when a provider launches the Claude Code binary, whatever backend it is
+ * pointed at (`claude-code`, `claude-ollama`, `claude-sglang`, or any renamed
+ * record whose command resolves to `claude`).
+ *
+ * The harness — not the backend — is what decides which knobs are forwardable:
+ * Claude Code owns its own sampling and speaks the Anthropic wire, so a control
+ * that reaches an OpenCode wrapper through `agent.build` has no route here.
+ * MIRROR of `isClaudeCommand` in server/lib/providerModels.js.
+ * @param {{command?:string}|null|undefined} provider
+ */
+export const isClaudeCommandProvider = (provider) => commandBasename(provider?.command) === 'claude';
+
+/**
  * Which default generation controls the provider editor should offer, or null
  * when the provider has none.
  *
@@ -1026,8 +1039,18 @@ export const generationControlsFor = (provider) => {
     // local OpenAI endpoints — see THINKING_STYLE.sglang on the server.
     || provider?.sglangBacked === true;
   if (!local && !orcarouter) return null;
-  if (commandBasename(provider?.command) === 'claude') {
-    return { temperature: false, topP: false, thinking: true };
+  if (isClaudeCommandProvider(provider)) {
+    // A Claude harness owns its own sampling, so only the thinking signal is
+    // ever forwardable — and only on Ollama, whose Anthropic endpoint maps an
+    // omitted `thinking` field to non-thinking mode (`MAX_THINKING_TOKENS=0`
+    // in server/lib/cliChildEnv.js). Every other local backend takes
+    // `chat_template_kwargs.enable_thinking`, which the Anthropic wire cannot
+    // carry — on SGLang the omitted field falls through to Qwen3.8's
+    // chat-template default (thinking ON), so offering the toggle there would
+    // pin a value nothing reads. No control at all is the honest answer.
+    return isOllamaBackedProvider(provider)
+      ? { temperature: false, topP: false, thinking: true }
+      : null;
   }
   return { temperature: true, topP: true, thinking: !orcarouter };
 };

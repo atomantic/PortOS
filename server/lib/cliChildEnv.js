@@ -42,27 +42,54 @@
 
 import { withSpawnCwdEnv } from './spawnCwd.js';
 import { buildOpencodeEnvVars } from './opencodeConfig.js';
+import { getOpencodeLocalProviderNamespace, isClaudeCommand } from './providerModels.js';
 import { agentGuardEnv } from './agentGuard/index.js';
 
 // Claude Code defaults to 32K output tokens. Thinking-capable local models can
 // legitimately spend more than that before returning their final tool call;
 // when they do, Claude Code paints a terminal API Error and waits forever at an
 // empty composer. Cloud Claude models own their own output budgets, so widen the
-// ceiling only for a Claude harness explicitly marked as Ollama-backed. A value
-// in provider.envVars still wins below.
-const CLAUDE_OLLAMA_MAX_OUTPUT_TOKENS = '65536';
+// ceiling only for a Claude harness pointed at a LOCAL daemon. A value in
+// provider.envVars still wins below.
+const CLAUDE_LOCAL_MAX_OUTPUT_TOKENS = '65536';
 
-function claudeOllamaEnvDefaults(provider) {
-  const command = String(provider?.command || '').split(/[\\/]/).pop()?.replace(/\.(?:cmd|exe)$/i, '').toLowerCase();
-  return provider?.ollamaBacked === true && command === 'claude'
-    ? {
-        CLAUDE_CODE_MAX_OUTPUT_TOKENS: CLAUDE_OLLAMA_MAX_OUTPUT_TOKENS,
-        // Claude Code omits the Anthropic-compatible `thinking` field when
-        // this is zero, which Ollama maps to Qwen's non-thinking mode. Do not
-        // set a value when enabled: Claude retains its normal adaptive budget.
-        ...(provider.thinking === false ? { MAX_THINKING_TOKENS: '0' } : {}),
-      }
-    : {};
+/**
+ * True for a Claude Code harness talking to a local OpenAI/Anthropic-compatible
+ * daemon — `claude-ollama` and `claude-sglang` today, plus any renamed or
+ * hand-built provider carrying one of the local-backend markers.
+ *
+ * Keyed on the marker set rather than `ollamaBacked` alone: SGLang serves an
+ * Anthropic-compatible `/v1/messages` endpoint, so a `claude` binary drives it
+ * exactly the way it drives Ollama, and the 32K-output wedge above is a
+ * property of "local thinking-capable model behind the Claude binary", not of
+ * Ollama specifically. `orcarouter` is excluded — it is a hosted gateway whose
+ * upstream models own their own budgets, the same carve-out `localRuntimeKind`
+ * makes.
+ */
+function isLocalBackedClaude(provider) {
+  const namespace = getOpencodeLocalProviderNamespace(provider);
+  return !!namespace && namespace !== 'orcarouter' && isClaudeCommand(provider?.command);
+}
+
+function claudeLocalEnvDefaults(provider) {
+  if (!isLocalBackedClaude(provider)) return {};
+  return {
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS: CLAUDE_LOCAL_MAX_OUTPUT_TOKENS,
+    // Claude Code omits the Anthropic-compatible `thinking` field when this is
+    // zero, which Ollama maps to Qwen's non-thinking mode. Do not set a value
+    // when enabled: Claude retains its normal adaptive budget.
+    //
+    // Ollama-only on purpose. Every other local backend takes its thinking
+    // switch as `chat_template_kwargs.enable_thinking`, which the Anthropic
+    // wire cannot carry — on SGLang an omitted `thinking` field falls through
+    // to Qwen3.8's chat-template default, which is thinking ON. Emitting the
+    // var there would look like an off switch while changing nothing, so the
+    // provider card does not offer the toggle for those records either (see
+    // `generationControlsFor` in client/src/utils/providers.js).
+    ...(provider.ollamaBacked === true && provider.thinking === false
+      ? { MAX_THINKING_TOKENS: '0' }
+      : {}),
+  };
 }
 
 /**
@@ -86,7 +113,7 @@ function claudeOllamaEnvDefaults(provider) {
 export function composeProviderEnv({ before = null, provider = null, model = null, extra = null } = {}) {
   return {
     ...(before || {}),
-    ...claudeOllamaEnvDefaults(provider),
+    ...claudeLocalEnvDefaults(provider),
     ...(provider?.envVars || {}),
     // Rebuilds OPENCODE_CONFIG_CONTENT with a declared models map for OpenCode
     // local providers (an empty object for everyone else) so the injected

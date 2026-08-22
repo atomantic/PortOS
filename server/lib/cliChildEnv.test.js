@@ -219,6 +219,37 @@ describe('composeProviderEnv — delta for sites that do not spawn directly', ()
     // `sglangBacked` also marks the OpenCode wrappers, but the OpenCode config
     // is gated on the COMMAND — a `claude` harness must not receive one.
     expect(env.OPENCODE_CONFIG_CONTENT).toBeUndefined();
+
+    // The 32K-output wedge is a property of "local thinking model behind the
+    // claude binary", not of Ollama — a run that reasons past the default ceiling
+    // hangs forever at an empty composer, and thinking cannot be turned off here.
+    expect(env.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe('65536');
+  });
+
+  it('widens the Claude output ceiling for any LOCAL backend, never a hosted one', () => {
+    const forClaude = (extra) => composeProviderEnv({ provider: { command: 'claude', envVars: {}, ...extra } });
+
+    for (const marker of ['ollamaBacked', 'sglangBacked', 'llamaBacked', 'mtplxBacked', 'vllmBacked']) {
+      expect(forClaude({ [marker]: true }).CLAUDE_CODE_MAX_OUTPUT_TOKENS, marker).toBe('65536');
+    }
+    // OrcaRouter is a hosted gateway whose upstream models own their own output
+    // budgets — the same carve-out localRuntimeKind makes.
+    expect(forClaude({ orcarouterBacked: true }).CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBeUndefined();
+    // And a cloud Claude provider is untouched.
+    expect(forClaude({}).CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBeUndefined();
+    // The marker alone isn't enough: an OpenCode wrapper is not a Claude harness.
+    expect(composeProviderEnv({ provider: { command: 'opencode', sglangBacked: true, envVars: {} } })
+      .CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBeUndefined();
+  });
+
+  it('emits MAX_THINKING_TOKENS only where an omitted thinking field means OFF', () => {
+    // Ollama's Anthropic endpoint maps an omitted `thinking` field to its
+    // non-thinking mode, so the var is a real off switch there. SGLang falls
+    // through to Qwen3.8's chat-template default (thinking ON), so emitting it
+    // would look like an off switch while changing nothing.
+    const off = (extra) => composeProviderEnv({ provider: { command: 'claude', thinking: false, envVars: {}, ...extra } });
+    expect(off({ ollamaBacked: true }).MAX_THINKING_TOKENS).toBe('0');
+    expect(off({ sglangBacked: true }).MAX_THINKING_TOKENS).toBeUndefined();
   });
 
   it('is what buildCliChildEnv layers over its base env', () => {

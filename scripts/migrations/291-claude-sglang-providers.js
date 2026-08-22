@@ -30,14 +30,31 @@
  *      for the same reason migration 284 put Claude Ollama's there: a blank field
  *      would otherwise be indistinguishable from an ambient override.
  *
- * Tool calls additionally need `--tool-call-parser qwen3_coder` on the serve
- * line, which the runtime owns (see docs/features/sglang-qwen38.md). Without it
- * the schemas are accepted but calls come back as raw text and Claude Code
- * executes nothing.
+ * Tool calls additionally need SGLang's tool-call-parser flag on the serve line,
+ * which the runtime owns — the one place that spelling lives is
+ * `parserFlagsFor('sglang')` in server/lib/qwenAgentParsers.js (see
+ * docs/features/sglang-qwen38.md). Without it the schemas are accepted but calls
+ * come back as raw text and Claude Code executes nothing.
  *
  * The model name carries NO `[1m]` suffix: native context is 262,144, and
  * claiming the 1M beta while the serve line does not raise `--context-length`
  * would cap the window incorrectly in the other direction.
+ *
+ * Two deliberate divergences from the Claude Ollama pair they mirror:
+ *
+ *   - **No thinking control.** Qwen3.8-27B thinks by default and the only
+ *     per-request off switch is `chat_template_kwargs.enable_thinking`, which the
+ *     Anthropic wire cannot carry. `MAX_THINKING_TOKENS=0` works on Ollama (its
+ *     endpoint maps an omitted `thinking` field to non-thinking mode) but not
+ *     here, so the provider card offers no toggle for these records — see
+ *     `generationControlsFor` in client/src/utils/providers.js. Use the OpenCode
+ *     wrappers, or the serve line, when a run needs thinking off.
+ *   - **Non-lean.** `isOllamaClaudeProvider` puts Claude Ollama in lean mode
+ *     (`--bare --strict-mcp-config`) because a 7B model drowns in the full
+ *     personal environment. These presets stay non-lean on purpose: 262,144
+ *     native context, the environment is what lets a CoS agent type `/do:pr`,
+ *     and a large prefix is free once the attribution header stops changing it
+ *     between turns.
  *
  * Both presets are DISABLED and this migration installs nothing — no image pull,
  * no weights, no container, no request to the endpoint. `sglangBacked: true`

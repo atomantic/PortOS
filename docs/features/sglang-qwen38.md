@@ -213,7 +213,11 @@ skip, and the GPU-exclusivity probe treat all four presets as the same container
   them breaks the harness while leaving the checklist green.
 - **`ANTHROPIC_AUTH_TOKEN` must be non-empty.** SGLang accepts any value unless
   you started it with `--api-key`, but the SDK refuses to send a request with a
-  blank one. It ships as `sglang` and is marked secret.
+  blank one. It ships as `sglang` and is marked secret. **If you did start the
+  container behind `--api-key`, set this to that key** — the provider card's
+  `API Key` field feeds only the model-refresh probe on these two presets, so
+  filling that in alone leaves every agent run 401ing while the readiness
+  checklist stays green.
 - **`API_TIMEOUT_MS=3000000`** — reasoning plus a long CoS prompt runs well past
   the SDK default.
 
@@ -228,7 +232,32 @@ window incorrectly in the other direction. Every tier
 `ANTHROPIC_SMALL_FAST_MODEL`) points at the one served `qwen3.8-27b`, so a
 haiku-tier sub-call cannot ask the container for a model it has never heard of.
 
-Thinking still rides Qwen's `enable_thinking`, and CoS coding still wants it off.
+### Thinking is not switchable on this path
+
+Qwen3.8-27B thinks by default, and the only per-request off switch is
+`chat_template_kwargs.enable_thinking` — which the Anthropic wire cannot carry.
+Claude Code has no field that maps to it, so an omitted `thinking` block falls
+through to the chat-template default and the model keeps thinking. The provider
+card therefore offers **no Thinking toggle** on these two presets; showing one
+would pin a value nothing reads.
+
+CoS coding still wants thinking off — that is what keeps the tool-call format
+reliable. On this path the levers are the serve line (bake a non-thinking
+default into the chat template) or the OpenCode presets above, which reach
+`enable_thinking` per request through `OPENCODE_CONFIG_CONTENT`. Pick the
+harness accordingly: Claude Code buys you the better file-editing loop, OpenCode
+buys you the thinking switch.
+
+### These presets deliberately run non-lean
+
+Claude Ollama runs in **lean mode** (`--bare --strict-mcp-config`) because a 7B
+local model drowns in Claude Code's full personal environment — hooks, plugins,
+MCP servers, global `CLAUDE.md`. The SGLang pair does not, and that is a choice
+rather than an oversight: Qwen3.8-27B has a 262,144-token native window, the
+same environment is what lets a CoS agent type `/do:pr` and drive a change
+through to merge, and a large prompt prefix costs nothing per turn once
+`CLAUDE_CODE_ATTRIBUTION_HEADER=0` keeps it byte-identical between turns. Revisit
+this if you point the presets at a smaller served model.
 
 ## GPU exclusivity
 

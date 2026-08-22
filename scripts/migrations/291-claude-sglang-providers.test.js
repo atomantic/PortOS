@@ -180,17 +180,28 @@ describe('migration 291 — Claude SGLang providers', () => {
     expect(readFileSync(providersPath, 'utf-8')).toBe(first);
   });
 
-  it('ships the same records the install seeds do', async () => {
-    // The migration is the upgrade path for an existing install; data.reference
-    // (and the toolkit sample it stays in parity with) is the fresh-install path.
-    // A divergence gives the two populations different providers.
+  it('ships the same records all three seed copies do', async () => {
+    // Three populations, three sources: the migration upgrades an existing
+    // install, data.reference seeds a fresh one, and providers.sample.json is
+    // what loadProviders() falls through to when the install seed is absent. A
+    // divergence gives those populations different providers.
+    //
+    // providersSeedParity.test.js already ties data.reference to the sample, but
+    // only on the MODEL fields — and every acceptance criterion for these two
+    // records lives in `envVars`, which that test documents as legitimately
+    // divergent. So pin the env set here, per-id, rather than widening its scope.
     writeJson(providersPath, { providers: {} });
     await migration.up({ rootDir });
     const migrated = readJson(providersPath).providers;
     const reference = readJson(resolve(__dirname, '../../data.reference/providers.json')).providers;
+    const sample = readJson(resolve(__dirname, '../../server/lib/aiToolkit/defaults/providers.sample.json')).providers;
 
     for (const id of IDS) {
       expect(migrated[id]).toEqual(reference[id]);
+      expect(sample[id]?.envVars, `${id}.envVars diverged between data.reference and providers.sample.json`)
+        .toEqual(migrated[id].envVars);
+      expect(sample[id]?.secretEnvVars).toEqual(migrated[id].secretEnvVars);
+      expect(sample[id]?.endpoint).toEqual(migrated[id].endpoint);
     }
   });
 });

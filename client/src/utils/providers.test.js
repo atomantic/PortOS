@@ -161,6 +161,13 @@ describe('generationControlsFor', () => {
     // A Claude harness on Ollama is forwarded only MAX_THINKING_TOKENS
     // (server/lib/cliChildEnv.js) — it owns its own sampling.
     ['Claude Ollama TUI', { id: 'claude-ollama-tui', command: 'claude', ollamaBacked: true }, { temperature: false, topP: false, thinking: true }],
+    // ...but a Claude harness on ANY OTHER local backend gets no control at all.
+    // MAX_THINKING_TOKENS is the harness's only thinking lever, and it means
+    // "off" solely on Ollama; SGLang takes `chat_template_kwargs.enable_thinking`,
+    // which the Anthropic wire cannot carry, so the toggle would pin a value
+    // nothing reads. Sampling was never forwardable on a Claude harness either,
+    // which would have left the block rendering one inert select.
+    ['Claude SGLang TUI', { id: 'claude-sglang-tui', command: 'claude', sglangBacked: true }, null],
     ['native Ollama API', { id: 'ollama', type: 'api', endpoint: 'http://localhost:11434/v1' }, { temperature: true, topP: true, thinking: true }],
     // OrcaRouter proxies cloud models that own their own reasoning switch.
     ['OpenCode OrcaRouter', { id: 'opencode-orcarouter', command: 'opencode', orcarouterBacked: true }, { temperature: true, topP: true, thinking: false }],
