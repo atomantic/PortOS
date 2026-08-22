@@ -17,7 +17,7 @@ import { getActiveProvider } from './providers.js';
 import { runPromptThroughProvider } from '../lib/promptRunner.js';
 import { readJSONFile, PATHS, tryReadFile, expandHome } from '../lib/fileUtils.js';
 import { loadSlashdoFile, loadSlashdoLib, writeResolvedSlashdoBody } from '../lib/slashdoLoader.js';
-import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, LOCAL_LLM_REVIEWERS, MODEL_CAPABLE_CLI_REVIEWERS, describeReviewerCli, isCliReviewer, reviewerCliBinary, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, resolveReviewerConfig, reviewerEffortArgs, reviewerModelArg, buildReviewerEffortNote, resolveKeyedReviewers, buildReviewWithArgs, buildReviewersCsv } from '../lib/validation.js';
+import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, LOCAL_LLM_REVIEWERS, MODEL_CAPABLE_CLI_REVIEWERS, describeReviewerCli, isCliReviewer, reviewerCliBinary, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, resolveReviewerConfig, resolveClaimReviewerConfig, buildReviewerPinNote, reviewerEffortArgs, reviewerModelArg, buildReviewerEffortNote, resolveKeyedReviewers, buildReviewWithArgs, buildReviewersCsv } from '../lib/validation.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { doneSentinelName, PROGRAMMATIC_OUTPUT_COMPLETION_HEADING } from '../lib/agentSentinel.js';
 import { canTypeSlashCommands, agentOwnsPrWorkflow, resolveSlashdoInvocation, buildSlashdoSection, oversizedBodyPointer, unreachableReviewerIncludes, SLASHDO_INLINE_BUDGET_CHARS } from '../lib/slashdoInvocation.js';
@@ -1493,13 +1493,39 @@ export function buildActionOutputCompletionSection({ isTui = false, sentinelPath
 }
 
 /**
+ * The `--review-with` token list a claim task's prompt names, read back off the
+ * task record. The claim generators persist the bundle they rendered into
+ * `{reviewers}` (`reviewerConfigMetadata`), so this reproduces that CSV exactly.
+ *
+ * A claim task queued before #4770 carries no reviewer metadata, so this falls
+ * through to the install's Code Review Defaults — routed through the claim
+ * resolver so an in-flight legacy task can't be pinned to a bare `copilot`,
+ * which a claim agent has no CLI to invoke (#2507).
+ */
+function claimReviewersCsv(task, codeReviewDefaults, defaultReviewers) {
+  return resolveClaimReviewerConfig(task?.metadata, codeReviewDefaults, defaultReviewers).csv;
+}
+
+/**
  * Completion handoff for claim prompts that create their own worktree and own
  * the forge lifecycle. `openPR: false` must remain the CoS provisioning posture,
  * so claimFlow is the explicit signal that keeps these prompts out of the
  * generic commit-only handoff.
+ *
+ * This is also the ONE emitter of the reviewer pin (#4770). Every claim
+ * generator persists the reviewer bundle it rendered into `{reviewers}` onto the
+ * task, so `resolveClaimReviewerConfig(task.metadata, …)` here reproduces that
+ * exact CSV — which means the pin covers all five claim task types from one call
+ * site, instead of three prose appends in `cosTaskGenerator.js` that a new claim
+ * generator could forget.
+ *
+ * @param {string} [reviewersCsv] - the emitted `--review-with` token list to pin;
+ *   empty suppresses the block (`buildReviewerPinNote` returns '').
  */
-function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = null } = {}) {
+function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = null, reviewersCsv = '' } = {}) {
+  const pin = buildReviewerPinNote(reviewersCsv);
   const lines = [
+    ...(pin ? [pin, ''] : []),
     '## Claim Workflow Handoff',
     'This is a self-managed claim flow. The claim prompt above owns its claim worktree, branch, PR/MR, review, merge or human-handoff, and cleanup. Follow its phase-specific exit conditions — do NOT stop after a code commit or hand the lifecycle back to PortOS.',
     '',
@@ -1794,7 +1820,7 @@ After completing your work and before committing, ${simplifyInstruction}. Fix an
     : discardWorktree
       ? buildProgrammaticOutputCompletionSection(sentinelPath)
       : claimFlow
-        ? buildClaimFlowCompletionSection({ isTui, sentinelPath })
+        ? buildClaimFlowCompletionSection({ isTui, sentinelPath, reviewersCsv: claimReviewersCsv(task, codeReviewDefaults, defaultReviewers) })
       : isTui
         ? buildTuiCompletionSection({
             willOpenPR, prCompletion, simplifyEnabled,
@@ -2254,6 +2280,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
     contractSections.push(buildClaimFlowCompletionSection({
       isTui,
       sentinelPath: resolveSentinelPath(worktreeInfo, workspaceDir, agentId),
+      reviewersCsv: claimReviewersCsv(task, codeReviewDefaults, defaultReviewers),
     }));
   } else if (isReadOnly) {
     contractSections.push(buildReadOnlyCompletionSection({

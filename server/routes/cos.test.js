@@ -1106,6 +1106,50 @@ describe('CoS Routes', () => {
       expect(taskData.claimFlow).toBe(true);
     });
 
+    // The claim prompt names its reviewers as prose and emits no flag, so the
+    // ONLY way a later consumer (the prompt builder's reviewer pin) can know who
+    // the prompt named is the task record. #4770: the resolved bundle rides out
+    // of buildClaimWorkTask on taskMetadata and must reach addTask intact.
+    it('persists the reviewer bundle the claim prompt resolved onto the task', async () => {
+      getAppById.mockResolvedValue({ id: 'my-app', name: 'MyApp', repoPath: '/repo' });
+      buildClaimWorkTask.mockResolvedValue({
+        tracker: 'github',
+        source: 'config',
+        promptTaskType: 'claim-issue',
+        prompt: 'CLAIM ISSUE PROMPT',
+        taskMetadata: {
+          useWorktree: false,
+          openPR: false,
+          claimFlow: true,
+          reviewers: ['codex', 'claude'],
+          usernames: ['alice'],
+          optionalReviewers: [],
+          reviewerMaxRounds: { codex: 2 },
+          reviewerModels: {},
+          reviewerEfforts: { codex: 'high' }
+        }
+      });
+      cos.addTask.mockResolvedValue({ id: 'task-sd-next-reviewers', status: 'pending' });
+
+      const response = await request(app)
+        .post('/api/cos/tasks/slashdo')
+        .send({ command: 'next', app: 'my-app' });
+
+      expect(response.status).toBe(200);
+      const [taskData] = cos.addTask.mock.calls.at(-1);
+      expect(taskData).toMatchObject({
+        reviewers: ['codex', 'claude'],
+        usernames: ['alice'],
+        optionalReviewers: [],
+        reviewerMaxRounds: { codex: 2 },
+        reviewerModels: {},
+        reviewerEfforts: { codex: 'high' },
+        claimFlow: true
+      });
+      // `reviewLoop` stays off — the claim prompt owns its own review sequence.
+      expect(taskData.reviewLoop).toBe(false);
+    });
+
     // `next` is commit-shaped in the catalog, but the claim flow resolves the
     // app's actual work tracker — a forge tracker files its outcome outside the
     // repo, so its `worktreeChangesExpected` must override the catalog default

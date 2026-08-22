@@ -75,7 +75,6 @@ import {
   buildPrefetchedIssueContextBlock,
   buildClaimOverrideContextBlock,
   buildLocalReviewerInstructions,
-  normalizeClaimReviewers,
   resolveTaskInputHook,
   resolveReconcileDrainGate,
   applyPerpetualDrainCap
@@ -92,11 +91,6 @@ const task = (id, metadata = {}) => ({ id, metadata });
 const noCooldown = () => Promise.resolve(false);
 
 describe('claim reviewer resolution', () => {
-  it('uses codex instead of resurrecting Copilot when claim settings are absent or Copilot-only', () => {
-    expect(normalizeClaimReviewers({}, undefined)).toEqual(['codex']);
-    expect(normalizeClaimReviewers({ reviewers: ['copilot'] }, ['copilot'])).toEqual(['codex']);
-  });
-
   // The claim prompts run their local reviewers BEFORE the PR/MR is opened, so
   // the diff has to come from the branch. A forge command (`gh pr diff` /
   // `glab mr diff`) would resolve nothing at that point and the one review pass
@@ -371,15 +365,19 @@ describe('isCooldownExemptTask', () => {
 // not the bare `normalizeReviewers(metadata)` call. The claim-specific wrapper
 // also prevents the retired Copilot fallback from reappearing.
 describe('{reviewers} interpolation honors Code Review Defaults', () => {
-  it('resolves getCodeReviewDefaults and passes them through the claim reviewer normalizer', () => {
+  it('resolves getCodeReviewDefaults and routes every claim path through the one claim reviewer resolver', () => {
     expect(GEN_SRC).toContain("import { getCodeReviewDefaults } from './codeReview.js'");
-    expect(GEN_SRC).toContain('normalizeClaimReviewers(metadata, codeReviewDefaults?.reviewers)');
+    // One resolver per claim path: the list, the `@user` tokens, the `~opt` set
+    // and the three keyed pins come out together, so a new pin kind cannot reach
+    // one site and silently miss another. It also applies the claim copilot
+    // guard, which is what keeps the retired Copilot fallback from reappearing.
+    expect(GEN_SRC).toContain('resolveClaimReviewerConfig(metadata, codeReviewDefaults, codeReviewDefaults?.reviewers)');
+    expect(GEN_SRC).toContain('resolveClaimReviewerConfig({}, codeReviewDefaults, codeReviewDefaults?.reviewers)');
     expect(GEN_SRC).not.toMatch(/normalizeReviewers\(metadata\)(?!,)/);
   });
 
   it('keeps local-LLM reviewers and appends their fail-closed invocation procedure', () => {
     expect(GEN_SRC).not.toContain('.filter((r) => !LOCAL_LLM_REVIEWERS.includes(r))');
-    expect(GEN_SRC).toContain('buildReviewersCsv(promptReviewers, promptUsernames, promptOptionalReviewers, promptReviewerMaxRounds, promptReviewerModels, promptReviewerEfforts)');
     expect(GEN_SRC).toContain('buildLocalReviewerInstructions(promptReviewers');
   });
 
@@ -399,24 +397,27 @@ describe('{reviewers} interpolation honors Code Review Defaults', () => {
     expect(GEN_SRC).not.toMatch(/buildReviewerEffortNote\([^)]*reviewWith/);
   });
 
-  it('appends the reviewer pin on the SCHEDULED claim path too', () => {
-    // The manual/Issues-tab claim and the JIRA play button are covered
-    // behaviorally below; `buildImprovementTaskDescription` is not exported, so
-    // its site is pinned by source. A scheduled claim that renders the CSV but
-    // skips the pin leaves that agent free to fall back to the host's saved
-    // slashdo --review-with default.
-    expect(GEN_SRC).toContain('rendersReviewers\n        ? appendReviewerPinBlock(reviewersCsv)');
+  it('persists the resolved reviewer bundle on the SCHEDULED claim path instead of appending a pin (#4770)', () => {
+    // The pin now has ONE owner — buildClaimFlowCompletionSection, which reads
+    // the reviewers back off the task record — so every claim generator must
+    // stamp what its prompt named. The manual/Issues-tab claim and the JIRA play
+    // button are covered behaviorally below; `buildImprovementTaskDescription`
+    // is not exported, so its site is pinned by source.
+    expect(GEN_SRC).toContain('if (rendersReviewers) Object.assign(metadata, reviewerConfigMetadata(claimReviewers))');
+    // No generator may re-grow a per-site pin append: three prose copies drifting
+    // apart is exactly what #4770 collapsed.
+    expect(GEN_SRC).not.toContain('appendReviewerPinBlock');
   });
 
   it('threads per-reviewer ~max round caps into the prompt CSV on both claim paths', () => {
     // The `{reviewers}` token is the whole reviewer contract the claim agent
     // gets — it runs each reviewer by hand, so a configured cap only reaches the
     // run if the CSV carries it. Both the scheduled path and buildClaimWorkTask
-    // resolve it with task-over-default precedence (unit-tested in
-    // validation.test.js).
-    expect(GEN_SRC).toContain('resolveReviewerMaxRounds(metadata.reviewerMaxRounds, codeReviewDefaults?.reviewerMaxRounds)');
-    expect(GEN_SRC).toContain('resolveReviewerMaxRounds(reviewerMaxRounds ?? metadata.reviewerMaxRounds, codeReviewDefaults?.reviewerMaxRounds)');
-    expect(GEN_SRC).toContain('buildReviewersCsv(reviewersList, promptUsernames, promptOptionalReviewers, promptReviewerMaxRounds, promptReviewerModels, promptReviewerEfforts)');
+    // feed the cap into the shared claim resolver, which applies task-over-default
+    // precedence (unit-tested in cosValidation.test.js).
+    expect(GEN_SRC).toContain('reviewerMaxRounds: reviewerMaxRounds ?? metadata.reviewerMaxRounds');
+    expect(GEN_SRC).toContain('resolveClaimReviewerConfig(metadata, codeReviewDefaults, codeReviewDefaults?.reviewers)');
+    expect(GEN_SRC).not.toContain('resolveReviewerMaxRounds(');
   });
 
   it('threads per-reviewer model pins into the prompt CSV on both claim paths (#3133)', () => {
@@ -430,14 +431,15 @@ describe('{reviewers} interpolation honors Code Review Defaults', () => {
     // agy model id can carry its effort as a suffix, so a path that resolved the
     // models alone would emit `--model <suffixed> --effort <tier>`, a pair agy
     // rejects, while the other paths emitted the split form.
-    expect(GEN_SRC).toContain('resolveReviewerPins(metadata, codeReviewDefaults)');
     expect(GEN_SRC).toContain('reviewerModels: reviewerModels ?? metadata.reviewerModels');
     expect(GEN_SRC).toContain('reviewerEfforts: reviewerEfforts ?? metadata.reviewerEfforts');
     // The play-button path reads the defaults directly (no task metadata to layer).
-    expect(GEN_SRC).toContain('resolveReviewerPins(null, codeReviewDefaults)');
-    // No path may resolve one map without the other.
+    expect(GEN_SRC).toContain('resolveClaimReviewerConfig({}, codeReviewDefaults, codeReviewDefaults?.reviewers)');
+    // No path may resolve one map without the other — or reach past the shared
+    // claim resolver, which wraps `resolveReviewerPins` for all three sites.
     expect(GEN_SRC).not.toContain('resolveReviewerModels(');
     expect(GEN_SRC).not.toContain('resolveReviewerEfforts(');
+    expect(GEN_SRC).not.toContain('resolveReviewerPins(');
   });
 });
 
@@ -484,7 +486,7 @@ describe('claim-work single-source routing', () => {
     expect(GEN_SRC).toContain('taskSchedule.DEFAULT_TASK_INTERVALS[promptTaskType]?.taskMetadata');
     expect(GEN_SRC).toContain("'useWorktree' in delegatedMeta");
     expect(GEN_SRC).toContain("'openPR' in delegatedMeta");
-    expect(GEN_SRC).toContain('const taskMetadata = { claimFlow: true }');
+    expect(GEN_SRC).toContain('const taskMetadata = { ...reviewerConfigMetadata(claimReviewers), claimFlow: true }');
     expect(GEN_SRC).toContain('metadata.claimFlow = true');
   });
 
@@ -510,9 +512,11 @@ describe('claim-work single-source routing', () => {
     const fn = GEN_SRC.slice(GEN_SRC.indexOf('export async function buildClaimWorkTask('));
     expect(fn).toMatch(/resolveClaimWorkMetadata\(app\)/);
     expect(fn).toMatch(/resolveClaimAuthorFilter\(issueAuthorFilter, metadata\)/);
-    // reviewers fall back to Code Review Defaults through the claim-specific
-    // normalizer, which keeps local LLMs and excludes the retired Copilot path.
-    expect(fn).toMatch(/normalizeClaimReviewers\(metadata, codeReviewDefaults\?\.reviewers\)/);
+    // Reviewers layer an explicit per-field option over the configured claim-work
+    // metadata, then fall back to the Code Review Defaults — through the claim
+    // resolver, which keeps local LLMs and excludes the retired Copilot path.
+    expect(fn).toMatch(/resolveClaimReviewerConfig\(\{\s*\.\.\.metadata,/);
+    expect(fn).toMatch(/reviewers: reviewers !== undefined/);
     expect(fn).toMatch(/LOCAL_LLM_REVIEWERS\.includes/);
     // A direct claim-work prompt customization overrides the tracker body, same
     // as the scheduled router's promptKeyForBody selection.
@@ -664,9 +668,6 @@ describe('buildJiraTicketTask', () => {
     expect(prompt).not.toContain('{reviewers}');
     expect(prompt).toContain('ollama');
     expect(prompt).toContain('Local Reviewer Procedure');
-    // The pin travels with the CSV on this path too — the play button's claim
-    // agent is the same kind of slashdo-capable session as the /do:next one.
-    expect(prompt).toContain('--review-with ollama,@alice');
     expect(prompt).not.toContain('copilot');
     expect(prompt).toContain('@alice');
     // Target-ticket constraint pins the uppercased key.
@@ -675,8 +676,21 @@ describe('buildJiraTicketTask', () => {
     // Ticket key normalized to upper-case.
     expect(ticketKey).toBe('PROJ-1234');
     // claim-issue-jira self-manages worktree + PR; claimFlow keeps that
-    // lifecycle from falling into CoS's generic false/false handoff.
-    expect(taskMetadata).toEqual({ useWorktree: false, openPR: false, claimFlow: true });
+    // lifecycle from falling into CoS's generic false/false handoff. The
+    // resolved reviewer bundle rides along so the prompt builder's reviewer pin
+    // names the same tokens this prompt does (#4770) — the play button's claim
+    // agent is the same kind of slashdo-capable session as the /do:next one.
+    expect(taskMetadata).toEqual({
+      useWorktree: false,
+      openPR: false,
+      claimFlow: true,
+      reviewers: ['ollama'],
+      usernames: ['alice'],
+      optionalReviewers: [],
+      reviewerMaxRounds: {},
+      reviewerModels: {},
+      reviewerEfforts: {}
+    });
   });
 
   it('is exported so the /tasks/jira-ticket route reuses the shared assembly', () => {
@@ -1645,19 +1659,24 @@ describe('automated drain refills do not clear their own convergence brakes', ()
 describe('buildClaimWorkTask reviewer pin', () => {
   const app = { id: 'acme', name: 'Acme App', repoPath: '/repos/acme' };
 
-  it('pins the configured reviewers against slashdo saved defaults', async () => {
-    const { prompt } = await buildClaimWorkTask(app);
+  it('persists the reviewers its prompt names so the pin has one owner', async () => {
+    const { prompt, taskMetadata } = await buildClaimWorkTask(app);
     // The configured claim-work reviewers reach the prompt body...
-    expect(prompt).toContain('Reviewers: codex,claude');
-    // ...and the appended pin names the same tokens as an explicit flag, so the
-    // agent has the exact text to pass rather than a list to re-derive.
-    expect(prompt).toContain('--review-with codex,claude');
-    expect(prompt).toContain('Reviewer pin');
+    expect(prompt).toContain('Reviewers: codex,claude,@alice');
+    // ...and the SAME resolved list is stamped on the task, so
+    // resolveReviewerConfig(task.metadata, …) at spawn time reproduces the CSV
+    // the prompt names rather than re-deriving the install-wide defaults.
+    expect(taskMetadata.reviewers).toEqual(['codex', 'claude']);
+    expect(taskMetadata.usernames).toEqual(['alice']);
+    expect(taskMetadata.claimFlow).toBe(true);
+    // The pin itself is emitted once from buildClaimFlowCompletionSection, not
+    // appended here (#4770).
+    expect(prompt).not.toContain('Reviewer pin');
   });
 
-  it('carries an explicitly requested reviewer list into the pin, not the configured one', async () => {
-    const { prompt } = await buildClaimWorkTask(app, { reviewers: ['claude'] });
-    expect(prompt).toContain('--review-with claude');
-    expect(prompt).not.toContain('--review-with codex,claude');
+  it('carries an explicitly requested reviewer list into the persisted bundle, not the configured one', async () => {
+    const { prompt, taskMetadata } = await buildClaimWorkTask(app, { reviewers: ['claude'] });
+    expect(prompt).toContain('Reviewers: claude,@alice');
+    expect(taskMetadata.reviewers).toEqual(['claude']);
   });
 });

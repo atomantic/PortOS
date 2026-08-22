@@ -28,6 +28,10 @@ import {
   buildReviewerEffortNote,
   buildReviewerPinNote,
   buildReviewersCsv,
+  claimSafeReviewers,
+  resolveReviewerConfig,
+  resolveClaimReviewerConfig,
+  reviewerConfigMetadata,
   reviewerTokenSlug,
   sanitizeTaskMetadata,
   codeReviewSettingsSchema,
@@ -617,5 +621,108 @@ describe('reviewer pin note (saved slashdo defaults must not win)', () => {
     expect(buildReviewerPinNote('   ')).toBe('');
     expect(buildReviewerPinNote(null)).toBe('');
     expect(buildReviewerPinNote(undefined)).toBe('');
+  });
+});
+
+// The claim generators resolve reviewers BEFORE a task record exists and render
+// the CSV into `{reviewers}`; the prompt builder re-resolves them from the
+// persisted task at spawn time to emit the reviewer pin. Those two resolutions
+// have to land on the same list, or the pin names reviewers the prompt does not
+// (#4770). `reviewerConfigMetadata` is the round-trip that makes them agree.
+describe('claim reviewer round-trip (prompt CSV ↔ persisted metadata)', () => {
+  const defaults = {
+    reviewers: ['copilot'],
+    usernames: ['alice'],
+    optionalReviewers: ['ollama'],
+    reviewerMaxRounds: { codex: 2 },
+    antigravityModel: 'gemini-3.7-flash-high',
+    codexEffort: 'high'
+  };
+
+  it('claimSafeReviewers drops copilot and never falls back to it', () => {
+    expect(claimSafeReviewers(['codex', 'copilot'])).toEqual(['codex']);
+    expect(claimSafeReviewers(['copilot'])).toEqual(['codex']);
+    expect(claimSafeReviewers([])).toEqual(['codex']);
+    expect(claimSafeReviewers(undefined)).toEqual(['codex']);
+  });
+
+  it('resolves through the claim guard from every input shape a claim task can carry', () => {
+    // The install default is the fallback, the claim guard is applied after it,
+    // and legacy single-`reviewer` metadata still resolves.
+    expect(resolveClaimReviewerConfig({}, null, undefined).reviewers).toEqual(['codex']);
+    expect(resolveClaimReviewerConfig({ reviewers: ['copilot'] }, null, ['copilot']).reviewers).toEqual(['codex']);
+    expect(resolveClaimReviewerConfig({}, null, ['claude', 'copilot']).reviewers).toEqual(['claude']);
+    expect(resolveClaimReviewerConfig({ reviewer: 'grok' }, null, ['claude']).reviewers).toEqual(['grok']);
+  });
+
+  it('resolveClaimReviewerConfig emits a CSV matching its own resolved bundle', () => {
+    const config = resolveClaimReviewerConfig({ reviewers: ['codex', 'antigravity'] }, defaults, defaults.reviewers);
+    expect(config.reviewers).toEqual(['codex', 'antigravity']);
+    expect(config.csv).toBe(buildReviewersCsv(
+      config.reviewers, config.usernames, config.optionalReviewers,
+      config.reviewerMaxRounds, config.reviewerModels, config.reviewerEfforts
+    ));
+    // The agy model id's baked tier is split off exactly once — resolving the
+    // persisted config a second time must not re-split or double-apply it.
+    expect(config.reviewerModels.antigravity).toBe('gemini-3.7-flash');
+    expect(config.reviewerEfforts.antigravity).toBe('high');
+  });
+
+  it('persisting reviewerConfigMetadata makes the SECOND resolution reproduce the first CSV', () => {
+    // Round 1: the generator, with no task record yet.
+    const generated = resolveClaimReviewerConfig({ reviewers: ['codex', 'antigravity'] }, defaults, defaults.reviewers);
+    const metadata = { claimFlow: true, ...reviewerConfigMetadata(generated) };
+    // Round 2: the prompt builder, reading the task back — and deliberately
+    // WITHOUT the defaults it would otherwise fall through to, to prove the
+    // persisted values are what carry the list.
+    const rebuilt = resolveClaimReviewerConfig(metadata, null, null);
+    expect(rebuilt.csv).toBe(generated.csv);
+    expect(rebuilt).toMatchObject({
+      reviewers: generated.reviewers,
+      usernames: generated.usernames,
+      optionalReviewers: generated.optionalReviewers,
+      reviewerMaxRounds: generated.reviewerMaxRounds,
+      reviewerModels: generated.reviewerModels,
+      reviewerEfforts: generated.reviewerEfforts
+    });
+    // And the plain (non-claim) resolver the prompt builder shares with the
+    // review loop agrees too — that is the resolution #4770 was silently
+    // answering from the install-wide defaults.
+    expect(resolveReviewerConfig(metadata, null, null).reviewers).toEqual(generated.reviewers);
+  });
+
+  it('a DIFFERENT install default cannot override what the task persisted', () => {
+    const generated = resolveClaimReviewerConfig({ reviewers: ['grok'] }, defaults, defaults.reviewers);
+    const metadata = reviewerConfigMetadata(generated);
+    const otherInstall = { reviewers: ['claude'], usernames: ['bob'], optionalReviewers: ['grok'], reviewerMaxRounds: { grok: 9 } };
+    expect(resolveClaimReviewerConfig(metadata, otherInstall, otherInstall.reviewers).csv).toBe(generated.csv);
+  });
+
+  it('sanitizes rather than trusts: unknown keys and junk values never reach the task record', () => {
+    const meta = reviewerConfigMetadata({
+      reviewers: ['codex', 'bogus'],
+      usernames: ['@Alice', 'bad token'],
+      optionalReviewers: ['nope'],
+      reviewerMaxRounds: { codex: 'three' },
+      reviewerModels: {},
+      reviewerEfforts: {},
+      swarmCount: 6,
+      issueAuthorFilter: 'any'
+    });
+    expect(meta).toEqual({
+      reviewers: ['codex'],
+      usernames: ['Alice'],
+      optionalReviewers: [],
+      reviewerMaxRounds: {},
+      reviewerModels: {},
+      reviewerEfforts: {}
+    });
+  });
+
+  it('returns an empty patch rather than null when nothing survives sanitizing', () => {
+    // Callers spread this into a task's metadata, so a null would throw at the
+    // three claim generators rather than degrade.
+    expect(reviewerConfigMetadata(null)).toEqual({});
+    expect(reviewerConfigMetadata({ reviewers: ['bogus'] })).toEqual({});
   });
 });

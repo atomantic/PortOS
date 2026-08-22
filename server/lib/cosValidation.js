@@ -593,6 +593,64 @@ export function resolveReviewerConfig(metadata, codeReviewDefaults, defaultRevie
   };
 }
 
+/** The reviewer a claim flow falls back to when its resolved list is unusable. */
+const CLAIM_REVIEWER_FALLBACK = ['codex'];
+
+/**
+ * Constrain an already-resolved reviewer list to what an UNATTENDED claim run can
+ * actually invoke: `copilot` is a forge-side PR reviewer with no CLI, so a claim
+ * agent told to "review with copilot" has nothing to run and stalls (#2507).
+ * An empty result falls back to `codex` rather than to `DEFAULT_REVIEWERS`
+ * (which is `copilot`, the very thing being removed).
+ */
+export function claimSafeReviewers(reviewers) {
+  const kept = (Array.isArray(reviewers) ? reviewers : []).filter((reviewer) => reviewer !== 'copilot');
+  return kept.length ? kept : [...CLAIM_REVIEWER_FALLBACK];
+}
+
+/**
+ * `resolveReviewerConfig` plus the claim flow's copilot guard and the emitted
+ * `--review-with` token list — the ONE resolver a claim prompt's reviewer text
+ * and a claim task's persisted `reviewers` metadata both go through, so the two
+ * cannot name different reviewers.
+ *
+ * The generators resolve their list before a task record exists (they read
+ * schedule metadata + Code Review Defaults); the prompt builder resolves it from
+ * the persisted task metadata at spawn time. Feeding both the same function is
+ * what makes `reviewerConfigMetadata`'s round-trip exact.
+ */
+export function resolveClaimReviewerConfig(metadata, codeReviewDefaults, defaultReviewers) {
+  const config = resolveReviewerConfig(metadata, codeReviewDefaults, defaultReviewers);
+  const reviewers = claimSafeReviewers(config.reviewers);
+  return {
+    ...config,
+    reviewers,
+    csv: buildReviewersCsv(reviewers, config.usernames, config.optionalReviewers, config.reviewerMaxRounds, config.reviewerModels, config.reviewerEfforts)
+  };
+}
+
+/**
+ * The reviewer fields a task must PERSIST so a later
+ * `resolveReviewerConfig(task.metadata, …)` resolves the same list its prompt
+ * names, instead of re-deriving the install-wide Code Review Defaults (#4770).
+ *
+ * All six travel together: resolving only `reviewers` still lets the usernames,
+ * `~opt` set, and the three keyed pins fall back to the defaults, which is the
+ * same disagreement one field down. Sanitized on the way out so a hand-crafted
+ * request body can't smuggle an unrecognized key onto the task record, and every
+ * value is re-validated rather than trusted.
+ */
+export function reviewerConfigMetadata(config) {
+  return sanitizeTaskMetadata({
+    reviewers: config?.reviewers,
+    usernames: config?.usernames,
+    optionalReviewers: config?.optionalReviewers,
+    reviewerMaxRounds: config?.reviewerMaxRounds,
+    reviewerModels: config?.reviewerModels,
+    reviewerEfforts: config?.reviewerEfforts
+  }) || {};
+}
+
 /**
  * Resolve the model and effort pins TOGETHER — `{ reviewerModels, reviewerEfforts }`
  * with task-over-default precedence, already reconciled into a pair the reviewer's
@@ -856,7 +914,7 @@ export const reviewerTokenSlug = (token) => String(token).split('[')[0].split('~
  *
  * Unlike `buildReviewWithArgs` this does NOT suppress a lone bare `copilot`
  * (the #2507 stall): every claim path resolves its list through
- * `normalizeClaimReviewers`, which strips `copilot` and falls back to `codex`,
+ * `claimSafeReviewers`, which strips `copilot` and falls back to `codex`,
  * so the suppressed case cannot reach here. A future caller that skips that
  * normalizer has to add the guard rather than assume it.
  *

@@ -294,6 +294,79 @@ describe('claim-flow completion handoff', () => {
     expect(prompt).toMatch(/## Claim Workflow Handoff/);
     expect(prompt).not.toMatch(/PortOS will merge it back after completion/);
   });
+
+  // The reviewer pin used to be appended by each of three claim-prompt
+  // generators; #4770 moved it here, off the task's persisted reviewer bundle,
+  // so it covers all five claim task types from ONE call site.
+  describe('reviewer pin', () => {
+    const claimMeta = (extra = {}) => ({ claimFlow: true, useWorktree: false, openPR: false, ...extra });
+
+    it('pins the reviewers the task persisted, exactly once', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: claimMeta({ reviewers: ['codex', 'claude'], usernames: ['alice'] }) }),
+        '/repo', null, isTruthyMeta,
+        { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' },
+      );
+
+      expect(prompt).toContain('## Reviewer pin — use the reviewers PortOS configured');
+      expect(prompt).toContain('--review-with codex,claude,@alice');
+      expect(prompt.match(/## Reviewer pin/g)).toHaveLength(1);
+      // The pin leads the handoff rather than replacing it.
+      expect(prompt.indexOf('## Reviewer pin')).toBeLessThan(prompt.indexOf('## Claim Workflow Handoff'));
+    });
+
+    it('carries the per-reviewer suffixes the task persisted into the pinned flag', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({
+          metadata: claimMeta({
+            reviewers: ['antigravity', 'ollama'],
+            usernames: [],
+            optionalReviewers: ['ollama'],
+            reviewerMaxRounds: { antigravity: 1 },
+            reviewerModels: { antigravity: 'gemini-3.7-flash' },
+            reviewerEfforts: { antigravity: 'medium' },
+          }),
+        }),
+        '/repo', null, isTruthyMeta,
+        { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' },
+      );
+
+      expect(prompt).toContain('--review-with antigravity[gemini-3.7-flash]~max=1~effort=medium,ollama~opt');
+    });
+
+    it('emits the pin on the full API prompt path too', async () => {
+      const prompt = await buildAgentPrompt(
+        makeTask({ metadata: claimMeta({ reviewers: ['grok'], usernames: [] }) }),
+        {}, '/repo', null, isTruthyMeta, { providerType: 'api' },
+      );
+
+      expect(prompt).toContain('--review-with grok');
+      expect(prompt.match(/## Reviewer pin/g)).toHaveLength(1);
+    });
+
+    it('never pins a bare copilot on a claim task — the claim agent has no CLI to run it', async () => {
+      // A claim task queued before #4770 carries no reviewer metadata, so the
+      // pin falls through to the install default. Routing that through the claim
+      // resolver is what keeps an in-flight legacy task off the #2507 stall.
+      vi.mocked(getCodeReviewDefaults).mockResolvedValueOnce({ reviewers: ['copilot'] });
+      const prompt = await buildAgentPrompt(
+        makeTask({ metadata: claimMeta() }), {}, '/repo', null, isTruthyMeta, { providerType: 'api' },
+      );
+
+      expect(prompt).toContain('--review-with codex');
+      expect(prompt).not.toContain('--review-with copilot');
+    });
+
+    it('does not emit the pin for a non-claim task', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: false, reviewers: ['codex'] } }),
+        '/repo', null, isTruthyMeta,
+        { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' },
+      );
+
+      expect(prompt).not.toContain('## Reviewer pin');
+    });
+  });
 });
 
 describe('buildLightContextPrompt', () => {
