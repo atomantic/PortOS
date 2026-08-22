@@ -1343,11 +1343,26 @@ export function applyMeasuredFit(models, { backend, measured } = {}) {
 // Never throws and never fails the caller's list: a repo the Hub has no answer
 // for (gated, renamed, offline) resolves to `null`, which the UI renders as a
 // missing age rather than an error.
-export async function fetchRepoPublishedDates(repoIds = []) {
+export async function fetchRepoPublishedDates(repoIds = [], { timeoutMs = CATALOG_ENRICH_TIMEOUT_MS } = {}) {
   const unique = [...new Set(repoIds.filter((id) => typeof id === 'string' && id.includes('/')))]
-  const settled = await Promise.allSettled(unique.map((repo) => fetchRepoModel(repo)))
-  return Object.fromEntries(unique.map((repo, i) => {
-    const model = settled[i].status === 'fulfilled' ? settled[i].value : null
-    return [repo, model?.createdAt || model?.created_at || null]
+  // Seeded with nulls and filled in place, so the budget below can return early
+  // with a partial answer instead of an empty one.
+  const dates = Object.fromEntries(unique.map((repo) => [repo, null]))
+  const work = Promise.allSettled(unique.map(async (repo) => {
+    const model = await fetchRepoModel(repo)
+    dates[repo] = model?.createdAt || model?.created_at || null
   }))
+  // Bound the wait exactly as enrichCatalogWithVariants does: a listing of 24
+  // repos is 6 rounds through a gate of 4, each round up to the 12s fetch budget
+  // plus a retry, so an unreachable Hub would otherwise turn an instant search
+  // into a minute-long hang. Whatever resolved in time is already in `dates`; the
+  // rest stay null and their probes keep warming the repo cache for the next search.
+  if (timeoutMs > 0) {
+    let timer
+    const budget = new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs); timer.unref?.() })
+    await Promise.race([work.finally(() => clearTimeout(timer)), budget])
+  } else {
+    await work
+  }
+  return dates
 }

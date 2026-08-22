@@ -249,8 +249,8 @@ export function formatAgeDays(value, fallback = '') {
   const time = new Date(value).getTime();
   if (!Number.isFinite(time)) return fallback;
   const days = Math.floor((Date.now() - time) / 86400000);
-  if (days < 0) return 'today'; // A clock skew ahead of the publish date is not "-1 days old".
-  if (days === 0) return 'today';
+  // <= 0 covers a clock skew ahead of the publish date — never "-1 days old".
+  if (days <= 0) return 'today';
   return `${days.toLocaleString()} day${days === 1 ? '' : 's'} old`;
 }
 

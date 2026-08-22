@@ -1329,6 +1329,15 @@ describe('fetchRepoPublishedDates', () => {
     })
   })
 
+  it('returns a partial answer rather than hanging the caller when the Hub stalls', async () => {
+    // A listing of two dozen repos is several rounds through the shared gate, so an
+    // unresponsive Hub must not hold the search open — unanswered repos come back null.
+    fetch.mockImplementation(() => new Promise(() => {}))
+
+    expect(await fetchRepoPublishedDates(['pub-owner/Slow'], { timeoutMs: 20 }))
+      .toEqual({ 'pub-owner/Slow': null })
+  })
+
   it('ignores ids that are not owner/name rather than asking the Hub about them', async () => {
     expect(await fetchRepoPublishedDates(['not-a-repo', null, 42])).toEqual({})
     expect(fetch).not.toHaveBeenCalled()
