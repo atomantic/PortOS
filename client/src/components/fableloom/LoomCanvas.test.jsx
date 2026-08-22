@@ -54,6 +54,20 @@ describe('LoomCanvas', () => {
     expect(onSelectNode).toHaveBeenCalledWith('n2');
   });
 
+  it('keeps left-to-right flow when the page pins orientation on a narrow canvas', () => {
+    render(
+      <LoomCanvas
+        episode={episode()}
+        selectedNodeId="n1"
+        onSelectNode={() => {}}
+        viewportWidth={390}
+        orientation="lr"
+      />,
+    );
+    expect(screen.getByTestId('loom-canvas')).toHaveAttribute('data-orientation', 'lr');
+    expect(screen.queryByTestId('loom-path-strip')).not.toBeInTheDocument();
+  });
+
   it('stacks the graph and shows a path strip on a narrow canvas', () => {
     const onSelectNode = vi.fn();
     render(

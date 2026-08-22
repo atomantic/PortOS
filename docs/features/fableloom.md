@@ -24,12 +24,12 @@ answers in-world without leaving the scene when nothing matches.
   style for AI) and optionally a pipeline series.
 - **`/fableloom/:loomId/:episodeId/:nodeId?`** — the visual editor: an SVG
   scene-graph canvas (BFS-layered; orthogonal port-fanned edges; drag to
-  reposition on desktop, positions persist). Narrow canvases (and graphs
-  that wouldn't fit) flip top-to-bottom and ignore persisted `pos` so the
-  graph scrolls instead of pan-clipping. A scene editor rail (prose,
-  endings, intent paths, scene image) sits beside the canvas on large
-  screens and below it on small ones, with a path strip for inbound/outbound
-  intents when the graph is stacked. `?play=1` opens the reader drawer.
+  reposition on desktop, positions persist). Below the editor-rail
+  breakpoint the graph flips top-to-bottom (and ignores persisted `pos`) so
+  it scrolls instead of pan-clipping. A scene editor rail (prose, endings,
+  intent paths, scene image) sits beside the canvas on large screens and
+  below it on small ones, with a path strip for inbound/outbound intents
+  when the graph is stacked. `?play=1` opens the reader drawer.
 - **Play drawer** — the reader chat. Sessions are client-side state
   (restart is free; nothing persists server-side).
 - **Story settings drawer** — scene format (plus the rewrite pass), and the

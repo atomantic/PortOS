@@ -194,6 +194,17 @@ describe('pickLoomOrientation', () => {
   });
 });
 
+describe('explicit orientation', () => {
+  it('stays left-to-right when the page pins lr even if the canvas is narrow', () => {
+    const { orientation, positions } = layoutLoomGraph(episode(), {
+      viewportWidth: 800,
+      orientation: LOOM_ORIENTATION.LR,
+    });
+    expect(orientation).toBe(LOOM_ORIENTATION.LR);
+    expect(positions.n1.x).toBeLessThan(positions.n2.x);
+  });
+});
+
 describe('loomEdgePath', () => {
   it('produces an orthogonal path from right edge to left edge', () => {
     const { d, labelX, labelY } = loomEdgePath({ x: 0, y: 0 }, { x: 300, y: 100 });

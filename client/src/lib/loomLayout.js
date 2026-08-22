@@ -161,8 +161,11 @@ function flowGapFor(nodes) {
  * ready-to-draw orthogonal path plus a de-collided label anchor. Persisted
  * `node.pos` overrides the computed slot on left-to-right layouts only.
  *
- * `options.viewportWidth` (canvas CSS width, not the window) drives
- * orientation and, on top-to-bottom, how many cards fit in a layer row.
+ * `options.orientation` pins flow direction (`lr`/`tb`). When omitted,
+ * `pickLoomOrientation(viewportWidth)` decides. `viewportWidth` (the
+ * canvas CSS width) still drives how many cards fit in a stacked layer
+ * row — not the page breakpoint; the editor passes orientation from the
+ * page so a laptop with the rail beside the canvas stays left-to-right.
  */
 export function layoutLoomGraph(episode, options = {}) {
   const nodes = asArray(episode?.nodes);

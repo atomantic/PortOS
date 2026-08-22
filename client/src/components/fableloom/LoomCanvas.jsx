@@ -3,8 +3,9 @@
  *
  * Renders scene nodes as SVG cards with intent-labeled transition edges —
  * placement, orientation, and orthogonal routing come from `layoutLoomGraph`.
- * The canvas measures itself: a wide desktop stays left-to-right, a phone or
- * a graph that wouldn't fit stacks top-to-bottom so it scrolls natively.
+ * The canvas measures itself for card wrapping. Flow direction comes from
+ * the parent when it knows the page breakpoint (editor rail beside vs
+ * under); otherwise `pickLoomOrientation` keys off canvas width.
  * Click (or tap) selects a scene (selection lives in the URL — the parent
  * navigates); mouse-drag repositions a card and persists `pos` on release.
  * Touch never drags — it would fight scrolling, and desktop `pos` is the
@@ -34,7 +35,8 @@ const startOfPath = (d) => {
 };
 
 export default function LoomCanvas({
-  episode, selectedNodeId, onSelectNode, onMoveNode, viewportWidth: viewportWidthProp,
+  episode, selectedNodeId, onSelectNode, onMoveNode,
+  viewportWidth: viewportWidthProp, orientation: orientationProp,
 }) {
   // An in-flight drag lives entirely outside React state: the dragged <g>'s
   // transform is mutated directly per pointermove, and the position commits
@@ -46,8 +48,8 @@ export default function LoomCanvas({
   const markerId = useId().replace(/:/g, '');
 
   const layout = useMemo(
-    () => layoutLoomGraph(episode, { viewportWidth }),
-    [episode, viewportWidth],
+    () => layoutLoomGraph(episode, { viewportWidth, orientation: orientationProp }),
+    [episode, viewportWidth, orientationProp],
   );
   const { positions, edges, nodeW, nodeH, orientation } = layout;
   const stacked = orientation === LOOM_ORIENTATION.TB;

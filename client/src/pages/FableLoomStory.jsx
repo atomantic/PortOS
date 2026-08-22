@@ -21,12 +21,14 @@ import PageSkeleton from '../components/ui/PageSkeleton';
 import TabPills from '../components/ui/TabPills';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
+import useContainerWidth from '../hooks/useContainerWidth';
 import LoomCanvas from '../components/fableloom/LoomCanvas';
 import LoomNodeEditor from '../components/fableloom/LoomNodeEditor';
 import LoomPlayPanel from '../components/fableloom/LoomPlayPanel';
 import LoomSettingsDrawer from '../components/fableloom/LoomSettingsDrawer';
 import LoomValidationPanel from '../components/fableloom/LoomValidationPanel';
 import { fieldClass, labelClass } from '../components/fableloom/fieldStyles';
+import { LOOM_ORIENTATION, LOOM_STACK_WIDTH } from '../lib/loomLayout';
 import {
   addLoomEpisode, addLoomNode, deleteLoomEpisode, getLoom, updateLoomEpisode,
   updateLoomNode, weaveLoomEpisode,
@@ -41,6 +43,13 @@ export default function FableLoomStory() {
   const [setupOpen, setSetupOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const playOpen = searchParams.get('play') === '1';
+  // Orientation keys off the PAGE, not the canvas. The canvas is the leftover
+  // after the 380px rail on `lg+`, so measuring it would stack a laptop graph
+  // while the rail is still beside it.
+  const [pageRef, pageWidth] = useContainerWidth();
+  const graphOrientation = pageWidth > 0
+    ? (pageWidth < LOOM_STACK_WIDTH ? LOOM_ORIENTATION.TB : LOOM_ORIENTATION.LR)
+    : undefined;
 
   useEffect(() => {
     setNotFound(false);
@@ -138,7 +147,7 @@ export default function FableLoomStory() {
   }
 
   return (
-    <div className="h-full flex flex-col">
+    <div ref={pageRef} className="h-full flex flex-col">
       <header className="border-b border-port-border px-4 py-2.5 space-y-2">
         <div className="flex items-center gap-3 flex-wrap">
           <Link to="/fableloom" className="text-port-text-muted hover:text-port-text" aria-label="Back to FableLoom">
@@ -231,6 +240,7 @@ export default function FableLoomStory() {
                 selectedNodeId={nodeId || null}
                 onSelectNode={selectNode}
                 onMoveNode={handleMoveNode}
+                orientation={graphOrientation}
               />
             ) : (
               <div className="h-full grid place-items-center p-8 text-center">
