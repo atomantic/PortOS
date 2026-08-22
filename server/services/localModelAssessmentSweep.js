@@ -56,11 +56,11 @@
  * what is still unmeasured. Persisting the queue would buy a resumable pointer
  * into a job that is cheap to restart and must never auto-resume on boot.
  *
- * One consequence is worth naming: a restart during a TUNING sweep also loses
- * the captured launch configuration, so llama-server stays on whichever variant
- * was in flight. That is visible and fixable on the LLMs page, and the
- * alternative — persisting it and relaunching a daemon at boot to put it back —
- * is exactly the boot-time work this module refuses to do.
+ * One consequence is worth naming: a restart during a MODEL or TUNING sweep
+ * also loses the captured launch configuration, so llama-server stays on
+ * whichever variant/model was in flight. That is visible and fixable on the
+ * LLMs page, and the alternative — persisting it and relaunching a daemon at
+ * boot to put it back — is exactly the boot-time work this module refuses to do.
  */
 
 import { selectSweepTargets, SWEEP_SCOPES } from '../lib/localModelAssessment.js';
@@ -164,8 +164,8 @@ export function getSweepStatus() {
  * on the sweep's last variant, which is the thing this exists to prevent. It
  * waits, bounded, then restores anyway and lets the reason be reported.
  */
-async function restoreUnderClaim(run, backend) {
-  if (!run.launchState) return { restored: false, reason: 'nothing to restore' };
+async function restoreUnderClaim(run, backend, launchState = run.launchState) {
+  if (!launchState) return { restored: false, reason: 'nothing to restore' };
   const claim = await claimHeavyLocalJob({
     kind: 'local-model assessment',
     id: `${backend} launch restore`,
@@ -175,10 +175,23 @@ async function restoreUnderClaim(run, backend) {
     console.error(`⚠️ Local LLM: restoring the launch configuration without the accelerator claim — ${claim.message}`);
   }
   try {
-    return await restoreLaunchState(backend, run.launchState);
+    return await restoreLaunchState(backend, launchState);
   } finally {
     if (claim.ok) await claim.release();
   }
+}
+
+/** Restore every backend touched by a model or tuning sweep, one at a time. */
+async function restoreAllUnderClaim(run) {
+  const failures = [];
+  for (const [backend, launchState] of Object.entries(run.launchStates || {})) {
+    const result = await restoreUnderClaim(run, backend, launchState)
+      .catch((err) => ({ restored: false, reason: err?.message || 'restore failed' }));
+    if (result?.restored === false) {
+      failures.push(`${backend}: ${result.reason || 'the launch configuration could not be put back'}`);
+    }
+  }
+  return failures;
 }
 
 /**
@@ -217,11 +230,11 @@ export function __resetSweep() {
 // queue is replaceable the moment it is cancelled, and a loop still winding down
 // its last model must not write its results into the sweep that succeeded it.
 async function runSweepLoop(run, targets, contextTokens, emit) {
-  // A tuning sweep asks each variant to be the COMPLETE tuning, so the launch
-  // line is exactly that variant's knobs and the baseline's is none of them.
-  // `beginSweep` captured what was running first, and the `finally` below puts
-  // it back — the running daemon is the only record of the flags the user chose.
-  const resetTuning = run.mode === 'tunings';
+  // A tuning sweep asks each variant to be the COMPLETE tuning, while a model
+  // sweep applies each model's recorded tuning. In both cases the launch line
+  // is made explicit before the measurement, and `beginSweep` captured what
+  // was running first so the final restore can put the user's configuration
+  // back.
   for (const target of targets) {
     if (run.cancelRequested) break;
     run.current = { backend: target.backend, modelId: target.modelId, tuningLabel: target.tuningLabel, startedAt: nowIso() };
@@ -241,6 +254,12 @@ async function runSweepLoop(run, targets, contextTokens, emit) {
 
     // One model failing is a RESULT, not a reason to abandon the queue — the
     // whole point of an overnight run is that it gets through the list.
+    // A llama model sweep must reset the launch line before applying the stored
+    // tuning for each model. Without this, model B inherited model A's batch /
+    // KV / speculative flags while its record named only B's tuning (#4774).
+    // Other endpoint runtimes have no sweep-safe reset/restore path, so they
+    // remain ordinary model measurements.
+    const resetTuning = run.mode === 'tunings' || isTuningSweepable(target.backend);
     const result = await runAssessment({
       backend: target.backend,
       modelId: target.modelId,
@@ -310,10 +329,10 @@ async function runSweepLoop(run, targets, contextTokens, emit) {
 export async function startSweep({ scope = 'unmeasured', backend, modelId, tunings = false, contextTokens, onProgress } = {}) {
   if (sweep?.status === 'running' || startingSweep) return { ...snapshot(), rejected: 'a sweep is already running' };
   // A CANCELLED sweep is not finished with the machine: its last measurement is
-  // still aborting and, for a tuning sweep, it has a launch configuration to put
-  // back. Starting the next one on top of that would have the old sweep relaunch
-  // the daemon partway through the new one's first measurement — and every
-  // number the new sweep produced up to then would describe that relaunch.
+  // still aborting and it may have a launch configuration to put back. Starting
+  // the next one on top of that would have the old sweep relaunch the daemon
+  // partway through the new one's first measurement — and every number the new
+  // sweep produced up to then would describe that relaunch.
   if (sweep && !sweep.settled) return { ...snapshot(), rejected: 'the previous sweep is still winding down' };
   // Reserved here, synchronously, so the check above and this claim cannot be
   // split by the await inside. Released in the `finally` — by which point either
@@ -384,21 +403,22 @@ async function beginSweep({ scope, backend, modelId, tunings, contextTokens, onP
     catch (err) { console.error(`❌ Local LLM: sweep progress listener failed: ${err.message}`); }
   };
 
-  // Captured BEFORE the first variant relaunches anything. A sweep rewrites the
-  // launch line once per variant, and the running daemon is the only record of
-  // the flags the user chose — the LLMs page seeds its form from hardcoded
-  // defaults, not from what is running.
-  const launchState = grid ? await captureLaunchState(named.backend) : null;
-  // Nothing to capture means the daemon is stopped, or someone else started it —
-  // either way PortOS cannot put a tuning on its launch line, so every variant
-  // would record `tuningApplied: false` and the comparison would rank a set of
-  // configurations that never ran. Refusing costs a click; running costs the
-  // whole sweep.
-  if (grid && !launchState) {
-    return {
-      ...snapshot(),
-      rejected: `PortOS is not running ${named.backend}, so it cannot vary the launch configuration — start it from the LLMs page first`,
-    };
+  // Capture BEFORE the first model/variant relaunches anything. A model sweep
+  // can cross several llama targets, each with a different stored tuning; the
+  // llama daemon is machine-wide, so the one launch state has to be restored
+  // after the whole queue, not after each model. Endpoint runtimes that cannot
+  // reset safely are intentionally absent from this map.
+  const restoreBackends = [...new Set(targets.map((target) => target.backend).filter(isTuningSweepable))];
+  const launchStates = {};
+  for (const restoreBackend of restoreBackends) {
+    const state = await captureLaunchState(restoreBackend);
+    if (!state) {
+      return {
+        ...snapshot(),
+        rejected: `PortOS is not running ${restoreBackend}, so it cannot vary the launch configuration safely — start it from the LLMs page first`,
+      };
+    }
+    launchStates[restoreBackend] = state;
   }
 
   const run = {
@@ -420,7 +440,10 @@ async function beginSweep({ scope, backend, modelId, tunings, contextTokens, onP
     // while it is false, so a cancelled sweep cannot relaunch the daemon
     // underneath the sweep that replaced it.
     settled: false,
-    launchState,
+    // Kept as a compatibility alias for callers/tests that only ever had one
+    // tuning backend. The restore path uses the per-backend map above.
+    launchState: named ? launchStates[named.backend] || null : null,
+    launchStates,
     controller: new AbortController(),
   };
   sweep = run;
@@ -443,14 +466,14 @@ async function beginSweep({ scope, backend, modelId, tunings, contextTokens, onP
     // Not in the `finally`: putting the daemon back is real work that can fail,
     // and it has to finish before the page is told the sweep is over — a user
     // reading "complete" must not still be racing a relaunch.
-    .then(() => restoreUnderClaim(run, named?.backend)
-      .then((result) => {
-        // `restored: false` with a captured state means the daemon is still on
+    .then(() => restoreAllUnderClaim(run)
+      .then((failures) => {
+        // A captured state that did not restore means that backend is still on
         // the last variant. Recording the reason is the only way the user finds
         // out; swallowing it leaves them running a configuration they did not
         // choose and cannot see.
-        if (run.launchState && result?.restored === false) {
-          run.restoreError = result.reason || 'the launch configuration could not be put back';
+        if (failures.length) {
+          run.restoreError = failures.join('; ');
           console.error(`❌ Local LLM: sweep finished but the launch configuration was not restored — ${run.restoreError}`);
         }
       })

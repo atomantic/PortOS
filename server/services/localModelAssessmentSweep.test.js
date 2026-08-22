@@ -397,9 +397,9 @@ describe('startSweep — the tuning dimension', () => {
     for (const [args] of runAssessment.mock.calls) expect(args.resetTuning).toBe(true);
   });
 
-  // A plain model sweep re-measures each model under the tuning it already
-  // carries. Resetting there would wipe launch flags the user chose.
-  it('never asks a model sweep for a reset', async () => {
+  // A plain endpoint model sweep re-measures each model under the tuning it
+  // already carries. Endpoint runtimes have no sweep-safe reset/restore path.
+  it('does not reset an endpoint model sweep', async () => {
     getAssessmentReport.mockResolvedValue(report({ unassessed: [{ backend: 'ollama', modelId: 'a' }] }));
     runAssessment.mockResolvedValue(measured());
 
@@ -407,6 +407,23 @@ describe('startSweep — the tuning dimension', () => {
     await settle();
     expect(runAssessment.mock.calls[0][0].resetTuning).toBe(false);
     expect(captureLaunchState).not.toHaveBeenCalled();
+  });
+
+  it('resets each llama model to its recorded tuning and restores the daemon afterwards', async () => {
+    getAssessmentReport.mockResolvedValue(report({
+      unassessed: [
+        { backend: 'llama', modelId: 'model-a' },
+        { backend: 'llama', modelId: 'model-b' },
+      ],
+    }));
+    runAssessment.mockResolvedValue(measured());
+
+    await startSweep({ scope: 'unmeasured' });
+    await settle();
+
+    expect(captureLaunchState).toHaveBeenCalledWith('llama');
+    expect(runAssessment.mock.calls.map(([args]) => args.resetTuning)).toEqual([true, true]);
+    expect(restoreLaunchState).toHaveBeenCalledWith('llama', { model: '/models/example.gguf' });
   });
 
   // The running daemon is the only record of the launch flags the user chose, so

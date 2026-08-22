@@ -240,6 +240,11 @@ export const getLocalLlmAssessments = (intent = 'balanced', options) =>
 export const runLocalLlmAssessment = (payload, options) =>
   request('/local-llm/assessments/run', { method: 'POST', body: JSON.stringify(payload), ...options });
 
+// Run one disposable OpenCode agent task through a local TUI provider preset.
+// This measures tool-loop completion separately from direct decoder throughput.
+export const runOpenCodeAgentBenchmark = (payload, options) =>
+  request('/local-llm/assessments/agent-benchmark', { method: 'POST', body: JSON.stringify(payload), ...options });
+
 // === The overnight sweep =====================================================
 // Measure every model the scope covers, in one server-side queue. Unlike
 // `runLocalLlmAssessment` this returns as soon as the queue is built — the run

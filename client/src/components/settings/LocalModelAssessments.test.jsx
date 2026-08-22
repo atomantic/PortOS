@@ -6,6 +6,7 @@ import { MemoryRouter, useLocation } from 'react-router';
 vi.mock('../../services/api', () => ({
   getLocalLlmAssessments: vi.fn(),
   runLocalLlmAssessment: vi.fn(),
+  runOpenCodeAgentBenchmark: vi.fn(),
   deleteLocalLlmAssessment: vi.fn(),
   // The sweep panel is a child of this one and polls the queue on mount. Its own
   // behavior has a dedicated suite; here it just has to be idle and quiet.
@@ -23,7 +24,7 @@ vi.mock('../../services/socket', () => ({
 }));
 
 import {
-  getLocalLlmAssessments, runLocalLlmAssessment, deleteLocalLlmAssessment,
+  getLocalLlmAssessments, runLocalLlmAssessment, runOpenCodeAgentBenchmark, deleteLocalLlmAssessment,
   getLocalLlmAssessmentSweep, startLocalLlmAssessmentSweep, cancelLocalLlmAssessmentSweep,
 } from '../../services/api';
 import toast from '../ui/Toast';
@@ -131,6 +132,22 @@ describe('LocalModelAssessments', () => {
     // The AI Provider Usage Policy boundary: mounting the panel must never
     // reach a provider.
     expect(runLocalLlmAssessment).not.toHaveBeenCalled();
+  });
+
+  it('runs an explicit OpenCode task check and renders its task-level rates', async () => {
+    runOpenCodeAgentBenchmark.mockResolvedValue({
+      backend: 'llama', modelId: 'qwen3.8-27b-dflash2', completed: true,
+      taskTokensPerSecond: 27.5, taskCharsPerSecond: 110, toolCalls: 2, elapsedMs: 4000,
+    });
+    const user = userEvent.setup();
+    render(<LocalModelAssessments />);
+    await user.click(screen.getAllByRole('button', { name: 'Run task check' })[0]);
+    await waitFor(() => expect(runOpenCodeAgentBenchmark).toHaveBeenCalledWith({
+      backend: 'llama', modelId: 'qwen3.8-27b-dflash2',
+    }));
+    expect(await screen.findByText('sentinel complete')).toBeInTheDocument();
+    expect(screen.getAllByText(/27\.5 tok\/s/)).toHaveLength(2);
+    expect(screen.getByText(/exact OpenCode output counts/)).toBeInTheDocument();
   });
 
   it('renders measured numbers for a ranked model', async () => {

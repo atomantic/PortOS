@@ -7,7 +7,7 @@ import { ensureProviderReady as ensureOllamaProviderReady } from './ollamaManage
 import { anyAbortSignal } from '../lib/requestAbort.js';
 // The SSE read loop lives in `lib/openAiChatStream.js` so the assessments
 // service can measure a bare loopback daemon that has no provider record.
-import { buildMessages, streamOpenAiChat } from '../lib/openAiChatStream.js';
+import { buildMessages, streamOllamaChat, streamOpenAiChat } from '../lib/openAiChatStream.js';
 import { assertSecretEndpoint } from '../lib/aiToolkit/internal/endpointGuard.js';
 
 const PROVIDER_BY_BACKEND = { ollama: 'ollama', lmstudio: 'lmstudio' };
@@ -53,7 +53,13 @@ export function summarizeTimings({ startedAt, firstChunkAt, endedAt, text, usage
   // Decode window: everything after the first token arrived. Falls back to the
   // full wall clock when TTFT was never observed (a non-streamed response), which
   // understates the rate rather than inventing a prefill split that wasn't seen.
-  const decodeMs = Number.isFinite(ttftMs) ? totalMs - ttftMs : totalMs;
+  const reportedDecodeMs = Number.isFinite(usage?.completionMs) && usage.completionMs > 0
+    ? usage.completionMs
+    : null;
+  const reportedPromptMs = Number.isFinite(usage?.promptMs) && usage.promptMs > 0
+    ? usage.promptMs
+    : null;
+  const decodeMs = reportedDecodeMs ?? (Number.isFinite(ttftMs) ? totalMs - ttftMs : totalMs);
   const rate = (tokens, ms) =>
     (Number.isFinite(tokens) && tokens > 0 && ms > 0 ? Number((tokens / (ms / 1000)).toFixed(2)) : null);
 
@@ -72,7 +78,13 @@ export function summarizeTimings({ startedAt, firstChunkAt, endedAt, text, usage
     // Prompt processing (prefill) speed: how fast the daemon chewed through the
     // context before the first token. Needs BOTH a prompt-token count and a
     // measured TTFT, so it is null on a non-streamed response.
-    promptTokensPerSecond: Number.isFinite(ttftMs) ? rate(promptTokens, ttftMs) : null,
+    promptTokensPerSecond: reportedPromptMs
+      ? rate(promptTokens, reportedPromptMs)
+      : (Number.isFinite(ttftMs) ? rate(promptTokens, ttftMs) : null),
+    // Native Ollama reports these directly. Keeping them in the sample makes
+    // the report auditable and avoids forcing readers to reverse the rates.
+    decodeMs: reportedDecodeMs,
+    promptMs: reportedPromptMs,
     // Whether the token count came from the daemon's own tokenizer (`false`) or
     // from counting streamed frames (`true`). `null` = no token count at all.
     // A consumer must label an estimate as one — PortOS has no tokenizer, and
@@ -99,7 +111,7 @@ async function resolveLocalProvider(backend) {
   return provider;
 }
 
-async function streamChatCompletion({ provider, backend, modelId, prompt, systemPrompt, temperature, maxTokens, extraBody = {}, signal, onChunk, onStats }) {
+async function streamChatCompletion({ provider, backend, modelId, prompt, systemPrompt, temperature, maxTokens, extraBody = {}, signal, onChunk, onStats, nativeOllamaUsage = false }) {
   if (backend === 'ollama') {
     const ready = await ensureOllamaProviderReady(provider).catch((err) => ({ success: false, error: err.message }));
     if (!ready.success) {
@@ -115,7 +127,8 @@ async function streamChatCompletion({ provider, backend, modelId, prompt, system
     allowCustomEndpoint: provider.allowCustomEndpoint === true,
   });
 
-  return streamOpenAiChat({
+  const stream = backend === 'ollama' && nativeOllamaUsage ? streamOllamaChat : streamOpenAiChat;
+  return stream({
     endpoint: provider.endpoint,
     apiKey: provider.apiKey,
     model: modelId,
@@ -154,6 +167,10 @@ export async function runLocalLlmTest({
   // channel). The returned result is unchanged, so non-streaming callers ignore
   // this entirely.
   onToken,
+  // The Performance page opts into Ollama's native API so exact eval counts and
+  // decode/prefill durations survive. Normal playground runs stay on the same
+  // OpenAI-compatible path OpenCode uses.
+  nativeOllamaUsage = false,
 }) {
   const provider = await resolveLocalProvider(backend);
   const fullPrompt = buildPrompt({ systemPrompt, prompt });
@@ -197,6 +214,7 @@ export async function runLocalLlmTest({
       maxTokens,
       extraBody,
       signal,
+      nativeOllamaUsage,
       onStats,
       onChunk: (chunk, kind = 'content') => {
         // First token of EITHER channel marks TTFT: for a reasoning model the
@@ -221,7 +239,7 @@ export async function runLocalLlmTest({
       runId,
       text,
       timings: summarizeTimings({ startedAt, firstChunkAt, endedAt, text, usage }),
-      options: { temperature, maxTokens, timeoutMs },
+      options: { temperature, maxTokens, timeoutMs, nativeOllamaUsage },
     };
   } catch (err) {
     const endedAt = Date.now();
@@ -250,7 +268,7 @@ export async function runLocalLlmTest({
       error,
       text: partialText,
       timings: summarizeTimings({ startedAt, firstChunkAt, endedAt, text: partialText, usage }),
-      options: { temperature, maxTokens, timeoutMs },
+      options: { temperature, maxTokens, timeoutMs, nativeOllamaUsage },
     };
   }
 }

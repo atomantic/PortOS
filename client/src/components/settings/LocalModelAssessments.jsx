@@ -23,7 +23,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Gauge, RefreshCw, Trash2, Play, AlertTriangle, History, SlidersHorizontal, ChevronDown, ChevronUp } from 'lucide-react';
+import { Gauge, RefreshCw, Trash2, Play, AlertTriangle, History, SlidersHorizontal, ChevronDown, ChevronUp, Terminal } from 'lucide-react';
 import socket from '../../services/socket';
 import Drawer from '../Drawer';
 import BrailleSpinner from '../BrailleSpinner';
@@ -36,7 +36,7 @@ import ModelThroughputReport from './ModelThroughputReport';
 import { formatContextTokens, formatDurationMs, throughputLabel } from '../../utils/formatters';
 import { tuningNoticeChip } from '../../lib/assessmentTuningNotice';
 import {
-  getLocalLlmAssessments, runLocalLlmAssessment, deleteLocalLlmAssessment,
+  getLocalLlmAssessments, runLocalLlmAssessment, runOpenCodeAgentBenchmark, deleteLocalLlmAssessment,
 } from '../../services/api';
 
 const INTENTS = [
@@ -52,6 +52,12 @@ const INTENTS = [
 const BACKEND_LABEL = {
   ollama: 'Ollama', lmstudio: 'LM Studio', llama: 'llama.cpp', mtplx: 'MTPLX', vllm: 'vLLM',
 };
+
+const OPENCODE_AGENT_TARGETS = [
+  { backend: 'llama', label: 'OpenCode llama TUI', modelId: 'qwen3.8-27b-dflash2' },
+  { backend: 'mtplx', label: 'OpenCode MTPLX TUI', modelId: 'mtplx-qwen38-27b-optimized-speed' },
+  { backend: 'ollama', label: 'OpenCode Ollama TUI', modelId: 'qwen3.8:27b-mlx' },
+];
 
 const VERDICT_META = {
   fits: { label: 'Fits', cls: 'text-emerald-400 border-emerald-400/50' },
@@ -462,6 +468,8 @@ function TuningComparison({ rows, runtimeLabelFor }) {
       <h3 className="text-xs font-medium text-gray-400">Tuning comparison</h3>
       <p className="text-[11px] text-gray-500">
         Throughput of each launch configuration, relative to the best one measured for that model.
+        The comparison uses exact tokens/s when every variant reports tokenizer counts; otherwise it
+        uses chars/s so estimates and missing usage do not decide the winner.
       </p>
       {rows.map((row) => (
         <div key={`${row.backend}:${row.modelId}`} className="border border-port-border rounded-lg p-3 space-y-1.5">
@@ -484,7 +492,9 @@ function TuningComparison({ rows, runtimeLabelFor }) {
                 </span>
               </div>
               <div className="text-right text-gray-400 shrink-0">
-                {variant.charsPerSecond} chars/s
+                {Number.isFinite(variant.rate)
+                  ? `${variant.rate} ${row.metricLabel || (row.metric === 'tokensPerSecond' ? 'tokens/s' : 'chars/s')}`
+                  : 'not measured'}
                 <span className="text-gray-600 ml-1.5">{variant.deltaPercent}%</span>
               </div>
             </div>
@@ -524,6 +534,70 @@ function RuntimeRoster({ runtimes }) {
   );
 }
 
+function OpenCodeAgentBenchmarkPanel({ results, running, onRun }) {
+  const completed = OPENCODE_AGENT_TARGETS
+    .map((target) => ({ target, result: results?.[target.backend] }))
+    .filter(({ result }) => result?.completed);
+  const comparableTokens = completed.length > 0
+    && completed.every(({ result }) => Number.isFinite(result.taskTokensPerSecond));
+  const metricKey = comparableTokens ? 'taskTokensPerSecond' : 'taskCharsPerSecond';
+  const metricLabel = comparableTokens ? 'tok/s' : 'chars/s';
+  const leader = [...completed]
+    .filter(({ result }) => Number.isFinite(result[metricKey]))
+    .sort((a, b) => b.result[metricKey] - a.result[metricKey])[0];
+
+  return (
+    <div className="border border-port-border rounded-lg p-3 space-y-2">
+      <div className="flex items-center gap-1.5 text-xs text-gray-300">
+        <Terminal size={12} className="text-port-accent" />
+        <h3 className="font-medium">OpenCode agent-task check</h3>
+      </div>
+      <p className="text-[11px] text-gray-500">
+        Runs one disposable task through each configured OpenCode local preset. The agent must create and
+        read a sentinel file in a temporary workspace, so this measures tool-loop completion rather than raw
+        decoder speed. Terminal paste/render overhead is intentionally excluded; compare the direct report
+        above for engine throughput.
+      </p>
+      {leader && (
+        <div className="text-[11px] text-port-accent border border-port-accent/30 rounded px-2 py-1">
+          Current task leader: <span className="font-medium">{leader.target.label}</span> — {leader.result[metricKey]} {metricLabel}
+          {comparableTokens ? ' (exact OpenCode output counts)' : ' (chars/s fallback until every check reports tokens)'}
+        </div>
+      )}
+      <div className="grid gap-1.5 sm:grid-cols-3">
+        {OPENCODE_AGENT_TARGETS.map((target) => {
+          const result = results?.[target.backend];
+          return (
+            <div key={target.backend} className="border border-port-border/70 rounded p-2 space-y-1.5">
+              <div className="text-[11px] text-gray-300">{target.label}</div>
+              <div className="text-[10px] text-gray-500 font-mono break-all">{target.modelId}</div>
+              {result && (
+                <div className={`text-[10px] ${result.completed ? 'text-emerald-400' : 'text-port-warning'}`}>
+                  {result.completed ? 'sentinel complete' : (result.error || 'task failed')}
+                </div>
+              )}
+              {result?.completed && (
+                <div className="text-[10px] text-gray-400 space-y-0.5">
+                  <div>{Number.isFinite(result.taskTokensPerSecond) ? `${result.taskTokensPerSecond} tok/s · ` : ''}{Number.isFinite(result.taskCharsPerSecond) ? `${result.taskCharsPerSecond} chars/s` : 'chars/s n/a'}</div>
+                  <div>{result.toolCalls} tool call{result.toolCalls === 1 ? '' : 's'} · {formatDurationMs(result.elapsedMs)}</div>
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => onRun(target)}
+                disabled={running}
+                className="w-full flex items-center justify-center gap-1 px-2 py-1 text-[10px] rounded border border-port-border text-gray-300 hover:border-port-accent hover:text-white transition-colors disabled:opacity-50"
+              >
+                <Play size={10} /> {running ? 'Running…' : 'Run task check'}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function LocalModelAssessments() {
   const [intent, setIntent] = useState('balanced');
   const [report, setReport] = useState(null);
@@ -545,6 +619,7 @@ export function LocalModelAssessments() {
   // gate and the progress for BOTH sweeps — there is only one server-side queue,
   // so there is only one place that renders it.
   const [tuningSweepRequest, setTuningSweepRequest] = useState(null);
+  const [agentBenchmarkResults, setAgentBenchmarkResults] = useState({});
 
   const [searchParams, updateParams] = useUrlParams();
   const measureBackend = searchParams.get('measureBackend') || '';
@@ -705,6 +780,17 @@ export function LocalModelAssessments() {
     return true;
   }, { errorMessage: 'Could not discard that measurement' });
 
+  const [runAgentBenchmark, agentBenchmarkRunning] = useAsyncAction(async (target) => {
+    const result = await runOpenCodeAgentBenchmark({ backend: target.backend, modelId: target.modelId });
+    setAgentBenchmarkResults((previous) => ({ ...previous, [target.backend]: result }));
+    if (result?.completed) {
+      toast.success(`${target.label}: agent task completed`);
+    } else if (result) {
+      toast.warning(`${target.label}: ${result.error || 'agent task did not complete'}`);
+    }
+    return result;
+  }, { errorMessage: 'OpenCode agent benchmark failed' });
+
   const cancelRun = () => {
     runControllerRef.current?.abort();
     // Stop accepting frames for the abandoned run BEFORE the drawer closes, or a
@@ -770,6 +856,12 @@ export function LocalModelAssessments() {
       </p>
 
       <RuntimeRoster runtimes={report?.runtimes} />
+
+      <OpenCodeAgentBenchmarkPanel
+        results={agentBenchmarkResults}
+        running={agentBenchmarkRunning || busy}
+        onRun={runAgentBenchmark}
+      />
 
       {/* The batch run. Kept above the ranking because it is what you come here
           to press at the end of the day; the results below are what you read the

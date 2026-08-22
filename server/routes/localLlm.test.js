@@ -8,6 +8,7 @@ import { enrichCatalogWithVariants, applyMeasuredFit } from '../services/hugging
 import { getMeasuredFits } from '../services/localModelAssessmentStore.js';
 import { runAssessment } from '../services/localModelAssessments.js';
 import { startSweep, getSweepStatus, cancelSweep } from '../services/localModelAssessmentSweep.js';
+import { runOpenCodeAgentBenchmark } from '../services/localModelAgentBenchmark.js';
 import { getLoadedModels, unloadModel } from '../services/ollamaManager.js';
 import { getLoadedModels as getLoadedLmStudioModels, getLastLoadedModelsError as getLmStudioResidencyError } from '../services/lmStudioManager.js';
 import { getSettings } from '../services/settings.js';
@@ -76,6 +77,12 @@ vi.mock('../services/localModelAssessmentSweep.js', () => ({
   startSweep: vi.fn(async () => ({ status: 'running', total: 3, completed: 0 })),
   getSweepStatus: vi.fn(() => ({ status: 'idle', total: 0, completed: 0, results: [] })),
   cancelSweep: vi.fn(() => ({ status: 'cancelled', total: 3, completed: 1, results: [] })),
+}));
+
+vi.mock('../services/localModelAgentBenchmark.js', () => ({
+  runOpenCodeAgentBenchmark: vi.fn(async ({ backend, modelId, timeoutMs }) => ({
+    backend, modelId, timeoutMs, completed: true, taskCharsPerSecond: 100,
+  })),
 }));
 
 vi.mock('../services/llamaServerManager.js', () => ({
@@ -511,6 +518,29 @@ describe('measured assessments wiring', () => {
     expect(app.get('io').emit).toHaveBeenCalledWith('localLlm:progress', {
       scope: 'assessment', backend: 'ollama', modelId: 'example-model:14b', event: 'start', sampleIndex: 1, sampleCount: 3,
     });
+  });
+
+  it('runs the explicit OpenCode agent benchmark with a bounded timeout', async () => {
+    const res = await request(makeApp())
+      .post('/api/local-llm/assessments/agent-benchmark')
+      .send({ backend: 'ollama', modelId: 'qwen3.8:27b-mlx', timeoutMs: 120000 });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      backend: 'ollama', modelId: 'qwen3.8:27b-mlx', timeoutMs: 120000, completed: true,
+    });
+    expect(runOpenCodeAgentBenchmark).toHaveBeenCalledWith({
+      backend: 'ollama', modelId: 'qwen3.8:27b-mlx', timeoutMs: 120000,
+    });
+  });
+
+  it('rejects an agent benchmark backend outside the three local targets', async () => {
+    const res = await request(makeApp())
+      .post('/api/local-llm/assessments/agent-benchmark')
+      .send({ backend: 'vllm', modelId: 'qwen3.8-27b-dflash2' });
+
+    expect(res.status).toBe(400);
+    expect(runOpenCodeAgentBenchmark).not.toHaveBeenCalled();
   });
 
   // The sweep is the overnight path: it must return as soon as the queue exists,

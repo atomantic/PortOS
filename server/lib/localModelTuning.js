@@ -176,7 +176,7 @@ const RAW_SPECS = {
     // attention is on, so a V-only variant would fail to launch rather than
     // measure anything. The `flashAttn` variant above is the honest single knob.
     { id: 'cacheTypeV', label: 'KV cache type (V)', type: 'enum', config: true, options: CACHE_TYPES, hint: 'Quantizing the value cache buys context length with a little quality.' },
-    { id: 'draftMax', label: 'Draft tokens', type: 'number', config: true, min: 0, max: 64, hint: 'Speculative-decoding lookahead. Only does anything when a drafter model is loaded.' },
+    { id: 'draftMax', label: 'Draft tokens', type: 'number', config: true, min: 0, max: 64, sweep: [3], hint: 'Speculative-decoding lookahead (`--spec-draft-n-max`). Only does anything when a drafter model is loaded.' },
   ],
   // Every Ollama knob is daemon-wide environment, applied by restarting
   // `ollama serve` — including the context window. A `num_ctx` in the request
@@ -490,6 +490,16 @@ const throughputOf = (a) => {
   return Number.isFinite(value) ? value : null;
 };
 
+// Token rates are the better tuning signal only when every variant has an
+// exact daemon-reported count. A frame-count estimate is useful evidence, but
+// mixing it with tokenizer counts would make the winner depend on reporting
+// behavior rather than runtime speed. Fall back to chars/s for that group — it
+// is the unit every assessment can measure without a tokenizer.
+const tokenThroughputOf = (a) => {
+  const value = a?.performance?.meanTokensPerSecond;
+  return Number.isFinite(value) && a?.performance?.tokensEstimated !== true ? value : null;
+};
+
 /**
  * Group measured assessments by (backend, model) and report which tuning won.
  *
@@ -516,27 +526,38 @@ export function compareTunings(assessments) {
   const rows = [];
   for (const list of groups.values()) {
     if (list.length < 2) continue;
-    const sorted = [...list].sort((a, b) => throughputOf(b) - throughputOf(a));
-    const winner = throughputOf(sorted[0]);
+    const useTokens = list.every((assessment) => tokenThroughputOf(assessment) !== null);
+    const metric = useTokens ? 'tokensPerSecond' : 'charsPerSecond';
+    const rateOf = useTokens ? tokenThroughputOf : throughputOf;
+    const sorted = [...list].sort((a, b) => rateOf(b) - rateOf(a));
+    const winner = rateOf(sorted[0]);
     rows.push({
       backend: sorted[0].backend,
       modelId: sorted[0].modelId,
+      metric,
+      metricLabel: useTokens ? 'tokens/s' : 'chars/s',
       best: {
         tuning: sorted[0].tuning || {},
         label: labelOf(sorted[0]),
-        charsPerSecond: winner,
+        charsPerSecond: throughputOf(sorted[0]),
+        tokensPerSecond: tokenThroughputOf(sorted[0]),
+        rate: winner,
       },
       variants: sorted.map((a) => ({
         tuning: a.tuning || {},
         label: labelOf(a),
         charsPerSecond: throughputOf(a),
+        tokensPerSecond: tokenThroughputOf(a),
+        rate: rateOf(a),
+        metric,
+        tokensEstimated: a?.performance?.tokensEstimated === true,
         maxWorkingContextTokens: Number.isFinite(a.performance?.maxWorkingContextTokens)
           ? a.performance.maxWorkingContextTokens
           : null,
         assessedAt: a.assessedAt || null,
         // Relative to the winner, so 100 is the best measured tuning and 74
         // means "a quarter slower than the best this model managed here".
-        deltaPercent: winner > 0 ? Number(((throughputOf(a) / winner) * 100).toFixed(1)) : null,
+        deltaPercent: winner > 0 ? Number(((rateOf(a) / winner) * 100).toFixed(1)) : null,
       })),
     });
   }

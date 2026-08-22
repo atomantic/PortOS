@@ -268,6 +268,8 @@ export function toSample(contextTokens, result) {
     promptTokens: measured(timings.promptTokens),
     tokensPerSecond: measured(timings.tokensPerSecond),
     promptTokensPerSecond: measured(timings.promptTokensPerSecond),
+    decodeMs: measured(timings.decodeMs),
+    promptMs: measured(timings.promptMs),
     // `true` = the count came from counting streamed frames rather than the
     // daemon's tokenizer, and every figure derived from it must be labelled.
     tokensEstimated: ok && typeof timings.tokensEstimated === 'boolean' ? timings.tokensEstimated : null,
@@ -629,6 +631,11 @@ async function measureModel({ backend, modelId, contexts, tuning, resetTuning, s
       timeoutMs: SAMPLE_TIMEOUT_MS,
       extraBody: request,
       signal,
+      // Ollama's OpenAI-compatible shim frequently omits usage even though the
+      // native `/api/chat` final frame reports exact tokenizer counts and
+      // eval/prefill durations. Use that transport only for Performance-page
+      // evidence; OpenCode remains on its normal provider endpoint.
+      nativeOllamaUsage: backend === 'ollama',
     };
     const result = await (endpoint
       ? runEndpointLlmTest({ ...shared, runtime: backend, endpoint, apiKey })

@@ -25,6 +25,7 @@ import {
   localLlmCompareSchema,
   localLlmAssessmentRunSchema,
   localLlmAssessmentIntentSchema,
+  localLlmAgentBenchmarkSchema,
   localLlmAssessmentDeleteSchema,
   localLlmAssessmentSweepSchema,
   localLlmLlamaServerStartSchema,
@@ -54,6 +55,7 @@ import { getSettings } from '../services/settings.js'
 import { runLocalLlmTest, compareLocalLlmModels } from '../services/localLlmPlayground.js'
 import { getAssessmentReport, runAssessment, deleteAssessment } from '../services/localModelAssessments.js'
 import { startSweep, getSweepStatus, cancelSweep } from '../services/localModelAssessmentSweep.js'
+import { runOpenCodeAgentBenchmark } from '../services/localModelAgentBenchmark.js'
 import { listUserModels } from '../services/audioModels.js'
 import { ENGINES } from '../services/pipeline/musicGen.js'
 import { abortSignalFromResponse } from '../lib/requestAbort.js'
@@ -485,6 +487,15 @@ router.post('/assessments/run', asyncHandler(async (req, res) => {
   // frame from a model pull streaming on the same event.
   const onProgress = (frame) => io?.emit('localLlm:progress', frame)
   res.json(await runAssessment({ backend, modelId, contextTokens, tuning, signal: abortSignalFromResponse(res), onProgress }))
+}))
+
+// POST /api/local-llm/assessments/agent-benchmark — run one explicit,
+// disposable OpenCode task through a configured local TUI provider. This is
+// deliberately separate from `/run`: it measures task-loop completion, not just
+// decoder speed, and never runs from a read/poll/bootstrap path.
+router.post('/assessments/agent-benchmark', asyncHandler(async (req, res) => {
+  const { backend, modelId, timeoutMs } = validateRequest(localLlmAgentBenchmarkSchema, req.body)
+  res.json(await runOpenCodeAgentBenchmark({ backend, modelId, timeoutMs }))
 }))
 
 // POST /api/local-llm/assessments/sweep — measure EVERY model the scope covers,

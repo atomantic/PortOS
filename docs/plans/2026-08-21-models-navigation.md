@@ -57,7 +57,7 @@ rule, and partial-output-on-abort.
 PortOS can actually **do** with it:
 
 - `launch` — PortOS puts it on the daemon's command line (llama.cpp only:
-  `-b`, `-ub`, `-t`, `--flash-attn`, `--cache-type-k|v`, `--draft-max`).
+  `-b`, `-ub`, `-t`, `--flash-attn`, `--cache-type-k|v`, `--spec-draft-n-max`).
 - `request` — sent with each measurement request (Ollama's `num_ctx`).
 - `record` — PortOS cannot set it; the user states how the daemon was launched so
   two readings stay comparable (LM Studio, MTPLX, vLLM).

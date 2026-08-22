@@ -142,7 +142,12 @@ function parseConfigFromArgs(args) {
     flashAttn: list.includes('--flash-attn') || list.includes('-fa'),
     cacheTypeK: getArg('--cache-type-k'),
     cacheTypeV: getArg('--cache-type-v'),
-    draftMax: getArg('--draft-max') !== null ? Number(getArg('--draft-max')) : null,
+    // Current llama.cpp calls this `--spec-draft-n-max`; retain the older
+    // spelling on read so a pre-upgrade PortOS launch line can still be captured
+    // and restored without inventing a new value.
+    draftMax: getArg('--spec-draft-n-max') !== null
+      ? Number(getArg('--spec-draft-n-max'))
+      : (getArg('--draft-max') !== null ? Number(getArg('--draft-max')) : null),
   };
 }
 
@@ -353,7 +358,7 @@ export async function startLlamaServer(options = {}) {
   if (cacheTypeV) args.push('--cache-type-v', String(cacheTypeV));
   // Only meaningful alongside a drafter — passing it without one makes
   // llama-server reject the launch line outright.
-  if (Number.isFinite(draftMax) && draftPath) args.push('--draft-max', String(draftMax));
+  if (Number.isFinite(draftMax) && draftPath) args.push('--spec-draft-n-max', String(draftMax));
   if (alias) args.push('--alias', alias);
 
   lastExitError = null;
@@ -1063,4 +1068,3 @@ export function _resetLlamaServerStateForTests({ relaunchReadyTimeout, pm2ReadRe
   relaunchReadyTimeoutMs = Number.isFinite(relaunchReadyTimeout) ? relaunchReadyTimeout : 120000;
   pm2ReadRetryDelayMs = Number.isFinite(pm2ReadRetryDelay) ? pm2ReadRetryDelay : PM2_READ_RETRY_DELAY_MS;
 }
-

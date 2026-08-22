@@ -272,6 +272,24 @@ describe('compareTunings', () => {
     expect(row.variants.map((v) => v.deltaPercent)).toEqual([100, 75]);
   });
 
+  it('ranks by exact tokens per second when every variant reports tokenizer usage', () => {
+    const [row] = compareTunings([
+      measured({ ubatchSize: 256 }, 100, {
+        performance: { meanCharsPerSecond: 100, meanTokensPerSecond: 20, tokensEstimated: false, maxWorkingContextTokens: 16384 },
+      }),
+      measured({ ubatchSize: 512 }, 90, {
+        performance: { meanCharsPerSecond: 90, meanTokensPerSecond: 30, tokensEstimated: false, maxWorkingContextTokens: 16384 },
+      }),
+    ]);
+    expect(row.metric).toBe('tokensPerSecond');
+    expect(row.metricLabel).toBe('tokens/s');
+    expect(row.best.rate).toBe(30);
+    expect(row.best.tokensPerSecond).toBe(30);
+    expect(row.best.charsPerSecond).toBe(90);
+    expect(row.variants.map((variant) => variant.rate)).toEqual([30, 20]);
+    expect(row.variants.map((variant) => variant.deltaPercent)).toEqual([100, 66.7]);
+  });
+
   it('labels the untuned variant as backend defaults rather than an empty string', () => {
     const [row] = compareTunings([measured({}, 120), measured({ ubatchSize: 512 }, 90)]);
     expect(row.best.label).toBe('Backend defaults');

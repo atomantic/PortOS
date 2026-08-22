@@ -9,8 +9,15 @@
  * reasoning-only model must still surface its output.
  */
 
-import { describe, it, expect } from 'vitest';
-import { buildMessages, normalizeUsage, parseStreamFrame, resolvePartialOutput } from './openAiChatStream.js';
+import { describe, it, expect, vi } from 'vitest';
+import {
+  buildMessages,
+  normalizeUsage,
+  parseOllamaStreamFrame,
+  parseStreamFrame,
+  resolvePartialOutput,
+  streamOllamaChat,
+} from './openAiChatStream.js';
 
 describe('buildMessages', () => {
   it('omits the system message when blank', () => {
@@ -107,5 +114,63 @@ describe('normalizeUsage', () => {
   it('ignores non-numeric and negative values rather than recording them', () => {
     expect(normalizeUsage({ completion_tokens: 'lots', prompt_tokens: -3 }))
       .toEqual({ completionTokens: null, promptTokens: null });
+  });
+});
+
+describe('parseOllamaStreamFrame', () => {
+  it('reads native content and thinking deltas', () => {
+    expect(parseOllamaStreamFrame(JSON.stringify({ message: { content: 'answer', thinking: 'hmm' } })))
+      .toEqual({ content: 'answer', reasoning: 'hmm', usage: { message: { content: 'answer', thinking: 'hmm' } }, done: false });
+  });
+
+  it('skips malformed native lines and preserves terminal usage', () => {
+    expect(parseOllamaStreamFrame('{nope')).toBeNull();
+    expect(parseOllamaStreamFrame(JSON.stringify({
+      done: true,
+      eval_count: 42,
+      prompt_eval_count: 900,
+      eval_duration: 250000000,
+      prompt_eval_duration: 50000000,
+    }))).toMatchObject({ content: '', reasoning: '', done: true, usage: { eval_count: 42 } });
+  });
+});
+
+describe('streamOllamaChat', () => {
+  it('uses native options and reports exact counts plus durations', async () => {
+    const lines = [
+      JSON.stringify({ message: { content: 'Done.' }, done: false }),
+      JSON.stringify({ done: true, eval_count: 42, prompt_eval_count: 900, eval_duration: 250000000, prompt_eval_duration: 50000000 }),
+    ];
+    let index = 0;
+    const reader = {
+      read: vi.fn(async () => index < lines.length
+        ? { done: false, value: new TextEncoder().encode(`${lines[index++]}\n`) }
+        : { done: true, value: undefined }),
+      cancel: vi.fn(async () => {}),
+    };
+    global.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200, body: { getReader: () => reader } });
+    const stats = [];
+    const result = await streamOllamaChat({
+      endpoint: 'http://localhost:11434/v1',
+      model: 'qwen3.8:27b-mlx',
+      messages: [{ role: 'user', content: 'hi' }],
+      temperature: 0,
+      maxTokens: 96,
+      extraBody: { num_ctx: 4096 },
+      onStats: (value) => stats.push(value),
+    });
+
+    expect(result).toBe('Done.');
+    expect(global.fetch).toHaveBeenCalledWith('http://localhost:11434/api/chat', expect.objectContaining({
+      body: expect.stringContaining('"num_ctx":4096'),
+    }));
+    expect(stats).toEqual([{
+      completionTokens: 42,
+      promptTokens: 900,
+      completionMs: 250,
+      promptMs: 50,
+      estimated: false,
+    }]);
+    delete global.fetch;
   });
 });

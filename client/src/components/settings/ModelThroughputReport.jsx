@@ -42,7 +42,7 @@ const pointsByContext = (row) => new Map((row.points || []).map((p) => [p.contex
 /** The report as a markdown table — what a copy of this is actually useful as. */
 export function toMarkdown(report) {
   const contexts = report?.contexts || [];
-  const header = ['Model', 'Runtime', 'Tuning', 'tok/s', 'Prefill tok/s', 'TTFT', ...contexts.map((c) => `${formatContextTokens(c)} tok/s`)];
+  const header = ['Model', 'Runtime', 'Tuning', 'tok/s', 'chars/s', 'Prefill tok/s', 'TTFT', ...contexts.map((c) => `${formatContextTokens(c)} tok/s`)];
   const lines = [
     `| ${header.join(' | ')} |`,
     `| ${header.map(() => '---').join(' | ')} |`,
@@ -54,6 +54,7 @@ export function toMarkdown(report) {
       row.backend,
       row.tuningLabel || 'backend defaults',
       rateText(row.meanTokensPerSecond, row.tokensEstimated),
+      rateText(row.meanCharsPerSecond, false),
       rateText(row.meanPromptTokensPerSecond, row.tokensEstimated),
       Number.isFinite(row.meanTtftMs) ? formatDurationMs(row.meanTtftMs) : '—',
       ...contexts.map((c) => rateText(byContext.get(c)?.tokensPerSecond, row.tokensEstimated)),
@@ -101,9 +102,10 @@ export default function ModelThroughputReport({ report, runtimeLabelFor }) {
         </button>
       </div>
       <p className="text-[11px] text-gray-500">
-        Generation speed after the first token — the same figure llama.cpp and Ollama report. Prefill speed
-        (how fast the prompt was read) and time to first token are beside it, so a model that decodes fast
-        but chews slowly through long context is visible as such.
+        Generation speed after the first token — exact tokens/s when the runtime reports usage, with chars/s
+        beside it as the universal cross-runtime fallback. Prefill speed (how fast the prompt was read) and
+        time to first token are beside them, so a model that decodes fast but chews slowly through long context
+        is visible as such.
         {report.modelsWithTokenRates < rows.length && (
           <> A <span className="text-gray-400">—</span> means the runtime reported no token counts for that
           reading; its chars/s figure is in the ranked list above.</>
@@ -118,6 +120,7 @@ export default function ModelThroughputReport({ report, runtimeLabelFor }) {
             <tr className="text-gray-500 border-b border-port-border">
               <th scope="col" className="text-left font-medium px-2 py-1.5">Model</th>
               <th scope="col" className="text-right font-medium px-2 py-1.5 whitespace-nowrap">tok/s</th>
+              <th scope="col" className="text-right font-medium px-2 py-1.5 whitespace-nowrap">chars/s</th>
               <th scope="col" className="text-right font-medium px-2 py-1.5 whitespace-nowrap">Prefill</th>
               <th scope="col" className="text-right font-medium px-2 py-1.5 whitespace-nowrap">TTFT</th>
               {contexts.map((context) => (
@@ -143,6 +146,7 @@ export default function ModelThroughputReport({ report, runtimeLabelFor }) {
                     </div>
                   </td>
                   <td className="px-2 py-1.5 text-right"><Rate value={row.meanTokensPerSecond} estimated={row.tokensEstimated} /></td>
+                  <td className="px-2 py-1.5 text-right"><Rate value={row.meanCharsPerSecond} estimated={false} /></td>
                   <td className="px-2 py-1.5 text-right"><Rate value={row.meanPromptTokensPerSecond} estimated={row.tokensEstimated} /></td>
                   <td className="px-2 py-1.5 text-right text-gray-200 whitespace-nowrap">
                     {Number.isFinite(row.meanTtftMs) ? formatDurationMs(row.meanTtftMs) : <span className="text-gray-600">—</span>}

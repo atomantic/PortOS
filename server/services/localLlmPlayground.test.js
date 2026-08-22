@@ -58,6 +58,19 @@ describe('summarizeTimings', () => {
     expect(t.tokensEstimated).toBe(false);
   });
 
+  it('prefers native decode and prefill durations when the runtime reports them', () => {
+    const t = summarizeTimings({
+      startedAt: 0, firstChunkAt: 1000, endedAt: 3000, text: 'abc',
+      usage: {
+        completionTokens: 100, promptTokens: 4000, completionMs: 500, promptMs: 250, estimated: false,
+      },
+    });
+    expect(t.decodeMs).toBe(500);
+    expect(t.promptMs).toBe(250);
+    expect(t.tokensPerSecond).toBe(200);
+    expect(t.promptTokensPerSecond).toBe(16000);
+  });
+
   it('marks a frame-counted token figure as an estimate', () => {
     const t = summarizeTimings({
       startedAt: 0, firstChunkAt: 500, endedAt: 1500, text: 'abc',

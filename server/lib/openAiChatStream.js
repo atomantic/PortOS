@@ -92,6 +92,36 @@ export function normalizeUsage(usage) {
 }
 
 /**
+ * Parse one native Ollama `/api/chat` NDJSON frame.
+ *
+ * Ollama reports exact tokenizer counts and nanosecond timings on the terminal
+ * `done` frame, but its OpenAI-compatible shim does not consistently forward
+ * those fields. Keep this parser next to the SSE parser so the assessment
+ * service can choose the native path without growing a second streaming loop.
+ * A malformed line is skipped for the same reason as a malformed SSE frame:
+ * one keep-alive or proxy fragment must not discard the output already read.
+ */
+export function parseOllamaStreamFrame(rawLine) {
+  const line = String(rawLine || '').trim();
+  if (!line) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  const message = parsed?.message && typeof parsed.message === 'object' ? parsed.message : {};
+  return {
+    content: typeof message.content === 'string' ? message.content : '',
+    reasoning: typeof message.thinking === 'string'
+      ? message.thinking
+      : (typeof message.reasoning === 'string' ? message.reasoning : ''),
+    usage: parsed && typeof parsed === 'object' ? parsed : null,
+    done: parsed?.done === true,
+  };
+}
+
+/**
  * Resolve the text to surface from a (possibly interrupted) stream: prefer the
  * visible content, fall back to reasoning when no content arrived (some models
  * emit only a reasoning channel), and `''` when neither did. Used on both the
@@ -284,6 +314,134 @@ export async function streamOpenAiChat({
       // reporting 0 would file a transport failure as a zero-token generation.
       : { completionTokens: contentFrames > 0 ? contentFrames : null, promptTokens: reported.promptTokens, estimated: contentFrames > 0 });
     await reader.cancel().catch(() => {});
+  }
+
+  return resolvePartialOutput({ output, reasoning });
+}
+
+/**
+ * Stream Ollama's native `/api/chat` endpoint.
+ *
+ * This is intentionally an assessment-only transport. OpenCode and the local
+ * playground use the OpenAI-compatible endpoint because that is the provider
+ * contract they exercise; the Performance page uses this native route only to
+ * obtain Ollama's exact `eval_count`, `prompt_eval_count`, `eval_duration`, and
+ * `prompt_eval_duration` values. `extraBody.num_ctx` is translated into the
+ * native `options.num_ctx` field, matching Ollama's API rather than the shim.
+ *
+ * @returns {Promise<string>} visible content, or reasoning when content is
+ *   absent; an interrupted stream throws with `.partialOutput`.
+ */
+export async function streamOllamaChat({
+  endpoint,
+  apiKey,
+  model,
+  messages,
+  temperature,
+  maxTokens,
+  extraBody = {},
+  signal,
+  onChunk,
+  onStats,
+}) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+  const base = String(endpoint || '').replace(/\/v1\/?$/, '').replace(/\/+$/, '');
+  const url = `${base}/api/chat`;
+  const { num_ctx: numCtx, think, ...nativeExtra } = extraBody || {};
+  const options = {
+    ...nativeExtra,
+    ...(Number.isFinite(Number(numCtx)) && Number(numCtx) > 0 ? { num_ctx: Number(numCtx) } : {}),
+    ...(Number.isFinite(Number(temperature)) ? { temperature: Number(temperature) } : {}),
+    ...(Number.isFinite(Number(maxTokens)) && Number(maxTokens) > 0 ? { num_predict: Number(maxTokens) } : {}),
+  };
+  const response = await fetch(url, {
+    method: 'POST',
+    headers,
+    signal,
+    body: JSON.stringify({
+      model,
+      messages,
+      stream: true,
+      ...(Object.keys(options).length ? { options } : {}),
+      ...(typeof think === 'boolean' ? { think } : {}),
+    }),
+  }).catch((err) => ({ ok: false, status: 0, error: err.message }));
+
+  if (!response.ok) {
+    const body = response.text ? await response.text().catch(() => '') : response.error || '';
+    throw new Error(`Ollama returned ${response.status || 0}: ${body || response.error || response.statusText || 'request failed'}`);
+  }
+
+  const emitStats = (stats) => {
+    if (typeof onStats !== 'function') return;
+    try { onStats(stats); }
+    catch (err) { console.error(`❌ Local LLM: Ollama usage listener failed: ${err.message}`); }
+  };
+
+  let output = '';
+  let reasoning = '';
+  let usage = null;
+  let contentFrames = 0;
+  let promptMs = null;
+  let completionMs = null;
+  let reader = null;
+
+  const consumeLine = async (rawLine) => {
+    const frame = parseOllamaStreamFrame(rawLine);
+    if (!frame) return;
+    if (frame.usage) usage = frame.usage;
+    if (Number.isFinite(frame.usage?.prompt_eval_duration)) {
+      promptMs = frame.usage.prompt_eval_duration / 1e6;
+    }
+    if (Number.isFinite(frame.usage?.eval_duration)) {
+      completionMs = frame.usage.eval_duration / 1e6;
+    }
+    if (frame.content) {
+      contentFrames += 1;
+      output += frame.content;
+      await onChunk?.(frame.content, 'content');
+    }
+    if (frame.reasoning) {
+      reasoning += frame.reasoning;
+      await onChunk?.(frame.reasoning, 'reasoning');
+    }
+  };
+
+  try {
+    if (!response.body?.getReader) {
+      const body = await response.text?.() || '';
+      for (const line of body.split(/\r?\n/)) await consumeLine(line);
+    } else {
+      reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) await consumeLine(line);
+      }
+      if (buffer.trim()) await consumeLine(buffer);
+    }
+  } catch (err) {
+    err.partialOutput = resolvePartialOutput({ output, reasoning });
+    throw err;
+  } finally {
+    const reported = normalizeUsage(usage);
+    emitStats({
+      ...reported,
+      // Ollama's durations are nanoseconds. Keep the converted milliseconds
+      // beside the counts so the caller can calculate decode and prefill rates
+      // without subtracting two clocks that include different work.
+      ...(Number.isFinite(completionMs) ? { completionMs } : {}),
+      ...(Number.isFinite(promptMs) ? { promptMs } : {}),
+      estimated: reported.completionTokens === null && contentFrames > 0,
+      ...(reported.completionTokens === null && contentFrames > 0 ? { completionTokens: contentFrames } : {}),
+    });
+    await reader?.cancel?.().catch(() => {});
   }
 
   return resolvePartialOutput({ output, reasoning });

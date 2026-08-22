@@ -305,6 +305,14 @@ export const localLlmAssessmentSweepSchema = z.object({
 export const localLlmAssessmentIntentSchema = z.object({
   intent: z.enum(['balanced', 'smartest', 'fastest', 'lightweight']).optional().default('balanced'),
 });
+// One explicit OpenCode task through each of the three Qwen runtime presets.
+// The service still restricts the model id to the named target for that backend
+// so this endpoint cannot become an arbitrary CLI launcher.
+export const localLlmAgentBenchmarkSchema = z.object({
+  backend: z.enum(['ollama', 'mtplx', 'llama']),
+  modelId: localLlmModelIdSchema,
+  timeoutMs: z.coerce.number().int().min(10000).max(600000).optional().default(600000),
+});
 // `tuningKey` identifies WHICH measurement of a model to drop — several can now
 // coexist, one per tuning. Absent/'' targets the backend-defaults record, which
 // is exactly what a pre-tuning client sends.
