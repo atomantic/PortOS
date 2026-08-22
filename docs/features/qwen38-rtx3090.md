@@ -118,6 +118,12 @@ With the right parser the same request comes back as `finish_reason:
 without which the whole point of the preset — a CoS agent editing files — does
 not work.
 
+The value is produced by `vllmExtraArgs()` in
+[`server/lib/qwenAgentParsers.js`](../../server/lib/qwenAgentParsers.js), the one
+table holding the per-runtime parser spellings (SGLang needs different ones for
+the same model). Edit it there, not here — `qwenAgentParsers.test.js` asserts
+this doc still quotes the table, so the two cannot drift apart.
+
 ### 1a. Extra requirements on WSL2
 
 Three settings native Linux does not need. Each one fails in a way that points

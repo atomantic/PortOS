@@ -158,6 +158,7 @@ export * from './localProviderRuntime.js';
 export * from './mtplxModels.js';
 export * from './managedDaemon.js';
 export * from './vllmQwenProject.js';
+export * from './qwenAgentParsers.js';
 export * from './openAiModelsProbe.js';
 export * from './openAiChatStream.js';
 // `runners.js` re-defines `isFlux2`/`isZImage`/`isErnie` that also live in
