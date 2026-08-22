@@ -87,7 +87,7 @@ export const providerSchema = z.object({
   // prompts (e.g. a whole manuscript) aren't silently truncated. Null = unset.
   numCtx: z.number().int().min(512).max(1048576).nullable().optional(),
   // Default generation controls for the local OpenAI-compatible backends
-  // (Ollama, llama.cpp, MTPLX) and the OpenCode wrappers in front of them.
+  // (Ollama, llama.cpp, MTPLX, vLLM) and the OpenCode wrappers in front of them.
   // Provider-level so the same local model keeps its defaults across API, CLI,
   // and TUI launchers; a run may still override them per task.
   // All three are nullable, and null is the UI's "unset" — a backend that is

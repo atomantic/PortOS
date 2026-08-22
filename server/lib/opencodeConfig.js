@@ -115,17 +115,26 @@ export function toBareModelIds(models, providerKey = 'ollama') {
  * `temperature`, `topP` and `reasoningEffort` are portable — every daemon behind
  * these entries speaks the OpenAI chat-completions shape, so they are emitted
  * for all of them. The thinking toggle is NOT: Ollama takes its own native
- * `think` boolean, while a llama.cpp / MTPLX OpenAI endpoint routes it through
- * the chat template (`chat_template_kwargs.enable_thinking`). OrcaRouter fronts
- * cloud models that own their reasoning switch upstream, so it gets no toggle at
- * all and the editor hides the checkbox for it. MIRROR of
+ * `think` boolean, while a llama.cpp / MTPLX / vLLM OpenAI endpoint routes it
+ * through the chat template (`chat_template_kwargs.enable_thinking`). OrcaRouter
+ * fronts cloud models that own their reasoning switch upstream, so it gets no
+ * toggle at all and the editor hides the checkbox for it. MIRROR of
  * `generationControlsFor` in `client/src/utils/providers.js`; keep in lockstep.
- * @type {Record<'ollama'|'mtplx'|'llama'|'orcarouter', 'think'|'chatTemplate'|null>}
+ *
+ * A missing entry is not a missing checkbox — `buildAgentGeneration` bails on it
+ * and drops temperature / topP / reasoningEffort along with the toggle, which is
+ * how vLLM shipped with no generation controls at all (#4765). Every local
+ * runtime OpenCode can be pointed at needs a row here; `opencodeConfig.test.js`
+ * walks `LOCAL_RUNTIMES` to make a missing one fail.
+ * @type {Record<'ollama'|'mtplx'|'llama'|'vllm'|'orcarouter', 'think'|'chatTemplate'|null>}
  */
 const THINKING_STYLE = {
   ollama: 'think',
   mtplx: 'chatTemplate',
   llama: 'chatTemplate',
+  // vLLM routes it through the chat template exactly as MTPLX and llama.cpp do
+  // — see `server/services/voice/llm.js` for the same body shape on the HTTP side.
+  vllm: 'chatTemplate',
   orcarouter: null,
 };
 
@@ -153,7 +162,7 @@ const readBoolean = (value) =>
  * the provider.
  *
  * @param {{temperature?:unknown, topP?:unknown, thinking?:unknown, effort?:unknown}|null|undefined} generation
- * @param {'ollama'|'mtplx'|'llama'|'orcarouter'} providerKey
+ * @param {'ollama'|'mtplx'|'llama'|'vllm'|'orcarouter'} providerKey
  * @returns {object|null}
  */
 export function buildAgentGeneration(generation, providerKey) {

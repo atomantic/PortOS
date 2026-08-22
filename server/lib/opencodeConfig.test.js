@@ -1,10 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import {
+  buildAgentGeneration,
   buildOpencodeConfig,
   buildOpencodeConfigContent,
   buildOpencodeEnvVars,
+  opencodeLocalBaseUrl,
   toBareModelIds,
 } from './opencodeConfig.js';
+import { LOCAL_RUNTIMES } from './localProviderRuntime.js';
 
 describe('toBareModelIds', () => {
   it('strips the ollama/ namespace, drops empties, and dedupes', () => {
@@ -239,6 +242,31 @@ describe('buildOpencodeEnvVars', () => {
     expect(cfg.provider.vllm.models['qwen3.8-27b']).toEqual({ name: 'qwen3.8-27b', tool_call: true });
   });
 
+  it('sends vLLM its generation defaults, routing thinking through the chat template', () => {
+    // The container's own chat-template default applied instead until #4765:
+    // vLLM had no THINKING_STYLE row, so buildAgentGeneration bailed and dropped
+    // temperature and topP with it. `enable_thinking: false` + temperature 0.7
+    // is the documented posture for tool-calling agent work on this preset.
+    const result = buildOpencodeEnvVars(
+      { command: 'opencode', vllmBacked: true, models: [], temperature: 0.7, topP: 0.9, thinking: false, effort: 'high' },
+      'qwen3.8-27b',
+    );
+    const cfg = JSON.parse(result.OPENCODE_CONFIG_CONTENT);
+    expect(cfg.agent.build).toEqual({
+      temperature: 0.7,
+      topP: 0.9,
+      chat_template_kwargs: { enable_thinking: false },
+      reasoningEffort: 'high',
+    });
+  });
+
+  it('leaves a vLLM provider with no configured generation alone', () => {
+    // Only Ollama carries the historical 0.6 default; an unset control must stay
+    // unset so the container keeps its own.
+    const result = buildOpencodeEnvVars({ command: 'opencode', vllmBacked: true, models: [] }, 'qwen3.8-27b');
+    expect(JSON.parse(result.OPENCODE_CONFIG_CONTENT).agent).toBeUndefined();
+  });
+
   it("injects the vLLM container's API key into options.apiKey, and no ORCAROUTER_API_KEY", () => {
     const result = buildOpencodeEnvVars({
       command: 'opencode',
@@ -310,5 +338,27 @@ describe('buildOpencodeEnvVars', () => {
     const cfg = JSON.parse(buildOpencodeEnvVars(provider, null).OPENCODE_CONFIG_CONTENT);
     expect(cfg.provider.ollama.options.baseURL).toBe('http://localhost:11434/v1');
     expect(cfg.provider.ollama.models['qwen2.5:7b']).toBeDefined();
+  });
+});
+
+// A local runtime OpenCode can be pointed at but that has no THINKING_STYLE row
+// does not merely lose its thinking checkbox: `buildAgentGeneration` bails on
+// the missing key and returns null, taking temperature, topP and
+// reasoningEffort with it. That is how the seeded vLLM providers shipped with
+// every generation control silently discarded (#4765). Walk LOCAL_RUNTIMES so a
+// sixth runtime cannot land with the same hole.
+describe('every OpenCode-reachable local runtime forwards generation controls', () => {
+  // LM Studio is skipped deliberately — nothing spawns OpenCode against it, so
+  // it has no provider entry (and no base URL) in opencodeConfig's table.
+  const opencodeRuntimes = Object.keys(LOCAL_RUNTIMES).filter((id) => opencodeLocalBaseUrl(id));
+
+  it('actually walks the runtimes (a degenerate filter would pass vacuously)', () => {
+    expect(opencodeRuntimes).toContain('vllm');
+    expect(opencodeRuntimes.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it.each(opencodeRuntimes)('%s', (id) => {
+    expect(buildAgentGeneration({ temperature: 0.7, topP: 0.9, effort: 'high' }, id))
+      .toMatchObject({ temperature: 0.7, topP: 0.9, reasoningEffort: 'high' });
   });
 });

@@ -204,7 +204,22 @@ workload that fits.
 3. Click **Refresh Models**. The served model should appear; the seeded alias is
    `qwen3.8-27b`, so update the default model if your container publishes a
    different id.
-4. Assign the provider to a CoS agent task.
+4. Under **Generation Defaults** on the same card, set **thinking off** and
+   **temperature 0.7** (see below).
+5. Assign the provider to a CoS agent task.
+
+**Turn thinking off for agent work.** Qwen3.8's tool-call format is markedly more
+reliable with `enable_thinking: false`, and every measurement in the
+[bring-up record](../research/2026-08-21-qwen38-rtx3090-vllm.md) was taken that
+way. The provider card's **Generation Defaults** block is where you set it:
+PortOS emits the toggle as `chat_template_kwargs.enable_thinking` on the spawned
+OpenCode's `agent.build`, which is how vLLM takes it. Temperature ~0.7 is the
+matching default for coding work.
+
+Both controls ship **unset**, not pre-filled — an unset control means the
+container keeps its own chat-template default, which is not the same as being
+pinned to a value. So this is a step you take once per install, not something
+the preset does for you.
 
 The provider card's requirements checklist probes `:18020` directly. Its
 **Start** button runs `docker compose --profile single up -d` — but only when it

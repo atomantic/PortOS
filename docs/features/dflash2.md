@@ -8,6 +8,8 @@ PortOS integrates both through the **OpenCode llama TUI** provider preset and th
 
 > **Which one to run:** `--spec-type draft-dspark` **merged into llama.cpp on 2026-07-28** ([#25173](https://github.com/ggml-org/llama.cpp/pull/25173)) and works on a stock `brew install llama.cpp`. DFlash 2's engine modules are **still an open PR** ([#27342](https://github.com/ggml-org/llama.cpp/pull/27342)) and need a from-source build of that branch. llama.cpp falls back **silently** on a spec-type/drafter mismatch rather than erroring, so a DFlash 2 drafter on a stock build degrades quietly. Start with DSpark unless you have built the DFlash 2 branch. Full comparison: [DSpark vs DFlash 2](../research/2026-08-19-dspark-vs-dflash2.md).
 
+> **On an NVIDIA RTX 3090?** There is a shorter path than building llama.cpp from a branch. Upstream froze a working DFlash 2 setup for that exact card — patched vLLM 0.27.1 plus a requantized Qwen3.8-27B, shipped as a Docker compose project — and PortOS fronts it with its own OpenCode presets. You get DFlash 2 drafting and prefix caching without vendoring an unmerged engine patch, at the cost of the container holding the whole 24 GB card. See [vLLM Qwen3.8-27B on an RTX 3090](./qwen38-rtx3090.md). It is CUDA-only: Apple Silicon stays on DSpark or [MTPLX](./mtplx.md).
+
 ---
 
 ## What PortOS Adds

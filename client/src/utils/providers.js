@@ -209,10 +209,12 @@ export const CURSOR_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhi
 
 /**
  * True when an OpenCode process provider runs against one of the local
- * OpenAI-compatible backends (Ollama / MTPLX / llama.cpp / OrcaRouter) rather
- * than a vendor cloud model. MIRROR of `isOpencodeProvider(p) &&
+ * OpenAI-compatible backends (Ollama / MTPLX / llama.cpp / vLLM / OrcaRouter)
+ * rather than a vendor cloud model. MIRROR of `isOpencodeProvider(p) &&
  * getOpencodeLocalProviderNamespace(p)` in server/lib/providerModels.js, which
- * is exactly what gates the effort ladder there.
+ * is exactly what gates the effort ladder there — so a backend marker missing
+ * here hides the effort picker for a provider the server would happily forward
+ * `reasoningEffort` for (#4765).
  */
 export const isOpencodeLocalProvider = (provider) =>
   (['opencode', 'opencode-tui'].includes(String(provider?.id || '').toLowerCase())
@@ -220,6 +222,7 @@ export const isOpencodeLocalProvider = (provider) =>
   && (provider?.ollamaBacked === true
     || provider?.mtplxBacked === true
     || provider?.llamaBacked === true
+    || provider?.vllmBacked === true
     || provider?.orcarouterBacked === true);
 
 /**
@@ -993,11 +996,12 @@ export const isOrcaRouterBackedProvider = (provider) => provider?.orcarouterBack
  * Which default generation controls the provider editor should offer, or null
  * when the provider has none.
  *
- * Only the local OpenAI-compatible backends qualify — Ollama, llama.cpp and
- * MTPLX (reached directly as an `api` provider, or through an OpenCode CLI/TUI
- * wrapper), plus the OrcaRouter gateway. A hosted cloud provider is deliberately
- * excluded: PortOS sends it no sampling fields at all, so offering a stored
- * temperature there would be a control that silently does nothing.
+ * Only the local OpenAI-compatible backends qualify — Ollama, llama.cpp, MTPLX
+ * and vLLM (the first three reached directly as an `api` provider or through an
+ * OpenCode CLI/TUI wrapper; vLLM ships only the wrappers), plus the OrcaRouter
+ * gateway. A hosted cloud provider is deliberately excluded: PortOS sends it no
+ * sampling fields at all, so offering a stored temperature there would be a
+ * control that silently does nothing.
  *
  * Each control is reported separately because the forwarding is uneven:
  * OrcaRouter's upstream models own their own reasoning switch, so it has no
@@ -1015,7 +1019,8 @@ export const generationControlsFor = (provider) => {
   const orcarouter = isOrcaRouterBackedProvider(provider);
   const local = isOllamaBackedProvider(provider)
     || provider?.llamaBacked === true
-    || provider?.mtplxBacked === true;
+    || provider?.mtplxBacked === true
+    || provider?.vllmBacked === true;
   if (!local && !orcarouter) return null;
   if (commandBasename(provider?.command) === 'claude') {
     return { temperature: false, topP: false, thinking: true };

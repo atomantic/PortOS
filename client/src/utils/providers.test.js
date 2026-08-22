@@ -128,6 +128,7 @@ describe('effortLevelsForProvider (server mirror)', () => {
     // to, so the ladder belongs to every local namespace, not just Ollama.
     ['OpenCode llama TUI', { id: 'opencode-llama-tui', command: 'opencode', llamaBacked: true }, ['low', 'medium', 'high']],
     ['OpenCode MTPLX', { id: 'opencode-mtplx', command: 'opencode', mtplxBacked: true }, ['low', 'medium', 'high']],
+    ['OpenCode vLLM TUI', { id: 'opencode-vllm-tui', command: 'opencode', vllmBacked: true }, ['low', 'medium', 'high']],
     ['OpenCode with no local backend', { id: 'opencode', command: 'opencode' }, null],
     ['grok (no effort control)', { id: 'grok-cli', command: 'grok' }, null],
     ['blank command is not claude', { id: 'ollama' }, null],
@@ -148,6 +149,11 @@ describe('generationControlsFor', () => {
   it.each([
     ['OpenCode llama TUI', { id: 'opencode-llama-tui', command: 'opencode', llamaBacked: true }, { temperature: true, topP: true, thinking: true }],
     ['OpenCode MTPLX', { id: 'opencode-mtplx', command: 'opencode', mtplxBacked: true }, { temperature: true, topP: true, thinking: true }],
+    // vLLM routes the thinking toggle through the chat template like the other
+    // two. Both sides were written before `vllmBacked` existed, so the editor
+    // hid the whole block while the server discarded every control anyway
+    // (#4765).
+    ['OpenCode vLLM TUI', { id: 'opencode-vllm-tui', command: 'opencode', vllmBacked: true }, { temperature: true, topP: true, thinking: true }],
     // A Claude harness on Ollama is forwarded only MAX_THINKING_TOKENS
     // (server/lib/cliChildEnv.js) — it owns its own sampling.
     ['Claude Ollama TUI', { id: 'claude-ollama-tui', command: 'claude', ollamaBacked: true }, { temperature: false, topP: false, thinking: true }],
