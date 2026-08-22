@@ -149,6 +149,29 @@ describe('AI Toolkit runner service', () => {
     expect(body.think).toBeUndefined();
   });
 
+  it('sends a vLLM endpoint its temperature/top_p and routes thinking through the chat template', async () => {
+    // No vLLM `api` preset ships (the container is reached through the OpenCode
+    // wrappers), but the guard here mirrors `generationControlsFor` on the
+    // client — which now offers the controls — so a hand-built endpoint record
+    // must not be the one place they are silently dropped again (#4765).
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const fetch = stubStreamingFetch();
+    const runner = createRunnerService({ dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) } });
+    let done;
+    const completed = new Promise((resolve) => { done = resolve; });
+    await runner.executeApiRun({
+      runId: 'run-vllm-options',
+      provider: runReady({ id: 'vllm', endpoint: 'http://127.0.0.1:18020/v1', vllmBacked: true, temperature: 0.7, topP: 0.9, thinking: false }),
+      model: null, prompt: 'hi', workspacePath: process.cwd(), screenshots: [], onData: undefined, onComplete: () => done(),
+    });
+    await completed;
+
+    const body = JSON.parse(fetch.mock.calls[0][1].body);
+    expect(body).toMatchObject({ temperature: 0.7, top_p: 0.9, chat_template_kwargs: { enable_thinking: false } });
+    expect(body.think).toBeUndefined();
+  });
+
   it('sends a cloud provider no sampling fields at all', async () => {
     // Widening the editor must not start re-shaping hosted models' output.
     const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
