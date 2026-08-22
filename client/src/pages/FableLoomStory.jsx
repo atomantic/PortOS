@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router';
-import { ArrowLeft, BookOpenText, Loader2, Plus, Settings, Sparkles, Trash2, Waypoints } from 'lucide-react';
+import { ArrowLeft, BookOpenText, Loader2, Plus, Settings, Sparkles, Trash2, Waypoints, Workflow as WorkflowIcon } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Drawer from '../components/Drawer';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
@@ -25,8 +25,8 @@ import LoomSettingsDrawer from '../components/fableloom/LoomSettingsDrawer';
 import LoomValidationPanel from '../components/fableloom/LoomValidationPanel';
 import { fieldClass, labelClass } from '../components/fableloom/fieldStyles';
 import {
-  addLoomEpisode, addLoomNode, deleteLoomEpisode, getLoom, updateLoomEpisode,
-  updateLoomNode, weaveLoomEpisode,
+  addLoomEpisode, addLoomNode, deleteLoomEpisode, getLoom, getPipelineSeries,
+  updateLoomEpisode, updateLoomNode, weaveLoomEpisode,
 } from '../services/api';
 
 export default function FableLoomStory() {
@@ -34,6 +34,10 @@ export default function FableLoomStory() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [loom, setLoom] = useState(null);
+  // The series this loom is soft-linked to, resolved for the header backlink.
+  // `seriesId` is a soft ref: deleting the series is allowed and leaves the id
+  // dangling, so an unresolvable id renders NO chip rather than a dead link.
+  const [linkedSeries, setLinkedSeries] = useState(null);
   const [notFound, setNotFound] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -43,6 +47,19 @@ export default function FableLoomStory() {
     setNotFound(false);
     getLoom(loomId).then(setLoom).catch(() => setNotFound(true));
   }, [loomId]);
+
+  const linkedSeriesId = loom?.seriesId || null;
+  useEffect(() => {
+    if (!linkedSeriesId) {
+      setLinkedSeries(null);
+      return undefined;
+    }
+    let canceled = false;
+    getPipelineSeries(linkedSeriesId, { silent: true })
+      .then((series) => { if (!canceled) setLinkedSeries(series || null); })
+      .catch(() => { if (!canceled) setLinkedSeries(null); });
+    return () => { canceled = true; };
+  }, [linkedSeriesId]);
 
   const episode = loom?.episodes.find((e) => e.id === episodeId) || null;
   const node = episode?.nodes.find((n) => n.id === nodeId) || null;
@@ -145,6 +162,16 @@ export default function FableLoomStory() {
             <Waypoints size={16} className="text-port-accent shrink-0" />
             <span className="truncate">{loom.name}</span>
           </h1>
+          {linkedSeries ? (
+            <Link
+              to={`/pipeline/series/${encodeURIComponent(linkedSeries.id)}`}
+              className="flex items-center gap-1 px-2 py-1 rounded border border-port-border text-xs text-port-text-muted hover:text-port-text hover:border-port-accent min-w-0"
+              title="Open the series this branching narrative is linked to"
+            >
+              <WorkflowIcon size={12} className="shrink-0" />
+              <span className="truncate max-w-[12rem]">{linkedSeries.name || 'Untitled series'}</span>
+            </Link>
+          ) : null}
           <div className="flex items-center gap-2 ml-auto">
             <button
               type="button"

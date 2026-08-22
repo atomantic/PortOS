@@ -182,6 +182,21 @@ describe('listLoomSummaries', () => {
     });
     expect(summary.episodes).toBeUndefined();
   });
+
+  it('scopes the list to one series when seriesId is passed', async () => {
+    const linked = await makeLoom({ name: 'Linked', seriesId: 'ser-1' });
+    await makeLoom({ name: 'Other series', seriesId: 'ser-2' });
+    await makeLoom({ name: 'Standalone' });
+
+    const scoped = await listLoomSummaries({ seriesId: 'ser-1' });
+    expect(scoped.map((l) => l.id)).toEqual([linked.id]);
+    expect(await listLoomSummaries()).toHaveLength(3);
+  });
+
+  it('returns nothing (never throws) for a series id nothing links to', async () => {
+    await makeLoom({ name: 'Standalone' });
+    expect(await listLoomSummaries({ seriesId: 'ser-deleted' })).toEqual([]);
+  });
 });
 
 describe('episodes', () => {

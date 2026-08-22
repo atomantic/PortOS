@@ -16,6 +16,7 @@ import {
   episodeCreateSchema,
   episodePatchSchema,
   loomCreateSchema,
+  loomListQuerySchema,
   loomPatchSchema,
   nodeCreateSchema,
   nodePatchSchema,
@@ -53,8 +54,12 @@ const router = Router();
 
 // Summaries only — a woven episode carries pages of prose per node, and the
 // index renders three counts. The full record comes from GET /:id.
+// `?seriesId=` scopes the list to one pipeline series' linked looms (the series
+// detail page's "Branching narratives" card). A blank value means "no filter",
+// so a caller can build the query from a possibly-unset id.
 router.get('/', asyncHandler(async (req, res) => {
-  res.json(await listLoomSummaries());
+  const { seriesId } = validateRequest(loomListQuerySchema, req.query);
+  res.json(await listLoomSummaries({ seriesId: seriesId?.trim() || undefined }));
 }));
 
 // Linked universe/series refs are validated by the service (createLoom /

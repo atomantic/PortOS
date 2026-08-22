@@ -21,6 +21,7 @@ import toast from '../components/ui/Toast';
 import ArcCanvas from '../components/pipeline/ArcCanvas';
 import AutopilotPanel from '../components/pipeline/AutopilotPanel';
 import SeriesReviewPanel from '../components/pipeline/SeriesReviewPanel';
+import SeriesLoomsPanel from '../components/pipeline/SeriesLoomsPanel';
 import CatalogCastPanel from '../components/CatalogCastPanel';
 import TabPills from '../components/ui/TabPills';
 import Field from '../components/ui/FormField';
@@ -290,6 +291,8 @@ export default function PipelineSeries() {
             onSeriesUpdate={updateSeriesFromServer}
             onIssuesUpdate={handleIssuesUpdate}
           />
+
+          <SeriesLoomsPanel series={series} />
 
           <ArcCanvas
             series={series}

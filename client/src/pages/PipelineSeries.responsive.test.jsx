@@ -28,6 +28,7 @@ vi.mock('../hooks/useLocalStorageBool', () => ({ useLocalStorageBool: () => [fal
 vi.mock('../components/pipeline/ArcCanvas', () => ({ default: () => <div>arc canvas</div> }));
 vi.mock('../components/pipeline/AutopilotPanel', () => ({ default: () => <div>autopilot</div> }));
 vi.mock('../components/pipeline/SeriesReviewPanel', () => ({ default: () => <div>series review</div> }));
+vi.mock('../components/pipeline/SeriesLoomsPanel', () => ({ default: () => <div>branching narratives</div> }));
 vi.mock('../components/CatalogCastPanel', () => ({ default: () => <div>cast</div> }));
 vi.mock('../components/pipeline/AuthorPicker', () => ({ default: () => <div>author</div> }));
 vi.mock('../components/VoiceExemplarEditor', () => ({ default: () => <div>voice exemplars</div>, VOICE_EXEMPLARS_MAX: 5 }));

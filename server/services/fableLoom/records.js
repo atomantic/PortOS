@@ -184,9 +184,15 @@ export async function listLooms() {
  * Index-page projection: everything the list UI shows, WITHOUT the episode
  * graphs — a woven episode carries up to 20k chars of prose per node, so the
  * full records would make the index multi-MB to render three counts.
+ *
+ * `seriesId` scopes the list to one pipeline series' linked looms. The link is
+ * a soft ref, so a series that no longer exists simply matches nothing — this
+ * never throws on a dangling id.
  */
-export async function listLoomSummaries() {
-  return (await listLooms()).map(({ id, name, logline, format, universeId, seriesId, createdAt, updatedAt, episodes }) => ({
+export async function listLoomSummaries({ seriesId: scopeSeriesId } = {}) {
+  const looms = await listLooms();
+  const scoped = scopeSeriesId ? looms.filter((loom) => loom.seriesId === scopeSeriesId) : looms;
+  return scoped.map(({ id, name, logline, format, universeId, seriesId, createdAt, updatedAt, episodes }) => ({
     id,
     name,
     logline,

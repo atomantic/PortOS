@@ -16,6 +16,16 @@ beforeEach(async () => {
 });
 
 describe('apiFableLoom', () => {
+  it('lists every loom when no series scope is given', async () => {
+    await api.listLooms({ silent: true });
+    expect(request).toHaveBeenCalledWith('/fableloom', { silent: true });
+  });
+
+  it('scopes the index to one series and keeps the remaining request options', async () => {
+    await api.listLooms({ seriesId: 'ser/1', silent: true });
+    expect(request).toHaveBeenCalledWith('/fableloom?seriesId=ser%2F1', { silent: true });
+  });
+
   it('encodes ids in nested node paths', async () => {
     await api.updateLoomNode('loom/1', 'ep/1', 'node/1', { prose: 'x' }, { silent: true });
     expect(request).toHaveBeenCalledWith('/fableloom/loom%2F1/episodes/ep%2F1/nodes/node%2F1', {

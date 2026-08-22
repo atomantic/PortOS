@@ -44,6 +44,24 @@ describe('FableLoom routes', () => {
     const response = await request(makeApp()).get('/api/fableloom');
     expect(response.status).toBe(200);
     expect(response.body).toEqual([{ id: 'loom-1', name: 'X', sceneCount: 3 }]);
+    expect(fableLoom.listLoomSummaries).toHaveBeenCalledWith({ seriesId: undefined });
+  });
+
+  it('GET /?seriesId= scopes the list to one series', async () => {
+    fableLoom.listLoomSummaries.mockResolvedValueOnce([{ id: 'loom-1', seriesId: 'ser-1' }]);
+    const response = await request(makeApp()).get('/api/fableloom?seriesId=ser-1');
+    expect(response.status).toBe(200);
+    expect(fableLoom.listLoomSummaries).toHaveBeenCalledWith({ seriesId: 'ser-1' });
+  });
+
+  it('GET / treats a blank seriesId as no filter and rejects an over-long one', async () => {
+    const blank = await request(makeApp()).get('/api/fableloom?seriesId=');
+    expect(blank.status).toBe(200);
+    expect(fableLoom.listLoomSummaries).toHaveBeenCalledWith({ seriesId: undefined });
+
+    const tooLong = await request(makeApp()).get(`/api/fableloom?seriesId=${'s'.repeat(65)}`);
+    expect(tooLong.status).toBe(400);
+    expect(fableLoom.listLoomSummaries).toHaveBeenCalledTimes(1);
   });
 
   it('POST / forwards the validated create payload (refs are checked in the service)', async () => {

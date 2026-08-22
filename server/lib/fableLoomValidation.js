@@ -31,6 +31,14 @@ const playSettings = z.object({
   effort: effort.nullable().optional(),
 }).nullable();
 
+// Index filter. `?seriesId=` scopes the list to the looms soft-linked to one
+// pipeline series (the series detail page's "Branching narratives" card). An
+// empty value is a no-op filter, not a 400 — a UI that builds the query from a
+// possibly-unset id should not have to branch on it.
+export const loomListQuerySchema = z.object({
+  seriesId: z.string().max(LOOM_LIMITS.REF_ID_MAX).optional(),
+});
+
 export const loomCreateSchema = z.object({
   name,
   logline: logline.optional(),

@@ -8,7 +8,10 @@ const nodePath = (id, episodeId, nodeId, rest = '') =>
 const transitionPath = (id, episodeId, nodeId, transitionId) =>
   nodePath(id, episodeId, nodeId, `/transitions/${encodeURIComponent(transitionId)}`);
 
-export const listLooms = (options = {}) => request('/fableloom', options);
+// `seriesId` scopes the index to one pipeline series' linked looms; every other
+// key is passed through to `request` as fetch options (e.g. `{ silent: true }`).
+export const listLooms = ({ seriesId, ...options } = {}) =>
+  request(seriesId ? `/fableloom?seriesId=${encodeURIComponent(seriesId)}` : '/fableloom', options);
 export const getLoom = (id, options = {}) => request(loomPath(id), options);
 
 export const createLoom = (body, options = {}) => request('/fableloom', {

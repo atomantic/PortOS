@@ -31,6 +31,10 @@ answers in-world without leaving the scene when nothing matches.
   (restart is free; nothing persists server-side).
 - **Story settings drawer** — scene format (plus the rewrite pass), and the
   narrator's provider/model/effort pin.
+- **Series detail page** (`/pipeline/series/:seriesId`) — a "Branching
+  narratives" card lists the looms linked to that series (counts + a link into
+  the editor) and spawns a new one pre-linked to the series and its universe.
+  The series index badges each row with its loom count.
 
 ## Editing paths
 
@@ -117,5 +121,16 @@ weave / store / db); routes: `server/routes/fableLoom.js` (`/api/fableloom`).
 A loom can *link* to a pipeline series (`seriesId`) but is its own record
 type — branching narratives don't run the linear issue/stage pipeline
 (manuscript formats, autopilot, federation semantics don't apply to a graph).
-Deeper integration (a branching series type surfaced inside series
-management) is deliberately deferred.
+There is deliberately **no `seriesType: 'branching'` enum** on
+`pipeline_series`: a scene graph has no linear stage chain, and a type enum
+would force a special case into every pipeline surface. The integration is a
+soft ref surfaced at the presentation layer instead (#4785) — the same posture
+as Games / Creative Director:
+
+- `GET /api/fableloom?seriesId=<id>` scopes the index to one series' looms. A
+  blank value means "no filter"; a dangling id simply matches nothing.
+- The series detail page renders those looms and can spawn a new pre-linked
+  one; the series index badges each row with its count.
+- The link is soft in both directions — deleting a series is never blocked by a
+  loom pointing at it, and the loom editor's series backlink renders **no chip**
+  (rather than a dead link) once the series is gone.

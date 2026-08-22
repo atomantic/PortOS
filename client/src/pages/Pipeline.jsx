@@ -10,7 +10,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import { Link, useNavigate, useSearchParams } from 'react-router';
-import { Plus, Workflow as WorkflowIcon, Trash2, Loader2, Globe2, FileInput, Sparkles, BookOpen } from 'lucide-react';
+import { Plus, Workflow as WorkflowIcon, Trash2, Loader2, Globe2, FileInput, Sparkles, BookOpen, Waypoints } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import ImageThumb from '../components/ui/ImageThumb';
@@ -20,6 +20,7 @@ import OriginBadge from '../components/sharing/OriginBadge';
 import SyncBadge from '../components/sync/SyncBadge';
 import { useSyncIntegrity, syncBadgeStatus } from '../hooks/useSyncIntegrity';
 import {
+  listLooms,
   listPipelineSeries,
   createPipelineSeries,
   deletePipelineSeries,
@@ -34,6 +35,18 @@ import { ArcShapePicker, ArcShapeSparkline, getStoryShape } from '../components/
 import AuthorPicker from '../components/pipeline/AuthorPicker';
 import MoodBoardReferenceStrip from '../components/moodBoard/MoodBoardReferenceStrip';
 import { buildImporterLink } from '../lib/importerDeepLink';
+
+// Roll the loom summaries into a per-series count for the row badge. Looms with
+// no seriesId (standalone) and looms pointing at a series that no longer exists
+// simply never match a row — the link is a soft ref in both directions.
+const countLoomsBySeries = (looms) => {
+  const counts = new Map();
+  for (const loom of Array.isArray(looms) ? looms : []) {
+    if (!loom?.seriesId) continue;
+    counts.set(loom.seriesId, (counts.get(loom.seriesId) || 0) + 1);
+  }
+  return counts;
+};
 
 const emptyForm = () => ({
   name: '',
@@ -51,6 +64,9 @@ export default function Pipeline() {
   const navigate = useNavigate();
   const [series, setSeries] = useState([]);
   const [universes, setWorlds] = useState([]);
+  // seriesId -> number of FableLoom looms soft-linked to it (#4785). A failed
+  // fetch degrades to "no badges", never to a broken series list.
+  const [loomCounts, setLoomCounts] = useState(() => new Map());
   const [loading, setLoading] = useState(true);
 
   const sync = useSyncIntegrity('series');
@@ -83,9 +99,13 @@ export default function Pipeline() {
         toast.error(err.message || 'Failed to load universes');
         return [];
       }),
-    ]).then(([s, w]) => {
+      // Loom summaries are a side quest for the row badge — a failure here must
+      // not toast over the series list or block it.
+      listLooms({ silent: true }).catch(() => []),
+    ]).then(([s, w, looms]) => {
       setSeries(Array.isArray(s) ? s : []);
       setWorlds(Array.isArray(w) ? w : []);
+      setLoomCounts(countLoomsBySeries(looms));
       setLoading(false);
     });
   }, []);
@@ -516,6 +536,7 @@ export default function Pipeline() {
         <ul className="space-y-2">
           {series.map((s) => {
             const shapeDef = s.arc?.shape ? getStoryShape(s.arc.shape) : null;
+            const loomCount = loomCounts.get(s.id) || 0;
             return (
             <li key={s.id} className="flex flex-col sm:flex-row sm:items-start gap-3 p-3 bg-port-card border border-port-border rounded-lg hover:border-port-accent/40 transition-colors">
               <Link to={`/pipeline/series/${s.id}`} className="flex-1 min-w-0 flex items-start gap-3">
@@ -524,6 +545,15 @@ export default function Pipeline() {
                   <div className="text-white font-medium flex items-center gap-2 flex-wrap">
                     <span>{s.name}</span>
                     {s.origin ? <OriginBadge origin={s.origin} compact /> : null}
+                    {loomCount ? (
+                      <span
+                        className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-port-bg border border-port-border text-gray-300"
+                        title={`${loomCount} branching narrative${loomCount === 1 ? '' : 's'} linked to this series`}
+                      >
+                        <Waypoints size={10} aria-hidden="true" />
+                        {loomCount} branching
+                      </span>
+                    ) : null}
                     {shapeDef ? (
                       <span
                         className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-port-bg border border-port-accent/40 text-port-accent"

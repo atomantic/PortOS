@@ -5,6 +5,7 @@ import Pipeline from './Pipeline';
 
 const listPipelineSeries = vi.fn();
 const listUniverses = vi.fn();
+const listLooms = vi.fn();
 
 vi.mock('../services/api', () => ({
   listPipelineSeries: (...a) => listPipelineSeries(...a),
@@ -13,6 +14,7 @@ vi.mock('../services/api', () => ({
   generateSeriesTitleLogo: vi.fn(),
   generateSeriesConcepts: vi.fn(),
   listUniverses: (...a) => listUniverses(...a),
+  listLooms: (...a) => listLooms(...a),
   WORLD_LOGLINE_MAX: 400,
   WORLD_PREMISE_MAX: 2000,
   WORLD_STYLE_NOTES_MAX: 2000,
@@ -50,6 +52,7 @@ describe('Pipeline series list — mobile layout', () => {
     vi.clearAllMocks();
     listPipelineSeries.mockResolvedValue([SERIES]);
     listUniverses.mockResolvedValue([]);
+    listLooms.mockResolvedValue([]);
   });
 
   it('stacks the row below sm so the logline gets the full card width', async () => {
