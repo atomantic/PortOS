@@ -505,6 +505,34 @@ def write_sidecar(output: str, payload: dict) -> None:
     sidecar.write_text(json.dumps(payload, indent=2))
 
 
+def write_stepwise_preview(stepwise_dir: str, frame) -> bool:
+    """Atomically publish one bounded preview frame for the active render.
+
+    The server watches a job-scoped directory and reads ``preview.png``. A
+    fixed filename keeps the directory bounded even when a runner emits a
+    progress callback for every denoise step; replacing it atomically also
+    prevents the watcher from reading a partially-written PNG.
+    """
+    if not stepwise_dir:
+        return False
+    from PIL import Image
+
+    out = Path(stepwise_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    image = frame if isinstance(frame, Image.Image) else Image.fromarray(frame)
+    # Pillow < 9 exposes the resampling constants directly on Image rather
+    # than through Image.Resampling. The runner environments are user-managed,
+    # so keep the bounded preview contract compatible with both shapes.
+    resampling = getattr(Image, "Resampling", Image).LANCZOS
+    image.thumbnail((512, 512), resampling)
+    # Keep the staging file out of directory scans that look for visible PNGs;
+    # the explicit format argument still makes Pillow encode it as PNG.
+    temporary = out / f".preview-{os.getpid()}.tmp"
+    image.save(temporary, "PNG", optimize=False)
+    os.replace(temporary, out / "preview.png")
+    return True
+
+
 def make_stepwise_callback(
     stepwise_dir: str,
     pipe,
@@ -536,7 +564,6 @@ def make_stepwise_callback(
     if not stepwise_dir:
         return None
     import torch
-    from PIL import Image
     out = Path(stepwise_dir)
     out.mkdir(parents=True, exist_ok=True)
     vae = pipe.vae
@@ -599,10 +626,8 @@ def make_stepwise_callback(
                 decoded = vae.decode(scaled, return_dict=False)[0]
             decoded = (decoded.clamp(-1, 1) + 1) / 2
             arr = (decoded[0].float().cpu().permute(1, 2, 0).numpy() * 255).astype("uint8")
-            img = Image.fromarray(arr)
-            img.thumbnail((512, 512), Image.LANCZOS)
-            img.save(out / f"step_{step_index + 1}.png", "PNG", optimize=False)
-            fired["saved"] += 1
+            if write_stepwise_preview(str(out), arr):
+                fired["saved"] += 1
         except Exception as err:
             print(f"⚠️ stepwise preview failed at step {step_index}: {type(err).__name__}: {err}", file=sys.stderr)
         return callback_kwargs

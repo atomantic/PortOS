@@ -86,7 +86,7 @@ os.environ.setdefault("LTX2_GEMMA_EVAL_EVERY", "1")
 # (mirrors generate_hunyuan.py). _runner_common is stdlib-only at import time, so
 # this is safe from the ltx-2-mlx venv (no torch pulled in).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _runner_common import emit_runtime_fingerprint, parse_user_loras  # noqa: E402
+from _runner_common import emit_runtime_fingerprint, parse_user_loras, write_stepwise_preview  # noqa: E402
 
 
 def emit_status(msg: str) -> None:
@@ -437,6 +437,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--prompt", required=True)
     p.add_argument("--negative-prompt", default="")
     p.add_argument("--output", required=True, help="Output .mp4 path")
+    p.add_argument("--preview-dir", default=None,
+                   help="Job-scoped directory where the latest decoded denoise frame is published")
     p.add_argument("--model", required=True, help="HF repo id or local path (e.g. dgrauet/ltx-2.3-mlx-q4)")
     p.add_argument("--gemma", default=None,
                    help="Shared Gemma repo for LTX-2.3. Omit on LTX-2.5 packs that "
@@ -756,6 +758,153 @@ def bind_output_fps(pipe, fps: float) -> None:
     pipe._decode_and_save_video = decode_with_fps
 
 
+def _ltx_preview_shapes(args: argparse.Namespace) -> list[tuple[int, int, int]]:
+    """Return the one-stage and two-stage latent shapes this pin may denoise.
+
+    The LTX sampler carries packed video rows rather than a 5-D latent. The
+    pipeline's own shape helper is the compatibility boundary for both the
+    pre-rename and v0.14.x pins, so the preview hook never hardcodes the
+    temporal or spatial compression factors.
+    """
+    try:
+        from ltx_core_mlx.components.patchifiers import compute_video_latent_shape
+    except ImportError:
+        return []
+
+    try:
+        from ltx_core_mlx.components.patchifiers import snap_output_dimensions
+    except ImportError:
+        # Older checked-out pins do not expose the convenience snapper. Their
+        # public latent-shape helper still accepts snapped dimensions, and the
+        # server's video dimensions are already multiples of 64 in practice.
+        snap_output_dimensions = lambda height, width, two_stage: (height, width)
+
+    one_h, one_w = snap_output_dimensions(args.height, args.width, two_stage=False)
+    full_h, full_w = snap_output_dimensions(args.height, args.width, two_stage=True)
+    dimensions = ((one_h, one_w), (full_h // 2, full_w // 2), (full_h, full_w))
+    shapes = []
+    seen = set()
+    for height, width in dimensions:
+        shape = compute_video_latent_shape(args.num_frames, height, width)
+        if shape not in seen:
+            seen.add(shape)
+            shapes.append(shape)
+    return shapes
+
+
+def _install_ltx_stepwise_preview(pipe, args: argparse.Namespace):
+    """Tap the installed LTX sampler after each video denoise step.
+
+    ``ltx-pipelines-mlx`` has no stable public callback on the versions PortOS
+    supports. Its sampler does, however, call the module-local ``euler_step``
+    once for video and once for audio. Wrapping that narrow primitive keeps the
+    bridge source-pinned and lets us project the packed video rows back through
+    the pipeline's own patchifier and decoder. Preview failures are deliberately
+    non-fatal: the final render remains the source of truth.
+    """
+    preview_dir = getattr(args, "preview_dir", None)
+    if not preview_dir:
+        return lambda: None
+    try:
+        import numpy as np
+        import mlx.core as mx
+        from ltx_pipelines_mlx.utils import samplers
+    except ImportError as exc:
+        print(f"⚠️ stepwise LTX preview unavailable: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+        return lambda: None
+
+    shapes = _ltx_preview_shapes(args)
+    if not shapes:
+        return lambda: None
+    original_euler_step = samplers.euler_step
+    state = {"expect_video": True, "saved": 0}
+
+    def shape_for_tokens(token_count: int):
+        exact = [(shape[0] * shape[1] * shape[2], shape) for shape in shapes
+                 if shape[0] * shape[1] * shape[2] == token_count]
+        if exact:
+            return exact[0][1]
+        # Keyframe conditioning appends rows to the generated video rows. Pick
+        # the smallest compatible base shape so the appended rows are not
+        # mistaken for a larger two-stage canvas.
+        compatible = [(token_count - base, shape) for base, shape in
+                      ((shape[0] * shape[1] * shape[2], shape) for shape in shapes)
+                      if token_count > base and token_count - base <= base * 4]
+        return min(compatible, key=lambda item: item[0])[1] if compatible else None
+
+    def publish(result, shape) -> None:
+        stage = "start"
+        try:
+            frames, latent_height, latent_width = shape
+            token_count = frames * latent_height * latent_width
+            stage = "eval-sampler-result"
+            mx.eval(result)
+            tokens = result[:, :token_count, :]
+            stage = "unpatchify"
+            latent = pipe.video_patchifier.unpatchify(tokens, shape)
+            # Decode one temporal latent slice. It is enough to show the
+            # forming composition and avoids decoding the entire clip while
+            # the DiT is still resident for the next step.
+            frame_index = max(0, frames // 2)
+            latent = latent[:, :, frame_index:frame_index + 1, :, :]
+            stage = "load-decoder"
+            decoder_block = getattr(pipe, "video_decoder_block", None)
+            if decoder_block is not None and hasattr(decoder_block, "load"):
+                decoder = decoder_block.load()
+            else:
+                decoder = getattr(pipe, "vae_decoder", decoder_block)
+            if decoder is None:
+                raise RuntimeError("pipeline exposes no video decoder")
+            stage = "decode"
+            decoded = decoder.decode(latent)
+            # Some MLX decoder implementations return bfloat16-backed arrays;
+            # normalize before crossing into NumPy, whose buffer bridge does
+            # not support that dtype consistently on Apple Silicon.
+            decoded = decoded.astype(mx.float32)
+            stage = "eval-decoded"
+            mx.eval(decoded)
+            # MLX exposes a buffer view whose PEP 3118 item size is not
+            # consistent for some decoded uint8 tensors. Force a detached
+            # NumPy copy at this boundary instead of asking numpy.asarray to
+            # consume that view in place.
+            stage = "numpy-copy"
+            array = np.array(decoded)
+            frame = array[0, :, array.shape[2] // 2, :, :].transpose(1, 2, 0)
+            frame = np.clip((frame + 1.0) * 127.5, 0, 255).astype("uint8")
+            stage = "publish-png"
+            if write_stepwise_preview(preview_dir, frame):
+                state["saved"] += 1
+        except Exception as exc:  # best-effort instrumentation around a live runner
+            print(f"⚠️ LTX stepwise preview failed at {stage}: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+
+    def euler_step(sample, denoised, sigma, sigma_next):
+        result = original_euler_step(sample, denoised, sigma, sigma_next)
+        is_video_turn = state["expect_video"]
+        state["expect_video"] = not state["expect_video"]
+        if not is_video_turn:
+            return result
+        shape = shape_for_tokens(int(sample.shape[1]))
+        if shape is not None:
+            publish(result, shape)
+        return result
+
+    samplers.euler_step = euler_step
+
+    def restore():
+        if samplers.euler_step is euler_step:
+            samplers.euler_step = original_euler_step
+
+    return restore
+
+
+def _run_with_ltx_stepwise_preview(pipe, args: argparse.Namespace, render):
+    restore = _install_ltx_stepwise_preview(pipe, args)
+    try:
+        return render()
+    finally:
+        restore()
+
+
 def _apply_legacy_image_strength(image_strength: float) -> bool:
     """Inject I2V strength on pre-rename pins; return True if the hook applied.
 
@@ -900,7 +1049,7 @@ def run_two_stage(args: argparse.Namespace, image: str | None = None) -> str:
     bind_output_fps(pipe, args.fps)
     emit_stage(1, 1, 1, "Loaded")
     emit_status("Generating with CFG…")
-    return pipe.generate_and_save(
+    return _run_with_ltx_stepwise_preview(pipe, args, lambda: pipe.generate_and_save(
         prompt=args.prompt,
         output_path=args.output,
         height=args.height,
@@ -912,7 +1061,7 @@ def run_two_stage(args: argparse.Namespace, image: str | None = None) -> str:
         cfg_scale=args.cfg_scale if args.cfg_scale is not None else 3.0,
         **_image_conditioning_kwargs(pipe.generate_and_save, image, args.image_strength),
         **_rate_kwargs(pipe.generate_and_save, args.fps),
-    )
+    ))
 
 
 def run_text(args: argparse.Namespace) -> str:
@@ -926,10 +1075,10 @@ def run_text(args: argparse.Namespace) -> str:
     bind_output_fps(pipe, args.fps)
     emit_stage(1, 1, 1, "Loaded")
     emit_status("Generating T2V…")
-    return pipe.generate_and_save(
+    return _run_with_ltx_stepwise_preview(pipe, args, lambda: pipe.generate_and_save(
         **_one_stage_kwargs(args),
         **_rate_kwargs(pipe.generate_and_save, args.fps),
-    )
+    ))
 
 
 def run_image(args: argparse.Namespace) -> str:
@@ -951,10 +1100,10 @@ def run_image(args: argparse.Namespace) -> str:
     image_kwargs = _image_conditioning_kwargs(
         pipe.generate_and_save, args.image, args.image_strength
     )
-    return pipe.generate_and_save(
+    return _run_with_ltx_stepwise_preview(pipe, args, lambda: pipe.generate_and_save(
         **_one_stage_kwargs(args, **image_kwargs),
         **_rate_kwargs(pipe.generate_and_save, args.fps),
-    )
+    ))
 
 
 def _resolve_keyframes(args: argparse.Namespace) -> tuple[list[str], list[int]]:
@@ -1036,7 +1185,7 @@ def run_fflf(args: argparse.Namespace) -> str:
     _apply_user_loras(pipe, args.user_lora_specs)
     emit_stage(1, 1, 1, "Loaded")
     emit_status(f"Interpolating between {len(keyframe_images)} keyframes at indices {keyframe_indices}…")
-    return pipe.generate_and_save(
+    return _run_with_ltx_stepwise_preview(pipe, args, lambda: pipe.generate_and_save(
         prompt=args.prompt,
         output_path=args.output,
         keyframe_images=keyframe_images,
@@ -1049,7 +1198,7 @@ def run_fflf(args: argparse.Namespace) -> str:
         stage2_steps=args.stage2_steps,
         cfg_scale=args.cfg_scale if args.cfg_scale is not None else 3.0,
         **_rate_kwargs(pipe.generate_and_save, args.fps),
-    )
+    ))
 
 
 def run_extend(args: argparse.Namespace) -> str:
@@ -1080,7 +1229,7 @@ def run_extend(args: argparse.Namespace) -> str:
     if _EXTEND_TC_CONFIG["enable"]:
         emit_status(f"TeaCache active on extend (thresh={_teacache_thresh_label(args.teacache_thresh)})")
     try:
-        video_latent, audio_latent = pipe.extend_from_video(
+        video_latent, audio_latent = _run_with_ltx_stepwise_preview(pipe, args, lambda: pipe.extend_from_video(
             prompt=args.prompt,
             video_path=args.extend_from_video,
             extend_frames=args.extend_frames,
@@ -1088,7 +1237,7 @@ def run_extend(args: argparse.Namespace) -> str:
             seed=args.seed,
             num_steps=num_steps,
             cfg_scale=args.cfg_scale if args.cfg_scale is not None else 3.0,
-        )
+        ))
     finally:
         _EXTEND_TC_CONFIG = None
     # Mirror cli._decode_and_save: drop the DiT + text encoder before the VAE
@@ -1136,7 +1285,7 @@ def run_a2v(args: argparse.Namespace) -> str:
         emit_status(f"TeaCache active on A2V Stage 1 (thresh={_teacache_thresh_label(args.teacache_thresh)})")
     restore_image_rate = _patch_a2v_image_conditioning_rate(args.fps)
     try:
-        return pipe.generate_and_save(
+        return _run_with_ltx_stepwise_preview(pipe, args, lambda: pipe.generate_and_save(
             prompt=args.prompt,
             output_path=args.output,
             audio_path=args.audio,
@@ -1150,7 +1299,7 @@ def run_a2v(args: argparse.Namespace) -> str:
             cfg_scale=args.cfg_scale if args.cfg_scale is not None else 3.0,
             audio_start_time=args.audio_start,
             **_rate_kwargs(pipe.generate_and_save, args.fps),
-        )
+        ))
     finally:
         restore_image_rate()
         _A2V_TC_CONFIG = None
@@ -1251,7 +1400,7 @@ def run_ic_lora(args: argparse.Namespace) -> str:
     )
     if args.ic_attention_strength is not None:
         kwargs["conditioning_attention_strength"] = args.ic_attention_strength
-    return pipe.generate_and_save(**kwargs)
+    return _run_with_ltx_stepwise_preview(pipe, args, lambda: pipe.generate_and_save(**kwargs))
 
 
 def maybe_strip_audio(output_path: str) -> None:

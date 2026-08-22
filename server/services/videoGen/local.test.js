@@ -260,6 +260,7 @@ vi.mock('fs', () => ({
     if (i >= 0) { fsState.missOnce.splice(i, 1); return undefined; }
     return { size: 1000 };
   }),
+  watch: vi.fn(() => ({ close: vi.fn() })),
 }));
 
 // Anchor scoring. The scorer itself is unit-tested in lib/frameQuality.test.js;
@@ -309,6 +310,8 @@ vi.mock('fs/promises', () => ({
   writeFile: vi.fn(async () => {}),
   copyFile: vi.fn(async () => {}),
   rm: vi.fn(async () => {}),
+  readFile: vi.fn(async () => Buffer.from('')),
+  mkdtemp: vi.fn(async (prefix) => `${prefix}mock`),
   // Unused by the code under test, but lib/ffmpeg.js imports it and the ffmpeg
   // mock above pulls the real module in for buildTrimConcatArgs.
   rename: vi.fn(async () => {}),
@@ -1412,6 +1415,7 @@ describe('generateVideo — PORTOS_T2V_TWO_STAGE arg threading', () => {
   it('threads --stage2-steps 3 + fast steps/cfg when the knob is on', async () => {
     process.env.PORTOS_T2V_TWO_STAGE = '1';
     const args = await renderArgsFor('t2v-twostage-on');
+    expect(args[args.indexOf('--preview-dir') + 1]).toContain('portos-video-stepwise-');
     expect(args[args.indexOf('--stage2-steps') + 1]).toBe('3');
     expect(args[args.indexOf('--steps') + 1]).toBe('8');
     expect(args[args.indexOf('--cfg-scale') + 1]).toBe('1');
@@ -2890,6 +2894,7 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
     expect(args[args.indexOf('--height') + 1]).toBe('672');
     expect(args[args.indexOf('--num-frames') + 1]).toBe('107');
     expect(args[args.indexOf('--steps') + 1]).toBe('8');
+    expect(args[args.indexOf('--preview-dir') + 1]).toContain('portos-video-stepwise-');
     expect(args.flatMap((arg, i) => arg === '--checkpoint-file' ? [args[i + 1]] : []))
       .toEqual(['LICENSE', 'FL2VA/vae/video/config.json']);
     expect(options.killProcessGroup).toBe(true);
@@ -2902,6 +2907,61 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
     expect(options.env).not.toHaveProperty('HF_TOKEN');
     expect(options.env).not.toHaveProperty('HUGGING_FACE_HUB_TOKEN');
     expect(hfChildEnv).not.toHaveBeenCalled();
+  });
+
+  it('forwards the newest preview as currentImage and ignores events after teardown', async () => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const { watch } = await import('fs');
+    const { readFile } = await import('fs/promises');
+    const listeners = {};
+    const proc = {
+      pid: 6789,
+      exitCode: null,
+      signalCode: null,
+      killed: false,
+      stdout: { on: vi.fn() },
+      stderr: { on: vi.fn() },
+      on(event, fn) { listeners[event] = fn; return proc; },
+      off(event, fn) { if (listeners[event] === fn) delete listeners[event]; return proc; },
+      kill: vi.fn(),
+    };
+    vi.mocked(spawnDetached).mockImplementationOnce(async () => proc);
+    const progress = [];
+    const onProgress = (event) => {
+      if (event.generationId === 'preview-current-image') progress.push(event);
+    };
+    videoGenEvents.on('progress', onProgress);
+
+    try {
+      await generateVideo({
+        jobId: 'preview-current-image',
+        pythonPath: '/usr/bin/python3',
+        modelId: 'ltx2_unified',
+        prompt: 'a quiet street at dusk',
+        width: 512,
+        height: 512,
+        numFrames: 25,
+        fps: 24,
+      });
+      const watchCall = vi.mocked(watch).mock.calls.at(-1);
+      expect(watchCall[0]).toContain('portos-video-stepwise-');
+      vi.mocked(readFile).mockResolvedValueOnce(Buffer.from('frame-one'));
+      watchCall[1]('rename', 'preview.png');
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(progress).toContainEqual({
+        generationId: 'preview-current-image',
+        currentImage: Buffer.from('frame-one').toString('base64'),
+      });
+
+      listeners.close?.(1, null);
+      await new Promise((resolve) => setImmediate(resolve));
+      vi.mocked(readFile).mockResolvedValueOnce(Buffer.from('stale-frame'));
+      watchCall[1]('rename', 'preview.png');
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(progress).toHaveLength(1);
+    } finally {
+      videoGenEvents.off('progress', onProgress);
+    }
   });
 
   // Substituted prompt conditioner (#4081). The whole override path has to stay

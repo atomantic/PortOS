@@ -468,4 +468,13 @@ describe.skipIf(!pyBin)('generate_ltx2.py', () => {
     ].join('\n')}`);
     expect(output.trim()).toBe(expected);
   });
+
+  it('parses the optional bounded preview directory', () => {
+    const output = runPython(`${importRunner}\n${[
+      'import sys',
+      'sys.argv = ["generate_ltx2.py", "--mode", "text", "--prompt", "p", "--output", "/tmp/o.mp4", "--model", "m", "--preview-dir", "/tmp/previews"]',
+      'print(runner.parse_args().preview_dir)',
+    ].join('\n')}`);
+    expect(output.trim()).toBe('/tmp/previews');
+  });
 });

@@ -11,8 +11,8 @@
  */
 
 import { execFile, spawn } from '../../lib/childProcess.js';
-import { existsSync, statSync } from 'fs';
-import { unlink, writeFile, copyFile, rm } from 'fs/promises';
+import { existsSync, statSync, watch as fsWatch } from 'fs';
+import { unlink, writeFile, copyFile, rm, readFile, mkdtemp } from 'fs/promises';
 import { join, basename } from 'path';
 import { tmpdir, totalmem } from 'os';
 import { randomUUID } from 'crypto';
@@ -492,7 +492,7 @@ export const ltx25TextEncoderArgs = (textEncoder) => {
   return args;
 };
 
-const buildLtx2Args = ({ model, ltxModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, disableAudio, outputPath, textEncoderRepo, textEncoder, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2 }) => {
+const buildLtx2Args = ({ model, ltxModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, disableAudio, outputPath, previewDir, textEncoderRepo, textEncoder, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2 }) => {
   assertByovRuntimeInstalled(model.runtime);
   // Map PortOS UI modes to the helper's subcommand. Native extend on ltx2
   // routes to ExtendPipeline.extend_from_video — conditions on the entire
@@ -602,6 +602,7 @@ const buildLtx2Args = ({ model, ltxModelPath, prompt, negativePrompt, width, hei
     '--steps', String(steps),
     '--cfg-scale', String(guidance),
   ];
+  if (previewDir) args.push('--preview-dir', previewDir);
   // LTX-2.5 packs ship Gemma 4 under text_encoder/. Passing the shared 2.3
   // Gemma 3 encoder would either fail load or silently condition on the wrong
   // model. The 2.3 runtime still needs the explicit shared encoder.
@@ -754,7 +755,7 @@ const assertMiniMaxH3Preflight = ({
 // Build args for PipeNetwork's pinned MiniMax H3 MLX port. The helper resolves
 // only exact, already-cached HF revisions; every network download remains an
 // explicit Video Gen UI action guarded by the model's terms acknowledgement.
-const buildMiniMaxH3Args = ({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath, loras, textEncoder }) => {
+const buildMiniMaxH3Args = ({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath, previewDir, loras, textEncoder }) => {
   assertMiniMaxH3Preflight({
     runtimeId: 'minimax_h3',
     repoLabel: 'transformer repo or revision',
@@ -787,6 +788,7 @@ const buildMiniMaxH3Args = ({ model, prompt, negativePrompt, width, height, numF
     '--seed', String(seed),
     '--output', outputPath,
   ];
+  if (previewDir) args.push('--preview-dir', previewDir);
   for (const file of files) args.push('--checkpoint-file', file);
   // Anchor order is packed order: the helper stretches the FIRST keyframe onto
   // the canvas as the geometry anchor, so a first-frame image must lead.
@@ -922,12 +924,12 @@ const buildHunyuanArgs = ({ model, prompt, negativePrompt, width, height, numFra
   return { bin: HUNYUAN_VENV_PYTHON, args };
 };
 
-const buildArgs = ({ pythonPath, modelId, model, wanModelPath, wanRequiredWeights, ltxModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, tiling, disableAudio, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, textEncoderRepo, textEncoder, outputPath, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2 }) => {
+const buildArgs = ({ pythonPath, modelId, model, wanModelPath, wanRequiredWeights, ltxModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, tiling, disableAudio, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, textEncoderRepo, textEncoder, outputPath, previewDir, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2 }) => {
   // Route to the dgrauet/ltx-2-mlx helper when the model declares the new
   // runtime. Existing notapalindrome models default to runtime: 'mlx_video'
   // (or undefined in legacy registries — see backfillRuntime in mediaModels.js).
   if (isLtx2FamilyRuntime(model.runtime)) {
-    return buildLtx2Args({ model, ltxModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, disableAudio, outputPath, textEncoderRepo, textEncoder, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2 });
+    return buildLtx2Args({ model, ltxModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, disableAudio, outputPath, previewDir, textEncoderRepo, textEncoder, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2 });
   }
   // IC-LoRA remix modes are an LTX-2 primitive (ICLoraPipeline) — no other
   // runtime has an equivalent. The route guards this too, but a non-route
@@ -967,7 +969,7 @@ const buildArgs = ({ pythonPath, modelId, model, wanModelPath, wanRequiredWeight
     return buildWan22Args({ model, wanModelPath, wanRequiredWeights, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, sourceImagePath, mode, outputPath });
   }
   if (model.runtime === 'minimax_h3') {
-    return buildMiniMaxH3Args({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath, loras, textEncoder });
+    return buildMiniMaxH3Args({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath, previewDir, loras, textEncoder });
   }
   if (model.runtime === 'minimax_h3_cuda') {
     return buildMiniMaxH3CudaArgs({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath });
@@ -1585,6 +1587,10 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     ...(addedTriggerWords.length ? { renderPrompt, addedTriggerWords } : {}),
     ...(hidden ? { hidden: true } : {}),
   };
+  // Each render gets one private preview directory. Runners overwrite the
+  // fixed `preview.png` path atomically, so a long render cannot accumulate
+  // one PNG per step and a stale preview can never cross job boundaries.
+  const stepwiseDir = await mkdtemp(join(tmpdir(), 'portos-video-stepwise-'));
   const job = { ...meta, clients: [], status: 'running' };
   jobs.set(jobId, job);
 
@@ -1596,7 +1602,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // logic of the spawn-error handler so failure modes converge.
   let bin, args;
   try {
-    ({ bin, args } = buildArgs({ pythonPath, modelId, model: loraCapableModel, wanModelPath, wanRequiredWeights, ltxModelPath, prompt: renderPrompt, negativePrompt, width: w, height: h, numFrames: parsedNumFrames, fps: parsedFps, steps: actualSteps, stage2Steps: actualStage2Steps, guidance: actualGuidance, seed: actualSeed, tiling, disableAudio, sourceImagePath: resolvedSourceImage, lastImagePath: resolvedLastImage, keyframes: resolvedKeyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength: actualImageStrength, textEncoderRepo: actualTextEncoderRepo, textEncoder: resolvedTextEncoder, outputPath, loras: resolvedLoras, icReferencePaths: resolvedIcReferencePaths, icLoraWeightPath, icStrength: actualIcStrength, icAttentionStrength: actualIcAttentionStrength, icSkipStage2 }));
+    ({ bin, args } = buildArgs({ pythonPath, modelId, model: loraCapableModel, wanModelPath, wanRequiredWeights, ltxModelPath, prompt: renderPrompt, negativePrompt, width: w, height: h, numFrames: parsedNumFrames, fps: parsedFps, steps: actualSteps, stage2Steps: actualStage2Steps, guidance: actualGuidance, seed: actualSeed, tiling, disableAudio, sourceImagePath: resolvedSourceImage, lastImagePath: resolvedLastImage, keyframes: resolvedKeyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength: actualImageStrength, textEncoderRepo: actualTextEncoderRepo, textEncoder: resolvedTextEncoder, outputPath, previewDir: stepwiseDir, loras: resolvedLoras, icReferencePaths: resolvedIcReferencePaths, icLoraWeightPath, icStrength: actualIcStrength, icAttentionStrength: actualIcAttentionStrength, icSkipStage2 }));
   } catch (err) {
     job.status = 'error';
     const reason = err.message || 'Failed to build video gen args';
@@ -1604,6 +1610,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     broadcastSse(job, { type: 'error', error: reason });
     videoGenEvents.emit('failed', { generationId: jobId, error: reason });
     void cleanupTempFiles({ includeUploads: true, includeUntrackedAudio: true });
+    void rm(stepwiseDir, { recursive: true, force: true });
     closeJobAfterDelay(jobs, jobId);
     throw err;
   }
@@ -1612,6 +1619,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   if (!heavyClaim.ok) {
     jobs.delete(jobId);
     await cleanupTempFiles({ includeUploads: true });
+    await rm(stepwiseDir, { recursive: true, force: true });
     throw new ServerError(heavyClaim.message, { status: 409, code: 'HEAVY_LOCAL_JOB_BUSY', context: { holder: heavyClaim.holder } });
   }
   const releaseHeavyClaim = () => heavyClaim.release()
@@ -1629,6 +1637,53 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // Hoisted out of the try so a relaunch can respawn with the SAME child env
   // plus a lowered Gemma budget, instead of rebuilding it from scratch.
   let childEnv;
+
+  // Runners publish one atomically-replaced `preview.png`. Keep the reader
+  // serialized because fs.watch can report several events for one replacement;
+  // a pending flag collapses those events to the newest available frame.
+  let previewWatcher = null;
+  let previewReading = false;
+  let previewPending = false;
+  let previewClosed = false;
+  const cleanupStepwisePreview = () => {
+    if (previewClosed) return;
+    previewClosed = true;
+    if (previewWatcher) {
+      try { previewWatcher.close(); } catch { /* already closed */ }
+      previewWatcher = null;
+    }
+    void rm(stepwiseDir, { recursive: true, force: true });
+  };
+  const processLatestPreview = async () => {
+    if (previewClosed) return;
+    if (previewReading) {
+      previewPending = true;
+      return;
+    }
+    previewReading = true;
+    try {
+      const framePath = join(stepwiseDir, 'preview.png');
+      const currentImage = (await readFile(framePath)).toString('base64');
+      if (jobs.get(jobId) === job && job.status === 'running') {
+        job.currentImage = currentImage;
+        videoGenEvents.emit('progress', { generationId: jobId, currentImage });
+      }
+    } catch (err) {
+      // A replacement can race a read, and cancel/close removes the directory;
+      // both are ordinary teardown races rather than render failures.
+      if (!previewClosed) console.log(`⚠️ Video preview read skipped [${jobId.slice(0, 8)}]: ${err.message}`);
+    }
+    previewReading = false;
+    if (previewPending) {
+      previewPending = false;
+      void processLatestPreview();
+    }
+  };
+  try {
+    previewWatcher = fsWatch(stepwiseDir, (event) => {
+      if (event === 'rename' || event === 'change') void processLatestPreview();
+    });
+  } catch { /* preview is best-effort; the final video remains authoritative */ }
 
   // ── one render child, fully wired ──────────────────────────────────────────
   // Everything per-CHILD lives in here — the process handle, both watchdogs, the
@@ -1768,6 +1823,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
       // Defensive cleanup includes audio passed directly without the route's
       // uploadedTempPaths tracking. Duplicate unlinks remain harmless.
       void cleanupTempFiles({ includeUploads: true, includeUntrackedAudio: true });
+      cleanupStepwisePreview();
       closeJobAfterDelay(jobs, jobId);
     };
 
@@ -1867,6 +1923,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
       // before emitting the terminal completion event: an extend chain starts its
       // next child from that event and must be able to acquire the machine claim.
       await releaseHeavyClaim();
+      cleanupStepwisePreview();
       // Wrap the whole teardown so a throw from finalizeGeneratedVideo (history
       // save, thumbnail, file move) can't leak as an unhandled rejection — on
       // Node ≥15 that kills the process AND strands the media job `running` with
@@ -2115,6 +2172,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     broadcastSse(job, { type: 'error', error: reason });
     videoGenEvents.emit('failed', { generationId: jobId, error: reason });
     void cleanupTempFiles({ includeUploads: true, includeUntrackedAudio: true });
+    cleanupStepwisePreview();
     closeJobAfterDelay(jobs, jobId);
   };
 

@@ -128,6 +128,66 @@ describe.skipIf(!pyBin)('generate_minimax_h3.py', () => {
     expect(output.trim()).toBe('9');
   });
 
+  it('parses the optional bounded preview directory', () => {
+    const output = runPython(`${importRunner}\n${[
+      'import sys',
+      'sys.argv = ["generate_minimax_h3.py", "--model-repo", "example/model", "--model-revision", "revision",',
+      '    "--runtime-dir", "/tmp/runtime", "--runtime-revision", "revision",',
+      '    "--checkpoint-repo", "example/checkpoint", "--checkpoint-revision", "revision",',
+      '    "--prompt", "a test prompt", "--width", "1344", "--height", "768", "--num-frames", "124",',
+      '    "--output", "test.mp4", "--preview-dir", "/tmp/previews"]',
+      'print(runner.parse_args().preview_dir)',
+    ].join('\n')}`);
+    expect(output.trim()).toBe('/tmp/previews');
+  });
+
+  it('projects the DiT batch rows to the generated video rows before decoding', () => {
+    const output = runPython(`${importRunner}\n${[
+      'import json, sys, types',
+      'packing = types.ModuleType("minimax_h3_mlx.packing")',
+      'packing.align_num_frames = lambda value: value',
+      'packing.video_latent_num_frames = lambda value: 2',
+      'sys.modules["minimax_h3_mlx"] = types.ModuleType("minimax_h3_mlx")',
+      'sys.modules["minimax_h3_mlx.packing"] = packing',
+      'class Config:',
+      '    spatial_compression_ratio = 2',
+      'class DitConfig:',
+      '    patch_size = (1, 2, 2)',
+      'class VideoVae:',
+      '    config = Config()',
+      'class Dit:',
+      '    config = DitConfig()',
+      'class Rows:',
+      '    def __init__(self, shape): self.shape = shape',
+      '    def __getitem__(self, key):',
+      '        if key == 0: return Rows((10, 4))',
+      '        if isinstance(key, slice): return Rows((8, 4))',
+      '        raise AssertionError(f"unexpected row key: {key!r}")',
+      'class Frame:',
+      '    shape = (4, 4, 3)',
+      'class Frames:',
+      '    def __len__(self): return 2',
+      '    def __getitem__(self, key): return Frame()',
+      'class Pipe:',
+      '    video_vae = VideoVae()',
+      '    dit = Dit()',
+      '    def _decode_video(self, rows, *shape):',
+      '        print(json.dumps({"rows": list(rows.shape), "shape": list(shape)}))',
+      '        return Frames()',
+      'seen = []',
+      'runner.write_stepwise_preview = lambda directory, frame: seen.append((directory, list(frame.shape))) or True',
+      'preview = runner._H3StepwisePreview(Pipe(), "/tmp/previews", 17, 8, 8)',
+      'rows = Rows((1, 10, 4))',
+      'proxy = runner._PreviewingDiT(lambda *args: "ok", preview)',
+      'proxy(rows)',
+      'preview.publish(1, 2)',
+      'print(json.dumps({"seen": seen, "saved": preview.saved}))',
+    ].join('\n')}`);
+    const lines = output.trim().split('\n').map((line) => JSON.parse(line));
+    expect(lines[0]).toMatchObject({ rows: [8, 4], shape: [2, 4, 4] });
+    expect(lines[1]).toEqual({ seen: [['/tmp/previews', [4, 4, 3]]], saved: 1 });
+  });
+
   // Only this runner shells out to ffmpeg (the CUDA sibling muxes in-process
   // via PyAV), so the preflight lives here rather than in the shared module.
   // Tens of GB of weights load before the mux; discovering a missing ffmpeg

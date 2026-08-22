@@ -27,6 +27,7 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _runner_common import (  # noqa: E402
     emit_runtime_fingerprint, establish_process_group, heartbeat, register_source_namespace,
+    write_stepwise_preview,
 )
 from _minimax_h3_common import (  # noqa: E402
     FPS, add_h3_common_args, emit_result, load_keyframes, resolve_cached_snapshot,
@@ -52,6 +53,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint-repo", required=True)
     parser.add_argument("--checkpoint-revision", required=True)
     parser.add_argument("--checkpoint-file", action="append", default=[])
+    parser.add_argument("--preview-dir", default=None,
+                        help="Job-scoped directory where the latest decoded denoise frame is published")
     parser.add_argument("--lora", action="append", default=[],
                         help="user LoRA safetensors applied at runtime (repeatable)")
     parser.add_argument("--lora-scale", action="append", type=float, default=[],
@@ -425,11 +428,89 @@ def verify_runtime_checkout(runtime_dir: Path, expected_revision: str) -> None:
         raise RuntimeError("MiniMax H3 runtime source differs from the pinned checkout; use Repair in Video Gen.")
 
 
+class _H3StepwisePreview:
+    """Decode one selected H3 video frame when ProgressWriter sees a step."""
+
+    def __init__(self, pipe, stepwise_dir: str, num_frames: int, height: int, width: int) -> None:
+        from minimax_h3_mlx.packing import align_num_frames, video_latent_num_frames
+
+        self.pipe = pipe
+        self.stepwise_dir = stepwise_dir
+        self.num_frames = align_num_frames(num_frames)
+        self.num_latent_frames = video_latent_num_frames(self.num_frames)
+        ratio = pipe.video_vae.config.spatial_compression_ratio
+        self.latent_height = height // ratio
+        self.latent_width = width // ratio
+        patch_t, patch_h, patch_w = tuple(pipe.dit.config.patch_size)
+        self.target_rows = (
+            (self.num_latent_frames // patch_t)
+            * (self.latent_height // patch_h)
+            * (self.latent_width // patch_w)
+        )
+        self._latest_rows = None
+        self.saved = 0
+
+    def capture(self, rows) -> None:
+        # The pinned pipeline passes generated video rows as the first DiT
+        # argument. They are the state immediately before the current forward;
+        # ProgressWriter publishes them after that forward's step line, which
+        # keeps the hook independent of private scheduler locals.
+        self._latest_rows = rows[0] if len(rows.shape) == 3 else rows
+
+    def publish(self, step: int, total: int) -> None:
+        if self._latest_rows is None:
+            return
+        try:
+            rows = self._latest_rows[-self.target_rows:]
+            frames = self.pipe._decode_video(
+                rows,
+                self.num_latent_frames,
+                self.latent_height,
+                self.latent_width,
+            )
+            frame = frames[len(frames) // 2]
+            if write_stepwise_preview(self.stepwise_dir, frame):
+                self.saved += 1
+        except Exception as exc:  # best-effort instrumentation around a live runner
+            print(
+                f"⚠️ MiniMax H3 stepwise preview failed at {step}/{total}: "
+                f"{type(exc).__name__}: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
+
+
+class _PreviewingDiT:
+    """Delegate the pinned DiT while exposing its latest video input rows."""
+
+    def __init__(self, inner, preview: _H3StepwisePreview) -> None:
+        self._inner = inner
+        self._preview = preview
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def __call__(self, *args, **kwargs):
+        rows = args[0] if args else kwargs.get("video_latents")
+        if rows is not None:
+            self._preview.capture(rows)
+        return self._inner(*args, **kwargs)
+
+
+def _install_h3_stepwise_preview(pipe, args: argparse.Namespace):
+    if not args.preview_dir:
+        return None
+    preview = _H3StepwisePreview(pipe, args.preview_dir, args.num_frames, args.height, args.width)
+    pipe.dit = _PreviewingDiT(pipe.dit, preview)
+    return preview
+
+
 class ProgressWriter:
     """Translate the port's human step lines into PortOS STAGE progress."""
 
-    def __init__(self) -> None:
+    def __init__(self, preview: _H3StepwisePreview | None = None) -> None:
         self._carry = ""
+        self._preview = preview
 
     def write(self, text: str) -> int:
         self._carry += text
@@ -443,8 +524,7 @@ class ProgressWriter:
             self._emit(self._carry)
             self._carry = ""
 
-    @staticmethod
-    def _emit(line: str) -> None:
+    def _emit(self, line: str) -> None:
         clean = line.strip()
         if not clean:
             return
@@ -456,6 +536,8 @@ class ProgressWriter:
                 file=sys.stderr,
                 flush=True,
             )
+            if self._preview is not None:
+                self._preview.publish(int(step), int(total))
             return
         print(clean, file=sys.stderr, flush=True)
 
@@ -591,7 +673,8 @@ def main() -> int:
         )
 
     print("STAGE:inference", file=sys.stderr, flush=True)
-    progress = ProgressWriter()
+    preview = _install_h3_stepwise_preview(pipe, args)
+    progress = ProgressWriter(preview)
     with heartbeat("minimax-h3-inference"), redirect_stdout(progress):
         result = pipe(
             args.prompt,
