@@ -139,7 +139,7 @@ function snapshot() {
     // runtime is now serving the last variant's launch line and nothing else on
     // the page would say so. Separate from `error` so neither one lies.
     restoreError: sweep.restoreError || null,
-    // `launchState` is deliberately NOT exposed: it holds on-disk model paths,
+    // `launchStates` is deliberately NOT exposed: it holds on-disk model paths,
     // and the page has no use for the configuration being put back.
   };
 }
@@ -164,8 +164,7 @@ export function getSweepStatus() {
  * on the sweep's last variant, which is the thing this exists to prevent. It
  * waits, bounded, then restores anyway and lets the reason be reported.
  */
-async function restoreUnderClaim(run, backend, launchState = run.launchState) {
-  if (!launchState) return { restored: false, reason: 'nothing to restore' };
+async function restoreUnderClaim(backend, launchState) {
   const claim = await claimHeavyLocalJob({
     kind: 'local-model assessment',
     id: `${backend} launch restore`,
@@ -181,11 +180,18 @@ async function restoreUnderClaim(run, backend, launchState = run.launchState) {
   }
 }
 
-/** Restore every backend touched by a model or tuning sweep, one at a time. */
+/**
+ * Restore every backend touched by a model or tuning sweep, one at a time.
+ *
+ * Only CAPTURED backends are in the map, so every entry is a real restore —
+ * there is no "nothing to restore" here to mistake for a failure. Each is caught
+ * on its own: one runtime that will not come back must not leave the next one
+ * serving the sweep's launch line.
+ */
 async function restoreAllUnderClaim(run) {
   const failures = [];
-  for (const [backend, launchState] of Object.entries(run.launchStates || {})) {
-    const result = await restoreUnderClaim(run, backend, launchState)
+  for (const [backend, launchState] of Object.entries(run.launchStates)) {
+    const result = await restoreUnderClaim(backend, launchState)
       .catch((err) => ({ restored: false, reason: err?.message || 'restore failed' }));
     if (result?.restored === false) {
       failures.push(`${backend}: ${result.reason || 'the launch configuration could not be put back'}`);
@@ -259,7 +265,15 @@ async function runSweepLoop(run, targets, contextTokens, emit) {
     // KV / speculative flags while its record named only B's tuning (#4774).
     // Other endpoint runtimes have no sweep-safe reset/restore path, so they
     // remain ordinary model measurements.
-    const resetTuning = run.mode === 'tunings' || isTuningSweepable(target.backend);
+    //
+    // Gated on a CAPTURED configuration rather than on `isTuningSweepable`
+    // alone: a reset renders the cleared launch line, which wipes knobs the USER
+    // may have set on the LLMs page, and only a caller holding what was running
+    // there is entitled to do that. `beginSweep` captured every sweepable
+    // backend it could, so a runtime that could not be captured — llama-server
+    // stopped, or started outside PortOS — measures under what is running
+    // instead of losing flags nothing can put back.
+    const resetTuning = Boolean(run.launchStates[target.backend]);
     const result = await runAssessment({
       backend: target.backend,
       modelId: target.modelId,
@@ -408,17 +422,33 @@ async function beginSweep({ scope, backend, modelId, tunings, contextTokens, onP
   // llama daemon is machine-wide, so the one launch state has to be restored
   // after the whole queue, not after each model. Endpoint runtimes that cannot
   // reset safely are intentionally absent from this map.
+  //
+  // A backend whose capture comes back `null` is LEFT OUT rather than stored as
+  // null: the daemon is stopped or somebody else started it, so there is nothing
+  // to put back — and the loop reads presence here as its permission to reset.
   const restoreBackends = [...new Set(targets.map((target) => target.backend).filter(isTuningSweepable))];
   const launchStates = {};
   for (const restoreBackend of restoreBackends) {
     const state = await captureLaunchState(restoreBackend);
-    if (!state) {
-      return {
-        ...snapshot(),
-        rejected: `PortOS is not running ${restoreBackend}, so it cannot vary the launch configuration safely — start it from the LLMs page first`,
-      };
-    }
-    launchStates[restoreBackend] = state;
+    if (state) launchStates[restoreBackend] = state;
+  }
+  // Nothing to capture means the daemon is stopped, or someone else started it —
+  // either way PortOS cannot put a tuning on its launch line, so every variant
+  // would record `tuningApplied: false` and the comparison would rank a set of
+  // configurations that never ran. Refusing costs a click; running costs the
+  // whole sweep.
+  //
+  // Only a TUNING sweep refuses. Varying the launch line is its entire job, so
+  // an uncapturable runtime leaves it nothing to do — but a MODEL sweep is a
+  // queue of real measurements across every runtime the scope covers, and one
+  // llama-server somebody else started must not cancel the Ollama and LM Studio
+  // models alongside it. It measures that runtime under whatever is running, as
+  // it did before the reset existed.
+  if (grid && !launchStates[named.backend]) {
+    return {
+      ...snapshot(),
+      rejected: `PortOS is not running ${named.backend}, so it cannot vary the launch configuration — start it from the LLMs page first`,
+    };
   }
 
   const run = {
@@ -440,9 +470,6 @@ async function beginSweep({ scope, backend, modelId, tunings, contextTokens, onP
     // while it is false, so a cancelled sweep cannot relaunch the daemon
     // underneath the sweep that replaced it.
     settled: false,
-    // Kept as a compatibility alias for callers/tests that only ever had one
-    // tuning backend. The restore path uses the per-backend map above.
-    launchState: named ? launchStates[named.backend] || null : null,
     launchStates,
     controller: new AbortController(),
   };

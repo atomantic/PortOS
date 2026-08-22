@@ -645,3 +645,123 @@ describe('startSweep — the tuning dimension', () => {
     expect(started.scope).toBeNull();
   });
 });
+
+// A MODEL sweep may reset a runtime only where it can put the launch line back,
+// and that permission is the CAPTURE, not the runtime's `sweepable` flag alone.
+// llama-server started outside PortOS captures nothing, and a sweep that reset
+// it anyway would clear flags the user chose with no record of what they were —
+// while refusing outright would cancel every Ollama and LM Studio model queued
+// alongside it.
+describe('startSweep — a model sweep across runtimes', () => {
+  const twoLlamaModels = () => getAssessmentReport.mockResolvedValue(report({
+    assessments: [
+      {
+        backend: 'llama', modelId: 'first', tuningKey: 'batchSize=4096', tuningLabel: 'batch 4096',
+        tuning: { batchSize: 4096 }, staleness: { stale: true },
+      },
+      {
+        backend: 'llama', modelId: 'second', tuningKey: 'ubatchSize=1024', tuningLabel: 'ubatch 1024',
+        tuning: { ubatchSize: 1024 }, staleness: { stale: true },
+      },
+    ],
+  }));
+
+  // The seam this module owns. What a reset then DOES — clear every sweepable
+  // knob the new tuning does not name — is `llamaServerManager`'s contract, and
+  // its own suite asserts the second launch line carries none of the first's.
+  it('gives each model the complete tuning its record names', async () => {
+    twoLlamaModels();
+    runAssessment.mockResolvedValue(measured());
+
+    await startSweep({ scope: 'stale' });
+    await settle();
+    expect(runAssessment.mock.calls.map(([args]) => args)).toMatchObject([
+      { modelId: 'first', tuning: { batchSize: 4096 }, resetTuning: true },
+      { modelId: 'second', tuning: { ubatchSize: 1024 }, resetTuning: true },
+    ]);
+  });
+
+  it('captures a runtime once for the whole queue, however many models it holds', async () => {
+    twoLlamaModels();
+    runAssessment.mockResolvedValue(measured());
+
+    await startSweep({ scope: 'stale' });
+    expect(captureLaunchState).toHaveBeenCalledTimes(1);
+    await settle();
+    expect(restoreLaunchState).toHaveBeenCalledTimes(1);
+    expect(restoreLaunchState).toHaveBeenCalledWith('llama', { model: '/models/example.gguf' });
+  });
+
+  it('resets only the sweepable runtimes in a mixed sweep', async () => {
+    getAssessmentReport.mockResolvedValue(report({
+      unassessed: [{ backend: 'llama', modelId: 'gguf' }, { backend: 'ollama', modelId: 'pulled' }],
+    }));
+    runAssessment.mockResolvedValue(measured());
+
+    await startSweep({ scope: 'unmeasured' });
+    await settle();
+    expect(captureLaunchState).toHaveBeenCalledWith('llama');
+    expect(captureLaunchState).not.toHaveBeenCalledWith('ollama');
+    expect(runAssessment.mock.calls.map(([args]) => args)).toMatchObject([
+      { backend: 'llama', resetTuning: true },
+      { backend: 'ollama', resetTuning: false },
+    ]);
+  });
+
+  // The regression this guards: refusing the whole queue over one runtime PortOS
+  // does not own throws away every measurement it could still have taken.
+  it('measures the rest of the queue when a runtime cannot be captured', async () => {
+    getAssessmentReport.mockResolvedValue(report({
+      unassessed: [{ backend: 'llama', modelId: 'gguf' }, { backend: 'ollama', modelId: 'pulled' }],
+    }));
+    captureLaunchState.mockResolvedValue(null);
+    runAssessment.mockResolvedValue(measured());
+
+    const started = await startSweep({ scope: 'unmeasured' });
+    expect(started.rejected).toBeUndefined();
+    expect(started.total).toBe(2);
+    await settle();
+    expect(getSweepStatus().results).toHaveLength(2);
+  });
+
+  // Nothing was captured, so nothing may be cleared — the measurement falls back
+  // to the behavior it had before the reset existed rather than wiping launch
+  // flags with no record of what they were.
+  it('never resets a runtime whose launch line it could not capture', async () => {
+    twoLlamaModels();
+    captureLaunchState.mockResolvedValue(null);
+    runAssessment.mockResolvedValue(measured());
+
+    await startSweep({ scope: 'stale' });
+    await settle();
+    for (const [args] of runAssessment.mock.calls) expect(args.resetTuning).toBe(false);
+    expect(restoreLaunchState).not.toHaveBeenCalled();
+    expect(getSweepStatus().restoreError).toBeNull();
+  });
+
+  // A TUNING sweep of the same uncapturable runtime still refuses — varying the
+  // launch line is its entire job, so it is left with nothing to do. That is
+  // "refuses when there is no launch configuration to vary" above; the asymmetry
+  // between the two sweeps is deliberate.
+
+  // Two runtimes can be left wrong at once, and one that will not come back must
+  // not strand the next — so the restores are caught individually and the reason
+  // names which runtime to go fix.
+  it('restores every captured runtime even when one of them throws', async () => {
+    getAssessmentReport.mockResolvedValue(report({
+      unassessed: [{ backend: 'llama', modelId: 'gguf' }, { backend: 'mtplx', modelId: 'mlx' }],
+    }));
+    isTuningSweepable.mockImplementation((backend) => backend === 'llama' || backend === 'mtplx');
+    captureLaunchState.mockImplementation(async (backend) => ({ model: `/models/${backend}.bin` }));
+    restoreLaunchState.mockImplementation(async (backend) => {
+      if (backend === 'llama') throw new Error('llama-server would not come back');
+      return { restored: true, reason: null };
+    });
+    runAssessment.mockResolvedValue(measured());
+
+    await startSweep({ scope: 'unmeasured' });
+    await settle();
+    expect(restoreLaunchState).toHaveBeenCalledWith('mtplx', { model: '/models/mtplx.bin' });
+    expect(getSweepStatus().restoreError).toBe('llama: llama-server would not come back');
+  });
+});
