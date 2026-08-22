@@ -822,7 +822,14 @@ const federatedMediaAudioJobSubmissionSchema = federatedMediaJobRoutingSchema.ex
 // by the routes, since neither has a field to name it — is a MODEL (LoRA
 // weights, rule 3) and multi-step CHAIN STATE (a video to extend, chained
 // chunks, IC-LoRA references, rule 4).
-export const federatedMediaImageJobSubmissionSchema = federatedMediaJobRoutingSchema.omit({
+// Exported UN-REFINED as well, and the split is load-bearing rather than
+// cosmetic. The cross-field rule below pairs `initImageStrength` with
+// `initImage` — but a conditioning image reaches the body as an asset id
+// resolved immediately BEFORE submission, so the persisted marker legitimately
+// carries the strength with no image beside it yet. The marker and the request
+// builder validate against the base; the provider route, which sees the fully
+// assembled body, validates against the refined schema.
+export const federatedMediaImageJobSubmissionBaseSchema = federatedMediaJobRoutingSchema.omit({
   durationSec: true, durationMode: true,
 }).extend({
   kind: z.literal('image'),
@@ -838,7 +845,9 @@ export const federatedMediaImageJobSubmissionSchema = federatedMediaJobRoutingSc
   referenceImages: z.array(federatedMediaInputAssetRefSchema)
     .max(FEDERATED_MEDIA_ASSET_MAX_COUNT).optional(),
 }).strict()
-  .refine(refineImagePixelCap, { message: PIXEL_CAP_MESSAGE, path: ['width'] })
+  .refine(refineImagePixelCap, { message: PIXEL_CAP_MESSAGE, path: ['width'] });
+
+export const federatedMediaImageJobSubmissionSchema = federatedMediaImageJobSubmissionBaseSchema
   // A strength with nothing to apply it to is a caller bug, not a default to
   // guess at: silently ignoring it renders at full denoise, which is the
   // opposite of what a low strength asked for.

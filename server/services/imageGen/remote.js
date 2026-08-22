@@ -16,7 +16,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { PATHS, atomicWrite } from '../../lib/fileUtils.js';
 import { FEDERATED_MEDIA_WIRE_VERSION } from '../../lib/federatedMediaWire.js';
-import { federatedMediaImageJobSubmissionSchema } from '../../lib/validation.js';
+import { federatedMediaImageJobSubmissionBaseSchema } from '../../lib/validation.js';
 import { createRemoteMediaExecutor } from '../federatedMedia/remoteExecutor.js';
 import { applyRemoteInputAssets, remoteInputAssetsSchema } from '../federatedMedia/inputAssets.js';
 import { imageGenEvents } from '../imageGenEvents.js';
@@ -34,7 +34,7 @@ const remoteImageMarkerSchema = z.object({
   // replay. Persisted queue state is user-editable, so the body that actually
   // leaves this machine is the one this schema accepted — not whatever the file
   // happens to contain.
-  request: federatedMediaImageJobSubmissionSchema,
+  request: federatedMediaImageJobSubmissionBaseSchema,
   // LOCAL paths for this render's conditioning images, resolved to provider
   // asset ids immediately before each submission. Ids are NOT persisted here:
   // they name slots in the peer's TTL-swept staging area, so a reconcile after a

@@ -17,7 +17,7 @@ import { z } from 'zod';
 import { PATHS } from '../../lib/fileUtils.js';
 import { generateThumbnail, optimizeForStreaming } from '../../lib/ffmpeg.js';
 import { FEDERATED_MEDIA_WIRE_VERSION } from '../../lib/federatedMediaWire.js';
-import { federatedMediaVideoJobSubmissionSchema } from '../../lib/validation.js';
+import { federatedMediaVideoJobSubmissionBaseSchema } from '../../lib/validation.js';
 import { createRemoteMediaExecutor } from '../federatedMedia/remoteExecutor.js';
 import { applyRemoteInputAssets, remoteInputAssetsSchema } from '../federatedMedia/inputAssets.js';
 import { videoGenEvents } from './events.js';
@@ -36,7 +36,7 @@ const remoteVideoMarkerSchema = z.object({
   // replay. Persisted queue state is user-editable, so the body that actually
   // leaves this machine is the one this schema accepted — not whatever the file
   // happens to contain.
-  request: federatedMediaVideoJobSubmissionSchema,
+  request: federatedMediaVideoJobSubmissionBaseSchema,
   // LOCAL paths for this render's conditioning images, resolved to provider
   // asset ids immediately before each submission. Ids are NOT persisted here:
   // they name slots in the peer's TTL-swept staging area, so a reconcile after a

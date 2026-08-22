@@ -12,6 +12,22 @@ describe('buildFederatedMediaRequest', () => {
     });
   });
 
+  // The strength scales the init image it travels with (#4348). Dropping it
+  // renders at FULL denoise — the opposite of what a low strength asked for,
+  // and indistinguishable from a working render until the result comes back.
+  // It is projected without its `initImage`, because the image itself reaches
+  // the body as an asset id resolved immediately before submission; the builder
+  // therefore validates against the un-refined base schema.
+  it('projects an init-image strength even though the image itself is added later', () => {
+    expect(buildFederatedMediaRequest({
+      kind: 'image',
+      params: {
+        modelId: 'sdxl-base', prompt: 'a lighthouse', width: 512, height: 512,
+        initImagePath: 'source.png', initImageStrength: 0.35,
+      },
+    })).toMatchObject({ initImageStrength: 0.35 });
+  });
+
   it('maps the video route dialect guidanceScale onto the wire guidance field', () => {
     const request = buildFederatedMediaRequest({
       kind: 'video',

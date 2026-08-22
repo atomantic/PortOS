@@ -16,8 +16,8 @@
  */
 
 import {
-  federatedMediaImageJobSubmissionSchema,
-  federatedMediaVideoJobSubmissionSchema,
+  federatedMediaImageJobSubmissionBaseSchema,
+  federatedMediaVideoJobSubmissionBaseSchema,
   validateRequest,
 } from './validation.js';
 
@@ -34,6 +34,10 @@ const FIELD_MAPS = Object.freeze({
     guidance: 'guidance',
     guidanceScale: 'guidance',
     seed: 'seed',
+    // Rides with the init image it scales (#4348). Dropping it would render at
+    // full denoise — the opposite of what a low strength asked for, and
+    // indistinguishable from a working render until the result comes back.
+    initImageStrength: 'initImageStrength',
   }),
   video: Object.freeze({
     negativePrompt: 'negativePrompt',
@@ -48,9 +52,14 @@ const FIELD_MAPS = Object.freeze({
   }),
 });
 
+// The BASE (un-refined) schemas. Conditioning images reach the body as asset ids
+// resolved immediately before submission, so at BUILD time the pairing rules
+// ("a strength needs an image", "an end frame needs a start frame") have nothing
+// to check yet. The generate routes enforce those pairings on the local params
+// they actually hold, and the provider re-checks the fully assembled body.
 const SCHEMAS = Object.freeze({
-  image: federatedMediaImageJobSubmissionSchema,
-  video: federatedMediaVideoJobSubmissionSchema,
+  image: federatedMediaImageJobSubmissionBaseSchema,
+  video: federatedMediaVideoJobSubmissionBaseSchema,
 });
 
 /**
