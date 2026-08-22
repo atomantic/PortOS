@@ -140,7 +140,7 @@ describe('LocalModelAssessments', () => {
       taskTokensPerSecond: 27.5, taskCharsPerSecond: 110, toolCalls: 2, elapsedMs: 4000,
     });
     const user = userEvent.setup();
-    render(<LocalModelAssessments />);
+    renderPanel();
     await user.click(screen.getAllByRole('button', { name: 'Run task check' })[0]);
     await waitFor(() => expect(runOpenCodeAgentBenchmark).toHaveBeenCalledWith({
       backend: 'llama', modelId: 'qwen3.8-27b-dflash2',
