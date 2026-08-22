@@ -475,15 +475,25 @@ consumer can re-upload and retry rather than watching a job die minutes later.
 
 Four properties are worth knowing:
 
-- **Content-addressed.** The id embeds the digest, so re-sending identical bytes
-  returns the same id and refreshes the expiry. That is what makes a reconcile
-  after a restart one transfer rather than a duplicated render.
+- **Content-addressed, and the consumer asks first.** The id is
+  `<callerHash>-<sha256>`, derivable by BOTH sides — so before sending anything a
+  consumer computes the id from its own instance id plus a streamed file digest
+  and `GET`s it. A hit costs one small request instead of up to 32 MiB, which is
+  what makes a reconcile after a restart, or a second render from the same init
+  image, nearly free. On a miss it uploads; an identical re-upload refreshes the
+  expiry rather than rewriting the file.
 - **Caller-scoped.** The id's first half is derived from the *authenticated*
   caller — re-derived on every reference, never parsed from the request — so one
   peer cannot reach another's staged asset even given its exact id. Absent,
   expired, and someone else's all answer the same 404.
-- **TTL-bounded.** Staged bytes live 6 hours under `data/federated-media-inbox/`,
-  swept opportunistically on each admission. That directory sits outside every
+- **TTL-bounded, but never out from under a live job.** Staged bytes live 6
+  hours under `data/federated-media-inbox/`, swept opportunistically as work
+  arrives — except that the sweep first pins the conditioning of every queued or
+  running job. The age gate is a backstop; a job waiting behind a long render or
+  a first-run model download outlives it easily, and deleting its source image
+  would leave the runner unable to open a file the consumer is still waiting on.
+  The Data Manager purge for this category refuses on the same predicate, so it
+  can never be more permissive than the sweep. The directory sits outside every
   media root the gallery and the sync layer read, and is excluded from backups —
   it holds another machine's data, not this install's.
 - **Consumers persist paths, not ids.** A queued job's marker records the LOCAL
