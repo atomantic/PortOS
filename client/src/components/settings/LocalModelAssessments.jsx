@@ -90,7 +90,12 @@ const compactTuning = (draft) => Object.fromEntries(
 // A model can hold several measurements, one per launch tuning, so the tuning is
 // part of a row's identity — not decoration. Keying on model alone gave two
 // variants the same React key and made "discard" target the wrong record.
-const entryKey = (entry) => `${entry.backend}:${entry.modelId}@${entry.tuningKey || ''}`;
+//
+// `modelKey` is the coarser identity a TUNING SWEEP works in: a sweep is what
+// measures the tunings, so it targets the model rather than one of its recorded
+// configurations.
+const modelKey = (entry) => `${entry.backend}:${entry.modelId}`;
+const entryKey = (entry) => `${modelKey(entry)}@${entry.tuningKey || ''}`;
 
 // Which model the measure drawer has open lives in the URL, not in local state,
 // so the gate is shareable, bookmarkable and reload-safe — the same rule the
@@ -100,6 +105,13 @@ const entryKey = (entry) => `${entry.backend}:${entry.modelId}@${entry.tuningKey
 // tab. `measureTuning` is the tuning key of the record being re-measured, so a
 // deep link reopens the configuration it describes rather than the defaults.
 const CLOSED_MEASURE_PARAMS = { measureBackend: null, measureModel: null, measureTuning: null };
+
+// Its neighbour on the same row — the per-model "Sweep tunings" gate — is
+// routable for the same reasons and by the same mechanism. It names no tuning:
+// the sweep is what measures the tunings, so the model is the whole target, and
+// everything else the gate shows (the runtime label, the grid it will run) is
+// derivable from that pair plus the report.
+const CLOSED_SWEEP_PARAMS = { sweepBackend: null, sweepModel: null };
 
 // `null` is NOT MEASURED and must render as such — never as 0, and never as a
 // dash the reader could mistake for "measured, none".
@@ -615,18 +627,21 @@ export function LocalModelAssessments() {
   // Whether the server-side sweep is working. Owned here rather than in the
   // sweep panel because it gates this panel's per-model buttons too.
   const [sweepRunning, setSweepRunning] = useState(false);
-  // A "sweep tunings" request handed to the sweep panel, which owns the consent
-  // gate and the progress for BOTH sweeps — there is only one server-side queue,
-  // so there is only one place that renders it.
-  const [tuningSweepRequest, setTuningSweepRequest] = useState(null);
   const [agentBenchmarkResults, setAgentBenchmarkResults] = useState({});
 
   const [searchParams, updateParams] = useUrlParams();
   const measureBackend = searchParams.get('measureBackend') || '';
   const measureModel = searchParams.get('measureModel') || '';
   const measureTuning = searchParams.get('measureTuning') || '';
+  const sweepBackend = searchParams.get('sweepBackend') || '';
+  const sweepModel = searchParams.get('sweepModel') || '';
 
+  // The two gates are alternatives, not siblings — both hold the provider, and
+  // only one is reachable by clicking. Each open therefore drops the other's
+  // params, so the URL never carries a target for a gate that is not on screen.
+  // (What GUARANTEES one drawer is the precedence rule further down, not this.)
   const openTarget = useCallback((entry) => updateParams({
+    ...CLOSED_SWEEP_PARAMS,
     measureBackend: entry.backend,
     measureModel: entry.modelId,
     measureTuning: entry.tuningKey || null,
@@ -638,6 +653,20 @@ export function LocalModelAssessments() {
     updateParams(CLOSED_MEASURE_PARAMS, { replace: true });
     setTuningEdits(null);
   }, [updateParams]);
+
+  // Names the model for the sweep panel's consent gate — that panel owns the
+  // gate and the progress for BOTH sweeps, because there is only one
+  // server-side queue and so only one place that may render a Stop button.
+  const openSweepTarget = useCallback((entry) => updateParams({
+    ...CLOSED_MEASURE_PARAMS,
+    sweepBackend: entry.backend,
+    sweepModel: entry.modelId,
+  }), [updateParams]);
+
+  const closeSweepTarget = useCallback(
+    () => updateParams(CLOSED_SWEEP_PARAMS, { replace: true }),
+    [updateParams],
+  );
 
   const load = useCallback(async (nextIntent) => {
     setLoading(true);
@@ -664,12 +693,40 @@ export function LocalModelAssessments() {
   // of truth for what's open — and says so, rather than bouncing: the same id is
   // legitimately absent for the moment between a first run landing and the
   // refreshed report arriving, which is why the notice also stands down mid-run.
-  const pendingTarget = measureBackend && measureModel
+  const measureOpen = Boolean(measureBackend && measureModel);
+  const pendingTarget = measureOpen
     ? measureMatch || { backend: measureBackend, modelId: measureModel, tuningKey: measureTuning }
     : null;
   const recordTuning = measureMatch?.tuning;
   const tuningDraft = tuningEdits
     ?? (recordTuning && typeof recordTuning === 'object' ? recordTuning : {});
+
+  // The row the sweep URL names. Matched through `modelKey`, not `entryKey`: a
+  // sweep varies the tuning, so a model with three recorded configurations is
+  // still one sweep target, not three.
+  const sweepMatch = useMemo(() => {
+    if (!sweepBackend || !sweepModel) return null;
+    const wanted = modelKey({ backend: sweepBackend, modelId: sweepModel });
+    const hit = (rows) => rows?.find((entry) => modelKey(entry) === wanted);
+    return hit(report?.ranked) || hit(report?.excluded) || hit(report?.unassessed) || null;
+  }, [report, sweepBackend, sweepModel]);
+
+  // The whole gate payload, derived from the pair in the URL plus the report —
+  // the runtime label and the grid are the server's own, never carried in the
+  // link. An id the report no longer lists still opens the gate (the URL is the
+  // source of truth for what's open) and says so, the same as the measure
+  // drawer; with no grid behind it, Start is already off anyway.
+  //
+  // The measure drawer wins when a hand-edited link names both: a Drawer assumes
+  // it is the only one open (one scroll lock, one focus trap), and the measure
+  // gate is the one that can be mid-run.
+  const tuningSweepRequest = useMemo(() => (sweepBackend && sweepModel && !measureOpen ? {
+    backend: sweepBackend,
+    modelId: sweepModel,
+    runtimeLabel: backendLabel(report, sweepBackend),
+    variants: gridFor(report, sweepBackend),
+    unknownTarget: Boolean(report) && !sweepMatch,
+  } : null), [report, sweepBackend, sweepModel, sweepMatch, measureOpen]);
 
   // Which model this panel is currently measuring. A ref, not state: the socket
   // handler subscribes once and must read the CURRENT target, not the one
@@ -800,16 +857,6 @@ export function LocalModelAssessments() {
     closeTarget();
   };
 
-  // Hands the model to the sweep panel's consent gate. The grid rides along so
-  // the modal can list what it is about to run — it is the server's own grid,
-  // shipped on the report, not a count derived here.
-  const requestTuningSweep = (entry) => setTuningSweepRequest({
-    backend: entry.backend,
-    modelId: entry.modelId,
-    runtimeLabel: backendLabel(report, entry.backend),
-    variants: gridFor(report, entry.backend),
-  });
-
   // A sweep holds the provider for hours. A single-model run started on top of
   // it would measure the contention between the two, so every per-model action
   // goes quiet while the queue is working.
@@ -874,7 +921,7 @@ export function LocalModelAssessments() {
         onRunningChange={setSweepRunning}
         onSweepFinished={() => load(intent)}
         tuningRequest={tuningSweepRequest}
-        onTuningRequestClose={() => setTuningSweepRequest(null)}
+        onTuningRequestClose={closeSweepTarget}
       />
 
       <div className="flex items-center gap-2 flex-wrap">
@@ -920,7 +967,7 @@ export function LocalModelAssessments() {
                   sweepVariants={gridFor(report, entry.backend).length}
                   onRemeasure={openTarget}
                   onDelete={removeAssessment}
-                  onSweepTunings={requestTuningSweep}
+                  onSweepTunings={openSweepTarget}
                 />
               ))}
             </div>
@@ -969,7 +1016,7 @@ export function LocalModelAssessments() {
               </p>
               <div className="space-y-1 pt-1">
                 {report.unassessed.map((entry) => (
-                  <div key={`${entry.backend}:${entry.modelId}`} className="flex items-center justify-between gap-2 text-xs">
+                  <div key={modelKey(entry)} className="flex items-center justify-between gap-2 text-xs">
                     <span className="text-gray-300 font-mono break-all min-w-0">
                       {entry.modelId}
                       <span className="text-gray-600 ml-2">{backendLabel(report, entry.backend)}</span>

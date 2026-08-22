@@ -207,7 +207,7 @@ describe('AssessmentSweepPanel — tuning sweep', () => {
   it('names the variant count, the generation count, and every configuration', async () => {
     renderPanel({ tuningRequest });
 
-    expect(await screen.findByText(/Sweep tunings\?/)).toBeInTheDocument();
+    expect(await screen.findByRole('dialog', { name: 'Sweep tunings' })).toBeInTheDocument();
     expect(startLocalLlmAssessmentSweep).not.toHaveBeenCalled();
     // 3 variants × 3 context lengths = 9 generations.
     expect(screen.getByText('3')).toBeInTheDocument();
@@ -260,6 +260,21 @@ describe('AssessmentSweepPanel — tuning sweep', () => {
   it('will not start a sweep with only the baseline in the grid', async () => {
     renderPanel({ tuningRequest: { ...tuningRequest, variants: [{ key: '', label: null }] } });
     expect(await screen.findByRole('button', { name: /start sweep/i })).toBeDisabled();
+  });
+
+  // The gate is routable, so its target can outlive the row it was opened from.
+  // A deep link to a model the report no longer lists still opens — the URL is
+  // what is open — but it says the row is gone rather than presenting hours of
+  // GPU as a normal next step.
+  it('says so when the model it was pointed at is not in the current list', async () => {
+    renderPanel({ tuningRequest: { ...tuningRequest, unknownTarget: true } });
+    expect(await screen.findByText(/not in the current list/)).toBeInTheDocument();
+  });
+
+  it('says nothing of the sort for a model the report still lists', async () => {
+    renderPanel({ tuningRequest });
+    await screen.findByRole('dialog', { name: 'Sweep tunings' });
+    expect(screen.queryByText(/not in the current list/)).not.toBeInTheDocument();
   });
 
   // Every step names the same model, so counting models — or printing the model
@@ -466,6 +481,6 @@ describe('AssessmentSweepPanel — tuning sweep', () => {
   it('shows no tuning gate until one is requested', async () => {
     renderPanel();
     await screen.findByRole('button', { name: 'Measure all models' });
-    expect(screen.queryByText(/Sweep tunings\?/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Sweep tunings' })).not.toBeInTheDocument();
   });
 });

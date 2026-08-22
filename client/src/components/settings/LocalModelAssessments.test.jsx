@@ -700,7 +700,7 @@ describe('LocalModelAssessments — sweep tunings', () => {
 
     await user.click(await screen.findByRole('button', { name: 'Sweep tunings for example-model.gguf' }));
 
-    expect(await screen.findByText(/Sweep tunings\?/)).toBeInTheDocument();
+    expect(await screen.findByRole('dialog', { name: 'Sweep tunings' })).toBeInTheDocument();
     // The grid the server shipped, not a count derived here.
     expect(screen.getByText('Micro-batch size 1024')).toBeInTheDocument();
     expect(screen.getByText('Flash attention on')).toBeInTheDocument();
@@ -822,5 +822,109 @@ describe('LocalModelAssessments — routable measure drawer', () => {
     await user.click(await screen.findByRole('button', { name: 'Measure' }));
     await user.click(screen.getByRole('button', { name: 'Run assessment' }));
     await waitFor(() => expect(currentUrl()).toBe('/models/performance'));
+  });
+});
+
+// The per-model "Sweep tunings" gate is routable for the same reasons as its
+// neighbour: it targets one model, so which model it is open on lives in the URL
+// rather than evaporating on a reload. Only the model pair rides in the link —
+// the runtime label and the grid are derived from the report, so a shared link
+// always describes what the server would actually run today.
+describe('LocalModelAssessments — routable tuning-sweep drawer', () => {
+  const llamaEntry = () => rankedEntry({ backend: 'llama', modelId: 'example-model.gguf' });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    idleSweep();
+    getLocalLlmAssessments.mockResolvedValue(report({ ranked: [llamaEntry()] }));
+  });
+
+  it('puts the model it opens on in the URL rather than local state', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(await screen.findByRole('button', { name: 'Sweep tunings for example-model.gguf' }));
+    await waitFor(() => expect(currentUrl()).toBe(
+      '/models/performance?sweepBackend=llama&sweepModel=example-model.gguf',
+    ));
+  });
+
+  it('opens straight from a deep link, with no click to get there', async () => {
+    renderPanel('/models/performance?sweepBackend=llama&sweepModel=example-model.gguf');
+
+    expect(await screen.findByRole('dialog', { name: 'Sweep tunings' })).toBeInTheDocument();
+    // The grid the server shipped for that runtime, resolved from the report —
+    // it was never in the link.
+    expect(screen.getByText('Micro-batch size 1024')).toBeInTheDocument();
+    expect(screen.getByText(/llama\.cpp is restarted between each one/)).toBeInTheDocument();
+    expect(startLocalLlmAssessmentSweep).not.toHaveBeenCalled();
+  });
+
+  // A sweep varies the tuning, so it targets the MODEL: a model with several
+  // recorded configurations is one sweep target, not one per row.
+  it('resolves a model whose only rows carry their own tunings', async () => {
+    getLocalLlmAssessments.mockResolvedValue(report({
+      ranked: [rankedEntry({
+        backend: 'llama', modelId: 'example-model.gguf', tuningKey: 'ubatchSize=1024', tuningLabel: 'Micro-batch size 1024',
+      })],
+    }));
+    renderPanel('/models/performance?sweepBackend=llama&sweepModel=example-model.gguf');
+
+    await screen.findByRole('dialog', { name: 'Sweep tunings' });
+    expect(screen.queryByText(/not in the current list/)).not.toBeInTheDocument();
+  });
+
+  it('says so when the model a link names is not in the current list', async () => {
+    renderPanel('/models/performance?sweepBackend=llama&sweepModel=gone.gguf');
+
+    expect(await screen.findByText(/not in the current list/)).toBeInTheDocument();
+  });
+
+  it('clears the URL when the gate is dismissed', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(await screen.findByRole('button', { name: 'Sweep tunings for example-model.gguf' }));
+    await user.click(screen.getByRole('button', { name: /^cancel$/i }));
+    await waitFor(() => expect(currentUrl()).toBe('/models/performance'));
+    expect(startLocalLlmAssessmentSweep).not.toHaveBeenCalled();
+  });
+
+  it('clears the URL once the sweep is queued', async () => {
+    const user = userEvent.setup();
+    startLocalLlmAssessmentSweep.mockResolvedValue({ status: 'running', total: 3, completed: 0, results: [] });
+    renderPanel();
+
+    await user.click(await screen.findByRole('button', { name: 'Sweep tunings for example-model.gguf' }));
+    await user.click(screen.getByRole('button', { name: /start sweep/i }));
+    await waitFor(() => expect(currentUrl()).toBe('/models/performance'));
+  });
+
+  // A Drawer assumes it is the only one open — one scroll lock, one focus trap —
+  // so a hand-edited link naming both gates must resolve to exactly one panel,
+  // not stack two. The measure gate wins: it is the one that can be mid-run.
+  it('opens one drawer, not two, for a link that names both gates', async () => {
+    renderPanel(
+      '/models/performance?measureBackend=llama&measureModel=example-model.gguf'
+      + '&sweepBackend=llama&sweepModel=example-model.gguf',
+    );
+
+    expect(await screen.findByRole('dialog', { name: 'Measure this model' })).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Sweep tunings' })).not.toBeInTheDocument();
+  });
+
+  // Opening one clears the other's params, so the URL never accumulates a target
+  // for a gate that is not on screen.
+  it('drops a stale measure target from the URL when the sweep gate opens', async () => {
+    const user = userEvent.setup();
+    renderPanel('/models/performance?measureBackend=llama&measureModel=example-model.gguf');
+
+    await screen.findByRole('dialog', { name: 'Measure this model' });
+    await user.click(await screen.findByRole('button', { name: 'Sweep tunings for example-model.gguf' }));
+
+    await waitFor(() => expect(currentUrl()).toBe(
+      '/models/performance?sweepBackend=llama&sweepModel=example-model.gguf',
+    ));
+    expect(screen.queryByRole('dialog', { name: 'Measure this model' })).not.toBeInTheDocument();
   });
 });

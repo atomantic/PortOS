@@ -22,7 +22,8 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { PlayCircle, Square, AlertTriangle, CheckCircle2, SlidersHorizontal } from 'lucide-react';
+import { PlayCircle, Square, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import Drawer from '../Drawer';
 import Modal from '../ui/Modal';
 import ProgressBar from '../ui/ProgressBar';
 import BrailleSpinner from '../BrailleSpinner';
@@ -55,44 +56,34 @@ const isRunning = (status) => status?.status === 'running';
 const measuredUnit = (status) => (status?.mode === 'tunings' ? 'tuning' : 'model');
 
 /**
- * The consent gate both sweeps share: the card, the heading, and the
- * Cancel/Start footer.
+ * The Cancel/Start footer both sweeps share.
  *
  * The AI Provider Usage Policy (root CLAUDE.md) demands the same three things of
  * either sweep — say what will run, say how many generations that is, and let
- * the user decline — so the parts that differ are only which middle the caller
- * fills in and which numbers it names. Two copies of this shell would drift, and
- * the half that drifted would be the half stating the cost.
+ * the user decline. The two gates differ in their container (the batch gate
+ * targets no record, so it stays a modal; the per-model gate is a routable
+ * drawer) and in the numbers they name, but never in the decision they offer.
+ * Two copies of these buttons would drift, and the half that drifted would be
+ * the half that decides whether hours of GPU start.
  */
-function SweepConsentShell({ icon, title, ariaLabel, children, onCancel, onConfirm, starting, confirmDisabled }) {
+function SweepConsentActions({ onCancel, onConfirm, starting, confirmDisabled }) {
   return (
-    <Modal open onClose={onCancel} size="sm" ariaLabel={ariaLabel}>
-      <div className="bg-port-card border border-port-border rounded-lg p-5 space-y-4">
-        <div className="flex items-center gap-2">
-          {icon}
-          <h3 className="text-white font-medium">{title}</h3>
-        </div>
-
-        {children}
-
-        <div className="flex gap-3 pt-1">
-          <button
-            onClick={onCancel}
-            disabled={starting}
-            className="flex-1 px-4 py-2 bg-port-card border border-port-border hover:border-port-accent text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={onConfirm}
-            disabled={starting || confirmDisabled}
-            className="flex-1 px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-port-on-accent text-sm font-medium rounded-lg transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
-          >
-            {starting ? <><BrailleSpinner /> Starting…</> : <>Start sweep</>}
-          </button>
-        </div>
-      </div>
-    </Modal>
+    <div className="flex gap-3 pt-1">
+      <button
+        onClick={onCancel}
+        disabled={starting}
+        className="flex-1 px-4 py-2 bg-port-card border border-port-border hover:border-port-accent text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+      >
+        Cancel
+      </button>
+      <button
+        onClick={onConfirm}
+        disabled={starting || confirmDisabled}
+        className="flex-1 px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-port-on-accent text-sm font-medium rounded-lg transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+      >
+        {starting ? <><BrailleSpinner /> Starting…</> : <>Start sweep</>}
+      </button>
+    </div>
   );
 }
 
@@ -101,20 +92,20 @@ function SweepConsentShell({ icon, title, ariaLabel, children, onCancel, onConfi
 // compute it the same way.
 const generationsFor = (count, contextTokens) => count * Math.max(1, contextTokens.length);
 
+// Stays a MODAL, deliberately: this gate targets no record — it is a scope
+// selector — so there is nothing to put in a URL and nothing a deep link could
+// usefully reopen.
 function SweepConsentModal({ scope, onScopeChange, counts, contextTokens, onCancel, onConfirm, starting }) {
   const count = counts?.[scope] ?? 0;
   const generations = generationsFor(count, contextTokens);
   return (
-    <SweepConsentShell
-      icon={<PlayCircle size={18} className="text-port-accent" />}
-      title="Measure every model?"
-      ariaLabel="Measure every local model"
-      starting={starting}
-      confirmDisabled={count === 0}
-      onCancel={onCancel}
-      onConfirm={onConfirm}
-    >
-      <>
+    <Modal open onClose={onCancel} size="sm" ariaLabel="Measure every local model">
+      <div className="bg-port-card border border-port-border rounded-lg p-5 space-y-4">
+        <div className="flex items-center gap-2">
+          <PlayCircle size={18} className="text-port-accent" />
+          <h3 className="text-white font-medium">Measure every model?</h3>
+        </div>
+
         <fieldset className="space-y-2">
           <legend className="text-xs text-gray-400 mb-1">What to measure</legend>
           {SCOPES.map((option) => {
@@ -153,8 +144,15 @@ function SweepConsentModal({ scope, onScopeChange, counts, contextTokens, onCanc
           this a job for overnight — expect several minutes per model. It keeps running with this tab closed,
           and you can stop it at any point; everything measured up to then is kept.
         </p>
-      </>
-    </SweepConsentShell>
+
+        <SweepConsentActions
+          starting={starting}
+          confirmDisabled={count === 0}
+          onCancel={onCancel}
+          onConfirm={onConfirm}
+        />
+      </div>
+    </Modal>
   );
 }
 
@@ -165,24 +163,41 @@ function SweepConsentModal({ scope, onScopeChange, counts, contextTokens, onCanc
  * many variants, how many generations in total, and that the runtime is
  * restarted between each one, which is what makes a tuning sweep slower per
  * measurement than a model sweep.
+ *
+ * A routable Drawer rather than a modal: this gate targets one model, so which
+ * model it is open on belongs in the URL — shareable, bookmarkable, reload-safe,
+ * exactly like the "Measure this model" gate it sits beside. The caller owns
+ * those params; everything here is derived from the `target` it is handed.
  */
-function TuningSweepConsentModal({ target, contextTokens, onCancel, onConfirm, starting }) {
-  const variants = target.variants;
+function TuningSweepConsentDrawer({ target, contextTokens, onCancel, onConfirm, starting }) {
+  const variants = target.variants || [];
   const count = variants.length;
   const generations = generationsFor(count, contextTokens);
   return (
-    <SweepConsentShell
-      icon={<SlidersHorizontal size={18} className="text-port-accent" />}
-      title="Sweep tunings?"
-      ariaLabel={`Sweep tunings for ${target.modelId}`}
-      starting={starting}
-      // The baseline alone is one measurement with nothing to compare it to —
-      // the server refuses that, and the gate must not offer it either.
-      confirmDisabled={count < 2}
-      onCancel={onCancel}
-      onConfirm={onConfirm}
+    <Drawer
+      open
+      onClose={onCancel}
+      title="Sweep tunings"
+      subtitle={target.modelId}
+      size="sm"
+      // Dismissing mid-POST would drop the gate while the start request is still
+      // in flight, so both accidental paths are shut off for those few seconds.
+      closeOnEsc={!starting}
+      closeOnBackdrop={!starting}
+      closeLabel="Close"
     >
-      <>
+      <div className="space-y-4">
+        {/* A link whose model the report no longer lists still opens — the URL
+            is what is open — but it says the row is gone rather than presenting
+            hours of GPU as a normal next step. */}
+        {target.unknownTarget && (
+          <p className="text-xs text-port-warning flex items-start gap-1.5" role="alert">
+            <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+            This model is not in the current list — it may have been removed since the link was made.
+            Sweeping it will still ask {target.runtimeLabel} for it.
+          </p>
+        )}
+
         <p className="text-sm text-gray-400">
           PortOS will measure <span className="text-gray-200 font-mono break-all">{target.modelId}</span> under{' '}
           <span className="text-gray-200">{count}</span> configuration{count === 1 ? '' : 's'} —{' '}
@@ -206,8 +221,17 @@ function TuningSweepConsentModal({ target, contextTokens, onCancel, onConfirm, s
           actually take effect — expect several minutes per configuration. It keeps running with this tab closed,
           and you can stop it at any point; everything measured up to then is kept and ranked.
         </p>
-      </>
-    </SweepConsentShell>
+
+        <SweepConsentActions
+          starting={starting}
+          // The baseline alone is one measurement with nothing to compare it to —
+          // the server refuses that, and the gate must not offer it either.
+          confirmDisabled={count < 2}
+          onCancel={onCancel}
+          onConfirm={onConfirm}
+        />
+      </div>
+    </Drawer>
   );
 }
 
@@ -254,11 +278,15 @@ function SweepResultRow({ result }) {
  * @param {(running: boolean) => void} [props.onRunningChange] lets the parent
  *   disable its own per-model Measure buttons while the queue holds the provider
  * @param {boolean} props.disabled a single-model run is already occupying the provider
- * @param {{backend:string, modelId:string, runtimeLabel:string, variants:Array<{key:string,label:string|null}>}|null} [props.tuningRequest]
+ * @param {{backend:string, modelId:string, runtimeLabel:string, variants:Array<{key:string,label:string|null}>, unknownTarget?:boolean}|null} [props.tuningRequest]
  *   a "sweep tunings" request raised elsewhere on the page — opens this panel's
- *   tuning consent gate. `null` closes it.
- * @param {() => void} [props.onTuningRequestClose] clears that request, whether
- *   it was confirmed or cancelled
+ *   routable tuning consent gate. `null` closes it. The caller derives the whole
+ *   object from the model pair it keeps in the URL plus the report, so
+ *   `unknownTarget` is how it says that pair names a model the report no longer
+ *   lists.
+ * @param {() => void} [props.onTuningRequestClose] clears that request — in
+ *   practice, drops the model pair from the URL — whether it was confirmed or
+ *   cancelled
  */
 export default function AssessmentSweepPanel({
   counts, contextTokens = [], onSweepFinished, onRunningChange, disabled, tuningRequest, onTuningRequestClose,
@@ -515,7 +543,7 @@ export default function AssessmentSweepPanel({
       )}
 
       {tuningRequest && (
-        <TuningSweepConsentModal
+        <TuningSweepConsentDrawer
           target={tuningRequest}
           contextTokens={contextTokens}
           starting={startingTuning}
