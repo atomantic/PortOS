@@ -390,6 +390,15 @@ describe('token counting through the stream', () => {
     expect(JSON.parse(global.fetch.mock.calls[0][1].body).stream_options).toBeUndefined();
   });
 
+  it('does not cache an unrelated 400 as stream_options incompatibility', async () => {
+    global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 400, text: async () => 'invalid model name' });
+
+    const result = await runLocalLlmTest({ backend: 'lmstudio', modelId: 'm1', prompt: 'hi', timeoutMs: 5000 });
+
+    expect(result.error).toContain('invalid model name');
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
   // A 401 says nothing about the body. Retrying it would double every real
   // auth failure against a key-gated vLLM.
   it('does not retry an auth failure as though it were a body rejection', async () => {

@@ -367,6 +367,24 @@ describe('the machine-wide heavy-job claim', () => {
     await expect(runCapabilityTest({ backend: 'lmstudio', modelId: 'vlm', testId: 'image-analysis' })).rejects.toThrow();
     expect(release).toHaveBeenCalled();
   });
+
+  it('releases the claim when the progress consumer disconnects before the runner starts', async () => {
+    const release = vi.fn(async () => {});
+    claimHeavyLocalJob.mockResolvedValue({ ok: true, holder: null, release });
+    let firstFrame = true;
+    const onProgress = vi.fn(() => {
+      if (firstFrame) {
+        firstFrame = false;
+        throw new Error('progress consumer disconnected');
+      }
+    });
+
+    await expect(runCapabilityTest({
+      backend: 'lmstudio', modelId: 'vlm', testId: 'image-analysis', onProgress,
+    })).rejects.toThrow(/progress consumer disconnected/);
+    expect(release).toHaveBeenCalledOnce();
+    expect(runLocalLlmTest).not.toHaveBeenCalled();
+  });
 });
 
 describe('what the report ships', () => {

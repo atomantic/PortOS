@@ -128,10 +128,10 @@ describe('scoreStoryBeats', () => {
 
 describe('scoreFictionScene', () => {
   const scene = [
-    'At dawn the tidal marsh breathed mud and salt around Mara, the oyster farmer, while the dying beds clicked below the water. The flats should have been silver with shells, but a skin of black scum gathered between the stakes and turned the tide opaque.',
-    'She waded toward the sea wall, heard the wind in its cracks, and pulled a rusted gate open. The wall had been her victory once, a straight grey promise against the storms. Now its stones sweated warm water that smelled of pennies and rot, and the current pressed inland instead of out.',
-    '“Stay back,” she said, though nobody stood beside her. Her boots sank past the ankles. She cut the rope on the inspection ladder, climbed through the reeds, and reached for the valve she had signed off on herself. The metal shuddered under her palm.',
-    'Black water poured through the breach. The sea wall was feeding the beds their death. Mara watched the current carry a pale oyster shell into the channel, then took the wrench from her belt and began to undo the gate before the next tide arrived.',
+    'At dawn the tidal marsh breathed mud and salt around Mara, the oyster farmer, while the dying beds clicked below the water. The flats should have been silver with shells, but a skin of black scum gathered between the stakes and turned the tide opaque. Gulls wheeled above the racks, their cries thin in the fog. Mara had spent twenty years learning the marsh by touch: the safe firmness of a bed, the soft collapse of silt, the sweet iron smell that warned of a dead pocket. This water carried a harsher sting that coated her tongue and made the oysters clamp shut. She lifted one from its cage and found its shell warm, its living edge withdrawn.',
+    'She waded toward the sea wall, heard the wind in its cracks, and pulled a rusted gate open. The wall had been her victory once, a straight grey promise against the storms. Now its stones sweated warm water that smelled of pennies and rot, and the current pressed inland instead of out. Behind her, the pumps coughed in the work shed, trying to draw clean water through a pipe that had begun to tremble. The oldest bedhands had warned her about that vibration, but she had signed the inspection anyway, trusting a survey stamped by the county more than the unease in her palms.',
+    '“Stay back,” she said, though nobody stood beside her. Her boots sank past the ankles. She cut the rope on the inspection ladder, climbed through the reeds, and reached for the valve she had signed off on herself. The metal shuddered under her palm. A memory came back with the pressure: the wall being poured, her younger hands smoothing concrete while the mayor called it a promise. She had told the cameras that the marsh would finally be safe. Now every turn of the wheel felt like opening the door on that lie.',
+    'Black water poured through the breach. The sea wall was feeding the beds their death. Mara watched the current carry a pale oyster shell into the channel, then took the wrench from her belt and began to undo the gate before the next tide arrived. The first bolt resisted, then cracked loose hard enough to numb her fingers. Somewhere behind the wall, a hidden sluice groaned and answered. She braced one shoulder against the wheel, tasted salt and metal, and kept turning while the tide climbed over the dying beds.',
   ].join('\n\n');
 
   it('passes a scene that follows the premise and the craft gate', () => {
@@ -147,7 +147,12 @@ describe('scoreFictionScene', () => {
   it('keeps a content attempt partial when the scene craft is incomplete', () => {
     const scored = scoreFictionScene('The oyster farmer saw the tidal marsh, the sea wall, and water. The beds were dying. “Not again,” she said.', FICTION_SCENE_KEYWORDS);
     expect(scored.verdict).toBe('partial');
-    expect(scored.wordCount).toBeLessThan(180);
+    expect(scored.wordCount).toBeLessThan(350);
+  });
+
+  it('does not count speech-attribution prose as dialogue', () => {
+    const scored = scoreFictionScene('The oyster farmer said the tidal marsh was changing, and the sea wall held back the dying water.', FICTION_SCENE_KEYWORDS);
+    expect(scored.hasDialogue).toBe(false);
   });
 
   it('fails generic prose that does not follow the fixed premise', () => {

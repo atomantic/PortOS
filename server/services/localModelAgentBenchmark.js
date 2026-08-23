@@ -136,6 +136,7 @@ export async function runOpenCodeAgentBenchmark({ backend, modelId, timeoutMs = 
         workspacePath: scratchDir,
         timeout: timeoutMs,
         label: `local-model-benchmark:${backend}`,
+        guard: true,
         onComplete: resolve,
       }).catch((err) => resolve({ success: false, exitCode: 1, error: err?.message || 'OpenCode TUI failed' }));
     });

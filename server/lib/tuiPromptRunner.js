@@ -139,9 +139,11 @@ const PTY_ROWS = 50;
  * @param {string} [options.label] — human label for the live Shell view (the
  *   run `source`, e.g. `'pipeline-manuscript-completeness'`). Surfaced in the
  *   Shell page's session tab; falls back to `command · model` when absent.
+ * @param {boolean} [options.guard=false] — prepend the PM2 guard shim for an
+ *   autonomous task that must not be able to kill the shared PortOS daemon.
  * @returns {Promise<void>}
  */
-export async function executeTuiRun({ runId, provider, prompt, workspacePath, onData, onComplete, timeout, idleMs, label }) {
+export async function executeTuiRun({ runId, provider, prompt, workspacePath, onData, onComplete, timeout, idleMs, label, guard = false }) {
   if (!provider || typeof provider !== 'object') {
     throw new Error('executeTuiRun: provider is required');
   }
@@ -219,6 +221,7 @@ ${prompt}`;
   const childEnv = buildCliChildEnv({
     provider,
     cwd: workingDir,
+    guard,
     extra: { TERM: 'xterm-256color', COLORTERM: 'truecolor' },
   });
 

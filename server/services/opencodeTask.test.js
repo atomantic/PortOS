@@ -104,6 +104,20 @@ describe('runOpencodeTask', () => {
     expect(result.success).toBe(true);
   });
 
+  it('passes a caller cancellation signal to the streaming runner', async () => {
+    runStreamingCommand.mockResolvedValue({ success: true });
+    const controller = new AbortController();
+    await runOpencodeTask({
+      provider: OPENCODE_OLLAMA_TUI, modelId: 'm', cwd: '/tmp/s', prompt: 'p', timeoutMs: 1000,
+      signal: controller.signal,
+    });
+
+    const options = runStreamingCommand.mock.calls[0][3];
+    expect(options.isCancelled()).toBe(false);
+    controller.abort();
+    expect(options.isCancelled()).toBe(true);
+  });
+
   it('refuses a provider that is not an OpenCode TUI', async () => {
     await expect(runOpencodeTask({ provider: CLAUDE_OLLAMA_TUI, modelId: 'm', cwd: '/tmp/s', prompt: 'p', timeoutMs: 1 }))
       .rejects.toThrow(/not an OpenCode TUI provider/);

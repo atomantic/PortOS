@@ -71,6 +71,7 @@ describe('runOpenCodeAgentBenchmark', () => {
       prompt: buildOpenCodeAgentBenchmarkPrompt(join(invocation.workspacePath, 'PORTOS_AGENT_BENCHMARK.txt')),
       timeout: 600000,
       workspacePath: expect.any(String),
+      guard: true,
     }));
   });
 

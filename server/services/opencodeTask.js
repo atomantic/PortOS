@@ -59,12 +59,13 @@ export async function resolveOpencodeTuiProvider(runtime, providers) {
  * @param {string} options.cwd the directory the agent works in
  * @param {string} options.prompt
  * @param {number} options.timeoutMs
+ * @param {AbortSignal} [options.signal] caller disconnect/cancel signal
  * @param {(event: object) => void} [options.onEvent] called with each parsed
  *   stream frame as it arrives, for a caller rendering live progress
  * @returns {Promise<{success: boolean, error: string|null, events: object[]}>}
  *   never rejects for an in-run failure — the caller gets a value to score.
  */
-export async function runOpencodeTask({ provider, modelId, cwd, prompt, timeoutMs, onEvent }) {
+export async function runOpencodeTask({ provider, modelId, cwd, prompt, timeoutMs, signal, onEvent }) {
   if (!provider) {
     throw new ServerError('No OpenCode TUI provider was given', { status: 503, code: 'OPENCODE_TASK_PROVIDER_MISSING' });
   }
@@ -90,7 +91,7 @@ export async function runOpencodeTask({ provider, modelId, cwd, prompt, timeoutM
     // Hook failures are already caught by runStreamingCommand — this runs
     // outside the request lifecycle, where a throw would take the process down.
     onEvent?.(event);
-  }, { cwd, env, timeoutMs });
+  }, { cwd, env, timeoutMs, isCancelled: () => signal?.aborted === true });
 
   return { success: result.success, error: result.error || null, events };
 }

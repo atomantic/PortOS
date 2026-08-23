@@ -265,16 +265,30 @@ export async function streamOpenAiChat({
   // mean "I did not like this body": a 401 (key-gated vLLM), a 404, a 5xx, or a
   // transport error all say nothing about `stream_options`, and retrying them
   // would double every real failure.
-  if (!response.ok && includeUsage && (response.status === 400 || response.status === 422) && !signal?.aborted) {
-    console.log(`⚠️  Local LLM: ${model} rejected stream_options (${response.status}) — retrying without usage reporting`);
-    usageUnsupportedEndpoints.add(url);
-    // Drain the rejected response so its socket is released before the retry.
-    await response.body?.cancel?.().catch(() => {});
-    response = await post(false);
+  let responseErrorBody = '';
+  const mayRejectUsage = !response.ok
+    && includeUsage
+    && (response.status === 400 || response.status === 422)
+    && !signal?.aborted;
+  if (mayRejectUsage) {
+    // A bad model or request can also be a 400/422. Inspect the body before
+    // caching endpoint capability, otherwise one unrelated failure disables
+    // exact usage collection for every later sample on this daemon.
+    responseErrorBody = typeof response.clone === 'function'
+      ? await response.clone().text().catch(() => '')
+      : (response.text ? await response.text().catch(() => '') : response.error || '');
+    if (/stream_options|include_usage/i.test(responseErrorBody)) {
+      console.log(`⚠️  Local LLM: ${model} rejected stream_options (${response.status}) — retrying without usage reporting`);
+      usageUnsupportedEndpoints.add(url);
+      // Drain the rejected response so its socket is released before the retry.
+      await response.body?.cancel?.().catch(() => {});
+      responseErrorBody = '';
+      response = await post(false);
+    }
   }
 
   if (!response.ok) {
-    const body = response.text ? await response.text().catch(() => '') : response.error || '';
+    const body = responseErrorBody || (response.text ? await response.text().catch(() => '') : response.error || '');
     throw new Error(`Provider returned ${response.status || 0}: ${body || response.error || response.statusText || 'request failed'}`);
   }
 

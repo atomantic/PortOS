@@ -350,9 +350,10 @@ export function scoreFictionScene(text, spec = FICTION_SCENE_KEYWORDS) {
   const words = source ? source.split(/\s+/u).filter(Boolean) : [];
   const paragraphs = source ? source.split(/\n\s*\n/u).map((p) => p.trim()).filter(Boolean) : [];
   const hasDialogue = /["“][^"”\n]{2,}["”]/u.test(source)
-    || /\b(?:said|asked|whispered|shouted|murmured)\b/iu.test(source);
+    || /\b(?:said|asked|whispered|shouted|murmured)\s*:\s*\S/iu.test(source)
+    || /(?:^|\n)\s*—\s*\S(?:.*\S)?$/mu.test(source);
   const craft = {
-    minimumWords: words.length >= 180,
+    minimumWords: words.length >= 350 && words.length <= 500,
     paragraphs: paragraphs.length >= 3,
     dialogue: hasDialogue,
   };
