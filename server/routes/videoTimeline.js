@@ -23,22 +23,96 @@ import {
 
 const router = Router();
 
+// Lane schemas mirror server/services/videoTimeline/segments.js. Zod is the
+// coarse shape/bounds gate at the edge; the service validators re-check the
+// cross-field rules (fades fitting inside their own duration, asset
+// containment under an allowlisted data/ subdirectory) that a schema can't
+// express against the filesystem.
+const IMAGE_ASSET_KINDS = ['images', 'video-thumbnails'];
+const AUDIO_ASSET_KINDS = ['audio', 'music'];
+
+const fadeFields = {
+  fadeInSec: z.number().min(0).max(30).optional(),
+  fadeOutSec: z.number().min(0).max(30).optional(),
+};
+
+const assetFields = (kinds) => ({
+  assetKind: z.enum(kinds),
+  // Basename only — the service resolves it under the kind's data/ root and
+  // refuses anything that escapes.
+  assetFile: z.string().min(1).max(255),
+});
+
 const clipSchema = z.object({
   clipId: z.string().guid(),
   inSec: z.number().min(0),
   outSec: z.number().min(0),
 }).refine((c) => c.outSec > c.inSec, { message: 'outSec must be > inSec', path: ['outSec'] });
 
+const clipSegmentSchema = z.object({
+  type: z.literal('clip'),
+  clipId: z.string().guid(),
+  inSec: z.number().min(0),
+  outSec: z.number().min(0),
+  volume: z.number().min(0).max(4).optional(),
+  ...fadeFields,
+}).refine((c) => c.outSec > c.inSec, { message: 'outSec must be > inSec', path: ['outSec'] });
+
+const stillSegmentSchema = z.object({
+  type: z.literal('still'),
+  ...assetFields(IMAGE_ASSET_KINDS),
+  durationSec: z.number().gt(0).max(600),
+  ...fadeFields,
+});
+
+const segmentSchema = z.discriminatedUnion('type', [clipSegmentSchema, stillSegmentSchema]);
+
+const overlaySchema = z.object({
+  type: z.literal('image').optional(),
+  ...assetFields(IMAGE_ASSET_KINDS),
+  startSec: z.number().min(0),
+  durationSec: z.number().gt(0).max(600),
+  // Normalized to the canonical canvas so placement survives a change of
+  // canonical dimensions. Slight overscan lets a graphic bleed off-frame.
+  x: z.number().min(-1).max(2).optional(),
+  y: z.number().min(-1).max(2).optional(),
+  width: z.number().gt(0).max(4).optional(),
+  opacity: z.number().min(0).max(1).optional(),
+  ...fadeFields,
+});
+
+const audioTrackSchema = z.object({
+  ...assetFields(AUDIO_ASSET_KINDS),
+  startSec: z.number().min(0),
+  offsetSec: z.number().min(0).optional(),
+  durationSec: z.number().gt(0).max(600),
+  volume: z.number().min(0).max(4).optional(),
+  ...fadeFields,
+});
+
+const audioSchema = z.object({
+  clipVolume: z.number().min(0).max(4).optional(),
+  tracks: z.array(audioTrackSchema).max(20).optional(),
+});
+
 const createBodySchema = z.object({
   name: z.string().min(1).max(200),
 });
 
+const LANE_KEYS = ['name', 'clips', 'segments', 'overlays', 'audio'];
+
 const updateBodySchema = z.object({
   name: z.string().min(1).max(200).optional(),
+  // `clips` is the v1 video lane. Still accepted so an older client (or an
+  // older peer-authored payload) keeps working; the service upgrades it to
+  // clip segments, and `segments` wins when both are present.
   clips: z.array(clipSchema).max(200).optional(),
+  segments: z.array(segmentSchema).max(200).optional(),
+  overlays: z.array(overlaySchema).max(50).optional(),
+  audio: audioSchema.optional(),
   expectedUpdatedAt: z.string().optional(),
-}).refine((b) => b.name !== undefined || b.clips !== undefined, {
-  message: 'PATCH body must include at least name or clips',
+}).refine((b) => LANE_KEYS.some((k) => b[k] !== undefined), {
+  message: `PATCH body must include at least one of: ${LANE_KEYS.join(', ')}`,
 });
 
 // Backward-compatible by default: returns the full projects array. When a client
