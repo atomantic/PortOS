@@ -224,7 +224,8 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   // non-PortOS app does nothing. See DEFAULT_TASK_PROMPTS['refresh-local-llm-catalog'].
   'refresh-local-llm-catalog',
   // The planning-only sibling of `feature-ideas`: runs the same brainstorm
-  // research (GOALS.md, changelog/git log, REJECTED.md, closed-unmerged PRs)
+  // research (PRD.md/GOALS.md or repository docs, changelog/git log, and
+  // closed-unmerged PRs)
   // but NEVER implements — its deliverable is ONE decision-complete feature
   // plan filed into the app's resolved work tracker via {trackerInstructions}
   // (PLAN.md checklist item / GitHub / GitLab issue / JIRA ticket), which the
@@ -482,11 +483,11 @@ export const DEFAULT_TASK_INTERVALS = {
   // default; the user enables it on the PortOS app.
   'refresh-local-llm-catalog': { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: true, simplify: true } },
   // plan-feature files a plan, not code — tracker-filing posture mirrors
-  // reference-watch: writable (the PLAN.md path commits checklist items), no
+  // reference-watch: writable (a file-based tracker commits checklist items), no
   // managed worktree, no PR. Weekly (not daily like feature-ideas) so an
   // enabled run doesn't flood the tracker with plans — one filed plan per run.
-  // runAfter do-replan for the same grounding feature-ideas has: proposals are
-  // checked against a fresh PLAN.md that already accounts for in-flight work.
+  // runAfter do-replan so proposals are checked against the freshest available
+  // work tracker before a new feature plan is filed.
   'plan-feature':         { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, runAfter: ['do-replan'], taskMetadata: { useWorktree: false, openPR: false, readOnly: false } },
   // layered-intelligence is a programmatic-I/O task (agent-backed, hooked). Daily
   // by default; per-app scheduling (enabled/interval/provider/model) is set in the

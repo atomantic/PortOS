@@ -131,6 +131,26 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(v9).not.toBe(current);
   });
 
+  // plan-feature v2: product intent is specific-first (PRD → GOALS → repository
+  // docs) and no longer depends on the retired roadmap/rejection-ledger files.
+  it('plan-feature v2 uses the PRD/docs fallback hierarchy and preserves v1', () => {
+    const current = DEFAULT_TASK_PROMPTS['plan-feature'];
+    expect(PROMPT_VERSIONS['plan-feature']).toBe(2);
+    expect(current).toContain('PRD.md');
+    expect(current).toContain('GOALS.md');
+    expect(current).toContain('README.md');
+    expect(current).toContain('docs/README.md');
+    expect(current).toContain('AGENTS.md');
+    expect(current).not.toContain('REJECTED.md');
+    expect(current).not.toContain('ALSO read PLAN.md');
+
+    const v1 = PREVIOUS_DEFAULT_PROMPTS['plan-feature'].find((prompt) => prompt.includes('ALSO read PLAN.md'));
+    expect(v1).toBeDefined();
+    expect(v1).toContain('REJECTED.md');
+    expect(v1).not.toContain('PRD.md');
+    expect(v1).not.toBe(current);
+  });
+
   it('do-replan v2 rejects future-only proposals while preserving v1 for migration', () => {
     const current = DEFAULT_TASK_PROMPTS['do-replan'];
     expect(PROMPT_VERSIONS['do-replan']).toBe(2);

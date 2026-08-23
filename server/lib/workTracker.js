@@ -221,7 +221,7 @@ export const TRACKER_FILING_PRESETS = {
     issueLabel: 'plan-feature',
     labelDescription: 'Feature plan filed by the plan-feature brainstorm',
     planItemBody: 'From the `plan-feature` brainstorm (<today\'s date>). <What the feature is and which user need or goal it serves, 1–2 sentences.> Approach: <the decided approach and the {appName} files/components it would touch>. Scope: <small/medium/large>.',
-    bodyRequirements: 'the motivation (which user need or GOALS.md priority this serves), the decided approach naming the {appName} files/components it would touch, an estimated scope, acceptance criteria another agent can verify cold, and any explicit non-goals',
+    bodyRequirements: 'the motivation (which PRD.md requirement or success criterion, GOALS.md priority, or repository-documented user need this serves), the decided approach naming the {appName} files/components it would touch, an estimated scope, acceptance criteria another agent can verify cold, and any explicit non-goals',
     planCommitMessage: 'docs(plan-feature): file <N> feature plan(s)',
   },
 };

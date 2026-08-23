@@ -591,32 +591,50 @@ Repository: {repoPath}
 
 1. **Inventory so you don't duplicate.** Follow the "Inventory" step under
    "Where to record the plan" above for this app's tracker — collect every
-   existing \`[plan-feature-…]\` slug. ALSO read PLAN.md from {repoPath} (if it
-   exists) and skim the last 50 \`git log\` entries plus recent \`.changelog/\`
-   files: an idea that is already an unchecked plan item, an open tracker item,
-   or recently shipped work is NOT a candidate.
+   existing \`[plan-feature-…]\` slug. Then skim the last 50 \`git log\` entries
+   plus recent \`.changelog/\` files: an idea that is already an open tracker
+   item or recently shipped work is NOT a candidate.
 
-2. **Research the app the same way \`feature-ideas\` does.**
+2. **Build a product brief from the repository's documentation.** Use the most
+   specific available source of intent, and make a best effort rather than
+   assuming a missing document means the app has no direction:
 
-   - Read GOALS.md from {repoPath} for the app's goals and priorities. If no
-     GOALS.md exists, focus on general improvements.
-   - Read REJECTED.md from {repoPath} (if it exists) — do NOT re-propose an
-     idea matching a rejected entry.
+   - If \`PRD.md\` exists, read it first. Treat its requirements, acceptance
+     criteria, success metrics, constraints, and non-goals as the primary
+     evaluation for what the feature should accomplish.
+   - If \`GOALS.md\` exists, read it for strategic context and to supplement
+     the PRD. If there is no PRD, use GOALS.md as the primary statement of
+     desired direction.
+   - If neither exists, start with the root \`README.md\`, \`docs/README.md\`
+     (if present), relevant guides, architecture notes, ADRs, design documents,
+     and other product documentation in the repository. In all cases, inspect
+     the relevant documentation for feature-specific context and fill gaps
+     from it. Extract stated users, problems, workflows, constraints, and
+     success signals rather than inventing a product direction.
+   - If PRD.md and GOALS.md conflict, follow the PRD's concrete requirements
+     and success criteria; use GOALS.md as strategic context and call out any
+     material tension in the filed plan.
+   - Read the repository's \`AGENTS.md\` or \`CLAUDE.md\` files as implementation
+     constraints, not as a substitute for product intent. When documentation
+     is sparse, validate the inferred need against the current source, tests,
+     and recent history and name the evidence in the plan.
    - Check the repo's recently closed-unmerged PRs (\`gh pr list --state closed
      --search "is:unmerged" --limit 20\`, or the forge's equivalent) — a feature
      whose PR the user closed WITHOUT merging was rejected; treat those ideas as
      rejected too.
-   - Review the codebase structure, README, and docs to understand how the app
-     is built, so the plan names real files rather than imagined ones.
+   - Review the codebase structure and relevant source files so the plan names
+     real files rather than imagined ones.
 
 3. **Identify ONE small, high-impact feature** that:
 
-   - Aligns with GOALS.md priorities (if available)
+   - Aligns with PRD.md requirements and success criteria when available;
+     otherwise aligns with GOALS.md or the repository documentation gathered
+     in step 2
    - Is NOT already shipped, planned, or filed (per step 1)
-   - Does NOT match a REJECTED.md entry or a closed-unmerged automation PR
+   - Does NOT duplicate existing functionality or repeat a closed-unmerged
+     automation PR
    - Saves user time, improves UX, or makes the app more useful
    - Is self-contained and completable in one session by the agent that claims it
-   - Does NOT duplicate existing functionality
 
 4. **Write the decision-complete plan.** Every design choice is DECIDED, not
    raised as a question — make the call and state it. The filed item must carry:
@@ -625,8 +643,8 @@ Repository: {repoPath}
      \`plan-feature-\`, naming the feature (e.g.
      \`plan-feature-export-universe-to-markdown\`); ≤80 chars total; unique
      against every existing \`[plan-feature-…]\` slug (re-check before recording).
-   - **Motivation** — which user need or GOALS.md priority this serves, 1–2
-     sentences.
+   - **Motivation** — which documented requirement, success criterion, goal, or
+     evidenced user need this serves, 1–2 sentences.
    - **Approach** — the design you have decided on: the behavior to build, the
      existing patterns in {appName} it follows, and the concrete files/components
      it would touch (describe them; do NOT write the code).

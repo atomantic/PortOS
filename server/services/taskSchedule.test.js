@@ -1368,11 +1368,11 @@ describe('taskSchedule', () => {
       expect(cfg.type).toBe(INTERVAL_TYPES.WEEKLY)
       // Off by default — enabling it is the user's consent to scheduled LLM runs.
       expect(cfg.enabled).toBe(false)
-      // Same grounding as feature-ideas: proposals checked against a fresh PLAN.md.
+      // Refresh the configured work tracker before filing a new proposal.
       expect(cfg.runAfter).toEqual(['do-replan'])
       expect(cfg.taskMetadata.useWorktree).toBe(false)
       expect(cfg.taskMetadata.openPR).toBe(false)
-      // Writable: the PLAN.md tracker path commits checklist items.
+      // Writable: a file-based tracker path commits checklist items.
       expect(cfg.taskMetadata.readOnly).toBe(false)
       // Filing posture comes from TRACKER_FILING_PRESETS membership at dispatch,
       // not a static lock.
@@ -1393,9 +1393,14 @@ describe('taskSchedule', () => {
       expect(prompt).toContain('{repoPath}')
       // The tracker block is injected at dispatch, so the token must survive here.
       expect(prompt).toContain('{trackerInstructions}')
-      // Same research pipeline as feature-ideas' brainstorm phase.
+      // Product intent is specific-first, with repository documentation as the
+      // fallback when a project has neither a PRD nor goals document.
+      expect(prompt).toContain('PRD.md')
       expect(prompt).toContain('GOALS.md')
-      expect(prompt).toContain('REJECTED.md')
+      expect(prompt).toContain('README.md')
+      expect(prompt).toContain('docs/README.md')
+      expect(prompt).not.toContain('PLAN.md')
+      expect(prompt).not.toContain('REJECTED.md')
       expect(prompt).toContain('closed-unmerged')
       // Never implements — the plan IS the deliverable.
       expect(prompt).toContain('no branches, no PRs')

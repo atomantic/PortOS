@@ -14,7 +14,7 @@
     "data-safety": "86b07f51abdbcbe7016f840b5bb0cd9b",
     "simplify": "2a048214d1dd3b75bee9ae1a38fa1589",
     "feature-ideas": "d3282f16da29efe2d53595b3b34778bc",
-    "plan-feature": "3df6f0a46f2a524af1dc4f83dfdf0647",
+    "plan-feature": "b20980c8eda2256060d09d4bca397244",
     "plan-task": "910802d67f3b5a785f068f4d90178543",
     "claim-issue": "542ce3673abbdee93e895f9df660aaf7",
     "claim-issue-gitlab": "348ed6348b90dcc6eead03e06df049e9",
@@ -53,7 +53,7 @@
     "branch-reconcile": 3,
     "issue-reconcile": 4,
     "refresh-local-llm-catalog": 3,
-    "plan-feature": 1,
+    "plan-feature": 2,
     "security": 2,
     "code-quality": 2,
     "test-coverage": 2,
@@ -215,6 +215,9 @@
     "refresh-local-llm-catalog": [
       "525bd0077672bf2f8beec9c0124740c8",
       "a9dce67bb9f0837ba904f3412b03637f"
+    ],
+    "plan-feature": [
+      "3df6f0a46f2a524af1dc4f83dfdf0647"
     ],
     "stash-cleanup": [
       "f9de8b10937919ceb6656fbdb70179c4"

@@ -188,6 +188,12 @@ describe('formatTrackerInstructions — plan-feature preset', () => {
     expect(gitlab).toContain('--label plan-feature --label plan');
   });
 
+  it('grounds the plan motivation in the PRD first, with goals or repo docs as fallbacks', () => {
+    expect(planFeature.bodyRequirements).toContain('PRD.md requirement or success criterion');
+    expect(planFeature.bodyRequirements).toContain('GOALS.md priority');
+    expect(planFeature.bodyRequirements).toContain('repository-documented user need');
+  });
+
   it('keeps the read-only-on-source contract in every forge block', () => {
     for (const tracker of ['github', 'gitlab', 'jira']) {
       expect(formatTrackerInstructions(tracker, planFeature)).toContain('No source-code edits');
