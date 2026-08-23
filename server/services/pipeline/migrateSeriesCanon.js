@@ -19,6 +19,7 @@ import { updateSeries } from './series.js';
 import { PATHS, readJSONFile } from '../../lib/fileUtils.js';
 import { getUniverse, insertUniverseWithId, updateUniverse, ERR_DUPLICATE } from '../universeBuilder.js';
 import { mergeExtractedBible, BIBLE_FIELD, BIBLE_SOURCE } from '../../lib/storyBible.js';
+import { isDirectlyInvoked } from '../../../scripts/lib/directInvocation.js';
 
 // Derive a stable universe id from the importing series so a retry after a
 // mid-helper throw (insert succeeded, a later write failed) reuses the orphan
@@ -223,7 +224,7 @@ export async function migrateSeriesCanon({ dryRun = false, log = console.log } =
 }
 
 // CLI entrypoint: `node server/services/pipeline/migrateSeriesCanon.js [--dry-run]`
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isDirectlyInvoked(import.meta.url)) {
   const dryRun = process.argv.includes('--dry-run');
   migrateSeriesCanon({ dryRun })
     .then(() => process.exit(0))

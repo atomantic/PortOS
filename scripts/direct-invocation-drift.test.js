@@ -5,25 +5,30 @@
  * symlink and case-folding behavior handled by scripts/lib/directInvocation.js.
  * Keep every import-safe CLI on the shared helper so a direct run cannot
  * silently no-op under a symlinked checkout.
+ *
+ * The scan covers every tracked non-test .js file rather than a directory list:
+ * CLI entrypoints are not confined to scripts/, and the tenth copy is most
+ * likely to appear exactly where nobody thought to look. Reading the whole
+ * tracked tree costs ~65ms, so scoping it any tighter buys nothing.
  */
 import { describe, expect, it } from 'vitest';
-import { readdirSync, readFileSync } from 'fs';
+import { execFileSync } from 'child_process';
+import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const SCRIPT_DIRS = ['scripts', 'server/scripts'];
 
-const scriptFiles = SCRIPT_DIRS.flatMap((relativeDir) => {
-  const directory = join(REPO_ROOT, relativeDir);
-  return readdirSync(directory, { withFileTypes: true })
-    .filter((entry) => (
-      entry.isFile()
-      && entry.name.endsWith('.js')
-      && !entry.name.endsWith('.test.js')
-    ))
-    .map((entry) => `${relativeDir}/${entry.name}`);
-});
+/** The helper itself compares the two by definition — it is the one owner. */
+const OWNER = 'scripts/lib/directInvocation.js';
+
+const scriptFiles = execFileSync('git', ['ls-files', '*.js'], { cwd: REPO_ROOT, encoding: 'utf8' })
+  .split('\n')
+  .filter((relativePath) => (
+    relativePath
+    && !relativePath.endsWith('.test.js')
+    && relativePath !== OWNER
+  ));
 
 /** True when `source` hand-rolls the argv[1] <-> import.meta.url comparison. */
 const handRollsCheck = (source) => (
@@ -42,7 +47,7 @@ describe('direct-invocation checks have one owner (issue #4868)', () => {
     expect(handRollsCheck('if (isDirectlyInvoked(import.meta.url)) main();')).toBe(false);
   });
 
-  it('top-level JavaScript scripts do not compare argv[1] with import.meta.url themselves', () => {
+  it('tracked JavaScript files do not compare argv[1] with import.meta.url themselves', () => {
     expect(scriptFiles.length).toBeGreaterThan(0);
 
     const offenders = scriptFiles.filter((relativePath) => (
