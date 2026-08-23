@@ -12,16 +12,19 @@ The current production UI remains available as `classic-midnight`. The three re-
 
 New UI should use semantic PortOS tokens wherever possible:
 
-- Colors: `bg-port-bg`, `bg-port-card`, `border-port-border`, `text-port-accent`, `text-port-success`, `text-port-warning`, `text-port-error`.
-- Text: default body text inherits `rgb(var(--port-text))`; secondary text should use `text-gray-400` or `rgb(var(--port-text-muted))` when authoring CSS.
+- Colors: `bg-port-bg`, `bg-port-card`, `border-port-border`, and the semantic foreground tokens `text-port-accent`, `text-port-accent-2`, `text-port-success`, `text-port-warning`, and `text-port-error`.
+- Text: use `text-port-text`, `text-port-text-muted`, and `text-port-text-subtle` for primary, supporting, and tertiary copy. Their CSS variables are `--port-text`, `--port-text-muted`, and `--port-text-subtle`.
+- Filled-control ink: pair each semantic fill with its matching `text-port-on-*` token (`text-port-on-accent`, `text-port-on-accent-2`, `text-port-on-success`, `text-port-on-warning`, or `text-port-on-error`). These are intentionally separate from the surface-text tokens.
 - Surfaces: prefer `bg-port-card border border-port-border rounded-lg` for panels and `bg-port-bg border border-port-border rounded-lg` for inset controls.
 - Controls: inputs, textareas, and selects should use `bg-port-bg border border-port-border`; theme CSS supplies the material, radius, and focus behavior.
-- Buttons: use `bg-port-accent text-white` for filled primary actions, `bg-port-border text-gray-400 hover:text-white` for neutral actions, and `bg-port-*/20 text-port-*` for tonal status actions. The runtime maps those legacy utility pairs to theme-safe control fills and foreground colors.
+- Buttons: use `bg-port-accent text-port-on-accent` for filled primary actions, `bg-port-border text-port-text-muted hover:text-port-text` for neutral actions, and `bg-port-*/20 text-port-*` for tonal status actions. Keep tonal fills at 30% or below when using surface-semantic ink; 40% and above is treated as a filled state and must pair with `text-port-on-*`. Legacy `text-white`, `text-gray-*`, and solid semantic Tailwind hue utilities remain supported through the shared compatibility layer, but new code should use the semantic tokens directly.
 - Icons: use the existing lucide icon style and let `text-port-accent` carry theme identity.
 - Charts: use `rgb(var(--port-chart-1))` through `rgb(var(--port-chart-4))` for series and `rgb(var(--port-chart-grid) / 0.34)` for grid lines.
 - Terminal/log output: use `var(--port-terminal-bg)` and `var(--port-terminal-text)` when authoring custom CSS.
 
-Avoid hard-coded background colors for major containers. Hard-coded state colors are acceptable only when they are data colors and still pass contrast in all themes.
+Avoid hard-coded background colors for major containers. Hard-coded state colors are acceptable only when they are data colors and still pass contrast in all eight theme variants.
+
+The shared CSS contract keeps surface text between **4.5:1 and 15.5:1** against both the page and minimum card surfaces. The lower bound protects readability; the upper bound avoids glare from unnecessary near-white/near-black pairings. Solid legacy neutral backgrounds (`bg-gray-800` through `bg-gray-500` and their zinc/neutral/slate equivalents) are aliases of the theme surface tokens. Fixed media, scrims, terminals, and canvas overlays are the documented exceptions and must keep their own explicit overlay contract.
 
 ## Surface Elevation
 

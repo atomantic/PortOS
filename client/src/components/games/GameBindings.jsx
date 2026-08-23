@@ -254,7 +254,7 @@ function MusicBindingRow({
             type="button"
             disabled={busy}
             onClick={() => onPublish(binding.id, true)}
-            className="inline-flex min-h-[36px] items-center rounded-lg bg-amber-500/80 px-3 text-xs font-semibold text-black disabled:opacity-40"
+            className="inline-flex min-h-[36px] items-center rounded-lg bg-port-warning px-3 text-xs font-semibold text-port-on-warning disabled:opacity-40"
           >
             Overwrite
           </button>

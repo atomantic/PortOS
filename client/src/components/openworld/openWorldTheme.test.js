@@ -16,27 +16,27 @@ describe('deriveOpenWorldPalette', () => {
   it('derives the accent hex from a theme --port-accent triplet', () => {
     const phosphor = getTheme('black-ice-terminal-day');
     const p = deriveOpenWorldPalette(phosphor);
-    expect(p.accent).toBe('#0a7a4a'); // 10 122 74
+    expect(p.accent).toBe('#086c43'); // 8 108 67
     expect(p.themeId).toBe('black-ice-terminal-day');
     expect(p.isDay).toBe(true);
   });
 
   it('exposes a dark night void and a bright day sky, both accent-tinted', () => {
-    const phosphor = getTheme('black-ice-terminal-day'); // accent #0a7a4a
+    const phosphor = getTheme('black-ice-terminal-day'); // accent #086c43
     const p = deriveOpenWorldPalette(phosphor, 'cyber');
-    expect(p.nightBackground).toBe('#010c07'); // #0a7a4a * 0.1
-    expect(p.dayBackground).toBe('#badacc');   // #0a7a4a lightened 0.72 toward white
+    expect(p.nightBackground).toBe('#010b07'); // #086c43 * 0.1
+    expect(p.dayBackground).toBe('#bad6ca');   // #086c43 lightened 0.72 toward white
     // A day theme's default surround (loading screen) is the bright day sky.
     expect(p.isDay).toBe(true);
-    expect(p.background).toBe('#badacc');
+    expect(p.background).toBe('#bad6ca');
   });
 
   it('defaults a night theme surround to the dark void', () => {
-    const midnight = getTheme('classic-midnight'); // accent #3b82f6
+    const midnight = getTheme('classic-midnight'); // accent #2563eb
     const p = deriveOpenWorldPalette(midnight, 'cyber');
     expect(p.isDay).toBe(false);
-    expect(p.background).toBe('#060d19'); // nightBackground = #3b82f6 * 0.1
-    expect(p.dayBackground).toBe('#c8dcfc');
+    expect(p.background).toBe('#040a18'); // nightBackground = #2563eb * 0.1
+    expect(p.dayBackground).toBe('#c2d3f9');
   });
 
   it('falls back to defaults for a missing/invalid theme', () => {
@@ -234,12 +234,12 @@ describe('deriveOpenWorldPalette — world style', () => {
 describe('deriveOpenWorldPalette brand surfaces', () => {
   it('carries themed brand surfaces derived from the accent', () => {
     const p = deriveOpenWorldPalette(getTheme('black-ice-terminal-day'));
-    expect(p.ground).toBe('#0a7a4a');
-    expect(p.particles).toBe('#0a7a4a');
-    expect(p.building.online).toBe('#0a7a4a');
-    expect(p.neonAccents[0]).toBe('#0a7a4a');
+    expect(p.ground).toBe('#086c43');
+    expect(p.particles).toBe('#086c43');
+    expect(p.building.online).toBe('#086c43');
+    expect(p.neonAccents[0]).toBe('#086c43');
     // online buildings follow the recolor through the palette-bound helper
-    expect(p.getBuildingColor('online')).toBe('#0a7a4a');
+    expect(p.getBuildingColor('online')).toBe('#086c43');
   });
 
   it('leaves status colors untouched', () => {
@@ -272,8 +272,8 @@ describe('deriveOpenWorldPalette brand surfaces', () => {
     const green = deriveOpenWorldPalette(getTheme('black-ice-terminal-day'));
     deriveOpenWorldPalette(getTheme('classic-midnight'));
     const greenAgain = deriveOpenWorldPalette(getTheme('black-ice-terminal-day'));
-    // classic-midnight accent is 59 130 246 -> #3b82f6, never a blend of green+blue.
-    expect(deriveOpenWorldPalette(getTheme('classic-midnight')).ground).toBe('#3b82f6');
+    // classic-midnight accent is 37 99 235 -> #2563eb, never a blend of green+blue.
+    expect(deriveOpenWorldPalette(getTheme('classic-midnight')).ground).toBe('#2563eb');
     // Re-deriving the green theme yields an identical body — proof it's recomputed
     // from ORIGINAL_BUILDING_BODY, not from a previously-tinted value.
     expect(greenAgain.buildingBody).toBe(green.buildingBody);
@@ -282,7 +282,7 @@ describe('deriveOpenWorldPalette brand surfaces', () => {
   it('binds getAccentColor to the themed neon list', () => {
     const p = deriveOpenWorldPalette(getTheme('black-ice-terminal-day'));
     // The lead neon accent tracks the theme, so an app hashing to index 0 gets it.
-    expect(p.neonAccents[0]).toBe('#0a7a4a');
+    expect(p.neonAccents[0]).toBe('#086c43');
     // Bound helper picks from the palette's list; the bare helper picks from the
     // static list. Both are deterministic for a given app and stay in their list.
     const app = { name: 'anything' };

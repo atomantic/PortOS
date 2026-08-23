@@ -21,6 +21,67 @@ const contrastRatio = (a, b) => {
 };
 
 const AA_SMALL_TEXT = 4.5;
+const MAX_COMFORTABLE_TEXT_CONTRAST = 15.5;
+
+const REQUIRED_COLOR_TOKENS = [
+  '--port-bg',
+  '--port-card',
+  '--port-border',
+  '--port-accent',
+  '--port-accent-text',
+  '--port-accent-2',
+  '--port-accent-2-text',
+  '--port-success',
+  '--port-success-text',
+  '--port-warning',
+  '--port-warning-text',
+  '--port-error',
+  '--port-error-text',
+  '--port-text',
+  '--port-text-muted',
+  '--port-text-subtle',
+  '--port-on-accent',
+  '--port-on-accent-2',
+  '--port-on-success',
+  '--port-on-warning',
+  '--port-on-error',
+];
+
+const SURFACE_TEXT_TOKENS = [
+  '--port-text',
+  '--port-text-muted',
+  '--port-text-subtle',
+  '--port-accent-text',
+  '--port-accent-2-text',
+  '--port-success-text',
+  '--port-warning-text',
+  '--port-error-text',
+];
+
+const FILLED_CONTROL_PAIRS = [
+  ['--port-accent', '--port-on-accent'],
+  ['--port-accent-2', '--port-on-accent-2'],
+  ['--port-success', '--port-on-success'],
+  ['--port-warning', '--port-on-warning'],
+  ['--port-error', '--port-on-error'],
+];
+
+const TONAL_TEXT_PAIRS = [
+  ['--port-accent', '--port-accent-text'],
+  ['--port-accent-2', '--port-accent-2-text'],
+  ['--port-success', '--port-success-text'],
+  ['--port-warning', '--port-warning-text'],
+  ['--port-error', '--port-error-text'],
+];
+
+const TONAL_ALPHA_STEPS = [0.05, 0.08, 0.1, 0.15, 0.2, 0.25, 0.3];
+
+const minimumCardSurface = (theme) => {
+  const bg = parseRgb(theme.colors['--port-bg']);
+  const card = parseRgb(theme.colors['--port-card']);
+  const floor = Number(theme.tokens['--port-card-min-alpha']);
+  return card.map((channel, index) => floor * channel + (1 - floor) * bg[index]);
+};
 
 describe('portosThemes warning token contrast', () => {
   const entries = Object.values(THEMES);
@@ -36,6 +97,85 @@ describe('portosThemes warning token contrast', () => {
       const onWarning = parseRgb(theme.colors['--port-on-warning']);
       const ratio = contrastRatio(warning, onWarning);
       expect(ratio).toBeGreaterThanOrEqual(AA_SMALL_TEXT);
+    },
+  );
+});
+
+describe('shared eight-theme color contract', () => {
+  const entries = Object.values(THEMES);
+
+  it('keeps four day/night variants on the same token surface', () => {
+    expect(entries).toHaveLength(8);
+    expect(entries.filter((theme) => theme.mode === 'day')).toHaveLength(4);
+    expect(entries.filter((theme) => theme.mode === 'night')).toHaveLength(4);
+    expect(new Set(entries.map((theme) => theme.family))).toEqual(new Set(['classic', 'glass', 'terminal', 'blueprint']));
+  });
+
+  it.each(entries.map((theme) => [theme.id, theme]))(
+    '%s: defines valid RGB values for every shared color token',
+    (_id, theme) => {
+      for (const token of REQUIRED_COLOR_TOKENS) {
+        const value = parseRgb(theme.colors[token]);
+        expect(value, token).toHaveLength(3);
+        expect(value.every((channel) => Number.isInteger(channel) && channel >= 0 && channel <= 255), token).toBe(true);
+      }
+    },
+  );
+
+  it.each(entries.map((theme) => [theme.id, theme]))(
+    '%s: keeps surface text readable without extreme contrast',
+    (_id, theme) => {
+      const surfaces = [
+        parseRgb(theme.colors['--port-bg']),
+        parseRgb(theme.colors['--port-card']),
+        minimumCardSurface(theme),
+      ];
+      for (const token of SURFACE_TEXT_TOKENS) {
+        for (const surface of surfaces) {
+          const ratio = contrastRatio(parseRgb(theme.colors[token]), surface);
+          expect(ratio, `${token} on ${surface.join(' ')}`).toBeGreaterThanOrEqual(AA_SMALL_TEXT);
+          expect(ratio, `${token} on ${surface.join(' ')}`).toBeLessThanOrEqual(MAX_COMFORTABLE_TEXT_CONTRAST);
+        }
+      }
+    },
+  );
+
+  it.each(entries.map((theme) => [theme.id, theme]))(
+    '%s: keeps ink readable inside every filled semantic control',
+    (_id, theme) => {
+      for (const [fillToken, inkToken] of FILLED_CONTROL_PAIRS) {
+        const ratio = contrastRatio(
+          parseRgb(theme.colors[fillToken]),
+          parseRgb(theme.colors[inkToken]),
+        );
+        expect(ratio, `${inkToken} on ${fillToken}`).toBeGreaterThanOrEqual(AA_SMALL_TEXT);
+        expect(ratio, `${inkToken} on ${fillToken}`).toBeLessThanOrEqual(MAX_COMFORTABLE_TEXT_CONTRAST);
+      }
+    },
+  );
+
+  it.each(entries.map((theme) => [theme.id, theme]))(
+    '%s: keeps semantic text readable on tonal fills through 30% opacity',
+    (_id, theme) => {
+      const page = parseRgb(theme.colors['--port-bg']);
+      const card = parseRgb(theme.colors['--port-card']);
+      const minimumCard = minimumCardSurface(theme);
+      for (const [fillToken, textToken] of TONAL_TEXT_PAIRS) {
+        const fill = parseRgb(theme.colors[fillToken]);
+        const ink = parseRgb(theme.colors[textToken]);
+        for (const surface of [page, card, minimumCard]) {
+          for (const alpha of TONAL_ALPHA_STEPS) {
+            const tonalSurface = fill.map((channel, index) => (
+              alpha * channel + (1 - alpha) * surface[index]
+            ));
+            const ratio = contrastRatio(ink, tonalSurface);
+            expect(ratio, `${textToken} on ${fillToken}/${alpha} over ${surface.join(' ')}`)
+              .toBeGreaterThanOrEqual(AA_SMALL_TEXT);
+            expect(ratio, `${textToken} on ${fillToken}/${alpha} over ${surface.join(' ')}`)
+              .toBeLessThanOrEqual(MAX_COMFORTABLE_TEXT_CONTRAST);
+          }
+        }
+      }
     },
   );
 });

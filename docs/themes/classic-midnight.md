@@ -16,8 +16,8 @@ Classic Midnight preserves the existing PortOS UI: dark utilitarian panels, blue
 
 - Panels: `bg-port-card border border-port-border rounded-lg`.
 - Inset regions: `bg-port-bg border border-port-border rounded-lg`.
-- Primary buttons: `bg-port-accent text-white`.
-- Secondary buttons: `bg-port-card border border-port-border text-gray-300`.
+- Primary buttons: `bg-port-accent text-port-on-accent`.
+- Secondary buttons: `bg-port-card border border-port-border text-port-text-muted`.
 - Code blocks: `bg-port-bg border border-port-border font-mono`.
 
 ## Validation

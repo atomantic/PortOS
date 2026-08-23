@@ -23,6 +23,12 @@
   --color-port-error: rgb(var(--port-error));
   --color-port-text: rgb(var(--port-text));
   --color-port-text-muted: rgb(var(--port-text-muted));
+  --color-port-text-subtle: rgb(var(--port-text-subtle));
+  --color-port-accent-text: rgb(var(--port-accent-text));
+  --color-port-accent-2-text: rgb(var(--port-accent-2-text));
+  --color-port-success-text: rgb(var(--port-success-text));
+  --color-port-warning-text: rgb(var(--port-warning-text));
+  --color-port-error-text: rgb(var(--port-error-text));
   --color-port-on-accent: rgb(var(--port-on-accent));
   --color-port-on-accent-2: rgb(var(--port-on-accent-2));
   --color-port-on-success: rgb(var(--port-on-success));
@@ -37,20 +43,26 @@
   --port-bg: 15 15 15;
   --port-card: 26 26 26;
   --port-border: 42 42 42;
-  --port-accent: 59 130 246;
+  --port-accent: 37 99 235;
   --port-accent-2: 168 85 247;
+  --port-accent-text: 96 165 250;
+  --port-accent-2-text: 216 180 254;
   --port-success: 34 197 94;
   --port-warning: 245 158 11;
   --port-error: 239 68 68;
+  --port-success-text: 134 239 172;
+  --port-warning-text: 252 211 77;
+  --port-error-text: 253 164 175;
   --port-on-accent: 255 255 255;
-  --port-on-accent-2: 255 255 255;
+  --port-on-accent-2: 37 7 56;
   --port-on-success: 5 46 22;
   --port-on-warning: 17 24 39;
-  --port-on-error: 255 255 255;
-  --port-text: 229 229 229;
-  --port-text-muted: 163 163 163;
+  --port-on-error: 48 8 8;
+  --port-text: 212 212 216;
+  --port-text-muted: 161 161 170;
+  --port-text-subtle: 140 140 149;
   --port-control-text: 212 212 216;
-  --port-focus-ring: 59 130 246;
+  --port-focus-ring: 37 99 235;
   /* Writers Room "light reading" theme — sepia paper tone used by the prose
      textarea, the AI panel's Evaluate/Format/Adapt result containers, and
      the per-scene cards. Centralized so the shade can be tweaked once. */
@@ -104,8 +116,8 @@
   --port-active-bg: rgb(var(--port-accent) / 0.1);
   --port-hover-bg: rgb(var(--port-border) / 0.5);
   --port-terminal-bg: rgb(7 7 7);
-  --port-terminal-text: rgb(229 229 229);
-  --port-chart-1: 59 130 246;
+  --port-terminal-text: rgb(212 212 216);
+  --port-chart-1: 37 99 235;
   --port-chart-2: 34 197 94;
   --port-chart-3: 245 158 11;
   --port-chart-4: 236 72 153;
@@ -443,6 +455,381 @@ html[data-port-theme] [role="button"] {
     opacity var(--port-motion-fast) ease;
 }
 
+/* === Shared foreground color contract ===
+   Components still contain a large amount of legacy Tailwind color utility
+   text. These selectors make those utilities aliases of the theme contract at
+   runtime, so the eight themes share the same readable roles:
+
+   - primary text: normal labels and controls
+   - muted text: supporting copy and metadata
+   - subtle text: tertiary labels, unavailable states, and tiny annotations
+   - semantic text: accent, secondary accent, success, warning, and error
+
+   Filled controls use the matching `--port-on-*` token below instead. Keeping
+   fill ink and surface ink separate is what prevents a color that is readable
+   as a status label from becoming unreadable inside a bright badge. Opacity
+   variants are intentionally promoted to the role's full readable value: a
+   small text label cannot rely on a decorative alpha to remain legible.
+ */
+html[data-port-theme] :is(
+  [class*="text-white"], [class*="text-zinc-50"], [class*="text-zinc-100"],
+  [class*="text-neutral-50"], [class*="text-neutral-100"],
+  [class*="text-gray-50"], [class*="text-gray-100"],
+  [class*="text-slate-50"], [class*="text-slate-100"]
+) {
+  color: rgb(var(--port-text)) !important;
+}
+
+html[data-port-theme] :is(
+  [class*="text-zinc-200"], [class*="text-zinc-300"],
+  [class*="text-neutral-200"], [class*="text-neutral-300"],
+  [class*="text-gray-200"], [class*="text-gray-300"],
+  [class*="text-slate-200"], [class*="text-slate-300"]
+) {
+  color: rgb(var(--port-text) / 0.85) !important;
+}
+
+html[data-port-theme] :is(
+  [class*="text-zinc-400"], [class*="text-zinc-500"],
+  [class*="text-neutral-400"], [class*="text-neutral-500"],
+  [class*="text-gray-400"], [class*="text-gray-500"],
+  [class*="text-slate-400"], [class*="text-slate-500"]
+) {
+  color: rgb(var(--port-text-muted)) !important;
+}
+
+html[data-port-theme] :is(
+  [class*="text-zinc-600"], [class*="text-zinc-700"],
+  [class*="text-neutral-600"], [class*="text-neutral-700"],
+  [class*="text-gray-600"], [class*="text-gray-700"],
+  [class*="text-slate-600"], [class*="text-slate-700"]
+) {
+  color: rgb(var(--port-text-subtle)) !important;
+}
+
+html[data-port-theme] :is(
+  [class*="text-zinc-800"], [class*="text-zinc-900"],
+  [class*="text-neutral-800"], [class*="text-neutral-900"],
+  [class*="text-gray-800"], [class*="text-gray-900"],
+  [class*="text-slate-800"], [class*="text-slate-900"]
+) {
+  color: rgb(var(--port-text)) !important;
+}
+
+/* Hue families are semantic aliases. This keeps legacy utility names useful
+   while making their actual foreground color follow the active theme. */
+html[data-port-theme] :is(
+  [class*="text-cyan-"], [class*="text-sky-"], [class*="text-blue-"],
+  [class*="text-indigo-"], .text-port-accent
+) {
+  color: rgb(var(--port-accent-text)) !important;
+}
+
+html[data-port-theme] :is(
+  [class*="text-violet-"], [class*="text-purple-"],
+  [class*="text-fuchsia-"], [class*="text-pink-"], .text-port-accent-2
+) {
+  color: rgb(var(--port-accent-2-text)) !important;
+}
+
+html[data-port-theme] :is(
+  [class*="text-red-"], [class*="text-rose-"], .text-port-error
+) {
+  color: rgb(var(--port-error-text)) !important;
+}
+
+html[data-port-theme] :is(
+  [class*="text-orange-"], [class*="text-amber-"], [class*="text-yellow-"],
+  .text-port-warning
+) {
+  color: rgb(var(--port-warning-text)) !important;
+}
+
+html[data-port-theme] :is(
+  [class*="text-lime-"], [class*="text-green-"], [class*="text-emerald-"],
+  [class*="text-teal-"], .text-port-success
+) {
+  color: rgb(var(--port-success-text)) !important;
+}
+
+html[data-port-theme] .text-port-text { color: rgb(var(--port-text)) !important; }
+html[data-port-theme] .text-port-text-muted { color: rgb(var(--port-text-muted)) !important; }
+html[data-port-theme] .text-port-text-subtle { color: rgb(var(--port-text-subtle)) !important; }
+/* Opacity-bearing semantic text utilities still need the semantic foreground
+   role, not the raw fill color. The hue-family aliases above already cover
+   legacy Tailwind variants; these selectors close the same gap for PortOS
+   utility names such as `text-port-warning/90`. */
+html[data-port-theme] :is([class^="text-port-text-muted/"], [class*=" text-port-text-muted/"]) {
+  color: rgb(var(--port-text-muted)) !important;
+}
+html[data-port-theme] :is([class^="text-port-text-subtle/"], [class*=" text-port-text-subtle/"]) {
+  color: rgb(var(--port-text-subtle)) !important;
+}
+html[data-port-theme] :is([class^="text-port-accent/"], [class*=" text-port-accent/"]) {
+  color: rgb(var(--port-accent-text)) !important;
+}
+html[data-port-theme] :is([class^="text-port-accent-2/"], [class*=" text-port-accent-2/"]) {
+  color: rgb(var(--port-accent-2-text)) !important;
+}
+html[data-port-theme] :is([class^="text-port-success/"], [class*=" text-port-success/"]) {
+  color: rgb(var(--port-success-text)) !important;
+}
+html[data-port-theme] :is([class^="text-port-warning/"], [class*=" text-port-warning/"]) {
+  color: rgb(var(--port-warning-text)) !important;
+}
+html[data-port-theme] :is([class^="text-port-error/"], [class*=" text-port-error/"]) {
+  color: rgb(var(--port-error-text)) !important;
+}
+
+/* Filled semantic controls use their own ink token. */
+html[data-port-theme] :is(
+  .bg-port-accent,
+  [class~="bg-port-accent/40"], [class~="bg-port-accent/50"], [class~="bg-port-accent/60"],
+  [class~="bg-port-accent/70"], [class~="bg-port-accent/75"], [class~="bg-port-accent/80"],
+  [class~="bg-port-accent/90"], [class~="bg-port-accent/95"], [class~="bg-port-accent/100"]
+):is([class~="text-white"], [class~="text-black"]) {
+  background-color: rgb(var(--port-accent)) !important;
+  color: rgb(var(--port-on-accent)) !important;
+}
+html[data-port-theme] :is(
+  .bg-port-accent-2,
+  [class~="bg-port-accent-2/40"], [class~="bg-port-accent-2/50"], [class~="bg-port-accent-2/60"],
+  [class~="bg-port-accent-2/70"], [class~="bg-port-accent-2/75"], [class~="bg-port-accent-2/80"],
+  [class~="bg-port-accent-2/90"], [class~="bg-port-accent-2/95"], [class~="bg-port-accent-2/100"]
+):is([class~="text-white"], [class~="text-black"]) {
+  background-color: rgb(var(--port-accent-2)) !important;
+  color: rgb(var(--port-on-accent-2)) !important;
+}
+html[data-port-theme] :is(
+  .bg-port-success,
+  [class~="bg-port-success/40"], [class~="bg-port-success/50"], [class~="bg-port-success/60"],
+  [class~="bg-port-success/70"], [class~="bg-port-success/75"], [class~="bg-port-success/80"],
+  [class~="bg-port-success/90"], [class~="bg-port-success/95"], [class~="bg-port-success/100"]
+):is([class~="text-white"], [class~="text-black"]) {
+  background-color: rgb(var(--port-success)) !important;
+  color: rgb(var(--port-on-success)) !important;
+}
+html[data-port-theme] :is(
+  .bg-port-warning,
+  [class~="bg-port-warning/40"], [class~="bg-port-warning/50"], [class~="bg-port-warning/60"],
+  [class~="bg-port-warning/70"], [class~="bg-port-warning/75"], [class~="bg-port-warning/80"],
+  [class~="bg-port-warning/90"], [class~="bg-port-warning/95"], [class~="bg-port-warning/100"]
+):is([class~="text-white"], [class~="text-black"]) {
+  background-color: rgb(var(--port-warning)) !important;
+  color: rgb(var(--port-on-warning)) !important;
+}
+html[data-port-theme] :is(
+  .bg-port-error,
+  [class~="bg-port-error/40"], [class~="bg-port-error/50"], [class~="bg-port-error/60"],
+  [class~="bg-port-error/70"], [class~="bg-port-error/75"], [class~="bg-port-error/80"],
+  [class~="bg-port-error/90"], [class~="bg-port-error/95"], [class~="bg-port-error/100"]
+):is([class~="text-white"], [class~="text-black"]) {
+  background-color: rgb(var(--port-error)) !important;
+  color: rgb(var(--port-on-error)) !important;
+}
+
+/* A semantic tint stops being a tonal surface at 40% opacity. Existing
+   controls still use surface-text classes on those high-opacity states, so
+   promote the fill and its semantic text together. The state-aware selectors
+   include Tailwind's variant prefix; matching the class without its pseudo
+   state would make a hover fill active before the pointer arrives. */
+html[data-port-theme] :is(
+  [class~="bg-port-accent/40"], [class~="bg-port-accent/50"], [class~="bg-port-accent/60"],
+  [class~="bg-port-accent/70"], [class~="bg-port-accent/75"], [class~="bg-port-accent/80"],
+  [class~="bg-port-accent/90"], [class~="bg-port-accent/95"], [class~="bg-port-accent/100"],
+  [class*="hover:bg-port-accent/4"]:hover, [class*="hover:bg-port-accent/5"]:hover,
+  [class*="hover:bg-port-accent/6"]:hover, [class*="hover:bg-port-accent/7"]:hover,
+  [class*="hover:bg-port-accent/8"]:hover, [class*="hover:bg-port-accent/9"]:hover,
+  [class*="hover:bg-port-accent/100"]:hover,
+  [class*="active:bg-port-accent/4"]:active, [class*="active:bg-port-accent/5"]:active,
+  [class*="active:bg-port-accent/6"]:active, [class*="active:bg-port-accent/7"]:active,
+  [class*="active:bg-port-accent/8"]:active, [class*="active:bg-port-accent/9"]:active,
+  [class*="active:bg-port-accent/100"]:active
+):is(
+  [class~="text-port-accent"], [class^="text-port-accent/"], [class*=" text-port-accent/"],
+  [class*="text-cyan-"], [class*="text-sky-"], [class*="text-blue-"], [class*="text-indigo-"]
+) {
+  background-color: rgb(var(--port-accent)) !important;
+  color: rgb(var(--port-on-accent)) !important;
+}
+
+html[data-port-theme] :is(
+  [class~="bg-port-accent-2/40"], [class~="bg-port-accent-2/50"], [class~="bg-port-accent-2/60"],
+  [class~="bg-port-accent-2/70"], [class~="bg-port-accent-2/75"], [class~="bg-port-accent-2/80"],
+  [class~="bg-port-accent-2/90"], [class~="bg-port-accent-2/95"], [class~="bg-port-accent-2/100"],
+  [class*="hover:bg-port-accent-2/4"]:hover, [class*="hover:bg-port-accent-2/5"]:hover,
+  [class*="hover:bg-port-accent-2/6"]:hover, [class*="hover:bg-port-accent-2/7"]:hover,
+  [class*="hover:bg-port-accent-2/8"]:hover, [class*="hover:bg-port-accent-2/9"]:hover,
+  [class*="hover:bg-port-accent-2/100"]:hover,
+  [class*="active:bg-port-accent-2/4"]:active, [class*="active:bg-port-accent-2/5"]:active,
+  [class*="active:bg-port-accent-2/6"]:active, [class*="active:bg-port-accent-2/7"]:active,
+  [class*="active:bg-port-accent-2/8"]:active, [class*="active:bg-port-accent-2/9"]:active,
+  [class*="active:bg-port-accent-2/100"]:active
+):is(
+  [class~="text-port-accent-2"], [class^="text-port-accent-2/"], [class*=" text-port-accent-2/"],
+  [class*="text-violet-"], [class*="text-purple-"], [class*="text-fuchsia-"], [class*="text-pink-"]
+) {
+  background-color: rgb(var(--port-accent-2)) !important;
+  color: rgb(var(--port-on-accent-2)) !important;
+}
+
+html[data-port-theme] :is(
+  [class~="bg-port-success/40"], [class~="bg-port-success/50"], [class~="bg-port-success/60"],
+  [class~="bg-port-success/70"], [class~="bg-port-success/75"], [class~="bg-port-success/80"],
+  [class~="bg-port-success/90"], [class~="bg-port-success/95"], [class~="bg-port-success/100"],
+  [class*="hover:bg-port-success/4"]:hover, [class*="hover:bg-port-success/5"]:hover,
+  [class*="hover:bg-port-success/6"]:hover, [class*="hover:bg-port-success/7"]:hover,
+  [class*="hover:bg-port-success/8"]:hover, [class*="hover:bg-port-success/9"]:hover,
+  [class*="hover:bg-port-success/100"]:hover,
+  [class*="active:bg-port-success/4"]:active, [class*="active:bg-port-success/5"]:active,
+  [class*="active:bg-port-success/6"]:active, [class*="active:bg-port-success/7"]:active,
+  [class*="active:bg-port-success/8"]:active, [class*="active:bg-port-success/9"]:active,
+  [class*="active:bg-port-success/100"]:active
+):is(
+  [class~="text-port-success"], [class^="text-port-success/"], [class*=" text-port-success/"],
+  [class*="text-lime-"], [class*="text-green-"], [class*="text-emerald-"], [class*="text-teal-"]
+) {
+  background-color: rgb(var(--port-success)) !important;
+  color: rgb(var(--port-on-success)) !important;
+}
+
+html[data-port-theme] :is(
+  [class~="bg-port-warning/40"], [class~="bg-port-warning/50"], [class~="bg-port-warning/60"],
+  [class~="bg-port-warning/70"], [class~="bg-port-warning/75"], [class~="bg-port-warning/80"],
+  [class~="bg-port-warning/90"], [class~="bg-port-warning/95"], [class~="bg-port-warning/100"],
+  [class*="hover:bg-port-warning/4"]:hover, [class*="hover:bg-port-warning/5"]:hover,
+  [class*="hover:bg-port-warning/6"]:hover, [class*="hover:bg-port-warning/7"]:hover,
+  [class*="hover:bg-port-warning/8"]:hover, [class*="hover:bg-port-warning/9"]:hover,
+  [class*="hover:bg-port-warning/100"]:hover,
+  [class*="active:bg-port-warning/4"]:active, [class*="active:bg-port-warning/5"]:active,
+  [class*="active:bg-port-warning/6"]:active, [class*="active:bg-port-warning/7"]:active,
+  [class*="active:bg-port-warning/8"]:active, [class*="active:bg-port-warning/9"]:active,
+  [class*="active:bg-port-warning/100"]:active
+):is(
+  [class~="text-port-warning"], [class^="text-port-warning/"], [class*=" text-port-warning/"],
+  [class*="text-orange-"], [class*="text-amber-"], [class*="text-yellow-"]
+) {
+  background-color: rgb(var(--port-warning)) !important;
+  color: rgb(var(--port-on-warning)) !important;
+}
+
+html[data-port-theme] :is(
+  [class~="bg-port-error/40"], [class~="bg-port-error/50"], [class~="bg-port-error/60"],
+  [class~="bg-port-error/70"], [class~="bg-port-error/75"], [class~="bg-port-error/80"],
+  [class~="bg-port-error/90"], [class~="bg-port-error/95"], [class~="bg-port-error/100"],
+  [class*="hover:bg-port-error/4"]:hover, [class*="hover:bg-port-error/5"]:hover,
+  [class*="hover:bg-port-error/6"]:hover, [class*="hover:bg-port-error/7"]:hover,
+  [class*="hover:bg-port-error/8"]:hover, [class*="hover:bg-port-error/9"]:hover,
+  [class*="hover:bg-port-error/100"]:hover,
+  [class*="active:bg-port-error/4"]:active, [class*="active:bg-port-error/5"]:active,
+  [class*="active:bg-port-error/6"]:active, [class*="active:bg-port-error/7"]:active,
+  [class*="active:bg-port-error/8"]:active, [class*="active:bg-port-error/9"]:active,
+  [class*="active:bg-port-error/100"]:active
+):is(
+  [class~="text-port-error"], [class^="text-port-error/"], [class*=" text-port-error/"],
+  [class*="text-red-"], [class*="text-rose-"]
+) {
+  background-color: rgb(var(--port-error)) !important;
+  color: rgb(var(--port-on-error)) !important;
+}
+
+/* Solid legacy semantic fills are aliases too. This covers provider/status
+   buttons whose class names still come from a data-driven palette (for example
+   `bg-purple-500 text-white`) while leaving low-opacity decorative tints alone.
+   The paired ink token is applied to both historical white and black text. */
+html[data-port-theme] :is(
+  .bg-blue-500, .bg-blue-600, .bg-blue-700,
+  .bg-cyan-400, .bg-cyan-500, .bg-sky-500, .bg-sky-600,
+  .bg-indigo-500, .bg-indigo-600
+):is([class~="text-white"], [class~="text-black"]) {
+  background-color: rgb(var(--port-accent)) !important;
+  color: rgb(var(--port-on-accent)) !important;
+}
+
+html[data-port-theme] :is(
+  .bg-purple-500, .bg-purple-600, .bg-violet-500, .bg-violet-600,
+  .bg-fuchsia-500, .bg-pink-500
+):is([class~="text-white"], [class~="text-black"]) {
+  background-color: rgb(var(--port-accent-2)) !important;
+  color: rgb(var(--port-on-accent-2)) !important;
+}
+
+html[data-port-theme] :is(
+  .bg-green-400, .bg-green-500, .bg-green-600,
+  .bg-emerald-400, .bg-emerald-500, .bg-emerald-600,
+  .bg-lime-400, .bg-lime-500, .bg-teal-500, .bg-teal-600
+):is([class~="text-white"], [class~="text-black"]) {
+  background-color: rgb(var(--port-success)) !important;
+  color: rgb(var(--port-on-success)) !important;
+}
+
+html[data-port-theme] :is(
+  .bg-yellow-400, .bg-yellow-500, .bg-yellow-600,
+  .bg-amber-400, .bg-amber-500, .bg-amber-600,
+  .bg-orange-400, .bg-orange-500, .bg-orange-600
+):is([class~="text-white"], [class~="text-black"]) {
+  background-color: rgb(var(--port-warning)) !important;
+  color: rgb(var(--port-on-warning)) !important;
+}
+
+html[data-port-theme] :is(
+  .bg-red-400, .bg-red-500, .bg-red-600, .bg-red-700,
+  .bg-rose-400, .bg-rose-500, .bg-rose-600
+):is([class~="text-white"], [class~="text-black"]) {
+  background-color: rgb(var(--port-error)) !important;
+  color: rgb(var(--port-on-error)) !important;
+}
+
+html[data-port-theme] :is(
+  [class~="hover:bg-blue-400"], [class~="hover:bg-blue-500"], [class~="hover:bg-blue-600"],
+  [class~="hover:bg-cyan-400"], [class~="hover:bg-cyan-500"], [class~="hover:bg-sky-500"],
+  [class~="hover:bg-sky-600"], [class~="hover:bg-indigo-500"], [class~="hover:bg-indigo-600"]
+):hover { background-color: rgb(var(--port-accent)) !important; }
+
+html[data-port-theme] :is(
+  [class~="hover:bg-purple-400"], [class~="hover:bg-purple-500"], [class~="hover:bg-purple-600"],
+  [class~="hover:bg-violet-400"], [class~="hover:bg-violet-500"], [class~="hover:bg-violet-600"],
+  [class~="hover:bg-fuchsia-500"], [class~="hover:bg-pink-500"]
+):hover { background-color: rgb(var(--port-accent-2)) !important; }
+
+html[data-port-theme] :is(
+  [class~="hover:bg-green-400"], [class~="hover:bg-green-500"], [class~="hover:bg-green-600"],
+  [class~="hover:bg-emerald-400"], [class~="hover:bg-emerald-500"], [class~="hover:bg-emerald-600"],
+  [class~="hover:bg-lime-400"], [class~="hover:bg-lime-500"], [class~="hover:bg-teal-500"], [class~="hover:bg-teal-600"]
+):hover { background-color: rgb(var(--port-success)) !important; }
+
+html[data-port-theme] :is(
+  [class~="hover:bg-yellow-400"], [class~="hover:bg-yellow-500"], [class~="hover:bg-yellow-600"],
+  [class~="hover:bg-amber-400"], [class~="hover:bg-amber-500"], [class~="hover:bg-amber-600"],
+  [class~="hover:bg-orange-400"], [class~="hover:bg-orange-500"], [class~="hover:bg-orange-600"]
+):hover { background-color: rgb(var(--port-warning)) !important; }
+
+html[data-port-theme] :is(
+  [class~="hover:bg-red-400"], [class~="hover:bg-red-500"], [class~="hover:bg-red-600"], [class~="hover:bg-red-700"],
+  [class~="hover:bg-rose-400"], [class~="hover:bg-rose-500"], [class~="hover:bg-rose-600"]
+):hover { background-color: rgb(var(--port-error)) !important; }
+
+/* Shared neutral surface contract. Legacy dark gray utilities are common in
+   settings, diagnostics, and imported provider panels; treating them as
+   theme aliases keeps their text/background pairing readable in both modes.
+   White/black utilities are intentionally excluded because they are also used
+   for fixed media, scrims, and canvas chrome with their own contracts below. */
+html[data-port-theme] :is(.bg-gray-800, .bg-zinc-800, .bg-neutral-800, .bg-slate-800) {
+  background-color: rgb(var(--port-card) / var(--port-card-alpha)) !important;
+}
+
+html[data-port-theme] :is(.bg-gray-900, .bg-zinc-900, .bg-neutral-900, .bg-slate-900) {
+  background-color: rgb(var(--port-bg) / var(--port-bg-alpha)) !important;
+}
+
+html[data-port-theme] :is(.bg-gray-700, .bg-zinc-700, .bg-neutral-700, .bg-slate-700, .bg-gray-600, .bg-zinc-600, .bg-neutral-600, .bg-slate-600) {
+  background-color: var(--port-control-bg) !important;
+}
+
+html[data-port-theme] :is(.bg-gray-500, .bg-zinc-500, .bg-neutral-500, .bg-slate-500) {
+  background-color: var(--port-control-bg-hover) !important;
+}
+
 /* Every rounded/bordered CONTENT CARD gets the theme's card elevation, at any
    fill opacity. Listing only `/50` meant a card written `bg-port-card/40` — the
    other common spelling — silently lost both its shadow and its glass blur, so
@@ -495,6 +882,61 @@ html[data-port-theme] aside nav [aria-current="page"] {
   background: var(--port-active-bg) !important;
 }
 
+/* Tonal semantic surfaces keep their alpha/background treatment, but legacy
+   literal white/black ink must follow the semantic foreground role. This is
+   the safe pairing for /5 through /30 chips; higher-opacity fills use the
+   matching `--port-on-*` token above. */
+html[data-port-theme] :is(
+  [class~="bg-port-accent/5"], [class~="bg-port-accent/8"], [class~="bg-port-accent/10"],
+  [class~="bg-port-accent/15"], [class~="bg-port-accent/20"], [class~="bg-port-accent/25"], [class~="bg-port-accent/30"]
+):is(
+  [class~="text-white"], [class~="text-black"],
+  [class^="text-white/"], [class*=" text-white/"],
+  [class^="text-black/"], [class*=" text-black/"]
+) {
+  color: rgb(var(--port-accent-text)) !important;
+}
+html[data-port-theme] :is(
+  [class~="bg-port-accent-2/5"], [class~="bg-port-accent-2/10"], [class~="bg-port-accent-2/15"],
+  [class~="bg-port-accent-2/20"], [class~="bg-port-accent-2/25"], [class~="bg-port-accent-2/30"]
+):is(
+  [class~="text-white"], [class~="text-black"],
+  [class^="text-white/"], [class*=" text-white/"],
+  [class^="text-black/"], [class*=" text-black/"]
+) {
+  color: rgb(var(--port-accent-2-text)) !important;
+}
+html[data-port-theme] :is(
+  [class~="bg-port-success/5"], [class~="bg-port-success/10"], [class~="bg-port-success/15"],
+  [class~="bg-port-success/20"], [class~="bg-port-success/25"], [class~="bg-port-success/30"]
+):is(
+  [class~="text-white"], [class~="text-black"],
+  [class^="text-white/"], [class*=" text-white/"],
+  [class^="text-black/"], [class*=" text-black/"]
+) {
+  color: rgb(var(--port-success-text)) !important;
+}
+html[data-port-theme] :is(
+  [class~="bg-port-warning/5"], [class~="bg-port-warning/10"], [class~="bg-port-warning/15"],
+  [class~="bg-port-warning/20"], [class~="bg-port-warning/25"], [class~="bg-port-warning/30"]
+):is(
+  [class~="text-white"], [class~="text-black"],
+  [class^="text-white/"], [class*=" text-white/"],
+  [class^="text-black/"], [class*=" text-black/"]
+) {
+  color: rgb(var(--port-warning-text)) !important;
+}
+html[data-port-theme] :is(
+  [class~="bg-port-error/5"], [class~="bg-port-error/10"], [class~="bg-port-error/15"],
+  [class~="bg-port-error/20"], [class~="bg-port-error/25"], [class~="bg-port-error/30"]
+):is(
+  [class~="text-white"], [class~="text-black"],
+  [class^="text-white/"], [class*=" text-white/"],
+  [class^="text-black/"], [class*=" text-black/"]
+) {
+  color: rgb(var(--port-error-text)) !important;
+}
+
 html[data-port-theme] .bg-port-border {
   background: var(--port-control-bg) !important;
 }
@@ -526,11 +968,11 @@ html[data-port-theme] .bg-port-accent {
   box-shadow: var(--port-shadow-interactive);
 }
 
-html[data-port-theme] [class~="bg-port-accent"][class~="text-white"] {
+html[data-port-theme] [class~="bg-port-accent"]:is([class~="text-white"], [class~="text-black"]) {
   color: rgb(var(--port-on-accent)) !important;
 }
 
-html[data-port-theme] [class~="bg-port-success"][class~="text-white"] {
+html[data-port-theme] [class~="bg-port-success"]:is([class~="text-white"], [class~="text-black"]) {
   color: rgb(var(--port-on-success)) !important;
 }
 
@@ -542,15 +984,15 @@ html[data-port-theme] :is(
   .bg-green-400, .bg-green-500, .bg-green-600,
   .bg-emerald-400, .bg-emerald-500, .bg-emerald-600,
   .bg-lime-400, .bg-lime-500
-)[class~="text-white"] {
+):is([class~="text-white"], [class~="text-black"]) {
   color: rgb(var(--port-on-success)) !important;
 }
 
-html[data-port-theme] [class~="bg-port-warning"][class~="text-white"] {
+html[data-port-theme] [class~="bg-port-warning"]:is([class~="text-white"], [class~="text-black"]) {
   color: rgb(var(--port-on-warning)) !important;
 }
 
-html[data-port-theme] [class~="bg-port-error"][class~="text-white"] {
+html[data-port-theme] [class~="bg-port-error"]:is([class~="text-white"], [class~="text-black"]) {
   color: rgb(var(--port-on-error)) !important;
 }
 
@@ -685,21 +1127,8 @@ html[data-port-theme-mode="day"] [class~="border-slate-700/50"] {
   border-color: rgb(var(--port-border) / calc(var(--port-border-alpha) * 1.4)) !important;
 }
 
-/* Solid dark gray backgrounds (cards, modals, panels) — without these, pages
-   like DataDog/Jira/GitHub render dark cards under day-mode dark text. */
-html[data-port-theme-mode="day"] :is(.bg-gray-800, .bg-zinc-800, .bg-neutral-800, .bg-slate-800) {
-  background-color: rgb(var(--port-card) / var(--port-card-alpha)) !important;
-}
-
-html[data-port-theme-mode="day"] :is(.bg-gray-900, .bg-zinc-900, .bg-neutral-900, .bg-slate-900) {
-  background-color: rgb(var(--port-bg) / var(--port-bg-alpha)) !important;
-}
-
-/* Mid-gray surfaces — input wells, badges, secondary buttons, sub-sections.
-   Map to control-bg so they stay visually distinct from cards. */
-html[data-port-theme-mode="day"] :is(.bg-gray-700, .bg-zinc-700, .bg-neutral-700, .bg-slate-700, .bg-gray-600, .bg-zinc-600, .bg-neutral-600, .bg-slate-600) {
-  background-color: var(--port-control-bg) !important;
-}
+/* Day-mode alpha variants and interaction states need separate compositing
+   values; the solid neutral aliases live in the shared contract above. */
 
 /* Toggle off-state track. The global bg-gray-600 → --port-control-bg remap
    above turns ToggleSwitch's inactive track into the same cream as the page,
@@ -711,10 +1140,6 @@ html[data-port-theme-mode="day"] :is(.bg-gray-700, .bg-zinc-700, .bg-neutral-700
 }
 html[data-port-theme-mode="day"] .port-toggle-track-off {
   background-color: rgb(var(--port-text-muted) / 0.7) !important;
-}
-
-html[data-port-theme-mode="day"] :is(.bg-gray-500, .bg-zinc-500, .bg-neutral-500, .bg-slate-500) {
-  background-color: var(--port-control-bg-hover) !important;
 }
 
 html[data-port-theme-mode="day"] [class~="bg-gray-800/30"],
@@ -786,110 +1211,9 @@ html[data-port-theme-mode="day"] [class~="bg-indigo-500/20"] {
   background-color: rgb(var(--port-accent) / 0.18) !important;
 }
 
-html[data-port-theme-mode="day"] [class~="text-indigo-400"],
-html[data-port-theme-mode="day"] [class~="text-indigo-400/70"] {
-  color: rgb(var(--port-accent)) !important;
-}
-
-/* Day-mode chip + action-button text colors. The 100–500 Tailwind tones are
-   designed for dark-mode surfaces (e.g. `bg-cyan-500/20 text-cyan-400`, or
-   `bg-purple-600/30 text-purple-200`) — on the cream / white day backgrounds
-   they wash out to near-invisible and make enabled action buttons look
-   disabled. Remap to the 700 (or 800 for yellow, which stays warm at 700)
-   tone in the same hue family so each chip / button keeps its semantic color
-   but reads clearly. The 100/200 tints are remapped to the same dark target
-   as 300/400/500 so the only visible difference between an enabled and a
-   disabled button is the explicit `disabled:opacity-50` (or similar). */
-html[data-port-theme-mode="day"] [class~="text-cyan-100"],
-html[data-port-theme-mode="day"] [class~="text-cyan-200"],
-html[data-port-theme-mode="day"] [class~="text-cyan-300"],
-html[data-port-theme-mode="day"] [class~="text-cyan-400"],
-html[data-port-theme-mode="day"] [class~="text-cyan-500"] { color: rgb(14 116 144) !important; }
-html[data-port-theme-mode="day"] [class~="text-sky-100"],
-html[data-port-theme-mode="day"] [class~="text-sky-200"],
-html[data-port-theme-mode="day"] [class~="text-sky-300"],
-html[data-port-theme-mode="day"] [class~="text-sky-400"] { color: rgb(3 105 161) !important; }
-html[data-port-theme-mode="day"] [class~="text-blue-100"],
-html[data-port-theme-mode="day"] [class~="text-blue-200"],
-html[data-port-theme-mode="day"] [class~="text-blue-300"],
-html[data-port-theme-mode="day"] [class~="text-blue-400"] { color: rgb(29 78 216) !important; }
-html[data-port-theme-mode="day"] [class~="text-indigo-100"],
-html[data-port-theme-mode="day"] [class~="text-indigo-200"],
-html[data-port-theme-mode="day"] [class~="text-indigo-300"] { color: rgb(55 48 163) !important; }
-html[data-port-theme-mode="day"] [class~="text-purple-100"],
-html[data-port-theme-mode="day"] [class~="text-purple-200"],
-html[data-port-theme-mode="day"] [class~="text-purple-300"],
-html[data-port-theme-mode="day"] [class~="text-purple-400"],
-html[data-port-theme-mode="day"] [class~="text-purple-500"] { color: rgb(126 34 206) !important; }
-html[data-port-theme-mode="day"] [class~="text-violet-100"],
-html[data-port-theme-mode="day"] [class~="text-violet-200"],
-html[data-port-theme-mode="day"] [class~="text-violet-300"],
-html[data-port-theme-mode="day"] [class~="text-violet-400"] { color: rgb(109 40 217) !important; }
-html[data-port-theme-mode="day"] [class~="text-fuchsia-200"],
-html[data-port-theme-mode="day"] [class~="text-fuchsia-300"],
-html[data-port-theme-mode="day"] [class~="text-fuchsia-400"] { color: rgb(162 28 175) !important; }
-html[data-port-theme-mode="day"] [class~="text-pink-100"],
-html[data-port-theme-mode="day"] [class~="text-pink-200"],
-html[data-port-theme-mode="day"] [class~="text-pink-300"],
-html[data-port-theme-mode="day"] [class~="text-pink-400"],
-html[data-port-theme-mode="day"] [class~="text-pink-500"] { color: rgb(190 24 93) !important; }
-html[data-port-theme-mode="day"] [class~="text-rose-200"],
-html[data-port-theme-mode="day"] [class~="text-rose-300"],
-html[data-port-theme-mode="day"] [class~="text-rose-400"] { color: rgb(190 18 60) !important; }
-html[data-port-theme-mode="day"] [class~="text-red-100"],
-html[data-port-theme-mode="day"] [class~="text-red-200"],
-html[data-port-theme-mode="day"] [class~="text-red-300"],
-html[data-port-theme-mode="day"] [class~="text-red-400"],
-html[data-port-theme-mode="day"] [class~="text-red-500"] { color: rgb(185 28 28) !important; }
-html[data-port-theme-mode="day"] [class~="text-orange-100"],
-html[data-port-theme-mode="day"] [class~="text-orange-200"],
-html[data-port-theme-mode="day"] [class~="text-orange-300"],
-html[data-port-theme-mode="day"] [class~="text-orange-400"] { color: rgb(194 65 12) !important; }
-html[data-port-theme-mode="day"] [class~="text-amber-100"],
-html[data-port-theme-mode="day"] [class~="text-amber-200"],
-html[data-port-theme-mode="day"] [class~="text-amber-300"],
-html[data-port-theme-mode="day"] [class~="text-amber-400"],
-html[data-port-theme-mode="day"] [class~="text-amber-500"] { color: rgb(180 83 9) !important; }
-html[data-port-theme-mode="day"] [class~="text-yellow-100"],
-html[data-port-theme-mode="day"] [class~="text-yellow-200"],
-html[data-port-theme-mode="day"] [class~="text-yellow-300"],
-html[data-port-theme-mode="day"] [class~="text-yellow-400"],
-html[data-port-theme-mode="day"] [class~="text-yellow-500"] { color: rgb(133 77 14) !important; }
-html[data-port-theme-mode="day"] [class~="text-lime-200"],
-html[data-port-theme-mode="day"] [class~="text-lime-300"],
-html[data-port-theme-mode="day"] [class~="text-lime-400"] { color: rgb(77 124 15) !important; }
-html[data-port-theme-mode="day"] [class~="text-green-100"],
-html[data-port-theme-mode="day"] [class~="text-green-200"],
-html[data-port-theme-mode="day"] [class~="text-green-300"],
-html[data-port-theme-mode="day"] [class~="text-green-400"],
-html[data-port-theme-mode="day"] [class~="text-green-500"] { color: rgb(21 128 61) !important; }
-html[data-port-theme-mode="day"] [class~="text-emerald-100"],
-html[data-port-theme-mode="day"] [class~="text-emerald-200"],
-html[data-port-theme-mode="day"] [class~="text-emerald-300"],
-html[data-port-theme-mode="day"] [class~="text-emerald-400"],
-html[data-port-theme-mode="day"] [class~="text-emerald-500"] { color: rgb(4 120 87) !important; }
-html[data-port-theme-mode="day"] [class~="text-teal-200"],
-html[data-port-theme-mode="day"] [class~="text-teal-300"],
-html[data-port-theme-mode="day"] [class~="text-teal-400"] { color: rgb(15 118 110) !important; }
-
-/* hover: variants used on chips and buttons */
-html[data-port-theme-mode="day"] [class~="hover:text-cyan-300"]:hover,
-html[data-port-theme-mode="day"] [class~="hover:text-cyan-400"]:hover { color: rgb(14 116 144) !important; }
-html[data-port-theme-mode="day"] [class~="hover:text-blue-300"]:hover,
-html[data-port-theme-mode="day"] [class~="hover:text-blue-400"]:hover { color: rgb(29 78 216) !important; }
-html[data-port-theme-mode="day"] [class~="hover:text-purple-300"]:hover,
-html[data-port-theme-mode="day"] [class~="hover:text-purple-400"]:hover { color: rgb(126 34 206) !important; }
-html[data-port-theme-mode="day"] [class~="hover:text-pink-400"]:hover { color: rgb(190 24 93) !important; }
-html[data-port-theme-mode="day"] [class~="hover:text-red-300"]:hover,
-html[data-port-theme-mode="day"] [class~="hover:text-red-400"]:hover { color: rgb(185 28 28) !important; }
-html[data-port-theme-mode="day"] [class~="hover:text-orange-400"]:hover { color: rgb(194 65 12) !important; }
-html[data-port-theme-mode="day"] [class~="hover:text-amber-400"]:hover { color: rgb(180 83 9) !important; }
-html[data-port-theme-mode="day"] [class~="hover:text-yellow-300"]:hover,
-html[data-port-theme-mode="day"] [class~="hover:text-yellow-400"]:hover,
-html[data-port-theme-mode="day"] [class~="hover:text-yellow-500"]:hover { color: rgb(133 77 14) !important; }
-html[data-port-theme-mode="day"] [class~="hover:text-green-400"]:hover { color: rgb(21 128 61) !important; }
-html[data-port-theme-mode="day"] [class~="hover:text-emerald-400"]:hover { color: rgb(4 120 87) !important; }
-html[data-port-theme-mode="day"] [class~="hover:text-teal-400"]:hover { color: rgb(15 118 110) !important; }
+/* Legacy hue utilities are normalized by the shared foreground contract
+   above for both day and night. Keeping one rule set prevents a day-only
+   literal palette from drifting away from the eight theme tokens. */
 
 /* hover variants of near-white utilities — without these, hover:text-white on a
  * gray-on-light element flashes pure white-on-light and becomes unreadable
@@ -904,6 +1228,43 @@ html[data-port-theme-mode="day"] [class~="hover:text-gray-100"]:hover,
 html[data-port-theme-mode="day"] [class~="hover:text-slate-50"]:hover,
 html[data-port-theme-mode="day"] [class~="hover:text-slate-100"]:hover {
   color: rgb(var(--port-text)) !important;
+}
+
+/* Fixed black overlays are intentionally outside the theme surface palette
+ * (media scrims, lightbox controls, and timeline labels). Keep their light
+ * utility ink light in day mode instead of applying the page-text remap. */
+html[data-port-theme-mode="day"] :is(.bg-black, [class^="bg-black/"], [class*=" bg-black/"]):is(
+  [class~="text-white"], [class^="text-white/"], [class*=" text-white/"],
+  [class~="text-zinc-50"], [class~="text-zinc-100"], [class^="text-zinc-50/"], [class^="text-zinc-100/"], [class*=" text-zinc-50/"], [class*=" text-zinc-100/"],
+  [class~="text-neutral-50"], [class~="text-neutral-100"], [class^="text-neutral-50/"], [class^="text-neutral-100/"], [class*=" text-neutral-50/"], [class*=" text-neutral-100/"],
+  [class~="text-gray-50"], [class~="text-gray-100"], [class^="text-gray-50/"], [class^="text-gray-100/"], [class*=" text-gray-50/"], [class*=" text-gray-100/"],
+  [class~="text-slate-50"], [class~="text-slate-100"], [class^="text-slate-50/"], [class^="text-slate-100/"], [class*=" text-slate-50/"], [class*=" text-slate-100/"]
+) {
+  color: rgb(255 255 255) !important;
+}
+html[data-port-theme-mode="day"] :is(.bg-black, [class^="bg-black/"], [class*=" bg-black/"]):is(
+  [class~="text-zinc-200"], [class~="text-zinc-300"], [class^="text-zinc-200/"], [class^="text-zinc-300/"], [class*=" text-zinc-200/"], [class*=" text-zinc-300/"],
+  [class~="text-neutral-200"], [class~="text-neutral-300"], [class^="text-neutral-200/"], [class^="text-neutral-300/"], [class*=" text-neutral-200/"], [class*=" text-neutral-300/"],
+  [class~="text-gray-200"], [class~="text-gray-300"], [class^="text-gray-200/"], [class^="text-gray-300/"], [class*=" text-gray-200/"], [class*=" text-gray-300/"],
+  [class~="text-slate-200"], [class~="text-slate-300"], [class^="text-slate-200/"], [class^="text-slate-300/"], [class*=" text-slate-200/"], [class*=" text-slate-300/"]
+) {
+  color: rgb(212 212 216) !important;
+}
+html[data-port-theme-mode="day"] :is(.bg-black, [class^="bg-black/"], [class*=" bg-black/"]):is(
+  [class~="text-zinc-400"], [class~="text-zinc-500"], [class^="text-zinc-400/"], [class^="text-zinc-500/"], [class*=" text-zinc-400/"], [class*=" text-zinc-500/"],
+  [class~="text-neutral-400"], [class~="text-neutral-500"], [class^="text-neutral-400/"], [class^="text-neutral-500/"], [class*=" text-neutral-400/"], [class*=" text-neutral-500/"],
+  [class~="text-gray-400"], [class~="text-gray-500"], [class^="text-gray-400/"], [class^="text-gray-500/"], [class*=" text-gray-400/"], [class*=" text-gray-500/"],
+  [class~="text-slate-400"], [class~="text-slate-500"], [class^="text-slate-400/"], [class^="text-slate-500/"], [class*=" text-slate-400/"], [class*=" text-slate-500/"]
+) {
+  color: rgb(161 161 170) !important;
+}
+html[data-port-theme-mode="day"] :is(.bg-black, [class^="bg-black/"], [class*=" bg-black/"]):is(
+  [class*="hover:text-white"], [class*="hover:text-zinc-50"], [class*="hover:text-zinc-100"],
+  [class*="hover:text-neutral-50"], [class*="hover:text-neutral-100"],
+  [class*="hover:text-gray-50"], [class*="hover:text-gray-100"],
+  [class*="hover:text-slate-50"], [class*="hover:text-slate-100"]
+):hover {
+  color: rgb(255 255 255) !important;
 }
 
 /* Keep text contrast on always-dark panels (e.g. video overlays, 3D canvas control panels, HUDs) in day mode */

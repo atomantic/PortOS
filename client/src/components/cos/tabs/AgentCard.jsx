@@ -603,7 +603,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
             >
               <Terminal size={14} aria-hidden="true" className="shrink-0" />
               <span>Open Shell</span>
-              <span className="font-mono text-[10px] text-black/60">{agent.metadata.tuiSessionId.slice(0, 6)}</span>
+              <span className="font-mono text-[10px] text-port-on-success">{agent.metadata.tuiSessionId.slice(0, 6)}</span>
             </Link>
           )}
           {!remote && (
