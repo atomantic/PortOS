@@ -13,6 +13,7 @@ import { query, withTransaction } from '../lib/db.js';
 import {
   listPeople,
   createPerson,
+  createTouchpoint,
   normalizeTags,
   normalizeEmails,
   isoDate,
@@ -164,6 +165,32 @@ describe('tribe service — listPeople query builder', () => {
     expect(sql).toContain('ring = $1');
     expect(sql).toContain('ILIKE $2');
     expect(params).toEqual(['core', '%ada%']);
+  });
+});
+
+describe('tribe service — createTouchpoint', () => {
+  beforeEach(() => {
+    query.mockReset();
+    withTransaction.mockReset();
+  });
+
+  it('persists the browser-local date independently from the UTC timestamp', async () => {
+    query.mockResolvedValue({ rows: [{ id: 'person-1', name: 'Example Person', ring: 'tribe', cadence_days: 45 }] });
+    const clientQuery = vi.fn()
+      .mockResolvedValueOnce({ rows: [{ id: 'touch-1', person_id: 'person-1', happened_at: '2026-01-02T04:00:00.000Z' }] })
+      .mockResolvedValueOnce({ rows: [] });
+    withTransaction.mockImplementation(async (fn) => fn({ query: clientQuery }));
+
+    await createTouchpoint('person-1', {
+      happenedAt: '2026-01-02T04:00:00.000Z',
+      localDate: '2026-01-01',
+    });
+
+    expect(clientQuery).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('SET last_contact_on'),
+      ['person-1', '2026-01-01', ''],
+    );
   });
 });
 

@@ -125,6 +125,7 @@ describe('Tribe Routes', () => {
       .post(`/api/tribe/people/${PERSON_ID}/touchpoints`)
       .send({
         happenedAt: '2026-06-18T15:00:00.000Z',
+        localDate: '2026-06-19',
         source: 'calendar',
         calendarAccountId: ACCOUNT_ID,
         calendarEventId: 'event-1',
@@ -135,10 +136,20 @@ describe('Tribe Routes', () => {
     expect(response.body.calendarEventId).toBe('event-1');
     expect(tribe.createTouchpoint).toHaveBeenCalledWith(PERSON_ID, expect.objectContaining({
       source: 'calendar',
+      localDate: '2026-06-19',
       calendarAccountId: ACCOUNT_ID,
       calendarEventId: 'event-1',
       metadata: { title: 'Walk' },
     }));
+  });
+
+  it('rejects an invalid local date on a manual touchpoint', async () => {
+    const response = await request(app)
+      .post(`/api/tribe/people/${PERSON_ID}/touchpoints`)
+      .send({ localDate: '06/19/2026' });
+
+    expect(response.status).toBe(400);
+    expect(tribe.createTouchpoint).not.toHaveBeenCalled();
   });
 
   it('creates touchpoints from calendar events', async () => {

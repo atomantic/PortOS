@@ -335,6 +335,8 @@ export async function createTouchpoint(personId, data = {}) {
   await ensureReady();
   const person = await getPerson(personId);
   if (!person) throw new ServerError('Person not found', { status: 404 });
+  const happenedAt = data.happenedAt || new Date().toISOString();
+  const contactDate = data.localDate || happenedAt;
 
   return withTransaction(async (client) => {
     const result = await client.query(
@@ -346,7 +348,7 @@ export async function createTouchpoint(personId, data = {}) {
       [
         data.id || uuidv4(),
         personId,
-        data.happenedAt || new Date().toISOString(),
+        happenedAt,
         data.channel || '',
         data.summary || '',
         data.source || 'user',
@@ -362,7 +364,7 @@ export async function createTouchpoint(personId, data = {}) {
            channel = CASE WHEN $3::text = '' THEN channel ELSE $3::text END,
            updated_at = NOW()
        WHERE id = $1`,
-      [personId, data.happenedAt || new Date().toISOString(), data.channel || ''],
+      [personId, contactDate, data.channel || ''],
     );
     return rowToTouchpoint(result.rows[0]);
   });

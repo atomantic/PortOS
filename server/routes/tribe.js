@@ -40,6 +40,7 @@ const personUpdateSchema = partialWithoutDefaults(personSchema).extend({
 
 const touchpointSchema = z.object({
   happenedAt: z.string().datetime().optional(),
+  localDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   channel: z.string().max(200).optional().default(''),
   summary: z.string().max(2000).optional().default(''),
   source: z.enum(['user', 'calendar', 'message', 'import']).optional().default('user'),

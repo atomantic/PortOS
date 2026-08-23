@@ -28,7 +28,7 @@ export default function ReviewTab() {
   const changeDate = (delta) => {
     const d = new Date(date + 'T12:00:00');
     d.setDate(d.getDate() + delta);
-    setDate(d.toISOString().slice(0, 10));
+    setDate(localDateStr(d));
   };
 
   const handleConfirm = async (event, happened) => {

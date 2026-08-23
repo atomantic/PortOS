@@ -156,7 +156,11 @@ describe('Tribe care filter', () => {
     await screen.findByText('Example Person');
     fireEvent.click(screen.getAllByRole('button', { name: 'Touch' })[0]);
 
-    await waitFor(() => expect(api.createTribeTouchpoint).toHaveBeenCalled());
+    await waitFor(() => expect(api.createTribeTouchpoint).toHaveBeenCalledWith(
+      'p1',
+      expect.objectContaining({ localDate: '2026-01-01' }),
+      { silent: true },
+    ));
     expect(screen.getByText('Last 2026-01-01')).toBeTruthy();
   });
 });

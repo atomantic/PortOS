@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../services/api', () => ({
@@ -15,6 +15,7 @@ import ReviewTab from './ReviewTab';
 describe('ReviewTab', () => {
   afterEach(() => {
     vi.useRealTimers();
+    process.env.TZ = 'UTC';
   });
 
   it('defaults to the local calendar date', async () => {
@@ -25,5 +26,18 @@ describe('ReviewTab', () => {
     await waitFor(() => expect(api.getDailyReview).toHaveBeenCalledWith('2026-01-01'));
     expect(screen.getByLabelText('Review date').value).toBe('2026-01-01');
     expect(screen.queryByRole('button', { name: 'Today' })).toBeNull();
+  });
+
+  it('navigates by local calendar day in positive UTC offsets', async () => {
+    process.env.TZ = 'Pacific/Kiritimati';
+    vi.setSystemTime(new Date(2026, 0, 1, 20));
+
+    render(<ReviewTab />);
+    await waitFor(() => expect(api.getDailyReview).toHaveBeenCalledWith('2026-01-01'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+
+    await waitFor(() => expect(api.getDailyReview).toHaveBeenCalledWith('2026-01-02'));
+    expect(screen.getByLabelText('Review date').value).toBe('2026-01-02');
   });
 });

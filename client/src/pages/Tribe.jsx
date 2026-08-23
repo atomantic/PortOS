@@ -1111,9 +1111,11 @@ export default function Tribe() {
   };
 
   const logTouch = async (id) => {
-    const date = localDateStr();
+    const now = new Date();
+    const date = localDateStr(now);
     const result = await api.createTribeTouchpoint(id, {
-      happenedAt: new Date().toISOString(),
+      happenedAt: now.toISOString(),
+      localDate: date,
       channel: contacts.find((contact) => contact.id === id)?.channel || '',
       summary: 'Manual touchpoint',
       source: 'user',
