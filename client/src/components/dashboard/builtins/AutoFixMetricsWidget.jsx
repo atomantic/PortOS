@@ -68,12 +68,12 @@ function TrendSparkline({ trend }) {
       <polyline
         points={coords.join(' ')}
         fill="none"
-        stroke="rgb(var(--port-accent))"
+        style={{ stroke: 'rgb(var(--port-accent))' }}
         strokeWidth="1.5"
         strokeLinejoin="round"
         strokeLinecap="round"
       />
-      <circle cx={lastX} cy={lastY} r="2" fill="rgb(var(--port-accent))" />
+      <circle cx={lastX} cy={lastY} r="2" style={{ fill: 'rgb(var(--port-accent))' }} />
     </svg>
   );
 }

@@ -278,7 +278,7 @@ body {
 @utility max-h-dvh-cap {
   max-height: min(var(--dvh-cap, 100vh), calc(100vh - var(--dvh-inset, 0px)));
   @supports (height: 1dvh) {
-    max-height: min(var(--dvh-cap, 100dvh), calc(100dvh - var(--dvh-inset, 0px)));
+    max-height: min(var(--dvh-cap-dynamic, var(--dvh-cap, 100dvh)), calc(100dvh - var(--dvh-inset, 0px)));
   }
 }
 @utility min-h-dvh-cap {
