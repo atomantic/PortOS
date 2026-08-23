@@ -319,7 +319,12 @@ CREATE TABLE IF NOT EXISTS catalog_ingredients (
 -- below inspects pg_attrdef and only drops when the existing expression is
 -- missing a v2-only field (`physicalDescription`) — fresh runs of this script
 -- skip the drop entirely (column absent), already-v2 installs skip it too, and
--- only an upgrading v1 install pays the table-rewrite cost. ensureSchema in
+-- only an upgrading v1 install pays the table-rewrite cost. That rewrite takes
+-- an ACCESS EXCLUSIVE lock for its duration; this is deliberately accepted at
+-- boot because Postgres cannot alter a STORED generation expression in place
+-- and the catalog schema must be complete before the server becomes ready.
+-- Operators with unusually large catalogs should schedule the upgrade as
+-- maintenance; docs/STORAGE.md carries the decision and runbook. ensureSchema in
 -- server/lib/db.js mirrors the same gate. PORTOS_SCHEMA_VERSIONS.catalog is
 -- bumped to 2 in lockstep so older peers can't push pre-expansion-shape rows
 -- that would mismatch the indexed expression.

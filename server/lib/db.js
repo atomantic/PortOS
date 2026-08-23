@@ -359,7 +359,7 @@ async function ensureSchemaImpl() {
   //   withTransaction() block, so CREATE INDEX CONCURRENTLY CANNOT run there
   //   either — it must be issued from a dedicated non-transactional path (a
   //   standalone maintenance script / manual step run outside any transaction).
-  //   See docs/STORAGE.md ("Boot schema upgrades & the CREATE INDEX lock window").
+  //   See docs/STORAGE.md ("Boot schema upgrades & lock windows").
   const upgrades = buildUpgradeDdl();
   for (const sql of upgrades) {
     await pool.query(sql);

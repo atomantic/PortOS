@@ -82,7 +82,12 @@ export const catalogDdl = [
     // when the current generation expression is missing a v2-only field
     // (`physicalDescription`). That keeps boot O(1) on already-v2 installs —
     // an unconditional DROP+ADD would AccessExclusive-lock the table, rewrite
-    // every row, and rebuild the GIN index on every server start.
+    // every row, and rebuild the GIN index on every server start. The one v1 ->
+    // v2 rewrite deliberately accepts that boot-time lock: Postgres cannot alter
+    // a STORED generation expression in place, and the catalog schema must be
+    // complete before the server becomes ready. Operators with unusually large
+    // catalogs should schedule that upgrade as maintenance; see docs/STORAGE.md
+    // ("Boot schema upgrades & lock windows") for the decision and runbook.
     // Fresh installs (no column yet) fall through to the ADD IF NOT EXISTS
     // below and skip the DROP entirely.
     `DO $$

@@ -157,7 +157,7 @@ The escape hatch is **guarded from bitrot by the test suite** (tests boot with `
 
 `PGPASSWORD`/`PGUSER`/`PGDATABASE`/`PGPORT` are resolved from `process.env` first, then `.env`, then the backward-compatible defaults (`portos`/`portos`/`portos`/`5432`). The default `portos` password is an **intentional** local-development fallback (see the Distribution model note in [`AGENTS.md`](../AGENTS.md)); production deployments override it via `PGPASSWORD`.
 
-### Boot schema upgrades & the CREATE INDEX lock window
+### Boot schema upgrades & lock windows
 
 `ensureSchema()` in `server/lib/db.js` applies **idempotent** schema upgrades on every boot (`CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`). Every index it creates — including the HNSW vector index and the GIN full-text index on `catalog_scraps` — is a plain, **non-`CONCURRENT`** build.
 
@@ -166,6 +166,19 @@ The **first** time a given index materializes on a table that **already holds ma
 This is left as-is deliberately rather than switched to `CREATE INDEX CONCURRENTLY`, because `CONCURRENTLY` cannot run inside a transaction block, needs its own retry/cleanup path (a failed concurrent build leaves an `INVALID` index that must be dropped by hand), and roughly doubles build time — too fragile to run unattended on every boot for a stall that only bites large-table upgrades.
 
 **If a future index must land on a table known to already carry a large row count on existing installs,** note that the standard db-migration runner (`server/scripts/run-db-migrations.js`) wraps every migration in a `withTransaction()` block — so `CREATE INDEX CONCURRENTLY` **cannot** run there either. It would have to be issued from a dedicated **non-transactional** path (a standalone maintenance script or manual step run outside any transaction), not from `ensureSchema()` or a standard db-migration.
+
+#### Catalog generated-column rewrite
+
+Catalog schema v2 expanded `catalog_ingredients.search_tsv`, a stored generated column, to index `physicalDescription`. PostgreSQL cannot alter a stored generation expression in place, so the compatibility path drops and re-adds the column on an upgrading v1 install. Adding it back computes the value for every existing ingredient and holds an `ACCESS EXCLUSIVE` lock on `catalog_ingredients` for the rewrite; the following GIN index recreation adds its own write-blocking build window. Reads and writes that reach this table from another still-running PortOS process wait behind those locks.
+
+PortOS deliberately accepts this **one-time, boot-time maintenance window** instead of carrying a second shadow column, trigger, batched-backfill checkpoint, and recovery protocol indefinitely. The expression check in both schema sources makes the path bounded by state: fresh installs add the column to an empty table, v2 installs skip the rewrite, and only a pre-v2 catalog pays the row-proportional cost. `ensureSchema()` completes before the new server reports ready, so it never exposes a partially upgraded catalog.
+
+For an install with an unusually large pre-v2 catalog, treat the update as planned maintenance:
+
+1. Take a normal PortOS backup before updating.
+2. Stop other PortOS processes that can use the same PostgreSQL database; federated peers use their own databases and upgrade independently.
+3. Run the normal update during a low-use window and allow startup to finish without interruption. There is no safe universal duration estimate: row count, payload size, disk speed, and PostgreSQL settings all affect the rewrite.
+4. Wait for the `Database schema upgrades applied` startup log before resuming use. If startup is interrupted, rerun the normal startup; the expression gate and `IF NOT EXISTS` statements safely converge on the v2 shape.
 
 ---
 
