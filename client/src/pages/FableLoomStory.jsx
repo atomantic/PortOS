@@ -295,7 +295,7 @@ export default function FableLoomStory() {
               </div>
             )}
           </section>
-          <aside className="lg:w-[380px] lg:shrink-0 max-h-[45vh] lg:max-h-none border-t lg:border-t-0 lg:border-l border-port-border overflow-y-auto">
+          <aside className="lg:w-[380px] lg:shrink-0 max-h-[45dvh] lg:max-h-none border-t lg:border-t-0 lg:border-l border-port-border overflow-y-auto">
             {node ? (
               <LoomNodeEditor
                 key={node.id}
