@@ -132,7 +132,12 @@ const clampFades = (fadeInSec, fadeOutSec, duration, label) => {
 // `ffmpeg exit 1`; refusing them here turns that into a 400 naming the field.
 const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp'];
 const AUDIO_EXTENSIONS = ['.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg', '.opus'];
-const extensionsFor = (kinds) => (kinds === AUDIO_ASSET_KINDS ? AUDIO_EXTENSIONS : IMAGE_EXTENSIONS);
+const EXTENSIONS_BY_KIND = {
+  images: IMAGE_EXTENSIONS,
+  'video-thumbnails': IMAGE_EXTENSIONS,
+  audio: AUDIO_EXTENSIONS,
+  music: AUDIO_EXTENSIONS,
+};
 
 const assetFields = (raw, allowedKinds, label) => {
   const assetKind = String(raw.assetKind || '').trim();
@@ -146,7 +151,7 @@ const assetFields = (raw, allowedKinds, label) => {
   if (!assetPathFor(assetKind, assetFile)) {
     throw bad(`${label}: assetFile must be a plain filename inside data/${assetKind}`);
   }
-  const extensions = extensionsFor(allowedKinds);
+  const extensions = EXTENSIONS_BY_KIND[assetKind];
   if (!extensions.some((ext) => assetFile.toLowerCase().endsWith(ext))) {
     throw bad(`${label}: assetFile must be one of ${extensions.join(', ')}`);
   }

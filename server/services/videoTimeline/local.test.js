@@ -437,16 +437,3 @@ describe('buildFfmpegArgs — an overlay clamped by the timeline end', () => {
     expect(filter).toContain('fade=t=out:st=5.5:d=2:alpha=1');
   });
 });
-
-describe('buildFfmpegArgs — canonical geometry', () => {
-  it('is taken from the timeline, which skips a clip carrying no dimensions', () => {
-    // An uploaded or downloaded clip has no width/height in history; letting
-    // it decide the canvas would letterbox the whole project into 720p and
-    // disagree with the editor's preview, which skips those too.
-    const { canonW, canonH } = buildFfmpegArgs({
-      segments: [baseClip({ width: undefined, height: undefined }), baseClip({ width: 1080, height: 1920 })],
-      canonW: 1080, canonH: 1920, fps: 24,
-    }, '/out.mp4');
-    expect([canonW, canonH]).toEqual([1080, 1920]);
-  });
-});

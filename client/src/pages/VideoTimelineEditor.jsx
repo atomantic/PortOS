@@ -242,7 +242,20 @@ export default function VideoTimelineEditor() {
   // Save the whole timeline (debounced via the caller). The server validates
   // and returns the canonical project; we only update updatedAt and preserve
   // local _keys to avoid blowing away the dnd identity.
-  const saveTimeline = useCallback(async (next) => {
+  // Every PATCH from this editor — a lane save, a rename — chains onto one
+  // tail. All of them assert `expectedUpdatedAt`, so two in flight together
+  // means the second is guaranteed a 409 even though nothing outside the
+  // editor changed; if the loser is a lane save, its reload discards the edit
+  // the user just made. Serializing here mirrors the server's own single-tail
+  // write queue and leaves 409 meaning what it should: someone ELSE wrote.
+  const writeTailRef = useRef(Promise.resolve());
+  const queueWrite = useCallback((fn) => {
+    const next = writeTailRef.current.then(fn, fn);
+    writeTailRef.current = next.catch(() => {});
+    return next;
+  }, []);
+
+  const saveTimeline = useCallback((next) => queueWrite(async () => {
     if (updatedAtRef.current == null) return false;
     const updated = await api.updateTimelineProject(projectId, {
       ...timelinePatch(next),
@@ -260,7 +273,7 @@ export default function VideoTimelineEditor() {
     updatedAtRef.current = updated.updatedAt;
     setProject((p) => ({ ...p, updatedAt: updated.updatedAt }));
     return true;
-  }, [projectId, refresh]);
+  }), [projectId, refresh, queueWrite]);
 
   // Debounced save: trim/fade edits fire many PATCHes per drag if we don't
   // batch them. 400ms gives the user time to stop fiddling before we hit the
@@ -296,20 +309,20 @@ export default function VideoTimelineEditor() {
   // gate 400s the whole PATCH, so one entry over the limit makes EVERY
   // subsequent debounced save fail with a message that names no lane, and the
   // user has to guess which one to trim.
+  //
+  // The decision reads `lanes` directly, NOT a flag set inside the setState
+  // updater — React only runs an updater eagerly when the fiber has no pending
+  // work, and the rAF playhead loop keeps work pending throughout playback, so
+  // such a flag would still be false when read and report a spurious "limit
+  // reached" on a perfectly good add.
   const addToLane = useCallback((lane, entry) => {
-    let added = false;
-    updateLanes((prev) => {
-      const entries = laneEntries(prev, lane);
-      if (entries.length >= LANE_CAPS[lane].max) return prev;
-      added = true;
-      return withLaneEntries(prev, lane, [...entries, entry]);
-    });
-    if (!added) {
+    if (laneEntries(lanes, lane).length >= LANE_CAPS[lane].max) {
       toast.error(`${LANE_CAPS[lane].label} limit reached (${LANE_CAPS[lane].max}) — remove one first`);
       return;
     }
+    updateLanes((prev) => withLaneEntries(prev, lane, [...laneEntries(prev, lane), entry]));
     setSelection({ lane, key: entry._key });
-  }, [updateLanes]);
+  }, [lanes, updateLanes]);
 
   const removeFromLane = useCallback((lane, key) => {
     updateLanes((prev) => withLaneEntries(prev, lane, laneEntries(prev, lane).filter((e) => e._key !== key)));
@@ -691,22 +704,27 @@ export default function VideoTimelineEditor() {
             aria-label="Project name"
             value={nameDraft}
             onChange={(e) => setNameDraft(e.target.value)}
-            onBlur={async (e) => {
+            onBlur={(e) => {
               const trimmed = e.target.value.trim();
               if (!trimmed) { setNameDraft(project.name); return; }
               if (trimmed === project.name) return;
-              const updated = await api.updateTimelineProject(projectId, {
-                name: trimmed, expectedUpdatedAt: updatedAtRef.current,
-              }, { silent: true }).catch((err) => {
-                toast.error(`Rename failed: ${err.message}`);
-                setNameDraft(project.name);
-                return null;
+              // Through the same tail as the lane saves — see queueWrite. The
+              // expectedUpdatedAt read has to happen INSIDE the queued fn, or
+              // it captures a value the preceding write has already replaced.
+              queueWrite(async () => {
+                const updated = await api.updateTimelineProject(projectId, {
+                  name: trimmed, expectedUpdatedAt: updatedAtRef.current,
+                }, { silent: true }).catch((err) => {
+                  toast.error(`Rename failed: ${err.message}`);
+                  setNameDraft(project.name);
+                  return null;
+                });
+                if (updated) {
+                  updatedAtRef.current = updated.updatedAt;
+                  setProject((p) => ({ ...p, name: updated.name, updatedAt: updated.updatedAt }));
+                  setNameDraft(updated.name);
+                }
               });
-              if (updated) {
-                updatedAtRef.current = updated.updatedAt;
-                setProject((p) => ({ ...p, name: updated.name, updatedAt: updated.updatedAt }));
-                setNameDraft(updated.name);
-              }
             }}
             className="bg-transparent text-white font-medium text-lg focus:outline-none focus:bg-port-card focus:px-2 rounded transition-all"
           />
