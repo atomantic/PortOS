@@ -8,7 +8,7 @@
  * would re-render (and, in the video lane, re-run `useSortable`) 60×/s.
  */
 
-import { memo } from 'react';
+import { memo, useEffect, useRef } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { X, Film, Plus, Music } from 'lucide-react';
 import { dndTransformToCss } from '../../lib/dndTransform';
@@ -265,3 +265,30 @@ export const AudioRow = memo(function AudioRow({ track, onAdd }) {
     </div>
   );
 });
+
+/**
+ * One hidden `<audio>` element for a bed track, registered in the editor's
+ * playback registry for as long as it is mounted.
+ *
+ * A component rather than an inline `ref` callback so the registration is tied
+ * to the element's LIFETIME, not to render identity: an inline
+ * `ref={(el) => ...}` is a fresh function every render, so React detaches and
+ * re-attaches it on each frame of playback — and its `el === null` call, which
+ * is also how a genuine removal arrives, can't tell the two apart. Unmount is
+ * unambiguous, so this is where a removed bed gets paused; a detached but still
+ * playing `<audio>` keeps producing sound in some browsers.
+ */
+export function BedAudio({ trackKey, src, registry }) {
+  const elRef = useRef(null);
+  useEffect(() => {
+    const el = elRef.current;
+    if (!el) return undefined;
+    registry.set(trackKey, el);
+    return () => {
+      el.pause();
+      registry.delete(trackKey);
+    };
+  }, [trackKey, registry]);
+  if (!src) return null;
+  return <audio ref={elRef} src={src} preload="auto" className="hidden" />;
+}

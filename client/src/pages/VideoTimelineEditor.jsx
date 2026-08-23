@@ -21,7 +21,7 @@ import * as api from '../services/api';
 import { formatTimecode, clamp } from '../utils/formatters';
 import { useSseProgress, isTerminalSseFrame } from '../hooks/useSseProgress';
 import {
-  TimelineBlock, FloatingLane, LibraryTile, StillTile, AudioRow,
+  TimelineBlock, FloatingLane, LibraryTile, StillTile, AudioRow, BedAudio,
 } from '../components/media/VideoTimelineLanes';
 import { NumberField, FadeFields, RemoveButton } from '../components/media/VideoTimelineInspector';
 import {
@@ -471,10 +471,6 @@ export default function VideoTimelineEditor() {
 
   // Drive the bed <audio> elements from the same playhead the export mixes
   // against, so what the user hears while scrubbing is what amix will produce.
-  const setBedRef = useCallback((key) => (el) => {
-    if (el) bedRefs.current.set(key, el);
-    else bedRefs.current.delete(key);
-  }, []);
   useEffect(() => {
     for (const track of audio.tracks) {
       const el = bedRefs.current.get(track._key);
@@ -781,6 +777,18 @@ export default function VideoTimelineEditor() {
             {activeStillSrc && (
               <img src={activeStillSrc} alt="" className="absolute inset-0 w-full h-full object-contain" />
             )}
+            {/* The segment fade scrim sits UNDER the overlay lane, matching the
+                export: ffmpeg fades each segment before concat and composites
+                overlays afterwards, so a fade dims the base video and leaves
+                the overlay at its own opacity. */}
+            {activeFadeScrim > 0 && (
+              <div
+                data-testid="fade-scrim"
+                aria-hidden="true"
+                style={{ opacity: activeFadeScrim }}
+                className="absolute inset-0 bg-black pointer-events-none"
+              />
+            )}
             {/* Overlay lane, composited exactly as ffmpeg will: normalized
                 position/width against the canvas, alpha from the same ramp.
                 Every overlay stays MOUNTED and rides its opacity to zero —
@@ -796,14 +804,6 @@ export default function VideoTimelineEditor() {
                 className="absolute pointer-events-none"
               />
             ) : null))}
-            {activeFadeScrim > 0 && (
-              <div
-                data-testid="fade-scrim"
-                aria-hidden="true"
-                style={{ opacity: activeFadeScrim }}
-                className="absolute inset-0 bg-black pointer-events-none"
-              />
-            )}
             {segments.length === 0 && (
               <div className="absolute inset-0 flex items-center justify-center text-gray-500 text-sm">
                 Add clips to start
@@ -812,19 +812,14 @@ export default function VideoTimelineEditor() {
           </div>
 
           {/* Bed playback elements. Hidden — the timeline lane is the UI. */}
-          {audio.tracks.map((track) => {
-            const src = assetUrl(track.assetKind, track.assetFile);
-            if (!src) return null;
-            return (
-              <audio
-                key={track._key}
-                ref={setBedRef(track._key)}
-                src={src}
-                preload="auto"
-                className="hidden"
-              />
-            );
-          })}
+          {audio.tracks.map((track) => (
+            <BedAudio
+              key={track._key}
+              trackKey={track._key}
+              src={assetUrl(track.assetKind, track.assetFile)}
+              registry={bedRefs.current}
+            />
+          ))}
 
           <div className="flex items-center gap-2 text-xs text-gray-400">
             <button

@@ -18,7 +18,7 @@ vi.mock('@dnd-kit/sortable', async () => {
   };
 });
 
-import { TimelineBlock, LaneBlock, FloatingLane } from './VideoTimelineLanes';
+import { TimelineBlock, LaneBlock, FloatingLane, BedAudio } from './VideoTimelineLanes';
 
 const clip = { _key: 'clip-key', clipId: 'clip-1', inSec: 0, outSec: 2 };
 const clipMeta = { prompt: 'A dramatic sunrise' };
@@ -219,5 +219,35 @@ describe('FloatingLane', () => {
     // carries that as a `hover:` variant.
     expect(screen.getByText('badge.png').closest('div').className).toContain('bg-port-accent/20');
     expect(screen.getByText('logo.png').closest('div').className).not.toContain('bg-port-accent/20');
+  });
+});
+
+describe('BedAudio — registration is tied to the element lifetime', () => {
+  it('registers on mount and pauses + deregisters on unmount', () => {
+    const registry = new Map();
+    const { unmount, rerender } = render(<BedAudio trackKey="bed-1" src="/data/music/bed.mp3" registry={registry} />);
+
+    const el = registry.get('bed-1');
+    expect(el).toBeInstanceOf(HTMLAudioElement);
+    const pause = vi.spyOn(el, 'pause');
+
+    // A re-render (which happens every animation frame during playback) must
+    // NOT be mistaken for a removal.
+    rerender(<BedAudio trackKey="bed-1" src="/data/music/bed.mp3" registry={registry} />);
+    expect(registry.get('bed-1')).toBe(el);
+    expect(pause).not.toHaveBeenCalled();
+
+    // Removing the bed is what stops it — a detached but still-playing
+    // <audio> keeps producing sound in some browsers.
+    unmount();
+    expect(pause).toHaveBeenCalled();
+    expect(registry.has('bed-1')).toBe(false);
+  });
+
+  it('renders nothing for an unresolvable asset', () => {
+    const registry = new Map();
+    const { container } = render(<BedAudio trackKey="bed-1" src={null} registry={registry} />);
+    expect(container.querySelector('audio')).toBeNull();
+    expect(registry.size).toBe(0);
   });
 });

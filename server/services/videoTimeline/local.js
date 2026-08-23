@@ -28,6 +28,7 @@ import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { attachFfmpegRenderGuard } from '../../lib/ffmpegRenderGuard.js';
 import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
+import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { loadHistory, mutateVideoHistory } from '../videoGen/local.js';
 import {
   TIMELINE_SCHEMA_VERSION,
@@ -98,6 +99,14 @@ export const loadProjects = async () => {
   // migration missed (a restored backup, a hand-edited file) working anyway.
   return (await loadRawProjects()).map(normalizeProject);
 };
+// Every mutator read-modify-writes ONE shared file, so they share ONE tail:
+// each waits for the previous to settle before it reads, and therefore merges
+// against the freshest persisted state. Without it two concurrent PATCHes — a
+// debounced lane save and the flush Render issues — can both read the same
+// `updatedAt`, both pass the conflict check, and the later write silently
+// erases the earlier one's lane (server/AGENTS.md, "write serialization").
+const queueProjectWrite = createFileWriteQueue();
+
 const saveProjects = async (projects) => {
   // First write on a fresh install lands before PATHS.data is created by any
   // other service — without ensureDir it would ENOENT on the temp-file write
@@ -115,7 +124,9 @@ export async function getProject(id) {
   return project ? normalizeProject(project) : null;
 }
 
-export async function createProject(name) {
+export const createProject = (name) => queueProjectWrite(() => createProjectNow(name));
+
+async function createProjectNow(name) {
   const trimmed = (name || '').trim();
   if (!trimmed) throw new ServerError('Project name required', { status: 400, code: 'VALIDATION_ERROR' });
   const projects = await loadProjects();
@@ -143,7 +154,11 @@ export async function createProject(name) {
 // client-supplied numFrames/fps here either; those come from the history
 // entry at render time.
 
-export async function updateProject(id, patch, expectedUpdatedAt) {
+export const updateProject = (id, patch, expectedUpdatedAt) => queueProjectWrite(
+  () => updateProjectNow(id, patch, expectedUpdatedAt),
+);
+
+async function updateProjectNow(id, patch, expectedUpdatedAt) {
   const projects = await loadProjects();
   const idx = projects.findIndex((p) => p.id === id);
   if (idx === -1) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
@@ -203,7 +218,9 @@ export async function updateProject(id, patch, expectedUpdatedAt) {
   return project;
 }
 
-export async function deleteProject(id) {
+export const deleteProject = (id) => queueProjectWrite(() => deleteProjectNow(id));
+
+async function deleteProjectNow(id) {
   // Only ids are compared here — nothing to normalize.
   const projects = await loadRawProjects();
   const filtered = projects.filter((p) => p.id !== id);

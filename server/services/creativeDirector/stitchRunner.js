@@ -70,7 +70,12 @@ export async function runStitch(projectId) {
       timeline = await createTimelineProject(`${project.name} — Final Cut`);
       await updateProject(projectId, { timelineProjectId: timeline.id });
     }
-    await updateTimelineProject(timeline.id, { clips });
+    // Send the v2 video lane, not the legacy `clips` mirror: a reused timeline
+    // the user has since layered (a still, a fade, a clip volume) refuses a
+    // clips-only save with SCHEMA_TOO_NEW, which would fail the whole retry.
+    // The accepted scenes ARE the cut, so the lane is replaced wholesale — but
+    // as clip segments, which can carry those fields.
+    await updateTimelineProject(timeline.id, { segments: clips.map((c) => ({ type: 'clip', ...c })) });
 
     const { jobId } = await renderTimelineProject(timeline.id);
 
