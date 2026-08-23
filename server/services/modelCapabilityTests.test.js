@@ -211,6 +211,24 @@ describe('runCapabilityTest — story outline', () => {
   });
 });
 
+describe('runCapabilityTest — fiction scene', () => {
+  it('keeps the scene and returns the structural craft score', async () => {
+    runLocalLlmTest.mockResolvedValue({
+      text: [
+        'The tidal marsh smelled of mud as the oyster farmer watched the dying beds.',
+        'She waded to the sea wall and pulled the gate open.',
+        '“No,” she said, as black water spilled through the breach.',
+      ].join('\n\n'),
+      timings: null,
+    });
+    const record = await runCapabilityTest({ backend: 'ollama', modelId: 'writer', testId: 'fiction-scene' });
+    expect(record.output).toContain('oyster farmer');
+    expect(record.detail.wordCount).toBeGreaterThan(0);
+    expect(record.detail.hasDialogue).toBe(true);
+    expect(record.verdict).toBe('partial');
+  });
+});
+
 describe('runCapabilityTest — sandbox repair', () => {
   beforeEach(() => {
     getAllProviders.mockResolvedValue({ activeProvider: null, providers: [OPENCODE_LLAMA] });

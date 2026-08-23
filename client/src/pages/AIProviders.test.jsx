@@ -215,6 +215,7 @@ describe('AIProviders page load error handling', () => {
     renderPage();
 
     expect(await screen.findByText('OpenAI')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Compare local models/ })).toHaveAttribute('href', '/models/performance');
     expect(screen.queryByText('No providers configured')).not.toBeInTheDocument();
     expect(screen.queryByText('Failed to load AI providers')).not.toBeInTheDocument();
   });

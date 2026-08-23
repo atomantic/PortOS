@@ -39,8 +39,9 @@ export function buildPrompt({ systemPrompt, prompt }) {
  * @param {{ completionTokens: number|null, promptTokens: number|null, estimated: boolean }} [usage]
  *   token counts from `streamOpenAiChat`'s `onStats`. Absent entirely for a
  *   caller that does not track usage, which records `null` — not zero.
+ * @param {number|null} [streamChunks] number of non-empty streamed chunks
  */
-export function summarizeTimings({ startedAt, firstChunkAt, endedAt, text, usage }) {
+export function summarizeTimings({ startedAt, firstChunkAt, endedAt, text, usage, streamChunks = null }) {
   const totalMs = endedAt - startedAt;
   const ttftMs = firstChunkAt ? firstChunkAt - startedAt : null;
   const chars = text.length;
@@ -59,7 +60,10 @@ export function summarizeTimings({ startedAt, firstChunkAt, endedAt, text, usage
   const reportedPromptMs = Number.isFinite(usage?.promptMs) && usage.promptMs > 0
     ? usage.promptMs
     : null;
-  const decodeMs = reportedDecodeMs ?? (Number.isFinite(ttftMs) ? totalMs - ttftMs : totalMs);
+  const observedDecodeMs = (streamChunks === null || streamChunks > 1) && Number.isFinite(ttftMs)
+    ? totalMs - ttftMs
+    : totalMs;
+  const decodeMs = reportedDecodeMs ?? observedDecodeMs;
   const rate = (tokens, ms) =>
     (Number.isFinite(tokens) && tokens > 0 && ms > 0 ? Number((tokens / (ms / 1000)).toFixed(2)) : null);
 
@@ -85,6 +89,13 @@ export function summarizeTimings({ startedAt, firstChunkAt, endedAt, text, usage
     // the report auditable and avoids forcing readers to reverse the rates.
     decodeMs: reportedDecodeMs,
     promptMs: reportedPromptMs,
+    // Runtime timings are authoritative. When they are absent, a response
+    // delivered in multiple chunks has an observable decode window; a single
+    // chunk does not, so its token rate uses end-to-end wall time rather than
+    // subtracting TTFT from a near-zero remainder.
+    timingSource: reportedDecodeMs
+      ? 'runtime'
+      : (streamChunks !== null && streamChunks <= 1 ? 'wall-clock' : 'stream-window'),
     // Whether the token count came from the daemon's own tokenizer (`false`) or
     // from counting streamed frames (`true`). `null` = no token count at all.
     // A consumer must label an estimate as one — PortOS has no tokenizer, and
@@ -185,6 +196,7 @@ export async function runLocalLlmTest({
   // Stays null until then so a run that died before any frame records "no token
   // count" rather than a fabricated zero.
   let usage = null;
+  let streamChunks = 0;
   const onStats = (stats) => { usage = stats; };
 
   try {
@@ -227,6 +239,7 @@ export async function runLocalLlmTest({
         // honest time-to-first-token (previously reasoning-only runs reported a
         // null TTFT because reasoning never reached this callback).
         if (!firstChunkAt && chunk) firstChunkAt = Date.now();
+        if (chunk) streamChunks += 1;
         // Await the consumer so socket backpressure from the streaming route
         // propagates back up to the upstream read loop (pauses reading until the
         // client drains). Non-streaming callers pass no onToken, so this no-ops.
@@ -243,7 +256,7 @@ export async function runLocalLlmTest({
       providerId: provider.id,
       runId,
       text,
-      timings: summarizeTimings({ startedAt, firstChunkAt, endedAt, text, usage }),
+      timings: summarizeTimings({ startedAt, firstChunkAt, endedAt, text, usage, streamChunks }),
       options: { temperature, maxTokens, timeoutMs, nativeOllamaUsage },
     };
   } catch (err) {
@@ -272,7 +285,7 @@ export async function runLocalLlmTest({
       runId,
       error,
       text: partialText,
-      timings: summarizeTimings({ startedAt, firstChunkAt, endedAt, text: partialText, usage }),
+      timings: summarizeTimings({ startedAt, firstChunkAt, endedAt, text: partialText, usage, streamChunks }),
       options: { temperature, maxTokens, timeoutMs, nativeOllamaUsage },
     };
   }
@@ -313,6 +326,7 @@ export async function runEndpointLlmTest({
   const startedAt = Date.now();
   let firstChunkAt = null;
   let usage = null;
+  let streamChunks = 0;
   const timeoutController = new AbortController();
   const timeoutHandle = setTimeout(() => timeoutController.abort(), timeoutMs);
   const signal = anyAbortSignal([clientSignal, timeoutController.signal]);
@@ -330,6 +344,7 @@ export async function runEndpointLlmTest({
       onStats: (stats) => { usage = stats; },
       onChunk: (chunk, kind = 'content') => {
         if (!firstChunkAt && chunk) firstChunkAt = Date.now();
+        if (chunk) streamChunks += 1;
         if (chunk) return onToken?.(chunk, kind);
         return undefined;
       },
@@ -339,7 +354,7 @@ export async function runEndpointLlmTest({
       modelId,
       endpoint,
       text,
-      timings: summarizeTimings({ startedAt, firstChunkAt, endedAt: Date.now(), text, usage }),
+      timings: summarizeTimings({ startedAt, firstChunkAt, endedAt: Date.now(), text, usage, streamChunks }),
       options: { temperature, maxTokens, timeoutMs },
     };
   } catch (err) {
@@ -352,7 +367,7 @@ export async function runEndpointLlmTest({
       endpoint,
       error,
       text: partialText,
-      timings: summarizeTimings({ startedAt, firstChunkAt, endedAt: Date.now(), text: partialText, usage }),
+      timings: summarizeTimings({ startedAt, firstChunkAt, endedAt: Date.now(), text: partialText, usage, streamChunks }),
       options: { temperature, maxTokens, timeoutMs },
     };
   }

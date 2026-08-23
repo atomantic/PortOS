@@ -534,7 +534,7 @@ describe('measured assessments wiring', () => {
     });
   });
 
-  it('rejects an agent benchmark backend outside the three local targets', async () => {
+  it('rejects an agent benchmark backend outside the configured local targets', async () => {
     const res = await request(makeApp())
       .post('/api/local-llm/assessments/agent-benchmark')
       .send({ backend: 'vllm', modelId: 'qwen3.8-27b-dflash2' });

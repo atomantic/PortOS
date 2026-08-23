@@ -316,6 +316,7 @@ export function toSample(contextTokens, result) {
     promptTokensPerSecond: measured(timings.promptTokensPerSecond),
     decodeMs: measured(timings.decodeMs),
     promptMs: measured(timings.promptMs),
+    timingSource: ok && typeof timings.timingSource === 'string' ? timings.timingSource : null,
     // `true` = the count came from counting streamed frames rather than the
     // daemon's tokenizer, and every figure derived from it must be labelled.
     tokensEstimated: ok && typeof timings.tokensEstimated === 'boolean' ? timings.tokensEstimated : null,

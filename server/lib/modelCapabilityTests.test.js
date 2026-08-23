@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CAPABILITY_TESTS,
+  FICTION_SCENE_KEYWORDS,
   HEROS_JOURNEY_BEATS,
   VISION_FIXTURE_KEYWORDS,
   applicabilityFor,
@@ -9,6 +10,7 @@ import {
   getCapabilityTest,
   rollUpVerdict,
   scoreKeywords,
+  scoreFictionScene,
   scoreSandboxRepair,
   scoreStoryBeats,
 } from './modelCapabilityTests.js';
@@ -124,6 +126,35 @@ describe('scoreStoryBeats', () => {
   });
 });
 
+describe('scoreFictionScene', () => {
+  const scene = [
+    'At dawn the tidal marsh breathed mud and salt around Mara, the oyster farmer, while the dying beds clicked below the water. The flats should have been silver with shells, but a skin of black scum gathered between the stakes and turned the tide opaque.',
+    'She waded toward the sea wall, heard the wind in its cracks, and pulled a rusted gate open. The wall had been her victory once, a straight grey promise against the storms. Now its stones sweated warm water that smelled of pennies and rot, and the current pressed inland instead of out.',
+    '“Stay back,” she said, though nobody stood beside her. Her boots sank past the ankles. She cut the rope on the inspection ladder, climbed through the reeds, and reached for the valve she had signed off on herself. The metal shuddered under her palm.',
+    'Black water poured through the breach. The sea wall was feeding the beds their death. Mara watched the current carry a pale oyster shell into the channel, then took the wrench from her belt and began to undo the gate before the next tide arrived.',
+  ].join('\n\n');
+
+  it('passes a scene that follows the premise and the craft gate', () => {
+    const scored = scoreFictionScene(scene, FICTION_SCENE_KEYWORDS);
+    expect(scored.verdict).toBe('passed');
+    expect(scored.requiredHit).toBe(scored.requiredTotal);
+    expect(scored.hasDialogue).toBe(true);
+    expect(scored.paragraphCount).toBe(4);
+    expect(scored.summary).toContain('3 of 3 scene signals');
+    expect(scored.summary).toContain('3 of 3 minimum craft checks');
+  });
+
+  it('keeps a content attempt partial when the scene craft is incomplete', () => {
+    const scored = scoreFictionScene('The oyster farmer saw the tidal marsh, the sea wall, and water. The beds were dying. “Not again,” she said.', FICTION_SCENE_KEYWORDS);
+    expect(scored.verdict).toBe('partial');
+    expect(scored.wordCount).toBeLessThan(180);
+  });
+
+  it('fails generic prose that does not follow the fixed premise', () => {
+    expect(scoreFictionScene('A person walked through a city and watched the rain.', FICTION_SCENE_KEYWORDS).verdict).toBe('failed');
+  });
+});
+
 describe('scoreSandboxRepair', () => {
   it('passes only when the test command actually exits 0', () => {
     expect(scoreSandboxRepair({ moduleChanged: true, fixturesIntact: true, testsPass: true, toolCalls: 3 }).verdict).toBe('passed');
@@ -158,4 +189,3 @@ describe('rollUpVerdict', () => {
     expect(rollUpVerdict([undefined, null])).toBeNull();
   });
 });
-

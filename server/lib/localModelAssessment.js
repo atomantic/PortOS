@@ -164,6 +164,10 @@ export function summarizePerformance(samples) {
     meanTokensPerSecond: meanOf(samples, 'tokensPerSecond'),
     peakTokensPerSecond: tokenRates.length ? Math.max(...tokenRates) : null,
     meanPromptTokensPerSecond: meanOf(samples, 'promptTokensPerSecond'),
+    timingSource: (() => {
+      const sources = [...new Set(ok.map((s) => s.timingSource).filter(Boolean))];
+      return sources.length === 1 ? sources[0] : (sources.length ? 'mixed' : null);
+    })(),
     // `true` when ANY contributing sample counted streamed frames instead of
     // reading the daemon's own count. One estimated sample makes the mean an
     // estimate, so this is deliberately pessimistic. `null` = no token evidence.
@@ -219,6 +223,7 @@ export function buildThroughputReport(assessments) {
         charsPerSecond: num(sample.charsPerSecond),
         ttftMs: num(sample.ttftMs),
         completionTokens: num(sample.completionTokens),
+        timingSource: sample.timingSource || null,
         error: sample?.error || null,
       });
     }
@@ -240,6 +245,7 @@ export function buildThroughputReport(assessments) {
       meanPromptTokensPerSecond: num(perf.meanPromptTokensPerSecond),
       meanCharsPerSecond: num(perf.meanCharsPerSecond),
       meanTtftMs: num(perf.meanTtftMs),
+      timingSource: perf.timingSource || null,
       tokensEstimated: typeof perf.tokensEstimated === 'boolean' ? perf.tokensEstimated : null,
       points: points.sort((a, b) => a.contextTokens - b.contextTokens),
     });

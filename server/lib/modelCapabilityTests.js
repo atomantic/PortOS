@@ -42,6 +42,12 @@ export const CAPABILITY_TEST_PROMPTS = Object.freeze({
     '',
     "Outline this as a hero's journey in twelve beats. Give each beat its standard name as a heading, followed by one short paragraph.",
   ].join('\n'),
+  'fiction-scene': [
+    'Premise: a tidal-marsh oyster farmer finds that the water killing her beds is coming from the sea wall she campaigned to build.',
+    '',
+    'Write a 350–500 word opening scene in close third person.',
+    'Keep the prose concrete and sensory. Include one spoken line of dialogue, the oyster farmer taking a consequential action, and a final turn that makes the sea wall the source of the dying water.',
+  ].join('\n'),
 });
 
 /**
@@ -94,6 +100,15 @@ export const CAPABILITY_TESTS = Object.freeze([
     capabilities: Object.freeze(['chat']),
     prefers: Object.freeze(['reasoning']),
     blurb: "Outline a hero's-journey story from one premise. Scored on how many of the twelve beats are present and in order.",
+    driver: 'chat',
+  }),
+  Object.freeze({
+    id: 'fiction-scene',
+    label: 'Fiction scene',
+    kind: 'text',
+    capabilities: Object.freeze(['chat']),
+    prefers: Object.freeze(['reasoning']),
+    blurb: 'Write a short opening scene from a fixed premise. Scored on required story facts plus minimum scene craft signals; read the saved prose for quality.',
     driver: 'chat',
   }),
 ]);
@@ -158,6 +173,28 @@ export const VISION_FIXTURE_KEYWORDS = Object.freeze({
     Object.freeze({ id: 'red-bicycle', label: 'Bicycle is red', any: Object.freeze(['red', 'crimson', 'scarlet']) }),
     Object.freeze({ id: 'blue-bench', label: 'Bench is blue', any: Object.freeze(['blue']) }),
     Object.freeze({ id: 'sign-number', label: 'Reads the number 3 on the sign', any: Object.freeze(['3', 'three']) }),
+  ]),
+});
+
+/**
+ * The fiction fixture's content anchors. This is deliberately a modest
+ * structural rubric, not a claim that keywords can judge literary quality.
+ * The complete scene is retained so a human can read the prose after the
+ * deterministic checks have separated a coherent attempt from a refusal or a
+ * generic paragraph.
+ */
+export const FICTION_SCENE_KEYWORDS = Object.freeze({
+  required: Object.freeze([
+    Object.freeze({ id: 'tidal-marsh', label: 'Tidal-marsh setting', any: Object.freeze(['tidal marsh', 'marsh', 'estuary']) }),
+    Object.freeze({ id: 'oyster-farmer', label: 'Oyster farmer', any: Object.freeze(['oyster farmer', 'oyster grower']) }),
+    Object.freeze({ id: 'dying-beds', label: 'Dying oyster beds', any: Object.freeze(['dying', 'dead', 'die', 'killing', 'rot']) }),
+    Object.freeze({ id: 'sea-wall', label: 'Sea wall', any: Object.freeze(['sea wall', 'seawall']) }),
+    Object.freeze({ id: 'water', label: 'Water as the immediate problem', any: Object.freeze(['water', 'brine', 'tide', 'salt']) }),
+  ]),
+  bonus: Object.freeze([
+    Object.freeze({ id: 'sensory-detail', label: 'Concrete sensory detail', any: Object.freeze(['mud', 'silt', 'stench', 'stink', 'cold', 'wind', 'grit', 'slick']) }),
+    Object.freeze({ id: 'spoken-line', label: 'Spoken line', any: Object.freeze(['said', 'asked', 'whispered', 'shouted', 'murmured']) }),
+    Object.freeze({ id: 'consequence', label: 'Consequential action', any: Object.freeze(['cut', 'climb', 'break', 'open', 'pull', 'wade', 'run', 'turn']) }),
   ]),
 });
 
@@ -296,6 +333,45 @@ export function scoreStoryBeats(text, beats = HEROS_JOURNEY_BEATS) {
   };
 }
 
+/**
+ * Score a short fiction scene without pretending that a lexical rubric is an
+ * aesthetic judge. Required anchors establish that the model followed the
+ * premise; length, paragraphing, and dialogue establish that it attempted a
+ * scene rather than returning notes. The prose itself remains the evidence a
+ * human should use for voice, originality, and sentence quality.
+ *
+ * @returns {{verdict:string, summary:string, required:Array, bonus:Array,
+ *   requiredHit:number, requiredTotal:number, bonusHit:number, bonusTotal:number,
+ *   wordCount:number, paragraphCount:number, hasDialogue:boolean}}
+ */
+export function scoreFictionScene(text, spec = FICTION_SCENE_KEYWORDS) {
+  const keyword = scoreKeywords(text, spec);
+  const source = String(text || '').trim();
+  const words = source ? source.split(/\s+/u).filter(Boolean) : [];
+  const paragraphs = source ? source.split(/\n\s*\n/u).map((p) => p.trim()).filter(Boolean) : [];
+  const hasDialogue = /["“][^"”\n]{2,}["”]/u.test(source)
+    || /\b(?:said|asked|whispered|shouted|murmured)\b/iu.test(source);
+  const craft = {
+    minimumWords: words.length >= 180,
+    paragraphs: paragraphs.length >= 3,
+    dialogue: hasDialogue,
+  };
+  const craftHit = Object.values(craft).filter(Boolean).length;
+  const requiredComplete = keyword.requiredHit === keyword.requiredTotal;
+  const verdict = requiredComplete && craftHit === Object.keys(craft).length
+    ? 'passed'
+    : (keyword.requiredHit >= Math.ceil(keyword.requiredTotal * 0.6) && craftHit >= 1 ? 'partial' : 'failed');
+  return {
+    ...keyword,
+    verdict,
+    wordCount: words.length,
+    paragraphCount: paragraphs.length,
+    hasDialogue,
+    craft,
+    summary: `${keyword.requiredHit} of ${keyword.requiredTotal} story anchors, ${keyword.bonusHit} of ${keyword.bonusTotal} scene signals, ${craftHit} of ${Object.keys(craft).length} minimum craft checks, ${words.length} words`,
+  };
+}
+
 // ---- sandbox-repair scoring -------------------------------------------------
 
 /**
@@ -340,4 +416,3 @@ export function rollUpVerdict(verdicts) {
   if (list.includes('partial')) return 'partial';
   return 'passed';
 }
-

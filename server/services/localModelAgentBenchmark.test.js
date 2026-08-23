@@ -1,22 +1,17 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { writeFile } from 'fs/promises';
-
+import { join } from 'path';
 vi.mock('./providers.js', () => ({ getProviderById: vi.fn() }));
-vi.mock('../lib/bufferedSpawn.js', () => ({
-  bufferedSpawn: vi.fn(),
-  prepareCliSpawn: vi.fn((command, args) => ({ command, args })),
-}));
-vi.mock('../lib/cliChildEnv.js', () => ({ buildCliChildEnv: vi.fn(() => ({ PATH: '/example/bin' })) }));
+vi.mock('../lib/tuiPromptRunner.js', () => ({ executeTuiRun: vi.fn() }));
+vi.mock('./runner.js', () => ({ getRunsPath: vi.fn(() => '/tmp/portos-benchmark-runs') }));
 vi.mock('../lib/providerModels.js', () => ({
   isOpencodeCommand: vi.fn(() => true),
-  prefixOpencodeModel: vi.fn((_provider, model) => `llama/${model}`),
+  isClaudeCommand: vi.fn((command) => command === 'claude'),
 }));
 
 import { getProviderById } from './providers.js';
-import { bufferedSpawn } from '../lib/bufferedSpawn.js';
-import { buildCliChildEnv } from '../lib/cliChildEnv.js';
+import { executeTuiRun } from '../lib/tuiPromptRunner.js';
 import {
-  OPENCODE_AGENT_BENCHMARK_PROMPT,
+  buildOpenCodeAgentBenchmarkPrompt,
   runOpenCodeAgentBenchmark,
   summarizeOpenCodeEvents,
 } from './localModelAgentBenchmark.js';
@@ -48,42 +43,75 @@ describe('runOpenCodeAgentBenchmark', () => {
       args: [],
       llamaBacked: true,
     });
-    bufferedSpawn.mockImplementation(async (_command, args) => {
-      const dir = args[args.indexOf('--dir') + 1];
-      await writeFile(`${dir}/PORTOS_AGENT_BENCHMARK.txt`, 'PORTOS_AGENT_BENCHMARK_OK');
-      return {
-        success: true,
-        code: 0,
-        signal: null,
-        stdout: [
-          JSON.stringify({ type: 'tool_use', part: { type: 'tool' } }),
-          JSON.stringify({ type: 'text', text: 'PORTOS_AGENT_BENCHMARK_OK' }),
-          JSON.stringify({ type: 'step_finish', part: { tokens: { output: 9 } } }),
-        ].join('\n'),
-        stderr: '',
-        timedOut: false,
-      };
+    executeTuiRun.mockImplementation(async ({ workspacePath, onComplete }) => {
+      const { writeFile } = await import('fs/promises');
+      await writeFile(`${workspacePath}/PORTOS_AGENT_BENCHMARK.txt`, 'PORTOS_AGENT_BENCHMARK_OK');
+      onComplete({ success: true, exitCode: 0, text: 'PORTOS_AGENT_BENCHMARK_OK', duration: 25 });
     });
   });
 
-  it('runs the named target in a scratch workspace and returns task rates', async () => {
-    const result = await runOpenCodeAgentBenchmark({ backend: 'llama', modelId: 'qwen3.8-27b-dflash2' });
+  it('runs the named target in a scratch workspace and returns PTY completion timing', async () => {
+    const result = await runOpenCodeAgentBenchmark({ backend: 'llama', modelId: 'dflash' });
 
     expect(result).toMatchObject({
       backend: 'llama',
-      modelId: 'qwen3.8-27b-dflash2',
+      modelId: 'dflash',
       providerId: 'opencode-llama-tui',
       completed: true,
-      toolCalls: 1,
-      outputTokens: 9,
+      toolCalls: null,
+      outputTokens: null,
+      measurementMode: 'pty-tui',
       error: null,
     });
-    expect(result.taskCharsPerSecond).toBeGreaterThan(0);
-    expect(result.taskTokensPerSecond).toBeGreaterThan(0);
-    expect(buildCliChildEnv).toHaveBeenCalledWith(expect.objectContaining({ model: 'qwen3.8-27b-dflash2', guard: true }));
-    expect(bufferedSpawn).toHaveBeenCalledWith('opencode', expect.arrayContaining([
-      'run', '--format', 'json', '--auto', '--model', 'llama/qwen3.8-27b-dflash2', OPENCODE_AGENT_BENCHMARK_PROMPT,
-    ]), expect.objectContaining({ timeoutMs: 600000, env: { PATH: '/example/bin' } }));
+    expect(result.taskCharsPerSecond).toBeNull();
+    expect(result.taskTokensPerSecond).toBeNull();
+    const invocation = executeTuiRun.mock.calls[0][0];
+    expect(invocation).toEqual(expect.objectContaining({
+      provider: expect.objectContaining({ defaultModel: 'dflash' }),
+      prompt: buildOpenCodeAgentBenchmarkPrompt(join(invocation.workspacePath, 'PORTOS_AGENT_BENCHMARK.txt')),
+      timeout: 600000,
+      workspacePath: expect.any(String),
+    }));
+  });
+
+  it('accepts the Claude Ollama TUI as a separate local harness target', async () => {
+    getProviderById.mockResolvedValue({
+      id: 'claude-ollama-tui',
+      type: 'tui',
+      command: 'claude',
+      args: [],
+      ollamaBacked: true,
+    });
+
+    const result = await runOpenCodeAgentBenchmark({ backend: 'claude-ollama', modelId: 'qwen3.8:27b-mlx' });
+
+    expect(result).toMatchObject({
+      backend: 'claude-ollama',
+      modelId: 'qwen3.8:27b-mlx',
+      providerId: 'claude-ollama-tui',
+      completed: true,
+      measurementMode: 'pty-tui',
+    });
+  });
+
+  it('accepts the installed Qwen3-Coder Ollama target', async () => {
+    getProviderById.mockResolvedValue({
+      id: 'opencode-ollama-tui',
+      type: 'tui',
+      command: 'opencode',
+      args: [],
+      ollamaBacked: true,
+    });
+
+    const result = await runOpenCodeAgentBenchmark({ backend: 'ollama-coder', modelId: 'qwen3-coder:30b' });
+
+    expect(result).toMatchObject({
+      backend: 'ollama-coder',
+      modelId: 'qwen3-coder:30b',
+      providerId: 'opencode-ollama-tui',
+      completed: true,
+      measurementMode: 'pty-tui',
+    });
   });
 
   it('rejects a model outside the three explicit benchmark targets', async () => {

@@ -73,12 +73,13 @@ const CATEGORY_LABELS = {
   reasoning: 'Reasoning & analysis',
   vision: 'Image Analysis',
   chat: 'Chat & voice',
+  writing: 'Fiction & writing',
   audio: 'Audio & Music',
   embedding: 'Text Embeddings',
   lightweight: 'Small & Fast',
   multilingual: 'Multilingual'
 };
-const CATEGORY_ORDER = ['general', 'coding', 'reasoning', 'vision', 'chat', 'lightweight', 'multilingual', 'embedding', 'audio'];
+const CATEGORY_ORDER = ['general', 'coding', 'writing', 'reasoning', 'vision', 'chat', 'lightweight', 'multilingual', 'embedding', 'audio'];
 const categoryLabel = (id) => CATEGORY_LABELS[id] || id;
 const primaryCategoryFor = (model) => model?.category || 'general';
 const recommendationCategoriesFor = (model) => {

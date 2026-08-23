@@ -26,7 +26,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import {
-  FlaskConical, Play, RefreshCw, Trash2, Check, X, AlertTriangle, Terminal, Eye, BookOpen, Wrench,
+  FlaskConical, Play, RefreshCw, Trash2, Check, X, AlertTriangle, Terminal, Eye, BookOpen, Wrench, Search, Trophy,
 } from 'lucide-react';
 import socket from '../../services/socket';
 import Drawer from '../Drawer';
@@ -45,6 +45,7 @@ const TEST_META = {
   'sandbox-repair': { Icon: Wrench, cls: 'text-blue-400', border: 'border-blue-400/35' },
   'image-analysis': { Icon: Eye, cls: 'text-amber-400', border: 'border-amber-400/35' },
   'story-outline': { Icon: BookOpen, cls: 'text-port-accent-2', border: 'border-port-accent-2/35' },
+  'fiction-scene': { Icon: BookOpen, cls: 'text-pink-400', border: 'border-pink-400/35' },
 };
 const testMeta = (id) => TEST_META[id] || { Icon: FlaskConical, cls: 'text-gray-400', border: 'border-port-border' };
 
@@ -77,6 +78,69 @@ const pairFor = (report, backend, modelId, testId) => {
   const test = report?.tests?.find((t) => t.id === testId) || null;
   const slot = model?.tests?.find((t) => t.testId === testId) || null;
   return { model, test, slot };
+};
+
+const TASK_FILTERS = [
+  { id: 'all', label: 'All tests' },
+  { id: 'coding', label: 'Coding', testIds: ['sandbox-repair'] },
+  { id: 'vision', label: 'Vision', testIds: ['image-analysis'] },
+  // Older servers shipped only the outline proxy. Prefer the prose check when
+  // present, but keep the filter useful during a rolling upgrade.
+  { id: 'writing', label: 'Writing', testIds: ['fiction-scene', 'story-outline'] },
+];
+
+const verdictRank = { passed: 2, partial: 1, failed: 0 };
+
+const taskScore = (taskId, result) => {
+  if (!result?.verdict || !Number.isFinite(verdictRank[result.verdict])) return null;
+  const detail = result.detail || {};
+  if (taskId === 'vision' && Number.isFinite(detail.requiredTotal) && detail.requiredTotal > 0) {
+    const required = detail.requiredHit / detail.requiredTotal;
+    const bonus = Number.isFinite(detail.bonusTotal) && detail.bonusTotal > 0
+      ? detail.bonusHit / detail.bonusTotal
+      : 0;
+    return required * 0.8 + bonus * 0.2;
+  }
+  if (taskId === 'writing' && Number.isFinite(detail.requiredTotal) && detail.requiredTotal > 0) {
+    const anchors = detail.requiredHit / detail.requiredTotal;
+    const beats = Number.isFinite(detail.total) && detail.total > 0 && Number.isFinite(detail.found)
+      ? detail.found / detail.total
+      : 0;
+    const craft = Number.isFinite(detail.wordCount)
+      ? Object.values(detail.craft || {}).filter(Boolean).length / Math.max(1, Object.keys(detail.craft || {}).length)
+      : 0;
+    return detail.total ? beats : anchors * 0.7 + craft * 0.3;
+  }
+  return verdictRank[result.verdict] / 2;
+};
+
+const taskTest = (tests, task) => (task?.testIds || [])
+  .map((id) => tests.find((test) => test.id === id))
+  .find(Boolean) || null;
+
+// A structural pass is the primary evidence. When several models tie, prefer
+// an explicit specialization in the installed model id before falling back to
+// a stable name sort; this keeps a coding-specialist or fiction-tuned model
+// from losing to an unrelated model merely because its name sorts later.
+const specializationScore = (taskId, model) => {
+  const id = String(model?.modelId || '').toLowerCase();
+  if (taskId === 'coding') return /coder|code/.test(id) ? 2 : 0;
+  if (taskId === 'writing') return /fable|fiction|writer|story/.test(id) ? 2 : 0;
+  return 0;
+};
+
+const bestForTask = (models, tests, task) => {
+  if (!task || task.id === 'all') return null;
+  const candidates = (models || []).flatMap((model) => {
+    const test = taskTest(tests, task);
+    const slot = test && model.tests?.find((entry) => entry.testId === test.id);
+    const score = taskScore(task.id, slot?.result);
+    return score === null ? [] : [{ model, test, slot, score }];
+  });
+  return candidates.sort((a, b) => b.score - a.score
+    || (verdictRank[b.slot.result.verdict] - verdictRank[a.slot.result.verdict])
+    || (specializationScore(task.id, b.model) - specializationScore(task.id, a.model))
+    || String(a.model.modelId).localeCompare(String(b.model.modelId)))[0] || null;
 };
 
 // ---- small shared bits ------------------------------------------------------
@@ -213,6 +277,50 @@ function BeatScore({ detail }) {
   );
 }
 
+/** Structural checks for the fiction scene, kept distinct from prose quality. */
+function FictionScore({ detail }) {
+  const row = (entry, required) => (
+    <div key={entry.id} className="flex items-center gap-2 py-1.5 border-b border-port-border/50 last:border-b-0">
+      {entry.hit
+        ? <Check size={13} className="text-emerald-400 shrink-0" aria-label="found" />
+        : <X size={13} className={`${required ? 'text-port-error' : 'text-gray-600'} shrink-0`} aria-label="not found" />}
+      <span className={`text-xs ${entry.hit ? 'text-gray-300' : 'text-gray-500'}`}>{entry.label}</span>
+      <span className="ml-auto text-[10px] text-gray-600 font-mono">{entry.any.join(' | ')}</span>
+    </div>
+  );
+  const craftChecks = Object.entries(detail.craft || {});
+  const craftPassed = craftChecks.filter(([, passed]) => passed).length;
+
+  return (
+    <div className="space-y-3">
+      <dl className="grid grid-cols-3 gap-2 text-xs">
+        <div><dt className="text-gray-500">Words</dt><dd className="text-gray-200">{detail.wordCount ?? '—'}</dd></div>
+        <div><dt className="text-gray-500">Paragraphs</dt><dd className="text-gray-200">{detail.paragraphCount ?? '—'}</dd></div>
+        <div><dt className="text-gray-500">Dialogue</dt><dd className="text-gray-200">{detail.hasDialogue ? 'yes' : 'no'}</dd></div>
+      </dl>
+      <div>
+        <div className="flex items-baseline justify-between gap-2 mb-1">
+          <h4 className="text-xs font-medium text-gray-400">Scene anchors</h4>
+          <span className="text-[11px] text-gray-500">{detail.requiredHit} of {detail.requiredTotal} — all needed to pass</span>
+        </div>
+        {(detail.required || []).map((entry) => row(entry, true))}
+      </div>
+      <div>
+        <div className="flex items-baseline justify-between gap-2 mb-1">
+          <h4 className="text-xs font-medium text-gray-400">Scene signals</h4>
+          <span className="text-[11px] text-gray-500">{detail.bonusHit} of {detail.bonusTotal}</span>
+        </div>
+        {(detail.bonus || []).map((entry) => row(entry, false))}
+      </div>
+      <p className="text-[11px] text-gray-500">Minimum craft checks: {craftPassed} of {craftChecks.length}</p>
+      <p className="text-[11px] text-gray-500 leading-snug">
+        This is a structural screen for a saved scene, not a literary-quality score. Read the scene above
+        before choosing a writing model.
+      </p>
+    </div>
+  );
+}
+
 /** On-disk checks for the sandbox test. */
 function SandboxChecks({ detail }) {
   return (
@@ -250,6 +358,7 @@ function SandboxChecks({ detail }) {
 const SCORE_VIEWS = {
   'image-analysis': KeywordScore,
   'story-outline': BeatScore,
+  'fiction-scene': FictionScore,
   'sandbox-repair': SandboxChecks,
 };
 
@@ -455,6 +564,51 @@ function CapabilityTestDrawer({
   );
 }
 
+function CapabilityRecommendations({ report, onOpen }) {
+  const tests = report?.tests || [];
+  const models = report?.models || [];
+  const tasks = TASK_FILTERS.filter((task) => task.id !== 'all');
+  return (
+    <div className="border border-port-accent/30 rounded-lg p-3 space-y-2">
+      <div className="flex items-center gap-1.5 text-xs text-gray-300">
+        <Trophy size={12} className="text-port-accent" />
+        <h4 className="font-medium">Evidence-based task picks</h4>
+        <span className="text-[10px] text-gray-500">recorded checks only</span>
+      </div>
+      <p className="text-[11px] text-gray-500 leading-snug">
+        These leaders are task-specific, not a generic model rank. Unmeasured models are left out; the
+        writing result is a structural screen, so open the saved scene before choosing a voice. Tied
+        structural results favor an explicitly task-specialized model name.
+      </p>
+      <div className="grid gap-2 sm:grid-cols-3">
+        {tasks.map((task) => {
+          const winner = bestForTask(models, tests, task);
+          return (
+            <div key={task.id} className="border border-port-border/70 rounded p-2 space-y-1.5">
+              <div className="text-[11px] text-gray-300">Best {task.label.toLowerCase()} evidence</div>
+              {winner ? (
+                <>
+                  <div className="text-[11px] text-white font-mono break-all">{winner.model.modelId}</div>
+                  <div className="text-[10px] text-gray-500">{winner.model.runtimeLabel} · {winner.slot.result.summary}</div>
+                  <button
+                    type="button"
+                    onClick={() => onOpen(winner.model.backend, winner.model.modelId, winner.test.id)}
+                    className="text-[10px] text-port-accent hover:underline"
+                  >
+                    Read the result
+                  </button>
+                </>
+              ) : (
+                <span className="text-[10px] text-gray-600 italic">Run the {task.label.toLowerCase()} check to rank it.</span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ---- the panel --------------------------------------------------------------
 
 export default function ModelCapabilityTests({ report, loading, onReload, disabled = false }) {
@@ -473,6 +627,8 @@ export default function ModelCapabilityTests({ report, loading, onReload, disabl
   // would turn one click into a batch of provider calls the gate never counted —
   // so "run everything applicable" is a queue here, not a wider endpoint.
   const [queue, setQueue] = useState(null);
+  const [modelQuery, setModelQuery] = useState('');
+  const [taskFilter, setTaskFilter] = useState('all');
   const mountedRef = useMounted();
 
   // Which pairing is in flight. A ref, not state: the socket handler subscribes
@@ -621,6 +777,26 @@ export default function ModelCapabilityTests({ report, loading, onReload, disabl
   const tests = report?.tests || [];
   const models = report?.models || [];
   const busy = disabled || running;
+  const selectedTask = TASK_FILTERS.find((task) => task.id === taskFilter) || TASK_FILTERS[0];
+  const visibleTests = selectedTask.id === 'all'
+    ? tests
+    : tests.filter((test) => selectedTask.testIds.includes(test.id));
+  const visibleModels = useMemo(() => {
+    const query = modelQuery.trim().toLowerCase();
+    return models.filter((model) => {
+      const matchesQuery = !query || [model.modelId, model.runtimeLabel, ...(model.capabilities || [])]
+        .some((value) => String(value).toLowerCase().includes(query));
+      const matchesTask = selectedTask.id === 'all'
+        || visibleTests.some((test) => model.tests?.some((slot) => slot.testId === test.id));
+      return matchesQuery && matchesTask;
+    });
+  }, [models, modelQuery, selectedTask, visibleTests]);
+
+  const openRecommended = useCallback((b, m, t) => {
+    setLiveLines([]);
+    setProgress('');
+    updateParams({ capBackend: b, capModel: m, capTest: t });
+  }, [updateParams]);
 
   return (
     <div className="border border-port-border rounded-lg p-3 space-y-3">
@@ -680,6 +856,8 @@ export default function ModelCapabilityTests({ report, loading, onReload, disabl
         </div>
       )}
 
+      <CapabilityRecommendations report={report} onOpen={openRecommended} />
+
       {/* A runtime PortOS could not reach. Every line carries the fix: for the
           runtimes PortOS can start, a link to the page that starts them; for the
           ones it cannot (vLLM and SGLang are containers the user runs), the
@@ -718,19 +896,47 @@ export default function ModelCapabilityTests({ report, loading, onReload, disabl
           No local models are installed, so there is nothing to test yet.
         </p>
       ) : (
-        <div className="border border-port-border rounded overflow-x-auto">
+        <>
+          <div className="flex items-center gap-2 flex-wrap">
+            <label htmlFor="capability-model-search" className="sr-only">Search models</label>
+            <div className="relative min-w-[14rem] flex-1">
+              <Search size={13} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500" />
+              <input
+                id="capability-model-search"
+                type="search"
+                value={modelQuery}
+                onChange={(event) => setModelQuery(event.target.value)}
+                placeholder="Search model, runtime, or capability"
+                className="w-full bg-port-bg border border-port-border rounded pl-7 pr-2 py-1.5 text-xs text-white placeholder:text-gray-600"
+              />
+            </div>
+            <label htmlFor="capability-task-filter" className="text-[11px] text-gray-500">Show</label>
+            <select
+              id="capability-task-filter"
+              value={taskFilter}
+              onChange={(event) => setTaskFilter(event.target.value)}
+              className="bg-port-bg border border-port-border rounded px-2 py-1.5 text-xs text-white"
+            >
+              {TASK_FILTERS.map((task) => <option key={task.id} value={task.id}>{task.label}</option>)}
+            </select>
+            <span className="text-[10px] text-gray-600">{visibleModels.length} of {models.length} models</span>
+          </div>
+          {visibleModels.length === 0 ? (
+            <p className="text-xs text-gray-500">No models match this filter.</p>
+          ) : (
+            <div className="border border-port-border rounded overflow-x-auto">
           <table className="w-full min-w-[42rem] text-left">
             <thead>
               <tr className="bg-port-bg/60 border-b border-port-border">
                 <th scope="col" className="px-3 py-2 text-[11px] font-normal text-gray-500">Model</th>
-                {tests.map((t) => (
+                {visibleTests.map((t) => (
                   <th key={t.id} scope="col" className="px-3 py-2 text-[11px] font-normal text-gray-500">{t.label}</th>
                 ))}
                 <th scope="col" className="px-3 py-2 text-[11px] font-normal text-gray-500 text-right">Run</th>
               </tr>
             </thead>
             <tbody>
-              {models.map((m) => (
+              {visibleModels.map((m) => (
                 <tr key={modelKey(m.backend, m.modelId)} className="border-b border-port-border/60 last:border-b-0">
                   <td className="px-3 py-2 align-top">
                     <div className="flex items-center gap-2 flex-wrap">
@@ -746,7 +952,7 @@ export default function ModelCapabilityTests({ report, loading, onReload, disabl
                       <CapabilityBadges capabilities={m.capabilities} />
                     </div>
                   </td>
-                  {tests.map((t) => (
+                  {visibleTests.map((t) => (
                     <td key={t.id} className="px-3 py-2 align-top">
                       <TestCell
                         slot={m.tests.find((s) => s.testId === t.id)}
@@ -762,7 +968,9 @@ export default function ModelCapabilityTests({ report, loading, onReload, disabl
               ))}
             </tbody>
           </table>
-        </div>
+            </div>
+          )}
+        </>
       )}
 
       {open && (

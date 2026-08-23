@@ -57,9 +57,11 @@ const BACKEND_LABEL = {
 };
 
 const OPENCODE_AGENT_TARGETS = [
-  { backend: 'llama', label: 'OpenCode llama TUI', modelId: 'qwen3.8-27b-dflash2' },
+  { backend: 'llama', label: 'OpenCode llama TUI (Qwen3.8-27B → dflash)', modelId: 'dflash' },
   { backend: 'mtplx', label: 'OpenCode MTPLX TUI', modelId: 'mtplx-qwen38-27b-optimized-speed' },
   { backend: 'ollama', label: 'OpenCode Ollama TUI', modelId: 'qwen3.8:27b-mlx' },
+  { backend: 'ollama-coder', label: 'OpenCode Ollama TUI (Qwen3-Coder 30B)', modelId: 'qwen3-coder:30b' },
+  { backend: 'claude-ollama', label: 'Claude Ollama TUI', modelId: 'qwen3.8:27b-mlx' },
 ];
 
 const VERDICT_META = {
@@ -600,33 +602,28 @@ function OpenCodeAgentBenchmarkPanel({ results, running, onRun }) {
   const completed = OPENCODE_AGENT_TARGETS
     .map((target) => ({ target, result: results?.[target.backend] }))
     .filter(({ result }) => result?.completed);
-  const comparableTokens = completed.length > 0
-    && completed.every(({ result }) => Number.isFinite(result.taskTokensPerSecond));
-  const metricKey = comparableTokens ? 'taskTokensPerSecond' : 'taskCharsPerSecond';
-  const metricLabel = comparableTokens ? 'tok/s' : 'chars/s';
   const leader = [...completed]
-    .filter(({ result }) => Number.isFinite(result[metricKey]))
-    .sort((a, b) => b.result[metricKey] - a.result[metricKey])[0];
+    .filter(({ result }) => Number.isFinite(result.elapsedMs))
+    .sort((a, b) => a.result.elapsedMs - b.result.elapsedMs)[0];
 
   return (
     <div className="border border-port-border rounded-lg p-3 space-y-2">
       <div className="flex items-center gap-1.5 text-xs text-gray-300">
         <Terminal size={12} className="text-port-accent" />
-        <h3 className="font-medium">OpenCode agent-task check</h3>
+        <h3 className="font-medium">Local TUI agent-task check</h3>
       </div>
       <p className="text-[11px] text-gray-500">
-        Runs one disposable task through each configured OpenCode local preset. The agent must create and
-        read a sentinel file in a temporary workspace, so this measures tool-loop completion rather than raw
-        decoder speed. Terminal paste/render overhead is intentionally excluded; compare the direct report
-        above for engine throughput.
+        Runs one disposable task through each configured local TUI preset using the actual PTY-backed harness.
+        The agent must create and read a sentinel file in a temporary workspace, so this measures harness
+        completion including startup and terminal paste overhead. Compare the direct report above for engine
+        throughput.
       </p>
       {leader && (
         <div className="text-[11px] text-port-accent border border-port-accent/30 rounded px-2 py-1">
-          Current task leader: <span className="font-medium">{leader.target.label}</span> — {leader.result[metricKey]} {metricLabel}
-          {comparableTokens ? ' (exact OpenCode output counts)' : ' (chars/s fallback until every check reports tokens)'}
+          Current task leader: <span className="font-medium">{leader.target.label}</span> — {formatDurationMs(leader.result.elapsedMs)} fastest completion
         </div>
       )}
-      <div className="grid gap-1.5 sm:grid-cols-3">
+      <div className="grid gap-1.5 sm:grid-cols-2 xl:grid-cols-5">
         {OPENCODE_AGENT_TARGETS.map((target) => {
           const result = results?.[target.backend];
           return (
@@ -640,8 +637,12 @@ function OpenCodeAgentBenchmarkPanel({ results, running, onRun }) {
               )}
               {result?.completed && (
                 <div className="text-[10px] text-gray-400 space-y-0.5">
-                  <div>{Number.isFinite(result.taskTokensPerSecond) ? `${result.taskTokensPerSecond} tok/s · ` : ''}{Number.isFinite(result.taskCharsPerSecond) ? `${result.taskCharsPerSecond} chars/s` : 'chars/s n/a'}</div>
-                  <div>{result.toolCalls} tool call{result.toolCalls === 1 ? '' : 's'} · {formatDurationMs(result.elapsedMs)}</div>
+                  <div>
+                    {result.toolCalls === null || result.toolCalls === undefined
+                      ? 'PTY-backed TUI'
+                      : `${result.toolCalls} tool call${result.toolCalls === 1 ? '' : 's'}`}
+                    {' · '}{formatDurationMs(result.elapsedMs)}
+                  </div>
                 </div>
               )}
               <button

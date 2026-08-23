@@ -3,17 +3,20 @@
  *
  * The assessments panel next door answers "how fast is this model here". This
  * one answers the question speed cannot: **can it actually do what its badges
- * claim?** Three tests, each bound to the capability badges the install catalog
+ * claim?** Four tests, each bound to the capability badges the install catalog
  * already shows, each keeping the model's full output:
  *
  *   - `sandbox-repair` (`tools`) — a broken module and its failing test are
- *     copied into a throwaway sandbox and a real OpenCode TUI agent is pointed
- *     at it. The model has to read the files, write a fix to disk, and make the
- *     test pass. The transcript streams to the page while it works.
+ *     copied into a throwaway sandbox and the configured OpenCode task driver is
+ *     pointed at it. The model has to read the files, write a fix to disk, and
+ *     make the test pass. Its structured transcript streams to the page while it
+ *     works; the PTY-backed TUI path is measured separately by the harness check.
  *   - `image-analysis` (`vision`) — a fixture image with known contents goes in;
  *     the description is scored against required and bonus keywords.
  *   - `story-outline` (`chat`) — one hero's-journey outline from a fixed
  *     premise, scored on beat coverage and ordering.
+ *   - `fiction-scene` (`chat`) — a short opening scene from the same premise,
+ *     scored on story anchors and basic scene craft before a human reads it.
  *
  * ## Rules this file exists to honour
  *
@@ -52,9 +55,9 @@ import {
 } from '../lib/localProviderRuntime.js';
 import {
   CAPABILITY_TESTS, CAPABILITY_TEST_IDS, CAPABILITY_TEST_PROMPTS, SANDBOX_TASK_PROMPT,
-  VISION_FIXTURE_KEYWORDS, HEROS_JOURNEY_BEATS,
+  VISION_FIXTURE_KEYWORDS, FICTION_SCENE_KEYWORDS, HEROS_JOURNEY_BEATS,
   applicableTests, getCapabilityTest,
-  scoreKeywords, scoreStoryBeats, scoreSandboxRepair, rollUpVerdict,
+  scoreKeywords, scoreFictionScene, scoreStoryBeats, scoreSandboxRepair, rollUpVerdict,
 } from '../lib/modelCapabilityTests.js';
 import { listRuntimeModels, runtimeEndpoint, runtimeApiKey } from './localModelAssessments.js';
 import { runLocalLlmTest, runEndpointLlmTest } from './localLlmPlayground.js';
@@ -209,10 +212,10 @@ async function generate({ backend, modelId, prompt, images, maxTokens, signal })
   });
 }
 
-// ---- the three tests --------------------------------------------------------
+// ---- the generative tests ---------------------------------------------------
 
 /**
- * The two generative tests, which differ only in what they send and how the
+ * The generative tests, which differ only in what they send and how the
  * answer is scored. Everything else — the empty-output contract, keeping the
  * text whichever way the run ended — is identical, and was worth having in one
  * place rather than twice.
@@ -232,6 +235,12 @@ const CHAT_TESTS = {
     message: (modelId) => `Asking ${modelId} for a twelve-beat outline…`,
     images: async () => undefined,
     score: (text) => scoreStoryBeats(text, HEROS_JOURNEY_BEATS),
+  },
+  'fiction-scene': {
+    maxTokens: 1400,
+    message: (modelId) => `Asking ${modelId} for a short fiction scene…`,
+    images: async () => undefined,
+    score: (text) => scoreFictionScene(text, FICTION_SCENE_KEYWORDS),
   },
 };
 
@@ -315,8 +324,8 @@ async function runSandboxRepair({ backend, modelId, signal, emit, runId, provide
       if (!rendered) return;
       if (rendered.toolCall) toolCalls += 1;
       transcript += `${rendered.line}\n`;
-      // Watching the loop work is the point of driving a TUI here rather than an
-      // in-process tool loop.
+      // Watching the structured tool loop work is the point of streaming this
+      // driver rather than hiding it behind an in-process helper.
       emit({ event: 'output', line: rendered.line });
     },
   });
@@ -380,6 +389,7 @@ async function runSandboxRepair({ backend, modelId, signal, emit, runId, provide
 const RUNNERS = {
   'image-analysis': runChatTest,
   'story-outline': runChatTest,
+  'fiction-scene': runChatTest,
   'sandbox-repair': runSandboxRepair,
 };
 

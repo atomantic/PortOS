@@ -306,11 +306,11 @@ export const localLlmAssessmentSweepSchema = z.object({
 export const localLlmAssessmentIntentSchema = z.object({
   intent: z.enum(['balanced', 'smartest', 'fastest', 'lightweight']).optional().default('balanced'),
 });
-// One explicit OpenCode task through each of the three Qwen runtime presets.
-// The service still restricts the model id to the named target for that backend
-// so this endpoint cannot become an arbitrary CLI launcher.
+// One explicit local-TUI task through each configured Qwen runtime preset. The
+// service still restricts the model id and provider to the named target for that
+// backend, so this endpoint cannot become an arbitrary CLI launcher.
 export const localLlmAgentBenchmarkSchema = z.object({
-  backend: z.enum(['ollama', 'mtplx', 'llama']),
+  backend: z.enum(['ollama', 'ollama-coder', 'mtplx', 'llama', 'claude-ollama']),
   modelId: localLlmModelIdSchema,
   timeoutMs: z.coerce.number().int().min(10000).max(600000).optional().default(600000),
 });

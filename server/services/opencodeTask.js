@@ -1,5 +1,6 @@
 /**
- * Run one bounded task through an OpenCode TUI provider — the shared driver.
+ * Run one bounded task through an OpenCode provider preset — the shared
+ * structured task driver.
  *
  * Two features need this: the runtime agent-task benchmark
  * (`localModelAgentBenchmark.js`) and the sandbox-repair capability test
@@ -25,7 +26,7 @@ import { parseAgentLine } from '../lib/opencodeStream.js';
 import { listProviders } from './providers.js';
 
 /**
- * The configured OpenCode TUI provider that drives a given local runtime.
+ * The configured OpenCode TUI provider preset that drives a given local runtime.
  *
  * Matched on the provider's own `*Backed` marker rather than a hardcoded id
  * list, so renaming or adding a preset keeps working. LM Studio has no OpenCode
@@ -45,7 +46,10 @@ export async function resolveOpencodeTuiProvider(runtime, providers) {
 }
 
 /**
- * Drive one disposable OpenCode task to completion.
+ * Drive one disposable OpenCode task to completion through its JSON task
+ * interface. The PTY-backed TUI path is measured by the separate local harness
+ * benchmark; keeping this driver structured makes disk-verifiable capability
+ * scoring and live tool-event rendering deterministic.
  *
  * @param {object} options
  * @param {object} options.provider a TUI provider record (validated here)

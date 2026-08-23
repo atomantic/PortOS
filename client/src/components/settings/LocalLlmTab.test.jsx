@@ -301,8 +301,8 @@ describe('LocalLlmTab recommendations', () => {
         category: 'general',
         recommendedFor: ['general', 'coding', 'reasoning', 'vision', 'multilingual'],
         featured: {
-          label: 'Best overall',
-          description: 'Flagship local pick for general work, coding and agents, reasoning, and image analysis.',
+          label: 'Best Qwen3.8 path',
+          description: 'For Qwen3.8 CoS tasks, use MTPLX + OpenCode MTPLX TUI; use native MLX when isolated decoder throughput or vision is the priority.',
         },
         params: '27B',
         size: '16.5 GB',
@@ -315,7 +315,7 @@ describe('LocalLlmTab recommendations', () => {
 
     await renderTab();
 
-    expect(await screen.findByText('Best overall')).toBeTruthy();
+    expect(await screen.findByText('Best Qwen3.8 path')).toBeTruthy();
     expect(screen.getAllByText('General purpose').length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole('button', { name: 'Coding & agents (1)' }));

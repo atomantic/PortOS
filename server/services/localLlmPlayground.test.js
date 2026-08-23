@@ -58,6 +58,15 @@ describe('summarizeTimings', () => {
     expect(t.tokensEstimated).toBe(false);
   });
 
+  it('uses wall clock for a one-chunk response when no runtime decode duration exists', () => {
+    const t = summarizeTimings({
+      startedAt: 0, firstChunkAt: 1000, endedAt: 3000, text: 'abc', streamChunks: 1,
+      usage: { completionTokens: 100, promptTokens: 4000, estimated: false },
+    });
+    expect(t.tokensPerSecond).toBe(33.33);
+    expect(t.timingSource).toBe('wall-clock');
+  });
+
   it('prefers native decode and prefill durations when the runtime reports them', () => {
     const t = summarizeTimings({
       startedAt: 0, firstChunkAt: 1000, endedAt: 3000, text: 'abc',

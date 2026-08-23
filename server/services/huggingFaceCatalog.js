@@ -47,6 +47,7 @@ const CATEGORY_SEARCH = {
   chat: 'instruct gguf',
   reasoning: 'reasoning gguf',
   coding: 'coder gguf',
+  writing: 'fiction gguf',
   vision: 'vision gguf',
   // Audio is NOT a GGUF category — the search relaxes the GGUF filter for it
   // (see `searchHuggingFaceModels`) and these terms surface generation models.

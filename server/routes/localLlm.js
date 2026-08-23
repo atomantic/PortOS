@@ -495,7 +495,7 @@ router.post('/assessments/run', asyncHandler(async (req, res) => {
 }))
 
 // POST /api/local-llm/assessments/agent-benchmark — run one explicit,
-// disposable OpenCode task through a configured local TUI provider. This is
+// disposable local-TUI task through a configured local provider. This is
 // deliberately separate from `/run`: it measures task-loop completion, not just
 // decoder speed, and never runs from a read/poll/bootstrap path.
 router.post('/assessments/agent-benchmark', asyncHandler(async (req, res) => {
@@ -556,10 +556,11 @@ router.post('/assessments/delete', asyncHandler(async (req, res) => {
 // === Capability tests ========================================================
 // The assessments above answer "how fast is this model here". These answer the
 // question speed cannot: can it do what its badges claim? One test per
-// capability — tool use (repair a module in a sandbox, driven through a real
-// OpenCode TUI), vision (describe a fixture image, scored on required and bonus
-// keywords), and chat/reasoning (a twelve-beat story outline, scored on beat
-// coverage). Every run keeps the model's full output.
+// capability — tool use (repair a module in a sandbox, driven through the
+// configured OpenCode task driver), vision (describe a fixture image, scored on
+// required and bonus keywords), and chat/reasoning (a twelve-beat story outline
+// plus a fiction scene, scored on structural signals). Every run keeps the
+// model's full output.
 //
 // Same read/run split as the assessments, and for the same reason: GET touches
 // disk only; POST /run is the ONLY path that reaches a model, and it fires from

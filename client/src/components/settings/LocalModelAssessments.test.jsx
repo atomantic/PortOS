@@ -142,20 +142,20 @@ describe('LocalModelAssessments', () => {
     expect(runLocalLlmAssessment).not.toHaveBeenCalled();
   });
 
-  it('runs an explicit OpenCode task check and renders its task-level rates', async () => {
+  it('runs an explicit local TUI task check and ranks by completion time', async () => {
     runOpenCodeAgentBenchmark.mockResolvedValue({
-      backend: 'llama', modelId: 'qwen3.8-27b-dflash2', completed: true,
-      taskTokensPerSecond: 27.5, taskCharsPerSecond: 110, toolCalls: 2, elapsedMs: 4000,
+      backend: 'llama', modelId: 'dflash', completed: true,
+      taskTokensPerSecond: null, taskCharsPerSecond: null, toolCalls: null, elapsedMs: 4000,
     });
     const user = userEvent.setup();
     renderPanel();
     await user.click(screen.getAllByRole('button', { name: 'Run task check' })[0]);
     await waitFor(() => expect(runOpenCodeAgentBenchmark).toHaveBeenCalledWith({
-      backend: 'llama', modelId: 'qwen3.8-27b-dflash2',
+      backend: 'llama', modelId: 'dflash',
     }));
     expect(await screen.findByText('sentinel complete')).toBeInTheDocument();
-    expect(screen.getAllByText(/27\.5 tok\/s/)).toHaveLength(2);
-    expect(screen.getByText(/exact OpenCode output counts/)).toBeInTheDocument();
+    expect(screen.getByText(/4s fastest completion/)).toBeInTheDocument();
+    expect(screen.getByText(/PTY-backed TUI/)).toBeInTheDocument();
   });
 
   it('renders measured numbers for a ranked model', async () => {

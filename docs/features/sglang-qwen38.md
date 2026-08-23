@@ -11,7 +11,7 @@ the OpenAI and the Anthropic wire protocols, so either harness can drive it.
 the weights.** It holds the whole GPU, so local image/video generation cannot run
 while it is up — see [GPU exclusivity](#gpu-exclusivity) below.
 
-Investigation record: [2026-08-21 SGLang Qwen3.8-27B](../research/2026-08-21-sglang-qwen38-27b.md).
+Investigation record: [2026-08-21 SGLang Qwen3.8-27B](../research/2026-08-21-sglang-qwen38-27b.md). The latest local-model comparison is recorded in the [2026-08-22 performance audit](../research/2026-08-22-local-llm-performance-audit.md); it found this Apple Silicon install cannot run the recipe. The seed presets stay disabled by default; a live TUI card may be enabled for an explicit future test, but the readiness checklist keeps it blocked until a supported NVIDIA endpoint is reachable.
 
 ## Which card
 

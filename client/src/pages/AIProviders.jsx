@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, Gauge } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
@@ -538,6 +538,12 @@ export default function AIProviders() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <h1 className="text-2xl font-bold text-white">AI Providers</h1>
         <div className="flex flex-wrap gap-2">
+          <Link
+            to="/models/performance"
+            className="inline-flex items-center gap-1.5 px-4 py-2 bg-port-border hover:bg-port-border/80 text-white rounded-lg transition-colors text-sm sm:text-base"
+          >
+            <Gauge size={15} /> Compare local models
+          </Link>
           <button
             onClick={() => setShowRunPanel(!showRunPanel)}
             className="px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors text-sm sm:text-base"

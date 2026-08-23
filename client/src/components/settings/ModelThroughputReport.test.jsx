@@ -119,8 +119,8 @@ describe('toMarkdown', () => {
   it('emits one row per measurement with a column per context', () => {
     const md = toMarkdown(report([row('example-model:7b')]));
     const lines = md.split('\n');
-    expect(lines[0]).toBe('| Model | Runtime | Tuning | tok/s | chars/s | Prefill tok/s | TTFT | 512 tok/s | 4K tok/s |');
-    expect(lines[2]).toContain('| example-model:7b | ollama | backend defaults | 50.0 |');
+    expect(lines[0]).toBe('| Model | Runtime | Tuning | Rate basis | tok/s | chars/s | Prefill tok/s | TTFT | 512 tok/s | 4K tok/s |');
+    expect(lines[2]).toContain('| example-model:7b | ollama | backend defaults | timing basis unavailable | 50.0 |');
     expect(lines[2]).toContain('| 60.0 | 40.0 |');
   });
 
@@ -130,6 +130,6 @@ describe('toMarkdown', () => {
       points: [point(512, null)],
     });
     const md = toMarkdown(report([quiet]));
-    expect(md).toContain('| quiet-model | ollama | backend defaults | — | 200.0 | — | — |');
+    expect(md).toContain('| quiet-model | ollama | backend defaults | timing basis unavailable | — | 200.0 | — | — |');
   });
 });

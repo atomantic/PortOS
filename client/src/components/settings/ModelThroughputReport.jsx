@@ -36,13 +36,20 @@ const Rate = ({ value, estimated, suffix = '' }) => (
     : <span className="text-gray-600">{rateText(value, estimated)}</span>
 );
 
+const timingLabel = (source) => ({
+  runtime: 'runtime timing',
+  'stream-window': 'observed stream window',
+  'wall-clock': 'end-to-end wall clock',
+  mixed: 'mixed timing basis',
+}[source] || 'timing basis unavailable');
+
 // A row's samples keyed by context, for the per-context columns.
 const pointsByContext = (row) => new Map((row.points || []).map((p) => [p.contextTokens, p]));
 
 /** The report as a markdown table — what a copy of this is actually useful as. */
 export function toMarkdown(report) {
   const contexts = report?.contexts || [];
-  const header = ['Model', 'Runtime', 'Tuning', 'tok/s', 'chars/s', 'Prefill tok/s', 'TTFT', ...contexts.map((c) => `${formatContextTokens(c)} tok/s`)];
+  const header = ['Model', 'Runtime', 'Tuning', 'Rate basis', 'tok/s', 'chars/s', 'Prefill tok/s', 'TTFT', ...contexts.map((c) => `${formatContextTokens(c)} tok/s`)];
   const lines = [
     `| ${header.join(' | ')} |`,
     `| ${header.map(() => '---').join(' | ')} |`,
@@ -53,6 +60,7 @@ export function toMarkdown(report) {
       row.modelId,
       row.backend,
       row.tuningLabel || 'backend defaults',
+      timingLabel(row.timingSource),
       rateText(row.meanTokensPerSecond, row.tokensEstimated),
       rateText(row.meanCharsPerSecond, false),
       rateText(row.meanPromptTokensPerSecond, row.tokensEstimated),
@@ -110,6 +118,9 @@ export default function ModelThroughputReport({ report, runtimeLabelFor }) {
           <> A <span className="text-gray-400">—</span> means the runtime reported no token counts for that
           reading; its chars/s figure is in the ranked list above.</>
         )}
+        {rows.some((row) => row.timingSource === 'wall-clock') && (
+          <> Some local endpoints expose exact token counts but no decode duration; those rates use end-to-end wall clock and are marked below.</>
+        )}
       </p>
 
       {/* Wide by nature — one column per sampled context. Scrolls inside its own
@@ -119,6 +130,7 @@ export default function ModelThroughputReport({ report, runtimeLabelFor }) {
           <thead>
             <tr className="text-gray-500 border-b border-port-border">
               <th scope="col" className="text-left font-medium px-2 py-1.5">Model</th>
+              <th scope="col" className="text-right font-medium px-2 py-1.5 whitespace-nowrap">Rate basis</th>
               <th scope="col" className="text-right font-medium px-2 py-1.5 whitespace-nowrap">tok/s</th>
               <th scope="col" className="text-right font-medium px-2 py-1.5 whitespace-nowrap">chars/s</th>
               <th scope="col" className="text-right font-medium px-2 py-1.5 whitespace-nowrap">Prefill</th>
@@ -139,12 +151,17 @@ export default function ModelThroughputReport({ report, runtimeLabelFor }) {
                       {runtimeLabelFor?.(row.backend) || row.backend}
                       <span className="mx-1">·</span>
                       {row.tuningLabel || 'backend defaults'}
+                      <span className="mx-1">·</span>
+                      <span className={row.timingSource === 'wall-clock' ? 'text-port-warning' : ''} title="How the runtime timing was obtained">
+                        {timingLabel(row.timingSource)}
+                      </span>
                       {row.staleness?.stale && <span className="ml-1 text-port-warning">stale</span>}
                       {/* The numbers are real but describe a configuration nobody
                           asked for — say so here too, not only in the ranked list. */}
                       {tuningNoticeChip(row) && <span className="ml-1 text-port-warning">{tuningNoticeChip(row)}</span>}
                     </div>
                   </td>
+                  <td className="px-2 py-1.5 text-right text-gray-500 whitespace-nowrap">{timingLabel(row.timingSource)}</td>
                   <td className="px-2 py-1.5 text-right"><Rate value={row.meanTokensPerSecond} estimated={row.tokensEstimated} /></td>
                   <td className="px-2 py-1.5 text-right"><Rate value={row.meanCharsPerSecond} estimated={false} /></td>
                   <td className="px-2 py-1.5 text-right"><Rate value={row.meanPromptTokensPerSecond} estimated={row.tokensEstimated} /></td>

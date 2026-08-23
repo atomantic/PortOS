@@ -13,10 +13,12 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   buildMessages,
   normalizeUsage,
+  normalizeRuntimeTiming,
   parseOllamaStreamFrame,
   parseStreamFrame,
   resolvePartialOutput,
   streamOllamaChat,
+  toOllamaMessages,
 } from './openAiChatStream.js';
 
 describe('buildMessages', () => {
@@ -34,6 +36,22 @@ describe('buildMessages', () => {
   });
 });
 
+describe('toOllamaMessages', () => {
+  it('converts OpenAI image parts to Ollama text plus bare base64 images', () => {
+    expect(toOllamaMessages([{
+      role: 'user',
+      content: [
+        { type: 'image_url', image_url: { url: 'data:image/png;base64,abc123' } },
+        { type: 'text', text: 'Describe this.' },
+      ],
+    }])).toEqual([{
+      role: 'user',
+      content: 'Describe this.',
+      images: ['abc123'],
+    }]);
+  });
+});
+
 describe('parseStreamFrame — deltas', () => {
   it('parses an OpenAI-style content delta', () => {
     const line = 'data: {"choices":[{"delta":{"content":"Hi"}}]}';
@@ -42,6 +60,11 @@ describe('parseStreamFrame — deltas', () => {
 
   it('parses a reasoning delta', () => {
     const line = 'data: {"choices":[{"delta":{"reasoning":"thinking"}}]}';
+    expect(parseStreamFrame(line)).toEqual({ content: '', reasoning: 'thinking', usage: null });
+  });
+
+  it('normalizes llama.cpp reasoning_content deltas', () => {
+    const line = 'data: {"choices":[{"delta":{"reasoning_content":"thinking"}}]}';
     expect(parseStreamFrame(line)).toEqual({ content: '', reasoning: 'thinking', usage: null });
   });
 
@@ -58,6 +81,14 @@ describe('parseStreamFrame — deltas', () => {
 
   it('tolerates a frame with no delta', () => {
     expect(parseStreamFrame('data: {"choices":[{}]}')).toEqual({ content: '', reasoning: '', usage: null });
+  });
+
+  it('preserves llama.cpp timing blocks from the terminal frame', () => {
+    expect(parseStreamFrame('data: {"choices":[],"timings":{"prompt_n":20,"predicted_n":10,"prompt_ms":100,"predicted_ms":250}}'))
+      .toMatchObject({
+        content: '', reasoning: '', usage: null,
+        timings: { prompt_n: 20, predicted_n: 10, prompt_ms: 100, predicted_ms: 250 },
+      });
   });
 });
 
@@ -114,6 +145,18 @@ describe('normalizeUsage', () => {
   it('ignores non-numeric and negative values rather than recording them', () => {
     expect(normalizeUsage({ completion_tokens: 'lots', prompt_tokens: -3 }))
       .toEqual({ completionTokens: null, promptTokens: null });
+  });
+});
+
+describe('normalizeRuntimeTiming', () => {
+  it('converts llama.cpp millisecond timings', () => {
+    expect(normalizeRuntimeTiming({ prompt_n: 20, predicted_n: 10, prompt_ms: 100, predicted_ms: 250 }))
+      .toEqual({ promptTokens: 20, completionTokens: 10, promptMs: 100, completionMs: 250 });
+  });
+
+  it('converts MTPLX seconds without falling back to TTFT subtraction', () => {
+    expect(normalizeRuntimeTiming(null, { prompt_tokens: 20, generated_tokens: 10, prompt_eval_time_s: 0.1, decode_elapsed_s: 0.25 }))
+      .toEqual({ promptTokens: 20, completionTokens: 10, promptMs: 100, completionMs: 250 });
   });
 });
 

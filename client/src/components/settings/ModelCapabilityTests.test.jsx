@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 
@@ -24,6 +24,7 @@ const TESTS = [
   { id: 'image-analysis', label: 'Image analysis', capabilities: ['vision'], prefers: [], blurb: 'Describe a fixture image.', driver: 'chat', kind: 'vision' },
   { id: 'story-outline', label: 'Story outline', capabilities: ['chat'], prefers: ['reasoning'], blurb: 'Outline a hero journey.', driver: 'chat', kind: 'text' },
 ];
+const FICTION_TEST = { id: 'fiction-scene', label: 'Fiction scene', capabilities: ['chat'], prefers: [], blurb: 'Write a constrained opening scene.', driver: 'chat', kind: 'text' };
 
 const slot = (testId, over = {}) => ({ testId, state: 'applicable', missing: [], reason: null, result: null, ...over });
 
@@ -58,6 +59,14 @@ const renderPanel = (props = {}) => render(
     <ModelCapabilityTests report={report()} loading={false} onReload={vi.fn()} {...props} />
   </MemoryRouter>,
 );
+
+const fictionReport = (result) => report({
+  tests: [...TESTS, FICTION_TEST],
+  testIds: [...TESTS.map((t) => t.id), FICTION_TEST.id],
+  prompts: { ...report().prompts, 'fiction-scene': 'Write a constrained opening scene.' },
+  models: [model({ tests: [...TESTS.map((t) => slot(t.id)), slot('fiction-scene', { result })] })],
+  counts: { models: 1, applicable: 4, passed: 0, failed: 0 },
+});
 
 /**
  * Replay a server progress frame through the handler the panel registered.
@@ -132,6 +141,21 @@ describe('the matrix', () => {
   it('says so plainly when nothing is installed', () => {
     renderPanel({ report: report({ models: [], counts: { models: 0, applicable: 0, passed: 0, failed: 0 } }) });
     expect(screen.getByText(/no local models are installed/i)).toBeInTheDocument();
+  });
+
+  it('uses an explicit task specialization to break a tied evidence score', () => {
+    const passingSandbox = { verdict: 'passed', summary: 'fixed in 5 tool calls' };
+    renderPanel({
+      report: report({
+        models: [
+          model({ modelId: 'generic-model:30b', tests: [slot('sandbox-repair', { result: passingSandbox }), slot('image-analysis'), slot('story-outline')] }),
+          model({ modelId: 'qwen3-coder:30b', tests: [slot('sandbox-repair', { result: passingSandbox }), slot('image-analysis'), slot('story-outline')] }),
+        ],
+      }),
+    });
+
+    const card = screen.getByText('Best coding evidence').parentElement;
+    expect(within(card).getByText('qwen3-coder:30b')).toBeInTheDocument();
   });
 });
 
@@ -302,6 +326,30 @@ describe('a recorded result', () => {
     await openResult(user);
     expect(await screen.findByRole('alert')).toHaveTextContent('Timed out after 300000ms');
     expect(await screen.findByText('A bicycle and a bench at night.')).toBeInTheDocument();
+  });
+
+  it('shows the fiction scene structure checks and warns that they are not literary quality', async () => {
+    const user = userEvent.setup();
+    const result = {
+      verdict: 'partial',
+      summary: '4 of 5 story anchors, 2 of 3 scene signals, 3 of 3 minimum craft checks, 446 words',
+      detail: {
+        requiredHit: 4,
+        requiredTotal: 5,
+        wordCount: 446,
+        paragraphCount: 8,
+        hasDialogue: true,
+        required: [{ id: 'marsh', label: 'Tidal-marsh setting', any: ['marsh'], hit: true }],
+        bonus: [{ id: 'dialogue', label: 'Spoken line', any: ['said'], hit: true }],
+        craft: { minimumWords: true, paragraphs: true, dialogue: true },
+      },
+    };
+    renderPanel({ report: fictionReport(result) });
+    await user.click(screen.getByRole('button', { name: /4 of 5 story anchors/i }));
+    await user.click(await screen.findByRole('tab', { name: /checks/i }));
+
+    expect(screen.getByText('446')).toBeInTheDocument();
+    expect(screen.getByText(/not a literary-quality score/i)).toBeInTheDocument();
   });
 });
 

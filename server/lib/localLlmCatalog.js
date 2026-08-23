@@ -24,6 +24,7 @@ export const LOCAL_LLM_CATEGORIES = [
   { id: 'reasoning', label: 'Reasoning & analysis' },
   { id: 'vision', label: 'Image Analysis' },
   { id: 'chat', label: 'Chat & voice' },
+  { id: 'writing', label: 'Fiction & writing' },
   // Audio/music GENERATION models (ACE-Step, MusicGen, AudioLDM2, Stable Audio,
   // Magenta…). These are NOT GGUF chat models and don't run on Ollama/LM Studio
   // — the Hugging Face search relaxes its GGUF filter for this category and the
@@ -290,7 +291,7 @@ export const LOCAL_LLM_CATALOG = [
     recommendedFor: ['general', 'coding', 'reasoning', 'vision', 'multilingual'],
     featured: {
       label: 'Fast on Apple Silicon',
-      description: 'Recommended native-MLX Qwen3.8 install on Apple Silicon.'
+      description: 'Full image-analysis score in the local audit and the faster direct Qwen3.8 decoder fallback; MTPLX completed the end-to-end TUI task sooner.'
     },
     params: '27B',
     size: '15.0 GB',
@@ -335,8 +336,8 @@ export const LOCAL_LLM_CATALOG = [
     category: 'general',
     recommendedFor: ['general', 'coding', 'reasoning', 'vision', 'multilingual'],
     featured: {
-      label: 'Best overall',
-      description: 'Flagship local pick for general work, coding and agents, reasoning, and image analysis.'
+      label: 'Best Qwen3.8 path',
+      description: 'For Qwen3.8 CoS tasks, use MTPLX + OpenCode MTPLX TUI; use native MLX when isolated decoder throughput or vision is the priority.'
     },
     params: '27B',
     size: '16.5 GB',
@@ -449,6 +450,24 @@ export const LOCAL_LLM_CATALOG = [
   },
   // ── Coding / agentic tier ──
   {
+    key: 'qwen3-coder-30b',
+    name: 'Qwen3-Coder 30B',
+    category: 'coding',
+    recommendedFor: ['coding', 'general'],
+    featured: {
+      label: 'Best coding agent',
+      description: 'Measured local CoS pick: Ollama + OpenCode TUI. Confirm the local performance record before changing the default on another machine.'
+    },
+    params: '30B / 3.3B active',
+    size: '19 GB',
+    family: 'qwen',
+    description: 'Qwen\'s agentic coding model for repository work, tool calling, and multi-step software-engineering tasks. The audit made this the primary coding/TUI recommendation on the current Apple Silicon profile.',
+    capabilities: ['chat', 'code', 'tools'],
+    context: 262144,
+    repository: 'Qwen/Qwen3-Coder-30B-A3B-Instruct',
+    ollama: 'qwen3-coder:30b'
+  },
+  {
     key: 'ornith-9b',
     name: 'Ornith 1.0 9B',
     category: 'coding',
@@ -528,6 +547,25 @@ export const LOCAL_LLM_CATALOG = [
     context: 262144,
     ollama: 'qwen3.6:35b',
     lmstudio: 'unsloth/Qwen3.6-35B-A3B-GGUF'
+  },
+  // ── Fiction / writing tier ──
+  {
+    key: 'qwen3.6-fable-fusion',
+    name: 'Qwen3.6 Fable Fusion 27B',
+    category: 'writing',
+    recommendedFor: ['writing', 'general'],
+    featured: {
+      label: 'Best fiction candidate',
+      description: 'Best fiction-specialist result in the local audit. The screen is structural, not an aesthetic judgment—read the saved prose.'
+    },
+    params: '27B',
+    size: '31 GB',
+    family: 'qwen',
+    description: 'A Qwen3.6 Fable Fusion checkpoint for fiction drafting and narrative voice experiments. Keep a general or coding model selected for agentic repository work.',
+    capabilities: ['chat', 'reasoning'],
+    context: 262144,
+    repository: 'DavidAU/Qwen3.6-27B-Fable-Fusion-711-Uncensored-Heretic-NM-DAU-NEO-MAX-MTP-GGUF',
+    ollama: 'hf.co/DavidAU/Qwen3.6-27B-Fable-Fusion-711-Uncensored-Heretic-NM-DAU-NEO-MAX-MTP-GGUF:Q8_0'
   },
   // ── Vision / image analysis tier ──
   {

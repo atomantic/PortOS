@@ -128,7 +128,7 @@ describe('localLlmCatalog', () => {
       const qwen = getCatalog('ollama').find((m) => m.key === 'qwen3.8-27b');
       expect(qwen).toMatchObject({
         category: 'general',
-        featured: { label: 'Best overall' },
+        featured: { label: 'Best Qwen3.8 path' },
         id: 'hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M',
         size: '16.5 GB',
         repository: 'unsloth/Qwen3.8-27B-GGUF',
@@ -136,6 +136,19 @@ describe('localLlmCatalog', () => {
       expect(qwen.note).toMatch(/Dynamic 3\.0/i);
       expect(qwen.recommendedFor).toEqual(expect.arrayContaining(['general', 'coding', 'reasoning', 'vision']));
       expect(qwen.capabilities).toEqual(expect.arrayContaining(['code', 'tools', 'vision']));
+    });
+
+    it('surfaces the measured coding and fiction recommendations in the Ollama catalog', () => {
+      expect(getCatalog('ollama').find((m) => m.key === 'qwen3-coder-30b')).toMatchObject({
+        id: 'qwen3-coder:30b',
+        category: 'coding',
+        featured: { label: 'Best coding agent' },
+        capabilities: ['chat', 'code', 'tools'],
+      });
+      expect(getCatalog('ollama').find((m) => m.key === 'qwen3.6-fable-fusion')).toMatchObject({
+        category: 'writing',
+        featured: { label: 'Best fiction candidate' },
+      });
     });
 
     it('still treats an older Unsloth Q4_K_M install as the same Qwen3.8 catalog entry', () => {

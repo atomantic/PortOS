@@ -46,12 +46,23 @@ export function parseStreamFrame(rawLine) {
     return null;
   }
   const delta = parsed?.choices?.[0]?.delta;
-  return {
+  const frame = {
     content: delta?.content || '',
-    reasoning: delta?.reasoning || '',
+    // llama.cpp/MTPLX commonly name the hidden channel `reasoning_content`;
+    // normalize it beside the OpenAI `reasoning` spelling so a reasoning-only
+    // answer is not reduced to a stray newline and scored as a one-character
+    // generation.
+    reasoning: delta?.reasoning || delta?.reasoning_content || delta?.thinking || '',
     // `null` = this frame reported no usage, which is every frame but the last.
     usage: parsed?.usage && typeof parsed.usage === 'object' ? parsed.usage : null,
   };
+  // llama.cpp puts its authoritative prompt/decode timings on the terminal
+  // chunk rather than inside OpenAI's usage object. MTPLX carries a richer
+  // sibling stats block. Keep both optional so ordinary OpenAI frames retain
+  // the small stable shape callers already consume.
+  if (parsed?.timings && typeof parsed.timings === 'object') frame.timings = parsed.timings;
+  if (parsed?.mtplx_stats && typeof parsed.mtplx_stats === 'object') frame.mtplxStats = parsed.mtplx_stats;
+  return frame;
 }
 
 // Endpoints that answered 4xx to `stream_options`. A sweep runs hundreds of
@@ -89,6 +100,34 @@ export function normalizeUsage(usage) {
     completionTokens: pick('completion_tokens', 'completionTokens', 'eval_count'),
     promptTokens: pick('prompt_tokens', 'promptTokens', 'prompt_eval_count'),
   };
+}
+
+/**
+ * Normalize runtime-specific timing blocks into milliseconds and counts.
+ *
+ * The OpenAI-compatible surface does not standardize decode timing: llama.cpp
+ * uses `predicted_ms`, while MTPLX reports seconds in `mtplx_stats`. Without
+ * this translation the generic clock fallback subtracts TTFT from a one-frame
+ * response and can report absurd rates such as tens of thousands of tokens/s.
+ * Missing fields stay absent so the caller can preserve the null sentinel.
+ */
+export function normalizeRuntimeTiming(timings, mtplxStats) {
+  const t = timings && typeof timings === 'object' ? timings : {};
+  const s = mtplxStats && typeof mtplxStats === 'object' ? mtplxStats : {};
+  const firstFinite = (...values) => values.find((value) => Number.isFinite(value) && value >= 0);
+  const result = {};
+  const promptTokens = firstFinite(t.prompt_n, t.prompt_tokens, s.prompt_tokens);
+  const completionTokens = firstFinite(t.predicted_n, t.completion_tokens, s.completion_tokens, s.generated_tokens);
+  const promptMs = firstFinite(t.prompt_ms, t.prompt_eval_ms,
+    Number.isFinite(s.prompt_eval_time_s) ? s.prompt_eval_time_s * 1000 : null);
+  const completionMs = firstFinite(t.predicted_ms, t.completion_ms,
+    Number.isFinite(s.decode_elapsed_s) ? s.decode_elapsed_s * 1000 : null,
+    Number.isFinite(s.elapsed_s) ? s.elapsed_s * 1000 : null);
+  if (promptTokens !== undefined) result.promptTokens = promptTokens;
+  if (completionTokens !== undefined) result.completionTokens = completionTokens;
+  if (promptMs !== undefined) result.promptMs = promptMs;
+  if (completionMs !== undefined) result.completionMs = completionMs;
+  return result;
 }
 
 /**
@@ -209,7 +248,7 @@ export async function streamOpenAiChat({
     signal,
     body: JSON.stringify({
       model,
-      messages: toOllamaMessages(messages),
+      messages,
       stream: true,
       temperature,
       max_tokens: maxTokens,
@@ -283,11 +322,15 @@ export async function streamOpenAiChat({
   // it — the two would disagree systematically on every reasoning model.
   let usage = null;
   let contentFrames = 0;
+  let runtimeTimings = null;
+  let mtplxStats = null;
 
   const consumeLine = async (rawLine) => {
     const delta = parseStreamFrame(rawLine);
     if (!delta) return;
     if (delta.usage) usage = delta.usage;
+    if (delta.timings) runtimeTimings = delta.timings;
+    if (delta.mtplxStats) mtplxStats = delta.mtplxStats;
     if (delta.content) contentFrames += 1;
     if (delta.content) {
       output += delta.content;
@@ -322,12 +365,19 @@ export async function streamOpenAiChat({
     throw err;
   } finally {
     const reported = normalizeUsage(usage);
+    const runtime = normalizeRuntimeTiming(runtimeTimings, mtplxStats);
     emitStats(reported.completionTokens !== null
-      ? { ...reported, estimated: false }
+      ? { ...reported, ...runtime, estimated: false }
       // No usage block: fall back to the streamed-frame count, which is the only
       // token-shaped evidence we have. `null` when nothing streamed at all —
       // reporting 0 would file a transport failure as a zero-token generation.
-      : { completionTokens: contentFrames > 0 ? contentFrames : null, promptTokens: reported.promptTokens, estimated: contentFrames > 0 });
+      : {
+        completionTokens: runtime.completionTokens ?? (contentFrames > 0 ? contentFrames : null),
+        promptTokens: runtime.promptTokens ?? reported.promptTokens,
+        ...(runtime.promptMs !== undefined ? { promptMs: runtime.promptMs } : {}),
+        ...(runtime.completionMs !== undefined ? { completionMs: runtime.completionMs } : {}),
+        estimated: runtime.completionTokens === undefined && contentFrames > 0,
+      });
     await reader.cancel().catch(() => {});
   }
 
@@ -400,7 +450,7 @@ export async function streamOllamaChat({
     signal,
     body: JSON.stringify({
       model,
-      messages,
+      messages: toOllamaMessages(messages),
       stream: true,
       ...(Object.keys(options).length ? { options } : {}),
       ...(typeof think === 'boolean' ? { think } : {}),
