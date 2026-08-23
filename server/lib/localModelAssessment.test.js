@@ -606,6 +606,7 @@ describe('buildThroughputReport', () => {
     expect(report.rows.map((r) => r.modelId)).toEqual(['fast-model', 'slow-model']);
     expect(report.contexts).toEqual([512, 4096]);
     expect(report.rows[0].points.map((p) => p.tokensPerSecond)).toEqual([60, 40]);
+    expect(report.rows[0].points.map((p) => p.totalMs)).toEqual([1000, 1000]);
     expect(report.modelsWithTokenRates).toBe(2);
   });
 

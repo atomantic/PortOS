@@ -9,7 +9,7 @@ import ModelThroughputReport, { toMarkdown } from './ModelThroughputReport.jsx';
 
 const point = (contextTokens, tokensPerSecond, extra = {}) => ({
   contextTokens, ok: true, tokensPerSecond, promptTokensPerSecond: 900, charsPerSecond: 200,
-  ttftMs: 300, completionTokens: 96, error: null, ...extra,
+  ttftMs: 300, totalMs: 800, completionTokens: 96, error: null, ...extra,
 });
 
 const row = (modelId, overrides = {}) => ({
@@ -41,10 +41,19 @@ beforeEach(() => vi.clearAllMocks());
 describe('ModelThroughputReport', () => {
   it('renders a column per sampled context and the per-context rates', () => {
     render(<ModelThroughputReport report={report([row('example-model:7b')])} />);
-    expect(screen.getByRole('columnheader', { name: '512' })).toBeInTheDocument();
-    expect(screen.getByRole('columnheader', { name: '4K' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: /512.*rate.*elapsed/i })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: /4K.*rate.*elapsed/i })).toBeInTheDocument();
     expect(screen.getByText('60.0')).toBeInTheDocument();
     expect(screen.getByText('40.0')).toBeInTheDocument();
+  });
+
+  it('shows the elapsed time for each context test beneath its rate', () => {
+    const measured = row('timed-model', {
+      points: [point(512, 60, { totalMs: 800 }), point(4096, 40, { totalMs: 2400 })],
+    });
+    render(<ModelThroughputReport report={report([measured])} />);
+    expect(screen.getByText('800ms')).toBeInTheDocument();
+    expect(screen.getByText('2.4s')).toBeInTheDocument();
   });
 
   // The sentinel contract, in the UI: a runtime that reported no token counts
@@ -119,9 +128,9 @@ describe('toMarkdown', () => {
   it('emits one row per measurement with a column per context', () => {
     const md = toMarkdown(report([row('example-model:7b')]));
     const lines = md.split('\n');
-    expect(lines[0]).toBe('| Model | Runtime | Tuning | Rate basis | tok/s | chars/s | Prefill tok/s | TTFT | 512 tok/s | 4K tok/s |');
+    expect(lines[0]).toBe('| Model | Runtime | Tuning | Rate basis | tok/s | chars/s | Prefill tok/s | TTFT | 512 tok/s / elapsed | 4K tok/s / elapsed |');
     expect(lines[2]).toContain('| example-model:7b | ollama | backend defaults | timing basis unavailable | 50.0 |');
-    expect(lines[2]).toContain('| 60.0 | 40.0 |');
+    expect(lines[2]).toContain('| 60.0 (800ms) | 40.0 (800ms) |');
   });
 
   it('writes a dash for an unmeasured cell rather than a zero', () => {

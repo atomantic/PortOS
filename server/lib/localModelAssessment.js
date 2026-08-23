@@ -186,10 +186,11 @@ export function summarizePerformance(samples) {
  * Flatten every measurement into one tokens-per-second table, fastest first.
  *
  * This is the "how fast is each model, really" view: one row per measured
- * model+tuning, carrying the per-context readings so falloff as the prompt grows
- * is visible rather than averaged away. It is a REPORT, not a ranking — no
- * scoring, no intent, no exclusions — so a model that only ran at 512 tokens
- * still appears, with one column filled and the rest honestly blank.
+ * model+tuning, carrying the per-context readings and elapsed test time so
+ * falloff as the prompt grows is visible rather than averaged away. It is a
+ * REPORT, not a ranking — no scoring, no intent, no exclusions — so a model that
+ * only ran at 512 tokens still appears, with one column filled and the rest
+ * honestly blank.
  *
  * Rows whose runtime reported no token counts are still included (with `null`
  * rates) rather than dropped: "this runtime does not report tokens" is the
@@ -222,6 +223,10 @@ export function buildThroughputReport(assessments) {
         promptTokensPerSecond: num(sample.promptTokensPerSecond),
         charsPerSecond: num(sample.charsPerSecond),
         ttftMs: num(sample.ttftMs),
+        // Keep the end-to-end duration with the context column. Unlike the
+        // aggregate mean TTFT, this answers how long THIS individual test took,
+        // including prompt processing and generation.
+        totalMs: num(sample.totalMs),
         completionTokens: num(sample.completionTokens),
         timingSource: sample.timingSource || null,
         error: sample?.error || null,

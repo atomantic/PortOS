@@ -1,5 +1,5 @@
 /**
- * Tokens-per-second report.
+ * Tokens-per-second and test-time report.
  *
  * The ranked list above it answers "which model should I use?". This answers
  * "how fast is each one, and where does it fall off?" — one row per measured
@@ -21,7 +21,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Timer, Copy, Check } from 'lucide-react';
 import { copyToClipboard } from '../../lib/clipboard';
 import { tuningNoticeChip } from '../../lib/assessmentTuningNotice';
-import { formatContextTokens, formatDurationMs } from '../../utils/formatters';
+import { formatContextTokens, formatDurationMs, formatRuntime } from '../../utils/formatters';
 
 // One rate, as text. `null` is not measured and renders as an em dash — never a
 // zero; `estimated` marks a frame-counted figure with a `~` so it is never
@@ -36,6 +36,14 @@ const Rate = ({ value, estimated, suffix = '' }) => (
     : <span className="text-gray-600">{rateText(value, estimated)}</span>
 );
 
+// Per-context tests can be shorter than a second, so use the formatter that
+// preserves milliseconds rather than the coarse multi-second formatter used by
+// summary cards. A finite zero is still an observed duration, not an unknown.
+const elapsedText = (value) => {
+  if (!Number.isFinite(value) || value < 0) return '—';
+  return formatRuntime(value) || '0ms';
+};
+
 const timingLabel = (source) => ({
   runtime: 'runtime timing',
   'stream-window': 'observed stream window',
@@ -46,10 +54,19 @@ const timingLabel = (source) => ({
 // A row's samples keyed by context, for the per-context columns.
 const pointsByContext = (row) => new Map((row.points || []).map((p) => [p.contextTokens, p]));
 
+const contextMarkdown = (point, estimated) => {
+  if (!point) return '—';
+  if (!point.ok) {
+    const elapsed = elapsedText(point.totalMs);
+    return elapsed === '—' ? 'failed' : `failed (${elapsed})`;
+  }
+  return `${rateText(point.tokensPerSecond, estimated)} (${elapsedText(point.totalMs)})`;
+};
+
 /** The report as a markdown table — what a copy of this is actually useful as. */
 export function toMarkdown(report) {
   const contexts = report?.contexts || [];
-  const header = ['Model', 'Runtime', 'Tuning', 'Rate basis', 'tok/s', 'chars/s', 'Prefill tok/s', 'TTFT', ...contexts.map((c) => `${formatContextTokens(c)} tok/s`)];
+  const header = ['Model', 'Runtime', 'Tuning', 'Rate basis', 'tok/s', 'chars/s', 'Prefill tok/s', 'TTFT', ...contexts.map((c) => `${formatContextTokens(c)} tok/s / elapsed`)];
   const lines = [
     `| ${header.join(' | ')} |`,
     `| ${header.map(() => '---').join(' | ')} |`,
@@ -65,7 +82,7 @@ export function toMarkdown(report) {
       rateText(row.meanCharsPerSecond, false),
       rateText(row.meanPromptTokensPerSecond, row.tokensEstimated),
       Number.isFinite(row.meanTtftMs) ? formatDurationMs(row.meanTtftMs) : '—',
-      ...contexts.map((c) => rateText(byContext.get(c)?.tokensPerSecond, row.tokensEstimated)),
+      ...contexts.map((c) => contextMarkdown(byContext.get(c), row.tokensEstimated)),
     ].join(' | ')} |`);
   }
   return lines.join('\n');
@@ -99,7 +116,7 @@ export default function ModelThroughputReport({ report, runtimeLabelFor }) {
     <div className="space-y-2">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <h3 className="text-xs font-medium text-gray-400 flex items-center gap-1.5">
-          <Timer size={12} /> Tokens per second
+          <Timer size={12} /> Tokens per second / test time
         </h3>
         <button
           onClick={copy}
@@ -113,7 +130,8 @@ export default function ModelThroughputReport({ report, runtimeLabelFor }) {
         Generation speed after the first token — exact tokens/s when the runtime reports usage, with chars/s
         beside it as the universal cross-runtime fallback. Prefill speed (how fast the prompt was read) and
         time to first token are beside them, so a model that decodes fast but chews slowly through long context
-        is visible as such.
+        is visible as such. Each context column shows its throughput on top and the total elapsed time for
+        that individual test below it.
         {report.modelsWithTokenRates < rows.length && (
           <> A <span className="text-gray-400">—</span> means the runtime reported no token counts for that
           reading; its chars/s figure is in the ranked list above.</>
@@ -137,7 +155,8 @@ export default function ModelThroughputReport({ report, runtimeLabelFor }) {
               <th scope="col" className="text-right font-medium px-2 py-1.5 whitespace-nowrap">TTFT</th>
               {contexts.map((context) => (
                 <th key={context} scope="col" className="text-right font-medium px-2 py-1.5 whitespace-nowrap">
-                  {formatContextTokens(context)}
+                  <div>{formatContextTokens(context)}</div>
+                  <div className="text-[10px] font-normal text-gray-600">rate / elapsed</div>
                 </th>
               ))}
             </tr>
@@ -178,9 +197,19 @@ export default function ModelThroughputReport({ report, runtimeLabelFor }) {
                         // never sampled — the title says which, and why.
                         title={point && !point.ok ? (point.error || 'failed') : undefined}
                       >
-                        {point && !point.ok
-                          ? <span className="text-port-warning">failed</span>
-                          : <Rate value={point?.tokensPerSecond} estimated={row.tokensEstimated} />}
+                        <div className="flex flex-col items-end gap-0.5">
+                          {point && !point.ok
+                            ? <span className="text-port-warning">failed</span>
+                            : <Rate value={point?.tokensPerSecond} estimated={row.tokensEstimated} />}
+                          {point && (
+                            <span
+                              className="text-gray-500 whitespace-nowrap"
+                              title="Total elapsed time for this context test"
+                            >
+                              {elapsedText(point.totalMs)}
+                            </span>
+                          )}
+                        </div>
                       </td>
                     );
                   })}

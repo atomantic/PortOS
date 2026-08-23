@@ -175,7 +175,7 @@ describe('buildSamplePrompt', () => {
 describe('toSample', () => {
   it('records timings from a successful run', () => {
     expect(svc.toSample(512, okRun())).toMatchObject({
-      contextTokens: 512, ok: true, charsPerSecond: 120, ttftMs: 250, error: null,
+      contextTokens: 512, ok: true, charsPerSecond: 120, ttftMs: 250, totalMs: 800, error: null,
     });
   });
 
