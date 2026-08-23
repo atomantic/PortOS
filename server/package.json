@@ -35,8 +35,8 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "4.1.10",
-    "vitest": "4.1.10"
+    "@vitest/coverage-v8": "4.1.11",
+    "vitest": "4.1.11"
   },
   "overrides": {
     "path-to-regexp": "8.4.2",
