@@ -224,6 +224,44 @@ export const deriveLegacyClips = (segments) => segments
   .filter((s) => s.type === 'clip')
   .map((s) => ({ clipId: s.clipId, inSec: s.inSec, outSec: s.outSec }));
 
+const sameMirror = (a, b) => a.length === b.length
+  && a.every((c, i) => c.clipId === b[i].clipId && c.inSec === b[i].inSec && c.outSec === b[i].outSec);
+
+/**
+ * Reconcile a stored `clips` mirror that no longer matches its lane.
+ *
+ * v2 rebuilds the mirror on every write, so a divergence can only come from a
+ * v1 build editing the project after a rollback: that build knows only `clips`
+ * and leaves `segments` untouched, so trusting `segments` would silently
+ * discard the user's legacy edits. Take the mirror as the authority for order
+ * and trims, carrying each clip's fades and volume across from the segment
+ * that still matches it by id (matched in order, so a clip used twice keeps
+ * both of its treatments).
+ *
+ * A lane holding STILLS is the one unreconcilable case — a v1 mirror cannot
+ * represent them, so honouring it would delete work the old build never saw.
+ * The lane wins there and the mirror is rebuilt.
+ */
+const reconcileLegacyMirror = (segments, storedClips) => {
+  if (!Array.isArray(storedClips)) return segments;
+  if (segments.some((s) => s.type !== 'clip')) return segments;
+  const mirror = storedClips
+    .filter((c) => c && typeof c === 'object')
+    .map((c) => ({ clipId: String(c.clipId || ''), inSec: Math.max(0, num(c.inSec, 0)), outSec: num(c.outSec, NaN) }))
+    .filter((c) => c.clipId && Number.isFinite(c.outSec) && c.outSec > c.inSec);
+  if (sameMirror(deriveLegacyClips(segments), mirror)) return segments;
+
+  const effectsById = new Map();
+  for (const s of segments) {
+    if (!effectsById.has(s.clipId)) effectsById.set(s.clipId, []);
+    effectsById.get(s.clipId).push({ fadeInSec: s.fadeInSec, fadeOutSec: s.fadeOutSec, volume: s.volume });
+  }
+  return mirror.map((c) => {
+    const effects = effectsById.get(c.clipId)?.shift();
+    return { type: 'clip', ...c, fadeInSec: 0, fadeOutSec: 0, volume: 1, ...effects };
+  });
+};
+
 /**
  * Upgrade a persisted project to the v2 lane shape in memory. Idempotent, and
  * tolerant of a hand-edited file: a non-array `clips`/`segments`/`overlays`
@@ -241,7 +279,7 @@ export function normalizeProject(project) {
     ? project.segments
     : legacyClips.map((c) => ({ type: 'clip', ...c }));
 
-  const segments = rawSegments.flatMap((entry) => {
+  const coerced = rawSegments.flatMap((entry) => {
     if (!entry || typeof entry !== 'object') return [];
     const type = entry.type || (entry.clipId ? 'clip' : null);
     if (type === 'clip') {
@@ -272,6 +310,12 @@ export function normalizeProject(project) {
     }
     return [];
   });
+
+  // A stored mirror that diverges from the lane means a rolled-back v1 build
+  // edited this project; that edit is newer than the lane it never touched.
+  const segments = Array.isArray(project.segments)
+    ? reconcileLegacyMirror(coerced, project.clips)
+    : coerced;
 
   const overlays = Array.isArray(project.overlays)
     ? project.overlays.filter((o) => o && typeof o === 'object').map((o) => ({

@@ -5,6 +5,7 @@ import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import { formatDurationSec } from '../utils/formatters';
+import { projectSummary } from '../lib/videoTimelineModel';
 
 export default function VideoTimeline() {
   const navigate = useNavigate();
@@ -52,19 +53,8 @@ export default function VideoTimeline() {
 
   const projectStats = useMemo(() => {
     const historyMap = new Map(history.map((h) => [h.id, h]));
-    const stats = new Map();
-    for (const project of projects) {
-      let totalSec = 0;
-      let firstThumb = null;
-      for (const ref of project.clips || []) {
-        const clip = historyMap.get(ref.clipId);
-        if (!clip) continue;
-        totalSec += Math.max(0, ref.outSec - ref.inSec);
-        if (!firstThumb && clip.thumbnail) firstThumb = `/data/video-thumbnails/${clip.thumbnail}`;
-      }
-      stats.set(project.id, { totalSec, firstThumb });
-    }
-    return stats;
+    const thumbnailFor = (clipId) => historyMap.get(clipId)?.thumbnail;
+    return new Map(projects.map((p) => [p.id, projectSummary(p, thumbnailFor)]));
   }, [projects, history]);
 
   return (
@@ -100,7 +90,7 @@ export default function VideoTimeline() {
       {!loading && projects.length > 0 && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           {projects.map((project) => {
-            const { totalSec, firstThumb } = projectStats.get(project.id) || { totalSec: 0, firstThumb: null };
+            const { totalSec, blockCount, firstThumb } = projectStats.get(project.id) || { totalSec: 0, blockCount: 0, firstThumb: null };
             return (
               <div key={project.id} className="bg-port-card border border-port-border rounded-xl overflow-hidden hover:border-port-accent/50 transition-colors">
                 <button
@@ -135,7 +125,7 @@ export default function VideoTimeline() {
                     </button>
                   </div>
                   <div className="flex items-center gap-3 text-xs text-gray-400">
-                    <span className="flex items-center gap-1"><Film className="w-3 h-3" />{(project.clips || []).length} clips</span>
+                    <span className="flex items-center gap-1"><Film className="w-3 h-3" />{blockCount} blocks</span>
                     <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{formatDurationSec(totalSec)}</span>
                   </div>
                 </div>

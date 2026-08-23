@@ -180,3 +180,27 @@ export const segmentVolumeAt = (segment, clipVolume, within) => {
   const base = (clipVolume == null ? 1 : clipVolume) * (segment.volume == null ? 1 : segment.volume);
   return clamp(base * fadeMultiplier(segment.fadeInSec || 0, segment.fadeOutSec || 0, duration, within), 0, 1);
 };
+
+/**
+ * Summary a project index needs: how many blocks the timeline holds, how long
+ * it runs, and a thumbnail for the card.
+ *
+ * Reads the `segments` lane, NEVER the derived `clips` mirror — the mirror
+ * carries only clip segments, so a project built from stills would report zero
+ * blocks and zero seconds while playing back perfectly in the editor. A v1
+ * project that predates the lane falls back to `clips`, which for it IS the
+ * lane. `thumbnailFor(clipId)` resolves a video clip's thumbnail filename.
+ */
+export const projectSummary = (project, thumbnailFor) => {
+  const segments = Array.isArray(project?.segments) ? project.segments : (project?.clips || []);
+  let totalSec = 0;
+  let firstThumb = null;
+  for (const segment of segments) {
+    totalSec += segmentDuration(segment);
+    if (firstThumb) continue;
+    firstThumb = segment.type === 'still'
+      ? assetUrl(segment.assetKind, segment.assetFile)
+      : assetUrl('video-thumbnails', thumbnailFor(segment.clipId));
+  }
+  return { totalSec, blockCount: segments.length, firstThumb };
+};

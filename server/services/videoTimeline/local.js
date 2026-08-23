@@ -23,7 +23,7 @@ import { randomUUID } from 'crypto';
 import { ensureDir, PATHS, readJSONFile, atomicWrite } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
-import { findFfmpeg, findFfprobe, safeUnder, generateThumbnail, probeVideoDuration, BT709_CONTAINER_ARGS } from '../../lib/ffmpeg.js';
+import { findFfmpeg, findFfprobe, safeUnder, generateThumbnail, probeVideoDuration, BT709_CONTAINER_ARGS, bt709TagFilter } from '../../lib/ffmpeg.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { attachFfmpegRenderGuard } from '../../lib/ffmpegRenderGuard.js';
@@ -177,12 +177,16 @@ export async function updateProject(id, patch, expectedUpdatedAt) {
     if (!Array.isArray(patch.clips)) {
       throw new ServerError('clips must be an array', { status: 400, code: 'VALIDATION_ERROR' });
     }
-    const nonClip = (project.segments || []).filter((s) => s.type !== 'clip');
-    if (nonClip.length > 0) {
-      throw new ServerError('Project uses the layered timeline — a clips-only save would drop its non-clip segments', {
+    // A `clips` entry carries only { clipId, inSec, outSec }, so rebuilding the
+    // lane from one erases every layered field it cannot express — a still
+    // outright, and a clip's fades and volume back to their neutral defaults.
+    const wouldDrop = (project.segments || []).filter((s) => s.type !== 'clip'
+      || s.fadeInSec > 0 || s.fadeOutSec > 0 || (s.volume != null && s.volume !== 1));
+    if (wouldDrop.length > 0) {
+      throw new ServerError('Project uses the layered timeline — a clips-only save would drop its stills, fades or volume', {
         status: 409,
         code: 'SCHEMA_TOO_NEW',
-        context: { schemaVersion: TIMELINE_SCHEMA_VERSION, droppedSegmentCount: nonClip.length },
+        context: { schemaVersion: TIMELINE_SCHEMA_VERSION, droppedSegmentCount: wouldDrop.length },
       });
     }
     project.segments = validateSegments(patch.clips.map((c) => ({ type: 'clip', ...(c && typeof c === 'object' ? c : {}) })));
@@ -423,7 +427,7 @@ const fadeChain = (prefix, { fadeInSec = 0, fadeOutSec = 0 }, duration, lead = [
 // carries its on-disk path, its project-time `duration`, and (for a clip) its
 // probed `hasAudio`. Geometry comes off the timeline rather than being
 // re-derived here, so exactly one place decides the canvas.
-export function buildFfmpegArgs(timeline, outputPath) {
+export function buildFfmpegArgs(timeline, outputPath, { colorTagFilter = null } = {}) {
   const t = timeline || {};
   const segments = t.segments || [];
   if (segments.length === 0) throw new Error('buildFfmpegArgs: empty clips');
@@ -490,7 +494,13 @@ export function buildFfmpegArgs(timeline, outputPath) {
   // Label the concat outputs as the FINAL outputs whenever no later lane
   // post-processes them, so a plain clip-only project still produces the exact
   // minimal graph it always has.
-  const vConcatOut = overlays.length > 0 ? '[cv]' : '[outv]';
+  // From ffmpeg 8 the encoder reads colour properties off the FRAMES, silently
+  // overriding the container flags — so a flags-only output still decodes
+  // washed-out. `setparams` stamps the frames; the caller probes for it once
+  // (`bt709TagFilter()`) and passes the string in, keeping this builder pure.
+  const tag = typeof colorTagFilter === 'string' && colorTagFilter ? colorTagFilter : null;
+  const videoOut = tag ? '[vpre]' : '[outv]';
+  const vConcatOut = overlays.length > 0 ? '[cv]' : videoOut;
   const aConcatOut = audioTracks.length > 0 ? '[ca]' : '[outa]';
   filters.push(`${concatStreams.join('')}concat=n=${segments.length}:v=1:a=1${vConcatOut}${aConcatOut}`);
 
@@ -516,7 +526,7 @@ export function buildFfmpegArgs(timeline, outputPath) {
       chain.push(`fade=t=out:st=${fmt(Math.max(ov.startSec, end - ov.fadeOutSec))}:d=${fmt(ov.fadeOutSec)}:alpha=1`);
     }
     filters.push(`[${oIdx}:v]${chain.join(',')}[ov${j}]`);
-    const out = j === overlays.length - 1 ? '[outv]' : `[ovc${j}]`;
+    const out = j === overlays.length - 1 ? videoOut : `[ovc${j}]`;
     filters.push(
       `${overlayIn}[ov${j}]overlay=x=${x}:y=${y}:eof_action=pass:enable='between(t,${fmt(ov.startSec)},${fmt(end)})'${out}`
     );
@@ -554,6 +564,8 @@ export function buildFfmpegArgs(timeline, outputPath) {
       `[ca]${bedLabels.join('')}amix=inputs=${bedLabels.length + 1}:duration=first:dropout_transition=0:normalize=0[outa]`
     );
   }
+
+  if (tag) filters.push(`[vpre]${tag}[outv]`);
 
   const args = [
     ...inputs,
@@ -614,7 +626,7 @@ export async function renderProject(projectId) {
   const jobId = randomUUID();
   const filename = `timeline-${projectId.slice(0, 8)}-${Date.now()}.mp4`;
   const outputPath = join(PATHS.videos, filename);
-  const { args, totalDuration, canonW, canonH, fps } = buildFfmpegArgs(timeline, outputPath);
+  const { args, totalDuration, canonW, canonH, fps } = buildFfmpegArgs(timeline, outputPath, { colorTagFilter: await bt709TagFilter() });
 
   const job = {
     id: jobId,

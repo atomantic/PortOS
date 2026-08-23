@@ -13,6 +13,7 @@ import {
   clampTrim,
   fitFadePatch,
   segmentVolumeAt,
+  projectSummary,
 } from './videoTimelineModel';
 
 const clip = (inSec, outSec) => ({ type: 'clip', clipId: 'c', inSec, outSec });
@@ -221,5 +222,50 @@ describe('segmentVolumeAt — preview must audition what the export mixes', () =
 
   it('is silent for a still — it carries no audio track', () => {
     expect(segmentVolumeAt({ type: 'still', durationSec: 3 }, 1, 1)).toBe(0);
+  });
+});
+
+describe('projectSummary — the index must count the lane, not the mirror', () => {
+  const thumbFor = (id) => (id === 'c1' ? 'c1.jpg' : null);
+
+  it('counts stills, which the derived clips mirror deliberately omits', () => {
+    const summary = projectSummary({
+      segments: [
+        { type: 'clip', clipId: 'c1', inSec: 0, outSec: 2 },
+        { type: 'still', assetKind: 'images', assetFile: 'plate.png', durationSec: 3 },
+      ],
+      // A layered project's mirror carries only its clip segments; reading it
+      // here would under-report the timeline the editor actually plays.
+      clips: [{ clipId: 'c1', inSec: 0, outSec: 2 }],
+    }, thumbFor);
+
+    expect(summary).toMatchObject({ blockCount: 2, totalSec: 5 });
+  });
+
+  it('does not report a stills-only project as empty', () => {
+    const summary = projectSummary({
+      segments: [{ type: 'still', assetKind: 'images', assetFile: 'plate.png', durationSec: 4 }],
+      clips: [],
+    }, thumbFor);
+
+    expect(summary).toMatchObject({ blockCount: 1, totalSec: 4, firstThumb: '/data/images/plate.png' });
+  });
+
+  it('falls back to clips for a v1 project, where the mirror IS the lane', () => {
+    expect(projectSummary({ clips: [{ clipId: 'c1', inSec: 1, outSec: 4 }] }, thumbFor))
+      .toMatchObject({ blockCount: 1, totalSec: 3, firstThumb: '/data/video-thumbnails/c1.jpg' });
+  });
+
+  it('takes the first block\'s thumbnail, still or clip', () => {
+    expect(projectSummary({
+      segments: [
+        { type: 'still', assetKind: 'images', assetFile: 'first.png', durationSec: 1 },
+        { type: 'clip', clipId: 'c1', inSec: 0, outSec: 1 },
+      ],
+    }, thumbFor).firstThumb).toBe('/data/images/first.png');
+  });
+
+  it('reports an empty project as empty rather than throwing', () => {
+    expect(projectSummary({}, thumbFor)).toEqual({ totalSec: 0, blockCount: 0, firstThumb: null });
   });
 });

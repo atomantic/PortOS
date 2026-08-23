@@ -81,6 +81,8 @@ export default function VideoTimelineEditor() {
   const [history, setHistory] = useState([]);
   const [images, setImages] = useState([]);
   const [musicTracks, setMusicTracks] = useState([]);
+  // Which catalogues have actually been fetched — see knownAbsent below.
+  const [loaded, setLoaded] = useState({ clips: false, images: false, music: false });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   // The three lanes live in ONE state object so a save always ships a
@@ -128,11 +130,15 @@ export default function VideoTimelineEditor() {
   const refresh = useCallback(async () => {
     setLoading(true);
     setError(null);
+    // `null` = the request FAILED; `[]` = a genuinely empty library. Collapsing
+    // the two would wipe a populated list on a transient error and then mark
+    // every segment, overlay and bed drawing on it as "missing" — sources the
+    // server can still render perfectly well.
     const [proj, hist, gallery, library] = await Promise.all([
       api.getTimelineProject(projectId).catch((err) => { setError(err.message); return null; }),
-      api.listVideoHistory().catch(() => []),
-      api.listImageGallery().catch(() => []),
-      api.listMusicLibrary().catch(() => null),
+      api.listVideoHistory({ silent: true }).catch(() => null),
+      api.listImageGallery({ silent: true }).catch(() => null),
+      api.listMusicLibrary({ silent: true }).catch(() => null),
     ]);
     if (proj) {
       const nextLanes = {
@@ -153,11 +159,16 @@ export default function VideoTimelineEditor() {
       const entries = laneEntries(nextLanes, lane);
       setSelection(entries?.[index] ? { lane, key: entries[index]._key } : null);
     }
-    setHistory(Array.isArray(hist) ? hist : []);
-    setImages(Array.isArray(gallery) ? gallery : []);
-    // `null` = the request failed; `[]` = a genuinely empty library. Only the
-    // former should leave the previous list alone.
+    if (Array.isArray(hist)) setHistory(hist);
+    if (Array.isArray(gallery)) setImages(gallery);
     if (library) setMusicTracks(Array.isArray(library.tracks) ? library.tracks : []);
+    // Whether each library actually loaded, so the "missing source" badges can
+    // stay silent about a lane whose catalogue we never received.
+    setLoaded((prev) => ({
+      clips: prev.clips || Array.isArray(hist),
+      images: prev.images || Array.isArray(gallery),
+      music: prev.music || !!library,
+    }));
     setLoading(false);
   }, [projectId]);
 
@@ -187,13 +198,24 @@ export default function VideoTimelineEditor() {
   const imageNames = useMemo(() => new Set(images.map((i) => i.filename)), [images]);
   const musicNames = useMemo(() => new Set(musicTracks.map((m) => m.filename)), [musicTracks]);
 
-  // A lane entry is "missing" when its source is gone from the library it came
-  // from — the render would 404, so the editor flags it up front.
+  // A lane entry is "missing" when its source is gone from the catalogue it
+  // came from — the render would 404, so the editor flags it up front.
+  //
+  // Only `images`, `music` and the video history have a client-side catalogue.
+  // For an asset kind we cannot enumerate — or a catalogue whose fetch failed —
+  // "absent from the list" is NOT evidence of absence on disk, so say nothing
+  // and let the render's MISSING_CLIPS report be the authority.
+  const knownAbsent = useCallback((kind, file) => {
+    if (kind === 'images') return loaded.images && !imageNames.has(file);
+    if (kind === 'music') return loaded.music && !musicNames.has(file);
+    return false; // 'video-thumbnails' / 'audio' — no catalogue to check against
+  }, [loaded.images, loaded.music, imageNames, musicNames]);
+
   const isSegmentMissing = useCallback((seg) => (seg.type === 'still'
-    ? !imageNames.has(seg.assetFile)
-    : !historyMap.has(seg.clipId)), [imageNames, historyMap]);
-  const isOverlayMissing = useCallback((ov) => !imageNames.has(ov.assetFile), [imageNames]);
-  const isBedMissing = useCallback((tr) => tr.assetKind === 'music' && !musicNames.has(tr.assetFile), [musicNames]);
+    ? knownAbsent(seg.assetKind, seg.assetFile)
+    : loaded.clips && !historyMap.has(seg.clipId)), [knownAbsent, loaded.clips, historyMap]);
+  const isOverlayMissing = useCallback((ov) => knownAbsent(ov.assetKind, ov.assetFile), [knownAbsent]);
+  const isBedMissing = useCallback((tr) => knownAbsent(tr.assetKind, tr.assetFile), [knownAbsent]);
 
   const total = useMemo(() => timelineDuration(segments), [segments]);
 
@@ -851,31 +873,39 @@ export default function VideoTimelineEditor() {
           </div>
 
           <div className="bg-port-card/30 border border-port-border rounded-lg p-2 overflow-x-auto space-y-1">
-            {segments.length === 0 ? (
+            {segments.length === 0 && overlays.length === 0 && audio.tracks.length === 0 ? (
               <div className="text-xs text-gray-500 py-6 text-center">
                 Drag-drop reorder once you've added clips. Add clips, stills, overlays and audio from the library on the left.
               </div>
             ) : (
+              /* Every lane renders whenever ANY lane has content. Gating the
+                 free lanes on the video lane would strand an overlay or bed
+                 added to an empty project — unselectable and unremovable until
+                 a video segment happened to be added. */
               <>
                 <div className="text-[9px] uppercase tracking-wide text-gray-600 px-0.5">Video</div>
-                <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-                  <SortableContext items={segmentKeys} strategy={horizontalListSortingStrategy}>
-                    <div className="flex gap-1 items-stretch min-w-min py-1">
-                      {segments.map((segment) => (
-                        <TimelineBlock
-                          key={segment._key}
-                          clip={segment}
-                          clipMeta={segment.type === 'clip' ? metaFor(segment.clipId) : null}
-                          isSelected={selection?.lane === 'segment' && segment._key === selection.key}
-                          isMissing={isSegmentMissing(segment)}
-                          pxPerSec={pxPerSec}
-                          onSelect={selectSegment}
-                          onRemove={removeSegment}
-                        />
-                      ))}
-                    </div>
-                  </SortableContext>
-                </DndContext>
+                {segments.length === 0 ? (
+                  <div className="text-[10px] text-gray-600 pl-2 py-2">Add a clip or a still from the library</div>
+                ) : (
+                  <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+                    <SortableContext items={segmentKeys} strategy={horizontalListSortingStrategy}>
+                      <div className="flex gap-1 items-stretch min-w-min py-1">
+                        {segments.map((segment) => (
+                          <TimelineBlock
+                            key={segment._key}
+                            clip={segment}
+                            clipMeta={segment.type === 'clip' ? metaFor(segment.clipId) : null}
+                            isSelected={selection?.lane === 'segment' && segment._key === selection.key}
+                            isMissing={isSegmentMissing(segment)}
+                            pxPerSec={pxPerSec}
+                            onSelect={selectSegment}
+                            onRemove={removeSegment}
+                          />
+                        ))}
+                      </div>
+                    </SortableContext>
+                  </DndContext>
+                )}
 
                 <FloatingLane
                   title="Overlays"

@@ -50,6 +50,7 @@ vi.mock('../../lib/ffmpeg.js', () => ({
   safeUnder: (root, name) => (name ? `${root}/${name}` : null),
   generateThumbnail: vi.fn(async () => 'thumb.jpg'),
   probeVideoDuration: vi.fn(async () => null), // no bed probing in these render-lifecycle cases
+  bt709TagFilter: vi.fn(async () => null), // no setparams on this stub build
   BT709_CONTAINER_ARGS: ['-color_primaries', 'bt709', '-color_trc', 'bt709', '-colorspace', 'bt709'],
 }));
 vi.mock('../../lib/processEnv.js', () => ({

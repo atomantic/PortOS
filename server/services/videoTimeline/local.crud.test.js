@@ -209,3 +209,40 @@ describe('updateProject — the v1 clips payload cannot silently destroy the new
     expect(updated.segments[0].durationSec).toBe(4);
   });
 });
+
+describe('updateProject — a legacy save cannot silently reset clip effects', () => {
+  it('refuses a clips-only save against a lane carrying fades', async () => {
+    seed([{
+      id: 'p1', updatedAt: 'u1', schemaVersion: 2, clips: [{ clipId: CLIP_A, inSec: 0, outSec: 4 }],
+      segments: [{ type: 'clip', clipId: CLIP_A, inSec: 0, outSec: 4, fadeInSec: 1, fadeOutSec: 0, volume: 1 }],
+      overlays: [], audio: { clipVolume: 1, tracks: [] },
+    }]);
+
+    // The v1 payload has no fade field, so rebuilding from it would reset the
+    // fade to zero without telling anyone.
+    await expect(updateProject('p1', { clips: [{ clipId: CLIP_A, inSec: 0, outSec: 4 }] }))
+      .rejects.toMatchObject({ code: 'SCHEMA_TOO_NEW' });
+  });
+
+  it('refuses a clips-only save against a lane carrying a non-default volume', async () => {
+    seed([{
+      id: 'p1', updatedAt: 'u1', schemaVersion: 2, clips: [{ clipId: CLIP_A, inSec: 0, outSec: 4 }],
+      segments: [{ type: 'clip', clipId: CLIP_A, inSec: 0, outSec: 4, fadeInSec: 0, fadeOutSec: 0, volume: 0.4 }],
+      overlays: [], audio: { clipVolume: 1, tracks: [] },
+    }]);
+
+    await expect(updateProject('p1', { clips: [{ clipId: CLIP_A, inSec: 0, outSec: 4 }] }))
+      .rejects.toMatchObject({ code: 'SCHEMA_TOO_NEW' });
+  });
+
+  it('accepts it when every clip is at its neutral defaults — nothing can be lost', async () => {
+    seed([{
+      id: 'p1', updatedAt: 'u1', schemaVersion: 2, clips: [{ clipId: CLIP_A, inSec: 0, outSec: 4 }],
+      segments: [{ type: 'clip', clipId: CLIP_A, inSec: 0, outSec: 4, fadeInSec: 0, fadeOutSec: 0, volume: 1 }],
+      overlays: [], audio: { clipVolume: 1, tracks: [] },
+    }]);
+
+    const updated = await updateProject('p1', { clips: [{ clipId: CLIP_B, inSec: 1, outSec: 6 }] });
+    expect(updated.segments[0]).toMatchObject({ clipId: CLIP_B, inSec: 1, outSec: 6 });
+  });
+});

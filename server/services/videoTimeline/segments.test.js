@@ -40,16 +40,49 @@ describe('normalizeProject — v1 → v2 upgrade', () => {
     expect(normalizeProject(once)).toEqual(once);
   });
 
-  it('rebuilds the clips mirror from segments, so a stale mirror cannot resurrect a removed segment', () => {
-    const project = {
+  it('takes a diverged clips mirror as a rolled-back v1 build\'s edit, not a stale copy', () => {
+    // v2 rebuilds the mirror on every write, so a mirror that disagrees with
+    // the lane can only have been written by a v1 build after a rollback —
+    // and that edit is newer than the lane it had no way to touch.
+    const v2 = normalizeProject({
       id: 'p1',
       schemaVersion: 2,
-      segments: [{ type: 'clip', clipId: CLIP_A, inSec: 0, outSec: 2 }],
-      // An older build wrote this before the segment was deleted.
+      segments: [{ type: 'clip', clipId: CLIP_A, inSec: 0, outSec: 2, fadeInSec: 0.5, volume: 0.3 }],
       clips: [{ clipId: CLIP_A, inSec: 0, outSec: 2 }, { clipId: CLIP_B, inSec: 0, outSec: 9 }],
-    };
+    });
 
-    expect(normalizeProject(project).clips).toEqual([{ clipId: CLIP_A, inSec: 0, outSec: 2 }]);
+    expect(v2.segments.map((s) => s.clipId)).toEqual([CLIP_A, CLIP_B]);
+    // Effects the v1 build couldn't see ride across from the matching segment.
+    expect(v2.segments[0]).toMatchObject({ fadeInSec: 0.5, volume: 0.3 });
+    // A clip the v1 build added carries neutral defaults.
+    expect(v2.segments[1]).toMatchObject({ clipId: CLIP_B, fadeInSec: 0, fadeOutSec: 0, volume: 1 });
+  });
+
+  it('keeps the lane when it holds stills — a v1 mirror cannot represent them', () => {
+    const v2 = normalizeProject({
+      id: 'p1',
+      schemaVersion: 2,
+      segments: [
+        { type: 'clip', clipId: CLIP_A, inSec: 0, outSec: 2 },
+        { type: 'still', assetKind: 'images', assetFile: 'plate.png', durationSec: 3 },
+      ],
+      // Honouring this would delete a still the old build never saw.
+      clips: [{ clipId: CLIP_B, inSec: 0, outSec: 9 }],
+    });
+
+    expect(v2.segments).toHaveLength(2);
+    expect(v2.segments[1]).toMatchObject({ type: 'still', assetFile: 'plate.png' });
+    expect(v2.clips).toEqual([{ clipId: CLIP_A, inSec: 0, outSec: 2 }]);
+  });
+
+  it('leaves a matching mirror alone — no divergence, no reconciliation', () => {
+    const v2 = normalizeProject({
+      id: 'p1',
+      schemaVersion: 2,
+      segments: [{ type: 'clip', clipId: CLIP_A, inSec: 0, outSec: 2, fadeInSec: 0.5, fadeOutSec: 0, volume: 0.3 }],
+      clips: [{ clipId: CLIP_A, inSec: 0, outSec: 2 }],
+    });
+    expect(v2.segments[0]).toMatchObject({ fadeInSec: 0.5, volume: 0.3 });
   });
 
   it('drops corrupt entries instead of throwing — this runs on every read', () => {

@@ -379,3 +379,35 @@ describe('buildFfmpegArgs — combined lanes and input indexing', () => {
     expect(filter).not.toContain('0.19999');
   });
 });
+
+describe('buildFfmpegArgs — BT.709 frame tagging', () => {
+  const TAG = 'setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709';
+
+  it('stamps the frames as well as the container when the build supports setparams', () => {
+    // From ffmpeg 8 the encoder reads colour off the FRAMES and overrides the
+    // container flags, so the flags alone still decode washed-out.
+    const filter = filterOf(buildFfmpegArgs(lane([baseClip()]), '/out.mp4', { colorTagFilter: TAG }).args);
+    expect(filter).toContain('concat=n=1:v=1:a=1[vpre][outa]');
+    expect(filter).toContain(`[vpre]${TAG}[outv]`);
+  });
+
+  it('tags after the overlay composite, not before it', () => {
+    const filter = filterOf(buildFfmpegArgs(lane([baseClip()], {
+      overlays: [{
+        type: 'image', assetKind: 'images', assetFile: 'logo.png', assetPath: '/logo.png',
+        startSec: 0, durationSec: 1, x: 0, y: 0, width: 0.5, opacity: 1, fadeInSec: 0, fadeOutSec: 0,
+      }],
+    }), '/out.mp4', { colorTagFilter: TAG }).args);
+    expect(filter).toContain('[cv][ov0]overlay=');
+    expect(filter).toContain('[vpre]');
+    expect(filter.indexOf('overlay=')).toBeLessThan(filter.indexOf(`[vpre]${TAG}`));
+  });
+
+  it('emits the minimal graph unchanged on a build without the filter', () => {
+    const { args } = buildFfmpegArgs(lane([baseClip()]), '/out.mp4', { colorTagFilter: null });
+    expect(filterOf(args)).toContain('concat=n=1:v=1:a=1[outv][outa]');
+    expect(filterOf(args)).not.toContain('setparams');
+    // The container flags need no probe and are always emitted.
+    expect(args).toContain('-color_primaries');
+  });
+});
