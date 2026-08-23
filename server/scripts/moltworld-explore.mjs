@@ -23,9 +23,9 @@
  *   MOLTWORLD_MAX_INTERVAL      - Max seconds between joins (default: 540 = 9 min)
  *   MOLTWORLD_USE_WS            - Set to "true" to route moves through PortOS WS relay
  *   PORTOS_API_BASE              - PortOS server URL (default: http://localhost:5555)
- *   LMSTUDIO_BASE_URL           - LM Studio URL (default: http://localhost:1234)
- *   LMSTUDIO_MODEL              - Model name (default: gpt-oss-20b)
- *   LMSTUDIO_ENABLED            - Set to "false" to disable (default: true)
+ *   LM_STUDIO_URL               - LM Studio URL (default: http://localhost:1234)
+ *   LM_STUDIO_MODEL             - Model name (default: gpt-oss-20b)
+ *   LM_STUDIO_ENABLED           - Set to "false" to disable (default: true)
  *
  * Example:
  *   node server/scripts/moltworld-explore.mjs 60
@@ -57,9 +57,11 @@ const USE_WS = process.env.MOLTWORLD_USE_WS === 'true';
 const PORTOS_API_BASE = process.env.PORTOS_API_BASE || 'http://localhost:5555';
 
 // LM Studio config
-const LMSTUDIO_URL = process.env.LMSTUDIO_BASE_URL || 'http://localhost:1234';
-const LMSTUDIO_MODEL = process.env.LMSTUDIO_MODEL || 'gpt-oss-20b';
-const LMSTUDIO_ENABLED = process.env.LMSTUDIO_ENABLED !== 'false';
+// Keep the historical LMSTUDIO_* spellings as compatibility fallbacks while
+// aligning new configuration with PortOS's shared LM_STUDIO_* convention.
+const LMSTUDIO_URL = process.env.LM_STUDIO_URL || process.env.LMSTUDIO_BASE_URL || 'http://localhost:1234';
+const LMSTUDIO_MODEL = process.env.LM_STUDIO_MODEL || process.env.LMSTUDIO_MODEL || 'gpt-oss-20b';
+const LMSTUDIO_ENABLED = (process.env.LM_STUDIO_ENABLED || process.env.LMSTUDIO_ENABLED) !== 'false';
 
 // Move to a new position every Nth join (not every time)
 const MOVE_EVERY_N_JOINS = 3;
