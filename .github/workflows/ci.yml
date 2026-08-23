@@ -143,7 +143,7 @@ jobs:
       # See docs/GITHUB_ACTIONS.md.
       - name: Cache server node_modules
         id: server-modules
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: server/node_modules
           key: server-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('server/package-lock.json', 'server/package.json', 'server/.npmrc', 'scripts/trusted-rebuilds.js') }}
@@ -211,7 +211,7 @@ jobs:
       # deliberately: this is where a near miss is safe, so this is the entry
       # that keeps restore-keys and stays warm across a lockfile bump.
       - name: Cache Vitest transform artifacts
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             server/node_modules/.vite
@@ -264,7 +264,7 @@ jobs:
         run: npm ci --prefix client
 
       - name: Cache Vitest transform artifacts
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             client/node_modules/.vite
@@ -331,7 +331,7 @@ jobs:
       # on the cache hit.
       - name: Cache server node_modules
         id: server-modules
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: server/node_modules
           key: server-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('server/package-lock.json', 'server/package.json', 'server/.npmrc', 'scripts/trusted-rebuilds.js') }}
@@ -399,7 +399,7 @@ jobs:
       # deliberately: this is where a near miss is safe, so this is the entry
       # that keeps restore-keys and stays warm across a lockfile bump.
       - name: Cache Vitest transform artifacts
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             server/node_modules/.vite
@@ -451,7 +451,7 @@ jobs:
       # on the cache hit.
       - name: Cache server node_modules
         id: server-modules
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: server/node_modules
           key: server-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('server/package-lock.json', 'server/package.json', 'server/.npmrc', 'scripts/trusted-rebuilds.js') }}
@@ -519,7 +519,7 @@ jobs:
       # deliberately: this is where a near miss is safe, so this is the entry
       # that keeps restore-keys and stays warm across a lockfile bump.
       - name: Cache Vitest transform artifacts
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             server/node_modules/.vite
