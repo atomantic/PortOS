@@ -18,7 +18,7 @@ import {
   effectiveModelContextWindow,
   isApiProvider,
   isGrokBuildCli,
-  isOrcaRouterBackedProvider,
+  gatewayForProvider,
   isPrivateNetworkEndpoint,
   isProcessProvider,
   isRunnerAllowedCommand,
@@ -29,7 +29,7 @@ import {
 import { formatContextLength } from '../../utils/formatters';
 import ProviderRuntimeStatus from './ProviderRuntimeStatus';
 import ProviderReadiness from './ProviderReadiness';
-import { GrokUploadWarning, OrcaRouterKeyHint } from './ProviderNotices';
+import { GrokUploadWarning, GatewayKeyHint } from './ProviderNotices';
 
 // One phrasing for "this command isn't on the CoS Agent Runner's allowlist".
 // The editor states the same thing in its own inline banner, in prose.
@@ -393,9 +393,10 @@ export default function ProviderCard({
 
         {isGrokBuildCli(provider) && <GrokUploadWarning className="max-w-3xl" />}
 
-        {isOrcaRouterBackedProvider(provider) && (
-          <OrcaRouterKeyHint
-            sibling={providersById.orcarouter}
+        {gatewayForProvider(provider) && (
+          <GatewayKeyHint
+            gateway={gatewayForProvider(provider)}
+            sibling={providersById[gatewayForProvider(provider).id]}
             onEdit={onEdit}
             className="max-w-3xl"
           />

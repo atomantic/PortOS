@@ -21,6 +21,9 @@ const SHIPPED_REFRESHABLE = [
   'opencode-llama-tui',
   'opencode-mtplx', 'opencode-mtplx-tui', 'opencode-ollama', 'opencode-ollama-tui',
   'opencode-orcarouter', 'opencode-orcarouter-tui', 'orcarouter',
+  // Every hosted gateway refreshes through the same sibling `/models` probe —
+  // one MODEL_FETCHERS row covers all of them (internal/gateways.js).
+  'opencode-openrouter', 'opencode-openrouter-tui', 'openrouter',
   'opencode-vllm', 'opencode-vllm-tui',
   // SGLang publishes its served catalog through the same OpenAI-compatible
   // `/v1/models` contract as the vLLM pair, so its wrappers refresh too.

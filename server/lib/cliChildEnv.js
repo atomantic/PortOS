@@ -43,6 +43,7 @@
 import { withSpawnCwdEnv } from './spawnCwd.js';
 import { buildOpencodeEnvVars } from './opencodeConfig.js';
 import { getOpencodeLocalProviderNamespace, isClaudeCommand } from './providerModels.js';
+import { isGatewayNamespace } from './providerGateways.js';
 import { agentGuardEnv } from './agentGuard/index.js';
 
 // Claude Code defaults to 32K output tokens. Thinking-capable local models can
@@ -62,13 +63,13 @@ const CLAUDE_LOCAL_MAX_OUTPUT_TOKENS = '65536';
  * Anthropic-compatible `/v1/messages` endpoint, so a `claude` binary drives it
  * exactly the way it drives Ollama, and the 32K-output wedge above is a
  * property of "local thinking-capable model behind the Claude binary", not of
- * Ollama specifically. `orcarouter` is excluded — it is a hosted gateway whose
- * upstream models own their own budgets, the same carve-out `localRuntimeKind`
- * makes.
+ * Ollama specifically. Hosted gateways (`providerGateways.js`) are excluded —
+ * their upstream models own their own budgets, the same carve-out
+ * `localRuntimeKind` makes.
  */
 function isLocalBackedClaude(provider) {
   const namespace = getOpencodeLocalProviderNamespace(provider);
-  return !!namespace && namespace !== 'orcarouter' && isClaudeCommand(provider?.command);
+  return !!namespace && !isGatewayNamespace(namespace) && isClaudeCommand(provider?.command);
 }
 
 function claudeLocalEnvDefaults(provider) {
@@ -102,7 +103,7 @@ function claudeLocalEnvDefaults(provider) {
  * @param {object} options
  * @param {object|null} [options.before] - layered first, so `provider.envVars`
  *   overrides it (forgeTokenEnv, claudeSettingsEnv).
- * @param {{command?:string, envVars?:object, models?:string[], defaultModel?:string|null, ollamaBacked?:boolean, mtplxBacked?:boolean, llamaBacked?:boolean, vllmBacked?:boolean, sglangBacked?:boolean, orcarouterBacked?:boolean, thinking?:boolean}|null} [options.provider]
+ * @param {{command?:string, envVars?:object, models?:string[], defaultModel?:string|null, ollamaBacked?:boolean, mtplxBacked?:boolean, llamaBacked?:boolean, vllmBacked?:boolean, sglangBacked?:boolean, gatewayBacked?:string, orcarouterBacked?:boolean, thinking?:boolean}|null} [options.provider]
  * @param {string|null} [options.model] - the model being run this invocation,
  *   unioned into the OpenCode declared-models map. Omit when the site has no
  *   per-call model — `provider.defaultModel` is always declared regardless.

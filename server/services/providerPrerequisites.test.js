@@ -65,6 +65,21 @@ describe('getProviderPrerequisiteMap', () => {
       .toContain('inheritedApiKey');
     expect(getProviderPrerequisiteMap([wrapper, sibling(true)])[wrapper.id].met).toBe(true);
   });
+
+  // Each gateway wrapper is judged against ITS OWN sibling: a key on one gateway
+  // must never satisfy another, or the card would report a wrapper as ready
+  // while the spawn has no credential for the host it actually calls.
+  it('keeps each gateway wrapper on its own sibling key', () => {
+    const orcaWrapper = { id: 'opencode-orcarouter', type: 'cli', command: 'opencode', orcarouterBacked: true };
+    const openWrapper = { id: 'opencode-openrouter', type: 'cli', command: 'opencode', gatewayBacked: 'openrouter' };
+    const api = (id, hasApiKey) => ({ id, type: 'api', hasApiKey, endpoint: 'https://api.example.com' });
+
+    const map = getProviderPrerequisiteMap([orcaWrapper, openWrapper, api('orcarouter', true), api('openrouter', false)]);
+    expect(map[orcaWrapper.id].met).toBe(true);
+    expect(map[openWrapper.id].missing).toEqual([
+      { code: 'inheritedApiKey', label: 'OpenRouter API provider has no API key' },
+    ]);
+  });
 });
 
 describe('prerequisitesMetForRouting', () => {

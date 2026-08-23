@@ -124,9 +124,14 @@ export const providerSchema = z.object({
   // `vllmBacked`: a different engine, a different port, a different tool-call
   // parser, and an API key that is optional rather than required.
   sglangBacked: z.boolean().optional(),
-  // Marks an OpenCode CLI/TUI wrapper for the OrcaRouter OpenAI-compatible
-  // gateway. Its API key is read from the sibling `orcarouter` API record at
-  // spawn/refresh time and is never stored in this wrapper's config.
+  // Marks an OpenCode CLI/TUI wrapper for a hosted OpenAI-compatible gateway
+  // ('orcarouter', 'openrouter' — see internal/gateways.js). Its API key is read
+  // from the sibling API record of the SAME id at spawn/refresh time and is
+  // never stored in this wrapper's config.
+  gatewayBacked: z.string().optional(),
+  // Legacy per-gateway marker, superseded by `gatewayBacked` and still read
+  // forever — stored records are never rewritten (installs upgrade on their own
+  // schedule, so an older peer/version must keep resolving its own data).
   orcarouterBacked: z.boolean().optional(),
   // Explicit opt-in to attach the provider's API key to an arbitrary
   // (non-local, non-allowlisted) endpoint. Guards against SSRF / key

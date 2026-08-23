@@ -3,6 +3,8 @@
  * Mirrors the constants in client/src/utils/providers.js — keep in sync.
  */
 
+import { gatewayIdForProvider, isGatewayNamespace } from './providerGateways.js';
+
 export const CODEX_CONFIGURED_DEFAULT = 'codex-configured-default';
 export const ANTIGRAVITY_CONFIGURED_DEFAULT = 'antigravity-configured-default';
 // Grok Build CLI/TUI: PortOS does not select a model — the local `grok` binary
@@ -564,8 +566,16 @@ export function prefixOpencodeModel(provider, model) {
   const namespace = getOpencodeLocalProviderNamespace(provider);
   if (!isOpencodeCommand(provider?.command) || !namespace || !model) return model;
   const id = String(model);
-  if (namespace === 'orcarouter') {
-    return id.startsWith('orcarouter/orcarouter/') ? id : `orcarouter/${id}`;
+  if (isGatewayNamespace(namespace)) {
+    // A gateway model id is ALREADY `vendor/model` (`anthropic/claude-sonnet-4`,
+    // `orcarouter/auto`), and OpenCode splits provider/model on the FIRST slash
+    // only — so the namespaced form is legitimately doubled
+    // (`openrouter/anthropic/claude-sonnet-4`, `openrouter/openrouter/auto`).
+    // Guard on the DOUBLED prefix, never the single one: a single-prefix check
+    // would read OpenRouter's own auto-router id `openrouter/auto` as
+    // already-namespaced and emit it unchanged, which OpenCode resolves to the
+    // model `auto` — a model that does not exist.
+    return id.startsWith(`${namespace}/${namespace}/`) ? id : `${namespace}/${id}`;
   }
   return id.startsWith(`${namespace}/`) ? id : `${namespace}/${id}`;
 }
@@ -575,8 +585,8 @@ export function prefixOpencodeModel(provider, model) {
  * opted into one. Structural markers avoid deriving a backend from an editable
  * display name or endpoint and preserve the legacy Ollama outcome if a malformed
  * record carries both markers.
- * @param {{ollamaBacked?:boolean, mtplxBacked?:boolean, llamaBacked?:boolean, vllmBacked?:boolean, sglangBacked?:boolean, orcarouterBacked?:boolean}|null|undefined} provider
- * @returns {'ollama'|'mtplx'|'llama'|'vllm'|'sglang'|'orcarouter'|null}
+ * @param {{ollamaBacked?:boolean, mtplxBacked?:boolean, llamaBacked?:boolean, vllmBacked?:boolean, sglangBacked?:boolean, gatewayBacked?:string, orcarouterBacked?:boolean}|null|undefined} provider
+ * @returns {'ollama'|'mtplx'|'llama'|'vllm'|'sglang'|string|null}
  */
 export function getOpencodeLocalProviderNamespace(provider) {
   if (provider?.ollamaBacked === true) return 'ollama';
@@ -584,8 +594,10 @@ export function getOpencodeLocalProviderNamespace(provider) {
   if (provider?.llamaBacked === true) return 'llama';
   if (provider?.vllmBacked === true) return 'vllm';
   if (provider?.sglangBacked === true) return 'sglang';
-  if (provider?.orcarouterBacked === true) return 'orcarouter';
-  return null;
+  // Hosted gateways (`providerGateways.js`) come LAST so a malformed record
+  // carrying both a local marker and a gateway marker keeps its legacy local
+  // outcome, exactly as the old if-chain did with `orcarouterBacked`.
+  return gatewayIdForProvider(provider);
 }
 
 /**

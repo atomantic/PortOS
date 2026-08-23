@@ -209,7 +209,8 @@ export const CURSOR_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhi
 
 /**
  * True when an OpenCode process provider runs against one of the local
- * OpenAI-compatible backends (Ollama / MTPLX / llama.cpp / vLLM / OrcaRouter)
+ * OpenAI-compatible backends (Ollama / MTPLX / llama.cpp / vLLM) or a hosted
+ * gateway (OrcaRouter / OpenRouter)
  * rather than a vendor cloud model. MIRROR of `isOpencodeProvider(p) &&
  * getOpencodeLocalProviderNamespace(p)` in server/lib/providerModels.js, which
  * is exactly what gates the effort ladder there — so a backend marker missing
@@ -224,7 +225,7 @@ export const isOpencodeLocalProvider = (provider) =>
     || provider?.llamaBacked === true
     || provider?.vllmBacked === true
     || provider?.sglangBacked === true
-    || provider?.orcarouterBacked === true);
+    || isGatewayBackedProvider(provider));
 
 /**
  * Antigravity base-model ↔ effort-suffix split — MIRROR of
@@ -979,19 +980,42 @@ export const isOllamaBackedProvider = (provider) => {
 };
 
 /**
-* True when a provider is an OpenCode wrapper that front-ends the OrcaRouter
-* gateway (the shipped `opencode-orcarouter` / `opencode-orcarouter-tui`
-* presets, or any renamed wrapper carrying the `orcarouterBacked` marker).
-*
-* These wrappers deliberately carry NO key of their own: at spawn time the
-* server attaches the key from the sibling `orcarouter` API provider
-* (`server/lib/aiToolkit/providers.js` `withOrcaRouterApiKey`), so the one place
-* a user actually pastes the key is the `orcarouter` API provider, not this
-* form. MIRROR of the `orcarouterBacked` marker the server keys on — keep in
-* lockstep with `server/lib/providerModels.js#getOpencodeLocalProviderNamespace`.
-* @param {{id?:string,orcarouterBacked?:boolean}} provider
-*/
-export const isOrcaRouterBackedProvider = (provider) => provider?.orcarouterBacked === true;
+ * The hosted OpenAI-compatible gateways an OpenCode CLI/TUI wrapper can
+ * front-end. MIRROR of `PROVIDER_GATEWAYS` in `server/lib/providerGateways.js`
+ * (and its vendored twin `server/lib/aiToolkit/internal/gateways.js`) — the
+ * browser cannot import server code, so the table is duplicated; keep the three
+ * in lockstep. `id` is simultaneously the OpenCode namespace, the
+ * `gatewayBacked` marker value, and the id of the sibling `api` record that
+ * owns the key.
+ */
+export const PROVIDER_GATEWAYS = Object.freeze([
+  Object.freeze({ id: 'orcarouter', label: 'OrcaRouter', apiKeyEnv: 'ORCAROUTER_API_KEY', legacyMarker: 'orcarouterBacked' }),
+  Object.freeze({ id: 'openrouter', label: 'OpenRouter', apiKeyEnv: 'OPENROUTER_API_KEY' }),
+]);
+
+/**
+ * The gateway an OpenCode wrapper front-ends, or null (the shipped
+ * `opencode-<gateway>` / `-tui` presets, or any renamed wrapper carrying the
+ * marker).
+ *
+ * These wrappers deliberately carry NO key of their own: at spawn time the
+ * server attaches the key from the sibling API provider whose id equals the
+ * gateway id (`server/lib/aiToolkit/providers.js` `withGatewayApiKey`), so the
+ * one place a user actually pastes the key is that API provider, not this form.
+ * Reads the generic `gatewayBacked` marker first, then the legacy per-gateway
+ * boolean — MIRROR of `gatewayForProvider` on the server; keep in lockstep with
+ * `server/lib/providerModels.js#getOpencodeLocalProviderNamespace`.
+ * @param {{id?:string,gatewayBacked?:string,orcarouterBacked?:boolean}|null|undefined} provider
+ */
+export const gatewayForProvider = (provider) => {
+  if (!provider || typeof provider !== 'object') return null;
+  const declared = PROVIDER_GATEWAYS.find((g) => g.id === provider.gatewayBacked);
+  if (declared) return declared;
+  return PROVIDER_GATEWAYS.find((g) => g.legacyMarker && provider[g.legacyMarker] === true) || null;
+};
+
+/** True when a provider is an OpenCode wrapper front-ending any hosted gateway. */
+export const isGatewayBackedProvider = (provider) => gatewayForProvider(provider) !== null;
 
 /**
  * True when a provider launches the Claude Code binary, whatever backend it is
@@ -1012,13 +1036,13 @@ export const isClaudeCommandProvider = (provider) => commandBasename(provider?.c
  *
  * Only the local OpenAI-compatible backends qualify — Ollama, llama.cpp, MTPLX
  * and vLLM (the first three reached directly as an `api` provider or through an
- * OpenCode CLI/TUI wrapper; vLLM ships only the wrappers), plus the OrcaRouter
- * gateway. A hosted cloud provider is deliberately excluded: PortOS sends it no
+ * OpenCode CLI/TUI wrapper; vLLM ships only the wrappers), plus the hosted
+ * gateways (OrcaRouter, OpenRouter). A hosted cloud provider is deliberately excluded: PortOS sends it no
  * sampling fields at all, so offering a stored temperature there would be a
  * control that silently does nothing.
  *
  * Each control is reported separately because the forwarding is uneven:
- * OrcaRouter's upstream models own their own reasoning switch, so it has no
+ * A gateway's upstream models own their own reasoning switch, so it has no
  * thinking toggle; and the Claude Code harness pointed at Ollama takes ONLY a
  * thinking signal (`MAX_THINKING_TOKENS=0` in server/lib/cliChildEnv.js) — it
  * owns its own sampling, so a temperature or top-p stored on one of those
@@ -1030,7 +1054,7 @@ export const isClaudeCommandProvider = (provider) => commandBasename(provider?.c
  * @returns {{temperature:boolean, topP:boolean, thinking:boolean}|null}
  */
 export const generationControlsFor = (provider) => {
-  const orcarouter = isOrcaRouterBackedProvider(provider);
+  const gateway = isGatewayBackedProvider(provider);
   const local = isOllamaBackedProvider(provider)
     || provider?.llamaBacked === true
     || provider?.mtplxBacked === true
@@ -1038,7 +1062,7 @@ export const generationControlsFor = (provider) => {
     // SGLang takes the same `chat_template_kwargs.enable_thinking` as the other
     // local OpenAI endpoints — see THINKING_STYLE.sglang on the server.
     || provider?.sglangBacked === true;
-  if (!local && !orcarouter) return null;
+  if (!local && !gateway) return null;
   if (isClaudeCommandProvider(provider)) {
     // A Claude harness owns its own sampling, so only the thinking signal is
     // ever forwardable — and only on Ollama, whose Anthropic endpoint maps an
@@ -1052,7 +1076,7 @@ export const generationControlsFor = (provider) => {
       ? { temperature: false, topP: false, thinking: true }
       : null;
   }
-  return { temperature: true, topP: true, thinking: !orcarouter };
+  return { temperature: true, topP: true, thinking: !gateway };
 };
 
 // Environment variables whose names are conventionally credentials. The
@@ -1084,10 +1108,10 @@ const credentialEnvVars = (provider) => {
  * Identify how a provider authenticates, without deciding whether that
  * credential is present. `null` is a deliberate ref for `none`, while a
  * credential ref names the provider id, inherited sibling, or env var to look
- * up. An own key wins over the OrcaRouter marker because the server leaves a
+ * up. An own key wins over the gateway marker because the server leaves a
  * provider carrying `provider.apiKey` untouched at spawn time.
  *
- * @param {{id?:string,type?:string,endpoint?:string,apiKey?:string,hasApiKey?:boolean,orcarouterBacked?:boolean,envVars?:Record<string,string>,secretEnvVars?:string[]}|null|undefined} provider
+ * @param {{id?:string,type?:string,endpoint?:string,apiKey?:string,hasApiKey?:boolean,gatewayBacked?:string,orcarouterBacked?:boolean,envVars?:Record<string,string>,secretEnvVars?:string[]}|null|undefined} provider
  * @returns {{kind:'stored'|'inherited'|'env'|'none',ref:string|null}}
  */
 export const credentialSource = (provider) => {
@@ -1102,14 +1126,15 @@ export const credentialSource = (provider) => {
   if (isApiProvider(provider)) {
     return { kind: 'stored', ref: provider?.id || null };
   }
-  // An OrcaRouter wrapper with its own key is the one process-backed exception:
-  // withOrcaRouterApiKey leaves it untouched, so that key really is used.
-  if (isOrcaRouterBackedProvider(provider) && providerHasStoredKey(provider)) {
+  // A gateway wrapper with its own key is the one process-backed exception:
+  // withGatewayApiKey leaves it untouched, so that key really is used.
+  if (isGatewayBackedProvider(provider) && providerHasStoredKey(provider)) {
     return { kind: 'stored', ref: provider?.id || null };
   }
   const [envVar] = credentialEnvVars(provider);
   if (envVar) return { kind: 'env', ref: envVar };
-  if (isOrcaRouterBackedProvider(provider)) return { kind: 'inherited', ref: 'orcarouter' };
+  const gateway = gatewayForProvider(provider);
+  if (gateway) return { kind: 'inherited', ref: gateway.id };
   return { kind: 'none', ref: null };
 };
 
@@ -1153,12 +1178,13 @@ const credentialEnvGroups = (provider) => {
 };
 
 const inheritedCredentialMissing = (provider, keySetFor) => {
-  if (!isOrcaRouterBackedProvider(provider) || providerHasStoredKey(provider)) return null;
+  const gateway = gatewayForProvider(provider);
+  if (!gateway || providerHasStoredKey(provider)) return null;
   const rawState = typeof keySetFor === 'function'
-    ? keySetFor('orcarouter')
-    : defaultKeySetFor(provider, 'orcarouter');
+    ? keySetFor(gateway.id)
+    : defaultKeySetFor(provider, gateway.id);
   return normalizeCredentialState(rawState) === false
-    ? { code: 'inheritedApiKey', label: 'OrcaRouter API provider has no API key' }
+    ? { code: 'inheritedApiKey', label: `${gateway.label} API provider has no API key` }
     : null;
 };
 

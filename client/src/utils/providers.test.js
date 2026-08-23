@@ -38,7 +38,8 @@ import {
   isPrivateNetworkEndpoint,
   PROVIDER_CARD_STATE,
   isOllamaBackedProvider,
-  isOrcaRouterBackedProvider,
+  gatewayForProvider,
+  isGatewayBackedProvider,
   isGrokBuildCli,
   isKimiProvider,
   isCodexProvider,
@@ -171,6 +172,8 @@ describe('generationControlsFor', () => {
     ['native Ollama API', { id: 'ollama', type: 'api', endpoint: 'http://localhost:11434/v1' }, { temperature: true, topP: true, thinking: true }],
     // OrcaRouter proxies cloud models that own their own reasoning switch.
     ['OpenCode OrcaRouter', { id: 'opencode-orcarouter', command: 'opencode', orcarouterBacked: true }, { temperature: true, topP: true, thinking: false }],
+    // Same posture for every gateway: upstream models own their reasoning switch.
+    ['OpenCode OpenRouter', { id: 'opencode-openrouter', command: 'opencode', gatewayBacked: 'openrouter' }, { temperature: true, topP: true, thinking: false }],
     ['cloud API provider', { id: 'anthropic', type: 'api', endpoint: 'https://api.anthropic.com/v1' }, null],
     ['vendor CLI', { id: 'claude-code', command: 'claude' }, null],
   ])('%s', (_label, provider, expected) => {
@@ -479,17 +482,23 @@ describe('provider type predicates', () => {
     expect(isProcessProvider(api)).toBe(false);
   });
 
-  it('isOrcaRouterBackedProvider matches only the orcarouterBacked marker', () => {
-    expect(isOrcaRouterBackedProvider({ id: 'opencode-orcarouter', orcarouterBacked: true })).toBe(true);
-    expect(isOrcaRouterBackedProvider({ id: 'opencode-orcarouter-tui', orcarouterBacked: true })).toBe(true);
+  it('gatewayForProvider matches the generic marker and the legacy boolean', () => {
+    // The legacy per-gateway boolean, which stored records still carry.
+    expect(gatewayForProvider({ id: 'opencode-orcarouter', orcarouterBacked: true }).id).toBe('orcarouter');
+    expect(gatewayForProvider({ id: 'opencode-orcarouter-tui', orcarouterBacked: true }).id).toBe('orcarouter');
+    // The generic marker every new gateway wrapper ships with.
+    expect(gatewayForProvider({ id: 'opencode-openrouter', gatewayBacked: 'openrouter' }).id).toBe('openrouter');
+    expect(gatewayForProvider({ id: 'opencode-openrouter-tui', gatewayBacked: 'openrouter' }).label).toBe('OpenRouter');
     // A renamed wrapper that keeps the marker still inherits the sibling key.
-    expect(isOrcaRouterBackedProvider({ id: 'my-orca', orcarouterBacked: true })).toBe(true);
-    // The sibling API provider itself is NOT orcarouter-backed (it owns the key).
-    expect(isOrcaRouterBackedProvider({ id: 'orcarouter', type: 'api' })).toBe(false);
+    expect(isGatewayBackedProvider({ id: 'my-orca', orcarouterBacked: true })).toBe(true);
+    // The sibling API provider itself is NOT gateway-backed (it owns the key).
+    expect(isGatewayBackedProvider({ id: 'orcarouter', type: 'api' })).toBe(false);
+    expect(isGatewayBackedProvider({ id: 'openrouter', type: 'api' })).toBe(false);
     // An ollama-backed OpenCode wrapper shares the form shape but not the marker.
-    expect(isOrcaRouterBackedProvider({ id: 'opencode-ollama', ollamaBacked: true })).toBe(false);
-    expect(isOrcaRouterBackedProvider(null)).toBe(false);
-    expect(isOrcaRouterBackedProvider(undefined)).toBe(false);
+    expect(isGatewayBackedProvider({ id: 'opencode-ollama', ollamaBacked: true })).toBe(false);
+    expect(isGatewayBackedProvider({ id: 'x', gatewayBacked: 'not-a-gateway' })).toBe(false);
+    expect(isGatewayBackedProvider(null)).toBe(false);
+    expect(isGatewayBackedProvider(undefined)).toBe(false);
    });
 
   it('isOllamaBackedProvider matches the marker or an Ollama base URL', () => {
@@ -947,10 +956,11 @@ describe('supportsModelRefresh', () => {
       'cursor-tui', 'grok', 'lmstudio', 'mtplx', 'nvidia-kimi', 'ollama',
       'opencode-llama-tui',
       'opencode-mtplx', 'opencode-mtplx-tui', 'opencode-ollama',
-      'opencode-ollama-tui', 'opencode-orcarouter', 'opencode-orcarouter-tui',
+      'opencode-ollama-tui', 'opencode-openrouter', 'opencode-openrouter-tui',
+      'opencode-orcarouter', 'opencode-orcarouter-tui',
       'opencode-sglang', 'opencode-sglang-tui',
       'opencode-vllm', 'opencode-vllm-tui',
-      'orcarouter',
+      'openrouter', 'orcarouter',
     ]);
   });
 });
@@ -1269,9 +1279,11 @@ describe('credentialSource', () => {
       .toEqual({ kind: 'none', ref: null });
   });
 
-  it('identifies an inherited OrcaRouter key', () => {
+  it('identifies an inherited gateway key, pointing at the sibling of that gateway', () => {
     expect(credentialSource({ id: 'opencode-orcarouter', type: 'cli', orcarouterBacked: true }))
       .toEqual({ kind: 'inherited', ref: 'orcarouter' });
+    expect(credentialSource({ id: 'opencode-openrouter', type: 'cli', gatewayBacked: 'openrouter' }))
+      .toEqual({ kind: 'inherited', ref: 'openrouter' });
   });
 
   it('identifies env credentials from explicit metadata and conventional names', () => {
@@ -1381,6 +1393,16 @@ describe('providerCardState', () => {
       .toEqual([{ code: 'inheritedApiKey', label: 'OrcaRouter API provider has no API key' }]);
     // Sibling absent from the list = unknown, which must not accuse the wrapper.
     expect(providerCardState(wrapper, { keySetFor: () => null }).state).toBe(PROVIDER_CARD_STATE.READY);
+    expect(providerCardState(wrapper, { keySetFor: () => true }).state).toBe(PROVIDER_CARD_STATE.READY);
+  });
+
+  it('blocks an OpenRouter wrapper against its OWN sibling, naming that gateway', () => {
+    const wrapper = cli({ id: 'opencode-openrouter', gatewayBacked: 'openrouter' });
+    expect(providerCardState(wrapper, { keySetFor: id => id === 'openrouter' ? false : null }).missing)
+      .toEqual([{ code: 'inheritedApiKey', label: 'OpenRouter API provider has no API key' }]);
+    // An OrcaRouter key must never satisfy an OpenRouter wrapper.
+    expect(providerCardState(wrapper, { keySetFor: id => id === 'orcarouter' }).missing)
+      .toEqual([{ code: 'inheritedApiKey', label: 'OpenRouter API provider has no API key' }]);
     expect(providerCardState(wrapper, { keySetFor: () => true }).state).toBe(PROVIDER_CARD_STATE.READY);
   });
 

@@ -21,11 +21,12 @@ import {
   parseCursorModelList,
 } from './internal/cursor.js';
 import { isOllamaBackedProvider, ollamaBaseFromProvider } from './internal/ollamaBacked.js';
+import { gatewayForProvider, isGatewayBackedProvider } from './internal/gateways.js';
 import { canRefreshModels, ollamaRefreshGroupKey, resolveModelFetcher } from './internal/modelFetchers.js';
 
 // Re-exported (rather than defined here) so the model-fetcher table can key its
 // ollama row on the same predicate without importing back into this module.
-export { isOllamaBackedProvider };
+export { isOllamaBackedProvider, isGatewayBackedProvider };
 // Groups providers that share one daemon + one probe shape, so a host fanning a
 // refresh across them can fetch once instead of once per provider. The base-URL
 // normalizer it keys on stays internal — the group key IS the contract, and an
@@ -39,13 +40,18 @@ export { canRefreshModels };
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_SAMPLE_PATH = join(__dirname, 'defaults/providers.sample.json');
 
-// OpenCode OrcaRouter wrappers intentionally keep no key in their persisted
+// Gateway-backed OpenCode wrappers intentionally keep no key in their persisted
 // record. Attach the sibling API key only to execution-time copies, and make
 // the property non-enumerable so provider responses and provider writes cannot
 // accidentally expose or persist it.
-function withOrcaRouterApiKey(provider, providers) {
-  const siblingKey = providers?.orcarouter?.apiKey;
-  if (provider?.orcarouterBacked !== true || provider.apiKey || !siblingKey) return provider;
+//
+// The sibling is looked up by the wrapper's OWN gateway id (internal/gateways.js),
+// never a hardcoded one — an OrcaRouter key must not leak into an OpenRouter
+// wrapper, which would send a secret to the wrong host.
+function withGatewayApiKey(provider, providers) {
+  const gateway = gatewayForProvider(provider);
+  const siblingKey = gateway ? providers?.[gateway.id]?.apiKey : null;
+  if (!gateway || provider.apiKey || !siblingKey) return provider;
   const executionProvider = { ...provider };
   Object.defineProperty(executionProvider, 'apiKey', {
     value: siblingKey,
@@ -548,14 +554,14 @@ export function createProviderService(config = {}) {
     async getProviderById(id) {
       const data = await loadProviders();
       const provider = data.providers[id];
-      return provider ? withOrcaRouterApiKey(provider, data.providers) : null;
+      return provider ? withGatewayApiKey(provider, data.providers) : null;
     },
 
     async getActiveProvider() {
       const data = await loadProviders();
       if (!data.activeProvider) return null;
       const provider = data.providers[data.activeProvider];
-      return provider ? withOrcaRouterApiKey(provider, data.providers) : null;
+      return provider ? withGatewayApiKey(provider, data.providers) : null;
     },
 
     async setActiveProvider(id) {
@@ -615,6 +621,11 @@ export function createProviderService(config = {}) {
         // PortOS-owned launch line): preserve the marker so OpenCode receives the
         // `sglang/` namespace and model refresh probes the container.
         ...(providerData.sglangBacked === true ? { sglangBacked: true } : {}),
+        // Hosted gateway markers: the generic one plus the legacy per-gateway
+        // boolean, both preserved so a record written by any version keeps
+        // resolving through internal/gateways.js.
+        ...(typeof providerData.gatewayBacked === 'string' && providerData.gatewayBacked
+          ? { gatewayBacked: providerData.gatewayBacked } : {}),
         ...(providerData.orcarouterBacked === true ? { orcarouterBacked: true } : {}),
         // Explicit opt-in to send the API key to an arbitrary (non-local,
         // non-allowlisted) endpoint — see internal/endpointGuard.js. Only
@@ -675,7 +686,7 @@ export function createProviderService(config = {}) {
 
     async testProvider(id) {
       const data = await loadProviders();
-      const provider = withOrcaRouterApiKey(data.providers[id], data.providers);
+      const provider = withGatewayApiKey(data.providers[id], data.providers);
 
       if (!provider) {
         return { success: false, error: 'Provider not found' };
@@ -809,7 +820,7 @@ export function createProviderService(config = {}) {
      */
     async fetchProviderModels(id) {
       const data = await loadProviders();
-      const provider = withOrcaRouterApiKey(data.providers[id], data.providers);
+      const provider = withGatewayApiKey(data.providers[id], data.providers);
 
       if (!provider) {
         return null;
@@ -1127,8 +1138,8 @@ export function createProviderService(config = {}) {
       return this._refreshAPIProviderModels(provider);
     },
 
-    /** Fetch the OrcaRouter catalog for its OpenCode CLI/TUI wrappers. */
-    async _fetchOrcaRouterModels(provider) {
+    /** Fetch a hosted gateway's catalog for its OpenCode CLI/TUI wrappers. */
+    async _fetchGatewayModels(provider) {
       return this._refreshAPIProviderModels(provider);
     },
 

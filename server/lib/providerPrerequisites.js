@@ -25,8 +25,9 @@
  * **SENTINEL DISCIPLINE.** `runtime` is `null` for NOT PROBED, which must never
  * read as "missing" — an unprobed CLI would otherwise take every perfectly
  * installed provider out of the fallback chain the first time a run failed.
- * Same for `orcaRouterKeySet`: `false` is "the sibling holds no key", `null` is
- * "the caller cannot tell". Only a definite negative produces a finding.
+ * Same for each entry of `gatewayKeySet`: `false` is "that gateway's sibling API
+ * record holds no key", `null`/absent is "the caller cannot tell". Only a
+ * definite negative produces a finding.
  *
  * Credentials carried in a secret env var (Bedrock, an Ollama auth token) stay
  * presentation-only here: the provider card resolves them from the sanitized
@@ -37,6 +38,7 @@
 import { PROVIDER_TYPES } from './aiToolkit/constants.js';
 import { isLocalInstanceHost } from './localProviderRuntime.js';
 import { commandBasename } from './providerModels.js';
+import { gatewayForProvider } from './providerGateways.js';
 
 /**
  * Hosts inside the trust boundary, where an unauthenticated OpenAI-compatible
@@ -166,13 +168,13 @@ const providerHasApiKey = (provider) =>
  * @param {object} [options]
  * @param {object|null} [options.runtime] — the provider's entry of the runtimes
  *   map. `null` = NOT PROBED (see the sentinel note at the top of this file).
- * @param {boolean|null} [options.orcaRouterKeySet] — does the sibling
- *   `orcarouter` API provider hold the key an OpenCode OrcaRouter wrapper
- *   inherits at spawn time? `false` covers both "no key" and "sibling deleted";
- *   `null` is "cannot tell".
+ * @param {Record<string, boolean|null>|null} [options.gatewayKeySet] — per gateway
+ *   id, does the sibling API provider of that id hold the key an OpenCode
+ *   wrapper inherits at spawn time? `false` covers both "no key" and "sibling
+ *   deleted"; `null`/absent is "cannot tell".
  * @returns {{met: boolean, missing: {code: string, label: string}[]}}
  */
-export const providerPrerequisites = (provider, { runtime = null, orcaRouterKeySet = null } = {}) => {
+export const providerPrerequisites = (provider, { runtime = null, gatewayKeySet = null } = {}) => {
   const missing = [];
 
   if (runtime && runtime.installed === false) {
@@ -185,10 +187,12 @@ export const providerPrerequisites = (provider, { runtime = null, orcaRouterKeyS
     && !isPrivateNetworkEndpoint(provider?.endpoint)) {
     missing.push({ code: 'apiKey', label: 'API key is not set' });
   }
-  // OpenCode OrcaRouter wrappers normally inherit from the sibling API
-  // provider, but an explicitly stored wrapper key takes precedence at spawn.
-  if (provider?.orcarouterBacked === true && !providerHasApiKey(provider) && orcaRouterKeySet === false) {
-    missing.push({ code: 'inheritedApiKey', label: 'OrcaRouter API provider has no API key' });
+  // A gateway-backed OpenCode wrapper normally inherits from the sibling API
+  // provider of the same id, but an explicitly stored wrapper key takes
+  // precedence at spawn.
+  const gateway = gatewayForProvider(provider);
+  if (gateway && !providerHasApiKey(provider) && gatewayKeySet?.[gateway.id] === false) {
+    missing.push({ code: 'inheritedApiKey', label: `${gateway.label} API provider has no API key` });
   }
 
   return { met: missing.length === 0, missing };
@@ -213,7 +217,7 @@ export const describeMissingPrerequisites = (missing) =>
  * can only ever save a doomed run. The credential findings are NOT in that
  * class. This module reads only the provider's own stored key, and a provider
  * can legitimately authenticate another way — a secret env var (Bedrock's AWS
- * credentials, an Ollama auth token), or an OrcaRouter wrapper carrying its own
+ * credentials, an Ollama auth token), or a gateway wrapper carrying its own
  * key rather than the sibling's. Routing on those would take working providers
  * out of the chain, so they stay presentation-only. The provider card may
  * report those credentials separately without changing the routing gate.

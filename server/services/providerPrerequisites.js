@@ -34,25 +34,32 @@
  */
 
 import { blocksRouting, describeMissingPrerequisites, providerPrerequisites, providerRuntimeKey } from '../lib/providerPrerequisites.js';
+import { PROVIDER_GATEWAYS } from '../lib/providerGateways.js';
 import { getProviderRuntime, getProviderRuntimeStatuses, peekProviderRuntimeStatuses } from './providerRuntimeInstaller.js';
 
 /**
- * Does the sibling `orcarouter` API provider hold the key an OpenCode
- * OrcaRouter wrapper inherits at spawn time?
+ * Per gateway id, does the sibling API provider of that id hold the key an
+ * OpenCode wrapper inherits at spawn time?
  *
  * `null` (cannot tell) when there is no provider collection to look in —
  * distinct from `false` ("looked, and the sibling has no key"), which is what a
  * present-but-keyless or deleted sibling gives. Accepts a raw map (keyed by id)
  * or a sanitized array.
+ *
+ * A map keyed by gateway id rather than one boolean, so a wrapper is only ever
+ * judged against ITS OWN sibling — an OrcaRouter key must never satisfy an
+ * OpenRouter wrapper.
  */
-const orcaRouterKeyState = (providers) => {
+const gatewayKeyState = (providers) => {
   if (!providers || typeof providers !== 'object') return null;
   const entries = Array.isArray(providers) ? providers : Object.values(providers);
   // An EMPTY collection is "nothing loaded", not "the sibling is gone" — the
   // same `null`-vs-`false` distinction the whole module runs on.
   if (entries.length === 0) return null;
-  const sibling = entries.find((p) => p?.id === 'orcarouter');
-  return sibling?.hasApiKey === true || Boolean(sibling?.apiKey);
+  return Object.fromEntries(PROVIDER_GATEWAYS.map((gateway) => {
+    const sibling = entries.find((p) => p?.id === gateway.id);
+    return [gateway.id, sibling?.hasApiKey === true || Boolean(sibling?.apiKey)];
+  }));
 };
 
 // Coalesced background refresh — one probe in flight at a time, so a failure
@@ -81,11 +88,11 @@ const runtimeSnapshotFor = (keys) => {
   return runtimes;
 };
 
-const forProvider = (provider, runtimes, orcaRouterKeySet) => providerPrerequisites(provider, {
+const forProvider = (provider, runtimes, gatewayKeySet) => providerPrerequisites(provider, {
   // `undefined` (no entry in the map) is NOT PROBED — normalize it to the
   // module's `null` sentinel rather than letting it fall through as a value.
   runtime: runtimes?.[providerRuntimeKey(provider) ?? ''] ?? null,
-  orcaRouterKeySet,
+  gatewayKeySet,
 });
 
 /**
@@ -96,8 +103,8 @@ export function getProviderPrerequisiteMap(providers) {
   const list = Array.isArray(providers) ? providers : [];
   if (list.length === 0) return {};
   const runtimes = runtimeSnapshotFor(list.map(providerRuntimeKey));
-  const orcaRouterKeySet = orcaRouterKeyState(list);
-  return Object.fromEntries(list.map((provider) => [provider.id, forProvider(provider, runtimes, orcaRouterKeySet)]));
+  const gatewayKeySet = gatewayKeyState(list);
+  return Object.fromEntries(list.map((provider) => [provider.id, forProvider(provider, runtimes, gatewayKeySet)]));
 }
 
 /**
@@ -115,7 +122,7 @@ export function getProviderPrerequisiteMap(providers) {
  */
 export function prerequisitesMetForRouting(provider, providers) {
   const runtimes = runtimeSnapshotFor([providerRuntimeKey(provider)]);
-  const { missing } = forProvider(provider, runtimes, orcaRouterKeyState(providers));
+  const { missing } = forProvider(provider, runtimes, gatewayKeyState(providers));
   if (!blocksRouting(missing)) return true;
   console.log(`⛔ Skipping fallback ${provider?.id || 'provider'}: ${describeMissingPrerequisites(missing)}`);
   return false;

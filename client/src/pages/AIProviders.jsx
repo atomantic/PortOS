@@ -4,7 +4,7 @@ import { AlertTriangle, Gauge } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
-import { filterSelectableModels, filterGenerationModels, isEmbeddingModel, mergeModelLists, configuredDefaultIn, localBackendForProvider, modelOptionLabel, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isGrokBuildCli, isLocalEndpoint, isLocalInstanceProvider, effectiveModelContextWindow, isRunnerAllowedCommand, effortLevelsForProvider, isOllamaBackedProvider, isOrcaRouterBackedProvider, isClaudeCommandProvider, generationControlsFor, providerRuntimeKey, providerCardState, PROVIDER_CARD_STATE } from '../utils/providers';
+import { filterSelectableModels, filterGenerationModels, isEmbeddingModel, mergeModelLists, configuredDefaultIn, localBackendForProvider, modelOptionLabel, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isGrokBuildCli, isLocalEndpoint, isLocalInstanceProvider, effectiveModelContextWindow, isRunnerAllowedCommand, effortLevelsForProvider, isOllamaBackedProvider, gatewayForProvider, isClaudeCommandProvider, generationControlsFor, providerRuntimeKey, providerCardState, PROVIDER_CARD_STATE } from '../utils/providers';
 import useLocalModels from '../hooks/useLocalModels';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import BrailleSpinner from '../components/BrailleSpinner';
@@ -25,7 +25,7 @@ import useDrawerTab from '../hooks/useDrawerTab';
 import { FormField } from '../components/ui/FormField';
 import RuntimeInstallModal from '../components/install/RuntimeInstallModal';
 import ProviderCard from '../components/providers/ProviderCard';
-import { GrokUploadWarning, OrcaRouterKeyHint } from '../components/providers/ProviderNotices';
+import { GrokUploadWarning, GatewayKeyHint } from '../components/providers/ProviderNotices';
 import CollapsibleSection from '../components/ui/CollapsibleSection';
 
 // The two local apps an API provider can front. Their installer lives on the
@@ -944,7 +944,7 @@ function ProviderForm({ provider, onClose, onSave, onEditProvider, allProviders 
   // and render blank — reading as "no model configured" when one is.
   const configuredDefault = configuredDefaultIn(mergedModels);
   // The markers that identify a backed provider (`ollamaBacked`, `llamaBacked`,
-  // `orcarouterBacked`) are NOT form fields, so a shape built from `formData`
+  // `gatewayBacked`) are NOT form fields, so a shape built from `formData`
   // alone loses them — which hid the effort ladder on the OpenCode-Ollama
   // providers, whose ladder is keyed on `ollamaBacked`. Merge the live edits
   // over the stored record instead, so edits to command/endpoint/envVars count
@@ -1333,7 +1333,7 @@ function ProviderForm({ provider, onClose, onSave, onEditProvider, allProviders 
                     <p className="text-xs text-gray-500 mt-1">
                       This field is the only place API providers read a key from — it's stored on this
                       provider and sent as an <code>Authorization: Bearer</code> header on every request.
-                      No environment variable is involved. Hosted APIs (Cerebras, Grok, NVIDIA, OrcaRouter, …) require
+                      No environment variable is involved. Hosted APIs (Cerebras, Grok, NVIDIA, OrcaRouter, OpenRouter, …) require
                       one; local backends (Ollama, LM Studio) don't.
                     </p>
                   </FormField>
@@ -1369,9 +1369,10 @@ function ProviderForm({ provider, onClose, onSave, onEditProvider, allProviders 
 
               {isGrokBuildCli({ type: formData.type, command: formData.command }) && <GrokUploadWarning />}
 
-              {isOrcaRouterBackedProvider(provider) && (
-                <OrcaRouterKeyHint
-                  sibling={allProviders.find(p => p.id === 'orcarouter')}
+              {gatewayForProvider(provider) && (
+                <GatewayKeyHint
+                  gateway={gatewayForProvider(provider)}
+                  sibling={allProviders.find(p => p.id === gatewayForProvider(provider).id)}
                   onEdit={onEditProvider}
                 />
               )}

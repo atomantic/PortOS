@@ -30,6 +30,7 @@
 
 import { getOpencodeLocalProviderNamespace, isOpencodeCommand } from './providerModels.js';
 import { opencodeLocalBaseUrl } from './opencodeConfig.js';
+import { isGatewayNamespace } from './providerGateways.js';
 
 // Default OpenAI-compatible ports for the two local backends PortOS manages. An
 // endpoint-only provider (no id/name) pointed at one of these on the local
@@ -302,8 +303,9 @@ function opencodeConfiguredBaseUrl(provider, namespace) {
  * first and its endpoint/name only as a fallback.
  *
  * The `*Backed` markers are authoritative — they are what the spawner itself
- * keys on. `orcarouter` is deliberately excluded: it is an OpenCode local
- * *namespace* but a remote hosted API, so there is no local daemon to check.
+ * keys on. Hosted gateways (`providerGateways.js`) are deliberately excluded:
+ * each is an OpenCode local *namespace* but a remote hosted API, so there is no
+ * local daemon to check.
  *
  * @param {object|null|undefined} provider
  * @returns {'llama'|'ollama'|'lmstudio'|'mtplx'|'vllm'|'sglang'|null}
@@ -313,7 +315,7 @@ export function localRuntimeKind(provider) {
   // Marker-based, NOT command-based: this also resolves `claude-ollama`, which
   // carries `ollamaBacked` without being an OpenCode provider.
   const namespace = getOpencodeLocalProviderNamespace(provider);
-  if (namespace && namespace !== 'orcarouter') return namespace;
+  if (namespace && !isGatewayNamespace(namespace)) return namespace;
   return localBackendForProvider(provider);
 }
 

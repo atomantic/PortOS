@@ -425,8 +425,14 @@ export const providerSchema = z.object({
   // Marks an OpenCode CLI/TUI wrapper for a separately started local SGLang
   // container (Qwen3.8-27B on a Hopper/Blackwell card).
   sglangBacked: z.boolean().optional(),
-  // Marks an OpenCode CLI/TUI wrapper for the OrcaRouter OpenAI-compatible
-  // gateway; the sibling API record owns its key.
+  // Marks an OpenCode CLI/TUI wrapper for a hosted OpenAI-compatible gateway
+  // ('orcarouter', 'openrouter' — see server/lib/providerGateways.js). The
+  // sibling API record whose id equals this value owns the key.
+  gatewayBacked: z.string().optional(),
+  // Legacy per-gateway marker, superseded by `gatewayBacked`. Still accepted and
+  // still READ (providerGateways.js resolves it), because records written before
+  // the registry existed are never rewritten — installs upgrade on their own
+  // schedule.
   orcarouterBacked: z.boolean().optional(),
   // Explicit opt-in to attach the API key to an arbitrary (non-local,
   // non-allowlisted) endpoint — mirrors the aiToolkit providerSchema. Guards

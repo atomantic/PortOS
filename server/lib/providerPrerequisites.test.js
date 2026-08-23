@@ -117,13 +117,28 @@ describe('providerPrerequisites', () => {
     expect(providerPrerequisites(api({ hasApiKey: false })).met).toBe(false);
   });
 
+  // The legacy per-gateway boolean, which stored records still carry.
   it('reports an OrcaRouter wrapper whose sibling holds no key', () => {
     const wrapper = cli({ id: 'opencode-orcarouter', command: 'opencode', orcarouterBacked: true });
-    expect(providerPrerequisites(wrapper, { orcaRouterKeySet: false }).missing)
+    expect(providerPrerequisites(wrapper, { gatewayKeySet: { orcarouter: false } }).missing)
       .toEqual([{ code: 'inheritedApiKey', label: 'OrcaRouter API provider has no API key' }]);
-    expect(providerPrerequisites(wrapper, { orcaRouterKeySet: true }).met).toBe(true);
-    // null = cannot tell, which must never read as missing
-    expect(providerPrerequisites(wrapper, { orcaRouterKeySet: null }).met).toBe(true);
+    expect(providerPrerequisites(wrapper, { gatewayKeySet: { orcarouter: true } }).met).toBe(true);
+    // null = cannot tell, which must never read as missing — and so is an absent
+    // entry (a collection that was never loaded).
+    expect(providerPrerequisites(wrapper, { gatewayKeySet: { orcarouter: null } }).met).toBe(true);
+    expect(providerPrerequisites(wrapper, { gatewayKeySet: null }).met).toBe(true);
+    expect(providerPrerequisites(wrapper, {}).met).toBe(true);
+  });
+
+  it('reports an OpenRouter wrapper against its OWN sibling, naming that gateway', () => {
+    const wrapper = cli({ id: 'opencode-openrouter', command: 'opencode', gatewayBacked: 'openrouter' });
+    expect(providerPrerequisites(wrapper, { gatewayKeySet: { openrouter: false } }).missing)
+      .toEqual([{ code: 'inheritedApiKey', label: 'OpenRouter API provider has no API key' }]);
+    expect(providerPrerequisites(wrapper, { gatewayKeySet: { openrouter: true } }).met).toBe(true);
+    // A DIFFERENT gateway's key must never satisfy this wrapper — that would be
+    // a secret from the wrong host reading as the credential for this one.
+    expect(providerPrerequisites(wrapper, { gatewayKeySet: { orcarouter: true, openrouter: false } }).missing)
+      .toEqual([{ code: 'inheritedApiKey', label: 'OpenRouter API provider has no API key' }]);
   });
 
   it('does not demand the sibling key when the wrapper carries its own key', () => {
@@ -133,14 +148,14 @@ describe('providerPrerequisites', () => {
       orcarouterBacked: true,
       apiKey: 'sk-example',
     });
-    expect(providerPrerequisites(wrapper, { orcaRouterKeySet: false }).met).toBe(true);
+    expect(providerPrerequisites(wrapper, { gatewayKeySet: { orcarouter: false } }).met).toBe(true);
   });
 
   it('collects every finding rather than stopping at the first', () => {
     const wrapper = { id: 'x', type: 'api', endpoint: 'https://api.example.com', orcarouterBacked: true };
     const result = providerPrerequisites(wrapper, {
       runtime: { installed: false, label: 'OpenCode CLI' },
-      orcaRouterKeySet: false,
+      gatewayKeySet: { orcarouter: false },
     });
     expect(result.missing.map((m) => m.code)).toEqual(['runtime', 'apiKey', 'inheritedApiKey']);
   });
@@ -166,7 +181,7 @@ describe('blocksRouting', () => {
   it('does NOT act on the credential findings', () => {
     expect(blocksRouting(providerPrerequisites(api()).missing)).toBe(false);
     const wrapper = cli({ orcarouterBacked: true });
-    expect(blocksRouting(providerPrerequisites(wrapper, { orcaRouterKeySet: false }).missing)).toBe(false);
+    expect(blocksRouting(providerPrerequisites(wrapper, { gatewayKeySet: { orcarouter: false } }).missing)).toBe(false);
   });
 
   it('is false for nothing missing, and for a non-array', () => {

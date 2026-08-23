@@ -19,6 +19,7 @@
  */
 
 import { getOpencodeLocalProviderNamespace, isOpencodeCommand } from './providerModels.js';
+import { PROVIDER_GATEWAYS, PROVIDER_GATEWAY_IDS, gatewayById, isGatewayNamespace } from './providerGateways.js';
 import { PORTS } from './ports.js';
 
 const LLAMA_SERVER_BASE_URL = `http://127.0.0.1:${PORTS.LLAMA_SERVER}/v1`;
@@ -56,11 +57,14 @@ const OPENCODE_LOCAL_BASE_PROVIDERS = {
     name: 'SGLang Qwen3.8-27B (local)',
     options: { baseURL: SGLANG_QWEN_BASE_URL },
   },
-  orcarouter: {
+  // Every hosted gateway (`providerGateways.js`) declares the same
+  // OpenAI-compatible shape, so the rows are generated rather than hand-listed —
+  // a new gateway is one registry row, not an edit here.
+  ...Object.fromEntries(PROVIDER_GATEWAYS.map((gateway) => [gateway.id, {
     npm: '@ai-sdk/openai-compatible',
-    name: 'OrcaRouter',
-    options: { baseURL: 'https://api.orcarouter.ai/v1' },
-  },
+    name: gateway.label,
+    options: { baseURL: gateway.baseURL },
+  }])),
 };
 
 /**
@@ -68,7 +72,7 @@ const OPENCODE_LOCAL_BASE_PROVIDERS = {
  * — what a spawned OpenCode talks to when the provider stores no config of its
  * own. Read by `lib/localProviderRuntime.js` so the readiness probe and the
  * spawn agree on the endpoint instead of keeping two copies of these ports.
- * @param {'ollama'|'mtplx'|'llama'|'vllm'|'sglang'|'orcarouter'} providerKey
+ * @param {'ollama'|'mtplx'|'llama'|'vllm'|'sglang'|string} providerKey
  * @returns {string|null}
  */
 export const opencodeLocalBaseUrl = (providerKey) =>
@@ -79,7 +83,7 @@ export const opencodeLocalBaseUrl = (providerKey) =>
  * else here is an unauthenticated loopback daemon, and attaching a key to those
  * would put a secret into a config file that never needed one.
  */
-const KEY_BEARING_NAMESPACES = new Set(['orcarouter', 'vllm', 'sglang']);
+const KEY_BEARING_NAMESPACES = new Set(['vllm', 'sglang', ...PROVIDER_GATEWAY_IDS]);
 
 const localProviderBase = (providerKey) => {
   if (!Object.hasOwn(OPENCODE_LOCAL_BASE_PROVIDERS, providerKey)) {
@@ -91,8 +95,11 @@ const localProviderBase = (providerKey) => {
 // Strip the selected provider namespace so a model id can key that provider's
 // config `models` map. Idempotent for an already-bare id. A slash-bearing model
 // id (`hf.co/user/model:tag`) retains every slash after the leading namespace.
+// A hosted gateway's model ids are already `vendor/model` and are NEVER
+// namespace-prefixed in storage, so stripping would eat a real id segment
+// (`anthropic/claude-sonnet-4` is the key, not `claude-sonnet-4`).
 const stripProviderPrefix = (id, providerKey) =>
-  providerKey === 'orcarouter' ? id :
+  isGatewayNamespace(providerKey) ? id :
   typeof id === 'string' && id.startsWith(`${providerKey}/`)
     ? id.slice(providerKey.length + 1)
     : id;
@@ -101,7 +108,7 @@ const stripProviderPrefix = (id, providerKey) =>
  * Normalize an id or list of ids to the unique, non-empty, prefix-stripped bare
  * model ids that key the OpenCode `models` map.
  * @param {string|string[]|null|undefined} models
- * @param {'ollama'|'mtplx'|'llama'|'vllm'|'sglang'|'orcarouter'} [providerKey='ollama']
+ * @param {'ollama'|'mtplx'|'llama'|'vllm'|'sglang'|string} [providerKey='ollama']
  * @returns {string[]}
  */
 export function toBareModelIds(models, providerKey = 'ollama') {
@@ -122,9 +129,9 @@ export function toBareModelIds(models, providerKey = 'ollama') {
  * these entries speaks the OpenAI chat-completions shape, so they are emitted
  * for all of them. The thinking toggle is NOT: Ollama takes its own native
  * `think` boolean, while a llama.cpp / MTPLX / vLLM OpenAI endpoint routes it
- * through the chat template (`chat_template_kwargs.enable_thinking`). OrcaRouter
- * fronts cloud models that own their reasoning switch upstream, so it gets no
- * toggle at all and the editor hides the checkbox for it. MIRROR of
+ * through the chat template (`chat_template_kwargs.enable_thinking`). A hosted
+ * gateway fronts cloud models that own their reasoning switch upstream, so it
+ * gets no toggle at all and the editor hides the checkbox for it. MIRROR of
  * `generationControlsFor` in `client/src/utils/providers.js`; keep in lockstep.
  *
  * A missing entry is not a missing checkbox — `buildAgentGeneration` bails on it
@@ -132,7 +139,7 @@ export function toBareModelIds(models, providerKey = 'ollama') {
  * how vLLM shipped with no generation controls at all (#4765). Every local
  * runtime OpenCode can be pointed at needs a row here; `opencodeConfig.test.js`
  * walks `LOCAL_RUNTIMES` to make a missing one fail.
- * @type {Record<'ollama'|'mtplx'|'llama'|'vllm'|'sglang'|'orcarouter', 'think'|'chatTemplate'|null>}
+ * @type {Record<string, 'think'|'chatTemplate'|null>}
  */
 const THINKING_STYLE = {
   ollama: 'think',
@@ -147,7 +154,10 @@ const THINKING_STYLE = {
   // tool-call format reliable), so the control has to exist for the operator to
   // set — but nothing here SEEDS `thinking: false`, per #4716.
   sglang: 'chatTemplate',
-  orcarouter: null,
+  // Every hosted gateway fronts cloud models that own their reasoning switch
+  // upstream, so none of them gets a toggle — the editor hides the checkbox for
+  // them (`generationControlsFor` in client/src/utils/providers.js).
+  ...Object.fromEntries(PROVIDER_GATEWAY_IDS.map((id) => [id, null])),
 };
 
 const numberInRange = (value, min, max) => {
@@ -174,7 +184,7 @@ const readBoolean = (value) =>
  * the provider.
  *
  * @param {{temperature?:unknown, topP?:unknown, thinking?:unknown, effort?:unknown}|null|undefined} generation
- * @param {'ollama'|'mtplx'|'llama'|'vllm'|'sglang'|'orcarouter'} providerKey
+ * @param {'ollama'|'mtplx'|'llama'|'vllm'|'sglang'|string} providerKey
  * @returns {object|null}
  */
 export function buildAgentGeneration(generation, providerKey) {
@@ -218,7 +228,7 @@ export function buildAgentGeneration(generation, providerKey) {
  *
  * @param {string|string[]|null|undefined} models
  * @param {object|null} [base] - existing config to merge into (a fresh clone is made)
- * @param {'ollama'|'mtplx'|'llama'|'vllm'|'sglang'|'orcarouter'} [providerKey='ollama']
+ * @param {'ollama'|'mtplx'|'llama'|'vllm'|'sglang'|string} [providerKey='ollama']
  * @returns {object} OpenCode config object
  */
 export function buildOpencodeConfig(models, base = null, providerKey = 'ollama', generation = null) {
@@ -257,7 +267,7 @@ export function buildOpencodeConfig(models, base = null, providerKey = 'ollama',
  *
  * @param {string|string[]|null|undefined} models
  * @param {object|null} [base] - existing config to merge into
- * @param {'ollama'|'mtplx'|'llama'|'vllm'|'sglang'|'orcarouter'} [providerKey='ollama']
+ * @param {'ollama'|'mtplx'|'llama'|'vllm'|'sglang'|string} [providerKey='ollama']
  * @returns {string} JSON string for OPENCODE_CONFIG_CONTENT
  */
 export function buildOpencodeConfigContent(models, base = null, providerKey = 'ollama', generation = null) {
@@ -277,7 +287,7 @@ export function buildOpencodeConfigContent(models, base = null, providerKey = 'o
  * model, and the model being run this invocation — so whichever namespaced
  * `--model` the spawner passes is always accepted.
  *
- * @param {{command?:string, ollamaBacked?:boolean, mtplxBacked?:boolean, llamaBacked?:boolean, vllmBacked?:boolean, sglangBacked?:boolean, orcarouterBacked?:boolean, models?:string[], defaultModel?:string|null, apiKey?:string, orcarouterApiKey?:string, envVars?:object}} provider
+ * @param {{command?:string, ollamaBacked?:boolean, mtplxBacked?:boolean, llamaBacked?:boolean, vllmBacked?:boolean, sglangBacked?:boolean, gatewayBacked?:string, orcarouterBacked?:boolean, models?:string[], defaultModel?:string|null, apiKey?:string, orcarouterApiKey?:string, envVars?:object}} provider
  * @param {string|null|undefined} model - the model being run (may differ from defaultModel)
  * @returns {{OPENCODE_CONFIG_CONTENT?: string}} env vars to merge
  */
@@ -304,13 +314,18 @@ export function buildOpencodeEnvVars(provider, model) {
     model,
   ];
   const config = buildOpencodeConfig(ids, base, providerKey, provider);
-  // Both key-bearing namespaces read the SAME `provider.apiKey` field; the
-  // OrcaRouter alias is legacy. vLLM's compose stack is started with
-  // `VLLM_API_KEY`, so a wrapper pointed at it needs the key on
-  // `options.apiKey` exactly the way the hosted gateway does — the endpoint is
-  // loopback, but the server still 401s without it.
+  // Every key-bearing namespace reads the SAME `provider.apiKey` field; a
+  // gateway's `legacyApiKeyField` (`orcarouterApiKey`) is an older alias kept
+  // readable forever. vLLM's compose stack is started with `VLLM_API_KEY`, so a
+  // wrapper pointed at it needs the key on `options.apiKey` exactly the way a
+  // hosted gateway does — the endpoint is loopback, but the server still 401s
+  // without it.
+  // Keyed off the RESOLVED namespace, not the record's marker: a malformed
+  // record carrying both a local marker and a gateway marker resolves to the
+  // local namespace above, and must not then export a gateway key env var.
+  const gateway = gatewayById(providerKey);
   const apiKey = KEY_BEARING_NAMESPACES.has(providerKey)
-    ? (provider?.apiKey || (providerKey === 'orcarouter' ? provider?.orcarouterApiKey : null))
+    ? (provider?.apiKey || (gateway?.legacyApiKeyField ? provider?.[gateway.legacyApiKeyField] : null))
     : null;
   if (apiKey) {
     config.provider[providerKey].options = {
@@ -320,6 +335,6 @@ export function buildOpencodeEnvVars(provider, model) {
   }
   return {
     OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
-    ...(apiKey && providerKey === 'orcarouter' ? { ORCAROUTER_API_KEY: apiKey } : {}),
+    ...(apiKey && gateway ? { [gateway.apiKeyEnv]: apiKey } : {}),
   };
 }

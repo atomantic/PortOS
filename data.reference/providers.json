@@ -416,6 +416,59 @@
       "secretEnvVars": [],
       "headlessArgs": []
     },
+    "openrouter": {
+      "id": "openrouter",
+      "name": "OpenRouter",
+      "type": "api",
+      "endpoint": "https://openrouter.ai/api/v1",
+      "apiKey": "",
+      "models": ["openrouter/auto"],
+      "defaultModel": "openrouter/auto",
+      "lightModel": "openrouter/auto",
+      "mediumModel": "openrouter/auto",
+      "heavyModel": "openrouter/auto",
+      "timeout": 300000,
+      "enabled": false,
+      "envVars": {},
+      "secretEnvVars": []
+    },
+    "opencode-openrouter": {
+      "id": "opencode-openrouter",
+      "name": "OpenCode OpenRouter",
+      "type": "cli",
+      "command": "opencode",
+      "args": ["run"],
+      "endpoint": "https://openrouter.ai/api/v1",
+      "models": ["openrouter/auto"],
+      "defaultModel": "openrouter/auto",
+      "gatewayBacked": "openrouter",
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {
+        "OPENCODE_CONFIG_CONTENT": "{\"permission\":\"allow\",\"provider\":{\"openrouter\":{\"npm\":\"@ai-sdk/openai-compatible\",\"name\":\"OpenRouter\",\"options\":{\"baseURL\":\"https://openrouter.ai/api/v1\"}}}}"
+      },
+      "secretEnvVars": [],
+      "headlessArgs": []
+    },
+    "opencode-openrouter-tui": {
+      "id": "opencode-openrouter-tui",
+      "name": "OpenCode OpenRouter TUI",
+      "type": "tui",
+      "command": "opencode",
+      "args": [],
+      "endpoint": "https://openrouter.ai/api/v1",
+      "models": ["openrouter/auto"],
+      "defaultModel": "openrouter/auto",
+      "gatewayBacked": "openrouter",
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {
+        "OPENCODE_CONFIG_CONTENT": "{\"permission\":\"allow\",\"provider\":{\"openrouter\":{\"npm\":\"@ai-sdk/openai-compatible\",\"name\":\"OpenRouter\",\"options\":{\"baseURL\":\"https://openrouter.ai/api/v1\"}}}}"
+      },
+      "secretEnvVars": [],
+      "tuiPromptDelayMs": 2500,
+      "tuiIdleTimeoutMs": 180000
+    },
     "opencode-orcarouter-tui": {
       "id": "opencode-orcarouter-tui",
       "name": "OpenCode OrcaRouter TUI",

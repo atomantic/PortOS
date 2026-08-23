@@ -1,6 +1,6 @@
 /**
  * The two credential/privacy notices a provider surface renders: the Grok Build
- * CLI's repo-upload disclosure and the OpenCode OrcaRouter wrappers' "the key
+ * CLI's repo-upload disclosure and a gateway-backed OpenCode wrapper's "the key
  * lives on the sibling API provider" hint.
  *
  * Shared because both the provider CARD and the provider EDITOR show them — the
@@ -24,27 +24,31 @@ disable_codebase_upload = true`}</pre>
    );
 }
 
-// The OpenCode OrcaRouter wrappers (opencode-orcarouter / -tui) keep no key of
-// their own — at spawn time the server copies the key from the sibling
-// `orcarouter` API provider. This answers "where do I put the API key?" from the
-// card/form: it's on the API provider, not here.
-export function OrcaRouterKeyHint({ sibling, className = '', onEdit }) {
+// A gateway-backed OpenCode wrapper (opencode-orcarouter / opencode-openrouter
+// and their -tui twins) keeps no key of its own — at spawn time the server
+// copies the key from the sibling API provider whose id equals the gateway id.
+// This answers "where do I put the API key?" from the card/form: it's on the
+// API provider, not here. `gateway` is a row of PROVIDER_GATEWAYS
+// (client/src/utils/providers.js), so the copy names the right gateway rather
+// than hardcoding one.
+export function GatewayKeyHint({ gateway, sibling, className = '', onEdit }) {
+  if (!gateway) return null;
   const hasKey = Boolean(sibling?.hasApiKey);
   return (
     <div className={`text-xs rounded-md border border-port-border bg-port-bg/60 px-2.5 py-2 leading-relaxed ${className}`}>
       <span className="text-gray-300">
-        API key is inherited from the <code className="font-mono">OrcaRouter</code> API provider
+        API key is inherited from the <code className="font-mono">{gateway.label}</code> API provider
         {" "}at run time — this wrapper has no key field of its own.
       </span>
       <p className="mt-1 text-gray-400">
         You do not need to add an environment variable. PortOS supplies{' '}
-        <code className="font-mono">ORCAROUTER_API_KEY</code> to OpenCode automatically.
+        <code className="font-mono">{gateway.apiKeyEnv}</code> to OpenCode automatically.
       </p>
       <div className="mt-2 flex flex-wrap items-center gap-2">
         {hasKey ? (
-          <span className="text-port-success">OrcaRouter key: set</span>
+          <span className="text-port-success">{gateway.label} key: set</span>
         ) : (
-          <span className="text-port-warning">OrcaRouter key: not set</span>
+          <span className="text-port-warning">{gateway.label} key: not set</span>
         )}
         {sibling && onEdit && (
           <button
@@ -52,7 +56,7 @@ export function OrcaRouterKeyHint({ sibling, className = '', onEdit }) {
             onClick={() => onEdit(sibling)}
             className="text-port-accent hover:text-port-accent/80 underline underline-offset-2"
           >
-            Edit OrcaRouter API provider
+            Edit {gateway.label} API provider
           </button>
         )}
       </div>
