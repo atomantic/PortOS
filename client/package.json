@@ -31,11 +31,13 @@
     "react-router": "8.3.0",
     "recharts": "3.10.1",
     "socket.io-client": "4.8.3",
-    "three": "0.185.1"
+    "three": "0.185.1",
+    "three-stdlib": "2.36.1"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.9",
     "@tailwindcss/postcss": "4.3.3",
+    "@testing-library/dom": "10.4.1",
     "@testing-library/jest-dom": "7.0.1",
     "@testing-library/react": "16.3.2",
     "@testing-library/user-event": "14.6.5",
