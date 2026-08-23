@@ -276,3 +276,25 @@ describe('reconcileLegacyMirror — a legacy trim must not strand an over-long f
     expect(() => validateSegments(v2.segments)).not.toThrow();
   });
 });
+
+describe('asset extension gate', () => {
+  it('refuses an image sidecar that lives in the same directory as the gallery', () => {
+    // data/images also holds *.metadata.json; without this it is an acceptable
+    // still that only fails at render as a bare `ffmpeg exit 1`.
+    expect(() => validateSegments([{ type: 'still', assetKind: 'images', assetFile: 'shot.metadata.json', durationSec: 2 }]))
+      .toThrow(/assetFile must be one of/);
+  });
+
+  it('refuses an image where an audio track is expected, and vice versa', () => {
+    expect(() => validateAudio({ tracks: [{ assetKind: 'music', assetFile: 'cover.png', startSec: 0, durationSec: 2 }] }))
+      .toThrow(/assetFile must be one of/);
+    expect(() => validateOverlays([{ assetKind: 'images', assetFile: 'bed.mp3', startSec: 0, durationSec: 2 }]))
+      .toThrow(/assetFile must be one of/);
+  });
+
+  it('accepts the formats each lane actually renders, case-insensitively', () => {
+    expect(() => validateSegments([{ type: 'still', assetKind: 'images', assetFile: 'PLATE.PNG', durationSec: 2 }])).not.toThrow();
+    expect(() => validateOverlays([{ assetKind: 'images', assetFile: 'logo.webp', startSec: 0, durationSec: 2 }])).not.toThrow();
+    expect(() => validateAudio({ tracks: [{ assetKind: 'audio', assetFile: 'vo.wav', startSec: 0, durationSec: 2 }] })).not.toThrow();
+  });
+});

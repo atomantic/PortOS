@@ -126,6 +126,14 @@ const clampFades = (fadeInSec, fadeOutSec, duration, label) => {
   return { fadeInSec: fin, fadeOutSec: fout };
 };
 
+// `data/images` also holds `*.metadata.json` sidecars, and `data/music` holds
+// whatever the user dropped there. Without an extension gate those are
+// acceptable asset references that only fail at render time as a bare
+// `ffmpeg exit 1`; refusing them here turns that into a 400 naming the field.
+const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp'];
+const AUDIO_EXTENSIONS = ['.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg', '.opus'];
+const extensionsFor = (kinds) => (kinds === AUDIO_ASSET_KINDS ? AUDIO_EXTENSIONS : IMAGE_EXTENSIONS);
+
 const assetFields = (raw, allowedKinds, label) => {
   const assetKind = String(raw.assetKind || '').trim();
   if (!allowedKinds.includes(assetKind)) {
@@ -137,6 +145,10 @@ const assetFields = (raw, allowedKinds, label) => {
   // in the project file at all.
   if (!assetPathFor(assetKind, assetFile)) {
     throw bad(`${label}: assetFile must be a plain filename inside data/${assetKind}`);
+  }
+  const extensions = extensionsFor(allowedKinds);
+  if (!extensions.some((ext) => assetFile.toLowerCase().endsWith(ext))) {
+    throw bad(`${label}: assetFile must be one of ${extensions.join(', ')}`);
   }
   return { assetKind, assetFile };
 };

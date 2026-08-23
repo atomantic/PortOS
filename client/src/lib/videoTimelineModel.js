@@ -76,6 +76,21 @@ export const fadeMultiplier = (fadeInSec, fadeOutSec, duration, within) => {
 };
 
 /**
+ * Shrink a fade pair that no longer fits `duration`, scaling both
+ * proportionally so the author's balance survives. Mirrors `fitFades` in
+ * server/services/videoTimeline/segments.js — the export and the preview must
+ * compress an over-long pair the same way or they ramp differently.
+ */
+export function fitFades(fadeInSec, fadeOutSec, duration) {
+  const fin = Math.max(0, Number(fadeInSec) || 0);
+  const fout = Math.max(0, Number(fadeOutSec) || 0);
+  const span = fin + fout;
+  if (span <= duration || span === 0) return { fadeInSec: fin, fadeOutSec: fout };
+  const scale = Math.max(0, duration) / span;
+  return { fadeInSec: fin * scale, fadeOutSec: fout * scale };
+}
+
+/**
  * Effective opacity of an overlay at project-time `t` — 0 outside its window,
  * its configured opacity inside, scaled by whichever alpha fade is active.
  *
@@ -91,7 +106,12 @@ export const overlayOpacityAt = (overlay, t, limitSec = Infinity) => {
   const dur = end - start;
   if (dur <= 0 || t < start || t > end) return 0;
   const base = overlay.opacity == null ? 1 : overlay.opacity;
-  return base * fadeMultiplier(overlay.fadeInSec || 0, overlay.fadeOutSec || 0, dur, t - start);
+  // Refit against the VISIBLE span, exactly as the export does: a clamped
+  // window can be shorter than the fades authored for the full one, and the
+  // two sides must compress them the same way or the preview and the render
+  // ramp differently over the overlay's last seconds.
+  const { fadeInSec, fadeOutSec } = fitFades(overlay.fadeInSec || 0, overlay.fadeOutSec || 0, dur);
+  return base * fadeMultiplier(fadeInSec, fadeOutSec, dur, t - start);
 };
 
 /**
@@ -177,8 +197,7 @@ export function fitFadePatch(entry, patch, duration) {
   const fin = Math.max(0, merged.fadeInSec || 0);
   const fout = Math.max(0, merged.fadeOutSec || 0);
   if (fin + fout <= duration) return patch;
-  const scale = fin + fout > 0 ? Math.max(0, duration) / (fin + fout) : 0;
-  return { ...patch, fadeInSec: fin * scale, fadeOutSec: fout * scale };
+  return { ...patch, ...fitFades(fin, fout, duration) };
 }
 
 /**
@@ -202,6 +221,11 @@ export function clampTrim(segment, patch, sourceDur, fps) {
  * project's clip-audio multiplier, the segment's own trim, and its fade ramp,
  * exactly as the export composes them (`volume=` ahead of `afade` in the
  * segment's audio chain).
+ *
+ * Capped at 1: the server allows a multiplier up to MAX_VOLUME, but
+ * HTMLMediaElement.volume cannot exceed 1, so a boosted mix auditions quieter
+ * than it renders. The browser has no way to match that — the cap is the
+ * honest ceiling, not a rule the export shares.
  */
 export const segmentVolumeAt = (segment, clipVolume, within) => {
   if (!segment || segment.type === 'still') return 0;

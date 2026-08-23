@@ -53,6 +53,13 @@ const DEFAULT_BED_SEC = 10;
 const MIN_ENTRY_SEC = 0.05;
 const MAX_ENTRY_SEC = 600;
 const MAX_VOLUME = 4;
+// Mirrors MAX_SEGMENTS / MAX_OVERLAYS / MAX_AUDIO_TRACKS in
+// server/services/videoTimeline/segments.js.
+const LANE_CAPS = {
+  segment: { max: 200, label: 'Video lane' },
+  overlay: { max: 50, label: 'Overlay lane' },
+  audio: { max: 20, label: 'Audio lane' },
+};
 
 const LIBRARY_TABS = [
   { id: 'clips', label: 'Clips', Icon: Film },
@@ -285,8 +292,22 @@ export default function VideoTimelineEditor() {
     ));
   }, [updateLanes]);
 
+  // Refuse the add at the cap rather than letting it through: the server's Zod
+  // gate 400s the whole PATCH, so one entry over the limit makes EVERY
+  // subsequent debounced save fail with a message that names no lane, and the
+  // user has to guess which one to trim.
   const addToLane = useCallback((lane, entry) => {
-    updateLanes((prev) => withLaneEntries(prev, lane, [...laneEntries(prev, lane), entry]));
+    let added = false;
+    updateLanes((prev) => {
+      const entries = laneEntries(prev, lane);
+      if (entries.length >= LANE_CAPS[lane].max) return prev;
+      added = true;
+      return withLaneEntries(prev, lane, [...entries, entry]);
+    });
+    if (!added) {
+      toast.error(`${LANE_CAPS[lane].label} limit reached (${LANE_CAPS[lane].max}) — remove one first`);
+      return;
+    }
     setSelection({ lane, key: entry._key });
   }, [updateLanes]);
 

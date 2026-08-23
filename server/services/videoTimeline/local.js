@@ -295,7 +295,10 @@ export async function resolveTimeline(rawProject) {
     if (seg.type === 'still') {
       const assetPath = resolveAsset(seg.assetKind, seg.assetFile, { allowedKinds: IMAGE_ASSET_KINDS });
       if (!assetPath) { missingAssets.push(`${seg.assetKind}/${seg.assetFile}`); continue; }
-      prepared.push({ kind: 'still', i, seg, assetPath, duration: seg.durationSec });
+      prepared.push({
+        kind: 'still', i, seg, assetPath, duration: seg.durationSec,
+        fades: fitFades(seg.fadeInSec, seg.fadeOutSec, seg.durationSec),
+      });
       continue;
     }
     const entry = historyMap.get(seg.clipId);
@@ -371,8 +374,8 @@ export async function resolveTimeline(rawProject) {
       assetFile: p.seg.assetFile,
       assetPath: p.assetPath,
       duration: p.duration,
-      fadeInSec: p.seg.fadeInSec,
-      fadeOutSec: p.seg.fadeOutSec,
+      fadeInSec: p.fades.fadeInSec,
+      fadeOutSec: p.fades.fadeOutSec,
     }
     : {
       type: 'clip',
@@ -391,7 +394,14 @@ export async function resolveTimeline(rawProject) {
       volume: p.seg.volume,
     }));
 
-  const firstClip = resolvedSegments.find((seg) => seg.type === 'clip');
+  // Pick the geometry off the first clip that actually HAS dimensions. An
+  // uploaded or downloaded clip carries no width/height (videoUpload.js /
+  // videoDownload.js write no dims), so taking the first clip unconditionally
+  // would letterbox a whole project into the 720p fallback because of one
+  // dims-less entry — and the editor's preview, which skips those, would then
+  // show a different canvas than the render produces.
+  const firstClip = resolvedSegments.find((seg) => seg.type === 'clip' && seg.width > 0 && seg.height > 0);
+  const firstFps = resolvedSegments.find((seg) => seg.type === 'clip' && seg.fps > 0);
   return {
     segments: resolvedSegments,
     overlays,
@@ -401,7 +411,7 @@ export async function resolveTimeline(rawProject) {
     // rather than letting scale/pad inherit `undefined` and fail the graph.
     canonW: firstClip?.width || DEFAULT_CANVAS.width,
     canonH: firstClip?.height || DEFAULT_CANVAS.height,
-    fps: firstClip?.fps || DEFAULT_CANVAS.fps,
+    fps: firstFps?.fps || DEFAULT_CANVAS.fps,
   };
 }
 
@@ -521,11 +531,17 @@ export function buildFfmpegArgs(timeline, outputPath, { colorTagFilter = null } 
     const x = Math.round(ov.x * canonW);
     const y = Math.round(ov.y * canonH);
     const end = Math.min(totalDuration, ov.startSec + ov.durationSec);
+    // An overlay running past the end of the video lane has its window cut
+    // short, which can leave its fades longer than the window itself. Refit
+    // them against the VISIBLE span — the same rule the preview applies — or
+    // the ramp never completes before `enable` cuts the overlay off, and the
+    // render pops from most-of-opaque to nothing on the last frame.
+    const fades = fitFades(ov.fadeInSec, ov.fadeOutSec, end - ov.startSec);
     const chain = [`scale=${w}:-2`, `fps=${fps}`, 'format=rgba'];
     if (ov.opacity < 1) chain.push(`colorchannelmixer=aa=${fmt(ov.opacity)}`);
-    if (ov.fadeInSec > 0) chain.push(`fade=t=in:st=${fmt(ov.startSec)}:d=${fmt(ov.fadeInSec)}:alpha=1`);
-    if (ov.fadeOutSec > 0) {
-      chain.push(`fade=t=out:st=${fmt(Math.max(ov.startSec, end - ov.fadeOutSec))}:d=${fmt(ov.fadeOutSec)}:alpha=1`);
+    if (fades.fadeInSec > 0) chain.push(`fade=t=in:st=${fmt(ov.startSec)}:d=${fmt(fades.fadeInSec)}:alpha=1`);
+    if (fades.fadeOutSec > 0) {
+      chain.push(`fade=t=out:st=${fmt(end - fades.fadeOutSec)}:d=${fmt(fades.fadeOutSec)}:alpha=1`);
     }
     filters.push(`[${oIdx}:v]${chain.join(',')}[ov${j}]`);
     const out = j === overlays.length - 1 ? videoOut : `[ovc${j}]`;

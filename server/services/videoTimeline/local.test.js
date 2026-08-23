@@ -411,3 +411,42 @@ describe('buildFfmpegArgs — BT.709 frame tagging', () => {
     expect(args).toContain('-color_primaries');
   });
 });
+
+describe('buildFfmpegArgs — an overlay clamped by the timeline end', () => {
+  const clampedOverlay = {
+    type: 'image', assetKind: 'images', assetFile: 'logo.png', assetPath: '/logo.png',
+    startSec: 4.5, durationSec: 3, x: 0, y: 0, width: 0.5, opacity: 1, fadeInSec: 0, fadeOutSec: 2,
+  };
+
+  it('compresses the fade-out into the visible window so the ramp completes', () => {
+    // The window is cut from 3s to 0.5s; keeping d=2 would leave the overlay
+    // at ~75% when `enable` cuts it off — a pop on the final frame, and a
+    // divergence from the preview, which ramps to zero at the end.
+    const filter = filterOf(buildFfmpegArgs(lane([baseClip({ duration: 5, outSec: 5 })], {
+      overlays: [clampedOverlay],
+    }), '/out.mp4').args);
+
+    expect(filter).toContain('fade=t=out:st=4.5:d=0.5:alpha=1');
+    expect(filter).toContain("enable='between(t,4.5,5)'");
+  });
+
+  it('leaves an overlay that fits on its authored ramp', () => {
+    const filter = filterOf(buildFfmpegArgs(lane([baseClip({ duration: 30, outSec: 30 })], {
+      overlays: [clampedOverlay],
+    }), '/out.mp4').args);
+    expect(filter).toContain('fade=t=out:st=5.5:d=2:alpha=1');
+  });
+});
+
+describe('buildFfmpegArgs — canonical geometry', () => {
+  it('is taken from the timeline, which skips a clip carrying no dimensions', () => {
+    // An uploaded or downloaded clip has no width/height in history; letting
+    // it decide the canvas would letterbox the whole project into 720p and
+    // disagree with the editor's preview, which skips those too.
+    const { canonW, canonH } = buildFfmpegArgs({
+      segments: [baseClip({ width: undefined, height: undefined }), baseClip({ width: 1080, height: 1920 })],
+      canonW: 1080, canonH: 1920, fps: 24,
+    }, '/out.mp4');
+    expect([canonW, canonH]).toEqual([1080, 1920]);
+  });
+});

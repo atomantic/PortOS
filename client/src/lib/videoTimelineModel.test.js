@@ -313,3 +313,24 @@ describe('canvasAspectRatio — the preview must match the export canvas', () =>
       .toBeCloseTo(1920 / 1080);
   });
 });
+
+describe('overlay fade parity when the timeline clamps the window', () => {
+  // 5s timeline, overlay starting at 4.5s with a 3s body and a 2s fade-out:
+  // the window is cut to 0.5s, so the 2s fade cannot run as authored. Preview
+  // and export must compress it identically or the render pops off on the
+  // last frame while the editor showed it already gone.
+  const overlay = { startSec: 4.5, durationSec: 3, opacity: 1, fadeInSec: 0, fadeOutSec: 2 };
+
+  it('compresses the fade into the visible window, reaching zero exactly at the end', () => {
+    expect(overlayOpacityAt(overlay, 4.5, 5)).toBe(1);
+    expect(overlayOpacityAt(overlay, 4.75, 5)).toBeCloseTo(0.5);
+    expect(overlayOpacityAt(overlay, 5, 5)).toBe(0);
+  });
+
+  it('leaves an unclamped overlay on its authored ramp', () => {
+    // Window [4.5, 7.5]; the 2s ramp therefore runs 5.5s → 7.5s.
+    expect(overlayOpacityAt(overlay, 5.5, 30)).toBe(1);
+    expect(overlayOpacityAt(overlay, 6.5, 30)).toBeCloseTo(0.5);
+    expect(overlayOpacityAt(overlay, 7.5, 30)).toBe(0);
+  });
+});
