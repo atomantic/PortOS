@@ -15,6 +15,11 @@
  *     and still name the same file, so those platforms compare case-folded.
  *   - fileURLToPath (rather than a `file://` string template) is what handles
  *     paths containing spaces or non-ASCII characters.
+ *
+ * Lives in scripts/lib/, not server/lib/ with the other pure helpers, because
+ * the CI impact job runs scripts/ci-base-sha.js and scripts/ci-test-plan.js
+ * before any `npm ci` — both import this, so it has to load from a bare
+ * checkout. Builtins only; scripts/pre-install-entrypoints.test.js enforces it.
  */
 
 import { realpathSync } from 'fs';
