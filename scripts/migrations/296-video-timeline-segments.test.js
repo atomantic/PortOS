@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from 'fs'
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-import migration from './295-video-timeline-segments.js';
+import migration from './296-video-timeline-segments.js';
 
 const CLIP_A = '11111111-1111-4111-8111-111111111111';
 const CLIP_B = '22222222-2222-4222-8222-222222222222';
@@ -11,12 +11,12 @@ const CLIP_B = '22222222-2222-4222-8222-222222222222';
 const writeJson = (path, value) => writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 const readJson = (path) => JSON.parse(readFileSync(path, 'utf8'));
 
-describe('migration 295 — layered video timeline', () => {
+describe('migration 296 — layered video timeline', () => {
   let rootDir;
   let projectsPath;
 
   beforeEach(() => {
-    rootDir = mkdtempSync(join(tmpdir(), 'migration-295-'));
+    rootDir = mkdtempSync(join(tmpdir(), 'migration-296-'));
     mkdirSync(join(rootDir, 'data'), { recursive: true });
     projectsPath = join(rootDir, 'data/video-projects.json');
   });

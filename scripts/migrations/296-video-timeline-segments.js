@@ -40,7 +40,7 @@ export default {
     } catch (err) {
       // A corrupt state file must not crash the migration runner — that would
       // turn a cosmetic upgrade into a boot blocker.
-      console.warn(`⚠️ migration 295: ${path} is not valid JSON (${err.message}); skipping`);
+      console.warn(`⚠️ migration 296: ${path} is not valid JSON (${err.message}); skipping`);
       return { ok: false, reason: 'invalid-json', updated: 0 };
     }
     if (!Array.isArray(projects)) return { ok: false, reason: 'not-an-array', updated: 0 };

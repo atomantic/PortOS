@@ -96,7 +96,7 @@ export const loadProjects = async () => {
   // function" instead of degrading gracefully to an empty list.
   // Every read upgrades v1 (`clips`-only) projects to the v2 lane shape in
   // memory, so the rest of the service only ever sees `segments`/`overlays`/
-  // `audio`. The on-disk upgrade is migration 295; this keeps a project the
+  // `audio`. The on-disk upgrade is migration 296; this keeps a project the
   // migration missed (a restored backup, a hand-edited file) working anyway.
   return (await loadRawProjects()).map(normalizeProject);
 };
