@@ -10,6 +10,7 @@ import { memo } from 'react';
 import { Trash2 } from 'lucide-react';
 import useFieldDraft from '../../hooks/useFieldDraft';
 import { clamp } from '../../utils/formatters';
+import { MAX_FADE_SEC } from '../../lib/videoTimelineModel';
 
 /**
  * Commit-on-blur numeric input. The draft buffer is what lets the user type
@@ -42,9 +43,14 @@ export const NumberField = memo(function NumberField({ id, label, value, step = 
   );
 });
 
-/** The fade pair every lane entry carries, bounded by its own duration. */
+/**
+ * The fade pair every lane entry carries, bounded by its own duration AND by
+ * the server's absolute fade cap — an entry longer than 30s would otherwise
+ * let the user type a fade the save rejects with a 400, leaving the editor
+ * unsavable until they guessed the real limit.
+ */
 export const FadeFields = memo(function FadeFields({ idPrefix, entry, duration, onCommit }) {
-  const max = Math.max(0, duration);
+  const max = Math.min(Math.max(0, duration), MAX_FADE_SEC);
   return (
     <div className="grid grid-cols-2 gap-2">
       <NumberField

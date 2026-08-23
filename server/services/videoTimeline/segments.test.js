@@ -7,6 +7,8 @@ import {
   validateAudio,
   deriveLegacyClips,
   resolveAsset,
+  assetPathFor,
+  fitFades,
   segmentDuration,
   laneDuration,
 } from './segments.js';
@@ -216,5 +218,61 @@ describe('deriveLegacyClips', () => {
       { clipId: CLIP_A, inSec: 0, outSec: 2 },
       { clipId: CLIP_B, inSec: 1, outSec: 3 },
     ]);
+  });
+});
+
+describe('assetPathFor — a valid gallery basename must stay usable', () => {
+  it('accepts a filename containing a `..` substring, which the gallery permits', () => {
+    // `safeUnder` rejects any `..` substring, which would make this real
+    // gallery file unselectable in the timeline.
+    expect(assetPathFor('images', 'my..render.png')).toMatch(/data[/\\]images[/\\]my\.\.render\.png$/);
+    expect(() => validateSegments([{ type: 'still', assetKind: 'images', assetFile: 'my..render.png', durationSec: 2 }]))
+      .not.toThrow();
+  });
+
+  it('still refuses a traversal segment, a separator and the bare dots', () => {
+    expect(assetPathFor('images', '../secrets.png')).toBeNull();
+    expect(assetPathFor('images', 'nested/logo.png')).toBeNull();
+    expect(assetPathFor('images', '..')).toBeNull();
+    expect(assetPathFor('images', '.')).toBeNull();
+    expect(assetPathFor('images', 'a\\b.png')).toBeNull();
+  });
+
+  it('refuses an unknown kind', () => {
+    expect(assetPathFor('videos', 'clip.mp4')).toBeNull();
+  });
+});
+
+describe('fitFades', () => {
+  it('leaves a fitting pair alone', () => {
+    expect(fitFades(1, 1, 4)).toEqual({ fadeInSec: 1, fadeOutSec: 1 });
+  });
+
+  it('scales an over-long pair proportionally rather than dropping one', () => {
+    expect(fitFades(1, 3, 2)).toEqual({ fadeInSec: 0.5, fadeOutSec: 1.5 });
+  });
+
+  it('collapses to zero when the duration does', () => {
+    expect(fitFades(1, 1, 0)).toEqual({ fadeInSec: 0, fadeOutSec: 0 });
+  });
+});
+
+describe('reconcileLegacyMirror — a legacy trim must not strand an over-long fade', () => {
+  it('refits fades carried onto a clip the v1 build shortened', () => {
+    const v2 = normalizeProject({
+      id: 'p1',
+      schemaVersion: 2,
+      segments: [{ type: 'clip', clipId: CLIP_A, inSec: 0, outSec: 10, fadeInSec: 5, fadeOutSec: 5, volume: 0.5 }],
+      // The v1 editor cut this to 2s; the old 5s+5s fade pair no longer fits.
+      clips: [{ clipId: CLIP_A, inSec: 0, outSec: 2 }],
+    });
+
+    const [seg] = v2.segments;
+    expect(seg.outSec - seg.inSec).toBe(2);
+    expect(seg.fadeInSec + seg.fadeOutSec).toBeLessThanOrEqual(2);
+    expect(seg.volume).toBe(0.5);
+    // The refitted result must survive the persist-time validator, or the
+    // layered editor could never save this project again.
+    expect(() => validateSegments(v2.segments)).not.toThrow();
   });
 });

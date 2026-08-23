@@ -41,6 +41,7 @@ import {
   defaultAudio,
   deriveLegacyClips,
   resolveAsset,
+  fitFades,
 } from './segments.js';
 
 const PROJECTS_FILE = join(PATHS.data, 'video-projects.json');
@@ -410,22 +411,6 @@ export async function resolveTimeline(rawProject) {
 // stringify.
 const fmt = (n) => String(Math.round(Number(n) * 1e6) / 1e6);
 
-// `fade` renders black (and `afade` silence) for the whole segment when its
-// start time goes negative, so fades that no longer fit are scaled down
-// proportionally rather than dropped — the author's intended balance survives.
-function fitFades(fadeInSec, fadeOutSec, duration) {
-  const fin = Math.max(0, Number(fadeInSec) || 0);
-  const fout = Math.max(0, Number(fadeOutSec) || 0);
-  const span = fin + fout;
-  if (span <= duration || span === 0) return { fadeInSec: fin, fadeOutSec: fout };
-  const scale = Math.max(0, duration) / span;
-  return { fadeInSec: fin * scale, fadeOutSec: fout * scale };
-}
-
-// Fade filters for one segment, in the segment's own post-setpts clock.
-// `prefix` is 'fade' (video) or 'afade' (audio) — the two must agree on the
-// fade-out start, so they share one expression. `lead` carries filters that
-// belong ahead of the ramp (an audio volume trim).
 const fadeChain = (prefix, { fadeInSec = 0, fadeOutSec = 0 }, duration, lead = []) => {
   const parts = [...lead];
   if (fadeInSec > 0) parts.push(`${prefix}=t=in:st=0:d=${fmt(fadeInSec)}`);

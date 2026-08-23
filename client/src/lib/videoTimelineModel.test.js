@@ -14,6 +14,7 @@ import {
   fitFadePatch,
   segmentVolumeAt,
   projectSummary,
+  canvasAspectRatio,
 } from './videoTimelineModel';
 
 const clip = (inSec, outSec) => ({ type: 'clip', clipId: 'c', inSec, outSec });
@@ -267,5 +268,48 @@ describe('projectSummary — the index must count the lane, not the mirror', () 
 
   it('reports an empty project as empty rather than throwing', () => {
     expect(projectSummary({}, thumbFor)).toEqual({ totalSec: 0, blockCount: 0, firstThumb: null });
+  });
+});
+
+describe('overlayOpacityAt — clamped to the timeline length like the export', () => {
+  const overlay = { startSec: 4, durationSec: 6, opacity: 1, fadeInSec: 0, fadeOutSec: 2 };
+
+  it('pulls the fade-out earlier when the overlay outruns the video lane', () => {
+    // The export clamps the overlay's end to the timeline length, so its
+    // 2s fade-out lands at 6s–8s, not 8s–10s.
+    expect(overlayOpacityAt(overlay, 7, 8)).toBeCloseTo(0.5);
+    expect(overlayOpacityAt(overlay, 8, 8)).toBe(0);
+  });
+
+  it('uses the configured window when the overlay fits', () => {
+    expect(overlayOpacityAt(overlay, 7, 30)).toBe(1);
+    expect(overlayOpacityAt(overlay, 9, 30)).toBeCloseTo(0.5);
+  });
+
+  it('is fully transparent once the limit cuts the window to nothing', () => {
+    expect(overlayOpacityAt(overlay, 4, 4)).toBe(0);
+  });
+});
+
+describe('canvasAspectRatio — the preview must match the export canvas', () => {
+  const dims = { c1: { width: 1080, height: 1920 }, c2: { width: 1920, height: 1080 } };
+  const dimsFor = (id) => dims[id];
+
+  it('takes the FIRST clip segment, mirroring resolveTimeline', () => {
+    expect(canvasAspectRatio([
+      { type: 'still', assetKind: 'images', assetFile: 'a.png', durationSec: 2 },
+      { type: 'clip', clipId: 'c1' },
+      { type: 'clip', clipId: 'c2' },
+    ], dimsFor)).toBeCloseTo(1080 / 1920);
+  });
+
+  it('falls back to the server default for a stills-only project', () => {
+    expect(canvasAspectRatio([{ type: 'still', assetKind: 'images', assetFile: 'a.png', durationSec: 2 }], dimsFor))
+      .toBeCloseTo(1280 / 720);
+  });
+
+  it('skips a clip whose dimensions are unknown rather than dividing by zero', () => {
+    expect(canvasAspectRatio([{ type: 'clip', clipId: 'gone' }, { type: 'clip', clipId: 'c2' }], dimsFor))
+      .toBeCloseTo(1920 / 1080);
   });
 });

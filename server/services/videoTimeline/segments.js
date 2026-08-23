@@ -19,7 +19,8 @@
  * Assets are addressed as `{ assetKind, assetFile }` rather than a free path:
  * `assetKind` selects one of a fixed allowlist of `data/` subdirectories and
  * `assetFile` must be a plain basename, so `resolveAsset` can reuse the
- * existing `safeUnder` containment check instead of trusting a stored path.
+ * shared top-level-entry predicate plus a resolved-prefix check rather than
+ * trusting a stored path.
  *
  * `clips` stays on every persisted project as a DERIVED mirror of the video
  * lane's clip segments. It is never the source of truth once `segments`
@@ -28,8 +29,8 @@
  */
 
 import { existsSync } from 'fs';
-import { PATHS } from '../../lib/fileUtils.js';
-import { safeUnder } from '../../lib/ffmpeg.js';
+import { join, resolve as resolvePath, sep } from 'path';
+import { PATHS, isTopLevelEntryName } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 
 export const TIMELINE_SCHEMA_VERSION = 2;
@@ -49,6 +50,23 @@ export const AUDIO_ASSET_KINDS = ['audio', 'music'];
 export const MAX_SEGMENTS = 200;
 export const MAX_OVERLAYS = 50;
 export const MAX_AUDIO_TRACKS = 20;
+/**
+ * Shrink a fade pair that no longer fits `duration`, scaling both
+ * proportionally so the author's balance survives. Non-throwing twin of
+ * `clampFades`: that one rejects an over-long pair at persist time, this one
+ * repairs a pair that a LATER change made too long (a probe-shortened bed, a
+ * legacy trim). ffmpeg's `fade` renders the whole segment black when its start
+ * time goes negative, so an unfitted pair is not a cosmetic problem.
+ */
+export function fitFades(fadeInSec, fadeOutSec, duration) {
+  const fin = Math.max(0, Number(fadeInSec) || 0);
+  const fout = Math.max(0, Number(fadeOutSec) || 0);
+  const span = fin + fout;
+  if (span <= duration || span === 0) return { fadeInSec: fin, fadeOutSec: fout };
+  const scale = Math.max(0, duration) / span;
+  return { fadeInSec: fin * scale, fadeOutSec: fout * scale };
+}
+
 export const MAX_FADE_SEC = 30;
 export const MAX_STILL_SEC = 600;
 export const MAX_VOLUME = 4;
@@ -60,11 +78,30 @@ const bad = (message, context) => new ServerError(message, { status: 400, code: 
  * null when the kind is not allowlisted, the filename is not a safe basename,
  * or the file does not exist. Never returns a path outside the asset root.
  */
+/**
+ * Resolve `{ assetKind, assetFile }` under its allowlisted root.
+ *
+ * `isTopLevelEntryName` rather than `safeUnder`: both refuse separators, but
+ * `safeUnder` rejects any `..` SUBSTRING, which would turn a perfectly valid
+ * gallery file like `my..render.png` into an unusable timeline asset. Naming a
+ * single entry is what makes the `join` safe in the filesystem sense — with no
+ * separator there is no intermediate component for a symlink to redirect — and
+ * the resolved-prefix check below is the lexical backstop.
+ */
+export function assetPathFor(assetKind, assetFile) {
+  const root = ASSET_ROOTS[assetKind];
+  if (!root || !isTopLevelEntryName(assetFile)) return null;
+  const full = resolvePath(join(root, assetFile));
+  return full.startsWith(resolvePath(root) + sep) ? full : null;
+}
+
+/**
+ * `assetPathFor` plus the caller's kind allowlist and an on-disk existence
+ * check. Returns null — never a path outside the asset root.
+ */
 export function resolveAsset(assetKind, assetFile, { allowedKinds = null, requireExists = true } = {}) {
   if (allowedKinds && !allowedKinds.includes(assetKind)) return null;
-  const root = ASSET_ROOTS[assetKind];
-  if (!root) return null;
-  const full = safeUnder(root, assetFile);
+  const full = assetPathFor(assetKind, assetFile);
   if (!full) return null;
   if (requireExists && !existsSync(full)) return null;
   return full;
@@ -98,7 +135,7 @@ const assetFields = (raw, allowedKinds, label) => {
   // Containment is re-checked at render time against the live filesystem;
   // this is the persist-time shape guard so a traversal string never lands
   // in the project file at all.
-  if (!assetFile || !safeUnder(ASSET_ROOTS[assetKind], assetFile)) {
+  if (!assetPathFor(assetKind, assetFile)) {
     throw bad(`${label}: assetFile must be a plain filename inside data/${assetKind}`);
   }
   return { assetKind, assetFile };
@@ -258,7 +295,12 @@ const reconcileLegacyMirror = (segments, storedClips) => {
   }
   return mirror.map((c) => {
     const effects = effectsById.get(c.clipId)?.shift();
-    return { type: 'clip', ...c, fadeInSec: 0, fadeOutSec: 0, volume: 1, ...effects };
+    // The v1 build may have SHORTENED this clip; a fade pair sized against the
+    // old trim would then be longer than the segment, which validateSegments
+    // refuses — leaving the layered editor unable to save until the user
+    // repaired it by hand.
+    const fades = fitFades(effects?.fadeInSec, effects?.fadeOutSec, c.outSec - c.inSec);
+    return { type: 'clip', ...c, volume: effects?.volume ?? 1, ...fades };
   });
 };
 

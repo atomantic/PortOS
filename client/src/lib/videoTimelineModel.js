@@ -78,15 +78,44 @@ export const fadeMultiplier = (fadeInSec, fadeOutSec, duration, within) => {
 /**
  * Effective opacity of an overlay at project-time `t` — 0 outside its window,
  * its configured opacity inside, scaled by whichever alpha fade is active.
+ *
+ * `limitSec` is the timeline's own length. The export clamps an overlay that
+ * runs past the end of the video lane to that length, which pulls its fade-out
+ * earlier; pass the same value here or the preview stays opaque through
+ * seconds the render fades.
  */
-export const overlayOpacityAt = (overlay, t) => {
+export const overlayOpacityAt = (overlay, t, limitSec = Infinity) => {
   if (!overlay) return 0;
   const start = overlay.startSec || 0;
-  const dur = Math.max(0, overlay.durationSec || 0);
-  if (dur <= 0 || t < start || t > start + dur) return 0;
+  const end = Math.min(start + Math.max(0, overlay.durationSec || 0), limitSec);
+  const dur = end - start;
+  if (dur <= 0 || t < start || t > end) return 0;
   const base = overlay.opacity == null ? 1 : overlay.opacity;
   return base * fadeMultiplier(overlay.fadeInSec || 0, overlay.fadeOutSec || 0, dur, t - start);
 };
+
+/**
+ * Aspect ratio of the canonical render canvas — the first CLIP segment's
+ * dimensions, mirroring resolveTimeline. The editor's preview must adopt it or
+ * an overlay placed against a 16:9 box lands somewhere else in a portrait or
+ * square export. `dimsFor(clipId)` resolves a clip's `{ width, height }`.
+ */
+export const canvasAspectRatio = (segments, dimsFor) => {
+  for (const segment of segments || []) {
+    if (segment.type === 'still') continue;
+    const dims = dimsFor(segment.clipId);
+    if (dims?.width > 0 && dims?.height > 0) return dims.width / dims.height;
+  }
+  // A stills-only project has no intrinsic geometry — the server falls back to
+  // 1280×720, so the preview must too.
+  return DEFAULT_CANVAS_ASPECT;
+};
+
+/** Mirrors DEFAULT_CANVAS in server/services/videoTimeline/local.js. */
+export const DEFAULT_CANVAS_ASPECT = 1280 / 720;
+
+/** Mirrors MAX_FADE_SEC in server/services/videoTimeline/segments.js. */
+export const MAX_FADE_SEC = 30;
 
 /**
  * Where an audio track sits relative to project-time `t`.

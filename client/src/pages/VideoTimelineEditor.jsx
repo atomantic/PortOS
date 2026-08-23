@@ -28,6 +28,7 @@ import {
   assetUrl,
   segmentDuration,
   timelineDuration,
+  canvasAspectRatio,
   findSegmentAt,
   fadeMultiplier,
   overlayOpacityAt,
@@ -218,6 +219,10 @@ export default function VideoTimelineEditor() {
   const isBedMissing = useCallback((tr) => knownAbsent(tr.assetKind, tr.assetFile), [knownAbsent]);
 
   const total = useMemo(() => timelineDuration(segments), [segments]);
+  const canvasAspect = useMemo(
+    () => canvasAspectRatio(segments, (clipId) => historyMap.get(clipId)),
+    [segments, historyMap],
+  );
 
   // Clamp the playhead into [0, total] when the timeline duration shrinks
   // (segment removal, tighter trim, etc.). Without this, t can exceed total
@@ -767,7 +772,11 @@ export default function VideoTimelineEditor() {
 
         {/* Center — preview + tracks */}
         <div className="space-y-3 min-w-0">
-          <div className="bg-black rounded-lg overflow-hidden aspect-video relative">
+          {/* The preview adopts the CANONICAL render canvas, not a fixed 16:9
+              box — overlay x/y/width are normalized against that canvas, so a
+              portrait or square project would otherwise place them somewhere
+              the export does not. */}
+          <div className="bg-black rounded-lg overflow-hidden relative" style={{ aspectRatio: canvasAspect }}>
             <video
               ref={videoRef}
               className={`w-full h-full ${activeStillSrc ? 'invisible' : ''}`}
@@ -800,7 +809,7 @@ export default function VideoTimelineEditor() {
                 src={src}
                 alt=""
                 data-testid="overlay-preview"
-                style={{ left, top, width, opacity: overlayOpacityAt(overlay, t) }}
+                style={{ left, top, width, opacity: overlayOpacityAt(overlay, t, total) }}
                 className="absolute pointer-events-none"
               />
             ) : null))}
