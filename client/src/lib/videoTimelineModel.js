@@ -11,7 +11,7 @@
  * tests alike.
  */
 
-export const TIMELINE_SCHEMA_VERSION = 2;
+import { clamp } from '../utils/formatters';
 
 export const IMAGE_ASSET_KINDS = ['images', 'video-thumbnails'];
 export const AUDIO_ASSET_KINDS = ['audio', 'music'];
@@ -131,3 +131,52 @@ export const laneKey = (prefix, idx) => `${prefix}-${idx}-${Math.random().toStri
 
 /** Attach `_key` to every entry of a lane loaded from the server. */
 export const withKeys = (entries, prefix) => (entries || []).map((e, idx) => ({ ...e, _key: laneKey(prefix, idx) }));
+
+/**
+ * Shrink a fade pair that no longer fits its own duration, scaling both
+ * proportionally so the author's balance survives. Mirrors the server's
+ * `fitFades` (`server/services/videoTimeline/local.js`) — ffmpeg's `fade`
+ * renders the whole segment black when its start time goes negative, and the
+ * persist-time validator rejects an over-long pair outright, so the editor
+ * shrinks rather than letting the PATCH 400 mid-edit.
+ *
+ * Returns the caller's `patch` with the fades folded in only when they had to
+ * move, so an already-fitting edit round-trips untouched.
+ */
+export function fitFadePatch(entry, patch, duration) {
+  const merged = { ...entry, ...patch };
+  const fin = Math.max(0, merged.fadeInSec || 0);
+  const fout = Math.max(0, merged.fadeOutSec || 0);
+  if (fin + fout <= duration) return patch;
+  const scale = fin + fout > 0 ? Math.max(0, duration) / (fin + fout) : 0;
+  return { ...patch, fadeInSec: fin * scale, fadeOutSec: fout * scale };
+}
+
+/**
+ * Clamp a trim edit to `0..sourceDur`, keeping at least one frame between in
+ * and out. The floor is `1/fps` to match the server's CLIP_TOO_SHORT guard —
+ * a hardcoded floor was too lenient at 24fps and let the editor build a
+ * project the render then rejected with a 400.
+ */
+export function clampTrim(segment, patch, sourceDur, fps) {
+  const limit = sourceDur || Infinity;
+  const minDur = fps && fps > 0 ? 1 / fps : 0.04;
+  let inSec = patch.inSec != null ? patch.inSec : segment.inSec;
+  let outSec = patch.outSec != null ? patch.outSec : segment.outSec;
+  inSec = Math.max(0, Math.min(inSec, limit - minDur));
+  outSec = Math.max(inSec + minDur, Math.min(outSec, limit));
+  return fitFadePatch(segment, { inSec, outSec }, outSec - inSec);
+}
+
+/**
+ * Effective playback volume for a video segment at `within` seconds in — the
+ * project's clip-audio multiplier, the segment's own trim, and its fade ramp,
+ * exactly as the export composes them (`volume=` ahead of `afade` in the
+ * segment's audio chain).
+ */
+export const segmentVolumeAt = (segment, clipVolume, within) => {
+  if (!segment || segment.type === 'still') return 0;
+  const duration = segmentDuration(segment);
+  const base = (clipVolume == null ? 1 : clipVolume) * (segment.volume == null ? 1 : segment.volume);
+  return clamp(base * fadeMultiplier(segment.fadeInSec || 0, segment.fadeOutSec || 0, duration, within), 0, 1);
+};

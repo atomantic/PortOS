@@ -1,7 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { buildFfmpegArgs } from './local.js';
 
+// buildFfmpegArgs consumes RESOLVED segments — resolveTimeline has already
+// attached the on-disk path, the project-time `duration`, the probed
+// `hasAudio`, and the canonical geometry.
 const baseClip = (overrides = {}) => ({
+  type: 'clip',
   index: 0,
   clipId: 'clip-1',
   videoPath: '/tmp/clip-1.mp4',
@@ -12,17 +16,30 @@ const baseClip = (overrides = {}) => ({
   height: 512,
   fps: 24,
   hasAudio: true,
+  fadeInSec: 0,
+  fadeOutSec: 0,
+  volume: 1,
   ...overrides,
+});
+
+// A resolved timeline whose geometry defaults to the first clip's, mirroring
+// what resolveTimeline computes.
+const lane = (segments, extra = {}) => ({
+  segments,
+  canonW: segments[0]?.width ?? 1280,
+  canonH: segments[0]?.height ?? 720,
+  fps: segments[0]?.fps ?? 24,
+  ...extra,
 });
 
 describe('buildFfmpegArgs', () => {
   it('throws on empty clip list', () => {
-    expect(() => buildFfmpegArgs([], '/out.mp4')).toThrow(/empty/i);
+    expect(() => buildFfmpegArgs({ segments: [] }, '/out.mp4')).toThrow(/empty/i);
   });
 
   it('produces a single-clip filter_complex with audio passthrough', () => {
     const clips = [baseClip()];
-    const { args, totalDuration, canonW, canonH } = buildFfmpegArgs(clips, '/out.mp4');
+    const { args, totalDuration, canonW, canonH } = buildFfmpegArgs(lane(clips), '/out.mp4');
 
     expect(totalDuration).toBe(4);
     expect(canonW).toBe(768);
@@ -46,7 +63,7 @@ describe('buildFfmpegArgs', () => {
       baseClip({ hasAudio: false, duration: 3, outSec: 3 }),
       baseClip({ hasAudio: true, duration: 5, outSec: 5 }),
     ];
-    const { args } = buildFfmpegArgs(clips, '/out.mp4');
+    const { args } = buildFfmpegArgs(lane(clips), '/out.mp4');
 
     // Inputs: -i clip0, -f lavfi -t 3 -i anullsrc..., -i clip1
     // Indices: 0 = clip0 video, 1 = silent stub, 2 = clip1 (with audio at 2:a)
@@ -73,7 +90,7 @@ describe('buildFfmpegArgs', () => {
       baseClip({ hasAudio: false, inSec: 1, outSec: 4, duration: 3 }),
       baseClip({ hasAudio: true, inSec: 0.5, outSec: 3, duration: 2.5 }),
     ];
-    const { args, totalDuration } = buildFfmpegArgs(clips, '/out.mp4');
+    const { args, totalDuration } = buildFfmpegArgs(lane(clips), '/out.mp4');
 
     expect(totalDuration).toBeCloseTo(7.5);
 
@@ -91,7 +108,7 @@ describe('buildFfmpegArgs', () => {
       baseClip({ width: 1024, height: 576 }),
       baseClip({ width: 768, height: 512 }), // different — should still be padded to 1024x576
     ];
-    const { args, canonW, canonH } = buildFfmpegArgs(clips, '/out.mp4');
+    const { args, canonW, canonH } = buildFfmpegArgs(lane(clips), '/out.mp4');
     expect(canonW).toBe(1024);
     expect(canonH).toBe(576);
     const filter = args[args.indexOf('-filter_complex') + 1];
@@ -101,7 +118,7 @@ describe('buildFfmpegArgs', () => {
   });
 
   it('emits encoder + faststart + progress flags', () => {
-    const { args } = buildFfmpegArgs([baseClip()], '/out.mp4');
+    const { args } = buildFfmpegArgs(lane([baseClip()]), '/out.mp4');
     expect(args).toContain('-c:v');
     expect(args).toContain('libx264');
     expect(args).toContain('-c:a');
@@ -339,10 +356,18 @@ describe('buildFfmpegArgs — combined lanes and input indexing', () => {
     expect(args).toContain('[outa]');
   });
 
-  it('accepts the v1 bare-array signature and produces the same minimal graph', () => {
-    const fromArray = buildFfmpegArgs([baseClip()], '/out.mp4');
-    const fromObject = buildFfmpegArgs({ segments: [baseClip()] }, '/out.mp4');
-    expect(fromArray.args).toEqual(fromObject.args);
+  it('tags BT.709 so a re-encoded still cannot decode with a different colour guess than the clips beside it', () => {
+    const { args } = buildFfmpegArgs(lane([baseClip(), stillSegment()]), '/out.mp4');
+    expect(args).toContain('-color_primaries');
+    expect(args).toContain('-colorspace');
+    expect(args[args.indexOf('-color_trc') + 1]).toBe('bt709');
+  });
+
+  it('falls back to the default canvas when the timeline carries no geometry', () => {
+    // resolveTimeline always supplies canonW/H/fps; this is the last-resort
+    // guard, not a second place that derives geometry from the segments.
+    const { canonW, canonH, fps } = buildFfmpegArgs({ segments: [baseClip({ width: 1920, height: 1080, fps: 60 })] }, '/out.mp4');
+    expect([canonW, canonH, fps]).toEqual([1280, 720, 24]);
   });
 
   it('rounds float noise out of the graph instead of leaking it', () => {

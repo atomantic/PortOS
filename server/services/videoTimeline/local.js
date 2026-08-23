@@ -23,7 +23,7 @@ import { randomUUID } from 'crypto';
 import { ensureDir, PATHS, readJSONFile, atomicWrite } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
-import { findFfmpeg, findFfprobe, safeUnder, generateThumbnail } from '../../lib/ffmpeg.js';
+import { findFfmpeg, findFfprobe, safeUnder, generateThumbnail, probeVideoDuration, BT709_CONTAINER_ARGS } from '../../lib/ffmpeg.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { attachFfmpegRenderGuard } from '../../lib/ffmpegRenderGuard.js';
@@ -40,7 +40,6 @@ import {
   defaultAudio,
   deriveLegacyClips,
   resolveAsset,
-  segmentDuration,
 } from './segments.js';
 
 const PROJECTS_FILE = join(PATHS.data, 'video-projects.json');
@@ -53,6 +52,8 @@ const DEFAULT_CANVAS = { width: 1280, height: 720, fps: 24 };
 // Floor for a probe-clamped audio slice — atrim with start === end produces
 // an empty stream that amix rejects.
 const MIN_MEDIA_SEC = 0.05;
+// Every audio branch entering concat must present identical link parameters.
+const AUDIO_NORM = 'aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo';
 
 // Per-project render mutex map. Keyed by projectId so two different projects
 // can render in parallel; same project re-render returns 409 with the
@@ -79,16 +80,23 @@ export function getRenderJobStatus(jobId) {
 // Project CRUD
 // =====================================================================
 
+// Raw, un-normalized read. Callers that touch a single record (or only compare
+// ids) use this and normalize just what they need — normalizing every project
+// on every request is pure waste on a library of any size.
+const loadRawProjects = async () => {
+  const raw = await readJSONFile(PROJECTS_FILE, []);
+  return Array.isArray(raw) ? raw : [];
+};
+
 export const loadProjects = async () => {
   // Defend against a hand-edited / corrupted JSON state file. Without this,
   // a non-array root would crash every CRUD path with "x.findIndex is not a
   // function" instead of degrading gracefully to an empty list.
-  const raw = await readJSONFile(PROJECTS_FILE, []);
   // Every read upgrades v1 (`clips`-only) projects to the v2 lane shape in
   // memory, so the rest of the service only ever sees `segments`/`overlays`/
   // `audio`. The on-disk upgrade is migration 295; this keeps a project the
-  // migration missed (restored backup, peer-copied file) working anyway.
-  return Array.isArray(raw) ? raw.map(normalizeProject) : [];
+  // migration missed (a restored backup, a hand-edited file) working anyway.
+  return (await loadRawProjects()).map(normalizeProject);
 };
 const saveProjects = async (projects) => {
   // First write on a fresh install lands before PATHS.data is created by any
@@ -103,8 +111,8 @@ export async function listProjects() {
 }
 
 export async function getProject(id) {
-  const projects = await loadProjects();
-  return projects.find((p) => p.id === id) || null;
+  const project = (await loadRawProjects()).find((p) => p.id === id);
+  return project ? normalizeProject(project) : null;
 }
 
 export async function createProject(name) {
@@ -159,11 +167,23 @@ export async function updateProject(id, patch, expectedUpdatedAt) {
   if (patch.segments != null) {
     project.segments = validateSegments(patch.segments);
   } else if (patch.clips != null) {
-    // Legacy v1 client (or an older peer-authored payload): a flat clip array
-    // replaces the whole video lane. Upgraded in place so the persisted model
-    // stays single-shaped regardless of which client wrote it.
+    // Legacy v1 client: a flat clip array replaces the whole video lane, and is
+    // upgraded in place so the persisted model stays single-shaped.
+    //
+    // A v1 build reads the `clips` mirror and cannot see stills, so letting it
+    // write that mirror back would silently DELETE every still in the lane —
+    // turning a degraded read into unrecoverable data loss on the next save.
+    // Refuse instead, the way every other version-gated payload in PortOS does.
     if (!Array.isArray(patch.clips)) {
       throw new ServerError('clips must be an array', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    const nonClip = (project.segments || []).filter((s) => s.type !== 'clip');
+    if (nonClip.length > 0) {
+      throw new ServerError('Project uses the layered timeline — a clips-only save would drop its non-clip segments', {
+        status: 409,
+        code: 'SCHEMA_TOO_NEW',
+        context: { schemaVersion: TIMELINE_SCHEMA_VERSION, droppedSegmentCount: nonClip.length },
+      });
     }
     project.segments = validateSegments(patch.clips.map((c) => ({ type: 'clip', ...(c && typeof c === 'object' ? c : {}) })));
   }
@@ -180,7 +200,8 @@ export async function updateProject(id, patch, expectedUpdatedAt) {
 }
 
 export async function deleteProject(id) {
-  const projects = await loadProjects();
+  // Only ids are compared here — nothing to normalize.
+  const projects = await loadRawProjects();
   const filtered = projects.filter((p) => p.id !== id);
   if (filtered.length === projects.length) {
     throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
@@ -216,28 +237,14 @@ const probeAudio = async (videoPath) => {
   });
 };
 
-// ffprobe a media file's duration in seconds, or null when ffprobe is missing
-// or the container reports no duration. Used to clamp an audio track's
-// requested slice to what the file actually holds — an atrim past EOF yields a
-// shorter-than-declared bed, which amix then pads with silence.
-const probeDuration = async (mediaPath) => {
-  const ffprobe = await findFfprobe();
-  if (!ffprobe) return null;
-  return new Promise((resolve) => {
-    const proc = spawn(ffprobe, [
-      '-v', 'error',
-      '-show_entries', 'format=duration',
-      '-of', 'default=nw=1:nk=1',
-      mediaPath,
-    ], safeChildProcessOptions({ stdio: ['ignore', 'pipe', 'ignore'] }));
-    let out = '';
-    proc.stdout.on('data', (c) => { out += c.toString(); });
-    proc.on('close', () => {
-      const n = Number(out.trim());
-      resolve(Number.isFinite(n) && n > 0 ? n : null);
-    });
-    proc.on('error', () => resolve(null));
-  });
+// Run `probe` over the DISTINCT paths in `paths`, bounded by PROBE_CONCURRENCY,
+// and return a path → result map. Deduping here rather than at the call site
+// keeps a timeline that reuses one source from spawning an ffprobe per
+// placement.
+const probeByPath = async (paths, probe) => {
+  const distinct = [...new Set(paths)];
+  const results = await mapWithConcurrency(distinct, PROBE_CONCURRENCY, probe);
+  return new Map(distinct.map((p, i) => [p, results[i]]));
 };
 
 // Resolve a project's three lanes to verified on-disk paths + durations +
@@ -245,7 +252,9 @@ const probeDuration = async (mediaPath) => {
 // missing asset so the editor can highlight them all in one pass instead of
 // surfacing one broken reference per failed render.
 export async function resolveTimeline(rawProject) {
-  const project = normalizeProject(rawProject);
+  // getProject already normalized — only a caller handing us a raw record pays
+  // for a second full rebuild.
+  const project = rawProject?.schemaVersion === TIMELINE_SCHEMA_VERSION ? rawProject : normalizeProject(rawProject);
   const segments = project.segments || [];
   if (segments.length === 0) {
     throw new ServerError('Project has no clips', { status: 400, code: 'EMPTY_PROJECT' });
@@ -307,24 +316,30 @@ export async function resolveTimeline(rawProject) {
     });
   }
 
+  // Probe once per distinct FILE, not per placement: a cut that returns to the
+  // same source clip, or a bed placed twice, would otherwise spawn an identical
+  // ffprobe per occurrence. Both fan-outs are independent, so they share the
+  // wall clock — each stays capped at PROBE_CONCURRENCY on its own.
   const clipEntries = prepared.filter((p) => p.kind === 'clip');
-  const audioFlags = new Map();
-  const clipAudio = await mapWithConcurrency(clipEntries, PROBE_CONCURRENCY, (p) => probeAudio(p.videoPath));
-  clipEntries.forEach((p, j) => audioFlags.set(p.i, clipAudio[j]));
+  const [audioFlagByPath, durationByPath] = await Promise.all([
+    probeByPath(clipEntries.map((p) => p.videoPath), probeAudio),
+    probeByPath(audioTracks.map((tr) => tr.assetPath), probeVideoDuration),
+  ]);
 
-  const bedDurations = await mapWithConcurrency(audioTracks, PROBE_CONCURRENCY, (tr) => probeDuration(tr.assetPath));
-  audioTracks.forEach((tr, j) => {
-    const probed = bedDurations[j];
+  for (const p of clipEntries) p.hasAudio = audioFlagByPath.get(p.videoPath) === true;
+
+  for (const tr of audioTracks) {
+    const probed = durationByPath.get(tr.assetPath);
     // A probe reporting LESS than the requested slice is authoritative.
     // `null` (no ffprobe on PATH, unreadable container) must NOT collapse into
     // "0 seconds available" — leave the stored slice alone in that case.
-    if (probed == null) return;
+    if (probed == null) continue;
     tr.offsetSec = Math.min(tr.offsetSec, Math.max(0, probed - MIN_MEDIA_SEC));
     tr.durationSec = Math.min(tr.durationSec, Math.max(MIN_MEDIA_SEC, probed - tr.offsetSec));
     const fitted = fitFades(tr.fadeInSec, tr.fadeOutSec, tr.durationSec);
     tr.fadeInSec = fitted.fadeInSec;
     tr.fadeOutSec = fitted.fadeOutSec;
-  });
+  }
 
   const resolvedSegments = prepared.map((p) => (p.kind === 'still'
     ? {
@@ -348,7 +363,7 @@ export async function resolveTimeline(rawProject) {
       width: p.entry.width,
       height: p.entry.height,
       fps: p.entry.fps,
-      hasAudio: audioFlags.get(p.i) === true,
+      hasAudio: p.hasAudio,
       fadeInSec: p.fades.fadeInSec,
       fadeOutSec: p.fades.fadeOutSec,
       volume: p.seg.volume,
@@ -366,14 +381,6 @@ export async function resolveTimeline(rawProject) {
     canonH: firstClip?.height || DEFAULT_CANVAS.height,
     fps: firstClip?.fps || DEFAULT_CANVAS.fps,
   };
-}
-
-/**
- * Back-compat wrapper: the v1 entry point returned only the video lane.
- * Retained so any caller still asking for "the resolved clips" keeps working.
- */
-export async function resolveClips(project) {
-  return (await resolveTimeline(project)).segments;
 }
 
 // Filter-graph number formatting. Raw interpolation of a subtraction result
@@ -394,21 +401,15 @@ function fitFades(fadeInSec, fadeOutSec, duration) {
   return { fadeInSec: fin * scale, fadeOutSec: fout * scale };
 }
 
-const videoFades = (seg, duration) => {
-  const parts = [];
-  if (seg.fadeInSec > 0) parts.push(`fade=t=in:st=0:d=${fmt(seg.fadeInSec)}`);
-  if (seg.fadeOutSec > 0) {
-    parts.push(`fade=t=out:st=${fmt(Math.max(0, duration - seg.fadeOutSec))}:d=${fmt(seg.fadeOutSec)}`);
-  }
-  return parts.length > 0 ? `,${parts.join(',')}` : '';
-};
-
-const audioShaping = (seg, duration, volume) => {
-  const parts = [];
-  if (volume !== 1) parts.push(`volume=${fmt(volume)}`);
-  if (seg.fadeInSec > 0) parts.push(`afade=t=in:st=0:d=${fmt(seg.fadeInSec)}`);
-  if (seg.fadeOutSec > 0) {
-    parts.push(`afade=t=out:st=${fmt(Math.max(0, duration - seg.fadeOutSec))}:d=${fmt(seg.fadeOutSec)}`);
+// Fade filters for one segment, in the segment's own post-setpts clock.
+// `prefix` is 'fade' (video) or 'afade' (audio) — the two must agree on the
+// fade-out start, so they share one expression. `lead` carries filters that
+// belong ahead of the ramp (an audio volume trim).
+const fadeChain = (prefix, { fadeInSec = 0, fadeOutSec = 0 }, duration, lead = []) => {
+  const parts = [...lead];
+  if (fadeInSec > 0) parts.push(`${prefix}=t=in:st=0:d=${fmt(fadeInSec)}`);
+  if (fadeOutSec > 0) {
+    parts.push(`${prefix}=t=out:st=${fmt(Math.max(0, duration - fadeOutSec))}:d=${fmt(fadeOutSec)}`);
   }
   return parts.length > 0 ? `,${parts.join(',')}` : '';
 };
@@ -418,32 +419,33 @@ const audioShaping = (seg, duration, volume) => {
 // link parameters do not match" mid-render — and an RGBA still concatenated
 // after a yuv420p clip fails exactly the same way.
 //
-// Accepts either a resolved timeline object from resolveTimeline() or a bare
-// segment array (the v1 signature — video lane only, no overlays or bed).
+// Takes a RESOLVED timeline from resolveTimeline() — every segment already
+// carries its on-disk path, its project-time `duration`, and (for a clip) its
+// probed `hasAudio`. Geometry comes off the timeline rather than being
+// re-derived here, so exactly one place decides the canvas.
 export function buildFfmpegArgs(timeline, outputPath) {
-  const t = Array.isArray(timeline) ? { segments: timeline } : (timeline || {});
+  const t = timeline || {};
   const segments = t.segments || [];
   if (segments.length === 0) throw new Error('buildFfmpegArgs: empty clips');
   const overlays = t.overlays || [];
   const audioTracks = t.audioTracks || [];
   const clipVolume = t.clipVolume == null ? 1 : t.clipVolume;
 
-  const firstClip = segments.find((seg) => (seg.type || 'clip') === 'clip');
-  const canonW = t.canonW || firstClip?.width || DEFAULT_CANVAS.width;
-  const canonH = t.canonH || firstClip?.height || DEFAULT_CANVAS.height;
-  const fps = t.fps || firstClip?.fps || DEFAULT_CANVAS.fps;
+  const canonW = t.canonW || DEFAULT_CANVAS.width;
+  const canonH = t.canonH || DEFAULT_CANVAS.height;
+  const fps = t.fps || DEFAULT_CANVAS.fps;
 
   const inputs = [];
   const filters = [];
   const concatStreams = [];
   let inputIdx = 0;
 
-  const totalDuration = segments.reduce((sum, seg) => sum + (seg.duration ?? segmentDuration(seg)), 0);
+  const totalDuration = segments.reduce((sum, seg) => sum + seg.duration, 0);
 
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i];
-    const isStill = (seg.type || 'clip') === 'still';
-    const duration = seg.duration ?? segmentDuration(seg);
+    const isStill = seg.type === 'still';
+    const { duration } = seg;
 
     const vIdx = inputIdx++;
     if (isStill) {
@@ -462,32 +464,25 @@ export function buildFfmpegArgs(timeline, outputPath) {
       ? `trim=start=0:end=${fmt(duration)}`
       : `trim=start=${fmt(seg.inSec)}:end=${fmt(seg.outSec)}`;
     filters.push(
-      `[${vIdx}:v]scale=${canonW}:${canonH}:force_original_aspect_ratio=decrease,pad=${canonW}:${canonH}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p,fps=${fps},${trim},setpts=PTS-STARTPTS${videoFades(seg, duration)}[v${i}]`
+      `[${vIdx}:v]scale=${canonW}:${canonH}:force_original_aspect_ratio=decrease,pad=${canonW}:${canonH}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p,fps=${fps},${trim},setpts=PTS-STARTPTS${fadeChain('fade', seg, duration)}[v${i}]`
     );
 
-    const hasAudio = !isStill && seg.hasAudio;
-    let aIdx;
-    if (hasAudio) {
-      aIdx = vIdx;
-    } else {
-      // -t bounds the otherwise-infinite anullsrc to match the segment's
-      // duration so concat=v=1:a=1 gets a length-matched silent track.
-      aIdx = inputIdx++;
-      inputs.push('-f', 'lavfi', '-t', fmt(duration), '-i', `anullsrc=channel_layout=stereo:sample_rate=48000`);
-    }
-    if (hasAudio) {
+    // The silent stub must share the real-audio branches' sample format and
+    // layout — concat=v=1:a=1 fails fast with "Input link parameters do not
+    // match" if they diverge.
+    if (!isStill && seg.hasAudio) {
       const vol = clipVolume * (seg.volume == null ? 1 : seg.volume);
+      const lead = vol === 1 ? [] : [`volume=${fmt(vol)}`];
       filters.push(
-        `[${aIdx}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,atrim=start=${fmt(seg.inSec)}:end=${fmt(seg.outSec)},asetpts=PTS-STARTPTS${audioShaping(seg, duration, vol)}[a${i}]`
+        `[${vIdx}:a]${AUDIO_NORM},atrim=start=${fmt(seg.inSec)}:end=${fmt(seg.outSec)},asetpts=PTS-STARTPTS${fadeChain('afade', seg, duration, lead)}[a${i}]`
       );
     } else {
-      // The silent input must match the same sample-format/layout as the
-      // real-audio branches; concat=v=1:a=1 fails fast with "Input link
-      // parameters do not match" if they diverge. No volume or fade here — the
+      // -t bounds the otherwise-infinite anullsrc to the segment's duration so
+      // concat gets a length-matched silent track. No volume or fade here — the
       // stream is already silence.
-      filters.push(
-        `[${aIdx}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=PTS-STARTPTS[a${i}]`
-      );
+      const aIdx = inputIdx++;
+      inputs.push('-f', 'lavfi', '-t', fmt(duration), '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000');
+      filters.push(`[${aIdx}:a]${AUDIO_NORM},asetpts=PTS-STARTPTS[a${i}]`);
     }
     concatStreams.push(`[v${i}][a${i}]`);
   }
@@ -571,6 +566,10 @@ export function buildFfmpegArgs(timeline, outputPath) {
     '-pix_fmt', 'yuv420p',
     '-c:a', 'aac',
     '-b:a', '192k',
+    // Untagged H.264 decodes washed-out or over-saturated depending on the
+    // player; stills and overlays re-encoded here must match the tagged stitch
+    // path or one output file carries two colour interpretations.
+    ...BT709_CONTAINER_ARGS,
     '-movflags', '+faststart',
     '-progress', 'pipe:2',
     '-y',

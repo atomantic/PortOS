@@ -164,3 +164,48 @@ describe('deleteProject', () => {
     await expect(deleteProject('p1')).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
 });
+
+describe('updateProject — the v1 clips payload cannot silently destroy the new lanes', () => {
+  it('refuses a clips-only save against a project holding stills', async () => {
+    seed([{
+      id: 'p1', updatedAt: 'u1', schemaVersion: 2, clips: [{ clipId: CLIP_A, inSec: 0, outSec: 2 }],
+      segments: [
+        { type: 'clip', clipId: CLIP_A, inSec: 0, outSec: 2 },
+        { type: 'still', assetKind: 'images', assetFile: 'plate.png', durationSec: 3 },
+      ],
+      overlays: [], audio: { clipVolume: 1, tracks: [] },
+    }]);
+
+    // A rolled-back v1 editor reads only the `clips` mirror, so writing it back
+    // would drop the still it never saw.
+    await expect(updateProject('p1', { clips: [{ clipId: CLIP_A, inSec: 0, outSec: 2 }] }))
+      .rejects.toMatchObject({ code: 'SCHEMA_TOO_NEW' });
+
+    expect(onDisk()[0].segments).toHaveLength(2);
+    expect(onDisk()[0].updatedAt).toBe('u1');
+  });
+
+  it('still accepts a clips-only save when the lane is all clips — nothing can be lost', async () => {
+    seed([{
+      id: 'p1', updatedAt: 'u1', schemaVersion: 2, clips: [{ clipId: CLIP_A, inSec: 0, outSec: 2 }],
+      segments: [{ type: 'clip', clipId: CLIP_A, inSec: 0, outSec: 2 }],
+      overlays: [], audio: { clipVolume: 1, tracks: [] },
+    }]);
+
+    const updated = await updateProject('p1', { clips: [{ clipId: CLIP_B, inSec: 0, outSec: 5 }] });
+    expect(updated.segments[0].clipId).toBe(CLIP_B);
+  });
+
+  it('lets a v2 client edit the same project through the segments lane', async () => {
+    seed([{
+      id: 'p1', updatedAt: 'u1', schemaVersion: 2, clips: [],
+      segments: [{ type: 'still', assetKind: 'images', assetFile: 'plate.png', durationSec: 3 }],
+      overlays: [], audio: { clipVolume: 1, tracks: [] },
+    }]);
+
+    const updated = await updateProject('p1', {
+      segments: [{ type: 'still', assetKind: 'images', assetFile: 'plate.png', durationSec: 4 }],
+    });
+    expect(updated.segments[0].durationSec).toBe(4);
+  });
+});

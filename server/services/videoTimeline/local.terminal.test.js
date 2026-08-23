@@ -49,6 +49,8 @@ vi.mock('../../lib/ffmpeg.js', () => ({
   findFfprobe: vi.fn(async () => null), // → probeAudio returns false without spawning
   safeUnder: (root, name) => (name ? `${root}/${name}` : null),
   generateThumbnail: vi.fn(async () => 'thumb.jpg'),
+  probeVideoDuration: vi.fn(async () => null), // no bed probing in these render-lifecycle cases
+  BT709_CONTAINER_ARGS: ['-color_primaries', 'bt709', '-color_trc', 'bt709', '-colorspace', 'bt709'],
 }));
 vi.mock('../../lib/processEnv.js', () => ({
   safeChildProcessOptions: (options = {}) => ({ ...options, env: {}, windowsHide: true }),

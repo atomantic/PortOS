@@ -10,6 +10,9 @@ import {
   stripKey,
   withKeys,
   timelinePatch,
+  clampTrim,
+  fitFadePatch,
+  segmentVolumeAt,
 } from './videoTimelineModel';
 
 const clip = (inSec, outSec) => ({ type: 'clip', clipId: 'c', inSec, outSec });
@@ -156,5 +159,67 @@ describe('save helpers', () => {
 
   it('sends every lane even when empty, so clearing one actually persists', () => {
     expect(timelinePatch({})).toEqual({ segments: [], overlays: [], audio: { clipVolume: 1, tracks: [] } });
+  });
+});
+describe('clampTrim', () => {
+  const segment = { inSec: 0, outSec: 4, fadeInSec: 0, fadeOutSec: 0 };
+
+  it('clamps out to the source duration', () => {
+    expect(clampTrim(segment, { outSec: 99 }, 5, 24)).toMatchObject({ outSec: 5 });
+  });
+
+  it('keeps at least one frame between in and out, matching the server guard', () => {
+    // 24fps → 1/24s minimum, not the old hardcoded 0.04.
+    expect(clampTrim(segment, { inSec: 4 }, 4, 24).outSec - clampTrim(segment, { inSec: 4 }, 4, 24).inSec)
+      .toBeCloseTo(1 / 24);
+  });
+
+  it('shrinks fades that no longer fit the tightened trim', () => {
+    const faded = { inSec: 0, outSec: 4, fadeInSec: 1, fadeOutSec: 1 };
+    const patched = clampTrim(faded, { outSec: 1 }, 4, 24);
+    expect(patched.fadeInSec + patched.fadeOutSec).toBeCloseTo(1);
+  });
+});
+
+describe('fitFadePatch', () => {
+  it('leaves a fitting fade pair untouched', () => {
+    expect(fitFadePatch({ fadeInSec: 0.5, fadeOutSec: 0.5 }, { fadeInSec: 1 }, 4)).toEqual({ fadeInSec: 1 });
+  });
+
+  it('scales an over-long pair down proportionally rather than dropping one', () => {
+    const patched = fitFadePatch({ fadeInSec: 1, fadeOutSec: 3 }, { fadeInSec: 1 }, 2);
+    expect(patched.fadeInSec).toBeCloseTo(0.5);
+    expect(patched.fadeOutSec).toBeCloseTo(1.5);
+  });
+
+  it('zeroes both fades when the duration collapses', () => {
+    const patched = fitFadePatch({ fadeInSec: 1, fadeOutSec: 1 }, { durationSec: 0 }, 0);
+    expect(patched).toMatchObject({ fadeInSec: 0, fadeOutSec: 0 });
+  });
+});
+
+describe('segmentVolumeAt — preview must audition what the export mixes', () => {
+  const seg = { type: 'clip', clipId: 'c', inSec: 0, outSec: 4, volume: 0.5, fadeInSec: 1, fadeOutSec: 0 };
+
+  it('multiplies the project clip volume by the segment volume, exactly as the export chain does', () => {
+    // Export builds `volume=${clipVolume * seg.volume}` ahead of the afade.
+    expect(segmentVolumeAt(seg, 0.4, 2)).toBeCloseTo(0.2);
+  });
+
+  it('applies the segment fade on top of that product', () => {
+    expect(segmentVolumeAt(seg, 1, 0.5)).toBeCloseTo(0.25);
+    expect(segmentVolumeAt(seg, 1, 1)).toBeCloseTo(0.5);
+  });
+
+  it('defaults a missing clipVolume/volume to unity', () => {
+    expect(segmentVolumeAt({ type: 'clip', inSec: 0, outSec: 2 }, null, 1)).toBe(1);
+  });
+
+  it('caps at 1 — a >1x multiplier cannot be honoured by a media element', () => {
+    expect(segmentVolumeAt({ type: 'clip', inSec: 0, outSec: 2, volume: 4 }, 2, 1)).toBe(1);
+  });
+
+  it('is silent for a still — it carries no audio track', () => {
+    expect(segmentVolumeAt({ type: 'still', durationSec: 3 }, 1, 1)).toBe(0);
   });
 });

@@ -18,7 +18,7 @@ vi.mock('@dnd-kit/sortable', async () => {
   };
 });
 
-import { TimelineBlock, LaneBlock, clampTrim, fitFadePatch } from './VideoTimelineEditor';
+import { TimelineBlock, LaneBlock, FloatingLane } from './VideoTimelineLanes';
 
 const clip = { _key: 'clip-key', clipId: 'clip-1', inSec: 0, outSec: 2 };
 const clipMeta = { prompt: 'A dramatic sunrise' };
@@ -175,39 +175,49 @@ describe('LaneBlock — free-floating overlay/bed placement', () => {
   });
 });
 
-describe('clampTrim', () => {
-  const segment = { inSec: 0, outSec: 4, fadeInSec: 0, fadeOutSec: 0 };
+describe('FloatingLane', () => {
+  const overlay = (over = {}) => ({ _key: 'ov-1', assetFile: 'logo.png', startSec: 1, durationSec: 2, ...over });
 
-  it('clamps out to the source duration', () => {
-    expect(clampTrim(segment, { outSec: 99 }, 5, 24)).toMatchObject({ outSec: 5 });
+  const renderLane = (props = {}) => render(
+    <FloatingLane
+      title="Overlays"
+      entries={[overlay()]}
+      emptyHint="Add an overlay from the Stills tab"
+      tone=""
+      labelOf={(e) => e.assetFile}
+      isMissing={() => false}
+      selectedKey={null}
+      pxPerSec={40}
+      width={400}
+      playheadSec={2.5}
+      onSelect={vi.fn()}
+      onRemove={vi.fn()}
+      {...props}
+    />,
+  );
+
+  it('places its own playhead in project-time coordinates', () => {
+    renderLane();
+    expect(screen.getByTestId('overlays-playhead')).toHaveStyle({ left: '100px' });
   });
 
-  it('keeps at least one frame between in and out, matching the server guard', () => {
-    // 24fps → 1/24s minimum, not the old hardcoded 0.04.
-    expect(clampTrim(segment, { inSec: 4 }, 4, 24).outSec - clampTrim(segment, { inSec: 4 }, 4, 24).inSec)
-      .toBeCloseTo(1 / 24);
+  it('gives each lane a distinct playhead testid so neither query is ambiguous', () => {
+    renderLane();
+    renderLane({ title: 'Audio' });
+    expect(screen.getByTestId('overlays-playhead')).toBeInTheDocument();
+    expect(screen.getByTestId('audio-playhead')).toBeInTheDocument();
   });
 
-  it('shrinks fades that no longer fit the tightened trim', () => {
-    const faded = { inSec: 0, outSec: 4, fadeInSec: 1, fadeOutSec: 1 };
-    const patched = clampTrim(faded, { outSec: 1 }, 4, 24);
-    expect(patched.fadeInSec + patched.fadeOutSec).toBeCloseTo(1);
-  });
-});
-
-describe('fitFadePatch', () => {
-  it('leaves a fitting fade pair untouched', () => {
-    expect(fitFadePatch({ fadeInSec: 0.5, fadeOutSec: 0.5 }, { fadeInSec: 1 }, 4)).toEqual({ fadeInSec: 1 });
+  it('shows the empty hint instead of a bare lane', () => {
+    renderLane({ entries: [] });
+    expect(screen.getByText('Add an overlay from the Stills tab')).toBeInTheDocument();
   });
 
-  it('scales an over-long pair down proportionally rather than dropping one', () => {
-    const patched = fitFadePatch({ fadeInSec: 1, fadeOutSec: 3 }, { fadeInSec: 1 }, 2);
-    expect(patched.fadeInSec).toBeCloseTo(0.5);
-    expect(patched.fadeOutSec).toBeCloseTo(1.5);
-  });
-
-  it('zeroes both fades when the duration collapses', () => {
-    const patched = fitFadePatch({ fadeInSec: 1, fadeOutSec: 1 }, { durationSec: 0 }, 0);
-    expect(patched).toMatchObject({ fadeInSec: 0, fadeOutSec: 0 });
+  it('marks only the selected block', () => {
+    renderLane({ entries: [overlay(), overlay({ _key: 'ov-2', assetFile: 'badge.png' })], selectedKey: 'ov-2' });
+    // Match the selected-only fill, not `border-port-accent` — every block
+    // carries that as a `hover:` variant.
+    expect(screen.getByText('badge.png').closest('div').className).toContain('bg-port-accent/20');
+    expect(screen.getByText('logo.png').closest('div').className).not.toContain('bg-port-accent/20');
   });
 });
