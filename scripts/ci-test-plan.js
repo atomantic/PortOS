@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from 'child_process';
-import { fileURLToPath } from 'url';
-import { resolve } from 'path';
+import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { writeStepOutput } from './lib/githubOutput.js';
 
 const TEST_FILE_RE = /\.(?:test|spec)\.[cm]?[jt]sx?$/i;
@@ -466,7 +465,4 @@ function main() {
   emitGitHubPlan(buildCiTestPlan(changedFiles, { trackedFiles, forceFull, forceFullReason }));
 }
 
-const isMain = process.argv[1]
-  && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
-
-if (isMain) main();
+if (isDirectlyInvoked(import.meta.url)) main();

@@ -30,8 +30,9 @@
  */
 
 import { readdir, readFile } from 'fs/promises';
-import { join, dirname, resolve } from 'path';
+import { join, dirname } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
+import { isDirectlyInvoked } from '../../scripts/lib/directInvocation.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_MIGRATIONS_DIR = join(__dirname, 'db-migrations');
@@ -106,13 +107,7 @@ export async function runDbMigrations({
   return ran;
 }
 
-// Only run as CLI when invoked directly (not when imported as a module).
-// `pathToFileURL()` requires an absolute path, so we `resolve()` argv[1] first
-// (it may be relative when launched as `node server/scripts/run-db-migrations.js`).
-// URL-vs-URL comparison normalizes slashes / drive-letter casing on Windows.
-const invokedAsScript = process.argv[1]
-  && import.meta.url === pathToFileURL(resolve(process.argv[1])).href;
-if (invokedAsScript) {
+if (isDirectlyInvoked(import.meta.url)) {
   const { close } = await import('../lib/db.js');
   await runDbMigrations()
     .then(() => close())

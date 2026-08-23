@@ -20,8 +20,7 @@
 // `verified=false`, and the release workflow runs the complete suite.
 
 import { spawnSync } from 'child_process';
-import { fileURLToPath } from 'url';
-import { resolve } from 'path';
+import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { writeStepOutput } from './lib/githubOutput.js';
 
 // Must match the `Full CI Gate` job name in .github/workflows/ci.yml.
@@ -137,7 +136,4 @@ function main() {
   emit(false, `no successful ${FULL_CI_GATE_CHECK_NAME} for this tree`);
 }
 
-const isMain = process.argv[1]
-  && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
-
-if (isMain) main();
+if (isDirectlyInvoked(import.meta.url)) main();

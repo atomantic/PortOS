@@ -28,6 +28,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isDirectlyInvoked } from './lib/directInvocation.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -182,4 +183,4 @@ function main() {
   console.log(`📜 Wrote ${MANIFEST_RELATIVE_PATH}: ${Object.keys(manifest).length} stages across ${paths.size} files`);
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();
+if (isDirectlyInvoked(import.meta.url)) main();

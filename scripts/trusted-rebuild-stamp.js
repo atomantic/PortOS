@@ -31,9 +31,9 @@
  */
 import { createHash } from 'crypto';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
-import { join, resolve } from 'path';
-import { fileURLToPath } from 'url';
+import { join } from 'path';
 
+import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { TRUSTED_REBUILDS, discoverWorkspaces, workspaceDir } from './trusted-rebuilds.js';
 
 export const STAMP_FILE = '.portos-trusted-rebuild.json';
@@ -100,7 +100,4 @@ function tryRead(path) {
   }
 }
 
-const isMain = process.argv[1]
-  && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
-
-if (isMain) process.exit(runCli(process.argv.slice(2)));
+if (isDirectlyInvoked(import.meta.url)) process.exit(runCli(process.argv.slice(2)));

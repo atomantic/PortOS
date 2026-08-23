@@ -2,8 +2,9 @@
 
 import { spawnSync } from 'child_process';
 import { existsSync } from 'fs';
-import { dirname, join, resolve } from 'path';
+import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { isDirectlyInvoked } from './lib/directInvocation.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -69,7 +70,4 @@ function main() {
   process.exit(result.status ?? 1);
 }
 
-const isMain = process.argv[1]
-  && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
-
-if (isMain) main();
+if (isDirectlyInvoked(import.meta.url)) main();

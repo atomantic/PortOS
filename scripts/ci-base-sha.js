@@ -26,8 +26,7 @@
  */
 
 import { spawnSync } from 'child_process';
-import { resolve } from 'path';
-import { fileURLToPath } from 'url';
+import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { writeStepEnv } from './lib/githubOutput.js';
 
 /** Resolve a revision to a commit sha, or null when git cannot. */
@@ -73,7 +72,4 @@ function main() {
   console.log('No pull-request merge base to resolve — this run tests the complete suite.');
 }
 
-const isMain = process.argv[1]
-  && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
-
-if (isMain) main();
+if (isDirectlyInvoked(import.meta.url)) main();

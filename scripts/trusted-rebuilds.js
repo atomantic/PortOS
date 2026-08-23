@@ -19,9 +19,10 @@
  */
 import { execFileSync } from 'child_process';
 import { existsSync, readdirSync } from 'fs';
-import { join, dirname, resolve } from 'path';
+import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { prepareCliSpawn } from '../server/lib/bufferedSpawn.js';
+import { isDirectlyInvoked } from './lib/directInvocation.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -144,9 +145,4 @@ export function runCli(argv, { spawn = execFileSync } = {}) {
   return rebuildTrusted(dirOverride ?? workspaceDir(label), label, { spawn }) ? 0 : 1;
 }
 
-// Matches the entry-guard idiom in scripts/run-ci-lint.js — `resolve()` on both
-// sides so a relative `node scripts/…` invocation still matches.
-const isMain = process.argv[1]
-  && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
-
-if (isMain) process.exit(runCli(process.argv.slice(2)));
+if (isDirectlyInvoked(import.meta.url)) process.exit(runCli(process.argv.slice(2)));

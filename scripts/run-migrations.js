@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { readdir, readFile, writeFile, mkdir, rename } from 'fs/promises';
-import { join, dirname, resolve } from 'path';
+import { join, dirname } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { resolveInstallRoot, isWorktreeRoot } from '../server/lib/dataRoot.js';
+import { isDirectlyInvoked } from './lib/directInvocation.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Prefer an explicit PORTOS_DATA_ROOT env var over the executing-file location
@@ -171,15 +172,7 @@ export async function runMigrations({
   return ran;
 }
 
-// Only run as CLI when invoked directly (not when imported as a module).
-// `pathToFileURL()` requires an absolute path, so we `resolve()` argv[1]
-// first (it may be relative when launched as `node scripts/run-migrations.js`).
-// URL-vs-URL comparison normalizes slashes / drive-letter casing on Windows.
-// Kept synchronous so importing the module doesn't make it an async module
-// or trigger filesystem I/O at evaluation time.
-const invokedAsScript = process.argv[1]
-  && import.meta.url === pathToFileURL(resolve(process.argv[1])).href;
-if (invokedAsScript) {
+if (isDirectlyInvoked(import.meta.url)) {
   runMigrations().catch(err => {
     console.error(`❌ Migration failed: ${err?.stack ?? err}`);
     process.exit(1);

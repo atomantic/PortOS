@@ -2,10 +2,11 @@
 
 import { spawnSync } from 'child_process';
 import { appendFileSync } from 'fs';
-import { dirname, join, resolve } from 'path';
+import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { prepareCliSpawn } from '../server/lib/bufferedSpawn.js';
 import { ALWAYS_RUN_TESTS } from './ci-test-plan.js';
+import { isDirectlyInvoked } from './lib/directInvocation.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -193,7 +194,4 @@ function main() {
   process.exit(spawnNpm(scope, union, 'selected tests'));
 }
 
-const isMain = process.argv[1]
-  && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
-
-if (isMain) main();
+if (isDirectlyInvoked(import.meta.url)) main();
