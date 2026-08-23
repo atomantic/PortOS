@@ -126,8 +126,8 @@ faster than MTPLX until it runs on compatible hardware. Upstream references:
 
 ## Verification record
 
-- Full server suite: 33,203 passing tests, 19 skipped.
-- Full client suite: 9,466 passing tests.
+- Full server suite: 33,222 passing tests, 19 skipped.
+- Full client suite: 9,468 passing tests.
 - Focused capability, stream-transport, TUI benchmark, catalog, and UI tests
   passed after the audit changes.
 - Production client build passed; the existing large-chunk warning remains a
