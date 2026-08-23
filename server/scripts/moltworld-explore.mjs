@@ -59,7 +59,8 @@ const PORTOS_API_BASE = process.env.PORTOS_API_BASE || 'http://localhost:5555';
 // LM Studio config
 // Keep the historical LMSTUDIO_* spellings as compatibility fallbacks while
 // aligning new configuration with PortOS's shared LM_STUDIO_* convention.
-const LMSTUDIO_URL = process.env.LM_STUDIO_URL || process.env.LMSTUDIO_BASE_URL || 'http://localhost:1234';
+const LMSTUDIO_URL = (process.env.LM_STUDIO_URL || process.env.LMSTUDIO_BASE_URL || 'http://localhost:1234')
+  .replace(/\/+$/, '').replace(/\/v1$/, '');
 const LMSTUDIO_MODEL = process.env.LM_STUDIO_MODEL || process.env.LMSTUDIO_MODEL || 'gpt-oss-20b';
 const LMSTUDIO_ENABLED = (process.env.LM_STUDIO_ENABLED || process.env.LMSTUDIO_ENABLED) !== 'false';
 
