@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 
@@ -6,6 +6,7 @@ vi.mock('../services/api', () => ({
   getTribePeople: vi.fn(() => Promise.resolve({ people: [] })),
   // OutreachQueue (care tab) fetches unanswered threads on mount (#2158).
   getTribeOutreach: vi.fn(() => Promise.resolve({ threads: [] })),
+  createTribeTouchpoint: vi.fn(),
 }));
 
 vi.mock('../services/socket', () => ({
@@ -14,6 +15,10 @@ vi.mock('../services/socket', () => ({
 
 import Tribe from './Tribe';
 import * as api from '../services/api';
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 // Surfaces the current URL (path + search) so tests can assert deep-link state.
 function LocationProbe() {
@@ -141,5 +146,17 @@ describe('Tribe care filter', () => {
     renderAt('/tribe?tab=circle&status=overdue');
     expect(await screen.findByText('Example Person')).toBeTruthy();
     expect(screen.queryByText('Placeholder Pal')).toBeNull();
+  });
+
+  it('records a manual touch on the local calendar date', async () => {
+    vi.setSystemTime(new Date(2026, 0, 1, 20));
+    api.createTribeTouchpoint.mockResolvedValue({ id: 'touch-1' });
+
+    renderAt('/tribe');
+    await screen.findByText('Example Person');
+    fireEvent.click(screen.getAllByRole('button', { name: 'Touch' })[0]);
+
+    await waitFor(() => expect(api.createTribeTouchpoint).toHaveBeenCalled());
+    expect(screen.getByText('Last 2026-01-01')).toBeTruthy();
   });
 });

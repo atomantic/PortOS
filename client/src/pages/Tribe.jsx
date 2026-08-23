@@ -25,6 +25,7 @@ import * as api from '../services/api';
 import socket from '../services/socket';
 import BrailleSpinner from '../components/BrailleSpinner';
 import PageHeader from '../components/PageHeader';
+import { localDateStr } from '../components/meatspace/constants';
 import toast from '../components/ui/Toast';
 import TabPills from '../components/ui/TabPills';
 import TribeCircleMap from '../components/tribe/TribeCircleMap.jsx';
@@ -80,10 +81,6 @@ function withParam(params, key, value, defaultValue) {
   if (value === defaultValue) params.delete(key);
   else params.set(key, value);
   return params;
-}
-
-function todayISO() {
-  return new Date().toISOString().slice(0, 10);
 }
 
 function parseStoredContacts(value) {
@@ -1114,7 +1111,7 @@ export default function Tribe() {
   };
 
   const logTouch = async (id) => {
-    const date = todayISO();
+    const date = localDateStr();
     const result = await api.createTribeTouchpoint(id, {
       happenedAt: new Date().toISOString(),
       channel: contacts.find((contact) => contact.id === id)?.channel || '',

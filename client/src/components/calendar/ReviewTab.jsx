@@ -4,9 +4,10 @@ import toast from '../ui/Toast';
 import * as api from '../../services/api';
 import { formatDurationMin, formatTimeOfDay } from '../../utils/formatters';
 import BrailleSpinner from '../BrailleSpinner';
+import { localDateStr } from '../meatspace/constants';
 
 export default function ReviewTab() {
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(localDateStr());
   const [review, setReview] = useState(null);
   const [loading, setLoading] = useState(true);
   const [confirming, setConfirming] = useState(null);
@@ -92,7 +93,7 @@ export default function ReviewTab() {
     fetchReview();
   };
 
-  const isToday = date === new Date().toISOString().slice(0, 10);
+  const isToday = date === localDateStr();
   const isSyncStale = review?.lastSyncAt
     ? (Date.now() - new Date(review.lastSyncAt).getTime()) > 12 * 60 * 60 * 1000
     : true;
@@ -125,7 +126,7 @@ export default function ReviewTab() {
           </button>
           {!isToday && (
             <button
-              onClick={() => setDate(new Date().toISOString().slice(0, 10))}
+              onClick={() => setDate(localDateStr())}
               className="px-2 py-1 text-xs rounded bg-port-accent/20 text-port-accent"
             >
               Today
