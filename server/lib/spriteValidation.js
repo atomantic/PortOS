@@ -1,11 +1,12 @@
 import { z } from 'zod';
-import { SPRITE_ID_PATTERN, SPRITE_RECORD_KINDS } from '../services/sprites/recordsLogic.js';
-import { ANCHOR_DIRECTIONS, SPRITE_DIRECTIONS, TURNAROUND_ID } from '../services/sprites/prompts.js';
-import { CHROMA_KEY_HEXES } from '../services/sprites/chromaKey.js';
-import { ANIMATION_PROVIDER_IDS } from '../services/sprites/animationWorkflow.js';
+import {
+  SPRITE_ID_PATTERN, SPRITE_RECORD_KINDS, ANCHOR_DIRECTIONS, SPRITE_DIRECTIONS,
+  TURNAROUND_ID, ANIMATION_PROVIDER_IDS,
+} from './spriteVocabulary.js';
+import { CHROMA_KEY_HEXES } from './spriteChromaKey.js';
 import {
   WALK_TRACK, AUTHORED_TRACK_FIELDS, TRACK_BOUND_TRIPLES,
-} from '../services/sprites/animationTracks.js';
+} from './spriteAnimationTracks.js';
 // #3152 — the EFFECTIVE table (compiled `walk` + the user-defined store), so a
 // user's track validates against its own bounds and occupies its own contract
 // field with no schema edit. The store reads one small JSON config synchronously
@@ -13,8 +14,9 @@ import {
 // schemas below stay module-load constants rather than becoming lazily-built.
 import {
   effectiveTrack, getEffectiveAnimationTracks, getEffectiveAnimationTrackIds,
-} from '../services/sprites/animationTrackStore.js';
-import { QUEUEABLE_IMAGE_MODES } from '../services/imageGen/modes.js';
+} from './spriteAnimationTrackStore.js';
+// From lib since #5021 — the generation-mode alphabets live below validation.
+import { QUEUEABLE_IMAGE_MODES } from './generationModes.js';
 import { RECORD_RENDER_MODEL_MAX } from './renderTargets.js';
 import {
   cloudModelIdString, grokVideoDurationSchema, isSafeSubdirFilter, recordRenderPinFields,

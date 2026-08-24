@@ -3,7 +3,7 @@ import {
   CHROMA_KEYS, CHROMA_KEY_HEXES, MIN_HUE_SEPARATION,
   rgbToHsv, hueDistance, pickChromaKey, keyProximityWarning,
   keyChannelSplit, keyShareFn,
-} from './chromaKey.js';
+} from './spriteChromaKey.js';
 
 describe('chroma key set', () => {
   it('is exactly the three standard keys', () => {

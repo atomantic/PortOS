@@ -25,24 +25,28 @@ import {
   isAnimationTrack, getAnimationTrack, clampTrackFrameCount, clampTrackFps,
   assertAnimationTrackRows, trackRowCount, tracksForKind, kindSupportsTrack,
   sourceReferenceFor, primaryTrackForKind,
-} from './animationTracks.js';
+} from './spriteAnimationTracks.js';
 import {
   getEffectiveAnimationTracks, getEffectiveAnimationTrackIds, animationTrackSeedPath,
-} from './animationTrackStore.js';
-import { SPRITE_RECORD_KINDS } from './recordsLogic.js';
-import { AMBIENT_TRACK_ROW } from './spriteTestFixtures.js';
+} from './spriteAnimationTrackStore.js';
+import { SPRITE_RECORD_KINDS } from '../services/sprites/recordsLogic.js';
+import { AMBIENT_TRACK_ROW } from '../services/sprites/spriteTestFixtures.js';
 import {
   staticImportSpecifiers, staticImportClosure, specifierMatchesPackage,
-} from '../../lib/staticImportGraph.js';
+} from './staticImportGraph.js';
 import {
   WALK_DEFAULT_FRAME_COUNT as CLIENT_DEFAULT_FRAME_COUNT,
   WALK_DEFAULT_FPS as CLIENT_DEFAULT_FPS,
   WALK_FRAME_COUNT_OPTIONS as CLIENT_FRAME_COUNT_OPTIONS,
   walkFpsOptionsFor as clientWalkFpsOptionsFor,
-} from '../../../client/src/lib/spriteTrimmer.js';
+} from '../../client/src/lib/spriteTrimmer.js';
 
-const SPRITES_DIR = dirname(fileURLToPath(import.meta.url));
-const SERVER_DIR = dirname(dirname(SPRITES_DIR));
+// This suite moved to server/lib with the registry it covers (#4901), but it
+// still walks modules that stayed in services/sprites — so name both roots
+// explicitly rather than deriving one from the test's own location.
+const LIB_DIR = dirname(fileURLToPath(import.meta.url));
+const SERVER_DIR = dirname(LIB_DIR);
+const SPRITES_DIR = join(SERVER_DIR, 'services', 'sprites');
 
 // The merged table this install actually serves — compiled `walk` plus the store
 // rows, which on a machine that has authored its own tracks includes those too.
@@ -454,7 +458,7 @@ describe('per-track clamps', () => {
 
 describe('walkBounds re-reads the walk row (no call-site churn)', () => {
   it('exposes exactly the registry values under its historical export names', async () => {
-    const bounds = await import('./walkBounds.js');
+    const bounds = await import('../services/sprites/walkBounds.js');
     const row = getAnimationTrack(WALK_TRACK);
     expect({
       min: bounds.WALK_MIN_FRAME_COUNT,
@@ -474,7 +478,7 @@ describe('walkBounds re-reads the walk row (no call-site churn)', () => {
   });
 
   it('keeps clampFrameCount / clampFps behaving as the walk-track clamps', async () => {
-    const { clampFrameCount, clampFps } = await import('./walkBounds.js');
+    const { clampFrameCount, clampFps } = await import('../services/sprites/walkBounds.js');
     for (const n of [-1, 0, 5, 6, 11.6, 16, 99, 'nope', undefined, null]) {
       expect(clampFrameCount(n)).toBe(clampTrackFrameCount(n, WALK_TRACK));
       expect(clampFps(n)).toBe(clampTrackFps(n, WALK_TRACK));
@@ -494,12 +498,12 @@ describe('sharp-free leaf property', () => {
 
   it.each([
     ['the request-validation graph', join(SERVER_DIR, 'lib', 'validation.js')],
-    ['animationTracks.js', join(SPRITES_DIR, 'animationTracks.js')],
+    ['spriteAnimationTracks.js', join(LIB_DIR, 'spriteAnimationTracks.js')],
     // #3152: the store sits BETWEEN the leaf registry and validation.js — every
     // sprite Zod range now resolves through it — so if it ever reached sharp, the
     // whole split collapses at its narrowest point. It does file I/O (which the
     // leaf below may not), but native image deps are still forbidden.
-    ['animationTrackStore.js', join(SPRITES_DIR, 'animationTrackStore.js')],
+    ['spriteAnimationTrackStore.js', join(LIB_DIR, 'spriteAnimationTrackStore.js')],
     ['walkBounds.js', join(SPRITES_DIR, 'walkBounds.js')],
     ['animationTargets.js', join(SPRITES_DIR, 'animationTargets.js')],
     // #3016: the atlas grid is the ONE definition of a column span, shared by
@@ -515,7 +519,7 @@ describe('sharp-free leaf property', () => {
   });
 
   it('keeps animationTracks.js a true leaf — it imports nothing at all', () => {
-    expect(staticImportSpecifiers(join(SPRITES_DIR, 'animationTracks.js'))).toEqual([]);
+    expect(staticImportSpecifiers(join(LIB_DIR, 'spriteAnimationTracks.js'))).toEqual([]);
   });
 
   it('runs the store→leaf dependency ONE way (#3152)', () => {
@@ -525,10 +529,10 @@ describe('sharp-free leaf property', () => {
     // animationTracks.js" is the natural-looking refactor that would drag fs into
     // the request-validation graph and break the split this whole describe exists
     // to protect.
-    expect(staticImportSpecifiers(join(SPRITES_DIR, 'animationTrackStore.js')))
-      .toContain('./animationTracks.js');
-    const leafClosure = staticImportClosure(join(SPRITES_DIR, 'animationTracks.js'));
-    expect([...leafClosure.files]).not.toContain(join(SPRITES_DIR, 'animationTrackStore.js'));
+    expect(staticImportSpecifiers(join(LIB_DIR, 'spriteAnimationTrackStore.js')))
+      .toContain('./spriteAnimationTracks.js');
+    const leafClosure = staticImportClosure(join(LIB_DIR, 'spriteAnimationTracks.js'));
+    expect([...leafClosure.files]).not.toContain(join(LIB_DIR, 'spriteAnimationTrackStore.js'));
   });
 
   it('actually walks the graph (positive control — the guard is not vacuous)', () => {
@@ -537,7 +541,7 @@ describe('sharp-free leaf property', () => {
     // unresolvable specifier silently truncates it. Pin the first two against a
     // module that genuinely reaches sharp.
     const walkBounds = staticImportClosure(join(SPRITES_DIR, 'walkBounds.js'));
-    expect([...walkBounds.files]).toContain(join(SPRITES_DIR, 'animationTracks.js'));
+    expect([...walkBounds.files]).toContain(join(LIB_DIR, 'spriteAnimationTracks.js'));
 
     const packer = staticImportClosure(join(SPRITES_DIR, 'walkPostprocess.js'));
     expect([...packer.packages], 'walkPostprocess is the native-graph module this split exists to fence off')

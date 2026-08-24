@@ -1,0 +1,183 @@
+/**
+ * Sprites — dynamic chroma-key selection (issue #2896, phase 2).
+ *
+ * The source pipeline hardcoded magenta because its one character wore green;
+ * per the #2895 decision the key is now picked per character from a FIXED set
+ * of three standard keys, by hue distance from the character's own palette
+ * (a green-clothed character keys on magenta; a pink one keys on green/blue).
+ *
+ * Pure module — palette extraction (sharp) lives in normalize.js; this file
+ * is just color math so it stays unit-testable and safe to import anywhere.
+ */
+
+export const CHROMA_KEYS = [
+  { hex: '#FF00FF', name: 'magenta', hue: 300 },
+  { hex: '#00FF00', name: 'green', hue: 120 },
+  { hex: '#0000FF', name: 'blue', hue: 240 },
+];
+
+export const CHROMA_KEY_HEXES = CHROMA_KEYS.map((k) => k.hex);
+
+// Magenta — the source pipeline's only key; the fallback wherever no key has
+// been selected yet (pre-lock generation, legacy imports).
+export const DEFAULT_CHROMA_KEY = CHROMA_KEYS[0].hex;
+
+// Below this hue separation (degrees) between the chosen key and the nearest
+// significant palette color, keying will likely eat character pixels — the
+// selection still returns the best key but carries a warning.
+export const MIN_HUE_SEPARATION = 60;
+
+export function hexToRgb(hex) {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(typeof hex === 'string' ? hex : '');
+  if (!m) throw new Error(`Invalid hex color: ${hex}`);
+  const n = parseInt(m[1], 16);
+  return { r: (n >> 16) & 0xff, g: (n >> 8) & 0xff, b: n & 0xff };
+}
+
+export function rgbToHsv(r, g, b) {
+  const rn = r / 255; const gn = g / 255; const bn = b / 255;
+  const max = Math.max(rn, gn, bn);
+  const min = Math.min(rn, gn, bn);
+  const delta = max - min;
+  let h = 0;
+  if (delta > 0) {
+    if (max === rn) h = 60 * (((gn - bn) / delta) % 6);
+    else if (max === gn) h = 60 * ((bn - rn) / delta + 2);
+    else h = 60 * ((rn - gn) / delta + 4);
+    if (h < 0) h += 360;
+  }
+  return { h, s: max === 0 ? 0 : delta / max, v: max };
+}
+
+export function hueDistance(a, b) {
+  const d = Math.abs(a - b) % 360;
+  return d > 180 ? 360 - d : d;
+}
+
+/**
+ * Pick the key whose hue is farthest from every significant color in the
+ * character's palette.
+ *
+ * `palette` is `[{ r, g, b, count }]` (see extractForegroundPalette). Colors
+ * below the saturation/value floors are ignored — near-grays and near-blacks
+ * have no meaningful hue and never conflict with a saturated key; colors
+ * below `minCountFrac` of the total are single-pixel noise.
+ *
+ * Returns `{ hex, name, minHueDistance, warning }` — never null; a fully
+ * achromatic palette conflicts with nothing, so the first key (magenta, the
+ * legacy default) wins with distance Infinity.
+ */
+function significantHues(palette, { minCountFrac = 0.005, minSaturation = 0.25, minValue = 0.15 } = {}) {
+  const entries = Array.isArray(palette) ? palette : [];
+  const total = entries.reduce((sum, e) => sum + (e.count || 0), 0);
+  return entries
+    .map((e) => ({ ...rgbToHsv(e.r, e.g, e.b), count: e.count || 0 }))
+    .filter((c) => c.count >= total * minCountFrac && c.s >= minSaturation && c.v >= minValue);
+}
+
+/**
+ * Warn when the character's surviving palette sits close in hue to the key
+ * it was GENERATED on: the normalize mask has already discarded any pixel
+ * within the luma threshold of that key, so near-key palette colors imply
+ * exact-key details (a magenta garment on the magenta default) may have been
+ * silently clipped from the immutable locked artifact. Returns a warning
+ * string or null.
+ */
+export function keyProximityWarning(palette, keyHex, { role = 'generation', ...opts } = {}) {
+  const { r, g, b } = hexToRgb(keyHex);
+  const keyHue = rgbToHsv(r, g, b).h;
+  const significant = significantHues(palette, opts);
+  if (!significant.length) return null;
+  const minDist = Math.min(...significant.map((c) => hueDistance(keyHue, c.h)));
+  if (minDist >= MIN_HUE_SEPARATION) return null;
+  // `selected` = the key the artifact will be COMPOSITED onto (runtime keying
+  // would clip character pixels); `generation` = the key it was RENDERED on
+  // (exact-key details are already gone from the mask).
+  return role === 'selected'
+    ? `Character palette sits within ${Math.round(minDist)}° of the selected key ${keyHex} — runtime keying on it would clip character pixels; pick a different key before locking`
+    : `Character palette sits within ${Math.round(minDist)}° of the generation key ${keyHex} — exact-key details may have been clipped by the mask; consider pinning a different key and regenerating before locking`;
+}
+
+/**
+ * Split a key color into its saturated ("high", 255) and dark ("low", 0)
+ * channel indices — the structure every key-parameterized un-key/despill
+ * formula in walkPostprocess.js is written against. The source pipeline
+ * hardcoded magenta (highs r+b, low g); the three standard keys are all
+ * pure-channel colors, so highs/lows fully describe them:
+ *   magenta → highs [0,2], lows [1]
+ *   green   → highs [1],   lows [0,2]
+ *   blue    → highs [2],   lows [0,1]
+ * Channel indices are 0=r, 1=g, 2=b into an RGB(A) pixel.
+ */
+export function keyChannelSplit(hex) {
+  const { r, g, b } = hexToRgb(hex);
+  const values = [r, g, b];
+  const highs = [];
+  const lows = [];
+  values.forEach((v, i) => (v >= 128 ? highs : lows).push(i));
+  if (!highs.length || !lows.length) throw new Error(`Not a usable chroma key: ${hex}`);
+  return { rgb: values, highs, lows };
+}
+
+/**
+ * How key-like a pixel is: min(high channels) − max(low channels).
+ * Positive = the pixel leans toward the key color. For magenta this is the
+ * source pipeline's `min(r,b) − g` exactly.
+ */
+export function keyness(pixel, split) {
+  let minHigh = 255;
+  for (const h of split.highs) minHigh = Math.min(minHigh, pixel[h]);
+  let maxLow = 0;
+  for (const l of split.lows) maxLow = Math.max(maxLow, pixel[l]);
+  return minHigh - maxLow;
+}
+
+/**
+ * Build the per-pixel background-key "share" sampler for a key: the fraction of
+ * a pixel that is the key color, reversing anti-aliased source-over-key
+ * compositing. Measured as the min over the key's (high, low) channel pairs of
+ * (pixel[high] − pixel[low]) / (key[high] − key[low]), clamped to [0, 1] — a
+ * pure-key pixel scores 1, a pixel unlike the key scores 0, an anti-aliased
+ * blend lands in between (the exact weight of the key still contaminating it).
+ *
+ * `keyRgb` is the key as `[r, g, b]` (a nominal key OR a measured border key);
+ * `split` is its keyChannelSplit. The returned sampler reads channels from
+ * `arr` at `base + channelIndex`, so one factory serves both a 3-element pixel
+ * array (`base` 0) and a flat RGB/RGBA buffer (`base` = pixelIndex * channels).
+ * The (high, low) pairs and their spans are precomputed once per key so the
+ * hot per-pixel path only does the reads, subtracts, and min.
+ */
+export function keyShareFn(keyRgb, split) {
+  const pairs = [];
+  for (const h of split.highs) {
+    for (const l of split.lows) pairs.push([h, l, Math.max(1, keyRgb[h] - keyRgb[l])]);
+  }
+  return (arr, base = 0) => {
+    let s = Infinity;
+    for (const [h, l, span] of pairs) {
+      const v = (arr[base + h] - arr[base + l]) / span;
+      if (v < s) s = v;
+    }
+    return s < 0 ? 0 : s > 1 ? 1 : s;
+  };
+}
+
+export function pickChromaKey(palette, opts = {}) {
+  const significant = significantHues(palette, opts);
+
+  let best = null;
+  for (const key of CHROMA_KEYS) {
+    const minDist = significant.length
+      ? Math.min(...significant.map((c) => hueDistance(key.hue, c.h)))
+      : Infinity;
+    if (!best || minDist > best.minHueDistance) {
+      best = { hex: key.hex, name: key.name, minHueDistance: minDist };
+    }
+  }
+  return {
+    ...best,
+    warning: best.minHueDistance < MIN_HUE_SEPARATION
+      ? `Closest palette hue is within ${Math.round(best.minHueDistance)}° of the ${best.name} key — keying may clip character pixels`
+      : null,
+  };
+}

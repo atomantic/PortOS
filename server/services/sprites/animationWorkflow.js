@@ -98,7 +98,9 @@ export const buildGrokI2vTask = ({ prompt, inputAbs, videoAbs, duration }) => (
 export const LOCAL_VIDEO_PROVIDER_ID = 'minimax-h3-local';
 
 /** The provider ids a generate REQUEST may carry. */
-export const ANIMATION_PROVIDER_IDS = Object.freeze(['grok', 'local']);
+// Moved to lib/spriteVocabulary.js in #4901; re-exported for existing callers.
+export { ANIMATION_PROVIDER_IDS } from '../../lib/spriteVocabulary.js';
+import { ANIMATION_PROVIDER_IDS } from '../../lib/spriteVocabulary.js';
 
 /**
  * Absent → grok, so every pre-existing client, persisted retry, and test

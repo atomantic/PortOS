@@ -27,11 +27,11 @@ import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { storedTrackRow } from './spriteTestFixtures.js';
+import { storedTrackRow } from '../services/sprites/spriteTestFixtures.js';
 
 const TEST_ROOT = mkdtempSync(join(tmpdir(), 'sprite-track-store-test-'));
 
-vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
+vi.mock('./fileUtils.js', async (importOriginal) => {
   const actual = await importOriginal();
   Object.assign(actual.PATHS, { data: TEST_ROOT, sprites: join(TEST_ROOT, 'sprites') });
   return actual;
@@ -41,8 +41,8 @@ const {
   getEffectiveAnimationTracks, getEffectiveAnimationTrackIds, __resetAnimationTrackStore,
   animationTrackStorePath, animationTrackSeedPath, ANIMATION_TRACK_STORE_SCHEMA_VERSION,
   classifyStoreReadError,
-} = await import('./animationTrackStore.js');
-const { ANIMATION_TRACKS, WALK_TRACK } = await import('./animationTracks.js');
+} = await import('./spriteAnimationTrackStore.js');
+const { ANIMATION_TRACKS, WALK_TRACK } = await import('./spriteAnimationTracks.js');
 
 const STORE_PATH = animationTrackStorePath();
 

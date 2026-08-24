@@ -13,20 +13,13 @@
 
 // Canonical 8-direction order (the source pipeline's RUNTIME_DIRECTION_ORDER)
 // — atlas row order in later phases depends on this, so keep it stable.
-export const SPRITE_DIRECTIONS = [
-  'south',
-  'south-east',
-  'east',
-  'north-east',
-  'north',
-  'north-west',
-  'west',
-  'south-west',
-];
+// Moved to lib/spriteVocabulary.js in #4901; re-exported for existing callers.
+export { SPRITE_DIRECTIONS, ANCHOR_DIRECTIONS } from '../../lib/spriteVocabulary.js';
+import { SPRITE_DIRECTIONS } from '../../lib/spriteVocabulary.js';
 
 // Directions that get a derived anchor. `south` is never generated — the
 // frozen main reference IS the south anchor.
-export const ANCHOR_DIRECTIONS = SPRITE_DIRECTIONS.filter((d) => d !== 'south');
+
 
 export const anchorIdForDirection = (direction) => `walk-${direction}`;
 
@@ -136,7 +129,7 @@ export function viewGeometryClause(direction) {
 // The sheet's candidate/asset id — the `anchorIdForDirection` analogue for the
 // one reference artifact that has no direction. Lives here with the other
 // target vocabulary so validation.js and the services share one spelling.
-export const TURNAROUND_ID = 'turnaround';
+export { TURNAROUND_ID } from '../../lib/spriteVocabulary.js';
 
 // --- Corrections (#2964 / #3134, made to actually land by #3216) -------------
 //

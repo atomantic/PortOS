@@ -16,7 +16,8 @@
  * records created through the UI only ever get `character`/`place`/`object`.
  */
 
-export const SPRITE_RECORD_KINDS = ['character', 'place', 'object', 'props'];
+export { SPRITE_RECORD_KINDS } from '../../lib/spriteVocabulary.js';
+import { SPRITE_RECORD_KINDS } from '../../lib/spriteVocabulary.js';
 
 // The one import is lib/renderTargets.js, itself a dependency-free leaf, so
 // this module stays safe to import from mocked suites (see the note on
@@ -25,7 +26,10 @@ import { recordRenderPin } from '../../lib/renderTargets.js';
 
 // Record ids double as the on-disk directory name under data/sprites/ — keep
 // them strict kebab-case so a record id can never traverse the filesystem.
-export const SPRITE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
+// Moved to lib/spriteVocabulary.js in #4901 so route schemas can read it
+// without importing this module. Re-exported so existing imports are unchanged.
+export { SPRITE_ID_PATTERN } from '../../lib/spriteVocabulary.js';
+import { SPRITE_ID_PATTERN } from '../../lib/spriteVocabulary.js';
 
 export function isValidSpriteId(id) {
   return typeof id === 'string' && SPRITE_ID_PATTERN.test(id);

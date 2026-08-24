@@ -28,7 +28,6 @@ const PREEXISTING_LIB_TO_SERVICES_ALLOWLIST = new Set([
   'createSettingsGatedSyncScheduler.js',
   'creativeDirectorPrompts.js',
   'promptRunner.js',
-  'spriteValidation.js',
   'stageRunner.js',
   'tuiPromptRunner.js',
 ]);

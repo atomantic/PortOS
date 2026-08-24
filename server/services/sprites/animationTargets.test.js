@@ -99,9 +99,14 @@ describe('resolveAnimationTarget precedence', () => {
     // other track's contract key. Only one track exists today, so stand up a
     // null-fps row via a scoped module mock to keep that branch covered.
     vi.resetModules();
-    const real = await vi.importActual('./animationTracks.js');
+    // Mock the LIB registry, not the services/sprites re-export shim: the row
+    // this resolver sees comes from animationTrackStore.js, which imports
+    // lib/spriteAnimationTracks.js directly (#4901). Mocking the shim would
+    // leave the store reading the real table and silently un-discriminate this
+    // test.
+    const real = await vi.importActual('../../lib/spriteAnimationTracks.js');
     const nullFpsRow = { ...real.ANIMATION_TRACKS.walk, contractFpsField: null };
-    vi.doMock('./animationTracks.js', () => ({
+    vi.doMock('../../lib/spriteAnimationTracks.js', () => ({
       ...real,
       ANIMATION_TRACKS: { walk: nullFpsRow },
       getAnimationTrack: (id) => {
@@ -117,7 +122,7 @@ describe('resolveAnimationTarget precedence', () => {
     expect(resolveWithNullFps({
       runtimeContract: { walkFrameCount: 16, walkFps: 24, null: 24 },
     })).toMatchObject({ frameCount: 16, fps: 10, source: 'app', fpsLocked: false });
-    vi.doUnmock('./animationTracks.js');
+    vi.doUnmock('../../lib/spriteAnimationTracks.js');
     vi.resetModules();
   });
 
