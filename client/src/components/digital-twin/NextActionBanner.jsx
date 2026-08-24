@@ -345,6 +345,7 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
                 </div>
               ) : (
                 <textarea
+                  aria-label="Your answer"
                   value={answer}
                   onChange={(e) => setAnswer(e.target.value)}
                   onKeyDown={handleKeyDown}

@@ -280,6 +280,7 @@ export default function AutomationTab({ appId, appName }) {
                 {/* Row 2: interval + cron + agent options */}
                 <div className="flex flex-wrap items-center gap-2">
                   <select
+                    aria-label="Override interval"
                     value={cronEditing[taskType] !== undefined || isCronExpression(overrideInterval) ? 'cron' : (overrideInterval ?? 'null')}
                     onChange={e => handleIntervalChange(taskType, e.target.value)}
                     className="px-2 py-1 bg-port-bg border border-port-border rounded text-xs text-white focus:border-port-accent focus:outline-hidden"

@@ -428,6 +428,7 @@ export default function GoalsListView({ data, onRefresh, selectedGoalId }) {
               />
               <div className="flex gap-2">
                 <select
+                  aria-label="Horizon"
                   value={newGoal.horizon}
                   onChange={e => setNewGoal({ ...newGoal, horizon: e.target.value })}
                   className="flex-1 sm:flex-none bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white"
@@ -435,6 +436,7 @@ export default function GoalsListView({ data, onRefresh, selectedGoalId }) {
                   {HORIZON_OPTIONS.map(h => <option key={h.value} value={h.value}>{h.label}</option>)}
                 </select>
                 <select
+                  aria-label="Category"
                   value={newGoal.category}
                   onChange={e => setNewGoal({ ...newGoal, category: e.target.value })}
                   className="flex-1 sm:flex-none bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white"

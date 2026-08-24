@@ -292,6 +292,7 @@ export default function FeedsTab({ onRefresh }) {
           {/* Mobile feed selector */}
           <div className="md:hidden shrink-0">
             <select
+              aria-label="Feed"
               value={selectedFeedId || ''}
               onChange={(e) => setSelectedFeedId(e.target.value || null)}
               className="w-full px-3 py-2 bg-port-card border border-port-border rounded-lg text-white text-sm"

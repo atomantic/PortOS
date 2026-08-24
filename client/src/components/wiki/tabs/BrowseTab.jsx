@@ -317,6 +317,7 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
               <div className="flex-1 min-w-0">
                 {editing ? (
                   <textarea
+                    aria-label="Note content"
                     ref={editorRef}
                     value={noteContent}
                     onChange={e => setNoteContent(e.target.value)}

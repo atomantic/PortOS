@@ -349,6 +349,7 @@ function RefRow({ reference, snapshot, checking, editingNotes, onCheck, onMarkRe
       {editingNotes ? (
         <div className="space-y-1">
           <textarea
+            aria-label="Repo notes"
             value={notesDraft}
             onChange={(e) => setNotesDraft(e.target.value)}
             rows={4}
@@ -446,6 +447,7 @@ function AddRefForm({ onSubmit, onCancel }) {
         />
       </FormField>
       <textarea
+        aria-label="Repo notes"
         value={form.notes}
         onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
         rows={3}

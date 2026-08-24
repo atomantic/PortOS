@@ -632,6 +632,7 @@ function SettingsPane({
               </div>
             </div>
             <textarea
+              aria-label="Note"
               value={noteDraft}
               onChange={(e) => setNoteDraft(e.target.value.slice(0, NOTE_MAX))}
               placeholder="Add a note — use this for cover, reshoot at 24fps, etc."

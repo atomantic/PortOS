@@ -38,6 +38,7 @@ export default function VolumeCoverEditorBox({
         </div>
       </div>
       <textarea
+        aria-label="Cover script"
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={() => {

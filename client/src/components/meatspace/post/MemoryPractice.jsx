@@ -439,6 +439,7 @@ function MemoryPracticeRunner({ item, mode, onSelectMode, onExitMode, onBack, on
             </div>
           ) : (
             <textarea
+              aria-label="Your answer"
               ref={inputRef}
               value={answer}
               onChange={e => setAnswer(e.target.value)}
@@ -581,6 +582,7 @@ function MemoryPracticeRunner({ item, mode, onSelectMode, onExitMode, onBack, on
             </div>
           ) : (
             <textarea
+              aria-label="Your answer"
               ref={inputRef}
               value={answer}
               onChange={e => setAnswer(e.target.value)}

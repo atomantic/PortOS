@@ -24,6 +24,7 @@ export default function PromptEditor({ config, promptValue, setPromptValue, edit
         {editingPrompt ? (
           <div className="space-y-2">
             <textarea
+              aria-label="Task prompt"
               value={promptValue}
               onChange={(e) => setPromptValue(e.target.value)}
               disabled={updating}

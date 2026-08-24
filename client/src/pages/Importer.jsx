@@ -1247,6 +1247,7 @@ const IssueCard = memo(function IssueCard({ idx, issue, onPatch, arcRoles, seaso
         {proseExpanded && (
           <textarea
             id={`iss-${idx}-prose`}
+            aria-label="Prose excerpt"
             value={issue.proseExcerpt || ''}
             onChange={(e) => onPatch(idx, { proseExcerpt: e.target.value })}
             // Monospace + tall default so the user sees enough lines to

@@ -219,6 +219,7 @@ export function DoubleMeaningUI({ challenge, inputValue, setInputValue, onSubmit
   ) : (
     <form onSubmit={onSubmit} className="space-y-3">
       <textarea
+        aria-label="Your answer"
         ref={inputRef}
         value={inputValue}
         onChange={e => setInputValue(e.target.value)}
@@ -269,6 +270,7 @@ export function IdiomTwistUI({ challenge, inputValue, setInputValue, onSubmit, i
   ) : (
     <form onSubmit={onSubmit} className="space-y-3">
       <textarea
+        aria-label="Your answer"
         ref={inputRef}
         value={inputValue}
         onChange={e => setInputValue(e.target.value)}

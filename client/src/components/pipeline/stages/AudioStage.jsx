@@ -876,6 +876,7 @@ export default function AudioStage({ issue, onStageUpdate }) {
                       )}
                     </div>
                     <textarea
+                      aria-label={`Dialogue line ${i + 1} text`}
                       value={textValue}
                       onChange={(e) => setDrafts((prev) => ({ ...prev, [i]: e.target.value }))}
                       onBlur={() => handleBlur(i)}

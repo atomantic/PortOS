@@ -649,6 +649,7 @@ function TextInput({ inputRef, value, onChange, onSubmit, placeholder, buttonLab
   return (
     <form onSubmit={onSubmit} className="space-y-3">
       <textarea
+        aria-label={placeholder || 'Your answer'}
         ref={inputRef}
         value={value}
         onChange={e => onChange(e.target.value)}

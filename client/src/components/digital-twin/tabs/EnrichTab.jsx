@@ -372,6 +372,7 @@ export default function EnrichTab({ onRefresh }) {
               ) : (
                 <>
                   <textarea
+                    aria-label="Your answer"
                     value={answer}
                     onChange={(e) => setAnswer(e.target.value)}
                     placeholder="Type your answer here..."
@@ -570,6 +571,7 @@ export default function EnrichTab({ onRefresh }) {
               {writingSamples.map((sample, index) => (
                 <div key={sample._key} className="relative">
                   <textarea
+                    aria-label={`Writing sample ${index + 1}`}
                     value={sample.value}
                     onChange={(e) => updateWritingSample(index, e.target.value)}
                     placeholder={`Paste writing sample ${index + 1} here (emails, messages, docs)...`}

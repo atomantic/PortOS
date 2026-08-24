@@ -765,6 +765,7 @@ export default function GenomeTab() {
                 ))}
               </div>
               <select
+                aria-label="Filter by ClinVar star rating"
                 value={clinvarStarFilter}
                 onChange={(e) => setClinvarStarFilter(Number(e.target.value))}
                 className="px-2 py-1 rounded bg-port-card border border-port-border text-xs text-gray-400 focus:outline-hidden"

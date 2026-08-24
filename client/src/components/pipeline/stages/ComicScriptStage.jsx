@@ -622,6 +622,7 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
           </div>
         </div>
         <textarea
+          aria-label="Cover concept"
           value={draftCoverScript}
           onChange={(e) => setDraftCoverScript(e.target.value)}
           onBlur={() => {
@@ -705,6 +706,7 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
           </div>
         </div>
         <textarea
+          aria-label="Back cover concept"
           value={draftBackCoverScript}
           onChange={(e) => setDraftBackCoverScript(e.target.value)}
           onBlur={() => {
@@ -1080,6 +1082,7 @@ function PageRow({
       ) : null}
       <div className="grid md:grid-cols-2 gap-3 p-3">
         <textarea
+          aria-label="Script draft"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           rows={18}

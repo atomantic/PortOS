@@ -229,6 +229,7 @@ function ScheduleFields({ data, onChange, timezone }) {
       ) : (
         <div className="flex gap-3">
           <select
+            aria-label="Interval"
             value={data.interval}
             onChange={e => onChange('interval', e.target.value)}
             className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
@@ -451,6 +452,7 @@ function JobCard({ job, apps, providers, timezone, onToggle, onTrigger, onDelete
               </FormField>
               <div className="flex gap-3">
                 <select
+                  aria-label="Job type"
                   value={editData.type}
                   onChange={e => setEditData(d => ({ ...d, type: e.target.value }))}
                   className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
@@ -462,6 +464,7 @@ function JobCard({ job, apps, providers, timezone, onToggle, onTrigger, onDelete
                   {isScript && <option value="script">Script Handler</option>}
                 </select>
                 <select
+                  aria-label="Priority"
                   value={editData.priority}
                   onChange={e => setEditData(d => ({ ...d, priority: e.target.value }))}
                   className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
@@ -472,6 +475,7 @@ function JobCard({ job, apps, providers, timezone, onToggle, onTrigger, onDelete
                 </select>
                 {editData.type !== 'shell' && (
                   <select
+                    aria-label="Autonomy level"
                     value={editData.autonomyLevel}
                     onChange={e => setEditData(d => ({ ...d, autonomyLevel: e.target.value }))}
                     className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
@@ -487,6 +491,7 @@ function JobCard({ job, apps, providers, timezone, onToggle, onTrigger, onDelete
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-gray-400">App scope:</span>
                   <select
+                    aria-label="App scope"
                     value={editData.appId || ''}
                     onChange={e => setEditData(d => ({ ...d, appId: e.target.value }))}
                     className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
@@ -512,12 +517,14 @@ function JobCard({ job, apps, providers, timezone, onToggle, onTrigger, onDelete
               {editData.type === 'shell' ? (
                 <>
                   <textarea
+                    aria-label="Shell command"
                     value={editData.command}
                     onChange={e => setEditData(d => ({ ...d, command: e.target.value }))}
                     className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm font-mono h-20"
                     placeholder="Shell command"
                   />
                   <select
+                    aria-label="Trigger action"
                     value={editData.triggerAction}
                     onChange={e => setEditData(d => ({ ...d, triggerAction: e.target.value }))}
                     className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
@@ -534,6 +541,7 @@ function JobCard({ job, apps, providers, timezone, onToggle, onTrigger, onDelete
                 </div>
               ) : (
                 <textarea
+                  aria-label="Prompt template"
                   value={editData.promptTemplate}
                   onChange={e => setEditData(d => ({ ...d, promptTemplate: e.target.value }))}
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm font-mono h-40"
@@ -821,6 +829,7 @@ export default function JobsTab() {
             </FormField>
             <div className="flex gap-3">
               <select
+                aria-label="Priority"
                 value={newJob.priority}
                 onChange={e => setNewJob(j => ({ ...j, priority: e.target.value }))}
                 className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
@@ -831,6 +840,7 @@ export default function JobsTab() {
               </select>
               {newJob.type !== 'shell' && (
                 <select
+                  aria-label="Autonomy level"
                   value={newJob.autonomyLevel}
                   onChange={e => setNewJob(j => ({ ...j, autonomyLevel: e.target.value }))}
                   className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
@@ -846,6 +856,7 @@ export default function JobsTab() {
               <div className="flex items-center gap-2">
                 <span className="text-xs text-gray-400">App scope:</span>
                 <select
+                  aria-label="App scope"
                   value={newJob.appId || ''}
                   onChange={e => setNewJob(j => ({ ...j, appId: e.target.value }))}
                   className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
@@ -865,12 +876,14 @@ export default function JobsTab() {
             {newJob.type === 'shell' ? (
               <>
                 <textarea
+                  aria-label="Shell command"
                   placeholder="Shell command *"
                   value={newJob.command}
                   onChange={e => setNewJob(j => ({ ...j, command: e.target.value }))}
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm font-mono h-20"
                 />
                 <select
+                  aria-label="Trigger action"
                   value={newJob.triggerAction}
                   onChange={e => setNewJob(j => ({ ...j, triggerAction: e.target.value }))}
                   className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
@@ -882,6 +895,7 @@ export default function JobsTab() {
               </>
             ) : (
               <textarea
+                aria-label="Prompt template"
                 placeholder="Prompt template for the agent *"
                 value={newJob.promptTemplate}
                 onChange={e => setNewJob(j => ({ ...j, promptTemplate: e.target.value }))}

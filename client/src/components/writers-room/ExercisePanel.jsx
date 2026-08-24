@@ -189,6 +189,7 @@ export default function ExercisePanel({ activeWork, onClose }) {
             </button>
           </div>
           <textarea
+            aria-label="Exercise text"
             autoFocus
             value={text}
             onChange={(e) => setText(e.target.value)}

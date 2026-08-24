@@ -446,6 +446,7 @@ export default function InboxTab({ onRefresh, settings }) {
                       {editingId === entry.id ? (
                         <div className="flex-1 flex gap-2">
                           <textarea
+                            aria-label="Edit item text"
                             value={editText}
                             onChange={(e) => setEditText(e.target.value)}
                             className="flex-1 px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm resize-none"
@@ -619,6 +620,7 @@ export default function InboxTab({ onRefresh, settings }) {
                     {editingId === entry.id ? (
                       <div className="flex-1 flex gap-2">
                         <textarea
+                          aria-label="Edit item text"
                           value={editText}
                           onChange={(e) => setEditText(e.target.value)}
                           className="flex-1 px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm resize-none"
@@ -804,6 +806,7 @@ export default function InboxTab({ onRefresh, settings }) {
                       {fixingId === entry.id ? (
                         <div className="flex items-center gap-2">
                           <select
+                            aria-label="Fix destination"
                             value={fixDestination}
                             onChange={(e) => setFixDestination(e.target.value)}
                             className="px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-white"

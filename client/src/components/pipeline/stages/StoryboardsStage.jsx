@@ -527,6 +527,7 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
               </div>
               <div className="flex items-start gap-2">
                 <textarea
+                  aria-label="Shot description"
                   value={scene.description || ''}
                   onChange={(e) => updateScene(i, { description: e.target.value })}
                   onBlur={() => persist(scenes)}
@@ -701,6 +702,7 @@ function ShotList({
                 <span className="text-[10px] text-gray-500 font-mono pt-1.5 w-6">{j + 1}</span>
                 <div className="flex-1 flex flex-col gap-1">
                   <textarea
+                    aria-label="Shot description"
                     value={shot.description || ''}
                     onChange={(e) => onUpdateShot(j, { description: e.target.value })}
                     onBlur={onBlurShot}

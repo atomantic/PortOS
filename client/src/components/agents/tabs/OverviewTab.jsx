@@ -540,6 +540,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                     </div>
                     <div className="flex gap-2">
                       <select
+                        aria-label="Provider"
                         value={fnConfig.providerId || ''}
                         onChange={(e) => setFormData(prev => ({
                           ...prev,
@@ -556,6 +557,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                         ))}
                       </select>
                       <select
+                        aria-label="Model"
                         value={fnConfig.model || ''}
                         onChange={(e) => setFormData(prev => ({
                           ...prev,

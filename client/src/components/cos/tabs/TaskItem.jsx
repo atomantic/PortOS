@@ -447,6 +447,7 @@ export default function TaskItem({ task, isSystem, spawning = false, selected = 
               />
               <div className="flex gap-2">
                 <select
+                  aria-label="Provider"
                   value={editData.provider}
                   onChange={e => setEditData(d => ({ ...d, provider: e.target.value, model: '' }))}
                   className="w-36 px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm"
@@ -458,6 +459,7 @@ export default function TaskItem({ task, isSystem, spawning = false, selected = 
                 </select>
                 {editModels.length > 0 && (
                   <select
+                    aria-label="Model"
                     value={editData.model}
                     onChange={e => setEditData(d => ({ ...d, model: e.target.value }))}
                     className="flex-1 px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm"

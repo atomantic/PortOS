@@ -179,6 +179,7 @@ function TaskForm({ form, setForm, onSave, onCancel, saveLabel, timezone }) {
         ) : (
           <div className="flex gap-3">
             <select
+              aria-label="Interval"
               value={form.interval}
               onChange={e => update('interval', e.target.value)}
               className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
@@ -200,6 +201,7 @@ function TaskForm({ form, setForm, onSave, onCancel, saveLabel, timezone }) {
       {/* Priority + autonomy */}
       <div className="flex gap-3">
         <select
+          aria-label="Priority"
           value={form.priority}
           onChange={e => update('priority', e.target.value)}
           className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
@@ -207,6 +209,7 @@ function TaskForm({ form, setForm, onSave, onCancel, saveLabel, timezone }) {
           {PRIORITY_OPTIONS.map(p => <option key={p} value={p}>{p}</option>)}
         </select>
         <select
+          aria-label="Autonomy level"
           value={form.autonomyLevel}
           onChange={e => update('autonomyLevel', e.target.value)}
           className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"

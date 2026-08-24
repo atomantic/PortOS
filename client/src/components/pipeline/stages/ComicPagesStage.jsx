@@ -345,6 +345,7 @@ export default function ComicPagesStage({ issue, onStageUpdate, actionsGated = f
                     <div className="flex items-start gap-2">
                       <span className="text-xs text-gray-600 mt-2 w-8 shrink-0">P{ni + 1}</span>
                       <textarea
+                        aria-label="Panel description"
                         value={panel.description || ''}
                         onChange={(e) => updatePanel(pi, ni, { description: e.target.value })}
                         onBlur={() => persist(pagesRef.current)}

@@ -568,6 +568,7 @@ export default function TasteTab({ onRefresh }) {
 
             <div className="mb-6">
               <textarea
+                aria-label="Your answer"
                 value={answer}
                 onChange={(e) => setAnswer(e.target.value)}
                 placeholder="Share your thoughts... be as specific as possible."
@@ -783,6 +784,7 @@ export default function TasteTab({ onRefresh }) {
           </div>
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
             <select
+              aria-label="AI provider and model"
               value={selectedProvider ? `${selectedProvider.providerId}:${selectedProvider.model}` : ''}
               onChange={(e) => {
                 const [providerId, model] = e.target.value.split(':');

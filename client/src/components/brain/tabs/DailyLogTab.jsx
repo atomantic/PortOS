@@ -890,6 +890,7 @@ export default function DailyLogTab() {
         ) : (
           <>
             <textarea
+              aria-label="Log entry"
               ref={editorRef}
               value={content}
               onChange={(e) => setContent(e.target.value)}

@@ -111,6 +111,7 @@ export default function InterviewTab({ onRefresh }) {
 
           {/* Textarea */}
           <textarea
+            aria-label="Personality assessment"
             value={content}
             onChange={(e) => setContent(e.target.value)}
             placeholder="Paste your personality assessment here (from ChatGPT, Claude, etc.)..."

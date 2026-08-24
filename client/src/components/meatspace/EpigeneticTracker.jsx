@@ -155,6 +155,7 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
               className="col-span-2 px-3 py-2 bg-port-bg border border-port-border rounded text-sm text-white placeholder-gray-600 focus:outline-hidden focus:border-port-accent"
             />
             <select
+              aria-label="Category"
               value={customForm.category}
               onChange={(e) => setCustomForm(prev => ({ ...prev, category: e.target.value }))}
               className="px-3 py-2 bg-port-bg border border-port-border rounded text-sm text-white focus:outline-hidden"
@@ -164,6 +165,7 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
               <option value="custom">Custom</option>
             </select>
             <select
+              aria-label="Frequency"
               value={customForm.frequency}
               onChange={(e) => setCustomForm(prev => ({ ...prev, frequency: e.target.value }))}
               className="px-3 py-2 bg-port-bg border border-port-border rounded text-sm text-white focus:outline-hidden"

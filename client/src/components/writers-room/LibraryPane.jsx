@@ -192,6 +192,7 @@ export default function LibraryPane({ folders, works, activeWorkId, onSelectWork
             className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs min-h-[44px]"
           />
           <select
+            aria-label="Work kind"
             value={workKind}
             onChange={(e) => setWorkKind(e.target.value)}
             className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs min-h-[44px]"

@@ -238,6 +238,7 @@ function GoalPicker({ goals, pending, disabled, open, onToggle, onPick }) {
   return (
     <div className="inline-flex items-center gap-1.5">
       <select
+        aria-label="Attach to goal"
         defaultValue=""
         onChange={(e) => {
           const id = e.target.value;
@@ -707,6 +708,7 @@ export default function Ask() {
         <form onSubmit={handleSend} className="border-t border-port-border bg-port-card p-3 md:p-4">
           <div className="flex items-end gap-2">
             <textarea
+              aria-label="Question"
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
               onKeyDown={(e) => {

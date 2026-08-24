@@ -323,6 +323,7 @@ export function CategoryEditor({
             maxLength={120}
           />
           <textarea
+            aria-label="Prompt fragment"
             value={newPrompt}
             onChange={(e) => setNewPrompt(e.target.value)}
             placeholder="Prompt fragment (subject only)"
@@ -441,6 +442,7 @@ function VariationCard({
               maxLength={120}
             />
             <textarea
+              aria-label="Prompt fragment"
               value={editPrompt}
               onChange={(e) => setEditPrompt(e.target.value)}
               rows={3}

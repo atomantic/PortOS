@@ -664,6 +664,7 @@ export default function WorldTab({ agentId }) {
               <h3 className="font-semibold text-white">Activity History</h3>
               <div className="flex items-center gap-2">
                 <select
+                  aria-label="Filter history"
                   value={historyFilter}
                   onChange={e => setHistoryFilter(e.target.value)}
                   className="px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-white"
@@ -747,6 +748,7 @@ export default function WorldTab({ agentId }) {
             {showAddForm && (
               <div className="mb-3 p-3 bg-port-bg border border-port-border rounded space-y-2">
                 <select
+                  aria-label="Action type"
                   value={newActionType}
                   onChange={e => { setNewActionType(e.target.value); setNewActionParams({}); }}
                   className="w-full px-2 py-1.5 bg-port-card border border-port-border rounded text-white text-sm"
@@ -919,6 +921,7 @@ export default function WorldTab({ agentId }) {
             </div>
             <div className="grid grid-cols-2 gap-2 mb-3">
               <select
+                aria-label="Block type"
                 value={blockType}
                 onChange={(e) => setBlockType(e.target.value)}
                 className="px-3 py-2 bg-port-bg border border-port-border rounded text-white"
@@ -930,6 +933,7 @@ export default function WorldTab({ agentId }) {
                 <option value="leaves">Leaves</option>
               </select>
               <select
+                aria-label="Build action"
                 value={buildAction}
                 onChange={(e) => setBuildAction(e.target.value)}
                 className="px-3 py-2 bg-port-bg border border-port-border rounded text-white"

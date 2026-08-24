@@ -355,6 +355,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
                       <div className="flex items-center justify-between">
                         <span className="text-xs text-gray-500 font-medium">Sync Method</span>
                         <select
+                          aria-label="Sync method"
                           value={account.syncMethod || 'claude-mcp'}
                           onChange={(e) => handleSyncMethodChange(account, e.target.value)}
                           className="bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white"

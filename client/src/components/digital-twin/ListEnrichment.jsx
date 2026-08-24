@@ -404,6 +404,7 @@ export default function ListEnrichment({
 
             {editingDocument ? (
               <textarea
+                aria-label="Document content"
                 value={documentContent}
                 onChange={(e) => setDocumentContent(e.target.value)}
                 rows={15}

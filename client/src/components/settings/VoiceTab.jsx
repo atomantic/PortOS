@@ -367,6 +367,7 @@ export function VoiceTab() {
           <div className="flex items-center gap-2">
             <select
               value={activeVoice || ''}
+              aria-label="Voice"
               onChange={(e) => {
                 const val = e.target.value;
                 if (engine === 'kokoro') { patch('tts.kokoro.voice', val); return; }

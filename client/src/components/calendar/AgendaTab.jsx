@@ -101,6 +101,7 @@ export default function AgendaTab({ accounts }) {
         </div>
         {accounts.length > 1 && (
           <select
+            aria-label="Filter by account"
             value={accountFilter}
             onChange={(e) => setAccountFilter(e.target.value)}
             className="px-3 py-2 bg-port-card border border-port-border rounded-lg text-sm text-white focus:outline-none focus:border-port-accent"

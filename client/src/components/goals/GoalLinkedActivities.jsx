@@ -32,6 +32,7 @@ export default function GoalLinkedActivities({
       {activities.length > 0 && (
         <div className="flex gap-1">
           <select
+            aria-label="Activity"
             value={selectedActivity}
             onChange={e => setSelectedActivity(e.target.value)}
             className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white"

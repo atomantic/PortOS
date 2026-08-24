@@ -370,6 +370,7 @@ function PromptResultField({ label, value, negative, onCopy, onApply, applyLabel
         </div>
       </div>
       <textarea
+        aria-label="Prompt"
         readOnly
         value={value}
         rows={4}

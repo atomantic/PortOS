@@ -447,6 +447,7 @@ export default function InboxTab({ accounts }) {
           />
         </div>
         <select
+          aria-label="Account"
           value={selectedAccount}
           onChange={(e) => setSelectedAccount(e.target.value)}
           className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white focus:outline-none focus:border-port-accent"

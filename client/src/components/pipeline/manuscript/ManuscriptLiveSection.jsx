@@ -156,6 +156,7 @@ export default function ManuscriptLiveSection({
         </div>
 
         <textarea
+          aria-label="Manuscript content"
           ref={(el) => { taRef.current = el; }}
           value={content}
           onChange={(e) => onContentChange(e.target.value)}

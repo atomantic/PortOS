@@ -363,6 +363,7 @@ export default function ToolsTab({ agentId, agent }) {
                 <h3 className="font-semibold text-white">Feed Browser</h3>
                 <div className="flex gap-2">
                   <select
+                    aria-label="Sort feed"
                     value={feedSort}
                     onChange={(e) => setFeedSort(e.target.value)}
                     className="px-2 py-1 text-sm bg-port-bg border border-port-border rounded text-white"
@@ -557,6 +558,7 @@ export default function ToolsTab({ agentId, agent }) {
 
               <div className="flex gap-2 mb-3">
                 <select
+                  aria-label="Submolt"
                   value={selectedSubmolt}
                   onChange={(e) => setSelectedSubmolt(e.target.value)}
                   className="px-3 py-2 bg-port-bg border border-port-border rounded text-white flex-1"
@@ -587,6 +589,7 @@ export default function ToolsTab({ agentId, agent }) {
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white mb-2"
               />
               <textarea
+                aria-label="Post content"
                 value={postContent}
                 onChange={(e) => setPostContent(e.target.value)}
                 placeholder="Post content (markdown)..."
@@ -725,6 +728,7 @@ export default function ToolsTab({ agentId, agent }) {
                 )}
 
                 <textarea
+                  aria-label="Comment content"
                   value={commentContent}
                   onChange={(e) => setCommentContent(e.target.value)}
                   placeholder="Comment content (markdown)..."

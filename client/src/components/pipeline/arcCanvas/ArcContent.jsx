@@ -66,6 +66,7 @@ export default function ArcContent({ series, onSeriesUpdate, onRegisterDraftFlus
     return (
       <div className="space-y-2">
         <textarea
+          aria-label="Logline"
           value={draft.logline || ''}
           onChange={(e) => setDraft({ ...draft, logline: e.target.value })}
           placeholder="One-sentence whole-arc pitch"
@@ -74,6 +75,7 @@ export default function ArcContent({ series, onSeriesUpdate, onRegisterDraftFlus
           maxLength={500}
         />
         <textarea
+          aria-label="Summary"
           value={draft.summary || ''}
           onChange={(e) => setDraft({ ...draft, summary: e.target.value })}
           placeholder="Multi-volume / multi-season summary (~500 words)"
@@ -82,6 +84,7 @@ export default function ArcContent({ series, onSeriesUpdate, onRegisterDraftFlus
           maxLength={8000}
         />
         <textarea
+          aria-label="Protagonist arc"
           value={draft.protagonistArc || ''}
           onChange={(e) => setDraft({ ...draft, protagonistArc: e.target.value })}
           placeholder="Protagonist arc across all volumes / seasons"

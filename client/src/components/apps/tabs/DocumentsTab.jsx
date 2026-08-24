@@ -191,6 +191,7 @@ export default function DocumentsTab({ appId, repoPath }) {
                   </div>
                 </div>
                 <textarea
+                  aria-label="Document content"
                   value={editContent}
                   onChange={e => setEditContent(e.target.value)}
                   className="w-full h-[500px] bg-[var(--port-terminal-bg)] text-[var(--port-terminal-text)] border border-port-border rounded-lg p-3 font-mono text-sm resize-y focus:outline-hidden focus:border-port-accent/50"

@@ -277,6 +277,7 @@ export default function ReviewTab() {
                       <div className="text-xs text-gray-400">Log progress for this event:</div>
                       <div className="flex gap-2">
                         <select
+                          aria-label="Goal"
                           value={editForm.goalId}
                           onChange={e => setEditForm(f => ({ ...f, goalId: e.target.value }))}
                           className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white"

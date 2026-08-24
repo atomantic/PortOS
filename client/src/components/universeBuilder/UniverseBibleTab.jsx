@@ -140,6 +140,7 @@ export default function BibleTab({
               Starter idea
             </FieldLabel>
             <textarea
+              aria-label="Universe starter prompt"
               value={draft.starterPrompt}
               onChange={(e) => updateDraft({ starterPrompt: e.target.value })}
               placeholder="moebius and scavengers reign meets Prophet inspired sci fi universe"

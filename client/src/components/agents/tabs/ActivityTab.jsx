@@ -66,6 +66,7 @@ export default function ActivityTab({ agentId }) {
         <h2 className="text-lg font-semibold text-white">Activity Log</h2>
         <div className="flex gap-2">
           <select
+            aria-label="Filter by action"
             value={actionFilter}
             onChange={(e) => setActionFilter(e.target.value)}
             className="px-3 py-1 bg-port-bg border border-port-border rounded text-white text-sm"

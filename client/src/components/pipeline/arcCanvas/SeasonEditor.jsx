@@ -74,6 +74,7 @@ export default function SeasonEditor({ series, season, seasons, onSeriesUpdate, 
         maxLength={500}
       />
       <textarea
+        aria-label="Season synopsis"
         value={draft.synopsis || ''}
         onChange={(e) => setDraft({ ...draft, synopsis: e.target.value })}
         disabled={contentDisabled}
@@ -106,6 +107,7 @@ export default function SeasonEditor({ series, season, seasons, onSeriesUpdate, 
       </div>
       <div className="flex items-center gap-2">
         <select
+          aria-label="Status"
           value={draft.status || 'draft'}
           onChange={(e) => setDraft({ ...draft, status: e.target.value })}
           className="px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm"

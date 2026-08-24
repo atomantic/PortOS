@@ -122,6 +122,7 @@ export default function DigestTab() {
           <h3 className="text-lg font-semibold text-white">Weekly Digest</h3>
           {digestList.length > 0 && (
             <select
+              aria-label="Week"
               value={selectedWeek || currentDigest?.weekId || ''}
               onChange={(e) => loadWeek(e.target.value)}
               className="bg-port-card border border-port-border rounded px-2 py-1 text-sm text-gray-300"

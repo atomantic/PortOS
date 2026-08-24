@@ -84,6 +84,7 @@ function CreateLoopForm({ providers, onCreated }) {
       </div>
 
       <textarea
+        aria-label="Loop prompt"
         value={prompt}
         onChange={e => setPrompt(e.target.value)}
         placeholder="What should this loop do? e.g., check if the deployment finished and report status"

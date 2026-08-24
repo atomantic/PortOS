@@ -219,6 +219,7 @@ export default function BriefingTab() {
           <h3 className="text-lg font-semibold text-white">Daily Briefing</h3>
           {briefings.length > 0 && (
             <select
+              aria-label="Date"
               value={selectedDate || ''}
               onChange={(e) => loadBriefing(e.target.value)}
               className="bg-port-card border border-port-border rounded px-2 py-1 text-sm text-gray-300"

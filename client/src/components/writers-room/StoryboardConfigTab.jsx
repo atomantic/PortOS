@@ -84,6 +84,7 @@ function WorldStyleRow({ value, presets, onChange }) {
         )}
       </div>
       <select
+        aria-label="Preset"
         value={value.presetId}
         onChange={(e) => pickPreset(e.target.value)}
         className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-[11px] text-gray-200"

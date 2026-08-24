@@ -528,6 +528,7 @@ export default function LinksTab({ onRefresh }) {
                     />
                   </div>
                   <textarea
+                    aria-label="Description"
                     value={editForm.description}
                     onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
                     className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm resize-none"
@@ -536,6 +537,7 @@ export default function LinksTab({ onRefresh }) {
                   />
                   <div className="flex gap-2">
                     <select
+                      aria-label="Link type"
                       value={editForm.linkType}
                       onChange={(e) => setEditForm({ ...editForm, linkType: e.target.value })}
                       className="px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm"

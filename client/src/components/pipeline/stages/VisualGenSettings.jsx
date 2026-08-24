@@ -158,6 +158,7 @@ function VisualGenSettingsBody({ cfg, update, stageLabel, systemSettings, imageM
             Local image model
           </div>
           <select
+            aria-label="Image model"
             value={cfg.imageModelId || ''}
             onChange={(e) => update({ imageModelId: e.target.value || null })}
             className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-xs"

@@ -685,6 +685,7 @@ export default function AIProviders() {
         <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-4">
           <div className="flex flex-col sm:flex-row gap-2 sm:gap-4">
             <select
+              aria-label="Active provider"
               value={activeProviderId || ''}
               onChange={(e) => handleSetActive(e.target.value)}
               className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white w-full sm:w-auto"
@@ -696,6 +697,7 @@ export default function AIProviders() {
             </select>
 
             <select
+              aria-label="Workspace"
               value={selectedWorkspace}
               onChange={(e) => setSelectedWorkspace(e.target.value)}
               className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white w-full sm:w-auto"
@@ -708,6 +710,7 @@ export default function AIProviders() {
           </div>
 
           <textarea
+            aria-label="Prompt"
             value={runPrompt}
             onChange={(e) => setRunPrompt(e.target.value)}
             placeholder="Enter your prompt..."

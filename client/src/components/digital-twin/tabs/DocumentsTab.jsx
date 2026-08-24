@@ -287,6 +287,7 @@ export default function DocumentsTab({ onRefresh }) {
             <div className="flex-1 overflow-auto">
               {editMode ? (
                 <textarea
+                  aria-label="Soul document"
                   value={editContent}
                   onChange={(e) => setEditContent(e.target.value)}
                   className="w-full h-full p-4 bg-port-bg text-white font-mono text-sm resize-none focus:outline-hidden"

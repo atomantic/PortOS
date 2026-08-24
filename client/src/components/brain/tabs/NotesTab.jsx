@@ -270,6 +270,7 @@ export default function NotesTab() {
         <div className="p-3 border-b border-port-border space-y-2">
           <div className="flex items-center gap-2">
             <select
+              aria-label="Vault"
               value={selectedVaultId || ''}
               onChange={e => {
                 setSelectedVaultId(e.target.value);
@@ -544,6 +545,7 @@ export default function NotesTab() {
               <div className="flex-1 min-w-0">
                 {editing ? (
                   <textarea
+                    aria-label="Note content"
                     ref={editorRef}
                     value={noteContent}
                     onChange={e => setNoteContent(e.target.value)}

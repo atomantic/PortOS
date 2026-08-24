@@ -88,6 +88,7 @@ export default function TickingClockEditor({ clock, disabled, onChange }) {
           </div>
           <textarea
             id="ticking-clock-stakes"
+            aria-label="Stakes"
             value={c.stakes || ''}
             onChange={(e) => patch({ stakes: e.target.value })}
             placeholder="Stakes — what happens if the clock runs out"

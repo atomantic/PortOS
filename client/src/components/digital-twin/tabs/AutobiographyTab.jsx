@@ -381,6 +381,7 @@ export default function AutobiographyTab({ onRefresh }) {
           </div>
 
           <textarea
+            aria-label="Your story"
             value={storyContent}
             onChange={(e) => setStoryContent(e.target.value)}
             placeholder="Start writing your story... Take about 5 minutes."
@@ -492,6 +493,7 @@ export default function AutobiographyTab({ onRefresh }) {
                 {isEditing ? (
                   <>
                     <textarea
+                      aria-label="Edit story"
                       value={editContent}
                       onChange={(e) => setEditContent(e.target.value)}
                       className="w-full h-48 bg-port-bg border border-port-border rounded p-3 text-white text-sm resize-y focus:outline-hidden focus:border-port-accent/50"

@@ -81,6 +81,7 @@ function DescriptionField({ entry, descField, fallbackField, max, editable, onCo
   }
   return (
     <textarea
+      aria-label="Description"
       value={draft.value}
       onChange={draft.onChange}
       onBlur={draft.onBlur}
@@ -274,6 +275,7 @@ function WardrobeRow({ wardrobe, editable, onCommit, onRemove }) {
         </button>
       </div>
       <textarea
+        aria-label="Outfit description"
         value={draftFor('description')}
         onChange={(e) => setDraft('description', e.target.value)}
         onBlur={() => commit('description')}

@@ -216,6 +216,7 @@ export default function JiraReports() {
         <div className="flex items-center gap-2">
           {apps.length > 1 && (
             <select
+              aria-label="Filter by app"
               value={filterAppId}
               onChange={e => handleFilterApp(e.target.value)}
               className="bg-port-card border border-port-border rounded px-2 py-1.5 text-sm text-white"

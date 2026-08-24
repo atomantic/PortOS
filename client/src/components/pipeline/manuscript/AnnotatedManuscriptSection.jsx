@@ -70,6 +70,7 @@ export default function AnnotatedManuscriptSection({
     <ManuscriptSectionFrame section={section} saveState={saveState} onRevert={onRevert} onFormat={onFormat} onReformat={onReformat} headerExtra={editToggle} registerRef={registerRef}>
       {editing ? (
         <textarea
+          aria-label="Manuscript content"
           value={content}
           onChange={(e) => onContentChange(e.target.value)}
           onBlur={onBlurSave}

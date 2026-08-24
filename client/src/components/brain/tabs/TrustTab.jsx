@@ -210,6 +210,7 @@ export default function TrustTab({ onRefresh }) {
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <span className="text-sm text-gray-500">Filter by status:</span>
         <select
+          aria-label="Filter by status"
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
           className="px-3 py-1.5 bg-port-card border border-port-border rounded text-sm text-white"

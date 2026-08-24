@@ -66,6 +66,7 @@ export default function PublishedTab({ agentId }) {
         </FormField>
         <div className="flex items-center gap-2 ml-auto">
           <select
+            aria-label="Time range"
             value={publishedDays}
             onChange={(e) => setPublishedDays(parseInt(e.target.value, 10))}
             className="px-2 py-1 text-sm bg-port-bg border border-port-border rounded text-white"

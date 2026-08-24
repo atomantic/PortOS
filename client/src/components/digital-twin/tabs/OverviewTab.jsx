@@ -428,6 +428,7 @@ export default function OverviewTab({ status, settings, onRefresh }) {
 
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4 mb-4">
           <select
+            aria-label="AI provider and model"
             value={selectedProvider ? `${selectedProvider.providerId}:${selectedProvider.model}` : ''}
             onChange={(e) => {
               const [providerId, model] = e.target.value.split(':');

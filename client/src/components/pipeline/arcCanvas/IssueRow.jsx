@@ -95,6 +95,7 @@ export default function IssueRow({ issue, seasons, onIssuesUpdate }) {
       ) : (
         <div className="px-2 pb-2 flex items-center gap-1.5">
           <select
+            aria-label="Season"
             value={issue.seasonId || ''}
             onChange={(e) => handleReassign(e.target.value)}
             disabled={reassigning}

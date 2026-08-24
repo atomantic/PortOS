@@ -123,6 +123,7 @@ export default function CompositeSheetsEditor({
       {adding && (
         <div className="bg-port-bg border border-port-border rounded p-2 flex flex-col gap-2">
           <select
+            aria-label="Sheet kind"
             value={newKind}
             onChange={(e) => setNewKind(e.target.value)}
             className="bg-port-card border border-port-border rounded px-2 py-1 text-white text-sm min-h-[40px]"
@@ -140,6 +141,7 @@ export default function CompositeSheetsEditor({
             maxLength={120}
           />
           <textarea
+            aria-label="Sheet prompt"
             value={newPrompt}
             onChange={(e) => setNewPrompt(e.target.value)}
             placeholder={newKind === 'world_pitch_poster'
@@ -183,6 +185,7 @@ export default function CompositeSheetsEditor({
                 body={(
                   <div className="flex flex-col gap-1">
                     <select
+                      aria-label="Sheet kind"
                       value={editKind}
                       onChange={(e) => setEditKind(e.target.value)}
                       className="bg-port-card border border-port-border rounded px-2 py-1 text-white text-sm min-h-[40px]"
@@ -199,6 +202,7 @@ export default function CompositeSheetsEditor({
                       maxLength={120}
                     />
                     <textarea
+                      aria-label="Sheet prompt"
                       value={editPrompt}
                       onChange={(e) => setEditPrompt(e.target.value)}
                       rows={8}

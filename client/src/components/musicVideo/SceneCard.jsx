@@ -49,6 +49,7 @@ export default function SceneCard({
         </div>
       </div>
       <textarea
+        aria-label="Shot prompt"
         value={scene.prompt || ''} rows={2}
         onChange={(e) => onEditLocal(scene.sceneId, { prompt: e.target.value })}
         onBlur={(e) => onSave(scene.sceneId, { prompt: e.target.value })}
@@ -75,6 +76,7 @@ export default function SceneCard({
       {/* Reference frame — the still image that seeds this shot (Phase 1b) */}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
         <textarea
+          aria-label="Reference frame prompt"
           value={scene.framePrompt || ''} rows={2}
           onChange={(e) => onEditLocal(scene.sceneId, { framePrompt: e.target.value })}
           onBlur={(e) => onSave(scene.sceneId, { framePrompt: e.target.value || null })}

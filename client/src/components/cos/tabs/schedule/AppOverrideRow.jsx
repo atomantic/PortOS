@@ -122,6 +122,7 @@ const AppOverrideRow = memo(function AppOverrideRow({ app, taskType, globalInter
       <div className="flex items-center gap-2 flex-wrap">
         <div className="flex items-center gap-1">
           <select
+            aria-label="Interval"
             value={cronEditing || hasCron ? 'cron' : (currentInterval || '')}
             onChange={(e) => handleIntervalChange(e.target.value)}
             disabled={updating}
