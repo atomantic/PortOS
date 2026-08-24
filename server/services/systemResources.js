@@ -15,7 +15,7 @@ import { z } from 'zod';
 import { query } from '../lib/db.js';
 import { PATHS, dirSize } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from '../lib/promptRunner.js';
+import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from './promptRunner.js';
 import { getDataOverview } from './dataManager.js';
 import { listHfModelStorage, listLoraStorage } from './mediaModelStorage.js';
 import * as ollamaManager from './ollamaManager.js';

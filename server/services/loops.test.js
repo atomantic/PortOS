@@ -24,7 +24,7 @@ vi.mock('./runner.js', () => ({
   createRun: vi.fn()
 }));
 
-vi.mock('../lib/promptRunner.js', () => ({
+vi.mock('./promptRunner.js', () => ({
 assertProvider: (provider, { message, code, status = 503 } = {}) => {
     if (provider) return;
     const err = new Error(message || 'No AI provider available');
@@ -42,7 +42,7 @@ vi.mock('./providers.js', () => ({
 
 import { tryReadFile, atomicWrite } from '../lib/fileUtils.js';
 import { createRun } from './runner.js';
-import { runPromptThroughProvider, resolveProviderAndModel } from '../lib/promptRunner.js';
+import { runPromptThroughProvider, resolveProviderAndModel } from './promptRunner.js';
 import {
   createLoop,
   stopLoop,

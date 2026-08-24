@@ -27,7 +27,7 @@ import { getDaySummary } from './humanActivity.js';
 import * as journal from './brainJournal.js';
 import { getPerson } from './tribe.js';
 import { getProviderById } from './providers.js';
-import { runPromptThroughProvider } from '../lib/promptRunner.js';
+import { runPromptThroughProvider } from './promptRunner.js';
 
 const SETTINGS_FILE = join(PATHS.brain, 'activity-digest-settings.json');
 

@@ -74,7 +74,7 @@ vi.mock('./socialAccounts.js', () => ({
   getAllAccounts: vi.fn(() => [])
 }));
 
-vi.mock('../lib/promptRunner.js', () => ({
+vi.mock('./promptRunner.js', () => ({
   runPromptThroughProvider: vi.fn()
 }));
 
@@ -87,7 +87,7 @@ import { existsSync } from 'fs';
 import { getProviderById, getActiveProvider } from './providers.js';
 import { buildPrompt } from './promptService.js';
 import { safeJSONParse, atomicWrite } from '../lib/fileUtils.js';
-import { runPromptThroughProvider } from '../lib/promptRunner.js';
+import { runPromptThroughProvider } from './promptRunner.js';
 
 import {
   digitalTwinEvents,

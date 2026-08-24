@@ -12,7 +12,7 @@
  * Uses AI for interpretation — supports both API and CLI providers.
  */
 
-import { runPromptThroughProvider } from '../../lib/promptRunner.js';
+import { runPromptThroughProvider } from '../../services/promptRunner.js';
 import { getActiveProvider, getProviderById } from '../../services/providers.js';
 
 /**

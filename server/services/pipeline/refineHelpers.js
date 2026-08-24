@@ -1,4 +1,4 @@
-import { runStagedLLM } from '../../lib/stageRunner.js';
+import { runStagedLLM } from '../stageRunner.js';
 import { ServerError } from '../../lib/errorHandler.js';
 
 // Pass `logTag: null` to suppress the default runId log so a caller that

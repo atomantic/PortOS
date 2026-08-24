@@ -1038,7 +1038,7 @@ describe('pipeline routes', () => {
   });
 
   it('POST /issues/:id/stages/storyboards/extract-scenes runs the extractor and persists scenes (visualPrompt → description)', async () => {
-    const extractor = await import('../lib/sceneExtractor.js');
+    const extractor = await import('../services/sceneExtractor.js');
     const spy = vi.spyOn(extractor, 'extractScenes').mockResolvedValue({
       extracted: {
         title: 'The Pilot', logline: 'A heist gone wrong.',
@@ -1094,7 +1094,7 @@ describe('pipeline routes', () => {
   });
 
   it('POST /issues/:id/stages/storyboards/extract-scenes does NOT pair a new providerOverride with the stale series model', async () => {
-    const extractor = await import('../lib/sceneExtractor.js');
+    const extractor = await import('../services/sceneExtractor.js');
     const spy = vi.spyOn(extractor, 'extractScenes').mockResolvedValue({
       extracted: { title: 'T', logline: 'L', scenes: [] },
       runId: 'r', providerId: 'mock', model: 'mock-model',
@@ -1118,7 +1118,7 @@ describe('pipeline routes', () => {
   });
 
   it('POST /issues/:id/stages/storyboards/extract-scenes with from=prose routes to the prose stage output', async () => {
-    const extractor = await import('../lib/sceneExtractor.js');
+    const extractor = await import('../services/sceneExtractor.js');
     const spy = vi.spyOn(extractor, 'extractScenes').mockResolvedValue({
       extracted: { title: null, logline: null, scenes: [{ visualPrompt: 'a paragraph beat' }] },
       runId: 'run-scenes-2', providerId: 'mock', model: 'mock-model',
@@ -1145,7 +1145,7 @@ describe('pipeline routes', () => {
   });
 
   it('POST /issues/:id/stages/storyboards/extract-scenes with force=true overwrites existing scenes', async () => {
-    const extractor = await import('../lib/sceneExtractor.js');
+    const extractor = await import('../services/sceneExtractor.js');
     const spy = vi.spyOn(extractor, 'extractScenes').mockResolvedValue({
       extracted: { title: null, logline: null, scenes: [{ visualPrompt: 'fresh scene' }] },
       runId: 'run-scenes-3', providerId: 'mock', model: 'mock-model',
@@ -1171,7 +1171,7 @@ describe('pipeline routes', () => {
   });
 
   it('POST /issues/:id/stages/storyboards/extract-scenes overlays the canonical numbering on LLM scenes (hybrid: alignment + dialogue preserved)', async () => {
-    const extractor = await import('../lib/sceneExtractor.js');
+    const extractor = await import('../services/sceneExtractor.js');
     // The LLM extraction supplies rich fields (dialogue/visualPrompt); the
     // canonical list overlays its numbering/sluglines. The LLM may number /
     // slug the scenes differently — the overlay must win on identity.
@@ -1230,7 +1230,7 @@ describe('pipeline routes', () => {
   });
 
   it('POST /issues/:id/stages/storyboards/extract-scenes uses the canonical list alone when there is no source text (deterministic, no LLM)', async () => {
-    const extractor = await import('../lib/sceneExtractor.js');
+    const extractor = await import('../services/sceneExtractor.js');
     const spy = vi.spyOn(extractor, 'extractScenes');
 
     const app = makeApp();
@@ -1266,7 +1266,7 @@ describe('pipeline routes', () => {
   });
 
   it('POST /issues/:id/stages/storyboards/extract-scenes falls back to the LLM when the beat sheet has no scene list', async () => {
-    const extractor = await import('../lib/sceneExtractor.js');
+    const extractor = await import('../services/sceneExtractor.js');
     const spy = vi.spyOn(extractor, 'extractScenes').mockResolvedValue({
       extracted: { title: null, logline: null, scenes: [{ visualPrompt: 'llm scene' }] },
       runId: 'run-fallback', providerId: 'mock', model: 'mock-model',

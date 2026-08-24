@@ -5,12 +5,12 @@
 // series.cast → references into universe entities.
 
 import { getUniverse, updateUniverse, listUniverses, joinInfluenceList } from './universeBuilder.js';
-import { extractBible } from '../lib/bibleExtractor.js';
+import { extractBible } from './bibleExtractor.js';
 import {
   BIBLE_KIND, BIBLE_KINDS, BIBLE_FIELD, BIBLE_KEYS, BIBLE_SOURCE, BIBLE_LIMITS, mergeExtractedBible,
   listSheetPointers, applySheetPointerToCharacter, isSeriesScopedCanonEntry,
 } from '../lib/storyBible.js';
-import { runStagedLLM } from '../lib/stageRunner.js';
+import { runStagedLLM } from './stageRunner.js';
 import { runPromptRefine } from './pipeline/refineHelpers.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { shortId } from '../lib/fileUtils.js';

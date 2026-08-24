@@ -12,7 +12,7 @@ import { join } from 'path';
 import { PATHS, ensureDir, atomicWrite, tryReadFile } from '../lib/fileUtils.js';
 import { randomUUID } from 'crypto';
 import { createRun } from './runner.js';
-import { resolveProviderAndModel, runPromptThroughProvider } from '../lib/promptRunner.js';
+import { resolveProviderAndModel, runPromptThroughProvider } from './promptRunner.js';
 import { getAllProviders, getActiveProvider } from './providers.js';
 
 export const loopEvents = new EventEmitter();

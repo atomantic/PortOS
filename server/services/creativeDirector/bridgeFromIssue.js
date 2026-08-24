@@ -25,7 +25,7 @@
  * is itself reachable from seriesAutopilot's teaser step.
  */
 
-import { runStagedLLM } from '../../lib/stageRunner.js';
+import { runStagedLLM } from '../stageRunner.js';
 import {
   CD_BRIDGE_STAGE,
   shapeProposal,

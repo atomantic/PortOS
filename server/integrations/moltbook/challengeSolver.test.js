@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('../../lib/promptRunner.js', () => ({ runPromptThroughProvider: vi.fn() }));
+vi.mock('../../services/promptRunner.js', () => ({ runPromptThroughProvider: vi.fn() }));
 vi.mock('../../services/providers.js', () => ({
   getActiveProvider: vi.fn(),
   getProviderById: vi.fn(),
 }));
 
-import { runPromptThroughProvider } from '../../lib/promptRunner.js';
+import { runPromptThroughProvider } from '../../services/promptRunner.js';
 import { getActiveProvider, getProviderById } from '../../services/providers.js';
 import { solveChallenge } from './challengeSolver.js';
 

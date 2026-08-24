@@ -32,7 +32,7 @@ import { query, ensureSchema } from '../lib/db.js';
 import { getLocalParts } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
 import { getProviderById } from './providers.js';
-import { runPromptThroughProvider } from '../lib/promptRunner.js';
+import { runPromptThroughProvider } from './promptRunner.js';
 
 const DIR = PATHS.digitalTwin;
 const TASTE_OBSERVED_FILE = join(DIR, 'taste-observed.json');

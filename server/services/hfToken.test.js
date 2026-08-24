@@ -6,7 +6,7 @@ const { mockGetSettings, mockTryReadFile } = vi.hoisted(() => ({
 }));
 
 vi.mock('../services/settings.js', () => ({ getSettings: mockGetSettings }));
-vi.mock('./fileUtils.js', () => ({ tryReadFile: mockTryReadFile }));
+vi.mock('../lib/fileUtils.js', () => ({ tryReadFile: mockTryReadFile }));
 
 import { hfChildEnv } from './hfToken.js';
 

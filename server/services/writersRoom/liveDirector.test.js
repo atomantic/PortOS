@@ -13,7 +13,7 @@ vi.mock('../../lib/fileUtils.js', async () => {
 
 // Stub the staged-LLM runner so the suggest path doesn't reach a real provider.
 const runStagedLLM = vi.fn();
-vi.mock('../../lib/stageRunner.js', () => ({ runStagedLLM: (...a) => runStagedLLM(...a) }));
+vi.mock('../stageRunner.js', () => ({ runStagedLLM: (...a) => runStagedLLM(...a) }));
 
 // Mock the Creative Director store + video-model helper so the CD-bridge send
 // path is a focused unit test of the orchestration (create → setTreatment →

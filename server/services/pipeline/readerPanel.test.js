@@ -19,7 +19,7 @@ vi.mock('../../lib/fileUtils.js', () => ({
   tryReadFile: (...a) => tryReadFile(...a),
   safeJSONParse: (s) => (s == null ? null : JSON.parse(s)),
 }));
-vi.mock('../../lib/stageRunner.js', () => ({ runStagedLLM: vi.fn() }));
+vi.mock('../stageRunner.js', () => ({ runStagedLLM: vi.fn() }));
 vi.mock('./readerPanelDigest.js', () => ({
   computeSourceContentHash: (...a) => computeSourceContentHash(...a),
   renderDigestText: (d) => JSON.stringify(d),

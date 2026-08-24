@@ -58,10 +58,10 @@ const { ptyInstances, ptySpawnMock, runnerMocks, shellMocks, runsTmpDirRef, resp
 runnerMocks.getRunsPath.mockImplementation(() => runsTmpDirRef.current);
 
 vi.mock('node-pty', () => ({ spawn: (...args) => ptySpawnMock(...args) }));
-vi.mock('../services/runner.js', () => runnerMocks);
-vi.mock('../services/shell.js', () => shellMocks);
-vi.mock('./fileUtils.js', async () => {
-  const actual = await vi.importActual('./fileUtils.js');
+vi.mock('./runner.js', () => runnerMocks);
+vi.mock('./shell.js', () => shellMocks);
+vi.mock('../lib/fileUtils.js', async () => {
+  const actual = await vi.importActual('../lib/fileUtils.js');
   // Imported here rather than relied on from the module scope: vi.mock
   // factories are hoisted above the import list.
   const { resolve: resolvePath } = await import('path');
@@ -103,8 +103,8 @@ vi.mock('./fileUtils.js', async () => {
 });
 
 import { cleanTuiResponse, resolveTuiResponseText, executeTuiRun } from './tuiPromptRunner.js';
-import { markHostShuttingDown, resetHostShutdownFlagForTests } from './hostShutdown.js';
-import { SELF_CLEARING_RESUBMIT_INTERVAL_MS, SELF_CLEARING_RESUBMIT_ECHO_MS, TUI_INPUT_READY_DEADLINE_MS } from './tuiHandshake.js';
+import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../lib/hostShutdown.js';
+import { SELF_CLEARING_RESUBMIT_INTERVAL_MS, SELF_CLEARING_RESUBMIT_ECHO_MS, TUI_INPUT_READY_DEADLINE_MS } from '../lib/tuiHandshake.js';
 
 const makeFakePty = () => {
   const fake = {

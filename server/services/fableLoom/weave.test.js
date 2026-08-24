@@ -14,7 +14,7 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
 });
 
 const runStagedLLM = vi.hoisted(() => vi.fn());
-vi.mock('../../lib/stageRunner.js', () => ({ runStagedLLM }));
+vi.mock('../stageRunner.js', () => ({ runStagedLLM }));
 
 const getUniverseMock = vi.hoisted(() => vi.fn(async () => null));
 vi.mock('../universeBuilder.js', () => ({ getUniverse: getUniverseMock }));

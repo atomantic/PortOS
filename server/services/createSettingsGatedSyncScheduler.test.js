@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const scheduleMock = vi.fn();
-vi.mock('../services/eventScheduler.js', () => ({ schedule: (...args) => scheduleMock(...args) }));
+vi.mock('./eventScheduler.js', () => ({ schedule: (...args) => scheduleMock(...args) }));
 
 const { createSyncScheduler } = await import('./createSettingsGatedSyncScheduler.js');
 

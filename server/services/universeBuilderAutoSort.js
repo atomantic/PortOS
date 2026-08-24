@@ -23,7 +23,7 @@ import {
 import { VALID_TARGET_KINDS } from './universeBuilderPromote.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { extractJson as extractJsonShared } from '../lib/jsonExtract.js';
-import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from '../lib/promptRunner.js';
+import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from './promptRunner.js';
 
 // The 3 real trunks — derived from BIBLE_FIELD via universeBuilderPromote so
 // adding a new canon kind reaches this resolver automatically.

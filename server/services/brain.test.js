@@ -118,7 +118,7 @@ vi.mock('./instances.js', () => ({
 // return canned responses; the runner-internal mechanics (spawn args, --model
 // flag injection, stdio shape, gemini-cli --output-format) are covered by
 // runner.test.js, not here.
-vi.mock('../lib/promptRunner.js', () => ({
+vi.mock('./promptRunner.js', () => ({
 assertProvider: (provider, { message, code, status = 503 } = {}) => {
     if (provider) return;
     const err = new Error(message || 'No AI provider available');
@@ -128,7 +128,7 @@ assertProvider: (provider, { message, code, status = 503 } = {}) => {
   runPromptThroughProvider: vi.fn()
 }));
 
-import { runPromptThroughProvider } from '../lib/promptRunner.js';
+import { runPromptThroughProvider } from './promptRunner.js';
 import * as githubCloner from './githubCloner.js';
 import * as storage from './brainStorage.js';
 import { deleteMemoryAssets } from './chatgptImport.js';

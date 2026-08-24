@@ -7,7 +7,7 @@
  * Built on the leaf helpers in ./context.js.
  */
 
-import { runStagedLLM } from '../../../lib/stageRunner.js';
+import { runStagedLLM } from '../../stageRunner.js';
 import { ServerError } from '../../../lib/errorHandler.js';
 import { stripAnsi } from '../../../lib/ansiStrip.js';
 import { ARC_LOCKABLE_FIELDS, getSeries, updateSeries } from '../series.js';

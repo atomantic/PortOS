@@ -10,7 +10,7 @@ vi.mock('../../../lib/fileUtils.js', async (importActual) => ({
   ensureDir: vi.fn(async () => {}),
 }));
 
-vi.mock('../../../lib/stageRunner.js', () => ({
+vi.mock('../../stageRunner.js', () => ({
   runStagedLLM: vi.fn(),
   resolveStageContext: vi.fn(async () => ({ contextWindow: 200_000 })),
 }));
@@ -34,7 +34,7 @@ vi.mock('../readerPanelDigest.js', () => ({
 }));
 
 const fileUtils = await import('../../../lib/fileUtils.js');
-const stageRunner = await import('../../../lib/stageRunner.js');
+const stageRunner = await import('../../stageRunner.js');
 const issuesSvc = await import('../issues.js');
 const digest = await import('../readerPanelDigest.js');
 const {

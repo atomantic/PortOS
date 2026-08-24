@@ -21,7 +21,7 @@
 import { join } from 'path';
 import { rm } from 'fs/promises';
 import { PATHS, atomicWrite, ensureDir, tryReadFile, safeJSONParse } from '../../lib/fileUtils.js';
-import { runStagedLLM } from '../../lib/stageRunner.js';
+import { runStagedLLM } from '../stageRunner.js';
 import {
   PANEL_PERSONA_IDS,
   minePanelDisagreements,

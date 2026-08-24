@@ -36,7 +36,7 @@ function partial(overrides) {
 vi.mock('./series.js', partial({ getSeries: vi.fn(async () => ({ id: 'ser-test', severityWeights: null })) }));
 vi.mock('./issues.js', partial({ listIssues: vi.fn(async () => []) }));
 vi.mock('../settings.js', partial({ getSettings: vi.fn(async () => ({})) }));
-vi.mock('../../lib/stageRunner.js', partial({ runStageScopedInlineLLM: vi.fn(async () => ({ content: {} })) }));
+vi.mock('../stageRunner.js', partial({ runStageScopedInlineLLM: vi.fn(async () => ({ content: {} })) }));
 
 // The four passes whose interleaving this suite is about. Each appends to the
 // shared `order` log so the test can read the real execution sequence.

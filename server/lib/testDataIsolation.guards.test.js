@@ -72,7 +72,7 @@ const SELF = relative(REPO_ROOT, fileURLToPath(import.meta.url)).split(sep).join
 //     feed a real vision model, and skips itself when the directory is absent.
 // A future false positive belongs here too — with a sentence saying why it's safe.
 const ALLOWED = new Set([
-  'server/lib/creativeDirectorPrompts.test.js',
+  'server/services/creativeDirectorPrompts.test.js',
   'server/services/visionTest.integration.test.js',
 ]);
 

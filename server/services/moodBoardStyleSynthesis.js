@@ -12,7 +12,7 @@
 
 import { parseLLMJSON, resolveAPIProvider } from './aiProvider.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { assertProvider, runPromptThroughProvider } from '../lib/promptRunner.js';
+import { assertProvider, runPromptThroughProvider } from './promptRunner.js';
 import { trimTo } from '../lib/storyBible.js';
 import {
   sanitizeInfluences,

@@ -8,7 +8,7 @@ const runPromptThroughProvider = vi.fn();
 vi.mock('./providers.js', () => ({ getProviderById }));
 vi.mock('./brainStorage.js', () => ({ loadMeta }));
 vi.mock('./chatgptImport.js', () => ({ readArchivedConversation }));
-vi.mock('../lib/promptRunner.js', () => ({ runPromptThroughProvider }));
+vi.mock('./promptRunner.js', () => ({ runPromptThroughProvider }));
 
 let summarizer;
 

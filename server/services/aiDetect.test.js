@@ -11,12 +11,12 @@ vi.mock('./providers.js', () => ({
   getProviderById: vi.fn()
 }));
 
-vi.mock('../lib/promptRunner.js', () => ({
+vi.mock('./promptRunner.js', () => ({
   runPromptThroughProvider: vi.fn()
 }));
 
 import { getActiveProvider, getProviderById } from './providers.js';
-import { runPromptThroughProvider } from '../lib/promptRunner.js';
+import { runPromptThroughProvider } from './promptRunner.js';
 import { detectAppWithAi } from './aiDetect.js';
 
 const VALID_DETECTION_JSON = JSON.stringify({

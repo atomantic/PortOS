@@ -22,7 +22,7 @@ import { PATHS, atomicWrite, isPathInsideDir } from '../lib/fileUtils.js';
 import { findFfmpeg, runFfmpegProcess } from '../lib/ffmpeg.js';
 import { chiptuneScoreSchema, CHIPTUNE_LIMITS, CHIPTUNE_NOISE_PRESETS, scoreDurationSec } from '../lib/chiptuneScore.js';
 import { renderScoreToWav } from '../lib/chiptuneRender.js';
-import { resolveProviderAndModel, assertProvider, runPromptThroughProvider } from '../lib/promptRunner.js';
+import { resolveProviderAndModel, assertProvider, runPromptThroughProvider } from './promptRunner.js';
 import * as tracks from './tracks/index.js';
 import { getAppById, PORTOS_APP_ID } from './apps.js';
 

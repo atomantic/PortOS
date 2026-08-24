@@ -4,7 +4,7 @@ import { getSettings } from './settings.js';
 import { getProviderById, getAllProviders } from './providers.js';
 import { buildRulesPromptSection } from './messageTriageRules.js';
 import { PATHS, tryReadFile } from '../lib/fileUtils.js';
-import { runPromptThroughProvider } from '../lib/promptRunner.js';
+import { runPromptThroughProvider } from './promptRunner.js';
 import { extractJson } from '../lib/jsonExtract.js';
 
 const EVAL_PROMPT = `You are an email triage assistant. For each email below, recommend ONE action and a brief reason.

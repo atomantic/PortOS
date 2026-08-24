@@ -16,7 +16,7 @@
  *   user disabling the sync mid-session doesn't keep polling until restart.
  */
 
-import { schedule } from '../services/eventScheduler.js';
+import { schedule } from './eventScheduler.js';
 
 /**
  * Build a `start*Scheduler()` function for one settings-gated sync domain.

@@ -9,7 +9,7 @@
 import { randomUUID } from 'crypto';
 import { parseLLMJSON, resolveAPIProvider } from './aiProvider.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { assertProvider, assertVisionRunUsedImages, runPromptThroughProvider } from '../lib/promptRunner.js';
+import { assertProvider, assertVisionRunUsedImages, runPromptThroughProvider } from './promptRunner.js';
 import { trimTo } from '../lib/storyBible.js';
 import {
   sanitizeInfluences,

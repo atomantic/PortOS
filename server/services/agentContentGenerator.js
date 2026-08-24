@@ -7,7 +7,7 @@
 
 import * as agentActivity from './agentActivity.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
-import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from '../lib/promptRunner.js';
+import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from './promptRunner.js';
 
 /**
  * Parse JSON from AI response text (handles markdown blocks, extra text)

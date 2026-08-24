@@ -24,7 +24,7 @@
  * trio — same LLM-call + shape + apply structure, one altitude down.
  */
 
-import { runStagedLLM } from '../../../lib/stageRunner.js';
+import { runStagedLLM } from '../../stageRunner.js';
 import { ServerError } from '../../../lib/errorHandler.js';
 import { getSeries } from '../series.js';
 import { listIssues, updateStageWithLatest, TEXT_STAGE_IDS } from '../issues.js';

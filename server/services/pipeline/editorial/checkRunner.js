@@ -17,7 +17,7 @@
 
 import { randomUUID } from 'crypto';
 import { createSseRunner } from '../../../lib/sseUtils.js';
-import { runStagedLLM, runInlineLLM, runStageScopedInlineLLM, resolveStageContext } from '../../../lib/stageRunner.js';
+import { runStagedLLM, runInlineLLM, runStageScopedInlineLLM, resolveStageContext } from '../../stageRunner.js';
 import { planManuscriptPass, fitContextToManuscriptFloor, estimateTokens, MANUSCRIPT_FLOOR_TOKENS } from '../../../lib/contextBudget.js';
 import { getEnabledChecks, getEnabledCheckRows, getAllChecks, applySeriesCheckConfig, orderChecksByDependencies, buildCustomCheck, CUSTOM_CHECK_ID_PREFIX } from '../../../lib/editorial/index.js';
 import { getSettings } from '../../settings.js';

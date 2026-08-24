@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('../services/runner.js', () => ({
+vi.mock('./runner.js', () => ({
   createRun: vi.fn(),
   executeApiRun: vi.fn(),
   executeCliRun: vi.fn(),
@@ -32,7 +32,7 @@ vi.mock('./tuiPromptRunner.js', () => ({
 // tests can drive the active/by-id lookups directly. `getAllProviders` is
 // mocked too so the retry-with-fallback path (which enumerates providers to
 // look up the configured fallback) can be driven directly from tests.
-vi.mock('../services/providers.js', () => ({
+vi.mock('./providers.js', () => ({
   getActiveProvider: vi.fn(),
   getProviderById: vi.fn(),
   getAllProviders: vi.fn().mockResolvedValue({ activeProvider: null, providers: [] }),
@@ -42,7 +42,7 @@ vi.mock('../services/providers.js', () => ({
 // fallback retry to cancel the deferred investigation task. Mock the export
 // to a spy so tests can assert it was/wasn't invoked without wiring up the
 // full task system.
-vi.mock('../services/autoFixer.js', () => ({
+vi.mock('./autoFixer.js', () => ({
   noteFallbackStarted: vi.fn(),
   noteFallbackHandled: vi.fn(),
   noteFallbackFailed: vi.fn(),
@@ -53,17 +53,17 @@ vi.mock('../services/autoFixer.js', () => ({
 // service being present. By default the mock returns null so the retry
 // short-circuits and the original error is rethrown — individual tests
 // override the return value to enable the retry branch.
-vi.mock('./aiToolkitState.js', () => ({
+vi.mock('../lib/aiToolkitState.js', () => ({
   getAIToolkitInstance: vi.fn().mockReturnValue(null),
 }));
 
-const runner = await import('../services/runner.js');
+const runner = await import('./runner.js');
 const tuiRunner = await import('./tuiPromptRunner.js');
-const providers = await import('../services/providers.js');
-const autoFixer = await import('../services/autoFixer.js');
-const toolkitState = await import('./aiToolkitState.js');
-const { ERROR_CATEGORIES } = await import('./aiToolkit/errorDetection.js');
-const { CREATIVE_LATITUDE_HEADING, withCreativeLatitude } = await import('./creativeLatitude.js');
+const providers = await import('./providers.js');
+const autoFixer = await import('./autoFixer.js');
+const toolkitState = await import('../lib/aiToolkitState.js');
+const { ERROR_CATEGORIES } = await import('../lib/aiToolkit/errorDetection.js');
+const { CREATIVE_LATITUDE_HEADING, withCreativeLatitude } = await import('../lib/creativeLatitude.js');
 const { runPromptThroughProvider, resolveProviderAndModel, resolveEffectiveModel, pickConfigCorrectedModel, normalizeResponseSchema, coerceResponseToSchema, isSchemaTypeCategory } = await import('./promptRunner.js');
 
 const apiProvider = (extra = {}) => ({

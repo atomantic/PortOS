@@ -25,7 +25,7 @@ vi.mock('../sharing/peerSync.js', () => mockNoPeerSync());
 
 // Stub the staged-LLM runner so the test owns the LLM response shape.
 // Each test sets `stageRunnerSpy = vi.fn(...)` to control what comes back.
-vi.mock('../../lib/stageRunner.js', () => ({
+vi.mock('../stageRunner.js', () => ({
   runStagedLLM: vi.fn((...args) => stageRunnerSpy(...args)),
   extractJson: (raw) => JSON.parse(raw),
   // Large window by default so completeness runs as a single call (mode:

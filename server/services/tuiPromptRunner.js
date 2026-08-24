@@ -38,16 +38,16 @@
 import { spawn as ptySpawn } from 'node-pty';
 
 import { join, resolve } from 'path';
-import { ensureDir, PATHS, tryReadFile } from './fileUtils.js';
-import { createStreamingAnsiStripper, stripAnsi } from './ansiStrip.js';
+import { ensureDir, PATHS, tryReadFile } from '../lib/fileUtils.js';
+import { createStreamingAnsiStripper, stripAnsi } from '../lib/ansiStrip.js';
 import {
   createImmediateFallbackSignalDetector,
   createTerminalModelErrorDetector,
   createTerminalRequestTimeoutDetector,
-} from './aiToolkit/errorDetection.js';
-import { getRunsPath, finalizeRunRecord, emitRunStarted, registerActiveRun, unregisterActiveRun, consumeRunStopRequested, resolveRunCwd } from '../services/runner.js';
-import { registerExternalSession, unregisterExternalSession, isExternalSessionAttached, pasteToSession } from '../services/shell.js';
-import { isHostShuttingDown } from './hostShutdown.js';
+} from '../lib/aiToolkit/errorDetection.js';
+import { getRunsPath, finalizeRunRecord, emitRunStarted, registerActiveRun, unregisterActiveRun, consumeRunStopRequested, resolveRunCwd } from './runner.js';
+import { registerExternalSession, unregisterExternalSession, isExternalSessionAttached, pasteToSession } from './shell.js';
+import { isHostShuttingDown } from '../lib/hostShutdown.js';
 import {
   DEFAULT_TUI_PROMPT_DELAY_MS,
   PASTE_MARKER_POLL_MS,
@@ -69,10 +69,10 @@ import {
   detectMissingTuiBinary,
   createSelfClearingSignalGate,
   SUBMIT_KEY,
-} from './tuiHandshake.js';
-import { buildCliChildEnv } from './cliChildEnv.js';
-import { isCodexCommand } from './codex.js';
-import { isClaudeCommand } from './providerModels.js';
+} from '../lib/tuiHandshake.js';
+import { buildCliChildEnv } from '../lib/cliChildEnv.js';
+import { isCodexCommand } from '../lib/codex.js';
+import { isClaudeCommand } from '../lib/providerModels.js';
 
 // One-shot defaults that don't apply to the long-running agent path:
 //   - hard run cap (5 min vs unbounded for agents)

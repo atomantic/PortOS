@@ -20,7 +20,7 @@ import { randomUUID } from 'crypto';
 import { join } from 'path';
 import { PATHS, atomicWrite, readJSONFile } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
-import { resolveProviderAndModel, runPromptThroughProvider, assertProvider } from '../lib/promptRunner.js';
+import { resolveProviderAndModel, runPromptThroughProvider, assertProvider } from './promptRunner.js';
 import {
   PERSONALITY_TAXONOMY_VERSION,
   PERSONALITY_TRAIT_KEYS,

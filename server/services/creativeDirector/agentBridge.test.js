@@ -18,7 +18,7 @@ vi.mock('../cos.js', () => ({
   reviveBlockedTask: mocks.reviveBlockedTask,
   cosEvents: { emit: mocks.emit },
 }));
-vi.mock('../../lib/creativeDirectorPrompts.js', () => ({
+vi.mock('../creativeDirectorPrompts.js', () => ({
   buildTreatmentPrompt: mocks.buildTreatmentPrompt,
   buildEvaluatePrompt: mocks.buildEvaluatePrompt,
   buildPlanPrompt: mocks.buildPlanPrompt,

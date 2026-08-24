@@ -27,7 +27,7 @@
  * re-extract).
  */
 
-import { runStagedLLM } from '../../lib/stageRunner.js';
+import { runStagedLLM } from '../stageRunner.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { trimTo } from '../../lib/storyBible.js';
 import {

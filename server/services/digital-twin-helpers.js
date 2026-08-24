@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { existsSync } from 'fs';
 import { ensureDir, PATHS, safeJSONParse } from '../lib/fileUtils.js';
-import { runPromptThroughProvider } from '../lib/promptRunner.js';
+import { runPromptThroughProvider } from './promptRunner.js';
 import { clearTombstone, tombstoneTimestamp, supersedingTimestamp } from '../lib/tombstones.js';
 
 export const DIGITAL_TWIN_DIR = PATHS.digitalTwin;

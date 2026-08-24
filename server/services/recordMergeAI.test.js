@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Mock the prompt runner so the test never tries to spawn a CLI / API provider.
 const resolveProviderAndModelMock = vi.fn();
 const runPromptThroughProviderMock = vi.fn();
-vi.mock('../lib/promptRunner.js', () => ({
+vi.mock('./promptRunner.js', () => ({
   assertProvider: (provider, { message, code, status = 503 } = {}) => {
     if (provider) return;
     const err = new Error(message || 'No AI provider available');

@@ -18,7 +18,7 @@
  * intent + a completed OAuth connection.
  */
 
-import { createSyncScheduler } from '../lib/createSettingsGatedSyncScheduler.js';
+import { createSyncScheduler } from './createSettingsGatedSyncScheduler.js';
 import { getSpotifyConfig, runSync } from './spotifySync.js';
 
 /**

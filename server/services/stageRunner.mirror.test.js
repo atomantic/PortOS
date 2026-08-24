@@ -1,6 +1,6 @@
 /**
  * Mirror parity test for the `KNOWN_MODEL_CONTEXT_WINDOWS` table, which lives
- * in both server/lib/stageRunner.js and client/src/utils/providers.js (the
+ * in both server/services/stageRunner.js and client/src/utils/providers.js (the
  * client can't import server modules, so the table is duplicated behind a
  * "Keep in sync" comment on each side).
  *
@@ -21,7 +21,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { compareDeclaration } from './mirrorParity.js';
+import { compareDeclaration } from '../lib/mirrorParity.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -60,7 +60,7 @@ describe('stageRunner↔client providers context-window mirror parity', () => {
       const { serverDecl, clientDecl, serverNorm, clientNorm } =
         compareDeclaration(serverSrc, clientSrc, name);
 
-      expect(serverDecl, `server/lib/stageRunner.js is missing: ${name}`).not.toBeNull();
+      expect(serverDecl, `server/services/stageRunner.js is missing: ${name}`).not.toBeNull();
       expect(clientDecl, `client/src/utils/providers.js is missing: ${name}`).not.toBeNull();
       expect(
         clientNorm,

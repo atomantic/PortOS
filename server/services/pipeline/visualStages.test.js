@@ -113,7 +113,7 @@ const DEFAULT_RUN_STAGED_LLM = async () => ({
   model: 'gpt-4o',
 });
 const runStagedLLMMock = vi.fn(DEFAULT_RUN_STAGED_LLM);
-vi.mock('../../lib/stageRunner.js', () => ({ runStagedLLM: (...a) => runStagedLLMMock(...a) }));
+vi.mock('../stageRunner.js', () => ({ runStagedLLM: (...a) => runStagedLLMMock(...a) }));
 
 vi.mock('../../lib/mediaModels.js', () => ({
   getDefaultVideoModelId: () => 'ltx-default',

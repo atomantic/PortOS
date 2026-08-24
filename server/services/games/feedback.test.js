@@ -25,7 +25,7 @@ vi.mock('../providers.js', () => ({
   })),
 }));
 
-vi.mock('../../lib/promptRunner.js', () => ({
+vi.mock('../promptRunner.js', () => ({
   resolveEffectiveModel: vi.fn((_provider, model) => model),
   runPromptThroughProvider: vi.fn(async () => ({
     text: 'Add a victory cue.',
@@ -46,7 +46,7 @@ vi.mock('../tracks/index.js', () => ({
   getTrack: vi.fn(async (id) => ({ id, title: 'Example Theme', audioFilename: 'theme.ogg' })),
 }));
 
-import { runPromptThroughProvider } from '../../lib/promptRunner.js';
+import { runPromptThroughProvider } from '../promptRunner.js';
 import { getProviderById } from '../providers.js';
 import { requestGameFeedback } from './feedback.js';
 

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { readFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { applyTemplate } from './promptTemplate.js';
+import { applyTemplate } from '../lib/promptTemplate.js';
 
 // Resolve the templates from disk so the tests exercise the real Prompts
 // Manager templates — if a future edit breaks an unwrapped {{var}} or a
@@ -25,7 +25,7 @@ const loadStage = async (stageName) => {
 
 // Mock the prompt-service buildPrompt to render the on-disk template through
 // the same engine production uses, without needing a live aiToolkit instance.
-vi.mock('../services/promptService.js', () => ({
+vi.mock('./promptService.js', () => ({
   buildPrompt: vi.fn(async (stageName, view) => {
     const template = await loadStage(stageName);
     return applyTemplate(template, view);

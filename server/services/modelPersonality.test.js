@@ -15,7 +15,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) =>
   makePathsProxy(await importOriginal(), { dataRoot: TEST_DATA_ROOT }));
 
 // Full stub — promptRunner drags in the runner/provider stack transitively.
-vi.mock('../lib/promptRunner.js', () => ({
+vi.mock('./promptRunner.js', () => ({
   resolveProviderAndModel: vi.fn(),
   runPromptThroughProvider: vi.fn(),
   assertProvider: (provider, { message } = {}) => {
@@ -29,7 +29,7 @@ vi.mock('./digital-twin-meta.js', () => ({
   loadMeta: vi.fn(async () => ({}))
 }));
 
-const { resolveProviderAndModel, runPromptThroughProvider } = await import('../lib/promptRunner.js');
+const { resolveProviderAndModel, runPromptThroughProvider } = await import('./promptRunner.js');
 const { buildPrompt } = await import('./promptService.js');
 const { loadMeta } = await import('./digital-twin-meta.js');
 const svc = await import('./modelPersonality.js');

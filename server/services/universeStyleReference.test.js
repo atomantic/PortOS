@@ -4,13 +4,13 @@ vi.mock('./aiProvider.js', async (importActual) => {
   const actual = await importActual();
   return { ...actual, resolveAPIProvider: vi.fn() };
 });
-vi.mock('../lib/promptRunner.js', async (importActual) => {
+vi.mock('./promptRunner.js', async (importActual) => {
   const actual = await importActual();
   return { ...actual, runPromptThroughProvider: vi.fn() };
 });
 
 const aiProvider = await import('./aiProvider.js');
-const promptRunner = await import('../lib/promptRunner.js');
+const promptRunner = await import('./promptRunner.js');
 const {
   analyzeUniverseStyleReference,
   buildStyleReferenceDiff,

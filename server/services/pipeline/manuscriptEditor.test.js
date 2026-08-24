@@ -21,7 +21,7 @@ vi.mock('crypto', async () => {
 vi.mock('../instances.js', () => mockNoPeers());
 vi.mock('../sharing/peerSync.js', () => mockNoPeerSync());
 
-vi.mock('../../lib/stageRunner.js', () => ({
+vi.mock('../stageRunner.js', () => ({
   runStagedLLM: vi.fn((...args) => stageRunnerSpy(...args)),
   extractJson: (raw) => JSON.parse(raw),
   // Large window so manuscript-fix runs as a single call (mode: 'whole').

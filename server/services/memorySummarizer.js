@@ -20,7 +20,7 @@
 import { getProviderById } from './providers.js';
 import { loadMeta } from './brainStorage.js';
 import { readArchivedConversation } from './chatgptImport.js';
-import { runPromptThroughProvider } from '../lib/promptRunner.js';
+import { runPromptThroughProvider } from './promptRunner.js';
 
 // Preferred summarizer model when the Brain default doesn't resolve. gpt-oss:20b
 // is the typical Brain default and has ample context for a full transcript.

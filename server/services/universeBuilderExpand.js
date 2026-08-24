@@ -37,7 +37,7 @@ import {
   assertProvider,
   resolveProviderAndModel,
   runPromptThroughProvider,
-} from "../lib/promptRunner.js";
+} from "./promptRunner.js";
 
 const LABEL_MAX = 80;
 const NARRATIVE_REPAIR_MAX_ATTEMPTS = 3;

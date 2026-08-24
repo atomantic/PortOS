@@ -6,7 +6,7 @@
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS, resolveGalleryImage } from '../../lib/fileUtils.js';
-import { runPromptThroughProvider } from '../../lib/promptRunner.js';
+import { runPromptThroughProvider } from '../promptRunner.js';
 import { extractJson } from '../../lib/jsonExtract.js';
 import {
   buildThreejsFactorySource,

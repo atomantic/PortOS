@@ -3,7 +3,7 @@
  * source text and commit the derived plan. Built on ./context.js + ./arcCore.js.
  */
 
-import { runStagedLLM } from '../../../lib/stageRunner.js';
+import { runStagedLLM } from '../../stageRunner.js';
 import { getSeries, updateSeries } from '../series.js';
 import { getIssue, listIssues, recomputeIssueNumbersForSeries, updateIssue, updateStage } from '../issues.js';
 import { emitRecordUpdated, withReexportSuppressed } from '../../sharing/recordEvents.js';

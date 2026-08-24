@@ -32,7 +32,7 @@ import { join } from 'path';
 import { PATHS, resolveGalleryImage } from '../../lib/fileUtils.js';
 import { verifyVideoPlayable } from '../../lib/ffmpeg.js';
 import { presetToRenderParams } from '../../lib/creativeDirectorPresets.js';
-import { CD_MAX_SCENE_RETRIES } from '../../lib/creativeDirectorPrompts.js';
+import { CD_MAX_SCENE_RETRIES } from '../creativeDirectorPrompts.js';
 import { extractLastFrame, sampleEvaluationFrames } from '../videoGen/local.js';
 import { VIDEO_GEN_MODE } from '../videoGen/modes.js';
 import { grokVideoJobParams, resolveVideoBackendPin } from '../videoGen/backendPin.js';

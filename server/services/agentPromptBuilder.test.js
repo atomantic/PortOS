@@ -53,7 +53,7 @@ vi.mock('./promptService.js', () => ({
 vi.mock('./providers.js', () => ({
   getActiveProvider: vi.fn().mockResolvedValue(null),
 }));
-vi.mock('../lib/promptRunner.js', () => ({
+vi.mock('./promptRunner.js', () => ({
 assertProvider: (provider, { message, code, status = 503 } = {}) => {
     if (provider) return;
     const err = new Error(message || 'No AI provider available');

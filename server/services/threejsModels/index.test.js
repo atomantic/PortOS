@@ -8,7 +8,7 @@ vi.mock('../../lib/fileUtils.js', () => ({
   )),
 }));
 
-vi.mock('../../lib/promptRunner.js', () => ({
+vi.mock('../promptRunner.js', () => ({
   runPromptThroughProvider: vi.fn(),
 }));
 
@@ -25,7 +25,7 @@ vi.mock('./db.js', () => ({
   recoverInterruptedModels: vi.fn(),
 }));
 
-import { runPromptThroughProvider } from '../../lib/promptRunner.js';
+import { runPromptThroughProvider } from '../promptRunner.js';
 import { getProviderById } from '../providers.js';
 import * as store from './db.js';
 import { createModel, startGeneration } from './index.js';

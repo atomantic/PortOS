@@ -10,7 +10,7 @@
  */
 
 import { getActiveProvider, getProviderById } from './providers.js';
-import { runPromptThroughProvider } from '../lib/promptRunner.js';
+import { runPromptThroughProvider } from './promptRunner.js';
 import {
   LEGACY_POST_LLM_PROVENANCE,
   POST_LLM_MAX_SEMANTIC_CANDIDATES,

@@ -18,8 +18,8 @@
  */
 
 import { randomUUID } from 'crypto';
-import { extractBible } from '../lib/bibleExtractor.js';
-import { runStagedLLM } from '../lib/stageRunner.js';
+import { extractBible } from './bibleExtractor.js';
+import { runStagedLLM } from './stageRunner.js';
 import { BIBLE_KINDS, BIBLE_FIELD, BIBLE_LIMITS } from '../lib/storyBible.js';
 import { CATALOG_TYPES } from '../lib/catalogTypes.js';
 import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';

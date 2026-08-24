@@ -5,7 +5,7 @@ vi.mock('./providers.js', () => ({
   getProviderById: vi.fn(),
 }));
 
-vi.mock('../lib/promptRunner.js', () => ({
+vi.mock('./promptRunner.js', () => ({
   resolveEffectiveModel: vi.fn((_provider, model) => model || 'default-model'),
   runPromptThroughProvider: vi.fn(),
   assertVisionRunUsedImages: vi.fn((_result, provider) => provider),
@@ -52,7 +52,7 @@ vi.mock('fs', async (importOriginal) => {
 });
 
 const providers = await import('./providers.js');
-const promptRunner = await import('../lib/promptRunner.js');
+const promptRunner = await import('./promptRunner.js');
 const visionCli = await import('./visionCli.js');
 const fileUtils = await import('../lib/fileUtils.js');
 const ffmpeg = await import('../lib/ffmpeg.js');

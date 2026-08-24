@@ -3,13 +3,13 @@ import {
 } from 'vitest';
 
 // Mock the staged-LLM runner so the reformat core is tested without a real call.
-vi.mock('../../lib/stageRunner.js', () => ({
+vi.mock('../stageRunner.js', () => ({
   runStagedLLM: vi.fn(),
   resolveStageContext: vi.fn(async () => ({ contextWindow: 100000 })),
 }));
 
 import { reformatManuscriptText, reformatManuscriptStageText } from './manuscriptFix.js';
-import { runStagedLLM } from '../../lib/stageRunner.js';
+import { runStagedLLM } from '../stageRunner.js';
 
 describe('reformatManuscriptText — integrity guard', () => {
   beforeEach(() => runStagedLLM.mockReset());

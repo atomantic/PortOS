@@ -43,7 +43,7 @@ import { unlink } from 'fs/promises';
 import { PATHS, atomicWrite, ensureDir, tryReadFile, safeJSONParse, sha256Text } from '../../lib/fileUtils.js';
 import { canonicalStringify } from '../../lib/objects.js';
 import { createSseRunner } from '../../lib/sseUtils.js';
-import { runStageScopedInlineLLM } from '../../lib/stageRunner.js';
+import { runStageScopedInlineLLM } from '../stageRunner.js';
 import { getDomainMode } from '../../lib/domainAutonomy.js';
 import { readReadinessGate, mergeSeverityWeights } from '../../lib/editorial/index.js';
 import { loadState } from '../cosState.js';

@@ -10,7 +10,7 @@
 
 import { ServerError } from '../lib/errorHandler.js';
 import { extractJson as extractJsonShared } from '../lib/jsonExtract.js';
-import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from '../lib/promptRunner.js';
+import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from './promptRunner.js';
 import { stripPromptControlChars, buildUniverseStyleContext } from './universeBuilder.js';
 
 export const ERR_NO_PROVIDER = 'MERGE_AI_NO_PROVIDER';

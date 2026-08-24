@@ -16,7 +16,7 @@
 
 import { randomUUID } from 'crypto';
 import { addTask, reviveBlockedTask, cosEvents } from '../cos.js';
-import { buildTreatmentPrompt, buildEvaluatePrompt, buildPlanPrompt } from '../../lib/creativeDirectorPrompts.js';
+import { buildTreatmentPrompt, buildEvaluatePrompt, buildPlanPrompt } from '../creativeDirectorPrompts.js';
 import { getToolSpecs } from '../creative/toolRegistry.js';
 import { getSettings } from '../settings.js';
 import { resolveStagePin } from './projectsLogic.js';

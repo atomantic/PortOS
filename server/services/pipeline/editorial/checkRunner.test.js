@@ -46,7 +46,7 @@ vi.mock('../arcPlanner.js', async () => {
     completenessSourceHash: completeness.completenessSourceHash,
   };
 });
-vi.mock('../../../lib/stageRunner.js', () => ({
+vi.mock('../../stageRunner.js', () => ({
   runStagedLLM: vi.fn(async () => ({
     runId: 'llm-run',
     content: {
@@ -97,7 +97,7 @@ let editorialState = { characters: [] };
 vi.mock('../editorialAnalysis.js', () => ({ getSeriesEditorial: vi.fn(async () => editorialState) }));
 
 const { runEditorialChecks, buildEditorialCheckPlan, getReviewWithStaleness, enabledChecksConsumeReverseOutline, buildReverseOutlineGateContext, summarizeCheckErrors, previewCustomCheck, buildScopedPriorFindings, effectiveCheckSources, __testing: checkRunnerTesting } = await import('./checkRunner.js');
-const { runStagedLLM, resolveStageContext } = await import('../../../lib/stageRunner.js');
+const { runStagedLLM, resolveStageContext } = await import('../../stageRunner.js');
 const { buildCompletenessContext, collectManuscriptSections, completenessSourceHash, sectionsCorpus } = await import('../arcPlanner.js');
 const { getSeriesCanon } = await import('../seriesCanon.js');
 const { getSeries } = await import('../series.js');
@@ -527,7 +527,7 @@ describe('previewCustomCheck (#1607)', () => {
   });
 
   it('normalizes an out-of-enum LLM severity to the draft default', async () => {
-    const { runInlineLLM } = await import('../../../lib/stageRunner.js');
+    const { runInlineLLM } = await import('../../stageRunner.js');
     runInlineLLM.mockResolvedValueOnce({
       runId: 'inline-run',
       content: { findings: [{ severity: 'catastrophic', issueNumber: 1, location: 'p1', problem: 'x', suggestion: 'y', anchorQuote: 'z' }] },
@@ -551,7 +551,7 @@ describe('previewCustomCheck (#1607)', () => {
   });
 
   it('honors a maxFindings cap', async () => {
-    const { runInlineLLM } = await import('../../../lib/stageRunner.js');
+    const { runInlineLLM } = await import('../../stageRunner.js');
     runInlineLLM.mockResolvedValueOnce({
       runId: 'inline-run',
       content: { findings: [

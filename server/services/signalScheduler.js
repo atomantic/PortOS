@@ -17,7 +17,7 @@
  * key/DB access + user intent.
  */
 
-import { createSyncScheduler } from '../lib/createSettingsGatedSyncScheduler.js';
+import { createSyncScheduler } from './createSettingsGatedSyncScheduler.js';
 import { getSignalConfig, runSync } from './signalSync.js';
 
 /**

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('../../lib/promptRunner.js', () => ({
+vi.mock('../promptRunner.js', () => ({
   resolveProviderAndModel: vi.fn(),
   runPromptThroughProvider: vi.fn(),
 }));
@@ -10,7 +10,7 @@ vi.mock('./projects.js', () => ({
   addProjectScenes: vi.fn(),
 }));
 
-import { resolveProviderAndModel, runPromptThroughProvider } from '../../lib/promptRunner.js';
+import { resolveProviderAndModel, runPromptThroughProvider } from '../promptRunner.js';
 import { getProject, addProjectScenes } from './projects.js';
 import {
   validSections,

@@ -14,17 +14,17 @@
  * every stage call lands in `data/runs/<runId>/` for replay.
  */
 
-import { ServerError } from './errorHandler.js';
-import { findBalancedBlocks, tryParseWithRepair } from './jsonExtract.js';
+import { ServerError } from '../lib/errorHandler.js';
+import { findBalancedBlocks, tryParseWithRepair } from '../lib/jsonExtract.js';
 import { resolveEffectiveModel, runPromptThroughProvider, DEFAULT_TIMEOUT_MS, isLocalEndpoint } from './promptRunner.js';
-import { stripCodeFences } from './llmText.js';
-import { extractCodexAssistant } from './codexAssistantExtract.js';
-import { getActiveProvider, getProviderById } from '../services/providers.js';
-import { commandBasename, isCodexProvider } from './providerModels.js';
-import { buildPrompt, getStage } from '../services/promptService.js';
-import { stagePinsIgnored } from './stagePinPolicy.js';
-import { createRun, patchRunMetadata } from '../services/runner.js';
-import { MIN_TIMEOUT as STAGE_TIMEOUT_MIN_MS, MAX_TIMEOUT as STAGE_TIMEOUT_MAX_MS } from './aiToolkit/constants.js';
+import { stripCodeFences } from '../lib/llmText.js';
+import { extractCodexAssistant } from '../lib/codexAssistantExtract.js';
+import { getActiveProvider, getProviderById } from './providers.js';
+import { commandBasename, isCodexProvider } from '../lib/providerModels.js';
+import { buildPrompt, getStage } from './promptService.js';
+import { stagePinsIgnored } from '../lib/stagePinPolicy.js';
+import { createRun, patchRunMetadata } from './runner.js';
+import { MIN_TIMEOUT as STAGE_TIMEOUT_MIN_MS, MAX_TIMEOUT as STAGE_TIMEOUT_MAX_MS } from '../lib/aiToolkit/constants.js';
 
 // Stage configs name a model by tier (PromptManager UI). Map each tier name
 // to the provider's per-tier model field; an unset tier falls through to

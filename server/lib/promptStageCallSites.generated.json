@@ -16,13 +16,13 @@
     "server/services/catalogExtraction.js"
   ],
   "cd-evaluate": [
-    "server/lib/creativeDirectorPrompts.js"
+    "server/services/creativeDirectorPrompts.js"
   ],
   "cd-plan": [
-    "server/lib/creativeDirectorPrompts.js"
+    "server/services/creativeDirectorPrompts.js"
   ],
   "cd-treatment": [
-    "server/lib/creativeDirectorPrompts.js"
+    "server/services/creativeDirectorPrompts.js"
   ],
   "cos-agent-briefing": [
     "server/services/agentPromptBuilder.js"
@@ -259,7 +259,7 @@
     "server/lib/editorial/checkInfra/structureStages.js"
   ],
   "pipeline-extract-scenes": [
-    "server/lib/sceneExtractor.js"
+    "server/services/sceneExtractor.js"
   ],
   "pipeline-foundation-repair": [
     "server/services/pipeline/foundationJudge.js"
@@ -407,7 +407,7 @@
     "server/services/writersRoom/liveDirector.js"
   ],
   "writers-room-characters": [
-    "server/lib/bibleExtractor.js",
+    "server/services/bibleExtractor.js",
     "server/services/writersRoom/evaluator.js"
   ],
   "writers-room-continue": [
@@ -424,18 +424,18 @@
     "server/services/writersRoom/evaluator.js"
   ],
   "writers-room-objects": [
-    "server/lib/bibleExtractor.js",
+    "server/services/bibleExtractor.js",
     "server/services/writersRoom/evaluator.js"
   ],
   "writers-room-places": [
-    "server/lib/bibleExtractor.js",
+    "server/services/bibleExtractor.js",
     "server/services/writersRoom/evaluator.js"
   ],
   "writers-room-revise": [
     "server/services/writersRoom/evaluator.js"
   ],
   "writers-room-script": [
-    "server/lib/sceneExtractor.js",
+    "server/services/sceneExtractor.js",
     "server/services/writersRoom/evaluator.js"
   ]
 }

@@ -26,18 +26,18 @@
  * stay honest about what the runner actually executed.
  */
 
-import { createRun, executeApiRun, executeCliRun, extractBakedModel, hasModelFlag, stopRun, patchRunMetadata } from '../services/runner.js';
-import { getActiveProvider, getProviderById, getAllProviders } from '../services/providers.js';
+import { createRun, executeApiRun, executeCliRun, extractBakedModel, hasModelFlag, stopRun, patchRunMetadata } from './runner.js';
+import { getActiveProvider, getProviderById, getAllProviders } from './providers.js';
 import { executeTuiRun } from './tuiPromptRunner.js';
-import { ServerError } from './errorHandler.js';
-import { PROVIDER_TYPES } from './aiToolkit/constants.js';
-import { analyzeError, ERROR_CATEGORIES, isRunCanceledError } from './aiToolkit/errorDetection.js';
-import { isSchemaTypeCategory, resolveProviderBench } from './providerCooldown.js';
-import { isGenerationModel } from './localModelHeuristics.js';
-import { getAIToolkitInstance } from './aiToolkitState.js';
-import { createSingleFlight } from './singleFlight.js';
-import { extractJson } from './jsonExtract.js';
-import { isCreativeRunSource, withCreativeLatitude } from './creativeLatitude.js';
+import { ServerError } from '../lib/errorHandler.js';
+import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
+import { analyzeError, ERROR_CATEGORIES, isRunCanceledError } from '../lib/aiToolkit/errorDetection.js';
+import { isSchemaTypeCategory, resolveProviderBench } from '../lib/providerCooldown.js';
+import { isGenerationModel } from '../lib/localModelHeuristics.js';
+import { getAIToolkitInstance } from '../lib/aiToolkitState.js';
+import { createSingleFlight } from '../lib/singleFlight.js';
+import { extractJson } from '../lib/jsonExtract.js';
+import { isCreativeRunSource, withCreativeLatitude } from '../lib/creativeLatitude.js';
 
 // The fallback-lifecycle notifiers live in services/autoFixer.js, which
 // transitively pulls in services/cos.js (PM2 + fs + sockets). Importing it
@@ -45,7 +45,7 @@ import { isCreativeRunSource, withCreativeLatitude } from './creativeLatitude.js
 // dragging the CoS stack along on the happy path. Node caches the module after
 // the first dynamic import, so the cost is one-time.
 function loadAutoFixer() {
-  return import('../services/autoFixer.js');
+  return import('./autoFixer.js');
 }
 
 export const DEFAULT_TIMEOUT_MS = 300000;

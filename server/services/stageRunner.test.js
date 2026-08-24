@@ -1,16 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('../services/providers.js', () => ({
+vi.mock('./providers.js', () => ({
   getActiveProvider: vi.fn(),
   getProviderById: vi.fn(),
 }));
 
-vi.mock('../services/promptService.js', () => ({
+vi.mock('./promptService.js', () => ({
   buildPrompt: vi.fn().mockResolvedValue('rendered-prompt'),
   getStage: vi.fn(),
 }));
 
-vi.mock('../services/runner.js', () => ({
+vi.mock('./runner.js', () => ({
   createRun: vi.fn(async () => ({ runId: 'run-abc12345' })),
   executeApiRun: vi.fn(),
   executeCliRun: vi.fn(),
@@ -19,11 +19,11 @@ vi.mock('../services/runner.js', () => ({
   patchRunMetadata: vi.fn(async () => undefined),
 }));
 
-const providers = await import('../services/providers.js');
-const prompts = await import('../services/promptService.js');
-const runner = await import('../services/runner.js');
-const { buildEffortArgs } = await import('./providerModels.js');
-const { CREATIVE_LATITUDE_HEADING } = await import('./creativeLatitude.js');
+const providers = await import('./providers.js');
+const prompts = await import('./promptService.js');
+const runner = await import('./runner.js');
+const { buildEffortArgs } = await import('../lib/providerModels.js');
+const { CREATIVE_LATITUDE_HEADING } = await import('../lib/creativeLatitude.js');
 const {
   runStagedLLM,
   runInlineLLM,
@@ -45,7 +45,7 @@ const {
   withLocalConcurrencyGate,
   LOCAL_LLM_MAX_CONCURRENCY,
 } = await import('./stageRunner.js');
-const { withStagePinsIgnored, stagePinsIgnored } = await import('./stagePinPolicy.js');
+const { withStagePinsIgnored, stagePinsIgnored } = await import('../lib/stagePinPolicy.js');
 
 const apiProvider = (extra = {}) => ({
   id: 'mock-api', name: 'Mock', type: 'api', enabled: true, defaultModel: 'm-default', ...extra,

@@ -9,7 +9,7 @@ vi.mock('../../lib/fileUtils.js', async (importActual) => ({
   ensureDir: vi.fn(async () => {}),
 }));
 
-vi.mock('../../lib/stageRunner.js', () => ({
+vi.mock('../stageRunner.js', () => ({
   runStagedLLM: vi.fn(),
   resolveStageContext: vi.fn(async () => ({ contextWindow: 200_000 })),
   resolveJudgeForStage: vi.fn(async () => ({ provider: { id: 'judge-x' }, model: 'jm-heavy' })),
@@ -57,7 +57,7 @@ vi.mock('./arcPlanner.js', async (importActual) => ({
 }));
 
 const fileUtils = await import('../../lib/fileUtils.js');
-const stageRunner = await import('../../lib/stageRunner.js');
+const stageRunner = await import('../stageRunner.js');
 const seriesSvc = await import('./series.js');
 const universeBuilder = await import('../universeBuilder.js');
 const universeBuilderExpand = await import('../universeBuilderExpand.js');

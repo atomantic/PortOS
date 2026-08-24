@@ -41,7 +41,7 @@ import { startEpisodeVideoForIssue } from '../../services/pipeline/episodeVideo.
 import { COMIC_PAGE_VARIANTS } from '../../services/pipeline/owners.js';
 import { ASPECT_RATIOS, QUALITIES } from '../../lib/creativeDirectorPresets.js';
 import { QUEUEABLE_IMAGE_MODES } from '../../services/imageGen/modes.js';
-import { extractScenes, scenesFromBeatSheet, SOURCE_KIND } from '../../lib/sceneExtractor.js';
+import { extractScenes, scenesFromBeatSheet, SOURCE_KIND } from '../../services/sceneExtractor.js';
 import { resolveSeriesLlmOverride } from '../../lib/seriesLlmOverride.js';
 import { parseComicScript } from '../../lib/comicScriptParser.js';
 import {

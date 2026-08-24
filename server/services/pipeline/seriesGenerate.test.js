@@ -15,7 +15,7 @@ vi.mock('./series.js', async (importOriginal) => {
   return { ...actual, listSeries: vi.fn(async () => []) };
 });
 vi.mock('./refineHelpers.js', () => ({ runPromptRefineRaw: vi.fn() }));
-vi.mock('../../lib/stageRunner.js', () => ({
+vi.mock('../stageRunner.js', () => ({
   runStagedLLM: vi.fn(),
   resolveJudgeForStage: vi.fn(),
 }));
@@ -36,7 +36,7 @@ import {
 import { getUniverse } from '../universeBuilder.js';
 import { listSeries, NAME_MAX, LOGLINE_MAX, PREMISE_MAX } from './series.js';
 import { runPromptRefineRaw } from './refineHelpers.js';
-import { runStagedLLM, resolveJudgeForStage } from '../../lib/stageRunner.js';
+import { runStagedLLM, resolveJudgeForStage } from '../stageRunner.js';
 
 const baseUniverse = {
   id: 'uni-1',

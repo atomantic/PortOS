@@ -9,7 +9,7 @@ vi.mock('./providers.js', () => ({
 // Mock the central LLM handler — meatspacePostLlm used to spawn child_process
 // + fetch directly, but now delegates to runPromptThroughProvider. Runner
 // internals (spawn args, --model flag injection) are covered by runner.test.js.
-vi.mock('../lib/promptRunner.js', () => ({
+vi.mock('./promptRunner.js', () => ({
 assertProvider: (provider, { message, code, status = 503 } = {}) => {
     if (provider) return;
     const err = new Error(message || 'No AI provider available');
@@ -20,7 +20,7 @@ assertProvider: (provider, { message, code, status = 503 } = {}) => {
 }));
 
 import { getActiveProvider, getProviderById } from './providers.js';
-import { runPromptThroughProvider } from '../lib/promptRunner.js';
+import { runPromptThroughProvider } from './promptRunner.js';
 import {
   LLM_DRILL_TYPES,
   generateLlmDrill,

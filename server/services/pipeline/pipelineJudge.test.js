@@ -9,7 +9,7 @@ vi.mock('../../lib/fileUtils.js', async (importActual) => ({
   ensureDir: vi.fn(async () => {}),
 }));
 
-vi.mock('../../lib/stageRunner.js', () => ({
+vi.mock('../stageRunner.js', () => ({
   runStagedLLM: vi.fn(),
   resolveStageContext: vi.fn(async () => ({ contextWindow: 200_000 })),
   resolveJudgeForStage: vi.fn(async () => ({ provider: { id: 'judge-x' }, model: 'jm-heavy' })),
@@ -32,7 +32,7 @@ vi.mock('./seriesCanon.js', async (importActual) => ({
 }));
 
 const fileUtils = await import('../../lib/fileUtils.js');
-const stageRunner = await import('../../lib/stageRunner.js');
+const stageRunner = await import('../stageRunner.js');
 const issuesSvc = await import('./issues.js');
 const { computeSlopPenalty } = await import('../../lib/editorial/slopScore.js');
 const {

@@ -14,7 +14,7 @@
  * necessary.
  */
 
-import { runStagedLLM, resolveStageContext } from '../../lib/stageRunner.js';
+import { runStagedLLM, resolveStageContext } from '../stageRunner.js';
 import { manuscriptContentBudgetChars, estimateTokens } from '../../lib/contextBudget.js';
 import { getIssue } from './issues.js';
 import { getSeries } from './series.js';

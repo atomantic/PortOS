@@ -40,7 +40,7 @@ import { randomUUID } from 'crypto';
 import { isStr, trimTo, pickPromptFields, BIBLE_KIND } from '../lib/storyBible.js';
 import { sanitizeOrigin } from '../lib/sharingOrigin.js';
 import { sanitizeSoftDeleteFields } from '../lib/syncWire.js';
-import { runStagedLLM } from '../lib/stageRunner.js';
+import { runStagedLLM } from './stageRunner.js';
 import {
   STEP_IDS, STEP_STATUSES, isValidStepId,
 } from '../lib/storyBuilderSteps.js';

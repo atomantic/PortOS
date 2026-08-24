@@ -20,7 +20,7 @@ vi.mock('./tracks/index.js', () => ({
   }),
 }));
 
-vi.mock('../lib/promptRunner.js', () => ({
+vi.mock('./promptRunner.js', () => ({
   resolveProviderAndModel: vi.fn(),
   assertProvider: vi.fn(),
   runPromptThroughProvider: vi.fn(),
@@ -43,7 +43,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
 });
 
 const tracks = await import('./tracks/index.js');
-const promptRunner = await import('../lib/promptRunner.js');
+const promptRunner = await import('./promptRunner.js');
 const apps = await import('./apps.js');
 const { generateChiptuneScore, renderChiptuneTrack, publishChiptuneTrack, buildChiptunePrompt } = await import('./chiptune.js');
 

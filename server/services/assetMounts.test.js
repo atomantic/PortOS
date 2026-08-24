@@ -16,15 +16,15 @@ import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import express from 'express';
 import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { request } from './testHelper.js';
-import { createTempDataRoot, makePathsProxy } from './mockPathsDataRoot.js';
+import { request } from '../lib/testHelper.js';
+import { createTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 // Re-roots every `PATHS` member under a temp tree, so the mounts resolve there
 // instead of at the running install's `data/` — including `wrWorksDir()`, which
 // derives from `PATHS.data`. This is why every `dir` in the table is a thunk:
 // it has to read `PATHS` after this mock applies, not at import.
 const tempRoot = createTempDataRoot('portos-asset-mounts-');
-vi.mock('./fileUtils.js', async (importOriginal) => (
+vi.mock('../lib/fileUtils.js', async (importOriginal) => (
   makePathsProxy(await importOriginal(), { dataRoot: tempRoot })
 ));
 afterAll(() => rmSync(tempRoot, { recursive: true, force: true }));

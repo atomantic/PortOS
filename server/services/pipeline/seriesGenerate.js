@@ -43,7 +43,7 @@ import { getUniverse, joinInfluenceList, ERR_NOT_FOUND as UNIVERSE_ERR_NOT_FOUND
 import { listSeries, NAME_MAX, LOGLINE_MAX, PREMISE_MAX } from './series.js';
 import { ARC_SHAPES, ARC_SHAPE_IDS } from '../../lib/storyArc.js';
 import { runPromptRefineRaw } from './refineHelpers.js';
-import { runStagedLLM, resolveJudgeForStage } from '../../lib/stageRunner.js';
+import { runStagedLLM, resolveJudgeForStage } from '../stageRunner.js';
 import { getStage } from '../promptService.js';
 import { ServerError } from '../../lib/errorHandler.js';
 

@@ -6,7 +6,7 @@ vi.mock('./aiProvider.js', async (importActual) => {
   const actual = await importActual();
   return { ...actual, resolveAPIProvider: vi.fn() };
 });
-vi.mock('../lib/promptRunner.js', async (importActual) => {
+vi.mock('./promptRunner.js', async (importActual) => {
   const actual = await importActual();
   return {
     ...actual,
@@ -16,7 +16,7 @@ vi.mock('../lib/promptRunner.js', async (importActual) => {
 });
 
 const aiProvider = await import('./aiProvider.js');
-const promptRunner = await import('../lib/promptRunner.js');
+const promptRunner = await import('./promptRunner.js');
 const { refineWorldPrompts } = await import('./universeBuilderRefine.js');
 
 const apiProvider = { id: 'ollama', type: 'api', enabled: true, defaultModel: 'qwen-vl' };

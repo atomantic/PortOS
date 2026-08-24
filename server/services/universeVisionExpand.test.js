@@ -9,7 +9,7 @@ vi.mock('./aiProvider.js', async (importActual) => {
 
 // runPromptThroughProvider is the LLM boundary — mock it. assertProvider stays
 // real (the typed-throw helper we want exercised).
-vi.mock('../lib/promptRunner.js', async (importActual) => {
+vi.mock('./promptRunner.js', async (importActual) => {
   const actual = await importActual();
   return { ...actual, runPromptThroughProvider: vi.fn() };
 });
@@ -22,7 +22,7 @@ vi.mock('./universeBuilder.js', async (importActual) => {
 });
 
 const aiProvider = await import('./aiProvider.js');
-const promptRunner = await import('../lib/promptRunner.js');
+const promptRunner = await import('./promptRunner.js');
 const universeBuilder = await import('./universeBuilder.js');
 const {
   expandEntityFromImages, buildVisionExpandPrompt, VISION_EXPAND_MAX_IMAGES, __testing,

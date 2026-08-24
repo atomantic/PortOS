@@ -63,7 +63,6 @@ export * from './threejsModelPlayerSource.js';
 export * from './threejsModelRig.js';
 
 // === Story & narrative ===
-export * from './bibleExtractor.js';
 export * as catalogBulkParsers from './catalogBulkParsers.js';
 export * from './catalogChunking.js';
 export * from './catalogTypes.js';
@@ -72,7 +71,6 @@ export * from './canonPrompt.js';
 export * from './comicScriptParser.js';
 export * from './composeStyledPrompt.js';
 export * from './creativeDirectorPresets.js';
-export * from './creativeDirectorPrompts.js';
 export * from './creativeLatitude.js';
 // Namespaced: the editorial-check registry (#1284) lives in the editorial/
 // subdir with its own barrel — surface it under `editorial.*` so the root
@@ -81,7 +79,6 @@ export * as editorial from './editorial/index.js';
 export * from './fableLoomGraph.js';
 export * from './fableLoomLimits.js';
 export * from './fableLoomFormats.js';
-export * from './sceneExtractor.js';
 export * from './scenePrompt.js';
 export * from './proseExportSettings.js';
 export * from './shotGrammar.js';
@@ -140,7 +137,6 @@ export * from './videoModeProfiles.js';
 export * from './videoReferenceModes.js';
 export * from './videoTextEncoders.js';
 export * from './promptPartials.js';
-export * from './promptRunner.js';
 export * from './promptSystemStages.js';
 export * from './promptTemplate.js';
 export * from './providerCooldown.js';
@@ -173,11 +169,8 @@ export * from './openAiChatStream.js';
 // `runners.js` re-defines `isFlux2`/`isZImage`/`isErnie` that also live in
 // mediaModels.js — namespace it so the barrel surface is unambiguous.
 export * as runners from './runners.js';
-// `stageRunner.js` defines its own `extractJson` distinct from `jsonExtract.js`.
-export * as stageRunner from './stageRunner.js';
 export * from './stagePinPolicy.js';
 export * from './tuiHandshake.js';
-export * from './tuiPromptRunner.js';
 export * from './tuiShellLaunch.js';
 export * from './tuiUsageScrape.js';
 
@@ -306,7 +299,6 @@ export * from './capabilityMap.js';
 export * from './chiptuneRender.js';
 export * from './chiptuneScore.js';
 export * from './civitai.js';
-export * from './createSettingsGatedSyncScheduler.js';
 export * from './huggingfaceLora.js';
 export * from './huggingfaceModel.js';
 export * from './localLlmCatalog.js';
@@ -380,7 +372,6 @@ export * from './viteAllowedHosts.js';
 // === General utilities ===
 export * from './apiRegistry.js';
 export * from './arrayUtils.js';
-export * from './assetMounts.js';
 export * from './assetRoutePrefixes.js';
 export * from './asyncMutex.js';
 export * from './concurrencyGate.js';

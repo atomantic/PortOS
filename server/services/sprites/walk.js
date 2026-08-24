@@ -25,7 +25,7 @@ import {
   ensureDir, atomicWrite, readJSONFile, pathExists, sha256File,
 } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { executeTuiRun } from '../../lib/tuiPromptRunner.js';
+import { executeTuiRun } from '../tuiPromptRunner.js';
 import { GROK_TUI_ID } from '../../lib/grok.js';
 import { getSettings } from '../settings.js';
 import { getRecord, updateRecord } from './records.js';

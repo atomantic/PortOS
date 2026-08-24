@@ -5,7 +5,7 @@ const { resolveProviderAndModelMock, runPromptThroughProviderMock } = vi.hoisted
   runPromptThroughProviderMock: vi.fn(),
 }));
 
-vi.mock('../lib/promptRunner.js', () => ({
+vi.mock('./promptRunner.js', () => ({
   assertProvider: vi.fn(),
   resolveProviderAndModel: (...args) => resolveProviderAndModelMock(...args),
   runPromptThroughProvider: (...args) => runPromptThroughProviderMock(...args),

@@ -23,7 +23,7 @@
  */
 
 import { ServerError } from '../lib/errorHandler.js';
-import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from '../lib/promptRunner.js';
+import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from './promptRunner.js';
 
 // Caps mirror the Generate form's own field limits so a designer round-trip
 // can't produce text the generate route would then reject.

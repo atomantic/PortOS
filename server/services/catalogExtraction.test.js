@@ -13,10 +13,10 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('../lib/bibleExtractor.js', () => ({
+vi.mock('./bibleExtractor.js', () => ({
   extractBible: vi.fn(),
 }));
-vi.mock('../lib/stageRunner.js', () => ({
+vi.mock('./stageRunner.js', () => ({
   runStagedLLM: vi.fn(),
 }));
 // catalogDB pulls in the Postgres pool — mock just the one function the
@@ -27,8 +27,8 @@ vi.mock('./catalogDB.js', () => ({
   listChildScraps: vi.fn(),
 }));
 
-const bibleExtractor = await import('../lib/bibleExtractor.js');
-const stageRunner = await import('../lib/stageRunner.js');
+const bibleExtractor = await import('./bibleExtractor.js');
+const stageRunner = await import('./stageRunner.js');
 const catalogDB = await import('./catalogDB.js');
 const { catalogEvents } = await import('./catalogEvents.js');
 const {

@@ -9,8 +9,8 @@
 
 import { getActiveProvider, getProviderById } from './providers.js';
 import { getStage, buildPrompt } from './promptService.js';
-import { runPromptThroughProvider } from '../lib/promptRunner.js';
-import { resolveModel } from '../lib/stageRunner.js';
+import { runPromptThroughProvider } from './promptRunner.js';
+import { resolveModel } from './stageRunner.js';
 
 const STAGE_NAME = 'cos-task-enhance';
 

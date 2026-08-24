@@ -36,7 +36,7 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
 });
 
 const executeTuiRun = vi.fn(() => new Promise(() => {}));
-vi.mock('../../lib/tuiPromptRunner.js', () => ({
+vi.mock('../tuiPromptRunner.js', () => ({
   executeTuiRun: (...args) => executeTuiRun(...args),
 }));
 

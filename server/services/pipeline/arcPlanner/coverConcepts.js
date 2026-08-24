@@ -3,7 +3,7 @@
  * Built on ./context.js.
  */
 
-import { runStagedLLM } from '../../../lib/stageRunner.js';
+import { runStagedLLM } from '../../stageRunner.js';
 import { getSeries, updateSeasonOnSeries } from '../series.js';
 import { assertStageUnlocked, getIssue, updateStageWithLatest } from '../issues.js';
 import { ERR_VALIDATION, makeErr } from './context.js';

@@ -19,7 +19,7 @@ vi.mock('../../domainUsage.js', () => ({
 
 let llmContent = null;
 const runStagedLLM = vi.fn(async () => ({ content: llmContent }));
-vi.mock('../../../lib/stageRunner.js', () => ({ runStagedLLM: (...a) => runStagedLLM(...a) }));
+vi.mock('../../stageRunner.js', () => ({ runStagedLLM: (...a) => runStagedLLM(...a) }));
 
 vi.mock('../../settings.js', async (importOriginal) => ({
   ...(await importOriginal()),

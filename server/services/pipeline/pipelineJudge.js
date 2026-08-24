@@ -30,7 +30,7 @@
 import { join } from 'path';
 import { createHash } from 'crypto';
 import { PATHS, atomicWrite, ensureDir, tryReadFile, safeJSONParse } from '../../lib/fileUtils.js';
-import { runStagedLLM, resolveStageContext, resolveJudgeForStage } from '../../lib/stageRunner.js';
+import { runStagedLLM, resolveStageContext, resolveJudgeForStage } from '../stageRunner.js';
 import { manuscriptContentBudgetChars, estimateTokens } from '../../lib/contextBudget.js';
 import { computeSlopPenalty } from '../../lib/editorial/slopScore.js';
 import { getStage } from '../promptService.js';

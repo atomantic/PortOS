@@ -14,7 +14,7 @@
  */
 
 import { ServerError } from '../../lib/errorHandler.js';
-import { runStagedLLM } from '../../lib/stageRunner.js';
+import { runStagedLLM } from '../stageRunner.js';
 import {
   getWork, resolveLiveMode, recordLiveModeUsage, recordLiveModeRenderUsage, utcDayKey,
   linkToCreativeDirector, renderWorkVoiceGuide,

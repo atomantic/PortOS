@@ -18,7 +18,7 @@
  * user intent + a signed-in browser profile.
  */
 
-import { createSyncScheduler } from '../lib/createSettingsGatedSyncScheduler.js';
+import { createSyncScheduler } from './createSettingsGatedSyncScheduler.js';
 import { getYoutubeConfig, runSync } from './youtubeSync.js';
 
 /**

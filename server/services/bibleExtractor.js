@@ -2,7 +2,7 @@
 // canonical bible shape. Caller owns persistence.
 
 import { runStagedLLM } from './stageRunner.js';
-import { sanitizeBibleList, BIBLE_KIND, BIBLE_FIELD, pickPromptFields } from './storyBible.js';
+import { sanitizeBibleList, BIBLE_KIND, BIBLE_FIELD, pickPromptFields } from '../lib/storyBible.js';
 
 const KIND_STAGE = Object.freeze({
   [BIBLE_KIND.CHARACTER]: 'writers-room-characters',

@@ -25,7 +25,7 @@ import { isClaudeCommand, isOpencodeCommand } from '../lib/providerModels.js';
 // different tool-call counts for the same run.
 import { summarizeOpenCodeEvents } from '../lib/opencodeStream.js';
 import { getProviderById } from './providers.js';
-import { executeTuiRun } from '../lib/tuiPromptRunner.js';
+import { executeTuiRun } from './tuiPromptRunner.js';
 import { getRunsPath } from './runner.js';
 
 export const LOCAL_TUI_AGENT_BENCHMARK_TARGETS = Object.freeze({

@@ -15,7 +15,7 @@ vi.mock('../../lib/fileUtils.js', () => ({
 // returns the next queued JSON object.
 const analysisQueue = [];
 const llmCalls = [];
-vi.mock('../../lib/stageRunner.js', () => ({
+vi.mock('../stageRunner.js', () => ({
   runStagedLLM: vi.fn(async (stage, ctx) => {
     llmCalls.push({ stage, ctx });
     if (stage === 'pipeline-pov-rewrite') {

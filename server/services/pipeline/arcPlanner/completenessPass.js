@@ -4,7 +4,7 @@
  */
 
 import { createHash } from 'crypto';
-import { resolveStageContext, runStagedLLM } from '../../../lib/stageRunner.js';
+import { resolveStageContext, runStagedLLM } from '../../stageRunner.js';
 import {
   estimateTokens, planManuscriptPass, fitContextToManuscriptFloor,
   trimContextToBudget, MANUSCRIPT_FLOOR_TOKENS, CHARS_PER_TOKEN,

@@ -57,7 +57,7 @@ import { setAIToolkit as setProvidersToolkit } from './providers.js';
 import { setAIToolkit as setProviderStatusToolkit } from './providerStatus.js';
 import { setAIToolkit as setRunnerToolkit, executeCliRun as executeCliRunFixed } from './runner.js';
 import { setAIToolkit as setPromptsToolkit } from './promptService.js';
-import { executeTuiRun as executeTuiRunFixed } from '../lib/tuiPromptRunner.js';
+import { executeTuiRun as executeTuiRunFixed } from './tuiPromptRunner.js';
 import { initAutoFixer } from './autoFixer.js';
 import { initTaskLearning } from './taskLearning.js';
 import { initSpawner } from './subAgentSpawner.js';

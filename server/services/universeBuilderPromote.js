@@ -22,7 +22,7 @@ import {
 } from '../lib/storyBible.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { extractJson as extractJsonShared } from '../lib/jsonExtract.js';
-import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from '../lib/promptRunner.js';
+import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from './promptRunner.js';
 
 // Inverse of BIBLE_FIELD: trunk-name (canon array key) → singular BIBLE_KIND.
 // Derived from the source-of-truth map so the two can't drift. `other` is

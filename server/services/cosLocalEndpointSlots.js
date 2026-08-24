@@ -22,7 +22,7 @@
  * A shared counter across process boundaries isn't worth the coupling.
  */
 
-import { LOCAL_LLM_MAX_CONCURRENCY } from '../lib/promptRunner.js';
+import { LOCAL_LLM_MAX_CONCURRENCY } from './promptRunner.js';
 import { SWARM_COUNT_MAX, SWARM_COUNT_MIN } from '../lib/validation.js';
 import { localRuntimeForProvider, localEndpointPort, normalizeOpenAiBaseUrl } from '../lib/localProviderRuntime.js';
 import { listProviders, getActiveProvider } from './providers.js';

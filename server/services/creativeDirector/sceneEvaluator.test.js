@@ -26,9 +26,16 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('fs', () => ({ existsSync: mocks.existsSync }));
-vi.mock('../../lib/fileUtils.js', () => ({ PATHS: { videoThumbnails: '/data/video-thumbnails' } }));
+// Spread the real module rather than replacing it: this mock used to supply
+// ONLY videoThumbnails, which left PATHS.data undefined for anything else the
+// graph reached. Override the two fields this suite cares about and point the
+// data root at a mock path so nothing touches the real checkout.
+vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, PATHS: { ...actual.PATHS, data: '/mock/data', videoThumbnails: '/data/video-thumbnails' } };
+});
 vi.mock('../aiProvider.js', () => ({ stripCodeFences: (s) => String(s).replace(/```[a-z]*\n?/gi, '').replace(/```/g, '') }));
-vi.mock('../../lib/promptRunner.js', () => ({
+vi.mock('../promptRunner.js', () => ({
   runPromptThroughProvider: mocks.runPromptThroughProvider,
   assertVisionRunUsedImages: mocks.assertVisionRunUsedImages,
 }));

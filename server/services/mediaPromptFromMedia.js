@@ -26,7 +26,7 @@ import {
   assertVisionRunUsedImages,
   resolveEffectiveModel,
   runPromptThroughProvider,
-} from '../lib/promptRunner.js';
+} from './promptRunner.js';
 import { getProviderById } from './providers.js';
 import { loadHistory } from './videoGen/history.js';
 import { describeImagesFromPaths } from './visionCli.js';

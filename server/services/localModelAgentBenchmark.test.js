@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { join } from 'path';
 vi.mock('./providers.js', () => ({ getProviderById: vi.fn() }));
-vi.mock('../lib/tuiPromptRunner.js', () => ({ executeTuiRun: vi.fn() }));
+vi.mock('./tuiPromptRunner.js', () => ({ executeTuiRun: vi.fn() }));
 vi.mock('./runner.js', () => ({ getRunsPath: vi.fn(() => '/tmp/portos-benchmark-runs') }));
 vi.mock('../lib/providerModels.js', () => ({
   isOpencodeCommand: vi.fn(() => true),
@@ -9,7 +9,7 @@ vi.mock('../lib/providerModels.js', () => ({
 }));
 
 import { getProviderById } from './providers.js';
-import { executeTuiRun } from '../lib/tuiPromptRunner.js';
+import { executeTuiRun } from './tuiPromptRunner.js';
 import {
   buildOpenCodeAgentBenchmarkPrompt,
   runOpenCodeAgentBenchmark,

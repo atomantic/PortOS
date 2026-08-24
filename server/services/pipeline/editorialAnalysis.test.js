@@ -14,7 +14,7 @@ vi.mock('../../lib/fileUtils.js', () => ({
 // runStagedLLM returns the next queued canned analysis.
 const llmQueue = [];
 const llmCalls = [];
-vi.mock('../../lib/stageRunner.js', () => ({
+vi.mock('../stageRunner.js', () => ({
   runStagedLLM: vi.fn(async (stage, ctx) => {
     llmCalls.push({ stage, ctx });
     const content = llmQueue.shift();

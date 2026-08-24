@@ -18,7 +18,7 @@
 import { join } from 'path';
 import { createHash } from 'crypto';
 import { PATHS, atomicWrite, ensureDir, tryReadFile, safeJSONParse } from '../../lib/fileUtils.js';
-import { runStagedLLM, resolveStageContext } from '../../lib/stageRunner.js';
+import { runStagedLLM, resolveStageContext } from '../stageRunner.js';
 import { manuscriptContentBudgetChars, estimateTokens } from '../../lib/contextBudget.js';
 import { getIssue, listIssues } from './issues.js';
 import { getSeries } from './series.js';

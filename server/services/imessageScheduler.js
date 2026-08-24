@@ -17,7 +17,7 @@
  * Disk Access + user intent.
  */
 
-import { createSyncScheduler } from '../lib/createSettingsGatedSyncScheduler.js';
+import { createSyncScheduler } from './createSettingsGatedSyncScheduler.js';
 import { getImessageConfig, runSync } from './imessageSync.js';
 
 /**

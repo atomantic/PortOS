@@ -8,13 +8,13 @@ const ai = vi.hoisted(() => ({
   selectedModel: 'fake-model',
   runPromptThroughProvider: vi.fn(),
 }));
-vi.mock('../lib/promptRunner.js', async () => ({
-  ...(await vi.importActual('../lib/promptRunner.js')),
+vi.mock('./promptRunner.js', async () => ({
+  ...(await vi.importActual('./promptRunner.js')),
   resolveProviderAndModel: vi.fn(async () => ({ provider: ai.provider, selectedModel: ai.selectedModel })),
   runPromptThroughProvider: ai.runPromptThroughProvider,
 }));
 
-import { resolveProviderAndModel } from '../lib/promptRunner.js';
+import { resolveProviderAndModel } from './promptRunner.js';
 import {
   DEFAULT_DESCRIBE_TEMPLATE, DEFAULT_LYRICS_TEMPLATE,
   buildDescribePrompt, buildLyricsPrompt, describeMusic, writeLyrics,

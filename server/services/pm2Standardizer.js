@@ -5,7 +5,7 @@ import { exec, spawn } from '../lib/childProcess.js';
 import { promisify } from 'util';
 import { getActiveProvider, getProviderById } from './providers.js';
 import { safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
-import { runPromptThroughProvider } from '../lib/promptRunner.js';
+import { runPromptThroughProvider } from './promptRunner.js';
 import { getReservedPorts, getAllApps } from './apps.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { usesPm2, isStandardizable } from './streamingDetect.js';

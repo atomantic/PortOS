@@ -7,7 +7,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import {
   resolveEffectiveModel,
   runPromptThroughProvider,
-} from '../../lib/promptRunner.js';
+} from '../promptRunner.js';
 import { getAppById } from '../apps.js';
 import { getProviderById } from '../providers.js';
 import { getRecord as getSpriteRecord } from '../sprites/records.js';

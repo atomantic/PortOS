@@ -30,7 +30,7 @@ import { fileURLToPath } from 'url';
 
 import { NAV_COMMANDS } from '../server/lib/navManifest.js';
 import { ASSET_ROUTE_PREFIXES, SERVER_OWNED_PREFIXES } from '../server/lib/assetRoutePrefixes.js';
-import { ASSET_MOUNTS } from '../server/lib/assetMounts.js';
+import { ASSET_MOUNTS } from '../server/services/assetMounts.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (rel) => readFileSync(join(REPO_ROOT, rel), 'utf8');

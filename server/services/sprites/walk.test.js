@@ -36,7 +36,7 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
 // NOT race the test with a background attach; a happy-path test overrides it
 // with mockImplementationOnce to simulate grok writing the MP4.
 const executeTuiRun = vi.fn(() => new Promise(() => {}));
-vi.mock('../../lib/tuiPromptRunner.js', () => ({
+vi.mock('../tuiPromptRunner.js', () => ({
   executeTuiRun: (...args) => executeTuiRun(...args),
 }));
 

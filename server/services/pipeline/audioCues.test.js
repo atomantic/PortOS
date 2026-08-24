@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Stub the LLM driver so deriveAudioCues never hits a provider.
 const runStagedLLMMock = vi.fn();
-vi.mock('../../lib/stageRunner.js', () => ({
+vi.mock('../stageRunner.js', () => ({
   runStagedLLM: (...a) => runStagedLLMMock(...a),
 }));
 

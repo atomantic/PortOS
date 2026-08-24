@@ -4,7 +4,7 @@
 
 import { join } from 'path';
 import { PATHS, readJSONFile, expandHome } from '../../lib/fileUtils.js';
-import { runPromptThroughProvider } from '../../lib/promptRunner.js';
+import { runPromptThroughProvider } from '../promptRunner.js';
 import { getActiveProvider } from '../providers.js';
 import * as jiraService from '../jira.js';
 import { emitLog } from '../cosEvents.js';

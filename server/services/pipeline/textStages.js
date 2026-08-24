@@ -19,7 +19,7 @@
  * emit is a no-op and generation is byte-for-byte the un-streamed path.
  */
 
-import { runStagedLLM, resolveStageContext } from '../../lib/stageRunner.js';
+import { runStagedLLM, resolveStageContext } from '../stageRunner.js';
 import { getStage } from '../promptService.js';
 import { emitStageProgress, finishStageProgress } from './textStageProgress.js';
 import { getSeries } from './series.js';

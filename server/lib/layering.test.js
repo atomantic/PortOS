@@ -8,9 +8,9 @@
  * meatspacePostDrillCache.js` for a four-string array — dragging in the LLM
  * drill generator behind it.
  *
- * Burn-down, like the a11y control-name guard: the allowlist only shrinks.
- * Fixing a module means deleting its row, and the stale-entry test below fails
- * if you name one without deleting it. Tracked in #4901.
+ * The burn-down is COMPLETE: the allowlist is empty, so this is now a plain
+ * rule rather than a backlog. The stale-entry test below stays because the
+ * allowlist must keep shrinking if anyone ever re-opens it.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -23,14 +23,16 @@ const LIB_ROOT = dirname(fileURLToPath(import.meta.url));
 // Modules that still import upward into services. Each row is a real layering
 // inversion awaiting its slice of #4901 — NOT a permanent exemption. Fix the
 // module, delete the row. Never add a row for new code.
-const PREEXISTING_LIB_TO_SERVICES_ALLOWLIST = new Set([
-  'assetMounts.js',
-  'createSettingsGatedSyncScheduler.js',
-  'creativeDirectorPrompts.js',
-  'promptRunner.js',
-  'stageRunner.js',
-  'tuiPromptRunner.js',
-]);
+// EMPTY — the burn-down is complete (#4901). Every server/lib module that
+// imported upward into services has been resolved, each on its own merits:
+// pure vocabularies were pushed DOWN into lib, and genuine orchestration
+// (runners, the HF download stack, aiProvider) was promoted UP into services.
+//
+// Do NOT add a row here. An empty list means the rule is now simply enforced:
+// if you need a service from lib, either the dependency belongs below (move the
+// constant/helper down) or the module belongs above (promote it). Adding a row
+// re-opens a backlog that took six PRs to close.
+const PREEXISTING_LIB_TO_SERVICES_ALLOWLIST = new Set([]);
 
 // Permanently exempt — NOT burn-down rows. Both reach into services through a
 // DYNAMIC import for a documented structural reason, and turning either into a

@@ -19,7 +19,7 @@
  * (promptRunner → providers → runner) doesn't load on every plain song read.
  */
 
-import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from '../lib/promptRunner.js';
+import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from './promptRunner.js';
 import { extractJson } from '../lib/jsonExtract.js';
 import { ServerError } from '../lib/errorHandler.js';
 import {

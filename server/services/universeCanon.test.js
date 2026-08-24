@@ -37,12 +37,12 @@ vi.mock('./sharing/peerSync.js', () => mockNoPeerSync());
 // out to live AI providers. Stub them to return deterministic shapes so we
 // can test lock semantics without spinning up a model.
 const extractBibleMock = vi.fn();
-vi.mock('../lib/bibleExtractor.js', () => ({
+vi.mock('./bibleExtractor.js', () => ({
   extractBible: (...args) => extractBibleMock(...args),
 }));
 
 const runStagedLLMMock = vi.fn();
-vi.mock('../lib/stageRunner.js', () => ({
+vi.mock('./stageRunner.js', () => ({
   runStagedLLM: (...args) => runStagedLLMMock(...args),
 }));
 

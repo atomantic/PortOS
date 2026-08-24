@@ -70,7 +70,7 @@
     { "id": "svc.taskSchedule", "label": "taskSchedule", "group": "server-services", "file": "server/services/taskSchedule.js", "desc": "Unified v2 schedule store (interval/cron) with prompt versioning." },
     { "id": "svc.cosJobScheduler", "label": "cosJobScheduler", "group": "server-services", "file": "server/services/cosJobScheduler.js", "desc": "Fires due scheduled jobs: inline script/shell or task:ready for AI agents." },
 
-    { "id": "lib.promptRunner", "label": "promptRunner", "group": "server-lib", "file": "server/lib/promptRunner.js", "desc": "Assembles prompts from templates + context and runs them through a provider." },
+    { "id": "lib.promptRunner", "label": "promptRunner", "group": "server-lib", "file": "server/services/promptRunner.js", "desc": "Assembles prompts from templates + context and runs them through a provider." },
     { "id": "lib.aiProvider", "label": "aiProvider + aiToolkit", "group": "server-lib", "file": "server/services/aiProvider.js", "desc": "Provider registry/resolution: CLI providers, local backends, model selection." },
     { "id": "lib.peerHttpClient", "label": "peerHttpClient", "group": "server-lib", "file": "server/lib/peerHttpClient.js", "desc": "peerFetch: authenticated HTTP to federated peer instances." },
     { "id": "lib.navManifest", "label": "navManifest", "group": "server-lib", "file": "server/lib/navManifest.js", "desc": "NAV_COMMANDS + resolveNavCommand — shared by ⌘K palette and voice nav." },

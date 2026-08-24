@@ -11,7 +11,7 @@
  */
 
 import { randomUUID } from 'crypto';
-import { runStagedLLM } from '../lib/stageRunner.js';
+import { runStagedLLM } from './stageRunner.js';
 import { importerEvents, emitImporterProgress } from './importerEvents.js';
 // Re-export so consumers reach the analyze-phase progress bus through the
 // importer's public surface (the socket bridge imports it from the source

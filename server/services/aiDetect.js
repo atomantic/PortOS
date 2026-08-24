@@ -4,7 +4,7 @@ import { join, basename } from 'path';
 import { getActiveProvider, getProviderById } from './providers.js';
 import { tryReadFile } from '../lib/fileUtils.js';
 import { extractJson } from '../lib/jsonExtract.js';
-import { runPromptThroughProvider } from '../lib/promptRunner.js';
+import { runPromptThroughProvider } from './promptRunner.js';
 
 const DEFAULT_AI_DETECT_TIMEOUT_MS = 60000;
 

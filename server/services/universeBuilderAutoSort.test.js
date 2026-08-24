@@ -26,7 +26,7 @@ vi.mock('./sharing/peerSync.js', () => mockNoPeerSync());
 
 const resolveProviderAndModelMock = vi.fn();
 const runPromptThroughProviderMock = vi.fn();
-vi.mock('../lib/promptRunner.js', () => ({
+vi.mock('./promptRunner.js', () => ({
 assertProvider: (provider, { message, code, status = 503 } = {}) => {
     if (provider) return;
     const err = new Error(message || 'No AI provider available');

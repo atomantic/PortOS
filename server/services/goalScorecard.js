@@ -33,7 +33,7 @@ import { localDayRangeUtc, localDayKey, listEvents } from './humanActivity.js';
 import * as journal from './brainJournal.js';
 import { buildMarkers } from '../lib/markedSection.js';
 import { getProviderById, getActiveProvider } from './providers.js';
-import { runPromptThroughProvider } from '../lib/promptRunner.js';
+import { runPromptThroughProvider } from './promptRunner.js';
 
 const GOALS_FILE = join(PATHS.digitalTwin, 'goals.json');
 const INSIGHTS_DIR = join(PATHS.data, 'insights');

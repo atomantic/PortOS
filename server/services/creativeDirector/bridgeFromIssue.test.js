@@ -22,7 +22,7 @@ const mockStartProject = vi.fn();
 
 // stageRunner is shared by bridgeFromIssue AND liveDirector (which provides the
 // real shapeProposal/CD_BRIDGE_STAGE we deliberately keep unmocked).
-vi.mock('../../lib/stageRunner.js', () => ({ runStagedLLM: (...a) => mockRunStagedLLM(...a) }));
+vi.mock('../stageRunner.js', () => ({ runStagedLLM: (...a) => mockRunStagedLLM(...a) }));
 vi.mock('../pipeline/issues.js', () => ({ getIssue: (...a) => mockGetIssue(...a) }));
 vi.mock('../pipeline/series.js', () => ({ getSeries: (...a) => mockGetSeries(...a) }));
 vi.mock('../videoGen/local.js', () => ({ defaultVideoModelId: () => 'ltx-model' }));

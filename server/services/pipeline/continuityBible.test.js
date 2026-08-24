@@ -11,7 +11,7 @@ vi.mock('../../lib/fileUtils.js', () => ({
 // runStagedLLM returns the next queued canned ledger.
 const llmQueue = [];
 const llmCalls = [];
-vi.mock('../../lib/stageRunner.js', () => ({
+vi.mock('../stageRunner.js', () => ({
   runStagedLLM: vi.fn(async (stage, vars) => {
     llmCalls.push({ stage, vars });
     const content = llmQueue.shift();

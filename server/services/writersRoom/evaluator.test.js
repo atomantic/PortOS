@@ -5,9 +5,9 @@ import { describe, it, expect, vi } from 'vitest';
 // pure KIND_META map + the `cuts`/`revise` SHAPERS, which depend on nothing but
 // stripCodeFences (aiProvider) and CUT_TYPES (cutApplier, real).
 vi.mock('../aiProvider.js', () => ({ stripCodeFences: (s) => String(s ?? '') }));
-vi.mock('../../lib/stageRunner.js', () => ({ runStagedLLM: vi.fn() }));
-vi.mock('../../lib/bibleExtractor.js', () => ({ extractBible: vi.fn() }));
-vi.mock('../../lib/sceneExtractor.js', () => ({ extractScenes: vi.fn(), SOURCE_KIND: { PROSE: 'prose' } }));
+vi.mock('../stageRunner.js', () => ({ runStagedLLM: vi.fn() }));
+vi.mock('../bibleExtractor.js', () => ({ extractBible: vi.fn() }));
+vi.mock('../sceneExtractor.js', () => ({ extractScenes: vi.fn(), SOURCE_KIND: { PROSE: 'prose' } }));
 vi.mock('../../lib/storyBible.js', () => ({ BIBLE_KIND: { CHARACTER: 'character', PLACE: 'place', OBJECT: 'object' } }));
 vi.mock('./local.js', () => ({ getWorkWithBody: vi.fn(), ensureWorkMediaCollection: vi.fn() }));
 vi.mock('../mediaCollections.js', () => ({ addItem: vi.fn(), ERR_DUPLICATE: 'DUP' }));

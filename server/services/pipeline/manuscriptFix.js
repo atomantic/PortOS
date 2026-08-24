@@ -13,7 +13,7 @@
  */
 
 import { randomUUID, createHash } from 'crypto';
-import { runStagedLLM, resolveStageContext } from '../../lib/stageRunner.js';
+import { runStagedLLM, resolveStageContext } from '../stageRunner.js';
 import { planManuscriptPass, estimateTokens } from '../../lib/contextBudget.js';
 import { getSeries, MANUSCRIPT_TYPES } from './series.js';
 import { getIssue, updateStageWithLatest, updateStagesWithLatest } from './issues.js';

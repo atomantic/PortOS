@@ -14,7 +14,7 @@ vi.mock('../lib/fileUtils.js', () => ({
   },
   dirSize: vi.fn(async (path) => path.includes('Downloads') ? 900 : 100),
 }));
-vi.mock('../lib/promptRunner.js', () => ({
+vi.mock('./promptRunner.js', () => ({
   resolveProviderAndModel: vi.fn(async () => ({ provider: { id: 'codex' }, selectedModel: 'gpt-example' })),
   assertProvider: vi.fn(),
   runPromptThroughProvider: vi.fn(async () => ({
@@ -85,7 +85,7 @@ vi.mock('./cos.js', () => ({
   getStatus: vi.fn(async () => ({ running: true, paused: false, activeAgents: 0, pausedAgents: 0 })),
 }));
 
-const promptRunner = await import('../lib/promptRunner.js');
+const promptRunner = await import('./promptRunner.js');
 const fsPromises = await import('fs/promises');
 const db = await import('../lib/db.js');
 const fileUtils = await import('../lib/fileUtils.js');

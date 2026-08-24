@@ -42,7 +42,7 @@ import { readdir, rm } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { atomicWrite, ensureDir, pathExists, readJSONFile, sha256File } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { executeTuiRun } from '../../lib/tuiPromptRunner.js';
+import { executeTuiRun } from '../tuiPromptRunner.js';
 import { GROK_TUI_ID } from '../../lib/grok.js';
 import { resolveGrokDuration } from '../../lib/grokVideoClip.js';
 import {

@@ -15,10 +15,10 @@
  * resolve after the mock, not at import.
  */
 import express from 'express';
-import { PATHS } from './fileUtils.js';
-import { ServerError, sendErrorResponse } from './errorHandler.js';
-import { ASSET_ROUTE_PREFIXES, SERVER_OWNED_PREFIXES } from './assetRoutePrefixes.js';
-import { wrWorksDir } from '../services/writersRoom/_shared.js';
+import { PATHS } from '../lib/fileUtils.js';
+import { ServerError, sendErrorResponse } from '../lib/errorHandler.js';
+import { ASSET_ROUTE_PREFIXES, SERVER_OWNED_PREFIXES } from '../lib/assetRoutePrefixes.js';
+import { wrWorksDir } from './writersRoom/_shared.js';
 
 // `acceptRanges: true` is the serve-static default already, but we set it
 // explicitly because the federated peer-sync receiver

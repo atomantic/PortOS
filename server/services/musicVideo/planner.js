@@ -30,7 +30,7 @@
 
 import { ServerError } from '../../lib/errorHandler.js';
 import { extractJson } from '../../lib/jsonExtract.js';
-import { resolveProviderAndModel, runPromptThroughProvider } from '../../lib/promptRunner.js';
+import { resolveProviderAndModel, runPromptThroughProvider } from '../promptRunner.js';
 import { snapSectionsToGrid } from './audioAnalysis.js';
 import { getProject, addProjectScenes } from './projects.js';
 

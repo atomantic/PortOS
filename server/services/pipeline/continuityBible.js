@@ -28,7 +28,7 @@ import { createHash } from 'crypto';
 import { atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
 import { createKeyedFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { createSseRunner } from '../../lib/sseUtils.js';
-import { runStagedLLM, resolveStageContext } from '../../lib/stageRunner.js';
+import { runStagedLLM, resolveStageContext } from '../stageRunner.js';
 import { manuscriptContentBudgetChars, estimateTokens } from '../../lib/contextBudget.js';
 import { seriesStore, getSeries } from './series.js';
 import { getSeriesCanon } from './seriesCanon.js';

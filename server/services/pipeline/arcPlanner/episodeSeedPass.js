@@ -3,7 +3,7 @@
  * and the per-episode canon extraction. Built on ./context.js.
  */
 
-import { runStagedLLM } from '../../../lib/stageRunner.js';
+import { runStagedLLM } from '../../stageRunner.js';
 import { getSeries } from '../series.js';
 import { createIssue, listIssues, updateIssue, TEXT_STAGE_IDS } from '../issues.js';
 import { renderArcShapeGuidance, renderArcShapePositionSummary } from '../../../lib/storyArc.js';

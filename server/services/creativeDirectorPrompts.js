@@ -23,9 +23,9 @@ import {
   resolveAspectDimensions,
   QUALITY_PRESETS,
   presetToRenderParams,
-} from './creativeDirectorPresets.js';
+} from '../lib/creativeDirectorPresets.js';
 import { PORTOS_API_URL } from './ports.js';
-import { buildPrompt } from '../services/promptService.js';
+import { buildPrompt } from './promptService.js';
 
 // Shared project-block view used by both prompt stages. Defaults out
 // nullable fields to `''` so the templates' `{{#x}}`/`{{^x}}` Mustache-spec
@@ -153,7 +153,7 @@ export async function buildPlanPrompt(project, { toolSpecs } = {}) {
   // focused consumers intentionally mock only the PATHS keys they use; loading
   // the on-disk model catalog is specific to planning and should happen only
   // when a plan prompt is actually requested.
-  const { getVideoModels } = await import('./mediaModels.js');
+  const { getVideoModels } = await import('../lib/mediaModels.js');
   const view = buildPlanView(project, toolSpecs, getVideoModels());
   return buildPrompt('cd-plan', view);
 }

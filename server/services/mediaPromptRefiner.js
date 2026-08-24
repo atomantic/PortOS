@@ -1,6 +1,6 @@
 import { ServerError } from '../lib/errorHandler.js';
 import { findBalancedBlocks, tryParseWithRepair } from '../lib/jsonExtract.js';
-import { resolveEffectiveModel, runPromptThroughProvider } from '../lib/promptRunner.js';
+import { resolveEffectiveModel, runPromptThroughProvider } from './promptRunner.js';
 import { getProviderById } from './providers.js';
 
 const MAX_PROMPT_LEN = 8000;
