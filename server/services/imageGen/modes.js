@@ -9,33 +9,19 @@
  * `IMAGE_GEN_MODES` is the alphabet for Zod / OpenAI tool-spec enums.
  * Single source of truth: derive the array from `Object.values(...)`.
  *
- * The lone import is the error type — `errorHandler.js` pulls in nothing but
- * node's `events`, so it cannot reintroduce the provider cycle this module was
- * split out to avoid.
+ * The backend alphabets live in `lib/generationModes.js`, below both validation
+ * and this service module. They are re-exported here so existing generation
+ * callers keep the same service-local import path.
  */
 
 import { ServerError } from '../../lib/errorHandler.js';
+import {
+  CLOUD_IMAGE_GEN_MODES, IMAGE_GEN_MODE, IMAGE_GEN_MODES, QUEUEABLE_IMAGE_MODES,
+} from '../../lib/generationModes.js';
 
-export const IMAGE_GEN_MODE = Object.freeze({
-  EXTERNAL: 'external',
-  LOCAL: 'local',
-  CODEX: 'codex',
-  GROK: 'grok',
-  AGY: 'agy',
-});
-
-export const IMAGE_GEN_MODES = Object.freeze(Object.values(IMAGE_GEN_MODE));
-
-// Cloud-CLI backends (codex `$imagegen`, grok `image_gen`) — each render
-// shells out to an external child that spends remote quota, not local GPU.
-// The mediaJobQueue routes these through its parallel cloud lane (they don't
-// serialize on the MLX runtime) and async callers treat them like local:
-// generateImage returns a job descriptor before the file lands.
-export const CLOUD_IMAGE_GEN_MODES = Object.freeze([
-  IMAGE_GEN_MODE.CODEX,
-  IMAGE_GEN_MODE.GROK,
-  IMAGE_GEN_MODE.AGY,
-]);
+export {
+  CLOUD_IMAGE_GEN_MODES, IMAGE_GEN_MODE, IMAGE_GEN_MODES, QUEUEABLE_IMAGE_MODES,
+};
 
 // The provider-side image tool each cloud CLI is directed to call. Single
 // source: the prompt builders name it, the fabrication guard names it when it
@@ -73,12 +59,6 @@ export const visualReferenceRole = (count) => (count === 1
  */
 export const enabledCloudImageModes = (settings) =>
   CLOUD_IMAGE_GEN_MODES.filter((mode) => settings?.imageGen?.[mode]?.enabled === true);
-
-// Modes the mediaJobQueue can run (external SD-API stays synchronous — a
-// remote HTTP call with no local single-flight constraint to absorb). Single
-// source for the pipeline routes' Zod enums and batch-render guards, so a
-// future backend is one edit here instead of a sweep of enum literals.
-export const QUEUEABLE_IMAGE_MODES = Object.freeze([IMAGE_GEN_MODE.LOCAL, ...CLOUD_IMAGE_GEN_MODES]);
 
 // Backends that cannot take an input image at all (#3243). Every *queueable*
 // backend now can: local (mflux/diffusers `--image-path` + FLUX.2 references),

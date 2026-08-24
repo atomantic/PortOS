@@ -16,9 +16,8 @@
 
 import { describe, it, expect } from 'vitest';
 import { RENDER_TARGET, RENDER_TARGETS, RENDER_TARGET_BACKEND_AUTO } from './renderTargets.js';
-import {
-  CLOUD_IMAGE_GEN_MODES, EDIT_INCAPABLE_IMAGE_MODES, IMAGE_GEN_MODES,
-} from '../services/imageGen/modes.js';
+import { CLOUD_IMAGE_GEN_MODES, IMAGE_GEN_MODES } from './generationModes.js';
+import { EDIT_INCAPABLE_IMAGE_MODES } from '../services/imageGen/modes.js';
 import { cloudPromptRequired, maxInputImages } from '../services/imageGen/cloudProviderConfig.js';
 // Import the node-safe leaf, NOT imageGenBackends.js — that module imports
 // lucide-react, which is not installed in the server CI job (this exact import

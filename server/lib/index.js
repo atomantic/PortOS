@@ -348,6 +348,7 @@ export * from './planIds.js';
 export * from './markdownText.js';
 export * from './renderSlot.js';
 export * from './renderTargets.js';
+export * from './generationModes.js';
 export * from './telegramClient.js';
 export * from './tempPathGuard.js';
 export * from './textUtils.js';

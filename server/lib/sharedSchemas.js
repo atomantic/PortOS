@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { RENDER_TARGET_BACKEND_AUTO, RECORD_RENDER_MODEL_MAX } from './renderTargets.js';
-import { QUEUEABLE_IMAGE_MODES } from '../services/imageGen/modes.js';
+import { QUEUEABLE_IMAGE_MODES } from './generationModes.js';
 import { GROK_VIDEO_DURATIONS } from './grokVideoClip.js';
 
 /**

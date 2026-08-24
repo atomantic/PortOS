@@ -4,8 +4,7 @@ import { partialWithoutDefaults, emptyToUndefined, emptyToNull, optionalBooleanM
 import { WORK_TRACKERS } from './workTracker.js';
 import { PROVIDER_FAMILY_IDS } from './providerFamilies.js';
 import { MAX_MONTHLY_COST } from './subscriptionSavings.js';
-import { QUEUEABLE_IMAGE_MODES } from '../services/imageGen/modes.js';
-import { VIDEO_GEN_MODES } from '../services/videoGen/modes.js';
+import { QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from './generationModes.js';
 import { RENDER_TARGETS, RENDER_TARGET_BACKEND_AUTO } from './renderTargets.js';
 import {
   grokVideoDurationSchema, cloudModelIdString, recordRenderPinFields, isSafeSubdirFilter,

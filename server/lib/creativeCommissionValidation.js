@@ -1,6 +1,5 @@
 import { z } from 'zod';
-import { QUEUEABLE_IMAGE_MODES } from '../services/imageGen/modes.js';
-import { VIDEO_GEN_MODES } from '../services/videoGen/modes.js';
+import { QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from './generationModes.js';
 import { RENDER_TARGET_BACKEND_AUTO } from './renderTargets.js';
 import { recurrenceRuleSchema } from './recurrenceValidation.js';
 

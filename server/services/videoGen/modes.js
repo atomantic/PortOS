@@ -10,9 +10,9 @@
  * no enumerable alphabet — so a Zod schema, a UI picker, or a resolver had
  * nothing to derive from and had to hand-copy `['local', 'grok']`.
  *
- * This module is that alphabet. The values are DERIVED from `IMAGE_GEN_MODE`
- * rather than re-typed, so the queue's discriminator can never drift from what a
- * schema validates.
+ * The alphabet lives in `lib/generationModes.js`, below both validation and the
+ * generation services. This module re-exports it beside the service-owned
+ * usability and resolution helpers for compatibility.
  *
  * Careful: local video renders ALSO use a `params.mode` for the t2v/i2v semantic
  * ('text' | 'image' | 'fflf' | 'a2v' | 'extend' | an IC-LoRA remix id — see
@@ -20,25 +20,16 @@
  * literal 'grok', which is exactly why the cloud discriminator can share the
  * key; a grok job carries the semantic separately as `videoMode`.
  *
- * Dependency-free apart from the image enum and the render-target leaf (both
- * leaves themselves), so `lib/validation.js` and the commission validation
- * leaf can both import it.
+ * Validation imports the leaf directly, so this service module can retain the
+ * settings-aware backend resolver without inverting the dependency graph.
  */
 
-import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
+import {
+  CLOUD_VIDEO_GEN_MODES, VIDEO_GEN_MODE, VIDEO_GEN_MODES,
+} from '../../lib/generationModes.js';
 import { normalizeRenderPinValue } from '../../lib/renderTargets.js';
 
-export const VIDEO_GEN_MODE = Object.freeze({
-  LOCAL: IMAGE_GEN_MODE.LOCAL,
-  GROK: IMAGE_GEN_MODE.GROK,
-});
-
-export const VIDEO_GEN_MODES = Object.freeze(Object.values(VIDEO_GEN_MODE));
-
-// Cloud-CLI video backends — each render shells out to an external child that
-// spends remote quota, so the queue routes them through its parallel cloud lane
-// instead of serializing on the MLX runtime.
-export const CLOUD_VIDEO_GEN_MODES = Object.freeze([VIDEO_GEN_MODE.GROK]);
+export { CLOUD_VIDEO_GEN_MODES, VIDEO_GEN_MODE, VIDEO_GEN_MODES };
 
 /**
  * Is `mode` a video backend this install can actually render on right now?
