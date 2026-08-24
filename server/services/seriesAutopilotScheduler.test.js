@@ -20,7 +20,9 @@ vi.mock('./eventScheduler.js', () => ({
 vi.mock('./settings.js', () => ({ getSettings: vi.fn(), settingsEvents: { on: vi.fn() } }));
 vi.mock('./pipeline/series.js', () => ({ getSeries: vi.fn() }));
 vi.mock('./pipeline/seriesAutopilot.js', () => ({ startSeriesAutopilot: vi.fn() }));
-vi.mock('../lib/timezone.js', () => ({ getUserTimezone: vi.fn().mockResolvedValue('America/Los_Angeles') }));
+vi.mock('./userTimezone.js', () => ({
+  getUserTimezone: vi.fn().mockResolvedValue('America/Los_Angeles'),
+}));
 
 import { schedule, cancel } from './eventScheduler.js';
 import { getSettings } from './settings.js';

@@ -19,7 +19,8 @@ import { synthesize } from './tts.js';
 import { getVoiceConfig } from './config.js';
 import { rememberTtsForAllSockets } from './echo.js';
 import { emitVoiceOutput } from './voiceOutput.js';
-import { getUserTimezone, getLocalParts, isWithinTimeWindow } from '../../lib/timezone.js';
+import { getLocalParts, isWithinTimeWindow } from '../../lib/timezone.js';
+import { getUserTimezone } from '../userTimezone.js';
 
 // HH:MM helpers live in server/lib/timezone.js (single source of truth shared
 // with the dashboard's time-window validator). Re-exported here so the

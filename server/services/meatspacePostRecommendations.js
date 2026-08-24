@@ -25,7 +25,8 @@ import { getDueMemoryItems } from './meatspacePostMemory.js';
 import { getDueReviews } from './meatspacePostReview.js';
 import { getAllTrainingEntries } from './postTrainingLogStore.js';
 import { getMorseProgress, MAX_KOCH_LEVEL } from './meatspacePostMorse.js';
-import { getUserTimezone, todayInTimezone } from '../lib/timezone.js';
+import { todayInTimezone } from '../lib/timezone.js';
+import { getUserTimezone } from './userTimezone.js';
 
 const RECOMMENDATION_LIMIT = 5;
 const recModuleForDrillType = (type, fallback) => {

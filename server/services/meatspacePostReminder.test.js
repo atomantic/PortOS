@@ -37,11 +37,13 @@ vi.mock('./eventScheduler.js', () => ({
 }));
 
 vi.mock('../lib/timezone.js', () => ({
-  getUserTimezone: vi.fn().mockResolvedValue('UTC'),
-  getTimezoneUpdatedAt: vi.fn().mockResolvedValue(null),
   getLocalParts: vi.fn(),
   todayInTimezone: vi.fn(),
-  HHMM_STRICT_RE: /^([01]\d|2[0-3]):[0-5]\d$/
+  HHMM_STRICT_RE: /^([01]\d|2[0-3]):[0-5]\d$/,
+}));
+vi.mock('./userTimezone.js', () => ({
+  getUserTimezone: vi.fn().mockResolvedValue('UTC'),
+  getTimezoneUpdatedAt: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('./meatspacePost.js', () => ({
@@ -66,7 +68,8 @@ vi.mock('./settings.js', () => ({
 }));
 
 import { schedule, cancel, parseCronToPrevRun } from './eventScheduler.js';
-import { getUserTimezone, getTimezoneUpdatedAt, getLocalParts, todayInTimezone } from '../lib/timezone.js';
+import { getLocalParts, todayInTimezone } from '../lib/timezone.js';
+import { getUserTimezone, getTimezoneUpdatedAt } from './userTimezone.js';
 import { getPostConfig, getPostSessions } from './meatspacePost.js';
 import { isInstanceFeatureEnabled } from './instanceFeatures.js';
 import { addNotification, getNotifications } from './notifications.js';

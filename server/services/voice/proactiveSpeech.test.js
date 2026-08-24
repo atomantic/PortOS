@@ -15,8 +15,11 @@ vi.mock('./tts.js', () => ({
 // here) and override only the timezone-lookup pair the integration path needs.
 vi.mock('../../lib/timezone.js', async (importOriginal) => ({
   ...(await importOriginal()),
-  getUserTimezone: vi.fn(async () => 'UTC'),
   getLocalParts: vi.fn(() => ({ hour: 14, minute: 0 })),
+}));
+vi.mock('../userTimezone.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getUserTimezone: vi.fn(async () => 'UTC'),
 }));
 
 const {
@@ -245,7 +248,8 @@ describe('speakProactive', () => {
   // called. Skipping them removes a settings-file read + Intl call per
   // proactive line and one async failure surface.
   it('does not resolve local time when quiet hours are disabled', async () => {
-    const { getUserTimezone, getLocalParts } = await import('../../lib/timezone.js');
+    const { getLocalParts } = await import('../../lib/timezone.js');
+    const { getUserTimezone } = await import('../userTimezone.js');
     getUserTimezone.mockClear();
     getLocalParts.mockClear();
     const { io } = makeIo();
@@ -257,7 +261,8 @@ describe('speakProactive', () => {
 
   it('resolves local time only when quiet hours are enabled', async () => {
     const { getVoiceConfig } = await import('./config.js');
-    const { getUserTimezone, getLocalParts } = await import('../../lib/timezone.js');
+    const { getLocalParts } = await import('../../lib/timezone.js');
+    const { getUserTimezone } = await import('../userTimezone.js');
     getUserTimezone.mockClear();
     getLocalParts.mockClear();
     getVoiceConfig.mockResolvedValueOnce({

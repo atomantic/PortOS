@@ -29,7 +29,7 @@ import { schedule, cancel, isValidCron } from './eventScheduler.js';
 import { getSettings, settingsEvents } from './settings.js';
 import { getSeries } from './pipeline/series.js';
 import { startSeriesAutopilot } from './pipeline/seriesAutopilot.js';
-import { getUserTimezone } from '../lib/timezone.js';
+import { getUserTimezone } from './userTimezone.js';
 
 // eventScheduler id namespace for a per-series cron. One event per seriesId.
 const eventId = (seriesId) => `series-autopilot-${seriesId}`;

@@ -27,7 +27,8 @@
 
 import { join } from 'path';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
-import { getUserTimezone, todayInTimezone } from '../lib/timezone.js';
+import { todayInTimezone } from '../lib/timezone.js';
+import { getUserTimezone } from './userTimezone.js';
 import { localDayRangeUtc, localDayKey, listEvents } from './humanActivity.js';
 import * as journal from './brainJournal.js';
 import { buildMarkers } from '../lib/markedSection.js';

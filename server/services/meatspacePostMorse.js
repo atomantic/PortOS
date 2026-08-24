@@ -25,7 +25,8 @@
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
-import { getUserTimezone, todayInTimezone, userLocalToday } from '../lib/timezone.js';
+import { todayInTimezone } from '../lib/timezone.js';
+import { getUserTimezone, userLocalToday } from './userTimezone.js';
 import { withDerivedDayKeys, ymdShift } from '../lib/postStreak.js';
 
 const MEATSPACE_DIR = PATHS.meatspace;

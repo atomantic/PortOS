@@ -24,7 +24,8 @@
  */
 
 import { schedule, cancel, parseCronToPrevRun } from './eventScheduler.js';
-import { getUserTimezone, getTimezoneUpdatedAt, getLocalParts, todayInTimezone, HHMM_STRICT_RE } from '../lib/timezone.js';
+import { getLocalParts, todayInTimezone, HHMM_STRICT_RE } from '../lib/timezone.js';
+import { getUserTimezone, getTimezoneUpdatedAt } from './userTimezone.js';
 import { getPostConfig, getPostSessions, postConfigEvents } from './meatspacePost.js';
 import { isInstanceFeatureEnabled } from './instanceFeatures.js';
 import { addNotification, getNotifications, NOTIFICATION_TYPES, PRIORITY_LEVELS } from './notifications.js';

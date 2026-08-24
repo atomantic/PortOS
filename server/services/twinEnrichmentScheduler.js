@@ -16,7 +16,8 @@
  * recomputes once per local calendar day.
  */
 
-import { todayInTimezone, getUserTimezone } from '../lib/timezone.js';
+import { todayInTimezone } from '../lib/timezone.js';
+import { getUserTimezone } from './userTimezone.js';
 import { aggregateTwinEvidence } from './twinEnrichment.js';
 
 let schedulerInterval = null;

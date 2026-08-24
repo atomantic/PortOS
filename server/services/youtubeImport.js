@@ -31,7 +31,7 @@
 import { readFile } from 'fs/promises';
 import { collectZipEntries, isZipUpload } from '../lib/zipStream.js';
 import { shortSummary, recordEvents, localDayKey } from './humanActivity.js';
-import { getUserTimezone } from '../lib/timezone.js';
+import { getUserTimezone } from './userTimezone.js';
 
 // ---------------------------------------------------------------------------
 // Pure helpers (exported for unit tests — no DB, no filesystem, no side effects).

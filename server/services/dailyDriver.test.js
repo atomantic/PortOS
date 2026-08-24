@@ -12,8 +12,10 @@ vi.mock('../lib/fileUtils.js', () => ({
 
 let mockToday = '2026-07-16';
 vi.mock('../lib/timezone.js', () => ({
-  getUserTimezone: vi.fn(async () => 'UTC'),
   todayInTimezone: vi.fn(() => mockToday),
+}));
+vi.mock('./userTimezone.js', () => ({
+  getUserTimezone: vi.fn(async () => 'UTC'),
 }));
 
 import {

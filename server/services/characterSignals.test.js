@@ -26,7 +26,7 @@ vi.mock('./instanceFeatures.js', () => ({
 }));
 // PARTIAL mock — only the settings-backed reads are stubbed, so the pure `todayInTimezone`
 // that `lib/activeDays.js` derives day keys through stays real.
-vi.mock('../lib/timezone.js', async (importOriginal) => ({
+vi.mock('./userTimezone.js', async (importOriginal) => ({
   ...(await importOriginal()),
   userLocalToday: vi.fn(async () => '2026-07-17'),
   getUserTimezone: vi.fn(async () => 'America/Los_Angeles'),

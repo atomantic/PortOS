@@ -41,7 +41,7 @@ vi.mock('../services/autonomousJobs/scheduler.js', () => ({
   computeNextJobRun: vi.fn(),
 }));
 
-vi.mock('../lib/timezone.js', () => ({
+vi.mock('../services/userTimezone.js', () => ({
   getUserTimezone: vi.fn(),
 }));
 
@@ -50,7 +50,7 @@ import * as autonomousJobs from '../services/autonomousJobs.js';
 import { checkJobGate, hasGate, getRegisteredGates } from '../services/jobGates.js';
 import { parseCronToNextRun } from '../services/eventScheduler.js';
 import { computeNextJobRun } from '../services/autonomousJobs/scheduler.js';
-import { getUserTimezone } from '../lib/timezone.js';
+import { getUserTimezone } from '../services/userTimezone.js';
 
 describe('CoS Job Routes', () => {
   let app;

@@ -15,7 +15,8 @@
  */
 import { getPostSessions } from './meatspacePost.js';
 import { computeUnifiedStreak } from '../lib/postStreak.js';
-import { getUserTimezone, todayInTimezone } from '../lib/timezone.js';
+import { todayInTimezone } from '../lib/timezone.js';
+import { getUserTimezone } from './userTimezone.js';
 
 /**
  * ONE unified activity streak across scored sessions AND the training log — the

@@ -25,7 +25,8 @@ import { getScheduleStatus } from './taskSchedule.js';
 import * as autonomousJobs from './autonomousJobs.js';
 import { checkJobGate, hasGate, getRegisteredGates } from './jobGates.js';
 import { parseCronToNextRun, parseRecurrenceToNextRun } from './eventScheduler.js';
-import { getLocalParts, getUserTimezone, nextLocalTime } from '../lib/timezone.js';
+import { getLocalParts, nextLocalTime } from '../lib/timezone.js';
+import { getUserTimezone } from './userTimezone.js';
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;

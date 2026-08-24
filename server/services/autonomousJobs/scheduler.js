@@ -6,7 +6,8 @@
  * creating/updating jobs and rendering the UI's interval picker.
  */
 
-import { getUserTimezone, getLocalParts, nextLocalTime } from '../../lib/timezone.js'
+import { getLocalParts, nextLocalTime } from '../../lib/timezone.js'
+import { getUserTimezone } from '../userTimezone.js'
 import { parseCronToNextRun, parseRecurrenceToNextRun } from '../eventScheduler.js'
 import { DAY } from './constants.js'
 import { loadJobs } from './store.js'

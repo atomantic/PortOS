@@ -33,7 +33,6 @@ const PREEXISTING_LIB_TO_SERVICES_ALLOWLIST = new Set([
   'promptRunner.js',
   'spriteValidation.js',
   'stageRunner.js',
-  'timezone.js',
   'tuiPromptRunner.js',
 ]);
 

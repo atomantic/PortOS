@@ -44,9 +44,11 @@ vi.mock('./eventScheduler.js', () => ({
   parseCronToNextRun: vi.fn(() => new Date(0)),
 }));
 vi.mock('../lib/timezone.js', () => ({
-  getUserTimezone: vi.fn().mockResolvedValue('UTC'),
   getLocalParts: vi.fn(() => ({ dayOfWeek: 1 })),
   nextLocalTime: vi.fn((ms) => ms),
+}));
+vi.mock('./userTimezone.js', () => ({
+  getUserTimezone: vi.fn().mockResolvedValue('UTC'),
 }));
 vi.mock('../lib/fileUtils.js', async (importOriginal) => ({
   ...(await importOriginal()),

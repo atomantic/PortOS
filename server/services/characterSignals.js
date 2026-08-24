@@ -43,7 +43,7 @@ import { getGoals } from './identity/goals.js';
 import { countMemories } from './memoryBackend.js';
 import { countAssets } from './mediaAssetIndex/db.js';
 import { isInstanceFeatureEnabled } from './instanceFeatures.js';
-import { getUserTimezone, userLocalToday } from '../lib/timezone.js';
+import { getUserTimezone, userLocalToday } from './userTimezone.js';
 
 /**
  * Every domain stat the derived Character surfaces are allowed to read, keyed by signal id.

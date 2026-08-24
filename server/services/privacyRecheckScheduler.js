@@ -15,7 +15,7 @@
 
 import { schedule, cancel, parseCronToNextRun } from './eventScheduler.js';
 import { getSettings } from './settings.js';
-import { getUserTimezone } from '../lib/timezone.js';
+import { getUserTimezone } from './userTimezone.js';
 import { runScanPass } from './privacyScan.js';
 import { runOptOutPass } from './privacyOptOut.js';
 import { listSubjects } from './privacySubjects.js';

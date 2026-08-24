@@ -11,7 +11,7 @@
  */
 
 import { withDerivedDayKeys } from '../lib/postStreak.js';
-import { getUserTimezone } from '../lib/timezone.js';
+import { getUserTimezone } from './userTimezone.js';
 import { listStoredTrainingEntries } from './postRunStore.js';
 
 /**

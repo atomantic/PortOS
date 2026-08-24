@@ -25,7 +25,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { statSync } from 'node:fs';
 
 import { expandHome, dataPath, atomicWrite, tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
-import { getUserTimezone } from '../lib/timezone.js';
+import { getUserTimezone } from './userTimezone.js';
 import { identityFromHandle } from '../lib/tribeMatch.js';
 import { shortSummary, localDayKey } from './humanActivity.js';
 import { getSettings } from './settings.js';

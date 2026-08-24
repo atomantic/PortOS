@@ -3,7 +3,8 @@ import { createHash } from 'crypto';
 import { join } from 'path';
 import { atomicWrite, ensureDir, filterBySearch as genericFilterBySearch, PATHS, safeDate, safeJSONParse, UUID_RE, tryReadFile } from '../lib/fileUtils.js';
 import { getAccount, updateSyncStatus, markSentIngested, updateSendAsAliases } from './messageAccounts.js';
-import { getUserTimezone, getLocalParts } from '../lib/timezone.js';
+import { getLocalParts } from '../lib/timezone.js';
+import { getUserTimezone } from './userTimezone.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 

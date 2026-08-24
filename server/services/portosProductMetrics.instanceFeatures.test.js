@@ -16,8 +16,10 @@ vi.mock('./creativeCommissions/store.js', () => ({ listCommissions: mock.listCom
 vi.mock('./creativeDirector/local.js', () => ({ getProjectsByIds: mock.getProjectsByIds }));
 vi.mock('./instanceFeatures.js', () => ({ isInstanceFeatureEnabled: mock.isInstanceFeatureEnabled }));
 vi.mock('../lib/timezone.js', () => ({
-  getUserTimezone: mock.getUserTimezone,
   todayInTimezone: mock.todayInTimezone,
+}));
+vi.mock('./userTimezone.js', () => ({
+  getUserTimezone: mock.getUserTimezone,
 }));
 
 import { getProductEngagement } from './portosProductMetrics.js';

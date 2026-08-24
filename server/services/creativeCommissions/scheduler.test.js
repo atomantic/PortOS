@@ -11,7 +11,9 @@ vi.mock('../eventScheduler.js', () => ({
   isValidRecurrence: (rule) => rule?.frequency === 'weekly' && Array.isArray(rule.weekdays) && rule.weekdays.length > 0,
 }));
 
-vi.mock('../../lib/timezone.js', () => ({ getUserTimezone: async () => 'UTC' }));
+vi.mock('../userTimezone.js', () => ({
+  getUserTimezone: async () => 'UTC',
+}));
 
 const settingsEvents = new EventEmitter();
 vi.mock('../settings.js', () => ({ settingsEvents, getSettings: async () => ({}) }));

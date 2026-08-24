@@ -15,7 +15,8 @@ import { listCommissions } from './creativeCommissions/store.js';
 import { getProjectsByIds } from './creativeDirector/local.js';
 import { isInstanceFeatureEnabled } from './instanceFeatures.js';
 import { computeUnifiedStreak, recordDayKey, ymdShift, ymdToUTC } from '../lib/postStreak.js';
-import { getUserTimezone, todayInTimezone } from '../lib/timezone.js';
+import { todayInTimezone } from '../lib/timezone.js';
+import { getUserTimezone } from './userTimezone.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const FEEDBACK_WINDOW_DAYS = 30;

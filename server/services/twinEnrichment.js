@@ -29,7 +29,8 @@
 import { join } from 'path';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import { query, ensureSchema } from '../lib/db.js';
-import { getLocalParts, getUserTimezone } from '../lib/timezone.js';
+import { getLocalParts } from '../lib/timezone.js';
+import { getUserTimezone } from './userTimezone.js';
 import { getProviderById } from './providers.js';
 import { runPromptThroughProvider } from '../lib/promptRunner.js';
 

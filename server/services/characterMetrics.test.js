@@ -40,7 +40,7 @@ vi.mock('./instanceFeatures.js', () => ({
 // REAL — `lib/activeDays.js` (behind the daysActive tile) derives its day keys through it, and
 // a factory that dropped it would leave that tile throwing on an undefined import and reading
 // `unavailable` for reasons that have nothing to do with the behavior under test.
-vi.mock('../lib/timezone.js', async (importOriginal) => ({
+vi.mock('./userTimezone.js', async (importOriginal) => ({
   ...(await importOriginal()),
   userLocalToday: vi.fn(async () => stats.today),
   getUserTimezone: vi.fn(async () => stats.timezone),
@@ -58,7 +58,7 @@ import { countAssets } from './mediaAssetIndex/db.js';
 import { countWorks } from './writersRoom/local.js';
 import { getPostSessions } from './meatspacePost.js';
 import { getAllTrainingEntries } from './meatspacePostTraining.js';
-import { userLocalToday, getUserTimezone } from '../lib/timezone.js';
+import { userLocalToday, getUserTimezone } from './userTimezone.js';
 import { isInstanceFeatureEnabled } from './instanceFeatures.js';
 
 const goal = (status) => ({ status });

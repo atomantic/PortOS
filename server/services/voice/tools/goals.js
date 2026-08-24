@@ -3,7 +3,8 @@
 // property one" resolve from a distinctive word.
 
 import { getGoals, updateGoalProgress, addProgressEntry } from '../../identity.js';
-import { getUserTimezone, todayInTimezone } from '../../../lib/timezone.js';
+import { todayInTimezone } from '../../../lib/timezone.js';
+import { getUserTimezone } from '../../userTimezone.js';
 import { clampLimit } from './shared.js';
 
 export const GOALS_INTENT_RE = /\b(goals?|progress|objective)\b/i;

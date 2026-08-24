@@ -22,7 +22,8 @@
  */
 
 import { schedule as scheduleEvent, cancel as cancelEvent, parseCronToNextRun, parseRecurrenceToNextRun } from './eventScheduler.js';
-import { getUserTimezone, getLocalParts, nextLocalTime } from '../lib/timezone.js';
+import { getLocalParts, nextLocalTime } from '../lib/timezone.js';
+import { getUserTimezone } from './userTimezone.js';
 import { formatDuration } from '../lib/fileUtils.js';
 import { loadState, isDaemonRunning, canQueueImprovementTasks } from './cosState.js';
 import { getDomainMode } from '../lib/domainAutonomy.js';

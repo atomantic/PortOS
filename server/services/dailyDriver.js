@@ -13,7 +13,8 @@
 
 import { join } from 'path';
 import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
-import { getUserTimezone, todayInTimezone } from '../lib/timezone.js';
+import { todayInTimezone } from '../lib/timezone.js';
+import { getUserTimezone } from './userTimezone.js';
 
 const FILE = join(PATHS.data, 'daily-driver.json');
 

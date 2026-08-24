@@ -7,17 +7,8 @@ vi.mock('../services/settings.js', () => ({
 }))
 
 import { getSettings } from '../services/settings.js'
-import {
-  getLocalParts,
-  getUtcOffsetMs,
-  nextLocalTime,
-  todayInTimezone,
-  getTimezoneUpdatedAt,
-  HHMM_RE,
-  HHMM_STRICT_RE,
-  parseHHMM,
-  isWithinTimeWindow,
-} from './timezone.js'
+import { getLocalParts, getUtcOffsetMs, nextLocalTime, todayInTimezone, HHMM_RE, HHMM_STRICT_RE, parseHHMM, isWithinTimeWindow } from './timezone.js'
+import { getTimezoneUpdatedAt } from '../services/userTimezone.js'
 
 describe('timezone', () => {
   describe('getLocalParts', () => {

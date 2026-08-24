@@ -11,7 +11,7 @@
 import { schedule, cancel } from './eventScheduler.js';
 import { getSettings, settingsEvents } from './settings.js';
 import { runBackup } from './backup.js';
-import { getUserTimezone } from '../lib/timezone.js';
+import { getUserTimezone } from './userTimezone.js';
 
 const EVENT_ID = 'backup-daily';
 const DEFAULT_CRON = '0 0 * * *';

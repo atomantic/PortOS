@@ -10,7 +10,7 @@ import { randomUUID } from 'crypto';
 import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
 import { shuffle } from '../lib/arrayUtils.js';
 import { isMemoryItemEnabled } from '../lib/postTopics.js';
-import { userLocalToday } from '../lib/timezone.js';
+import { userLocalToday } from './userTimezone.js';
 import {
   DEFAULT_EASE,
   advanceSchedule,

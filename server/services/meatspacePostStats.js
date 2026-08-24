@@ -7,7 +7,8 @@
 import { getPostSessions, deriveTaskAccuracy, deriveTaskCompletion } from './meatspacePost.js';
 import { getAllTrainingEntries } from './postTrainingLogStore.js';
 import { computePostStreaks, computeUnifiedStreak, recordDayKey, ymdShift } from '../lib/postStreak.js';
-import { getUserTimezone, todayInTimezone } from '../lib/timezone.js';
+import { todayInTimezone } from '../lib/timezone.js';
+import { getUserTimezone } from './userTimezone.js';
 
 function trainingEntryTask(entry) {
   const rawQuestionCount = Number(entry?.questionCount);

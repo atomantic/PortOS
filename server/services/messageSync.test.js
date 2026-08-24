@@ -60,7 +60,6 @@ vi.mock('./tribe.js', () => ({
 // fileUtils and fail on its settings read.
 let mockTimezone = 'UTC';
 vi.mock('../lib/timezone.js', () => ({
-  getUserTimezone: vi.fn(async () => mockTimezone),
   getLocalParts: (utcDate, timezone) => {
     const parts = {};
     const fmt = new Intl.DateTimeFormat('en-US', {
@@ -73,6 +72,9 @@ vi.mock('../lib/timezone.js', () => ({
       hour: parts.hour === '24' ? 0 : parseInt(parts.hour), minute: parseInt(parts.minute),
     };
   },
+}));
+vi.mock('./userTimezone.js', () => ({
+  getUserTimezone: vi.fn(async () => mockTimezone),
 }));
 
 import { readdir, unlink } from 'fs/promises';

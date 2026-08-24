@@ -6,7 +6,8 @@
  */
 
 import { randomUUID } from 'crypto';
-import { getUserTimezone, todayInTimezone, userLocalToday } from '../lib/timezone.js';
+import { todayInTimezone } from '../lib/timezone.js';
+import { getUserTimezone, userLocalToday } from './userTimezone.js';
 import { recordDayKey, ymdShift } from '../lib/postStreak.js';
 import { getUnifiedActivityStreak } from './postActivityStreak.js';
 import { getAllTrainingEntries } from './postTrainingLogStore.js';

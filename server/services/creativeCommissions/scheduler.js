@@ -23,7 +23,7 @@
  */
 
 import { schedule, cancel, isValidCron, isValidRecurrence } from '../eventScheduler.js';
-import { getUserTimezone } from '../../lib/timezone.js';
+import { getUserTimezone } from '../userTimezone.js';
 import { getSettings, settingsEvents } from '../settings.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { renderTargetDefaults } from '../imageGen/cloudProviderConfig.js';

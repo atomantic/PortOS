@@ -8,7 +8,7 @@ import * as autonomousJobs from '../services/autonomousJobs.js';
 import { checkJobGate, hasGate, getRegisteredGates } from '../services/jobGates.js';
 import { computeNextJobRun } from '../services/autonomousJobs/scheduler.js';
 import { parseCronToNextRun, isValidRecurrence } from '../services/eventScheduler.js';
-import { getUserTimezone } from '../lib/timezone.js';
+import { getUserTimezone } from '../services/userTimezone.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import { createCosJobSchema, updateCosJobSchema } from '../lib/validation.js';
 

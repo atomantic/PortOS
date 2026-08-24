@@ -70,8 +70,10 @@ vi.mock('../lib/ports.js', () => ({
 }))
 
 vi.mock('../lib/timezone.js', () => ({
+  getLocalParts: vi.fn(() => ({ dayOfWeek: 3 })),
+}))
+vi.mock('./userTimezone.js', () => ({
   getUserTimezone: vi.fn().mockResolvedValue('America/Los_Angeles'),
-  getLocalParts: vi.fn(() => ({ dayOfWeek: 3 }))
 }))
 
 vi.mock('./eventScheduler.js', () => ({

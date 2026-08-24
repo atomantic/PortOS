@@ -5,7 +5,8 @@
 
 import { getEvents as getCalendarEvents } from '../../calendarSync.js';
 import { fetchWithTimeout } from '../../../lib/fetchWithTimeout.js';
-import { getUserTimezone, todayInTimezone, getLocalParts, getUtcOffsetMs } from '../../../lib/timezone.js';
+import { todayInTimezone, getLocalParts, getUtcOffsetMs } from '../../../lib/timezone.js';
+import { getUserTimezone } from '../../userTimezone.js';
 import { getSettings } from '../../settings.js';
 import { clampLimit } from './shared.js';
 

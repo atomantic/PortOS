@@ -43,8 +43,8 @@ vi.mock('./backup.js', () => ({
   runBackup: vi.fn().mockResolvedValue({ success: true })
 }));
 
-vi.mock('../lib/timezone.js', () => ({
-  getUserTimezone: vi.fn().mockResolvedValue('UTC')
+vi.mock('./userTimezone.js', () => ({
+  getUserTimezone: vi.fn().mockResolvedValue('UTC'),
 }));
 
 import { schedule, cancel } from './eventScheduler.js';

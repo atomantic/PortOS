@@ -51,7 +51,8 @@ import { applySessionToReviewSchedule, getDueReviews, getRetentionReport } from 
 import { getAllTrainingEntries } from './postTrainingLogStore.js';
 import { getMorseProgress, MAX_KOCH_LEVEL } from './meatspacePostMorse.js';
 import { computePostStreaks, computeUnifiedStreak, normalizeYmd, recordDayKey, withDerivedDayKeys, ymdToUTC, ymdShift } from '../lib/postStreak.js';
-import { getUserTimezone, todayInTimezone, userLocalToday as localToday } from '../lib/timezone.js';
+import { todayInTimezone } from '../lib/timezone.js';
+import { getUserTimezone, userLocalToday as localToday } from './userTimezone.js';
 import { getStoredPostSession, listPostSessions, saveStoredPostSession } from './postRunStore.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { getPostStats } from './meatspacePostStats.js';

@@ -18,7 +18,8 @@
  *   - TODAY's draft waits until the configured evening `runTime`.
  */
 
-import { getLocalParts, getUserTimezone, parseHHMM, todayInTimezone } from '../lib/timezone.js';
+import { getLocalParts, parseHHMM, todayInTimezone } from '../lib/timezone.js';
+import { getUserTimezone } from './userTimezone.js';
 import { getSettings, computeCatchUpDates, runDigestForDate } from './activityDigest.js';
 
 let schedulerInterval = null;

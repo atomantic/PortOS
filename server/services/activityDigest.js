@@ -22,7 +22,7 @@
 import { join } from 'path';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import { buildMarkers } from '../lib/markedSection.js';
-import { getUserTimezone } from '../lib/timezone.js';
+import { getUserTimezone } from './userTimezone.js';
 import { getDaySummary } from './humanActivity.js';
 import * as journal from './brainJournal.js';
 import { getPerson } from './tribe.js';

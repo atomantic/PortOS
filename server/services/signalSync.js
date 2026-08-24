@@ -41,7 +41,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { expandHome, dataPath, atomicWrite, tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
-import { getUserTimezone } from '../lib/timezone.js';
+import { getUserTimezone } from './userTimezone.js';
 import { identityFromHandle } from '../lib/tribeMatch.js';
 import { decryptSqlcipherDatabase, decryptSafeStorageValue, isRawHexKey } from '../lib/signalCrypto.js';
 import { shortSummary, localDayKey } from './humanActivity.js';

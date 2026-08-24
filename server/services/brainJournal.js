@@ -30,7 +30,8 @@ import { replaceMarkedSection } from '../lib/markedSection.js';
 import * as brainStorage from './brainStorage.js';
 import { brainEvents, now } from './brainStorage.js';
 import * as obsidian from './obsidian.js';
-import { getUserTimezone, todayInTimezone } from '../lib/timezone.js';
+import { todayInTimezone } from '../lib/timezone.js';
+import { getUserTimezone } from './userTimezone.js';
 
 const SETTINGS_FILE = join(PATHS.brain, 'journal-settings.json');
 

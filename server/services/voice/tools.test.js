@@ -51,10 +51,12 @@ vi.mock('../../lib/fetchWithTimeout.js', () => ({
 // Timezone — pin to deterministic values so calendar/time tests don't depend
 // on the host TZ or settings file.
 vi.mock('../../lib/timezone.js', () => ({
-  getUserTimezone: vi.fn(async () => 'America/Los_Angeles'),
   todayInTimezone: vi.fn(() => '2026-04-17'),
   getLocalParts: vi.fn(() => ({ year: 2026, month: 4, day: 17 })),
-  getUtcOffsetMs: vi.fn(() => -7 * 3600 * 1000), // PDT
+  getUtcOffsetMs: vi.fn(() => -7 * 3600 * 1000),
+}));
+vi.mock('../userTimezone.js', () => ({
+  getUserTimezone: vi.fn(async () => 'America/Los_Angeles'),
 }));
 vi.mock('../identity.js', () => ({
   getGoals: vi.fn(async () => ({ goals: [] })),

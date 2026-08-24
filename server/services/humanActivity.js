@@ -23,7 +23,8 @@
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureSchema, query } from '../lib/db.js';
 import { normalizeIdentifier } from '../lib/tribeMatch.js';
-import { getUserTimezone, getLocalParts, getUtcOffsetMs, todayInTimezone } from '../lib/timezone.js';
+import { getLocalParts, getUtcOffsetMs, todayInTimezone } from '../lib/timezone.js';
+import { getUserTimezone } from './userTimezone.js';
 
 // ---------------------------------------------------------------------------
 // Pure helpers (exported for unit tests — no DB, no side effects).
