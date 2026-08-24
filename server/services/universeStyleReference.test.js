@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../lib/aiProvider.js', async (importActual) => {
+vi.mock('./aiProvider.js', async (importActual) => {
   const actual = await importActual();
   return { ...actual, resolveAPIProvider: vi.fn() };
 });
@@ -9,7 +9,7 @@ vi.mock('../lib/promptRunner.js', async (importActual) => {
   return { ...actual, runPromptThroughProvider: vi.fn() };
 });
 
-const aiProvider = await import('../lib/aiProvider.js');
+const aiProvider = await import('./aiProvider.js');
 const promptRunner = await import('../lib/promptRunner.js');
 const {
   analyzeUniverseStyleReference,

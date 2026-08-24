@@ -3,17 +3,17 @@
  * Used by insightsService, identity, goalCheckIn, taste-questionnaire, etc.
  */
 
-import { getAllProviders } from '../services/providers.js';
-import { startAIOp } from '../services/aiStatusEvents.js';
-import { ensureProviderReady as ensureOllamaProviderReady, isOllamaProvider } from '../services/ollamaManager.js';
-import { ensureMtplxProviderReady, isMtplxProvider } from '../services/mtplxServerManager.js';
+import { getAllProviders } from './providers.js';
+import { startAIOp } from './aiStatusEvents.js';
+import { ensureProviderReady as ensureOllamaProviderReady, isOllamaProvider } from './ollamaManager.js';
+import { ensureMtplxProviderReady, isMtplxProvider } from './mtplxServerManager.js';
 // localModelHealing is lazy-imported at its (rare, error-recovery) call site
 // below — a static import here pulls its notifications/providers deps (which
 // eagerly import fileUtils `PATHS`) into every aiProvider consumer's module
 // graph, breaking suites that partial-mock fileUtils without PATHS.
-import { readResponseJson } from './readResponseJson.js';
-import { evaluateSecretEndpoint } from './aiToolkit/internal/endpointGuard.js';
-import { withCreativeLatitude } from './creativeLatitude.js';
+import { readResponseJson } from '../lib/readResponseJson.js';
+import { evaluateSecretEndpoint } from '../lib/aiToolkit/internal/endpointGuard.js';
+import { withCreativeLatitude } from '../lib/creativeLatitude.js';
 
 const isAPI = (p) => p && p.type === 'api' && p.enabled !== false;
 
@@ -335,26 +335,7 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
   return { error: first.error };
 }
 
-/**
- * Strip markdown code fences from LLM output before JSON.parse.
- *
- * Trims surrounding whitespace BEFORE the fence regex so common LLM shapes
- * with trailing newlines/spaces around the closing fence (e.g. "```json\n{}\n```\n")
- * still get the closing ``` stripped — the regex anchors on end-of-string.
- */
-export function stripCodeFences(raw) {
-  return raw.trim().replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
-}
-
-/**
- * Parse JSON from LLM output, stripping code fences first.
- * Throws a descriptive error on parse failure.
- */
-export function parseLLMJSON(raw) {
-  const cleaned = stripCodeFences(raw);
-  try {
-    return JSON.parse(cleaned);
-  } catch (e) {
-    throw new Error(`Invalid JSON from AI: ${e.message}`);
-  }
-}
+// Extracted to lib/llmText.js in #4901 — unfencing a string needs no provider,
+// and lib modules must be able to do it without importing this one. Re-exported
+// here so the callers that have always imported them from aiProvider keep working.
+export { stripCodeFences, parseLLMJSON } from '../lib/llmText.js';

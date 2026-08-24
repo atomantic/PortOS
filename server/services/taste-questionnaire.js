@@ -11,7 +11,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { atomicWrite, ensureDir, safeJSONParse, PATHS } from '../lib/fileUtils.js';
-import { resolveAPIProvider, callProviderAISimple } from '../lib/aiProvider.js';
+import { resolveAPIProvider, callProviderAISimple } from './aiProvider.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { buildPrompt } from './promptService.js';
 import { digitalTwinEvents } from './digital-twin.js';

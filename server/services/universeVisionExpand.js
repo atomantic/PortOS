@@ -30,7 +30,7 @@
 import { getUniverse } from './universeBuilder.js';
 import { applyExpansion, STRING_FIELDS, LIST_FIELDS } from './universeCharacterExpand.js';
 import { bibleFieldIsBlank } from '../lib/universeBibleCompleteness.js';
-import { resolveAPIProvider, parseLLMJSON } from '../lib/aiProvider.js';
+import { resolveAPIProvider, parseLLMJSON } from './aiProvider.js';
 import { runPromptThroughProvider, assertProvider, assertVisionRunUsedImages } from '../lib/promptRunner.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { shortId } from '../lib/fileUtils.js';

@@ -33,7 +33,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) =>
 const provider = { id: 'p1', defaultModel: 'test-model' };
 vi.mock('./providers.js', () => ({ getActiveProvider: vi.fn(async () => provider) }));
 
-vi.mock('../lib/aiProvider.js', () => ({
+vi.mock('./aiProvider.js', () => ({
   callProviderAISimple: vi.fn(async () => ({ text: '{"assessment":"ok","recommendations":["keep going"]}' })),
   parseLLMJSON: (text) => JSON.parse(text),
 }));

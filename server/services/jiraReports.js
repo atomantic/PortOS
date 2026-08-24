@@ -8,7 +8,7 @@ import { join } from 'path';
 import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { getInstances, createJiraClient } from './jira.js';
 import { getActiveApps } from './apps.js';
-import { callProviderAISimple } from '../lib/aiProvider.js';
+import { callProviderAISimple } from './aiProvider.js';
 import { getActiveProvider, getAllProviders } from './providers.js';
 
 const REPORTS_DIR = join(PATHS.data, 'jira-reports');

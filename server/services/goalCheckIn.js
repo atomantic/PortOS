@@ -1,7 +1,7 @@
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { atomicWrite, PATHS, readJSONFile, ensureDir } from '../lib/fileUtils.js';
-import { callProviderAISimple, parseLLMJSON } from '../lib/aiProvider.js';
+import { callProviderAISimple, parseLLMJSON } from './aiProvider.js';
 import { addNotification, NOTIFICATION_TYPES } from './notifications.js';
 
 const GOALS_FILE = join(PATHS.digitalTwin, 'goals.json');

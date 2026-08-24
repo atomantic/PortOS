@@ -1437,7 +1437,7 @@ describe('Integration: organizeGoals', () => {
     }));
 
     // callProviderAISimple mock set per-test to use actual goal IDs
-    vi.doMock('../lib/aiProvider.js', () => ({
+    vi.doMock('./aiProvider.js', () => ({
       callProviderAISimple: vi.fn(async () => ({ text: '{}' })),
       parseLLMJSON: vi.fn((text) => JSON.parse(text))
     }));
@@ -1452,7 +1452,7 @@ describe('Integration: organizeGoals', () => {
     const goal2 = await createGoal({ title: 'Learn Spanish' });
 
     // Re-mock with actual goal IDs
-    const { callProviderAISimple, parseLLMJSON } = await import('../lib/aiProvider.js');
+    const { callProviderAISimple, parseLLMJSON } = await import('./aiProvider.js');
     callProviderAISimple.mockResolvedValue({
       text: JSON.stringify({
         apexGoal: { existingId: null, suggestedTitle: 'Live fully', suggestedDescription: 'The ultimate purpose' },
@@ -1504,7 +1504,7 @@ describe('Integration: organizeGoals', () => {
       getProviderById: vi.fn(async () => null)
     }));
 
-    vi.doMock('../lib/aiProvider.js', () => ({
+    vi.doMock('./aiProvider.js', () => ({
       callProviderAISimple: vi.fn(),
       parseLLMJSON: vi.fn()
     }));

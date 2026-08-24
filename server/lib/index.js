@@ -104,7 +104,7 @@ export * from './writersRoomPresets.js';
 export * from './writersRoomStylePresets.js';
 
 // === Prompt & AI (toolkit lives in aiToolkit/ — see its own index.js) ===
-export * from './aiProvider.js';
+export * from './llmText.js';
 export * from './aiToolkitState.js';
 export * from './ansiStrip.js';
 // Namespaced: antigravity.js and providerModels.js both export

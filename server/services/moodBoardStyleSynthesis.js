@@ -10,7 +10,7 @@
  * through the universe's queued-write adopt endpoint.
  */
 
-import { parseLLMJSON, resolveAPIProvider } from '../lib/aiProvider.js';
+import { parseLLMJSON, resolveAPIProvider } from './aiProvider.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { assertProvider, runPromptThroughProvider } from '../lib/promptRunner.js';
 import { trimTo } from '../lib/storyBible.js';

@@ -24,7 +24,7 @@ import { execPm2, getAppStatusStrict, clearJlistCache, getSavedProcessNames } fr
 // `settings.js` is lazy-imported at its call sites below, never statically: it
 // eagerly resolves `fileUtils.PATHS` at module load, which drags PATHS into the
 // module graph of every consumer of this manager and breaks the many suites that
-// partial-mock fileUtils without it. Same reason `lib/aiProvider.js` defers
+// partial-mock fileUtils without it. Same reason `services/aiProvider.js` defers
 // `localModelHealing`.
 
 

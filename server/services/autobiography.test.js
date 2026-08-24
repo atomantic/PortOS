@@ -36,7 +36,7 @@ vi.mock('./providers.js', () => ({
 }));
 
 const mockCallProviderAISimple = vi.fn();
-vi.mock('../lib/aiProvider.js', () => ({
+vi.mock('./aiProvider.js', () => ({
   callProviderAISimple: (...args) => mockCallProviderAISimple(...args),
   // Real-ish JSON extractor good enough for tests
   parseLLMJSON: (raw) => JSON.parse(raw)

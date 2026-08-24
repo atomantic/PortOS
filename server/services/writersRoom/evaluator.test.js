@@ -4,7 +4,7 @@ import { describe, it, expect, vi } from 'vitest';
 // heavy siblings so this unit test can import it cheaply — it only exercises the
 // pure KIND_META map + the `cuts`/`revise` SHAPERS, which depend on nothing but
 // stripCodeFences (aiProvider) and CUT_TYPES (cutApplier, real).
-vi.mock('../../lib/aiProvider.js', () => ({ stripCodeFences: (s) => String(s ?? '') }));
+vi.mock('../aiProvider.js', () => ({ stripCodeFences: (s) => String(s ?? '') }));
 vi.mock('../../lib/stageRunner.js', () => ({ runStagedLLM: vi.fn() }));
 vi.mock('../../lib/bibleExtractor.js', () => ({ extractBible: vi.fn() }));
 vi.mock('../../lib/sceneExtractor.js', () => ({ extractScenes: vi.fn(), SOURCE_KIND: { PROSE: 'prose' } }));

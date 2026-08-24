@@ -19,7 +19,7 @@ import { MARKER_CATEGORIES, CURATED_MARKERS } from '../lib/curatedGenomeMarkers.
 import { getTasteProfile } from './taste-questionnaire.js';
 import { getActiveProvider, getProviderById } from './providers.js';
 import { getCorrelationData } from './appleHealthQuery.js';
-import { stripCodeFences, parseLLMJSON } from '../lib/aiProvider.js';
+import { stripCodeFences, parseLLMJSON } from './aiProvider.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { readResponseJson } from '../lib/readResponseJson.js';
 import { ensureProviderReady as ensureOllamaProviderReady } from './ollamaManager.js';

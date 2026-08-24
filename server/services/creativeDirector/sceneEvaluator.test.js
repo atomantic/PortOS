@@ -27,7 +27,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('fs', () => ({ existsSync: mocks.existsSync }));
 vi.mock('../../lib/fileUtils.js', () => ({ PATHS: { videoThumbnails: '/data/video-thumbnails' } }));
-vi.mock('../../lib/aiProvider.js', () => ({ stripCodeFences: (s) => String(s).replace(/```[a-z]*\n?/gi, '').replace(/```/g, '') }));
+vi.mock('../aiProvider.js', () => ({ stripCodeFences: (s) => String(s).replace(/```[a-z]*\n?/gi, '').replace(/```/g, '') }));
 vi.mock('../../lib/promptRunner.js', () => ({
   runPromptThroughProvider: mocks.runPromptThroughProvider,
   assertVisionRunUsedImages: mocks.assertVisionRunUsedImages,

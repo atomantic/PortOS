@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // resolveAPIProvider drives provider selection; parseLLMJSON stays real so the
 // JSON-parse + fence-strip path is exercised end to end.
-vi.mock('../lib/aiProvider.js', async (importActual) => {
+vi.mock('./aiProvider.js', async (importActual) => {
   const actual = await importActual();
   return { ...actual, resolveAPIProvider: vi.fn() };
 });
@@ -21,7 +21,7 @@ vi.mock('./universeBuilder.js', async (importActual) => {
   return { ...actual, getUniverse: vi.fn() };
 });
 
-const aiProvider = await import('../lib/aiProvider.js');
+const aiProvider = await import('./aiProvider.js');
 const promptRunner = await import('../lib/promptRunner.js');
 const universeBuilder = await import('./universeBuilder.js');
 const {

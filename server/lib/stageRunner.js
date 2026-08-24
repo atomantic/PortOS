@@ -17,7 +17,7 @@
 import { ServerError } from './errorHandler.js';
 import { findBalancedBlocks, tryParseWithRepair } from './jsonExtract.js';
 import { resolveEffectiveModel, runPromptThroughProvider, DEFAULT_TIMEOUT_MS, isLocalEndpoint } from './promptRunner.js';
-import { stripCodeFences } from './aiProvider.js';
+import { stripCodeFences } from './llmText.js';
 import { extractCodexAssistant } from './codexAssistantExtract.js';
 import { getActiveProvider, getProviderById } from '../services/providers.js';
 import { commandBasename, isCodexProvider } from './providerModels.js';

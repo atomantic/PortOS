@@ -33,7 +33,7 @@ import { createDaemonWatcher, pm2ArgValue, idleWindowMs, markDaemonUsed, registe
 // `settings.js` is lazy-imported at its call sites below, never statically: it
 // eagerly resolves `fileUtils.PATHS` at module load, which drags PATHS into the
 // module graph of every consumer of this manager and breaks the many suites that
-// partial-mock fileUtils without it. Same reason `lib/aiProvider.js` defers
+// partial-mock fileUtils without it. Same reason `services/aiProvider.js` defers
 // `localModelHealing`.
 
 import { isAppleSilicon, isPortInUse } from '../lib/platform.js';
@@ -835,7 +835,7 @@ export async function ensureMtplxRunning() {
 /**
  * Is this provider served by the MTPLX daemon PortOS manages?
  *
- * Mirrors `ollamaManager.isOllamaProvider` so `lib/aiProvider.js` gates both
+ * Mirrors `ollamaManager.isOllamaProvider` so `services/aiProvider.js` gates both
  * local daemons the same way. Only a LOCAL endpoint counts: an MTPLX on a
  * tailnet peer is someone else's process, and neither starting nor idle-stopping
  * it is this install's business.
@@ -857,7 +857,7 @@ export function isMtplxProvider(provider) {
 }
 
 /**
- * The `ensureProviderReady` shape `lib/aiProvider.js` expects, for MTPLX.
+ * The `ensureProviderReady` shape `services/aiProvider.js` expects, for MTPLX.
  *
  * This is the one call site that both refreshes the idle clock and lazily
  * restarts — deliberately on the INFERENCE path rather than in

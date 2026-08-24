@@ -13,7 +13,7 @@ import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js
 import { recordTombstone } from '../lib/tombstones.js';
 import { addNotification, NOTIFICATION_TYPES, exists as notificationExists } from './notifications.js';
 import { getActiveProvider, getProviderById } from './providers.js';
-import { callProviderAISimple, parseLLMJSON } from '../lib/aiProvider.js';
+import { callProviderAISimple, parseLLMJSON } from './aiProvider.js';
 
 const DATA_DIR = join(PATHS.digitalTwin, 'autobiography');
 const STORIES_FILE = join(DATA_DIR, 'stories.json');

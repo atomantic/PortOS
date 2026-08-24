@@ -8,7 +8,7 @@ import { join } from 'path';
 import { readFile, readdir, rm } from 'fs/promises';
 import { PATHS, atomicWrite, ensureDir, safeJSONParse, tryReadFile } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { stripCodeFences } from '../../lib/aiProvider.js';
+import { stripCodeFences } from '../aiProvider.js';
 import { runStagedLLM } from '../../lib/stageRunner.js';
 import { extractBible } from '../../lib/bibleExtractor.js';
 import { extractScenes, SOURCE_KIND } from '../../lib/sceneExtractor.js';

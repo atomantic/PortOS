@@ -25,7 +25,7 @@
  * credential-theft target.
  *
  * Kept in `aiToolkit/internal/` (pure, no imports) so the toolkit stays
- * self-contained; `server/lib/aiProvider.js` imports it from here too.
+ * self-contained; `server/services/aiProvider.js` imports it from here too.
  *
  * NOTE: checks are performed on the URL's literal host. We do not resolve DNS,
  * so a user-supplied hostname that resolves to a private/metadata IP is treated

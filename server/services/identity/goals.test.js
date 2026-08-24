@@ -18,7 +18,7 @@ vi.mock('../providers.js', () => ({
   getProviderById: vi.fn(async () => ({ id: 'p1', apiType: 'openai', defaultModel: 'm1' }))
 }));
 
-vi.mock('../../lib/aiProvider.js', async (importOriginal) => {
+vi.mock('../aiProvider.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, callProviderAISimple: vi.fn(async () => ({ text: h.aiText })) };
 });

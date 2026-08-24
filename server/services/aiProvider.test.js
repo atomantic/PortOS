@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { stripCodeFences, parseLLMJSON, callProviderAISimple } from './aiProvider.js';
-import { CREATIVE_LATITUDE_HEADING } from './creativeLatitude.js';
+import { CREATIVE_LATITUDE_HEADING } from '../lib/creativeLatitude.js';
 
 // `statusOp` is hoisted with the mock factories so the ai:status spy is in scope
 // when vitest lifts vi.mock above the imports.

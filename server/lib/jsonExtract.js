@@ -18,7 +18,7 @@
  * the three callers import from this file with optional shape predicates.
  */
 
-import { stripCodeFences } from './aiProvider.js';
+import { stripCodeFences } from './llmText.js';
 
 /**
  * Walk the string and return every top-level brace-balanced block, in

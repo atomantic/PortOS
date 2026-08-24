@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from '../../lib/uuid.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { getActivities } from '../meatspaceCalendar.js';
-import { callProviderAISimple, parseLLMJSON } from '../../lib/aiProvider.js';
+import { callProviderAISimple, parseLLMJSON } from '../aiProvider.js';
 import {
   goalTypeEnum,
   goalPhasesProposalSchema,

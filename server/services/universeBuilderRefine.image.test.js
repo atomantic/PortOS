@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Style-reference-image refine path: forces a vision API provider, passes the
 // resolved image path as a screenshot, and rejects a non-API fallback.
-vi.mock('../lib/aiProvider.js', async (importActual) => {
+vi.mock('./aiProvider.js', async (importActual) => {
   const actual = await importActual();
   return { ...actual, resolveAPIProvider: vi.fn() };
 });
@@ -15,7 +15,7 @@ vi.mock('../lib/promptRunner.js', async (importActual) => {
   };
 });
 
-const aiProvider = await import('../lib/aiProvider.js');
+const aiProvider = await import('./aiProvider.js');
 const promptRunner = await import('../lib/promptRunner.js');
 const { refineWorldPrompts } = await import('./universeBuilderRefine.js');
 

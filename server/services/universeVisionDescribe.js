@@ -18,7 +18,7 @@
  * description from nothing.
  */
 
-import { resolveAPIProvider, stripCodeFences } from '../lib/aiProvider.js';
+import { resolveAPIProvider, stripCodeFences } from './aiProvider.js';
 import { runPromptThroughProvider, assertProvider, assertVisionRunUsedImages } from '../lib/promptRunner.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { getUniverse } from './universeBuilder.js';

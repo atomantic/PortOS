@@ -24,7 +24,6 @@ const LIB_ROOT = dirname(fileURLToPath(import.meta.url));
 // inversion awaiting its slice of #4901 — NOT a permanent exemption. Fix the
 // module, delete the row. Never add a row for new code.
 const PREEXISTING_LIB_TO_SERVICES_ALLOWLIST = new Set([
-  'aiProvider.js',
   'assetMounts.js',
   'createSettingsGatedSyncScheduler.js',
   'creativeDirectorPrompts.js',
