@@ -161,6 +161,6 @@ describe('Tribe care filter', () => {
       expect.objectContaining({ localDate: '2026-01-01' }),
       { silent: true },
     ));
-    expect(screen.getByText('Last 2026-01-01')).toBeTruthy();
+    expect(await screen.findByText('Last 2026-01-01')).toBeTruthy();
   });
 });

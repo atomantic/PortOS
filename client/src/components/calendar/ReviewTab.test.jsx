@@ -13,9 +13,13 @@ import * as api from '../../services/api';
 import ReviewTab from './ReviewTab';
 
 describe('ReviewTab', () => {
+  // Restore the ambient zone rather than pinning UTC: vitest reuses a worker
+  // across files, so clobbering TZ here would follow the next suite in.
+  const ambientTZ = process.env.TZ;
   afterEach(() => {
     vi.useRealTimers();
-    process.env.TZ = 'UTC';
+    if (ambientTZ === undefined) delete process.env.TZ;
+    else process.env.TZ = ambientTZ;
   });
 
   it('defaults to the local calendar date', async () => {
