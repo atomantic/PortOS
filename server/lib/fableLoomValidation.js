@@ -6,8 +6,8 @@
  */
 
 import { z } from 'zod';
-import { LOOM_LIMITS } from '../services/fableLoom/limits.js';
-import { LOOM_FORMATS } from '../services/fableLoom/formats.js';
+import { LOOM_LIMITS } from './fableLoomLimits.js';
+import { LOOM_FORMATS } from './fableLoomFormats.js';
 import { llmRoutePinSchema } from './llmRoutePin.js';
 
 const name = z.string().trim().min(1).max(LOOM_LIMITS.NAME_MAX);

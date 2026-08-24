@@ -18,9 +18,10 @@ const MIN_PER_TYPE = 3;
 const MAX_PER_TYPE = 10;
 
 // Only cache LLM-generated drill types used in wordplay training
-export const CACHEABLE_TYPES = [
-  'compound-chain', 'bridge-word', 'double-meaning', 'idiom-twist',
-];
+// Moved to lib so route validation can enumerate the types without importing
+// this module (and, through it, the LLM drill generator) — issue #4901.
+export { CACHEABLE_TYPES } from '../lib/postDrillTypes.js';
+import { CACHEABLE_TYPES } from '../lib/postDrillTypes.js';
 
 let cache = {}; // { type: [drill, drill, ...] }
 let replenishing = new Map(); // type -> Promise (in-flight replenishment)

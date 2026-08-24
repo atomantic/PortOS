@@ -1,6 +1,5 @@
 import { z } from 'zod';
-import { CACHEABLE_TYPES } from '../services/meatspacePostDrillCache.js';
-import { COGNITIVE_DRILL_TYPES } from '../services/meatspacePostCognitive.js';
+import { CACHEABLE_TYPES, COGNITIVE_DRILL_TYPES } from './postDrillTypes.js';
 import { TOPIC_IDS } from './postTopics.js';
 import { HHMM_STRICT_RE } from './timezone.js';
 import { POST_LLM_MAX_SEMANTIC_CANDIDATES, postLlmEvaluationSchema } from './postLlmContracts.js';

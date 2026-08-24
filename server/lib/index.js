@@ -79,6 +79,8 @@ export * from './creativeLatitude.js';
 // discovery surface reaches EDITORIAL_CHECKS + the lookup helpers.
 export * as editorial from './editorial/index.js';
 export * from './fableLoomGraph.js';
+export * from './fableLoomLimits.js';
+export * from './fableLoomFormats.js';
 export * from './sceneExtractor.js';
 export * from './scenePrompt.js';
 export * from './proseExportSettings.js';
@@ -349,6 +351,7 @@ export * from './markdownText.js';
 export * from './renderSlot.js';
 export * from './renderTargets.js';
 export * from './generationModes.js';
+export * from './postDrillTypes.js';
 export * from './telegramClient.js';
 export * from './tempPathGuard.js';
 export * from './textUtils.js';
