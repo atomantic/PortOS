@@ -5,7 +5,11 @@ import {
   LOOM_FORMATS, episodesNeedingReformat, isTeleplayFormat, loomFormatHint, loomFormatLabel, sceneNeedsReformat,
 } from './loomFormats.js';
 
-const SERVER_FORMATS = join('server', 'services', 'fableLoom', 'formats.js');
+// The server-side source of truth. It moved from services/fableLoom/formats.js
+// to lib/ in #4901 so route validation could read it without importing upward
+// into services; services/fableLoom/formats.js is now a re-export shim with no
+// literal declaration, so this must point at the real one.
+const SERVER_FORMATS = join('server', 'lib', 'fableLoomFormats.js');
 
 // Walk up from the working directory rather than assuming it — the client
 // suite runs from `client/`, but a root-level runner would start elsewhere.

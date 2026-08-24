@@ -6,7 +6,8 @@ export const LLM_DRILL_TYPES = ['word-association', 'story-recall', 'verbal-flue
 // server's schedule/mastery advancement fires.
 export const MEMORY_DRILL_TYPES = ['memory-fill-blank', 'memory-sequence', 'memory-element-flash'];
 // Deterministic cognitive drills (no LLM). Mirror the server's
-// COGNITIVE_DRILL_TYPES in server/services/meatspacePostCognitive.js.
+// COGNITIVE_DRILL_TYPES in server/lib/postDrillTypes.js (re-exported by
+// server/services/meatspacePostCognitive.js, which owns the generators).
 export const COGNITIVE_DRILL_TYPES = ['n-back', 'digit-span', 'stroop', 'schulte-table', 'mental-rotation', 'reaction-time', 'task-switching', 'go-no-go', 'flanker'];
 
 // Cognitive drills that have a progressive difficulty ladder. Mirror of the

@@ -18,7 +18,7 @@ import { useAsyncAction } from '../../hooks/useAsyncAction';
 import { timeAgo } from '../../utils/formatters';
 import { createLoom, listLooms } from '../../services/api';
 
-// Mirrors LOOM_LIMITS.NAME_MAX (server/services/fableLoom/limits.js) — the
+// Mirrors LOOM_LIMITS.NAME_MAX (server/lib/fableLoomLimits.js) — the
 // derived name is built from the series name, which has its own longer cap, so
 // it has to be clamped before the create PATCH hits the door check.
 const LOOM_NAME_MAX = 200;
