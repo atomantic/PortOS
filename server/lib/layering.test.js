@@ -28,8 +28,6 @@ const PREEXISTING_LIB_TO_SERVICES_ALLOWLIST = new Set([
   'assetMounts.js',
   'createSettingsGatedSyncScheduler.js',
   'creativeDirectorPrompts.js',
-  'hfDownload.js',
-  'hfToken.js',
   'promptRunner.js',
   'spriteValidation.js',
   'stageRunner.js',

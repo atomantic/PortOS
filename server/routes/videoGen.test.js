@@ -141,7 +141,6 @@ const sseDownload = vi.hoisted(() => ({
   }),
 }));
 vi.mock('../lib/sseDownload.js', () => ({
-  startHfDownloadStream: sseDownload.start,
   openSseStream: (res) => {
     res.writeHead(200, { 'Content-Type': 'text/event-stream' });
     return {
@@ -149,6 +148,9 @@ vi.mock('../lib/sseDownload.js', () => ({
       safeEnd: () => { if (!res.writableEnded) res.end(); },
     };
   },
+}));
+vi.mock('../services/hfDownloadStream.js', () => ({
+  startHfDownloadStream: sseDownload.start,
 }));
 
 // Render submissions go through the mediaJobQueue. Mock its surface so the

@@ -137,8 +137,10 @@ const sse = vi.hoisted(() => ({
   }),
 }));
 vi.mock('../lib/sseDownload.js', () => ({
-  startHfDownloadStream: (args) => sse.run(args),
   openSseStream: (res) => sse.open(res),
+}));
+vi.mock('../services/hfDownloadStream.js', () => ({
+  startHfDownloadStream: (args) => sse.run(args),
 }));
 
 // Register-after-download gates on whether the repo landed in the cache.

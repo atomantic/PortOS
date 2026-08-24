@@ -1,6 +1,6 @@
 /**
  * Read the CENTRAL HuggingFace token status (`GET /image-gen/setup/hf-token-status`,
- * backed by `server/lib/hfToken.js`: stored token → env vars → `hf auth login` file).
+ * backed by `server/services/hfToken.js`: stored token → env vars → `hf auth login` file).
  *
  * Every gated-model surface needs the same three-state answer — token present / not
  * present / not yet known — and each one had grown its own copy with its own failure

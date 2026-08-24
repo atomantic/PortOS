@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // never pull the deleted shard back. Mock the IO-bound cache inspect + HF fetch
 // so the pure stream-control logic is exercised in isolation.
 
-vi.mock('./hfCache.js', () => ({
+vi.mock('../lib/hfCache.js', () => ({
   inspectModelCache: vi.fn(async () => ({ cached: true, sizeBytes: 100, snapshotPath: '/snap' })),
   findCachedRepoFile: vi.fn(async () => null),
 }));
@@ -17,8 +17,8 @@ vi.mock('./hfDownload.js', () => ({
   downloadHfRepo: vi.fn(() => ({ promise: Promise.resolve({ ok: true, sizeBytes: 100 }), kill: vi.fn() })),
 }));
 
-import { startHfDownloadStream } from './sseDownload.js';
-import { inspectModelCache } from './hfCache.js';
+import { startHfDownloadStream } from './hfDownloadStream.js';
+import { inspectModelCache } from '../lib/hfCache.js';
 import { downloadHfRepo } from './hfDownload.js';
 
 // Minimal req/res doubles. Disconnect detection lives on `res` (see

@@ -58,7 +58,8 @@ import {
   verifyCachedRepoFiles, repairCachedRepoFiles, summarizeVerify, aggregateVerifies,
   isSafeHfRepoRelativePath,
 } from '../lib/hfCache.js';
-import { startHfDownloadStream, openSseStream } from '../lib/sseDownload.js';
+import { startHfDownloadStream } from '../services/hfDownloadStream.js';
+import { openSseStream } from '../lib/sseDownload.js';
 import { saveUploadedGalleryVideo } from '../services/videoUpload.js';
 import { JSON_BODY_LIMIT_BYTES } from '../lib/uploadLimits.js';
 import { prepareRemoteMediaJob } from '../services/federatedMedia/remoteSubmission.js';

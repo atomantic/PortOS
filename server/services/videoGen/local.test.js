@@ -220,7 +220,7 @@ vi.mock('../../lib/ffmpeg.js', async () => ({
 // hfChildEnv() carries the resolved token over the inherited child env; mocking here
 // avoids touching the real settings layer (which would await an unmocked
 // `getSettings()` chain and hang the spawn-mock-driven tests).
-vi.mock('../../lib/hfToken.js', () => ({
+vi.mock('../hfToken.js', () => ({
   hfChildEnv: vi.fn(async () => ({})),
   getHfToken: vi.fn(async () => null),
 }));
@@ -2974,7 +2974,7 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
 
   it('uses the pinned cache-only helper, locked sampler and credential-free environment', async () => {
     const { spawnDetached } = await import('../../lib/detachedSpawn.js');
-    const { hfChildEnv } = await import('../../lib/hfToken.js');
+    const { hfChildEnv } = await import('../hfToken.js');
     const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
     vi.mocked(hfChildEnv).mockClear();

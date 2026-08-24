@@ -479,7 +479,7 @@ vi.mock('../../lib/fileUtils.js', async () => {
   };
 });
 
-vi.mock('../../lib/hfToken.js', () => ({ hfChildEnv: async () => ({}) }));
+vi.mock('../hfToken.js', () => ({ hfChildEnv: async () => ({}) }));
 
 // Venv resolvers — flip readiness per engine per test.
 vi.mock('../../lib/pythonSetup.js', async () => {

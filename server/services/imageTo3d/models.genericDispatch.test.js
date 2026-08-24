@@ -27,7 +27,7 @@ vi.mock('./targets.js', () => ({
   renderOptionSupportFor: () => null,
 }));
 
-vi.mock('../../lib/hfToken.js', () => ({
+vi.mock('../hfToken.js', () => ({
   hfChildEnv: vi.fn(async () => ({ HF_TOKEN: 'hf_test' })),
 }));
 
@@ -58,7 +58,7 @@ vi.mock('./adapters.js', () => ({
   getTargetAdapter: vi.fn((id) => (id === 'second-target' ? { isInstalled: fakeIsInstalled, run: fakeRun } : null)),
 }));
 
-import { hfChildEnv } from '../../lib/hfToken.js';
+import { hfChildEnv } from '../hfToken.js';
 import * as store from './db.js';
 import { createModel } from './models.js';
 

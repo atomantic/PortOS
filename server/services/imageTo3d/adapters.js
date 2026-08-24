@@ -61,7 +61,7 @@
  *    server reads that field and PortOS installs update independently.
  */
 
-import { hfChildEnv } from '../../lib/hfToken.js';
+import { hfChildEnv } from '../hfToken.js';
 import {
   isTrellis2Installed,
   installTrellis2,

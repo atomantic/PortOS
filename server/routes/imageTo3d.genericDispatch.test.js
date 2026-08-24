@@ -45,7 +45,7 @@ vi.mock('../services/imageTo3d/adapters.js', () => ({
   } : null)),
 }));
 
-vi.mock('../lib/hfToken.js', () => ({ hfChildEnv: vi.fn(async () => ({})) }));
+vi.mock('../services/hfToken.js', () => ({ hfChildEnv: vi.fn(async () => ({})) }));
 
 vi.mock('../services/imageTo3d/models.js', () => ({
   listModels: vi.fn(),
@@ -56,7 +56,7 @@ vi.mock('../services/imageTo3d/models.js', () => ({
   getModelAsset: vi.fn(),
 }));
 
-import { hfChildEnv } from '../lib/hfToken.js';
+import { hfChildEnv } from '../services/hfToken.js';
 import routes from './imageTo3d.js';
 
 const makeApp = () => {

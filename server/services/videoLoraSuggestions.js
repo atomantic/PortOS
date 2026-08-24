@@ -17,7 +17,7 @@
 
 import { VIDEO_LORA_FAMILIES } from '../lib/runners.js';
 import { extractHfCardDescription, fetchHuggingfaceModel } from '../lib/huggingfaceLora.js';
-import { getHfToken } from '../lib/hfToken.js';
+import { getHfToken } from './hfToken.js';
 
 const TTL_MS = 60 * 60 * 1000; // 1 hour — matches the Civitai suggestion cache.
 const DESCRIPTION_MAX_CHARS = 240;

@@ -22,7 +22,7 @@ import { ensureDir, expandHome } from '../lib/fileUtils.js';
 import { isProjectorName, isShardedGguf } from '../lib/localLlmDisk.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { buildHfAuthHeaders, buildHfResolveUrl, fetchHuggingfaceModel, modelSiblingFilenames } from '../lib/huggingfaceLora.js';
-import { getHfToken } from '../lib/hfToken.js';
+import { getHfToken } from './hfToken.js';
 import {
   SPEC_DECODE_PRESETS,
   SPEC_MODEL_ROLES,

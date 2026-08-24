@@ -14,7 +14,7 @@ import { videoGenEvents } from './events.js';
 import {
   broadcastSse, closeJobAfterDelay, PYTHON_NOISE_RE,
 } from '../../lib/sseUtils.js';
-import { hfChildEnv } from '../../lib/hfToken.js';
+import { hfChildEnv } from '../hfToken.js';
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
 import {
   makeVideoGenLineHandler,

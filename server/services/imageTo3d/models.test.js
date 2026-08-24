@@ -37,7 +37,7 @@ vi.mock('./trellis2.js', () => ({
 // The render spawns with the central HF child env (#3032). Mock the resolver
 // so the suite doesn't pull in the real settings store (which needs PATHS.data, and
 // this suite mocks fileUtils down to `imageTo3d` alone).
-vi.mock('../../lib/hfToken.js', () => ({
+vi.mock('../hfToken.js', () => ({
   hfChildEnv: vi.fn(async () => ({ HF_TOKEN: 'hf_from_store', HUGGINGFACE_HUB_TOKEN: 'hf_from_store' })),
 }));
 

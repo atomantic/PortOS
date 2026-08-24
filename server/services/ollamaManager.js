@@ -1370,7 +1370,7 @@ async function importModelFromHfSafetensors(spec, onProgress) {
       code: 'OLLAMA_OUTDATED'
     }
   }
-  const { getHfToken } = await import('../lib/hfToken.js')
+  const { getHfToken } = await import('./hfToken.js')
   const token = await getHfToken()
   if (!token) {
     return {
@@ -1732,10 +1732,10 @@ async function finalizeHuggingFacePull(modelId) {
 
   const modelsDir = getModelsDir()
   const blobsDir = join(modelsDir, 'blobs')
-  // Imported lazily: lib/hfToken.js reaches services/settings.js, which resolves
-  // its file path from PATHS at module load — a static import would drag that
-  // (and everything settings pulls in) into every consumer of this module.
-  const { getHfToken } = await import('../lib/hfToken.js')
+  // Imported lazily: hfToken.js reaches settings.js, which resolves its file
+  // path from PATHS at module load — a static import would drag that (and
+  // everything settings pulls in) into every consumer of this module.
+  const { getHfToken } = await import('./hfToken.js')
   const headers = buildHfAuthHeaders(await getHfToken())
   const fetched = await fetchHuggingFaceDocument(`${base}/manifests/${ref.tag}`, headers)
   if (fetched.error) return { success: false, error: `manifest fetch failed: ${fetched.error}` }

@@ -18,7 +18,7 @@ vi.mock('../lib/childProcess.js', () => ({
 // The HF pull recovery attaches the user's HF token (so a gated repo Ollama could
 // pull is recoverable too). Stub the resolver rather than reading real settings.
 const hfTokenMock = { token: null }
-vi.mock('../lib/hfToken.js', () => ({ getHfToken: async () => hfTokenMock.token }))
+vi.mock('./hfToken.js', () => ({ getHfToken: async () => hfTokenMock.token }))
 
 // pullModel talks to Ollama over its native HTTP API via the global `fetch`
 // (through fetchWithTimeout). We stub `fetch` so each test scripts the

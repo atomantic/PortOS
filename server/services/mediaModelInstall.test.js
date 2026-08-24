@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { pinPlatform } from '../lib/testHelper.js';
 
-vi.mock('../lib/hfToken.js', () => ({ getHfToken: vi.fn(async () => '') }));
+vi.mock('./hfToken.js', () => ({ getHfToken: vi.fn(async () => '') }));
 vi.mock('../lib/mediaModels.js', () => ({ addUserModelEntry: vi.fn((entry) => entry) }));
 
 const { addModelFromHuggingface } = await import('./mediaModelInstall.js');

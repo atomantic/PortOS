@@ -17,7 +17,7 @@ import apiCore from '../../services/apiCore';
 
 /**
  * Where a resolved token came from, phrased for the user — keyed by the `source`
- * `server/lib/hfToken.js` reports. Shared so every gated surface names the same
+ * `server/services/hfToken.js` reports. Shared so every gated surface names the same
  * command: three separate copies had drifted, and one still told users to run the
  * deprecated `huggingface-cli login` while its neighbor said `hf auth login`.
  */

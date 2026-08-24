@@ -66,7 +66,7 @@ vi.mock('../services/imageTo3d/trellis2.js', async (importOriginal) => ({
 // The install route resolves the central HF child env (#3032).
 // Mock it so the suite never reads the host's real settings.json or
 // ~/.cache/huggingface/token, and so the resolution-failure branch is drivable.
-vi.mock('../lib/hfToken.js', () => ({
+vi.mock('../services/hfToken.js', () => ({
   hfChildEnv: vi.fn(async () => ({ HF_TOKEN: 'hf_test', HUGGINGFACE_HUB_TOKEN: 'hf_test' })),
 }));
 
@@ -83,7 +83,7 @@ vi.mock('../services/imageTo3d/models.js', () => ({
 import * as targets from '../services/imageTo3d/targets.js';
 import * as trellis2 from '../services/imageTo3d/trellis2.js';
 import * as models from '../services/imageTo3d/models.js';
-import { hfChildEnv } from '../lib/hfToken.js';
+import { hfChildEnv } from '../services/hfToken.js';
 import routes from './imageTo3d.js';
 
 const makeApp = () => {

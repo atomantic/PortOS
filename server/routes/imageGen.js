@@ -24,7 +24,7 @@ import setupRouter from './imageGenSetup.js';
 import { enqueueJob, attachSseClient as attachQueueSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
 import { getImageModels, requiredReposForModel } from '../lib/mediaModels.js';
 import { inspectModelCache, verifyModelCache, repairModelCache, aggregateVerifies } from '../lib/hfCache.js';
-import { startHfDownloadStream } from '../lib/sseDownload.js';
+import { startHfDownloadStream } from '../services/hfDownloadStream.js';
 import { PATHS, ensureDir, resolveGalleryImage } from '../lib/fileUtils.js';
 import { prepareGenerateParams, resolveLocalImageModel } from '../services/imageGen/prepareParams.js';
 import { applyImageClean, applyWatermarkRemoval, applyLightRegenVariant } from '../services/imageGen/variants.js';

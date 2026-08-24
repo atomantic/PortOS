@@ -23,16 +23,16 @@
 // parseHfDownloadLine is the single decoder — downloadHfRepo and the tests
 // share it so a wire-shape change cannot drift between them.
 
-import { spawn } from './childProcess.js';
+import { spawn } from '../lib/childProcess.js';
 import { join } from 'node:path';
 import {
   resolveFlux2Python, isFlux2VenvHealthy, HF_HUB_PYTHON_RESOLVERS,
-} from './pythonSetup.js';
-import { PATHS } from './fileUtils.js';
+} from '../lib/pythonSetup.js';
+import { PATHS } from '../lib/fileUtils.js';
 import { getHfTokenInfo } from './hfToken.js';
-import { safeChildProcessEnv, safeChildProcessOptions } from './processEnv.js';
-import { createLineReader } from './streamLines.js';
-import { getSettings } from '../services/settings.js';
+import { safeChildProcessEnv, safeChildProcessOptions } from '../lib/processEnv.js';
+import { createLineReader } from '../lib/streamLines.js';
+import { getSettings } from './settings.js';
 
 const HELPER_SCRIPT = join(PATHS.root, 'scripts', 'hf_download_repo.py');
 

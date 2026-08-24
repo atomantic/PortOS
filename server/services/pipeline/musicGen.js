@@ -44,7 +44,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
 import { PATHS, ensureDir } from '../../lib/fileUtils.js';
-import { hfChildEnv } from '../../lib/hfToken.js';
+import { hfChildEnv } from '../hfToken.js';
 import { runSidecarProcess, parseSidecarResult } from '../../lib/sidecarProcess.js';
 import {
   resolveMusicgenPython, MUSICGEN_RUNTIME_DIR, MUSICGEN_VENV_DEFAULT,

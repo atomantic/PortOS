@@ -21,7 +21,7 @@ import { platform } from 'os';
 import { PATHS, ensureDir, atomicWrite, shortId } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { v4 as uuidv4 } from '../../lib/uuid.js';
-import { hfChildEnv } from '../../lib/hfToken.js';
+import { hfChildEnv } from '../hfToken.js';
 import { spawnDetached, reapDetached, reattachDetached, isReattachable } from '../../lib/detachedSpawn.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { getImageModels } from '../../lib/mediaModels.js';

@@ -31,7 +31,7 @@ import { tmpdir } from 'os';
 import { PATHS, shortId, importFileToDir } from '../lib/fileUtils.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../lib/sseUtils.js';
 import { killWithEscalation } from '../lib/killWithEscalation.js';
-import { hfChildEnv } from '../lib/hfToken.js';
+import { hfChildEnv } from './hfToken.js';
 import { isGatedRepoError, extractGatedRepo } from '../lib/hfErrors.js';
 import { resolveMuscriptorPython, isMuscriptorRuntimeReady, MUSCRIPTOR_VENV_DEFAULT } from '../lib/pythonSetup.js';
 import { runSidecarProcess, parseSidecarResult } from '../lib/sidecarProcess.js';

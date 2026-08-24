@@ -36,7 +36,8 @@ import {
 import { listEngineModels, addAudioModel, removeAudioModel, isValidRepoId } from '../services/audioModels.js';
 import { listMusicEngineCapabilities } from '../services/musicEngineCapabilities.js';
 import { describeMusic, writeLyrics } from '../services/musicDesigner.js';
-import { startHfDownloadStream, openSseStream } from '../lib/sseDownload.js';
+import { startHfDownloadStream } from '../services/hfDownloadStream.js';
+import { openSseStream } from '../lib/sseDownload.js';
 import { createInstallLogger } from '../lib/installLogger.js';
 import { inspectModelCache } from '../lib/hfCache.js';
 import { getCudaCapability } from '../lib/cudaCapability.js';

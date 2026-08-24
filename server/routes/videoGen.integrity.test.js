@@ -34,7 +34,7 @@ vi.mock('../lib/hfCache.js', async (importOriginal) => ({
 }));
 
 const sseDownload = vi.hoisted(() => ({ start: vi.fn() }));
-vi.mock('../lib/sseDownload.js', async (importOriginal) => ({
+vi.mock('../services/hfDownloadStream.js', async (importOriginal) => ({
   ...(await importOriginal()),
   startHfDownloadStream: sseDownload.start,
 }));

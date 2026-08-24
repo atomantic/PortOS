@@ -23,7 +23,7 @@ import {
   classifyHfMediaModel,
 } from '../lib/huggingfaceModel.js';
 import { addUserModelEntry } from '../lib/mediaModels.js';
-import { getHfToken } from '../lib/hfToken.js';
+import { getHfToken } from './hfToken.js';
 import { ServerError } from '../lib/errorHandler.js';
 
 // Add a media model from a HuggingFace repo. `input.url` is any HF ref shape

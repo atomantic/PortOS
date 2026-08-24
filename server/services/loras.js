@@ -63,7 +63,7 @@ import {
   isKnownLoraKeyLayout,
   readSafetensorsHeader,
 } from '../lib/safetensors.js';
-import { getHfToken } from '../lib/hfToken.js';
+import { getHfToken } from './hfToken.js';
 import { getSettings } from './settings.js';
 
 const SIDECAR_SUFFIX = '.metadata.json';

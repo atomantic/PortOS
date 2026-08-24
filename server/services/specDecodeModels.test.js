@@ -12,7 +12,7 @@ import {
   _resetSpecDecodeDownloadsForTests,
 } from './specDecodeModels.js';
 import * as specDecodePresets from '../lib/specDecodePresets.js';
-import * as hfToken from '../lib/hfToken.js';
+import * as hfToken from './hfToken.js';
 import * as huggingfaceLora from '../lib/huggingfaceLora.js';
 
 const siblings = (...names) => ({ siblings: names.map((rfilename) => ({ rfilename })) });

@@ -16,7 +16,7 @@ import { join } from 'node:path';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
-import { getHfToken, getHfTokenInfo, HF_TOKEN_REGEX } from '../lib/hfToken.js';
+import { getHfToken, getHfTokenInfo, HF_TOKEN_REGEX } from '../services/hfToken.js';
 import { getImageModels, isFlux2 } from '../lib/mediaModels.js';
 import { createInstallLogger } from '../lib/installLogger.js';
 import {

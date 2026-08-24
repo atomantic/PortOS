@@ -7,9 +7,9 @@
 
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { tryReadFile } from './fileUtils.js';
-import { safeChildProcessEnv } from './processEnv.js';
-import { getSettings } from '../services/settings.js';
+import { tryReadFile } from '../lib/fileUtils.js';
+import { safeChildProcessEnv } from '../lib/processEnv.js';
+import { getSettings } from './settings.js';
 
 const HF_CLI_TOKEN_PATH = join(homedir(), '.cache', 'huggingface', 'token');
 

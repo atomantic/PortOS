@@ -6,7 +6,7 @@ let svc;
 beforeEach(async () => {
   vi.resetModules();
   // No HF token in tests — getHfToken reads settings/env, stub to null.
-  vi.doMock('../lib/hfToken.js', () => ({ getHfToken: async () => null }));
+  vi.doMock('./hfToken.js', () => ({ getHfToken: async () => null }));
   svc = await import('./videoLoraSuggestions.js');
   svc._resetVideoSuggestionsCache();
 });
