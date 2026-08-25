@@ -24,7 +24,7 @@ import {
   QUALITY_PRESETS,
   presetToRenderParams,
 } from '../lib/creativeDirectorPresets.js';
-import { PORTOS_API_URL } from './ports.js';
+import { PORTOS_API_URL } from '../lib/ports.js';
 import { buildPrompt } from './promptService.js';
 
 // Shared project-block view used by both prompt stages. Defaults out
