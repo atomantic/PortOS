@@ -142,7 +142,9 @@ describe('classifyBranch', () => {
   });
   it('local-only bare pointer (no upstream, no commits of its own) → WIP', () => {
     expect(classifyBranch({ isMerged: false, openPr: null, hasUpstream: false, worktreeDirty: false })).toBe('WIP');
-    expect(classifyBranch({ isMerged: false, openPr: null, hasUpstream: false, worktreeDirty: false, ahead: 0 })).toBe('WIP');
+    expect(classifyBranch({
+      isMerged: false, openPr: null, hasUpstream: false, worktreeDirty: false, ahead: 0, hasOrigin: true
+    })).toBe('WIP');
   });
 
   // The shape of eight `claim/*` branches that sat unreconciled: each /claim
@@ -151,29 +153,46 @@ describe('classifyBranch', () => {
   // and every run parked on "no branches in flight" with the work still sitting there.
   it('classifies a never-pushed branch holding commits as NEEDS_PR', () => {
     expect(classifyBranch({
-      isMerged: false, openPr: null, hasUpstream: false, worktreeDirty: false, ahead: 2
+      isMerged: false, openPr: null, hasUpstream: false, worktreeDirty: false, ahead: 2, hasOrigin: true
     })).toBe('NEEDS_PR');
   });
 
   it('leaves a never-pushed branch WIP when its commit count is unreadable', () => {
     expect(classifyBranch({
-      isMerged: false, openPr: null, hasUpstream: false, worktreeDirty: false, ahead: null
+      isMerged: false, openPr: null, hasUpstream: false, worktreeDirty: false, ahead: null, hasOrigin: true
     })).toBe('WIP');
+  });
+
+  // An origin-less repo has nowhere to push, so dispatching its local work would
+  // spend a coordinator run to fail at `git push -u origin <branch>`. The gate is
+  // scoped to the ahead-based arm: a branch that TRACKS a remote branch is itself
+  // proof the remote exists, so it stays actionable.
+  it('does not dispatch never-pushed work on a repo with no origin', () => {
+    expect(classifyBranch({
+      isMerged: false, openPr: null, hasUpstream: false, worktreeDirty: false, ahead: 2, hasOrigin: false
+    })).toBe('WIP');
+    // Omitted entirely — fail-closed, not an invented remote.
+    expect(classifyBranch({
+      isMerged: false, openPr: null, hasUpstream: false, worktreeDirty: false, ahead: 2
+    })).toBe('WIP');
+    expect(classifyBranch({
+      isMerged: false, openPr: null, hasUpstream: true, worktreeDirty: false, ahead: 2, hasOrigin: false
+    })).toBe('NEEDS_PR');
   });
 
   it('still protects a never-pushed branch that is dirty or live-owned', () => {
     expect(classifyBranch({
-      isMerged: false, openPr: null, hasUpstream: false, worktreeDirty: true, ahead: 3
+      isMerged: false, openPr: null, hasUpstream: false, worktreeDirty: true, ahead: 3, hasOrigin: true
     })).toBe('WIP');
     expect(classifyBranch({
-      isMerged: false, openPr: null, hasUpstream: false, worktreeDirty: false, ahead: 3,
+      isMerged: false, openPr: null, hasUpstream: false, worktreeDirty: false, ahead: 3, hasOrigin: true,
       liveOwnerReason: 'worktree-active-agent'
     })).toBe('WIP');
   });
 
   it('does not conclude "no PR" for a never-pushed branch when the forge was unreadable', () => {
     expect(classifyBranch({
-      isMerged: false, openPr: null, hasUpstream: false, worktreeDirty: false, ahead: 3,
+      isMerged: false, openPr: null, hasUpstream: false, worktreeDirty: false, ahead: 3, hasOrigin: true,
       prStateUnavailable: true
     })).toBe('WIP');
   });
