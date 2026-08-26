@@ -86,9 +86,9 @@ const latestReadyRollup = (rollups, promptVersion) => rollups
 const summaryOutcome = (summarize, input) => Promise.resolve()
   .then(() => summarize(input))
   .then(
-    (summary) => typeof summary === 'string'
+    (summary) => typeof summary === 'string' && summary.trim()
       ? { ok: true, summary }
-      : { ok: false, error: 'Persistent mind summarizer returned no summary string' },
+      : { ok: false, error: 'Persistent mind summarizer returned no summary text' },
     (error) => ({ ok: false, error: String(error?.message || error || 'Persistent mind summary failed').slice(0, 500) })
   );
 
@@ -147,7 +147,13 @@ export async function preparePersistentMindContext({
         await appendMindEvent({
           kind: 'mind.summary',
           mindId,
-          eventId: `mind-summary-${sha256Text(rollup.id).slice(0, 32)}`,
+          // Keyed on the rollup's own createdAt (unique per attempt), not just
+          // rollup.id: a forceSummary retry reuses the same rollup id, and the
+          // shared ledger dedupes mind events by eventId regardless of age — an
+          // id derived from rollup.id alone would make a successful retry's
+          // event silently drop, leaving the replayed trajectory stuck showing
+          // the earlier failed attempt forever.
+          eventId: `mind-summary-${sha256Text(`${rollup.id}:${rollup.provenance.createdAt}`).slice(0, 32)}`,
           data: {
             rollupId: rollup.id,
             status: rollup.status,

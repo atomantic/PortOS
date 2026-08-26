@@ -108,6 +108,49 @@ describe('persistent mind rollups', () => {
     expect(rollup).toMatchObject({ status: 'failed', summary: null, error: 'summary provider unavailable' });
   });
 
+  it('rejects an empty or whitespace-only summary as a failed attempt', async () => {
+    mock.history = [event(1), event(2), event(3)];
+    const summarize = vi.fn(async () => '   ');
+
+    const context = await preparePersistentMindContext({ recentEventLimit: 1, summarize });
+    const [rollup] = await readPersistentMindRollups();
+
+    expect(context.summaryState).toBe('failed');
+    expect(rollup).toMatchObject({
+      status: 'failed',
+      summary: null,
+      error: 'Persistent mind summarizer returned no summary text',
+    });
+  });
+
+  it('gives a forced retry its own trajectory event so a successful retry is not deduped against the earlier failure', async () => {
+    mock.history = [event(1), event(2), event(3)];
+    const summarize = vi.fn(async () => { throw new Error('summary provider unavailable'); });
+
+    await preparePersistentMindContext({ recentEventLimit: 1, summarize });
+    mock.appendMindEvent.mockClear();
+    summarize.mockImplementation(async () => 'Recovered after the provider came back.');
+
+    await preparePersistentMindContext({ recentEventLimit: 1, summarize, forceSummary: true });
+    const [rollup] = await readPersistentMindRollups();
+
+    expect(rollup).toMatchObject({ status: 'ready', summary: 'Recovered after the provider came back.' });
+    expect(mock.appendMindEvent).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'mind.summary',
+      data: expect.objectContaining({ status: 'ready' }),
+    }));
+    const retryEventId = mock.appendMindEvent.mock.calls.find(
+      ([call]) => call.kind === 'mind.summary'
+    )[0].eventId;
+    expect(retryEventId).toBeTruthy();
+    // The retry's event id must differ from an id derived from rollup.id alone
+    // (which is unchanged across attempts) — otherwise the shared ledger's
+    // dedupe would silently drop this event and the replayed trajectory would
+    // stay stuck on the earlier failed attempt forever.
+    const staleEventId = `mind-summary-${(await import('../lib/fileUtils.js')).sha256Text(rollup.id).slice(0, 32)}`;
+    expect(retryEventId).not.toBe(staleEventId);
+  });
+
   it('builds cumulative rollups so a bounded cache retains the full summarized life', async () => {
     mock.history = [event(1), event(2), event(3)];
     const summarize = vi.fn()
