@@ -215,6 +215,7 @@ export * from './agentOutputMarkers.js';
 export * from './agentRunEvents.js';
 export * from './agentRunReconcile.js';
 export * from './persistentMind.js';
+export * from './persistentMindTrajectory.js';
 export * from './agentSentinel.js';
 export * from './bareUrl.js';
 export * from './bashResolver.js';

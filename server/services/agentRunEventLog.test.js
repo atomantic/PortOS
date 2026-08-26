@@ -21,7 +21,10 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
 
 const {
   appendRunEvent,
+  appendMindEvent,
   readRunEvents,
+  readPersistentMindEvents,
+  readPersistentMindHistory,
   getRunProjections,
   getRunDiagnostic,
   getRunEventLedgerStats,
@@ -31,13 +34,15 @@ const {
   MAX_EVENT_AGE_DAYS
 } = await import('./agentRunEventLog.js');
 const { buildRunEvent } = await import('../lib/agentRunEvents.js');
+const { persistentMindEventCursor } = await import('../lib/persistentMindTrajectory.js');
 
 const ACTIVE = join(LEDGER_DIR, 'run-events.jsonl');
 const ARCHIVE = join(LEDGER_DIR, 'run-events.1.jsonl');
+const MIND_SEQUENCES = join(LEDGER_DIR, 'persistent-mind-sequences.json');
 
 /** Wipe the on-disk ledger AND the in-process caches — i.e. a fresh install. */
 function resetLedger() {
-  for (const path of [ACTIVE, ARCHIVE]) if (existsSync(path)) rmSync(path);
+  for (const path of [ACTIVE, ARCHIVE, MIND_SEQUENCES]) if (existsSync(path)) rmSync(path);
   __resetRunEventLogCache();
 }
 
@@ -143,6 +148,102 @@ describe('duplicate-event idempotency', () => {
     const other = await appendRunEvent({ ...event, at: '2026-08-18T11:00:01.000Z' });
     expect(other.appended).toBe(true);
     expect(countLines(ACTIVE)).toBe(2);
+  });
+});
+
+describe('persistent-mind ordering, replay, and cursors', () => {
+  const appendMessage = (id) => appendMindEvent({
+    kind: 'mind.message.accepted',
+    eventId: `mind-message:${id}`,
+    data: { messageId: id, displayText: `Message ${id}` },
+  });
+
+  it('serializes concurrent appends into strict per-mind sequence order', async () => {
+    const results = await Promise.all(Array.from({ length: 20 }, (_, index) => appendMessage(index)));
+    const events = await readPersistentMindHistory();
+
+    expect(results.every((result) => result.appended)).toBe(true);
+    expect(events.map((event) => event.data.messageId)).toEqual(Array.from({ length: 20 }, (_, index) => index));
+    expect(events.every((event, index) => index === 0 || event.sequence > events[index - 1].sequence)).toBe(true);
+  });
+
+  it('deduplicates an explicit event id without consuming another sequence', async () => {
+    const first = await appendMessage('one');
+    const duplicate = await appendMessage('one');
+    const second = await appendMessage('two');
+
+    expect(duplicate).toMatchObject({ appended: false, duplicate: true });
+    expect(await readPersistentMindHistory()).toHaveLength(2);
+    expect(second.event.sequence).toBe(first.event.sequence + 1);
+  });
+
+  it('continues sequence order and reconstructs the same snapshot after restart', async () => {
+    await appendMessage('one');
+    await appendMindEvent({
+      kind: 'mind.wake',
+      turnId: 'turn-1',
+      eventId: 'mind-wake:turn-1',
+    });
+    const before = await readPersistentMindEvents();
+
+    restartServer();
+    const after = await readPersistentMindEvents();
+    const completed = await appendMindEvent({
+      kind: 'mind.turn.completed',
+      turnId: 'turn-1',
+      eventId: 'mind-complete:turn-1',
+    });
+
+    expect(after.snapshot).toEqual(before.snapshot);
+    expect(completed.event.sequence).toBeGreaterThan(after.snapshot.lastSequence);
+  });
+
+  it('keeps sequence order after all raw events expire and the wall clock moves backwards', async () => {
+    const first = await appendMessage('one');
+    writeFileSync(ACTIVE, '');
+    restartServer();
+    vi.setSystemTime(new Date('2026-08-17T13:00:00.000Z'));
+
+    const later = await appendMessage('two');
+    expect(later.event.sequence).toBe(first.event.sequence + 1);
+  });
+
+  it('fails mind appends closed on a corrupt sequence checkpoint without blocking ordinary run events', async () => {
+    writeFileSync(MIND_SEQUENCES, '{broken');
+    restartServer();
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(appendMessage('one')).resolves.toMatchObject({
+      appended: false,
+      error: 'Persistent mind sequence checkpoint is unreadable or invalid',
+    });
+    await expect(appendRunEvent({
+      kind: 'run.spawned',
+      runId: 'ordinary-run',
+      at: '2026-08-18T12:00:00.000Z',
+    })).resolves.toMatchObject({ appended: true });
+    expect((await readRunEvents()).map((item) => item.runId)).toEqual(['ordinary-run']);
+    spy.mockRestore();
+  });
+
+  it('pages strictly after a cursor and reports a missing retained predecessor as a gap', async () => {
+    await appendMessage('one');
+    await appendMessage('two');
+    await appendMessage('three');
+    const history = await readPersistentMindHistory();
+    const cursor = persistentMindEventCursor(history[0]);
+
+    const page = await readPersistentMindEvents({ cursor, limit: 1 });
+    expect(page).toMatchObject({ gap: false, hasMore: true });
+    expect(page.events.map((item) => item.data.messageId)).toEqual(['two']);
+    expect(page.cursor).toBe(persistentMindEventCursor(history[1]));
+
+    writeFileSync(ACTIVE, history.slice(1).map((item) => `${JSON.stringify(item)}\n`).join(''));
+    restartServer();
+    const recovered = await readPersistentMindEvents({ cursor, limit: 2 });
+    expect(recovered.gap).toBe(true);
+    expect(recovered.events.map((item) => item.data.messageId)).toEqual(['two', 'three']);
+    expect(recovered.snapshot.messages.map((item) => item.messageId)).toEqual(['two', 'three']);
   });
 });
 
@@ -312,6 +413,28 @@ describe('retention — age bound (#4540)', () => {
     // …and the file itself shrank, so a quiet install's ledger doesn't grow
     // forever under a count bound it never reaches.
     expect(countLines(ACTIVE)).toBe(1);
+  });
+
+  it('keeps the mind recent window count-bounded across a long explicit stop', async () => {
+    const mindEvent = buildRunEvent({
+      kind: 'mind.message.accepted',
+      mindId: 'cos-persistent-mind',
+      sequence: 1,
+      eventId: 'mind-message:ancient',
+      at: stale(),
+      data: { messageId: 'ancient', displayText: 'Retain until it can be summarized.' },
+    });
+    writeFileSync(ACTIVE, `${JSON.stringify(mindEvent)}\n`);
+    restartServer();
+
+    expect((await readPersistentMindHistory()).map((item) => item.eventId)).toEqual(['mind-message:ancient']);
+    expect(countLines(ACTIVE)).toBe(1);
+    expect(await appendMindEvent({
+      kind: 'mind.message.accepted',
+      eventId: 'mind-message:ancient',
+      at: stale(),
+      data: { messageId: 'ancient', displayText: 'Retain until it can be summarized.' },
+    })).toMatchObject({ appended: false, duplicate: true });
   });
 
   it('drops an archive generation that has aged out entirely', async () => {

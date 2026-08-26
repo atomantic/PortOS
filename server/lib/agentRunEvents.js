@@ -33,11 +33,16 @@ import { homedir } from 'os';
 import { sha256Text } from './fileUtils.js';
 import { canonicalStringify, POLLUTING_KEYS } from './objects.js';
 import { redactOutput } from './commandSecurity.js';
+import {
+  PERSISTENT_MIND_EVENT_KINDS,
+  isPersistentMindEventKind,
+} from './persistentMindTrajectory.js';
 
 /**
  * Envelope schema version. Bump when the envelope SHAPE changes in a way a
- * reader must notice; adding a new value to `AGENT_RUN_EVENT_KINDS` is not
- * such a change (unknown kinds fold into the projection as no-ops).
+ * reader must notice. The mind fields below are confined to a new kind
+ * namespace, so ordinary v1 run envelopes remain byte-for-byte compatible;
+ * adding a kind is not a shape change (unknown kinds fold as no-ops).
  *
  * This is deliberately NOT a `PORTOS_SCHEMA_VERSIONS` entry: the ledger never
  * crosses the wire, so no peer ever has to agree with this number.
@@ -93,7 +98,14 @@ export const AGENT_RUN_EVENT_KINDS = Object.freeze([
   'run.reconciled'
 ]);
 
-const KIND_SET = new Set(AGENT_RUN_EVENT_KINDS);
+/** All writeable kinds in the shared machine-local ledger. */
+export const RUN_EVENT_KINDS = Object.freeze([
+  ...AGENT_RUN_EVENT_KINDS,
+  ...PERSISTENT_MIND_EVENT_KINDS,
+]);
+
+const KIND_SET = new Set(RUN_EVENT_KINDS);
+const AGENT_KIND_SET = new Set(AGENT_RUN_EVENT_KINDS);
 
 // ---------------------------------------------------------------------------
 // Redaction
@@ -126,6 +138,9 @@ const DROPPED_KEY_PATTERNS = [
 /** Bounds. A ledger line must stay a diagnostic, not become a record copy. */
 export const RUN_EVENT_LIMITS = Object.freeze({
   maxStringChars: 200,
+  // Explicitly display-safe mind text is allowed to be useful context while
+  // still bounded. Prompt/result/body keys never take this path.
+  maxDisplayChars: 4_000,
   maxArrayItems: 20,
   maxObjectKeys: 40,
   maxDepth: 3
@@ -167,10 +182,10 @@ export function scrubHomePath(value) {
  * Scrub + bound one free-form string: home path, then the shared secret filter,
  * then a hard length cap.
  */
-function scrubString(value) {
+function scrubString(value, maxChars = RUN_EVENT_LIMITS.maxStringChars) {
   const scrubbed = redactOutput(scrubHomePath(value)) ?? '';
-  return scrubbed.length > RUN_EVENT_LIMITS.maxStringChars
-    ? `${scrubbed.slice(0, RUN_EVENT_LIMITS.maxStringChars)}…`
+  return scrubbed.length > maxChars
+    ? `${scrubbed.slice(0, maxChars)}…`
     : scrubbed;
 }
 
@@ -232,6 +247,8 @@ function redactValue(value, depth) {
     // payload that was already safe.
     if (isDroppedKey(key) && (typeof raw === 'string' || (raw !== null && typeof raw === 'object'))) {
       out[key] = { redacted: 'content', chars: typeof raw === 'string' ? raw.length : null };
+    } else if ((key === 'displayText' || key === 'summaryText') && typeof raw === 'string') {
+      out[key] = scrubString(raw, RUN_EVENT_LIMITS.maxDisplayChars);
     } else {
       out[key] = redactValue(raw, depth + 1);
     }
@@ -248,16 +265,39 @@ function redactValue(value, depth) {
  * Zod schema for one ledger line. `.strict()` so a call site cannot smuggle an
  * extra top-level field past redaction (redaction only walks `data`).
  */
-export const agentRunEventSchema = z.object({
+const runEventEnvelopeSchema = z.object({
   schemaVersion: z.literal(AGENT_RUN_EVENT_SCHEMA_VERSION),
   eventId: z.string().min(1).max(128),
-  kind: z.enum(AGENT_RUN_EVENT_KINDS),
+  kind: z.string().min(1).max(64),
   runId: z.string().min(1).max(128).nullable(),
   agentId: z.string().min(1).max(128).nullable(),
   taskId: z.string().min(1).max(128).nullable(),
+  // Present only on persistent-mind events. Ordinary lifecycle envelopes keep
+  // their exact pre-mind shape, so existing consumers do not grow fake ids.
+  mindId: z.string().min(1).max(128).optional(),
+  turnId: z.string().min(1).max(128).nullable().optional(),
+  sequence: z.number().int().nonnegative().optional(),
   at: z.string().datetime(),
   data: z.record(z.unknown())
 }).strict();
+
+const refineKnownEventIdentity = (event, ctx) => {
+  const mindEvent = isPersistentMindEventKind(event.kind);
+  if (mindEvent && !event.mindId) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['mindId'], message: 'persistent-mind events require mindId' });
+  }
+  if (mindEvent && !Number.isSafeInteger(event.sequence)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['sequence'], message: 'persistent-mind events require sequence' });
+  }
+  if (AGENT_KIND_SET.has(event.kind)
+      && (event.mindId !== undefined || event.turnId !== undefined || event.sequence !== undefined)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['mindId'], message: 'ordinary run events cannot carry persistent-mind identity' });
+  }
+};
+
+export const agentRunEventSchema = runEventEnvelopeSchema.extend({
+  kind: z.enum(RUN_EVENT_KINDS),
+}).superRefine(refineKnownEventIdentity);
 
 /**
  * Structural envelope check for the READ path.
@@ -271,9 +311,7 @@ export const agentRunEventSchema = z.object({
  * folds unknown kinds as no-ops). Writes stay strict — a typo at a call site is
  * still a bug, and `buildRunEvent` is where it gets caught.
  */
-export const storedRunEventSchema = agentRunEventSchema.extend({
-  kind: z.string().min(1).max(64)
-});
+export const storedRunEventSchema = runEventEnvelopeSchema.superRefine(refineKnownEventIdentity);
 
 /** Is this parsed line a structurally sound ledger line? Used by the read path. */
 export function isStoredRunEvent(value) {
@@ -303,17 +341,21 @@ const nullableId = (value) => (typeof value === 'string' && value.trim() ? value
  * is where that throw gets absorbed.
  *
  * @param {object} input
- * @param {string} input.kind - one of AGENT_RUN_EVENT_KINDS
+ * @param {string} input.kind - one of RUN_EVENT_KINDS
  * @param {string} [input.runId]
  * @param {string} [input.agentId]
  * @param {string} [input.taskId]
+ * @param {string} [input.mindId] - required for persistent-mind kinds
+ * @param {string} [input.turnId] - persistent-mind turn identity
+ * @param {number} [input.sequence] - ledger-assigned mind ordering cursor
  * @param {string|Date} [input.at] - defaults to now
  * @param {object} [input.data] - redacted before it is hashed or stored
  * @param {string} [input.eventId] - explicit idempotency key
  * @returns {object} validated envelope
  */
-export function buildRunEvent({ kind, runId, agentId, taskId, at, data, eventId } = {}) {
+export function buildRunEvent({ kind, runId, agentId, taskId, mindId, turnId, sequence, at, data, eventId } = {}) {
   const timestamp = at instanceof Date ? at.toISOString() : (typeof at === 'string' && at ? at : new Date().toISOString());
+  const mindEvent = isPersistentMindEventKind(kind);
   const core = {
     schemaVersion: AGENT_RUN_EVENT_SCHEMA_VERSION,
     kind,
@@ -323,6 +365,11 @@ export function buildRunEvent({ kind, runId, agentId, taskId, at, data, eventId 
     at: timestamp,
     data: redactRunEventData(data)
   };
+  if (mindEvent) {
+    core.mindId = nullableId(mindId);
+    core.turnId = nullableId(turnId);
+    core.sequence = sequence;
+  }
   const envelope = {
     ...core,
     eventId: typeof eventId === 'string' && eventId ? eventId.slice(0, 128) : deriveEventId(core)

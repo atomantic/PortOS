@@ -29,7 +29,7 @@ describe('migration 298 — persistent mind runtime state', () => {
       running: true,
       config: { alwaysOn: true },
       agents: { a1: { status: 'completed' } },
-      persistentMind: { schemaVersion: 1, enabled: false, started: false, status: 'disabled' },
+      persistentMind: { schemaVersion: 2, mindId: 'cos-persistent-mind', enabled: false, started: false, status: 'disabled' },
     });
   });
 

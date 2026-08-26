@@ -2404,7 +2404,8 @@ describe('canQueueImprovementTasks — autonomous queuing gate', () => {
 describe('persistent mind — default-off CoS state integration (#5064)', () => {
   it('adds no cold-bootstrap provider work to a fresh CoS state', () => {
     expect(DEFAULT_STATE.persistentMind).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
+      mindId: 'cos-persistent-mind',
       enabled: false,
       started: false,
       status: 'disabled',

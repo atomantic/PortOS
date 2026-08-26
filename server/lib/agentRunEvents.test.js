@@ -37,6 +37,29 @@ describe('buildRunEvent — envelope schema', () => {
     expect(event.taskId).toBeNull();
   });
 
+  it('adds mind identity only to typed persistent-mind envelopes', () => {
+    const event = buildRunEvent({
+      kind: 'mind.message.accepted',
+      mindId: 'cos-persistent-mind',
+      turnId: 'turn-1',
+      sequence: 42,
+      at: AT,
+      data: { displayText: 'Hello' },
+    });
+    expect(event).toMatchObject({
+      kind: 'mind.message.accepted',
+      mindId: 'cos-persistent-mind',
+      turnId: 'turn-1',
+      sequence: 42,
+    });
+    expect(() => buildRunEvent({ kind: 'mind.wake', mindId: 'cos-persistent-mind', at: AT })).toThrow();
+
+    const ordinary = buildRunEvent({ kind: 'run.spawned', runId: 'r1', at: AT });
+    expect(ordinary).not.toHaveProperty('mindId');
+    expect(ordinary).not.toHaveProperty('turnId');
+    expect(ordinary).not.toHaveProperty('sequence');
+  });
+
   it('accepts a Date for `at` and normalizes it to ISO', () => {
     const event = buildRunEvent({ kind: 'run.spawned', runId: 'r1', at: new Date(AT) });
     expect(event.at).toBe(AT);
@@ -61,6 +84,15 @@ describe('buildRunEvent — envelope schema', () => {
     expect(isStoredRunEvent({ kind: 'run.spawned' })).toBe(false);
     expect(isStoredRunEvent({ ...buildRunEvent({ kind: 'run.spawned', runId: 'r1', at: AT }), at: 'not-a-date' })).toBe(false);
     expect(isStoredRunEvent({ ...buildRunEvent({ kind: 'run.spawned', runId: 'r1', at: AT }), extra: 1 })).toBe(false);
+    const mind = buildRunEvent({
+      kind: 'mind.wake',
+      mindId: 'cos-persistent-mind',
+      turnId: 'turn-1',
+      sequence: 1,
+      at: AT,
+    });
+    const { sequence: _sequence, ...missingSequence } = mind;
+    expect(isStoredRunEvent(missingSequence)).toBe(false);
   });
 
   it('isKnownRunEventKind tracks the exported vocabulary', () => {
@@ -192,6 +224,30 @@ describe('redactRunEventData — privacy', () => {
   it('redacts inside buildRunEvent, so an unredacted payload cannot be constructed', () => {
     const event = buildRunEvent({ kind: 'run.spawned', runId: 'r1', at: AT, data: { prompt: 'private words' } });
     expect(event.data.prompt).toEqual({ redacted: 'content', chars: 13 });
+  });
+
+  it('bounds display-safe mind text while still dropping prompt-like fields and secrets', () => {
+    const event = buildRunEvent({
+      kind: 'mind.model.result',
+      mindId: 'cos-persistent-mind',
+      turnId: 'turn-1',
+      sequence: 1,
+      at: AT,
+      data: {
+        displayText: `${'x'.repeat(RUN_EVENT_LIMITS.maxDisplayChars + 200)} {"API_KEY":"sk-live-example-secret"}`,
+        prompt: 'private prompt words',
+        body: { privateRecord: 'must not persist' },
+        output: 'private model output',
+      },
+    });
+    const persisted = JSON.stringify(event);
+    expect(event.data.displayText.length).toBeLessThanOrEqual(RUN_EVENT_LIMITS.maxDisplayChars + 1);
+    expect(persisted).not.toContain('sk-live-example-secret');
+    expect(persisted).not.toContain('private prompt words');
+    expect(persisted).not.toContain('must not persist');
+    expect(persisted).not.toContain('private model output');
+    expect(event.data.prompt).toEqual({ redacted: 'content', chars: 20 });
+    expect(event.data.body).toEqual({ redacted: 'content', chars: null });
   });
 });
 

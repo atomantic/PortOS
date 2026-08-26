@@ -13,6 +13,8 @@ const mock = vi.hoisted(() => ({
   budget: { withinBudget: true, exceeded: null },
   recordUsage: vi.fn(async () => {}),
   acquireSlot: vi.fn(async () => ({ ok: true, release: vi.fn() })),
+  appendMindEvent: vi.fn(async (event) => ({ appended: true, event })),
+  prepareContext: vi.fn(async () => ({ text: 'bounded context', chars: 15, summaryState: 'not-needed' })),
   daemonRunning: true,
 }));
 
@@ -45,6 +47,14 @@ vi.mock('./cosLocalEndpointSlots.js', () => ({
   acquireLocalEndpointProviderSlot: (...args) => mock.acquireSlot(...args),
 }));
 
+vi.mock('./agentRunEventLog.js', () => ({
+  appendMindEvent: (...args) => mock.appendMindEvent(...args),
+}));
+
+vi.mock('./persistentMindContext.js', () => ({
+  preparePersistentMindContext: (...args) => mock.prepareContext(...args),
+}));
+
 const supervisor = await import('./persistentMindSupervisor.js');
 
 const makeRoot = () => ({
@@ -71,6 +81,8 @@ describe('persistent mind supervisor', () => {
     mock.recordUsage.mockClear();
     mock.acquireSlot.mockReset();
     mock.acquireSlot.mockResolvedValue({ ok: true, release: vi.fn() });
+    mock.appendMindEvent.mockClear();
+    mock.prepareContext.mockClear();
     __resetCosAdmissionReservations();
     supervisor.__resetPersistentMindSupervisorForTests();
   });
@@ -118,6 +130,20 @@ describe('persistent mind supervisor', () => {
     pending.resolve({});
     await Promise.all([firstDrain, secondDrain]);
 
+    expect(mock.prepareContext).toHaveBeenCalledWith(expect.objectContaining({
+      mindId: 'cos-persistent-mind',
+      providerId: 'example-cloud',
+      model: 'example-model',
+    }));
+    expect(run.mock.calls[0][0].context).toMatchObject({ text: 'bounded context', summaryState: 'not-needed' });
+    expect(mock.appendMindEvent.mock.calls.map(([event]) => event.kind)).toEqual(expect.arrayContaining([
+      'mind.message.accepted',
+      'mind.wake',
+      'mind.model.request',
+      'mind.model.result',
+      'mind.turn.completed',
+    ]));
+
     expect(prepare).toHaveBeenCalledTimes(1);
     expect(mock.acquireSlot).toHaveBeenCalledTimes(1);
     expect(mock.root.persistentMind.activeTurn).toBeNull();
@@ -149,6 +175,34 @@ describe('persistent mind supervisor', () => {
     expect(recovered.queuedMessages).toEqual([message]);
     expect(recovered.nextEligibleWakeAt).not.toBeNull();
     expect(mock.scheduled.has(supervisor.PERSISTENT_MIND_WATCHDOG_EVENT_ID)).toBe(true);
+    expect(mock.appendMindEvent).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'mind.failed',
+      turnId: 'turn-orphan',
+      data: expect.objectContaining({ status: 'interrupted' }),
+    }));
+  });
+
+  it('records pause, stop, and disable boundaries even without an active provider turn', async () => {
+    await supervisor.setPersistentMindEnabled(true);
+    await supervisor.startPersistentMind();
+    await supervisor.pausePersistentMind('Pause for inspection');
+    expect(mock.appendMindEvent).toHaveBeenLastCalledWith(expect.objectContaining({
+      kind: 'mind.paused',
+      data: expect.objectContaining({ status: 'paused', error: 'Pause for inspection' }),
+    }));
+
+    await supervisor.resumePersistentMind();
+    await supervisor.stopPersistentMind();
+    expect(mock.appendMindEvent).toHaveBeenLastCalledWith(expect.objectContaining({
+      kind: 'mind.paused',
+      data: expect.objectContaining({ status: 'idle', error: 'Persistent mind stopped' }),
+    }));
+
+    await supervisor.setPersistentMindEnabled(false);
+    expect(mock.appendMindEvent).toHaveBeenLastCalledWith(expect.objectContaining({
+      kind: 'mind.paused',
+      data: expect.objectContaining({ status: 'disabled', error: 'Persistent mind disabled' }),
+    }));
   });
 
   it('requeues a message and degrades visibly when the pinned provider is unavailable', async () => {

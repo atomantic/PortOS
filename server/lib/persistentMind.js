@@ -6,7 +6,9 @@
  * rules without depending on module-level process state.
  */
 
-export const PERSISTENT_MIND_SCHEMA_VERSION = 1;
+import { PERSISTENT_MIND_ID } from './persistentMindTrajectory.js';
+
+export const PERSISTENT_MIND_SCHEMA_VERSION = 2;
 
 export const PERSISTENT_MIND_STATUSES = [
   'disabled',
@@ -42,6 +44,7 @@ const asBoundedString = (value, max) => (
 );
 
 const asId = (value) => asBoundedString(value, 200);
+const asMindId = (value) => asBoundedString(value, 128);
 
 const asCount = (value) => (
   Number.isSafeInteger(value) && value >= 0 ? value : 0
@@ -99,6 +102,7 @@ const sanitizeActiveTurn = (value) => {
 export function createDefaultPersistentMindState() {
   return {
     schemaVersion: PERSISTENT_MIND_SCHEMA_VERSION,
+    mindId: PERSISTENT_MIND_ID,
     enabled: false,
     started: false,
     status: 'disabled',
@@ -161,6 +165,7 @@ export function normalizePersistentMindState(raw) {
   return {
     ...defaults,
     schemaVersion: PERSISTENT_MIND_SCHEMA_VERSION,
+    mindId: asMindId(source.mindId) || PERSISTENT_MIND_ID,
     enabled,
     started,
     status,

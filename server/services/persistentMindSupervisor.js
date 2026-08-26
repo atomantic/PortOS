@@ -27,6 +27,8 @@ import { schedule, cancel } from './eventScheduler.js';
 import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';
 import { acquireLocalEndpointProviderSlot } from './cosLocalEndpointSlots.js';
 import { acquireCosActionReservation, acquireCosGlobalSlot } from './cosAdmissionReservations.js';
+import { appendMindEvent } from './agentRunEventLog.js';
+import { preparePersistentMindContext } from './persistentMindContext.js';
 
 export const PERSISTENT_MIND_WAKE_EVENT_ID = 'cos-persistent-mind-wake';
 export const PERSISTENT_MIND_WATCHDOG_EVENT_ID = 'cos-persistent-mind-watchdog';
@@ -148,15 +150,22 @@ async function interruptActiveTurn(reason, status, { retry = false, expectedTurn
           ? new Date(Date.now() + persistentMindBackoffMs(failureCount)).toISOString()
           : null,
       },
-      value: interrupted,
+      value: { interrupted, turnId: mind.activeTurn?.id || null, mindId: mind.mindId },
     };
   });
-  if (result.value) {
+  if (result.value?.interrupted) {
     runtimeGeneration += 1;
     activeAbortController?.abort(reason);
+    await appendMindEvent({
+      kind: status === 'paused' ? 'mind.paused' : 'mind.failed',
+      mindId: result.value.mindId,
+      turnId: result.value.turnId,
+      eventId: `mind-${status}:${result.value.turnId}`,
+      data: { status, error: reason },
+    });
   }
   emitMindStatus(result.state);
-  return { state: result.state, interrupted: result.value === true };
+  return { state: result.state, interrupted: result.value?.interrupted === true };
 }
 
 async function parkActiveTurn(turnId, reason, status = 'waiting', retryAt = null) {
@@ -175,6 +184,13 @@ async function parkActiveTurn(turnId, reason, status = 'waiting', retryAt = null
         nextEligibleWakeAt: retryAt || new Date(Date.now() + persistentMindBackoffMs(failureCount)).toISOString(),
       },
     };
+  });
+  await appendMindEvent({
+    kind: 'mind.failed',
+    mindId: result.state.mindId,
+    turnId,
+    eventId: `mind-failed:${turnId}:${status}`,
+    data: { status, error: reason, retryAt },
   });
   emitMindStatus(result.state);
   return result.state;
@@ -209,7 +225,23 @@ async function claimNextTurn() {
       value: activeTurn,
     };
   });
-  if (result.value) emitMindStatus(result.state);
+  if (result.value) {
+    await appendMindEvent({
+      kind: 'mind.wake',
+      mindId: result.state.mindId,
+      turnId: result.value.id,
+      eventId: `mind-wake:${result.value.id}`,
+      at: result.value.startedAt,
+      data: {
+        status: result.state.status,
+        wakeKind: result.value.wake.kind,
+        wakeId: result.value.wake.id || null,
+        messageId: result.value.wake.message?.id || null,
+        reason: result.value.wake.reason || null,
+      },
+    });
+    emitMindStatus(result.state);
+  }
   return result.value;
 }
 
@@ -297,6 +329,20 @@ async function completeTurn(turnId, result, generation) {
     };
   });
   if (!updated.value) return;
+  await appendMindEvent({
+    kind: 'mind.turn.completed',
+    mindId: updated.state.mindId,
+    turnId,
+    eventId: `mind-turn-completed:${turnId}`,
+    at: completedAt,
+    data: {
+      status: updated.state.status,
+      providerId: result?.providerId || null,
+      model: result?.model || null,
+      effort: result?.effort || null,
+      summaryText: typeof result?.summary === 'string' ? result.summary : null,
+    },
+  });
   emitMindStatus(updated.state);
   cosEvents.emit('persistent-mind:turn-completed', {
     turnId,
@@ -424,6 +470,35 @@ async function runOnePersistentMindTurn() {
       await recordTurnProfile(turn.id, prepared);
       if (!await turnCanContinue(turn.id, generation, controller.signal)) return;
 
+      const context = await preparePersistentMindContext({
+        mindId: mind.mindId,
+        identity: turnAdapter.identity || 'One supervised persistent Chief of Staff mind.',
+        providerId: prepared.provider.id,
+        model: prepared.model || null,
+        summarize: typeof turnAdapter.summarize === 'function'
+          ? (input) => turnAdapter.summarize({
+              ...input,
+              provider: prepared.provider,
+              model: prepared.model || null,
+              effort: prepared.effort || null,
+              signal: controller.signal,
+            })
+          : null,
+      });
+      await appendMindEvent({
+        kind: 'mind.model.request',
+        mindId: mind.mindId,
+        turnId: turn.id,
+        eventId: `mind-model-request:${turn.id}`,
+        data: {
+          providerId: prepared.provider.id,
+          model: prepared.model || null,
+          effort: prepared.effort || null,
+          contextChars: context.chars,
+          contextSummaryState: context.summaryState,
+        },
+      });
+
       const latestRoot = await loadState();
       const slot = await acquireLocalEndpointProviderSlot(prepared.provider, latestRoot.agents, turn.id);
       if (!slot.ok) {
@@ -441,8 +516,39 @@ async function runOnePersistentMindTurn() {
         effort: prepared.effort || null,
         signal: controller.signal,
         heartbeat: () => heartbeat(turn.id, generation),
+        context,
+        recordCapabilityEvent: ({ kind, id, data } = {}) => {
+          const eventKind = kind === 'result' ? 'mind.capability.result' : 'mind.capability.request';
+          const capabilityId = typeof id === 'string' && id ? id : randomUUID();
+          return appendMindEvent({
+            kind: eventKind,
+            mindId: mind.mindId,
+            turnId: turn.id,
+            eventId: `mind-capability:${turn.id}:${capabilityId}:${kind === 'result' ? 'result' : 'request'}`,
+            data: { capabilityId, ...(data && typeof data === 'object' ? data : {}) },
+          });
+        },
       });
-      await completeTurn(turn.id, { ...result, providerId: prepared.provider.id }, generation);
+      await appendMindEvent({
+        kind: 'mind.model.result',
+        mindId: mind.mindId,
+        turnId: turn.id,
+        eventId: `mind-model-result:${turn.id}`,
+        data: {
+          providerId: prepared.provider.id,
+          model: prepared.model || null,
+          effort: prepared.effort || null,
+          summaryText: typeof result?.summary === 'string' ? result.summary : null,
+          responseChars: typeof result?.output === 'string' ? result.output.length : null,
+          success: true,
+        },
+      });
+      await completeTurn(turn.id, {
+        ...result,
+        providerId: prepared.provider.id,
+        model: prepared.model || null,
+        effort: prepared.effort || null,
+      }, generation);
     } catch (error) {
       if (generation === runtimeGeneration) {
         const message = controller.signal.aborted
@@ -495,6 +601,8 @@ export async function setPersistentMindEnabled(enabled) {
     cancel(PERSISTENT_MIND_WATCHDOG_EVENT_ID);
   }
   const result = await mutateMindState((mind) => {
+    const changedToDisabled = !enabled && (mind.enabled || Boolean(mind.activeTurn));
+    const interruptedTurnId = !enabled ? mind.activeTurn?.id || null : null;
     let next = mind;
     if (!enabled && mind.activeTurn) next = requeuePersistentMindWake(next, mind.activeTurn.wake);
     return {
@@ -507,8 +615,18 @@ export async function setPersistentMindEnabled(enabled) {
         pauseReason: null,
         nextEligibleWakeAt: enabled ? next.nextEligibleWakeAt : null,
       },
+      value: { changedToDisabled, interruptedTurnId, mindId: mind.mindId },
     };
   });
+  if (result.value.changedToDisabled) {
+    await appendMindEvent({
+      kind: 'mind.paused',
+      mindId: result.value.mindId,
+      turnId: result.value.interruptedTurnId,
+      eventId: `mind-disabled:${result.value.interruptedTurnId || randomUUID()}`,
+      data: { status: 'disabled', error: 'Persistent mind disabled' },
+    });
+  }
   emitMindStatus(result.state);
   return result.state;
 }
@@ -538,7 +656,15 @@ export async function startPersistentMind() {
 }
 
 export async function pausePersistentMind(reason = 'Paused by user') {
-  const { state } = await interruptActiveTurn(reason, 'paused');
+  const { state, interrupted } = await interruptActiveTurn(reason, 'paused');
+  if (!interrupted) {
+    await appendMindEvent({
+      kind: 'mind.paused',
+      mindId: state.mindId,
+      eventId: `mind-paused:${randomUUID()}`,
+      data: { status: 'paused', error: reason },
+    });
+  }
   cancel(PERSISTENT_MIND_WAKE_EVENT_ID);
   return { success: true, state };
 }
@@ -573,6 +699,8 @@ export async function stopPersistentMind() {
   cancel(PERSISTENT_MIND_WAKE_EVENT_ID);
   cancel(PERSISTENT_MIND_WATCHDOG_EVENT_ID);
   const result = await mutateMindState((mind) => {
+    const wasStarted = mind.started;
+    const interruptedTurnId = mind.activeTurn?.id || null;
     let next = mind;
     if (mind.activeTurn) next = requeuePersistentMindWake(next, mind.activeTurn.wake);
     return {
@@ -584,8 +712,18 @@ export async function stopPersistentMind() {
         pauseReason: null,
         nextEligibleWakeAt: null,
       },
+      value: { wasStarted, interruptedTurnId, mindId: mind.mindId },
     };
   });
+  if (result.value.wasStarted || result.value.interruptedTurnId) {
+    await appendMindEvent({
+      kind: 'mind.paused',
+      mindId: result.value.mindId,
+      turnId: result.value.interruptedTurnId,
+      eventId: `mind-stopped:${result.value.interruptedTurnId || randomUUID()}`,
+      data: { status: result.state.status, error: 'Persistent mind stopped' },
+    });
+  }
   emitMindStatus(result.state);
   return { success: true };
 }
@@ -612,6 +750,22 @@ export async function enqueuePersistentMindMessage({ id = randomUUID(), text, cr
       value: { success: true, duplicate: false, messageId: message.id },
     };
   });
+  if (result.value.success) {
+    // Retry the stable event id even when the mutable queue already saw this
+    // message. The ledger deduplicates a healthy first append; if the first
+    // append was dropped, the caller's idempotent retry repairs the trajectory.
+    await appendMindEvent({
+      kind: 'mind.message.accepted',
+      mindId: result.state.mindId,
+      eventId: `mind-message:${message.id}`,
+      at: message.createdAt,
+      data: {
+        messageId: message.id,
+        displayText: message.text,
+        textChars: message.text.length,
+      },
+    });
+  }
   if (result.value.success && result.state.started) await scheduleNextWake();
   emitMindStatus(result.state);
   return result.value;
@@ -667,6 +821,7 @@ export async function initializePersistentMindSupervisor() {
   const recovered = await mutateMindState((mind) => {
     if (!mind.enabled || !mind.started) return { mind };
     let next = mind;
+    const orphanedTurnId = mind.activeTurn?.id || null;
     if (mind.activeTurn) {
       next = requeuePersistentMindWake(next, mind.activeTurn.wake);
       const failureCount = next.failureCount + 1;
@@ -683,8 +838,20 @@ export async function initializePersistentMindSupervisor() {
       const base = next.lastCompletedAt ? Date.parse(next.lastCompletedAt) : Date.now();
       next = { ...next, selfWake: quietSelfWake(next.lastCompletedTurnId || 'restart', base + PERSISTENT_MIND_LIMITS.MAX_QUIET_MS) };
     }
-    return { mind: next };
+    return { mind: next, value: { orphanedTurnId, mindId: mind.mindId } };
   });
+  if (recovered.value?.orphanedTurnId) {
+    await appendMindEvent({
+      kind: 'mind.failed',
+      mindId: recovered.value.mindId,
+      turnId: recovered.value.orphanedTurnId,
+      eventId: `mind-restart-recovered:${recovered.value.orphanedTurnId}`,
+      data: {
+        status: 'interrupted',
+        error: 'Recovered an orphaned persistent mind turn after restart',
+      },
+    });
+  }
   if (recovered.state.enabled && recovered.state.started) {
     armWatchdog();
     await scheduleNextWake();
