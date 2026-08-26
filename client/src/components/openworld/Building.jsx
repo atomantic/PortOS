@@ -9,6 +9,7 @@ import BuildingHologram from './BuildingHologram';
 import BuildingWindows from './BuildingWindows';
 import { computeRooftopKit } from '../../utils/openWorldRooftops';
 import { buildingHasInteriorWindows } from '../../utils/openWorldInteriorWindows';
+import { computeAppMetrics, cpuTone } from '../../utils/openWorldAppMetrics';
 
 // Rooftop fixture geometry/materials are module-scope singletons shared by every
 // building — fixtures are tiny set dressing, so they keep fixed colors (the antenna
@@ -470,6 +471,118 @@ function LowPolyFacade({ width, depth, height, bodyColor, edgeColor, dimMul, sur
   );
 }
 
+// Always-visible façade health indicator (Roadmap 1.1) - readable at any distance
+function BuildingHealthStrip({ width, height, depth, status, metrics, dimMul = 1, dayMix = 0 }) {
+  const isHot = metrics?.hasMetrics && cpuTone(metrics.cpuPercent) === 'hot';
+  const isBusy = metrics?.hasMetrics && cpuTone(metrics.cpuPercent) === 'busy';
+  const isErrored = status === 'errored' || (metrics?.unstableRestarts > 0);
+
+  const toneColor = isErrored
+    ? '#f43f5e'
+    : isHot
+      ? '#ef4444'
+      : isBusy
+        ? '#f59e0b'
+        : status === 'online'
+          ? '#10b981'
+          : '#64748b';
+
+  const ref = useRef();
+  useFrame(({ clock }) => {
+    if (!ref.current) return;
+    const t = clock.getElapsedTime();
+    if (isHot || isErrored) {
+      ref.current.material.opacity = (0.55 + Math.sin(t * 6) * 0.35) * dimMul;
+    } else if (isBusy) {
+      ref.current.material.opacity = (0.6 + Math.sin(t * 2.5) * 0.2) * dimMul;
+    } else {
+      ref.current.material.opacity = (0.65 - dayMix * 0.2) * dimMul;
+    }
+  });
+
+  const barWidth = Math.min(width * 0.65, 1.2);
+  const barY = Math.max(0.4, height * 0.76);
+
+  return (
+    <group position={[0, barY, depth / 2 + 0.03]}>
+      {/* Background dark casing */}
+      <mesh position={[0, 0, 0]}>
+        <boxGeometry args={[barWidth + 0.06, 0.06, 0.015]} />
+        <meshBasicMaterial color="#0f172a" transparent opacity={0.8 * dimMul} />
+      </mesh>
+      {/* LED active meter strip */}
+      <mesh ref={ref} position={[0, 0, 0.01]}>
+        <boxGeometry args={[barWidth, 0.035, 0.015]} />
+        <meshBasicMaterial color={toneColor} transparent opacity={0.7 * dimMul} toneMapped={false} />
+      </mesh>
+    </group>
+  );
+}
+
+// Stress smoke / sparks (Roadmap 1.2) - rises from rooftop when CPU is hot or app has errored
+function StressEffects({ height, metrics, status, dimMul = 1 }) {
+  const isHot = metrics?.hasMetrics && cpuTone(metrics.cpuPercent) === 'hot';
+  const isErrored = status === 'errored' || (metrics?.restarts > 3 && status !== 'stopped');
+  const smokeRef = useRef();
+  const sparksRef = useRef();
+
+  useFrame(({ clock }) => {
+    const t = clock.getElapsedTime();
+    if (smokeRef.current) {
+      smokeRef.current.children.forEach((puff, i) => {
+        const age = (t * 0.8 + i * 0.33) % 1.0;
+        puff.position.y = age * 1.6;
+        puff.position.x = Math.sin(t * 1.5 + i * 2) * 0.15 * age;
+        puff.position.z = Math.cos(t * 1.2 + i * 2) * 0.15 * age;
+        puff.scale.setScalar(0.08 + age * 0.22);
+        if (puff.material) {
+          puff.material.opacity = (1 - age) * 0.45 * dimMul;
+        }
+      });
+    }
+    if (sparksRef.current) {
+      sparksRef.current.children.forEach((spark, i) => {
+        const age = (t * 2.2 + i * 0.25) % 1.0;
+        spark.position.y = age * 0.9;
+        spark.position.x = Math.sin(t * 8 + i * 4) * 0.25;
+        spark.position.z = Math.cos(t * 7 + i * 3) * 0.25;
+        if (spark.material) {
+          spark.material.opacity = (1 - age) * 0.8 * dimMul;
+        }
+      });
+    }
+  });
+
+  if (!isHot && !isErrored) return null;
+
+  return (
+    <group position={[0, height + 0.1, 0]}>
+      {/* Smoke puffs for persistent CPU spike */}
+      {isHot && (
+        <group ref={smokeRef}>
+          {[0, 1, 2].map((i) => (
+            <mesh key={`smoke-${i}`}>
+              <sphereGeometry args={[0.2, 6, 6]} />
+              <meshBasicMaterial color="#64748b" transparent opacity={0.3} depthWrite={false} />
+            </mesh>
+          ))}
+        </group>
+      )}
+      {/* Sparks for recent crash / errored app */}
+      {isErrored && (
+        <group ref={sparksRef}>
+          {[0, 1, 2, 3].map((i) => (
+            <mesh key={`spark-${i}`}>
+              <sphereGeometry args={[0.03, 4, 4]} />
+              <meshBasicMaterial color="#f59e0b" transparent opacity={0.8} toneMapped={false} depthWrite={false} />
+            </mesh>
+          ))}
+        </group>
+      )}
+    </group>
+  );
+}
+
 export default function Building({ app, position, agentCount, onClick, playSfx, neonBrightness = 1.2, isProximity = false, focused = false, dimmed = false, dayMix = 0, playback = false, transitionState = null, onExited, rooftops = true, interiorWindows = false }) {
   const meshRef = useRef();
   const glowRef = useRef();
@@ -529,6 +642,8 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
     for (let i = 0; i < n.length; i++) h = ((h << 5) - h) + n.charCodeAt(i);
     return Math.abs(h);
   }, [app.name, app.id]);
+
+  const metrics = useMemo(() => computeAppMetrics(app), [app]);
 
   const boxGeom = useMemo(() => new THREE.BoxGeometry(width, height, depth), [width, height, depth]);
   const edgesGeom = useMemo(() => new THREE.EdgesGeometry(boxGeom), [boxGeom]);
@@ -779,6 +894,29 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
       >
         {displayName}
       </OpenWorldLabel>
+
+      {/* Always-visible façade health indicator (Roadmap 1.1) */}
+      {!app.archived && (
+        <BuildingHealthStrip
+          width={width}
+          height={height}
+          depth={depth}
+          status={app.overallStatus}
+          metrics={metrics}
+          dimMul={dimMul}
+          dayMix={dayMix}
+        />
+      )}
+
+      {/* Stress smoke / sparks on rooftop when CPU is hot or crashed (Roadmap 1.2) */}
+      {!app.archived && (
+        <StressEffects
+          height={height}
+          metrics={metrics}
+          status={app.overallStatus}
+          dimMul={dimMul}
+        />
+      )}
 
       {/* Focus selection ring (issue #2593) — a bright accent ring at the base marking the
           URL-focused borough. Rendered day AND night (unlike the neon glow) so the selected
