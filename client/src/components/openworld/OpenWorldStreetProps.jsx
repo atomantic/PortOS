@@ -89,6 +89,10 @@ export default function OpenWorldStreetProps({ settings }) {
     return computeStreetProps(streets, density);
   }, [density]);
 
+  useFrame(({ clock }) => {
+    swayTimeUniform.value = clock.getElapsedTime();
+  });
+
   // Keep the plaza grove even on the low tier: it is cheap, anchors the center of the map,
   // and gives the bright world a sense of scale. Lamps and their additive pools remain detail-only.
   const showLamps = lowPoly || openWorldShowDetail(settings);
@@ -101,10 +105,6 @@ export default function OpenWorldStreetProps({ settings }) {
     ? mixHex('#3e5a5f', accent, 0.18)
     : tintStructure('#141b2c');
   const foliageColor = mixHex(mixHex('#6fa37f', accent, 0.22), '#d5bd83', dayMix * 0.18);
-
-  useFrame(({ clock }) => {
-    swayTimeUniform.value = clock.getElapsedTime();
-  });
 
   return (
     <group>

@@ -80,7 +80,7 @@ export default function OpenWorldGrass({ settings }) {
 
   useLayoutEffect(() => {
     writeMatrices(ref, blades);
-  }, [blades]);
+  }, [blades, lowPoly]);
 
   const onBeforeCompile = useMemo(() => (shader) => {
     shader.uniforms.uGrassTime = timeUniformRef.current;

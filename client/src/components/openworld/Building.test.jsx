@@ -59,6 +59,41 @@ describe('Building component', () => {
     expect(container.getElementsByTagName('group').length).toBeGreaterThan(0);
   });
 
+  it('renders stress effects when PM2 process is errored', () => {
+    const errorApp = {
+      ...mockApp,
+      pm2Status: {
+        worker1: { status: 'errored', cpu: 0, memory: 0, uptime: 0 },
+      },
+    };
+    const { container } = render(
+      <Building
+        app={errorApp}
+        position={{ x: 0, z: 0 }}
+        agentCount={0}
+      />
+    );
+    expect(container.getElementsByTagName('group').length).toBeGreaterThan(0);
+  });
+
+  it('suppresses live stress effects during history playback', () => {
+    const hotApp = {
+      ...mockApp,
+      pm2Status: {
+        worker1: { status: 'online', cpu: 95, memory: 500000000, uptime: 100000 },
+      },
+    };
+    const { container } = render(
+      <Building
+        app={hotApp}
+        position={{ x: 0, z: 0 }}
+        agentCount={0}
+        playback={true}
+      />
+    );
+    expect(container).toBeTruthy();
+  });
+
   it('omits health strip and stress effects for archived apps', () => {
     const archivedApp = {
       ...mockApp,

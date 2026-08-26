@@ -472,10 +472,11 @@ function LowPolyFacade({ width, depth, height, bodyColor, edgeColor, dimMul, sur
 }
 
 // Always-visible façade health indicator (Roadmap 1.1) - readable at any distance
-function BuildingHealthStrip({ width, height, depth, status, metrics, dimMul = 1, dayMix = 0 }) {
-  const isHot = metrics?.hasMetrics && cpuTone(metrics.cpuPercent) === 'hot';
-  const isBusy = metrics?.hasMetrics && cpuTone(metrics.cpuPercent) === 'busy';
-  const isErrored = status === 'errored' || (metrics?.unstableRestarts > 0);
+function BuildingHealthStrip({ width, height, depth, status, metrics, pm2Status, dimMul = 1, dayMix = 0, playback = false }) {
+  const isPm2Errored = Object.values(pm2Status || {}).some((p) => p?.status === 'errored' || p?.status === 'error');
+  const isErrored = status === 'errored' || isPm2Errored || (!playback && metrics?.unstableRestarts > 0);
+  const isHot = !playback && metrics?.hasMetrics && cpuTone(metrics.cpuPercent) === 'hot';
+  const isBusy = !playback && metrics?.hasMetrics && cpuTone(metrics.cpuPercent) === 'busy';
 
   const toneColor = isErrored
     ? '#f43f5e'
@@ -520,9 +521,12 @@ function BuildingHealthStrip({ width, height, depth, status, metrics, dimMul = 1
 }
 
 // Stress smoke / sparks (Roadmap 1.2) - rises from rooftop when CPU is hot or app has errored
-function StressEffects({ height, metrics, status, dimMul = 1 }) {
+function StressEffects({ height, metrics, status, pm2Status, dimMul = 1, playback = false }) {
+  if (playback) return null;
+
+  const isPm2Errored = Object.values(pm2Status || {}).some((p) => p?.status === 'errored' || p?.status === 'error');
   const isHot = metrics?.hasMetrics && cpuTone(metrics.cpuPercent) === 'hot';
-  const isErrored = status === 'errored' || (metrics?.restarts > 3 && status !== 'stopped');
+  const isErrored = status === 'errored' || isPm2Errored || (metrics?.unstableRestarts > 0);
   const smokeRef = useRef();
   const sparksRef = useRef();
 
@@ -903,8 +907,10 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
           depth={depth}
           status={app.overallStatus}
           metrics={metrics}
+          pm2Status={app.pm2Status}
           dimMul={dimMul}
           dayMix={dayMix}
+          playback={playback}
         />
       )}
 
@@ -914,7 +920,9 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
           height={height}
           metrics={metrics}
           status={app.overallStatus}
+          pm2Status={app.pm2Status}
           dimMul={dimMul}
+          playback={playback}
         />
       )}
 
