@@ -1,4 +1,4 @@
-import { request, API_BASE, maybeRedirectToLogin } from './apiCore.js';
+import { request, API_BASE, throwApiError } from './apiCore.js';
 
 // Local LLM backends (Ollama / LM Studio) — status, model management, migrate.
 // Installed models per backend come back inside getLocalLlmStatus().
@@ -183,13 +183,13 @@ export async function streamLocalLlmTest(payload, { signal, onToken } = {}) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
     signal,
+  }).catch((error) => {
+    if (error?.name === 'AbortError') throw error;
+    return null;
   });
+  if (!response) throw new Error('Server unreachable — check your connection and try again');
   if (!response.ok || !response.body?.getReader) {
-    const err = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
-    // Honor session expiry the same way request() does — a streaming run that
-    // 401s should bounce to /login, not just toast and strand the user here.
-    maybeRedirectToLogin(response, err);
-    throw new Error(err.error || `HTTP ${response.status}`);
+    await throwApiError(response);
   }
 
   const reader = response.body.getReader();

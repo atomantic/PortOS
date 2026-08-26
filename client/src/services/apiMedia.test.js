@@ -4,11 +4,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // header, which the JSON-oriented request() helper can't surface). saveCleanResult
 // goes through request(). Mock both layers.
 const request = vi.fn();
-vi.mock('./apiCore.js', () => ({
-  request: (...a) => request(...a),
-  API_BASE: '/api',
-  maybeRedirectToLogin: vi.fn(),
-}));
+vi.mock('./apiCore.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    request: (...a) => request(...a),
+  };
+});
 
 let cleanImage;
 let fetchCleanResult;
@@ -62,9 +64,18 @@ describe('cleanImage', () => {
     expect(out.mimeType).toBe('image/png');
   });
 
-  it('throws with the server code on an error response', async () => {
-    global.fetch.mockResolvedValue(makeResponse({ status: 400, ok: false, json: { error: 'No FLUX', code: 'REGEN_BACKEND_UNAVAILABLE' } }));
-    await expect(cleanImage(fakeFile, { diffusion: 'gpu' })).rejects.toMatchObject({ code: 'REGEN_BACKEND_UNAVAILABLE' });
+  it('throws with the server code and context on an error response', async () => {
+    const context = { retryable: true, backend: 'example' };
+    global.fetch.mockResolvedValue(makeResponse({
+      status: 400,
+      ok: false,
+      json: { error: 'No FLUX', code: 'REGEN_BACKEND_UNAVAILABLE', context },
+    }));
+    await expect(cleanImage(fakeFile, { diffusion: 'gpu' })).rejects.toMatchObject({
+      code: 'REGEN_BACKEND_UNAVAILABLE',
+      status: 400,
+      context,
+    });
   });
 });
 

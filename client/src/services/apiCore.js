@@ -21,6 +21,19 @@ export function maybeRedirectToLogin(response, error) {
   }
 }
 
+// Shared by raw-response callers that need to consume a stream or blob instead
+// of handing the response to request(). Keep the envelope construction here so
+// structured server context and status metadata survive every API surface.
+export async function throwApiError(response, parsedError) {
+  const error = parsedError ?? await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+  maybeRedirectToLogin(response, error);
+  const err = new Error(error.error || `HTTP ${response.status}`);
+  err.code = error?.code;
+  err.status = response.status;
+  if (error?.context) err.context = error.context;
+  throw err;
+}
+
 export async function request(endpoint, options = {}) {
   const { silent, responseType, ...fetchOptions } = options;
   const url = `${API_BASE}${endpoint}`;
@@ -45,29 +58,17 @@ export async function request(endpoint, options = {}) {
   }
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: 'Request failed' }));
-    const errorMessage = error.error || `HTTP ${response.status}`;
-    // Auth gate (server: services/authGate.js) returns 401 with code AUTH_REQUIRED
-    // for any /api request without a valid session. Bounce to /login so the
-    // user can re-authenticate; skip if we're already there.
-    maybeRedirectToLogin(response, error);
-    if (!silent) {
-      // Platform unavailability is a warning, not an error
-      if (error.code === 'PLATFORM_UNAVAILABLE') {
-        toast(errorMessage, { icon: '⚠️' });
-      } else if (error.code !== 'AUTH_REQUIRED') {
-        toast.error(errorMessage);
+    await throwApiError(response).catch((error) => {
+      if (!silent) {
+        // Platform unavailability is a warning, not an error
+        if (error.code === 'PLATFORM_UNAVAILABLE') {
+          toast(error.message, { icon: '⚠️' });
+        } else if (error.code !== 'AUTH_REQUIRED') {
+          toast.error(error.message);
+        }
       }
-    }
-    const err = new Error(errorMessage);
-    err.code = error?.code;
-    err.status = response.status;
-    // Forward structured context the server attached to the error (e.g.
-    // ERR_PARTIAL_COMMIT_ISSUES carries `{ universeId, seriesId,
-    // arcAlreadyPersisted, skipArcOnRetry }` so the Importer client can
-    // shape its retry without re-overwriting persisted state).
-    if (error?.context) err.context = error.context;
-    throw err;
+      throw error;
+    });
   }
 
   // Handle 204 No Content

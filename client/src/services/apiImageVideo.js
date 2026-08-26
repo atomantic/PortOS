@@ -1,4 +1,4 @@
-import { request, API_BASE, maybeRedirectToLogin } from './apiCore.js';
+import { request, API_BASE, throwApiError } from './apiCore.js';
 import { filterHardwareCompatibleModels } from '../utils/systemCapabilities.js';
 
 // Image gen — local backend extras (gallery, models, LoRAs, cancel, delete).
@@ -284,13 +284,10 @@ export function buildFormData(fields) {
 // the optional sourceImage upload (and uniform multipart parsing for both
 // upload and no-upload paths is simpler than branching on Content-Type).
 export async function generateVideo(fields) {
-  const res = await fetch('/api/video-gen', { method: 'POST', body: buildFormData(fields) });
+  const res = await fetch('/api/video-gen', { method: 'POST', body: buildFormData(fields) }).catch(() => null);
+  if (!res) throw new Error('Server unreachable — check your connection and try again');
   if (!res.ok) {
-    const body = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-    const err = new Error(body.error || `HTTP ${res.status}`);
-    err.code = body.code;
-    err.status = res.status;
-    throw err;
+    await throwApiError(res);
   }
   return res.json();
 }
@@ -490,13 +487,13 @@ export async function installLoraFromHuggingfaceStream({ url, family, file, onPr
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ url, ...(family ? { family } : {}), ...(file ? { file } : {}) }),
     signal,
+  }).catch((error) => {
+    if (error?.name === 'AbortError') throw error;
+    return null;
   });
+  if (!response) throw new Error('Server unreachable — check your connection and try again');
   if (!response.ok || !response.body?.getReader) {
-    const err = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
-    maybeRedirectToLogin(response, err);
-    const e = new Error(err.error || `HTTP ${response.status}`);
-    e.code = err.code || null;
-    throw e;
+    await throwApiError(response);
   }
 
   const reader = response.body.getReader();
