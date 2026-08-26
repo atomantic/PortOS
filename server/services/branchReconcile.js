@@ -121,10 +121,14 @@ const PR_LIST_LIMIT = 200;
  *   MERGED     — work is fully in the default branch → deterministic cleanup
  *   CONFLICTED — open PR with merge conflicts        → agent resolves
  *   IN_REVIEW  — open PR, otherwise                  → agent drives to merge
- *   NEEDS_PR   — pushed, not merged, no PR, clean     → agent verifies + opens PR
- *   WIP        — local-only, dirty, or LIVE-owned     → skip + report (never touch)
+ *   NEEDS_PR   — unmerged work, no PR, clean          → agent verifies + opens PR
+ *                (pushed-with-no-PR, or never pushed but holding commits)
+ *   WIP        — bare pointer, dirty, or LIVE-owned   → skip + report (never touch)
  *
- * @param {{ hasUpstream:boolean, isMerged:boolean, worktreeDirty:boolean, abandonedAgentWorktree?:boolean, liveOwnerReason?:string|null, openPr:({mergeable?:string}|null), prStateUnavailable?:boolean }} input
+ * @param {{ hasUpstream:boolean, ahead?:number|null, isMerged:boolean, worktreeDirty:boolean, abandonedAgentWorktree?:boolean, liveOwnerReason?:string|null, openPr:({mergeable?:string}|null), prStateUnavailable?:boolean }} input
+ *   `ahead` is the branch's own commit count over the default branch (null =
+ *   unreadable). It is what makes a never-pushed branch actionable — see the
+ *   NEEDS_PR gate below.
  *   `prStateUnavailable` means the forge could not be READ this cycle — distinct
  *   from `openPr: null` ("the forge answered: no open PR").
  *   `liveOwnerReason` is `resolveLiveOwnerReason`'s verdict for the branch — non-null
@@ -133,7 +137,7 @@ const PR_LIST_LIMIT = 200;
  *   dirty claim trees still remain WIP through the ordinary dirty-tree guard.
  * @returns {'ABANDONED_WIP'|'MERGED'|'CONFLICTED'|'IN_REVIEW'|'NEEDS_PR'|'WIP'}
  */
-export function classifyBranch({ hasUpstream, isMerged, worktreeDirty, abandonedAgentWorktree, liveOwnerReason = null, openPr, prStateUnavailable = false }) {
+export function classifyBranch({ hasUpstream, ahead = null, isMerged, worktreeDirty, abandonedAgentWorktree, liveOwnerReason = null, openPr, prStateUnavailable = false }) {
   // A dead agent's worktree that still holds uncommitted work is the ONE dirty
   // case that must be driven rather than skipped — and it must be caught BEFORE
   // the `isMerged` test, because an agent that exited without committing leaves
@@ -166,7 +170,20 @@ export function classifyBranch({ hasUpstream, isMerged, worktreeDirty, abandoned
   // (skip + never touch) rather than dispatching an agent to open a PR that may
   // already exist. MERGED above is unaffected: that verdict is pure git truth.
   if (prStateUnavailable) return 'WIP';
-  if (hasUpstream) return 'NEEDS_PR';
+  // Unmerged commits that nothing else owns are in-flight work whether or not
+  // they were ever PUSHED. Gating this on `hasUpstream` alone is what made a
+  // whole shelf of `claim/*` branches invisible: a /claim session that dies
+  // before its `git push -u` leaves commits ahead of the default branch with no
+  // upstream, so every run classified them WIP and parked on "no branches in
+  // flight" while the work sat there. NEEDS_PR already tells the agent to push
+  // (`/do:pr`, or `git push -u origin <branch>` by hand), so the un-pushed case
+  // needs no separate state — only to stop being skipped.
+  //
+  // `ahead` is the discriminator the upstream check was standing in for: a branch
+  // with NO commits of its own is a bare pointer with nothing to ship, and stays
+  // WIP. Unknown (`null`, an unreadable rev-list) also stays WIP — a git failure
+  // must never manufacture work.
+  if (hasUpstream || (typeof ahead === 'number' && ahead > 0)) return 'NEEDS_PR';
   return 'WIP';
 }
 
@@ -1234,6 +1251,12 @@ export function formatInFlightForPrompt(inFlight, { defaultBranch, actions, bran
     const pr = b.openPr ? ` — PR #${b.openPr.number} (${b.openPr.mergeable})${b.openPr.url ? ` ${b.openPr.url}` : ''}` : ' — no PR';
     lines.push(`### \`${b.branch}\` [${b.state}]${pr}`);
     if (b.worktreePath) lines.push(`- Worktree: \`${b.worktreePath}\`${b.state === 'ABANDONED_WIP' ? ' (holds UNCOMMITTED work — read it before doing anything)' : ''}`);
+    // A never-pushed NEEDS_PR branch reads identically to a pushed one in this
+    // block, and the difference decides whether the push needs `-u`. State it
+    // rather than making the agent infer it from a missing PR link.
+    if (b.hasUpstream === false && b.state === 'NEEDS_PR') {
+      lines.push('- Never pushed: no upstream on `origin` — the push that opens the PR must create one (`git push -u origin <branch>`).');
+    }
     if (typeof b.behind === 'number') {
       lines.push(`- Drift: ${b.behind} commit(s) behind \`${defaultBranch}\`${typeof b.ahead === 'number' ? `, ${b.ahead} ahead` : ''}`);
     }

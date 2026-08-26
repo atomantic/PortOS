@@ -140,8 +140,42 @@ describe('classifyBranch', () => {
       liveOwnerReason: null, openPr: null
     })).toBe('ABANDONED_WIP');
   });
-  it('local-only (no upstream), no PR → WIP', () => {
+  it('local-only bare pointer (no upstream, no commits of its own) → WIP', () => {
     expect(classifyBranch({ isMerged: false, openPr: null, hasUpstream: false, worktreeDirty: false })).toBe('WIP');
+    expect(classifyBranch({ isMerged: false, openPr: null, hasUpstream: false, worktreeDirty: false, ahead: 0 })).toBe('WIP');
+  });
+
+  // The shape of eight `claim/*` branches that sat unreconciled: each /claim
+  // session committed real work and died before its `git push -u`, so the branch
+  // had commits ahead of `main` and no upstream — classified WIP, never in-flight,
+  // and every run parked on "no branches in flight" with the work still sitting there.
+  it('classifies a never-pushed branch holding commits as NEEDS_PR', () => {
+    expect(classifyBranch({
+      isMerged: false, openPr: null, hasUpstream: false, worktreeDirty: false, ahead: 2
+    })).toBe('NEEDS_PR');
+  });
+
+  it('leaves a never-pushed branch WIP when its commit count is unreadable', () => {
+    expect(classifyBranch({
+      isMerged: false, openPr: null, hasUpstream: false, worktreeDirty: false, ahead: null
+    })).toBe('WIP');
+  });
+
+  it('still protects a never-pushed branch that is dirty or live-owned', () => {
+    expect(classifyBranch({
+      isMerged: false, openPr: null, hasUpstream: false, worktreeDirty: true, ahead: 3
+    })).toBe('WIP');
+    expect(classifyBranch({
+      isMerged: false, openPr: null, hasUpstream: false, worktreeDirty: false, ahead: 3,
+      liveOwnerReason: 'worktree-active-agent'
+    })).toBe('WIP');
+  });
+
+  it('does not conclude "no PR" for a never-pushed branch when the forge was unreadable', () => {
+    expect(classifyBranch({
+      isMerged: false, openPr: null, hasUpstream: false, worktreeDirty: false, ahead: 3,
+      prStateUnavailable: true
+    })).toBe('WIP');
   });
 
   // The exact shape of the three branches that went unreconciled for weeks: a CoS
@@ -1296,6 +1330,16 @@ describe('formatInFlightForPrompt', () => {
     expect(block).toContain('- Worktree: `/wt/1`');
     expect(block).toContain('### `next/issue-2` [NEEDS_PR] — no PR');
     expect(block).toContain('- Do: ');
+  });
+
+  it('flags a never-pushed NEEDS_PR branch so the agent knows the push needs -u', () => {
+    const block = formatInFlightForPrompt([
+      { branch: 'claim/issue-1', state: 'NEEDS_PR', hasUpstream: false },
+      { branch: 'claim/issue-2', state: 'NEEDS_PR', hasUpstream: true }
+    ], { defaultBranch: 'main', actions: {} });
+    const [first, second] = block.split('### `claim/issue-2`');
+    expect(first).toContain('Never pushed: no upstream on `origin`');
+    expect(second).not.toContain('Never pushed');
   });
 
   it('states the configured batch limit when supplied', () => {
