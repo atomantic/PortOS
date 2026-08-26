@@ -648,12 +648,11 @@ describe('taskPromptDefaults integrity snapshot', () => {
   // signal perpetualWork.js#isActionableIssue reads, so the live agent and the
   // drain agree on when an epic stops being claimable.
   it('claim flows decompose an undecomposed epic instead of skipping it, preserving the outgoing defaults', () => {
-    // JIRA is deliberately NOT in this list: its reads expose neither labels nor
-    // epic links (jira.js#getIssue / #fetchMyCurrentSprintTickets), so a decomposition
-    // marker is invisible there and an epic's children unfindable — that flow still
-    // leaves an epic for a human, and says so. Tracked in #5042.
-    const keys = ['claim-issue', 'claim-issue-gitlab'];
-    const floors = { 'claim-issue': 21, 'claim-issue-gitlab': 19 };
+    // JIRA joined this list in #5042, once jira.js grew the reads Phase 1b needs:
+    // getIssue projects labels/description/epic link, fetchMyCurrentSprintTickets
+    // returns labels, and getEpicChildren finds an epic's children.
+    const keys = ['claim-issue', 'claim-issue-gitlab', 'claim-issue-jira'];
+    const floors = { 'claim-issue': 21, 'claim-issue-gitlab': 19, 'claim-issue-jira': 15 };
 
     for (const key of keys) {
       const current = DEFAULT_TASK_PROMPTS[key];
@@ -679,9 +678,20 @@ describe('taskPromptDefaults integrity snapshot', () => {
     // checklist a later claim follows to the next available child.
     expect(DEFAULT_TASK_PROMPTS['claim-issue']).toContain('Part of #${EPIC}');
     expect(DEFAULT_TASK_PROMPTS['claim-issue']).toContain('## Decomposed into');
-    // The JIRA flow keeps its human-split behavior, and names the API gap that forces it.
-    expect(DEFAULT_TASK_PROMPTS['claim-issue-jira']).not.toContain('Phase 1b');
-    expect(DEFAULT_TASK_PROMPTS['claim-issue-jira']).toContain('Leave epics for a human to split');
+
+    // JIRA has no `Closes` auto-close and no assignee/label claim, so a slice is
+    // claimable only when it is BOTH assigned to the caller and in the open sprint
+    // — Phase 1's candidate query is `assignee = currentUser() AND sprint in
+    // openSprints()`. A child missing either one is invisible to every later run,
+    // which is exactly how the remaining slices got stranded before #5042.
+    const jira = DEFAULT_TASK_PROMPTS['claim-issue-jira'];
+    expect(jira).toContain('## Decomposed into');
+    expect(jira).toContain('"assignee": "currentUser"');
+    expect(jira).toContain('"sprintId"');
+    // A sprint move that failed must be reported, never silently dropped.
+    expect(jira).toContain('not sprinted');
+    // And the child lookup must exist at all — the endpoint #5042 added.
+    expect(jira).toContain('/epics/<EPIC>/children');
   });
 
   // Contributor labels advertise work to a HUMAN who might pick it up. Once a

@@ -20,6 +20,9 @@ vi.mock('../services/jira.js', () => ({
   getActiveSprints: vi.fn(),
   getBoards: vi.fn(),
   getIssue: vi.fn(),
+  getEpicChildren: vi.fn(),
+  addIssuesToSprint: vi.fn(),
+  addLabels: vi.fn(),
   searchEpics: vi.fn()
 }));
 vi.mock('../services/jiraReports.js', () => ({
@@ -97,5 +100,65 @@ describe('GET /instances/:instanceId/my-sprint-tickets/:projectKey', () => {
     expect(r.body.error).toContain('connect ECONNREFUSED');
     // The soft wrapper must not be what the UI route calls.
     expect(jiraService.getMyCurrentSprintTickets).not.toHaveBeenCalled();
+  });
+});
+
+// #5042 — the endpoints the JIRA claim flow's epic decomposition needs. Before
+// this, the flow's prompt told the agent to GET `/tickets/<KEY>`, a route that
+// did not exist, and there was no way at all to stamp a label, list an epic's
+// children, or move a filed child into the sprint.
+describe('epic-decomposition endpoints (#5042)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('GET /instances/:instanceId/tickets/:ticketId reads one ticket', async () => {
+    jiraService.getIssue.mockResolvedValue({ key: 'PROJ-1', labels: ['decomposed'], description: 'body', epicKey: null });
+    const response = await request(makeApp()).get('/api/jira/instances/inst-1/tickets/PROJ-1');
+    expect(response.status).toBe(200);
+    expect(response.body.labels).toEqual(['decomposed']);
+    expect(jiraService.getIssue).toHaveBeenCalledWith('inst-1', 'PROJ-1');
+  });
+
+  it('POST /instances/:instanceId/tickets/:ticketId/labels adds labels additively', async () => {
+    jiraService.addLabels.mockResolvedValue({ success: true, ticketId: 'PROJ-1' });
+    const response = await request(makeApp())
+      .post('/api/jira/instances/inst-1/tickets/PROJ-1/labels')
+      .send({ labels: ['decomposed'] });
+    expect(response.status).toBe(200);
+    expect(jiraService.addLabels).toHaveBeenCalledWith('inst-1', 'PROJ-1', ['decomposed']);
+  });
+
+  it('rejects a labels request with no labels rather than issuing a no-op write', async () => {
+    const response = await request(makeApp())
+      .post('/api/jira/instances/inst-1/tickets/PROJ-1/labels')
+      .send({ labels: [] });
+    expect(response.status).toBe(400);
+    expect(jiraService.addLabels).not.toHaveBeenCalled();
+  });
+
+  it('GET /instances/:instanceId/epics/:epicKey/children lists an epic\'s children', async () => {
+    jiraService.getEpicChildren.mockResolvedValue([{ key: 'PROJ-2', status: 'To Do' }]);
+    const response = await request(makeApp()).get('/api/jira/instances/inst-1/epics/PROJ-1/children');
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual([{ key: 'PROJ-2', status: 'To Do' }]);
+    expect(jiraService.getEpicChildren).toHaveBeenCalledWith('inst-1', 'PROJ-1');
+  });
+
+  it('POST /instances/:instanceId/sprints/:sprintId/issues moves issues into a sprint', async () => {
+    jiraService.addIssuesToSprint.mockResolvedValue({ success: true, sprintId: '42', issueKeys: ['PROJ-2'] });
+    const response = await request(makeApp())
+      .post('/api/jira/instances/inst-1/sprints/42/issues')
+      .send({ issueKeys: ['PROJ-2'] });
+    expect(response.status).toBe(200);
+    expect(jiraService.addIssuesToSprint).toHaveBeenCalledWith('inst-1', '42', ['PROJ-2']);
+  });
+
+  it('rejects a sprint move with no issue keys', async () => {
+    const response = await request(makeApp())
+      .post('/api/jira/instances/inst-1/sprints/42/issues')
+      .send({ issueKeys: [] });
+    expect(response.status).toBe(400);
+    expect(jiraService.addIssuesToSprint).not.toHaveBeenCalled();
   });
 });

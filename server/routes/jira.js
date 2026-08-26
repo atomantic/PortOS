@@ -33,7 +33,18 @@ const jiraTicketCreateSchema = z.object({
   customFields: z.record(z.unknown()).optional(),
 }).passthrough();
 
-const jiraTicketUpdateSchema = jiraTicketCreateSchema.partial();
+// An update accepts every create key EXCEPT the two that name nothing writable on
+// an existing issue: a ticket cannot change project, and sprint membership moves
+// through POST /sprints/:sprintId/issues. Advertising them would accept a write
+// the service then silently drops and still answers 200.
+const jiraTicketUpdateSchema = jiraTicketCreateSchema.partial().omit({ projectKey: true, sprintId: true });
+
+// A write with an empty list is a no-op request, not a valid one — reject it at
+// the edge rather than issuing a JIRA call that changes nothing.
+const nonEmptyStringList = z.array(z.string().min(1)).min(1);
+
+const jiraLabelsSchema = z.object({ labels: nonEmptyStringList });
+const jiraSprintIssuesSchema = z.object({ issueKeys: nonEmptyStringList });
 
 const reportParamsSchema = z.object({
   appId: z.string().regex(/^[A-Za-z0-9._-]+$/, 'appId contains invalid characters'),
@@ -134,6 +145,40 @@ router.get('/instances/:id/projects', asyncHandler(async (req, res) => {
 router.post('/instances/:id/tickets', asyncHandler(async (req, res) => {
   const ticketData = validateRequest(jiraTicketCreateSchema, req.body);
   const result = await jiraService.createTicket(req.params.id, ticketData);
+  res.json(result);
+}));
+
+/**
+ * GET /api/jira/instances/:instanceId/tickets/:ticketId
+ * GET /api/jira/instances/:instanceId/issues/:issueKey
+ *
+ * Read one ticket — labels, description, and the epic link. Two paths, one
+ * handler: `/issues/:issueKey` is what the app-config epic picker calls, and
+ * `/tickets/:ticketId` is the spelling every claim-flow prompt already uses.
+ */
+const readTicket = asyncHandler(async (req, res) => {
+  const issue = await jiraService.getIssue(
+    req.params.instanceId,
+    req.params.ticketId || req.params.issueKey
+  );
+  res.json(issue);
+});
+
+router.get('/instances/:instanceId/tickets/:ticketId', readTicket);
+
+/**
+ * POST /api/jira/instances/:instanceId/tickets/:ticketId/labels
+ * Add labels without disturbing the ticket's existing ones — this is how the
+ * claim flow stamps the `decomposed` marker on a parent epic. A PUT of
+ * `fields.labels` would REPLACE them.
+ */
+router.post('/instances/:instanceId/tickets/:ticketId/labels', asyncHandler(async (req, res) => {
+  const { labels } = validateRequest(jiraLabelsSchema, req.body);
+  const result = await jiraService.addLabels(
+    req.params.instanceId,
+    req.params.ticketId,
+    labels
+  );
   res.json(result);
 }));
 
@@ -269,6 +314,35 @@ router.get('/instances/:instanceId/boards/:boardId/sprints', asyncHandler(async 
 }));
 
 /**
+ * POST /api/jira/instances/:instanceId/sprints/:sprintId/issues
+ * Move existing issues into a sprint. `createTicket` does this itself for a
+ * `sprintId` on create; this is the retry path for a child whose sprint move
+ * failed, which would otherwise be invisible to the next claim run.
+ */
+router.post('/instances/:instanceId/sprints/:sprintId/issues', asyncHandler(async (req, res) => {
+  const { issueKeys } = validateRequest(jiraSprintIssuesSchema, req.body);
+  const result = await jiraService.addIssuesToSprint(
+    req.params.instanceId,
+    req.params.sprintId,
+    issueKeys
+  );
+  res.json(result);
+}));
+
+/**
+ * GET /api/jira/instances/:instanceId/epics/:epicKey/children
+ * List an epic's child issues — what the claim flow reads before deciding an
+ * epic still needs decomposing.
+ */
+router.get('/instances/:instanceId/epics/:epicKey/children', asyncHandler(async (req, res) => {
+  const children = await jiraService.getEpicChildren(
+    req.params.instanceId,
+    req.params.epicKey
+  );
+  res.json(children);
+}));
+
+/**
  * GET /api/jira/instances/:instanceId/projects/:projectKey/boards
  * List agile boards (Scrum + Kanban) for a project — powers the app-config board picker.
  */
@@ -280,17 +354,9 @@ router.get('/instances/:instanceId/projects/:projectKey/boards', asyncHandler(as
   res.json(boards);
 }));
 
-/**
- * GET /api/jira/instances/:instanceId/issues/:issueKey
- * Resolve a single issue by key — used to validate a configured epicKey.
- */
-router.get('/instances/:instanceId/issues/:issueKey', asyncHandler(async (req, res) => {
-  const issue = await jiraService.getIssue(
-    req.params.instanceId,
-    req.params.issueKey
-  );
-  res.json(issue);
-}));
+// Second path for the readTicket handler defined above — the app-config epic
+// picker calls this spelling, and dropping it would break a shipped client.
+router.get('/instances/:instanceId/issues/:issueKey', readTicket);
 
 /**
  * GET /api/jira/instances/:instanceId/projects/:projectKey/epics?q=search

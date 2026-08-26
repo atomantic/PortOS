@@ -102,7 +102,9 @@ export async function upsertInstance(instanceId, instanceData) {
   };
 
   await saveInstances(config);
+  // A changed token can authenticate as a different account.
   clearCloudAssigneeCache(instanceId);
+  clearCurrentUserCache(instanceId);
   return config.instances[instanceId];
 }
 
@@ -114,6 +116,7 @@ export async function deleteInstance(instanceId) {
   delete config.instances[instanceId];
   await saveInstances(config);
   clearCloudAssigneeCache(instanceId);
+  clearCurrentUserCache(instanceId);
 }
 
 /**
@@ -312,9 +315,13 @@ async function resolveCloudAssignee(instanceId, client, assignee) {
 }
 
 /**
- * Create JIRA ticket
+ * Look up one configured instance, or throw.
+ *
+ * The `getInstances() → lookup → throw` preamble is copy-pasted at ~20 call
+ * sites in this file. New and edited code goes through here; the rest migrate as
+ * they are touched, rather than in one mechanical sweep.
  */
-export async function createTicket(instanceId, ticketData) {
+async function resolveInstance(instanceId) {
   const config = await getInstances();
   const instance = config.instances[instanceId];
 
@@ -322,64 +329,228 @@ export async function createTicket(instanceId, ticketData) {
     throw new Error(`JIRA instance ${instanceId} not found`);
   }
 
+  return instance;
+}
+
+/**
+ * Custom-field IDs vary per JIRA instance, so every read AND write of one goes
+ * through here. Shared by createTicket (which writes the epic link),
+ * getIssue/getEpicChildren (which read it back), and fetchMyCurrentSprintTickets
+ * (story points), so a claim agent resolving an epic's parent reads the exact
+ * field the creator wrote — a one-sided default would silently answer null.
+ *
+ * There is deliberately no `sprint` entry: sprint membership is set through the
+ * Agile API (see addIssuesToSprint), never by writing a custom field, so a
+ * `customFields.sprint` id would be config nothing reads.
+ */
+export function resolveCustomFieldIds(instance) {
+  return {
+    storyPoints: instance?.customFields?.storyPoints || 'customfield_10106',
+    epic: instance?.customFields?.epic || 'customfield_10101',
+  };
+}
+
+/**
+ * Resolve the authenticated JIRA account. Cloud identifies a user by `accountId`
+ * (GDPR retired `name`/`key`); Server/DC still uses `name`. Returned raw so
+ * callers can pick the field their endpoint expects.
+ */
+export async function getMyself(instanceId) {
+  const instance = await resolveInstance(instanceId);
+  const client = createJiraClient(instance);
+  const response = await client.get('/rest/api/2/myself');
+  const me = response.data || {};
+  return {
+    accountId: me.accountId || null,
+    name: me.name || null,
+    displayName: me.displayName || null,
+    emailAddress: me.emailAddress || null,
+    isCloud: isCloudInstance(instance.baseUrl)
+  };
+}
+
+// `assignee: 'currentUser'` is the sentinel a claim agent uses to make a filed
+// child ticket claimable: the sprint query is `assignee = currentUser()`, and an
+// agent has no way to know its own accountId up front.
+const CURRENT_USER_ASSIGNEE = 'currentuser';
+
+// The account behind an instance's credential does not change while the process
+// runs, and the epic-decomposition flow files a whole batch of slices in a loop —
+// without this, every one of them pays its own `/myself` round-trip. `undefined`
+// means "not looked up"; a cached `null` means "looked up, no usable identity",
+// so a resolvable-to-nothing instance is not re-probed on every create.
+const currentUserFieldCache = new Map();
+
+// Exported for tests and for a credential swap: `upsertInstance` can change which
+// account a token authenticates as, which is the one thing the cache above can't see.
+export function clearCurrentUserCache(instanceId) {
+  if (instanceId === undefined) currentUserFieldCache.clear();
+  else currentUserFieldCache.delete(instanceId);
+}
+
+/**
+ * Build the `fields.assignee` value for a create. Returns null when there is
+ * nothing to set.
+ *
+ * The `currentUser` sentinel resolves the caller's own identity and writes the
+ * field its instance type actually accepts: Cloud identifies a user by
+ * `accountId` (GDPR retired `name`), Server/DC by `name`. A LITERAL identifier
+ * goes through `resolveCloudAssignee` on Cloud — Cloud rejects a bare `{ name }`
+ * for the same GDPR reason — and is passed through as `{ name }` unchanged on
+ * Server/DC, which still accepts it.
+ */
+async function resolveAssigneeField(instanceId, instance, client, assignee) {
+  if (!assignee) return null;
+  // A caller that already built the JIRA object (`{ accountId }` / `{ name }`)
+  // gets it back untouched — stringifying it would write `{ name: "[object Object]" }`.
+  if (typeof assignee !== 'string') return assignee;
+
+  const trimmed = assignee.trim();
+  if (!trimmed) return null;
+
+  if (trimmed.toLowerCase() !== CURRENT_USER_ASSIGNEE) {
+    if (isCloudInstance(instance.baseUrl)) {
+      const accountId = await resolveCloudAssignee(instanceId, client, trimmed);
+      return accountId ? { accountId } : null;
+    }
+    return { name: trimmed };
+  }
+
+  const cached = currentUserFieldCache.get(instanceId);
+  if (cached !== undefined) return cached;
+
+  const me = await getMyself(instanceId);
+  const field = me.isCloud ? 'accountId' : 'name';
+  const resolved = me[field] ? { [field]: me[field] } : null;
+  currentUserFieldCache.set(instanceId, resolved);
+  return resolved;
+}
+
+// The two ways a project can express "this issue belongs to that epic". Only one
+// exists on any given project — writing the wrong one is a 400, not a silent
+// no-op — so a create tries the classic custom field first (what every install
+// has been writing until now) and retries with the native `parent` field.
+const EPIC_LINK_CUSTOM_FIELD = 'customField';
+const EPIC_LINK_PARENT = 'parent';
+
+/**
+ * Translate PortOS's domain ticket keys into the JIRA `fields` they actually
+ * name. Shared by createTicket and updateTicket: `jiraTicketUpdateSchema` is
+ * `jiraTicketCreateSchema.partial()`, so PUT accepts the same keys — and before
+ * this, forwarded `epicKey` / `storyPoints` / `assignee` verbatim, none of which
+ * is a JIRA field name. That wrote nothing and reported success.
+ *
+ * Only keys the caller actually supplied are mapped; everything else is left to
+ * the caller, so an update can still pass raw JIRA fields straight through.
+ */
+async function buildIssueFields(instanceId, instance, client, data, epicLinkAs = EPIC_LINK_CUSTOM_FIELD) {
+  const fieldIds = resolveCustomFieldIds(instance);
+  const fields = {};
+
+  if (data.summary !== undefined) fields.summary = data.summary;
+  // `!= null`, not truthiness — `storyPoints: 0` is a real estimate, and dropping
+  // it while answering 200 is the absent-vs-empty conflation AGENTS.md warns about.
+  if (data.storyPoints != null) fields[fieldIds.storyPoints] = data.storyPoints;
+  // The epic link has two incompatible spellings and only one exists per project
+  // (see getEpicChildren). `epicLinkAs` picks which to write; the caller retries
+  // with the other when the first is rejected.
+  if (data.epicKey) {
+    if (epicLinkAs === EPIC_LINK_PARENT) fields.parent = { key: data.epicKey };
+    else fields[fieldIds.epic] = data.epicKey;
+  }
+  // `issuetype` IS writable on update — JIRA accepts a type change on an existing
+  // issue — so it is mapped here rather than treated as a create-only concern.
+  if (data.issueType) fields.issuetype = { name: data.issueType };
+  // Array.isArray, not `.length` truthiness: `labels: []` is an intentional CLEAR
+  // and must reach JIRA, while an absent key must leave the existing labels alone.
+  if (Array.isArray(data.labels)) fields.labels = data.labels;
+
+  const assignee = await resolveAssigneeField(instanceId, instance, client, data.assignee);
+  if (assignee) fields.assignee = assignee;
+
+  return fields;
+}
+
+/**
+ * Move existing issues into a sprint via the Agile API.
+ *
+ * This is the only reliable way to sprint an issue: setting the sprint custom
+ * field on create is rejected outright on most Cloud instances ("Field cannot be
+ * set"), which is why `createTicket`'s old `fields[sprint]` write was both dead
+ * (it read `ticketData.sprint`, a key nothing sends) and wrong. Filing a child
+ * that never lands in the sprint strands it — the next claim run's candidate
+ * query only sees sprinted tickets.
+ */
+export async function addIssuesToSprint(instanceId, sprintId, issueKeys = []) {
+  const instance = await resolveInstance(instanceId);
+  const keys = issueKeys.filter(key => typeof key === 'string' && key.trim());
+  if (keys.length === 0) return { success: true, sprintId, issueKeys: [] };
+
+  const client = createJiraClient(instance);
+  await client.post(`/rest/agile/1.0/sprint/${encodeURIComponent(sprintId)}/issue`, { issues: keys });
+
+  return { success: true, sprintId, issueKeys: keys };
+}
+
+/**
+ * Create JIRA ticket.
+ *
+ * Returns `{ success, ticketId, url, sprint, response }`. `sprint` is the
+ * explicit sentinel for the sprint move: `null` when none was requested, else
+ * `{ id, assigned, error }` — `assigned: false` with an `error` means the ticket
+ * EXISTS but is not in the sprint, which a caller must surface rather than treat
+ * as a clean create (an unsprinted child is invisible to the next claim run).
+ */
+export async function createTicket(instanceId, ticketData) {
+  const instance = await resolveInstance(instanceId);
   const client = createJiraClient(instance);
 
-  const issue = {
+  const buildIssue = async (epicLinkAs) => ({
     fields: {
       project: {
         key: ticketData.projectKey
       },
-      summary: ticketData.summary,
       description: ticketData.description || ticketData.summary,
       issuetype: {
         name: ticketData.issueType || 'Task'
-      }
+      },
+      ...(await buildIssueFields(instanceId, instance, client, ticketData, epicLinkAs))
     }
-  };
+  });
 
-  // Add optional fields
-  const assignee = typeof ticketData.assignee === 'string' ? ticketData.assignee.trim() : '';
-  if (assignee) {
-    if (isCloudInstance(instance.baseUrl)) {
-      const accountId = await resolveCloudAssignee(instanceId, client, assignee);
-      if (accountId) issue.fields.assignee = { accountId };
-    } else {
-      issue.fields.assignee = { name: assignee };
-    }
-  }
-
-  // Custom field IDs vary per JIRA instance — use instance config or defaults
-  const fieldIds = {
-    storyPoints: instance.customFields?.storyPoints || 'customfield_10106',
-    epic: instance.customFields?.epic || 'customfield_10101',
-    sprint: instance.customFields?.sprint || 'customfield_10105',
-  };
-
-  if (ticketData.storyPoints) {
-    issue.fields[fieldIds.storyPoints] = ticketData.storyPoints;
-  }
-
-  if (ticketData.epicKey) {
-    issue.fields[fieldIds.epic] = ticketData.epicKey;
-  }
-
-  if (ticketData.sprint) {
-    issue.fields[fieldIds.sprint] = ticketData.sprint;
-  }
-
-  if (ticketData.labels && ticketData.labels.length > 0) {
-    issue.fields.labels = ticketData.labels;
-  }
-
-  const response = await client.post('/rest/api/2/issue', issue);
+  // A project has exactly one epic-link spelling and rejects the other with a 400
+  // naming the offending field, so retry once with the alternative rather than
+  // filing an UNPARENTED child — a slice that isn't linked to its epic is
+  // invisible to the next run's child lookup and the decomposition strands.
+  const response = await client.post('/rest/api/2/issue', await buildIssue(EPIC_LINK_CUSTOM_FIELD))
+    .catch(async err => {
+      if (!ticketData.epicKey || err?.status !== 400) throw err;
+      console.warn(`⚠️ JIRA rejected the epic-link custom field, retrying ${ticketData.projectKey} create with parent`);
+      return client.post('/rest/api/2/issue', await buildIssue(EPIC_LINK_PARENT));
+    });
 
   const ticketId = response.data.key;
   const ticketUrl = `${instance.baseUrl}/browse/${ticketId}`;
+
+  // Sprint the ticket AFTER creation (see addIssuesToSprint). A failure here is
+  // reported, never thrown: the ticket already exists, so throwing would lose the
+  // key the caller needs to recover.
+  const sprintId = ticketData.sprintId ?? null;
+  let sprint = null;
+  if (sprintId !== null && sprintId !== '') {
+    sprint = await addIssuesToSprint(instanceId, sprintId, [ticketId])
+      .then(() => ({ id: sprintId, assigned: true, error: null }))
+      .catch(err => {
+        console.warn(`⚠️ JIRA ${ticketId} created but not added to sprint ${sprintId}: ${err.message}`);
+        return { id: sprintId, assigned: false, error: err.message };
+      });
+  }
 
   return {
     success: true,
     ticketId,
     url: ticketUrl,
+    sprint,
     response: response.data
   };
 }
@@ -390,7 +561,8 @@ export async function createTicket(instanceId, ticketData) {
  * legitimately empty result set (the AGENTS.md sentinel rule). `fields` selects
  * the returned issue fields; `maxResults` caps the page.
  *
- * Returns `[{ key, summary, description, status, statusCategory, labels, updated, url }]`.
+ * Returns `[{ key, summary, description, status, statusCategory, priority,
+ * issueType, assignee, labels, updated, resolutiondate, url }]`.
  */
 export async function searchIssues(instanceId, jql, { fields = 'summary,status,labels,updated,description,resolutiondate', maxResults = 100 } = {}) {
   const config = await getInstances();
@@ -409,9 +581,11 @@ export async function searchIssues(instanceId, jql, { fields = 'summary,status,l
     description: issue.fields.description || '',
     status: issue.fields.status?.name || null,
     statusCategory: issue.fields.status?.statusCategory?.name || null,
-    // Only populated when the caller asked for the `priority` field (it is not in
-    // the default `fields` set) — null otherwise, never a fabricated default.
+    // Only populated when the caller asked for these fields (none is in the
+    // default `fields` set) — null otherwise, never a fabricated default.
     priority: issue.fields.priority?.name || null,
+    issueType: issue.fields.issuetype?.name || null,
+    assignee: issue.fields.assignee?.displayName || issue.fields.assignee?.name || null,
     labels: issue.fields.labels || [],
     updated: issue.fields.updated || null,
     resolutiondate: issue.fields.resolutiondate || null,
@@ -447,17 +621,20 @@ export async function addLabels(instanceId, ticketId, labels = []) {
  * Update JIRA ticket
  */
 export async function updateTicket(instanceId, ticketId, updates) {
-  const config = await getInstances();
-  const instance = config.instances[instanceId];
-
-  if (!instance) {
-    throw new Error(`JIRA instance ${instanceId} not found`);
-  }
-
+  const instance = await resolveInstance(instanceId);
   const client = createJiraClient(instance);
 
+  // The domain keys go through the shared mapper so a PUT writes the same JIRA
+  // fields a POST does; anything else the caller sent is a raw JIRA field and is
+  // passed through untouched. `projectKey` and `sprintId` name nothing writable
+  // on an update — the route schema no longer accepts them, and sprint membership
+  // moves via addIssuesToSprint rather than a field write.
+  const { projectKey, sprintId, summary, issueType, storyPoints, epicKey, labels, assignee, ...rest } = updates;
   const payload = {
-    fields: updates
+    fields: {
+      ...rest,
+      ...(await buildIssueFields(instanceId, instance, client, { summary, issueType, storyPoints, epicKey, labels, assignee }))
+    }
   };
 
   await client.put(`/rest/api/2/issue/${ticketId}`, payload);
@@ -556,21 +733,18 @@ export async function transitionTicket(instanceId, ticketId, transitionId) {
  * The UI-facing `getMyCurrentSprintTickets` wraps this and swallows to [] instead.
  */
 export async function fetchMyCurrentSprintTickets(instanceId, projectKey) {
-  const config = await getInstances();
-  const instance = config.instances[instanceId];
-
-  if (!instance) {
-    throw new Error(`JIRA instance ${instanceId} not found`);
-  }
-
+  const instance = await resolveInstance(instanceId);
   const client = createJiraClient(instance);
+  const fieldIds = resolveCustomFieldIds(instance);
 
   // JQL to find tickets assigned to current user in active sprint for the project
   const jql = `project = "${escapeJql(projectKey)}" AND assignee = currentUser() AND sprint in openSprints() ORDER BY priority DESC, updated DESC`;
 
+  // `labels` is what lets the claim flow see per-ticket markers (the `decomposed`
+  // epic marker, dispatch hints) without a second round-trip per candidate.
   const response = await client.search({
     jql,
-    fields: 'summary,status,priority,issuetype,assignee,updated,customfield_10106',
+    fields: `summary,status,priority,issuetype,assignee,labels,updated,${fieldIds.storyPoints}`,
     maxResults: 50
   });
 
@@ -581,7 +755,8 @@ export async function fetchMyCurrentSprintTickets(instanceId, projectKey) {
     statusCategory: issue.fields.status.statusCategory?.name,
     priority: issue.fields.priority?.name,
     issueType: issue.fields.issuetype?.name,
-    storyPoints: issue.fields.customfield_10106,
+    labels: issue.fields.labels || [],
+    storyPoints: issue.fields[fieldIds.storyPoints],
     updated: issue.fields.updated,
     url: `${instance.baseUrl}/browse/${issue.key}`
   }));
@@ -800,31 +975,101 @@ export async function getBoards(instanceId, projectKey) {
 }
 
 /**
- * Fetch a single issue by key (lightweight — summary/type/status only).
+ * Fetch a single issue by key.
+ *
  * Used by the app-config picker to validate that a configured epicKey still
- * resolves on the instance (keys can vanish/change across a migration). Throws
- * (bubbles to a 4xx) when the key doesn't resolve — the caller treats that as
- * "no longer resolves".
+ * resolves on the instance (keys can vanish/change across a migration), and by
+ * the claim flow's epic decomposition, which needs three things the original
+ * summary/type/status projection did not carry: `labels` (to see the
+ * `decomposed` marker), `description` (to append and re-read the
+ * "Decomposed into" checklist), and `epicKey` (to walk a child back to its
+ * parent). Throws (bubbles to a 4xx) when the key doesn't resolve — the caller
+ * treats that as "no longer resolves".
+ *
+ * `epicKey` reads BOTH the instance's configured epic-link custom field and the
+ * native `parent` field: company-managed projects use the custom field, while
+ * team-managed (next-gen) projects only ever populate `parent`.
  */
 export async function getIssue(instanceId, issueKey) {
-  const config = await getInstances();
-  const instance = config.instances[instanceId];
-
-  if (!instance) {
-    throw new Error(`JIRA instance ${instanceId} not found`);
-  }
-
+  const instance = await resolveInstance(instanceId);
+  const fieldIds = resolveCustomFieldIds(instance);
   const client = createJiraClient(instance);
   const response = await client.get(`/rest/api/2/issue/${encodeURIComponent(issueKey)}`, {
-    params: { fields: 'summary,status,issuetype' }
+    params: { fields: `summary,status,issuetype,labels,description,parent,${fieldIds.epic}` }
   });
   const fields = response.data.fields || {};
+  const epicLink = fields[fieldIds.epic];
   return {
     key: response.data.key,
     summary: fields.summary || '',
     status: fields.status?.name || null,
-    issueType: fields.issuetype?.name || null
+    issueType: fields.issuetype?.name || null,
+    labels: fields.labels || [],
+    // Absent stays null, never '' — an empty description is a legitimate value a
+    // caller must be able to tell apart from a field the projection didn't carry.
+    description: typeof fields.description === 'string' ? fields.description : null,
+    // The custom field holds a bare key string; `parent` holds an issue object.
+    epicKey: (typeof epicLink === 'string' ? epicLink : epicLink?.key) || fields.parent?.key || null
   };
+}
+
+/**
+ * List the child issues of an epic.
+ *
+ * JIRA has two incompatible epic-link models and no way to know up front which
+ * one a project uses: `parent` (team-managed, and the modern Cloud spelling) and
+ * the instance's configured epic-link custom field via `cf[...]` (company-managed,
+ * classic). A single `OR` query is not an option — a project that lacks either
+ * field rejects the WHOLE query with a 400 — so both run separately and their
+ * results are unioned by key.
+ *
+ * Both must run even when the first one succeeds. `parent` is valid JQL on
+ * Server/DC as the long-standing sub-task clause, so a company-managed project
+ * whose children hang off the Epic Link field answers it with a clean, empty 200
+ * rather than a 400. Returning that empty result would report an already-split
+ * epic as childless, and the claim flow would re-split it into duplicate slices.
+ *
+ * A 400 means only "this project does not know that clause" and is tolerated;
+ * anything else (401/403/5xx/network) bubbles immediately, because "the lookup
+ * failed" must never collapse into "the epic has no children". An empty union
+ * after every clause succeeded IS a genuinely childless epic.
+ */
+export async function getEpicChildren(instanceId, epicKey, { maxResults = 100 } = {}) {
+  const instance = await resolveInstance(instanceId);
+  const fieldIds = resolveCustomFieldIds(instance);
+  const epicFieldNumber = String(fieldIds.epic).replace(/^customfield_/, '');
+  const safeKey = escapeJql(epicKey);
+  const clauses = [
+    `parent = "${safeKey}"`,
+    `cf[${epicFieldNumber}] = "${safeKey}"`
+  ];
+
+  const byKey = new Map();
+  let rejected = 0;
+  let lastError = null;
+
+  for (const clause of clauses) {
+    const issues = await searchIssues(
+      instanceId,
+      `${clause} ORDER BY created ASC`,
+      { fields: 'summary,status,labels,issuetype,assignee,updated', maxResults }
+    ).catch(err => {
+      if (err?.status !== 400) throw err;
+      rejected += 1;
+      lastError = err;
+      return null;
+    });
+    if (issues === null) continue;
+    for (const issue of issues) {
+      if (!byKey.has(issue.key)) byKey.set(issue.key, issue);
+    }
+  }
+
+  // Every clause was rejected as bad JQL — that is a failed lookup, not an
+  // answer, so it must throw rather than report zero children.
+  if (rejected === clauses.length) throw lastError;
+
+  return [...byKey.values()];
 }
 
 export default {
@@ -837,7 +1082,12 @@ export default {
   getProjects,
   getBoards,
   getIssue,
+  getEpicChildren,
+  getMyself,
+  resolveCustomFieldIds,
+  clearCurrentUserCache,
   createTicket,
+  addIssuesToSprint,
   searchIssues,
   addLabels,
   updateTicket,

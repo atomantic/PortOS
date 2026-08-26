@@ -162,7 +162,7 @@ async function main() {
     storyPoints: args.points,
     epicKey,
     labels: jira.labels || [],
-    sprint: sprintId || undefined
+    sprintId: sprintId || undefined
   };
 
   console.log(`🎫 Creating ${ticketData.issueType} in ${ticketData.projectKey}...`);
@@ -171,6 +171,11 @@ async function main() {
 
   console.log(`✅ ${result.ticketId}`);
   console.log(`🔗 ${result.url}`);
+  // The sprint move happens after the create and can fail on its own — say so
+  // rather than letting a ticket outside the sprint read as a clean success.
+  if (result.sprint && !result.sprint.assigned) {
+    console.log(`⚠️  Not added to sprint ${result.sprint.id}: ${result.sprint.error}`);
+  }
 
   // Output JSON for programmatic use
   console.log(JSON.stringify(result));
