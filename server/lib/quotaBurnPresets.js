@@ -15,19 +15,26 @@
  * on any install and there is no migration to write — the cost is that an
  * improved prompt reaches existing jobs only when the user re-picks the preset.
  *
- * ONE exception exists: #4852 renamed the agent-instructions file this contract
- * tells the agent to read, and a stored job naming CLAUDE.md but not AGENTS.md
- * would send an agent to a file its target repo may no longer have. Migration
- * 294 rewrites those job prompts — but ONLY where the stored string is byte-for-byte
- * a prior unmodified render, which is the same 'unmodified default ⇒ safe to
- * upgrade' rule PREVIOUS_DEFAULT_PROMPTS uses. Any future preset edit that must
- * reach existing jobs needs the same treatment.
+ * A contract change that must reach EXISTING jobs therefore needs a migration.
+ * Two exist, and the second supersedes the first's matching rule:
+ *
+ * - Migration 294 (#4852, the CLAUDE.md → AGENTS.md rename) matched a stored
+ *   prompt byte-for-byte against a reconstructed prior render. That rule turned
+ *   out to be too strict to be useful: a job seeded two contract revisions ago
+ *   matches no single reconstructed render, so 294 skipped every real job on
+ *   this install as "user-edited" and they kept running a prompt that predated
+ *   the dispatch-label guidance entirely — which is why a whole quota-burn
+ *   backlog arrived with no `model:`/`effort:` routing on it.
+ * - Migration 305 matches on the MISSION half instead (everything above
+ *   `## How to run this audit`, the part that says WHAT to audit) and replaces
+ *   the contract half, which is the part this file owns and revises. Copy that
+ *   migration for the next contract edit rather than 294's.
  *
  * Pure module: strings only, no I/O. `routes/quotaBurn.js` serves the list in
  * the config catalog; the client's preset picker applies one to a job row.
  */
 
-import { DISPATCH_HINT_GUIDANCE } from './dispatchLabels.js';
+import { MANDATORY_DISPATCH_HINT_GUIDANCE } from './dispatchLabels.js';
 import { QUOTA_BURN_JOB_TYPE } from './quotaBurnConfig.js';
 
 /** Params every audit preset sets, and why they differ from the job defaults. */
@@ -59,27 +66,53 @@ const AUDIT_PARAMS = Object.freeze({
 });
 
 /**
+ * The line that splits a rendered audit prompt in two: above it the MISSION
+ * (what to audit — one per preset, essentially stable), below it the CONTRACT
+ * (how to audit — shared, and the half this file keeps revising).
+ *
+ * Exported because that split is what lets a migration tell a stale shipped
+ * render apart from a prompt the user wrote over. See `upgradeStoredAuditPrompt`.
+ */
+export const AUDIT_CONTRACT_HEADING = '## How to run this audit';
+
+/**
  * The half of every audit prompt that is about HOW to audit rather than WHAT to
  * audit. Written once so a lesson learned from one bad run (a preset that filed
  * forty nits, or one that quietly stopped at the first `gh` failure) fixes every
  * preset at once.
  */
 const auditContract = ({ labels, dedupeSearch }) => `
-## How to run this audit
+${AUDIT_CONTRACT_HEADING}
+
+Most of this window belongs to RESEARCH, not to filing. Two issues another agent
+can execute cold — trigger named, fix decided, files listed — are worth more than
+five it has to re-investigate from scratch. Spend roughly the first two thirds of
+the window reading and tracing, and only then start filing.
 
 1. **Pick a bounded slice and say so first.** Do NOT attempt the whole
    repository. Choose one coherent area (a feature directory, a route group, a
    handful of related screens) — prefer one that recent audit issues have not
    already covered — and open your report by naming the slice in one line.
-2. **Read the actual code.** Every finding must cite \`path/to/file.js:LINE\` and
-   describe a concrete, reproducible failure: what a user does, in what state,
-   and what goes wrong. Delete any finding you cannot state that way — that
+2. **Research each candidate before you judge it.** Read the whole file, not the
+   lines your search matched. Trace the value end to end: where it is set, who
+   else reads it, and what each caller does when it fails. Read the tests that
+   already cover it, and check \`git log -n 5 -- <file>\` for why the code is
+   shaped the way it is — code that looks wrong is often load-bearing. Drop any
+   candidate you cannot walk through this way; a hunch is not a finding.
+3. **Prove the trigger.** Every finding must cite \`path/to/file.js:LINE\` and
+   name the path that actually reaches it — which user action, route, event, or
+   scheduled job, in what state — plus what goes wrong and who notices. If you
+   cannot name a reachable trigger, the finding is a guess: delete it. That
    filter is the whole point of this job.
-3. **De-duplicate before filing.** Run
+4. **Decide the fix before you file it.** Name the approach, every file it
+   touches, and the tests to add or change. Where you had a real choice, say
+   which option you rejected and why in one line. If the only obstacle was a
+   design decision, make the call — do not file a question.
+5. **De-duplicate before filing.** Run
    \`gh issue list --state open --limit 200 --search "${dedupeSearch}"\` (and a
    plain keyword search per finding). If it is already filed, skip it; comment on
    the existing issue only when you have genuinely new evidence.
-4. **File each surviving finding as its own issue.** Write the body to a scratch
+6. **File each surviving finding as its own issue.** Write the body to a scratch
    file OUTSIDE the repository — \`BODY=$(mktemp)\` — then create with repeated
    \`--label\` flags:
    \`gh issue create --title "..." --body-file "$BODY" --label ...\`. Keep scratch
@@ -88,21 +121,24 @@ const auditContract = ({ labels, dedupeSearch }) => `
    anything you leave behind is left in the user's working tree. Category
    labels (create each missing one immediately before applying it —
    \`gh label create <name> --color 0366D6 2>/dev/null || true\`):
-   ${labels}. Then add independent dispatch hints when the finding justifies
-   them. ${DISPATCH_HINT_GUIDANCE.split('\n').join(' ')} One problem per
+   ${labels}. Then the required dispatch labels.
+   ${MANDATORY_DISPATCH_HINT_GUIDANCE.split('\n').join(' ')} One problem per
    issue — never a bundle. Do not relabel an existing issue you skipped as a
    duplicate.
-5. **Bodies must be decision-complete**, in this shape:
+7. **Bodies must be decision-complete**, in this shape:
    - **Problem** — what is wrong, with file:line references.
+   - **Trigger** — the path that reaches it: the action, the state, the caller.
    - **Impact** — the user-visible consequence, not the code smell.
-   - **Fix** — the approach you have DECIDED on, with the files it touches. If
-     the only obstacle was a design choice, make the call and state it with a
-     one-line rationale. Do not file a question.
+   - **Fix** — the approach you have DECIDED on, the files it touches, the tests
+     to add or change, and the alternative you rejected with a one-line
+     rationale. Do not file a question.
    - **Acceptance criteria** — checkboxes another agent can verify cold.
-6. **Cap yourself at 5 issues.** A handful of well-evidenced, ready-to-work
-   issues is worth more than a wall of nits, and a long tail of low-value issues
-   costs a human real triage time. Fewer than 5 real problems? File fewer.
-7. **Redact before you publish.** An issue is world-readable the moment it is
+8. **Cap yourself at 5 issues, and aim for two or three.** Depth is the
+   deliverable: a handful of researched, ready-to-work issues is worth more than
+   a wall of nits, and a long tail of low-value issues costs a human real triage
+   time. Fewer than 5 real problems? File fewer, and spend the time you save
+   going deeper on the ones you keep or widening the slice you researched.
+9. **Redact before you publish.** An issue is world-readable the moment it is
    filed. Never paste a secret, credential, token, hostname, IP address, absolute
    path containing a username, or any personal record into a title or body — cite
    the location and redact the value (\`<token>\`, \`<hostname>\`, \`<user-email>\`).
@@ -111,13 +147,14 @@ const auditContract = ({ labels, dedupeSearch }) => `
    Report it in your final summary to the user, say it needs rotating, and file
    at most a location-free issue ("a committed credential needs rotating and
    purging from history — details in the run summary").
-8. **Change no code.** No edits, no commits, no branches, no pull requests, and
+10. **Change no code.** No edits, no commits, no branches, no pull requests, and
    no \`git checkout\`/\`switch\` — you are standing in the user's live checkout of
    this repository, so an edit or a branch change is felt immediately by whoever
    is working in it. The deliverable is the filed issues, and the run must end
    with the same \`git status\` and the same branch it started on.
-9. **Report at the end**: the slice you audited, each issue number and title, and
-   anything you deliberately did not file and why.
+11. **Report at the end**: the slice you audited, what you traced and ruled out,
+   each issue number and title, and anything you deliberately did not file and
+   why.
 
 If \`gh\` cannot reach the network (errors like "bad file descriptor" or a
 connect timeout), do not give up silently — fall back to the REST API with the
@@ -607,4 +644,50 @@ proposed replacement text with rationale.`,
 /** Look up a preset by id. Returns `null` for an unknown id — never throws. */
 export function findQuotaBurnPreset(id) {
   return QUOTA_BURN_PROMPT_PRESETS.find((preset) => preset.id === id) || null;
+}
+
+/**
+ * Sentences every shipped render of the contract has carried. A stored prompt
+ * missing one is not a shipped contract — it is a user's own How-to-run section,
+ * and refreshing it would silently delete their instructions.
+ *
+ * Deliberately drawn from the OLDEST wording still in the field, not the newest:
+ * a phrase this revision introduced would match nothing and make the upgrade a
+ * no-op on exactly the stale jobs it exists to rescue.
+ */
+const SHIPPED_CONTRACT_ANCHORS = Object.freeze([
+  'Pick a bounded slice and say so first',
+  'gh issue create',
+  'Change no code.',
+  'Report at the end',
+]);
+
+/**
+ * The current render for a stored audit prompt that is still a shipped preset,
+ * or `null` to leave the stored text exactly as it is.
+ *
+ * Matching is on the MISSION half — everything above `AUDIT_CONTRACT_HEADING` —
+ * rather than on the whole string. A job seeded N contract revisions ago matches
+ * no reconstructed prior render byte-for-byte (that is why migration 294 skipped
+ * every real job as "user-edited"), but its mission half is unchanged, because
+ * revisions land in the contract. Requiring the stored contract to still carry
+ * `SHIPPED_CONTRACT_ANCHORS` keeps the looser rule from overwriting a user who
+ * kept a preset's mission and wrote their own procedure under it.
+ *
+ * Returns `null` when the prompt is already current, so a caller can count real
+ * upgrades without diffing.
+ */
+export function upgradeStoredAuditPrompt(stored) {
+  if (typeof stored !== 'string' || !stored.includes(AUDIT_CONTRACT_HEADING)) return null;
+  const index = stored.indexOf(AUDIT_CONTRACT_HEADING);
+  const storedMission = stored.slice(0, index);
+  const storedContract = stored.slice(index);
+  if (!SHIPPED_CONTRACT_ANCHORS.every((anchor) => storedContract.includes(anchor))) return null;
+
+  for (const preset of QUOTA_BURN_PROMPT_PRESETS) {
+    const current = preset.params.prompt;
+    if (current.slice(0, current.indexOf(AUDIT_CONTRACT_HEADING)) !== storedMission) continue;
+    return current === stored ? null : current;
+  }
+  return null;
 }

@@ -300,6 +300,30 @@ export const DISPATCH_HINT_GUIDANCE = [
 ].join('\n');
 
 /**
+ * Mandatory-axis sibling of `DISPATCH_HINT_GUIDANCE`, for producers that read
+ * the target code closely before filing — the quota-burn audits, which spend
+ * most of a window researching one slice and arrive at a chosen fix.
+ *
+ * The general guidance keeps both axes optional because most callers file from
+ * thinner evidence, and a guessed hint is worse than none. That reasoning does
+ * not transfer here: an agent that has traced the failure and decided the fix
+ * already knows how the work should run, so "omit rather than guess" just
+ * strands the issue with no routing at all — which is exactly what happened to
+ * the audit issues filed before this contract existed. Same vocabulary and the
+ * same colors as the optional form; only the obligation differs.
+ */
+export const MANDATORY_DISPATCH_HINT_GUIDANCE = [
+  'Dispatch labels are REQUIRED on every issue you file: exactly one `model:` and exactly one `effort:`. They are two independent axes describing HOW to run the work, not how big it is — pick each from the code you just read.',
+  '- `model:light|medium|heavy` — capability: light is mechanical (rename, config, a well-specified single-file edit); medium is routine multi-file work; heavy is genuinely hard reasoning (concurrency, schema/compatibility design, redesign).',
+  '- `effort:low|medium|high|xhigh|max` — reasoning budget per step, independent of model. `model:light` + `effort:max` is a mechanical sweep across many call sites; `model:heavy` + `effort:low` is a two-line change that hinges on one idea.',
+  'Never derive one axis from the other, and do NOT stamp `medium` on both by reflex — where that genuinely is the answer, justify it in one line of the body. Do NOT put `[model:…]` / `[effort:…]` / `[category]` / `[SEVERITY]` in the title; those belong in labels.',
+  'Create each label immediately before applying it (`gh label create <name> --color <hex> 2>/dev/null || true`; glab needs `--name` and `#<hex>`). Colors: model:light D4C5F9, model:medium A371F7, model:heavy 6F42C1, effort:low BFE5E5, effort:medium 76C7C7, effort:high 1D7874, effort:xhigh 0E4F4C, effort:max 05403D.',
+  'Contributor labels stay OPTIONAL and independent: `good first issue` (color 7057FF) when the work is self-contained enough for a new contributor with no deep repo context — a `model:light` 40-file sweep is NOT one — and `help wanted` (color 008672) when the body is scoped enough to pick up cold. Same `label create` form.',
+  'Use repeated `--label` flags (one per label). Preserve existing category/scope labels (`plan`, `ux`, `bug`, `tests`, `area:*`, …). After creating each issue, read its labels back (`gh issue view <number> --json labels`) and apply any that did not stick. Never relabel a deduplicated existing issue.',
+  ISSUE_QUALITY_GUIDANCE,
+].join('\n');
+
+/**
  * Jira sibling of `DISPATCH_HINT_GUIDANCE`. Same vocabulary, hyphenated label
  * names (`model-light`, `effort-max`) because a colon is unsafe on some Jira
  * versions.

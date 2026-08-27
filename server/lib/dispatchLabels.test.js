@@ -5,6 +5,7 @@ import {
   DISPATCH_LABEL_COLORS,
   ISSUE_QUALITY_GUIDANCE,
   DISPATCH_HINT_GUIDANCE,
+  MANDATORY_DISPATCH_HINT_GUIDANCE,
   JIRA_DISPATCH_HINT_GUIDANCE,
   PORTOS_AREA_LABELS,
   PORTOS_AREA_LABEL_GUIDANCE,
@@ -194,6 +195,26 @@ describe('shared guidance', () => {
     expect(JIRA_DISPATCH_HINT_GUIDANCE).toContain('help-wanted');
     expect(JIRA_DISPATCH_HINT_GUIDANCE).toContain('Issue-quality gate');
     expect(JIRA_DISPATCH_HINT_GUIDANCE).not.toMatch(/model:light/);
+  });
+
+  it('keeps the mandatory variant on the same vocabulary but inverts the obligation', () => {
+    // Same axes, same colors, same label-create idiom — the ONLY difference is
+    // that both axes are required. A drifted second copy of the vocabulary is
+    // exactly what this module exists to prevent.
+    expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain('model:light|medium|heavy');
+    expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain('effort:low|medium|high|xhigh|max');
+    expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain('good first issue');
+    expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain('help wanted');
+    expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain('Issue-quality gate');
+    for (const name of Object.keys(DISPATCH_LABEL_COLORS)) {
+      expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain(`${name} ${DISPATCH_LABEL_COLORS[name]}`);
+    }
+    expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain('REQUIRED on every issue you file');
+    expect(MANDATORY_DISPATCH_HINT_GUIDANCE).not.toContain('Omit an axis rather than guessing');
+    expect(MANDATORY_DISPATCH_HINT_GUIDANCE).not.toContain('are optional');
+    // Contributor labels stay optional in BOTH forms — requiring them would
+    // advertise unattended-agent work to humans who never asked for it.
+    expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain('stay OPTIONAL');
   });
 
   it('keeps the PortOS area vocabulary and repo-study complete-label contract explicit', () => {

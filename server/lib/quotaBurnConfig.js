@@ -97,7 +97,13 @@ export const QUOTA_BURN_BOUNDS = Object.freeze({
   jobsPerFamily: { max: 25 },
   idLength: { max: 64 },
   labelLength: { max: 120 },
-  paramLength: { max: 8000 },
+  // Sized for the longest thing a param actually holds: an audit preset's work
+  // prompt. At 8000 the largest shipped preset rendered to 7999 — one character
+  // of headroom — so the next sentence added to the shared audit contract would
+  // have been silently sliced off the END of every stored preset job, taking the
+  // "change no code" and redaction rules with it and leaving nothing on screen
+  // saying so. The cap exists to bound a runaway paste, not to fit the presets.
+  paramLength: { max: 16000 },
 });
 const BOUNDS = QUOTA_BURN_BOUNDS;
 
