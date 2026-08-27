@@ -527,6 +527,117 @@ Cross-version and cross-install compatibility code is NOT dead code, even when
 this install no longer hits it. Read the project's rules on migrations and
 version gates before proposing any such removal.`,
 
+  'api-contract': `[Improvement: {appName}] API and route-contract audit
+
+Audit {appName}'s API endpoints and route handlers for contract drift,
+validation gaps, and error traps.
+
+Repository: {repoPath}
+
+{modeInstructions}
+
+Trace client callers through to server routes and schemas, hunting for:
+
+- **Unvalidated inputs** — endpoints reading \`req.body\`/\`query\`/\`params\`
+  directly with no validation schema, letting malformed types into domain logic.
+- **Client/server drift** — a client service sending a field no route reads, a
+  route requiring one the caller omits, or a caller awaiting a key the response
+  never carries.
+- **Status and envelope errors** — a 200 carrying \`{ error }\`, a raw 500 for
+  bad client input, or a bare string where the app's \`{ error: message }\`
+  envelope is expected.
+- **Async traps** — a route handler not wrapped in \`asyncHandler\`, where a
+  rejected promise hangs the request socket instead of reaching the error
+  middleware.
+- **Loose schemas** — unbounded strings (no \`.max()\`), arbitrary keys (no
+  \`.strict()\`), or an enum accepting values downstream code cannot handle.
+- **Method mismatch** — a mutation behind \`GET\`, or a non-idempotent \`PUT\`.
+
+For each finding, name the caller AND the route with \`file.js:LINE\`, the shape
+that gets through, and the concrete failure it produces.`,
+
+  'react-lifecycle': `[Improvement: {appName}] React lifecycle and state audit
+
+Audit {appName}'s React components, hooks, and state lifecycles for leaks,
+stale closures, and render races.
+
+Repository: {repoPath}
+
+{modeInstructions}
+
+Hunt specifically for:
+
+- **Missing effect teardowns** — \`window\`/\`document\` listeners, timers,
+  sockets, or observers created in \`useEffect\` with no cleanup on unmount.
+- **Stale closures** — a callback or timer capturing state/props with no ref or
+  dependency keeping it current, so it acts on data that has already moved on.
+- **Unmounted state updates** — an async resolution setting state after unmount,
+  or an earlier request's response overwriting a newer one's.
+- **Derived-state anti-patterns** — a prop mirrored into local state and synced
+  by an effect, which flashes the stale value before correcting itself.
+- **Render-time side effects** — mutating a ref or firing work during render
+  rather than in an effect or a handler.
+- **Broken dependencies** — a missing dependency causing a stale read, or an
+  inline object/array literal retriggering the effect every render.
+
+Give the interaction sequence that triggers each defect, not just the code
+shape: which action, in what order, leaving what on screen.`,
+
+  'observability': `[Improvement: {appName}] Logging and observability audit
+
+Audit how {appName} logs events, reports runtime failures, and surfaces
+diagnostics.
+
+Repository: {repoPath}
+
+{modeInstructions}
+
+Hunt specifically for:
+
+- **Silent failure swallowing** — a \`catch\` that discards the error with no
+  log and no telemetry, so the failure is invisible in production.
+- **Log noise** — a polling loop, socket frame handler, or hot render path
+  emitting a line every tick, burying the errors that matter.
+- **Missing error context** — an error logged with only \`err.message\`, with no
+  task id, record id, route, or stack to reproduce from.
+- **Wrong level** — a fatal runtime error logged through the equivalent of
+  \`console.log\` instead of the project's error path.
+- **Uninstrumented workflows** — a multi-step background pipeline or agent
+  transition with no progress logging, so a stuck job looks identical to a slow
+  one.
+
+For each finding, name the catch block or uninstrumented step and state the
+operational blind spot it creates: what breaks, and how long before anyone
+notices.`,
+
+  'copy': `[Improvement: {appName}] Copy and text-clarity audit
+
+Audit {appName}'s user-facing copy — labels, tooltips, dialogs, empty states,
+and error messages — for clarity, accuracy, and consistency.
+
+Repository: {repoPath}
+
+{modeInstructions}
+
+Hunt specifically for:
+
+- **Internal jargon** — a variable name, database key, or protocol detail
+  surfacing in a label where a domain term belongs.
+- **Ambiguous action labels** — a generic "OK"/"Submit" on a destructive action
+  instead of the actual verb ("Delete", "Discard"), or a "Cancel" that is
+  ambiguous about which thing it cancels.
+- **Dead-end error text** — "Failed" or "Invalid request" with no statement of
+  what was wrong or what the user can do about it.
+- **Broken pluralization** — "1 items", "found 1 results", "0 files deleted".
+- **Inconsistent terminology** — the same entity or action named one way in the
+  nav, another in a dialog, a third in a toast.
+- **Clipped labels** — text in a fixed-width container that truncates the word
+  carrying the meaning.
+
+Quote the exact current string with \`file.jsx:LINE\`, and give the proposed
+replacement plus a one-line rationale. A finding with no proposed wording is
+not actionable.`,
+
   'feature-ideas': `[Improvement: {appName}] Implement Next Planned Feature
 
 Your goal is to implement the next planned item from PLAN.md, or brainstorm a new feature if no plan exists.

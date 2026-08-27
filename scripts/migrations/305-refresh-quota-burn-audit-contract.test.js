@@ -22,10 +22,13 @@ const mission = currentPrompt.slice(0, currentPrompt.indexOf(AUDIT_CONTRACT_HEAD
 const staleContract = `${AUDIT_CONTRACT_HEADING}
 
 1. **Pick a bounded slice and say so first.** Audit one area.
-2. **File each finding.** \`gh issue create --title "..." --body-file "$BODY"\`.
+2. **Read the actual code.** Cite \`file.js:LINE\`.
+3. **File each surviving finding as its own issue.**
+   \`gh issue create --title "..." --body-file "$BODY"\`.
    Suggested labels: \`ux\`, \`plan\`. Run \`gh label list\` first.
-3. **Change no code.** The deliverable is the filed issues.
-4. **Report at the end**: the slice you audited and each issue number.
+4. **Cap yourself at 5 issues.**
+5. **Change no code.** The deliverable is the filed issues.
+6. **Report at the end**: the slice you audited and each issue number.
 `;
 const stalePrompt = `${mission}${staleContract}`;
 
@@ -81,5 +84,21 @@ describe('migration 305 — refresh quota-burn audit contract', () => {
 
   it('returns cleanly when the install has no quota-burn config', async () => {
     await expect(migration.up({ rootDir })).resolves.toEqual({ updated: 0 });
+  });
+
+  it('throws on a corrupt config instead of reporting zero updates', async () => {
+    // Reporting `{ updated: 0 }` here would be indistinguishable from "this
+    // install has no burn plan", the runner would record 305 as applied, and
+    // the refresh would never run again once the user repaired the file.
+    writeFileSync(configPath, '{ "families": { oops');
+    await expect(migration.up({ rootDir })).rejects.toThrow(/not valid JSON/);
+  });
+
+  it('leaves the file byte-identical when it upgrades nothing', async () => {
+    const custom = `# my own audit\n\n${AUDIT_CONTRACT_HEADING}\n\nJust report in chat.\n`;
+    writeJson(configPath, config(custom));
+    const before = readFileSync(configPath, 'utf8');
+    await migration.up({ rootDir });
+    expect(readFileSync(configPath, 'utf8')).toBe(before);
   });
 });

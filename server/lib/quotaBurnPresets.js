@@ -663,6 +663,52 @@ const SHIPPED_CONTRACT_ANCHORS = Object.freeze([
 ]);
 
 /**
+ * Every bolded heading any shipped contract revision has used — step titles and
+ * the body-shape sub-labels.
+ *
+ * The anchors above prove a stored contract still contains the shipped skeleton;
+ * they cannot tell whether the user ADDED to it. A user who kept all four
+ * anchors and appended their own `**Also check X.**` step would pass the anchor
+ * gate and have that step silently deleted by the refresh. So the rule is a
+ * SUBSET test: every bold heading in the stored contract must be one this
+ * project shipped. An unrecognized heading means the text is no longer purely
+ * ours, and the prompt is left exactly as it is.
+ *
+ * The list must stay a superset of every historical render, not just the
+ * current one — a title dropped from here turns into a refusal to upgrade the
+ * jobs still carrying it. Refusing is the safe direction (the user keeps their
+ * text and re-picks the preset), which is why the check is written this way
+ * round rather than as a blocklist.
+ */
+const SHIPPED_CONTRACT_HEADINGS = Object.freeze(new Set([
+  // Step titles, current revision.
+  'Pick a bounded slice and say so first.',
+  'Research each candidate before you judge it.',
+  'Prove the trigger.',
+  'Decide the fix before you file it.',
+  'De-duplicate before filing.',
+  'File each surviving finding as its own issue.',
+  'Bodies must be decision-complete',
+  'Cap yourself at 5 issues, and aim for two or three.',
+  'Redact before you publish.',
+  'Change no code.',
+  'Report at the end',
+  // Step titles retired by earlier revisions but still sitting in stored jobs.
+  'Read the actual code.',
+  'Cap yourself at 5 issues.',
+  // Body-shape sub-labels.
+  'Problem',
+  'Trigger',
+  'Impact',
+  'Fix',
+  'Acceptance criteria',
+]));
+
+/** The `**…**` headings in one rendered contract half, in document order. */
+const contractHeadings = (contract) =>
+  Array.from(contract.matchAll(/\*\*(.+?)\*\*/g), (match) => match[1]);
+
+/**
  * The current render for a stored audit prompt that is still a shipped preset,
  * or `null` to leave the stored text exactly as it is.
  *
@@ -670,9 +716,12 @@ const SHIPPED_CONTRACT_ANCHORS = Object.freeze([
  * rather than on the whole string. A job seeded N contract revisions ago matches
  * no reconstructed prior render byte-for-byte (that is why migration 294 skipped
  * every real job as "user-edited"), but its mission half is unchanged, because
- * revisions land in the contract. Requiring the stored contract to still carry
- * `SHIPPED_CONTRACT_ANCHORS` keeps the looser rule from overwriting a user who
- * kept a preset's mission and wrote their own procedure under it.
+ * revisions land in the contract. Two gates keep that looser rule from eating a
+ * user's own text: `SHIPPED_CONTRACT_ANCHORS` proves the shipped skeleton is
+ * still there (they did not replace the procedure), and
+ * `SHIPPED_CONTRACT_HEADINGS` proves nothing was ADDED to it (no step of their
+ * own that a wholesale replacement would delete). Either gate failing means
+ * leave it alone.
  *
  * Returns `null` when the prompt is already current, so a caller can count real
  * upgrades without diffing.
@@ -683,6 +732,7 @@ export function upgradeStoredAuditPrompt(stored) {
   const storedMission = stored.slice(0, index);
   const storedContract = stored.slice(index);
   if (!SHIPPED_CONTRACT_ANCHORS.every((anchor) => storedContract.includes(anchor))) return null;
+  if (!contractHeadings(storedContract).every((heading) => SHIPPED_CONTRACT_HEADINGS.has(heading))) return null;
 
   for (const preset of QUOTA_BURN_PROMPT_PRESETS) {
     const current = preset.params.prompt;
