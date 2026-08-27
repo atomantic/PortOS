@@ -10,6 +10,7 @@ import { useNavigate, useLocation } from 'react-router';
 import { Sparkles, Loader2, CheckCircle2, AlertCircle, ArrowLeft, RotateCcw, Circle, Upload, Link2, FileText, Mic, Square } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import FilePickerButton from '../components/ui/FilePickerButton';
+import Modal from '../components/ui/Modal';
 import socket from '../services/socket';
 import { startMemoRecording } from '../lib/audioRecorder';
 import {
@@ -74,6 +75,7 @@ export default function CatalogIngest() {
   // The draft returned by extractFromCatalogScrap(): per-kind candidate arrays
   // editable inline + checkbox-gated. Defaults all to selected.
   const [draft, setDraft] = useState({ characters: [], places: [], objects: [], ideas: [], scenes: [], concepts: [] });
+  const [confirmReset, setConfirmReset] = useState(false);
   const [selected, setSelected] = useState({ characters: new Set(), places: new Set(), objects: new Set(), ideas: new Set(), scenes: new Set(), concepts: new Set() });
   // Bulk import is a separate ingest path — no LLM extraction, no review.
   // Power-user paste of pre-structured markdown/CSV/JSON. Lives on the
@@ -159,6 +161,15 @@ export default function CatalogIngest() {
     setStages(INITIAL_STAGES);
     setDraft({ characters: [], places: [], objects: [], ideas: [], scenes: [], concepts: [] });
     setSelected({ characters: new Set(), places: new Set(), objects: new Set(), ideas: new Set(), scenes: new Set(), concepts: new Set() });
+  };
+
+  const requestReset = () => {
+    const hasDraftItems = KIND_SECTIONS.some(({ key }) => draft[key].length > 0);
+    if (rawText.trim() || hasDraftItems) {
+      setConfirmReset(true);
+      return;
+    }
+    reset();
   };
 
   // Shared review-entry: every ingest path (paste / url / file / voice) yields
@@ -445,13 +456,33 @@ export default function CatalogIngest() {
               </button>
             )}
             {phase !== 'paste' && (
-              <button type="button" onClick={reset}
+              <button type="button" onClick={requestReset}
                 className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-port-border text-gray-300 hover:text-white">
                 <RotateCcw size={14} aria-hidden="true" /> Start Over
               </button>
             )}
           </div>
         </header>
+
+        <Modal open={confirmReset} onClose={() => setConfirmReset(false)} size="sm"
+          ariaLabelledBy="catalog-reset-title">
+          <div className="p-5 space-y-4">
+            <h2 id="catalog-reset-title" className="text-lg font-semibold text-white">Start over?</h2>
+            <p className="text-sm text-gray-300">
+              This will discard the current extracted draft and any edits you made. This action cannot be undone.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setConfirmReset(false)}
+                className="px-3 py-2 rounded-lg text-sm text-gray-300 hover:text-white">
+                Cancel
+              </button>
+              <button type="button" onClick={() => { setConfirmReset(false); reset(); }}
+                className="px-3 py-2 rounded-lg text-sm bg-port-error text-white hover:bg-port-error/90">
+                Discard draft
+              </button>
+            </div>
+          </div>
+        </Modal>
 
         {phase === 'paste' && bulkOpen && (
           <div className="bg-port-card border border-port-border rounded-lg p-4 sm:p-6 space-y-4">
