@@ -40,6 +40,7 @@ import { recalculateDurationStats } from './metrics.js';
 import { tryReadFile, loadLearningData, saveLearningData } from './store.js';
 import { SKIP_LEARNING_VERDICT } from '../../lib/learningVerdict.js';
 import { readdir } from 'fs/promises';
+import { join } from 'path';
 
 const makeData = () => ({
   version: 1,
@@ -126,7 +127,8 @@ describe('recalculateDurationStats — skip verdict (#4107)', () => {
     await recalculateDurationStats();
 
     expect(readdir).toHaveBeenCalledWith('/tmp/portos-test-agents', { withFileTypes: true });
-    expect(readdir).toHaveBeenCalledWith('/tmp/portos-test-agents/2026-08-14', { withFileTypes: true });
+    // The scan joins with path.join, so the date-dir separator is platform-native (Windows CI).
+    expect(readdir).toHaveBeenCalledWith(join('/tmp/portos-test-agents', '2026-08-14'), { withFileTypes: true });
     expect(tryReadFile).toHaveBeenCalledTimes(25);
     expect(maxActiveReads).toBe(20);
   });

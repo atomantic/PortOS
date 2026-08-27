@@ -1,12 +1,12 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, stat, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { basename, join } from 'path';
 import { ChildProcess, execFile } from './childProcess.js';
 import { promisify } from 'util';
 import { pinPlatform } from './testHelper.js';
 import { killProcessTree } from './bufferedSpawn.js';
-import { spawnDetached, reapDetached, reapAndCleanDetachedDirs, reattachDetached, isReattachable, isDetachedRunning } from './detachedSpawn.js';
+import { spawnDetached, reapDetached, reapAndCleanDetachedDirs, reattachDetached, isReattachable, isDetachedRunning, __detachedSpawnTesting } from './detachedSpawn.js';
 
 // Only the win32 fallback's kill() reaches killProcessTree, so stubbing it is
 // inert for every POSIX test here — and it lets the win32 test assert the
@@ -480,12 +480,37 @@ describe('isReattachable', () => {
 });
 
 describe('isDetachedRunning', () => {
+  it.each(['<defunct>', 'bash <defunct>', '[bash] <defunct>', 'bash <exiting>'])(
+    'keeps a zombie PID blocked until its supervisor writes the exit sentinel: %s',
+    (command) => {
+      expect(__detachedSpawnTesting.processCommandMatches(command, {
+        executable: 'bash',
+        args: ['/example/update.sh']
+      })).toBe(true);
+    }
+  );
+
   it.runIf(IS_POSIX)('is true while the recorded child is still alive with no exit sentinel', async () => {
     const controlDir = await tmpControlDir();
     const handle = await spawnDetached('sh', ['-c', 'sleep 30'], { controlDir, pollMs: 25 });
     expect(await isDetachedRunning(controlDir)).toBe(true);
     handle.kill('SIGKILL');
     await onClose(handle);
+  });
+
+  it.runIf(IS_POSIX)('is true when the live process matches the expected executable', async () => {
+    const controlDir = await tmpControlDir();
+    await writeFile(join(controlDir, 'pid'), String(process.pid));
+    expect(await isDetachedRunning(controlDir, { executable: basename(process.execPath) })).toBe(true);
+  });
+
+  it.runIf(IS_POSIX)('is false when a recycled live PID belongs to another process', async () => {
+    const controlDir = await tmpControlDir();
+    await writeFile(join(controlDir, 'pid'), String(process.pid));
+    expect(await isDetachedRunning(controlDir, {
+      executable: 'bash',
+      args: ['/example/update.sh']
+    })).toBe(false);
   });
 
   it('is false once the job recorded its exit', async () => {
