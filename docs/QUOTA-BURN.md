@@ -250,6 +250,10 @@ issues, and changes nothing:
 | Data & upgrade-safety issues | Missing migrations/seeds, schema-parity drift, version gates, destructive defaults |
 | Docs drift | Doc claims the code contradicts, stale commands, undocumented surfaces |
 | Security issues | Real exposure under the documented threat model — findings that contradict it are noise |
+| API & route contracts | Unvalidated inputs, client/server drift, wrong status/envelope, missing `asyncHandler`, loose schemas |
+| React lifecycle & state | Missing effect teardowns, stale closures, unmounted state updates, derived-state anti-patterns |
+| Logging & observability | Silent catch blocks, log noise on hot paths, errors logged without context, uninstrumented pipelines |
+| Copy & text clarity | Internal jargon in labels, ambiguous action verbs, dead-end error text, broken pluralization |
 
 Presets are **templates**: picking one COPIES its prompt into the job's own
 `params.prompt`, and nothing on disk points back at the preset id. So a contract

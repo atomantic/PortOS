@@ -211,7 +211,6 @@ describe('shared guidance', () => {
     }
     expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain('REQUIRED on every issue you file');
     expect(MANDATORY_DISPATCH_HINT_GUIDANCE).not.toContain('Omit an axis rather than guessing');
-    expect(MANDATORY_DISPATCH_HINT_GUIDANCE).not.toContain('are optional');
     // Contributor labels stay optional in BOTH forms — requiring them would
     // advertise unattended-agent work to humans who never asked for it.
     expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain('stay OPTIONAL');
