@@ -218,6 +218,13 @@ describe('Layout — instance feature gating', () => {
     expect(screen.getByRole('button', { name: 'POST' })).toBeTruthy();
   });
 
+  it('shows API Explorer inside Dev Tools navigation', async () => {
+    await renderLayout('/api-reference/catalog');
+
+    expect(NAV_COMMANDS.find((command) => command.path === '/api-reference/catalog')?.section).toBe('Dev Tools');
+    expect(screen.getByRole('link', { name: 'API Explorer' })).toHaveAttribute('href', '/api-reference/catalog');
+  });
+
   it('drops only the rows of the features this install turned off', async () => {
     featureMock.features = allFeaturesOn()
       .map((f) => (f.id === 'post' ? f : { ...f, enabled: false }));

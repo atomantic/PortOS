@@ -89,6 +89,7 @@ const Privacy = lazyWithReload(() => import('./pages/Privacy'));
 const Agents = lazyWithReload(() => import('./pages/Agents'));
 const Uploads = lazyWithReload(() => import('./pages/Uploads'));
 const Settings = lazyWithReload(() => import('./pages/Settings'));
+const ApiExplorer = lazyWithReload(() => import('./pages/ApiExplorer'));
 const LocalLlmPlayground = lazyWithReload(() => import('./pages/LocalLlmPlayground'));
 const Models = lazyWithReload(() => import('./pages/Models'));
 const Shell = lazyWithReload(() => import('./pages/Shell'));
@@ -320,6 +321,8 @@ export default function App() {
               (#4728) — it picks a model, not a preference. */}
           <Route path="settings/embeddings" element={<Navigate to="/models/embeddings" replace />} />
           <Route path="settings/:tab" element={<Settings />} />
+          <Route path="api-reference" element={<Navigate to="/api-reference/catalog" replace />} />
+          <Route path="api-reference/:tab" element={<ApiExplorer />} />
           <Route path="models" element={<Navigate to="/models/performance" replace />} />
           {/* A tab's drill-down (today: the LoRA dataset workbench) renders through
               Models itself, so it keeps the section header and tab bar — see

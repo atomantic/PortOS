@@ -15,11 +15,21 @@ const advertisedSchema = (schema) => {
 
 describe('agentContextValidation', () => {
   it('accepts only bounded, unique known settings scopes', () => {
-    expect(agentContextSettingsSchema.parse({ enabled: true, profile: 'metadata', scopes: ['navigation', 'brain'] }))
-      .toEqual({ enabled: true, profile: 'metadata', scopes: ['navigation', 'brain'] });
+    expect(agentContextSettingsSchema.parse({
+      enabled: true,
+      profile: 'metadata',
+      scopes: ['navigation', 'brain'],
+      actions: { readPortos: true, writePortos: false },
+    })).toEqual({
+      enabled: true,
+      profile: 'metadata',
+      scopes: ['navigation', 'brain'],
+      actions: { readPortos: true, writePortos: false },
+    });
     expect(agentContextSettingsSchema.safeParse({ scopes: ['brain', 'brain'] }).success).toBe(false);
     expect(agentContextSettingsSchema.safeParse({ scopes: ['privacy-vault'] }).success).toBe(false);
     expect(agentContextSettingsSchema.safeParse({ enabled: true, unknown: true }).success).toBe(false);
+    expect(agentContextSettingsSchema.safeParse({ actions: { shell: true } }).success).toBe(false);
   });
 
   it('advertises the same schemas used for runtime validation', () => {

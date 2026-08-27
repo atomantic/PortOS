@@ -40,4 +40,31 @@ describe('GET /api/api-docs/openapi.json', () => {
     const res = await request(buildApp()).get('/api/api-docs/openapi.json');
     expect(res.body.servers[0].url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
   });
+
+  it('serves the complete internal spec independently of public exposure', async () => {
+    const res = await request(buildApp()).get('/api/api-docs/internal/openapi.json');
+    expect(res.status).toBe(200);
+    expect(res.body.paths['/api/cos/mind/tools'].get).toBeDefined();
+    expect(Object.keys(res.body.paths).length).toBeGreaterThan(1000);
+  });
+
+  it('serves searchable catalog metadata and registry cards', async () => {
+    const res = await request(buildApp()).get('/api/api-docs/catalog.json');
+    expect(res.status).toBe(200);
+    expect(res.body.stats.operations).toBeGreaterThan(2000);
+    expect(res.body.operations[0].contractStatus).toMatch(/modeled|generated/);
+    expect(res.body.externallyExposableApis.map((entry) => entry.id)).toEqual(['voice', 'sdapi']);
+  });
+
+  it('serves the generated Socket.IO catalog and AsyncAPI 3 document', async () => {
+    const events = await request(buildApp()).get('/api/api-docs/events.json');
+    expect(events.status).toBe(200);
+    expect(events.body.stats.events).toBeGreaterThan(100);
+    expect(events.body.events.some((event) => event.event === 'cos:mind:event')).toBe(true);
+
+    const asyncapi = await request(buildApp()).get('/api/api-docs/asyncapi.json');
+    expect(asyncapi.status).toBe(200);
+    expect(asyncapi.body.asyncapi).toBe('3.0.0');
+    expect(Object.values(asyncapi.body.channels).some((channel) => channel.address === 'shell:start')).toBe(true);
+  });
 });

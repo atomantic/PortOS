@@ -1,4 +1,4 @@
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { getSettings } from './settings.js';
 import { BRAIN_SEARCH_TYPES, getBrainProjections } from './brainSearchIndex.js';
 import { listContexts } from './workspaceContext.js';
@@ -6,6 +6,7 @@ import { previewLegacyExport, redactSecrets } from './legacyExport.js';
 import { NAV_COMMANDS, resolveNavCommand } from '../lib/navManifest.js';
 import {
   AGENT_CONTEXT_DEFAULT_SCOPES,
+  AGENT_CONTEXT_DEFAULT_ACTIONS,
   AGENT_CONTEXT_LIMITS,
   AGENT_CONTEXT_PROTOCOL_VERSION,
   AGENT_CONTEXT_SCHEMA_VERSION,
@@ -13,6 +14,12 @@ import {
   advertiseAgentContextTools,
   agentContextSettingsSchema,
 } from '../lib/agentContextValidation.js';
+import { normalizePortosSemanticToolGrants } from '../lib/cosToolContracts.js';
+import {
+  executeCosToolCall,
+  formatCosToolCatalog,
+  getCosToolCatalog,
+} from './cosToolRegistry.js';
 
 export const AGENT_CONTEXT_EXCLUSIONS = Object.freeze([
   'Privacy Vault and encrypted privacy records',
@@ -48,6 +55,7 @@ export function resolveAgentContextConfig(settings = {}) {
       enabled: false,
       profile: 'metadata',
       scopes: [...AGENT_CONTEXT_DEFAULT_SCOPES],
+      actions: { ...AGENT_CONTEXT_DEFAULT_ACTIONS },
       invalid: true,
     };
   }
@@ -55,6 +63,7 @@ export function resolveAgentContextConfig(settings = {}) {
     enabled: parsed.data.enabled ?? false,
     profile: parsed.data.profile ?? 'metadata',
     scopes: parsed.data.scopes ?? [...AGENT_CONTEXT_DEFAULT_SCOPES],
+    actions: normalizePortosSemanticToolGrants(parsed.data.actions),
     invalid: false,
   };
 }
@@ -211,6 +220,7 @@ const fitItems = (items, limit) => {
 const profileOutput = (config) => ({
   profile: config.profile,
   scopes: config.scopes,
+  actions: config.actions,
   limits: {
     defaultResults: AGENT_CONTEXT_LIMITS.defaultResults,
     maxResults: AGENT_CONTEXT_LIMITS.maxResults,
@@ -286,6 +296,16 @@ const successToolResult = (output) => ({
   structuredContent: output,
 });
 
+const semanticToolsForConfig = (config) => {
+  const catalog = getCosToolCatalog({ scope: 'agent', capabilities: config.actions });
+  return {
+    ...catalog,
+    tools: catalog.tools.filter((tool) => tool.granted === true),
+  };
+};
+
+const semanticMcpToolsForConfig = (config) => formatCosToolCatalog(semanticToolsForConfig(config), 'mcp').tools;
+
 export function createAgentContextContract({
   readSettings = getSettings,
   navigationCommands = NAV_COMMANDS,
@@ -325,20 +345,38 @@ export function createAgentContextContract({
       scopes: config.scopes,
       limits: profileOutput(config).limits,
       exclusions: [...AGENT_CONTEXT_EXCLUSIONS],
-      tools: advertiseAgentContextTools(config.scopes),
+      actions: config.actions,
+      tools: [
+        ...advertiseAgentContextTools(config.scopes),
+        ...semanticMcpToolsForConfig(config),
+      ],
     };
   };
 
-  const callTool = async (name, args, settings) => {
+  const callTool = async (name, args, settings, options = {}) => {
     const current = settings ?? await readSettings();
     const config = resolveAgentContextConfig(current);
     if (!config.enabled || config.invalid) return errorToolResult('Agent context is disabled or invalid.');
 
     const tool = AGENT_CONTEXT_TOOL_REGISTRY.find((candidate) => candidate.name === name);
-    if (!tool || !TOOL_HANDLERS[name]) return errorToolResult(`Unknown tool: ${cap(name, 120)}`);
-    if (tool.requiredScope && !config.scopes.includes(tool.requiredScope)) {
-      return errorToolResult(`Tool requires the ${tool.requiredScope} scope.`);
+    if (!tool || !TOOL_HANDLERS[name]) {
+      const semanticTool = semanticToolsForConfig(config).tools.find((candidate) =>
+        candidate.name === name || candidate.providerName === name || candidate.aliases.includes(name));
+      if (!semanticTool) return errorToolResult(`Unknown or ungranted tool: ${cap(name, 120)}`);
+      return executeCosToolCall({
+        call: {
+          requestId: options.requestId || `agent-mcp:${randomUUID()}`,
+          name: semanticTool.name,
+          arguments: args ?? {},
+        },
+        authority: { scope: 'agent', capabilities: config.actions },
+      }).then((result) => ({
+        ...(result.state === 'failed' ? { isError: true } : {}),
+        content: [{ type: 'text', text: JSON.stringify(result) }],
+        structuredContent: result,
+      })).catch((error) => errorToolResult(error?.message || 'Semantic tool call failed.'));
     }
+    if (tool.requiredScope && !config.scopes.includes(tool.requiredScope)) return errorToolResult(`Tool requires the ${tool.requiredScope} scope.`);
 
     const parsed = tool.inputSchema.safeParse(args ?? {});
     if (!parsed.success) {
@@ -357,4 +395,4 @@ export function createAgentContextContract({
 const defaultAgentContextContract = createAgentContextContract();
 
 export const getAgentContextManifest = (settings) => defaultAgentContextContract.getManifest(settings);
-export const callAgentContextTool = (name, args, settings) => defaultAgentContextContract.callTool(name, args, settings);
+export const callAgentContextTool = (name, args, settings, options) => defaultAgentContextContract.callTool(name, args, settings, options);

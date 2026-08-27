@@ -33,6 +33,13 @@ export const API_REGISTRY = [
     label: 'Voice / TTS',
     description: 'Text-to-speech synthesis and voice enumeration (Kokoro, Piper).',
     publicPrefixes: ['/api/voice/public/'],
+    publicBase: '/api/voice/public',
+    example: {
+      method: 'POST',
+      path: '/api/voice/public/synthesize',
+      body: { text: 'Hello from PortOS', engine: 'kokoro' },
+      output: 'speech.wav',
+    },
     settingsKey: 'voice',
     defaults: { exposed: false, requireAuth: false },
     docPaths: [
@@ -44,8 +51,14 @@ export const API_REGISTRY = [
   {
     id: 'sdapi',
     label: 'Image Gen (A1111-compatible)',
-    description: 'AUTOMATIC1111-compatible txt2img + model/sampler catalog.',
+    description: 'AUTOMATIC1111-compatible txt2img + model/sampler catalog. Also requires the Image Gen exposure toggle.',
     publicPrefixes: ['/sdapi/'],
+    publicBase: '/sdapi/v1',
+    example: {
+      method: 'POST',
+      path: '/sdapi/v1/txt2img',
+      body: { prompt: 'a neon city', steps: 20 },
+    },
     settingsKey: 'sdapi',
     defaults: { exposed: false, requireAuth: false },
     docPaths: [
@@ -54,6 +67,7 @@ export const API_REGISTRY = [
       '/sdapi/v1/samplers',
       '/sdapi/v1/options',
       '/sdapi/v1/progress',
+      '/sdapi/v1/portos/video-models',
     ],
   },
 ];

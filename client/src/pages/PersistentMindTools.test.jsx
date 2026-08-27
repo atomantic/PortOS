@@ -73,7 +73,7 @@ describe('PersistentMindTools', () => {
     await user.click(toggle);
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
-      { persistentMindCapabilities: { schemaVersion: 1, createTasks: true } },
+      { persistentMindCapabilities: { schemaVersion: 2, createTasks: true, readPortos: false, writePortos: false } },
       { silent: true },
     ));
     expect(await screen.findByText(/persistent-mind capabilities granted/)).toHaveTextContent('1 of 1');

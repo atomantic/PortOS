@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { randomUUID } from 'node:crypto';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
   AGENT_CONTEXT_PROTOCOL_VERSION,
@@ -126,8 +127,8 @@ router.post('/mcp', asyncHandler(async (req, res) => {
     res.json(jsonRpcResult(message.id, {
       protocolVersion,
       capabilities: { tools: { listChanged: false } },
-      serverInfo: { name: 'PortOS Agent Context', version: '1' },
-      instructions: 'Read-only, local-only context. Inspect context_profile before querying personal scopes.',
+      serverInfo: { name: 'PortOS Agent Tools', version: '1' },
+      instructions: 'Local-only MCP. Context tools remain read-only; semantic actions appear only when separately granted. Inspect context_profile before querying personal scopes.',
     }));
     return;
   }
@@ -158,7 +159,10 @@ router.post('/mcp', asyncHandler(async (req, res) => {
         enabled: true,
         profile: req.agentContextManifest.profile,
         scopes: req.agentContextManifest.scopes,
+        actions: req.agentContextManifest.actions,
       },
+    }, {
+      requestId: `agent-mcp:${req.get('idempotency-key') || randomUUID()}`,
     });
     res.json(jsonRpcResult(message.id, result));
     return;

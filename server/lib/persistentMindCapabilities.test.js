@@ -12,20 +12,22 @@ describe('persistent mind capabilities', () => {
   it('describes every persistent-mind grant from the capability contract', () => {
     expect(PERSISTENT_MIND_TOOL_CATALOG).toEqual([
       expect.objectContaining({ id: 'cos.create-task', capability: 'createTasks', defaultEnabled: false }),
+      expect.objectContaining({ id: 'portos.read', capability: 'readPortos', defaultEnabled: false }),
+      expect.objectContaining({ id: 'portos.write', capability: 'writePortos', defaultEnabled: false }),
     ]);
   });
 
   it('keeps task creation opt-in across fresh and legacy config', () => {
-    expect(createDefaultPersistentMindCapabilities()).toMatchObject({ createTasks: false });
-    expect(normalizePersistentMindCapabilities(null)).toMatchObject({ createTasks: false });
-    expect(normalizePersistentMindCapabilities({ createTasks: 'true' })).toMatchObject({ createTasks: false });
+    expect(createDefaultPersistentMindCapabilities()).toMatchObject({ createTasks: false, readPortos: false, writePortos: false });
+    expect(normalizePersistentMindCapabilities(null)).toMatchObject({ createTasks: false, readPortos: false, writePortos: false });
+    expect(normalizePersistentMindCapabilities({ createTasks: 'true', readPortos: 'true' })).toMatchObject({ createTasks: false, readPortos: false });
   });
 
   it('validates and merges the explicit task-creation grant', () => {
-    expect(persistentMindCapabilitiesSchema.safeParse({ createTasks: true }).success).toBe(true);
+    expect(persistentMindCapabilitiesSchema.safeParse({ createTasks: true, readPortos: true, writePortos: false }).success).toBe(true);
     expect(persistentMindCapabilitiesSchema.safeParse({ createTasks: true, shell: true }).success).toBe(false);
     expect(mergePersistentMindCapabilities({ createTasks: false }, { createTasks: true }))
-      .toMatchObject({ createTasks: true });
+      .toMatchObject({ createTasks: true, readPortos: false, writePortos: false });
   });
 
   it('accepts only bounded typed task requests and known PR dispositions', () => {

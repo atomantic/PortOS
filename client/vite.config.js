@@ -115,7 +115,11 @@ export default defineConfig(({ mode }) => {
       open: false,
       allowedHosts: ['.ts.net', 'localhost'],
       proxy: {
-        '/api': {
+        // Anchor the API namespace so client routes such as `/api-reference`
+        // stay on Vite. A plain `/api` context uses `startsWith` and would
+        // steal every client page whose first segment begins with those
+        // characters.
+        '^/api(?:/|$)': {
           target: API_TARGET,
           changeOrigin: true,
           secure: false

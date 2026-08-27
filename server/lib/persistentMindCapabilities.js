@@ -9,8 +9,12 @@
 import { z } from 'zod';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { PR_COMPLETION_VALUES } from './prDisposition.js';
+import {
+  normalizePortosSemanticToolGrants,
+  portosSemanticToolGrantsSchema,
+} from './cosToolContracts.js';
 
-export const PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION = 1;
+export const PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION = 2;
 
 // The persistent mind has a deliberately smaller surface than ordinary CoS
 // agents. Keep this catalog beside the capability schema so the API and the UI
@@ -30,11 +34,37 @@ export const PERSISTENT_MIND_TOOL_CATALOG = Object.freeze([
       'Plan & File Issue requests use the existing issue-only planning contract',
     ],
   }),
+  Object.freeze({
+    id: 'portos.read',
+    capability: 'readPortos',
+    name: 'Read PortOS context',
+    description: 'Use the bounded semantic catalog to inspect selected Brain, goals, journal, calendar, health, feed, catalog, and runtime context.',
+    kind: 'semantic-tools',
+    defaultEnabled: false,
+    guardrails: [
+      'Read-only adapters only',
+      'No arbitrary URL, route, SQL, shell, or filesystem access',
+      'Tool inputs and results are schema-validated and size-bounded',
+    ],
+  }),
+  Object.freeze({
+    id: 'portos.write',
+    capability: 'writePortos',
+    name: 'Update PortOS records',
+    description: 'Use selected typed actions for Brain capture, journal, goals, health logs, and feed read state.',
+    kind: 'semantic-tools',
+    defaultEnabled: false,
+    guardrails: [
+      'No process control, arbitrary code execution, external messaging, or paid generation',
+      'Every action is recorded in the persistent-mind trajectory',
+      'Calls use stable request ids so retries within the bounded retention window cannot repeat an accepted action',
+    ],
+  }),
 ]);
 
 export const PERSISTENT_MIND_TOOL_BOUNDARIES = Object.freeze([
   'No arbitrary shell or file-system access',
-  'No direct access to onboard tools such as image generation or browser controls',
+  'No raw HTTP proxy, browser controls, process control, paid generation, or external messaging',
   'No provider credentials or hidden reasoning tokens are exposed as tools',
 ]);
 
@@ -58,10 +88,10 @@ export const PERSISTENT_MIND_VALIDATION_CHECKS = Object.freeze([
   'reviewers',
 ]);
 
-export const persistentMindCapabilitiesSchema = z.object({
+export const persistentMindCapabilitiesSchema = portosSemanticToolGrantsSchema.extend({
   schemaVersion: z.literal(PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION).optional(),
   createTasks: z.boolean().optional(),
-}).strict();
+});
 
 export const persistentMindTaskRequestSchema = z.object({
   description: z.string().trim().min(1).max(PERSISTENT_MIND_TASK_LIMITS.descriptionChars),
@@ -100,14 +130,18 @@ export function createDefaultPersistentMindCapabilities() {
   return {
     schemaVersion: PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION,
     createTasks: false,
+    readPortos: false,
+    writePortos: false,
   };
 }
 
 export function normalizePersistentMindCapabilities(raw) {
   const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const semanticGrants = normalizePortosSemanticToolGrants(source);
   return {
     schemaVersion: PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION,
     createTasks: source.createTasks === true,
+    ...semanticGrants,
   };
 }
 

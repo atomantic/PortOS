@@ -237,7 +237,7 @@ Everything you need to manage your dev environment without leaving the browser.
 - **Flows** — Rendered architecture/data-flow diagrams of how PortOS subsystems and integrations actually connect
 - **Video Downloader** — Pull clips from YouTube/X via `yt-dlp` into the media library
 - **Local LLM Playground** — Side-by-side comparison of local Ollama/LM Studio models with TTFT and tokens/sec
-- **API Access** — Public REST surface (OpenAPI/Swagger) for the TTS, image, and voice endpoints, with explicit auth gating
+- **API Explorer** — Searchable complete HTTP and Socket.IO inventories, rendered OpenAPI 3.1, AsyncAPI 3, and governed agent-tool contracts; external TTS/image exposure remains explicitly gated
 - **Templates** — Scaffold new apps from pre-built templates wired up to your AI providers
 - **Review Hub** — Single inbox for actionable items (CoS approvals, alerts, todos, briefings) across every PortOS subsystem
 
@@ -425,7 +425,7 @@ Full catalog (including design plans, ADRs, and research notes): [docs/README.md
 - [Voice Mode](./docs/features/voice.md) — local STT/TTS/LLM voice assistant setup
 - [Chief of Staff](./docs/features/chief-of-staff.md) — Autonomous agent orchestrator
 - [Operational Goals](./docs/GOALS_OPERATIONAL.md) — Runtime priorities the CoS reads when generating work
-- [Agent Context](./docs/features/agent-context.md) — Per-task execution context and history tracking
+- [Agent Tools (MCP)](./docs/features/agent-context.md) — Loopback-only bounded context plus independently granted semantic PortOS tools for local CoS agents
 - [Agent Skills](./docs/features/agent-skills.md) — Task-type-specific agent prompts
 - [Claude on Ollama](./docs/features/claude-ollama.md) — Run agent tasks on a local model
 - [CoS Agent Runner](./docs/features/cos-agent-runner.md) — Isolated agent process architecture

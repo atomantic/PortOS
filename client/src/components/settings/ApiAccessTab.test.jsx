@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 
 vi.mock('../../services/apiSystem', () => ({
   getSettings: vi.fn(),
   updateSettings: vi.fn(),
   getOpenApiSpec: vi.fn(),
+  getApiCatalog: vi.fn(),
 }));
 vi.mock('../ui/Toast', () => ({
   default: Object.assign(vi.fn(), {
@@ -14,17 +16,29 @@ vi.mock('../ui/Toast', () => ({
 // copyToClipboard is unused in these tests but imported by the component.
 vi.mock('../../lib/clipboard', () => ({ copyToClipboard: vi.fn() }));
 
-import { getSettings, updateSettings, getOpenApiSpec } from '../../services/apiSystem';
+import { getApiCatalog, getSettings, updateSettings, getOpenApiSpec } from '../../services/apiSystem';
 import { ApiAccessTab } from './ApiAccessTab';
 
 beforeEach(() => {
   vi.clearAllMocks();
   getOpenApiSpec.mockResolvedValue({ paths: {} });
+  getApiCatalog.mockResolvedValue({
+    externallyExposableApis: [
+      {
+        id: 'voice', label: 'Voice / TTS', description: 'Text-to-speech synthesis.', publicBase: '/api/voice/public',
+        example: { method: 'POST', path: '/api/voice/public/synthesize', body: { text: 'Hello from PortOS' }, output: 'speech.wav' },
+      },
+      {
+        id: 'sdapi', label: 'Image Gen (A1111-compatible)', description: 'Text-to-image generation.', publicBase: '/sdapi/v1',
+        example: { method: 'POST', path: '/sdapi/v1/txt2img', body: { prompt: 'a neon city' } },
+      },
+    ],
+  });
   updateSettings.mockResolvedValue({});
 });
 
 const renderTab = async () => {
-  render(<ApiAccessTab />);
+  render(<MemoryRouter><ApiAccessTab /></MemoryRouter>);
   // Wait for the loading spinner to clear (cards render post-load).
   await waitFor(() => expect(screen.getByText('Voice / TTS')).toBeTruthy());
 };
@@ -110,6 +124,41 @@ describe('ApiAccessTab', () => {
     expect(screen.getAllByText('not exposed').length).toBe(2);
   });
 
+  it('persists registry settings by settingsKey instead of display id', async () => {
+    getSettings.mockResolvedValue({ apiAccess: { voice: { exposed: true, requireAuth: false } } });
+    getApiCatalog.mockResolvedValue({
+      externallyExposableApis: [{
+        id: 'voice-display', settingsKey: 'voice', label: 'Voice / TTS', description: 'Text-to-speech synthesis.',
+        publicBase: '/api/voice/public', example: { method: 'GET', path: '/api/voice/public/voices' },
+      }],
+    });
+    await renderTab();
+    expect(screen.getByLabelText('Expose on the network').checked).toBe(true);
+    fireEvent.click(screen.getByLabelText('Require auth (password)'));
+    await waitFor(() => expect(updateSettings).toHaveBeenCalled());
+    expect(updateSettings.mock.calls[0][0].apiAccess).toMatchObject({
+      voice: { exposed: true, requireAuth: true },
+    });
+    expect(updateSettings.mock.calls[0][0].apiAccess['voice-display']).toBeUndefined();
+  });
+
+  it('distinguishes a failed catalog load from an empty registry and supports retry', async () => {
+    getSettings.mockResolvedValue({});
+    getApiCatalog
+      .mockRejectedValueOnce(new Error('temporarily offline'))
+      .mockResolvedValueOnce({
+        externallyExposableApis: [{
+          id: 'voice', settingsKey: 'voice', label: 'Voice / TTS', description: 'Text-to-speech synthesis.',
+          publicBase: '/api/voice/public', example: { method: 'GET', path: '/api/voice/public/voices' },
+        }],
+      });
+    render(<MemoryRouter><ApiAccessTab /></MemoryRouter>);
+    expect(await screen.findByRole('alert')).toHaveTextContent('temporarily offline');
+    expect(screen.queryByText('Voice / TTS')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Voice / TTS')).toBeTruthy();
+  });
+
   it('defaults agent context to disabled metadata with minimal scopes', async () => {
     getSettings.mockResolvedValue({});
     await renderTab();
@@ -118,6 +167,8 @@ describe('ApiAccessTab', () => {
     expect(screen.getByLabelText('Workspaces').checked).toBe(true);
     expect(screen.getByLabelText('Brain').checked).toBe(false);
     expect(screen.getByLabelText('Disclosure profile').value).toBe('metadata');
+    expect(screen.getByLabelText('Allow semantic PortOS reads').checked).toBe(false);
+    expect(screen.getByLabelText('Allow semantic PortOS updates').checked).toBe(false);
   });
 
   it('persists the complete agent-context opt-in configuration', async () => {
@@ -129,6 +180,23 @@ describe('ApiAccessTab', () => {
         enabled: true,
         profile: 'metadata',
         scopes: ['navigation', 'workspaces'],
+        actions: { readPortos: false, writePortos: false },
+      },
+    }, { silent: true }));
+  });
+
+  it('persists semantic MCP grants independently of context scopes', async () => {
+    getSettings.mockResolvedValue({
+      agentContext: { enabled: true, profile: 'metadata', scopes: ['navigation'], actions: { readPortos: false, writePortos: false } },
+    });
+    await renderTab();
+    fireEvent.click(screen.getByLabelText('Allow semantic PortOS reads'));
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({
+      agentContext: {
+        enabled: true,
+        profile: 'metadata',
+        scopes: ['navigation'],
+        actions: { readPortos: true, writePortos: false },
       },
     }, { silent: true }));
   });

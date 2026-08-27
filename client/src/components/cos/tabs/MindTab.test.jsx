@@ -258,7 +258,7 @@ describe('MindTab', () => {
     await user.click(taskAccess);
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
-      { persistentMindCapabilities: { schemaVersion: 1, createTasks: true } },
+      { persistentMindCapabilities: { schemaVersion: 2, createTasks: true, readPortos: false, writePortos: false } },
       { silent: true },
     ));
     expect(screen.getByText(/code review then merge/i)).toBeInTheDocument();

@@ -1,0 +1,4969 @@
+{
+  "schemaVersion": 1,
+  "generatedFrom": [
+    "server/**/*.js",
+    "!server/cos-runner/**",
+    "client/src/**/*.{js,jsx}"
+  ],
+  "events": [
+    {
+      "event": "agent:btw",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "server/services/cosRunnerClient.js",
+          "line": 159
+        }
+      ]
+    },
+    {
+      "event": "agent:completed",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "server/services/cosRunnerClient.js",
+          "line": 157
+        }
+      ]
+    },
+    {
+      "event": "agent:error",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "server/services/cosRunnerClient.js",
+          "line": 158
+        }
+      ]
+    },
+    {
+      "event": "agent:output",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "server/services/cosRunnerClient.js",
+          "line": 156
+        }
+      ]
+    },
+    {
+      "event": "agents:account:changed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 418
+        }
+      ]
+    },
+    {
+      "event": "agents:activity",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 425
+        }
+      ]
+    },
+    {
+      "event": "agents:activity:updated",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 426
+        }
+      ]
+    },
+    {
+      "event": "agents:orphaned",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "server/services/cosRunnerClient.js",
+          "line": 164
+        }
+      ]
+    },
+    {
+      "event": "agents:personality:changed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 415
+        }
+      ]
+    },
+    {
+      "event": "agents:schedule:changed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 421
+        }
+      ]
+    },
+    {
+      "event": "agents:schedule:execute",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 422
+        }
+      ]
+    },
+    {
+      "event": "agents:subscribe",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/hooks/useMoltworldWs.js",
+          "line": 45
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/services/socket.js",
+          "line": 123
+        }
+      ]
+    },
+    {
+      "event": "agents:subscribed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 123
+        }
+      ]
+    },
+    {
+      "event": "agents:unsubscribe",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "server/services/socket.js",
+          "line": 123
+        }
+      ]
+    },
+    {
+      "event": "agents:unsubscribed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 123
+        }
+      ]
+    },
+    {
+      "event": "ai:status",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useAIStatusNotifications.js",
+          "line": 195
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useOpenWorldData.js",
+          "line": 320
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 288
+        }
+      ]
+    },
+    {
+      "event": "app:deploy",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/hooks/useAppDeploy.js",
+          "line": 61
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/apps.js",
+          "line": 242
+        }
+      ]
+    },
+    {
+      "event": "app:deploy:{type}",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/apps.js",
+          "line": 248
+        }
+      ]
+    },
+    {
+      "event": "app:deploy:complete",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useAppDeploy.js",
+          "line": 60
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/apps.js",
+          "line": 256
+        }
+      ]
+    },
+    {
+      "event": "app:deploy:error",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useAppDeploy.js",
+          "line": 59
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/apps.js",
+          "line": 253
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/apps.js",
+          "line": 260
+        }
+      ]
+    },
+    {
+      "event": "app:deploy:output",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useAppDeploy.js",
+          "line": 57
+        }
+      ]
+    },
+    {
+      "event": "app:deploy:status",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useAppDeploy.js",
+          "line": 58
+        }
+      ]
+    },
+    {
+      "event": "app:operations:active",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useAppOperation.js",
+          "line": 134
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/apps.js",
+          "line": 33
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/apps.js",
+          "line": 39
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/apps.js",
+          "line": 238
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/apps.js",
+          "line": 240
+        }
+      ]
+    },
+    {
+      "event": "app:operations:list",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/hooks/useAppOperation.js",
+          "line": 106
+        },
+        {
+          "direction": "client-to-server",
+          "source": "client/src/hooks/useAppOperation.js",
+          "line": 132
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/apps.js",
+          "line": 237
+        }
+      ]
+    },
+    {
+      "event": "app:standardize",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/apps.js",
+          "line": 141
+        }
+      ]
+    },
+    {
+      "event": "app:standardize:complete",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useAppOperation.js",
+          "line": 140
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/apps.js",
+          "line": 216
+        }
+      ]
+    },
+    {
+      "event": "app:standardize:error",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useAppOperation.js",
+          "line": 139
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/apps.js",
+          "line": 149
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/apps.js",
+          "line": 155
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/apps.js",
+          "line": 161
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/apps.js",
+          "line": 184
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/apps.js",
+          "line": 203
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/apps.js",
+          "line": 230
+        }
+      ]
+    },
+    {
+      "event": "app:standardize:step",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useAppOperation.js",
+          "line": 138
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/apps.js",
+          "line": 175
+        }
+      ]
+    },
+    {
+      "event": "app:update",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/apps.js",
+          "line": 91
+        }
+      ]
+    },
+    {
+      "event": "app:update:complete",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useAppOperation.js",
+          "line": 137
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/apps.js",
+          "line": 128
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/apps.js",
+          "line": 135
+        }
+      ]
+    },
+    {
+      "event": "app:update:error",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useAppOperation.js",
+          "line": 136
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/apps.js",
+          "line": 99
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/apps.js",
+          "line": 105
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/apps.js",
+          "line": 123
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/apps.js",
+          "line": 134
+        }
+      ]
+    },
+    {
+      "event": "app:update:step",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useAppOperation.js",
+          "line": 135
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/apps.js",
+          "line": 119
+        }
+      ]
+    },
+    {
+      "event": "apps:changed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/apps/AppDetailView.jsx",
+          "line": 101
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useOpenWorldData.js",
+          "line": 203
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useSidebarApps.js",
+          "line": 26
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/Apps.jsx",
+          "line": 64
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/ChiefOfStaff.jsx",
+          "line": 442
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/Dashboard.jsx",
+          "line": 140
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 392
+        }
+      ]
+    },
+    {
+      "event": "audio-gen:completed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 580
+        }
+      ]
+    },
+    {
+      "event": "audio-gen:failed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 583
+        }
+      ]
+    },
+    {
+      "event": "audio-gen:progress",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 577
+        }
+      ]
+    },
+    {
+      "event": "audio-gen:started",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 574
+        }
+      ]
+    },
+    {
+      "event": "backup:completed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useOpenWorldData.js",
+          "line": 255
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/backup.js",
+          "line": 331
+        }
+      ]
+    },
+    {
+      "event": "backup:failed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/backup.js",
+          "line": 292
+        }
+      ]
+    },
+    {
+      "event": "backup:started",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useOpenWorldData.js",
+          "line": 254
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/backup.js",
+          "line": 298
+        }
+      ]
+    },
+    {
+      "event": "brain:classified",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/brain/tabs/InboxTab.jsx",
+          "line": 105
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 433
+        }
+      ]
+    },
+    {
+      "event": "build:id",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/services/socket.js",
+          "line": 62
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 107
+        }
+      ]
+    },
+    {
+      "event": "calendar:google:autoconfig",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/googleOAuthAutoConfig.js",
+          "line": 113
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/googleOAuthAutoConfig.js",
+          "line": 120
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/googleOAuthAutoConfig.js",
+          "line": 136
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/googleOAuthAutoConfig.js",
+          "line": 540
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/googleOAuthAutoConfig.js",
+          "line": 579
+        }
+      ]
+    },
+    {
+      "event": "calendar:sync:completed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/calendar/AgendaTab.jsx",
+          "line": 69
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/calendar/DayView.jsx",
+          "line": 123
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/calendar/MonthView.jsx",
+          "line": 61
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/calendar/SyncTab.jsx",
+          "line": 42
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/calendar/WeekView.jsx",
+          "line": 138
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/calendarGoogleApiSync.js",
+          "line": 70
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/calendarGoogleSync.js",
+          "line": 140
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/calendarGoogleSync.js",
+          "line": 209
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/calendarSync.js",
+          "line": 231
+        }
+      ]
+    },
+    {
+      "event": "calendar:sync:event",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/calendarApiSync.js",
+          "line": 81
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/calendarApiSync.js",
+          "line": 149
+        }
+      ]
+    },
+    {
+      "event": "calendar:sync:failed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/calendar/SyncTab.jsx",
+          "line": 43
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/calendarGoogleSync.js",
+          "line": 217
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/calendarSync.js",
+          "line": 240
+        }
+      ]
+    },
+    {
+      "event": "calendar:sync:progress",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/calendar/SyncTab.jsx",
+          "line": 44
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/calendarGoogleApiSync.js",
+          "line": 30
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/calendarGoogleSync.js",
+          "line": 245
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/calendarGoogleSync.js",
+          "line": 307
+        }
+      ]
+    },
+    {
+      "event": "calendar:sync:started",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/calendar/SyncTab.jsx",
+          "line": 41
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/calendarGoogleApiSync.js",
+          "line": 18
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/calendarGoogleSync.js",
+          "line": 167
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/calendarSync.js",
+          "line": 160
+        }
+      ]
+    },
+    {
+      "event": "catalog:extract:progress",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/CatalogIngest.jsx",
+          "line": 144
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 250
+        }
+      ]
+    },
+    {
+      "event": "command:{commandId}:complete",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/RunnerPage.jsx",
+          "line": 131
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/routes/commands.js",
+          "line": 58
+        }
+      ]
+    },
+    {
+      "event": "command:{commandId}:data",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/RunnerPage.jsx",
+          "line": 130
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/routes/commands.js",
+          "line": 55
+        }
+      ]
+    },
+    {
+      "event": "connect",
+      "directions": [
+        "client-to-server",
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/apps/tabs/IssuesTab.jsx",
+          "line": 202
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/apps/tabs/PullRequestsTab.jsx",
+          "line": 116
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/cos/tabs/MindTab.jsx",
+          "line": 285
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useAppOperation.js",
+          "line": 141
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useImporterProgress.js",
+          "line": 69
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useMoltworldWs.js",
+          "line": 47
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useOpenWorldData.js",
+          "line": 200
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useShellSession.js",
+          "line": 849
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useSocket.js",
+          "line": 15
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/ChiefOfStaff.jsx",
+          "line": 314
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/services/socket.js",
+          "line": 18
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/services/socket.js",
+          "line": 63
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/services/voiceClient.js",
+          "line": 556
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/lib/connectivity.js",
+          "line": 47
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/services/cosRunnerClient.js",
+          "line": 133
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/services/peerSocketRelay.js",
+          "line": 46
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/services/remoteDesktop.js",
+          "line": 47
+        }
+      ]
+    },
+    {
+      "event": "connect_error",
+      "directions": [
+        "client-to-server",
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/services/socket.js",
+          "line": 26
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/services/cosRunnerClient.js",
+          "line": 149
+        }
+      ]
+    },
+    {
+      "event": "cos:agent:btw",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 333
+        }
+      ]
+    },
+    {
+      "event": "cos:agent:completed",
+      "directions": [
+        "client-to-server",
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/apps/tabs/IssuesTab.jsx",
+          "line": 262
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/apps/tabs/PullRequestsTab.jsx",
+          "line": 156
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/WhileAwayWidget.jsx",
+          "line": 88
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useAgentFeedbackToast.jsx",
+          "line": 205
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useOpenWorldData.js",
+          "line": 219
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/ChiefOfStaff.jsx",
+          "line": 405
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/services/peerSocketRelay.js",
+          "line": 89
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 331
+        }
+      ]
+    },
+    {
+      "event": "cos:agent:output",
+      "directions": [
+        "client-to-server",
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/feature-agents/OutputTab.jsx",
+          "line": 44
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/ChiefOfStaff.jsx",
+          "line": 386
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/services/peerSocketRelay.js",
+          "line": 84
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 332
+        }
+      ]
+    },
+    {
+      "event": "cos:agent:spawned",
+      "directions": [
+        "client-to-server",
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/apps/tabs/IssuesTab.jsx",
+          "line": 261
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/apps/tabs/PullRequestsTab.jsx",
+          "line": 155
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useOpenWorldData.js",
+          "line": 209
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/ChiefOfStaff.jsx",
+          "line": 367
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/services/peerSocketRelay.js",
+          "line": 61
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 329
+        }
+      ]
+    },
+    {
+      "event": "cos:agent:updated",
+      "directions": [
+        "client-to-server",
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useOpenWorldData.js",
+          "line": 214
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/ChiefOfStaff.jsx",
+          "line": 375
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/services/peerSocketRelay.js",
+          "line": 72
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 330
+        }
+      ]
+    },
+    {
+      "event": "cos:evaluation",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 348
+        }
+      ]
+    },
+    {
+      "event": "cos:feature-agent:output",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/feature-agents/OutputTab.jsx",
+          "line": 45
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 353
+        }
+      ]
+    },
+    {
+      "event": "cos:feature-agent:run-complete",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/FeatureAgentDetail.jsx",
+          "line": 57
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/FeatureAgents.jsx",
+          "line": 26
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 354
+        }
+      ]
+    },
+    {
+      "event": "cos:feature-agent:status",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/FeatureAgentDetail.jsx",
+          "line": 56
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/FeatureAgents.jsx",
+          "line": 25
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 352
+        }
+      ]
+    },
+    {
+      "event": "cos:health:check",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/ChiefOfStaff.jsx",
+          "line": 419
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 344
+        }
+      ]
+    },
+    {
+      "event": "cos:health:critical",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 345
+        }
+      ]
+    },
+    {
+      "event": "cos:log",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useOpenWorldData.js",
+          "line": 228
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/ChiefOfStaff.jsx",
+          "line": 436
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 316
+        }
+      ]
+    },
+    {
+      "event": "cos:memory:approval-needed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 341
+        }
+      ]
+    },
+    {
+      "event": "cos:memory:created",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 337
+        }
+      ]
+    },
+    {
+      "event": "cos:memory:deleted",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 339
+        }
+      ]
+    },
+    {
+      "event": "cos:memory:extracted",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 340
+        }
+      ]
+    },
+    {
+      "event": "cos:memory:updated",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 338
+        }
+      ]
+    },
+    {
+      "event": "cos:mind:event",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/cos/tabs/MindTab.jsx",
+          "line": 286
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 215
+        }
+      ]
+    },
+    {
+      "event": "cos:mind:status",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/cos/tabs/MindTab.jsx",
+          "line": 287
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 334
+        }
+      ]
+    },
+    {
+      "event": "cos:schedule:on-demand-empty",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useOnDemandTaskToast.js",
+          "line": 112
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 363
+        }
+      ]
+    },
+    {
+      "event": "cos:status",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useOpenWorldData.js",
+          "line": 233
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/ChiefOfStaff.jsx",
+          "line": 324
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 313
+        }
+      ]
+    },
+    {
+      "event": "cos:subscribe",
+      "directions": [
+        "client-to-server",
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/components/apps/tabs/IssuesTab.jsx",
+          "line": 200
+        },
+        {
+          "direction": "client-to-server",
+          "source": "client/src/components/apps/tabs/PullRequestsTab.jsx",
+          "line": 114
+        },
+        {
+          "direction": "client-to-server",
+          "source": "client/src/hooks/useAgentFeedbackToast.jsx",
+          "line": 156
+        },
+        {
+          "direction": "client-to-server",
+          "source": "client/src/hooks/useOnDemandTaskToast.js",
+          "line": 36
+        },
+        {
+          "direction": "client-to-server",
+          "source": "client/src/hooks/useOpenWorldData.js",
+          "line": 196
+        },
+        {
+          "direction": "client-to-server",
+          "source": "client/src/pages/ChiefOfStaff.jsx",
+          "line": 305
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/peerSocketRelay.js",
+          "line": 48
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/services/socket.js",
+          "line": 120
+        }
+      ]
+    },
+    {
+      "event": "cos:subscribed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 120
+        }
+      ]
+    },
+    {
+      "event": "cos:task:ready",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 349
+        }
+      ]
+    },
+    {
+      "event": "cos:tasks:changed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/apps/tabs/IssuesTab.jsx",
+          "line": 258
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/apps/tabs/PullRequestsTab.jsx",
+          "line": 152
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/ChiefOfStaff.jsx",
+          "line": 349
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 322
+        }
+      ]
+    },
+    {
+      "event": "cos:tasks:cos:changed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useOpenWorldData.js",
+          "line": 261
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/ChiefOfStaff.jsx",
+          "line": 338
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 326
+        }
+      ]
+    },
+    {
+      "event": "cos:tasks:user:added",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 324
+        }
+      ]
+    },
+    {
+      "event": "cos:tasks:user:changed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/apps/tabs/IssuesTab.jsx",
+          "line": 259
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/apps/tabs/PullRequestsTab.jsx",
+          "line": 153
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/ChiefOfStaff.jsx",
+          "line": 329
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 323
+        }
+      ]
+    },
+    {
+      "event": "cos:tasks:user:completed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/apps/tabs/IssuesTab.jsx",
+          "line": 260
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/apps/tabs/PullRequestsTab.jsx",
+          "line": 154
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 325
+        }
+      ]
+    },
+    {
+      "event": "cos:unsubscribe",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "server/services/socket.js",
+          "line": 120
+        }
+      ]
+    },
+    {
+      "event": "cos:unsubscribed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 120
+        }
+      ]
+    },
+    {
+      "event": "cos:watcher:started",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 357
+        }
+      ]
+    },
+    {
+      "event": "cos:watcher:stopped",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 358
+        }
+      ]
+    },
+    {
+      "event": "database:progress",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/settings/DatabaseTab.jsx",
+          "line": 212
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/dbAdmin.js",
+          "line": 48
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/dbAdmin.js",
+          "line": 215
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/dbAdmin.js",
+          "line": 429
+        }
+      ]
+    },
+    {
+      "event": "detect:complete",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/streamingDetect.js",
+          "line": 1188
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/streamingDetect.js",
+          "line": 1195
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/streamingDetect.js",
+          "line": 1503
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/apps.js",
+          "line": 61
+        }
+      ]
+    },
+    {
+      "event": "detect:start",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/apps.js",
+          "line": 51
+        }
+      ]
+    },
+    {
+      "event": "detect:step",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/streamingDetect.js",
+          "line": 1163
+        }
+      ]
+    },
+    {
+      "event": "digital-twin:test-progress",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/routes/digital-twin/tests.js",
+          "line": 66
+        }
+      ]
+    },
+    {
+      "event": "disconnect",
+      "directions": [
+        "client-to-server",
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/apps/tabs/UpdateTab.jsx",
+          "line": 166
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useShellSession.js",
+          "line": 850
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useSocket.js",
+          "line": 16
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/services/socket.js",
+          "line": 22
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/services/voiceClient.js",
+          "line": 445
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/routes/scaffoldPortOS.js",
+          "line": 315
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/services/cosRunnerClient.js",
+          "line": 144
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/services/peerSocketRelay.js",
+          "line": 54
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/services/socket.js",
+          "line": 152
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/voice.js",
+          "line": 353
+        }
+      ]
+    },
+    {
+      "event": "error",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "server/lib/connectivity.js",
+          "line": 49
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/services/remoteDesktop.js",
+          "line": 49
+        }
+      ]
+    },
+    {
+      "event": "error:notified",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useErrorNotifications.js",
+          "line": 85
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 377
+        }
+      ]
+    },
+    {
+      "event": "error:occurred",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/lib/errorHandler.js",
+          "line": 309
+        }
+      ]
+    },
+    {
+      "event": "error:recover",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/hooks/useErrorNotifications.js",
+          "line": 15
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/services/socket.js",
+          "line": 129
+        }
+      ]
+    },
+    {
+      "event": "error:recover:error",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 146
+        }
+      ]
+    },
+    {
+      "event": "error:recover:requested",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useErrorNotifications.js",
+          "line": 87
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 137
+        }
+      ]
+    },
+    {
+      "event": "error:server",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/apps.js",
+          "line": 60
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/apps.js",
+          "line": 86
+        }
+      ]
+    },
+    {
+      "event": "errors:subscribe",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/hooks/useErrorNotifications.js",
+          "line": 24
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/services/socket.js",
+          "line": 121
+        }
+      ]
+    },
+    {
+      "event": "errors:subscribed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 121
+        }
+      ]
+    },
+    {
+      "event": "errors:unsubscribe",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/hooks/useErrorNotifications.js",
+          "line": 90
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/services/socket.js",
+          "line": 121
+        }
+      ]
+    },
+    {
+      "event": "errors:unsubscribed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 121
+        }
+      ]
+    },
+    {
+      "event": "genome:clinvar-progress",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/routes/genome.js",
+          "line": 105
+        }
+      ]
+    },
+    {
+      "event": "health:xml:complete",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/meatspace/tabs/SettingsTab.jsx",
+          "line": 31
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/appleHealthXml.js",
+          "line": 321
+        }
+      ]
+    },
+    {
+      "event": "health:xml:progress",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/meatspace/tabs/SettingsTab.jsx",
+          "line": 30
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/appleHealthXml.js",
+          "line": 285
+        }
+      ]
+    },
+    {
+      "event": "image-gen:canceled",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/writers-room/LiveRenderPanel.jsx",
+          "line": 143
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/writers-room/SceneCard.jsx",
+          "line": 159
+        }
+      ]
+    },
+    {
+      "event": "image-gen:completed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/writers-room/LiveRenderPanel.jsx",
+          "line": 137
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/writers-room/SceneCard.jsx",
+          "line": 157
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useImageGenProgress.js",
+          "line": 53
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useImageGenQueue.js",
+          "line": 180
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useMediaCompletionRefresh.js",
+          "line": 25
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/CharacterSheet.jsx",
+          "line": 228
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 549
+        }
+      ]
+    },
+    {
+      "event": "image-gen:failed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/writers-room/LiveRenderPanel.jsx",
+          "line": 138
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/writers-room/SceneCard.jsx",
+          "line": 158
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useImageGenProgress.js",
+          "line": 54
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useImageGenQueue.js",
+          "line": 181
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/CharacterSheet.jsx",
+          "line": 229
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 552
+        }
+      ]
+    },
+    {
+      "event": "image-gen:progress",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/writers-room/SceneCard.jsx",
+          "line": 156
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useImageGenProgress.js",
+          "line": 52
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useImageGenQueue.js",
+          "line": 179
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/CharacterSheet.jsx",
+          "line": 227
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 546
+        }
+      ]
+    },
+    {
+      "event": "image-gen:started",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/writers-room/SceneCard.jsx",
+          "line": 155
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useImageGenProgress.js",
+          "line": 51
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useImageGenQueue.js",
+          "line": 178
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/CharacterSheet.jsx",
+          "line": 226
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 543
+        }
+      ]
+    },
+    {
+      "event": "importer:progress",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useImporterProgress.js",
+          "line": 58
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 114
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 241
+        }
+      ]
+    },
+    {
+      "event": "importer:progress:replay",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/hooks/useImporterProgress.js",
+          "line": 67
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/services/socket.js",
+          "line": 112
+        }
+      ]
+    },
+    {
+      "event": "instances:peer:agent:completed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/instances/PeerAgentsSection.jsx",
+          "line": 63
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 481
+        }
+      ]
+    },
+    {
+      "event": "instances:peer:agent:output",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/instances/PeerAgentsSection.jsx",
+          "line": 62
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 480
+        }
+      ]
+    },
+    {
+      "event": "instances:peer:agent:spawned",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/instances/PeerAgentsSection.jsx",
+          "line": 60
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 478
+        }
+      ]
+    },
+    {
+      "event": "instances:peer:agent:updated",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/instances/PeerAgentsSection.jsx",
+          "line": 61
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 479
+        }
+      ]
+    },
+    {
+      "event": "instances:peer:agents:updated",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/instances/PeerAgentsSection.jsx",
+          "line": 59
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 477
+        }
+      ]
+    },
+    {
+      "event": "instances:peers:updated",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/DataManager.jsx",
+          "line": 55
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/Instances.jsx",
+          "line": 1422
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 466
+        }
+      ]
+    },
+    {
+      "event": "instances:subscribe",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/pages/Instances.jsx",
+          "line": 1418
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/services/socket.js",
+          "line": 124
+        }
+      ]
+    },
+    {
+      "event": "instances:subscribed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 124
+        }
+      ]
+    },
+    {
+      "event": "instances:unsubscribe",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/pages/Instances.jsx",
+          "line": 1430
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/services/socket.js",
+          "line": 124
+        }
+      ]
+    },
+    {
+      "event": "instances:unsubscribed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 124
+        }
+      ]
+    },
+    {
+      "event": "legacy-export:completed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/digital-twin/tabs/LegacyExportTab.jsx",
+          "line": 53
+        }
+      ]
+    },
+    {
+      "event": "legacy-export:progress",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/digital-twin/tabs/LegacyExportTab.jsx",
+          "line": 52
+        }
+      ]
+    },
+    {
+      "event": "llamaServer:download",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/settings/LocalLlmTab.jsx",
+          "line": 354
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/routes/localLlm.js",
+          "line": 671
+        }
+      ]
+    },
+    {
+      "event": "localLlm:progress",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/settings/AssessmentSweepPanel.jsx",
+          "line": 392
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/settings/LocalLlmTab.jsx",
+          "line": 423
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/settings/LocalModelAssessments.jsx",
+          "line": 840
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/settings/ModelCapabilityTests.jsx",
+          "line": 718
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/routes/localLlm.js",
+          "line": 95
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/routes/localLlm.js",
+          "line": 516
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/routes/localLlm.js",
+          "line": 549
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/routes/localLlm.js",
+          "line": 610
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/routes/localLlm.js",
+          "line": 708
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/routes/localLlm.js",
+          "line": 719
+        }
+      ]
+    },
+    {
+      "event": "logs:close",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/logs.js",
+          "line": 148
+        }
+      ]
+    },
+    {
+      "event": "logs:error",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useProcessLogs.js",
+          "line": 77
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/logs.js",
+          "line": 140
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/logs.js",
+          "line": 157
+        }
+      ]
+    },
+    {
+      "event": "logs:line",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useProcessLogs.js",
+          "line": 75
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/logs.js",
+          "line": 113
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/logs.js",
+          "line": 129
+        }
+      ]
+    },
+    {
+      "event": "logs:subscribe",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/hooks/useProcessLogs.js",
+          "line": 59
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/logs.js",
+          "line": 54
+        }
+      ]
+    },
+    {
+      "event": "logs:subscribed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useProcessLogs.js",
+          "line": 76
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/logs.js",
+          "line": 153
+        }
+      ]
+    },
+    {
+      "event": "logs:unsubscribe",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/hooks/useProcessLogs.js",
+          "line": 80
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/logs.js",
+          "line": 161
+        }
+      ]
+    },
+    {
+      "event": "logs:unsubscribed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/logs.js",
+          "line": 166
+        }
+      ]
+    },
+    {
+      "event": "loop:created",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 525
+        }
+      ]
+    },
+    {
+      "event": "loop:deleted",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 528
+        }
+      ]
+    },
+    {
+      "event": "loop:iteration:complete",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/Loops.jsx",
+          "line": 214
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 531
+        }
+      ]
+    },
+    {
+      "event": "loop:iteration:error",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/Loops.jsx",
+          "line": 216
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 532
+        }
+      ]
+    },
+    {
+      "event": "loop:iteration:start",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/Loops.jsx",
+          "line": 215
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 530
+        }
+      ]
+    },
+    {
+      "event": "loop:output",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/Loops.jsx",
+          "line": 213
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 533
+        }
+      ]
+    },
+    {
+      "event": "loop:resumed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 527
+        }
+      ]
+    },
+    {
+      "event": "loop:stopped",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 526
+        }
+      ]
+    },
+    {
+      "event": "loop:updated",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 529
+        }
+      ]
+    },
+    {
+      "event": "loops:subscribe",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/pages/Loops.jsx",
+          "line": 364
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/services/socket.js",
+          "line": 125
+        }
+      ]
+    },
+    {
+      "event": "loops:subscribed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 125
+        }
+      ]
+    },
+    {
+      "event": "loops:unsubscribe",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/pages/Loops.jsx",
+          "line": 370
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/services/socket.js",
+          "line": 125
+        }
+      ]
+    },
+    {
+      "event": "loops:unsubscribed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 125
+        }
+      ]
+    },
+    {
+      "event": "media:annotation:updated",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useMediaAnnotations.js",
+          "line": 76
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/sharing/index.js",
+          "line": 140
+        }
+      ]
+    },
+    {
+      "event": "media:sketch:updated",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/pipeline/stages/StoryboardsStage.jsx",
+          "line": 62
+        }
+      ]
+    },
+    {
+      "event": "messages:changed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/messageSender.js",
+          "line": 43
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/messageSync.js",
+          "line": 323
+        }
+      ]
+    },
+    {
+      "event": "messages:draft:sent",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/messageSender.js",
+          "line": 42
+        }
+      ]
+    },
+    {
+      "event": "messages:sync:auth-required",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/messages/SyncTab.jsx",
+          "line": 58
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/messagePlaywrightSync.js",
+          "line": 76
+        }
+      ]
+    },
+    {
+      "event": "messages:sync:completed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/messages/SyncTab.jsx",
+          "line": 57
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/messageSync.js",
+          "line": 321
+        }
+      ]
+    },
+    {
+      "event": "messages:sync:failed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/messages/SyncTab.jsx",
+          "line": 59
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/messageSync.js",
+          "line": 337
+        }
+      ]
+    },
+    {
+      "event": "messages:sync:message",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/messages/InboxTab.jsx",
+          "line": 295
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/messageApiSync.js",
+          "line": 128
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/messageGmailSync.js",
+          "line": 346
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/messagePlaywrightSync.js",
+          "line": 128
+        }
+      ]
+    },
+    {
+      "event": "messages:sync:progress",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/messageApiSync.js",
+          "line": 58
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/messageGmailSync.js",
+          "line": 264
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/messageGmailSync.js",
+          "line": 283
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/messagePlaywrightSync.js",
+          "line": 68
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/messagePlaywrightSync.js",
+          "line": 91
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/messagePlaywrightSync.js",
+          "line": 134
+        }
+      ]
+    },
+    {
+      "event": "messages:sync:started",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/messages/SyncTab.jsx",
+          "line": 56
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/messageSync.js",
+          "line": 163
+        }
+      ]
+    },
+    {
+      "event": "moltworld:action",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useMoltworldWs.js",
+          "line": 85
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 444
+        }
+      ]
+    },
+    {
+      "event": "moltworld:event",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useMoltworldWs.js",
+          "line": 82
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 441
+        }
+      ]
+    },
+    {
+      "event": "moltworld:interaction",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useMoltworldWs.js",
+          "line": 86
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 445
+        }
+      ]
+    },
+    {
+      "event": "moltworld:nearby",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useMoltworldWs.js",
+          "line": 87
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 446
+        }
+      ]
+    },
+    {
+      "event": "moltworld:presence",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useMoltworldWs.js",
+          "line": 83
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 442
+        }
+      ]
+    },
+    {
+      "event": "moltworld:queue:added",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/agents/tabs/WorldTab.jsx",
+          "line": 219
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 451
+        }
+      ]
+    },
+    {
+      "event": "moltworld:queue:removed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/agents/tabs/WorldTab.jsx",
+          "line": 221
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 453
+        }
+      ]
+    },
+    {
+      "event": "moltworld:queue:updated",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/agents/tabs/WorldTab.jsx",
+          "line": 220
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 452
+        }
+      ]
+    },
+    {
+      "event": "moltworld:status",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useMoltworldWs.js",
+          "line": 81
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 440
+        }
+      ]
+    },
+    {
+      "event": "moltworld:thinking",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useMoltworldWs.js",
+          "line": 84
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 443
+        }
+      ]
+    },
+    {
+      "event": "mtplx:download",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/settings/LocalLlmTab.jsx",
+          "line": 379
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/routes/localLlm.js",
+          "line": 800
+        }
+      ]
+    },
+    {
+      "event": "music-video:scene-image",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 273
+        }
+      ]
+    },
+    {
+      "event": "music-video:scene-video",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 279
+        }
+      ]
+    },
+    {
+      "event": "notifications:added",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useNotifications.js",
+          "line": 66
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 402
+        }
+      ]
+    },
+    {
+      "event": "notifications:cleared",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useNotifications.js",
+          "line": 70
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useOpenWorldData.js",
+          "line": 243
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 406
+        }
+      ]
+    },
+    {
+      "event": "notifications:count",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useNotifications.js",
+          "line": 69
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useOpenWorldData.js",
+          "line": 242
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 405
+        }
+      ]
+    },
+    {
+      "event": "notifications:removed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useNotifications.js",
+          "line": 67
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 403
+        }
+      ]
+    },
+    {
+      "event": "notifications:subscribe",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/hooks/useNotifications.js",
+          "line": 40
+        },
+        {
+          "direction": "client-to-server",
+          "source": "client/src/hooks/useOpenWorldData.js",
+          "line": 197
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/services/socket.js",
+          "line": 122
+        }
+      ]
+    },
+    {
+      "event": "notifications:subscribed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 122
+        }
+      ]
+    },
+    {
+      "event": "notifications:unsubscribe",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "server/services/socket.js",
+          "line": 122
+        }
+      ]
+    },
+    {
+      "event": "notifications:unsubscribed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 122
+        }
+      ]
+    },
+    {
+      "event": "notifications:updated",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useNotifications.js",
+          "line": 68
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 404
+        }
+      ]
+    },
+    {
+      "event": "peerSync:asset-arrived",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/MediaImage.jsx",
+          "line": 78
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/sharing/index.js",
+          "line": 146
+        }
+      ]
+    },
+    {
+      "event": "peerSync:subscription-blocked",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/Instances.jsx",
+          "line": 1183
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/sharing/index.js",
+          "line": 122
+        }
+      ]
+    },
+    {
+      "event": "peerSync:subscription-unblocked",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/Instances.jsx",
+          "line": 1184
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/sharing/index.js",
+          "line": 125
+        }
+      ]
+    },
+    {
+      "event": "peerSync:subscription:created",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/Instances.jsx",
+          "line": 1191
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/sharing/index.js",
+          "line": 131
+        }
+      ]
+    },
+    {
+      "event": "portos:update:available",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useUpdateChecker.jsx",
+          "line": 60
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 507
+        }
+      ]
+    },
+    {
+      "event": "portos:update:checked",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 512
+        }
+      ]
+    },
+    {
+      "event": "portos:update:complete",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/apps/tabs/UpdateTab.jsx",
+          "line": 164
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/routes/update.js",
+          "line": 262
+        }
+      ]
+    },
+    {
+      "event": "portos:update:error",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/apps/tabs/UpdateTab.jsx",
+          "line": 165
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/routes/update.js",
+          "line": 264
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/routes/update.js",
+          "line": 269
+        }
+      ]
+    },
+    {
+      "event": "portos:update:step",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/apps/tabs/UpdateTab.jsx",
+          "line": 163
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/routes/update.js",
+          "line": 237
+        }
+      ]
+    },
+    {
+      "event": "provider:error",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/lib/aiToolkit/index.js",
+          "line": 96
+        }
+      ]
+    },
+    {
+      "event": "provider:status:changed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/cos/tabs/ProviderStatusCard.jsx",
+          "line": 36
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/lib/aiToolkit/index.js",
+          "line": 78
+        }
+      ]
+    },
+    {
+      "event": "review:item:created",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/ReviewHubCard.jsx",
+          "line": 14
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/Review.jsx",
+          "line": 146
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 490
+        }
+      ]
+    },
+    {
+      "event": "review:item:deleted",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/ReviewHubCard.jsx",
+          "line": 16
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/Review.jsx",
+          "line": 148
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 496
+        }
+      ]
+    },
+    {
+      "event": "review:item:updated",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/ReviewHubCard.jsx",
+          "line": 15
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/Review.jsx",
+          "line": 147
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 493
+        }
+      ]
+    },
+    {
+      "event": "run:{activeRun}:complete",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/AIProviders.jsx",
+          "line": 180
+        }
+      ]
+    },
+    {
+      "event": "run:{activeRun}:data",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/AIProviders.jsx",
+          "line": 179
+        }
+      ]
+    },
+    {
+      "event": "run:{runId}:complete",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/RunnerPage.jsx",
+          "line": 105
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/lib/aiToolkit/routes/runs.js",
+          "line": 111
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/lib/aiToolkit/routes/runs.js",
+          "line": 127
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/lib/aiToolkit/routes/runs.js",
+          "line": 151
+        }
+      ]
+    },
+    {
+      "event": "run:{runId}:data",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/RunnerPage.jsx",
+          "line": 104
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/lib/aiToolkit/routes/runs.js",
+          "line": 107
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/lib/aiToolkit/routes/runs.js",
+          "line": 124
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/lib/aiToolkit/routes/runs.js",
+          "line": 147
+        }
+      ]
+    },
+    {
+      "event": "sharing:inbox-updated",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/Sharing.jsx",
+          "line": 176
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/sharing/index.js",
+          "line": 95
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/sharing/index.js",
+          "line": 99
+        }
+      ]
+    },
+    {
+      "event": "sharing:incompatible-manifest",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useSharingNotifications.js",
+          "line": 41
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/sharing/index.js",
+          "line": 108
+        }
+      ]
+    },
+    {
+      "event": "sharing:manifest-processed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useSharingNotifications.js",
+          "line": 40
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/Sharing.jsx",
+          "line": 177
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/sharing/index.js",
+          "line": 93
+        }
+      ]
+    },
+    {
+      "event": "sharing:portos-schema-ahead",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/sharing/index.js",
+          "line": 116
+        }
+      ]
+    },
+    {
+      "event": "sharing:unshared",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/sharing/index.js",
+          "line": 134
+        }
+      ]
+    },
+    {
+      "event": "sharing:watcher-attached",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/sharing/index.js",
+          "line": 102
+        }
+      ]
+    },
+    {
+      "event": "sharing:watcher-detached",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/sharing/index.js",
+          "line": 105
+        }
+      ]
+    },
+    {
+      "event": "shell:attach",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/hooks/useShellSession.js",
+          "line": 489
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/shell.js",
+          "line": 51
+        }
+      ]
+    },
+    {
+      "event": "shell:attached",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useShellSession.js",
+          "line": 853
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/shell.js",
+          "line": 58
+        }
+      ]
+    },
+    {
+      "event": "shell:cd",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/shell.js",
+          "line": 79
+        }
+      ]
+    },
+    {
+      "event": "shell:detached",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useShellSession.js",
+          "line": 856
+        }
+      ]
+    },
+    {
+      "event": "shell:error",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useShellSession.js",
+          "line": 857
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/shell.js",
+          "line": 29
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/shell.js",
+          "line": 42
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/shell.js",
+          "line": 47
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/shell.js",
+          "line": 56
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/shell.js",
+          "line": 60
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/shell.js",
+          "line": 73
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/shell.js",
+          "line": 84
+        }
+      ]
+    },
+    {
+      "event": "shell:exit",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useShellSession.js",
+          "line": 855
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/shell.js",
+          "line": 229
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/shell.js",
+          "line": 442
+        }
+      ]
+    },
+    {
+      "event": "shell:input",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/shell.js",
+          "line": 69
+        }
+      ]
+    },
+    {
+      "event": "shell:list",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/hooks/useShellSession.js",
+          "line": 606
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/shell.js",
+          "line": 64
+        }
+      ]
+    },
+    {
+      "event": "shell:output",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useShellSession.js",
+          "line": 854
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/shell.js",
+          "line": 212
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/shell.js",
+          "line": 425
+        }
+      ]
+    },
+    {
+      "event": "shell:release-views",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/hooks/useShellSession.js",
+          "line": 878
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/shell.js",
+          "line": 103
+        }
+      ]
+    },
+    {
+      "event": "shell:resize",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/hooks/useShellSession.js",
+          "line": 320
+        },
+        {
+          "direction": "client-to-server",
+          "source": "client/src/hooks/useShellSession.js",
+          "line": 690
+        },
+        {
+          "direction": "client-to-server",
+          "source": "client/src/hooks/useShellSession.js",
+          "line": 718
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/shell.js",
+          "line": 91
+        }
+      ]
+    },
+    {
+      "event": "shell:sessions",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useShellSession.js",
+          "line": 851
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/shell.js",
+          "line": 66
+        }
+      ]
+    },
+    {
+      "event": "shell:start",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/hooks/useShellSession.js",
+          "line": 470
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/shell.js",
+          "line": 19
+        }
+      ]
+    },
+    {
+      "event": "shell:started",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useShellSession.js",
+          "line": 852
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/shell.js",
+          "line": 37
+        }
+      ]
+    },
+    {
+      "event": "shell:stop",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/hooks/useShellSession.js",
+          "line": 529
+        },
+        {
+          "direction": "client-to-server",
+          "source": "client/src/hooks/useShellSession.js",
+          "line": 535
+        },
+        {
+          "direction": "client-to-server",
+          "source": "client/src/hooks/useShellSession.js",
+          "line": 551
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/shell.js",
+          "line": 97
+        }
+      ]
+    },
+    {
+      "event": "standardize:analyzed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/apps.js",
+          "line": 79
+        }
+      ]
+    },
+    {
+      "event": "standardize:complete",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/apps.js",
+          "line": 82
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/apps.js",
+          "line": 87
+        }
+      ]
+    },
+    {
+      "event": "standardize:start",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/apps.js",
+          "line": 67
+        }
+      ]
+    },
+    {
+      "event": "standardize:step",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/apps.js",
+          "line": 77
+        }
+      ]
+    },
+    {
+      "event": "sync:progress",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/Instances.jsx",
+          "line": 1144
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 471
+        }
+      ]
+    },
+    {
+      "event": "system:critical-error",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useErrorNotifications.js",
+          "line": 86
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/lib/errorHandler.js",
+          "line": 321
+        }
+      ]
+    },
+    {
+      "event": "timeout",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "server/lib/connectivity.js",
+          "line": 48
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/services/remoteDesktop.js",
+          "line": 48
+        }
+      ]
+    },
+    {
+      "event": "tribe:changed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/Tribe.jsx",
+          "line": 988
+        }
+      ]
+    },
+    {
+      "event": "tui:exit",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "server/services/cosRunnerClient.js",
+          "line": 161
+        }
+      ]
+    },
+    {
+      "event": "tui:output",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "server/services/cosRunnerClient.js",
+          "line": 160
+        }
+      ]
+    },
+    {
+      "event": "video-gen:completed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useMediaCompletionRefresh.js",
+          "line": 26
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 562
+        }
+      ]
+    },
+    {
+      "event": "video-gen:failed",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 565
+        }
+      ]
+    },
+    {
+      "event": "video-gen:progress",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 559
+        }
+      ]
+    },
+    {
+      "event": "video-gen:started",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 556
+        }
+      ]
+    },
+    {
+      "event": "voice:dictation",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useOpenWorldData.js",
+          "line": 278
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/voice.js",
+          "line": 224
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/voice.js",
+          "line": 248
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/voice.js",
+          "line": 253
+        }
+      ]
+    },
+    {
+      "event": "voice:dictation:set",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/services/voiceClient.js",
+          "line": 549
+        },
+        {
+          "direction": "client-to-server",
+          "source": "client/src/services/voiceClient.js",
+          "line": 558
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/voice.js",
+          "line": 241
+        }
+      ]
+    },
+    {
+      "event": "voice:error",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useOpenWorldData.js",
+          "line": 279
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/voice.js",
+          "line": 132
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/voice.js",
+          "line": 145
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/voice.js",
+          "line": 154
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/voice.js",
+          "line": 159
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/voice.js",
+          "line": 163
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/voice.js",
+          "line": 179
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/voice.js",
+          "line": 188
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/voice.js",
+          "line": 193
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/voice.js",
+          "line": 197
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/voice.js",
+          "line": 203
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/voice.js",
+          "line": 256
+        }
+      ]
+    },
+    {
+      "event": "voice:idle",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useOpenWorldData.js",
+          "line": 280
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/voice.js",
+          "line": 133
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/voice.js",
+          "line": 213
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/voice.js",
+          "line": 225
+        }
+      ]
+    },
+    {
+      "event": "voice:interrupt",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/services/voiceClient.js",
+          "line": 472
+        },
+        {
+          "direction": "client-to-server",
+          "source": "client/src/services/voiceClient.js",
+          "line": 575
+        },
+        {
+          "direction": "client-to-server",
+          "source": "client/src/services/voiceClient.js",
+          "line": 913
+        },
+        {
+          "direction": "client-to-server",
+          "source": "client/src/services/voiceClient.js",
+          "line": 1114
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/voice.js",
+          "line": 207
+        }
+      ]
+    },
+    {
+      "event": "voice:output:available",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/services/voiceClient.js",
+          "line": 409
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/voice.js",
+          "line": 341
+        }
+      ]
+    },
+    {
+      "event": "voice:output:claim",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/services/voiceClient.js",
+          "line": 400
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/voice.js",
+          "line": 349
+        }
+      ]
+    },
+    {
+      "event": "voice:output:detached",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/services/voiceClient.js",
+          "line": 426
+        }
+      ]
+    },
+    {
+      "event": "voice:output:primary",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/services/voiceClient.js",
+          "line": 421
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/voice/voiceOutput.js",
+          "line": 91
+        }
+      ]
+    },
+    {
+      "event": "voice:reset",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/services/voiceClient.js",
+          "line": 580
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/voice.js",
+          "line": 216
+        }
+      ]
+    },
+    {
+      "event": "voice:screenshot:result",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/services/voiceClient.js",
+          "line": 692
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/voice.js",
+          "line": 301
+        }
+      ]
+    },
+    {
+      "event": "voice:speak",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/services/voiceClient.js",
+          "line": 364
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/voice/voiceOutput.js",
+          "line": 4
+        }
+      ]
+    },
+    {
+      "event": "voice:text",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/services/voiceClient.js",
+          "line": 537
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/voice.js",
+          "line": 183
+        }
+      ]
+    },
+    {
+      "event": "voice:transcript",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/services/voiceClient.js",
+          "line": 467
+        }
+      ]
+    },
+    {
+      "event": "voice:tts:audio",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/services/voiceClient.js",
+          "line": 343
+        }
+      ]
+    },
+    {
+      "event": "voice:turn",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/services/voiceClient.js",
+          "line": 529
+        },
+        {
+          "direction": "client-to-server",
+          "source": "client/src/services/voiceClient.js",
+          "line": 846
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/voice.js",
+          "line": 149
+        }
+      ]
+    },
+    {
+      "event": "voice:ui:index",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/hooks/useVoiceUiSync.js",
+          "line": 79
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/voice.js",
+          "line": 264
+        }
+      ]
+    },
+    {
+      "event": "voice:ui:read-request",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useVoiceUiSync.js",
+          "line": 101
+        }
+      ]
+    },
+    {
+      "event": "voice:ui:read-response",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/hooks/useVoiceUiSync.js",
+          "line": 99
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/voice.js",
+          "line": 319
+        }
+      ]
+    },
+    {
+      "event": "writers-room:scene-image",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/writers-room/LiveRenderPanel.jsx",
+          "line": 144
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/services/socket.js",
+          "line": 261
+        }
+      ]
+    }
+  ],
+  "stats": {
+    "events": 253,
+    "clientToServer": 56,
+    "serverToClient": 205,
+    "bidirectional": 8,
+    "sourceFiles": 103
+  }
+}

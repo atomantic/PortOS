@@ -90,6 +90,16 @@ export default function PersistentMindTools() {
                 </div>
               </section>
 
+              <section aria-labelledby="authority-controls-heading" className="rounded border border-port-border bg-port-card p-4">
+                <h2 id="authority-controls-heading" className="text-sm font-semibold uppercase tracking-wide text-port-text-muted">Authority controls</h2>
+                <div className="mt-4">
+                  <PersistentMindTaskAccessControls
+                    capabilities={data.capabilities}
+                    onSaved={updateCapabilities}
+                  />
+                </div>
+              </section>
+
               {taskCatalog && (
                 <section aria-labelledby="task-catalog-heading" className="rounded border border-port-border bg-port-card p-4">
                   <h2 id="task-catalog-heading" className="text-sm font-semibold uppercase tracking-wide text-port-text-muted">Available task filing choices</h2>
@@ -143,15 +153,6 @@ export default function PersistentMindTools() {
                         {tool.granted ? 'Granted' : 'Off by default'}
                       </span>
                     </div>
-
-                    {tool.capability === 'createTasks' && (
-                      <div className="mt-4 border-t border-port-border pt-4">
-                        <PersistentMindTaskAccessControls
-                          capabilities={data.capabilities}
-                          onSaved={updateCapabilities}
-                        />
-                      </div>
-                    )}
 
                     {Array.isArray(tool.guardrails) && tool.guardrails.length > 0 && (
                       <div className="mt-4 rounded border border-port-border bg-port-bg/40 px-3 py-2">

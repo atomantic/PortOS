@@ -132,7 +132,7 @@ describe('vite dev proxy vs the server and the client router', () => {
     // An empty list on either side would make every assertion below vacuously
     // true — this is the one that fails if the wiring itself breaks.
     expect(ASSET_ROUTE_PREFIXES.length).toBeGreaterThan(5);
-    expect(contexts).toContain('/api');
+    expect(contexts).toContain('^/api(?:/|$)');
     expect(navPaths.length).toBeGreaterThan(5);
   });
 

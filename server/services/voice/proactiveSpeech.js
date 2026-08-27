@@ -21,6 +21,7 @@ import { rememberTtsForAllSockets } from './echo.js';
 import { emitVoiceOutput } from './voiceOutput.js';
 import { getLocalParts, isWithinTimeWindow } from '../../lib/timezone.js';
 import { getUserTimezone } from '../userTimezone.js';
+import { VOICE_TEXT_MAX_CHARS } from '../../lib/apiContractSchemas.js';
 
 // HH:MM helpers live in server/lib/timezone.js (single source of truth shared
 // with the dashboard's time-window validator). Re-exported here so the
@@ -35,7 +36,7 @@ export { HHMM_RE, parseHHMM } from '../../lib/timezone.js';
 // caller can't trigger multi-minute synthesis and a multi-megabyte socket
 // payload. Exposed so the route can import the same constant if it ever
 // needs to.
-export const MAX_PROACTIVE_TEXT_LEN = 4000;
+export const MAX_PROACTIVE_TEXT_LEN = VOICE_TEXT_MAX_CHARS;
 
 // Quiet-hours inclusion is exactly the generic time-window predicate — a
 // half-open [start, end) window with overnight wrap (same-value start/end =

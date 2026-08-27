@@ -1,6 +1,6 @@
 # Unified CoS Tool-Calling Interface
 
-Status: preliminary proposed specification; pending route, quota-telemetry, and provider-fallback audit
+Status: implemented foundation; future expansion sections retained as design backlog
 Date: 2026-08-27
 Audience: PortOS server, Persistent Mind, voice, palette, and future agent integrations
 
@@ -8,6 +8,21 @@ Audience: PortOS server, Persistent Mind, voice, palette, and future agent integ
 > contains the named route/service contract. **Proposed** means this document is
 > defining a new interface. **[VERIFY]** marks a decision or integration detail
 > that must be confirmed by the implementation audit before it becomes binding.
+
+## 0. Implemented foundation
+
+The initial production slice is implemented. This section supersedes proposal language elsewhere in the document when the two differ.
+
+- The generated HTTP inventory contains 2,066 mounted operations and feeds `GET /api/api-docs/catalog.json` plus the complete OpenAPI 3.1 document at `/api/api-docs/internal/openapi.json`.
+- A generated inventory of 253 Socket.IO events feeds `/api/api-docs/events.json` and the AsyncAPI 3 document at `/api/api-docs/asyncapi.json`.
+- `/api/cos/tools` exposes 23 Persistent Mind tools and 22 CoS-agent/UI/voice tools through the versioned provider-neutral catalog. OpenAI, Anthropic, and MCP translations derive from the same entries.
+- `/api/cos/tools/call` and `/api/cos/tools/calls/:requestId` implement server-derived UI authority, schema validation, normalized results, and replay conflict detection. Raw routes are not callable.
+- Persistent Mind has separate default-off read, write, and CoS-task grants and a bounded multi-round tool loop. `cos.create-task` reuses the existing scheduler, worktree, review, CI, and landing-policy path.
+- The existing loopback-only Agent Context MCP transport now optionally advertises the same semantic registry under separate default-off CoS-agent read/write grants. Its original bounded context scopes and privacy behavior remain intact.
+- The visible `/api-reference/:tab` Explorer provides HTTP catalog, rendered REST reference, event catalog, and agent-tool authority/format views. Navigation is registered in the shared manifest.
+- Voice/TTS and A1111 request validation now share canonical Zod contracts with OpenAPI. The semantic grant shape is also shared between Persistent Mind and CoS-agent MCP settings.
+
+The later provider-routing, quota fallback, confirmation-token, media-generation, and generic long-running-job sections remain design backlog. They are not required for the safe local semantic-tool foundation and must not be read as claims about current behavior.
 
 ## 1. Decision summary
 
@@ -169,7 +184,7 @@ The unified CoS interface must therefore:
 3. Never become an accidental public API through `apiRegistry.js`.
 4. Preserve CSRF and cross-origin behavior when auth is enabled.
 5. Redact credentials, personal records, prompts containing PII, and provider responses from logs and errors.
-6. Treat Agent Context separately: it is loopback-only, origin-checked, opt-in, and read-only.
+6. Preserve Agent Tools MCP boundaries: it is loopback-only, origin-checked, and opt-in; its context tools remain read-only while separately granted semantic actions share the canonical registry.
 
 The request body's `context`, including `source`, `mindId`, and `turnId`, is correlation metadata only. It cannot select authority. The server derives the caller and scope from one of these trusted paths: a process-local dispatch context created by the Persistent Mind supervisor; an authenticated, CSRF-checked PortOS UI/voice session; or a short-lived server-issued caller credential bound to a known scope and session. A peer credential derives only the federation scope. A passwordless install must reject direct HTTP mutations and privileged `mind`/`admin` claims unless the request carries such a server-issued credential; it must never treat a client-supplied scope as proof of identity. The catalog's optional scope filter may narrow the derived scope, never widen it.
 
@@ -206,7 +221,7 @@ The registry is the best starting point for adapter reuse, but it is not yet a c
 | `GET /api/agent-context/manifest` | Report enabled state, profile, scopes, budgets, and advertised tools. |
 | `POST /api/agent-context/mcp` | MCP `initialize`, `ping`, `tools/list`, and `tools/call`. Notifications/responses receive `202`. |
 
-Its five tools are `search_context`, `get_context`, `list_context`, `resolve_navigation` (only with the `navigation` scope), and `context_profile`. The surface is loopback-only, rejects non-loopback `Origin`, requires the feature to be enabled and configuration-valid, advertises read-only/idempotent/non-destructive annotations, and bounds input/output schemas. It should be reused as a read-only context provider by the new registry, not merged into the mutation-capable CoS endpoint without retaining those constraints.
+Its five context tools are `search_context`, `get_context`, `list_context`, `resolve_navigation` (only with the `navigation` scope), and `context_profile`. The surface is loopback-only, rejects non-loopback `Origin`, requires the feature to be enabled and configuration-valid, advertises those context tools as read-only/idempotent/non-destructive, and bounds input/output schemas. Separately granted semantic tools are advertised from the canonical registry and retain their own side-effect annotations; the context scopes themselves remain read-only.
 
 ### 3.4 Persistent Mind
 
@@ -398,7 +413,7 @@ The following is the endpoint map used to design adapter domains. Paths are rela
 | `/api/autofix` | Auto-fix metrics: `GET /metrics`. |
 | `/api/model-personality` | Explicit provider/model personality test, history delete, and scorer settings. Only `POST /run` calls an LLM and requires a named provider/model. |
 | `/api/voice` | Authenticated voice config/status/voices, Piper fetch, TTS test/speak, Kokoro status/unload, and Whisper start/stop. `/api/voice/public` is the separate opt-in external TTS surface. |
-| `/api/api-docs` | Authenticated OpenAPI document: `GET /openapi.json`; documents only exposed public APIs. |
+| `/api/api-docs` | Authenticated catalogs and specifications: exposed/public and complete/internal OpenAPI 3.1, generated HTTP metadata, generated Socket.IO metadata, and AsyncAPI 3. |
 | `/api/openclaw` | OpenClaw status/session/message reads and message send/stream. External agent messaging; stream/send require explicit policy and confirmation. |
 | `/api/midi-runtime` | SSE installer: `GET /install`; multi-GB runtime setup, not a model tool. |
 | `/api/devtools/video-download` | Video download/list/delete, progress SSE, cancel. Download starts external network and disk work; confirmation-gated if ever exposed. |
@@ -942,7 +957,7 @@ Trajectory events may record the tool ID, request ID, argument digest, status, a
 ## Appendix B: intentionally rejected designs
 
 - **Expose every REST endpoint as a function:** rejected because it creates a 2,000-plus-function prompt, leaks route/storage details, and lacks uniform risk/lifecycle semantics.
-- **Use MCP as the only transport:** rejected because browser/voice clients already use REST, the Persistent Mind is local to PortOS, and long-running PortOS jobs need first-class authenticated HTTP/SSE semantics. MCP remains a supported read-only context transport.
+- **Use MCP as the only transport:** rejected because browser/voice clients already use REST, the Persistent Mind is local to PortOS, and long-running PortOS jobs need first-class authenticated HTTP/SSE semantics. MCP remains the local CoS-agent transport for read-only context plus separately granted semantic actions.
 - **Use the existing Persistent Mind `tools` route for all CoS tools:** rejected because that route intentionally describes a much smaller authority inventory and its default-off boundary is a security contract.
 - **Have the model call raw HTTP itself:** rejected because authorization, idempotency, request serialization, privacy, error mapping, and confirmation must be enforced server-side.
 - **Return prose-only tool results:** rejected because the supervisor needs typed terminal state, replay behavior, job references, and safe machine-readable error handling.

@@ -159,7 +159,7 @@ describe('persistent mind routes', () => {
     expect(res.body).toMatchObject({
       events: [], gap: false, state: { status: 'idle' },
       profile: { enabled: true, providerId: 'demo', model: 'demo-model', effort: 'high', thinkingInterface: 'text' },
-      capabilities: { schemaVersion: 1, createTasks: true },
+      capabilities: { schemaVersion: 2, createTasks: true, readPortos: false, writePortos: false },
       harness: { type: 'api', recommendation: 'recommended' },
       autonomyMode: 'execute',
     });
@@ -192,15 +192,14 @@ describe('persistent mind routes', () => {
     const res = await get('/mind/tools');
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
-      schemaVersion: 1,
-      capabilities: { schemaVersion: 1, createTasks: true },
+      schemaVersion: 2,
+      capabilities: { schemaVersion: 2, createTasks: true, readPortos: false, writePortos: false },
       boundaries: expect.arrayContaining([expect.stringMatching(/arbitrary shell/i)]),
-      tools: [expect.objectContaining({
-        id: 'cos.create-task',
-        capability: 'createTasks',
-        granted: true,
-        defaultEnabled: false,
-      })],
+      tools: expect.arrayContaining([
+        expect.objectContaining({ id: 'cos.create-task', capability: 'createTasks', granted: true, defaultEnabled: false }),
+        expect.objectContaining({ id: 'portos.read', capability: 'readPortos', granted: false, defaultEnabled: false }),
+        expect.objectContaining({ id: 'portos.write', capability: 'writePortos', granted: false, defaultEnabled: false }),
+      ]),
       taskCatalog: {
         apps: [{ id: 'demo-app', planOnly: true }],
         providers: [{ id: 'codex' }],

@@ -5,6 +5,7 @@ import { extractToken, isAuthEnabled, verifyPassword, verifySession } from './au
 import { extractBasicPassword, isCrossOrigin } from '../../lib/portosAuthCore.js';
 import { getSettings, settingsEvents } from './settings.js';
 import { isRegistryPublic } from '../lib/apiRegistry.js';
+import { GATED_NON_API_PREFIXES, isAlwaysPublicApiPath } from '../lib/apiAccessPolicy.js';
 import { sendErrorResponse, ServerError } from '../lib/errorHandler.js';
 
 // Paths that bypass the auth gate even when a password is set:
@@ -14,21 +15,6 @@ import { sendErrorResponse, ServerError } from '../lib/errorHandler.js';
 //     session.
 // Anything not on this list returns 401 when auth is on and the request has
 // no valid token.
-const PUBLIC_API_PATHS = new Set([
-  '/api/auth/status',
-  '/api/auth/whoami',
-  '/api/auth/login',
-  '/api/auth/logout',
-  '/api/system/health',
-]);
-
-// Non-`/api` API surfaces that must also be gated. `/sdapi/v1/*` is the
-// AUTOMATIC1111-compatible image-gen mount served by sdapiRoutes — it accepts
-// generation requests and exposes the LoRA / model catalog, so a sidecar with
-// network reach but no auth must NOT be able to hit it. Add to this list any
-// future routes that live outside `/api`.
-const GATED_NON_API_PREFIXES = ['/sdapi/'];
-
 // Short-lived cache for successful Basic-auth scrypt results so probe cycles
 // (3 parallel HTTP requests every 30s) don't re-run scrypt each time. Failed
 // results are deliberately not cached so a corrected credential is retried
@@ -53,7 +39,7 @@ const verifyBasicPassword = async (password) => {
 export const __testing = { verifyBasicPassword };
 
 const isPublicPath = (path) => {
-  if (PUBLIC_API_PATHS.has(path)) return true;
+  if (isAlwaysPublicApiPath(path)) return true;
   // /api/* and /data/* are always gated. /sdapi/* (and any future non-/api
   // API surface listed above) is also gated. Everything else is the static
   // client bundle — index.html / hashed JS+CSS / fonts — which is safe to

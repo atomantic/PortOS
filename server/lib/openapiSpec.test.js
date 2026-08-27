@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
-import { buildOpenApiSpec } from './openapiSpec.js';
+import { buildInternalOpenApiSpec, buildOpenApiSpec } from './openapiSpec.js';
 import { synthesizeBodySchema as routeSchema } from '../routes/voicePublic.js';
+import { voiceSynthesizeBodySchema } from './apiContractSchemas.js';
 
 const exposed = (apiAccess) => ({ apiAccess });
 
@@ -61,23 +62,33 @@ describe('buildOpenApiSpec', () => {
     expect(spec.servers).toEqual([]);
   });
 
-  it('synthesize body schema stays in sync with the route schema (parity)', () => {
-    // The lib keeps a light copy of the route's schema (so it doesn't pull the
-    // heavy TTS chain). Assert the documented body matches the route's actual
-    // VALIDATION shape — every property's type/bounds + the required set — so
-    // the two can't drift. `description` is doc-only (the lib copy adds a
-    // per-engine rate note the route schema doesn't carry); strip it before
-    // comparing so a deliberate doc annotation isn't read as a contract drift.
-    const stripDescriptions = (props) =>
-      Object.fromEntries(Object.entries(props).map(([k, v]) => {
-        // eslint-disable-next-line no-unused-vars
-        const { description, ...rest } = v;
-        return [k, rest];
-      }));
+  it('route validation and OpenAPI consume the same synthesize schema object', () => {
+    expect(routeSchema).toBe(voiceSynthesizeBodySchema);
     const spec = buildOpenApiSpec(exposed({ voice: { exposed: true, requireAuth: false } }), {});
     const documented = spec.paths['/api/voice/public/synthesize'].post.requestBody.content['application/json'].schema;
     const route = z.toJSONSchema(routeSchema);
-    expect(stripDescriptions(documented.properties)).toEqual(stripDescriptions(route.properties));
+    delete route.$schema;
+    expect(documented).toEqual(route);
     expect((documented.required || []).sort()).toEqual((route.required || []).sort());
+  });
+});
+
+describe('buildInternalOpenApiSpec', () => {
+  it('documents every generated operation with unique operation ids', () => {
+    const spec = buildInternalOpenApiSpec({}, { baseUrl: 'http://host:5555', version: '1.2.3' });
+    const operations = Object.values(spec.paths).flatMap((pathItem) => Object.values(pathItem));
+    expect(operations.length).toBeGreaterThan(2000);
+    expect(new Set(operations.map((operation) => operation.operationId)).size).toBe(operations.length);
+    expect(spec.paths['/api/apps/{id}'].delete.parameters).toContainEqual({
+      name: 'id', in: 'path', required: true, schema: { type: 'string' },
+    });
+  });
+
+  it('distinguishes detailed contracts from generated inventory', () => {
+    const spec = buildInternalOpenApiSpec({}, {});
+    expect(spec.paths['/api/voice/public/synthesize'].post['x-portos-contract-status']).toBe('modeled');
+    expect(spec.paths['/api/voice/public/synthesize'].post.requestBody).toBeDefined();
+    expect(spec.paths['/api/apps'].get['x-portos-contract-status']).toBe('generated');
+    expect(spec.paths['/api/apps'].get.responses.default).toBeDefined();
   });
 });

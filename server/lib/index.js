@@ -17,12 +17,15 @@
 // `digitalTwinValidation.X`. The catch-all `validation.js` stays flat — its
 // names are the canonical PortOS-wide schemas.
 export * from './appDeployFlags.js';
+export * from './apiContractSchemas.js';
+export * from './asyncApiSpec.js';
 export * as agentValidation from './agentValidation.js';
 export * as agentContextValidation from './agentContextValidation.js';
 export * as appleHealthValidation from './appleHealthValidation.js';
 export * as brainValidation from './brainValidation.js';
 export * as catalogValidation from './catalogValidation.js';
 export * as cosValidation from './cosValidation.js';
+export * from './cosToolContracts.js';
 export * as creativeCommissionValidation from './creativeCommissionValidation.js';
 export * as creativeDirectorValidation from './creativeDirectorValidation.js';
 export * as digitalTwinValidation from './digitalTwinValidation.js';
@@ -44,6 +47,7 @@ export * as postValidation from './postValidation.js';
 export * as privacyValidation from './privacyValidation.js';
 export * as roundsValidation from './roundsValidation.js';
 export * as socketValidation from './socketValidation.js';
+export * from './socketEventContracts.js';
 export * as spriteValidation from './spriteValidation.js';
 export * as storyBuilderValidation from './storyBuilderValidation.js';
 export * as telegramValidation from './telegramValidation.js';
@@ -379,6 +383,10 @@ export * from './tribeMatch.js';
 export * from './viteAllowedHosts.js';
 
 // === General utilities ===
+export * from './apiAccessPolicy.js';
+export * from './apiCatalog.js';
+export * from './socketEventCatalog.js';
+export * from './apiOperationContracts.js';
 export * from './apiRegistry.js';
 export * from './arrayUtils.js';
 export * from './assetRoutePrefixes.js';

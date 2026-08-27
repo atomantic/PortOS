@@ -287,6 +287,7 @@ export const NAV_PRESENTATION = {
   '/models/training': { icon: GraduationCap },
   '/settings/ai-assignments': { icon: Bot },
   '/settings/api-access': { icon: Globe },
+  '/api-reference/catalog': { icon: Braces },
   '/settings/autofixer': { icon: Wrench },
   '/settings/backup': { icon: Download },
   '/settings/code-reviewers': { icon: ShieldCheck },
@@ -583,6 +584,7 @@ const FULL_WIDTH_PATH_PREFIXES = [
   // body, so the page owns its own scroll. Without this it nests inside the
   // padded scrolling main and the inner `h-full` clips below the fold.
   '/models',
+  '/api-reference',
   '/settings',
   // Round EDITOR (/rounds/:id) and the Learning Guide (/rounds/guide)
   // are full-width and own their own scroll; the bare /rounds index
