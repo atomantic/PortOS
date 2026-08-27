@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { join } from 'node:path';
 import { PERSISTENT_MIND_LIMITS, createDefaultPersistentMindState } from '../lib/persistentMind.js';
 
 const mocks = vi.hoisted(() => ({
@@ -225,7 +226,7 @@ describe('persistent mind image attachment lifecycle', () => {
     expect(mocks.root.persistentMind.pendingAttachments).toEqual(expect.arrayContaining([
       expect.objectContaining({ attachmentId: 'claimed-old', claimedBy: 'completed-message' }),
     ]));
-    expect(mocks.unlink).not.toHaveBeenCalledWith('/tmp/portos-mind-attachments/mind-claimed-old.png');
+    expect(mocks.unlink).not.toHaveBeenCalledWith(join('/tmp/portos-mind-attachments', 'mind-claimed-old.png'));
   });
 
   it('deletes only unclaimed files and leaves claimed historical assets alone', async () => {
@@ -258,8 +259,8 @@ describe('persistent mind image attachment lifecycle', () => {
 
     await expect(supervisor.cleanupPersistentMindAttachments({ now }))
       .resolves.toMatchObject({ success: true, removed: 1, examined: 1 });
-    expect(mocks.unlink).toHaveBeenNthCalledWith(1, '/tmp/portos-mind-attachments/mind-orphan-diagram.png');
-    expect(mocks.unlink).toHaveBeenNthCalledWith(2, '/tmp/portos-mind-attachments/.mind-pending-orphan');
+    expect(mocks.unlink).toHaveBeenNthCalledWith(1, join('/tmp/portos-mind-attachments', 'mind-orphan-diagram.png'));
+    expect(mocks.unlink).toHaveBeenNthCalledWith(2, join('/tmp/portos-mind-attachments', '.mind-pending-orphan'));
     expect(mocks.unlink).toHaveBeenCalledTimes(2);
   });
 
