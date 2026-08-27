@@ -45,7 +45,7 @@ import {
   enforceBranchReconcileBatch,
   enforceManagedAgentOptions
 } from './taskScheduleRegistry.js';
-import { loadSchedule, saveSchedule } from './taskScheduleStore.js';
+import { loadSchedule, updateSchedule } from './taskScheduleStore.js';
 import { getTaskDataInputCatalog } from '../lib/taskDataInputCatalog.js';
 import {
   clearFailureLedgerFields,
@@ -150,83 +150,86 @@ export async function getTaskInterval(taskType) {
 }
 
 export async function updateTaskInterval(taskType, settings) {
-  const schedule = await loadSchedule();
-
-  if (!schedule.tasks[taskType]) {
-    schedule.tasks[taskType] = { type: INTERVAL_TYPES.ROTATION, enabled: false, providerId: null, model: null, createdAt: new Date().toISOString() };
-  }
-
-  // Normalize empty/whitespace prompts to null (treated as "use default")
-  if ('prompt' in settings && typeof settings.prompt === 'string' && !settings.prompt.trim()) {
-    settings.prompt = null;
-  }
-  // If user is setting a custom prompt, mark it so auto-upgrade won't overwrite it.
-  // If user clears the prompt (null), remove the customized flag to resume defaults.
-  if ('prompt' in settings) {
-    settings.promptCustomized = settings.prompt != null;
-  }
-
-  schedule.tasks[taskType] = {
-    ...schedule.tasks[taskType],
-    ...settings
-  };
-
-  // Re-assert agent-managed taskMetadata fields after the merge so a PUT that
-  // tries to flip them (UI bypass, hand-edited TASKS.md, direct API call)
-  // gets the locked value back in its response.
-  enforceManagedAgentOptions(taskType, schedule.tasks[taskType]);
-  enforceBranchReconcileBatch(taskType, schedule.tasks[taskType]);
-
-  // Config change unparks a failure-parked type (#2616): editing a type's
-  // settings is an explicit "I've addressed the cause" signal, so clear the
-  // consecutive-failure ledger + auto-park (global + every per-app record) so
-  // the type gets a fresh start on its next tick. Track the scopes that were
-  // actually parked so their stale notifications can be pruned after the save.
-  const topExec = schedule.executions[`task:${taskType}`];
-  const unparkedScopes = [];
-  if (topExec) {
-    if (topExec.failureParkedAt) unparkedScopes.push(null);
-    clearFailureLedgerFields(topExec);
-    for (const [id, rec] of Object.entries(topExec.perApp || {})) {
-      if (rec.failureParkedAt) unparkedScopes.push(id);
-      clearFailureLedgerFields(rec);
+  const { task, unparkedScopes } = await updateSchedule(async (schedule) => {
+    if (!schedule.tasks[taskType]) {
+      schedule.tasks[taskType] = { type: INTERVAL_TYPES.ROTATION, enabled: false, providerId: null, model: null, createdAt: new Date().toISOString() };
     }
-  }
 
-  // Globally disabling pr-watcher also drops its execution cooldown so a later
-  // re-enable baselines on the very next tick rather than waiting out the prior
-  // 30-min interval — otherwise PRs opened in that delayed window slip past the
-  // firstRun baseline and are never dispatched. Paired with clearAllPrWatcherState
-  // below (the per-app disable paths in apps.js do the same via resetExecutionHistory).
-  if (taskType === 'pr-watcher' && settings.enabled === false) {
-    delete schedule.executions['task:pr-watcher'];
-  }
+    // Normalize empty/whitespace prompts to null (treated as "use default")
+    if ('prompt' in settings && typeof settings.prompt === 'string' && !settings.prompt.trim()) {
+      settings.prompt = null;
+    }
+    // If user is setting a custom prompt, mark it so auto-upgrade won't overwrite it.
+    // If user clears the prompt (null), remove the customized flag to resume defaults.
+    if ('prompt' in settings) {
+      settings.promptCustomized = settings.prompt != null;
+    }
 
-  // When the recheck cadence of a perpetual task changes, re-derive the
-  // `parkedUntil` of any CURRENTLY-parked execution records (global + per-app)
-  // from the new cadence — otherwise an already-parked task keeps waiting out
-  // its old timestamp and the cadence control appears to do nothing until then.
-  // Only recompute existing parks (never create one), and compute from now so a
-  // shortened cadence takes effect on the next slot. A park whose timestamp has
-  // ALREADY elapsed is left alone (#3590): an elapsed park is not cleared when it
-  // expires — shouldRunTask reports `perpetual-recheck` and the dispatch gate
-  // clears it — so it is a record that is DUE RIGHT NOW. Restamping it from a
-  // lengthened cadence would silently push already-due work back into the future.
-  const merged = schedule.tasks[taskType];
-  if (merged.type === INTERVAL_TYPES.PERPETUAL && ('recheckCron' in settings || 'recheckIntervalMs' in settings)) {
-    const exec = schedule.executions[`task:${taskType}`];
-    if (exec) {
-      const nowMs = Date.now();
-      const records = [exec, ...Object.values(exec.perApp || {})];
-      for (const rec of records) {
-        if (parkedUntilMs(rec) > nowMs) {
-          rec.parkedUntil = boundParkedUntil(await computePerpetualRecheckAt(merged), rec.parkNotLaterThan);
+    schedule.tasks[taskType] = {
+      ...schedule.tasks[taskType],
+      ...settings
+    };
+
+    // Re-assert agent-managed taskMetadata fields after the merge so a PUT that
+    // tries to flip them (UI bypass, hand-edited TASKS.md, direct API call)
+    // gets the locked value back in its response.
+    enforceManagedAgentOptions(taskType, schedule.tasks[taskType]);
+    enforceBranchReconcileBatch(taskType, schedule.tasks[taskType]);
+
+    // Config change unparks a failure-parked type (#2616): editing a type's
+    // settings is an explicit "I've addressed the cause" signal, so clear the
+    // consecutive-failure ledger + auto-park (global + every per-app record) so
+    // the type gets a fresh start on its next tick. Track the scopes that were
+    // actually parked so their stale notifications can be pruned after the save.
+    const topExec = schedule.executions[`task:${taskType}`];
+    const unparkedScopes = [];
+    if (topExec) {
+      if (topExec.failureParkedAt) unparkedScopes.push(null);
+      clearFailureLedgerFields(topExec);
+      for (const [id, rec] of Object.entries(topExec.perApp || {})) {
+        if (rec.failureParkedAt) unparkedScopes.push(id);
+        clearFailureLedgerFields(rec);
+      }
+    }
+
+    // Globally disabling pr-watcher also drops its execution cooldown so a later
+    // re-enable baselines on the very next tick rather than waiting out the prior
+    // 30-min interval — otherwise PRs opened in that delayed window slip past the
+    // firstRun baseline and are never dispatched. Paired with clearAllPrWatcherState
+    // below (the per-app disable paths in apps.js do the same via resetExecutionHistory).
+    if (taskType === 'pr-watcher' && settings.enabled === false) {
+      delete schedule.executions['task:pr-watcher'];
+    }
+
+    // When the recheck cadence of a perpetual task changes, re-derive the
+    // `parkedUntil` of any CURRENTLY-parked execution records (global + per-app)
+    // from the new cadence — otherwise an already-parked task keeps waiting out
+    // its old timestamp and the cadence control appears to do nothing until then.
+    // Only recompute existing parks (never create one), and compute from now so a
+    // shortened cadence takes effect on the next slot. A park whose timestamp has
+    // ALREADY elapsed is left alone (#3590): an elapsed park is not cleared when it
+    // expires — shouldRunTask reports `perpetual-recheck` and the dispatch gate
+    // clears it — so it is a record that is DUE RIGHT NOW. Restamping it from a
+    // lengthened cadence would silently push already-due work back into the future.
+    const merged = schedule.tasks[taskType];
+    if (merged.type === INTERVAL_TYPES.PERPETUAL && ('recheckCron' in settings || 'recheckIntervalMs' in settings)) {
+      const exec = schedule.executions[`task:${taskType}`];
+      if (exec) {
+        const nowMs = Date.now();
+        const records = [exec, ...Object.values(exec.perApp || {})];
+        for (const rec of records) {
+          if (parkedUntilMs(rec) > nowMs) {
+            rec.parkedUntil = boundParkedUntil(await computePerpetualRecheckAt(merged), rec.parkNotLaterThan);
+          }
         }
       }
     }
-  }
 
-  await saveSchedule(schedule);
+    return {
+      result: { task: schedule.tasks[taskType], unparkedScopes },
+      changed: true
+    };
+  });
 
   // Globally disabling pr-watcher clears every app's high-water mark, mirroring
   // the per-app disable clears in apps.js — so a later global re-enable
@@ -245,40 +248,40 @@ export async function updateTaskInterval(taskType, settings) {
   emitLog('info', `Updated task interval for ${taskType}`, { taskType, settings }, '📅 TaskSchedule');
   cosEvents.emit('schedule:changed', { taskType, settings });
 
-  return schedule.tasks[taskType];
+  return task;
 }
 
 /**
  * Record a task execution
  */
 export async function recordExecution(taskType, appId = null) {
-  const schedule = await loadSchedule();
-  const key = taskType.startsWith('task:') ? taskType : `task:${taskType}`;
+  return updateSchedule(async (schedule) => {
+    const key = taskType.startsWith('task:') ? taskType : `task:${taskType}`;
 
-  if (!schedule.executions[key]) {
-    schedule.executions[key] = {
-      lastRun: null,
-      count: 0,
-      perApp: {}
-    };
-  }
-
-  schedule.executions[key].lastRun = new Date().toISOString();
-  schedule.executions[key].count = (schedule.executions[key].count || 0) + 1;
-
-  if (appId) {
-    if (!schedule.executions[key].perApp[appId]) {
-      schedule.executions[key].perApp[appId] = {
+    if (!schedule.executions[key]) {
+      schedule.executions[key] = {
         lastRun: null,
-        count: 0
+        count: 0,
+        perApp: {}
       };
     }
-    schedule.executions[key].perApp[appId].lastRun = new Date().toISOString();
-    schedule.executions[key].perApp[appId].count++;
-  }
 
-  await saveSchedule(schedule);
-  return schedule.executions[key];
+    schedule.executions[key].lastRun = new Date().toISOString();
+    schedule.executions[key].count = (schedule.executions[key].count || 0) + 1;
+
+    if (appId) {
+      if (!schedule.executions[key].perApp[appId]) {
+        schedule.executions[key].perApp[appId] = {
+          lastRun: null,
+          count: 0
+        };
+      }
+      schedule.executions[key].perApp[appId].lastRun = new Date().toISOString();
+      schedule.executions[key].perApp[appId].count++;
+    }
+
+    return { result: schedule.executions[key], changed: true };
+  });
 }
 
 export async function getExecutionHistory(taskType) {
@@ -486,56 +489,58 @@ const PARK_FIELDS = ['parkedUntil', 'parkReason', 'parkActionableCount', 'parkCo
  * cap could never fire.
  */
 export async function parkPerpetual(taskType, appId = null, { reason = null, actionableCount = 0, counts = null, signature, dispatchCount = 0, notLaterThan = null } = {}) {
-  const schedule = await loadSchedule();
-  const interval = schedule.tasks[taskType] || {};
-  // Bound HERE, not at the assignment: `parkedUntil` is also what the log line and
-  // the schedule:perpetual-parked event publish, and a change whose whole point is
-  // an honest "when will this actually run" must not report the un-shortened time.
-  const parkedUntil = boundParkedUntil(await computePerpetualRecheckAt(interval), notLaterThan);
-  const record = ensureExecutionRecord(schedule, taskType, appId);
-  record.parkedUntil = parkedUntil;
-  record.parkReason = reason;
-  record.parkActionableCount = actionableCount;
-  // The detector's candidate breakdown ({ open, inFlight, filtered }). Lets the
-  // UI explain WHY a non-empty queue yields zero claimable work — "0 of N, M
-  // in-flight" — instead of a bare "no work". `null` = the detector reported no
-  // breakdown (e.g. the reconcile scans), so the field is left off the record.
-  if (counts != null) record.parkCounts = counts;
-  else delete record.parkCounts;
-  // The self-expiry has to OUTLIVE this call: updateTaskInterval restamps every
-  // un-elapsed park from the new cadence, and without a remembered bound it would
-  // stretch a correctly-shortened park back out — reintroducing the stacking this
-  // option exists to remove, via an unrelated settings edit.
-  if (notLaterThan) record.parkNotLaterThan = notLaterThan;
-  else delete record.parkNotLaterThan;
-  record.parkedAt = new Date().toISOString();
-  // A drain that parks because a full cycle made NO progress (branch-reconcile's
-  // 'no-progress' park) records the actionable signature it was stuck on, so the
-  // next recheck can tell "same stuck set" (park again) from "the set changed"
-  // (resume). `null` clears it (an idle park with nothing actionable); `undefined`
-  // (the default) leaves any prior signature untouched.
-  //
-  // `signatureRepeatCount` is the harvested "same finding again" metric the
-  // CoS churn detector reports: increment when this park restates the same
-  // signature, reset when the set changes, clear when idle.
-  if (signature !== undefined) {
-    if (signature === null) {
-      delete record.lastActionableSignature;
-      delete record.signatureRepeatCount;
-    } else if (signature === record.lastActionableSignature) {
-      record.signatureRepeatCount = (Number(record.signatureRepeatCount) || 1) + 1;
-    } else {
-      record.lastActionableSignature = signature;
-      record.signatureRepeatCount = 1;
+  const { record, parkedUntil } = await updateSchedule(async (schedule) => {
+    const interval = schedule.tasks[taskType] || {};
+    // Bound HERE, not at the assignment: `parkedUntil` is also what the log line and
+    // the schedule:perpetual-parked event publish, and a change whose whole point is
+    // an honest "when will this actually run" must not report the un-shortened time.
+    const parkedUntil = boundParkedUntil(await computePerpetualRecheckAt(interval), notLaterThan);
+    const record = ensureExecutionRecord(schedule, taskType, appId);
+    record.parkedUntil = parkedUntil;
+    record.parkReason = reason;
+    record.parkActionableCount = actionableCount;
+    // The detector's candidate breakdown ({ open, inFlight, filtered }). Lets the
+    // UI explain WHY a non-empty queue yields zero claimable work — "0 of N, M
+    // in-flight" — instead of a bare "no work". `null` = the detector reported no
+    // breakdown (e.g. the reconcile scans), so the field is left off the record.
+    if (counts != null) record.parkCounts = counts;
+    else delete record.parkCounts;
+    // The self-expiry has to OUTLIVE this call: updateTaskInterval restamps every
+    // un-elapsed park from the new cadence, and without a remembered bound it would
+    // stretch a correctly-shortened park back out — reintroducing the stacking this
+    // option exists to remove, via an unrelated settings edit.
+    if (notLaterThan) record.parkNotLaterThan = notLaterThan;
+    else delete record.parkNotLaterThan;
+    record.parkedAt = new Date().toISOString();
+    // A drain that parks because a full cycle made NO progress (branch-reconcile's
+    // 'no-progress' park) records the actionable signature it was stuck on, so the
+    // next recheck can tell "same stuck set" (park again) from "the set changed"
+    // (resume). `null` clears it (an idle park with nothing actionable); `undefined`
+    // (the default) leaves any prior signature untouched.
+    //
+    // `signatureRepeatCount` is the harvested "same finding again" metric the
+    // CoS churn detector reports: increment when this park restates the same
+    // signature, reset when the set changes, clear when idle.
+    if (signature !== undefined) {
+      if (signature === null) {
+        delete record.lastActionableSignature;
+        delete record.signatureRepeatCount;
+      } else if (signature === record.lastActionableSignature) {
+        record.signatureRepeatCount = (Number(record.signatureRepeatCount) || 1) + 1;
+      } else {
+        record.lastActionableSignature = signature;
+        record.signatureRepeatCount = 1;
+      }
     }
-  }
-  // Same option shape for the consecutive-dispatch budget: `0` (or null) clears it
-  // because this park ended the drain window; `undefined` leaves it alone.
-  if (dispatchCount !== undefined) {
-    if (!dispatchCount) delete record.perpetualDispatchCount;
-    else record.perpetualDispatchCount = dispatchCount;
-  }
-  await saveSchedule(schedule);
+    // Same option shape for the consecutive-dispatch budget: `0` (or null) clears it
+    // because this park ended the drain window; `undefined` leaves it alone.
+    if (dispatchCount !== undefined) {
+      if (!dispatchCount) delete record.perpetualDispatchCount;
+      else record.perpetualDispatchCount = dispatchCount;
+    }
+
+    return { result: { record, parkedUntil }, changed: true };
+  });
   emitLog('info', `Perpetual ${taskType} parked until ${parkedUntil} (${reason || 'idle'})`, { taskType, appId, parkedUntil }, '📅 TaskSchedule');
   cosEvents.emit('schedule:perpetual-parked', { taskType, appId, parkedUntil, reason, actionableCount, counts });
   return record;
@@ -601,26 +606,26 @@ export async function getPerpetualDrainState(taskType, appId = null) {
  * @returns {Promise<number>} the new consecutive-dispatch count
  */
 export async function recordPerpetualDispatch(taskType, appId = null, signature) {
-  const schedule = await loadSchedule();
-  const record = ensureExecutionRecord(schedule, taskType, appId);
-  for (const field of PARK_FIELDS) delete record[field];
-  // Mirrors parkPerpetual's signature handling, including the churn detector's
-  // `signatureRepeatCount`. A dispatch only happens when the set CHANGED (an
-  // unchanged one parks instead), so this is always the "new signature ⇒ first
-  // sighting" case — leaving the previous count in place would let the NEXT park
-  // increment a stale value, over-reporting "same finding again" to a detector
-  // that parks the coordinator and files a tracker issue off that number.
-  if (signature == null) {
-    delete record.lastActionableSignature;
-    delete record.signatureRepeatCount;
-  } else {
-    record.lastActionableSignature = signature;
-    record.signatureRepeatCount = 1;
-  }
-  const count = (record.perpetualDispatchCount || 0) + 1;
-  record.perpetualDispatchCount = count;
-  await saveSchedule(schedule);
-  return count;
+  return updateSchedule(async (schedule) => {
+    const record = ensureExecutionRecord(schedule, taskType, appId);
+    for (const field of PARK_FIELDS) delete record[field];
+    // Mirrors parkPerpetual's signature handling, including the churn detector's
+    // `signatureRepeatCount`. A dispatch only happens when the set CHANGED (an
+    // unchanged one parks instead), so this is always the "new signature ⇒ first
+    // sighting" case — leaving the previous count in place would let the NEXT park
+    // increment a stale value, over-reporting "same finding again" to a detector
+    // that parks the coordinator and files a tracker issue off that number.
+    if (signature == null) {
+      delete record.lastActionableSignature;
+      delete record.signatureRepeatCount;
+    } else {
+      record.lastActionableSignature = signature;
+      record.signatureRepeatCount = 1;
+    }
+    const count = (record.perpetualDispatchCount || 0) + 1;
+    record.perpetualDispatchCount = count;
+    return { result: count, changed: true };
+  });
 }
 
 /**
@@ -642,15 +647,15 @@ export async function recordPerpetualDispatch(taskType, appId = null, signature)
  * Returns true when it cleared anything.
  */
 export async function resetPerpetualForManualRun(taskType, appId = null) {
-  const schedule = await loadSchedule();
-  const record = resolveExecutionRecord(schedule, taskType, appId);
-  if (!record) return false;
-  let changed = false;
-  for (const field of [...PARK_FIELDS, 'lastActionableSignature', 'signatureRepeatCount', 'perpetualDispatchCount']) {
-    if (record[field] !== undefined) { delete record[field]; changed = true; }
-  }
-  if (changed) await saveSchedule(schedule);
-  return changed;
+  return updateSchedule(async (schedule) => {
+    const record = resolveExecutionRecord(schedule, taskType, appId);
+    if (!record) return { result: false, changed: false };
+    let changed = false;
+    for (const field of [...PARK_FIELDS, 'lastActionableSignature', 'signatureRepeatCount', 'perpetualDispatchCount']) {
+      if (record[field] !== undefined) { delete record[field]; changed = true; }
+    }
+    return { result: changed, changed };
+  });
 }
 
 /**
@@ -1083,37 +1088,39 @@ export async function getNextTaskType(appId = null, lastType = '', { perpetualOn
  * automated, and therefore NOT allowed to clear its own brakes.
  */
 export async function triggerOnDemandTask(taskType, appId = null, { emit = true, origin = ON_DEMAND_ORIGINS.USER } = {}) {
-  const schedule = await loadSchedule();
+  const request = await updateSchedule(async (schedule) => {
+    // Cheap per-task-type check first; the master-flag check pays a state.json read.
+    const tasks = schedule.tasks || {};
+    if (!Object.prototype.hasOwnProperty.call(tasks, taskType)) {
+      return { result: { error: `Unknown task type '${taskType}'` }, changed: false };
+    }
+    if (!tasks[taskType].enabled) {
+      return { result: { error: `Task type '${taskType}' is disabled` }, changed: false };
+    }
 
-  // Cheap per-task-type check first; the master-flag check pays a state.json read.
-  const tasks = schedule.tasks || {};
-  if (!Object.prototype.hasOwnProperty.call(tasks, taskType)) {
-    return { error: `Unknown task type '${taskType}'` };
-  }
-  if (!tasks[taskType].enabled) {
-    return { error: `Task type '${taskType}' is disabled` };
-  }
+    // Reject if the master Improve toggle is off — request would be silently dropped downstream
+    const state = await loadState();
+    if (!isImprovementEnabled(state)) {
+      return { result: { error: 'Improvement is disabled — enable it in CoS → Config to run on-demand tasks' }, changed: false };
+    }
 
-  // Reject if the master Improve toggle is off — request would be silently dropped downstream
-  const state = await loadState();
-  if (!isImprovementEnabled(state)) {
-    return { error: 'Improvement is disabled — enable it in CoS → Config to run on-demand tasks' };
-  }
+    if (!schedule.onDemandRequests) {
+      schedule.onDemandRequests = [];
+    }
 
-  if (!schedule.onDemandRequests) {
-    schedule.onDemandRequests = [];
-  }
+    const request = {
+      id: `demand-${Date.now().toString(36)}`,
+      taskType,
+      appId,
+      origin,
+      requestedAt: new Date().toISOString()
+    };
 
-  const request = {
-    id: `demand-${Date.now().toString(36)}`,
-    taskType,
-    appId,
-    origin,
-    requestedAt: new Date().toISOString()
-  };
+    schedule.onDemandRequests.push(request);
+    return { result: request, changed: true };
+  });
 
-  schedule.onDemandRequests.push(request);
-  await saveSchedule(schedule);
+  if (request.error) return request;
 
   emitLog('info', `On-demand task requested: ${taskType}`, { appId }, '📅 TaskSchedule');
   // The event's only consumer is a `dequeueNextTask()` trigger (cos.js). Callers
@@ -1134,17 +1141,15 @@ export async function getOnDemandRequests() {
 }
 
 export async function clearOnDemandRequest(requestId) {
-  const schedule = await loadSchedule();
+  return updateSchedule(async (schedule) => {
+    if (!schedule.onDemandRequests) return { result: null, changed: false };
 
-  if (!schedule.onDemandRequests) return null;
+    const index = schedule.onDemandRequests.findIndex(r => r.id === requestId);
+    if (index === -1) return { result: null, changed: false };
 
-  const index = schedule.onDemandRequests.findIndex(r => r.id === requestId);
-  if (index === -1) return null;
-
-  const cleared = schedule.onDemandRequests.splice(index, 1)[0];
-  await saveSchedule(schedule);
-
-  return cleared;
+    const cleared = schedule.onDemandRequests.splice(index, 1)[0];
+    return { result: cleared, changed: true };
+  });
 }
 
 // ============================================================
@@ -1276,25 +1281,28 @@ export async function getScheduleStatus() {
  * Reset execution history for a task type
  */
 export async function resetExecutionHistory(taskType, appId = null) {
-  const schedule = await loadSchedule();
-  const key = `task:${taskType}`;
+  const result = await updateSchedule(async (schedule) => {
+    const key = `task:${taskType}`;
 
-  if (!schedule.executions[key]) {
-    return { error: 'No execution history found' };
-  }
-
-  if (appId) {
-    if (schedule.executions[key].perApp?.[appId]) {
-      delete schedule.executions[key].perApp[appId];
+    if (!schedule.executions[key]) {
+      return { result: { error: 'No execution history found' }, changed: false };
     }
-  } else {
-    delete schedule.executions[key];
-  }
 
-  await saveSchedule(schedule);
+    if (appId) {
+      if (schedule.executions[key].perApp?.[appId]) {
+        delete schedule.executions[key].perApp[appId];
+      }
+    } else {
+      delete schedule.executions[key];
+    }
+
+    return { result: { success: true, taskType, appId }, changed: true };
+  });
+
+  if (result.error) return result;
   emitLog('info', `Reset execution history for ${taskType}`, { appId }, '📅 TaskSchedule');
 
-  return { success: true, taskType, appId };
+  return result;
 }
 
 // ============================================================

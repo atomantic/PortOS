@@ -3,6 +3,7 @@
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { isPlainObject } from '../lib/objects.js';
 import { emitLog } from './cosEvents.js';
 import { INTERVAL_TYPES } from './taskScheduleConstants.js';
@@ -19,6 +20,7 @@ import {
 
 const DATA_DIR = PATHS.cos;
 const SCHEDULE_FILE = join(DATA_DIR, 'task-schedule.json');
+const queueScheduleWrite = createFileWriteQueue();
 
 /**
  * Default schedule data structure (v2 - unified)
@@ -144,21 +146,23 @@ function promptMatchesShippedDefault(prompt, taskType) {
 }
 
 /**
- * Load schedule data (auto-migrates from v1 if needed)
+ * Read and normalize schedule data without deciding whether the normalized
+ * result should be persisted. Callers that mutate the result must do so inside
+ * `queueScheduleWrite`, otherwise two stale snapshots can still overwrite each
+ * other even when the final atomic writes are individually serialized.
  */
-export async function loadSchedule() {
+async function readSchedule() {
   await ensureDataDir();
 
   const loaded = await readJSONFile(SCHEDULE_FILE, null);
   if (!loaded) {
-    return { ...DEFAULT_SCHEDULE };
+    return { schedule: { ...DEFAULT_SCHEDULE }, needsSave: false };
   }
 
   // Auto-migrate v1 → v2
   if (!loaded.version || loaded.version === 1) {
     const migrated = migrateScheduleV1toV2(loaded);
-    await saveSchedule(migrated);
-    return migrated;
+    return { schedule: migrated, needsSave: true };
   }
 
   // v2: merge each task config with its default to backfill new fields
@@ -256,15 +260,50 @@ export async function loadSchedule() {
     }
   }
 
-  if (needsSave) {
-    await saveSchedule(schedule);
-  }
-
-  return schedule;
+  return { schedule, needsSave };
 }
 
-export async function saveSchedule(schedule) {
+/**
+ * Load schedule data (auto-migrates from v1 if needed).
+ *
+ * Normal reads stay off the queue unless compatibility repair is needed. When
+ * repair is needed, discard the pre-queue snapshot and read it again inside a
+ * queued turn so a concurrent mutation cannot be overwritten by stale repair
+ * data.
+ */
+export async function loadSchedule() {
+  const initial = await readSchedule();
+  if (!initial.needsSave) return initial.schedule;
+
+  return queueScheduleWrite(async () => {
+    const current = await readSchedule();
+    if (current.needsSave) await saveScheduleNow(current.schedule);
+    return current.schedule;
+  });
+}
+
+/**
+ * Serialize a complete schedule read-modify-write cycle.
+ *
+ * `mutate` receives the freshest normalized schedule and must return
+ * `{ result, changed }`. `changed: false` preserves no-op callers' no-write
+ * behavior, while compatibility repairs discovered during the read still save.
+ */
+export async function updateSchedule(mutate) {
+  return queueScheduleWrite(async () => {
+    const { schedule, needsSave } = await readSchedule();
+    const { result, changed } = await mutate(schedule);
+    if (needsSave || changed) await saveScheduleNow(schedule);
+    return result;
+  });
+}
+
+async function saveScheduleNow(schedule) {
   await ensureDataDir();
   schedule.lastUpdated = new Date().toISOString();
   await atomicWrite(SCHEDULE_FILE, schedule);
+}
+
+export function saveSchedule(schedule) {
+  return queueScheduleWrite(() => saveScheduleNow(schedule));
 }
