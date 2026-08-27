@@ -1169,6 +1169,7 @@ function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, on
   const [dragOver, setDragOver] = useState(false);
   const [busy, setBusy] = useState(false); // upload or transcription in flight
   const [recording, setRecording] = useState(false);
+  const [armedDetach, setArmedDetach] = useState(null);
   const recorderRef = useRef(null);
   const list = Array.isArray(media) ? media : [];
   const portrait = list.find((m) => m.kind === 'portrait');
@@ -1271,7 +1272,8 @@ function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, on
         <div className="mb-3">
           <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1">Portrait</div>
           <MediaTile m={portrait} missing={missingMedia.has(portrait.mediaKey)} isPortrait
-            onSetPortrait={onSetPortrait} onDetach={onDetach} />
+            onSetPortrait={onSetPortrait} onDetach={onDetach} armedDetach={armedDetach}
+            onArmDetach={setArmedDetach} />
         </div>
       )}
 
@@ -1279,7 +1281,8 @@ function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, on
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
           {others.map((m) => (
             <MediaTile key={`${m.mediaKey}:${m.kind}`} m={m} missing={missingMedia.has(m.mediaKey)}
-              onSetPortrait={onSetPortrait} onDetach={onDetach} />
+              onSetPortrait={onSetPortrait} onDetach={onDetach} armedDetach={armedDetach}
+              onArmDetach={setArmedDetach} />
           ))}
         </div>
       )}
@@ -1307,7 +1310,7 @@ function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, on
 // `missing` integrity flag warns about). Audio/video render inline players
 // (their bytes are served from /data/audio and /data/videos); a voice memo's
 // transcript rides in `caption`. Other kinds render a labeled chip.
-function MediaTile({ m, missing, isPortrait = false, onSetPortrait, onDetach }) {
+function MediaTile({ m, missing, isPortrait = false, onSetPortrait, onDetach, armedDetach, onArmDetach }) {
   const isImage = m.kind === 'portrait' || m.kind === 'reference';
   const isAudio = m.kind === 'audio';
   const isVideo = m.kind === 'video';
@@ -1347,10 +1350,18 @@ function MediaTile({ m, missing, isPortrait = false, onSetPortrait, onDetach }) 
             <Star size={12} aria-hidden="true" />
           </button>
         )}
-        <button type="button" onClick={() => onDetach(m.mediaKey, m.kind)} title="Detach" aria-label="Detach"
-          className="p-2 sm:p-1 rounded bg-black/60 text-gray-200 hover:text-port-error">
-          <X size={12} aria-hidden="true" />
-        </button>
+        {armedDetach === `${m.mediaKey}:${m.kind}` ? (
+          <ConfirmButtonPair prompt="Detach?" confirmText="Detach" cancelText="Cancel"
+            ariaLabel="Confirm media detach" onConfirm={() => {
+              onArmDetach(null);
+              onDetach(m.mediaKey, m.kind);
+            }} onCancel={() => onArmDetach(null)} largeTouchTargets />
+        ) : (
+          <button type="button" onClick={() => onArmDetach(`${m.mediaKey}:${m.kind}`)} title="Detach" aria-label="Detach"
+            className="p-2 sm:p-1 rounded bg-black/60 text-gray-200 hover:text-port-error">
+            <X size={12} aria-hidden="true" />
+          </button>
+        )}
       </div>
     </div>
   );

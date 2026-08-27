@@ -112,7 +112,7 @@ vi.mock('../components/TagPicker', () => ({
 vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
 import CatalogIngredient, { buildGenerationPromptSeed } from './CatalogIngredient';
-import { getCatalogIngredientDetails, unlinkCatalogIngredientRelation, updateCatalogIngredient } from '../services/apiCatalog';
+import { getCatalogIngredientDetails, unlinkCatalogIngredientRelation, updateCatalogIngredient, detachCatalogIngredientMedia } from '../services/apiCatalog';
 
 const renderPage = (path = '/catalog/character/cat-chr-1') => {
   const router = createMemoryRouter([
@@ -126,9 +126,28 @@ beforeEach(() => {
   getCatalogIngredientDetails.mockImplementation(async () => detailsOf(CHAR_FIXTURE));
   updateCatalogIngredient.mockReset();
   unlinkCatalogIngredientRelation.mockReset();
+  detachCatalogIngredientMedia.mockReset();
 });
 
 describe('CatalogIngredient — character sheet', () => {
+  it('requires confirmation before detaching media', async () => {
+    detachCatalogIngredientMedia.mockResolvedValue({});
+    getCatalogIngredientDetails.mockImplementation(async () => ({
+      ...detailsOf(CHAR_FIXTURE),
+      media: [{ mediaKey: 'portrait.png', kind: 'portrait' }],
+    }));
+    renderPage();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Detach' })).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Detach' }));
+    expect(detachCatalogIngredientMedia).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Detach', exact: true })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Detach', exact: true }));
+    await waitFor(() => expect(detachCatalogIngredientMedia).toHaveBeenCalledWith(
+      'cat-chr-1', { mediaKey: 'portrait.png', kind: 'portrait' }, { silent: true },
+    ));
+  });
+
   it('requires confirmation before removing an outbound relation', async () => {
     unlinkCatalogIngredientRelation.mockResolvedValue({});
     getCatalogIngredientDetails.mockImplementation(async () => ({
