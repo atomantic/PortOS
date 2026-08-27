@@ -249,6 +249,62 @@ export const AUDIT_DEFINITIONS = Object.freeze({
       noun: 'simplify finding(s)',
     }),
   },
+  'api-contract': {
+    quotaBurnId: 'api-contract-audit',
+    label: 'API & route contracts',
+    description: 'API contract audit — configurable: file issues (default) or implement fixes',
+    defaultFileIssues: true,
+    filing: filing({
+      slugPrefix: 'api-contract-',
+      label: 'api-contract-audit',
+      issueLabel: 'api-contract',
+      labelDescription: 'Proposed from an API/route-contract audit',
+      noun: 'API contract finding(s)',
+    }),
+  },
+  'react-lifecycle': {
+    quotaBurnId: 'react-lifecycle-audit',
+    label: 'React lifecycle & state',
+    description: 'React lifecycle audit — configurable: file issues (default) or implement fixes',
+    defaultFileIssues: true,
+    filing: filing({
+      slugPrefix: 'react-lifecycle-',
+      label: 'react-lifecycle-audit',
+      issueLabel: 'react-lifecycle',
+      labelDescription: 'Proposed from a React lifecycle/state audit',
+      noun: 'React lifecycle finding(s)',
+    }),
+  },
+  observability: {
+    quotaBurnId: 'observability-audit',
+    label: 'Logging & observability',
+    description: 'Observability audit — configurable: file issues (default) or implement fixes',
+    defaultFileIssues: true,
+    filing: filing({
+      slugPrefix: 'observability-',
+      label: 'observability-audit',
+      // Reuses the existing `code-quality` label the way `simplify` does — a
+      // missing log line is a maintainability defect, not its own category.
+      issueLabel: 'code-quality',
+      labelDescription: 'Proposed from a logging/observability audit',
+      noun: 'observability finding(s)',
+    }),
+  },
+  copy: {
+    quotaBurnId: 'copy-audit',
+    label: 'Copy & text clarity',
+    description: 'Copy-clarity audit — configurable: file issues (default) or implement rewrites',
+    defaultFileIssues: true,
+    filing: filing({
+      slugPrefix: 'copy-',
+      label: 'copy-audit',
+      // User-facing wording is a UX concern, so it files under the same label
+      // the UX audit uses rather than minting a near-duplicate category.
+      issueLabel: 'ux',
+      labelDescription: 'Proposed from a copy/text-clarity audit',
+      noun: 'copy finding(s)',
+    }),
+  },
 });
 
 export const AUDIT_TASK_TYPES = new Set(Object.keys(AUDIT_DEFINITIONS));
