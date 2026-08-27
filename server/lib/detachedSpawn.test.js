@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, stat, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { basename, join } from 'path';
 import { ChildProcess, execFile } from './childProcess.js';
 import { promisify } from 'util';
 import { pinPlatform } from './testHelper.js';
@@ -486,6 +486,21 @@ describe('isDetachedRunning', () => {
     expect(await isDetachedRunning(controlDir)).toBe(true);
     handle.kill('SIGKILL');
     await onClose(handle);
+  });
+
+  it.runIf(IS_POSIX)('is true when the live process matches the expected executable', async () => {
+    const controlDir = await tmpControlDir();
+    await writeFile(join(controlDir, 'pid'), String(process.pid));
+    expect(await isDetachedRunning(controlDir, { executable: basename(process.execPath) })).toBe(true);
+  });
+
+  it.runIf(IS_POSIX)('is false when a recycled live PID belongs to another process', async () => {
+    const controlDir = await tmpControlDir();
+    await writeFile(join(controlDir, 'pid'), String(process.pid));
+    expect(await isDetachedRunning(controlDir, {
+      executable: 'bash',
+      args: ['/example/update.sh']
+    })).toBe(false);
   });
 
   it('is false once the job recorded its exit', async () => {

@@ -43,14 +43,18 @@
 // the supervisor records the exit status — exactly as if the original handle
 // had never gone away (#1332).
 
-import { spawn } from './childProcess.js';
+import { execFile, spawn } from './childProcess.js';
 import { EventEmitter } from 'events';
 import { constants as osConstants } from 'os';
-import { join } from 'path';
+import { basename, join } from 'path';
 import { open, readFile, writeFile, rm, stat, readdir } from 'fs/promises';
+import { promisify } from 'util';
 import { killProcessTree } from './bufferedSpawn.js';
 import { ensureDir, sleep } from './fileUtils.js';
+import { safeChildProcessOptions } from './processEnv.js';
 import { withSpawnCwdEnv } from './spawnCwd.js';
+
+const execFileAsync = promisify(execFile);
 
 // Default cadence for tailing the job's log files and polling for completion.
 // 250ms matches the high-frequency-write batching cadence used elsewhere — far
@@ -532,8 +536,13 @@ export async function reattachDetached(controlDir, { pollMs = DEFAULT_POLL_MS, c
  * (dataManagerBusy, #3342). So an ABSENT control file reads as "never launched",
  * but any other read failure is rethrown rather than silently synthesized into
  * "not running": "we could not look" must not answer as "nothing is there".
+ * Callers that reuse one control dir for one fixed command may also provide
+ * its expected executable and arguments. That identity check prevents a stale
+ * PID file from treating an unrelated process that inherited the PID as the
+ * detached job.
  *
  * @param {string} controlDir - the job's spawnDetached control dir
+ * @param {{executable: string, args?: string[]}|null} expectedProcess
  * @returns {Promise<boolean>}
  */
 const readControlFile = (path) => readFile(path, 'utf8').catch((err) => {
@@ -541,12 +550,31 @@ const readControlFile = (path) => readFile(path, 'utf8').catch((err) => {
   throw err;
 });
 
-export async function isDetachedRunning(controlDir) {
+const processMatches = async (pid, { executable, args }) => {
+  const { stdout } = await execFileAsync(
+    'ps', ['-ww', '-p', String(pid), '-o', 'command='], safeChildProcessOptions({ timeout: 5000 })
+  ).catch((err) => {
+    // The process may exit between kill(pid, 0) and ps. That is a normal
+    // not-running answer; every other probe failure must remain fail-closed.
+    if (err?.code === 1) return { stdout: '' };
+    throw err;
+  });
+  const command = stdout.trim();
+  if (!command) return false;
+  const actualExecutable = command.split(/\s+/, 1)[0];
+  if (basename(actualExecutable) !== basename(executable)) return false;
+  if (!Array.isArray(args)) return true;
+  const actualArgs = command.slice(actualExecutable.length).trim();
+  return actualArgs === args.map(String).join(' ');
+};
+
+export async function isDetachedRunning(controlDir, expectedProcess = null) {
   const pidRaw = await readControlFile(join(controlDir, 'pid'));
   const pid = Number.parseInt(pidRaw, 10);
   if (!Number.isFinite(pid) || pid <= 0) return false;
   const exitWritten = (await readControlFile(join(controlDir, 'exit'))).length > 0;
-  return !exitWritten && isAlive(pid);
+  if (exitWritten || !isAlive(pid)) return false;
+  return expectedProcess ? processMatches(pid, expectedProcess) : true;
 }
 
 /**

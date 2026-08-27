@@ -76,7 +76,7 @@ export async function executeUpdate(tag, emit, { forceCleanWorkspaces } = {}) {
   // triggers, and its supervisor's late `exit` write into a truncated control
   // dir would prematurely close the new handle with the OLD script's status).
   // A still-running script also means a second update is wrong regardless.
-  if (!isWindows && await isDetachedRunning(controlDir)) {
+  if (!isWindows && await isDetachedRunning(controlDir, { executable: cmd, args })) {
     const errorMessage = 'A previous update script is still running — wait for it to finish before starting another update';
     await recordUpdateResult({
       version: tag.replace(/^v/, ''),
