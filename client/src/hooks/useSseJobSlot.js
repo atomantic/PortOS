@@ -64,8 +64,14 @@ export default function useSseJobSlot({
   // Metadata and warning frames intentionally omit progress fields. Preserve the
   // last announced values across those sparse frames instead of flashing 0% /
   // "starting" between real progress updates.
+  //
+  // `latestUrl` is only a STALE-FRAME guard: the real hook sets it alongside
+  // `latest`, so a mismatch means the frame belongs to a previous job. An absent
+  // `latestUrl` means "unknown", not "mismatched" — treating it as a mismatch
+  // would silently freeze progress for any consumer whose SSE seam is stubbed.
   useEffect(() => {
-    if (!job || !latest || sse.latestUrl !== jobUrl) return;
+    if (!job || !latest) return;
+    if (sse.latestUrl && sse.latestUrl !== jobUrl) return;
     setProgress((prev) => ({
       percent: Number.isFinite(latest.percent) ? Math.round(latest.percent) : prev.percent,
       stage: typeof latest.stage === 'string' && latest.stage ? latest.stage : prev.stage,
