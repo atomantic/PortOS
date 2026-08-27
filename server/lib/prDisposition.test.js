@@ -33,6 +33,15 @@ describe('resolvePrCreation (#3733)', () => {
     expect(resolvePrCreation({ taskOpenPR: true, agentOwnsPr: false, prClaimVerified: false })).toBe(PR_CREATION.ALWAYS);
   });
 
+  it('never creates an empty PR after finalize proves an opted-in audit is a no-op', () => {
+    expect(resolvePrCreation({
+      taskOpenPR: true,
+      agentOwnsPr: false,
+      prClaimVerified: false,
+      noChangesToShip: true,
+    })).toBe(PR_CREATION.NEVER);
+  });
+
   it('backstops an owner finalize did NOT verify — the slashdo-free harnesses', () => {
     expect(resolvePrCreation({ taskOpenPR: true, agentOwnsPr: true, prClaimVerified: false })).toBe(PR_CREATION.IF_MISSING);
   });

@@ -1299,6 +1299,7 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
     // user-terminated, or whose finalize threw outright verified nothing, and
     // cleanup must ask the forge itself rather than assume the PR exists.
     let runnerPrClaimVerified = false;
+    let runnerNoChangesToShip = false;
     try {
       const finalized = await finalizeAgent({
         agentId,
@@ -1318,6 +1319,7 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
       });
       if (finalized && typeof finalized.success === 'boolean') cleanupSuccess = finalized.success;
       runnerPrClaimVerified = prClaimWasVerified(finalized?.prVerdict);
+      runnerNoChangesToShip = finalized?.prVerdict?.noChangesToShip === true;
     } catch (err) {
       finalizeError = err;
       emitLog('error', `finalizeAgent threw for ${agentId} (continuing cleanup): ${err.message}`, { agentId, error: err.message });
@@ -1327,7 +1329,7 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
     // pipeline progression, the Creative Director chain hook, and worktree
     // cleanup (+ cleanup-warning notification and merge-recovery task). Runs
     // inside this try so a throw still hits the finally below.
-    await runAgentCompletionCleanup({ agentId, task, agent, effectiveSuccess: cleanupSuccess, outputBuffer, prClaimVerified: runnerPrClaimVerified });
+    await runAgentCompletionCleanup({ agentId, task, agent, effectiveSuccess: cleanupSuccess, outputBuffer, prClaimVerified: runnerPrClaimVerified, noChangesToShip: runnerNoChangesToShip });
 
     // Surface a finalizeAgent throw to the caller after best-effort
     // cleanup completed — without this the runner harness would never see

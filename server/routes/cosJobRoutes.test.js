@@ -5,7 +5,8 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 import jobRoutes from './cosJobRoutes.js';
 
 vi.mock('../services/cos.js', () => ({
-  addTask: vi.fn()
+  addTask: vi.fn(),
+  forceSpawnTask: vi.fn()
 }));
 
 vi.mock('../services/autonomousJobs.js', () => ({
@@ -76,6 +77,7 @@ describe('CoS Job Routes', () => {
       expect(response.body.jobs).toHaveLength(1);
       expect(response.body.jobs[0].hasGate).toBe(false);
       expect(response.body.stats).toHaveProperty('total');
+      expect(response.body.dataInputCatalog.map(({ id }) => id)).toContain('project-goals');
     });
 
     it('projects the next run for rich recurrence jobs', async () => {
@@ -312,6 +314,28 @@ describe('CoS Job Routes', () => {
       );
     });
 
+    it('should accept registered data inputs and forward them to createJob', async () => {
+      autonomousJobs.createJob.mockResolvedValue({ id: 'j1' });
+
+      const response = await request(app)
+        .post('/api/cos/jobs')
+        .send({ name: 'Context Task', type: 'agent', promptTemplate: 'test', dataInputs: ['project-goals', 'open-issues'] });
+
+      expect(response.status).toBe(200);
+      expect(autonomousJobs.createJob).toHaveBeenCalledWith(
+        expect.objectContaining({ dataInputs: ['project-goals', 'open-issues'] })
+      );
+    });
+
+    it('should reject unknown data input ids', async () => {
+      const response = await request(app)
+        .post('/api/cos/jobs')
+        .send({ name: 'Bad Context Task', type: 'agent', promptTemplate: 'test', dataInputs: ['unknown'] });
+
+      expect(response.status).toBe(400);
+      expect(autonomousJobs.createJob).not.toHaveBeenCalled();
+    });
+
     it('should reject an effort value outside EFFORT_LEVELS', async () => {
       const response = await request(app)
         .post('/api/cos/jobs')
@@ -451,13 +475,16 @@ describe('CoS Job Routes', () => {
       autonomousJobs.isScriptJob.mockReturnValue(false);
       autonomousJobs.generateTaskFromJob.mockResolvedValue({ description: 'Review', priority: 'MEDIUM' });
       cos.addTask.mockResolvedValue({ id: 'task-1' });
+      cos.forceSpawnTask.mockResolvedValue({ success: true, taskId: 'task-1' });
 
       const response = await request(app).post('/api/cos/jobs/j1/trigger');
 
       expect(response.status).toBe(200);
       expect(response.body.type).toBe('agent');
       expect(response.body.status).toBe('queued');
+      expect(response.body.started).toBe(true);
       expect(response.body.taskId).toBe('task-1');
+      expect(cos.forceSpawnTask).toHaveBeenCalledWith('task-1');
     });
 
     it('should forward app scope + git options into addTask for an app-scoped agent job', async () => {
@@ -476,10 +503,12 @@ describe('CoS Job Routes', () => {
           simplify: false,
           provider: 'anthropic',
           model: 'claude-opus-4-8',
-          effort: 'high'
+          effort: 'high',
+          prompt: 'Review\n\n## Preloaded task data\nSnapshot'
         }
       });
       cos.addTask.mockResolvedValue({ id: 'task-2' });
+      cos.forceSpawnTask.mockResolvedValue({ success: true, taskId: 'task-2' });
 
       const response = await request(app).post('/api/cos/jobs/j1/trigger');
 
@@ -493,10 +522,40 @@ describe('CoS Job Routes', () => {
           provider: 'anthropic',
           model: 'claude-opus-4-8',
           effort: 'high',
+          prompt: 'Review\n\n## Preloaded task data\nSnapshot',
           autonomousJob: true,
           jobId: 'j1'
         }),
-        'internal'
+        'internal',
+        { suppressDequeue: true }
+      );
+      expect(cos.forceSpawnTask).toHaveBeenCalledWith('task-2');
+    });
+
+    it('should preserve the no-change success contract when Run now queues an agent job', async () => {
+      autonomousJobs.getJob.mockResolvedValue({ id: 'j1', type: 'agent', name: 'Catalog audit' });
+      autonomousJobs.isShellJob.mockReturnValue(false);
+      autonomousJobs.isScriptJob.mockReturnValue(false);
+      autonomousJobs.generateTaskFromJob.mockResolvedValue({
+        description: 'Audit catalogs',
+        priority: 'MEDIUM',
+        metadata: {
+          autonomousJob: true,
+          jobId: 'j1',
+          useWorktree: true,
+          openPR: true,
+          noChangeSuccess: true,
+        }
+      });
+      cos.addTask.mockResolvedValue({ id: 'task-no-change' });
+
+      const response = await request(app).post('/api/cos/jobs/j1/trigger');
+
+      expect(response.status).toBe(200);
+      expect(cos.addTask).toHaveBeenCalledWith(
+        expect.objectContaining({ autonomousJob: true, jobId: 'j1', noChangeSuccess: true }),
+        'internal',
+        { suppressDequeue: true }
       );
     });
 
@@ -510,14 +569,37 @@ describe('CoS Job Routes', () => {
         metadata: { provider: 'anthropic', model: 'claude-opus-4-8', effort: 'high' }
       });
       cos.addTask.mockResolvedValue({ id: 'task-3' });
+      cos.forceSpawnTask.mockResolvedValue({ success: true, taskId: 'task-3' });
 
       const response = await request(app).post('/api/cos/jobs/j1/trigger');
 
       expect(response.status).toBe(200);
       expect(cos.addTask).toHaveBeenCalledWith(
         expect.objectContaining({ provider: 'anthropic', model: 'claude-opus-4-8', effort: 'high' }),
-        'internal'
+        'internal',
+        { suppressDequeue: true }
       );
+      expect(cos.forceSpawnTask).toHaveBeenCalledWith('task-3');
+    });
+
+    it('reports a direct-spawn failure while retaining the queued task', async () => {
+      autonomousJobs.getJob.mockResolvedValue({ id: 'j1', type: 'agent', name: 'Review' });
+      autonomousJobs.isShellJob.mockReturnValue(false);
+      autonomousJobs.isScriptJob.mockReturnValue(false);
+      autonomousJobs.generateTaskFromJob.mockResolvedValue({ description: 'Review', priority: 'MEDIUM' });
+      cos.addTask.mockResolvedValue({ id: 'task-4' });
+      cos.forceSpawnTask.mockResolvedValue({ error: 'No available agent slots (1/1)' });
+
+      const response = await request(app).post('/api/cos/jobs/j1/trigger');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({
+        success: false,
+        type: 'agent',
+        status: 'skipped',
+        taskId: 'task-4',
+        reason: 'No available agent slots (1/1)'
+      });
     });
 
     it('should return 404 if job not found', async () => {

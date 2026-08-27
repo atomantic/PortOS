@@ -1,6 +1,6 @@
 {
   "name": "portos",
-  "version": "2.50.0",
+  "version": "2.51.0",
   "private": true,
   "description": "Local dev machine App OS portal",
   "author": "Adam Eivy (@antic|@atomantic)",
@@ -32,6 +32,7 @@
     "test:db": "npm run test:db --prefix server",
     "setup:llm": "node scripts/setup-llm.js",
     "setup:browser": "node scripts/setup-browser.js",
+    "setup:remote-desktop": "node scripts/setup-remote-desktop.js",
     "fix:windows-console": "node scripts/fix-windows-console.js",
     "setup:cert": "node scripts/setup-cert.js",
     "setup:ghostty": "node scripts/setup-ghostty.js",

@@ -161,7 +161,7 @@ describe('ImageGenTab grouped tabs', () => {
     getImageGenStatus.mockResolvedValue({ connected: true, mode: 'external', model: 'flux-v1' });
     await renderTab();
     fireEvent.click(screen.getByRole('button', { name: /Test Connection/i }));
-    await waitFor(() => expect(screen.getByText(/external — flux-v1/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/Ready — external — flux-v1/)).toBeTruthy());
     expect(getImageGenStatus).toHaveBeenCalledWith(undefined);
   });
 
@@ -174,6 +174,20 @@ describe('ImageGenTab grouped tabs', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: /Agy CLI/i }));
     expect(screen.queryByText(/grok — grok-cli 0\.0\.30/)).toBeNull();
+  });
+
+  it('keeps an inconclusive local probe distinct from an unavailable runtime', async () => {
+    getImageGenStatus.mockResolvedValue({
+      connected: false,
+      mode: 'local',
+      readiness: 'unknown',
+      reason: 'Could not verify the configured Python runtime',
+    });
+    await renderTab();
+    fireEvent.click(screen.getByRole('tab', { name: /^Local/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Test Connection/i }));
+
+    await waitFor(() => expect(screen.getByText(/Could not verify — Could not verify the configured Python runtime/)).toBeTruthy());
   });
 
   it('never shows an in-flight probe result under the tab the user switched to', async () => {

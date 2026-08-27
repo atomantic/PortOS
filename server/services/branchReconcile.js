@@ -121,10 +121,16 @@ const PR_LIST_LIMIT = 200;
  *   MERGED     — work is fully in the default branch → deterministic cleanup
  *   CONFLICTED — open PR with merge conflicts        → agent resolves
  *   IN_REVIEW  — open PR, otherwise                  → agent drives to merge
- *   NEEDS_PR   — pushed, not merged, no PR, clean     → agent verifies + opens PR
- *   WIP        — local-only, dirty, or LIVE-owned     → skip + report (never touch)
+ *   NEEDS_PR   — unmerged work, no PR, clean          → agent verifies + opens PR
+ *                (pushed-with-no-PR, or never pushed but holding commits)
+ *   WIP        — bare pointer, dirty, or LIVE-owned   → skip + report (never touch)
  *
- * @param {{ hasUpstream:boolean, isMerged:boolean, worktreeDirty:boolean, abandonedAgentWorktree?:boolean, liveOwnerReason?:string|null, openPr:({mergeable?:string}|null), prStateUnavailable?:boolean }} input
+ * @param {{ hasUpstream:boolean, ahead?:number|null, hasOrigin?:boolean, isMerged:boolean, worktreeDirty:boolean, abandonedAgentWorktree?:boolean, liveOwnerReason?:string|null, openPr:({mergeable?:string}|null), prStateUnavailable?:boolean }} input
+ *   `ahead` is the branch's own commit count over the default branch (null =
+ *   unreadable), and `hasOrigin` says the repo has a remote to push that work to.
+ *   Together they are what make a never-pushed branch actionable — see the
+ *   NEEDS_PR gate below. `hasOrigin` defaults to FALSE (fail-closed): a caller
+ *   that cannot vouch for a remote must not have one invented for it.
  *   `prStateUnavailable` means the forge could not be READ this cycle — distinct
  *   from `openPr: null` ("the forge answered: no open PR").
  *   `liveOwnerReason` is `resolveLiveOwnerReason`'s verdict for the branch — non-null
@@ -133,7 +139,7 @@ const PR_LIST_LIMIT = 200;
  *   dirty claim trees still remain WIP through the ordinary dirty-tree guard.
  * @returns {'ABANDONED_WIP'|'MERGED'|'CONFLICTED'|'IN_REVIEW'|'NEEDS_PR'|'WIP'}
  */
-export function classifyBranch({ hasUpstream, isMerged, worktreeDirty, abandonedAgentWorktree, liveOwnerReason = null, openPr, prStateUnavailable = false }) {
+export function classifyBranch({ hasUpstream, ahead = null, hasOrigin = false, isMerged, worktreeDirty, abandonedAgentWorktree, liveOwnerReason = null, openPr, prStateUnavailable = false }) {
   // A dead agent's worktree that still holds uncommitted work is the ONE dirty
   // case that must be driven rather than skipped — and it must be caught BEFORE
   // the `isMerged` test, because an agent that exited without committing leaves
@@ -166,7 +172,28 @@ export function classifyBranch({ hasUpstream, isMerged, worktreeDirty, abandoned
   // (skip + never touch) rather than dispatching an agent to open a PR that may
   // already exist. MERGED above is unaffected: that verdict is pure git truth.
   if (prStateUnavailable) return 'WIP';
-  if (hasUpstream) return 'NEEDS_PR';
+  // Unmerged commits that nothing else owns are in-flight work whether or not
+  // they were ever PUSHED. Gating this on `hasUpstream` alone is what made a
+  // whole shelf of `claim/*` branches invisible: a /claim session that dies
+  // before its `git push -u` leaves commits ahead of the default branch with no
+  // upstream, so every run classified them WIP and parked on "no branches in
+  // flight" while the work sat there. NEEDS_PR already tells the agent to push
+  // (`/do:pr`, or `git push -u origin <branch>` by hand), so the un-pushed case
+  // needs no separate state — only to stop being skipped.
+  //
+  // `ahead` is the discriminator the upstream check was standing in for: a branch
+  // with NO commits of its own is a bare pointer with nothing to ship, and stays
+  // WIP. Unknown (`null`, an unreadable rev-list) also stays WIP — a git failure
+  // must never manufacture work.
+  //
+  // `hasOrigin` gates only the ahead-based arm, because that arm is the one with
+  // nothing else proving the work is shippable. On a managed repo with NO remote,
+  // every branch has `hasUpstream: false` and `getOpenPrsByHead` answers with an
+  // empty Map, so without this gate a clean local branch would be dispatched to a
+  // coordinator that can only fail at `git push -u origin <branch>` — spending an
+  // agent run to discover there is nowhere to push. `hasUpstream` needs no such
+  // gate: a branch that tracks a remote branch is itself proof the remote exists.
+  if (hasUpstream || (hasOrigin && typeof ahead === 'number' && ahead > 0)) return 'NEEDS_PR';
   return 'WIP';
 }
 
@@ -192,10 +219,15 @@ export function classifyBranches(inputs) {
  * coordinator agent a list of PRs to re-open on top of the ones that exist.
  *
  * @param {string} repoPath
+ * @param {object|null} [providedOrigin] - `getOriginInfo`'s answer when the caller
+ *   already resolved it (gatherBranchState needs the same record for `hasOrigin`);
+ *   omitted, this reads it itself so a standalone call still works.
  * @returns {Promise<Map<string, {number:number, mergeable:string, isDraft:boolean, url:string}>|null>}
  */
-async function getOpenPrsByHead(repoPath) {
-  const origin = await getOriginInfo(repoPath).catch(() => null);
+async function getOpenPrsByHead(repoPath, providedOrigin) {
+  const origin = providedOrigin === undefined
+    ? await getOriginInfo(repoPath).catch(() => null)
+    : providedOrigin;
   // Accept any GitHub-family host (github.com AND enterprise github.*), mirroring
   // prWatcher.checkPullRequests. `origin.isGithub` is github.com-only, so gating
   // on it silently skipped enterprise repos. githubRepoSpec pairs that gate with
@@ -643,23 +675,38 @@ async function worktreeAgeMs(worktreePath) {
  * always-protected set. Effectful (git + gh).
  *
  * @param {string} repoPath
- * @param {{ defaultBranch:string, activeAgentIds?:Set<string>, remoteHeads?:Map<string,string>|null }} ctx
+ * @param {{ defaultBranch:string, activeAgentIds?:Set<string>, remoteHeads?:Map<string,string>|null, hasOrigin?:boolean }} ctx
  *   `activeAgentIds` distinguishes a live agent's worktree from an abandoned one (see
  *   `isAbandonedAgentWorktree`); omitting it leaves every agent worktree protected.
  *   `remoteHeads` is `listRemoteHeads`' answer when the caller already has it;
  *   omitted, this reads it itself, and `null` (unreadable remote) is carried
  *   through as "we could not ask" rather than "the remote is empty".
+ *   `hasOrigin` is `getOriginInfo`'s verdict when the caller already has it (same
+ *   rationale); omitted, this reads it itself, so a standalone caller still gets a
+ *   truthful answer rather than the fail-closed default.
  * @returns {Promise<object[]>} one entry per candidate branch:
- *   { branch, tip, hasUpstream, tracking, upstreamGone, isMerged, hasWorktree, worktreePath,
+ *   { branch, tip, hasUpstream, hasOrigin, tracking, upstreamGone, isMerged, hasWorktree, worktreePath,
  *     worktreeDirty, dirtyPaths, behind, ahead, collisionPaths, abandonedAgentWorktree, openPr }
  */
-export async function gatherBranchState(repoPath, { defaultBranch, activeAgentIds = null, remoteHeads: providedRemoteHeads } = {}) {
+export async function gatherBranchState(repoPath, { defaultBranch, activeAgentIds = null, remoteHeads: providedRemoteHeads, hasOrigin: providedHasOrigin } = {}) {
   const protectedSet = new Set([...PROTECTED_BRANCHES, defaultBranch]);
+  // Read origin ONCE and use it for both facts below — `hasOrigin` (the gate on
+  // classifyBranch's ahead-based NEEDS_PR arm, so an origin-less repo's local work
+  // is never dispatched to a coordinator whose only move is a push that cannot
+  // land) and the PR query's host-qualified repo selector. Skipped entirely when
+  // the caller already vouched for `hasOrigin`, in which case getOpenPrsByHead
+  // resolves origin itself as it always has.
+  const origin = providedHasOrigin === undefined
+    ? await getOriginInfo(repoPath).catch(() => null)
+    : undefined;
+  const hasOrigin = providedHasOrigin === undefined
+    ? Boolean(origin?.hasOrigin)
+    : Boolean(providedHasOrigin);
 
   const [branches, worktrees, prsByHeadOrNull, remoteHeads] = await Promise.all([
     getBranches(repoPath),
     listWorktrees(repoPath).catch(() => []),
-    getOpenPrsByHead(repoPath),
+    getOpenPrsByHead(repoPath, origin),
     providedRemoteHeads === undefined ? listRemoteHeads(repoPath) : providedRemoteHeads
   ]);
   // null = the forge could not be read (see getOpenPrsByHead). Carried onto every
@@ -701,6 +748,7 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
       branch: b.name,
       tip,
       hasUpstream: Boolean(b.tracking),
+      hasOrigin,
       // Kept alongside the boolean because cleanup needs the NAME, not just the
       // fact: a branch may track a remote branch called something else, and the
       // remote-side delete has to name the right ref.
@@ -926,7 +974,9 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapRem
   // exactly the staleness listRemoteHeads exists to avoid. One extra ls-remote
   // per cycle is the cost of each destructive step reading the remote itself.
   const remoteHeads = origin?.hasOrigin ? await listRemoteHeads(repoPath) : null;
-  const inputs = await gatherBranchState(repoPath, { defaultBranch, activeAgentIds, remoteHeads });
+  const inputs = await gatherBranchState(repoPath, {
+    defaultBranch, activeAgentIds, remoteHeads, hasOrigin: Boolean(origin?.hasOrigin)
+  });
   // A gh failure AFTER a passing probe (a blip mid-cycle, or an unparseable
   // page) is still "we could not ask" — surface it so the caller retries next
   // tick instead of parking on an in-flight set built from unknown PR state.
@@ -1098,7 +1148,10 @@ const verifyGate = 'Rebase onto the default branch before opening or updating a 
 //
 // `pr` is the PR's number when the branch already has one, else the `<num>`
 // placeholder the agent fills in after opening it.
-const driveToMerge = (pr) => [
+// Exported so the per-agent repo-state audit (services/agentRepoStateVerification.js)
+// hands a recovery agent the SAME merge procedure, rather than re-authoring a
+// `gh pr merge` line that loses these caveats.
+export const driveToMerge = (pr) => [
   'Opening (or approving) the PR is NOT the end state — a green PR left open is still an unfinished branch that this task will simply re-drive on its next run.',
   `Wait for CI in-session by re-polling \`gh pr checks ${pr} --required\` every 30s so the run stays observable while CI is pending. Budget 15 minutes for the run; past that, leave the PR open and report that CI was still pending.`,
   'If a required check FAILS, fix it on the branch, push, and re-poll (max 3 rounds); if it is still red after that, leave the PR open and report exactly which check failed.',
@@ -1231,6 +1284,12 @@ export function formatInFlightForPrompt(inFlight, { defaultBranch, actions, bran
     const pr = b.openPr ? ` — PR #${b.openPr.number} (${b.openPr.mergeable})${b.openPr.url ? ` ${b.openPr.url}` : ''}` : ' — no PR';
     lines.push(`### \`${b.branch}\` [${b.state}]${pr}`);
     if (b.worktreePath) lines.push(`- Worktree: \`${b.worktreePath}\`${b.state === 'ABANDONED_WIP' ? ' (holds UNCOMMITTED work — read it before doing anything)' : ''}`);
+    // A never-pushed NEEDS_PR branch reads identically to a pushed one in this
+    // block, and the difference decides whether the push needs `-u`. State it
+    // rather than making the agent infer it from a missing PR link.
+    if (b.hasUpstream === false && b.state === 'NEEDS_PR') {
+      lines.push('- Never pushed: no upstream on `origin` — the push that opens the PR must create one (`git push -u origin <branch>`).');
+    }
     if (typeof b.behind === 'number') {
       lines.push(`- Drift: ${b.behind} commit(s) behind \`${defaultBranch}\`${typeof b.ahead === 'number' ? `, ${b.ahead} ahead` : ''}`);
     }

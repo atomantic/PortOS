@@ -26,6 +26,17 @@ describe('EffortSelect', () => {
       .toEqual(['Default effort', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
   });
 
+  it('uses a server-published ladder for a renamed custom CLI', () => {
+    const custom = {
+      id: 'custom-agent',
+      effortLevels: ['low', 'medium', 'high'],
+      effortLevelsByModel: { 'custom-model': ['low', 'high'] },
+    };
+    render(<EffortSelect provider={custom} model="custom-model" value="" onChange={() => {}} />);
+    expect(screen.getAllByRole('option').map(o => o.textContent))
+      .toEqual(['Default effort', 'low', 'high']);
+  });
+
   // The server clamps an out-of-ladder effort rather than dropping it, so the
   // run still gets an `--effort`. Without an option matching the stored value
   // the select renders blank — indistinguishable from "Default effort" — while

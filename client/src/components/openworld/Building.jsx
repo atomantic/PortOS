@@ -9,6 +9,7 @@ import BuildingHologram from './BuildingHologram';
 import BuildingWindows from './BuildingWindows';
 import { computeRooftopKit } from '../../utils/openWorldRooftops';
 import { buildingHasInteriorWindows } from '../../utils/openWorldInteriorWindows';
+import { computeAppMetrics, buildingSignalTone } from '../../utils/openWorldAppMetrics';
 
 // Rooftop fixture geometry/materials are module-scope singletons shared by every
 // building — fixtures are tiny set dressing, so they keep fixed colors (the antenna
@@ -22,6 +23,9 @@ const ROOF_GEOMS = {
   ac: new THREE.BoxGeometry(0.4, 0.22, 0.34),
   dish: new THREE.SphereGeometry(0.24, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2),
 };
+const CONTACT_SHADOW_GEOM = new THREE.CircleGeometry(1, 16);
+const SMOKE_GEOM = new THREE.SphereGeometry(0.2, 6, 6);
+const SPARK_GEOM = new THREE.SphereGeometry(0.03, 4, 4);
 
 // 0–3 deterministic fixtures (antenna/tank/AC/dish) on the roof, seeded by app name —
 // the same determinism as the window textures, so a building keeps its roof forever.
@@ -470,6 +474,126 @@ function LowPolyFacade({ width, depth, height, bodyColor, edgeColor, dimMul, sur
   );
 }
 
+// Always-visible health belt (Roadmap 1.1) — a thin status-colored band wrapping all
+// four façades so the LED reads from any orbit angle, not just the labeled front.
+function HealthBandMeshes({ width, height, depth, color, dimMul, opacity, bandRef }) {
+  const y = Math.max(0.4, height * 0.72);
+  return (
+    <group position={[0, y, 0]}>
+      <mesh>
+        <boxGeometry args={[width + 0.08, 0.07, depth + 0.08]} />
+        <meshBasicMaterial color="#0f172a" transparent opacity={0.78 * dimMul} />
+      </mesh>
+      <mesh ref={bandRef}>
+        <boxGeometry args={[width + 0.05, 0.038, depth + 0.05]} />
+        <meshBasicMaterial color={color} transparent opacity={opacity} toneMapped={false} />
+      </mesh>
+    </group>
+  );
+}
+
+function PulsingHealthBand({ width, height, depth, color, tone, dimMul }) {
+  const ref = useRef();
+  useFrame(({ clock }) => {
+    if (!ref.current) return;
+    const t = clock.getElapsedTime();
+    const pulse = tone === 'busy'
+      ? 0.6 + Math.sin(t * 2.5) * 0.2
+      : 0.55 + Math.sin(t * 6) * 0.35;
+    ref.current.material.opacity = pulse * dimMul;
+  });
+  return (
+    <HealthBandMeshes
+      width={width}
+      height={height}
+      depth={depth}
+      color={color}
+      dimMul={dimMul}
+      opacity={0.7 * dimMul}
+      bandRef={ref}
+    />
+  );
+}
+
+function BuildingHealthBand({ width, height, depth, color, tone = 'idle', pulsing = false, dimMul = 1, dayMix = 0 }) {
+  if (pulsing) {
+    return (
+      <PulsingHealthBand
+        width={width}
+        height={height}
+        depth={depth}
+        color={color}
+        tone={tone}
+        dimMul={dimMul}
+      />
+    );
+  }
+  return (
+    <HealthBandMeshes
+      width={width}
+      height={height}
+      depth={depth}
+      color={color}
+      dimMul={dimMul}
+      opacity={(0.62 - dayMix * 0.18) * dimMul}
+    />
+  );
+}
+
+// Stress smoke / sparks (Roadmap 1.2) — rooftop plume for a hot CPU, sparks for a crash.
+// Parent mounts this only when smoke or sparks is actually on, so healthy buildings pay
+// no extra useFrame. Hooks always run (no early return) to satisfy the rules of hooks.
+function StressEffects({ height, smoke = false, sparks = false, dimMul = 1 }) {
+  const smokeRef = useRef();
+  const sparksRef = useRef();
+
+  useFrame(({ clock }) => {
+    const t = clock.getElapsedTime();
+    if (smokeRef.current) {
+      smokeRef.current.children.forEach((puff, i) => {
+        const age = (t * 0.8 + i * 0.33) % 1.0;
+        puff.position.y = age * 1.6;
+        puff.position.x = Math.sin(t * 1.5 + i * 2) * 0.15 * age;
+        puff.position.z = Math.cos(t * 1.2 + i * 2) * 0.15 * age;
+        puff.scale.setScalar(0.08 + age * 0.22);
+        if (puff.material) puff.material.opacity = (1 - age) * 0.45 * dimMul;
+      });
+    }
+    if (sparksRef.current) {
+      sparksRef.current.children.forEach((spark, i) => {
+        const age = (t * 2.2 + i * 0.25) % 1.0;
+        spark.position.y = age * 0.9;
+        spark.position.x = Math.sin(t * 8 + i * 4) * 0.25;
+        spark.position.z = Math.cos(t * 7 + i * 3) * 0.25;
+        if (spark.material) spark.material.opacity = (1 - age) * 0.8 * dimMul;
+      });
+    }
+  });
+
+  return (
+    <group position={[0, height + 0.1, 0]}>
+      {smoke && (
+        <group ref={smokeRef}>
+          {[0, 1, 2].map((i) => (
+            <mesh key={`smoke-${i}`} geometry={SMOKE_GEOM}>
+              <meshBasicMaterial color="#64748b" transparent opacity={0.3} depthWrite={false} />
+            </mesh>
+          ))}
+        </group>
+      )}
+      {sparks && (
+        <group ref={sparksRef}>
+          {[0, 1, 2, 3].map((i) => (
+            <mesh key={`spark-${i}`} geometry={SPARK_GEOM}>
+              <meshBasicMaterial color="#f59e0b" transparent opacity={0.8} toneMapped={false} depthWrite={false} />
+            </mesh>
+          ))}
+        </group>
+      )}
+    </group>
+  );
+}
+
 export default function Building({ app, position, agentCount, onClick, playSfx, neonBrightness = 1.2, isProximity = false, focused = false, dimmed = false, dayMix = 0, playback = false, transitionState = null, onExited, rooftops = true, interiorWindows = false }) {
   const meshRef = useRef();
   const glowRef = useRef();
@@ -529,6 +653,17 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
     for (let i = 0; i < n.length; i++) h = ((h << 5) - h) + n.charCodeAt(i);
     return Math.abs(h);
   }, [app.name, app.id]);
+
+  const metrics = useMemo(() => computeAppMetrics(app), [app]);
+  const signal = useMemo(
+    () => buildingSignalTone({
+      status: app.overallStatus,
+      metrics,
+      pm2Status: app.pm2Status,
+      playback,
+    }),
+    [app.overallStatus, metrics, app.pm2Status, playback]
+  );
 
   const boxGeom = useMemo(() => new THREE.BoxGeometry(width, height, depth), [width, height, depth]);
   const edgesGeom = useMemo(() => new THREE.EdgesGeometry(boxGeom), [boxGeom]);
@@ -780,6 +915,30 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
         {displayName}
       </OpenWorldLabel>
 
+      {/* Always-visible wrapping health belt (Roadmap 1.1) */}
+      {!app.archived && (
+        <BuildingHealthBand
+          width={width}
+          height={height}
+          depth={depth}
+          color={signal.color}
+          tone={signal.tone}
+          pulsing={signal.pulsing}
+          dimMul={dimMul}
+          dayMix={dayMix}
+        />
+      )}
+
+      {/* Stress smoke / sparks on rooftop when CPU is hot or crashed (Roadmap 1.2) */}
+      {!app.archived && (signal.smoke || signal.sparks) && (
+        <StressEffects
+          height={height}
+          smoke={signal.smoke}
+          sparks={signal.sparks}
+          dimMul={dimMul}
+        />
+      )}
+
       {/* Focus selection ring (issue #2593) — a bright accent ring at the base marking the
           URL-focused borough. Rendered day AND night (unlike the neon glow) so the selected
           building is unambiguously distinguished in any lighting. */}
@@ -800,6 +959,18 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
             opacity={0.25 * dimMul}
             side={THREE.DoubleSide}
           />
+        </mesh>
+      )}
+
+      {/* Daytime contact shadow — grounds the tower on the meadow so it doesn't float. */}
+      {daytime && !app.archived && (
+        <mesh
+          geometry={CONTACT_SHADOW_GEOM}
+          rotation={[-Math.PI / 2, 0, 0]}
+          position={[0, 0.008, 0]}
+          scale={[Math.max(width, depth) * 0.82, Math.max(width, depth) * 0.82, 1]}
+        >
+          <meshBasicMaterial color="#0b1220" transparent opacity={0.26 * dimMul} depthWrite={false} />
         </mesh>
       )}
 
@@ -845,6 +1016,7 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
           agentCount={agentCount}
           position={[0, height + 1.8, 0]}
           expanded={isProximity || focused}
+          playback={playback}
         />
       )}
     </group>

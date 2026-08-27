@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { NAV_COMMANDS, getNavAliasMap, resolveNavCommand } from './navManifest.js';
+import { NAV_COMMANDS, NAV_FEATURE_IDS, SECTION_FEATURE, getNavAliasMap, resolveNavCommand } from './navManifest.js';
+import { INSTANCE_FEATURE_IDS } from './instanceFeatureRegistry.js';
 import { PORTOS_APP_ID } from './appIdentity.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -143,11 +144,56 @@ describe('navManifest — shape invariants', () => {
   });
 });
 
+// Feature gating hides a page from the ⌘K palette and the sidebar. A typo in a
+// `feature` tag would silently gate on a flag nothing can ever turn on, hiding
+// the page on every install with no other symptom.
+describe('nav contract — instance-feature gating', () => {
+  it('every gated entry names a registered instance feature', () => {
+    const unknown = NAV_FEATURE_IDS.filter((id) => !INSTANCE_FEATURE_IDS.includes(id));
+    expect(unknown).toEqual([]);
+  });
+
+  // SECTION_FEATURE keys on the DISPLAY label, so renaming a section would
+  // un-gate it silently — and every other assertion here would still pass,
+  // because they filter on that same label and would simply match nothing.
+  it('every SECTION_FEATURE key is a live section carrying that gate', () => {
+    for (const [section, featureId] of SECTION_FEATURE) {
+      const inSection = NAV_COMMANDS.filter((c) => c.section === section);
+      expect(inSection.length, `no commands in section "${section}"`).toBeGreaterThan(0);
+      expect(INSTANCE_FEATURE_IDS, `unregistered feature "${featureId}"`).toContain(featureId);
+      expect(inSection.every((c) => c.feature === featureId)).toBe(true);
+    }
+  });
+
+  it('gates the DataDog, JIRA, and GSD feature pages', () => {
+    const byId = Object.fromEntries(NAV_COMMANDS.map((c) => [c.id, c.feature]));
+    expect(byId['nav.devtools.datadog']).toBe('datadog');
+    expect(byId['nav.devtools.jira']).toBe('jira');
+    expect(byId['nav.devtools.jira-reports']).toBe('jira');
+    expect(byId['nav.cos.gsd']).toBe('gsd');
+  });
+
+  it('leaves ungated pages untagged', () => {
+    const gated = NAV_COMMANDS.filter((c) => c.feature).map((c) => c.id);
+    expect(gated).toContain('nav.devtools.jira');
+    expect(gated).not.toContain('nav.dashboard');
+    expect(gated).not.toContain('nav.devtools.flows');
+  });
+
+  // Sidebar rows now derive path, label, section and feature directly from this
+  // array. The former Layout source-scrape parity guards are intentionally gone:
+  // there is no second structural declaration left for them to compare.
+});
+
 describe('resolveNavCommand — fuzzy matching', () => {
   it('resolves exact alias', () => {
     expect(resolveNavCommand('dashboard')?.path).toBe('/');
     expect(resolveNavCommand('tasks')?.path).toBe('/cos/tasks');
     expect(resolveNavCommand('goals')?.path).toBe('/goals/list');
+  });
+
+  it('resolves the Catalog settings phrase to the feature-local drawer', () => {
+    expect(resolveNavCommand('catalog settings')?.path).toBe('/catalog?settings=1');
   });
 
   it('resolves every canonical System Resources section name', () => {
@@ -290,6 +336,7 @@ describe('nav contract — OpenWorld regions match the registry labels and alias
       return {
         id: field('id'),
         label: field('label'),
+        feature: field('feature'),
         aliases: [...aliases.matchAll(/'([^']*)'/g)].map((a) => a[1]),
       };
     });
@@ -308,6 +355,14 @@ describe('nav contract — OpenWorld regions match the registry labels and alias
       .map((r) => ({ r, cmd: navByPath.get(`/openworld/region/${r.id}`) }))
       .filter(({ r, cmd }) => cmd && cmd.label !== r.label)
       .map(({ r, cmd }) => `${r.id}: nav "${cmd.label}" ≠ registry "${r.label}"`);
+    expect(wrong).toEqual([]);
+  });
+
+  it('keeps each region feature gate mirrored between the registry and nav command', () => {
+    const wrong = readRegistry()
+      .map((r) => ({ r, cmd: navByPath.get(`/openworld/region/${r.id}`) }))
+      .filter(({ r, cmd }) => (cmd?.feature || null) !== (r.feature || null))
+      .map(({ r, cmd }) => `${r.id}: nav "${cmd?.feature || 'none'}" ≠ registry "${r.feature || 'none'}"`);
     expect(wrong).toEqual([]);
   });
 
@@ -551,9 +606,11 @@ describe('nav coverage — every navigable App.jsx route has a manifest entry', 
   // Driven by each command's own `previousPaths`, NOT a list maintained here: the
   // declaration then lives beside the path that moved, and the next move is one
   // edit in navManifest.js instead of two files that can disagree.
+  // Compare the full destination, including any query that opens a feature-local
+  // drawer or selects a subview.
   it('keeps a redirect from every declared previous path to its current one', () => {
     const broken = NAV_COMMANDS
-      .flatMap((c) => (c.previousPaths || []).map((from) => ({ from, to: c.path.split(/[?#]/)[0], id: c.id })))
+      .flatMap((c) => (c.previousPaths || []).map((from) => ({ from, to: c.path, id: c.id })))
       .filter(({ from, to }) => byFrom.get(from)?.to !== to)
       .map(({ from, to, id }) => `${id}: ${from} → ${byFrom.get(from)?.to ?? 'NO REDIRECT'} (want ${to})`);
     expect(broken).toEqual([]);
@@ -597,6 +654,7 @@ describe('nav coverage — every navigable App.jsx route has a manifest entry', 
       '/devtools/submodules',
       '/devtools/runs',
       '/settings/contacts',
+      '/settings/catalog',
       '/imessage',
       '/system-health',
       '/datadog',

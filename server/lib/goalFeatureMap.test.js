@@ -7,6 +7,7 @@ import {
 } from './goalFeatureMap.js';
 import { NAV_COMMANDS } from './navManifest.js';
 import { goalCategoryEnum } from './identityValidation.js';
+import { INSTANCE_FEATURE_IDS } from './instanceFeatureRegistry.js';
 import * as clientMap from '../../client/src/lib/goalFeatureMap.js';
 
 // Every route the manifest knows about (strip query strings — a feature-area
@@ -21,6 +22,7 @@ describe('goalFeatureMap — registry shape', () => {
       expect(area.to.startsWith('/'), `${id}.to`).toBe(true);
       expect(typeof area.icon, `${id}.icon`).toBe('string');
       expect(area.icon.length, `${id}.icon`).toBeGreaterThan(0);
+      if (area.feature) expect(INSTANCE_FEATURE_IDS, `${id}.feature`).toContain(area.feature);
     }
   });
 
@@ -65,6 +67,19 @@ describe('goalFeatureMap — getGoalFeatureAreas', () => {
 
   it('returns an empty list for an unknown category with no override', () => {
     expect(getGoalFeatureAreas({ category: 'mystery' })).toEqual([]);
+  });
+
+  it('filters gated areas and falls back to the next enabled category area', () => {
+    const isFeatureEnabled = (featureId) => featureId !== 'post';
+
+    expect(getGoalFeatureAreas({ category: 'health' }, isFeatureEnabled).map((row) => row.area))
+      .toEqual(['bodyHealth']);
+    expect(getGoalFeatureAreas({ category: 'mastery' }, isFeatureEnabled).map((row) => row.area))
+      .toEqual(['memory']);
+    expect(getGoalFeatureAreas({ category: 'health', featureAreas: ['post', 'sharing'] }, isFeatureEnabled).map((row) => row.area))
+      .toEqual(['sharing']);
+    expect(getGoalFeatureAreas({ category: 'health', featureAreas: ['post'] }, isFeatureEnabled).map((row) => row.area))
+      .toEqual(['bodyHealth']);
   });
 });
 

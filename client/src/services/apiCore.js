@@ -21,6 +21,33 @@ export function maybeRedirectToLogin(response, error) {
   }
 }
 
+// Shared `!response.ok` envelope: parse the server's JSON error body, bounce to
+// /login on session expiry, and throw an Error carrying `.code`/`.status`/
+// `.context` from the response. Toasting is NOT done here — request() does its
+// own (with `silent` support); the streaming/blob callers that bypass request()
+// to read a raw Response deliberately surface their own errors instead.
+export async function throwApiError(response) {
+  // A valid JSON body that isn't an object (e.g. a bare `null`) parses
+  // successfully but has no `.error`/`.code`/`.context` to read — fall back
+  // to the same HTTP-status shape used when the body isn't JSON at all.
+  const parsedError = await response.json().catch(() => null);
+  const error =
+    parsedError && typeof parsedError === 'object' ? parsedError : { error: `HTTP ${response.status}` };
+  // Auth gate (server: services/authGate.js) returns 401 with code AUTH_REQUIRED
+  // for any /api request without a valid session. Bounce to /login so the
+  // user can re-authenticate; skip if we're already there.
+  maybeRedirectToLogin(response, error);
+  const err = new Error(error.error || `HTTP ${response.status}`);
+  err.code = error?.code;
+  err.status = response.status;
+  // Forward structured context the server attached to the error (e.g.
+  // ERR_PARTIAL_COMMIT_ISSUES carries `{ universeId, seriesId,
+  // arcAlreadyPersisted, skipArcOnRetry }` so the Importer client can
+  // shape its retry without re-overwriting persisted state).
+  if (error?.context) err.context = error.context;
+  throw err;
+}
+
 export async function request(endpoint, options = {}) {
   const { silent, responseType, ...fetchOptions } = options;
   const url = `${API_BASE}${endpoint}`;
@@ -45,29 +72,19 @@ export async function request(endpoint, options = {}) {
   }
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: 'Request failed' }));
-    const errorMessage = error.error || `HTTP ${response.status}`;
-    // Auth gate (server: services/authGate.js) returns 401 with code AUTH_REQUIRED
-    // for any /api request without a valid session. Bounce to /login so the
-    // user can re-authenticate; skip if we're already there.
-    maybeRedirectToLogin(response, error);
-    if (!silent) {
-      // Platform unavailability is a warning, not an error
-      if (error.code === 'PLATFORM_UNAVAILABLE') {
-        toast(errorMessage, { icon: '⚠️' });
-      } else if (error.code !== 'AUTH_REQUIRED') {
-        toast.error(errorMessage);
+    try {
+      await throwApiError(response);
+    } catch (err) {
+      if (!silent) {
+        // Platform unavailability is a warning, not an error
+        if (err.code === 'PLATFORM_UNAVAILABLE') {
+          toast(err.message, { icon: '⚠️' });
+        } else if (err.code !== 'AUTH_REQUIRED') {
+          toast.error(err.message);
+        }
       }
+      throw err;
     }
-    const err = new Error(errorMessage);
-    err.code = error?.code;
-    err.status = response.status;
-    // Forward structured context the server attached to the error (e.g.
-    // ERR_PARTIAL_COMMIT_ISSUES carries `{ universeId, seriesId,
-    // arcAlreadyPersisted, skipArcOnRetry }` so the Importer client can
-    // shape its retry without re-overwriting persisted state).
-    if (error?.context) err.context = error.context;
-    throw err;
   }
 
   // Handle 204 No Content

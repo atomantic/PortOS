@@ -33,6 +33,7 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _runner_common import (  # noqa: E402
     apply_memory_optimizations,
+    emit_image_execution_marker,
     heartbeat,
     install_hf_error_handler,
     make_generator,
@@ -171,8 +172,8 @@ def load_pipeline(
             )
     print("STAGE:move-to-device", file=sys.stderr, flush=True)
     with heartbeat("move-to-device"):
-        place_pipeline(pipe, device)
-    return pipe
+        placement = place_pipeline(pipe, device)
+    return pipe, placement
 
 
 def to_i2i_pipeline(pipe):
@@ -217,7 +218,7 @@ def main() -> None:
     device = pick_device(args.device)
     dtype = torch.bfloat16 if device in ("mps", "cuda") else torch.float32
 
-    pipe = load_pipeline(
+    pipe, placement = load_pipeline(
         args.repo,
         device,
         dtype,
@@ -225,6 +226,13 @@ def main() -> None:
         text_encoder_repo=args.text_encoder_repo,
         text_encoder_class=args.text_encoder_class,
         tokenizer_class=args.tokenizer_class,
+    )
+    emit_image_execution_marker(
+        "diffusers-image",
+        args.device,
+        device,
+        placement,
+        ["torch", "diffusers", "transformers", "accelerate"],
     )
 
     init_image = None

@@ -522,8 +522,9 @@ describe('CoS Routes', () => {
   });
 
   describe('GET /api/cos/agents', () => {
-    it('should return state-resident agents after cleaning zombies', async () => {
-      cos.cleanupZombieAgents.mockResolvedValue({ cleaned: [], count: 0 });
+    it('should return state-resident agents without waiting for zombie cleanup', async () => {
+      let releaseCleanup;
+      cos.cleanupZombieAgents.mockReturnValue(new Promise((resolve) => { releaseCleanup = resolve; }));
       cos.getAgents.mockResolvedValue([
         { id: 'agent-001', status: 'running' },
         { id: 'agent-002', status: 'completed' }
@@ -534,6 +535,7 @@ describe('CoS Routes', () => {
       expect(response.status).toBe(200);
       expect(response.body).toHaveLength(2);
       expect(cos.cleanupZombieAgents).toHaveBeenCalled();
+      releaseCleanup({ cleaned: [], count: 0 });
     });
   });
 

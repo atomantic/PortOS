@@ -8,16 +8,18 @@
  * safe. The flat Grid view paginates past the old 200-item cap with "Load more";
  * the Albums view groups ingredients by universe with pinned "Unsorted / Raw"
  * and "Orphaned" albums. The "+ New" inline form mirrors the Pipeline
- * series-create pattern; "Ingest" links to the paste-and-extract page. Delete
- * uses an armed two-click confirm (no window.confirm); the multi-select action
- * bar can Remix the selection into Story Builder or place it into a
+ * series-create pattern; "Ingest" links to the paste-and-extract page, and
+ * "Settings" opens the catalog type and field configuration in a drawer.
+ * Delete uses an armed two-click confirm (no window.confirm); the multi-select
+ * action bar can Remix the selection into Story Builder or place it into a
  * universe/series.
  */
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { Sparkles, Plus, Search, FileInput, Loader2, RefreshCw, Wand2, X, LayoutGrid, Library, FolderPlus } from 'lucide-react';
+import { Sparkles, Plus, Search, FileInput, Loader2, RefreshCw, Wand2, X, LayoutGrid, Library, FolderPlus, Settings as SettingsIcon } from 'lucide-react';
 import BrailleSpinner from '../components/BrailleSpinner';
+import Drawer from '../components/Drawer';
 import toast from '../components/ui/Toast';
 import {
   listCatalogIngredients,
@@ -32,8 +34,10 @@ import { listUniverses } from '../services/apiUniverseBuilder';
 import { listPipelineSeries } from '../services/apiPipeline';
 import CatalogCard from '../components/catalog/CatalogCard';
 import CatalogAlbum from '../components/catalog/CatalogAlbum';
+import { CatalogTypesTab } from '../components/settings/CatalogTypesTab';
 import { catalogRefRoleForType } from '../lib/catalogTypes';
 import { useCatalogTypes } from '../hooks/useCatalogTypes.jsx';
+import useDrawerTab from '../hooks/useDrawerTab';
 import useUrlParams from '../hooks/useUrlParams';
 
 // All type-derived UI (chips, badge color, inline-form primary content
@@ -58,6 +62,13 @@ const REMIX_TARGETS = [
 
 export default function Catalog() {
   const navigate = useNavigate();
+  // Catalog type definitions belong to this feature, so keep their settings
+  // drawer deep-linkable while leaving the catalog filters in the same URL.
+  const [settingsParam, setSettingsParam] = useDrawerTab('settings', null, ['1']);
+  const settingsOpen = settingsParam === '1';
+  const openSettings = () => setSettingsParam('1');
+  const closeSettings = () => setSettingsParam(null);
+
   // Merged type registry (system + user-defined). `types` drives the filter
   // chips + the New-form dropdown; `getType` resolves badge/primary-content.
   const { types: TYPES, getType } = useCatalogTypes();
@@ -505,9 +516,24 @@ export default function Catalog() {
     onCancelArm: cancelArm,
   };
 
+  const settingsDrawer = (
+    <Drawer
+      open={settingsOpen}
+      onClose={closeSettings}
+      title="Catalog settings"
+      subtitle="Configure the labels and fields used by Catalog ingredients"
+      size="lg"
+      closeOnEsc={false}
+      closeOnBackdrop={false}
+    >
+      <CatalogTypesTab />
+    </Drawer>
+  );
+
   return (
-    <div>
-      {/* Header. The toolbar wraps to its own rows on a phone because the four
+    <>
+      {settingsDrawer}
+      {/* Header. The toolbar wraps to its own rows on a phone because the five
           controls together need ~350px and a 320px viewport gives 288px.
           A label too long to survive that (Sync's, at `lg`; the action bar's, at
           `sm`) hides its tail and keeps the full wording in aria-label, so the
@@ -543,6 +569,16 @@ export default function Catalog() {
               <Library size={16} className="shrink-0" aria-hidden="true" /> Albums
             </button>
           </div>
+          <button
+            type="button"
+            onClick={openSettings}
+            aria-label="Catalog settings"
+            title="Configure catalog labels and fields"
+            className="inline-flex flex-1 sm:flex-none items-center justify-center gap-2 px-3 py-2 min-h-[40px] rounded-lg border border-port-border bg-port-card hover:bg-port-bg text-white text-sm font-medium"
+          >
+            <SettingsIcon size={16} className="shrink-0" aria-hidden="true" />
+            Settings
+          </button>
           <button
             type="button"
             onClick={handleSync}
@@ -932,7 +968,7 @@ export default function Catalog() {
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }
 

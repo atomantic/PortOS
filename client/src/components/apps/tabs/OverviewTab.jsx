@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Link } from 'react-router';
-import { FolderOpen, Gamepad2, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Download, Tag, AlertTriangle, Rocket, Camera, Image, Sparkles } from 'lucide-react';
+import { Link, useNavigate } from 'react-router';
+import { FolderOpen, Gamepad2, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Download, Tag, AlertTriangle, Rocket, Camera, Image, Sparkles, Trash2 } from 'lucide-react';
 import toast from '../../ui/Toast';
+import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import { isStandardizable } from '../constants';
 import ActivityLog from '../ActivityLog';
 import SlashDoPanel from '../SlashDoPanel';
@@ -17,8 +18,11 @@ const SCRIPT_ICONS = {
 };
 
 export default function OverviewTab({ app, onRefresh }) {
+  const navigate = useNavigate();
   const [refreshingConfig, setRefreshingConfig] = useState(false);
   const [archiving, setArchiving] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [installingScripts, setInstallingScripts] = useState(false);
   const [detectingIcon, setDetectingIcon] = useState(false);
   // Reverse lookup (#2991): sprite records that publish assets into this app.
@@ -100,6 +104,19 @@ export default function OverviewTab({ app, onRefresh }) {
   const handleArchive = () => setArchived(true);
 
   const handleUnarchive = () => setArchived(false);
+
+  const handleDelete = async () => {
+    if (deleting) return;
+    setDeleting(true);
+    // DELETE returns 204, so success is represented by resolution rather than
+    // a response body. request() owns the failure toast; this handler only
+    // adds the success path and returns the user to the registry.
+    const removed = await api.deleteApp(app.id).then(() => true, () => false);
+    setDeleting(false);
+    if (!removed) return;
+    toast.success(`${app.name} removed from PortOS — files kept on disk`);
+    navigate('/apps');
+  };
 
   return (
     <div className="space-y-6">
@@ -341,6 +358,41 @@ export default function OverviewTab({ app, onRefresh }) {
           </button>
         )}
       </div>
+
+      {app.id !== api.PORTOS_APP_ID && (
+        <div className="border-t border-port-border pt-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-medium text-white">PortOS registration</h3>
+              <p className="text-xs text-gray-500 mt-1">
+                Remove PortOS&apos;s record of this app without deleting its repository from disk.
+              </p>
+            </div>
+            {!confirmingDelete && (
+              <button
+                onClick={() => setConfirmingDelete(true)}
+                disabled={deleting}
+                className="self-start sm:self-auto px-3 py-1.5 bg-port-error/10 text-port-error hover:bg-port-error/20 rounded-lg text-xs flex items-center gap-1 disabled:opacity-50"
+              >
+                <Trash2 size={14} />
+                Remove from PortOS
+              </button>
+            )}
+          </div>
+          {confirmingDelete && (
+            <InlineConfirmRow
+              className="mt-3"
+              autoFocus
+              aria-label={`Confirm removal of ${app.name} from PortOS`}
+              question={`Remove ${app.name} from PortOS? Its repository will stay on disk.`}
+              confirmText={deleting ? 'Removing…' : 'Remove'}
+              cancelText="Keep"
+              onConfirm={handleDelete}
+              onCancel={() => setConfirmingDelete(false)}
+            />
+          )}
+        </div>
+      )}
 
       {/* Activity Log */}
       <ActivityLog steps={steps} error={error} completed={completed} />

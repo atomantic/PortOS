@@ -499,6 +499,17 @@ describe('validation.js', () => {
       expect(result.success).toBe(true);
     });
 
+    it('accepts nullable managed-app feature overrides and rejects unknown features', () => {
+      const app = {
+        name: 'Feature App',
+        repoPath: '/path',
+        featureOverrides: { datadog: true, jira: null, gsd: false },
+      };
+      expect(appSchema.safeParse(app).success).toBe(true);
+      expect(appSchema.safeParse(app).data.featureOverrides).toEqual(app.featureOverrides);
+      expect(appSchema.safeParse({ ...app, featureOverrides: { post: true } }).success).toBe(false);
+    });
+
     it('accepts a safe native launch target and rejects an unsafe process name', () => {
       const app = {
         name: 'Mixed App',
@@ -627,6 +638,11 @@ describe('validation.js', () => {
       };
       const result = appUpdateSchema.safeParse(update);
       expect(result.success).toBe(true);
+    });
+
+    it('accepts partial managed-app feature overrides', () => {
+      expect(appUpdateSchema.safeParse({ featureOverrides: { jira: false } }).success).toBe(true);
+      expect(appUpdateSchema.safeParse({ featureOverrides: { gsd: null } }).success).toBe(true);
     });
   });
 

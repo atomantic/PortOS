@@ -38,14 +38,24 @@ import { getAIToolkitInstance } from '../lib/aiToolkitState.js';
 import { createSingleFlight } from '../lib/singleFlight.js';
 import { extractJson } from '../lib/jsonExtract.js';
 import { isCreativeRunSource, withCreativeLatitude } from '../lib/creativeLatitude.js';
+import { DEFAULT_OUTPUT_RESERVE_TOKENS, estimateTokens } from '../lib/contextBudget.js';
 
 // The fallback-lifecycle notifiers live in services/autoFixer.js, which
 // transitively pulls in services/cos.js (PM2 + fs + sockets). Importing it
 // lazily on the failure path keeps anything that imports promptRunner.js from
 // dragging the CoS stack along on the happy path. Node caches the module after
 // the first dynamic import, so the cost is one-time.
+let autoFixerLoadPromise;
 function loadAutoFixer() {
-  return import('./autoFixer.js');
+  if (!autoFixerLoadPromise) {
+    autoFixerLoadPromise = import('./autoFixer.js').catch((err) => {
+      // Keep a failed optional load retryable for a later failure after a
+      // transient module-resolution problem.
+      autoFixerLoadPromise = null;
+      throw err;
+    });
+  }
+  return autoFixerLoadPromise;
 }
 
 export const DEFAULT_TIMEOUT_MS = 300000;
@@ -55,6 +65,16 @@ export const DEFAULT_TIMEOUT_MS = 300000;
 // backstop only intervenes if the runner never reports completion at all.
 const API_TIMEOUT_BACKSTOP_GRACE_MS = 2000;
 const APPEND_CHUNK = (acc, chunk) => acc + (typeof chunk === 'string' ? chunk : (chunk?.text || ''));
+
+export function buildRequestCapabilities({ prompt, screenshots, outputReserveTokens } = {}) {
+  const reserve = Number.isFinite(Number(outputReserveTokens))
+    ? Math.max(0, Number(outputReserveTokens))
+    : DEFAULT_OUTPUT_RESERVE_TOKENS;
+  return {
+    requiredContextTokens: estimateTokens(prompt) + reserve,
+    hasImages: Array.isArray(screenshots) && screenshots.length > 0,
+  };
+}
 
 // ── Local-backend concurrency gate ─────────────────────────────────────────
 // A local LLM server (Ollama / LM Studio on localhost) runs inference on one
@@ -513,12 +533,18 @@ export function assertVisionRunUsedImages(result, requestedProvider) {
  * @param {number} [args.timeout] — per-call timeout in ms; falls back to
  *   `provider.timeout`, then DEFAULT_TIMEOUT_MS. Callers like the loop
  *   runner expose a user-configurable timeout that isn't a provider attr.
+ * @param {number} [args.outputReserveTokens=8000] — expected completion budget
+ *   included in fallback context admission. Callers with a tighter known
+ *   output budget may lower it.
  * @param {string} [args.cwd] — working directory for the spawned process.
  *   Defaults to `process.cwd()`. Callers that run AI against external
  *   directories (loops with `loop.cwd`, pm2Standardizer with a repo path)
  *   must pass this — without it, the CLI/TUI spawn lands in PortOS's own
  *   cwd and the analysis runs against the wrong files. No-op for API
  *   providers (no spawn).
+ * @param {boolean} [args.allowFallback=true] — set false when provider/model
+ *   identity is part of the feature contract. Disables proactive provider
+ *   substitution and every model/provider retry tier after the first attempt.
  * @param {*} [args.responseSchema] — the caller's declared response schema
  *   (issue #2350). A Zod-style schema (`.safeParse`/`.parse`) or a bare
  *   predicate `(parsedValue) => boolean`. When set, the runner enables Tier-2
@@ -627,6 +653,10 @@ export async function runPromptThroughProvider(rawArgs) {
   // attempt. Do not enter any correction/fallback tier, mark the provider
   // unavailable, or escalate an investigation task.
   if (isRunCanceledError(firstError)) {
+    throw stripFallbackContext(firstError);
+  }
+
+  if (rawArgs.allowFallback === false) {
     throw stripFallbackContext(firstError);
   }
 
@@ -889,7 +919,7 @@ export async function runPromptThroughProvider(rawArgs) {
       // (pickFallbackProvider) and re-writing provider-status.json
       // (markUnavailable). The fallback *run* below is NOT coalesced — each failed
       // call still executes its own fallback to get its own result.
-      const picked = await coalesceFallbackMarkAndPick(failed, firstError);
+      const picked = await coalesceFallbackMarkAndPick(failed, firstError, buildRequestCapabilities(args));
       if (!picked) {
         // ── Tier 4 — escalate ──: no recovery path left. Every attempted key's
         // incidental task was suppressed, so escalate exactly one investigation
@@ -1001,9 +1031,10 @@ const _fallbackMarkAndPick = createSingleFlight();
  * @param {Error} firstError — the execution error (carries message + errorAnalysis)
  * @returns {Promise<{ provider: object, model: string|null }|null>}
  */
-function coalesceFallbackMarkAndPick(failed, firstError) {
-  return _fallbackMarkAndPick.run(failed.id, async () => {
-    const picked = await pickFallbackProvider(failed);
+function coalesceFallbackMarkAndPick(failed, firstError, requestCapabilities) {
+  const capabilityKey = `${requestCapabilities?.hasImages === true ? 'images' : 'text'}:${requestCapabilities?.requiredContextTokens || 0}`;
+  return _fallbackMarkAndPick.run(`${failed.id}:${capabilityKey}`, async () => {
+    const picked = await pickFallbackProvider(failed, requestCapabilities);
     if (!picked) return null;
     await markProviderUnavailableFromError(failed, firstError.message, firstError.errorAnalysis).catch(err => {
       console.error(`❌ markUnavailable failed for ${failed.id}: ${err.message}`);
@@ -1026,7 +1057,7 @@ function coalesceFallbackMarkAndPick(failed, firstError) {
  * `getFallbackProvider`; the system priority loop already excludes
  * `failed.id` by construction.
  */
-async function pickFallbackProvider(failed) {
+async function pickFallbackProvider(failed, requestCapabilities) {
   const toolkit = getAIToolkitInstance();
   const providerStatus = toolkit?.services?.providerStatus;
   if (!providerStatus) return null;
@@ -1036,7 +1067,7 @@ async function pickFallbackProvider(failed) {
   const providersMap = {};
   for (const p of all.providers) providersMap[p.id] = p;
 
-  const picked = providerStatus.getFallbackProvider(failed.id, providersMap);
+  const picked = providerStatus.getFallbackProvider(failed.id, providersMap, null, null, requestCapabilities);
   if (!picked?.provider) return null;
   return { provider: picked.provider, model: picked.model ?? null };
 }
@@ -1117,6 +1148,8 @@ async function executeProviderRunOnce({
   timeout: timeoutOverride,
   cwd: cwdOverride,
   screenshots = [],
+  outputReserveTokens,
+  allowFallback = true,
 }) {
   // Resolve the model that'll actually run BEFORE creating the run record
   // so the record reflects reality. resolveEffectiveModel handles both
@@ -1152,6 +1185,8 @@ async function executeProviderRunOnce({
       source,
       workspacePath: effectiveCwd,
       effort,
+      requestCapabilities: buildRequestCapabilities({ prompt, screenshots, outputReserveTokens }),
+      allowFallback,
     });
     runId = runResult.runId;
     if (runResult.provider && runResult.provider.id !== provider.id) {

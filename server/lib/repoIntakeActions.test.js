@@ -52,6 +52,34 @@ describe('normalizeRepoIntake', () => {
     });
   });
 
+  it('keeps provider, model, and effort pins only for repo study', () => {
+    expect(normalizeRepoIntake({
+      learn: true,
+      providerId: ' codex ',
+      model: ' gpt-5 ',
+      effort: ' HIGH ',
+    })).toEqual({
+      malwareScan: false,
+      learn: true,
+      providerId: 'codex',
+      model: 'gpt-5',
+      effort: 'high',
+    });
+    expect(normalizeRepoIntake({
+      malwareScan: true,
+      providerId: 'codex',
+      model: 'gpt-5',
+      effort: 'high',
+    })).toEqual({ malwareScan: true, learn: false });
+  });
+
+  it('drops an unknown effort rather than persisting an unsafe task override', () => {
+    expect(normalizeRepoIntake({ learn: true, effort: 'unlimited' })).toEqual({
+      malwareScan: false,
+      learn: true,
+    });
+  });
+
   it('covers exactly the two documented actions', () => {
     expect(REPO_INTAKE_KEYS).toEqual(['malwareScan', 'learn']);
   });

@@ -9,6 +9,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | System design: React client, Express server, PM2 satellites, PostgreSQL + `data/` files |
 | [API.md](./API.md) | REST endpoints, complete route-domain index, Socket.IO events |
 | [COMPANION_APP_API.md](./COMPANION_APP_API.md) | PortDeck native iOS companion client discovery and HTTP API contract |
+| [REMOTE_DESKTOP.md](./REMOTE_DESKTOP.md) | PortDeck VNC broker security, host setup, and session flow |
 | [FEDERATED_MEDIA_PROVIDERS.md](./FEDERATED_MEDIA_PROVIDERS.md) | Authenticated, capacity-aware peer audio provider wire contract and setup |
 | [STORAGE.md](./STORAGE.md) | Storage classification contract — PostgreSQL vs filesystem, new-data-store checklist |
 | [BACKUP.md](./BACKUP.md) | Filesystem snapshots + PostgreSQL dumps, restore semantics |

@@ -17,6 +17,7 @@ import {
   parseOllamaStreamFrame,
   parseStreamFrame,
   resolvePartialOutput,
+  streamOpenAiChat,
   streamOllamaChat,
   toOllamaMessages,
 } from './openAiChatStream.js';
@@ -104,6 +105,59 @@ describe('resolvePartialOutput', () => {
   it('returns empty string when neither content nor reasoning streamed', () => {
     expect(resolvePartialOutput({ output: '', reasoning: '' })).toBe('');
     expect(resolvePartialOutput({})).toBe('');
+  });
+});
+
+describe('streamOpenAiChat — pre-header retries', () => {
+  it('retries an allowlisted gateway response before reading the stream', async () => {
+    const cancel = vi.fn(async () => {});
+    const chunk = new TextEncoder().encode('data: {"choices":[{"delta":{"content":"ok"}}]}\n');
+    let read = false;
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 503, body: { cancel } })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        body: {
+          getReader: () => ({
+            read: vi.fn(async () => read
+              ? { done: true }
+              : (read = true, { done: false, value: chunk })),
+            cancel: vi.fn(async () => {}),
+          }),
+        },
+      });
+
+    await expect(streamOpenAiChat({
+      endpoint: 'http://127.0.0.1:11434/v1', model: 'example-model', messages: [],
+    })).resolves.toBe('ok');
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    expect(cancel).toHaveBeenCalledOnce();
+    delete global.fetch;
+  });
+
+  it('never replays a response after streamed output has begun', async () => {
+    const chunk = new TextEncoder().encode('data: {"choices":[{"delta":{"content":"partial"}}]}\n');
+    let reads = 0;
+    const reader = {
+      read: vi.fn(async () => {
+        reads += 1;
+        if (reads === 1) return { done: false, value: chunk };
+        throw Object.assign(new Error('socket reset'), { code: 'ECONNRESET' });
+      }),
+      cancel: vi.fn(async () => {}),
+    };
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true, status: 200, body: { getReader: () => reader },
+    });
+
+    const error = await streamOpenAiChat({
+      endpoint: 'http://127.0.0.1:11434/v1', model: 'example-model', messages: [],
+    }).catch((err) => err);
+    expect(error).toMatchObject({ message: 'socket reset', partialOutput: 'partial' });
+    expect(global.fetch).toHaveBeenCalledOnce();
+    expect(reader.cancel).toHaveBeenCalledOnce();
+    delete global.fetch;
   });
 });
 

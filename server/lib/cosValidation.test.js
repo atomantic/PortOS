@@ -110,6 +110,21 @@ describe('cosValidation autonomous-job effort field', () => {
   });
 });
 
+describe('cosValidation autonomous-job data inputs', () => {
+  it('accepts registered ids, de-duplicates them, and preserves an explicit clear', () => {
+    expect(createCosJobSchema.parse({
+      name: 'j',
+      dataInputs: ['project-goals', 'open-issues', 'project-goals'],
+    }).dataInputs).toEqual(['project-goals', 'open-issues']);
+    expect(updateCosJobSchema.parse({ dataInputs: [] }).dataInputs).toEqual([]);
+    expect(updateCosJobSchema.parse({}).dataInputs).toBeUndefined();
+  });
+
+  it('rejects unknown input ids', () => {
+    expect(createCosJobSchema.safeParse({ name: 'j', dataInputs: ['unknown-source'] }).success).toBe(false);
+  });
+});
+
 describe('cosValidation job taskMetadata.worktreeChangesExpected (#3102)', () => {
   it('accepts the flag and preserves an explicit false (schema parity with the sanitizer)', () => {
     // Zod strips undeclared keys, so an unlisted flag would be silently dropped
@@ -121,6 +136,24 @@ describe('cosValidation job taskMetadata.worktreeChangesExpected (#3102)', () =>
     expect(parsed.taskMetadata).toEqual({ useWorktree: true, worktreeChangesExpected: false });
     expect(createCosJobSchema.safeParse({ name: 'j', taskMetadata: { worktreeChangesExpected: 'nope' } }).success)
       .toBe(false);
+  });
+});
+
+describe('cosValidation job taskMetadata.noChangeSuccess (#5074)', () => {
+  it('accepts the verified no-change marker and rejects non-boolean values', () => {
+    const parsed = createCosJobSchema.parse({
+      name: 'catalog audit',
+      taskMetadata: { useWorktree: true, noChangeSuccess: true },
+    });
+    expect(parsed.taskMetadata).toEqual({ useWorktree: true, noChangeSuccess: true });
+    expect(createCosJobSchema.safeParse({ name: 'catalog audit', taskMetadata: { noChangeSuccess: 'yes' } }).success)
+      .toBe(false);
+  });
+
+  it('keeps the marker available to app task-type override sanitization', () => {
+    expect(sanitizeTaskMetadata({ noChangeSuccess: true })).toEqual({ noChangeSuccess: true });
+    expect(sanitizeTaskMetadata({ noChangeSuccess: false })).toEqual({ noChangeSuccess: false });
+    expect(sanitizeTaskMetadata({ noChangeSuccess: 'true' })).toBeNull();
   });
 });
 

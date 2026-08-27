@@ -16,7 +16,7 @@ const MENU_WIDTH = 256; // w-64
 // A named boolean per reason would mean every new reason edits this component,
 // and — as the pin-saving gate showed — reaching only whichever call site the
 // author had in mind.
-export default function RunTaskButton({ taskType, apps, onTrigger, disabledReason = '' }) {
+export default function RunTaskButton({ taskType, apps, onTrigger, installWide = false, disabledReason = '' }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   const activeApps = apps?.filter(app => !app.archived) || [];
@@ -45,9 +45,18 @@ export default function RunTaskButton({ taskType, apps, onTrigger, disabledReaso
     if (disabled) setOpen(false);
   }, [disabled]);
 
-  if (activeApps.length === 0) {
+  // An install-wide task sweeps every managed app in ONE dispatch, so its real
+  // run is the app-less one. Without this the picker would be the only way to
+  // start it on any install that has apps, and every click would send an appId —
+  // silently reducing an install-wide sweep to a single repo.
+  if (activeApps.length === 0 || installWide) {
     return (
-      <span title={disabledReason || 'Run this task immediately (bypasses schedule)'} className="inline-block">
+      <span
+        title={disabledReason || (installWide
+          ? 'Run this task across every managed app in one sweep'
+          : 'Run this task immediately (bypasses schedule)')}
+        className="inline-block"
+      >
         <button
           type="button"
           onClick={() => !disabled && onTrigger(taskType)}
@@ -56,7 +65,7 @@ export default function RunTaskButton({ taskType, apps, onTrigger, disabledReaso
           className={triggerButtonClass(disabled)}
         >
           <Play size={14} />
-          Run Now
+          {installWide ? 'Run on All Apps' : 'Run Now'}
         </button>
       </span>
     );

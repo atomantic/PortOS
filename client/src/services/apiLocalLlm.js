@@ -1,4 +1,4 @@
-import { request, API_BASE, maybeRedirectToLogin } from './apiCore.js';
+import { request, API_BASE, throwApiError } from './apiCore.js';
 
 // Local LLM backends (Ollama / LM Studio) — status, model management, migrate.
 // Installed models per backend come back inside getLocalLlmStatus().
@@ -101,6 +101,12 @@ export const saveRuntimeStartupList = () =>
 export const getLlamaServerStatus = (options) =>
   request('/local-llm/llama-server/status', options);
 
+// Optional version/Homebrew metadata for the Local LLMs runtime card. Kept
+// separate from lifecycle status because the provider version probe and Homebrew
+// query can be slow on a cold machine.
+export const getLlamaServerUpdateStatus = (options) =>
+  request('/local-llm/llama-server/update-status', options);
+
 export const startLlamaServer = (config) =>
   request('/local-llm/llama-server/start', { method: 'POST', body: JSON.stringify(config) });
 
@@ -109,6 +115,11 @@ export const stopLlamaServer = () =>
 
 export const installLlamaServer = () =>
   request('/local-llm/llama-server/install', { method: 'POST' });
+
+// Upgrade a Homebrew-installed llama.cpp binary. A managed llama-server is
+// restarted by the server with its existing launch configuration.
+export const upgradeLlamaServer = () =>
+  request('/local-llm/llama-server/upgrade', { method: 'POST' });
 
 // Fetch one speculative-decoding preset's GGUF (role: 'model' | 'draftModel')
 // from Hugging Face into the path the launcher passes llama.cpp. Byte progress
@@ -185,11 +196,9 @@ export async function streamLocalLlmTest(payload, { signal, onToken } = {}) {
     signal,
   });
   if (!response.ok || !response.body?.getReader) {
-    const err = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
     // Honor session expiry the same way request() does — a streaming run that
     // 401s should bounce to /login, not just toast and strand the user here.
-    maybeRedirectToLogin(response, err);
-    throw new Error(err.error || `HTTP ${response.status}`);
+    await throwApiError(response);
   }
 
   const reader = response.body.getReader();

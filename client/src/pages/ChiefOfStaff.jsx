@@ -19,30 +19,19 @@ import {
   summarizeHealthIssues,
   healthIssueTone,
   fresherHealth,
-  CoSCharacter,
-  StateLabel,
-  TerminalCoSPanel,
-  StatusIndicator,
-  StatCard,
-  StatusBubble,
-  EventLog,
-  QuickSummary,
-  ActionableInsightsBanner,
-  TasksTab,
-  AgentsTab,
-  JobsTab,
-  ScheduleTab,
-  WorkflowTab,
-  DigestTab,
-  GsdTab,
-  ProductivityTab,
-  LearningTab,
-  MemoryTab,
-  HealthTab,
-  ConfigTab,
-  BriefingTab
-} from '../components/cos';
-import { resolveDynamicAvatar } from '../components/cos/constants';
+  resolveDynamicAvatar,
+} from '../components/cos/constants';
+import CoSCharacter from '../components/cos/CoSCharacter';
+import StateLabel from '../components/cos/StateLabel';
+import TerminalCoSPanel from '../components/cos/TerminalCoSPanel';
+import StatusIndicator from '../components/cos/StatusIndicator';
+import StatCard from '../components/cos/StatCard';
+import StatusBubble from '../components/cos/StatusBubble';
+import EventLog from '../components/cos/EventLog';
+import QuickSummary from '../components/cos/QuickSummary';
+import ActionableInsightsBanner from '../components/cos/ActionableInsightsBanner';
+import TasksTab from '../components/cos/tabs/TasksTab';
+import AgentsTab from '../components/cos/tabs/AgentsTab';
 
 // The Runs tab (full AI run history + its log modal) is lazy-loaded so its weight
 // stays out of the eager CoS chunk every /cos/* visit pays for — same reason the
@@ -52,6 +41,21 @@ const RunsTab = lazy(() => import('../components/cos/tabs/RunsTab'));
 // post-mortem surface nobody opens on a normal day, and it pulls the whole
 // ledger read path with it.
 const RunEventsTab = lazy(() => import('../components/cos/tabs/RunEventsTab'));
+const MindTab = lazy(() => import('../components/cos/tabs/MindTab'));
+// The task and agent tabs are the default CoS landing surfaces and stay eager.
+// Every other tab is loaded only when selected so the common queue view does
+// not pay for charts, memory graphs, briefing readers, or configuration forms.
+const JobsTab = lazy(() => import('../components/cos/tabs/JobsTab'));
+const ScheduleTab = lazy(() => import('../components/cos/tabs/ScheduleTab'));
+const WorkflowTab = lazy(() => import('../components/cos/tabs/WorkflowTab'));
+const DigestTab = lazy(() => import('../components/cos/tabs/DigestTab'));
+const GsdTab = lazy(() => import('../components/cos/tabs/GsdTab'));
+const ProductivityTab = lazy(() => import('../components/cos/tabs/ProductivityTab'));
+const LearningTab = lazy(() => import('../components/cos/tabs/LearningTab'));
+const MemoryTab = lazy(() => import('../components/cos/tabs/MemoryTab'));
+const HealthTab = lazy(() => import('../components/cos/tabs/HealthTab'));
+const ConfigTab = lazy(() => import('../components/cos/tabs/ConfigTab'));
+const BriefingTab = lazy(() => import('../components/cos/tabs/BriefingTab'));
 
 // Three.js-based avatars lazy-loaded so the R3F stack isn't bundled unless the
 // user's chosen avatar style actually needs it.
@@ -74,6 +78,10 @@ const CANVAS_AVATAR_STYLES = new Set([
 // Shared brand gradient for the "CoS" wordmark headings (clipped to text).
 const COS_TITLE_GRADIENT = 'linear-gradient(135deg, #6366f1, #8b5cf6, #06b6d4)';
 
+function TabLoadFallback({ label }) {
+  return <div className="flex items-center justify-center py-12"><BrailleSpinner text={`Loading ${label}`} /></div>;
+}
+
 export default function ChiefOfStaff() {
   const { tab } = useParams();
   const navigate = useNavigate();
@@ -83,6 +91,7 @@ export default function ChiefOfStaff() {
   const [tasks, setTasks] = useState({ user: null, cos: null });
   const [agents, setAgents] = useState([]);
   const [health, setHealth] = useState(null);
+  const [healthLoaded, setHealthLoaded] = useState(false);
   const [providers, setProviders] = useState([]);
   // Which provider an unpinned task actually runs on — the Schedule tab names it
   // on the "Default" option and resolves model/effort choices against it.
@@ -145,6 +154,7 @@ export default function ChiefOfStaff() {
     const resolved = merge ? fresherHealth(healthRef.current, next) : next;
     healthRef.current = resolved;
     setHealth(resolved);
+    setHealthLoaded(true);
     return resolved;
   }, []);
 
@@ -164,11 +174,25 @@ export default function ChiefOfStaff() {
 
   const fetchData = useCallback(async () => {
     const queueSeq = queueSeqRef.current;
-    const [statusData, tasksData, agentsData, healthData, providersData, appsData, learningSummaryData, insightsData] = await Promise.all([
+    // The queue is the critical path for both the Tasks and Agents tabs. Start
+    // the secondary reads at the same time, but do not make the first paint
+    // wait for them: actionable insights runs a server-side PM2/memory health
+    // check, and provider/app/learning data can be hydrated after the queue is
+    // already usable.
+    const coreRead = Promise.all([
       api.getCosStatus().catch(() => null),
       api.getCosTasks().catch(() => ({ user: null, cos: null })),
       api.getCosAgents().catch(() => []),
-      api.getCosHealth().catch(() => null),
+    ]);
+    const healthRead = api.getCosHealth().catch(() => null).then((data) => {
+      // Health is independently useful to the Health tab. Commit it as soon
+      // as its own read settles instead of making that tab wait for the slower
+      // actionable-insights request in the same batch.
+      applyHealth(data, { merge: true });
+      return data;
+    });
+    const secondaryRead = Promise.all([
+      healthRead,
       api.getProviders().catch(() => ({ providers: [] })),
       api.getApps().catch(() => []),
       api.getCosLearningSummary().catch(() => null),
@@ -176,16 +200,32 @@ export default function ChiefOfStaff() {
       // retired 60s poll; `.catch(() => null)` → preserve last-good below.
       api.getCosActionableInsights({ silent: true }).catch(() => null)
     ]);
+
+    const [statusData, tasksData, agentsData] = await coreRead;
     setStatus(statusData);
-    // fetchData is the SLOW read (8 endpoints, one of which runs a server health
-    // check), so a queue refresh started later routinely resolves first. Its task
-    // payload would then be clobbered by this older, pre-flip one — restoring the
-    // pending-AND-active render this change exists to remove. Drop only the queue
-    // half of a superseded read; the rest of the batch has no fresher writer.
+    // A queue refresh started later can still resolve first. Its task payload
+    // must not be clobbered by this older, pre-flip read — otherwise the row
+    // returns to the pending-AND-active state this guard exists to remove.
     if (queueSeqRef.current === queueSeq) {
       setTasks(tasksData);
       setAgents(agentsData);
     }
+
+    setLoading(false);
+
+    // Paint the shell and queue before waiting for health, providers, apps,
+    // learning, and insights. Those values fill in below without delaying the
+    // tab the user asked to open.
+    const initialHealth = healthRef.current;
+    const initialState = deriveAgentState(statusData, agentsData, initialHealth);
+    setAgentState(initialState);
+    setStatusMessage(statusData?.paused
+      ? `Paused${statusData.pauseReason ? ` — ${statusData.pauseReason}` : ''}`
+      : (initialState === 'investigating' && summarizeHealthIssues(initialHealth?.issues)) || STATE_MESSAGES[initialState]);
+    const runningAgent = agentsData.find(a => a.status === 'running');
+    setActiveAgentMeta(runningAgent?.metadata || null);
+
+    const [, providersData, appsData, learningSummaryData, insightsData] = await secondaryRead;
     // `getCosHealth` above reads the *pre-check* persisted health, while the
     // getCosActionableInsights call in this same batch triggers a fresh server
     // health check (cos.runHealthCheck) that emits `cos:health:check` — the
@@ -193,7 +233,7 @@ export default function ChiefOfStaff() {
     // keeps whichever check is newer (and keeps the last-good one when this read
     // failed); everything below derives from what it returned, never from the
     // raw read, so the bubble can't name an older issue than the tile shows.
-    const mergedHealth = applyHealth(healthData, { merge: true });
+    const mergedHealth = healthRef.current;
     setProviders(providersData.providers || []);
     setActiveProviderId(providersData.activeProvider || null);
     // Filter out PortOS Autofixer (it's part of PortOS project)
@@ -203,7 +243,6 @@ export default function ChiefOfStaff() {
     // from a failed/transient fetch preserves the last-good array so the banner
     // doesn't flicker empty on a blip.
     if (insightsData?.insights) setInsights(insightsData.insights);
-    setLoading(false);
 
     const newState = deriveAgentState(statusData, agentsData, mergedHealth);
     setAgentState(newState);
@@ -215,9 +254,6 @@ export default function ChiefOfStaff() {
       ? `Paused${statusData.pauseReason ? ` — ${statusData.pauseReason}` : ''}`
       : (newState === 'investigating' && summarizeHealthIssues(mergedHealth?.issues)) || STATE_MESSAGES[newState]);
 
-    // Set active agent metadata for dynamic avatar (use first running agent)
-    const runningAgent = agentsData.find(a => a.status === 'running');
-    setActiveAgentMeta(runningAgent?.metadata || null);
   }, [deriveAgentState, applyHealth]);
 
   // A cheap, read-only refresh of just the queue — the task lists plus the agent
@@ -1032,7 +1068,9 @@ export default function ChiefOfStaff() {
         {/* Tab Content */}
         {activeTab === 'briefing' && (
           <div role="tabpanel" id="tabpanel-briefing" aria-labelledby="tab-briefing">
-            <BriefingTab />
+            <Suspense fallback={<TabLoadFallback label="briefing" />}>
+              <BriefingTab />
+            </Suspense>
           </div>
         )}
         {activeTab === 'tasks' && (
@@ -1051,66 +1089,93 @@ export default function ChiefOfStaff() {
         )}
         {activeTab === 'jobs' && (
           <div role="tabpanel" id="tabpanel-jobs" aria-labelledby="tab-jobs">
-            <JobsTab />
+            <Suspense fallback={<TabLoadFallback label="jobs" />}>
+              <JobsTab />
+            </Suspense>
           </div>
         )}
         {activeTab === 'runs' && (
           <div role="tabpanel" id="tabpanel-runs" aria-labelledby="tab-runs">
-            <Suspense fallback={<div className="flex items-center justify-center py-12"><BrailleSpinner text="Loading runs" /></div>}>
+            <Suspense fallback={<TabLoadFallback label="runs" />}>
               <RunsTab />
             </Suspense>
           </div>
         )}
         {activeTab === 'run-events' && (
           <div role="tabpanel" id="tabpanel-run-events" aria-labelledby="tab-run-events">
-            <Suspense fallback={<div className="flex items-center justify-center py-12"><BrailleSpinner text="Loading run events" /></div>}>
+            <Suspense fallback={<TabLoadFallback label="run events" />}>
               <RunEventsTab />
+            </Suspense>
+          </div>
+        )}
+        {activeTab === 'mind' && (
+          <div role="tabpanel" id="tabpanel-mind" aria-labelledby="tab-mind">
+            <Suspense fallback={<TabLoadFallback label="mind" />}>
+              <MindTab />
             </Suspense>
           </div>
         )}
         {activeTab === 'schedule' && (
           <div role="tabpanel" id="tabpanel-schedule" aria-labelledby="tab-schedule">
-            <ScheduleTab apps={apps} providers={providers} activeProviderId={activeProviderId} />
+            <Suspense fallback={<TabLoadFallback label="schedule" />}>
+              <ScheduleTab apps={apps} providers={providers} activeProviderId={activeProviderId} />
+            </Suspense>
           </div>
         )}
         {activeTab === 'workflow' && (
           <div role="tabpanel" id="tabpanel-workflow" aria-labelledby="tab-workflow">
-            <WorkflowTab apps={apps} providers={providers} />
+            <Suspense fallback={<TabLoadFallback label="workflow" />}>
+              <WorkflowTab apps={apps} providers={providers} />
+            </Suspense>
           </div>
         )}
         {activeTab === 'digest' && (
           <div role="tabpanel" id="tabpanel-digest" aria-labelledby="tab-digest">
-            <DigestTab />
+            <Suspense fallback={<TabLoadFallback label="digest" />}>
+              <DigestTab />
+            </Suspense>
           </div>
         )}
         {activeTab === 'gsd' && (
           <div role="tabpanel" id="tabpanel-gsd" aria-labelledby="tab-gsd">
-            <GsdTab />
+            <Suspense fallback={<TabLoadFallback label="GSD" />}>
+              <GsdTab />
+            </Suspense>
           </div>
         )}
         {activeTab === 'productivity' && (
           <div role="tabpanel" id="tabpanel-productivity" aria-labelledby="tab-productivity">
-            <ProductivityTab />
+            <Suspense fallback={<TabLoadFallback label="productivity" />}>
+              <ProductivityTab />
+            </Suspense>
           </div>
         )}
         {activeTab === 'learning' && (
           <div role="tabpanel" id="tabpanel-learning" aria-labelledby="tab-learning">
-            <LearningTab />
+            <Suspense fallback={<TabLoadFallback label="learning" />}>
+              <LearningTab />
+            </Suspense>
           </div>
         )}
         {activeTab === 'memory' && (
           <div role="tabpanel" id="tabpanel-memory" aria-labelledby="tab-memory">
-            <MemoryTab apps={apps} />
+            <Suspense fallback={<TabLoadFallback label="memory" />}>
+              <MemoryTab apps={apps} />
+            </Suspense>
           </div>
         )}
         {activeTab === 'health' && (
           <div role="tabpanel" id="tabpanel-health" aria-labelledby="tab-health">
-            <HealthTab health={health} onCheck={handleHealthCheck} />
+            <Suspense fallback={<TabLoadFallback label="health" />}>
+              <HealthTab health={health} healthLoading={!healthLoaded} onCheck={handleHealthCheck} />
+            </Suspense>
           </div>
         )}
         {activeTab === 'config' && (
           <div role="tabpanel" id="tabpanel-config" aria-labelledby="tab-config">
-            <ConfigTab config={status?.config} onUpdate={fetchData} onEvaluate={handleForceEvaluate} avatarStyle={configAvatarStyle} setAvatarStyle={setAvatarStyle} />
+            <Suspense fallback={<TabLoadFallback label="configuration" />}>
+              <ConfigTab config={status?.config} onUpdate={fetchData} onEvaluate={handleForceEvaluate} avatarStyle={configAvatarStyle} setAvatarStyle={setAvatarStyle} />
+            </Suspense>
           </div>
         )}
       </div>

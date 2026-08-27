@@ -3,7 +3,7 @@
 Living reference of every third-party dependency in PortOS, why it's kept, and what the current verdict is. Updated by `/do:depfree` runs.
 
 **Last audited:** 2026-08-04 (scoped audit of the `keyv`/`cacheable` supply-chain compromise); prior follow-up 2026-07-14 (issue #2547), prior full audit 2026-04-28 (default mode), tables corrected 2026-07-01 during a docs audit.
-**Verdict:** All dependencies justified. The 2026-08-04 audit replaced the entire `eslint` stack with `@biomejs/biome`, dropping 110 net client packages including the `file-entry-cache → flat-cache → keyv` chain named in the August 2026 Shai-Hulud npm compromise (PortOS held safe versions throughout — see the detailed finding below). The same pass closed a latent hole where `ignore-scripts=true` was only active for repo-root installs, not for any workspace install or CI. Since the last full audit: `sax` was removed (replaced with an owned parser, issue #1824), `portos-ai-toolkit` was vendored in-tree (`server/lib/aiToolkit/`), and monolithic `googleapis` was replaced with scoped `@googleapis/*` packages. The 2026-07-14 follow-up bumped `kokoro-js` to its latest patch `1.2.1` (still on maintenance watch — no publish since 2025-05) and aligned the dual `pm2` pins (root + server both `7.0.3`).
+**Verdict:** All dependencies justified. The 2026-08-04 audit replaced the entire `eslint` stack with `@biomejs/biome`, dropping 110 net client packages including the `file-entry-cache → flat-cache → keyv` chain named in the August 2026 Shai-Hulud npm compromise (PortOS held safe versions throughout — see the detailed finding below). The same pass closed a latent hole where `ignore-scripts=true` was only active for repo-root installs, not for any workspace install or CI. Since the last full audit: `sax` was removed (replaced with an owned parser, issue #1824), `portos-ai-toolkit` was vendored in-tree (`server/lib/aiToolkit/`), and monolithic `googleapis` was replaced with scoped `@googleapis/*` packages. The 2026-07-14 follow-up bumped `kokoro-js` to its latest patch `1.2.1` (still on maintenance watch — no publish since 2025-05) and aligned the dual `pm2` pins (root + server both `7.0.4`).
 
 ## Audit Methodology
 
@@ -20,8 +20,9 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | Package | Tier | Verdict | Where Used | Notes |
 |---------|------|---------|------------|-------|
 | **Root devDeps** | | | | |
-| `pm2` | 1 | KEEP | top-level scripts | Process manager, foundational. Pinned `7.0.3` (aligned with server pin) |
+| `pm2` | 1 | KEEP | top-level scripts | Process manager, foundational. Pinned `7.0.4` (aligned with server pin) |
 | **Server deps** | | | | |
+| `@novnc/novnc` | 1 | KEEP | PortDeck remote desktop viewer | Mature RFB/VNC protocol implementation; replacing it would require owning multiple security types and framebuffer encodings |
 | `@googleapis/calendar` | 1 | KEEP | Calendar integration | Scoped official Google SDK (replaced monolithic `googleapis`) |
 | `@googleapis/gmail` | 1 | KEEP | Messages/Gmail integration | Scoped official Google SDK |
 | `express` | 1 | KEEP | `server/index.js` + routes | Framework |
@@ -30,11 +31,12 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `node-pty` | 1 | KEEP | shell/terminal services | Native PTY binding (N-API) |
 | `pdf-lib` | 1 | KEEP | PDF generation/manipulation | |
 | `pg` | 1 | KEEP | Postgres access | Official `pg` driver |
-| `pm2` | 1 | KEEP | app lifecycle | Process manager. Pinned `7.0.3` (aligned with root pin) |
+| `pm2` | 1 | KEEP | app lifecycle | Process manager. Pinned `7.0.4` (aligned with root pin) |
 | `sharp` | 1 | KEEP | image processing | Native, widely-audited |
 | `socket.io` | 1 | KEEP | realtime | Foundational |
 | `socket.io-client` | 1 | KEEP | server-to-client | Paired with socket.io |
 | `undici` | 1 | KEEP | HTTP client | Node core team project |
+| `ws` | 1 | KEEP | remote desktop + browser WebSockets | Foundational WebSocket transport; also used transitively by Socket.IO |
 | `zod` | 1 | KEEP | input validation | Widely-audited |
 | **Server devDeps** | | | | |
 | `vitest` | 1 | KEEP | test runner | |

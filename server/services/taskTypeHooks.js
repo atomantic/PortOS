@@ -141,7 +141,7 @@ export function resolveTaskHookType(task) {
  */
 export const NON_COMMITTING_COORDINATOR_TASK_TYPES = new Set([
   'branch-reconcile', 'issue-reconcile', 'branch-cleanup', 'jira-status-report', 'release-check',
-  'stash-cleanup',
+  'stash-cleanup', 'repo-sync',
 ]);
 
 /**

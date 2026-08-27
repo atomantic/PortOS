@@ -25,7 +25,7 @@ export const CYBER_SHARDS = [
   // Western Districts (Memory, Backup, Jira, Productivity)
   { id: 'shard-memory-steps', label: 'Memory Crystal Shard', x: -38, y: DEFAULT_SHARD_Y, z: -24, color: '#a855f7', value: 20 },
   { id: 'shard-backup-vault', label: 'Vault Crypt Cache', x: -30, y: DEFAULT_SHARD_Y, z: -8, color: '#f59e0b', value: 20 },
-  { id: 'shard-jira-yard', label: 'Sprint Yard Crate', x: -16, y: DEFAULT_SHARD_Y, z: -38, color: '#ec4899', value: 20 },
+  { id: 'shard-jira-yard', label: 'Sprint Yard Crate', x: -16, y: DEFAULT_SHARD_Y, z: -38, color: '#ec4899', value: 20, feature: 'jira' },
   { id: 'shard-productivity', label: 'Focus Terrace Spark', x: -44, y: DEFAULT_SHARD_Y, z: 24, color: '#22c55e', value: 20 },
   { id: 'shard-quiet-corner', label: 'Secret Shard', x: -44, y: DEFAULT_SHARD_Y, z: 38, color: '#e879f9', value: 30 },
 
@@ -42,12 +42,20 @@ export const CYBER_SHARDS = [
 
 export const TOTAL_SHARDS = CYBER_SHARDS.length;
 
+export const isCollectibleVisible = (shard, isFeatureEnabled) => (
+  !shard?.feature
+  || typeof isFeatureEnabled !== 'function'
+  || isFeatureEnabled(shard.feature)
+);
+
 // Return all shards with placement metadata and individual animation phase offsets.
-export function getCollectiblesList() {
-  return CYBER_SHARDS.map((shard, index) => ({
-    ...shard,
-    pulsePhase: (index * 0.13) % 1,
-  }));
+export function getCollectiblesList(isFeatureEnabled) {
+  return CYBER_SHARDS
+    .filter((shard) => isCollectibleVisible(shard, isFeatureEnabled))
+    .map((shard, index) => ({
+      ...shard,
+      pulsePhase: (index * 0.13) % 1,
+    }));
 }
 
 // Check which uncollected shards are within range of the player position.

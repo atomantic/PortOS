@@ -16,7 +16,7 @@
 
 // Feature areas, keyed by a stable area id. Each `to` is a live NAV_COMMANDS path.
 export const FEATURE_AREAS = {
-  post:          { label: 'Daily POST',      to: '/post/launcher',              icon: 'Brain' },
+  post:          { label: 'Daily POST',      to: '/post/launcher',              icon: 'Brain', feature: 'post' },
   bodyHealth:    { label: 'Body Health',     to: '/meatspace/health',           icon: 'HeartPulse' },
   writersRoom:   { label: 'Writers Room',    to: '/writers-room',               icon: 'PenLine' },
   universes:     { label: 'Universes',       to: '/universes',                  icon: 'Globe' },
@@ -46,13 +46,23 @@ export const GOAL_CATEGORY_FEATURE_MAP = {
 // Resolve the feature-area rows for a goal. Honors the optional per-goal
 // `featureAreas` override (an ordered array of area ids) when present and
 // non-empty — filtering out any unknown ids — otherwise falls back to the
-// category default. Returns an array of { area, label, to, icon }.
-export function getGoalFeatureAreas(goal) {
+// category default. When supplied, isFeatureEnabled filters gated rows while
+// preserving the selected/default order. Returns rows with an optional feature tag.
+export function getGoalFeatureAreas(goal, isFeatureEnabled) {
   const override = Array.isArray(goal?.featureAreas)
     ? goal.featureAreas.filter((id) => FEATURE_AREAS[id])
     : [];
+  const categoryDefaults = GOAL_CATEGORY_FEATURE_MAP[goal?.category] || [];
   const areaIds = override.length > 0
     ? override
-    : (GOAL_CATEGORY_FEATURE_MAP[goal?.category] || []);
-  return areaIds.map((area) => ({ area, ...FEATURE_AREAS[area] }));
+    : categoryDefaults;
+  const rows = areaIds.map((area) => ({ area, ...FEATURE_AREAS[area] }));
+  if (typeof isFeatureEnabled !== 'function') return rows;
+
+  const enabledRows = rows.filter((row) => isFeatureEnabled(row.feature));
+  if (enabledRows.length > 0 || override.length === 0) return enabledRows;
+
+  return categoryDefaults
+    .map((area) => ({ area, ...FEATURE_AREAS[area] }))
+    .filter((row) => isFeatureEnabled(row.feature));
 }

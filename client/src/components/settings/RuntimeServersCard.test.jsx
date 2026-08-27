@@ -14,6 +14,7 @@ const renderCard = (props = {}) => {
     onControlLmStudio: vi.fn(),
     onInstallBackend: vi.fn(),
     onInstallLlama: vi.fn(),
+    onUpgradeLlama: vi.fn(),
     onStopLlama: vi.fn(),
     onConfigureLlama: vi.fn(),
     onConfigureMtplx: vi.fn(),
@@ -81,6 +82,46 @@ describe('RuntimeServersCard', () => {
 
     fireEvent.click(within(llama).getByRole('button', { name: /Configure/ }));
     expect(handlers.onConfigureLlama).toHaveBeenCalled();
+  });
+
+  it('shows a llama.cpp update and delegates the action to the runtime handler', () => {
+    const handlers = renderCard({
+      llamaStatus: {
+        installed: true,
+        running: false,
+        version: '0.1.1-dev',
+        latestVersion: '0.3.0',
+        updateAvailable: true,
+        canUpgrade: true,
+      },
+    });
+    const llama = row('llama.cpp');
+
+    expect(within(llama).getByText('v0.1.1-dev')).toBeInTheDocument();
+    expect(within(llama).getByText('v0.3.0 available')).toBeInTheDocument();
+    fireEvent.click(within(llama).getByRole('button', { name: 'Update to v0.3.0' }));
+
+    expect(handlers.onUpgradeLlama).toHaveBeenCalledWith();
+  });
+
+  it('links to llama.cpp release notes when Homebrew cannot update the installation', () => {
+    renderCard({
+      llamaStatus: {
+        installed: true,
+        running: false,
+        latestVersion: '0.3.0',
+        updateAvailable: true,
+        canUpgrade: false,
+        downloadUrl: 'https://github.com/ggml-org/llama.cpp/releases',
+      },
+    });
+    const llama = row('llama.cpp');
+
+    expect(within(llama).queryByRole('button', { name: /Update to/ })).toBeNull();
+    expect(within(llama).getByRole('link', { name: /Update available/ })).toHaveAttribute(
+      'href',
+      'https://github.com/ggml-org/llama.cpp/releases',
+    );
   });
 
   // MTPLX cannot unload its checkpoint in place, so PortOS stops the process

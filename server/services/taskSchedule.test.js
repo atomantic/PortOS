@@ -104,6 +104,7 @@ vi.mock('./cosState.js', async () => {
 
 import {
   INTERVAL_TYPES,
+  INSTALL_WIDE_TASK_TYPES,
   SELF_IMPROVEMENT_TASK_TYPES,
   loadSchedule,
   getTaskInterval,
@@ -229,6 +230,18 @@ describe('taskSchedule', () => {
       expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('performance')
       expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('dependency-updates')
       expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('do-replan')
+    })
+  })
+
+  describe('INSTALL_WIDE_TASK_TYPES', () => {
+    it('names only task types that really sweep the whole install', () => {
+      expect([...INSTALL_WIDE_TASK_TYPES]).toEqual(['repo-sync'])
+    })
+
+    it('every install-wide type is a registered task type', () => {
+      for (const t of INSTALL_WIDE_TASK_TYPES) {
+        expect(SELF_IMPROVEMENT_TASK_TYPES).toContain(t)
+      }
     })
   })
 
@@ -1308,33 +1321,6 @@ describe('taskSchedule', () => {
     })
   })
 
-  describe('refresh-local-llm-catalog defaults', () => {
-    it('is registered as a self-improvement task type', () => {
-      expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('refresh-local-llm-catalog')
-    })
-
-    it('defaults to weekly, disabled, with CoS-managed worktree + PR', () => {
-      const cfg = DEFAULT_TASK_INTERVALS['refresh-local-llm-catalog']
-      expect(cfg.type).toBe(INTERVAL_TYPES.WEEKLY)
-      expect(cfg.enabled).toBe(false)
-      // CoS manages the worktree + PR (like feature-ideas), so these are NOT
-      // in MANAGED_AGENT_OPTIONS (the user could turn them off if they wanted).
-      expect(cfg.taskMetadata.useWorktree).toBe(true)
-      expect(cfg.taskMetadata.openPR).toBe(true)
-      expect(MANAGED_AGENT_OPTIONS['refresh-local-llm-catalog']).toBeUndefined()
-    })
-
-    it('prompt guards on the PortOS catalog file and targets the catalog + ranking', async () => {
-      const prompt = await getTaskPrompt('refresh-local-llm-catalog')
-      // No-ops on any repo lacking the catalog file (so enabling on a non-PortOS app is safe).
-      expect(prompt).toContain('server/lib/localLlmCatalog.js')
-      expect(prompt).toContain('LOCAL_LLM_CATALOG')
-      expect(prompt).toContain('EDITORIAL_FAMILY_RANK')
-      // Must not open an empty PR when nothing changed (phrase may be line-wrapped).
-      expect(prompt).toContain('empty PR')
-    })
-  })
-
   describe('ux defaults (#3273)', () => {
     it('is registered as a self-improvement task type with a description', () => {
       expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('ux')
@@ -1386,6 +1372,13 @@ describe('taskSchedule', () => {
       expect(cfg.enabled).toBe(false)
       // Refresh the configured work tracker before filing a new proposal.
       expect(cfg.runAfter).toEqual(['do-replan'])
+      expect(cfg.dataInputs).toEqual([
+        'product-requirements',
+        'project-goals',
+        'open-issues',
+        'open-pull-requests',
+        'closed-unmerged-pull-requests',
+      ])
       expect(cfg.taskMetadata.useWorktree).toBe(false)
       expect(cfg.taskMetadata.openPR).toBe(false)
       // Writable: a file-based tracker path commits checklist items.
@@ -1417,7 +1410,7 @@ describe('taskSchedule', () => {
       expect(prompt).toContain('docs/README.md')
       expect(prompt).not.toContain('PLAN.md')
       expect(prompt).not.toContain('REJECTED.md')
-      expect(prompt).toContain('closed-unmerged')
+      expect(prompt).toContain('Closed unmerged pull requests')
       // Never implements — the plan IS the deliverable.
       expect(prompt).toContain('no branches, no PRs')
       expect(prompt).toContain('Acceptance criteria')

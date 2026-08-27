@@ -488,6 +488,48 @@ export function resolveOutputPlacement(outputTarget) {
   return { outputDir, skipSidecar, isGallery };
 }
 
+const IMAGE_EXECUTION_MARKER = 'IMAGE_EXECUTION:';
+const IMAGE_EXECUTION_DEVICES = new Set(['auto', 'mps', 'cuda', 'cpu']);
+const IMAGE_EXECUTION_EFFECTIVE_DEVICES = new Set(['mps', 'cuda', 'cpu']);
+const IMAGE_EXECUTION_PLACEMENTS = new Set(['mps', 'cuda', 'cuda+offload', 'cpu']);
+const IMAGE_EXECUTION_RUNTIMES = new Set(['flux2', 'diffusers-image']);
+const IMAGE_EXECUTION_PACKAGES = new Set(['torch', 'diffusers', 'transformers', 'accelerate']);
+
+const boundedString = (value, max = 80) => (typeof value === 'string' && value.length > 0 && value.length <= max ? value : null);
+
+// A malformed marker is evidence of neither GPU nor CPU execution. Keep it
+// distinct from an older runner that emitted no marker at all, while refusing
+// to persist arbitrary subprocess JSON into a gallery sidecar.
+export function parseImageExecutionMarker(line) {
+  if (typeof line !== 'string' || !line.startsWith(IMAGE_EXECUTION_MARKER)) return null;
+  let value;
+  try {
+    value = JSON.parse(line.slice(IMAGE_EXECUTION_MARKER.length));
+  } catch {
+    return { state: 'malformed' };
+  }
+  if (!value || value.version !== 1
+    || !IMAGE_EXECUTION_DEVICES.has(value.requestedDevice)
+    || !IMAGE_EXECUTION_EFFECTIVE_DEVICES.has(value.effectiveDevice)
+    || !IMAGE_EXECUTION_PLACEMENTS.has(value.placement)
+    || !IMAGE_EXECUTION_RUNTIMES.has(value.runtime?.runtime)
+    || typeof value.cpuFallback !== 'boolean') return { state: 'malformed' };
+  const expectedState = value.effectiveDevice === 'cpu' ? 'degraded' : 'confirmed';
+  if (value.state !== expectedState || value.cpuFallback !== (expectedState === 'degraded')) return { state: 'malformed' };
+  const versions = Object.fromEntries(Object.entries(value.runtime.versions || {})
+    .filter(([name, version]) => IMAGE_EXECUTION_PACKAGES.has(name) && boundedString(version))
+    .map(([name, version]) => [name, version]));
+  return {
+    version: 1,
+    state: expectedState,
+    requestedDevice: value.requestedDevice,
+    effectiveDevice: value.effectiveDevice,
+    placement: value.placement,
+    cpuFallback: value.cpuFallback,
+    runtime: { runtime: value.runtime.runtime, versions },
+  };
+}
+
 export async function generateImage({ pythonPath, prompt = '', negativePrompt = '', modelId = LOCAL_IMAGEGEN_DEFAULT_MODEL, width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null, referenceImagePaths = [], referenceImageStrengths = [], jobId: providedJobId = null, cleanC2PA = false, denoise = false, regenOf = null, upscaleTo = null, outputTarget = null }) {
   // Empty prompt is allowed: img2img / edit / unconditional renders are driven
   // by the init image (or run unconditionally), so text isn't required. The
@@ -726,6 +768,14 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     // first-run multi-GB HF downloads don't trip the timeout when
     // tqdm is slow to update during connection-establishment.
     imageGenEvents.emit('activity', { generationId: jobId });
+
+    const execution = parseImageExecutionMarker(trimmed);
+    if (execution) {
+      meta.executionProvenance = execution;
+      job.executionProvenance = execution;
+      if (activeJob?.generationId === jobId) activeJob.executionProvenance = execution;
+      return true;
+    }
 
     if (trimmed.startsWith('STAGE:')) {
       const rest = trimmed.slice(6); // strip 'STAGE:'
@@ -969,7 +1019,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
       // A non-gallery render has no `/data/images` mount — carry the absolute
       // `outputPath` so the queue/route can read the finished bytes; `path`
       // stays null so nothing treats it as a gallery URL.
-      const result = { filename, seed: actualSeed, path: publicPath, outputPath };
+      const result = { filename, seed: actualSeed, path: publicPath, outputPath, ...(meta.executionProvenance ? { executionProvenance: meta.executionProvenance } : {}) };
       broadcastSse(job, { type: 'complete', result });
       // Include `seed` so /sdapi/v1/txt2img can surface the actual seed used
       // (mflux generates a random one if the client didn't pass one). Emit the
@@ -978,11 +1028,11 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
       // federated. The queue's own `completed` handler still fires off the
       // return value below, so the job settles either way.
       if (!skipSidecar) {
-        imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, path: publicPath, filename, seed: actualSeed });
+        imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, path: publicPath, filename, seed: actualSeed, ...(meta.executionProvenance ? { executionProvenance: meta.executionProvenance } : {}) });
       } else {
         // `temp: true` tells the media-asset-index + peer-sync hooks to ignore
         // this render — there's no gallery file or sidecar to index/federate.
-        imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, path: null, filename, seed: actualSeed, outputPath, temp: true });
+        imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, path: null, filename, seed: actualSeed, outputPath, temp: true, ...(meta.executionProvenance ? { executionProvenance: meta.executionProvenance } : {}) });
       }
     }
     closeJobAfterDelay(jobs, jobId);

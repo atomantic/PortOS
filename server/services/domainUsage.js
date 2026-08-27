@@ -20,6 +20,7 @@ import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { DOMAIN_IDS } from '../lib/domainAutonomy.js';
 import { getDomainBudget, hasBudget, evaluateBudget } from '../lib/domainBudgets.js';
 import { loadState } from './cosState.js';
+import { pendingCosActionReservations } from './cosAdmissionReservations.js';
 
 export const USAGE_FILE = join(PATHS.cos, 'domain-usage.json');
 
@@ -113,6 +114,9 @@ export async function getDomainBudgetStatus(domainId) {
     return { withinBudget: true, exceeded: null, budget, usage: { actions: 0, ms: 0 } };
   }
   const usage = await getDomainUsageToday(domainId);
-  const { withinBudget, exceeded } = evaluateBudget(budget, usage);
+  const effectiveUsage = domainId === 'cos'
+    ? { ...usage, actions: usage.actions + pendingCosActionReservations() }
+    : usage;
+  const { withinBudget, exceeded } = evaluateBudget(budget, effectiveUsage);
   return { withinBudget, exceeded, budget, usage };
 }

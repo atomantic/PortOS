@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
-import { Cpu, Box, Zap, Gauge, Play, Square, Download, Power, PowerOff, RefreshCw, Save, Settings2, ExternalLink } from 'lucide-react';
+import { Cpu, Box, Zap, Gauge, Play, Square, Download, ArrowUpCircle, Power, PowerOff, RefreshCw, Save, Settings2, ExternalLink } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
 
 /**
@@ -65,8 +65,9 @@ function backendRow({ id, label, icon, data, onStart, onStop, onInstall }) {
  * answers on the port means a server the user started in a terminal, which
  * PortOS must not offer to stop.
  */
-function pm2Row({ id, label, icon, status, platformReason, onStart, onStop, onInstall, startBlockedReason, detail }) {
+function pm2Row({ id, label, icon, status, platformReason, onStart, onStop, onInstall, onUpgrade, startBlockedReason, detail }) {
   const external = status?.running && status?.managed === false;
+  const updateAvailable = !platformReason && status?.installed && status?.updateAvailable === true;
   const state = platformReason ? 'unsupported'
     : status?.running ? (external ? 'external' : 'running')
       : status?.installed ? 'stopped' : 'missing';
@@ -86,6 +87,11 @@ function pm2Row({ id, label, icon, status, platformReason, onStart, onStop, onIn
     onStart: !platformReason && status?.installed && !status?.running && !startBlockedReason ? onStart : null,
     startBlockedReason: status?.installed && !status?.running ? startBlockedReason : null,
     onStop: !external && status?.running ? onStop : null,
+    version: status?.version || null,
+    latestVersion: status?.latestVersion || null,
+    updateAvailable,
+    onUpgrade: updateAvailable && status?.canUpgrade ? onUpgrade : null,
+    updateUrl: updateAvailable && !status?.canUpgrade ? status?.downloadUrl : null,
   };
 }
 
@@ -168,6 +174,15 @@ function ServerRow({ row, busy, actionInProgress, children }) {
         {row.endpoint && (
           <code className="text-xs text-gray-500 truncate max-w-full">{row.endpoint}</code>
         )}
+        {row.version && <span className="text-xs text-gray-500">v{row.version}</span>}
+        {row.updateAvailable && row.latestVersion && (
+          <span
+            className="text-xs text-port-warning"
+            title={`${row.label} v${row.latestVersion} is available (you have ${row.version ? `v${row.version}` : 'an older version'})`}
+          >
+            v{row.latestVersion} available
+          </span>
+        )}
         {row.pm2 && row.runAtStartup && (
           <span className="px-1.5 py-0.5 text-xs rounded border border-port-success/40 text-port-success" title="This PM2 process is in the saved list `pm2 resurrect` replays at boot">
             starts at boot
@@ -225,6 +240,29 @@ function ServerRow({ row, busy, actionInProgress, children }) {
             Stop
           </button>
         )}
+        {row.onUpgrade && (
+          <button
+            onClick={() => row.onUpgrade()}
+            disabled={busy}
+            className={`${accentBtn} bg-port-success/20 hover:bg-port-success/30 text-port-success`}
+            title={row.latestVersion ? `Update ${row.label} to v${row.latestVersion} through Homebrew` : `Update ${row.label} through Homebrew`}
+          >
+            {actionInProgress === `runtime-upgrade-${row.id}` ? <BrailleSpinner /> : <ArrowUpCircle size={12} />}
+            {row.latestVersion ? `Update to v${row.latestVersion}` : 'Update'}
+          </button>
+        )}
+        {row.updateUrl && (
+          <a
+            href={row.updateUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={`${neutralBtn} no-underline text-port-warning`}
+            title={`${row.label} has an update, but PortOS cannot update this installation automatically`}
+          >
+            <ExternalLink size={12} />
+            Update available
+          </a>
+        )}
       </div>
     </div>
   );
@@ -242,6 +280,7 @@ export default function RuntimeServersCard({
   onControlLmStudio,
   onInstallBackend,
   onInstallLlama,
+  onUpgradeLlama,
   onStopLlama,
   onConfigureLlama,
   onConfigureMtplx,
@@ -282,6 +321,7 @@ export default function RuntimeServersCard({
       icon: Zap,
       status: llamaStatus,
       onInstall: onInstallLlama,
+      onUpgrade: onUpgradeLlama,
       onStop: onStopLlama,
       // llama-server takes a REQUIRED model path, and which GGUF (plus which
       // drafter and spec type) is a real choice — so there is no honest one-click

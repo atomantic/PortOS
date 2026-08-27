@@ -20,6 +20,31 @@ const MUSIC_STUDIO_KEYS = new Set([
   'trackId', 'title', 'artistId', 'artist', 'albumId', 'lyricsEnabled', 'lyricsProvided', 'instrumentalOnly',
 ]);
 
+const EXECUTION_RUNTIME_KEYS = new Set(['torch', 'diffusers', 'transformers', 'accelerate']);
+const executionProvenance = (value) => {
+  if (!value || typeof value !== 'object') return undefined;
+  if (value.state === 'malformed') return { state: 'malformed' };
+  if (!['confirmed', 'degraded'].includes(value.state)
+    || !['auto', 'mps', 'cuda', 'cpu'].includes(value.requestedDevice)
+    || !['mps', 'cuda', 'cpu'].includes(value.effectiveDevice)
+    || !['mps', 'cuda', 'cuda+offload', 'cpu'].includes(value.placement)
+    || typeof value.cpuFallback !== 'boolean'
+    || !['flux2', 'diffusers-image'].includes(value.runtime?.runtime)) return undefined;
+  return {
+    version: 1,
+    state: value.state,
+    requestedDevice: value.requestedDevice,
+    effectiveDevice: value.effectiveDevice,
+    placement: value.placement,
+    cpuFallback: value.cpuFallback,
+    runtime: {
+      runtime: value.runtime.runtime,
+      versions: Object.fromEntries(Object.entries(value.runtime.versions || {})
+        .filter(([key, version]) => EXECUTION_RUNTIME_KEYS.has(key) && typeof version === 'string' && version.length <= 80)),
+    },
+  };
+};
+
 export function sanitizeJob(job) {
   if (!job) return job;
   const safeParams = job.params
@@ -38,6 +63,11 @@ export function sanitizeJob(job) {
   // Rebuild the prompt for the public projection without exposing private peer
   // routing state.
   const remotePrompt = effectiveJobPrompt(job);
+  const safeExecution = executionProvenance(job.result?.executionProvenance);
+  const { executionProvenance: _executionProvenance, ...resultWithoutExecution } = job.result && typeof job.result === 'object' ? job.result : {};
+  const safeResult = job.result && typeof job.result === 'object'
+    ? { ...resultWithoutExecution, ...(safeExecution ? { executionProvenance: safeExecution } : {}) }
+    : job.result;
   // The model id is nulled in top-level params for the same reason (#4683), so
   // rebuild it from the marker too — the Render Queue's model badge reads
   // `params.modelId`, and every routed kind (audio included: routes/music.js
@@ -73,7 +103,7 @@ export function sanitizeJob(job) {
     render: job.render,
     etaMs: job.etaMs,
     error: job.error,
-    result: job.result,
+    result: safeResult,
     params: safeParams,
   };
 }

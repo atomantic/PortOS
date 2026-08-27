@@ -56,21 +56,18 @@ function createBlades(count) {
   });
 }
 
-function writeMatrices(ref, blades, time = 0) {
-  if (!ref.current) return;
+function writeMatrices(ref, blades) {
+  if (!ref.current || typeof ref.current.setMatrixAt !== 'function') return;
   blades.forEach((blade, index) => {
-    const gust = Math.sin(time * 0.62 + blade.x * 0.045 + blade.z * 0.032 + blade.phase) * 0.22
-      + Math.sin(time * 1.45 + blade.phase * 0.7) * 0.07;
-    const height = blade.height * (1 + Math.sin(blade.phase * 1.3) * 0.08);
-    dummy.position.set(blade.x, GRASS_BASE_Y + height * 0.5, blade.z);
-    // A triangular blade leans in two axes so the field reads as a moving volume, not
-    // as one synchronized sheet. The phase is deterministic, but the wind is shared.
-    dummy.rotation.set(gust * 0.36, blade.yaw, gust * 0.58);
-    dummy.scale.set(blade.width, height, blade.width);
+    dummy.position.set(blade.x, GRASS_BASE_Y + blade.height * 0.5, blade.z);
+    dummy.rotation.set(0, blade.yaw, 0);
+    dummy.scale.set(blade.width, blade.height, blade.width);
     dummy.updateMatrix();
     ref.current.setMatrixAt(index, dummy.matrix);
   });
-  ref.current.instanceMatrix.needsUpdate = true;
+  if (ref.current.instanceMatrix) {
+    ref.current.instanceMatrix.needsUpdate = true;
+  }
 }
 
 export default function OpenWorldGrass({ settings }) {
@@ -79,22 +76,71 @@ export default function OpenWorldGrass({ settings }) {
   const blades = useMemo(() => createBlades(count), [count]);
   const ref = useRef();
   const grassColor = mixHex('#4f8a5d', accent, 0.16);
+  const timeUniformRef = useRef({ value: 0 });
 
   useLayoutEffect(() => {
     writeMatrices(ref, blades);
-    if (ref.current) ref.current.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  }, [blades]);
+    if (typeof ref.current?.computeBoundingSphere === 'function') {
+      ref.current.computeBoundingSphere();
+    }
+  }, [blades, lowPoly]);
+
+  const onBeforeCompile = useMemo(() => (shader) => {
+    shader.uniforms.uGrassTime = timeUniformRef.current;
+    shader.vertexShader = `
+      uniform float uGrassTime;
+      varying float vBladeHeight;
+    ` + shader.vertexShader;
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <begin_vertex>',
+      `
+      #include <begin_vertex>
+      // Cone geometry height 1 is centered at y=0, so base is at -0.5 and tip is at +0.5.
+      float bladeHeightNorm = clamp(position.y + 0.5, 0.0, 1.0);
+      vBladeHeight = bladeHeightNorm;
+      float sway = bladeHeightNorm * bladeHeightNorm;
+
+      vec3 instPos = vec3(instanceMatrix[3][0], instanceMatrix[3][1], instanceMatrix[3][2]);
+      float gust = sin(uGrassTime * 0.75 + instPos.x * 0.05 + instPos.z * 0.04) * 0.32
+                 + sin(uGrassTime * 1.6 + instPos.x * 0.12) * 0.1;
+
+      transformed.x += gust * 0.38 * sway;
+      transformed.z += gust * 0.62 * sway;
+      `
+    );
+    shader.fragmentShader = `
+      varying float vBladeHeight;
+    ` + shader.fragmentShader;
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <color_fragment>',
+      `
+      #include <color_fragment>
+      vec3 bladeBase = diffuseColor.rgb * 0.52;
+      vec3 bladeTip = diffuseColor.rgb * 1.28 + vec3(0.06, 0.10, 0.01);
+      diffuseColor.rgb = mix(bladeBase, bladeTip, vBladeHeight);
+      `
+    );
+  }, []);
 
   useFrame(({ clock }) => {
-    if (lowPoly && blades.length > 0) writeMatrices(ref, blades, clock.getElapsedTime());
+    if (lowPoly && blades.length > 0) {
+      timeUniformRef.current.value = clock.getElapsedTime();
+    }
   });
 
   if (!lowPoly || blades.length === 0) return null;
 
   return (
-    <instancedMesh key={blades.length} ref={ref} args={[undefined, undefined, blades.length]} frustumCulled={false}>
+    <instancedMesh key={blades.length} ref={ref} args={[undefined, undefined, blades.length]}>
       <coneGeometry args={[0.12, 1, 3]} />
-      <meshStandardMaterial {...surface} color={grassColor} roughness={1} metalness={0} />
+      <meshStandardMaterial
+        {...surface}
+        color={grassColor}
+        roughness={1}
+        metalness={0}
+        side={THREE.DoubleSide}
+        onBeforeCompile={onBeforeCompile}
+      />
     </instancedMesh>
   );
 }

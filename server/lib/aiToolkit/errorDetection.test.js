@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   analyzeError,
   analyzeHttpError,
+  normalizeRateLimitHeaders,
   createImmediateFallbackSignalDetector,
   createTerminalModelErrorDetector,
   createLocalRuntimeOomDetector,
@@ -713,6 +714,86 @@ describe('Error Detection', () => {
       });
       expect(result.hasError).toBe(true);
       expect(result.waitTime).toBeTruthy();
+    });
+
+    it('normalizes relative and HTTP-date Retry-After values without retaining raw headers', () => {
+      const now = Date.parse('2026-08-26T12:00:00.000Z');
+      expect(normalizeRateLimitHeaders({ 'Retry-After': '90' }, { now })).toEqual({
+        observedAt: '2026-08-26T12:00:00.000Z',
+        retryAfterMs: 90000,
+      });
+      expect(normalizeRateLimitHeaders(new Headers({
+        'retry-after': 'Wed, 26 Aug 2026 12:02:00 GMT',
+      }), { now })).toEqual({
+        observedAt: '2026-08-26T12:00:00.000Z',
+        retryAfterMs: 120000,
+      });
+    });
+
+    it('normalizes provider header casing, reset timestamps, and count metadata', () => {
+      const now = Date.parse('2026-08-26T12:00:00.000Z');
+      const result = normalizeRateLimitHeaders({
+        'X-RateLimit-Reset': String((now + 60000) / 1000),
+        'X-RATELIMIT-REMAINING': '4',
+        'x-ratelimit-limit': '100',
+        authorization: 'Bearer secret-value',
+      }, { now });
+      expect(result).toEqual({
+        observedAt: '2026-08-26T12:00:00.000Z',
+        resetAt: '2026-08-26T12:01:00.000Z',
+        remaining: 4,
+        limit: 100,
+      });
+      expect(JSON.stringify(result)).not.toContain('secret-value');
+      expect(JSON.stringify(result)).not.toContain('authorization');
+    });
+
+    it('normalizes provider-specific request-window duration headers', () => {
+      const now = Date.parse('2026-08-26T12:00:00.000Z');
+      expect(normalizeRateLimitHeaders({
+        'X-RateLimit-Reset-Requests': '1m30s',
+        'X-RateLimit-Remaining-Requests': '2',
+        'X-RateLimit-Limit-Requests': '50',
+      }, { now })).toEqual({
+        observedAt: '2026-08-26T12:00:00.000Z',
+        resetAt: '2026-08-26T12:01:30.000Z',
+        remaining: 2,
+        limit: 50,
+      });
+    });
+
+    it('continues past an empty alias to a populated allowed header', () => {
+      const now = Date.parse('2026-08-26T12:00:00.000Z');
+      expect(normalizeRateLimitHeaders({
+        'ratelimit-remaining': '',
+        'x-ratelimit-remaining': '5',
+      }, { now })).toEqual({
+        observedAt: '2026-08-26T12:00:00.000Z',
+        remaining: 5,
+      });
+    });
+
+    it('ignores malformed, negative, oversized, and huge values', () => {
+      const now = Date.parse('2026-08-26T12:00:00.000Z');
+      expect(normalizeRateLimitHeaders({
+        'retry-after': '-1',
+        'x-ratelimit-reset': String((now + (31 * 24 * 60 * 60 * 1000)) / 1000),
+        'x-ratelimit-remaining': '9'.repeat(129),
+        'x-ratelimit-limit': 'token-secret',
+      }, { now })).toBeNull();
+      expect(normalizeRateLimitHeaders(null, { now })).toBeNull();
+    });
+
+    it('attaches only normalized rate-limit metadata to a quota response', () => {
+      const result = analyzeHttpError({
+        status: 400,
+        statusText: 'Bad Request',
+        body: 'usage limit reached',
+        headers: { 'Retry-After': '15', 'X-Api-Key': 'secret-value' },
+      });
+      expect(result.category).toBe(ERROR_CATEGORIES.USAGE_LIMIT);
+      expect(result.rateLimitWindow).toMatchObject({ retryAfterMs: 15000 });
+      expect(JSON.stringify(result)).not.toContain('secret-value');
     });
   });
 

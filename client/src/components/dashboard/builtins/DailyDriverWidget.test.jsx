@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { INSTANCE_FEATURES_CHANGED } from '../../../constants/events.js';
+import { __resetInstanceFeatureCache } from '../../../hooks/useInstanceFeatures.js';
 import DailyDriverWidget from './DailyDriverWidget';
 
 const mocks = vi.hoisted(() => ({
@@ -23,6 +24,7 @@ const renderWidget = (dashboardState = {}) =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  __resetInstanceFeatureCache();
   mocks.getInstanceFeatures.mockResolvedValue({ features: [{ id: 'post', enabled: true }] });
   mocks.getPostStats.mockResolvedValue({ completedToday: false, currentStreak: 3 });
   mocks.getPostRecommendations.mockResolvedValue({ recommendations: [{ title: 'Morse copy drill' }] });

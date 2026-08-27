@@ -14,8 +14,8 @@ import { isWalkable, WORLD } from '../../utils/openWorldPlan';
 import { BOROUGH_PARAMS, BUILDING_PARAMS, PROCESS_BUILDING_PARAMS } from './openWorldConstants';
 import { regionWarpPadPosition, getRegion } from '../../utils/openWorldRegions';
 import { checkSpeedPadOverlap } from '../../utils/openWorldSpeedPads';
-import { checkShardCollection } from '../../utils/openWorldCollectibles';
-import { detectProximity } from '../../utils/openWorldProximity';
+import { checkShardCollection, getCollectiblesList } from '../../utils/openWorldCollectibles';
+import { detectProximity, getResolvedLandmarks } from '../../utils/openWorldProximity';
 
 const WALK_SPEED = 10;
 const SPRINT_SPEED = 20;
@@ -57,10 +57,12 @@ export default function PlayerController({
   cameraView = 'third',
   teleport = null,
   warpPads = [],
+  landmarks = getResolvedLandmarks(),
   onWarpPadInteract,
   onWarpPadProximity,
   onProximityChange,
   easterEggs = [],
+  shards = getCollectiblesList(),
   collectedShardIds = new Set(),
   onCollectShard,
   onPlayerPoseChange,
@@ -497,7 +499,7 @@ export default function PlayerController({
     }
 
     // Cyber Shards collectible detection
-    const collectedShards = checkShardCollection(rig.position, undefined, localCollectedSetRef.current);
+    const collectedShards = checkShardCollection(rig.position, shards, localCollectedSetRef.current);
     if (collectedShards.length > 0) {
       collectedShards.forEach((shard) => {
         localCollectedSetRef.current.add(shard.id);
@@ -536,6 +538,7 @@ export default function PlayerController({
       positions,
       warpPads: warpPadList,
       easterEggs,
+      landmarks,
     });
 
     if (proxTarget?.id !== proximityTargetRef.current?.id || proxTarget?.type !== proximityTargetRef.current?.type) {

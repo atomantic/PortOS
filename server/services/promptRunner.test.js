@@ -64,7 +64,7 @@ const autoFixer = await import('./autoFixer.js');
 const toolkitState = await import('../lib/aiToolkitState.js');
 const { ERROR_CATEGORIES } = await import('../lib/aiToolkit/errorDetection.js');
 const { CREATIVE_LATITUDE_HEADING, withCreativeLatitude } = await import('../lib/creativeLatitude.js');
-const { runPromptThroughProvider, resolveProviderAndModel, resolveEffectiveModel, pickConfigCorrectedModel, normalizeResponseSchema, coerceResponseToSchema, isSchemaTypeCategory } = await import('./promptRunner.js');
+const { runPromptThroughProvider, resolveProviderAndModel, resolveEffectiveModel, pickConfigCorrectedModel, normalizeResponseSchema, coerceResponseToSchema, isSchemaTypeCategory, buildRequestCapabilities } = await import('./promptRunner.js');
 
 const apiProvider = (extra = {}) => ({
   id: 'mock-api', type: 'api', defaultModel: 'm-default', ...extra,
@@ -163,6 +163,15 @@ describe('promptRunner — happy paths', () => {
     expect(runner.executeApiRun).toHaveBeenCalledWith(
       expect.objectContaining({ screenshots: ['a.png', 'b.png'] }),
     );
+    expect(runner.createRun).toHaveBeenCalledWith(expect.objectContaining({
+      requestCapabilities: { hasImages: true, requiredContextTokens: 8_002 },
+    }));
+  });
+
+  it('builds a request budget from prompt input plus the caller output reserve', () => {
+    expect(buildRequestCapabilities({
+      prompt: '12345678', screenshots: [], outputReserveTokens: 1_000,
+    })).toEqual({ hasImages: false, requiredContextTokens: 1_002 });
   });
 
   it('defaults screenshots to [] when omitted', async () => {
@@ -775,6 +784,25 @@ describe('promptRunner — retry-with-fallback', () => {
     return { isAvailable, markUnavailable, markUsageLimit, getFallbackProvider };
   }
 
+  it('keeps an exact provider pin and skips every fallback tier when disabled', async () => {
+    const status = mockToolkitWithFallback();
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
+      onComplete({ success: false, error: 'Pinned provider failed' });
+    });
+
+    await expect(runPromptThroughProvider({
+      provider: primaryCli,
+      prompt: 'p',
+      source: 'test',
+      allowFallback: false,
+    })).rejects.toThrow('Pinned provider failed');
+
+    expect(runner.createRun).toHaveBeenCalledWith(expect.objectContaining({ allowFallback: false }));
+    expect(status.markUnavailable).not.toHaveBeenCalled();
+    expect(status.getFallbackProvider).not.toHaveBeenCalled();
+    expect(autoFixer.escalateProviderFailure).not.toHaveBeenCalled();
+  });
+
   it('does not retry, bench, or escalate a canceled TUI run', async () => {
     const status = mockToolkitWithFallback();
     const primaryTui = tuiProvider({ id: 'primary-tui', name: 'Primary TUI', defaultModel: 'primary-model' });
@@ -830,7 +858,10 @@ describe('promptRunner — retry-with-fallback', () => {
     expect(status.markUnavailable).toHaveBeenCalledWith('primary-cli', expect.objectContaining({
       reason: expect.any(String),
     }));
-    expect(status.getFallbackProvider).toHaveBeenCalledWith('primary-cli', expect.any(Object));
+    expect(status.getFallbackProvider).toHaveBeenCalledWith(
+      'primary-cli', expect.any(Object), null, null,
+      expect.objectContaining({ hasImages: false, requiredContextTokens: expect.any(Number) }),
+    );
     // The fallback lifecycle is announced up front (so a slow fallback can't
     // outrun the backstop timer) and resolved on success.
     expect(autoFixer.noteFallbackStarted).toHaveBeenCalledWith({
@@ -842,6 +873,33 @@ describe('promptRunner — retry-with-fallback', () => {
       model: 'primary-model',
     });
     expect(autoFixer.noteFallbackFailed).not.toHaveBeenCalled();
+  });
+
+  it('threads screenshot capability into retry selection and the fallback run', async () => {
+    const status = mockToolkitWithFallback();
+    runner.executeApiRun
+      .mockImplementationOnce(async ({ onComplete }) => {
+        onComplete({ success: false, error: 'vision primary failed' });
+      })
+      .mockImplementationOnce(async ({ screenshots, onData, onComplete }) => {
+        expect(screenshots).toEqual(['frame.png']);
+        onData('described');
+        onComplete({ success: true });
+      });
+
+    const out = await runPromptThroughProvider({
+      provider: primaryApi,
+      prompt: '12345678',
+      source: 'test',
+      screenshots: ['frame.png'],
+      outputReserveTokens: 1_000,
+    });
+
+    expect(out.text).toBe('described');
+    expect(status.getFallbackProvider).toHaveBeenCalledWith(
+      'primary-api', expect.any(Object), null, null,
+      { hasImages: true, requiredContextTokens: 1_002 },
+    );
   });
 
   it('does NOT bench the provider on a model-not-found (request-specific bad model id), but still falls back for this call', async () => {
@@ -866,7 +924,10 @@ describe('promptRunner — retry-with-fallback', () => {
     // The carve-out: the provider was NOT benched (mirrors CONTENT_REFUSAL).
     expect(status.markUnavailable).not.toHaveBeenCalled();
     // …but the failing call still recovered via the fallback.
-    expect(status.getFallbackProvider).toHaveBeenCalledWith('primary-api', expect.any(Object));
+    expect(status.getFallbackProvider).toHaveBeenCalledWith(
+      'primary-api', expect.any(Object), null, null,
+      expect.objectContaining({ hasImages: false, requiredContextTokens: expect.any(Number) }),
+    );
   });
 
   it('runs the configured fallbackModel on the fallback (never the primary model) when one is pinned', async () => {
@@ -1370,7 +1431,10 @@ describe('promptRunner — Tier 1 config/env correction (issue #2342)', () => {
     expect(out.fixStrategy).toBe('constrained-agent-retry');
     expect(out.fallbackProvider).toMatchObject({ id: 'fallback-api' });
     // Tier 3 engaged: the fallback was looked up (MODEL_NOT_FOUND stays unbenched).
-    expect(status.getFallbackProvider).toHaveBeenCalledWith('primary-api', expect.any(Object));
+    expect(status.getFallbackProvider).toHaveBeenCalledWith(
+      'primary-api', expect.any(Object), null, null,
+      expect.objectContaining({ hasImages: false, requiredContextTokens: expect.any(Number) }),
+    );
     expect(status.markUnavailable).not.toHaveBeenCalled();
   });
 
@@ -1447,7 +1511,10 @@ describe('promptRunner — Tier 1 config/env correction (issue #2342)', () => {
     // No same-provider corrected retry (primary ran once), straight to Tier 3.
     expect(primaryCalls).toBe(1);
     expect(out.fixTier).toBe(3);
-    expect(status.getFallbackProvider).toHaveBeenCalledWith('primary-cli', expect.any(Object));
+    expect(status.getFallbackProvider).toHaveBeenCalledWith(
+      'primary-cli', expect.any(Object), null, null,
+      expect.objectContaining({ hasImages: false, requiredContextTokens: expect.any(Number) }),
+    );
   });
 
   it('does NOT attempt a Tier-1 correction for non-model failure categories', async () => {
@@ -1473,7 +1540,10 @@ describe('promptRunner — Tier 1 config/env correction (issue #2342)', () => {
     // going straight to the Tier-3 fallback.
     expect(primaryCalls).toBe(1);
     expect(out.fixTier).toBe(3);
-    expect(status.getFallbackProvider).toHaveBeenCalledWith('primary-api', expect.any(Object));
+    expect(status.getFallbackProvider).toHaveBeenCalledWith(
+      'primary-api', expect.any(Object), null, null,
+      expect.objectContaining({ hasImages: false, requiredContextTokens: expect.any(Number) }),
+    );
   });
 
   it('escalates explicitly when a Tier-1 pre-execution throw leaves no survivor and no fallback exists', async () => {
@@ -1596,7 +1666,10 @@ describe('promptRunner — Tier 1 config/env correction (issue #2342)', () => {
 
     expect(primaryCalls).toBe(1);
     expect(out.fixTier).toBe(3);
-    expect(status.getFallbackProvider).toHaveBeenCalledWith('primary-api', expect.any(Object));
+    expect(status.getFallbackProvider).toHaveBeenCalledWith(
+      'primary-api', expect.any(Object), null, null,
+      expect.objectContaining({ hasImages: false, requiredContextTokens: expect.any(Number) }),
+    );
   });
 });
 
@@ -1870,7 +1943,10 @@ describe('promptRunner — Tier 2 schema/type correction (issue #2350)', () => {
     expect(out.text).toBe('{"ok":true}');
     expect(out.fixTier).toBe(3);
     expect(out.fallbackProvider).toMatchObject({ id: 'fallback-api' });
-    expect(status.getFallbackProvider).toHaveBeenCalledWith('primary-api', expect.any(Object));
+    expect(status.getFallbackProvider).toHaveBeenCalledWith(
+      'primary-api', expect.any(Object), null, null,
+      expect.objectContaining({ hasImages: false, requiredContextTokens: expect.any(Number) }),
+    );
     // Schema/type failure never benches the primary (it's response-specific, not an outage).
     expect(status.markUnavailable).not.toHaveBeenCalled();
     expect(autoFixer.noteFallbackHandled).toHaveBeenCalledWith({ provider: 'Primary API', model: 'm1' });

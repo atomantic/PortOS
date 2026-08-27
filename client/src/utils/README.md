@@ -75,6 +75,7 @@ its tunable constants and placement helpers.
 | `openWorldActivityHeatmap` | Calendar activity → per-tile heat levels (`computeActivityHeatmap`, `tileLevel`). |
 | `openWorldAgentMotion` | Agent orbit/trail motion math (`computeAgentOrbit`, `computeAgentTrailPoints`, trail colors). |
 | `openWorldAiCore` | AI-ops core: model tiers, beam thickness, and `computeAiCore` / `computeAiCoreBeams` from live AI status events. |
+| `openWorldAppMetrics` | Per-building live telemetry: aggregate an app's `pm2Status` CPU/memory/uptime/restarts into one snapshot (`computeAppMetrics`, `cpuTone`, `hasPm2Error`, `buildingSignalTone` — façade LED / rooftop stress flags). |
 | `openWorldArtifacts` | Earned-artifact milestones (level/goal/streak) → placed artifact descriptors (`computeArtifacts`). |
 | `openWorldBackupVault` | Backup-vault health/alerting state and color (`computeBackupVault`, `vaultHealth`). |
 | `openWorldChronotype` | Chronotype energy curve by hour → brightness/tempo modifiers (`computeChronotypeEnergy`). |

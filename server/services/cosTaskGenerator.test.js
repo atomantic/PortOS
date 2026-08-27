@@ -233,6 +233,13 @@ describe('isConfiguredApprovalRequired', () => {
     expect(GEN_SRC.slice(appStart, appStart + 11000)).toContain('stampApprovalReason(metadata, approval)');
   });
 
+  it('the PortOS self-improvement lane resolves and appends configured data inputs', () => {
+    const selfStart = GEN_SRC.indexOf('export async function generateSelfImprovementTaskForType');
+    const selfBody = GEN_SRC.slice(selfStart, selfStart + 9000);
+    expect(selfBody).toContain('resolveTaskDataInputs(interval.dataInputs');
+    expect(selfBody).toContain('appendTaskDataInputs(description, taskDataInputs)');
+  });
+
   it('resolveConfidenceApproval consults the toggle before safety-kind and confidence', () => {
     const start = GEN_SRC.indexOf('async function resolveConfidenceApproval');
     expect(start).toBeGreaterThan(-1);

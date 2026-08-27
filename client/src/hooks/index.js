@@ -178,6 +178,7 @@ export * from './useNavWorkingSet.js';
 
 // === Sidebar navigation data ===
 export * from './useFocusRefreshedList.js';
+export * from './useInstanceFeatures.js';
 export * from './useSidebarApps.js';
 export * from './useSidebarSeries.js';
 export * from './useSidebarUniverses.js';

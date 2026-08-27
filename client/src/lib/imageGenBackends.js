@@ -21,6 +21,14 @@ const MODE_ICONS = {
 
 const metaFor = (mode) => ({ label: MODE_LABELS[mode], icon: MODE_ICONS[mode] });
 
+// Older peers and servers only return `connected`; newer local probes add a
+// three-way readiness result. Keep the compatibility read in one place so the
+// Image Gen page and Settings describe the same response identically.
+export const imageGenReadiness = (status) => {
+  if (['ready', 'unavailable', 'unknown'].includes(status?.readiness)) return status.readiness;
+  return status?.connected ? 'ready' : 'unavailable';
+};
+
 export function deriveAvailableBackends(settings, { excludeExternal = false } = {}) {
   const ig = settings?.imageGen || {};
   const out = [];

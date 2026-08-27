@@ -97,15 +97,43 @@ export const WINDOWS_CONTRACT_TESTS = [
 ];
 
 // Contract guards that run on EVERY plan, whatever the impact scope selects.
-// `taskPromptDefaults.test.js` pins the cross-install prompt-upgrade contract
-// (AGENTS.md "Distribution model"): edit a preserved historical default and
-// other installs stop recognizing their stored prompt, so they are treated as
-// having customized it and stay on it forever. Nothing else in the suite
-// notices, and neither can a scoped run that happens not to select this file —
-// so it is never scoped out. The file runs in ~150ms and imports only prompt
-// data, which is cheap enough to pay on every PR including documentation-only
-// ones, where the alternative is reasoning per-scope about what can reach it.
+//
+// Two kinds of test land here, and both share one property: no impact scope can
+// be trusted to select them, because what they assert is not reachable through
+// the import graph the scoped modes walk.
+//
+//   1. Cross-install contract snapshots. `taskPromptDefaults.test.js` pins the
+//      prompt-upgrade contract (AGENTS.md "Distribution model"): edit a
+//      preserved historical default and other installs stop recognizing their
+//      stored prompt, so they are treated as having customized it and stay on
+//      it forever. Nothing else in the suite notices.
+//
+//   2. Repo-hygiene guards that enumerate the tracked tree with `git grep` /
+//      `git ls-files` and assert over files they never import (issue #5055).
+//      Impact selection is import-graph-driven by construction, so it has no
+//      edge that can reach them: the violating file is some *other* file, in
+//      some other directory, that the guard only ever sees as a path string.
+//      They sat structurally unselectable — `agent-instructions-files.test.js`
+//      went red on `main` and stayed there while every PR reported green — and
+//      the always-run list is the only mechanism that can reach them at all.
+//      `repo-scan-guards.test.js` keeps this half of the list honest: it
+//      re-derives the scanner set from the tree and fails when a new one is
+//      added without being registered here or named as structurally selected.
+//
+// Everything here is deliberately cheap — the whole set runs in ~3s and reads
+// only prompt data or `git` output, which is affordable on every PR including
+// documentation-only ones, where the alternative is reasoning per-scope about
+// what can reach it.
 export const ALWAYS_RUN_TESTS = [
+  'scripts/agent-instructions-files.test.js',
+  'scripts/direct-invocation-drift.test.js',
+  'scripts/node-version-drift.test.js',
+  'scripts/repo-scan-guards.test.js',
+  'scripts/tailnet-identity-leak.test.js',
+  'server/lib/qwenAgentParsers.test.js',
+  'server/lib/testDataIsolation.guards.test.js',
+  'server/lib/testHelper.test.js',
+  'server/services/imageGen/renderTargets.guard.test.js',
   'server/services/taskPromptDefaults.test.js',
 ];
 
@@ -237,6 +265,20 @@ const uniqueSorted = (values) => [...new Set(values)].sort();
 // Guarded by trackedSet like every other selector: an untracked path handed to
 // Vitest as an exact selector makes the run exit non-zero.
 const alwaysRunTests = (trackedSet) => ALWAYS_RUN_TESTS.filter((path) => trackedSet.has(path));
+
+/**
+ * Split a set of always-run selectors across the two Vitest runners.
+ *
+ * The docs-only plan names its files directly instead of going through the
+ * runner split the scoped branches use, so it has to do that split itself: an
+ * entry added to ALWAYS_RUN_TESTS under client/src would otherwise be handed to
+ * the server runner, which does not glob client/, and the guard would report
+ * green having run nowhere.
+ */
+export const splitByRunner = (paths) => ({
+  server: paths.filter((path) => runnerForTest(path) === 'server'),
+  client: paths.filter((path) => runnerForTest(path) === 'client'),
+});
 const windowsContractTests = (trackedSet) => WINDOWS_CONTRACT_TESTS.filter((path) => trackedSet.has(path));
 
 const skippedRunner = () => ({ mode: 'skip', files: [] });
@@ -288,12 +330,13 @@ export function buildCiTestPlan(changedFiles, {
 
   const relevant = changed.filter((path) => !isDocumentationOnly(path));
   if (relevant.length === 0) {
+    const { server: alwaysRunServer, client: alwaysRunClient } = splitByRunner(alwaysRun);
     return {
       full: false,
       reason: changed.length ? 'documentation-only change' : 'no changed files',
       changedFiles: changed,
-      server: alwaysRun.length > 0 ? { mode: 'files', files: alwaysRun } : skippedRunner(),
-      client: skippedRunner(),
+      server: alwaysRunServer.length > 0 ? { mode: 'files', files: alwaysRunServer } : skippedRunner(),
+      client: alwaysRunClient.length > 0 ? { mode: 'files', files: alwaysRunClient } : skippedRunner(),
       db: false,
       lint: { mode: 'skip', files: [] },
       build: false,

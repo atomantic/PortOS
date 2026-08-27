@@ -568,13 +568,29 @@ export function createPortOSProviderRoutes(aiToolkit) {
 
   // Provider status routes MUST be defined before toolkit routes,
   // because the toolkit has a GET /:id route that would catch /status
+  const presentProviderStatus = (status) => {
+    // Keep a second allowlist at the HTTP boundary even though the toolkit
+    // service already presents sanitized status. The route is the final guard
+    // if a host injects a different provider-status implementation.
+    const { rateLimitWindow, ...publicStatus } = status || {};
+    if (!rateLimitWindow || typeof rateLimitWindow !== 'object') return publicStatus;
+    const allowedWindow = Object.fromEntries(
+      ['observedAt', 'retryAfterMs', 'resetAt', 'remaining', 'limit']
+        .filter(key => rateLimitWindow[key] != null)
+        .map(key => [key, rateLimitWindow[key]])
+    );
+    return Object.keys(allowedWindow).length
+      ? { ...publicStatus, rateLimitWindow: allowedWindow }
+      : publicStatus;
+  };
+
   router.get('/status', asyncHandler(async (req, res) => {
     const statuses = providerStatusService.getAllStatuses();
     // Enrich with time until recovery
     const enriched = { ...statuses };
     for (const [providerId, status] of Object.entries(enriched.providers)) {
       enriched.providers[providerId] = {
-        ...status,
+        ...presentProviderStatus(status),
         timeUntilRecovery: providerStatusService.getTimeUntilRecovery(providerId)
       };
     }
@@ -582,7 +598,7 @@ export function createPortOSProviderRoutes(aiToolkit) {
   }));
 
   router.get('/:id/status', asyncHandler(async (req, res) => {
-    const status = providerStatusService.getStatus(req.params.id);
+    const status = presentProviderStatus(providerStatusService.getStatus(req.params.id));
     res.json({
       ...status,
       timeUntilRecovery: providerStatusService.getTimeUntilRecovery(req.params.id)

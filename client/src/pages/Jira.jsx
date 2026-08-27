@@ -5,6 +5,7 @@ import PageSkeleton from '../components/ui/PageSkeleton';
 import { FormField } from '../components/ui/FormField';
 import Modal from '../components/ui/Modal';
 import api from '../services/api';
+import { invalidateInstanceFeatures } from '../hooks/useInstanceFeatures.js';
 
 // PAT lifetimes aren't a fixed platform constant — Cloud API tokens typically don't
 // expire on a schedule at all, and Server/DC PAT expiration is chosen per-token by
@@ -109,6 +110,10 @@ export default function Jira() {
 
       const saved = await api.post('/jira/instances', payload, { silent: true });
 
+      // The JIRA nav entries are auto-gated on whether any instance is
+      // configured, so saving the FIRST one is what reveals them — without this
+      // they stay hidden until a full reload.
+      invalidateInstanceFeatures('jira');
       toast.success(`JIRA instance "${payload.name}" saved successfully`);
       setInstances(prev => ({ ...prev, [saved.id]: saved }));
       handleCancel();
@@ -131,6 +136,8 @@ export default function Jira() {
 
     try {
       await api.delete(`/jira/instances/${instanceId}`, { silent: true });
+      // Removing the LAST instance re-hides the nav entries (see the save path).
+      invalidateInstanceFeatures('jira');
       toast.success(`JIRA instance "${instanceId}" deleted`);
       setInstances(prev => {
         const next = { ...prev };

@@ -143,9 +143,9 @@ describe('runAgentCompletionCleanup — agentOwnsPR mirrors the prompt gate', ()
   // `prClaimVerified` is the caller's answer to "did finalize's PR-claim check
   // actually produce a forge verdict for this run?" — threaded in, never
   // re-derived here (see the note at its use site).
-  const cleanupCallFor = async (agent, { prClaimVerified = false } = {}) => {
+  const cleanupCallFor = async (agent, { prClaimVerified = false, noChangesToShip = false } = {}) => {
     await runAgentCompletionCleanup({
-      agentId: 'a1', task: prTask, agent, effectiveSuccess: true, outputBuffer: '', prClaimVerified,
+      agentId: 'a1', task: prTask, agent, effectiveSuccess: true, outputBuffer: '', prClaimVerified, noChangesToShip,
     });
     // cleanupAgentWorktree(agentId, success, options) — options is the 3rd arg.
     return cleanupAgentWorktree.mock.calls.at(-1)[2];
@@ -190,6 +190,14 @@ describe('runAgentCompletionCleanup — agentOwnsPR mirrors the prompt gate', ()
     });
     expect(opts.prCreation).toBe('always');
     expect(opts.skipMerge).toBe(false);
+  });
+
+  it('does not create an empty PR after finalize proves a no-change audit', async () => {
+    const opts = await cleanupCallFor(
+      { providerId: 'claude-ollama', providerCommand: 'claude', leanMode: true, ownsPrWorkflow: false },
+      { noChangesToShip: true },
+    );
+    expect(opts.prCreation).toBe('never');
   });
 
   it('a task that asked for no PR never creates one', async () => {

@@ -14,9 +14,13 @@ import * as api from '../services/api';
 import socket from '../services/socket';
 import toast from '../components/ui/Toast';
 import { pickActiveLayoutId, recordManualLayoutPick } from '../utils/timeWindow.js';
+import { useInstanceFeatures } from '../hooks/useInstanceFeatures.js';
 
 export default function Dashboard() {
-  const [apps, setApps] = useState([]);
+  // null means the first apps read has not completed. Keep that distinct from
+  // a successful empty response so the Apps tile cannot flash its empty-state
+  // CTA while an existing installation is still being read.
+  const [apps, setApps] = useState(null);
   const [health, setHealth] = useState(null);
   const [usage, setUsage] = useState(null);
   const [tribeCare, setTribeCare] = useState(null);
@@ -24,7 +28,6 @@ export default function Dashboard() {
   const [meatspaceLogging, setMeatspaceLogging] = useState(null);
   const [dailyDriver, setDailyDriver] = useState(null);
   const [dailyActions, setDailyActions] = useState(null);
-  const [instanceFeatures, setInstanceFeatures] = useState(null);
   const [loading, setLoading] = useState(true);
   const [dataError, setDataError] = useState(null);
   const [layoutsError, setLayoutsError] = useState(null);
@@ -78,7 +81,13 @@ export default function Dashboard() {
   // closure captured a possibly-stale activeLayout — lets it skip arming the
   // scroll when the user switched layouts while the add was still saving.
   const activeLayoutIdRef = useRef(null);
-  const instanceFeatureGenerationRef = useRef(0);
+  // Dashboard widget gates intentionally read the raw list: unlike navigation,
+  // a failed feature read must fail closed and reserve no POST widget cell.
+  const { features: instanceFeatureList } = useInstanceFeatures();
+  const instanceFeatures = useMemo(
+    () => (instanceFeatureList === null ? null : { features: instanceFeatureList }),
+    [instanceFeatureList],
+  );
 
   const refreshHealth = useCallback(async () => {
     // Keep the last good snapshot visible when a manual refresh hits a
@@ -89,63 +98,63 @@ export default function Dashboard() {
     return data;
   }, []);
 
-  const refreshInstanceFeatures = useCallback(async () => {
-    const generation = ++instanceFeatureGenerationRef.current;
-    const data = await api.getInstanceFeatures({ silent: true }).catch(() => null);
-    if (generation !== instanceFeatureGenerationRef.current) return null;
-    setInstanceFeatures(data);
-    return data;
-  }, []);
+  const fetchDailyActions = useCallback(
+    () => api.getDailyActions({ silent: true }).catch(() => null),
+    [],
+  );
 
   const fetchData = useCallback(async () => {
     setDataError(null);
-    const [appsData, , usageData, tribeCareData, feedsData, meatspaceLoggingData, dailyDriverData, dailyActionsData] = await Promise.all([
-      api.getApps().catch((err) => { setDataError(err.message); return []; }),
+    // The shell and layout have their own loading states. Release the page
+    // immediately so a slow PM2/apps read cannot hold the entire dashboard
+    // behind a single network response.
+    setLoading(false);
+    // Apps and the remaining widgets are independent hydration streams. Health
+    // and daily-actions in particular can involve slow subsystem/database work
+    // that should not hold every widget behind one Promise.all barrier.
+    const appsRead = api.getApps().catch((err) => { setDataError(err.message); return null; });
+    const secondaryRead = Promise.all([
       refreshHealth(),
-      api.getUsage().catch(() => null),
-      api.getTribeCareSummary({ silent: true }).catch(() => null),
-      api.getFeedStats({ silent: true }).catch(() => null),
-      api.getMeatspaceLoggingStats({ silent: true }).catch(() => null),
+      api.getUsage().catch(() => null).then(setUsage),
+      api.getTribeCareSummary({ silent: true }).catch(() => null).then(setTribeCare),
+      api.getFeedStats({ silent: true }).catch(() => null).then(setFeeds),
+      api.getMeatspaceLoggingStats({ silent: true }).catch(() => null).then(setMeatspaceLogging),
       // GET records the first-visit-of-day signal (issue #2666); a failure just
       // hides the Daily Driver card via its gate. No LLM calls here.
-      api.getDailyDriverState().catch(() => null),
-      api.getDailyActions({ silent: true }).catch(() => null),
-      refreshInstanceFeatures(),
+      api.getDailyDriverState().catch(() => null).then(setDailyDriver),
+      fetchDailyActions().then(setDailyActions),
     ]);
-    setApps(appsData);
-    setUsage(usageData);
-    setTribeCare(tribeCareData);
-    setFeeds(feedsData);
-    setMeatspaceLogging(meatspaceLoggingData);
-    setDailyDriver(dailyDriverData);
-    setDailyActions(dailyActionsData);
-    setLoading(false);
-  }, [refreshHealth, refreshInstanceFeatures]);
+    const appsData = await appsRead;
+    if (Array.isArray(appsData)) setApps(appsData);
+    await secondaryRead;
+  }, [fetchDailyActions, refreshHealth]);
 
   useEffect(() => {
     fetchData();
     const handleAppsChanged = () => fetchData();
-    const handleFeatureChange = (event) => {
-      if (event.detail?.featureId !== 'post') return;
-      const enabled = event.detail.enabled === true;
-      setInstanceFeatures((current) => {
-        const features = Array.isArray(current?.features) ? current.features : [];
-        const hasPost = features.some((feature) => feature.id === 'post');
-        const nextFeatures = hasPost
-          ? features.map((feature) => feature.id === 'post' ? { ...feature, enabled } : feature)
-          : [...features, { id: 'post', enabled }];
-        return { ...(current || {}), features: nextFeatures };
-      });
-      fetchData();
-    };
     socket.on('apps:changed', handleAppsChanged);
-    window.addEventListener(INSTANCE_FEATURES_CHANGED, handleFeatureChange);
     return () => {
-      instanceFeatureGenerationRef.current += 1;
       socket.off('apps:changed', handleAppsChanged);
-      window.removeEventListener(INSTANCE_FEATURES_CHANGED, handleFeatureChange);
     };
   }, [fetchData]);
+
+  // Daily Actions is a dashboard-state consumer rather than a feature-aware
+  // widget. Refresh it when the shared feature hook applies a toggle so a
+  // POST action cannot remain visible after POST is disabled (or stay absent
+  // after it is enabled) until an unrelated dashboard refresh.
+  useEffect(() => {
+    let active = true;
+    const handleFeaturesChanged = () => {
+      fetchDailyActions().then((data) => {
+        if (active) setDailyActions(data);
+      });
+    };
+    window.addEventListener(INSTANCE_FEATURES_CHANGED, handleFeaturesChanged);
+    return () => {
+      active = false;
+      window.removeEventListener(INSTANCE_FEATURES_CHANGED, handleFeaturesChanged);
+    };
+  }, [fetchDailyActions]);
 
   // One-shot per mount — guards against re-evaluation stomping manual picks.
   // Serialization across concurrent writers (auto-window + manual pick +
@@ -212,16 +221,18 @@ export default function Dashboard() {
     };
   }, []);
 
+  const appList = useMemo(() => (Array.isArray(apps) ? apps : []), [apps]);
+  const appsLoading = !Array.isArray(apps);
   const sortedApps = useMemo(() =>
-    [...apps].sort((a, b) => {
+    [...appList].sort((a, b) => {
       const archiveDiff = (a.archived ? 1 : 0) - (b.archived ? 1 : 0);
       if (archiveDiff !== 0) return archiveDiff;
       return a.name.localeCompare(b.name);
     }),
-    [apps]
+    [appList]
   );
 
-  const activeApps = useMemo(() => apps.filter((a) => !a.archived), [apps]);
+  const activeApps = useMemo(() => appList.filter((a) => !a.archived), [appList]);
   const appStats = useMemo(() => ({
     total: activeApps.length,
     online: activeApps.filter((a) => a.overallStatus === 'online').length,
@@ -233,8 +244,8 @@ export default function Dashboard() {
   }), [activeApps]);
 
   const dashboardState = useMemo(
-    () => ({ apps, sortedApps, activeApps, appStats, health, usage, tribeCare, feeds, meatspaceLogging, dailyDriver, dailyActions, instanceFeatures, refetch: fetchData, refetchHealth: refreshHealth }),
-    [apps, sortedApps, activeApps, appStats, health, usage, tribeCare, feeds, meatspaceLogging, dailyDriver, dailyActions, instanceFeatures, fetchData, refreshHealth]
+    () => ({ apps: appList, appsLoading, sortedApps, activeApps, appStats, health, usage, tribeCare, feeds, meatspaceLogging, dailyDriver, dailyActions, instanceFeatures, refetch: fetchData, refetchHealth: refreshHealth }),
+    [appList, appsLoading, sortedApps, activeApps, appStats, health, usage, tribeCare, feeds, meatspaceLogging, dailyDriver, dailyActions, instanceFeatures, fetchData, refreshHealth]
   );
 
   // Falls back to a local minimal layout only AFTER the initial fetch has

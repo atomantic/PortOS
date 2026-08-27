@@ -22,6 +22,14 @@ vi.mock('../services/taskSchedule.js', () => ({
 
 vi.mock('../lib/validation.js', () => ({
   sanitizeTaskMetadata: vi.fn((meta) => meta),
+  taskDataInputsSchema: {
+    safeParse: (ids) => {
+      const allowed = new Set(['product-requirements', 'project-goals', 'open-issues', 'open-pull-requests', 'closed-unmerged-pull-requests']);
+      return Array.isArray(ids) && ids.every((id) => allowed.has(id))
+        ? { success: true, data: [...new Set(ids)] }
+        : { success: false };
+    }
+  },
   validateRequest: vi.fn((schema, data) => {
     const result = schema.safeParse(data);
     if (!result.success) {
@@ -146,6 +154,27 @@ describe('CoS Schedule Routes', () => {
       expect(taskSchedule.updateTaskInterval).toHaveBeenCalledWith('review', expect.objectContaining({
         runAfter: null
       }));
+    });
+
+    it('validates and forwards registered data input ids', async () => {
+      taskSchedule.updateTaskInterval.mockResolvedValue({ type: 'weekly' });
+      const response = await request(app)
+        .put('/api/cos/schedule/task/plan-feature')
+        .send({ dataInputs: ['project-goals', 'open-issues', 'project-goals'] });
+
+      expect(response.status).toBe(200);
+      expect(taskSchedule.updateTaskInterval).toHaveBeenCalledWith('plan-feature', expect.objectContaining({
+        dataInputs: ['project-goals', 'open-issues']
+      }));
+    });
+
+    it('rejects unknown data input ids', async () => {
+      const response = await request(app)
+        .put('/api/cos/schedule/task/plan-feature')
+        .send({ dataInputs: ['not-registered'] });
+
+      expect(response.status).toBe(400);
+      expect(taskSchedule.updateTaskInterval).not.toHaveBeenCalled();
     });
   });
 

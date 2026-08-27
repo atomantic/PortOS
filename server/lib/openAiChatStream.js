@@ -20,6 +20,7 @@
  */
 
 import { readResponseJson } from './readResponseJson.js';
+import { fetchWithPreHeaderRetry, isReplaySafeLocalRequest } from './aiToolkit/internal/preHeaderRetry.js';
 
 /**
  * Parse one OpenAI-style SSE `data:` line into its content/reasoning delta and,
@@ -242,7 +243,7 @@ export async function streamOpenAiChat({
   // told us it does not understand the key.
   const includeUsage = typeof onStats === 'function' && !usageUnsupportedEndpoints.has(url);
 
-  const post = (withUsage) => fetch(url, {
+  const post = (withUsage) => fetchWithPreHeaderRetry(() => fetch(url, {
     method: 'POST',
     headers,
     signal,
@@ -255,6 +256,9 @@ export async function streamOpenAiChat({
       ...(withUsage ? { stream_options: { include_usage: true } } : {}),
       ...extraBody,
     }),
+  }), {
+    signal,
+    allowReplay: isReplaySafeLocalRequest({ endpoint, apiKey }),
   }).catch((err) => ({ ok: false, status: 0, error: err.message }));
 
   let response = await post(includeUsage);

@@ -1,10 +1,10 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { Link } from 'react-router';
 import { Brain, ArrowRight, Compass } from 'lucide-react';
 import * as api from '../services/api';
 import { streakGlyph } from '../lib/streakGlyph.js';
 import { computeGoalProgress } from './meatspace/post/constants';
-import { INSTANCE_FEATURES_CHANGED } from '../constants/events.js';
+import { useInstanceFeatures } from '../hooks/useInstanceFeatures.js';
 
 // Surfaces the daily POST cognitive self-test on the dashboard: today's
 // completion status, the current practice streak, the top "what to practice
@@ -16,53 +16,45 @@ export default function DailyPostWidget() {
   const [statsWeek, setStatsWeek] = useState(null);
   const [config, setConfig] = useState(null);
   const [topRec, setTopRec] = useState(null);
-  const [featureEnabled, setFeatureEnabled] = useState(true);
   const [loaded, setLoaded] = useState(false);
-  const fetchGeneration = useRef(0);
+  const [loadedForFeature, setLoadedForFeature] = useState(null);
+  const { features } = useInstanceFeatures();
+  // Read the raw list rather than the hook's navigation helper: a failed or
+  // still-loading feature read must hide this dashboard widget.
+  const featureEnabled = features?.find((feature) => feature.id === 'post')?.enabled === true;
 
-  const fetchData = useCallback(async () => {
-    const generation = ++fetchGeneration.current;
-    const featureData = await api.getInstanceFeatures({ silent: true }).catch(() => null);
-    if (generation !== fetchGeneration.current) return;
-    const postFeature = featureData?.features?.find((feature) => feature.id === 'post');
-    if (postFeature?.enabled !== true) {
-      setFeatureEnabled(false);
+  useEffect(() => {
+    let active = true;
+    setLoaded(false);
+    setLoadedForFeature(null);
+    if (!featureEnabled) {
+      setLoadedForFeature(false);
       setLoaded(true);
-      return;
+      return () => { active = false; };
     }
 
     // Recommendations/config/week-stats are best-effort — a failure just hides
     // the extra rows; the streak card still renders from `stats`.
-    const [data, week, cfg, recs] = await Promise.all([
+    Promise.all([
       api.getPostStats().catch(() => null),
       api.getPostStats(7).catch(() => null),
       api.getPostConfig().catch(() => null),
       api.getPostRecommendations(1).catch(() => null),
-    ]);
-    if (generation !== fetchGeneration.current) return;
-    setStats(data);
-    setStatsWeek(week);
-    setConfig(cfg);
-    setTopRec(recs?.recommendations?.[0] || null);
-    setFeatureEnabled(true);
-    setLoaded(true);
-  }, []);
-
-  useEffect(() => {
-    fetchData();
-    const handleFeatureChange = (event) => {
-      if (event.detail?.featureId !== 'post') return;
-      if (event.detail.enabled === false) setFeatureEnabled(false);
-      fetchData();
-    };
-    window.addEventListener(INSTANCE_FEATURES_CHANGED, handleFeatureChange);
+    ]).then(([data, week, cfg, recs]) => {
+      if (!active) return;
+      setStats(data);
+      setStatsWeek(week);
+      setConfig(cfg);
+      setTopRec(recs?.recommendations?.[0] || null);
+      setLoadedForFeature(true);
+      setLoaded(true);
+    });
     return () => {
-      fetchGeneration.current += 1;
-      window.removeEventListener(INSTANCE_FEATURES_CHANGED, handleFeatureChange);
+      active = false;
     };
-  }, [fetchData]);
+  }, [featureEnabled]);
 
-  if (!loaded || !featureEnabled) return null;
+  if (!loaded || loadedForFeature !== featureEnabled || !featureEnabled) return null;
 
   const streak = stats?.currentStreak ?? 0;
   const longest = stats?.longestStreak ?? 0;

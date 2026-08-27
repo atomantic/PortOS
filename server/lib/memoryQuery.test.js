@@ -14,23 +14,23 @@ describe('projectIndexMeta', () => {
     const memory = {
       id: 'm1', type: 'fact', category: 'work', tags: ['a'], summary: 's',
       importance: 0.7, createdAt: '2024-01-01T00:00:00Z', status: 'active',
-      sourceAppId: 'brain',
+      sourceAppId: 'brain', sourceAgentId: 'agent-1',
       // fields that must NOT leak into the index entry
       content: 'long content', embedding: [1, 2, 3], confidence: 0.9, accessCount: 5
     };
     expect(projectIndexMeta(memory)).toEqual({
       id: 'm1', type: 'fact', category: 'work', tags: ['a'], summary: 's',
       importance: 0.7, createdAt: '2024-01-01T00:00:00Z', status: 'active',
-      sourceAppId: 'brain'
+      sourceAppId: 'brain', sourceAgentId: 'agent-1'
     });
   });
 });
 
 describe('filterMemoryIndex', () => {
   const memories = [
-    { id: '1', type: 'fact', category: 'work', tags: ['x'], status: 'active', sourceAppId: 'brain' },
-    { id: '2', type: 'note', category: 'home', tags: ['y'], status: 'active', sourceAppId: 'app1' },
-    { id: '3', type: 'fact', category: 'work', tags: ['x', 'z'], status: 'archived', sourceAppId: 'app1' }
+    { id: '1', type: 'fact', category: 'work', tags: ['x'], status: 'active', sourceAppId: 'brain', sourceAgentId: 'mind-1' },
+    { id: '2', type: 'note', category: 'home', tags: ['y'], status: 'active', sourceAppId: 'app1', sourceAgentId: 'mind-2' },
+    { id: '3', type: 'fact', category: 'work', tags: ['x', 'z'], status: 'archived', sourceAppId: 'app1', sourceAgentId: 'mind-1' }
   ];
 
   it('defaults to active status', () => {
@@ -55,6 +55,10 @@ describe('filterMemoryIndex', () => {
 
   it('filters by appId', () => {
     expect(filterMemoryIndex(memories, { appId: 'app1' }).map(m => m.id)).toEqual(['2']);
+  });
+
+  it('filters by the owning source agent', () => {
+    expect(filterMemoryIndex(memories, { sourceAgentId: 'mind-1' }).map(m => m.id)).toEqual(['1']);
   });
 
   it('excludes brain entries with __not_brain sentinel', () => {

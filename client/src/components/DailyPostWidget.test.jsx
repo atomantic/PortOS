@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { INSTANCE_FEATURES_CHANGED } from '../constants/events.js';
+import { __resetInstanceFeatureCache } from '../hooks/useInstanceFeatures.js';
 
 const mock = vi.hoisted(() => ({
   getInstanceFeatures: vi.fn(),
@@ -17,6 +18,7 @@ import DailyPostWidget from './DailyPostWidget';
 describe('DailyPostWidget', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    __resetInstanceFeatureCache();
     mock.getInstanceFeatures.mockResolvedValue({
       features: [{ id: 'post', enabled: false }],
     });

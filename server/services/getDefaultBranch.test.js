@@ -125,6 +125,24 @@ describe('getDefaultBranch', () => {
     expect(result).toBe('develop');
   });
 
+  it('returns null in strict mode instead of treating the current feature branch as default', async () => {
+    execGit.mockImplementation((args) => {
+      if (args[0] === 'symbolic-ref') {
+        return Promise.reject(new Error('not set'));
+      }
+      if (args[0] === 'branch') {
+        return Promise.resolve({ stdout: '  develop\n  feature/x\n', stderr: '', exitCode: 0 });
+      }
+      if (args[0] === 'rev-parse' && args.includes('--abbrev-ref')) {
+        return Promise.resolve({ stdout: 'feature/x', stderr: '', exitCode: 0 });
+      }
+      return Promise.resolve({ stdout: '', stderr: '', exitCode: 0 });
+    });
+
+    const result = await getDefaultBranch('/fake/dir', { allowRemote: false, strict: true });
+    expect(result).toBeNull();
+  });
+
   it('returns null when all detection methods fail', async () => {
     execGit.mockImplementation((args) => {
       if (args[0] === 'symbolic-ref') {

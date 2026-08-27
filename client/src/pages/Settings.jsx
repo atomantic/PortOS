@@ -5,7 +5,6 @@ import { ApiAccessTab } from '../components/settings/ApiAccessTab';
 import { AutofixerTab } from '../components/settings/AutofixerTab';
 import AiAssignmentsTab from '../components/settings/AiAssignmentsTab';
 import { BackupTab } from '../components/settings/BackupTab';
-import { CatalogTypesTab } from '../components/settings/CatalogTypesTab';
 import CodeReviewersTab from '../components/settings/CodeReviewersTab';
 import { DatabaseTab } from '../components/settings/DatabaseTab';
 import InstanceFeaturesTab from '../components/settings/InstanceFeaturesTab';
@@ -25,7 +24,8 @@ import SettingsTabsHeader from '../components/settings/SettingsTabsHeader';
 // stale palette entries keep working.
 const REDIRECTS = {
   'image-gen': '/media/image?settings=1',
-  imessage: '/messages/imessage?settings=1'
+  imessage: '/messages/imessage?settings=1',
+  catalog: '/catalog?settings=1',
 };
 
 export default function Settings() {
@@ -43,7 +43,6 @@ export default function Settings() {
       case 'api-access': return <ApiAccessTab />;
       case 'autofixer': return <AutofixerTab />;
       case 'backup': return <BackupTab />;
-      case 'catalog': return <CatalogTypesTab />;
       case 'code-reviewers': return <CodeReviewersTab />;
       case 'database': return <DatabaseTab />;
       case 'features': return <InstanceFeaturesTab />;

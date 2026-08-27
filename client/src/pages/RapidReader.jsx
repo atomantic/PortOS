@@ -1,8 +1,14 @@
 import { useState } from 'react';
-import { Zap, ClipboardPaste, Eraser } from 'lucide-react';
+import { BookOpen, ClipboardPaste, Eraser, ExternalLink, Zap } from 'lucide-react';
 import RapidReader from '../components/RapidReader';
 import PageHeader from '../components/PageHeader';
 import { readClipboard } from '../lib/clipboard';
+import { useAsyncAction } from '../hooks/useAsyncAction';
+import {
+  ACCELERANDO_LICENSE_URL,
+  ACCELERANDO_SOURCE_PAGE_URL,
+  getAccelerandoBook,
+} from '../services/api';
 
 const SAMPLE = `Speed reading is a collection of techniques used to scan text quickly while still understanding what you've read. Most people read in chunks of three or four words at a time, which slows them down. Rapid serial visual presentation flashes one word at a time at a fixed location, removing the need to move your eyes. With practice, comprehension stays intact at three to five hundred words per minute, and many readers can push past six hundred for familiar material.`;
 
@@ -20,6 +26,27 @@ export default function RapidReaderPage() {
   const [wpm, setWpm] = useState(350);
   const [chunkSize, setChunkSize] = useState(1);
   const [focalColor, setFocalColor] = useState('#ef4444');
+  const [bookStatus, setBookStatus] = useState('idle');
+  const [bookError, setBookError] = useState('');
+
+  const [loadBook, loadingBook] = useAsyncAction(async () => {
+    setBookStatus('loading');
+    setBookError('');
+    const book = await getAccelerandoBook({ silent: true }).catch((error) => {
+      setBookStatus('error');
+      setBookError(error?.message || 'Could not load Accelerando');
+      return null;
+    });
+    if (!book) return null;
+    if (typeof book?.text !== 'string' || !book.text.trim()) {
+      setBookStatus('error');
+      setBookError('The Accelerando response was invalid — please retry');
+      return null;
+    }
+    setText(book.text);
+    setBookStatus(book.cached ? 'cached' : book.cacheStored === false ? 'downloaded-uncached' : 'downloaded');
+    return book;
+  });
 
   const start = () => {
     const trimmed = text.trim();
@@ -64,6 +91,59 @@ export default function RapidReaderPage() {
         </div>
       ) : (
         <div className="space-y-4">
+          <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <BookOpen size={20} className="mt-0.5 text-port-accent shrink-0" aria-hidden="true" />
+                <div>
+                  <h2 className="text-sm font-medium text-gray-200">Accelerando</h2>
+                  <p className="text-xs text-gray-400">Charles Stross · official HTML edition</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => loadBook()}
+                disabled={loadingBook}
+                className="inline-flex items-center justify-center min-h-10 px-3 py-2 rounded-md bg-port-accent text-white text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-port-accent/90"
+              >
+                {loadingBook ? 'Loading…' : 'Load Accelerando'}
+              </button>
+            </div>
+            <p className="text-xs leading-5 text-gray-400">
+              Downloads the author-hosted book when requested, then keeps the source in this instance's local cache for repeat and offline reads.
+            </p>
+            <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-500">
+              <a
+                href={ACCELERANDO_SOURCE_PAGE_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 text-port-accent hover:underline"
+              >
+                Author's page <ExternalLink size={11} aria-hidden="true" />
+              </a>
+              <a
+                href={ACCELERANDO_LICENSE_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="text-port-accent hover:underline"
+              >
+                CC BY-NC-ND 2.5
+              </a>
+            </div>
+            {bookStatus === 'downloaded' && (
+              <p role="status" className="text-xs text-green-400">Downloaded from the author's site and cached on this instance.</p>
+            )}
+            {bookStatus === 'downloaded-uncached' && (
+              <p role="status" className="text-xs text-yellow-400">Downloaded from the author's site, but this instance could not save its local cache.</p>
+            )}
+            {bookStatus === 'cached' && (
+              <p role="status" className="text-xs text-green-400">Loaded from this instance's local cache.</p>
+            )}
+            {bookStatus === 'error' && (
+              <p role="alert" className="text-xs text-red-400">{bookError}</p>
+            )}
+          </div>
+
           <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
             <div className="flex items-center justify-between gap-2">
               <label htmlFor="rr-text" className="text-sm font-medium text-gray-300">

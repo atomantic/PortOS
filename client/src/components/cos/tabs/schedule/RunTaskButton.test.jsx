@@ -33,6 +33,21 @@ describe('RunTaskButton', () => {
     expect(onTrigger).toHaveBeenCalledWith('review');
   });
 
+  it('runs an install-wide task with NO app even when apps exist', async () => {
+    // The regression this guards: an install-wide sweep dispatches once for the
+    // WHOLE install, but the picker only ever calls onTrigger WITH an appId. Left
+    // to the default branch, every click on a machine that has apps would quietly
+    // reduce the sweep to a single repo, and the install-wide lane would be
+    // unreachable from the UI entirely.
+    const user = userEvent.setup();
+    const onTrigger = vi.fn();
+    render(<RunTaskButton taskType="repo-sync" apps={APPS} onTrigger={onTrigger} installWide />);
+    await user.click(screen.getByRole('button', { name: /Run on All Apps/i }));
+    expect(onTrigger).toHaveBeenCalledWith('repo-sync');
+    expect(onTrigger.mock.calls[0]).toHaveLength(1);
+    expect(screen.queryByText('Example App')).toBeNull();
+  });
+
   it('lists only active apps and runs the task on the picked one', async () => {
     const user = userEvent.setup();
     const onTrigger = vi.fn();

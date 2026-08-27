@@ -407,6 +407,12 @@ describe('memoryValidation.js', () => {
       expect(result.success).toBe(true);
       expect(result.data.appId).toBe('__not_brain');
     });
+
+    it('should accept a sourceAgentId filter', () => {
+      const result = memoryListSchema.safeParse({ sourceAgentId: 'cos-persistent-mind' });
+      expect(result.success).toBe(true);
+      expect(result.data.sourceAgentId).toBe('cos-persistent-mind');
+    });
   });
 
   describe('memoryExtractSchema', () => {

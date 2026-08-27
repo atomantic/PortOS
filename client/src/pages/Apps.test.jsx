@@ -67,12 +67,12 @@ describe('Apps row action hierarchy', () => {
     api.getApps.mockResolvedValue(APPS);
   });
 
-  it('keeps Archive and Delete out of the resting row, leaving Manage as the visible action', async () => {
+  it('keeps Archive and PortOS removal out of the resting row, leaving Manage as the visible action', async () => {
     await renderApps();
 
     expect(screen.getByRole('link', { name: 'Manage Example App' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Stop Example App' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /^Delete$/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Remove from PortOS$/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Archive$/ })).toBeNull();
   });
 
@@ -85,13 +85,13 @@ describe('Apps row action hierarchy', () => {
     expect(nameLink.className).toContain('underline');
   });
 
-  it('exposes Archive and Delete only through the overflow menu', async () => {
+  it('exposes Archive and PortOS removal only through the overflow menu', async () => {
     const user = userEvent.setup();
     await renderApps();
 
     await openRowMenu(user);
     expect(screen.getByRole('menuitem', { name: 'Archive' })).toBeTruthy();
-    expect(screen.getByRole('menuitem', { name: 'Delete' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Remove from PortOS' })).toBeTruthy();
   });
 
   it('requires an inline confirm before deleting, and cancelling leaves the app alone', async () => {
@@ -99,19 +99,19 @@ describe('Apps row action hierarchy', () => {
     await renderApps();
 
     await openRowMenu(user);
-    await user.click(screen.getByRole('menuitem', { name: 'Delete' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Remove from PortOS' }));
 
     expect(api.deleteApp).not.toHaveBeenCalled();
-    const confirm = screen.getByLabelText('Confirm deletion of Example App');
-    expect(confirm.textContent).toContain('cannot be undone');
+    const confirm = screen.getByLabelText('Confirm removal of Example App from PortOS');
+    expect(confirm.textContent).toContain('repository will stay on disk');
 
     // Focus follows the revealed confirmation instead of being stranded on the
     // "…" trigger whose menu just closed.
     expect(document.activeElement).toBe(confirm);
 
-    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await user.click(screen.getByRole('button', { name: 'Keep' }));
     expect(api.deleteApp).not.toHaveBeenCalled();
-    expect(screen.queryByLabelText('Confirm deletion of Example App')).toBeNull();
+    expect(screen.queryByLabelText('Confirm removal of Example App from PortOS')).toBeNull();
     // Dismissing hands focus back to the trigger it came from, not to <body>.
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'More actions for Example App' }));
   });
@@ -121,10 +121,12 @@ describe('Apps row action hierarchy', () => {
     await renderApps();
 
     await openRowMenu(user);
-    await user.click(screen.getByRole('menuitem', { name: 'Delete' }));
-    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Remove from PortOS' }));
+    await user.click(screen.getByRole('button', { name: 'Remove' }));
 
     await waitFor(() => expect(api.deleteApp).toHaveBeenCalledWith('app-alpha'));
+    expect(toast.success).toHaveBeenCalledWith('Example App removed from PortOS — files kept on disk');
+    expect(screen.queryByRole('link', { name: 'Example App' })).toBeNull();
   });
 
   it('archives from the overflow menu', async () => {

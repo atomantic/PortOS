@@ -69,6 +69,16 @@ describe('listRegions', () => {
     expect(list.map((r) => r.id)).toEqual(OPEN_WORLD_REGIONS.map((r) => r.id));
     for (const region of list) expect(Array.isArray(region.anchor)).toBe(true);
   });
+
+  it('hides a disabled feature region from browse lists while leaving untagged regions visible', () => {
+    const jiraOff = (featureId) => featureId !== 'jira';
+    const list = listRegions(jiraOff);
+
+    expect(list.map((region) => region.id)).not.toContain('sprint-yard');
+    expect(list.map((region) => region.id)).toContain('memory');
+    expect(searchRegions('jira', jiraOff)).toEqual([]);
+    expect(searchRegions('jira', () => true).map((region) => region.id)).toContain('sprint-yard');
+  });
 });
 
 describe('searchRegions', () => {

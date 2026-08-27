@@ -41,6 +41,26 @@ function renderResults(overrides = {}) {
 }
 
 describe('PostSessionResults drill breakdown', () => {
+  it('opens a digit-span drill review by default', () => {
+    const { container } = renderResults({
+      drillResults: [{
+        type: 'digit-span',
+        score: 80,
+        questions: [{ prompt: '123', expected: '123', answered: '123', correct: true, responseMs: 800 }],
+      }],
+    });
+
+    expect(within(container.querySelector('table')).getAllByText('123')).not.toHaveLength(0);
+    expect(container.querySelector('.lucide-chevron-up')).toBeInTheDocument();
+  });
+
+  it('leaves non-digit-span drills collapsed by default', () => {
+    const { container } = renderResults();
+
+    expect(container.querySelector('table')).not.toBeInTheDocument();
+    expect(container.querySelectorAll('.lucide-chevron-down')).toHaveLength(2);
+  });
+
   it('renders a chevron on every drill row — including non-LLM ones (regression: dead expand affordance)', () => {
     const { container } = renderResults();
     // Both rows start collapsed, so both show ChevronDown. Previously this

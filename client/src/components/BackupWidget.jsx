@@ -5,6 +5,7 @@ import {HardDrive,
   ChevronRight,
   RefreshCw,
   RotateCcw,
+  Download,
   Eye,
   AlertTriangle,
   CheckCircle,
@@ -197,10 +198,20 @@ function SnapshotList() {
       // the oldest — walk every rendered tuple (id + fileCount) so a stale
       // server-side fileCount recount or a middle-row mutation can't hide
       // behind the head/tail id check.
-      compare: (prev, next) => equalListByKeys(prev, next, ['id', 'fileCount']),
+      compare: (prev, next) => equalListByKeys(prev, next, ['id', 'fileCount', 'incomplete']),
     },
   );
   const [selectedId, setSelectedId] = useState(null);
+  const [downloadingId, setDownloadingId] = useState(null);
+
+  const handleDownload = useCallback((snapshotId) => {
+    setDownloadingId(snapshotId);
+    api.downloadBackupSnapshot(snapshotId)
+      .then(() => toast.success('Snapshot downloaded'))
+      // Dismissing the browser's save dialog is a choice, not a failure.
+      .catch(err => { if (err?.name !== 'AbortError') toast.error(`Download failed: ${err.message}`); })
+      .finally(() => setDownloadingId(null));
+  }, []);
 
   if (loading) {
     return (
@@ -220,18 +231,35 @@ function SnapshotList() {
     <div className="mt-3 space-y-1">
       {snapshots.map(snap => (
         <div key={snap.id}>
-          <div className="flex items-center justify-between py-1.5 px-2 rounded bg-port-bg/50 hover:bg-port-bg/80 transition-colors">
+          <div className="flex items-center justify-between gap-2 py-1.5 px-2 rounded bg-port-bg/50 hover:bg-port-bg/80 transition-colors">
             <div className="min-w-0 flex-1">
               <div className="text-xs text-gray-300 font-mono truncate">{snap.id}</div>
-              <div className="text-xs text-gray-600">{snap.fileCount} files</div>
+              <div className="text-xs text-gray-600">
+                {snap.incomplete ? 'Still being written…' : `${snap.fileCount} files`}
+              </div>
             </div>
-            <button
-              onClick={() => setSelectedId(selectedId === snap.id ? null : snap.id)}
-              className="ml-2 flex items-center gap-1 px-2 py-1 text-xs text-port-accent hover:text-port-accent/80 transition-colors min-h-[32px]"
-            >
-              <RotateCcw size={12} />
-              Restore
-            </button>
+            <div className="flex shrink-0 items-center gap-1">
+              <button
+                onClick={() => handleDownload(snap.id)}
+                // Deliberately disabled across every row, not just this one:
+                // each download spawns a tar over the whole snapshot on the
+                // same external drive, so two at once only thrash the disk.
+                disabled={downloadingId !== null || snap.incomplete}
+                aria-label={`Download snapshot ${snap.id}`}
+                className="flex items-center gap-1 px-2 py-1 text-xs text-port-accent hover:text-port-accent/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-h-[32px]"
+              >
+                {downloadingId === snap.id ? <BrailleSpinner /> : <Download size={12} />}
+                Download
+              </button>
+              <button
+                onClick={() => setSelectedId(selectedId === snap.id ? null : snap.id)}
+                disabled={snap.incomplete}
+                className="flex items-center gap-1 px-2 py-1 text-xs text-port-accent hover:text-port-accent/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-h-[32px]"
+              >
+                <RotateCcw size={12} />
+                Restore
+              </button>
+            </div>
           </div>
           {selectedId === snap.id && (
             <RestorePanel

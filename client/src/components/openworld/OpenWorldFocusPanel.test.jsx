@@ -8,8 +8,8 @@ const app = {
   overallStatus: 'online',
   processes: [{ name: 'web' }, { name: 'worker' }],
   pm2Status: {
-    web: { status: 'online' },
-    worker: { status: 'errored' },
+    web: { status: 'online', cpu: 12.5, memory: 150 * 1024 * 1024, uptime: 3 * 24 * 60 * 60 * 1000 },
+    worker: { status: 'errored', restarts: 2, unstableRestarts: 1 },
   },
 };
 
@@ -37,6 +37,19 @@ describe('OpenWorldFocusPanel', () => {
     expect(screen.getByText('Broke the build')).toBeTruthy();
     // A completed (non-active) agent is filtered out.
     expect(screen.queryByText('Old done task')).toBeNull();
+  });
+
+  it('renders live CPU/MEM/uptime telemetry from pm2Status', () => {
+    render(<OpenWorldFocusPanel app={app} agents={[]} />);
+    // Only the online process counts toward live usage.
+    expect(screen.getByText('12.5%')).toBeTruthy();
+    expect(screen.getByText('150 MB')).toBeTruthy();
+    expect(screen.getByText('3d 0h')).toBeTruthy();
+  });
+
+  it('omits the telemetry row for apps with no PM2 status', () => {
+    render(<OpenWorldFocusPanel app={{ id: 'x', name: 'X', overallStatus: 'n/a' }} agents={[]} />);
+    expect(screen.queryByText('CPU')).toBeNull();
   });
 
   it('fires onFocusInWorld with the app id from the explicit in-world action', () => {

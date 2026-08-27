@@ -10,6 +10,7 @@
  *   - `learn`       → a `repo-study` review: read the clone as a source of IDEAS
  *     for PortOS and file the adoptable ones into PortOS's configured work
  *     tracker. Clean-room — propose reimplementation, never copy upstream code.
+ *     Its optional provider/model/effort pins travel with the stored request.
  *
  * Both are queued only AFTER the clone succeeds (there is nothing to read
  * before that), and only because the user asked for them in the same request —
@@ -145,7 +146,7 @@ End with: the studied repo, its license, how many proposals you filed (with thei
  *
  * @returns {Promise<{ queued: boolean, reason?: string, taskId?: string, linkPatch?: object }>}
  */
-export async function queueRepoStudy(link, targetAppId = PORTOS_APP_ID, studyContext) {
+export async function queueRepoStudy(link, targetAppId = PORTOS_APP_ID, studyContext, { providerId, model, effort } = {}) {
   if (!isCloneReadable(link)) return { queued: false, reason: 'not-cloned' };
 
   const app = await getAppById(targetAppId || PORTOS_APP_ID);
@@ -187,6 +188,9 @@ export async function queueRepoStudy(link, targetAppId = PORTOS_APP_ID, studyCon
       // without pretending to be a scheduled task type — see
       // taskTypeHooks.js#isTrackerFilingDispatch.
       workTracker,
+      ...(providerId ? { provider: providerId } : {}),
+      ...(model ? { model } : {}),
+      ...(effort ? { effort } : {}),
       repoStudy: { linkId: link.id },
     },
     'user'
@@ -222,7 +226,7 @@ export async function runRepoIntake(link, intake) {
   for (const [key, queue] of Object.entries(INTAKE_QUEUERS)) {
     if (!requested[key]) continue;
     const result = key === 'learn'
-      ? await queue(link, requested.targetAppId, requested.studyContext).catch(err => ({ queued: false, reason: err.message }))
+      ? await queue(link, requested.targetAppId, requested.studyContext, requested).catch(err => ({ queued: false, reason: err.message }))
       : await queue(link).catch(err => ({ queued: false, reason: err.message }));
     if (result.queued) patch = { ...patch, ...result.linkPatch };
     else console.error(`❌ Capture-time ${key} not queued for link ${link.id}: ${result.reason}`);

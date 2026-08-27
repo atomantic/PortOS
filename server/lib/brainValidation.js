@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { partialWithoutDefaults, optionalBooleanMap } from './zodCompat.js';
 import { REPO_INTAKE_KEYS } from './repoIntakeActions.js';
+import { EFFORT_LEVELS } from './providerModels.js';
 import { MAX_QUALITY } from './spacedRepetition.js';
 
 // Destination enum. `links` is reachable only from the bare-URL capture
@@ -193,7 +194,16 @@ export const reviewRecordSchema = z.object({
 // that reads it (server/lib/repoIntakeActions.js).
 export const repoIntakeSchema = z.object(optionalBooleanMap(REPO_INTAKE_KEYS)).extend({
   targetAppId: z.string().trim().min(1).max(200).optional(),
-  studyContext: z.string().trim().max(5000).optional()
+  studyContext: z.string().trim().max(5000).optional(),
+  // These pins apply only to the opt-in repo-study CoS task. Empty values are
+  // the UI's "use the configured default" sentinel and are omitted before
+  // the link stores the intake request.
+  providerId: z.string().trim().min(1).max(120).optional(),
+  model: z.string().trim().min(1).max(200).optional(),
+  effort: z.preprocess(
+    value => typeof value === 'string' ? (value.trim().toLowerCase() || undefined) : value,
+    z.enum(EFFORT_LEVELS).optional()
+  )
 });
 const repoIntakeInputSchema = repoIntakeSchema.optional();
 

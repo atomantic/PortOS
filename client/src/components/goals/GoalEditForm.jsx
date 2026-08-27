@@ -6,7 +6,8 @@ import {
 import Pill from '../ui/Pill';
 import { FormField } from '../ui/FormField';
 import { CATEGORY_CONFIG, HORIZON_OPTIONS, GOAL_TYPE_OPTIONS, MAX_TAGS } from './goalConstants';
-import { FEATURE_AREAS, FEATURE_AREA_IDS, GOAL_CATEGORY_FEATURE_MAP } from '../../lib/goalFeatureMap';
+import { FEATURE_AREAS, FEATURE_AREA_IDS, getGoalFeatureAreas } from '../../lib/goalFeatureMap';
+import { useInstanceFeatures } from '../../hooks/useInstanceFeatures.js';
 
 // Resolve a feature-area icon NAME (kept as a string in goalFeatureMap.js so
 // that module stays React-free and server-mirrorable) to a lucide component.
@@ -21,18 +22,29 @@ export default function GoalEditForm({
   toggleFeatureArea, parentOptions, saveEdit, onCancel
 }) {
   const selectedAreas = form.featureAreas || [];
+  const { features, error } = useInstanceFeatures();
+  // This picker writes a persistent Daily Driver override, so it must fail
+  // closed while the shared feature list is loading or unreadable. Navigation
+  // uses the hook's separate fail-open predicate, but saving a gated area while
+  // participation is unknown would create a link the dashboard cannot show.
+  const isFeatureAvailable = (featureId) => (
+    !featureId
+    || (!error
+      && Array.isArray(features)
+      && features.some((feature) => feature?.id === featureId && feature.enabled === true))
+  );
+  const isAreaEnabled = (id) => isFeatureAvailable(FEATURE_AREAS[id]?.feature);
   // Gate the greyed category-default hint on whether any LOCALLY-KNOWN area is
   // selected — not on raw array length. A version-skewed goal can carry only
   // forward-unknown ids (from a newer peer); those render no visible button and
   // getGoalFeatureAreas filters them, so the Daily Driver still falls back to the
   // category default. Keying on length would hide the hint in that case and lie
   // about the actual behavior (issue #2679).
-  const hasKnownSelection = selectedAreas.some(id => FEATURE_AREAS[id]);
+  const hasKnownSelection = selectedAreas.some(id => FEATURE_AREAS[id] && isAreaEnabled(id));
   // Category default shown (greyed) when no known override is set, so the user
   // sees which areas the Daily Driver will deep-link to by default.
-  const categoryDefaultLabels = (GOAL_CATEGORY_FEATURE_MAP[form.category] || [])
-    .map(id => FEATURE_AREAS[id]?.label)
-    .filter(Boolean);
+  const categoryDefaultLabels = getGoalFeatureAreas({ category: form.category }, isFeatureAvailable)
+    .map(({ label }) => label);
   return (
     <div className="space-y-3">
       <FormField label="Title" labelClassName="text-xs text-gray-500">
@@ -201,7 +213,7 @@ export default function GoalEditForm({
           Pin which PortOS areas the Daily Driver deep-links to for this goal. Leave empty to use the category default.
         </p>
         <div role="group" aria-labelledby="feature-areas-label" className="flex flex-wrap gap-1 mt-1">
-          {FEATURE_AREA_IDS.map(id => {
+          {FEATURE_AREA_IDS.filter(isAreaEnabled).map(id => {
             const area = FEATURE_AREAS[id];
             const Icon = AREA_ICONS[area.icon] || Target;
             const active = selectedAreas.includes(id);

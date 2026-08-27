@@ -6,7 +6,7 @@
  * managed as an optional PM2 process (`portos-llama-server`).
  */
 
-import { stat } from 'fs/promises';
+import { realpath, stat } from 'fs/promises';
 import { spawn } from '../lib/childProcess.js';
 import { commandExists } from '../lib/commandExists.js';
 import { findCommandOnPath, safeChildProcessEnv, safeChildProcessOptions } from '../lib/processEnv.js';
@@ -20,6 +20,8 @@ import { isPortInUse } from '../lib/platform.js';
 import { PORTS } from '../lib/ports.js';
 import { tuningSpecsFor } from '../lib/localModelTuning.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { bufferedSpawn } from '../lib/bufferedSpawn.js';
+import { runStreamingCommand } from '../lib/streamingSpawn.js';
 import { execPm2, getAppStatusStrict, clearJlistCache, getSavedProcessNames } from './pm2.js';
 // `settings.js` is lazy-imported at its call sites below, never statically: it
 // eagerly resolves `fileUtils.PATHS` at module load, which drags PATHS into the
@@ -32,6 +34,11 @@ export { LLAMA_APP };
 
 const PROBE_TIMEOUT_MS = 1500;
 const STARTUP_WAIT_TIMEOUT_MS = 4000;
+const LLAMA_CPP_FORMULA = 'llama.cpp';
+const LLAMA_CPP_DOWNLOAD_URL = 'https://github.com/ggml-org/llama.cpp/releases';
+const VERSION_PROBE_TIMEOUT_MS = 5000;
+const BREW_INFO_TIMEOUT_MS = 15_000;
+const UPGRADE_TIMEOUT_MS = 30 * 60 * 1000;
 // `llama-server --help` is a fast local exec; this only bounds a wedged binary.
 const HELP_PROBE_TIMEOUT_MS = 5000;
 // llama.cpp's own in-place idle unload. See `supportsSleepIdle`.
@@ -77,6 +84,94 @@ let currentConfig = null;
 // cannot tell a PortOS tuning apart from the same flags typed by the user.
 let preTuningConfig = null;
 let lastExitError = null;
+
+/**
+ * Run a small local command and retain its output without throwing. Version and
+ * Homebrew metadata are optional decorations on status, so a missing/broken
+ * command must not take the runtime status endpoint down with it.
+ */
+async function readCommandOutput(command, args, timeoutMs) {
+  const result = await bufferedSpawn(command, args, { timeoutMs, shell: false });
+  return {
+    error: result.success
+      ? null
+      : result.error || new Error(result.timedOut ? `timed out after ${timeoutMs}ms` : `exited with code ${result.code}`),
+    stdout: result.stdout || '',
+    stderr: result.stderr || '',
+  };
+}
+
+/**
+ * Read the version printed by the installed llama-server binary. Different
+ * llama.cpp builds have used both `version: X` and `version X`, so accept both
+ * spellings while keeping the status field to the useful short version token.
+ */
+function parseLlamaServerVersion(output) {
+  const match = String(output || '').match(/\bversion\s*:?\s+([^\s(]+)/i);
+  return match?.[1]?.replace(/^v/, '') || null;
+}
+
+async function readLlamaServerVersion(binaryPath) {
+  const result = await readCommandOutput(binaryPath, ['--version'], VERSION_PROBE_TIMEOUT_MS);
+  return result.error ? null : parseLlamaServerVersion(`${result.stdout}\n${result.stderr}`);
+}
+
+/**
+ * Read Homebrew's formula metadata for the installed llama.cpp package.
+ * `outdated` is authoritative here: llama.cpp's installed Homebrew version is
+ * often a build number while the current formula uses a release version, so a
+ * generic semver comparison would report false positives.
+ */
+async function readBrewLlamaCppInfo() {
+  const result = await readCommandOutput(
+    'brew',
+    ['info', '--json=v2', '--formula', LLAMA_CPP_FORMULA],
+    BREW_INFO_TIMEOUT_MS,
+  );
+  if (result.error) return null;
+
+  return Promise.resolve()
+    .then(() => JSON.parse(result.stdout))
+    .then(async (payload) => {
+      const formula = payload?.formulae?.find((entry) => entry?.name === LLAMA_CPP_FORMULA);
+      const installed = formula?.installed?.[0];
+      if (!installed) return null;
+      const prefixResult = await readCommandOutput(
+        'brew',
+        ['--prefix', LLAMA_CPP_FORMULA],
+        BREW_INFO_TIMEOUT_MS,
+      );
+      return {
+        installedVersion: String(installed.version || ''),
+        latestVersion: formula?.versions?.stable ? String(formula.versions.stable) : null,
+        outdated: formula.outdated === true,
+        pinned: formula.pinned === true,
+        linked: Boolean(formula.linked_keg),
+        prefix: prefixResult.error ? null : prefixResult.stdout.trim().split(/\r?\n/)[0] || null,
+      };
+    })
+    .catch(() => null);
+}
+
+/**
+ * Confirm that the binary found on PATH resolves to Homebrew's linked keg.
+ *
+ * `brew info` reports whether the formula is linked, not which executable the
+ * current PATH resolves. A source build earlier on PATH can therefore coexist
+ * with a linked Homebrew formula; upgrading the formula in that state would
+ * leave the serving process on the old source build. Canonicalize both paths so
+ * the normal `/opt/homebrew/bin` and `/opt/homebrew/opt` symlinks compare as the
+ * same Cellar executable.
+ */
+async function isHomebrewLlamaServer(binaryPath, brewInfo) {
+  if (!binaryPath || !brewInfo?.prefix) return false;
+  const expectedPath = `${brewInfo.prefix}/bin/llama-server`;
+  const [activePath, homebrewPath] = await Promise.all([
+    realpath(binaryPath).catch(() => null),
+    realpath(expectedPath).catch(() => null),
+  ]);
+  return Boolean(activePath && homebrewPath && activePath === homebrewPath);
+}
 
 /**
  * Probes whether an OpenAI-compatible endpoint responds at the given host/port.
@@ -285,6 +380,38 @@ export async function getLlamaServerStatus() {
     // process actually got is `config.sleepIdleMinutes` — they differ until the
     // next start, because this is a launch flag.
     idleMinutes: await configuredSleepIdleMinutes(),
+  };
+}
+
+/**
+ * Check whether the installed llama.cpp formula has a newer Homebrew build.
+ * This is kept separate from the lifecycle status probe because the latter is
+ * also used by performance/ownership paths that must remain disk-and-process
+ * local; the LLMs page calls this explicit update-information path.
+ */
+export async function getLlamaServerUpdateStatus() {
+  const binaryPath = resolveLlamaServerBinary();
+  if (!binaryPath) {
+    return {
+      version: null,
+      latestVersion: null,
+      updateAvailable: false,
+      canUpgrade: false,
+      downloadUrl: LLAMA_CPP_DOWNLOAD_URL,
+    };
+  }
+
+  const [version, brewInfo] = await Promise.all([
+    readLlamaServerVersion(binaryPath),
+    readBrewLlamaCppInfo(),
+  ]);
+  const homebrewBinary = await isHomebrewLlamaServer(binaryPath, brewInfo);
+  return {
+    version: version || brewInfo?.installedVersion || null,
+    latestVersion: brewInfo?.latestVersion || null,
+    updateAvailable: Boolean(brewInfo?.outdated),
+    canUpgrade: Boolean(brewInfo?.linked && !brewInfo.pinned && homebrewBinary),
+    downloadUrl: LLAMA_CPP_DOWNLOAD_URL,
   };
 }
 
@@ -593,6 +720,171 @@ export async function stopLlamaServer() {
  * just stopped.
  */
 const waitForPortRelease = daemon.waitForPortRelease;
+
+/**
+ * Put a managed server back after an upgrade attempt. The model may take longer
+ * than the normal port-release race, so wait before asking `startLlamaServer`
+ * to validate the preserved launch configuration.
+ */
+async function restartManagedLlamaServer(config, baseline) {
+  await waitForPortRelease(config.port ?? PORTS.LLAMA_SERVER);
+  // The recovered PM2 config carries the effective idle flag from the old
+  // process. Leave this field undefined so startLlamaServer reads the current
+  // saved setting when an upgrade is also the next launch.
+  const started = await startLlamaServer({ ...config, sleepIdleMinutes: undefined }).catch((err) => {
+    console.error(`❌ llama-server: could not restore the previous configuration after update: ${err.message}`);
+    return null;
+  });
+  if (!started) return null;
+  if (!started.online && !(await waitForEndpoint(started.endpoint))) {
+    console.error('❌ llama-server: restored process never answered after update');
+    await stopLlamaServer().catch(() => {});
+    return null;
+  }
+  preTuningConfig = baseline;
+  return started;
+}
+
+async function upgradeFailureResult(message, managedConfig, baseline, updated = false) {
+  const restored = managedConfig ? await restartManagedLlamaServer(managedConfig, baseline) : null;
+  const restoreNote = managedConfig && !restored
+    ? ' PortOS could not restore the llama-server process.'
+    : '';
+  return {
+    success: false,
+    ...(updated ? { updated: true } : {}),
+    error: `${message}${restoreNote}`,
+  };
+}
+
+/**
+ * Upgrade a Homebrew-installed llama.cpp binary in place.
+ *
+ * A managed llama-server is stopped before Homebrew swaps the binary and then
+ * restarted with the exact launch configuration it was using. An external
+ * process is never stopped; changing the package only takes effect for it when
+ * its owner starts it again.
+ */
+export async function upgradeLlamaServer({ onProgress = () => {} } = {}) {
+  const brewInfo = await readBrewLlamaCppInfo();
+  if (!brewInfo) {
+    return {
+      success: false,
+      error: `llama.cpp is not installed through Homebrew, so PortOS cannot update it here. Install it with Homebrew or update your source build manually: ${LLAMA_CPP_DOWNLOAD_URL}`,
+    };
+  }
+  if (brewInfo.pinned) {
+    return {
+      success: false,
+      manualUpdateRequired: true,
+      error: 'llama.cpp is pinned in Homebrew. Unpin it before asking PortOS to update it.',
+    };
+  }
+  if (!brewInfo.linked) {
+    return {
+      success: false,
+      manualUpdateRequired: true,
+      error: 'Homebrew has llama.cpp installed, but its keg is not linked to the llama-server on PATH. Link the formula manually before asking PortOS to update it.',
+    };
+  }
+
+  const binaryPath = resolveLlamaServerBinary();
+  if (!(await isHomebrewLlamaServer(binaryPath, brewInfo))) {
+    return {
+      success: false,
+      manualUpdateRequired: true,
+      error: `The active llama-server is not the linked Homebrew llama.cpp binary, so PortOS left it untouched. Update that installation manually: ${LLAMA_CPP_DOWNLOAD_URL}`,
+    };
+  }
+
+  const launch = await readLlamaServerLaunch();
+  if (launch.readFailed) {
+    return {
+      success: false,
+      error: 'PortOS could not read PM2 to determine whether it owns llama-server. Try the update again in a moment.',
+    };
+  }
+  if (launch.managed && !launch.config?.model) {
+    return {
+      success: false,
+      error: 'PortOS could not recover llama-server\'s launch configuration, so it left the running process untouched.',
+    };
+  }
+  const managedConfig = launch.managed ? launch.config : null;
+  const baseline = preTuningConfig;
+
+  if (managedConfig) {
+    onProgress({ event: 'progress', message: 'Stopping llama-server before updating…' });
+    const stopped = await stopLlamaServer();
+    if (!stopped.success) {
+      return {
+        success: false,
+        error: stopped.message || 'PortOS could not stop the managed llama-server before updating.',
+      };
+    }
+  }
+
+  onProgress({ event: 'progress', message: 'Updating llama.cpp via Homebrew…' });
+  const upgraded = await runStreamingCommand(
+    'brew',
+    ['upgrade', LLAMA_CPP_FORMULA],
+    (message) => onProgress({ event: 'progress', message }),
+    { timeoutMs: UPGRADE_TIMEOUT_MS },
+  );
+
+  if (!upgraded.success) {
+    return upgradeFailureResult(
+      `llama.cpp upgrade failed: ${upgraded.error || 'Homebrew reported an unknown error'}.`,
+      managedConfig,
+      baseline,
+    );
+  }
+
+  // Homebrew normally keeps a linked formula linked across an upgrade, but an
+  // unlinked keg should not leave the newly-upgraded runtime invisible to PATH.
+  if (!resolveLlamaServerBinary()) {
+    onProgress({ event: 'progress', message: 'llama.cpp upgraded but is not linked — linking…' });
+    const linked = await runStreamingCommand(
+      'brew',
+      ['link', '--overwrite', LLAMA_CPP_FORMULA],
+      (message) => onProgress({ event: 'progress', message }),
+      { timeoutMs: 60_000 },
+    );
+    if (!linked.success || !resolveLlamaServerBinary()) {
+      return upgradeFailureResult(
+        `llama.cpp was upgraded, but its llama-server binary is not on PATH${linked.error ? `: ${linked.error}` : '.'}`,
+        managedConfig,
+        baseline,
+        true,
+      );
+    }
+  }
+
+  // A new binary may gain support for a cached compatibility flag such as
+  // --sleep-idle-seconds. Re-probe it before the preserved launch line returns.
+  sleepIdleSupport.clear();
+
+  if (managedConfig) {
+    onProgress({ event: 'progress', message: 'Restarting llama-server with its previous settings…' });
+    const restarted = await restartManagedLlamaServer(managedConfig, baseline);
+    if (!restarted) {
+      return {
+        success: false,
+        updated: true,
+        error: 'llama.cpp was upgraded, but llama-server could not be restarted with its previous settings.',
+      };
+    }
+    return {
+      success: true,
+      note: 'Updated llama.cpp and restarted llama-server with its previous settings.',
+    };
+  }
+
+  return {
+    success: true,
+    note: 'Updated llama.cpp. The new binary will be used the next time llama-server starts.',
+  };
+}
 
 /**
  * Block until the endpoint answers, or the readiness budget elapses.

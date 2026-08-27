@@ -37,6 +37,7 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _runner_common import (  # noqa: E402
     apply_memory_optimizations,
+    emit_image_execution_marker,
     heartbeat,
     install_hf_error_handler,
     make_generator,
@@ -429,6 +430,15 @@ def main() -> None:
     else:
         print(f"❌ unknown quantization: {args.quantization}", file=sys.stderr)
         sys.exit(64)
+    # The runner only reports accelerator evidence after the pipeline has been
+    # placed. A successful image alone must not be read as GPU confirmation.
+    emit_image_execution_marker(
+        "flux2",
+        args.device,
+        device,
+        device,
+        ["torch", "diffusers", "transformers", "accelerate"],
+    )
     suppress_cosmetic_clip_truncation()
 
     apply_memory_optimizations(pipe, width=args.width, height=args.height)

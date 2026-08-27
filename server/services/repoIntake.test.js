@@ -114,6 +114,20 @@ describe('queueRepoStudy', () => {
     expect(addTask.mock.calls[0][0].context).not.toContain('current PortOS area vocabulary');
   });
 
+  it('passes the selected provider, model, and effort to the repo-study task', async () => {
+    await queueRepoStudy(LINK, undefined, undefined, {
+      providerId: 'codex',
+      model: 'gpt-5',
+      effort: 'high',
+    });
+
+    expect(addTask.mock.calls[0][0]).toEqual(expect.objectContaining({
+      provider: 'codex',
+      model: 'gpt-5',
+      effort: 'high',
+    }));
+  });
+
   // `analysisType` enrolls a task in taskSchedule's per-type consecutive-failure
   // ledger (agentFinalization.js), which auto-parks and notifies. A hand-queued
   // repo study has no schedule to park, so it must reach the no-commit gate via
@@ -210,6 +224,20 @@ describe('runRepoIntake', () => {
   it('passes requester context into the queued repo study', async () => {
     await runRepoIntake(LINK, { learn: true, studyContext: 'Focus on the search architecture.' });
     expect(addTask.mock.calls[0][0].context).toContain('Focus on the search architecture.');
+  });
+
+  it('passes provider pins from the stored intake into the queued repo study', async () => {
+    await runRepoIntake(LINK, {
+      learn: true,
+      providerId: 'codex',
+      model: 'gpt-5',
+      effort: 'high',
+    });
+    expect(addTask.mock.calls[0][0]).toEqual(expect.objectContaining({
+      provider: 'codex',
+      model: 'gpt-5',
+      effort: 'high',
+    }));
   });
 
   it('stamps a queued scan as `queued`, so the UI does not link at a missing report', async () => {

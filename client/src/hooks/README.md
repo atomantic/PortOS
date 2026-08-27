@@ -144,6 +144,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | Hook | Purpose | Use when |
 |---|---|---|
 | `useFocusRefreshedList` | Load-once-then-refresh-on-focus list fetcher: debounces focus refreshes to 30s, sorts by name, and skips re-render when an `id\|name` signature is unchanged. Owns its own warn-on-error. | Any sidebar/nav list that should refresh when the user returns to the tab without hammering the API. Pass a stable `api.*` fetch fn. |
+| `useInstanceFeatures` | Shared read of Settings > Features with a module-level cache, so the sidebar, ⌘K, and the Features tab collapse to one fetch. Returns `isFeatureEnabled(id)`; `publishInstanceFeatures` announces a toggle on the existing `INSTANCE_FEATURES_CHANGED` window event (the channel the reminder toast and the dashboard widgets already use). Fails open on a fetch error so navigation is never blanked. | Gating a sidebar row, page, palette entry, or widget on an optional instance feature (`post`, `datadog`, `jira`, `gsd`). Pair with `lib/navFeatures.js` for manifest entries. |
 | `useSidebarApps` | Apps list for sidebar nav: socket-driven (`apps:changed`), archived filtered out, name-sorted. | The sidebar apps section. |
 | `useSidebarSeries` | Pipeline series for the Create > Pipeline grandchildren (built on `useFocusRefreshedList`). | The sidebar pipeline-series section. |
 | `useSidebarUniverses` | Universes for the Create > Universes grandchildren (built on `useFocusRefreshedList`). | The sidebar universes section. |

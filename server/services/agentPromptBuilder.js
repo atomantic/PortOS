@@ -14,7 +14,7 @@ import { buildPrompt } from './promptService.js';
 import { getToolsSummaryForPrompt } from './tools.js';
 import { PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { loadSlashdoFile, loadSlashdoLib, writeResolvedSlashdoBody } from '../lib/slashdoLoader.js';
-import { DEFAULT_REVIEWER, DEFAULT_REVIEW_STOP_MODE, isCliReviewer, resolveReviewerConfig } from '../lib/validation.js';
+import { DEFAULT_REVIEWER, DEFAULT_REVIEW_STOP_MODE, LOCAL_LLM_REVIEWERS, isCliReviewer, resolveReviewerConfig } from '../lib/validation.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { doneSentinelName } from '../lib/agentSentinel.js';
 import { canTypeSlashCommands, SLASHDO_INLINE_BUDGET_CHARS } from '../lib/slashdoInvocation.js';
@@ -34,6 +34,7 @@ import {
   buildCliCompletionSection,
   buildCompletionGuidelineBullet,
   buildInlineReviewLoopSection,
+  NO_CHANGE_AUDIT_GUIDANCE,
   buildProgrammaticOutputCompletionSection,
   buildReadOnlyCompletionSection,
   buildResumeSection,
@@ -44,7 +45,7 @@ import {
   isPrBranchWorktree,
   worktreeCommitGuidance,
 } from './promptSections/completion.js';
-import { buildReviewLoopFollowUpSection, isMergeOnlyFollowUp } from './promptSections/reviewLifecycle.js';
+import { buildLocalReviewLoopSection, buildReviewLoopFollowUpSection, isMergeOnlyFollowUp, prepareLocalReviewLoopBody } from './promptSections/reviewLifecycle.js';
 
 export {
   detectDomainSkillTemplate,
@@ -84,11 +85,13 @@ export const UI_AUDIT_TASK_TYPES = Object.freeze([
 const UI_AUDIT_TASK_TYPE_SET = new Set(UI_AUDIT_TASK_TYPES);
 
 export const UI_AUDIT_RUNTIME_RULE = `## UI Audit Runtime (PortOS local system)
-This is an unattended run, but it is not browserless when the target has a web UI. PortOS provides a managed Chromium browser for CoS agents over Chrome DevTools Protocol (CDP). Use the available Playwright/browser tools with that PortOS-managed browser, or connect to its CDP endpoint from the local shell when this provider has no browser MCP configured; do not skip live UI verification or assume the browser is unavailable because no human is present.
+This is an unattended run, but it is not browserless when the target has a web UI. PortOS provides a managed Chromium browser for CoS agents over Chrome DevTools Protocol (CDP). The agent-facing browser bridge is separate from that managed browser: an empty array returned by agent.browsers.list() ([]), getForUrl() returning "No browser is available", or an otherwise unusable agent-browser binding is a provider-bridge failure, not evidence that PortOS's managed Chromium or CDP endpoint is unavailable. Do not skip live UI verification because the provider bridge is empty, unusable, or no human is present.
 
-- Reuse the PortOS-managed browser over CDP instead of launching a separate browser. Check the browser status/configuration when needed; the CDP endpoint is local and its port is configurable (the shipped default is 127.0.0.1:5556). A direct fallback is to query the CDP health endpoint and /json/version or /json/list, then attach to a page target's webSocketDebuggerUrl with Node's WebSocket or another installed CDP client; if /json/list is empty, create an about:blank page target with PUT /json/new?about:blank and navigate that page with Page.navigate. Do not send Page or Runtime commands to the browser-level socket from /json/version; use Page, Runtime, Log, and Network domains on the page socket for live evidence.
+- Use the available Playwright/browser tools against that PortOS-managed browser when the provider has a working browser bridge; fall back to the configured CDP endpoint from the local shell when the provider has no browser bridge, or when its bridge is empty or unusable.
+- When the agent browser bridge is empty or unusable, query the configured PortOS browser health endpoint (usually http://127.0.0.1:5557/health, or its configured healthPort) and the CDP /json/version or /json/list endpoints before stopping. The richer /api/browser/health check may require the instance password; a 401 from that API route is an authentication response, not evidence that PortOS's managed browser is unavailable. A healthy PortOS health/CDP response overrides the provider's "No browser is available" response.
+- Reuse the PortOS-managed browser over CDP instead of launching a separate browser. Check the browser status/configuration when needed; the CDP endpoint is local and its port is configurable (the shipped default is 127.0.0.1:5556). For a local smoke check, select a normal type: "page" target from /json/list and attach to its webSocketDebuggerUrl with Node's WebSocket or another installed CDP client; if /json/list is empty, create an about:blank page target with PUT /json/new?about:blank. Navigate the page with Page.navigate, then inspect it with Runtime.evaluate on that same page socket. Do not send Page or Runtime commands to the browser-level socket from /json/version; use Page, Runtime, Log, and Network domains on the page socket for live evidence.
 - Treat the target as a running local system: discover its actual UI/API URL and ports from the app configuration, PortOS app/process state, and health endpoints, then inspect scoped server logs when diagnosing console or request failures. Do not guess a URL or treat source-only speculation as a UI finding.
-- Capture live evidence (snapshots, console/request results, and observed runtime state) before changing code. If the managed browser or target app is genuinely unavailable, record the concrete health/process error and stop the web-UI portion cleanly. For a native or source-only target with no web surface, continue the relevant audit without inventing a browser target and record that limitation.`;
+- Capture live evidence (snapshots, console/request results, and observed runtime state) before changing code. Do not stop the UI audit merely because the provider bridge is unavailable. Stop the web-UI portion only after the PortOS health/CDP probes fail or no usable page target can be created, navigated, and inspected; the handoff must name the concrete endpoint, HTTP/process, or WebSocket failure. A provider-only "No browser is available" result is not enough, and a failed CDP probe must not become a source-only UX finding. For a native or source-only target with no web surface, continue the relevant audit without inventing a browser target and record that limitation.`;
 
 export function isUiAuditTask(task) {
   const taskType = task?.metadata?.analysisType
@@ -245,14 +248,17 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   const localAgentLoopBody = (isFollowUpNeedingRecipes || isInlineNeedingRecipes)
     ? await loadSlashdoLib('local-agent-review-loop').catch(() => null)
     : null;
+  const localAgentLoopBodyForInline = (isInlineNeedingRecipes && !isFollowUpNeedingRecipes)
+    ? prepareLocalReviewLoopBody(localAgentLoopBody)
+    : localAgentLoopBody;
   // The recipe is ~40KB. A follow-up agent inlines it — driving the loop is that
   // agent's entire job, so it will read all of it anyway. An INLINE loop is a
   // later phase of a run whose context is already carrying the actual task, so an
   // over-budget recipe is staged on disk and pointed at instead (#3110's split,
   // applied to the same body). Every host that reaches here has file tools.
   const localAgentLoopBodyPath = (isInlineNeedingRecipes && !isFollowUpNeedingRecipes
-    && localAgentLoopBody && localAgentLoopBody.length > SLASHDO_INLINE_BUDGET_CHARS)
-    ? await writeResolvedSlashdoBody('local-agent-review-loop', localAgentLoopBody).catch((err) => {
+    && localAgentLoopBodyForInline && localAgentLoopBodyForInline.length > SLASHDO_INLINE_BUDGET_CHARS)
+    ? await writeResolvedSlashdoBody('local-agent-review-loop', localAgentLoopBodyForInline).catch((err) => {
         console.warn(`⚠️ Could not stage the CLI-reviewer recipe, inlining instead: ${err.message}`);
         return null;
       })
@@ -260,7 +266,7 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
 
   if (LIGHT_CONTEXT_PROVIDER_TYPES.has(providerType)) {
     const forgeCli = await resolveManualForgeCli(workspaceDir, worktreeInfo, task);
-    const lightOptions = { isTui, providerId, providerCommand, leanMode, agentId, defaultReviewers, codeReviewDefaults, localAgentLoopBody, localAgentLoopBodyPath, forgeCli };
+    const lightOptions = { isTui, providerId, providerCommand, leanMode, agentId, defaultReviewers, codeReviewDefaults, localAgentLoopBody: localAgentLoopBodyForInline, localAgentLoopBodyPath, forgeCli };
     return options.split === true
       ? buildLightContextPromptParts(task, workspaceDir, worktreeInfo, isTruthyMetaFn, lightOptions)
       : buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTruthyMetaFn, lightOptions);
@@ -312,7 +318,20 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   // `pending` BEFORE this flag existed (persisted across an upgrade) are still
   // recognized without a metadata migration.
   const noCodeOutput = isTruthyMetaFn(task.metadata?.noCodeOutput) || isCreativeDirectorTask;
+  const noChangeSuccess = isTruthyMetaFn(task.metadata?.noChangeSuccess);
   const isWorktreeOnExistingBranch = isPrBranchWorktree(task, worktreeInfo);
+  const worktreeCommitNote = worktreeInfo
+    ? worktreeCommitGuidance({
+        isTui,
+        hasSlashdo: false,
+        ownsPrWorkflow: false,
+        isWorktreeOnExistingBranch,
+        willOpenPR,
+        discardWorktree,
+        claimFlow,
+        noChangeSuccess,
+      })
+    : '';
   const worktreeSection = worktreeInfo ? `
 ## Git Worktree Context
 You are working in an **isolated git worktree** to avoid conflicts with other agents working concurrently.
@@ -320,15 +339,7 @@ You are working in an **isolated git worktree** to avoid conflicts with other ag
 - **Worktree Path**: \`${worktreeInfo.worktreePath}\`
 ${worktreeInfo.baseBranch ? `- **Based on**: \`${worktreeInfo.baseBranch}\` (latest from origin)` : ''}
 
-**Important**: ${discardWorktree
-    ? DISCARD_WORKTREE_NOTE
-    : claimFlow
-      ? 'The claim workflow in the Completion section owns its claim branch, push, PR/MR, review, merge or human-handoff, and cleanup — do not hand those steps back to PortOS.'
-    : isTui
-      ? 'Commit your changes to this branch — see the **Completion Workflow** section below for the full push/PR/exit sequence.'
-      : isWorktreeOnExistingBranch
-        ? 'Commit and **push** any review-fix commits to this branch — the PR points at it, so pushed commits are how Copilot sees your fixes. Use `git pull --rebase` before pushing if needed.'
-        : `Commit your changes to this branch.${willOpenPR ? ' When your task completes, the system will push this branch and open a pull request against the default branch — do NOT push or open a PR yourself.' : ' Your commits will be automatically merged back to the main development branch when your task completes.'}`} Do NOT manually switch branches or modify the worktree configuration.
+**Important**: ${worktreeCommitNote} Do NOT manually switch branches or modify the worktree configuration.
 ${buildResumeSection(task, worktreeInfo)}` : '';
 
   // Build pipeline context section if this is a pipeline stage
@@ -420,7 +431,7 @@ After completing your work and before committing, ${simplifyInstruction}. Fix an
         ? buildClaimFlowCompletionSection({ isTui, sentinelPath, reviewersCsv: claimReviewersCsv(task, codeReviewDefaults, defaultReviewers) })
       : isTui
         ? buildTuiCompletionSection({
-            willOpenPR, prCompletion, simplifyEnabled,
+            willOpenPR, prCompletion, simplifyEnabled, noChangeSuccess,
             // Unreachable today — every `tui`/`cli` provider returns early at the
             // LIGHT_CONTEXT gate above, so `isTui` is always false on this path
             // (same situation as buildCompletionGuidelineBullet's `isTui` arm).
@@ -636,7 +647,7 @@ ${(() => {
   const bullet = buildCompletionGuidelineBullet({
     isReadOnly: isTruthyMetaFn(task.metadata?.readOnly),
     isTui, tuiCompletionCommand, slashdoFree: isTui && !canRunSlashCommands,
-    worktreeInfo, willOpenPR, prCompletion, discardWorktree, noCodeOutput,
+    worktreeInfo, willOpenPR, prCompletion, discardWorktree, noCodeOutput, noChangeSuccess,
     leavePrOpen: leavesPrForHuman(task),
     isPrFollowUp: isReviewLoopFollowUp, claimFlow,
   });
@@ -647,6 +658,7 @@ ${(() => {
 - **Before starting work**, run \`git status\` to verify a clean working tree. Do NOT stash or discard uncommitted changes — other agents may be working concurrently and expecting those changes to be present. If the tree is dirty, only commit files YOU changed for this task.
 - **NEVER use \`git stash\`** in any form (\`git stash push\`, \`git stash pop\`, etc.). This is a multi-agent system — stashing can silently destroy or corrupt another agent's or the user's in-progress work. Work around uncommitted changes instead. (Note: the backend may use \`--autostash\` in user-triggered pull operations — that is safe because those are single-user UI actions, not concurrent agent operations.)
 - **Only commit files YOU changed** for this task. Never use \`git add -A\` or \`git add .\` — always stage specific files by name.
+${noChangeSuccess ? `- **No-change audits may exit cleanly.** ${NO_CHANGE_AUDIT_GUIDANCE}` : ''}
 ${noCodeOutput
   ? `- **Do NOT commit, push, or open a PR.** This task changes no code — its result is delivered by the API call or command described above. Without this, a no-worktree task of this shape was told to \`/do:push\` **directly to the branch it is standing on**, which for a task running in the app's live checkout is its default branch.`
   : discardWorktree
@@ -655,7 +667,7 @@ ${noCodeOutput
     ? `- **Follow the claim workflow prompt above.** It owns the claim worktree and the full PR/MR lifecycle; do not stop after committing or hand push/PR/merge/cleanup back to PortOS.`
   : isReviewLoopFollowUp
     ? `- **Push fixes straight to the PR branch you are on** (the follow-up section above is the procedure). Stage specific files, use a \`fix:\` prefix, no Co-Authored-By annotations. Do NOT open a new PR.`
-    : isTui && tuiSlashdoFree
+  : isTui && tuiSlashdoFree
     ? `- **Commit only — do NOT push.** Stage specific files, use \`feat:\`/\`fix:\`/\`breaking:\` prefix in the commit message, no Co-Authored-By annotations, then write the completion sentinel. PortOS will handle the branch after it closes the session.`
     : isTui
     ? `- **Use \`${tuiCompletionCommand}\` to ${willOpenPR ? 'commit, push, and open the PR' : 'commit and push the branch'}** — see the Completion Workflow section above. Stage specific files (no \`git add -A\`), use \`feat:\`/\`fix:\`/\`breaking:\` prefix in the commit message, no Co-Authored-By annotations.`
@@ -732,6 +744,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   // derive from a CD task's `creativeDirector` marker so pre-upgrade `pending`
   // tasks (queued before this flag existed) are recognized without a migration.
   const noCodeOutput = isTruthyMetaFn(task.metadata?.noCodeOutput) || !!task.metadata?.creativeDirector;
+  const noChangeSuccess = isTruthyMetaFn(task.metadata?.noChangeSuccess);
   const isReviewLoopFollowUp = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp);
   const isWorktreeOnExistingBranch = isPrBranchWorktree(task, worktreeInfo);
   // Ordered reviewer list + flags for the Review Loop (task metadata wins; else
@@ -786,6 +799,38 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
     providerId, providerCommand, leanMode, worktreeInfo, isTruthyMetaFn,
   });
   const ownsPrWorkflow = inlineSection !== null;
+  // Slashdo already partitions reviewers. Plain-git completion prompts need the
+  // same split spelled out: local CLIs/local LLMs inspect the committed branch
+  // before it is public; Copilot and @login reviewers can only run after a PR.
+  const isLocalReviewer = reviewer => isCliReviewer(reviewer) || LOCAL_LLM_REVIEWERS.includes(reviewer);
+  const localReviewers = lightReviewers.filter(isLocalReviewer);
+  const localReviewRequired = localReviewers.some(reviewer => !lightOptionalReviewers.includes(reviewer));
+  const reviewerPositions = [
+    ...lightReviewers.map((reviewer, position) => ({ reviewer, position })),
+    ...lightReviewerUsernames.map((username, index) => ({ reviewer: `@${username}`, position: lightReviewers.length + index })),
+  ];
+  const localReviewSection = inlineSection === 'review-loop'
+    ? buildLocalReviewLoopSection({
+      taskId: task.id,
+      branchName: worktreeInfo?.branchName || null,
+      baseBranch: worktreeInfo?.baseBranch || null,
+      localAgentLoopBody,
+      localAgentLoopBodyPath,
+      reviewers: lightReviewers,
+      optionalReviewers: lightOptionalReviewers,
+      reviewerMaxRounds: lightReviewerMaxRounds,
+      reviewerModels: lightReviewerModels,
+      reviewerEfforts: lightReviewerEfforts,
+      reviewStopMode: lightReviewStopMode,
+      reviewerApplies: lightReviewerApplies,
+      reviewerPositions,
+    })
+    : '';
+  const prSideReviewers = lightReviewers.filter(reviewer => !isLocalReviewer(reviewer));
+  const runsPrSideReviewLoop = inlineSection === 'review-loop'
+    && (prSideReviewers.length > 0 || lightReviewerUsernames.length > 0);
+  const localPhaseCanShortCircuit = localReviewSection !== ''
+    && runsPrSideReviewLoop;
 
   const taskSections = [];
   const contractSections = [];
@@ -827,7 +872,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
       `- **Path**: \`${worktreeInfo.worktreePath}\``,
       worktreeInfo.baseBranch ? `- **Based on**: \`${worktreeInfo.baseBranch}\`` : null,
       '',
-      worktreeCommitGuidance({ isTui, hasSlashdo, ownsPrWorkflow, isWorktreeOnExistingBranch, willOpenPR, discardWorktree, claimFlow }),
+      worktreeCommitGuidance({ isTui, hasSlashdo, ownsPrWorkflow, isWorktreeOnExistingBranch, willOpenPR, discardWorktree, claimFlow, noChangeSuccess }),
       'Do NOT manually switch branches or modify the worktree configuration.',
       // Resuming a previous failed agent's branch: establish what's already done
       // before writing code (see buildResumeSection). '' when not a resume.
@@ -903,16 +948,16 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
     }
   } else if (isTui) {
     contractSections.push(buildTuiCompletionSection({
-      willOpenPR, prCompletion, simplifyEnabled, slashdoFree: tuiSlashdoFree, ownsPrWorkflow,
+      willOpenPR, prCompletion, simplifyEnabled, noChangeSuccess, slashdoFree: tuiSlashdoFree, ownsPrWorkflow,
       sentinelPath: resolveSentinelPath(worktreeInfo, workspaceDir, agentId),
       branchName: worktreeInfo?.branchName || null,
       baseBranch: worktreeInfo?.baseBranch || null,
       leavePrOpen: leavesPrForHuman(task),
       reviewers: lightReviewers, usernames: lightReviewerUsernames, optionalReviewers: lightOptionalReviewers, reviewerMaxRounds: lightReviewerMaxRounds, reviewerModels: lightReviewerModels, reviewerEfforts: lightReviewerEfforts, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies,
-      forgeCli: resolvedForgeCli
+      forgeCli: resolvedForgeCli, localReviewSection, localReviewRequired, postPrReview: ownsPrWorkflow ? runsPrSideReviewLoop : null
     }));
   } else {
-    contractSections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion, hasSlashdo, ownsPrWorkflow, simplifyEnabled, leavePrOpen: leavesPrForHuman(task), reviewers: lightReviewers, usernames: lightReviewerUsernames, optionalReviewers: lightOptionalReviewers, reviewerMaxRounds: lightReviewerMaxRounds, reviewerModels: lightReviewerModels, reviewerEfforts: lightReviewerEfforts, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies, forgeCli: resolvedForgeCli }));
+    contractSections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion, hasSlashdo, ownsPrWorkflow, simplifyEnabled, noChangeSuccess, leavePrOpen: leavesPrForHuman(task), reviewers: lightReviewers, usernames: lightReviewerUsernames, optionalReviewers: lightOptionalReviewers, reviewerMaxRounds: lightReviewerMaxRounds, reviewerModels: lightReviewerModels, reviewerEfforts: lightReviewerEfforts, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies, forgeCli: resolvedForgeCli, localReviewSection, localReviewRequired, postPrReview: ownsPrWorkflow ? runsPrSideReviewLoop : null }));
   }
 
   // The manual workflow's step 4 points here — it must follow the completion
@@ -923,14 +968,14 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
     contractSections.push(buildInlineReviewLoopSection({
       taskId: task.id,
       branchName: worktreeInfo?.branchName || null,
-      runsReviewLoop: inlineSection === 'review-loop',
+      runsReviewLoop: runsPrSideReviewLoop,
       leaveOpen: false,
-      localAgentLoopBody,
-      localAgentLoopBodyPath,
+      localAgentLoopBody: null,
+      localAgentLoopBodyPath: null,
       // Only the TUI completion workflow ends on a sentinel write; a CLI run
       // signals completion by exiting.
       writesSentinel: isTui,
-      reviewers: lightReviewers,
+      reviewers: prSideReviewers,
       usernames: lightReviewerUsernames,
       optionalReviewers: lightOptionalReviewers,
       reviewerMaxRounds: lightReviewerMaxRounds,
@@ -938,7 +983,11 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
       reviewerEfforts: lightReviewerEfforts,
       reviewStopMode: lightReviewStopMode,
       reviewerApplies: lightReviewerApplies,
+      localPhaseReviewers: localReviewers,
+      localPhaseCanShortCircuit,
+      reviewerPositions,
       forgeCli: resolvedForgeCli,
+      workflowStep: localReviewSection ? 5 : 4,
     }));
   }
 

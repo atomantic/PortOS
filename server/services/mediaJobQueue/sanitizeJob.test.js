@@ -2,6 +2,40 @@ import { describe, expect, it } from 'vitest';
 import { sanitizeJob } from './sanitizeJob.js';
 
 describe('sanitizeJob', () => {
+  it('projects only validated image execution provenance from a completed result', () => {
+    const sanitized = sanitizeJob({
+      id: 'image-job',
+      kind: 'image',
+      status: 'completed',
+      result: {
+        filename: 'image.png',
+        executionProvenance: {
+          version: 1,
+          state: 'confirmed',
+          requestedDevice: 'auto',
+          effectiveDevice: 'cuda',
+          placement: 'cuda+offload',
+          cpuFallback: false,
+          runtime: { runtime: 'diffusers-image', versions: { torch: '2.7.0', prompt: 'private' } },
+        },
+      },
+    });
+    expect(sanitized.result.executionProvenance).toEqual({
+      version: 1,
+      state: 'confirmed',
+      requestedDevice: 'auto',
+      effectiveDevice: 'cuda',
+      placement: 'cuda+offload',
+      cpuFallback: false,
+      runtime: { runtime: 'diffusers-image', versions: { torch: '2.7.0' } },
+    });
+  });
+
+  it('does not leak an invalid execution marker into the public queue result', () => {
+    const sanitized = sanitizeJob({ id: 'image-job', kind: 'image', status: 'completed', result: { executionProvenance: { state: 'confirmed', prompt: 'private' } } });
+    expect(sanitized.result).not.toHaveProperty('executionProvenance');
+  });
+
   it('exposes safe video retry configuration fields', () => {
     const sanitized = sanitizeJob({
       id: 'video-job',

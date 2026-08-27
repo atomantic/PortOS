@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useLocalStorageBool } from './useLocalStorageBool.js';
+import useProviderModels from './useProviderModels.js';
 import { parseBareUrl } from '../lib/bareUrl.js';
 import { parseGitHubUrl } from '../lib/githubRepoUrl.js';
 import * as api from '../services/api.js';
@@ -38,7 +39,8 @@ export function capturedGitHubRepo(text) {
 /**
  * @param {string} text the current capture text
  * @returns {{ repo: object|null, options: object, studyContext: string,
- *   setStudyContext: (context: string) => void, toggle: (key: string) => void,
+ *   setStudyContext: (context: string) => void, providerOverride: object,
+ *   setProviderOverride: (patch: object) => void, toggle: (key: string) => void,
  *   intakeFor: (text: string) => object|undefined }}
  *   `repo` is the parsed `{ owner, repo }` (null when the text isn't a bare repo
  *   URL) — both the panel and the host's hint read it, so the text is parsed
@@ -50,17 +52,25 @@ export function capturedGitHubRepo(text) {
 export function useRepoIntake(text) {
   const [malwareScan, setMalwareScan] = useLocalStorageBool(STORAGE_KEYS.malwareScan, false);
   const [learn, setLearn] = useLocalStorageBool(STORAGE_KEYS.learn, false);
+  const repo = useMemo(() => capturedGitHubRepo(text), [text]);
+  const { providers, activeProviderId } = useProviderModels({
+    allowDefault: true,
+    silent: true,
+    withEffort: true,
+    enabled: Boolean(repo && learn),
+  });
   const [managedApps, setManagedApps] = useState([{ id: PORTOS_APP_ID, name: 'PortOS' }]);
   const [targetAppId, setTargetAppId] = useState(PORTOS_APP_ID);
   const [studyContext, setStudyContext] = useState('');
+  const [providerOverride, setProviderOverride] = useState({ providerId: '', model: '', effort: '' });
 
-  const repo = useMemo(() => capturedGitHubRepo(text), [text]);
   const repoKey = repo ? `${repo.owner}/${repo.repo}` : null;
   const options = useMemo(() => ({ malwareScan, learn }), [malwareScan, learn]);
   const setters = { malwareScan: setMalwareScan, learn: setLearn };
 
   useEffect(() => {
     setStudyContext('');
+    setProviderOverride({ providerId: '', model: '', effort: '' });
   }, [repoKey]);
 
   useEffect(() => {
@@ -84,11 +94,18 @@ export function useRepoIntake(text) {
     setTargetAppId,
     studyContext,
     setStudyContext,
+    providers,
+    activeProviderId,
+    providerOverride,
+    setProviderOverride: (patch) => setProviderOverride(current => ({ ...current, ...patch })),
     toggle: (key) => setters[key](v => !v),
     intakeFor: (submitted) => (capturedGitHubRepo(submitted)
       ? { ...options, ...(learn ? {
         targetAppId,
         ...(studyContext.trim() ? { studyContext: studyContext.trim() } : {}),
+        ...(providerOverride.providerId ? { providerId: providerOverride.providerId } : {}),
+        ...(providerOverride.model ? { model: providerOverride.model } : {}),
+        ...(providerOverride.effort ? { effort: providerOverride.effort } : {}),
       } : {}) }
       : undefined),
   };

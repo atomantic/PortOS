@@ -18,6 +18,12 @@ describe('openWorldProximity', () => {
     });
   });
 
+  it('hides a disabled feature landmark from proximity browse surfaces', () => {
+    const jiraOff = (featureId) => featureId !== 'jira';
+    expect(getResolvedLandmarks(jiraOff).map((landmark) => landmark.id)).not.toContain('sprint-yard');
+    expect(getResolvedLandmarks(() => true).map((landmark) => landmark.id)).toContain('sprint-yard');
+  });
+
   it('detects landmark when player is close', () => {
     const aiCore = getResolvedLandmarks().find((l) => l.id === 'ai-core');
     expect(aiCore).toBeDefined();

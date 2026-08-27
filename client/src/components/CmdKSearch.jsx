@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useLocation, useNavigate } from 'react-router';
 import { Brain, Cpu, Package, History, HeartPulse, Search, Loader2, Navigation, Play, LayoutGrid, BookMarked } from 'lucide-react';
 import { useCmdKSearch } from '../hooks/useCmdKSearch';
+import { useInstanceFeatures } from '../hooks/useInstanceFeatures.js';
 import { useScrollLock } from '../hooks/useScrollLock';
 import { search, getPaletteManifest, runPaletteAction, getDashboardLayouts, setActiveDashboardLayout, listCatalogIngredients } from '../services/api';
 import toast from './ui/Toast';
@@ -10,6 +11,7 @@ import { modKey } from '../utils/platform';
 import { DASHBOARD_LAYOUT_CHANGED } from '../constants/events.js';
 import { recordManualLayoutPick } from '../utils/timeWindow.js';
 import { RECENT_KEY, RECENT_CAP, resolveRecentNavEntries } from '../utils/navWorkingSet.js';
+import { filterNavByFeatures } from '../lib/navFeatures.js';
 import { safeReadJsonStorage } from '../lib/safeStorage.js';
 
 const ICON_MAP = { Brain, Cpu, Package, History, HeartPulse };
@@ -69,6 +71,7 @@ export default function CmdKSearch() {
 
   const [query, setQuery] = useState('');
   const [manifest, setManifest] = useState(null);
+  const { isFeatureEnabled } = useInstanceFeatures();
   const [searchResults, setSearchResults] = useState([]);
   const [catalogResults, setCatalogResults] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -200,17 +203,26 @@ export default function CmdKSearch() {
     setFocusedIndex(0);
   }, [searchResults, catalogResults, query]);
 
+  // Pages belonging to a feature this install turned off are dropped here rather
+  // than server-side: the manifest is fetched once per session (and HTTP-cached),
+  // so filtering it on the server would leave ⌘K offering hidden pages until a
+  // reload. Applying the gate at render keeps it live with the Features toggle.
+  const gatedNav = useMemo(
+    () => (manifest ? filterNavByFeatures(manifest.nav, isFeatureEnabled) : []),
+    [manifest, isFeatureEnabled],
+  );
+
   const combined = useMemo(() => {
     if (!manifest) return { recentNav: [], nav: [], actions: [], layouts: [], commandCount: 0 };
     const q = query.trim().toLowerCase();
     if (!q) {
-      const recentNav = resolveRecentNavEntries(recentPaths, manifest.nav, {
+      const recentNav = resolveRecentNavEntries(recentPaths, gatedNav, {
         currentPath: location.pathname,
         limit: RECENT_CAP,
       }).map((c) => ({ ...c, kind: 'nav' }));
       const recentIds = new Set(recentNav.map((c) => c.id));
       const fallbackLimit = Math.max(0, RECENT_CAP - recentNav.length);
-      const nav = manifest.nav
+      const nav = gatedNav
         .filter((c) => DEFAULT_NAV_IDS.has(c.id) && !recentIds.has(c.id) && c.path !== location.pathname)
         .slice(0, fallbackLimit)
         .map((c) => ({ ...c, kind: 'nav' }));
@@ -223,11 +235,11 @@ export default function CmdKSearch() {
       .sort((a, b) => b.score - a.score)
       .slice(0, max)
       .map((x) => x.cmd);
-    const nav = rank(manifest.nav, 8).map((c) => ({ ...c, kind: 'nav' }));
+    const nav = rank(gatedNav, 8).map((c) => ({ ...c, kind: 'nav' }));
     const actions = rank(manifest.actions, 5).map((a) => ({ ...a, kind: 'action' }));
     const layouts = rank(manifest.layouts || [], 5).map((l) => ({ ...l, kind: 'layout' }));
     return { recentNav: [], nav, actions, layouts, commandCount: nav.length + actions.length + layouts.length };
-  }, [manifest, query, recentPaths, location.pathname]);
+  }, [manifest, gatedNav, query, recentPaths, location.pathname]);
 
   const flatSearchResults = useMemo(
     () => searchResults.flatMap((source) => {

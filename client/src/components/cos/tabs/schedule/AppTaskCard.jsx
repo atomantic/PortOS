@@ -87,6 +87,7 @@ export default function AppTaskCard({ taskType, config, apps, onTrigger, onConfi
           taskType={taskType}
           apps={apps}
           onTrigger={onTrigger}
+          installWide={config.installWide}
           disabledReason={improvementDisabled ? IMPROVEMENT_DISABLED_TITLE : (pins.saving ? SAVING_TITLE : '')}
         />
         <button

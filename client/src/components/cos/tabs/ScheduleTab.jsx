@@ -11,6 +11,20 @@ import AppTaskTypeSection from './schedule/AppTaskTypeSection';
 import TaskConfigDrawer from './schedule/TaskConfigDrawer';
 import { TASK_FILTERS, DEFAULT_FILTER_ID } from './schedule/scheduleConstants';
 
+export function mergeUpdatedTaskInterval(schedule, taskType, interval) {
+  if (!schedule) return schedule;
+  return {
+    ...schedule,
+    tasks: {
+      ...(schedule.tasks || {}),
+      [taskType]: {
+        ...(schedule.tasks?.[taskType] || {}),
+        ...interval,
+      },
+    },
+  };
+}
+
 // `providers` is owned by ChiefOfStaff (30s poll, see useAutoRefetch there) and
 // passed down — same convention as TasksTab/AgentsTab — so this tab's provider/
 // model pickers stay live without standing up a second independent poll of the
@@ -61,9 +75,12 @@ export default function ScheduleTab({ apps, providers, activeProviderId }) {
     // Not "interval" — this handler carries every task setting (provider, model,
     // effort, prompt, dependencies), and the card's pins now use it too.
     toast.success(`Updated ${taskType}`);
-    fetchSchedule();
+    // Apply the authoritative response before resolving so a rapid second edit
+    // reads the value that was just persisted instead of overwriting it from a
+    // stale render while a background refetch is still in flight.
+    setSchedule(current => mergeUpdatedTaskInterval(current, taskType, result.interval));
     return true;
-  }, [fetchSchedule]);
+  }, []);
 
   const handleTriggerTask = useCallback(async (taskType, appId = null) => {
     const result = await api.triggerCosOnDemandTask(taskType, appId, { silent: true }).catch(err => {
@@ -188,6 +205,7 @@ export default function ScheduleTab({ apps, providers, activeProviderId }) {
         onBulkToggleOverride={handleBulkToggleOverride}
         allTaskTypes={allTaskTypes}
         improvementDisabled={improvementDisabled}
+        dataInputCatalog={schedule.dataInputCatalog || []}
       />
     </div>
     </CodeReviewDefaultsProvider>

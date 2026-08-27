@@ -2,7 +2,7 @@ import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { computeDistrictBounds } from '../../utils/openWorldMiniMap';
-import { listRegions, regionWarpPadPosition } from '../../utils/openWorldRegions';
+import { regionWarpPadPosition } from '../../utils/openWorldRegions';
 import { PIXEL_FONT_URL, openWorldDayMix, openWorldShowDetail, mixHex } from './openWorldConstants';
 import { useOpenWorldPalette } from './OpenWorldPaletteContext';
 import OpenWorldLabel from './OpenWorldLabel';
@@ -195,9 +195,8 @@ function WarpPad({ region, active, detailed, dayMix, onTravel }) {
   );
 }
 
-export default function OpenWorldSignalBeacons({ positions, reviewCounts, instances, settings, activeRegionId, onTravelToRegion }) {
+export default function OpenWorldSignalBeacons({ positions, reviewCounts, instances, settings, activeRegionId, onTravelToRegion, regions = [] }) {
   const dayMix = openWorldDayMix(settings);
-  const regions = useMemo(() => listRegions(), []);
   const showDetail = openWorldShowDetail(settings);
   const config = useMemo(() => {
     if (!positions || positions.size === 0) return [];

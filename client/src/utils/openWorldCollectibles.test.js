@@ -6,6 +6,7 @@ import {
   checkShardCollection,
   getCollectionStats,
   SHARD_COLLECTION_RADIUS,
+  isCollectibleVisible,
 } from './openWorldCollectibles';
 
 describe('openWorldCollectibles', () => {
@@ -54,6 +55,15 @@ describe('openWorldCollectibles', () => {
     expect(checkShardCollection(null)).toEqual([]);
     expect(checkShardCollection({ x: 'invalid', z: 0 })).toEqual([]);
     expect(checkShardCollection({ x: 9999, z: 9999 }, CYBER_SHARDS, new Set())).toEqual([]);
+  });
+
+  it('hides the Sprint Yard shard when JIRA is disabled', () => {
+    const jiraOff = (featureId) => featureId !== 'jira';
+    const jiraShard = CYBER_SHARDS.find((shard) => shard.feature === 'jira');
+
+    expect(isCollectibleVisible(jiraShard, jiraOff)).toBe(false);
+    expect(getCollectiblesList(jiraOff).map((shard) => shard.id)).not.toContain('shard-jira-yard');
+    expect(getCollectiblesList(() => true).map((shard) => shard.id)).toContain('shard-jira-yard');
   });
 
   it('getCollectionStats calculates accurate percentages and completion flags', () => {

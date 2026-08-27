@@ -78,10 +78,57 @@ export async function cleanupAgentWorktree(agentId, success, options = {}) {
   // Join the pass already underway. Its warnings are the run's warnings — the
   // duplicate caller must not re-derive them from a half-removed worktree.
   if (existing) return existing;
-  const run = runCleanupAgentWorktree(agentId, success, options)
-    .finally(() => { inFlightCleanups.delete(agentId); });
-  inFlightCleanups.set(agentId, run);
-  return run;
+
+  const run = runCleanupAgentWorktree(agentId, success, options);
+  const settled = run.finally(() => { inFlightCleanups.delete(agentId); });
+  inFlightCleanups.set(agentId, settled);
+
+  // The audit hangs off THIS wrapper rather than off `runCleanupAgentWorktree`,
+  // whose dozen return points would each need the call, and because every
+  // completion path — runner, TUI `finish()`, direct-CLI, the manual stop in
+  // agentManagement — funnels through here. One `.then` on `run` means a
+  // duplicate completion callback that JOINS the in-flight pass audits once.
+  //
+  // Detached, NOT awaited: it makes two network calls and nothing downstream
+  // consumes its result, while the callers awaiting cleanup still owe the run a
+  // retry-hold release, a lane release and a shell-session kill. Only
+  // `originalTask` is captured — closing over `options` would pin the whole TUI
+  // output buffer for the duration of the probes.
+  const originalTask = options?.originalTask || null;
+  run.then(
+    (warnings) => auditRepoState(agentId, success, originalTask, warnings)
+      .catch(err => emitLog('warn', `🔎 Repo-state audit failed for ${agentId}: ${err.message}`, { agentId })),
+    // A cleanup that threw has no end state to audit; `settled` still rejects.
+    () => {}
+  // Nothing awaits this chain, so a throw from the reporting itself would surface
+  // as an unhandled rejection and take the process down outside any request.
+  ).catch(() => {});
+
+  return settled;
+}
+
+/**
+ * Post-cleanup repo-state audit — did this run actually leave the repository the
+ * way its task asked? `verifyAgentRepoState` itself decides whether the run is
+ * even auditable, and files a recovery task when it is not clean.
+ *
+ * Imported lazily so the cleanup graph doesn't pull the verification module's
+ * branch-reconcile / apps / github reach into every consumer's module-init.
+ */
+async function auditRepoState(agentId, success, originalTask, warnings) {
+  const { verifyAgentRepoState } = await import('./agentRepoStateVerification.js');
+  // `getAgentRecord`, not `getAgent` — the audit reads three worktree metadata
+  // fields and has no use for the run's whole output.txt.
+  const { getAgentRecord } = await import('./cos.js');
+  const agentState = await getAgentRecord(agentId).catch(() => null);
+  await verifyAgentRepoState({
+    agentId,
+    task: originalTask,
+    agentState,
+    success,
+    prExpected: isTruthyMeta(originalTask?.metadata?.openPR),
+    cleanupWarnings: warnings || [],
+  });
 }
 
 async function runCleanupAgentWorktree(agentId, success, { prCreation = PR_CREATION.NEVER, prCompletion = null, requestCopilotReview: legacyRequestCopilotReview = false, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null, reviewerEfforts = null, skipMerge = false, description = null, agentOutput = null, originalTask = null } = {}) {

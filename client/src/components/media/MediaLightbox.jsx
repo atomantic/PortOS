@@ -80,6 +80,15 @@ function describeCleanedLineage(item) {
   return null;
 }
 
+function describeImageExecution(item) {
+  const execution = item.executionProvenance || item.raw?.result?.executionProvenance;
+  if (!execution) return item.kind === 'image' ? 'Unknown (legacy runner)' : null;
+  if (execution.state === 'malformed') return 'Unknown (invalid runner marker)';
+  if (execution.state === 'confirmed') return `Confirmed · ${execution.effectiveDevice}${execution.placement !== execution.effectiveDevice ? ` (${execution.placement})` : ''}`;
+  if (execution.state === 'degraded') return `Degraded · CPU fallback${execution.requestedDevice !== 'cpu' ? ` (requested ${execution.requestedDevice})` : ''}`;
+  return 'Unknown';
+}
+
 // onClean(item) — optional. Returning a rejected promise keeps the lightbox
 // open (e.g. on error) so the user can retry.
 //
@@ -206,6 +215,7 @@ export default function MediaLightbox({
   // the server contract; users shouldn't see the wire tokens.
   const entryKindLabel = ({ canon: 'Canon entry', variation: 'Category variation', sheet: 'Composite sheet' })[item.entryKind] || item.entryKind;
   const cleanedLabel = describeCleanedLineage(item);
+  const executionLabel = describeImageExecution(item);
 
   // Speed profile (#4875). The REQUESTED schedule, annotated with whatever the
   // runner could not actually apply. Without this the degraded case exists only
@@ -249,6 +259,7 @@ export default function MediaLightbox({
     ['Seed', item.seed ?? (isCodex ? 'n/a (gpt-image-2)' : null)],
     ['Codex session', item.codexSessionId],
     ['Cleaned', cleanedLabel],
+    ['Execution', executionLabel],
     ['Frames', item.numFrames],
     ['FPS', item.fps],
     // What the conditioning image promised (#4874). Recorded on the render only

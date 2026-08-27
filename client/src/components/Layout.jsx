@@ -122,6 +122,9 @@ import UpdateBanners from './UpdateBanners';
 import { useAIStatusNotifications } from '../hooks/useAIStatusNotifications';
 import { useNavWorkingSet } from '../hooks/useNavWorkingSet.js';
 import { migrateLegacyNavPath } from '../utils/navWorkingSet.js';
+import { useInstanceFeatures } from '../hooks/useInstanceFeatures.js';
+import { filterNavByFeatures } from '../lib/navFeatures.js';
+import { NAV_COMMANDS } from '../../../server/lib/navManifest.js';
 import { useSidebarApps } from '../hooks/useSidebarApps.js';
 import { useSidebarSeries } from '../hooks/useSidebarSeries.js';
 import { useSidebarUniverses } from '../hooks/useSidebarUniverses.js';
@@ -151,245 +154,247 @@ function ThemeModeToggle({ className = '' }) {
 }
 import * as api from '../services/api';
 
+// `NAV_COMMANDS` owns every structural field shared with the sidebar. This map
+// intentionally contains presentation only: giving a manifest path an icon is
+// what opts that destination into the sidebar. External and runtime-hydrated
+// rows have no manifest destination and stay explicitly local below.
+export const NAV_PRESENTATION = {
+  '/': { icon: Home, single: true },
+  '/review': { icon: ClipboardList, single: true },
+  '/openworld': { icon: Globe2, single: true },
+  '/apps': { icon: Package, dynamic: 'apps' },
+  '/brain/config': { icon: Settings },
+  '/brain/daily-log': { icon: NotebookPen },
+  '/brain/digest': { icon: Calendar },
+  '/brain/feeds': { icon: Rss },
+  '/brain/graph': { icon: Network },
+  '/brain/import': { icon: Upload },
+  '/brain/inbox': { icon: MessageSquare },
+  '/brain/links': { icon: Link2 },
+  '/brain/memory': { icon: Database },
+  '/brain/notes': { icon: FileText },
+  '/rapid-reader': { icon: Zap },
+  '/songbook': { icon: ListMusic },
+  '/timeline': { icon: CalendarClock },
+  '/tribe': { icon: Users },
+  '/brain/trust': { icon: Shield },
+  '/wiki/overview': { icon: BookOpen },
+  '/calendar/agenda': { icon: CalendarDays },
+  '/calendar/config': { icon: Settings },
+  '/calendar/day': { icon: Calendar },
+  '/calendar/lifetime': { icon: Clock },
+  '/calendar/month': { icon: CalendarDays },
+  '/calendar/review': { icon: ClipboardList },
+  '/calendar/sync': { icon: RefreshCw },
+  '/calendar/week': { icon: CalendarDays },
+  '/cos/agents': { icon: Cpu },
+  '/cos/briefing': { icon: Newspaper },
+  '/cos/config': { icon: Settings },
+  '/cos/digest': { icon: Calendar },
+  '/feature-agents': { icon: Wand2 },
+  '/cos/gsd': { icon: Compass },
+  '/cos/health': { icon: Activity },
+  '/cos/learning': { icon: GraduationCap },
+  '/cos/memory': { icon: Brain },
+  '/cos/mind': { icon: MessageSquare },
+  '/cos/run-events': { icon: ScrollText },
+  '/cos/runs': { icon: Play },
+  '/cos/schedule': { icon: Clock },
+  '/agents': { icon: Users },
+  '/cos/productivity': { icon: Flame },
+  '/cos/jobs': { icon: Bot },
+  '/cos/tasks': { icon: FileText },
+  '/cos/workflow': { icon: ChartGantt },
+  '/messages/config': { icon: Settings },
+  '/messages/drafts': { icon: FilePen },
+  '/messages/imessage': { icon: MessageSquare },
+  '/messages/inbox': { icon: Inbox },
+  '/stacker-news': { icon: Newspaper },
+  '/messages/sync': { icon: RefreshCw },
+  '/x': { icon: AtSign },
+  '/3d': { icon: Boxes },
+  '/authors': { icon: FilePen },
+  '/catalog': { icon: Sparkles },
+  '/creative-commission': { icon: CalendarClock },
+  '/creative-director': { icon: Clapperboard },
+  '/pipeline/editorial-checks': { icon: ListChecks },
+  '/fableloom': { icon: Waypoints },
+  '/game': { icon: Gamepad2 },
+  '/importer': { icon: FileInput },
+  '/media': { icon: Layers },
+  '/mood-boards': { icon: Palette },
+  '/music': { icon: Mic },
+  '/music-video': { icon: Music },
+  '/rounds': { icon: Music },
+  '/pipeline': { icon: WorkflowIcon, dynamic: 'pipelineSeries' },
+  '/sharing': { icon: Share2 },
+  '/sprites': { icon: PersonStanding },
+  '/start-story': { icon: Rocket },
+  '/story-builder': { icon: Wand2 },
+  '/media/threejs': { icon: Box },
+  '/universes': { icon: Globe, dynamic: 'universes' },
+  '/writers-room': { icon: NotebookPen },
+  '/devtools/agents': { icon: Cpu },
+  '/ambient': { icon: Sparkles },
+  '/browser': { icon: Globe },
+  '/capabilities': { icon: Compass },
+  '/devtools/runner': { icon: Code2 },
+  '/data': { icon: HardDrive },
+  '/devtools/datadog': { icon: Dog },
+  '/devtools/flows': { icon: WorkflowIcon },
+  '/devtools/github': { icon: GitBranch },
+  '/devtools/history': { icon: History },
+  '/devtools/image-clean': { icon: Eraser },
+  '/instances': { icon: Network },
+  '/devtools/jira': { icon: Ticket },
+  '/devtools/jira/reports': { icon: FileText },
+  '/loops': { icon: RefreshCw },
+  '/devtools/processes': { icon: Activity },
+  '/devtools/quota-burn': { icon: Flame },
+  '/security': { icon: Camera },
+  '/shell': { icon: SquareTerminal },
+  '/system-resources': { icon: Activity },
+  '/uploads': { icon: Upload },
+  '/devtools/usage': { icon: BarChart3 },
+  '/devtools/video-download': { icon: Film },
+  '/workspace-contexts': { icon: Layers },
+  '/goals/list': { icon: Target, single: true },
+  '/meatspace/age': { icon: Clock },
+  '/meatspace/alcohol': { icon: Activity },
+  '/meatspace/blood': { icon: HeartPulse },
+  '/meatspace/body': { icon: Scale },
+  '/meatspace/health': { icon: Heart },
+  '/meatspace/export': { icon: FileText },
+  '/meatspace/genome': { icon: Dna },
+  '/meatspace/lifestyle': { icon: ClipboardList },
+  '/meatspace/nicotine': { icon: Cigarette },
+  '/meatspace/overview': { icon: Activity },
+  '/meatspace/settings': { icon: Settings },
+  '/models/3d': { icon: Boxes },
+  '/models/embeddings': { icon: Braces },
+  '/models/llms': { icon: Cpu },
+  '/models/loras': { icon: Sparkles },
+  '/models/media': { icon: HardDrive },
+  '/models/performance': { icon: Gauge },
+  '/local-llm/playground': { icon: FlaskConical },
+  '/models/status': { icon: Activity },
+  '/models/training': { icon: GraduationCap },
+  '/settings/ai-assignments': { icon: Bot },
+  '/settings/api-access': { icon: Globe },
+  '/settings/backup': { icon: Download },
+  '/settings/code-reviewers': { icon: ShieldCheck },
+  '/settings/database': { icon: Database },
+  '/settings/features': { icon: ListChecks },
+  '/settings/general': { icon: Settings },
+  '/settings/mortalloom': { icon: Activity },
+  '/openclaw': { icon: MessagesSquare },
+  '/prompts': { icon: FileText },
+  '/ai': { icon: Bot },
+  '/settings/security': { icon: Lock },
+  '/settings/sharing': { icon: Share2 },
+  '/settings/telegram': { icon: MessageSquare },
+  '/settings/voice': { icon: Mic },
+  '/digital-twin/accounts': { icon: Globe },
+  '/ask': { icon: MessageCircle },
+  '/digital-twin/autobiography': { icon: PenLine },
+  '/character': { icon: Swords },
+  '/digital-twin/documents': { icon: FileText },
+  '/digital-twin/enrich': { icon: Sparkles },
+  '/digital-twin/export': { icon: Download },
+  '/digital-twin/identity': { icon: Fingerprint },
+  '/digital-twin/import': { icon: Upload },
+  '/insights/overview': { icon: Lightbulb },
+  '/digital-twin/interview': { icon: MessageSquare },
+  '/digital-twin/overview': { icon: Heart },
+  '/privacy/overview': { icon: Shield },
+  '/digital-twin/taste': { icon: Palette },
+  '/digital-twin/test': { icon: CheckCircle },
+  '/digital-twin/time-capsule': { icon: Archive },
+  '/post/config': { icon: Settings },
+  '/post/explore': { icon: Compass },
+  '/post/history': { icon: History },
+  '/post/launcher': { icon: Play },
+  '/post/memory': { icon: Brain },
+  '/post/morse': { icon: Radio },
+  '/post/plan': { icon: ListChecks },
+  '/post/progress': { icon: TrendingUp },
+  '/post/rhetoric': { icon: Feather },
+  '/post/wordplay': { icon: MessageCircle },
+};
+
+const SECTION_PRESENTATION = {
+  Brain: { icon: Brain, defaultTo: '/brain/inbox' },
+  Calendar: { icon: CalendarDays },
+  'Chief of Staff': { icon: Crown, defaultTo: '/cos/tasks', showBadge: true },
+  Comms: { icon: MessagesSquare, defaultTo: '/messages/inbox' },
+  Create: { icon: Sparkles, defaultTo: '/media' },
+  'Dev Tools': { icon: Terminal },
+  Health: { icon: Heart, defaultTo: '/meatspace/overview' },
+  Models: { icon: Cpu, defaultTo: '/models/performance' },
+  Settings: { icon: Settings, defaultTo: '/settings/general' },
+  Identity: { icon: Fingerprint, defaultTo: '/digital-twin/overview' },
+  POST: { icon: Zap, defaultTo: '/post/launcher' },
+};
+
+const SECTION_ORDER = [
+  'Brain', 'Calendar', 'Chief of Staff', 'Comms', 'Create', 'Dev Tools',
+  'Health', 'Models', 'Settings', 'Identity', 'POST',
+];
+
+// These rows have no PortOS route, so a NAV_COMMANDS entry would be dishonest.
+// Keep them visibly marked as local-only instead of smuggling structural route
+// data back into the presentation map.
+const LOCAL_SECTION_ROWS = {
+  'Dev Tools': [
+    { href: '//:5560', label: 'Autofixer', icon: Wrench, external: true, dynamicHost: true, localOnly: true },
+  ],
+};
+
+const commandByPath = new Map();
+for (const command of NAV_COMMANDS) {
+  if (!commandByPath.has(command.path)) commandByPath.set(command.path, command);
+}
+
+const navRowForPath = (path) => {
+  const command = commandByPath.get(path);
+  if (!command) throw new Error(`Layout: NAV_PRESENTATION path has no NAV_COMMANDS entry: ${path}`);
+  return {
+    to: command.path,
+    label: command.label,
+    section: command.section,
+    feature: command.feature,
+    ...NAV_PRESENTATION[path],
+  };
+};
+
+const presentedNavRows = Object.keys(NAV_PRESENTATION).map(navRowForPath);
+
+const sectionNavItem = (section) => {
+  const children = presentedNavRows
+    .filter((row) => row.section === section && !row.single)
+    .concat(LOCAL_SECTION_ROWS[section] || [])
+    .sort((a, b) => a.label.localeCompare(b.label));
+  const sharedFeature = children[0]?.feature
+    && children.every((child) => child.feature === children[0].feature)
+    ? children[0].feature
+    : undefined;
+  return { label: section, feature: sharedFeature, children, ...SECTION_PRESENTATION[section] };
+};
+
+const mainRows = ['/', '/review', '/openworld'].map(navRowForPath);
+const appsCommand = navRowForPath('/apps');
+const goalsRow = navRowForPath('/goals/list');
+const sectionRows = Object.fromEntries(SECTION_ORDER.map((section) => [section, sectionNavItem(section)]));
+
 const navItems = [
-  { to: '/', label: 'Dashboard', icon: Home, single: true },
-  { to: '/review', label: 'Review Hub', icon: ClipboardList, single: true },
-  { to: '/openworld', label: 'OpenWorld', icon: Globe2, single: true },
-  { separator: true },
-  { label: 'Apps', icon: Package, dynamic: 'apps', defaultTo: '/apps', children: [] },
-  {
-    label: 'Brain',
-    icon: Brain,
-    defaultTo: '/brain/inbox',
-    children: [
-      { to: '/brain/config', label: 'Config', icon: Settings },
-      { to: '/brain/daily-log', label: 'Daily Log', icon: NotebookPen },
-      { to: '/brain/digest', label: 'Digest', icon: Calendar },
-      { to: '/brain/feeds', label: 'Feeds', icon: Rss },
-      { to: '/brain/graph', label: 'Graph', icon: Network },
-      { to: '/brain/import', label: 'Import', icon: Upload },
-      { to: '/brain/inbox', label: 'Inbox', icon: MessageSquare },
-      { to: '/brain/links', label: 'Links', icon: Link2 },
-      { to: '/brain/memory', label: 'Memory', icon: Database },
-      { to: '/brain/notes', label: 'Notes', icon: FileText },
-      { to: '/rapid-reader', label: 'Rapid Reader', icon: Zap },
-      { to: '/songbook', label: 'SongBook', icon: ListMusic },
-      { to: '/timeline', label: 'Timeline', icon: CalendarClock },
-      { to: '/tribe', label: 'Tribe', icon: Users },
-      { to: '/brain/trust', label: 'Trust', icon: Shield },
-      { to: '/wiki/overview', label: 'Wiki', icon: BookOpen },
-    ],
-  },
-  {
-    label: 'Calendar',
-    icon: CalendarDays,
-    children: [
-      { to: '/calendar/agenda', label: 'Agenda', icon: CalendarDays },
-      { to: '/calendar/config', label: 'Config', icon: Settings },
-      { to: '/calendar/day', label: 'Day', icon: Calendar },
-      { to: '/calendar/lifetime', label: 'Lifetime', icon: Clock },
-      { to: '/calendar/month', label: 'Month', icon: CalendarDays },
-      { to: '/calendar/review', label: 'Review', icon: ClipboardList },
-      { to: '/calendar/sync', label: 'Sync', icon: RefreshCw },
-      { to: '/calendar/week', label: 'Week', icon: CalendarDays },
-    ],
-  },
-  {
-    label: 'Chief of Staff',
-    icon: Crown,
-    showBadge: true,
-    defaultTo: '/cos/tasks',
-    children: [
-      { to: '/cos/agents', label: 'Agents', icon: Cpu },
-      { to: '/cos/briefing', label: 'Briefing', icon: Newspaper },
-      { to: '/cos/config', label: 'Config', icon: Settings },
-      { to: '/cos/digest', label: 'Digest', icon: Calendar },
-      { to: '/feature-agents', label: 'Feature Agents', icon: Wand2 },
-      { to: '/cos/gsd', label: 'GSD', icon: Compass },
-      { to: '/cos/health', label: 'Health', icon: Activity },
-      { to: '/cos/learning', label: 'Learning', icon: GraduationCap },
-      { to: '/cos/memory', label: 'Memory', icon: Brain },
-      { to: '/cos/run-events', label: 'Run Events', icon: ScrollText },
-      { to: '/cos/runs', label: 'Runs', icon: Play },
-      { to: '/cos/schedule', label: 'Schedule', icon: Clock },
-      { to: '/agents', label: 'Social Agents', icon: Users },
-      { to: '/cos/productivity', label: 'Streaks', icon: Flame },
-      { to: '/cos/jobs', label: 'System Tasks', icon: Bot },
-      { to: '/cos/tasks', label: 'Tasks', icon: FileText },
-      { to: '/cos/workflow', label: 'Timeline', icon: ChartGantt },
-    ],
-  },
-  {
-    label: 'Comms',
-    icon: MessagesSquare,
-    defaultTo: '/messages/inbox',
-    children: [
-      { to: '/messages/config', label: 'Config', icon: Settings },
-      { to: '/messages/drafts', label: 'Drafts', icon: FilePen },
-      { to: '/messages/imessage', label: 'iMessage', icon: MessageSquare },
-      { to: '/messages/inbox', label: 'Inbox', icon: Inbox },
-      { to: '/stacker-news', label: 'Stacker News', icon: Newspaper },
-      { to: '/messages/sync', label: 'Sync', icon: RefreshCw },
-      { to: '/x', label: 'X', icon: AtSign },
-    ],
-  },
-  {
-    label: 'Create',
-    icon: Sparkles,
-    defaultTo: '/media',
-    children: [
-      { to: '/3d', label: '3D', icon: Boxes },
-      { to: '/authors', label: 'Authors', icon: FilePen },
-      { to: '/catalog', label: 'Catalog', icon: Sparkles },
-      { to: '/creative-commission', label: 'Creative Commissions', icon: CalendarClock },
-      { to: '/creative-director', label: 'Creative Director', icon: Clapperboard },
-      { to: '/pipeline/editorial-checks', label: 'Editorial Checks', icon: ListChecks },
-      { to: '/fableloom', label: 'FableLoom', icon: Waypoints },
-      { to: '/game', label: 'Game', icon: Gamepad2 },
-      { to: '/importer', label: 'Importer', icon: FileInput },
-      { to: '/media', label: 'Media Gen', icon: Layers },
-      { to: '/mood-boards', label: 'Mood Boards', icon: Palette },
-      { to: '/music', label: 'Music', icon: Mic },
-      { to: '/music-video', label: 'Music Video', icon: Music },
-      { to: '/rounds', label: 'Rounds', icon: Music },
-      { to: '/pipeline', label: 'Series Pipeline', icon: WorkflowIcon, dynamic: 'pipelineSeries' },
-      { to: '/sharing', label: 'Sharing', icon: Share2 },
-      { to: '/sprites', label: 'Sprites', icon: PersonStanding },
-      { to: '/start-story', label: 'Start a Story', icon: Rocket },
-      { to: '/story-builder', label: 'Story Builder', icon: Wand2 },
-      { to: '/media/threejs', label: 'Three.js Models', icon: Box },
-      { to: '/universes', label: 'Universes', icon: Globe, dynamic: 'universes' },
-      { to: '/writers-room', label: 'Writers Room', icon: NotebookPen },
-    ],
-  },
-  {
-    label: 'Dev Tools',
-    icon: Terminal,
-    children: [
-      { to: '/devtools/agents', label: 'AI Agents', icon: Cpu },
-      { to: '/ambient', label: 'Ambient', icon: Sparkles },
-      { href: '//:5560', label: 'Autofixer', icon: Wrench, external: true, dynamicHost: true },
-      { to: '/browser', label: 'Browser', icon: Globe },
-      { to: '/capabilities', label: 'Capabilities', icon: Compass },
-      { to: '/devtools/runner', label: 'Code', icon: Code2 },
-      { to: '/data', label: 'Data', icon: HardDrive },
-      { to: '/devtools/datadog', label: 'DataDog', icon: Dog },
-      { to: '/devtools/flows', label: 'Flows', icon: WorkflowIcon },
-      { to: '/devtools/github', label: 'GitHub', icon: GitBranch },
-      { to: '/devtools/history', label: 'History', icon: History },
-      { to: '/devtools/image-clean', label: 'Image Cleaner', icon: Eraser },
-      { to: '/instances', label: 'Instances', icon: Network },
-      { to: '/devtools/jira', label: 'JIRA', icon: Ticket },
-      { to: '/devtools/jira/reports', label: 'JIRA Reports', icon: FileText },
-      { to: '/loops', label: 'Loops', icon: RefreshCw },
-      { to: '/devtools/processes', label: 'Processes', icon: Activity },
-      { to: '/devtools/quota-burn', label: 'Quota Burn', icon: Flame },
-      { to: '/security', label: 'Security', icon: Camera },
-      { to: '/shell', label: 'Shell', icon: SquareTerminal },
-      { to: '/system-resources', label: 'System Resources', icon: Activity },
-      { to: '/uploads', label: 'Uploads', icon: Upload },
-      { to: '/devtools/usage', label: 'Usage', icon: BarChart3 },
-      { to: '/devtools/video-download', label: 'Video Downloader', icon: Film },
-      { to: '/workspace-contexts', label: 'Workspaces', icon: Layers },
-    ],
-  },
-  { to: '/goals/list', label: 'Goals', icon: Target, single: true },
-  {
-    label: 'Health',
-    icon: Heart,
-    defaultTo: '/meatspace/overview',
-    children: [
-      { to: '/meatspace/age', label: 'Age', icon: Clock },
-      { to: '/meatspace/alcohol', label: 'Alcohol', icon: Activity },
-      { to: '/meatspace/blood', label: 'Blood', icon: HeartPulse },
-      { to: '/meatspace/body', label: 'Body', icon: Scale },
-      { to: '/meatspace/health', label: 'Body Health', icon: Heart },
-      { to: '/meatspace/export', label: 'Export', icon: FileText },
-      { to: '/meatspace/genome', label: 'Genome', icon: Dna },
-      { to: '/meatspace/lifestyle', label: 'Lifestyle', icon: ClipboardList },
-      { to: '/meatspace/nicotine', label: 'Nicotine', icon: Cigarette },
-      { to: '/meatspace/overview', label: 'Overview', icon: Activity },
-      { to: '/meatspace/settings', label: 'Settings', icon: Settings },
-    ],
-  },
-  {
-    label: 'Models',
-    icon: Cpu,
-    defaultTo: '/models/performance',
-    children: [
-      { to: '/models/3d', label: '3D', icon: Boxes },
-      { to: '/models/embeddings', label: 'Embeddings', icon: Braces },
-      { to: '/models/llms', label: 'LLMs', icon: Cpu },
-      { to: '/models/loras', label: 'LoRAs', icon: Sparkles },
-      { to: '/models/media', label: 'Media', icon: HardDrive },
-      { to: '/models/performance', label: 'Performance', icon: Gauge },
-      { to: '/local-llm/playground', label: 'Playground', icon: FlaskConical },
-      { to: '/models/status', label: 'Status', icon: Activity },
-      { to: '/models/training', label: 'Training', icon: GraduationCap },
-    ],
-  },
-  {
-    label: 'Settings',
-    icon: Settings,
-    defaultTo: '/settings/general',
-    children: [
-      { to: '/settings/ai-assignments', label: 'AI Assignments', icon: Bot },
-      { to: '/settings/api-access', label: 'API Access', icon: Globe },
-      { to: '/settings/backup', label: 'Backup', icon: Download },
-      { to: '/settings/code-reviewers', label: 'Code Reviewers', icon: ShieldCheck },
-      { to: '/settings/database', label: 'Database', icon: Database },
-      { to: '/settings/general', label: 'General', icon: Settings },
-      { to: '/settings/mortalloom', label: 'MortalLoom', icon: Activity },
-      { to: '/openclaw', label: 'OpenClaw', icon: MessagesSquare },
-      { to: '/prompts', label: 'Prompts', icon: FileText },
-      { to: '/ai', label: 'Providers', icon: Bot },
-      { to: '/settings/security', label: 'Security', icon: Lock },
-      { to: '/settings/sharing', label: 'Sharing', icon: Share2 },
-      { to: '/settings/telegram', label: 'Telegram', icon: MessageSquare },
-      { to: '/settings/voice', label: 'Voice', icon: Mic },
-    ],
-  },
-  { moreLabel: true },
-  {
-    label: 'Identity',
-    icon: Fingerprint,
-    defaultTo: '/digital-twin/overview',
-    children: [
-      { to: '/digital-twin/accounts', label: 'Accounts', icon: Globe },
-      { to: '/ask', label: 'Ask Yourself', icon: MessageCircle },
-      { to: '/digital-twin/autobiography', label: 'Autobiography', icon: PenLine },
-      { to: '/character', label: 'Character', icon: Swords },
-      { to: '/digital-twin/documents', label: 'Documents', icon: FileText },
-      { to: '/digital-twin/enrich', label: 'Enrich', icon: Sparkles },
-      { to: '/digital-twin/export', label: 'Export', icon: Download },
-      { to: '/digital-twin/identity', label: 'Identity', icon: Fingerprint },
-      { to: '/digital-twin/import', label: 'Import', icon: Upload },
-      { to: '/insights/overview', label: 'Insights', icon: Lightbulb },
-      { to: '/digital-twin/interview', label: 'Interview', icon: MessageSquare },
-      { to: '/digital-twin/overview', label: 'Overview', icon: Heart },
-      { to: '/privacy/overview', label: 'Privacy', icon: Shield },
-      { to: '/digital-twin/taste', label: 'Taste', icon: Palette },
-      { to: '/digital-twin/test', label: 'Test', icon: CheckCircle },
-      { to: '/digital-twin/time-capsule', label: 'Time Capsule', icon: Archive },
-    ],
-  },
-  {
-    label: 'POST',
-    icon: Zap,
-    defaultTo: '/post/launcher',
-    children: [
-      { to: '/post/config', label: 'Config', icon: Settings },
-      { to: '/post/explore', label: 'Explore', icon: Compass },
-      { to: '/post/history', label: 'History', icon: History },
-      { to: '/post/launcher', label: 'Launcher', icon: Play },
-      { to: '/post/memory', label: 'Memory', icon: Brain },
-      { to: '/post/morse', label: 'Morse', icon: Radio },
-      { to: '/post/plan', label: 'Practice Plan', icon: ListChecks },
-      { to: '/post/progress', label: 'Progress', icon: TrendingUp },
-      { to: '/post/rhetoric', label: 'Rhetoric', icon: Feather },
-      { to: '/post/wordplay', label: 'Wordplay', icon: MessageCircle },
-    ],
-  },
+  ...mainRows,
+  { separator: true, localOnly: true },
+  { ...appsCommand, dynamic: 'apps', defaultTo: appsCommand.to, children: [] },
+  ...SECTION_ORDER.slice(0, 6).map((section) => sectionRows[section]),
+  goalsRow,
+  ...SECTION_ORDER.slice(6, 9).map((section) => sectionRows[section]),
+  { moreLabel: true, localOnly: true },
+  ...SECTION_ORDER.slice(9).map((section) => sectionRows[section]),
 ];
 
 const SIDEBAR_KEY = 'portos-sidebar-collapsed';
@@ -709,6 +714,9 @@ export default function Layout() {
   // Sidebar data-fetch loops (apps / pipeline series / universes) live in
   // dedicated hooks so the shared focus-debounce + signature-guard pattern is
   // testable in isolation. See client/src/hooks/useSidebar*.js.
+  // Optional features the user turned off in Settings > Features drop out of the
+  // sidebar entirely (their routes keep working for a direct link/bookmark).
+  const { isFeatureEnabled } = useInstanceFeatures();
   const sidebarApps = useSidebarApps();
   const pipelineSeries = useSidebarSeries();
   const universes = useSidebarUniverses();
@@ -723,13 +731,15 @@ export default function Layout() {
       .catch((err) => console.warn(`⚠️ Layout: palette manifest fetch failed: ${err?.message || err}`));
   }, []);
 
+  // Manifest-only paths still honour the feature gate, so a row pinned before the
+  // user disabled its feature stops resolving into Pinned/Recent too.
   const manifestEntryByPath = useMemo(() => {
     const map = new Map();
-    manifestNav.forEach((c) => {
+    filterNavByFeatures(manifestNav, isFeatureEnabled).forEach((c) => {
       if (c?.path && !map.has(c.path)) map.set(c.path, { path: c.path, label: c.label, icon: Navigation });
     });
     return map;
-  }, [manifestNav]);
+  }, [manifestNav, isFeatureEnabled]);
 
   useEffect(() => {
     safeWriteStorage(SIDEBAR_KEY, String(collapsed));
@@ -768,7 +778,20 @@ export default function Layout() {
         })),
       };
     };
-    return navItems.map((item) => {
+    // Feature gate, applied before any decoration: a disabled feature drops its
+    // whole section (POST) or just its tagged rows (DataDog, JIRA), and a
+    // section left with no navigable child disappears with them. Sections that
+    // lose nothing keep their identity so the memo below doesn't reallocate.
+    const gatedItems = navItems.flatMap((item) => {
+      if (!isFeatureEnabled(item.feature)) return [];
+      if (!Array.isArray(item.children)) return [item];
+      const children = item.children.filter((child) => isFeatureEnabled(child.feature));
+      if (children.length === item.children.length) return [item];
+      const navigable = item.dynamic || children.some((child) => child.to || child.href);
+      return navigable ? [{ ...item, children }] : [];
+    });
+
+    return gatedItems.map((item) => {
       if (item.dynamic === 'apps') {
         return {
           ...item,
@@ -788,7 +811,7 @@ export default function Layout() {
       }
       return item;
     });
-  }, [sidebarApps, pipelineSeries, universes]);
+  }, [sidebarApps, pipelineSeries, universes, isFeatureEnabled]);
 
   // Flat path -> { path, label, icon } lookup over every leaf nav row, so the
   // Pinned/Recent sections render a stored path with its real label + icon.

@@ -56,6 +56,8 @@ import { openWorldDayMix, getTimeOfDayPreset } from './openWorldConstants';
 import { CITY_MAX_ORBIT_DISTANCE } from '../../utils/openWorldFocusCamera';
 import { THIRD_PERSON } from '../../utils/openWorldPlayerRig';
 import { listRegions } from '../../utils/openWorldRegions';
+import { getResolvedLandmarks } from '../../utils/openWorldProximity';
+import { getCollectiblesList } from '../../utils/openWorldCollectibles';
 import { computeEasterEggs } from '../../utils/openWorldEasterEggs';
 import { OpenWorldPaletteProvider } from './OpenWorldPaletteContext';
 import ErrorBoundary from '../ErrorBoundary';
@@ -98,6 +100,8 @@ export default function OpenWorldScene({
   dimmedAppIds,
   focusedAppId,
   focusedRegion,
+  isFeatureEnabled,
+  isPassiveFeatureEnabled,
   playerTeleport,
   hudSafe,
   background,
@@ -156,7 +160,12 @@ export default function OpenWorldScene({
   // belong to the OpenWorld style; over the Vibes world's sunlit low-poly landscape they
   // read as haze and grain, so they don't mount at all rather than fading per-frame.
   const neonLayers = Boolean(palette?.neonLayers);
-  const warpRegions = useMemo(() => listRegions(), []);
+  const jiraFeatureEnabled = typeof isPassiveFeatureEnabled === 'function'
+    ? isPassiveFeatureEnabled('jira')
+    : typeof isFeatureEnabled === 'function' ? isFeatureEnabled('jira') : true;
+  const warpRegions = useMemo(() => listRegions(isFeatureEnabled), [isFeatureEnabled]);
+  const landmarks = useMemo(() => getResolvedLandmarks(isFeatureEnabled), [isFeatureEnabled]);
+  const collectibles = useMemo(() => getCollectiblesList(isPassiveFeatureEnabled), [isPassiveFeatureEnabled]);
   const easterEggsList = useMemo(
     () => computeEasterEggs({ character, goals, productivityData }),
     [character, goals, productivityData]
@@ -397,7 +406,7 @@ export default function OpenWorldScene({
       <OpenWorldVoiceMarker voiceState={voiceState} settings={renderSettings} />
       <OpenWorldMemoryDistrict memoryGraph={memoryGraph} inboxDepth={inboxDepth} settings={renderSettings} />
       <OpenWorldDataHarbor introspection={introspection} settings={renderSettings} />
-      <OpenWorldJiraDistrict jiraTickets={jiraTickets} settings={renderSettings} />
+      {jiraFeatureEnabled && <OpenWorldJiraDistrict jiraTickets={jiraTickets} settings={renderSettings} />}
       <OpenWorldAiCore aiActivity={aiActivity} positions={positions} apps={apps} settings={renderSettings} />
       <WorldGround settings={renderSettings} />
       <OpenWorldStreets settings={renderSettings} />
@@ -407,6 +416,7 @@ export default function OpenWorldScene({
         collectedShardIds={collectedShardIds}
         activeBursts={activeBursts}
         settings={renderSettings}
+        shards={collectibles}
       />
       <OpenWorldTransitLoop settings={renderSettings} />
 
@@ -439,6 +449,7 @@ export default function OpenWorldScene({
         settings={renderSettings}
         activeRegionId={focusedRegion?.id}
         onTravelToRegion={onTravelToRegion}
+        regions={warpRegions}
       />
       {neonLayers && <OpenWorldVolumetricLights positions={positions} settings={renderSettings} />}
       {neonLayers && <OpenWorldNeonSigns positions={positions} />}
@@ -461,8 +472,10 @@ export default function OpenWorldScene({
           cameraView={settings?.cameraView ?? 'third'}
           teleport={playerTeleport}
           warpPads={warpRegions}
+          landmarks={landmarks}
           onWarpPadInteract={onTravelToRegion}
           easterEggs={easterEggsList.eggs}
+          shards={collectibles}
           collectedShardIds={collectedShardIds}
           onCollectShard={onCollectShard}
           onPlayerPoseChange={onPlayerPoseChange}

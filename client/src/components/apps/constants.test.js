@@ -1,8 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { APP_DETAIL_TABS, appUsesJira } from './constants';
+import { APP_DETAIL_TABS, appUsesJira, getAppFeatureOverride, isAppFeatureEnabled } from './constants';
 
-const visibleIds = (app) =>
-  APP_DETAIL_TABS.filter(t => (t.visibleWhen ? t.visibleWhen(app) : true)).map(t => t.id);
+const featureEntry = (id) => APP_DETAIL_TABS.find(tab => tab.id === id);
 
 describe('appUsesJira', () => {
   it('is false for an app with no JIRA config at all', () => {
@@ -26,21 +25,37 @@ describe('appUsesJira', () => {
   });
 });
 
-describe('APP_DETAIL_TABS jira visibility', () => {
-  it('hides the JIRA tab for an app that is not wired to JIRA', () => {
-    expect(visibleIds({ id: 'a', workTracker: 'github' })).not.toContain('jira');
+describe('managed-app feature overrides', () => {
+  it('marks DataDog, JIRA, and GSD as feature-gated detail tabs', () => {
+    expect(featureEntry('datadog').feature).toBe('datadog');
+    expect(featureEntry('jira').feature).toBe('jira');
+    expect(featureEntry('gsd').feature).toBe('gsd');
   });
 
-  it('shows the JIRA tab when the integration is enabled', () => {
-    expect(visibleIds({ id: 'a', jira: { enabled: true } })).toContain('jira');
+  it('inherits the global setting when no app override exists', () => {
+    expect(getAppFeatureOverride({ id: 'a' }, 'datadog')).toBeNull();
+    expect(isAppFeatureEnabled({ id: 'a' }, 'datadog', true)).toBe(true);
+    expect(isAppFeatureEnabled({ id: 'a' }, 'datadog', false)).toBe(false);
   });
 
-  it('shows the JIRA tab when JIRA is the work tracker', () => {
-    expect(visibleIds({ id: 'a', workTracker: 'jira' })).toContain('jira');
+  it('lets true and false app overrides outrank the global setting', () => {
+    const app = { id: 'a', featureOverrides: { datadog: true, jira: false } };
+    expect(isAppFeatureEnabled(app, 'datadog', false)).toBe(true);
+    expect(isAppFeatureEnabled(app, 'jira', true)).toBe(false);
+    expect(getAppFeatureOverride(app, 'datadog')).toBe(true);
+    expect(getAppFeatureOverride(app, 'jira')).toBe(false);
   });
 
-  it('leaves the unconditional tabs alone', () => {
-    const ids = visibleIds({ id: 'a' });
-    expect(ids).toEqual(expect.arrayContaining(['overview', 'automation', 'documents', 'git', 'gsd', 'issues', 'processes', 'references', 'tasks']));
+  it('uses a null app override to return to the global setting', () => {
+    const app = { id: 'a', datadog: { enabled: true }, featureOverrides: { datadog: null } };
+    expect(getAppFeatureOverride(app, 'datadog')).toBeNull();
+    expect(isAppFeatureEnabled(app, 'datadog', false)).toBe(false);
+  });
+
+  it('keeps legacy integration and JIRA-tracker signals working', () => {
+    expect(isAppFeatureEnabled({ datadog: { enabled: true } }, 'datadog', false)).toBe(true);
+    expect(isAppFeatureEnabled({ jira: { enabled: true } }, 'jira', false)).toBe(true);
+    expect(isAppFeatureEnabled({ workTracker: 'jira' }, 'jira', false)).toBe(true);
+    expect(isAppFeatureEnabled({ jira: { enabled: false }, workTracker: 'github' }, 'jira', true)).toBe(false);
   });
 });

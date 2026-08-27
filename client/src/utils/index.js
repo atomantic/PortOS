@@ -44,6 +44,7 @@ export * from './characterXp.js';
 export * from './openWorldActivityHeatmap.js';
 export * from './openWorldAgentMotion.js';
 export * from './openWorldAiCore.js';
+export * from './openWorldAppMetrics.js';
 export * from './openWorldArtifacts.js';
 export * from './openWorldBackupVault.js';
 export * from './openWorldChronotype.js';

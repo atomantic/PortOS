@@ -366,6 +366,23 @@ describe('brain service', () => {
         }));
       });
 
+      it('persists repo-study provider pins with the requested intake', async () => {
+        asGitHub();
+        await captureThought('https://github.com/acme/widgets', undefined, undefined, {
+          repoIntake: { learn: true, providerId: 'codex', model: 'gpt-5', effort: 'high' },
+        });
+
+        expect(storage.createLink).toHaveBeenCalledWith(expect.objectContaining({
+          repoIntake: {
+            malwareScan: false,
+            learn: true,
+            providerId: 'codex',
+            model: 'gpt-5',
+            effort: 'high',
+          }
+        }));
+      });
+
       it('stores nothing when every box is unticked', async () => {
         asGitHub();
         await captureThought('https://github.com/acme/widgets', undefined, undefined, {

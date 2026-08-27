@@ -449,6 +449,12 @@ export const effortLevelsForProvider = (provider, model = null) => {
   if (isCursorProvider(provider)) return CURSOR_EFFORT_LEVELS;
   const id = String(provider.id || '').toLowerCase();
   if (id.startsWith('claude-code') || commandBasename(provider.command) === 'claude') return CLAUDE_EFFORT_LEVELS;
+  // Sanitized provider inventories intentionally omit command/path/env details.
+  // The server publishes the derived ladder so renamed custom CLIs still expose
+  // the same effort control without leaking machine-specific configuration.
+  const modelLevels = model ? provider.effortLevelsByModel?.[model] : null;
+  if (Array.isArray(modelLevels)) return modelLevels.length ? modelLevels : null;
+  if (Array.isArray(provider.effortLevels)) return provider.effortLevels.length ? provider.effortLevels : null;
   return null;
 };
 

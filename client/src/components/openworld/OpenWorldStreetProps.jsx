@@ -13,6 +13,7 @@ import { computeStreets, computeStreetProps } from '../../utils/openWorldPlan';
 // neon dressing is much heavier and the grove is already enough orientation at that tier.
 
 const dummy = new THREE.Object3D();
+const swayTimeUniform = { value: 0 };
 
 // Module-scope position offsets — stable identities so the matrix-writing effect below
 // runs only when placements actually change, not on every parent re-render.
@@ -27,37 +28,50 @@ const CANOPY_TOP_POS = [0, 2.12, 0, 0.72];
 
 // One instanced mesh whose matrices are written once from `placements`. `flat` lays the
 // geometry into the ground plane (used by the light-pool discs).
-function writeMatrices(ref, placements, position, flat, sway, time = 0) {
-  if (!ref.current) return;
+function writeMatrices(ref, placements, position, flat) {
+  if (!ref.current || typeof ref.current.setMatrixAt !== 'function') return;
   const scaleMultiplier = position[3] ?? 1;
   placements.forEach((p, i) => {
-    const phase = p.seed ?? i;
-    const gust = sway
-      ? Math.sin(time * 0.72 + phase * 1.7 + p.x * 0.04 + p.z * 0.03) * 0.035
-        + Math.sin(time * 1.21 + phase * 0.63) * 0.016
-      : 0;
     dummy.position.set(p.x + position[0], position[1], p.z + position[2]);
-    dummy.rotation.set(flat ? -Math.PI / 2 : gust * 0.6, !flat && p.seed != null ? (p.seed * 1.7) % (Math.PI * 2) : 0, flat ? 0 : gust);
+    dummy.rotation.set(flat ? -Math.PI / 2 : 0, !flat && p.seed != null ? (p.seed * 1.7) % (Math.PI * 2) : 0, 0);
     dummy.scale.setScalar((p.scale ?? 1) * scaleMultiplier);
     dummy.updateMatrix();
     ref.current.setMatrixAt(i, dummy.matrix);
   });
-  ref.current.instanceMatrix.needsUpdate = true;
+  if (ref.current.instanceMatrix) {
+    ref.current.instanceMatrix.needsUpdate = true;
+  }
+  if (typeof ref.current.computeBoundingSphere === 'function') {
+    ref.current.computeBoundingSphere();
+  }
 }
 
-function Instances({ placements, geometry, geometryArgs, position, flat = false, sway = false, children }) {
+const onSwayCompile = (shader) => {
+  shader.uniforms.uSwayTime = swayTimeUniform;
+  shader.vertexShader = `
+    uniform float uSwayTime;
+  ` + shader.vertexShader;
+  shader.vertexShader = shader.vertexShader.replace(
+    '#include <begin_vertex>',
+    `
+    #include <begin_vertex>
+    vec3 instPos = vec3(instanceMatrix[3][0], instanceMatrix[3][1], instanceMatrix[3][2]);
+    float gust = sin(uSwayTime * 0.72 + instPos.x * 0.04 + instPos.z * 0.03) * 0.045
+               + sin(uSwayTime * 1.21 + instPos.z * 0.08) * 0.02;
+    transformed.x += gust * (position.y + 0.8);
+    transformed.z += gust * 0.8 * (position.y + 0.8);
+    `
+  );
+};
+
+function Instances({ placements, geometry, geometryArgs, position, flat = false, children }) {
   const ref = useRef();
   useLayoutEffect(() => {
-    writeMatrices(ref, placements, position, flat, sway);
-    if (sway && ref.current) ref.current.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  }, [placements, position, flat, sway]);
-
-  useFrame(({ clock }) => {
-    if (sway) writeMatrices(ref, placements, position, flat, true, clock.getElapsedTime());
-  });
+    writeMatrices(ref, placements, position, flat);
+  }, [placements, position, flat]);
 
   return (
-    <instancedMesh ref={ref} args={[undefined, undefined, placements.length]} frustumCulled={false}>
+    <instancedMesh ref={ref} args={[undefined, undefined, placements.length]}>
       {geometry === 'cylinder' && <cylinderGeometry args={geometryArgs} />}
       {geometry === 'sphere' && <sphereGeometry args={geometryArgs} />}
       {geometry === 'circle' && <circleGeometry args={geometryArgs} />}
@@ -77,6 +91,10 @@ export default function OpenWorldStreetProps({ settings }) {
     const streets = computeStreets();
     return computeStreetProps(streets, density);
   }, [density]);
+
+  useFrame(({ clock }) => {
+    swayTimeUniform.value = clock.getElapsedTime();
+  });
 
   // Keep the plaza grove even on the low tier: it is cheap, anchors the center of the map,
   // and gives the bright world a sense of scale. Lamps and their additive pools remain detail-only.
@@ -132,21 +150,22 @@ export default function OpenWorldStreetProps({ settings }) {
           floating gems; Cyber keeps the established wireframe treatment. */}
       {lowPoly ? (
         <>
-          <Instances placements={props.trees} geometry="sphere" geometryArgs={[0.9, 8, 5]} position={CANOPY_POS} sway>
-            <meshStandardMaterial {...surface} color={foliageColor} roughness={0.98} />
+          <Instances placements={props.trees} geometry="sphere" geometryArgs={[0.9, 8, 5]} position={CANOPY_POS}>
+            <meshStandardMaterial {...surface} color={foliageColor} roughness={0.98} onBeforeCompile={onSwayCompile} />
           </Instances>
-          <Instances placements={props.trees} geometry="sphere" geometryArgs={[0.68, 8, 5]} position={CANOPY_TOP_POS} sway>
-            <meshStandardMaterial {...surface} color={mixHex(foliageColor, '#d5e7a4', 0.28)} roughness={0.98} />
+          <Instances placements={props.trees} geometry="sphere" geometryArgs={[0.68, 8, 5]} position={CANOPY_TOP_POS}>
+            <meshStandardMaterial {...surface} color={mixHex(foliageColor, '#d5e7a4', 0.28)} roughness={0.98} onBeforeCompile={onSwayCompile} />
           </Instances>
         </>
       ) : (
-        <Instances placements={props.trees} geometry="icosahedron" geometryArgs={[0.8, 1]} position={CANOPY_POS} sway>
+        <Instances placements={props.trees} geometry="icosahedron" geometryArgs={[0.8, 1]} position={CANOPY_POS}>
           <meshBasicMaterial
             color={mixHex(accent, '#22c55e', 0.45)}
             wireframe
             transparent
             opacity={0.5 * (1 - dayMix) + 0.3 * dayMix}
             toneMapped={false}
+            onBeforeCompile={onSwayCompile}
           />
         </Instances>
       )}

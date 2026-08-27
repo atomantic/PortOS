@@ -28,6 +28,7 @@
     "server/services/agentPromptBuilder.js"
   ],
   "cos-task-enhance": [
+    "server/services/persistentMindTaskCapability.js",
     "server/services/taskEnhancer.js"
   ],
   "fableloom-branch-node": [

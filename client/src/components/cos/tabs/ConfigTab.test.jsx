@@ -9,6 +9,10 @@ const api = vi.hoisted(() => ({
   getCosBudgetUsage: vi.fn(),
 }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
+const providerHook = vi.hoisted(() => ({
+  setSelectedProviderId: vi.fn(),
+  setSelectedModel: vi.fn(),
+}));
 
 vi.mock('../../../services/api', () => api);
 vi.mock('../../ui/Toast', () => ({ default: toast }));
@@ -16,10 +20,10 @@ vi.mock('../../ui/Toast', () => ({ default: toast }));
 // so the test exercises only the config-save / level-change handlers.
 vi.mock('../../../hooks/useProviderModels', () => ({
   default: () => ({
-    providers: [],
-    availableModels: [],
-    setSelectedProviderId: vi.fn(),
-    setSelectedModel: vi.fn(),
+    providers: [{ id: 'codex', name: 'Codex', models: ['gpt-5'], defaultModel: 'gpt-5' }],
+    availableModels: ['gpt-5'],
+    setSelectedProviderId: providerHook.setSelectedProviderId,
+    setSelectedModel: providerHook.setSelectedModel,
     selectedProviderId: '',
     selectedModel: '',
   }),
@@ -74,6 +78,25 @@ describe('ConfigTab handleSave', () => {
     expect(api.updateCosConfig).toHaveBeenCalledWith(expect.any(Object), { silent: true });
     // Editor closed — the Edit button is back.
     expect(screen.getByRole('button', { name: /Edit/i })).toBeInTheDocument();
+  });
+});
+
+describe('persistent mind profile', () => {
+  it('starts disabled and saving its toggle sends a default-safe profile without starting a mind', async () => {
+    api.updateCosConfig.mockResolvedValue({ success: true });
+    render(<ConfigTab config={config} onUpdate={vi.fn()} onEvaluate={vi.fn()} avatarStyle="svg" setAvatarStyle={vi.fn()} />);
+
+    const toggle = screen.getByRole('checkbox', { name: 'Enable persistent mind profile' });
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        persistentMindProfile: expect.objectContaining({ enabled: true, thinkingInterface: 'text' }),
+      }),
+      { silent: true },
+    ));
+    expect(screen.getByText(/never starts a turn or downloads a model/i)).toBeInTheDocument();
   });
 });
 

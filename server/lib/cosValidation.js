@@ -18,6 +18,9 @@ import { isValidSlashdoCommand } from './slashdoInvocation.js';
 import { PR_COMPLETION_VALUES } from './prDisposition.js';
 import { AGENT_RUN_EVENT_KINDS, RUN_EVENT_READ_LIMITS } from './agentRunEvents.js';
 import { recurrenceRuleSchema } from './recurrenceValidation.js';
+import { TASK_DATA_INPUT_DEFINITIONS, TASK_DATA_INPUT_IDS } from './taskDataInputCatalog.js';
+
+export { TASK_DATA_INPUT_DEFINITIONS, TASK_DATA_INPUT_IDS } from './taskDataInputCatalog.js';
 
 // =============================================================================
 // COS TASK SCHEMAS
@@ -1427,6 +1430,15 @@ export const createLoopSchema = z.object({
 // COS JOB SCHEMAS
 // =============================================================================
 
+// Deterministic context sources that can be preloaded before a scheduled agent
+// starts. The ids are persisted on both built-in schedule entries and custom
+// agent jobs; taskDataInputs.js owns the I/O behind each id. Keep this catalog
+// descriptive and side-effect-free so APIs can expose it directly to every
+// configuration surface without duplicating labels or capabilities in clients.
+export const taskDataInputsSchema = z.array(z.enum(TASK_DATA_INPUT_IDS))
+  .max(TASK_DATA_INPUT_IDS.length)
+  .transform((ids) => [...new Set(ids)]);
+
 export const createCosJobSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
@@ -1447,6 +1459,10 @@ export const createCosJobSchema = z.object({
   priority: z.string().optional(),
   autonomyLevel: z.enum(['standby', 'assistant', 'manager', 'yolo']).optional(),
   promptTemplate: z.string().optional(),
+  // Deterministic repository/tracker context appended before the agent starts.
+  // An empty array actively clears every selection on update; absent preserves
+  // the stored selection.
+  dataInputs: taskDataInputsSchema.optional(),
   command: z.string().optional(),
   triggerAction: z.preprocess(v => v === '' ? undefined : v, z.string().optional()),
   // Optional AI provider + model override for agent jobs. Empty string from the
@@ -1475,6 +1491,9 @@ export const createCosJobSchema = z.object({
     // deliverable is intentionally outside the worktree — see
     // ALLOWED_TASK_METADATA_KEYS below and agentTuiSpawning.js (#3102).
     worktreeChangesExpected: z.boolean().optional(),
+    // PortOS-owned audits may succeed after proving the branch is empty; the
+    // finalizer still requires the forge/no-commit proof before honoring this.
+    noChangeSuccess: z.boolean().optional(),
   }).optional(),
 });
 
@@ -1644,9 +1663,34 @@ export const MAX_TOTAL_SPAWNS = 5;
 // allowlist — like `prAuthorFilter` / `issueAuthorFilter` — so a per-app
 // override can disable an individual rectification behavior and survive
 // sanitizeTaskMetadata.
+
+// repo-sync's per-app / per-schedule action toggles. Each is ON unless
+// explicitly `false` (branch-reconcile's opt-out convention), EXCEPT
+// `reapRemotes`, which mutates `origin` and is therefore opt-IN. Lives here so
+// the sanitizer's allowlist and services/repoSync.js read ONE list — the two
+// drifting would silently drop a toggle at the app-override boundary.
+export const REPO_SYNC_ACTION_KEYS = ['syncPush', 'syncPull', 'switchDefault', 'cleanupMerged', 'dropStashes', 'reapRemotes'];
+
 const ALLOWED_TASK_METADATA_KEYS = [
   ...PIPELINE_BEHAVIOR_FLAGS, 'readOnly', 'claimFlow',
   'cleanupMerged', 'openPr', 'resolveConflicts', 'autoMerge', 'finishAbandoned', 'autoClose',
+  // repo-sync's action toggles (REPO_SYNC_ACTION_KEYS above): publish branches
+  // strictly ahead of their upstream, fast-forward the default branch, return the
+  // checkout to it, delete merged branches, drop provably-redundant stashes, and
+  // (opt-IN, since it mutates origin) reap merged orphan remote branches.
+  // `cleanupMerged` deliberately reuses branch-reconcile's NAME because it means
+  // the same thing — but task metadata is stored per task type, so the two are
+  // independent settings. Turning it off on branch-reconcile does NOT turn it off
+  // here; each task type carries its own value.
+  ...REPO_SYNC_ACTION_KEYS,
+  // repo-sync's per-app opt-OUT. The sweep is install-wide by design, so it
+  // needs a key of its own rather than reading the per-app `enabled` flag next
+  // to it: createApp SEEDS `{ enabled: false }` for every task type, so
+  // `enabled` cannot distinguish "leave this repo alone" from "never configured",
+  // and reading it would exclude every app on a fresh install. `enabled` still
+  // governs whether the app gets its own SCHEDULED repo-sync run; this governs
+  // whether the install-wide sweep visits its checkout.
+  'skipRepoSync',
   // Throwaway-worktree posture for programmatic-I/O reasoning tasks (layered-
   // intelligence): the worktree is discarded without a merge or PR so a reasoning
   // agent can't land code. See agentWorktreeCleanup.js.
@@ -1657,6 +1701,10 @@ const ALLOWED_TASK_METADATA_KEYS = [
   // against a GitHub/GitLab/JIRA work tracker files its proposals as issues and,
   // per the prompt, edits no application code, so a clean worktree is expected.
   'worktreeChangesExpected',
+  // Allows a PortOS-owned audit's verified-empty-branch contract to survive
+  // app task-type override sanitization. The finalizer also requires the
+  // autonomous-job marker and a live forge proof before honoring it.
+  'noChangeSuccess',
   // Audit-type toggle: file tracker issues (no code) vs implement the fix.
   // Dispatch stamps `noCodeOutput` when this is true. See server/lib/auditCatalog.js.
   'fileIssues',
@@ -1683,6 +1731,17 @@ export const PR_AUTHOR_FILTERS = ['any', 'self', 'others'];
 // here so both the sanitizer and the claim-issue prompt-builder agree on the
 // vocabulary.
 export const ISSUE_AUTHOR_FILTERS = ['self', 'collaborators', 'owner', 'any'];
+
+// repo-sync verify-mode vocabulary — when the coordinator agent is dispatched
+// after the deterministic sweep. 'always' verifies every run; 'when-changed'
+// (the default) verifies only a run that actually mutated a checkout, so a sweep
+// over an already-clean machine makes no provider call at all; 'never' dispatches
+// only when the sweep left something unresolved. An ESCALATION dispatches under
+// every mode. Kept here so the sanitizer and services/repoSync.js agree on the
+// vocabulary — and so the static task registry can name the default without
+// importing the git-heavy service (it is deliberately dependency-light).
+export const REPO_SYNC_VERIFY_MODES = ['always', 'when-changed', 'never'];
+export const DEFAULT_REPO_SYNC_VERIFY_MODE = 'when-changed';
 
 // `issueExcludeLabels` — extra labels a user wants left for human contributors
 // (e.g. `good first issue`) rather than auto-claimed by claim-issue/claim-work.
@@ -1860,6 +1919,13 @@ export function sanitizeTaskMetadata(raw) {
   // string the watcher would silently treat as "any".
   if (Object.prototype.hasOwnProperty.call(raw, 'prAuthorFilter') && PR_AUTHOR_FILTERS.includes(raw.prAuthorFilter)) {
     clean.prAuthorFilter = raw.prAuthorFilter;
+    hasKeys = true;
+  }
+  // `verifyMode` decides when repo-sync dispatches its coordinator agent after a
+  // clean deterministic pass — constrained, so an arbitrary string can't reach the
+  // dispatch gate (which would fall back to the default anyway, silently).
+  if (Object.prototype.hasOwnProperty.call(raw, 'verifyMode') && REPO_SYNC_VERIFY_MODES.includes(raw.verifyMode)) {
+    clean.verifyMode = raw.verifyMode;
     hasKeys = true;
   }
   // `issueAuthorFilter` gates claim-issue dispatch on issue authorship —

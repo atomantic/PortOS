@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildCiTestPlan, forceFullReasonFor, WINDOWS_CONTRACT_TESTS } from './ci-test-plan.js';
+import {
+  ALWAYS_RUN_TESTS,
+  buildCiTestPlan,
+  forceFullReasonFor,
+  splitByRunner,
+  WINDOWS_CONTRACT_TESTS,
+} from './ci-test-plan.js';
 
 const TRACKED = [
   'server/lib/index.test.js',
@@ -70,6 +76,54 @@ describe('CI test impact planner', () => {
     // A full plan runs everything, so it carries no explicit selector list.
     const full = buildCiTestPlan(['.github/workflows/ci.yml'], { trackedFiles: TRACKED });
     expect(full.server.mode).toBe('full');
+  });
+
+  // The docs-only branch names its selectors directly rather than going through
+  // the runner split the scoped branches use, so it splits them itself. Handing
+  // a client/src guard to the server runner (which does not glob client/) would
+  // report green having run it nowhere.
+  it('routes always-run selectors to the runner that globs them', () => {
+    expect(splitByRunner([
+      'server/services/taskPromptDefaults.test.js',
+      'scripts/agent-instructions-files.test.js',
+      'client/src/a11yConventions.test.js',
+    ])).toEqual({
+      server: ['server/services/taskPromptDefaults.test.js', 'scripts/agent-instructions-files.test.js'],
+      client: ['client/src/a11yConventions.test.js'],
+    });
+  });
+
+  // Every guard on the list is unreachable by import-graph selection, so a
+  // docs-only plan is the one scope where the complete list has to survive.
+  it('carries every tracked always-run guard on a docs-only plan', () => {
+    const tracked = [...TRACKED, ...ALWAYS_RUN_TESTS];
+    const plan = buildCiTestPlan(['docs/GITHUB_ACTIONS.md'], { trackedFiles: tracked });
+    const { server, client } = splitByRunner(ALWAYS_RUN_TESTS);
+
+    expect(plan.server.mode).toBe('files');
+    for (const guard of server) {
+      expect(plan.server.files, guard).toContain(guard);
+    }
+    expect(plan.server.files.filter((path) => path.startsWith('client/'))).toEqual([]);
+
+    if (client.length > 0) {
+      expect(plan.client.mode).toBe('files');
+      for (const guard of client) {
+        expect(plan.client.files, guard).toContain(guard);
+      }
+    } else {
+      expect(plan.client.mode).toBe('skip');
+    }
+  });
+
+  it('maps every always-run guard to a runner', () => {
+    // splitByRunner drops a path whose runnerForTest is null. A root-level
+    // entry on ALWAYS_RUN_TESTS would then vanish from both jobs and the
+    // docs-only plan would report green having run it nowhere.
+    for (const path of ALWAYS_RUN_TESTS) {
+      const { server, client } = splitByRunner([path]);
+      expect(server.includes(path) || client.includes(path), path).toBe(true);
+    }
   });
 
   it('omits an untracked always-run guard rather than handing Vitest a missing selector', () => {

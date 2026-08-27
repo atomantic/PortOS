@@ -182,9 +182,9 @@ export async function handlePipelineProgression(task, agentId, success) {
  * be skipped by a throw from the JIRA/pipeline/Creative Director steps — either
  * would leave the task held until the orphan sweep noticed.
  *
- * @param {{ agentId: string, task: object, agent: object, effectiveSuccess: boolean, outputBuffer: string }} params
+ * @param {{ agentId: string, task: object, agent: object, effectiveSuccess: boolean, outputBuffer: string, noChangesToShip?: boolean }} params
  */
-export async function runAgentCompletionCleanup({ agentId, task, agent, effectiveSuccess, outputBuffer, prClaimVerified = false }) {
+export async function runAgentCompletionCleanup({ agentId, task, agent, effectiveSuccess, outputBuffer, prClaimVerified = false, noChangesToShip = false }) {
   // Fetch agent state once for JIRA, plan-question, and the resume pointer. Its
   // worktree fields are stamped once at registerAgent and never mutated, so passing
   // it to the release spares a re-read that would re-split the whole output.txt.
@@ -192,7 +192,7 @@ export async function runAgentCompletionCleanup({ agentId, task, agent, effectiv
   const agentState = await getAgentState(agentId).catch(() => null);
 
   try {
-    await runCompletionCleanupSteps({ agentId, task, agent, agentState, effectiveSuccess, outputBuffer, prClaimVerified });
+    await runCompletionCleanupSteps({ agentId, task, agent, agentState, effectiveSuccess, outputBuffer, prClaimVerified, noChangesToShip });
   } finally {
     await releaseRetryHold({
       agentId,
@@ -207,7 +207,7 @@ export async function runAgentCompletionCleanup({ agentId, task, agent, effectiv
  * The cleanup steps themselves. Split from the public entry point above only so
  * the retry-hold release can wrap them in a `finally` without re-indenting them.
  */
-async function runCompletionCleanupSteps({ agentId, task, agent, agentState, effectiveSuccess, outputBuffer, prClaimVerified = false }) {
+async function runCompletionCleanupSteps({ agentId, task, agent, agentState, effectiveSuccess, outputBuffer, prClaimVerified = false, noChangesToShip = false }) {
   // JIRA integration: push branch, create PR, comment on ticket
   const jiraTicketId = task?.metadata?.jiraTicketId;
   const jiraBranch = task?.metadata?.jiraBranch;
@@ -361,7 +361,7 @@ async function runCompletionCleanupSteps({ agentId, task, agent, agentState, eff
       // `if-missing` for an agent-owned PR that finalize did NOT verify: cleanup
       // asks the forge once and only stands down when a PR actually exists, so a
       // harness that skipped its completion workflow can't strand the branch.
-      prCreation: resolvePrCreation({ taskOpenPR, agentOwnsPr: agentOwnsPR, prClaimVerified }),
+      prCreation: resolvePrCreation({ taskOpenPR, agentOwnsPr: agentOwnsPR, prClaimVerified, noChangesToShip }),
       prCompletion: taskPrCompletion,
       ...reviewOptions,
       skipMerge: taskReviewLoopFollowUp || agentOwnsPR,

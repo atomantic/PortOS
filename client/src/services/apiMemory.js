@@ -8,6 +8,7 @@ export const getMemories = (options = {}) => {
   if (options.tags) params.set('tags', options.tags.join(','));
   if (options.status) params.set('status', options.status);
   if (options.appId) params.set('appId', options.appId);
+  if (options.sourceAgentId) params.set('sourceAgentId', options.sourceAgentId);
   if (options.limit) params.set('limit', options.limit);
   if (options.offset) params.set('offset', options.offset);
   if (options.sortBy) params.set('sortBy', options.sortBy);

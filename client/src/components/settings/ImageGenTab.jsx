@@ -23,7 +23,7 @@ import {
   registerTool, updateTool, getToolsList,
   saveHfToken, clearHfToken,
 } from '../../services/api';
-import { deriveAvailableBackends, isCloudCliMode, IMAGE_GEN_MODE, AGY_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_IMAGE_MODEL, CODEX_IMAGEGEN_DEFAULT_EFFORT, GROK_ASPECT_RATIOS, RENDER_TARGET_BACKEND_AUTO, RENDER_TARGET_OPTIONS, VIDEO_RENDER_MODES, modeLabel, normalizeRenderPinValue, supportsCloudModelOverride } from '../../lib/imageGenBackends';
+import { deriveAvailableBackends, imageGenReadiness, isCloudCliMode, IMAGE_GEN_MODE, AGY_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_IMAGE_MODEL, CODEX_IMAGEGEN_DEFAULT_EFFORT, GROK_ASPECT_RATIOS, RENDER_TARGET_BACKEND_AUTO, RENDER_TARGET_OPTIONS, VIDEO_RENDER_MODES, modeLabel, normalizeRenderPinValue, supportsCloudModelOverride } from '../../lib/imageGenBackends';
 import { resolveCleanersFromConfig } from '../../lib/imageCleaners';
 import { useMediaJobSse } from '../../hooks/useMediaJobSse';
 import { useAgyModels } from '../../hooks/useAgyModels';
@@ -339,6 +339,9 @@ export function ImageGenTab() {
       .catch(() => setStatus({ connected: false, reason: 'Check failed', forTab: mediaTab }))
       .finally(() => setChecking(false));
   }, [probeMode, mediaTab]);
+  const statusReadiness = imageGenReadiness(status);
+  const statusReady = statusReadiness === 'ready';
+  const statusUnknown = statusReadiness === 'unknown';
 
   // Backends the Test Render picker may offer — derived from the SAVED slice,
   // not the live form, because a test render runs against what the server has
@@ -1363,10 +1366,10 @@ export function ImageGenTab() {
           Test Connection
         </button>
         {status?.forTab === mediaTab && (
-          <span className={`text-sm ${status.connected ? 'text-port-success' : 'text-port-error'}`}>
-            {status.connected
-              ? `${status.mode} — ${status.model || status.pythonPath}`
-              : status.reason || 'Not connected'}
+          <span className={`text-sm ${statusReady ? 'text-port-success' : statusUnknown ? 'text-port-warning' : 'text-port-error'}`}>
+            {statusReady
+              ? `Ready — ${status.mode} — ${status.model || status.pythonPath}`
+              : `${statusUnknown ? 'Could not verify' : 'Unavailable'} — ${status.reason || 'Not connected'}`}
           </span>
         )}
       </div>

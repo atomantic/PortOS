@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { streamAttachment } from '../lib/streamAttachment.js';
 import { validateRequest, restoreRequestSchema, restoreDbRequestSchema } from '../lib/validation.js';
 import * as backup from '../services/backup.js';
 import { getSettings } from '../services/settings.js';
@@ -38,6 +39,23 @@ router.get('/snapshots', asyncHandler(async (req, res) => {
   const settings = await getSettings();
   const snapshots = await backup.listSnapshots(settings.backup?.destPath);
   res.json(snapshots);
+}));
+
+// GET /api/backup/snapshots/:snapshotId/download
+router.get('/snapshots/:snapshotId/download', asyncHandler(async (req, res) => {
+  const settings = await getSettings();
+  const destPath = settings.backup?.destPath;
+  if (!destPath) {
+    throw new ServerError('No backup destination configured in settings', { status: 400, code: 'BACKUP_NOT_CONFIGURED' });
+  }
+  const { snapshotId } = req.params;
+  const stream = await backup.openSnapshotStream(destPath, snapshotId);
+  streamAttachment(res, stream, {
+    filename: `portos-snapshot-${snapshotId}.tar.gz`,
+    contentType: 'application/gzip',
+    failure: new ServerError('Snapshot download failed', { status: 500, code: 'BACKUP_DOWNLOAD_FAILED' }),
+    label: `Backup snapshot ${snapshotId}`,
+  });
 }));
 
 // POST /api/backup/restore

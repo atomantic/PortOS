@@ -535,23 +535,27 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/avatar` | Avatar rendering/config |
 | `/api/system` | System health metrics |
 | `/api/system/capabilities` | Local hardware capabilities for model/provider selection |
+| `/api/system-resources` | System storage report and AI-assisted cleanup triage |
 | `/api/capabilities` | Feature capability flags |
 | `/api/agent-context` | Opt-in, loopback-only read-only MCP context and runtime manifest |
 | `/api/workspace-contexts` | Workspace context management |
 | `/api/apps/:appId/reference-repos` | Per-app reference repos |
 | `/api/network-exposure` | Network exposure checks |
+| `/api/history` | User/system action history log |
+| `/api/commands` | Allowlisted command execution |
 | `/api/git` | Git operations for managed apps |
 | `/api/screenshots` | Screenshot capture |
 | `/api/search` | Global search |
 | `/api/palette` | ⌘K command palette manifest + actions |
 | `/api/dashboard/layouts` | Dashboard widget layouts |
-| `/api/media/collections`, `/api/media/annotations` | Media library collections/annotations |
+| `/api/dashboard/daily-actions` | Dashboard daily action tracking |
+| `/api/media/collections`, `/api/media/annotations`, `/api/media/sketches` | Media library collections/annotations/sketches |
 | `/api/client-errors` | Client-side error reporting |
 | `/api/backup` | Backup snapshots + restore |
 | `/api/legacy-export` | Legacy data export |
 | `/api/database` | Postgres introspection |
 | `/api/image-clean` | Image metadata cleaning |
-| `/api/city` | CyberCity snapshots/introspection |
+| `/api/openworld`, `/api/city` | OpenWorld and CyberCity 3D snapshots/introspection |
 | `/api/cos/gsd` | CoS GSD workflow |
 | `/api/feature-agents` | Feature agent runs |
 | `/api/feeds` | RSS/content feeds |
@@ -584,6 +588,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/video-timeline` | Video timeline editor |
 | `/api/media-jobs` | Async media job queue |
 | `/api/creative-director` | Creative Director projects |
+| `/api/fableloom` | FableLoom interactive story generation |
 | `/api/music-video` | Music video projects |
 | `/api/mood-boards` | Mood boards |
 | `/api/writers-room` | Writers Room |
@@ -594,6 +599,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/importer` | Story importer |
 | `/api/story-builder` | Story Builder |
 | `/api/loras`, `/api/lora-datasets`, `/api/lora-training` | LoRA management/training |
+| `/sdapi/v1` | AUTOMATIC1111-compatible image generation surface (gated by `settings.imageGen.expose.a1111`) |
 | `/api/openclaw` | OpenClaw operator chat |
 | `/api/rounds` | Rounds (music + Morse training) |
 | `/api/ask` | Ask (LLM Q&A) |
@@ -612,14 +618,14 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/scaffold` | App scaffolding |
 | `/api/usage` | Provider usage / quota |
 | `/api/daily-driver` | Daily-driver snapshot |
-| `/api/media/sketches` | Media annotation sketches |
 | `/api/attachments` | Task / CoS file attachments |
 | `/api/autofix` | Autofixer metrics |
 | `/api/uploads` | Generic uploads |
 | `/api/agents` | Agent process management (personalities, accounts, schedules, activity, tools) |
+| `/api/agents/tools/moltworld`, `/api/agents/tools/moltworld/ws` | MoltWorld agent tools and WebSocket |
 | `/api/cos` | Chief of Staff |
 | `/api/memory` | Memory CRUD / search |
-| `/api/brain` | Brain (second brain) |
+| `/api/brain`, `/api/brain/import` | Brain (second brain) and document import |
 | `/api/media` | Media library |
 | `/api/imessage`, `/api/contacts`, `/api/signal`, `/api/spotify`, `/api/youtube` | Personal-data ingest |
 | `/api/notifications` | Notification stream |

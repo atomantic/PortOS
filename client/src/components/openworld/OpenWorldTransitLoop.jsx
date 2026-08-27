@@ -70,18 +70,29 @@ export default function OpenWorldTransitLoop({ settings }) {
       ))}
 
       {showTrams && Array.from({ length: TRANSIT.tramCount }, (_, i) => (
-        <mesh key={i} ref={(el) => { if (el) tramRefs.current[i] = el; }}>
-          <boxGeometry args={TRAM_SIZE} />
-          <meshStandardMaterial
-            {...surface}
-            color={lowPoly ? mixHex('#d57b67', accent, 0.2) : tintStructure('#1a2440')}
-            emissive={accent}
-            emissiveIntensity={0.5 * (1 - dayMix) + 0.15 * dayMix}
-            metalness={lowPoly ? 0.05 : 0.5}
-            roughness={lowPoly ? 0.85 : 0.3}
-            toneMapped={false}
-          />
-        </mesh>
+        <group key={i} ref={(el) => { if (el) tramRefs.current[i] = el; }}>
+          <mesh>
+            <boxGeometry args={TRAM_SIZE} />
+            <meshStandardMaterial
+              {...surface}
+              color={lowPoly ? mixHex('#d57b67', accent, 0.2) : tintStructure('#1a2440')}
+              emissive={accent}
+              emissiveIntensity={0.5 * (1 - dayMix) + 0.15 * dayMix}
+              metalness={lowPoly ? 0.05 : 0.5}
+              roughness={lowPoly ? 0.85 : 0.3}
+              toneMapped={false}
+            />
+          </mesh>
+          {/* Front headlamp bar and rear brake light */}
+          <mesh position={[0, 0, TRAM_SIZE[2] / 2 + 0.01]}>
+            <boxGeometry args={[TRAM_SIZE[0] * 0.65, 0.08, 0.02]} />
+            <meshBasicMaterial color="#fef08a" toneMapped={false} />
+          </mesh>
+          <mesh position={[0, 0, -TRAM_SIZE[2] / 2 - 0.01]}>
+            <boxGeometry args={[TRAM_SIZE[0] * 0.6, 0.06, 0.02]} />
+            <meshBasicMaterial color="#ef4444" toneMapped={false} />
+          </mesh>
+        </group>
       ))}
     </group>
   );

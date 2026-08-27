@@ -7,6 +7,7 @@ import { NON_PM2_TYPES, usesPm2, isDesktopType } from './streamingDetect.js';
 import { listProcessesStrict } from './pm2.js';
 import { SELF_IMPROVEMENT_TASK_TYPES } from './taskScheduleRegistry.js';
 import { sanitizeTaskMetadata } from '../lib/validation.js';
+import { isPlainObject } from '../lib/objects.js';
 import { resolveAppWorkTracker } from '../lib/workTracker.js';
 import { PORTS } from '../lib/ports.js';
 import { hasTailscaleCert } from '../../lib/tailscale-https.js';
@@ -158,8 +159,12 @@ export function invalidateCache() {
  * Notify clients that apps data has changed
  * Call this after any operation that modifies app state
  */
-export function notifyAppsChanged(action = 'update') {
-  appsEvents.emit('changed', { action, timestamp: Date.now() });
+export function notifyAppsChanged(action = 'update', appId) {
+  appsEvents.emit('changed', {
+    action,
+    ...(appId ? { appId } : {}),
+    timestamp: Date.now()
+  });
 }
 
 /**
@@ -413,6 +418,13 @@ export async function createApp(appData) {
     // concrete tracker (PLAN.md / GitHub / GitLab / JIRA) from the git origin
     // host at dispatch time — see server/lib/workTracker.js.
     workTracker: appData.workTracker || 'auto',
+    // Only persisted when explicitly sent. Absent means ON (see
+    // repoStateVerificationEnabled), so writing a default here would freeze the
+    // app against a future change of that default — but an explicit `false` on
+    // create MUST survive, or a new app cannot opt out through POST at all.
+    ...(typeof appData.verifyRepoStateOnCompletion === 'boolean'
+      ? { verifyRepoStateOnCompletion: appData.verifyRepoStateOnCompletion }
+      : {}),
     taskTypeOverrides: Object.fromEntries(
       SELF_IMPROVEMENT_TASK_TYPES.map(t => [t, { enabled: false }])
     ),
@@ -426,6 +438,13 @@ export async function createApp(appData) {
   // absent — createApp otherwise builds the object field-by-field and would drop it.
   if (appData.layeredIntelligence && typeof appData.layeredIntelligence === 'object') {
     app.layeredIntelligence = appData.layeredIntelligence;
+  }
+
+  // An absent map means every managed-app feature inherits the install-wide
+  // setting. Preserve an explicitly supplied (possibly empty) map so create
+  // and update have the same override contract.
+  if (isPlainObject(appData.featureOverrides)) {
+    app.featureOverrides = appData.featureOverrides;
   }
 
   data.apps[id] = app;
@@ -447,10 +466,19 @@ export async function updateApp(id, updates) {
 
   // Remove id and uiUrl from updates if present (id is key, uiUrl is derived)
   const { id: _id, uiUrl: _uiUrl, ...cleanUpdates } = updates;
+  // Feature overrides are a partial map: changing one app feature must not
+  // erase the other per-app choices that are already persisted.
+  const featureOverrides = isPlainObject(cleanUpdates.featureOverrides)
+    ? {
+      ...(isPlainObject(data.apps[id].featureOverrides) ? data.apps[id].featureOverrides : {}),
+      ...cleanUpdates.featureOverrides,
+    }
+    : null;
 
   const app = {
     ...data.apps[id],
     ...cleanUpdates,
+    ...(featureOverrides ? { featureOverrides } : {}),
     createdAt: data.apps[id].createdAt, // Preserve creation date
     updatedAt: new Date().toISOString()
   };
@@ -463,7 +491,8 @@ export async function updateApp(id, updates) {
 }
 
 /**
- * Delete an app (PortOS baseline app cannot be deleted)
+ * Remove an app from PortOS's registry (the repository on disk is untouched).
+ * The PortOS baseline app cannot be removed.
  */
 export async function deleteApp(id) {
   if (id === PORTOS_APP_ID) return false;

@@ -1,4 +1,4 @@
-import { request, API_BASE, maybeRedirectToLogin } from './apiCore.js';
+import { request, API_BASE, throwApiError } from './apiCore.js';
 import { formatBytes } from '../utils/formatters.js';
 import {
   validateImageFile,
@@ -319,12 +319,7 @@ export const cleanImage = async (file, steps = {}) => {
   if (!response) throw new Error('Server unreachable — check your connection and try again');
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: 'Failed to clean image' }));
-    maybeRedirectToLogin(response, error);
-    const err = new Error(error.error || `HTTP ${response.status}`);
-    err.code = error?.code;
-    err.status = response.status;
-    throw err;
+    await throwApiError(response);
   }
 
   // GPU FLUX round-trip: the server enqueued a job and returned 202 + JSON
@@ -358,11 +353,7 @@ export const fetchCleanResult = async (jobId) => {
     throw e;
   }
   if (!response.ok) {
-    const err = await response.json().catch(() => ({ error: 'Failed to fetch clean result' }));
-    maybeRedirectToLogin(response, err);
-    const e = new Error(err.error || `HTTP ${response.status}`);
-    e.code = err?.code; e.status = response.status;
-    throw e;
+    await throwApiError(response);
   }
   const reportHeader = response.headers.get('X-Clean-Report');
   let report = null;

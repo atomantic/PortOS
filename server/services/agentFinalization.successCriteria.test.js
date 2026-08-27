@@ -346,6 +346,65 @@ describe('withOutputHookTimeout (#2727)', () => {
 describe('evaluateSuccessCriteria — commit criterion (#2344, #3637)', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it('accepts a verified no-change result for an explicitly marked autonomous audit', async () => {
+    const task = {
+      id: 'catalog-audit-1',
+      taskType: 'internal',
+      metadata: { autonomousJob: true, noChangeSuccess: true }
+    };
+    expect(await evaluateSuccessCriteria({
+      task,
+      workspacePath: '/w',
+      success: true,
+      noChangesToShip: true,
+      startedAt: STARTED_AT
+    })).toBe(true);
+    // The no-change proof came from verifyPrClaim's forge + branch checks; it
+    // must not trigger a second commit probe or turn a clean audit into a miss.
+    expect(committedDuringRun).not.toHaveBeenCalled();
+  });
+
+  it('does not let the marker bypass validation without the verified no-change proof', async () => {
+    const task = {
+      id: 'catalog-audit-2',
+      taskType: 'internal',
+      metadata: { autonomousJob: true, noChangeSuccess: true }
+    };
+    committedDuringRun.mockResolvedValueOnce(false);
+    expect(await evaluateSuccessCriteria({
+      task,
+      workspacePath: '/w',
+      success: true,
+      noChangesToShip: false,
+      startedAt: STARTED_AT
+    })).toBe(false);
+    expect(committedDuringRun).toHaveBeenCalledWith('/w', STARTED_AT);
+  });
+
+  it('does not let an unmarked task claim the no-change exemption', async () => {
+    committedDuringRun.mockResolvedValueOnce(false);
+    expect(await evaluateSuccessCriteria({
+      task: { id: 'ordinary-audit-1', taskType: 'internal', metadata: { autonomousJob: true } },
+      workspacePath: '/w',
+      success: true,
+      noChangesToShip: true,
+      startedAt: STARTED_AT
+    })).toBe(false);
+    expect(committedDuringRun).toHaveBeenCalledWith('/w', STARTED_AT);
+  });
+
+  it('accepts persisted string markers after the task markdown round-trip', async () => {
+    const task = {
+      id: 'catalog-audit-3',
+      taskType: 'internal',
+      metadata: { autonomousJob: 'true', noChangeSuccess: 'true' }
+    };
+    expect(await evaluateSuccessCriteria({
+      task, workspacePath: '/w', success: true, noChangesToShip: true, startedAt: STARTED_AT
+    })).toBe(true);
+    expect(committedDuringRun).not.toHaveBeenCalled();
+  });
+
   it('passes an autonomous code run that COMMITTED during its window', async () => {
     committedDuringRun.mockResolvedValueOnce(true);
     expect(await evaluateSuccessCriteria({ task: { id: 't1', taskType: 'internal' }, workspacePath: '/w', startedAt: STARTED_AT })).toBe(true);

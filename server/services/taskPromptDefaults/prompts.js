@@ -11,7 +11,13 @@
 
 // PORTOS_API_URL is interpolated into the jira-status-report default prompt below.
 import { PORTOS_API_URL } from '../../lib/ports.js';
-import { EPIC_DECOMPOSED_LABEL, EPIC_LABEL, ISSUE_QUALITY_GUIDANCE, formatLabelCreateCommand } from '../../lib/dispatchLabels.js';
+import {
+  EPIC_DECOMPOSED_LABEL,
+  EPIC_LABEL,
+  ISSUE_QUALITY_GUIDANCE,
+  formatContributorLabelReleaseCommands,
+  formatLabelCreateCommand,
+} from '../../lib/dispatchLabels.js';
 
 // The epic marker and its idempotent `label create` line come from the shared
 // label registry, so the label the claim agent stamps is by construction the one
@@ -25,6 +31,11 @@ const EPIC_LABEL_CREATE_GLAB = formatLabelCreateCommand(EPIC_DECOMPOSED_LABEL, {
 // actionable and it gets re-split every pass.
 const UMBRELLA_LABEL_CREATE_GH = formatLabelCreateCommand(EPIC_LABEL);
 const UMBRELLA_LABEL_CREATE_GLAB = formatLabelCreateCommand(EPIC_LABEL, { cli: 'glab' });
+// Claiming an issue retires its human-contributor invitations. The `${NUM}` here
+// is SHELL text, not a JS interpolation — these are single-quoted so the claim
+// agent gets the literal `"${NUM}"` its own script sets.
+const CONTRIBUTOR_RELEASE_GH = formatContributorLabelReleaseCommands('"${NUM}"').join('\n');
+const CONTRIBUTOR_RELEASE_GLAB = formatContributorLabelReleaseCommands('"${NUM}"', { cli: 'glab' }).join('\n');
 
 const SCHEDULED_ISSUE_QUALITY_GATE = `## Scheduled issue-quality gate
 
@@ -608,20 +619,31 @@ Repository: {repoPath}
 
 ## What to do
 
-1. **Inventory so you don't duplicate.** Follow the "Inventory" step under
-   "Where to record the plan" above for this app's tracker — collect every
-   existing \`[plan-feature-…]\` slug. Then skim the last 50 \`git log\` entries
-   plus recent \`.changelog/\` files: an idea that is already an open tracker
-   item or recently shipped work is NOT a candidate.
+1. **Inventory so you don't duplicate.** Start with any **Preloaded task data**
+   appended below. When an Open issues or Open pull requests section is
+   present, that section is a current snapshot collected immediately before
+   dispatch, so do NOT list it again. Follow the "Inventory" step under "Where
+   to record the plan" for any corresponding section that is absent, says it
+   could not be collected, or when you need a full issue body. Collect every
+   existing \`[plan-feature-…]\` slug, then skim
+   the last 50 \`git log\` entries plus recent \`.changelog/\` files: an idea
+   that is already an open tracker item, in an open PR, or recently shipped work
+   is NOT a candidate.
 
-2. **Build a product brief from the repository's documentation.** Use the most
-   specific available source of intent, and make a best effort rather than
-   assuming a missing document means the app has no direction:
+2. **Build a product brief from the preloaded repository documents.** For each
+   Product requirements or Project goals section that is present, PortOS
+   searched the repository immediately before dispatch. Use the most specific
+   available source of intent, and do NOT search for or re-read a file when its
+   section has complete content. If a section is absent, unavailable,
+   unreadable, or truncated, search for and read the source directly before
+   relying on it. Make a best effort rather than assuming a missing document
+   means the app has no direction:
 
-   - If \`PRD.md\` exists, read it first. Treat its requirements, acceptance
+   - If the Product requirements section contains a \`PRD.md\`, use it first.
+     Treat its requirements, acceptance
      criteria, success metrics, constraints, and non-goals as the primary
      evaluation for what the feature should accomplish.
-   - If \`GOALS.md\` exists, read it for strategic context and to supplement
+   - If the Project goals section contains a \`GOALS.md\`, use it for strategic context and to supplement
      the PRD. If there is no PRD, use GOALS.md as the primary statement of
      desired direction.
    - If neither exists, start with the root \`README.md\`, \`docs/README.md\`
@@ -637,10 +659,10 @@ Repository: {repoPath}
      constraints, not as a substitute for product intent. When documentation
      is sparse, validate the inferred need against the current source, tests,
      and recent history and name the evidence in the plan.
-   - Check the repo's recently closed-unmerged PRs (\`gh pr list --state closed
-     --search "is:unmerged" --limit 20\`, or the forge's equivalent) — a feature
-     whose PR the user closed WITHOUT merging was rejected; treat those ideas as
-     rejected too.
+   - Use the preloaded Closed unmerged pull requests section — a feature whose
+     PR the user closed WITHOUT merging was rejected; treat those ideas as
+     rejected too. Query the forge if that section is absent or says it was
+     unavailable.
    - Review the codebase structure and relevant source files so the plan names
      real files rather than imagined ones.
 
@@ -960,10 +982,17 @@ git worktree add --no-track -b "claim/issue-\${NUM}" "\${WORKTREE}" origin/main
 # Cross-machine claim markers (best-effort — do not abort the run if these fail):
 gh issue edit "\${NUM}" --add-assignee @me 2>/dev/null
 gh issue edit "\${NUM}" --add-label in-progress 2>/dev/null
+# Retire the contributor invitations — this issue is taken now, so it must stop
+# advertising itself to a human looking for something to pick up. One edit per
+# label: \`--remove-label\` fails the WHOLE call when a named label is absent, so
+# a combined call on an issue carrying only one of them would remove neither.
+${CONTRIBUTOR_RELEASE_GH}
 cd "\${WORKTREE}"
 \`\`\`
 
 (If the repo's default branch is not \`main\`, detect it with \`gh repo view --json defaultBranchRef -q .defaultBranchRef.name\` and substitute it for \`main\` above.)
+
+Releasing \`good first issue\` / \`help wanted\` is deliberate and one-way: they invite a human contributor, and every path out of this flow either closes the issue or returns it to the AUTONOMOUS queue, where those labels mean nothing. Do NOT restore them when Phase 3 or Phase 7 releases the claim — re-advertising the issue to humans is a call for the human who wants it re-advertised.
 
 **If \`git worktree add\` fails because the \`claim/issue-<num>\` branch already exists** (a concurrent run won the race, or a remote claim branch is now visible), do NOT force or reuse it — that branch IS another run's claim. Treat the issue as in-flight, return to Phase 1, and pick the next eligible issue; if nothing else is eligible, exit cleanly. Stash \`WORKTREE\` — you'll need it for Phase 7 cleanup.
 
@@ -1132,8 +1161,15 @@ git worktree add --no-track -b "claim/issue-\${NUM}" "\${WORKTREE}" "origin/\${D
 ME="$(glab api user 2>/dev/null | sed -n 's/.*"username":"\\([^"]*\\)".*/\\1/p')"
 glab issue update "\${NUM}" --assignee "\${ME:-@me}" 2>/dev/null
 glab issue update "\${NUM}" --label in-progress 2>/dev/null
+# Retire the contributor invitations — this issue is taken now, so it must stop
+# advertising itself to a human looking for something to pick up. One update per
+# label: \`--unlabel\` fails the WHOLE call when a named label is absent, so a
+# combined call on an issue carrying only one of them would remove neither.
+${CONTRIBUTOR_RELEASE_GLAB}
 cd "\${WORKTREE}"
 \`\`\`
+
+Releasing \`good first issue\` / \`help wanted\` is deliberate and one-way: they invite a human contributor, and every path out of this flow either closes the issue or returns it to the AUTONOMOUS queue, where those labels mean nothing. Do NOT restore them when Phase 3 or Phase 7 releases the claim — re-advertising the issue to humans is a call for the human who wants it re-advertised.
 
 **If \`git worktree add\` fails because the \`claim/issue-<num>\` branch already exists** (a concurrent run won the race), do NOT force or reuse it — that branch IS another run's claim. Treat the issue as in-flight, return to Phase 1, and pick the next eligible issue; if nothing else is eligible, exit cleanly. Stash \`WORKTREE\` — you'll need it for Phase 7 cleanup.
 
@@ -1248,14 +1284,48 @@ Run steps 1–5 in order.
    git branch -a --no-color --format='%(refname:short)'
    \`\`\`
    For each ref (after stripping any leading \`origin/\` / \`upstream/\` prefix), extract the ticket KEY **only when the ref matches** \`claim/<KEY>\` (the segment after \`claim/\`) or \`cos/<task>/<KEY>/<agent>\` (the \`<KEY>\` third segment). A KEY looks like \`PROJ-1234\`.
-4. **Pick the target ticket:** walk the sprint tickets and pick the FIRST where ALL of the following are true (prefer higher priority — Blocker/Highest/High — then oldest):
+4. **Pick the target ticket:** walk the sprint tickets in TWO passes (within each pass, prefer higher priority — Blocker/Highest/High — then oldest). First pass, consider only NON-epic tickets and take the first that satisfies every rule below — atomic work always outranks an epic, whatever their relative priority. Only if that pass finds nothing do you make a second pass for an undecomposed epic (same rules), and an epic you pick goes to **Phase 1b**, not Phase 2. A single pass would enter a decomposition the moment an epic happened to outrank claimable work, which is exactly backwards. The rules:
    - Its status is a not-started status (e.g. "To Do", "Open", "Backlog", "Selected for Development", "Ready"). Skip tickets already "In Progress", "In Review", "Done", or any closed/resolved status — those are claimed or finished.
    - Its KEY is NOT in the in-flight set from step 3.
    - It has enough of a summary/description to act on. A ticket that merely leaves a design choice unstated is still eligible — you'll decide the reading in Phase 3, not skip it here. Skip only a ticket with essentially no actionable content (bare title, no description or acceptance criteria).
-   - It is NOT an Epic (issue type "Epic", or a title ending in "(epic)"). Leave epics for a human to split. Unlike the GitHub/GitLab claim flows, this one cannot decompose one: the JIRA reads PortOS exposes return neither a ticket's labels nor its epic links, so an agent here can see no decomposition marker and cannot find an epic's existing children.
-5. **If no eligible ticket exists**, exit cleanly — an empty actionable queue is a healthy state, not a failure. If a ticket is in the sprint but too vague or blocked to start, create a Review Hub todo (POST ${PORTOS_API_URL}/api/review/todo with title "[<KEY>] Needs clarification" or "[<KEY>] Blocked" and a description of what's missing) instead of claiming it.
+   - It is NOT an ALREADY-DECOMPOSED tracking **Epic**. An epic is recognized by issue type "Epic" or a title ending in "(epic)"; it counts as decomposed once it ALSO carries the \`${EPIC_DECOMPOSED_LABEL}\` label (the sprint fetch returns each ticket's \`labels\`). Skip a decomposed epic — its child slices are ordinary claimable tickets, so claiming the parent would duplicate them. An UNdecomposed epic is eligible only in the second pass above, and goes to **Phase 1b**.
+5. **If no eligible ticket exists**, exit cleanly — an empty actionable queue is a healthy state, not a failure. **But an open, undecomposed epic is NOT an empty queue**: never report "no work available" while one is unclaimed. Splitting it is the work — go to Phase 1b. If a ticket is in the sprint but too vague or blocked to start, create a Review Hub todo (POST ${PORTOS_API_URL}/api/review/todo with title "[<KEY>] Needs clarification" or "[<KEY>] Blocked" and a description of what's missing) instead of claiming it.
 
 Capture the ticket KEY as \`KEY\`, its summary, and its full description — you'll reuse them in the branch, the MR/PR, and the commit trailer.
+
+## Phase 1b — Decompose an epic (only when Phase 1 landed on one)
+
+You reach this phase two ways: Phase 1 found no eligible atomic ticket and fell through to an undecomposed epic, or the user pinned this run to an epic. **Never end a run reporting "nothing to do" while an undecomposed epic is open** — turning it into shippable slices IS this round's work, and it is what refills the sprint queue for every later run.
+
+Capture the epic's key as \`EPIC\`. This phase writes ONLY to JIRA — no worktree, no branch, no MR/PR, no edits in the source repo. A split leaves the epic's own STATUS untouched (it is a container, not work in progress); the single exception is step 3's all-children-done branch, which is what finally closes it.
+
+1. Read it in full: GET ${PORTOS_API_URL}/api/jira/instances/<instanceId>/tickets/<EPIC> — the response carries \`labels\`, \`description\`, \`status\`, and \`issueType\`.
+2. **Find the children it already has** — an epic a human (or an earlier run) already split must never be re-split: GET ${PORTOS_API_URL}/api/jira/instances/<instanceId>/epics/<EPIC>/children. Union that with every \`<KEY>\` the epic's own \`description\` checklist references. **A failed lookup is NOT an empty result**: if that request errors, stop and report — treating it as "no children" would re-split an epic that is already decomposed.
+3. **If children already exist, do NOT file more.**
+   - **Some child still in a not-started status** → the epic is already decomposed. Make sure it carries the \`${EPIC_DECOMPOSED_LABEL}\` label and that its description checklist lists every child (steps 5–6), then set \`KEY\` to the FIRST such child that passes Phase 1 step 4's eligibility rules and continue at **Phase 2** with that child. If every child is in flight, in progress, or done, exit cleanly — that queue is busy, not empty.
+   - **Every child Done/Closed** → the epic's work is finished. Comment naming the children that delivered it (POST ${PORTOS_API_URL}/api/jira/instances/<instanceId>/tickets/<EPIC>/comments), transition the epic to **Done/Closed**, and return to Phase 1 to look for other work.
+   - **Labeled \`${EPIC_DECOMPOSED_LABEL}\` but NO children exist** → an earlier split claimed the epic and died before filing anything. Treat it as undecomposed and continue at step 4; the marker is already in place, so nothing needs re-claiming.
+4. **Otherwise, plan the split.** Read the code the epic actually names before slicing — a split that never met the repo is worthless. Produce 2–8 slices, each independently shippable in ONE MR/PR, valuable on its own, and written with concrete scope + acceptance criteria + the files/areas involved. Slice by user-visible behavior or subsystem; never one-ticket-per-file, and never invent scope the epic doesn't ask for. Decide the boundaries yourself — an ambiguous epic is decided, not deferred (same rule as Phase 3). Only an epic so vague that no split survives contact with the code is a park case: create a Review Hub todo ("[<EPIC>] Needs clarification"), transition the epic to a Blocked/On Hold status if the workflow has one, and exit.
+5. **Claim the epic, THEN file the slices.** Stamp the marker before the first create — the label IS this phase's claim (Phase 1 skips a \`${EPIC_DECOMPOSED_LABEL}\` epic). Like every other marker in this flow it **narrows** the collision window without eliminating it, so re-run step 2's child query immediately before the first create and abandon the split if children now exist. Marking last instead of first would leave the epic actionable forever whenever that final write failed, and let a crashed run be re-split from scratch on the next tick:
+   \`\`\`
+   POST ${PORTOS_API_URL}/api/jira/instances/<instanceId>/tickets/<EPIC>/labels
+   {"labels": ["${EPIC_DECOMPOSED_LABEL}"]}
+   \`\`\`
+   Then comment on the epic saying how you sliced it, and resolve the sprint to file the slices INTO: GET ${PORTOS_API_URL}/api/jira/instances/<instanceId>/boards/<boardId>/sprints (\`jira.boardId\` on the app config) and take the active sprint's \`id\`. **If \`jira.boardId\` is not configured, or that call returns no active sprint, do NOT abandon the split** — file the slices without \`sprintId\`, flag every one of them as **not sprinted** in step 6's checklist, and say so in your Phase 7 report, so a human can drop them into a sprint. File each slice, in the order you want them worked:
+   \`\`\`
+   POST ${PORTOS_API_URL}/api/jira/instances/<instanceId>/tickets
+   {"projectKey": "<projectKey>", "summary": "<specific, human-readable>",
+    "description": "<what + why + acceptance criteria + files/areas>\\n\\nPart of <EPIC>",
+    "epicKey": "<EPIC>", "assignee": "currentUser", "sprintId": <activeSprintId>}
+   \`\`\`
+   **The \`assignee\` + \`sprintId\` pair is what makes a slice claimable at all** — Phase 1's candidate query is "assigned to me AND in an open sprint", so a child missing either one is invisible to every later run and the remaining work is stranded. \`assignee: "currentUser"\` resolves the authenticated account server-side. The response's \`sprint\` field is the sentinel to check: \`{"assigned": true}\` means it landed, while \`{"assigned": false, "error": "…"}\` means the ticket EXISTS but is not in the sprint. On \`assigned: false\`, retry once (POST ${PORTOS_API_URL}/api/jira/instances/<instanceId>/sprints/<sprintId>/issues with \`{"issueKeys": ["<KEY>"]}\`); if it still fails, mark that slice in the epic's checklist as **not sprinted** and say so in your Phase 7 report — never leave it silently stranded. Say \`Part of <EPIC>\` in the description and set \`epicKey\`; JIRA has no \`Closes\` auto-close, so the epic is closed by step 3's all-children-done branch on a later run. Add the equivalent hyphenated dispatch labels (\`model-light|model-medium|model-heavy\`, \`effort-low|effort-medium|effort-high|effort-xhigh|effort-max\`) and contributor labels (\`good-first-issue\`, \`help-wanted\`) only where that slice genuinely justifies them.
+6. **Write the checklist back to the epic** so the next run can follow it — keep the original description (step 1 returned it) and append a \`## Decomposed into\` list naming every child, flagging any that could not be sprinted:
+   \`\`\`
+   PUT ${PORTOS_API_URL}/api/jira/instances/<instanceId>/tickets/<EPIC>
+   {"description": "<original description>\\n\\n## Decomposed into\\n\\n- [ ] <KEY-a> — <title>\\n- [ ] <KEY-b> — <title> (NOT SPRINTED — needs a human to add it)"}
+   \`\`\`
+   The marker from step 5 is what stops the next run from splitting the same epic again; this checklist is what lets a claim aimed at the epic resolve the next available child. Leave the epic in its current status — it moves to Done when its last child closes.
+7. **Then claim the first slice you filed** — set \`KEY\` to it and continue at **Phase 2**, shipping that ONE slice normally. If claiming it fails because another run won the race, exit cleanly: the decomposition alone is a successful round, and the next claim run picks up the next linked child.
 
 ## Phase 2 — Claim (In Progress + worktree)
 
@@ -1289,7 +1359,9 @@ Re-read the ticket (GET ${PORTOS_API_URL}/api/jira/instances/<instanceId>/ticket
 
 (A too-large scope is NOT in this list — it has its own park path below.)
 
-**A genuinely too-large ticket needs parking so the queue converges.** If the work is bigger than one coherent claim — it would touch files far outside the ticket's scope (>5 unrelated files) — and you can't carve a valuable standalone slice to ship first, splitting the omnibus is a human call: create a Review Hub todo (POST ${PORTOS_API_URL}/api/review/todo with title "[<KEY>] Needs clarification" and the split you'd suggest), transition the ticket to a **Blocked/On Hold status if the workflow has one — NOT back to a not-started status**, which would re-queue it under Phase 1 (ticket selection never consults Review Hub todos, so a not-started ticket is immediately re-eligible and the run would re-park it every pass); if the workflow has no held status, leave it **In Progress**. Phase 1's not-started-only filter keeps a non-not-started ticket out of the ready queue, and the Review Hub todo is the durable human signal — together they let the claim run converge. Then remove the worktree and exit.
+**A genuinely too-large ticket gets SPLIT, not parked.** If the work is bigger than one coherent claim — it would touch files far outside the ticket's scope (>5 unrelated files) — and you can't carve a valuable standalone slice to ship first, promote it to an epic and decompose it: file the slices and rewrite the parent exactly as **Phase 1b** steps 4–6 describe (each slice carrying \`Part of <KEY>\` and \`epicKey: "<KEY>"\`). **Mark it on BOTH axes** — the queue skips a parent only when it is epic-shaped AND marked, so a ticket left carrying only \`${EPIC_DECOMPOSED_LABEL}\` stays claimable and gets re-split every pass. Add the marker label (POST ${PORTOS_API_URL}/api/jira/instances/<instanceId>/tickets/<KEY>/labels with \`{"labels": ["${EPIC_DECOMPOSED_LABEL}"]}\`) and make it epic-shaped: change its issue type to Epic if the project allows it, otherwise append " (epic)" to the summary (PUT ${PORTOS_API_URL}/api/jira/instances/<instanceId>/tickets/<KEY>) — the title convention marks an epic on a project where the type can't change. Confirm both landed by re-reading the ticket. Then transition it back to a not-started status so the sprint board shows the parent as unstarted (the marker, not the status, is what keeps Phase 1 off it), remove the worktree, and continue at Phase 2 with the first slice you filed. Splitting an omnibus ticket is work you do, not a hand-off.
+
+Park instead ONLY when the ticket is too vague to slice against the code at all: create a Review Hub todo (POST ${PORTOS_API_URL}/api/review/todo with title "[<KEY>] Needs clarification" and what a human must resolve), transition the ticket to a **Blocked/On Hold status if the workflow has one — NOT back to a not-started status**, which would re-queue it under Phase 1 (ticket selection never consults Review Hub todos, so a not-started ticket is immediately re-eligible and the run would re-park it every pass); if the workflow has no held status, leave it **In Progress**. Then remove the worktree and exit.
 
 **Ambiguity is NOT a release trigger — decide, don't defer.** If the ticket is merely open to more than one reasonable reading, or leaves a design choice unstated, do NOT bail to a "Needs clarification" todo. Pick the most reasonable interpretation, record the approach you chose in a ticket comment (POST ${PORTOS_API_URL}/api/jira/instances/<instanceId>/tickets/<KEY>/comments) so the decision is on the record, and implement it. The user would rather iterate on top of a shipped best-guess than have the ticket parked waiting on a decision they didn't ask to make. Reserve the "Needs clarification" todo for cases where proceeding would be **destructive or irreversible**, or genuinely requires the human: specific hardware/credentials you don't have, or a judgment only they can make. In those cases only, create the todo (POST ${PORTOS_API_URL}/api/review/todo with title "[<KEY>] Needs clarification" and what a human must resolve), transition the ticket to a **Blocked/On Hold status if the workflow has one — NOT back to a not-started status** (which would re-queue it under Phase 1, since ticket selection never consults Review Hub todos); if the workflow has no held status, leave it **In Progress** so Phase 1's not-started-only filter excludes it. Then remove the worktree and **exit — do NOT proceed to Phase 4**.
 
@@ -1581,6 +1653,48 @@ Run \`git stash list\`. For each \`stash@{N}\`:
 ## Step 3: Report
 
 Summarize: how many stashes were reviewed, how many were dropped (grouped by reason: superseded vs. stale/abandoned), and — for anything classified REAL UNLANDED WORK — what it is, which files it touches, and a recommendation (recover as a branch, cherry-pick specific hunks, or leave it for the user to decide). When in doubt about whether a stash is safe to drop, leave it in the stash and say so in the report rather than dropping it.`,
+
+  'repo-sync': `[Improvement] Repo Sync — verify and finish the origin sync sweep
+
+A deterministic sweep has ALREADY run across every managed repository on this machine. It did everything it could prove safe: fetched, pushed branches strictly ahead of their upstream, fast-forwarded default branches, returned checkouts to their default branch where the current branch was clean and already merged, deleted merged branches + worktrees, and dropped stash entries whose content is byte-identical to the default branch.
+
+Your job is the part it refused to do: **finish what needs judgment, then verify the end state.** The target for every repo is — on the default branch, level with origin, no leftover local branches or worktrees, an empty stash list — **without losing any work.**
+
+{repoSyncReport}
+
+## Rules
+
+- **Never lose work.** No \`--force\` push, no \`reset --hard\`, no \`checkout -f\`, no \`stash clear\`, no \`clean -fd\`. If the only way forward would discard something unrecoverable, STOP and report it instead.
+- **Work in each repo's live checkout** (\`cd\` to the path listed for it). Do not create a worktree, do not commit application code, and do not open a PR for this task — its whole deliverable is repo state.
+- **Leave a checkout alone** when the report says an agent is running in it.
+- Re-run \`git status\`, \`git stash list\`, and \`git branch -vv\` yourself before acting — the report is a snapshot, and the sweep already changed things.
+
+## Handle each escalation kind
+
+- \`operation-in-progress\` — a merge/rebase/cherry-pick is half-finished. Read the conflicts. Resolve only the ones where one side is demonstrably a superset of the other (grep the file for the added identifiers and read the surrounding code — do not eyeball the diff). Where two live versions genuinely differ, run \`git rebase --abort\` / \`git merge --abort\` to return to the pre-operation state and report it — that is recoverable; a bad hand-merge is not.
+- \`uncommitted-changes\` — work the sweep found in the tree. Decide what it IS before touching it: \`git diff\` it, then check whether the default branch already contains the same change or a superset (this is common — work popped from a stash and redone on the default branch, or already merged under another branch). If it is already on the default branch, \`git checkout -- <file>\` those paths. If it is real unlanded work, commit it on a properly named branch and ship it (push + PR) rather than leaving it loose. If you cannot tell, LEAVE IT and report it.
+- \`off-default-branch\` — resolve whatever is blocking the return (the dirty tree, or the branch not being merged yet), then \`git checkout <default>\`.
+- \`diverged-branch\` / \`diverged-default\` — the local branch and its upstream both moved. Prefer \`git pull --rebase\` on a work branch. On the DEFAULT branch, inspect the local-only commits first (\`git log origin/<default>..<default>\`) — they are usually work that landed upstream under different SHAs, in which case moving the branch onto origin is correct, but confirm with \`git cherry origin/<default> <default>\` before assuming, and never discard a commit that has no patch-equivalent upstream.
+- \`unpushed-branch\` — local commits that were never pushed and have no PR. Push the branch and open a PR if the work is coherent; if it is already on the default branch under other commits, delete the branch. Anything ambiguous stays and gets reported.
+- \`in-flight-branch\` — a branch that needs a PR opened, a conflict resolved, or a review driven. **Report these; do not drive them here.** The \`branch-reconcile\` task owns that work and wraps it in machinery this task has none of — the per-app openPr / resolveConflicts / autoMerge toggles, per-agent batching, the drain convergence guards, and the superseded ledger — so finishing them here bypasses all of it. Name each one and recommend running \`branch-reconcile\`.
+- \`stash-entries\` — triage each one the way the stash-cleanup task does: \`git stash show -p stash@{N}\`, then check whether the default branch already has the same change or a superset. Drop only what is superseded or clearly stale/abandoned scratch (indices shift after every drop, so re-read \`git stash list\` each time). Leave real unlanded work in the stash and say what it is.
+- \`orphan-remote\` — a branch on origin with nothing local pointing at it. Report it rather than deleting it: it may belong to another machine, and \`branch-reconcile\` reaps the provably-merged ones under its own gates.
+- \`action-failed\` — the deterministic step hit something it could not handle. Read the error and finish it by hand, within the rules above.
+- \`scan-failed\` — investigate why (missing path, no origin, auth), and report.
+
+## Verify
+
+Once every escalation is handled, walk EVERY repository named above and confirm the end state, reporting the actual values:
+
+1. \`git status\` — on the default branch, clean tree (untracked build/env files are fine; name them).
+2. \`git log origin/<default>..<default>\` and \`git log <default>..origin/<default>\` — both empty.
+3. \`git branch -vv\` — no leftover local branches beyond the default and any long-lived ones.
+4. \`git worktree list\` — no stale worktrees.
+5. \`git stash list\` — empty, or only entries you deliberately kept.
+
+## Report
+
+Per repository: what you changed, what you deliberately left and why, and the five verification results above. End with a one-line verdict per repo — CLEAN, or what is still outstanding. If you left anything unresolved, say exactly what a human needs to decide.`,
 
   'jira-sprint-manager': `[Improvement: {appName}] JIRA Sprint Manager
 
@@ -2099,11 +2213,9 @@ Default branch: {defaultBranch}
    Update catalog/picker tests when you intentionally add recommendation
    metadata; do not change existing cross-backend install-id mapping semantics.
 
-7. Log the refresh in the changelog with
-   \`cd {repoPath} && npm run changelog:add -- changed "<one line summarizing the catalog refresh>"\`.
-   That writes a per-branch fragment under \`.changelog/next/\`, which is what keeps
-   parallel agents from conflicting on the shared \`.changelog/NEXT.md\`. Do NOT
-   append to \`.changelog/NEXT.md\` by hand.
+7. Do NOT create or edit a changelog file or fragment. PortOS release notes are
+   synthesized from the commit log, so write a clear conventional commit subject
+   that names the catalog change and its user-visible effect.
 
 ## Output
 

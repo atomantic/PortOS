@@ -256,6 +256,10 @@ export default function QuickBrainCapture() {
         onTargetAppChange={repoIntake.setTargetAppId}
         studyContext={repoIntake.studyContext}
         onStudyContextChange={repoIntake.setStudyContext}
+        providerOverride={repoIntake.providerOverride}
+        providers={repoIntake.providers}
+        activeProviderId={repoIntake.activeProviderId}
+        onProviderOverrideChange={repoIntake.setProviderOverride}
         onToggle={repoIntake.toggle}
       />
 

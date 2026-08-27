@@ -41,7 +41,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiApps.js` | App CRUD + PM2 ops (start/stop/restart/logs) + local open actions (editor, Claude Code, folder, Xcode) + `getAppIssues` (open GitHub/GitLab issues for the Issues tab). |
 | `apiWorkspaceContexts.js` | Per-project working-context save/restore (branch, shells, tasks). |
 | `apiAccounts.js` | Platform accounts. |
-| `apiAgents.js` | Running-agent process management. |
+| `apiAgents.js` | Running-agent process management, CoS run-event diagnostics, and persistent-mind conversation, lifecycle, context, and runtime-telemetry calls. |
 | `apiCommands.js` | CLI command dispatch. |
 | `apiDashboard.js` | Dashboard state. |
 | `apiDatabase.js` | Database introspection. |
@@ -62,6 +62,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiScaffold.js` | App scaffolding templates. |
 | `apiSchedules.js` | Automation schedules. |
 | `apiQuotaBurn.js` | Quota Burn plan + live status, the job-type catalog its config form renders, and manual runs (`getQuotaBurn`/`getQuotaBurnCatalog`/`saveQuotaBurn`/`runQuotaBurn`), plus `rearmQuotaBurn` to put spent `run once` steps back into the rotation. |
+| `apiRapidReader.js` | Rapid Reader's optional author-hosted Accelerando book loader. |
 | `apiSystem.js` | System info (CPU/memory/ports/alerts/active processing and local hardware capabilities) + D&D-style character sheet getter, plus the usage cost report and explicit historical reconciliation (`getUsage`/`getUsageRaw`/`resetUsage`, `getProviderUsage`, `getUsageBackfillStatus`/`startUsageBackfill`, `updateSubscriptionCosts` for the subscription-vs-API savings comparison). |
 | `apiAuth.js` | Optional login password — status, login/logout, set/clear password. |
 | `apiLoops.js` | Scheduled loops. |

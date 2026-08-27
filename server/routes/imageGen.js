@@ -322,7 +322,9 @@ router.get('/status', asyncHandler(async (req, res) => {
   // the dispatcher as `string | undefined`.
   const rawMode = req.query.mode;
   const mode = typeof rawMode === 'string' && IMAGE_GEN_MODES.includes(rawMode) ? rawMode : undefined;
-  res.json(await imageGen.checkConnection({ mode }));
+  const rawModelId = req.query.modelId;
+  const modelId = typeof rawModelId === 'string' && rawModelId.length <= 64 ? rawModelId : undefined;
+  res.json(await imageGen.checkConnection({ mode, ...(modelId ? { modelId } : {}) }));
 }));
 
 router.get('/active', asyncHandler(async (_req, res) => {

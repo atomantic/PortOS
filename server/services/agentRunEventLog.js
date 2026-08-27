@@ -11,6 +11,8 @@
  * On disk:
  *   data/cos/run-events.jsonl    — active generation
  *   data/cos/run-events.1.jsonl  — the one retained archive generation
+ *   data/cos/mind-events.jsonl   — persistent-mind active generation
+ *   data/cos/mind-events.1.jsonl — persistent-mind archive generation
  *
  * Retention is TWO bounds, and both are load-bearing.
  *
@@ -20,12 +22,9 @@
  * MAX_ACTIVE_EVENTS it becomes the archive and the previous archive is dropped,
  * so the ledger holds between MAX_ACTIVE_EVENTS and 2×MAX_ACTIVE_EVENTS events.
  *
- * On top of that sits an AGE bound (MAX_EVENT_AGE_DAYS). The count alone is
- * only half a retention policy: it bounds a busy install but lets a quiet one
- * keep a trace of a run from last spring, describing a workspace, a provider,
- * and a code path that no longer exist. Expired events are filtered out on
- * every read (so the bound holds continuously) and swept off disk on a
- * throttled prune (so the files actually shrink) — see `pruneExpired`.
+ * Ordinary diagnostics additionally carry an AGE bound (MAX_EVENT_AGE_DAYS).
+ * Persistent-mind events live in their own larger count-bounded pool: mind
+ * chatter can neither evict ordinary diagnostics nor age out while stopped.
  *
  * Two invariants the callers depend on:
  *
@@ -40,9 +39,12 @@
 
 import { join } from 'path';
 import { rename, unlink } from 'fs/promises';
+import { EventEmitter } from 'events';
 import {
   PATHS,
+  atomicWrite,
   appendJSONLine,
+  readJSONFileStrict,
   readJSONLFile,
   writeJSONLines,
   pathExists
@@ -51,18 +53,35 @@ import {
   buildRunEvent,
   isStoredRunEvent,
   projectRunStates,
-  AGENT_RUN_EVENT_KINDS,
+  RUN_EVENT_KINDS,
   RUN_EVENT_READ_LIMITS
 } from '../lib/agentRunEvents.js';
+import {
+  PERSISTENT_MIND_ID,
+  PERSISTENT_MIND_TRAJECTORY_LIMITS,
+  isPersistentMindEventKind,
+  parsePersistentMindCursor,
+  persistentMindEventCursor,
+  projectPersistentMind,
+} from '../lib/persistentMindTrajectory.js';
 
 const ACTIVE_PATH = join(PATHS.cos, 'run-events.jsonl');
 const ARCHIVE_PATH = join(PATHS.cos, 'run-events.1.jsonl');
+const MIND_ACTIVE_PATH = join(PATHS.cos, 'mind-events.jsonl');
+const MIND_ARCHIVE_PATH = join(PATHS.cos, 'mind-events.1.jsonl');
+const MIND_SEQUENCE_PATH = join(PATHS.cos, 'persistent-mind-sequences.json');
+const MIND_SEQUENCE_SCHEMA_VERSION = 1;
+
+// Live delivery is only a hint that a cursor-aware client should backfill from
+// the durable ledger. The event itself is already redacted at construction.
+export const runEventLogEvents = new EventEmitter();
 
 /**
  * Events per generation. 5000 covers weeks of a busy install's lifecycle
  * boundaries at a few hundred bytes per line — a couple of MB per generation.
  */
 export const MAX_ACTIVE_EVENTS = 5000;
+export const MAX_ACTIVE_MIND_EVENTS = 10_000;
 
 /**
  * Age bound, on TOP of the count bound.
@@ -74,9 +93,9 @@ export const MAX_ACTIVE_EVENTS = 5000;
  * solves. So: keep at most 2×MAX_ACTIVE_EVENTS events, AND nothing older than
  * this, whichever bites first.
  *
- * 30 days is well past the window in which a run failure is still worth a
- * post-mortem, and comfortably past the longest restart/recovery cycle a run
- * can survive.
+ * 30 days is well past the window in which an ordinary run failure is still
+ * worth a post-mortem. Persistent-mind events instead use the count bound so
+ * their recent unsummarized window survives a long user-initiated stop.
  */
 export const MAX_EVENT_AGE_DAYS = 30;
 const MAX_EVENT_AGE_MS = MAX_EVENT_AGE_DAYS * 24 * 60 * 60 * 1000;
@@ -96,7 +115,7 @@ const PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 export const DEFAULT_READ_LIMIT = RUN_EVENT_READ_LIMITS.default;
 export const MAX_READ_LIMIT = RUN_EVENT_READ_LIMITS.max;
 
-// Lazily hydrated on first append/read: Maps of eventId → the event's `at`.
+// Lazily hydrated on first append/read: Maps of eventId → retention metadata.
 // `null` (not an empty Map) is the "never loaded" sentinel, so a genuinely
 // empty ledger caches as empty instead of re-reading both files on every single
 // append. The timestamp is carried so the duplicate check can apply the SAME age
@@ -105,16 +124,58 @@ export const MAX_READ_LIMIT = RUN_EVENT_READ_LIMITS.max;
 let activeIds = null;
 let archiveIds = null;
 let activeCount = 0;
+let mindActiveIds = null;
+let mindArchiveIds = null;
+let mindActiveCount = 0;
+// Highest sequence observed per mind. The timestamp-based floor keeps a new
+// event above a fully-retained-away generation after restart; the retained max
+// keeps strict monotonic order when the wall clock moves backwards.
+let mindSequenceHighWater = null;
+let mindSequenceCheckpointError = null;
 // `null` = never pruned in this process, so the first append/read always
 // prunes; a timestamp means "pruned then, skip until the interval elapses".
 let lastPrunedAt = null;
 
 // Serializes appends; also the handle callers await.
 let appendQueue = Promise.resolve();
+// A read can be the first caller after a restart, while an append arrives in
+// the same event-loop turn. Keep all first-load callers on one snapshot so a
+// slower read cannot overwrite the append path's in-memory sequence/index
+// state with an older view of disk.
+let hydrationPromise = null;
 
-/** eventId → `at`, for the duplicate check. Lines with no id are unindexable. */
-function indexById(events) {
-  return new Map(events.filter((e) => e?.eventId).map((e) => [e.eventId, e.at ?? null]));
+/** eventId → retention metadata, for the duplicate check. */
+function indexById(events, { persistentMind = false } = {}) {
+  return new Map(events.filter((e) => e?.eventId).map((e) => [e.eventId, {
+    at: e.at ?? null,
+    persistentMind: persistentMind || isPersistentMindEventKind(e.kind),
+  }]));
+}
+
+const isMindShapedEvent = (event) => isStoredRunEvent(event)
+  && typeof event.mindId === 'string'
+  && Number.isSafeInteger(event.sequence);
+
+function normalizeMindGenerations(events) {
+  const seen = new Set();
+  const previousByMind = new Map();
+  const ordered = events
+    .filter(isMindShapedEvent)
+    .filter((event) => !seen.has(event.eventId) && seen.add(event.eventId))
+    .sort((a, b) => a.sequence - b.sequence || String(a.eventId).localeCompare(String(b.eventId)))
+    .map((event) => {
+      const previousSequence = previousByMind.get(event.mindId) ?? null;
+      previousByMind.set(event.mindId, event.sequence);
+      return Object.hasOwn(event.data, 'previousSequence')
+        ? event
+        : { ...event, data: { ...event.data, previousSequence } };
+    });
+  const active = ordered.slice(-MAX_ACTIVE_MIND_EVENTS);
+  const archive = ordered.slice(
+    Math.max(0, ordered.length - (MAX_ACTIVE_MIND_EVENTS * 2)),
+    Math.max(0, ordered.length - MAX_ACTIVE_MIND_EVENTS)
+  );
+  return { archive, active };
 }
 
 /**
@@ -127,22 +188,92 @@ function indexById(events) {
  * duplicate — applied continuously rather than only at the moment of a prune.
  */
 function isStoredDuplicate(eventId, cutoff) {
-  const at = activeIds.has(eventId) ? activeIds.get(eventId)
+  const metadata = activeIds.has(eventId) ? activeIds.get(eventId)
     : archiveIds.has(eventId) ? archiveIds.get(eventId)
+      : mindActiveIds.has(eventId) ? mindActiveIds.get(eventId)
+        : mindArchiveIds.has(eventId) ? mindArchiveIds.get(eventId)
       : undefined;
-  return at !== undefined && typeof at === 'string' && at > cutoff;
+  return metadata !== undefined
+    && (metadata.persistentMind || (typeof metadata.at === 'string' && metadata.at > cutoff));
 }
 
 async function hydrate() {
   if (activeIds) return;
-  const [active, archive] = await Promise.all([
-    readJSONLFile(ACTIVE_PATH),
-    readJSONLFile(ARCHIVE_PATH)
-  ]);
-  activeIds = indexById(active);
-  archiveIds = indexById(archive);
-  activeCount = active.length;
+  if (hydrationPromise) return hydrationPromise;
+  const pending = (async () => {
+    let [active, archive, mindActive, mindArchive, sequenceStore] = await Promise.all([
+      readJSONLFile(ACTIVE_PATH),
+      readJSONLFile(ARCHIVE_PATH),
+      readJSONLFile(MIND_ACTIVE_PATH),
+      readJSONLFile(MIND_ARCHIVE_PATH),
+      readJSONFileStrict(MIND_SEQUENCE_PATH, { schemaVersion: MIND_SEQUENCE_SCHEMA_VERSION, minds: {} }),
+    ]);
+    const legacyArchive = archive.filter((event) => isPersistentMindEventKind(event?.kind));
+    const legacyActive = active.filter((event) => isPersistentMindEventKind(event?.kind));
+    if (legacyArchive.length > 0 || legacyActive.length > 0) {
+      const recovered = normalizeMindGenerations([
+        ...mindArchive,
+        ...mindActive,
+        ...legacyArchive,
+        ...legacyActive,
+      ]);
+      // Destination-first makes recovery retry-safe if a later source rewrite
+      // fails. This path handles upgrade -> rollback -> upgrade installs after
+      // migration 301 is already marked applied.
+      await writeJSONLines(MIND_ARCHIVE_PATH, recovered.archive);
+      await writeJSONLines(MIND_ACTIVE_PATH, recovered.active);
+      archive = archive.filter((event) => !isPersistentMindEventKind(event?.kind));
+      active = active.filter((event) => !isPersistentMindEventKind(event?.kind));
+      await writeJSONLines(ARCHIVE_PATH, archive);
+      await writeJSONLines(ACTIVE_PATH, active);
+      mindArchive = recovered.archive;
+      mindActive = recovered.active;
+      console.log(`🧠 Re-homed ${legacyArchive.length + legacyActive.length} rollback-era persistent mind event(s)`);
+    }
+    const invalidSequenceStore = !sequenceStore.ok || !sequenceStore.value
+        || typeof sequenceStore.value !== 'object' || Array.isArray(sequenceStore.value)
+        || sequenceStore.value.schemaVersion !== MIND_SEQUENCE_SCHEMA_VERSION
+        || !sequenceStore.value.minds || typeof sequenceStore.value.minds !== 'object'
+        || Array.isArray(sequenceStore.value.minds)
+        || Object.entries(sequenceStore.value.minds).some(([mindId, sequence]) => (
+          !mindId || mindId.length > 128 || !Number.isSafeInteger(sequence) || sequence < 0
+        ));
+    const validSequenceStore = !invalidSequenceStore;
+    activeIds = indexById(active);
+    archiveIds = indexById(archive);
+    mindActiveIds = indexById(mindActive, { persistentMind: true });
+    mindArchiveIds = indexById(mindArchive, { persistentMind: true });
+    activeCount = active.length;
+    mindActiveCount = mindActive.length;
+    mindSequenceCheckpointError = validSequenceStore
+      ? null
+      : 'Persistent mind sequence checkpoint is unreadable or invalid';
+    mindSequenceHighWater = new Map(validSequenceStore ? Object.entries(sequenceStore.value.minds) : []);
+    for (const event of [...mindArchive, ...mindActive]) {
+      if (!event?.mindId || !Number.isSafeInteger(event.sequence)) continue;
+      mindSequenceHighWater.set(
+        event.mindId,
+        Math.max(mindSequenceHighWater.get(event.mindId) ?? -1, event.sequence)
+      );
+    }
+  })();
+  hydrationPromise = pending;
+  try {
+    await pending;
+  } finally {
+    if (hydrationPromise === pending) hydrationPromise = null;
+  }
 }
+
+function nextMindSequence(mindId) {
+  const previous = mindSequenceHighWater.get(mindId) ?? -1;
+  return Math.max(previous + 1, Date.now() * 1000);
+}
+
+const saveMindSequenceHighWater = () => atomicWrite(MIND_SEQUENCE_PATH, {
+  schemaVersion: MIND_SEQUENCE_SCHEMA_VERSION,
+  minds: Object.fromEntries(mindSequenceHighWater),
+});
 
 /**
  * Rotate when the active generation is full: active becomes the archive, the
@@ -150,14 +281,24 @@ async function hydrate() {
  * event whose only copy just aged out of the ledger is appendable again — which
  * is correct: a duplicate we can no longer see is no longer a duplicate.
  */
-async function rotateIfFull() {
-  if (activeCount < MAX_ACTIVE_EVENTS) return;
-  if (await pathExists(ARCHIVE_PATH)) await unlink(ARCHIVE_PATH);
-  await rename(ACTIVE_PATH, ARCHIVE_PATH);
-  archiveIds = activeIds;
-  activeIds = new Map();
-  activeCount = 0;
-  console.log(`🔁 Rotated CoS run event ledger at ${MAX_ACTIVE_EVENTS} events`);
+async function rotateIfFull(mindEvent) {
+  const count = mindEvent ? mindActiveCount : activeCount;
+  const limit = mindEvent ? MAX_ACTIVE_MIND_EVENTS : MAX_ACTIVE_EVENTS;
+  if (count < limit) return;
+  const activePath = mindEvent ? MIND_ACTIVE_PATH : ACTIVE_PATH;
+  const archivePath = mindEvent ? MIND_ARCHIVE_PATH : ARCHIVE_PATH;
+  if (await pathExists(archivePath)) await unlink(archivePath);
+  await rename(activePath, archivePath);
+  if (mindEvent) {
+    mindArchiveIds = mindActiveIds;
+    mindActiveIds = new Map();
+    mindActiveCount = 0;
+  } else {
+    archiveIds = activeIds;
+    activeIds = new Map();
+    activeCount = 0;
+  }
+  console.log(`🔁 Rotated ${mindEvent ? 'persistent mind' : 'CoS run'} event ledger at ${limit} events`);
 }
 
 /**
@@ -170,8 +311,8 @@ function expiryCutoff(now = Date.now()) {
 }
 
 /**
- * Would a reader see this line — i.e. is it structurally sound AND still inside
- * the age window?
+ * Would a reader see this line — structurally sound and either a mind event or
+ * still inside the ordinary-run age window?
  *
  * One predicate, used by the read path, the stats, and the prune, so all three
  * agree by construction. A structurally invalid or undatable line counts as
@@ -180,7 +321,8 @@ function expiryCutoff(now = Date.now()) {
  * would let unreadable bytes accumulate forever under a retention policy that
  * can never date them. The prune is the only thing that ever cleans them up.
  */
-const isRetained = (event, cutoff) => isStoredRunEvent(event) && event.at > cutoff;
+const isRetained = (event, cutoff) => isStoredRunEvent(event)
+  && (isPersistentMindEventKind(event.kind) || event.at > cutoff);
 
 /**
  * Rewrite both generations without their expired events, and drop the expired
@@ -223,18 +365,42 @@ async function pruneExpired({ now = Date.now(), force = false } = {}) {
 }
 
 async function appendNow(input) {
-  const event = buildRunEvent(input);
   await hydrate();
+  const mindEvent = isPersistentMindEventKind(input?.kind);
+  if (mindEvent && mindSequenceCheckpointError) throw new Error(mindSequenceCheckpointError);
+  // A stable explicit id lets a retry short-circuit before consuming a new
+  // sequence. Every supervisor boundary supplies one; derived ids remain
+  // available for one-off callers and ordinary lifecycle events.
+  if (mindEvent && input?.eventId && isStoredDuplicate(input.eventId, expiryCutoff())) {
+    return { appended: false, duplicate: true, event: null };
+  }
+  const previousSequence = mindEvent ? (mindSequenceHighWater.get(input.mindId) ?? null) : null;
+  const sequence = mindEvent ? nextMindSequence(input.mindId) : undefined;
+  const event = buildRunEvent(mindEvent ? {
+    ...input,
+    sequence,
+    data: { ...(input.data && typeof input.data === 'object' ? input.data : {}), previousSequence },
+  } : input);
   // Age out BEFORE the duplicate check: an event whose only copy just expired
   // must be appendable again, exactly as after a rotation.
   await pruneExpired();
   if (isStoredDuplicate(event.eventId, expiryCutoff())) {
     return { appended: false, duplicate: true, event };
   }
-  await rotateIfFull();
-  await appendJSONLine(ACTIVE_PATH, event);
-  activeIds.set(event.eventId, event.at);
-  activeCount += 1;
+  await rotateIfFull(mindEvent);
+  const activePath = mindEvent ? MIND_ACTIVE_PATH : ACTIVE_PATH;
+  await appendJSONLine(activePath, event);
+  const ids = mindEvent ? mindActiveIds : activeIds;
+  ids.set(event.eventId, { at: event.at, persistentMind: mindEvent });
+  if (mindEvent) mindActiveCount += 1;
+  else activeCount += 1;
+  if (mindEvent) {
+    mindSequenceHighWater.set(event.mindId, event.sequence);
+    // Mind generations are bounded by rotation, while rollups can live
+    // indefinitely. Persist the high-water separately so a clock rollback
+    // after raw retention rotates cannot reuse an old sequence range.
+    await saveMindSequenceHighWater();
+  }
   return { appended: true, duplicate: false, event };
 }
 
@@ -256,6 +422,13 @@ export function appendRunEvent(input) {
     return { appended: false, error: err.message };
   });
   return appendQueue;
+}
+
+/** Append one persistent-mind trajectory event through the shared queue. */
+export async function appendMindEvent(input) {
+  const result = await appendRunEvent({ ...input, mindId: input?.mindId || PERSISTENT_MIND_ID });
+  if (result.appended && result.event) runEventLogEvents.emit('mind:event', result.event);
+  return result;
 }
 
 /** Resolve once every queued append has landed. Used by the read path + tests. */
@@ -296,11 +469,12 @@ function schedulePrune() {
  * @param {number} [options.limit] - newest-N cap (default DEFAULT_READ_LIMIT)
  * @returns {Promise<object[]>} validated events in append order
  */
-export async function readRunEvents({ runId, agentId, taskId, kind, since, limit } = {}) {
+async function readRetainedEvents() {
+  await hydrate();
   await schedulePrune();
   const [archive, active] = await Promise.all([
     readJSONLFile(ARCHIVE_PATH),
-    readJSONLFile(ACTIVE_PATH)
+    readJSONLFile(ACTIVE_PATH),
   ]);
   // The age bound is enforced on read as well as on disk, so it holds in the
   // window between prunes — a reader must never see an event the retention
@@ -311,7 +485,11 @@ export async function readRunEvents({ runId, agentId, taskId, kind, since, limit
   // The check deliberately admits kinds this build does not know (see
   // `isStoredRunEvent`): a newer install's ledger must still read here. The
   // same predicate bounds the age, so a reader never sees an expired event.
-  let events = [...archive, ...active].filter((e) => isRetained(e, cutoff));
+  return [...archive, ...active].filter((event) => isRetained(event, cutoff) && !isMindShapedEvent(event));
+}
+
+export async function readRunEvents({ runId, agentId, taskId, kind, since, limit } = {}) {
+  let events = await readRetainedEvents();
 
   if (runId) events = events.filter((e) => e.runId === runId);
   if (agentId) events = events.filter((e) => e.agentId === agentId);
@@ -321,6 +499,54 @@ export async function readRunEvents({ runId, agentId, taskId, kind, since, limit
 
   const cap = Math.min(Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : DEFAULT_READ_LIMIT, MAX_READ_LIMIT);
   return events.length > cap ? events.slice(events.length - cap) : events;
+}
+
+/** All retained events for one mind, ordered by durable sequence. */
+export async function readPersistentMindHistory(mindId = PERSISTENT_MIND_ID) {
+  await hydrate();
+  const [archive, active] = await Promise.all([
+    readJSONLFile(MIND_ARCHIVE_PATH),
+    readJSONLFile(MIND_ACTIVE_PATH),
+  ]);
+  return [...archive, ...active]
+    // Preserve structurally valid future kinds in the physical mind stream.
+    // Current projections can ignore an unknown kind without deleting history.
+    .filter((event) => isMindShapedEvent(event) && event.mindId === mindId)
+    .sort((a, b) => a.sequence - b.sequence || String(a.eventId).localeCompare(String(b.eventId)));
+}
+
+/**
+ * Cursor-aware mind tail read. A missing predecessor is explicit `gap: true`;
+ * the same response carries a fresh projection and retained tail so a client
+ * can recover without treating the gap as an empty conversation.
+ */
+export async function readPersistentMindEvents({
+  mindId = PERSISTENT_MIND_ID,
+  cursor,
+  limit = PERSISTENT_MIND_TRAJECTORY_LIMITS.defaultPageSize,
+} = {}) {
+  const retained = await readPersistentMindHistory(mindId);
+  const cap = Math.min(
+    Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : PERSISTENT_MIND_TRAJECTORY_LIMITS.defaultPageSize,
+    PERSISTENT_MIND_TRAJECTORY_LIMITS.maxPageSize
+  );
+  const parsed = cursor ? parsePersistentMindCursor(cursor) : null;
+  const cursorIndex = parsed
+    ? retained.findIndex((event) => event.sequence === parsed.sequence && event.eventId === parsed.eventId)
+    : -1;
+  const gap = Boolean(cursor) && cursorIndex < 0;
+  const available = cursorIndex >= 0 ? retained.slice(cursorIndex + 1) : retained;
+  const events = cursorIndex >= 0 ? available.slice(0, cap) : available.slice(-cap);
+  const last = events.at(-1) || retained.at(-1) || null;
+  return {
+    mindId,
+    events,
+    cursor: persistentMindEventCursor(last),
+    gap,
+    hasMore: cursorIndex >= 0 && available.length > events.length,
+    truncated: cursorIndex < 0 && available.length > events.length,
+    snapshot: projectPersistentMind(retained, mindId),
+  };
 }
 
 /**
@@ -366,16 +592,19 @@ export async function getRunDiagnostic(id) {
  * are held to, so "why is this run missing" has an answer that isn't a guess.
  */
 export async function getRunEventLedgerStats() {
+  await hydrate();
   await schedulePrune();
-  const [archive, active] = await Promise.all([
+  const [archive, active, mindArchive, mindActive] = await Promise.all([
     readJSONLFile(ARCHIVE_PATH),
-    readJSONLFile(ACTIVE_PATH)
+    readJSONLFile(ACTIVE_PATH),
+    readJSONLFile(MIND_ARCHIVE_PATH),
+    readJSONLFile(MIND_ACTIVE_PATH),
   ]);
   // Counted through the SAME predicate the read path uses, so "stats say 40
   // events" and "the events endpoint returns 40" can never disagree.
   const cutoff = expiryCutoff();
-  const freshArchive = archive.filter((e) => isRetained(e, cutoff));
-  const freshActive = active.filter((e) => isRetained(e, cutoff));
+  const freshArchive = archive.filter((e) => isRetained(e, cutoff) && !isMindShapedEvent(e));
+  const freshActive = active.filter((e) => isRetained(e, cutoff) && !isMindShapedEvent(e));
   const oldest = freshArchive[0]?.at ?? freshActive[0]?.at ?? null;
   return {
     activeEvents: freshActive.length,
@@ -383,8 +612,13 @@ export async function getRunEventLedgerStats() {
     maxActiveEvents: MAX_ACTIVE_EVENTS,
     maxRetainedEvents: MAX_ACTIVE_EVENTS * 2,
     maxEventAgeDays: MAX_EVENT_AGE_DAYS,
+    mindActiveEvents: mindActive.filter(isMindShapedEvent).length,
+    mindArchivedEvents: mindArchive.filter(isMindShapedEvent).length,
+    maxActiveMindEvents: MAX_ACTIVE_MIND_EVENTS,
+    maxRetainedMindEvents: MAX_ACTIVE_MIND_EVENTS * 2,
+    persistentMindAgeBounded: false,
     oldestEventAt: oldest,
-    kinds: AGENT_RUN_EVENT_KINDS
+    kinds: RUN_EVENT_KINDS
   };
 }
 
@@ -398,6 +632,12 @@ export function __resetRunEventLogCache() {
   activeIds = null;
   archiveIds = null;
   activeCount = 0;
+  mindActiveIds = null;
+  mindArchiveIds = null;
+  mindActiveCount = 0;
+  mindSequenceHighWater = null;
+  mindSequenceCheckpointError = null;
   lastPrunedAt = null;
+  hydrationPromise = null;
   appendQueue = Promise.resolve();
 }

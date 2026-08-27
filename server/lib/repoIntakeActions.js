@@ -10,19 +10,31 @@
  */
 
 import { isPlainObject } from './objects.js';
+import { EFFORT_LEVELS } from './providerModels.js';
 
 export const REPO_INTAKE_KEYS = ['malwareScan', 'learn'];
 
+const normalizeOptionalString = (value, maxLength) => {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed && trimmed.length <= maxLength ? trimmed : undefined;
+};
+
+const normalizeOptionalEffort = (value) => {
+  const effort = normalizeOptionalString(value, 32)?.toLowerCase();
+  return effort && EFFORT_LEVELS.includes(effort) ? effort : undefined;
+};
+
 /**
- * Normalize a client-supplied intake object to `{ malwareScan, learn }` booleans,
- * or null when nothing was requested.
+ * Normalize a client-supplied intake object to the two action booleans plus
+ * optional repo-study context/provider pins, or null when nothing was requested.
  *
  * Returning null rather than an all-false object matters: it's what keeps
  * "the user ticked nothing" from being persisted onto every captured link and
  * from scheduling a no-op intake pass after each clone.
  *
  * @param {unknown} input
- * @returns {{ malwareScan: boolean, learn: boolean, targetAppId?: string, studyContext?: string } | null}
+ * @returns {{ malwareScan: boolean, learn: boolean, targetAppId?: string, studyContext?: string, providerId?: string, model?: string, effort?: string } | null}
  */
 export function normalizeRepoIntake(input) {
   if (!isPlainObject(input)) return null;
@@ -33,6 +45,14 @@ export function normalizeRepoIntake(input) {
   }
   if (normalized.learn && typeof input.studyContext === 'string' && input.studyContext.trim()) {
     normalized.studyContext = input.studyContext.trim();
+  }
+  if (normalized.learn) {
+    const providerId = normalizeOptionalString(input.providerId, 120);
+    const model = normalizeOptionalString(input.model, 200);
+    const effort = normalizeOptionalEffort(input.effort);
+    if (providerId) normalized.providerId = providerId;
+    if (model) normalized.model = model;
+    if (effort) normalized.effort = effort;
   }
   return normalized;
 }

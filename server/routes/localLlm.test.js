@@ -87,9 +87,17 @@ vi.mock('../services/localModelAgentBenchmark.js', () => ({
 
 vi.mock('../services/llamaServerManager.js', () => ({
   getLlamaServerStatus: vi.fn(async () => ({ installed: true, running: false })),
+  getLlamaServerUpdateStatus: vi.fn(async () => ({
+    version: null,
+    latestVersion: null,
+    updateAvailable: false,
+    canUpgrade: false,
+    downloadUrl: 'https://github.com/ggml-org/llama.cpp/releases',
+  })),
   startLlamaServer: vi.fn(async () => ({ success: true, pid: 123 })),
   stopLlamaServer: vi.fn(async () => ({ success: true })),
   installLlamaServer: vi.fn(async () => ({ success: true, message: 'installed' })),
+  upgradeLlamaServer: vi.fn(async () => ({ success: true, note: 'updated' })),
 }));
 
 // The launcher's curated presets (and their weights' on-disk state) ride along
@@ -672,6 +680,35 @@ describe('llama-server routes', () => {
     });
   });
 
+  it('GET /api/local-llm/llama-server/status keeps Homebrew probes out of lifecycle status', async () => {
+    const { getLlamaServerUpdateStatus } = await import('../services/llamaServerManager.js');
+    const res = await request(makeApp()).get('/api/local-llm/llama-server/status');
+
+    expect(res.status).toBe(200);
+    expect(getLlamaServerUpdateStatus).not.toHaveBeenCalled();
+    expect(res.body).not.toHaveProperty('updateAvailable');
+  });
+
+  it('GET /api/local-llm/llama-server/update-status returns llama.cpp update metadata', async () => {
+    const { getLlamaServerUpdateStatus } = await import('../services/llamaServerManager.js');
+    getLlamaServerUpdateStatus.mockResolvedValueOnce({
+      version: '0.1.1-dev',
+      latestVersion: '0.3.0',
+      updateAvailable: true,
+      canUpgrade: true,
+      downloadUrl: 'https://github.com/ggml-org/llama.cpp/releases',
+    });
+
+    const res = await request(makeApp()).get('/api/local-llm/llama-server/update-status');
+
+    expect(res.body).toMatchObject({
+      version: '0.1.1-dev',
+      latestVersion: '0.3.0',
+      updateAvailable: true,
+      canUpgrade: true,
+    });
+  });
+
   it('GET /api/local-llm/llama-server/status publishes the drafter-free spec types', async () => {
     // The card renders the picker from this list, so a launch with no drafter
     // GGUF (`ngram-map-k`) has to be reachable without the user knowing the
@@ -737,5 +774,21 @@ describe('llama-server routes', () => {
     const res = await request(makeApp()).post('/api/local-llm/llama-server/install');
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ success: true, message: 'installed' });
+  });
+
+  it('POST /api/local-llm/llama-server/upgrade emits progress and returns the result', async () => {
+    const { upgradeLlamaServer } = await import('../services/llamaServerManager.js');
+    upgradeLlamaServer.mockResolvedValueOnce({ success: true, note: 'updated and restarted' });
+    const app = makeApp();
+
+    const res = await request(app).post('/api/local-llm/llama-server/upgrade');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, note: 'updated and restarted' });
+    expect(upgradeLlamaServer).toHaveBeenCalledWith({ onProgress: expect.any(Function) });
+    expect(app.get('io').emit).toHaveBeenCalledWith(
+      'localLlm:progress',
+      { event: 'complete', message: 'llama.cpp updated — updated and restarted' },
+    );
   });
 });

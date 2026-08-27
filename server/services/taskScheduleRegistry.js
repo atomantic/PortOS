@@ -5,7 +5,7 @@
  * so app configuration can consume task definitions without forming a cycle.
  */
 
-import { BRANCHES_PER_AGENT_MAX, BRANCHES_PER_AGENT_MIN } from '../lib/cosValidation.js';
+import { BRANCHES_PER_AGENT_MAX, BRANCHES_PER_AGENT_MIN, DEFAULT_REPO_SYNC_VERIFY_MODE } from '../lib/cosValidation.js';
 import { isAuditTaskType, defaultFileIssuesFor } from '../lib/auditCatalog.js';
 import { INTERVAL_TYPES } from './taskScheduleConstants.js';
 
@@ -46,12 +46,21 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   // coordinator posture, since a cleared stash is a repo-hygiene side effect,
   // never a commit. See DEFAULT_TASK_PROMPTS['stash-cleanup'].
   'stash-cleanup',
-  // PortOS-only: researches the current best local LLMs per category and
-  // refreshes the bundled suggested-models catalog (server/lib/localLlmCatalog.js)
-  // + the editorial family ranking (server/lib/localModelHeuristics.js), opening a
-  // PR. No-ops on any repo lacking that catalog file, so enabling it on a
-  // non-PortOS app does nothing. See DEFAULT_TASK_PROMPTS['refresh-local-llm-catalog'].
-  'refresh-local-llm-catalog',
+  // Install-wide git hygiene sweep: for EVERY managed app (PortOS included) put
+  // the checkout back on its default branch, level with origin both ways, with
+  // no leftover local branches/worktrees and an empty stash list. A deterministic
+  // Tier-1 pass in services/repoSync.js does everything provable with no LLM call
+  // (push what is strictly ahead, fast-forward the default branch, return to it
+  // when the current branch is clean + already merged, delegate merged-branch and
+  // worktree deletion to branchReconcile, drop stashes whose content is identical
+  // to the default branch). It dispatches ONE coordinator agent only when the
+  // sweep leaves something needing judgment — a mid-flight merge/rebase,
+  // uncommitted work, a diverged branch, unpushed commits with no PR, a stash it
+  // could not prove redundant — or, under the default `verifyMode:
+  // 'when-changed'`, to double-check a run that actually mutated something.
+  // On-demand only, and GLOBAL: 'Run Now' with no app sweeps the whole install,
+  // which is the shape the task exists for. Non-committing coordinator posture.
+  'repo-sync',
   // The planning-only sibling of `feature-ideas`: runs the same brainstorm
   // research (PRD.md/GOALS.md or repository docs, changelog/git log, and
   // closed-unmerged PRs)
@@ -149,6 +158,15 @@ const CODE_REVIEWER_INTERVAL = { type: INTERVAL_TYPES.WEEKLY, enabled: false, we
  */
 export const PERPETUAL_DRAIN_DISPATCH_CAP = 5;
 export const DEFAULT_BRANCHES_PER_AGENT = 3;
+
+/**
+ * Task types whose "Run Now" with NO app is the REAL run — they sweep every
+ * managed app in one dispatch rather than acting on one. Surfaced per task on
+ * `getScheduleStatus()` so the schedule UI can offer an "All apps" entry
+ * instead of forcing every run through the app picker (which would make the
+ * install-wide lane unreachable on any install that has apps).
+ */
+export const INSTALL_WIDE_TASK_TYPES = new Set(['repo-sync']);
 
 export const DEFAULT_TASK_INTERVALS = {
   'security':            { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
@@ -264,6 +282,15 @@ export const DEFAULT_TASK_INTERVALS = {
   // there's no useful cadence for a stash a user hasn't necessarily touched
   // since the last run — they trigger it when they notice stash clutter.
   'stash-cleanup':       { type: INTERVAL_TYPES.ON_DEMAND, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { ...NON_COMMITTING_COORDINATOR_METADATA } },
+  // repo-sync sweeps EVERY managed app's checkout in one run (see the type list
+  // above). Like stash-cleanup it runs in the live checkouts — a branch, a stash,
+  // and a worktree are all properties of the checkout they live in, so a CoS
+  // worktree would hide every one of them — and ships no code of its own.
+  // On-demand: the user runs it when they want a clean slate, and a cadence would
+  // switch branches under a checkout they may be sitting in. Every action toggle
+  // is ON except `reapRemotes`, which DELETES branches on origin and so stays
+  // opt-in even though the reconciler only ever reaps already-merged ones.
+  'repo-sync':           { type: INTERVAL_TYPES.ON_DEMAND, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { ...NON_COMMITTING_COORDINATOR_METADATA, syncPush: true, syncPull: true, switchDefault: true, cleanupMerged: true, dropStashes: true, reapRemotes: false, verifyMode: DEFAULT_REPO_SYNC_VERIFY_MODE } },
   'pr-reviewer':         { type: INTERVAL_TYPES.CUSTOM, intervalMs: 7200000, enabled: false, weekdaysOnly: true, providerId: null, model: null, prompt: null, taskMetadata: { readOnly: true, pipeline: { stages: [{ name: 'Security Scan', promptKey: 'pr-reviewer-security', readOnly: true }, { name: 'Code Review & Merge', promptKey: 'pr-reviewer-review', readOnly: false }] } } },
   'code-reviewer-a':     { ...CODE_REVIEWER_INTERVAL },
   'code-reviewer-b':     { ...CODE_REVIEWER_INTERVAL },
@@ -309,19 +336,13 @@ export const DEFAULT_TASK_INTERVALS = {
   // customized prompt can make changes if the operator wants — the shipped
   // default prompt only reviews + comments.
   'pr-watcher':          { type: INTERVAL_TYPES.CUSTOM, intervalMs: 1800000, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { prAuthorFilter: 'any', readOnly: false } },
-  // refresh-local-llm-catalog maintains PortOS's own bundled suggested-models
-  // catalog. CoS manages the worktree + PR (like feature-ideas/do-replan) — the
-  // agent only edits the catalog file. Weekly is generous; the prompt only opens
-  // a PR when the catalog is actually stale, so most runs are no-ops. Off by
-  // default; the user enables it on the PortOS app.
-  'refresh-local-llm-catalog': { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: true, simplify: true } },
   // plan-feature files a plan, not code — tracker-filing posture mirrors
   // reference-watch: writable (a file-based tracker commits checklist items), no
   // managed worktree, no PR. Weekly (not daily like feature-ideas) so an
   // enabled run doesn't flood the tracker with plans — one filed plan per run.
   // runAfter do-replan so proposals are checked against the freshest available
   // work tracker before a new feature plan is filed.
-  'plan-feature':         { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, runAfter: ['do-replan'], taskMetadata: { useWorktree: false, openPR: false, readOnly: false } },
+  'plan-feature':         { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, dataInputs: ['product-requirements', 'project-goals', 'open-issues', 'open-pull-requests', 'closed-unmerged-pull-requests'], runAfter: ['do-replan'], taskMetadata: { useWorktree: false, openPR: false, readOnly: false } },
   // layered-intelligence is a programmatic-I/O task (agent-backed, hooked). Daily
   // by default; per-app scheduling (enabled/interval/provider/model) is set in the
   // Intelligence tab and stored on the app's taskTypeOverrides['layered-intelligence'].
@@ -358,7 +379,7 @@ export const MANAGED_AGENT_OPTIONS = {
   // fields, so an unmanaged `worktreeChangesExpected` would silently go absent and the
   // task bookkeeping would otherwise treat the clean worktree as missing code work.
   ...Object.fromEntries(
-    ['branch-reconcile', 'branch-cleanup', 'issue-reconcile', 'jira-status-report']
+    ['branch-reconcile', 'branch-cleanup', 'issue-reconcile', 'jira-status-report', 'stash-cleanup', 'repo-sync']
       .map((t) => [t, ['useWorktree', 'openPR', 'worktreeChangesExpected']])
   ),
   // claim-issue's prompt creates its own claim/issue-<num> worktree (same
@@ -367,8 +388,7 @@ export const MANAGED_AGENT_OPTIONS = {
   // claim-work delegates to one of the above prompt bodies, each of which
   // creates its own worktree + PR — so the same lock applies to the router.
   'claim-work': ['useWorktree', 'openPR', 'claimFlow'],
-  'release-check': ['useWorktree', 'openPR', 'worktreeChangesExpected', 'slashdoCommand'],
-  'stash-cleanup': ['useWorktree', 'openPR', 'worktreeChangesExpected']
+  'release-check': ['useWorktree', 'openPR', 'worktreeChangesExpected', 'slashdoCommand']
 };
 
 // Strip managed-agent fields from a per-app override map before merging on top
@@ -461,7 +481,7 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'data-safety': 'Data/upgrade-safety audit — file issues (default) or implement fixes',
   'simplify': 'Dead-code/duplication audit — file issues (default) or implement removals',
   'stash-cleanup': 'Triage git stash list — drop entries superseded by or stale relative to main, leave real unlanded work in place',
-  'refresh-local-llm-catalog': "Refresh PortOS's bundled suggested local-model catalog + editorial ranking (PortOS repo only)",
+  'repo-sync': 'Sync every managed app with origin — back on the default branch, pushed and pulled, merged branches/worktrees and redundant stashes cleared',
   'plan-feature': "Brainstorm one feature and file its decision-complete plan to the app's work tracker (no code)",
   'layered-intelligence': "Read this app's goals + telemetry, ask a reasoning model for one improvement, and file one deduplicated tracker issue — no code, no agent"
 };

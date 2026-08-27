@@ -132,6 +132,15 @@ function modelCleanupCandidates(downloaded) {
   }));
 }
 
+/**
+ * Build a sorted array of cleanup candidates from data categories, downloaded models, and package caches.
+ *
+ * @param {Object} options
+ * @param {Array<Object>} options.categories Data categories from dataManager
+ * @param {Array<Object>} options.downloadedModels Model inventory objects
+ * @param {number|null} options.npmCacheBytes Size of npm cache in bytes
+ * @returns {Array<Object>} Sorted cleanup candidates by estimated size descending
+ */
 export function buildCleanupCandidates({ categories, downloadedModels, npmCacheBytes }) {
   const candidates = [
     ...dataCleanupCandidates(categories),
@@ -546,6 +555,13 @@ export function resetSystemResourceReportCache() {
   reportInFlight = null;
 }
 
+/**
+ * Fetch or compute the cached system resource report.
+ *
+ * @param {Object} [options]
+ * @param {boolean} [options.force=false] Force bypassing the 30-second report cache
+ * @returns {Promise<Object>} System resource report containing storage breakdown, queues, and cleanup candidates
+ */
 export function getSystemResourceReport({ force = false } = {}) {
   if (!force && reportCache && Date.now() - reportCacheAt < REPORT_CACHE_TTL_MS) {
     return Promise.resolve(reportCache);
@@ -575,6 +591,7 @@ export function buildSystemResourceTriagePrompt(report) {
     kind: candidate.kind,
     estimatedBytes: candidate.estimatedBytes,
     risk: candidate.risk,
+    reason: candidate.reason,
     loaded: candidate.loaded,
     busy: candidate.busy,
     manualOnly: candidate.manualOnly,
@@ -604,6 +621,17 @@ SYSTEM REPORT (no filesystem paths or personal filenames):
 ${JSON.stringify(context, null, 2)}`;
 }
 
+/**
+ * Perform AI-assisted system storage triage based on the current system resource report.
+ *
+ * @param {Object} [options]
+ * @param {string} [options.providerId] AI provider identifier
+ * @param {string} [options.model] Specific AI model to use
+ * @param {string} [options.effort] Effort level for supported reasoning models
+ * @param {Function} [options.onRunCreated] Callback invoked when an AI run is spawned
+ * @param {Function} [options.onRunSettled] Callback invoked when an AI run settles
+ * @returns {Promise<Object>} Triage result containing structured recommendations and cautions
+ */
 export async function triageSystemResources({
   providerId,
   model,

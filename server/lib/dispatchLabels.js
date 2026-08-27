@@ -170,6 +170,36 @@ export function jiraContributorLabels({ goodFirstIssue, helpWanted } = {}) {
   return labels;
 }
 
+/** Both forge contributor labels, in the order they are applied and released. */
+export const CONTRIBUTOR_LABELS = Object.freeze([GOOD_FIRST_ISSUE_LABEL, HELP_WANTED_LABEL]);
+
+/** Jira-safe equivalents of `CONTRIBUTOR_LABELS`. */
+export const JIRA_CONTRIBUTOR_LABELS = Object.freeze([
+  JIRA_GOOD_FIRST_ISSUE_LABEL,
+  JIRA_HELP_WANTED_LABEL,
+]);
+
+/**
+ * Forge commands that retire an issue's contributor invitations at claim time.
+ * `good first issue` / `help wanted` advertise work to a *human* who might pick
+ * it up; once an autonomous claim holds the issue that invitation is stale, so
+ * the claim flows release both labels alongside setting the assignee and
+ * `in-progress`.
+ *
+ * ONE command per label, never a single combined edit: both `gh issue edit
+ * --remove-label` and `glab issue update --unlabel` fail the WHOLE call when any
+ * named label is absent from the issue, so a combined call on an issue carrying
+ * only `help wanted` would remove neither. Each is best-effort (`2>/dev/null`) —
+ * an issue carrying neither label is the common case and must never abort a claim.
+ *
+ * `issueRef` is inserted verbatim as shell text (e.g. `"${NUM}"`).
+ */
+export function formatContributorLabelReleaseCommands(issueRef, { cli = 'gh' } = {}) {
+  return CONTRIBUTOR_LABELS.map((label) => (cli === 'glab'
+    ? `glab issue update ${issueRef} --unlabel ${shellQuote(label)} 2>/dev/null`
+    : `gh issue edit ${issueRef} --remove-label ${shellQuote(label)} 2>/dev/null`));
+}
+
 /** Dispatch hints + contributor labels for one GitHub/GitLab issue. */
 export function forgeIssueLabels({ model, effort, goodFirstIssue, helpWanted } = {}) {
   return [

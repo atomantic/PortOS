@@ -29,6 +29,9 @@ import {
   allDispatchLabelSpecs,
   formatLabelCreateCommand,
   formatRepeatedLabelFlags,
+  CONTRIBUTOR_LABELS,
+  JIRA_CONTRIBUTOR_LABELS,
+  formatContributorLabelReleaseCommands,
 } from './dispatchLabels.js';
 
 describe('dispatch label vocabulary', () => {
@@ -139,6 +142,24 @@ describe('label specs and CLI formatting', () => {
     expect(forgeIssueLabels({ model: 'light' })).toEqual(['model:light']);
     expect(jiraIssueLabels({ effort: 'low', helpWanted: true }))
       .toEqual(['effort-low', JIRA_HELP_WANTED_LABEL]);
+  });
+
+  // A claim holds the issue, so the invitation to a human contributor is stale.
+  // The commands must stay SEPARATE and best-effort: a forge fails the whole edit
+  // when any named label is absent, so one combined call on an issue carrying
+  // only `help wanted` would remove neither — and an issue carrying neither is
+  // the common case, which must never abort a claim.
+  it('releases both contributor labels one best-effort command at a time', () => {
+    expect(CONTRIBUTOR_LABELS).toEqual([GOOD_FIRST_ISSUE_LABEL, HELP_WANTED_LABEL]);
+    expect(JIRA_CONTRIBUTOR_LABELS).toEqual([JIRA_GOOD_FIRST_ISSUE_LABEL, JIRA_HELP_WANTED_LABEL]);
+    expect(formatContributorLabelReleaseCommands('"${NUM}"')).toEqual([
+      `gh issue edit "\${NUM}" --remove-label 'good first issue' 2>/dev/null`,
+      `gh issue edit "\${NUM}" --remove-label 'help wanted' 2>/dev/null`,
+    ]);
+    expect(formatContributorLabelReleaseCommands('"${NUM}"', { cli: 'glab' })).toEqual([
+      `glab issue update "\${NUM}" --unlabel 'good first issue' 2>/dev/null`,
+      `glab issue update "\${NUM}" --unlabel 'help wanted' 2>/dev/null`,
+    ]);
   });
 
   it('emits repeated --label flags, never a comma list', () => {

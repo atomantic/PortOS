@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router';
-import { GitBranch, GitPullRequest, Lock, Copy } from 'lucide-react';
+import { GitBranch, GitPullRequest, Lock, Copy, ShieldCheck } from 'lucide-react';
 import IconPicker from '../IconPicker';
 import * as api from '../../services/api';
 import { PORTOS_APP_ID } from '../../services/apiCore';
@@ -12,24 +12,28 @@ import { copyToClipboard } from '../../lib/clipboard';
 import LayeredIntelligenceTab, { buildLayeredIntelligenceUpdate, buildLayeredIntelligenceScheduleUpdate } from './LayeredIntelligenceTab';
 import { PROVIDER_TYPES } from '../../utils/providers';
 import { DEFAULT_PR_COMPLETION, PR_COMPLETION_OPTIONS, prCompletionOption } from '../cos/constants';
-import { WORK_TRACKER_OPTIONS, WORK_TRACKER_LABELS, appUsesJira } from './constants';
+import {
+  APP_FEATURES,
+  APP_FEATURE_IDS,
+  WORK_TRACKER_OPTIONS,
+  WORK_TRACKER_LABELS,
+  appUsesJira,
+  getAppFeatureOverride,
+  isAppFeatureEnabled,
+} from './constants';
+import { useInstanceFeatures } from '../../hooks/useInstanceFeatures.js';
 
-// JIRA is deliberately absent: its config moved to the app detail page's JIRA
-// tab (/apps/:id/jira), where it sits next to the sprint board it drives and has
-// the width the instance/project/board pickers need. This drawer therefore never
-// sends a `jira` key — the PUT shallow-merges server-side, so the stored config
-// is preserved untouched.
-// The Workflow tab's work-tracker picker is the ONLY entry point into that tab
-// for an app that has never had JIRA turned on — the tab itself is hidden until
-// `appUsesJira(app)` holds (see constants.js), so choosing JIRA here is what
-// reveals it.
+// JIRA configuration remains on the app detail page's JIRA tab (/apps/:id/jira),
+// where it sits next to the sprint board it drives. This drawer owns only the
+// per-app feature visibility overrides; it never sends a `jira` key, so saving
+// an unrelated field cannot clobber the detail tab's configuration.
 const TABS = [
   { id: 'general', label: 'General' },
   { id: 'ports', label: 'Ports & TLS' },
   { id: 'commands', label: 'Commands' },
   { id: 'workflow', label: 'Workflow' },
   { id: 'intelligence', label: 'Intelligence' },
-  { id: 'datadog', label: 'DataDog' }
+  { id: 'features', label: 'Features' }
 ];
 const TAB_IDS = TABS.map(t => t.id);
 
@@ -63,11 +67,19 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
     defaultOpenPR: app.defaultOpenPR || false,
     defaultPrCompletion: app.defaultPrCompletion || DEFAULT_PR_COMPLETION,
     defaultUseWorktree: app.defaultUseWorktree || app.defaultOpenPR || false,
+    // Unset means ON server-side, so an app that has never been saved shows checked.
+    verifyRepoStateOnCompletion: app.verifyRepoStateOnCompletion !== false,
+    featureOverrides: Object.fromEntries(
+      APP_FEATURE_IDS.map(featureId => [featureId, getAppFeatureOverride(app, featureId)])
+    ),
+    featureOverridesTouched: false,
     datadogEnabled: app.datadog?.enabled || false,
     datadogInstanceId: app.datadog?.instanceId || '',
     datadogServiceName: app.datadog?.serviceName || '',
-    datadogEnvironment: app.datadog?.environment || ''
+    datadogEnvironment: app.datadog?.environment || '',
+    datadogConfigTouched: false,
   });
+  const { features: instanceFeatures, error: instanceFeaturesError } = useInstanceFeatures();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   // Layered Intelligence (self-improvement loop) config lives in its own slice —
@@ -254,13 +266,25 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
       defaultUseWorktree: formData.defaultUseWorktree || formData.defaultOpenPR,
       defaultOpenPR: formData.defaultOpenPR,
       defaultPrCompletion: formData.defaultPrCompletion,
-      datadog: formData.datadogEnabled ? {
+      verifyRepoStateOnCompletion: formData.verifyRepoStateOnCompletion,
+    };
+
+    // Do not stamp an all-null map during an unrelated edit. Leaving the map
+    // absent preserves the legacy JIRA-work-tracker bootstrap and keeps future
+    // global changes flowing to apps whose feature controls were never touched.
+    if (formData.featureOverridesTouched) data.featureOverrides = formData.featureOverrides;
+
+    // Keep the integration slice out of unrelated saves. The new feature map
+    // handles tab visibility, while this legacy slice holds DataDog's runtime
+    // connection details; omitting it preserves an existing configuration.
+    if (formData.datadogConfigTouched) {
+      data.datadog = formData.datadogEnabled ? {
         enabled: true,
         instanceId: formData.datadogInstanceId || undefined,
         serviceName: formData.datadogServiceName || undefined,
         environment: formData.datadogEnvironment || undefined
-      } : { enabled: false }
-    };
+      } : { enabled: false };
+    }
 
     // Only send layeredIntelligence when the user actually changed a BEHAVIOR
     // field (sources/scopes/rules/handoff) — the server merges the PATCH over the
@@ -647,6 +671,20 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
                   {prCompletionOption(formData.defaultPrCompletion)?.description}
                 </p>
               </div>
+              <label htmlFor="edit-app-verify-repo-state" className="flex items-center gap-2 cursor-pointer">
+                <input
+                  id="edit-app-verify-repo-state"
+                  type="checkbox"
+                  checked={formData.verifyRepoStateOnCompletion}
+                  onChange={e => setFormData(prev => ({ ...prev, verifyRepoStateOnCompletion: e.target.checked }))}
+                  className="rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent"
+                />
+                <ShieldCheck size={14} className="text-amber-400" />
+                <span className="text-sm text-white">Verify repo state after each agent</span>
+              </label>
+              <p className="ml-6 text-xs text-gray-500">
+                Audits git and the forge once an agent completes. A leftover worktree, an undeleted branch, or an unmerged PR files a recovery task instead of being silently left behind.
+              </p>
             </div>
           )}
 
@@ -663,70 +701,136 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
             />
           )}
 
-          {activeTab === 'datadog' && (
-            <div className="space-y-3">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={formData.datadogEnabled}
-                  onChange={e => setFormData({ ...formData, datadogEnabled: e.target.checked })}
-                  className="rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent"
-                />
-                <span className="text-sm text-white">Enable DataDog Monitoring</span>
-              </label>
+          {activeTab === 'features' && (
+            <div className="space-y-4">
+              <div>
+                <h2 className="text-lg font-semibold text-white">App features</h2>
+                <p className="text-sm text-gray-400 mt-1">
+                  Each app inherits the install-wide setting from Settings &gt; Features unless you choose an override here.
+                </p>
+              </div>
 
-              {formData.datadogEnabled && (
-                <>
-                  {datadogInstances.length === 0 ? (
-                    <Banner tone="warning" size="md">
-                      No DataDog instances configured. <Link to="/devtools/datadog" className="underline hover:text-white">Configure DataDog</Link> first.
-                    </Banner>
-                  ) : (
-                    <>
-                      <div>
-                        <label htmlFor="edit-app-datadog-instance" className="block text-sm text-gray-400 mb-1">DataDog Instance</label>
+              {APP_FEATURES.map(feature => {
+                const override = formData.featureOverrides?.[feature.id] ?? null;
+                const globalFeature = instanceFeatures?.find(item => item?.id === feature.id);
+                const globalStatus = instanceFeaturesError
+                  ? 'unavailable'
+                  : instanceFeatures === null
+                    ? 'loading'
+                    : globalFeature?.enabled === false ? 'off' : 'on';
+                const effectiveEnabled = isAppFeatureEnabled(
+                  { ...app, featureOverrides: formData.featureOverrides },
+                  feature.id,
+                  globalFeature?.enabled,
+                );
+
+                return (
+                  <div key={feature.id} className="bg-port-card border border-port-border rounded-lg p-3 space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-start gap-3">
+                      <div className="min-w-0 flex-1">
+                        <h3 className="text-sm font-semibold text-white">{feature.label}</h3>
+                        <p className="text-sm text-gray-400 mt-1">{feature.description}</p>
+                        <p className={`text-xs mt-2 ${effectiveEnabled ? 'text-port-success' : 'text-gray-500'}`}>
+                          {override === null
+                            ? `Inherited from global settings (currently ${globalStatus})`
+                            : `${feature.label} is ${effectiveEnabled ? 'enabled' : 'disabled'} for this app`}
+                        </p>
+                      </div>
+                      <div className="sm:w-52">
+                        <label htmlFor={`edit-app-feature-${feature.id}`} className="block text-xs text-gray-400 mb-1">{feature.label} availability</label>
                         <select
-                          id="edit-app-datadog-instance"
-                          value={formData.datadogInstanceId}
-                          onChange={e => setFormData({ ...formData, datadogInstanceId: e.target.value })}
+                          id={`edit-app-feature-${feature.id}`}
+                          value={override === true ? 'enabled' : override === false ? 'disabled' : 'inherit'}
+                          onChange={e => setFormData(prev => ({
+                            ...prev,
+                            featureOverridesTouched: true,
+                            featureOverrides: {
+                              ...prev.featureOverrides,
+                              [feature.id]: e.target.value === 'inherit' ? null : e.target.value === 'enabled',
+                            },
+                          }))}
                           className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
                         >
-                          <option value="">Select instance...</option>
-                          {datadogInstances.map(inst => (
-                            <option key={inst.id} value={inst.id}>{inst.name} ({inst.site})</option>
-                          ))}
+                          <option value="inherit">Use global setting</option>
+                          <option value="enabled">Enabled for this app</option>
+                          <option value="disabled">Disabled for this app</option>
                         </select>
                       </div>
+                    </div>
 
-                      <div>
-                        <label htmlFor="edit-app-datadog-service" className="block text-sm text-gray-400 mb-1">Service Name</label>
-                        <input
-                          id="edit-app-datadog-service"
-                          type="text"
-                          value={formData.datadogServiceName}
-                          onChange={e => setFormData({ ...formData, datadogServiceName: e.target.value })}
-                          className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
-                          placeholder="e.g., my-app-service"
-                        />
-                        <p className="text-xs text-gray-500 mt-1">The &quot;service&quot; tag your app reports to DataDog RUM/APM (not the Application ID)</p>
-                      </div>
+                    {feature.id === 'datadog' && (
+                      <div className="border-t border-port-border/60 pt-3 space-y-3">
+                        <div>
+                          <h3 className="text-sm font-semibold text-white">DataDog monitoring</h3>
+                          <p className="text-xs text-gray-500 mt-1">Configure the monitoring connection separately from the DataDog tab visibility above.</p>
+                        </div>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={formData.datadogEnabled}
+                            onChange={e => setFormData(prev => ({ ...prev, datadogEnabled: e.target.checked, datadogConfigTouched: true }))}
+                            className="rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent"
+                          />
+                          <span className="text-sm text-white">Enable DataDog Monitoring</span>
+                        </label>
 
-                      <div>
-                        <label htmlFor="edit-app-datadog-env" className="block text-sm text-gray-400 mb-1">Environment</label>
-                        <input
-                          id="edit-app-datadog-env"
-                          type="text"
-                          value={formData.datadogEnvironment}
-                          onChange={e => setFormData({ ...formData, datadogEnvironment: e.target.value })}
-                          className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
-                          placeholder="e.g., production"
-                        />
-                        <p className="text-xs text-gray-500 mt-1">The &quot;env&quot; tag (e.g., production, qa, staging)</p>
+                        {formData.datadogEnabled && (
+                          <>
+                            {datadogInstances.length === 0 ? (
+                              <Banner tone="warning" size="md">
+                                No DataDog instances configured. <Link to="/devtools/datadog" className="underline hover:text-white">Configure DataDog</Link> first.
+                              </Banner>
+                            ) : (
+                              <>
+                                <div>
+                                  <label htmlFor="edit-app-datadog-instance" className="block text-sm text-gray-400 mb-1">DataDog Instance</label>
+                                  <select
+                                    id="edit-app-datadog-instance"
+                                    value={formData.datadogInstanceId}
+                                    onChange={e => setFormData(prev => ({ ...prev, datadogInstanceId: e.target.value, datadogConfigTouched: true }))}
+                                    className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                                  >
+                                    <option value="">Select instance...</option>
+                                    {datadogInstances.map(inst => (
+                                      <option key={inst.id} value={inst.id}>{inst.name} ({inst.site})</option>
+                                    ))}
+                                  </select>
+                                </div>
+
+                                <div>
+                                  <label htmlFor="edit-app-datadog-service" className="block text-sm text-gray-400 mb-1">Service Name</label>
+                                  <input
+                                    id="edit-app-datadog-service"
+                                    type="text"
+                                    value={formData.datadogServiceName}
+                                    onChange={e => setFormData(prev => ({ ...prev, datadogServiceName: e.target.value, datadogConfigTouched: true }))}
+                                    className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                                    placeholder="e.g., my-app-service"
+                                  />
+                                  <p className="text-xs text-gray-500 mt-1">The &quot;service&quot; tag your app reports to DataDog RUM/APM (not the Application ID)</p>
+                                </div>
+
+                                <div>
+                                  <label htmlFor="edit-app-datadog-env" className="block text-sm text-gray-400 mb-1">Environment</label>
+                                  <input
+                                    id="edit-app-datadog-env"
+                                    type="text"
+                                    value={formData.datadogEnvironment}
+                                    onChange={e => setFormData(prev => ({ ...prev, datadogEnvironment: e.target.value, datadogConfigTouched: true }))}
+                                    className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                                    placeholder="e.g., production"
+                                  />
+                                  <p className="text-xs text-gray-500 mt-1">The &quot;env&quot; tag (e.g., production, qa, staging)</p>
+                                </div>
+                              </>
+                            )}
+                          </>
+                        )}
                       </div>
-                    </>
-                  )}
-                </>
-              )}
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
 

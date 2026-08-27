@@ -6,6 +6,7 @@ vi.mock('../services/api', () => ({
   captureBrainThought: vi.fn(),
   getYoutubeIngestSettings: vi.fn(),
   getApps: vi.fn(),
+  getProviders: vi.fn(),
 }));
 // The ingest hook reaches for apiBrain directly (not through the `api` barrel),
 // so mock it separately — that keeps the REAL useYoutubeIngest/useSseJobSlot
@@ -31,7 +32,7 @@ class StubEventSource {
 }
 globalThis.EventSource = StubEventSource;
 
-import { captureBrainThought, getApps, getYoutubeIngestSettings } from '../services/api';
+import { captureBrainThought, getApps, getProviders, getYoutubeIngestSettings } from '../services/api';
 import { startYoutubeIngest } from '../services/apiBrain.js';
 import toast from './ui/Toast';
 import QuickBrainCapture from './QuickBrainCapture';
@@ -69,6 +70,13 @@ describe('QuickBrainCapture', () => {
       { id: 'portos-default', name: 'PortOS', repoPath: '/srv/portos' },
       { id: 'app-example', name: 'Example App', repoPath: '/srv/example-app' },
     ]);
+    getProviders.mockResolvedValue({
+      activeProvider: 'codex',
+      providers: [
+        { id: 'codex', name: 'Codex', type: 'cli', command: 'codex', enabled: true, defaultModel: 'gpt-5', models: ['gpt-5'] },
+        { id: 'claude-code', name: 'Claude Code', type: 'cli', command: 'claude', enabled: true, defaultModel: 'claude-sonnet', models: ['claude-sonnet'] },
+      ],
+    });
     startYoutubeIngest.mockResolvedValue({ jobId: 'job-1' });
   });
 
@@ -183,6 +191,27 @@ describe('QuickBrainCapture', () => {
         learn: true,
         targetAppId: 'portos-default',
         studyContext: 'Look for the indexing approach and where it could fit in search.',
+      });
+    });
+
+    it('sends a provider, model, and effort override with the repo study request', async () => {
+      renderWidget();
+      type(REPO);
+      fireEvent.click(screen.getByLabelText('Study for app ideas'));
+      await waitFor(() => expect(screen.getByLabelText('Provider')).toBeInTheDocument());
+      fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'claude-code' } });
+      fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'claude-sonnet' } });
+      fireEvent.change(screen.getByLabelText('Thinking effort'), { target: { value: 'high' } });
+      fireEvent.click(screen.getByLabelText('Capture'));
+
+      await waitFor(() => expect(captureBrainThought).toHaveBeenCalled());
+      expect(captureBrainThought.mock.calls[0][3].repoIntake).toEqual({
+        malwareScan: false,
+        learn: true,
+        targetAppId: 'portos-default',
+        providerId: 'claude-code',
+        model: 'claude-sonnet',
+        effort: 'high',
       });
     });
 

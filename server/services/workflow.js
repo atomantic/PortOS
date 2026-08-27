@@ -42,7 +42,7 @@ export const WORKFLOW_STAGES = [
     id: 'hygiene',
     label: 'Hygiene',
     description: 'Reset state: clean up merged branches and stale agent data so downstream stages start clean.',
-    taskTypes: ['branch-reconcile', 'stash-cleanup'],
+    taskTypes: ['repo-sync', 'branch-reconcile', 'stash-cleanup'],
     jobIds: ['job-agent-data-cleanup']
   },
   {
@@ -76,10 +76,9 @@ export const WORKFLOW_STAGES = [
       'typing',
       'ui-bugs',
       'mobile-responsive',
-      'ux',
-      'refresh-local-llm-catalog'
+      'ux'
     ],
-    jobIds: ['job-wiki-maintenance']
+    jobIds: ['job-wiki-maintenance', 'job-refresh-local-llm-catalog', 'job-refresh-cli-provider-catalogs']
   },
   {
     id: 'build',

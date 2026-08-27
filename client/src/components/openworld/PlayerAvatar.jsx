@@ -169,20 +169,37 @@ export default function PlayerAvatar({ rigRef }) {
         {/* Headlight beams after dark: apex at the lamp, cone spreading forward and a
             touch down so the road ahead reads while driving at night. */}
         {headlightsOn && [-1, 1].map((side) => (
-          <group key={`beam-${side}`} position={[side * CAR_WIDTH * 0.3, 0.55, -CAR_LENGTH * 0.55]} rotation={[-0.09, 0, 0]}>
-            {/* Cone axis is +Y by default; rotating +90° about X aims the apex
-                backward (+Z), so the mesh is offset half its height to plant the
-                apex on the lamp and spread the wide end out ahead of the rover. */}
-            <mesh rotation={[Math.PI / 2, 0, 0]} position={[0, 0, 2.7]}>
-              <coneGeometry args={[1.15, 5.4, 10, 1, true]} />
+          <group key={`beam-${side}`}>
+            {/* Volumetric angled cone extending down-forward from the lamp */}
+            <group position={[side * CAR_WIDTH * 0.3, 0.55, -CAR_LENGTH * 0.55]} rotation={[-0.09, 0, 0]}>
+              {/* Cone axis is +Y by default; rotating +90° about X aims apex to +Z and base to -Z.
+                  With offset [0, 0, -2.7], apex is on the lamp (z=0) and wide base spreads forward (z=-5.4). */}
+              <mesh rotation={[Math.PI / 2, 0, 0]} position={[0, 0, -2.7]}>
+                <coneGeometry args={[1.15, 5.4, 10, 1, true]} />
+                <meshBasicMaterial
+                  color="#ffe9b8"
+                  transparent
+                  opacity={0.14}
+                  blending={THREE.AdditiveBlending}
+                  depthWrite={false}
+                  side={THREE.DoubleSide}
+                  toneMapped={false}
+                />
+              </mesh>
+            </group>
+            {/* Soft projected illumination spot flat on the road surface ahead */}
+            <mesh
+              position={[side * CAR_WIDTH * 0.3, 0.04, -CAR_LENGTH * 0.55 - 4.2]}
+              rotation={[-Math.PI / 2, 0, 0]}
+            >
+              <circleGeometry args={[1.25, 16]} />
               <meshBasicMaterial
                 color="#ffe9b8"
                 transparent
-                opacity={0.13}
+                opacity={0.09}
                 blending={THREE.AdditiveBlending}
                 depthWrite={false}
                 side={THREE.DoubleSide}
-                toneMapped={false}
               />
             </mesh>
           </group>

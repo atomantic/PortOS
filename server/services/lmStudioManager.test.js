@@ -109,6 +109,26 @@ describe('lmStudioManager stored model inventory', () => {
 });
 
 describe('lmStudioManager residency status', () => {
+  it('queries the requested provider endpoint without consulting the global server', async () => {
+    const fetchMock = vi.fn(async (url) => ({
+      ok: true,
+      json: async () => ({
+        data: [{ id: 'example/model', state: 'loaded', max_context_length: 32768 }],
+      }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { getLoadedModelsAt } = await import('./lmStudioManager.js');
+
+    await expect(getLoadedModelsAt('http://localhost:12400/v1')).resolves.toEqual({
+      models: [expect.objectContaining({ id: 'example/model', state: 'loaded', maxContextLength: 32768 })],
+      error: null,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:12400/api/v0/models',
+      expect.any(Object)
+    );
+  });
+
   it('keeps a failed loaded-model probe distinct from a trustworthy empty list', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline'); }));
     const { getLoadedModels, getLastLoadedModelsError } = await import('./lmStudioManager.js');

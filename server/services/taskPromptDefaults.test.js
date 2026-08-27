@@ -10,6 +10,9 @@ import {
 } from './taskPromptDefaults.js';
 import { hashPromptBody, buildPromptIntegritySnapshot } from './taskPromptDefaults/integrityHash.js';
 import { EPIC_DECOMPOSED_LABEL } from './perpetualWork.js';
+// The claim prompts build their contributor-label release from this helper, so the
+// test asserts against the same source rather than re-typing the command text.
+import { formatContributorLabelReleaseCommands } from '../lib/dispatchLabels.js';
 
 // Hash snapshot of every exported prompt body and version. This pins the
 // cross-install prompt-upgrade contract (see AGENTS.md "Distribution model"):
@@ -147,11 +150,16 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(v9).not.toBe(current);
   });
 
-  // plan-feature v2: product intent is specific-first (PRD → GOALS → repository
-  // docs) and no longer depends on the retired roadmap/rejection-ledger files.
-  it('plan-feature v2 uses the PRD/docs fallback hierarchy and preserves v1', () => {
+  // plan-feature v5: omitted optional preloads fall back to direct inventory,
+  // while v4 through v1 remain recognizable for cross-install upgrades.
+  it('plan-feature v5 handles omitted preloads and preserves prior defaults', () => {
     const current = DEFAULT_TASK_PROMPTS['plan-feature'];
-    expect(PROMPT_VERSIONS['plan-feature']).toBe(2);
+    expect(PROMPT_VERSIONS['plan-feature']).toBe(5);
+    expect(current).toContain('Preloaded task data');
+    expect(current).toContain('do NOT list it again');
+    expect(current).toContain('corresponding section that is absent');
+    expect(current).toContain('If a section is absent, unavailable');
+    expect(current).toContain('Closed unmerged pull requests');
     expect(current).toContain('PRD.md');
     expect(current).toContain('GOALS.md');
     expect(current).toContain('README.md');
@@ -159,6 +167,21 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(current).toContain('AGENTS.md');
     expect(current).not.toContain('REJECTED.md');
     expect(current).not.toContain('ALSO read PLAN.md');
+
+    const v4 = PREVIOUS_DEFAULT_PROMPTS['plan-feature'].find((prompt) => prompt.includes('marked unavailable, unreadable, or'));
+    expect(v4).toBeDefined();
+    expect(v4).not.toContain('corresponding section that is absent');
+    expect(v4).not.toBe(current);
+
+    const v3 = PREVIOUS_DEFAULT_PROMPTS['plan-feature'].find((prompt) => prompt.includes('Preloaded task data') && !prompt.includes('marked unavailable, unreadable, or'));
+    expect(v3).toBeDefined();
+    expect(v3).not.toContain('marked unavailable, unreadable, or');
+    expect(v3).not.toBe(current);
+
+    const v2 = PREVIOUS_DEFAULT_PROMPTS['plan-feature'].find((prompt) => prompt.includes('specific available source of intent'));
+    expect(v2).toBeDefined();
+    expect(v2).not.toContain('Preloaded task data');
+    expect(v2).not.toBe(current);
 
     const v1 = PREVIOUS_DEFAULT_PROMPTS['plan-feature'].find((prompt) => prompt.includes('ALSO read PLAN.md'));
     expect(v1).toBeDefined();
@@ -549,19 +572,20 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(v10).not.toBe(current);
   });
 
-  // refresh-local-llm-catalog is the one PortOS-ONLY prompt in this set (it
-  // edits PortOS's own bundled catalog), so it may — and should — name the
-  // fragment helper directly instead of describing the convention.
-  it('refresh-local-llm-catalog uses the changelog:add fragment helper, preserving the outgoing default', () => {
+  // The PortOS custom catalog-refresh job still sources this versioned prompt:
+  // keeping its history here lets migration recognize old shipped copies while
+  // autonomous-job shipped-default snapshots handle future custom-job updates.
+  it('refresh-local-llm-catalog follows the no-per-branch-changelog contract and preserves v3', () => {
     const current = DEFAULT_TASK_PROMPTS['refresh-local-llm-catalog'];
-    expect(current).toContain('npm run changelog:add -- changed');
-    // Line-wrap-insensitive — the prompt body is hard-wrapped.
-    expect(current).toMatch(/Do NOT\s+append to `\.changelog\/NEXT\.md` by hand/);
+    expect(PROMPT_VERSIONS['refresh-local-llm-catalog']).toBe(4);
+    expect(current).toContain('Do NOT create or edit a changelog file or fragment');
+    expect(current).not.toContain('npm run changelog:add');
+    expect(current).not.toContain('.changelog/NEXT.md');
 
     const previous = PREVIOUS_DEFAULT_PROMPTS['refresh-local-llm-catalog'];
     const outgoing = previous[previous.length - 1];
-    expect(outgoing).not.toContain('changelog:add');
-    expect(outgoing).toContain('Add a one-line entry to `{repoPath}/.changelog/NEXT.md`');
+    expect(outgoing).toContain('npm run changelog:add -- changed');
+    expect(outgoing).toMatch(/Do NOT\s+append to `\.changelog\/NEXT\.md` by hand/);
     expect(outgoing).not.toBe(current);
   });
 
@@ -644,12 +668,11 @@ describe('taskPromptDefaults integrity snapshot', () => {
   // signal perpetualWork.js#isActionableIssue reads, so the live agent and the
   // drain agree on when an epic stops being claimable.
   it('claim flows decompose an undecomposed epic instead of skipping it, preserving the outgoing defaults', () => {
-    // JIRA is deliberately NOT in this list: its reads expose neither labels nor
-    // epic links (jira.js#getIssue / #fetchMyCurrentSprintTickets), so a decomposition
-    // marker is invisible there and an epic's children unfindable — that flow still
-    // leaves an epic for a human, and says so. Tracked in #5042.
-    const keys = ['claim-issue', 'claim-issue-gitlab'];
-    const floors = { 'claim-issue': 21, 'claim-issue-gitlab': 19 };
+    // JIRA joined this list in #5042, once jira.js grew the reads Phase 1b needs:
+    // getIssue projects labels/description/epic link, fetchMyCurrentSprintTickets
+    // returns labels, and getEpicChildren finds an epic's children.
+    const keys = ['claim-issue', 'claim-issue-gitlab', 'claim-issue-jira'];
+    const floors = { 'claim-issue': 21, 'claim-issue-gitlab': 19, 'claim-issue-jira': 15 };
 
     for (const key of keys) {
       const current = DEFAULT_TASK_PROMPTS[key];
@@ -660,22 +683,80 @@ describe('taskPromptDefaults integrity snapshot', () => {
       expect(current).not.toContain('Leave epics for a human to split');
       expect(current).not.toContain("don't claim it wholesale here");
 
-      // The outgoing body stays recognizable so an install storing it auto-upgrades
-      // rather than being pinned to the skip-the-epic flow forever. One entry per
-      // shipped version, in ship order, is what makes .at(-1) the outgoing one.
+      // The body outgoing at THIS revision stays recognizable so an install
+      // storing it auto-upgrades rather than being pinned to the skip-the-epic
+      // flow forever. One entry per shipped version, in ship order, so the body
+      // the epic bump replaced is index `floor - 2` — addressed positionally
+      // rather than as .at(-1), which moves to a newer body on every later bump.
       const previous = PREVIOUS_DEFAULT_PROMPTS[key];
       expect(previous).toHaveLength(PROMPT_VERSIONS[key] - 1);
-      expect(previous.at(-1)).not.toBe(current);
-      expect(previous.at(-1)).not.toContain('Phase 1b');
+      expect(previous[floors[key] - 2]).not.toBe(current);
+      expect(previous[floors[key] - 2]).not.toContain('Phase 1b');
     }
 
     // A slice references its parent without closing it, and the parent keeps the
     // checklist a later claim follows to the next available child.
     expect(DEFAULT_TASK_PROMPTS['claim-issue']).toContain('Part of #${EPIC}');
     expect(DEFAULT_TASK_PROMPTS['claim-issue']).toContain('## Decomposed into');
-    // The JIRA flow keeps its human-split behavior, and names the API gap that forces it.
-    expect(DEFAULT_TASK_PROMPTS['claim-issue-jira']).not.toContain('Phase 1b');
-    expect(DEFAULT_TASK_PROMPTS['claim-issue-jira']).toContain('Leave epics for a human to split');
+
+    // JIRA has no `Closes` auto-close and no assignee/label claim, so a slice is
+    // claimable only when it is BOTH assigned to the caller and in the open sprint
+    // — Phase 1's candidate query is `assignee = currentUser() AND sprint in
+    // openSprints()`. A child missing either one is invisible to every later run,
+    // which is exactly how the remaining slices got stranded before #5042.
+    const jira = DEFAULT_TASK_PROMPTS['claim-issue-jira'];
+    expect(jira).toContain('## Decomposed into');
+    expect(jira).toContain('"assignee": "currentUser"');
+    expect(jira).toContain('"sprintId"');
+    // A sprint move that failed must be reported, never silently dropped.
+    expect(jira).toContain('not sprinted');
+    // And the child lookup must exist at all — the endpoint #5042 added.
+    expect(jira).toContain('/epics/<EPIC>/children');
+  });
+
+  // Contributor labels advertise work to a HUMAN who might pick it up. Once a
+  // claim run holds the issue that invitation is stale, so Phase 2 releases both
+  // where it stamps the assignee + `in-progress` markers. Pinned here because two
+  // details are load-bearing and easy to "tidy" into a break: the commands must
+  // stay SEPARATE (a forge fails the whole edit when any named label is absent,
+  // so a combined call on an issue carrying only one would remove neither) and
+  // best-effort (an issue carrying neither is the common case and must never
+  // abort a claim). The literals come from the shared registry, so the labels the
+  // claim releases are by construction the ones the filing flows apply.
+  //
+  // JIRA is deliberately absent: its reads expose no labels at all
+  // (jira.js#getIssue / #fetchMyCurrentSprintTickets), and its update replaces the
+  // WHOLE label array — so a release there could only be a blind write that erased
+  // every other label on the ticket. Same API gap as the epic skip, tracked in #5042.
+  it('claim flows release the contributor invitations at claim time, preserving the outgoing defaults', () => {
+    const floors = { 'claim-issue': 22, 'claim-issue-gitlab': 20 };
+    const releases = {
+      'claim-issue': formatContributorLabelReleaseCommands('"${NUM}"'),
+      'claim-issue-gitlab': formatContributorLabelReleaseCommands('"${NUM}"', { cli: 'glab' }),
+    };
+
+    for (const [key, floor] of Object.entries(floors)) {
+      const current = DEFAULT_TASK_PROMPTS[key];
+      expect(PROMPT_VERSIONS[key]).toBeGreaterThanOrEqual(floor);
+      expect(releases[key]).toHaveLength(2);
+      for (const command of releases[key]) expect(current).toContain(command);
+      // Both labels released in one command would silently no-op on the common
+      // single-label issue, so ban the combined spellings outright.
+      expect(current).not.toContain("--remove-label 'good first issue' --remove-label");
+      expect(current).not.toContain("--unlabel 'good first issue' --unlabel");
+      expect(current).toContain('Do NOT restore them when Phase 3 or Phase 7 releases the claim');
+
+      // The outgoing body stays recognizable so an install storing it auto-upgrades
+      // instead of being flagged promptCustomized and pinned to the old flow.
+      const previous = PREVIOUS_DEFAULT_PROMPTS[key];
+      expect(previous).toHaveLength(PROMPT_VERSIONS[key] - 1);
+      expect(previous.at(-1)).not.toBe(current);
+      for (const command of releases[key]) expect(previous.at(-1)).not.toContain(command);
+      // …and it is the body that ONLY lacks the release: everything else the
+      // outgoing version shipped (Phase 1b) is still there, which is what makes it
+      // the immediately-previous body rather than some older one.
+      expect(previous.at(-1)).toContain('Phase 1b');
+    }
   });
 
   // #4685: `glab issue list -F json` is accepted, IGNORED, and answers with the

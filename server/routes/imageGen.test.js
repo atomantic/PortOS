@@ -186,6 +186,13 @@ describe('Image Gen Routes', () => {
       expect(imageGen.checkConnection).toHaveBeenCalledWith({ mode: 'codex' });
     });
 
+    it('forwards a bounded local model selection into checkConnection', async () => {
+      imageGen.checkConnection.mockResolvedValue({ connected: true, mode: 'local', modelId: 'flux2-klein-4b' });
+      const response = await request(app).get('/api/image-gen/status?mode=local&modelId=flux2-klein-4b');
+      expect(response.status).toBe(200);
+      expect(imageGen.checkConnection).toHaveBeenCalledWith({ mode: 'local', modelId: 'flux2-klein-4b' });
+    });
+
     it('ignores an invalid ?mode= query and uses the saved default', async () => {
       imageGen.checkConnection.mockResolvedValue({ connected: true, mode: 'external' });
       const response = await request(app).get('/api/image-gen/status?mode=bogus');

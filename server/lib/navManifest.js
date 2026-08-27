@@ -1,5 +1,5 @@
-// Single source of truth for PortOS navigation. Consumed by
-// server/services/voice/tools.js#ui_navigate and the Cmd+K palette.
+// Single source of truth for PortOS navigation. Consumed by the sidebar,
+// server/services/voice/tools.js#ui_navigate, and the Cmd+K palette.
 // Entry: { id, path, label, section, aliases?, keywords?, previousPaths? }.
 // See AGENTS.md "Command Palette & Voice Nav" for the contract.
 //
@@ -21,7 +21,7 @@ import { PORTOS_APP_ID } from './appIdentity.js';
 // memory quarter") can warp straight into the world. The list is duplicated rather than
 // imported because a server lib can't reach into client code; navManifest.test.js scrapes
 // the registry and fails on drift in the paths, the labels, AND the aliases.
-// Written as [id, label, aliases] tuples so the axis that varies is the only thing repeated.
+// Written as [id, label, aliases, feature?] tuples so the axis that varies is the only thing repeated.
 //
 // Aliases are authored in the human phrasing the fast-travel search box uses ("memory
 // quarter") and registered KEBAB-CASED, because resolveNavCommand normalizes its input to
@@ -38,21 +38,31 @@ const OPEN_WORLD_REGION_COMMANDS = [
   ['productivity', 'Productivity Terrace', ['productivity terrace', 'productivity', 'streak district']],
   ['backup-vault', 'Backup Vault', ['backup vault', 'the vault']],
   ['memory', 'Memory Quarter', ['memory quarter', 'memory district', 'knowledge district']],
-  ['sprint-yard', 'Sprint Yard', ['sprint yard', 'jira yard', 'sprint district']],
+  ['sprint-yard', 'Sprint Yard', ['sprint yard', 'jira yard', 'sprint district'], 'jira'],
   ['voice', 'Voice Beacon', ['voice beacon', 'the beacon']],
   ['goals', 'Goal Monuments', ['goal monuments', 'monuments', 'goals district']],
   ['artifacts', 'Hall of Achievements', ['hall of achievements', 'artifact hall', 'achievements hall']],
   ['data-harbor', 'Data Harbor', ['data harbor', 'the harbor', 'piers']],
-].map(([id, label, aliases]) => ({
+].map(([id, label, aliases, feature]) => ({
   id: `nav.openworld.region.${id}`,
   path: `/openworld/region/${id}`,
   label,
   section: 'Main',
   aliases: aliases.map((a) => a.replace(/\s+/g, '-')),
   keywords: ['openworld', 'fast travel', 'warp', 'region', 'teleport'],
+  ...(feature ? { feature } : {}),
 }));
 
-export const NAV_COMMANDS = [
+// Sections whose every page belongs to one optional instance feature, so a page
+// added there inherits the gate with no edit. A single page inside an otherwise
+// ungated section (DataDog, JIRA) carries `feature` on its own entry instead.
+// Keys must be real section labels and values must be ids declared in
+// server/lib/instanceFeatureRegistry.js — navManifest.test.js fails on both
+// kinds of drift, because a stale key here would silently un-gate a section
+// with every other assertion still green.
+export const SECTION_FEATURE = new Map([['POST', 'post']]);
+
+const RAW_NAV_COMMANDS = [
   { id: 'nav.dashboard', path: '/', label: 'Dashboard', section: 'Main', aliases: ['dashboard', 'home'], keywords: ['overview', 'start'] },
   { id: 'nav.review-hub', path: '/review', label: 'Review Hub', section: 'Main', aliases: ['review', 'review-hub'] },
   { id: 'nav.cybercity', path: '/openworld', label: 'OpenWorld', section: 'Main', previousPaths: ['/city'], aliases: ['openworld', 'open world', 'open-world', 'city'], keywords: ['3d', 'visualization', 'game', 'map', 'explore'] },
@@ -67,7 +77,8 @@ export const NAV_COMMANDS = [
 
   { id: 'nav.catalog', path: '/catalog', label: 'Catalog', section: 'Create', aliases: ['catalog', 'ingredients', 'cast', 'creative-catalog'], keywords: ['character', 'place', 'object', 'idea', 'scene', 'concept', 'inventory', 'reference', 'creative'] },
   { id: 'nav.catalog.ingest', path: '/catalog/ingest', label: 'Catalog Ingest', section: 'Create', aliases: ['catalog-ingest', 'ingest', 'paste-scrap', 'extract-ingredients'], keywords: ['paste', 'snippet', 'scene', 'idea', 'extract', 'scrap', 'import-catalog'] },
-  { id: 'nav.media', path: '/media/image', label: 'Media Gen', section: 'Create', aliases: ['media', 'media-gen', 'mediagen', 'generate'], keywords: ['image', 'video', 'render', 'art', 'movie'] },
+  { id: 'nav.catalog.settings', path: '/catalog?settings=1', label: 'Catalog Types', section: 'Create', previousPaths: ['/settings/catalog'], aliases: ['catalog settings', 'catalog-settings', 'settings-catalog', 'catalog-types'], keywords: ['catalog', 'types', 'labels', 'character', 'place', 'object', 'taxonomy'] },
+  { id: 'nav.media', path: '/media', label: 'Media Gen', section: 'Create', aliases: ['media', 'media-gen', 'mediagen', 'generate'], keywords: ['image', 'video', 'render', 'art', 'movie'] },
   { id: 'nav.media.image', path: '/media/image', label: 'Image', section: 'Create', previousPaths: ['/image-gen'], aliases: ['image-gen', 'imagegen', 'generate-image', 'sd', 'stable-diffusion'], keywords: ['stable diffusion', 'render', 'art', 'picture', 'photo', 'draw', 'flux', 'mflux'] },
   { id: 'nav.media.video', path: '/media/video', label: 'Video', section: 'Create', previousPaths: ['/video-gen'], aliases: ['video-gen', 'videogen', 'generate-video', 'ltx'], keywords: ['video', 'animate', 'movie', 'clip', 'ltx'] },
   { id: 'nav.media.history', path: '/media/history', label: 'Media History', section: 'Create', previousPaths: ['/media-history'], aliases: ['media-history', 'video-history'], keywords: ['videos', 'gallery', 'stitch'] },
@@ -142,10 +153,11 @@ export const NAV_COMMANDS = [
   { id: 'nav.cos.config', path: '/cos/config', label: 'Config', section: 'Chief of Staff', aliases: ['cos-config'] },
   { id: 'nav.cos.digest', path: '/cos/digest', label: 'Digest', section: 'Chief of Staff', aliases: ['cos-digest'] },
   { id: 'nav.feature-agents', path: '/feature-agents', label: 'Feature Agents', section: 'Chief of Staff', aliases: ['feature-agents'] },
-  { id: 'nav.cos.gsd', path: '/cos/gsd', label: 'GSD', section: 'Chief of Staff', aliases: ['gsd', 'cos-gsd'] },
+  { id: 'nav.cos.gsd', path: '/cos/gsd', label: 'GSD', section: 'Chief of Staff', feature: 'gsd', aliases: ['gsd', 'cos-gsd'] },
   { id: 'nav.cos.health', path: '/cos/health', label: 'Health', section: 'Chief of Staff', aliases: ['cos-health', 'health'] },
   { id: 'nav.cos.learning', path: '/cos/learning', label: 'Learning', section: 'Chief of Staff', aliases: ['cos-learning'] },
   { id: 'nav.cos.memory', path: '/cos/memory', label: 'Memory', section: 'Chief of Staff', aliases: ['cos-memory'] },
+  { id: 'nav.cos.mind', path: '/cos/mind', label: 'Mind', section: 'Chief of Staff', aliases: ['cos-mind', 'persistent-mind', 'mind-chat'], keywords: ['persistent mind', 'chat', 'annotation', 'resident mind', 'conversation'] },
   { id: 'nav.cos.runs', path: '/cos/runs', label: 'Runs', section: 'Chief of Staff', previousPaths: ['/devtools/runs'], aliases: ['runs', 'ai-runs', 'cos-runs', 'recent-runs', 'run-history'], keywords: ['runs', 'run history', 'recent runs', 'ai runs', 'agent runs', 'failed runs'] },
   { id: 'nav.cos.run-events', path: '/cos/run-events', label: 'Run Events', section: 'Chief of Staff', aliases: ['run-events', 'cos-run-events', 'run-event-ledger', 'lifecycle-events'], keywords: ['run events', 'lifecycle', 'ledger', 'replay', 'diagnostics', 'orphaned', 'handoff', 'reconnect', 'interrupted', 'why did this run fail'] },
   { id: 'nav.cos.schedule', path: '/cos/schedule', label: 'Schedule', section: 'Chief of Staff', aliases: ['schedule', 'cos-schedule'] },
@@ -173,13 +185,13 @@ export const NAV_COMMANDS = [
   { id: 'nav.devtools.agents', path: '/devtools/agents', label: 'AI Agents', section: 'Dev Tools', aliases: ['ai-agents', 'devtools'] },
   { id: 'nav.browser', path: '/browser', label: 'Browser', section: 'Dev Tools', aliases: ['browser'] },
   { id: 'nav.devtools.runner', path: '/devtools/runner', label: 'Code', section: 'Dev Tools', aliases: ['devtools-runner'] },
-  { id: 'nav.devtools.datadog', path: '/devtools/datadog', label: 'DataDog', section: 'Dev Tools', previousPaths: ['/datadog'], aliases: ['datadog', 'devtools-datadog'] },
+  { id: 'nav.devtools.datadog', path: '/devtools/datadog', label: 'DataDog', section: 'Dev Tools', feature: 'datadog', previousPaths: ['/datadog'], aliases: ['datadog', 'devtools-datadog'] },
   { id: 'nav.devtools.flows', path: '/devtools/flows', label: 'Flows', section: 'Dev Tools', aliases: ['flows', 'integration-flows', 'workflows'], keywords: ['architecture', 'diagram', 'data flow', 'integrations', 'how it works'] },
   { id: 'nav.devtools.github', path: '/devtools/github', label: 'GitHub', section: 'Dev Tools', aliases: ['github', 'devtools-github'] },
   { id: 'nav.devtools.history', path: '/devtools/history', label: 'History', section: 'Dev Tools', aliases: ['devtools-history'] },
   { id: 'nav.devtools.image-clean', path: '/devtools/image-clean', label: 'Image Cleaner', section: 'Dev Tools', aliases: ['image-clean', 'image-cleaner'], keywords: ['metadata', 'c2pa', 'content-credentials', 'sharp', 'denoise'] },
-  { id: 'nav.devtools.jira', path: '/devtools/jira', label: 'JIRA', section: 'Dev Tools', previousPaths: ['/jira'], aliases: ['jira', 'devtools-jira'] },
-  { id: 'nav.devtools.jira-reports', path: '/devtools/jira/reports', label: 'JIRA Reports', section: 'Dev Tools', aliases: ['jira-reports'] },
+  { id: 'nav.devtools.jira', path: '/devtools/jira', label: 'JIRA', section: 'Dev Tools', feature: 'jira', previousPaths: ['/jira'], aliases: ['jira', 'devtools-jira'] },
+  { id: 'nav.devtools.jira-reports', path: '/devtools/jira/reports', label: 'JIRA Reports', section: 'Dev Tools', feature: 'jira', aliases: ['jira-reports'] },
   { id: 'nav.devtools.quota-burn', path: '/devtools/quota-burn', label: 'Quota Burn', section: 'Dev Tools', aliases: ['quota-burn', 'burn-quota', 'quota'], keywords: ['subscription', 'usage', 'reset window', 'spend quota', 'claude', 'codex', 'grok', 'agy', 'burn'] },
   { id: 'nav.shell', path: '/shell', label: 'Shell', section: 'Dev Tools', aliases: ['shell', 'terminal'] },
   { id: 'nav.devtools.usage', path: '/devtools/usage', label: 'Usage', section: 'Dev Tools', aliases: ['devtools-usage'] },
@@ -279,7 +291,6 @@ export const NAV_COMMANDS = [
   { id: 'nav.settings.api-access', path: '/settings/api-access', label: 'API Access', section: 'Settings', aliases: ['api-access', 'settings-api-access', 'public-api', 'swagger', 'openapi'], keywords: ['rest', 'external', 'tts api', 'sdapi', 'voice api', 'docs', 'curl', 'expose', 'passwordless', 'auth gating'] },
   { id: 'nav.settings.autofixer', path: '/settings/autofixer', label: 'Autofixer', section: 'Settings', aliases: ['autofixer', 'settings-autofixer', 'auto-fixer'], keywords: ['crash', 'fix', 'pm2', 'repair', 'ai provider', 'restart'] },
   { id: 'nav.settings.backup', path: '/settings/backup', label: 'Backup', section: 'Settings', aliases: ['backup', 'settings-backup'] },
-  { id: 'nav.settings.catalog', path: '/settings/catalog', label: 'Catalog Types', section: 'Settings', aliases: ['settings-catalog', 'catalog-types'], keywords: ['catalog', 'types', 'character', 'place', 'object', 'taxonomy'] },
   { id: 'nav.settings.code-reviewers', path: '/settings/code-reviewers', label: 'Code Reviewers', section: 'Settings', aliases: ['code-reviewers', 'settings-code-reviewers', 'code-review', 'review-defaults', 'reviewers'], keywords: ['review loop', 'reviewer chain', 'codex', 'copilot', 'ollama', 'stop mode', 'max rounds', 'defaults'] },
   { id: 'nav.settings.database', path: '/settings/database', label: 'Database', section: 'Settings', aliases: ['settings-database', 'database'] },
   { id: 'nav.settings.features', path: '/settings/features', label: 'Features', section: 'Settings', aliases: ['settings-features', 'instance-features', 'feature-usage'], keywords: ['enabled', 'disabled', 'instance', 'optional', 'participation', 'metrics', 'reminders'] },
@@ -290,18 +301,18 @@ export const NAV_COMMANDS = [
   // image-to-3D runtimes. Several ids keep a `nav.settings.*` / `nav.media.*`
   // prefix: they are opaque and stored in palette history, so renaming them
   // would orphan those entries — only the path, label and section move.
-  { id: 'nav.models.3d', path: '/models/3d', label: '3D Runtimes', section: 'Models', aliases: ['3d-runtimes', 'image-to-3d-runtimes', 'trellis-install', 'pixal3d-install'], keywords: ['trellis', 'pixal3d', 'install', 'repair', 'runtime', 'mesh', 'image to 3d', 'on-device'] },
+  { id: 'nav.models.3d', path: '/models/3d', label: '3D', section: 'Models', aliases: ['3d-runtimes', 'image-to-3d-runtimes', 'trellis-install', 'pixal3d-install'], keywords: ['trellis', 'pixal3d', 'install', 'repair', 'runtime', 'mesh', 'image to 3d', 'on-device'] },
   { id: 'nav.settings.embeddings', path: '/models/embeddings', label: 'Embeddings', section: 'Models', previousPaths: ['/settings/embeddings'], aliases: ['settings-embeddings', 'embeddings', 'embedding'], keywords: ['vector', 'pgvector', 'semantic search', 'nomic', 'ollama', 'lm studio'] },
   { id: 'nav.settings.local-llm', path: '/models/llms', label: 'LLMs', section: 'Models', previousPaths: ['/settings/local-llm'], aliases: ['local-llm', 'local-llms', 'llms', 'models-llms', 'ollama', 'lm-studio', 'lmstudio'], keywords: ['ollama', 'lm studio', 'local model', 'local llm', 'gguf', 'pull model', 'install model', 'migrate', 'switch backend', 'llama.cpp'] },
   { id: 'nav.media.loras', path: '/models/loras', label: 'LoRAs', section: 'Models', previousPaths: ['/media/loras'], aliases: ['loras', 'lora', 'lora-manager', 'civitai'], keywords: ['lora', 'civitai', 'fine-tune', 'style adapter', 'realstagram', 'photoreal', 'flux lora'] },
-  { id: 'nav.media.training', path: '/models/training', label: 'LoRA Training', section: 'Models', previousPaths: ['/media/training', '/media/training/:datasetId'], aliases: ['training', 'lora-training', 'train-lora', 'datasets', 'character-lora'], keywords: ['fine-tune', 'dataset', 'caption', 'dreambooth', 'character consistency', 'train', 'flux lora'] },
-  { id: 'nav.media.models', path: '/models/media', label: 'Media Models', section: 'Models', previousPaths: ['/media/models', '/media-models'], aliases: ['media-models', 'image-models', 'video-models', 'huggingface'], keywords: ['hf cache', 'model storage', 'disk', 'add model', 'install model', 'custom model'] },
-  { id: 'nav.models.performance', path: '/models/performance', label: 'Model Performance', section: 'Models', aliases: ['model-performance', 'performance', 'assessments', 'model-assessments', 'benchmark-models', 'tuning'], keywords: ['measure', 'assessment', 'benchmark', 'throughput', 'chars per second', 'ttft', 'context', 'tuning', 'llama.cpp', 'mtplx', 'vllm', 'which model', 'fastest model'] },
+  { id: 'nav.media.training', path: '/models/training', label: 'Training', section: 'Models', previousPaths: ['/media/training', '/media/training/:datasetId'], aliases: ['training', 'lora-training', 'train-lora', 'datasets', 'character-lora'], keywords: ['fine-tune', 'dataset', 'caption', 'dreambooth', 'character consistency', 'train', 'flux lora'] },
+  { id: 'nav.media.models', path: '/models/media', label: 'Media', section: 'Models', previousPaths: ['/media/models', '/media-models'], aliases: ['media-models', 'image-models', 'video-models', 'huggingface'], keywords: ['hf cache', 'model storage', 'disk', 'add model', 'install model', 'custom model'] },
+  { id: 'nav.models.performance', path: '/models/performance', label: 'Performance', section: 'Models', aliases: ['model-performance', 'performance', 'assessments', 'model-assessments', 'benchmark-models', 'tuning'], keywords: ['measure', 'assessment', 'benchmark', 'throughput', 'chars per second', 'ttft', 'context', 'tuning', 'llama.cpp', 'mtplx', 'vllm', 'which model', 'fastest model'] },
   // Absorbed the Dev Tools 'Model Resources' page (#4728), so its aliases and
   // keywords live here — 'model resources' and 'downloaded models' must keep
   // resolving after the fold.
-  { id: 'nav.models.status', path: '/models/status', label: 'Model Status', section: 'Models', previousPaths: ['/system-resources/models'], aliases: ['model-status', 'models-status', 'memory-management', 'resident-models', 'model-resources', 'loaded-models', 'downloaded-models', 'model-memory'], keywords: ['memory', 'resident', 'loaded', 'unload', 'ram', 'vram', 'free memory', 'what is loaded', 'ollama', 'lm studio', 'hugging face', 'lora', 'delete model', 'disk'] },
-  { id: 'nav.settings.local-llm-playground', path: '/local-llm/playground', label: 'Local LLM Playground', section: 'Models', aliases: ['llm-playground', 'playground', 'model-playground', 'compare-models'], keywords: ['ollama', 'lm studio', 'compare', 'benchmark', 'chat', 'test model', 'ttft', 'tokens per second', 'local llm'] },
+  { id: 'nav.models.status', path: '/models/status', label: 'Status', section: 'Models', previousPaths: ['/system-resources/models'], aliases: ['model-status', 'models-status', 'memory-management', 'resident-models', 'model-resources', 'loaded-models', 'downloaded-models', 'model-memory'], keywords: ['memory', 'resident', 'loaded', 'unload', 'ram', 'vram', 'free memory', 'what is loaded', 'ollama', 'lm studio', 'hugging face', 'lora', 'delete model', 'disk'] },
+  { id: 'nav.settings.local-llm-playground', path: '/local-llm/playground', label: 'Playground', section: 'Models', aliases: ['llm-playground', 'playground', 'model-playground', 'compare-models'], keywords: ['ollama', 'lm studio', 'compare', 'benchmark', 'chat', 'test model', 'ttft', 'tokens per second', 'local llm'] },
   { id: 'nav.settings.mortalloom', path: '/settings/mortalloom', label: 'MortalLoom', section: 'Settings', aliases: ['settings-mortalloom', 'mortalloom'] },
   { id: 'nav.settings.openclaw', path: '/openclaw', label: 'OpenClaw', section: 'Settings', aliases: ['openclaw', 'settings-openclaw'], keywords: ['operator', 'chat', 'agent', 'runtime', 'sessions', 'streaming'] },
   { id: 'nav.settings.security', path: '/settings/security', label: 'Security', section: 'Settings', aliases: ['settings-security', 'login-password', 'auth-password', 'password-settings'], keywords: ['password', 'login', 'auth', 'sign-in', 'lock', 'tailnet', 'sidecar'] },
@@ -319,18 +330,39 @@ export const NAV_COMMANDS = [
   { id: 'nav.loops', path: '/loops', label: 'Loops', section: 'Dev Tools', aliases: ['loops'] },
   { id: 'nav.devtools.processes', path: '/devtools/processes', label: 'Processes', section: 'Dev Tools', aliases: ['devtools-processes', 'processes'] },
   { id: 'nav.security', path: '/security', label: 'Security', section: 'Dev Tools', aliases: ['security'] },
-  { id: 'nav.system-health', path: '/system-resources/overview', label: 'System Resources', section: 'Dev Tools', previousPaths: ['/system-health'], aliases: ['system-resources', 'system-health', 'system-status', 'memory-usage', 'cpu-usage'], keywords: ['health', 'memory', 'cpu', 'disk', 'thresholds', 'top processes', 'resource usage', 'build', 'commit', 'running build', 'stale build', 'which code is running'] },
+  { id: 'nav.system-resources', path: '/system-resources', label: 'System Resources', section: 'Dev Tools' },
+  { id: 'nav.system-health', path: '/system-resources/overview', label: 'System Resources Overview', section: 'Dev Tools', previousPaths: ['/system-health'], aliases: ['system-resources', 'system-health', 'system-status', 'memory-usage', 'cpu-usage'], keywords: ['health', 'memory', 'cpu', 'disk', 'thresholds', 'top processes', 'resource usage', 'build', 'commit', 'running build', 'stale build', 'which code is running'] },
   { id: 'nav.system-resources.storage', path: '/system-resources/storage', label: 'Storage Report', section: 'Dev Tools', aliases: ['disk-usage', 'storage-report', 'disk-cleanup'], keywords: ['disk', 'storage', 'space', 'cleanup', 'cache', 'data usage', 'ai triage'] },
   { id: 'nav.system-resources.queues', path: '/system-resources/queues', label: 'Active Queues', section: 'Dev Tools', aliases: ['active-queues', 'job-queues', 'pending-jobs', 'render-queue'], keywords: ['media jobs', 'agent tasks', 'pending', 'running', 'cancel', 'run now'] },
   { id: 'nav.cos.jobs', path: '/cos/jobs', label: 'System Tasks', section: 'Chief of Staff', aliases: ['cos-jobs', 'system-tasks'] },
   { id: 'nav.uploads', path: '/uploads', label: 'Uploads', section: 'Dev Tools', aliases: ['uploads'] },
 
-  { id: 'nav.wiki.overview', path: '/wiki/overview', label: 'Overview', section: 'Brain', aliases: ['wiki'] },
+  { id: 'nav.wiki.overview', path: '/wiki/overview', label: 'Wiki', section: 'Brain', aliases: ['wiki'] },
   { id: 'nav.wiki.browse', path: '/wiki/browse', label: 'Browse', section: 'Brain', aliases: ['wiki-browse'] },
   { id: 'nav.wiki.graph', path: '/wiki/graph', label: 'Graph', section: 'Brain', aliases: ['wiki-graph'] },
   { id: 'nav.wiki.log', path: '/wiki/log', label: 'Log', section: 'Brain', aliases: ['wiki-log'] },
   { id: 'nav.wiki.search', path: '/wiki/search', label: 'Search', section: 'Brain', aliases: ['wiki-search'] },
 ];
+
+// A gated entry carries `feature`: the id of the optional instance feature it
+// belongs to (server/lib/instanceFeatureRegistry.js). The manifest ships the tag
+// rather than dropping the entry, and the GATE IS APPLIED CLIENT-SIDE — by the
+// sidebar and the ⌘K palette, which both hold the user's live feature state and
+// so react to a toggle without a reload. Filtering here instead would defeat the
+// manifest's HTTP caching and still leave ⌘K stale, because it caches the
+// manifest for the session.
+//
+// Gating hides a page from those two BROWSE surfaces only. The route keeps
+// working, and so does navigating to it by name — a bookmark, a direct URL, or
+// voice `ui_navigate` all still resolve, the same way a disabled feature's page
+// stays reachable when opened directly.
+export const NAV_COMMANDS = RAW_NAV_COMMANDS.map((cmd) => {
+  const feature = cmd.feature || SECTION_FEATURE.get(cmd.section);
+  return feature ? { ...cmd, feature } : cmd;
+});
+
+// Every feature id this manifest gates on, for the registry-drift guard.
+export const NAV_FEATURE_IDS = [...new Set(NAV_COMMANDS.map((c) => c.feature).filter(Boolean))].sort();
 
 const seenIds = new Set();
 for (const cmd of NAV_COMMANDS) {

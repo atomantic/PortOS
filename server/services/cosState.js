@@ -11,6 +11,10 @@ import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { ensureDirs, safeJSONParse, PATHS, atomicWrite } from '../lib/fileUtils.js';
 import { normalizeDomainAutonomy, getDomainMode } from '../lib/domainAutonomy.js';
 import { normalizeDomainBudgets } from '../lib/domainBudgets.js';
+import { createDefaultPersistentMindState, normalizePersistentMindState } from '../lib/persistentMind.js';
+import { createDefaultPersistentMindCapabilities, normalizePersistentMindCapabilities } from '../lib/persistentMindCapabilities.js';
+import { createDefaultPersistentMindProfile, normalizePersistentMindProfile } from '../lib/persistentMindProfile.js';
+import { createDefaultPersistentMindPrompt, normalizePersistentMindPrompt } from '../lib/persistentMindPrompt.js';
 import { DEFAULT_ALWAYS_APPROVE_KINDS } from './taskLearning/safetyKind.js';
 
 export const STATE_FILE = join(PATHS.cos, 'state.json');
@@ -61,6 +65,13 @@ export const DEFAULT_CONFIG = {
   // Investigation tasks normally hold only failure loops for a human. This
   // opt-in also admits those loop/storm investigations unattended.
   autoApproveInvestigations: false,
+  // Persisting a profile is not consent to wake the mind. Fresh and upgraded
+  // installs stay disabled until the user explicitly starts it.
+  persistentMindProfile: createDefaultPersistentMindProfile(),
+  persistentMindPrompt: createDefaultPersistentMindPrompt(),
+  // Action grants are independent of the provider profile. Existing and fresh
+  // conversation-only installs never gain task-creation authority on upgrade.
+  persistentMindCapabilities: createDefaultPersistentMindCapabilities(),
   // Per-domain autonomy guardrails (#711). Each domain is off | dry-run | execute.
   // Default is `execute` for every domain, reproducing pre-#711 behavior so no
   // migration is needed — an install with no stored value reads `execute`.
@@ -113,6 +124,7 @@ export const DEFAULT_STATE = {
     lastEvaluation: null,
     lastIdleReview: null
   },
+  persistentMind: createDefaultPersistentMindState(),
   agents: {}
 };
 
@@ -217,8 +229,15 @@ export async function loadState() {
   stateCache = {
     ...DEFAULT_STATE,
     ...state,
-    config: { ...DEFAULT_CONFIG, ...persistedConfig },
+    config: {
+      ...DEFAULT_CONFIG,
+      ...persistedConfig,
+      persistentMindCapabilities: normalizePersistentMindCapabilities(persistedConfig.persistentMindCapabilities),
+      persistentMindProfile: normalizePersistentMindProfile(persistedConfig.persistentMindProfile),
+      persistentMindPrompt: normalizePersistentMindPrompt(persistedConfig.persistentMindPrompt),
+    },
     stats: { ...DEFAULT_STATE.stats, ...state.stats },
+    persistentMind: normalizePersistentMindState(state.persistentMind),
     agents: state.agents ?? {}
   };
   return stateCache;

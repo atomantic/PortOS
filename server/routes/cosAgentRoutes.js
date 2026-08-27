@@ -38,7 +38,14 @@ router.post('/health/check', asyncHandler(async (req, res) => {
 // GET /api/cos/agents - Get state-resident agents (running + recently completed, auto-cleans zombies)
 // Strips output arrays from listing — output is loaded on demand via GET /agents/:id
 router.get('/agents', asyncHandler(async (req, res) => {
-  await cos.cleanupZombieAgents();
+  // Zombie cleanup probes the standalone runner and can wait up to its
+  // transport timeout when that optional process is restarting or offline.
+  // The state listing is still useful while that repair runs, so keep cleanup
+  // off the response critical path and let it complete independently; the next
+  // normal refresh will see any repaired records.
+  void cos.cleanupZombieAgents().catch((err) => {
+    console.error(`🧹 Background zombie cleanup failed: ${err.message}`);
+  });
   const agents = await cos.getAgents();
   res.json(agents.map(({ output, ...rest }) => rest));
 }));

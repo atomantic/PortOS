@@ -487,6 +487,7 @@ describe('Apps CRUD Routes', () => {
 
       expect(response.status).toBe(204);
       expect(appsService.deleteApp).toHaveBeenCalledWith('app-001');
+      expect(appsService.notifyAppsChanged).toHaveBeenCalledWith('delete', 'app-001');
     });
 
     it('should return 404 if app not found', async () => {

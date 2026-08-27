@@ -228,3 +228,22 @@ describe('MediaLightbox — i2v reference provenance (#4874)', () => {
     expect(screen.queryByText('Reference')).toBeNull();
   });
 });
+
+describe('MediaLightbox — local image execution provenance', () => {
+  it('distinguishes confirmed, degraded, and unknown legacy image execution', () => {
+    const { rerender } = render(<MediaLightbox item={{ ...imageItem, executionProvenance: { state: 'confirmed', effectiveDevice: 'cuda', placement: 'cuda+offload' } }} onClose={() => {}} />);
+    expect(screen.getByText('Execution')).toBeTruthy();
+    expect(screen.getByText('Confirmed · cuda (cuda+offload)')).toBeTruthy();
+
+    rerender(<MediaLightbox item={{ ...imageItem, executionProvenance: { state: 'degraded', requestedDevice: 'mps' } }} onClose={() => {}} />);
+    expect(screen.getByText('Degraded · CPU fallback (requested mps)')).toBeTruthy();
+
+    rerender(<MediaLightbox item={imageItem} onClose={() => {}} />);
+    expect(screen.getByText('Unknown (legacy runner)')).toBeTruthy();
+  });
+
+  it('does not mistake a malformed marker for confirmed execution', () => {
+    render(<MediaLightbox item={{ ...imageItem, executionProvenance: { state: 'malformed' } }} onClose={() => {}} />);
+    expect(screen.getByText('Unknown (invalid runner marker)')).toBeTruthy();
+  });
+});

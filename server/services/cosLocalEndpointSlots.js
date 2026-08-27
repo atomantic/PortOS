@@ -304,6 +304,25 @@ export async function acquireLocalEndpointSpawnSlot(task, agents) {
 }
 
 /**
+ * Reserve the same local inference capacity for a non-agent provider call.
+ *
+ * Persistent-mind turns use PortOS's text-provider interface directly rather
+ * than spawning a file-writing task agent. They still occupy the same model
+ * server and must therefore share this accounting instead of inventing a
+ * parallel GPU counter. Cloud providers return a no-op release.
+ */
+export async function acquireLocalEndpointProviderSlot(provider, agents, reservationId = null) {
+  const endpoint = localEndpointOfProvider(provider);
+  if (!endpoint) return { ok: true, release: NOOP_RELEASE };
+  const slots = await buildLocalEndpointSlotContext();
+  const { atCapacity, inFlight, limit } = readEndpointCapacity(endpoint, agents, slots);
+  if (atCapacity) {
+    return { ok: false, reason: `local endpoint ${endpoint} is at capacity (${inFlight}/${limit})` };
+  }
+  return { ok: true, release: reserveLocalEndpointSpawn(endpoint, reservationId) };
+}
+
+/**
  * Running agents plus in-flight reservations on `endpoint`, against the cap.
  *
  * `ignoreTaskId` excludes agents belonging to the task being dispatched. A task

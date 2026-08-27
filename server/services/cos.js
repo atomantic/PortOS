@@ -35,7 +35,11 @@ import { todayInTimezone } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
 import { normalizeDomainAutonomy, getDomainMode } from '../lib/domainAutonomy.js';
 import { normalizeDomainBudgets, remainingActionBudget } from '../lib/domainBudgets.js';
+import { mergePersistentMindCapabilities } from '../lib/persistentMindCapabilities.js';
+import { mergePersistentMindProfile } from '../lib/persistentMindProfile.js';
+import { mergePersistentMindPrompt } from '../lib/persistentMindPrompt.js';
 import { getDomainBudgetStatus } from './domainUsage.js';
+import { pendingCosActionReservations } from './cosAdmissionReservations.js';
 // Dependency-free leaf holding the shared agent maps + the runner-mode flag,
 // read by `isRunnerHolding` below.
 import { useRunner } from './agentState.js';
@@ -150,6 +154,28 @@ import {
 // `spawnDequeuePriorityN(ctx)` helpers.
 import { createDequeueCapacity, countRunningAgentsByLocalEndpoint, isMissionTierEligible, isIdleTierEligible } from './cosDequeue.js';
 import { buildLocalEndpointSlotContext, localEndpointCapacityError } from './cosLocalEndpointSlots.js';
+import {
+  initializePersistentMindSupervisor,
+  shutdownPersistentMindSupervisor,
+  handlePersistentMindGlobalPause,
+  handlePersistentMindGlobalResume,
+  registerPersistentMindTurnAdapter,
+  unregisterPersistentMindTurnAdapter,
+} from './persistentMindSupervisor.js';
+import { createPersistentMindTurnAdapter } from './persistentMindAdapter.js';
+
+export {
+  getPersistentMindState,
+  setPersistentMindEnabled,
+  startPersistentMind,
+  pausePersistentMind,
+  resumePersistentMind,
+  stopPersistentMind,
+  enqueuePersistentMindMessage,
+  requestPersistentMindWake,
+  registerPersistentMindTurnAdapter,
+  unregisterPersistentMindTurnAdapter,
+} from './persistentMindSupervisor.js';
 
 /**
  * Get current CoS status
@@ -200,6 +226,9 @@ export async function updateConfig(updates) {
     // Same for domainBudgets — a PATCH naming one domain (or one cap on one
     // domain) must merge field-by-field over the rest, not replace the map.
     const priorDomainBudgets = state.config.domainBudgets;
+    const priorPersistentMindCapabilities = state.config.persistentMindCapabilities;
+    const priorPersistentMindProfile = state.config.persistentMindProfile;
+    const priorPersistentMindPrompt = state.config.persistentMindPrompt;
     state.config = { ...state.config, ...updates };
     if (updates.domainAutonomy !== undefined) {
       state.config.domainAutonomy = normalizeDomainAutonomy({
@@ -214,10 +243,33 @@ export async function updateConfig(updates) {
       }
       state.config.domainBudgets = normalizeDomainBudgets(mergedBudgets);
     }
+    if (updates.persistentMindProfile !== undefined) {
+      state.config.persistentMindProfile = mergePersistentMindProfile(
+        priorPersistentMindProfile,
+        updates.persistentMindProfile,
+      );
+    }
+    if (updates.persistentMindCapabilities !== undefined) {
+      state.config.persistentMindCapabilities = mergePersistentMindCapabilities(
+        priorPersistentMindCapabilities,
+        updates.persistentMindCapabilities,
+      );
+    }
+    if (updates.persistentMindPrompt !== undefined) {
+      state.config.persistentMindPrompt = mergePersistentMindPrompt(
+        priorPersistentMindPrompt,
+        updates.persistentMindPrompt,
+      );
+    }
     await saveState(state);
     return state.config;
   });
   cosEvents.emit('config:changed', config);
+  if (isDaemonRunning() && updates.domainAutonomy !== undefined) {
+    const mode = getDomainMode(config, 'cos');
+    if (mode === 'execute') await handlePersistentMindGlobalResume();
+    else await handlePersistentMindGlobalPause(`CoS autonomy changed to ${mode}`);
+  }
   return config;
 }
 
@@ -425,6 +477,8 @@ export async function start() {
   emitLog('info', 'Running initial task evaluation...');
   await evaluateTasks({ initialStartup: true });
   await runHealthCheck();
+  await registerPersistentMindTurnAdapter(createPersistentMindTurnAdapter());
+  await initializePersistentMindSupervisor();
 
   cosEvents.emit('status', { running: true });
   emitLog('success', 'CoS daemon started');
@@ -454,6 +508,9 @@ export async function stop() {
     return { success: false, error: 'Not running' };
   }
 
+  await shutdownPersistentMindSupervisor();
+  unregisterPersistentMindTurnAdapter();
+
   // Cancel all scheduled events
   cancelEvent('cos-health-check');
   cancelEvent('cos-performance-summary');
@@ -479,7 +536,7 @@ export async function stop() {
  * Daemon stays running but skips evaluations
  */
 export async function pause(reason = null) {
-  return withStateLock(async () => {
+  const result = await withStateLock(async () => {
     const state = await loadState();
 
     if (state.paused) {
@@ -495,6 +552,8 @@ export async function pause(reason = null) {
     cosEvents.emit('status:paused', { paused: true, pausedAt: state.pausedAt, reason });
     return { success: true, pausedAt: state.pausedAt };
   });
+  if (result.success) await handlePersistentMindGlobalPause(reason || 'Chief of Staff paused');
+  return result;
 }
 
 /**
@@ -520,6 +579,7 @@ export async function resume() {
 
   // Trigger immediate task dequeue on resume (outside lock to avoid holding it)
   if (result.success && isDaemonRunning()) {
+    await handlePersistentMindGlobalResume();
     setTimeout(() => dequeueNextTask(), RESUME_DEQUEUE_DELAY_MS);
   }
 
@@ -1055,7 +1115,11 @@ async function spawnDequeuePriority2AutoApproved(ctx) {
       const runningAutonomous = Object.values(state.agents).filter(
         (a) => a.status === 'running' && a.metadata?.taskType && a.metadata.taskType !== 'user'
       ).length;
-      autonomousActionsRemaining = remainingActionBudget(cosBudget.budget, cosBudget.usage, runningAutonomous);
+      autonomousActionsRemaining = remainingActionBudget(
+        cosBudget.budget,
+        cosBudget.usage,
+        runningAutonomous + pendingCosActionReservations()
+      );
       if (autonomousActionsRemaining === 0) {
         emitLog('info', `CoS auto-run paused — daily actions budget reached`, { domainBudget: 'cos', exceeded: 'actions' });
         cosAutonomyMode = 'off';
@@ -1561,6 +1625,11 @@ export async function init() {
   cosEvents.on('tasks:changed', (data) => {
     if (!isDaemonRunning() || !data?.action) return;
     if (data.action === 'added') {
+      // An explicit dispatcher (for example a scheduled job's Run now route)
+      // owns the spawn and will call forceSpawnTask after persistence. Skipping
+      // the automatic wake here prevents that dispatcher from racing a normal
+      // internal-task dequeue and reporting a false in-progress failure.
+      if (data.suppressDequeue) return;
       // Order matters: dequeueNextTask is scheduled before the user-task
       // tryImmediateSpawn, matching the pre-extraction sequence (addTask emitted
       // tasks:changed — registering dequeue via this listener — before it called

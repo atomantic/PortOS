@@ -1,4 +1,6 @@
 import { useMemo } from 'react';
+import { formatBytes, formatDurationMs } from '../../utils/formatters';
+import { computeAppMetrics, cpuTone } from '../../utils/openWorldAppMetrics';
 
 // Building-detail panel shown while a borough is focused (issue #2593). It REPLACES the Intel pane
 // (desktop) / renders as a bottom sheet (compact) — never overlapping it — and surfaces the app's
@@ -16,6 +18,14 @@ const STATUS_STYLES = {
 
 const UNHEALTHY = new Set(['errored', 'error', 'stopped', 'stopping']);
 
+// Same glanceable load tone the building hologram uses, so "hot" means hot everywhere.
+const CPU_TONE_CLASSES = {
+  idle: 'text-gray-400',
+  calm: 'text-cyan-300',
+  busy: 'text-port-warning',
+  hot: 'text-port-error',
+};
+
 function StatBlock({ label, value, tone = 'text-cyan-300' }) {
   return (
     <div className="bg-black/40 border border-cyan-500/20 rounded px-2 py-1.5">
@@ -30,6 +40,10 @@ export default function OpenWorldFocusPanel({ app, notFound = false, agents = []
   const containerClass = isDesktop
     ? 'absolute top-20 right-4 bottom-24 w-[19rem] pointer-events-auto'
     : 'absolute inset-x-2 bottom-16 pointer-events-auto';
+
+  // Live per-process PM2 telemetry (roadmap 1.1) — same aggregation the building
+  // hologram renders, so the focused panel and the in-world card never disagree.
+  const metrics = useMemo(() => computeAppMetrics(app), [app]);
 
   const procSummary = useMemo(() => {
     const status = app?.pm2Status || {};
@@ -126,6 +140,17 @@ export default function OpenWorldFocusPanel({ app, notFound = false, agents = []
                   </li>
                 ))}
               </ul>
+            )}
+            {metrics.hasMetrics && metrics.onlineProcs > 0 && (
+              <div className="grid grid-cols-3 gap-1.5 mt-1.5">
+                <StatBlock
+                  label="CPU"
+                  value={`${metrics.cpuPercent}%`}
+                  tone={CPU_TONE_CLASSES[cpuTone(metrics.cpuPercent)]}
+                />
+                <StatBlock label="MEM" value={formatBytes(metrics.memBytes, 0)} />
+                <StatBlock label="UPTIME" value={formatDurationMs(metrics.uptimeMs)} tone="text-cyan-300/80" />
+              </div>
             )}
           </div>
 

@@ -58,13 +58,17 @@ const sourceModels = (provider, withEffort) => {
  *   — then list BASE models instead, with effort picked separately. Leave off
  *   for a picker with no effort control: there the suffixed ids are the only
  *   way to express a tier, so collapsing them would strip the capability.
- * @returns {{ providers, selectedProviderId, selectedModel, availableModels, selectedProvider, setSelectedProviderId, setSelectedModel, loading }}
+ * @param {boolean} [options.enabled] - Load the provider catalog only when true.
+ *   Disabled pickers keep an empty catalog and do not issue a provider request.
+ * @returns {{ providers, activeProviderId, selectedProviderId, selectedModel, availableModels, selectedProvider, setSelectedProviderId, setSelectedModel, loading }}
  */
-export default function useProviderModels({ filter, allowDefault = false, silent = false, modelFilter, withEffort = false } = {}) {
+export default function useProviderModels({ filter, allowDefault = false, silent = false, modelFilter, withEffort = false, enabled = true } = {}) {
   const [providers, setProviders] = useState([]);
+  const [activeProviderId, setActiveProviderId] = useState('');
   const [selectedProviderId, setSelectedProviderId] = useState('');
   const [selectedModel, setSelectedModel] = useState('');
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(enabled);
+  const loadGenerationRef = useRef(0);
   const hasSetInitialRef = useRef(false);
   // Latched once the model is chosen deliberately — a picker change, or a
   // caller restoring a saved pin. The auto re-pick below then stands down for
@@ -107,13 +111,16 @@ export default function useProviderModels({ filter, allowDefault = false, silent
   useEffect(() => { pickInitialModelRef.current = pickInitialModel; }, [pickInitialModel]);
 
   const load = useCallback(async () => {
+    const loadGeneration = ++loadGenerationRef.current;
     setLoading(true);
     const data = await api.getProviders(silent ? { silent: true } : undefined).catch((err) => {
       // Log even when `silent` suppresses the toast, so a failed fetch leaves
       // a breadcrumb (matches the prior inline console.warn behavior).
       console.warn(`⚠️ Provider list fetch failed: ${err?.message || err}`);
-      return { providers: [] };
+      return { activeProvider: '', providers: [] };
     });
+    if (loadGeneration !== loadGenerationRef.current) return;
+    setActiveProviderId(typeof data?.activeProvider === 'string' ? data.activeProvider : '');
     const filterFn = filter || (p => p.enabled);
     const filtered = (data.providers || [])
       .filter(isProviderHardwareCompatible)
@@ -127,7 +134,17 @@ export default function useProviderModels({ filter, allowDefault = false, silent
     setLoading(false);
   }, [filter, allowDefault, silent]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (!enabled) {
+      loadGenerationRef.current += 1;
+      setProviders([]);
+      setActiveProviderId('');
+      setLoading(false);
+      return;
+    }
+    load();
+    return () => { loadGenerationRef.current += 1; };
+  }, [enabled, load]);
 
   const currentProvider = useMemo(
     () => providers.find(p => p.id === selectedProviderId),
@@ -202,6 +219,7 @@ export default function useProviderModels({ filter, allowDefault = false, silent
 
   return {
     providers,
+    activeProviderId,
     selectedProviderId,
     selectedModel,
     availableModels,

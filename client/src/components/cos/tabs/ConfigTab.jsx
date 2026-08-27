@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Settings, Activity, CheckCircle, FileText, X } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
+import PersistentMindProfileControls from '../PersistentMindProfileControls';
 import ConfigRow from './ConfigRow';
 import { AUTONOMY_LEVELS, detectAutonomyLevel, AVATAR_STYLE_LABELS, AUTONOMY_DOMAINS, DOMAIN_AUTONOMY_MODES, getDomainMode, DOMAIN_BUDGET_FIELDS, getDomainBudget, normalizeBudgetLimit } from '../constants';
 import ProviderModelSelector from '../../ProviderModelSelector';
@@ -419,6 +420,13 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle })
       <DomainAutonomyControl config={config} onDomainChange={handleDomainChange} />
 
       <DomainBudgetControl config={config} usage={budgetUsage} onBudgetChange={handleBudgetChange} />
+
+      <div>
+        <h4 className="text-sm font-medium text-gray-400 mb-2">Persistent Mind</h4>
+        <div className="bg-port-card border border-port-border rounded-lg p-4">
+          <PersistentMindProfileControls profile={config?.persistentMindProfile} onSaved={onUpdate} />
+        </div>
+      </div>
 
       <div className="bg-port-card border border-port-border rounded-lg divide-y divide-port-border">
         <ConfigRow

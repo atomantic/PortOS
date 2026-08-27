@@ -30,7 +30,7 @@ const NAV = [
   { id: 'nav.meatspace.settings', path: '/meatspace/settings', label: 'Settings', aliases: ['meatspace-settings'] },
   { id: 'nav.settings.general', path: '/settings/general', label: 'General', aliases: ['settings', 'settings-general', 'general'] },
   { id: 'nav.settings.voice', path: '/settings/voice', label: 'Voice', aliases: ['settings-voice', 'voice', 'voice-settings'] },
-  { id: 'nav.settings.catalog', path: '/settings/catalog', label: 'Catalog Types', aliases: ['settings-catalog', 'catalog-types'] },
+  { id: 'nav.catalog.settings', path: '/catalog?settings=1', label: 'Catalog Types', aliases: ['catalog-settings', 'settings-catalog', 'catalog-types'] },
   { id: 'nav.settings.database', path: '/settings/database', label: 'Database', aliases: ['settings-database', 'database'] },
 ];
 
@@ -59,7 +59,7 @@ describe('resolveNavIntent', () => {
 
   it('word-overlaps a reversed-order alias — "catalog settings" → Catalog, not generic Settings', () => {
     // alias is "settings-catalog" (reversed word order); word overlap still wins.
-    expect(resolveNavIntent('go to catalog settings', NAV)).toEqual({ path: '/settings/catalog', label: 'Catalog Types' });
+    expect(resolveNavIntent('go to catalog settings', NAV)).toEqual({ path: '/catalog?settings=1', label: 'Catalog Types' });
   });
 
   it('resolves a terse "<page> settings" WITHOUT a nav lead-in', () => {

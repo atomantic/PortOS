@@ -27,6 +27,7 @@ describe('OverflowMenu', () => {
     await user.click(trigger);
 
     expect(screen.getByRole('menu')).toBeTruthy();
+    expect(screen.getByRole('menu').parentElement).toBe(document.body);
     expect(trigger.getAttribute('aria-expanded')).toBe('true');
     expect(screen.getByRole('menuitem', { name: 'Archive' })).toBeTruthy();
     expect(screen.getByRole('menuitem', { name: 'Delete' })).toBeTruthy();

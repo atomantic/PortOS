@@ -37,8 +37,9 @@ const postFeatureEnabled = (state) => state?.instanceFeatures?.features?.some(
 
 // Each entry: { id, label, Component, width, defaultH?, gate? }.
 // `gate(state) => bool` skips the widget when it has nothing useful to show.
-// The Apps tile is intentionally un-gated — it renders its own empty-state
-// CTA so the "add your first app" path is always visible on a blank install.
+// The Apps tile waits for its first read before rendering so a slow response
+// cannot flash the empty-state CTA over an existing installation. It still
+// renders its own empty-state CTA after a successful empty response.
 //
 // `defaultH` is the row count (each row ≈ 80px) used when a widget is first
 // auto-placed into a grid. It is a STARTING size, not the rendered height:
@@ -53,7 +54,7 @@ export const WIDGETS = [
   { id: 'quick-idea',        label: 'Quick Idea (Catalog)',  Component: QuickIdeaCapture,       width: 'half',    defaultH: 4 },
   { id: 'quick-image',       label: 'Quick Image Prompt',    Component: QuickImagePrompt,       width: 'half',    defaultH: 6 },
   { id: 'quick-task',        label: 'Quick Task',            Component: QuickTaskWidget,        width: 'half',    defaultH: 5 },
-  { id: 'apps',              label: 'Apps Grid',             Component: AppsGridWidget,         width: 'full',    defaultH: 5 },
+  { id: 'apps',              label: 'Apps Grid',             Component: AppsGridWidget,         width: 'full',    defaultH: 5, gate: (s) => s.appsLoading === false },
   { id: 'cos',               label: 'Chief of Staff',        Component: CosDashboardWidget,     width: 'third',   defaultH: 6 },
   { id: 'goal-progress',     label: 'Goal Progress',         Component: GoalProgressWidget,     width: 'third',   defaultH: 5 },
   { id: 'upcoming-tasks',    label: 'Upcoming Tasks',        Component: UpcomingTasksWidget,    width: 'third',   defaultH: 5 },

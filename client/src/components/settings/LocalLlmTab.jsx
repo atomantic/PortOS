@@ -10,7 +10,7 @@ import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import {
   getLocalLlmStatus, getLocalLlmCatalog, getLocalLlmHuggingFaceSearch, installLocalLlmModel,
   deleteLocalLlmModel, migrateLocalLlmBackend, installLocalLlmBackend, upgradeLocalLlmBackend, controlOllamaService,
-  installAudioModel, patchSettingsSlice, getLlamaServerStatus, startLlamaServer, stopLlamaServer, installLlamaServer,
+  installAudioModel, patchSettingsSlice, getLlamaServerStatus, getLlamaServerUpdateStatus, startLlamaServer, stopLlamaServer, installLlamaServer, upgradeLlamaServer,
   downloadSpecDecodeModel, cancelSpecDecodeModelDownload, controlLmStudioService, getMtplxServerStatus, stopMtplxServer, installMtplx,
   searchMtplxModels, pullMtplxModel, removeMtplxModel,
   saveRuntimeStartupList
@@ -225,7 +225,19 @@ export function LocalLlmTab() {
   const loadLlamaStatus = useCallback(() => {
     return getLlamaServerStatus({ silent: true })
       .then((res) => {
-        if (res) setLlamaStatus(res);
+        if (res) {
+          setLlamaStatus(res);
+          // Version/Homebrew metadata is deliberately a separate, non-blocking
+          // request. A slow `--version` probe must not hold up lifecycle state,
+          // presets, or the rest of the Local LLMs page.
+          if (res.installed) {
+            getLlamaServerUpdateStatus({ silent: true })
+              .then((update) => {
+                if (update) setLlamaStatus((previous) => previous ? { ...previous, ...update } : previous);
+              })
+              .catch(() => null);
+          }
+        }
         return res;
       })
       .catch(() => null);
@@ -477,6 +489,11 @@ export function LocalLlmTab() {
     'runtime-install-llama',
     () => installLlamaServer(),
     'llama.cpp installed'
+  ).then(loadLlamaStatus);
+  const runtimeUpgradeLlama = () => runAction(
+    'runtime-upgrade-llama',
+    () => upgradeLlamaServer(),
+    (r) => r?.note || 'llama.cpp updated'
   ).then(loadLlamaStatus);
   const runtimeStopLlama = () => runAction(
     'runtime-stop-llama',
@@ -916,6 +933,7 @@ export function LocalLlmTab() {
         onControlLmStudio={controlLmStudio}
         onInstallBackend={installRuntimeBackend}
         onInstallLlama={runtimeInstallLlama}
+        onUpgradeLlama={runtimeUpgradeLlama}
         onStopLlama={runtimeStopLlama}
         onConfigureLlama={() => scrollTo(llamaSectionRef)}
         onConfigureMtplx={() => scrollTo(mtplxSectionRef)}

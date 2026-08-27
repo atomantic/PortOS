@@ -754,8 +754,92 @@ export function isAuthErrorStatus(statusCode) {
   return statusCode === 401 || statusCode === 403;
 }
 
+const RATE_LIMIT_HEADER_NAMES = {
+  retryAfter: ['retry-after'],
+  reset: ['ratelimit-reset', 'rate-limit-reset', 'x-ratelimit-reset', 'x-rate-limit-reset', 'x-ratelimit-reset-requests', 'anthropic-ratelimit-requests-reset'],
+  remaining: ['ratelimit-remaining', 'rate-limit-remaining', 'x-ratelimit-remaining', 'x-rate-limit-remaining', 'x-ratelimit-remaining-requests', 'anthropic-ratelimit-requests-remaining'],
+  limit: ['ratelimit-limit', 'rate-limit-limit', 'x-ratelimit-limit', 'x-rate-limit-limit', 'x-ratelimit-limit-requests', 'anthropic-ratelimit-requests-limit'],
+};
+const MAX_RATE_LIMIT_HEADER_LENGTH = 128;
+const MAX_RATE_LIMIT_HEADER_DELAY_MS = 30 * 24 * 60 * 60 * 1000;
+const MAX_RATE_LIMIT_COUNT = 1_000_000_000;
+
+const readAllowedHeader = (headers, names) => {
+  for (const name of names) {
+    const value = typeof headers?.get === 'function'
+      ? headers.get(name)
+      : Object.entries(headers || {}).find(([key]) => key.toLowerCase() === name)?.[1];
+    if (value != null) {
+      const normalized = String(value).trim();
+      if (normalized) return normalized;
+    }
+  }
+  return null;
+};
+
+const parseRateLimitCount = (value) => {
+  if (!value || value.length > MAX_RATE_LIMIT_HEADER_LENGTH || !/^\d+$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed <= MAX_RATE_LIMIT_COUNT ? parsed : null;
+};
+
+const parseRetryAfter = (value, now) => {
+  if (!value || value.length > MAX_RATE_LIMIT_HEADER_LENGTH) return null;
+  if (/^\d+(?:\.\d+)?$/.test(value)) {
+    const delay = Math.ceil(Number(value) * 1000);
+    return Number.isSafeInteger(delay) && delay >= 0 && delay <= MAX_RATE_LIMIT_HEADER_DELAY_MS ? delay : null;
+  }
+  const at = Date.parse(value);
+  const delay = at - now;
+  return Number.isFinite(at) && delay >= 0 && delay <= MAX_RATE_LIMIT_HEADER_DELAY_MS ? delay : null;
+};
+
+const parseResetAt = (value, now) => {
+  if (!value || value.length > MAX_RATE_LIMIT_HEADER_LENGTH) return null;
+  let at;
+  if (/^(?:\d+(?:\.\d+)?(?:ms|s|m|h))+$/i.test(value)) {
+    const units = { ms: 1, s: 1000, m: 60000, h: 3600000 };
+    const delay = [...value.matchAll(/(\d+(?:\.\d+)?)(ms|s|m|h)/gi)]
+      .reduce((total, match) => total + (Number(match[1]) * units[match[2].toLowerCase()]), 0);
+    at = now + delay;
+  } else if (/^\d+(?:\.\d+)?$/.test(value)) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric < 0) return null;
+    if (numeric >= 1e12) at = numeric;
+    else if (numeric >= 1e9) at = numeric * 1000;
+    else at = now + (numeric * 1000);
+  } else {
+    at = Date.parse(value);
+  }
+  const delay = at - now;
+  return Number.isFinite(at) && delay >= 0 && delay <= MAX_RATE_LIMIT_HEADER_DELAY_MS
+    ? new Date(at).toISOString()
+    : null;
+};
+
+/**
+ * Normalize the small, explicit set of upstream rate-limit headers PortOS may
+ * persist. Raw names/values never leave this boundary.
+ */
+export function normalizeRateLimitHeaders(headers, { now = Date.now() } = {}) {
+  if (!headers) return null;
+  const retryAfterMs = parseRetryAfter(readAllowedHeader(headers, RATE_LIMIT_HEADER_NAMES.retryAfter), now);
+  const resetAt = parseResetAt(readAllowedHeader(headers, RATE_LIMIT_HEADER_NAMES.reset), now);
+  const remaining = parseRateLimitCount(readAllowedHeader(headers, RATE_LIMIT_HEADER_NAMES.remaining));
+  const limit = parseRateLimitCount(readAllowedHeader(headers, RATE_LIMIT_HEADER_NAMES.limit));
+  if (retryAfterMs == null && resetAt == null && remaining == null && limit == null) return null;
+  return {
+    observedAt: new Date(now).toISOString(),
+    ...(retryAfterMs != null ? { retryAfterMs } : {}),
+    ...(resetAt ? { resetAt } : {}),
+    ...(remaining != null ? { remaining } : {}),
+    ...(limit != null ? { limit } : {}),
+  };
+}
+
 export function analyzeHttpError(response) {
-  const { status, statusText, body } = response;
+  const { status, statusText, body, headers } = response;
+  const rateLimitWindow = normalizeRateLimitHeaders(headers);
 
   if (status >= 200 && status < 300) {
     return {
@@ -775,6 +859,7 @@ export function analyzeHttpError(response) {
       category: ERROR_CATEGORIES.RATE_LIMIT,
       message: `Rate limit exceeded (${status})`,
       waitTime: extractWaitTime(body),
+      rateLimitWindow,
       requiresFallback: false,
       actionable: false,
       suggestedFix: 'Wait and retry - temporary rate limiting'
@@ -798,7 +883,7 @@ export function analyzeHttpError(response) {
     // for a non-2xx response that's still a failure — preserve it as an
     // UNKNOWN HTTP error instead of letting the caller treat it as success.
     const bodyAnalysis = analyzeError(body);
-    if (bodyAnalysis.hasError) return bodyAnalysis;
+    if (bodyAnalysis.hasError) return { ...bodyAnalysis, rateLimitWindow };
   }
 
   return {

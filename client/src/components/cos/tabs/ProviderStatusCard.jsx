@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { AlertTriangle, CheckCircle, Clock, RefreshCw, Zap, Server } from 'lucide-react';
 import * as api from '../../../services/api';
 import socket from '../../../services/socket';
+import { formatClockTime } from '../../../utils/formatters';
 import BrailleSpinner from '../../BrailleSpinner';
 
 export default function ProviderStatusCard() {
@@ -169,6 +170,18 @@ export default function ProviderStatusCard() {
           const status = statuses?.providers?.[provider.id];
           const isUsageLimit = status?.reason === 'usage-limit';
           const isRateLimit = status?.reason === 'rate-limit';
+          const rateLimitWindow = status?.rateLimitWindow;
+          const rateLimitParts = [];
+          if (rateLimitWindow?.remaining != null) {
+            rateLimitParts.push(`${rateLimitWindow.remaining} remaining${rateLimitWindow.limit != null ? ` of ${rateLimitWindow.limit}` : ''}`);
+          } else if (rateLimitWindow?.limit != null) {
+            rateLimitParts.push(`limit ${rateLimitWindow.limit}`);
+          }
+          if (rateLimitWindow?.retryAfterMs != null) {
+            rateLimitParts.push(`retry after ${Math.ceil(rateLimitWindow.retryAfterMs / 1000)}s`);
+          }
+          const resetTime = formatClockTime(rateLimitWindow?.resetAt, { seconds: false });
+          if (resetTime) rateLimitParts.push(`resets ${resetTime}`);
 
           return (
             <div
@@ -198,6 +211,12 @@ export default function ProviderStatusCard() {
                     <div className="flex items-center gap-1.5 mt-2 text-xs text-gray-500">
                       <Clock size={12} />
                       <span>Estimated recovery: {status.timeUntilRecovery}</span>
+                    </div>
+                  )}
+
+                  {rateLimitParts.length > 0 && (
+                    <div className="mt-2 text-xs text-gray-500" data-testid={`rate-limit-window-${provider.id}`}>
+                      API window: {rateLimitParts.join(' · ')}
                     </div>
                   )}
                 </div>

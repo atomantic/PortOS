@@ -41,7 +41,7 @@ import {
   AlertTriangle, X, Film,
 } from 'lucide-react';
 import { composeStyledPrompt } from '../lib/composeStyledPrompt';
-import { isCloudCliMode, deriveAvailableBackends, AGY_IMAGEGEN_DEFAULT_MODEL, IMAGE_GEN_MODE, cloudPromptRequired, isI2iCapableMode, pickI2iMode, modeLabel, referenceSlotsFor, supportsReferenceStrength } from '../lib/imageGenBackends';
+import { isCloudCliMode, deriveAvailableBackends, AGY_IMAGEGEN_DEFAULT_MODEL, IMAGE_GEN_MODE, cloudPromptRequired, imageGenReadiness, isI2iCapableMode, pickI2iMode, modeLabel, referenceSlotsFor, supportsReferenceStrength } from '../lib/imageGenBackends';
 import { clampImageDimensions, clampImageEdge } from '../lib/imageGenResolutions';
 import { peerModelRequiresInput } from '../lib/federatedMediaReadiness.js';
 import { DEFAULT_NEGATIVE_PROMPT } from '../lib/imageGenDefaults';
@@ -275,10 +275,10 @@ export default function ImageGen() {
   // newer `local` probe that already returned green. Without this the badge
   // gets stuck on "SD API unreachable" even though Local is selected.
   const statusRequestToken = useRef(0);
-  const refreshStatus = useCallback((mode) => {
+  const refreshStatus = useCallback((mode, localModelId) => {
     const myToken = ++statusRequestToken.current;
     setStatusLoading(true);
-    getImageGenStatus(mode)
+    getImageGenStatus(mode, mode === IMAGE_GEN_MODE.LOCAL ? localModelId : undefined)
       .then((s) => {
         if (myToken !== statusRequestToken.current) return;
         setStatus(s);
@@ -413,8 +413,8 @@ export default function ImageGen() {
   // gating reflecting the previous backend.
   useEffect(() => {
     if (!effectiveMode) return;
-    refreshStatus(effectiveMode);
-  }, [effectiveMode, refreshStatus]);
+    refreshStatus(effectiveMode, modelId);
+  }, [effectiveMode, modelId, refreshStatus]);
 
   // Deferred i2i mode nudge: once backends resolve, flip to an i2i-capable
   // backend so the URL-supplied init image actually takes effect (the picker +
@@ -1193,6 +1193,9 @@ export default function ImageGen() {
   }, [navigate]);
 
   const notConnected = status && status.connected === false;
+  const statusReadiness = imageGenReadiness(status);
+  const statusReady = statusReadiness === 'ready';
+  const statusUnknown = statusReadiness === 'unknown';
 
   return (
     <div className="space-y-3">
@@ -1204,16 +1207,18 @@ export default function ImageGen() {
             </span>
           ) : status ? (
             <span className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full border ${
-              status.connected
+              statusReady
                 ? 'border-port-success/40 bg-port-success/10 text-port-success'
-                : 'border-port-error/40 bg-port-error/10 text-port-error'
+                : statusUnknown
+                  ? 'border-port-warning/40 bg-port-warning/10 text-port-warning'
+                  : 'border-port-error/40 bg-port-error/10 text-port-error'
             }`}>
-              {status.connected ? (
-                <><span className="w-2 h-2 rounded-full bg-port-success" /> {status.model || CONNECTED_MODE_LABELS[status.mode] || 'external SD API'}</>
+              {statusReady ? (
+                <><span className="w-2 h-2 rounded-full bg-port-success" /> Ready — {status.model || CONNECTED_MODE_LABELS[status.mode] || 'external SD API'}</>
               ) : (
                 <>
                   <AlertTriangle className="w-3 h-3" />
-                  {status.reason || 'Not connected'} —
+                  {statusUnknown ? 'Could not verify' : 'Unavailable'}: {status.reason || 'Not connected'} —
                   <button type="button" onClick={openSettings} className="underline">Settings</button>
                 </>
               )}
@@ -1234,7 +1239,7 @@ export default function ImageGen() {
         </div>
         <div className="flex items-center gap-1">
           <button
-            onClick={() => refreshStatus(effectiveMode)}
+            onClick={() => refreshStatus(effectiveMode, modelId)}
             disabled={statusLoading}
             className="p-1.5 rounded text-gray-400 hover:text-white hover:bg-port-border/50 disabled:opacity-50"
             title="Refresh status" aria-label="Refresh status"

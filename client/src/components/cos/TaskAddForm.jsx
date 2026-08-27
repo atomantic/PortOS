@@ -18,9 +18,33 @@ import useReviewerModelOptions from '../../hooks/useReviewerModelOptions';
 import useAssignableInstances from '../../hooks/useAssignableInstances';
 import { reviewerModelsFromDefaults, reviewerEffortsFromDefaults } from '../../lib/reviewerModels';
 import { PORTOS_APP_ID } from '../../lib/appIdentity';
+import { safeReadJsonStorage, safeReadStorage, safeRemoveStorage, safeWriteJsonStorage } from '../../lib/safeStorage';
+
+const TASK_DESCRIPTION_DRAFT_KEY = 'portos-cos-task-description-draft';
+const INVALID_DRAFT = Symbol('invalid task description draft');
+
+const readTaskDescriptionDraft = (defaultApp) => {
+  const raw = safeReadStorage(TASK_DESCRIPTION_DRAFT_KEY);
+  if (raw === null) return { description: '', app: defaultApp };
+  const draft = safeReadJsonStorage(TASK_DESCRIPTION_DRAFT_KEY, INVALID_DRAFT);
+  if (draft === INVALID_DRAFT) return { description: raw, app: defaultApp };
+  if (typeof draft === 'string') return { description: draft, app: defaultApp };
+  if (!draft || typeof draft !== 'object' || Array.isArray(draft)) return { description: '', app: defaultApp };
+  return {
+    description: typeof draft.description === 'string' ? draft.description : '',
+    app: typeof draft.app === 'string' && draft.app ? draft.app : defaultApp,
+  };
+};
 
 export default function TaskAddForm({ providers, apps, onTaskAdded, compact = false, defaultExpanded = false, defaultApp = '' }) {
-  const [newTask, setNewTask] = useState({ description: '', model: '', provider: '', effort: '', temperature: '', thinking: '', app: defaultApp });
+  const [initialDraft] = useState(() => readTaskDescriptionDraft(defaultApp));
+  const [newTask, setNewTask] = useState(() => {
+    return {
+      description: initialDraft.description,
+      model: '', provider: '', effort: '', temperature: '', thinking: '',
+      app: apps?.some(app => app.id === initialDraft.app) ? initialDraft.app : defaultApp
+    };
+  });
   const [addToTop, setAddToTop] = useState(false);
   const [enhancePrompt, setEnhancePrompt] = useState(false);
   const [isEnhancing, setIsEnhancing] = useState(false);
@@ -74,6 +98,29 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
   // run-shape toggles, so the app-defaults effect skips the single run that
   // change triggers. See that effect for why.
   const templateAppChangeRef = useRef(false);
+
+  useEffect(() => {
+    if (newTask.description) {
+      safeWriteJsonStorage(TASK_DESCRIPTION_DRAFT_KEY, {
+        description: newTask.description,
+        app: newTask.app || null,
+      });
+    } else {
+      safeRemoveStorage(TASK_DESCRIPTION_DRAFT_KEY);
+    }
+  }, [newTask.app, newTask.description]);
+
+  useEffect(() => {
+    if (!initialDraft.app || !apps?.length || newTask.app === initialDraft.app) return;
+    if (apps.some(app => app.id === initialDraft.app)) {
+      setNewTask(task => ({ ...task, app: initialDraft.app }));
+    }
+  }, [apps, initialDraft.app, newTask.app]);
+
+  useEffect(() => {
+    if (!newTask.app || !apps?.length || apps.some(app => app.id === newTask.app)) return;
+    setNewTask(task => ({ ...task, app: defaultApp }));
+  }, [apps, defaultApp, newTask.app]);
 
   // Fetch templates
   useEffect(() => {
@@ -503,6 +550,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
 
     // Only clear form inputs after successful submission
     setNewTask(t => ({ ...t, description: '' }));
+    safeRemoveStorage(TASK_DESCRIPTION_DRAFT_KEY);
     setSlashdoCommand(planOnly ? 'plan-task' : '');
     // targetInstanceId deliberately SURVIVES the clear, like app/model/provider
     // and the worktree toggles: it is a run setting, and someone queueing work

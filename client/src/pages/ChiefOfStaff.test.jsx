@@ -114,6 +114,30 @@ describe('ChiefOfStaff loading skeleton', () => {
     // The old spinner shell — a fixed 16rem box centering its child.
     expect(container.querySelector('.h-64')).toBeNull();
   });
+
+  it('shows the queue before the slow ancillary reads settle', async () => {
+    let releaseInsights;
+    api.getCosTasks.mockResolvedValue({
+      user: { tasks: [{ id: 'task-1', description: 'Example queued task', status: 'pending', metadata: {} }] },
+      cos: { tasks: [] },
+    });
+    api.getCosActionableInsights.mockReturnValue(new Promise((resolve) => { releaseInsights = resolve; }));
+
+    render(
+      <MemoryRouter initialEntries={['/cos/tasks']}>
+        <Routes>
+          <Route path="/cos/:tab" element={<ChiefOfStaff />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Example queued task')).toBeInTheDocument();
+    expect(screen.queryByRole('status', { name: 'Loading Chief of Staff' })).toBeNull();
+
+    await act(async () => {
+      releaseInsights({ insights: [] });
+    });
+  });
 });
 
 describe('ChiefOfStaff handleForceEvaluate', () => {
@@ -384,6 +408,20 @@ describe('ChiefOfStaff insight freshness (#2654)', () => {
     await waitFor(() => expect(api.forceHealthCheck).toHaveBeenCalledWith({ silent: true }));
     await act(async () => { await Promise.resolve(); });
     expect(api.getCosActionableInsights.mock.calls.length).toBe(before);
+  });
+
+  it('keeps the Health tab pending until its own read settles', async () => {
+    let releaseHealth;
+    api.getCosHealth.mockReturnValue(new Promise((resolve) => { releaseHealth = resolve; }));
+    renderAt('health');
+
+    expect(await screen.findByText('Loading health...')).toBeInTheDocument();
+    expect(screen.queryByText('All Systems Healthy')).not.toBeInTheDocument();
+
+    await act(async () => {
+      releaseHealth({ lastCheck: '2026-01-01T00:00:01Z', issues: [] });
+    });
+    expect(await screen.findByText('All Systems Healthy')).toBeInTheDocument();
   });
 
   it('does not let a stale fetchData health read clobber a fresher one', async () => {

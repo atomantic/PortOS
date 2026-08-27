@@ -107,7 +107,29 @@ builds on:
 | `POST` | `/api/instances/peers/:id/sync` | Trigger a sync with a peer. |
 | `GET` | `/api/instances/peers/:id/query?path=/api/…` | Proxy a request through a peer. |
 
-## 4. Quick actions, brain capture & daily log — the palette bridge
+## 4. Remote desktop
+
+Remote desktop is deliberately stricter than the rest of the companion API: it
+requires the PortOS instance password gate to be enabled even though ordinary
+API routes support the default passwordless tailnet posture.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/api/remote-desktop/status` | Report whether a VNC server is reachable on loopback, whether PortOS auth is enabled, and the host setup command. |
+| `POST` | `/api/remote-desktop/sessions` | Create a five-minute, single-purpose viewer URL. Returns `{ viewerPath, expiresAt }`. |
+
+The native client authenticates the session request with its saved instance
+password, then opens `viewerPath` in an embedded browser. The viewer loads the
+vendored noVNC module and connects to `/remote-desktop/ws?token=…`. That
+WebSocket is a byte-for-byte RFB bridge to `127.0.0.1:5900` (or the fixed
+`PORTOS_VNC_PORT` configured for the server process); neither the HTTP request
+nor the token can select an arbitrary TCP destination.
+
+The separate VNC password is entered inside the viewer and is never returned to
+PortOS's REST API or stored by the companion. See [REMOTE_DESKTOP.md](./REMOTE_DESKTOP.md)
+for setup and the complete security contract.
+
+## 5. Quick actions, brain capture & daily log — the palette bridge
 
 Non-DOM voice/palette actions are dispatchable over plain HTTP via the command
 palette bridge (`server/routes/palette.js`) — the app drives these directly and
@@ -157,7 +179,7 @@ are **not** interchangeable with these routes — pick per your need:
   `{ date, entry }`. Use it for a **typed** entry (`source: "text"`) or when you need
   the structured `entry` back.
 
-## 5. MeatSpace POST training & testing
+## 6. MeatSpace POST training & testing
 
 `/api/meatspace/post/*` (`server/routes/meatspacePostRoutes.js`). These are the
 read/write endpoints for POST config, sessions, and progress on a single instance.
@@ -185,7 +207,7 @@ those ids in one transaction and returns success only after the full batch is
 durable. Use `/sessions` only for scored tests, keeping training evidence out of
 benchmark history.
 
-## 6. iCloud-JSON sync precedent (POST-progress reconciliation)
+## 7. iCloud-JSON sync precedent (POST-progress reconciliation)
 
 The working reference for "iOS app writes an iCloud JSON file, PortOS ingests it"
 is MortalLoom (`server/routes/mortalloom.js`, `server/services/mortalLoomStore.js`):
@@ -197,7 +219,7 @@ is MortalLoom (`server/routes/mortalloom.js`, `server/services/mortalLoomStore.j
 A POST-progress iCloud reconciliation endpoint would need an explicit privacy
 design before it can mirror this precedent. Until then there is no cross-instance
 POST reconciliation — a companion app reads and writes each instance's
-`/api/meatspace/post/*` routes directly (see the note in §5).
+`/api/meatspace/post/*` routes directly (see the note in §6).
 
 ## Deferred follow-ups (filed separately)
 

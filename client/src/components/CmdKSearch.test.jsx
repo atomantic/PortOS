@@ -4,18 +4,21 @@ import { MemoryRouter, useLocation } from 'react-router';
 import { RECENT_KEY } from '../utils/navWorkingSet.js';
 
 const getPaletteManifest = vi.fn();
+const getInstanceFeatures = vi.fn();
 const getDashboardLayouts = vi.fn();
 const search = vi.fn(() => Promise.resolve({ sources: [] }));
 
 vi.mock('../services/api', () => ({
   search: (...args) => search(...args),
   getPaletteManifest: (...args) => getPaletteManifest(...args),
+  getInstanceFeatures: (...args) => getInstanceFeatures(...args),
   runPaletteAction: vi.fn(() => Promise.resolve({ ok: true })),
   getDashboardLayouts: (...args) => getDashboardLayouts(...args),
   setActiveDashboardLayout: vi.fn(() => Promise.resolve()),
   listCatalogIngredients: vi.fn(() => Promise.resolve({ items: [] })),
 }));
 
+import { __resetInstanceFeatureCache } from '../hooks/useInstanceFeatures.js';
 import CmdKSearch from './CmdKSearch.jsx';
 
 const NAV = [
@@ -24,7 +27,13 @@ const NAV = [
   { id: 'nav.brain.inbox', path: '/brain/inbox', label: 'Brain Inbox', section: 'Brain', aliases: [], keywords: [] },
   { id: 'nav.goals', path: '/goals', label: 'Goals', section: 'Life', aliases: [], keywords: [] },
   { id: 'nav.current', path: '/current', label: 'Current Page', section: 'Test', aliases: [], keywords: [] },
+  // Gated on an optional instance feature — present in the manifest, hidden by
+  // the palette whenever that feature is off.
+  { id: 'nav.devtools.jira', path: '/devtools/jira', label: 'JIRA', section: 'Dev Tools', feature: 'jira', aliases: ['jira'], keywords: [] },
 ];
+
+const FEATURES_ON = [{ id: 'jira', label: 'JIRA', enabled: true }];
+const FEATURES_OFF = [{ id: 'jira', label: 'JIRA', enabled: false }];
 
 function LocationProbe() {
   const location = useLocation();
@@ -32,6 +41,9 @@ function LocationProbe() {
 }
 
 beforeEach(() => {
+  // The feature list is cached at module scope and shared with the sidebar.
+  __resetInstanceFeatureCache();
+  getInstanceFeatures.mockResolvedValue({ features: FEATURES_ON });
   getPaletteManifest.mockResolvedValue({ nav: NAV, actions: [] });
   getDashboardLayouts.mockResolvedValue({ layouts: [] });
   search.mockReset();
@@ -69,6 +81,43 @@ describe('CmdKSearch recent destinations', () => {
 
     fireEvent.click(options[0]);
     await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/apps/example-app'));
+  });
+});
+
+// The manifest ships gated entries tagged rather than filtered, so the palette
+// has to apply the gate itself — filtering server-side would leave ⌘K offering
+// hidden pages until a reload, because it fetches the manifest once per session.
+describe('CmdKSearch instance feature gating', () => {
+  const openAndSearch = async (query) => {
+    render(
+      <MemoryRouter initialEntries={['/current']}>
+        <CmdKSearch />
+        <LocationProbe />
+      </MemoryRouter>,
+    );
+    fireEvent.keyDown(document, { key: 'k', metaKey: true });
+    const input = await screen.findByLabelText('Command palette');
+    fireEvent.change(input, { target: { value: query } });
+    await act(async () => {});
+  };
+
+  it('offers a gated page while its feature is on', async () => {
+    await openAndSearch('jira');
+    expect(screen.getByText('JIRA')).toBeInTheDocument();
+  });
+
+  it('hides a gated page when its feature is off', async () => {
+    getInstanceFeatures.mockResolvedValue({ features: FEATURES_OFF });
+
+    await openAndSearch('jira');
+    expect(screen.queryByText('JIRA')).not.toBeInTheDocument();
+  });
+
+  it('shows gated pages when the feature list cannot be read', async () => {
+    getInstanceFeatures.mockRejectedValue(new Error('offline'));
+
+    await openAndSearch('jira');
+    expect(screen.getByText('JIRA')).toBeInTheDocument();
   });
 });
 

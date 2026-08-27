@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router';
 import {
   Compass, ArrowRight, X, CheckCircle2, Target, Sparkles,
@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import * as api from '../../../services/api';
 import { getGoalFeatureAreas } from '../../../lib/goalFeatureMap.js';
-import { INSTANCE_FEATURES_CHANGED } from '../../../constants/events.js';
+import { useInstanceFeatures } from '../../../hooks/useInstanceFeatures.js';
 
 // Resolve a feature-area icon NAME (kept as a string in goalFeatureMap so that
 // module stays React-free and server-mirrorable) to a lucide component.
@@ -29,15 +29,23 @@ const AREA_ICONS = {
 export default function DailyDriverWidget({ dashboardState }) {
   const [post, setPost] = useState(null);
   const [topRec, setTopRec] = useState(null);
-  const [postEnabled, setPostEnabled] = useState(true);
   const [goals, setGoals] = useState([]);
   // Sentinel: distinguish "goals failed to load" from "no goals exist" so a
   // transient fetch failure doesn't show the "Define your goals" CTA to a user
   // who already has goals (AGENTS.md "absent/failed vs legitimately-empty").
   const [goalsFailed, setGoalsFailed] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [loadedForFeature, setLoadedForFeature] = useState(null);
   const [dismissing, setDismissing] = useState(false);
-  const fetchGeneration = useRef(0);
+  const { features } = useInstanceFeatures();
+  // Dashboard widgets fail closed on an unreadable feature list. This is
+  // intentionally separate from useInstanceFeatures().isFeatureEnabled(),
+  // whose fail-open answer protects navigation from blanking.
+  const isFeatureEnabled = (featureId) => (
+    !featureId
+    || (Array.isArray(features) && features.some((feature) => feature.id === featureId && feature.enabled === true))
+  );
+  const postEnabled = isFeatureEnabled('post');
 
   const refetchDashboard = dashboardState?.refetch;
   // The first landing of the local day (recorded server-side by the dashboard's
@@ -46,44 +54,33 @@ export default function DailyDriverWidget({ dashboardState }) {
   // reloads until the user handles it, rather than vanishing on a refresh.
   const firstVisitToday = !!dashboardState?.dailyDriver?.firstVisitToday;
 
-  const fetchData = useCallback(async () => {
-    const generation = ++fetchGeneration.current;
-    const featureData = await api.getInstanceFeatures({ silent: true }).catch(() => null);
-    if (generation !== fetchGeneration.current) return;
-    const enabled = featureData?.features?.find((feature) => feature.id === 'post')?.enabled === true;
-    setPostEnabled(enabled);
-    const [stats, recs, goalsData] = await Promise.all([
-      enabled ? api.getPostStats().catch(() => null) : Promise.resolve(null),
-      enabled ? api.getPostRecommendations(1).catch(() => null) : Promise.resolve(null),
-      api.getGoals({ silent: true }).catch(() => null),
-    ]);
-    if (generation !== fetchGeneration.current) return;
-    setPost(stats);
-    setTopRec(recs?.recommendations?.[0] || null);
-    // `goalsData?.goals` present ⇒ authoritative list; null ⇒ fetch failed.
-    if (Array.isArray(goalsData?.goals)) {
-      setGoals(goalsData.goals.filter((g) => g.status === 'active'));
-      setGoalsFailed(false);
-    } else {
-      setGoals([]);
-      setGoalsFailed(true);
-    }
-    setLoaded(true);
-  }, []);
-
   useEffect(() => {
-    fetchData();
-    const handleFeatureChange = (event) => {
-      if (event.detail?.featureId !== 'post') return;
-      if (event.detail.enabled === false) setPostEnabled(false);
-      fetchData();
-    };
-    window.addEventListener(INSTANCE_FEATURES_CHANGED, handleFeatureChange);
+    let active = true;
+    setLoaded(false);
+    setLoadedForFeature(null);
+    Promise.all([
+      postEnabled ? api.getPostStats().catch(() => null) : Promise.resolve(null),
+      postEnabled ? api.getPostRecommendations(1).catch(() => null) : Promise.resolve(null),
+      api.getGoals({ silent: true }).catch(() => null),
+    ]).then(([stats, recs, goalsData]) => {
+      if (!active) return;
+      setPost(stats);
+      setTopRec(recs?.recommendations?.[0] || null);
+      // `goalsData?.goals` present => authoritative list; null => fetch failed.
+      if (Array.isArray(goalsData?.goals)) {
+        setGoals(goalsData.goals.filter((g) => g.status === 'active'));
+        setGoalsFailed(false);
+      } else {
+        setGoals([]);
+        setGoalsFailed(true);
+      }
+      setLoadedForFeature(postEnabled);
+      setLoaded(true);
+    });
     return () => {
-      fetchGeneration.current += 1;
-      window.removeEventListener(INSTANCE_FEATURES_CHANGED, handleFeatureChange);
+      active = false;
     };
-  }, [fetchData]);
+  }, [postEnabled]);
 
   // Mark the day handled, then refetch dashboard state so the registry gate
   // drops the card (which unmounts this widget). On failure, re-enable the
@@ -96,7 +93,7 @@ export default function DailyDriverWidget({ dashboardState }) {
     if (refetchDashboard) await refetchDashboard();
   }, [refetchDashboard]);
 
-  if (!loaded) return null;
+  if (!loaded || loadedForFeature !== postEnabled) return null;
 
   // `completedToday`/`streak` come straight from getPostStats — the same source
   // the standalone DailyPostWidget uses — so the driver's POST row always agrees
@@ -180,7 +177,7 @@ export default function DailyDriverWidget({ dashboardState }) {
           <>
             <div className="text-xs font-medium text-gray-400 uppercase tracking-wide">Next actions</div>
             {goals.map((goal) => {
-              const areas = getGoalFeatureAreas(goal).filter((area) => postEnabled || area.area !== 'post');
+              const areas = getGoalFeatureAreas(goal, isFeatureEnabled);
               const latestRec = goal.checkIns?.[goal.checkIns.length - 1]?.recommendations?.[0];
               return (
                 <div key={goal.id} className="p-2 rounded-lg border border-port-border">

@@ -10,6 +10,8 @@
  */
 
 import { DAY, WEEK, JOB_STRUCTURAL_FIELDS, JOB_ADDITIVE_FIELDS } from './constants.js'
+import { PORTOS_CATALOG_REFRESH_JOB } from './portosCatalogRefresh.js'
+import { PORTOS_CLI_CATALOG_REFRESH_JOB } from './portosCliCatalogRefresh.js'
 
 /**
  * Default job definitions
@@ -289,6 +291,8 @@ Phase 4 — Report:
     createdAt: null,
     updatedAt: null
   },
+  PORTOS_CATALOG_REFRESH_JOB,
+  PORTOS_CLI_CATALOG_REFRESH_JOB,
   // 'job-layered-intelligence' removed (#2322): Layered Intelligence is now a
   // per-app HANDLER-BACKED scheduled task (CoS → Schedule) rather than a global
   // autonomous-job sweep. Migration 184 tombstones the persisted job record and

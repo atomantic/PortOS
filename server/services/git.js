@@ -36,8 +36,11 @@ export {
   extractAgentSummary
 };
 
-// Like execGit but catches rejections (e.g. timeout) into a failed-result shape
-const execGitSafe = (args, cwd, options) =>
+// Like execGit but catches rejections (e.g. timeout) into a failed-result shape.
+// Exported because every caller that wants `ignoreExitCode` semantics also has to
+// survive the two rejections `ignoreExitCode` does NOT suppress — a timeout and a
+// maxBuffer overflow — and each one hand-rolling that catch drops `stdout`.
+export const execGitSafe = (args, cwd, options) =>
   execGit(args, cwd, options).catch(err => ({ exitCode: 1, stdout: '', stderr: err.message }));
 
 /**
@@ -207,8 +210,8 @@ export function clearFetchCache() {
   activeFetches.clear();
 }
 
-function fetchOriginAttempt(dir, attempt) {
-  return execGit(['fetch', 'origin'], dir).then(
+function fetchOriginAttempt(dir, attempt, prune = false) {
+  return execGit(prune ? ['fetch', '--prune', 'origin'] : ['fetch', 'origin'], dir).then(
     () => {
       recordFetchSuccess(dir);
       return true;
@@ -226,13 +229,21 @@ function fetchOriginAttempt(dir, attempt) {
       }
       // Another PortOS surface or agent may advance the same remote ref mid-fetch.
       if (attempt >= FETCH_MAX_ATTEMPTS || !isGitLockError(err.message)) throw err;
-      return sleep(FETCH_RETRY_DELAY_MS).then(() => fetchOriginAttempt(dir, attempt + 1));
+      return sleep(FETCH_RETRY_DELAY_MS).then(() => fetchOriginAttempt(dir, attempt + 1, prune));
     }
   );
 }
 
-export function fetchOrigin(dir) {
-  return fetchOriginAttempt(dir, 1);
+/**
+ * Fetch origin with the concurrency handling a raw `git fetch` lacks: retries an
+ * `index.lock` collision, and treats a lost compare-and-swap on refs another
+ * PortOS surface already wrote as the SUCCESS it is.
+ * @param {string} dir
+ * @param {{prune?: boolean}} [opts] - `prune` also drops remote-tracking refs whose
+ *   remote branch is gone, for callers that go on to reason about what origin still has.
+ */
+export function fetchOrigin(dir, { prune = false } = {}) {
+  return fetchOriginAttempt(dir, 1, prune);
 }
 
 /**
@@ -660,7 +671,7 @@ export async function suggestPRTitle(dir, baseBranch, headBranch, fallbackText) 
   return firstLine.trim().substring(0, 100) || 'CoS automated task';
 }
 
-export async function getDefaultBranch(dir, { allowRemote = true } = {}) {
+export async function getDefaultBranch(dir, { allowRemote = true, strict = false } = {}) {
   const symRef = await execGitSafe(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], dir);
   if (symRef.stdout?.trim()) {
     const branch = symRef.stdout.trim().replace(/^origin\//, '');
@@ -685,6 +696,11 @@ export async function getDefaultBranch(dir, { allowRemote = true } = {}) {
   const branches = (result.stdout || '').trim().split('\n').map(b => b.replace(/^\*?\s+/, '')).filter(Boolean);
   if (branches.includes('main')) return 'main';
   if (branches.includes('master')) return 'master';
+
+  // Callers that are about to mutate a checkout need a known default branch;
+  // falling back to whichever feature branch happens to be checked out would
+  // make a remote-sync operation treat that branch as the canonical target.
+  if (strict) return null;
 
   // Last resort: use the currently checked-out branch
   const head = await execGitSafe(['rev-parse', '--abbrev-ref', 'HEAD'], dir);
@@ -759,7 +775,7 @@ async function getLocalMergedBranchNames(dir, defaultBranch) {
  * Get all local branches with tracking info
  * @returns {Promise<Array<{name: string, current: boolean, tracking: string|null, ahead: number, behind: number, isDefault: boolean, merged: boolean, worktree: boolean}>>}
  */
-export async function getBranches(dir) {
+export async function getBranches(dir, { strict = false } = {}) {
   // Get branches with verbose info (includes tracking)
   const [result, { baseBranch }, worktreeBranches] = await Promise.all([
     execGit(
@@ -770,6 +786,10 @@ export async function getBranches(dir) {
     getRepoBranches(dir),
     getWorktreeBranches(dir)
   ]);
+
+  if (strict && result.exitCode !== 0) {
+    throw new Error(result.stderr || `git branch -vv failed with exit code ${result.exitCode}`);
+  }
 
   const defaultBranch = baseBranch || 'main';
   const protectedSet = new Set(PROTECTED_BRANCHES);
@@ -1228,13 +1248,22 @@ async function clearSequencerState(dir, gitDirPath) {
  * @param {string} dir - Repo root to check
  * @returns {Promise<string|null>} - Agent id, or null
  */
-async function findActiveAgentInWorkspace(dir) {
-  const { getAgents } = await import('./cosAgentLifecycle.js').catch(() => ({ getAgents: null }));
-  if (!getAgents) return null;
-  const agents = await getAgents().catch(() => []);
+export async function findActiveAgentInWorkspace(dir, { includePaused = false, failClosed = false } = {}) {
+  const { getAgents } = await import('./cosAgentLifecycle.js').catch((err) => {
+    if (failClosed) throw err;
+    return { getAgents: null };
+  });
+  if (!getAgents) {
+    if (failClosed) throw new Error('could not load the CoS agent registry');
+    return null;
+  }
+  const agents = await getAgents().catch((err) => {
+    if (failClosed) throw err;
+    return [];
+  });
   const target = resolve(dir);
   const busy = agents.find(agent =>
-    agent.status === 'running'
+    (agent.status === 'running' || (includePaused && agent.status === 'paused'))
     && agent.metadata?.workspacePath
     && resolve(agent.metadata.workspacePath) === target
   );

@@ -323,6 +323,31 @@ describe('cosTaskStore.addTask', () => {
     expect(mock.events.some(e => e.name === 'tasks:changed' && e.payload.action === 'added' && e.payload.type === 'user')).toBe(true);
   });
 
+  it('persists the no-change success marker for an autonomous audit', async () => {
+    const created = await addTask({
+      description: 'Audit shipped catalogs',
+      id: 'catalog-audit-task',
+      autonomousJob: true,
+      jobId: 'job-refresh-cli-provider-catalogs',
+      noChangeSuccess: true,
+    }, 'internal');
+
+    expect(created.metadata.noChangeSuccess).toBe(true);
+    const reloaded = (await getTaskById(created.id)).metadata.noChangeSuccess;
+    expect(reloaded === true || reloaded === 'true').toBe(true);
+  });
+
+  it('marks explicitly dispatched tasks so the scheduler does not race their spawn', async () => {
+    const task = await addTask({ description: 'run this now' }, 'internal', { suppressDequeue: true });
+    const change = mock.events.find(e => e.name === 'tasks:changed' && e.payload.task?.id === task.id);
+
+    expect(change.payload).toMatchObject({
+      type: 'internal',
+      action: 'added',
+      suppressDequeue: true
+    });
+  });
+
   describe('targeted instance pin (#4520)', () => {
     it('persists targetInstanceId and round-trips it through markdown', async () => {
       const created = await addTask({ description: 'gpu work', id: 'task-pin', targetInstanceId: 'instance-bbbb' }, 'user');
@@ -358,6 +383,38 @@ describe('cosTaskStore.addTask', () => {
       const reloaded = await getTaskById('task-split');
       expect(reloaded.metadata.prompt).toBe(AGENT_BODY);
       expect(reloaded.metadata.context).toBeUndefined();
+    });
+
+    it('moves a raw multiline description into metadata.prompt before markdown persistence', async () => {
+      const fullPrompt = 'Scheduled review\n\n## Preloaded task data\nCurrent snapshot.';
+      const created = await addTask({
+        id: 'sys-scheduled-prompt',
+        status: 'pending',
+        priority: 'MEDIUM',
+        priorityValue: 2,
+        description: fullPrompt,
+        metadata: { autonomousJob: true, jobId: 'job-example' },
+        section: 'pending',
+      }, 'internal', { raw: true });
+      expect(created.description).toBe('Scheduled review');
+      expect(created.metadata.prompt).toBe(fullPrompt);
+      const reloaded = await getTaskById('sys-scheduled-prompt');
+      expect(reloaded.description).toBe('Scheduled review');
+      expect(reloaded.metadata.prompt).toBe(fullPrompt);
+    });
+
+    it('preserves an explicitly empty prompt while normalizing a multiline raw description', async () => {
+      const created = await addTask({
+        id: 'sys-cleared-scheduled-prompt',
+        status: 'pending',
+        priority: 'MEDIUM',
+        priorityValue: 2,
+        description: 'Scheduled review\n\nFallback body',
+        metadata: { prompt: '' },
+        section: 'pending',
+      }, 'internal', { raw: true });
+      expect(created.description).toBe('Scheduled review');
+      expect(created.metadata).toHaveProperty('prompt', '');
     });
 
     it('leaves a one-line human note on metadata.context', async () => {
@@ -846,11 +903,11 @@ describe('cosTaskStore.addTask', () => {
     expect(task.metadata.worktreeChangesExpected).toBeUndefined();
   });
 
-  it('raw=true stores the pre-built object verbatim', async () => {
-    const raw = { id: 'sys-raw', description: 'raw\nmultiline', status: 'pending', metadata: { context: 'ctx' } };
+  it('raw=true stores a pre-built one-line object verbatim', async () => {
+    const raw = { id: 'sys-raw', description: 'raw task', status: 'pending', metadata: { context: 'ctx' } };
     const task = await addTask(raw, 'internal', { raw: true });
     expect(task).toBe(raw);
-    expect(task.description).toBe('raw\nmultiline');
+    expect(task.description).toBe('raw task');
   });
 
   it('position:top unshifts the task to the front', async () => {

@@ -33,13 +33,13 @@ const MAP_BOUNDS = {
 // disagree about where the bay starts.
 const GEOGRAPHY = projectGeography(MAP_BOUNDS, MINI_MAP_PADDING);
 
-export default function OpenWorldFastTravel({ open, onClose, onTravel, activeRegionId, onLeaveRegion }) {
+export default function OpenWorldFastTravel({ open, onClose, onTravel, activeRegionId, onLeaveRegion, isFeatureEnabled }) {
   const [query, setQuery] = useState('');
   const inputRef = useRef(null);
   const { isCondensed } = useOpenWorldViewport();
 
-  const regions = useMemo(() => listRegions(), []);
-  const matches = useMemo(() => searchRegions(query), [query]);
+  const regions = useMemo(() => listRegions(isFeatureEnabled), [isFeatureEnabled]);
+  const matches = useMemo(() => searchRegions(query, isFeatureEnabled), [query, isFeatureEnabled]);
   const matchIds = useMemo(() => new Set(matches.map((r) => r.id)), [matches]);
   const mapMarkers = useMemo(
     () => spreadProjectedPoints(regions.map((region) => {

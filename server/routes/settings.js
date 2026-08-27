@@ -14,6 +14,7 @@ import { getInstanceFeatures, updateInstanceFeature } from '../services/instance
 import { asyncHandler } from '../lib/errorHandler.js';
 import { isPlainObject } from '../lib/objects.js';
 import { agentContextSettingsSchema } from '../lib/agentContextValidation.js';
+import { EFFORT_LEVELS } from '../lib/providerModels.js';
 import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, localLlmSettingsSchema, openWorldSnapshotConfigSchema, imessageConfigSchema, signalConfigSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, instanceFeatureSettingsSchema, instanceFeatureIdSchema, instanceFeatureUpdateSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, federationSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, imageGenAgySettingsSchema, renderDefaultsSettingsSchema, videoGenSettingsSchema, subscriptionCostsMapSchema, validateRequest } from '../lib/validation.js';
 
 const router = Router();
@@ -21,6 +22,7 @@ const router = Router();
 const aiAssignmentUpdateSchema = z.object({
   providerId: z.string().trim().max(128).nullable().optional(),
   model: z.string().trim().max(300).nullable().optional(),
+  effort: z.enum(EFFORT_LEVELS).nullable().optional(),
 }).strict();
 
 // Server-authoritative bounds the client UI can render directly so the form

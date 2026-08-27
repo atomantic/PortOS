@@ -90,6 +90,24 @@ const loadPullModel = () => loadManager().then((mod) => mod.pullModel)
 describe('ollamaManager residency status', () => {
   afterEach(() => vi.unstubAllGlobals())
 
+  it('queries the requested provider endpoint without consulting the global daemon', async () => {
+    const fetchMock = vi.fn(async (url) => {
+      const body = { models: [{ name: 'example-model', size_vram: 200 }] }
+      return { ok: true, status: 200, text: async () => JSON.stringify(body) }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { getLoadedModelsAt } = await loadManager()
+
+    await expect(getLoadedModelsAt('http://localhost:11500/v1')).resolves.toEqual({
+      models: [{ id: 'example-model', name: 'example-model', size: null, sizeVram: 200, expiresAt: null }],
+      error: null
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:11500/api/ps',
+      expect.any(Object)
+    )
+  })
+
   it('keeps a failed /api/ps probe distinct from a trustworthy empty list', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url) => {
       if (String(url).endsWith('/api/version')) return versionResponse()

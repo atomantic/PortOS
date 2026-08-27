@@ -204,6 +204,63 @@ def emit_runtime_fingerprint(runtime_id: str, packages, extra_versions=None) -> 
         return {}
 
 
+def build_image_execution_marker(
+    runtime_id: str,
+    requested_device: str,
+    effective_device: str,
+    placement: str,
+    packages,
+    extra_versions=None,
+) -> dict:
+    """Return the bounded execution evidence emitted by local image runners.
+
+    A successful PNG is not evidence that an accelerator actually ran it.  Keep
+    this marker deliberately small and portable: it records the caller's
+    request, the resolved device/placement, and only the runtime's allowlisted
+    package versions.  Host paths, prompts, environment, and stderr never
+    belong in durable gallery metadata.
+    """
+    fingerprint = build_runtime_fingerprint(runtime_id, packages, extra_versions)
+    cpu_fallback = effective_device == "cpu"
+    return {
+        "version": 1,
+        "state": "degraded" if cpu_fallback else "confirmed",
+        "requestedDevice": requested_device,
+        "effectiveDevice": effective_device,
+        "placement": placement,
+        "cpuFallback": cpu_fallback,
+        "runtime": {
+            "runtime": fingerprint["runtime"],
+            "versions": fingerprint["versions"],
+        },
+    }
+
+
+def emit_image_execution_marker(
+    runtime_id: str,
+    requested_device: str,
+    effective_device: str,
+    placement: str,
+    packages,
+    extra_versions=None,
+) -> dict:
+    """Print one parseable image-execution marker after placement resolves."""
+    try:
+        marker = build_image_execution_marker(
+            runtime_id,
+            requested_device,
+            effective_device,
+            placement,
+            packages,
+            extra_versions,
+        )
+        print(f"IMAGE_EXECUTION:{json.dumps(marker)}", file=sys.stderr, flush=True)
+        return marker
+    except Exception as err:  # pragma: no cover - defensive
+        print(f"⚠️ image execution marker failed: {err}", file=sys.stderr, flush=True)
+        return {}
+
+
 class _ClipTruncationFilter(logging.Filter):
     _MARKER = "input was truncated because CLIP can only handle"
 

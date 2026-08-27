@@ -1,5 +1,5 @@
 /**
- * The three dispatch HOLDS at the `task:ready` chokepoint, and what releases them.
+ * The dispatch HOLDS at the `task:ready` chokepoint, and what releases them.
  *
  * Each leaves the task queued for a condition that clears on its own, rather
  * than failing it:
@@ -13,6 +13,11 @@
  *    start while an agent is live, but `update.sh` then spends seconds in git
  *    pull / submodule update / npm install before `pm2 delete`. An agent spawned
  *    in that window is severed by the restart.
+ *
+ *  - Forge unreachable (issue #5110). A task that promises a change request cannot
+ *    finish with the forge down: the agent works, `git push` fails, and finalize
+ *    records the non-actionable `forge-unreachable` — which retries, so one VPN
+ *    drop re-ran the same agent three times before the task reached `blocked`.
  *
  *  - Local inference endpoint at capacity (issue #4834). A CoS agent runs a
  *    vendor CLI that talks to the local model server directly, so promptRunner's
@@ -64,6 +69,13 @@ vi.mock('./cosState.js', () => ({ loadState: vi.fn().mockResolvedValue({ agents:
 vi.mock('./cosLocalEndpointSlots.js', () => ({
   acquireLocalEndpointSpawnSlot: vi.fn().mockResolvedValue({ ok: true, release: vi.fn() }),
 }));
+// Same reason: the real gate reaches the app registry through agentPromptBuilder,
+// whose graph reads files at module load and pulls in cos.js. Its own decisions
+// (which statuses hold, which hosts are probed, the expiry) are covered directly
+// in cosForgeSpawnGate.test.js; here it is a seam for the LISTENER's wiring.
+vi.mock('./cosForgeSpawnGate.js', () => ({
+  forgeSpawnHoldReason: vi.fn().mockResolvedValue(null),
+}));
 vi.mock('./agentOrchestrator.js', () => ({
   completeAgent: vi.fn(),
   spawnAgentForTask: vi.fn().mockResolvedValue('agent-1'),
@@ -82,6 +94,7 @@ import { isUpdateInProgress } from './updateChecker.js';
 import { releaseMissionSubTask } from './missions.js';
 import { setUseRunner } from './agentState.js';
 import { acquireLocalEndpointSpawnSlot } from './cosLocalEndpointSlots.js';
+import { forgeSpawnHoldReason } from './cosForgeSpawnGate.js';
 
 const dispatch = (task) => taskHandlers.get('task:ready')(task);
 
@@ -365,6 +378,75 @@ describe('subAgentSpawner — local-endpoint capacity hold (#4834)', () => {
 
     acquireLocalEndpointSpawnSlot.mockResolvedValue({ ok: true, release });
     await dispatch({ id: 'cos-l6', metadata: {} });
+
+    expect(spawnAgentForTask).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('subAgentSpawner — forge-unreachable hold (#5110)', () => {
+  // The pre-gate behavior: an agent whose task promises a change request did the
+  // work, failed to push, and finalized the non-actionable `forge-unreachable` —
+  // which retries, so one VPN drop re-ran the same 20-to-100-minute agent three
+  // times before the task reached `blocked`.
+  beforeEach(async () => {
+    await initSpawner();
+    vi.clearAllMocks();
+    vi.useRealTimers();
+    setUseRunner(true);
+    isRunnerReachable.mockResolvedValue(true);
+    isUpdateInProgress.mockReturnValue(false);
+    acquireLocalEndpointSpawnSlot.mockResolvedValue({ ok: true, release: vi.fn() });
+    forgeSpawnHoldReason.mockResolvedValue(null);
+  });
+
+  it('spawns normally when the gate declines to hold', async () => {
+    await dispatch({ id: 'cos-f1', metadata: { openPR: true } });
+
+    expect(spawnAgentForTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('holds instead of dispatching an agent that cannot push what it builds', async () => {
+    forgeSpawnHoldReason.mockResolvedValue('forge.example.com is unreachable');
+
+    await dispatch({ id: 'cos-f2', metadata: { openPR: true } });
+
+    // Held, not failed: no agent, no retry charged, so the task keeps its full
+    // retry budget for a failure that is actually about the task.
+    expect(spawnAgentForTask).not.toHaveBeenCalled();
+  });
+
+  it('releases the app-review marker and the job reservation, same as the other holds', async () => {
+    forgeSpawnHoldReason.mockResolvedValue('forge.example.com is unreachable');
+
+    await dispatch({ id: 'cos-f3', metadata: { openPR: true, app: 'some-app', jobId: 'job-13' } });
+
+    expect(releaseAppReviewMarker).toHaveBeenCalledWith('some-app');
+    expect(cosEvents.emit).toHaveBeenCalledWith('job:spawn-failed', { jobId: 'job-13' });
+  });
+
+  it('holds BEFORE reserving a capacity slot, so a held task never books one', async () => {
+    forgeSpawnHoldReason.mockResolvedValue('forge.example.com is unreachable');
+
+    await dispatch({ id: 'cos-f4', metadata: { openPR: true } });
+
+    expect(acquireLocalEndpointSpawnSlot).not.toHaveBeenCalled();
+  });
+
+  it('probes the forge AFTER the update and runner holds, which are cheaper', async () => {
+    isUpdateInProgress.mockReturnValue(true);
+
+    await dispatch({ id: 'cos-f5', metadata: { openPR: true } });
+
+    expect(forgeSpawnHoldReason).not.toHaveBeenCalled();
+  });
+
+  it('resumes spawning once the forge returns — the hold is not sticky', async () => {
+    forgeSpawnHoldReason.mockResolvedValue('forge.example.com is unreachable');
+    await dispatch({ id: 'cos-f6', metadata: { openPR: true } });
+    expect(spawnAgentForTask).not.toHaveBeenCalled();
+
+    forgeSpawnHoldReason.mockResolvedValue(null);
+    await dispatch({ id: 'cos-f6', metadata: { openPR: true } });
 
     expect(spawnAgentForTask).toHaveBeenCalledTimes(1);
   });

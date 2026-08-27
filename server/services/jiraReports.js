@@ -6,14 +6,14 @@
 import { readdir } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
-import { getInstances, createJiraClient } from './jira.js';
+import { getInstances, createJiraClient, resolveCustomFieldIds } from './jira.js';
 import { getActiveApps } from './apps.js';
 import { callProviderAISimple } from './aiProvider.js';
 import { getActiveProvider, getAllProviders } from './providers.js';
 
 const REPORTS_DIR = join(PATHS.data, 'jira-reports');
 
-function mapIssue(issue, baseUrl) {
+function mapIssue(issue, baseUrl, storyPointsField) {
   return {
     key: issue.key,
     summary: issue.fields.summary,
@@ -22,7 +22,7 @@ function mapIssue(issue, baseUrl) {
     priority: issue.fields.priority?.name,
     issueType: issue.fields.issuetype?.name,
     assignee: issue.fields.assignee?.displayName || 'Unassigned',
-    storyPoints: issue.fields.customfield_10106,
+    storyPoints: issue.fields[storyPointsField],
     updated: issue.fields.updated,
     url: `${baseUrl}/browse/${issue.key}`
   };
@@ -30,16 +30,17 @@ function mapIssue(issue, baseUrl) {
 
 async function getSprintTickets(instance, projectKey) {
   const client = createJiraClient(instance);
+  const { storyPoints: storyPointsField } = resolveCustomFieldIds(instance);
   const jql = `project = "${projectKey}" AND assignee = currentUser() AND sprint in openSprints() ORDER BY status ASC, priority DESC, updated DESC`;
 
   const response = await client.search({
     jql,
-    fields: 'summary,status,priority,issuetype,assignee,updated,created,customfield_10106,resolution',
+    fields: `summary,status,priority,issuetype,assignee,updated,created,${storyPointsField},resolution`,
     maxResults: 100
   });
 
   return (response.data?.issues || []).map(issue => ({
-    ...mapIssue(issue, instance.baseUrl),
+    ...mapIssue(issue, instance.baseUrl, storyPointsField),
     created: issue.fields.created,
     resolved: issue.fields.resolution?.name || null
   }));
@@ -47,16 +48,17 @@ async function getSprintTickets(instance, projectKey) {
 
 async function getRecentlyCompleted(instance, projectKey) {
   const client = createJiraClient(instance);
+  const { storyPoints: storyPointsField } = resolveCustomFieldIds(instance);
   const jql = `project = "${projectKey}" AND assignee = currentUser() AND status changed to Done AFTER -7d ORDER BY updated DESC`;
 
   const response = await client.search({
     jql,
-    fields: 'summary,status,priority,issuetype,assignee,updated,customfield_10106,resolutiondate',
+    fields: `summary,status,priority,issuetype,assignee,updated,${storyPointsField},resolutiondate`,
     maxResults: 50
   });
 
   return (response.data?.issues || []).map(issue => ({
-    ...mapIssue(issue, instance.baseUrl),
+    ...mapIssue(issue, instance.baseUrl, storyPointsField),
     resolvedAt: issue.fields.resolutiondate
   }));
 }

@@ -36,12 +36,14 @@ export async function resolveAgentProviderAndModel(task) {
   // availability/fallback logic below as any other resolved provider.
   let provider = null;
   const userProviderId = task.metadata?.provider;
+  let userProviderMissing = false;
   if (userProviderId) {
     const userProvider = await getProviderById(userProviderId);
     if (userProvider) {
       emitLog('info', `Using user-specified provider: ${userProviderId}`, { taskId: task.id });
       provider = userProvider;
     } else {
+      userProviderMissing = true;
       emitLog('warn', `User-specified provider "${userProviderId}" not found, using active provider`, { taskId: task.id });
     }
   }
@@ -170,16 +172,21 @@ export async function resolveAgentProviderAndModel(task) {
   // model"), on every retry, until the task hit max retries and blocked. So a
   // provider swap drops the pin back to the new provider's own default unless
   // that provider actually lists it.
-  const providerSwapped = provider.id !== directProviderId;
+  // A missing pinned provider is also a provider swap, even when the active
+  // provider happens to be the same object the resolver returned. The task's
+  // model was selected for the missing provider and must not silently become a
+  // pin for the active provider.
+  const providerSwapped = userProviderMissing || provider.id !== directProviderId;
+  const pinnedProviderId = userProviderId || directProviderId;
   const isUserPin = modelSelection.tier === 'user-specified' && !fallbackModelPin;
   const isUserPinnedModel = isUserPin && !providerSwapped;
   if (isUserPin && providerSwapped && !(provider.models || []).includes(selectedModel)) {
     // Handled here rather than left to the list check below, which can't fire at
     // all for a fallback provider that enumerates no `models`.
-    emitLog('warn', `Dropping model "${selectedModel}" pinned for unavailable provider "${directProviderId}" — running on fallback "${provider.id}" with its default model`, {
+    emitLog('warn', `Dropping model "${selectedModel}" pinned for provider "${pinnedProviderId}" — running on fallback "${provider.id}" with its default model`, {
       taskId: task.id,
       requestedModel: selectedModel,
-      pinnedProviderId: directProviderId,
+      pinnedProviderId,
       providerId: provider.id
     });
     selectedModel = provider.defaultModel || null;

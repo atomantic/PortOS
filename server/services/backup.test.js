@@ -61,6 +61,7 @@ vi.mock('./memoryBackend.js', () => ({
 import { EventEmitter } from 'events';
 import { createHash } from 'crypto';
 import { hostname } from 'os';
+import { PassThrough } from 'node:stream';
 import { spawn } from '../lib/childProcess.js';
 // Partial mock: only override spawn. Preserve execFile et al. because
 // backup.js transitively imports fileUtils.js, which promisifies execFile.
@@ -74,7 +75,7 @@ vi.mock('../lib/childProcess.js', async (importOriginal) => ({
 // used by backup.js + fileUtils.js keeps its real implementation.
 vi.mock('fs/promises', async (importOriginal) => {
   const actual = await importOriginal();
-  return { ...actual, stat: vi.fn(actual.stat), readFile: vi.fn(actual.readFile) };
+  return { ...actual, stat: vi.fn(actual.stat), readFile: vi.fn(actual.readFile), access: vi.fn(actual.access) };
 });
 
 import { checkHealth, getServerMajorVersion } from '../lib/db.js';
@@ -90,21 +91,37 @@ vi.mock('./settings.js', async (importOriginal) => ({
   reloadSettings: vi.fn(async () => {}),
 }));
 import { reloadSettings } from './settings.js';
-import { DEFAULT_EXCLUDES, computeEffectiveExcludes, listSnapshots, restoreSnapshot } from './backup.js';
+import { DEFAULT_EXCLUDES, computeEffectiveExcludes, listSnapshots, openSnapshotStream, restoreSnapshot } from './backup.js';
+
+// fs.access is mocked file-wide because backup.js probes the .in-progress marker
+// with it. Restore the real implementation before EVERY test: vi.clearAllMocks()
+// resets call history but NOT implementations, so a single test's
+// mockResolvedValue would otherwise make every later test see a marker and 409.
+beforeEach(async () => {
+  const actual = await vi.importActual('fs/promises');
+  fs.access.mockImplementation(actual.access);
+});
+
+// Mirrors backup.js's MACHINE_HOST derivation so expected paths can be built
+// without hardcoding this machine's hostname.
+const machineHost = hostname().toLowerCase().replace(/[^\w.\-]/g, '_') || 'unknown';
 
 // Helper: build a fake child process whose close/error we can drive.
 function fakeProc() {
   const proc = new EventEmitter();
-  proc.stdout = new EventEmitter();
+  proc.stdout = new PassThrough();
   proc.stderr = new EventEmitter();
+  proc.exitCode = null;
+  proc.signalCode = null;
+  proc.killed = false;
+  proc.kill = vi.fn(() => { proc.killed = true; });
   return proc;
 }
 
-// dumpPostgres awaits checkHealth() before calling spawn() and attaching its
-// close/error listeners. Flush the microtask queue so the listeners exist
-// before the test drives the fake process — otherwise an 'error' emit throws
-// (no listener) and 'close' emits fall into the void (test hangs).
-const flush = () => new Promise((r) => setTimeout(r, 0));
+// The restore/dump helpers await filesystem and health checks before calling
+// spawn() and attaching child-process listeners. Wait for the mocked spawn
+// call itself so CI scheduling cannot emit into an uninitialized fake process.
+const flush = () => vi.waitFor(() => expect(spawn).toHaveBeenCalled());
 
 const overridable = DEFAULT_EXCLUDES.filter(e => e.overridable).map(e => e.path);
 const nonOverridable = DEFAULT_EXCLUDES.filter(e => !e.overridable).map(e => e.path);
@@ -273,6 +290,145 @@ describe('listSnapshots', () => {
     const readdirSpy = vi.spyOn(fs, 'readdir');
     expect(await listSnapshots('')).toEqual([]);
     expect(readdirSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('openSnapshotStream', () => {
+  afterEach(async () => {
+    const actual = await vi.importActual('fs/promises');
+    fs.stat.mockImplementation(actual.stat);
+    fs.access.mockImplementation(actual.access);
+    spawn.mockReset();
+  });
+
+  beforeEach(() => {
+    fs.access.mockRejectedValue(new Error('ENOENT'));
+  });
+
+  // An existing, COMPLETE snapshot directory, ready for tar: the directory stats
+  // fine while the .in-progress marker is absent.
+  function readySnapshot() {
+    fs.stat.mockResolvedValue({ isDirectory: () => true });
+    fs.access.mockRejectedValue(new Error('ENOENT'));   // no .in-progress marker
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    return proc;
+  }
+
+  // Same directory, but a marker left behind by a crashed run.
+  function crashedSnapshot() {
+    fs.stat.mockResolvedValue({ isDirectory: () => true });
+    fs.access.mockResolvedValue(undefined);             // .in-progress present
+  }
+
+  const ended = (stream) => new Promise((resolveEnd) => stream.once('end', resolveEnd));
+  const errored = (stream) => new Promise((resolveError) => stream.once('error', resolveError));
+
+  it.each([
+    ['a slash', 'snap/id'],
+    ['a wildcard', 'snap*id'],
+    ['a traversal id', '..'],
+  ])('rejects %s before touching the disk or spawning tar', async (_label, snapshotId) => {
+    await expect(openSnapshotStream('/dest', snapshotId))
+      .rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(fs.stat).not.toHaveBeenCalled();
+  });
+
+  it('refuses a snapshot whose .in-progress marker survived a crash', async () => {
+    // activeSnapshotId is module state and resets on restart; the marker is what
+    // still says "this tree was never finished" after PM2 restarts mid-backup.
+    crashedSnapshot();
+
+    await expect(openSnapshotStream('/dest', 'snap-1'))
+      .rejects.toMatchObject({ status: 409, code: 'SNAPSHOT_INCOMPLETE' });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 for an unknown snapshot without spawning tar', async () => {
+    fs.stat.mockRejectedValue(new Error('ENOENT'));
+
+    await expect(openSnapshotStream('/dest', 'snap-1'))
+      .rejects.toMatchObject({ status: 404, code: 'NOT_FOUND' });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('spawns tar with the snapshot directory as its archive root', async () => {
+    const proc = readySnapshot();
+
+    const stream = await openSnapshotStream('/dest', 'snap-1');
+
+    expect(spawn).toHaveBeenCalledWith(
+      'tar',
+      ['-czf', '-', '-C', resolve(join('/dest', 'snapshots', machineHost)), 'snap-1'],
+      { shell: false },
+    );
+    const done = ended(stream);
+    stream.resume();
+    proc.emit('close', 0);
+    await expect(done).resolves.toBeUndefined();
+  });
+
+  it('archives a legacy pre-manifest snapshot without consulting a manifest', async () => {
+    // listSnapshots deliberately keeps snapshots taken before manifests existed,
+    // so a missing manifest.json must never gate the download.
+    const proc = readySnapshot();
+
+    const stream = await openSnapshotStream('/dest', 'legacy-snapshot');
+
+    expect(fs.readFile).not.toHaveBeenCalled();
+    expect(fs.stat.mock.calls.flat().join(' ')).not.toContain('manifest.json');
+    const done = ended(stream);
+    stream.resume();
+    proc.emit('close', 0);
+    await expect(done).resolves.toBeUndefined();
+  });
+
+  it('fails the archive stream when tar exits unsuccessfully, reporting its stderr', async () => {
+    const proc = readySnapshot();
+
+    const stream = await openSnapshotStream('/dest', 'snap-1');
+    const failed = errored(stream);
+    proc.stderr.emit('data', Buffer.from('tar: Permission denied'));
+    proc.emit('close', 2);
+
+    await expect(failed).resolves.toMatchObject({
+      message: 'tar exited with code 2: tar: Permission denied',
+    });
+  });
+
+  it('escalates the kill when the response disconnects', async () => {
+    vi.useFakeTimers();
+    const proc = readySnapshot();
+
+    const stream = await openSnapshotStream('/dest', 'snap-1');
+    const failed = errored(stream);
+    stream.abort();
+
+    expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
+    // A tar wedged on a stalled mount ignores SIGTERM. The escalation must still
+    // fire after the grace window — it is gated on the CHILD's exit state, not on
+    // the archive stream's, which abort() has already settled by this point.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(proc.kill).toHaveBeenCalledWith('SIGKILL');
+    vi.useRealTimers();
+
+    await expect(failed).resolves.toMatchObject({ message: 'Snapshot download aborted: snap-1' });
+  });
+
+  it('does not escalate once tar has already exited', async () => {
+    vi.useFakeTimers();
+    const proc = readySnapshot();
+
+    const stream = await openSnapshotStream('/dest', 'snap-1');
+    stream.on('error', () => {});
+    proc.exitCode = 0;
+    stream.abort();
+
+    expect(proc.kill).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(proc.kill).not.toHaveBeenCalled();
+    vi.useRealTimers();
   });
 });
 
@@ -528,6 +684,19 @@ describe('restorePostgres', () => {
     vi.spyOn(fs, 'stat').mockRejectedValue(new Error('ENOENT'));
     const result = await restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: true });
     expect(result).toEqual({ status: 'skipped', reason: 'no_dump' });
+  });
+
+  // portos-db.sql is still being written while a backup runs. Replaying a half
+  // dump into the live database is the most destructive thing this module can
+  // do, so the guard has to cover it — not just download and file restore.
+  it('refuses an incomplete snapshot before reading the dump', async () => {
+    fs.access.mockResolvedValue(undefined);            // .in-progress present
+    const statSpy = vi.spyOn(fs, 'stat');
+
+    await expect(restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: false }))
+      .rejects.toMatchObject({ status: 409, code: 'SNAPSHOT_INCOMPLETE' });
+    expect(statSpy).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it('dry-run reports size/tableCount without spawning psql', async () => {
@@ -1046,10 +1215,6 @@ describe('getState and saveState', () => {
 // restoreSnapshot writes over the user's live data/ directory, so each of these
 // is a data-loss-adjacent contract, not a style nit (issue #3917).
 describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () => {
-  // Mirrors backup.js's MACHINE_HOST derivation so the expected src path can be
-  // built without hardcoding this machine's hostname.
-  const machineHost = hostname().toLowerCase().replace(/[^\w.\-]/g, '_') || 'unknown';
-
   beforeEach(() => {
     spawn.mockReset();
     reloadSettings.mockClear();
@@ -1060,7 +1225,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
     const pending = restoreSnapshot(...args);
-    await flush();
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
     proc.emit('close', 0);
     return pending;
   }
@@ -1122,7 +1287,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
     });
 
     it('echoes the subdirFilter back in the result', async () => {
-      await expect(runRestore('/dest', 'snap-1', { subdirFilter: 'brain' }))
+      await expect(runRestore('/dest', 'snap-1', { dryRun: true, subdirFilter: 'brain' }))
         .resolves.toMatchObject({ subdirFilter: 'brain' });
     });
   });
@@ -1153,7 +1318,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       const proc = fakeProc();
       spawn.mockReturnValue(proc);
       const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: false });
-      await flush();
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
       proc.stderr.emit('data', Buffer.from('boom'));
       proc.emit('close', 1);
 
@@ -1337,6 +1502,51 @@ describe('runBackup lifecycle', () => {
 
     proc.emit('close', 0);
     await first;
+  });
+
+  // A snapshot mid-assembly would tar/rsync as a truncated tree that looks like
+  // a complete backup. Driven through the real runBackup rather than a stubbed
+  // marker so the guard is tested against the state that actually gates it.
+  it('refuses to download or restore the snapshot currently being written', async () => {
+    const io = { emit: vi.fn() };
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    const { openSnapshotStream: open, restoreSnapshot: restore } = await import('./backup.js');
+
+    const pending = runBackup(destRoot, io);
+    await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+    const snapshotId = io.emit.mock.calls[0][1].snapshotId;
+
+    await expect(open(destRoot, snapshotId))
+      .rejects.toMatchObject({ status: 409, code: 'SNAPSHOT_INCOMPLETE' });
+    await expect(restore(destRoot, snapshotId, { dryRun: true }))
+      .rejects.toMatchObject({ status: 409, code: 'SNAPSHOT_INCOMPLETE' });
+    // Only the rsync — neither guard reached tar or a second rsync.
+    expect(spawn).toHaveBeenCalledTimes(1);
+
+    proc.emit('close', 0);
+    await pending;
+  });
+
+  // The old on-disk '.in-progress' marker was never removed on failure, which
+  // left a failed snapshot permanently un-downloadable with no recovery path.
+  it('clears the in-progress guard when a run fails, leaving the snapshot downloadable', async () => {
+    const io = { emit: vi.fn() };
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    const { openSnapshotStream: open } = await import('./backup.js');
+
+    const pending = runBackup(destRoot, io);
+    await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+    const snapshotId = io.emit.mock.calls[0][1].snapshotId;
+    proc.emit('close', 23);
+    await expect(pending).rejects.toThrow(/rsync exited with code 23/);
+
+    const tar = fakeProc();
+    spawn.mockReturnValue(tar);
+    const stream = await open(destRoot, snapshotId);
+    expect(stream).toBeDefined();
+    stream.destroy();
   });
 
   it('on rsync failure: releases the lock, records status error, emits backup:failed, and rethrows', async () => {

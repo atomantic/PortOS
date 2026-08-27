@@ -315,7 +315,7 @@ describe.skipIf(!dbReady)('memoryDB listing filters (#3447)', () => {
     await resetMemories();
     brainFact = await memoryDB.createMemory({
       type: 'fact', content: 'Brain fact.', category: 'science',
-      tags: ['astronomy'], importance: 0.9, sourceAppId: 'brain',
+      tags: ['astronomy'], importance: 0.9, sourceAgentId: 'persistent-mind', sourceAppId: 'brain',
     });
     studioPreference = await memoryDB.createMemory({
       type: 'preference', content: 'Studio preference.', category: 'style',
@@ -332,7 +332,7 @@ describe.skipIf(!dbReady)('memoryDB listing filters (#3447)', () => {
     expect(memories.map((m) => m.id).sort()).toEqual([brainFact.id, studioPreference.id].sort());
     // rowToMeta is deliberately narrow — no content/embedding on list rows.
     expect(Object.keys(memories[0]).sort()).toEqual(
-      ['category', 'createdAt', 'id', 'importance', 'sourceAppId', 'status', 'summary', 'tags', 'type'],
+      ['category', 'createdAt', 'id', 'importance', 'sourceAgentId', 'sourceAppId', 'status', 'summary', 'tags', 'type'],
     );
   });
 
@@ -343,6 +343,7 @@ describe.skipIf(!dbReady)('memoryDB listing filters (#3447)', () => {
     expect((await memoryDB.getMemories({ tags: ['art'] })).memories.map((m) => m.id)).toEqual([studioPreference.id]);
     expect((await memoryDB.getMemories({ appId: 'brain' })).memories.map((m) => m.id)).toEqual([brainFact.id]);
     expect((await memoryDB.getMemories({ appId: '__not_brain' })).memories.map((m) => m.id)).toEqual([studioPreference.id]);
+    expect((await memoryDB.getMemories({ sourceAgentId: 'persistent-mind' })).memories.map((m) => m.id)).toEqual([brainFact.id]);
   });
 
   it('sorts and paginates while reporting the unpaginated total', async () => {

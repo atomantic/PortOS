@@ -6,6 +6,7 @@ import { MemoryRouter } from 'react-router';
 // resolver and the update path used on save.
 vi.mock('../../services/api', () => ({
   getDatadogInstances: vi.fn(),
+  getInstanceFeatures: vi.fn(),
   getAppWorkTracker: vi.fn(),
   getAppLayeredIntelligence: vi.fn(),
   getAppTaskTypes: vi.fn(),
@@ -16,6 +17,7 @@ vi.mock('../../services/api', () => ({
 }));
 
 import * as api from '../../services/api';
+import { __resetInstanceFeatureCache } from '../../hooks/useInstanceFeatures.js';
 import EditAppDrawer from './EditAppDrawer';
 
 const APP = {
@@ -42,7 +44,15 @@ async function openTab(name) {
 }
 
 beforeEach(() => {
+  __resetInstanceFeatureCache();
   api.getDatadogInstances.mockResolvedValue({ instances: {} });
+  api.getInstanceFeatures.mockResolvedValue({
+    features: [
+      { id: 'datadog', label: 'DataDog', enabled: true },
+      { id: 'jira', label: 'JIRA', enabled: true },
+      { id: 'gsd', label: 'GSD', enabled: true },
+    ],
+  });
   api.getAppWorkTracker.mockResolvedValue({
     configured: 'auto',
     resolved: 'github',
@@ -86,7 +96,7 @@ describe('EditAppDrawer tabbed layout', () => {
 
   it('renders all six section tabs', async () => {
     renderDrawer();
-    for (const label of ['General', 'Ports & TLS', 'Commands', 'Workflow', 'Intelligence', 'DataDog']) {
+    for (const label of ['General', 'Ports & TLS', 'Commands', 'Workflow', 'Intelligence', 'Features']) {
       expect(await screen.findByRole('tab', { name: label })).toBeInTheDocument();
     }
   });
@@ -95,6 +105,26 @@ describe('EditAppDrawer tabbed layout', () => {
     renderDrawer();
     await screen.findByRole('tab', { name: 'General' });
     expect(screen.queryByRole('tab', { name: 'JIRA' })).not.toBeInTheDocument();
+  });
+
+  it('lets each managed-app feature inherit or override the global setting', async () => {
+    renderDrawer();
+    await openTab('Features');
+
+    expect(screen.getByLabelText('DataDog availability')).toHaveValue('inherit');
+    expect(screen.getByLabelText('JIRA availability')).toHaveValue('inherit');
+    expect(screen.getByLabelText('GSD availability')).toHaveValue('inherit');
+
+    fireEvent.change(screen.getByLabelText('JIRA availability'), { target: { value: 'enabled' } });
+    fireEvent.change(screen.getByLabelText('GSD availability'), { target: { value: 'disabled' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => expect(api.updateApp).toHaveBeenCalled());
+    expect(api.updateApp.mock.calls[0][1].featureOverrides).toEqual({
+      datadog: null,
+      jira: true,
+      gsd: false,
+    });
   });
 });
 
@@ -151,6 +181,7 @@ describe('EditAppDrawer work tracker selector', () => {
 
     await waitFor(() => expect(api.updateApp).toHaveBeenCalled());
     expect(api.updateApp.mock.calls[0][1]).not.toHaveProperty('jira');
+    expect(api.updateApp.mock.calls[0][1]).not.toHaveProperty('datadog');
   });
 
   it('saves the selected default PR completion policy', async () => {
@@ -164,6 +195,21 @@ describe('EditAppDrawer work tracker selector', () => {
 
     await waitFor(() => expect(api.updateApp).toHaveBeenCalled());
     expect(api.updateApp.mock.calls[0][1].defaultPrCompletion).toBe('leave-open');
+  });
+  it('defaults the repo-state audit ON for an app that has never set it, and saves an opt-out', async () => {
+    // Unset means ON server-side (repoStateVerificationEnabled), so an app record
+    // with no such key must render checked — otherwise the first save of an
+    // unrelated field would silently turn the audit off.
+    renderDrawer({ app: { ...APP, defaultUseWorktree: true } });
+    await openTab('Workflow');
+
+    const toggle = await screen.findByLabelText(/Verify repo state after each agent/);
+    expect(toggle).toBeChecked();
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => expect(api.updateApp).toHaveBeenCalled());
+    expect(api.updateApp.mock.calls[0][1].verifyRepoStateOnCompletion).toBe(false);
   });
 });
 

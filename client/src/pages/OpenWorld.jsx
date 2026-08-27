@@ -24,9 +24,10 @@ import { computeSoundscape } from '../utils/openWorldSoundscape';
 import { deriveOpenWorldPalette, getTimeOfDayPreset, resolveOpenWorldTimeOfDay, resolveWorldStyle } from '../components/openworld/openWorldConstants';
 import OpenWorldFastTravel from '../components/openworld/OpenWorldFastTravel';
 import { getRegion, regionArrivalPoint, regionPath } from '../utils/openWorldRegions';
-import { loadCollectedShardIds, saveCollectedShardIds, TOTAL_SHARDS } from '../utils/openWorldCollectibles';
+import { getCollectiblesList, loadCollectedShardIds, saveCollectedShardIds } from '../utils/openWorldCollectibles';
 import { OpenWorldPaletteProvider } from '../components/openworld/OpenWorldPaletteContext';
 import { useThemeContext } from '../components/ThemeContext';
+import { useInstanceFeatures } from '../hooks/useInstanceFeatures';
 
 // Internal render budgets only. These tiers are selected from sustained frame time and are
 // deliberately not persisted or exposed as player settings; art direction stays coherent while
@@ -57,6 +58,24 @@ function OpenWorldInner() {
   const location = useLocation();
   const { appId, regionId } = useParams();
   const { isDesktop } = useOpenWorldViewport();
+  const {
+    features: instanceFeatures,
+    error: instanceFeaturesError,
+    isFeatureEnabled,
+  } = useInstanceFeatures();
+  // OpenWorld browse surfaces use the hook's fail-open gate so a settings
+  // hiccup never blanks navigation. Passive JIRA data is different: do not
+  // poll or render tickets while participation is loading or unreadable.
+  const isPassiveFeatureEnabled = useCallback((featureId) => (
+    !featureId
+    || (!instanceFeaturesError
+      && Array.isArray(instanceFeatures)
+      && instanceFeatures.some((feature) => feature?.id === featureId && feature.enabled === true))
+  ), [instanceFeatures, instanceFeaturesError]);
+  const visibleCollectibles = useMemo(
+    () => getCollectiblesList(isPassiveFeatureEnabled),
+    [isPassiveFeatureEnabled],
+  );
 
   // URL-addressed building focus (issue #2593). The `/openworld/apps/:appId` route param is the
   // single source of truth for "which borough is focused" — reload/back-forward/deep-link all
@@ -194,6 +213,10 @@ function OpenWorldInner() {
   const [collectedShardIds, setCollectedShardIds] = useState(() => loadCollectedShardIds());
   const [activeBursts, setActiveBursts] = useState([]);
   const [playerPose, setPlayerPose] = useState(null);
+  const visibleCollectedCount = useMemo(
+    () => visibleCollectibles.filter((shard) => collectedShardIds.has(shard.id)).length,
+    [visibleCollectibles, collectedShardIds],
+  );
 
   const handleCollectShard = useCallback((shard) => {
     setCollectedShardIds((prev) => {
@@ -422,10 +445,12 @@ function OpenWorldInner() {
       .sort().join(','),
     [apps]
   );
+  const jiraFeatureEnabled = isPassiveFeatureEnabled('jira');
   // Fetch each enabled app's current-sprint tickets and merge; the helper dedupes by key. Skip
   // the poll entirely when no app has JIRA configured. Keyed on `jiraAppsKey` so the closure (and
   // poll) refresh when JIRA apps appear/disappear.
   const fetchSprintTickets = useCallback(async () => {
+    if (!jiraFeatureEnabled) return [];
     const specs = (apps || [])
       .filter(a => a?.jira?.enabled && a.jira.instanceId && a.jira.projectKey)
       .map(a => ({ instanceId: a.jira.instanceId, projectKey: a.jira.projectKey }));
@@ -434,11 +459,11 @@ function OpenWorldInner() {
       specs.map(j => api.getMySprintTickets(j.instanceId, j.projectKey, { silent: true }).catch(() => []))
     );
     return batches.flat();
-  }, [apps]);
+  }, [apps, jiraFeatureEnabled]);
   const { data: jiraTickets } = useAutoRefetch(
     fetchSprintTickets,
     120_000,
-    { enabled: jiraAppsKey.length > 0 },
+    { enabled: jiraFeatureEnabled && jiraAppsKey.length > 0 },
   );
 
   // Selecting a building focuses it in-place (issue #2593) — the URL becomes /openworld/apps/:id and the
@@ -569,6 +594,8 @@ function OpenWorldInner() {
         onAutoTierChange={setAutoTier}
         focusedAppId={appId || null}
         focusedRegion={focusedRegion}
+        isFeatureEnabled={isFeatureEnabled}
+        isPassiveFeatureEnabled={isPassiveFeatureEnabled}
         playerTeleport={playerTeleport}
         hudSafe={focusHudSafe}
         onTravelToRegion={handleTravelToRegion}
@@ -615,8 +642,8 @@ function OpenWorldInner() {
           activeRegion={focusedRegion}
           proximityTarget={proximityTarget}
           playerPose={playerPose}
-          collectedCount={collectedShardIds.size}
-          totalShards={TOTAL_SHARDS}
+          collectedCount={visibleCollectedCount}
+          totalShards={visibleCollectibles.length}
         />
       )}
       {!photoMode && !playback.active && !isDesktop && settings?.explorationMode && !showSettings && !fastTravelOpen && (
@@ -662,6 +689,7 @@ function OpenWorldInner() {
         onTravel={handleTravelToRegion}
         activeRegionId={focusedRegion?.id || null}
         onLeaveRegion={() => navigate('/openworld')}
+        isFeatureEnabled={isFeatureEnabled}
       />
       {/* Settings on the shared Drawer. Closing preserves other query params (e.g. an open
           openWorldPane) so the disclosure state survives. Rendering quality is automatic and

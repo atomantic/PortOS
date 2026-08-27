@@ -4,6 +4,7 @@ import { FormField } from '../components/ui/FormField';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import Modal from '../components/ui/Modal';
 import api from '../services/api';
+import { invalidateInstanceFeatures } from '../hooks/useInstanceFeatures.js';
 
 const SITE_OPTIONS = [
   { value: 'api.datadoghq.com', label: 'US1 (api.datadoghq.com)' },
@@ -105,6 +106,10 @@ export default function DataDog() {
 
       const saved = await api.post('/datadog/instances', payload, { silent: true });
 
+      // The DataDog nav entries are auto-gated on whether any instance is
+      // configured, so saving the FIRST one is what reveals them — without this
+      // they stay hidden until a full reload.
+      invalidateInstanceFeatures('datadog');
       toast.success(`DataDog instance "${payload.name}" saved successfully`);
       setInstances(prev => ({ ...prev, [saved.id]: saved }));
       handleCancel();
@@ -127,6 +132,8 @@ export default function DataDog() {
 
     try {
       await api.delete(`/datadog/instances/${instanceId}`, { silent: true });
+      // Removing the LAST instance re-hides the nav entries (see the save path).
+      invalidateInstanceFeatures('datadog');
       toast.success(`DataDog instance "${instanceId}" deleted`);
       setInstances(prev => {
         const next = { ...prev };

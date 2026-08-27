@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 import { ArrowRight, Bot, RefreshCw, Save, Search } from 'lucide-react';
 import toast from '../ui/Toast';
 import FormField from '../ui/FormField';
+import EffortSelect from '../cos/EffortSelect.jsx';
 import ToolUseWarning from '../ui/ToolUseWarning.jsx';
 import TabPills from '../ui/TabPills.jsx';
 import { getAiAssignments, updateAiAssignment } from '../../services/api';
@@ -14,17 +15,22 @@ import {
   assignmentModelOptions,
   assignmentDefaultModel,
   assignmentToolUseState,
+  effortLevelsForProvider,
+  effortAwareModelOptions,
+  effortSurvivingModel,
   withToolUseOptionLabel,
 } from '../../utils/providers.js';
 
 const getDraft = (entry) => ({
   providerId: entry.providerId || '',
   model: entry.model || '',
+  effort: entry.effort || '',
 });
 
 const sameDraft = (entry, draft) =>
   (entry.providerId || '') === (draft?.providerId || '') &&
-  (entry.model || '') === (draft?.model || '');
+  (entry.model || '') === (draft?.model || '') &&
+  (entry.effort || '') === (draft?.effort || '');
 
 // Rebuild the draft map from a server response without discarding edits the
 // user has in-flight on OTHER rows: reset only the rows we just saved (and seed
@@ -40,6 +46,7 @@ const reconcileDrafts = (prev, assignments, savedIds) => {
 
 // Provider label with the settings-table's "Default" fallback for an unset id.
 const providerName = (providers, id) => providerDisplayName(providers, id, 'Default');
+const effortOptionsFor = (provider, model) => effortLevelsForProvider(provider, model) || [];
 
 // Chip key for rows with no provider pinned. An empty string already means
 // "no provider chip selected", so unset rows need their own sentinel to be
@@ -53,10 +60,13 @@ export default function AiAssignmentsTab() {
   const [drafts, setDrafts] = useState({});
   const [query, setQuery] = useState('');
   const [area, setArea] = useState('all');
-  const [scope, setScope] = useState('all');
+  const [assignmentType, setAssignmentType] = useState('all');
   const [providerFilter, setProviderFilter] = useState('');
   const [fromProvider, setFromProvider] = useState('');
+  const [fromModel, setFromModel] = useState('');
   const [toProvider, setToProvider] = useState('');
+  const [toModel, setToModel] = useState('');
+  const [toEffort, setToEffort] = useState('');
   const [bulkSaving, setBulkSaving] = useState(false);
   // Authoritative vision-capable ids straight from the local backends, so a
   // vision-filtered row (Scene evaluation) isn't reduced to an empty list by
@@ -89,6 +99,43 @@ export default function AiAssignmentsTab() {
     [data.assignments]
   );
 
+  const assignmentTypes = useMemo(
+    () => ['all', ...Array.from(new Set((data.assignments || []).map((entry) => entry.assignmentType))).filter(Boolean).sort()],
+    [data.assignments]
+  );
+
+  const sourceProviders = useMemo(() => {
+    const assigned = new Set((data.assignments || []).map((entry) => entry.providerId).filter(Boolean));
+    const byId = new Map(data.providers.map((provider) => [provider.id, provider]));
+    return Array.from(assigned, (id) => byId.get(id) || { id, name: id });
+  }, [data.assignments, data.providers]);
+
+  const sourceModels = useMemo(() => Array.from(new Set(
+    (data.assignments || [])
+      .filter((entry) => entry.providerId === fromProvider && entry.model)
+      .map((entry) => entry.model)
+  )).sort(), [data.assignments, fromProvider]);
+
+  const targetProvider = data.providers.find((provider) => provider.id === toProvider);
+  const targetModels = effortAwareModelOptions(targetProvider, '');
+
+  const bulkTargets = useMemo(() => {
+    if (!fromProvider || !toProvider) return [];
+    return (data.assignments || []).filter((entry) => {
+      const modelCompatible = !toModel || (
+        entry.modelFilter === 'vision'
+          ? assignmentModelOptions(entry, data.providers, toProvider, visionIdsByProvider).includes(toModel)
+          : targetModels.includes(toModel)
+      );
+      return entry.editable !== false &&
+        entry.providerEditable !== false &&
+        entry.providerId === fromProvider &&
+        (!fromModel || entry.model === fromModel) &&
+        assignmentProviderOptions(entry, data.providers).some((option) => option.id === toProvider) &&
+        modelCompatible;
+    });
+  }, [data.assignments, data.providers, fromModel, fromProvider, targetModels, toModel, toProvider, visionIdsByProvider]);
+
   // Everything except the provider chips, so the chip counts describe what the
   // OTHER filters left behind (faceted-filter behaviour) instead of a global
   // total that stops matching the table the moment you type in the search box.
@@ -96,10 +143,11 @@ export default function AiAssignmentsTab() {
     const q = query.trim().toLowerCase();
     return (data.assignments || []).filter((entry) => {
       if (area !== 'all' && entry.area !== area) return false;
-      if (scope !== 'all' && entry.scope !== scope) return false;
+      if (assignmentType !== 'all' && entry.assignmentType !== assignmentType) return false;
       if (!q) return true;
       return [
         entry.area,
+        entry.assignmentType,
         entry.label,
         entry.source,
         entry.providerId,
@@ -107,7 +155,7 @@ export default function AiAssignmentsTab() {
         entry.notes,
       ].some((value) => String(value || '').toLowerCase().includes(q));
     });
-  }, [area, data.assignments, query, scope]);
+  }, [area, assignmentType, data.assignments, query]);
 
   const filtered = useMemo(() => {
     if (!providerFilter) return preProviderFiltered;
@@ -149,6 +197,7 @@ export default function AiAssignmentsTab() {
     const next = await updateAiAssignment(entry.id, {
       providerId: draft.providerId || null,
       model: draft.model || null,
+      effort: draft.effort || null,
     }, { silent: true }).catch((err) => {
       toast.error(`Save failed: ${err.message}`);
       return null;
@@ -161,27 +210,24 @@ export default function AiAssignmentsTab() {
   };
 
   const runBulkMigration = async () => {
-    if (!fromProvider || !toProvider || fromProvider === toProvider || bulkSaving) return;
-    const targets = (data.assignments || []).filter((entry) => (
-      entry.editable !== false &&
-      entry.providerEditable !== false &&
-      (drafts[entry.id]?.providerId || entry.providerId || '') === fromProvider &&
-      assignmentProviderOptions(entry, data.providers).some((option) => option.id === toProvider)
-    ));
-    if (targets.length === 0) {
+    if (!fromProvider || !toProvider || bulkSaving) return;
+    if (bulkTargets.length === 0) {
       toast.error('No editable assignments match that provider');
       return;
     }
     setBulkSaving(true);
     let latest = data;
     const savedIds = [];
-    for (const entry of targets) {
-      // Vision-filtered rows seed the first eligible VLM, not a text-only default.
-      const targetDefaultModel = assignmentDefaultModel(entry, data.providers, toProvider, visionIdsByProvider);
-      const nextModel = entry.modelEditable === false ? (drafts[entry.id]?.model || '') : targetDefaultModel;
+    for (const entry of bulkTargets) {
+      const nextModel = entry.modelEditable === false
+        ? (entry.model || '')
+        : (toModel || (entry.modelFilter === 'vision'
+          ? assignmentDefaultModel(entry, data.providers, toProvider, visionIdsByProvider)
+          : ''));
       const next = await updateAiAssignment(entry.id, {
         providerId: toProvider,
         model: nextModel || null,
+        ...(entry.effortEditable ? { effort: toEffort || null } : {}),
       }, { silent: true }).catch((err) => {
         toast.error(`${entry.label}: ${err.message}`);
         return null;
@@ -194,7 +240,7 @@ export default function AiAssignmentsTab() {
     setData(latest);
     setDrafts((prev) => reconcileDrafts(prev, latest.assignments, savedIds));
     setBulkSaving(false);
-    toast.success(`Migrated ${savedIds.length} assignment${savedIds.length === 1 ? '' : 's'}`);
+    toast.success(`Replaced ${savedIds.length} assignment${savedIds.length === 1 ? '' : 's'}`);
   };
 
   if (loading) {
@@ -207,7 +253,10 @@ export default function AiAssignmentsTab() {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 text-gray-200">
             <Bot size={18} className="text-port-accent" />
-            <h2 className="text-lg font-semibold">AI Assignments</h2>
+            <div>
+              <h2 className="text-lg font-semibold">AI Assignments</h2>
+              <p className="mt-0.5 text-sm text-gray-500">Manage persisted feature, workflow, and scheduled-task assignments.</p>
+            </div>
           </div>
           <TabPills
             tabs={providerTabs}
@@ -222,44 +271,82 @@ export default function AiAssignmentsTab() {
           />
         </div>
 
-        <div className="w-full min-w-0 max-w-full shrink-0 bg-port-card border border-port-border rounded-lg p-3 space-y-2 xl:w-[520px]">
-          <div className="flex flex-col sm:flex-row gap-2">
-            <FormField label="Migrate from provider" labelClassName="sr-only" className="min-w-0 flex-1">
+        <div className="w-full min-w-0 max-w-full shrink-0 bg-port-card border border-port-border rounded-lg p-3 space-y-2 xl:w-[720px]">
+          <div className="text-xs font-medium uppercase tracking-wide text-gray-500">Replace assignments</div>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_1fr_auto_1fr_1fr]">
+            <FormField label="Replace from provider" labelClassName="sr-only" className="min-w-0 flex-1">
               <select
                 value={fromProvider}
-                onChange={(e) => setFromProvider(e.target.value)}
-                aria-label="Migrate from provider"
+                onChange={(e) => { setFromProvider(e.target.value); setFromModel(''); }}
+                aria-label="Replace from provider"
                 className="w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-2 text-sm text-white"
               >
                 <option value="">From provider</option>
-                {data.providers.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                {sourceProviders.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
             </FormField>
-            <div className="hidden sm:flex items-center text-gray-500">
+            <FormField label="Replace from model" labelClassName="sr-only" className="min-w-0">
+              <select
+                value={fromModel}
+                onChange={(e) => setFromModel(e.target.value)}
+                aria-label="Replace from model"
+                disabled={!fromProvider}
+                className="w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-2 text-sm text-white disabled:opacity-50"
+              >
+                <option value="">Any model</option>
+                {sourceModels.map((model) => <option key={model} value={model}>{model}</option>)}
+              </select>
+            </FormField>
+            <div className="hidden sm:flex items-center justify-center text-gray-500">
               <ArrowRight size={16} />
             </div>
-            <FormField label="Migrate to provider" labelClassName="sr-only" className="min-w-0 flex-1">
+            <FormField label="Replace with provider" labelClassName="sr-only" className="min-w-0 flex-1">
               <select
                 value={toProvider}
-                onChange={(e) => setToProvider(e.target.value)}
-                aria-label="Migrate to provider"
+                onChange={(e) => { setToProvider(e.target.value); setToModel(''); setToEffort(''); }}
+                aria-label="Replace with provider"
                 className="w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-2 text-sm text-white"
               >
                 <option value="">To provider</option>
-                {data.providers.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                {data.providers.filter((p) => p.enabled !== false).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
             </FormField>
+            <FormField label="Replace with model" labelClassName="sr-only" className="min-w-0">
+              <select
+                value={toModel}
+                onChange={(e) => { setToModel(e.target.value); setToEffort(''); }}
+                aria-label="Replace with model"
+                disabled={!toProvider}
+                className="w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-2 text-sm text-white disabled:opacity-50"
+              >
+                <option value="">Default model</option>
+                {targetModels.map((model) => <option key={model} value={model}>{model}</option>)}
+              </select>
+            </FormField>
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+            <EffortSelect
+              provider={targetProvider}
+              model={toModel || targetProvider?.defaultModel}
+              value={toEffort}
+              onChange={setToEffort}
+              label="Target effort"
+              labelClassName="sr-only"
+              fieldClassName="min-w-0 sm:w-48"
+              className="w-full bg-port-bg border border-port-border rounded px-2 py-2 text-sm text-white"
+            />
             <button
               type="button"
               onClick={runBulkMigration}
-              disabled={!fromProvider || !toProvider || fromProvider === toProvider || bulkSaving}
+              disabled={!fromProvider || !toProvider || bulkTargets.length === 0 || bulkSaving}
               className="shrink-0 px-3 py-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 text-white rounded text-sm"
             >
-              {bulkSaving ? 'Migrating...' : 'Migrate'}
+              {bulkSaving ? 'Replacing...' : 'Replace all matches'}
             </button>
           </div>
           <p className="text-xs text-gray-500">
-            Bulk migration updates editable rows that currently use the source provider and resets their model to the target default.
+            {fromProvider && toProvider ? `${bulkTargets.length} compatible match${bulkTargets.length === 1 ? '' : 'es'}. ` : ''}
+            Match every persisted assignment on a provider, optionally narrow by model, then point compatible assignments to the new provider and model. Effort applies to scheduled assignments that persist it.
           </p>
         </div>
       </div>
@@ -282,12 +369,9 @@ export default function AiAssignmentsTab() {
             {areas.map((a) => <option key={a} value={a}>{a === 'all' ? 'All areas' : a}</option>)}
           </select>
         </FormField>
-        <FormField label="Filter by scope" labelClassName="sr-only" className="contents">
-          <select value={scope} onChange={(e) => setScope(e.target.value)} aria-label="Filter by scope" className="bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white">
-            <option value="all">All scopes</option>
-            <option value="global">Global</option>
-            <option value="record">Record pins</option>
-            <option value="runtime">Runtime call sites</option>
+        <FormField label="Filter by assignment type" labelClassName="sr-only" className="contents">
+          <select value={assignmentType} onChange={(e) => setAssignmentType(e.target.value)} aria-label="Filter by assignment type" className="bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white">
+            {assignmentTypes.map((type) => <option key={type} value={type}>{type === 'all' ? 'All assignment types' : type}</option>)}
           </select>
         </FormField>
         <button type="button" onClick={load} className="flex items-center justify-center gap-1.5 px-3 py-2 bg-port-border hover:bg-port-border/80 text-sm text-white rounded">
@@ -304,6 +388,7 @@ export default function AiAssignmentsTab() {
               <th className="px-3 py-2 font-medium min-w-[220px]">Assignment</th>
               <th className="px-3 py-2 font-medium min-w-[210px]">Provider</th>
               <th className="px-3 py-2 font-medium min-w-[220px]">Model</th>
+              <th className="px-3 py-2 font-medium min-w-[130px]">Effort</th>
               <th className="px-3 py-2 font-medium min-w-[160px]">Source</th>
               <th className="px-3 py-2 font-medium w-[90px]"></th>
             </tr>
@@ -311,7 +396,7 @@ export default function AiAssignmentsTab() {
           <tbody className="divide-y divide-port-border bg-port-bg">
             {filtered.map((entry) => {
               const draft = drafts[entry.id] || getDraft(entry);
-              const selectedProvider = data.providers.find((p) => p.id === draft.providerId);
+              const selectedProvider = data.providers.find((p) => p.id === (draft.providerId || data.activeProvider));
               const providerOptions = assignmentProviderOptions(entry, data.providers);
               const modelOptions = assignmentModelOptions(entry, data.providers, draft.providerId, visionIdsByProvider);
               const dirty = !sameDraft(entry, draft);
@@ -330,7 +415,7 @@ export default function AiAssignmentsTab() {
                 <tr key={entry.id} className="align-top">
                   <td className="px-3 py-3 text-sm text-gray-300 whitespace-nowrap">
                     <div>{entry.area}</div>
-                    <div className="mt-1 text-xs text-gray-600">{entry.scope}</div>
+                    <div className="mt-1 text-xs text-gray-600">{entry.assignmentType}</div>
                   </td>
                   <td className="px-3 py-3">
                     <div className="text-sm text-white">{entry.label}</div>
@@ -348,7 +433,7 @@ export default function AiAssignmentsTab() {
                             // Vision-filtered rows (e.g. Scene evaluation) seed the
                             // first eligible VLM when the provider default is text-only.
                             const nextDefault = assignmentDefaultModel(entry, data.providers, nextProviderId, visionIdsByProvider);
-                            setDraft(entry.id, { providerId: nextProviderId, model: entry.modelEditable === false ? draft.model : nextDefault });
+                            setDraft(entry.id, { providerId: nextProviderId, model: entry.modelEditable === false ? draft.model : nextDefault, effort: '' });
                           }}
                           aria-label={`Provider for ${entry.label}`}
                           disabled={visionUnknown}
@@ -367,7 +452,10 @@ export default function AiAssignmentsTab() {
                       <FormField label={`Model for ${entry.label}`} labelClassName="sr-only">
                         <select
                           value={draft.model}
-                          onChange={(e) => setDraft(entry.id, { model: e.target.value })}
+                          onChange={(e) => setDraft(entry.id, {
+                            model: e.target.value,
+                            effort: effortSurvivingModel(selectedProvider, e.target.value, draft.effort),
+                          })}
                           aria-label={`Model for ${entry.label}`}
                           className="w-full bg-port-card border border-port-border rounded px-2 py-2 text-sm text-white"
                         >
@@ -398,6 +486,21 @@ export default function AiAssignmentsTab() {
                       </ToolUseWarning>
                     )}
                   </td>
+                  <td className="px-3 py-3">
+                    {entry.effortEditable && effortOptionsFor(selectedProvider, draft.model || selectedProvider?.defaultModel).length > 0 ? (
+                      <EffortSelect
+                        provider={selectedProvider}
+                        model={draft.model || selectedProvider?.defaultModel}
+                        value={draft.effort}
+                        onChange={(effort) => setDraft(entry.id, { effort })}
+                        label={`Effort for ${entry.label}`}
+                        labelClassName="sr-only"
+                        className="w-full bg-port-card border border-port-border rounded px-2 py-2 text-sm text-white"
+                      />
+                    ) : (
+                      <span className="text-sm text-gray-600">—</span>
+                    )}
+                  </td>
                   <td className="px-3 py-3 text-xs text-gray-500">
                     <div className="break-all">{entry.source}</div>
                     {entry.link && (
@@ -424,7 +527,7 @@ export default function AiAssignmentsTab() {
             })}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan="6" className="px-3 py-8 text-center text-sm text-gray-500">No assignments match the current filters.</td>
+                <td colSpan="7" className="px-3 py-8 text-center text-sm text-gray-500">No assignments match the current filters.</td>
               </tr>
             )}
           </tbody>

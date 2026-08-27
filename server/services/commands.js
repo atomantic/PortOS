@@ -111,16 +111,8 @@ export function stopCommand(commandId) {
 }
 
 /**
- * Check if a command is active
- */
-export function isCommandActive(commandId) {
-  return activeCommands.has(commandId);
-}
-
-/**
  * Get list of allowed commands
  */
 export function getAllowedCommands() {
   return Array.from(ALLOWED_COMMANDS).sort();
 }
-

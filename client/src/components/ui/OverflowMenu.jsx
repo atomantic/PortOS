@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { MoreHorizontal } from 'lucide-react';
 import useClickOutside from '../../hooks/useClickOutside';
 import useEscapeKey from '../../hooks/useEscapeKey';
+import usePopoverPosition, { VIEWPORT_PADDING } from '../../hooks/usePopoverPosition.js';
 
 // "…" overflow menu for demoting rare/destructive row actions out of the
 // always-visible control set, so the row keeps a single primary affordance.
@@ -9,6 +11,8 @@ import useEscapeKey from '../../hooks/useEscapeKey';
 // ArrowUp/ArrowDown cycle, Escape closes and returns focus to the trigger.
 // Trigger and items are >=44px on phones (the repo's touch-target floor) and
 // relax to the denser desktop sizing from `sm` up.
+// The menu is portaled and fixed-positioned so clipped cards and dashboard
+// stacking contexts cannot move or hide the app row when it opens.
 //
 // Tones pre-compose full Tailwind class names — the JIT scans for complete
 // tokens, so `text-port-${tone}` would NOT generate the utility.
@@ -19,26 +23,32 @@ const TONES = {
 
 const ITEM_SELECTOR = '[role="menuitem"]:not(:disabled)';
 const TABBABLE_SELECTOR = 'a[href],button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),[tabindex]:not([tabindex="-1"])';
+const MENU_WIDTH = 176;
 
 export default function OverflowMenu({ label, items = [], className = '', triggerRef: externalTriggerRef }) {
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef(null);
-  const internalTriggerRef = useRef(null);
-  const menuRef = useRef(null);
   // Callers that dismiss follow-up UI opened from an item (an inline confirm)
   // pass `triggerRef` so they can hand focus back to the trigger it came from.
-  const triggerRef = externalTriggerRef || internalTriggerRef;
+  const { triggerRef, popoverRef, style } = usePopoverPosition({
+    open,
+    anchorRef: externalTriggerRef || null,
+    width: MENU_WIDTH,
+    minWidth: MENU_WIDTH,
+    gap: 4,
+    position: 'below',
+  });
 
   const close = useCallback((refocus) => {
     setOpen(false);
     if (refocus) triggerRef.current?.focus();
   }, []);
 
-  useClickOutside(wrapperRef, open, () => setOpen(false));
+  useClickOutside([wrapperRef, popoverRef], open, () => setOpen(false));
   useEscapeKey(open, () => close(true));
 
   useEffect(() => {
-    if (open) menuRef.current?.querySelector(ITEM_SELECTOR)?.focus();
+    if (open) popoverRef.current?.querySelector(ITEM_SELECTOR)?.focus();
   }, [open]);
 
   // Nothing to demote (e.g. a row whose destructive actions are all withheld) —
@@ -46,7 +56,7 @@ export default function OverflowMenu({ label, items = [], className = '', trigge
   if (items.length === 0) return null;
 
   const moveFocus = (dir) => {
-    const nodes = Array.from(menuRef.current?.querySelectorAll(ITEM_SELECTOR) || []);
+    const nodes = Array.from(popoverRef.current?.querySelectorAll(ITEM_SELECTOR) || []);
     if (!nodes.length) return;
     const idx = nodes.indexOf(document.activeElement);
     const next = idx === -1 ? nodes[dir > 0 ? 0 : nodes.length - 1] : nodes[(idx + dir + nodes.length) % nodes.length];
@@ -59,7 +69,7 @@ export default function OverflowMenu({ label, items = [], className = '', trigge
   const focusPastTrigger = (backwards) => {
     const trigger = triggerRef.current;
     const nodes = Array.from(document.querySelectorAll(TABBABLE_SELECTOR))
-      .filter(el => !menuRef.current?.contains(el));
+      .filter(el => !popoverRef.current?.contains(el));
     const idx = nodes.indexOf(trigger);
     const next = idx === -1 ? null : nodes[idx + (backwards ? -1 : 1)];
     (next || trigger)?.focus();
@@ -98,13 +108,19 @@ export default function OverflowMenu({ label, items = [], className = '', trigge
       >
         <MoreHorizontal size={16} aria-hidden="true" />
       </button>
-      {open && (
+      {open && createPortal(
         <div
-          ref={menuRef}
+          ref={popoverRef}
           role="menu"
           aria-label={label}
           onKeyDown={handleMenuKeyDown}
-          className="absolute right-0 top-full mt-1 z-30 min-w-[11rem] rounded-lg border border-port-border bg-port-card shadow-lg py-1"
+          className="fixed z-30 max-w-[calc(100vw-1rem)] rounded-lg border border-port-border bg-port-card shadow-lg py-1"
+          style={{
+            left: style?.left ?? `${VIEWPORT_PADDING}px`,
+            top: style?.top ?? `${VIEWPORT_PADDING}px`,
+            width: style?.width ?? `${MENU_WIDTH}px`,
+            visibility: style ? 'visible' : 'hidden',
+          }}
         >
           {items.map(item => (
             <button
@@ -122,7 +138,8 @@ export default function OverflowMenu({ label, items = [], className = '', trigge
               <span>{item.label}</span>
             </button>
           ))}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

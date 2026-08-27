@@ -13,7 +13,8 @@ import {
   Newspaper,
   ChartGantt,
   Play,
-  ScrollText
+  ScrollText,
+  MessageCircle
 } from 'lucide-react';
 import { normalizeReviewerSlug } from '../../lib/reviewerPins';
 import { inPlaceClipName } from '../../utils/animationClips';
@@ -32,6 +33,7 @@ export const TABS = [
   { id: 'productivity', label: 'Streaks', icon: Flame },
   { id: 'learning', label: 'Learning', icon: GraduationCap },
   { id: 'memory', label: 'Memory', icon: Brain },
+  { id: 'mind', label: 'Mind', icon: MessageCircle },
   { id: 'health', label: 'Health', icon: Activity },
   { id: 'config', label: 'Config', icon: Settings }
 ];

@@ -5,7 +5,7 @@
  *   GET    /:id              → App    (PM2-status-enriched, + appVersion)
  *   POST   /                 → App
  *   PUT    /:id              → App    (ports written back to ecosystem config)
- *   DELETE /:id              → 204
+ *   DELETE /:id              → 204  (removes the PortOS registry association only)
  *   POST   /:id/archive      → App
  *   POST   /:id/unarchive    → App
  */
@@ -180,6 +180,10 @@ router.delete('/:id', asyncHandler(async (req, res, next) => {
     throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
   }
 
+  // Keep the dashboard, sidebar, OpenWorld, and any open detail view in sync
+  // with the registry removal. This only removes PortOS's association; the
+  // app's repository is not touched by appsService.deleteApp().
+  notifyAppsChanged('delete', req.params.id);
   res.status(204).send();
 }));
 

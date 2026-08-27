@@ -253,9 +253,11 @@ export async function getTaskById(taskId) {
  * Emits `tasks:changed` with `action: 'added'` on success; cos.js's init
  * listener turns that into a `tryImmediateSpawn` for user tasks so a newly
  * submitted task starts instantly instead of waiting for the next evaluation
- * interval.
+ * interval. `suppressDequeue` is reserved for an explicit dispatcher that will
+ * force-spawn the returned task itself; the change event still reaches socket
+ * consumers, but the normal scheduler must not race that dispatch.
  */
-export async function addTask(taskData, taskType = 'user', { raw = false, ignoreTaskId = null, now = Date.now() } = {}) {
+export async function addTask(taskData, taskType = 'user', { raw = false, ignoreTaskId = null, now = Date.now(), suppressDequeue = false } = {}) {
   return withStateLock(async () => {
   const state = await loadState();
   const filePath = taskType === 'user'
@@ -338,6 +340,8 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
     if (taskData.app) metadata.app = taskData.app;
     if (taskData.autonomousJob === true) metadata.autonomousJob = true;
     if (typeof taskData.jobId === 'string' && taskData.jobId) metadata.jobId = taskData.jobId;
+    if (taskData.noChangeSuccess === true) metadata.noChangeSuccess = true;
+    else if (taskData.noChangeSuccess === false) metadata.noChangeSuccess = false;
     // Pin this task to ONE federated instance (#4520): only that instance's CoS
     // evaluator claims and runs it, every other peer passes over it. Absent —
     // the default — leaves the opportunistic first-claim-wins behavior intact.
@@ -566,6 +570,21 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
   // inference. See `server/lib/cosTaskPrompt.js` for the full contract.
   const splitMetadata = splitTaskPromptFields(newTask.metadata);
   if (splitMetadata !== newTask.metadata) newTask = { ...newTask, metadata: splitMetadata };
+  // Markdown task rows are one-line records. Preserve every generated prompt
+  // in the newline-safe metadata field before persistence, including raw
+  // on-demand tasks that bypass the queue generator's normalization pass.
+  if (typeof newTask.description === 'string' && newTask.description.includes('\n')) {
+    newTask = {
+      ...newTask,
+      description: firstLine(newTask.description),
+      metadata: {
+        ...(newTask.metadata || {}),
+        prompt: typeof newTask.metadata?.prompt === 'string'
+          ? newTask.metadata.prompt
+          : newTask.description,
+      },
+    };
+  }
 
   // Add task to top or bottom based on position parameter
   if (taskData.position === 'top') {
@@ -582,7 +601,9 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
   // cos.js init listens for this event. For user tasks it fires
   // tryImmediateSpawn so the task starts instantly if slots are available,
   // bypassing the evaluation interval (which is meant for system task generation).
-  cosEvents.emit('tasks:changed', { type: taskType, action: 'added', task: newTask });
+  const change = { type: taskType, action: 'added', task: newTask };
+  if (suppressDequeue) change.suppressDequeue = true;
+  cosEvents.emit('tasks:changed', change);
 
   return newTask;
   });

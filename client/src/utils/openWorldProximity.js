@@ -3,6 +3,7 @@
 // No three.js / React imports — pure, testable in node.
 
 import { PARCELS } from './openWorldPlan';
+import { isOpenWorldEntryVisible } from './openWorldRegions';
 
 export const PROXIMITY_DISTANCES = {
   warpPad: 3.6,
@@ -19,24 +20,27 @@ export const WORLD_LANDMARKS = [
   { id: 'task-queue', regionId: 'task-queue', parcel: 'taskQueue', label: 'Task Queue Depot', eyebrow: 'LANDMARK DEPOT', action: 'VIEW TASKS' },
   { id: 'wellness', regionId: 'wellness', parcel: 'health', label: 'Wellness Tower', eyebrow: 'LANDMARK TOWER', action: 'VIEW VITALS' },
   { id: 'memory', regionId: 'memory', parcel: 'memory', label: 'Memory Quarter', eyebrow: 'LANDMARK DISTRICT', action: 'VIEW MEMORY GRAPH' },
-  { id: 'sprint-yard', regionId: 'sprint-yard', parcel: 'jira', label: 'Sprint Yard', eyebrow: 'LANDMARK SPRINT', action: 'VIEW SPRINT TICKETS' },
+  { id: 'sprint-yard', regionId: 'sprint-yard', parcel: 'jira', feature: 'jira', label: 'Sprint Yard', eyebrow: 'LANDMARK SPRINT', action: 'VIEW SPRINT TICKETS' },
   { id: 'goals', regionId: 'goals', parcel: 'goals', label: 'Goal Monuments', eyebrow: 'LANDMARK MONUMENT', action: 'VIEW LIFE GOALS' },
   { id: 'artifacts', regionId: 'artifacts', parcel: 'artifacts', label: 'Hall of Achievements', eyebrow: 'LANDMARK HALL', action: 'VIEW ACHIEVEMENTS' },
   { id: 'voice', regionId: 'voice', parcel: 'voice', label: 'Voice Beacon', eyebrow: 'LANDMARK BEACON', action: 'VIEW VOICE AGENT' },
   { id: 'data-harbor', regionId: 'data-harbor', parcel: 'dataHarbor', label: 'Data Harbor Piers', eyebrow: 'LANDMARK HARBOR', action: 'VIEW DATA HARBOR' },
 ];
 
-export function getResolvedLandmarks() {
-  return WORLD_LANDMARKS.map((lm) => {
-    const parcel = PARCELS[lm.parcel];
-    if (!parcel) return null;
-    return {
-      ...lm,
-      x: parcel.anchor[0],
-      y: 0,
-      z: parcel.anchor[2],
-    };
-  }).filter(Boolean);
+export function getResolvedLandmarks(isFeatureEnabled) {
+  return WORLD_LANDMARKS
+    .filter((landmark) => isOpenWorldEntryVisible(landmark, isFeatureEnabled))
+    .map((lm) => {
+      const parcel = PARCELS[lm.parcel];
+      if (!parcel) return null;
+      return {
+        ...lm,
+        x: parcel.anchor[0],
+        y: 0,
+        z: parcel.anchor[2],
+      };
+    })
+    .filter(Boolean);
 }
 
 // Compute the closest interactable target to the player

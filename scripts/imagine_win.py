@@ -22,6 +22,8 @@ from transformers import (
     T5Config, T5EncoderModel, T5TokenizerFast,
 )
 
+from _runner_common import emit_image_execution_marker
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
@@ -182,6 +184,18 @@ def main():
     generator = torch.Generator('cuda').manual_seed(args.seed) if args.seed is not None else None
 
     pipe = build_pipeline(flux_key, hf_cache, dtype)
+
+    # The transformer and CLIP run on CUDA while T5 is intentionally kept on
+    # CPU to fit the Windows pipeline in available VRAM.  Emit this evidence
+    # only after placement is complete so the gallery can distinguish the
+    # split CUDA path from an unmarked legacy runner or a CPU fallback.
+    emit_image_execution_marker(
+        'diffusers-image',
+        'cuda',
+        'cuda',
+        'cuda+offload',
+        ['torch', 'diffusers', 'transformers', 'accelerate'],
+    )
 
     log(f'STATUS:Generating image ({args.width}x{args.height}, {args.steps} steps)...')
 

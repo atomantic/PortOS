@@ -130,6 +130,7 @@ export * from './editorialHealth.js';
 export * from './lookaheadTransport.js';
 export * from './lossSparkline.js';
 export * from './metronome.js';
+export * from './navFeatures.js';
 export * from './midiChords.js';
 export * from './midiNotes.js';
 export * from './midiPlayback.js';

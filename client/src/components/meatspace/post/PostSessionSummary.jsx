@@ -19,8 +19,8 @@ function fillBlankAttempts(questions) {
 // History render identically. `drillResults` is the live hook's results array
 // OR a saved session's `tasks` array (same task shape); `sessionScore` is the
 // blended session score.
-export default function PostSessionSummary({ drillResults = [], sessionScore = 0, isTraining = false, plan = null, actualDurationMs = null }) {
-  const [expandedDrill, setExpandedDrill] = useState(null);
+export default function PostSessionSummary({ drillResults = [], sessionScore = 0, isTraining = false, plan = null, actualDurationMs = null, initialExpandedDrill = null }) {
+  const [expandedDrill, setExpandedDrill] = useState(initialExpandedDrill);
 
   const scoreColor = sessionScore >= 80 ? 'text-port-success' :
     sessionScore >= 50 ? 'text-port-warning' : 'text-port-error';

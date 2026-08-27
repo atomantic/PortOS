@@ -35,6 +35,7 @@ export default function TaskConfigDrawer({
   onBulkToggleOverride,
   allTaskTypes,
   improvementDisabled,
+  dataInputCatalog,
 }) {
   const [updating, setUpdating] = useState(false);
 
@@ -96,6 +97,7 @@ export default function TaskConfigDrawer({
               setUpdating={setUpdating}
               allTaskTypes={allTaskTypes}
               improvementDisabled={improvementDisabled}
+              dataInputCatalog={dataInputCatalog}
             />
           )}
 

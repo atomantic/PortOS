@@ -104,6 +104,26 @@ describe('resolveAgentProviderAndModel', () => {
     expect(r.permanent).toBe(true);
   });
 
+  it('drops a model pin when the requested provider disappeared before the task ran', async () => {
+    const active = { id: 'codex', type: 'cli', models: ['gpt-5'], defaultModel: 'gpt-5' };
+    getProviderById.mockResolvedValue(null);
+    getActiveProvider.mockResolvedValue(active);
+    selectModelForTask.mockResolvedValue({
+      model: 'claude-sonnet',
+      tier: 'user-specified',
+      reason: 'user-preference',
+    });
+
+    const r = await resolveAgentProviderAndModel({
+      id: 't',
+      metadata: { provider: 'claude-code', model: 'claude-sonnet' },
+    });
+
+    expect(r.ok).toBe(true);
+    expect(r.provider).toBe(active);
+    expect(r.selectedModel).toBe('gpt-5');
+  });
+
   it('switches to the fallback provider and pins its model when one is available', async () => {
     const primary = { id: 'p1', type: 'cli' };
     const fallback = { id: 'p2', type: 'cli', models: ['fb-model'] };

@@ -17,6 +17,7 @@ is the contract.
 grep -i "what you want to do" client/src/lib/README.md
 ```
 
+| `navFeatures.js` | `filterNavByFeatures(navEntries, isFeatureEnabled)` — drops nav-manifest entries whose optional instance feature (`post`, `datadog`, `jira`, `gsd`) is off. The single gate for BROWSE surfaces (sidebar, ⌘K); routes stay reachable by URL, bookmark, and voice. Pair with `useInstanceFeatures`. |
 | `postQuickSession.js` | Pure Quick POST duration presets, local-observation estimator, deterministic budget composer, and preview metadata. |
 
 ---
@@ -64,7 +65,7 @@ grep -i "what you want to do" client/src/lib/README.md
 | `pipelineImageDefaults.js` | Pipeline comic-page image-gen defaults + settings reader. |
 | `reverseOutlineGrid.js` | `buildPlotlineGrid` (reverse-outline scenes + plotlines → plotline-by-sequence grid rows/cells) + `sceneComponentCount`. Used by the Reverse Outline page. |
 | `wrImageDefaults.js` | Writers Room per-scene image-gen defaults + style discriminators. |
-| `imageGenBackends.js` | Icon metadata + `deriveAvailableBackends` for the image-gen backends; re-exports everything from `imageGenModes.js` so consumers keep one import site. |
+| `imageGenBackends.js` | Icon metadata, `deriveAvailableBackends`, and `imageGenReadiness(status)` — a compatibility-safe `ready` / `unavailable` / `unknown` read of image-gen status responses; re-exports everything from `imageGenModes.js` so consumers keep one import site. |
 | `imageGenModes.js` | Node-safe (dependency-free) image/video backend constants + pure helpers: `IMAGE_GEN_MODE`, render-target mirror (`RENDER_TARGET_OPTIONS`, `normalizeRenderPinValue`, `applyRecordRenderPin` — fold a record's `imageMode`/`imageModelId` pin over a settings-derived cfg), `VIDEO_RENDER_MODES`, `modeLabel`, cloud/model-override/i2i capability gating. Imported by the server-side parity suite — must stay importable without client packages. |
 | `imageGenDefaults.js` | Shared `DEFAULT_NEGATIVE_PROMPT` used by the Image Gen form and quick-submit entry points. Mirrors server-side default. |
 | `imageGenResolutions.js` | Shared resolution presets for image generation. |

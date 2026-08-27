@@ -34,6 +34,10 @@ import { getCosTasks } from './cosTaskStore.js';
 import { queueEligibleImprovementTasks } from './cosTaskGenerator.js';
 import { generateTaskFromJob, recordJobGateSkip, isScriptJob, executeScriptJob, isShellJob, executeShellJob } from './autonomousJobs.js';
 import { checkJobGate, hasGate } from './jobGates.js';
+import {
+  acquireCosActionReservation,
+  pendingCosActionReservations,
+} from './cosAdmissionReservations.js';
 
 /**
  * Compute the next fire time for an autonomous job.
@@ -137,7 +141,7 @@ export async function registerSingleJobSchedule(jobId) {
 const spawningJobIds = new Set();
 const spawningJobTimeouts = new Map();
 
-// Synchronous daily-action reservation counter (#984). The budget gate in
+// Shared synchronous daily-action reservations (#984). The budget gate in
 // executeScheduledJob reads recorded usage + spawningJobIds + running autonomous
 // agents — but there are awaits between a job passing that gate and being
 // counted by spawningJobIds (agent jobs) or recordDomainUsage (script/shell
@@ -149,12 +153,10 @@ const spawningJobTimeouts = new Map();
 // It's released the moment the job is handed off to spawningJobIds /
 // recordDomainUsage or hits any exit path (a `finally` plus the agent handoff
 // cover every path, so the two counters never double-count the same job).
-let scheduledActionReservations = 0;
-
 // Test-only observability: lets the concurrency test assert the reservation
 // counter settles back to zero after a tick (no leak across any exit path).
 export function getScheduledActionReservations() {
-  return scheduledActionReservations;
+  return pendingCosActionReservations();
 }
 
 function addSpawningJob(jobId) {
@@ -230,7 +232,7 @@ export async function executeScheduledJob(jobId) {
       // In-flight = autonomous agents already running PLUS jobs admitted this
       // tick whose agent hasn't registered yet (`spawningJobIds`) PLUS jobs
       // admitted-to-fire this tick but not yet handed off to `spawningJobIds`
-      // or recorded usage (`scheduledActionReservations`, #984). The reservation
+      // or recorded usage (the shared action reservations, #984). The reservation
       // term closes the same-tick window: two jobs coming due in one event-loop
       // tick used to each clear this gate before either was counted, because an
       // agent job reserves `spawningJobIds` only after later awaits and an inline
@@ -240,7 +242,7 @@ export async function executeScheduledJob(jobId) {
       const runningAutonomous = Object.values(state.agents).filter(
         (a) => a.status === 'running' && a.metadata?.taskType && a.metadata.taskType !== 'user'
       ).length;
-      const inFlight = runningAutonomous + spawningJobIds.size + scheduledActionReservations;
+      const inFlight = runningAutonomous + spawningJobIds.size + pendingCosActionReservations();
       if (remainingActionBudget(cosBudget.budget, cosBudget.usage, inFlight) < 1) overBudget = true;
     }
     if (overBudget) {
@@ -261,7 +263,7 @@ export async function executeScheduledJob(jobId) {
   }
 
   // Admitted to fire: reserve one daily action SYNCHRONOUSLY, before any further
-  // await (#984). The budget gate above read `scheduledActionReservations`, and
+  // await (#984). The budget gate above read the shared reservation count, and
   // there is no `await` between that read and this increment — so "read gate →
   // reserve" is an atomic critical section. Two jobs coming due in the same tick
   // serialize on it: the first reads remaining≥1 and reserves; the second reads
@@ -271,13 +273,22 @@ export async function executeScheduledJob(jobId) {
   // releases it on every non-firing exit path (already-spawning, already-running,
   // capacity-defer, gate-skip, spawn failure). `releaseReservation` is idempotent
   // so the explicit handoff release and the `finally` can both fire harmlessly.
-  let reserved = true;
-  scheduledActionReservations += 1;
-  const releaseReservation = () => {
-    if (!reserved) return;
-    reserved = false;
-    scheduledActionReservations = Math.max(0, scheduledActionReservations - 1);
-  };
+  const actionReservation = acquireCosActionReservation({
+    budget: cosBudget.budget,
+    usage: cosBudget.usage,
+    inFlight: Object.values(state.agents).filter(
+      (agent) => agent.status === 'running' && agent.metadata?.taskType && agent.metadata.taskType !== 'user'
+    ).length + spawningJobIds.size,
+    reservationId: `scheduled-job:${jobId}`,
+  });
+  if (!actionReservation.ok) {
+    await recordJobGateSkip(jobId).catch((err) =>
+      console.error(`❌ Failed to record budget-skip for ${jobId}: ${err.message}`)
+    );
+    await registerSingleJobSchedule(jobId);
+    return;
+  }
+  const releaseReservation = actionReservation.release;
 
   try {
     // Script jobs and shell jobs execute directly without spawning an AI agent —

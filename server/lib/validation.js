@@ -3,6 +3,7 @@ import { ServerError } from './errorHandler.js';
 import { partialWithoutDefaults, emptyToUndefined, emptyToNull, optionalBooleanMap } from './zodCompat.js';
 import { WORK_TRACKERS } from './workTracker.js';
 import { PROVIDER_FAMILY_IDS } from './providerFamilies.js';
+import { APP_FEATURE_IDS, INSTANCE_FEATURE_IDS } from './instanceFeatureRegistry.js';
 import { MAX_MONTHLY_COST } from './subscriptionSavings.js';
 import { QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from './generationModes.js';
 import { RENDER_TARGETS, RENDER_TARGET_BACKEND_AUTO } from './renderTargets.js';
@@ -90,6 +91,13 @@ export const datadogConfigSchema = z.object({
   serviceName: z.string().optional(),
   environment: z.string().optional()
 });
+
+// Per-managed-app feature participation. An absent key or null means inherit
+// the install-wide Settings > Features value; true/false is an app override.
+// The app-level list intentionally excludes POST, which has no managed-app tab.
+export const appFeatureOverridesSchema = z.object(
+  Object.fromEntries(APP_FEATURE_IDS.map((id) => [id, z.boolean().nullable().optional()]))
+).strict();
 
 // POST /api/datadog/instances. API keys may be empty when updating an
 // existing instance because the route preserves the stored secret in that
@@ -286,6 +294,12 @@ export const appSchema = z.object({
   defaultUseWorktree: z.boolean().optional(),
   defaultOpenPR: z.boolean().optional(),
   defaultPrCompletion: z.enum(PR_COMPLETION_VALUES).optional(),
+  // After a CoS agent completes against this app, audit the repo for the state the
+  // task asked for (worktree removed, branch deleted, PR merged) and file a recovery
+  // task when it diverges. See lib/repoStateExpectations.js. Unset = ON: an install
+  // that never hears about a leaked branch just accumulates them.
+  verifyRepoStateOnCompletion: z.boolean().optional(),
+  featureOverrides: appFeatureOverridesSchema.optional(),
   jira: jiraConfigSchema.optional().nullable(),
   datadog: datadogConfigSchema.optional().nullable(),
   // Where this app's autonomous work items live (single source per app).
@@ -767,16 +781,18 @@ export const apiAccessSettingsSchema = z.object({
   sdapi: apiAccessEntrySchema.optional(),
 }).strict();
 
-// Install-local feature participation flags. The registry owns the available
-// feature ids; this schema keeps generic settings saves from persisting an
-// unknown or malformed feature state.
-export const instanceFeatureSettingsSchema = z.object({
-  post: z.object({
-    enabled: z.boolean().optional(),
-  }).strict().optional(),
-}).strict();
+// Install-local feature participation flags. `instanceFeatureRegistry.js` owns
+// the available feature ids and both schemas derive from it, so registering a
+// feature there needs no edit here; the schemas keep generic settings saves from
+// persisting an unknown or malformed feature state.
+export const instanceFeatureSettingsSchema = z.object(
+  Object.fromEntries(INSTANCE_FEATURE_IDS.map((id) => [
+    id,
+    z.object({ enabled: z.boolean().optional() }).strict().optional(),
+  ]))
+).strict();
 
-export const instanceFeatureIdSchema = z.enum(['post']);
+export const instanceFeatureIdSchema = z.enum([...INSTANCE_FEATURE_IDS]);
 
 export const instanceFeatureUpdateSchema = z.object({
   enabled: z.boolean(),

@@ -23,6 +23,7 @@ let priorRegistryEnv;
 let buildArgs;
 let buildSidecarMeta;
 let resolveOutputPlacement;
+let parseImageExecutionMarker;
 let PATHS;
 
 beforeAll(async () => {
@@ -30,8 +31,45 @@ beforeAll(async () => {
   priorRegistryEnv = process.env.PORTOS_MEDIA_MODELS_FILE;
   process.env.PORTOS_MEDIA_MODELS_FILE = join(tmpRegistryDir, 'media-models.json');
   vi.resetModules();
-  ({ buildArgs, buildSidecarMeta, resolveOutputPlacement } = await import('./local.js'));
+  ({ buildArgs, buildSidecarMeta, resolveOutputPlacement, parseImageExecutionMarker } = await import('./local.js'));
   ({ PATHS } = await import('../../lib/fileUtils.js'));
+});
+
+describe('imageGen local.parseImageExecutionMarker', () => {
+  const marker = (value) => `IMAGE_EXECUTION:${JSON.stringify(value)}`;
+  const confirmed = {
+    version: 1,
+    state: 'confirmed',
+    requestedDevice: 'auto',
+    effectiveDevice: 'cuda',
+    placement: 'cuda+offload',
+    cpuFallback: false,
+    runtime: { runtime: 'diffusers-image', versions: { torch: '2.7.0', prompt: 'must not persist' } },
+  };
+
+  it('accepts only the bounded runtime evidence after marker chunks are reassembled', () => {
+    expect(parseImageExecutionMarker(marker(confirmed))).toEqual({
+      ...confirmed,
+      runtime: { runtime: 'diffusers-image', versions: { torch: '2.7.0' } },
+    });
+  });
+
+  it('keeps malformed and absent markers distinct from confirmed execution', () => {
+    expect(parseImageExecutionMarker('IMAGE_EXECUTION:{not-json}')).toEqual({ state: 'malformed' });
+    expect(parseImageExecutionMarker(marker({ ...confirmed, cpuFallback: true }))).toEqual({ state: 'malformed' });
+    expect(parseImageExecutionMarker('RUNTIME:{"runtime":"diffusers-image"}')).toBeNull();
+  });
+
+  it('marks an explicit CPU path as degraded rather than accelerator-confirmed', () => {
+    expect(parseImageExecutionMarker(marker({
+      ...confirmed,
+      state: 'degraded',
+      requestedDevice: 'cuda',
+      effectiveDevice: 'cpu',
+      placement: 'cpu',
+      cpuFallback: true,
+    }))).toMatchObject({ state: 'degraded', effectiveDevice: 'cpu', cpuFallback: true });
+  });
 });
 
 afterAll(() => {

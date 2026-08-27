@@ -22,6 +22,92 @@ describe('AI Toolkit runner service', () => {
     }
   });
 
+  it('passes request capability requirements to proactive fallback selection', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const primary = { id: 'primary', name: 'Primary', type: 'api', enabled: true };
+    const fallback = { id: 'fallback', name: 'Fallback', type: 'api', enabled: true, defaultModel: 'vision' };
+    const providerService = {
+      getAllProviders: vi.fn().mockResolvedValue({ providers: [primary, fallback] }),
+      getProviderById: vi.fn(async (id) => (id === fallback.id ? fallback : primary)),
+    };
+    const providerStatusService = {
+      isAvailable: vi.fn().mockReturnValue(false),
+      getFallbackProvider: vi.fn().mockReturnValue({ provider: fallback, source: 'system', model: null }),
+      getStatus: vi.fn().mockReturnValue({ reason: 'rate-limit' }),
+      getTimeUntilRecovery: vi.fn().mockReturnValue('1m'),
+    };
+    const runner = createRunnerService({ dataDir, providerService, providerStatusService });
+    const requestCapabilities = { hasImages: true, requiredContextTokens: 12_000 };
+
+    const result = await runner.createRun({
+      providerId: primary.id,
+      prompt: 'describe',
+      requestCapabilities,
+    });
+
+    expect(result.provider.id).toBe(fallback.id);
+    expect(providerStatusService.getFallbackProvider).toHaveBeenCalledWith(
+      primary.id, expect.any(Object), null, null, requestCapabilities,
+    );
+  });
+
+  it('refuses proactive fallback when an exact provider is required', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const primary = { id: 'primary', name: 'Primary', type: 'api', enabled: true };
+    const providerService = {
+      getAllProviders: vi.fn().mockResolvedValue({ providers: [primary] }),
+      getProviderById: vi.fn().mockResolvedValue(primary),
+    };
+    const providerStatusService = {
+      isAvailable: vi.fn().mockReturnValue(false),
+      getFallbackProvider: vi.fn(),
+      getStatus: vi.fn().mockReturnValue({ reason: 'rate-limit' }),
+    };
+    const runner = createRunnerService({ dataDir, providerService, providerStatusService });
+
+    await expect(runner.createRun({
+      providerId: primary.id,
+      prompt: 'stay pinned',
+      allowFallback: false,
+    })).rejects.toThrow('fallback is disabled');
+    expect(providerStatusService.getFallbackProvider).not.toHaveBeenCalled();
+    expect(providerService.getAllProviders).not.toHaveBeenCalled();
+  });
+
+  it('derives request capabilities for direct and pre-created runs', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const primary = { id: 'primary', name: 'Primary', type: 'api', enabled: true };
+    const fallback = { id: 'fallback', name: 'Fallback', type: 'api', enabled: true };
+    const providerService = {
+      getAllProviders: vi.fn().mockResolvedValue({ providers: [primary, fallback] }),
+      getProviderById: vi.fn(async (id) => (id === fallback.id ? fallback : primary)),
+    };
+    const providerStatusService = {
+      isAvailable: vi.fn().mockReturnValue(false),
+      getFallbackProvider: vi.fn().mockReturnValue({ provider: fallback, source: 'system', model: null }),
+      getStatus: vi.fn().mockReturnValue({ reason: 'rate-limit' }),
+      getTimeUntilRecovery: vi.fn().mockReturnValue('1m'),
+    };
+    const runner = createRunnerService({ dataDir, providerService, providerStatusService });
+
+    await runner.createRun({
+      providerId: primary.id,
+      prompt: '12345678',
+      screenshots: ['image.png'],
+    });
+
+    expect(providerStatusService.getFallbackProvider).toHaveBeenCalledWith(
+      primary.id,
+      expect.any(Object),
+      null,
+      null,
+      { hasImages: true, requiredContextTokens: 8002 },
+    );
+  });
+
   it('checks provider readiness through the injected hook before API fetches', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
     tempDirs.push(dataDir);
@@ -96,6 +182,102 @@ describe('AI Toolkit runner service', () => {
     endpoint: 'http://localhost:11434/v1',
     defaultModel: 'llama3',
     ...overrides
+  });
+
+  it('forwards normalized 429 headers to provider status', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: false,
+      status: 429,
+      statusText: 'Too Many Requests',
+      headers: new Headers({ 'Retry-After': '15', 'X-RateLimit-Remaining': '0' }),
+      text: async () => 'rate limited',
+    })));
+    const markRateLimited = vi.fn(async () => {});
+    const runner = createRunnerService({
+      dataDir,
+      providerStatusService: { markRateLimited },
+      hooks: { ensureProviderReady: async () => ({ success: true }) },
+    });
+
+    await runner.executeApiRun({
+      runId: 'run-rate-limit-headers', provider: runReady(), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], onData: undefined, onComplete: vi.fn(),
+    });
+
+    expect(markRateLimited).toHaveBeenCalledWith('ollama', {
+      rateLimitWindow: expect.objectContaining({ retryAfterMs: 15000, remaining: 0 }),
+    });
+    expect(JSON.stringify(markRateLimited.mock.calls)).not.toContain('Retry-After');
+  });
+
+  it('keeps a successful generation successful when telemetry clearing fails', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    stubStreamingFetch();
+    const markApiSuccess = vi.fn(async () => { throw new Error('status disk unavailable'); });
+    const runner = createRunnerService({
+      dataDir,
+      providerStatusService: { markApiSuccess },
+      hooks: { ensureProviderReady: async () => ({ success: true }) },
+    });
+    let complete;
+    const completed = new Promise(resolve => { complete = resolve; });
+
+    await runner.executeApiRun({
+      runId: 'run-telemetry-failure', provider: runReady(), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], onData: undefined, onComplete: complete,
+    });
+    const metadata = await completed;
+
+    expect(markApiSuccess).toHaveBeenCalledWith('ollama');
+    expect(metadata.success).toBe(true);
+  });
+
+  it('keeps a successful generation successful with a partial provider status service', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    stubStreamingFetch();
+    const runner = createRunnerService({
+      dataDir,
+      providerStatusService: { markRateLimited: vi.fn(async () => {}) },
+      hooks: { ensureProviderReady: async () => ({ success: true }) },
+    });
+    let complete;
+    const completed = new Promise(resolve => { complete = resolve; });
+
+    await runner.executeApiRun({
+      runId: 'run-partial-status-service', provider: runReady(), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], onData: undefined, onComplete: complete,
+    });
+
+    expect(await completed).toMatchObject({ success: true });
+  });
+
+  it('keeps a rate-limit failure compatible with a partial provider status service', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: false,
+      status: 429,
+      statusText: 'Too Many Requests',
+      headers: new Headers({ 'Retry-After': '5' }),
+      text: async () => 'rate limited',
+    })));
+    const runner = createRunnerService({
+      dataDir,
+      providerStatusService: { markApiSuccess: vi.fn() },
+      hooks: { ensureProviderReady: async () => ({ success: true }) },
+    });
+    const onComplete = vi.fn();
+
+    await runner.executeApiRun({
+      runId: 'run-partial-status-error', provider: runReady(), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], onData: undefined, onComplete,
+    });
+
+    expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
   });
 
   it('sends num_ctx in the request body when the provider opts in', async () => {
@@ -209,6 +391,41 @@ describe('AI Toolkit runner service', () => {
 
     expect(fetch).toHaveBeenCalledTimes(1);
     expect('num_ctx' in JSON.parse(fetch.mock.calls[0][1].body)).toBe(false);
+  });
+
+  it('retries a transient gateway response before the API stream starts', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const cancel = vi.fn(async () => {});
+    const encoder = new TextEncoder();
+    const chunks = [encoder.encode('data: {"choices":[{"delta":{"content":"hi"}}]}\n')];
+    let index = 0;
+    const fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 503, body: { cancel } })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        body: { getReader: () => ({ read: async () => index < chunks.length
+          ? { done: false, value: chunks[index++] }
+          : { done: true } }) },
+      });
+    vi.stubGlobal('fetch', fetch);
+
+    const runner = createRunnerService({
+      dataDir,
+      hooks: { ensureProviderReady: async () => ({ success: true }) },
+    });
+    let done;
+    const completed = new Promise((resolve) => { done = resolve; });
+    await runner.executeApiRun({
+      runId: 'run-pre-header-retry', provider: runReady(), model: null,
+      prompt: 'hi', workspacePath: process.cwd(), screenshots: [],
+      onData: undefined, onComplete: (metadata) => done(metadata),
+    });
+
+    await expect(completed).resolves.toMatchObject({ success: true });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it('anchors relative screenshot refs under screenshotsDir so `../` traversal cannot escape it', async () => {

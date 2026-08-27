@@ -29,6 +29,19 @@ export const getAppWorkItems = (id, { issueAuthorFilter } = {}, options) => {
 // Read-only; the tab owns its own error UI, so default to silent.
 export const getAppIssues = (id, options) =>
   request(`/apps/${id}/issues`, { silent: true, ...options });
+// Every OPEN PR/MR on the app's GitHub/GitLab origin, including review/check
+// state and any active PortOS resolve action. The tab owns its error UI, so
+// default to silent.
+export const getAppPullRequests = (id, options) =>
+  request(`/apps/${id}/pull-requests`, { silent: true, ...options });
+// Queue the shared review-loop follow-up for one freshly verified open PR/MR.
+// The server, not the browser, owns the forge URL/branch and duplicate guard.
+export const resolveAppPullRequest = (id, number, options = {}) =>
+  request(`/apps/${id}/pull-requests/${encodeURIComponent(number)}/resolve`, {
+    method: 'POST',
+    silent: true,
+    ...options,
+  });
 // Effective Layered Intelligence config (self-improvement loop) for an app —
 // stored partial merged over the shipped defaults. Read-only; saved through
 // updateApp (the `layeredIntelligence` key routes to the merge helper server-

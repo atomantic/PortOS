@@ -35,7 +35,7 @@ export const OPEN_WORLD_REGIONS = [
   { id: 'productivity', parcel: 'productivity', label: 'Productivity Terrace', blurb: 'Streaks, throughput, and the activity heatmap.', appPath: '/insights/overview', aliases: ['productivity terrace', 'productivity', 'streak district'] },
   { id: 'backup-vault', parcel: 'backupVault', label: 'Backup Vault', blurb: 'The sealed door — last backup and its health.', appPath: '/settings/backup', aliases: ['backup vault', 'the vault'] },
   { id: 'memory', parcel: 'memory', label: 'Memory Quarter', blurb: 'Crystal clusters of long-term memory and the inbox well.', appPath: '/brain/inbox', aliases: ['memory quarter', 'memory district', 'knowledge district'] },
-  { id: 'sprint-yard', parcel: 'jira', label: 'Sprint Yard', blurb: 'The current sprint, laid out as a yard of tickets.', appPath: '/devtools/jira', aliases: ['sprint yard', 'jira yard', 'sprint district'] },
+  { id: 'sprint-yard', parcel: 'jira', label: 'Sprint Yard', blurb: 'The current sprint, laid out as a yard of tickets.', appPath: '/devtools/jira', feature: 'jira', aliases: ['sprint yard', 'jira yard', 'sprint district'] },
   { id: 'voice', parcel: 'voice', label: 'Voice Beacon', blurb: 'Lights up while the voice agent is listening.', appPath: '/digital-twin/voice', aliases: ['voice beacon', 'the beacon'] },
   { id: 'goals', parcel: 'goals', label: 'Goal Monuments', blurb: 'One monument per life goal, height by progress.', appPath: '/goals/tree', aliases: ['goal monuments', 'monuments', 'goals district'] },
   { id: 'artifacts', parcel: 'artifacts', label: 'Hall of Achievements', blurb: 'Earned artifacts on display.', appPath: '/character', aliases: ['hall of achievements', 'artifact hall', 'achievements hall'] },
@@ -49,6 +49,14 @@ export const OPEN_WORLD_REGION_PREFIX = '/openworld/region';
 export const regionPath = (id) => `${OPEN_WORLD_REGION_PREFIX}/${id}`;
 
 const REGIONS_BY_ID = new Map(OPEN_WORLD_REGIONS.map((r) => [r.id, r]));
+
+// Optional feature tags follow the caller's shared navigation gate. Untagged entries
+// and callers without a gate remain visible; tagged entries follow the gate's answer.
+export const isOpenWorldEntryVisible = (entry, isFeatureEnabled) => (
+  !entry?.feature
+  || typeof isFeatureEnabled !== 'function'
+  || isFeatureEnabled(entry.feature)
+);
 
 // A region with its geography resolved from the master town plan: `anchor` is the ground
 // center [x, y, z], `w`/`d` the parcel footprint. The registry's `label` is what the UI
@@ -71,15 +79,18 @@ export function getRegion(id) {
 
 // Every region, geography resolved, in fast-travel order. Regions whose parcel has vanished
 // from the plan are dropped rather than rendered at [0,0,0].
-export function listRegions() {
-  return OPEN_WORLD_REGIONS.map((r) => getRegion(r.id)).filter(Boolean);
+export function listRegions(isFeatureEnabled) {
+  return OPEN_WORLD_REGIONS
+    .filter((region) => isOpenWorldEntryVisible(region, isFeatureEnabled))
+    .map((r) => getRegion(r.id))
+    .filter(Boolean);
 }
 
 // Case/punctuation-insensitive lookup over labels + aliases, for the fast-travel filter box.
 // Returns regions in registry order so the list never jumps around as you type.
-export function searchRegions(query) {
+export function searchRegions(query, isFeatureEnabled) {
   const q = (query || '').trim().toLowerCase();
-  const all = listRegions();
+  const all = listRegions(isFeatureEnabled);
   if (!q) return all;
   return all.filter((r) =>
     r.label.toLowerCase().includes(q)

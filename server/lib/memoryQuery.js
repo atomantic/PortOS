@@ -25,7 +25,8 @@ export function projectIndexMeta(memory) {
     importance: memory.importance,
     createdAt: memory.createdAt,
     status: memory.status,
-    sourceAppId: memory.sourceAppId
+    sourceAppId: memory.sourceAppId,
+    sourceAgentId: memory.sourceAgentId,
   };
 }
 
@@ -61,6 +62,10 @@ export function filterMemoryIndex(memories, options = {}) {
     filtered = filtered.filter(m => m.sourceAppId !== 'brain');
   } else if (options.appId) {
     filtered = filtered.filter(m => m.sourceAppId === options.appId);
+  }
+
+  if (options.sourceAgentId) {
+    filtered = filtered.filter(m => m.sourceAgentId === options.sourceAgentId);
   }
 
   return filtered;

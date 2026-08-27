@@ -1,7 +1,7 @@
 /**
  * Shared fixture payloads for the `OpenWorld` PAGE suites (transport, fast
  * travel, and whatever comes next). Each of those suites stubs the same 3D
- * scene, the same data hook, and the same eight API endpoints purely to get the
+ * scene, the same data hook, and the same nine API endpoints purely to get the
  * page mountable in jsdom — none of it is what any of them is testing, and a
  * new endpoint the page starts polling otherwise has to be added to every copy.
  *
@@ -56,6 +56,7 @@ export const OPEN_WORLD_DATA = {
  */
 export function openWorldApiMock(vi) {
   return {
+    getInstanceFeatures: vi.fn(async () => ({ features: [] })),
     getCosQuickSummary: vi.fn(async () => null),
     getCosActivityCalendar: vi.fn(async () => null),
     getGoals: vi.fn(async () => null),

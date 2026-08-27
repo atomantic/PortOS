@@ -99,6 +99,9 @@ async function createJob(jobData) {
       priority: jobData.priority || 'MEDIUM',
       autonomyLevel: jobData.autonomyLevel || 'manager',
       promptTemplate: jobData.promptTemplate || '',
+      // Selected deterministic context sources resolved immediately before the
+      // agent task is generated. Empty is a real configured selection.
+      dataInputs: Array.isArray(jobData.dataInputs) ? jobData.dataInputs : [],
       // Optional per-job AI provider + model override. Null = use the active
       // provider / its default model (historical behavior). generateTaskFromJob
       // forwards these into the task metadata the agent runner resolves.
@@ -151,7 +154,7 @@ async function updateJob(jobId, updates) {
 
     const updatableFields = [
       'name', 'description', 'category', 'type', 'interval', 'intervalMs',
-      'scheduledTime', 'cronExpression', 'cronSchedule', 'weekdaysOnly', 'enabled', 'priority', 'autonomyLevel', 'promptTemplate',
+      'scheduledTime', 'cronExpression', 'cronSchedule', 'weekdaysOnly', 'enabled', 'priority', 'autonomyLevel', 'promptTemplate', 'dataInputs',
       'command', 'triggerAction', 'config', 'appId', 'taskMetadata', 'providerId', 'model', 'effort'
     ]
 

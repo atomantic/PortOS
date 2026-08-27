@@ -127,6 +127,7 @@ export const OPERATIONAL_RUN_SOURCES = Object.freeze([
   'activity-digest',
   'agent-personality-generation',
   'ai-app-detect',
+  'cos-persistent-mind',
   'digital-twin',
   'goal-scorecard',
   'jira-title',

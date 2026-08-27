@@ -438,6 +438,27 @@ describe('brainValidation.js', () => {
       expect(result.success).toBe(true);
     });
 
+    it('should allow provider pins inside a repo-study intake', () => {
+      const result = captureInputSchema.safeParse({
+        text: 'https://github.com/example/repo',
+        repoIntake: {
+          learn: true,
+          providerId: 'codex',
+          model: 'gpt-5',
+          effort: 'high',
+        },
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('should reject an unknown repo-study effort', () => {
+      const result = captureInputSchema.safeParse({
+        text: 'https://github.com/example/repo',
+        repoIntake: { learn: true, effort: 'unlimited' },
+      });
+      expect(result.success).toBe(false);
+    });
+
     it('should reject empty text', () => {
       expect(captureInputSchema.safeParse({ text: '' }).success).toBe(false);
     });

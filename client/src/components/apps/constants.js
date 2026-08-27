@@ -2,6 +2,7 @@
 // test (streamingDetect's DESKTOP_TYPES parity check), where apiCore's React
 // dependency doesn't resolve.
 import { PORTOS_APP_ID } from '../../lib/appIdentity.js';
+import { APP_FEATURE_IDS, INSTANCE_FEATURES } from '../../../../server/lib/instanceFeatureRegistry.js';
 
 export const NON_PM2_TYPES = new Set(['ios-native', 'macos-native', 'xcode', 'swift']);
 
@@ -107,32 +108,81 @@ export const workItemNoun = (tracker) =>
  *   - `jira.enabled` — the integration is switched on (the JIRA tab's own config panel)
  *   - `workTracker === 'jira'` — the app's work items live in JIRA (Edit App → Workflow)
  *
- * The second clause is the bootstrap path: JIRA's config panel lives ON the JIRA
- * tab, so gating the tab on `jira.enabled` alone would make a never-configured app
- * unable to ever reach it. Picking JIRA as the work tracker in the Edit App drawer
- * reveals the tab, and the panel there does the rest. `'auto'` never resolves to
- * JIRA (it classifies the git origin host → github/gitlab/plan), so an app only
- * lands here by an explicit choice.
+ * The second clause remains the bootstrap path for existing app records: JIRA's
+ * config panel lives on the JIRA detail tab, so selecting JIRA as the work
+ * tracker is still an app-local signal even before integration config exists.
+ * `'auto'` never resolves to JIRA (it classifies the git origin host →
+ * github/gitlab/plan), so an app only lands here by an explicit choice.
  */
 export const appUsesJira = (app) => !!app?.jira?.enabled || app?.workTracker === 'jira';
+
+export const APP_FEATURES = Object.freeze(
+  APP_FEATURE_IDS.map(id => INSTANCE_FEATURES.find(feature => feature.id === id)).filter(Boolean)
+);
+
+export { APP_FEATURE_IDS };
+
+const hasOwn = (value, key) => Object.hasOwn(value, key);
+
+// Read a new explicit override without collapsing an intentional null (inherit)
+// into an absent key. Invalid values from hand-edited legacy records inherit so
+// one malformed app flag cannot hide a tab forever.
+const readFeatureOverride = (app, featureId) => {
+  const overrides = app?.featureOverrides;
+  if (!overrides || typeof overrides !== 'object' || Array.isArray(overrides) || !hasOwn(overrides, featureId)) {
+    return undefined;
+  }
+  const value = overrides[featureId];
+  return typeof value === 'boolean' || value === null ? value : null;
+};
+
+// Older app records used integration config as the only app-local signal. Keep
+// those records meaningful while allowing a new null override to deliberately
+// switch them back to the install-wide setting.
+const readLegacyFeatureOverride = (app, featureId) => {
+  if (featureId === 'datadog' && typeof app?.datadog?.enabled === 'boolean') {
+    return app.datadog.enabled;
+  }
+  if (featureId === 'jira') {
+    if (app?.workTracker === 'jira') return true;
+    if (typeof app?.jira?.enabled === 'boolean') return app.jira.enabled;
+  }
+  return undefined;
+};
+
+/** The app-local choice, or null when this app inherits the global setting. */
+export const getAppFeatureOverride = (app, featureId) => {
+  const override = readFeatureOverride(app, featureId);
+  if (override !== undefined) return override;
+  return readLegacyFeatureOverride(app, featureId) ?? null;
+};
+
+/** Resolve an app tab against its app override and the install-wide value. */
+export const isAppFeatureEnabled = (app, featureId, globalEnabled) => {
+  const override = readFeatureOverride(app, featureId);
+  if (override === true || override === false) return override;
+  if (override === null) return globalEnabled !== false;
+  const legacy = readLegacyFeatureOverride(app, featureId);
+  return legacy ?? (globalEnabled !== false);
+};
 
 // Overview first, then alphabetical. Every id is a real route segment
 // (`/apps/:appId/:tab`) so each tab is linkable, bookmarkable, and reachable
 // from ⌘K — see the routing rules in client/src/AGENTS.md.
 //
-// `visibleWhen(app)` gates a tab that only some apps earn; omit it for the tabs
-// every app gets. Keeping the predicate on the entry means adding a conditional
-// tab is one edit here rather than a second id-string case in the detail view.
+// `feature` gates a tab against the install-wide feature setting, with an
+// app-level `featureOverrides` choice taking precedence. `visibleWhen(app)` is
+// reserved for structural conditions that are not feature participation.
 export const APP_DETAIL_TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'automation', label: 'Automation' },
-  { id: 'datadog', label: 'DataDog', visibleWhen: (app) => !!app?.datadog?.enabled },
+  { id: 'datadog', label: 'DataDog', feature: 'datadog' },
   { id: 'documents', label: 'Documents' },
   { id: 'git', label: 'Git' },
-  { id: 'gsd', label: 'GSD' },
+  { id: 'gsd', label: 'GSD', feature: 'gsd' },
   { id: 'issues', label: 'Issues' },
-  // JIRA config is only meaningful for an app wired to JIRA — see appUsesJira.
-  { id: 'jira', label: 'JIRA', visibleWhen: appUsesJira },
+  { id: 'pull-requests', label: 'PRs / MRs' },
+  { id: 'jira', label: 'JIRA', feature: 'jira' },
   { id: 'processes', label: 'Processes' },
   { id: 'references', label: 'References' },
   // Only repos that declare submodules (a .gitmodules file) get the tab — most

@@ -7,10 +7,12 @@ import { act, render, screen, fireEvent } from '@testing-library/react';
 vi.mock('../../services/api', () => ({
   getActivities: vi.fn(() => Promise.resolve([])),
   getCalendarAccounts: vi.fn(() => Promise.resolve([])),
+  getInstanceFeatures: vi.fn(() => Promise.resolve({ features: [{ id: 'post', enabled: true }] })),
   updateGoal: vi.fn(() => Promise.resolve({})),
 }));
 
 import * as api from '../../services/api';
+import { __resetInstanceFeatureCache } from '../../hooks/useInstanceFeatures.js';
 
 import GoalDetailPanel from './GoalDetailPanel';
 
@@ -38,11 +40,27 @@ const renderPanel = async (goal = baseGoal) => {
   );
 
   await act(async () => { await Promise.resolve(); });
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
   return view;
+};
+
+const openEdit = async () => {
+  await act(async () => {
+    fireEvent.click(screen.getByText('Edit'));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  __resetInstanceFeatureCache();
+  api.getInstanceFeatures.mockResolvedValue({ features: [{ id: 'post', enabled: true }] });
 });
 
 describe('GoalDetailPanel badge migration to <Pill>', () => {
@@ -136,7 +154,7 @@ describe('GoalDetailPanel provenance chip', () => {
     // a chip attributing those readings would point at content no longer shown.
     await renderPanel();
     expect(screen.getByText('Inferred')).toBeTruthy(); // read mode: present
-    fireEvent.click(screen.getByText('Edit'));
+    await openEdit();
     expect(screen.queryByText('Inferred')).toBeNull();
   });
 });
@@ -145,14 +163,14 @@ describe('GoalDetailPanel Daily Driver feature-area override (issue #2679)', () 
   it('shows the category default (greyed) when no per-goal override is set', async () => {
     // mastery → ['post', 'memory'] → "Daily POST, Memory" per goalFeatureMap.
     await renderPanel();
-    fireEvent.click(screen.getByText('Edit'));
+    await openEdit();
     expect(screen.getByText(/Default \(Mastery\):/)).toBeTruthy();
     expect(screen.getByText(/Daily POST, Memory/)).toBeTruthy();
   });
 
   it('initializes the multi-select from goal.featureAreas and reflects selection', async () => {
     await renderPanel({ ...baseGoal, featureAreas: ['writersRoom'] });
-    fireEvent.click(screen.getByText('Edit'));
+    await openEdit();
     const writersBtn = screen.getByRole('button', { name: /Writers Room/ });
     expect(writersBtn.getAttribute('aria-pressed')).toBe('true');
     // With an override present, the category-default hint is hidden.
@@ -161,7 +179,7 @@ describe('GoalDetailPanel Daily Driver feature-area override (issue #2679)', () 
 
   it('round-trips the override through updateGoal when saved', async () => {
     await renderPanel(); // no override → falls back to category default
-    fireEvent.click(screen.getByText('Edit'));
+    await openEdit();
     // Toggle two areas on, then save.
     fireEvent.click(screen.getByRole('button', { name: /Universes/ }));
     fireEvent.click(screen.getByRole('button', { name: /Tribe/ }));
@@ -177,7 +195,7 @@ describe('GoalDetailPanel Daily Driver feature-area override (issue #2679)', () 
 
   it('sends an empty featureAreas array when the override is cleared (falls back to category default)', async () => {
     await renderPanel({ ...baseGoal, featureAreas: ['universes'] });
-    fireEvent.click(screen.getByText('Edit'));
+    await openEdit();
     // Toggle the sole selected area off.
     fireEvent.click(screen.getByRole('button', { name: /Universes/ }));
     await act(async () => {
@@ -197,7 +215,7 @@ describe('GoalDetailPanel Daily Driver feature-area override (issue #2679)', () 
     // was open. Omitting the field lets the service preserve whatever is stored —
     // including any forward-unknown id from a newer peer, which is never dropped.
     await renderPanel({ ...baseGoal, featureAreas: ['someFutureAreaFromANewerPeer'] });
-    fireEvent.click(screen.getByText('Edit'));
+    await openEdit();
     // Change only the title; never touch the feature-area buttons.
     const titleInput = screen.getByDisplayValue('Master the craft');
     fireEvent.change(titleInput, { target: { value: 'Master the craft, revised' } });
@@ -215,7 +233,7 @@ describe('GoalDetailPanel Daily Driver feature-area override (issue #2679)', () 
     // another known area. The unknown id (invisible in this install's UI) must
     // ride along untouched so it is never erased across federation.
     await renderPanel({ ...baseGoal, featureAreas: ['someFutureAreaFromANewerPeer', 'universes'] });
-    fireEvent.click(screen.getByText('Edit'));
+    await openEdit();
     // Toggle a different known area on → override changed.
     fireEvent.click(screen.getByRole('button', { name: /Tribe/ }));
     await act(async () => {
@@ -231,8 +249,19 @@ describe('GoalDetailPanel Daily Driver feature-area override (issue #2679)', () 
     // Daily Driver falls back to the category default at read time, so the hint
     // must be shown (gating on known-selection, not raw array length).
     await renderPanel({ ...baseGoal, featureAreas: ['someFutureAreaFromANewerPeer'] });
-    fireEvent.click(screen.getByText('Edit'));
+    await openEdit();
     expect(screen.getByText(/Default \(Mastery\):/)).toBeTruthy();
     expect(screen.getByText(/Daily POST, Memory/)).toBeTruthy();
+  });
+
+  it('hides POST from the picker and falls back to the next enabled default when POST is disabled', async () => {
+    api.getInstanceFeatures.mockResolvedValue({ features: [{ id: 'post', enabled: false }] });
+    await renderPanel();
+    await openEdit();
+    expect(await screen.findByText(/Default \(Mastery\):/)).toBeTruthy();
+    expect(screen.getByText(/Default \(Mastery\):/)).toHaveTextContent('Memory');
+    expect(screen.queryByText(/Daily POST, Memory/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /Daily POST/ })).toBeNull();
+    expect(screen.getByRole('button', { name: /Memory/ })).toBeTruthy();
   });
 });

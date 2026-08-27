@@ -49,6 +49,8 @@ import { isUpdateInProgress } from './updateChecker.js';
 import { releaseMissionSubTask } from './missions.js';
 import { loadState } from './cosState.js';
 import { acquireLocalEndpointSpawnSlot } from './cosLocalEndpointSlots.js';
+import { forgeSpawnHoldReason } from './cosForgeSpawnGate.js';
+import { acquireCosGlobalSlot } from './cosAdmissionReservations.js';
 // This module's own event wiring drives three LIFECYCLE TRANSITIONS, so it takes
 // them from the facade rather than from the three separate leaves that happen to
 // implement them (#3450). It can: nothing the facade imports imports this module
@@ -344,7 +346,7 @@ async function runInitSpawner() {
 
   cosEvents.on('task:ready', async (task) => {
     // ── HOLDS, at the one chokepoint all seven `task:ready` emitters funnel
-    // through. Both leave the task queued (no status write, no retry charged)
+    // through. Each leaves the task queued (no status write, no retry charged)
     // for a condition that clears on its own.
     //
     // Held HERE rather than inside `runAgentSpawn`: a hold below this line would
@@ -371,7 +373,27 @@ async function runInitSpawner() {
     if (useRunner && !(await isRunnerReachable())) {
       return holdTask(task, 'CoS Runner is down');
     }
-    // 3. Local inference endpoint at capacity (issue #4834). A CoS agent runs a
+    // 3. Forge unreachable, for a task that cannot finish without it (#5110). An
+    //    agent whose task promises a change request does its work, fails to push,
+    //    and finalizes `forge-unreachable` — non-actionable, so the task retries,
+    //    and each retry re-runs the whole agent against the same dead network. One
+    //    VPN drop cost three runs (101 + 50 + 23 minutes) to reach `blocked`. See
+    //    cosForgeSpawnGate.js for the narrowings that keep the hold from becoming
+    //    the silent wedge a wrong hold would be.
+    const forgeHold = await forgeSpawnHoldReason(task);
+    if (forgeHold) return holdTask(task, forgeHold);
+    // 4. Global capacity. Reserve across the spawn window so direct persistent
+    //    turns and ordinary agents cannot both pass a stale pre-registration
+    //    snapshot.
+    const capacityState = await loadState();
+    const globalSlot = acquireCosGlobalSlot({
+      agents: capacityState.agents,
+      limit: capacityState.config?.maxConcurrentAgents,
+      reservationId: task.id,
+    });
+    if (!globalSlot.ok) return holdTask(task, globalSlot.reason);
+
+    // 5. Local inference endpoint at capacity (issue #4834). A CoS agent runs a
     //    vendor CLI that opens its own connection to the local model server, so
     //    promptRunner's in-flight gate never sees it — without this, two agents
     //    can be dispatched at one GPU and the runtime kills a turn with an
@@ -380,20 +402,22 @@ async function runInitSpawner() {
     //    Creative Director bridge all reach this listener directly. The slot is
     //    reserved across the spawn window and released below, since the agent
     //    record isn't countable until it reaches `running`.
-    const localSlot = await acquireLocalEndpointSpawnSlot(task, (await loadState()).agents);
-    if (!localSlot.ok) {
-      return holdTask(task, localSlot.reason);
-    }
     try {
-      await spawnAgentForTask(task);
-    } catch (err) {
-      emitLog('error', `Failed to spawn agent for task ${task.id}: ${err?.message || err}`, { taskId: task.id });
-      const jobId = task.metadata?.jobId;
-      if (jobId) {
-        cosEvents.emit('job:spawn-failed', { jobId });
+      const localSlot = await acquireLocalEndpointSpawnSlot(task, capacityState.agents);
+      if (!localSlot.ok) return holdTask(task, localSlot.reason);
+      try {
+        await spawnAgentForTask(task);
+      } catch (err) {
+        emitLog('error', `Failed to spawn agent for task ${task.id}: ${err?.message || err}`, { taskId: task.id });
+        const jobId = task.metadata?.jobId;
+        if (jobId) {
+          cosEvents.emit('job:spawn-failed', { jobId });
+        }
+      } finally {
+        localSlot.release();
       }
     } finally {
-      localSlot.release();
+      globalSlot.release();
     }
   });
 

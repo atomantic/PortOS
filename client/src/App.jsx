@@ -307,6 +307,9 @@ export default function App() {
           <Route path="templates" element={<Templates />} />
           <Route path="security" element={<Security />} />
           <Route path="settings" element={<Navigate to="/settings/backup" replace />} />
+          {/* Catalog type settings moved into the Catalog feature drawer; keep
+              the old Settings URL working for bookmarks and stale palette links. */}
+          <Route path="settings/catalog" element={<Navigate to="/catalog?settings=1" replace />} />
           {/* Legacy /settings/contacts → Comms Messages → Contacts tab */}
           <Route path="settings/contacts" element={<Navigate to="/messages/contacts" replace />} />
           {/* Local LLM management moved out of Settings into its own top-level

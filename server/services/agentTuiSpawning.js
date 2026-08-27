@@ -851,6 +851,7 @@ export async function spawnTuiAgent({
     // throw from finalize itself skips the assignment entirely — in all three
     // cases nothing was verified, so cleanup must ask rather than stand down.
     let prClaimVerified = false;
+    let noChangesToShip = false;
 
     // try/finally so a throw from finalizeAgent (e.g. processAgentCompletion
     // hook crash) still runs the local cleanup — sentinel removal, worktree
@@ -885,12 +886,13 @@ export async function spawnTuiAgent({
       });
       if (finalized && typeof finalized.success === 'boolean') cleanupSuccess = finalized.success;
       prClaimVerified = prClaimWasVerified(finalized?.prVerdict);
+      noChangesToShip = finalized?.prVerdict?.noChangesToShip === true;
     } finally {
       // This run's sentinel only — a sibling agent sharing this workspace owns
       // its own file and may still be running.
       if (doneSentinelPath) await rm(doneSentinelPath).catch(() => {});
 
-      const prCreation = resolvePrCreation({ taskOpenPR, agentOwnsPr: agentOwnsPR, prClaimVerified });
+      const prCreation = resolvePrCreation({ taskOpenPR, agentOwnsPr: agentOwnsPR, prClaimVerified, noChangesToShip });
       // Only the two modes that can still open a PR (and thus spawn a follow-up
       // that needs these) pay for the resolve. `never` — the dominant path, an
       // agent that opened and landed its own PR — discards them.

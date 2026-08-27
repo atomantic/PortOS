@@ -256,9 +256,9 @@ async function getServiceStatus() {
   return { supported: false, manager: null, running: false, runAtStartup: false, status: null }
 }
 
-async function ollamaRequest(endpoint, options = {}) {
+async function ollamaRequestAt(baseUrl, endpoint, options = {}) {
   const { timeout, headers, ...rest } = options
-  const response = await fetchWithTimeout(`${config.baseUrl}${endpoint}`, {
+  const response = await fetchWithTimeout(`${normalizeBaseUrl(baseUrl)}${endpoint}`, {
     ...rest,
     headers: { 'Content-Type': 'application/json', ...headers }
   }, timeout ?? config.timeout)
@@ -267,6 +267,10 @@ async function ollamaRequest(endpoint, options = {}) {
     throw new Error(`Ollama API error: ${response.status} ${response.statusText}${body ? ` — ${body.slice(0, 200)}` : ''}`)
   }
   return readResponseJson(response)
+}
+
+async function ollamaRequest(endpoint, options = {}) {
+  return ollamaRequestAt(config.baseUrl, endpoint, options)
 }
 
 /**
@@ -1195,9 +1199,31 @@ async function getEmbeddings(text, options = {}) {
 }
 
 /**
- * List models currently loaded into VRAM/unified memory (Ollama's `/api/ps`).
- * Distinct from getInstalledModels(): a model on disk doesn't occupy memory
- * until it's referenced by a request.
+ * Read residency from a specific provider endpoint without touching the global
+ * manager's availability cache or error state.
+ * @returns {Promise<{models:Array<{id,name,size,sizeVram,expiresAt}>,error:string|null}>}
+ */
+async function getLoadedModelsAt(baseUrl) {
+  const data = await ollamaRequestAt(baseUrl, '/api/ps').catch((err) => ({ _err: err.message }))
+  if (!Array.isArray(data?.models)) {
+    return { models: [], error: data?._err || 'Ollama residency endpoint returned no model list' }
+  }
+  return {
+    models: data.models.map((m) => ({
+      id: m.name || m.model,
+      name: m.name || m.model,
+      size: m.size ?? null,
+      sizeVram: m.size_vram ?? null,
+      expiresAt: m.expires_at || null
+    })),
+    error: null
+  }
+}
+
+/**
+ * List models currently loaded into VRAM/unified memory on the configured
+ * Ollama daemon. Distinct from getInstalledModels(): a model on disk doesn't
+ * occupy memory until it's referenced by a request.
  * @returns {Promise<Array<{ id, name, size, sizeVram, expiresAt }>>}
  */
 async function getLoadedModels() {
@@ -1205,19 +1231,9 @@ async function getLoadedModels() {
     lastLoadedModelsError = status.lastError || 'Ollama is unavailable'
     return []
   }
-  const data = await ollamaRequest('/api/ps').catch((err) => ({ _err: err.message }))
-  if (!Array.isArray(data?.models)) {
-    lastLoadedModelsError = data?._err || 'Ollama residency endpoint returned no model list'
-    return []
-  }
-  lastLoadedModelsError = null
-  return data.models.map((m) => ({
-    id: m.name || m.model,
-    name: m.name || m.model,
-    size: m.size ?? null,
-    sizeVram: m.size_vram ?? null,
-    expiresAt: m.expires_at || null
-  }))
+  const result = await getLoadedModelsAt(config.baseUrl)
+  lastLoadedModelsError = result.error
+  return result.models
 }
 
 /** Last `/api/tags` error (null only after a trustworthy installed list). */
@@ -1890,6 +1906,7 @@ export {
   getInstalledModels,
   getModelCapabilities,
   getLoadedModels,
+  getLoadedModelsAt,
   getLastInstalledModelsError,
   getLastLoadedModelsError,
   unloadModel,

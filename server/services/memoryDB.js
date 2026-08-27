@@ -55,7 +55,8 @@ function rowToMeta(row) {
     importance: row.importance,
     createdAt: row.created_at.toISOString(),
     status: row.status,
-    sourceAppId: row.source_app_id
+    sourceAppId: row.source_app_id,
+    sourceAgentId: row.source_agent_id,
   };
 }
 
@@ -215,6 +216,12 @@ function buildMemoryFilterWhere(options = {}) {
     params.push(options.appId);
   }
 
+
+  if (options.sourceAgentId) {
+    conditions.push(`source_agent_id = $${paramIdx++}`);
+    params.push(options.sourceAgentId);
+  }
+
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
   return { where, params };
 }
@@ -248,7 +255,7 @@ export async function getMemories(options = {}) {
   const limit = options.limit || 50;
 
   const dataResult = await query(
-    `SELECT id, type, category, tags, summary, importance, created_at, status, source_app_id
+    `SELECT id, type, category, tags, summary, importance, created_at, status, source_app_id, source_agent_id
      FROM memories ${where}
      ORDER BY ${sortBy} ${sortOrder}
      LIMIT $${paramIdx++} OFFSET $${paramIdx++}`,

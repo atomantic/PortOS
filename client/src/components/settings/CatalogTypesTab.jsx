@@ -8,7 +8,7 @@ import { useCatalogTypes } from '../../hooks/useCatalogTypes.jsx';
 import { USER_TYPE_FIELD_KINDS } from '../../lib/catalogTypes';
 
 /**
- * Settings → Catalog tab. Lists the built-in (system) ingredient types
+ * Catalog settings panel. Lists the built-in (system) ingredient types
  * read-only and lets the user define their own custom types — each with a flat
  * list of typed fields the generic editor renders. Definitions persist in
  * settings.json server-side (via the /api/catalog/types routes) and federate to

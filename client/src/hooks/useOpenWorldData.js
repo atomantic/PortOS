@@ -47,8 +47,10 @@ export const useOpenWorldData = () => {
   aiActivityRef.current = aiActivity;
 
   const fetchApps = useCallback(async () => {
-    const data = await api.getApps().catch(() => []);
-    setApps(data);
+    // Silent + last-good preservation: this now doubles as the 30s telemetry poll,
+    // so a transient /api/apps blip must blank neither the city nor toast repeatedly.
+    const data = await api.getApps({ silent: true }).catch(() => null);
+    if (data) setApps(data);
     return data;
   }, []);
 
@@ -145,6 +147,10 @@ export const useOpenWorldData = () => {
   useAutoRefetch(fetchRunningAgents, 10_000, { immediate: false, pollOnly: true });
   useAutoRefetch(fetchHealth, 15_000, { immediate: false, pollOnly: true });
   useAutoRefetch(fetchCharacter, 15_000, { immediate: false, pollOnly: true });
+  // PM2 telemetry (cpu/memory/uptime/restarts) drifts continuously and emits no
+  // `apps:changed` socket event — without this poll a building's metric readout
+  // freezes at whatever the mount-time fetch saw until an app mutation or reload.
+  useAutoRefetch(fetchApps, 30_000, { immediate: false, pollOnly: true });
 
   const agentMap = useMemo(() => {
     const map = new Map();

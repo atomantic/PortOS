@@ -76,6 +76,7 @@ vi.mock('../lib/slashdoLoader.js', async (importOriginal) => {
   return {
     ...actual,
     loadSlashdoFile: vi.fn().mockResolvedValue(null),
+    loadSlashdoLib: vi.fn().mockResolvedValue(null),
     // #3110 — staging the resolved copy is real disk I/O; mocked so tests can
     // assert the pointer path without writing under data/.
     writeResolvedSlashdoBody: vi.fn().mockResolvedValue(null),
@@ -99,7 +100,7 @@ import { buildPrompt } from './promptService.js'; // mocked above — inspect ca
 import { getMemorySection } from './memoryRetriever.js';
 import { getDigitalTwinForPrompt } from './digital-twin.js';
 import { getToolsSummaryForPrompt } from './tools.js';
-import { loadSlashdoFile, writeResolvedSlashdoBody } from '../lib/slashdoLoader.js'; // mocked above — control the inlined body
+import { loadSlashdoFile, loadSlashdoLib, writeResolvedSlashdoBody } from '../lib/slashdoLoader.js'; // mocked above — control the inlined body
 import { SLASHDO_INLINE_BUDGET_CHARS } from '../lib/slashdoInvocation.js';
 // The heading a task-type hook's prompt points at to locate the sentinel path.
 import { PROGRAMMATIC_OUTPUT_COMPLETION_HEADING } from '../lib/agentSentinel.js';
@@ -284,6 +285,28 @@ describe('claim-flow completion handoff', () => {
     expect(prompt).not.toMatch(/PortOS will merge it back after completion/);
   });
 
+  it('keeps the full API no-change prompt coupled to the normal change workflow', async () => {
+    const prompt = await buildAgentPrompt(
+      makeTask({ metadata: {
+        autonomousJob: true,
+        noChangeSuccess: true,
+        useWorktree: true,
+        openPR: true,
+        simplify: true,
+      } }),
+      {}, '/repo',
+      { branchName: 'b', worktreePath: '/tmp/wt', baseBranch: 'origin/main' },
+      isTruthyMeta,
+      { providerType: 'api' },
+    );
+
+    expect(prompt).toMatch(/leave the worktree clean/i);
+    expect(prompt).toMatch(/If a change is needed, continue through the normal workflow/i);
+    expect(prompt).toMatch(/## Simplify Step/);
+    expect(prompt).toMatch(/system will push and open/i);
+    expect(prompt).toMatch(/Only commit files YOU changed/);
+  });
+
   it('recognizes a queued legacy claim task by analysisType', () => {
     const prompt = buildLightContextPrompt(
       makeTask({ metadata: { analysisType: 'claim-issue', useWorktree: false, openPR: false } }),
@@ -381,17 +404,36 @@ describe('buildLightContextPrompt', () => {
 
       expect(prompt).toContain(UI_AUDIT_RUNTIME_RULE);
       expect(prompt).toContain('not browserless');
+      expect(prompt).toContain('agent.browsers.list()');
+      expect(prompt).toContain('empty array returned by agent.browsers.list() ([])');
+      expect(prompt).not.toContain('agent.browsers.list() === []');
+      expect(prompt).toContain('getForUrl()');
+      expect(prompt).toContain('No browser is available');
+      expect(prompt).toContain('provider-bridge failure');
+      expect(prompt).toContain('Playwright/browser tools');
+      expect(prompt).toContain('working browser bridge');
+      expect(prompt).toContain('/api/browser/health');
+      expect(prompt).toContain('127.0.0.1:5557/health');
+      expect(prompt).toContain('configured healthPort');
+      expect(prompt).toContain('401');
+      expect(prompt).toContain('authentication response');
       expect(prompt).toContain('127.0.0.1:5556');
+      expect(prompt).toContain('type: "page"');
       expect(prompt).toContain('webSocketDebuggerUrl');
       expect(prompt).toContain('about:blank');
+      expect(prompt).toContain('Page.navigate');
+      expect(prompt).toContain('Runtime.evaluate');
+      expect(prompt).toContain('browser-level socket');
       expect(prompt).toContain('page socket');
+      expect(prompt).toContain('only after the PortOS health/CDP probes fail');
+      expect(prompt).toContain('source-only UX finding');
       expect(prompt).toContain('running local system');
       expect(prompt).toContain('native or source-only target');
     });
 
-    it('adds the same guidance on the full API prompt path', async () => {
+    it.each(UI_AUDIT_TASK_TYPES)('adds the same guidance on the full API prompt path for %s', async (analysisType) => {
       const prompt = await buildAgentPrompt(
-        makeTask({ metadata: { analysisType: 'ui-bugs' } }),
+        makeTask({ metadata: { analysisType } }),
         {},
         '/repo',
         null,
@@ -791,17 +833,22 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/gh pr merge/);
     });
 
-    it('a slashdo-free OpenCode TUI drives its own PR, review loop, and merge', () => {
+    it('runs slashdo-free local reviewers before GitHub PR creation, then keeps PR-side review after it', () => {
       // OpenCode TUI doesn't load Claude Code slash commands, so /do:pr / /do:push
       // would be uninvokable — but it runs `git`/`gh` and the reviewer CLIs fine,
       // so it owns the whole lifecycle in one session rather than handing off to a
       // `sys-rl-*` follow-up agent (#3733).
       const prompt = buildLightContextPrompt(
-        makeTask({ metadata: { simplify: true, openPR: true, reviewLoop: true } }),
+        makeTask({ metadata: { simplify: true, openPR: true, reviewLoop: true, reviewers: ['codex', 'copilot'] } }),
         '/r',
         { branchName: 'claim/issue-1', worktreePath: '/tmp/wt', baseBranch: 'main' },
         isTruthyMeta,
-        { isTui: true, providerId: 'opencode-ollama-tui', providerCommand: 'opencode' });
+        {
+          isTui: true,
+          providerId: 'opencode-ollama-tui',
+          providerCommand: 'opencode',
+          localAgentLoopBody: 'RECIPE: codex --sandbox read-only review --base <base>',
+        });
       expect(prompt).toMatch(/## Completion Workflow/);
       // No slashdo commands anywhere in the workflow.
       expect(prompt).not.toMatch(/`\/do:pr`/);
@@ -809,12 +856,37 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/`\/simplify`/);
       // /simplify is a Claude built-in — OpenCode gets the inline equivalent.
       expect(prompt).toMatch(/review your changed code for reuse, quality, and efficiency/i);
-      // Commit → push → PR → review loop → merge, all in this session.
+      // Commit → local review → push → PR → PR-side review → merge, all in this session.
       expect(prompt).toMatch(/git commit -m/);
-      expect(prompt).toMatch(/git push -u origin claim\/issue-1/);
-      expect(prompt).toMatch(/PR_URL=\$\(gh pr create --base main --head claim\/issue-1/);
+      expect(prompt).toMatch(/### Local Review Before Opening the PR\/MR/);
+      expect(prompt).toMatch(/RECIPE: codex --sandbox read-only review/);
+      expect(prompt).toMatch(/git diff origin\/main\.\.\.HEAD/);
+      expect(prompt).toMatch(/BRANCH=claim\/issue-1/);
+      expect(prompt).toContain('publish_reviewed_branch -u "$PUSH_REMOTE" "$BRANCH"');
+      expect(prompt).toContain('git config --get "branch.${BRANCH}.pushRemote"');
+      expect(prompt).toContain('git config --get remote.pushDefault');
+      expect(prompt).toContain('git fetch "$PUBLISH_REMOTE" "+refs/heads/$BRANCH:refs/remotes/$PUBLISH_REMOTE/$BRANCH"');
+      expect(prompt).toContain('PUBLISH_REMOTE="$PUSH_REMOTE"');
+      expect(prompt).toContain('git merge-base --is-ancestor "$REMOTE_BRANCH_SHA" HEAD');
+      expect(prompt).toContain('publish_reviewed_branch -u "$PUBLISH_REMOTE" "HEAD:refs/heads/$BRANCH"');
+      expect(prompt).toContain('publish_reviewed_branch --force-with-lease="refs/heads/$BRANCH:$REMOTE_BRANCH_SHA" -u "$PUBLISH_REMOTE" "HEAD:refs/heads/$BRANCH"');
+      expect(prompt).toContain('PUBLISH_ERROR="publish failed; refusing PR/MR"');
+      expect(prompt).toContain('publish_reviewed_branch() { git push "$@" || { echo "$PUBLISH_ERROR" >&2; exit 1; }; }');
+      expect(prompt).toContain('PUSH_OWNER=$(gh repo view "$(git remote get-url --push "$PUSH_REMOTE"');
+      expect(prompt).toContain('[ -n "$PUSH_OWNER" ] || { echo "Missing PR head owner; refusing PR" >&2; exit 1; }');
+      expect(prompt).toContain('PR_HEAD="$PUSH_OWNER:$BRANCH"');
+      expect(prompt).toContain('portos-local-review-baseline');
+      expect(prompt).toContain('refusing to overwrite them');
+      expect(prompt).toMatch(/PR_URL=\$\(gh pr create --base main --head "\$PR_HEAD"/);
       expect(prompt).toMatch(/## Review Loop/);
       expect(prompt).toMatch(/gh pr merge "\$PR_URL" --merge --delete-branch/);
+      expect(prompt).toContain('LOCAL_PHASE_START_SHA');
+      expect(prompt).toContain('Cross-phase stop-mode gate');
+      expect(prompt).toContain('`all` always runs the PR-side reviewers.');
+      expect(prompt.indexOf('### Local Review Before Opening the PR/MR')).toBeLessThan(prompt.indexOf('publish_reviewed_branch -u "$PUSH_REMOTE" "$BRANCH"'));
+      expect(prompt.indexOf('publish_reviewed_branch -u "$PUSH_REMOTE" "$BRANCH"')).toBeLessThan(prompt.indexOf('## Review Loop'));
+      // The post-PR section receives only Copilot, never the local codex reviewer.
+      expect(prompt.slice(prompt.indexOf('## Review Loop'))).not.toMatch(/CLI Reviewer Procedure/);
       // PortOS no longer promises to do any of it.
       expect(prompt).not.toMatch(/PortOS will push the branch/);
       // Sentinel handshake still drives completion; never tell the agent to run /quit.
@@ -823,19 +895,146 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/^\s*\d+\.\s*`\/quit`/m);
     });
 
-    it('a slashdo-free GitLab TUI captures MR variables and keeps the lifecycle on glab', () => {
+    it.each(['on-clean', 'on-findings'])('carries the %s stop mode across the local and PR-side phases', (reviewStopMode) => {
       const prompt = buildLightContextPrompt(
-        makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['ollama'] } }),
+        makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex', 'copilot'], reviewStopMode } }),
+        '/r',
+        { branchName: 'claim/issue-1', worktreePath: '/tmp/wt', baseBranch: 'main' },
+        isTruthyMeta,
+        { isTui: true, providerId: 'opencode-ollama-tui', providerCommand: 'opencode', localAgentLoopBody: 'RECIPE' });
+
+      expect(prompt).toContain(`\`${reviewStopMode}\` skips the PR-side reviewers only when the local phase actually satisfied that stop condition`);
+      expect(prompt).toContain('LOCAL_STOP_TRIGGERED=true');
+      expect(prompt).toContain('git rev-parse --git-path portos-local-review-state');
+      expect(prompt).toContain('. "$LOCAL_REVIEW_STATE_FILE"');
+      expect(prompt).toContain('The original order places every local reviewer before every PR-side reviewer.');
+      expect(prompt).toContain('skip the PR-side phase and record the configured stop-mode short-circuit as `partial`');
+      expect(prompt).toContain('including when that verdict came from the final local reviewer');
+    });
+
+    it.each(['on-clean', 'on-findings'])('runs every PR-side reviewer for an interleaved %s order', (reviewStopMode) => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['copilot', 'codex'], reviewStopMode } }),
+        '/r',
+        { branchName: 'claim/issue-1', worktreePath: '/tmp/wt', baseBranch: 'main' },
+        isTruthyMeta,
+        { isTui: true, providerId: 'opencode-ollama-tui', providerCommand: 'opencode', localAgentLoopBody: 'RECIPE' });
+
+      expect(prompt).toContain('Cross-phase stop-mode gate');
+      expect(prompt).toContain('Cross-phase stop-mode skip disabled');
+      expect(prompt).toContain('Always run every PR-side reviewer');
+      expect(prompt).not.toContain('skip the PR-side phase and record the configured stop-mode short-circuit');
+      expect(prompt.slice(prompt.indexOf('## Review Loop'))).toContain('copilot');
+    });
+
+    it.each(['on-clean', 'on-findings'])('disables cross-phase skipping for an interleaved %s order', (reviewStopMode) => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex', 'copilot', 'ollama'], reviewStopMode } }),
+        '/r',
+        { branchName: 'claim/issue-1', worktreePath: '/tmp/wt', baseBranch: 'main' },
+        isTruthyMeta,
+        { isTui: true, providerId: 'opencode-ollama-tui', providerCommand: 'opencode', localAgentLoopBody: 'RECIPE' });
+
+      expect(prompt).toContain('`codex`=0, `copilot`=1, `ollama`=2');
+      expect(prompt).toContain('`LOCAL_STOP_INDEX` to that triggering local reviewer\'s position');
+      expect(prompt).toContain('Cross-phase stop-mode skip disabled');
+      expect(prompt).toContain('run every PR-side reviewer in this phase');
+    });
+
+    it('keeps an optional local reviewer non-blocking when its verdict is inconclusive', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex', 'copilot'], optionalReviewers: ['codex'] } }),
+        '/r',
+        { branchName: 'claim/issue-1', worktreePath: '/tmp/wt', baseBranch: 'main' },
+        isTruthyMeta,
+        { isTui: true, providerId: 'opencode-ollama-tui', providerCommand: 'opencode', localAgentLoopBody: 'RECIPE' });
+
+      expect(prompt).toContain('All local reviewers are optional, so missing/inconclusive results');
+      expect(prompt).toContain('Set aggregate `LOCAL_OVERALL_STATUS=clean` for clean, configured capped, or optional inconclusive');
+      expect(prompt).toContain('missing/malformed/no-verdict result from one of them is non-blocking');
+      expect(prompt).toContain('`codex` still run and their findings must still be fixed');
+      expect(prompt).not.toContain('a missing, timed-out, malformed, or inconclusive local review is UNSATISFIED');
+    });
+
+    it('defers the local CLI recipe push until after the local review gate', () => {
+      const localRecipe = [
+        '### Maintained local recipe',
+        '5. **Push verified changes**:',
+        '   git push origin {BRANCH_NAME}',
+        '   If the push fails: git pull --rebase --autostash && git push origin {BRANCH_NAME}',
+        '6. **Re-loop or stop**:',
+      ].join('\n');
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex'] } }),
+        '/r',
+        { branchName: 'claim/issue-1', worktreePath: '/tmp/wt', baseBranch: 'main' },
+        isTruthyMeta,
+        {
+          isTui: true,
+          providerId: 'opencode-ollama-tui',
+          providerCommand: 'opencode',
+          localAgentLoopBody: localRecipe,
+        });
+      const localStart = prompt.indexOf('### Local Review Before Opening the PR/MR');
+      const prPush = prompt.indexOf('publish_reviewed_branch -u "$PUSH_REMOTE" "$BRANCH"');
+      const localSection = prompt.slice(localStart, prPush);
+
+      expect(localStart).toBeGreaterThanOrEqual(0);
+      expect(prPush).toBeGreaterThan(localStart);
+      expect(localSection).toContain('Keep verified changes local');
+      const recipeStart = localSection.indexOf('### Maintained local recipe');
+      const recipeEnd = localSection.indexOf('\n\n4. Push', recipeStart);
+      const renderedLocalRecipe = localSection.slice(recipeStart, recipeEnd);
+      expect(renderedLocalRecipe).not.toMatch(/^\s*(?:git pull --rebase --autostash && )?git push\b/m);
+      expect(renderedLocalRecipe).not.toContain('git push origin');
+    });
+
+    it('keeps reviewer-applies local fixes off the remote branch', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex'], reviewerApplies: true } }),
+        '/r',
+        { branchName: 'claim/issue-1', worktreePath: '/tmp/wt', baseBranch: 'main' },
+        isTruthyMeta,
+        { isTui: true, providerId: 'opencode-ollama-tui', providerCommand: 'opencode', localAgentLoopBody: 'RECIPE' });
+      const localStart = prompt.indexOf('### Local Review Before Opening the PR/MR');
+      const prPush = prompt.indexOf('publish_reviewed_branch -u "$PUSH_REMOTE" "$BRANCH"');
+      const localSection = prompt.slice(localStart, prPush);
+
+      expect(localSection).toContain('keep fixes committed locally');
+      expect(localSection).toContain('Do NOT push or open the PR/MR from this loop');
+      expect(localSection).not.toContain('then verify, run tests, and push');
+    });
+
+    it('quotes the base branch in local review diff commands', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex'] } }),
+        '/r',
+        { branchName: 'claim/issue-1', worktreePath: '/tmp/wt', baseBranch: 'release; echo bad' },
+        isTruthyMeta,
+        { isTui: true, providerId: 'opencode-ollama-tui', providerCommand: 'opencode', localAgentLoopBody: 'RECIPE' });
+
+      expect(prompt).toContain("git diff 'origin/release; echo bad'...HEAD");
+      expect(prompt).not.toContain('git diff origin/release; echo bad...HEAD');
+    });
+
+    it('runs local review before GitLab MR creation and leaves @ reviewers after it', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['ollama'], usernames: ['alice'] } }),
         '/r',
         { branchName: 'claim/issue-4363', worktreePath: '/tmp/wt', baseBranch: 'main', forgeCli: 'glab' },
         isTruthyMeta,
         { isTui: true, providerId: 'opencode-ollama-tui', providerCommand: 'opencode' });
 
+      expect(prompt).toMatch(/### Local Review Before Opening the PR\/MR/);
+      expect(prompt).toMatch(/git diff origin\/main\.\.\.HEAD/);
       expect(prompt).toMatch(/PR_URL=\$\(glab mr create --source-branch claim\/issue-4363 --target-branch main/);
       expect(prompt).toMatch(/PR_NUMBER=\$\(glab mr view "\$PR_URL" --output json \| jq -r \.iid\)/);
-      expect(prompt).toMatch(/glab mr diff \$PR_NUMBER/);
+      expect(prompt).toMatch(/## Review Loop/);
+      expect(prompt).toMatch(/request `@alice` as MR reviewer/);
       expect(prompt).toMatch(/glab mr merge "\$PR_NUMBER" --yes --remove-source-branch/);
       expect(prompt).toMatch(/glab mr view "\$PR_NUMBER"/);
+      expect(prompt.indexOf('### Local Review Before Opening the PR/MR')).toBeLessThan(prompt.indexOf('glab mr create'));
+      expect(prompt.indexOf('glab mr create')).toBeLessThan(prompt.indexOf('## Review Loop'));
       expect(prompt).not.toMatch(/gh pr (create|diff|merge|view|checks)/);
     });
 
@@ -901,8 +1100,8 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/`\/do:push`/);
       // Plain git/gh equivalent of the whole slashdo workflow (#3733).
       expect(prompt).toMatch(/git commit -m/);
-      expect(prompt).toMatch(/git push -u origin claim\/x/);
-      expect(prompt).toMatch(/gh pr create --base main --head claim\/x/);
+      expect(prompt).toContain('publish_reviewed_branch -u "$PUSH_REMOTE" "$BRANCH"');
+      expect(prompt).toMatch(/gh pr create --base main --head "\$PR_HEAD"/);
       expect(prompt).toMatch(/## Review Loop/);
       expect(prompt).not.toMatch(/PortOS will push the branch/);
       expect(prompt).toMatch(/\.agent-done/);
@@ -943,15 +1142,19 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/The system will clean up your worktree on exit/);
     });
 
-    it('a CLI inline review loop ends by exiting — a CLI run has no sentinel to write', () => {
+    it('a CLI local-only review reaches the CI merge gate and exits without a sentinel', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex'] } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt', baseBranch: 'main' },
         isTruthyMeta,
         { isTui: false, providerId: 'codex', providerCommand: 'codex' });
-      expect(prompt).toMatch(/## Review Loop/);
+      expect(prompt).toMatch(/### Local Review Before Opening the PR\/MR/);
+      expect(prompt).toMatch(/## Merge Gate/);
       expect(prompt).toMatch(/You are done — exit/);
+      expect(prompt).toContain('repeat the pre-PR local review phase');
+      expect(prompt).toContain('the pre-PR local review is the only configured review');
+      expect(prompt).not.toContain('No code review was requested for this task');
       expect(prompt).not.toMatch(/write the completion sentinel — the run is not done/);
     });
 
@@ -1005,8 +1208,9 @@ describe('buildLightContextPrompt', () => {
         { branchName: 'weird;rm -rf /', worktreePath: '/tmp/wt', baseBranch: 'main' },
         isTruthyMeta,
         { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' });
-      expect(prompt).toMatch(/git push -u origin 'weird;rm -rf \/'/);
-      expect(prompt).toMatch(/gh pr create --base main --head 'weird;rm -rf \/'/);
+      expect(prompt).toMatch(/BRANCH='weird;rm -rf \/'/);
+      expect(prompt).toContain('publish_reviewed_branch -u "$PUSH_REMOTE" "$BRANCH"');
+      expect(prompt).toMatch(/gh pr create --base main --head "\$PR_HEAD"/);
       // Never bare — that would be a command substitution waiting to happen.
       expect(prompt).not.toMatch(/origin weird;rm/);
     });
@@ -1018,7 +1222,8 @@ describe('buildLightContextPrompt', () => {
         { branchName: 'cos/task-1/agent-2', worktreePath: '/tmp/wt', baseBranch: 'main' },
         isTruthyMeta,
         { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' });
-      expect(readable).toMatch(/git push -u origin cos\/task-1\/agent-2/);
+      expect(readable).toMatch(/BRANCH=cos\/task-1\/agent-2/);
+      expect(readable).toContain('publish_reviewed_branch -u "$PUSH_REMOTE" "$BRANCH"');
 
       const noBase = buildLightContextPrompt(
         makeTask({ metadata: { openPR: true } }),
@@ -1026,7 +1231,9 @@ describe('buildLightContextPrompt', () => {
         { branchName: 'b', worktreePath: '/tmp/wt' },
         isTruthyMeta,
         { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' });
-      expect(noBase).toMatch(/gh pr create --base <base-branch> --head b/);
+      expect(noBase).toMatch(/git remote set-head origin --auto/);
+      expect(noBase).toMatch(/BASE_BRANCH=\$\(git symbolic-ref --short refs\/remotes\/origin\/HEAD/);
+      expect(noBase).toMatch(/gh pr create --base "\$BASE_BRANCH" --head "\$PR_HEAD"/);
     });
 
     it('a path-configured claude binary under a custom provider id gets the slashdo workflow', () => {
@@ -1104,7 +1311,65 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/PortOS will push and open the PR/);
     });
 
-    // #3114 — the gates now derive from `resolveSlashdoStyle` with the spawners'
+    it('gives a marked catalog audit an explicit no-change exit while retaining the change workflow', () => {
+      const task = makeTask({ metadata: {
+        autonomousJob: true,
+        noChangeSuccess: true,
+        useWorktree: true,
+        openPR: true,
+        simplify: true,
+      } });
+      const prompt = buildLightContextPrompt(
+        task,
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: false, providerId: 'codex', providerCommand: 'codex' });
+      expect(prompt).toMatch(/no change is needed/i);
+      expect(prompt).toMatch(/leave the worktree clean/i);
+      expect(prompt).toMatch(/exit without committing/i);
+    expect(prompt).toMatch(/If a change is needed, continue through the normal workflow/i);
+    expect(prompt).toMatch(/gh pr create/);
+  });
+
+  it('keeps the TUI no-change sentinel compatible with a real PR result', () => {
+    const prompt = buildLightContextPrompt(
+      makeTask({ metadata: {
+        autonomousJob: true,
+        noChangeSuccess: true,
+        useWorktree: true,
+        openPR: true,
+        simplify: true,
+      } }),
+      '/r',
+      { branchName: 'b', worktreePath: '/tmp/wt' },
+      isTruthyMeta,
+      { isTui: true, providerId: 'claude-code-tui', providerCommand: 'claude' },
+    );
+
+      expect(prompt).toMatch(/`\/do:pr/);
+      expect(prompt).toMatch(/<PR URL, or "No change needed; no PR opened\." if the audit made no change>/);
+    });
+
+    it('keeps a lean TUI no-change handoff on the branch sentinel', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: {
+          autonomousJob: true,
+          noChangeSuccess: true,
+          useWorktree: true,
+          openPR: true,
+        } }),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: true, providerId: 'claude-ollama-tui', providerCommand: 'claude', leanMode: true },
+      );
+
+      expect(prompt).toMatch(/## Branch\n\s+<branch name>/);
+      expect(prompt).not.toMatch(/<PR URL/);
+    });
+
+  // #3114 — the gates now derive from `resolveSlashdoStyle` with the spawners'
     // blank-command posture, so a CLI provider with NO id and NO command reads as
     // Claude: `buildCliSpawnConfig`'s default branch launches `claude`, and the
     // session that actually runs does have `/do:pr` / `/simplify`.
@@ -2121,6 +2386,17 @@ describe('buildCompletionGuidelineBullet', () => {
     expect(none).toBeNull();
   });
 
+  it('marks a catalog audit no-op as a valid completion without weakening the change path', () => {
+    const bullet = buildCompletionGuidelineBullet({
+      isReadOnly: false, isTui: false, tuiCompletionCommand: '/do:pr',
+      worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true, noChangeSuccess: true,
+    });
+    expect(bullet).toMatch(/no change is needed/i);
+    expect(bullet).toMatch(/leave the worktree clean/i);
+    expect(bullet).toMatch(/exit without committing/i);
+    expect(bullet).toMatch(/If a change is needed, continue/);
+  });
+
   it('discardWorktree short-circuits to the reasoning-only bullet (wins over TUI/openPR)', () => {
     const bullet = buildCompletionGuidelineBullet({
       isReadOnly: false, isTui: true, tuiCompletionCommand: '/do:pr',
@@ -2508,13 +2784,13 @@ describe('buildReviewLoopFollowUpSection — CLI reviewer procedure inlining', (
     });
   }
 
-  it('fails the local reviewer command when its JSON response has no findings', () => {
+  it('records a no-verdict local reviewer result when its JSON response has no findings', () => {
     const out = buildReviewLoopFollowUpSection(
       { ...baseMeta, reviewLoopReviewers: ['ollama'] },
       { verbose: false, localAgentLoopBody: null }
     );
     expect(out).toMatch(/Local reviewer failed:/);
-    expect(out).toMatch(/STATUS=cli-error[^]*exit 1/);
+    expect(out).toMatch(/STATUS=no-verdict[^]*exit 1/);
   });
 
   it('does NOT inline the procedure for a copilot-only loop', () => {
@@ -2752,6 +3028,8 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
   beforeEach(() => {
     // mockReset (not just a new return value): several tests here assert the
     // staging helper was NOT called, so a prior test's call must not leak in.
+    vi.mocked(loadSlashdoLib).mockReset();
+    vi.mocked(loadSlashdoLib).mockResolvedValue(null);
     vi.mocked(writeResolvedSlashdoBody).mockReset();
     vi.mocked(loadSlashdoFile).mockReset();
     vi.mocked(loadSlashdoFile).mockResolvedValue(OVER);
@@ -2807,6 +3085,32 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
     expect(prompt).toContain(OVER);
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
+  });
+
+  it('stages a push-free local reviewer recipe for the inline workflow', async () => {
+    const body = [
+      'RECIPE HEADER',
+      '5. **Push verified changes**:',
+      '   git push origin {BRANCH_NAME}',
+      '   If the push fails: git pull --rebase --autostash && git push origin {BRANCH_NAME}',
+      '6. **Re-loop or stop**:',
+      '   continue',
+      'x'.repeat(SLASHDO_INLINE_BUDGET_CHARS + 500),
+    ].join('\n');
+    vi.mocked(loadSlashdoLib).mockResolvedValue(body);
+    vi.mocked(writeResolvedSlashdoBody).mockResolvedValue('/install/data/cos/slashdo-resolved/local-agent-review-loop.md');
+
+    const prompt = await buildAgentPrompt(
+      makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex'] } }),
+      {}, '/r',
+      { branchName: 'claim/issue-1', worktreePath: '/tmp/wt', baseBranch: 'main' },
+      isTruthyMeta,
+      { providerType: 'tui', providerId: 'opencode-tui', providerCommand: 'opencode' });
+    const [, stagedBody] = vi.mocked(writeResolvedSlashdoBody).mock.calls.at(-1);
+
+    expect(prompt).toContain('/install/data/cos/slashdo-resolved/local-agent-review-loop.md');
+    expect(stagedBody).toContain('Keep verified changes local');
+    expect(stagedBody).not.toMatch(/^\s*(?:git pull --rebase --autostash && )?git push\b/m);
   });
 
   // A pinned reviewer list carries the effort as slashdo's own `~effort=<level>`

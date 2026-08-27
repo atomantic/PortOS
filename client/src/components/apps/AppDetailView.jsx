@@ -9,7 +9,8 @@ import StatusBadge from '../StatusBadge';
 import * as api from '../../services/api';
 import { getLaunchUrls } from '../../services/appUrls';
 import socket from '../../services/socket';
-import { APP_DETAIL_TABS, NON_PM2_TYPES, getAppTypeLabel, resolveLaunchPanelProcess } from './constants';
+import { APP_DETAIL_TABS, NON_PM2_TYPES, getAppTypeLabel, isAppFeatureEnabled, resolveLaunchPanelProcess } from './constants';
+import { useInstanceFeatures } from '../../hooks/useInstanceFeatures.js';
 import DesktopLaunchProgress from './DesktopLaunchProgress';
 import OverviewTab from './tabs/OverviewTab';
 import TasksTab from './tabs/TasksTab';
@@ -18,6 +19,7 @@ import DocumentsTab from './tabs/DocumentsTab';
 import GitTab from './tabs/GitTab';
 import GsdTab from './tabs/GsdTab';
 import IssuesTab from './tabs/IssuesTab';
+import PullRequestsTab from './tabs/PullRequestsTab';
 import JiraTab from './tabs/JiraTab';
 import ProcessesTab from './tabs/ProcessesTab';
 import ReferencesTab from './tabs/ReferencesTab';
@@ -46,6 +48,7 @@ export default function AppDetailView() {
   // (Vite ≥5 blocks unknown hosts). `null` = not yet checked.
   const [viteHostStatus, setViteHostStatus] = useState(null);
   const [viteFixing, setViteFixing] = useState(null); // 'allow-all' | 'ai' while a fix is in flight
+  const { features: instanceFeatures, error: instanceFeaturesError } = useInstanceFeatures();
 
   const fetchApp = useCallback(async () => {
     const data = await api.getApp(appId).catch(() => null);
@@ -85,10 +88,19 @@ export default function AppDetailView() {
 
   // Real-time updates
   useEffect(() => {
-    const handleAppsChanged = () => fetchApp();
+    const handleAppsChanged = (change) => {
+      // The delete event reaches this mounted detail view before the DELETE
+      // response can navigate it away. Avoid refetching the known-deleted app,
+      // which would turn the expected 404 into an error toast beside success.
+      if (change?.action === 'delete' && change.appId === appId) {
+        navigate('/apps');
+        return;
+      }
+      fetchApp();
+    };
     socket.on('apps:changed', handleAppsChanged);
     return () => socket.off('apps:changed', handleAppsChanged);
-  }, [fetchApp]);
+  }, [appId, fetchApp, navigate]);
 
   const handleStart = async () => {
     setActionLoading('start');
@@ -209,10 +221,21 @@ export default function AppDetailView() {
     setViteHostStatus((prev) => prev ? { ...prev, hostAllowed: true } : prev);
   };
 
-  const visibleTabs = useMemo(() =>
-    APP_DETAIL_TABS.filter(t => (t.visibleWhen ? t.visibleWhen(app) : true)),
-    [app]
-  );
+  const availableTabs = useMemo(() => APP_DETAIL_TABS.filter((entry) => (
+    !entry.visibleWhen || entry.visibleWhen(app)
+  )), [app]);
+
+  const visibleTabs = useMemo(() => availableTabs.filter((entry) => {
+    if (!entry.feature) return true;
+    // A feature read is ancillary to the app detail request. Keep tabs visible
+    // during loading or a failed read so a transient settings outage cannot
+    // strand the user; a loaded false is the only affirmative hide signal.
+    const globalFeature = instanceFeatures?.find(feature => feature?.id === entry.feature);
+    const globalEnabled = instanceFeaturesError || instanceFeatures === null
+      ? undefined
+      : globalFeature?.enabled;
+    return isAppFeatureEnabled(app, entry.feature, globalEnabled);
+  }), [app, availableTabs, instanceFeatures, instanceFeaturesError]);
 
   if (loading) {
     return (
@@ -231,7 +254,10 @@ export default function AppDetailView() {
     );
   }
 
-  const effectiveTab = visibleTabs.some(t => t.id === activeTab) ? activeTab : 'overview';
+  // Feature flags gate the tab bar, not routes. Keep an explicitly requested
+  // feature tab renderable for bookmarked/direct URLs even when it is hidden
+  // from browse navigation; structural availability still rejects stale tabs.
+  const effectiveTab = availableTabs.some(t => t.id === activeTab) ? activeTab : 'overview';
 
   const renderTab = () => {
     switch (effectiveTab) {
@@ -251,6 +277,8 @@ export default function AppDetailView() {
         return <GsdTab appId={appId} repoPath={app.repoPath} />;
       case 'issues':
         return <IssuesTab appId={appId} appName={app.name} />;
+      case 'pull-requests':
+        return <PullRequestsTab appId={appId} appName={app.name} />;
       case 'jira':
         return <JiraTab app={app} onRefresh={fetchApp} />;
       case 'processes':

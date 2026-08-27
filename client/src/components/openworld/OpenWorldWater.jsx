@@ -83,7 +83,7 @@ export default function OpenWorldWater({ settings }) {
           emissiveMap={waveTex}
         />
       </mesh>
-      {/* Shoreline shimmer — a thin additive surf line where land meets the bay. */}
+      {/* Shoreline shimmer — dual additive surf lines where land meets the bay. */}
       <mesh
         ref={shimmerRef}
         rotation={[-Math.PI / 2, 0, 0]}
@@ -94,6 +94,19 @@ export default function OpenWorldWater({ settings }) {
           color={accent}
           transparent
           opacity={0.14}
+          blending={THREE.AdditiveBlending}
+          depthWrite={false}
+        />
+      </mesh>
+      <mesh
+        rotation={[-Math.PI / 2, 0, 0]}
+        position={[0, WORLD.waterY + 0.012, WORLD.shorelineZ - 2.4]}
+      >
+        <planeGeometry args={[320, 1.2]} />
+        <meshBasicMaterial
+          color={mixHex(accent, '#ffffff', 0.4)}
+          transparent
+          opacity={0.08 * (1 - dayMix) + 0.04 * dayMix}
           blending={THREE.AdditiveBlending}
           depthWrite={false}
         />

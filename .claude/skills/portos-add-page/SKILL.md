@@ -22,6 +22,7 @@ PortOS has a single source of truth for navigation: `server/lib/navManifest.js` 
 - `section` — matches the sidebar group label so the palette and sidebar stay visually aligned.
 - `aliases` — short spoken/typed tokens the user is likely to say. The voice agent's fuzzy resolver tries each alias with tiered matching; more aliases = more forgiving voice navigation.
 - `keywords` — extra terms used only by the palette's in-UI scorer (synonyms, feature names).
+- `feature` (optional) — gates the page on an optional instance feature (`post`, `datadog`, `jira`; see `server/lib/instanceFeatureRegistry.js`). When the feature is off in **Settings > Features**, the entry disappears from `⌘K` and its sidebar row disappears too — the route itself keeps working, so a bookmark, a direct link, or voice `ui_navigate` still resolves. The manifest ships the tag and the CLIENT applies the gate (`useInstanceFeatures` + `client/src/lib/navFeatures.js`), which is what makes a toggle take effect without a reload. Whole sidebar sections gate through navManifest's `SECTION_FEATURE` map instead, so a new page in one of those sections inherits the gate with no tag. **Tag the matching `Layout.jsx` row with the same `feature`** — the sidebar is a separate list, and `navManifest.test.js` fails when the two halves drift.
 
 Fail-fast guards at module load catch missing fields, non-slash paths, and duplicate ids — so a bad entry blocks server boot instead of silently breaking palette/voice.
 

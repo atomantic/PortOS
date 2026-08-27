@@ -821,6 +821,7 @@ export async function spawnDirectly({
     // that threw, and a throw from finalize skips the assignment entirely; in all
     // three cases nothing was verified, so cleanup must ask rather than stand down.
     let directPrClaimVerified = false;
+    let noChangesToShip = false;
 
     // try/finally so a throw from finalizeAgent still runs the local
     // cleanup (worktree, pid unregister, activeAgents delete). Mirrors the
@@ -850,6 +851,7 @@ export async function spawnDirectly({
       });
       if (finalized && typeof finalized.success === 'boolean') cleanupSuccess = finalized.success;
       directPrClaimVerified = prClaimWasVerified(finalized?.prVerdict);
+      noChangesToShip = finalized?.prVerdict?.noChangesToShip === true;
     } finally {
       const directPrCompletion = resolvePrCompletion(task.metadata);
       const directReviewLoopFollowUp = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp);
@@ -859,6 +861,7 @@ export async function spawnDirectly({
           taskOpenPR: directOpenPR,
           agentOwnsPr: directAgentOwnsPR,
           prClaimVerified: directPrClaimVerified,
+          noChangesToShip,
         }),
         prCompletion: directPrCompletion,
         ...reviewOptions,

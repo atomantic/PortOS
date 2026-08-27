@@ -18,6 +18,7 @@ export default function PostSessionResults({ session, conditions = {}, onSaved, 
         isTraining={isTraining}
         plan={sessionPlan}
         actualDurationMs={savedSession?.actualDurationMs}
+        initialExpandedDrill={drillResults?.findIndex(result => result.type === 'digit-span') ?? -1}
       />
 
       {benchmark && (

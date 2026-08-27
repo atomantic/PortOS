@@ -7,6 +7,7 @@ import { spawn, ChildProcess } from 'child_process';
 import { randomUUID } from 'crypto';
 import { analyzeError, analyzeHttpError, ERROR_CATEGORIES } from './errorDetection.js';
 import { apiGenerationOptions } from './internal/generationOptions.js';
+import { fetchWithPreHeaderRetry, isReplaySafeLocalRequest } from './internal/preHeaderRetry.js';
 
 // npm-installed CLI providers (claude, codex, opencode, …) are .cmd/.bat
 // shims on Windows; Node's spawn() can't execute those without going through
@@ -26,6 +27,16 @@ const WIN_EXECUTABLE_EXTS = ['.exe', '.cmd', '.bat', '.com'];
 // `provider.timeout || 300000` so a hung upstream can't hold `activeRuns`
 // (and thus the run slot) open forever.
 const DEFAULT_API_RUN_TIMEOUT_MS = 300000;
+const DEFAULT_OUTPUT_RESERVE_TOKENS = 8000;
+const CHARS_PER_TOKEN = 4;
+
+function deriveRequestCapabilities({ prompt, screenshots, requestCapabilities }) {
+  if (requestCapabilities && typeof requestCapabilities === 'object') return requestCapabilities;
+  return {
+    requiredContextTokens: Math.ceil(String(prompt ?? '').length / CHARS_PER_TOKEN) + DEFAULT_OUTPUT_RESERVE_TOKENS,
+    hasImages: Array.isArray(screenshots) && screenshots.length > 0,
+  };
+}
 
 /**
  * Resolve a bare command name to its full path WITH extension on Windows, so
@@ -227,15 +238,21 @@ export function createRunnerService(config = {}) {
     hooks.onProviderError?.(providerId, errorAnalysis, output);
 
     if (providerStatusService) {
-      if (errorAnalysis.category === ERROR_CATEGORIES.USAGE_LIMIT && errorAnalysis.requiresFallback) {
+      if (errorAnalysis.category === ERROR_CATEGORIES.USAGE_LIMIT &&
+          errorAnalysis.requiresFallback &&
+          typeof providerStatusService.markUsageLimit === 'function') {
         await providerStatusService.markUsageLimit(providerId, {
           message: errorAnalysis.message,
-          waitTime: errorAnalysis.waitTime
+          waitTime: errorAnalysis.waitTime,
+          rateLimitWindow: errorAnalysis.rateLimitWindow,
         }).catch(err => {
           console.error(`❌ Failed to mark provider usage limit: ${err.message}`);
         });
-      } else if (errorAnalysis.category === ERROR_CATEGORIES.RATE_LIMIT) {
-        await providerStatusService.markRateLimited(providerId).catch(err => {
+      } else if (errorAnalysis.category === ERROR_CATEGORIES.RATE_LIMIT &&
+                 typeof providerStatusService.markRateLimited === 'function') {
+        await providerStatusService.markRateLimited(providerId, {
+          rateLimitWindow: errorAnalysis.rateLimitWindow,
+        }).catch(err => {
           console.error(`❌ Failed to mark provider rate limited: ${err.message}`);
         });
       }
@@ -292,6 +309,9 @@ export function createRunnerService(config = {}) {
         source = 'devtools',
         fallbackProviderId = null,
         effort = null,
+        requestCapabilities = null,
+        screenshots = [],
+        allowFallback = true,
       } = options;
 
       if (!providerService) {
@@ -304,8 +324,17 @@ export function createRunnerService(config = {}) {
       // below. Stays null on the non-fallback path so the requested `model`
       // wins as before.
       let fallbackModelHint = null;
+      const effectiveRequestCapabilities = deriveRequestCapabilities({
+        prompt,
+        screenshots,
+        requestCapabilities,
+      });
 
       if (providerStatusService && !providerStatusService.isAvailable(providerId)) {
+        if (!allowFallback) {
+          const status = providerStatusService.getStatus(providerId) || {};
+          throw new Error(`Provider ${providerId} is unavailable (${status.reason || 'unknown'}) and fallback is disabled`);
+        }
         const allProviders = await providerService.getAllProviders();
         const providersMap = {};
         for (const p of allProviders.providers) {
@@ -315,7 +344,9 @@ export function createRunnerService(config = {}) {
         const fallback = providerStatusService.getFallbackProvider(
           providerId,
           providersMap,
-          fallbackProviderId
+          fallbackProviderId,
+          null,
+          effectiveRequestCapabilities
         );
 
         if (fallback) {
@@ -643,7 +674,7 @@ export function createRunnerService(config = {}) {
       const response = !endpointGuard.allowed
         ? { ok: false, error: `Endpoint blocked: ${endpointGuard.reason}`, status: 0 }
         : ready.success
-        ? await fetch(`${provider.endpoint}/chat/completions`, {
+        ? await fetchWithPreHeaderRetry(() => fetch(`${provider.endpoint}/chat/completions`, {
             method: 'POST',
             headers,
             signal: controller.signal,
@@ -658,6 +689,9 @@ export function createRunnerService(config = {}) {
               // OpenAI-style endpoints). Only sent when the provider opts in.
               ...(Number(provider.numCtx) > 0 ? { num_ctx: Number(provider.numCtx) } : {})
             })
+          }), {
+            signal: controller.signal,
+            allowReplay: isReplaySafeLocalRequest(provider),
           }).catch(err => ({ ok: false, error: err.message, status: 0 }))
         : { ok: false, error: `Ollama is not running and PortOS could not start it: ${ready.error || 'unknown error'}`, status: 0 };
 
@@ -685,7 +719,8 @@ export function createRunnerService(config = {}) {
         const errorAnalysis = analyzeHttpError({
           status: response.status || 0,
           statusText: response.statusText || '',
-          body: responseBody
+          body: responseBody,
+          headers: response.headers,
         });
 
         metadata.error = errorAnalysis.message || `API error: ${response.status}`;
@@ -768,6 +803,12 @@ export function createRunnerService(config = {}) {
           metadata.hadReasoning = reasoning.length > 0;
           metadata.usedReasoningAsFallback = usedReasoningAsFallback;
           await atomicWrite(metadataPath, metadata);
+
+          if (typeof providerStatusService?.markApiSuccess === 'function') {
+            await providerStatusService.markApiSuccess(provider.id).catch(err => {
+              console.error(`❌ Failed to clear provider rate-limit state: ${err.message}`);
+            });
+          }
 
           safeSettle(() => hooks.onRunCompleted?.(metadata, output), `Run ${runId} onRunCompleted hook`);
           safeSettle(() => onComplete?.(metadata), `Run ${runId} onComplete`);

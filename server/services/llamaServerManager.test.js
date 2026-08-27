@@ -8,6 +8,8 @@ import {
   captureLlamaServerConfig,
   restoreLlamaServerConfig,
   installLlamaServer,
+  getLlamaServerUpdateStatus,
+  upgradeLlamaServer,
   _resetLlamaServerStateForTests,
   LLAMA_APP,
 } from './llamaServerManager.js';
@@ -17,9 +19,11 @@ import * as childProcess from '../lib/childProcess.js';
 import * as platform from '../lib/platform.js';
 import * as openAiModelsProbe from '../lib/openAiModelsProbe.js';
 import * as pm2Module from './pm2.js';
+import * as bufferedSpawnModule from '../lib/bufferedSpawn.js';
+import * as streamingSpawnModule from '../lib/streamingSpawn.js';
 import { PORTS } from '../lib/ports.js';
 import { EventEmitter } from 'events';
-import { mkdtemp, rm, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -38,12 +42,25 @@ function endProcess(child, code) {
   child.emit('close', code);
 }
 
+const brewInfoJson = ({ installedVersion = 'build-100', latestVersion = '0.3.0', outdated = true, pinned = false, linkedKeg = 'build-100' } = {}) => JSON.stringify({
+  formulae: [{
+    name: 'llama.cpp',
+    versions: { stable: latestVersion },
+    installed: [{ version: installedVersion }],
+    outdated,
+    pinned,
+    linked_keg: linkedKeg,
+  }],
+});
+
 describe('llamaServerManager', () => {
   // startLlamaServer refuses to spawn for a GGUF that is not on disk, so the
   // lifecycle tests need real files to point at.
   let modelDir;
   let modelPath;
   let draftPath;
+  let homebrewBinaryPath;
+  let homebrewPrefix;
   let pm2State = null;
   let execPm2Calls = [];
   // Failed PM2 reads, on demand. `getAppStatusStrict` answers `null` for a read
@@ -59,6 +76,16 @@ describe('llamaServerManager', () => {
     draftPath = join(modelDir, 'draft.gguf');
     await writeFile(modelPath, 'gguf');
     await writeFile(draftPath, 'gguf');
+    const homebrewRoot = join(modelDir, 'homebrew');
+    const cellarRoot = join(homebrewRoot, 'Cellar', 'llama.cpp', 'build-100');
+    homebrewPrefix = join(homebrewRoot, 'opt', 'llama.cpp');
+    homebrewBinaryPath = join(homebrewRoot, 'bin', 'llama-server');
+    await mkdir(join(cellarRoot, 'bin'), { recursive: true });
+    await mkdir(join(homebrewRoot, 'bin'), { recursive: true });
+    await mkdir(join(homebrewRoot, 'opt'), { recursive: true });
+    await writeFile(join(cellarRoot, 'bin', 'llama-server'), 'binary');
+    await symlink(cellarRoot, homebrewPrefix);
+    await symlink(join(homebrewPrefix, 'bin', 'llama-server'), homebrewBinaryPath);
   });
 
   afterAll(async () => {
@@ -155,6 +182,92 @@ describe('llamaServerManager', () => {
     // a cold run right after `brew link` blew past commandExists' 5s bound and
     // reported an installed, working binary as missing.
     expect(execProbe).not.toHaveBeenCalled();
+  });
+
+  it('reports the binary version and Homebrew update metadata', async () => {
+    const binaryPath = homebrewBinaryPath;
+    vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue(binaryPath);
+    const buffered = vi.spyOn(bufferedSpawnModule, 'bufferedSpawn').mockImplementation(async (command, args) => ({
+      success: true,
+      code: 0,
+      stdout: command === 'brew' && args[0] === '--prefix'
+        ? `${homebrewPrefix}\n`
+        : command === 'brew' ? brewInfoJson() : 'version: 0.1.1-dev (build 100, commit abc123)',
+      stderr: '',
+      timedOut: false,
+    }));
+
+    const status = await getLlamaServerUpdateStatus();
+
+    expect(status).toMatchObject({
+      version: '0.1.1-dev',
+      latestVersion: '0.3.0',
+      updateAvailable: true,
+      canUpgrade: true,
+    });
+    expect(buffered).toHaveBeenCalledWith(binaryPath, ['--version'], { timeoutMs: 5000, shell: false });
+    expect(buffered).toHaveBeenCalledWith(
+      'brew',
+      ['info', '--json=v2', '--formula', 'llama.cpp'],
+      { timeoutMs: 15_000, shell: false },
+    );
+  });
+
+  it('does not offer an automatic update for a pinned Homebrew formula', async () => {
+    vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue(homebrewBinaryPath);
+    vi.spyOn(bufferedSpawnModule, 'bufferedSpawn').mockImplementation(async (command, args) => ({
+      success: true,
+      code: 0,
+      stdout: command === 'brew' && args[0] === '--prefix'
+        ? `${homebrewPrefix}\n`
+        : command === 'brew' ? brewInfoJson({ pinned: true }) : 'version: 0.1.1-dev',
+      stderr: '',
+      timedOut: false,
+    }));
+
+    await expect(getLlamaServerUpdateStatus()).resolves.toMatchObject({
+      updateAvailable: true,
+      canUpgrade: false,
+      latestVersion: '0.3.0',
+    });
+  });
+
+  it('keeps a custom llama-server build updateable by manual means only', async () => {
+    vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue('/usr/local/bin/llama-server');
+    vi.spyOn(bufferedSpawnModule, 'bufferedSpawn').mockImplementation(async (command) => ({
+      success: command !== 'brew',
+      code: command === 'brew' ? 1 : 0,
+      stdout: command === 'brew' ? '' : 'version: custom-build',
+      stderr: command === 'brew' ? 'Error: No available formula' : '',
+      timedOut: false,
+    }));
+
+    await expect(getLlamaServerUpdateStatus()).resolves.toMatchObject({
+      version: 'custom-build',
+      latestVersion: null,
+      updateAvailable: false,
+      canUpgrade: false,
+    });
+  });
+
+  it('keeps the Homebrew update manual when a source build is first on PATH', async () => {
+    vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue('/usr/local/bin/llama-server');
+    vi.spyOn(bufferedSpawnModule, 'bufferedSpawn').mockImplementation(async (command, args) => ({
+      success: true,
+      code: 0,
+      stdout: command === 'brew' && args[0] === '--prefix'
+        ? `${homebrewPrefix}\n`
+        : command === 'brew' ? brewInfoJson() : 'version: custom-build',
+      stderr: '',
+      timedOut: false,
+    }));
+
+    await expect(getLlamaServerUpdateStatus()).resolves.toMatchObject({
+      version: 'custom-build',
+      latestVersion: '0.3.0',
+      updateAvailable: true,
+      canUpgrade: false,
+    });
   });
 
   it('rejects start when binary is missing', async () => {
@@ -512,6 +625,138 @@ describe('llamaServerManager', () => {
     });
 
     await expect(installLlamaServer()).rejects.toThrow(/brew link --overwrite llama\.cpp/i);
+  });
+
+  describe('upgradeLlamaServer', () => {
+    const stubBrewInfo = (options) => vi.spyOn(bufferedSpawnModule, 'bufferedSpawn').mockImplementation(async (_command, args) => ({
+      success: true,
+      code: 0,
+      stdout: args[0] === '--prefix' ? `${homebrewPrefix}\n` : brewInfoJson(options),
+      stderr: '',
+      timedOut: false,
+    }));
+
+    it('updates an idle installation through Homebrew without starting it', async () => {
+      vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue(homebrewBinaryPath);
+      stubBrewInfo();
+      const progress = vi.fn();
+      const stream = vi.spyOn(streamingSpawnModule, 'runStreamingCommand').mockImplementation(async (_cmd, _args, onLine) => {
+        onLine('Updated llama.cpp');
+        return { success: true };
+      });
+
+      const result = await upgradeLlamaServer({ onProgress: progress });
+
+      expect(result).toMatchObject({ success: true });
+      expect(stream).toHaveBeenCalledWith(
+        'brew',
+        ['upgrade', 'llama.cpp'],
+        expect.any(Function),
+        { timeoutMs: 30 * 60 * 1000 },
+      );
+      expect(progress).toHaveBeenCalledWith({ event: 'progress', message: 'Updating llama.cpp via Homebrew…' });
+      expect(progress).toHaveBeenCalledWith({ event: 'progress', message: 'Updated llama.cpp' });
+      expect(execPm2Calls.some((args) => args[0] === 'start' || args[0] === 'delete')).toBe(false);
+    });
+
+    it('restarts a managed server with its recovered launch configuration', async () => {
+      const binaryPath = homebrewBinaryPath;
+      vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue(binaryPath);
+      stubBrewInfo();
+      pm2State = {
+        name: LLAMA_APP,
+        status: 'online',
+        pid: 321,
+        args: ['-m', modelPath, '--port', String(PORTS.LLAMA_SERVER), '--alias', 'example-model'],
+      };
+      openAiModelsProbe.probeOpenAiModels.mockImplementation(async () => ({ reachable: pm2State?.status === 'online' }));
+      vi.spyOn(streamingSpawnModule, 'runStreamingCommand').mockResolvedValue({ success: true });
+
+      const result = await upgradeLlamaServer();
+
+      expect(result).toMatchObject({ success: true });
+      expect(execPm2Calls.some((args) => args[0] === 'delete')).toBe(true);
+      const startCall = execPm2Calls.find((args) => args[0] === 'start');
+      expect(startCall).toContain(modelPath);
+      expect(startCall).toContain('--alias');
+      expect(startCall).toContain('example-model');
+    });
+
+    it('restarts a managed server with the current saved idle window', async () => {
+      const binaryPath = homebrewBinaryPath;
+      vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue(binaryPath);
+      stubBrewInfo();
+      pm2State = {
+        name: LLAMA_APP,
+        status: 'online',
+        pid: 321,
+        args: ['-m', modelPath, '--port', String(PORTS.LLAMA_SERVER), '--sleep-idle-seconds', '0'],
+      };
+      openAiModelsProbe.probeOpenAiModels.mockImplementation(async () => ({ reachable: pm2State?.status === 'online' }));
+      vi.spyOn(childProcess, 'execFile').mockImplementation((_bin, _args, _opts, cb) => {
+        cb(null, '--sleep-idle-seconds SECONDS', '');
+        return fakeSpawnProcess();
+      });
+      vi.spyOn(streamingSpawnModule, 'runStreamingCommand').mockResolvedValue({ success: true });
+      _resetLlamaServerStateForTests({ sleepIdleMinutes: 30 });
+
+      const result = await upgradeLlamaServer();
+
+      expect(result).toMatchObject({ success: true });
+      const startCall = execPm2Calls.find((args) => args[0] === 'start');
+      const idleFlagIndex = startCall.indexOf('--sleep-idle-seconds');
+      expect(startCall[idleFlagIndex + 1]).toBe('1800');
+    });
+
+    it('refuses to update when PM2 ownership cannot be determined', async () => {
+      vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue(homebrewBinaryPath);
+      stubBrewInfo();
+      pm2Reads.failures = Infinity;
+      const stream = vi.spyOn(streamingSpawnModule, 'runStreamingCommand');
+
+      await expect(upgradeLlamaServer()).resolves.toMatchObject({
+        success: false,
+        error: expect.stringMatching(/could not read PM2/i),
+      });
+      expect(stream).not.toHaveBeenCalled();
+    });
+
+    it('refuses an automatic update when a source build owns the active binary', async () => {
+      vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue('/usr/local/bin/llama-server');
+      stubBrewInfo();
+      const stream = vi.spyOn(streamingSpawnModule, 'runStreamingCommand');
+
+      await expect(upgradeLlamaServer()).resolves.toMatchObject({
+        success: false,
+        manualUpdateRequired: true,
+        error: expect.stringMatching(/active llama-server is not the linked Homebrew/i),
+      });
+      expect(stream).not.toHaveBeenCalled();
+    });
+
+    it('does not report success when a managed restart never becomes ready', async () => {
+      const binaryPath = homebrewBinaryPath;
+      vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue(binaryPath);
+      stubBrewInfo();
+      pm2State = {
+        name: LLAMA_APP,
+        status: 'online',
+        pid: 321,
+        args: ['-m', modelPath, '--port', String(PORTS.LLAMA_SERVER), '--alias', 'example-model'],
+      };
+      openAiModelsProbe.probeOpenAiModels.mockResolvedValue({ reachable: false });
+      vi.spyOn(streamingSpawnModule, 'runStreamingCommand').mockResolvedValue({ success: true });
+      _resetLlamaServerStateForTests({ relaunchReadyTimeout: 0, pm2ReadRetryDelay: 0 });
+
+      const result = await upgradeLlamaServer();
+
+      expect(result).toMatchObject({
+        success: false,
+        updated: true,
+        error: expect.stringMatching(/could not be restarted/i),
+      });
+      expect(execPm2Calls.filter((args) => args[0] === 'delete').length).toBeGreaterThanOrEqual(2);
+    });
   });
 
   // ---- tuning relaunch ----------------------------------------------------

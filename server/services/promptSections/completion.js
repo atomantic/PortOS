@@ -10,6 +10,14 @@ import { PR_COMPLETIONS, leavesPrForHuman, resolvePrCompletion } from '../../lib
 import { LIGHT_CONTEXT_PROVIDER_TYPES, SIMPLIFY_INLINE_REVIEW } from './constants.js';
 import { buildCiMergeGateSteps, buildReviewLoopFollowUpSection, LEAVE_PR_OPEN_STEP } from './reviewLifecycle.js';
 
+export const NO_CHANGE_AUDIT_GUIDANCE = 'This audit may legitimately conclude that no change is needed. First verify the data this audit owns against authoritative sources. If the audited data is current, leave the worktree clean and do not run the commit, push, PR, or review steps below; write the completion sentinel when this provider uses one, or exit without committing when it does not. If a change is needed, continue through the normal workflow below.';
+
+function withNoChangeAuditGuidance(guidance, noChangeSuccess) {
+  return noChangeSuccess && guidance
+    ? `${NO_CHANGE_AUDIT_GUIDANCE}\n\n${guidance}`
+    : guidance;
+}
+
 /**
  * Build the single "## Guidelines" completion-handoff bullet for the full
  * (api) prompt path. Mirrors the helper pattern the light path already uses
@@ -29,12 +37,14 @@ import { buildCiMergeGateSteps, buildReviewLoopFollowUpSection, LEAVE_PR_OPEN_ST
  * @param {Object|null} opts.worktreeInfo
  * @param {boolean} opts.willOpenPR
  * @param {'review-then-merge'|'merge-on-green'|'leave-open'} opts.prCompletion
+ * @param {boolean} [opts.noChangeSuccess] - The task may succeed after a
+ *   verified clean branch instead of producing a commit/PR.
  * @returns {string|null}
  */
 export function buildCompletionGuidelineBullet({
   isReadOnly, isTui, tuiCompletionCommand, slashdoFree = false,
   worktreeInfo, willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, discardWorktree = false, noCodeOutput = false,
-  leavePrOpen = false, isPrFollowUp = false, claimFlow = false,
+  leavePrOpen = false, isPrFollowUp = false, claimFlow = false, noChangeSuccess = false,
 }) {
   // A PR follow-up (review-loop or merge-only) already carries its own PRIMARY
   // OBJECTIVE section with the full procedure, and its cleanup runs with
@@ -73,7 +83,7 @@ export function buildCompletionGuidelineBullet({
     const howTo = slashdoFree
       ? 'the Completion Workflow above (plain `git` commit + PortOS handoff — this provider has no slashdo commands)'
       : `the Completion Workflow above (\`${tuiCompletionCommand}\`)`;
-    return `On successful completion, YOU run ${howTo}, then write the sentinel and stop — PortOS closes the session once it sees the sentinel; do NOT run \`/quit\`.`;
+    return withNoChangeAuditGuidance(`On successful completion, YOU run ${howTo}, then write the sentinel and stop — PortOS closes the session once it sees the sentinel; do NOT run \`/quit\`.`, noChangeSuccess);
   }
   if (worktreeInfo && willOpenPR) {
     const policyLeavesOpen = prCompletion === PR_COMPLETIONS.LEAVE_OPEN;
@@ -85,10 +95,10 @@ export function buildCompletionGuidelineBullet({
       : runsReviewLoop
         ? ' For GitHub PRs, a Copilot code review will also be requested automatically (skipped on GitLab and other non-GitHub forges) — do NOT run `/do:rpr` or attempt to address review comments yourself; you will have already exited.'
         : ' No review was requested for this task, so a follow-up agent merges the PR once CI is green — do NOT try to merge it yourself; you will have already exited.';
-    return `On successful completion, the system will push your branch and open a pull request — do NOT open a PR manually. (If the task fails, no PR is opened; the worktree is then cleaned up unless a safety check preserves it for manual recovery.)${reviewSuffix}`;
+    return withNoChangeAuditGuidance(`On successful completion, the system will push your branch and open a pull request — do NOT open a PR manually. (If the task fails, no PR is opened; the worktree is then cleaned up unless a safety check preserves it for manual recovery.)${reviewSuffix}`, noChangeSuccess);
   }
   if (worktreeInfo) {
-    return 'Your worktree branch will be automatically merged back to the source branch when your task completes — do NOT open a PR.';
+    return withNoChangeAuditGuidance('Your worktree branch will be automatically merged back to the source branch when your task completes — do NOT open a PR.', noChangeSuccess);
   }
   return null;
 }
@@ -291,26 +301,26 @@ export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = 
  * push workflow (TUI or Claude Code CLI with slashdo), reuse an existing PR
  * branch (review fixes), or hand off to PortOS's post-exit push.
  */
-export function worktreeCommitGuidance({ isTui, hasSlashdo, ownsPrWorkflow = false, isWorktreeOnExistingBranch, willOpenPR, discardWorktree, claimFlow = false }) {
+export function worktreeCommitGuidance({ isTui, hasSlashdo, ownsPrWorkflow = false, isWorktreeOnExistingBranch, willOpenPR, discardWorktree, claimFlow = false, noChangeSuccess = false }) {
   if (discardWorktree) return DISCARD_WORKTREE_NOTE;
   if (claimFlow) return 'The claim workflow in the Completion section owns the push, PR/MR, review, merge or human-handoff, and cleanup steps.';
-  if (isTui) return 'Commit your changes to this branch — see **Completion Workflow** below.';
+  if (isTui) return withNoChangeAuditGuidance('Commit your changes to this branch — see **Completion Workflow** below.', noChangeSuccess);
   if (isWorktreeOnExistingBranch) {
-    return 'Commit and **push** any review-fix commits to this branch (the PR points at it). Use `git pull --rebase` before pushing if needed.';
+    return withNoChangeAuditGuidance('Commit and **push** any review-fix commits to this branch (the PR points at it). Use `git pull --rebase` before pushing if needed.', noChangeSuccess);
   }
   if (hasSlashdo && willOpenPR) {
-    return 'Commit your changes here — the **Completion** section below drives the push and PR.';
+    return withNoChangeAuditGuidance('Commit your changes here — the **Completion** section below drives the push and PR.', noChangeSuccess);
   }
   if (hasSlashdo) {
-    return 'Commit your changes here — the **Completion** section below drives the push.';
+    return withNoChangeAuditGuidance('Commit your changes here — the **Completion** section below drives the push.', noChangeSuccess);
   }
   if (ownsPrWorkflow && willOpenPR) {
-    return 'Commit your changes here — the **Completion** section below drives the push, the PR, the review loop, and the merge.';
+    return withNoChangeAuditGuidance('Commit your changes here — the **Completion** section below drives the push, the PR, the review loop, and the merge.', noChangeSuccess);
   }
   if (willOpenPR) {
-    return 'Commit your changes here. The system will push and open a PR after you exit — do NOT push or open a PR yourself.';
+    return withNoChangeAuditGuidance('Commit your changes here. The system will push and open a PR after you exit — do NOT push or open a PR yourself.', noChangeSuccess);
   }
-  return 'Commit your changes here. Your branch will be merged back automatically when the task completes.';
+  return withNoChangeAuditGuidance('Commit your changes here. Your branch will be merged back automatically when the task completes.', noChangeSuccess);
 }
 
 /**
@@ -412,6 +422,18 @@ export function buildSentinelWriteSteps(stepNumber, sentinelPath, sentinelTail) 
 }
 
 /**
+ * Keep the manual pre-PR gate aligned with the review loop's `~opt` contract.
+ * Defaulting to required preserves the fail-closed behavior for direct callers
+ * that provide a local section without its reviewer metadata.
+ */
+function localReviewCompletionInstruction(localReviewRequired = true) {
+  if (!localReviewRequired) {
+    return 'Complete the **Local Review Before Opening the PR/MR** section below. All local reviewers are optional, so missing/inconclusive results (including skipped, timeout, malformed, or no-verdict) may continue. Set aggregate `LOCAL_OVERALL_STATUS=clean` for clean, configured capped, or optional inconclusive; use `partial` only for a qualifying stop, never raw statuses. Hard errors, failed build/test, rejection, or unpushed fixes block. Still run each reviewer and fix its findings.';
+  }
+  return 'Complete the **Local Review Before Opening the PR/MR** section below. Commit its fixes. A missing/timed-out/malformed/inconclusive REQUIRED review blocks publication; an OPTIONAL inconclusive result may continue. Set aggregate `LOCAL_OVERALL_STATUS=clean` for clean, configured capped, or optional inconclusive; use `partial` only for a qualifying stop, never raw statuses. Hard errors, failed build/test, rejection, or unpushed fixes block.';
+}
+
+/**
  * TUI completion-workflow block. The TUI owns its own commit → push → PR
  * pipeline via slashdo commands and signals "done" with a sentinel file.
  *
@@ -423,14 +445,14 @@ export function buildSentinelWriteSteps(stepNumber, sentinelPath, sentinelTail) 
  * return this IS a Claude session, so `/simplify` and `/do:pr` are both safe to
  * emit without a second provider check.
  */
-export function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, simplifyEnabled, sentinelPath, slashdoFree = false, ownsPrWorkflow = false, branchName = null, baseBranch = null, leavePrOpen = false, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewerModels = {}, reviewerEfforts = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, forgeCli = 'gh' }) {
+export function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, simplifyEnabled, sentinelPath, slashdoFree = false, ownsPrWorkflow = false, branchName = null, baseBranch = null, leavePrOpen = false, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewerModels = {}, reviewerEfforts = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, forgeCli = 'gh', noChangeSuccess = false, localReviewSection = '', localReviewRequired = true, postPrReview = null }) {
   const policyLeavesOpen = prCompletion === PR_COMPLETIONS.LEAVE_OPEN;
   const runsReviewLoop = prCompletion === PR_COMPLETIONS.REVIEW_THEN_MERGE;
   if (slashdoFree) {
     // Plain `git`/`gh` instead of `/do:pr` — but still the whole lifecycle when
     // the session is a real coding harness (`ownsPrWorkflow`); the reviewer
     // procedure it needs is inlined in the Review Loop section that follows.
-    return buildManualTuiCompletionSection({ willOpenPR, prCompletion, simplifyEnabled, sentinelPath, branchName, baseBranch, leavePrOpen, ownsPrWorkflow, forgeCli });
+    return buildManualTuiCompletionSection({ willOpenPR, prCompletion, simplifyEnabled, sentinelPath, branchName, baseBranch, leavePrOpen, ownsPrWorkflow, forgeCli, noChangeSuccess, localReviewSection, localReviewRequired, postPrReview });
   }
   const cmd = willOpenPR ? '/do:pr' : '/do:push';
   // `/do:pr` may inherit a saved `review-with` default. Explicitly opt out
@@ -457,7 +479,11 @@ export function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLE
   // Reached only for a Claude TUI (a non-Claude one took the slashdoFree branch
   // above), so `/simplify` — a Claude Code built-in — is invokable here.
   const simplifyStep = simplifyEnabled ? '1. `/simplify`' : '1. (simplify disabled — skip)';
-  const sentinelTail = willOpenPR ? '   ## PR\n   <PR URL>' : '   ## Branch\n   <branch name>';
+  const sentinelTail = willOpenPR
+    ? (noChangeSuccess
+        ? '   ## PR\n   <PR URL, or "No change needed; no PR opened." if the audit made no change>'
+        : '   ## PR\n   <PR URL>')
+    : '   ## Branch\n   <branch name>';
   // A PR gets merge steps — gated on the review verdict when a loop runs, on CI
   // alone when it doesn't (nothing else merges a no-review-loop PR). The one
   // exception is a PR a human lands (JIRA-tracked; see lib/prDisposition.js).
@@ -468,6 +494,7 @@ export function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLE
 
   return [
     '## Completion Workflow',
+    ...(noChangeSuccess ? ['', NO_CHANGE_AUDIT_GUIDANCE, ''] : []),
     'When the task is complete, run these in order:',
     '',
     simplifyStep,
@@ -507,18 +534,72 @@ function promptRef(ref, fallback) {
  * inline review-loop and merge-gate sections address the PR by those names —
  * they are rendered before the PR exists, so a literal URL is impossible.
  */
-function buildManualPrCreateStep(step, { branchName, baseBranch, forgeCli = 'gh' }) {
+function buildManualPrCreateStep(step, { branchName, baseBranch, forgeCli = 'gh', localReviewStateRequired = false }) {
   const branch = promptRef(branchName, '<branch>');
-  const base = promptRef(baseBranch, '<base-branch>');
+  const hasBaseBranch = typeof baseBranch === 'string' && baseBranch && baseBranch !== '<base-branch>';
+  const base = hasBaseBranch ? promptRef(baseBranch, '<base-branch>') : '"$BASE_BRANCH"';
   const gitlab = forgeCli === 'glab';
   return [
-    `${step}. Push the branch and open the pull request yourself, capturing its URL and number — the section below addresses the PR by these shell variables:`,
+    `${step}. Publish the branch and open the pull request yourself, capturing its URL and number:`,
     '',
     '   ```bash',
-    `   git push -u origin ${branch}`,
+    ...(hasBaseBranch ? [] : [
+      '   if ! git fetch origin; then echo "Unable to fetch origin while resolving the default branch" >&2; exit 1; fi',
+      '   if ! git remote set-head origin --auto; then echo "Unable to resolve origin/HEAD while resolving the default branch" >&2; exit 1; fi',
+      '   BASE_BRANCH=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed \'s#^origin/##\')',
+      '   if [ -z "$BASE_BRANCH" ]; then echo "Unable to resolve the repository default branch" >&2; exit 1; fi',
+    ]),
+    ...(localReviewStateRequired ? [
+      '   LOCAL_REVIEW_STATE_FILE="$(git rev-parse --git-path portos-local-review-state)"',
+      '   if [ ! -s "$LOCAL_REVIEW_STATE_FILE" ]; then echo "Local review state is missing; refusing to publish an unverified branch" >&2; exit 1; fi',
+      '   . "$LOCAL_REVIEW_STATE_FILE"',
+      '   LOCAL_REVIEW_BASELINE_FILE="$(git rev-parse --git-path portos-local-review-baseline)"',
+      '   if [ ! -s "$LOCAL_REVIEW_BASELINE_FILE" ]; then echo "Local review publication baseline is missing; refusing to publish" >&2; exit 1; fi',
+      '   LOCAL_PRE_REBASE_REMOTE=$(grep -m1 "^LOCAL_PRE_REBASE_REMOTE=" "$LOCAL_REVIEW_BASELINE_FILE" | cut -d= -f2-)',
+      '   LOCAL_PRE_REBASE_HEAD_SHA=$(grep -m1 "^LOCAL_PRE_REBASE_HEAD_SHA=" "$LOCAL_REVIEW_BASELINE_FILE" | cut -d= -f2-)',
+      '   LOCAL_PRE_REBASE_REMOTE_SHA=$(grep -m1 "^LOCAL_PRE_REBASE_REMOTE_SHA=" "$LOCAL_REVIEW_BASELINE_FILE" | cut -d= -f2-)',
+      '   if [ -z "$LOCAL_PRE_REBASE_REMOTE" ] || [ -z "$LOCAL_PRE_REBASE_HEAD_SHA" ]; then echo "Local review publication baseline is invalid; refusing to publish" >&2; exit 1; fi',
+      '   CURRENT_HEAD_SHA=$(git rev-parse HEAD)',
+      '   case "$LOCAL_OVERALL_STATUS" in clean|partial) ;; *) echo "Local review did not finish with an acceptable status; refusing to publish" >&2; exit 1 ;; esac',
+      '   if [ "$LOCAL_REVIEWED_HEAD_SHA" != "$CURRENT_HEAD_SHA" ]; then echo "Local review covered $LOCAL_REVIEWED_HEAD_SHA, but HEAD is $CURRENT_HEAD_SHA; refusing to publish an unreviewed branch" >&2; exit 1; fi',
+    ] : []),
+    `   BRANCH=${branch}`,
+    '   PUSH_REMOTE=$(git config --get "branch.${BRANCH}.pushRemote")',
+    '   PUSH_REMOTE_SOURCE=branch.pushRemote',
+    '   if [ -z "$PUSH_REMOTE" ] || [ "$PUSH_REMOTE" = "." ]; then PUSH_REMOTE=$(git config --get remote.pushDefault); PUSH_REMOTE_SOURCE=remote.pushDefault; fi',
+    '   if [ -z "$PUSH_REMOTE" ] || [ "$PUSH_REMOTE" = "." ]; then PUSH_REMOTE=$(git config --get "branch.${BRANCH}.remote"); PUSH_REMOTE_SOURCE=branch.remote; fi',
+    '   if [ -z "$PUSH_REMOTE" ] || [ "$PUSH_REMOTE" = "." ]; then PUSH_REMOTE=origin; PUSH_REMOTE_SOURCE=default; fi',
+    '   PUSH_REF=$(git config --get "branch.${BRANCH}.merge")',
+    '   PUBLISH_ERROR="publish failed; refusing PR/MR"',
+    '   publish_reviewed_branch() { git push "$@" || { echo "$PUBLISH_ERROR" >&2; exit 1; }; }',
+    '   if [ "$PUSH_REMOTE_SOURCE" = "branch.remote" ] && [ -n "$PUSH_REF" ]; then',
+    '     if [ "$PUSH_REF" != "refs/heads/$BRANCH" ] && [ "$PUSH_REF" != "$BRANCH" ]; then echo "Configured upstream $PUSH_REMOTE/$PUSH_REF does not name $BRANCH; refusing to publish" >&2; exit 1; fi',
+    '   fi',
+    '   if git ls-remote --exit-code --heads "$PUSH_REMOTE" "$BRANCH" >/dev/null 2>&1; then',
+    '     PUBLISH_REMOTE="$PUSH_REMOTE"',
+    '   else',
+    '     publish_reviewed_branch -u "$PUSH_REMOTE" "$BRANCH"',
+    '     PUBLISH_REMOTE=',
+    '   fi',
+    '   if [ -n "$PUBLISH_REMOTE" ]; then',
+    '     if ! git fetch "$PUBLISH_REMOTE" "+refs/heads/$BRANCH:refs/remotes/$PUBLISH_REMOTE/$BRANCH"; then echo "Unable to fetch the remote branch before publishing" >&2; exit 1; fi',
+    '     REMOTE_BRANCH_SHA=$(git rev-parse "refs/remotes/$PUBLISH_REMOTE/$BRANCH" 2>/dev/null) || { echo "Unable to read the remote branch before publishing" >&2; exit 1; }',
+    '     if git merge-base --is-ancestor "$REMOTE_BRANCH_SHA" HEAD; then',
+    '       if [ -n "$PUSH_REF" ]; then publish_reviewed_branch "$PUBLISH_REMOTE" "HEAD:refs/heads/$BRANCH"; else publish_reviewed_branch -u "$PUBLISH_REMOTE" "HEAD:refs/heads/$BRANCH"; fi',
+    '     elif [ "$PUBLISH_REMOTE" = "${LOCAL_PRE_REBASE_REMOTE:-}" ] && [ "$REMOTE_BRANCH_SHA" = "${LOCAL_PRE_REBASE_REMOTE_SHA:-}" ] && [ -n "${LOCAL_PRE_REBASE_HEAD_SHA:-}" ] && git merge-base --is-ancestor "$REMOTE_BRANCH_SHA" "$LOCAL_PRE_REBASE_HEAD_SHA" ]; then',
+    '       if [ -n "$PUSH_REF" ]; then publish_reviewed_branch --force-with-lease="refs/heads/$BRANCH:$REMOTE_BRANCH_SHA" "$PUBLISH_REMOTE" "HEAD:refs/heads/$BRANCH"; else publish_reviewed_branch --force-with-lease="refs/heads/$BRANCH:$REMOTE_BRANCH_SHA" -u "$PUBLISH_REMOTE" "HEAD:refs/heads/$BRANCH"; fi',
+    '     else',
+    '       echo "Remote $PUBLISH_REMOTE/$BRANCH contains commits not in HEAD, or changed during synchronization; refusing to overwrite them" >&2; exit 1',
+    '     fi',
+    '   fi',
+    ...(gitlab ? [] : [
+      '   PUSH_OWNER=$(gh repo view "$(git remote get-url --push "$PUSH_REMOTE" 2>/dev/null)" --json owner -q .owner.login 2>/dev/null) || { echo "Unable to resolve PR head; refusing PR" >&2; exit 1; }',
+      '   [ -n "$PUSH_OWNER" ] || { echo "Missing PR head owner; refusing PR" >&2; exit 1; }',
+      '   PR_HEAD="$PUSH_OWNER:$BRANCH"',
+    ]),
     gitlab
       ? `   PR_URL=$(glab mr create --source-branch ${branch} --target-branch ${base} --title "<conventional title>" --description "<description>" | grep -Eo 'https?://[^[:space:]]+' | tail -n 1)`
-      : `   PR_URL=$(gh pr create --base ${base} --head ${branch} --title "<conventional title>" --body "<description>")`,
+      : '   PR_URL=$(gh pr create --base ' + base + ' --head "$PR_HEAD" --title "<conventional title>" --body "<description>")',
     gitlab
       ? '   PR_NUMBER=$(glab mr view "$PR_URL" --output json | jq -r .iid)'
       : '   PR_NUMBER=$(gh pr view "$PR_URL" --json number -q .number)',
@@ -549,9 +630,9 @@ function buildManualPrCreateStep(step, { branchName, baseBranch, forgeCli = 'gh'
  * `ownsPrWorkflow: false` (lean mode) keeps the original handoff: commit and
  * stop, PortOS owns the post-exit push / PR / review / merge lifecycle.
  */
-function buildManualTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE, simplifyEnabled, sentinelPath, branchName = null, baseBranch = null, leavePrOpen = false, ownsPrWorkflow = false, forgeCli = 'gh' }) {
+function buildManualTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE, simplifyEnabled, sentinelPath, branchName = null, baseBranch = null, leavePrOpen = false, ownsPrWorkflow = false, forgeCli = 'gh', noChangeSuccess = false, localReviewSection = '', localReviewRequired = true, postPrReview = null }) {
   const policyLeavesOpen = prCompletion === PR_COMPLETIONS.LEAVE_OPEN;
-  const runsReviewLoop = prCompletion === PR_COMPLETIONS.REVIEW_THEN_MERGE;
+  const runsReviewLoop = postPrReview ?? (prCompletion === PR_COMPLETIONS.REVIEW_THEN_MERGE);
   // `ownsPrWorkflow` already folds in `willOpenPR`, the worktree, and the
   // leave-open exclusions — it is `inlinePrLifecycleSection() !== null` (see the
   // caller). Re-testing any of them here is how the two drifted apart before.
@@ -559,10 +640,15 @@ function buildManualTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLET
   const simplifyStep = simplifyEnabled
     ? `1. Before committing, ${SIMPLIFY_INLINE_REVIEW} and fix any findings.`
     : '1. (simplify disabled — skip)';
-  const sentinelTail = drivesOwnPr ? '   ## PR\n   <PR URL>' : '   ## Branch\n   <branch name>';
+  const sentinelTail = drivesOwnPr
+    ? (noChangeSuccess
+        ? '   ## PR\n   <PR URL, or "No change needed; no PR opened." if the audit made no change>'
+        : '   ## PR\n   <PR URL>')
+    : '   ## Branch\n   <branch name>';
 
   const lines = [
     '## Completion Workflow',
+    ...(noChangeSuccess ? ['', NO_CHANGE_AUDIT_GUIDANCE, ''] : []),
     drivesOwnPr
       ? `This provider does NOT have slashdo (\`/do:*\`) commands, so drive the handoff with plain \`git\` and \`${forgeCli}\`. **You own this ${forgeCli === 'glab' ? 'MR' : 'PR'} end to end — nothing else will open, review, or merge it.** Run these in order:`
       : 'This provider does NOT have slashdo (`/do:*`) commands, so finish the handoff with plain `git`. Run these in order:',
@@ -578,7 +664,11 @@ function buildManualTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLET
 
   let step = 3;
   if (drivesOwnPr) {
-    lines.push(...buildManualPrCreateStep(step++, { branchName, baseBranch, forgeCli }));
+    if (localReviewSection) {
+      lines.push(`${step++}. ${localReviewCompletionInstruction(localReviewRequired)}`);
+      lines.push('', localReviewSection, '');
+    }
+    lines.push(...buildManualPrCreateStep(step++, { branchName, baseBranch, forgeCli, localReviewStateRequired: Boolean(localReviewSection) }));
     lines.push(`${step++}. Work through the **${runsReviewLoop ? 'Review Loop' : 'Merge Gate'}** section below in full — it ends by merging the PR. Come back here when it is done.`);
   } else if (willOpenPR) {
     const handoff = policyLeavesOpen
@@ -653,7 +743,7 @@ export function inlinePrLifecycleSection(task, { providerType, providerId, provi
  */
 export function buildInlineReviewLoopSection({
   taskId, branchName, runsReviewLoop, leaveOpen, localAgentLoopBody, localAgentLoopBodyPath = null, writesSentinel = false,
-  reviewers, usernames, optionalReviewers, reviewerMaxRounds, reviewerModels, reviewerEfforts, reviewStopMode, reviewerApplies, forgeCli = 'gh',
+  reviewers, usernames, optionalReviewers, reviewerMaxRounds, reviewerModels, reviewerEfforts, reviewStopMode, reviewerApplies, localPhaseReviewers = [], localPhaseCanShortCircuit = false, reviewerPositions = [], forgeCli = 'gh', workflowStep,
 }) {
   // Where control goes after the merge. A TUI run still owes PortOS its
   // `.agent-done` sentinel — telling it to "exit" here is how a finished merge
@@ -678,7 +768,7 @@ export function buildInlineReviewLoopSection({
     // exactly as the merge-only follow-up gets.
     reviewLoopMergeOnly: !runsReviewLoop,
     sourceTaskId: taskId || 'unknown',
-  }, { verbose: false, localAgentLoopBody, localAgentLoopBodyPath, inlineExitStep, forgeCli });
+  }, { verbose: false, localAgentLoopBody, localAgentLoopBodyPath, inlineExitStep, forgeCli, inlineWorkflowStep: workflowStep, localPhaseReviewers, localPhaseCanShortCircuit, reviewerPositions });
 }
 
 /**
@@ -691,11 +781,11 @@ export function buildInlineReviewLoopSection({
  * CLI providers fall through to the legacy commit-only block where PortOS
  * handles push+PR on exit.
  */
-export function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, hasSlashdo = false, ownsPrWorkflow = false, simplifyEnabled = false, leavePrOpen = false, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewerModels = {}, reviewerEfforts = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, forgeCli = 'gh' }) {
+export function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, hasSlashdo = false, ownsPrWorkflow = false, simplifyEnabled = false, leavePrOpen = false, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewerModels = {}, reviewerEfforts = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, forgeCli = 'gh', noChangeSuccess = false, localReviewSection = '', localReviewRequired = true, postPrReview = null }) {
   const policyLeavesOpen = prCompletion === PR_COMPLETIONS.LEAVE_OPEN;
-  const runsReviewLoop = prCompletion === PR_COMPLETIONS.REVIEW_THEN_MERGE;
+  const runsReviewLoop = postPrReview ?? (prCompletion === PR_COMPLETIONS.REVIEW_THEN_MERGE);
   if (hasSlashdo && worktreeInfo && willOpenPR) {
-    const lines = ['## Completion', 'When finished, run these in order:'];
+    const lines = ['## Completion', ...(noChangeSuccess ? ['', NO_CHANGE_AUDIT_GUIDANCE, ''] : []), 'When finished, run these in order:'];
     let step = 1;
     if (simplifyEnabled) {
       lines.push(`${step++}. \`/simplify\` — review the changed code for reuse, quality, and efficiency, and fix any findings.`);
@@ -724,7 +814,7 @@ export function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompleti
     return lines.join('\n');
   }
   if (hasSlashdo && worktreeInfo) {
-    const lines = ['## Completion', 'When finished, run these in order:'];
+    const lines = ['## Completion', ...(noChangeSuccess ? ['', NO_CHANGE_AUDIT_GUIDANCE, ''] : []), 'When finished, run these in order:'];
     let step = 1;
     if (simplifyEnabled) {
       lines.push(`${step++}. \`/simplify\` — review the changed code for reuse, quality, and efficiency, and fix any findings.`);
@@ -739,16 +829,21 @@ export function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompleti
   // `ownsPrWorkflow` already folds in `willOpenPR`, the worktree, and the
   // leave-open exclusions (it is `inlinePrLifecycleSection() !== null`).
   if (ownsPrWorkflow) {
-    const lines = ['## Completion', '**You own this PR end to end — nothing else will open, review, or merge it.** When finished, run these in order:'];
+    const lines = ['## Completion', ...(noChangeSuccess ? ['', NO_CHANGE_AUDIT_GUIDANCE, ''] : []), '**You own this PR end to end — nothing else will open, review, or merge it.** When finished, run these in order:'];
     let step = 1;
     lines.push(simplifyEnabled
       ? `${step++}. Before committing, ${SIMPLIFY_INLINE_REVIEW} and fix any findings.`
       : `${step++}. (simplify disabled — skip)`);
     lines.push(`${step++}. Stage only the files you changed (never \`git add -A\` / \`git add .\`) and commit with a conventional message (\`feat:\`/\`fix:\`/\`breaking:\` prefix, no Co-Authored-By annotations).`);
+    if (localReviewSection) {
+      lines.push(`${step++}. ${localReviewCompletionInstruction(localReviewRequired)}`);
+      lines.push('', localReviewSection, '');
+    }
     lines.push(...buildManualPrCreateStep(step++, {
       branchName: worktreeInfo?.branchName || null,
       baseBranch: worktreeInfo?.baseBranch || null,
       forgeCli,
+      localReviewStateRequired: Boolean(localReviewSection),
     }));
     lines.push(`${step}. Work through the **${runsReviewLoop ? 'Review Loop' : 'Merge Gate'}** section below in full — it ends by merging the PR.`);
     return lines.join('\n');
@@ -767,5 +862,5 @@ export function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompleti
   const simplifyLine = simplifyEnabled
     ? `Before committing, ${SIMPLIFY_INLINE_REVIEW} and fix any findings. `
     : '';
-  return `## Completion\n${simplifyLine}${body}`;
+  return `## Completion\n${noChangeSuccess ? `${NO_CHANGE_AUDIT_GUIDANCE} ` : ''}${simplifyLine}${body}`;
 }

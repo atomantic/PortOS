@@ -69,9 +69,11 @@ export default function Apps() {
   }, [fetchApps]);
 
   const handleDelete = async (app) => {
-    await api.deleteApp(app.id);
+    const removed = await api.deleteApp(app.id).then(() => true, () => false);
+    if (!removed) return;
     setConfirmingDelete(null);
-    fetchApps();
+    setApps(prev => prev.filter(candidate => candidate.id !== app.id));
+    toast.success(`${app.name} removed from PortOS — files kept on disk`);
   };
 
   const handleStart = async (app) => {
@@ -461,8 +463,8 @@ export default function Apps() {
                     )}
 
                     {/* Manage is the row's single primary action; the rare and
-                        destructive ones (Archive/Delete) live behind the "…"
-                        menu so Delete isn't the loudest control on the card. */}
+                        destructive ones (Archive/Remove) live behind the "…"
+                        menu so removal isn't the loudest control on the card. */}
                     <div className="flex items-center gap-2">
                       <Link
                         to={`/apps/${app.id}/overview`}
@@ -471,7 +473,7 @@ export default function Apps() {
                       >
                         Manage
                       </Link>
-                      {/* Archive + Delete are withheld for the PortOS baseline app */}
+                      {/* Archive + Remove are withheld for the PortOS baseline app */}
                       {app.id !== api.PORTOS_APP_ID && (
                         <OverflowMenu
                           label={`More actions for ${app.name}`}
@@ -485,8 +487,8 @@ export default function Apps() {
                               onSelect: () => (app.archived ? handleUnarchive(app) : handleArchive(app)),
                             },
                             {
-                              id: 'delete',
-                              label: 'Delete',
+                              id: 'remove',
+                              label: 'Remove from PortOS',
                               icon: Trash2,
                               tone: 'danger',
                               onSelect: () => setConfirmingDelete(app.id),
@@ -502,10 +504,10 @@ export default function Apps() {
                   <InlineConfirmRow
                     className="mt-3"
                     autoFocus
-                    question={`Delete ${app.name}? This removes it from PortOS and cannot be undone.`}
-                    confirmText="Delete"
-                    cancelText="Cancel"
-                    aria-label={`Confirm deletion of ${app.name}`}
+                    question={`Remove ${app.name} from PortOS? Its repository will stay on disk.`}
+                    confirmText="Remove"
+                    cancelText="Keep"
+                    aria-label={`Confirm removal of ${app.name} from PortOS`}
                     onConfirm={() => handleDelete(app)}
                     onCancel={() => {
                       setConfirmingDelete(null);

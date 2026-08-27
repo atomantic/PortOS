@@ -37,7 +37,7 @@ vi.mock('./pm2.js', () => ({
 import { atomicWrite, readJSONFile } from '../lib/fileUtils.js';
 import { listProcessesStrict } from './pm2.js';
 import { resetExecutionHistory } from './taskSchedule.js';
-import { annotateExpectedExit, createApp, getAppStatuses, getAppStatusSummary, getDesktopProcessNames, getReservedPorts, invalidateCache, PORTOS_APP_ID, resolvePm2HomeForProcess, updateAppTaskTypeOverride } from './apps.js';
+import { annotateExpectedExit, createApp, deleteApp, getAppStatuses, getAppStatusSummary, getDesktopProcessNames, getReservedPorts, invalidateCache, PORTOS_APP_ID, resolvePm2HomeForProcess, updateApp, updateAppTaskTypeOverride } from './apps.js';
 
 describe('pr-watcher cooldown reset', () => {
   beforeEach(() => {
@@ -230,6 +230,41 @@ describe('portless / desktop apps (#2991)', () => {
     expect(stored.devUiPort).toBeNull();
   });
 
+  it('createApp persists an explicit repo-state-audit opt-out, and leaves it absent otherwise', async () => {
+    // Absent means ON (repoStateVerificationEnabled), so createApp must NOT stamp a
+    // default — that would freeze the app against a later change of that default.
+    // But an explicit `false` has to survive, or a new app cannot opt out via POST
+    // at all: createApp builds the record field-by-field and drops anything it
+    // doesn't name.
+    readJSONFile.mockResolvedValue({ apps: { [PORTOS_APP_ID]: { name: 'PortOS' } } });
+
+    const optedOut = await createApp({
+      name: 'Quiet App',
+      repoPath: '/tmp/quiet-app',
+      verifyRepoStateOnCompletion: false,
+    });
+    expect(optedOut.verifyRepoStateOnCompletion).toBe(false);
+    expect(atomicWrite.mock.calls.at(-1)[1].apps[optedOut.id].verifyRepoStateOnCompletion).toBe(false);
+
+    const unset = await createApp({ name: 'Default App', repoPath: '/tmp/default-app' });
+    expect(unset).not.toHaveProperty('verifyRepoStateOnCompletion');
+    expect(atomicWrite.mock.calls.at(-1)[1].apps[unset.id]).not.toHaveProperty('verifyRepoStateOnCompletion');
+  });
+
+  it('createApp preserves managed-app feature overrides', async () => {
+    readJSONFile.mockResolvedValue({ apps: { [PORTOS_APP_ID]: { name: 'PortOS' } } });
+    const featureOverrides = { datadog: true, jira: null, gsd: false };
+
+    const created = await createApp({
+      name: 'Feature App',
+      repoPath: '/tmp/feature-app',
+      featureOverrides,
+    });
+
+    expect(created.featureOverrides).toEqual(featureOverrides);
+    expect(atomicWrite.mock.calls.at(-1)[1].apps[created.id].featureOverrides).toEqual(featureOverrides);
+  });
+
   it('createApp preserves web ports when a separate native target is present', async () => {
     readJSONFile.mockResolvedValue({ apps: { [PORTOS_APP_ID]: { name: 'PortOS' } } });
     const nativeLaunch = {
@@ -413,6 +448,34 @@ describe('portless / desktop apps (#2991)', () => {
   });
 });
 
+describe('managed app feature overrides', () => {
+  beforeEach(() => {
+    invalidateCache();
+    vi.clearAllMocks();
+  });
+
+  it('merges partial updates without deleting sibling overrides', async () => {
+    readJSONFile.mockResolvedValue({
+      apps: {
+        [PORTOS_APP_ID]: { name: 'PortOS' },
+        'app-1': {
+          name: 'Feature App',
+          featureOverrides: { datadog: true, gsd: false },
+        },
+      },
+    });
+
+    const updated = await updateApp('app-1', { featureOverrides: { jira: false } });
+
+    expect(updated.featureOverrides).toEqual({ datadog: true, jira: false, gsd: false });
+    expect(atomicWrite.mock.calls.at(-1)[1].apps['app-1'].featureOverrides).toEqual({
+      datadog: true,
+      jira: false,
+      gsd: false,
+    });
+  });
+});
+
 describe('resolvePm2HomeForProcess', () => {
   beforeEach(() => {
     invalidateCache();
@@ -454,6 +517,34 @@ describe('resolvePm2HomeForProcess', () => {
     });
 
     await expect(resolvePm2HomeForProcess('example-api')).resolves.toBeNull();
+  });
+});
+
+describe('deleteApp', () => {
+  beforeEach(() => {
+    invalidateCache();
+    vi.clearAllMocks();
+  });
+
+  it('removes only the PortOS registry record and preserves the app path data', async () => {
+    readJSONFile.mockResolvedValue({
+      apps: {
+        [PORTOS_APP_ID]: { name: 'PortOS' },
+        'app-1': { name: 'Example App', repoPath: '/mock/example-app' },
+      },
+    });
+
+    await expect(deleteApp('app-1')).resolves.toBe(true);
+
+    const persisted = atomicWrite.mock.calls.at(-1)[1];
+    expect(persisted.apps['app-1']).toBeUndefined();
+    expect(persisted.apps[PORTOS_APP_ID]).toMatchObject({ name: 'PortOS' });
+  });
+
+  it('protects the PortOS baseline record', async () => {
+    await expect(deleteApp(PORTOS_APP_ID)).resolves.toBe(false);
+    expect(readJSONFile).not.toHaveBeenCalled();
+    expect(atomicWrite).not.toHaveBeenCalled();
   });
 });
 

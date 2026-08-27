@@ -8,8 +8,10 @@
 
 import { writeFile } from 'fs/promises'
 import { join } from 'path'
-import { ensureDir, tryReadFile } from '../../lib/fileUtils.js'
+import { ensureDir, PATHS, tryReadFile } from '../../lib/fileUtils.js'
 import { JOBS_SKILLS_DIR, JOB_SKILL_MAP } from './constants.js'
+import { getAppById } from '../apps.js'
+import { appendTaskDataInputs, resolveTaskDataInputs } from '../taskDataInputs.js'
 
 /**
  * Load a job skill template from disk
@@ -142,7 +144,16 @@ async function getJobEffectivePrompt(job) {
  * @returns {Promise<Object>} Task data suitable for cos.addTask()
  */
 async function generateTaskFromJob(job) {
-  const description = await getJobEffectivePrompt(job)
+  const prompt = await getJobEffectivePrompt(job)
+  const selectedInputs = Array.isArray(job.dataInputs) ? job.dataInputs : []
+  const app = selectedInputs.length > 0
+    ? (job.appId ? await getAppById(job.appId) : { id: null, name: 'PortOS', repoPath: PATHS.root })
+    : null
+  const inputs = selectedInputs.length > 0
+    ? await resolveTaskDataInputs(selectedInputs, { app })
+    : []
+  const taskPrompt = appendTaskDataInputs(prompt, inputs)
+  const description = taskPrompt.split('\n').map(line => line.trim()).find(Boolean) || job.name
   const meta = job.taskMetadata || {}
   return {
     id: `${job.id}-${Date.now().toString(36)}`,
@@ -154,6 +165,7 @@ async function generateTaskFromJob(job) {
       jobName: job.name,
       jobCategory: job.category,
       autonomyLevel: job.autonomyLevel,
+      prompt: taskPrompt,
       // App-scoped jobs carry the target app id so prepareAgentWorkspace resolves
       // the agent's workspace to the app's repoPath. Absent = runs in PortOS root.
       ...(job.appId != null ? { app: job.appId } : {}),
@@ -162,6 +174,10 @@ async function generateTaskFromJob(job) {
       ...(meta.useWorktree != null ? { useWorktree: meta.useWorktree } : {}),
       ...(meta.openPR != null ? { openPR: meta.openPR } : {}),
       ...(meta.simplify != null ? { simplify: meta.simplify } : {}),
+      // Some PortOS-owned audits can legitimately conclude that no change is
+      // needed. This is only a completion marker; agentFinalization still
+      // requires verifyPrClaim to prove the branch is empty before honoring it.
+      ...(meta.noChangeSuccess === true ? { noChangeSuccess: true } : {}),
       // Optional per-job AI provider + model override. resolveAgentProviderAndModel
       // reads metadata.provider to switch providers and selectModelForTask reads
       // metadata.model as the highest-priority model choice. Absent = active

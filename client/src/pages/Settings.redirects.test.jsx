@@ -18,13 +18,14 @@ function Landed() {
   return <div data-testid="landed">{`${pathname}${search}`}</div>;
 }
 
-// Two former Settings tabs now live as drawers over the page they configure.
+// Former Settings tabs now live as drawers over the pages they configure.
 // Their old /settings/<tab> URLs stay live as redirects so bookmarks, stale ⌘K
 // history, and older docs keep working — and land with the drawer already open.
 describe('Settings — retired tabs redirect to their drawer', () => {
   it.each([
     ['/settings/image-gen', '/media/image?settings=1'],
     ['/settings/imessage', '/messages/imessage?settings=1'],
+    ['/settings/catalog', '/catalog?settings=1'],
   ])('%s → %s', (from, to) => {
     render(
       <MemoryRouter initialEntries={[from]}>

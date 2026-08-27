@@ -36,8 +36,10 @@ see `OpenWorldDepthOfField.jsx`.
 
 Current gaps:
 
-- **Per-building real-time signal** — the world maps app status and process presence,
-  but CPU/memory/error-rate telemetry is not yet shown on each building.
+- **Always-on per-building signal** — live CPU/MEM/uptime/restarts from `app.pm2Status`
+  now surface in the building hologram (hover / proximity / focus) and the focus panel
+  (see `openWorldAppMetrics`); what remains is a glyph visible at any distance without
+  approaching the building.
 - **Mutation surface** — the city remains read-only; explicit restart, deploy, and log
   actions still belong to the canonical app surfaces.
 - **Geometry breadth** — the shared app-building grammar still carries much of the live
@@ -126,7 +128,7 @@ what's healthy, what's not, find a specific app, and take action.
 
 | ID | Item | Effort |
 |----|------|--------|
-| **1.1** | **Per-building health glyph** — vertical CPU/MEM/ERR strip on every building façade, cyan→amber→red mapped from `/api/system/health/details` + PM2 metrics. The single highest-leverage change: every building tells you what it's doing right now. | M |
+| **1.1** | **Per-building health glyph** — live CPU/MEM/uptime/restarts aggregated from `app.pm2Status` (`openWorldAppMetrics`) and shown on every building hologram when hovered/near/focused plus CPU/MEM/UPTIME blocks in the focus panel. Shipped 2026-08-26; the remaining slice is an always-visible façade strip readable at any distance. | M |
 | **1.2** | **Stress smoke / sparks** — reuse `OpenWorldEmbers` per-building. Persistent CPU spike = smoke trail; recent crash = sparks. Brings global weather vocabulary down to the per-building level. | S |
 | **1.3** | **Health card replaces cryptic weather glyph** — HUD shows plain `CPU 34% / MEM 71% / DISK 88%` with a sentinel dot. Atmospheric weather effect stays. | XS |
 | **1.4** | **System Health as City Atmosphere** — pipe `/api/system/health/details` into existing weather/fog/ground texture so the sky reflects real state. | S |

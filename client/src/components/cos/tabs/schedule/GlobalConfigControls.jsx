@@ -17,6 +17,7 @@ import { effectiveModelFor } from '../../../../utils/providers';
 import EffortSelect from '../../EffortSelect';
 import PromptEditor from './PromptEditor';
 import RunTaskButton from './RunTaskButton';
+import TaskDataInputs from '../../TaskDataInputs';
 import { INTERVAL_DESCRIPTIONS, toggleMetadataField, pipelineStages, IMPROVEMENT_DISABLED_TITLE, SAVING_TITLE, fileIssuesEffective, managedAgentOptionsFor, toggleFileIssuesMetadata } from './scheduleConstants';
 
 // Shown for the unpinned ('' → inherit) choice: the task type is global, so the
@@ -39,7 +40,7 @@ const REVIEW_CONFIG_KEYS = [
   'reviewerApplies',
 ];
 
-export default function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, category: _category, providers, activeProviderId, apps, updating, setUpdating, allTaskTypes, improvementDisabled }) {
+export default function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, category: _category, providers, activeProviderId, apps, updating, setUpdating, allTaskTypes, improvementDisabled, dataInputCatalog }) {
   const reviewDefaults = useCodeReviewDefaults();
   // Resolved model lists for the reviewer table's Model column (the picker itself
   // never fetches — see its `modelOptions` prop).
@@ -504,6 +505,17 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
         activeApps={activeApps}
       />
 
+      <TaskDataInputs
+        catalog={dataInputCatalog}
+        value={config.dataInputs || []}
+        disabled={updating}
+        onChange={async (dataInputs) => {
+          setUpdating(true);
+          await onUpdate(taskType, { dataInputs });
+          setUpdating(false);
+        }}
+      />
+
       {config.fileIssuesCapable && (
         <button
           type="button"
@@ -663,6 +675,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
           taskType={taskType}
           apps={apps}
           onTrigger={onTrigger}
+          installWide={config.installWide}
           // `updating` covers an in-flight pin write here, same race the card gates on.
           disabledReason={improvementDisabled ? IMPROVEMENT_DISABLED_TITLE : (updating ? SAVING_TITLE : '')}
         />

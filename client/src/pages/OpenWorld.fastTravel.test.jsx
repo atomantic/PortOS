@@ -39,6 +39,14 @@ vi.mock('../hooks/useOpenWorldPlayback', async () => {
 });
 vi.mock('../hooks/useOpenWorldAudio', () => ({ default: () => ({ playSfx: vi.fn(), isAudioReady: false }) }));
 vi.mock('../hooks/useAutoRefetch', () => ({ useAutoRefetch: () => ({ data: null }) }));
+vi.mock('../hooks/useInstanceFeatures', () => ({
+  useInstanceFeatures: () => ({
+    features: [],
+    error: null,
+    isFeatureEnabled: () => true,
+    reload: () => Promise.resolve(),
+  }),
+}));
 // Only the endpoints this page polls, from the shared page fixture. The vi.mock
 // CALL has to stay here (vitest hoists it), so the factory dynamic-imports it.
 vi.mock('../services/api', async () => (await import('../test/openWorldPageMocks.js')).openWorldApiMock(vi));

@@ -1,5 +1,6 @@
 import { GitBranch, ShieldCheck, Lightbulb } from 'lucide-react';
 import ToggleChip from '../ui/ToggleChip';
+import AgentJobProviderFields from '../cos/AgentJobProviderFields';
 
 /**
  * The "this URL is a GitHub repo" affordance shared by both Brain capture boxes
@@ -34,9 +35,13 @@ export const REPO_INTAKE_OPTIONS = [
  * @param {{malwareScan: boolean, learn: boolean}} props.options
  * @param {string} props.studyContext
  * @param {(context: string) => void} props.onStudyContextChange
+ * @param {{providerId: string, model: string, effort: string}} props.providerOverride
+ * @param {Array} props.providers
+ * @param {string} props.activeProviderId
+ * @param {(patch: object) => void} props.onProviderOverrideChange
  * @param {(key: string) => void} props.onToggle
  */
-export default function RepoIntakeOptions({ idPrefix, repo, options, managedApps = [], targetAppId, onTargetAppChange, studyContext = '', onStudyContextChange, onToggle }) {
+export default function RepoIntakeOptions({ idPrefix, repo, options, managedApps = [], targetAppId, onTargetAppChange, studyContext = '', onStudyContextChange, providerOverride = { providerId: '', model: '', effort: '' }, providers = [], activeProviderId = '', onProviderOverrideChange, onToggle }) {
   if (!repo) return null;
 
   return (
@@ -87,6 +92,21 @@ export default function RepoIntakeOptions({ idPrefix, repo, options, managedApps
             placeholder="What should the agent look for, and where might an implementation fit?"
             className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
           />
+        </div>
+      )}
+      {options.learn && (
+        <div className="pt-1">
+          <AgentJobProviderFields
+            data={providerOverride}
+            providers={providers}
+            activeProviderId={activeProviderId}
+            onChange={onProviderOverrideChange}
+          />
+          {providers.length > 0 && (
+            <p className="mt-1 text-xs text-gray-500">
+              Optional override for this study only. Leave it on the default to use the configured CoS provider.
+            </p>
+          )}
         </div>
       )}
       {REPO_INTAKE_OPTIONS.some(({ key }) => options[key]) && (

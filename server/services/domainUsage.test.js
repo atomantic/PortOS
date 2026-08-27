@@ -22,10 +22,15 @@ const {
   getAllDomainUsageToday,
   getDomainBudgetStatus
 } = await import('./domainUsage.js');
+const {
+  __resetCosAdmissionReservations,
+  acquireCosActionReservation,
+} = await import('./cosAdmissionReservations.js');
 
 beforeEach(() => {
   store = new Map();
   mockConfig = {};
+  __resetCosAdmissionReservations();
 });
 
 describe('recordDomainUsage + getDomainUsageToday', () => {
@@ -93,6 +98,17 @@ describe('getDomainBudgetStatus', () => {
     const status = await getDomainBudgetStatus('cos');
     expect(status.withinBudget).toBe(false);
     expect(status.exceeded).toBe('actions');
+  });
+
+  it('counts a pending CoS action reservation before usage is recorded', async () => {
+    mockConfig = { domainBudgets: { cos: { maxActionsPerDay: 1 } } };
+    const reservation = acquireCosActionReservation({
+      budget: { maxActionsPerDay: 1 },
+      usage: { actions: 0, ms: 0 },
+      reservationId: 'persistent-mind-turn',
+    });
+    expect((await getDomainBudgetStatus('cos')).withinBudget).toBe(false);
+    reservation.release();
   });
 
   it('reports exceeded once the minutes cap is reached', async () => {

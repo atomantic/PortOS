@@ -39,11 +39,24 @@ unknown artifacts, or wide diffs.
 PRs into `release` skip the planner entirely and force the full suite: that PR
 is the single gate a release ships behind.
 
-A short always-run list (`ALWAYS_RUN_TESTS` in the planner) is added to every
-plan, so no impact scope can drop it — currently
-`server/services/taskPromptDefaults.test.js` (cross-install prompt-upgrade). A
-documentation-only PR therefore still runs the server job with that file
-selected.
+An always-run list (`ALWAYS_RUN_TESTS` in the planner) is added to every plan,
+so no impact scope can drop it. A documentation-only PR therefore still runs the
+server job with those files selected. Two kinds of test qualify:
+
+- **Cross-install contract snapshots** — `server/services/taskPromptDefaults.test.js`
+  pins the prompt-upgrade contract, and nothing else in the suite notices when
+  it breaks.
+- **Repo-hygiene guards that enumerate the tracked tree** with `git grep` /
+  `git ls-files` and assert over files they never import. Impact selection is
+  import-graph-driven, so it has no edge that can reach them — the violating
+  file is always some *other* file the guard sees only as a path string. Left
+  off the list they are structurally unselectable and can sit red on `main`
+  while every PR reports green (issue #5055).
+
+`scripts/repo-scan-guards.test.js` keeps the second half honest: it re-derives
+the scanner set from the tree and fails when a new scanner is added without
+being registered, either in `ALWAYS_RUN_TESTS` or in its own
+`STRUCTURALLY_SELECTED` map naming the selector that already reaches it.
 
 ### Vitest runner tuning
 

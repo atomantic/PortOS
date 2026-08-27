@@ -146,6 +146,7 @@ export const memoryListSchema = z.object({
   tags: csvList(z.array(z.string().max(50)).optional()),
   status: emptyToUndefined(memoryStatusEnum.optional().default('active')),
   appId: emptyToUndefined(z.string().max(100).optional()),
+  sourceAgentId: emptyToUndefined(z.string().max(128).optional()),
   limit: numeric(z.number().int().min(1).max(500).optional().default(50)),
   offset: numeric(z.number().int().min(0).optional().default(0)),
   sortBy: emptyToUndefined(z.enum(['createdAt', 'updatedAt', 'importance', 'accessCount']).optional().default('createdAt')),

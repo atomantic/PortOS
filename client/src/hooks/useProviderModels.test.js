@@ -91,6 +91,65 @@ describe('useProviderModels — Antigravity base models', () => {
   });
 });
 
+describe('useProviderModels — provider envelope metadata', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('exposes the configured active provider alongside the catalog', async () => {
+    api.getProviders.mockResolvedValue({ activeProvider: 'codex', providers: [CODEX] });
+    const { result } = renderHook(() => useProviderModels({ allowDefault: true }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.activeProviderId).toBe('codex');
+  });
+});
+
+describe('useProviderModels — lazy loading', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('does not fetch while disabled and fetches when enabled', async () => {
+    api.getProviders.mockResolvedValue({ providers: [CODEX] });
+    const hook = renderHook(
+      ({ enabled }) => useProviderModels({ allowDefault: true, enabled }),
+      { initialProps: { enabled: false } },
+    );
+
+    expect(hook.result.current.loading).toBe(false);
+    expect(api.getProviders).not.toHaveBeenCalled();
+
+    hook.rerender({ enabled: true });
+    await waitFor(() => expect(hook.result.current.loading).toBe(false));
+    expect(api.getProviders).toHaveBeenCalledTimes(1);
+    expect(hook.result.current.providers).toEqual([CODEX]);
+  });
+
+  it('ignores a provider response from a load invalidated by disable and re-enable', async () => {
+    const deferred = () => {
+      let resolve;
+      const promise = new Promise((res) => { resolve = res; });
+      return { promise, resolve };
+    };
+    const first = deferred();
+    const second = deferred();
+    api.getProviders.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const replacement = { ...CODEX, id: 'replacement', name: 'Replacement' };
+    const hook = renderHook(
+      ({ enabled }) => useProviderModels({ allowDefault: true, enabled }),
+      { initialProps: { enabled: true } },
+    );
+
+    await waitFor(() => expect(api.getProviders).toHaveBeenCalledTimes(1));
+    hook.rerender({ enabled: false });
+    await waitFor(() => expect(hook.result.current.loading).toBe(false));
+    hook.rerender({ enabled: true });
+    await waitFor(() => expect(api.getProviders).toHaveBeenCalledTimes(2));
+
+    await act(async () => { first.resolve({ providers: [CODEX] }); });
+    expect(hook.result.current.providers).toEqual([]);
+
+    await act(async () => { second.resolve({ providers: [replacement] }); });
+    await waitFor(() => expect(hook.result.current.providers).toEqual([replacement]));
+  });
+});
+
 // A capability-scoped picker (vision) starts on the client-side id regex and
 // widens once the server's authoritative list resolves, so its `modelFilter`
 // identity changes AFTER the first load. Stand-in filters here: the contract

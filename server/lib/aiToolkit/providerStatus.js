@@ -10,6 +10,7 @@ import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { atomicWrite } from './internal/atomicWrite.js';
+import { isOllamaBackedProvider } from './internal/ollamaBacked.js';
 
 /**
  * Gate a *configured* fallback-model pin against the fallback provider's own
@@ -47,6 +48,82 @@ export function usableFallbackModel(provider, pinnedModel) {
   return null;
 }
 
+// Mirrored from the host's generation-model classifier because aiToolkit must
+// stay self-contained. Fallback admission must inspect the model the executor
+// will actually run, not an embedding-only configured pin/default.
+const EMBEDDING_MODEL_RE =
+  /(?:^|[-_/:])(?:embed|embedding|bge|nomic|mxbai|gte|e5|snowflake-arctic-embed)(?:[-_/:]|$)|text-embedding|embeddinggemma|minilm|paraphrase-multilingual/i;
+
+function isGenerationModelId(model) {
+  return typeof model === 'string' && model.length > 0 && !EMBEDDING_MODEL_RE.test(model);
+}
+
+function extractBakedModel(args) {
+  if (!Array.isArray(args)) return null;
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (typeof arg !== 'string') continue;
+    if (arg === '--model' || arg === '-m') {
+      const next = args[i + 1];
+      return typeof next === 'string' && next.length > 0 && !next.startsWith('-') ? next : null;
+    }
+    if (arg.startsWith('--model=')) return arg.slice('--model='.length) || null;
+    if (arg.startsWith('-m=')) return arg.slice('-m='.length) || null;
+  }
+  return null;
+}
+
+function resolvedFallbackModel(provider, correctedModel) {
+  const baked = provider?.type === 'cli' || provider?.type === 'tui'
+    ? extractBakedModel(provider?.args)
+    : null;
+  const candidates = baked
+    ? [baked, provider?.defaultModel]
+    : [correctedModel, provider?.defaultModel];
+  return candidates.find(isGenerationModelId)
+    || provider?.models?.find(isGenerationModelId)
+    || provider?.models?.[0]
+    || null;
+}
+
+function knownContextWindow(provider, model) {
+  const explicit = Number(provider?.contextWindow);
+  const catalog = Number(model && provider?.modelContextWindows?.[model]);
+  const runtime = Number(provider?.numCtx);
+  const planning = Number.isFinite(explicit) && explicit > 0
+    ? explicit
+    : (Number.isFinite(catalog) && catalog > 0 ? catalog : null);
+  // Only Ollama honors the runner's top-level num_ctx option. When configured,
+  // it is the real runtime ceiling and therefore constrains any wider planning
+  // or catalog window; other OpenAI-compatible endpoints ignore the field.
+  if (isOllamaBackedProvider(provider) && Number.isFinite(runtime) && runtime > 0) {
+    return planning ? Math.min(planning, runtime) : runtime;
+  }
+  return planning;
+}
+
+function capabilityRejection(provider, model, requestCapabilities) {
+  if (!requestCapabilities || typeof requestCapabilities !== 'object') return null;
+  if (requestCapabilities.hasImages === true && provider?.type !== 'api') {
+    return 'cannot transmit image input';
+  }
+
+  const required = Number(requestCapabilities.requiredContextTokens);
+  const available = knownContextWindow(provider, model);
+  if (Number.isFinite(required) && required > 0 && available && required > available) {
+    return `known ${available}-token context is below the ${required}-token request budget`;
+  }
+  return null;
+}
+
+function noEligibleFallbackError(rejections) {
+  const detail = rejections.map(({ provider, reason }) => `${provider}: ${reason}`).join('; ');
+  const error = new Error(`No eligible fallback can satisfy this request (${detail})`);
+  error.code = 'NO_ELIGIBLE_FALLBACK';
+  error.rejections = rejections;
+  return error;
+}
+
 export function createProviderStatusService(config = {}) {
   const {
     dataDir = './data',
@@ -61,6 +138,7 @@ export function createProviderStatusService(config = {}) {
     defaultUsageLimitWait = 10 * 60 * 1000,
     maxUsageLimitWait = 5 * 60 * 60 * 1000,
     defaultRateLimitWait = 5 * 60 * 1000,
+    maxRateLimitWait = 5 * 60 * 60 * 1000,
     onStatusChange = null,
     // Host-supplied `(provider, providers) => boolean` answering "can this
     // provider run at all right now?" — its CLI binary present, its credential
@@ -100,6 +178,7 @@ export function createProviderStatusService(config = {}) {
     providers: {},
     lastUpdated: null
   };
+  let statusWriteTail = Promise.resolve();
 
   async function loadStatus() {
     if (!existsSync(STATUS_PATH)) {
@@ -112,8 +191,11 @@ export function createProviderStatusService(config = {}) {
 
   async function saveStatus(status) {
     status.lastUpdated = new Date().toISOString();
-    await atomicWrite(STATUS_PATH, status);
     statusCache = status;
+    const snapshot = JSON.parse(JSON.stringify(status));
+    const write = statusWriteTail.then(() => atomicWrite(STATUS_PATH, snapshot));
+    statusWriteTail = write.catch(() => {});
+    await write;
   }
 
   function parseWaitTime(waitTimeStr) {
@@ -148,8 +230,46 @@ export function createProviderStatusService(config = {}) {
     return parts.join(' ') || '< 1m';
   }
 
+  function rateLimitDelay(window) {
+    if (!window) return null;
+    if (Number.isFinite(window.retryAfterMs) && window.retryAfterMs >= 0) return window.retryAfterMs;
+    if (window.resetAt) {
+      const delay = new Date(window.resetAt).getTime() - Date.now();
+      if (Number.isFinite(delay) && delay >= 0) return delay;
+    }
+    return null;
+  }
+
+  function sanitizedRateLimitWindow(window) {
+    if (!window || typeof window !== 'object') return null;
+    const observed = new Date(window.observedAt).getTime();
+    const maxWindowWait = Math.max(maxRateLimitWait, maxUsageLimitWait);
+    if (!Number.isFinite(observed) || Date.now() - observed > maxWindowWait) return null;
+    const clean = { observedAt: new Date(observed).toISOString() };
+    if (Number.isSafeInteger(window.retryAfterMs) && window.retryAfterMs >= 0) clean.retryAfterMs = Math.min(window.retryAfterMs, maxWindowWait);
+    const reset = new Date(window.resetAt).getTime();
+    if (Number.isFinite(reset) && reset >= observed) clean.resetAt = new Date(Math.min(reset, observed + maxWindowWait)).toISOString();
+    if (Number.isSafeInteger(window.remaining) && window.remaining >= 0 && window.remaining <= 1_000_000_000) clean.remaining = window.remaining;
+    if (Number.isSafeInteger(window.limit) && window.limit >= 0 && window.limit <= 1_000_000_000) clean.limit = window.limit;
+    return Object.keys(clean).length > 1 ? clean : null;
+  }
+
+  function presentStatus(status) {
+    if (!status) return status;
+    const rateLimitWindow = sanitizedRateLimitWindow(status.rateLimitWindow);
+    const { rateLimitWindow: _storedWindow, ...rest } = status;
+    return rateLimitWindow ? { ...rest, rateLimitWindow } : rest;
+  }
+
+  function sanitizedExtras(extras) {
+    if (!extras || typeof extras !== 'object') return {};
+    const { rateLimitWindow, ...rest } = extras;
+    const cleanWindow = sanitizedRateLimitWindow(rateLimitWindow);
+    return cleanWindow ? { ...rest, rateLimitWindow: cleanWindow } : rest;
+  }
+
   function emitStatusChange(providerId, status, type) {
-    const eventData = { providerId, status, type };
+    const eventData = { providerId, status: presentStatus(status), type };
     events.emit('status:changed', eventData);
     onStatusChange?.(eventData);
   }
@@ -163,6 +283,10 @@ export function createProviderStatusService(config = {}) {
       const now = Date.now();
       let changed = false;
       for (const [providerId, status] of Object.entries(statusCache.providers)) {
+        if (status.rateLimitWindow && !sanitizedRateLimitWindow(status.rateLimitWindow)) {
+          delete status.rateLimitWindow;
+          changed = true;
+        }
         if (status.estimatedRecovery) {
           const recoveryTime = new Date(status.estimatedRecovery).getTime();
           if (now > recoveryTime) {
@@ -206,7 +330,7 @@ export function createProviderStatusService(config = {}) {
           lastChecked: new Date().toISOString()
         };
       }
-      return status;
+      return presentStatus(status);
     },
 
     getAllStatuses() {
@@ -224,7 +348,7 @@ export function createProviderStatusService(config = {}) {
             lastChecked: new Date().toISOString()
           };
         } else {
-          providers[id] = status;
+          providers[id] = presentStatus(status);
         }
       }
       return { ...statusCache, providers };
@@ -267,7 +391,7 @@ export function createProviderStatusService(config = {}) {
         estimatedRecovery,
         failureCount,
         lastChecked: now.toISOString(),
-        ...(extras && typeof extras === 'object' ? extras : {})
+        ...sanitizedExtras(extras)
       };
 
       await saveStatus(statusCache);
@@ -283,8 +407,15 @@ export function createProviderStatusService(config = {}) {
       // exceed the 5h reset-window ceiling. This keeps a "resets in 21h" estimate
       // from sidelining the primary for a day — it retries in 10m and re-benches
       // if still limited. The parsed value is still surfaced for DISPLAY.
+      const rateLimitWindow = sanitizedRateLimitWindow(errorInfo.rateLimitWindow);
+      const headerDelay = rateLimitDelay(rateLimitWindow);
+      const boundedHeaderDelay = headerDelay == null
+        ? null
+        : Math.min(Math.max(1000, headerDelay), maxUsageLimitWait);
       const parsed = parseWaitTime(errorInfo.waitTime);
       const benchMs = Math.min(
+        defaultUsageLimitWait,
+        boundedHeaderDelay ?? defaultUsageLimitWait,
         parsed && parsed < defaultUsageLimitWait ? parsed : defaultUsageLimitWait,
         maxUsageLimitWait,
       );
@@ -295,16 +426,32 @@ export function createProviderStatusService(config = {}) {
         // `waitTime` is a usage-limit-only display string ("resets 5pm") —
         // pass via extras so it's part of the SAME persisted record and
         // status:changed event, not a follow-up second write.
-        extras: errorInfo.waitTime ? { waitTime: errorInfo.waitTime } : null
+        extras: {
+          ...(errorInfo.waitTime ? { waitTime: errorInfo.waitTime } : {}),
+          ...(rateLimitWindow ? { rateLimitWindow } : {}),
+        }
       });
     },
 
-    async markRateLimited(providerId) {
+    async markRateLimited(providerId, errorInfo = {}) {
+      const rateLimitWindow = sanitizedRateLimitWindow(errorInfo.rateLimitWindow);
+      const headerDelay = rateLimitDelay(rateLimitWindow);
       return this.markUnavailable(providerId, {
         reason: 'rate-limit',
         message: 'Rate limit exceeded - temporary',
-        waitTimeMs: defaultRateLimitWait
+        waitTimeMs: Math.min(
+          headerDelay == null ? defaultRateLimitWait : Math.max(1000, headerDelay),
+          defaultRateLimitWait,
+          maxRateLimitWait,
+        ),
+        extras: rateLimitWindow ? { rateLimitWindow } : null,
       });
+    },
+
+    async markApiSuccess(providerId) {
+      const status = statusCache.providers[providerId];
+      if (!['rate-limit', 'usage-limit'].includes(status?.reason)) return status || null;
+      return this.markAvailable(providerId);
     },
 
     async markAvailable(providerId) {
@@ -335,12 +482,26 @@ export function createProviderStatusService(config = {}) {
     // and it hasn't failed lately — neither says its CLI is installed or its
     // key is stored. Skipping an un-runnable candidate here is what turns a
     // late `spawn <binary> ENOENT` into "try the next provider instead".
-    getFallbackProvider(primaryProviderId, providers, taskFallbackId = null, taskFallbackModelId = null) {
+    getFallbackProvider(primaryProviderId, providers, taskFallbackId = null, taskFallbackModelId = null, requestCapabilities = null) {
+      const capabilityRejections = [];
+      const acceptCandidate = (provider, source, pinnedModel = null) => {
+        if (!provider?.enabled || !this.isAvailable(provider.id) || !meetsPrerequisites(provider, providers)) return null;
+        // Correct stale pins before checking the selected model's window. A pin
+        // that no longer exists falls back to the provider default, and THAT
+        // model must still fit the request before the retry is admitted.
+        const model = usableFallbackModel(provider, pinnedModel);
+        const reason = capabilityRejection(provider, resolvedFallbackModel(provider, model), requestCapabilities);
+        if (reason) {
+          capabilityRejections.push({ provider: provider.name || provider.id, reason });
+          return null;
+        }
+        return { provider, source, model };
+      };
+
       if (taskFallbackId && taskFallbackId !== primaryProviderId) {
         const taskFallback = providers[taskFallbackId];
-        if (taskFallback?.enabled && this.isAvailable(taskFallback.id) && meetsPrerequisites(taskFallback, providers)) {
-          return { provider: taskFallback, source: 'task', model: usableFallbackModel(taskFallback, taskFallbackModelId) };
-        }
+        const accepted = acceptCandidate(taskFallback, 'task', taskFallbackModelId);
+        if (accepted) return accepted;
       }
 
       const primaryProvider = providers[primaryProviderId];
@@ -350,20 +511,19 @@ export function createProviderStatusService(config = {}) {
       // primaryProviderId; the configured-fallback path needs its own check.
       if (primaryProvider?.fallbackProvider && primaryProvider.fallbackProvider !== primaryProviderId) {
         const configuredFallback = providers[primaryProvider.fallbackProvider];
-        if (configuredFallback?.enabled && this.isAvailable(configuredFallback.id) && meetsPrerequisites(configuredFallback, providers)) {
-          return { provider: configuredFallback, source: 'provider', model: usableFallbackModel(configuredFallback, primaryProvider.fallbackModel) };
-        }
+        const accepted = acceptCandidate(configuredFallback, 'provider', primaryProvider.fallbackModel);
+        if (accepted) return accepted;
       }
 
       for (const providerId of defaultFallbackPriority) {
         if (providerId === primaryProviderId) continue;
 
         const provider = providers[providerId];
-        if (provider?.enabled && this.isAvailable(providerId) && meetsPrerequisites(provider, providers)) {
-          return { provider, source: 'system', model: null };
-        }
+        const accepted = acceptCandidate(provider, 'system');
+        if (accepted) return accepted;
       }
 
+      if (capabilityRejections.length > 0) throw noEligibleFallbackError(capabilityRejections);
       return null;
     },
 

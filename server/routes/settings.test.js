@@ -102,7 +102,14 @@ describe('Settings routes — instance feature participation', () => {
     const res = await request(buildApp()).get('/api/settings/features');
 
     expect(res.status).toBe(200);
-    expect(res.body.features).toEqual([expect.objectContaining({ id: 'post', label: 'POST', enabled: true })]);
+    expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'post', label: 'POST', enabled: true }));
+    // Integration-backed features ride the same list; with nothing configured
+    // they resolve off, which is what hides their nav entries.
+    expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'datadog', enabled: false }));
+    expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'jira', enabled: false }));
+    // GSD remains enabled by default so existing app planning tabs stay
+    // available unless the install explicitly opts out.
+    expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'gsd', enabled: true }));
   });
 
   it('updates one feature without replacing unrelated settings', async () => {
@@ -113,7 +120,7 @@ describe('Settings routes — instance feature participation', () => {
       .send({ enabled: false });
 
     expect(res.status).toBe(200);
-    expect(res.body.features).toEqual([expect.objectContaining({ id: 'post', enabled: false })]);
+    expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'post', enabled: false }));
     expect(store).toEqual({ theme: 'dark', instanceFeatures: { post: { enabled: false } } });
   });
 

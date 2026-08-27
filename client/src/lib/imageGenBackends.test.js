@@ -9,10 +9,20 @@ import {
   referenceSlotsFor,
   supportsReferenceStrength,
   deriveAvailableBackends,
+  imageGenReadiness,
   applyRecordRenderPin,
   renderPinLadder,
   renderTargetPin,
 } from './imageGenBackends';
+
+describe('imageGenReadiness', () => {
+  it('preserves the three-way local readiness contract and supports older responses', () => {
+    expect(imageGenReadiness({ readiness: 'ready', connected: true })).toBe('ready');
+    expect(imageGenReadiness({ readiness: 'unknown', connected: false })).toBe('unknown');
+    expect(imageGenReadiness({ connected: true })).toBe('ready');
+    expect(imageGenReadiness({ connected: false })).toBe('unavailable');
+  });
+});
 
 describe('I2I_CAPABLE_MODES / isI2iCapableMode', () => {
   it('treats every generation backend as i2i-capable, but not external', () => {

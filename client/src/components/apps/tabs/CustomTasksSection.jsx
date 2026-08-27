@@ -1,41 +1,14 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { Plus, Play, Trash2, Edit3, Save, X, Clock } from 'lucide-react';
+import { Plus, Save, X } from 'lucide-react';
 import toast from '../../ui/Toast';
-import ToggleSwitch from '../../ToggleSwitch';
-import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import FormField from '../../ui/FormField';
-import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import useUserTimezone from '../../../hooks/useUserTimezone.js';
 import * as api from '../../../services/api';
-import { timeAgo } from '../../../utils/formatters';
-import { DEFAULT_CRON, describeCron, describeRecurrence, parseCronToRecurrence, buildCronFromRecurrence } from '../../../utils/cronHelpers';
-import CronSchedulePicker from '../../CronSchedulePicker';
-import { AGENT_OPTIONS, agentOptionButtonClass } from '../../cos/constants';
+import { parseCronToRecurrence, buildCronFromRecurrence } from '../../../utils/cronHelpers';
 import AgentJobProviderFields from '../../cos/AgentJobProviderFields';
+import JobCard, { AUTONOMY_OPTIONS, PRIORITY_OPTIONS, ScheduleFields, TaskMetadataFields } from '../../cos/JobCard';
 import { filterRunnableProviders } from '../../../utils/providers';
-
-const INTERVAL_OPTIONS = [
-  { value: 'hourly', label: 'Every Hour' },
-  { value: 'every-2-hours', label: 'Every 2 Hours' },
-  { value: 'every-4-hours', label: 'Every 4 Hours' },
-  { value: 'every-8-hours', label: 'Every 8 Hours' },
-  { value: 'daily', label: 'Daily' },
-  { value: 'weekly', label: 'Weekly' },
-  { value: 'biweekly', label: 'Every 2 Weeks' },
-  { value: 'monthly', label: 'Monthly' }
-];
-
-const PRIORITY_OPTIONS = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
-const AUTONOMY_OPTIONS = [
-  { value: 'standby', label: 'Standby' },
-  { value: 'assistant', label: 'Assistant' },
-  { value: 'manager', label: 'Manager' },
-  { value: 'yolo', label: 'YOLO' }
-];
-
-// Custom tasks always spawn an AI agent scoped to this app. The worktree/PR/simplify
-// toggles below mirror the per-app built-in task overrides for visual consistency.
-const TASK_META_FIELDS = AGENT_OPTIONS.filter(o => ['useWorktree', 'openPR', 'simplify'].includes(o.field));
+import TaskDataInputs from '../../cos/TaskDataInputs';
 
 export function emptyForm() {
   return {
@@ -52,6 +25,7 @@ export function emptyForm() {
     providerId: '',
     model: '',
     effort: '',
+    dataInputs: [],
     taskMetadata: { useWorktree: true, openPR: true, simplify: true }
   };
 }
@@ -71,6 +45,7 @@ export function formFromJob(job) {
     providerId: job.providerId || '',
     model: job.model || '',
     effort: job.effort || '',
+    dataInputs: job.dataInputs || [],
     taskMetadata: { useWorktree: false, openPR: false, simplify: false, ...(job.taskMetadata || {}) }
   };
 }
@@ -88,6 +63,7 @@ export function toPayload(form, appId) {
     providerId: form.providerId || null,
     model: form.model || null,
     effort: form.effort || null,
+    dataInputs: form.dataInputs || [],
     taskMetadata: form.taskMetadata
   };
   if (form.scheduleMode === 'cron') {
@@ -103,30 +79,8 @@ export function toPayload(form, appId) {
   return payload;
 }
 
-function scheduleSummary(job) {
-  if (job.cronSchedule) return describeRecurrence(job.cronSchedule);
-  if (job.cronExpression) return describeCron(job.cronExpression);
-  const label = INTERVAL_OPTIONS.find(i => i.value === job.interval)?.label || job.interval;
-  return job.scheduledTime ? `${label} at ${job.scheduledTime}` : label;
-}
-
-function TaskForm({ form, setForm, onSave, onCancel, saveLabel, timezone, providers, activeProviderId }) {
+function TaskForm({ form, setForm, onSave, onCancel, saveLabel, timezone, providers, activeProviderId, dataInputCatalog }) {
   const update = (key, val) => setForm(f => ({ ...f, [key]: val }));
-  // Switching to cron seeds the expression with the default the picker displays
-  // (07:00 daily) so an untouched picker is actually saveable — otherwise the
-  // form shows a schedule while cronExpression stays empty and Save is blocked.
-  const setScheduleMode = (mode) =>
-    setForm(f => ({ ...f, scheduleMode: mode, cronExpression: mode === 'cron' && !f.cronExpression && !f.cronSchedule ? DEFAULT_CRON : f.cronExpression }));
-  // Toggle a git-workflow flag while preserving the system-wide invariant that
-  // openPR implies useWorktree (matches toggleAppMetadataOverride used elsewhere):
-  // turning openPR on forces useWorktree on; turning useWorktree off forces openPR off.
-  const toggleMeta = (field) =>
-    setForm(f => {
-      const meta = { ...f.taskMetadata, [field]: !f.taskMetadata?.[field] };
-      if (field === 'openPR' && meta.openPR) meta.useWorktree = true;
-      if (field === 'useWorktree' && !meta.useWorktree) meta.openPR = false;
-      return { ...f, taskMetadata: meta };
-    });
 
   return (
     <div className="space-y-3 bg-port-card border border-port-accent/50 rounded-lg p-4">
@@ -157,57 +111,7 @@ function TaskForm({ form, setForm, onSave, onCancel, saveLabel, timezone, provid
         />
       </FormField>
 
-      {/* Schedule */}
-      <div className="space-y-2">
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-gray-400">Schedule:</span>
-          {['interval', 'cron'].map(mode => (
-            <button
-              key={mode}
-              type="button"
-              onClick={() => setScheduleMode(mode)}
-              className={`px-2 py-1 text-xs rounded transition-colors ${
-                form.scheduleMode === mode ? 'bg-port-accent/20 text-port-accent' : 'bg-port-bg text-gray-500 hover:text-gray-300'
-              }`}
-            >
-              {mode === 'interval' ? 'Interval' : 'Cron'}
-            </button>
-          ))}
-        </div>
-        {form.scheduleMode === 'cron' ? (
-          <div className="space-y-2">
-            <CronSchedulePicker
-              value={form.cronSchedule || form.cronExpression || DEFAULT_CRON}
-              valueShape="recurrence"
-              timezone={timezone}
-              onChange={rule => {
-                update('cronSchedule', rule);
-                const cron = buildCronFromRecurrence(rule);
-                update('cronExpression', cron || null);
-              }}
-            />
-          </div>
-        ) : (
-          <div className="flex gap-3">
-            <select
-              aria-label="Interval"
-              value={form.interval}
-              onChange={e => update('interval', e.target.value)}
-              className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
-            >
-              {INTERVAL_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-            </select>
-            <input
-              type="time"
-              value={form.scheduledTime || ''}
-              onChange={e => update('scheduledTime', e.target.value || '')}
-              className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
-              title="Run at a specific time (leave empty for any time)"
-              aria-label="Run at time"
-            />
-          </div>
-        )}
-      </div>
+      <ScheduleFields data={form} timezone={timezone} onChange={update} />
 
       {/* Priority + autonomy */}
       <div className="flex gap-3">
@@ -236,26 +140,13 @@ function TaskForm({ form, setForm, onSave, onCancel, saveLabel, timezone, provid
         onChange={patch => setForm(f => ({ ...f, ...patch }))}
       />
 
-      {/* Git-workflow options */}
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-xs text-gray-400">Options:</span>
-        {TASK_META_FIELDS.map(({ field, shortLabel, label }) => {
-          const effective = !!form.taskMetadata?.[field];
-          return (
-            <button
-              key={field}
-              type="button"
-              onClick={() => toggleMeta(field)}
-              aria-pressed={effective}
-              aria-label={`${label}: ${effective ? 'on' : 'off'}`}
-              title={`${label}: ${effective ? 'on' : 'off'}`}
-              className={`text-xs px-1.5 py-0.5 rounded transition-colors border ${agentOptionButtonClass(effective, true)}`}
-            >
-              {shortLabel}
-            </button>
-          );
-        })}
-      </div>
+      <TaskDataInputs
+        catalog={dataInputCatalog}
+        value={form.dataInputs}
+        onChange={dataInputs => update('dataInputs', dataInputs)}
+      />
+
+      <TaskMetadataFields data={form} onChange={patch => setForm(f => ({ ...f, ...patch }))} />
 
       <div className="flex justify-end gap-2">
         <button onClick={onCancel} className="flex items-center gap-1 px-3 py-1.5 text-sm text-gray-400 hover:text-white transition-colors">
@@ -275,12 +166,10 @@ export default function CustomTasksSection({ appId, appName, providerCatalog, ac
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [createForm, setCreateForm] = useState(emptyForm);
-  const [editingId, setEditingId] = useState(null);
-  const [editForm, setEditForm] = useState(emptyForm);
   const [rawProviders, setRawProviders] = useState(providerCatalog || []);
   const [activeProviderId, setActiveProviderId] = useState(inheritedActiveProviderId);
   const [triggering, setTriggering] = useState(null);
-  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
+  const [dataInputCatalog, setDataInputCatalog] = useState([]);
 
   const providers = useMemo(
     () => filterRunnableProviders(rawProviders, tasks.map(job => job.providerId)),
@@ -291,6 +180,7 @@ export default function CustomTasksSection({ appId, appName, providerCatalog, ac
     const data = await api.getCosJobs({ silent: true }).catch(() => null);
     const appTasks = (data?.jobs || []).filter(j => j.appId === appId);
     setTasks(appTasks);
+    setDataInputCatalog(data?.dataInputCatalog || []);
     setLoading(false);
   }, [appId]);
 
@@ -331,44 +221,32 @@ export default function CustomTasksSection({ appId, appName, providerCatalog, ac
     fetchTasks();
   };
 
-  const startEdit = (job) => {
-    setEditingId(job.id);
-    setEditForm(formFromJob(job));
-  };
-
-  const handleEditSave = async () => {
-    if (!validate(editForm)) return;
-    const result = await api.updateCosJob(editingId, toPayload(editForm, appId)).catch(() => null);
+  const handleToggle = async (jobId) => {
+    const result = await api.toggleCosJob(jobId).catch(() => null);
     if (!result) return;
-    toast.success('Custom task updated');
-    setEditingId(null);
-    fetchTasks();
+    setTasks(prev => prev.map(t => t.id === jobId ? { ...t, enabled: result.job.enabled } : t));
   };
 
-  const handleToggle = async (job) => {
-    const result = await api.toggleCosJob(job.id).catch(() => null);
-    if (!result) return;
-    setTasks(prev => prev.map(t => t.id === job.id ? { ...t, enabled: result.job.enabled } : t));
-  };
-
-  const handleTrigger = async (job) => {
-    setTriggering(job.id);
-    const result = await api.triggerCosJob(job.id).catch(() => null);
+  const handleTrigger = async (jobId) => {
+    const job = tasks.find(task => task.id === jobId);
+    if (!job) return;
+    setTriggering(jobId);
+    const result = await api.triggerCosJob(jobId).catch(() => null);
     setTriggering(null);
     if (!result) return; // HTTP/network error already toasted by the api helper
     if (result.status === 'skipped') {
       const notify = result.duplicate ? toast.success : toast.error;
       notify(result.reason || 'Task was not queued');
     } else if (result.success === false) toast.error(result.reason || 'Task failed to trigger');
-    else toast.success(`Triggered "${job.name}" for ${appName}`);
+    else toast.success(`${result.started ? 'Started' : 'Triggered'} "${job.name}" for ${appName}`);
     fetchTasks();
   };
 
-  const handleDelete = async (job) => {
-    const result = await api.deleteCosJob(job.id).catch(() => null);
+  const handleDelete = async (jobId) => {
+    const result = await api.deleteCosJob(jobId).catch(() => null);
     if (!result) return;
     toast.success('Custom task deleted');
-    setTasks(prev => prev.filter(t => t.id !== job.id));
+    setTasks(prev => prev.filter(t => t.id !== jobId));
   };
 
   return (
@@ -396,6 +274,7 @@ export default function CustomTasksSection({ appId, appName, providerCatalog, ac
           timezone={timezone}
           providers={providers}
           activeProviderId={activeProviderId}
+          dataInputCatalog={dataInputCatalog}
         />
       )}
 
@@ -410,57 +289,23 @@ export default function CustomTasksSection({ appId, appName, providerCatalog, ac
       ) : (
         <div className="space-y-2">
           {tasks.map(job => (
-            <div key={job.id} className={`bg-port-card border rounded-lg ${job.enabled ? 'border-port-border' : 'border-port-border/50 opacity-70'}`}>
-              {editingId === job.id ? (
-                <div className="p-3">
-                  <TaskForm
-                    form={editForm}
-                    setForm={setEditForm}
-                    onSave={handleEditSave}
-                    onCancel={() => setEditingId(null)}
-                    saveLabel="Save"
-                    timezone={timezone}
-                    providers={providers}
-                    activeProviderId={activeProviderId}
-                  />
-                </div>
-              ) : (
-                <div className="p-3 space-y-1">
-                  <div className="flex items-center gap-3">
-                    <ToggleSwitch enabled={job.enabled} onChange={() => handleToggle(job)} size="sm" activeColor="bg-port-success" ariaLabel={job.enabled ? 'Disable task' : 'Enable task'} />
-                    <div className="flex-1 min-w-0">
-                      <span className="text-white font-medium truncate">{job.name}</span>
-                      <div className="flex items-center gap-3 text-xs text-gray-500 mt-0.5">
-                        <span className="flex items-center gap-1"><Clock size={10} />{scheduleSummary(job)}</span>
-                        <span>Last: {timeAgo(job.lastRun, 'Never')}</span>
-                        <span>Runs: {job.runCount || 0}</span>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <button onClick={() => handleTrigger(job)} disabled={triggering === job.id} className="p-1.5 text-gray-500 hover:text-port-accent transition-colors disabled:opacity-40" title="Run now" aria-label="Run now">
-                        <Play size={14} />
-                      </button>
-                      <button onClick={() => startEdit(job)} className="p-1.5 text-gray-500 hover:text-white transition-colors" title="Edit" aria-label="Edit">
-                        <Edit3 size={14} />
-                      </button>
-                      {isConfirming(job.id) ? (
-                        <ConfirmButtonPair
-                          prompt="Delete?"
-                          onConfirm={() => confirmDelete(() => handleDelete(job))}
-                          onCancel={cancelDelete}
-                          ariaLabel="Confirm delete custom task"
-                        />
-                      ) : (
-                        <button onClick={() => requestDelete(job.id)} className="p-1.5 text-red-400/60 hover:text-red-400 transition-colors" title="Delete" aria-label="Delete">
-                          <Trash2 size={14} />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                  {job.description && <p className="text-xs text-gray-500 pl-12">{job.description}</p>}
-                </div>
-              )}
-            </div>
+            <JobCard
+              key={job.id}
+              job={job}
+              providers={providers}
+              activeProviderId={activeProviderId}
+              timezone={timezone}
+              dataInputCatalog={dataInputCatalog}
+              onToggle={handleToggle}
+              onTrigger={handleTrigger}
+              onDelete={handleDelete}
+              onUpdate={fetchTasks}
+              validateEdit={validate}
+              fixedAppId={appId}
+              fixedType="agent"
+              showTaskMetadata
+              triggering={triggering === job.id}
+            />
           ))}
         </div>
       )}

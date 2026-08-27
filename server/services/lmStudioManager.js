@@ -31,8 +31,10 @@ const LMS_CONTROL_TIMEOUT_MS = 60_000
 const LMS_LOAD_TIMEOUT_MS = 300_000
 
 // Default LM Studio configuration
+const normalizeBaseUrl = (value) => String(value || '').trim().replace(/\/+$/, '').replace(/\/v1$/, '')
+
 const DEFAULT_CONFIG = {
-  baseUrl: (process.env.LM_STUDIO_URL || 'http://localhost:1234').replace(/\/+$/, '').replace(/\/v1$/, ''),
+  baseUrl: normalizeBaseUrl(process.env.LM_STUDIO_URL || 'http://localhost:1234'),
   timeout: DEFAULT_REQUEST_TIMEOUT_MS,
   defaultThinkingModel: 'gpt-oss-20b'
 }
@@ -81,8 +83,8 @@ const status = {
  * @param {Object} options - Fetch options
  * @returns {Promise<*>} - Response data
  */
-async function lmStudioRequest(endpoint, options = {}) {
-  const url = `${config.baseUrl}${endpoint}`
+async function lmStudioRequestAt(baseUrl, endpoint, options = {}) {
+  const url = `${normalizeBaseUrl(baseUrl)}${endpoint}`
   const { timeout, headers, ...rest } = options
 
   const response = await fetchWithTimeout(url, {
@@ -98,6 +100,10 @@ async function lmStudioRequest(endpoint, options = {}) {
   }
 
   return response.json()
+}
+
+async function lmStudioRequest(endpoint, options = {}) {
+  return lmStudioRequestAt(config.baseUrl, endpoint, options)
 }
 
 /**
@@ -130,7 +136,53 @@ async function checkLMStudioAvailable(forceRefresh = false) {
 }
 
 /**
- * Get currently loaded models
+ * Read residency from a specific provider endpoint without touching the global
+ * manager's availability cache or error state.
+ * @returns {Promise<{models:Array,error:string|null}>}
+ */
+async function getLoadedModelsAt(baseUrl) {
+  // Use native REST API for richer model info (type, state, architecture)
+  const nativeModels = await lmStudioRequestAt(baseUrl, '/api/v0/models').catch((err) => ({ _err: err.message }))
+  if (Array.isArray(nativeModels?.data)) {
+    return {
+      models: nativeModels.data
+        .filter(model => model.state === 'loaded')
+        .map(model => ({
+        id: model.id,
+        object: model.object || 'model',
+        type: model.type,
+        arch: model.arch,
+        quantization: model.quantization,
+        state: model.state,
+        maxContextLength: model.max_context_length,
+        ownedBy: model.publisher
+        })),
+      error: null
+    }
+  }
+
+  // Fallback to OpenAI-compat endpoint
+  const response = await lmStudioRequestAt(baseUrl, '/v1/models').catch((err) => ({ _err: err.message }))
+  if (Array.isArray(response?.data)) {
+    return {
+      models: response.data.map(model => ({
+        id: model.id,
+        object: model.object,
+        created: model.created,
+        ownedBy: model.owned_by
+      })),
+      error: null
+    }
+  }
+
+  return {
+    models: [],
+    error: nativeModels?._err || response?._err || 'LM Studio loaded-model endpoints returned no data'
+  }
+}
+
+/**
+ * Get currently loaded models from the configured LM Studio server.
  * @param {boolean} forceRefresh - Force refresh from API
  * @returns {Promise<Array>} - Loaded models
  */
@@ -146,42 +198,11 @@ async function getLoadedModels(forceRefresh = false) {
     return []
   }
 
-  // Use native REST API for richer model info (type, state, architecture)
-  const nativeModels = await lmStudioRequest('/api/v0/models').catch((err) => ({ _err: err.message }))
-  if (nativeModels?.data) {
-    lastLoadedModelsError = null
-    loadedModels = nativeModels.data
-      .filter(model => model.state === 'loaded')
-      .map(model => ({
-        id: model.id,
-        object: model.object || 'model',
-        type: model.type,
-        arch: model.arch,
-        quantization: model.quantization,
-        state: model.state,
-        maxContextLength: model.max_context_length,
-        ownedBy: model.publisher
-      }))
-    return loadedModels
-  }
-
-  // Fallback to OpenAI-compat endpoint
-  const response = await lmStudioRequest('/v1/models').catch((err) => ({ _err: err.message }))
-  if (response?.data) {
-    lastLoadedModelsError = null
-    loadedModels = response.data.map(model => ({
-      id: model.id,
-      object: model.object,
-      created: model.created,
-      ownedBy: model.owned_by
-    }))
-    return loadedModels
-  }
-
-  // Both list endpoints failed — return empty WITHOUT caching (loadedModels
-  // stays null) so the next call retries instead of pinning a bogus empty.
-  lastLoadedModelsError = nativeModels?._err || response?._err || 'LM Studio loaded-model endpoints returned no data'
-  return []
+  const result = await getLoadedModelsAt(config.baseUrl)
+  lastLoadedModelsError = result.error
+  if (result.error) return []
+  loadedModels = result.models
+  return loadedModels
 }
 
 /** Last loaded-model probe error (null only after a trustworthy list). */
@@ -992,6 +1013,7 @@ export {
   checkLMStudioAvailable,
   controlServer as controlLmStudioServer,
   getLoadedModels,
+  getLoadedModelsAt,
   getLastLoadedModelsError,
   getAvailableModels,
   downloadModel,

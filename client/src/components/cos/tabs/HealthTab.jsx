@@ -4,7 +4,7 @@ import * as api from '../../../services/api';
 import { formatDateTime } from '../../../utils/formatters';
 import ProviderStatusCard from './ProviderStatusCard';
 
-export default function HealthTab({ health, onCheck }) {
+export default function HealthTab({ health, healthLoading = false, onCheck }) {
   const [learning, setLearning] = useState(null);
   const [loadingLearning, setLoadingLearning] = useState(true);
   const [backfilling, setBackfilling] = useState(false);
@@ -145,7 +145,12 @@ export default function HealthTab({ health, onCheck }) {
             </button>
           </div>
 
-          {!health?.issues || health.issues.length === 0 ? (
+          {healthLoading ? (
+            <div className="text-center py-4 text-gray-500">
+              <RefreshCw size={16} className="animate-spin mx-auto mb-2" />
+              Loading health...
+            </div>
+          ) : !health?.issues || health.issues.length === 0 ? (
             <div className="bg-port-success/10 border border-port-success/30 rounded-lg p-4 text-center">
               <CheckCircle className="w-8 h-8 text-port-success mx-auto mb-2" />
               <p className="text-port-success font-medium text-sm">All Systems Healthy</p>

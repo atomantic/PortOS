@@ -49,6 +49,11 @@ vi.mock('./agentOrchestrator.js', () => ({
   spawnAgentForTask: vi.fn().mockResolvedValue('agent-1'),
   terminateAgent: vi.fn(),
 }));
+// Same reason cosLocalEndpointSlots is mocked in the dispatch-holds suite: the
+// real gate reaches the app registry through agentPromptBuilder, whose graph
+// reads files at module load — which this file's `fs` mock breaks. The gate's own
+// behavior is covered in cosForgeSpawnGate.test.js.
+vi.mock('./cosForgeSpawnGate.js', () => ({ forgeSpawnHoldReason: vi.fn().mockResolvedValue(null) }));
 vi.mock('fs', () => ({ existsSync: vi.fn().mockReturnValue(false) }));
 
 import { initSpawner } from './subAgentSpawner.js';

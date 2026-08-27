@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, useLocation } from 'react-router';
 
 // Spy on navigation so the "Remix into…" handoff can assert the target route +
 // the generic `remix.ingredientIds` state payload. MemoryRouter still supplies
@@ -38,6 +38,9 @@ vi.mock('../components/ui/Toast', () => ({
 // user-defined type surfaces as a filter chip + dropdown option.
 vi.mock('../services/apiCatalogTypes', () => ({
   listCatalogTypes: vi.fn(),
+  createCatalogType: vi.fn(),
+  updateCatalogType: vi.fn(),
+  deleteCatalogType: vi.fn(),
 }));
 
 // MediaImage pulls in the socket service; stub it to a plain <img> so the card
@@ -66,9 +69,15 @@ const sample = [
   { id: 'i-2', name: 'Old Harbor', type: 'place', payload: { description: 'Brine and rust.' }, tags: [] },
 ];
 
-const renderCatalog = () => render(
-  <MemoryRouter>
+function LocationProbe() {
+  const { pathname, search } = useLocation();
+  return <div data-testid="catalog-location">{`${pathname}${search}`}</div>;
+}
+
+const renderCatalog = (initialEntry = '/catalog') => render(
+  <MemoryRouter initialEntries={[initialEntry]}>
     <Catalog />
+    <LocationProbe />
   </MemoryRouter>,
 );
 
@@ -96,6 +105,27 @@ beforeEach(() => {
 });
 
 describe('Catalog page', () => {
+  it('opens catalog type settings in a deep-linkable feature drawer', async () => {
+    renderCatalog();
+    await waitFor(() => expect(screen.getByText('Echo Saint')).toBeTruthy());
+    expect(screen.queryByRole('dialog', { name: 'Catalog settings' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Catalog settings' }));
+
+    expect(await screen.findByRole('dialog', { name: 'Catalog settings' })).toBeTruthy();
+    expect(screen.getByText(/Define custom ingredient types for the Catalog/i)).toBeTruthy();
+    expect(screen.getByTestId('catalog-location').textContent).toBe('/catalog?settings=1');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close settings' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Catalog settings' })).toBeNull());
+    expect(screen.getByTestId('catalog-location').textContent).toBe('/catalog');
+  });
+
+  it('opens catalog type settings from the compatibility deep link', async () => {
+    renderCatalog('/catalog?settings=1');
+    expect(await screen.findByRole('dialog', { name: 'Catalog settings' })).toBeTruthy();
+  });
+
   it('renders the fetched ingredient cards with snippet + count', async () => {
     renderCatalog();
     await waitFor(() => expect(screen.getByText('Echo Saint')).toBeTruthy());

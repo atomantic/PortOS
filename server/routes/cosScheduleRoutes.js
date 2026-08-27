@@ -6,7 +6,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import * as taskSchedule from '../services/taskSchedule.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { sanitizeTaskMetadata, validateRequest, parsePagination } from '../lib/validation.js';
+import { sanitizeTaskMetadata, taskDataInputsSchema, validateRequest, parsePagination } from '../lib/validation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
 
 const templateTaskSchema = z.object({
@@ -20,7 +20,7 @@ const templateTaskSchema = z.object({
 
 const router = Router();
 
-const SCHEDULE_FIELDS = ['type', 'enabled', 'intervalMs', 'cronExpression', 'providerId', 'model', 'effort', 'prompt', 'taskMetadata', 'runAfter',
+const SCHEDULE_FIELDS = ['type', 'enabled', 'intervalMs', 'cronExpression', 'providerId', 'model', 'effort', 'prompt', 'dataInputs', 'taskMetadata', 'runAfter',
   // Perpetual (drain-until-done) recheck cadence: after a perpetual task drains
   // its backlog and parks, it re-probes its work-detector on this cadence.
   // `recheckCron` (5-field) takes precedence over `recheckIntervalMs`.
@@ -66,6 +66,13 @@ function pickScheduleSettings(body) {
       throw new ServerError('Invalid taskMetadata: unrecognized keys or values', { status: 400, code: 'VALIDATION_ERROR' });
     }
     settings.taskMetadata = sanitized;
+  }
+  if (settings.dataInputs !== undefined) {
+    const parsed = taskDataInputsSchema.safeParse(settings.dataInputs);
+    if (!parsed.success) {
+      throw new ServerError('dataInputs must contain only registered task data input ids', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    settings.dataInputs = parsed.data;
   }
   if (settings.effort !== undefined && settings.effort !== null && !EFFORT_LEVELS.includes(settings.effort)) {
     throw new ServerError(`effort must be one of ${EFFORT_LEVELS.join(', ')} or null`, { status: 400, code: 'VALIDATION_ERROR' });

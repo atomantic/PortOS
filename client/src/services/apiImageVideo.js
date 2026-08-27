@@ -1,4 +1,4 @@
-import { request, API_BASE, maybeRedirectToLogin } from './apiCore.js';
+import { request, API_BASE, throwApiError } from './apiCore.js';
 import { filterHardwareCompatibleModels } from '../utils/systemCapabilities.js';
 
 // Image gen — local backend extras (gallery, models, LoRAs, cancel, delete).
@@ -481,7 +481,7 @@ export const installLoraFromHuggingface = ({ url, family, file, silent = false }
 // cross-origin navigation; (2) EventSource auto-reconnects on any transport
 // drop, which for this NON-idempotent install would silently start a second
 // multi-GB download — a single fetch never retries; (3) it honors session expiry
-// — a 401 AUTH_REQUIRED bounces to /login via maybeRedirectToLogin exactly like
+// — a 401 AUTH_REQUIRED bounces to /login via throwApiError exactly like
 // request(), instead of dead-ending on a generic stream error. Frames are
 // SSE-encoded (`data: {json}\n\n`).
 export async function installLoraFromHuggingfaceStream({ url, family, file, onProgress, signal } = {}) {
@@ -492,11 +492,7 @@ export async function installLoraFromHuggingfaceStream({ url, family, file, onPr
     signal,
   });
   if (!response.ok || !response.body?.getReader) {
-    const err = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
-    maybeRedirectToLogin(response, err);
-    const e = new Error(err.error || `HTTP ${response.status}`);
-    e.code = err.code || null;
-    throw e;
+    await throwApiError(response);
   }
 
   const reader = response.body.getReader();

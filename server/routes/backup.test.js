@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
+import { PassThrough } from 'stream';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
@@ -8,6 +9,7 @@ vi.mock('../services/backup.js', () => ({
   getNextRunTime: vi.fn(),
   runBackup: vi.fn(),
   listSnapshots: vi.fn(),
+  openSnapshotStream: vi.fn(),
   restoreSnapshot: vi.fn(),
   restorePostgres: vi.fn(),
   DEFAULT_EXCLUDES: [
@@ -126,6 +128,35 @@ describe('backup routes', () => {
       expect(res.status).toBe(200);
       expect(res.body).toHaveLength(2);
       expect(backup.listSnapshots).toHaveBeenCalledWith('/dest');
+    });
+  });
+
+  describe('GET /api/backup/snapshots/:snapshotId/download', () => {
+    it('streams a gzip attachment for the requested snapshot', async () => {
+      getSettings.mockResolvedValue({ backup: { destPath: '/dest' } });
+      backup.openSnapshotStream.mockImplementation(async () => {
+        const stream = new PassThrough();
+        process.nextTick(() => stream.end(Buffer.from('tarball')));
+        return stream;
+      });
+
+      const res = await request(buildApp()).get('/api/backup/snapshots/snap-1/download');
+
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toMatch(/^application\/gzip/);
+      expect(res.headers['content-disposition']).toBe('attachment; filename="portos-snapshot-snap-1.tar.gz"');
+      expect(res.body.toString()).toBe('tarball');
+      expect(backup.openSnapshotStream).toHaveBeenCalledWith('/dest', 'snap-1');
+    });
+
+    it('returns 400 when the backup destination is not configured', async () => {
+      getSettings.mockResolvedValue({ backup: {} });
+
+      const res = await request(buildApp()).get('/api/backup/snapshots/snap-1/download');
+
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('BACKUP_NOT_CONFIGURED');
+      expect(backup.openSnapshotStream).not.toHaveBeenCalled();
     });
   });
 

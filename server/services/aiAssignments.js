@@ -8,9 +8,11 @@ import * as taskScheduleService from './taskSchedule.js';
 import * as loopsService from './loops.js';
 import * as featureAgentsService from './featureAgents.js';
 import * as agentPersonalitiesService from './agentPersonalities.js';
+import * as autonomousJobsService from './autonomousJobs.js';
 import { getVoiceConfig, updateVoiceConfig } from './voice/config.js';
 import { isPlainObject } from '../lib/objects.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { effortLevelsForProvider } from '../lib/providerModels.js';
 
 const textProviderTypes = ['api', 'cli', 'tui'];
 const cliProviderTypes = ['cli', 'tui'];
@@ -51,10 +53,13 @@ const makeEntry = ({
   source,
   providerId = null,
   model = null,
+  effort = null,
+  assignmentType = 'Configuration',
   scope = 'global',
   editable = true,
   providerEditable = true,
   modelEditable = true,
+  effortEditable = false,
   providerTypes = textProviderTypes,
   providerOptions = null,
   modelOptions = null,
@@ -77,10 +82,13 @@ const makeEntry = ({
   source,
   providerId: providerId || null,
   model: model || null,
+  effort: effort || null,
+  assignmentType,
   scope,
   editable,
   providerEditable,
   modelEditable,
+  effortEditable,
   providerTypes,
   providerOptions,
   modelOptions,
@@ -102,46 +110,6 @@ const patchSettingsPath = async (path, value) => {
   }
   cur[segments[segments.length - 1]] = value;
   await updateSettings({ [top]: root });
-};
-
-const addProviderRegistryEntries = (entries, providersData) => {
-  const { activeProvider, providers = [] } = providersData;
-  entries.push(makeEntry({
-    id: 'provider.active',
-    area: 'Provider Registry',
-    label: 'System default provider',
-    source: 'data/providers.json activeProvider',
-    providerId: activeProvider,
-    modelEditable: false,
-    notes: 'Fallback for tools that do not pin their own provider.',
-  }));
-
-  for (const provider of providers) {
-    for (const field of ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel']) {
-      entries.push(makeEntry({
-        id: `provider.model.${provider.id}.${field}`,
-        area: 'Provider Registry',
-        label: `${provider.name} ${field.replace('Model', '').toLowerCase() || 'default'} model`,
-        source: `provider ${provider.id}.${field}`,
-        providerId: provider.id,
-        model: provider[field] || null,
-        providerEditable: false,
-        modelOptions: pickModelOptions(provider),
-        notes: field === 'defaultModel' ? 'Used when an assignment leaves model blank.' : 'Used by task-tier model selection.',
-        link: '/ai',
-      }));
-    }
-    entries.push(makeEntry({
-      id: `provider.fallback.${provider.id}`,
-      area: 'Provider Registry',
-      label: `${provider.name} fallback provider`,
-      source: `provider ${provider.id}.fallbackProvider`,
-      providerId: provider.fallbackProvider || null,
-      modelEditable: false,
-      notes: 'Used when this provider is rate-limited or unavailable.',
-      link: '/ai',
-    }));
-  }
 };
 
 const addSettingsEntries = async (entries) => {
@@ -169,6 +137,7 @@ const addSettingsEntries = async (entries) => {
     entries.push(makeEntry({
       id: `settings.${key}`,
       area: 'Automation',
+      assignmentType: 'Agents & automation',
       label,
       source: `settings.${key}`,
       providerId: settings[key]?.providerId || null,
@@ -182,6 +151,7 @@ const addSettingsEntries = async (entries) => {
   entries.push(makeEntry({
     id: 'settings.creativeDirector.treatment',
     area: 'Creative Director',
+    assignmentType: 'Creative workflows',
     label: 'Treatment generation model',
     source: 'settings.creativeDirector.treatment',
     providerId: settings.creativeDirector?.treatment?.providerId || null,
@@ -194,6 +164,7 @@ const addSettingsEntries = async (entries) => {
   entries.push(makeEntry({
     id: 'settings.creativeDirector.plan',
     area: 'Creative Director',
+    assignmentType: 'Creative workflows',
     label: 'Production planning model',
     source: 'settings.creativeDirector.plan',
     providerId: settings.creativeDirector?.plan?.providerId || null,
@@ -206,6 +177,7 @@ const addSettingsEntries = async (entries) => {
   entries.push(makeEntry({
     id: 'settings.creativeDirector.evaluation',
     area: 'Creative Director',
+    assignmentType: 'Creative workflows',
     label: 'Scene evaluation vision model',
     source: 'settings.creativeDirector.evaluation',
     providerId: settings.creativeDirector?.evaluation?.providerId || null,
@@ -221,6 +193,7 @@ const addSettingsEntries = async (entries) => {
   entries.push(makeEntry({
     id: 'settings.voice.llm',
     area: 'Voice',
+    assignmentType: 'Voice & messaging',
     label: 'Conversational LLM',
     source: 'settings.voice.llm',
     providerId: voice.llm?.provider || null,
@@ -231,6 +204,7 @@ const addSettingsEntries = async (entries) => {
   entries.push(makeEntry({
     id: 'settings.voice.vision',
     area: 'Voice',
+    assignmentType: 'Voice & messaging',
     label: 'Screen vision model',
     source: 'settings.voice.llm.visionModel',
     providerId: voice.llm?.provider || null,
@@ -242,6 +216,7 @@ const addSettingsEntries = async (entries) => {
   entries.push(makeEntry({
     id: 'settings.voice.codeAgent',
     area: 'Voice',
+    assignmentType: 'Voice & messaging',
     label: 'Delegated coding agent',
     source: 'settings.voice.llm.codeAgent',
     providerId: voice.llm?.codeAgent?.provider || null,
@@ -255,6 +230,7 @@ const addSettingsEntries = async (entries) => {
     entries.push(makeEntry({
       id: `settings.messages.${action}`,
       area: 'Messages',
+      assignmentType: 'Voice & messaging',
       label: `${action[0].toUpperCase()}${action.slice(1)} assistant`,
       source: `settings.messages.${action}`,
       providerId: cfg.providerId || messages.providerId || null,
@@ -289,6 +265,7 @@ const addRecordEntries = async (entries) => {
     loops,
     featureAgents,
     socialAgents,
+    autonomousJobs,
   ] = await Promise.all([
     brainService.loadMeta().catch(() => null),
     universeService.listUniverses().catch(() => []),
@@ -298,6 +275,7 @@ const addRecordEntries = async (entries) => {
     loopsService.getLoops().catch(() => []),
     featureAgentsService.getAllFeatureAgents().catch(() => []),
     agentPersonalitiesService.getAllAgents().catch(() => []),
+    autonomousJobsService.getAllJobs().catch(() => []),
   ]);
 
   if (brainMeta) {
@@ -317,6 +295,7 @@ const addRecordEntries = async (entries) => {
       entries.push(makeEntry({
         id: `universe.${universe.id}`,
         area: 'Universe Builder',
+        assignmentType: 'World & story building',
         label: universe.name,
         source: `universe ${universe.id}.llm`,
         providerId: universe.llm?.provider || null,
@@ -332,6 +311,7 @@ const addRecordEntries = async (entries) => {
       entries.push(makeEntry({
         id: `story.${session.id}`,
         area: 'Story Builder',
+        assignmentType: 'World & story building',
         label: session.title,
         source: `story session ${session.id}.llm`,
         providerId: session.llm?.provider || null,
@@ -347,6 +327,7 @@ const addRecordEntries = async (entries) => {
       entries.push(makeEntry({
         id: `pipeline.series.${s.id}`,
         area: 'Pipeline',
+        assignmentType: 'World & story building',
         label: s.name,
         source: `pipeline series ${s.id}.llm`,
         providerId: s.llm?.provider || null,
@@ -358,28 +339,34 @@ const addRecordEntries = async (entries) => {
   }
 
   for (const [taskType, task] of Object.entries(schedule?.tasks || {})) {
-    if (task.providerId || task.model) {
+    if (task.providerId || task.model || task.effort) {
       entries.push(makeEntry({
         id: `cos.task.${taskType}`,
         area: 'Chief of Staff',
+        assignmentType: 'Scheduled tasks',
         label: `Scheduled task: ${taskType}`,
         source: `cos task-schedule ${taskType}`,
         providerId: task.providerId || null,
         model: task.model || null,
+        effort: task.effort || null,
+        effortEditable: true,
         scope: 'record',
         ...agentEntry,
         link: '/cos/config',
       }));
     }
     for (const [index, stage] of (task.taskMetadata?.pipeline?.stages || []).entries()) {
-      if (stage?.providerId || stage?.model) {
+      if (stage?.providerId || stage?.model || stage?.effort) {
         entries.push(makeEntry({
           id: `cos.taskStage.${taskType}.${index}`,
           area: 'Chief of Staff',
+          assignmentType: 'Scheduled tasks',
           label: `${taskType} stage: ${stage.name || index + 1}`,
           source: `cos task ${taskType}.taskMetadata.pipeline.stages[${index}]`,
           providerId: stage.providerId || null,
           model: stage.model || null,
+          effort: stage.effort || null,
+          effortEditable: true,
           scope: 'record',
           ...agentEntry,
           link: '/cos/config',
@@ -393,6 +380,7 @@ const addRecordEntries = async (entries) => {
       entries.push(makeEntry({
         id: `loop.${loop.id}`,
         area: 'Loops',
+        assignmentType: 'Agents & automation',
         label: loop.name || loop.id,
         source: `loop ${loop.id}.providerId`,
         providerId: loop.providerId || null,
@@ -410,6 +398,7 @@ const addRecordEntries = async (entries) => {
       entries.push(makeEntry({
         id: `featureAgent.${agent.id}`,
         area: 'Feature Agents',
+        assignmentType: 'Agents & automation',
         label: agent.name,
         source: `feature agent ${agent.id}`,
         providerId: agent.providerId || null,
@@ -431,6 +420,7 @@ const addRecordEntries = async (entries) => {
       entries.push(makeEntry({
         id: `socialAgent.${agent.id}.${key}`,
         area: 'Social Agents',
+        assignmentType: 'Agents & automation',
         label: `${agent.name} ${key}`,
         source: `agent personality ${agent.id}.aiConfig.${key}`,
         providerId: cfg.providerId || null,
@@ -440,37 +430,23 @@ const addRecordEntries = async (entries) => {
       }));
     }
   }
-};
 
-const addRuntimeCallSiteEntries = (entries) => {
-  const callSites = [
-    ['Ask', 'Ask conversations', '/ask', 'Per-request provider/model override, otherwise the active provider resolves at run time.'],
-    ['Brain', 'Capture/retry/digest run buttons', '/brain/inbox', 'Uses Brain defaults unless a caller passes a one-off provider/model override.'],
-    ['Catalog', 'Catalog AI extraction', '/catalog', 'Accepts a one-off provider override for extraction jobs.'],
-    ['Digital Twin', 'Tests, enrichment, import, traits, taste summaries', '/digital-twin/overview', 'Most actions require a provider/model in the request and do not persist it as a default.'],
-    ['Insights', 'Theme and narrative refresh', '/insights/overview', 'Refresh endpoints accept provider/model per run.'],
-    ['Media', 'Prompt refinement', '/media/image', 'Prompt refine jobs carry their own provider/model in the request.'],
-    ['Meatspace POST', 'LLM drill generation and scoring', '/post/launcher', 'Drill runs accept provider/model per request and otherwise use active-provider fallback.'],
-    ['Standardizer', 'PM2 app standardization analysis', '/apps', 'Runs with an explicit provider when supplied, otherwise the active provider.'],
-    ['Social Agents', 'Generate post/comment actions', '/agents', 'Tool actions use the agent AI config when present, otherwise per-call values or defaults.'],
-    ['Universe Builder', 'Generate/refine/expand actions', '/universes', 'World actions use the universe pin when present and accept per-run overrides.'],
-    ['Pipeline', 'Stage generation, verification, canon extraction, editorial analysis', '/pipeline', 'Series pins are listed separately; individual action buttons may override provider/model for a single run.'],
-    ['Story Builder', 'Conductor steps and refinements', '/story-builder', 'Session pins are listed separately; step actions may override provider/model for a single run.'],
-    ['Voice', 'Screen description and image generation tools', '/settings/voice', 'Uses Voice LLM settings plus image-generation backend settings; per-tool calls may override image backend.'],
-  ];
-
-  for (const [area, label, link, notes] of callSites) {
+  for (const job of autonomousJobs) {
+    // Legacy/custom jobs omitted `type`; execution treats those as agent jobs.
+    if ((job.type || 'agent') !== 'agent' || (!job.providerId && !job.model && !job.effort)) continue;
     entries.push(makeEntry({
-      id: `runtime.${area.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
-      area,
-      label,
-      source: 'runtime call site',
-      scope: 'runtime',
-      editable: false,
-      providerEditable: false,
-      modelEditable: false,
-      link,
-      notes,
+      id: `cos.job.${job.id}`,
+      area: 'Chief of Staff',
+      assignmentType: 'Scheduled tasks',
+      label: `Scheduled job: ${job.name}`,
+      source: `cos autonomous job ${job.id}`,
+      providerId: job.providerId || null,
+      model: job.model || null,
+      effort: job.effort || null,
+      effortEditable: true,
+      scope: 'record',
+      ...agentEntry,
+      link: '/cos/jobs',
     }));
   }
 };
@@ -478,34 +454,48 @@ const addRuntimeCallSiteEntries = (entries) => {
 export async function getAiAssignments() {
   const providersData = await getAllProviders();
   const entries = [];
-  addProviderRegistryEntries(entries, providersData);
   await addSettingsEntries(entries);
   await addRecordEntries(entries);
-  addRuntimeCallSiteEntries(entries);
   return {
-    providers: providersData.providers.map((p) => ({
-      id: p.id,
-      name: p.name,
-      type: p.type,
-      enabled: p.enabled !== false,
-      defaultModel: p.defaultModel || null,
-      models: pickModelOptions(p),
-      // Resolved HERE rather than client-side: the client mirror of this
-      // predicate reads `envVars.ANTHROPIC_BASE_URL` / `endpoint`, and this
-      // payload deliberately ships neither (envVars can hold secrets). Without
-      // the resolved flag a renamed `claude-ollama-tui` — the exact provider
-      // class the tool-use warning exists for — looked like a cloud agent to
-      // every editor and was silently skipped.
-      ollamaBacked: isOllamaBackedProvider(p),
-    })),
+    providers: providersData.providers.map((p) => {
+      const models = pickModelOptions(p);
+      return {
+        id: p.id,
+        name: p.name,
+        type: p.type,
+        enabled: p.enabled !== false,
+        defaultModel: p.defaultModel || null,
+        models,
+        // Publish only the derived capability, never the command/path used to
+        // detect it. Renamed/path-configured CLIs then retain effort controls
+        // without exposing machine identity in this safe settings payload.
+        effortLevels: [...(effortLevelsForProvider(p) || [])],
+        effortLevelsByModel: Object.fromEntries(models.map((model) => [
+          model,
+          [...(effortLevelsForProvider(p, model) || [])],
+        ])),
+        // Resolved HERE rather than client-side: the client mirror of this
+        // predicate reads `envVars.ANTHROPIC_BASE_URL` / `endpoint`, and this
+        // payload deliberately ships neither (envVars can hold secrets). Without
+        // the resolved flag a renamed `claude-ollama-tui` — the exact provider
+        // class the tool-use warning exists for — looked like a cloud agent to
+        // every editor and was silently skipped.
+        ollamaBacked: isOllamaBackedProvider(p),
+      };
+    }),
     activeProvider: providersData.activeProvider || null,
     assignments: entries,
   };
 }
 
-export async function updateAiAssignment(id, { providerId, model } = {}) {
+export async function updateAiAssignment(id, payload = {}) {
+  const { providerId, model, effort } = payload;
   const nextProviderId = asNullable(providerId);
   const nextModel = asNullable(model);
+  const nextEffort = asNullable(effort);
+  // Older clients only send provider/model. Preserve a saved effort unless the
+  // caller explicitly supplies the field (null is the intentional clear).
+  const effortPatch = Object.hasOwn(payload, 'effort') ? { effort: nextEffort } : {};
 
   if (id === 'provider.active') {
     if (!nextProviderId) throw new ServerError('System default provider is required', { status: 400, code: 'VALIDATION_ERROR' });
@@ -609,7 +599,7 @@ export async function updateAiAssignment(id, { providerId, model } = {}) {
     const task = await taskScheduleService.getTaskInterval(taskType);
     const stages = [...(task.taskMetadata?.pipeline?.stages || [])];
     if (!stages[index]) throw new ServerError(`Stage not found: ${id}`, { status: 404, code: 'NOT_FOUND' });
-    stages[index] = { ...stages[index], providerId: nextProviderId, model: nextModel };
+    stages[index] = { ...stages[index], providerId: nextProviderId, model: nextModel, ...effortPatch };
     await taskScheduleService.updateTaskInterval(taskType, {
       taskMetadata: { ...(task.taskMetadata || {}), pipeline: { ...(task.taskMetadata?.pipeline || {}), stages } },
     });
@@ -622,7 +612,18 @@ export async function updateAiAssignment(id, { providerId, model } = {}) {
     // write a junk schedule record — gate on the existing task set first.
     const status = await taskScheduleService.getScheduleStatus();
     if (!status?.tasks?.[taskType]) throw new ServerError(`Scheduled task not found: ${taskType}`, { status: 404, code: 'NOT_FOUND' });
-    await taskScheduleService.updateTaskInterval(taskType, { providerId: nextProviderId, model: nextModel });
+    await taskScheduleService.updateTaskInterval(taskType, { providerId: nextProviderId, model: nextModel, ...effortPatch });
+    return getAiAssignments();
+  }
+
+  if (id.startsWith('cos.job.')) {
+    const jobId = id.replace('cos.job.', '');
+    const updated = await autonomousJobsService.updateJob(jobId, {
+      providerId: nextProviderId,
+      model: nextModel,
+      ...effortPatch,
+    });
+    if (!updated) throw new ServerError(`Scheduled job not found: ${jobId}`, { status: 404, code: 'NOT_FOUND' });
     return getAiAssignments();
   }
 

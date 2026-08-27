@@ -1,4 +1,7 @@
+import { useMemo } from 'react';
 import { Html } from '@react-three/drei';
+import { formatBytes, formatDurationMs } from '../../utils/formatters';
+import { computeAppMetrics, cpuTone } from '../../utils/openWorldAppMetrics';
 
 const STATUS_ICONS = {
   online: '\u25CF',
@@ -8,7 +11,18 @@ const STATUS_ICONS = {
   unknown: '\u25CB',
 };
 
-export default function HolographicPanel({ app, agentCount, position, expanded = false }) {
+// Glanceable load tone shared by the metric row's CPU readout.
+const TONE_CLASSES = {
+  idle: 'text-cyan-300/60',
+  calm: 'text-cyan-300',
+  busy: 'text-amber-300',
+  hot: 'text-red-400',
+};
+
+export default function HolographicPanel({ app, agentCount, position, expanded = false, playback = false }) {
+  // Live per-process PM2 telemetry already riding the app payload (roadmap 1.1) —
+  // aggregated once per payload change, rendered only when there is something to show.
+  const metrics = useMemo(() => computeAppMetrics(app), [app]);
   const statusColors = {
     online: 'border-cyan-500/50 text-cyan-400',
     stopped: 'border-red-500/50 text-red-400',
@@ -58,6 +72,33 @@ export default function HolographicPanel({ app, agentCount, position, expanded =
             <span className="opacity-50">| {agentCount} AGENT{agentCount > 1 ? 'S' : ''}</span>
           )}
         </div>
+        {/* Live telemetry is suppressed during history playback: pm2Status is always
+            the live snapshot, and showing current CPU beside a historical building
+            status would contradict the playback contract. */}
+        {!playback && metrics.hasMetrics && metrics.onlineProcs > 0 && (
+          <div className="flex items-center gap-2 text-[9px] font-pixel tracking-wide mt-1">
+            <span className={TONE_CLASSES[cpuTone(metrics.cpuPercent)]}>CPU {metrics.cpuPercent}%</span>
+            <span className="opacity-50">|</span>
+            <span className="text-cyan-300">MEM {formatBytes(metrics.memBytes, 0)}</span>
+            {Number.isFinite(metrics.uptimeMs) && (
+              <>
+                <span className="opacity-50">|</span>
+                <span className="text-cyan-300/70">UP {formatDurationMs(metrics.uptimeMs)}</span>
+              </>
+            )}
+            {metrics.restarts > 0 && (
+              <>
+                <span className="opacity-50">|</span>
+                <span className="text-cyan-300/70" title={`${metrics.restarts} total PM2 restarts`}>{'\u21BB'}{metrics.restarts}</span>
+              </>
+            )}
+          </div>
+        )}
+        {!playback && metrics.unstableRestarts > 0 && (
+          <div className="font-pixel text-[8px] text-red-400 tracking-wider mt-1">
+            {'\u21BB'} {metrics.unstableRestarts} UNSTABLE RESTART{metrics.unstableRestarts > 1 ? 'S' : ''}
+          </div>
+        )}
         <div className="font-pixel text-[8px] text-cyan-500/30 tracking-widest mt-1">
           {expanded ? 'PRESS E TO ENTER' : 'CLICK TO VIEW'}
         </div>
