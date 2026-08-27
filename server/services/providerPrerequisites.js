@@ -8,6 +8,8 @@
  *   - `getProviderPrerequisiteMap(providers)` — the whole collection's verdict,
  *     for decorating `GET /api/providers` so the AI Providers page reads the
  *     same answer the router uses instead of deriving its own.
+ *   - `getProviderPrerequisiteReadinessMap(providers)` — strict tri-state
+ *     readiness for authoritative choices that cannot treat unprobed as ready.
  *   - `prerequisitesMetForRouting(provider, providers)` — the gate the
  *     fallback-provider chain in `aiToolkit/providerStatus.js` consults.
  *
@@ -95,6 +97,27 @@ const forProvider = (provider, runtimes, gatewayKeySet) => providerPrerequisites
   gatewayKeySet,
 });
 
+const prerequisiteReadinessFor = (provider, runtimes, gatewayKeySet) => {
+  const runtimeKey = providerRuntimeKey(provider);
+  const runtime = runtimes?.[runtimeKey ?? ''] ?? null;
+  const { missing } = forProvider(provider, runtimes, gatewayKeySet);
+  if (missing.length > 0) {
+    return {
+      status: 'blocked',
+      reasonCodes: [...new Set(missing.map((entry) => entry.code).filter(Boolean))],
+    };
+  }
+  if (runtimeKey && getProviderRuntime(runtimeKey) && !runtime) {
+    return { status: 'unknown', reasonCodes: ['runtime-unprobed'] };
+  }
+  if (provider?.type === 'cli' || provider?.type === 'tui') {
+    if (!runtimeKey || !getProviderRuntime(runtimeKey)) {
+      return { status: 'unknown', reasonCodes: ['runtime-unprobed'] };
+    }
+  }
+  return { status: 'ready', reasonCodes: [] };
+};
+
 /**
  * `{ [providerId]: { met, missing } }` for a whole provider collection.
  * @param {Array<object>} providers — raw or sanitized provider records
@@ -105,6 +128,22 @@ export function getProviderPrerequisiteMap(providers) {
   const runtimes = runtimeSnapshotFor(list.map(providerRuntimeKey));
   const gatewayKeySet = gatewayKeyState(list);
   return Object.fromEntries(list.map((provider) => [provider.id, forProvider(provider, runtimes, gatewayKeySet)]));
+}
+
+/**
+ * A strict, non-secret prerequisite verdict for authoritative task choices.
+ * Unlike routing, this distinguishes a cold/expired runtime probe from a known
+ * runnable provider so callers that promise a provider choice can fail closed.
+ */
+export function getProviderPrerequisiteReadinessMap(providers) {
+  const list = Array.isArray(providers) ? providers : [];
+  if (list.length === 0) return {};
+  const runtimes = runtimeSnapshotFor(list.map(providerRuntimeKey));
+  const gatewayKeySet = gatewayKeyState(list);
+  return Object.fromEntries(list.map((provider) => [
+    provider.id,
+    prerequisiteReadinessFor(provider, runtimes, gatewayKeySet),
+  ]));
 }
 
 /**

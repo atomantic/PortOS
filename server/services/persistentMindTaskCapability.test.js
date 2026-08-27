@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   getTaskById: vi.fn(),
   getAppWorkTracker: vi.fn(),
   resolveAppWorkTracker: vi.fn(),
+  getProviderPrerequisiteReadinessMap: vi.fn(),
 }));
 
 vi.mock('./apps.js', () => ({
@@ -24,6 +25,9 @@ vi.mock('./cosTaskStore.js', () => ({
   getTaskById: (...args) => mocks.getTaskById(...args),
 }));
 vi.mock('./providers.js', () => ({ listProviders: vi.fn(async () => mocks.providers) }));
+vi.mock('./providerPrerequisites.js', () => ({
+  getProviderPrerequisiteReadinessMap: (...args) => mocks.getProviderPrerequisiteReadinessMap(...args),
+}));
 vi.mock('../lib/workTracker.js', () => ({
   resolveAppWorkTracker: (...args) => mocks.resolveAppWorkTracker(...args),
 }));
@@ -59,6 +63,9 @@ beforeEach(() => {
   mocks.resolveAppWorkTracker.mockResolvedValue({ resolved: 'plan' });
   mocks.getTaskById.mockImplementation(async () => mocks.existing);
   mocks.addTask.mockResolvedValue({ id: 'sys-mind-stable', status: 'pending', autoApproved: true });
+  mocks.getProviderPrerequisiteReadinessMap.mockImplementation((providers) => Object.fromEntries(
+    providers.map((provider) => [provider.id, { status: 'ready', reasonCodes: [] }]),
+  ));
 });
 
 describe('persistent mind CoS-task capability', () => {
@@ -75,6 +82,12 @@ describe('persistent mind CoS-task capability', () => {
           { id: 'gpt-5-mini', efforts: expect.arrayContaining(['high']) },
         ],
       }],
+      providerReadiness: {
+        blockedCount: 0,
+        blockedReasonCodes: [],
+        unknownCount: 0,
+        unknownReasonCodes: [],
+      },
     });
     const prompt = buildPersistentMindTaskCapabilityPrompt({ enabled: true, catalog });
     expect(prompt).toContain('"review-then-merge"');
@@ -82,6 +95,31 @@ describe('persistent mind CoS-task capability', () => {
     expect(prompt).toContain('"leave-open"');
     expect(prompt).toContain('Plan & File Issue');
     expect(prompt).toContain('planOnly');
+    expect(prompt).not.toContain('command');
+  });
+
+  it('omits blocked and unknown providers while publishing bounded reason-code aggregates', async () => {
+    mocks.providers.push(
+      { id: 'claude', name: 'Claude', type: 'cli', enabled: true, command: 'claude' },
+      { id: 'grok', name: 'Grok', type: 'cli', enabled: true, command: 'grok' },
+    );
+    mocks.getProviderPrerequisiteReadinessMap.mockReturnValue({
+      codex: { status: 'ready', reasonCodes: [] },
+      claude: { status: 'blocked', reasonCodes: ['runtime', 'inheritedApiKey'] },
+      grok: { status: 'unknown', reasonCodes: ['runtime-unprobed'] },
+    });
+
+    const catalog = await readPersistentMindTaskCatalog();
+    expect(catalog.providers.map((provider) => provider.id)).toEqual(['codex']);
+    expect(catalog.providerReadiness).toEqual({
+      blockedCount: 1,
+      blockedReasonCodes: ['inheritedApiKey', 'runtime'],
+      unknownCount: 1,
+      unknownReasonCodes: ['runtime-unprobed'],
+    });
+    const prompt = buildPersistentMindTaskCapabilityPrompt({ enabled: true, catalog });
+    expect(prompt).toContain('"blockedCount":1');
+    expect(prompt).toContain('"runtime-unprobed"');
     expect(prompt).not.toContain('command');
   });
 
@@ -203,6 +241,37 @@ describe('persistent mind CoS-task capability', () => {
       wake: { kind: 'message', message: { id: 'message-unrunnable' } },
     });
     expect(result).toMatchObject({ success: false, error: expect.stringContaining('repository') });
+    expect(mocks.addTask).not.toHaveBeenCalled();
+  });
+
+  it('revalidates readiness immediately before queueing and rejects a mid-turn change', async () => {
+    await readPersistentMindTaskCatalog();
+    mocks.getProviderPrerequisiteReadinessMap.mockReturnValue({
+      codex: { status: 'blocked', reasonCodes: ['runtime'] },
+    });
+
+    const [result] = await executePersistentMindTaskRequests({
+      taskRequests: [taskRequest()],
+      turnId: 'turn-readiness-change',
+      wake: { kind: 'message', message: { id: 'message-readiness-change' } },
+    });
+
+    expect(result).toMatchObject({ success: false, error: expect.stringContaining('not ready (runtime)') });
+    expect(mocks.addTask).not.toHaveBeenCalled();
+  });
+
+  it('keeps an unprobed provider distinct from a ready provider', async () => {
+    mocks.getProviderPrerequisiteReadinessMap.mockReturnValue({
+      codex: { status: 'unknown', reasonCodes: ['runtime-unprobed'] },
+    });
+
+    const [result] = await executePersistentMindTaskRequests({
+      taskRequests: [taskRequest()],
+      turnId: 'turn-readiness-unknown',
+      wake: { kind: 'message', message: { id: 'message-readiness-unknown' } },
+    });
+
+    expect(result).toMatchObject({ success: false, error: expect.stringContaining('still being checked') });
     expect(mocks.addTask).not.toHaveBeenCalled();
   });
 

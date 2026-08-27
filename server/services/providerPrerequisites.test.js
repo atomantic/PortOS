@@ -10,7 +10,12 @@ vi.mock('./providerRuntimeInstaller.js', async (importOriginal) => ({
 }));
 
 const { getProviderRuntimeStatuses, peekProviderRuntimeStatuses } = await import('./providerRuntimeInstaller.js');
-const { getProviderPrerequisiteMap, prerequisitesMetForRouting, __resetPrerequisiteRefresh } =
+const {
+  getProviderPrerequisiteMap,
+  getProviderPrerequisiteReadinessMap,
+  prerequisitesMetForRouting,
+  __resetPrerequisiteRefresh,
+} =
   await import('./providerPrerequisites.js');
 
 const CODEX_ABSENT = { id: 'codex', label: 'Codex CLI', installed: false };
@@ -79,6 +84,44 @@ describe('getProviderPrerequisiteMap', () => {
     expect(map[openWrapper.id].missing).toEqual([
       { code: 'inheritedApiKey', label: 'OpenRouter API provider has no API key' },
     ]);
+  });
+});
+
+describe('getProviderPrerequisiteReadinessMap', () => {
+  it('distinguishes ready, blocked, and unknown runtime states', () => {
+    peekProviderRuntimeStatuses.mockReturnValue({
+      codex: CODEX_PRESENT,
+      claude: { id: 'claude', label: 'Claude Code CLI', installed: false },
+    });
+
+    const map = getProviderPrerequisiteReadinessMap([
+      codex(),
+      { id: 'claude', type: 'cli', command: 'claude' },
+      { id: 'grok', type: 'cli', command: 'grok' },
+    ]);
+
+    expect(map.codex).toEqual({ status: 'ready', reasonCodes: [] });
+    expect(map.claude).toEqual({ status: 'blocked', reasonCodes: ['runtime'] });
+    expect(map.grok).toEqual({ status: 'unknown', reasonCodes: ['runtime-unprobed'] });
+  });
+
+  it('treats an expired runtime snapshot as unknown and refreshes it', () => {
+    peekProviderRuntimeStatuses.mockReturnValue({});
+
+    expect(getProviderPrerequisiteReadinessMap([codex()]).codex)
+      .toEqual({ status: 'unknown', reasonCodes: ['runtime-unprobed'] });
+    expect(getProviderRuntimeStatuses).toHaveBeenCalledTimes(1);
+  });
+
+  it('blocks on a known inherited credential finding without exposing its value', () => {
+    peekProviderRuntimeStatuses.mockReturnValue({
+      opencode: { id: 'opencode', label: 'OpenCode CLI', installed: true },
+    });
+    const wrapper = { id: 'opencode-orcarouter', type: 'cli', command: 'opencode', orcarouterBacked: true };
+    const sibling = { id: 'orcarouter', type: 'api', endpoint: 'https://api.example.com', hasApiKey: false };
+
+    expect(getProviderPrerequisiteReadinessMap([wrapper, sibling])[wrapper.id])
+      .toEqual({ status: 'blocked', reasonCodes: ['inheritedApiKey'] });
   });
 });
 

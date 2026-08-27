@@ -21,6 +21,7 @@ import { resolveAppWorkTracker } from '../lib/workTracker.js';
 import { getActiveApps, getAppWorkTracker } from './apps.js';
 import { loadState } from './cosState.js';
 import { addTask, getTaskById } from './cosTaskStore.js';
+import { getProviderPrerequisiteReadinessMap } from './providerPrerequisites.js';
 import { listProviders } from './providers.js';
 
 const MAX_CATALOG_APPS = 50;
@@ -35,6 +36,35 @@ const appTrackerCache = new Map();
 const isRunnableApp = (app) => typeof app?.repoPath === 'string' && app.repoPath.trim().length > 0;
 const isRunnableAgentProvider = (provider) => provider?.enabled !== false
   && (provider?.type === 'cli' || provider?.type === 'tui');
+
+const boundedProviderCandidates = (providers) => providers
+  .filter((provider) => isRunnableAgentProvider(provider)
+    && typeof provider?.id === 'string' && provider.id
+    && provider.id.length <= PERSISTENT_MIND_TASK_LIMITS.providerIdChars)
+  .slice(0, MAX_CATALOG_PROVIDERS);
+
+const providerReadinessSummary = (providers, readiness) => {
+  const summary = {
+    blockedCount: 0,
+    blockedReasonCodes: [],
+    unknownCount: 0,
+    unknownReasonCodes: [],
+  };
+  for (const provider of providers) {
+    const verdict = readiness[provider.id];
+    if (verdict?.status !== 'blocked' && verdict?.status !== 'unknown') continue;
+    const prefix = verdict.status;
+    summary[`${prefix}Count`] += 1;
+    summary[`${prefix}ReasonCodes`].push(...(verdict.reasonCodes || []));
+  }
+  summary.blockedReasonCodes = [...new Set(summary.blockedReasonCodes)].sort();
+  summary.unknownReasonCodes = [...new Set(summary.unknownReasonCodes)].sort();
+  return summary;
+};
+
+const boundedReadinessReasonCodes = (value) => (Array.isArray(value) ? value : [])
+  .filter((code) => typeof code === 'string' && /^[a-z][a-zA-Z0-9-]{0,49}$/.test(code))
+  .slice(0, 10);
 
 const selectableModelIds = (provider) => {
   const stored = filterSelectableModels(antigravityBaseModels(provider?.models))
@@ -86,19 +116,32 @@ export async function readPersistentMindTaskCatalog() {
     .filter((app) => isRunnableApp(app) && typeof app?.id === 'string' && app.id
       && app.id.length <= PERSISTENT_MIND_TASK_LIMITS.appIdChars)
     .slice(0, MAX_CATALOG_APPS);
+  const candidates = boundedProviderCandidates(providers);
+  const readiness = getProviderPrerequisiteReadinessMap(providers);
   return {
     apps: await Promise.all(runnableApps.map(appCatalogEntry)),
-    providers: providers
-      .filter((provider) => isRunnableAgentProvider(provider)
-        && typeof provider?.id === 'string' && provider.id
-        && provider.id.length <= PERSISTENT_MIND_TASK_LIMITS.providerIdChars)
-      .slice(0, MAX_CATALOG_PROVIDERS)
+    providers: candidates
+      .filter((provider) => readiness[provider.id]?.status === 'ready')
       .map(providerCatalogEntry),
+    providerReadiness: providerReadinessSummary(candidates, readiness),
   };
 }
 
 const boundedPromptCatalog = (catalog) => {
-  const bounded = { apps: [], providers: [] };
+  const bounded = {
+    apps: [],
+    providers: [],
+    providerReadiness: {
+      blockedCount: Number.isSafeInteger(catalog?.providerReadiness?.blockedCount)
+        ? Math.max(0, Math.min(MAX_CATALOG_PROVIDERS, catalog.providerReadiness.blockedCount))
+        : 0,
+      blockedReasonCodes: boundedReadinessReasonCodes(catalog?.providerReadiness?.blockedReasonCodes),
+      unknownCount: Number.isSafeInteger(catalog?.providerReadiness?.unknownCount)
+        ? Math.max(0, Math.min(MAX_CATALOG_PROVIDERS, catalog.providerReadiness.unknownCount))
+        : 0,
+      unknownReasonCodes: boundedReadinessReasonCodes(catalog?.providerReadiness?.unknownReasonCodes),
+    },
+  };
   for (const app of Array.isArray(catalog?.apps) ? catalog.apps : []) {
     bounded.apps.push(app);
     if (JSON.stringify({ apps: bounded.apps }).length > MAX_CATALOG_APP_PROMPT_CHARS) {
@@ -161,6 +204,14 @@ const taskIdFor = (wakeId, fingerprint) => (
 
 const boundedError = (error) => String(error?.message || error || 'Task creation failed').slice(0, 300);
 
+const readinessError = (providerId, verdict) => {
+  const reasonCodes = (verdict?.reasonCodes || []).slice(0, 5).join(', ') || 'prerequisites';
+  if (verdict?.status === 'unknown') {
+    return `Provider '${providerId}' readiness is still being checked (${reasonCodes}); retry shortly or check Settings > AI Providers`;
+  }
+  return `Provider '${providerId}' is not ready (${reasonCodes}); check Settings > AI Providers`;
+};
+
 const validateChoice = async (request, apps, providers) => {
   const app = apps.find((candidate) => candidate.id === request.appId && isRunnableApp(candidate));
   if (!app) return { error: `App '${request.appId}' has no configured repository` };
@@ -168,6 +219,8 @@ const validateChoice = async (request, apps, providers) => {
     candidate.id === request.providerId && isRunnableAgentProvider(candidate)
   ));
   if (!provider) return { error: `Provider '${request.providerId}' is not an enabled CLI/TUI coding provider` };
+  const readiness = getProviderPrerequisiteReadinessMap(providers)[provider.id];
+  if (readiness?.status !== 'ready') return { error: readinessError(provider.id, readiness) };
   const models = selectableModelIds(provider);
   if (request.model && !models.includes(request.model)) {
     return { error: `Model '${request.model}' is not configured for provider '${request.providerId}'` };
@@ -185,9 +238,10 @@ const validateChoice = async (request, apps, providers) => {
   return { app, provider };
 };
 
-async function queueOneTask({ request, taskId, apps, providers }) {
+async function queueOneTask({ request, taskId, apps }) {
   const existing = await getTaskById(taskId);
   if (existing) return { success: true, duplicate: true, task: existing };
+  const providers = await listProviders();
   const choice = await validateChoice(request, apps, providers);
   if (choice.error) return { success: false, error: choice.error };
   const planOnly = request.planOnly === true;
@@ -246,7 +300,7 @@ export async function executePersistentMindTaskRequests({
     : [];
   if (requests.length === 0) return [];
 
-  const [root, apps, providers] = await Promise.all([loadState(), getActiveApps(), listProviders()]);
+  const [root, apps] = await Promise.all([loadState(), getActiveApps()]);
   const enabled = normalizePersistentMindCapabilities(root.config?.persistentMindCapabilities).createTasks;
   const record = typeof recordCapabilityEvent === 'function'
     ? recordCapabilityEvent
@@ -281,7 +335,7 @@ export async function executePersistentMindTaskRequests({
       ? { success: false, error: 'Persistent mind turn was interrupted before task creation' }
       : enabled
       ? await Promise.resolve()
-        .then(() => queueOneTask({ request, taskId, apps, providers }))
+        .then(() => queueOneTask({ request, taskId, apps }))
         .then((value) => value, (error) => ({ success: false, error: boundedError(error) }))
       : { success: false, error: 'Persistent mind task creation access is disabled' };
     const displayText = outcome.success
