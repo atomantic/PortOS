@@ -40,4 +40,15 @@ describe('GET /api/api-docs/openapi.json', () => {
     const res = await request(buildApp()).get('/api/api-docs/openapi.json');
     expect(res.body.servers[0].url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
   });
+
+  it('serves a minimized tool resource for currently exposed operations', async () => {
+    store = { apiAccess: { voice: { exposed: true, requireAuth: false } } };
+    const res = await request(buildApp()).get('/api/api-docs/tools.json');
+    expect(res.status).toBe(200);
+    expect(res.body.type).toBe('portos_tool_resource');
+    expect(res.body.tools.map((tool) => tool.name)).toEqual([
+      'voice.list-engines', 'voice.list-voices', 'voice.synthesize',
+    ]);
+    expect(res.body.tools[2].transport).toEqual({ method: 'POST', path: '/api/voice/public/synthesize' });
+  });
 });

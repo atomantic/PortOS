@@ -18,8 +18,8 @@
 import { Router } from 'express';
 
 import { join } from 'path';
-import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { txt2imgSchema } from '../lib/apiSchemas.js';
 import { PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { getSettings } from '../services/settings.js';
 import { generateImage, getMode, getActiveJob, IMAGE_GEN_MODE, CLOUD_IMAGE_GEN_MODES } from '../services/imageGen/index.js';
@@ -137,17 +137,6 @@ router.get('/progress', asyncHandler(async (_req, res) => {
 // Mirror imageGen.js's generateSchema bounds — A1111 clients can be sloppy
 // (e.g. defaulting steps=999 from a preset) and we want a clear 400 instead
 // of letting bad values through to the dispatcher.
-const txt2imgSchema = z.object({
-  prompt: z.string().min(1).max(8000),
-  negative_prompt: z.string().max(8000).optional().nullable(),
-  width: z.number().int().min(64).max(2048).optional(),
-  height: z.number().int().min(64).max(2048).optional(),
-  steps: z.number().int().min(1).max(150).optional(),
-  cfg_scale: z.number().min(0).max(30).optional(),
-  seed: z.number().int().optional(),
-  sd_model_checkpoint: z.string().max(128).optional(),
-}).passthrough(); // tolerate extra A1111 fields the client sends
-
 router.post('/txt2img', asyncHandler(async (req, res) => {
   const parsed = txt2imgSchema.safeParse(req.body || {});
   if (!parsed.success) {

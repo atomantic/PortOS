@@ -16,17 +16,12 @@
  */
 
 import { Router } from 'express';
-import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { synthesizeBodySchema } from '../lib/apiSchemas.js';
 import { synthesize, listVoices, VALID_ENGINES } from '../services/voice/tts.js';
 import { getVoiceConfig } from '../services/voice/config.js';
-import { MAX_PROACTIVE_TEXT_LEN } from '../services/voice/proactiveSpeech.js';
 
 const router = Router();
-
-// Shared cap with the in-process function boundary (proactiveSpeech) and the
-// internal /api/voice/test route — imported so the three can't drift.
-const MAX_VOICE_TEXT_LEN = MAX_PROACTIVE_TEXT_LEN;
 
 const validEngine = (v) => (VALID_ENGINES.has(v) ? v : undefined);
 
@@ -35,12 +30,7 @@ const validEngine = (v) => (VALID_ENGINES.has(v) ? v : undefined);
 // so whitespace-only payloads 400 instead of synthesizing empty audio.
 // Exported so server/lib/openapiSpec.js can assert its (light) copy stays in
 // sync — see openapiSpec.test.js's parity test.
-export const synthesizeBodySchema = z.object({
-  text: z.string().trim().min(1).max(MAX_VOICE_TEXT_LEN),
-  engine: z.enum(['kokoro', 'piper']).optional(),
-  voice: z.string().max(128).optional(),
-  rate: z.number().min(0.25).max(4).optional(),
-}).strict();
+export { synthesizeBodySchema };
 
 // POST /api/voice/public/synthesize — body { text, engine?, voice?, rate? } → WAV.
 // Mirrors /api/voice/test but is the external-facing surface. `synthesize()`

@@ -10,7 +10,24 @@ http://localhost:5555/api
 
 When a TLS cert is provisioned (`npm run setup:cert`), `:5555` serves HTTPS instead and a loopback-only HTTP mirror runs on `http://127.0.0.1:5553` for local scripts. See [PORTS.md](./PORTS.md).
 
-This document covers the most commonly used endpoints plus a [complete route-domain index](#route-domain-index). A machine-readable OpenAPI 3.1 spec for the public API surface is served at `GET /api/api-docs/openapi.json` and rendered in the UI at `/api-access`.
+This document covers the most commonly used endpoints plus a [complete route-domain index](#route-domain-index). A machine-readable OpenAPI 3.1 spec for the public API surface is served at `GET /api/api-docs/openapi.json` and rendered in the UI at `/api-access`. The matching minimized provider-neutral tool resource is available at `GET /api/api-docs/tools.json`.
+
+## Generated API contracts
+
+The checked-in [OpenAPI contract](api/openapi.json) and [minimized tool resource](api/portos-tools.min.json) are generated with:
+
+```bash
+npm run generate:api-spec
+```
+
+`server/lib/openapiSpec.js` is the reusable source for both artifacts. Route
+request schemas live in `server/lib/apiSchemas.js` and are imported by the
+routes as well as the generator, so validation bounds cannot silently drift
+from the contract. Only operations explicitly marked with the
+`x-portos-tool` extension enter the tool resource; adding a REST path alone
+never exposes a new model tool. The checked-in document contains every static
+registry entry, while the runtime endpoints filter it to APIs currently
+enabled under Settings → API Access.
 
 Building a native companion client? See [COMPANION_APP_API.md](./COMPANION_APP_API.md) — the stable, pre-auth-discoverable contract (discovery/identity, HTTP Basic auth, instance management, palette actions, daily-log, POST progress, and the iCloud-sync precedent) that the PortDeck app consumes.
 

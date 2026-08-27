@@ -380,6 +380,7 @@ export * from './viteAllowedHosts.js';
 
 // === General utilities ===
 export * from './apiRegistry.js';
+export * from './apiSchemas.js';
 export * from './arrayUtils.js';
 export * from './assetRoutePrefixes.js';
 export * from './asyncMutex.js';

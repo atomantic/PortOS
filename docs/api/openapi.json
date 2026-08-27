@@ -1,0 +1,484 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "PortOS Public API",
+    "version": "2.51.0",
+    "description": "Complete registry contract for externally-callable PortOS services. Runtime exposure is opt-in per API in Settings → API Access."
+  },
+  "servers": [],
+  "tags": [
+    {
+      "name": "voice",
+      "description": "Text-to-speech synthesis and voice enumeration (Kokoro, Piper)."
+    },
+    {
+      "name": "sdapi",
+      "description": "AUTOMATIC1111-compatible txt2img + model/sampler catalog."
+    }
+  ],
+  "paths": {
+    "/api/voice/public/synthesize": {
+      "post": {
+        "tags": [
+          "voice"
+        ],
+        "summary": "Synthesize speech",
+        "description": "Convert text to spoken audio (WAV) using the selected engine and voice.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4000
+                  },
+                  "engine": {
+                    "type": "string",
+                    "enum": [
+                      "kokoro",
+                      "piper"
+                    ]
+                  },
+                  "voice": {
+                    "type": "string",
+                    "maxLength": 128
+                  },
+                  "rate": {
+                    "description": "Speech rate. Validated 0.25–4 (Piper). Kokoro clamps to 0.5–2.0.",
+                    "type": "number",
+                    "minimum": 0.25,
+                    "maximum": 4
+                  }
+                },
+                "required": [
+                  "text"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "WAV audio",
+            "content": {
+              "audio/wav": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid payload or unknown voice"
+          }
+        },
+        "x-portos-tool": {
+          "name": "voice.synthesize",
+          "version": 1,
+          "policy": {
+            "privacy": "personal",
+            "sideEffect": "local-compute",
+            "async": false
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/voice/public/voices": {
+      "get": {
+        "tags": [
+          "voice"
+        ],
+        "summary": "List voices",
+        "description": "Enumerate available voices for an engine (query param `engine`, default = active).",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "kokoro",
+                "piper"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Voice list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "engine",
+                    "voices"
+                  ],
+                  "properties": {
+                    "engine": {
+                      "type": "string",
+                      "enum": [
+                        "kokoro",
+                        "piper"
+                      ]
+                    },
+                    "voices": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-portos-tool": {
+          "name": "voice.list-voices",
+          "version": 1,
+          "policy": {
+            "privacy": "internal",
+            "sideEffect": "read",
+            "async": false
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/voice/public/engines": {
+      "get": {
+        "tags": [
+          "voice"
+        ],
+        "summary": "List engines",
+        "description": "Discover available TTS engines and the configured default voice per engine.",
+        "responses": {
+          "200": {
+            "description": "Engine list + defaults",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "engines",
+                    "active",
+                    "defaults"
+                  ],
+                  "properties": {
+                    "engines": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "kokoro",
+                          "piper"
+                        ]
+                      }
+                    },
+                    "active": {
+                      "type": "string",
+                      "enum": [
+                        "kokoro",
+                        "piper"
+                      ]
+                    },
+                    "defaults": {
+                      "type": "object",
+                      "properties": {
+                        "kokoro": {
+                          "type": "string"
+                        },
+                        "piper": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-portos-tool": {
+          "name": "voice.list-engines",
+          "version": 1,
+          "policy": {
+            "privacy": "internal",
+            "sideEffect": "read",
+            "async": false
+          }
+        },
+        "security": []
+      }
+    },
+    "/sdapi/v1/txt2img": {
+      "post": {
+        "tags": [
+          "sdapi"
+        ],
+        "summary": "Text-to-image (AUTOMATIC1111-compatible)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "prompt": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 8000
+                  },
+                  "negative_prompt": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 8000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "width": {
+                    "type": "integer",
+                    "minimum": 64,
+                    "maximum": 2048
+                  },
+                  "height": {
+                    "type": "integer",
+                    "minimum": 64,
+                    "maximum": 2048
+                  },
+                  "steps": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 150
+                  },
+                  "cfg_scale": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 30
+                  },
+                  "seed": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  "sd_model_checkpoint": {
+                    "type": "string",
+                    "maxLength": 128
+                  }
+                },
+                "required": [
+                  "prompt"
+                ],
+                "additionalProperties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Generated image(s)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Txt2ImgResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid generation parameters"
+          }
+        },
+        "x-portos-tool": {
+          "name": "image.generate",
+          "version": 1,
+          "policy": {
+            "privacy": "personal",
+            "sideEffect": "local-compute",
+            "async": true
+          }
+        },
+        "security": []
+      }
+    },
+    "/sdapi/v1/sd-models": {
+      "get": {
+        "tags": [
+          "sdapi"
+        ],
+        "summary": "List image models",
+        "responses": {
+          "200": {
+            "description": "Model catalog",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-portos-tool": {
+          "name": "image.list-models",
+          "version": 1,
+          "policy": {
+            "privacy": "internal",
+            "sideEffect": "read",
+            "async": false
+          }
+        },
+        "security": []
+      }
+    },
+    "/sdapi/v1/samplers": {
+      "get": {
+        "tags": [
+          "sdapi"
+        ],
+        "summary": "List samplers",
+        "responses": {
+          "200": {
+            "description": "Sampler list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-portos-tool": {
+          "name": "image.list-samplers",
+          "version": 1,
+          "policy": {
+            "privacy": "internal",
+            "sideEffect": "read",
+            "async": false
+          }
+        },
+        "security": []
+      }
+    },
+    "/sdapi/v1/options": {
+      "get": {
+        "tags": [
+          "sdapi"
+        ],
+        "summary": "Active model/options",
+        "responses": {
+          "200": {
+            "description": "Options",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "x-portos-tool": {
+          "name": "image.get-options",
+          "version": 1,
+          "policy": {
+            "privacy": "internal",
+            "sideEffect": "read",
+            "async": false
+          }
+        },
+        "security": []
+      }
+    },
+    "/sdapi/v1/progress": {
+      "get": {
+        "tags": [
+          "sdapi"
+        ],
+        "summary": "Generation progress",
+        "responses": {
+          "200": {
+            "description": "Progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "x-portos-tool": {
+          "name": "image.get-progress",
+          "version": 1,
+          "policy": {
+            "privacy": "internal",
+            "sideEffect": "read",
+            "async": false
+          }
+        },
+        "security": []
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "PortOS session token (when the API requires auth)."
+      },
+      "basicAuth": {
+        "type": "http",
+        "scheme": "basic",
+        "description": "PortOS password via HTTP Basic (username ignored)."
+      }
+    },
+    "schemas": {
+      "Txt2ImgResponse": {
+        "type": "object",
+        "required": [
+          "images",
+          "parameters",
+          "info"
+        ],
+        "properties": {
+          "images": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "contentEncoding": "base64"
+            }
+          },
+          "parameters": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "info": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

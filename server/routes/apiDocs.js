@@ -15,7 +15,7 @@ import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { getSettings } from '../services/settings.js';
 import { getCurrentVersion } from '../services/updateChecker.js';
-import { buildOpenApiSpec } from '../lib/openapiSpec.js';
+import { buildOpenApiSpec, buildToolCallingResource } from '../lib/openapiSpec.js';
 
 const router = Router();
 
@@ -32,6 +32,16 @@ const baseUrlFromReq = (req) => {
 router.get('/openapi.json', asyncHandler(async (req, res) => {
   const [settings, version] = await Promise.all([getSettings(), getCurrentVersion()]);
   res.json(buildOpenApiSpec(settings, { baseUrl: baseUrlFromReq(req), version }));
+}));
+
+// GET /api/api-docs/tools.json — compact provider-neutral tool resource. It is
+// derived from the same runtime exposure state as OpenAPI, so a disabled API
+// cannot be advertised to a tool caller.
+router.get('/tools.json', asyncHandler(async (req, res) => {
+  const [settings, version] = await Promise.all([getSettings(), getCurrentVersion()]);
+  const spec = buildOpenApiSpec(settings, { baseUrl: baseUrlFromReq(req), version });
+  res.set('Cache-Control', 'private, max-age=300');
+  res.json(buildToolCallingResource(spec));
 }));
 
 export default router;

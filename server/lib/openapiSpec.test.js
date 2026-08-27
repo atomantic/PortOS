@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
-import { buildOpenApiSpec } from './openapiSpec.js';
+import { buildOpenApiSpec, buildToolCallingResource, toOpenAiTools } from './openapiSpec.js';
 import { synthesizeBodySchema as routeSchema } from '../routes/voicePublic.js';
 
 const exposed = (apiAccess) => ({ apiAccess });
@@ -79,5 +79,26 @@ describe('buildOpenApiSpec', () => {
     const route = z.toJSONSchema(routeSchema);
     expect(stripDescriptions(documented.properties)).toEqual(stripDescriptions(route.properties));
     expect((documented.required || []).sort()).toEqual((route.required || []).sort());
+  });
+
+  it('can build a complete deterministic catalog without enabling APIs', () => {
+    const spec = buildOpenApiSpec({}, { includeUnexposed: true, version: '1.2.3' });
+    expect(Object.keys(spec.paths)).toHaveLength(8);
+    expect(spec.paths['/sdapi/v1/txt2img'].post.requestBody.content['application/json'].schema.additionalProperties).toBeDefined();
+    expect(spec.info.version).toBe('1.2.3');
+  });
+
+  it('projects only explicitly marked operations into a compact tool resource', () => {
+    const spec = buildOpenApiSpec({}, { includeUnexposed: true });
+    const resource = buildToolCallingResource(spec);
+    const names = resource.tools.map((tool) => tool.name);
+    expect(resource.type).toBe('portos_tool_resource');
+    expect(names).toEqual([...names].sort());
+    expect(names).toContain('image.generate');
+    expect(names).toContain('voice.synthesize');
+    expect(resource.tools.every((tool) => tool.input_schema && tool.output_schema)).toBe(true);
+    expect(resource.tools.find((tool) => tool.name === 'image.generate').output_schema.required).toEqual(['images', 'parameters', 'info']);
+    expect(JSON.stringify(resource)).not.toContain('#/components/');
+    expect(toOpenAiTools(resource).every((tool) => tool.type === 'function')).toBe(true);
   });
 });
