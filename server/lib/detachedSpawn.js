@@ -550,7 +550,19 @@ const readControlFile = (path) => readFile(path, 'utf8').catch((err) => {
   throw err;
 });
 
-const processMatches = async (pid, { executable, args }) => {
+const processCommandMatches = (command, { executable, args }) => {
+  // A zombie still owns its PID, so it cannot be a recycled unrelated process.
+  // Keep the control dir blocked until the supervisor writes the exit sentinel;
+  // otherwise its late write can land in a newly-truncated control directory.
+  if (/(?:^|\s)<(?:defunct|exiting)>(?:\s|$)/.test(command)) return true;
+  const actualExecutable = command.split(/\s+/, 1)[0];
+  if (basename(actualExecutable) !== basename(executable)) return false;
+  if (!Array.isArray(args)) return true;
+  const actualArgs = command.slice(actualExecutable.length).trim();
+  return actualArgs === args.map(String).join(' ');
+};
+
+const processMatches = async (pid, expectedProcess) => {
   const { stdout } = await execFileAsync(
     'ps', ['-ww', '-p', String(pid), '-o', 'command='], safeChildProcessOptions({ timeout: 5000 })
   ).catch((err) => {
@@ -561,12 +573,10 @@ const processMatches = async (pid, { executable, args }) => {
   });
   const command = stdout.trim();
   if (!command) return false;
-  const actualExecutable = command.split(/\s+/, 1)[0];
-  if (basename(actualExecutable) !== basename(executable)) return false;
-  if (!Array.isArray(args)) return true;
-  const actualArgs = command.slice(actualExecutable.length).trim();
-  return actualArgs === args.map(String).join(' ');
+  return processCommandMatches(command, expectedProcess);
 };
+
+export const __detachedSpawnTesting = { processCommandMatches };
 
 export async function isDetachedRunning(controlDir, expectedProcess = null) {
   const pidRaw = await readControlFile(join(controlDir, 'pid'));
