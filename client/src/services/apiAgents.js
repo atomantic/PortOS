@@ -355,13 +355,15 @@ export const getCosWorkflow = (hours = 24) => request(`/cos/workflow?hours=${hou
 // Feature Agents
 export const getFeatureAgents = () => request('/feature-agents');
 export const getFeatureAgent = (id) => request(`/feature-agents/${id}`);
-export const createFeatureAgent = (data) => request('/feature-agents', {
+export const createFeatureAgent = (data, options = {}) => request('/feature-agents', {
   method: 'POST',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
-export const updateFeatureAgent = (id, data) => request(`/feature-agents/${id}`, {
+export const updateFeatureAgent = (id, data, options = {}) => request(`/feature-agents/${id}`, {
   method: 'PUT',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
 export const deleteFeatureAgent = (id, options = {}) => request(`/feature-agents/${id}`, { method: 'DELETE', ...options });
 export const startFeatureAgent = (id, options = {}) => request(`/feature-agents/${id}/start`, { method: 'POST', ...options });

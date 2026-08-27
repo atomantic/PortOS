@@ -839,6 +839,11 @@ describe('validation.js', () => {
       const result = featureAgentSchema.safeParse({ ...validAgent, priority: 'INVALID' });
       expect(result.success).toBe(false);
     });
+
+    it('should validate an optional reasoning effort', () => {
+      expect(featureAgentSchema.safeParse({ ...validAgent, effort: 'high' }).success).toBe(true);
+      expect(featureAgentSchema.safeParse({ ...validAgent, effort: 'bogus' }).success).toBe(false);
+    });
   });
 
   describe('featureAgentUpdateSchema (deepPartial)', () => {

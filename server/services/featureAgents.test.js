@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { calculateBackoff } from './featureAgents.js';
+import { calculateBackoff, generateTaskFromFeatureAgent } from './featureAgents.js';
 
 /**
  * Tests for feature agents pure logic.
@@ -146,24 +146,6 @@ describe('Feature Agent State Transitions', () => {
 });
 
 describe('Feature Agent Task Generation', () => {
-  function generateTaskFromFeatureAgent(agent) {
-    return {
-      id: `fa-run-${agent.id}-${Date.now()}`,
-      description: `[Feature Agent] ${agent.name}: ${agent.description}`,
-      priority: agent.priority || 'MEDIUM',
-      status: 'pending',
-      taskType: 'internal',
-      approvalRequired: false,
-      metadata: {
-        featureAgentId: agent.id,
-        featureAgentRun: true,
-        app: agent.appId,
-        provider: agent.providerId || undefined,
-        model: agent.model || undefined
-      }
-    };
-  }
-
   const agent = {
     id: 'fa-abc123',
     name: 'UI Agent',
@@ -171,7 +153,8 @@ describe('Feature Agent Task Generation', () => {
     priority: 'HIGH',
     appId: 'app-001',
     providerId: 'prov-1',
-    model: 'opus'
+    model: 'opus',
+    effort: 'high'
   };
 
   it('should generate task with correct metadata', () => {
@@ -179,6 +162,7 @@ describe('Feature Agent Task Generation', () => {
     expect(task.metadata.featureAgentId).toBe('fa-abc123');
     expect(task.metadata.featureAgentRun).toBe(true);
     expect(task.metadata.app).toBe('app-001');
+    expect(task.metadata.effort).toBe('high');
   });
 
   it('should use agent priority', () => {

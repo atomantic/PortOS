@@ -359,7 +359,8 @@ export function generateTaskFromFeatureAgent(agent) {
       featureAgentRun: true,
       app: agent.appId,
       provider: agent.providerId || undefined,
-      model: agent.model || undefined
+      model: agent.model || undefined,
+      effort: agent.effort || undefined
     }
   };
 }
