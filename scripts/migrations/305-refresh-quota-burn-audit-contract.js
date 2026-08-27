@@ -26,6 +26,20 @@ import { upgradeStoredAuditPrompt } from '../../server/lib/quotaBurnPresets.js';
 const QUOTA_BURN_PATH = join('data', 'cos', 'quota-burn.json');
 
 /**
+ * Where the pre-refresh plan is copied before anything is rewritten.
+ *
+ * The two gates in `upgradeStoredAuditPrompt` recognize a user's own procedure
+ * by structure, and structure can only ever be a heuristic: a user who kept
+ * every shipped anchor and heading but added an unbolded sentence of their own
+ * inside the contract would still have it replaced. `data/` is gitignored
+ * runtime state, so there would be nothing to recover it from. One copy taken
+ * before the first rewrite makes the whole question moot — the refresh stops
+ * being irreversible, which is worth more than tightening a heuristic that
+ * cannot be made exact without reintroducing migration 294's failure.
+ */
+const BACKUP_PATH = join('data', 'cos', 'quota-burn.pre-305.json');
+
+/**
  * Absent → `null` (nothing to migrate). Unparseable → THROW.
  *
  * Swallowing a parse error would return the same `null` as "this install has no
@@ -34,14 +48,16 @@ const QUOTA_BURN_PATH = join('data', 'cos', 'quota-burn.json');
  * whole point of this migration would never run again. Failing loudly on a
  * corrupt file is the only outcome that stays recoverable.
  */
-async function readJson(path) {
+async function readPlan(path) {
   const raw = await readFile(path, 'utf-8').catch((err) => {
     if (err.code === 'ENOENT') return null;
     throw err;
   });
   if (raw == null) return null;
   try {
-    return JSON.parse(raw);
+    // The raw text rides along so the backup is a byte-for-byte copy of what
+    // was on disk, not a re-serialization that could differ in formatting.
+    return { raw, config: JSON.parse(raw) };
   } catch (err) {
     throw new Error(`${QUOTA_BURN_PATH} is not valid JSON (${err.message}) — repair it and re-run migrations`);
   }
@@ -50,7 +66,9 @@ async function readJson(path) {
 export default {
   async up({ rootDir }) {
     const fullPath = join(rootDir, QUOTA_BURN_PATH);
-    const config = await readJson(fullPath);
+    const plan = await readPlan(fullPath);
+    const config = plan?.config;
+    const original = plan?.raw;
     if (!config?.families) return { updated: 0 };
 
     let updated = 0;
@@ -76,7 +94,15 @@ export default {
     // repaired-JSON path above would then never re-run because the runner has
     // already recorded 305 as applied. The trailing newline matches what the
     // store itself writes, so this never shows as a spurious diff.
-    if (updated) await atomicWrite(fullPath, `${JSON.stringify(config, null, 2)}\n`);
+    //
+    // The backup is written FIRST and only when there is something to change,
+    // so a no-op install gains no stray file and a crash between the two writes
+    // still leaves the original plan readable at BACKUP_PATH.
+    if (updated) {
+      await atomicWrite(join(rootDir, BACKUP_PATH), original);
+      console.log(`💾 ${QUOTA_BURN_PATH}: previous plan saved to ${BACKUP_PATH}`);
+      await atomicWrite(fullPath, `${JSON.stringify(config, null, 2)}\n`);
+    }
     if (skipped) console.log(`✋ ${QUOTA_BURN_PATH}: left ${skipped} custom or already-current prompt(s) untouched`);
     return { updated, skipped };
   },

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -40,11 +40,13 @@ const storedPrompt = (path) => readJson(path).families.claude.jobs[0].params.pro
 describe('migration 305 — refresh quota-burn audit contract', () => {
   let rootDir;
   let configPath;
+  let backupPath;
 
   beforeEach(() => {
     rootDir = mkdtempSync(join(tmpdir(), 'migration-305-'));
     mkdirSync(join(rootDir, 'data/cos'), { recursive: true });
     configPath = join(rootDir, 'data/cos/quota-burn.json');
+    backupPath = join(rootDir, 'data/cos/quota-burn.pre-305.json');
   });
 
   afterEach(() => rmSync(rootDir, { recursive: true, force: true }));
@@ -54,6 +56,24 @@ describe('migration 305 — refresh quota-burn audit contract', () => {
     const result = await migration.up({ rootDir });
     expect(result.updated).toBe(1);
     expect(storedPrompt(configPath)).toBe(currentPrompt);
+  });
+
+  it('saves a byte-for-byte backup before rewriting anything', async () => {
+    // The edit-detection gates are structural heuristics, and `data/` is
+    // gitignored, so without this copy a wrongly-refreshed prompt is gone for
+    // good. Asserted on the raw bytes, not the parsed object, because a
+    // re-serialized backup would not round-trip a hand-formatted file.
+    writeJson(configPath, config(stalePrompt));
+    const before = readFileSync(configPath, 'utf8');
+    await migration.up({ rootDir });
+    expect(readFileSync(backupPath, 'utf8')).toBe(before);
+    expect(readFileSync(configPath, 'utf8')).not.toBe(before);
+  });
+
+  it('writes no backup when it upgrades nothing', async () => {
+    writeJson(configPath, config(currentPrompt));
+    await migration.up({ rootDir });
+    expect(existsSync(backupPath)).toBe(false);
   });
 
   it('leaves a prompt whose How-to-run section the user rewrote', async () => {
