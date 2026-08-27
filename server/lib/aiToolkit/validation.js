@@ -75,7 +75,7 @@ export const providerSchema = z.object({
   id: z.string().regex(/^[a-z0-9][a-z0-9-]*$/, 'id must be lowercase alphanumeric with hyphens').max(80).optional(),
   name: z.string().min(1).max(100),
   type: z.enum(['cli', 'api', 'tui']),
-  command: z.string().optional(),
+  command: z.string().trim().optional(),
   args: z.array(z.string()).optional(),
   // CLI providers send `endpoint: ''` from the form; coerce empty/null to
   // undefined so the URL check only runs for actual values (API providers).
