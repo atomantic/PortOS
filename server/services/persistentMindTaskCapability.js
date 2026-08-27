@@ -117,7 +117,7 @@ export async function readPersistentMindTaskCatalog() {
       && app.id.length <= PERSISTENT_MIND_TASK_LIMITS.appIdChars)
     .slice(0, MAX_CATALOG_APPS);
   const candidates = boundedProviderCandidates(providers);
-  const readiness = getProviderPrerequisiteReadinessMap(providers);
+  const readiness = await getProviderPrerequisiteReadinessMap(providers);
   return {
     apps: await Promise.all(runnableApps.map(appCatalogEntry)),
     providers: candidates
@@ -219,7 +219,7 @@ const validateChoice = async (request, apps, providers) => {
     candidate.id === request.providerId && isRunnableAgentProvider(candidate)
   ));
   if (!provider) return { error: `Provider '${request.providerId}' is not an enabled CLI/TUI coding provider` };
-  const readiness = getProviderPrerequisiteReadinessMap(providers)[provider.id];
+  const readiness = (await getProviderPrerequisiteReadinessMap(providers))[provider.id];
   if (readiness?.status !== 'ready') return { error: readinessError(provider.id, readiness) };
   const models = selectableModelIds(provider);
   if (request.model && !models.includes(request.model)) {

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { basename, dirname } from 'path';
 
 // Only the probe is stubbed — `getProviderRuntime` stays real so the "is this
 // command even in the runtime table?" branch is exercised against the shipped
@@ -88,13 +89,19 @@ describe('getProviderPrerequisiteMap', () => {
 });
 
 describe('getProviderPrerequisiteReadinessMap', () => {
-  it('distinguishes ready, blocked, and unknown runtime states', () => {
+  it('distinguishes ready and blocked runtime states after probing', async () => {
     peekProviderRuntimeStatuses.mockReturnValue({
       codex: CODEX_PRESENT,
       claude: { id: 'claude', label: 'Claude Code CLI', installed: false },
     });
 
-    const map = getProviderPrerequisiteReadinessMap([
+    getProviderRuntimeStatuses.mockResolvedValue({
+      codex: CODEX_PRESENT,
+      claude: { id: 'claude', label: 'Claude Code CLI', installed: false },
+      grok: { id: 'grok', label: 'Grok Build CLI', installed: true },
+    });
+
+    const map = await getProviderPrerequisiteReadinessMap([
       codex(),
       { id: 'claude', type: 'cli', command: 'claude' },
       { id: 'grok', type: 'cli', command: 'grok' },
@@ -102,26 +109,56 @@ describe('getProviderPrerequisiteReadinessMap', () => {
 
     expect(map.codex).toEqual({ status: 'ready', reasonCodes: [] });
     expect(map.claude).toEqual({ status: 'blocked', reasonCodes: ['runtime'] });
-    expect(map.grok).toEqual({ status: 'unknown', reasonCodes: ['runtime-unprobed'] });
+    expect(map.grok).toEqual({ status: 'ready', reasonCodes: [] });
   });
 
-  it('treats an expired runtime snapshot as unknown and refreshes it', () => {
+  it('awaits a cold or expired runtime probe before returning readiness', async () => {
     peekProviderRuntimeStatuses.mockReturnValue({});
+    getProviderRuntimeStatuses.mockResolvedValue({ codex: CODEX_PRESENT });
 
-    expect(getProviderPrerequisiteReadinessMap([codex()]).codex)
-      .toEqual({ status: 'unknown', reasonCodes: ['runtime-unprobed'] });
+    await expect(getProviderPrerequisiteReadinessMap([codex()]))
+      .resolves.toMatchObject({ codex: { status: 'ready', reasonCodes: [] } });
     expect(getProviderRuntimeStatuses).toHaveBeenCalledTimes(1);
   });
 
-  it('blocks on a known inherited credential finding without exposing its value', () => {
+  it('preserves an executable explicit-path provider outside the runtime table', async () => {
+    const provider = codex({ id: 'custom-codex', command: process.execPath });
+
+    await expect(getProviderPrerequisiteReadinessMap([provider]))
+      .resolves.toMatchObject({ 'custom-codex': { status: 'ready', reasonCodes: [] } });
+    expect(getProviderRuntimeStatuses).not.toHaveBeenCalled();
+  });
+
+  it('resolves a provider command against its configured PATH', async () => {
+    const provider = codex({
+      id: 'custom-path-codex',
+      command: basename(process.execPath),
+      envVars: { PATH: dirname(process.execPath) },
+    });
+
+    await expect(getProviderPrerequisiteReadinessMap([provider]))
+      .resolves.toMatchObject({ 'custom-path-codex': { status: 'ready', reasonCodes: [] } });
+    expect(getProviderRuntimeStatuses).not.toHaveBeenCalled();
+  });
+
+  it('blocks a missing command outside the runtime table', async () => {
+    const provider = codex({ id: 'custom-cli', command: '/missing/example-provider-cli' });
+
+    await expect(getProviderPrerequisiteReadinessMap([provider]))
+      .resolves.toMatchObject({ 'custom-cli': { status: 'blocked', reasonCodes: ['runtime'] } });
+  });
+
+  it('blocks on a known inherited credential finding without exposing its value', async () => {
     peekProviderRuntimeStatuses.mockReturnValue({
       opencode: { id: 'opencode', label: 'OpenCode CLI', installed: true },
     });
     const wrapper = { id: 'opencode-orcarouter', type: 'cli', command: 'opencode', orcarouterBacked: true };
     const sibling = { id: 'orcarouter', type: 'api', endpoint: 'https://api.example.com', hasApiKey: false };
 
-    expect(getProviderPrerequisiteReadinessMap([wrapper, sibling])[wrapper.id])
-      .toEqual({ status: 'blocked', reasonCodes: ['inheritedApiKey'] });
+    await expect(getProviderPrerequisiteReadinessMap([wrapper, sibling]))
+      .resolves.toMatchObject({
+        [wrapper.id]: { status: 'blocked', reasonCodes: ['inheritedApiKey'] },
+      });
   });
 });
 
