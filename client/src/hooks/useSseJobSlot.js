@@ -56,10 +56,20 @@ export default function useSseJobSlot({
 } = {}) {
   const [job, setJob] = useState(null); // { jobId, context }
   const [pending, setPending] = useState(false);
+  const [progress, setProgress] = useState({ percent: 0, stage: null });
   const sse = useSseProgress(job ? eventsUrl(job.jobId) : null);
   const latest = sse.latest;
-  const percent = Math.round(latest?.percent ?? 0);
-  const stage = latest?.stage ?? null;
+
+  // Metadata and warning frames intentionally omit progress fields. Preserve the
+  // last announced values across those sparse frames instead of flashing 0% /
+  // "starting" between real progress updates.
+  useEffect(() => {
+    if (!job || !latest) return;
+    setProgress((prev) => ({
+      percent: Number.isFinite(latest.percent) ? Math.round(latest.percent) : prev.percent,
+      stage: typeof latest.stage === 'string' && latest.stage ? latest.stage : prev.stage,
+    }));
+  }, [latest, job]);
 
   useEffect(() => {
     if (!job || !latest) return;
@@ -91,6 +101,7 @@ export default function useSseJobSlot({
     const arg = trimStartArg ? (startArg ?? '').trim() : startArg;
     if (trimStartArg && !arg) return;
     if (job || pending) return;
+    setProgress({ percent: 0, stage: null });
     setPending(true);
     startRequest(arg)
       .then(({ jobId }) => {
@@ -111,8 +122,8 @@ export default function useSseJobSlot({
 
   return {
     active: pending || !!job,
-    percent,
-    stage,
+    percent: progress.percent,
+    stage: progress.stage,
     context: job?.context ?? null,
     start,
     cancel,

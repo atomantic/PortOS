@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 vi.mock('../services/api', () => ({
@@ -27,7 +27,13 @@ vi.mock('./ui/Toast', () => ({
 // under test without inventing a fake transport — no test here drives frames.
 class StubEventSource {
   static CLOSED = 2;
-  constructor(url) { this.url = url; this.readyState = 0; }
+  static instances = [];
+  constructor(url) {
+    this.url = url;
+    this.readyState = 0;
+    StubEventSource.instances.push(this);
+  }
+  emit(frame) { this.onmessage?.({ data: JSON.stringify(frame) }); }
   close() { this.readyState = StubEventSource.CLOSED; }
 }
 globalThis.EventSource = StubEventSource;
@@ -59,6 +65,7 @@ const openAdvanced = async () => {
 describe('QuickBrainCapture', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    StubEventSource.instances = [];
     localStorage.clear();
     captureBrainThought.mockResolvedValue({ message: 'Saved to Links!' });
     getYoutubeIngestSettings.mockResolvedValue({
@@ -356,6 +363,15 @@ describe('QuickBrainCapture', () => {
       expect(progress).toHaveAttribute('aria-valuemin', '0');
       expect(progress).toHaveAttribute('aria-valuemax', '100');
       expect(screen.getByText('starting…')).toHaveAttribute('aria-live', 'polite');
+
+      await waitFor(() => expect(StubEventSource.instances).toHaveLength(1));
+      act(() => StubEventSource.instances[0].emit({ type: 'progress', stage: 'video', percent: 47.6 }));
+      await waitFor(() => expect(progress).toHaveAttribute('aria-valuenow', '48'));
+      expect(screen.getByText('video…')).toHaveAttribute('aria-live', 'polite');
+
+      act(() => StubEventSource.instances[0].emit({ type: 'metadata', title: 'Example Video' }));
+      await waitFor(() => expect(progress).toHaveAttribute('aria-valuenow', '48'));
+      expect(screen.getByText('video…')).toBeInTheDocument();
     });
 
     it('does not fetch ingest settings until a YouTube URL is typed', () => {

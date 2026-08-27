@@ -8,6 +8,7 @@ import { parseBareUrl } from '../lib/bareUrl';
 import { readClipboard } from '../lib/clipboard';
 import { INGEST_OPTIONS, defaultIngestOptions, ingestOptionsFromSettings, isYoutubeVideoUrl } from '../lib/youtubeUrl';
 import RepoIntakeOptions from './brain/RepoIntakeOptions';
+import ProgressBar from './ui/ProgressBar';
 import ToggleChip from './ui/ToggleChip';
 
 export default function QuickBrainCapture() {
@@ -267,16 +268,11 @@ export default function QuickBrainCapture() {
         <div className="mt-3 flex items-center gap-2 text-xs text-gray-400">
           <Film size={14} className="text-red-400 shrink-0" />
           <span aria-live="polite" className="capitalize">{ingest.stage || 'starting'}…</span>
-          <div
-            role="progressbar"
-            aria-label="YouTube video ingest progress"
-            aria-valuenow={Math.round(ingest.percent)}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            className="flex-1 h-1.5 bg-port-bg rounded-full overflow-hidden"
-          >
-            <div className="h-full bg-port-accent transition-all" style={{ width: `${ingest.percent}%` }} />
-          </div>
+          <ProgressBar
+            percent={ingest.percent}
+            label="YouTube video ingest progress"
+            className="flex-1"
+          />
           <button
             type="button"
             onClick={ingest.cancel}
