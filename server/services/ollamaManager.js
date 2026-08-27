@@ -1076,19 +1076,21 @@ export async function getVersion() {
 // enriching the model list on every status poll doesn't re-hit /api/show.
 // Busted alongside installedModels on delete (a deleted name shouldn't linger),
 // but a re-pull of the same name yields the same details so we don't bust on pull.
-const modelDetailsCache = new Map() // name -> { contextLength: number|null, capabilities: string[] }
+const modelDetailsCache = new Map() // name -> { contextLength: number|null, capabilities: string[]|null }
 
 /**
  * Fetch a model's native details (max context length + capability set) via
  * /api/show. Ollama nests context under `model_info["<arch>.context_length"]`
  * (the arch prefix varies by family so we scan for the suffix) and reports a
  * top-level `capabilities` array (`["completion","vision","tools",…]`). Cached;
- * returns nulls/empty when the daemon doesn't report a field.
+ * returns nulls/null when the request fails, and nulls/empty when the daemon
+ * answers without reporting a field. The distinction keeps a transient probe
+ * failure from looking like an authoritative empty capability set.
  * @param {string} name
- * @returns {Promise<{ contextLength: number|null, capabilities: string[] }>}
+ * @returns {Promise<{ contextLength: number|null, capabilities: string[]|null }>}
  */
 async function getModelDetails(name) {
-  const miss = { contextLength: null, capabilities: [] }
+  const miss = { contextLength: null, capabilities: null }
   if (!name) return miss
   if (modelDetailsCache.has(name)) return modelDetailsCache.get(name)
   // /api/show documents the id under `model`; current Ollama also accepts the
@@ -1116,9 +1118,10 @@ async function getModelDetails(name) {
  * A model's capability set (`["completion","vision","tools",…]`) from /api/show.
  * Lets vision detection see capabilities that the /api/tags id can't reveal —
  * e.g. a vision-capable MoE like `qwen3.6:35b` whose id has no `vl`/`vision`
- * token. Cached; returns `[]` when the daemon doesn't report capabilities.
+ * token. Cached; returns `null` when the per-model probe fails and `[]` when
+ * the daemon answers without reporting capabilities.
  * @param {string} name
- * @returns {Promise<string[]>}
+ * @returns {Promise<string[]|null>}
  */
 async function getModelCapabilities(name) {
   return (await getModelDetails(name)).capabilities

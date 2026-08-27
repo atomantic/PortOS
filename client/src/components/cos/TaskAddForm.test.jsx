@@ -88,6 +88,19 @@ describe('TaskAddForm responsive layout', () => {
     expect(localStorage.getItem('portos-cos-task-description-draft')).toBeNull();
   });
 
+  it('passes the persisted task to queue views immediately after submission', async () => {
+    const user = userEvent.setup();
+    const onTaskAdded = vi.fn();
+    const task = { id: 'task-new', description: 'Appear immediately', status: 'pending', metadata: {} };
+    api.addCosTask.mockResolvedValue(task);
+    render(<TaskAddForm providers={[]} apps={[]} onTaskAdded={onTaskAdded} />);
+
+    await user.type(screen.getByPlaceholderText('Task description *'), task.description);
+    await user.click(screen.getByRole('button', { name: /^Add$/ }));
+
+    await waitFor(() => expect(onTaskAdded).toHaveBeenCalledWith(task, { position: 'bottom' }));
+  });
+
   it('keeps the description draft when submission fails', async () => {
     const user = userEvent.setup();
     api.addCosTask.mockRejectedValue(new Error('Unable to add task'));

@@ -562,7 +562,11 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
     setAttachments([]);
 
     toast.success('Task added');
-    onTaskAdded?.();
+    // The POST returns the persisted task, so let queue views render that
+    // confirmed record immediately instead of waiting for the next socket
+    // delivery or polling refresh. The position is not persisted on a task,
+    // but the receiving list needs it to mirror this form's insertion choice.
+    onTaskAdded?.(result, { position: addToTop ? 'top' : 'bottom' });
   };
 
   // Compact mode: single row with description + app + add, expandable

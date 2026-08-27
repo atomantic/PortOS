@@ -27,7 +27,12 @@ import { getLocalLlmStatus } from '../services/apiLocalLlm';
  * compatibility verdicts into provider editors without changing the existing
  * string-id API used by other consumers of this hook.
  *
- * @returns {{ ollama: string[], lmstudio: string[], installed: { ollama: boolean|null, lmstudio: boolean|null }, recommendations: { ollama: object|null, lmstudio: object|null }, ctxById: Record<string, number>, hardwareCompatibilityByBackend: { ollama: Record<string, object>, lmstudio: Record<string, object> }, loading: boolean }}
+ * `capabilitiesByBackend` keeps the runtime's reported badge vocabulary keyed
+ * by model id. A present key with `null` means the model was found but its
+ * runtime did not report capabilities; an absent key means that model was not
+ * in the local status response.
+ *
+ * @returns {{ ollama: string[], lmstudio: string[], installed: { ollama: boolean|null, lmstudio: boolean|null }, recommendations: { ollama: object|null, lmstudio: object|null }, ctxById: Record<string, number>, hardwareCompatibilityByBackend: { ollama: Record<string, object>, lmstudio: Record<string, object> }, capabilitiesByBackend: { ollama: Record<string, string[]|null>, lmstudio: Record<string, string[]|null> }, loading: boolean }}
  */
 export default function useLocalModels() {
   const [state, setState] = useState({
@@ -37,6 +42,7 @@ export default function useLocalModels() {
     recommendations: { ollama: null, lmstudio: null },
     ctxById: {},
     hardwareCompatibilityByBackend: { ollama: {}, lmstudio: {} },
+    capabilitiesByBackend: { ollama: {}, lmstudio: {} },
     loading: true,
   });
 
@@ -49,9 +55,15 @@ export default function useLocalModels() {
         const ids = (list) => (list || []).map((m) => m.id || m.name).filter(Boolean);
         const ctxById = {};
         const hardwareCompatibilityByBackend = { ollama: {}, lmstudio: {} };
+        const capabilitiesByBackend = { ollama: {}, lmstudio: {} };
         for (const backend of ['ollama', 'lmstudio']) {
           for (const m of status?.[backend]?.models || []) {
             const id = m.id || m.name;
+            if (id) {
+              capabilitiesByBackend[backend][id] = Array.isArray(m.capabilities)
+                ? m.capabilities
+                : null;
+            }
             if (id && m.hardwareCompatibility && typeof m.hardwareCompatibility === 'object') {
               hardwareCompatibilityByBackend[backend][id] = m.hardwareCompatibility;
             }
@@ -71,6 +83,7 @@ export default function useLocalModels() {
           },
           ctxById,
           hardwareCompatibilityByBackend,
+          capabilitiesByBackend,
           loading: false,
         });
       })

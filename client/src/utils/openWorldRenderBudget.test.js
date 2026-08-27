@@ -8,6 +8,7 @@ import {
   resetRenderBudget,
   getEffectiveTier,
   percentile,
+  recommendOpenWorldStartTier,
   tierToIndex,
 } from './openWorldRenderBudget.js';
 
@@ -49,6 +50,20 @@ describe('openWorldRenderBudget — helpers', () => {
     expect(tierToIndex('low')).toBe(0);
     expect(tierToIndex('ultra')).toBe(QUALITY_TIERS.length - 1);
     expect(tierToIndex('bogus')).toBe(QUALITY_TIERS.indexOf('high'));
+  });
+
+  it('starts conservatively on touch and lower-capability devices', () => {
+    expect(recommendOpenWorldStartTier({ coarsePointer: true, hardwareConcurrency: 12 })).toBe('medium');
+    expect(recommendOpenWorldStartTier({ hardwareConcurrency: 6 })).toBe('medium');
+    expect(recommendOpenWorldStartTier({ deviceMemory: 6 })).toBe('medium');
+    expect(recommendOpenWorldStartTier({ hardwareConcurrency: 2 })).toBe('low');
+    expect(recommendOpenWorldStartTier({ deviceMemory: 4 })).toBe('low');
+  });
+
+  it('keeps capable and unknown desktops at high', () => {
+    expect(recommendOpenWorldStartTier()).toBe('high');
+    expect(recommendOpenWorldStartTier({ hardwareConcurrency: 12, deviceMemory: 16 })).toBe('high');
+    expect(recommendOpenWorldStartTier({ hardwareConcurrency: 0, deviceMemory: Number.NaN })).toBe('high');
   });
 });
 

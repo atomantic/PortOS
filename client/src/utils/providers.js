@@ -1111,6 +1111,74 @@ export const isOllamaBackedProvider = (provider) => {
 };
 
 /**
+ * Resolve the capability badges for a selected model without over-sharing a
+ * local runtime's answer with another provider. The status endpoint is keyed
+ * by backend, but only the canonical `ollama` / `lmstudio` provider records
+ * are known to point at this install's daemon; custom or remote providers stay
+ * on conservative inference. This mirrors the provider-scoped boundary used
+ * by `useToolUseModelIds` and `useVisionModelIds`.
+ *
+ * `[]` is a valid runtime answer meaning no optional capabilities were
+ * reported. `null` means the capability set is unknown, and `source` tells the
+ * UI whether that is because the runtime is still loading, the runtime probe
+ * failed, the provider gave a harness-level fact, or no authoritative metadata
+ * exists.
+ *
+ * @param {{id?:string,type?:string,command?:string,endpoint?:string,name?:string,ollamaBacked?:boolean}|null|undefined} provider
+ * @param {string|null|undefined} model
+ * @param {{capabilitiesByBackend?: {ollama?: Record<string, string[]|null>, lmstudio?: Record<string, string[]|null>}, recommendations?: {ollama?: object|null, lmstudio?: object|null}, loading?: boolean}} [options]
+ * @returns {{capabilities: string[]|null, source: 'unselected'|'runtime'|'runtime-unknown'|'provider'|'inferred'|'loading'|'unknown', recommendation: object|null}}
+ */
+export const modelCapabilityInfo = (provider, model, {
+  capabilitiesByBackend = {},
+  recommendations = {},
+  loading = false,
+} = {}) => {
+  const modelId = typeof model === 'string' ? model.trim() : '';
+  if (!provider || !modelId) {
+    return { capabilities: null, source: 'unselected', recommendation: null };
+  }
+
+  const backend = localBackendForProvider(provider);
+  const canonicalLocalProvider = backend
+    && provider.id === backend
+    && isLocalInstanceProvider(provider);
+  const recommendation = canonicalLocalProvider ? recommendations?.[backend] : null;
+  const selectedRecommendation = recommendation?.id === modelId ? recommendation : null;
+
+  if (canonicalLocalProvider) {
+    const modelCapabilities = capabilitiesByBackend?.[backend];
+    if (modelCapabilities && Object.hasOwn(modelCapabilities, modelId)) {
+      const capabilities = modelCapabilities[modelId];
+      return {
+        capabilities: Array.isArray(capabilities) ? [...new Set(capabilities)] : null,
+        source: Array.isArray(capabilities) ? 'runtime' : 'runtime-unknown',
+        recommendation: selectedRecommendation,
+      };
+    }
+    if (loading) {
+      return { capabilities: null, source: 'loading', recommendation: selectedRecommendation };
+    }
+  }
+
+  // A Codex or Claude CLI can attach/read an image and invoke tools through its
+  // harness. That is deliberately labelled as provider-level below; it is not
+  // pretending that the provider published per-model metadata.
+  if (isVisionCapableCliProvider(provider)) {
+    return { capabilities: ['tools', 'vision'], source: 'provider', recommendation: null };
+  }
+
+  const inferred = [];
+  if (backend && isToolUseModel(modelId)) inferred.push('tools');
+  if (backend && isVisionModel(modelId)) inferred.push('vision');
+  return {
+    capabilities: inferred.length ? inferred : null,
+    source: inferred.length ? 'inferred' : 'unknown',
+    recommendation: selectedRecommendation,
+  };
+};
+
+/**
  * The hosted OpenAI-compatible gateways an OpenCode CLI/TUI wrapper can
  * front-end. MIRROR of `PROVIDER_GATEWAYS` in `server/lib/providerGateways.js`
  * (and its vendored twin `server/lib/aiToolkit/internal/gateways.js`) — the

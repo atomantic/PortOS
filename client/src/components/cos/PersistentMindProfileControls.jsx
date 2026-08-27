@@ -1,6 +1,9 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import useProviderModels from '../../hooks/useProviderModels';
 import * as api from '../../services/api';
+import useLocalModels from '../../hooks/useLocalModels';
+import { modelCapabilityInfo } from '../../utils/providers.js';
+import ModelCapabilitySummary from '../models/ModelCapabilitySummary.jsx';
 import ProviderModelSelector from '../ProviderModelSelector';
 import toast from '../ui/Toast';
 
@@ -34,12 +37,26 @@ export default function PersistentMindProfileControls({
     setSelectedProviderId,
     setSelectedModel,
   } = useProviderModels({ allowDefault: true, withEffort: true, silent: true });
+  const {
+    capabilitiesByBackend,
+    recommendations,
+    loading: localModelsLoading,
+  } = useLocalModels();
   const [draft, setDraft] = useState(() => normalizeProfile(profile));
   const [saving, setSaving] = useState(false);
   const draftRef = useRef(draft);
   const publishedProfileRef = useRef(draft);
   const pendingSavesRef = useRef(0);
   const selectedProvider = providers.find((provider) => provider.id === draft.providerId) || null;
+  // Persistent mind requires an explicit model pin. Keep the capability panel
+  // on the stored value instead of previewing the provider default, which could
+  // make an invalid/unpinned profile look runnable.
+  const capabilityModel = draft.model;
+  const capabilityInfo = modelCapabilityInfo(selectedProvider, capabilityModel, {
+    capabilitiesByBackend,
+    recommendations,
+    loading: localModelsLoading,
+  });
   const harness = selectedProvider?.type === 'api'
     ? { label: 'Direct API · recommended', tone: 'border-port-success/30 bg-port-success/10 text-port-success', detail: 'Best reliability for an always-on mind: structured HTTP, clean cancellation, and no terminal state. Ollama, llama.cpp, LM Studio, vLLM, and compatible cloud endpoints use this lane.' }
     : selectedProvider?.type === 'cli'
@@ -150,6 +167,7 @@ export default function PersistentMindProfileControls({
         emptyProviderOption="Select an AI provider"
         emptyModelOption="Select a model"
         alwaysShowModel
+        highlightToolUse
         layout="stacked"
         label="AI provider"
         onProviderChange={(providerId) => {
@@ -162,6 +180,11 @@ export default function PersistentMindProfileControls({
           save({ model });
         }}
         onEffortChange={(effort) => save({ effort })}
+      />
+      <ModelCapabilitySummary
+        provider={selectedProvider}
+        model={capabilityModel}
+        {...capabilityInfo}
       />
       {harness && (
         <div className={`rounded border px-3 py-2 text-xs ${harness.tone}`}>

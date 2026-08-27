@@ -27,6 +27,7 @@ const BUILDING_FLYOVER_HEIGHT = 12; // above this the player clears rooftops, so
 const AIRBORNE_HEIGHT = EYE_HEIGHT + 0.6; // above this the avatar reads as flying (hover state)
 const MOUSE_SENSITIVITY = 0.002;
 const PITCH_LIMIT = Math.PI / 2 - 0.02;
+const POSE_REPORT_INTERVAL_SECONDS = 0.1;
 
 // Frame-loop scratch vectors (module scope — no per-frame allocation in useFrame).
 const _forward = new THREE.Vector3();
@@ -128,7 +129,7 @@ export default function PlayerController({
   const lastBoostPadRef = useRef(null);
   const boostOverrideTimerRef = useRef(0);
   const localCollectedSetRef = useRef(new Set(collectedShardIds));
-  const poseTickRef = useRef(0);
+  const poseReportElapsedRef = useRef(POSE_REPORT_INTERVAL_SECONDS);
   const lastSpawnRef = useRef(null);
   const pointerLockedRef = useRef(false);
   // Camera boom zoom: `boomZoomTargetRef` is the player's chosen multiplier, `boomZoomRef`
@@ -193,6 +194,9 @@ export default function PlayerController({
       rig.skid = 0;
       lastSpawnRef.current = rig.position.clone();
     }
+    // Publish the spawn immediately on the next frame so the mini-map never shows
+    // the previous street position while the player is dropping back in.
+    poseReportElapsedRef.current = POSE_REPORT_INTERVAL_SECONDS;
     lookInitRef.current = false;
   }, [active, positions]);
 
@@ -216,6 +220,7 @@ export default function PlayerController({
     rig.vy = 0;
     rig.jumping = false;
     lastSpawnRef.current = rig.position.clone();
+    poseReportElapsedRef.current = POSE_REPORT_INTERVAL_SECONDS;
     lookInitRef.current = false;
     // `teleport` is read for its coordinates but is not the trigger — see above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -552,8 +557,11 @@ export default function PlayerController({
       ? rig.speed
       : (hasHorizontal ? (isSprinting ? SPRINT_SPEED : WALK_SPEED) * (forwardInput < 0 ? -1 : 1) : 0);
 
-    poseTickRef.current = (poseTickRef.current || 0) + 1;
-    if (poseTickRef.current % 3 === 0) {
+    // DOM telemetry does not need the 60fps camera cadence. A time-based 10Hz publish
+    // stays smooth at both 30fps and 120fps while avoiding ~20 full page renders/sec.
+    poseReportElapsedRef.current += delta;
+    if (poseReportElapsedRef.current >= POSE_REPORT_INTERVAL_SECONDS) {
+      poseReportElapsedRef.current %= POSE_REPORT_INTERVAL_SECONDS;
       onPlayerPoseChange?.({
         x: rig.position.x,
         y: rig.position.y,

@@ -1,10 +1,22 @@
 import { describe, it, expect } from 'vitest';
-import { computeActivityDensity, buildTimelineBuckets } from './openWorldTimeline';
+import { appendEventLogBatch, computeActivityDensity, buildTimelineBuckets } from './openWorldTimeline';
 
 // Fixed reference "now" so the relative-age math is deterministic.
 const NOW = 1_700_000_000_000;
 const minsAgo = (m) => NOW - m * 60 * 1000;
 const secsAgo = (s) => NOW - s * 1000;
+
+describe('appendEventLogBatch', () => {
+  it('preserves every event in a socket burst and caps the oldest entries', () => {
+    const previous = [{ _localId: 1 }, { _localId: 2 }];
+    const incoming = [{ _localId: 3 }, { _localId: 4 }, { _localId: 5 }];
+
+    expect(appendEventLogBatch(previous, incoming, 4).map((event) => event._localId))
+      .toEqual([2, 3, 4, 5]);
+    expect(previous).toHaveLength(2);
+    expect(incoming).toHaveLength(3);
+  });
+});
 
 describe('computeActivityDensity', () => {
   it('returns one empty slot per bin', () => {

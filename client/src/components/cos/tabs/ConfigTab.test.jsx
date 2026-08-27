@@ -13,8 +13,13 @@ const providerHook = vi.hoisted(() => ({
   setSelectedProviderId: vi.fn(),
   setSelectedModel: vi.fn(),
 }));
+const localLlm = vi.hoisted(() => ({
+  getLocalLlmStatus: vi.fn(),
+  getToolUseModels: vi.fn(),
+}));
 
 vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiLocalLlm', () => localLlm);
 vi.mock('../../ui/Toast', () => ({ default: toast }));
 // The provider/model selector hook fetches providers over the network — stub it
 // so the test exercises only the config-save / level-change handlers.
@@ -46,6 +51,8 @@ const config = {
 beforeEach(() => {
   vi.clearAllMocks();
   api.getCosBudgetUsage.mockResolvedValue({ usage: {} });
+  localLlm.getLocalLlmStatus.mockResolvedValue({ ollama: { models: [] }, lmstudio: { models: [] } });
+  localLlm.getToolUseModels.mockResolvedValue({ models: [] });
 });
 
 describe('ConfigTab handleSave', () => {

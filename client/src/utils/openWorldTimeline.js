@@ -10,6 +10,15 @@
 // up the render. `now` is injectable into both transforms for deterministic tests.
 const MAX_TIMELINE_EVENTS = 40;
 
+// Append a socket burst to the HUD's bounded activity buffer in one immutable
+// update. The data hook batches raw cos:log frames before calling this helper so
+// a chatty agent costs one React render per short window, without dropping any
+// entries from the burst.
+export function appendEventLogBatch(previous, incoming, max = 50) {
+  const combined = [...(previous || []), ...(incoming || [])];
+  return combined.length > max ? combined.slice(-max) : combined;
+}
+
 // Lower-case so lookups against the lower-cased color maps in OpenWorldIntelPane
 // stay robust; the cos:log stream only emits info/warn/error/success/debug, so
 // unknown values just fall through to the maps' info default (same as the

@@ -38,7 +38,7 @@ function SectionGlyph({ status }) {
   return <MicroGlyph variant={spec.variant} state={spec.state} animated={spec.animated} size={13} />;
 }
 
-export default function TasksTab({ tasks, agents = [], onRefresh, providers, apps }) {
+export default function TasksTab({ tasks, agents = [], onRefresh, onTaskAdded, providers, apps }) {
   const [searchParams] = useSearchParams();
   const [userTasksLocal, setUserTasksLocal] = useState([]);
   const [durations, setDurations] = useState(null);
@@ -195,6 +195,14 @@ export default function TasksTab({ tasks, agents = [], onRefresh, providers, app
     }
   };
 
+  const handleTaskAdded = useCallback((task, options) => {
+    onTaskAdded?.(task, options);
+    // Keep the established authoritative refresh for agent/status data. The
+    // parent has already inserted the task above, so this can never make a
+    // successful submission appear to disappear while the refresh is pending.
+    onRefresh();
+  }, [onRefresh, onTaskAdded]);
+
   return (
     <div className="space-y-6">
       {/* User Tasks */}
@@ -220,7 +228,7 @@ export default function TasksTab({ tasks, agents = [], onRefresh, providers, app
         </div>
 
         {/* Add Task Form */}
-        <TaskAddForm providers={providers} apps={apps} onTaskAdded={onRefresh} />
+        <TaskAddForm providers={providers} apps={apps} onTaskAdded={handleTaskAdded} />
 
         {/* User Tasks Sections */}
         {pendingUserTasksLocal.length === 0 && activeUserTasksLocal.length === 0 && blockedUserTasksLocal.length === 0 && completedUserTasksLocal.length === 0 ? (

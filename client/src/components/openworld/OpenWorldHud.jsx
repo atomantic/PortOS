@@ -11,7 +11,7 @@ import OpenWorldMiniMap from './OpenWorldMiniMap';
 import OpenWorldHudCompact from './OpenWorldHudCompact';
 import OpenWorldInteractionPrompt from './OpenWorldInteractionPrompt';
 import OpenWorldSpeedometer from './OpenWorldSpeedometer';
-import { HealthBar, getHealthSentinel } from './openWorldHudBits';
+import { HealthBar, getHealthSentinel, metricColor } from './openWorldHudBits';
 import useOpenWorldViewport from '../../hooks/useOpenWorldViewport';
 import { formatClockTime } from '../../utils/formatters';
 
@@ -56,6 +56,17 @@ function Crosshair() {
   return (
     <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none">
       <div className="openworld-hud-crosshair" />
+    </div>
+  );
+}
+
+function SystemMetric({ label, value }) {
+  return (
+    <div className="flex items-baseline justify-between gap-1">
+      <span className="font-pixel text-[8px] tracking-[0.12em] text-[rgb(var(--port-text-muted))]">{label}</span>
+      <span className={`font-pixel text-[9px] tracking-wide ${metricColor(value)}`}>
+        {value != null ? `${value}%` : '—'}
+      </span>
     </div>
   );
 }
@@ -202,6 +213,14 @@ export default function OpenWorldHud({
               <div className="mt-2">
                 <HealthBar value={activeApps} max={totalApps} color="rgb(var(--port-accent))" />
               </div>
+              <div
+                className="mt-2 grid grid-cols-3 gap-3 border-t border-[rgb(var(--port-accent)/.14)] pt-2"
+                aria-label="System resource usage"
+              >
+                <SystemMetric label="CPU" value={cpuPct} />
+                <SystemMetric label="MEM" value={memPct} />
+                <SystemMetric label="DISK" value={diskPct} />
+              </div>
               <div className="mt-2 flex items-center justify-between gap-3 font-pixel text-[8px] tracking-[0.12em] text-[rgb(var(--port-text-muted))]">
                 <span className="truncate">{activeRegion?.label || 'DOWNTOWN'}</span>
                 <span className={sentinel.text}>{sentinel.label}</span>
@@ -330,6 +349,9 @@ export default function OpenWorldHud({
           onOpenDestination={onOpenDestination}
           onAttentionItem={onAttentionItem}
           proximityTarget={proximityTarget}
+          playerPose={playerPose}
+          collectedCount={collectedCount}
+          totalShards={totalShards}
         />
       )}
 

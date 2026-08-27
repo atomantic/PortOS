@@ -42,6 +42,7 @@ import {
   isPrivateNetworkEndpoint,
   PROVIDER_CARD_STATE,
   isOllamaBackedProvider,
+  modelCapabilityInfo,
   gatewayForProvider,
   isGatewayBackedProvider,
   isGrokBuildCli,
@@ -881,6 +882,62 @@ describe('localBackendForProvider', () => {
     expect(localBackendForProvider({ endpoint: 'https://api.openai.com/v1', name: 'OpenAI' })).toBeNull();
     expect(localBackendForProvider({})).toBeNull();
     expect(localBackendForProvider(null)).toBeNull();
+  });
+});
+
+describe('modelCapabilityInfo', () => {
+  const ollama = { id: 'ollama', name: 'Ollama', endpoint: 'http://localhost:11434/v1' };
+
+  it('uses the canonical local runtime report, including an intentional empty set', () => {
+    expect(modelCapabilityInfo(ollama, 'qwen3.6:35b', {
+      capabilitiesByBackend: { ollama: { 'qwen3.6:35b': ['chat', 'tools', 'vision'] } },
+    })).toEqual({
+      capabilities: ['chat', 'tools', 'vision'],
+      source: 'runtime',
+      recommendation: null,
+    });
+    expect(modelCapabilityInfo(ollama, 'gemma3:4b', {
+      capabilitiesByBackend: { ollama: { 'gemma3:4b': [] } },
+    })).toEqual({ capabilities: [], source: 'runtime', recommendation: null });
+  });
+
+  it('marks the backend editorial pick without treating it as a capability', () => {
+    const recommendation = { id: 'qwen3.6:35b', reason: 'Best fit for local text work.' };
+    expect(modelCapabilityInfo(ollama, 'qwen3.6:35b', {
+      capabilitiesByBackend: { ollama: { 'qwen3.6:35b': ['chat', 'tools'] } },
+      recommendations: { ollama: recommendation },
+    }).recommendation).toBe(recommendation);
+  });
+
+  it('does not let a local status map vouch for a custom remote provider', () => {
+    const remoteOllama = { id: 'remote-ollama', name: 'Remote Ollama', endpoint: 'http://192.0.2.10:11434/v1' };
+    expect(modelCapabilityInfo(remoteOllama, 'phi4-mini:latest', {
+      capabilitiesByBackend: { ollama: { 'phi4-mini:latest': ['chat', 'tools'] } },
+    })).toEqual({ capabilities: null, source: 'unknown', recommendation: null });
+  });
+
+  it('does not let the canonical provider id override a remote endpoint', () => {
+    const remoteCanonicalOllama = { ...ollama, endpoint: 'http://192.0.2.10:11434/v1' };
+    expect(modelCapabilityInfo(remoteCanonicalOllama, 'phi4-mini:latest', {
+      capabilitiesByBackend: { ollama: { 'phi4-mini:latest': ['chat', 'tools'] } },
+      recommendations: { ollama: { id: 'phi4-mini:latest', reason: 'Local-only recommendation.' } },
+    })).toEqual({ capabilities: null, source: 'unknown', recommendation: null });
+  });
+
+  it('distinguishes a failed local capability probe from a reported empty set', () => {
+    expect(modelCapabilityInfo(ollama, 'qwen3.6:35b', {
+      capabilitiesByBackend: { ollama: { 'qwen3.6:35b': null } },
+    })).toEqual({ capabilities: null, source: 'runtime-unknown', recommendation: null });
+  });
+
+  it('shows known CLI harness capabilities separately from per-model metadata', () => {
+    expect(modelCapabilityInfo({ id: 'codex', type: 'cli', command: 'codex' }, 'gpt-5'))
+      .toEqual({ capabilities: ['tools', 'vision'], source: 'provider', recommendation: null });
+  });
+
+  it('keeps a local model unknown while its authoritative status is loading', () => {
+    expect(modelCapabilityInfo(ollama, 'qwen3.6:35b', { loading: true }))
+      .toEqual({ capabilities: null, source: 'loading', recommendation: null });
   });
 });
 

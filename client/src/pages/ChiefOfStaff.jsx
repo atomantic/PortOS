@@ -563,6 +563,37 @@ export default function ChiefOfStaff() {
     });
   };
 
+  // A successful task POST returns the persisted task synchronously. Insert it
+  // into the queue right away so the user gets a durable pending indication
+  // before the scheduler's socket updates report its active transition.
+  const handleUserTaskAdded = useCallback((task, { position = 'bottom' } = {}) => {
+    if (!task?.id) return;
+    // A full-data read started before the POST resolved carries a queue snapshot
+    // that cannot contain this task. Retire it before inserting the confirmed
+    // record, just as fetchQueue does for socket-driven updates.
+    queueSeqRef.current += 1;
+    setTasks(prev => {
+      const current = prev.user?.tasks || [];
+      if (current.some(existing => existing.id === task.id)) return prev;
+      const nextTasks = position === 'top' ? [task, ...current] : [...current, task];
+      const grouped = {
+        pending: nextTasks.filter(item => item.status === 'pending'),
+        in_progress: nextTasks.filter(item => item.status === 'in_progress'),
+        challenged: nextTasks.filter(item => item.status === 'challenged'),
+        blocked: nextTasks.filter(item => item.status === 'blocked'),
+        completed: nextTasks.filter(item => item.status === 'completed'),
+      };
+      return {
+        ...prev,
+        user: {
+          ...(prev.user || { exists: true, type: 'user' }),
+          tasks: nextTasks,
+          grouped,
+        },
+      };
+    });
+  }, []);
+
   const handleHealthCheck = async () => {
     setAgentState('investigating');
     setStatusMessage("Running system health check...");
@@ -1080,7 +1111,7 @@ export default function ChiefOfStaff() {
                 tabs that don't surface this data. */}
             <ActionableInsightsBanner insights={insights} onTaskUnblocked={handleTaskUnblocked} onRefresh={fetchData} />
             <QuickSummary />
-            <TasksTab tasks={tasks} agents={agents} onRefresh={fetchData} providers={providers} apps={apps} />
+            <TasksTab tasks={tasks} agents={agents} onRefresh={fetchData} onTaskAdded={handleUserTaskAdded} providers={providers} apps={apps} />
           </div>
         )}
         {activeTab === 'agents' && (

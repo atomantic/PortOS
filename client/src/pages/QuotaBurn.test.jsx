@@ -225,6 +225,23 @@ describe('QuotaBurn page', () => {
     ));
   });
 
+  it('keeps the family Burn now action available after its automatic window closes', async () => {
+    const user = userEvent.setup();
+    const gatedStatus = {
+      ...status,
+      families: [{ ...status.families[0], willBurn: false, skipReason: 'dispatch cap reached (5/5)' }, status.families[1]],
+    };
+    api.getQuotaBurn.mockResolvedValue({ config, status: gatedStatus });
+    renderPage('/devtools/quota-burn/grok');
+
+    const burnButton = await screen.findByTitle('Force-run this family\'s next available job now');
+    expect(burnButton).toBeEnabled();
+    await user.click(burnButton);
+    await waitFor(() => expect(api.runQuotaBurn).toHaveBeenCalledWith(
+      { familyId: 'grok', force: true }, { silent: true },
+    ));
+  });
+
   it('adds a fully-configured job from a preset, inheriting the plan\'s app', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const user = setupSaveUser();

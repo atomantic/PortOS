@@ -63,7 +63,7 @@ router.put('/', asyncHandler(async (req, res) => {
 
 // POST /api/quota-burn/run — evaluate now. With no body it behaves like a
 // scheduled tick that ignores the master switch. `{ familyId, jobId, force }`
-// runs one named job immediately, past the window/reserve/cap gates.
+// runs a family or one named job immediately, past the window/reserve/cap gates.
 router.post('/run', asyncHandler(async (req, res) => {
   const { familyId = null, jobId = null, force = false } = validateRequest(quotaBurnRunSchema, req.body || {});
   if (force && !familyId) {

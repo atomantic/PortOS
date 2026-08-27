@@ -34,6 +34,7 @@ import {
 } from 'lucide-react';
 import AppContextPicker from '../components/AppContextPicker';
 import FilePickerButton from '../components/ui/FilePickerButton';
+import SettingsTabsHeader from '../components/settings/SettingsTabsHeader';
 import * as api from '../services/apiOpenClaw';
 import * as coreApi from '../services/api';
 import { formatDateTime } from '../utils/formatters';
@@ -314,6 +315,8 @@ export default function OpenClaw() {
           </button>
         </div>
       </div>
+
+      <SettingsTabsHeader activeTab="openclaw" />
 
       <div className="grid min-h-0 flex-1 gap-4 overflow-hidden p-4 lg:grid-cols-[320px_minmax(0,1fr)]">
         <aside className={`min-h-0 flex-col gap-4 ${showSidePanel ? 'flex' : 'hidden lg:flex'}`}>

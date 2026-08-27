@@ -19,8 +19,8 @@ export const saveQuotaBurn = (patch, options) => request('/quota-burn', {
   ...options,
 });
 
-// Evaluate now. `{ familyId, jobId, force }` runs one named job past the
-// window/reserve/cap gates; no body behaves like a scheduled tick.
+// Evaluate now. `{ familyId, jobId, force }` runs a family or named job past
+// the window/reserve/cap gates; no body behaves like a scheduled tick.
 export const runQuotaBurn = (body = {}, options) => request('/quota-burn/run', {
   method: 'POST',
   body: JSON.stringify(body),

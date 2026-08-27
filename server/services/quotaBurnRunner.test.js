@@ -207,6 +207,15 @@ describe('runQuotaBurnCycle', () => {
     expect(state.recorded).toEqual([]);
   });
 
+  it('force-runs a family plan after its automatic window closes', async () => {
+    state.config = plan({ families: { grok: { enabled: true, resetWithinHours: 0, jobs: [{ id: 'second', enabled: true, jobType: 'agent-prompt' }] } } });
+    state.pending = { second: { count: 1 } };
+    const result = await runQuotaBurnCycle({ trigger: 'manual', familyId: 'grok', force: true });
+    expect(result.dispatched).toBe(true);
+    expect(state.ran).toEqual([{ jobId: 'second', familyId: 'grok', charge: false }]);
+    expect(state.recorded).toEqual([]);
+  });
+
   it('burns EVERY eligible family in one cycle, not just the soonest to reset', async () => {
     // Families don't share a budget — each draws down its own window against its
     // own reserve and cap. Stopping the cycle at the first dispatch meant the

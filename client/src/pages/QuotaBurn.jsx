@@ -521,7 +521,7 @@ export default function QuotaBurn() {
             actionsBusy={unsaved || running}
             onToggleExpand={(id) => navigate(expanded === id ? '/devtools/quota-burn' : `/devtools/quota-burn/${id}`)}
             onPatch={(patch) => patchFamily(familyId, patch)}
-            onRunFamily={(id) => run({ familyId: id }, 'Burn')}
+            onRunFamily={(id) => run({ familyId: id, force: true }, 'Burn')}
             onRunJob={(id, job) => run({ familyId: id, jobId: job.id, force: true }, 'Job run')}
             onRearm={rearm}
           />

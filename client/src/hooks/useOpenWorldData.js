@@ -5,9 +5,11 @@ import { useAutoRefetch } from './useAutoRefetch';
 import { METRICS as HEALTH_TOWER_METRICS } from '../utils/openWorldHealthTower';
 import { applyAiStatusEvent, pruneAiOps, AI_CORE } from '../utils/openWorldAiCore';
 import { coalesce } from '../utils/coalesce';
+import { appendEventLogBatch } from '../utils/openWorldTimeline';
 
 // Metric keys the vitals-tower landmark renders — fetched as the latest-value snapshot.
 const HEALTH_METRIC_KEYS = HEALTH_TOWER_METRICS.map(m => m.key);
+const EVENT_LOG_FLUSH_MS = 100;
 
 const healthSignature = (h) => {
   const warnings = (h?.warnings || []).map(w => `${w.type}:${w.message}`).join(';');
@@ -37,6 +39,8 @@ export const useOpenWorldData = () => {
   const [aiActivity, setAiActivity] = useState({ ops: {}, lastStartTs: 0 });
   const [loading, setLoading] = useState(true);
   const logIdRef = useRef(0);
+  const pendingEventLogsRef = useRef([]);
+  const eventLogFlushTimerRef = useRef(null);
   // One-shot timer that prunes expired AI Core ops. `ai:status` is purely event-driven, so
   // without this a `done` afterglow (or a flare) beam would linger until the next event —
   // the render derivations check the clock but nothing re-renders to advance it.
@@ -180,6 +184,14 @@ export const useOpenWorldData = () => {
   useEffect(() => {
     fetchAll();
 
+    const flushEventLogs = () => {
+      eventLogFlushTimerRef.current = null;
+      if (pendingEventLogsRef.current.length === 0) return;
+      const incoming = pendingEventLogsRef.current;
+      pendingEventLogsRef.current = [];
+      setEventLogs(prev => appendEventLogBatch(prev, incoming));
+    };
+
     const subscribe = () => {
       socket.emit('cos:subscribe');
       socket.emit('notifications:subscribe');
@@ -208,7 +220,10 @@ export const useOpenWorldData = () => {
 
     const handleCosLog = (data) => {
       const entry = { ...data, timestamp: data.timestamp || Date.now(), _localId: ++logIdRef.current };
-      setEventLogs(prev => [...prev, entry].slice(-50));
+      pendingEventLogsRef.current.push(entry);
+      if (eventLogFlushTimerRef.current == null) {
+        eventLogFlushTimerRef.current = setTimeout(flushEventLogs, EVENT_LOG_FLUSH_MS);
+      }
     };
     socket.on('cos:log', handleCosLog);
 
@@ -327,6 +342,9 @@ export const useOpenWorldData = () => {
       socket.off('voice:idle', handleVoiceIdle);
       socket.off('ai:status', handleAiStatus);
       if (aiPruneTimerRef.current) clearTimeout(aiPruneTimerRef.current);
+      if (eventLogFlushTimerRef.current != null) clearTimeout(eventLogFlushTimerRef.current);
+      eventLogFlushTimerRef.current = null;
+      pendingEventLogsRef.current = [];
       coalescedFetchAll.cancel(); // drop any pending trailing refetch on unmount
     };
   }, [fetchAll, fetchApps, fetchBackup, coalescedFetchAll]);

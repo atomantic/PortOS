@@ -21,6 +21,7 @@ export default function FamilyCard({
   onToggleExpand, onPatch, onRunFamily, onRunJob, onRearm, onRetryCatalog,
 }) {
   const jobs = config.jobs || [];
+  const hasEnabledJobs = jobs.some((job) => job.enabled !== false);
   // Pending counts and `run once` completions stay on the STATUS side and are
   // passed to JobRow as their own props — merging them into the job objects
   // would mean stripping them back off before every save (the PUT schema is
@@ -142,9 +143,9 @@ export default function FamilyCard({
           <button
             type="button"
             className="text-xs text-port-accent hover:underline disabled:opacity-40"
-            disabled={actionsBusy || !status?.willBurn}
+            disabled={actionsBusy || !hasEnabledJobs}
             onClick={() => onRunFamily(familyId)}
-            title={status?.willBurn ? 'Run this family\'s next job now' : 'This family has no burnable window right now'}
+            title={hasEnabledJobs ? 'Force-run this family\'s next available job now' : 'Add an enabled job before running this family'}
           >
             Burn now
           </button>

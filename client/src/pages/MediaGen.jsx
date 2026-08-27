@@ -1,13 +1,14 @@
 import { useNavigate, useLocation, Outlet } from 'react-router';
-import { Layers, Image as ImageIcon, Film, History, Scissors, FolderOpen, Box } from 'lucide-react';
+import { Layers, Image as ImageIcon, Film, History, Scissors, FolderOpen, Box, Pencil } from 'lucide-react';
 import TabPills from '../components/ui/TabPills';
 
 // LoRAs, Training and Models moved to the Models section (#4728) — they manage
 // installed weights, while everything left here generates or browses output.
-const TABS = [
+export const TABS = [
   { id: 'image', label: 'Image', icon: ImageIcon },
   { id: 'video', label: 'Video', icon: Film },
   { id: 'threejs', label: 'Three.js', icon: Box },
+  { id: 'annotate', label: 'Annotate', icon: Pencil },
   { id: 'timeline', label: 'Timeline', icon: Scissors },
   { id: 'history', label: 'History', icon: History },
   { id: 'collections', label: 'Collections', icon: FolderOpen }

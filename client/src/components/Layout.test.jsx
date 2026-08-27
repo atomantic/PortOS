@@ -107,6 +107,36 @@ describe('Layout — manifest-derived sidebar structure', () => {
       expect(presentation.icon).toBeTruthy();
     }
   });
+
+  it('covers all sub-tabs for Settings, Digital Twin, and Messages in NAV_PRESENTATION', () => {
+    const settingsPaths = [
+      '/settings/general', '/settings/ai-assignments', '/settings/api-access', '/settings/autofixer',
+      '/settings/backup', '/settings/code-reviewers', '/settings/database', '/settings/features',
+      '/settings/security', '/settings/sharing', '/settings/signal', '/settings/spotify',
+      '/settings/telegram', '/settings/voice', '/settings/youtube', '/settings/mortalloom',
+      '/openclaw', '/prompts', '/ai'
+    ];
+    for (const p of settingsPaths) {
+      expect(NAV_PRESENTATION[p], `missing NAV_PRESENTATION for settings path ${p}`).toBeDefined();
+    }
+
+    const digitalTwinTabs = [
+      'overview', 'identity', 'personas', 'goals', 'taste',
+      'documents', 'import', 'accounts', 'interview', 'autobiography', 'enrich',
+      'test', 'personality', 'voice', 'appearance', 'avatar-bio',
+      'export', 'legacy', 'time-capsule'
+    ];
+    for (const tab of digitalTwinTabs) {
+      const p = `/digital-twin/${tab}`;
+      expect(NAV_PRESENTATION[p], `missing NAV_PRESENTATION for digital twin tab ${p}`).toBeDefined();
+    }
+
+    const messageTabs = ['inbox', 'drafts', 'imessage', 'contacts', 'sync', 'config'];
+    for (const tab of messageTabs) {
+      const p = `/messages/${tab}`;
+      expect(NAV_PRESENTATION[p], `missing NAV_PRESENTATION for message tab ${p}`).toBeDefined();
+    }
+  });
 });
 
 beforeEach(() => {

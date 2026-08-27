@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useSearchParams } from 'react-router';
+import { useSearchParams, Link } from 'react-router';
 import toast from '../components/ui/Toast';
 import {FileText,
   RefreshCw,
@@ -227,6 +227,12 @@ export default function JiraReports() {
               ))}
             </select>
           )}
+          <Link
+            to="/devtools/jira"
+            className="px-3 py-1.5 border border-port-border hover:border-port-accent text-gray-300 hover:text-white rounded text-sm transition-colors"
+          >
+            JIRA Instances
+          </Link>
           <button
             onClick={() => handleGenerate(filterAppId || null)}
             disabled={generating}

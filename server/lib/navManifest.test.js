@@ -36,7 +36,10 @@ const TABBED_PAGES = [
   { prefix: '/wiki', file: 'client/src/pages/Wiki.jsx', kind: 'ids', constName: 'TABS' },
   { prefix: '/settings', file: 'client/src/components/settings/SettingsTabsHeader.jsx', kind: 'links', constName: 'TABS' },
   { prefix: '/models', file: 'client/src/components/models/ModelsTabsHeader.jsx', kind: 'links', constName: 'TABS' },
+  { prefix: '/media', file: 'client/src/pages/MediaGen.jsx', kind: 'ids', constName: 'TABS', allowBasePrefix: true },
+  { prefix: '/music', file: 'client/src/pages/Music.jsx', kind: 'ids', constName: 'TABS', allowBasePrefix: true },
   { prefix: '/sharing', file: 'client/src/pages/Sharing.jsx', kind: 'links', constName: 'SECTIONS' },
+  { prefix: '/system-resources', file: 'client/src/pages/SystemHealthPage.jsx', kind: 'ids', constName: 'RESOURCE_TABS', allowBasePrefix: true },
   // OpenWorld's fast-travel destinations aren't page tabs, but they follow the same
   // contract: one `/openworld/region/<id>` nav command per region in the client's
   // registry, so every warp target is reachable from ⌘K and voice — and a region
@@ -102,7 +105,7 @@ function extractConstIds(filePath, constName) {
 }
 
 // The set of absolute tab paths a page serves under its own prefix.
-function extractTabPaths(filePath, { kind, constName, switchVar, prefix, nestedIdSources }) {
+function extractTabPaths(filePath, { kind, constName, switchVar, prefix, nestedIdSources, allowBasePrefix }) {
   const src = fs.readFileSync(filePath, 'utf8');
   const nested = (nestedIdSources || []).flatMap(({ parent, file, constName: c }) =>
     extractConstIds(path.join(REPO_ROOT, file), c).map((id) => `${prefix}/${parent}/${id}`));
@@ -111,7 +114,8 @@ function extractTabPaths(filePath, { kind, constName, switchVar, prefix, nestedI
   }
   const block = extractConstArrayBlock(src, constName);
   if (kind === 'ids') {
-    return [...block.matchAll(/id:\s*['"]([^'"]+)['"]/g)].map((m) => `${prefix}/${m[1]}`);
+    const ids = [...block.matchAll(/id:\s*['"]([^'"]+)['"]/g)].map((m) => `${prefix}/${m[1]}`);
+    return allowBasePrefix ? [prefix, ...ids] : ids;
   }
   // kind 'links': keep only entries that point at this page, dropping cross-links.
   return [...block.matchAll(/(?:to|path):\s*['"]([^'"]+)['"]/g)]

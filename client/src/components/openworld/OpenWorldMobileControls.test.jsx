@@ -58,6 +58,16 @@ describe('OpenWorldMobileControls', () => {
     expect(mobileInputRef.current.jump).toBe(false);
   });
 
+  it('clears a held action if pointer capture is lost', () => {
+    const { mobileInputRef } = renderControls();
+    const boost = screen.getByRole('button', { name: 'BOOST' });
+
+    fireEvent.pointerDown(boost, { pointerId: 12 });
+    expect(mobileInputRef.current.boost).toBe(true);
+    fireEvent.lostPointerCapture(boost, { pointerId: 12 });
+    expect(mobileInputRef.current.boost).toBe(false);
+  });
+
   it('maps the virtual joystick to normalized drive input', () => {
     const { mobileInputRef } = renderControls();
     const joystick = screen.getByRole('group', { name: 'Movement joystick' });
@@ -78,6 +88,52 @@ describe('OpenWorldMobileControls', () => {
     expect(mobileInputRef.current.moveY).toBeCloseTo(-Math.SQRT1_2);
 
     fireEvent.pointerUp(joystick, { pointerId: 6 });
+    expect(mobileInputRef.current.moveX).toBe(0);
+    expect(mobileInputRef.current.moveY).toBe(0);
+  });
+
+  it('does not steer from pointer hover without an active drag', () => {
+    const { mobileInputRef } = renderControls();
+    const joystick = screen.getByRole('group', { name: 'Movement joystick' });
+    vi.spyOn(joystick, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      top: 0,
+      width: 100,
+      height: 100,
+      right: 100,
+      bottom: 100,
+      x: 0,
+      y: 0,
+      toJSON: () => {},
+    });
+
+    fireEvent.pointerMove(joystick, { pointerId: 9, clientX: 75, clientY: 25 });
+
+    expect(mobileInputRef.current.moveX).toBe(0);
+    expect(mobileInputRef.current.moveY).toBe(0);
+  });
+
+  it('ignores a second pointer and clears movement if capture is lost', () => {
+    const { mobileInputRef } = renderControls();
+    const joystick = screen.getByRole('group', { name: 'Movement joystick' });
+    vi.spyOn(joystick, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      top: 0,
+      width: 100,
+      height: 100,
+      right: 100,
+      bottom: 100,
+      x: 0,
+      y: 0,
+      toJSON: () => {},
+    });
+
+    fireEvent.pointerDown(joystick, { pointerId: 10, clientX: 75, clientY: 25 });
+    const firstX = mobileInputRef.current.moveX;
+    fireEvent.pointerMove(joystick, { pointerId: 11, clientX: 25, clientY: 75 });
+    expect(mobileInputRef.current.moveX).toBe(firstX);
+
+    fireEvent.lostPointerCapture(joystick, { pointerId: 10 });
     expect(mobileInputRef.current.moveX).toBe(0);
     expect(mobileInputRef.current.moveY).toBe(0);
   });

@@ -31,8 +31,13 @@ const socket = vi.hoisted(() => {
     reset: () => handlers.clear(),
   };
 });
+const localLlm = vi.hoisted(() => ({
+  getLocalLlmStatus: vi.fn(),
+  getToolUseModels: vi.fn(),
+}));
 
 vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiLocalLlm', () => localLlm);
 vi.mock('../../../hooks/useSocket', () => ({ useSocket: () => socket }));
 
 import MindTab from './MindTab';
@@ -94,6 +99,8 @@ describe('MindTab', () => {
       }],
     });
     api.updateCosConfig.mockResolvedValue({ success: true });
+    localLlm.getLocalLlmStatus.mockResolvedValue({ ollama: { models: [] }, lmstudio: { models: [] } });
+    localLlm.getToolUseModels.mockResolvedValue({ models: [] });
     api.getPersistentMindContext.mockResolvedValue({
       prompt: { schemaVersion: 1, identity: 'Resident mind', instructions: 'Stay grounded.' },
       preview: { text: '# Effective context', chars: 19, approximateTokens: 5, summaryState: 'empty' },

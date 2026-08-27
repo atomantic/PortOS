@@ -99,12 +99,12 @@ its tunable constants and placement helpers.
 | `openWorldProximity` | Unified player proximity detection across warp pads, buildings, easter eggs, and district landmarks (`detectProximity`, `getResolvedLandmarks`, `WORLD_LANDMARKS`). |
 | `openWorldRegions` | OpenWorld fast-travel registry: named regions over the `openWorldPlan` parcels, each mapped to the PortOS page it visualizes (`OPEN_WORLD_REGIONS`, `getRegion`, `listRegions`, `searchRegions`, `regionArrivalPoint`, `regionPath`). |
 | `openWorldPlayerRig` | Exploration player-rig math: third-person follow camera, boom collision, damping, facing, avatar state (`thirdPersonCamera`, `resolveBoom`, `dampAngle`, `moveFacing`, `avatarState`). |
-| `openWorldRenderBudget` | Pure Auto-quality render-budget state machine: p75 frame-time windows, hysteresis, cooldown, warm-up/gap rejection (`createRenderBudget`, `recordFrame`, `restartWarmup`, `resetRenderBudget`, `getEffectiveTier`, `QUALITY_TIERS`, `DEFAULT_RENDER_BUDGET_CONFIG`). |
+| `openWorldRenderBudget` | Pure Auto-quality render-budget state machine: capability-aware startup tier (`recommendOpenWorldStartTier`), p75 frame-time windows, hysteresis, cooldown, warm-up/gap rejection (`createRenderBudget`, `recordFrame`, `restartWarmup`, `resetRenderBudget`, `getEffectiveTier`, `QUALITY_TIERS`, `DEFAULT_RENDER_BUDGET_CONFIG`). |
 | `openWorldRooftops` | Deterministic rooftop fixture kits (antenna/tank/AC/dish) per app name (`computeRooftopKit`). |
 | `openWorldProductivity` | Productivity monument from streak/velocity tiers (`computeProductivityMonument`). |
 | `openWorldSoundscape` | Ambient soundscape: mood/energy classification, chord selection (`computeSoundscape`), and the manual mood override (`applyMoodOverride`). |
 | `openWorldSpeedPads` | Luminous road speed boost pads placement and geometric local-coordinate overlap detection (`getSpeedPadsList`, `checkSpeedPadOverlap`, `SPEED_PADS`). |
 | `openWorldTaskFlowRiver` | Task-flow river width/speed from backlog & throughput (`computeTaskFlowRiver`). |
 | `openWorldTaskQueue` | Task-queue state/color from status counts (`computeTaskQueue`). |
-| `openWorldTimeline` | Activity-log density bins and timeline buckets (`computeActivityDensity`, `buildTimelineBuckets`). |
+| `openWorldTimeline` | Bounded activity-log batch appends plus density bins and timeline buckets (`appendEventLogBatch`, `computeActivityDensity`, `buildTimelineBuckets`). |
 | `openWorldVoiceMarker` | Voice-agent marker state/color/label from voice status (`computeVoiceMarker`). |
