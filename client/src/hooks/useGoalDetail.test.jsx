@@ -13,6 +13,9 @@ const addGoalProgress = vi.fn(() => Promise.resolve({}));
 const addGoalTodo = vi.fn(() => Promise.resolve({}));
 const generateGoalPhases = vi.fn(() => Promise.resolve([]));
 const decomposeGoal = vi.fn(() => Promise.resolve([]));
+const addGoalMilestone = vi.fn(() => Promise.resolve({}));
+const completeGoalMilestone = vi.fn(() => Promise.resolve({}));
+const completeMilestoneTask = vi.fn(() => Promise.resolve({}));
 
 vi.mock('../services/api', () => ({
   getActivities: (...args) => getActivities(...args),
@@ -26,7 +29,10 @@ vi.mock('../services/api', () => ({
   addGoalProgress: (...args) => addGoalProgress(...args),
   addGoalTodo: (...args) => addGoalTodo(...args),
   generateGoalPhases: (...args) => generateGoalPhases(...args),
-  decomposeGoal: (...args) => decomposeGoal(...args)
+  decomposeGoal: (...args) => decomposeGoal(...args),
+  addGoalMilestone: (...args) => addGoalMilestone(...args),
+  completeGoalMilestone: (...args) => completeGoalMilestone(...args),
+  completeMilestoneTask: (...args) => completeMilestoneTask(...args)
 }));
 
 const { useGoalDetail } = await import('./useGoalDetail');
@@ -464,5 +470,82 @@ describe('useGoalDetail handleDecompose', () => {
     await act(async () => {
       await expect(result.current.handleDecompose()).resolves.toBeUndefined();
     });
+  });
+});
+
+describe('useGoalDetail milestone actions', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getActivities.mockResolvedValue([]);
+    getCalendarAccounts.mockResolvedValue([]);
+    addGoalMilestone.mockResolvedValue({});
+    completeGoalMilestone.mockResolvedValue({});
+    completeMilestoneTask.mockResolvedValue({});
+  });
+
+  it('gates duplicate milestone submissions and clears the form after success', async () => {
+    let release;
+    addGoalMilestone.mockReturnValue(new Promise(resolve => { release = resolve; }));
+    const { result } = renderGoalDetail();
+    act(() => { result.current.setNewMilestone({ title: 'Ship it', targetDate: '' }); });
+
+    let first;
+    act(() => { first = result.current.handleAddMilestone(); });
+    expect(result.current.milestoneSubmitting).toBe(true);
+    await act(async () => { await result.current.handleAddMilestone(); });
+    expect(addGoalMilestone).toHaveBeenCalledTimes(1);
+    await act(async () => { release({}); await first; });
+    expect(result.current.milestoneSubmitting).toBe(false);
+    expect(result.current.newMilestone).toEqual({ title: '', targetDate: '' });
+  });
+
+  it('preserves milestone input and clears submitting after failure', async () => {
+    addGoalMilestone.mockRejectedValue(new Error('server exploded'));
+    const { result, onRefresh } = renderGoalDetail();
+    act(() => { result.current.setNewMilestone({ title: 'Retry me', targetDate: '2026-09-01' }); });
+
+    await act(async () => { await result.current.handleAddMilestone(); });
+    expect(result.current.newMilestone).toEqual({ title: 'Retry me', targetDate: '2026-09-01' });
+    expect(result.current.milestoneSubmitting).toBe(false);
+    expect(onRefresh).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['completeGoalMilestone', completeGoalMilestone, 'handleCompleteMilestone'],
+    ['completeMilestoneTask', completeMilestoneTask, 'handleCompleteMilestoneTask']
+  ])('%s swallows rejected requests and can be retried', async (_name, apiFn, handler) => {
+    apiFn.mockRejectedValueOnce(new Error('server exploded'));
+    const { result, onRefresh } = renderGoalDetail();
+
+    await act(async () => {
+      await expect(handler === 'handleCompleteMilestone'
+        ? result.current[handler]('milestone-1')
+        : result.current[handler]('milestone-1', 'task-1')).resolves.toBeUndefined();
+    });
+    expect(onRefresh).not.toHaveBeenCalled();
+    expect(result.current.milestoneActions.size).toBe(0);
+
+    await act(async () => {
+      await (handler === 'handleCompleteMilestone'
+        ? result.current[handler]('milestone-1')
+        : result.current[handler]('milestone-1', 'task-1'));
+    });
+    expect(apiFn).toHaveBeenCalledTimes(2);
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['completeGoalMilestone', completeGoalMilestone, 'handleCompleteMilestone'],
+    ['completeMilestoneTask', completeMilestoneTask, 'handleCompleteMilestoneTask']
+  ])('%s clears its action state when the API throws synchronously', async (_name, apiFn, handler) => {
+    apiFn.mockImplementation(() => { throw new Error('threw before returning a promise'); });
+    const { result, onRefresh } = renderGoalDetail();
+    await act(async () => {
+      await expect(handler === 'handleCompleteMilestone'
+        ? result.current[handler]('milestone-1')
+        : result.current[handler]('milestone-1', 'task-1')).resolves.toBeUndefined();
+    });
+    expect(result.current.milestoneActions.size).toBe(0);
+    expect(onRefresh).not.toHaveBeenCalled();
   });
 });

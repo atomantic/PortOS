@@ -198,6 +198,8 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
             handleAddMilestone={s.handleAddMilestone}
             handleCompleteMilestone={s.handleCompleteMilestone}
             handleCompleteMilestoneTask={s.handleCompleteMilestoneTask}
+            milestoneSubmitting={s.milestoneSubmitting}
+            milestoneActions={s.milestoneActions}
           />
 
           {/* Target Date */}

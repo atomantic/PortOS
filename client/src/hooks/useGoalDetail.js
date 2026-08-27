@@ -10,6 +10,9 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
   const [form, setForm] = useState({});
   const [tagInput, setTagInput] = useState('');
   const [newMilestone, setNewMilestone] = useState({ title: '', targetDate: '' });
+  const [milestoneSubmitting, setMilestoneSubmitting] = useState(false);
+  const milestoneSubmittingRef = useRef(false);
+  const [milestoneActions, setMilestoneActions] = useState(() => new Set());
   const [activities, setActivities] = useState([]);
   const [selectedActivity, setSelectedActivity] = useState('');
   const [showProgressForm, setShowProgressForm] = useState(false);
@@ -165,8 +168,21 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
   };
 
   const handleCompleteMilestoneTask = async (milestoneId, taskId) => {
-    await api.completeMilestoneTask(goal.id, milestoneId, taskId);
-    onRefresh();
+    const actionKey = `task:${milestoneId}:${taskId}`;
+    if (milestoneActions.has(actionKey)) return;
+    setMilestoneActions(prev => new Set(prev).add(actionKey));
+    try {
+      await api.completeMilestoneTask(goal.id, milestoneId, taskId);
+      onRefresh();
+    } catch {
+      // The request helper owns the toast; keep the task available for retry.
+    } finally {
+      setMilestoneActions(prev => {
+        const next = new Set(prev);
+        next.delete(actionKey);
+        return next;
+      });
+    }
   };
 
   // The response is the signal (issue #3518): a failed check-in used to expand the
@@ -233,18 +249,40 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
   };
 
   const handleAddMilestone = async () => {
-    if (!newMilestone.title.trim()) return;
-    await api.addGoalMilestone(goal.id, {
-      title: newMilestone.title,
-      ...(newMilestone.targetDate ? { targetDate: newMilestone.targetDate } : {})
-    });
-    setNewMilestone({ title: '', targetDate: '' });
-    onRefresh();
+    if (milestoneSubmittingRef.current || !newMilestone.title.trim()) return;
+    milestoneSubmittingRef.current = true;
+    setMilestoneSubmitting(true);
+    try {
+      await api.addGoalMilestone(goal.id, {
+        title: newMilestone.title,
+        ...(newMilestone.targetDate ? { targetDate: newMilestone.targetDate } : {})
+      });
+      setNewMilestone({ title: '', targetDate: '' });
+      onRefresh();
+    } catch {
+      // Keep the form intact so the user can retry. The request helper owns the toast.
+    } finally {
+      milestoneSubmittingRef.current = false;
+      setMilestoneSubmitting(false);
+    }
   };
 
   const handleCompleteMilestone = async (milestoneId) => {
-    await api.completeGoalMilestone(goal.id, milestoneId);
-    onRefresh();
+    const actionKey = `milestone:${milestoneId}`;
+    if (milestoneActions.has(actionKey)) return;
+    setMilestoneActions(prev => new Set(prev).add(actionKey));
+    try {
+      await api.completeGoalMilestone(goal.id, milestoneId);
+      onRefresh();
+    } catch {
+      // The request helper owns the toast; keep the milestone available for retry.
+    } finally {
+      setMilestoneActions(prev => {
+        const next = new Set(prev);
+        next.delete(actionKey);
+        return next;
+      });
+    }
   };
 
   const handleLinkActivity = async () => {
@@ -404,6 +442,7 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
     form, setForm,
     tagInput, setTagInput,
     newMilestone, setNewMilestone,
+    milestoneSubmitting, milestoneActions,
     activities,
     selectedActivity, setSelectedActivity,
     showProgressForm, setShowProgressForm,
