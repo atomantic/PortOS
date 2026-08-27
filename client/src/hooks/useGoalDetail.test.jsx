@@ -11,6 +11,8 @@ const updateGoalProgress = vi.fn(() => Promise.resolve({}));
 const updateGoal = vi.fn(() => Promise.resolve({}));
 const addGoalProgress = vi.fn(() => Promise.resolve({}));
 const addGoalTodo = vi.fn(() => Promise.resolve({}));
+const generateGoalPhases = vi.fn(() => Promise.resolve([]));
+const decomposeGoal = vi.fn(() => Promise.resolve([]));
 
 vi.mock('../services/api', () => ({
   getActivities: (...args) => getActivities(...args),
@@ -22,7 +24,9 @@ vi.mock('../services/api', () => ({
   updateGoalProgress: (...args) => updateGoalProgress(...args),
   updateGoal: (...args) => updateGoal(...args),
   addGoalProgress: (...args) => addGoalProgress(...args),
-  addGoalTodo: (...args) => addGoalTodo(...args)
+  addGoalTodo: (...args) => addGoalTodo(...args),
+  generateGoalPhases: (...args) => generateGoalPhases(...args),
+  decomposeGoal: (...args) => decomposeGoal(...args)
 }));
 
 const { useGoalDetail } = await import('./useGoalDetail');
@@ -351,5 +355,114 @@ describe('useGoalDetail creation actions', () => {
     expect(addGoalTodo).toHaveBeenCalledTimes(1);
     await act(async () => { release({}); await first; });
     expect(result.current.todoSubmitting).toBe(false);
+  });
+});
+
+// Issue #5201: a failed generate/decompose left the previous proposal on screen
+// once the "Generating..."/"Decomposing..." label reset, reading as if the new
+// request had succeeded and returned the same result again.
+describe('useGoalDetail handleGeneratePhases', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getActivities.mockResolvedValue([]);
+    getCalendarAccounts.mockResolvedValue([]);
+    generateGoalPhases.mockResolvedValue([{ title: 'Phase 1', order: 0 }]);
+  });
+
+  it('sets the proposal and clears generatingPhases on success', async () => {
+    const { result } = renderGoalDetail();
+
+    await act(async () => { await result.current.handleGeneratePhases(); });
+
+    expect(generateGoalPhases).toHaveBeenCalledWith(GOAL.id);
+    expect(result.current.proposedPhases).toEqual([{ title: 'Phase 1', order: 0 }]);
+    expect(result.current.generatingPhases).toBe(false);
+  });
+
+  it('clears a stale proposal and generatingPhases when the request rejects', async () => {
+    generateGoalPhases.mockResolvedValueOnce([{ title: 'Old phase', order: 0 }]);
+    const { result } = renderGoalDetail();
+    await act(async () => { await result.current.handleGeneratePhases(); });
+    expect(result.current.proposedPhases).toEqual([{ title: 'Old phase', order: 0 }]);
+
+    generateGoalPhases.mockRejectedValueOnce(new Error('server exploded'));
+    await act(async () => { await result.current.handleGeneratePhases(); });
+
+    expect(result.current.proposedPhases).toBeNull();
+    expect(result.current.generatingPhases).toBe(false);
+  });
+
+  // A bare `.catch()` never gets attached when the call throws before handing back
+  // a promise, so the reset would be skipped and the button would latch forever.
+  it('clears generatingPhases when the api call throws synchronously', async () => {
+    generateGoalPhases.mockImplementation(() => { throw new Error('threw before returning a promise'); });
+    const { result } = renderGoalDetail();
+
+    await act(async () => { await result.current.handleGeneratePhases(); });
+
+    expect(result.current.generatingPhases).toBe(false);
+    expect(result.current.proposedPhases).toBeNull();
+  });
+
+  it('does not surface a rejection to the caller as an unhandled promise', async () => {
+    generateGoalPhases.mockRejectedValue(new Error('server exploded'));
+    const { result } = renderGoalDetail();
+
+    await act(async () => {
+      await expect(result.current.handleGeneratePhases()).resolves.toBeUndefined();
+    });
+  });
+});
+
+describe('useGoalDetail handleDecompose', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getActivities.mockResolvedValue([]);
+    getCalendarAccounts.mockResolvedValue([]);
+    decomposeGoal.mockResolvedValue([{ title: 'Milestone 1', order: 0 }]);
+  });
+
+  it('sets the proposal (stamped with a client key) and clears decomposing on success', async () => {
+    const { result } = renderGoalDetail();
+
+    await act(async () => { await result.current.handleDecompose(); });
+
+    expect(decomposeGoal).toHaveBeenCalledWith(GOAL.id);
+    expect(result.current.proposedDecomposition).toEqual([{ title: 'Milestone 1', order: 0, _key: 'prop-0' }]);
+    expect(result.current.decomposing).toBe(false);
+  });
+
+  it('clears a stale proposal and decomposing when the request rejects', async () => {
+    decomposeGoal.mockResolvedValueOnce([{ title: 'Old milestone', order: 0 }]);
+    const { result } = renderGoalDetail();
+    await act(async () => { await result.current.handleDecompose(); });
+    expect(result.current.proposedDecomposition).not.toBeNull();
+
+    decomposeGoal.mockRejectedValueOnce(new Error('server exploded'));
+    await act(async () => { await result.current.handleDecompose(); });
+
+    expect(result.current.proposedDecomposition).toBeNull();
+    expect(result.current.decomposing).toBe(false);
+  });
+
+  // A bare `.catch()` never gets attached when the call throws before handing back
+  // a promise, so the reset would be skipped and the button would latch forever.
+  it('clears decomposing when the api call throws synchronously', async () => {
+    decomposeGoal.mockImplementation(() => { throw new Error('threw before returning a promise'); });
+    const { result } = renderGoalDetail();
+
+    await act(async () => { await result.current.handleDecompose(); });
+
+    expect(result.current.decomposing).toBe(false);
+    expect(result.current.proposedDecomposition).toBeNull();
+  });
+
+  it('does not surface a rejection to the caller as an unhandled promise', async () => {
+    decomposeGoal.mockRejectedValue(new Error('server exploded'));
+    const { result } = renderGoalDetail();
+
+    await act(async () => {
+      await expect(result.current.handleDecompose()).resolves.toBeUndefined();
+    });
   });
 });

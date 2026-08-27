@@ -114,11 +114,23 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
     onRefresh();
   };
 
+  // `try/catch/finally` rather than the `.catch(() => null)` used before, for the
+  // same reason as runSchedulingAction below: a bare `.catch` only covers a
+  // rejected promise, so a call that threw before returning one would skip the
+  // reset and latch the button on "Generating..." until a full page reload. No
+  // custom toast on purpose — `request()` already toasts the failure. The stale
+  // proposal is cleared up front so a failed regenerate can't read as "generation
+  // succeeded and returned the same plan again".
   const handleGeneratePhases = async () => {
     setGeneratingPhases(true);
-    const phases = await api.generateGoalPhases(goal.id).catch(() => null);
-    setGeneratingPhases(false);
-    if (phases) setProposedPhases(phases);
+    setProposedPhases(null);
+    try {
+      setProposedPhases(await api.generateGoalPhases(goal.id));
+    } catch {
+      // Deliberately swallowed — see the single-layer note above.
+    } finally {
+      setGeneratingPhases(false);
+    }
   };
 
   const handleAcceptPhases = async () => {
@@ -128,14 +140,21 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
     onRefresh();
   };
 
+  // Same single-layer error handling as handleGeneratePhases above.
   const handleDecompose = async () => {
     setDecomposing(true);
-    const milestones = await api.decomposeGoal(goal.id).catch(() => null);
-    setDecomposing(false);
-    // Stamp a stable client key so the reorderable/editable proposal list keys
-    // on identity, not array index (index keys mis-associate controlled-input
-    // state across a swap). `_key` is stripped by the accept Zod schema.
-    if (milestones) setProposedDecomposition(milestones.map((m, i) => ({ ...m, _key: `prop-${i}` })));
+    setProposedDecomposition(null);
+    try {
+      const milestones = await api.decomposeGoal(goal.id);
+      // Stamp a stable client key so the reorderable/editable proposal list keys
+      // on identity, not array index (index keys mis-associate controlled-input
+      // state across a swap). `_key` is stripped by the accept Zod schema.
+      setProposedDecomposition(milestones.map((m, i) => ({ ...m, _key: `prop-${i}` })));
+    } catch {
+      // Deliberately swallowed — see the single-layer note above.
+    } finally {
+      setDecomposing(false);
+    }
   };
 
   const handleAcceptDecomposition = async () => {
