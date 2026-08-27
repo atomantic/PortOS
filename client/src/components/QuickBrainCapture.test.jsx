@@ -23,8 +23,8 @@ vi.mock('./ui/Toast', () => ({
 }));
 
 // jsdom has no EventSource, and once a kickoff resolves the real
-// useSseProgress subscribes to one. A do-nothing stub keeps the hook wiring
-// under test without inventing a fake transport — no test here drives frames.
+// useSseProgress subscribes to one. This controllable stub lets the accessibility
+// coverage drive realistic progress frames without opening a network transport.
 class StubEventSource {
   static CLOSED = 2;
   static instances = [];
@@ -34,6 +34,10 @@ class StubEventSource {
     StubEventSource.instances.push(this);
   }
   emit(frame) { this.onmessage?.({ data: JSON.stringify(frame) }); }
+  fail() {
+    this.readyState = StubEventSource.CLOSED;
+    this.onerror?.();
+  }
   close() { this.readyState = StubEventSource.CLOSED; }
 }
 globalThis.EventSource = StubEventSource;
@@ -372,6 +376,17 @@ describe('QuickBrainCapture', () => {
       act(() => StubEventSource.instances[0].emit({ type: 'metadata', title: 'Example Video' }));
       await waitFor(() => expect(progress).toHaveAttribute('aria-valuenow', '48'));
       expect(screen.getByText('video…')).toBeInTheDocument();
+
+      act(() => StubEventSource.instances[0].fail());
+      await waitFor(() => expect(screen.queryByRole('progressbar')).not.toBeInTheDocument());
+
+      startYoutubeIngest.mockResolvedValueOnce({ jobId: 'job-2' });
+      type(YT);
+      fireEvent.click(screen.getByLabelText('Capture'));
+
+      const retryProgress = await screen.findByRole('progressbar', { name: 'YouTube video ingest progress' });
+      expect(retryProgress).toHaveAttribute('aria-valuenow', '0');
+      expect(screen.getByText('starting…')).toHaveAttribute('aria-live', 'polite');
     });
 
     it('does not fetch ingest settings until a YouTube URL is typed', () => {

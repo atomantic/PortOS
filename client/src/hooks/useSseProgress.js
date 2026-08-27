@@ -25,6 +25,7 @@ export const isTerminalSseFrame = (frame) => TERMINAL_TYPES.has(frame?.type);
 export function useSseProgress(url, { enabled = true } = {}) {
   const [frames, setFrames] = useState([]);
   const [latest, setLatest] = useState(null);
+  const [latestUrl, setLatestUrl] = useState(null);
   const [isOpen, setIsOpen] = useState(false);
   // `closed` flips true when the stream ends for ANY reason — a terminal frame
   // OR a connection failure/404 (e.g. the server pruned a fast-completing job
@@ -42,10 +43,12 @@ export function useSseProgress(url, { enabled = true } = {}) {
       // subscribe, tearing down the new stream before it can deliver progress.
       setIsOpen(false);
       setClosed(false);
+      setLatestUrl(null);
       return undefined;
     }
     setFrames([]);
     setLatest(null);
+    setLatestUrl(null);
     setIsOpen(false);
     setClosed(false);
 
@@ -62,6 +65,7 @@ export function useSseProgress(url, { enabled = true } = {}) {
       }
       setFrames((prev) => [...prev, data]);
       setLatest(data);
+      setLatestUrl(url);
       if (TERMINAL_TYPES.has(data?.type)) {
         es.close();
         setIsOpen(false); // the connection is now closed — keep isOpen honest
@@ -85,5 +89,5 @@ export function useSseProgress(url, { enabled = true } = {}) {
     };
   }, [url, enabled]);
 
-  return { frames, latest, isOpen, closed, close: () => esRef.current?.close() };
+  return { frames, latest, latestUrl, isOpen, closed, close: () => esRef.current?.close() };
 }

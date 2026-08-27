@@ -57,19 +57,20 @@ export default function useSseJobSlot({
   const [job, setJob] = useState(null); // { jobId, context }
   const [pending, setPending] = useState(false);
   const [progress, setProgress] = useState({ percent: 0, stage: null });
-  const sse = useSseProgress(job ? eventsUrl(job.jobId) : null);
+  const jobUrl = job ? eventsUrl(job.jobId) : null;
+  const sse = useSseProgress(jobUrl);
   const latest = sse.latest;
 
   // Metadata and warning frames intentionally omit progress fields. Preserve the
   // last announced values across those sparse frames instead of flashing 0% /
   // "starting" between real progress updates.
   useEffect(() => {
-    if (!job || !latest) return;
+    if (!job || !latest || sse.latestUrl !== jobUrl) return;
     setProgress((prev) => ({
       percent: Number.isFinite(latest.percent) ? Math.round(latest.percent) : prev.percent,
       stage: typeof latest.stage === 'string' && latest.stage ? latest.stage : prev.stage,
     }));
-  }, [latest, job]);
+  }, [latest, job, jobUrl, sse.latestUrl]);
 
   useEffect(() => {
     if (!job || !latest) return;

@@ -27,6 +27,7 @@ describe('useSseProgress', () => {
     });
     expect(result.current.frames).toHaveLength(2);
     expect(result.current.latest).toEqual({ type: 'progress', progress: 0.5 });
+    expect(result.current.latestUrl).toBe('/x');
     expect(result.current.closed).toBe(false);
   });
 
@@ -57,6 +58,7 @@ describe('useSseProgress', () => {
     rerender({ url: '/b' });
     expect(result.current.closed).toBe(false);
     expect(result.current.frames).toHaveLength(0);
+    expect(result.current.latestUrl).toBeNull();
     expect(last().url).toBe('/b');
   });
 
@@ -73,6 +75,7 @@ describe('useSseProgress', () => {
     rerender({ url: null });
     expect(result.current.closed).toBe(false);
     expect(result.current.latest).toEqual({ type: 'error', error: 'boom' });
+    expect(result.current.latestUrl).toBeNull();
   });
 
   it('isTerminalSseFrame matches the terminal set and rejects others', () => {
