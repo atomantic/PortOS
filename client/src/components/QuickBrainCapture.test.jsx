@@ -345,6 +345,19 @@ describe('QuickBrainCapture', () => {
       expect(startYoutubeIngest.mock.calls[0][0]).toMatchObject({ ingestAudio: true, captureTranscript: true });
     });
 
+    it('exposes ingest progress and stage updates to assistive technology', async () => {
+      renderWidget();
+      type(YT);
+      await waitFor(() => expect(getYoutubeIngestSettings).toHaveBeenCalled());
+      fireEvent.click(screen.getByLabelText('Capture'));
+
+      const progress = await screen.findByRole('progressbar', { name: 'YouTube video ingest progress' });
+      expect(progress).toHaveAttribute('aria-valuenow', '0');
+      expect(progress).toHaveAttribute('aria-valuemin', '0');
+      expect(progress).toHaveAttribute('aria-valuemax', '100');
+      expect(screen.getByText('starting…')).toHaveAttribute('aria-live', 'polite');
+    });
+
     it('does not fetch ingest settings until a YouTube URL is typed', () => {
       renderWidget();
       type('just a thought');
