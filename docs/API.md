@@ -18,14 +18,15 @@ the shipped semantic registry, MCP context/action schemas, authority matrix,
 and the current-vs-proposed boundary.
 
 - `GET /api/api-docs/catalog.json` — searchable metadata for every mounted HTTP operation.
-- `GET /api/api-docs/internal/openapi.json` — OpenAPI 3.1 for the complete internal HTTP surface.
-- `GET /api/api-docs/openapi.json` — OpenAPI 3.1 for only the external APIs currently exposed in Settings.
+- `GET /api/api-docs/internal/openapi.json` — OpenAPI 3.0.3 for the complete internal HTTP surface.
+- `GET /api/api-docs/openapi.json` — OpenAPI 3.0.3 for only the external APIs currently exposed in Settings.
 - `GET /api/api-docs/events.json` — searchable Socket.IO event inventory.
 - `GET /api/api-docs/asyncapi.json` — AsyncAPI 3 for the Socket.IO transport.
+- `GET /api/api-docs/tools.min.json` — the minimized semantic tool resource: only the operations annotated `x-portos-tool`, flattened to provider-neutral tool records with an HTTP binding. Sized for an agent to read whole, unlike the full internal document.
 
 Generated entries are explicitly marked `generated` until a runtime-backed payload contract exists; detailed entries are marked `modeled`. Regenerate the checked-in route and event manifests with `npm run generate:api-docs`. Drift tests fail when source declarations and committed manifests diverge.
 
-When adding an HTTP route, keep its request Zod schema in a reusable server library and register the detailed documentation in `server/lib/apiOperationContracts.js`; the route and OpenAPI should consume the same schema object. Socket payload schemas follow the same pattern in `server/lib/socketEventContracts.js`. The generators guarantee inventory coverage, while these small registries make richer contracts incremental without maintaining a second handwritten list of paths or events.
+When adding an HTTP route, keep its request Zod schema in a reusable server library and register the detailed documentation in `server/lib/apiOperationContracts.js`; the route and OpenAPI should consume the same schema object. Add an `x-portos-tool` annotation to that contract entry to also publish the operation as an agent-callable tool in `tools.min.json`, and declare the codes its error responses really throw in `x-portos-error-codes` — the HTTP status alone does not identify the code, since `errorHandler` prefers an explicit `err.code` over the status map. Socket payload schemas follow the same pattern in `server/lib/socketEventContracts.js`. The generators guarantee inventory coverage, while these small registries make richer contracts incremental without maintaining a second handwritten list of paths or events.
 
 Building a native companion client? See [COMPANION_APP_API.md](./COMPANION_APP_API.md) — the stable, pre-auth-discoverable contract (discovery/identity, HTTP Basic auth, instance management, palette actions, daily-log, POST progress, and the iCloud-sync precedent) that the PortDeck app consumes.
 
@@ -587,7 +588,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/lmstudio`, `/api/local-llm` | Local LLM backends and the local runtime servers PortOS can start/stop (Ollama, LM Studio, `llama-server`, MTPLX — the last two as PM2 processes; `POST /api/local-llm/save-startup` is `pm2 save`), plus MTPLX's checkpoint catalog — `GET /api/local-llm/mtplx/models/search`, `POST .../models/pull` (byte progress on the `mtplx:download` socket event), `POST .../models/remove` |
 | `/api/code-review` | Code review runs |
 | `/api/voice`, `/api/voice/public` | Voice assistant |
-| `/api/api-docs` | Generated HTTP/event catalogs, OpenAPI 3.1 documents, and AsyncAPI 3 document |
+| `/api/api-docs` | Generated HTTP/event catalogs, OpenAPI 3.0.3 documents, AsyncAPI 3 document, and the minimized semantic tool resource |
 | `/api/data` | Data manager/sync |
 | `/api/datadog`, `/api/jira`, `/api/github`, `/api/telegram` | External integrations |
 | `/api/health` | Health check |

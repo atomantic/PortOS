@@ -47,6 +47,7 @@ vi.mock('../services/jira.js', () => ({
 
 import settingsRoutes from './settings.js';
 import { hasConfiguredInstances as hasConfiguredDatadogInstances } from '../services/datadog.js';
+import { hasConfiguredInstances as hasConfiguredJiraInstances } from '../services/jira.js';
 
 const buildApp = () => {
   const app = express();
@@ -128,6 +129,26 @@ describe('Settings routes — instance feature participation', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'datadog', enabled: true, source: 'auto' }));
+  });
+
+  it('detects each integration independently, so one configured integration does not enable another', async () => {
+    hasConfiguredJiraInstances.mockResolvedValueOnce(true);
+
+    const res = await request(buildApp()).get('/api/settings/features');
+
+    expect(res.status).toBe(200);
+    expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'jira', enabled: true, source: 'auto' }));
+    // Detection is per-feature; a configured JIRA must not switch Datadog on.
+    expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'datadog', enabled: false, source: 'auto' }));
+  });
+
+  it('keeps an explicit opt-out off even when the integration is configured', async () => {
+    hasConfiguredJiraInstances.mockResolvedValueOnce(true);
+    store = { instanceFeatures: { jira: { enabled: false } } };
+
+    const res = await request(buildApp()).get('/api/settings/features');
+
+    expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'jira', enabled: false, source: 'explicit' }));
   });
 
   it('updates one feature without replacing unrelated settings', async () => {

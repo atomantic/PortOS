@@ -8,6 +8,7 @@ import {
   COS_TOOL_SCHEMA_VERSION,
   cosToolCallSchema,
   normalizePortosSemanticToolGrants,
+  providerToolName,
 } from '../lib/cosToolContracts.js';
 import { zodToOpenApiSchema } from '../lib/apiContractSchemas.js';
 import { canonicalStringify } from '../lib/objects.js';
@@ -71,7 +72,7 @@ const voiceTools = (intent) => {
     const legacyName = spec.function.name;
     const adapter = VOICE_ADAPTERS[legacyName];
     if (!adapter) return [];
-    const providerName = adapter.id.replaceAll('.', '_').replaceAll('-', '_');
+    const providerName = providerToolName(adapter.id);
     return [{
       type: 'portos_tool',
       name: adapter.id,

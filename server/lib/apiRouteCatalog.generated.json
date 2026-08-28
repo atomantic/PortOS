@@ -1057,7 +1057,7 @@
       "sources": [
         {
           "source": "server/routes/apiDocs.js",
-          "line": 57
+          "line": 60
         }
       ]
     },
@@ -1068,7 +1068,7 @@
       "sources": [
         {
           "source": "server/routes/apiDocs.js",
-          "line": 47
+          "line": 50
         }
       ]
     },
@@ -1079,7 +1079,7 @@
       "sources": [
         {
           "source": "server/routes/apiDocs.js",
-          "line": 52
+          "line": 55
         }
       ]
     },
@@ -1090,7 +1090,7 @@
       "sources": [
         {
           "source": "server/routes/apiDocs.js",
-          "line": 41
+          "line": 44
         }
       ]
     },
@@ -1101,7 +1101,18 @@
       "sources": [
         {
           "source": "server/routes/apiDocs.js",
-          "line": 35
+          "line": 38
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/api-docs/tools.min.json",
+      "mountPath": "/api/api-docs",
+      "sources": [
+        {
+          "source": "server/routes/apiDocs.js",
+          "line": 66
         }
       ]
     },
@@ -22927,8 +22938,8 @@
   ],
   "stats": {
     "mounts": 145,
-    "operations": 2068,
-    "declarations": 2071,
+    "operations": 2069,
+    "declarations": 2072,
     "sourceFiles": 224
   }
 }

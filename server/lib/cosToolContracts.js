@@ -31,6 +31,15 @@ export const normalizePortosSemanticToolGrants = (raw) => {
   };
 };
 
+/**
+ * The provider-facing name for a canonical dotted tool name. Model providers
+ * conventionally accept `[A-Za-z0-9_-]` function names, so `voice.list-voices`
+ * is published as `voice_list_voices`. Shared by both tool surfaces — the
+ * in-process CoS catalog and the HTTP tool resource — so the same tool never
+ * gets two different provider names.
+ */
+export const providerToolName = (name) => name.replaceAll('.', '_').replaceAll('-', '_');
+
 export const cosToolRequestIdSchema = z.string()
   .trim()
   .min(1)

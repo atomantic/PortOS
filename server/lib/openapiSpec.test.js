@@ -9,7 +9,7 @@ const exposed = (apiAccess) => ({ apiAccess });
 describe('buildOpenApiSpec', () => {
   it('produces a valid 3.1 envelope with security schemes', () => {
     const spec = buildOpenApiSpec({}, { baseUrl: 'https://host:5555', version: '1.2.3' });
-    expect(spec.openapi).toBe('3.1.0');
+    expect(spec.openapi).toBe('3.0.3');
     expect(spec.info.version).toBe('1.2.3');
     expect(spec.servers).toEqual([{ url: 'https://host:5555' }]);
     expect(spec.components.securitySchemes.bearerAuth).toBeDefined();

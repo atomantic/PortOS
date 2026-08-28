@@ -28,6 +28,15 @@ export const sdapiTxt2imgBodySchema = z.object({
   sd_model_checkpoint: z.string().max(128).optional(),
 }).passthrough();
 
+/**
+ * Convert a Zod contract to plain JSON Schema (draft 2020-12, minus `$schema`).
+ *
+ * Stays JSON Schema on purpose. Consumers that need it are the AsyncAPI
+ * document's `payload`, the CoS provider tool definitions, and the semantic
+ * tool resource — all JSON Schema dialects. The OpenAPI 3.0.3 documents convert
+ * at their own boundary via `toOpenApi30Operation`; doing it here instead
+ * silently corrupts the other three (see `openapiDowngrade.js`).
+ */
 export const zodToOpenApiSchema = (schema) => {
   const jsonSchema = z.toJSONSchema(schema);
   delete jsonSchema.$schema;

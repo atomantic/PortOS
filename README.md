@@ -237,7 +237,7 @@ Everything you need to manage your dev environment without leaving the browser.
 - **Flows** — Rendered architecture/data-flow diagrams of how PortOS subsystems and integrations actually connect
 - **Video Downloader** — Pull clips from YouTube/X via `yt-dlp` into the media library
 - **Local LLM Playground** — Side-by-side comparison of local Ollama/LM Studio models with TTFT and tokens/sec
-- **API Explorer** — Searchable complete HTTP and Socket.IO inventories, rendered OpenAPI 3.1, AsyncAPI 3, and governed agent-tool contracts; external TTS/image exposure remains explicitly gated
+- **API Explorer** — Searchable complete HTTP and Socket.IO inventories, rendered OpenAPI 3.0.3, AsyncAPI 3, and governed agent-tool contracts; external TTS/image exposure remains explicitly gated
 - **Templates** — Scaffold new apps from pre-built templates wired up to your AI providers
 - **Review Hub** — Single inbox for actionable items (CoS approvals, alerts, todos, briefings) across every PortOS subsystem
 

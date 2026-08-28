@@ -1965,7 +1965,7 @@
         {
           "direction": "server-to-client",
           "source": "server/lib/errorHandler.js",
-          "line": 309
+          "line": 318
         }
       ]
     },
@@ -4405,7 +4405,7 @@
         {
           "direction": "server-to-client",
           "source": "server/lib/errorHandler.js",
-          "line": 321
+          "line": 330
         }
       ]
     },

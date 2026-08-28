@@ -405,6 +405,8 @@ export * from './markedSection.js';
 export * from './mirrorParity.js';
 export * from './objects.js';
 export * from './openapiSpec.js';
+export * from './openapiDowngrade.js';
+export * from './apiToolResource.js';
 export * from './prDisposition.js';
 export * from './repoStateExpectations.js';
 export * from './shellCd.js';

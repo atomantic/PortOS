@@ -15,10 +15,10 @@ const jsonBody = (schema, required = true) => ({
 
 export const API_OPERATION_CONTRACTS = Object.freeze({
   '/api/api-docs/openapi.json': {
-    get: { summary: 'Read exposed OpenAPI document', responses: { 200: { description: 'OpenAPI 3.1 document for currently exposed external APIs' } } },
+    get: { summary: 'Read exposed OpenAPI document', responses: { 200: { description: 'OpenAPI 3.0.3 document for currently exposed external APIs' } } },
   },
   '/api/api-docs/internal/openapi.json': {
-    get: { summary: 'Read complete internal OpenAPI document', responses: { 200: { description: 'OpenAPI 3.1 document for every mounted HTTP operation' } } },
+    get: { summary: 'Read complete internal OpenAPI document', responses: { 200: { description: 'OpenAPI 3.0.3 document for every mounted HTTP operation' } } },
   },
   '/api/api-docs/catalog.json': {
     get: { summary: 'Read HTTP API catalog', responses: { 200: { description: 'Searchable generated HTTP operation metadata and coverage' } } },
@@ -28,6 +28,9 @@ export const API_OPERATION_CONTRACTS = Object.freeze({
   },
   '/api/api-docs/asyncapi.json': {
     get: { summary: 'Read AsyncAPI document', responses: { 200: { description: 'AsyncAPI 3 document for the Socket.IO transport' } } },
+  },
+  '/api/api-docs/tools.min.json': {
+    get: { summary: 'Read minimized semantic tool resource', responses: { 200: { description: 'Schema-optimized provider-neutral tool resource' } } },
   },
   '/api/agent-context/manifest': {
     get: { summary: 'Read local Agent Tools MCP manifest', responses: { 200: { description: 'MCP transport, context scopes, semantic grants, schemas, and limits' } } },
@@ -47,7 +50,11 @@ export const API_OPERATION_CONTRACTS = Object.freeze({
       requestBody: jsonBody(voiceSynthesizeBodySchema),
       responses: {
         200: { description: 'WAV audio', content: { 'audio/wav': { schema: { type: 'string', format: 'binary' } } } },
-        400: { description: 'Invalid payload or unknown voice' },
+        400: { description: 'Invalid payload or unknown voice', 'x-portos-error-codes': ['VALIDATION_ERROR'] },
+      },
+      'x-portos-tool': {
+        name: 'voice.synthesize', version: 1,
+        policy: { privacy: 'personal', sideEffect: 'local-compute', async: false },
       },
     },
   },
@@ -56,14 +63,16 @@ export const API_OPERATION_CONTRACTS = Object.freeze({
       summary: 'List voices',
       description: 'Enumerate available voices for an engine. Defaults to the active engine.',
       parameters: [{ name: 'engine', in: 'query', required: false, schema: { type: 'string', enum: ['kokoro', 'piper'] } }],
-      responses: { 200: { description: 'Voice list' } },
+      responses: { 200: { description: 'Voice list', content: { 'application/json': { schema: { type: 'object' } } } } },
+      'x-portos-tool': { name: 'voice.list-voices', version: 1, policy: { privacy: 'internal', sideEffect: 'read', async: false } },
     },
   },
   '/api/voice/public/engines': {
     get: {
       summary: 'List engines',
       description: 'Discover available TTS engines and the configured default voice per engine.',
-      responses: { 200: { description: 'Engine list and defaults' } },
+      responses: { 200: { description: 'Engine list and defaults', content: { 'application/json': { schema: { type: 'object' } } } } },
+      'x-portos-tool': { name: 'voice.list-engines', version: 1, policy: { privacy: 'internal', sideEffect: 'read', async: false } },
     },
   },
   '/sdapi/v1/txt2img': {
@@ -73,19 +82,37 @@ export const API_OPERATION_CONTRACTS = Object.freeze({
       requestBody: jsonBody(sdapiTxt2imgBodySchema),
       responses: {
         200: { description: 'Generated images in AUTOMATIC1111 response format' },
-        400: { description: 'Invalid generation payload' },
+        400: { description: 'Invalid generation payload', 'x-portos-error-codes': ['VALIDATION_ERROR'] },
         403: { description: 'A1111 API exposure is disabled' },
+        500: { description: 'Generation failed or its output could not be read', 'x-portos-error-codes': ['GEN_FAILED', 'GEN_OUTPUT_MISSING'] },
+        504: { description: 'Generation timed out', 'x-portos-error-codes': ['GEN_TIMEOUT'] },
+      },
+      'x-portos-tool': {
+        name: 'image.generate', version: 1,
+        policy: { privacy: 'personal', sideEffect: 'local-compute', async: true },
       },
     },
   },
   '/sdapi/v1/sd-models': {
-    get: { summary: 'List image models', responses: { 200: { description: 'Model catalog' } } },
+    get: {
+      summary: 'List image models',
+      responses: { 200: { description: 'Model catalog', content: { 'application/json': { schema: { type: 'array', items: { type: 'object' } } } } } },
+      'x-portos-tool': { name: 'image.list-models', version: 1, policy: { privacy: 'internal', sideEffect: 'read', async: false } },
+    },
   },
   '/sdapi/v1/samplers': {
-    get: { summary: 'List samplers', responses: { 200: { description: 'Sampler list' } } },
+    get: {
+      summary: 'List samplers',
+      responses: { 200: { description: 'Sampler list', content: { 'application/json': { schema: { type: 'array', items: { type: 'object' } } } } } },
+      'x-portos-tool': { name: 'image.list-samplers', version: 1, policy: { privacy: 'internal', sideEffect: 'read', async: false } },
+    },
   },
   '/sdapi/v1/options': {
-    get: { summary: 'Read active image options', responses: { 200: { description: 'Active model and options' } } },
+    get: {
+      summary: 'Read active image options',
+      responses: { 200: { description: 'Active model and options', content: { 'application/json': { schema: { type: 'object' } } } } },
+      'x-portos-tool': { name: 'image.get-options', version: 1, policy: { privacy: 'internal', sideEffect: 'read', async: false } },
+    },
     post: {
       summary: 'Acknowledge image options',
       description: 'Compatibility endpoint. PortOS does not switch its underlying model from this request.',
@@ -93,7 +120,11 @@ export const API_OPERATION_CONTRACTS = Object.freeze({
     },
   },
   '/sdapi/v1/progress': {
-    get: { summary: 'Read generation progress', responses: { 200: { description: 'Current generation progress or idle state' } } },
+    get: {
+      summary: 'Read generation progress',
+      responses: { 200: { description: 'Current generation progress or idle state', content: { 'application/json': { schema: { type: 'object' } } } } },
+      'x-portos-tool': { name: 'image.get-progress', version: 1, policy: { privacy: 'internal', sideEffect: 'read', async: false } },
+    },
   },
   '/sdapi/v1/portos/video-models': {
     get: { summary: 'List PortOS video models', responses: { 200: { description: 'Video model catalog and default' } } },

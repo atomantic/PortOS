@@ -1,4 +1,4 @@
-/** OpenAPI 3.1 builders for PortOS's exposed and complete HTTP API surfaces. */
+/** OpenAPI 3.0.3 builders for PortOS's exposed and complete HTTP API surfaces. */
 
 import { API_OPERATION_CONTRACTS } from './apiOperationContracts.js';
 import {
@@ -7,6 +7,7 @@ import {
   pathParametersFor,
 } from './apiCatalog.js';
 import { resolveApiAccess } from './apiRegistry.js';
+import { OPENAPI_VERSION, toOpenApi30Operation } from './openapiDowngrade.js';
 
 const SECURITY_SCHEMES = {
   bearerAuth: { type: 'http', scheme: 'bearer', description: 'PortOS session token, when instance authentication is enabled.' },
@@ -23,7 +24,7 @@ const applySecurity = (pathItem, requireAuth) => Object.fromEntries(
 );
 
 const commonEnvelope = ({ title, description, baseUrl, version, tags, paths }) => ({
-  openapi: '3.1.0',
+  openapi: OPENAPI_VERSION,
   info: { title, version, description },
   servers: baseUrl ? [{ url: baseUrl }] : [],
   tags,
@@ -69,7 +70,9 @@ const generatedOperation = (operation) => {
   };
 };
 
-const modeledOperation = (operation, contract) => ({
+// The contract's schemas are JSON Schema; this document declares 3.0.3, so they
+// convert on the way in. Generated operations model no schemas and need none.
+const modeledOperation = (operation, contract) => toOpenApi30Operation({
   ...generatedOperation(operation),
   ...contract,
   operationId: apiOperationId(operation.method, operation.path),
@@ -90,7 +93,10 @@ export const buildOpenApiSpec = (settings, { baseUrl, version = '0.0.0' } = {}) 
       const pathItem = API_OPERATION_CONTRACTS[path];
       if (!pathItem) continue;
       const tagged = Object.fromEntries(
-        Object.entries(pathItem).map(([method, operation]) => [method, { tags: [api.id], ...operation }]),
+        Object.entries(pathItem).map(([method, operation]) => [
+          method,
+          toOpenApi30Operation({ tags: [api.id], ...operation }),
+        ]),
       );
       paths[path] = applySecurity(tagged, api.requireAuth);
     }

@@ -19,10 +19,10 @@ const buildApp = () => {
 describe('GET /api/api-docs/openapi.json', () => {
   beforeEach(() => { store = {}; });
 
-  it('returns an empty-paths 3.1 spec when nothing exposed', async () => {
+  it('returns an empty-paths 3.0.3 spec when nothing exposed', async () => {
     const res = await request(buildApp()).get('/api/api-docs/openapi.json');
     expect(res.status).toBe(200);
-    expect(res.body.openapi).toBe('3.1.0');
+    expect(res.body.openapi).toBe('3.0.3');
     expect(Object.keys(res.body.paths)).toHaveLength(0);
     expect(res.body.info.version).not.toBe('0.0.0'); // real package.json version
   });
@@ -66,5 +66,14 @@ describe('GET /api/api-docs/openapi.json', () => {
     expect(asyncapi.status).toBe(200);
     expect(asyncapi.body.asyncapi).toBe('3.0.0');
     expect(Object.values(asyncapi.body.channels).some((channel) => channel.address === 'shell:start')).toBe(true);
+  });
+
+  it('serves the minimized semantic tool resource', async () => {
+    const res = await request(buildApp()).get('/api/api-docs/tools.min.json');
+    expect(res.status).toBe(200);
+    expect(res.body.type).toBe('portos_tool_resource');
+    expect(res.body.source.version).toBe('3.0.3');
+    expect(res.body.tools).toHaveLength(8);
+    expect(res.body.errors.some((error) => error.code === 'VALIDATION_ERROR')).toBe(true);
   });
 });
