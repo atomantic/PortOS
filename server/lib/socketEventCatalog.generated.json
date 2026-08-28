@@ -596,7 +596,7 @@
         {
           "direction": "server-to-client",
           "source": "client/src/pages/Dashboard.jsx",
-          "line": 140
+          "line": 128
         },
         {
           "direction": "server-to-client",
