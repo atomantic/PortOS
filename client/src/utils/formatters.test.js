@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   clamp, formatContextLength, formatDurationMin, formatDurationMs, formatEventDateTime, timeAgo, formatAgeDays,
-  formatCooldown, recommendedRamGb, parseTimeoutMs, formatDurationSec, middleTruncate,
+  formatCooldown, formatCountdown, recommendedRamGb, parseTimeoutMs, formatDurationSec, middleTruncate,
   formatWeight, formatPercent, formatUsd, formatBytes,
   formatDateNumeric, formatTimeOfDaySeconds, formatClockTime, formatWeekdayDate,
   formatMonthDay, formatMonthYear, formatWeekdayShort, formatWeekdayTime, formatDateFull, formatDateShort, formatDateTime,
@@ -609,3 +609,23 @@ describe('canonical date/time formatters (#3870)', () => {
   });
 });
 // @vitest-environment node
+
+describe('formatCountdown', () => {
+  it('renders sub-hour durations as MM:SS', () => {
+    expect(formatCountdown(0)).toBe('00:00');
+    expect(formatCountdown(75)).toBe('01:15');
+    expect(formatCountdown(3599)).toBe('59:59');
+  });
+
+  it('adds an hour bucket once the total reaches an hour', () => {
+    expect(formatCountdown(3600)).toBe('1:00:00');
+    expect(formatCountdown(3661)).toBe('1:01:01');
+    expect(formatCountdown(36000)).toBe('10:00:00');
+  });
+
+  it('clamps negative and non-finite input to zero', () => {
+    expect(formatCountdown(-10)).toBe('00:00');
+    expect(formatCountdown(NaN)).toBe('00:00');
+    expect(formatCountdown(undefined)).toBe('00:00');
+  });
+});

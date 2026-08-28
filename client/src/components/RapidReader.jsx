@@ -4,6 +4,7 @@ import Modal from './ui/Modal';
 import useKeyCapture from '../hooks/useKeyCapture';
 import { noPointerFocusSurfaceProps } from '../lib/a11yKeyboard';
 import { rapidReaderWords } from '../lib/rapidReaderPosition';
+import { formatCountdown } from '../utils/formatters';
 
 // Optimal Recognition Point — the focal letter the eye lands on. Spritz-style:
 // shorter words use a left-shifted ORP, longer words shift right. Returns the
@@ -142,8 +143,11 @@ export default function RapidReader({
   const changeChunkSize = (next) => { setChunkSize(next); onChunkSizeChange?.(next); };
 
   const progress = totalWords ? (Math.min(totalWords, wordIndex + current.wordCount) / totalWords) * 100 : 0;
-  const elapsedSec = Math.round(((wordIndex + 1) * 60) / Math.max(60, wpm));
-  const totalSec = Math.round((totalWords * 60) / Math.max(60, wpm));
+  // Time left to finish, derived from the live `wpm` so it re-renders the moment
+  // the slider or the +/- hotkeys change speed. The words still to come are the
+  // ones after the chunk on screen.
+  const remainingWords = Math.max(0, totalWords - wordIndex - current.wordCount);
+  const remainingSec = (remainingWords * 60) / Math.max(60, wpm);
 
   if (!totalWords) {
     return (
@@ -280,7 +284,7 @@ export default function RapidReader({
             </button>
           </div>
           <span className="font-mono text-gray-500">
-            {Math.min(wordIndex + 1, totalWords)}/{totalWords} words · {elapsedSec}s/{totalSec}s
+            {Math.min(wordIndex + 1, totalWords)}/{totalWords} words · {formatCountdown(remainingSec)} left
           </span>
         </div>
       </div>
