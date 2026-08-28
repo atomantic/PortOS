@@ -6,9 +6,9 @@
  * files as text, and fail when some unrelated file anywhere in the repo breaks
  * a convention. `scripts/agent-instructions-files.test.js` is the archetype.
  *
- * CI selects tests by impact (`scripts/ci-test-plan.js`), and both scoped modes
- * are import-graph-driven — Vitest's `--changed` walk plus sibling/feature path
- * matching. Neither can reach a scanner: the file that violates the convention
+ * CI selects tests by impact (`scripts/ci-test-plan.js`) through Vitest's
+ * changed-source import graph or feature-path matching. Neither can reach a
+ * scanner: the file that violates the convention
  * is never imported by the guard, so no edge exists to follow. The consequence
  * is not a flaky selection, it is a structural one — a scanner can sit red on
  * `main` indefinitely while every PR reports green, which is exactly what

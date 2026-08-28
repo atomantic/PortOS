@@ -34,6 +34,9 @@ export { LLAMA_APP };
 
 const PROBE_TIMEOUT_MS = 1500;
 const STARTUP_WAIT_TIMEOUT_MS = 4000;
+const STARTUP_POLL_DELAY_MS = 500;
+const RELAUNCH_READY_TIMEOUT_MS = 120000;
+const RELAUNCH_POLL_DELAY_MS = 1000;
 const LLAMA_CPP_FORMULA = 'llama.cpp';
 const LLAMA_CPP_DOWNLOAD_URL = 'https://github.com/ggml-org/llama.cpp/releases';
 const VERSION_PROBE_TIMEOUT_MS = 5000;
@@ -56,7 +59,10 @@ const PORT_RELEASE_TIMEOUT_MS = 5000;
 // while loading — so a relaunch must not read "not ready yet" as "wedged".
 // Mutable only through the test seam below: a suite asserting the give-up path
 // cannot sit through two real minutes of polling.
-let relaunchReadyTimeoutMs = 120000;
+let startupWaitTimeoutMs = STARTUP_WAIT_TIMEOUT_MS;
+let startupPollDelayMs = STARTUP_POLL_DELAY_MS;
+let relaunchReadyTimeoutMs = RELAUNCH_READY_TIMEOUT_MS;
+let relaunchPollDelayMs = RELAUNCH_POLL_DELAY_MS;
 // How many times a path that would REFUSE on an unreadable PM2 re-reads it
 // first. See `readLlamaServerStatusRetrying`.
 const PM2_READ_RETRIES = 2;
@@ -634,8 +640,8 @@ export async function startLlamaServer(options = {}) {
   const startTime = Date.now();
   let online = false;
   let currentProc = null;
-  while (Date.now() - startTime < STARTUP_WAIT_TIMEOUT_MS) {
-    await sleep(500);
+  while (Date.now() - startTime < startupWaitTimeoutMs) {
+    await sleep(startupPollDelayMs);
     clearJlistCache();
     currentProc = await getAppStatusStrict(LLAMA_APP);
     if (currentProc && (currentProc.status === 'errored' || currentProc.status === 'stopped' || currentProc.status === 'not_found')) {
@@ -894,7 +900,7 @@ async function waitForEndpoint(endpoint) {
   const deadline = Date.now() + relaunchReadyTimeoutMs;
   while (Date.now() < deadline) {
     if (await probeEndpoint(endpoint)) return true;
-    await sleep(1000);
+    await sleep(relaunchPollDelayMs);
   }
   return false;
 }
@@ -1431,7 +1437,14 @@ export async function installLlamaServer({ onProgress = () => {} } = {}) {
 /**
  * Clears in-memory test state (used by test suites).
  */
-export function _resetLlamaServerStateForTests({ relaunchReadyTimeout, pm2ReadRetryDelay, sleepIdleMinutes = 0 } = {}) {
+export function _resetLlamaServerStateForTests({
+  startupWaitTimeout,
+  startupPollDelay,
+  relaunchReadyTimeout,
+  relaunchPollDelay,
+  pm2ReadRetryDelay,
+  sleepIdleMinutes = 0,
+} = {}) {
   sleepIdleSupport.clear();
   // Pinned rather than read from disk — see `configuredSleepIdleMinutes`.
   sleepIdleMinutesOverride = sleepIdleMinutes;
@@ -1440,6 +1453,9 @@ export function _resetLlamaServerStateForTests({ relaunchReadyTimeout, pm2ReadRe
   daemon.resetLogs();
   lastExitError = null;
   // Restored to the production budget unless a suite asks for a shorter one.
-  relaunchReadyTimeoutMs = Number.isFinite(relaunchReadyTimeout) ? relaunchReadyTimeout : 120000;
+  startupWaitTimeoutMs = Number.isFinite(startupWaitTimeout) ? startupWaitTimeout : STARTUP_WAIT_TIMEOUT_MS;
+  startupPollDelayMs = Number.isFinite(startupPollDelay) ? startupPollDelay : STARTUP_POLL_DELAY_MS;
+  relaunchReadyTimeoutMs = Number.isFinite(relaunchReadyTimeout) ? relaunchReadyTimeout : RELAUNCH_READY_TIMEOUT_MS;
+  relaunchPollDelayMs = Number.isFinite(relaunchPollDelay) ? relaunchPollDelay : RELAUNCH_POLL_DELAY_MS;
   pm2ReadRetryDelayMs = Number.isFinite(pm2ReadRetryDelay) ? pm2ReadRetryDelay : PM2_READ_RETRY_DELAY_MS;
 }

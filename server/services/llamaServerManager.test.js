@@ -42,6 +42,18 @@ function endProcess(child, code) {
   child.emit('close', code);
 }
 
+const FAST_TIMING = {
+  startupWaitTimeout: 50,
+  startupPollDelay: 0,
+  relaunchReadyTimeout: 50,
+  relaunchPollDelay: 0,
+  pm2ReadRetryDelay: 0,
+};
+
+const resetForTest = (overrides = {}) => {
+  _resetLlamaServerStateForTests({ ...FAST_TIMING, ...overrides });
+};
+
 const brewInfoJson = ({ installedVersion = 'build-100', latestVersion = '0.3.0', outdated = true, pinned = false, linkedKeg = 'build-100' } = {}) => JSON.stringify({
   formulae: [{
     name: 'llama.cpp',
@@ -95,7 +107,7 @@ describe('llamaServerManager', () => {
   beforeEach(() => {
     // Zero retry delay: the paths that re-read an unreadable PM2 are asserted
     // here, and a suite must not sit through the production backoff to see them.
-    _resetLlamaServerStateForTests({ pm2ReadRetryDelay: 0 });
+    resetForTest();
     vi.restoreAllMocks();
     pm2State = null;
     execPm2Calls = [];
@@ -110,13 +122,8 @@ describe('llamaServerManager', () => {
     // PortOS's own extension port failed five of these for reasons that have
     // nothing to do with the code under test, so pin the probe too. Tests that
     // need a reachable endpoint re-mock this with `{ reachable: true }`.
-    vi.spyOn(openAiModelsProbe, 'probeOpenAiModels').mockResolvedValue({ reachable: false, models: [] });
-
-    // Status and start both probe the endpoint over the network. On a developer
-    // machine that is running PortOS's own llama-server the probe answers for
-    // real on :5568 and every lifecycle test reports "already running", so pin
-    // it unreachable for the same reason the port probe above is pinned.
-    vi.spyOn(openAiModelsProbe, 'probeOpenAiModels').mockResolvedValue({ reachable: false });
+    vi.spyOn(openAiModelsProbe, 'probeOpenAiModels')
+      .mockImplementation(async () => ({ reachable: pm2State?.status === 'online', models: [] }));
 
     vi.spyOn(pm2Module, 'execPm2').mockImplementation(async (args) => {
       execPm2Calls.push(args);
@@ -698,7 +705,7 @@ describe('llamaServerManager', () => {
         return fakeSpawnProcess();
       });
       vi.spyOn(streamingSpawnModule, 'runStreamingCommand').mockResolvedValue({ success: true });
-      _resetLlamaServerStateForTests({ sleepIdleMinutes: 30 });
+      resetForTest({ sleepIdleMinutes: 30 });
 
       const result = await upgradeLlamaServer();
 
@@ -746,7 +753,7 @@ describe('llamaServerManager', () => {
       };
       openAiModelsProbe.probeOpenAiModels.mockResolvedValue({ reachable: false });
       vi.spyOn(streamingSpawnModule, 'runStreamingCommand').mockResolvedValue({ success: true });
-      _resetLlamaServerStateForTests({ relaunchReadyTimeout: 0, pm2ReadRetryDelay: 0 });
+      resetForTest({ startupWaitTimeout: 0, relaunchReadyTimeout: 0 });
 
       const result = await upgradeLlamaServer();
 
@@ -1294,7 +1301,7 @@ describe('llamaServerManager', () => {
       vi.spyOn(openAiModelsProbe, 'probeOpenAiModels').mockResolvedValue({ reachable: false });
       // Shrink the readiness budget: the give-up path is what's under test, and
       // the production two minutes would just be two minutes of sleeping.
-      _resetLlamaServerStateForTests({ relaunchReadyTimeout: 1500 });
+      resetForTest({ startupWaitTimeout: 0, relaunchReadyTimeout: 0 });
       execPm2Calls = [];
       const result = await relaunchLlamaServerWithTuning({ ubatchSize: 512 });
       expect(result.applied).toBe(false);
@@ -1305,9 +1312,9 @@ describe('llamaServerManager', () => {
       const restore = execPm2Calls.filter((c) => c[0] === 'start').at(-1);
       expect(restore).not.toContain('-ub');
       expect(restore[restore.indexOf('-m') + 1]).toBe(modelPath);
-      // Two full start cycles (each polling `STARTUP_WAIT_TIMEOUT_MS` against a
-      // deliberately-silent probe) plus the readiness budget — slow by design,
-      // not by accident, so this one test buys the room rather than the suite.
+      // The timeout budgets are injected through the lifecycle seam: this
+      // verifies the give-up/restore behavior without sleeping through the
+      // production startup and readiness windows.
     }, 30000);
   });
 

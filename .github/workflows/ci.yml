@@ -38,8 +38,10 @@ jobs:
       reason: ${{ steps.plan.outputs.reason }}
       server_mode: ${{ steps.plan.outputs.server_mode }}
       server_files: ${{ steps.plan.outputs.server_files }}
+      server_sources: ${{ steps.plan.outputs.server_sources }}
       client_mode: ${{ steps.plan.outputs.client_mode }}
       client_files: ${{ steps.plan.outputs.client_files }}
+      client_sources: ${{ steps.plan.outputs.client_sources }}
       db: ${{ steps.plan.outputs.db }}
       lint_mode: ${{ steps.plan.outputs.lint_mode }}
       lint_files: ${{ steps.plan.outputs.lint_files }}
@@ -48,6 +50,7 @@ jobs:
       windows: ${{ steps.plan.outputs.windows }}
       windows_mode: ${{ steps.plan.outputs.windows_mode }}
       windows_files: ${{ steps.plan.outputs.windows_files }}
+      windows_sources: ${{ steps.plan.outputs.windows_sources }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -110,7 +113,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           # See the impact job: depth 2 is the whole PR merge ref, which is all
-          # Vitest's `--changed <sha>` three-dot diff reads.
+          # the planner needs to identify changed sources.
           fetch-depth: 2
 
       - name: Resolve the pull-request diff base
@@ -229,6 +232,13 @@ jobs:
         env:
           CI_TEST_MODE: ${{ needs.impact.outputs.server_mode }}
           CI_TEST_FILES: ${{ needs.impact.outputs.server_files }}
+          CI_TEST_SOURCES: ${{ needs.impact.outputs.server_sources }}
+          # Keep successful-test output signal-dense. Developers can reproduce
+          # locally without this flag when assertion context needs app logs.
+          PORTOS_TEST_QUIET: 1
+          # The documented local fallback; setting it avoids one warning per
+          # isolated test file without changing DB selection or credentials.
+          PGPASSWORD: portos
         run: node scripts/run-ci-tests.js server
 
       # Smoke-boot does not need Postgres: NODE_ENV=test selects the file
@@ -247,7 +257,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           # See the impact job: depth 2 is the whole PR merge ref, which is all
-          # Vitest's `--changed <sha>` three-dot diff reads.
+          # the planner needs to identify changed sources.
           fetch-depth: 2
 
       - name: Resolve the pull-request diff base
@@ -286,6 +296,7 @@ jobs:
         env:
           CI_TEST_MODE: ${{ needs.impact.outputs.client_mode }}
           CI_TEST_FILES: ${{ needs.impact.outputs.client_files }}
+          CI_TEST_SOURCES: ${{ needs.impact.outputs.client_sources }}
         run: node scripts/run-ci-tests.js client
 
       - name: Build client
@@ -433,7 +444,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           # See the impact job: depth 2 is the whole PR merge ref, which is all
-          # Vitest's `--changed <sha>` three-dot diff reads.
+          # the planner needs to identify changed sources.
           fetch-depth: 2
 
       - name: Resolve the pull-request diff base
@@ -536,6 +547,9 @@ jobs:
         env:
           CI_TEST_MODE: ${{ needs.impact.outputs.windows_mode }}
           CI_TEST_FILES: ${{ needs.impact.outputs.windows_files }}
+          CI_TEST_SOURCES: ${{ needs.impact.outputs.windows_sources }}
+          PORTOS_TEST_QUIET: 1
+          PGPASSWORD: portos
         run: node scripts/run-ci-tests.js server
 
   gate:

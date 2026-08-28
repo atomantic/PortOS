@@ -52,6 +52,18 @@
 
 import { mockNoPeers } from './lib/mockPathsDataRoot.js';
 
+// The server intentionally logs expected error paths, lifecycle transitions,
+// and fallback decisions. With console interception disabled (see the config),
+// `--silent=passed-only` cannot suppress those lines: PR #5296 emitted 15,355
+// log lines for a completely green run. CI sets this opt-in flag so reporter
+// output stays useful; local runs retain every log for debugging. Tests that
+// assert logging still work because vi.spyOn records calls to these no-ops.
+if (process.env.PORTOS_TEST_QUIET === '1') {
+  for (const method of ['log', 'info', 'warn', 'error']) {
+    console[method] = () => {};
+  }
+}
+
 // Path is relative to the project root (server/) as required by Vitest
 // setupFiles resolution — it resolves to the same module as any
 // `./instances.js` or `../instances.js` reference used in test files.
