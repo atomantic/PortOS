@@ -12,7 +12,7 @@ job and confirmation extensions retained in the [unified design spec](./superpow
 
 The current source contains:
 
-- 145 mounted HTTP prefixes, 2,068 deduplicated HTTP operations, and 2,071
+- 145 mounted HTTP prefixes, 2,069 deduplicated HTTP operations, and 2,072
   route declarations in `server/lib/apiRouteCatalog.generated.json`.
 - 103 Socket.IO source files and 253 events in
   `server/lib/socketEventCatalog.generated.json`.
@@ -250,7 +250,7 @@ exposable merely because they appear in the internal OpenAPI inventory.
 
 1. **Resolved documentation drift.** The prior unified spec said 2,066 HTTP
    operations, 23 Persistent Mind tools, 22 semantic tools, and a `cursor`
-   catalog query. The current generated inventory is 2,068 operations; the
+   catalog query. The current generated inventory is 2,069 operations; the
    runtime registry is 22 tools total (21 semantic plus `cos.create-task`),
    and the implemented catalog query is `scope`, `intent`, and `format`.
    The point-in-time spec's implemented-foundation text is corrected in this
@@ -288,7 +288,7 @@ result path in `server/services/cosToolRegistry.js`, and
 ## Validation
 
 - `node scripts/generate-api-route-catalog.js` — regenerated deterministic
-  HTTP manifest: 2,068 operations / 2,071 declarations / 145 mounts.
+  HTTP manifest: 2,069 operations / 2,072 declarations / 145 mounts.
 - `node scripts/generate-socket-event-catalog.js` — deterministic 253-event
   Socket.IO manifest.
 - Focused Vitest execution was attempted but this isolated worktree has no
