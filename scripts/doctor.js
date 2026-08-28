@@ -85,9 +85,13 @@ const PORT_BLOCK = { min: 5553, max: 5561 };
  * the port list" rather than taking the whole report down.
  * @returns {number[]} sorted, deduped ports inside the PortOS block
  */
-export function portBlock(root = ROOT) {
+export function ecosystemPorts(root = ROOT) {
   const require = createRequire(import.meta.url);
-  const { PORTS } = require(join(root, 'ecosystem.config.cjs'));
+  return require(join(root, 'ecosystem.config.cjs')).PORTS;
+}
+
+export function portBlock(root = ROOT) {
+  const PORTS = ecosystemPorts(root);
   const inBlock = Object.values(PORTS)
     .filter((p) => Number.isInteger(p) && p >= PORT_BLOCK.min && p <= PORT_BLOCK.max);
   return [...new Set(inBlock)].sort((a, b) => a - b);
@@ -245,9 +249,34 @@ async function probeDataSeeded(root) {
  * start. The pool is memoized across the two DB probes and closed once, in
  * `runDoctor`, so a single connection serves both and the process still exits.
  */
+/**
+ * Run `fn` with `console.warn`/`console.error` muted.
+ *
+ * `db.js` logs raw driver output — a `PGPASSWORD not set` warning on import,
+ * and the verbatim driver message on a failed health check. Those can carry a
+ * host, an IP, or `role "<user>" does not exist`, which would land in the
+ * terminal output a user pastes into a bug report, right beside the host-class
+ * line that promised not to say it. The facts built below never quote the
+ * driver message, so the incidental logging is dropped rather than scrubbed.
+ */
+async function withQuietConsole(fn) {
+  const { warn, error } = console;
+  console.warn = () => {};
+  console.error = () => {};
+  try {
+    return await fn();
+  } finally {
+    console.warn = warn;
+    console.error = error;
+  }
+}
+
 let dbStatePromise = null;
-function loadDbState() {
-  dbStatePromise ??= (async () => {
+function loadDbState(root = ROOT) {
+  dbStatePromise ??= withQuietConsole(async () => {
+    // db.js builds its pool from the environment at MODULE LOAD, so the port
+    // has to be pinned before the dynamic import below, not after it.
+    process.env.PGPORT ??= String(resolvePgPort(root));
     // A checkout with no `server/node_modules` cannot resolve `pg`. That is a
     // dependency fact the deps: probes already report, so translate it here
     // rather than surfacing a module-resolution stack trace as if the database
@@ -264,26 +293,46 @@ function loadDbState() {
       ? await db.query("SELECT 1 FROM pg_extension WHERE extname = 'vector'").then((r) => r.rowCount > 0).catch(() => false)
       : false;
     return { db, health, vector, depsMissing: false };
-  })();
+  });
   return dbStatePromise;
 }
 
+/**
+ * The port PortOS actually uses, resolved the way a real launch resolves it.
+ *
+ * `db.js` falls back to 5432 when `PGPORT` is unset, but nothing sets it
+ * outside PM2: `ecosystem.config.cjs` reads `PGMODE` from `.env` and passes
+ * `PGPORT: PORTS.POSTGRES` to the server app, and that DEFAULTS TO DOCKER
+ * (5561). A doctor run is a bare `node`, not a PM2 app, so it would otherwise
+ * probe 5432 and report a perfectly healthy Docker install as unreachable —
+ * the exact false alarm this tool exists to prevent. Mirror the launch instead
+ * of guessing, and let a real `PGPORT` in the environment still win.
+ */
+export function resolvePgPort(root = ROOT) {
+  if (process.env.PGPORT) return parseInt(process.env.PGPORT, 10);
+  try {
+    return ecosystemPorts(root).POSTGRES;
+  } catch {
+    return 5432;
+  }
+}
+
 /** `system :5432` / `docker :5561` — never a host, user, or password. */
-function pgHostClass() {
-  const port = parseInt(process.env.PGPORT || '5432', 10);
+export function pgHostClass(root = ROOT) {
+  const port = resolvePgPort(root);
   return `${port === 5561 ? 'docker' : 'system'} :${port}`;
 }
 
-async function probePostgres() {
-  const { health, depsMissing } = await loadDbState();
+async function probePostgres(root) {
+  const { health, depsMissing } = await loadDbState(root);
   if (depsMissing) return { available: false, detail: 'not checked — server dependencies missing; run: npm run install:all' };
-  if (!health.connected) return { available: false, detail: `unreachable on ${pgHostClass()} — run: npm run setup:db` };
-  if (!health.hasSchema) return { available: false, detail: `connected on ${pgHostClass()} but schema is missing — run: npm run setup:db` };
-  return { available: true, detail: `connected on ${pgHostClass()}, schema present` };
+  if (!health.connected) return { available: false, detail: `unreachable on ${pgHostClass(root)} — run: npm run setup:db` };
+  if (!health.hasSchema) return { available: false, detail: `connected on ${pgHostClass(root)} but schema is missing — run: npm run setup:db` };
+  return { available: true, detail: `connected on ${pgHostClass(root)}, schema present` };
 }
 
-async function probePgvector() {
-  const { health, vector, depsMissing } = await loadDbState();
+async function probePgvector(root) {
+  const { health, vector, depsMissing } = await loadDbState(root);
   if (depsMissing) return { available: false, detail: 'not checked — server dependencies missing; run: npm run install:all' };
   if (!health.connected) return { available: false, detail: 'not checked — database unreachable' };
   return vector
@@ -329,14 +378,25 @@ async function probeCert(root) {
 export function isPortFree(port, { timeoutMs = FAST_TIMEOUT_MS } = {}) {
   return new Promise((resolve) => {
     const server = createServer();
+    let settled = false;
+    // Resolve BEFORE close() rather than from its callback: close() drains live
+    // connections first, so a client that happened to connect in the window
+    // between listen and close would hold the whole report open. The bind
+    // question is already answered by then — the socket teardown is cleanup,
+    // not part of the answer. `unref` means it can never hold the event loop.
     const settle = (free) => {
-      server.removeAllListeners();
-      server.close(() => resolve(free));
+      if (settled) return;
+      settled = true;
+      clearTimeout(guard);
+      server.removeAllListeners('error');
+      server.removeAllListeners('listening');
+      server.close();
+      resolve(free);
     };
     const guard = setTimeout(() => settle(false), timeoutMs);
     guard.unref?.();
-    server.once('error', () => { clearTimeout(guard); settle(false); });
-    server.once('listening', () => { clearTimeout(guard); settle(true); });
+    server.once('error', () => settle(false));
+    server.once('listening', () => { server.unref?.(); settle(true); });
     server.listen(port, '127.0.0.1');
   });
 }
@@ -376,8 +436,8 @@ export function defaultProbes({ root = ROOT } = {}) {
       run: () => probeWorkspaceDeps(root, workspace),
     })),
     { name: 'data:seeded', required: true, run: () => probeDataSeeded(root) },
-    { name: 'postgres', required: true, run: probePostgres },
-    { name: 'postgres:pgvector', required: true, run: probePgvector },
+    { name: 'postgres', required: true, run: () => probePostgres(root) },
+    { name: 'postgres:pgvector', required: true, run: () => probePgvector(root) },
     { name: 'migrations', required: true, run: () => probeMigrations(root) },
     {
       name: 'pm2',
@@ -442,13 +502,31 @@ export async function runDoctor({ probes = defaultProbes(), json = false, log = 
 
 /**
  * Close anything a probe opened (today: the `pg` pool the database probes
- * share), so the process exits on its own. Exported because a programmatic
- * caller running `defaultProbes()` inherits the same open pool.
+ * share), so the process exits on its own.
+ *
+ * BOUNDED, because `runProbe`'s timeout bounds the FACT but not the work
+ * behind it: `db.js` sets `connectionTimeoutMillis` but no statement timeout,
+ * so a server that accepts the connection and then never answers leaves the
+ * query — and `pool.end()` waiting on it — pending forever. That would hang
+ * the CLI in cleanup after the report had already printed, which is a worse
+ * failure than the one being diagnosed. Give up on the graceful close and let
+ * the caller exit instead.
+ *
+ * Exported because a programmatic caller running `defaultProbes()` inherits
+ * the same open pool.
  */
-export async function closeProbeResources() {
-  if (!dbStatePromise) return;
-  await dbStatePromise.then(({ db }) => db?.close()).catch(() => {});
+export async function closeProbeResources({ timeoutMs = 5_000 } = {}) {
+  if (!dbStatePromise) return true;
+  const pending = dbStatePromise.then(({ db }) => db?.close()).catch(() => {});
   dbStatePromise = null;
+  let timer;
+  const bail = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(false), timeoutMs);
+    timer.unref?.();
+  });
+  const closed = await Promise.race([pending.then(() => true), bail]);
+  clearTimeout(timer);
+  return closed;
 }
 
 // Runnable directly: `node scripts/doctor.js [--json]` — see
@@ -456,5 +534,7 @@ export async function closeProbeResources() {
 if (isDirectlyInvoked(import.meta.url)) {
   const { exitCode } = await runDoctor({ json: process.argv.includes('--json') });
   await closeProbeResources();
-  process.exitCode = exitCode;
+  // Explicit: the report is already printed, and `process.exit` guarantees we
+  // leave even when a wedged Postgres kept the pool from settling gracefully.
+  process.exit(exitCode);
 }

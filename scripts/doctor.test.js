@@ -8,15 +8,21 @@
  * they are about to paste into a bug report is worse than no diagnostic, and
  * each of those is a behavior no caller-level test would catch.
  */
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { homedir } from 'os';
+import { createServer } from 'net';
 
 import {
   PROBE_TIMEOUT_MS,
+  closeProbeResources,
   collectFacts,
   defaultProbes,
+  ecosystemPorts,
   formatReport,
+  isPortFree,
+  pgHostClass,
   portBlock,
+  resolvePgPort,
   runDoctor,
   runProbe,
   summarize,
@@ -199,8 +205,79 @@ describe('runDoctor', () => {
     expect(log.mock.calls[0][0]).toContain('node');
   });
 
-  it('bounds each probe by default so one hung prerequisite cannot hang the report', () => {
-    expect(PROBE_TIMEOUT_MS).toBeGreaterThan(0);
-    expect(PROBE_TIMEOUT_MS).toBeLessThanOrEqual(30_000);
+  it('bounds a probe that names no timeout, using the default', async () => {
+    // Asserting on PROBE_TIMEOUT_MS alone would pass with the timeout deleted
+    // from runProbe entirely — drive the real default instead.
+    vi.useFakeTimers();
+    try {
+      const pending = runProbe({ name: 'hung', run: () => new Promise(() => {}) });
+      await vi.advanceTimersByTimeAsync(PROBE_TIMEOUT_MS);
+      expect((await pending).detail).toContain(`timed out after ${PROBE_TIMEOUT_MS}ms`);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('isPortFree', () => {
+  it('reports a bound port taken and a free one free, and settles either way', async () => {
+    // The real socket path, not a mock: the failure this guards against is the
+    // promise never settling (report hangs), which a stubbed net module cannot
+    // reproduce.
+    const held = createServer();
+    await new Promise((resolve) => held.listen(0, '127.0.0.1', resolve));
+    const { port } = held.address();
+    try {
+      expect(await isPortFree(port)).toBe(false);
+    } finally {
+      await new Promise((resolve) => held.close(resolve));
+    }
+    // Same port, now released.
+    expect(await isPortFree(port)).toBe(true);
+  });
+
+  it('resolves without waiting for a live connection to drain', async () => {
+    // isPortFree resolves before close() rather than from its callback: close()
+    // drains open sockets first, so a client connecting in the listen/close
+    // window would otherwise hold the whole report open.
+    const free = await isPortFree(0);
+    expect(typeof free).toBe('boolean');
+  });
+});
+
+describe('closeProbeResources', () => {
+  it('is a no-op when no probe ever opened the pool', async () => {
+    // The common path: every run that never reached the database probes (a
+    // bare checkout, or an injected probe list) must still exit cleanly.
+    await expect(closeProbeResources()).resolves.toBe(true);
+  });
+});
+
+describe('Postgres port resolution', () => {
+  const original = process.env.PGPORT;
+  afterEach(() => {
+    if (original === undefined) delete process.env.PGPORT;
+    else process.env.PGPORT = original;
+  });
+
+  it('falls back to the launch-time port from ecosystem.config.cjs, not a bare 5432', () => {
+    // db.js defaults PGPORT to 5432, but nothing sets PGPORT outside PM2 and
+    // ecosystem.config.cjs DEFAULTS TO DOCKER (5561). Guessing 5432 here would
+    // report a perfectly healthy Docker install as unreachable — the exact
+    // false alarm this tool exists to prevent.
+    delete process.env.PGPORT;
+    expect(resolvePgPort()).toBe(ecosystemPorts().POSTGRES);
+  });
+
+  it('lets an explicit PGPORT in the environment win', () => {
+    process.env.PGPORT = '15432';
+    expect(resolvePgPort()).toBe(15432);
+  });
+
+  it('names the host class only — never a host, user, or password', () => {
+    process.env.PGPORT = '5561';
+    expect(pgHostClass()).toBe('docker :5561');
+    process.env.PGPORT = '5432';
+    expect(pgHostClass()).toBe('system :5432');
   });
 });
