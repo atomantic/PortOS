@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   recordVitestDuration,
+  relatedInputs,
   requiresSourceFiles,
   toRunnerPath,
 } from './run-ci-tests.js';
@@ -45,5 +46,18 @@ describe('requiresSourceFiles', () => {
     expect(requiresSourceFiles('related', ['server/services/auth.js'])).toBe(false);
     expect(requiresSourceFiles('files', [])).toBe(false);
     expect(requiresSourceFiles('full', [])).toBe(false);
+  });
+});
+
+describe('relatedInputs', () => {
+  it('runs source-related tests and explicit guards in one deduplicated invocation', () => {
+    expect(relatedInputs(
+      ['./services/auth.js', './services/auth.test.js'],
+      ['./services/auth.test.js', '../scripts/repo-scan-guards.test.js'],
+    )).toEqual([
+      './services/auth.js',
+      './services/auth.test.js',
+      '../scripts/repo-scan-guards.test.js',
+    ]);
   });
 });

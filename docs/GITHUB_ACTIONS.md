@@ -32,8 +32,8 @@ A release therefore pays for one full run (on its PR), not three.
 PRs into `main` use `scripts/ci-test-plan.js` to classify the changed files
 before installing dependencies. Directory-scoped features run their server and
 client feature tests; flat modules fall back to Vitest's import-graph-aware
-`related` mode, fed only the changed behavioral source paths. The planner
-deliberately chooses full CI for shared
+`related` mode, fed the changed behavioral source paths plus the planner's
+explicit test files. The planner deliberately chooses full CI for shared
 composition roots, test configuration, dependency manifests, workflow changes,
 unknown artifacts, or wide diffs.
 
@@ -61,13 +61,15 @@ being registered, either in `ALWAYS_RUN_TESTS` or in its own
 
 ### Vitest runner tuning
 
-On GitHub Actions, `CI=true` caps each Vitest runner at `maxWorkers: 2`
+On GitHub Actions, `CI=true` caps the server Vitest runner at `maxWorkers: 4`
 (`scripts/vitestCiPool.js`, spread into `server/vitest.config.js` and
-`client/vitest.config.js`). Standard hosted runners are 2 vCPU / 7GB;
+`client/vitest.config.js`). Standard Linux runners for public repositories are
+[4 vCPU / 16GB](https://docs.github.com/en/actions/reference/runners/github-hosted-runners);
 uncapped forks oversubscribe those cores during transform. Local `npm test`
-is unbounded. File-level parallelism stays on for unit tests so the two
-workers stay busy; the DB suite already serializes files because those tests
-share one Postgres.
+is unbounded. The jsdom-heavy client retains its proven two-worker override:
+four workers made its async rendering assertions timing-dependent under CI
+contention. File-level parallelism stays on; the DB suite already serializes
+files because those tests share one Postgres.
 
 Each test job restores Vite/Vitest transform artifacts
 (`node_modules/.vite`, `node_modules/.vitest`) **after** the install — `npm ci`
@@ -230,8 +232,10 @@ The selected work is split across parallel jobs:
   see "Reusing the release PR's CI run" below.
 
 Targeted `files` plans run the planner's exact test files once. `related` plans
-run `vitest related` directly against changed behavioral source paths, then run
-the cheap structural/repository contracts that cannot be found through imports.
+run `vitest related` once with changed behavioral source paths and the cheap
+structural/repository contract files as inputs. Vitest treats a test-file input
+as directly selected, so contracts and changed tests share the import-graph run
+without being repeated in a second process.
 There is no buffered discovery pass: the old `vitest list --changed` path could
 spend minutes printing every test name, overflow Node's buffer, discard the
 result, and rerun the same graph.

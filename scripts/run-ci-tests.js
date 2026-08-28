@@ -21,6 +21,10 @@ export function toRunnerPath(scope, path) {
   return `../${path}`;
 }
 
+export function relatedInputs(sourceFiles, selectedFiles) {
+  return [...new Set([...sourceFiles, ...selectedFiles])];
+}
+
 export function recordVitestDuration(scope, label, startedAt) {
   const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
   const line = `⏱ ${scope} ${label}: ${seconds}s`;
@@ -92,15 +96,17 @@ function main() {
   // The old discovery pass took 282 seconds on PR #5296, overflowed Node's
   // spawnSync buffer, discarded its work, then reran the same graph. `related`
   // builds that graph once and immediately executes it.
-  const relatedStatus = spawnNpm(scope, 'test:ci:related', sourceFiles, 'source-related tests');
-  if (relatedStatus !== 0) process.exit(relatedStatus);
-
-  // Structural and repository-wide guards do not import the source they scan,
-  // so the import graph cannot discover them. They are deliberately cheap and
-  // run once after the related set.
-  process.exit(selectedFiles.length
-    ? spawnNpm(scope, 'test:ci', selectedFiles, 'explicit contract guards')
-    : 0);
+  // A test file passed to `vitest related` is itself selected, so changed tests
+  // and structural guards can share the source graph's one Vitest invocation.
+  // Running them in a second exact-file process repeated any changed test that
+  // already imported the source; on PR #5299 that rebuilt the atlas twice and
+  // added 27.5 seconds after the related run had already passed it.
+  process.exit(spawnNpm(
+    scope,
+    'test:ci:related',
+    relatedInputs(sourceFiles, selectedFiles),
+    'related and contract tests',
+  ));
 }
 
 if (isDirectlyInvoked(import.meta.url)) main();
