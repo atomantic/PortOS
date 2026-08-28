@@ -76,5 +76,63 @@ describe('postQuickSession', () => {
       type: 'multiplication', source: 'math', cfg: { count: 8, steps: 4, maxDigits: 2 },
     })).toMatchObject({ count: 5, steps: 4, maxDigits: 2 });
   });
+
+  // Issue #5319: a domain with several enabled drills used to resolve to
+  // registry-order list[0] forever, so Quick Session served the same drill every
+  // day. Recency + a local-day rotation replace that fixed order — without
+  // introducing randomness, which would break re-requesting the same plan.
+  describe("recent-practice rotation (issue #5319)", () => {
+    const twoMathDrills = [
+      { domain: "math", drills: [
+        { type: "multiplication", source: "math", cfg: { count: 5, steps: 2 } },
+        { type: "powers", source: "math", cfg: { count: 5 } },
+      ] },
+    ];
+    const pickedMathType = (recentPractice, recommendation = null) => composeQuickSession({
+      durationMinutes: 15, domainEntries: twoMathDrills, recommendation, recentPractice,
+    }).selected.find(candidate => candidate.domain === "math").type;
+
+    it("skips the registry-first drill once it was practiced in the window", () => {
+      expect(pickedMathType(null)).toBe("multiplication");
+      expect(pickedMathType({ dayKey: "2026-03-02", drillTypes: ["multiplication"] })).toBe("powers");
+    });
+
+    it("drops the recommendation preference only when the recommended drill is itself recent", () => {
+      const rec = { drillType: "powers" };
+      expect(pickedMathType({ dayKey: "2026-03-02", drillTypes: [] }, rec)).toBe("powers");
+      expect(pickedMathType({ dayKey: "2026-03-02", drillTypes: ["powers"] }, rec)).toBe("multiplication");
+    });
+
+    it("rotates equally-eligible drills across days and repeats within one day", () => {
+      const heads = ["2026-03-01", "2026-03-02"].map(dayKey => pickedMathType({ dayKey, drillTypes: [] }));
+      expect(new Set(heads).size).toBe(2);
+      const plan = { dayKey: "2026-03-02", drillTypes: [] };
+      expect(pickedMathType(plan)).toBe(pickedMathType(plan));
+    });
+
+    it("keeps the only candidate in a domain even when it is recent", () => {
+      const plan = composeQuickSession({
+        durationMinutes: 15,
+        domainEntries: [{ domain: "cognitive", drills: [{ type: "n-back", source: "cognitive", cfg: { length: 20 } }] }],
+        recentPractice: { dayKey: "2026-03-02", drillTypes: ["n-back"] },
+      });
+      expect(plan.selected.map(c => c.type)).toEqual(["n-back"]);
+    });
+
+    it("identifies a memory drill by its ITEM, so practicing one item does not sink the others", () => {
+      const memoryDomain = [{ domain: "memory", drills: [
+        { type: "memory-sequence", source: "memory", cfg: { count: 3 }, memoryItemId: "elements-song" },
+        { type: "memory-fill-blank", source: "memory", cfg: { count: 3 }, memoryItemId: "example-poem" },
+      ] }];
+      const picked = composeQuickSession({
+        durationMinutes: 15,
+        domainEntries: memoryDomain,
+        // Elements practiced; the sibling ITEM must stay eligible even though
+        // the type-level signal would otherwise mark the whole domain recent.
+        recentPractice: { dayKey: "2026-03-02", drillTypes: ["memory-sequence"], memoryItemIds: ["elements-song"] },
+      }).selected.find(candidate => candidate.domain === "memory");
+      expect(picked.type).toBe("memory-fill-blank");
+    });
+  });
 });
 // @vitest-environment node

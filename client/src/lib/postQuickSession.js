@@ -2,6 +2,8 @@
 // estimator and composer side-effect free makes the time-budget contract easy
 // to test and keeps provider calls out of the planning path.
 
+import { orderByRecencyRotation } from './postRotation.js';
+
 export const QUICK_DURATION_MINUTES = [3, 5, 10, 15];
 export const DEFAULT_QUICK_DURATION_MINUTES = 5;
 export const QUICK_DURATION_TOLERANCE_SEC = 30;
@@ -141,16 +143,39 @@ function inferSource(rep) {
   return 'math';
 }
 
-function candidateForDomain(domain, drills, recommendation, memoryItemIds = {}) {
+/**
+ * Normalize the server's `recentPractice` payload into a membership test.
+ * A memory drill's identity is its ITEM — practicing the Elements Song must not
+ * make every other memory item look recently practiced (issue #5319) — while
+ * every other drill is identified by its type.
+ */
+function recentPracticeMatcher({ drillTypes = [], memoryItemIds = [] } = {}) {
+  const types = new Set(drillTypes);
+  const items = new Set(memoryItemIds);
+  return (candidate, memoryItemId) => (
+    candidate?.source === 'memory' && memoryItemId
+      ? items.has(memoryItemId)
+      : types.has(candidate?.type)
+  );
+}
+
+function candidateForDomain(domain, drills, recommendation, memoryItemIds = {}, { dayKey = null, isRecent = () => false } = {}) {
   const list = drills || [];
   if (!list.length) return null;
+  const memoryItemIdFor = drill => drill.memoryItemId ?? memoryItemIds[drill.type];
+  const recentDrill = drill => isRecent(drill, memoryItemIdFor(drill));
   const recommended = recommendation?.drillType
     ? list.find(drill => drill.type === recommendation.drillType)
     : null;
-  const pick = recommended || list[0];
+  // The recommendation wins its domain only while it is still fresh. Once it
+  // has been practiced inside the window, this domain rotates to another
+  // enabled candidate instead of re-serving registry-order `list[0]`.
+  const pick = (recommended && !recentDrill(recommended))
+    ? recommended
+    : orderByRecencyRotation(list, { dayKey, isRecent: recentDrill })[0];
   const quickConfig = pick.quickConfig || buildQuickDrillConfig({
     ...pick,
-    memoryItemId: pick.memoryItemId ?? memoryItemIds[pick.type],
+    memoryItemId: memoryItemIdFor(pick),
   });
   return {
     kind: 'drill',
@@ -178,9 +203,16 @@ function reviewCandidate(rep) {
 }
 
 /**
- * Compose a stable Quick plan. The top recommendation wins its domain, due
- * review reps come next, and remaining domains are then admitted in their
- * existing registry order while the target+tolerance budget has room.
+ * Compose a stable Quick plan. A still-fresh top recommendation wins its
+ * domain, due review reps come next, and remaining domains are then admitted
+ * while the target+tolerance budget has room.
+ *
+ * `recentPractice` (from the recommendations endpoint: `{ dayKey, drillTypes,
+ * memoryItemIds }`) is what keeps a multi-drill domain from serving the same
+ * registry-order drill every day — within a domain, candidates practiced in the
+ * window sink, and equally-eligible ones rotate by local day. Omitting it
+ * restores the previous fixed ordering, so the plan is still deterministic when
+ * the recommendations fetch fails.
  */
 export function composeQuickSession({
   domainEntries = [],
@@ -190,13 +222,18 @@ export function composeQuickSession({
   toleranceSec = QUICK_DURATION_TOLERANCE_SEC,
   observedDurations = {},
   memoryItemIds = {},
+  recentPractice = null,
 } = {}) {
   const targetDurationSec = normalizeQuickDurationMinutes(durationMinutes) * 60;
   const budgetSec = targetDurationSec + Math.max(0, toleranceSec);
+  const rotation = {
+    dayKey: recentPractice?.dayKey || null,
+    isRecent: recentPracticeMatcher(recentPractice || {}),
+  };
   const domains = domainEntries
     .map(entry => ({
       domain: entry.domain,
-      candidate: candidateForDomain(entry.domain, entry.drills, recommendation, memoryItemIds),
+      candidate: candidateForDomain(entry.domain, entry.drills, recommendation, memoryItemIds, rotation),
     }))
     .filter(entry => entry.candidate);
 

@@ -652,6 +652,27 @@ describe('PostSessionLauncher topic gating (issue #3252)', () => {
     expect(types).toEqual(['bridge-word', 'pun-wordplay']);
   });
 
+  // Issue #5319: the launcher threads the endpoint's recency window into the
+  // Quick composer. Without it the composer keeps resolving each domain to its
+  // registry-order drill, so the same practice comes back day after day.
+  it("rotates a Quick domain off the recency window the recommendations endpoint reports", async () => {
+    const onStart = vi.fn();
+    getPostRecommendations.mockResolvedValue({
+      recommendations: [],
+      recentPractice: { dayKey: "2026-03-02", drillTypes: ["multiplication"], memoryItemIds: [] },
+    });
+    renderWith({
+      ...llmConfig({ verbal: { enabled: false }, imagination: { enabled: false } }),
+      mentalMath: { enabled: true, drillTypes: { multiplication: { enabled: true, count: 10 }, powers: { enabled: true, count: 5 } } },
+      sessionModules: ["mental-math", "llm-drills"],
+    }, onStart);
+    await waitFor(() => expect(getPostRecommendations).toHaveBeenCalled());
+    fireEvent.click(await screen.findByRole("button", { name: /Quick 5 Min/ }));
+
+    const mathDrills = onStart.mock.calls[0][0].filter(drill => drill.domain === "math");
+    expect(mathDrills.map(drill => drill.type)).toEqual(["powers"]);
+  });
+
   it('a disabled topic is excluded from Quick sessions too, not just Full POST', async () => {
     const onStart = vi.fn();
     // The Quick button only renders with ≥2 composable domains, so keep math in

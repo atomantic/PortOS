@@ -345,6 +345,7 @@ export * from './postAppliedNumeracy.js';
 export * from './postMultiplicationLadder.js';
 export * from './postPowersLadder.js';
 export * from './postProgression.js';
+export * from './postRotation.js';
 export * from './postStreak.js';
 export * from './activeDays.js';
 export * from './postTopics.js';
