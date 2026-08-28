@@ -13,12 +13,13 @@ When a TLS cert is provisioned (`npm run setup:cert`), `:5555` serves HTTPS inst
 This document covers the most commonly used endpoints plus a [route-domain index](#route-domain-index). The in-app **API Explorer** at `/api-reference/catalog` is the exhaustive, generated reference:
 
 - `GET /api/api-docs/catalog.json` — searchable metadata for every mounted HTTP operation.
-- `GET /api/api-docs/internal/openapi.json` — OpenAPI 3.1 for the complete internal HTTP surface.
-- `GET /api/api-docs/openapi.json` — OpenAPI 3.1 for only the external APIs currently exposed in Settings.
+- `GET /api/api-docs/internal/openapi.json` — OpenAPI 3.0.3 for the complete internal HTTP surface.
+- `GET /api/api-docs/openapi.json` — OpenAPI 3.0.3 for only the external APIs currently exposed in Settings.
+- `GET /api/api-docs/tools.min.json` — minimized provider-neutral resource for explicitly annotated semantic tools.
 - `GET /api/api-docs/events.json` — searchable Socket.IO event inventory.
 - `GET /api/api-docs/asyncapi.json` — AsyncAPI 3 for the Socket.IO transport.
 
-Generated entries are explicitly marked `generated` until a runtime-backed payload contract exists; detailed entries are marked `modeled`. Regenerate the checked-in route and event manifests with `npm run generate:api-docs`. Drift tests fail when source declarations and committed manifests diverge.
+Generated entries are explicitly marked `generated` until a runtime-backed payload contract exists; detailed entries are marked `modeled`. Regenerate the checked-in route and event manifests with `npm run generate:api-docs`, then generate the checked-in OpenAPI/tool artifacts with `npm run generate:api-spec`. See [docs/api/README.md](api/README.md) for routing and contract standards.
 
 When adding an HTTP route, keep its request Zod schema in a reusable server library and register the detailed documentation in `server/lib/apiOperationContracts.js`; the route and OpenAPI should consume the same schema object. Socket payload schemas follow the same pattern in `server/lib/socketEventContracts.js`. The generators guarantee inventory coverage, while these small registries make richer contracts incremental without maintaining a second handwritten list of paths or events.
 
@@ -582,7 +583,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/lmstudio`, `/api/local-llm` | Local LLM backends and the local runtime servers PortOS can start/stop (Ollama, LM Studio, `llama-server`, MTPLX — the last two as PM2 processes; `POST /api/local-llm/save-startup` is `pm2 save`), plus MTPLX's checkpoint catalog — `GET /api/local-llm/mtplx/models/search`, `POST .../models/pull` (byte progress on the `mtplx:download` socket event), `POST .../models/remove` |
 | `/api/code-review` | Code review runs |
 | `/api/voice`, `/api/voice/public` | Voice assistant |
-| `/api/api-docs` | Generated HTTP/event catalogs, OpenAPI 3.1 documents, and AsyncAPI 3 document |
+| `/api/api-docs` | Generated HTTP/event catalogs, OpenAPI 3.0.3 documents, minimized tool resource, and AsyncAPI 3 document |
 | `/api/data` | Data manager/sync |
 | `/api/datadog`, `/api/jira`, `/api/github`, `/api/telegram` | External integrations |
 | `/api/health` | Health check |

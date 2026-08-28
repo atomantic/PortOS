@@ -13,7 +13,7 @@ Audience: PortOS server, Persistent Mind, voice, palette, and future agent integ
 
 The initial production slice is implemented. This section supersedes proposal language elsewhere in the document when the two differ.
 
-- The generated HTTP inventory contains 2,066 mounted operations and feeds `GET /api/api-docs/catalog.json` plus the complete OpenAPI 3.1 document at `/api/api-docs/internal/openapi.json`.
+- The generated HTTP inventory feeds `GET /api/api-docs/catalog.json` plus the complete OpenAPI 3.0.3 document at `/api/api-docs/internal/openapi.json`.
 - A generated inventory of 253 Socket.IO events feeds `/api/api-docs/events.json` and the AsyncAPI 3 document at `/api/api-docs/asyncapi.json`.
 - `/api/cos/tools` exposes 23 Persistent Mind tools and 22 CoS-agent/UI/voice tools through the versioned provider-neutral catalog. OpenAI, Anthropic, and MCP translations derive from the same entries.
 - `/api/cos/tools/call` and `/api/cos/tools/calls/:requestId` implement server-derived UI authority, schema validation, normalized results, and replay conflict detection. Raw routes are not callable.
@@ -413,7 +413,7 @@ The following is the endpoint map used to design adapter domains. Paths are rela
 | `/api/autofix` | Auto-fix metrics: `GET /metrics`. |
 | `/api/model-personality` | Explicit provider/model personality test, history delete, and scorer settings. Only `POST /run` calls an LLM and requires a named provider/model. |
 | `/api/voice` | Authenticated voice config/status/voices, Piper fetch, TTS test/speak, Kokoro status/unload, and Whisper start/stop. `/api/voice/public` is the separate opt-in external TTS surface. |
-| `/api/api-docs` | Authenticated catalogs and specifications: exposed/public and complete/internal OpenAPI 3.1, generated HTTP metadata, generated Socket.IO metadata, and AsyncAPI 3. |
+| `/api/api-docs` | Authenticated catalogs and specifications: exposed/public and complete/internal OpenAPI 3.0.3, generated HTTP metadata, generated Socket.IO metadata, minimized tool resource, and AsyncAPI 3. |
 | `/api/openclaw` | OpenClaw status/session/message reads and message send/stream. External agent messaging; stream/send require explicit policy and confirmation. |
 | `/api/midi-runtime` | SSE installer: `GET /install`; multi-GB runtime setup, not a model tool. |
 | `/api/devtools/video-download` | Video download/list/delete, progress SSE, cancel. Download starts external network and disk work; confirmation-gated if ever exposed. |

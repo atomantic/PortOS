@@ -1,7 +1,7 @@
 /**
  * API Docs routes.
  *
- * Serves generated OpenAPI 3.1, AsyncAPI 3, and searchable catalog documents.
+ * Serves generated OpenAPI 3.0.3, AsyncAPI 3, and searchable catalog documents.
  * The client renders the OpenAPI documents with the lazy-loaded Scalar viewer
  * and uses the compact catalogs for the native HTTP/event explorer tabs.
  *
@@ -17,7 +17,7 @@ import { getSettings } from '../services/settings.js';
 import { getCurrentVersion } from '../services/updateChecker.js';
 import { buildApiCatalog } from '../lib/apiCatalog.js';
 import { buildAsyncApiSpec } from '../lib/asyncApiSpec.js';
-import { buildInternalOpenApiSpec, buildOpenApiSpec } from '../lib/openapiSpec.js';
+import { buildInternalOpenApiSpec, buildOpenApiSpec, buildToolCallingResource } from '../lib/openapiSpec.js';
 import { buildSocketEventCatalog } from '../lib/socketEventCatalog.js';
 
 const router = Router();
@@ -31,7 +31,7 @@ const baseUrlFromReq = (req) => {
   return host ? `${proto}://${host}` : '';
 };
 
-// GET /api/api-docs/openapi.json — the OpenAPI 3.1 document for exposed APIs.
+// GET /api/api-docs/openapi.json — the OpenAPI 3.0.3 document for exposed APIs.
 router.get('/openapi.json', asyncHandler(async (req, res) => {
   const [settings, version] = await Promise.all([getSettings(), getCurrentVersion()]);
   res.json(buildOpenApiSpec(settings, { baseUrl: baseUrlFromReq(req), version }));
@@ -57,6 +57,19 @@ router.get('/events.json', (_req, res) => {
 router.get('/asyncapi.json', asyncHandler(async (req, res) => {
   const version = await getCurrentVersion();
   res.json(buildAsyncApiSpec({ baseUrl: baseUrlFromReq(req), version }));
+}));
+
+// GET /api/api-docs/tools.min.json — compact semantic tools derived from the
+// same explicitly annotated OpenAPI operations. This is authenticated docs
+// metadata; it does not grant access or turn arbitrary routes into tools.
+router.get('/tools.min.json', asyncHandler(async (req, res) => {
+  const [settings, version] = await Promise.all([getSettings(), getCurrentVersion()]);
+  const spec = buildOpenApiSpec(settings, {
+    baseUrl: baseUrlFromReq(req),
+    version,
+    includeUnexposed: true,
+  });
+  res.json(buildToolCallingResource(spec));
 }));
 
 export default router;

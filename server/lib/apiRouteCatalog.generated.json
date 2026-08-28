@@ -1107,6 +1107,17 @@
     },
     {
       "method": "GET",
+      "path": "/api/api-docs/tools.min.json",
+      "mountPath": "/api/api-docs",
+      "sources": [
+        {
+          "source": "server/routes/apiDocs.js",
+          "line": 65
+        }
+      ]
+    },
+    {
+      "method": "GET",
       "path": "/api/apps",
       "mountPath": "/api/apps",
       "sources": [
@@ -22916,8 +22927,8 @@
   ],
   "stats": {
     "mounts": 145,
-    "operations": 2067,
-    "declarations": 2070,
+    "operations": 2068,
+    "declarations": 2071,
     "sourceFiles": 224
   }
 }

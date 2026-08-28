@@ -84,7 +84,7 @@ export const getAiAssignments = (options) => request('/settings/ai-assignments',
 // the peer-facing status endpoint only ever reports already-shared models.
 export const getMediaShareCandidates = (options) => request('/settings/media-share-candidates', options);
 
-// API Access — the OpenAPI 3.1 spec for the public API surface (built from the
+// API Access — the OpenAPI 3.0.3 spec for the public API surface (built from the
 // exposed entries in apiAccess settings). Rendered by the API Access settings tab.
 export const getOpenApiSpec = (options) => request('/api-docs/openapi.json', options);
 export const getInternalOpenApiSpec = (options) => request('/api-docs/internal/openapi.json', options);

@@ -1,19 +1,21 @@
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
-import { buildInternalOpenApiSpec, buildOpenApiSpec } from './openapiSpec.js';
+import { buildInternalOpenApiSpec, buildOpenApiSpec, buildToolCallingResource, STANDARD_API_ERRORS } from './openapiSpec.js';
 import { synthesizeBodySchema as routeSchema } from '../routes/voicePublic.js';
 import { voiceSynthesizeBodySchema } from './apiContractSchemas.js';
 
 const exposed = (apiAccess) => ({ apiAccess });
 
 describe('buildOpenApiSpec', () => {
-  it('produces a valid 3.1 envelope with security schemes', () => {
+  it('produces a valid 3.0.3 envelope with security schemes and standard errors', () => {
     const spec = buildOpenApiSpec({}, { baseUrl: 'https://host:5555', version: '1.2.3' });
-    expect(spec.openapi).toBe('3.1.0');
+    expect(spec.openapi).toBe('3.0.3');
     expect(spec.info.version).toBe('1.2.3');
     expect(spec.servers).toEqual([{ url: 'https://host:5555' }]);
     expect(spec.components.securitySchemes.bearerAuth).toBeDefined();
     expect(spec.components.securitySchemes.basicAuth).toBeDefined();
+    expect(spec.components.schemas.PortosError).toBeDefined();
+    expect(Object.keys(spec.components.responses)).toEqual(STANDARD_API_ERRORS.map(({ code }) => code));
   });
 
   it('includes NO paths when nothing is exposed', () => {
@@ -39,6 +41,7 @@ describe('buildOpenApiSpec', () => {
     expect(body.properties.engine.enum).toEqual(['kokoro', 'piper']);
     // OpenAPI path schemas must not carry the JSON-Schema dialect marker.
     expect(body.$schema).toBeUndefined();
+    expect(body.type).not.toBe('null');
   });
 
   it('omits security on passwordless operations, requires it when requireAuth', () => {
@@ -90,5 +93,20 @@ describe('buildInternalOpenApiSpec', () => {
     expect(spec.paths['/api/voice/public/synthesize'].post.requestBody).toBeDefined();
     expect(spec.paths['/api/apps'].get['x-portos-contract-status']).toBe('generated');
     expect(spec.paths['/api/apps'].get.responses.default).toBeDefined();
+  });
+
+  it('converts the canonical tool projection without exposing unannotated routes', () => {
+    const spec = buildOpenApiSpec({}, { includeUnexposed: true, version: '1.2.3' });
+    const resource = buildToolCallingResource(spec);
+    expect(resource.type).toBe('portos_tool_resource');
+    expect(resource.source.version).toBe('3.0.3');
+    expect(resource.tools.map((tool) => tool.name)).toEqual([
+      'image.generate', 'image.get-options', 'image.get-progress',
+      'image.list-models', 'image.list-samplers', 'voice.list-engines',
+      'voice.list-voices', 'voice.synthesize',
+    ]);
+    expect(resource.tools.every((tool) => tool.input_schema.type === 'object')).toBe(true);
+    expect(resource.errors).toEqual(STANDARD_API_ERRORS);
+    expect(resource.tools.some((tool) => tool.transport.path === '/api/apps')).toBe(false);
   });
 });

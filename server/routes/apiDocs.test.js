@@ -22,7 +22,7 @@ describe('GET /api/api-docs/openapi.json', () => {
   it('returns an empty-paths 3.1 spec when nothing exposed', async () => {
     const res = await request(buildApp()).get('/api/api-docs/openapi.json');
     expect(res.status).toBe(200);
-    expect(res.body.openapi).toBe('3.1.0');
+    expect(res.body.openapi).toBe('3.0.3');
     expect(Object.keys(res.body.paths)).toHaveLength(0);
     expect(res.body.info.version).not.toBe('0.0.0'); // real package.json version
   });
