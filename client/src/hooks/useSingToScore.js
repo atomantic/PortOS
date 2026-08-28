@@ -13,7 +13,7 @@
 // in AGENTS.md) so nothing dangles after navigation-away.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { createStreamAnalyser } from '../lib/audioRecorder.js';
+import { createStreamAnalyser, openAnalysisMic } from '../lib/audioRecorder.js';
 import { createPitchTracker } from '../lib/pitchDetect.js';
 import { createMetronome, clampBpm, timeSignatureFromScore, DEFAULT_BPM } from '../lib/metronome.js';
 import { transcribePitchTrack } from '../lib/singToScore.js';
@@ -145,14 +145,15 @@ export default function useSingToScore({ tempo, score = '', musicKey = 'C' } = {
     // handed back on every path that never reaches teardown() (the unmount bail
     // below is belt-and-suspenders: the hook already releases on unmount).
     claimSession();
-    const src = await getUserMedia({ audio: true }).catch((err) => {
+    const opened = await openAnalysisMic({ getUserMedia }).catch((err) => {
       if (settleStart(requestGeneration)) {
         releaseSession();
         if (mountedRef.current) setError(err?.message || 'Microphone access denied');
       }
       return null;
     });
-    if (!src) return;
+    if (!opened) return;
+    const src = opened.stream;
     if (!mountedRef.current || !isCurrent(requestGeneration)) {
       src.getTracks().forEach((track) => track.stop());
       if (isCurrent(requestGeneration)) releaseSession();

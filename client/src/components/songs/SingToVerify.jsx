@@ -7,6 +7,7 @@ import useSingToVerify, {
 } from '../../hooks/useSingToVerify.js';
 import { GRADE } from '../../lib/colorMatch.js';
 import { parseScore, replaceNotePitch } from '../../lib/scoreNotation.js';
+import MicProcessingHint from './MicProcessingHint.jsx';
 import ScoreSheet from './ScoreSheet.jsx';
 
 const pitchLabel = (pitch) =>
@@ -21,6 +22,7 @@ export default function SingToVerify({ value = '', tempo = null, onChange }) {
     beat,
     rows,
     error,
+    micProcessing,
     start,
     stop,
     cancel,
@@ -119,6 +121,7 @@ export default function SingToVerify({ value = '', tempo = null, onChange }) {
       </div>
 
       {error && <p className="mt-2 text-xs text-port-error">{error}</p>}
+      <MicProcessingHint processing={micProcessing} />
 
       {rows.length > 0 && !recording && (
         <div className="mt-3 space-y-3">

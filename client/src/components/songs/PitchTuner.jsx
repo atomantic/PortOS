@@ -19,9 +19,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Music2, Square } from 'lucide-react';
 import toast from '../ui/Toast';
-import { createStreamAnalyser } from '../../lib/audioRecorder.js';
+import { createStreamAnalyser, openAnalysisMic, readAppliedProcessing } from '../../lib/audioRecorder.js';
 import { createPitchTracker, tuningQuality } from '../../lib/pitchDetect.js';
 import useMounted from '../../hooks/useMounted';
+import MicProcessingHint from './MicProcessingHint.jsx';
 
 // Map a tuning-quality level to its readout color token + needle fill.
 const LEVEL_TONE = {
@@ -58,6 +59,10 @@ export default function PitchTuner({ stream = null, a4 = 440 }) {
   // "still that note" rather than a fresh detection.
   const [reading, setReading] = useState({ note: null, cents: null, held: false });
   const [standaloneOn, setStandaloneOn] = useState(false);
+  // What the browser ACTUALLY applied to whichever mic we are reading — the own
+  // standalone stream, or the recorder's (which is opened speech-tuned on
+  // purpose, so an attached tuner honestly reports the drift).
+  const [micProcessing, setMicProcessing] = useState(null);
   const trackerRef = useRef(null);   // active pitch tracker { stop }
   const analyserRef = useRef(null);  // active { close } stream-analyser graph
   const ownStreamRef = useRef(null); // standalone-mode mic stream we own + must stop
@@ -68,12 +73,14 @@ export default function PitchTuner({ stream = null, a4 = 440 }) {
     if (trackerRef.current) { trackerRef.current.stop(); trackerRef.current = null; }
     if (analyserRef.current) { analyserRef.current.close(); analyserRef.current = null; }
     setReading({ note: null, cents: null, held: false });
+    setMicProcessing(null);
   }, []);
 
   // Attach the tuner to a stream. Returns nothing; teardownTracker() detaches.
   const attach = useCallback((src) => {
     teardownTracker();
     if (!src) return;
+    setMicProcessing(readAppliedProcessing(src));
     const graph = createStreamAnalyser(src);
     analyserRef.current = graph;
     trackerRef.current = createPitchTracker(graph.analyser, {
@@ -136,11 +143,12 @@ export default function PitchTuner({ stream = null, a4 = 440 }) {
     // ownStreamRef, leaking the first). The button hides once standaloneOn flips,
     // but a fast double event can re-enter before the re-render.
     if (standaloneOn || trackerRef.current) return;
-    const src = await navigator.mediaDevices.getUserMedia({ audio: true }).catch((err) => {
+    const opened = await openAnalysisMic().catch((err) => {
       toast.error(err?.message || 'Microphone access denied');
       return null;
     });
-    if (!src) return;
+    if (!opened) return;
+    const { stream: src } = opened;
     if (!mountedRef.current) { src.getTracks().forEach((t) => t.stop()); return; }
     ownStreamRef.current = src;
     setStandaloneOn(true);
@@ -219,6 +227,7 @@ export default function PitchTuner({ stream = null, a4 = 440 }) {
         <span>in tune</span>
         <span>sharp ♯</span>
       </div>
+      {active && <MicProcessingHint processing={micProcessing} />}
     </div>
   );
 }

@@ -168,3 +168,63 @@ export async function startMemoRecording() {
     cancel: () => { teardown(); try { recorder.stop(); } catch { /* already stopped */ } },
   };
 }
+
+/**
+ * Constraints every PITCH-ANALYSIS mic opens with. The browser's default
+ * capture chain is tuned for speech intelligibility, not signal analysis: AGC
+ * rides the level the tuner's clarity gate reads, noise suppression chews
+ * sustained vowels and soft onsets, and echo cancellation can gate the mic
+ * outright while a reference melody plays back. Plain booleans, NOT `{ exact }`
+ * — a browser that can't honor one must still open the mic rather than fail
+ * closed; `openAnalysisMic` reports back what actually stuck.
+ *
+ * Deliberately NOT applied to `startMemoRecording` — that capture feeds Whisper
+ * transcription, where the speech-tuned chain helps.
+ */
+export const ANALYSIS_AUDIO_CONSTRAINTS = Object.freeze({
+  echoCancellation: false,
+  noiseSuppression: false,
+  autoGainControl: false,
+});
+
+const PROCESSING_KEYS = ['echoCancellation', 'noiseSuppression', 'autoGainControl'];
+
+/**
+ * Read back which processing stages the browser ACTUALLY applied to a capture
+ * stream. Each key is `true` (on despite the constraint), `false` (honored), or
+ * `null` when the browser doesn't report it — Firefox omits keys from
+ * `getSettings()`, and unknown must not collapse into "off" or every such
+ * browser would silently claim clean audio.
+ */
+export function readAppliedProcessing(stream) {
+  const track = stream?.getAudioTracks?.()?.[0] ?? stream?.getTracks?.()?.[0];
+  const settings = track?.getSettings?.();
+  return Object.fromEntries(PROCESSING_KEYS.map((key) => [
+    key,
+    typeof settings?.[key] === 'boolean' ? settings[key] : null,
+  ]));
+}
+
+/** True only when a stage is KNOWN to still be on — `null` (unknown) never warns. */
+export function hasUnwantedProcessing(processing) {
+  return PROCESSING_KEYS.some((key) => processing?.[key] === true);
+}
+
+/**
+ * Open a microphone for pitch/signal analysis with the browser's processing
+ * chain requested off, and report what it actually applied. Returns
+ * `{ stream, processing }`; rejects exactly like `getUserMedia` does, so call
+ * sites keep their existing `.catch()` + re-entrancy guards.
+ *
+ * Pass `getUserMedia` when the caller already resolved (and null-checked) it —
+ * reaching through `navigator.mediaDevices` throws synchronously on an insecure
+ * origin, and the capture hooks must do that check before claiming the audio
+ * session.
+ */
+export async function openAnalysisMic({ getUserMedia } = {}) {
+  const open = getUserMedia
+    || navigator.mediaDevices?.getUserMedia?.bind(navigator.mediaDevices);
+  if (!open) throw new Error('Microphone access requires a secure browser connection');
+  const stream = await open({ audio: { ...ANALYSIS_AUDIO_CONSTRAINTS } });
+  return { stream, processing: readAppliedProcessing(stream) };
+}

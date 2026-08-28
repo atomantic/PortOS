@@ -10,9 +10,13 @@ let metronomeOptions = null;
 let clock = 1000;
 const { alignMock } = vi.hoisted(() => ({ alignMock: vi.fn(() => [{ index: 0, accepted: false }]) }));
 
-vi.mock('../lib/audioRecorder.js', () => ({
-  createStreamAnalyser: vi.fn(() => ({ analyser: {}, close: analyserClose })),
-}));
+vi.mock('../lib/audioRecorder.js', async (importActual) => {
+  const actual = await importActual(); // keep the real openAnalysisMic / getSettings read-back
+  return {
+    ...actual,
+    createStreamAnalyser: vi.fn(() => ({ analyser: {}, close: analyserClose })),
+  };
+});
 
 vi.mock('../lib/pitchDetect.js', () => ({
   createPitchTracker: vi.fn((_analyser, options) => {
@@ -86,6 +90,45 @@ describe('useSingToVerify', () => {
     expect(result.current.rows).toEqual([{ index: 0, accepted: false }]);
   });
 
+  it('opens the mic with browser processing off and reports what actually stuck', async () => {
+    // Safari honors the AEC request but keeps AGC on — the exact case the
+    // report exists for, since the tuner cannot tell from the samples alone.
+    const settings = { echoCancellation: false, noiseSuppression: false, autoGainControl: true };
+    navigator.mediaDevices.getUserMedia = vi.fn(async () => ({
+      getTracks: () => [{ stop: trackStop, getSettings: () => settings }],
+    }));
+    const { result } = renderHook(() => useSingToVerify({
+      tempo: 120,
+      score: 'time: 4/4\n| C4q |',
+    }));
+
+    await act(async () => { await result.current.start(1); });
+
+    expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledWith({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+    });
+    expect(result.current.micProcessing).toEqual(settings);
+  });
+
+  it('reports an unknown processing stage as null rather than as honored', async () => {
+    // Firefox omits keys it does not implement. Collapsing absent into false
+    // would let it claim clean audio it never promised.
+    navigator.mediaDevices.getUserMedia = vi.fn(async () => ({
+      getTracks: () => [{ stop: trackStop, getSettings: () => ({ echoCancellation: false }) }],
+    }));
+    const { result } = renderHook(() => useSingToVerify({
+      tempo: 120,
+      score: 'time: 4/4\n| C4q |',
+    }));
+
+    await act(async () => { await result.current.start(1); });
+
+    expect(result.current.micProcessing).toEqual({
+      echoCancellation: false,
+      noiseSuppression: null,
+      autoGainControl: null,
+    });
+  });
   it('tears down mic stream, analyser, tracker, and metronome on unmount', async () => {
     const { result, unmount } = renderHook(() => useSingToVerify({
       tempo: 120,

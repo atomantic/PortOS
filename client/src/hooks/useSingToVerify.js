@@ -2,7 +2,7 @@
 // existing score, without changing the score until the user accepts pitches.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createStreamAnalyser } from '../lib/audioRecorder.js';
+import { createStreamAnalyser, openAnalysisMic } from '../lib/audioRecorder.js';
 import { createMetronome, clampBpm, DEFAULT_BPM } from '../lib/metronome.js';
 import { createPitchTracker } from '../lib/pitchDetect.js';
 import { parseScore } from '../lib/scoreNotation.js';
@@ -23,6 +23,9 @@ export default function useSingToVerify({ score: scoreText = '', tempo } = {}) {
   const [beat, setBeat] = useState(null);
   const [rows, setRows] = useState([]);
   const [error, setError] = useState(null);
+  // What the browser actually applied to the capture stream — a stage left on
+  // despite ANALYSIS_AUDIO_CONSTRAINTS is why a Safari/Firefox comparison drifts.
+  const [micProcessing, setMicProcessing] = useState(null);
 
   const score = useMemo(() => parseScore(scoreText), [scoreText]);
   const mountedRef = useMounted();
@@ -108,14 +111,15 @@ export default function useSingToVerify({ score: scoreText = '', tempo } = {}) {
     // newer start()'s own claim now owns the slot, so releasing from a
     // superseded request would drop THAT claim instead of ours.
     claimSession();
-    const stream = await getUserMedia({ audio: true }).catch((err) => {
+    const opened = await openAnalysisMic({ getUserMedia }).catch((err) => {
       if (settleStart(requestGeneration)) {
         releaseSession();
         if (mountedRef.current) setError(err?.message || 'Microphone access denied');
       }
       return null;
     });
-    if (!stream) return;
+    if (!opened) return;
+    const { stream, processing } = opened;
     if (!mountedRef.current || !isCurrent(requestGeneration)) {
       stream.getTracks().forEach((track) => track.stop());
       if (isCurrent(requestGeneration)) releaseSession();
@@ -123,6 +127,7 @@ export default function useSingToVerify({ score: scoreText = '', tempo } = {}) {
     }
     settleStart(requestGeneration);
     streamRef.current = stream;
+    setMicProcessing(processing);
 
     const graph = createStreamAnalyser(stream);
     analyserRef.current = graph;
@@ -187,5 +192,5 @@ export default function useSingToVerify({ score: scoreText = '', tempo } = {}) {
   cancelRef.current = cancel;
   useEffect(() => () => cancelRef.current(), []);
 
-  return { phase, beat, rows, error, start, stop, cancel, reset, toggleAccept, acceptAll };
+  return { phase, beat, rows, error, micProcessing, start, stop, cancel, reset, toggleAccept, acceptAll };
 }

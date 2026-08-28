@@ -22,6 +22,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { GraduationCap, Play, Square, Repeat, CheckCircle2, Circle, Target } from 'lucide-react';
 import toast from '../ui/Toast';
+import { openAnalysisMic } from '../../lib/audioRecorder.js';
 import { scoreHasMusic } from '../../lib/scoreNotation.js';
 import {
   WHOLE_SONG_SCOPE,
@@ -103,11 +104,12 @@ export default function SongTraining({
 
   const handleStart = useCallback(async () => {
     if (running || stream) return;
-    const src = await navigator.mediaDevices.getUserMedia({ audio: true }).catch((err) => {
+    const opened = await openAnalysisMic().catch((err) => {
       toast.error(err?.message || 'Microphone access denied');
       return null;
     });
-    if (!src) return;
+    if (!opened) return;
+    const { stream: src } = opened;
     if (!mountedRef.current) { src.getTracks().forEach((t) => t.stop()); return; }
     streamRef.current = src;
     setStream(src);
