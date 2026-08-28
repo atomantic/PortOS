@@ -119,6 +119,32 @@ describe('postQuickSession', () => {
       expect(plan.selected.map(c => c.type)).toEqual(["n-back"]);
     });
 
+    const memoryPick = (recommendation, drillItemId) => composeQuickSession({
+      durationMinutes: 15,
+      domainEntries: [{ domain: "memory", drills: [
+        { type: "memory-fill-blank", source: "memory", cfg: { count: 3 }, memoryItemId: "example-poem" },
+        { type: "memory-sequence", source: "memory", cfg: { count: 3 }, memoryItemId: drillItemId },
+      ] }],
+      recommendation,
+      recentPractice: { dayKey: "2026-03-02", drillTypes: ["memory-sequence"], memoryItemIds: ["elements-song"] },
+    }).selected.find(candidate => candidate.domain === "memory");
+
+    it("never rotates away from a SCHEDULE-driven recommendation, even one practiced yesterday", () => {
+      // The server keeps due memory items and due reviews outside the recency
+      // window on purpose — re-applying it here would skip the very item spaced
+      // repetition just brought up. A heuristic rec for the same drill DOES
+      // rotate away, which is what makes the kind gate load-bearing.
+      const forDue = { kind: "memory-due", drillType: "memory-sequence", memoryItemId: "elements-song" };
+      const forWeak = { kind: "weak-skill", drillType: "memory-sequence" };
+      expect(memoryPick(forDue, "elements-song").type).toBe("memory-sequence");
+      expect(memoryPick(forWeak, "elements-song").type).toBe("memory-fill-blank");
+    });
+
+    it("practices the ITEM a memory recommendation named, not the drill's configured default", () => {
+      const forDue = { kind: "memory-due", drillType: "memory-sequence", memoryItemId: "elements-song" };
+      expect(memoryPick(forDue, "example-poem").quickConfig.memoryItemId).toBe("elements-song");
+    });
+
     it("identifies a memory drill by its ITEM, so practicing one item does not sink the others", () => {
       const memoryDomain = [{ domain: "memory", drills: [
         { type: "memory-sequence", source: "memory", cfg: { count: 3 }, memoryItemId: "elements-song" },

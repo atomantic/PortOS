@@ -159,18 +159,36 @@ function recentPracticeMatcher({ drillTypes = [], memoryItemIds = [] } = {}) {
   );
 }
 
+// Recommendation kinds whose priority is SCHEDULE-driven, not heuristic. The
+// server deliberately keeps these outside the multi-day recency window (a
+// genuinely due item wins the top slot even if practiced yesterday), so the
+// client must not re-apply that window to them either — rotating away from a
+// due item is exactly the spaced-repetition miss the schedule exists to prevent.
+const SCHEDULED_RECOMMENDATION_KINDS = new Set(['memory-due', 'skill-review']);
+
 function candidateForDomain(domain, drills, recommendation, memoryItemIds = {}, { dayKey = null, isRecent = () => false } = {}) {
   const list = drills || [];
   if (!list.length) return null;
-  const memoryItemIdFor = drill => drill.memoryItemId ?? memoryItemIds[drill.type];
+  // A memory recommendation names the ITEM it wants practiced; honor that over
+  // the domain drill's configured default, or Quick "satisfies" a due rec by
+  // running a different item entirely.
+  const memoryItemIdFor = drill => (
+    (drill.type === recommendation?.drillType && recommendation?.memoryItemId)
+      || drill.memoryItemId
+      || memoryItemIds[drill.type]
+      || undefined
+  );
   const recentDrill = drill => isRecent(drill, memoryItemIdFor(drill));
   const recommended = recommendation?.drillType
     ? list.find(drill => drill.type === recommendation.drillType)
     : null;
-  // The recommendation wins its domain only while it is still fresh. Once it
-  // has been practiced inside the window, this domain rotates to another
-  // enabled candidate instead of re-serving registry-order `list[0]`.
-  const pick = (recommended && !recentDrill(recommended))
+  // A heuristic recommendation wins its domain only while it is still fresh —
+  // once practiced inside the window this domain rotates to another enabled
+  // candidate instead of re-serving registry-order `list[0]`. A scheduled one
+  // always wins, whatever the window says.
+  const recommendedWins = recommended
+    && (SCHEDULED_RECOMMENDATION_KINDS.has(recommendation.kind) || !recentDrill(recommended));
+  const pick = recommendedWins
     ? recommended
     : orderByRecencyRotation(list, { dayKey, isRecent: recentDrill })[0];
   const quickConfig = pick.quickConfig || buildQuickDrillConfig({
