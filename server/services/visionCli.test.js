@@ -2,6 +2,9 @@ import { describe, it, expect, vi } from 'vitest';
 import { posixPath } from '../lib/testHelper.js';
 
 import { EventEmitter } from 'events';
+import { mkdtemp, rm, writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
 
 // Wrap the REAL resolveWindowsExecutable/prepareWindowsSafeSpawn in spies
 // (not stubs) so every existing test below is unaffected (both are no-op
@@ -20,6 +23,7 @@ vi.mock('../lib/bufferedSpawn.js', async (importOriginal) => {
 const {
   decodeImageDataUrl,
   buildCliVisionInvocation,
+  prepareCliVisionRun,
   describeImageViaCli,
 } = await import('./visionCli.js');
 const { resolveWindowsExecutable, prepareWindowsSafeSpawn } = await import('../lib/bufferedSpawn.js');
@@ -108,6 +112,30 @@ describe('buildCliVisionInvocation', () => {
     expect(inv.stdin).toContain('vision-2.jpg');
     expect(inv.stdin).toMatch(/chronological/i);
     expect(inv.args).toEqual(expect.arrayContaining(['--effort', 'high']));
+  });
+});
+
+describe('prepareCliVisionRun', () => {
+  it('stages multiple files for the shared runner and removes them on cleanup', async () => {
+    const sourceDir = await mkdtemp(join(tmpdir(), 'portos-vision-source-'));
+    try {
+      const first = join(sourceDir, 'first.png');
+      const second = join(sourceDir, 'second.jpg');
+      await Promise.all([writeFile(first, 'one'), writeFile(second, 'two')]);
+      const prepared = await prepareCliVisionRun({
+        provider: { id: 'codex', command: 'codex', args: [] },
+        imagePaths: [first, second],
+        prompt: 'compare',
+        model: 'gpt-5',
+        effort: 'high',
+      });
+      expect(prepared.invocation.args.filter((arg) => arg === '-i')).toHaveLength(2);
+      expect(prepared.invocation.cwd).toMatch(/portos-vision-run-/);
+      await prepared.cleanup();
+      await expect(import('fs/promises').then(({ stat }) => stat(prepared.invocation.cwd))).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(sourceDir, { recursive: true, force: true });
+    }
   });
 });
 

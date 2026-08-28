@@ -1,6 +1,10 @@
 import { z } from 'zod';
+import {
+  createDefaultPortosSemanticToolGrants,
+  portosSemanticToolGrantsSchema,
+} from './cosToolContracts.js';
 
-export const AGENT_CONTEXT_SCHEMA_VERSION = 2;
+export const AGENT_CONTEXT_SCHEMA_VERSION = 3;
 export const AGENT_CONTEXT_PROTOCOL_VERSION = '2025-11-25';
 export const AGENT_CONTEXT_SUPPORTED_PROTOCOL_VERSIONS = Object.freeze([
   '2025-03-26',
@@ -11,6 +15,7 @@ export const AGENT_CONTEXT_SUPPORTED_PROTOCOL_VERSIONS = Object.freeze([
 export const AGENT_CONTEXT_SCOPES = Object.freeze(['navigation', 'workspaces', 'brain', 'identity']);
 export const AGENT_CONTEXT_PROFILES = Object.freeze(['metadata', 'summary']);
 export const AGENT_CONTEXT_DEFAULT_SCOPES = Object.freeze(['navigation', 'workspaces']);
+export const AGENT_CONTEXT_DEFAULT_ACTIONS = Object.freeze(createDefaultPortosSemanticToolGrants());
 export const AGENT_CONTEXT_LIMITS = Object.freeze({
   defaultResults: 10,
   maxResults: 25,
@@ -32,6 +37,7 @@ export const agentContextSettingsSchema = z.object({
     .max(AGENT_CONTEXT_SCOPES.length)
     .refine(uniqueScopes, 'Scopes must be unique')
     .optional(),
+  actions: portosSemanticToolGrantsSchema.optional(),
 }).strict();
 
 const requestedScopesSchema = z.array(z.enum(AGENT_CONTEXT_SCOPES))
@@ -102,6 +108,7 @@ export const agentContextNavigationOutputSchema = z.object({
 export const agentContextProfileOutputSchema = z.object({
   profile: z.enum(AGENT_CONTEXT_PROFILES),
   scopes: z.array(z.enum(AGENT_CONTEXT_SCOPES)),
+  actions: portosSemanticToolGrantsSchema,
   limits: z.object({
     defaultResults: z.number().int().positive(),
     maxResults: z.number().int().positive(),

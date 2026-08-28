@@ -14,6 +14,7 @@
     "test:fast": "vitest run",
     "test:watch": "vitest",
     "test:ci": "vitest run --bail=1 --silent=passed-only --reporter=default --reporter=github-actions",
+    "test:ci:related": "vitest related --run --bail=1 --silent=passed-only --reporter=default --reporter=github-actions",
     "test:coverage": "vitest run --coverage",
     "setup:db:test": "node scripts/setup-db-test.mjs",
     "test:db": "vitest run --config vitest.config.db.js",

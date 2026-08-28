@@ -243,21 +243,30 @@ export function normalizeError(err) {
 }
 
 /**
+ * The machine-readable error vocabulary PortOS speaks, keyed by HTTP status.
+ *
+ * Exported because it is a published contract, not just an internal lookup:
+ * the semantic tool resource (`apiToolResource.js`) advertises these codes to
+ * agent callers. Both read this object so the documented vocabulary and the
+ * codes routes actually emit cannot drift.
+ */
+export const ERROR_CODES_BY_STATUS = Object.freeze({
+  400: 'BAD_REQUEST',
+  401: 'UNAUTHORIZED',
+  403: 'FORBIDDEN',
+  404: 'NOT_FOUND',
+  409: 'CONFLICT',
+  422: 'VALIDATION_ERROR',
+  500: 'INTERNAL_ERROR',
+  502: 'BAD_GATEWAY',
+  503: 'SERVICE_UNAVAILABLE',
+});
+
+/**
  * Get appropriate error code from HTTP status
  */
 export function getErrorCode(status) {
-  const codeMap = {
-    400: 'BAD_REQUEST',
-    401: 'UNAUTHORIZED',
-    403: 'FORBIDDEN',
-    404: 'NOT_FOUND',
-    409: 'CONFLICT',
-    422: 'VALIDATION_ERROR',
-    500: 'INTERNAL_ERROR',
-    502: 'BAD_GATEWAY',
-    503: 'SERVICE_UNAVAILABLE'
-  };
-  return codeMap[status] || 'INTERNAL_ERROR';
+  return ERROR_CODES_BY_STATUS[status] || 'INTERNAL_ERROR';
 }
 
 /**

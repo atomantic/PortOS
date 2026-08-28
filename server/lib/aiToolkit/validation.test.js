@@ -71,6 +71,12 @@ describe('providerSchema', () => {
     expect(providerSchema.safeParse(minimalProvider).success).toBe(true);
   });
 
+  it('normalizes surrounding command whitespace before persistence', () => {
+    const result = providerSchema.safeParse({ ...minimalProvider, command: '  codex  ' });
+    expect(result.success).toBe(true);
+    expect(result.data.command).toBe('codex');
+  });
+
   it('accepts the explicit MTPLX marker and rejects a non-boolean value', () => {
     expect(providerSchema.safeParse({ ...minimalProvider, mtplxBacked: true }).success).toBe(true);
     expect(providerSchema.safeParse({ ...minimalProvider, mtplxBacked: 'true' }).success).toBe(false);

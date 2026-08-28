@@ -39,6 +39,21 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   // copy-paste drift — distinct from `code-quality` (which is the broader DRY /
   // long-function / TODO pass). Defaults to file-issues.
   'simplify',
+  // Quota-burn `api-contract-audit` counterpart. Route validation, client/server
+  // drift, status envelopes, and missing `asyncHandler`. Defaults to file-issues.
+  'api-contract',
+  // Quota-burn `react-lifecycle-audit` counterpart. Effect teardowns, stale
+  // closures, and post-unmount state — distinct from `ui-bugs` (console errors)
+  // and `accessibility`. Defaults to file-issues.
+  'react-lifecycle',
+  // Quota-burn `observability-audit` counterpart. Silent catches, log noise, and
+  // errors logged without the context needed to reproduce them. Files under the
+  // `code-quality` label. Defaults to file-issues.
+  'observability',
+  // Quota-burn `copy-audit` counterpart. User-facing wording only — jargon,
+  // ambiguous action verbs, dead-end error text. Files under the `ux` label;
+  // narrower than the `ux` audit, which walks the running UI. File-issues.
+  'copy',
   // Audits `git stash list` for {appName} and drops entries already superseded
   // by (or a subset of) current `main`/HEAD, or that are stale/abandoned scratch
   // work — without discarding real unlanded work. On-demand only (no cadence
@@ -328,6 +343,10 @@ export const DEFAULT_TASK_INTERVALS = {
   // file-issues so an unattended enable doesn't land code. Off by default.
   'data-safety':         { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
   'simplify':            { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
+  'api-contract':      { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
+  'react-lifecycle':   { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
+  'observability':     { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
+  'copy':                { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
   // pr-watcher polls for newly-opened PRs, so it runs on a short custom
   // interval rather than the loose rotation/daily cadence. 30 min keeps the
   // gh polling cheap while still reacting to a PR within one cycle. Default
@@ -480,6 +499,10 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'ux': 'UX/design audit — file issues (default) or implement fixes',
   'data-safety': 'Data/upgrade-safety audit — file issues (default) or implement fixes',
   'simplify': 'Dead-code/duplication audit — file issues (default) or implement removals',
+  'api-contract': 'API/route-contract audit — file issues (default) or implement fixes',
+  'react-lifecycle': 'React lifecycle/state audit — file issues (default) or implement fixes',
+  'observability': 'Logging/observability audit — file issues (default) or implement fixes',
+  'copy': 'Copy/text-clarity audit — file issues (default) or implement rewrites',
   'stash-cleanup': 'Triage git stash list — drop entries superseded by or stale relative to main, leave real unlanded work in place',
   'repo-sync': 'Sync every managed app with origin — back on the default branch, pushed and pulled, merged branches/worktrees and redundant stashes cleared',
   'plan-feature': "Brainstorm one feature and file its decision-complete plan to the app's work tracker (no code)",

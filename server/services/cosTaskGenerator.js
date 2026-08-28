@@ -148,6 +148,37 @@ export function isCooldownExemptTask(task) {
 }
 
 /**
+ * A claim/plan perpetual drain must stop when a completed agent leaves the
+ * complete actionable set unchanged. A null signature means the detector has
+ * no progress identity and keeps the legacy behavior; an empty signature is a
+ * valid idle result but never reaches this predicate because `actionable` is
+ * false.
+ */
+export function shouldParkUnchangedPerpetualWork(detection, lastSignature, dispatchCount = 0) {
+  return detection?.actionable === true
+    && detection.signature != null
+    && lastSignature != null
+    && detection.signature === lastSignature
+    // A same-issue continuation is allowed one unchanged recheck: the prior
+    // claim may have shipped a partial slice while leaving the issue actionable.
+    // A second unchanged observation is a genuine no-progress loop.
+    && dispatchCount > 1;
+}
+
+// The generator can be called before either spawn engine admits its result.
+// Keep the drain signature off persisted task metadata until that admission is
+// known to have succeeded; a WeakMap carries it only across the in-memory handoff.
+const deferredPerpetualSignatures = new WeakMap();
+
+export async function recordDeferredPerpetualDispatch(task, taskSchedule) {
+  const deferred = deferredPerpetualSignatures.get(task);
+  if (!deferred) return false;
+  deferredPerpetualSignatures.delete(task);
+  await taskSchedule.recordPerpetualDispatch(deferred.taskType, deferred.appId, deferred.signature);
+  return true;
+}
+
+/**
  * Dry-run eligibility pass over auto-approved system tasks. Walks the tasks in
  * file order applying the SAME gates execute mode uses — global slot cap,
  * max-total-spawns, app cooldown, per-project cap — while tracking virtual
@@ -397,7 +428,7 @@ For EACH picked issue, spawn a subagent that runs the single-issue **Phases 2–
 
 **Each fan-out agent gets its OWN scratch subdirectory — the scratchpad root is off-limits.** Every agent in this run shares one session scratchpad path, and every agent runs these byte-identical instructions, so left to themselves two agents pick the same obvious filename (\`pr-body.md\`) and silently clobber each other — last writer wins, the command still exits 0, and the wrong text lands on the wrong ${pr}. So: **each fan-out agent writes ALL temp files under \`<scratchpad>/issue-<num>/\` (its own issue number), and NEVER writes to the scratchpad root** (the root stays the orchestrator's). That covers ${pr} body drafts, review notes, diff dumps, test output — every scratch artifact, not just the body file. Create the directory before first use (\`mkdir -p\`). Filenames inside it may be as obvious as you like; the directory is what makes them unique. **If your environment gives you no scratchpad path at all**, use \`$(mktemp -d)/issue-<num>\` instead — never a path inside the source repo or inside your worktree, where it would show up as untracked cruft or get swept into a commit.
 
-**Verify the ${pr} body's issue trailer after create AND after every edit.** The ${pr}-body flow is create-then-edit — the file is written once, then re-read minutes later during the review loop — which is a wide window for a stale or foreign body to land. Belt to the namespacing's braces: immediately after \`create\` and after each body \`edit\`, re-read the published body with \`${bodyCmd}\` — **note it takes no number: both CLIs resolve the ${pr} from your checked-out \`claim/issue-<num>\` branch, and passing an ISSUE number where a ${pr} number belongs is how you end up reading (and then "correcting") someone else's ${pr}** — and confirm the body carries this agent's own trailer (\`Closes #<num>\` or \`Refs #<num>\` for ITS issue number). If it does not, rewrite the body from this agent's own scratch file and re-verify. **Cap this at 2 rewrites:** if the trailer still doesn't match, the scratch file itself is suspect — re-derive the body from your own branch's commits/diff for one final attempt, and if that also fails, STOP, leave the ${pr} open, and say so in the result you hand back. Never loop on it: Phase C waits for every agent to finish, so one agent stuck re-publishing blocks the whole batch's merges. And never assume a zero exit code means the right body was published.
+**Verify the ${pr} body's issue trailer after create AND after every edit.** The ${pr}-body flow is create-then-edit — the file is written once, then re-read minutes later during the review loop — which is a wide window for a stale or foreign body to land. Belt to the namespacing's braces: immediately after \`create\` and after each body \`edit\`, re-read the published body with \`${bodyCmd}\` — **note it takes no number: both CLIs resolve the ${pr} from your checked-out \`claim/issue-<num>\` branch, and passing an ISSUE number where a ${pr} number belongs is how you end up reading (and then "correcting") someone else's ${pr}** — and confirm the body carries this agent's own trailer. A full-scope ship MUST carry \`Closes #<num>\` for this issue; \`Refs #<num>\` is permitted ONLY for a deliberate partial ship that also records the required \`Done ✓ / Remaining ▢\` reconciliation comment. If it does not, rewrite the body from this agent's own scratch file and re-verify. **Cap this at 2 rewrites:** if the trailer still doesn't match, the scratch file itself is suspect — re-derive the body from your own branch's commits/diff for one final attempt, and if that also fails, STOP, leave the ${pr} open, and say so in the result you hand back. Never loop on it: Phase C waits for every agent to finish, so one agent stuck re-publishing blocks the whole batch's merges. And never assume a zero exit code means the right body was published.
 
 ## Phase C — Serialize the merges (orchestrator, after all agents finish)
 Merge the ready ${pr}s ONE AT A TIME. For each: re-sync onto the latest default branch, gate on **required** CI (one re-run on a flaky required check, then proceed; a real failure or an irreconcilable conflict leaves that ${pr} OPEN and recorded — move to the next), then \`${mergeCmd}\`. After all merges, run Phase 7 cleanup once per merged worktree.
@@ -914,7 +945,10 @@ async function spawnPriority0OnDemand(ctx) {
           reviewStartedApps.add(targetApp.id);
         }
         await taskSchedule.recordExecution(`task:${request.taskType}`, targetApp.id);
-        task = await generateManagedAppImprovementTaskForType(request.taskType, targetApp, state, { skipPreconditions: true });
+        task = await generateManagedAppImprovementTaskForType(request.taskType, targetApp, state, {
+          skipPreconditions: true,
+          deferPerpetualDispatch: true
+        });
         if (task) {
           await bindAppReviewAgent(targetApp.id, `on-demand-${Date.now()}`);
         }
@@ -937,8 +971,9 @@ async function spawnPriority0OnDemand(ctx) {
         // engines must stamp it — either may drain a given request. Stamped before
         // addTask so the blocked-revive branch inherits it via `task.metadata`.
         task.metadata = { ...(task.metadata || {}), onDemand: true };
-        const persisted = await addTask(task, 'internal', { raw: true });
+        const persisted = await addTask(task, 'internal', { raw: true, suppressDequeue: true });
         if (!persisted?.duplicate) {
+          await recordDeferredPerpetualDispatch(task, taskSchedule);
           tasksToSpawn.push(task);
           trackSpawn(task);
         } else if (persisted.status === 'blocked') {
@@ -946,7 +981,8 @@ async function spawnPriority0OnDemand(ctx) {
           // revive the existing task instead of silently dropping the Run and
           // stranding the bound on-demand review marker. Mirrors the sibling
           // dequeueNextTask on-demand engine in cos.js.
-          await reviveBlockedTask(persisted.id, { priority: task.priority, metadata: task.metadata }, 'internal');
+          await reviveBlockedTask(persisted.id, { priority: task.priority, metadata: task.metadata }, 'internal', { suppressDequeue: true });
+          await recordDeferredPerpetualDispatch(task, taskSchedule);
           const revived = { ...task, id: persisted.id };
           tasksToSpawn.push(revived);
           trackSpawn(revived);
@@ -1175,6 +1211,7 @@ async function spawnPriority4IdleReview(ctx) {
     if (pendingSystemTasks === 0) {
       const idleTask = await generateIdleReviewTask(state);
       if (idleTask && canSpawnTask(idleTask, autonomousSlotCeiling)) {
+        await recordDeferredPerpetualDispatch(idleTask, await import('./taskSchedule.js'));
         tasksToSpawn.push(idleTask);
         trackSpawn(idleTask);
       }
@@ -1533,8 +1570,9 @@ export function buildImprovementDedupSets(existingTasks, { ignoreTaskId = null }
  * Called during every evaluation to ensure system tasks are queued even when user tasks exist
  * Tasks are queued to COS-TASKS.md and will be picked up in Priority 2
  */
-export async function queueEligibleImprovementTasks(state, cosTaskData, { ignoreTaskId = null } = {}) {
-  const { getNextTaskType, recordExecution } = await import('./taskSchedule.js');
+export async function queueEligibleImprovementTasks(state, cosTaskData, { ignoreTaskId = null, wakeAfterRecord = true } = {}) {
+  const taskSchedule = await import('./taskSchedule.js');
+  const { getNextTaskType, recordExecution } = taskSchedule;
 
   if (!isImprovementEnabled(state)) return;
 
@@ -1630,7 +1668,10 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, { ignore
     // agents claim the same slug (2026-05-21 incident). The generator
     // returns null on plan-gate / precondition skip; we silently continue.
     // Regression-pinned in cos.test.js.
-    const task = await generateManagedAppImprovementTaskForType(nextType, app, state, { ignoreTaskId });
+    const task = await generateManagedAppImprovementTaskForType(nextType, app, state, {
+      ignoreTaskId,
+      deferPerpetualDispatch: true
+    });
     if (!task) continue;
 
     // Queue-path invariants override the generator's direct-spawn defaults
@@ -1668,8 +1709,10 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, { ignore
       task.description = firstLine(task.description);
     }
 
-    const newTask = await addTask(task, 'internal', { raw: true, ignoreTaskId });
+    const newTask = await addTask(task, 'internal', { raw: true, ignoreTaskId, suppressDequeue: true });
     if (newTask?.duplicate) continue;
+    await recordDeferredPerpetualDispatch(task, taskSchedule);
+    if (wakeAfterRecord) cosEvents.emit('cos:dequeue-requested');
 
     await recordExecution(`task:${nextType}`, app.id);
 
@@ -2052,7 +2095,10 @@ async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = nu
   // with the literal {prData}/{referenceData} markers and never poll. The
   // recordExecution + activity bump above already accounted for the idle
   // spawn; the per-type generator does not record execution itself.
-  const task = await generateManagedAppImprovementTaskForType(nextType, app, state, { ignoreTaskId });
+  const task = await generateManagedAppImprovementTaskForType(nextType, app, state, {
+    ignoreTaskId,
+    deferPerpetualDispatch: true
+  });
   // Idle-review can steal a queued on-demand request for this app. That
   // request is still a user Run — apply the same consent as Priority 0.
   if (selectionReason === 'on-demand') applyOnDemandConsent(task);
@@ -2289,10 +2335,11 @@ async function resolveClaimWorkRouting(app, taskType, metadata, taskSchedule) {
  * IS the detector — a programmatic detector decides whether there's anything to
  * claim BEFORE building the (expensive) prompt or burning an agent:
  *   - actionable → stamp metadata.perpetual (skip cooldown), proceed;
+ *   - unchanged actionable set → PARK after a successful no-progress run;
  *   - idle (definitive) → PARK on the recheck cadence, skip;
  *   - transient probe failure → skip WITHOUT parking so the next tick retries.
- * The detector keys on the RESOLVED promptTaskType. Returns `{ skip, spendDispatch }`
- * and mutates `metadata.perpetual` on the actionable path.
+ * The detector keys on the RESOLVED promptTaskType. Returns `{ skip, spendDispatch,
+ * signature }` and mutates `metadata.perpetual` on the actionable path.
  *
  * `spendDispatch` is the caller's cue to call `recordPerpetualDispatch` (which
  * clears the park and spends one unit of the type's `drainDispatchCap` budget in a
@@ -2316,11 +2363,35 @@ async function applyPerpetualWorkGate(app, taskType, promptTaskType, metadata, i
     ignoreTaskId
   });
   if (detection.actionable) {
+    // A successful claim/plan agent can still return without changing forge or
+    // PLAN state (for example, it decides not to pick the advertised item). The
+    // completion refill would otherwise dispatch the same candidate forever.
+    // The detector's signature covers the complete set; `items` is capped for
+    // the picker and is not sufficient for convergence.
+    const drainSignature = detection.signature == null
+      ? null
+      : JSON.stringify({ taskType: promptTaskType, candidates: detection.signature });
+    if (drainSignature != null) {
+      const { signature: lastSignature, dispatchCount } = await taskSchedule.getPerpetualDrainState(taskType, app.id);
+      if (shouldParkUnchangedPerpetualWork({ ...detection, signature: drainSignature }, lastSignature, dispatchCount)) {
+        const counts = detection.total != null
+          ? { open: detection.total, inFlight: detection.inFlightCount ?? 0, filtered: detection.filteredCount ?? 0 }
+          : null;
+        await taskSchedule.parkPerpetual(taskType, app.id, {
+          reason: 'no-progress',
+          actionableCount: detection.count,
+          counts,
+          signature: null
+        });
+        emitLog('info', `Perpetual ${taskType} parked for ${app.name}: actionable work unchanged after the last run`, { appId: app.id });
+        return { skip: true };
+      }
+    }
     recordPerpetualTransient(taskType, app.id, null);
     metadata.perpetual = true;
     // The dispatch is SPENT BY THE CALLER, once a task is certain — see the note
     // on `spendDispatch` in the JSDoc above.
-    return { skip: false, spendDispatch: true };
+    return { skip: false, spendDispatch: true, signature: drainSignature };
   }
   if (detection.transient) {
     emitLog('debug', `Perpetual ${taskType} skip for ${app.name} (transient: ${detection.reason})`, { appId: app.id });
@@ -2342,7 +2413,7 @@ async function applyPerpetualWorkGate(app, taskType, promptTaskType, metadata, i
     : null;
   // Terminal park — parkPerpetual zeroes the dispatch budget in the same write, so
   // the next drain window starts fresh instead of capping early on this one's spend.
-  await taskSchedule.parkPerpetual(taskType, app.id, { reason: detection.reason, actionableCount: detection.count, counts });
+  await taskSchedule.parkPerpetual(taskType, app.id, { reason: detection.reason, actionableCount: detection.count, counts, signature: null });
   emitLog('info', `Perpetual ${taskType} parked for ${app.name}: ${detection.reason}`, { appId: app.id });
   return { skip: true };
 }
@@ -2954,7 +3025,11 @@ function applyProviderModelPins(metadata, interval, appPin, hookOverride) {
   applyOneProviderPin(metadata, hookOverride);
 }
 
-export async function generateManagedAppImprovementTaskForType(taskType, app, state, { skipPreconditions = false, ignoreTaskId = null } = {}) {
+export async function generateManagedAppImprovementTaskForType(taskType, app, state, {
+  skipPreconditions = false,
+  ignoreTaskId = null,
+  deferPerpetualDispatch = false
+} = {}) {
   const { updateAppActivity } = await import('./appActivity.js');
   const taskSchedule = await import('./taskSchedule.js');
   const { getTaskPrompt, getStagePrompt } = await import('./taskPromptService.js');
@@ -2996,7 +3071,7 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   // while the completing task is still `in_progress` on disk — a hook that
   // counts in-flight tasks against a budget must not count the run that just
   // finished and already recorded itself (#3179).
-  const inputHook = await resolveTaskInputHook(app, taskType, taskSchedule, { ignoreTaskId });
+      const inputHook = await resolveTaskInputHook(app, taskType, taskSchedule, { ignoreTaskId });
   if (inputHook.skip) return null;
   const { hookPrompt, hookOverride, hookMetadata } = inputHook;
 
@@ -3166,14 +3241,6 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
     }
     metadata[key] = value;
   }
-  // Every gate has now passed and a task is certain, so the perpetual drain can
-  // finally be charged for this hop (and its park cleared). Sits beside
-  // `updateAppActivity` for the same reason that call does: both are "a task was
-  // really produced" side effects, and every `return null` above must skip them.
-  // The reconcile drains spend theirs inside their own block, which no later gate
-  // can skip (their types are outside PLAN_PICK_TASK_TYPES / pr-watcher /
-  // reference-watch), so they are already charged only on real dispatches.
-  if (perpetualGate.spendDispatch) await taskSchedule.recordPerpetualDispatch(taskType, app.id, null);
   await updateAppActivity(app.id, { lastImprovementType: taskType });
   emitLog('info', `Generating improvement task for ${app.name}: ${taskType}`, { appId: app.id, analysisType: taskType });
 
@@ -3187,6 +3254,21 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
     taskType: 'internal',
     ...approval
   };
+
+  // Most callers return the task to a spawn engine, so keep this side effect
+  // deferred until that engine admits the task. Direct callers retain the old
+  // immediate behavior; queue/on-demand/idle paths opt into the handoff below.
+  if (perpetualGate.spendDispatch) {
+    if (deferPerpetualDispatch) {
+      deferredPerpetualSignatures.set(task, {
+        taskType,
+        appId: app.id,
+        signature: perpetualGate.signature ?? null
+      });
+    } else {
+      await taskSchedule.recordPerpetualDispatch(taskType, app.id, perpetualGate.signature ?? null);
+    }
+  }
 
   return task;
 }

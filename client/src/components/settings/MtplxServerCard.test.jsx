@@ -7,6 +7,7 @@ const renderCard = async (status, props = {}) => {
   const handlers = {
     onRefresh: vi.fn(),
     onSaveLaunch: vi.fn(),
+    onStart: vi.fn(),
     onStop: vi.fn(),
     onInstall: vi.fn(),
     // The checkpoint manager loads upstream's default listing on mount.
@@ -26,9 +27,8 @@ const renderCard = async (status, props = {}) => {
 };
 
 describe('MtplxServerCard', () => {
-  // MTPLX has no Start button: the first PortOS request routed to it starts it.
-  // What this card saves is the launch line that on-demand start replays, so the
-  // user's checkpoint choice survives a stop/start cycle they never see.
+  // The card saves the launch line used by both explicit and on-demand starts,
+  // so the user's checkpoint choice survives a stop/start cycle they never see.
   it('saves the cached checkpoint and port the user picked', async () => {
     const handlers = await renderCard({
       installed: true,
@@ -145,10 +145,13 @@ describe('MtplxServerCard', () => {
     expect(handlers.onSaveLaunch).toHaveBeenCalled();
   });
 
-  it('says MTPLX starts on demand, so the missing Start button reads as intent', async () => {
-    await renderCard({ installed: true, running: false, supported: true, cachedModels: ['Example/Qwen-MTP'] });
+  it('says MTPLX starts on demand while offering an explicit Start button', async () => {
+    const handlers = await renderCard({ installed: true, running: false, supported: true, cachedModels: ['Example/Qwen-MTP', 'Example/Other-MTP'] });
     expect(screen.getByText(/starts on demand/i)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /^Start/ })).toBeNull();
+    fireEvent.change(screen.getByLabelText('Checkpoint'), { target: { value: 'Example/Other-MTP' } });
+    fireEvent.change(screen.getByLabelText('Port'), { target: { value: '8010' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Start MTPLX/ }));
+    expect(handlers.onStart).toHaveBeenCalledWith({ model: 'Example/Other-MTP', port: 8010 });
   });
 
   it('will not offer to stop a server started outside PortOS', async () => {

@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useLocation, useNavigate } from 'react-router';
 import { Brain, Cpu, Package, History, HeartPulse, Search, Loader2, Navigation, Play, LayoutGrid, BookMarked } from 'lucide-react';
 import { useCmdKSearch } from '../hooks/useCmdKSearch';
+import useFocusTrap from '../hooks/useFocusTrap.js';
 import { useInstanceFeatures } from '../hooks/useInstanceFeatures.js';
 import { useScrollLock } from '../hooks/useScrollLock';
 import { search, getPaletteManifest, runPaletteAction, getDashboardLayouts, setActiveDashboardLayout, listCatalogIngredients } from '../services/api';
@@ -68,6 +69,7 @@ export default function CmdKSearch() {
   const navigate = useNavigate();
   const location = useLocation();
   const inputRef = useRef(null);
+  const modalRef = useRef(null);
 
   const [query, setQuery] = useState('');
   const [manifest, setManifest] = useState(null);
@@ -80,10 +82,7 @@ export default function CmdKSearch() {
   const [recentPaths, setRecentPaths] = useState([]);
   const resultRefs = useRef([]);
 
-  useEffect(() => {
-    if (open) inputRef.current?.focus();
-  }, [open]);
-
+  useFocusTrap(open, modalRef, { initialFocusRef: inputRef });
   useScrollLock(open);
 
   // Layout records every route visit in the shared sidebar working set. Refresh
@@ -378,7 +377,13 @@ export default function CmdKSearch() {
         aria-hidden="true"
       />
 
-      <div className="relative w-full max-w-3xl mx-4 bg-port-card rounded-xl border border-port-border shadow-2xl overflow-hidden">
+      <div
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command palette"
+        className="relative w-full max-w-3xl mx-4 bg-port-card rounded-xl border border-port-border shadow-2xl overflow-hidden"
+      >
         <div className="flex items-center gap-3 px-4 py-4 border-b border-port-border">
           <Search size={18} className="text-gray-400 shrink-0" />
           <input

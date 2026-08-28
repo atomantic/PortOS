@@ -6,9 +6,22 @@
  * rules without depending on module-level process state.
  */
 
+import { createHash } from 'crypto';
 import { PERSISTENT_MIND_ID } from './persistentMindTrajectory.js';
+import { MAX_SCREENSHOT_BYTES } from './uploadLimits.js';
+import { sanitizeFilename } from './mimeTypes.js';
+import { isSafeFilename } from './pathSafety.js';
 
-export const PERSISTENT_MIND_SCHEMA_VERSION = 2;
+export const PERSISTENT_MIND_SCHEMA_VERSION = 4;
+
+export const PERSISTENT_MIND_IMAGE_EXTENSIONS = Object.freeze(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
+export const PERSISTENT_MIND_IMAGE_MIME_TYPES = Object.freeze({
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+});
 
 export const PERSISTENT_MIND_STATUSES = [
   'disabled',
@@ -22,12 +35,21 @@ export const PERSISTENT_MIND_STATUSES = [
 ];
 
 export const PERSISTENT_MIND_WAKE_KINDS = ['message', 'self'];
+export const PERSISTENT_MIND_SELF_WAKE_SCHEDULE_KINDS = ['quiet', 'requested'];
 
 export const PERSISTENT_MIND_LIMITS = Object.freeze({
   MAX_QUEUED_MESSAGES: 100,
   MAX_RECENT_MESSAGE_IDS: 200,
+  MAX_MESSAGE_IMAGES: 8,
   MAX_MESSAGE_CHARS: 8_000,
   MAX_REASON_CHARS: 500,
+  MAX_ATTACHMENT_ID_CHARS: 128,
+  MAX_ATTACHMENT_FILENAME_CHARS: 255,
+  MAX_ATTACHMENT_NAME_CHARS: 200,
+  MAX_PENDING_ATTACHMENTS: 800,
+  MAX_ATTACHMENT_CLEANUP_PER_PASS: 50,
+  MAX_ATTACHMENT_BYTES: MAX_SCREENSHOT_BYTES,
+  PENDING_ATTACHMENT_TTL_MS: 24 * 60 * 60 * 1000,
   BACKOFF_BASE_MS: 5_000,
   BACKOFF_MAX_MS: 15 * 60_000,
   WATCHDOG_STALE_MS: 5 * 60_000,
@@ -50,13 +72,152 @@ const asCount = (value) => (
   Number.isSafeInteger(value) && value >= 0 ? value : 0
 );
 
+const asFingerprint = (value) => (
+  typeof value === 'string' && /^[a-f0-9]{64}$/.test(value) ? value : null
+);
+
+const asAttachmentId = (value) => {
+  if (typeof value !== 'string') return null;
+  const id = value.trim();
+  return id.length <= PERSISTENT_MIND_LIMITS.MAX_ATTACHMENT_ID_CHARS
+    && /^[A-Za-z0-9_-]+$/.test(id) ? id : null;
+};
+
+const asAttachmentFilename = (value) => {
+  if (typeof value !== 'string') return null;
+  const filename = value.trim();
+  return filename.length <= PERSISTENT_MIND_LIMITS.MAX_ATTACHMENT_FILENAME_CHARS
+    && isSafeFilename(filename, PERSISTENT_MIND_IMAGE_EXTENSIONS)
+    && /^[A-Za-z0-9][A-Za-z0-9._-]*\.(?:png|jpg|jpeg|gif|webp)$/i.test(filename)
+    ? filename
+    : null;
+};
+
+const asAttachmentMimeType = (value) => (
+  typeof value === 'string' && Object.values(PERSISTENT_MIND_IMAGE_MIME_TYPES).includes(value)
+    ? value
+    : null
+);
+
+const asAttachmentSize = (value) => (
+  Number.isSafeInteger(value) && value > 0 && value <= PERSISTENT_MIND_LIMITS.MAX_ATTACHMENT_BYTES
+    ? value
+    : null
+);
+
+const attachmentPath = (filename) => {
+  const safeFilename = asAttachmentFilename(filename);
+  return safeFilename ? `/api/screenshots/${encodeURIComponent(safeFilename)}` : null;
+};
+
+/** True when a value is a safe server-issued Mind attachment id. */
+export function isPersistentMindAttachmentId(value) {
+  return asAttachmentId(value) !== null;
+}
+
+/** Convert a stored screenshot filename into the only client-visible reference. */
+export function persistentMindAttachmentPath(filename) {
+  return attachmentPath(filename);
+}
+
+/** Normalize the bounded, machine-local pending attachment record. */
+export function normalizePersistentMindAttachment(value) {
+  const attachmentId = asAttachmentId(value?.attachmentId);
+  const filename = asAttachmentFilename(value?.filename);
+  const originalName = typeof value?.originalName === 'string'
+    ? sanitizeFilename(value.originalName).slice(0, PERSISTENT_MIND_LIMITS.MAX_ATTACHMENT_NAME_CHARS) || filename
+    : filename;
+  const mimeType = asAttachmentMimeType(value?.mimeType);
+  const size = asAttachmentSize(value?.size);
+  const uploadedAt = asIso(value?.uploadedAt || value?.createdAt);
+  const claimedBy = value?.claimedBy == null ? null : asId(value.claimedBy);
+  if (!attachmentId || !filename || !mimeType || size === null || !uploadedAt) return null;
+  if (value?.claimedBy != null && !claimedBy) return null;
+  const expiresAt = claimedBy
+    ? null
+    : asIso(value?.expiresAt)
+      || new Date(Date.parse(uploadedAt) + PERSISTENT_MIND_LIMITS.PENDING_ATTACHMENT_TTL_MS).toISOString();
+  return {
+    attachmentId,
+    filename,
+    originalName,
+    mimeType,
+    size,
+    uploadedAt,
+    expiresAt,
+    claimedBy,
+    claimedAt: asIso(value?.claimedAt),
+    claimIndex: Number.isSafeInteger(value?.claimIndex)
+      && value.claimIndex >= 0
+      && value.claimIndex < PERSISTENT_MIND_LIMITS.MAX_MESSAGE_IMAGES
+      ? value.claimIndex
+      : null,
+  };
+}
+
+/** Build the durable image reference stored on a queued or active message. */
+export function normalizePersistentMindMessageImage(value) {
+  const attachment = normalizePersistentMindAttachment(value);
+  if (!attachment) return null;
+  return {
+    attachmentId: attachment.attachmentId,
+    filename: attachment.filename,
+    path: attachmentPath(attachment.filename),
+    originalName: attachment.originalName,
+    mimeType: attachment.mimeType,
+    size: attachment.size,
+    uploadedAt: attachment.uploadedAt,
+  };
+}
+
+/** Hash the bounded message content used to validate retries after completion. */
+export function persistentMindMessageFingerprint(value) {
+  const images = Array.isArray(value?.images)
+    ? value.images.map((image) => (typeof image === 'string' ? image : image?.attachmentId))
+      .map(asAttachmentId)
+      .filter(Boolean)
+    : [];
+  return createHash('sha256')
+    .update(JSON.stringify({
+      text: asBoundedString(value?.text, PERSISTENT_MIND_LIMITS.MAX_MESSAGE_CHARS),
+      images,
+    }))
+    .digest('hex');
+}
+
+/** Build the safe upload response without exposing claim bookkeeping. */
+export function publicPersistentMindAttachment(value) {
+  const attachment = normalizePersistentMindAttachment(value);
+  if (!attachment) return null;
+  return {
+    attachmentId: attachment.attachmentId,
+    filename: attachment.filename,
+    path: attachmentPath(attachment.filename),
+    originalName: attachment.originalName,
+    mimeType: attachment.mimeType,
+    size: attachment.size,
+    uploadedAt: attachment.uploadedAt,
+    expiresAt: attachment.expiresAt,
+  };
+}
+
 const sanitizeMessage = (value) => {
   const id = asId(value?.id);
   const text = asBoundedString(value?.text, PERSISTENT_MIND_LIMITS.MAX_MESSAGE_CHARS);
-  if (!id || !text) return null;
+  const images = [];
+  const seenImageIds = new Set();
+  for (const candidate of Array.isArray(value?.images) ? value.images : []) {
+    const image = normalizePersistentMindMessageImage(candidate);
+    if (!image || seenImageIds.has(image.attachmentId)) continue;
+    seenImageIds.add(image.attachmentId);
+    images.push(image);
+    if (images.length >= PERSISTENT_MIND_LIMITS.MAX_MESSAGE_IMAGES) break;
+  }
+  if (!id || (!text && images.length === 0)) return null;
   return {
     id,
     text,
+    ...(images.length > 0 ? { images } : {}),
     createdAt: asIso(value?.createdAt) || new Date(0).toISOString(),
   };
 };
@@ -69,6 +230,9 @@ const sanitizeSelfWake = (value) => {
   return {
     id,
     kind: 'self',
+    scheduleKind: PERSISTENT_MIND_SELF_WAKE_SCHEDULE_KINDS.includes(value?.scheduleKind)
+      ? value.scheduleKind
+      : 'requested',
     reason,
     sourceTurnId,
     createdAt: asIso(value?.createdAt) || new Date(0).toISOString(),
@@ -108,9 +272,11 @@ export function createDefaultPersistentMindState() {
     status: 'disabled',
     pauseReason: null,
     queuedMessages: [],
+    pendingAttachments: [],
     selfWake: null,
     activeTurn: null,
     recentMessageIds: [],
+    recentMessageFingerprints: [],
     lastCompletedTurnId: null,
     lastCompletedAt: null,
     nextEligibleWakeAt: null,
@@ -137,6 +303,24 @@ export function normalizePersistentMindState(raw) {
     const id = asId(candidate);
     if (!id || recentMessageIds.includes(id)) continue;
     recentMessageIds.push(id);
+  }
+  const recentMessageFingerprints = [];
+  const seenFingerprintIds = new Set();
+  for (const candidate of Array.isArray(source.recentMessageFingerprints) ? source.recentMessageFingerprints : []) {
+    const id = asId(candidate?.id);
+    const fingerprint = asFingerprint(candidate?.fingerprint);
+    if (!id || !fingerprint || seenFingerprintIds.has(id)) continue;
+    seenFingerprintIds.add(id);
+    recentMessageFingerprints.push({ id, fingerprint });
+  }
+  const pendingAttachments = [];
+  const seenAttachmentIds = new Set();
+  for (const candidate of Array.isArray(source.pendingAttachments) ? source.pendingAttachments : []) {
+    const attachment = normalizePersistentMindAttachment(candidate);
+    if (!attachment || seenAttachmentIds.has(attachment.attachmentId)) continue;
+    seenAttachmentIds.add(attachment.attachmentId);
+    pendingAttachments.push(attachment);
+    if (pendingAttachments.length >= PERSISTENT_MIND_LIMITS.MAX_PENDING_ATTACHMENTS) break;
   }
 
   const enabled = source.enabled === true;
@@ -171,9 +355,11 @@ export function normalizePersistentMindState(raw) {
     status,
     pauseReason: asBoundedString(source.pauseReason, PERSISTENT_MIND_LIMITS.MAX_REASON_CHARS) || null,
     queuedMessages,
+    pendingAttachments,
     selfWake,
     activeTurn,
     recentMessageIds: recentMessageIds.slice(-PERSISTENT_MIND_LIMITS.MAX_RECENT_MESSAGE_IDS),
+    recentMessageFingerprints: recentMessageFingerprints.slice(-PERSISTENT_MIND_LIMITS.MAX_RECENT_MESSAGE_IDS),
     lastCompletedTurnId: asId(source.lastCompletedTurnId) || null,
     lastCompletedAt: asIso(source.lastCompletedAt),
     nextEligibleWakeAt: asIso(source.nextEligibleWakeAt),
@@ -219,6 +405,42 @@ export function requeuePersistentMindWake(raw, wake) {
       : { ...state, queuedMessages: [sanitized.message, ...state.queuedMessages] };
   }
   return { ...state, selfWake: sanitized };
+}
+
+/**
+ * Report whether a source transition can safely cross a reader that predates
+ * image-bearing Persistent Mind messages. Counts only durable queued/active
+ * work; completed historical assets do not make rollback unsafe.
+ */
+export function persistentMindImageWorkGuard(raw) {
+  const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+  const hasValidImages = (value) => value.images === undefined || Array.isArray(value.images);
+  const source = raw == null ? {} : raw;
+  const queuedMessages = source?.queuedMessages;
+  const activeTurn = source?.activeTurn;
+  const activeMessage = activeTurn?.wake?.kind === 'message' ? activeTurn.wake.message : null;
+  const trusted = isRecord(source)
+    && (queuedMessages === undefined || (
+      Array.isArray(queuedMessages)
+      && queuedMessages.every((message) => isRecord(message) && hasValidImages(message))
+    ))
+    && (activeTurn == null || isRecord(activeTurn))
+    && (activeMessage == null || (isRecord(activeMessage) && hasValidImages(activeMessage)));
+  if (!trusted) {
+    return { safe: false, trusted: false, queuedImageMessages: 0, activeImageMessage: false };
+  }
+  const queuedImageMessages = (Array.isArray(queuedMessages) ? queuedMessages : [])
+    .filter((message) => Array.isArray(message?.images) && message.images.length > 0)
+    .length;
+  const activeImageMessage = Boolean(
+    activeMessage && Array.isArray(activeMessage.images) && activeMessage.images.length > 0,
+  );
+  return {
+    safe: queuedImageMessages === 0 && !activeImageMessage,
+    trusted: true,
+    queuedImageMessages,
+    activeImageMessage,
+  };
 }
 
 export function persistentMindTurnIsStale(raw, now = Date.now(), staleMs = PERSISTENT_MIND_LIMITS.WATCHDOG_STALE_MS) {

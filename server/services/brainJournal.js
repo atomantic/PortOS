@@ -25,6 +25,7 @@
 import { join } from 'path';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { replaceMarkedSection } from '../lib/markedSection.js';
 import * as brainStorage from './brainStorage.js';
@@ -51,6 +52,8 @@ const DEFAULT_SETTINGS = {
   autoSync: true,
 };
 
+const queueSettingsWrite = createFileWriteQueue();
+
 // ─── Settings ──────────────────────────────────────────────────────────────
 
 export async function getSettings() {
@@ -60,10 +63,12 @@ export async function getSettings() {
 }
 
 export async function updateSettings(partial) {
-  const current = await getSettings();
-  const next = { ...current, ...partial };
-  await atomicWrite(SETTINGS_FILE, next);
-  return next;
+  return queueSettingsWrite(async () => {
+    const current = await getSettings();
+    const next = { ...current, ...partial };
+    await atomicWrite(SETTINGS_FILE, next);
+    return next;
+  });
 }
 
 // ─── Store ─────────────────────────────────────────────────────────────────
@@ -120,6 +125,27 @@ async function saveObsidianLocation(date, { obsidianPath, obsidianVaultId }) {
   obsidianLocationsCache = map;
   obsidianLocationsCacheTime = Date.now();
   await atomicWrite(OBSIDIAN_LOCATIONS_FILE, map);
+}
+
+// Apply a bulk re-sync's changed locations in one sidecar write. Re-check each
+// record under the same mutex as individual writes so a day deleted while the
+// foreground re-sync was running cannot be resurrected in the local map.
+async function saveObsidianLocations(locations) {
+  if (!locations.size) return;
+  return storeMutex(async () => {
+    const map = { ...(await loadObsidianLocations()) };
+    let changed = false;
+    for (const [date, location] of locations) {
+      if (!(await brainStorage.getById('journals', date))) continue;
+      if (map[date]?.obsidianPath === location.obsidianPath && map[date]?.obsidianVaultId === location.obsidianVaultId) continue;
+      map[date] = location;
+      changed = true;
+    }
+    if (!changed) return;
+    obsidianLocationsCache = map;
+    obsidianLocationsCacheTime = Date.now();
+    await atomicWrite(OBSIDIAN_LOCATIONS_FILE, map);
+  });
 }
 
 // ── Synced journal entry store ───────────────────────────────────────────────
@@ -437,7 +463,7 @@ function buildObsidianNotePath(settings, date) {
  * all entries now" action so users who turn off auto-sync can still trigger
  * a one-shot backfill.
  */
-export async function syncToObsidian(entry, { force = false } = {}) {
+export async function syncToObsidian(entry, { force = false, locationUpdates = null } = {}) {
   const settings = await getSettings();
   if (!settings.obsidianVaultId) return null;
   if (!force && !settings.autoSync) return null;
@@ -455,6 +481,10 @@ export async function syncToObsidian(entry, { force = false } = {}) {
   // a vault swap in Settings both need to update the store so a later
   // deleteJournal() unlinks the right file in the right vault.
   if (entry.obsidianPath !== notePath || entry.obsidianVaultId !== vaultId) {
+    if (locationUpdates) {
+      locationUpdates.set(entry.date, { obsidianPath: notePath, obsidianVaultId: vaultId });
+      return notePath;
+    }
     await persistObsidianLocation(entry.date, notePath, vaultId);
   }
   return notePath;
@@ -516,11 +546,12 @@ export async function resyncAllToObsidian() {
   let skipped = 0;
   let consecutiveSkips = 0;
   let stoppedEarly = false;
+  const locationUpdates = new Map();
   for (const entry of records) {
     // force:true so this bulk resync still writes even when the user has
     // turned off the per-write autoSync — they explicitly clicked "Re-sync
     // all entries now", which is the manual-sync escape hatch.
-    const path = await syncToObsidian(entry, { force: true }).catch(() => null);
+    const path = await syncToObsidian(entry, { force: true, locationUpdates }).catch(() => null);
     if (path) {
       synced += 1;
       consecutiveSkips = 0;
@@ -542,5 +573,6 @@ export async function resyncAllToObsidian() {
       break;
     }
   }
+  await saveObsidianLocations(locationUpdates);
   return { synced, skipped, stoppedEarly };
 }

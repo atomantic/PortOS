@@ -255,8 +255,8 @@ describe('findPullRequestForBranch (#3358)', () => {
   };
 
   it('reports `found` with the PR number', async () => {
-    spawnMock.mockImplementation(() => ghChild({ stdout: '[{"number":7,"url":"https://example.com/pr/7","state":"OPEN"}]' }));
-    await expect(findPullRequestForBranch('claim/issue-1')).resolves.toMatchObject({ status: 'found', number: 7 });
+    spawnMock.mockImplementation(() => ghChild({ stdout: '[{"number":7,"url":"https://example.com/pr/7","body":"Closes #1","state":"OPEN"}]' }));
+    await expect(findPullRequestForBranch('claim/issue-1')).resolves.toMatchObject({ status: 'found', number: 7, body: 'Closes #1' });
   });
 
   it('reports `none` for an ANSWERED empty list', async () => {

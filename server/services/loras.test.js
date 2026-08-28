@@ -23,6 +23,7 @@ let tmpRoot;
 let tmpLoras;
 let lorasService;
 let civitaiLib;
+let atomicWriteHook;
 
 beforeEach(async () => {
   tmpRoot = mkdtempSync(join(tmpdir(), 'portos-loras-test-'));
@@ -34,6 +35,9 @@ beforeEach(async () => {
     return {
       ...actual,
       PATHS: { ...actual.PATHS, loras: tmpLoras },
+      atomicWrite: (...args) => atomicWriteHook
+        ? atomicWriteHook(actual.atomicWrite, ...args)
+        : actual.atomicWrite(...args),
     };
   });
   // Stub settings so resolveCivitaiKey doesn't read the real data/settings.json.
@@ -45,6 +49,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  atomicWriteHook = null;
   vi.doUnmock('../lib/fileUtils.js');
   vi.doUnmock('./settings.js');
   rmSync(tmpRoot, { recursive: true, force: true });
@@ -84,6 +89,77 @@ describe('listLoras', () => {
     expect(legacy.runnerFamily).toBe(null);
     expect(legacy.loraCompatKey).toBe(null);
     expect(legacy.recommendedScale).toBe(1.0);
+  });
+
+  it('reuses cached metadata while the LoRA file mtime is unchanged', async () => {
+    const fs = await import('fs/promises');
+    await fs.mkdir(tmpLoras, { recursive: true });
+    await fs.writeFile(join(tmpLoras, 'cached.safetensors'), 'weights');
+    await fs.writeFile(join(tmpLoras, 'cached.safetensors.metadata.json'), JSON.stringify({
+      filename: 'cached.safetensors', name: 'Cached', keyLayout: 'comfyui',
+    }));
+
+    const [first] = await lorasService.listLoras();
+    const [second] = await lorasService.listLoras();
+
+    expect(second).toBe(first);
+  });
+
+  it('invalidates cached metadata after a sidecar patch', async () => {
+    const fs = await import('fs/promises');
+    await fs.mkdir(tmpLoras, { recursive: true });
+    await fs.writeFile(join(tmpLoras, 'patched.safetensors'), 'weights');
+    await fs.writeFile(join(tmpLoras, 'patched.safetensors.metadata.json'), JSON.stringify({
+      filename: 'patched.safetensors', name: 'Before', keyLayout: 'comfyui',
+    }));
+
+    const [before] = await lorasService.listLoras();
+    await lorasService.patchLoraSidecar('patched.safetensors', { name: 'After' });
+    const [after] = await lorasService.listLoras();
+
+    expect(after).not.toBe(before);
+    expect(after.name).toBe('After');
+  });
+
+  it('refreshes cached metadata when a sidecar is replaced outside this service', async () => {
+    const fs = await import('fs/promises');
+    await fs.mkdir(tmpLoras, { recursive: true });
+    const filePath = join(tmpLoras, 'external.safetensors');
+    const sidecarPath = `${filePath}.metadata.json`;
+    await fs.writeFile(filePath, 'weights');
+    await fs.writeFile(sidecarPath, JSON.stringify({
+      filename: 'external.safetensors', name: 'Before', keyLayout: 'comfyui',
+    }));
+
+    const [before] = await lorasService.listLoras();
+    await fs.writeFile(sidecarPath, JSON.stringify({
+      filename: 'external.safetensors', name: 'After', keyLayout: 'comfyui',
+    }));
+    const future = new Date(Date.now() + 10_000);
+    await fs.utimes(sidecarPath, future, future);
+    const [after] = await lorasService.listLoras();
+
+    expect(after).not.toBe(before);
+    expect(after.name).toBe('After');
+  });
+
+  it('refreshes cached metadata when the LoRA file mtime changes', async () => {
+    const fs = await import('fs/promises');
+    await fs.mkdir(tmpLoras, { recursive: true });
+    const filePath = join(tmpLoras, 'updated.safetensors');
+    await fs.writeFile(filePath, 'weights');
+    await fs.writeFile(`${filePath}.metadata.json`, JSON.stringify({
+      filename: 'updated.safetensors', name: 'Updated', keyLayout: 'comfyui',
+    }));
+
+    const [before] = await lorasService.listLoras();
+    await fs.writeFile(filePath, 'larger-weights');
+    const future = new Date(Date.now() + 10_000);
+    await fs.utimes(filePath, future, future);
+    const [after] = await lorasService.listLoras();
+
+    expect(after).not.toBe(before);
+    expect(after.sizeBytes).toBe(Buffer.byteLength('larger-weights'));
   });
 
   it('tags a flux2 LoRA size from the Civitai baseModel without reading the header', async () => {
@@ -284,6 +360,39 @@ describe('deleteLora', () => {
     expect(existsSync(join(tmpLoras, 'lora-x.safetensors'))).toBe(false);
     expect(existsSync(join(tmpLoras, 'lora-x.safetensors.metadata.json'))).toBe(false);
   });
+  it('keeps the model when sidecar removal fails', async () => {
+    const fs = await import('fs/promises');
+    await fs.mkdir(tmpLoras, { recursive: true });
+    const filePath = join(tmpLoras, 'cleanup-fails.safetensors');
+    const sidecar = `${filePath}.metadata.json`;
+    await fs.writeFile(filePath, 'weights');
+    await fs.mkdir(sidecar);
+    await fs.writeFile(join(sidecar, 'locked'), 'metadata');
+
+    await expect(lorasService.deleteLora('cleanup-fails.safetensors')).rejects.toThrow();
+    expect(existsSync(filePath)).toBe(true);
+    expect(existsSync(sidecar)).toBe(true);
+  });
+  it('invalidates cached metadata before the same filename is reused', async () => {
+    const fs = await import('fs/promises');
+    await fs.mkdir(tmpLoras, { recursive: true });
+    const filePath = join(tmpLoras, 'reused.safetensors');
+    await fs.writeFile(filePath, 'old');
+    await fs.writeFile(`${filePath}.metadata.json`, JSON.stringify({
+      filename: 'reused.safetensors', name: 'Old', keyLayout: 'comfyui',
+    }));
+    const oldStat = await fs.stat(filePath);
+    expect((await lorasService.listLoras())[0].name).toBe('Old');
+
+    await lorasService.deleteLora('reused.safetensors');
+    await fs.writeFile(filePath, 'new');
+    await fs.utimes(filePath, oldStat.atime, oldStat.mtime);
+    await fs.writeFile(`${filePath}.metadata.json`, JSON.stringify({
+      filename: 'reused.safetensors', name: 'New', keyLayout: 'comfyui',
+    }));
+
+    expect((await lorasService.listLoras())[0].name).toBe('New');
+  });
   it('rejects path traversal', async () => {
     await expect(lorasService.deleteLora('../escape.safetensors')).rejects.toThrow(/Invalid LoRA filename/);
     await expect(lorasService.deleteLora('foo/bar.safetensors')).rejects.toThrow(/Invalid LoRA filename/);
@@ -333,6 +442,37 @@ describe('patchLoraSidecar', () => {
     expect(patched.recommendedScale).toBe(0.5);
     expect(patched.name).toBe('Custom');
     expect(JSON.parse(readFileSync(join(tmpLoras, 'lora-y.safetensors.metadata.json'), 'utf-8')).name).toBe('Custom');
+  });
+  it('does not recreate a sidecar when deletion wins the write queue', async () => {
+    const fs = await import('fs/promises');
+    await fs.mkdir(tmpLoras, { recursive: true });
+    const filePath = join(tmpLoras, 'delete-race.safetensors');
+    const sidecar = `${filePath}.metadata.json`;
+    await fs.writeFile(filePath, 'weights');
+
+    let releaseWrite;
+    let markWriteStarted;
+    const writeStarted = new Promise((resolve) => { markWriteStarted = resolve; });
+    const writeReleased = new Promise((resolve) => { releaseWrite = resolve; });
+    atomicWriteHook = async (atomicWrite, ...args) => {
+      markWriteStarted();
+      await writeReleased;
+      return atomicWrite(...args);
+    };
+
+    const firstPatch = lorasService.patchLoraSidecar('delete-race.safetensors', { name: 'Before delete' });
+    await writeStarted;
+    const deletion = lorasService.deleteLora('delete-race.safetensors');
+    const latePatch = lorasService.patchLoraSidecar('delete-race.safetensors', { name: 'After delete' });
+
+    releaseWrite();
+    await firstPatch;
+    await deletion;
+    const err = await latePatch.catch((error) => error);
+    expect(err.status).toBe(404);
+    expect(err.code).toBe('NOT_FOUND');
+    expect(existsSync(filePath)).toBe(false);
+    expect(existsSync(sidecar)).toBe(false);
   });
 });
 

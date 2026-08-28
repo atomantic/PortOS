@@ -59,6 +59,7 @@ vi.mock('./github.js', async (importActual) => ({
 import {
   selectDryRunAutoApproved,
   exceedsMaxSpawns,
+  shouldParkUnchangedPerpetualWork,
   resolveIssueAuthorFilterBlock,
   resolveIssueExcludeLabelsBlock,
   resolveSwarmBlock,
@@ -89,6 +90,28 @@ const COS_SRC = readFileSync(join(__dirname, 'cos.js'), 'utf-8');
 
 const task = (id, metadata = {}) => ({ id, metadata });
 const noCooldown = () => Promise.resolve(false);
+
+describe('claim drain convergence', () => {
+  it('parks a successful no-progress run when the actionable set is unchanged', () => {
+    const detection = { actionable: true, signature: '[101,202]' };
+    expect(shouldParkUnchangedPerpetualWork(detection, '[101,202]', 2)).toBe(true);
+    expect(shouldParkUnchangedPerpetualWork(detection, '[101,202]', 1)).toBe(false);
+  });
+
+  it('continues when the candidate set changed or has no progress identity', () => {
+    expect(shouldParkUnchangedPerpetualWork({ actionable: true, signature: '[202]' }, '[101,202]', 2)).toBe(false);
+    expect(shouldParkUnchangedPerpetualWork({ actionable: true }, '[101,202]', 2)).toBe(false);
+    expect(shouldParkUnchangedPerpetualWork({ actionable: false, signature: '[]' }, '[]', 2)).toBe(false);
+  });
+
+  it('does not confuse tracker-specific signatures', () => {
+    expect(shouldParkUnchangedPerpetualWork(
+      { actionable: true, signature: '{"taskType":"claim-issue-gitlab","candidates":"[1]"}' },
+      '{"taskType":"claim-issue","candidates":"[1]"}',
+      2
+    )).toBe(false);
+  });
+});
 
 describe('claim reviewer resolution', () => {
   // The claim prompts run their local reviewers BEFORE the PR/MR is opened, so
@@ -1422,7 +1445,7 @@ describe('ignoreTaskId reaches the in-flight-counting gates (#3179)', () => {
   };
 
   it('accepts ignoreTaskId and forwards it to the input hook and the perpetual gate', () => {
-    expect(GEN_SRC).toMatch(/generateManagedAppImprovementTaskForType\(taskType, app, state, \{ skipPreconditions = false, ignoreTaskId = null \} = \{\}\)/);
+    expect(GEN_SRC).toMatch(/generateManagedAppImprovementTaskForType\(taskType, app, state, \{\s*skipPreconditions = false,\s*ignoreTaskId = null/);
     expect(body()).toContain('resolveTaskInputHook(app, taskType, taskSchedule, { ignoreTaskId })');
     expect(body()).toContain('applyPerpetualWorkGate(app, taskType, promptTaskType, metadata, interval, taskSchedule, { ignoreTaskId })');
   });
@@ -1430,7 +1453,7 @@ describe('ignoreTaskId reaches the in-flight-counting gates (#3179)', () => {
   it('queueEligibleImprovementTasks passes its ignoreTaskId down to the generator', () => {
     // It already forwards the same id to addTask and buildImprovementDedupSets;
     // the generator was the one path that dropped it.
-    expect(GEN_SRC).toContain('generateManagedAppImprovementTaskForType(nextType, app, state, { ignoreTaskId })');
+    expect(GEN_SRC).toMatch(/generateManagedAppImprovementTaskForType\(nextType, app, state, \{[\s\S]*ignoreTaskId[\s\S]*deferPerpetualDispatch: true[\s\S]*\}\)/);
   });
 
   it('the perpetual gate hands ignoreTaskId to the work detector', () => {
@@ -1465,7 +1488,7 @@ describe('ignoreTaskId reaches BOTH completion-continuation generators (#3179)',
     expect(GEN_SRC).toMatch(/export async function generateIdleReviewTask\(state, \{ ignoreTaskId = null \} = \{\}\)/);
     expect(GEN_SRC).toContain('generateManagedAppImprovementTask(nextApp, state, { ignoreTaskId })');
     expect(GEN_SRC).toMatch(/async function generateManagedAppImprovementTask\(app, state, \{ ignoreTaskId = null \} = \{\}\)/);
-    expect(GEN_SRC).toContain('generateManagedAppImprovementTaskForType(nextType, app, state, { ignoreTaskId })');
+    expect(GEN_SRC).toMatch(/generateManagedAppImprovementTaskForType\(nextType, app, state, \{[\s\S]*ignoreTaskId[\s\S]*deferPerpetualDispatch: true[\s\S]*\}\)/);
   });
 
   it('cos.js passes the completing task id into the dequeue that follows the refill', () => {
@@ -1623,7 +1646,7 @@ describe('the drain cap has exactly one implementation, at the choke point', () 
 
     const genStart = GEN_SRC.indexOf('export async function generateManagedAppImprovementTaskForType');
     const body = GEN_SRC.slice(genStart, GEN_SRC.indexOf('return task;', genStart));
-    const spendIdx = body.indexOf('if (perpetualGate.spendDispatch) await taskSchedule.recordPerpetualDispatch(taskType, app.id, null)');
+    const spendIdx = body.search(/if \(perpetualGate\.spendDispatch\) \{[\s\S]*recordPerpetualDispatch\(taskType, app\.id, perpetualGate\.signature \?\? null\)/);
     expect(spendIdx, 'the choke point must spend the deferred dispatch').toBeGreaterThan(-1);
     // Every `return null` gate must precede it — planId is the last one.
     expect(body.indexOf('planMeta.skipReason')).toBeLessThan(spendIdx);

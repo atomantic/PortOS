@@ -9,15 +9,15 @@ export default function OverviewTab({ agent, onStart, onPause, onResume, onStop,
     <div className="space-y-6">
       {/* Status + Actions */}
       <div className="bg-port-card border border-port-border rounded-xl p-5">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+          <div className="flex flex-wrap items-center gap-3">
             <span className={`inline-flex items-center gap-1 text-sm px-3 py-1 rounded-full font-medium ${statusColor} ${statusBg}`}>
               {agent.status}
             </span>
             <span className={`text-sm ${PRIORITY_COLORS[agent.priority]}`}>{agent.priority} priority</span>
             <span className="text-sm text-gray-500">{AUTONOMY_LABELS[agent.autonomyLevel] || agent.autonomyLevel}</span>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {agent.status === 'draft' && (
               <button onClick={() => onStart(agent.id)} className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-port-success bg-port-success/10 hover:bg-port-success/20 rounded-lg transition-colors">
                 <Play size={14} /> Activate

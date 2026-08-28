@@ -54,7 +54,7 @@ function barTone(pct, warn, critical) {
 // The downloaded-model inventory used to be a fourth tab here. It answered the
 // same question Models → Status answers, in a different section, so it folded
 // into that page (#4728); /system-resources/models redirects there.
-const RESOURCE_TABS = [
+export const RESOURCE_TABS = [
   { id: 'overview', label: 'Overview', icon: Activity },
   { id: 'storage', label: 'Storage', icon: HardDrive },
   { id: 'queues', label: 'Queues', icon: ListOrdered },

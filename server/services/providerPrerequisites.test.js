@@ -1,16 +1,27 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { basename, dirname } from 'path';
 
 // Only the probe is stubbed — `getProviderRuntime` stays real so the "is this
 // command even in the runtime table?" branch is exercised against the shipped
 // table rather than a fixture that could drift from it.
 vi.mock('./providerRuntimeInstaller.js', async (importOriginal) => ({
   ...(await importOriginal()),
+  getProviderRuntimeStatus: vi.fn(),
   getProviderRuntimeStatuses: vi.fn(),
   peekProviderRuntimeStatuses: vi.fn(),
 }));
 
-const { getProviderRuntimeStatuses, peekProviderRuntimeStatuses } = await import('./providerRuntimeInstaller.js');
-const { getProviderPrerequisiteMap, prerequisitesMetForRouting, __resetPrerequisiteRefresh } =
+const {
+  getProviderRuntimeStatus,
+  getProviderRuntimeStatuses,
+  peekProviderRuntimeStatuses,
+} = await import('./providerRuntimeInstaller.js');
+const {
+  getProviderPrerequisiteMap,
+  getProviderPrerequisiteReadinessMap,
+  prerequisitesMetForRouting,
+  __resetPrerequisiteRefresh,
+} =
   await import('./providerPrerequisites.js');
 
 const CODEX_ABSENT = { id: 'codex', label: 'Codex CLI', installed: false };
@@ -22,6 +33,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   __resetPrerequisiteRefresh();
   peekProviderRuntimeStatuses.mockReturnValue({});
+  getProviderRuntimeStatus.mockResolvedValue(null);
   getProviderRuntimeStatuses.mockResolvedValue({});
   vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -79,6 +91,126 @@ describe('getProviderPrerequisiteMap', () => {
     expect(map[openWrapper.id].missing).toEqual([
       { code: 'inheritedApiKey', label: 'OpenRouter API provider has no API key' },
     ]);
+  });
+});
+
+describe('getProviderPrerequisiteReadinessMap', () => {
+  it('distinguishes ready and blocked runtime states after probing', async () => {
+    peekProviderRuntimeStatuses.mockReturnValue({
+      codex: CODEX_PRESENT,
+      claude: { id: 'claude', label: 'Claude Code CLI', installed: false },
+    });
+
+    getProviderRuntimeStatus.mockImplementation(async (id) => ({
+      codex: CODEX_PRESENT,
+      claude: { id: 'claude', label: 'Claude Code CLI', installed: false },
+      grok: { id: 'grok', label: 'Grok Build CLI', installed: true },
+    })[id]);
+
+    const map = await getProviderPrerequisiteReadinessMap([
+      codex(),
+      { id: 'claude', type: 'cli', command: 'claude' },
+      { id: 'grok', type: 'cli', command: 'grok' },
+    ]);
+
+    expect(map.codex).toEqual({ status: 'ready', reasonCodes: [] });
+    expect(map.claude).toEqual({ status: 'blocked', reasonCodes: ['runtime'] });
+    expect(map.grok).toEqual({ status: 'ready', reasonCodes: [] });
+  });
+
+  it('awaits a cold or expired runtime probe before returning readiness', async () => {
+    peekProviderRuntimeStatuses.mockReturnValue({});
+    getProviderRuntimeStatus.mockResolvedValue(CODEX_PRESENT);
+
+    await expect(getProviderPrerequisiteReadinessMap([codex()]))
+      .resolves.toMatchObject({ codex: { status: 'ready', reasonCodes: [] } });
+    expect(getProviderRuntimeStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it('probes only selectable candidates while retaining the full sibling set for credentials', async () => {
+    const wrapper = { id: 'opencode-orcarouter', type: 'cli', command: 'opencode', orcarouterBacked: true };
+    const sibling = { id: 'orcarouter', type: 'api', endpoint: 'https://api.example.com', hasApiKey: false };
+    const disabled = { id: 'grok', type: 'cli', command: 'grok', enabled: false };
+    getProviderRuntimeStatus.mockResolvedValue({ id: 'opencode', label: 'OpenCode CLI', installed: true });
+
+    const map = await getProviderPrerequisiteReadinessMap([wrapper, sibling, disabled], {
+      candidates: [wrapper],
+    });
+
+    expect(getProviderRuntimeStatus).toHaveBeenCalledTimes(1);
+    expect(getProviderRuntimeStatus).toHaveBeenCalledWith('opencode');
+    expect(map).toEqual({
+      [wrapper.id]: { status: 'blocked', reasonCodes: ['inheritedApiKey'] },
+    });
+  });
+
+  it('uses the actual Claude fallback for a blank CLI command', async () => {
+    getProviderRuntimeStatus.mockResolvedValue({ id: 'claude', label: 'Claude Code CLI', installed: true });
+
+    await expect(getProviderPrerequisiteReadinessMap([
+      { id: 'grok-cli', type: 'cli', command: '' },
+    ])).resolves.toMatchObject({ 'grok-cli': { status: 'ready', reasonCodes: [] } });
+    expect(getProviderRuntimeStatus).toHaveBeenCalledWith('claude');
+  });
+
+  it('blocks a legacy command whose surrounding whitespace would make the spawn fail', async () => {
+    await expect(getProviderPrerequisiteReadinessMap([
+      codex({ command: '  codex  ' }),
+    ])).resolves.toMatchObject({ codex: { status: 'blocked', reasonCodes: ['command'] } });
+  });
+
+  it('preserves an executable explicit-path provider outside the runtime table', async () => {
+    const provider = codex({ id: 'custom-codex', command: process.execPath });
+
+    await expect(getProviderPrerequisiteReadinessMap([provider]))
+      .resolves.toMatchObject({ 'custom-codex': { status: 'ready', reasonCodes: [] } });
+    expect(getProviderRuntimeStatuses).not.toHaveBeenCalled();
+  });
+
+  it('resolves a provider command against its configured PATH', async () => {
+    const provider = codex({
+      id: 'custom-path-codex',
+      command: basename(process.execPath),
+      envVars: { PATH: dirname(process.execPath) },
+    });
+
+    await expect(getProviderPrerequisiteReadinessMap([provider]))
+      .resolves.toMatchObject({ 'custom-path-codex': { status: 'ready', reasonCodes: [] } });
+    expect(getProviderRuntimeStatuses).not.toHaveBeenCalled();
+  });
+
+  it('defers app-relative commands in the catalog and resolves them from the selected workspace', async () => {
+    const provider = codex({ id: 'app-local', command: `./${basename(process.execPath)}` });
+
+    await expect(getProviderPrerequisiteReadinessMap([provider], {
+      deferCwdDependent: true,
+    })).resolves.toMatchObject({ 'app-local': { status: 'ready', reasonCodes: [] } });
+    await expect(getProviderPrerequisiteReadinessMap([provider], {
+      cwd: dirname(process.execPath),
+    })).resolves.toMatchObject({ 'app-local': { status: 'ready', reasonCodes: [] } });
+    await expect(getProviderPrerequisiteReadinessMap([provider], {
+      cwd: dirname(dirname(process.execPath)),
+    })).resolves.toMatchObject({ 'app-local': { status: 'blocked', reasonCodes: ['runtime'] } });
+  });
+
+  it('blocks a missing command outside the runtime table', async () => {
+    const provider = codex({ id: 'custom-cli', command: '/missing/example-provider-cli' });
+
+    await expect(getProviderPrerequisiteReadinessMap([provider]))
+      .resolves.toMatchObject({ 'custom-cli': { status: 'blocked', reasonCodes: ['runtime'] } });
+  });
+
+  it('blocks on a known inherited credential finding without exposing its value', async () => {
+    peekProviderRuntimeStatuses.mockReturnValue({
+      opencode: { id: 'opencode', label: 'OpenCode CLI', installed: true },
+    });
+    const wrapper = { id: 'opencode-orcarouter', type: 'cli', command: 'opencode', orcarouterBacked: true };
+    const sibling = { id: 'orcarouter', type: 'api', endpoint: 'https://api.example.com', hasApiKey: false };
+
+    await expect(getProviderPrerequisiteReadinessMap([wrapper, sibling]))
+      .resolves.toMatchObject({
+        [wrapper.id]: { status: 'blocked', reasonCodes: ['inheritedApiKey'] },
+      });
   });
 });
 

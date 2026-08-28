@@ -63,7 +63,7 @@ export async function processAgentCompletion(agentId, task, success, outputBuffe
     }
 
     const config = await getConfig();
-    const cooldownMs = config.appReviewCooldownMs || 3600000;
+    const cooldownMs = config.appReviewCooldownMs ?? 3600000;
 
     const issuesFound = success ? 1 : 0;
     const issuesFixed = success ? 1 : 0;

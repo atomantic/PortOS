@@ -76,7 +76,13 @@ export const WORKFLOW_STAGES = [
       'typing',
       'ui-bugs',
       'mobile-responsive',
-      'ux'
+      'ux',
+      'data-safety',
+      'simplify',
+      'api-contract',
+      'react-lifecycle',
+      'observability',
+      'copy'
     ],
     jobIds: ['job-wiki-maintenance', 'job-refresh-local-llm-catalog', 'job-refresh-cli-provider-catalogs']
   },

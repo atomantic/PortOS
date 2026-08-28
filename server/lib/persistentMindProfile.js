@@ -16,7 +16,11 @@ export const PERSISTENT_MIND_THINKING_INTERFACE = 'text';
 export const PERSISTENT_MIND_PROFILE_LIMITS = Object.freeze({
   PROVIDER_ID_MAX: 100,
   MODEL_MAX: 200,
+  WAKE_INTERVAL_MINUTES_MIN: 5,
+  WAKE_INTERVAL_MINUTES_MAX: 10_080,
 });
+
+export const DEFAULT_PERSISTENT_MIND_WAKE_INTERVAL_MINUTES = 30;
 
 export const persistentMindProfileSchema = z.object({
   schemaVersion: z.literal(PERSISTENT_MIND_PROFILE_SCHEMA_VERSION).optional(),
@@ -27,6 +31,11 @@ export const persistentMindProfileSchema = z.object({
   // empty rather than null because config is a mergeable settings object.
   effort: z.union([z.literal(''), z.enum(EFFORT_LEVELS)]).optional(),
   thinkingInterface: z.literal(PERSISTENT_MIND_THINKING_INTERFACE).optional(),
+  wakeIntervalMinutes: z.number()
+    .int()
+    .min(PERSISTENT_MIND_PROFILE_LIMITS.WAKE_INTERVAL_MINUTES_MIN)
+    .max(PERSISTENT_MIND_PROFILE_LIMITS.WAKE_INTERVAL_MINUTES_MAX)
+    .optional(),
 }).strict();
 
 export function createDefaultPersistentMindProfile() {
@@ -37,10 +46,19 @@ export function createDefaultPersistentMindProfile() {
     model: '',
     effort: '',
     thinkingInterface: PERSISTENT_MIND_THINKING_INTERFACE,
+    wakeIntervalMinutes: DEFAULT_PERSISTENT_MIND_WAKE_INTERVAL_MINUTES,
   };
 }
 
 const text = (value, max) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
+
+const wakeIntervalMinutes = (value) => (
+  Number.isInteger(value)
+    && value >= PERSISTENT_MIND_PROFILE_LIMITS.WAKE_INTERVAL_MINUTES_MIN
+    && value <= PERSISTENT_MIND_PROFILE_LIMITS.WAKE_INTERVAL_MINUTES_MAX
+    ? value
+    : DEFAULT_PERSISTENT_MIND_WAKE_INTERVAL_MINUTES
+);
 
 /** Normalize legacy or hand-edited config without turning an invalid effort into a pin. */
 export function normalizePersistentMindProfile(raw) {
@@ -56,7 +74,13 @@ export function normalizePersistentMindProfile(raw) {
     thinkingInterface: source.thinkingInterface === PERSISTENT_MIND_THINKING_INTERFACE
       ? source.thinkingInterface
       : PERSISTENT_MIND_THINKING_INTERFACE,
+    wakeIntervalMinutes: wakeIntervalMinutes(source.wakeIntervalMinutes),
   };
+}
+
+/** Resolve the user's maximum quiet period to scheduler milliseconds. */
+export function persistentMindWakeIntervalMs(raw) {
+  return normalizePersistentMindProfile(raw).wakeIntervalMinutes * 60_000;
 }
 
 /**

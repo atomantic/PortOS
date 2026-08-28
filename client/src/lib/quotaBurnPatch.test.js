@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   applyQuotaBurnPreset,
   dispatchCapInput,
+  getAvailablePresetsForJobs,
+  isPresetInJobs,
   isUnlimitedDispatchCap,
   jobFromPreset,
   mergeQuotaBurnPatch,
@@ -110,7 +112,7 @@ describe('applyQuotaBurnPreset', () => {
 describe('jobFromPreset', () => {
   it('mints a runnable job with the caller\'s id and app', () => {
     expect(jobFromPreset(preset, { id: 'job-x', appId: 'a1' })).toEqual({
-      id: 'job-x', enabled: true, label: 'UX issues', jobType: 'agent-prompt', model: null, providerId: null,
+      id: 'job-x', enabled: true, label: 'UX issues', jobType: 'agent-prompt', model: null, providerId: null, effort: null,
       // Standing work: an audit dimension is worth re-running as the code moves.
       runOnce: false,
       params: { ...preset.params, appId: 'a1' },
@@ -140,4 +142,42 @@ describe('dispatch cap helpers', () => {
     expect(dispatchCapInput(50)).toBe(50);
   });
 });
+
+describe('isPresetInJobs and getAvailablePresetsForJobs', () => {
+  const p1 = { id: 'ux-audit', label: 'UX issues', jobType: 'agent-prompt', params: { prompt: 'Audit UX.' } };
+  const p2 = { id: 'a11y-audit', label: 'A11y issues', jobType: 'agent-prompt', params: { prompt: 'Audit A11y.' } };
+  const p3 = { id: 'perf-audit', label: 'Perf issues', jobType: 'agent-prompt', params: { prompt: 'Audit Perf.' } };
+
+  it('matches a preset in jobs by prompt text', () => {
+    const jobs = [{ id: 'j1', params: { prompt: 'Audit UX.' } }];
+    expect(isPresetInJobs(p1, jobs)).toBe(true);
+    expect(isPresetInJobs(p2, jobs)).toBe(false);
+  });
+
+  it('filters presets to only those not already in jobs', () => {
+    const jobs = [{ id: 'j1', params: { prompt: 'Audit UX.' } }];
+    const available = getAvailablePresetsForJobs([p1, p2, p3], jobs);
+    expect(available).toEqual([p2, p3]);
+  });
+
+  it('returns all presets when jobs list is empty', () => {
+    expect(getAvailablePresetsForJobs([p1, p2], [])).toEqual([p1, p2]);
+  });
+
+  it('returns empty list when all presets are in jobs', () => {
+    const jobs = [
+      { id: 'j1', params: { prompt: 'Audit UX.' } },
+      { id: 'j2', params: { prompt: 'Audit A11y.' } },
+    ];
+    expect(getAvailablePresetsForJobs([p1, p2], jobs)).toEqual([]);
+  });
+
+  it('handles null/undefined gracefully', () => {
+    expect(isPresetInJobs(null, [])).toBe(false);
+    expect(getAvailablePresetsForJobs(null, null)).toEqual([]);
+  });
+});
+
 // @vitest-environment node
+
+

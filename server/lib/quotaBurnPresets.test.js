@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { QUOTA_BURN_PROMPT_PRESETS, findQuotaBurnPreset } from './quotaBurnPresets.js';
+import {
+  AUDIT_CONTRACT_HEADING,
+  QUOTA_BURN_PROMPT_PRESETS,
+  findQuotaBurnPreset,
+  upgradeStoredAuditPrompt,
+} from './quotaBurnPresets.js';
 import { QUOTA_BURN_BOUNDS, QUOTA_BURN_JOB_CATALOG, QUOTA_BURN_JOB_TYPES, normalizeQuotaBurnJob } from './quotaBurnConfig.js';
 import { quotaBurnConfigUpdateSchema } from './quotaBurnValidation.js';
 
@@ -94,12 +99,18 @@ describe('QUOTA_BURN_PROMPT_PRESETS', () => {
     }
   });
 
-  it('teaches every audit preset the independent model/effort dispatch contract', () => {
+  it('requires both dispatch axes on every issue an audit files', () => {
+    // The optional form of this guidance ("omit an axis rather than guessing")
+    // is right for producers filing from thin evidence and wrong here: an audit
+    // that traced the failure and chose the fix already knows how the work
+    // should run, and omitting the axes strands the issue with no routing —
+    // which is what shipped a whole backlog of unlabeled audit issues.
     for (const preset of QUOTA_BURN_PROMPT_PRESETS) {
       const prompt = preset.params.prompt;
+      expect(prompt).toContain('REQUIRED on every issue you file');
       expect(prompt).toContain('model:light|medium|heavy');
       expect(prompt).toContain('effort:low|medium|high|xhigh|max');
-      expect(prompt).toContain('Omit an axis rather than guessing');
+      expect(prompt).not.toContain('Omit an axis rather than guessing');
       expect(prompt).toContain('repeated `--label`');
       expect(prompt).toContain('gh label create');
       expect(prompt).toContain('Do not relabel an existing issue');
@@ -108,6 +119,84 @@ describe('QUOTA_BURN_PROMPT_PRESETS', () => {
       expect(prompt).toContain('Issue-quality gate');
       expect(prompt).toContain('current refactors that pay off now are valid');
     }
+  });
+
+  it('spends the window on research and demands a traced trigger and a decided fix', () => {
+    for (const preset of QUOTA_BURN_PROMPT_PRESETS) {
+      const prompt = preset.params.prompt;
+      expect(prompt).toContain('Most of this window belongs to RESEARCH');
+      expect(prompt).toContain('Research each candidate before you judge it');
+      expect(prompt).toContain('Prove the trigger');
+      expect(prompt).toContain('Decide the fix before you file it');
+      expect(prompt).toContain('the tests to add or change');
+    }
+  });
+
+  it('keeps real headroom under the param length bound', () => {
+    // Not a duplicate of the truncation assertion above: that one passed at
+    // 7999/8000, one character from silently slicing the redaction and
+    // "change no code" rules off the END of every stored preset job. A bound a
+    // sentence away from binding is a bound that will bind on the next edit.
+    for (const preset of QUOTA_BURN_PROMPT_PRESETS) {
+      expect(preset.params.prompt.length).toBeLessThanOrEqual(QUOTA_BURN_BOUNDS.paramLength.max * 0.8);
+    }
+  });
+});
+
+describe('upgradeStoredAuditPrompt', () => {
+  const preset = QUOTA_BURN_PROMPT_PRESETS[0];
+  const current = preset.params.prompt;
+  const mission = current.slice(0, current.indexOf(AUDIT_CONTRACT_HEADING));
+
+  it('refreshes a stale shipped contract while keeping the mission', () => {
+    const stale = `${mission}${AUDIT_CONTRACT_HEADING}
+1. **Pick a bounded slice and say so first.** Audit one area.
+2. \`gh issue create --title "..."\`. Suggested labels: \`ux\`, \`plan\`.
+3. **Change no code.**
+4. **Report at the end**: each issue number.
+`;
+    expect(upgradeStoredAuditPrompt(stale)).toBe(current);
+  });
+
+  it('returns null for an already-current prompt, so callers count real upgrades', () => {
+    expect(upgradeStoredAuditPrompt(current)).toBeNull();
+  });
+
+  it('returns null when the user replaced the How-to-run section', () => {
+    expect(upgradeStoredAuditPrompt(`${mission}${AUDIT_CONTRACT_HEADING}\n\nJust report findings in chat.\n`)).toBeNull();
+  });
+
+  it('returns null when the user ADDED a step to an otherwise-shipped contract', () => {
+    // The anchor gate alone passes here — every shipped sentence is still
+    // present — so without the heading subset check the refresh would replace
+    // the whole contract and silently delete the user's own step.
+    const withExtraStep = current.replace(
+      '9. **Redact before you publish.**',
+      '9. **Always check the billing module first.** It is our riskiest area.\n10. **Redact before you publish.**'
+    );
+    expect(withExtraStep).not.toBe(current);
+    expect(upgradeStoredAuditPrompt(withExtraStep)).toBeNull();
+  });
+
+  it('still upgrades a stale contract whose headings are all ones we shipped', () => {
+    // Guards the subset check from the opposite failure: a retired step title
+    // dropped from the known set turns into a silent refusal to upgrade every
+    // job still carrying it, which is the bug migration 294 already had.
+    const retiredTitles = `${mission}${AUDIT_CONTRACT_HEADING}
+1. **Pick a bounded slice and say so first.** Audit one area.
+2. **Read the actual code.** Cite file:line.
+3. \`gh issue create --title "..."\` with **Problem**, **Impact**, **Fix**, and **Acceptance criteria**.
+4. **Cap yourself at 5 issues.**
+5. **Change no code.**
+6. **Report at the end**: each issue number.
+`;
+    expect(upgradeStoredAuditPrompt(retiredTitles)).toBe(current);
+  });
+
+  it('returns null for a prompt that is not a preset render at all', () => {
+    expect(upgradeStoredAuditPrompt('Refactor the billing module and open a PR.')).toBeNull();
+    expect(upgradeStoredAuditPrompt(undefined)).toBeNull();
+    expect(upgradeStoredAuditPrompt(null)).toBeNull();
   });
 });
 

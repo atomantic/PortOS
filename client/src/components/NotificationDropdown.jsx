@@ -4,7 +4,6 @@ import { useNavigate } from 'react-router';
 import { Bell, X, CheckCheck, Trash2, Brain, ListTodo, AlertTriangle, Code, HelpCircle, BellRing, Sparkles } from 'lucide-react';
 import { timeAgo } from '../utils/formatters';
 import { isHttpUrl } from '../utils/urlNormalize';
-import { clickableProps } from '../lib/a11yKeyboard';
 import useClickOutside from '../hooks/useClickOutside.js';
 import usePopoverPosition, { VIEWPORT_PADDING } from '../hooks/usePopoverPosition.js';
 
@@ -135,7 +134,6 @@ export default function NotificationDropdown({
         title="Notifications"
         aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ''}`}
         aria-expanded={isOpen}
-        aria-haspopup="true"
       >
         <Bell className={`w-5 h-5 ${unreadCount > 0 ? 'text-yellow-400' : 'text-gray-400'}`} aria-hidden="true" />
         {unreadCount > 0 && (
@@ -148,8 +146,8 @@ export default function NotificationDropdown({
       {isOpen && createPortal(
         <div
           ref={popoverRef}
-          role="menu"
-          aria-label="Notifications menu"
+          role="region"
+          aria-label="Notifications"
           className="fixed bg-port-card border border-port-border rounded-lg shadow-xl z-[100] overflow-hidden"
           style={{
             left: panelStyle?.left ?? `${VIEWPORT_PADDING}px`,
@@ -205,70 +203,68 @@ export default function NotificationDropdown({
                 No notifications
               </div>
             ) : (
-              visible.map(notification => {
-                const config = NOTIFICATION_TYPE_CONFIG[notification.type] || NOTIFICATION_TYPE_CONFIG.task_approval;
-                const Icon = config.icon;
+              <ul aria-label="Notifications list">
+                {visible.map(notification => {
+                  const config = NOTIFICATION_TYPE_CONFIG[notification.type] || NOTIFICATION_TYPE_CONFIG.task_approval;
+                  const Icon = config.icon;
 
-                return (
-                  <div
-                    key={notification.id}
-                    className={`
-                      group px-4 py-3 border-b border-port-border last:border-b-0 cursor-pointer
-                      hover:bg-port-border/50 transition-colors focus:outline-hidden focus:bg-port-border/50
+                  return (
+                    <li
+                      key={notification.id}
+                      className={`
+                      group flex items-start gap-2 px-4 py-3 border-b border-port-border last:border-b-0
+                      hover:bg-port-border/50 transition-colors
                       ${!notification.read ? 'bg-port-border/30' : ''}
                       border-l-2 ${PRIORITY_COLORS[notification.priority] || PRIORITY_COLORS.medium}
                     `}
-                    onClick={() => handleNotificationClick(notification)}
-                    {...clickableProps(() => handleNotificationClick(notification), { role: 'menuitem' })}
-                  >
-                    <div className="flex items-start gap-3">
-                      <div className={`p-1.5 rounded ${config.bgColor}`} aria-hidden="true">
-                        <Icon className={`w-4 h-4 ${config.color}`} />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-start justify-between gap-2">
-                          <span className={`min-w-0 flex-1 text-sm font-medium break-words ${!notification.read ? 'text-white' : 'text-gray-300'}`}>
+                    >
+                      <button
+                        type="button"
+                        onClick={() => handleNotificationClick(notification)}
+                        className="flex min-w-0 flex-1 items-start gap-3 rounded text-left focus:outline-hidden focus:ring-2 focus:ring-port-accent"
+                        aria-label={`View notification: ${notification.title}`}
+                      >
+                        <span className={`p-1.5 rounded ${config.bgColor}`} aria-hidden="true">
+                          <Icon className={`w-4 h-4 ${config.color}`} />
+                        </span>
+                        <span className="flex-1 min-w-0">
+                          <span className={`block text-sm font-medium break-words ${!notification.read ? 'text-white' : 'text-gray-300'}`}>
                             {notification.title}
                           </span>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onRemove(notification.id);
-                            }}
-                            className="shrink-0 inline-flex items-center justify-center min-w-[44px] min-h-[44px] -my-2 rounded hover:bg-port-border transition-colors sm:min-w-0 sm:min-h-0 sm:my-0 sm:p-1 sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100 focus:outline-hidden focus:ring-2 focus:ring-port-accent"
-                            aria-label={`Remove notification: ${notification.title}`}
-                          >
-                            <X className="w-4 h-4 text-gray-500 sm:w-3 sm:h-3" aria-hidden="true" />
-                          </button>
-                        </div>
-                        {notification.description && (
-                          <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">
-                            {notification.description}
-                          </p>
-                        )}
-                        <div className="flex items-center gap-3 mt-1 sm:gap-2">
-                          <span className="text-[10px] text-gray-600">
+                          {notification.description && (
+                            <span className="block text-xs text-gray-500 mt-0.5 line-clamp-2">
+                              {notification.description}
+                            </span>
+                          )}
+                          <span className="block text-[10px] text-gray-600 mt-1">
                             {timeAgo(notification.timestamp)}
                           </span>
-                          {!notification.read && (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onMarkAsRead(notification.id);
-                              }}
-                              className="text-[10px] text-port-accent hover:underline py-2 -my-2 sm:py-0 sm:my-0"
-                            >
-                              Mark read
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })
+                        </span>
+                      </button>
+                      <span className="flex shrink-0 flex-col items-end gap-1">
+                        <button
+                          type="button"
+                          onClick={() => onRemove(notification.id)}
+                          className="inline-flex shrink-0 items-center justify-center min-w-[44px] min-h-[44px] -my-2 rounded hover:bg-port-border transition-colors sm:min-w-0 sm:min-h-0 sm:my-0 sm:p-1 sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100 focus:outline-hidden focus:ring-2 focus:ring-port-accent"
+                          aria-label={`Remove notification: ${notification.title}`}
+                        >
+                          <X className="w-4 h-4 text-gray-500 sm:w-3 sm:h-3" aria-hidden="true" />
+                        </button>
+                        {!notification.read && (
+                          <button
+                            type="button"
+                            onClick={() => onMarkAsRead(notification.id)}
+                            className="min-h-[44px] text-[10px] text-port-accent hover:underline -my-2 sm:min-h-0 sm:my-0"
+                            aria-label={`Mark notification as read: ${notification.title}`}
+                          >
+                            Mark read
+                          </button>
+                        )}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
             )}
           </div>
 

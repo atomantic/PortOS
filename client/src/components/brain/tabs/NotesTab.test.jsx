@@ -118,9 +118,7 @@ describe('NotesTab header touch targets', () => {
     // only thing labelled "Close" — assert that, or a second Close button
     // appearing later would silently redirect this assertion at the wrong
     // element and make it pass for the wrong reason.
-    const closeButtons = screen.getAllByRole('button', { name: 'Close' });
-    expect(closeButtons).toHaveLength(1);
-    const [clear] = closeButtons;
+    const clear = screen.getByRole('button', { name: 'Clear search' });
 
     // The clear button is absolutely positioned at `right-2` (8px) and is 44px
     // wide, so the input needs >= 52px of right padding or the typed text runs

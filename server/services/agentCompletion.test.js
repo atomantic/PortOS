@@ -29,6 +29,7 @@ vi.mock('./malwareScanReports.js', () => ({
 
 import { processAgentCompletion } from './agentCompletion.js';
 import * as appActivity from './appActivity.js';
+import { getConfig } from './cosState.js';
 
 describe('processAgentCompletion - cooldown handling for recovery tasks', () => {
   beforeEach(() => {
@@ -45,6 +46,19 @@ describe('processAgentCompletion - cooldown handling for recovery tasks', () => 
 
     expect(appActivity.markAppReviewCompleted).toHaveBeenCalledWith('portos-default', 1, 1);
     expect(appActivity.startAppCooldown).toHaveBeenCalledWith('portos-default', 1800000);
+  });
+
+  it('preserves an explicit zero app review cooldown', async () => {
+    getConfig.mockResolvedValueOnce({ appReviewCooldownMs: 0 });
+    const task = {
+      id: 'sys-zero-cooldown',
+      description: '[App Improvement: Example App] Code Quality Review',
+      metadata: { app: 'example-app' }
+    };
+
+    await processAgentCompletion('agent-zero', task, true, 'output');
+
+    expect(appActivity.startAppCooldown).toHaveBeenCalledWith('example-app', 0);
   });
 
   it('does NOT bump cooldown when task.metadata.isRecovery is true', async () => {

@@ -53,6 +53,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
   // An app that explicitly pins either flag false still wins — see the
   // app-defaults effect below, which distinguishes absent from `false`.
   const [useWorktree, setUseWorktree] = useState(true);
+  const [whenDone, setWhenDone] = useState('leave-uncommitted');
   const [openPR, setOpenPR] = useState(true);
   const [simplify, setSimplify] = useState(true);
   const [planOnly, setPlanOnly] = useState(false);
@@ -508,6 +509,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
       slashdoArgs: planOnly ? '--yes' : undefined,
       createJiraTicket: planOnly ? false : createJiraTicket,
       useWorktree: planOnly ? false : useWorktree,
+      whenDone: planOnly || useWorktree ? undefined : whenDone,
       openPR: planOnly ? false : useWorktree && openPR,
       simplify: planOnly ? false : simplify,
       // Omitted entirely when no template pinned a posture — sending `undefined`
@@ -562,7 +564,11 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
     setAttachments([]);
 
     toast.success('Task added');
-    onTaskAdded?.();
+    // The POST returns the persisted task, so let queue views render that
+    // confirmed record immediately instead of waiting for the next socket
+    // delivery or polling refresh. The position is not persisted on a task,
+    // but the receiving list needs it to mirror this form's insertion choice.
+    onTaskAdded?.(result, { position: addToTop ? 'top' : 'bottom' });
   };
 
   // Compact mode: single row with description + app + add, expandable
@@ -781,6 +787,15 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
                   Worktree
                 </span>
               </label>
+              {!useWorktree && (
+                <label htmlFor="task-when-done" className="flex items-center gap-2 py-1 basis-full sm:basis-auto">
+                  <span className="text-sm text-gray-400">When done</span>
+                  <select id="task-when-done" value={whenDone} onChange={(e) => setWhenDone(e.target.value)} className="min-w-52 rounded border border-port-border bg-port-bg px-2 py-1 text-sm text-white focus:border-port-accent focus:outline-hidden">
+                    <option value="leave-uncommitted">Leave code uncommitted</option>
+                    <option value="commit-push">Commit and push to default branch</option>
+                  </select>
+                </label>
+              )}
               <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap py-1">
                 <input
                   type="checkbox"

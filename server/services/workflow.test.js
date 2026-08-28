@@ -18,6 +18,7 @@ const { getScheduleStatus } = await import('./taskSchedule.js');
 const { getAllJobs } = await import('./autonomousJobs.js');
 const { checkJobGate, hasGate, getRegisteredGates } = await import('./jobGates.js');
 const { getWorkflowGraph, projectWorkflowTimeline, WORKFLOW_STAGES } = await import('./workflow.js');
+const { AUDIT_TASK_TYPES } = await import('../lib/auditCatalog.js');
 
 const STAGE_IDS = WORKFLOW_STAGES.map(s => s.id);
 
@@ -62,6 +63,11 @@ describe('WORKFLOW_STAGES contract', () => {
         seen.add(t);
       }
     }
+  });
+
+  it('places every audit task type in the audit stage', () => {
+    const audit = WORKFLOW_STAGES.find(s => s.id === 'audit');
+    expect([...AUDIT_TASK_TYPES].filter(type => !audit.taskTypes.includes(type))).toEqual([]);
   });
 
   it('does not place the same job id in two stages', () => {

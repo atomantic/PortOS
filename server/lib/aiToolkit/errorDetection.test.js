@@ -706,6 +706,20 @@ describe('Error Detection', () => {
       expect(result.category).toBe(ERROR_CATEGORIES.MODEL_NOT_FOUND);
     });
 
+    it('preserves a status-zero readiness failure instead of inventing HTTP 0', () => {
+      const result = analyzeHttpError({
+        status: 0,
+        statusText: '',
+        body: 'MTPLX could not start: checkpoint failed to load'
+      });
+
+      expect(result).toMatchObject({
+        hasError: true,
+        category: ERROR_CATEGORIES.UNKNOWN,
+        message: 'MTPLX could not start: checkpoint failed to load'
+      });
+    });
+
     it('should extract wait time from 429 response body', () => {
       const result = analyzeHttpError({
         status: 429,

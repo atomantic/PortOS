@@ -17,11 +17,17 @@ const mocks = vi.hoisted(() => ({
   readPersistentMindRollups: vi.fn(),
   updatePersistentMindMemory: vi.fn(),
   getProviderById: vi.fn(),
+  createPersistentMindAttachment: vi.fn(),
+  deletePersistentMindAttachment: vi.fn(),
   startPersistentMind: vi.fn(),
   pausePersistentMind: vi.fn(),
   resumePersistentMind: vi.fn(),
   stopPersistentMind: vi.fn(),
   inspectPersistentMindRuntime: vi.fn(),
+  readPersistentMindVisibility: vi.fn(),
+  readPersistentMindTaskCatalog: vi.fn(),
+  resolveImageCapability: vi.fn(),
+  cleanupPersistentMind: vi.fn(),
 }));
 
 vi.mock('../services/agentRunEventLog.js', () => ({
@@ -47,7 +53,18 @@ vi.mock('../services/persistentMindAdapter.js', () => ({
     detail: 'Structured provider harness.',
   }),
 }));
+vi.mock('../services/persistentMindImageCapability.js', () => ({
+  resolvePersistentMindImageCapability: (...args) => mocks.resolveImageCapability(...args),
+}));
+vi.mock('../services/persistentMindMaintenance.js', () => ({
+  cleanupPersistentMind: (...args) => mocks.cleanupPersistentMind(...args),
+}));
+vi.mock('../services/persistentMindTaskCapability.js', () => ({
+  readPersistentMindTaskCatalog: mocks.readPersistentMindTaskCatalog,
+}));
 vi.mock('../services/persistentMindSupervisor.js', () => ({
+  createPersistentMindAttachment: mocks.createPersistentMindAttachment,
+  deletePersistentMindAttachment: mocks.deletePersistentMindAttachment,
   getPersistentMindState: mocks.getPersistentMindState,
   enqueuePersistentMindMessage: mocks.enqueuePersistentMindMessage,
   startPersistentMind: mocks.startPersistentMind,
@@ -57,6 +74,9 @@ vi.mock('../services/persistentMindSupervisor.js', () => ({
 }));
 vi.mock('../services/persistentMindRuntime.js', () => ({
   inspectPersistentMindRuntime: mocks.inspectPersistentMindRuntime,
+}));
+vi.mock('../services/persistentMindVisibility.js', () => ({
+  readPersistentMindVisibility: mocks.readPersistentMindVisibility,
 }));
 
 import cosMindRoutes from './cosMindRoutes.js';
@@ -90,18 +110,41 @@ describe('persistent mind routes', () => {
       persistentMindPrompt: { schemaVersion: 1, identity: 'Resident mind', instructions: 'Stay grounded.' },
     } });
     mocks.getProviderById.mockResolvedValue({ id: 'demo', type: 'api' });
+    mocks.resolveImageCapability.mockResolvedValue({ status: 'unknown', reason: 'No authoritative metadata.', settingsPath: '/settings?tab=ai-providers' });
     mocks.readPersistentMindMemories.mockResolvedValue([{ id: 'memory-1', content: 'A durable fact', sourceAgentId: 'cos-persistent-mind' }]);
     mocks.readPersistentMindRollups.mockResolvedValue([]);
     mocks.preparePersistentMindContext.mockResolvedValue({ text: '# Context', chars: 9, approximateTokens: 3, summaryState: 'empty' });
     mocks.createPersistentMindMemory.mockResolvedValue({ id: 'memory-2', content: 'A new fact', sourceAgentId: 'cos-persistent-mind' });
     mocks.updatePersistentMindMemory.mockResolvedValue({ id: 'memory-1', content: 'An edited fact', sourceAgentId: 'cos-persistent-mind' });
     mocks.enqueuePersistentMindMessage.mockResolvedValue({ success: true, duplicate: false, messageId: 'message-1' });
+    mocks.createPersistentMindAttachment.mockResolvedValue({
+      success: true,
+      attachment: {
+        attachmentId: 'attachment-1',
+        filename: 'mind-attachment-1.png',
+        path: '/api/screenshots/mind-attachment-1.png',
+        originalName: 'diagram.png',
+        mimeType: 'image/png',
+        size: 12,
+        expiresAt: '2026-08-28T00:00:00.000Z',
+      },
+    });
+    mocks.deletePersistentMindAttachment.mockResolvedValue({ success: true, attachmentId: 'attachment-1' });
     mocks.appendPersistentMindAnnotation.mockResolvedValue({ appended: true, duplicate: false });
     mocks.promotePersistentMindMemory.mockResolvedValue({ success: true, memory: { id: 'memory-1' } });
     mocks.startPersistentMind.mockResolvedValue({ success: true });
     mocks.pausePersistentMind.mockResolvedValue({ success: true });
     mocks.resumePersistentMind.mockResolvedValue({ success: true });
     mocks.stopPersistentMind.mockResolvedValue({ success: true });
+    mocks.cleanupPersistentMind.mockResolvedValue({
+      success: true,
+      scopes: ['history'],
+      historyEventsCleared: 12,
+      historyEventsPreserved: 0,
+      rollupsCleared: 2,
+      memoriesArchived: 0,
+      runtimeResidueCleared: true,
+    });
     mocks.inspectPersistentMindRuntime.mockResolvedValue({
       observedAt: '2026-08-27T12:00:00.000Z',
       inference: {
@@ -113,6 +156,18 @@ describe('persistent mind routes', () => {
       context: { chars: 9, maxChars: 32000, approximateTokens: 3, summaryState: 'empty', memoryCount: 1 },
       system: { memory: { total: 100, used: 40, free: 60, usagePercent: 40 } },
     });
+    mocks.readPersistentMindVisibility.mockResolvedValue({
+      schemaVersion: 1,
+      capturedAt: '2026-08-27T12:00:00.000Z',
+      freshness: { state: 'fresh', ageMs: 0, ttlMs: 30_000 },
+      readiness: 'degraded',
+      truncated: false,
+      workspaces: [{ appId: 'demo-app', appName: 'Demo App', readiness: 'degraded', preflight: { warnings: [] } }],
+    });
+    mocks.readPersistentMindTaskCatalog.mockResolvedValue({
+      apps: [{ id: 'demo-app', name: 'Demo App', planOnly: true }],
+      providers: [{ id: 'codex', name: 'Codex', type: 'cli', models: [{ id: 'gpt-5', efforts: ['low', 'high'] }] }],
+    });
   });
 
   it('serves a bounded cursor snapshot with only the safe profile fields', async () => {
@@ -121,9 +176,17 @@ describe('persistent mind routes', () => {
     expect(mocks.readPersistentMindEvents).toHaveBeenCalledWith({ mindId: 'cos-persistent-mind', cursor: '12:mind-message:one', limit: 25 });
     expect(res.body).toMatchObject({
       events: [], gap: false, state: { status: 'idle' },
-      profile: { enabled: true, providerId: 'demo', model: 'demo-model', effort: 'high', thinkingInterface: 'text' },
-      capabilities: { schemaVersion: 1, createTasks: true },
+      profile: {
+        enabled: true,
+        providerId: 'demo',
+        model: 'demo-model',
+        effort: 'high',
+        thinkingInterface: 'text',
+        wakeIntervalMinutes: 30,
+      },
+      capabilities: { schemaVersion: 3, createTasks: true, manageMind: false, readPortos: false, writePortos: false, taskModelAllowlist: [] },
       harness: { type: 'api', recommendation: 'recommended' },
+      imageCapability: { status: 'unknown' },
       autonomyMode: 'execute',
     });
     expect(res.body.profile).not.toHaveProperty('credential');
@@ -151,6 +214,45 @@ describe('persistent mind routes', () => {
     }));
   });
 
+  it('serves a server-described inventory of persistent-mind tools', async () => {
+    const res = await get('/mind/tools');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      schemaVersion: 3,
+      capabilities: { schemaVersion: 3, createTasks: true, manageMind: false, readPortos: false, writePortos: false, taskModelAllowlist: [] },
+      boundaries: expect.arrayContaining([expect.stringMatching(/arbitrary shell/i)]),
+      tools: expect.arrayContaining([
+        expect.objectContaining({ id: 'cos.create-task', capability: 'createTasks', granted: true, defaultEnabled: false }),
+        expect.objectContaining({ id: 'portos.read', capability: 'readPortos', granted: false, defaultEnabled: false }),
+        expect.objectContaining({ id: 'portos.write', capability: 'writePortos', granted: false, defaultEnabled: false }),
+        expect.objectContaining({ id: 'mind.cleanup', capability: 'manageMind', granted: false, defaultEnabled: false }),
+      ]),
+      taskCatalog: {
+        apps: [{ id: 'demo-app', planOnly: true }],
+        providers: [{ id: 'codex' }],
+      },
+    });
+    expect(res.body.tools[0].guardrails).toEqual(expect.arrayContaining([
+      expect.stringMatching(/isolated-worktree/i),
+    ]));
+  });
+
+  it('marks revoked managed apps without removing them from the settings inventory', async () => {
+    mocks.loadState.mockResolvedValue({ config: {
+      persistentMindCapabilities: { schemaVersion: 3, createTasks: true, allowedAppIds: [] },
+    } });
+    mocks.readPersistentMindTaskCatalog.mockResolvedValue({
+      apps: [{ id: 'demo-app', name: 'Demo App', planOnly: true }],
+      providers: [],
+    });
+
+    const res = await get('/mind/tools');
+
+    expect(res.status).toBe(200);
+    expect(res.body.taskCatalog.apps).toEqual([{ id: 'demo-app', name: 'Demo App', planOnly: true, granted: false }]);
+    expect(mocks.readPersistentMindTaskCatalog).toHaveBeenCalledWith({ includeAllApps: true });
+  });
+
   it('exposes live context, system, inference, and model-residency telemetry', async () => {
     mocks.getPersistentMindState.mockResolvedValue({
       enabled: true,
@@ -175,6 +277,23 @@ describe('persistent mind routes', () => {
     expect(mocks.getProviderById).toHaveBeenCalledWith('ollama');
   });
 
+  it('serves the shared environment visibility projection and accepts an explicit refresh', async () => {
+    const res = await get('/mind/visibility?refresh=true');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      schemaVersion: 1,
+      readiness: 'degraded',
+      freshness: { state: 'fresh' },
+      workspaces: [{ appId: 'demo-app', readiness: 'degraded' }],
+    });
+    expect(mocks.readPersistentMindVisibility).toHaveBeenCalledWith(expect.objectContaining({
+      force: true,
+      state: expect.objectContaining({ status: 'idle' }),
+      profile: expect.objectContaining({ providerId: 'demo' }),
+      provider: expect.objectContaining({ id: 'demo' }),
+    }));
+  });
+
   it('creates and edits only validated persistent-mind memories', async () => {
     const created = await post('/mind/memories', { content: 'A new fact' });
     expect(created.status).toBe(201);
@@ -193,6 +312,30 @@ describe('persistent mind routes', () => {
     expect((await put('/mind/memories/foreign', { content: 'No access' })).status).toBe(404);
   });
 
+  it('stops the mind and performs only an explicitly confirmed cleanup', async () => {
+    expect((await post('/mind/cleanup', { scopes: ['history'], confirmation: 'no' })).status).toBe(400);
+    expect(mocks.stopPersistentMind).not.toHaveBeenCalled();
+
+    const res = await post('/mind/cleanup', {
+      scopes: ['history'],
+      reason: 'Discard stale failures',
+      confirmation: 'CLEAR',
+    });
+
+    expect(res.status).toBe(200);
+    expect(mocks.stopPersistentMind).toHaveBeenCalledWith({ waitForTurn: true });
+    expect(mocks.cleanupPersistentMind).toHaveBeenCalledWith({
+      scopes: ['history'],
+      reason: 'Discard stale failures',
+      requestedBy: 'user',
+    });
+    expect(res.body).toMatchObject({
+      success: true,
+      historyEventsCleared: 12,
+      state: { status: 'idle' },
+    });
+  });
+
   it('rejects malformed cursors, oversized pages, and unknown query fields', async () => {
     expect((await get('/mind?cursor=broken')).status).toBe(400);
     expect((await get('/mind?limit=501')).status).toBe(400);
@@ -209,6 +352,36 @@ describe('persistent mind routes', () => {
     expect(retry.status).toBe(202);
     expect(retry.body.duplicate).toBe(true);
     expect(mocks.enqueuePersistentMindMessage).toHaveBeenNthCalledWith(2, { id: 'message-1', text: 'Consider the next bounded slice.' });
+  });
+
+  it('admits image-only messages and forwards strict image references', async () => {
+    const res = await post('/mind/messages', { id: 'message-image', images: ['attachment-1'] });
+    expect(res.status).toBe(202);
+    expect(mocks.enqueuePersistentMindMessage).toHaveBeenCalledWith({
+      id: 'message-image', images: ['attachment-1'],
+    });
+  });
+
+  it('rejects empty, duplicate, oversized, and traversal image references', async () => {
+    expect((await post('/mind/messages', { id: 'empty' })).status).toBe(400);
+    expect((await post('/mind/messages', { id: 'duplicate', images: ['attachment-1', 'attachment-1'] })).status).toBe(400);
+    expect((await post('/mind/messages', {
+      id: 'too-many',
+      images: Array.from({ length: 9 }, (_, index) => `attachment-${index}`),
+    })).status).toBe(400);
+    expect((await post('/mind/messages', { id: 'traversal', images: ['../screenshot.png'] })).status).toBe(400);
+    expect(mocks.enqueuePersistentMindMessage).not.toHaveBeenCalled();
+  });
+
+  it('stores and removes attachments through the Mind-specific endpoints', async () => {
+    const upload = await post('/mind/attachments', { filename: 'diagram.png', data: 'iVBORw0KGgo=' });
+    expect(upload.status).toBe(201);
+    expect(mocks.createPersistentMindAttachment).toHaveBeenCalledWith({ filename: 'diagram.png', data: 'iVBORw0KGgo=' });
+    expect(upload.body.attachment).toMatchObject({ attachmentId: 'attachment-1', path: '/api/screenshots/mind-attachment-1.png' });
+
+    const deleteResponse = await request(app()).delete('/api/cos/mind/attachments/attachment-1');
+    expect(deleteResponse.status).toBe(200);
+    expect(mocks.deletePersistentMindAttachment).toHaveBeenCalledWith('attachment-1');
   });
 
   it('validates annotation targets and lifecycle inputs', async () => {

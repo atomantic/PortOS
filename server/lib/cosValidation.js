@@ -1262,6 +1262,7 @@ export const createCosTaskSchema = z.object({
     v => v === 'true' ? true : v === 'false' ? false : v,
     z.boolean().optional()
   ),
+  whenDone: z.enum(['commit-push', 'leave-uncommitted']).optional(),
   // Read-only planning mode: investigate the codebase and file the issue, but
   // do not start implementation delivery. The task store expands this into
   // the safe no-worktree/no-PR/no-simplify posture before persistence.
@@ -1912,6 +1913,10 @@ export function sanitizeTaskMetadata(raw) {
   }
   if (Object.prototype.hasOwnProperty.call(raw, 'reviewerApplies') && typeof raw.reviewerApplies === 'boolean') {
     clean.reviewerApplies = raw.reviewerApplies;
+    hasKeys = true;
+  }
+  if (Object.prototype.hasOwnProperty.call(raw, 'whenDone') && ['commit-push', 'leave-uncommitted'].includes(raw.whenDone)) {
+    clean.whenDone = raw.whenDone;
     hasKeys = true;
   }
   // `prAuthorFilter` gates pr-watcher dispatch on PR authorship — constrained

@@ -15,13 +15,18 @@ describe('vitestCiPool', () => {
     expect(vitestCiPool()).toEqual({});
   });
 
-  it('caps workers at 2 on CI', () => {
+  it('matches the four CPUs on public GitHub-hosted runners', () => {
     process.env.CI = 'true';
-    expect(vitestCiPool()).toEqual({ maxWorkers: 2 });
+    expect(vitestCiPool()).toEqual({ maxWorkers: 4 });
   });
 
   it('treats CI=1 as CI', () => {
     process.env.CI = '1';
-    expect(vitestCiPool()).toEqual({ maxWorkers: 2 });
+    expect(vitestCiPool()).toEqual({ maxWorkers: 4 });
+  });
+
+  it('allows a workspace to retain a lower evidence-based cap', () => {
+    process.env.CI = 'true';
+    expect(vitestCiPool({ maxWorkers: 2 })).toEqual({ maxWorkers: 2 });
   });
 });

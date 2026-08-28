@@ -11,8 +11,8 @@ PortOS is reachable over Tailscale and is intended to be a secure, self-hosted o
 PortOS is a public open-source project used by many people, so this feature is:
 
 - **Generic** — no assistant identity, persona, or relationship model is baked into product code.
-- **Optional** — PortOS works cleanly without OpenClaw; the page degrades gracefully when unconfigured.
-- **Instance-configurable** — identity, endpoints, tokens, and machine topology live in local, git-ignored config (`data/openclaw/config.json`) or environment variables, never in committed defaults.
+- **Optional and instance-configurable** — PortOS works cleanly without OpenClaw; enable or disable the feature for this install in **Settings > Features**. When disabled, PortOS hides its browse and launch affordances and refuses runtime requests, even if an OpenClaw config or environment variables are present.
+- **Instance-local configuration** — identity, endpoints, tokens, and machine topology live in git-ignored config (`data/openclaw/config.json`) or environment variables, never in committed defaults.
 
 ## Architecture
 

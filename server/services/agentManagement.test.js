@@ -117,13 +117,62 @@ import { updateRun, getProject } from './creativeDirector/local.js';
 import { advanceAfterPlanStepSettled } from './creativeDirector/planAdvance.js';
 import { advanceAfterSceneSettled } from './creativeDirector/completionHook.js';
 import { updateTask, addTask, getTaskById, getAllTasks, reviveBlockedTask } from './cos.js';
-import { pauseAgentViaRunner, terminateAgentViaRunner } from './cosRunnerClient.js';
+import { pauseAgentViaRunner, terminateAgentViaRunner, getActiveAgentsFromRunner } from './cosRunnerClient.js';
 import * as shellService from './shell.js';
 import { readHostShutdownMarker, clearHostShutdownMarker } from '../lib/hostShutdown.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import { committedDuringRun } from '../lib/gitCommitProbe.js';
 import { activeAgents, runnerAgents, pausedAgents } from './agentState.js';
 import { hasPauseReleaseAdapter, resolvePausedTaskResume, retirePausedAgent } from '../lib/taskPauseHold.js';
+
+describe('cleanupOrphanedAgents — startup recovery coordination', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('shares one in-flight sweep between concurrent startup callers', async () => {
+    let releaseProbe;
+    const probe = new Promise((resolve) => { releaseProbe = resolve; });
+    getAgents.mockReturnValueOnce(probe);
+
+    const first = cleanupOrphanedAgents();
+    await Promise.resolve();
+    const second = cleanupOrphanedAgents();
+
+    expect(second).toBe(first);
+    releaseProbe([]);
+    await Promise.all([first, second]);
+    expect(getAgents).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not reap runner-owned agents while the runner probe is unavailable', async () => {
+    getAgents.mockResolvedValueOnce([{
+      id: 'agent-runner',
+      status: 'running',
+      taskId: 'task-1',
+      metadata: { useRunner: true, executionMode: 'runner' },
+    }]);
+    getActiveAgentsFromRunner.mockRejectedValueOnce(new Error('runner is booting'));
+
+    await cleanupOrphanedAgents();
+
+    expect(markAgentComplete).not.toHaveBeenCalled();
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  it('treats a malformed runner probe as unavailable', async () => {
+    getAgents.mockResolvedValueOnce([{
+      id: 'agent-runner',
+      status: 'running',
+      taskId: 'task-1',
+      metadata: { useRunner: true, executionMode: 'runner-tui' },
+    }]);
+    getActiveAgentsFromRunner.mockResolvedValueOnce({ agents: [] });
+
+    await cleanupOrphanedAgents();
+
+    expect(markAgentComplete).not.toHaveBeenCalled();
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+});
 
 describe('settleOrphanedCreativeDirectorRun — reap a dead CD agent run (#2705)', () => {
   beforeEach(() => vi.clearAllMocks());

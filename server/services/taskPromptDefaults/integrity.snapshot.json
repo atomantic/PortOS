@@ -13,6 +13,10 @@
     "ux": "e03d03fc7c16faa5b5db93be2896b9ad",
     "data-safety": "86b07f51abdbcbe7016f840b5bb0cd9b",
     "simplify": "2a048214d1dd3b75bee9ae1a38fa1589",
+    "api-contract": "cf02b10a5993baf473e0d320771f26b6",
+    "react-lifecycle": "14b3816d1bcc10f0d7d6357e55cc5e69",
+    "observability": "fdb4d77df5891cfb653a5da2553ecf8a",
+    "copy": "6a0959e898d37fb4d4d7445dfc8008c9",
     "feature-ideas": "d3282f16da29efe2d53595b3b34778bc",
     "plan-feature": "87f71a894757f89354da4e2119e07118",
     "plan-task": "b85fe92999aa4ee4a8910320457c4242",
@@ -23,7 +27,7 @@
     "code-reviewer-implement": "2e10cac7c1e1cd021d06bfddb5c1eaf2",
     "error-handling": "9afba2e99b90a8d5771c75e7f0615d96",
     "typing": "1f2758ce0bb62d789a21aec241549531",
-    "release-check": "64be10f6ac7bcf74d4fc257089fc179b",
+    "release-check": "644e5f2f6df1daf06f3792a81ba7a51a",
     "stash-cleanup": "1c12bac5aac6bb27008c40981e7db08c",
     "repo-sync": "0a648d35d43b023b758226b9c709c8ea",
     "jira-sprint-manager": "3e63c8a3bdf0d5a05a30faaa2dc07980",
@@ -67,9 +71,13 @@
     "ux": 1,
     "data-safety": 1,
     "simplify": 1,
+    "api-contract": 1,
+    "react-lifecycle": 1,
+    "observability": 1,
+    "copy": 1,
     "stash-cleanup": 2,
     "repo-sync": 1,
-    "release-check": 11
+    "release-check": 12
   },
   "REFERENCE_WATCH_AUDITED_VERSION": 3,
   "PREVIOUS_DEFAULT_PROMPTS": {
@@ -215,7 +223,8 @@
       "746f11daaf721eae9e16845858ef55ee",
       "08c928e6f79f83535e40b6988ff6eae3",
       "afa9039cfbff21d77d601dc74eb5b81f",
-      "2d2a6700c23b73bf738c2aa915e37277"
+      "2d2a6700c23b73bf738c2aa915e37277",
+      "64be10f6ac7bcf74d4fc257089fc179b"
     ],
     "branch-reconcile": [
       "7ef2b5f7d8f05937d4912b26ad45f42e",

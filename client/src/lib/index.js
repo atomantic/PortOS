@@ -105,6 +105,7 @@ export * from './mediaNavigation.js';
 export * from './mediaSearch.js';
 export * from './morsePractice.js';
 export * from './moodBoardItemSrc.js';
+export * from './rapidReaderPosition.js';
 export * from './registerServiceWorker.js';
 export * from './safeStorage.js';
 export * from './sameJsonShape.js';

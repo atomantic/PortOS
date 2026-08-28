@@ -4,7 +4,7 @@ import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 
 export default function GoalProgressLog({
-  goal, showProgressForm, setShowProgressForm, progressForm, setProgressForm,
+  goal, showProgressForm, setShowProgressForm, progressForm, setProgressForm, progressSubmitting,
   handleAddProgress, resetProgressForm, handleDeleteProgress
 }) {
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
@@ -63,7 +63,7 @@ export default function GoalProgressLog({
           <div className="flex gap-1">
             <button
               onClick={handleAddProgress}
-              disabled={!progressForm.note.trim()}
+              disabled={progressSubmitting || !progressForm.note.trim()}
               className="px-2 py-1 text-xs rounded bg-port-accent text-white disabled:opacity-50"
             >
               Log

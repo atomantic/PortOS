@@ -285,6 +285,7 @@ export default function RuntimeServersCard({
   onConfigureLlama,
   onConfigureMtplx,
   onInstallMtplx,
+  onStartMtplx,
   onStopMtplx,
   onSaveStartup,
   onSaveIdleWindow,
@@ -335,17 +336,15 @@ export default function RuntimeServersCard({
       status: mtplxStatus,
       platformReason: mtplxStatus?.supported === false ? 'macOS with Apple Silicon only' : null,
       onInstall: onInstallMtplx,
-      // No Start button by design. MTPLX is lazily started by the first PortOS
-      // request routed to it and stopped again once its idle window elapses, so
-      // a manual Start would only pin 20GB ahead of a request that may never
-      // come. Install and Configure (download a checkpoint, set the launch
-      // options) are the two things that still need a human.
-      onStart: null,
+      // MTPLX can be started explicitly when a verified checkpoint is cached,
+      // and is still restarted automatically before a request after an idle
+      // release. Neither path downloads or guesses a model.
+      onStart: mtplxStatus?.cachedModels?.length ? onStartMtplx : null,
       onStop: onStopMtplx,
       startBlockedReason: mtplxStatus?.installed && !mtplxStatus?.running
         ? (mtplxStatus?.cachedModels?.length === 0 && !mtplxStatus?.cacheError
           ? 'No checkpoint yet — use Configure to download one'
-          : 'Starts on demand')
+          : null)
         : null,
       detail: mtplxStatus?.cachedModels?.length
         ? `${mtplxStatus.cachedModels.length} checkpoint${mtplxStatus.cachedModels.length === 1 ? '' : 's'} cached`

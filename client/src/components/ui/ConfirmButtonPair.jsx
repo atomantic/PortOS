@@ -31,8 +31,12 @@ export default function ConfirmButtonPair({
   tone = 'error',
   ariaLabel,
   className = '',
+  largeTouchTargets = false,
 }) {
   const confirmTone = TONES[tone] || TONES.error;
+  const buttonSizeClass = largeTouchTargets
+    ? 'min-h-[44px] min-w-[44px] justify-center'
+    : 'min-h-[36px]';
   // While in-flight, the confirm icon becomes a spinner and both buttons
   // disable; the label additionally swaps to the in-flight word ("Deleting")
   // when a busyText is supplied, otherwise it stays put.
@@ -49,7 +53,7 @@ export default function ConfirmButtonPair({
         type="button"
         onClick={onConfirm}
         disabled={busy}
-        className={`inline-flex min-h-[36px] items-center gap-1 px-2 py-1 text-xs rounded transition-colors disabled:opacity-50 ${confirmTone}`}
+        className={`inline-flex ${buttonSizeClass} items-center gap-1 px-2 py-1 text-xs rounded transition-colors disabled:opacity-50 ${confirmTone}`}
       >
         {busy ? (
           <Loader2 size={12} className="animate-spin" />
@@ -62,7 +66,7 @@ export default function ConfirmButtonPair({
         type="button"
         onClick={onCancel}
         disabled={busy}
-        className="min-h-[36px] px-2 py-1 text-xs text-gray-400 hover:text-white transition-colors disabled:opacity-50"
+        className={`${buttonSizeClass} px-2 py-1 text-xs text-gray-400 hover:text-white transition-colors disabled:opacity-50`}
       >
         {cancelText}
       </button>

@@ -36,8 +36,8 @@ PortOS is a monorepo application with a React frontend and Express.js backend, m
 │  │  │                     │  │ health :5557       │  │ UI :5560               │  │  │
 │  │  │ Task Watcher        │  │                    │  │                        │  │  │
 │  │  │ CoS Evaluation      │  │ Persistent         │  │ PM2 crash monitor      │  │  │
-│  │  │ Sub-Agent Spawner   │  │ Chromium instance  │  │ (polls every 15m)      │  │  │
-│  │  │ (Claude CLI) -------|->│ CDP WebSocket for  │  │ Claude CLI auto-fix    │  │  │
+│  │  │ CoS runner / task    │  │ Chromium instance  │  │ (polls every 15m)      │  │  │
+│  │  │ execution            │  │ CDP WebSocket for  │  │ Claude CLI auto-fix    │  │  │
 │  │  │                     │  │ web automation     │  │ Reads apps.json        │  │  │
 │  │  └─────────────────────┘  └────────────────────┘  │ Session history        │  │  │
 │  │                                                   └────────────────────────┘  │  │
@@ -74,7 +74,9 @@ PortOS/
 │   │   └── browser.js         # /api/browser/* endpoints
 │   ├── services/              # Business logic
 │   │   ├── cos.js             # Chief of Staff core
-│   │   ├── subAgentSpawner.js # Claude CLI integration
+│   │   ├── subAgentSpawner.js # Agent-cluster event wiring, runner communication, and slashdo loading
+│   │   ├── agentCliSpawning.js # Multi-provider CLI agent spawning
+│   │   ├── agentOrchestrator.js # Agent lifecycle-transition facade
 │   │   ├── pm2.js             # PM2 process management
 │   │   ├── runner.js          # AI execution engine
 │   │   ├── memory.js          # Memory system
@@ -88,7 +90,7 @@ PortOS/
 │
 ├── browser/                   # portos-browser service
 │   ├── server.js              # Launches Chromium with CDP, runs health server
-│   └── package.json           # Playwright dependency
+│   └── package.json           # Zero third-party dependencies; Chrome launched via native child_process.spawn
 │
 ├── autofixer/                 # portos-autofixer service
 │   ├── server.js              # Crash detection daemon (polls PM2 every 15min)
@@ -101,7 +103,8 @@ PortOS/
 │   ├── browser-config.json    # Browser CDP/health configuration
 │   ├── TASKS.md               # User task file
 │   ├── COS-TASKS.md           # System task file
-│   ├── COS-GOALS.md           # Mission and goals
+│   ├── GOALS.md               # Repository mission and goals
+│   ├── docs/GOALS_OPERATIONAL.md # Operational CoS goals
 │   ├── cos/                   # CoS state and agents
 │   │   ├── state.json         # Daemon state
 │   │   └── agents/            # Agent outputs

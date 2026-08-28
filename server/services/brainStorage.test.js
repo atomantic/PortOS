@@ -25,7 +25,16 @@ vi.mock('./instances.js', () => ({
   getInstanceId: () => Promise.resolve('local-instance'),
 }));
 
+vi.mock('./brainSyncLog.js', async () => {
+  const actual = await vi.importActual('./brainSyncLog.js');
+  return {
+    ...actual,
+    appendChanges: vi.fn(actual.appendChanges),
+  };
+});
+
 import * as brainStorage from './brainStorage.js';
+import * as brainSyncLog from './brainSyncLog.js';
 
 afterAll(() => { if (tempRoot) rmSync(tempRoot, { recursive: true, force: true }); });
 
@@ -184,8 +193,12 @@ describe('brainStorage tombstones', () => {
     const live = await brainStorage.create('memories', { content: 'alive' });
 
     const cutoff = Date.parse(ISO('2021-01-01'));
+    const changed = vi.fn();
+    brainStorage.brainEvents.on('record:changed', changed);
     const pruned = await brainStorage.pruneTombstones('memories', cutoff);
+    brainStorage.brainEvents.off('record:changed', changed);
     expect(pruned).toBe(1); // only the 2020 tombstone
+    expect(changed).toHaveBeenCalledWith({ type: 'memories', id: 'old' });
 
     expect(await rawRecord('memories', 'old')).toBeUndefined();
     expect((await rawRecord('memories', freshCreated.id))._deleted).toBe(true);
@@ -290,6 +303,43 @@ describe('updateWith (locked read-modify-write)', () => {
     const stored = await brainStorage.getById('songs', created.id);
     expect(stored.title).toBe('Abort Song');
     expect(stored.updatedAt).toBe(created.updatedAt); // no write happened
+  });
+});
+
+describe('reorderBuckets (batched sync log)', () => {
+  it('writes all bucket orders and appends one sync-log batch', async () => {
+    const first = await brainStorage.create('buckets', { name: 'First', order: 0 });
+    const second = await brainStorage.create('buckets', { name: 'Second', order: 1 });
+    brainSyncLog.appendChanges.mockClear();
+
+    const reordered = await brainStorage.reorderBuckets([
+      { id: second.id, order: 0 },
+      { id: first.id, order: 1 },
+    ]);
+
+    expect(reordered.map(({ id, order }) => ({ id, order }))).toEqual([
+      { id: second.id, order: 0 },
+      { id: first.id, order: 1 },
+    ]);
+    expect(await brainStorage.getBucketById(first.id)).toMatchObject({ name: 'First', order: 1 });
+    expect(await brainStorage.getBucketById(second.id)).toMatchObject({ name: 'Second', order: 0 });
+    expect(brainSyncLog.appendChanges).toHaveBeenCalledTimes(1);
+    expect(brainSyncLog.appendChanges).toHaveBeenCalledWith([
+      expect.objectContaining({
+        op: 'update',
+        type: 'buckets',
+        id: second.id,
+        record: expect.objectContaining({ order: 0 }),
+        originInstanceId: 'local-instance',
+      }),
+      expect.objectContaining({
+        op: 'update',
+        type: 'buckets',
+        id: first.id,
+        record: expect.objectContaining({ order: 1 }),
+        originInstanceId: 'local-instance',
+      }),
+    ]);
   });
 });
 

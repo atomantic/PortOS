@@ -28,6 +28,7 @@ import { getCollectiblesList, loadCollectedShardIds, saveCollectedShardIds } fro
 import { OpenWorldPaletteProvider } from '../components/openworld/OpenWorldPaletteContext';
 import { useThemeContext } from '../components/ThemeContext';
 import { useInstanceFeatures } from '../hooks/useInstanceFeatures';
+import { recommendOpenWorldStartTier } from '../utils/openWorldRenderBudget';
 
 // Internal render budgets only. These tiers are selected from sustained frame time and are
 // deliberately not persisted or exposed as player settings; art direction stays coherent while
@@ -124,7 +125,13 @@ function OpenWorldInner() {
   // chooses its detail tier from sustained frame time; low/medium/high/ultra are internal
   // budgets, not design settings. This keeps the settings drawer focused on choices a player
   // can actually feel (world style, audio, and controls).
-  const [autoTier, setAutoTier] = useState('high');
+  const [renderStartTier] = useState(() => recommendOpenWorldStartTier({
+    coarsePointer: typeof window !== 'undefined'
+      && Boolean(window.matchMedia?.('(pointer: coarse)').matches),
+    hardwareConcurrency: typeof navigator !== 'undefined' ? navigator.hardwareConcurrency : null,
+    deviceMemory: typeof navigator !== 'undefined' ? navigator.deviceMemory : null,
+  }));
+  const [autoTier, setAutoTier] = useState(renderStartTier);
   const effectiveTier = autoTier;
 
   const sceneSettings = useMemo(() => {
@@ -589,7 +596,7 @@ function OpenWorldInner() {
         playerActionRef={playerActionRef}
         dimmedAppIds={filterResult.dimmed}
         autoQuality
-        autoStartTier="high"
+        autoStartTier={renderStartTier}
         autoResetToken={resetNonce}
         onAutoTierChange={setAutoTier}
         focusedAppId={appId || null}

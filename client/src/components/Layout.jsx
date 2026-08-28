@@ -104,7 +104,10 @@ import {
   Boxes,
   Gamepad2,
   Waypoints,
-  AtSign
+  AtSign,
+  Drama,
+  UserRound,
+  Video
 } from 'lucide-react';
 // `__APP_VERSION__` is a Vite build-time define (see vite.config.js). Biome does
 // not honour ESLint-style "global" block comments, so it is declared in
@@ -130,6 +133,7 @@ import { useSidebarSeries } from '../hooks/useSidebarSeries.js';
 import { useSidebarUniverses } from '../hooks/useSidebarUniverses.js';
 import { useThemeContext } from './ThemeContext';
 import NotificationDropdown from './NotificationDropdown';
+import ThemeSwitcher from './ThemeSwitcher';
 import VoiceToggleButton from './voice/VoiceToggleButton';
 import CmdKSearch from './CmdKSearch';
 import KeyboardHelp from './KeyboardHelp';
@@ -206,6 +210,7 @@ export const NAV_PRESENTATION = {
   '/cos/tasks': { icon: FileText },
   '/cos/workflow': { icon: ChartGantt },
   '/messages/config': { icon: Settings },
+  '/messages/contacts': { icon: Users },
   '/messages/drafts': { icon: FilePen },
   '/messages/imessage': { icon: MessageSquare },
   '/messages/inbox': { icon: Inbox },
@@ -281,6 +286,8 @@ export const NAV_PRESENTATION = {
   '/models/training': { icon: GraduationCap },
   '/settings/ai-assignments': { icon: Bot },
   '/settings/api-access': { icon: Globe },
+  '/api-reference/catalog': { icon: Braces },
+  '/settings/autofixer': { icon: Wrench },
   '/settings/backup': { icon: Download },
   '/settings/code-reviewers': { icon: ShieldCheck },
   '/settings/database': { icon: Database },
@@ -292,24 +299,34 @@ export const NAV_PRESENTATION = {
   '/ai': { icon: Bot },
   '/settings/security': { icon: Lock },
   '/settings/sharing': { icon: Share2 },
+  '/settings/signal': { icon: MessageSquare },
+  '/settings/spotify': { icon: Music },
   '/settings/telegram': { icon: MessageSquare },
   '/settings/voice': { icon: Mic },
+  '/settings/youtube': { icon: Video },
   '/digital-twin/accounts': { icon: Globe },
+  '/digital-twin/appearance': { icon: Camera },
   '/ask': { icon: MessageCircle },
   '/digital-twin/autobiography': { icon: PenLine },
+  '/digital-twin/avatar-bio': { icon: UserRound },
   '/character': { icon: Swords },
   '/digital-twin/documents': { icon: FileText },
   '/digital-twin/enrich': { icon: Sparkles },
   '/digital-twin/export': { icon: Download },
+  '/digital-twin/goals': { icon: Target },
   '/digital-twin/identity': { icon: Fingerprint },
   '/digital-twin/import': { icon: Upload },
   '/insights/overview': { icon: Lightbulb },
   '/digital-twin/interview': { icon: MessageSquare },
+  '/digital-twin/legacy': { icon: Package },
   '/digital-twin/overview': { icon: Heart },
+  '/digital-twin/personality': { icon: Brain },
+  '/digital-twin/personas': { icon: Drama },
   '/privacy/overview': { icon: Shield },
   '/digital-twin/taste': { icon: Palette },
   '/digital-twin/test': { icon: CheckCircle },
   '/digital-twin/time-capsule': { icon: Archive },
+  '/digital-twin/voice': { icon: Mic },
   '/post/config': { icon: Settings },
   '/post/explore': { icon: Compass },
   '/post/history': { icon: History },
@@ -566,6 +583,7 @@ const FULL_WIDTH_PATH_PREFIXES = [
   // body, so the page owns its own scroll. Without this it nests inside the
   // padded scrolling main and the inner `h-full` clips below the fold.
   '/models',
+  '/api-reference',
   '/settings',
   // Round EDITOR (/rounds/:id) and the Learning Guide (/rounds/guide)
   // are full-width and own their own scroll; the bare /rounds index
@@ -1279,6 +1297,7 @@ export default function Layout() {
                 <Monitor size={18} />
               </NavLink>
               <ThemeModeToggle />
+              <ThemeSwitcher className={collapsed ? 'lg:hidden' : ''} />
               <VoiceToggleButton className={collapsed ? 'lg:hidden' : ''} />
               <NotificationDropdown
                 notifications={notifications}
@@ -1399,6 +1418,7 @@ export default function Layout() {
               <Monitor size={18} />
             </NavLink>
             <ThemeModeToggle />
+            <ThemeSwitcher position="below" />
             <VoiceToggleButton />
           </div>
         </header>

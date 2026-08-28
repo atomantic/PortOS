@@ -134,20 +134,21 @@ describe('LocalLlmTab runtime servers', () => {
     }
   });
 
-  // MTPLX starts on demand — the first request routed to it brings it up — so
-  // this surface offers Install and Configure, never Start.
-  it('offers no MTPLX Start on that surface', async () => {
-    const { getMtplxServerStatus } = await import('../../services/api');
+  // MTPLX starts on demand — the first request routed to it brings it up — and
+  // also offers an explicit start when its checkpoint is already cached.
+  it('offers MTPLX Start on the unified runtime surface', async () => {
+    const { getMtplxServerStatus, startMtplxServer } = await import('../../services/api');
     getMtplxServerStatus.mockResolvedValue({
       installed: true, running: false, supported: true, cachedModels: ['Example/Qwen-MTP'], endpoint: 'http://127.0.0.1:8000/v1',
     });
+    startMtplxServer.mockResolvedValue({ online: true });
 
     await renderTab();
     const card = screen.getByRole('heading', { name: 'Local Runtime Servers' }).closest('div.bg-port-card');
     const mtplxRow = within(card).getByText('MTPLX').closest('div.flex.flex-col');
 
-    expect(within(mtplxRow).queryByRole('button', { name: /^Start/ })).toBeNull();
-    expect(within(mtplxRow).getByText(/Starts on demand/)).toBeInTheDocument();
+    fireEvent.click(within(mtplxRow).getByRole('button', { name: /^Start/ }));
+    await waitFor(() => expect(startMtplxServer).toHaveBeenCalledWith({}));
   });
 
   it('saves an idle window through the settings slice for that runtime', async () => {

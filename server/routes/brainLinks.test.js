@@ -28,6 +28,7 @@ vi.mock('../services/brain.js', () => ({
   getBucketById: vi.fn(),
   createBucketAppended: vi.fn(),
   updateBucket: vi.fn(),
+  reorderBuckets: vi.fn(),
   deleteBucketAndUnlinkChildren: vi.fn(),
 }));
 

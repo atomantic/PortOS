@@ -1,5 +1,7 @@
 /** Safe client projection for the machine-local persistent-mind state. */
 
+import { nextPersistentMindWakeAt } from './persistentMind.js';
+
 const publicReason = (state) => {
   if (!state.pauseReason) return null;
   if (state.status === 'paused') return 'Paused by user';
@@ -8,6 +10,7 @@ const publicReason = (state) => {
 };
 
 export function publicPersistentMindState(state = {}) {
+  const nextWakeAt = nextPersistentMindWakeAt(state);
   return {
     enabled: state.enabled === true,
     started: state.started === true,
@@ -18,6 +21,7 @@ export function publicPersistentMindState(state = {}) {
     lastCompletedTurnId: typeof state.lastCompletedTurnId === 'string' ? state.lastCompletedTurnId : null,
     lastCompletedAt: typeof state.lastCompletedAt === 'string' ? state.lastCompletedAt : null,
     nextEligibleWakeAt: typeof state.nextEligibleWakeAt === 'string' ? state.nextEligibleWakeAt : null,
+    nextWakeAt: nextWakeAt == null ? null : new Date(nextWakeAt).toISOString(),
     failureCount: Number.isInteger(state.failureCount) ? state.failureCount : 0,
     lastError: state.lastError ? 'The last wake did not complete; local diagnostics have details' : null,
   };

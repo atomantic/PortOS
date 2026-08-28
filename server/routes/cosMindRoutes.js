@@ -5,7 +5,14 @@ import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { getDomainMode } from '../lib/domainAutonomy.js';
 import { PERSISTENT_MIND_LIMITS } from '../lib/persistentMind.js';
-import { normalizePersistentMindCapabilities } from '../lib/persistentMindCapabilities.js';
+import { MAX_SCREENSHOT_BYTES } from '../lib/uploadLimits.js';
+import {
+  normalizePersistentMindCapabilities,
+  PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION,
+  PERSISTENT_MIND_CLEANUP_SCOPES,
+  PERSISTENT_MIND_TOOL_BOUNDARIES,
+  PERSISTENT_MIND_TOOL_CATALOG,
+} from '../lib/persistentMindCapabilities.js';
 import {
   PERSISTENT_MIND_ID,
   PERSISTENT_MIND_TRAJECTORY_LIMITS,
@@ -28,8 +35,14 @@ import {
 } from '../services/persistentMindContext.js';
 import { getProviderById } from '../services/providers.js';
 import { persistentMindHarnessInfo } from '../services/persistentMindAdapter.js';
+import { cleanupPersistentMind } from '../services/persistentMindMaintenance.js';
+import { resolvePersistentMindImageCapability } from '../services/persistentMindImageCapability.js';
+import { readPersistentMindTaskCatalog } from '../services/persistentMindTaskCapability.js';
 import { inspectPersistentMindRuntime } from '../services/persistentMindRuntime.js';
+import { readPersistentMindVisibility } from '../services/persistentMindVisibility.js';
 import {
+  createPersistentMindAttachment,
+  deletePersistentMindAttachment,
   enqueuePersistentMindMessage,
   getPersistentMindState,
   pausePersistentMind,
@@ -43,11 +56,42 @@ const router = Router();
 const idempotencyId = z.string().trim().min(1).max(200);
 const eventId = z.string().trim().min(1).max(128);
 const text = z.string().trim().min(1).max(PERSISTENT_MIND_LIMITS.MAX_MESSAGE_CHARS);
+const messageText = z.string().trim().max(PERSISTENT_MIND_LIMITS.MAX_MESSAGE_CHARS).optional();
+const attachmentId = z.string()
+  .trim()
+  .min(1)
+  .max(PERSISTENT_MIND_LIMITS.MAX_ATTACHMENT_ID_CHARS)
+  .regex(/^[A-Za-z0-9_-]+$/, 'invalid attachment id');
+const imageReference = z.union([
+  attachmentId,
+  z.object({ attachmentId }).strict(),
+]);
 const mindReadSchema = z.object({
   cursor: z.string().max(260).refine((value) => parsePersistentMindCursor(value) !== null, 'Invalid cursor').optional(),
   limit: z.coerce.number().int().positive().max(PERSISTENT_MIND_TRAJECTORY_LIMITS.maxPageSize).optional(),
 }).strict();
-const messageSchema = z.object({ id: idempotencyId, text }).strict();
+const visibilityReadSchema = z.object({
+  refresh: z.enum(['true', 'false']).transform((value) => value === 'true').optional(),
+}).strict();
+const messageSchema = z.object({
+  id: idempotencyId,
+  text: messageText,
+  images: z.array(imageReference).max(PERSISTENT_MIND_LIMITS.MAX_MESSAGE_IMAGES).optional(),
+}).strict().superRefine((value, ctx) => {
+  const images = Array.isArray(value.images) ? value.images : [];
+  const ids = images.map((image) => typeof image === 'string' ? image : image.attachmentId);
+  if (!value.text && ids.length === 0) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['text'], message: 'text or at least one image is required' });
+  }
+  if (new Set(ids).size !== ids.length) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['images'], message: 'image references must be unique' });
+  }
+});
+const attachmentUploadSchema = z.object({
+  filename: z.string().trim().min(1).max(PERSISTENT_MIND_LIMITS.MAX_ATTACHMENT_FILENAME_CHARS),
+  data: z.string().min(1).max(Math.ceil(MAX_SCREENSHOT_BYTES * 4 / 3) + 16),
+}).strict();
+const attachmentParamsSchema = z.object({ attachmentId }).strict();
 const annotationSchema = z.object({
   id: idempotencyId,
   text,
@@ -88,10 +132,21 @@ const memoryUpdateSchema = z.object(memoryFields).partial().strict().refine(
   'At least one memory field is required'
 );
 const memoryParamsSchema = z.object({ memoryId: z.string().trim().min(1).max(128) }).strict();
+const cleanupSchema = z.object({
+  scopes: z.array(z.enum(PERSISTENT_MIND_CLEANUP_SCOPES))
+    .min(1)
+    .max(PERSISTENT_MIND_CLEANUP_SCOPES.length)
+    .refine((scopes) => new Set(scopes).size === scopes.length, 'cleanup scopes must be unique'),
+  reason: z.string().trim().min(1).max(300).optional(),
+  confirmation: z.literal('CLEAR'),
+}).strict();
 
 const requireSuccess = (result) => {
   if (result?.success === false) {
-    throw new ServerError(result.error || 'Persistent mind request was refused', { status: 409, code: 'INVALID_STATE' });
+    throw new ServerError(result.error || 'Persistent mind request was refused', {
+      status: Number.isInteger(result.status) ? result.status : 409,
+      code: result.code || 'INVALID_STATE',
+    });
   }
   return result;
 };
@@ -113,6 +168,7 @@ router.get('/mind', asyncHandler(async (req, res) => {
   const profile = normalizePersistentMindProfile(root.config?.persistentMindProfile);
   const capabilities = normalizePersistentMindCapabilities(root.config?.persistentMindCapabilities);
   const provider = profile.providerId ? await getProviderById(profile.providerId) : null;
+  const imageCapability = await resolvePersistentMindImageCapability({ provider, model: profile.model });
   const { snapshot: _snapshot, ...publicHistory } = history;
   res.json({
     ...publicHistory,
@@ -123,9 +179,11 @@ router.get('/mind', asyncHandler(async (req, res) => {
       model: profile.model || null,
       effort: profile.effort || null,
       thinkingInterface: profile.thinkingInterface,
+      wakeIntervalMinutes: profile.wakeIntervalMinutes,
     },
     capabilities,
     harness: persistentMindHarnessInfo(provider),
+    imageCapability,
     autonomyMode: getDomainMode(root.config, 'cos'),
   });
 }));
@@ -154,6 +212,34 @@ router.get('/mind/context', asyncHandler(async (_req, res) => {
   });
 }));
 
+// Keep the persistent mind's authority inventory separate from the broader
+// onboard-tools registry. Those tools belong to other agent surfaces and are
+// not direct capabilities of the persistent mind.
+router.get('/mind/tools', asyncHandler(async (_req, res) => {
+  const root = await loadState();
+  const capabilities = normalizePersistentMindCapabilities(root.config?.persistentMindCapabilities);
+  const taskCatalog = capabilities.createTasks
+    ? await readPersistentMindTaskCatalog({ includeAllApps: true })
+    : null;
+  if (taskCatalog && Array.isArray(taskCatalog.apps)) {
+    const allowed = Array.isArray(capabilities.allowedAppIds) ? new Set(capabilities.allowedAppIds) : null;
+    taskCatalog.apps = taskCatalog.apps.map((app) => ({
+      ...app,
+      granted: !allowed || allowed.has(app.id),
+    }));
+  }
+  res.json({
+    schemaVersion: PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION,
+    capabilities,
+    boundaries: PERSISTENT_MIND_TOOL_BOUNDARIES,
+    taskCatalog,
+    tools: PERSISTENT_MIND_TOOL_CATALOG.map((tool) => ({
+      ...tool,
+      granted: capabilities[tool.capability] === true,
+    })),
+  });
+}));
+
 router.get('/mind/runtime', asyncHandler(async (_req, res) => {
   const [root, state] = await Promise.all([loadState(), getPersistentMindState()]);
   const prompt = normalizePersistentMindPrompt(root.config?.persistentMindPrompt);
@@ -161,6 +247,16 @@ router.get('/mind/runtime', asyncHandler(async (_req, res) => {
   const providerId = state.activeTurn?.providerId || profile.providerId;
   const provider = providerId ? await getProviderById(providerId) : null;
   res.json(await inspectPersistentMindRuntime({ state, profile, prompt, provider }));
+}));
+
+router.get('/mind/visibility', asyncHandler(async (req, res) => {
+  const { refresh = false } = validateRequest(visibilityReadSchema, req.query);
+  const [root, state] = await Promise.all([loadState(), getPersistentMindState()]);
+  const prompt = normalizePersistentMindPrompt(root.config?.persistentMindPrompt);
+  const profile = normalizePersistentMindProfile(root.config?.persistentMindProfile);
+  const providerId = state.activeTurn?.providerId || profile.providerId;
+  const provider = providerId ? await getProviderById(providerId) : null;
+  res.json(await readPersistentMindVisibility({ root, state, profile, prompt, provider, force: refresh }));
 }));
 
 router.post('/mind/memories', asyncHandler(async (req, res) => {
@@ -175,6 +271,26 @@ router.put('/mind/memories/:memoryId', asyncHandler(async (req, res) => {
   const memory = await updatePersistentMindMemory(memoryId, updates);
   if (!memory) throw new ServerError('Persistent mind memory not found', { status: 404, code: 'NOT_FOUND' });
   res.json({ success: true, memory });
+}));
+
+router.post('/mind/cleanup', asyncHandler(async (req, res) => {
+  const { confirmation: _confirmation, ...input } = validateRequest(cleanupSchema, req.body);
+  // A user-initiated cleanup creates a stable boundary: stop inference first so
+  // an in-flight turn cannot immediately repopulate state from the old context.
+  await stopPersistentMind({ waitForTurn: true });
+  const result = await cleanupPersistentMind({ ...input, requestedBy: 'user' });
+  const state = await getPersistentMindState();
+  res.json({ ...result, state: publicPersistentMindState(state) });
+}));
+
+router.post('/mind/attachments', asyncHandler(async (req, res) => {
+  const input = validateRequest(attachmentUploadSchema, req.body);
+  res.status(201).json(requireSuccess(await createPersistentMindAttachment(input)));
+}));
+
+router.delete('/mind/attachments/:attachmentId', asyncHandler(async (req, res) => {
+  const { attachmentId: id } = validateRequest(attachmentParamsSchema, req.params);
+  res.json(requireSuccess(await deletePersistentMindAttachment(id)));
 }));
 
 router.post('/mind/messages', asyncHandler(async (req, res) => {

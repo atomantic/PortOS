@@ -165,7 +165,7 @@ export async function run({ params, job, family, context, force = false } = {}) 
   const { picked, total, max, depth } = collected;
   if (!picked) return { dispatched: false, reason: 'every bible entry is already described' };
 
-  const options = { providerId: provider.id, model: job?.model || undefined };
+  const options = { providerId: provider.id, model: job?.model || undefined, effort: job?.effort || undefined };
   const outcome = { described: 0, fields: 0, skipped: 0, failed: 0 };
   const failures = [];
   for (const row of picked.rows) {
@@ -207,6 +207,7 @@ export async function run({ params, job, family, context, force = false } = {}) 
       universeId: picked.universeId,
       providerId: provider.id,
       model: job?.model || null,
+      effort: job?.effort || null,
       depth,
       ...outcome,
       failures,

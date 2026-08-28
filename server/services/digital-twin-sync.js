@@ -63,6 +63,7 @@ import { atomicWrite, readJSONFile, ensureDir, PATHS } from '../lib/fileUtils.js
 import { canonicalStringify, isPlainObject } from '../lib/objects.js';
 import { normalizeTombstones, mergeTombstones, isTombstoned, pruneTombstones, tombstonesEqual } from '../lib/tombstones.js';
 import { compareNewerWins } from '../lib/lwwTimestamp.js';
+import { queueAutobiographyStoriesWrite } from './autobiographyFileQueues.js';
 
 const DIR = PATHS.digitalTwin;
 const IDENTITY_FILE = join(DIR, 'identity.json');
@@ -943,7 +944,9 @@ export async function applyDigitalTwinRemote(remoteData) {
 
   if (isPlainObject(remoteData.autobiography)) {
     // stories only — config (prompt schedule) is intentionally machine-local.
-    count += await applyMerge(AUTOBIO_STORIES_FILE, remoteData.autobiography.stories, mergeAutobiographyStories, { dir: AUTOBIO_DIR });
+    count += await queueAutobiographyStoriesWrite(() =>
+      applyMerge(AUTOBIO_STORIES_FILE, remoteData.autobiography.stories, mergeAutobiographyStories, { dir: AUTOBIO_DIR })
+    );
   }
 
   count += await applySocialAccounts(remoteData.socialAccounts);

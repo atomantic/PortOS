@@ -89,13 +89,6 @@ export const FALLBACK_LAYOUT = Object.freeze({
   widgets: ['apps', 'cos', 'upcoming-tasks', 'system-health'],
 });
 
-export const WIDTH_CLASS = {
-  full:    'col-span-12',
-  half:    'col-span-12 md:col-span-6',
-  third:   'col-span-12 md:col-span-6 lg:col-span-4',
-  quarter: 'col-span-12 sm:col-span-6 lg:col-span-3',
-};
-
 // Width keyword → 12-column grid units. Used when synthesizing a default
 // grid for a layout that hasn't been positionally edited yet.
 export const WIDTH_TO_COLS = {

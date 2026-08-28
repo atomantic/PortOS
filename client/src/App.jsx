@@ -89,6 +89,7 @@ const Privacy = lazyWithReload(() => import('./pages/Privacy'));
 const Agents = lazyWithReload(() => import('./pages/Agents'));
 const Uploads = lazyWithReload(() => import('./pages/Uploads'));
 const Settings = lazyWithReload(() => import('./pages/Settings'));
+const ApiExplorer = lazyWithReload(() => import('./pages/ApiExplorer'));
 const LocalLlmPlayground = lazyWithReload(() => import('./pages/LocalLlmPlayground'));
 const Models = lazyWithReload(() => import('./pages/Models'));
 const Shell = lazyWithReload(() => import('./pages/Shell'));
@@ -284,6 +285,8 @@ export default function App() {
           <Route path="ai/edit/:providerId" element={<AIProviders />} />
           <Route path="prompts" element={<PromptManager />} />
           <Route path="cos" element={<Navigate to="/cos/tasks" replace />} />
+          <Route path="cos/mind/tools" element={<Navigate to="/cos/mind?panel=tools" replace />} />
+          <Route path="cos/tools" element={<Navigate to="/cos/mind?panel=tools" replace />} />
           <Route path="cos/:tab" element={<ChiefOfStaff />} />
           <Route path="calendar" element={<Navigate to="/calendar/agenda" replace />} />
           <Route path="calendar/:tab" element={<CalendarPage />} />
@@ -319,6 +322,8 @@ export default function App() {
               (#4728) — it picks a model, not a preference. */}
           <Route path="settings/embeddings" element={<Navigate to="/models/embeddings" replace />} />
           <Route path="settings/:tab" element={<Settings />} />
+          <Route path="api-reference" element={<Navigate to="/api-reference/catalog" replace />} />
+          <Route path="api-reference/:tab" element={<ApiExplorer />} />
           <Route path="models" element={<Navigate to="/models/performance" replace />} />
           {/* A tab's drill-down (today: the LoRA dataset workbench) renders through
               Models itself, so it keeps the section header and tab bar — see

@@ -18,7 +18,7 @@ const harnessTone = (recommendation) => recommendation === 'recommended'
   ? 'success'
   : recommendation === 'not-recommended' ? 'warning' : 'info';
 
-export default function PersistentMindContextPanel() {
+export default function PersistentMindContextPanel({ view = 'all', refreshKey = 0, onMemoriesChanged }) {
   const [data, setData] = useState(null);
   const [draft, setDraft] = useState(() => promptDraft(null));
   const [loading, setLoading] = useState(true);
@@ -37,7 +37,12 @@ export default function PersistentMindContextPanel() {
       .finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void load(); }, [load, refreshKey]);
+
+  const refreshMemories = useCallback(async () => {
+    await load();
+    onMemoriesChanged?.();
+  }, [load, onMemoriesChanged]);
 
   const savePrompt = async () => {
     if (saving) return;
@@ -55,7 +60,7 @@ export default function PersistentMindContextPanel() {
     <div className="space-y-4">
       {error && <Banner tone="error" title="Context unavailable">{error}</Banner>}
 
-      <section className="rounded border border-port-border bg-port-card p-4" aria-labelledby="mind-architecture-heading">
+      {view !== 'memories' && <section className="rounded border border-port-border bg-port-card p-4" aria-labelledby="mind-architecture-heading">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h3 id="mind-architecture-heading" className="flex items-center gap-2 text-sm font-semibold text-port-text">
@@ -71,7 +76,7 @@ export default function PersistentMindContextPanel() {
           {[
             ['1 · Observe', 'Messages, annotations, and scheduled self-wakes enter one FIFO stream.'],
             ['2 · Assemble', 'Identity, instructions, curated memories, rollups, and recent events fill a bounded context.'],
-            ['3 · Think', 'The exact pinned provider returns a visible working note, reply, memory proposals, and optional follow-up.'],
+            ['3 · Think', 'The exact pinned provider returns a visible working note, reply, durable memories, and optional follow-up.'],
             ['4 · Persist', 'The append-only trajectory becomes the source for chat, inspection, replay, and later context.'],
           ].map(([title, body]) => (
             <div key={title} className="rounded border border-port-border bg-port-bg/40 p-3">
@@ -80,15 +85,15 @@ export default function PersistentMindContextPanel() {
             </div>
           ))}
         </div>
-      </section>
+      </section>}
 
-      {data?.harness && (
+      {view !== 'memories' && data?.harness && (
         <Banner tone={harnessTone(data.harness.recommendation)} title={`${data.harness.label} · ${data.harness.recommendation}`}>
           {data.harness.detail}
         </Banner>
       )}
 
-      <section className="rounded border border-port-border bg-port-card p-4" aria-labelledby="mind-prompt-heading">
+      {view !== 'memories' && <section className="rounded border border-port-border bg-port-card p-4" aria-labelledby="mind-prompt-heading">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h3 id="mind-prompt-heading" className="text-sm font-semibold text-port-text">Identity and operating prompt</h3>
@@ -108,22 +113,22 @@ export default function PersistentMindContextPanel() {
             <textarea id="persistent-mind-instructions" rows={7} maxLength={12000} value={draft.instructions} onChange={(event) => setDraft((current) => ({ ...current, instructions: event.target.value }))} className="mt-1 w-full resize-y rounded border border-port-border bg-port-bg px-3 py-2 text-sm font-normal text-port-text" />
           </label>
         </div>
-      </section>
+      </section>}
 
-      <section className="rounded border border-port-border bg-port-card p-4" aria-labelledby="mind-memory-heading">
+      {view !== 'context' && <section className="rounded border border-port-border bg-port-card p-4" aria-labelledby="mind-memory-heading">
         <div>
           <h3 id="mind-memory-heading" className="flex items-center gap-2 text-sm font-semibold text-port-text"><Database size={16} aria-hidden="true" /> Curated memories</h3>
-          <p className="mt-1 text-xs text-port-text-muted">Only memories explicitly promoted or added here enter the mind context. Model proposals stay in the conversation until you promote them.</p>
+          <p className="mt-1 text-xs text-port-text-muted">Memories created by the persistent mind and memories added here enter its bounded context automatically. You can edit them here at any time.</p>
         </div>
-        <MemoryCreator onCreated={load} />
+        <MemoryCreator onCreated={refreshMemories} />
         <div className="mt-3 space-y-2">
           {(data?.memories || []).length === 0 ? (
             <p className="rounded border border-dashed border-port-border p-4 text-center text-xs text-port-text-muted">No curated memories yet.</p>
-          ) : (data.memories || []).map((memory) => <MemoryEditor key={memory.id} memory={memory} onSaved={load} />)}
+          ) : (data.memories || []).map((memory) => <MemoryEditor key={memory.id} memory={memory} onSaved={refreshMemories} />)}
         </div>
-      </section>
+      </section>}
 
-      <section className="rounded border border-port-border bg-port-card p-4" aria-labelledby="mind-preview-heading">
+      {view !== 'memories' && <section className="rounded border border-port-border bg-port-card p-4" aria-labelledby="mind-preview-heading">
         <h3 id="mind-preview-heading" className="flex items-center gap-2 text-sm font-semibold text-port-text"><Eye size={16} aria-hidden="true" /> Effective context preview</h3>
         <p className="mt-1 text-xs text-port-text-muted">
           This is the actual bounded text projection used on the next wake: {data?.preview?.chars || 0} characters, about {data?.preview?.approximateTokens || 0} tokens, summary cache {data?.preview?.summaryState || 'unknown'}.
@@ -141,7 +146,7 @@ export default function PersistentMindContextPanel() {
             ))}
           </div>
         </details>
-      </section>
+      </section>}
     </div>
   );
 }

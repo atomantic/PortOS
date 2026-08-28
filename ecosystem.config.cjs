@@ -48,6 +48,7 @@ const PORTS = {
   AUTOFIXER: 5559,     // Autofixer API
   AUTOFIXER_UI: 5560,  // Autofixer UI
   POSTGRES_DOCKER: 5561, // PostgreSQL Docker container (host port mapping)
+  WHISPER: 5562,       // Loopback whisper.cpp speech-to-text server
   LLAMA_SERVER: 5568,  // Loopback llama.cpp speculative-decoding server
   VLLM_QWEN: 18020,    // Loopback vLLM Qwen3.8-27B (DFlash 2) container — started by the operator, never by PortOS
   SGLANG_QWEN: 18021,  // Loopback SGLang Qwen3.8-27B container (Hopper/Blackwell) — started by the operator, never by PortOS

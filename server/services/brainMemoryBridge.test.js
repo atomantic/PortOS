@@ -21,6 +21,11 @@ const getDigests = vi.fn(async () => []);
 const getReviews = vi.fn(async () => []);
 const listJournals = vi.fn(async () => ({ records: [] }));
 const getJournal = vi.fn();
+const atomicWrite = vi.fn(async (filePath, data) => {
+  const payload = (typeof data === 'string' || Buffer.isBuffer(data)) ? data : JSON.stringify(data, null, 2);
+  const { writeFile } = await import('fs/promises');
+  return writeFile(filePath, payload);
+});
 
 vi.mock('fs', () => ({ existsSync: vi.fn(() => bridgeFileContents !== null) }));
 vi.mock('fs/promises', () => ({
@@ -30,14 +35,9 @@ vi.mock('fs/promises', () => ({
 vi.mock('../lib/fileUtils.js', () => ({
   PATHS: { brain: '/tmp/test-brain' },
   ensureDir: vi.fn(async () => {}),
-  // atomicWrite replaced the raw writeFile(JSON.stringify) bridge-map site (#1837);
-  // route it through the mocked fs/promises.writeFile so it updates
-  // bridgeFileContents and a reloaded bridge sees the persisted map.
-  atomicWrite: vi.fn(async (filePath, data) => {
-    const payload = (typeof data === 'string' || Buffer.isBuffer(data)) ? data : JSON.stringify(data, null, 2);
-    const { writeFile } = await import('fs/promises');
-    return writeFile(filePath, payload);
-  }),
+  // Route atomic writes through the mocked fs/promises.writeFile so a reloaded
+  // bridge sees the persisted map.
+  atomicWrite,
 }));
 vi.mock('./memoryBackend.js', () => ({
   createMemory, updateMemory, updateMemoryEmbedding, deleteMemory, getMemoryIdsMissingEmbedding,
@@ -444,6 +444,53 @@ describe('brainMemoryBridge — journal re-embed debounce (daily-log autosave)',
 });
 
 describe('brainMemoryBridge — syncAllBrainData refresh mode (issue #1080 recovery)', () => {
+  it('persists all newly created mappings once after a bulk sync', async () => {
+    const bridge = await loadBridge();
+    getAll.mockImplementation(async (type) => (type === 'people'
+      ? [{ id: 'p1', name: 'Alice' }, { id: 'p2', name: 'Bob' }]
+      : []));
+
+    const stats = await bridge.syncAllBrainData();
+
+    expect(stats.synced).toBe(2);
+    expect(atomicWrite).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(bridgeFileContents)).toMatchObject({
+      [bridge.bridgeKey('people', 'p1')]: expect.any(String),
+      [bridge.bridgeKey('people', 'p2')]: expect.any(String),
+    });
+  });
+
+  it('persists a replacement for a stale falsy mapping', async () => {
+    const bridge = await loadBridge();
+    bridgeFileContents = JSON.stringify({ [bridge.bridgeKey('people', 'p1')]: null });
+    getAll.mockImplementation(async (type) => (type === 'people'
+      ? [{ id: 'p1', name: 'Alice' }]
+      : []));
+
+    await bridge.syncAllBrainData();
+
+    expect(atomicWrite).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(bridgeFileContents)).toMatchObject({
+      [bridge.bridgeKey('people', 'p1')]: expect.any(String),
+    });
+  });
+
+  it('persists created mappings when a later bulk read fails', async () => {
+    const bridge = await loadBridge();
+    getAll.mockImplementation(async (type) => {
+      if (type === 'people') return [{ id: 'p1', name: 'Alice' }];
+      if (type === 'projects') throw new Error('store unavailable');
+      return [];
+    });
+
+    await expect(bridge.syncAllBrainData()).rejects.toThrow('store unavailable');
+
+    expect(atomicWrite).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(bridgeFileContents)).toMatchObject({
+      [bridge.bridgeKey('people', 'p1')]: expect.any(String),
+    });
+  });
+
   it('skips already-mapped records by default but re-embeds them with refresh:true', async () => {
     const bridge = await loadBridge();
     getAll.mockImplementation(async (type) => (type === 'people' ? [{ id: 'p1', name: 'Alice' }] : []));

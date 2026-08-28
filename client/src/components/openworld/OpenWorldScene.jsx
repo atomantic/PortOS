@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect, useMemo, Suspense } from 'react';
+import { memo, useState, useCallback, useRef, useEffect, useMemo, Suspense } from 'react';
 import * as THREE from 'three';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
@@ -65,7 +65,7 @@ import { useVisibilityEvent } from '../../hooks/useVisibilityEvent';
 
 const STARTUP_PARTICLE_DENSITY = 0.49;
 
-export default function OpenWorldScene({
+function OpenWorldScene({
   apps,
   agentMap,
   onBuildingClick,
@@ -548,3 +548,8 @@ export default function OpenWorldScene({
     </div>
   );
 }
+
+// HUD telemetry (rover pose, clock, socket logs) updates much more often than scene
+// inputs. Keep those parent renders out of the expensive r3f tree; React still
+// re-enters the scene whenever any actual scene prop changes.
+export default memo(OpenWorldScene);

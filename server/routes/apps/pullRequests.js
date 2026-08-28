@@ -166,8 +166,14 @@ router.post('/:id/pull-requests/:number/resolve', loadApp, asyncHandler(async (r
     id: `app-pr-${app.id}-${number}`,
     status: 'pending',
     priority: 'HIGH',
-    description: `Resolve and merge ${result.forge === 'gitlab' ? 'MR' : 'PR'} #${number} for ${appLabel}: ${title}`,
-    metadata: { app: app.id },
+    // Keep forge-controlled text out of the task instructions. The title is
+    // retained as explicitly delimited data for UI/audit consumers, but the
+    // autonomous follow-up receives only this static objective.
+    description: `Resolve and merge ${result.forge === 'gitlab' ? 'MR' : 'PR'} #${number} for ${appLabel}`,
+    metadata: {
+      app: app.id,
+      reviewLoopPRTitle: `--- BEGIN UNTRUSTED FORGE PR TITLE ---\n${title}\n--- END UNTRUSTED FORGE PR TITLE ---`,
+    },
   };
 
   const task = await spawnReviewLoopFollowUp({

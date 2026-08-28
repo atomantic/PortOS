@@ -165,6 +165,115 @@ describe('finalizeRunRecord — authoritative timeout classification', () => {
     expect(errorDetection.analyzeError).not.toHaveBeenCalled();
     expect(onRunFailed).not.toHaveBeenCalled();
   });
+
+  // A caller that synthesizes its own run id instead of going through toolkit
+  // `createRun` (the local-model benchmark) leaves no metadata.json to merge
+  // into, so the record described a run with no id, provider or model. That
+  // anonymous record still reached onRunFailed, and autoFixer filed
+  // "Investigate AI provider failure: undefined (undefined)" against it —
+  // keying its dedupe and circuit breaker on `undefined-undefined`.
+  it('attributes a failure with no stored metadata to the run and provider it was given', async () => {
+    const onRunFailed = vi.fn();
+    setAIToolkit(fakeToolkit(), { dataDir: '/tmp/test-runner', hooks: { onRunFailed } });
+
+    const metadata = await finalizeRunRecord({
+      runId: 'run-no-record',
+      output: '',
+      exitCode: 1,
+      success: false,
+      error: 'TUI exited with code 1',
+      startTime: Date.now(),
+      identity: { providerId: 'opencode-llama-tui', providerName: 'OpenCode', model: 'dflash' },
+    });
+
+    expect(metadata).toMatchObject({
+      id: 'run-no-record',
+      providerId: 'opencode-llama-tui',
+      providerName: 'OpenCode',
+      model: 'dflash',
+    });
+    expect(onRunFailed).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'run-no-record', providerName: 'OpenCode', model: 'dflash' }),
+      'TUI exited with code 1',
+      '',
+    );
+  });
+
+  it('never lets identity overwrite what the stored run record already says', async () => {
+    readFile.mockResolvedValueOnce(JSON.stringify({
+      id: 'run-real', providerId: 'claude-cli', providerName: 'Claude Code', model: 'claude-opus-5',
+    }));
+
+    const metadata = await finalizeRunRecord({
+      runId: 'run-real',
+      output: '',
+      exitCode: 1,
+      success: false,
+      error: 'boom',
+      startTime: Date.now(),
+      identity: { providerId: 'wrong', providerName: 'Wrong', model: 'wrong-model' },
+    });
+
+    expect(metadata).toMatchObject({
+      id: 'run-real', providerId: 'claude-cli', providerName: 'Claude Code', model: 'claude-opus-5',
+    });
+  });
+
+  // A benchmark deliberately probes a model that may not work at all — that is
+  // the measurement, not evidence a configured provider broke. Escalating it
+  // queued a CoS investigation task per failed benchmark run.
+  it('finalizes a probe run without firing the provider-failure hook', async () => {
+    const onRunFailed = vi.fn();
+    setAIToolkit(fakeToolkit(), { dataDir: '/tmp/test-runner', hooks: { onRunFailed } });
+
+    const metadata = await finalizeRunRecord({
+      runId: 'run-probe',
+      output: '',
+      exitCode: 1,
+      success: false,
+      error: 'TUI exited with code 1',
+      startTime: Date.now(),
+      reportFailure: false,
+    });
+
+    expect(metadata).toMatchObject({ success: false, exitCode: 1, error: 'TUI exited with code 1' });
+    expect(onRunFailed).not.toHaveBeenCalled();
+  });
+});
+
+describe('failRunRecord — pre-spawn failures reach the caller', () => {
+  it('streams the reason, persists the record, and settles onComplete', async () => {
+    const onData = vi.fn();
+    const onComplete = vi.fn();
+
+    const failure = await runner.failRunRecord({
+      runId: 'run-no-binary',
+      error: 'TUI command not found: opencode',
+      exitCode: 127,
+      startTime: Date.now(),
+      onData,
+      onComplete,
+      identity: { providerName: 'OpenCode' },
+    });
+
+    expect(onData).toHaveBeenCalledWith('\u274c TUI command not found: opencode');
+    expect(failure).toMatchObject({
+      id: 'run-no-binary',
+      success: false,
+      exitCode: 127,
+      error: 'TUI command not found: opencode',
+      providerName: 'OpenCode',
+    });
+    expect(onComplete).toHaveBeenCalledWith(failure);
+  });
+
+  it('does not let a throwing onComplete escape and strand the run', async () => {
+    await expect(runner.failRunRecord({
+      runId: 'run-throwing-callback',
+      error: 'nope',
+      onComplete: () => { throw new Error('callback blew up'); },
+    })).resolves.toMatchObject({ success: false });
+  });
 });
 
 describe('patchRunMetadata — serialized merges', () => {

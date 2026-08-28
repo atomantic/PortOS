@@ -16,11 +16,14 @@ import toast from '../components/ui/Toast';
 import { pickActiveLayoutId, recordManualLayoutPick } from '../utils/timeWindow.js';
 import { useInstanceFeatures } from '../hooks/useInstanceFeatures.js';
 
+export const isAppsLoading = (appsReadSettled) => !appsReadSettled;
+
 export default function Dashboard() {
   // null means the first apps read has not completed. Keep that distinct from
   // a successful empty response so the Apps tile cannot flash its empty-state
   // CTA while an existing installation is still being read.
   const [apps, setApps] = useState(null);
+  const [appsReadSettled, setAppsReadSettled] = useState(false);
   const [health, setHealth] = useState(null);
   const [usage, setUsage] = useState(null);
   const [tribeCare, setTribeCare] = useState(null);
@@ -112,7 +115,9 @@ export default function Dashboard() {
     // Apps and the remaining widgets are independent hydration streams. Health
     // and daily-actions in particular can involve slow subsystem/database work
     // that should not hold every widget behind one Promise.all barrier.
-    const appsRead = api.getApps().catch((err) => { setDataError(err.message); return null; });
+    const appsRead = api.getApps()
+      .catch((err) => { setDataError(err.message); return null; })
+      .finally(() => setAppsReadSettled(true));
     const secondaryRead = Promise.all([
       refreshHealth(),
       api.getUsage().catch(() => null).then(setUsage),
@@ -222,7 +227,7 @@ export default function Dashboard() {
   }, []);
 
   const appList = useMemo(() => (Array.isArray(apps) ? apps : []), [apps]);
-  const appsLoading = !Array.isArray(apps);
+  const appsLoading = isAppsLoading(appsReadSettled);
   const sortedApps = useMemo(() =>
     [...appList].sort((a, b) => {
       const archiveDiff = (a.archived ? 1 : 0) - (b.archived ? 1 : 0);

@@ -51,6 +51,36 @@ beforeEach(() => {
   HTMLElement.prototype.scrollIntoView = vi.fn();
 });
 
+describe('CmdKSearch dialog accessibility', () => {
+  it('traps focus inside the modal and restores it to the opener on close', async () => {
+    render(
+      <MemoryRouter>
+        <button type="button">Open palette shortcut</button>
+        <CmdKSearch />
+      </MemoryRouter>,
+    );
+
+    const opener = screen.getByRole('button', { name: 'Open palette shortcut' });
+    opener.focus();
+    fireEvent.keyDown(document, { key: 'k', metaKey: true });
+
+    const dialog = await screen.findByRole('dialog', { name: 'Command palette' });
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+
+    const input = within(dialog).getByRole('textbox', { name: 'Command palette' });
+    expect(input).toHaveFocus();
+
+    fireEvent.keyDown(input, { key: 'Tab' });
+    expect(input).toHaveFocus();
+    fireEvent.keyDown(input, { key: 'Tab', shiftKey: true });
+    expect(input).toHaveFocus();
+
+    fireEvent.keyDown(input, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(opener).toHaveFocus();
+  });
+});
+
 describe('CmdKSearch recent destinations', () => {
   it('leads with shared nav history, resolves deep links, and fills with non-duplicate defaults', async () => {
     localStorage.setItem(RECENT_KEY, JSON.stringify([
@@ -96,7 +126,7 @@ describe('CmdKSearch instance feature gating', () => {
       </MemoryRouter>,
     );
     fireEvent.keyDown(document, { key: 'k', metaKey: true });
-    const input = await screen.findByLabelText('Command palette');
+    const input = await screen.findByRole('textbox', { name: 'Command palette' });
     fireEvent.change(input, { target: { value: query } });
     await act(async () => {});
   };

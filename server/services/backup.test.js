@@ -1370,8 +1370,9 @@ describe('runBackup lifecycle', () => {
   async function findSnapshotDir() {
     const fsp = await actualFs();
     const [host] = await fsp.readdir(joinPath(destRoot, 'snapshots'));
-    const [snapshot] = await fsp.readdir(joinPath(destRoot, 'snapshots', host));
-    return joinPath(destRoot, 'snapshots', host, snapshot);
+    const entries = await fsp.readdir(joinPath(destRoot, 'snapshots', host), { withFileTypes: true });
+    const snapshot = entries.find((entry) => entry.isDirectory() && !entry.name.startsWith('.'));
+    return joinPath(destRoot, 'snapshots', host, snapshot.name);
   }
 
   async function readJson(path) {
@@ -1422,6 +1423,9 @@ describe('runBackup lifecycle', () => {
     // real file and fileCount reflects actual snapshot contents.
     const snapshotDir = await findSnapshotDir();
     const fsp = await actualFs();
+    const snapshotId = basename(snapshotDir);
+    await expect(fsp.access(joinPath(destRoot, 'snapshots', machineHost, `.${snapshotId}.in-progress`)))
+      .resolves.toBeUndefined();
     await fsp.writeFile(joinPath(snapshotDir, 'data', 'settings.json'), '{"a":1}');
 
     proc.stdout.emit('data', Buffer.from(
@@ -1431,6 +1435,9 @@ describe('runBackup lifecycle', () => {
     ));
     proc.emit('close', 0);
     const result = await pending;
+
+    await expect(fsp.access(joinPath(destRoot, 'snapshots', machineHost, `.${snapshotId}.in-progress`)))
+      .rejects.toThrow();
 
     // --- rsync invocation -------------------------------------------------
     const [bin, args, opts] = spawn.mock.calls[0];
@@ -1577,6 +1584,29 @@ describe('runBackup lifecycle', () => {
 
     // isRunning must have been reset: the next run proceeds instead of
     // short-circuiting to { skipped: true }.
+    const retryProc = fakeProc();
+    spawn.mockReturnValue(retryProc);
+    const retry = runBackup(destRoot, io);
+    await waitFor(() => spawn.mock.calls.length === 2, 'retry rsync spawn');
+    retryProc.emit('close', 0);
+    await expect(retry).resolves.toMatchObject({ status: 'ok' });
+  });
+
+  it('on PostgreSQL setup failure: releases the lock, records status error, and permits retry', async () => {
+    const io = { emit: vi.fn() };
+    const firstProc = fakeProc();
+    spawn.mockReturnValue(firstProc);
+    checkHealth.mockRejectedValueOnce(new Error('database health unavailable'));
+
+    const pending = runBackup(destRoot, io);
+    await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+    firstProc.emit('close', 0);
+    await expect(pending).rejects.toThrow('database health unavailable');
+
+    const failed = io.emit.mock.calls.find(([event]) => event === 'backup:failed');
+    expect(failed?.[1]?.error).toBe('database health unavailable');
+    expect((await readJson(joinPath(dataRoot, 'backup', 'state.json'))).status).toBe('error');
+
     const retryProc = fakeProc();
     spawn.mockReturnValue(retryProc);
     const retry = runBackup(destRoot, io);

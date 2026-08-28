@@ -13,6 +13,7 @@ vi.mock('../services/fableLoom/index.js', () => ({
   deleteLoom: vi.fn(),
   deleteNode: vi.fn(),
   deleteNodeTransition: vi.fn(),
+  feedbackEpisode: vi.fn(),
   getLoom: vi.fn(),
   listLoomSummaries: vi.fn(async () => []),
   playTurn: vi.fn(),
@@ -189,6 +190,23 @@ describe('FableLoom routes', () => {
       .send({ guidance: 'darker', replace: true });
     expect(ok.status).toBe(200);
     expect(fableLoom.weaveEpisode).toHaveBeenCalledWith('loom-1', 'ep-1', { guidance: 'darker', replace: true });
+  });
+
+  it('POST feedback requires an instruction and forwards the route selection', async () => {
+    const invalid = await request(makeApp())
+      .post('/api/fableloom/loom-1/episodes/ep-1/feedback')
+      .send({ feedback: '   ' });
+    expect(invalid.status).toBe(400);
+    expect(fableLoom.feedbackEpisode).not.toHaveBeenCalled();
+
+    fableLoom.feedbackEpisode.mockResolvedValueOnce({ loom: { id: 'loom-1' }, changedScenes: 1 });
+    const ok = await request(makeApp())
+      .post('/api/fableloom/loom-1/episodes/ep-1/feedback')
+      .send({ feedback: 'Tighten the opening.', providerId: 'writer', model: 'large', effort: 'high' });
+    expect(ok.status).toBe(200);
+    expect(fableLoom.feedbackEpisode).toHaveBeenCalledWith('loom-1', 'ep-1', {
+      feedback: 'Tighten the opening.', providerId: 'writer', model: 'large', effort: 'high',
+    });
   });
 
   it('POST play accepts a tapped path instead of a message', async () => {

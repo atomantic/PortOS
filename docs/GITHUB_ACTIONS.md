@@ -32,7 +32,8 @@ A release therefore pays for one full run (on its PR), not three.
 PRs into `main` use `scripts/ci-test-plan.js` to classify the changed files
 before installing dependencies. Directory-scoped features run their server and
 client feature tests; flat modules fall back to Vitest's import-graph-aware
-`--changed` mode. The planner deliberately chooses full CI for shared
+`related` mode, fed the changed behavioral source paths plus the planner's
+explicit test files. The planner deliberately chooses full CI for shared
 composition roots, test configuration, dependency manifests, workflow changes,
 unknown artifacts, or wide diffs.
 
@@ -60,13 +61,15 @@ being registered, either in `ALWAYS_RUN_TESTS` or in its own
 
 ### Vitest runner tuning
 
-On GitHub Actions, `CI=true` caps each Vitest runner at `maxWorkers: 2`
+On GitHub Actions, `CI=true` caps the server Vitest runner at `maxWorkers: 4`
 (`scripts/vitestCiPool.js`, spread into `server/vitest.config.js` and
-`client/vitest.config.js`). Standard hosted runners are 2 vCPU / 7GB;
+`client/vitest.config.js`). Standard Linux runners for public repositories are
+[4 vCPU / 16GB](https://docs.github.com/en/actions/reference/runners/github-hosted-runners);
 uncapped forks oversubscribe those cores during transform. Local `npm test`
-is unbounded. File-level parallelism stays on for unit tests so the two
-workers stay busy; the DB suite already serializes files because those tests
-share one Postgres.
+is unbounded. The jsdom-heavy client retains its proven two-worker override:
+four workers made its async rendering assertions timing-dependent under CI
+contention. File-level parallelism stays on; the DB suite already serializes
+files because those tests share one Postgres.
 
 Each test job restores Vite/Vitest transform artifacts
 (`node_modules/.vite`, `node_modules/.vitest`) **after** the install — `npm ci`
@@ -185,11 +188,9 @@ No job clones full history. `actions/checkout` runs at `fetch-depth: 2`,
 which on a pull request is the merge ref plus both of its parents — and the
 first parent *is* the base-branch commit the pull request is diffed against.
 `scripts/ci-base-sha.js` reads it (`HEAD^1`) and exports `CI_BASE_SHA` for the
-rest of the job, so both three-dot diffs that matter resolve without deeper
-history:
-
-- the planner's `git diff <base>...HEAD`;
-- Vitest's own `--changed <sha>`, which is also a three-dot diff internally.
+rest of the job, so the planner's `git diff <base>...HEAD` resolves without
+deeper history. The planner passes the resulting source paths directly to
+`vitest related`; Vitest no longer performs its own Git diff.
 
 Reading the base off the checkout rather than `github.event.pull_request.base.sha`
 is also more correct: GitHub rebuilds the merge ref when the base branch moves,
@@ -230,10 +231,14 @@ The selected work is split across parallel jobs:
   mirrors `CI Gate`'s result. This is the check the release workflow looks for;
   see "Reusing the release PR's CI run" below.
 
-Targeted `files` / `related` plans run **one** Vitest process for the union of
-planner-selected files and Vitest's `--changed` import graph. The two sets are
-listed then merged — they cannot share one argv, because Vitest ANDs
-`--changed` with path selectors.
+Targeted `files` plans run the planner's exact test files once. `related` plans
+run `vitest related` once with changed behavioral source paths and the cheap
+structural/repository contract files as inputs. Vitest treats a test-file input
+as directly selected, so contracts and changed tests share the import-graph run
+without being repeated in a second process.
+There is no buffered discovery pass: the old `vitest list --changed` path could
+spend minutes printing every test name, overflow Node's buffer, discard the
+result, and rerun the same graph.
 
 No third-party change-filter action is used. The planner passes test paths as a
 JSON argument array to `spawnSync`, never through shell interpolation.
@@ -258,12 +263,14 @@ Changes to CI/test configuration also force the full suite on their own PR.
 ### Impact-planner safety rules
 
 - A directory feature such as `server/services/sprites/` selects tests carrying
-  the same feature segment across server and client, plus every test Vitest's
-  import graph relates to the changed files.
-- Directly changed tests and co-located sibling tests are always included.
+  the same feature segment across server and client.
+- Flat/shared behavioral modules use Vitest's import graph, driven by their
+  exact changed source paths. Directly changed tests are always included.
 - Barrel/catalog guards are added when reusable `lib`, `hooks`, or `utils`
-  directories change; JSX changes include the global accessibility convention
-  guard.
+  directories change, and catalog-only barrels are excluded from import-graph
+  expansion. JSX changes include the global accessibility convention guard.
+- A deleted executable source cannot be handed to `vitest related`, so that
+  case fails closed to the complete suite.
 - Database adapters, DB scripts, and relevant migrations add the complete
   serial DB suite.
 - Unmapped executable files use related-test mode. Unclassified artifacts,

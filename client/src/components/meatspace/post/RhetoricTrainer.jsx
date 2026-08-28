@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, CheckCircle, ChevronRight, Feather, Lightbulb, Repeat2, RotateCcw, Save, Sparkles, Timer } from 'lucide-react';
-import { evaluateRhetoricAttempt, submitTrainingEntry, updatePostConfig } from '../../../services/api';
+import { evaluateRhetoricAttempt, getLoadedLlmModels, submitTrainingEntry, updatePostConfig } from '../../../services/api';
 import useProviderModels from '../../../hooks/useProviderModels';
+import { isEmbeddingModel, isLocalEndpoint, isLocalInstanceProvider, isOllamaBackedProvider, localBackendForProvider, mergeModelLists } from '../../../utils/providers';
 import ProviderModelSelector from '../../ProviderModelSelector';
 import toast from '../../ui/Toast';
 import { uuidv4 } from '../../../lib/uuid';
@@ -87,6 +88,72 @@ export const RHETORIC_MODES = [
 const modeFor = (id) => RHETORIC_MODES.find((mode) => mode.id === id) || null;
 const newRoundId = () => uuidv4();
 const evaluatorProviderFilter = (provider) => provider?.enabled !== false;
+const LOCAL_MODEL_BACKENDS = [
+  { id: 'ollama', label: 'Ollama' },
+  { id: 'lmstudio', label: 'LM Studio' },
+];
+const EMBEDDING_CAPABILITIES = new Set(['embedding', 'embeddings']);
+
+const isGenerationLoadedModel = (model) => {
+  const type = typeof model?.type === 'string' ? model.type.toLowerCase() : '';
+  if (EMBEDDING_CAPABILITIES.has(type)) return false;
+  if (Array.isArray(model?.capabilities) && model.capabilities.length > 0) {
+    return !model.capabilities.some((capability) => EMBEDDING_CAPABILITIES.has(String(capability).toLowerCase()));
+  }
+  if (type) return true;
+  return !isEmbeddingModel(model?.id || model?.name || '');
+};
+
+const normalizeLoadedLocalModels = (status, sourceErrors = []) => LOCAL_MODEL_BACKENDS.flatMap(({ id: backend, label }) => (
+  !sourceErrors.includes(backend) && Array.isArray(status?.[backend])
+    ? status[backend]
+      .filter((model) => typeof model?.id === 'string' && model.id.trim())
+      .map((model) => ({
+        backend,
+        backendLabel: label,
+        id: model.id,
+        name: model.name || model.id,
+        type: model.type,
+        capabilities: model.capabilities,
+      }))
+    : []
+));
+
+const configuredProviderEndpoints = (provider) => {
+  const endpoints = [];
+  if (typeof provider?.endpoint === 'string' && provider.endpoint.trim()) endpoints.push(provider.endpoint);
+  const anthropicBaseUrl = provider?.envVars?.ANTHROPIC_BASE_URL;
+  if (typeof anthropicBaseUrl === 'string' && anthropicBaseUrl.trim()) endpoints.push(anthropicBaseUrl);
+  const openCodeConfig = provider?.envVars?.OPENCODE_CONFIG_CONTENT;
+  if (typeof openCodeConfig === 'string' && openCodeConfig.trim()) {
+    const openCodeEndpoints = [...openCodeConfig.matchAll(/"baseURL"\s*:\s*"([^"]+)"/g)].map((match) => match[1]);
+    if (openCodeEndpoints.length === 0) return null;
+    endpoints.push(...openCodeEndpoints);
+  }
+  return endpoints;
+};
+
+const backendForProvider = (provider) => {
+  if (!provider || !isLocalInstanceProvider(provider)) return null;
+  const endpoints = configuredProviderEndpoints(provider);
+  if (!endpoints || endpoints.some((endpoint) => !isLocalEndpoint(endpoint))) return null;
+  return isOllamaBackedProvider(provider) ? 'ollama' : localBackendForProvider(provider);
+};
+
+const pickLoadedEvaluatorModel = (models, providers, activeProviderId, sourceErrors) => {
+  const available = models.filter((model) => (
+    !sourceErrors.includes(model.backend)
+    && isGenerationLoadedModel(model)
+    && providers.some((provider) => backendForProvider(provider) === model.backend)
+  ));
+  const activeBackend = backendForProvider(providers.find((provider) => provider.id === activeProviderId));
+  const selected = available.find((model) => model.backend === activeBackend) || available[0] || null;
+  if (!selected) return null;
+  const provider = providers.find((candidate) => (
+    candidate.id === activeProviderId && backendForProvider(candidate) === selected.backend
+  )) || providers.find((candidate) => backendForProvider(candidate) === selected.backend);
+  return provider ? { ...selected, providerId: provider.id } : null;
+};
 
 function EvaluatorReport({ results, enabled }) {
   if (!enabled) return null;
@@ -154,6 +221,7 @@ function RhetoricEvaluatorConfig({
   saving,
   error,
   onSave,
+  localModelStatus,
 }) {
   const saved = config?.rhetoricEvaluator?.enabled === true;
   return (
@@ -180,6 +248,28 @@ function RhetoricEvaluatorConfig({
           <span className="block text-xs text-gray-500 mt-0.5">Off by default. Saving this setting is the consent gate for background provider calls.</span>
         </span>
       </label>
+      {localModelStatus.state === 'loading' && (
+        <p className="text-xs text-gray-500" role="status">Checking which local models are loaded…</p>
+      )}
+      {localModelStatus.models.length > 0 && (
+        <div className="rounded-lg border border-port-accent/30 bg-port-accent/5 px-3 py-2.5" role="status">
+          <div className="text-xs font-medium text-port-accent">Loaded local models</div>
+          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-300">
+            {localModelStatus.models.map((model) => (
+              <span key={`${model.backend}:${model.id}`}>{model.name} · {model.backendLabel}</span>
+            ))}
+          </div>
+          <p className="mt-1 text-[11px] text-gray-500">A loaded model is preselected when there is no saved evaluator choice, avoiding a cold start.</p>
+        </div>
+      )}
+      {localModelStatus.state === 'ready' && localModelStatus.models.length === 0 && localModelStatus.sourceErrors.length === 0 && (
+        <p className="text-xs text-gray-500">No local models are loaded right now. Selecting one later may require a cold start.</p>
+      )}
+      {localModelStatus.sourceErrors.length > 0 && (
+        <p className="text-xs text-amber-400" role="status">
+          Couldn&apos;t verify residency for {localModelStatus.sourceErrors.map((backend) => LOCAL_MODEL_BACKENDS.find((entry) => entry.id === backend)?.label || backend).join(', ')}. Loaded-model information may be partial.
+        </p>
+      )}
       <ProviderModelSelector
         providers={providers}
         selectedProviderId={providerId}
@@ -221,17 +311,29 @@ export default function RhetoricTrainer({ mode, onSelectMode, onExitMode, onBack
   const [saving, setSaving] = useState(false);
   const [evaluatorSaving, setEvaluatorSaving] = useState(false);
   const [evaluatorSaveError, setEvaluatorSaveError] = useState('');
+  const [localModelStatus, setLocalModelStatus] = useState({ state: 'loading', models: [], sourceErrors: [] });
   const savedEvaluator = config?.rhetoricEvaluator || {};
+  const hasSavedEvaluatorChoice = savedEvaluator.providerId != null || savedEvaluator.model != null;
   const [evaluatorEnabled, setEvaluatorEnabled] = useState(savedEvaluator.enabled === true);
   const [evaluatorEffort, setEvaluatorEffort] = useState(savedEvaluator.effort || '');
+  const evaluatorSelectionTouchedRef = useRef(false);
+  const evaluatorAutoSelectionRef = useRef(false);
   const {
     providers,
+    activeProviderId: evaluatorActiveProviderId,
     selectedProviderId: evaluatorProviderId,
     selectedModel: evaluatorModel,
     availableModels: evaluatorModels,
     setSelectedProviderId: setEvaluatorProviderId,
     setSelectedModel: setEvaluatorModel,
   } = useProviderModels({ filter: evaluatorProviderFilter, allowDefault: true, silent: true, withEffort: true });
+  const evaluatorBackend = backendForProvider(providers.find((provider) => provider.id === evaluatorProviderId));
+  const evaluatorAvailableModels = useMemo(() => mergeModelLists(
+    evaluatorModels,
+    localModelStatus.models
+      .filter((model) => model.backend === evaluatorBackend && isGenerationLoadedModel(model))
+      .map((model) => model.id),
+  ), [evaluatorBackend, evaluatorModels, localModelStatus.models]);
   const roundStart = useRef(Date.now());
   const promptStart = useRef(Date.now());
   const roundIdRef = useRef(newRoundId());
@@ -256,10 +358,68 @@ export default function RhetoricTrainer({ mode, onSelectMode, onExitMode, onBack
 
   useEffect(() => {
     setEvaluatorEnabled(savedEvaluator.enabled === true);
-    setEvaluatorProviderId(savedEvaluator.providerId || '');
-    setEvaluatorModel(savedEvaluator.model || '');
+    if (
+      !evaluatorSelectionTouchedRef.current
+      && (hasSavedEvaluatorChoice || !evaluatorAutoSelectionRef.current)
+    ) {
+      setEvaluatorProviderId(savedEvaluator.providerId || '');
+      setEvaluatorModel(savedEvaluator.model || '');
+    }
     setEvaluatorEffort(savedEvaluator.effort || '');
-  }, [savedEvaluator.enabled, savedEvaluator.providerId, savedEvaluator.model, savedEvaluator.effort]);
+  }, [hasSavedEvaluatorChoice, savedEvaluator.enabled, savedEvaluator.providerId, savedEvaluator.model, savedEvaluator.effort]);
+
+  useEffect(() => {
+    if (selectedMode) return undefined;
+    let canceled = false;
+    setLocalModelStatus({ state: 'loading', models: [], sourceErrors: [] });
+    getLoadedLlmModels({ silent: true })
+      .then((status) => {
+        if (canceled) return;
+        const listsValid = LOCAL_MODEL_BACKENDS.every(({ id }) => Array.isArray(status?.[id]));
+        const sourceErrors = Array.isArray(status?.sourceErrors)
+          ? status.sourceErrors.filter((backend) => LOCAL_MODEL_BACKENDS.some((entry) => entry.id === backend))
+          : [];
+        setLocalModelStatus({
+          state: listsValid ? 'ready' : 'unavailable',
+          models: normalizeLoadedLocalModels(status, sourceErrors),
+          sourceErrors: sourceErrors.length > 0
+            ? sourceErrors
+            : (listsValid ? [] : LOCAL_MODEL_BACKENDS.map(({ id }) => id)),
+        });
+      })
+      .catch(() => {
+        if (!canceled) setLocalModelStatus({ state: 'unavailable', models: [], sourceErrors: LOCAL_MODEL_BACKENDS.map(({ id }) => id) });
+      });
+    return () => { canceled = true; };
+  }, [selectedMode?.id]);
+
+  useEffect(() => {
+    if (
+      selectedMode
+      || localModelStatus.state !== 'ready'
+      || evaluatorSelectionTouchedRef.current
+      || evaluatorAutoSelectionRef.current
+      || hasSavedEvaluatorChoice
+    ) return;
+    const loaded = pickLoadedEvaluatorModel(
+      localModelStatus.models,
+      providers,
+      evaluatorActiveProviderId,
+      localModelStatus.sourceErrors,
+    );
+    if (!loaded) return;
+    evaluatorAutoSelectionRef.current = true;
+    setEvaluatorProviderId(loaded.providerId);
+    setEvaluatorModel(loaded.id);
+  }, [
+    evaluatorActiveProviderId,
+    localModelStatus,
+    providers,
+    hasSavedEvaluatorChoice,
+    selectedMode,
+    setEvaluatorModel,
+    setEvaluatorProviderId,
+  ]);
 
   const prompt = selectedMode?.prompts[promptIndex];
   const completed = results.length;
@@ -413,15 +573,23 @@ export default function RhetoricTrainer({ mode, onSelectMode, onExitMode, onBack
           providerId={evaluatorProviderId}
           model={evaluatorModel}
           effort={evaluatorEffort}
-          availableModels={evaluatorModels}
+          availableModels={evaluatorAvailableModels}
           enabled={evaluatorEnabled}
-          onProviderChange={(value) => { setEvaluatorProviderId(value); setEvaluatorEffort(''); }}
-          onModelChange={setEvaluatorModel}
+          onProviderChange={(value) => {
+            evaluatorSelectionTouchedRef.current = true;
+            setEvaluatorProviderId(value);
+            setEvaluatorEffort('');
+          }}
+          onModelChange={(value) => {
+            evaluatorSelectionTouchedRef.current = true;
+            setEvaluatorModel(value);
+          }}
           onEffortChange={setEvaluatorEffort}
           onEnabledChange={setEvaluatorEnabled}
           saving={evaluatorSaving}
           error={evaluatorSaveError}
           onSave={saveEvaluator}
+          localModelStatus={localModelStatus}
         />
         <div className="grid gap-4 sm:grid-cols-2">
           {RHETORIC_MODES.map((entry) => {

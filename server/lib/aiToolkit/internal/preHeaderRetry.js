@@ -8,6 +8,28 @@ const REPLAY_SAFE_TRANSPORT_CODES = new Set([
   'UND_ERR_SOCKET',
 ]);
 
+/**
+ * Flatten a fetch rejection's cause chain for run metadata and classification.
+ * Node/undici otherwise exposes every pre-header transport failure as the same
+ * `TypeError: fetch failed`, with the actionable code nested under `.cause`.
+ * Kept inside the vendored toolkit rather than importing PortOS's equivalent
+ * helper, preserving this directory's self-contained contract.
+ */
+export function describeTransportError(error) {
+  const parts = [];
+  const seen = new Set();
+  let current = error;
+  for (let depth = 0; current && typeof current === 'object' && depth < 5; depth += 1) {
+    if (seen.has(current)) break;
+    seen.add(current);
+    if (current.code) parts.push(String(current.code));
+    if (current.message) parts.push(String(current.message));
+    current = current.cause;
+  }
+  if (typeof current === 'string') parts.push(current);
+  return parts.join(': ') || String(error);
+}
+
 export function isTransientGatewayStatus(status) {
   return TRANSIENT_GATEWAY_STATUSES.has(Number(status));
 }

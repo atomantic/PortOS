@@ -49,6 +49,7 @@ import {
   readEndpointCapacity,
 } from './cosLocalEndpointSlots.js';
 import { PENDING_MERGE_SWEEP_INTERVAL_MS, MAX_PENDING_MERGE_TICKS } from './prWatcher.js';
+import { PERSISTENT_MIND_SCHEMA_VERSION } from '../lib/persistentMind.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const COS_SRC = readFileSync(join(__dirname, 'cos.js'), 'utf-8');
@@ -2265,8 +2266,8 @@ describe('cos.js source — agent:completed triggers perpetual refill', () => {
     expect(fnIdx, 'refillPerpetualForCompletedAgent must exist').toBeGreaterThan(-1);
     const fnSlice = COS_SRC.slice(fnIdx, fnIdx + 4600);
     expect(
-      /queueEligibleImprovementTasks\(\s*state\s*,\s*cosTaskData\s*,\s*\{\s*ignoreTaskId:\s*agent\?\.taskId\s*\}\s*\)/.test(fnSlice),
-      'refill must forward { ignoreTaskId: agent?.taskId } to queueEligibleImprovementTasks'
+      /queueEligibleImprovementTasks\(\s*state\s*,\s*cosTaskData\s*,\s*\{[\s\S]*?ignoreTaskId:\s*agent\?\.taskId[\s\S]*?\}\s*\)/.test(fnSlice),
+      'refill must forward ignoreTaskId: agent?.taskId to queueEligibleImprovementTasks'
     ).toBe(true);
   });
 
@@ -2319,7 +2320,7 @@ describe('cos.js source — agent:completed triggers perpetual refill', () => {
       'on-demand engine must stamp metadata.onDemand: true before addTask'
     ).toBe(true);
     expect(
-      /addTask\(\s*task\s*,\s*'internal'\s*,\s*\{\s*raw:\s*true\s*,\s*ignoreTaskId\s*\}\s*\)/.test(engSlice),
+      /addTask\(\s*task\s*,\s*'internal'\s*,\s*\{[\s\S]*?raw:\s*true[\s\S]*?ignoreTaskId[\s\S]*?\}\s*\)/.test(engSlice),
       'on-demand engine must forward ignoreTaskId to addTask'
     ).toBe(true);
   });
@@ -2411,7 +2412,7 @@ describe('canQueueImprovementTasks — autonomous queuing gate', () => {
 describe('persistent mind — default-off CoS state integration (#5064)', () => {
   it('adds no cold-bootstrap provider work to a fresh CoS state', () => {
     expect(DEFAULT_STATE.persistentMind).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: PERSISTENT_MIND_SCHEMA_VERSION,
       mindId: 'cos-persistent-mind',
       enabled: false,
       started: false,
@@ -2473,5 +2474,13 @@ describe('pending-merge sweep — own timer, not the evaluation cadence (#3630)'
     const hours = (PENDING_MERGE_SWEEP_INTERVAL_MS * MAX_PENDING_MERGE_TICKS) / (60 * 60 * 1000);
     expect(PENDING_MERGE_SWEEP_INTERVAL_MS).toBe(30 * 60 * 1000);
     expect(hours).toBe(6);
+  });
+});
+
+describe('CoS startup — single-flight recovery', () => {
+  it('shares the full boot promise across concurrent start callers', () => {
+    expect(COS_SRC).toMatch(/let daemonStartPromise = null/);
+    expect(COS_SRC).toMatch(/daemonStartPromise = runStart\(\)\.finally\(\(\) => \{\s*daemonStartPromise = null;/);
+    expect(COS_SRC).toMatch(/export function start\(\) \{[\s\S]*?return daemonStartPromise;\s*\}/);
   });
 });

@@ -15,7 +15,7 @@ Four separate workstreams converge on the same vision: a personal digital twin t
 | **Genome** | Fully implemented: 23andMe upload, 117 curated SNP markers across 32 categories, ClinVar integration, epigenetic tracking | `server/services/genome.js`, `GenomeTab.jsx`, `data/meatspace/genome.json` |
 | **Chronotype** | Implemented: `deriveChronotype()` combines the 5 sleep/circadian markers (CLOCK rs1801260, DEC2 rs57875989, PER2 rs35333999, CRY1 rs2287161, MTNR1B rs10830963) with `daily_routines` enrichment and writes `chronotype.json` | `server/services/identity/chronotype.js`, `identity.test.js`, `data/digital-twin/chronotype.json` |
 | **Aesthetic Taste** | P2 complete: Taste questionnaire with 5 sections (movies, music, visual_art, architecture, food), conversational Q&A, AI summary generation. Enrichment categories also feed taste data from book/movie/music lists | `TasteTab.jsx`, `taste-questionnaire.js`, `data/digital-twin/taste-profile.json` |
-| **Goal Tracking** | Partially exists: `COS-GOALS.md` for CoS missions, `TASKS.md` for user tasks, `EXISTENTIAL.md` soul doc | `data/COS-GOALS.md`, `data/TASKS.md`, `data/digital-twin/EXISTENTIAL.md` |
+| **Goal Tracking** | Partially exists: `GOALS.md` for repository mission and `docs/GOALS_OPERATIONAL.md` for operational CoS goals, `TASKS.md` for user tasks, `EXISTENTIAL.md` soul doc | `GOALS.md`, `docs/GOALS_OPERATIONAL.md`, `data/TASKS.md`, `data/digital-twin/EXISTENTIAL.md` |
 
 These should be unified under a single **Identity** architecture so the twin can reason across all dimensions (e.g., "your CLOCK gene says evening chronotype — schedule deep work after 8pm" or "given your longevity markers and age, here's how to prioritize your 10-year goals").
 

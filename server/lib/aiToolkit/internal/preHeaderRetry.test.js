@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  describeTransportError,
   fetchWithPreHeaderRetry,
   isReplaySafeTransportError,
   isReplaySafeLocalRequest,
@@ -9,6 +10,14 @@ import {
 const response = (status, cancel = vi.fn()) => ({ status, body: { cancel } });
 
 describe('pre-header retry policy', () => {
+  it('preserves nested transport codes that undici hides under fetch failed', () => {
+    const socketError = Object.assign(new TypeError('fetch failed'), {
+      cause: { code: 'ECONNREFUSED', message: 'connect refused' },
+    });
+
+    expect(describeTransportError(socketError)).toBe('fetch failed: ECONNREFUSED: connect refused');
+  });
+
   it('retries only the allowlisted gateway statuses and cancels failed bodies', async () => {
     const failed = response(503);
     const ok = response(200);

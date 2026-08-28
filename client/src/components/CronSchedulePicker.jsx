@@ -143,6 +143,7 @@ function TimeInput({ value, onChange, label = 'Time of day' }) {
 }
 
 function CronExpressionPicker({ value, onChange, className, showAdvanced, showSummary, cronAriaLabel, onCronKeyDown }) {
+  const advancedContainerId = useId();
   const expr = typeof value === 'string' ? value : '';
   const parsed = parseCronToRecurrence(expr);
   const simple = parsed?.frequency === 'daily' || parsed?.frequency === 'weekly';
@@ -172,11 +173,13 @@ function CronExpressionPicker({ value, onChange, className, showAdvanced, showSu
           <button
             type="button"
             onClick={() => setAdvanced(current => !current)}
+            aria-expanded={advanced}
+            aria-controls={advancedContainerId}
             className="text-xs text-gray-500 underline decoration-dotted hover:text-gray-300"
           >
             {advanced ? 'Hide advanced' : 'Advanced cron'}
           </button>
-          {advanced && (
+          <div id={advancedContainerId} hidden={!advanced}>
             <div className="flex flex-wrap items-center gap-2">
               <input
                 type="text"
@@ -200,7 +203,7 @@ function CronExpressionPicker({ value, onChange, className, showAdvanced, showSu
                 {CRON_PRESETS.map(preset => <option key={preset.value} value={preset.value}>{preset.label}</option>)}
               </select>
             </div>
-          )}
+          </div>
         </>
       )}
     </div>

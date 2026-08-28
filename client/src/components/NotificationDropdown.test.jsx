@@ -42,10 +42,10 @@ const renderDropdown = ({ notifications = makeNotifications(3), observeLocation 
 
 const openPanel = () => {
   fireEvent.click(screen.getByRole('button', { name: /^Notifications/ }));
-  return screen.getByRole('menu', { name: 'Notifications menu' });
+  return screen.getByRole('region', { name: 'Notifications' });
 };
 
-const queryPanel = () => screen.queryByRole('menu', { name: 'Notifications menu' });
+const queryPanel = () => screen.queryByRole('region', { name: 'Notifications' });
 
 describe('NotificationDropdown', () => {
   describe('links', () => {
@@ -83,7 +83,7 @@ describe('NotificationDropdown', () => {
       renderDropdown();
       const panel = openPanel();
 
-      expect(panel.closest('[role="menu"]').parentElement).toBe(document.body);
+      expect(panel.parentElement).toBe(document.body);
       expect(panel.className).toContain('fixed');
       expect(panel.style.left).not.toBe('');
       expect(panel.style.top).not.toBe('');
@@ -98,6 +98,26 @@ describe('NotificationDropdown', () => {
       // utility would silently override it at whatever breakpoint it applies to.
       const anchored = classes.filter((c) => /^(sm:|md:|lg:)?(absolute|inset|left|right|top|bottom)(-|$)/.test(c));
       expect(anchored).toEqual([]);
+    });
+  });
+
+  describe('accessibility semantics', () => {
+    it('uses a labeled list with separate controls for each notification action', () => {
+      renderDropdown();
+      openPanel();
+
+      expect(screen.getByRole('list', { name: 'Notifications list' })).toBeTruthy();
+      expect(screen.queryByRole('menuitem')).toBeNull();
+      expect(screen.getByRole('button', { name: 'View notification: Notification 0' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Mark notification as read: Notification 0' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Remove notification: Notification 0' })).toBeTruthy();
+    });
+
+    it('keeps interactive controls as siblings rather than nesting buttons', () => {
+      renderDropdown();
+      openPanel();
+
+      expect(document.querySelector('button button')).toBeNull();
     });
   });
 

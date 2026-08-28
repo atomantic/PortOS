@@ -30,7 +30,8 @@ function useHarness(overrides = {}) {
     sending,
     setSending,
     onError: overrides.onError ?? (() => {}),
-    onSendComplete: overrides.onSendComplete ?? (() => {})
+    onSendComplete: overrides.onSendComplete ?? (() => {}),
+    featureEnabled: overrides.featureEnabled ?? true,
   });
 
   return { ...stream, setSelectedSessionId, setComposer, composer, sending };
@@ -40,6 +41,20 @@ const flushMicrotasks = () => new Promise(resolve => setTimeout(resolve, 0));
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+describe('feature gate', () => {
+  it('does not load or send messages while OpenClaw is disabled', async () => {
+    const { result } = renderHook(() => useHarness({ featureEnabled: false }));
+
+    await act(async () => {
+      await result.current.loadMessages('session-1');
+      await result.current.handleSend();
+    });
+
+    expect(getOpenClawMessages).not.toHaveBeenCalled();
+    expect(streamOpenClawMessage).not.toHaveBeenCalled();
+  });
 });
 
 // =============================================================================

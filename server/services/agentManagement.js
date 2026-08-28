@@ -50,6 +50,13 @@ const MAX_ORPHAN_RETRIES = 3;
 // Minimum cooldown between orphan retries (30 minutes)
 const ORPHAN_RETRY_COOLDOWN_MS = 30 * 60 * 1000;
 
+// Startup has two callers for this sweep: cos.start() awaits it before the
+// first dequeue, while the spawner's delayed safety sweep runs shortly after
+// its event wiring. Keep the whole sweep single-flight so both callers cannot
+// read the same running agent and each requeue it (which would emit duplicate
+// wakeups and dispatch the same claim task twice).
+let orphanCleanupPromise = null;
+
 /**
  * Map a failed runner-op result (`{ error?, status? }`) to a ServerError.
  * A genuine runner 404 — the agent is gone / the runner restarted out of sync
@@ -946,7 +953,16 @@ async function retireStrandedPausedAgents(agents) {
   }
 }
 
-export async function cleanupOrphanedAgents() {
+export function cleanupOrphanedAgents() {
+  if (!orphanCleanupPromise) {
+    orphanCleanupPromise = runCleanupOrphanedAgents().finally(() => {
+      orphanCleanupPromise = null;
+    });
+  }
+  return orphanCleanupPromise;
+}
+
+async function runCleanupOrphanedAgents() {
   // Was `await import('./cos.js')` destructuring all four of these (#3450). The
   // deferral bought nothing — this module already imports `./cos.js` statically
   // at the top, so the module was loaded either way — while routing two agent
@@ -972,8 +988,17 @@ export async function cleanupOrphanedAgents() {
   }
 
   // Get list of agents actively running in the CoS Runner
+  const runnerProbe = await getActiveAgentsFromRunner().then(
+    (agents) => Array.isArray(agents)
+      ? { available: true, agents }
+      : { available: false, agents: [] },
+    (err) => {
+      emitLog('debug', `Runner agent recovery probe unavailable: ${err.message}`);
+      return { available: false, agents: [] };
+    },
+  );
   const runnerActiveIds = new Set();
-  const runnerAgentsList = await getActiveAgentsFromRunner().catch(() => []);
+  const runnerAgentsList = runnerProbe.agents;
   for (const agent of runnerAgentsList) {
     runnerActiveIds.add(agent.id);
   }
@@ -989,6 +1014,22 @@ export async function cleanupOrphanedAgents() {
   for (const agent of agents) {
     if (agent.status === 'running') {
       const inRemoteRunner = runnerActiveIds.has(agent.id);
+
+      // A runner-owned agent may still be alive while the runner is booting or
+      // reconnecting. Its absence from a failed probe is not evidence that the
+      // process died. Leave the durable record in_progress so the next
+      // connection can re-adopt it; requeueing here would race a second claim
+      // agent onto the same work. Old records use `useRunner`, while newer
+      // records carry the more precise executionMode.
+      const executionMode = agent.metadata?.executionMode;
+      const runnerOwned = agent.metadata?.useRunner === true
+        || agent.metadata?.useRunner === 'true'
+        || executionMode === 'runner'
+        || executionMode === 'runner-tui';
+      if (!runnerProbe.available && runnerOwned) {
+        emitLog('debug', `Skipping orphan cleanup for runner-owned agent ${agent.id} — runner is unavailable`, { agentId: agent.id });
+        continue;
+      }
 
       if (!isAgentOwnedLocally(agent.id) && !inRemoteRunner) {
         // Before marking as orphaned, check if the process is actually still running

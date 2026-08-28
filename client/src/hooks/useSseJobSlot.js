@@ -56,10 +56,27 @@ export default function useSseJobSlot({
 } = {}) {
   const [job, setJob] = useState(null); // { jobId, context }
   const [pending, setPending] = useState(false);
-  const sse = useSseProgress(job ? eventsUrl(job.jobId) : null);
+  const [progress, setProgress] = useState({ percent: 0, stage: null });
+  const jobUrl = job ? eventsUrl(job.jobId) : null;
+  const sse = useSseProgress(jobUrl);
   const latest = sse.latest;
-  const percent = Math.round(latest?.percent ?? 0);
-  const stage = latest?.stage ?? null;
+
+  // Metadata and warning frames intentionally omit progress fields. Preserve the
+  // last announced values across those sparse frames instead of flashing 0% /
+  // "starting" between real progress updates.
+  //
+  // `latestUrl` is only a STALE-FRAME guard: the real hook sets it alongside
+  // `latest`, so a mismatch means the frame belongs to a previous job. An absent
+  // `latestUrl` means "unknown", not "mismatched" — treating it as a mismatch
+  // would silently freeze progress for any consumer whose SSE seam is stubbed.
+  useEffect(() => {
+    if (!job || !latest) return;
+    if (sse.latestUrl && sse.latestUrl !== jobUrl) return;
+    setProgress((prev) => ({
+      percent: Number.isFinite(latest.percent) ? Math.round(latest.percent) : prev.percent,
+      stage: typeof latest.stage === 'string' && latest.stage ? latest.stage : prev.stage,
+    }));
+  }, [latest, job, jobUrl, sse.latestUrl]);
 
   useEffect(() => {
     if (!job || !latest) return;
@@ -91,6 +108,7 @@ export default function useSseJobSlot({
     const arg = trimStartArg ? (startArg ?? '').trim() : startArg;
     if (trimStartArg && !arg) return;
     if (job || pending) return;
+    setProgress({ percent: 0, stage: null });
     setPending(true);
     startRequest(arg)
       .then(({ jobId }) => {
@@ -111,8 +129,8 @@ export default function useSseJobSlot({
 
   return {
     active: pending || !!job,
-    percent,
-    stage,
+    percent: progress.percent,
+    stage: progress.stage,
     context: job?.context ?? null,
     start,
     cancel,

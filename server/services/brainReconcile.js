@@ -35,6 +35,30 @@ import * as brainSyncLog from './brainSyncLog.js';
 
 const { BRAIN_ENTITY_TYPES } = brainStorage;
 
+// The checksum endpoint is polled on every peer sync cycle, so rebuilding it
+// from every record file on every request turns a lightweight comparison into
+// an O(N) disk walk. Cache the result until a persisted entity mutation fires.
+//
+// `checksumGeneration` is load-bearing: a mutation can land while buildRawMap
+// is awaiting disk reads. That in-flight result is still safe for its original
+// caller (the old implementation had the same point-in-time limitation), but
+// it must never populate the cache after the mutation invalidated it.
+let checksumGeneration = 0;
+let cachedChecksum = null;
+let checksumBuild = null;
+
+function invalidateChecksum() {
+  checksumGeneration += 1;
+  cachedChecksum = null;
+  checksumBuild = null;
+}
+
+for (const type of BRAIN_ENTITY_TYPES) {
+  brainEvents.on(`${type}:upserted`, invalidateChecksum);
+  brainEvents.on(`${type}:deleted`, invalidateChecksum);
+}
+brainEvents.on('record:changed', invalidateChecksum);
+
 /**
  * Build the canonical `{ type: { id: record } }` map across all brain stores,
  * including tombstones. Types and ids are emitted in sorted order so the
@@ -116,7 +140,24 @@ function computeChecksum(rawMap) {
  * peer fetches this first and only pulls the full snapshot on a mismatch.
  */
 export async function getBrainChecksum() {
-  return computeChecksum(await buildRawMap());
+  if (cachedChecksum !== null) return cachedChecksum;
+  if (checksumBuild?.generation === checksumGeneration) return checksumBuild.promise;
+
+  const generation = checksumGeneration;
+  const promise = buildRawMap().then(
+    (rawMap) => {
+      const checksum = computeChecksum(rawMap);
+      if (checksumGeneration === generation) cachedChecksum = checksum;
+      if (checksumBuild?.promise === promise) checksumBuild = null;
+      return checksum;
+    },
+    (error) => {
+      if (checksumBuild?.promise === promise) checksumBuild = null;
+      throw error;
+    },
+  );
+  checksumBuild = { generation, promise };
+  return promise;
 }
 
 /**

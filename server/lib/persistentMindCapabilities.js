@@ -9,21 +9,144 @@
 import { z } from 'zod';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { PR_COMPLETION_VALUES } from './prDisposition.js';
+import {
+  normalizePortosSemanticToolGrants,
+  portosSemanticToolGrantsSchema,
+} from './cosToolContracts.js';
 
-export const PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION = 1;
+export const PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION = 3;
+const PREVIOUS_PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION = 2;
+
+export const PERSISTENT_MIND_TASK_MODEL_ALLOWLIST_LIMITS = Object.freeze({
+  MAX_ENTRIES: 200,
+  PROVIDER_ID_CHARS: 100,
+  MODEL_CHARS: 200,
+});
+
+const persistentMindTaskModelAllowlistEntrySchema = z.object({
+  providerId: z.string().trim().min(1).max(PERSISTENT_MIND_TASK_MODEL_ALLOWLIST_LIMITS.PROVIDER_ID_CHARS),
+  model: z.string().trim().min(1).max(PERSISTENT_MIND_TASK_MODEL_ALLOWLIST_LIMITS.MODEL_CHARS),
+}).strict();
+
+export const PERSISTENT_MIND_CLEANUP_SCOPES = Object.freeze([
+  'context',
+  'history',
+  'memories',
+]);
+
+// The persistent mind has a deliberately smaller surface than ordinary CoS
+// agents. Keep this catalog beside the capability schema so the API and the UI
+// describe the same grants instead of maintaining a second client-only list.
+export const PERSISTENT_MIND_TOOL_CATALOG = Object.freeze([
+  Object.freeze({
+    id: 'cos.create-task',
+    capability: 'createTasks',
+    name: 'Queue CoS agent tasks',
+    description: 'Request a bounded, typed CoS task for an app using a configured coding provider.',
+    kind: 'typed-action',
+    defaultEnabled: false,
+    guardrails: [
+      'Up to five requests per turn',
+      'Configured app, provider, model, effort, mode, and completion policy are re-validated before queueing',
+      'Implementation work runs through the normal isolated-worktree, autonomy, budget, review, CI, and PR gates',
+      'Plan & File Issue requests use the existing issue-only planning contract',
+    ],
+  }),
+  Object.freeze({
+    id: 'portos.read',
+    capability: 'readPortos',
+    name: 'Read PortOS context',
+    description: 'Use the bounded semantic catalog to inspect selected Brain, goals, journal, calendar, health, feed, catalog, and runtime context.',
+    kind: 'semantic-tools',
+    defaultEnabled: false,
+    guardrails: [
+      'Read-only adapters only',
+      'No arbitrary URL, route, SQL, shell, or filesystem access',
+      'Tool inputs and results are schema-validated and size-bounded',
+    ],
+  }),
+  Object.freeze({
+    id: 'portos.write',
+    capability: 'writePortos',
+    name: 'Update PortOS records',
+    description: 'Use selected typed actions for Brain capture, journal, goals, health logs, and feed read state.',
+    kind: 'semantic-tools',
+    defaultEnabled: false,
+    guardrails: [
+      'No process control, arbitrary code execution, external messaging, or paid generation',
+      'Every action is recorded in the persistent-mind trajectory',
+      'Calls use stable request ids so retries within the bounded retention window cannot repeat an accepted action',
+    ],
+  }),
+  Object.freeze({
+    id: 'mind.cleanup',
+    capability: 'manageMind',
+    name: 'Clean up mindspace',
+    description: 'Archive mind-owned memories, clear conversation history, or rebuild the derived context cache.',
+    kind: 'typed-action',
+    defaultEnabled: false,
+    guardrails: [
+      'Only Persistent Mind-owned machine-local state is in scope',
+      'Memory cleanup archives records instead of hard-deleting them',
+      'History cleanup preserves the turn requesting it and resets derived rollups',
+      'Every cleanup leaves a bounded maintenance record in the new trajectory',
+    ],
+  }),
+]);
+
+export const PERSISTENT_MIND_TOOL_BOUNDARIES = Object.freeze([
+  'No arbitrary shell or file-system access',
+  'No raw HTTP proxy, browser controls, process control, paid generation, or external messaging',
+  'No provider credentials or hidden reasoning tokens are exposed as tools',
+]);
 
 export const PERSISTENT_MIND_TASK_LIMITS = Object.freeze({
   maxPerTurn: 5,
   descriptionChars: 500,
   promptChars: 12_000,
   appIdChars: 128,
+  maxAllowedAppIds: 50,
   providerIdChars: 100,
   modelChars: 200,
 });
 
-export const persistentMindCapabilitiesSchema = z.object({
-  schemaVersion: z.literal(PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION).optional(),
+// These are the only workspace facts a task may promote from advisory
+// visibility into a queueing gate. An omitted or empty list keeps the
+// preflight informative without blocking docs-only/read-only work.
+export const PERSISTENT_MIND_VALIDATION_CHECKS = Object.freeze([
+  'dependencies',
+  'engines',
+  'submodules',
+  'forge',
+  'reviewers',
+]);
+
+export const persistentMindCapabilitiesSchema = portosSemanticToolGrantsSchema.extend({
+  // Accept the previous wire version so an older client can still change the
+  // unrelated grants while this server normalizes the stored shape forward.
+  schemaVersion: z.union([
+    z.literal(PREVIOUS_PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION),
+    z.literal(PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION),
+  ]).optional(),
   createTasks: z.boolean().optional(),
+  manageMind: z.boolean().optional(),
+  // An empty list preserves the legacy unrestricted task catalog. Once any
+  // entries are configured, requests must name one of these exact pairs.
+  taskModelAllowlist: z.array(persistentMindTaskModelAllowlistEntrySchema)
+    .max(PERSISTENT_MIND_TASK_MODEL_ALLOWLIST_LIMITS.MAX_ENTRIES).optional(),
+  // Omitted preserves the legacy grant to every runnable managed app. An
+  // explicit list lets the user narrow that grant without changing the typed
+  // task capability itself.
+  allowedAppIds: z.array(z.string().trim().min(1).max(PERSISTENT_MIND_TASK_LIMITS.appIdChars))
+    .max(PERSISTENT_MIND_TASK_LIMITS.maxAllowedAppIds).optional(),
+});
+
+export const persistentMindCleanupRequestSchema = z.object({
+  scopes: z.array(z.enum(PERSISTENT_MIND_CLEANUP_SCOPES))
+    .min(1)
+    .max(PERSISTENT_MIND_CLEANUP_SCOPES.length)
+    .refine((scopes) => new Set(scopes).size === scopes.length, 'cleanup scopes must be unique'),
+  reason: z.string().trim().min(1).max(300).optional(),
 }).strict();
 
 export const persistentMindTaskRequestSchema = z.object({
@@ -36,26 +159,106 @@ export const persistentMindTaskRequestSchema = z.object({
   // providers whose CLI owns model selection and publishes no concrete ids.
   model: z.string().trim().max(PERSISTENT_MIND_TASK_LIMITS.modelChars),
   effort: z.union([z.literal(''), z.enum(EFFORT_LEVELS)]).optional().default(''),
-  prCompletion: z.enum(PR_COMPLETION_VALUES),
-}).strict();
+  // `planOnly` is the User Task form's issue-only mode. It deliberately does
+  // not require a PR disposition because the task store forces the
+  // no-worktree/no-PR posture for it. Implementation tasks still must choose a
+  // disposition so the mind cannot silently inherit a different landing gate.
+  // Keep absence meaningful for replay compatibility: adding a default here
+  // would change the canonical fingerprint of an older implementation request
+  // and could queue it twice after an install upgrades.
+  planOnly: z.boolean().optional(),
+  prCompletion: z.enum(PR_COMPLETION_VALUES).optional(),
+  // Advisory by default. A task declares only the checks its acceptance
+  // criteria require; this lets docs-only work proceed when code dependencies
+  // are absent while still failing closed for required validation.
+  requiredValidation: z.array(z.enum(PERSISTENT_MIND_VALIDATION_CHECKS)).max(PERSISTENT_MIND_VALIDATION_CHECKS.length).optional(),
+}).strict().superRefine((value, context) => {
+  if (!value.planOnly && !value.prCompletion) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['prCompletion'],
+      message: 'Implementation tasks require a PR completion policy',
+    });
+  }
+});
 
 export function createDefaultPersistentMindCapabilities() {
   return {
     schemaVersion: PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION,
     createTasks: false,
+    manageMind: false,
+    readPortos: false,
+    writePortos: false,
+    taskModelAllowlist: [],
   };
+}
+
+const normalizeTaskModelAllowlist = (value) => {
+  if (value === undefined) return { entries: [], invalid: false };
+  if (!Array.isArray(value) || value.length > PERSISTENT_MIND_TASK_MODEL_ALLOWLIST_LIMITS.MAX_ENTRIES) {
+    return { entries: [], invalid: true };
+  }
+  const entries = [];
+  const seen = new Set();
+  for (const candidate of value) {
+    const parsed = persistentMindTaskModelAllowlistEntrySchema.safeParse(candidate);
+    if (!parsed.success) return { entries: [], invalid: true };
+    const entry = parsed.data;
+    const key = `${entry.providerId}\0${entry.model}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    entries.push(entry);
+  }
+  return { entries, invalid: false };
+};
+
+export function isPersistentMindTaskModelAllowed(capabilities, providerId, model) {
+  const normalized = normalizePersistentMindCapabilities(capabilities);
+  if (normalized.taskModelAllowlistInvalid || capabilities?.taskModelAllowlistInvalid === true) return false;
+  if (normalized.taskModelAllowlist.length === 0) return true;
+  return normalized.taskModelAllowlist.some((entry) => (
+    entry.providerId === providerId && entry.model === model
+  ));
 }
 
 export function normalizePersistentMindCapabilities(raw) {
   const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const semanticGrants = normalizePortosSemanticToolGrants(source);
+  const taskModelAllowlist = source.taskModelAllowlistInvalid === true
+    ? { entries: [], invalid: true }
+    : normalizeTaskModelAllowlist(source.taskModelAllowlist);
+  const allowedAppIds = Array.isArray(source.allowedAppIds)
+    ? [...new Set(source.allowedAppIds
+      .filter((id) => typeof id === 'string')
+      .map((id) => id.trim())
+      .filter(Boolean)
+      .filter((id) => id.length <= PERSISTENT_MIND_TASK_LIMITS.appIdChars))]
+      .slice(0, PERSISTENT_MIND_TASK_LIMITS.maxAllowedAppIds)
+    : undefined;
   return {
     schemaVersion: PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION,
     createTasks: source.createTasks === true,
+    manageMind: source.manageMind === true,
+    ...semanticGrants,
+    taskModelAllowlist: taskModelAllowlist.entries,
+    // A malformed hand-edited persisted policy must not silently become the
+    // unrestricted empty-list policy. This internal marker is omitted from
+    // route input schemas and only affects fail-closed admission/catalog code.
+    ...(taskModelAllowlist.invalid ? { taskModelAllowlistInvalid: true } : {}),
+    ...(allowedAppIds !== undefined ? { allowedAppIds } : {}),
   };
 }
 
 export function mergePersistentMindCapabilities(previous, update) {
   const prior = normalizePersistentMindCapabilities(previous);
   const patch = update && typeof update === 'object' && !Array.isArray(update) ? update : {};
-  return normalizePersistentMindCapabilities({ ...prior, ...patch });
+  const merged = { ...prior, ...patch };
+  // A valid replacement repairs a malformed persisted policy; unrelated grant
+  // updates must retain the fail-closed marker until that happens.
+  if (patch.taskModelAllowlist !== undefined) {
+    delete merged.taskModelAllowlistInvalid;
+  } else if (prior.taskModelAllowlistInvalid) {
+    delete merged.taskModelAllowlist;
+  }
+  return normalizePersistentMindCapabilities(merged);
 }

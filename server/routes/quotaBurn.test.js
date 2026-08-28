@@ -14,12 +14,14 @@ vi.mock('../services/quotaBurnRunner.js', () => ({
 vi.mock('../services/quotaBurnCompletions.js', () => ({ clearQuotaBurnJobCompletion: vi.fn() }));
 vi.mock('../services/apps.js', () => ({ getActiveApps: vi.fn() }));
 vi.mock('../services/universeBuilder.js', () => ({ listUniverseNames: vi.fn() }));
+vi.mock('../services/providers.js', () => ({ listProviders: vi.fn() }));
 
 import { clearQuotaBurnJobCompletion } from '../services/quotaBurnCompletions.js';
 import { getQuotaBurnConfig, saveQuotaBurnConfig } from '../services/quotaBurnStore.js';
 import { getQuotaBurnStatus, runQuotaBurnCycle } from '../services/quotaBurnRunner.js';
 import { getActiveApps } from '../services/apps.js';
 import { listUniverseNames } from '../services/universeBuilder.js';
+import { listProviders } from '../services/providers.js';
 import quotaBurnRoutes from './quotaBurn.js';
 
 const buildApp = () => {
@@ -38,6 +40,7 @@ beforeEach(() => {
   });
   getActiveApps.mockResolvedValue([{ id: 'a1', name: 'App One', secret: 'do-not-leak' }]);
   listUniverseNames.mockResolvedValue([{ id: 'u1', name: 'Example Universe' }]);
+  listProviders.mockResolvedValue([{ id: 'claude-code', name: 'Claude Code', type: 'cli' }]);
 });
 
 describe('GET /api/quota-burn', () => {
@@ -60,11 +63,12 @@ describe('GET /api/quota-burn', () => {
 });
 
 describe('GET /api/quota-burn/catalog', () => {
-  it('projects apps and universes down to id + name', async () => {
+  it('projects apps, universes, and providers', async () => {
     const res = await request(buildApp()).get('/api/quota-burn/catalog');
     expect(res.status).toBe(200);
     expect(res.body.apps).toEqual([{ id: 'a1', name: 'App One' }]);
     expect(res.body.universes).toEqual([{ id: 'u1', name: 'Example Universe' }]);
+    expect(res.body.providers).toEqual([{ id: 'claude-code', name: 'Claude Code', type: 'cli' }]);
     expect(res.body.jobTypes.map((type) => type.id)).toContain('universe-bible-images');
   });
 

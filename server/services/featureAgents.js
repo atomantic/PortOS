@@ -273,36 +273,66 @@ export async function stopFeatureAgent(id) {
  * Force-trigger an immediate run for a feature agent
  */
 export async function triggerFeatureAgent(id) {
-  const agent = await getFeatureAgent(id);
+  let agent = await getFeatureAgent(id);
   if (!agent) return null;
 
-  // Activate if in draft/paused, then reset lastRunAt/backoff so it's picked up immediately
+  // Activation enables scheduling, while Trigger is an explicit Run now. Draft
+  // and paused agents therefore become active first, then all states use the
+  // same immediate-dispatch path below.
   if (agent.status === 'draft' || agent.status === 'paused') {
-    await activateFeatureAgent(id);
-    return withLock(async () => {
-      const data = await readData();
-      const idx = data.agents.findIndex(a => a.id === id);
-      if (idx === -1) return null;
-      data.agents[idx].backoff = null;
-      data.agents[idx].lastRunAt = null;
-      data.agents[idx].updatedAt = new Date().toISOString();
-      await writeData(data);
-      return data.agents[idx];
-    });
+    agent = await activateFeatureAgent(id);
   }
 
-  // For active agents, reset backoff and lastRunAt so getDueFeatureAgents picks it up immediately
-  return withLock(async () => {
+  agent = await withLock(async () => {
     const data = await readData();
     const idx = data.agents.findIndex(a => a.id === id);
     if (idx === -1) return null;
+    if (data.agents[idx].currentAgentId) return data.agents[idx];
     data.agents[idx].backoff = null;
     data.agents[idx].lastRunAt = null;
     data.agents[idx].updatedAt = new Date().toISOString();
     await writeData(data);
-    console.log(`🤖 Feature agent force-triggered: ${data.agents[idx].name} (${id})`);
     return data.agents[idx];
   });
+  if (!agent) return null;
+
+  if (agent.currentAgentId) {
+    return {
+      triggered: false,
+      reason: 'Feature agent already has a run in progress',
+      agent,
+      taskId: agent.currentAgentId
+    };
+  }
+
+  const task = generateTaskFromFeatureAgent(agent);
+  const { addTask, forceSpawnTask } = await import('./cos.js');
+  const persisted = await addTask(task, 'internal', { raw: true, suppressDequeue: true });
+  if (!persisted?.id) {
+    return { triggered: false, reason: 'Feature agent run was not queued', agent };
+  }
+
+  // A previous scheduler evaluation can leave an equivalent pending task in
+  // COS-TASKS.md. Reuse it and force-spawn it rather than reporting a trigger
+  // that only reset the feature-agent timestamps.
+  if (persisted.duplicate && persisted.status !== 'pending') {
+    return {
+      triggered: false,
+      reason: `Feature agent run is already ${persisted.status}`,
+      agent,
+      taskId: persisted.id
+    };
+  }
+
+  await setCurrentAgent(id, persisted.id);
+  const spawnResult = await forceSpawnTask(persisted.id);
+  if (spawnResult?.error) {
+    await clearPendingAgentTask(id, persisted.id);
+    return { triggered: false, reason: spawnResult.error, agent, taskId: persisted.id };
+  }
+
+  console.log(`🤖 Feature agent force-triggered: ${agent.name} (${id})`);
+  return { triggered: true, started: true, agent, taskId: persisted.id };
 }
 
 /**
@@ -359,7 +389,8 @@ export function generateTaskFromFeatureAgent(agent) {
       featureAgentRun: true,
       app: agent.appId,
       provider: agent.providerId || undefined,
-      model: agent.model || undefined
+      model: agent.model || undefined,
+      effort: agent.effort || undefined
     }
   };
 }
@@ -533,6 +564,17 @@ export async function setCurrentAgent(id, taskId) {
   });
 }
 
+async function clearPendingAgentTask(id, taskId) {
+  return withLock(async () => {
+    const data = await readData();
+    const idx = data.agents.findIndex(a => a.id === id);
+    if (idx === -1 || data.agents[idx].currentAgentId !== taskId) return;
+    data.agents[idx].currentAgentId = null;
+    data.agents[idx].updatedAt = new Date().toISOString();
+    await writeData(data);
+  });
+}
+
 // Listen for agent:spawned events to update currentAgentId from the
 // temporary task ID to the real CoS agent ID (needed for output streaming).
 cosEvents.on('agent:spawned', async (agentData) => {
@@ -545,5 +587,34 @@ cosEvents.on('agent:spawned', async (agentData) => {
   if (!fa) return;
   await setCurrentAgent(fa.id, agentData.id).catch(err => {
     console.log(`⚠️ Failed to update feature agent currentAgentId: ${err.message}`);
+  });
+  cosEvents.emit(`${EVT}:status`, { id: fa.id, status: fa.status, name: fa.name });
+});
+
+// Feature-agent tasks are ordinary CoS agents at runtime. Keep the persistent
+// feature-agent record in sync with that shared lifecycle so a completed run
+// does not permanently block the next scheduled or manual run.
+cosEvents.on('agent:completed', async (agentData) => {
+  const featureAgentId = agentData?.metadata?.featureAgentId;
+  if (!agentData?.metadata?.featureAgentRun || !featureAgentId) return;
+  const success = agentData.result?.success === true;
+  await recordRunCompletion(featureAgentId, {
+    status: success ? 'working' : 'error',
+    summary: success ? 'Feature agent run completed' : agentData.result?.error || 'Feature agent run failed'
+  }).catch(err => {
+    console.log(`⚠️ Failed to record feature agent completion: ${err.message}`);
+  });
+});
+
+// Provider/worktree setup can fail before a CoS agent record exists, so no
+// completion event will clear the temporary task pointer. Release that pointer
+// when the spawn path reports the task-level error.
+cosEvents.on('agent:error', async (agentData) => {
+  if (!agentData?.taskId) return;
+  const data = await readData().catch(() => null);
+  const agent = data?.agents?.find(candidate => candidate.currentAgentId === agentData.taskId);
+  if (!agent) return;
+  await clearPendingAgentTask(agent.id, agentData.taskId).catch(err => {
+    console.log(`⚠️ Failed to clear feature agent pending task: ${err.message}`);
   });
 });

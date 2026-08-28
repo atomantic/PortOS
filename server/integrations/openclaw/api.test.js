@@ -9,8 +9,13 @@ vi.mock('../../lib/fetchWithTimeout.js', () => ({
   fetchWithTimeout: vi.fn()
 }));
 
+vi.mock('../../services/instanceFeatures.js', () => ({
+  isInstanceFeatureEnabled: vi.fn()
+}));
+
 import { readJSONFile } from '../../lib/fileUtils.js';
 import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
+import { isInstanceFeatureEnabled } from '../../services/instanceFeatures.js';
 import { getRuntimeStatus } from './api.js';
 
 const OPENCLAW_ENV_KEYS = Object.keys(process.env).filter(key => key.startsWith('OPENCLAW_'));
@@ -28,6 +33,7 @@ describe('openclaw getRuntimeStatus', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    isInstanceFeatureEnabled.mockResolvedValue(true);
     for (const key of OPENCLAW_ENV_KEYS) {
       savedEnv[key] = process.env[key];
       delete process.env[key];
@@ -75,6 +81,20 @@ describe('openclaw getRuntimeStatus', () => {
 
     expect(status.configured).toBe(false);
     expect(status.runtime).toBeNull();
+    expect(fetchWithTimeout).not.toHaveBeenCalled();
+  });
+
+  it('does not configure or probe the runtime when the PortOS feature is disabled', async () => {
+    isInstanceFeatureEnabled.mockResolvedValue(false);
+
+    const status = await getRuntimeStatus();
+
+    expect(status).toMatchObject({
+      configured: false,
+      enabled: false,
+      reachable: false,
+      message: 'OpenClaw is disabled for this PortOS instance'
+    });
     expect(fetchWithTimeout).not.toHaveBeenCalled();
   });
 });

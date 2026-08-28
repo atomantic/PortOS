@@ -228,7 +228,7 @@ export function brainRecordToMemory(brainType, record) {
  * Upsert a single brain record into the memory system.
  * Creates a new memory or updates the existing one based on the bridge map.
  */
-export async function syncBrainRecord(brainType, record) {
+export async function syncBrainRecord(brainType, record, { deferMapSave = false, onMapChanged } = {}) {
   const memoryData = brainRecordToMemory(brainType, record);
   if (!memoryData) return null;
 
@@ -261,7 +261,8 @@ export async function syncBrainRecord(brainType, record) {
   // Create new memory
   const created = await memory.createMemory(memoryData, embedding);
   map[key] = created.id;
-  await saveBridgeMap();
+  onMapChanged?.();
+  if (!deferMapSave) await saveBridgeMap();
   console.log(`🧠🔗 Created brain→memory: ${brainType}/${record.id} → ${created.id}`);
   return created.id;
 }
@@ -294,6 +295,13 @@ const makeEmbeddedChecker = (map, missingMemIds) => (key) => {
 export async function syncAllBrainData({ dryRun = false, refresh = false, onlyMissing = false } = {}) {
   const map = await loadBridgeMap();
   const stats = { synced: 0, skipped: 0, errors: 0, archived: 0 };
+  let bridgeMapChanged = false;
+  const deferredMapSave = {
+    deferMapSave: true,
+    onMapChanged: () => { bridgeMapChanged = true; },
+  };
+
+  try {
 
   // `onlyMissing` is the cheap, targeted backfill: embed only records that lack
   // an embedding (unmapped, or mapped to a memory whose vector is NULL because
@@ -325,7 +333,7 @@ export async function syncAllBrainData({ dryRun = false, refresh = false, onlyMi
         stats.synced++;
         continue;
       }
-      const memoryId = await syncBrainRecord(type, record).catch(err => {
+      const memoryId = await syncBrainRecord(type, record, deferredMapSave).catch(err => {
         console.error(`❌ Failed to sync ${type}/${record.id}: ${err.message}`);
         stats.errors++;
         return null;
@@ -357,7 +365,7 @@ export async function syncAllBrainData({ dryRun = false, refresh = false, onlyMi
         stats.synced += 1;
         continue;
       }
-      const memoryId = await syncBrainRecord('journals', record).catch((err) => {
+      const memoryId = await syncBrainRecord('journals', record, deferredMapSave).catch((err) => {
         console.error(`❌ Failed to sync journals/${record.date}: ${err.message}`);
         stats.errors += 1;
         return null;
@@ -382,7 +390,7 @@ export async function syncAllBrainData({ dryRun = false, refresh = false, onlyMi
         stats.synced++;
         continue;
       }
-      const memoryId = await syncBrainRecord(type, record).catch(err => {
+      const memoryId = await syncBrainRecord(type, record, deferredMapSave).catch(err => {
         console.error(`❌ Failed to sync ${type}/${record.id}: ${err.message}`);
         stats.errors++;
         return null;
@@ -422,7 +430,15 @@ export async function syncAllBrainData({ dryRun = false, refresh = false, onlyMi
     }
   }
 
-  return stats;
+    return stats;
+  } finally {
+    if (bridgeMapChanged) {
+      await saveBridgeMap().catch((err) => {
+        console.error(`❌ Failed to save brain bridge map after bulk sync: ${err.message}`);
+        stats.errors++;
+      });
+    }
+  }
 }
 
 /**

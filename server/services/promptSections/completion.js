@@ -44,7 +44,7 @@ function withNoChangeAuditGuidance(guidance, noChangeSuccess) {
 export function buildCompletionGuidelineBullet({
   isReadOnly, isTui, tuiCompletionCommand, slashdoFree = false,
   worktreeInfo, willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, discardWorktree = false, noCodeOutput = false,
-  leavePrOpen = false, isPrFollowUp = false, claimFlow = false, noChangeSuccess = false,
+  leavePrOpen = false, isPrFollowUp = false, claimFlow = false, noChangeSuccess = false, whenDone = null,
 }) {
   // A PR follow-up (review-loop or merge-only) already carries its own PRIMARY
   // OBJECTIVE section with the full procedure, and its cleanup runs with
@@ -100,7 +100,9 @@ export function buildCompletionGuidelineBullet({
   if (worktreeInfo) {
     return withNoChangeAuditGuidance('Your worktree branch will be automatically merged back to the source branch when your task completes — do NOT open a PR.', noChangeSuccess);
   }
-  return null;
+  return whenDone === null ? null : whenDone === 'commit-push'
+    ? 'Commit and push your changes to the default branch (see Git Hygiene below).'
+    : 'Leave your code changes uncommitted in the default branch; do not commit or push.';
 }
 
 // One-line worktree note for a discard (reasoning-only) task, replacing the

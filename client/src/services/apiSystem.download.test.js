@@ -114,6 +114,27 @@ describe('downloadBackupSnapshot', () => {
     expect(abort).toHaveBeenCalledOnce();
   });
 
+  it('aborts the opened file handle when fetch rejects', async () => {
+    const abort = vi.fn().mockResolvedValue(undefined);
+    window.showSaveFilePicker = vi.fn().mockResolvedValue({ createWritable: async () => ({ abort }) });
+    const error = new Error('network unavailable');
+    fetch.mockRejectedValue(error);
+
+    await expect(downloadBackupSnapshot('offline')).rejects.toBe(error);
+    expect(abort).toHaveBeenCalledOnce();
+  });
+
+  it('aborts the opened file handle when streaming rejects', async () => {
+    const abort = vi.fn().mockResolvedValue(undefined);
+    const pipeError = new Error('destination failed');
+    const pipeTo = vi.fn().mockRejectedValue(pipeError);
+    window.showSaveFilePicker = vi.fn().mockResolvedValue({ createWritable: async () => ({ abort }) });
+    fetch.mockResolvedValue({ ok: true, headers: new Headers(), body: { pipeTo } });
+
+    await expect(downloadBackupSnapshot('stream-failure')).rejects.toBe(pipeError);
+    expect(abort).toHaveBeenCalledOnce();
+  });
+
   it('falls back to the blob download when the picker is unavailable', async () => {
     const blob = new Blob(['snapshot']);
     const body = { pipeTo: vi.fn() };

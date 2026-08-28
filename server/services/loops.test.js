@@ -398,7 +398,8 @@ describe('loops.js', () => {
       };
       const FALLBACK_RUN_RESULT = {
         metadata: { id: 'run-fallback' },
-        provider: FALLBACK_PROVIDER
+        provider: FALLBACK_PROVIDER,
+        fallbackModel: 'pinned-fallback-model',
       };
       mockCreateRun.mockResolvedValue(FALLBACK_RUN_RESULT);
       // runPromptThroughProvider resolves successfully using fallback provider
@@ -430,6 +431,7 @@ describe('loops.js', () => {
       expect(mockRunPrompt).toHaveBeenCalled();
       const callArg = mockRunPrompt.mock.calls[0][0];
       expect(callArg.provider.id).toBe('fallback-provider');
+      expect(callArg.model).toBe('pinned-fallback-model');
     });
   });
 });

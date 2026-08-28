@@ -52,6 +52,18 @@ describe('apiFableLoom', () => {
     });
   });
 
+  it('posts conversational episode feedback', async () => {
+    await api.feedbackLoomEpisode('loom-1', 'ep-1', {
+      feedback: 'Make the opening more urgent.', providerId: 'writer', model: 'large', effort: 'high',
+    });
+    expect(request).toHaveBeenCalledWith('/fableloom/loom-1/episodes/ep-1/feedback', {
+      method: 'POST',
+      body: JSON.stringify({
+        feedback: 'Make the opening more urgent.', providerId: 'writer', model: 'large', effort: 'high',
+      }),
+    });
+  });
+
   it('reads validation silently for the polling panel', async () => {
     await api.validateLoomEpisode('loom-1', 'ep-1', { silent: true });
     expect(request).toHaveBeenCalledWith('/fableloom/loom-1/episodes/ep-1/validate', { silent: true });

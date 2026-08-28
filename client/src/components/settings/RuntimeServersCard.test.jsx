@@ -19,6 +19,7 @@ const renderCard = (props = {}) => {
     onConfigureLlama: vi.fn(),
     onConfigureMtplx: vi.fn(),
     onInstallMtplx: vi.fn(),
+    onStartMtplx: vi.fn(),
     onSaveIdleWindow: vi.fn(),
     onStopMtplx: vi.fn(),
     onSaveStartup: vi.fn(),
@@ -124,16 +125,23 @@ describe('RuntimeServersCard', () => {
     );
   });
 
-  // MTPLX cannot unload its checkpoint in place, so PortOS stops the process
-  // when it goes idle and the next request starts it again. A manual Start would
-  // only pin 20GB ahead of a request that may never come.
-  it('offers no MTPLX Start — it starts on demand', () => {
-    renderCard({
+  // MTPLX can be started on demand or explicitly when a verified checkpoint is
+  // already cached. Neither path downloads weights.
+  it('offers MTPLX Start when a checkpoint is cached', () => {
+    const handlers = renderCard({
       mtplxStatus: { installed: true, running: false, supported: true, cachedModels: ['Example/Qwen-MTP'], endpoint: 'http://127.0.0.1:8000/v1' },
+    });
+    fireEvent.click(within(row('MTPLX')).getByRole('button', { name: /^Start/ }));
+    expect(handlers.onStartMtplx).toHaveBeenCalledWith();
+  });
+
+  it('keeps MTPLX Start unavailable when no checkpoint is cached', () => {
+    renderCard({
+      mtplxStatus: { installed: true, running: false, supported: true, cachedModels: [], endpoint: 'http://127.0.0.1:8000/v1' },
     });
     const mtplx = row('MTPLX');
     expect(within(mtplx).queryByRole('button', { name: /^Start/ })).toBeNull();
-    expect(within(mtplx).getByText(/Starts on demand/)).toBeInTheDocument();
+    expect(within(mtplx).getByText(/use Configure to download one/)).toBeInTheDocument();
   });
 
   // llama.cpp keeps its Stop: it is started explicitly from the launcher, and

@@ -14,6 +14,7 @@ import templateRoutes from './cosTemplateRoutes.js';
 import insightRoutes from './cosInsightRoutes.js';
 import workflowRoutes from './cosWorkflowRoutes.js';
 import mindRoutes from './cosMindRoutes.js';
+import toolRoutes from './cosToolRoutes.js';
 
 const router = Router();
 
@@ -28,5 +29,6 @@ router.use(templateRoutes);
 router.use(insightRoutes);
 router.use(workflowRoutes);
 router.use(mindRoutes);
+router.use(toolRoutes);
 
 export default router;

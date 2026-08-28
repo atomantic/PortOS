@@ -109,6 +109,13 @@ describe('executeUpdate', () => {
     await promise;
 
     expect(spawn).not.toHaveBeenCalled();
+    expect(isDetachedRunning).toHaveBeenCalledWith(
+      expect.stringContaining('update-detached'),
+      {
+        executable: 'bash',
+        args: [expect.stringContaining('update.sh')]
+      }
+    );
     expect(spawnDetached).toHaveBeenCalledWith(
       'bash',
       [expect.stringContaining('update.sh')],
@@ -117,6 +124,19 @@ describe('executeUpdate', () => {
         controlDir: expect.stringContaining('update-detached')
       })
     );
+  });
+
+  it('continues when a stale control PID does not match the update process', async () => {
+    isDetachedRunning.mockResolvedValue(false);
+    const child = createMockChild();
+    spawnDetached.mockResolvedValue(child);
+
+    const { promise } = await startUpdate('v1.0.0', () => {});
+    child.emit('close', 0);
+    const result = await promise;
+
+    expect(result.success).toBe(true);
+    expect(spawnDetached).toHaveBeenCalledOnce();
   });
 
   // Reusing the fixed control dir while the prior update script is still

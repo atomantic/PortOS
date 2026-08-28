@@ -10,17 +10,32 @@
  */
 
 import { randomUUID } from 'crypto';
+import { mkdir, readFile, readdir, stat, unlink, writeFile } from 'fs/promises';
+import { join } from 'path';
 import { getDomainMode } from '../lib/domainAutonomy.js';
 import {
   PERSISTENT_MIND_LIMITS,
+  PERSISTENT_MIND_IMAGE_EXTENSIONS,
   createDefaultPersistentMindState,
+  isPersistentMindAttachmentId,
+  normalizePersistentMindAttachment,
+  normalizePersistentMindMessageImage,
   nextPersistentMindWakeAt,
   normalizePersistentMindState,
+  persistentMindMessageFingerprint,
   persistentMindBackoffMs,
   persistentMindTurnIsStale,
+  publicPersistentMindAttachment,
   requeuePersistentMindWake,
   takeNextPersistentMindWake,
 } from '../lib/persistentMind.js';
+import {
+  detectImageFormat,
+  PATHS,
+  resolveScreenshot,
+  sanitizeFilename,
+  saveImageUpload,
+} from '../lib/fileUtils.js';
 import { isDaemonRunning, loadState, saveState, withStateLock } from './cosState.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { schedule, cancel } from './eventScheduler.js';
@@ -30,7 +45,14 @@ import { acquireCosActionReservation, acquireCosGlobalSlot } from './cosAdmissio
 import { appendMindEvent } from './agentRunEventLog.js';
 import { preparePersistentMindContext } from './persistentMindContext.js';
 import { resolvePersistentMindProfile } from './persistentMindProfile.js';
+import { isUpdateInProgress } from './updateChecker.js';
 import { publicPersistentMindState } from '../lib/persistentMindPublic.js';
+import { normalizePersistentMindProfile, persistentMindWakeIntervalMs } from '../lib/persistentMindProfile.js';
+import { getProviderById } from './providers.js';
+import {
+  imageCapabilityAllowsAttempt,
+  resolvePersistentMindImageCapability,
+} from './persistentMindImageCapability.js';
 
 export const PERSISTENT_MIND_WAKE_EVENT_ID = 'cos-persistent-mind-wake';
 export const PERSISTENT_MIND_WATCHDOG_EVENT_ID = 'cos-persistent-mind-watchdog';
@@ -45,6 +67,8 @@ let supervisorStopping = false;
 const nowIso = () => new Date().toISOString();
 const errorMessage = (error) => String(error?.message || error || 'Persistent mind turn failed')
   .slice(0, PERSISTENT_MIND_LIMITS.MAX_REASON_CHARS);
+const PENDING_ATTACHMENT_MARKER_PREFIX = '.mind-pending-';
+const PENDING_ATTACHMENT_MARKER_PATTERN = /^\.mind-pending-([A-Za-z0-9_-]{1,128})$/;
 
 async function mutateMindState(mutator) {
   return withStateLock(async () => {
@@ -55,6 +79,369 @@ async function mutateMindState(mutator) {
     await saveState(root);
     return { state: root.persistentMind, value: result?.value };
   });
+}
+
+const attachmentFailure = (error, { code = 'INVALID_ATTACHMENT', status = 400 } = {}) => ({
+  success: false,
+  error,
+  code,
+  status,
+});
+
+const normalizeRequestedAttachmentIds = (images) => {
+  if (images === undefined) return [];
+  if (!Array.isArray(images) || images.length > PERSISTENT_MIND_LIMITS.MAX_MESSAGE_IMAGES) return null;
+  const ids = images.map((image) => {
+    const value = typeof image === 'string' ? image : image?.attachmentId;
+    return typeof value === 'string' ? value.trim() : null;
+  });
+  if (ids.some((id) => !id || !isPersistentMindAttachmentId(id))) return null;
+  if (new Set(ids).size !== ids.length) return null;
+  return ids;
+};
+
+const normalizeMessageText = (text) => (
+  typeof text === 'string' ? text.trim().slice(0, PERSISTENT_MIND_LIMITS.MAX_MESSAGE_CHARS) : ''
+);
+
+const imageIdsForMessage = (message) => (
+  Array.isArray(message?.images)
+    ? message.images.map((image) => image?.attachmentId).filter(isPersistentMindAttachmentId)
+    : []
+);
+
+const sameAttachmentIds = (left, right) => (
+  left.length === right.length && left.every((id, index) => id === right[index])
+);
+
+const findMessageById = (mind, messageId) => {
+  const queued = mind.queuedMessages.find((message) => message.id === messageId);
+  if (queued) return queued;
+  return mind.activeTurn?.wake.kind === 'message' && mind.activeTurn.wake.message.id === messageId
+    ? mind.activeTurn.wake.message
+    : null;
+};
+
+const claimedAttachmentsForMessage = (mind, messageId) => mind.pendingAttachments
+  .map((attachment, index) => ({ attachment, index }))
+  .filter(({ attachment }) => attachment.claimedBy === messageId)
+  .sort((left, right) => (
+    (left.attachment.claimIndex ?? Number.MAX_SAFE_INTEGER)
+      - (right.attachment.claimIndex ?? Number.MAX_SAFE_INTEGER)
+      || left.index - right.index
+  ))
+  .map(({ attachment }) => attachment);
+
+const messageFromAttachments = ({ id, text, createdAt, attachments }) => ({
+  id,
+  text,
+  ...(attachments.length > 0 ? {
+    images: attachments.map(normalizePersistentMindMessageImage).filter(Boolean),
+  } : {}),
+  createdAt,
+});
+
+const pendingAttachmentMarkerPath = (attachmentId) => join(
+  PATHS.screenshots,
+  `${PENDING_ATTACHMENT_MARKER_PREFIX}${attachmentId}`,
+);
+
+const removePendingAttachmentMarker = async (attachmentId) => unlink(pendingAttachmentMarkerPath(attachmentId)).then(
+  () => true,
+  (error) => {
+    if (error?.code === 'ENOENT') return true;
+    console.error(`❌ Failed to remove Persistent Mind upload marker ${attachmentId}: ${error.message}`);
+    return false;
+  },
+);
+
+const removeStoredFilename = async (filename) => {
+  const filePath = resolveScreenshot(filename);
+  if (!filePath) return true;
+  return unlink(filePath).then(
+    () => true,
+    (error) => {
+      if (error?.code === 'ENOENT') return true;
+      console.error(`❌ Failed to remove Persistent Mind attachment file: ${error.message}`);
+      return false;
+    },
+  );
+};
+
+const screenshotEntries = async () => readdir(PATHS.screenshots).then(
+  (entries) => entries.filter((entry) => typeof entry === 'string'),
+  (error) => {
+    if (error?.code === 'ENOENT') return [];
+    console.error(`❌ Failed to inspect Persistent Mind upload markers: ${error.message}`);
+    return null;
+  },
+);
+
+const removePendingAttachmentFiles = async (attachmentId, entries) => {
+  const prefix = `mind-${attachmentId}-`;
+  const candidates = entries.filter((entry) => (
+    entry.startsWith(prefix)
+    && PERSISTENT_MIND_IMAGE_EXTENSIONS.some((extension) => entry.toLowerCase().endsWith(extension))
+  ));
+  let removed = true;
+  for (const filename of candidates) {
+    if (!await removeStoredFilename(filename)) removed = false;
+  }
+  return removed;
+};
+
+/** Reap marker-backed files left before their pending state could be indexed. */
+const cleanupUnindexedPendingAttachments = async ({ knownAttachments, now, limit }) => {
+  const entries = await screenshotEntries();
+  if (!entries) return { examined: 0, removed: 0 };
+  const recordsById = new Map(knownAttachments.map((attachment) => [attachment.attachmentId, attachment]));
+  const markers = entries
+    .map((entry) => ({ entry, match: PENDING_ATTACHMENT_MARKER_PATTERN.exec(entry) }))
+    .filter(({ match }) => Boolean(match))
+    .slice(0, limit);
+  let removed = 0;
+  for (const { entry, match } of markers) {
+    const attachmentId = match[1];
+    const known = recordsById.get(attachmentId);
+    if (known) {
+      // A claimed asset is durable even if its metadata is later pruned. The
+      // marker is only a pending-upload sentinel, so removing it is safe.
+      if (known.claimedBy && await removePendingAttachmentMarker(attachmentId)) removed += 1;
+      continue;
+    }
+    const markerAge = await stat(join(PATHS.screenshots, entry)).then(
+      (value) => value.mtimeMs,
+      () => null,
+    );
+    if (!Number.isFinite(markerAge) || markerAge > now - PERSISTENT_MIND_LIMITS.PENDING_ATTACHMENT_TTL_MS) continue;
+    if (await removePendingAttachmentFiles(attachmentId, entries)
+        && await removePendingAttachmentMarker(attachmentId)) {
+      removed += 1;
+    }
+  }
+  return { examined: markers.length, removed };
+};
+
+const verifyStoredAttachment = async (attachment) => {
+  const filePath = resolveScreenshot(attachment.filename);
+  if (!filePath) return false;
+  const bytes = await readFile(filePath).then((value) => value, () => null);
+  const detected = detectImageFormat(bytes);
+  return Boolean(
+    detected
+    && detected.mime === attachment.mimeType
+    && bytes.length === attachment.size,
+  );
+};
+
+const removeStoredAttachmentFile = async (attachment) => {
+  return removeStoredFilename(attachment.filename);
+};
+
+const removeUploadAfterStateFailure = async (filePath, attachmentId) => unlink(filePath).then(
+  async () => removePendingAttachmentMarker(attachmentId),
+  (error) => {
+    if (error?.code !== 'ENOENT') {
+      console.error(`❌ Failed to clean up Persistent Mind upload ${attachmentId}: ${error.message}`);
+    }
+    return removePendingAttachmentMarker(attachmentId).then(() => false);
+  },
+);
+
+// A validation/write rejection happens before `saveImageUpload` can return its
+// stored path. Remove every file with this upload's generated prefix as well as
+// the marker, so a partial write cannot survive without the marker-based crash
+// recovery path.
+const removeRejectedUpload = async (attachmentId) => {
+  const entries = await screenshotEntries();
+  if (entries) await removePendingAttachmentFiles(attachmentId, entries);
+  await removePendingAttachmentMarker(attachmentId);
+};
+
+const resolveMessageAttachments = async (mind, attachmentIds, messageId) => {
+  const byId = new Map(mind.pendingAttachments.map((attachment) => [attachment.attachmentId, attachment]));
+  const attachments = [];
+  for (const attachmentId of attachmentIds) {
+    const attachment = byId.get(attachmentId);
+    if (!attachment) {
+      return { error: attachmentFailure('Persistent mind attachment was not found', { code: 'ATTACHMENT_NOT_FOUND' }) };
+    }
+    if (attachment.claimedBy && attachment.claimedBy !== messageId) {
+      return { error: attachmentFailure('Persistent mind attachment is already claimed by another message', { code: 'ATTACHMENT_ALREADY_CLAIMED', status: 409 }) };
+    }
+    const expiresAt = attachment.expiresAt ? Date.parse(attachment.expiresAt) : null;
+    if (!attachment.claimedBy && (!Number.isFinite(expiresAt) || expiresAt <= Date.now())) {
+      return { error: attachmentFailure('Persistent mind attachment has expired', { code: 'ATTACHMENT_EXPIRED' }) };
+    }
+    if (!await verifyStoredAttachment(attachment)) {
+      return { error: attachmentFailure('Persistent mind attachment is missing or invalid', { code: 'INVALID_ATTACHMENT' }) };
+    }
+    attachments.push(attachment);
+  }
+  return { attachments };
+};
+
+/** Remove expired or invalid unclaimed files in one bounded maintenance pass. */
+export async function cleanupPersistentMindAttachments({ now = Date.now() } = {}) {
+  const result = await mutateMindState(async (mind) => {
+    let examined = 0;
+    let removed = 0;
+    const pendingAttachments = [];
+    for (const attachment of mind.pendingAttachments) {
+      if (attachment.claimedBy) {
+        await removePendingAttachmentMarker(attachment.attachmentId);
+        pendingAttachments.push(attachment);
+        continue;
+      }
+      if (examined >= PERSISTENT_MIND_LIMITS.MAX_ATTACHMENT_CLEANUP_PER_PASS) {
+        pendingAttachments.push(attachment);
+        continue;
+      }
+      examined += 1;
+      const expiresAt = attachment.expiresAt ? Date.parse(attachment.expiresAt) : null;
+      const expired = !attachment.claimedBy && Number.isFinite(expiresAt) && expiresAt <= now;
+      const valid = expired ? false : await verifyStoredAttachment(attachment);
+      if (!expired && valid) {
+        pendingAttachments.push(attachment);
+        continue;
+      }
+      if (await removeStoredAttachmentFile(attachment)) removed += 1;
+      else pendingAttachments.push(attachment);
+    }
+    const orphaned = await cleanupUnindexedPendingAttachments({
+      knownAttachments: pendingAttachments,
+      now,
+      limit: Math.max(0, PERSISTENT_MIND_LIMITS.MAX_ATTACHMENT_CLEANUP_PER_PASS - examined),
+    });
+    removed += orphaned.removed;
+    return {
+      mind: removed > 0 ? { ...mind, pendingAttachments } : mind,
+      value: { success: true, removed, examined: examined + orphaned.examined },
+    };
+  });
+  return result.value;
+}
+
+/** Store one validated image and register its server-owned pending record. */
+export async function createPersistentMindAttachment({ filename, data } = {}) {
+  if (typeof filename !== 'string' || !filename.trim() || typeof data !== 'string' || !data.trim()) {
+    return attachmentFailure('Image filename and base64 data are required', { code: 'VALIDATION_ERROR' });
+  }
+  if (isUpdateInProgress()) {
+    return attachmentFailure('Persistent Mind image admission is paused during a PortOS update', {
+      code: 'UPDATE_IN_PROGRESS',
+      status: 409,
+    });
+  }
+  await cleanupPersistentMindAttachments();
+  const attachmentId = randomUUID();
+  const originalName = sanitizeFilename(filename).slice(0, PERSISTENT_MIND_LIMITS.MAX_ATTACHMENT_NAME_CHARS) || `image-${attachmentId}`;
+  // Create the marker BEFORE the image write. If the process dies after the
+  // write but before the state record is saved, boot/activity cleanup can find
+  // and reap the otherwise-unindexed file without ever scanning durable assets.
+  await mkdir(PATHS.screenshots, { recursive: true });
+  await writeFile(pendingAttachmentMarkerPath(attachmentId), '', { flag: 'wx' });
+  const saved = await saveImageUpload(PATHS.screenshots, {
+    filename: `mind-${attachmentId}-${originalName}`,
+    data,
+  }, { maxBytes: PERSISTENT_MIND_LIMITS.MAX_ATTACHMENT_BYTES }).then(
+    (value) => value,
+    async (error) => {
+      await removeRejectedUpload(attachmentId);
+      throw error;
+    },
+  );
+  const uploadedAt = nowIso();
+  const attachment = normalizePersistentMindAttachment({
+    attachmentId,
+    filename: saved.filename,
+    originalName,
+    mimeType: saved.mime,
+    size: saved.size,
+    uploadedAt,
+    expiresAt: new Date(Date.now() + PERSISTENT_MIND_LIMITS.PENDING_ATTACHMENT_TTL_MS).toISOString(),
+  });
+  if (!attachment) {
+    await removeUploadAfterStateFailure(saved.filePath, attachmentId);
+    return attachmentFailure('Stored image metadata was invalid', { code: 'INVALID_ATTACHMENT' });
+  }
+  const result = await mutateMindState(async (mind) => {
+    if (isUpdateInProgress()) {
+      return {
+        mind,
+        value: attachmentFailure('Persistent Mind image admission is paused during a PortOS update', {
+          code: 'UPDATE_IN_PROGRESS',
+          status: 409,
+        }),
+      };
+    }
+    const retainedMessageIds = new Set([
+      ...mind.recentMessageIds,
+      ...mind.queuedMessages.map((message) => message.id),
+      ...(mind.activeTurn?.wake.kind === 'message' ? [mind.activeTurn.wake.message.id] : []),
+    ]);
+    // Old claimed records are metadata only once their message leaves the
+    // idempotency window. Keep their files and message references durable, but
+    // do not let the pending-record index grow without bound. If removing the
+    // claim marker fails, retain the metadata: without it the marker-based
+    // orphan sweep could mistake the durable image for an unindexed upload.
+    const pendingAttachments = [];
+    for (const item of mind.pendingAttachments) {
+      if (!item.claimedBy || retainedMessageIds.has(item.claimedBy)) {
+        pendingAttachments.push(item);
+      } else if (!await removePendingAttachmentMarker(item.attachmentId)) {
+        pendingAttachments.push(item);
+      }
+    }
+    if (pendingAttachments.length >= PERSISTENT_MIND_LIMITS.MAX_PENDING_ATTACHMENTS) {
+      return {
+        mind,
+        value: attachmentFailure('Persistent mind has too many pending image uploads', {
+          code: 'ATTACHMENT_QUEUE_FULL',
+          status: 409,
+        }),
+      };
+    }
+    return {
+      mind: { ...mind, pendingAttachments: [...pendingAttachments, attachment] },
+      value: { success: true, attachment: publicPersistentMindAttachment(attachment) },
+    };
+  }).then(
+    (value) => value,
+    async (error) => {
+      await removeUploadAfterStateFailure(saved.filePath, attachmentId);
+      throw error;
+    },
+  );
+  if (!result.value.success) {
+    await removeUploadAfterStateFailure(saved.filePath, attachmentId);
+  } else {
+    await removePendingAttachmentMarker(attachmentId);
+  }
+  return result.value;
+}
+
+/** Delete an unclaimed pending image and its machine-local bytes. */
+export async function deletePersistentMindAttachment(attachmentId) {
+  if (!isPersistentMindAttachmentId(attachmentId)) {
+    return attachmentFailure('Invalid persistent mind attachment id', { code: 'VALIDATION_ERROR' });
+  }
+  const result = await mutateMindState(async (mind) => {
+    const attachment = mind.pendingAttachments.find((item) => item.attachmentId === attachmentId);
+    if (!attachment) return { mind, value: attachmentFailure('Persistent mind attachment was not found', { code: 'ATTACHMENT_NOT_FOUND', status: 404 }) };
+    if (attachment.claimedBy) {
+      return { mind, value: attachmentFailure('Claimed persistent mind attachments cannot be removed', { code: 'ATTACHMENT_ALREADY_CLAIMED', status: 409 }) };
+    }
+    if (!await removeStoredAttachmentFile(attachment)) {
+      return { mind, value: attachmentFailure('Persistent mind attachment could not be removed', { code: 'ATTACHMENT_DELETE_FAILED', status: 500 }) };
+    }
+    await removePendingAttachmentMarker(attachmentId);
+    return {
+      mind: { ...mind, pendingAttachments: mind.pendingAttachments.filter((item) => item.attachmentId !== attachmentId) },
+      value: { success: true, attachmentId },
+    };
+  });
+  return result.value;
 }
 
 function emitMindStatus(state) {
@@ -104,6 +491,7 @@ function initialSelfWake(reason) {
   return {
     id: `wake-${randomUUID()}`,
     kind: 'self',
+    scheduleKind: 'requested',
     reason,
     sourceTurnId: reason,
     createdAt,
@@ -111,14 +499,17 @@ function initialSelfWake(reason) {
   };
 }
 
-function quietSelfWake(turnId, notBefore = Date.now() + PERSISTENT_MIND_LIMITS.MAX_QUIET_MS) {
+const QUIET_SELF_WAKE_REASON = 'maximum quiet period elapsed';
+
+function quietSelfWake(turnId, quietPeriodMs = PERSISTENT_MIND_LIMITS.MAX_QUIET_MS, baseAt = Date.now()) {
   return {
     id: `wake-${randomUUID()}`,
     kind: 'self',
-    reason: 'maximum quiet period elapsed',
+    scheduleKind: 'quiet',
+    reason: QUIET_SELF_WAKE_REASON,
     sourceTurnId: turnId,
     createdAt: nowIso(),
-    notBefore: new Date(notBefore).toISOString(),
+    notBefore: new Date(baseAt + quietPeriodMs).toISOString(),
   };
 }
 
@@ -283,32 +674,51 @@ async function heartbeat(turnId, generation) {
 async function completeTurn(turnId, result, generation) {
   if (generation !== runtimeGeneration) return;
   const completedAt = nowIso();
-  const updated = await mutateMindState((mind) => {
+  const updated = await mutateMindState((mind, root) => {
     if (mind.activeTurn?.id !== turnId) return { mind, value: false };
     const messageId = mind.activeTurn.wake.kind === 'message'
       ? mind.activeTurn.wake.message.id
+      : null;
+    const messageFingerprint = messageId
+      ? persistentMindMessageFingerprint(mind.activeTurn.wake.message)
       : null;
     const recentMessageIds = messageId
       ? [...mind.recentMessageIds.filter((id) => id !== messageId), messageId]
         .slice(-PERSISTENT_MIND_LIMITS.MAX_RECENT_MESSAGE_IDS)
       : mind.recentMessageIds;
+    const recentMessageFingerprints = messageId
+      ? [...mind.recentMessageFingerprints.filter((entry) => entry.id !== messageId), {
+          id: messageId,
+          fingerprint: messageFingerprint,
+        }].slice(-PERSISTENT_MIND_LIMITS.MAX_RECENT_MESSAGE_IDS)
+      : mind.recentMessageFingerprints;
+    const quietPeriodMs = persistentMindWakeIntervalMs(root.config?.persistentMindProfile);
+    const quietDeadline = Date.parse(completedAt) + quietPeriodMs;
+    const requestedAt = Date.parse(result?.selfWake?.notBefore);
     const requestedWake = result?.selfWake && typeof result.selfWake === 'object'
       ? {
           id: `wake-${randomUUID()}`,
           kind: 'self',
+          scheduleKind: 'requested',
           reason: String(result.selfWake.reason || 'turn requested follow-up')
             .slice(0, PERSISTENT_MIND_LIMITS.MAX_REASON_CHARS),
           sourceTurnId: turnId,
           createdAt: completedAt,
-          notBefore: result.selfWake.notBefore || completedAt,
+          // A turn may request an earlier follow-up, but the saved cadence is
+          // the operator's maximum quiet period and therefore caps later asks.
+          notBefore: new Date(Math.min(
+            quietDeadline,
+            Number.isFinite(requestedAt) ? Math.max(Date.parse(completedAt), requestedAt) : Date.parse(completedAt),
+          )).toISOString(),
         }
-      : quietSelfWake(turnId);
+      : quietSelfWake(turnId, quietPeriodMs, Date.parse(completedAt));
     const hasQueuedMessages = mind.queuedMessages.length > 0;
     return {
       mind: {
         ...mind,
         activeTurn: null,
         recentMessageIds,
+        recentMessageFingerprints,
         selfWake: requestedWake,
         lastCompletedTurnId: turnId,
         lastCompletedAt: completedAt,
@@ -482,6 +892,16 @@ async function runOnePersistentMindTurn() {
         await parkActiveTurn(turn.id, 'Persistent mind adapter did not honor the pinned provider profile', 'degraded');
         return;
       }
+      if (turn.wake.kind === 'message' && Array.isArray(turn.wake.message?.images) && turn.wake.message.images.length > 0) {
+        const imageCapability = await resolvePersistentMindImageCapability({
+          provider: prepared.provider,
+          model: prepared.model,
+        });
+        if (!imageCapabilityAllowsAttempt(imageCapability, prepared.provider)) {
+          await parkActiveTurn(turn.id, imageCapability.reason, 'degraded');
+          return;
+        }
+      }
       await recordTurnProfile(turn.id, prepared);
       if (!await turnCanContinue(turn.id, generation, controller.signal)) return;
 
@@ -625,6 +1045,45 @@ export async function getPersistentMindState() {
   return normalizePersistentMindState(state.persistentMind);
 }
 
+/** Apply a saved cadence to the currently scheduled self-wake and timer. */
+export async function refreshPersistentMindWakeCadence() {
+  const result = await mutateMindState((mind, root) => {
+    if (!mind.started || mind.activeTurn) return { mind };
+    const quietPeriodMs = persistentMindWakeIntervalMs(root.config?.persistentMindProfile);
+    const baseAt = Number.isFinite(Date.parse(mind.lastCompletedAt))
+      ? Date.parse(mind.lastCompletedAt)
+      : Date.now();
+    const quietDeadline = baseAt + quietPeriodMs;
+    let selfWake = mind.selfWake;
+    if (!selfWake && mind.queuedMessages.length === 0) {
+      selfWake = quietSelfWake(mind.lastCompletedTurnId || 'cadence-change', quietPeriodMs, baseAt);
+    } else if (selfWake?.scheduleKind === 'quiet') {
+      selfWake = quietSelfWake(selfWake.sourceTurnId || mind.lastCompletedTurnId || 'cadence-change', quietPeriodMs, baseAt);
+    } else if (selfWake && (!Number.isFinite(Date.parse(selfWake.notBefore)) || Date.parse(selfWake.notBefore) > quietDeadline)) {
+      selfWake = { ...selfWake, notBefore: new Date(quietDeadline).toISOString() };
+    }
+    return { mind: { ...mind, selfWake } };
+  });
+  if (result.state.started) await scheduleNextWake();
+  emitMindStatus(result.state);
+  return result.state;
+}
+
+/** Clear failure/backoff residue without changing lifecycle or queued work. */
+export async function resetPersistentMindRuntimeResidue() {
+  const result = await mutateMindState((mind) => ({
+    mind: {
+      ...mind,
+      failureCount: 0,
+      lastError: null,
+      nextEligibleWakeAt: null,
+      pauseReason: mind.status === 'paused' ? mind.pauseReason : null,
+    },
+  }));
+  emitMindStatus(result.state);
+  return result.state;
+}
+
 export async function setPersistentMindEnabled(enabled) {
   if (!enabled) {
     runtimeGeneration += 1;
@@ -725,7 +1184,7 @@ export async function resumePersistentMind() {
   return result.value;
 }
 
-export async function stopPersistentMind() {
+export async function stopPersistentMind({ waitForTurn = false } = {}) {
   runtimeGeneration += 1;
   activeAbortController?.abort('Persistent mind stopped');
   cancel(PERSISTENT_MIND_WAKE_EVENT_ID);
@@ -757,50 +1216,189 @@ export async function stopPersistentMind() {
     });
   }
   emitMindStatus(result.state);
+  if (waitForTurn && activeRun) {
+    await activeRun.catch((error) => {
+      console.error(`❌ Failed while settling stopped persistent mind turn: ${error.message}`);
+    });
+  }
   return { success: true };
 }
 
-export async function enqueuePersistentMindMessage({ id = randomUUID(), text, createdAt = nowIso() } = {}) {
-  const message = normalizePersistentMindState({ queuedMessages: [{ id, text, createdAt }] }).queuedMessages[0];
-  if (!message) return { success: false, error: 'Message id and text are required' };
-  const result = await mutateMindState((mind) => {
-    const duplicate = mind.recentMessageIds.includes(message.id)
-      || mind.queuedMessages.some((queued) => queued.id === message.id)
-      || (mind.activeTurn?.wake.kind === 'message' && mind.activeTurn.wake.message.id === message.id);
-    if (duplicate) return { mind, value: { success: true, duplicate: true, messageId: message.id } };
+export async function enqueuePersistentMindMessage({ id = randomUUID(), text, images, createdAt = nowIso() } = {}) {
+  const messageId = typeof id === 'string' ? id.trim().slice(0, 200) : '';
+  const messageText = normalizeMessageText(text);
+  const attachmentIds = normalizeRequestedAttachmentIds(images);
+  if (!messageId || attachmentIds === null || (!messageText && attachmentIds.length === 0)) {
+    return attachmentFailure('Message id and text or at least one image are required', { code: 'VALIDATION_ERROR' });
+  }
+  if (attachmentIds.length > 0) {
+    const root = await loadState();
+    const profile = normalizePersistentMindProfile(root.config?.persistentMindProfile);
+    const provider = profile.providerId ? await getProviderById(profile.providerId) : null;
+    const imageCapability = await resolvePersistentMindImageCapability({ provider, model: profile.model });
+    if (!imageCapabilityAllowsAttempt(imageCapability, provider)) {
+      return attachmentFailure(imageCapability.reason, { code: 'IMAGE_CAPABILITY_UNSUPPORTED', status: 422 });
+    }
+  }
+  const messageCreatedAt = typeof createdAt === 'string' && Number.isFinite(Date.parse(createdAt))
+    ? new Date(createdAt).toISOString()
+    : nowIso();
+  await cleanupPersistentMindAttachments();
+  const result = await mutateMindState(async (mind) => {
+    if (attachmentIds.length > 0 && isUpdateInProgress()) {
+      return {
+        mind,
+        value: attachmentFailure('Persistent Mind image admission is paused during a PortOS update', {
+          code: 'UPDATE_IN_PROGRESS',
+          status: 409,
+        }),
+      };
+    }
+    const existingMessage = findMessageById(mind, messageId);
+    const claimedRecords = claimedAttachmentsForMessage(mind, messageId);
+    const duplicate = Boolean(existingMessage) || mind.recentMessageIds.includes(messageId);
+    const requestedFingerprint = persistentMindMessageFingerprint({
+      text: messageText,
+      images: attachmentIds,
+    });
+    const recentFingerprint = mind.recentMessageFingerprints.find((entry) => entry.id === messageId)?.fingerprint;
+    const existingImageIds = existingMessage
+      ? imageIdsForMessage(existingMessage)
+      : claimedRecords.map((attachment) => attachment.attachmentId);
+    if (duplicate) {
+      if (!existingMessage && !recentFingerprint) {
+        return {
+          mind,
+          value: attachmentFailure('This completed message predates retry verification; send it again with a new message id', {
+            code: 'IDEMPOTENCY_CONFLICT',
+            status: 409,
+          }),
+        };
+      }
+      if (!existingMessage && recentFingerprint && recentFingerprint !== requestedFingerprint) {
+        return {
+          mind,
+          value: attachmentFailure('A retry must use the same Persistent Mind message content', {
+            code: 'IDEMPOTENCY_CONFLICT',
+            status: 409,
+          }),
+        };
+      }
+      if (existingMessage && existingMessage.text !== messageText) {
+        return {
+          mind,
+          value: attachmentFailure('A retry must use the same Persistent Mind message text', {
+            code: 'IDEMPOTENCY_CONFLICT',
+            status: 409,
+          }),
+        };
+      }
+      if (!sameAttachmentIds(existingImageIds, attachmentIds)) {
+        return {
+          mind,
+          value: attachmentFailure('A retry must use the same Persistent Mind image references', {
+            code: 'IDEMPOTENCY_CONFLICT',
+            status: 409,
+          }),
+        };
+      }
+      const resolved = await resolveMessageAttachments(mind, attachmentIds, messageId);
+      if (resolved.error) return { mind, value: resolved.error };
+      return {
+        mind,
+        value: {
+          success: true,
+          duplicate: true,
+          messageId,
+          acceptedMessage: existingMessage || messageFromAttachments({
+            id: messageId,
+            text: messageText,
+            createdAt: messageCreatedAt,
+            attachments: resolved.attachments,
+          }),
+        },
+      };
+    }
+    if (claimedRecords.length > 0 && !sameAttachmentIds(
+      claimedRecords.map((attachment) => attachment.attachmentId),
+      attachmentIds,
+    )) {
+      return {
+        mind,
+        value: attachmentFailure('A retry must use the same Persistent Mind image references', {
+          code: 'IDEMPOTENCY_CONFLICT',
+          status: 409,
+        }),
+      };
+    }
+    const resolved = await resolveMessageAttachments(mind, attachmentIds, messageId);
+    if (resolved.error) return { mind, value: resolved.error };
     const acceptedMessageCount = mind.queuedMessages.length
       + (mind.activeTurn?.wake.kind === 'message' ? 1 : 0);
     if (acceptedMessageCount >= PERSISTENT_MIND_LIMITS.MAX_QUEUED_MESSAGES) {
-      return { mind, value: { success: false, error: 'Persistent mind message queue is full' } };
+      return { mind, value: attachmentFailure('Persistent mind message queue is full', { code: 'QUEUE_FULL', status: 409 }) };
     }
+    // Once the state mutation below records the claim, the attachment is a
+    // durable conversation asset. Removing the pending marker first is safe:
+    // if this process stops before saveState, the still-unclaimed state record
+    // continues to protect the valid file from cleanup.
+    for (const attachment of resolved.attachments) {
+      await removePendingAttachmentMarker(attachment.attachmentId);
+    }
+    const claimedAt = nowIso();
+    const requestedIds = new Set(attachmentIds);
+    const pendingAttachments = mind.pendingAttachments.map((attachment) => {
+      if (!requestedIds.has(attachment.attachmentId)) return attachment;
+      return {
+        ...attachment,
+        claimedBy: messageId,
+        claimedAt,
+        claimIndex: attachmentIds.indexOf(attachment.attachmentId),
+        expiresAt: null,
+      };
+    });
+    const message = messageFromAttachments({
+      id: messageId,
+      text: messageText,
+      createdAt: messageCreatedAt,
+      attachments: resolved.attachments,
+    });
     return {
       mind: {
         ...mind,
+        pendingAttachments,
         queuedMessages: [...mind.queuedMessages, message],
         status: mind.started && mind.status !== 'paused' ? 'waiting' : mind.status,
       },
-      value: { success: true, duplicate: false, messageId: message.id },
+      value: { success: true, duplicate: false, messageId, acceptedMessage: message },
     };
   });
   if (result.value.success) {
     // Retry the stable event id even when the mutable queue already saw this
     // message. The ledger deduplicates a healthy first append; if the first
     // append was dropped, the caller's idempotent retry repairs the trajectory.
+    const acceptedMessage = result.value.acceptedMessage;
     await appendMindEvent({
       kind: 'mind.message.accepted',
       mindId: result.state.mindId,
-      eventId: `mind-message:${message.id}`,
-      at: message.createdAt,
+      eventId: `mind-message:${messageId}`,
+      at: acceptedMessage.createdAt,
       data: {
-        messageId: message.id,
-        displayText: message.text,
-        textChars: message.text.length,
+        messageId,
+        displayText: acceptedMessage.text,
+        textChars: acceptedMessage.text.length,
+        imageCount: Array.isArray(acceptedMessage.images) ? acceptedMessage.images.length : 0,
+        images: Array.isArray(acceptedMessage.images)
+          ? acceptedMessage.images.map(normalizePersistentMindMessageImage).filter(Boolean)
+          : [],
       },
     });
   }
   if (result.value.success && result.state.started) await scheduleNextWake();
   emitMindStatus(result.state);
-  return result.value;
+  const publicResult = { ...result.value };
+  delete publicResult.acceptedMessage;
+  return publicResult;
 }
 
 export async function requestPersistentMindWake({ sourceTurnId, reason, notBefore = nowIso() } = {}) {
@@ -811,6 +1409,7 @@ export async function requestPersistentMindWake({ sourceTurnId, reason, notBefor
     const selfWake = {
       id: `wake-${randomUUID()}`,
       kind: 'self',
+      scheduleKind: 'requested',
       reason: String(reason || 'self-wake').slice(0, PERSISTENT_MIND_LIMITS.MAX_REASON_CHARS),
       sourceTurnId,
       createdAt: nowIso(),
@@ -850,7 +1449,8 @@ export async function checkPersistentMindWatchdog() {
 
 export async function initializePersistentMindSupervisor() {
   supervisorStopping = false;
-  const recovered = await mutateMindState((mind) => {
+  await cleanupPersistentMindAttachments();
+  const recovered = await mutateMindState((mind, root) => {
     if (!mind.enabled || !mind.started) return { mind };
     let next = mind;
     const orphanedTurnId = mind.activeTurn?.id || null;
@@ -868,7 +1468,14 @@ export async function initializePersistentMindSupervisor() {
       };
     } else if (next.queuedMessages.length === 0 && !next.selfWake) {
       const base = next.lastCompletedAt ? Date.parse(next.lastCompletedAt) : Date.now();
-      next = { ...next, selfWake: quietSelfWake(next.lastCompletedTurnId || 'restart', base + PERSISTENT_MIND_LIMITS.MAX_QUIET_MS) };
+      next = {
+        ...next,
+        selfWake: quietSelfWake(
+          next.lastCompletedTurnId || 'restart',
+          persistentMindWakeIntervalMs(root.config?.persistentMindProfile),
+          base,
+        ),
+      };
     }
     return { mind: next, value: { orphanedTurnId, mindId: mind.mindId } };
   });

@@ -232,6 +232,32 @@ describe('autoFixer — defer + noteFallbackHandled', () => {
     clearPendingAutoFixTasks();
   });
 
+  // The body built by buildAIProviderErrorContext has always fallen back to
+  // 'Unknown'/'N/A'; the title did not, so a failure that reached the hook with
+  // no attribution filed a task literally called
+  // "Investigate AI provider failure: undefined (undefined)".
+  it('never titles a task with a literal undefined provider or model', async () => {
+    clearPendingAutoFixTasks();
+    cos.isRunning.mockReturnValue(false);
+
+    // Emitted raw, not through emitProviderFailure — that helper defaults
+    // provider/model, which is exactly the attribution this case lacks.
+    errorEvents.emit('error', {
+      code: 'AI_PROVIDER_EXECUTION_FAILED',
+      message: 'AI provider undefined execution failed: TUI exited with code 1',
+      severity: 'error',
+      canAutoFix: true,
+      timestamp: Date.now(),
+      context: { exitCode: 1, duration: 86, errorDetails: 'TUI exited with code 1' },
+    });
+    await vi.advanceTimersByTimeAsync(5500);
+
+    const pending = getPendingAutoFixTasks();
+    expect(pending).toHaveLength(1);
+    expect(pending[0].description).not.toMatch(/undefined/);
+    clearPendingAutoFixTasks();
+  });
+
   it('clears the dedupe entry when deferred task creation fails so future failures can still raise tasks', async () => {
     // Simulate addTask rejecting (e.g. PLAN.md write error). Without the
     // dedupe-clear in the catch arm, the next identical failure would be

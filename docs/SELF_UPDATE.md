@@ -59,3 +59,9 @@ When `isFork` is true, `UpdateTab` replaces the single "Update Now" button with 
 | Update from Fork As-Is | `execute` with `acknowledgeFork: true` |
 
 Keep these three behaviors distinct. Collapsing them strips the user's agency over what touches their GitHub fork.
+
+## Image-bearing Persistent Mind work must drain before source transitions
+
+The managed update route refuses to restart into a different source revision while a queued Persistent Mind message or active turn carries image references. `GET /api/update/status` reports the privacy-safe `persistentMindImages` preflight (`safe`, queued count, and active-turn boolean), and `POST /api/update/execute` re-checks it before and after acquiring the update lock.
+
+To recover, drain the image-bearing messages, confirm the preflight is safe, create a normal PortOS backup, and retry the update. If a stopped or unavailable provider prevents the queue from draining, create a backup that includes `data/cos/state.json` and `data/screenshots/`, then explicitly retry the API request with `acknowledgePersistentMindImageBackup: true`; that acknowledgement is the recovery escape hatch and is never sent silently by the UI. Invalid or unreadable Persistent Mind state blocks the transition until it is restored from backup. Claimed historical images do not block updates once their message has completed. PortOS does not offer a managed rollback command; manually checking out an older source revision while image-bearing work is queued or active is unsupported because schema-v2 readers cannot preserve those references.

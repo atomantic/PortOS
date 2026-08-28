@@ -7,7 +7,7 @@ import { spawn, ChildProcess } from 'child_process';
 import { randomUUID } from 'crypto';
 import { analyzeError, analyzeHttpError, ERROR_CATEGORIES } from './errorDetection.js';
 import { apiGenerationOptions } from './internal/generationOptions.js';
-import { fetchWithPreHeaderRetry, isReplaySafeLocalRequest } from './internal/preHeaderRetry.js';
+import { describeTransportError, fetchWithPreHeaderRetry, isReplaySafeLocalRequest } from './internal/preHeaderRetry.js';
 
 // npm-installed CLI providers (claude, codex, opencode, …) are .cmd/.bat
 // shims on Windows; Node's spawn() can't execute those without going through
@@ -692,8 +692,8 @@ export function createRunnerService(config = {}) {
           }), {
             signal: controller.signal,
             allowReplay: isReplaySafeLocalRequest(provider),
-          }).catch(err => ({ ok: false, error: err.message, status: 0 }))
-        : { ok: false, error: `Ollama is not running and PortOS could not start it: ${ready.error || 'unknown error'}`, status: 0 };
+          }).catch(err => ({ ok: false, error: describeTransportError(err), status: 0 }))
+        : { ok: false, error: ready.error || 'Provider readiness check failed', status: 0 };
 
       if (!response.ok) {
         // Read the (possibly stalled) error body BEFORE claiming settlement so

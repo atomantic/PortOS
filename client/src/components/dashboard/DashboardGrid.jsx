@@ -296,7 +296,7 @@ function DragHandle({ kind, item, onPointerDown, onClick, handleProps }) {
 // Auto-place a new widget at the end of the reading sequence, left-aligned.
 // Used when LayoutEditor adds a widget to a layout without specifying a
 // position. The pack decides where "the end" actually renders.
-export function placeNewWidget(items, widgetId) {
+function placeNewWidget(items, widgetId) {
   const meta = WIDGETS_BY_ID[widgetId];
   const w = WIDTH_TO_COLS[meta?.width] ?? 4;
   const h = meta?.defaultH ?? GRID_DEFAULT_H;

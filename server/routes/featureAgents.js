@@ -68,9 +68,9 @@ router.post('/:id/resume', asyncHandler(async (req, res) => {
 
 // POST /:id/trigger - Force immediate run
 router.post('/:id/trigger', asyncHandler(async (req, res) => {
-  const agent = await featureAgents.triggerFeatureAgent(req.params.id);
-  if (!agent) throw new ServerError('Feature agent not found', { status: 404, code: 'NOT_FOUND' });
-  res.json({ triggered: true, agent });
+  const result = await featureAgents.triggerFeatureAgent(req.params.id);
+  if (!result) throw new ServerError('Feature agent not found', { status: 404, code: 'NOT_FOUND' });
+  res.json(result);
 }));
 
 // POST /:id/stop - Deactivate fully

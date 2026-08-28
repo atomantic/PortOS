@@ -66,9 +66,31 @@ export const repairRunRecords = (body = {}, options = {}) =>
 export const getPersistentMind = (filters = {}, options = {}) =>
   request(`/cos/mind${runEventQuery(filters)}`, options);
 export const getPersistentMindContext = (options = {}) => request('/cos/mind/context', options);
+export const getPersistentMindTools = (options = {}) => request('/cos/mind/tools', options);
+export const getCosToolCatalog = ({ scope = 'all', format = 'portos', intent, ...options } = {}) => {
+  const params = new URLSearchParams({ scope, format });
+  if (intent) params.set('intent', intent);
+  return request(`/cos/tools?${params}`, options);
+};
+export const callCosTool = (call, options = {}) => request('/cos/tools/call', {
+  method: 'POST',
+  body: JSON.stringify(call),
+  ...options,
+  headers: { 'Idempotency-Key': call.requestId, ...(options.headers || {}) },
+});
+export const getCosToolCall = (requestId, options = {}) =>
+  request(`/cos/tools/calls/${encodeURIComponent(requestId)}`, options);
 export const getPersistentMindRuntime = (options = {}) => request('/cos/mind/runtime', options);
+export const getPersistentMindVisibility = (options = {}) => {
+  const { refresh, ...requestOptions } = options;
+  return request(`/cos/mind/visibility${refresh ? '?refresh=true' : ''}`, requestOptions);
+};
 export const sendPersistentMindMessage = (body, options = {}) =>
   request('/cos/mind/messages', { method: 'POST', body: JSON.stringify(body), ...options });
+export const uploadPersistentMindAttachment = (body, options = {}) =>
+  request('/cos/mind/attachments', { method: 'POST', body: JSON.stringify(body), ...options });
+export const deletePersistentMindAttachment = (attachmentId, options = {}) =>
+  request(`/cos/mind/attachments/${encodeURIComponent(attachmentId)}`, { method: 'DELETE', ...options });
 export const addPersistentMindAnnotation = (body, options = {}) =>
   request('/cos/mind/annotations', { method: 'POST', body: JSON.stringify(body), ...options });
 export const startPersistentMind = (options = {}) => request('/cos/mind/start', { method: 'POST', ...options });
@@ -90,6 +112,9 @@ export const createPersistentMindMemory = (body, options = {}) => request('/cos/
 });
 export const updatePersistentMindMemory = (memoryId, body, options = {}) => request(`/cos/mind/memories/${encodeURIComponent(memoryId)}`, {
   method: 'PUT', body: JSON.stringify(body), ...options,
+});
+export const cleanupPersistentMind = (body, options = {}) => request('/cos/mind/cleanup', {
+  method: 'POST', body: JSON.stringify(body), ...options,
 });
 
 // Chief of Staff
@@ -354,13 +379,15 @@ export const getCosWorkflow = (hours = 24) => request(`/cos/workflow?hours=${hou
 // Feature Agents
 export const getFeatureAgents = () => request('/feature-agents');
 export const getFeatureAgent = (id) => request(`/feature-agents/${id}`);
-export const createFeatureAgent = (data) => request('/feature-agents', {
+export const createFeatureAgent = (data, options = {}) => request('/feature-agents', {
   method: 'POST',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
-export const updateFeatureAgent = (id, data) => request(`/feature-agents/${id}`, {
+export const updateFeatureAgent = (id, data, options = {}) => request(`/feature-agents/${id}`, {
   method: 'PUT',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
 export const deleteFeatureAgent = (id, options = {}) => request(`/feature-agents/${id}`, { method: 'DELETE', ...options });
 export const startFeatureAgent = (id, options = {}) => request(`/feature-agents/${id}/start`, { method: 'POST', ...options });

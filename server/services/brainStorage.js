@@ -131,12 +131,12 @@ export const brainEvents = new EventEmitter();
  * Announce a persisted entity-store change that did NOT emit the usual
  * `${type}:upserted` / `${type}:deleted` event.
  *
- * Two write paths are deliberately event-silent — `applyRemoteRecord` (peer
- * applies, silent to prevent the #1077 cross-peer echo loop) and
- * `upsertWithId({ emitEvent: false })` (the caller emits its own richer event).
- * Read-through consumers didn't care, but a derived in-memory projection does:
- * without this signal, brainSearchIndex would serve stale results forever after
- * an inbound sync (issue #3506).
+ * Some write paths are deliberately event-silent — `applyRemoteRecord` (peer
+ * applies, silent to prevent the #1077 cross-peer echo loop),
+ * `upsertWithId({ emitEvent: false })` (the caller emits its own richer event),
+ * tombstone pruning, and origin-instance backfill. Read-through consumers did
+ * not care, but derived in-memory state does: without this signal,
+ * brainSearchIndex or the reconcile checksum cache could stay stale.
  *
  * LOCAL-ONLY, like `sync:applied`: it carries no record payload, is never fed
  * to the sync log, and is never relayed to a peer, so it cannot amplify an
@@ -644,6 +644,60 @@ export async function updateMany(type, updates) {
 }
 
 /**
+ * Apply a batch whose records can be persisted independently and whose sync
+ * entries should be appended together. Per-record queues still protect each
+ * record's read-modify-write, while Promise.allSettled lets successful writes
+ * reach the batch log before a failed sibling is surfaced to the caller.
+ */
+async function updateManyWithBatchLog(type, updates) {
+  const store = storeFor(type);
+  const results = await Promise.allSettled(updates.map(({ id, ...fields }) => {
+    if (!store.isValidId(id)) return null;
+    return store.queueRecordWrite(id, async () => {
+      const existing = await store.loadOne(id);
+      if (!existing || isTombstone(existing)) return null;
+
+      const record = {
+        ...existing,
+        ...fields,
+        // Preserve immutable fields, exactly as update() does.
+        originInstanceId: existing.originInstanceId,
+        createdAt: existing.createdAt,
+        updatedAt: now()
+      };
+
+      await store.saveOneNow(id, record);
+      return { id, record };
+    });
+  }));
+  const failures = results.filter(({ status }) => status === 'rejected');
+  const applied = results
+    .filter(({ status }) => status === 'fulfilled')
+    .map(({ value }) => value)
+    .filter(Boolean);
+
+  for (const { id, record } of applied) {
+    brainEvents.emit(`${type}:upserted`, { id, record: { id, ...record } });
+  }
+
+  if (applied.length > 0) {
+    await brainSyncLog.appendChanges(applied.map(({ id, record }) => ({
+      op: 'update',
+      type,
+      id,
+      record,
+      originInstanceId: record.originInstanceId,
+    }))).catch(err => console.error(`⚠️ Sync log batch append failed for ${type}: ${err.message}`));
+  }
+
+  if (failures.length > 0) throw failures[0].reason;
+  if (applied.length === 0) return [];
+
+  console.log(`🧠 Updated ${applied.length} ${type} records in one batch`);
+  return applied.map(({ id, record }) => ({ id, ...record }));
+}
+
+/**
  * Delete a record
  */
 export async function remove(type, id) {
@@ -1064,6 +1118,9 @@ export const getBuckets = (filters) => filters ? query('buckets', filters) : get
 export const getBucketById = (id) => getById('buckets', id);
 export const createBucket = (data) => create('buckets', data);
 export const updateBucket = (id, data) => update('buckets', id, data);
+// Bucket order changes are one user gesture; persist the independent records
+// together and append their federation entries with one sync-log write.
+export const reorderBuckets = (updates) => updateManyWithBatchLog('buckets', updates);
 export const deleteBucket = (id) => remove('buckets', id);
 
 // =============================================================================
@@ -1156,6 +1213,7 @@ export async function pruneTombstones(type, cutoffMs) {
     const deletedAt = Date.parse(record.deletedAt ?? record.updatedAt ?? '');
     if (Number.isFinite(deletedAt) && deletedAt < cutoffMs) {
       await store.deleteOneNow(id);
+      emitRecordChanged(type, id);
       return true;
     }
     return false;
@@ -1180,6 +1238,7 @@ export async function backfillOriginInstanceId() {
       // Tombstones always carry originInstanceId; skip them and absent records.
       if (!record || isTombstone(record) || record.originInstanceId) return false;
       await store.saveOneNow(id, { ...record, originInstanceId: instanceId });
+      emitRecordChanged(type, id);
       return true;
     })));
     return changes.filter(Boolean).length;

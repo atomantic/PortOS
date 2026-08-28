@@ -250,19 +250,39 @@ issues, and changes nothing:
 | Data & upgrade-safety issues | Missing migrations/seeds, schema-parity drift, version gates, destructive defaults |
 | Docs drift | Doc claims the code contradicts, stale commands, undocumented surfaces |
 | Security issues | Real exposure under the documented threat model — findings that contradict it are noise |
+| API & route contracts | Unvalidated inputs, client/server drift, wrong status/envelope, missing `asyncHandler`, loose schemas |
+| React lifecycle & state | Missing effect teardowns, stale closures, unmounted state updates, derived-state anti-patterns |
+| Logging & observability | Silent catch blocks, log noise on hot paths, errors logged without context, uninstrumented pipelines |
+| Copy & text clarity | Internal jargon in labels, ambiguous action verbs, dead-end error text, broken pluralization |
 
 Presets are **templates**: picking one COPIES its prompt into the job's own
-`params.prompt`, and nothing on disk points back at the preset id. So editing the
-text here never rewrites a configured job on any install (no migration needed) —
-and an improved prompt reaches an existing job only when the user re-picks it.
+`params.prompt`, and nothing on disk points back at the preset id. So a contract
+revision reaches configured jobs only through a migration — and the shape of
+that migration matters. Every rendered prompt is two halves split by the
+`## How to run this audit` line: the **mission** above it (what to audit, one
+per preset, essentially stable) and the **contract** below it (how to audit,
+shared, and the half that keeps being revised). `upgradeStoredAuditPrompt`
+matches on the mission and replaces the contract, so a job seeded several
+revisions ago still upgrades; it refuses when the stored contract has lost the
+sentences every shipped render carried, which is how a user's own procedure is
+recognized and left alone. Copy migration 305 for the next contract edit —
+**not** migration 294, whose byte-for-byte rule matched nothing older than one
+revision and silently stranded every real job on a prompt that predated the
+dispatch-label guidance entirely.
 
-Each audit prompt now tells the agent to apply independent slashdo dispatch
-hints (`model:light|medium|heavy`, `effort:low|medium|high|xhigh|max`) and
-contributor labels (`good first issue`, `help wanted`) when the finding
-justifies them, create missing labels lazily, and keep category labels
-(`plan`, `ux`, `bug`, `tests`, …) intact. Existing jobs keep whatever prompt
-was copied when they were created; re-pick the preset to pick up the new
-filing contract.
+Each audit prompt spends **roughly the first two thirds of the window on
+research**: trace each candidate end to end, read the tests and `git log` around
+it, name the path that actually reaches the failure, and decide the fix (files,
+tests, and the rejected alternative) before filing. The cap stays at 5 issues
+with two or three as the target — depth over volume.
+
+Filing carries a **required** label contract: exactly one `model:` and exactly
+one `effort:` label on every issue, chosen as independent axes from the code the
+agent just read (`MANDATORY_DISPATCH_HINT_GUIDANCE` in `server/lib/dispatchLabels.js`).
+Contributor labels (`good first issue`, `help wanted`) stay optional, missing
+labels are created lazily, category labels (`plan`, `ux`, `bug`, `tests`,
+`area:*`, …) are preserved, and the agent reads each new issue's labels back to
+repair any that did not stick.
 ### The "lands no code" postures
 
 An `agent-prompt` job has two of them, and they are not the same thing:

@@ -3,9 +3,11 @@ import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { UPSTREAM_FULL_NAME } from '../lib/gitRemote.js';
+import { persistentMindImageWorkGuard } from '../lib/persistentMind.js';
 import * as updateChecker from '../services/updateChecker.js';
 import { executeUpdate } from '../services/updateExecutor.js';
 import { getActiveAgentIds, spawningTasks } from '../services/agentState.js';
+import { readPersistentMindStateForSafetyCheck, withStateLock } from '../services/cosState.js';
 
 const router = Router();
 
@@ -40,6 +42,33 @@ function agentsActiveError(n) {
   );
 }
 
+const persistentMindImageWorkError = (guard) => {
+  const work = [
+    guard.queuedImageMessages > 0
+      ? `${guard.queuedImageMessages} queued image message${guard.queuedImageMessages === 1 ? '' : 's'}`
+      : null,
+    guard.activeImageMessage ? 'one active image turn' : null,
+  ].filter(Boolean).join(' and ');
+  return new ServerError(
+    `Persistent Mind has ${work}. Drain the image-bearing work, or create a backup and retry ` +
+    'with acknowledgePersistentMindImageBackup: true. Older source readers cannot preserve image references.',
+    { status: 409, code: 'PERSISTENT_MIND_IMAGES_IN_FLIGHT' },
+  );
+};
+
+async function getPersistentMindImageWorkGuard() {
+  const snapshot = await readPersistentMindStateForSafetyCheck();
+  if (!snapshot.trusted) {
+    return { safe: false, trusted: false, queuedImageMessages: 0, activeImageMessage: false };
+  }
+  return persistentMindImageWorkGuard(snapshot.persistentMind);
+}
+
+const persistentMindStateUntrustedError = () => new ServerError(
+  'Persistent Mind state could not be validated. Restore data/cos/state.json from backup before updating.',
+  { status: 409, code: 'PERSISTENT_MIND_STATE_UNTRUSTED' },
+);
+
 const ignoreSchema = z.object({
   version: z.string().min(1, 'version is required')
 });
@@ -50,6 +79,7 @@ const syncForkSchema = z.object({
 
 const executeSchema = z.object({
   acknowledgeFork: z.boolean().optional(),
+  acknowledgePersistentMindImageBackup: z.boolean().optional(),
   // Reconcile a half-updated install (issue #1779): run update.sh to pull +
   // install + build + restart even when there's no NEWER GitHub release — the
   // user did a bare `git pull` and just needs the rest of the update steps.
@@ -63,8 +93,11 @@ const executeSchema = z.object({
 // restart out from under a running agent).
 router.get('/status', asyncHandler(async (req, res) => {
   await updateChecker.clearStaleUpdateInProgress();
-  const status = await updateChecker.getUpdateStatus();
-  res.json({ ...status, activeCosAgents: countActiveCosAgents() });
+  const [status, persistentMindImages] = await Promise.all([
+    updateChecker.getUpdateStatus(),
+    getPersistentMindImageWorkGuard(),
+  ]);
+  res.json({ ...status, activeCosAgents: countActiveCosAgents(), persistentMindImages });
 }));
 
 // POST /api/update/check — triggers manual check
@@ -144,7 +177,7 @@ router.post('/sync-fork', asyncHandler(async (req, res) => {
 
 // POST /api/update/execute — kicks off update
 router.post('/execute', asyncHandler(async (req, res) => {
-  const { acknowledgeFork, reconcile } = validateRequest(executeSchema, req.body || {});
+  const { acknowledgeFork, acknowledgePersistentMindImageBackup, reconcile } = validateRequest(executeSchema, req.body || {});
 
   // Never restart PortOS out from under a live CoS agent. Both a normal update
   // and a reconcile run update.sh, which pm2-restarts THIS server process and
@@ -158,6 +191,11 @@ router.post('/execute', asyncHandler(async (req, res) => {
   // an agent could start in during that work.
   const preCheck = countActiveCosAgents();
   if (preCheck > 0) throw agentsActiveError(preCheck);
+  const preImageCheck = await getPersistentMindImageWorkGuard();
+  if (!preImageCheck.trusted) throw persistentMindStateUntrustedError();
+  if (!preImageCheck.safe && !acknowledgePersistentMindImageBackup) {
+    throw persistentMindImageWorkError(preImageCheck);
+  }
 
   const status = await updateChecker.getUpdateStatus();
 
@@ -227,6 +265,15 @@ router.post('/execute', asyncHandler(async (req, res) => {
   if (postLock > 0) {
     await updateChecker.setUpdateInProgress(false);
     throw agentsActiveError(postLock);
+  }
+  const postLockImageCheck = await withStateLock(() => getPersistentMindImageWorkGuard()).catch(async (error) => {
+    await updateChecker.setUpdateInProgress(false);
+    throw error;
+  });
+  if (!postLockImageCheck.trusted || (!postLockImageCheck.safe && !acknowledgePersistentMindImageBackup)) {
+    await updateChecker.setUpdateInProgress(false);
+    if (!postLockImageCheck.trusted) throw persistentMindStateUntrustedError();
+    throw persistentMindImageWorkError(postLockImageCheck);
   }
 
   const io = req.app.get('io');

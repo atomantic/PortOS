@@ -1,4 +1,5 @@
 import RouteTabsHeader from '../ui/RouteTabsHeader';
+import { useInstanceFeatures } from '../../hooks/useInstanceFeatures.js';
 
 // Shared sub-nav for every page that lives under the sidebar's "Settings"
 // group. Settings.jsx hosts the in-Settings tabs (general/backup/etc.) and
@@ -17,8 +18,8 @@ export const TABS = [
   { id: 'database', label: 'Database', to: '/settings/database' },
   { id: 'features', label: 'Features', to: '/settings/features' },
   { id: 'general', label: 'General', to: '/settings/general' },
-  { id: 'mortalloom', label: 'MortalLoom', to: '/settings/mortalloom' },
-  { id: 'openclaw', label: 'OpenClaw', to: '/openclaw' },
+  { id: 'mortalloom', label: 'MortalLoom', to: '/settings/mortalloom', feature: 'health' },
+  { id: 'openclaw', label: 'OpenClaw', to: '/openclaw', feature: 'openclaw' },
   { id: 'prompts', label: 'Prompts', to: '/prompts' },
   { id: 'providers', label: 'Providers', to: '/ai' },
   { id: 'security', label: 'Security', to: '/settings/security' },
@@ -31,5 +32,7 @@ export const TABS = [
 ];
 
 export default function SettingsTabsHeader({ activeTab }) {
-  return <RouteTabsHeader tabs={TABS} activeTab={activeTab} ariaLabel="Settings sections" />;
+  const { isFeatureEnabled } = useInstanceFeatures();
+  const visibleTabs = TABS.filter((tab) => isFeatureEnabled(tab.feature));
+  return <RouteTabsHeader tabs={visibleTabs} activeTab={activeTab} ariaLabel="Settings sections" />;
 }

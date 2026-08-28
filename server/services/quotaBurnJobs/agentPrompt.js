@@ -90,6 +90,7 @@ export async function run({ params, job, family, candidate, context } = {}) {
     context: renderBurnPrompt({ family, candidate, prompt }),
     provider: provider.id,
     model: job?.model || undefined,
+    effort: job?.effort || undefined,
     useWorktree: params?.useWorktree !== false,
     // A job that lands no code can never produce a PR. Leaving `openPR: true`
     // on it (the param's default, one checkbox away) makes the spawner expect a
@@ -136,6 +137,6 @@ export async function run({ params, job, family, candidate, context } = {}) {
   return {
     dispatched: true,
     summary: `Queued "${label}" in ${app.name} via ${provider.id}`,
-    detail: { taskId: task.id, appId: app.id, providerId: provider.id, model: job?.model || null },
+    detail: { taskId: task.id, appId: app.id, providerId: provider.id, model: job?.model || null, effort: job?.effort || null },
   };
 }

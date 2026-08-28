@@ -25,6 +25,7 @@ export default function MtplxServerCard({
   actionInProgress,
   onRefresh,
   onSaveLaunch,
+  onStart,
   onStop,
   onInstall,
   onSearchModels,
@@ -156,11 +157,21 @@ export default function MtplxServerCard({
             <p className="text-xs text-gray-500">Couldn't read MTPLX's model cache ({status.cacheError}) — an on-demand start will fall through to MTPLX's own default checkpoint.</p>
           )}
           <p className="text-[11px] text-gray-500">
-            MTPLX starts on demand — the first PortOS request routed to it brings it up on these
-            options, and its idle window (set under Local Runtime Servers) stops it again to release
-            the checkpoint. There is no Start button because a manually-started server would only pin
-            those gigabytes ahead of a request that may never come.
+            MTPLX starts on demand when a request needs it. You can also start it now with the
+            cached checkpoint; its idle window (set under Local Runtime Servers) stops it again to
+            release the checkpoint. Neither path downloads weights without an explicit download.
           </p>
+          {!emptyCache && onStart && (
+            <button
+              onClick={() => onStart({ model: model || null, ...(port ? { port: Number(port) } : {}) })}
+              disabled={busy}
+              className={`${btnClass} bg-port-success/20 hover:bg-port-success/30 text-port-success`}
+              title="Start MTPLX with the cached checkpoint; no weights are downloaded"
+            >
+              {actionInProgress === 'runtime-start-mtplx' ? <BrailleSpinner /> : <Terminal size={13} />}
+              Start MTPLX
+            </button>
+          )}
           <button
             onClick={() => onSaveLaunch({ model: model || null, ...(port ? { port: Number(port) } : {}) })}
             disabled={busy || emptyCache}

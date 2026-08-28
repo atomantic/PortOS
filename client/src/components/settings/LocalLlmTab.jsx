@@ -11,7 +11,7 @@ import {
   getLocalLlmStatus, getLocalLlmCatalog, getLocalLlmHuggingFaceSearch, installLocalLlmModel,
   deleteLocalLlmModel, migrateLocalLlmBackend, installLocalLlmBackend, upgradeLocalLlmBackend, controlOllamaService,
   installAudioModel, patchSettingsSlice, getLlamaServerStatus, getLlamaServerUpdateStatus, startLlamaServer, stopLlamaServer, installLlamaServer, upgradeLlamaServer,
-  downloadSpecDecodeModel, cancelSpecDecodeModelDownload, controlLmStudioService, getMtplxServerStatus, stopMtplxServer, installMtplx,
+  downloadSpecDecodeModel, cancelSpecDecodeModelDownload, controlLmStudioService, getMtplxServerStatus, startMtplxServer, stopMtplxServer, installMtplx,
   searchMtplxModels, pullMtplxModel, removeMtplxModel,
   saveRuntimeStartupList
 } from '../../services/api';
@@ -505,8 +505,13 @@ export function LocalLlmTab() {
     () => installMtplx(),
     'MTPLX installed'
   ).then(loadMtplxStatus);
-  // MTPLX has no Start action: the first PortOS request routed to it starts it.
-  // What the card saves is the launch line that on-demand start will replay.
+  const runtimeStartMtplx = (launch = {}) => runAction(
+    'runtime-start-mtplx',
+    () => startMtplxServer(launch),
+    (r) => r?.online ? 'MTPLX is running' : 'MTPLX is loading its checkpoint'
+  ).then(loadMtplxStatus);
+  // The card can start MTPLX explicitly from its cached checkpoint, and the
+  // same launch configuration is replayed when a request wakes it on demand.
   const saveMtplxLaunch = (launch) => runAction(
     'runtime-save-mtplx-launch',
     () => patchSettingsSlice('localLlm.mtplx', { launch }),
@@ -938,6 +943,7 @@ export function LocalLlmTab() {
         onConfigureLlama={() => scrollTo(llamaSectionRef)}
         onConfigureMtplx={() => scrollTo(mtplxSectionRef)}
         onInstallMtplx={runtimeInstallMtplx}
+        onStartMtplx={runtimeStartMtplx}
         onStopMtplx={runtimeStopMtplx}
         onSaveStartup={saveRuntimeStartup}
         onSaveIdleWindow={saveIdleWindow}
@@ -1056,6 +1062,7 @@ export function LocalLlmTab() {
           actionInProgress={actionInProgress}
           onRefresh={loadMtplxStatus}
           onSaveLaunch={saveMtplxLaunch}
+          onStart={runtimeStartMtplx}
           onStop={runtimeStopMtplx}
           onInstall={runtimeInstallMtplx}
           onSearchModels={mtplxSearch}

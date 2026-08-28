@@ -34,6 +34,7 @@ Common port labels:
 | 5559 | portos-autofixer | api | Autofixer daemon API |
 | 5560 | portos-autofixer-ui | ui | Autofixer web UI |
 | 5561 | portos-db (Docker container) | - | Infrastructure dependency: PostgreSQL Docker container provisioned by `scripts/setup-db.js` / Docker Compose (not a PM2 process in `server/services/apps.js`; native mode uses system pg on 5432). |
+| 5562 | portos-whisper | whisper-server | Loopback whisper.cpp speech-to-text server. |
 | 5568 | portos-llama-server | - | Loopback llama.cpp speculative-decoding server. Optional PM2 process, started/stopped from Models → LLMs. |
 | 8000 | portos-mtplx | - | Loopback MTPLX OpenAI-compatible API (upstream's own default, kept so the shipped provider presets match). Optional PM2 process, started/stopped from Models → LLMs. See [features/mtplx.md](./features/mtplx.md). |
 | 18020 | vLLM (Docker) | - | Loopback vLLM Qwen3.8-27B / DFlash 2 container on an RTX 3090 host. Operator-started (`docker compose --profile single up -d`) — PortOS never brings it up on boot. See [features/qwen38-rtx3090.md](./features/qwen38-rtx3090.md). |

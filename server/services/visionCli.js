@@ -113,6 +113,30 @@ export function buildCliVisionInvocation(provider, model, imageDir, prompt, opts
 }
 
 /**
+ * Stage already-validated image files for the ordinary CLI runner.
+ * The caller owns the returned cleanup function and must keep the directory
+ * alive until the child process has reached a terminal state.
+ */
+export async function prepareCliVisionRun({ provider, imagePaths, prompt, model, effort }) {
+  const paths = (Array.isArray(imagePaths) ? imagePaths : []).filter((value) => typeof value === 'string' && value);
+  if (!paths.length) throw new Error('At least one image path is required');
+  for (const imagePath of paths) {
+    if (!existsSync(imagePath)) throw new Error(`Vision image not found: ${imagePath}`);
+  }
+  const dir = await mkdtemp(join(tmpdir(), 'portos-vision-run-'));
+  const imageNames = [];
+  for (let index = 0; index < paths.length; index += 1) {
+    const name = `vision-${index + 1}${extname(paths[index]) || '.jpg'}`;
+    await copyFile(paths[index], join(dir, name));
+    imageNames.push(name);
+  }
+  return {
+    invocation: buildCliVisionInvocation(provider, model, dir, prompt, { imageNames, effort }),
+    cleanup: () => rm(dir, { recursive: true, force: true }),
+  };
+}
+
+/**
  * Run a vision prompt against a CLI provider and resolve with the model's text
  * in the API-compatible diagnostic shape. `spawnImpl` is injectable for tests.
  *
@@ -170,34 +194,18 @@ export async function describeImageViaCli({
 export async function describeImagesFromPaths({
   provider, imagePaths, prompt, model, effort, timeout = CLI_VISION_TIMEOUT_MS, spawnImpl = spawn,
 }) {
-  const paths = (Array.isArray(imagePaths) ? imagePaths : []).filter((p) => typeof p === 'string' && p);
-  if (!paths.length) throw new Error('At least one image path is required');
-  for (const p of paths) {
-    if (!existsSync(p)) throw new Error(`Vision image not found: ${p}`);
-  }
-
   const visionModel = model || provider?.defaultModel || null;
-  const dir = await mkdtemp(join(tmpdir(), 'portos-vision-'));
+  const prepared = await prepareCliVisionRun({ provider, imagePaths, prompt, model: visionModel, effort });
   let cleanupPromptFile = () => {};
   try {
-    const imageNames = [];
-    for (let i = 0; i < paths.length; i += 1) {
-      const ext = extname(paths[i]) || '.jpg';
-      const name = `vision-${i + 1}${ext}`;
-      await copyFile(paths[i], join(dir, name));
-      imageNames.push(name);
-    }
-    const invocation = buildCliVisionInvocation(
-      provider, visionModel, dir, prompt, { imageNames, effort },
-    );
     const text = await runCliVisionSpawn({
-      provider, model: visionModel, invocation, timeout, spawnImpl,
+      provider, model: visionModel, invocation: prepared.invocation, timeout, spawnImpl,
       setCleanup: (fn) => { cleanupPromptFile = fn; },
     });
     return { text, finishReason: null, usage: null, reasoning: '' };
   } finally {
     cleanupPromptFile();
-    await rm(dir, { recursive: true, force: true }).catch(() => {});
+    await prepared.cleanup().catch(() => {});
   }
 }
 

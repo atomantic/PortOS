@@ -2,6 +2,7 @@ import { useNavigate } from 'react-router';
 import toast from '../ui/Toast';
 import { RefreshCw, Terminal, Play, Settings } from 'lucide-react';
 import * as api from '../../services/api';
+import { useInstanceFeatures } from '../../hooks/useInstanceFeatures.js';
 
 const STATUS_COLORS = {
   active: 'bg-port-accent text-port-accent',
@@ -11,6 +12,7 @@ const STATUS_COLORS = {
 
 export default function GsdProjectHeader({ project, appId, repoPath, onRefresh }) {
   const navigate = useNavigate();
+  const { isFeatureEnabled } = useInstanceFeatures();
   const state = project?.state?.frontmatter || {};
   const phases = project?.phases || [];
   const completedPhases = phases.filter(p => p.totalTasks > 0 && p.completedTasks === p.totalTasks && p.verification?.status === 'passed').length;
@@ -112,12 +114,14 @@ export default function GsdProjectHeader({ project, appId, repoPath, onRefresh }
           )}
           {repoPath && (
             <>
-              <button
-                onClick={handleOpenOpenClaw}
-                className="px-3 py-1.5 bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-400 rounded-lg text-xs flex items-center gap-1 border border-cyan-600/30"
-              >
-                <Terminal size={14} /> OpenClaw
-              </button>
+              {isFeatureEnabled('openclaw') && (
+                <button
+                  onClick={handleOpenOpenClaw}
+                  className="px-3 py-1.5 bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-400 rounded-lg text-xs flex items-center gap-1 border border-cyan-600/30"
+                >
+                  <Terminal size={14} /> OpenClaw
+                </button>
+              )}
               <button
                 onClick={handleOpenClaude}
                 className="px-3 py-1.5 bg-port-accent-2/20 hover:bg-port-accent-2/30 text-port-accent-2 rounded-lg text-xs flex items-center gap-1 border border-port-accent-2/30"

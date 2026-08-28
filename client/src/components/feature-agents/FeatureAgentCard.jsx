@@ -27,7 +27,7 @@ export default function FeatureAgentCard({ agent, onStart, onPause, onResume, on
         </div>
       </div>
 
-      <div className="flex items-center gap-4 text-xs text-gray-500 mb-3">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500 mb-3">
         <span>Runs: {agent.runCount || 0}</span>
         <span>Last: {timeAgo(agent.lastRunAt)}</span>
         <span>{SCHEDULE_LABELS[agent.schedule?.mode] || 'Continuous'}</span>
@@ -49,29 +49,29 @@ export default function FeatureAgentCard({ agent, onStart, onPause, onResume, on
         </div>
       )}
 
-      <div className="flex items-center gap-1 pt-2 border-t border-port-border">
+      <div className="flex flex-wrap items-center gap-1 pt-2 border-t border-port-border">
         {agent.status === 'draft' && (
-          <button onClick={() => onStart(agent.id)} className="flex items-center gap-1 px-2 py-1 text-xs text-port-success hover:bg-port-success/10 rounded transition-colors">
+          <button onClick={() => onStart(agent.id)} className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 px-2 py-1 text-xs text-port-success hover:bg-port-success/10 rounded transition-colors">
             <Play size={12} /> Start
           </button>
         )}
         {agent.status === 'active' && (
           <>
-            <button onClick={() => onPause(agent.id)} className="flex items-center gap-1 px-2 py-1 text-xs text-port-warning hover:bg-port-warning/10 rounded transition-colors">
+            <button onClick={() => onPause(agent.id)} className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 px-2 py-1 text-xs text-port-warning hover:bg-port-warning/10 rounded transition-colors">
               <Pause size={12} /> Pause
             </button>
-            <button onClick={() => onTrigger(agent.id)} className="flex items-center gap-1 px-2 py-1 text-xs text-port-accent hover:bg-port-accent/10 rounded transition-colors">
+            <button onClick={() => onTrigger(agent.id)} className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 px-2 py-1 text-xs text-port-accent hover:bg-port-accent/10 rounded transition-colors">
               <Zap size={12} /> Trigger
             </button>
           </>
         )}
         {agent.status === 'paused' && (
-          <button onClick={() => onResume(agent.id)} className="flex items-center gap-1 px-2 py-1 text-xs text-port-success hover:bg-port-success/10 rounded transition-colors">
+          <button onClick={() => onResume(agent.id)} className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 px-2 py-1 text-xs text-port-success hover:bg-port-success/10 rounded transition-colors">
             <Play size={12} /> Resume
           </button>
         )}
         {(agent.status === 'active' || agent.status === 'paused') && (
-          <button onClick={() => onStop(agent.id)} className="flex items-center gap-1 px-2 py-1 text-xs text-gray-400 hover:bg-port-border/50 rounded transition-colors">
+          <button onClick={() => onStop(agent.id)} className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 px-2 py-1 text-xs text-gray-400 hover:bg-port-border/50 rounded transition-colors">
             <Square size={12} /> Stop
           </button>
         )}
@@ -83,9 +83,10 @@ export default function FeatureAgentCard({ agent, onStart, onPause, onResume, on
             cancelText="No"
             onConfirm={() => { onDelete(agent.id); setConfirmingDelete(false); }}
             onCancel={() => setConfirmingDelete(false)}
+            largeTouchTargets
           />
         ) : (
-          <button onClick={() => setConfirmingDelete(true)} aria-label="Delete" className="flex items-center gap-1 px-2 py-1 text-xs text-port-error hover:bg-port-error/10 rounded transition-colors">
+          <button onClick={() => setConfirmingDelete(true)} aria-label="Delete" className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 px-2 py-1 text-xs text-port-error hover:bg-port-error/10 rounded transition-colors">
             <Trash2 size={12} />
           </button>
         )}

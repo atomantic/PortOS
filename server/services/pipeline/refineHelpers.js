@@ -16,6 +16,7 @@ export async function runPromptRefineRaw({
   const result = await runStagedLLM(templateName, variables, {
     providerOverride: options.providerId,
     modelOverride: options.model,
+    effortOverride: options.effort,
     returnsJson: true,
     source,
   });

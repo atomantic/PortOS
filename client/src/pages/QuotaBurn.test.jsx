@@ -186,6 +186,7 @@ describe('QuotaBurn page', () => {
     api.getQuotaBurn.mockResolvedValueOnce({ config, status: blocked });
     renderPage();
     expect(await screen.findByText(/provider refused — retrying after/)).toBeInTheDocument();
+    expect(screen.getByText('Usage limit exceeded')).toBeInTheDocument();
   });
 
   it('does NOT poll when nothing is pending', async () => {
@@ -213,6 +214,38 @@ describe('QuotaBurn page', () => {
     expect(screen.getByText(/Ready — 4 bible entries have no image/)).toBeInTheDocument();
   });
 
+  it('keeps step actions touch-sized and separates delete from run', async () => {
+    const user = userEvent.setup();
+    renderPage('/devtools/quota-burn/grok');
+
+    const actions = await Promise.all([
+      screen.findByLabelText('Move step 1 earlier'),
+      screen.findByLabelText('Move step 1 later'),
+      screen.findByLabelText('Run step 1 now'),
+      screen.findByLabelText('Remove step 1'),
+    ]);
+    actions.forEach((action) => {
+      expect(action).toHaveClass('min-h-[44px]', 'min-w-[44px]');
+    });
+
+    expect(screen.getByLabelText('Remove step 1').parentElement).toHaveClass(
+      'ml-2', 'border-l', 'border-port-border/50', 'pl-2',
+    );
+
+    await user.click(screen.getByLabelText('Run step 1 now'));
+    const runConfirm = screen.getByRole('group', { name: 'Confirm running step 1 now' });
+    Array.from(runConfirm.querySelectorAll('button')).forEach((action) => {
+      expect(action).toHaveClass('min-h-[44px]', 'min-w-[44px]');
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await user.click(screen.getByLabelText('Remove step 1'));
+    const removeConfirm = screen.getByRole('group', { name: 'Confirm removing step 1' });
+    Array.from(removeConfirm.querySelectorAll('button')).forEach((action) => {
+      expect(action).toHaveClass('min-h-[44px]', 'min-w-[44px]');
+    });
+  });
+
   it('force-runs a single job from its row only after the arm click is confirmed', async () => {
     const user = userEvent.setup();
     renderPage('/devtools/quota-burn/grok');
@@ -222,6 +255,23 @@ describe('QuotaBurn page', () => {
     await user.click(await screen.findByRole('button', { name: 'Run' }));
     await waitFor(() => expect(api.runQuotaBurn).toHaveBeenCalledWith(
       { familyId: 'grok', jobId: 'j1', force: true }, { silent: true },
+    ));
+  });
+
+  it('keeps the family Burn now action available after its automatic window closes', async () => {
+    const user = userEvent.setup();
+    const gatedStatus = {
+      ...status,
+      families: [{ ...status.families[0], willBurn: false, skipReason: 'dispatch cap reached (5/5)' }, status.families[1]],
+    };
+    api.getQuotaBurn.mockResolvedValue({ config, status: gatedStatus });
+    renderPage('/devtools/quota-burn/grok');
+
+    const burnButton = await screen.findByTitle('Force-run this family\'s next available job now');
+    expect(burnButton).toBeEnabled();
+    await user.click(burnButton);
+    await waitFor(() => expect(api.runQuotaBurn).toHaveBeenCalledWith(
+      { familyId: 'grok', force: true }, { silent: true },
     ));
   });
 
@@ -248,6 +298,7 @@ describe('QuotaBurn page', () => {
   it('asks before a preset overwrites a work prompt the user already wrote', async () => {
     const user = userEvent.setup();
     renderPage('/devtools/quota-burn/grok');
+    await user.click(await screen.findByLabelText('Expand step 1'));
     await user.selectOptions(await screen.findByLabelText('Job type'), 'agent-prompt');
     const promptBox = screen.getByLabelText('Work prompt');
     await user.type(promptBox, 'my own prompt');
@@ -270,6 +321,7 @@ describe('QuotaBurn page', () => {
     // disk records a preset id), so it stays honest across an edit.
     const user = userEvent.setup();
     renderPage('/devtools/quota-burn/grok');
+    await user.click(await screen.findByLabelText('Expand step 1'));
     await user.selectOptions(await screen.findByLabelText('Job type'), 'agent-prompt');
     const picker = screen.getByLabelText(/Start from a preset/);
     expect(picker).toHaveValue('');
@@ -289,6 +341,7 @@ describe('QuotaBurn page', () => {
     // hand-written prompt with no confirmation and no undo.
     const user = userEvent.setup();
     renderPage('/devtools/quota-burn/grok');
+    await user.click(await screen.findByLabelText('Expand step 1'));
     await user.selectOptions(await screen.findByLabelText('Job type'), 'agent-prompt');
     await user.type(screen.getByLabelText('Work prompt'), 'keep me');
     await user.selectOptions(screen.getByLabelText('Job type'), 'universe-bible-images');
@@ -335,6 +388,7 @@ describe('QuotaBurn run-once steps', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const user = setupSaveUser();
     renderPage('/devtools/quota-burn/grok');
+    await user.click(await screen.findByLabelText('Expand step 1'));
     await user.click(await screen.findByLabelText('Run once'));
     await flushSave();
     expect(api.saveQuotaBurn).toHaveBeenCalled();
@@ -772,5 +826,223 @@ describe('QuotaBurn save races', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('QuotaBurn collapsible jobs', () => {
+  it('renders configured jobs in a collapsed state by default with summary details', async () => {
+    renderPage('/devtools/quota-burn/grok');
+    expect(await screen.findByDisplayValue('Bible images')).toBeInTheDocument();
+    // Compact summary badge shows job type
+    expect(screen.getByText(/Universe bible images/)).toBeInTheDocument();
+    // Inner fields are collapsed
+    expect(screen.queryByLabelText('Job type')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Expand step 1')).toBeInTheDocument();
+  });
+
+  it('expands and collapses a single job using its chevron toggle', async () => {
+    const user = userEvent.setup();
+    renderPage('/devtools/quota-burn/grok');
+    const toggle = await screen.findByLabelText('Expand step 1');
+    await user.click(toggle);
+
+    // Now expanded: shows inner fields
+    expect(await screen.findByLabelText('Job type')).toBeInTheDocument();
+    expect(screen.getByLabelText('Collapse step 1')).toBeInTheDocument();
+
+    // Click again to collapse
+    await user.click(screen.getByLabelText('Collapse step 1'));
+    expect(screen.queryByLabelText('Job type')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Expand step 1')).toBeInTheDocument();
+  });
+
+  it('expands all and collapses all jobs via header control', async () => {
+    const twoJobConfig = {
+      ...config,
+      families: {
+        ...config.families,
+        grok: {
+          ...config.families.grok,
+          jobs: [
+            { id: 'j1', enabled: true, label: 'Job 1', jobType: 'universe-bible-images', params: {} },
+            { id: 'j2', enabled: true, label: 'Job 2', jobType: 'agent-prompt', params: {} },
+          ],
+        },
+      },
+    };
+    api.getQuotaBurn.mockResolvedValue({ config: twoJobConfig, status });
+    const user = userEvent.setup();
+    renderPage('/devtools/quota-burn/grok');
+
+    expect(await screen.findByRole('button', { name: /Expand all/i })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Collapse step 1')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Collapse step 2')).not.toBeInTheDocument();
+
+    // Expand all
+    await user.click(screen.getByRole('button', { name: /Expand all/i }));
+    expect(screen.getByLabelText('Collapse step 1')).toBeInTheDocument();
+    expect(screen.getByLabelText('Collapse step 2')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Collapse all/i })).toBeInTheDocument();
+
+    // Collapse all
+    await user.click(screen.getByRole('button', { name: /Collapse all/i }));
+    expect(screen.queryByLabelText('Collapse step 1')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Collapse step 2')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Expand all/i })).toBeInTheDocument();
+  });
+
+  it('automatically expands newly added jobs for editing', async () => {
+    const user = userEvent.setup();
+    renderPage('/devtools/quota-burn/grok');
+    await user.click(await screen.findByRole('button', { name: /Add job/i }));
+    expect(await screen.findByLabelText('Collapse step 2')).toBeInTheDocument();
+  });
+});
+
+describe('QuotaBurn preset addition filtering', () => {
+  const multiPresetCatalog = {
+    ...catalog,
+    presets: [
+      { id: 'ux-audit', label: 'UX issues', summary: 'Audit UI.', jobType: 'agent-prompt', params: { prompt: 'Prompt 1' } },
+      { id: 'a11y-audit', label: 'A11y issues', summary: 'Audit A11y.', jobType: 'agent-prompt', params: { prompt: 'Prompt 2' } },
+    ],
+  };
+
+  it('filters preset addition dropdown to only presets not already in the family', async () => {
+    const grokWithUx = {
+      ...config,
+      families: {
+        ...config.families,
+        grok: {
+          ...config.families.grok,
+          jobs: [
+            { id: 'j1', enabled: true, label: 'UX issues', jobType: 'agent-prompt', params: { prompt: 'Prompt 1' } },
+          ],
+        },
+      },
+    };
+    api.getQuotaBurn.mockResolvedValue({ config: grokWithUx, status });
+    api.getQuotaBurnCatalog.mockResolvedValue(multiPresetCatalog);
+
+    renderPage('/devtools/quota-burn/grok');
+    const select = await screen.findByLabelText(/Add a preset job/);
+    const options = Array.from(select.querySelectorAll('option')).map((o) => o.value);
+
+    // 'ux-audit' is already in the list, so only '' (placeholder) and 'a11y-audit' should be available
+    expect(options).toEqual(['', 'a11y-audit']);
+  });
+
+  it('hides preset addition picker when all catalog presets are in the jobs list', async () => {
+    const grokWithAll = {
+      ...config,
+      families: {
+        ...config.families,
+        grok: {
+          ...config.families.grok,
+          jobs: [
+            { id: 'j1', enabled: true, label: 'UX issues', jobType: 'agent-prompt', params: { prompt: 'Prompt 1' } },
+            { id: 'j2', enabled: true, label: 'A11y issues', jobType: 'agent-prompt', params: { prompt: 'Prompt 2' } },
+          ],
+        },
+      },
+    };
+    api.getQuotaBurn.mockResolvedValue({ config: grokWithAll, status });
+    api.getQuotaBurnCatalog.mockResolvedValue(multiPresetCatalog);
+
+    renderPage('/devtools/quota-burn/grok');
+    expect(await screen.findByDisplayValue('UX issues')).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Add a preset job/)).not.toBeInTheDocument();
+  });
+
+  it('renders standard model select and effort picker for effort-capable providers', async () => {
+    const claudeProviderCatalog = {
+      ...catalog,
+      providers: [
+        {
+          id: 'claude-code',
+          name: 'Claude Code',
+          type: 'tui',
+          command: 'claude',
+          models: [{ id: 'claude-sonnet-4', name: 'Claude Sonnet 4' }, { id: 'claude-opus-4', name: 'Claude Opus 4' }],
+        },
+      ],
+    };
+    const claudeConfig = {
+      ...config,
+      families: {
+        ...config.families,
+        claude: {
+          enabled: true,
+          resetWithinHours: 24,
+          reservePercent: 0,
+          maxDispatchesPerWindow: 5,
+          priority: 0,
+          jobs: [
+            { id: 'j1', enabled: true, label: 'Audit UI', jobType: 'agent-prompt', model: 'claude-sonnet-4', effort: 'high', params: { appId: 'a1', prompt: 'audit' } },
+          ],
+        },
+      },
+    };
+    api.getQuotaBurn.mockResolvedValue({ config: claudeConfig, status });
+    api.getQuotaBurnCatalog.mockResolvedValue(claudeProviderCatalog);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = setupSaveUser();
+
+    renderPage('/devtools/quota-burn/claude');
+    await user.click(await screen.findByLabelText('Expand step 1'));
+
+    const modelSelect = await screen.findByLabelText('Model (optional)');
+    expect(modelSelect).toBeInTheDocument();
+    expect(modelSelect.tagName).toBe('SELECT');
+    expect(modelSelect).toHaveValue('claude-sonnet-4');
+
+    const effortSelect = screen.getByLabelText('Thinking effort');
+    expect(effortSelect).toBeInTheDocument();
+    expect(effortSelect.tagName).toBe('SELECT');
+    expect(effortSelect).toHaveValue('high');
+
+    // Change effort to medium and verify auto-save
+    await user.selectOptions(effortSelect, 'medium');
+    await flushSave();
+    expect(api.saveQuotaBurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        families: expect.objectContaining({
+          claude: expect.objectContaining({
+            jobs: [
+              expect.objectContaining({
+                id: 'j1',
+                model: 'claude-sonnet-4',
+                effort: 'medium',
+              }),
+            ],
+          }),
+        }),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it('displays model and effort in collapsed step summary badge', async () => {
+    const claudeConfig = {
+      ...config,
+      families: {
+        ...config.families,
+        claude: {
+          enabled: true,
+          resetWithinHours: 24,
+          reservePercent: 0,
+          maxDispatchesPerWindow: 5,
+          priority: 0,
+          jobs: [
+            { id: 'j1', enabled: true, label: '', jobType: 'agent-prompt', model: 'claude-sonnet-4', effort: 'high', params: { appId: 'a1', prompt: 'audit' } },
+          ],
+        },
+      },
+    };
+    api.getQuotaBurn.mockResolvedValue({ config: claudeConfig, status });
+    api.getQuotaBurnCatalog.mockResolvedValue(catalog);
+
+    renderPage('/devtools/quota-burn/claude');
+    expect(await screen.findByText(/Agent prompt · claude-sonnet-4 · high/)).toBeInTheDocument();
   });
 });

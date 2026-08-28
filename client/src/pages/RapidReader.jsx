@@ -1,8 +1,15 @@
-import { useState } from 'react';
-import { BookOpen, ClipboardPaste, Eraser, ExternalLink, Zap } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Bookmark, BookOpen, ClipboardPaste, Eraser, ExternalLink, Play, Zap } from 'lucide-react';
 import RapidReader from '../components/RapidReader';
 import PageHeader from '../components/PageHeader';
 import { readClipboard } from '../lib/clipboard';
+import {
+  clearRapidReaderProgress,
+  rapidReaderDocumentId,
+  rapidReaderWordIndexAtCursor,
+  readRapidReaderProgress,
+  writeRapidReaderProgress,
+} from '../lib/rapidReaderPosition';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import {
   ACCELERANDO_LICENSE_URL,
@@ -22,12 +29,27 @@ const focalPalette = [
 
 export default function RapidReaderPage() {
   const [text, setText] = useState('');
-  const [active, setActive] = useState('');
+  const [active, setActive] = useState(null);
   const [wpm, setWpm] = useState(350);
   const [chunkSize, setChunkSize] = useState(1);
   const [focalColor, setFocalColor] = useState('#ef4444');
+  const [bookmark, setBookmark] = useState(null);
   const [bookStatus, setBookStatus] = useState('idle');
   const [bookError, setBookError] = useState('');
+  const textareaRef = useRef(null);
+  const latestProgressRef = useRef(null);
+  const lastAutoSavedWordRef = useRef(-1);
+
+  const documentText = useMemo(() => text.trim(), [text]);
+  const wordCount = useMemo(() => documentText ? documentText.split(/\s+/).length : 0, [documentText]);
+  const documentIdentity = useMemo(() => ({
+    documentId: rapidReaderDocumentId(documentText),
+    wordCount,
+  }), [documentText, wordCount]);
+
+  useEffect(() => {
+    setBookmark(readRapidReaderProgress(documentText, documentIdentity));
+  }, [documentText, documentIdentity]);
 
   const [loadBook, loadingBook] = useAsyncAction(async () => {
     setBookStatus('loading');
@@ -48,22 +70,62 @@ export default function RapidReaderPage() {
     return book;
   });
 
-  const start = () => {
-    const trimmed = text.trim();
-    if (!trimmed) return;
-    setActive(trimmed);
+  const startAt = (wordIndex, saved = null) => {
+    if (!documentText) return;
+    if (saved) {
+      setWpm(saved.wpm);
+      setChunkSize(saved.chunkSize);
+    }
+    latestProgressRef.current = null;
+    lastAutoSavedWordRef.current = -1;
+    setActive({ text: documentText, initialWordIndex: wordIndex, ...documentIdentity });
   };
 
+  const persistProgress = useCallback((document, progress, updateBookmark = true) => {
+    if (!document?.text || !progress || progress.wordIndex <= 0) return;
+    if (progress.wordIndex >= progress.wordCount - 1) {
+      clearRapidReaderProgress(document.text, document);
+      if (updateBookmark) setBookmark(null);
+      return;
+    }
+    const saved = writeRapidReaderProgress(document.text, progress, document);
+    if (saved && updateBookmark) setBookmark(saved);
+  }, []);
+
+  const handlePositionChange = useCallback((progress) => {
+    latestProgressRef.current = progress;
+    if (!active || progress.wordIndex <= 0) return;
+    if (lastAutoSavedWordRef.current >= 0 && progress.wordIndex - lastAutoSavedWordRef.current < 10) return;
+    lastAutoSavedWordRef.current = progress.wordIndex;
+    persistProgress(active, progress);
+  }, [active, persistProgress]);
+
+  const saveBookmark = useCallback((wordIndex) => {
+    if (!active) return;
+    persistProgress(active, { ...latestProgressRef.current, wordIndex });
+  }, [active, persistProgress]);
+
   const reset = () => {
-    setActive('');
+    if (active) persistProgress(active, latestProgressRef.current);
+    setActive(null);
   };
+
+  const complete = () => {
+    if (!active) return;
+    clearRapidReaderProgress(active.text, active);
+    setBookmark(null);
+  };
+
+  useEffect(() => {
+    if (!active) return undefined;
+    return () => persistProgress(active, latestProgressRef.current, false);
+  }, [active, persistProgress]);
 
   const pasteFromClipboard = async () => {
     const t = await readClipboard();
     if (t) setText(t);
   };
 
-  const wordCount = text.trim() ? text.trim().split(/\s+/).length : 0;
   const estSec = Math.round((wordCount * 60) / Math.max(60, wpm));
 
   return (
@@ -78,15 +140,22 @@ export default function RapidReaderPage() {
       {active ? (
         <div className="space-y-4">
           <RapidReader
-            text={active}
+            text={active.text}
             wpm={wpm}
             chunkSize={chunkSize}
             focalColor={focalColor}
+            initialWordIndex={active.initialWordIndex}
             autoPlay
             onClose={reset}
+            onComplete={complete}
+            onPositionChange={handlePositionChange}
+            onBookmark={saveBookmark}
+            onWpmChange={setWpm}
+            onChunkSizeChange={setChunkSize}
           />
           <div className="flex flex-wrap items-center gap-3 text-xs text-gray-500">
-            <span>Space = play/pause · ← → step · R restart · +/− WPM · Esc close</span>
+            <span>Space = play/pause · ← → step · B bookmark · R restart · +/− WPM · Esc close</span>
+            <span>Progress also saves automatically while reading.</span>
           </div>
         </div>
       ) : (
@@ -179,6 +248,7 @@ export default function RapidReaderPage() {
             </div>
             <textarea
               id="rr-text"
+              ref={textareaRef}
               value={text}
               onChange={(e) => setText(e.target.value)}
               rows={10}
@@ -250,15 +320,41 @@ export default function RapidReaderPage() {
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <button
               type="button"
-              onClick={start}
+              onClick={() => startAt(0)}
               disabled={!text.trim()}
               className="inline-flex items-center gap-2 min-h-10 px-4 py-2 rounded-lg bg-port-accent text-white font-medium disabled:opacity-40 disabled:cursor-not-allowed hover:bg-port-accent/90"
             >
               <Zap size={16} /> Start reading
             </button>
+            <button
+              type="button"
+              onClick={() => startAt(rapidReaderWordIndexAtCursor(text, textareaRef.current?.selectionStart || 0))}
+              disabled={!documentText}
+              className="inline-flex items-center gap-2 min-h-10 px-4 py-2 rounded-lg border border-port-accent/50 text-port-accent font-medium disabled:opacity-40 disabled:cursor-not-allowed hover:bg-port-accent/10"
+            >
+              <Play size={16} /> Start at cursor
+            </button>
+            {bookmark && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => startAt(bookmark.wordIndex, bookmark)}
+                  className="inline-flex items-center gap-2 min-h-10 px-4 py-2 rounded-lg border border-port-border text-gray-200 font-medium hover:border-port-accent/60 hover:bg-port-bg/40"
+                >
+                  <Bookmark size={16} className="text-port-accent" /> Resume at word {bookmark.wordIndex + 1}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { clearRapidReaderProgress(documentText, documentIdentity); setBookmark(null); }}
+                  className="min-h-10 px-3 py-2 text-xs text-gray-500 hover:text-white"
+                >
+                  Clear bookmark
+                </button>
+              </>
+            )}
             <span className="text-xs text-gray-500">
               Tip: many surfaces in PortOS expose a Rapid Read button — Briefing, Wiki notes, and more.
             </span>

@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { writeFileSync, rmSync } from 'fs';
+import { readFileSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 import { bindSettingsFile } from '../lib/settingsTestUtil.js';
@@ -425,6 +425,35 @@ describe('authGate HTTP Basic auth (peer federation)', () => {
     expect(result.called).toBe(false);
     expect(result.res.statusCode).toBe(401);
   });
+
+  it('does not cache failed password verification', async () => {
+    const auth = await import('./auth.js');
+    await auth.setPassword({ newPassword: 'future-secret' });
+    const futureSettings = JSON.parse(readFileSync(join(tempRoot, 'settings.json'), 'utf-8'));
+    await auth.setPassword({
+      newPassword: 'current-secret',
+      currentPassword: 'future-secret',
+    });
+    const { __testing } = await import('./authGate.js');
+
+    expect(await __testing.verifyBasicPassword('future-secret')).toBe(false);
+
+    // Replace the backing credential without emitting settings:updated. A failed
+    // verification must not shadow the now-valid password for the cache TTL.
+    await mergeSettingsFile({ secrets: futureSettings.secrets });
+    expect(await __testing.verifyBasicPassword('future-secret')).toBe(true);
+  });
+
+  it.each([null, undefined, 123, {}, []])(
+    'rejects malformed Basic password value %j without throwing',
+    async (password) => {
+      const auth = await import('./auth.js');
+      await auth.setPassword({ newPassword: 'peer-secret' });
+      const { __testing } = await import('./authGate.js');
+
+      await expect(__testing.verifyBasicPassword(password)).resolves.toBe(false);
+    },
+  );
 });
 
 describe('socketAuthGate middleware', () => {

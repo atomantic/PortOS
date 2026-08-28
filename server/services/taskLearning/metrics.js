@@ -7,7 +7,8 @@
  * everything here mutates and persists `learning.json`.
  */
 
-import { existsSync, readdirSync } from 'fs';
+import { existsSync } from 'fs';
+import { readdir } from 'fs/promises';
 import { join } from 'path';
 import {
   withLock,
@@ -30,11 +31,13 @@ import {
 import { deriveFailureSignalAvoidance, isNonRoutableLearnedTier } from './routing.js';
 import { recordCorrelationSample } from './correlationQuality.js';
 import { isSkipLearningVerdict, toValidationVerdict } from '../../lib/learningVerdict.js';
+import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
 
 // Cap on retained per-category signature samples — bounds file growth the same
 // way `recentUnknownErrors` does, while keeping enough recent context to spot
 // trends (provider/model/tier correlation) without a full agent-archive scan.
 const MAX_SIGNATURE_SAMPLES = 10;
+const ARCHIVE_READ_CONCURRENCY = 20;
 
 // ENVIRONMENTAL_ERROR_CATEGORIES lives in store.js (the leaf module) so both
 // this recorder and routing.js can consume it without deepening the existing
@@ -1006,22 +1009,25 @@ export async function recalculateDurationStats() {
   let successCount = 0;
 
   if (existsSync(AGENTS_DIR)) {
-    const dateDirs = readdirSync(AGENTS_DIR, { withFileTypes: true })
+    const dateDirs = (await readdir(AGENTS_DIR, { withFileTypes: true }))
       .filter(d => d.isDirectory() && /^\d{4}-\d{2}-\d{2}$/.test(d.name));
 
-    // Collect all metadata paths then read in parallel
+    // Collect all metadata paths asynchronously, then cap reads so a large
+    // archive cannot exhaust file descriptors or spike memory.
     const metaPaths = [];
     for (const dateDir of dateDirs) {
       const datePath = join(AGENTS_DIR, dateDir.name);
-      const agentDirs = readdirSync(datePath, { withFileTypes: true })
+      const agentDirs = (await readdir(datePath, { withFileTypes: true }))
         .filter(d => d.isDirectory());
       for (const agentDir of agentDirs) {
         metaPaths.push(join(datePath, agentDir.name, 'metadata.json'));
       }
     }
 
-    const results = await Promise.all(
-      metaPaths.map(p => tryReadFile(p))
+    const results = await mapWithConcurrency(
+      metaPaths,
+      ARCHIVE_READ_CONCURRENCY,
+      (path) => tryReadFile(path)
     );
 
     for (const raw of results) {

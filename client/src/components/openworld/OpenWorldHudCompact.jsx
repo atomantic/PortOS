@@ -91,6 +91,9 @@ export default function OpenWorldHudCompact({
   onCloseFocus,
   onFocusInWorld,
   proximityTarget,
+  playerPose,
+  collectedCount = 0,
+  totalShards = 0,
 }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -104,6 +107,7 @@ export default function OpenWorldHudCompact({
   );
   const criticalCount = items.filter(i => i.severity === 'critical').length;
   const hasApps = (apps || []).length > 0;
+  const speedKmh = Math.round(Math.abs(playerPose?.speed || 0) * 3.6);
   // No usable level → the birth-date CTA distinguishes a genuinely unset date ("set") from a
   // present-but-unusable one ("fix" — invalid/future/unreadable) so we don't tell the user to
   // set a date they already entered (#2757). Null when a real level exists.
@@ -154,7 +158,9 @@ export default function OpenWorldHudCompact({
         <button
           type="button"
           onClick={() => togglePane('vitals')}
-          aria-label="Time and system vitals"
+          aria-label={explorationMode
+            ? `Time and system vitals, ${speedKmh} kilometers per hour, ${collectedCount} of ${totalShards} shards collected`
+            : 'Time and system vitals'}
           aria-pressed={activePane === 'vitals'}
           className="openworld-hud-chip openworld-hud-action relative px-3 min-h-[44px] flex items-center gap-2"
         >
@@ -163,6 +169,16 @@ export default function OpenWorldHudCompact({
             {formatClockTime(time, { seconds: false })}
           </span>
           <span className="font-pixel text-[9px] text-cyan-500 tracking-wide">{vitals.activeApps}/{vitals.totalApps}</span>
+          {explorationMode && (
+            <>
+              <span className="h-4 w-px bg-cyan-500/20" aria-hidden="true" />
+              <span className="font-pixel text-[11px] text-cyan-300 tracking-wide">{speedKmh}</span>
+              <span className="font-pixel text-[7px] text-gray-500 tracking-wide">KM/H</span>
+              <span className="font-pixel text-[8px] text-cyan-400 tracking-wide">
+                ⯁ {collectedCount}/{totalShards}
+              </span>
+            </>
+          )}
         </button>
       </div>
 

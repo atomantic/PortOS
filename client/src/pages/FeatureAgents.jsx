@@ -59,8 +59,13 @@ export default function FeatureAgents() {
   }, []);
 
   const handleTrigger = useCallback((id) => {
-    api.triggerFeatureAgent(id, { silent: true }).then(() => {
-      toast.success('Run triggered');
+    api.triggerFeatureAgent(id, { silent: true }).then(result => {
+      if (result?.triggered === false) {
+        toast.error(result.reason || 'Run could not be started');
+        return;
+      }
+      if (result?.agent) setAgents(prev => prev.map(a => a.id === id ? { ...a, ...result.agent } : a));
+      toast.success('Run started');
     }).catch(err => toast.error(err.message || 'Action failed'));
   }, []);
 

@@ -3590,6 +3590,8 @@ describe('peerSync', () => {
       vi.mocked(mergeSeriesFromSync).mockClear();
       vi.mocked(mergeIssuesFromSync).mockClear();
       vi.mocked(mergeMediaCollectionsFromSync).mockClear();
+      vi.mocked(mergeMusicVideoProjectsFromSync).mockClear();
+      vi.mocked(mergeTracksFromSync).mockClear();
     });
 
     describe('receiver — applyIncomingPush', () => {
@@ -3725,6 +3727,47 @@ describe('peerSync', () => {
         expect(rejection.details.ahead).toEqual([{ category: 'mediaCollections', senderV: 2, receiverV: 1 }]);
         expect(mergeUniversesFromSync).not.toHaveBeenCalled();
         expect(mergeMediaCollectionsFromSync).not.toHaveBeenCalled();
+      });
+
+      it('DOES reject a music-video push WITH a live linkedTrack when the sender is ahead on tracks', async () => {
+        const rejection = await applyIncomingPush({
+          kind: 'musicVideoProject',
+          record: { id: 'mv-1', trackId: 'track-1', deleted: false, deletedAt: null },
+          linkedTrack: { id: 'track-1', title: 'Linked', deleted: false, deletedAt: null },
+          assetManifest: [],
+          sourceInstanceId: 'peer-a',
+          portosMeta: {
+            portosVersion: '99.0.0',
+            schemaVersions: { ...PORTOS_SCHEMA_VERSIONS, tracks: PORTOS_SCHEMA_VERSIONS.tracks + 1 },
+          },
+        }).catch((err) => err);
+        expect(rejection.code).toBe('PEER_SYNC_SCHEMA_VERSION_AHEAD');
+        expect(rejection.details.ahead).toEqual([
+          { category: 'tracks', senderV: PORTOS_SCHEMA_VERSIONS.tracks + 1, receiverV: PORTOS_SCHEMA_VERSIONS.tracks },
+        ]);
+        expect(mergeMusicVideoProjectsFromSync).not.toHaveBeenCalled();
+        expect(mergeTracksFromSync).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        ['is a tombstone', { id: 'track-1', deleted: true, deletedAt: '2026-06-29T00:00:00Z' }],
+        ['does not match the project trackId', { id: 'other-track', title: 'Unbound', deleted: false, deletedAt: null }],
+      ])('does NOT gate a bundled linkedTrack that %s when the sender is ahead on tracks', async (_label, linkedTrack) => {
+        await applyIncomingPush({
+          kind: 'musicVideoProject',
+          record: { id: 'mv-1', trackId: 'track-1', deleted: false, deletedAt: null },
+          linkedTrack,
+          assetManifest: [],
+          sourceInstanceId: 'peer-a',
+          portosMeta: {
+            portosVersion: '99.0.0',
+            schemaVersions: { ...PORTOS_SCHEMA_VERSIONS, tracks: PORTOS_SCHEMA_VERSIONS.tracks + 1 },
+          },
+        });
+        expect(mergeMusicVideoProjectsFromSync).toHaveBeenCalledWith(
+          [expect.objectContaining({ id: 'mv-1' })],
+          { source: { via: 'peer-push', peerId: 'peer-a' } },
+        );
       });
 
       // ---- tombstone-aware per-category scoping --------------------------

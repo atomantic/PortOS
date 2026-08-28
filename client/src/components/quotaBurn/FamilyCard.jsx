@@ -7,12 +7,13 @@
  * runner evaluates, so the card can't disagree with what actually happens.
  */
 
+import { useState } from 'react';
 import { AlertTriangle, Ban, ChevronDown, ChevronRight, Flame, Plus, RotateCcw } from 'lucide-react';
 import Banner from '../ui/Banner';
 import BrailleSpinner from '../BrailleSpinner';
 import JobRow from './JobRow';
 import PresetPicker from './PresetPicker';
-import { dispatchCapInput, isUnlimitedDispatchCap, jobFromPreset, quotaBurnJobIsSpent, UNLIMITED_DISPATCHES } from '../../lib/quotaBurnPatch';
+import { dispatchCapInput, getAvailablePresetsForJobs, isUnlimitedDispatchCap, jobFromPreset, quotaBurnJobIsSpent, UNLIMITED_DISPATCHES } from '../../lib/quotaBurnPatch';
 import { formatDateTime } from '../../utils/formatters';
 import { NumberField } from './fields';
 
@@ -21,6 +22,8 @@ export default function FamilyCard({
   onToggleExpand, onPatch, onRunFamily, onRunJob, onRearm, onRetryCatalog,
 }) {
   const jobs = config.jobs || [];
+  const hasEnabledJobs = jobs.some((job) => job.enabled !== false);
+  const [expandedJobIds, setExpandedJobIds] = useState(() => new Set());
   // Pending counts and `run once` completions stay on the STATUS side and are
   // passed to JobRow as their own props — merging them into the job objects
   // would mean stripping them back off before every save (the PUT schema is
@@ -59,27 +62,53 @@ export default function FamilyCard({
     while (taken.has(`${base}-${suffix}`)) suffix += 1;
     return `${base}-${suffix}`;
   };
-  const addJob = () => patchJobs([...jobs, {
-    id: nextJobId(),
-    enabled: true,
-    label: '',
-    jobType: catalog.jobTypes[0].id,
-    model: null,
-    providerId: null,
-    runOnce: false,
-    params: {},
-  }]);
+  const addJob = () => {
+    const id = nextJobId();
+    patchJobs([...jobs, {
+      id,
+      enabled: true,
+      label: '',
+      jobType: catalog.jobTypes[0].id,
+      model: null,
+      providerId: null,
+      effort: null,
+      runOnce: false,
+      params: {},
+    }]);
+    setExpandedJobIds((prev) => new Set(prev).add(id));
+  };
   // A preset job inherits the app the plan is already pointed at, when the plan
   // is unambiguous about it — otherwise a one-click "add a UX audit" lands as a
   // step that cannot run until the user notices the unset app picker. Derived at
   // click time, not per render: the page polls while any family is pending.
   const addPresetJob = (preset) => {
     const targetedAppIds = [...new Set(jobs.map((job) => job.params?.appId).filter(Boolean))];
+    const id = nextJobId();
     patchJobs([...jobs, jobFromPreset(preset, {
-      id: nextJobId(),
+      id,
       appId: targetedAppIds.length === 1 ? targetedAppIds[0] : null,
     })]);
+    setExpandedJobIds((prev) => new Set(prev).add(id));
   };
+
+  const allExpanded = jobs.length > 0 && jobs.every((job) => expandedJobIds.has(job.id));
+  const toggleAllJobs = () => {
+    if (allExpanded) {
+      setExpandedJobIds(new Set());
+    } else {
+      setExpandedJobIds(new Set(jobs.map((job) => job.id)));
+    }
+  };
+  const toggleJobExpand = (jobId) => {
+    setExpandedJobIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(jobId)) next.delete(jobId);
+      else next.add(jobId);
+      return next;
+    });
+  };
+
+  const availablePresets = getAvailablePresetsForJobs(catalog.presets, jobs);
 
   return (
     <div className="rounded border border-port-border bg-port-card/40">
@@ -111,7 +140,9 @@ export default function FamilyCard({
             {status.windowLabel ? `${status.windowLabel}: ` : ''}{status.percentRemaining}% left · resets in {status.hoursUntilReset}h · {status.dispatchesUsed}{isUnlimitedDispatchCap(config.maxDispatchesPerWindow) ? '' : `/${config.maxDispatchesPerWindow}`} used
           </span>
         ) : (
-          <span className="text-xs text-gray-500">{status?.skipReason || 'not evaluated yet'}</span>
+          !status?.blockedUntil && (
+            <span className="text-xs text-gray-500">{status?.skipReason || 'not evaluated yet'}</span>
+          )
         )}
 
         {/* An observed refusal, shown even when some other gate is the one
@@ -120,10 +151,15 @@ export default function FamilyCard({
             server's skip reason deliberately omits the instant so this badge
             owns it, in the app's shared timestamp format. */}
         {status?.blockedUntil && (
-          <span className="inline-flex items-center gap-1 text-xs text-amber-400" title={status.blockedReason || 'The provider refused the last burn.'}>
-            <Ban size={13} />
-            provider refused — retrying after {formatDateTime(status.blockedUntil)}
-          </span>
+          <div className="flex flex-wrap items-center gap-1 text-xs text-amber-400">
+            <span className="inline-flex items-center gap-1">
+              <Ban size={13} />
+              provider refused — retrying after {formatDateTime(status.blockedUntil)}
+            </span>
+            <span className="basis-full pl-[17px] break-words text-amber-300/90">
+              {status.blockedReason || 'The provider refused the last burn.'}
+            </span>
+          </div>
         )}
 
         {/* A collapsed card otherwise says nothing about whether this family has
@@ -142,9 +178,9 @@ export default function FamilyCard({
           <button
             type="button"
             className="text-xs text-port-accent hover:underline disabled:opacity-40"
-            disabled={actionsBusy || !status?.willBurn}
+            disabled={actionsBusy || !hasEnabledJobs}
             onClick={() => onRunFamily(familyId)}
-            title={status?.willBurn ? 'Run this family\'s next job now' : 'This family has no burnable window right now'}
+            title={hasEnabledJobs ? 'Force-run this family\'s next available job now' : 'Add an enabled job before running this family'}
           >
             Burn now
           </button>
@@ -209,6 +245,16 @@ export default function FamilyCard({
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-xs uppercase tracking-wide text-gray-400">Burn plan — runs in order</h3>
               <div className="flex items-center gap-3">
+                {jobs.length > 0 && (
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 text-xs text-gray-300 hover:text-white"
+                    onClick={toggleAllJobs}
+                  >
+                    {allExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                    {allExpanded ? 'Collapse all' : 'Expand all'}
+                  </button>
+                )}
                 {/* Re-arming step by step is the wrong shape for the case this
                     exists to serve: a plan configured as a one-shot SERIES,
                     which the user wants to run again as a series. Not confirmed
@@ -227,7 +273,7 @@ export default function FamilyCard({
                 )}
                 <button
                   type="button"
-                  className="inline-flex items-center gap-1 text-xs text-port-accent hover:underline disabled:opacity-40"
+                  className="inline-flex items-center gap-1 text-port-accent hover:underline disabled:opacity-40"
                   disabled={!canAddJob}
                   title={canAddJob ? 'Add a job to this plan' : 'Job catalog unavailable — retry the catalog load above'}
                   onClick={addJob}
@@ -240,7 +286,7 @@ export default function FamilyCard({
               <PresetPicker
                 id={`burn-${familyId}-preset`}
                 label="Add a preset job"
-                presets={catalog.presets}
+                presets={availablePresets}
                 onPick={addPresetJob}
                 hint="Single-focus audits that read the code, file GitHub issues, and change nothing — safe work for an unattended window."
               />
@@ -252,12 +298,15 @@ export default function FamilyCard({
               <JobRow
                 key={job.id}
                 job={job}
+                familyId={familyId}
                 index={index}
                 total={jobs.length}
                 catalog={catalog}
                 pending={statusById.get(job.id)?.pending ?? null}
                 ranAt={statusById.get(job.id)?.ranAt ?? null}
                 actionsBusy={actionsBusy}
+                expanded={expandedJobIds.has(job.id)}
+                onToggleExpand={() => toggleJobExpand(job.id)}
                 onChange={(next) => changeJob(index, next)}
                 onMove={moveJob}
                 onRemove={(i) => patchJobs(jobs.filter((_, x) => x !== i))}

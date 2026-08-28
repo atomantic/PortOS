@@ -724,6 +724,13 @@ describe('withLocalConcurrencyGate', () => {
     expect(state.peak).toBeGreaterThan(1);
   });
 
+  it('serializes concurrent TUI calls to a LOCAL endpoint', async () => {
+    const provider = { type: 'tui', endpoint: 'http://127.0.0.1:8000/v1' };
+    const { state, fn } = makeTracker();
+    await Promise.all(Array.from({ length: 4 }, () => withLocalConcurrencyGate(provider, fn)));
+    expect(state.peak).toBeLessThanOrEqual(LOCAL_LLM_MAX_CONCURRENCY);
+  });
+
   it('releases the slot even when the gated fn throws (no deadlock)', async () => {
     const provider = { type: 'api', endpoint: 'http://127.0.0.1:1234' };
     await expect(withLocalConcurrencyGate(provider, () => Promise.reject(new Error('boom')))).rejects.toThrow('boom');

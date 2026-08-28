@@ -47,7 +47,7 @@ const PORT_INSET = 16;
 const SIDE_GUTTER = 52;
 const LABEL_CHAR_W = 5.2;
 const LABEL_ROW_H = 12;
-const LABEL_MAX_NUDGE_ROWS = 8;
+const LABEL_MAX_NUDGE_ROWS = 16;
 const MIN_NODE_W = 168;
 
 const asArray = (v) => (Array.isArray(v) ? v : []);
@@ -412,7 +412,9 @@ export function routeLoomEdges(nodes, positions, cardExtent, options = {}) {
       nodeW,
       nodeH,
     }),
-  })));
+  })), {
+    obstacles: Object.values(positions).map(({ x, y }) => ({ x, y, width: nodeW, height: nodeH })),
+  });
 }
 
 function assignPorts(routes, nodeW, nodeH, isLR) {
@@ -534,24 +536,36 @@ function assignForwardLanes(routes, nodeW, nodeH, isLR) {
 }
 
 /**
- * Push overlapping labels down a row at a time until each clears the ones
- * already placed. Sorted by anchor so the result doesn't depend on transition
- * order, and capped so a hopelessly crowded cluster stops sliding down the
- * canvas rather than trailing off it.
+ * Move labels away from cards and from one another. Labels are centered on a
+ * route segment when there is room; older records can have tighter persisted
+ * card positions, so the full text box must be checked rather than only its
+ * anchor. Candidates alternate above and below the route, which keeps a
+ * crowded graph readable without changing the authored node positions.
  */
-export function placeEdgeLabels(edges) {
+export function placeEdgeLabels(edges, { obstacles = [] } = {}) {
   const placed = [];
   const halfWidth = (text) => (Math.min(text.length, LOOM_EDGE_LABEL_MAX) * LABEL_CHAR_W) / 2;
   for (const edge of [...edges].sort((a, b) => a.labelY - b.labelY || a.labelX - b.labelX)) {
     if (!edge.intent) continue;
     const half = halfWidth(edge.intent);
-    let y = edge.labelY;
-    for (let row = 0; row < LABEL_MAX_NUDGE_ROWS; row += 1) {
-      const clash = placed.some((p) => Math.abs(p.y - y) < LABEL_ROW_H
-        && Math.abs(p.x - edge.labelX) < p.half + half);
-      if (!clash) break;
-      y += LABEL_ROW_H;
+    const candidates = [edge.labelY];
+    for (let row = 1; row <= LABEL_MAX_NUDGE_ROWS; row += 1) {
+      candidates.push(edge.labelY + row * LABEL_ROW_H, edge.labelY - row * LABEL_ROW_H);
     }
+    const fits = (y) => {
+      const labelTop = y - LABEL_ROW_H;
+      const labelBottom = y + 3;
+      const hitsObstacle = obstacles.some((rect) => (
+        edge.labelX + half > rect.x
+        && edge.labelX - half < rect.x + rect.width
+        && labelBottom > rect.y
+        && labelTop < rect.y + rect.height
+      ));
+      if (hitsObstacle) return false;
+      return !placed.some((p) => Math.abs(p.y - y) < LABEL_ROW_H
+        && Math.abs(p.x - edge.labelX) < p.half + half);
+    };
+    const y = candidates.find(fits) ?? candidates[candidates.length - 1];
     edge.labelY = y;
     edge.maxY = Math.max(edge.maxY, y);
     edge.maxX = Math.max(edge.maxX ?? 0, edge.labelX + half);

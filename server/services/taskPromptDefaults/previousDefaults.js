@@ -10583,7 +10583,47 @@ Summarize:
       'Then search for release documentation. Check your AGENTS.md (or CLAUDE.md) context (already provided above) for "Git Workflow", "Release", or "Changelog" sections. If the release process is not clear from those instructions, check these files in order (use whichever exist):'
     );
     if (v10 === history.at(-1)) throw new Error('release-check v10 historical prompt derivation did not match v9');
-    return [...history, v10];
+    // v11 delegated release mechanics to slashdo and pinned the configured
+    // reviewers. Keep that outgoing body byte-for-byte recognizable so v12 can
+    // upgrade existing uncustomized schedules without touching user prompts.
+    const v11 = `[Improvement: {appName}] Release Check
+
+Repository: {repoPath}
+
+This scheduled task is a thin coordinator for {appName}'s release. The bundled slashdo \`release\` workflow is the single source of truth for release mechanics. Do not duplicate its branch, version, changelog, readiness, test/build, PR, review, CI, merge, tag, or report steps here.
+
+## Step 0: Reconcile Missing Releases
+
+Before evaluating unreleased work, determine \`<OWNER>\`, \`<REPO>\`, and \`<TARGET_BRANCH>\` from the repository's AGENTS.md (or CLAUDE.md) and release documentation. If the project does not document a release flow, use the repository's default branch. Extract the GitHub project identity with:
+\`\`\`bash
+cd {repoPath} && gh repo view --json owner,name --jq '"OWNER=" + .owner.login + " REPO=" + .name'
+\`\`\`
+
+Check for existing release tags that lack a corresponding GitHub Release:
+1. \`git -C {repoPath} fetch --tags origin\`
+2. List version tags on \`<TARGET_BRANCH>\` / \`origin\` and published releases:
+   \`\`\`bash
+   gh release list --repo <OWNER>/<REPO> --limit 100
+   \`\`\`
+3. Compare every \`vX.Y.Z\` tag with published releases. For each missing release:
+   - Report it explicitly as "Unpublished release detected: vX.Y.Z".
+   - Find its changelog body (for example, \`.changelog/vX.Y.Z.md\` or \`.changelog/vX.Y.x.md\`).
+   - Check whether a newer version exists.
+   - Publish it with \`gh release create "vX.Y.Z"\`, using \`--notes-file\` or \`--body-file\`; pass \`--latest=false\` when a newer release exists, and \`--latest\` only for the newest version.
+4. Report missing releases reconciled before continuing.
+
+The canonical workflow owns readiness and should count both the current changelog and any uncollected per-branch fragments (for example, \`.changelog/next/\`) across the assembled notes. If the changelog README documents a preview/collect command, use only that documented command — Do NOT guess a command name. If fewer than two substantive entries remain, stop without creating a release PR.
+
+If the release docs identify a separate database-backed test suite, the canonical workflow must first use the documented test-database provisioning/setup command and then run that suite against an isolated test database. The workflow must never substitute a production database; if the isolated setup cannot reach its documented service, report the environmental blocker and stop.
+
+## Step 1: Run the canonical release workflow
+
+The PortOS Code Review Defaults rendered into \`{reviewers}\` are authoritative for this run. Use exactly that reviewer list and no other. The task builder attaches the same list to the bundled slashdo invocation; do not invoke a bare workflow that falls back to saved slashdo defaults. PortOS-only configured reviewers still run through the Local Reviewer Procedure appended to this prompt. If the reviewer list is empty or unavailable, stop before creating or updating a release PR.
+
+Run the bundled \`/do:release\` workflow (or its equivalent \`release\` skill) exactly once, in autonomous mode with no \`--interactive\` flag. It owns release readiness, version/changelog finalization, tests/build, local review, PR creation, the configured reviewer loop, CI, merge, tagging, and the final report. If it cannot run or a configured reviewer is unavailable or inconclusive, stop and report instead of substituting another reviewer.
+
+The release workflow is attached to this task by metadata so every provider receives the same bundled body and reviewer pin. Do not reimplement any of its phases in this scheduled prompt.`;
+    return [...history, v10, v11];
   })(),
   'branch-reconcile': [
     // v1 default — superseded by v2, whose Rules make "merged" (not "PR opened")

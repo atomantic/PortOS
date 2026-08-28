@@ -50,8 +50,9 @@ import {
 } from './bootstrapSequence.js';
 
 import { ensureBackendProvider, getBackend as getLocalLlmBackend } from './localLlm.js';
-import { ensureProviderReady as ensureOllamaProviderReady, ensureRunning as ensureOllamaRunning } from './ollamaManager.js';
-import { recordSession } from './usage.js';
+import { ensureRunning as ensureOllamaRunning } from './ollamaManager.js';
+import { ensureProviderReadyForExecution } from './providerExecutionReadiness.js';
+import { loadUsage, recordSession } from './usage.js';
 import { recordCompletedRunUsage } from './usageReconciler.js';
 import { setAIToolkit as setProvidersToolkit } from './providers.js';
 import { setAIToolkit as setProviderStatusToolkit } from './providerStatus.js';
@@ -158,7 +159,7 @@ import { prerequisitesMetForRouting } from './providerPrerequisites.js';
 export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverDir }) => {
   // Lifecycle hooks shared between AI Toolkit and PortOS runner shim
   const aiToolkitHooks = {
-    ensureProviderReady: (provider) => ensureOllamaProviderReady(provider),
+    ensureProviderReady: (provider) => ensureProviderReadyForExecution(provider),
     onRunCreated: (metadata) => {
       recordSession(metadata.providerId, metadata.providerName, metadata.model).catch(err => {
         console.error(`❌ Failed to record usage session: ${err.message}`);
@@ -219,6 +220,11 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
     // worktree still resolves to the real install; runMigrations also skips a
     // worktree-rooted path as a backstop (#1947).
     applyDataMigrations: () => runMigrations({ rootDir: resolveInstallRoot(join(serverDir, '..')) }),
+
+    // usage.js and migration 304 both update usage.json. Initialize the service
+    // only after migrations finish so their whole-file writes cannot race and
+    // replace a freshly normalized or rolled-up snapshot with stale bytes.
+    loadUsage,
 
     // Verify every registered collection's on-disk type-level schemaVersion
     // matches what the code expects. Mismatches mean a migration didn't run (or

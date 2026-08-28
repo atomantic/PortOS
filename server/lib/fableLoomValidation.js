@@ -155,3 +155,8 @@ export const reformatSchema = z.object({
   format,
   ...llmPickFields,
 });
+
+export const feedbackSchema = z.object({
+  feedback: z.string().trim().min(1).max(LOOM_LIMITS.FEEDBACK_MAX),
+  ...llmPickFields,
+});

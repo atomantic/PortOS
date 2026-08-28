@@ -9,29 +9,41 @@ import {
 } from './ci-test-plan.js';
 
 const TRACKED = [
+  'server/lib/index.js',
   'server/lib/index.test.js',
+  'server/lib/bufferedSpawn.js',
   'server/routes/auth.test.js',
   'server/routes/sprites.test.js',
+  'server/services/auth.js',
   'server/services/auth.test.js',
+  'server/services/catalogDB/facets.js',
   'server/services/catalogDB/facets.db.test.js',
+  'server/services/sprites/animationTracks.js',
   'server/services/sprites/animationTracks.test.js',
+  'server/services/sprites/atlas.js',
   'server/services/sprites/atlas.test.js',
+  'server/services/sprites/atlasGrid.js',
   'server/services/sprites/atlasGrid.test.js',
+  'server/services/sprites/atlasLayout.js',
   'server/services/sprites/atlasLayout.test.js',
   'server/services/taskPromptDefaults.test.js',
   'server/lib/bufferedSpawn.test.js',
   'server/lib/platform.test.js',
   'server/lib/shellCd.test.js',
+  'server/lib/shellCd.js',
   'server/services/agentTuiSpawning.test.js',
   'client/src/a11yConventions.test.js',
   'client/src/hooks/mountedRefConventions.test.js',
   'client/src/components/catalog/CatalogCard.jsx',
   'client/src/components/catalog/CatalogCard.test.jsx',
   'client/src/components/sprites/WalkWorkflow.test.jsx',
+  'client/src/hooks/useAsyncAction.js',
   'client/src/lib/catalogLinks.js',
   'client/src/lib/index.test.js',
   'client/src/services/apiSprites.test.js',
+  'scripts/migrations/210-example.js',
   'scripts/migrations/210-example.test.js',
+  'scripts/fix-windows-console.js',
 ];
 
 describe('CI test impact planner', () => {
@@ -131,7 +143,7 @@ describe('CI test impact planner', () => {
       trackedFiles: TRACKED.filter((path) => path !== 'server/services/taskPromptDefaults.test.js'),
     });
 
-    expect(plan.server).toEqual({ mode: 'skip', files: [] });
+    expect(plan.server).toEqual({ mode: 'skip', files: [], sources: [] });
   });
 
   it('forces the full suite when CI or shared test configuration changes', () => {
@@ -159,11 +171,13 @@ describe('CI test impact planner', () => {
     }
   });
 
-  it('uses related server coverage, not every CI surface, for a server barrel edit', () => {
+  it('uses only the structural contract for a server barrel edit', () => {
     const plan = buildCiTestPlan(['server/lib/index.js'], { trackedFiles: TRACKED });
 
     expect(plan.full).toBe(false);
-    expect(plan.server.mode).toBe('related');
+    expect(plan.server.mode).toBe('files');
+    expect(plan.server.sources).toEqual([]);
+    expect(plan.server.files).toContain('server/lib/index.test.js');
     expect(plan.client.mode).toBe('skip');
     expect(plan.db).toBe(false);
     expect(plan.windows).toBe(false);
@@ -224,7 +238,8 @@ describe('CI test impact planner', () => {
     expect(plan.full).toBe(false);
     expect(plan.server).toEqual({
       mode: 'related',
-      files: ['server/services/auth.test.js', 'server/services/taskPromptDefaults.test.js'],
+      files: ['server/services/taskPromptDefaults.test.js'],
+      sources: ['server/services/auth.js'],
     });
     expect(plan.client.mode).toBe('skip');
     expect(plan.smoke).toBe(true);
@@ -238,6 +253,10 @@ describe('CI test impact planner', () => {
 
     expect(plan.full).toBe(false);
     expect(plan.client.mode).toBe('related');
+    expect(plan.client.sources).toEqual([
+      'client/src/components/catalog/CatalogCard.jsx',
+      'client/src/lib/catalogLinks.js',
+    ]);
     expect(plan.client.files).toContain('client/src/lib/index.test.js');
     expect(plan.client.files).toContain('client/src/a11yConventions.test.js');
     expect(plan.client.files).toContain('client/src/hooks/mountedRefConventions.test.js');
@@ -282,10 +301,11 @@ describe('CI test impact planner', () => {
     expect(plan.server).toEqual({
       mode: 'related',
       files: ['scripts/migrations/210-example.test.js', 'server/services/taskPromptDefaults.test.js'],
+      sources: ['scripts/migrations/210-example.js'],
     });
   });
 
-  it('excludes a deleted test file from the exact server selector list, and a deleted client file from lint', () => {
+  it('excludes deleted test files from exact selectors', () => {
     // `changed` includes deleted paths (diff-filter ACMRD), but neither
     // `TRACKED` (git ls-files) nor the trackedFiles fixture below lists them
     // — a deletion-only PR must not hand a nonexistent path to Vitest/ESLint
@@ -293,16 +313,22 @@ describe('CI test impact planner', () => {
     const plan = buildCiTestPlan([
       'server/services/sprites/atlas.test.js', // deleted alongside its source
       'client/src/components/catalog/CatalogCard.test.jsx', // deleted test
-      'client/src/lib/catalogLinks.js', // deleted lint-relevant client file
     ], { trackedFiles: TRACKED.filter((path) => ![
       'server/services/sprites/atlas.test.js',
       'client/src/components/catalog/CatalogCard.test.jsx',
-      'client/src/lib/catalogLinks.js',
     ].includes(path)) });
 
     expect(plan.full).toBe(false);
     expect(plan.server.files).not.toContain('server/services/sprites/atlas.test.js');
-    expect(plan.lint.files).not.toContain('client/src/lib/catalogLinks.js');
+  });
+
+  it('widens when a changed executable source was deleted', () => {
+    const plan = buildCiTestPlan(['client/src/lib/catalogLinks.js'], {
+      trackedFiles: TRACKED.filter((path) => path !== 'client/src/lib/catalogLinks.js'),
+    });
+
+    expect(plan.full).toBe(true);
+    expect(plan.reason).toMatch(/deleted executable source/);
   });
 
   it('falls back to full CI for unknown artifacts and wide changes', () => {
@@ -395,6 +421,7 @@ describe('CI test impact planner', () => {
     expect(spawn.full).toBe(false);
     expect(spawn.windows).toBe(true);
     expect(spawn.windowsMode).toBe('related');
+    expect(spawn.windowsSources).toEqual(['server/lib/bufferedSpawn.js']);
     expect(spawn.windowsFiles).toEqual([
       'server/lib/bufferedSpawn.test.js',
       'server/lib/platform.test.js',
@@ -431,5 +458,15 @@ describe('CI test impact planner', () => {
     });
 
     expect(plan.windowsFiles.every((path) => WINDOWS_CONTRACT_TESTS.includes(path))).toBe(true);
+  });
+
+  it('uses exact Windows contracts when only a Windows-sensitive test changed', () => {
+    const plan = buildCiTestPlan(['server/lib/bufferedSpawn.test.js'], {
+      trackedFiles: TRACKED,
+    });
+
+    expect(plan.windows).toBe(true);
+    expect(plan.windowsMode).toBe('files');
+    expect(plan.windowsSources).toEqual([]);
   });
 });

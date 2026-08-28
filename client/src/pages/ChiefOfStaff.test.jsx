@@ -15,6 +15,7 @@ const api = vi.hoisted(() => ({
   getCosLearningSummary: vi.fn(),
   getCosActionableInsights: vi.fn(),
   getCosBudgetUsage: vi.fn(),
+  getPersistentMind: vi.fn(),
   forceCosEvaluate: vi.fn(),
   pauseCos: vi.fn(),
   resumeCos: vi.fn(),
@@ -31,13 +32,22 @@ const api = vi.hoisted(() => ({
 }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 const socketStub = vi.hoisted(() => ({ connected: false, on: vi.fn(), off: vi.fn(), emit: vi.fn() }));
+const localLlm = vi.hoisted(() => ({
+  getLocalLlmStatus: vi.fn(),
+  getToolUseModels: vi.fn(),
+}));
 
 vi.mock('../services/api', () => api);
+vi.mock('../services/apiLocalLlm', () => localLlm);
 vi.mock('../components/ui/Toast', () => ({ default: toast }));
 vi.mock('../services/socket', () => ({ default: socketStub }));
 // TaskAddForm drags in the reviewer/model picker plumbing (local-LLM status,
 // prompt templates) that the task-event tests below have no stake in.
-vi.mock('../components/cos/TaskAddForm', () => ({ default: () => null }));
+vi.mock('../components/cos/TaskAddForm', () => ({
+  default: ({ onTaskAdded }) => <button type="button" onClick={() => onTaskAdded?.({
+    id: 'task-immediate', description: 'Appears without a refresh', status: 'pending', metadata: {},
+  }, { position: 'bottom' })}>Add test task</button>,
+}));
 // ConfigTab's provider/model hook fetches over the network — stub it.
 vi.mock('../hooks/useProviderModels', () => ({
   default: () => ({
@@ -62,7 +72,6 @@ const config = {
   improvementEnabled: true,
   proactiveMode: true,
   idleReviewEnabled: true,
-  immediateExecution: true,
 };
 
 beforeEach(() => {
@@ -80,11 +89,17 @@ beforeEach(() => {
   api.getCosLearning.mockResolvedValue(null);
   api.getProviderStatuses.mockResolvedValue({ providers: {} });
   api.getCosBudgetUsage.mockResolvedValue({ usage: {} });
+  api.getPersistentMind.mockResolvedValue({
+    state: { enabled: false, started: false, status: 'disabled', queuedMessageCount: 0 },
+    profile: { enabled: false, providerId: null, model: null },
+  });
   api.pauseCos.mockResolvedValue({ success: true, pausedAt: '2026-01-01T00:00:00.000Z' });
   api.resumeCos.mockResolvedValue({ success: true });
   api.getCosLearningDurations.mockResolvedValue(null);
   api.getCosPopularTemplates.mockResolvedValue([]);
   api.getCodeReviewDefaults.mockResolvedValue({});
+  localLlm.getLocalLlmStatus.mockResolvedValue({ ollama: { models: [] }, lmstudio: { models: [] } });
+  localLlm.getToolUseModels.mockResolvedValue({ models: [] });
 });
 
 const renderConfigTab = () => render(
@@ -531,6 +546,16 @@ describe('ChiefOfStaff task-change subscriptions', () => {
     expect(await screen.findByText('Example scheduled task')).toBeInTheDocument();
     // The event carries the whole list, so it must not cost a round trip.
     expect(api.getCosTasks.mock.calls.length).toBe(before);
+  });
+
+  it('renders a submitted user task before the follow-up refresh resolves', async () => {
+    renderTasksTab();
+    await screen.findByRole('button', { name: 'Add test task' });
+    api.getCosTasks.mockReturnValue(new Promise(() => {}));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add test task' }));
+
+    expect(await screen.findByText('Appears without a refresh')).toBeInTheDocument();
   });
 
   it('coalesces a burst of task-store changes into a single refetch', async () => {

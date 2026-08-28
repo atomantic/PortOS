@@ -18,7 +18,7 @@ function normalizeContent(content) {
 // the messagesError state and passes setMessagesError as onError.
 // onSendComplete is called after a successful send with { sessionId } so the component
 // can update session metadata (e.g. lastMessageAt) without the hook owning sessions state.
-export function useOpenClawStream({ selectedSessionId, attachments, setAttachments, composer, setComposer, context, apps, sending, setSending, onError = () => {}, onSendComplete = () => {} } = {}) {
+export function useOpenClawStream({ selectedSessionId, attachments, setAttachments, composer, setComposer, context, apps, sending, setSending, onError = () => {}, onSendComplete = () => {}, featureEnabled = true } = {}) {
   const [messages, setMessages] = useState([]);
   const [activityLabel, setActivityLabel] = useState('');
   const [messagesLoading, setMessagesLoading] = useState(false);
@@ -46,8 +46,18 @@ export function useOpenClawStream({ selectedSessionId, attachments, setAttachmen
 
   useEffect(() => () => abortControllerRef.current?.abort(), []);
 
+  useEffect(() => {
+    if (featureEnabled) return;
+    abortControllerRef.current?.abort();
+    loadingSessionRef.current = null;
+    setMessages([]);
+    setMessagesLoading(false);
+    setActivityLabel('');
+    setSending(false);
+  }, [featureEnabled, setSending]);
+
   const loadMessages = useCallback(async (sessionId) => {
-    if (!sessionId) {
+    if (!featureEnabled || !sessionId) {
       loadingSessionRef.current = null;
       setMessages([]);
       setMessagesLoading(false);
@@ -70,13 +80,13 @@ export function useOpenClawStream({ selectedSessionId, attachments, setAttachmen
     } finally {
       if (loadingSessionRef.current === sessionId) setMessagesLoading(false);
     }
-  }, [onError]);
+  }, [featureEnabled, onError]);
 
   const handleSend = useCallback(async (event) => {
     event?.preventDefault();
 
     const message = composer.trim();
-    if ((!message && attachments.length === 0) || !selectedSessionId || sending) return;
+    if (!featureEnabled || ((!message && attachments.length === 0) || !selectedSessionId || sending)) return;
 
     const userMessageId = `local-user-${Date.now()}`;
     const assistantMessageId = `local-assistant-${Date.now()}`;
@@ -191,7 +201,7 @@ export function useOpenClawStream({ selectedSessionId, attachments, setAttachmen
       setSending(false);
       setActivityLabel('');
     }
-  }, [composer, attachments, selectedSessionId, sending, apps, context, setComposer, setAttachments, setSending, onError, onSendComplete]);
+  }, [featureEnabled, composer, attachments, selectedSessionId, sending, apps, context, setComposer, setAttachments, setSending, onError, onSendComplete]);
 
   const handleStop = () => {
     abortControllerRef.current?.abort();

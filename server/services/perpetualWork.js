@@ -310,6 +310,19 @@ const normalizeIssues = (raw, numberKey, authorKey) => raw.map((r) => ({
   authorLogin: (r.author?.[authorKey] || '').toLowerCase()
 }));
 
+// A forge can return the same candidate set in a different order, especially
+// after the collaborators author fan-out. Keep picker order untouched, but use
+// a canonical representation for the perpetual drain's set comparison.
+const canonicalizeIds = (ids) => [...new Set(ids
+  .filter((id) => id != null)
+  .map((id) => String(id)))].sort((a, b) => {
+  const numericA = Number(a);
+  const numericB = Number(b);
+  return Number.isFinite(numericA) && Number.isFinite(numericB)
+    ? numericA - numericB
+    : a.localeCompare(b);
+});
+
 const GLAB_SELF_LOGIN_ARGS = ['api', 'user', '-q', '.username'];
 
 // Upper bound on the `--author <login>` queries the `collaborators` gate fans
@@ -652,6 +665,10 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
     filteredCount,
     reason: actionable.length > 0 ? 'actionable-issues' : 'no-actionable-issues',
     sample: actionable.slice(0, 5).map((i) => i.number),
+    // The perpetual drain uses the complete candidate set to detect a
+    // successful agent that exited without claiming anything. `sample` is
+    // intentionally capped for UI payloads, so it cannot serve as that brake.
+    signature: JSON.stringify(canonicalizeIds(actionable.map((i) => i.number))),
     items: actionable.slice(0, WORK_ITEM_LIMIT).map((i) => ({ ref: String(i.number), title: i.title || '' }))
   };
 }
@@ -692,6 +709,10 @@ export async function detectPlanTask(app) {
     actionable: !!pick,
     count: available.length,
     reason: pick ? 'actionable-plan-items' : 'no-actionable-plan-items',
+    // Keep the signature complete even though the picker payload is capped.
+    // PLAN.md order is meaningful because pickFirstAvailable chooses the first
+    // eligible item; unlike forge issue sets, preserve that order in the brake.
+    signature: JSON.stringify(available.map((it) => it.id)),
     items: available.slice(0, WORK_ITEM_LIMIT).map((it) => ({ ref: it.id, title: planItemTitle(it) }))
   };
 }

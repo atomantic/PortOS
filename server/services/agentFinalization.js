@@ -41,6 +41,7 @@ import { canRunTaskOutputHookWithoutPayload, getTaskOutputPayloadPredicate, isPr
 import { processAgentCompletion } from './agentCompletion.js';
 import { extractSimplifySummaries } from './agentSummaryExtraction.js';
 import { usesCreativeDirectorScratchCwd, removeCreativeDirectorScratchCwd } from '../lib/spawnCwd.js';
+import { issueNumberFromRef } from './issueReconcile.js';
 
 /**
  * Release the execution lane and complete tool-execution tracking for a
@@ -241,6 +242,15 @@ const HOOK_ABORTED_BEFORE_EVALUATION = new Set(['no-app', 'app-not-found']);
  */
 export const PR_MISSING_CATEGORY = 'pr-missing';
 export const FORGE_UNREACHABLE_CATEGORY = 'forge-unreachable';
+export const ISSUE_TRAILER_MISSING_CATEGORY = 'issue-trailer-missing';
+
+function hasIssueClosingTrailer(body, issueNumber) {
+  return new RegExp(`\\b(clos(e|es|ed)|fix(e[sd])?|resolv(e|es|ed))\\s+#${issueNumber}\\b`, 'i').test(body);
+}
+
+function hasIssuePartialTrailer(body, issueNumber) {
+  return new RegExp(`\\b(refs?|part of)\\s+#${issueNumber}\\b`, 'i').test(body);
+}
 
 function isVerifiedNoChangeTask(task) {
   const isPersistedTrue = (value) => value === true || value === 'true';
@@ -316,7 +326,7 @@ async function countCommitsAhead(workspacePath) {
  * would fail and record every correct MR run as `forge-unreachable`.
  *
  * Four outcomes, never collapsed:
- *   - `ok: true`  — a PR exists, or there was nothing to check
+ *   - `ok: true`  — a PR exists with a valid claim trailer, or there was nothing to check
  *   - `ok: true, noChangesToShip: true` — the forge answered "no PR" and the
  *     branch holds no commits, so there was nothing a PR could have been opened
  *     for; the run concluded that no change was warranted
@@ -326,9 +336,9 @@ async function countCommitsAhead(workspacePath) {
  *
  * @returns {Promise<{ ok: boolean, category?: string, message?: string, branch?: string|null, noChangesToShip?: boolean, commitsAhead?: number|null, inconclusive?: boolean }>}
  * `inconclusive: true` is set for every requested check that cannot reach an
- * unambiguous answer about an empty branch (no resolvable branch, unreachable
- * forge, or unreadable commit count). It is omitted for a found PR, a proven
- * empty branch, and a readable non-empty branch missing its PR.
+ * unambiguous answer (no resolvable branch, unreachable forge, unreadable claim
+ * body, or unreadable commit count). It is omitted for a proven empty branch and
+ * a readable non-empty branch missing its PR.
  */
 export async function verifyPrClaim({ task, workspacePath, success, prExpected }) {
   // Only a run that CLAIMED success has a claim to verify; a failed run is
@@ -352,7 +362,33 @@ export async function verifyPrClaim({ task, workspacePath, success, prExpected }
     : await (await import('./github.js')).findPullRequestForBranch(branch, { cwd: workspacePath, env: env || null });
 
   const noun = cli === 'glab' ? 'merge request' : 'pull request';
-  if (found.status === 'found') return { ok: true, branch };
+  if (found.status === 'found') {
+    const issueNumber = issueNumberFromRef(branch);
+    if (issueNumber === null) return { ok: true, branch };
+    if (typeof found.body !== 'string') {
+      return {
+        ok: false,
+        branch,
+        category: FORGE_UNREACHABLE_CATEGORY,
+        message: `Could not read the ${noun} body for branch ${branch} to verify issue #${issueNumber}`,
+        inconclusive: true,
+      };
+    }
+    if (hasIssueClosingTrailer(found.body, issueNumber)) return { ok: true, branch };
+    if (hasIssuePartialTrailer(found.body, issueNumber)) {
+      return {
+        ok: true,
+        branch,
+        advisory: `${noun[0].toUpperCase()}${noun.slice(1)} for branch ${branch} partially ships issue #${issueNumber}; reconcile the remaining scope after merge.`,
+      };
+    }
+    return {
+      ok: false,
+      branch,
+      category: ISSUE_TRAILER_MISSING_CATEGORY,
+      message: `${noun[0].toUpperCase()}${noun.slice(1)} for branch ${branch} does not contain a closing trailer for issue #${issueNumber}`,
+    };
+  }
   if (found.status === 'none') {
     // "No PR" is only a MISS if there was something to open one for. An agent
     // that investigated its task, found the defect already fixed on main, and

@@ -9,6 +9,7 @@ import TerminalHotKeys from '../components/shell/TerminalHotKeys';
 import ShellSessionTabs from '../components/shell/ShellSessionTabs';
 import ShellProviderLauncher from '../components/shell/ShellProviderLauncher';
 import InfoTooltip from '../components/ui/InfoTooltip';
+import { useInstanceFeatures } from '../hooks/useInstanceFeatures.js';
 
 // Typed-into-the-current-session shortcuts only. The AI CLIs that used to sit
 // here as hardcoded buttons (claude / codex / agy / grok) now come from the
@@ -28,6 +29,7 @@ const QUICK_COMMANDS = [
 ];
 
 export default function Shell() {
+  const { isFeatureEnabled } = useInstanceFeatures();
   // Fullscreen promotes the terminal to a fixed overlay above the sidebar, hiding
   // the stacked toolbars so the TUI gets the whole viewport — the key mobile win
   // where the header/tabs/quick-commands otherwise eat most of the screen.
@@ -248,7 +250,7 @@ export default function Shell() {
               onOpen={loadProviders}
               onLaunch={launchProvider}
             />
-            {QUICK_COMMANDS.map(({ label, command }) => (
+            {QUICK_COMMANDS.filter(({ label }) => label !== 'openclaw' || isFeatureEnabled('openclaw')).map(({ label, command }) => (
               <button
                 key={label}
                 onClick={() => sendCommand(command)}

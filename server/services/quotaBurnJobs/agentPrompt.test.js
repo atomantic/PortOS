@@ -39,12 +39,13 @@ describe('countPending', () => {
 });
 
 describe('run', () => {
-  it('queues an internal task pinned to the family provider', async () => {
-    const result = await run({ params: { appId: 'app-1', prompt: 'Do the thing' }, job: { id: 'j1', label: 'Nightly', model: 'grok-4' }, family, candidate });
+  it('queues an internal task pinned to the family provider, model, and effort', async () => {
+    const result = await run({ params: { appId: 'app-1', prompt: 'Do the thing' }, job: { id: 'j1', label: 'Nightly', model: 'grok-4', effort: 'high' }, family, candidate });
     expect(result.dispatched).toBe(true);
+    expect(result.detail.effort).toBe('high');
     expect(state.added[0].type).toBe('internal');
     expect(state.added[0].task).toMatchObject({
-      app: 'app-1', provider: 'grok-cli', model: 'grok-4', useWorktree: true, openPR: true, simplify: true, reviewLoop: false,
+      app: 'app-1', provider: 'grok-cli', model: 'grok-4', effort: 'high', useWorktree: true, openPR: true, simplify: true, reviewLoop: false,
     });
     expect(state.added[0].task.context).toContain('Do the thing');
   });

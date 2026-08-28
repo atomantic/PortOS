@@ -59,6 +59,7 @@ vi.mock('./brainStorage.js', () => {
     getBucketById: vi.fn(),
     createBucket: vi.fn(),
     updateBucket: vi.fn(),
+    reorderBuckets: vi.fn(),
     deleteBucket: vi.fn()
   };
 });
@@ -1402,6 +1403,11 @@ describe('brain service', () => {
     it('should re-export getSummary from storage', async () => {
       const { getSummary } = await import('./brain.js');
       expect(getSummary).toBe(storage.getSummary);
+    });
+
+    it('should re-export reorderBuckets from storage', async () => {
+      const { reorderBuckets } = await import('./brain.js');
+      expect(reorderBuckets).toBe(storage.reorderBuckets);
     });
   });
 

@@ -536,7 +536,10 @@ async function createAIProviderInvestigationTask(error) {
   const context = buildAIProviderErrorContext(error, diagnostics);
 
   const taskData = {
-    description: `Investigate AI provider failure: ${ctx.provider} (${ctx.model})`,
+    // Mirror the `|| 'Unknown'` fallbacks buildAIProviderErrorContext already
+    // applies to the body. Without them an unattributable failure filed a task
+    // titled "Investigate AI provider failure: undefined (undefined)".
+    description: `Investigate AI provider failure: ${ctx.provider || 'Unknown provider'} (${ctx.model || 'unknown model'})`,
     priority: 'MEDIUM',
     context,
     diagnostics,

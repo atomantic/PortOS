@@ -199,6 +199,16 @@ describe('cosValidation plan-only task mode', () => {
 
 });
 
+describe('cosValidation non-worktree completion choice', () => {
+  it('accepts the supported completion choices and preserves them through metadata sanitization', () => {
+    expect(createCosTaskSchema.parse({ description: 'x', whenDone: 'commit-push' }).whenDone).toBe('commit-push');
+    expect(createCosTaskSchema.parse({ description: 'x', whenDone: 'leave-uncommitted' }).whenDone).toBe('leave-uncommitted');
+    expect(createCosTaskSchema.safeParse({ description: 'x', whenDone: 'later' }).success).toBe(false);
+    expect(sanitizeTaskMetadata({ whenDone: 'commit-push' })).toEqual({ whenDone: 'commit-push' });
+    expect(sanitizeTaskMetadata({ whenDone: 'later' })).toBeNull();
+  });
+});
+
 describe('cosValidation reviewer CLI binaries', () => {
   // The bug this exists to prevent: `antigravity` is the stored, federated
   // reviewer identity, but the shipped executable is `agy` — no `antigravity`

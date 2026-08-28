@@ -34,6 +34,7 @@ const ROLLUP_PATH = join(PATHS.cos, 'persistent-mind-rollups.json');
 const ROLLUP_STORE_SCHEMA_VERSION = 1;
 const queueRollupWrite = createFileWriteQueue();
 const promotionRuns = new Map();
+const memoryCreationRuns = new Map();
 
 const emptyStore = () => ({ schemaVersion: ROLLUP_STORE_SCHEMA_VERSION, rollups: [] });
 
@@ -55,6 +56,17 @@ export async function readPersistentMindRollups(mindId = PERSISTENT_MIND_ID) {
     .sort((a, b) => a.source.fromSequence - b.source.fromSequence);
 }
 
+/** Drop derived summaries for one mind so the next wake rebuilds from retained history. */
+export function clearPersistentMindRollups(mindId = PERSISTENT_MIND_ID) {
+  return queueRollupWrite(async () => {
+    const store = await loadRollupStore();
+    const rollups = store.rollups.filter((rollup) => rollup.mindId !== mindId);
+    const cleared = store.rollups.length - rollups.length;
+    await atomicWrite(ROLLUP_PATH, { schemaVersion: ROLLUP_STORE_SCHEMA_VERSION, rollups });
+    return { cleared };
+  });
+}
+
 /** Full active memories explicitly owned by this mind, newest importance first. */
 export async function readPersistentMindMemories(mindId = PERSISTENT_MIND_ID) {
   const result = await memoryBackend.getMemories({
@@ -66,6 +78,35 @@ export async function readPersistentMindMemories(mindId = PERSISTENT_MIND_ID) {
   });
   const details = await Promise.all((result.memories || []).map((memory) => memoryBackend.peekMemory(memory.id)));
   return details.filter((memory) => memory?.status === 'active' && memory.sourceAgentId === mindId);
+}
+
+/**
+ * Archive every active memory owned by this mind. Archival removes the records
+ * from effective context while keeping recovery possible through Brain.
+ */
+export async function archivePersistentMindMemories(mindId = PERSISTENT_MIND_ID) {
+  let archived = 0;
+  while (true) {
+    const result = await memoryBackend.getMemories({
+      status: 'active',
+      sourceAgentId: mindId,
+      sortBy: 'createdAt',
+      sortOrder: 'asc',
+      limit: 100,
+    });
+    const candidates = result.memories || [];
+    if (candidates.length === 0) break;
+    let batchArchived = 0;
+    for (const candidate of candidates) {
+      const memory = await memoryBackend.peekMemory(candidate.id);
+      if (memory?.status !== 'active' || memory.sourceAgentId !== mindId) continue;
+      await memoryBackend.deleteMemory(memory.id, false);
+      archived += 1;
+      batchArchived += 1;
+    }
+    if (batchArchived === 0) break;
+  }
+  return { archived };
 }
 
 export function recordPersistentMindRollup(input) {
@@ -228,6 +269,70 @@ export function createPersistentMindMemory({ mindId = PERSISTENT_MIND_ID, ...inp
     sourceAgentId: mindId,
     status: 'active',
   });
+}
+
+async function findExistingAutomaticMemory({ memoryApi, mindId, turnId, content }) {
+  const result = await memoryApi.getMemories({
+    status: 'active',
+    sourceAgentId: mindId,
+    limit: 1000,
+  });
+  const candidates = result.memories || [];
+  for (const candidate of candidates) {
+    const memory = await memoryApi.peekMemory(candidate.id);
+    if (memory?.sourceTaskId === turnId && memory.content === content) return memory;
+  }
+  return null;
+}
+
+async function performAutomaticMemoryCreation({
+  candidateId,
+  mindId = PERSISTENT_MIND_ID,
+  turnId = null,
+  content,
+  summary,
+  type = 'observation',
+  category = 'other',
+  tags = [],
+  memoryApi = memoryBackend,
+} = {}) {
+  if (typeof candidateId !== 'string' || !candidateId.trim()) {
+    throw new Error('Persistent mind memory candidate id is required');
+  }
+  if (typeof content !== 'string' || !content.trim()) {
+    throw new Error('Persistent mind memory content is required');
+  }
+  const id = candidateId.trim();
+  const normalizedContent = content.trim().slice(0, 10_240);
+  const history = await readPersistentMindHistory(mindId);
+  const previous = history.find((event) => (
+    event.kind === 'mind.memory.created' && event.data?.candidateId === id
+  ));
+  if (previous?.data?.memoryId) {
+    return { success: true, duplicate: true, memory: { id: previous.data.memoryId } };
+  }
+
+  const existing = await findExistingAutomaticMemory({ memoryApi, mindId, turnId, content: normalizedContent });
+  const memory = existing || await memoryApi.createMemory({
+    type,
+    content: normalizedContent,
+    summary: typeof summary === 'string' ? summary.trim().slice(0, 500) : undefined,
+    category,
+    tags: [...new Set(Array.isArray(tags) ? tags.filter((tag) => typeof tag === 'string' && tag) : [])].slice(0, 20),
+    sourceTaskId: turnId,
+    sourceAgentId: mindId,
+    status: 'active',
+  });
+  return { success: true, duplicate: Boolean(existing), memory };
+}
+
+/** Persist a structured memory emitted by the mind without a human approval step. */
+export function createPersistentMindMemoryFromCandidate(input = {}) {
+  const key = `${input.mindId || PERSISTENT_MIND_ID}:${input.candidateId || ''}`;
+  if (memoryCreationRuns.has(key)) return memoryCreationRuns.get(key);
+  const run = performAutomaticMemoryCreation(input).finally(() => memoryCreationRuns.delete(key));
+  memoryCreationRuns.set(key, run);
+  return run;
 }
 
 export async function updatePersistentMindMemory(memoryId, updates, mindId = PERSISTENT_MIND_ID) {

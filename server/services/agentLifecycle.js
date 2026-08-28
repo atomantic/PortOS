@@ -607,7 +607,12 @@ async function runAgentSpawn(task) {
       configReviewers: normalizeReviewers(task.metadata),
       configUseWorktree: !!worktreeInfo,
       configWorktreeAutoDetected: !!worktreeInfo && !explicitWorktree,
-      configCodingOnMain: !worktreeInfo && !jiraBranchName
+      configCodingOnMain: !worktreeInfo && !jiraBranchName,
+      // Feature-agent provenance must survive the in-memory runner handoff and
+      // server restarts so featureAgents can clear currentAgentId and record the
+      // run when the shared CoS lifecycle emits agent:completed.
+      featureAgentId: task.metadata?.featureAgentId || null,
+      featureAgentRun: isTruthyMeta(task.metadata?.featureAgentRun)
     });
 
     emitLog('info', `Agent ${agentId} initializing...${worktreeInfo ? ' (worktree)' : ''}${jiraBranchName ? ` (JIRA: ${jiraTicket?.ticketId})` : ''}`, { agentId, taskId: task.id });

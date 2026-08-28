@@ -23,6 +23,7 @@ import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import useContainerWidth from '../hooks/useContainerWidth';
 import LoomCanvas from '../components/fableloom/LoomCanvas';
+import LoomEpisodeFeedback from '../components/fableloom/LoomEpisodeFeedback';
 import LoomNodeEditor from '../components/fableloom/LoomNodeEditor';
 import LoomPlayPanel from '../components/fableloom/LoomPlayPanel';
 import LoomSettingsDrawer from '../components/fableloom/LoomSettingsDrawer';
@@ -331,6 +332,7 @@ export default function FableLoomStory() {
           loom={loom}
           episode={episode}
           onLoomUpdate={setLoom}
+          onFeedbackStarted={() => handleRewritten({ refetch: false })}
           onDeleted={() => {
             setSetupOpen(false);
             navigate(basePath);
@@ -359,11 +361,12 @@ export default function FableLoomStory() {
  * Episode setup drawer — title/synopsis (the weave inputs), the AI weave
  * controls, and episode deletion.
  */
-function EpisodeSetupDrawer({ open, onClose, loom, episode, onLoomUpdate, onDeleted }) {
+function EpisodeSetupDrawer({ open, onClose, loom, episode, onLoomUpdate, onFeedbackStarted, onDeleted }) {
   const [form, setForm] = useState({ title: '', synopsis: '', guidance: '', nodeTarget: 12, endingTarget: 3 });
   // The weave reads server-side state (title/synopsis), so it gates on
   // in-flight meta saves per the client save-gating convention.
   const [metaSaving, setMetaSaving] = useState(0);
+  const [feedbackRunning, setFeedbackRunning] = useState(false);
   const del = useConfirmDelete();
   const hasScenes = episode.nodes.length > 0;
 
@@ -464,13 +467,23 @@ function EpisodeSetupDrawer({ open, onClose, loom, episode, onLoomUpdate, onDele
           <button
             type="button"
             onClick={runWeave}
-            disabled={weaving || metaSaving > 0}
+            disabled={weaving || feedbackRunning || metaSaving > 0}
             className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded bg-port-accent text-white text-sm disabled:opacity-60"
           >
             {weaving ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
             {weaving ? 'Weaving…' : hasScenes ? 'Reweave episode' : 'Weave episode'}
           </button>
         </div>
+
+        <LoomEpisodeFeedback
+          open={open}
+          loom={loom}
+          episode={episode}
+          onLoomUpdate={onLoomUpdate}
+          onFeedbackStarted={onFeedbackStarted}
+          disabled={metaSaving > 0}
+          onRunningChange={setFeedbackRunning}
+        />
 
         <div className="border-t border-port-border pt-4">
           {del.isConfirming(episode.id) ? (

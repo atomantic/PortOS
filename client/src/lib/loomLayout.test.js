@@ -174,6 +174,23 @@ describe('placeEdgeLabels', () => {
     expect(blank.labelY).toBe(50);
     expect(labeled.labelY).toBe(50);
   });
+
+  it('moves a label clear of a card when its full text does not fit in the gap', () => {
+    const edges = [{ intent: 'take the long hallway', labelX: 100, labelY: 60, maxY: 60 }];
+    placeEdgeLabels(edges, {
+      obstacles: [{ x: 0, y: 0, width: 200, height: 112 }],
+    });
+    expect(edges[0].labelY).toBeGreaterThan(112);
+    expect(edges[0].maxY).toBe(edges[0].labelY);
+  });
+
+  it('prefers the first clear row below a card', () => {
+    const edges = [{ intent: 'take the long hallway', labelX: 100, labelY: 60, maxY: 60 }];
+    placeEdgeLabels(edges, {
+      obstacles: [{ x: 0, y: 0, width: 200, height: 55 }],
+    });
+    expect(edges[0].labelY).toBe(72);
+  });
 });
 
 describe('pickLoomOrientation', () => {

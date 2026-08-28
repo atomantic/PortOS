@@ -249,6 +249,34 @@ describe('CoS Routes', () => {
       expect(response.status).toBe(200);
       expect(cos.updateConfig).toHaveBeenCalledWith(updates);
     });
+
+    it('validates the persistent mind wake cadence', async () => {
+      const updates = { persistentMindProfile: { wakeIntervalMinutes: 60 } };
+      cos.updateConfig.mockResolvedValue(updates);
+
+      const accepted = await request(app).put('/api/cos/config').send(updates);
+      const rejected = await request(app).put('/api/cos/config').send({
+        persistentMindProfile: { wakeIntervalMinutes: 4 },
+      });
+
+      expect(accepted.status).toBe(200);
+      expect(cos.updateConfig).toHaveBeenCalledWith(updates);
+      expect(rejected.status).toBe(400);
+    });
+
+    it.each([
+      ['autonomyLevel', 'manager'],
+      ['comprehensiveAppImprovement', true],
+      ['immediateExecution', true],
+    ])('accepts but ignores the retired %s config field for older clients', async (field, value) => {
+      cos.updateConfig.mockResolvedValue({ maxConcurrentAgents: 5 });
+      const response = await request(app)
+        .put('/api/cos/config')
+        .send({ [field]: value, maxConcurrentAgents: 5 });
+
+      expect(response.status).toBe(200);
+      expect(cos.updateConfig).toHaveBeenCalledWith({ maxConcurrentAgents: 5 });
+    });
   });
 
   describe('GET /api/cos/tasks', () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createHash } from 'crypto';
@@ -15,6 +15,13 @@ vi.mock('../../lib/fileUtils.js', async () => {
   return makePathsProxy(actual, { dataRoot: () => tempRoot });
 });
 
+const peers = [];
+vi.mock('../instances.js', () => ({
+  getPeers: vi.fn(async () => peers),
+}));
+
+vi.mock('../../lib/peerHttpClient.js', () => ({ peerFetch: vi.fn() }));
+
 // Tracks are db-primary; stub the dispatcher so the manifest builder never
 // touches Postgres. trackAudioFilename mirrors the real basename sanitizer.
 vi.mock('../tracks/index.js', async () => ({
@@ -24,7 +31,16 @@ vi.mock('../tracks/index.js', async () => ({
 }));
 
 const { getTrack } = await import('../tracks/index.js');
-const { buildMusicVideoAssetManifest, buildProjectAssetManifest, buildBoardAssetManifest } = await import('./peerSyncAssets.js');
+const { peerFetch } = await import('../../lib/peerHttpClient.js');
+const { peerSyncEvents } = await import('./peerSyncShared.js');
+const {
+  assetWriteQueue,
+  buildMusicVideoAssetManifest,
+  buildProjectAssetManifest,
+  buildBoardAssetManifest,
+  inflightPulls,
+  pullMissingAssetsFromPeer,
+} = await import('./peerSyncAssets.js');
 
 const sha = (buf) => createHash('sha256').update(buf).digest('hex');
 
@@ -44,6 +60,32 @@ function writeVideo(filename, bytes) {
   const dir = join(tempRoot, 'videos');
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, filename), bytes);
+}
+
+const mkAssetResponse = (body, contentLength = body.length) => ({
+  ok: true,
+  headers: {
+    has: (name) => name === 'content-length',
+    get: (name) => (name === 'content-length' ? String(contentLength) : null),
+  },
+  arrayBuffer: async () => body,
+});
+
+async function captureAssetArrivals(run) {
+  const arrivals = [];
+  const onArrival = (entry) => arrivals.push(entry);
+  peerSyncEvents.on('asset-arrived', onArrival);
+  try {
+    await run();
+  } finally {
+    peerSyncEvents.off('asset-arrived', onArrival);
+  }
+  return arrivals;
+}
+
+function listAssetFiles(kind) {
+  const dir = join(tempRoot, kind);
+  return existsSync(dir) ? readdirSync(dir) : [];
 }
 
 describe('buildMusicVideoAssetManifest — master audio', () => {
@@ -257,5 +299,109 @@ describe('buildBoardAssetManifest — video items (#4188)', () => {
     expect(manifest).toContainEqual(expect.objectContaining({ filename: 'render.png', kind: 'image', sha256: sha(imageBytes) }));
     expect(manifest).toContainEqual(expect.objectContaining({ filename: 'clip.mp4', kind: 'video', sha256: sha(videoBytes) }));
     expect(manifest).toHaveLength(2);
+  });
+});
+
+describe('pullMissingAssetsFromPeer — unsafe and incomplete downloads (#5230)', () => {
+  beforeEach(() => {
+    tempRoot = mkdtempSync(join(tmpdir(), 'portos-peer-pull-safety-'));
+    peers.length = 0;
+    peers.push({
+      instanceId: 'peer-a',
+      name: 'peer-a',
+      address: '192.0.2.10',
+      port: 5555,
+    });
+    assetWriteQueue.clear();
+    inflightPulls.clear();
+    vi.mocked(peerFetch).mockReset();
+  });
+
+  afterEach(() => {
+    if (tempRoot) rmSync(tempRoot, { recursive: true, force: true });
+  });
+
+  it('rejects traversal-shaped filenames before fetching or touching disk', async () => {
+    const unsafeNames = ['..', '../../secret.json', '/etc/passwd', 'folder\\secret.json'];
+
+    const arrivals = await captureAssetArrivals(() => pullMissingAssetsFromPeer(
+      'peer-a',
+      unsafeNames.map((filename) => ({ filename, kind: 'audio', sha256: 'unused' })),
+    ));
+
+    expect(peerFetch).not.toHaveBeenCalled();
+    expect(arrivals).toEqual([]);
+    expect(listAssetFiles('audio')).toEqual([]);
+  });
+
+  it('discards a truncated response without leaving destination or temporary files', async () => {
+    const body = Buffer.from('partial');
+    vi.mocked(peerFetch).mockResolvedValue(mkAssetResponse(body, body.length + 10));
+
+    const arrivals = await captureAssetArrivals(() => pullMissingAssetsFromPeer('peer-a', [
+      { filename: 'truncated.mp3', kind: 'audio', sha256: sha(body) },
+    ]));
+
+    expect(peerFetch).toHaveBeenCalledTimes(1);
+    expect(arrivals).toEqual([]);
+    expect(listAssetFiles('audio')).toEqual([]);
+  });
+
+  it('cleans up when the response stream terminates before producing a body', async () => {
+    vi.mocked(peerFetch).mockResolvedValue({
+      ...mkAssetResponse(Buffer.alloc(0), 20),
+      arrayBuffer: vi.fn(async () => { throw new Error('stream terminated early'); }),
+    });
+
+    const arrivals = await captureAssetArrivals(() => pullMissingAssetsFromPeer('peer-a', [
+      { filename: 'dropped.mp3', kind: 'audio', sha256: 'unused' },
+    ]));
+
+    expect(arrivals).toEqual([]);
+    expect(listAssetFiles('audio')).toEqual([]);
+
+    const retryBody = Buffer.from('complete retry');
+    vi.mocked(peerFetch).mockResolvedValue(mkAssetResponse(retryBody));
+    await pullMissingAssetsFromPeer('peer-a', [
+      { filename: 'dropped.mp3', kind: 'audio', sha256: sha(retryBody) },
+    ]);
+
+    expect(peerFetch).toHaveBeenCalledTimes(2);
+    expect(listAssetFiles('audio')).toEqual(['dropped.mp3']);
+  });
+
+  it('rejects a zero-byte asset without registering or writing it', async () => {
+    vi.mocked(peerFetch).mockResolvedValue(mkAssetResponse(Buffer.alloc(0)));
+
+    const arrivals = await captureAssetArrivals(() => pullMissingAssetsFromPeer('peer-a', [
+      { filename: 'empty.mp3', kind: 'audio', sha256: sha(Buffer.alloc(0)) },
+    ]));
+
+    expect(peerFetch).toHaveBeenCalledTimes(1);
+    expect(arrivals).toEqual([]);
+    expect(listAssetFiles('audio')).toEqual([]);
+  });
+
+  it('coalesces concurrent same-peer pulls for one asset into one HTTP request', async () => {
+    const body = Buffer.from('single-flight');
+    let markFetchStarted;
+    let releaseFetch;
+    const fetchStarted = new Promise((resolve) => { markFetchStarted = resolve; });
+    const fetchRelease = new Promise((resolve) => { releaseFetch = resolve; });
+    vi.mocked(peerFetch).mockImplementation(async () => {
+      markFetchStarted();
+      await fetchRelease;
+      return mkAssetResponse(body);
+    });
+    const entry = { filename: 'shared.mp3', kind: 'audio', sha256: sha(body) };
+
+    const first = pullMissingAssetsFromPeer('peer-a', [entry]);
+    await fetchStarted;
+    const second = pullMissingAssetsFromPeer('peer-a', [entry]);
+    releaseFetch();
+    await Promise.all([first, second]);
+
+    expect(peerFetch).toHaveBeenCalledTimes(1);
+    expect(listAssetFiles('audio')).toEqual(['shared.mp3']);
   });
 });

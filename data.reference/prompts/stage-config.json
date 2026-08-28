@@ -1003,6 +1003,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "fableloom-feedback-episode": {
+      "name": "FableLoom — Apply Episode Feedback",
+      "description": "Applies one conversational author instruction to an existing branching-narrative episode. Returns sparse patches for episode metadata, existing scene content, and existing path labels/details while preserving scene and path ids.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
     "fableloom-play-turn": {
       "name": "FableLoom — Play Turn",
       "description": "Narrates one turn of an interactive read-through: matches the reader's free-text message against the current scene's intent-labeled paths (move) or responds in-world without leaving the scene (stay). Returns { action, transitionId?, narration }.",

@@ -3,6 +3,7 @@ import { render, screen, within, act, fireEvent, waitFor } from '@testing-librar
 import { MemoryRouter } from 'react-router';
 import { PINNED_KEY } from '../utils/navWorkingSet.js';
 import * as api from '../services/api';
+import { INSTANCE_FEATURES_CHANGED } from '../constants/events.js';
 
 // This suite locks the *integration* path that SingleNavRow.test.jsx can't reach:
 // pinning a top-level `single: true` row (Dashboard `/`, Review Hub `/review`,
@@ -52,7 +53,7 @@ vi.mock('../services/socket', () => ({
 
 // --- API: every sidebar fetch resolves empty so the dynamic sections stay bare
 //     and the single rows are the only top-level leaves under test. ---
-// Instance features gate sidebar rows (POST / DataDog / JIRA / GSD). Default every
+// Instance features gate sidebar rows (Health / POST / DataDog / JIRA / GSD / OpenClaw). Default every
 // feature ON so these tests see the full sidebar; the gating itself is covered
 // by 'Layout — instance feature gating' below.
 const allFeaturesOn = () => [
@@ -60,6 +61,8 @@ const allFeaturesOn = () => [
   { id: 'datadog', label: 'DataDog', enabled: true },
   { id: 'jira', label: 'JIRA', enabled: true },
   { id: 'gsd', label: 'GSD', enabled: true },
+  { id: 'openclaw', label: 'OpenClaw', enabled: true },
+  { id: 'health', label: 'Health tracking', enabled: true },
 ];
 const featureMock = vi.hoisted(() => ({ features: null }));
 
@@ -68,6 +71,7 @@ vi.mock('../services/api', () => ({
   listPipelineSeries: vi.fn(() => Promise.resolve([])),
   listUniverses: vi.fn(() => Promise.resolve([])),
   getPaletteManifest: vi.fn(() => Promise.resolve({ nav: [] })),
+  getDailyActions: vi.fn(() => Promise.resolve({ actions: [] })),
   getInstanceFeatures: vi.fn(() => Promise.resolve({ features: featureMock.features })),
 }));
 
@@ -105,6 +109,36 @@ describe('Layout — manifest-derived sidebar structure', () => {
       expect(presentation).not.toHaveProperty('section');
       expect(presentation).not.toHaveProperty('feature');
       expect(presentation.icon).toBeTruthy();
+    }
+  });
+
+  it('covers all sub-tabs for Settings, Digital Twin, and Messages in NAV_PRESENTATION', () => {
+    const settingsPaths = [
+      '/settings/general', '/settings/ai-assignments', '/settings/api-access', '/settings/autofixer',
+      '/settings/backup', '/settings/code-reviewers', '/settings/database', '/settings/features',
+      '/settings/security', '/settings/sharing', '/settings/signal', '/settings/spotify',
+      '/settings/telegram', '/settings/voice', '/settings/youtube', '/settings/mortalloom',
+      '/openclaw', '/prompts', '/ai'
+    ];
+    for (const p of settingsPaths) {
+      expect(NAV_PRESENTATION[p], `missing NAV_PRESENTATION for settings path ${p}`).toBeDefined();
+    }
+
+    const digitalTwinTabs = [
+      'overview', 'identity', 'personas', 'goals', 'taste',
+      'documents', 'import', 'accounts', 'interview', 'autobiography', 'enrich',
+      'test', 'personality', 'voice', 'appearance', 'avatar-bio',
+      'export', 'legacy', 'time-capsule'
+    ];
+    for (const tab of digitalTwinTabs) {
+      const p = `/digital-twin/${tab}`;
+      expect(NAV_PRESENTATION[p], `missing NAV_PRESENTATION for digital twin tab ${p}`).toBeDefined();
+    }
+
+    const messageTabs = ['inbox', 'drafts', 'imessage', 'contacts', 'sync', 'config'];
+    for (const tab of messageTabs) {
+      const p = `/messages/${tab}`;
+      expect(NAV_PRESENTATION[p], `missing NAV_PRESENTATION for message tab ${p}`).toBeDefined();
     }
   });
 });
@@ -184,6 +218,13 @@ describe('Layout — instance feature gating', () => {
     expect(screen.getByRole('button', { name: 'POST' })).toBeTruthy();
   });
 
+  it('shows API Explorer inside Dev Tools navigation', async () => {
+    await renderLayout('/api-reference/catalog');
+
+    expect(NAV_COMMANDS.find((command) => command.path === '/api-reference/catalog')?.section).toBe('Dev Tools');
+    expect(screen.getByRole('link', { name: 'API Explorer' })).toHaveAttribute('href', '/api-reference/catalog');
+  });
+
   it('drops only the rows of the features this install turned off', async () => {
     featureMock.features = allFeaturesOn()
       .map((f) => (f.id === 'post' ? f : { ...f, enabled: false }));
@@ -204,6 +245,18 @@ describe('Layout — instance feature gating', () => {
     expect(screen.getByRole('link', { name: 'Features' })).toHaveAttribute('href', '/settings/features');
   });
 
+  it('shows and hides OpenClaw with its instance feature flag', async () => {
+    await renderLayout('/openclaw');
+    expect(screen.getByRole('link', { name: 'OpenClaw' })).toHaveAttribute('href', '/openclaw');
+
+    featureMock.features = allFeaturesOn()
+      .map((feature) => feature.id === 'openclaw' ? { ...feature, enabled: false } : feature);
+    act(() => window.dispatchEvent(new CustomEvent(INSTANCE_FEATURES_CHANGED, {
+      detail: { features: featureMock.features },
+    })));
+    expect(screen.queryByRole('link', { name: 'OpenClaw' })).toBeNull();
+  });
+
   it('drops the whole POST section when POST is off', async () => {
     featureMock.features = allFeaturesOn()
       .map((f) => (f.id === 'post' ? { ...f, enabled: false } : f));
@@ -212,6 +265,15 @@ describe('Layout — instance feature gating', () => {
 
     expect(screen.queryByRole('button', { name: 'POST' })).toBeNull();
     expect(screen.getByRole('link', { name: 'DataDog' })).toBeTruthy();
+  });
+
+  it('drops the whole Health section when health tracking is off', async () => {
+    featureMock.features = allFeaturesOn()
+      .map((f) => (f.id === 'health' ? { ...f, enabled: false } : f));
+
+    await renderLayout('/devtools/flows');
+
+    expect(screen.queryByRole('button', { name: 'Health' })).toBeNull();
   });
 
   it('shows everything when the feature list cannot be read', async () => {

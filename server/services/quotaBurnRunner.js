@@ -156,8 +156,9 @@ async function dispatchFromCandidate(candidate, { jobId = null, force = false, a
 /**
  * One evaluation. `trigger` is recorded in the run log so the page can tell a
  * scheduled tick from a "Run now". A manual trigger ignores the master
- * `enabled` switch (the user just clicked the button) but respects every quota
- * gate — the reset window, the reserve, and the per-window dispatch cap.
+ * `enabled` switch (the user just clicked the button); an explicit `force`
+ * request also bypasses the reset window, reserve, dispatch cap, and denial
+ * gates.
  */
 export async function runQuotaBurnCycle(options = {}) {
   if (running) {
@@ -291,10 +292,11 @@ async function evaluate({ trigger = 'scheduled', familyId = null, jobId = null, 
   // walk straight past `maxDispatchesPerWindow` and spend quota the user already
   // spent (#4115). Same posture as the provider-quota read above: skip the cycle.
   if (!dispatches) return finish({ dispatched: false, reason: 'dispatch ledger read failed' });
-  // `force` is the page's per-job "Run now" — the window/reserve/cap/denial gates
-  // that bound UNATTENDED burns don't apply to a run the user just asked for. It
-  // goes through the same selection, so the candidate still carries the family's
-  // real card and limit; it only comes back `charge: false`.
+  // `force` is the page's explicit family/job "Run now" — the
+  // window/reserve/cap/denial gates that bound UNATTENDED burns don't apply to a
+  // run the user just asked for. It goes through the same selection, so the
+  // candidate still carries the family's real card and limit; it only comes
+  // back `charge: false`.
   const candidates = selectBurnCandidates(quotas, config, {
     dispatches, blocks, completions, bypassGatesFor: force ? familyId : null,
   }).filter((candidate) => !familyId || candidate.family.id === familyId);

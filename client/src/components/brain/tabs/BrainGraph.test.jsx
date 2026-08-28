@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
@@ -8,7 +8,7 @@ import userEvent from '@testing-library/user-event';
 // <bufferGeometry>/<mesh> as unknown DOM elements, and the r3f refs they hand
 // back are HTMLElements without the three.js geometry API.
 vi.mock('@react-three/fiber', () => ({
-  Canvas: () => <div data-testid="graph-canvas" />,
+  Canvas: ({ frameloop }) => <div data-testid="graph-canvas" data-frameloop={frameloop} />,
   // GraphScene reads the live camera through this; it is never rendered here,
   // but the named import has to resolve.
   useThree: () => ({ camera: null, size: { width: 0, height: 0 } }),
@@ -41,7 +41,7 @@ vi.mock('../../../services/api', () => ({
 import * as api from '../../../services/api';
 import { chipColors, parseColor } from '../../../lib/chipContrast';
 import { BRAIN_TYPE_HEX } from '../constants';
-import BrainGraph, { recordBody } from './BrainGraph';
+import BrainGraph, { graphMotionSettings, recordBody } from './BrainGraph';
 
 const GRAPH = {
   hasEmbeddings: true,
@@ -58,6 +58,8 @@ const renderGraph = async () => {
   await act(async () => {});
 };
 
+const originalMatchMedia = window.matchMedia;
+
 beforeEach(() => {
   vi.clearAllMocks();
   api.getBrainGraph.mockResolvedValue(GRAPH);
@@ -70,6 +72,33 @@ beforeEach(() => {
     api.getBrainPerson, api.getBrainProject, api.getBrainIdea, api.getBrainAdminItem,
     api.getBrainMemory, api.getBrainGoal, api.getBrainJournalEntry, api.getSong,
   ]) getter.mockResolvedValue(null);
+});
+
+afterEach(() => {
+  window.matchMedia = originalMatchMedia;
+});
+
+describe('reduced motion', () => {
+  it('reads the system preference and renders the canvas on demand', async () => {
+    window.matchMedia = vi.fn(() => ({
+      matches: true,
+      addEventListener() {},
+      removeEventListener() {}
+    }));
+
+    await renderGraph();
+
+    expect(window.matchMedia).toHaveBeenCalledWith('(prefers-reduced-motion: reduce)');
+    expect(screen.getByTestId('graph-canvas')).toHaveAttribute('data-frameloop', 'demand');
+  });
+
+  it('stops the canvas render loop and OrbitControls inertia when motion is reduced', () => {
+    expect(graphMotionSettings(true)).toEqual({ frameloop: 'demand', enableDamping: false });
+  });
+
+  it('keeps animated rendering and controls for users without the preference', () => {
+    expect(graphMotionSettings(false)).toEqual({ frameloop: 'always', enableDamping: true });
+  });
 });
 
 // The legend is ten rows tall and sits over the canvas, which blankets a
@@ -120,6 +149,30 @@ describe('legend disclosure', () => {
     for (const label of ['similar', 'shared tag', 'linked']) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
+  });
+});
+
+describe('type filters', () => {
+  it('shows a keyboard focus ring and toggles with Space', async () => {
+    const user = userEvent.setup();
+    await renderGraph();
+
+    const checkbox = screen.getByRole('checkbox', { name: 'Ideas' });
+    const swatch = checkbox.nextElementSibling;
+
+    expect(checkbox).toHaveClass('peer', 'sr-only');
+    expect(swatch).toHaveClass(
+      'peer-focus-visible:ring-2',
+      'peer-focus-visible:ring-port-accent',
+      'peer-focus-visible:ring-offset-1',
+      'peer-focus-visible:ring-offset-port-bg',
+    );
+    expect(swatch.className).not.toMatch(/(^|\s)ring-/);
+
+    expect(checkbox).toBeChecked();
+    checkbox.focus();
+    await user.keyboard(' ');
+    expect(checkbox).not.toBeChecked();
   });
 });
 

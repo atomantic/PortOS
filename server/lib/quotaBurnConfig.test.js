@@ -93,6 +93,13 @@ describe('normalizeQuotaBurnJob', () => {
     expect(normalizeQuotaBurnJob({ jobType: 'agent-prompt', runOnce: 'yes' }).runOnce).toBe(false);
     expect(normalizeQuotaBurnJob({ jobType: 'agent-prompt', runOnce: true }).runOnce).toBe(true);
   });
+
+  it('normalizes effort and model strings', () => {
+    expect(normalizeQuotaBurnJob({ jobType: 'agent-prompt', model: '  claude-sonnet-4  ', effort: '  high  ' }))
+      .toMatchObject({ model: 'claude-sonnet-4', effort: 'high' });
+    expect(normalizeQuotaBurnJob({ jobType: 'agent-prompt', model: '', effort: '' }))
+      .toMatchObject({ model: null, effort: null });
+  });
 });
 
 describe('jobIsSpent', () => {

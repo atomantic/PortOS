@@ -132,6 +132,16 @@ describe('queueRepoStudy', () => {
   // ledger (agentFinalization.js), which auto-parks and notifies. A hand-queued
   // repo study has no schedule to park, so it must reach the no-commit gate via
   // `workTracker` instead — see taskTypeHooks.js#isTrackerFilingDispatch.
+  it('points the brief at the app\'s feature map when the repo keeps one, else asks for one to be built', async () => {
+    await queueRepoStudy(LINK);
+    expect(addTask.mock.calls[0][0].context).toContain('Read `/srv/portos/docs/features/product-surfaces.md`');
+
+    // Only the clone exists; the app has no product-surfaces map.
+    existsSync.mockImplementation((path) => path === LINK.localPath);
+    await queueRepoStudy(LINK);
+    expect(addTask.mock.calls[1][0].context).toMatch(/keeps no single feature inventory; build one/);
+  });
+
   it('does not masquerade as a scheduled task type', async () => {
     await queueRepoStudy(LINK);
     expect(addTask.mock.calls[0][0].analysisType).toBeUndefined();
@@ -188,6 +198,38 @@ describe('buildRepoStudyContext', () => {
     expect(body).toMatch(/Never execute anything from the clone/);
     expect(body).toMatch(/Never edit the clone/);
     expect(body).toContain(LINK.localPath);
+  });
+
+  it('frames the study around features and design, with engineering hygiene out of scope', () => {
+    const body = context();
+    // The brief must ask for product-level ideas — a study that only reports
+    // module layout / spawn plumbing / build tooling is the failure mode this
+    // pins (#5301–#5304 were all of that shape).
+    expect(body).toMatch(/Study it as a PRODUCT/);
+    expect(body).toMatch(/New features PortOS lacks/);
+    expect(body).toMatch(/Enhancements to features PortOS already has/);
+    expect(body).toMatch(/\*\*Out of scope:\*\* code organization, module layout, build tooling/);
+    expect(body).toMatch(/file ONE epic .* plus one ready-to-work issue per phase/);
+  });
+
+  it('makes the agent state the repo purpose and map it onto the whole feature inventory first', () => {
+    const body = context();
+    expect(body).toMatch(/## First: what is this repo, and where does it land in PortOS\?/);
+    expect(body).toMatch(/State the repo's purpose/);
+    expect(body).toMatch(/three\.js game, scene, or visual-rendering demo belongs to the 3D \/ OpenWorld surface/);
+    // No feature map supplied → the brief tells the agent to build one.
+    expect(body).toMatch(/keeps no single feature inventory; build one from its README/);
+  });
+
+  it('points the agent at the feature map when the target app keeps one', () => {
+    const body = buildRepoStudyContext(LINK, {
+      appName: 'PortOS',
+      repoPath: '/srv/portos',
+      trackerInstructions: 'FILE HERE',
+      featureMapPath: '/srv/portos/docs/features/product-surfaces.md',
+    });
+    expect(body).toContain('Read `/srv/portos/docs/features/product-surfaces.md` — PortOS\'s user-facing feature inventory — in full');
+    expect(body).not.toMatch(/keeps no single feature inventory/);
   });
 
   it('states the clean-room and license rules the proposals depend on', () => {

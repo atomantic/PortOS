@@ -38,8 +38,15 @@ const SNAPSHOT_IN_PROGRESS_MARKER = '.in-progress';
 let activeSnapshotId = null;
 
 const markerPath = (snapshotDir) => join(snapshotDir, SNAPSHOT_IN_PROGRESS_MARKER);
-const markerExists = (snapshotDir) =>
-  access(markerPath(snapshotDir)).then(() => true, () => false);
+const parentMarkerPath = (snapshotDir, snapshotId) =>
+  join(resolve(snapshotDir, '..'), `.${snapshotId}${SNAPSHOT_IN_PROGRESS_MARKER}`);
+const markerExists = (snapshotDir, snapshotId) =>
+  Promise.all([
+    access(markerPath(snapshotDir)).then(() => true, () => false),
+    snapshotId
+      ? access(parentMarkerPath(snapshotDir, snapshotId)).then(() => true, () => false)
+      : false,
+  ]).then(([snapshotMarker, parentMarker]) => snapshotMarker || parentMarker);
 
 /**
  * Reject a snapshot that is still being written. Every consumer that reads a
@@ -47,7 +54,7 @@ const markerExists = (snapshotDir) =>
  * call this; restoring half a backup over live data is the worst outcome here.
  */
 async function assertSnapshotComplete(snapshotDir, snapshotId) {
-  const incomplete = snapshotId === activeSnapshotId || await markerExists(snapshotDir);
+  const incomplete = snapshotId === activeSnapshotId || await markerExists(snapshotDir, snapshotId);
   if (incomplete) {
     throw new ServerError(`Snapshot is still being written: ${snapshotId}`, {
       status: 409,
@@ -256,23 +263,19 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
 
   isRunning = true;
   const snapshotId = new Date().toISOString().replace(/:/g, '-').replace(/\..+/, '');
-  const snapshotDir = join(destPath, 'snapshots', MACHINE_HOST, snapshotId);
+  const snapshotsRoot = join(destPath, 'snapshots', MACHINE_HOST);
+  const snapshotDir = join(snapshotsRoot, snapshotId);
+  const parentMarker = parentMarkerPath(snapshotDir, snapshotId);
   const dataDestDir = join(snapshotDir, 'data');
 
   const effectiveExcludes = computeEffectiveExcludes({ excludePaths, disabledDefaultExcludes });
-
-  console.log(`💾 Backup starting: snapshot ${snapshotId} (excluding ${effectiveExcludes.length} paths)`);
-  if (io) io.emit('backup:started', { snapshotId });
-
-  await ensureDir(dataDestDir);
-  activeSnapshotId = snapshotId;
-  await writeFile(markerPath(snapshotDir), '');
 
   let changedFiles = [];
   let manifest;
 
   const clearInProgress = async () => {
     await unlink(markerPath(snapshotDir)).catch(() => {});
+    await unlink(parentMarker).catch(() => {});
     activeSnapshotId = null;
   };
 
@@ -285,48 +288,64 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
   const fail = async (err) => {
     await clearInProgress();
     isRunning = false;
-    await saveState({ lastRun: new Date().toISOString(), status: 'error', error: err.message, pgBackup: null });
+    await saveState({ lastRun: new Date().toISOString(), status: 'error', error: err.message, pgBackup: null }).catch(() => {});
     if (io) io.emit('backup:failed', { snapshotId, error: err.message });
     throw err;
   };
 
-  const excludeFlags = effectiveExcludes.flatMap(p => ['--exclude', p]);
-  changedFiles = await runRsync(PATHS.data, dataDestDir, excludeFlags).catch(fail);
-  console.log(`💾 Backup rsync complete: ${changedFiles.length} files changed (exit 0)`);
+  try {
+    console.log(`💾 Backup starting: snapshot ${snapshotId} (excluding ${effectiveExcludes.length} paths)`);
+    if (io) io.emit('backup:started', { snapshotId });
 
-  // Dump PostgreSQL alongside the file backup. Result is NO LONGER swallowed —
-  // a configured-but-failed dump must degrade the backup and alert the user.
-  const pgDumpPath = join(snapshotDir, 'portos-db.sql');
-  const pgResult = await dumpPostgres(pgDumpPath);
+    // Establish the durable parent marker before exposing the snapshot
+    // directory. A crash during directory setup therefore cannot leave a
+    // snapshot that consumers mistake for a completed backup after restart.
+    await ensureDir(snapshotsRoot);
+    await writeFile(parentMarker, '');
+    await ensureDir(dataDestDir);
+    activeSnapshotId = snapshotId;
+    await writeFile(markerPath(snapshotDir), '');
 
-  manifest = await generateManifest(dataDestDir, join(snapshotDir, 'manifest.json'), pgDumpPath).catch(fail);
+    const excludeFlags = effectiveExcludes.flatMap(p => ['--exclude', p]);
+    changedFiles = await runRsync(PATHS.data, dataDestDir, excludeFlags);
+    console.log(`💾 Backup rsync complete: ${changedFiles.length} files changed (exit 0)`);
 
-  const status = backupStatusForPg(pgResult);
-  const lastRun = new Date().toISOString();
-  await saveState({
-    lastRun,
-    lastSnapshotId: snapshotId,
-    status,
-    filesChanged: changedFiles.length,
-    pgBackup: pgResult,
-    error: pgResult.status === 'failed' ? `DB dump ${pgResult.reason}` : null
-  }).catch(fail);
+    // Dump PostgreSQL alongside the file backup. Result is NO LONGER swallowed —
+    // a configured-but-failed dump must degrade the backup and alert the user.
+    const pgDumpPath = join(snapshotDir, 'portos-db.sql');
+    const pgResult = await dumpPostgres(pgDumpPath);
 
-  if (io) io.emit('backup:completed', { snapshotId, filesChanged: changedFiles.length, status, pgBackup: pgResult });
+    manifest = await generateManifest(dataDestDir, join(snapshotDir, 'manifest.json'), pgDumpPath);
 
-  // Loud-on-failure: surface a degraded DB dump as a warning toast, even on
-  // unattended scheduled runs (which pass io=null) via the module-level io.
-  if (pgResult.status === 'failed') {
-    const errIo = io || getIo();
-    if (errIo) {
-      emitErrorEvent(errIo, new ServerError(
-        `Backup DB dump failed: ${pgResult.reason}`,
-        { status: 500, code: 'BACKUP_DB_DUMP_FAILED', severity: 'warning' }
-      ));
+    const status = backupStatusForPg(pgResult);
+    const lastRun = new Date().toISOString();
+    await saveState({
+      lastRun,
+      lastSnapshotId: snapshotId,
+      status,
+      filesChanged: changedFiles.length,
+      pgBackup: pgResult,
+      error: pgResult.status === 'failed' ? `DB dump ${pgResult.reason}` : null
+    });
+
+    if (io) io.emit('backup:completed', { snapshotId, filesChanged: changedFiles.length, status, pgBackup: pgResult });
+
+    // Loud-on-failure: surface a degraded DB dump as a warning toast, even on
+    // unattended scheduled runs (which pass io=null) via the module-level io.
+    if (pgResult.status === 'failed') {
+      const errIo = io || getIo();
+      if (errIo) {
+        emitErrorEvent(errIo, new ServerError(
+          `Backup DB dump failed: ${pgResult.reason}`,
+          { status: 500, code: 'BACKUP_DB_DUMP_FAILED', severity: 'warning' }
+        ));
+      }
     }
-  }
 
-  return complete({ snapshotId, filesChanged: changedFiles.length, status, lastRun, manifest, pgBackup: pgResult });
+    return complete({ snapshotId, filesChanged: changedFiles.length, status, lastRun, manifest, pgBackup: pgResult });
+  } catch (err) {
+    return fail(err);
+  }
 }
 
 /**
@@ -516,7 +535,7 @@ export async function listSnapshots(destPath) {
       // Report a still-being-written snapshot rather than hiding it: the row is
       // real and the user should see the run in flight, but download and restore
       // must not be offered for it. Mirrors assertSnapshotComplete's two signals.
-      const incomplete = id === activeSnapshotId || await markerExists(snapshotDir);
+      const incomplete = id === activeSnapshotId || await markerExists(snapshotDir, id);
       return {
         id,
         createdAt: manifest?.generatedAt ?? null,

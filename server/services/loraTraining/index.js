@@ -27,6 +27,7 @@ import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { getImageModels } from '../../lib/mediaModels.js';
 import { resolveFlux2Python, isFlux2VenvHealthy, resolveMfluxPython } from '../../lib/pythonSetup.js';
 import { getSettings } from '../settings.js';
+import { writeLoraSidecar } from '../loras.js';
 import { enqueueJob, getJob, mediaJobEvents } from '../mediaJobQueue/index.js';
 import { updateDataset } from '../loraDatasets.js';
 import { trainingEvents } from './events.js';
@@ -1044,7 +1045,7 @@ async function registerTrainedLora({
   const sidecar = buildTrainedSidecar({
     run, result, filename, previewImageUrl, sizeBytes, selectedStep, autoSelected,
   });
-  await atomicWrite(`${dest}.metadata.json`, JSON.stringify(sidecar, null, 2) + '\n');
+  await writeLoraSidecar(filename, sidecar);
   return { sizeBytes, sidecar };
 }
 

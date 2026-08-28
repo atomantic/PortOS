@@ -13,6 +13,7 @@ import { isToolCapable, isReasoningModel } from './llm.js';
 import { getProviderById } from '../providers.js';
 import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
 import { whichFirst } from '../../lib/processEnv.js';
+import { PORTS } from '../../lib/ports.js';
 
 export const pexec = promisify(execFile);
 
@@ -163,7 +164,7 @@ export const startWhisper = async (cfg) => {
 
   const url = new URL(cfg.stt.endpoint);
   const host = url.hostname;
-  const port = url.port || '5562';
+  const port = url.port || String(PORTS.WHISPER);
 
   // Delete stale PM2 entry so our own previous instance doesn't count as a collision.
   await execPm2(['delete', WHISPER_APP]).catch(() => {});

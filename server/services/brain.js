@@ -911,6 +911,7 @@ export const getBuckets = storage.getBuckets;
 export const getBucketById = storage.getBucketById;
 export const createBucket = storage.createBucket;
 export const updateBucket = storage.updateBucket;
+export const reorderBuckets = storage.reorderBuckets;
 export const deleteBucket = storage.deleteBucket;
 
 /**

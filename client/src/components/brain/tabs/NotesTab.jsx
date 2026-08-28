@@ -315,7 +315,7 @@ export default function NotesTab() {
             {searchQuery && (
               <button
                 onClick={clearSearch}
-                aria-label="Close"
+                aria-label="Clear search"
                 className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center"
               >
                 <X size={14} />
@@ -1068,4 +1068,3 @@ function renderInline(text, onLinkClick) {
 
   return parts;
 }
-

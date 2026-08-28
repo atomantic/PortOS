@@ -19,7 +19,7 @@ const AREA_ICONS = {
 
 export default function GoalEditForm({
   form, setForm, tagInput, setTagInput, addTag, removeTag,
-  toggleFeatureArea, parentOptions, saveEdit, onCancel
+  toggleFeatureArea, parentOptions, saveEdit, saving, onCancel
 }) {
   const selectedAreas = form.featureAreas || [];
   const { features, error } = useInstanceFeatures();
@@ -239,8 +239,8 @@ export default function GoalEditForm({
         )}
       </div>
       <div className="flex gap-2">
-        <button onClick={saveEdit} className="px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80">
-          Save
+        <button onClick={saveEdit} disabled={saving} className="px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50">
+          {saving ? 'Saving…' : 'Save'}
         </button>
         <button onClick={onCancel} className="px-3 py-1.5 text-sm rounded bg-port-border text-gray-300">
           Cancel

@@ -200,8 +200,8 @@ describe('recovery output-hook dispatch (#3182)', () => {
 
 describe('recovery path wiring (#3182)', () => {
   it('dispatches before orphan cleanup marks the agent complete', () => {
-    const start = MANAGEMENT_SOURCE.indexOf('export async function cleanupOrphanedAgents');
-    const body = MANAGEMENT_SOURCE.slice(start, start + 7_000);
+    const start = MANAGEMENT_SOURCE.indexOf('async function runCleanupOrphanedAgents');
+    const body = MANAGEMENT_SOURCE.slice(start, start + 12_000);
     expect(body.indexOf('dispatchRecoveredTaskOutputHook({')).toBeGreaterThan(-1);
     expect(body.indexOf('dispatchRecoveredTaskOutputHook({')).toBeLessThan(body.indexOf('await completeAgent(agent.id'));
   });

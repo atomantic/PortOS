@@ -1,6 +1,9 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import useProviderModels from '../../hooks/useProviderModels';
 import * as api from '../../services/api';
+import useLocalModels from '../../hooks/useLocalModels';
+import { modelCapabilityInfo } from '../../utils/providers.js';
+import ModelCapabilitySummary from '../models/ModelCapabilitySummary.jsx';
 import ProviderModelSelector from '../ProviderModelSelector';
 import toast from '../ui/Toast';
 
@@ -11,7 +14,20 @@ const DEFAULT_PROFILE = {
   model: '',
   effort: '',
   thinkingInterface: 'text',
+  wakeIntervalMinutes: 30,
 };
+
+const WAKE_INTERVAL_OPTIONS = [
+  [5, 'Every 5 minutes'],
+  [15, 'Every 15 minutes'],
+  [30, 'Every 30 minutes'],
+  [60, 'Every hour'],
+  [120, 'Every 2 hours'],
+  [240, 'Every 4 hours'],
+  [480, 'Every 8 hours'],
+  [1_440, 'Every day'],
+  [10_080, 'Every week'],
+];
 
 const normalizeProfile = (profile) => ({
   ...DEFAULT_PROFILE,
@@ -28,18 +44,33 @@ export default function PersistentMindProfileControls({
   onSavingChange,
 }) {
   const enabledId = useId();
+  const wakeIntervalId = useId();
   const {
     providers,
     availableModels,
     setSelectedProviderId,
     setSelectedModel,
   } = useProviderModels({ allowDefault: true, withEffort: true, silent: true });
+  const {
+    capabilitiesByBackend,
+    recommendations,
+    loading: localModelsLoading,
+  } = useLocalModels();
   const [draft, setDraft] = useState(() => normalizeProfile(profile));
   const [saving, setSaving] = useState(false);
   const draftRef = useRef(draft);
   const publishedProfileRef = useRef(draft);
   const pendingSavesRef = useRef(0);
   const selectedProvider = providers.find((provider) => provider.id === draft.providerId) || null;
+  // Persistent mind requires an explicit model pin. Keep the capability panel
+  // on the stored value instead of previewing the provider default, which could
+  // make an invalid/unpinned profile look runnable.
+  const capabilityModel = draft.model;
+  const capabilityInfo = modelCapabilityInfo(selectedProvider, capabilityModel, {
+    capabilitiesByBackend,
+    recommendations,
+    loading: localModelsLoading,
+  });
   const harness = selectedProvider?.type === 'api'
     ? { label: 'Direct API · recommended', tone: 'border-port-success/30 bg-port-success/10 text-port-success', detail: 'Best reliability for an always-on mind: structured HTTP, clean cancellation, and no terminal state. Ollama, llama.cpp, LM Studio, vLLM, and compatible cloud endpoints use this lane.' }
     : selectedProvider?.type === 'cli'
@@ -72,6 +103,7 @@ export default function PersistentMindProfileControls({
     profile?.model,
     profile?.effort,
     profile?.thinkingInterface,
+    profile?.wakeIntervalMinutes,
   ]);
 
   const save = async (patch) => {
@@ -150,6 +182,7 @@ export default function PersistentMindProfileControls({
         emptyProviderOption="Select an AI provider"
         emptyModelOption="Select a model"
         alwaysShowModel
+        highlightToolUse
         layout="stacked"
         label="AI provider"
         onProviderChange={(providerId) => {
@@ -162,6 +195,29 @@ export default function PersistentMindProfileControls({
           save({ model });
         }}
         onEffortChange={(effort) => save({ effort })}
+      />
+      <div>
+        <label htmlFor={wakeIntervalId} className="block text-sm font-medium text-port-text">Wake cadence</label>
+        <select
+          id={wakeIntervalId}
+          value={draft.wakeIntervalMinutes}
+          disabled={disabled || saving || !draft.enabled}
+          onChange={(event) => save({ wakeIntervalMinutes: Number(event.target.value) })}
+          className="mt-1 w-full rounded border border-port-border bg-port-bg px-3 py-2 text-sm text-port-text disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {!WAKE_INTERVAL_OPTIONS.some(([minutes]) => minutes === draft.wakeIntervalMinutes) && (
+            <option value={draft.wakeIntervalMinutes}>Every {draft.wakeIntervalMinutes} minutes</option>
+          )}
+          {WAKE_INTERVAL_OPTIONS.map(([minutes, label]) => <option key={minutes} value={minutes}>{label}</option>)}
+        </select>
+        <p className="mt-1 text-xs text-port-text-muted">
+          Messages wake the mind immediately. This is the maximum quiet time between self-directed thoughts; the mind can ask to wake sooner, and shorter intervals use the selected provider more often.
+        </p>
+      </div>
+      <ModelCapabilitySummary
+        provider={selectedProvider}
+        model={capabilityModel}
+        {...capabilityInfo}
       />
       {harness && (
         <div className={`rounded border px-3 py-2 text-xs ${harness.tone}`}>

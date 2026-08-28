@@ -42,6 +42,22 @@ export const INSTANCE_FEATURES = Object.freeze([
     description: 'Get Stuff Done project planning and progress tracking for managed apps.',
     defaultEnabled: true,
   }),
+  Object.freeze({
+    id: 'openclaw',
+    label: 'OpenClaw',
+    description: 'Operator chat with a configured OpenClaw runtime.',
+    // Preserve the existing behavior for installs that already configured
+    // OpenClaw; an explicit Settings > Features toggle remains authoritative.
+    defaultEnabled: true,
+  }),
+  Object.freeze({
+    id: 'health',
+    label: 'Health tracking',
+    description: 'Personal health tracking, MeatSpace records, and MortalLoom iCloud sync.',
+    // Health and MortalLoom were previously always visible. Keep existing
+    // installs on that behavior until the user explicitly changes the flag.
+    defaultEnabled: true,
+  }),
 ]);
 
 export const INSTANCE_FEATURE_IDS = Object.freeze(INSTANCE_FEATURES.map((feature) => feature.id));

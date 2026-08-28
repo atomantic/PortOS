@@ -25,6 +25,7 @@ export {
 export {
   branchNode,
   buildCanonDigest,
+  feedbackEpisode,
   mapGeneratedGraph,
   playTurn,
   publicNode,

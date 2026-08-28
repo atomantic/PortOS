@@ -675,7 +675,7 @@ async function worktreeAgeMs(worktreePath) {
  * always-protected set. Effectful (git + gh).
  *
  * @param {string} repoPath
- * @param {{ defaultBranch:string, activeAgentIds?:Set<string>, remoteHeads?:Map<string,string>|null, hasOrigin?:boolean }} ctx
+ * @param {{ defaultBranch:string, activeAgentIds?:Set<string>, remoteHeads?:Map<string,string>|null, hasOrigin?:boolean, origin?:object|null }} ctx
  *   `activeAgentIds` distinguishes a live agent's worktree from an abandoned one (see
  *   `isAbandonedAgentWorktree`); omitting it leaves every agent worktree protected.
  *   `remoteHeads` is `listRemoteHeads`' answer when the caller already has it;
@@ -688,7 +688,7 @@ async function worktreeAgeMs(worktreePath) {
  *   { branch, tip, hasUpstream, hasOrigin, tracking, upstreamGone, isMerged, hasWorktree, worktreePath,
  *     worktreeDirty, dirtyPaths, behind, ahead, collisionPaths, abandonedAgentWorktree, openPr }
  */
-export async function gatherBranchState(repoPath, { defaultBranch, activeAgentIds = null, remoteHeads: providedRemoteHeads, hasOrigin: providedHasOrigin } = {}) {
+export async function gatherBranchState(repoPath, { defaultBranch, activeAgentIds = null, remoteHeads: providedRemoteHeads, hasOrigin: providedHasOrigin, origin: providedOrigin } = {}) {
   const protectedSet = new Set([...PROTECTED_BRANCHES, defaultBranch]);
   // Read origin ONCE and use it for both facts below — `hasOrigin` (the gate on
   // classifyBranch's ahead-based NEEDS_PR arm, so an origin-less repo's local work
@@ -696,7 +696,9 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
   // land) and the PR query's host-qualified repo selector. Skipped entirely when
   // the caller already vouched for `hasOrigin`, in which case getOpenPrsByHead
   // resolves origin itself as it always has.
-  const origin = providedHasOrigin === undefined
+  const origin = providedOrigin !== undefined
+    ? providedOrigin
+    : providedHasOrigin === undefined
     ? await getOriginInfo(repoPath).catch(() => null)
     : undefined;
   const hasOrigin = providedHasOrigin === undefined
@@ -975,7 +977,7 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapRem
   // per cycle is the cost of each destructive step reading the remote itself.
   const remoteHeads = origin?.hasOrigin ? await listRemoteHeads(repoPath) : null;
   const inputs = await gatherBranchState(repoPath, {
-    defaultBranch, activeAgentIds, remoteHeads, hasOrigin: Boolean(origin?.hasOrigin)
+    defaultBranch, activeAgentIds, remoteHeads, hasOrigin: Boolean(origin?.hasOrigin), origin
   });
   // A gh failure AFTER a passing probe (a blip mid-cycle, or an unparseable
   // page) is still "we could not ask" — surface it so the caller retries next

@@ -86,6 +86,91 @@ describe('TaskItem task source', () => {
     ));
   });
 
+  it('shows and persists the selected thinking effort for an effort-capable provider', async () => {
+    const effortTask = {
+      ...task,
+      metadata: { ...task.metadata, effort: 'medium' },
+    };
+    render(<TaskItem task={effortTask} isSystem onRefresh={vi.fn()} providers={providers} />);
+
+    expect(screen.getByText('medium effort')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+
+    const effortSelect = screen.getByRole('combobox', { name: 'Thinking effort' });
+    expect(effortSelect).toHaveValue('medium');
+    fireEvent.change(effortSelect, { target: { value: 'xhigh' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(api.updateCosTask).toHaveBeenCalledWith(
+      'sys-model-edit',
+      expect.objectContaining({
+        provider: 'codex-tui',
+        model: 'gpt-5.6-terra',
+        effort: 'xhigh',
+        type: 'internal',
+      }),
+      { silent: true },
+    ));
+  });
+
+  it('clears the model and effort when the provider changes', async () => {
+    const effortTask = {
+      ...task,
+      metadata: { ...task.metadata, effort: 'high' },
+    };
+    render(<TaskItem task={effortTask} isSystem onRefresh={vi.fn()} providers={providers} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Provider' }), { target: { value: '' } });
+    expect(screen.queryByRole('combobox', { name: 'Thinking effort' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(api.updateCosTask).toHaveBeenCalledWith(
+      'sys-model-edit',
+      expect.objectContaining({ provider: '', model: '', effort: '', type: 'internal' }),
+      { silent: true },
+    ));
+  });
+
+  it('preserves effort encoded in a legacy Antigravity model pin', async () => {
+    const legacyTask = {
+      ...task,
+      metadata: {
+        provider: 'antigravity-tui',
+        model: 'gemini-3.6-flash-high',
+      },
+    };
+    const antigravityProviders = [{
+      id: 'antigravity-tui',
+      name: 'Antigravity TUI',
+      enabled: true,
+      models: ['gemini-3.6-flash-low', 'gemini-3.6-flash-medium', 'gemini-3.6-flash-high'],
+    }];
+    render(<TaskItem task={legacyTask} isSystem onRefresh={vi.fn()} providers={antigravityProviders} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    expect(screen.getByRole('combobox', { name: 'Model' })).toHaveValue('gemini-3.6-flash');
+    expect(screen.getByRole('combobox', { name: 'Thinking effort' })).toHaveValue('high');
+
+    // Normalizing the two controls is not itself an edit, so Cancel stays
+    // immediate instead of asking the user to discard a change they never made.
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('group', { name: 'Confirm discard task edits' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.updateCosTask).toHaveBeenCalledWith(
+      'sys-model-edit',
+      expect.objectContaining({
+        provider: 'antigravity-tui',
+        model: 'gemini-3.6-flash',
+        effort: 'high',
+        type: 'internal',
+      }),
+      { silent: true },
+    ));
+  });
+
   it('updates an approval-gated system task in the internal queue when changing status', async () => {
     render(<TaskItem task={{ ...task, approvalRequired: true }} isSystem onRefresh={vi.fn()} providers={providers} />);
 

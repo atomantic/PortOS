@@ -25,6 +25,7 @@ import { isClaudeCommand, isOpencodeCommand } from '../lib/providerModels.js';
 // different tool-call counts for the same run.
 import { summarizeOpenCodeEvents } from '../lib/opencodeStream.js';
 import { getProviderById } from './providers.js';
+import { ensureProviderReadyForExecution } from './providerExecutionReadiness.js';
 import { executeTuiRun } from './tuiPromptRunner.js';
 import { getRunsPath } from './runner.js';
 
@@ -124,6 +125,30 @@ export async function runOpenCodeAgentBenchmark({ backend, modelId, timeoutMs = 
   const startedAt = Date.now();
   const benchmarkFilePath = join(scratchDir, 'PORTOS_AGENT_BENCHMARK.txt');
   try {
+    // This benchmark uses the direct PTY runner instead of
+    // runPromptThroughProvider, so wake a stopped local daemon before spawning
+    // OpenCode. MTPLX releases its checkpoint after the idle window.
+    const ready = await ensureProviderReadyForExecution(provider);
+    if (!ready.success) {
+      return {
+        backend,
+        modelId,
+        providerId: target.providerId,
+        providerLabel: target.label,
+        measurementMode: 'pty-tui',
+        completed: false,
+        elapsedMs: Math.max(0, Date.now() - startedAt),
+        assistantChars: null,
+        outputTokens: null,
+        toolCalls: null,
+        taskCharsPerSecond: null,
+        taskTokensPerSecond: null,
+        exitCode: null,
+        timedOut: false,
+        error: ready.error || `${target.label} is not ready`,
+      };
+    }
+
     // The one-shot TUI runner owns PTY startup, prompt paste, trust dialogs,
     // response-file completion, cancellation and run-record cleanup semantics.
     // Clone only the model pin: the provider's endpoint, env and permissions
@@ -137,6 +162,13 @@ export async function runOpenCodeAgentBenchmark({ backend, modelId, timeoutMs = 
         timeout: timeoutMs,
         label: `local-model-benchmark:${backend}`,
         guard: true,
+        // This run is a PROBE — measuring whether a local model can drive an
+        // agentic task is the whole point, so "it couldn't" is the result, and
+        // it is already reported in `error` below. Left reporting, every failed
+        // benchmark also queued a CoS "Investigate AI provider failure" task
+        // against a provider nobody claimed was healthy — and pointed it at a
+        // run record this function's `finally` had already deleted.
+        reportFailure: false,
         onComplete: resolve,
       }).catch((err) => resolve({ success: false, exitCode: 1, error: err?.message || 'OpenCode TUI failed' }));
     });

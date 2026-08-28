@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import * as api from '../services/api';
 import { MAX_TAGS, MAX_TAG_LENGTH } from '../components/goals/goalConstants';
 
@@ -6,20 +6,28 @@ import { MAX_TAGS, MAX_TAG_LENGTH } from '../components/goals/goalConstants';
 // thin composition shell; behavior is identical to the prior inline logic.
 export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
   const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({});
   const [tagInput, setTagInput] = useState('');
   const [newMilestone, setNewMilestone] = useState({ title: '', targetDate: '' });
+  const [milestoneSubmitting, setMilestoneSubmitting] = useState(false);
+  const milestoneSubmittingRef = useRef(false);
+  const [milestoneActions, setMilestoneActions] = useState(() => new Set());
   const [activities, setActivities] = useState([]);
   const [selectedActivity, setSelectedActivity] = useState('');
   const [showProgressForm, setShowProgressForm] = useState(false);
   const todayISO = new Date().toISOString().slice(0, 10);
   const [progressForm, setProgressForm] = useState({ date: todayISO, note: '', durationMinutes: '' });
+  const [progressSubmitting, setProgressSubmitting] = useState(false);
+  const progressSubmittingRef = useRef(false);
   const [subcalendars, setSubcalendars] = useState([]);
   const [selectedCalendar, setSelectedCalendar] = useState('');
   const [calendarMatchPattern, setCalendarMatchPattern] = useState('');
   const [newTodoTitle, setNewTodoTitle] = useState('');
   const [newTodoPriority, setNewTodoPriority] = useState('medium');
   const [newTodoEstimate, setNewTodoEstimate] = useState('');
+  const [todoSubmitting, setTodoSubmitting] = useState(false);
+  const todoSubmittingRef = useRef(false);
   // Plan & scheduling state
   const [planOpen, setPlanOpen] = useState(false);
   const [generatingPhases, setGeneratingPhases] = useState(false);
@@ -68,6 +76,7 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
   };
 
   const saveEdit = async () => {
+    if (saving) return;
     // featureAreas handling (issue #2679):
     //  - When the user did NOT touch the selector, OMIT featureAreas from the
     //    PATCH. The whole editor sends a startEdit snapshot, so re-sending an
@@ -96,16 +105,35 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
     if (featureAreasChanged) {
       payload.featureAreas = current;
     }
-    await api.updateGoal(goal.id, payload);
+    setSaving(true);
+    try {
+      await api.updateGoal(goal.id, payload);
+    } catch {
+      return;
+    } finally {
+      setSaving(false);
+    }
     setEditing(false);
     onRefresh();
   };
 
+  // `try/catch/finally` rather than the `.catch(() => null)` used before, for the
+  // same reason as runSchedulingAction below: a bare `.catch` only covers a
+  // rejected promise, so a call that threw before returning one would skip the
+  // reset and latch the button on "Generating..." until a full page reload. No
+  // custom toast on purpose — `request()` already toasts the failure. The stale
+  // proposal is cleared up front so a failed regenerate can't read as "generation
+  // succeeded and returned the same plan again".
   const handleGeneratePhases = async () => {
     setGeneratingPhases(true);
-    const phases = await api.generateGoalPhases(goal.id).catch(() => null);
-    setGeneratingPhases(false);
-    if (phases) setProposedPhases(phases);
+    setProposedPhases(null);
+    try {
+      setProposedPhases(await api.generateGoalPhases(goal.id));
+    } catch {
+      // Deliberately swallowed — see the single-layer note above.
+    } finally {
+      setGeneratingPhases(false);
+    }
   };
 
   const handleAcceptPhases = async () => {
@@ -115,14 +143,21 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
     onRefresh();
   };
 
+  // Same single-layer error handling as handleGeneratePhases above.
   const handleDecompose = async () => {
     setDecomposing(true);
-    const milestones = await api.decomposeGoal(goal.id).catch(() => null);
-    setDecomposing(false);
-    // Stamp a stable client key so the reorderable/editable proposal list keys
-    // on identity, not array index (index keys mis-associate controlled-input
-    // state across a swap). `_key` is stripped by the accept Zod schema.
-    if (milestones) setProposedDecomposition(milestones.map((m, i) => ({ ...m, _key: `prop-${i}` })));
+    setProposedDecomposition(null);
+    try {
+      const milestones = await api.decomposeGoal(goal.id);
+      // Stamp a stable client key so the reorderable/editable proposal list keys
+      // on identity, not array index (index keys mis-associate controlled-input
+      // state across a swap). `_key` is stripped by the accept Zod schema.
+      setProposedDecomposition(milestones.map((m, i) => ({ ...m, _key: `prop-${i}` })));
+    } catch {
+      // Deliberately swallowed — see the single-layer note above.
+    } finally {
+      setDecomposing(false);
+    }
   };
 
   const handleAcceptDecomposition = async () => {
@@ -133,8 +168,21 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
   };
 
   const handleCompleteMilestoneTask = async (milestoneId, taskId) => {
-    await api.completeMilestoneTask(goal.id, milestoneId, taskId);
-    onRefresh();
+    const actionKey = `task:${milestoneId}:${taskId}`;
+    if (milestoneActions.has(actionKey)) return;
+    setMilestoneActions(prev => new Set(prev).add(actionKey));
+    try {
+      await api.completeMilestoneTask(goal.id, milestoneId, taskId);
+      onRefresh();
+    } catch {
+      // The request helper owns the toast; keep the task available for retry.
+    } finally {
+      setMilestoneActions(prev => {
+        const next = new Set(prev);
+        next.delete(actionKey);
+        return next;
+      });
+    }
   };
 
   // The response is the signal (issue #3518): a failed check-in used to expand the
@@ -201,18 +249,40 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
   };
 
   const handleAddMilestone = async () => {
-    if (!newMilestone.title.trim()) return;
-    await api.addGoalMilestone(goal.id, {
-      title: newMilestone.title,
-      ...(newMilestone.targetDate ? { targetDate: newMilestone.targetDate } : {})
-    });
-    setNewMilestone({ title: '', targetDate: '' });
-    onRefresh();
+    if (milestoneSubmittingRef.current || !newMilestone.title.trim()) return;
+    milestoneSubmittingRef.current = true;
+    setMilestoneSubmitting(true);
+    try {
+      await api.addGoalMilestone(goal.id, {
+        title: newMilestone.title,
+        ...(newMilestone.targetDate ? { targetDate: newMilestone.targetDate } : {})
+      });
+      setNewMilestone({ title: '', targetDate: '' });
+      onRefresh();
+    } catch {
+      // Keep the form intact so the user can retry. The request helper owns the toast.
+    } finally {
+      milestoneSubmittingRef.current = false;
+      setMilestoneSubmitting(false);
+    }
   };
 
   const handleCompleteMilestone = async (milestoneId) => {
-    await api.completeGoalMilestone(goal.id, milestoneId);
-    onRefresh();
+    const actionKey = `milestone:${milestoneId}`;
+    if (milestoneActions.has(actionKey)) return;
+    setMilestoneActions(prev => new Set(prev).add(actionKey));
+    try {
+      await api.completeGoalMilestone(goal.id, milestoneId);
+      onRefresh();
+    } catch {
+      // The request helper owns the toast; keep the milestone available for retry.
+    } finally {
+      setMilestoneActions(prev => {
+        const next = new Set(prev);
+        next.delete(actionKey);
+        return next;
+      });
+    }
   };
 
   const handleLinkActivity = async () => {
@@ -223,15 +293,24 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
   };
 
   const handleAddProgress = async () => {
-    if (!progressForm.note.trim() || !progressForm.date) return;
-    await api.addGoalProgress(goal.id, {
-      date: progressForm.date,
-      note: progressForm.note,
-      ...(progressForm.durationMinutes ? { durationMinutes: parseInt(progressForm.durationMinutes, 10) } : {})
-    });
-    setProgressForm({ date: todayISO, note: '', durationMinutes: '' });
-    setShowProgressForm(false);
-    onRefresh();
+    if (progressSubmittingRef.current || !progressForm.note.trim() || !progressForm.date) return;
+    progressSubmittingRef.current = true;
+    setProgressSubmitting(true);
+    try {
+      await api.addGoalProgress(goal.id, {
+        date: progressForm.date,
+        note: progressForm.note,
+        ...(progressForm.durationMinutes ? { durationMinutes: parseInt(progressForm.durationMinutes, 10) } : {})
+      });
+      setProgressForm({ date: todayISO, note: '', durationMinutes: '' });
+      setShowProgressForm(false);
+      onRefresh();
+    } catch {
+      // Keep the form intact so the user can retry. The request helper owns the toast.
+    } finally {
+      progressSubmittingRef.current = false;
+      setProgressSubmitting(false);
+    }
   };
 
   const resetProgressForm = () => {
@@ -286,16 +365,25 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
   };
 
   const handleAddTodo = async () => {
-    if (!newTodoTitle.trim()) return;
-    await api.addGoalTodo(goal.id, {
-      title: newTodoTitle,
-      priority: newTodoPriority,
-      ...(newTodoEstimate ? { estimateMinutes: parseInt(newTodoEstimate, 10) } : {})
-    });
-    setNewTodoTitle('');
-    setNewTodoPriority('medium');
-    setNewTodoEstimate('');
-    onRefresh();
+    if (todoSubmittingRef.current || !newTodoTitle.trim()) return;
+    todoSubmittingRef.current = true;
+    setTodoSubmitting(true);
+    try {
+      await api.addGoalTodo(goal.id, {
+        title: newTodoTitle,
+        priority: newTodoPriority,
+        ...(newTodoEstimate ? { estimateMinutes: parseInt(newTodoEstimate, 10) } : {})
+      });
+      setNewTodoTitle('');
+      setNewTodoPriority('medium');
+      setNewTodoEstimate('');
+      onRefresh();
+    } catch {
+      // Keep the form intact so the user can retry. The request helper owns the toast.
+    } finally {
+      todoSubmittingRef.current = false;
+      setTodoSubmitting(false);
+    }
   };
 
   const handleToggleTodo = async (todo) => {
@@ -350,20 +438,23 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
   };
 
   return {
-    editing, setEditing,
+    editing, setEditing, saving,
     form, setForm,
     tagInput, setTagInput,
     newMilestone, setNewMilestone,
+    milestoneSubmitting, milestoneActions,
     activities,
     selectedActivity, setSelectedActivity,
     showProgressForm, setShowProgressForm,
     progressForm, setProgressForm,
+    progressSubmitting,
     subcalendars,
     selectedCalendar, setSelectedCalendar,
     calendarMatchPattern, setCalendarMatchPattern,
     newTodoTitle, setNewTodoTitle,
     newTodoPriority, setNewTodoPriority,
     newTodoEstimate, setNewTodoEstimate,
+    todoSubmitting,
     planOpen, setPlanOpen,
     generatingPhases,
     proposedPhases, setProposedPhases,

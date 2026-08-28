@@ -73,6 +73,7 @@ describe('runPreRouteSequence — pre-route boot order', () => {
     const { step } = recorder;
     return {
       applyDataMigrations: step('applyDataMigrations', () => Promise.resolve()),
+      loadUsage: step('loadUsage', () => Promise.resolve()),
       verifyCollections: step('verifyCollections', () => Promise.resolve()),
       createToolkit: step('createToolkit', () => ({ id: 'toolkit' })),
       registerToolkitShims: step('registerToolkitShims'),
@@ -91,6 +92,7 @@ describe('runPreRouteSequence — pre-route boot order', () => {
     await runPreRouteSequence(buildDeps(recorder));
     expect(recorder.calls).toEqual([
       'applyDataMigrations',
+      'loadUsage',
       'verifyCollections',
       'createToolkit',
       'registerToolkitShims',
@@ -132,7 +134,22 @@ describe('runPreRouteSequence — pre-route boot order', () => {
     expect(recorder.calls).toEqual(['applyDataMigrations']);
     gate.resolve();
     await done;
+    expect(recorder.calls.indexOf('loadUsage')).toBeGreaterThan(recorder.calls.indexOf('applyDataMigrations'));
     expect(recorder.calls).toContain('createToolkit');
+  });
+
+  it('awaits usage loading after migrations before continuing startup', async () => {
+    const recorder = createRecorder();
+    const gate = deferred();
+    const deps = buildDeps(recorder, {
+      loadUsage: recorder.step('loadUsage', () => gate.promise)
+    });
+    const done = runPreRouteSequence(deps);
+    await flush();
+    expect(recorder.calls).toEqual(['applyDataMigrations', 'loadUsage']);
+    gate.resolve();
+    await done;
+    expect(recorder.calls).toContain('verifyCollections');
   });
 
   it('awaits the provider warm before registering runners', async () => {

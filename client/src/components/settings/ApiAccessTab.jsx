@@ -1,46 +1,35 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Bot, Globe, Lock, Unlock, Copy, RefreshCw } from 'lucide-react';
+import { Link } from 'react-router';
+import { Bot, Globe, Lock, Unlock, Copy, RefreshCw, ExternalLink } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
-import { getSettings, updateSettings, getOpenApiSpec } from '../../services/apiSystem';
+import { getApiCatalog, getSettings, updateSettings, getOpenApiSpec } from '../../services/apiSystem';
 import { copyToClipboard } from '../../lib/clipboard';
 
-// Mirror of server/lib/apiRegistry.js — the client can't import the server
-// module, so the display metadata is duplicated here. The server stays the
-// source of truth for gating; this only drives the UI cards. The OpenAPI spec
-// (fetched below) is what actually reflects which paths exist per API.
-const API_CARDS = [
-  {
-    id: 'voice',
-    label: 'Voice / TTS',
-    description: 'Text-to-speech synthesis and voice enumeration (Kokoro, Piper).',
-    publicBase: '/api/voice/public',
-    exampleCurl: (base) =>
-      `curl -X POST ${base}/api/voice/public/synthesize \\\n` +
-      `  -H 'content-type: application/json' \\\n` +
-      `  -d '{"text":"Hello from PortOS","engine":"kokoro"}' \\\n` +
-      `  --output speech.wav`,
-  },
-  {
-    id: 'sdapi',
-    label: 'Image Gen (A1111-compatible)',
-    description: 'AUTOMATIC1111-compatible txt2img + model/sampler catalog. Also requires the "Expose A1111 API" toggle under Settings → Image Gen.',
-    publicBase: '/sdapi/v1',
-    exampleCurl: (base) =>
-      `curl -X POST ${base}/sdapi/v1/txt2img \\\n` +
-      `  -H 'content-type: application/json' \\\n` +
-      `  -d '{"prompt":"a neon city","steps":20}'`,
-  },
-];
-
 const DEFAULT_ACCESS = { exposed: false, requireAuth: false };
-const DEFAULT_AGENT_CONTEXT = { enabled: false, profile: 'metadata', scopes: ['navigation', 'workspaces'] };
+const DEFAULT_AGENT_CONTEXT = {
+  enabled: false,
+  profile: 'metadata',
+  scopes: ['navigation', 'workspaces'],
+  actions: { readPortos: false, writePortos: false },
+};
 const AGENT_CONTEXT_SCOPES = [
   { id: 'navigation', label: 'Navigation', hint: 'PortOS page labels, aliases, and paths.' },
   { id: 'workspaces', label: 'Workspaces', hint: 'App presence and task counts; never repository paths or branches.' },
   { id: 'brain', label: 'Brain', hint: 'Searchable Brain records; metadata-only unless summary mode is selected.' },
   { id: 'identity', label: 'Identity export', hint: 'Section presence only; never raw identity records or Privacy Vault data.' },
 ];
+
+const exampleCurl = (card, baseUrl) => {
+  const example = card.example || {};
+  const lines = [`curl -X ${example.method || 'GET'} ${baseUrl}${example.path || card.publicBase}`];
+  if (example.body) {
+    lines.push("  -H 'content-type: application/json'");
+    lines.push(`  -d '${JSON.stringify(example.body)}'`);
+  }
+  if (example.output) lines.push(`  --output ${example.output}`);
+  return lines.join(' \\\n');
+};
 
 const Toggle = ({ id, checked, onChange, label, hint, disabled }) => (
   <div className={`flex items-start gap-3 ${disabled ? 'opacity-50' : ''}`}>
@@ -66,6 +55,8 @@ export function ApiAccessTab() {
   const [access, setAccess] = useState({});
   const [agentContext, setAgentContext] = useState(DEFAULT_AGENT_CONTEXT);
   const [spec, setSpec] = useState(null);
+  const [apiCards, setApiCards] = useState(null);
+  const [apiCatalogError, setApiCatalogError] = useState('');
 
   // window.location.origin is the tailnet host the user is browsing from, so
   // the example curls are copy-pasteable from this machine.
@@ -77,6 +68,13 @@ export function ApiAccessTab() {
       .catch(() => setSpec(null));
   }, []);
 
+  const loadApiCards = useCallback(() => {
+    setApiCatalogError('');
+    getApiCatalog({ silent: true })
+      .then((catalog) => setApiCards(catalog.externallyExposableApis || []))
+      .catch((error) => setApiCatalogError(error?.message || 'API catalog unavailable'));
+  }, []);
+
   useEffect(() => {
     getSettings({ silent: true })
       .then((s) => {
@@ -85,12 +83,14 @@ export function ApiAccessTab() {
           ...DEFAULT_AGENT_CONTEXT,
           ...(s?.agentContext || {}),
           scopes: s?.agentContext?.scopes?.length ? s.agentContext.scopes : DEFAULT_AGENT_CONTEXT.scopes,
+          actions: { ...DEFAULT_AGENT_CONTEXT.actions, ...(s?.agentContext?.actions || {}) },
         });
       })
       .catch(() => toast.error('Failed to load API access settings'))
       .finally(() => setLoading(false));
+    loadApiCards();
     loadSpec();
-  }, [loadSpec]);
+  }, [loadApiCards, loadSpec]);
 
   const entryFor = (id) => ({ ...DEFAULT_ACCESS, ...(access[id] || {}) });
 
@@ -137,6 +137,10 @@ export function ApiAccessTab() {
     if (scopes.length > 0) patchAgentContext({ scopes });
   };
 
+  const patchAgentContextAction = (action, checked) => patchAgentContext({
+    actions: { ...agentContext.actions, [action]: checked },
+  });
+
   if (loading) return <BrailleSpinner text="Loading API access settings" />;
 
   return (
@@ -154,16 +158,28 @@ export function ApiAccessTab() {
           password while leaving the rest open. Only read/synthesis endpoints are public;
           config and control endpoints always require the password.
         </p>
+        <Link to="/api-reference/catalog" className="inline-flex items-center gap-1 text-xs font-medium text-port-accent hover:underline">
+          Browse all APIs <ExternalLink size={11} />
+        </Link>
       </div>
 
-      {API_CARDS.map((card) => {
-        const entry = entryFor(card.id);
+      {apiCatalogError && (
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-port-error/40 bg-port-error/5 p-4 text-sm text-port-error">
+          <span>API exposure controls are unavailable: {apiCatalogError}</span>
+          <button type="button" onClick={loadApiCards} className="rounded border border-port-error/40 px-3 py-1.5 text-xs hover:bg-port-error/10">Retry</button>
+        </div>
+      )}
+      {apiCards === null && !apiCatalogError && <BrailleSpinner text="Loading API catalog" />}
+
+      {(apiCards || []).map((card) => {
+        const settingsKey = card.settingsKey || card.id;
+        const entry = entryFor(settingsKey);
         // Disable EVERY card's toggles while ANY save is in flight, not just
         // this card's. Each PUT sends a full apiAccess snapshot and the server
         // replaces the whole key, so two overlapping saves could let the older
         // one land last and clobber the newer toggle. Serializing to one save
         // at a time removes the race. `cardBusy` still drives this card's spinner.
-        const cardBusy = savingId === card.id;
+        const cardBusy = savingId === settingsKey;
         const busy = savingId !== null;
         return (
           <div key={card.id} className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-4">
@@ -189,7 +205,7 @@ export function ApiAccessTab() {
                 id={`api-${card.id}-exposed`}
                 checked={entry.exposed}
                 disabled={busy}
-                onChange={(v) => patchAccess(card.id, { exposed: v })}
+                onChange={(v) => patchAccess(settingsKey, { exposed: v })}
                 label="Expose on the network"
                 hint="Off by default. Nothing is reachable until you turn this on."
               />
@@ -197,7 +213,7 @@ export function ApiAccessTab() {
                 id={`api-${card.id}-auth`}
                 checked={entry.requireAuth}
                 disabled={busy || !entry.exposed}
-                onChange={(v) => patchAccess(card.id, { requireAuth: v })}
+                onChange={(v) => patchAccess(settingsKey, { requireAuth: v })}
                 label="Require auth (password)"
                 hint="When off, this API is callable without the PortOS password."
               />
@@ -214,11 +230,11 @@ export function ApiAccessTab() {
               <summary className="cursor-pointer select-none">Example request</summary>
               <div className="mt-2 relative">
                 <pre className="bg-port-bg border border-port-border rounded-lg p-3 overflow-x-auto text-[11px] text-gray-300 whitespace-pre">
-{card.exampleCurl(baseUrl)}
+{exampleCurl(card, baseUrl)}
                 </pre>
                 <button
                   type="button"
-                  onClick={() => copyToClipboard(card.exampleCurl(baseUrl), 'Example copied')}
+                  onClick={() => copyToClipboard(exampleCurl(card, baseUrl), 'Example copied')}
                   className="absolute top-2 right-2 p-1.5 rounded bg-port-border hover:bg-port-border/70 text-white"
                   aria-label="Copy example request"
                   title="Copy example request"
@@ -236,15 +252,15 @@ export function ApiAccessTab() {
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-white">
               <Bot size={18} />
-              <h3 className="text-base font-semibold">Agent Context (MCP)</h3>
+              <h3 className="text-base font-semibold">Agent Tools (MCP)</h3>
               <span className={`text-xs ${agentContext.enabled ? 'text-port-success' : 'text-gray-500'}`}>
                 {agentContext.enabled ? 'local access enabled' : 'disabled'}
               </span>
             </div>
             <p className="text-xs text-gray-500 mt-1">
-              A read-only context surface for agents running on this machine. It accepts loopback
-              connections only, never tailnet or public traffic, and makes no LLM calls. PortOS
-              password authentication still applies when configured.
+              A governed context and semantic-action surface for CoS agents running on this machine.
+              It accepts loopback connections only, never tailnet or public traffic, and makes no LLM
+              calls by itself. Context and action grants are independently opt-in.
             </p>
           </div>
           {savingId === 'agent-context' && <BrailleSpinner />}
@@ -277,6 +293,31 @@ export function ApiAccessTab() {
               );
             })}
           </div>
+        </fieldset>
+
+        <fieldset className="space-y-2" disabled={savingId !== null}>
+          <legend className="text-xs font-medium text-gray-300 mb-2">Semantic action grants</legend>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Toggle
+              id="agent-context-action-read"
+              checked={agentContext.actions.readPortos}
+              disabled={savingId !== null}
+              onChange={(value) => patchAgentContextAction('readPortos', value)}
+              label="Allow semantic PortOS reads"
+              hint="Brain, goals, journal, calendar, health, feed, catalog, and runtime adapters."
+            />
+            <Toggle
+              id="agent-context-action-write"
+              checked={agentContext.actions.writePortos}
+              disabled={savingId !== null}
+              onChange={(value) => patchAgentContextAction('writePortos', value)}
+              label="Allow semantic PortOS updates"
+              hint="Typed Brain, journal, goals, health-log, and feed-state actions; no raw routes or shell."
+            />
+          </div>
+          <p className="text-xs text-gray-500">
+            Both default off. MCP advertises only granted actions, with schemas generated from the same contracts used at runtime.
+          </p>
         </fieldset>
 
         <div className="space-y-1">
@@ -322,6 +363,9 @@ export function ApiAccessTab() {
           Machine-readable description of every exposed API. Served at{' '}
           <code className="text-port-accent">/api/api-docs/openapi.json</code>.
         </p>
+        <Link to="/api-reference/rest" className="inline-flex items-center gap-1 text-xs text-port-accent hover:underline">
+          Open rendered reference <ExternalLink size={11} />
+        </Link>
         {spec ? (
           <div className="text-xs text-gray-400">
             <span className="text-port-success">{Object.keys(spec.paths || {}).length}</span> path(s) documented

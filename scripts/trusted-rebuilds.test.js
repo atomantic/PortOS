@@ -147,9 +147,14 @@ describe('trusted rebuild allowlist', () => {
   // rebuild — recorded here so the lockfile-derived check stays honest rather than
   // being loosened.
   const FSEVENTS_STALE_FLAG = ['fsevents'];
+  // Scalar's Vue 3 renderer brings in vue-demi. Its postinstall only rewrites
+  // the shipped compatibility files when the host uses Vue 2; PortOS uses Vue
+  // 3 and the package already ships in Vue 3 mode. Keep the hook blocked rather
+  // than expanding the lifecycle-script allowlist for a no-op.
+  const VUE_DEMI_VUE3_NOOP = ['vue-demi'];
   const DELIBERATELY_UNBUILT = {
     root: FSEVENTS_STALE_FLAG,
-    client: FSEVENTS_STALE_FLAG,
+    client: [...FSEVENTS_STALE_FLAG, ...VUE_DEMI_VUE3_NOOP],
     server: FSEVENTS_STALE_FLAG
   };
 

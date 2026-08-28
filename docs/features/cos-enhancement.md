@@ -109,6 +109,35 @@ Comprehensive upgrade from reactive task executor to proactive autonomous agent 
 3. **Self-Modification**: Full autonomy - COS can change its own base thinking model without user approval
 4. **Failure Investigation**: Unattended by default - an `[Auto] Investigate agent failure` task runs without approval, because an isolated agent failure is exactly the work CoS exists to diagnose for itself. Approval is reserved for a failure *loop*, where another unattended agent would only repeat what already didn't work: the same cause investigated again within 24h (`repeat-fingerprint`), or the circuit-breaker hour already one slot from its cap (`failure-storm`). The reason is stamped on the task as the producer-agnostic `metadata.approvalReason` (`investigation-loop:<signal>`), which the Tasks UI turns into a hint on the APPROVE button. See `resolveInvestigationApproval` in `server/services/agentErrorAnalysis.js`.
 
+## Persistent Mind task filing
+
+The Persistent Mind has one explicit, default-off typed action, `cos.create-task`.
+When the grant is enabled, each wake receives a bounded server-built catalog of
+runnable apps and enabled CLI/TUI coding providers. The catalog includes each
+provider's selectable models and effort levels, and marks apps whose effective
+work tracker supports the issue-only **Plan & File Issue** workflow.
+
+The mind may select the provider, model, effort, priority, delivery mode, and PR
+completion policy per request. Implementation mode requires one of
+`review-then-merge`, `merge-on-green`, or `leave-open`; plan-only mode is only
+valid for GitHub/GitLab apps and is normalized to the existing unattended
+`plan-task --yes` no-code/no-PR contract. The queue path revalidates every choice
+after inference, so stale prompts, disabled providers, invented model ids, and
+unsupported trackers fail closed.
+
+Task model selection can be restricted in Persistent Mind Tools with an exact
+provider/model allowlist. An empty list preserves the unrestricted catalog; a
+non-empty list is applied to both the model choices sent to the mind and the
+server-side queue admission check, which supports subscription-specific or
+local-only task lanes. A removed or malformed allowlist fails closed.
+
+`GET /api/cos/mind/tools` returns the authority inventory and, when task access is
+granted, the same redacted task catalog used in the mind prompt. This keeps the
+Mind Tools UI and the model-facing contract discoverable without granting the
+mind arbitrary shell, filesystem, or general API access. Broader PortOS APIs
+remain governed by their own authenticated route contracts and are not silently
+made callable by enabling task filing.
+
 ## Test Coverage
 
 | Test File | Module |

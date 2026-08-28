@@ -237,7 +237,7 @@ Everything you need to manage your dev environment without leaving the browser.
 - **Flows** — Rendered architecture/data-flow diagrams of how PortOS subsystems and integrations actually connect
 - **Video Downloader** — Pull clips from YouTube/X via `yt-dlp` into the media library
 - **Local LLM Playground** — Side-by-side comparison of local Ollama/LM Studio models with TTFT and tokens/sec
-- **API Access** — Public REST surface (OpenAPI/Swagger) for the TTS, image, and voice endpoints, with explicit auth gating
+- **API Explorer** — Searchable complete HTTP and Socket.IO inventories, rendered OpenAPI 3.0.3, AsyncAPI 3, and governed agent-tool contracts; external TTS/image exposure remains explicitly gated
 - **Templates** — Scaffold new apps from pre-built templates wired up to your AI providers
 - **Review Hub** — Single inbox for actionable items (CoS approvals, alerts, todos, briefings) across every PortOS subsystem
 
@@ -425,12 +425,15 @@ Full catalog (including design plans, ADRs, and research notes): [docs/README.md
 - [Voice Mode](./docs/features/voice.md) — local STT/TTS/LLM voice assistant setup
 - [Chief of Staff](./docs/features/chief-of-staff.md) — Autonomous agent orchestrator
 - [Operational Goals](./docs/GOALS_OPERATIONAL.md) — Runtime priorities the CoS reads when generating work
-- [Agent Context](./docs/features/agent-context.md) — Per-task execution context and history tracking
+- [Agent Tools (MCP)](./docs/features/agent-context.md) — Loopback-only bounded context plus independently granted semantic PortOS tools for local CoS agents
 - [Agent Skills](./docs/features/agent-skills.md) — Task-type-specific agent prompts
 - [Claude on Ollama](./docs/features/claude-ollama.md) — Run agent tasks on a local model
 - [CoS Agent Runner](./docs/features/cos-agent-runner.md) — Isolated agent process architecture
 - [CoS Enhancement](./docs/features/cos-enhancement.md) — Hybrid search, proactive execution, error recovery
 - [MTPLX](./docs/features/mtplx.md) — Native multi-token-prediction Qwen runtime on Apple Silicon, managed as a PM2 process from Models → LLMs
+- [DFlash 2 / DSpark](./docs/features/dflash2.md) — Speculative drafting acceleration for local llama-server
+- [vLLM RTX 3090](./docs/features/qwen38-rtx3090.md) — Docker compose setup for Qwen 27B on NVIDIA RTX 3090 GPUs
+- [SGLang Qwen](./docs/features/sglang-qwen38.md) — SGLang engine configuration for Hopper/Blackwell hardware
 - [Memory System](./docs/features/memory-system.md) — Semantic memory with vector search and importance decay
 - [Digital Twin](./docs/features/digital-twin.md) — Genome, chronotype, taste, and mortality-aware goals
 - [Identity System](./docs/features/identity-system.md) — Extended identity modeling (P1-P3)
@@ -445,8 +448,10 @@ Full catalog (including design plans, ADRs, and research notes): [docs/README.md
 - [Prompt Manager](./docs/features/prompt-manager.md) — Customizable AI prompt templates
 - [JIRA Sprint Manager](./docs/features/jira-sprint-manager.md) — Autonomous JIRA triage and implementation
 - [Writers Room](./docs/features/writers-room.md) — Prose-to-media writing environment with explicit AI passes
+- [FableLoom](./docs/features/fableloom.md) — Interactive branching narrative engine and graph reader
 - [Sprite Export Contract](./docs/features/sprite-export-contract.md) — What a published sprite atlas guarantees a consuming game
 - [Video Text Encoders](./docs/features/video-text-encoders.md) — Dual-encoder memory and clip conditioning for video models
+- [Video Speed Profiles](./docs/features/video-speed-profiles.md) — Fast sampling profiles and runtime acceleration for video models
 - [Music Renderer Benchmarks](./docs/features/music-renderer-benchmarks.md) — Benchmarking profiles and listening test evidence for local renderers
 - [OpenClaw](./docs/features/openclaw-operator-chat.md) — In-app operator-agent chat
 - [Stacker News](./docs/features/stacker-news.md) — Territory management and content stewardship

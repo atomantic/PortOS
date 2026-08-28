@@ -73,6 +73,7 @@ vi.mock('../services/brain.js', () => ({
   createBucket: vi.fn(),
   createBucketAppended: vi.fn(),
   updateBucket: vi.fn(),
+  reorderBuckets: vi.fn(),
   deleteBucket: vi.fn(),
   deleteBucketAndUnlinkChildren: vi.fn()
 }));
@@ -1450,19 +1451,23 @@ describe('Brain Routes', () => {
   });
 
   describe('POST /api/brain/buckets/reorder', () => {
-    it('persists order for each id in the given sequence', async () => {
+    it('persists order for all ids in one batch', async () => {
       const id3 = '33333333-3333-4333-8333-333333333333';
       const id1 = '11111111-1111-4111-8111-111111111111';
       const id2 = '22222222-2222-4222-8222-222222222222';
-      brainService.updateBucket.mockResolvedValue({});
+      brainService.reorderBuckets.mockResolvedValue([]);
       brainService.getBuckets.mockResolvedValue([]);
       const res = await request(app)
         .post('/api/brain/buckets/reorder')
         .send({ ids: [id3, id1, id2] });
       expect(res.status).toBe(200);
-      expect(brainService.updateBucket).toHaveBeenNthCalledWith(1, id3, { order: 0 });
-      expect(brainService.updateBucket).toHaveBeenNthCalledWith(2, id1, { order: 1 });
-      expect(brainService.updateBucket).toHaveBeenNthCalledWith(3, id2, { order: 2 });
+      expect(brainService.reorderBuckets).toHaveBeenCalledTimes(1);
+      expect(brainService.reorderBuckets).toHaveBeenCalledWith([
+        { id: id3, order: 0 },
+        { id: id1, order: 1 },
+        { id: id2, order: 2 },
+      ]);
+      expect(brainService.updateBucket).not.toHaveBeenCalled();
     });
   });
 

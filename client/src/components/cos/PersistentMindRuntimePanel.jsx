@@ -1,5 +1,5 @@
 import { Brain, Cpu, Gauge } from 'lucide-react';
-import { formatBytes } from '../../utils/formatters.js';
+import { formatBytes, timeUntil } from '../../utils/formatters.js';
 
 const number = (value) => Number.isFinite(value) ? value.toLocaleString() : '—';
 
@@ -15,9 +15,11 @@ const residencyLabel = (runtime) => {
 
 export function PersistentMindThoughtStatus({ state, model }) {
   const thinking = state?.status === 'thinking' && Boolean(state.activeTurnId);
+  const scheduled = state?.started && state?.nextWakeAt && ['idle', 'waiting'].includes(state.status);
   const label = thinking
     ? `Thinking${model ? ` with ${model}` : ''}`
-    : state?.status === 'waiting' ? 'Waiting for the next wake'
+    : scheduled ? `Waiting · next wake ${timeUntil(state.nextWakeAt)}`
+      : state?.status === 'waiting' ? 'Waiting for the next wake'
       : state?.status === 'paused' ? 'Mind paused'
         : state?.status === 'idle' ? 'Mind idle'
           : state?.status === 'disabled' ? 'Mind disabled'
@@ -52,16 +54,17 @@ export default function PersistentMindRuntimePanel({ runtime, error, loading, on
   const processMemory = runtime?.system?.process;
   const residency = runtime?.inference?.residency;
   const usagePercent = Number.isFinite(memory?.usagePercent) ? memory.usagePercent : null;
+  const ContextSurface = onOpenContext ? 'button' : 'div';
 
   return (
     <section aria-label="Persistent mind runtime" className="grid gap-3 md:grid-cols-3">
-      <button type="button" onClick={onOpenContext} className="rounded border border-port-border bg-port-card p-3 text-left hover:bg-port-border/20">
+      <ContextSurface {...(onOpenContext ? { type: 'button', onClick: onOpenContext } : {})} className={`rounded border border-port-border bg-port-card p-3 text-left ${onOpenContext ? 'hover:bg-port-border/20' : ''}`}>
         <span className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-port-accent"><Brain size={15} aria-hidden="true" /> Effective context</span>
         <span className="mt-2 block text-lg font-semibold text-port-text">~{number(context?.approximateTokens)} tokens</span>
         <span className="mt-1 block text-xs text-port-text-muted">
           {number(context?.chars)} / {number(context?.maxChars)} characters · {number(context?.memoryCount)} curated memories · summary {context?.summaryState || 'unknown'}
         </span>
-      </button>
+      </ContextSurface>
 
       <div className="rounded border border-port-border bg-port-card p-3">
         <span className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-port-accent"><Gauge size={15} aria-hidden="true" /> System memory</span>

@@ -215,18 +215,6 @@ const featureDirectory = (path) => {
   return null;
 };
 
-const siblingTestCandidates = (path) => {
-  const extMatch = path.match(/(\.[cm]?[jt]sx?)$/i);
-  if (!extMatch || isTestFile(path)) return [];
-  const stem = path.slice(0, -extMatch[1].length);
-  return [
-    `${stem}.test${extMatch[1]}`,
-    `${stem}.spec${extMatch[1]}`,
-    `${stem}.test.js`,
-    `${stem}.test.jsx`,
-  ];
-};
-
 const structuralTestsFor = (changedFiles, trackedSet) => {
   const selected = [];
   const add = (path) => {
@@ -281,7 +269,19 @@ export const splitByRunner = (paths) => ({
 });
 const windowsContractTests = (trackedSet) => WINDOWS_CONTRACT_TESTS.filter((path) => trackedSet.has(path));
 
-const skippedRunner = () => ({ mode: 'skip', files: [] });
+const skippedRunner = () => ({ mode: 'skip', files: [], sources: [] });
+
+// Catalog barrels are validated by structural export guards. Feeding one to
+// Vitest's import graph selects nearly every consumer even though the barrel
+// contains no behavior; PR #5296 changed server/lib/index.js and consequently
+// selected 1,244 files / 27,491 tests. Behavioral source files in the same diff
+// still drive related-test selection normally.
+const isStructuralBarrel = (path) => [
+  'server/lib/index.js',
+  'client/src/lib/index.js',
+  'client/src/hooks/index.js',
+  'client/src/utils/index.js',
+].includes(path);
 
 /**
  * Build a conservative PR test plan.
@@ -304,8 +304,8 @@ export function buildCiTestPlan(changedFiles, {
       full: true,
       reason: forceFullReason,
       changedFiles: changed,
-      server: { mode: 'full', files: [] },
-      client: { mode: 'full', files: [] },
+      server: { mode: 'full', files: [], sources: [] },
+      client: { mode: 'full', files: [], sources: [] },
       db: true,
       lint: { mode: 'full', files: [] },
       build: true,
@@ -313,6 +313,7 @@ export function buildCiTestPlan(changedFiles, {
       windows: true,
       windowsMode: 'full',
       windowsFiles: [],
+      windowsSources: [],
     };
   }
 
@@ -335,8 +336,8 @@ export function buildCiTestPlan(changedFiles, {
       full: false,
       reason: changed.length ? 'documentation-only change' : 'no changed files',
       changedFiles: changed,
-      server: alwaysRunServer.length > 0 ? { mode: 'files', files: alwaysRunServer } : skippedRunner(),
-      client: alwaysRunClient.length > 0 ? { mode: 'files', files: alwaysRunClient } : skippedRunner(),
+      server: alwaysRunServer.length > 0 ? { mode: 'files', files: alwaysRunServer, sources: [] } : skippedRunner(),
+      client: alwaysRunClient.length > 0 ? { mode: 'files', files: alwaysRunClient, sources: [] } : skippedRunner(),
       db: false,
       lint: { mode: 'skip', files: [] },
       build: false,
@@ -344,6 +345,7 @@ export function buildCiTestPlan(changedFiles, {
       windows: false,
       windowsMode: 'skip',
       windowsFiles: [],
+      windowsSources: [],
     };
   }
 
@@ -367,11 +369,17 @@ export function buildCiTestPlan(changedFiles, {
   if (unsupportedSources.length > 0) {
     return fullPlan(changed, `unmapped executable surface: ${unsupportedSources[0]}`);
   }
+  const deletedSources = sourceFiles.filter((path) => !trackedSet.has(path));
+  if (deletedSources.length > 0) {
+    // `vitest related` needs a real source path. A deleted module can still
+    // affect importers, so widening is safer than silently dropping its side of
+    // the graph.
+    return fullPlan(changed, `deleted executable source: ${deletedSources[0]}`);
+  }
   const features = uniqueSorted(sourceFiles.map(featureDirectory).filter(Boolean));
   const unscopedSources = sourceFiles.filter((path) => !featureDirectory(path));
   const selectedTests = [
     ...directTests,
-    ...sourceFiles.flatMap(siblingTestCandidates).filter((path) => trackedSet.has(path)),
     ...structuralTestsFor(changed, trackedSet),
     ...alwaysRun,
   ];
@@ -394,18 +402,34 @@ export function buildCiTestPlan(changedFiles, {
   const hasUnscopedServer = unscopedSources.some(isServerRunnerFile);
   const hasUnscopedClient = unscopedSources.some((path) => path.startsWith('client/'));
 
+  const serverSources = sourceFiles
+    .filter(isServerRunnerFile)
+    .filter((path) => !isStructuralBarrel(path));
+  const clientSources = sourceFiles
+    .filter((path) => path.startsWith('client/'))
+    .filter((path) => !isStructuralBarrel(path));
+
+  // Feature-directory plans already enumerate their boundary tests. Flat and
+  // shared modules use Vitest's import graph, except a barrel-only edit whose
+  // contract is completely covered by the structural export guard.
+  const serverMode = hasUnscopedServer && serverSources.length > 0 ? 'related' : 'files';
+  const clientMode = hasUnscopedClient && clientSources.length > 0 ? 'related' : 'files';
+
   const server = serverFiles.length > 0
-    ? { mode: hasUnscopedServer ? 'related' : 'files', files: serverFiles }
+    ? { mode: serverMode, files: serverFiles, sources: serverMode === 'related' ? serverSources : [] }
     : hasServerSource
-      ? { mode: 'related', files: [] }
+      ? { mode: serverSources.length > 0 ? 'related' : 'files', files: [], sources: serverSources }
       : skippedRunner();
   const client = clientFiles.length > 0
-    ? { mode: hasUnscopedClient ? 'related' : 'files', files: clientFiles }
+    ? { mode: clientMode, files: clientFiles, sources: clientMode === 'related' ? clientSources : [] }
     : hasClientSource
-      ? { mode: 'related', files: [] }
+      ? { mode: clientSources.length > 0 ? 'related' : 'files', files: [], sources: clientSources }
       : skippedRunner();
 
   const windows = executable.some((path) => WINDOWS_RISK_RULES.some((rule) => rule.test(path)));
+  const windowsMode = windows
+    ? (serverSources.length > 0 ? 'related' : 'files')
+    : 'skip';
 
   return {
     full: false,
@@ -425,8 +449,9 @@ export function buildCiTestPlan(changedFiles, {
     build: hasClientSource,
     smoke: hasServerSource,
     windows,
-    windowsMode: windows ? 'related' : 'skip',
+    windowsMode,
     windowsFiles: windows ? windowsContractTests(trackedSet) : [],
+    windowsSources: windowsMode === 'related' ? serverSources : [],
   };
 }
 
@@ -435,8 +460,8 @@ function fullPlan(changedFiles, reason) {
     full: true,
     reason,
     changedFiles,
-    server: { mode: 'full', files: [] },
-    client: { mode: 'full', files: [] },
+    server: { mode: 'full', files: [], sources: [] },
+    client: { mode: 'full', files: [], sources: [] },
     db: true,
     lint: { mode: 'full', files: [] },
     build: true,
@@ -444,6 +469,7 @@ function fullPlan(changedFiles, reason) {
     windows: true,
     windowsMode: 'full',
     windowsFiles: [],
+    windowsSources: [],
   };
 }
 
@@ -458,8 +484,10 @@ export function emitGitHubPlan(plan) {
     reason: plan.reason.replace(/[`<>\r\n]+/g, ' '),
     server_mode: plan.server.mode,
     server_files: JSON.stringify(plan.server.files),
+    server_sources: JSON.stringify(plan.server.sources),
     client_mode: plan.client.mode,
     client_files: JSON.stringify(plan.client.files),
+    client_sources: JSON.stringify(plan.client.sources),
     db: plan.db,
     lint_mode: plan.lint.mode,
     lint_files: JSON.stringify(plan.lint.files),
@@ -468,6 +496,7 @@ export function emitGitHubPlan(plan) {
     windows: plan.windows,
     windows_mode: plan.windowsMode,
     windows_files: JSON.stringify(plan.windowsFiles),
+    windows_sources: JSON.stringify(plan.windowsSources),
   };
 
   Object.entries(outputs).forEach(([name, value]) => writeStepOutput(name, value));

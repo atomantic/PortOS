@@ -96,6 +96,7 @@ import {
   finalizeAgent,
   PR_MISSING_CATEGORY,
   FORGE_UNREACHABLE_CATEGORY,
+  ISSUE_TRAILER_MISSING_CATEGORY,
 } from './agentFinalization.js';
 
 /**
@@ -129,8 +130,8 @@ beforeEach(() => {
   Object.assign(git, { branch: 'claim/issue-1', ahead: 3, hasOriginRef: true });
   execGitMock.mockImplementation(async (args) => routeGit(args));
   getDefaultBranchMock.mockResolvedValue('main');
-  findPullRequestForBranchMock.mockResolvedValue({ status: 'found', number: 7, url: 'https://example.com/pr/7' });
-  findMergeRequestForBranchMock.mockResolvedValue({ status: 'found', number: 12, url: 'https://example.com/mr/12' });
+  findPullRequestForBranchMock.mockResolvedValue({ status: 'found', number: 7, url: 'https://example.com/pr/7', body: 'Closes #1' });
+  findMergeRequestForBranchMock.mockResolvedValue({ status: 'found', number: 12, url: 'https://example.com/mr/12', body: 'Closes #1' });
   resolveForgeForRepoMock.mockResolvedValue({ cli: 'gh' });
 });
 
@@ -140,6 +141,43 @@ describe('verifyPrClaim (#3358)', () => {
     const verdict = await verifyPrClaim({ task: prTask(), workspacePath: '/w', success: true, prExpected: true });
     expect(verdict.ok).toBe(true);
     expect(findPullRequestForBranchMock).toHaveBeenCalledWith('claim/issue-1', { cwd: '/w', env: null });
+  });
+
+  it('fails claim branches with a dedicated category when the PR body lacks a closing trailer', async () => {
+    onBranch('claim/issue-1');
+    findPullRequestForBranchMock.mockResolvedValue({ status: 'found', number: 7, url: 'https://example.com/pr/7', body: 'Summary only' });
+    const verdict = await verifyPrClaim({ task: prTask(), workspacePath: '/w', success: true, prExpected: true });
+    expect(verdict).toMatchObject({ ok: false, category: ISSUE_TRAILER_MISSING_CATEGORY, branch: 'claim/issue-1' });
+    expect(verdict.message).toMatch(/issue #1/i);
+  });
+
+  it.each(['Closes #1', 'Fixes #1', 'Resolves #1'])('accepts a closing trailer: %s', async (body) => {
+    onBranch('claim/issue-1');
+    findPullRequestForBranchMock.mockResolvedValue({ status: 'found', number: 7, url: 'https://example.com/pr/7', body });
+    await expect(verifyPrClaim({ task: prTask(), workspacePath: '/w', success: true, prExpected: true }))
+      .resolves.toMatchObject({ ok: true, branch: 'claim/issue-1' });
+  });
+
+  it.each(['Refs #1', 'Part of #1'])('permits a partial-ship trailer with an advisory: %s', async (body) => {
+    onBranch('claim/issue-1');
+    findPullRequestForBranchMock.mockResolvedValue({ status: 'found', number: 7, url: 'https://example.com/pr/7', body });
+    await expect(verifyPrClaim({ task: prTask(), workspacePath: '/w', success: true, prExpected: true }))
+      .resolves.toMatchObject({ ok: true, branch: 'claim/issue-1', advisory: expect.stringMatching(/partially ships/i) });
+  });
+
+  it('skips trailer verification for a non-claim branch', async () => {
+    onBranch('feature/pr-body-verification');
+    findPullRequestForBranchMock.mockResolvedValue({ status: 'found', number: 7, url: 'https://example.com/pr/7', body: null });
+    await expect(verifyPrClaim({ task: prTask(), workspacePath: '/w', success: true, prExpected: true }))
+      .resolves.toMatchObject({ ok: true, branch: 'feature/pr-body-verification' });
+  });
+
+  it('is inconclusive rather than reporting a trailer miss when the PR body is unreadable', async () => {
+    onBranch('claim/issue-1');
+    findPullRequestForBranchMock.mockResolvedValue({ status: 'found', number: 7, url: 'https://example.com/pr/7', body: null });
+    const verdict = await verifyPrClaim({ task: prTask(), workspacePath: '/w', success: true, prExpected: true });
+    expect(verdict).toMatchObject({ ok: false, category: FORGE_UNREACHABLE_CATEGORY, inconclusive: true });
+    expect(verdict.category).not.toBe(ISSUE_TRAILER_MISSING_CATEGORY);
   });
 
   it('threads the repo-pinned gh credential into the lookup', async () => {
@@ -459,7 +497,7 @@ describe('finalizeAgent — a PR-shaped run with no PR is not a success (#3358)'
     findPullRequestForBranchMock.mockResolvedValue({ status: 'none', number: null, url: null, detail: null });
     await expect(finalize()).resolves.toMatchObject({ success: false });
 
-    findPullRequestForBranchMock.mockResolvedValue({ status: 'found', number: 7, url: 'u' });
+    findPullRequestForBranchMock.mockResolvedValue({ status: 'found', number: 7, url: 'u', body: 'Closes #1' });
     await expect(finalize()).resolves.toMatchObject({ success: true });
   });
 
@@ -623,7 +661,7 @@ describe('finalizeAgent — the PR verdict is only recorded when one was reached
     onBranch('claim/issue-1');
     findPullRequestForBranchMock.mockResolvedValue({ status: 'none', number: null, url: null, detail: null });
     await finalize();
-    findPullRequestForBranchMock.mockResolvedValue({ status: 'found', number: 7, url: 'https://example.com/pr/7' });
+    findPullRequestForBranchMock.mockResolvedValue({ status: 'found', number: 7, url: 'https://example.com/pr/7', body: 'Closes #1' });
     await finalize();
 
     expect(prVerified().map((e) => e.data.verified)).toEqual([false, true]);

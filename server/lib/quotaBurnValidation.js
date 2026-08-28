@@ -36,6 +36,7 @@ const quotaBurnJobSchema = z.object({
   jobType: z.enum(QUOTA_BURN_JOB_TYPES),
   model: z.string().max(B.labelLength.max).nullable().optional(),
   providerId: z.string().max(B.labelLength.max).nullable().optional(),
+  effort: z.string().max(B.labelLength.max).nullable().optional(),
   // One-shot work: dispatch this step at most once, then drop it out of the
   // rotation until the user re-arms it. Absent reads as `false`, so plans
   // written before this field keep repeating.

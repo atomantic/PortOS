@@ -25,13 +25,64 @@ import { getBrainChecksum, getBrainSnapshot, applyBrainSnapshot } from './brainR
 // Default: every store empty unless a test overrides a specific type.
 function emptyStores(overrides = {}) {
   brainStorage.getRawRecords.mockImplementation(async (type) => overrides[type] ?? {});
+  brainEvents.emit('record:changed', { type: 'people', id: 'test-reset' });
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  brainEvents.emit('record:changed', { type: 'people', id: 'test-reset' });
 });
 
 describe('brainReconcile checksum', () => {
+  it('reuses the cached checksum when no brain records changed', async () => {
+    emptyStores({ links: { a: { id: 'a', updatedAt: '2026-01-01T00:00:00.000Z', title: 'A' } } });
+
+    const first = await getBrainChecksum();
+    const readsAfterFirst = brainStorage.getRawRecords.mock.calls.length;
+    const second = await getBrainChecksum();
+
+    expect(second).toBe(first);
+    expect(readsAfterFirst).toBe(brainStorage.BRAIN_ENTITY_TYPES.length);
+    expect(brainStorage.getRawRecords).toHaveBeenCalledTimes(readsAfterFirst);
+  });
+
+  it.each(['links:upserted', 'links:deleted', 'record:changed'])(
+    'invalidates the cached checksum on %s',
+    async (eventName) => {
+      emptyStores({ links: { a: { id: 'a', updatedAt: '2026-01-01T00:00:00.000Z', title: 'A' } } });
+      const before = await getBrainChecksum();
+
+      brainStorage.getRawRecords.mockImplementation(async (type) => type === 'links'
+        ? { a: { id: 'a', updatedAt: '2026-01-02T00:00:00.000Z', title: 'B' } }
+        : {});
+      brainEvents.emit(eventName, { type: 'links', id: 'a' });
+      const after = await getBrainChecksum();
+
+      expect(after).not.toBe(before);
+      expect(brainStorage.getRawRecords).toHaveBeenCalledTimes(
+        brainStorage.BRAIN_ENTITY_TYPES.length * 2,
+      );
+    },
+  );
+
+  it('does not cache a checksum invalidated while its disk scan is in flight', async () => {
+    let invalidated = false;
+    brainStorage.getRawRecords.mockImplementation(async () => {
+      if (!invalidated) {
+        invalidated = true;
+        brainEvents.emit('record:changed', { type: 'links', id: 'a' });
+      }
+      return {};
+    });
+
+    await getBrainChecksum();
+    await getBrainChecksum();
+
+    expect(brainStorage.getRawRecords).toHaveBeenCalledTimes(
+      brainStorage.BRAIN_ENTITY_TYPES.length * 2,
+    );
+  });
+
   it('is deterministic regardless of record/type key order', async () => {
     emptyStores({
       links: {

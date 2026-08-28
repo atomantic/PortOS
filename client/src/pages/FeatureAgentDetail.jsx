@@ -74,7 +74,14 @@ export default function FeatureAgentDetail() {
     api.stopFeatureAgent(agentId, { silent: true }).then(data => { setAgent(prev => ({ ...prev, ...data })); toast.success('Stopped'); }).catch(err => toast.error(err.message || 'Action failed'));
   }, []);
   const handleTrigger = useCallback((agentId) => {
-    api.triggerFeatureAgent(agentId, { silent: true }).then(() => toast.success('Run triggered')).catch(err => toast.error(err.message || 'Action failed'));
+    api.triggerFeatureAgent(agentId, { silent: true }).then(result => {
+      if (result?.triggered === false) {
+        toast.error(result.reason || 'Run could not be started');
+        return;
+      }
+      if (result?.agent) setAgent(prev => ({ ...prev, ...result.agent }));
+      toast.success('Run started');
+    }).catch(err => toast.error(err.message || 'Action failed'));
   }, []);
 
   const handleSave = useCallback((saved) => {

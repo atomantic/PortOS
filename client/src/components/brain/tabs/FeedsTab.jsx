@@ -227,7 +227,7 @@ export default function FeedsTab({ onRefresh }) {
       ) : (
         <div className="flex flex-col md:flex-row gap-4 flex-1 min-h-0">
           {/* Feed sidebar */}
-          <div className="w-56 shrink-0 space-y-1 overflow-y-auto hidden md:block">
+          <div className="w-full md:w-56 shrink-0 space-y-1 overflow-y-auto">
             {feeds.map(feed => (
               <div key={feed.id} className="group relative">
                 <button
@@ -248,17 +248,17 @@ export default function FeedsTab({ onRefresh }) {
                   )}
                 </button>
                 {/* Feed actions on hover */}
-                <div className="absolute right-0 top-0 h-full flex items-center gap-0.5 pr-1 opacity-40 sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                <div className="absolute right-0 top-0 h-full flex items-center gap-0.5 pr-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
                   <button
                     onClick={(e) => { e.stopPropagation(); handleRefreshFeed(feed.id); }}
-                    className="p-1 text-gray-500 hover:text-white rounded"
+                    className="min-h-[44px] min-w-[44px] flex items-center justify-center p-1 text-gray-500 hover:text-white rounded"
                     title="Refresh feed" aria-label="Refresh feed"
                   >
                     <RefreshCw size={10} />
                   </button>
                   <button
                     onClick={(e) => { e.stopPropagation(); setConfirmingDeleteId(feed.id); }}
-                    className="p-1 text-gray-500 hover:text-port-error rounded"
+                    className="min-h-[44px] min-w-[44px] flex items-center justify-center p-1 text-gray-500 hover:text-port-error rounded"
                     title="Remove feed" aria-label="Remove feed"
                   >
                     <Trash2 size={10} />
@@ -287,23 +287,6 @@ export default function FeedsTab({ onRefresh }) {
                 )}
               </div>
             ))}
-          </div>
-
-          {/* Mobile feed selector */}
-          <div className="md:hidden shrink-0">
-            <select
-              aria-label="Feed"
-              value={selectedFeedId || ''}
-              onChange={(e) => setSelectedFeedId(e.target.value || null)}
-              className="w-full px-3 py-2 bg-port-card border border-port-border rounded-lg text-white text-sm"
-            >
-              <option value="">All feeds</option>
-              {feeds.map(f => (
-                <option key={f.id} value={f.id}>
-                  {f.title} {f.unreadCount > 0 ? `(${f.unreadCount})` : ''}
-                </option>
-              ))}
-            </select>
           </div>
 
           {/* Items list */}

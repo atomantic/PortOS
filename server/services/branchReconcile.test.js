@@ -715,6 +715,28 @@ describe('unreachable forge (#3358)', () => {
     expect(res.inFlight).toEqual([]);
   });
 
+  it('reuses the successful origin read for PR state instead of reopening a fail-closed gap', async () => {
+    git.getBranches.mockResolvedValue([
+      { name: 'claim/issue-1', isDefault: false, current: false, tracking: 'origin/claim/issue-1', merged: false }
+    ]);
+    wt.listWorktrees.mockResolvedValue([]);
+    git.isBranchMergedInto.mockResolvedValue(false);
+    execGit.mockImplementation(async (args) => args[0] === 'ls-remote'
+      ? { stdout: 'sha\trefs/heads/claim/issue-1\n', exitCode: 0 }
+      : { stdout: '', exitCode: 0 });
+    execGh.mockResolvedValue(JSON.stringify([
+      { number: 1, headRefName: 'claim/issue-1', mergeable: 'MERGEABLE', isDraft: false, url: 'https://example.com/pr/1' }
+    ]));
+    const origin = { hasOrigin: true, isGithub: true, host: 'github.com', fullName: 'example/portos' };
+    getOriginInfo.mockResolvedValueOnce(origin).mockRejectedValueOnce(new Error('origin read blipped'));
+
+    const res = await reconcile('/repo');
+
+    expect(res.inFlight.map(({ branch, state }) => [branch, state]))
+      .toEqual([['claim/issue-1', 'IN_REVIEW']]);
+    expect(getOriginInfo).toHaveBeenCalledOnce();
+  });
+
   it('leaves prStateUnavailable false on a clean cycle', async () => {
     git.getBranches.mockResolvedValue([
       { name: 'claim/issue-1', isDefault: false, current: false, tracking: 'origin/claim/issue-1', merged: false }

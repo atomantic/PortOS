@@ -379,6 +379,7 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
     else if (taskData.useWorktree === false) metadata.useWorktree = false;
     if (taskData.openPR === true) metadata.openPR = true;
     else if (taskData.openPR === false) metadata.openPR = false;
+    if (taskData.whenDone === 'commit-push' || taskData.whenDone === 'leave-uncommitted') metadata.whenDone = taskData.whenDone;
     // Default a worktree-isolated USER task to opening a PR rather than
     // auto-merging straight to the default branch — an unreviewed agent commit
     // landing on main is the more dangerous default (see the local-model eval
@@ -387,7 +388,7 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
     // always wins, and internal/system tasks (autopilot, self-improvement) keep
     // their existing auto-merge behavior so automation isn't silently gated on a
     // human merging a PR.
-    else if (taskData.useWorktree === true && taskType === 'user') metadata.openPR = true;
+    else if (taskData.openPR === undefined && taskData.useWorktree === true && taskType === 'user') metadata.openPR = true;
     // Claim prompts own their forge lifecycle in a separately-created
     // claim/<item> worktree. Keep this marker independent from openPR: false is
     // still required to stop CoS from provisioning a second worktree.
@@ -630,9 +631,9 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
  * running either inside would deadlock. Resolving first is also what keeps the task
  * from ever being `pending` (spawnable) without its pointer.
  */
-export async function updateTask(taskId, updates, taskType = 'user', { now = Date.now() } = {}) {
+export async function updateTask(taskId, updates, taskType = 'user', { now = Date.now(), suppressDequeue = false } = {}) {
   const release = await preparePauseRelease(taskId, updates);
-  const result = await writeTaskUpdate(taskId, release ? { ...updates, metadata: release.metadata } : updates, taskType, { now });
+  const result = await writeTaskUpdate(taskId, release ? { ...updates, metadata: release.metadata } : updates, taskType, { now, suppressDequeue });
   if (release && !result?.error) {
     await retirePausedAgent(release.agentId, taskId, resolveTaskTargetBranch(result?.metadata));
   }
@@ -667,7 +668,7 @@ async function preparePauseRelease(taskId, updates) {
   return { agentId, metadata: { ...pointer, ...(updates.metadata || {}) } };
 }
 
-async function writeTaskUpdate(taskId, updates, taskType, { now }) {
+async function writeTaskUpdate(taskId, updates, taskType, { now, suppressDequeue = false }) {
   return withStateLock(async () => {
   const state = await loadState();
   const filePath = taskType === 'user'
@@ -840,7 +841,9 @@ async function writeTaskUpdate(taskId, updates, taskType, { now }) {
   // description is enough — so a consumer that reacts to "reached completed"
   // (the investigation auto-retry; the voice completion line) needs the edge, not
   // `status === 'completed'`, which is true on every later write too.
-  cosEvents.emit('tasks:changed', { type: taskType, action, task: updatedTask, previousStatus });
+  const change = { type: taskType, action, task: updatedTask, previousStatus };
+  if (suppressDequeue) change.suppressDequeue = true;
+  cosEvents.emit('tasks:changed', change);
   return updatedTask;
   });
 }
@@ -861,7 +864,7 @@ async function writeTaskUpdate(taskId, updates, taskType, { now }) {
  * updateTask emits `tasks:changed` action 'unblocked', which re-runs the
  * dequeue, so callers don't need a separate wake signal.
  */
-export async function reviveBlockedTask(taskId, { priority, metadata } = {}, taskType = 'internal') {
+export async function reviveBlockedTask(taskId, { priority, metadata } = {}, taskType = 'internal', { suppressDequeue = false } = {}) {
   return updateTask(taskId, {
     status: 'pending',
     ...(priority ? { priority } : {}),
@@ -877,7 +880,7 @@ export async function reviveBlockedTask(taskId, { priority, metadata } = {}, tas
       // every wait and would defeat the cap.
       worktreeBusyAttempts: undefined
     }
-  }, taskType);
+  }, taskType, { suppressDequeue });
 }
 
 /**

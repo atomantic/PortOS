@@ -153,7 +153,41 @@ describe('AI Toolkit runner service', () => {
     );
     expect(metadata).toMatchObject({
       success: false,
+      error: 'service offline',
       errorCategory: 'unknown'
+    });
+  });
+
+  it('records the nested cause of a pre-header transport failure', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const socketError = Object.assign(new TypeError('fetch failed'), {
+      cause: { code: 'ECONNREFUSED', message: 'connect ECONNREFUSED 192.0.2.10:8000' },
+    });
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(socketError));
+
+    const runner = createRunnerService({
+      dataDir,
+      hooks: { ensureProviderReady: async () => ({ success: true }) }
+    });
+    let done;
+    const completed = new Promise((resolve) => { done = resolve; });
+
+    await runner.executeApiRun({
+      runId: 'run-transport-failure',
+      provider: runReady({ endpoint: 'https://api.example.com/v1' }),
+      model: null,
+      prompt: 'hello',
+      workspacePath: process.cwd(),
+      screenshots: [],
+      onData: undefined,
+      onComplete: (metadata) => done(metadata)
+    });
+
+    await expect(completed).resolves.toMatchObject({
+      success: false,
+      errorCategory: 'network-error',
+      error: expect.stringContaining('ECONNREFUSED')
     });
   });
 

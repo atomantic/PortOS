@@ -95,6 +95,19 @@ describe('OpenWorldHudCompact', () => {
     expect(screen.getByTestId('openworld-interaction-prompt')).toHaveTextContent('ACTION');
   });
 
+  it('shows live speed and collectible progress while free roaming', () => {
+    renderCompact('', {
+      explorationMode: true,
+      playerPose: { speed: 10 },
+      collectedCount: 4,
+      totalShards: 12,
+    });
+
+    expect(screen.getByText('36')).toBeInTheDocument();
+    expect(screen.getByText('KM/H')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /36 kilometers per hour, 4 of 12 shards collected/i })).toHaveTextContent('4/12');
+  });
+
   it('restores the open pane from the URL on load', () => {
     renderCompact('?openWorldPane=vitals');
     expect(screen.getByText('SYSTEM VITALS')).toBeInTheDocument();

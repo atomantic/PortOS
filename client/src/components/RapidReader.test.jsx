@@ -56,6 +56,27 @@ describe('RapidReader keyboard transport', () => {
     expect(voiceHotkey()).not.toHaveBeenCalled();
   });
 
+  it('starts at a canonical word offset and keeps that place when chunk size changes', () => {
+    const { container } = renderReader({ initialWordIndex: 2 });
+    expect(container.textContent).toContain('3/4 words');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show two words at a time' }));
+
+    expect(container.textContent).toContain('3/4 words');
+    expect(container.textContent).toContain('charlie');
+  });
+
+  it('saves the current canonical position from the bookmark button or B key', () => {
+    const onBookmark = vi.fn();
+    renderReader({ initialWordIndex: 2, onBookmark });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save bookmark' }));
+    act(() => { fireEvent.keyDown(document.body, { key: 'b', code: 'KeyB' }); });
+
+    expect(onBookmark).toHaveBeenNthCalledWith(1, 2);
+    expect(onBookmark).toHaveBeenNthCalledWith(2, 2);
+  });
+
   it('stands down while an unrelated dialog is open', () => {
     const { container } = renderReader();
     const dialog = document.createElement('div');

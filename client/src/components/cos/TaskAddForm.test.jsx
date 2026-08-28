@@ -88,6 +88,19 @@ describe('TaskAddForm responsive layout', () => {
     expect(localStorage.getItem('portos-cos-task-description-draft')).toBeNull();
   });
 
+  it('passes the persisted task to queue views immediately after submission', async () => {
+    const user = userEvent.setup();
+    const onTaskAdded = vi.fn();
+    const task = { id: 'task-new', description: 'Appear immediately', status: 'pending', metadata: {} };
+    api.addCosTask.mockResolvedValue(task);
+    render(<TaskAddForm providers={[]} apps={[]} onTaskAdded={onTaskAdded} />);
+
+    await user.type(screen.getByPlaceholderText('Task description *'), task.description);
+    await user.click(screen.getByRole('button', { name: /^Add$/ }));
+
+    await waitFor(() => expect(onTaskAdded).toHaveBeenCalledWith(task, { position: 'bottom' }));
+  });
+
   it('keeps the description draft when submission fails', async () => {
     const user = userEvent.setup();
     api.addCosTask.mockRejectedValue(new Error('Unable to add task'));
@@ -180,6 +193,21 @@ describe('TaskAddForm responsive layout', () => {
       expect(worktreeToggle()).toBeChecked();
       expect(openPrToggle()).toBeChecked();
     });
+  });
+
+  it('offers and submits the non-worktree completion choice', async () => {
+    const user = userEvent.setup();
+    api.addCosTask.mockResolvedValue({ success: true });
+    render(<TaskAddForm providers={[]} apps={[]} onTaskAdded={vi.fn()} />);
+
+    await user.click(worktreeToggle());
+    expect(screen.getByLabelText('When done')).toHaveValue('leave-uncommitted');
+    await user.selectOptions(screen.getByLabelText('When done'), 'commit-push');
+    await user.type(screen.getByPlaceholderText('Task description *'), 'Update default branch');
+    await user.click(screen.getByRole('button', { name: /^Add$/ }));
+
+    await waitFor(() => expect(api.addCosTask).toHaveBeenCalled());
+    expect(api.addCosTask.mock.calls.at(-1)[0]).toMatchObject({ useWorktree: false, whenDone: 'commit-push' });
   });
 
   it.each([

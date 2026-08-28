@@ -311,6 +311,43 @@ describe('usage.js — streak calculations', () => {
       await loadUsage();
       expect(getFirstActivityDay()).toBeNull();
     });
+
+    it('backfills a stale cached value during load and persists it', async () => {
+      readJSONFile.mockResolvedValueOnce(makeUsage(
+        { '2025-06-08': { sessions: 1 } },
+        { earliestActivityDay: '2025-06-10', monthlyActivity: { '2024-03': { sessions: 5 } } }
+      ));
+
+      await loadUsage();
+
+      expect(getFirstActivityDay()).toBe('2024-03-01');
+      expect(atomicWrite).toHaveBeenCalled();
+    });
+
+    it('updates the cached value when the first day bucket is recorded', async () => {
+      readJSONFile.mockResolvedValueOnce(makeUsage({}));
+      await loadUsage();
+
+      await recordSession('codex', 'Codex', 'gpt-5.6');
+
+      expect(getFirstActivityDay()).toBe(daysAgo(0));
+    });
+  });
+
+  describe('summary memoization', () => {
+    it('reuses a summary until usage changes', async () => {
+      readJSONFile.mockResolvedValueOnce(makeUsage({ [daysAgo(0)]: { sessions: 1 } }));
+      await loadUsage();
+
+      const first = getUsageSummary();
+      const cached = getUsageSummary();
+      await recordSession('codex', 'Codex', 'gpt-5.6');
+      const updated = getUsageSummary();
+
+      expect(cached).toBe(first);
+      expect(updated).not.toBe(first);
+      expect(updated.totalSessions).toBe(2);
+    });
   });
 
   describe('time-dimensioned capture', () => {
@@ -906,6 +943,57 @@ describe('usage.js — cache tiers and measured/estimate provenance (#3124 Phase
     // A cache read is an input token the user was charged for — the headline
     // "Tokens" figure must not omit it (that was the #3124 understatement).
     expect(getUsage().totalTokens.input).toBe(1500 + 3_500_000 + 280_000);
+  });
+
+  it('records a multi-model run with one atomic write', async () => {
+    readJSONFile.mockResolvedValueOnce(makeUsage({}, {
+      byModel: {
+        'claude-opus-5': { sessions: 1, messages: 0, tokens: 0 },
+        'claude-sonnet-5': { sessions: 1, messages: 0, tokens: 0 }
+      }
+    }));
+    await loadUsage();
+    vi.clearAllMocks();
+
+    await recordRunUsage([
+      {
+        providerId: 'claude-code',
+        model: 'claude-opus-5',
+        messages: 2,
+        tokensIn: 100,
+        tokensOut: 20,
+        source: 'measured'
+      },
+      {
+        providerId: 'claude-code',
+        model: 'claude-sonnet-5',
+        messages: 3,
+        tokensIn: 200,
+        tokensOut: 30,
+        cacheReadTokens: 400,
+        source: 'estimate'
+      }
+    ]);
+
+    expect(atomicWrite).toHaveBeenCalledTimes(1);
+    expect(getUsage()).toMatchObject({
+      totalMessages: 5,
+      totalTokens: { input: 700, output: 50 },
+      byProvider: {
+        'claude-code': { messages: 5, tokens: 50 }
+      },
+      byModel: {
+        'claude-opus-5': { messages: 2, tokens: 20 },
+        'claude-sonnet-5': { messages: 3, tokens: 30 }
+      }
+    });
+    expect(getUsage().dailyActivity[today].byProvider['claude-code']).toMatchObject({
+      messages: 5,
+      tokensIn: 300,
+      tokensOut: 50,
+      cacheReadTokens: 400,
+      source: 'mixed'
+    });
   });
 
   it('defaults recordMessages to an estimate source with no cache tokens', async () => {

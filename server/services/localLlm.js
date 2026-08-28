@@ -755,7 +755,7 @@ export async function listVisionModels() {
   // in the picker. Models the id heuristic already caught skip the round-trip.
   const ollamaVision = await Promise.all(ollama.map(async (m) => {
     if (m.vision) return m
-    const capabilities = await ollamaManager.getModelCapabilities(m.id).catch(() => [])
+    const capabilities = await ollamaManager.getModelCapabilities(m.id).catch(() => null)
     return { ...m, vision: isVisionModel({ id: m.id, capabilities }) }
   }))
   const tag = (backend, models) => models
@@ -801,10 +801,10 @@ export async function listToolUseModels() {
   // client can already decide for itself, so skipping the round-trip would leave
   // this list adding nothing beyond what the caller already knows.
   const ollamaToolUse = await Promise.all(ollama.map(async (m) => {
-    const capabilities = await ollamaManager.getModelCapabilities(m.id).catch(() => [])
+    const capabilities = await ollamaManager.getModelCapabilities(m.id).catch(() => null)
     // `isToolUseModel` treats a NON-EMPTY capabilities array as authoritative in
-    // both directions; an empty one (daemon didn't report, or /api/show failed)
-    // falls back to the id regex.
+    // both directions; null/empty (probe failed or daemon didn't report) falls
+    // back to the id regex.
     return { ...m, toolUse: isToolUseModel({ id: m.id, capabilities }) }
   }))
   // LM Studio reports no tool-calling flag, so `lmStudioBadgeCapabilities`

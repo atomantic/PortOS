@@ -5,6 +5,22 @@ import CronSchedulePicker from './CronSchedulePicker.jsx';
 describe('CronSchedulePicker', () => {
   afterEach(() => vi.useRealTimers());
 
+  it('exposes the advanced cron panel state and relationship', () => {
+    render(<CronSchedulePicker value="0 7 * * *" onChange={vi.fn()} />);
+
+    const toggle = screen.getByRole('button', { name: 'Hide advanced' });
+    const advancedPanel = document.getElementById(toggle.getAttribute('aria-controls'));
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(toggle).toHaveAttribute('aria-controls', advancedPanel.id);
+
+    fireEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(toggle).toHaveAttribute('aria-controls', advancedPanel.id);
+    expect(advancedPanel).toHaveAttribute('hidden');
+  });
+
   it('edits an arbitrary weekly interval without losing the weekday', () => {
     const onChange = vi.fn();
     render(

@@ -45,9 +45,10 @@ import {
   createTerminalModelErrorDetector,
   createTerminalRequestTimeoutDetector,
 } from '../lib/aiToolkit/errorDetection.js';
-import { getRunsPath, finalizeRunRecord, emitRunStarted, registerActiveRun, unregisterActiveRun, consumeRunStopRequested, resolveRunCwd } from './runner.js';
+import { getRunsPath, finalizeRunRecord, failRunRecord, emitRunStarted, registerActiveRun, unregisterActiveRun, consumeRunStopRequested, resolveRunCwd } from './runner.js';
 import { registerExternalSession, unregisterExternalSession, isExternalSessionAttached, pasteToSession } from './shell.js';
 import { isHostShuttingDown } from '../lib/hostShutdown.js';
+import { findCommandOnPath } from '../lib/processEnv.js';
 import {
   DEFAULT_TUI_PROMPT_DELAY_MS,
   PASTE_MARKER_POLL_MS,
@@ -141,9 +142,13 @@ const PTY_ROWS = 50;
  *   Shell page's session tab; falls back to `command · model` when absent.
  * @param {boolean} [options.guard=false] — prepend the PM2 guard shim for an
  *   autonomous task that must not be able to kill the shared PortOS daemon.
+ * @param {boolean} [options.reportFailure=true] — fire the host's `onRunFailed`
+ *   hook when the run fails. Pass `false` for a deliberate PROBE of a provider
+ *   (the local-model benchmark): its failure is the caller's measurement, which
+ *   it reports itself, not a provider incident for the autofixer to escalate.
  * @returns {Promise<void>}
  */
-export async function executeTuiRun({ runId, provider, prompt, workspacePath, onData, onComplete, timeout, idleMs, label, guard = false }) {
+export async function executeTuiRun({ runId, provider, prompt, workspacePath, onData, onComplete, timeout, idleMs, label, guard = false, reportFailure = true }) {
   if (!provider || typeof provider !== 'object') {
     throw new Error('executeTuiRun: provider is required');
   }
@@ -170,11 +175,21 @@ export async function executeTuiRun({ runId, provider, prompt, workspacePath, on
   const runDir = join(getRunsPath(), runId);
   await ensureDir(runDir);
 
+  // Who this run is, for a finalize that finds no `createRun` metadata on disk
+  // to merge into. Mirrors `emitRunStarted`'s naming so the started and failed
+  // events describe the same run — they used to disagree, and the failure event
+  // was the anonymous one.
+  const runIdentity = {
+    providerId: provider.id,
+    providerName: provider.name || provider.id,
+    model: provider.defaultModel,
+  };
+
   // Logs the effective cwd, and rejects a workspace that was requested but is
   // missing on disk instead of silently spawning in the PortOS root (#3180).
   // Sequenced after ensureDir so finalizeRunRecord has a run dir to write into.
   const { cwd: workingDir, failure } = await resolveRunCwd({
-    runId, workspacePath, label: `TUI run ${runId}`, onData, onComplete,
+    runId, workspacePath, label: `TUI run ${runId}`, onData, onComplete, identity: runIdentity, reportFailure,
   });
   if (failure) return failure;
 
@@ -224,6 +239,26 @@ ${prompt}`;
     guard,
     extra: { TERM: 'xterm-256color', COLORTERM: 'truecolor' },
   });
+
+  // A PTY has no shell to print "command not found": node-pty forks, `execvp`
+  // fails in the child, and the child exits 1 with an EMPTY screen. So the
+  // output-driven `detectMissingTuiBinary` probe further down can never fire on
+  // this path, and the run finalized as a bare `TUI exited with code 1` — no
+  // provider, no cause, nothing to act on. Resolve against the CHILD's PATH
+  // (`childEnv`, since a provider may override PATH with only its own bin dir)
+  // and report the real reason with the 127 that probe already uses.
+  if (!findCommandOnPath(command, { env: childEnv, cwd: workingDir })) {
+    return failRunRecord({
+      runId,
+      error: `TUI command not found: ${command}`,
+      exitCode: 127,
+      startTime: Date.now(),
+      onData,
+      onComplete,
+      identity: runIdentity,
+      reportFailure,
+    });
+  }
 
   let ptyProcess;
   try {
@@ -413,6 +448,8 @@ ${prompt}`;
         // set post-write and never made it to disk → /runs replay missed it).
         const metadata = await finalizeRunRecord({
           runId, output: responseText, exitCode, success, error, startTime,
+          identity: runIdentity,
+          reportFailure,
           extras: {
             completionReason: reason,
             usedResponseFile,

@@ -857,6 +857,11 @@ describe('cosTaskStore.addTask', () => {
     expect(task.metadata.prCompletion).toBe('leave-open');
   });
 
+  it('persists the non-worktree completion choice', async () => {
+    const task = await addTask({ description: 'commit in place', useWorktree: false, whenDone: 'commit-push' }, 'user');
+    expect(task.metadata.whenDone).toBe('commit-push');
+  });
+
   it('defaults a worktree USER task to openPR:true when openPR is unspecified', async () => {
     const task = await addTask({ description: 'wt default pr', useWorktree: true }, 'user');
     expect(task.metadata.useWorktree).toBe(true);

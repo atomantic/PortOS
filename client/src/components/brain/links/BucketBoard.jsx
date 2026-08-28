@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { Plus, FolderPlus, X } from 'lucide-react';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
@@ -84,9 +84,21 @@ export default function BucketBoard({ links, buckets, setBuckets, onAssignLink, 
     });
   }, [setBuckets]);
 
-  const linksFor = (bucketId) => links
-    .filter(l => l.bucketId === bucketId)
-    .sort((a, b) => (a.bucketOrder ?? 0) - (b.bucketOrder ?? 0));
+  const groupedLinks = useMemo(() => {
+    const grouped = new Map();
+    links.forEach(link => {
+      const bucketLinks = grouped.get(link.bucketId);
+      if (bucketLinks) {
+        bucketLinks.push(link);
+      } else {
+        grouped.set(link.bucketId, [link]);
+      }
+    });
+    grouped.forEach(bucketLinks => {
+      bucketLinks.sort((a, b) => (a.bucketOrder ?? 0) - (b.bucketOrder ?? 0));
+    });
+    return grouped;
+  }, [links]);
 
   return (
     <div className="@container">
@@ -95,7 +107,7 @@ export default function BucketBoard({ links, buckets, setBuckets, onAssignLink, 
           <BucketCard
             key={bucket.id}
             bucket={bucket}
-            links={linksFor(bucket.id)}
+            links={groupedLinks.get(bucket.id) || []}
             onUpdate={handleUpdate}
             onDelete={handleDelete}
             onAddLink={onAddLinkToBucket}

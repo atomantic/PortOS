@@ -5,6 +5,8 @@ const mocks = vi.hoisted(() => ({
   getBrainProjections: vi.fn(),
   listContexts: vi.fn(),
   previewLegacyExport: vi.fn(),
+  executeCosToolCall: vi.fn(),
+  getCosToolCatalog: vi.fn(),
 }));
 
 vi.mock('./settings.js', () => ({ getSettings: vi.fn(async () => mocks.settings) }));
@@ -23,6 +25,19 @@ vi.mock('../lib/navManifest.js', () => ({
     ? { path: '/', matched: 'home', command: { id: 'nav.dashboard', path: '/', label: 'Dashboard', section: 'Main', aliases: ['home'] } }
     : null,
 }));
+vi.mock('./cosToolRegistry.js', () => ({
+  executeCosToolCall: mocks.executeCosToolCall,
+  getCosToolCatalog: mocks.getCosToolCatalog,
+  formatCosToolCatalog: (catalog) => ({
+    tools: catalog.tools.map((tool) => ({
+      name: tool.providerName,
+      description: tool.description,
+      inputSchema: tool.input_schema,
+      outputSchema: tool.output_schema,
+      annotations: { readOnlyHint: tool.policy.sideEffect === 'read' },
+    })),
+  }),
+}));
 
 import { AGENT_CONTEXT_LIMITS } from '../lib/agentContextValidation.js';
 import {
@@ -38,6 +53,21 @@ describe('agentContextMcp service', () => {
     mocks.listContexts.mockResolvedValue([]);
     mocks.getBrainProjections.mockResolvedValue([]);
     mocks.previewLegacyExport.mockResolvedValue({ sections: {} });
+    mocks.getCosToolCatalog.mockImplementation(({ capabilities }) => ({
+      tools: capabilities?.readPortos ? [{
+        name: 'brain.search',
+        providerName: 'brain_search',
+        aliases: ['brain_search'],
+        description: 'Search Brain.',
+        input_schema: { type: 'object', properties: {}, additionalProperties: false },
+        output_schema: { type: 'object' },
+        policy: { sideEffect: 'read' },
+        granted: true,
+      }] : [],
+    }));
+    mocks.executeCosToolCall.mockResolvedValue({
+      type: 'portos_tool_result', requestId: 'agent-mcp:test', name: 'brain.search', state: 'completed', result: { ok: true },
+    });
   });
 
   it('fails closed to a disabled metadata-only default manifest', async () => {
@@ -46,7 +76,11 @@ describe('agentContextMcp service', () => {
     expect(manifest.profile).toBe('metadata');
     expect(manifest.scopes).toEqual(['navigation', 'workspaces']);
     expect(manifest.transport).toMatchObject({ loopbackOnly: true, stateful: false });
-    expect(manifest).toMatchObject({ schemaVersion: 2, limits: { maxApproxTokens: 5_000 } });
+    expect(manifest).toMatchObject({
+      schemaVersion: 3,
+      actions: { readPortos: false, writePortos: false },
+      limits: { maxApproxTokens: 5_000 },
+    });
     expect(manifest.exclusions.join(' ')).toMatch(/Privacy Vault/);
   });
 
@@ -54,6 +88,25 @@ describe('agentContextMcp service', () => {
     const result = await callAgentContextTool('list_context', { scope: 'navigation' });
     expect(result.isError).toBe(true);
     expect(mocks.listContexts).not.toHaveBeenCalled();
+  });
+
+  it('advertises and dispatches only explicitly granted semantic tools', async () => {
+    mocks.settings = {
+      agentContext: {
+        enabled: true,
+        scopes: ['navigation'],
+        actions: { readPortos: true, writePortos: false },
+      },
+    };
+    const manifest = await getAgentContextManifest();
+    expect(manifest.tools.map((tool) => tool.name)).toContain('brain_search');
+
+    const result = await callAgentContextTool('brain_search', {}, undefined, { requestId: 'agent-mcp:test' });
+    expect(result.isError).toBeUndefined();
+    expect(mocks.executeCosToolCall).toHaveBeenCalledWith(expect.objectContaining({
+      call: expect.objectContaining({ requestId: 'agent-mcp:test', name: 'brain.search' }),
+      authority: { scope: 'agent', capabilities: { readPortos: true, writePortos: false } },
+    }));
   });
 
   it('metadata profile can match private workspace text without returning it', async () => {

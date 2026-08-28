@@ -37,7 +37,7 @@ export const SAVE_DEBOUNCE_MS = 500;
 // is a 10-20s PTY spawn, so this is a handful of polls, not a busy loop.
 const PENDING_POLL_MS = 4000;
 
-const EMPTY_CATALOG = { jobTypes: [], apps: [], universes: [], imageModes: [] };
+const EMPTY_CATALOG = { jobTypes: [], apps: [], universes: [], imageModes: [], providers: [] };
 
 // Where a patch the server never accepted waits for the next visit. Session
 // scope, not local: this is a crash buffer for the current tab, and a patch
@@ -521,7 +521,7 @@ export default function QuotaBurn() {
             actionsBusy={unsaved || running}
             onToggleExpand={(id) => navigate(expanded === id ? '/devtools/quota-burn' : `/devtools/quota-burn/${id}`)}
             onPatch={(patch) => patchFamily(familyId, patch)}
-            onRunFamily={(id) => run({ familyId: id }, 'Burn')}
+            onRunFamily={(id) => run({ familyId: id, force: true }, 'Burn')}
             onRunJob={(id, job) => run({ familyId: id, jobId: job.id, force: true }, 'Job run')}
             onRearm={rearm}
           />

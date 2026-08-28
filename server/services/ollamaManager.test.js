@@ -121,6 +121,28 @@ describe('ollamaManager residency status', () => {
   })
 })
 
+describe('ollamaManager model capability sentinel', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('returns unknown when a per-model capability probe fails', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('show offline') }))
+    const { getModelCapabilities } = await loadManager()
+
+    await expect(getModelCapabilities('example-model')).resolves.toBeNull()
+  })
+
+  it('keeps an answered empty capability set distinct from a failed probe', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ model_info: {} }),
+    })))
+    const { getModelCapabilities } = await loadManager()
+
+    await expect(getModelCapabilities('example-model')).resolves.toEqual([])
+  })
+})
+
 describe('ollamaManager.pullModel transient-error retry', () => {
   beforeEach(() => { vi.useFakeTimers() })
   afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals() })

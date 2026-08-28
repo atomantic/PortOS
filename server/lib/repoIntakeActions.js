@@ -5,7 +5,7 @@
  * write path and from the Zod schemas.
  *
  * `malwareScan` → the read-only `/do:scan` audit of the clone.
- * `learn`       → a `repo-study` review: read the clone for ideas worth adopting
+ * `learn`       → a `repo-study` review: read the clone for feature/design ideas worth adopting
  *                 into PortOS and file them in the work tracker (clean-room).
  */
 

@@ -80,11 +80,16 @@ The `selectModelForTask` function routes tasks to appropriate model tiers:
 | maxConcurrentAgents | 3 | Max parallel agents (global) |
 | maxConcurrentAgentsPerProject | 2 | Max parallel agents per project |
 | maxProcessMemoryMb | 2048 | Memory alert threshold |
-| autoStart | false | Start on server boot |
-| selfImprovementEnabled | true | Allow self-analysis |
+| maxTotalProcesses | 50 | Process-count alert threshold |
+| alwaysOn | true | Start on server boot (`autoStart` is a legacy compatibility alias) |
+| improvementEnabled | true | Allow improvement work for PortOS and managed apps |
 | proactiveMode | true | Always find work when idle |
-| comprehensiveAppImprovement | true | Apply full analysis to managed apps |
-| avatarStyle | svg | CoS UI avatar style: `svg`, `cyber`, `sigil`, or `ascii` |
+| idleReviewEnabled | true | Review managed apps while user work is idle |
+| autonomousJobsEnabled | true | Enable the global scheduled-agent-job runner |
+| domainAutonomy | execute per domain | Off, dry-run, or execute policy for each automatic-work domain |
+| domainBudgets | unlimited | Optional daily action and runtime caps per domain |
+| persistentMindProfile.enabled | false | Configure a persistent-mind profile without starting it |
+| avatarStyle | svg | Default CoS UI avatar style |
 
 ## API Endpoints
 

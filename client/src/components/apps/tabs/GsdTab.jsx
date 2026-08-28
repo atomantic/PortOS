@@ -8,6 +8,7 @@ import PhaseCardList from '../../gsd/PhaseCardList';
 import GsdConcernsPanel from '../../cos/tabs/GsdConcernsPanel';
 import GsdDocumentsPanel from '../../gsd/GsdDocumentsPanel';
 import * as api from '../../../services/api';
+import { useInstanceFeatures } from '../../../hooks/useInstanceFeatures.js';
 
 const STEP_DESCRIPTIONS = {
   map: 'Run the /gsd:map-codebase skill to analyze the codebase structure',
@@ -17,6 +18,7 @@ const STEP_DESCRIPTIONS = {
 
 function GsdSetupGuide({ gsd, appId, repoPath, onRefresh }) {
   const navigate = useNavigate();
+  const { isFeatureEnabled } = useInstanceFeatures();
   const [runningStep, setRunningStep] = useState(null);
 
   // Determine the current step based on what exists
@@ -83,12 +85,14 @@ function GsdSetupGuide({ gsd, appId, repoPath, onRefresh }) {
           <div className="flex items-center gap-2">
             {repoPath && (
               <>
-                <button
-                  onClick={handleOpenOpenClaw}
-                  className="px-3 py-1.5 bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-400 rounded-lg text-xs flex items-center gap-1 border border-cyan-600/30"
-                >
-                  <Terminal size={14} /> Open OpenClaw
-                </button>
+                {isFeatureEnabled('openclaw') && (
+                  <button
+                    onClick={handleOpenOpenClaw}
+                    className="px-3 py-1.5 bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-400 rounded-lg text-xs flex items-center gap-1 border border-cyan-600/30"
+                  >
+                    <Terminal size={14} /> Open OpenClaw
+                  </button>
+                )}
                 <button
                   onClick={handleOpenClaude}
                   className="px-3 py-1.5 bg-port-accent-2/20 hover:bg-port-accent-2/30 text-port-accent-2 rounded-lg text-xs flex items-center gap-1 border border-port-accent-2/30"
@@ -328,4 +332,3 @@ export default function GsdTab({ appId, repoPath }) {
     </div>
   );
 }
-

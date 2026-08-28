@@ -3,6 +3,8 @@ import { Save } from 'lucide-react';
 import toast from '../ui/Toast';
 import { FormField } from '../ui/FormField';
 import * as api from '../../services/api';
+import useProviderModels from '../../hooks/useProviderModels';
+import AgentJobProviderFields from '../cos/AgentJobProviderFields';
 
 function ArrayInput({ label, value, onChange, placeholder }) {
   const [text, setText] = useState((value || []).join('\n'));
@@ -32,6 +34,11 @@ function ArrayInput({ label, value, onChange, placeholder }) {
 }
 
 export default function ConfigTab({ agent, isCreate, apps, onSave }) {
+  const { providers, activeProviderId } = useProviderModels({
+    allowDefault: true,
+    silent: true,
+    withEffort: true
+  });
   const [form, setForm] = useState({
     name: '',
     description: '',
@@ -42,6 +49,7 @@ export default function ConfigTab({ agent, isCreate, apps, onSave }) {
     constraints: [],
     providerId: '',
     model: '',
+    effort: '',
     autonomyLevel: 'assistant',
     priority: 'MEDIUM'
   });
@@ -59,6 +67,7 @@ export default function ConfigTab({ agent, isCreate, apps, onSave }) {
         constraints: agent.constraints || [],
         providerId: agent.providerId || '',
         model: agent.model || '',
+        effort: agent.effort || '',
         autonomyLevel: agent.autonomyLevel || 'assistant',
         priority: agent.priority || 'MEDIUM'
       });
@@ -74,6 +83,10 @@ export default function ConfigTab({ agent, isCreate, apps, onSave }) {
     });
   }, []);
 
+  const setAiProvider = useCallback((patch) => {
+    setForm(prev => ({ ...prev, ...patch }));
+  }, []);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setSaving(true);
@@ -81,18 +94,19 @@ export default function ConfigTab({ agent, isCreate, apps, onSave }) {
     const payload = {
       ...form,
       providerId: form.providerId || null,
-      model: form.model || null
+      model: form.model || null,
+      effort: form.effort || null
     };
 
     if (isCreate) {
-      const created = await api.createFeatureAgent(payload).catch(() => null);
+      const created = await api.createFeatureAgent(payload, { silent: true }).catch(() => null);
       setSaving(false);
       if (created) {
         toast.success('Feature agent created');
         onSave?.(created);
       }
     } else {
-      const updated = await api.updateFeatureAgent(agent.id, payload).catch(() => null);
+      const updated = await api.updateFeatureAgent(agent.id, payload, { silent: true }).catch(() => null);
       setSaving(false);
       if (updated) {
         toast.success('Config saved');
@@ -178,15 +192,14 @@ export default function ConfigTab({ agent, isCreate, apps, onSave }) {
 
       {/* AI Provider Override */}
       <div className="bg-port-card border border-port-border rounded-xl p-5 space-y-4">
-        <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">AI Provider (optional override)</h3>
-        <div className="grid grid-cols-2 gap-4">
-          <FormField label="Provider ID">
-            <input value={form.providerId || ''} onChange={e => set('providerId', e.target.value)} className={inputCls} placeholder="Leave empty for default" />
-          </FormField>
-          <FormField label="Model">
-            <input value={form.model || ''} onChange={e => set('model', e.target.value)} className={inputCls} placeholder="Leave empty for default" />
-          </FormField>
-        </div>
+        <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">AI Provider Override</h3>
+        <AgentJobProviderFields
+          data={{ providerId: form.providerId, model: form.model, effort: form.effort }}
+          providers={providers}
+          activeProviderId={activeProviderId}
+          onChange={setAiProvider}
+        />
+        <p className="text-xs text-gray-500">Leave the provider at the active default unless this agent should always use a specific coding provider, model, or reasoning effort.</p>
       </div>
 
       <div className="flex justify-end">

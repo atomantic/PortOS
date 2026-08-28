@@ -18,7 +18,7 @@ import TracksManager from '../components/music/TracksManager';
 import MusicDesigner from '../components/music/MusicDesigner';
 import TabPills from '../components/ui/TabPills';
 
-const TABS = [
+export const TABS = [
   { id: 'generate', label: 'Generate', icon: Wand2 },
   { id: 'artists', label: 'Artists', icon: Mic },
   { id: 'albums', label: 'Albums', icon: Disc3 },

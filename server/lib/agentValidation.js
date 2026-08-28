@@ -10,6 +10,7 @@
  */
 import { z } from 'zod';
 import { partialWithoutDefaults } from './zodCompat.js';
+import { EFFORT_LEVELS } from './providerModels.js';
 
 // =============================================================================
 // AGENT PERSONALITY SCHEMAS
@@ -338,6 +339,7 @@ export const featureAgentSchema = z.object({
   constraints: z.array(z.string()).default([]),
   providerId: z.string().optional().nullable(),
   model: z.string().optional().nullable(),
+  effort: z.preprocess((value) => (value === '' ? undefined : value), z.enum(EFFORT_LEVELS).nullable().optional()),
   autonomyLevel: featureAgentAutonomySchema.default('assistant'),
   priority: featureAgentPrioritySchema.default('MEDIUM')
 });
@@ -357,6 +359,7 @@ export const featureAgentUpdateSchema = z.object({
   constraints: z.array(z.string()).optional(),
   providerId: z.string().optional().nullable(),
   model: z.string().optional().nullable(),
+  effort: z.preprocess((value) => (value === '' ? undefined : value), z.enum(EFFORT_LEVELS).nullable().optional()),
   autonomyLevel: featureAgentAutonomySchema.optional(),
   priority: featureAgentPrioritySchema.optional()
 });

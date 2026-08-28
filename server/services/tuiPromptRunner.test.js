@@ -15,15 +15,27 @@ const TEST_WORKSPACE = process.cwd();
 // serves seeded response files from memory — see below). Mocks live
 // inside vi.hoisted so the vi.mock factories (which are themselves hoisted
 // to the top of the file) can reference them.
-const { ptyInstances, ptySpawnMock, runnerMocks, shellMocks, runsTmpDirRef, responseFiles } = vi.hoisted(() => ({
+const { ptyInstances, ptySpawnMock, runnerMocks, shellMocks, runsTmpDirRef, responseFiles, processEnvMocks } = vi.hoisted(() => ({
   ptyInstances: [],
   ptySpawnMock: vi.fn(),
+  // The pre-spawn binary probe. Defaults to "resolved" so every other test in
+  // this file exercises the spawn path regardless of which agent CLIs happen to
+  // be installed on the host running the suite.
+  processEnvMocks: {
+    findCommandOnPath: vi.fn((name) => `/usr/local/bin/${name}`),
+  },
   runsTmpDirRef: { current: null },
   // Absolute response-file path → contents, for the runs driven under fake
   // timers (see the fileUtils mock below).
   responseFiles: new Map(),
   runnerMocks: {
     finalizeRunRecord: vi.fn(),
+    failRunRecord: vi.fn(async ({ runId, error, exitCode, onData, onComplete }) => {
+      const failure = { id: runId, success: false, exitCode, error };
+      onData?.(`\u274c ${error}`);
+      onComplete?.(failure);
+      return failure;
+    }),
     emitRunStarted: vi.fn(),
     registerActiveRun: vi.fn(),
     unregisterActiveRun: vi.fn(),
@@ -60,6 +72,10 @@ runnerMocks.getRunsPath.mockImplementation(() => runsTmpDirRef.current);
 vi.mock('node-pty', () => ({ spawn: (...args) => ptySpawnMock(...args) }));
 vi.mock('./runner.js', () => runnerMocks);
 vi.mock('./shell.js', () => shellMocks);
+vi.mock('../lib/processEnv.js', async () => {
+  const actual = await vi.importActual('../lib/processEnv.js');
+  return { ...actual, findCommandOnPath: (...args) => processEnvMocks.findCommandOnPath(...args) };
+});
 vi.mock('../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../lib/fileUtils.js');
   // Imported here rather than relied on from the module scope: vi.mock
@@ -337,6 +353,9 @@ describe('executeTuiRun', () => {
     runnerMocks.consumeRunStopRequested.mockReset();
     runnerMocks.consumeRunStopRequested.mockReturnValue(false);
     runnerMocks.getRunsPath.mockClear();
+    runnerMocks.failRunRecord.mockClear();
+    processEnvMocks.findCommandOnPath.mockReset();
+    processEnvMocks.findCommandOnPath.mockImplementation((name) => `/usr/local/bin/${name}`);
     resetHostShutdownFlagForTests();
     shellMocks.registerExternalSession.mockClear();
     shellMocks.unregisterExternalSession.mockClear();
@@ -371,6 +390,56 @@ describe('executeTuiRun', () => {
       const provider = { id: 'claude', type: 'tui', command: 'echo' };
       await expect(executeTuiRun({ runId: 'run-x', provider, prompt: 12345, workspacePath: '/tmp' }))
         .rejects.toThrow(/non-empty string/);
+    });
+  });
+
+  describe('missing TUI binary', () => {
+    // A PTY has no shell to say "command not found": node-pty's child fails
+    // `execvp` and exits 1 with an EMPTY screen, so the output-driven
+    // `detectMissingTuiBinary` probe never fires. Before the pre-spawn check,
+    // an uninstalled CLI finalized as a bare "TUI exited with code 1" with no
+    // provider attached — which is exactly what queued a CoS task titled
+    // "Investigate AI provider failure: undefined (undefined)".
+    it('reports the real cause through the run record instead of spawning', async () => {
+      processEnvMocks.findCommandOnPath.mockReturnValue(null);
+      const provider = { id: 'opencode-llama-tui', name: 'OpenCode', type: 'tui', command: 'opencode', defaultModel: 'dflash' };
+      const onComplete = vi.fn();
+
+      await executeTuiRun({ runId: 'run-missing', provider, prompt: 'do thing', workspacePath: TEST_WORKSPACE, onComplete });
+
+      expect(ptySpawnMock).not.toHaveBeenCalled();
+      expect(runnerMocks.failRunRecord).toHaveBeenCalledWith(expect.objectContaining({
+        runId: 'run-missing',
+        error: 'TUI command not found: opencode',
+        exitCode: 127,
+        identity: { providerId: 'opencode-llama-tui', providerName: 'OpenCode', model: 'dflash' },
+      }));
+      expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ success: false, exitCode: 127 }));
+    });
+
+    it('probes the child PATH, not the server PATH — a provider may override it', async () => {
+      processEnvMocks.findCommandOnPath.mockReturnValue(null);
+      const provider = {
+        id: 'codex', name: 'Codex', type: 'tui', command: 'codex',
+        envVars: { PATH: '/opt/only-my-bin' },
+      };
+
+      await executeTuiRun({ runId: 'run-path', provider, prompt: 'do thing', workspacePath: TEST_WORKSPACE });
+
+      expect(processEnvMocks.findCommandOnPath).toHaveBeenCalledWith('codex', expect.objectContaining({
+        env: expect.objectContaining({ PATH: expect.stringContaining('/opt/only-my-bin') }),
+      }));
+    });
+
+    it('leaves failure reporting on by default and off for a probe run', async () => {
+      processEnvMocks.findCommandOnPath.mockReturnValue(null);
+      const provider = { id: 'opencode-llama-tui', name: 'OpenCode', type: 'tui', command: 'opencode' };
+
+      await executeTuiRun({ runId: 'run-default', provider, prompt: 'p', workspacePath: TEST_WORKSPACE });
+      expect(runnerMocks.failRunRecord).toHaveBeenLastCalledWith(expect.objectContaining({ reportFailure: true }));
+
+      await executeTuiRun({ runId: 'run-probe', provider, prompt: 'p', workspacePath: TEST_WORKSPACE, reportFailure: false });
+      expect(runnerMocks.failRunRecord).toHaveBeenLastCalledWith(expect.objectContaining({ reportFailure: false }));
     });
   });
 

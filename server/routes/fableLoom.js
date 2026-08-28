@@ -1,7 +1,7 @@
 /**
  * FableLoom REST surface — branching narratives.
  *
- * CRUD for looms/episodes/nodes plus the AI lanes (weave/branch/review/play)
+ * CRUD for looms/episodes/nodes plus the AI lanes (weave/branch/feedback/review/play)
  * and the deterministic graph validation. Every AI endpoint is a direct
  * user action in the same request (AI Provider Usage Policy). Scene images
  * ride the existing `/api/image-gen/generate` queue with a `fableLoom`
@@ -15,6 +15,7 @@ import {
   branchSchema,
   episodeCreateSchema,
   episodePatchSchema,
+  feedbackSchema,
   loomCreateSchema,
   loomListQuerySchema,
   loomPatchSchema,
@@ -38,6 +39,7 @@ import {
   deleteLoom,
   deleteNode,
   deleteNodeTransition,
+  feedbackEpisode,
   getLoom,
   listLoomSummaries,
   playTurn,
@@ -167,6 +169,14 @@ router.post('/:id/episodes/:episodeId/nodes/:nodeId/branch', asyncHandler(async 
 router.post('/:id/episodes/:episodeId/review', asyncHandler(async (req, res) => {
   const input = validateRequest(reviewSchema, req.body);
   res.json(await reviewEpisode(req.params.id, req.params.episodeId, input));
+}));
+
+// Apply one conversational author instruction to the episode. The service
+// keeps scene ids and graph membership stable while applying the model's
+// sparse metadata/scene/path patches.
+router.post('/:id/episodes/:episodeId/feedback', asyncHandler(async (req, res) => {
+  const input = validateRequest(feedbackSchema, req.body);
+  res.json(await feedbackEpisode(req.params.id, req.params.episodeId, input));
 }));
 
 router.post('/:id/episodes/:episodeId/play', asyncHandler(async (req, res) => {

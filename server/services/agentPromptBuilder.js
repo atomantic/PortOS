@@ -192,6 +192,20 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   // Feeds both the briefing template (via the reconciled `task` object) and the
   // full-path fallback below.
   task = reconcileSplitContext(task);
+
+  // Feature-agent tasks carry only a compact queue description. Expand the
+  // persisted persona briefing at spawn time so scheduled and manually
+  // triggered runs share the same feature-specific goals, constraints, branch
+  // context, and previous-run history without storing that prompt in the task
+  // queue or duplicating it in every task producer.
+  if (task.metadata?.featureAgentRun && task.metadata?.featureAgentId) {
+    const { getFeatureAgent, buildFeatureAgentPrompt } = await import('./featureAgents.js');
+    const featureAgent = await getFeatureAgent(task.metadata.featureAgentId);
+    if (featureAgent) {
+      const featurePrompt = await buildFeatureAgentPrompt(featureAgent);
+      task = { ...task, metadata: { ...task.metadata, prompt: featurePrompt } };
+    }
+  }
   const providerType = options.providerType || PROVIDER_TYPES.API;
   const providerId = options.providerId || null;
   const providerCommand = options.providerCommand || null;
@@ -306,6 +320,7 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
 
   // Build worktree context section if applicable
   const willOpenPR = isTruthyMetaFn(task.metadata?.openPR);
+  const whenDone = task.metadata?.whenDone === 'commit-push' ? 'commit-push' : 'leave-uncommitted';
   const claimFlow = isClaimFlowTask(task, isTruthyMetaFn);
   const prCompletion = resolvePrCompletion(task.metadata);
   // A discard (reasoning-only) worktree: the agent reasons in it but it's thrown
@@ -645,7 +660,7 @@ ${skillSection ? `## Task-Type Skill Guidelines\n\n${skillSection}\n` : ''}${too
 - Never update the PortOS changelog (\`.changelog/\`) for work on managed apps — the PortOS changelog tracks PortOS core changes only
 ${(() => {
   const bullet = buildCompletionGuidelineBullet({
-    isReadOnly: isTruthyMetaFn(task.metadata?.readOnly),
+    isReadOnly: isTruthyMetaFn(task.metadata?.readOnly), whenDone,
     isTui, tuiCompletionCommand, slashdoFree: isTui && !canRunSlashCommands,
     worktreeInfo, willOpenPR, prCompletion, discardWorktree, noCodeOutput, noChangeSuccess,
     leavePrOpen: leavesPrForHuman(task),

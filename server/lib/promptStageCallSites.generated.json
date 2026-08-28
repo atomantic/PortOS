@@ -34,6 +34,9 @@
   "fableloom-branch-node": [
     "server/services/fableLoom/weave.js"
   ],
+  "fableloom-feedback-episode": [
+    "server/services/fableLoom/weave.js"
+  ],
   "fableloom-play-turn": [
     "server/services/fableLoom/weave.js"
   ],

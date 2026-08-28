@@ -25,6 +25,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `@novnc/novnc` | 1 | KEEP | PortDeck remote desktop viewer | Mature RFB/VNC protocol implementation; replacing it would require owning multiple security types and framebuffer encodings |
 | `@googleapis/calendar` | 1 | KEEP | Calendar integration | Scoped official Google SDK (replaced monolithic `googleapis`) |
 | `@googleapis/gmail` | 1 | KEEP | Messages/Gmail integration | Scoped official Google SDK |
+| `chokidar` | 1 | KEEP | server file watching | Mature cross-platform file-system watcher used by server services |
 | `express` | 1 | KEEP | `server/index.js` + routes | Framework |
 | `google-auth-library` | 1 | KEEP | Google OAuth | Pairs with `@googleapis/*` |
 | `kokoro-js` | 2 | KEEP | `server/services/voice/tts-kokoro.js` | Only pure-JS in-process TTS; replacement = Python subprocess + pooling |
@@ -57,6 +58,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `recharts` | 1 | KEEP | charts | |
 | `socket.io-client` | 1 | KEEP | realtime client | |
 | `three` | 1 | KEEP | 3D | |
+| `three-stdlib` | 1 | KEEP | CyberCity 3D | Community-maintained Three.js utilities used by the client renderer |
 | **Client devDeps** | | | | |
 | `@biomejs/biome` | 1 | KEEP | linting | Replaced the whole eslint stack 2026-08-04; native binary, 0 regular deps + 8 platform optionals (1 installed) |
 | `eslint` | — | REMOVED | linting | 2026-08-04 → `@biomejs/biome`. 53 packages were reachable only via `eslint` itself (incl. the `file-entry-cache → flat-cache → keyv` chain); 110 net once the plugin subtrees and orphaned `typescript` go too |
@@ -71,6 +73,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `vitest` | 1 | KEEP | client test runner | jsdom environment |
 | `jsdom` | 1 | KEEP | test DOM | Paired with vitest |
 | `@testing-library/jest-dom` | 1 | KEEP | test matchers | |
+| `@testing-library/dom` | 1 | KEEP | DOM test utilities | Foundation for the client Testing Library stack |
 | `@testing-library/react` | 1 | KEEP | component tests | |
 | `@testing-library/user-event` | 1 | KEEP | interaction tests | |
 | `rollup-plugin-visualizer` | 2 | KEEP | bundle-size analysis | Dev-only, opt-in |

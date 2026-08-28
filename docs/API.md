@@ -10,7 +10,23 @@ http://localhost:5555/api
 
 When a TLS cert is provisioned (`npm run setup:cert`), `:5555` serves HTTPS instead and a loopback-only HTTP mirror runs on `http://127.0.0.1:5553` for local scripts. See [PORTS.md](./PORTS.md).
 
-This document covers the most commonly used endpoints plus a [complete route-domain index](#route-domain-index). A machine-readable OpenAPI 3.1 spec for the public API surface is served at `GET /api/api-docs/openapi.json` and rendered in the UI at `/api-access`.
+This document covers the most commonly used endpoints plus a [route-domain index](#route-domain-index). The in-app **API Explorer** at `/api-reference/catalog` is the exhaustive, generated reference:
+
+For the bridge between these HTTP/event inventories and model-facing tools,
+see [API and MCP Unified Tool Contract](./API_TOOL_CONTRACT.md). It records
+the shipped semantic registry, MCP context/action schemas, authority matrix,
+and the current-vs-proposed boundary.
+
+- `GET /api/api-docs/catalog.json` — searchable metadata for every mounted HTTP operation.
+- `GET /api/api-docs/internal/openapi.json` — OpenAPI 3.0.3 for the complete internal HTTP surface.
+- `GET /api/api-docs/openapi.json` — OpenAPI 3.0.3 for only the external APIs currently exposed in Settings.
+- `GET /api/api-docs/events.json` — searchable Socket.IO event inventory.
+- `GET /api/api-docs/asyncapi.json` — AsyncAPI 3 for the Socket.IO transport.
+- `GET /api/api-docs/tools.min.json` — the minimized semantic tool resource: only the operations annotated `x-portos-tool`, flattened to provider-neutral tool records with an HTTP binding. Sized for an agent to read whole, unlike the full internal document.
+
+Generated entries are explicitly marked `generated` until a runtime-backed payload contract exists; detailed entries are marked `modeled`. Regenerate the checked-in route and event manifests with `npm run generate:api-docs`. Drift tests fail when source declarations and committed manifests diverge.
+
+When adding an HTTP route, keep its request Zod schema in a reusable server library and register the detailed documentation in `server/lib/apiOperationContracts.js`; the route and OpenAPI should consume the same schema object. Add an `x-portos-tool` annotation to that contract entry to also publish the operation as an agent-callable tool in `tools.min.json`, and declare the codes its error responses really throw in `x-portos-error-codes` — the HTTP status alone does not identify the code, since `errorHandler` prefers an explicit `err.code` over the status map. Socket payload schemas follow the same pattern in `server/lib/socketEventContracts.js`. The generators guarantee inventory coverage, while these small registries make richer contracts incremental without maintaining a second handwritten list of paths or events.
 
 Building a native companion client? See [COMPANION_APP_API.md](./COMPANION_APP_API.md) — the stable, pre-auth-discoverable contract (discovery/identity, HTTP Basic auth, instance management, palette actions, daily-log, POST progress, and the iCloud-sync precedent) that the PortDeck app consumes.
 
@@ -123,14 +139,14 @@ own wire contract in [FEDERATED_MEDIA_PROVIDERS.md](./FEDERATED_MEDIA_PROVIDERS.
 | GET | `/agents/:pid` | Get agent process details |
 | DELETE | `/agents/:pid` | Kill agent process |
 
-### Agent Context (MCP)
+### Agent Tools (MCP)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/agent-context/manifest` | Inspect the local context profile, scopes, schemas, exclusions, and limits; available while MCP is disabled |
-| POST | `/agent-context/mcp` | Loopback-only, opt-in MCP Streamable HTTP endpoint for bounded read-only context tools |
+| GET | `/agent-context/manifest` | Inspect the local context profile, scopes, semantic-action grants, schemas, exclusions, and limits; available while MCP is disabled |
+| POST | `/agent-context/mcp` | Loopback-only, opt-in MCP Streamable HTTP endpoint for bounded context plus explicitly granted semantic PortOS tools |
 
-See [Agent Context (MCP)](./features/agent-context.md) for setup, transport headers, privacy profiles, and tool schemas.
+Context tools remain read-only. Semantic reads and writes are independent, default-off grants; MCP advertises only granted actions and never accepts a raw route, URL, shell command, or SQL query. See [Agent Tools (MCP)](./features/agent-context.md) for setup, transport headers, privacy profiles, grants, and tool schemas.
 
 ### Command Execution
 
@@ -188,6 +204,9 @@ See [Agent Context (MCP)](./features/agent-context.md) for setup, transport head
 | POST | `/cos/start` | Start daemon |
 | POST | `/cos/stop` | Stop daemon |
 | GET | `/cos/config` | Get configuration |
+| GET | `/cos/tools` | Provider-neutral semantic tool catalog; `scope=agent|mind|ui|voice`, with PortOS/OpenAI/Anthropic/MCP output formats |
+| POST | `/cos/tools/call` | Execute one schema-validated semantic tool with server-derived authority and idempotency |
+| GET | `/cos/tools/calls/:requestId` | Read a retained normalized tool result |
 | PUT | `/cos/config` | Update configuration |
 | GET | `/cos/tasks` | Get all tasks |
 | POST | `/cos/evaluate` | Force task evaluation |
@@ -537,7 +556,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/system/capabilities` | Local hardware capabilities for model/provider selection |
 | `/api/system-resources` | System storage report and AI-assisted cleanup triage |
 | `/api/capabilities` | Feature capability flags |
-| `/api/agent-context` | Opt-in, loopback-only read-only MCP context and runtime manifest |
+| `/api/agent-context` | Opt-in, loopback-only MCP context plus separately granted semantic PortOS actions |
 | `/api/workspace-contexts` | Workspace context management |
 | `/api/apps/:appId/reference-repos` | Per-app reference repos |
 | `/api/network-exposure` | Network exposure checks |
@@ -569,7 +588,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/lmstudio`, `/api/local-llm` | Local LLM backends and the local runtime servers PortOS can start/stop (Ollama, LM Studio, `llama-server`, MTPLX — the last two as PM2 processes; `POST /api/local-llm/save-startup` is `pm2 save`), plus MTPLX's checkpoint catalog — `GET /api/local-llm/mtplx/models/search`, `POST .../models/pull` (byte progress on the `mtplx:download` socket event), `POST .../models/remove` |
 | `/api/code-review` | Code review runs |
 | `/api/voice`, `/api/voice/public` | Voice assistant |
-| `/api/api-docs` | OpenAPI 3.1 spec |
+| `/api/api-docs` | Generated HTTP/event catalogs, OpenAPI 3.0.3 documents, AsyncAPI 3 document, and the minimized semantic tool resource |
 | `/api/data` | Data manager/sync |
 | `/api/datadog`, `/api/jira`, `/api/github`, `/api/telegram` | External integrations |
 | `/api/health` | Health check |
@@ -639,6 +658,8 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 ## WebSocket Events
 
 Connect to Socket.IO at `http://localhost:5555`.
+
+The complete generated event list is visible in **API Explorer → Event API** and available at `GET /api/api-docs/asyncapi.json` as AsyncAPI 3. The examples below highlight common flows rather than serving as the exhaustive inventory.
 
 ### Log Streaming
 

@@ -13,8 +13,11 @@ const USAGE_FILE = join(DATA_DIR, 'usage.json');
 // any useful streak/report window — while collapsing everything older to per-month.
 const ROLLUP_RETENTION_DAYS = 400;
 const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const MONTH_KEY_RE = /^\d{4}-\d{2}$/;
+const SUMMARY_CACHE_LIMIT = 20;
 
 let usageData = null;
+const summaryCache = new Map();
 const UNKNOWN_PROVIDER_ID = 'unknown';
 const UNKNOWN_PROVIDER_NAME = 'Unknown provider';
 const LEGACY_PROVIDER_ID = 'legacy';
@@ -62,6 +65,7 @@ function getEmptyUsage() {
     byModel: {},
     dailyActivity: {},
     monthlyActivity: {},
+    earliestActivityDay: null,
     hourlyActivity: Array(24).fill(0),
     lastUpdated: null
   };
@@ -119,11 +123,33 @@ export function rollupOldDailyActivity(dailyActivity, monthlyActivity, { retenti
   return changed;
 }
 
+const findEarliestActivityDay = (dailyActivity, monthlyActivity) => {
+  let earliest = null;
+  const consider = (day) => {
+    if (!earliest || day < earliest) earliest = day;
+  };
+  for (const key of Object.keys(dailyActivity || {})) {
+    if (DAY_KEY_RE.test(key)) consider(key);
+  }
+  for (const key of Object.keys(monthlyActivity || {})) {
+    if (MONTH_KEY_RE.test(key)) consider(`${key}-01`);
+  }
+  return earliest;
+};
+
+const cacheActivityDay = (day) => {
+  if (!DAY_KEY_RE.test(day)) return;
+  if (!usageData.earliestActivityDay || day < usageData.earliestActivityDay) {
+    usageData.earliestActivityDay = day;
+  }
+};
+
 /**
  * Load usage data from disk
  */
 export async function loadUsage() {
   await ensureDir(DATA_DIR);
+  summaryCache.clear();
 
   // STRICT (#4115): the `!usageData` branch below does not just report an empty
   // total — it atomically OVERWRITES usage.json with zeros on the same tick. A
@@ -153,7 +179,10 @@ export async function loadUsage() {
     normalizedProviders = normalizeUndefinedProviderBucket(bucket?.byProvider) || normalizedProviders;
   }
   const rolledUp = rollupOldDailyActivity(usageData.dailyActivity, usageData.monthlyActivity);
-  if (rolledUp || normalizedProviders) {
+  const earliestActivityDay = findEarliestActivityDay(usageData.dailyActivity, usageData.monthlyActivity);
+  const earliestChanged = usageData.earliestActivityDay !== earliestActivityDay;
+  usageData.earliestActivityDay = earliestActivityDay;
+  if (rolledUp || normalizedProviders || earliestChanged) {
     if (normalizedProviders) console.log('📊 Normalized undefined usage providers to unknown');
     if (rolledUp) console.log(`📊 Rolled up old daily usage into ${Object.keys(usageData.monthlyActivity).length} monthly buckets`);
     await saveUsage();
@@ -167,6 +196,7 @@ export async function loadUsage() {
  * Save usage data to disk
  */
 async function saveUsage() {
+  summaryCache.clear();
   usageData.lastUpdated = new Date().toISOString();
   await atomicWrite(USAGE_FILE, usageData);
 }
@@ -189,19 +219,7 @@ export function getUsage() {
  * unbounded one (see lib/subscriptionSavings.js).
  */
 export function getFirstActivityDay() {
-  const data = getUsage();
-  // Min over the keys rather than sort-then-head: on a full 400-day retention
-  // window that is one linear pass instead of three intermediate arrays and an
-  // O(n log n) string sort. YYYY-MM-DD compares correctly as a string.
-  let earliest = null;
-  const consider = (day) => { if (!earliest || day < earliest) earliest = day; };
-  for (const key of Object.keys(data.dailyActivity || {})) {
-    if (DAY_KEY_RE.test(key)) consider(key);
-  }
-  for (const key of Object.keys(data.monthlyActivity || {})) {
-    if (/^\d{4}-\d{2}$/.test(key)) consider(`${key}-01`);
-  }
-  return earliest;
+  return getUsage().earliestActivityDay ?? null;
 }
 
 /**
@@ -430,6 +448,7 @@ function todayBucket() {
   const today = new Date().toISOString().split('T')[0];
   if (!usageData.dailyActivity[today]) {
     usageData.dailyActivity[today] = { sessions: 0, messages: 0, tokens: 0 };
+    cacheActivityDay(today);
   }
   return usageData.dailyActivity[today];
 }
@@ -482,8 +501,7 @@ export async function recordSession(providerId, providerName, model) {
  * tokens, estimated" so every existing caller — and the
  * `POST /api/usage/messages` route — keeps its current behavior.
  */
-export async function recordMessages(providerId, model, messageCount, outputTokens = 0, inputTokens = 0, extra = {}) {
-  if (!usageData) await loadUsage();
+function applyMessageUsage(providerId, model, messageCount, outputTokens = 0, inputTokens = 0, extra = {}) {
   const provider = normalizeProvider(providerId);
   const cacheReadTokens = Math.max(0, extra?.cacheReadTokens || 0);
   const cacheWriteTokens = Math.max(0, extra?.cacheWriteTokens || 0);
@@ -535,7 +553,11 @@ export async function recordMessages(providerId, model, messageCount, outputToke
   const providerDay = providerDayBucket(day, provider.id, providerName);
   bumpDayBucket(providerDay);
   if (model) bumpDayBucket(modelDayBucket(providerDay, model));
+}
 
+export async function recordMessages(providerId, model, messageCount, outputTokens = 0, inputTokens = 0, extra = {}) {
+  if (!usageData) await loadUsage();
+  applyMessageUsage(providerId, model, messageCount, outputTokens, inputTokens, extra);
   await saveUsage();
 }
 
@@ -561,27 +583,32 @@ export async function recordMessages(providerId, model, messageCount, outputToke
  */
 export async function recordRunUsage(record) {
   // A single run can produce several records when its session switched models
-  // mid-flight (see usageReconciler.reconcileRunUsage) — record each so every
-  // model's tokens are priced at that model's own rate.
-  if (Array.isArray(record)) {
-    for (const entry of record) await recordRunUsage(entry);
-    return;
+  // mid-flight (see usageReconciler.reconcileRunUsage). Apply the full batch
+  // in memory before saving so every model is priced independently without
+  // rewriting the complete usage file once per entry.
+  const records = Array.isArray(record) ? record.flat(Infinity) : [record];
+  if (records.length === 0) return;
+  if (!usageData) await loadUsage();
+
+  for (const entry of records) {
+    const {
+      providerId = null,
+      model = null,
+      messages = 1,
+      tokensIn = 0,
+      tokensOut = 0,
+      cacheReadTokens = 0,
+      cacheWriteTokens = 0,
+      source = 'estimate'
+    } = entry || {};
+    applyMessageUsage(providerId, model, messages, tokensOut, tokensIn, {
+      cacheReadTokens,
+      cacheWriteTokens,
+      source
+    });
   }
-  const {
-    providerId = null,
-    model = null,
-    messages = 1,
-    tokensIn = 0,
-    tokensOut = 0,
-    cacheReadTokens = 0,
-    cacheWriteTokens = 0,
-    source = 'estimate'
-  } = record || {};
-  await recordMessages(providerId, model, messages, tokensOut, tokensIn, {
-    cacheReadTokens,
-    cacheWriteTokens,
-    source
-  });
+
+  await saveUsage();
 }
 
 /**
@@ -979,6 +1006,20 @@ export function getUsageSummary({ from = null, to = null, providers = [] } = {})
     };
   }
 
+  const cacheKey = JSON.stringify({
+    day: new Date().toISOString().split('T')[0],
+    from,
+    to,
+    providers: providers.map((provider) => ({
+      id: provider.id,
+      name: provider.name,
+      free: isFreeProvider(provider),
+      family: familyForProvider(provider)
+    }))
+  });
+  const cached = summaryCache.get(cacheKey);
+  if (cached) return cached;
+
   // Get last 7 days activity
   const last7Days = [];
   for (let i = 6; i >= 0; i--) {
@@ -1008,7 +1049,7 @@ export function getUsageSummary({ from = null, to = null, providers = [] } = {})
       })
     : report;
 
-  return {
+  const summary = {
     totalSessions: usageData.totalSessions,
     totalMessages: usageData.totalMessages,
     totalToolCalls: usageData.totalToolCalls,
@@ -1032,6 +1073,11 @@ export function getUsageSummary({ from = null, to = null, providers = [] } = {})
     report,
     lastUpdated: usageData.lastUpdated
   };
+  if (summaryCache.size >= SUMMARY_CACHE_LIMIT) {
+    summaryCache.delete(summaryCache.keys().next().value);
+  }
+  summaryCache.set(cacheKey, summary);
+  return summary;
 }
 
 /**
@@ -1042,6 +1088,3 @@ export async function resetUsage() {
   await saveUsage();
   return true;
 }
-
-// Load on startup
-loadUsage().catch(err => console.error(`❌ Failed to load usage: ${err.message}`));

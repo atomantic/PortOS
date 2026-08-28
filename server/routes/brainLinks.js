@@ -316,9 +316,7 @@ router.post('/buckets', asyncHandler(async (req, res) => {
  */
 router.post('/buckets/reorder', asyncHandler(async (req, res) => {
   const { ids } = validateRequest(bucketReorderSchema, req.body);
-  for (let i = 0; i < ids.length; i++) {
-    await brainService.updateBucket(ids[i], { order: i });
-  }
+  await brainService.reorderBuckets(ids.map((id, order) => ({ id, order })));
   const buckets = await brainService.getBuckets();
   buckets.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   res.json({ buckets });

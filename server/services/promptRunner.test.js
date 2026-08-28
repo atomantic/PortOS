@@ -27,6 +27,10 @@ vi.mock('./tuiPromptRunner.js', () => ({
   executeTuiRun: vi.fn(),
 }));
 
+vi.mock('./providerExecutionReadiness.js', () => ({
+  ensureProviderReadyForExecution: vi.fn().mockResolvedValue({ success: true }),
+}));
+
 // providers.js is a compatibility shim that throws when the toolkit hasn't
 // been initialized via setAIToolkit(). Mock it so the resolveProviderAndModel
 // tests can drive the active/by-id lookups directly. `getAllProviders` is
@@ -59,12 +63,13 @@ vi.mock('../lib/aiToolkitState.js', () => ({
 
 const runner = await import('./runner.js');
 const tuiRunner = await import('./tuiPromptRunner.js');
+const executionReadiness = await import('./providerExecutionReadiness.js');
 const providers = await import('./providers.js');
 const autoFixer = await import('./autoFixer.js');
 const toolkitState = await import('../lib/aiToolkitState.js');
 const { ERROR_CATEGORIES } = await import('../lib/aiToolkit/errorDetection.js');
 const { CREATIVE_LATITUDE_HEADING, withCreativeLatitude } = await import('../lib/creativeLatitude.js');
-const { runPromptThroughProvider, resolveProviderAndModel, resolveEffectiveModel, pickConfigCorrectedModel, normalizeResponseSchema, coerceResponseToSchema, isSchemaTypeCategory, buildRequestCapabilities } = await import('./promptRunner.js');
+const { runPromptThroughProvider, resolveProviderAndModel, resolveEffectiveModel, pickConfigCorrectedModel, normalizeResponseSchema, coerceResponseToSchema, isSchemaTypeCategory, buildRequestCapabilities, assertVisionRunUsedImages } = await import('./promptRunner.js');
 
 const apiProvider = (extra = {}) => ({
   id: 'mock-api', type: 'api', defaultModel: 'm-default', ...extra,
@@ -110,6 +115,28 @@ describe('promptRunner — happy paths', () => {
     expect(out).toEqual({ text: 'hello world', runId: 'run-xyz', model: 'm-default', provider: cliProvider() });
     expect(runner.executeCliRun).toHaveBeenCalledTimes(1);
     expect(runner.executeApiRun).not.toHaveBeenCalled();
+  });
+
+  it('forwards images through the ordinary Codex CLI lifecycle and rejects unsupported CLIs', async () => {
+    const codex = cliProvider({ command: 'codex' });
+    runner.executeCliRun.mockImplementation(async ({ screenshots, onComplete }) => {
+      expect(screenshots).toEqual(['/tmp/example.png']);
+      onComplete({ success: true });
+    });
+    const output = await runPromptThroughProvider({
+      provider: codex,
+      prompt: 'Inspect the image.',
+      source: 'test',
+      screenshots: ['/tmp/example.png'],
+      allowFallback: false,
+    });
+    expect(assertVisionRunUsedImages(output, codex)).toBe(codex);
+    await expect(runPromptThroughProvider({
+      provider: cliProvider({ command: 'opencode' }),
+      prompt: 'Inspect the image.',
+      source: 'test',
+      screenshots: ['/tmp/example.png'],
+    })).rejects.toMatchObject({ code: 'VISION_PROVIDER_UNSUPPORTED' });
   });
 
   it('routes API providers through executeApiRun, accumulates text, resolves { text, runId, model }', async () => {
@@ -620,6 +647,20 @@ describe('promptRunner — TUI provider routing', () => {
     expect(tuiRunner.executeTuiRun).toHaveBeenCalledTimes(1);
     expect(runner.executeCliRun).not.toHaveBeenCalled();
     expect(runner.executeApiRun).not.toHaveBeenCalled();
+  });
+
+  it('wakes an MTPLX-backed TUI before spawning OpenCode', async () => {
+    const provider = tuiProvider({
+      id: 'opencode-mtplx-tui',
+      mtplxBacked: true,
+      endpoint: 'http://127.0.0.1:8000/v1',
+    });
+    tuiRunner.executeTuiRun.mockImplementation(async ({ onComplete }) => onComplete({ success: true, text: 'ready' }));
+
+    await runPromptThroughProvider({ provider, prompt: 'p', source: 'test' });
+
+    expect(executionReadiness.ensureProviderReadyForExecution).toHaveBeenCalledWith(provider);
+    expect(tuiRunner.executeTuiRun).toHaveBeenCalledTimes(1);
   });
 
   it('passes cwd + timeout overrides through to executeTuiRun', async () => {

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { Play, Pause, RotateCcw, Rewind, FastForward, X, Zap } from 'lucide-react';
+import { Bookmark, Play, Pause, RotateCcw, Rewind, FastForward, X, Zap } from 'lucide-react';
 import Modal from './ui/Modal';
 import useKeyCapture from '../hooks/useKeyCapture';
 import { noPointerFocusSurfaceProps } from '../lib/a11yKeyboard';
+import { rapidReaderWords } from '../lib/rapidReaderPosition';
 
 // Optimal Recognition Point — the focal letter the eye lands on. Spritz-style:
 // shorter words use a left-shifted ORP, longer words shift right. Returns the
@@ -17,28 +18,16 @@ const orpIndex = (word) => {
   return 4;
 };
 
-// Tokenize while preserving punctuation attached to words. Strips empty tokens.
-// Each token may be one or two words depending on `chunkSize`. Short connector
-// words (≤3 chars) merge into the next token when chunkSize=2 — feels natural
-// at speed and keeps WPM honest.
-const tokenize = (text, chunkSize) => {
-  if (!text) return [];
-  const raw = text.replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
-  if (chunkSize === 1) return raw;
-  const out = [];
-  let i = 0;
-  while (i < raw.length) {
-    const a = raw[i];
-    const b = raw[i + 1];
-    if (b && (a.length <= 3 || b.length <= 3) && (a.length + b.length) <= 12) {
-      out.push(`${a} ${b}`);
-      i += 2;
-    } else {
-      out.push(a);
-      i += 1;
-    }
+// Build the display chunk from the canonical word position. This keeps cursor
+// starts and bookmarks exact even when they land where a prior 2-word chunk
+// would have begun one word earlier.
+const chunkAt = (words, wordIndex, chunkSize) => {
+  const a = words[wordIndex]?.text || '';
+  const b = words[wordIndex + 1]?.text;
+  if (chunkSize === 2 && b && (a.length <= 3 || b.length <= 3) && (a.length + b.length) <= 12) {
+    return { value: `${a} ${b}`, wordCount: 2 };
   }
-  return out;
+  return { value: a, wordCount: 1 };
 };
 
 // Sentence-end detection: word ends with terminal punctuation. Used to add a
@@ -56,33 +45,43 @@ export default function RapidReader({
   autoPlay = false,
   compact = false,
   inDialog = false,
+  initialWordIndex = 0,
   onClose,
-  onComplete
+  onComplete,
+  onPositionChange,
+  onBookmark,
+  onWpmChange,
+  onChunkSizeChange,
 }) {
   const [wpm, setWpm] = useState(initialWpm);
   const [chunkSize, setChunkSize] = useState(initialChunk);
-  const [idx, setIdx] = useState(0);
+  const [wordIndex, setWordIndex] = useState(initialWordIndex);
   const [playing, setPlaying] = useState(autoPlay);
   const timeoutRef = useRef(null);
 
-  const tokens = useMemo(() => tokenize(text, chunkSize), [text, chunkSize]);
-  const total = tokens.length;
-  const current = tokens[idx] || '';
+  const words = useMemo(() => rapidReaderWords(text), [text]);
+  const totalWords = words.length;
+  const current = useMemo(() => chunkAt(words, wordIndex, chunkSize), [words, wordIndex, chunkSize]);
 
-  // Keep idx in range when text/chunkSize changes
+  // Position is a canonical word offset, so changing chunk size never jumps to
+  // a different place in the source text.
   useEffect(() => {
-    if (idx >= tokens.length && tokens.length > 0) setIdx(tokens.length - 1);
-  }, [tokens.length, idx]);
+    setWordIndex(Math.max(0, Math.min(initialWordIndex, Math.max(0, totalWords - 1))));
+  }, [text, initialWordIndex, totalWords]);
+
+  useEffect(() => {
+    onPositionChange?.({ wordIndex, wordCount: totalWords, wpm, chunkSize, playing });
+  }, [wordIndex, totalWords, wpm, chunkSize, playing, onPositionChange]);
 
   // Per-token delay: base = 60000/wpm ms. Long chunks and sentence boundaries
   // get extra time; ultra-short tokens get a small bonus too.
   const delayFor = useCallback((token) => {
     const base = 60000 / Math.max(60, wpm);
     let mult = 1;
-    if (endsSentence(token)) mult = 1.8;
-    else if (endsClause(token)) mult = 1.3;
-    if (token && token.length > 8) mult *= 1.15;
-    return base * mult;
+    if (endsSentence(token?.value)) mult = 1.8;
+    else if (endsClause(token?.value)) mult = 1.3;
+    if (token?.value.length > 8) mult *= 1.15;
+    return base * token.wordCount * mult;
   }, [wpm]);
 
   useEffect(() => {
@@ -90,16 +89,16 @@ export default function RapidReader({
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
       return;
     }
-    if (idx >= total) {
-      setPlaying(false);
-      onComplete?.();
-      return;
-    }
     timeoutRef.current = setTimeout(() => {
-      setIdx((i) => i + 1);
+      const nextWordIndex = wordIndex + current.wordCount;
+      if (nextWordIndex < totalWords) setWordIndex(nextWordIndex);
+      else {
+        setPlaying(false);
+        onComplete?.();
+      }
     }, delayFor(current));
     return () => clearTimeout(timeoutRef.current);
-  }, [playing, idx, total, current, delayFor, onComplete]);
+  }, [playing, wordIndex, totalWords, current, delayFor, onComplete]);
 
   // Keyboard controls — only active while this component is mounted. Claimed in
   // the capture phase so a handled key never reaches a bubble-phase window
@@ -108,31 +107,45 @@ export default function RapidReader({
   useKeyCapture({
     enabledInDialog: inDialog,
     onKeyDown: (e) => {
-      if (e.key === ' ') setPlaying((p) => !p);
-      else if (e.key === 'ArrowLeft') setIdx((i) => Math.max(0, i - 1));
-      else if (e.key === 'ArrowRight') setIdx((i) => Math.min(total - 1, i + 1));
-      else if (e.key === 'r' || e.key === 'R') { setIdx(0); setPlaying(true); }
-      else if (e.key === '+' || e.key === '=') setWpm((w) => Math.min(1200, w + 25));
-      else if (e.key === '-' || e.key === '_') setWpm((w) => Math.max(100, w - 25));
+      if (e.key === ' ') {
+        if (wordIndex >= totalWords - 1) { setWordIndex(0); setPlaying(true); }
+        else setPlaying((p) => !p);
+      }
+      else if (e.key === 'ArrowLeft') setWordIndex((value) => Math.max(0, value - 1));
+      else if (e.key === 'ArrowRight') setWordIndex((value) => Math.min(totalWords - 1, value + 1));
+      else if (e.key === 'r' || e.key === 'R') { setWordIndex(0); setPlaying(true); }
+      else if ((e.key === 'b' || e.key === 'B') && onBookmark) onBookmark(wordIndex);
+      else if (e.key === '+' || e.key === '=') setWpm((value) => {
+        const next = Math.min(1000, value + 25);
+        onWpmChange?.(next);
+        return next;
+      });
+      else if (e.key === '-' || e.key === '_') setWpm((value) => {
+        const next = Math.max(100, value - 25);
+        onWpmChange?.(next);
+        return next;
+      });
       else if (e.key === 'Escape' && onClose) onClose();
       else return false;
       return true;
     },
   });
 
-  const restart = () => { setIdx(0); setPlaying(true); };
+  const restart = () => { setWordIndex(0); setPlaying(true); };
   const togglePlay = () => {
-    if (idx >= total - 1) { restart(); return; }
+    if (wordIndex >= totalWords - 1) { restart(); return; }
     setPlaying((p) => !p);
   };
-  const back = () => { setPlaying(false); setIdx((i) => Math.max(0, i - 5)); };
-  const fwd = () => { setPlaying(false); setIdx((i) => Math.min(total - 1, i + 5)); };
+  const back = () => { setPlaying(false); setWordIndex((value) => Math.max(0, value - 5)); };
+  const fwd = () => { setPlaying(false); setWordIndex((value) => Math.min(totalWords - 1, value + 5)); };
+  const changeWpm = (next) => { setWpm(next); onWpmChange?.(next); };
+  const changeChunkSize = (next) => { setChunkSize(next); onChunkSizeChange?.(next); };
 
-  const progress = total ? ((idx + 1) / total) * 100 : 0;
-  const elapsedSec = Math.round(((idx + 1) * 60) / Math.max(60, wpm));
-  const totalSec = Math.round((total * 60) / Math.max(60, wpm));
+  const progress = totalWords ? (Math.min(totalWords, wordIndex + current.wordCount) / totalWords) * 100 : 0;
+  const elapsedSec = Math.round(((wordIndex + 1) * 60) / Math.max(60, wpm));
+  const totalSec = Math.round((totalWords * 60) / Math.max(60, wpm));
 
-  if (!total) {
+  if (!totalWords) {
     return (
       <div className={`bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500 ${compact ? '' : 'min-h-64'}`}>
         Paste or pass some text to start reading.
@@ -156,7 +169,7 @@ export default function RapidReader({
           style={{ minWidth: '12ch' }}
         >
           {/* Position chunk so its focal letter sits on the center guide */}
-          <FocalSlot chunk={current} focalColor={focalColor} />
+          <FocalSlot chunk={current.value} focalColor={focalColor} />
         </div>
       </div>
 
@@ -207,6 +220,17 @@ export default function RapidReader({
           >
             <RotateCcw size={16} />
           </button>
+          {onBookmark && (
+            <button
+              type="button"
+              onClick={() => onBookmark(wordIndex)}
+              className="min-h-10 min-w-10 flex items-center justify-center rounded-lg border border-port-border text-gray-400 hover:text-white hover:bg-port-bg/60"
+              title="Save bookmark (B)"
+              aria-label="Save bookmark"
+            >
+              <Bookmark size={16} />
+            </button>
+          )}
           {onClose && (
             <button
               type="button"
@@ -229,7 +253,8 @@ export default function RapidReader({
               max={1000}
               step={25}
               value={wpm}
-              onChange={(e) => setWpm(Number(e.target.value))}
+              onChange={(e) => changeWpm(Number(e.target.value))}
+              aria-label="Reading speed"
               className="w-28 sm:w-32 accent-port-accent"
             />
             <span className="font-mono text-gray-300 w-10 text-right">{wpm}</span>
@@ -237,7 +262,7 @@ export default function RapidReader({
           <div className="flex items-center gap-1 border border-port-border rounded-md overflow-hidden">
             <button
               type="button"
-              onClick={() => setChunkSize(1)}
+              onClick={() => changeChunkSize(1)}
               className={`px-2 py-1 text-xs ${chunkSize === 1 ? 'bg-port-accent/20 text-port-accent' : 'text-gray-400 hover:text-white'}`}
               aria-pressed={chunkSize === 1}
               aria-label="Show one word at a time"
@@ -246,7 +271,7 @@ export default function RapidReader({
             </button>
             <button
               type="button"
-              onClick={() => setChunkSize(2)}
+              onClick={() => changeChunkSize(2)}
               className={`px-2 py-1 text-xs ${chunkSize === 2 ? 'bg-port-accent/20 text-port-accent' : 'text-gray-400 hover:text-white'}`}
               aria-pressed={chunkSize === 2}
               aria-label="Show two words at a time"
@@ -255,7 +280,7 @@ export default function RapidReader({
             </button>
           </div>
           <span className="font-mono text-gray-500">
-            {idx + 1}/{total} · {elapsedSec}s/{totalSec}s
+            {Math.min(wordIndex + 1, totalWords)}/{totalWords} words · {elapsedSec}s/{totalSec}s
           </span>
         </div>
       </div>

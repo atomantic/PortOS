@@ -64,7 +64,7 @@ export async function runCanonEntryExpand({
   const { content, rationale, runId, providerId, model } = await runPromptRefineRaw({
     templateName,
     variables: buildVariables({ universe, target, peers: list.filter((_, i) => i !== idx) }),
-    options: { providerId: options.providerId, model: options.model },
+    options: { providerId: options.providerId, model: options.model, effort: options.effort },
     source: templateName,
     logTag: null,
     emptyError,

@@ -889,7 +889,11 @@ export function analyzeHttpError(response) {
   return {
     hasError: true,
     category: ERROR_CATEGORIES.UNKNOWN,
-    message: statusText || `HTTP ${status}`,
+    // Status 0 is PortOS's sentinel for "no HTTP response" (a fetch rejection
+    // or a failed provider-readiness hook). Preserve that transport detail;
+    // calling it `HTTP 0` discards the only useful diagnosis and HTTP has no
+    // status zero in the first place.
+    message: statusText || (status === 0 && body ? extractErrorMessage(String(body)) : `HTTP ${status}`),
     waitTime: null,
     requiresFallback: false,
     actionable: false,

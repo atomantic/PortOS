@@ -21,6 +21,36 @@ cd client && npm test            # Vitest (jsdom) — component/unit tests
 npm run test:db                  # DB-backed suites → portos_test ONLY (see Security Model)
 ```
 
+## Test Strategy: Value Over Assertion Count
+
+PortOS tests move **up the stack as behavior stabilizes**. The default new test
+is the highest practical public boundary: an Express route, service workflow,
+persisted-store adapter, socket exchange, or rendered user interaction. A
+boundary test should cover the success path plus the materially different
+failure/compatibility paths; it should not enumerate every internal branch just
+because the branch exists.
+
+Do not add or retain a unit test merely to raise coverage for a deterministic
+helper whose behavior is already exercised through a stable caller. When a
+helper's signature and every caller would have to change together, prefer the
+caller's integration contract and delete redundant helper-level examples.
+Table-driven permutations are still duplication when they all prove the same
+product outcome.
+
+Focused unit tests remain valuable for behavior that a higher-level test cannot
+pin precisely or cheaply: parsers and algorithms with a real input matrix;
+security, privacy, data-isolation, and destructive-action guards; migrations and
+cross-version compatibility; serialization/schema boundaries; retry, timeout,
+and process-lifecycle state machines; and pure edge cases whose failure would be
+ambiguous through an integration test. Real timeout behavior gets one focused
+contract test with injected/fake time — never repeated production sleeps.
+
+Before adding a test, name the regression it uniquely catches. During review,
+remove tests that duplicate a stronger boundary assertion, mirror implementation
+details, only verify mocks called other mocks, or cover impossible states. Test
+count and line coverage are diagnostics, not goals; CI time, determinism, and
+regression-detection value are the goals.
+
 ## Security Model
 
 **Trust model (within one install).** Each PortOS install serves exactly one human user, on a private network behind Tailscale VPN, never exposed to the public internet. Within an install there is one server process and one user — so concurrent *request* races, mutex locking on file I/O, and atomic write patterns are unnecessary as defenses against competing actors and should not be added or flagged as concerns. Simple re-entrancy guards (per-account sync locks preventing duplicate in-flight operations; serializing two write paths that mutate the same record) are fine and expected. PortOS intentionally omits CORS restrictions, rate limiting, and full concurrency controls by default — non-issues for a single-user private-network deployment. Do not add them or flag their absence. **"Single-user" means: do not defend against multiple competing humans inside one install. It does NOT mean "assume only one install exists."**

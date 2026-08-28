@@ -18,6 +18,13 @@ describe('instance feature registry', () => {
     expect(APP_FEATURE_IDS.every((id) => INSTANCE_FEATURE_IDS.includes(id))).toBe(true);
     expect(new Set(APP_FEATURE_IDS).size).toBe(APP_FEATURE_IDS.length);
   });
+
+  it('keeps health tracking enabled by default for existing installs', () => {
+    expect(INSTANCE_FEATURES.find((feature) => feature.id === 'health')).toMatchObject({
+      label: 'Health tracking',
+      defaultEnabled: true,
+    });
+  });
 });
 
 describe('countConfiguredInstances', () => {

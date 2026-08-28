@@ -64,7 +64,7 @@ export function __resetSelfInstanceIdForTests() {
  * keep working.
  */
 export async function peerFetch(url, options = {}, peer = null) {
-  const callerHeaders = options.headers || {};
+  const callerHeaders = normalizeHeaders(options.headers);
   const finalOptions = {
     ...options,
     headers: {
@@ -73,6 +73,12 @@ export async function peerFetch(url, options = {}, peer = null) {
     },
   };
   return url.startsWith('https://') ? httpsFetch(url, finalOptions) : fetch(url, finalOptions);
+}
+
+function normalizeHeaders(headers) {
+  if (!headers) return {};
+  if (typeof headers[Symbol.iterator] === 'function') return Object.fromEntries(new Headers(headers));
+  return { ...headers };
 }
 
 /**

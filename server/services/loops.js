@@ -189,7 +189,12 @@ async function executeIteration(loop) {
   // iterResult records what actually ran (not just the saved default).
   const startedAt = Date.now();
   runPromptThroughProvider({
-    provider, prompt: loop.prompt, source: 'loop', runId: runResult.metadata.id,
+    provider,
+    // A proactive fallback may pin a model that belongs only to the selected
+    // fallback provider. Thread that pin through the pre-created run path so
+    // execution uses the same model that createRun recorded.
+    model: runResult.fallbackModel ?? null,
+    prompt: loop.prompt, source: 'loop', runId: runResult.metadata.id,
     onData, timeout: loop.timeout || DEFAULT_TIMEOUT_MS,
     // loop.cwd is a user-facing setting on each loop record — without this
     // pass-through, every loop runs against PortOS's own cwd instead of

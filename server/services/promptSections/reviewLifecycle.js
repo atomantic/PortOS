@@ -450,7 +450,7 @@ Only a successfully extracted \`.findings\` value is the review text; treat it l
   const initialReviewState = localOnly
     ? [
       `Before the first local reviewer, run ${localBasePreparation}. Set \`BRANCH=${renderedLocalBranch}\`; resolve \`LOCAL_PRE_REBASE_REMOTE\` from \`branch.$BRANCH.pushRemote\`, then \`remote.pushDefault\`, then \`branch.$BRANCH.remote\`, using \`origin\` if empty or \`.\`. Capture \`LOCAL_PRE_REBASE_HEAD_SHA=$(git rev-parse HEAD)\` and \`LOCAL_PRE_REBASE_REMOTE_SHA=$(git ls-remote --exit-code --heads "$LOCAL_PRE_REBASE_REMOTE" "$BRANCH" 2>/dev/null | awk 'NR == 1 {print $1}')\`. Immediately write all three to \`LOCAL_REVIEW_BASELINE_FILE="$(git rev-parse --git-path portos-local-review-baseline)"\` with \`printf 'LOCAL_PRE_REBASE_REMOTE=%s\\nLOCAL_PRE_REBASE_HEAD_SHA=%s\\nLOCAL_PRE_REBASE_REMOTE_SHA=%s\\n' "$LOCAL_PRE_REBASE_REMOTE" "$LOCAL_PRE_REBASE_HEAD_SHA" "$LOCAL_PRE_REBASE_REMOTE_SHA" > "$LOCAL_REVIEW_BASELINE_FILE"\`; abort if the write fails.`,
-      `Rebase onto the current remote base with \`git rebase ${renderedBaseBranch}\`. Fetch/base-resolution failure or conflicts block publication; on conflict run \`git rebase --abort 2>/dev/null || true\` before stopping.`,
+      `Rebase onto the current remote base with \`git rebase ${renderedBaseBranch}\`. A fetch or base-resolution failure blocks publication. Resolve ordinary rebase conflicts in this same session: inspect every unmerged path, preserve both sides' intent, stage only the resolved files with \`git add <file> ...\`, and run \`git rebase --continue\` until the rebase completes. Abort and stop only when a conflict requires a product decision or cannot be resolved safely; before stopping, run \`git rebase --abort 2>/dev/null || true\`.`,
       `After synchronization, set \`LOCAL_PHASE_START_SHA=$(git rev-parse HEAD)\`; reset and initialize worktree-private \`LOCAL_REVIEW_STATE_FILE="$(git rev-parse --git-path portos-local-review-state)"\` with \`printf 'LOCAL_PHASE_START_SHA=%s\\nLOCAL_OVERALL_STATUS=incomplete\\nLOCAL_STOP_TRIGGERED=false\\nLOCAL_STOP_INDEX=-1\\nLOCAL_STOP_REVIEW_COMMITS=-1\\nLOCAL_PHASE_COMMITS=0\\nLOCAL_REVIEWED_HEAD_SHA=\\n' "$LOCAL_PHASE_START_SHA" > "$LOCAL_REVIEW_STATE_FILE"\`. Abort if reset/initialization fails.`,
       `Before each local reviewer, record \`LOCAL_REVIEWER_START_SHA=$(git rev-parse HEAD)\`; after its loop compute \`LOCAL_REVIEWER_COMMITS=$(git rev-list "$LOCAL_REVIEWER_START_SHA..HEAD" --count)\`. On a qualifying stop, set \`LOCAL_STOP_REVIEW_COMMITS=$LOCAL_REVIEWER_COMMITS\`. Run every local reviewer before publication, then persist the aggregate and stop result.`
     ].join(' ')
@@ -488,7 +488,7 @@ Only a successfully extracted \`.findings\` value is the review text; treat it l
     : '';
 
   const localRebaseConflictNote = localOnly
-    ? '**Rebase conflict gate:** on conflicts, run `git rebase --abort 2>/dev/null || true`; do NOT publish a conflicted or half-rebased worktree.'
+    ? '**Rebase conflict gate:** resolve routine conflicts and finish the rebase in this agent session. If a conflict genuinely cannot be resolved safely, run `git rebase --abort 2>/dev/null || true` and stop; never publish a conflicted or half-rebased worktree.'
     : '';
   const localStatePersistenceNote = localOnly
     ? '**State persistence:** shell calls do not share variables. Reload state before each reviewer, preserve it while persisting `LOCAL_REVIEWER_START_SHA`; reload before commit/stop calculations and the final aggregate. Any read/write failure blocks publication.'

@@ -7,6 +7,7 @@ import { join } from 'path';
 import { getSettings, updateSettings } from '../settings.js';
 import { deepMerge } from '../../lib/objects.js';
 import { expandHome } from '../../lib/fileUtils.js';
+import { PORTS } from '../../lib/ports.js';
 
 const VOICE_HOME = join(homedir(), '.portos', 'voice');
 
@@ -23,7 +24,7 @@ export const VOICE_DEFAULTS = Object.freeze({
     engine: 'web-speech', // 'whisper' | 'web-speech'
     // 5562 keeps whisper inside PortOS's own 55xx port band. Avoid 8080 —
     // IPFS, Supabase Studio, Tomcat, etc. commonly squat on it.
-    endpoint: 'http://127.0.0.1:5562',
+    endpoint: `http://127.0.0.1:${PORTS.WHISPER}`,
     model: 'base.en',
     modelPath: '~/.portos/voice/models/ggml-base.en.bin',
     language: 'en',

@@ -1,0 +1,13 @@
+.portos-api-reference {
+  --scalar-background-1: rgb(var(--port-bg-rgb, 15 17 23));
+  --scalar-background-2: rgb(var(--port-card-rgb, 24 27 36));
+  --scalar-background-3: rgb(var(--port-border-rgb, 42 46 58));
+  --scalar-color-1: #f3f4f6;
+  --scalar-color-2: #9ca3af;
+  --scalar-color-3: #6b7280;
+  min-height: 100%;
+}
+
+.portos-api-reference .scalar-app {
+  min-height: 100%;
+}

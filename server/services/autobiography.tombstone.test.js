@@ -118,6 +118,19 @@ describe('autobiography story tombstones (#3531)', () => {
     ]));
     expect((await getStories()).map((s) => s.id)).toEqual(['peer-story-1']);
   });
+
+  it('preserves local and peer stories when their writes start concurrently', async () => {
+    await Promise.all([
+      newStory('A local memory.'),
+      applyDigitalTwinRemote(peerSnapshotWith([
+        { id: 'peer-story-1', themeId: 'family', content: 'A peer memory.', createdAt: '2026-01-01T00:00:00.000Z' },
+      ])),
+    ]);
+
+    const stories = await getStories();
+    expect(stories).toHaveLength(2);
+    expect(stories.map((story) => story.id)).toContain('peer-story-1');
+  });
 });
 
 describe('mergeAutobiographyStories tombstones (#3531)', () => {

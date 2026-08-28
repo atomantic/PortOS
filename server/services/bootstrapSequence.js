@@ -39,15 +39,17 @@ const logFailureWithStack = (label) => (err) => console.error(`❌ ${label}: ${e
  *   1. `applyDataMigrations` runs FIRST and is awaited — the toolkit reads
  *      stage-config.json / providers.json, so a pull-and-restart that skipped
  *      `npm run migrations` must still land new prompt stages before then.
- *   2. `verifyCollections` runs before anything can serve a request, and only
+ *   2. `loadUsage` runs after migrations so both operations cannot race while
+ *      updating the same usage snapshot.
+ *   3. `verifyCollections` runs before anything can serve a request, and only
  *      logs: a hard exit on a schema mismatch is worse than a noisy log.
- *   3. `createToolkit` → `registerToolkitShims` → `warmProviders`: the shims
+ *   4. `createToolkit` → `registerToolkitShims` → `warmProviders`: the shims
  *      hand the toolkit to the compatibility modules before the providers file
  *      is warmed, so the codex-sentinel migration write completes before any
  *      request can consult providers state (hence the await).
- *   4. `registerRunners` before the workers below, so a run dispatched by the
+ *   5. `registerRunners` before the workers below, so a run dispatched by the
  *      spawner cannot land on a toolkit without PortOS's CLI/TUI runners.
- *   5. `startSpawner` LAST, and its promise is returned (not awaited): CoS init
+ *   6. `startSpawner` LAST, and its promise is returned (not awaited): CoS init
  *      in the post-route phase gates on it so `task:ready` can't be emitted
  *      before the spawner registered its listener.
  *
@@ -55,6 +57,7 @@ const logFailureWithStack = (label) => (err) => console.error(`❌ ${label}: ${e
  */
 export const runPreRouteSequence = async ({
   applyDataMigrations,
+  loadUsage,
   verifyCollections,
   createToolkit,
   registerToolkitShims,
@@ -66,6 +69,7 @@ export const runPreRouteSequence = async ({
   startSpawner
 }) => {
   await bestEffort(applyDataMigrations(), logFailureWithStack('Migration run failed at startup'));
+  await bestEffort(loadUsage(), logFailureWithStack('Usage load failed at startup'));
   await bestEffort(verifyCollections(), logFailureWithStack('Collection version check failed at startup'));
 
   const aiToolkit = createToolkit();

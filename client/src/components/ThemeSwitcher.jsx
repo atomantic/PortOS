@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, Palette } from 'lucide-react';
 import { useThemeContext } from './ThemeContext';
@@ -8,6 +8,8 @@ import useClickOutside from '../hooks/useClickOutside.js';
 import useEscapeKey from '../hooks/useEscapeKey.js';
 
 const MENU_WIDTH = 288;
+const ITEM_SELECTOR = '[role="menuitemradio"]';
+const TABBABLE_SELECTOR = 'a[href],button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),[tabindex]:not([tabindex="-1"])';
 
 export default function ThemeSwitcher({ position = 'above', className = '' }) {
   const { themeId, theme, themeList, setTheme } = useThemeContext();
@@ -19,21 +21,82 @@ export default function ThemeSwitcher({ position = 'above', className = '' }) {
     style: menuStyle,
   } = usePopoverPosition({ open, width: MENU_WIDTH, minWidth: 180, gap: 8, position });
 
+  const close = useCallback((refocus) => {
+    setOpen(false);
+    if (refocus) triggerRef.current?.focus();
+  }, [triggerRef]);
+
   // Close on outside-click / Escape — the popover-position hook owns placement
   // and reflow; this component still owns its own dismiss semantics. The menu is
   // portaled to <body>, so both the trigger container and the panel have to count
   // as "inside" — that's what the array form of useClickOutside is for.
   useClickOutside([containerRef, menuRef], open, () => setOpen(false));
-  useEscapeKey(open, () => setOpen(false));
+  useEscapeKey(open, () => close(true));
+
+  useEffect(() => {
+    if (!open || !menuStyle) return;
+    const selected = menuRef.current?.querySelector(`${ITEM_SELECTOR}[aria-checked="true"]`);
+    (selected ?? menuRef.current?.querySelector(ITEM_SELECTOR))?.focus();
+  }, [open, menuRef, menuStyle]);
+
+  const menuItems = () => Array.from(menuRef.current?.querySelectorAll(ITEM_SELECTOR) ?? []);
+
+  const focusItem = (index) => {
+    const items = menuItems();
+    items[(index + items.length) % items.length]?.focus();
+  };
+
+  const moveFocus = (direction) => {
+    const items = menuItems();
+    const current = items.indexOf(document.activeElement);
+    focusItem(current === -1 ? (direction > 0 ? 0 : items.length - 1) : current + direction);
+  };
+
+  const focusPastTrigger = (backwards) => {
+    const trigger = triggerRef.current;
+    const items = Array.from(document.querySelectorAll(TABBABLE_SELECTOR))
+      .filter(element => !menuRef.current?.contains(element));
+    const triggerIndex = items.indexOf(trigger);
+    const next = triggerIndex === -1 ? null : items[triggerIndex + (backwards ? -1 : 1)];
+    (next ?? trigger)?.focus();
+  };
+
+  const handleMenuKeyDown = (event) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      moveFocus(1);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      moveFocus(-1);
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      focusItem(0);
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      focusItem(-1);
+    } else if (event.key === 'Tab') {
+      event.preventDefault();
+      focusPastTrigger(event.shiftKey);
+      setOpen(false);
+    }
+  };
 
   return (
     <div ref={containerRef} className={`relative ${className}`}>
       <button
+        type="button"
         ref={triggerRef}
         onClick={() => setOpen(!open)}
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            event.preventDefault();
+            setOpen(true);
+          }
+        }}
         className="p-1.5 text-gray-500 hover:text-port-accent transition-colors"
         title="Switch theme"
         aria-label={`Switch theme. Current theme: ${theme?.label ?? 'Classic Midnight'}`}
+        aria-haspopup="menu"
         aria-expanded={open}
       >
         <Palette size={18} />
@@ -42,6 +105,9 @@ export default function ThemeSwitcher({ position = 'above', className = '' }) {
       {open && createPortal(
         <div
           ref={menuRef}
+          role="menu"
+          aria-label="Interface theme"
+          onKeyDown={handleMenuKeyDown}
           className="fixed max-w-[calc(100vw-1rem)] bg-port-card border border-port-border rounded-xl shadow-xl z-[100] p-2"
           style={{
             left: menuStyle?.left ?? `${VIEWPORT_PADDING}px`,
@@ -59,8 +125,11 @@ export default function ThemeSwitcher({ position = 'above', className = '' }) {
               const active = themeId === option.id;
               return (
                 <button
+                  type="button"
                   key={option.id}
-                  onClick={() => { setTheme(option.id); setOpen(false); }}
+                  role="menuitemradio"
+                  aria-checked={active}
+                  onClick={() => { setTheme(option.id); close(true); }}
                   className={`w-full flex items-center gap-3 px-2.5 py-2.5 rounded-lg text-sm transition-colors ${
                     active
                       ? 'bg-port-accent/10 text-port-accent'

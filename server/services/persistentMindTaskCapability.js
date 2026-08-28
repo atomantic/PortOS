@@ -9,6 +9,7 @@
 
 import {
   PERSISTENT_MIND_TASK_LIMITS,
+  isPersistentMindTaskModelAllowed,
   normalizePersistentMindCapabilities,
   persistentMindTaskRequestSchema,
 } from '../lib/persistentMindCapabilities.js';
@@ -17,20 +18,58 @@ import { canonicalStringify } from '../lib/objects.js';
 import { antigravityBaseModels, effortLevelsForProvider, filterSelectableModels } from '../lib/providerModels.js';
 import { PR_COMPLETIONS } from '../lib/prDisposition.js';
 import { sha256Text } from '../lib/fileUtils.js';
-import { getActiveApps } from './apps.js';
+import { resolveAppWorkTracker } from '../lib/workTracker.js';
+import { getActiveApps, getAppWorkTracker } from './apps.js';
 import { loadState } from './cosState.js';
 import { addTask, getTaskById } from './cosTaskStore.js';
+import { getProviderPrerequisiteReadinessMap } from './providerPrerequisites.js';
 import { listProviders } from './providers.js';
+import {
+  assessPersistentMindWorkspaceReadiness,
+  readPersistentMindWorkspacePreflight,
+} from './persistentMindWorkspacePreflight.js';
 
 const MAX_CATALOG_APPS = 50;
 const MAX_CATALOG_PROVIDERS = 50;
 const MAX_CATALOG_MODELS = 60;
 const MAX_CATALOG_PROMPT_CHARS = 16_000;
 const MAX_CATALOG_APP_PROMPT_CHARS = 4_000;
+const APP_TRACKER_CACHE_TTL_MS = 30_000;
+const ISSUE_TRACKERS = new Set(['github', 'gitlab']);
+const appTrackerCache = new Map();
 
 const isRunnableApp = (app) => typeof app?.repoPath === 'string' && app.repoPath.trim().length > 0;
 const isRunnableAgentProvider = (provider) => provider?.enabled !== false
   && (provider?.type === 'cli' || provider?.type === 'tui');
+
+const boundedProviderCandidates = (providers) => providers
+  .filter((provider) => isRunnableAgentProvider(provider)
+    && typeof provider?.id === 'string' && provider.id
+    && provider.id.length <= PERSISTENT_MIND_TASK_LIMITS.providerIdChars)
+  .slice(0, MAX_CATALOG_PROVIDERS);
+
+const providerReadinessSummary = (providers, readiness) => {
+  const summary = {
+    blockedCount: 0,
+    blockedReasonCodes: [],
+    unknownCount: 0,
+    unknownReasonCodes: [],
+  };
+  for (const provider of providers) {
+    const verdict = readiness[provider.id];
+    if (verdict?.status !== 'blocked' && verdict?.status !== 'unknown') continue;
+    const prefix = verdict.status;
+    summary[`${prefix}Count`] += 1;
+    summary[`${prefix}ReasonCodes`].push(...(verdict.reasonCodes || []));
+  }
+  summary.blockedReasonCodes = [...new Set(summary.blockedReasonCodes)].sort();
+  summary.unknownReasonCodes = [...new Set(summary.unknownReasonCodes)].sort();
+  return summary;
+};
+
+const boundedReadinessReasonCodes = (value) => (Array.isArray(value) ? value : [])
+  .filter((code) => typeof code === 'string' && /^[a-z][a-zA-Z0-9-]{0,49}$/.test(code))
+  .slice(0, 10);
 
 const selectableModelIds = (provider) => {
   const stored = filterSelectableModels(antigravityBaseModels(provider?.models))
@@ -45,8 +84,11 @@ const selectableModelIds = (provider) => {
   return [...new Set(withDefault)].slice(0, MAX_CATALOG_MODELS);
 };
 
-const providerCatalogEntry = (provider) => {
-  const models = selectableModelIds(provider);
+const providerCatalogEntry = (provider, capabilities) => {
+  const policy = normalizePersistentMindCapabilities(capabilities);
+  const models = selectableModelIds(provider)
+    .filter((model) => isPersistentMindTaskModelAllowed(capabilities, provider.id, model));
+  if ((policy.taskModelAllowlist.length > 0 || policy.taskModelAllowlistInvalid) && models.length === 0) return null;
   return {
     id: provider.id,
     name: String(provider.name || provider.id).slice(0, 100),
@@ -58,25 +100,66 @@ const providerCatalogEntry = (provider) => {
   };
 };
 
-export async function readPersistentMindTaskCatalog() {
-  const [apps, providers] = await Promise.all([getActiveApps(), listProviders()]);
+const catalogTrackerFor = (app) => {
+  const key = `${app.id}\0${app.repoPath}\0${app.workTracker || 'auto'}`;
+  const cached = appTrackerCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.promise;
+  const promise = resolveAppWorkTracker(app);
+  appTrackerCache.set(key, { expiresAt: Date.now() + APP_TRACKER_CACHE_TTL_MS, promise });
+  return promise;
+};
+
+const appCatalogEntry = async (app) => {
+  const tracker = await catalogTrackerFor(app);
   return {
-    apps: apps
-      .filter((app) => isRunnableApp(app) && typeof app?.id === 'string' && app.id
-        && app.id.length <= PERSISTENT_MIND_TASK_LIMITS.appIdChars)
-      .slice(0, MAX_CATALOG_APPS)
-      .map((app) => ({ id: app.id, name: String(app.name || app.id).slice(0, 100) })),
-    providers: providers
-      .filter((provider) => isRunnableAgentProvider(provider)
-        && typeof provider?.id === 'string' && provider.id
-        && provider.id.length <= PERSISTENT_MIND_TASK_LIMITS.providerIdChars)
-      .slice(0, MAX_CATALOG_PROVIDERS)
-      .map(providerCatalogEntry),
+    id: app.id,
+    name: String(app.name || app.id).slice(0, 100),
+    planOnly: ISSUE_TRACKERS.has(tracker?.resolved),
+  };
+};
+
+export async function readPersistentMindTaskCatalog({ allowedAppIds, includeAllApps = false } = {}) {
+  const [apps, providers, root] = await Promise.all([getActiveApps(), listProviders(), loadState()]);
+  const capabilities = normalizePersistentMindCapabilities(root.config?.persistentMindCapabilities);
+  const effectiveAllowedAppIds = Array.isArray(allowedAppIds) ? allowedAppIds : capabilities.allowedAppIds;
+  const runnableApps = apps
+    .filter((app) => isRunnableApp(app) && typeof app?.id === 'string' && app.id
+      && app.id.length <= PERSISTENT_MIND_TASK_LIMITS.appIdChars)
+    .slice(0, MAX_CATALOG_APPS);
+  const candidates = boundedProviderCandidates(providers);
+  const readiness = await getProviderPrerequisiteReadinessMap(providers, {
+    candidates,
+    deferCwdDependent: true,
+  });
+  const appCatalog = await Promise.all(runnableApps.map(appCatalogEntry));
+  const allowed = Array.isArray(effectiveAllowedAppIds) ? new Set(effectiveAllowedAppIds) : null;
+  return {
+    // The tools settings page needs to see revoked apps so it can restore them;
+    // the model-facing catalog remains narrowed to the granted set.
+    apps: includeAllApps || !allowed ? appCatalog : appCatalog.filter((app) => allowed.has(app.id)),
+    providers: candidates
+      .filter((provider) => readiness[provider.id]?.status === 'ready')
+      .map((provider) => providerCatalogEntry(provider, capabilities))
+      .filter(Boolean),
+    providerReadiness: providerReadinessSummary(candidates, readiness),
   };
 }
 
 const boundedPromptCatalog = (catalog) => {
-  const bounded = { apps: [], providers: [] };
+  const bounded = {
+    apps: [],
+    providers: [],
+    providerReadiness: {
+      blockedCount: Number.isSafeInteger(catalog?.providerReadiness?.blockedCount)
+        ? Math.max(0, Math.min(MAX_CATALOG_PROVIDERS, catalog.providerReadiness.blockedCount))
+        : 0,
+      blockedReasonCodes: boundedReadinessReasonCodes(catalog?.providerReadiness?.blockedReasonCodes),
+      unknownCount: Number.isSafeInteger(catalog?.providerReadiness?.unknownCount)
+        ? Math.max(0, Math.min(MAX_CATALOG_PROVIDERS, catalog.providerReadiness.unknownCount))
+        : 0,
+      unknownReasonCodes: boundedReadinessReasonCodes(catalog?.providerReadiness?.unknownReasonCodes),
+    },
+  };
   for (const app of Array.isArray(catalog?.apps) ? catalog.apps : []) {
     bounded.apps.push(app);
     if (JSON.stringify({ apps: bounded.apps }).length > MAX_CATALOG_APP_PROMPT_CHARS) {
@@ -109,12 +192,21 @@ Task creation access is OFF. Return an empty taskRequests array. You may recomme
   }
   const promptCatalog = boundedPromptCatalog(catalog);
   return `# CoS agent task capability
-Task creation access is ON. You may request up to ${PERSISTENT_MIND_TASK_LIMITS.maxPerTurn} internal CoS agent tasks when the current wake calls for concrete delegated work. Each task runs in an isolated worktree, opens a pull request, and is auto-approved into the normal CoS scheduler. The scheduler still enforces capacity, autonomy, and budget gates.
+Task creation access is ON. You may request up to ${PERSISTENT_MIND_TASK_LIMITS.maxPerTurn} internal CoS agent tasks when the current wake calls for concrete delegated work. Implementation tasks run in an isolated worktree, open a pull request, and are auto-approved into the normal CoS scheduler. Plan-only tasks use the issue-only planning contract described below. The scheduler still enforces capacity, autonomy, and budget gates.
 
-For each task, choose one configured app, provider, model (or "" for the provider's configured default), supported effort (or "" for the provider default), and exactly one PR completion policy:
+For each task, choose one configured app, provider, model, supported effort (or "" for the provider default), and exactly one PR completion policy. If the task model allowlist below is non-empty, only its exact provider/model pairs are permitted; do not use a provider default or another model:
 - "review-then-merge": run the configured code-review loop, then merge only when its gate passes.
 - "merge-on-green": skip code review and merge after CI is green.
 - "leave-open": open the PR and wait for a human to review and merge it.
+Set 'planOnly' to true to use the issue-only "Plan & File Issue" mode, but only
+for an app whose catalog entry has 'planOnly: true'; that mode investigates the
+repository and files one GitHub/GitLab issue without editing code or opening a
+PR. In plan-only mode, 'prCompletion' may be omitted. Otherwise set
+'planOnly' to false and choose one PR completion policy.
+Use 'requiredValidation' only when the task's acceptance criteria require those
+workspace checks before queueing. Supported checks are 'dependencies',
+'engines', 'submodules', 'forge', and 'reviewers'. An omitted or empty list
+keeps absent dependencies advisory, which is appropriate for docs-only work.
 
 Configured choices (ids are authoritative; do not invent ids):
 ${JSON.stringify(promptCatalog)}
@@ -134,29 +226,67 @@ const taskIdFor = (wakeId, fingerprint) => (
 
 const boundedError = (error) => String(error?.message || error || 'Task creation failed').slice(0, 300);
 
-const validateChoice = (request, apps, providers) => {
+const readinessError = (providerId, verdict) => {
+  const reasonCodes = (verdict?.reasonCodes || []).slice(0, 5).join(', ') || 'prerequisites';
+  if (verdict?.status === 'unknown') {
+    return `Provider '${providerId}' readiness is still being checked (${reasonCodes}); retry shortly or check Settings > AI Providers`;
+  }
+  return `Provider '${providerId}' is not ready (${reasonCodes}); check Settings > AI Providers`;
+};
+
+const validateChoice = async (request, apps, providers, capabilities) => {
   const app = apps.find((candidate) => candidate.id === request.appId && isRunnableApp(candidate));
   if (!app) return { error: `App '${request.appId}' has no configured repository` };
   const provider = providers.find((candidate) => (
     candidate.id === request.providerId && isRunnableAgentProvider(candidate)
   ));
   if (!provider) return { error: `Provider '${request.providerId}' is not an enabled CLI/TUI coding provider` };
+  const providerReadiness = (await getProviderPrerequisiteReadinessMap(providers, {
+    candidates: [provider],
+    cwd: app.repoPath,
+  }))[provider.id];
+  if (providerReadiness?.status !== 'ready') return { error: readinessError(provider.id, providerReadiness) };
   const models = selectableModelIds(provider);
   if (request.model && !models.includes(request.model)) {
     return { error: `Model '${request.model}' is not configured for provider '${request.providerId}'` };
+  }
+  if (!isPersistentMindTaskModelAllowed(capabilities, request.providerId, request.model)) {
+    return { error: `Model '${request.model}' is not allowed for persistent mind tasks on provider '${request.providerId}'` };
   }
   const efforts = effortLevelsForProvider(provider, request.model || null) || [];
   if (request.effort && !efforts.includes(request.effort)) {
     return { error: `Effort '${request.effort}' is not supported by provider '${request.providerId}'` };
   }
-  return { app, provider };
+  if (request.planOnly) {
+    const tracker = await getAppWorkTracker(request.appId);
+    if (!ISSUE_TRACKERS.has(tracker?.resolved)) {
+      return { error: `Plan-and-file tasks require a GitHub or GitLab issue tracker for app '${request.appId}'` };
+    }
+  }
+  const preflight = await readPersistentMindWorkspacePreflight(app);
+  const readiness = assessPersistentMindWorkspaceReadiness(preflight, request.requiredValidation);
+  if (readiness.blockers.length) {
+    return {
+      error: `Workspace preflight blocked task '${request.description}': ${readiness.blockers.map((blocker) => blocker.message).join(' ')}`,
+      preflight,
+      readiness,
+    };
+  }
+  return { app, provider, preflight, readiness };
 };
 
-async function queueOneTask({ request, taskId, apps, providers }) {
+async function queueOneTask({ request, taskId, apps, allowedAppIds }) {
+  if (Array.isArray(allowedAppIds) && !allowedAppIds.includes(request.appId)) {
+    return { success: false, error: `Managed app '${request.appId}' is not authorized for Persistent Mind tasks; update Persistent Mind Tools permissions` };
+  }
   const existing = await getTaskById(taskId);
   if (existing) return { success: true, duplicate: true, task: existing };
-  const choice = validateChoice(request, apps, providers);
+  const [providers, root] = await Promise.all([listProviders(), loadState()]);
+  const capabilities = normalizePersistentMindCapabilities(root.config?.persistentMindCapabilities);
+  if (!capabilities.createTasks) return { success: false, error: 'Persistent mind task creation access is disabled' };
+  const choice = await validateChoice(request, apps, providers, capabilities);
   if (choice.error) return { success: false, error: choice.error };
+  const planOnly = request.planOnly === true;
   const task = await addTask({
     id: taskId,
     description: request.description,
@@ -166,11 +296,15 @@ async function queueOneTask({ request, taskId, apps, providers }) {
     provider: request.providerId,
     model: request.model || undefined,
     effort: request.effort || undefined,
-    useWorktree: true,
-    openPR: true,
-    prCompletion: request.prCompletion,
-    simplify: true,
-    worktreeChangesExpected: true,
+    ...(planOnly ? {
+      planOnly: true,
+    } : {
+      useWorktree: true,
+      openPR: true,
+      prCompletion: request.prCompletion,
+      simplify: true,
+      worktreeChangesExpected: true,
+    }),
     approvalRequired: false,
   }, 'internal');
   return { success: true, duplicate: task.duplicate === true, task };
@@ -182,7 +316,9 @@ const eventDataFor = (request, outcome, displayText) => ({
   providerId: request.providerId,
   model: request.model || null,
   effort: request.effort || null,
-  prCompletion: request.prCompletion,
+  planOnly: request.planOnly === true,
+  prCompletion: request.prCompletion || null,
+  requiredValidation: request.requiredValidation || [],
   ...(outcome ? {
     success: outcome.success === true,
     duplicate: outcome.duplicate === true,
@@ -207,8 +343,9 @@ export async function executePersistentMindTaskRequests({
     : [];
   if (requests.length === 0) return [];
 
-  const [root, apps, providers] = await Promise.all([loadState(), getActiveApps(), listProviders()]);
-  const enabled = normalizePersistentMindCapabilities(root.config?.persistentMindCapabilities).createTasks;
+  const [root, apps] = await Promise.all([loadState(), getActiveApps()]);
+  const taskAccess = normalizePersistentMindCapabilities(root.config?.persistentMindCapabilities);
+  const enabled = taskAccess.createTasks;
   const record = typeof recordCapabilityEvent === 'function'
     ? recordCapabilityEvent
     : () => Promise.resolve();
@@ -242,7 +379,7 @@ export async function executePersistentMindTaskRequests({
       ? { success: false, error: 'Persistent mind turn was interrupted before task creation' }
       : enabled
       ? await Promise.resolve()
-        .then(() => queueOneTask({ request, taskId, apps, providers }))
+        .then(() => queueOneTask({ request, taskId, apps, allowedAppIds: taskAccess.allowedAppIds }))
         .then((value) => value, (error) => ({ success: false, error: boundedError(error) }))
       : { success: false, error: 'Persistent mind task creation access is disabled' };
     const displayText = outcome.success

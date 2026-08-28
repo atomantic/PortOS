@@ -5,7 +5,7 @@ import { PRIORITY_BADGE } from './goalConstants';
 
 export default function GoalTodoList({
   goal, newTodoTitle, setNewTodoTitle, newTodoPriority, setNewTodoPriority,
-  newTodoEstimate, setNewTodoEstimate, handleAddTodo, handleToggleTodo, handleDeleteTodo
+  newTodoEstimate, setNewTodoEstimate, todoSubmitting, handleAddTodo, handleToggleTodo, handleDeleteTodo
 }) {
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   return (
@@ -72,14 +72,14 @@ export default function GoalTodoList({
             type="text"
             value={newTodoTitle}
             onChange={e => setNewTodoTitle(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && handleAddTodo()}
+            onKeyDown={e => e.key === 'Enter' && !todoSubmitting && handleAddTodo()}
             placeholder="Add todo..."
             aria-label="New todo title"
             className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white"
           />
           <button
             onClick={handleAddTodo}
-            disabled={!newTodoTitle.trim()}
+            disabled={todoSubmitting || !newTodoTitle.trim()}
             className="px-2 py-1 text-xs rounded bg-port-accent/20 text-port-accent disabled:opacity-50"
           >
             Add

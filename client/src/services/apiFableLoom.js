@@ -72,6 +72,9 @@ export const branchLoomNode = (id, episodeId, nodeId, body = {}, options = {}) =
 export const reviewLoomEpisode = (id, episodeId, body = {}, options = {}) => request(episodePath(id, episodeId, '/review'), {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
+export const feedbackLoomEpisode = (id, episodeId, body = {}, options = {}) => request(episodePath(id, episodeId, '/feedback'), {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
 export const playLoomTurn = (id, episodeId, body, options = {}) => request(episodePath(id, episodeId, '/play'), {
   method: 'POST', body: JSON.stringify(body), ...options,
 });

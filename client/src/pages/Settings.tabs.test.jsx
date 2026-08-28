@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { TABS } from '../components/settings/SettingsTabsHeader';
 
 // Same stub as Settings.redirects.test.jsx — Settings.jsx imports every tab
 // component, and those pull in the API client at import time.
-vi.mock('../services/api', () => new Proxy({}, {
-  get: (_target, key) => (key === 'then' || key === '__esModule' ? undefined : vi.fn().mockResolvedValue({})),
+vi.mock('../services/api', () => ({
+  getInstanceFeatures: vi.fn().mockResolvedValue({ features: [] }),
 }));
 
 // The two tabs this test distinguishes between. A slug with no `case` in
@@ -38,8 +38,9 @@ describe('Settings — Code Reviewers tab', () => {
     expect(tab?.to).toBe('/settings/code-reviewers');
   });
 
-  it('routes /settings/code-reviewers to the Code Reviewers panel', () => {
+  it('routes /settings/code-reviewers to the Code Reviewers panel', async () => {
     renderTab('/settings/code-reviewers');
+    await act(async () => {});
     expect(screen.getByTestId('code-reviewers-tab')).toBeTruthy();
     expect(screen.queryByTestId('general-tab')).toBeNull();
   });
@@ -51,9 +52,17 @@ describe('Settings — Instance Features tab', () => {
     expect(tab?.to).toBe('/settings/features');
   });
 
-  it('routes /settings/features to the feature participation panel', () => {
+  it('routes /settings/features to the feature participation panel', async () => {
     renderTab('/settings/features');
+    await act(async () => {});
     expect(screen.getByTestId('instance-features-tab')).toBeTruthy();
     expect(screen.queryByTestId('general-tab')).toBeNull();
+  });
+});
+
+describe('Settings — MortalLoom tab', () => {
+  it('marks MortalLoom as part of the health-tracking feature', () => {
+    const tab = TABS.find(t => t.id === 'mortalloom');
+    expect(tab).toMatchObject({ to: '/settings/mortalloom', feature: 'health' });
   });
 });

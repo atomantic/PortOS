@@ -1,7 +1,7 @@
 /** Consecutive-failure backoff and auto-park state for scheduled task types. */
 
 import { cosEvents, emitLog } from './cosEvents.js';
-import { loadSchedule, saveSchedule } from './taskScheduleStore.js';
+import { loadSchedule, updateSchedule } from './taskScheduleStore.js';
 import {
   FAILURE_BACKOFF_BASE_MS,
   FAILURE_BACKOFF_CAP_MS,
@@ -105,20 +105,21 @@ async function notifyTaskTypeFailurePark(taskType, appId, record) {
  * indefinite — cleared only by a success, a manual retry, or a config change.
  */
 export async function recordTaskTypeFailure(taskType, appId = null, { errorCategory = null } = {}) {
-  const schedule = await loadSchedule();
-  const record = ensureExecutionRecord(schedule, taskType, appId);
-  record.consecutiveFailures = (Number(record.consecutiveFailures) || 0) + 1;
-  record.lastFailureAt = new Date().toISOString();
-  if (errorCategory) record.lastErrorCategory = errorCategory;
+  const { record, justParked } = await updateSchedule(async (schedule) => {
+    const record = ensureExecutionRecord(schedule, taskType, appId);
+    record.consecutiveFailures = (Number(record.consecutiveFailures) || 0) + 1;
+    record.lastFailureAt = new Date().toISOString();
+    if (errorCategory) record.lastErrorCategory = errorCategory;
 
-  let justParked = false;
-  if (record.consecutiveFailures >= FAILURE_PARK_THRESHOLD && !record.failureParkedAt) {
-    record.failureParkedAt = new Date().toISOString();
-    record.failureParkReason = errorCategory || record.lastErrorCategory || 'unknown';
-    justParked = true;
-  }
+    let justParked = false;
+    if (record.consecutiveFailures >= FAILURE_PARK_THRESHOLD && !record.failureParkedAt) {
+      record.failureParkedAt = new Date().toISOString();
+      record.failureParkReason = errorCategory || record.lastErrorCategory || 'unknown';
+      justParked = true;
+    }
 
-  await saveSchedule(schedule);
+    return { result: { record, justParked }, changed: true };
+  });
   emitLog(
     justParked ? 'warn' : 'info',
     `Task type ${taskType}${appId ? ` (app ${appId})` : ''} failure #${record.consecutiveFailures}${justParked ? ' — AUTO-PARKED' : ''} (${errorCategory || 'unknown'})`,
@@ -140,11 +141,15 @@ export async function recordTaskTypeFailure(taskType, appId = null, { errorCateg
  * auto-park) for this type. No-op (no write) when the ledger is already clean.
  */
 export async function recordTaskTypeSuccess(taskType, appId = null) {
-  const schedule = await loadSchedule();
-  const record = resolveExecutionRecord(schedule, taskType, appId);
-  const wasParked = !!record?.failureParkedAt;
-  if (!clearFailureLedgerFields(record)) return false;
-  await saveSchedule(schedule);
+  const { didChange, wasParked } = await updateSchedule(async (schedule) => {
+    const record = resolveExecutionRecord(schedule, taskType, appId);
+    const wasParked = !!record?.failureParkedAt;
+    if (!clearFailureLedgerFields(record)) {
+      return { result: { didChange: false, wasParked: false }, changed: false };
+    }
+    return { result: { didChange: true, wasParked }, changed: true };
+  });
+  if (!didChange) return false;
   emitLog('info', `Task type ${taskType}${appId ? ` (app ${appId})` : ''} succeeded — failure ledger reset`, { taskType, appId }, '📅 TaskSchedule');
   if (wasParked) await clearTaskTypeFailureParkNotification(taskType, appId);
   return true;
@@ -161,13 +166,17 @@ export async function recordTaskTypeSuccess(taskType, appId = null) {
  * true if anything was cleared.
  */
 export async function clearTaskTypeFailurePark(taskType, appId = null) {
-  const schedule = await loadSchedule();
-  const top = schedule.executions[executionKey(taskType)];
-  if (!top) return false;
-  const record = appId ? top.perApp?.[appId] : top;
-  const wasParked = !!record?.failureParkedAt;
-  if (!clearFailureLedgerFields(record)) return false;
-  await saveSchedule(schedule);
+  const { cleared, wasParked } = await updateSchedule(async (schedule) => {
+    const top = schedule.executions[executionKey(taskType)];
+    if (!top) return { result: { cleared: false, wasParked: false }, changed: false };
+    const record = appId ? top.perApp?.[appId] : top;
+    const wasParked = !!record?.failureParkedAt;
+    if (!clearFailureLedgerFields(record)) {
+      return { result: { cleared: false, wasParked: false }, changed: false };
+    }
+    return { result: { cleared: true, wasParked }, changed: true };
+  });
+  if (!cleared) return false;
   // Prune the stale park notification (if any) so the bell clears and a later
   // re-park can re-notify.
   if (wasParked) await clearTaskTypeFailureParkNotification(taskType, appId);

@@ -197,6 +197,7 @@ export default function GoalsListView({ data, onRefresh, selectedGoalId }) {
   const [showNewGoal, setShowNewGoal] = useState(false);
   const [newGoal, setNewGoal] = useState({ ...DEFAULT_NEW_GOAL });
   const [quickAdd, setQuickAdd] = useState('');
+  const [isCreating, setIsCreating] = useState(false);
   const [organizing, setOrganizing] = useState(false);
   const [draggedGoal, setDraggedGoal] = useState(null);
   const {
@@ -262,18 +263,32 @@ export default function GoalsListView({ data, onRefresh, selectedGoalId }) {
   };
 
   const handleCreateGoal = async () => {
-    if (!newGoal.title.trim()) return;
-    await api.createGoal(newGoal);
-    setNewGoal({ ...DEFAULT_NEW_GOAL });
-    setShowNewGoal(false);
-    onRefresh();
+    if (!newGoal.title.trim() || isCreating) return;
+    setIsCreating(true);
+    try {
+      await api.createGoal(newGoal, { silent: true });
+      setNewGoal({ ...DEFAULT_NEW_GOAL });
+      setShowNewGoal(false);
+      onRefresh();
+    } catch {
+      toast.error('Failed to create goal');
+    } finally {
+      setIsCreating(false);
+    }
   };
 
   const handleQuickAdd = async () => {
-    if (!quickAdd.trim()) return;
-    await api.createGoal({ ...DEFAULT_NEW_GOAL, title: quickAdd.trim() });
-    setQuickAdd('');
-    onRefresh();
+    if (!quickAdd.trim() || isCreating) return;
+    setIsCreating(true);
+    try {
+      await api.createGoal({ ...DEFAULT_NEW_GOAL, title: quickAdd.trim() }, { silent: true });
+      setQuickAdd('');
+      onRefresh();
+    } catch {
+      toast.error('Failed to create goal');
+    } finally {
+      setIsCreating(false);
+    }
   };
 
   const handleOrganize = async () => {
@@ -352,6 +367,7 @@ export default function GoalsListView({ data, onRefresh, selectedGoalId }) {
               value={quickAdd}
               onChange={e => setQuickAdd(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleQuickAdd()}
+              disabled={isCreating}
               placeholder="Add goal..."
               aria-label="Quick-add a goal"
               className="w-full bg-port-bg border border-port-border rounded-lg pl-8 pr-3 py-1.5 text-sm text-white placeholder-gray-500"
@@ -447,7 +463,7 @@ export default function GoalsListView({ data, onRefresh, selectedGoalId }) {
                 </select>
                 <button
                   onClick={handleCreateGoal}
-                  disabled={!newGoal.title.trim()}
+                  disabled={!newGoal.title.trim() || isCreating}
                   className="px-3 py-1.5 text-sm rounded bg-port-accent text-white disabled:opacity-50"
                 >
                   Create

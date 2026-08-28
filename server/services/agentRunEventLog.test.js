@@ -22,6 +22,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
 const {
   appendRunEvent,
   appendMindEvent,
+  clearPersistentMindHistory,
   readRunEvents,
   readPersistentMindEvents,
   readPersistentMindHistory,
@@ -269,6 +270,39 @@ describe('persistent-mind ordering, replay, and cursors', () => {
     const page = await readPersistentMindEvents({ limit: 2 });
     expect(page).toMatchObject({ gap: false, hasMore: false, truncated: true });
     expect(page.events.map((item) => item.data.messageId)).toEqual(['two', 'three']);
+  });
+
+  it('clears one mind while preserving the requesting turn and monotonic sequence', async () => {
+    const old = await appendMessage('old');
+    const currentMessage = await appendMessage('current');
+    const wake = await appendMindEvent({
+      kind: 'mind.wake',
+      turnId: 'turn-current',
+      eventId: 'mind-wake:turn-current',
+    });
+    await appendMindEvent({
+      kind: 'mind.wake',
+      mindId: 'future-mind',
+      turnId: 'future-turn',
+      eventId: 'mind-wake:future-turn',
+    });
+
+    const result = await clearPersistentMindHistory({
+      preserveTurnId: 'turn-current',
+      preserveMessageId: 'current',
+    });
+    const retained = await readPersistentMindHistory();
+    const later = await appendMessage('later');
+
+    expect(result).toEqual({ cleared: 1, preserved: 2 });
+    expect(retained.map((item) => item.eventId)).toEqual([
+      currentMessage.event.eventId,
+      wake.event.eventId,
+    ]);
+    expect(retained[0].data.previousSequence).toBeNull();
+    expect(retained[1].data.previousSequence).toBe(retained[0].sequence);
+    expect(later.event.sequence).toBeGreaterThan(old.event.sequence);
+    expect(await readPersistentMindHistory('future-mind')).toHaveLength(1);
   });
 });
 

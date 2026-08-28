@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os';
 import { join } from 'path';
 import migration from './298-persistent-mind-runtime-state.js';
+import { PERSISTENT_MIND_SCHEMA_VERSION } from '../../server/lib/persistentMind.js';
 
 const readJson = (path) => JSON.parse(readFileSync(path, 'utf8'));
 
@@ -29,7 +30,7 @@ describe('migration 298 — persistent mind runtime state', () => {
       running: true,
       config: { alwaysOn: true },
       agents: { a1: { status: 'completed' } },
-      persistentMind: { schemaVersion: 2, mindId: 'cos-persistent-mind', enabled: false, started: false, status: 'disabled' },
+      persistentMind: { schemaVersion: PERSISTENT_MIND_SCHEMA_VERSION, mindId: 'cos-persistent-mind', enabled: false, started: false, status: 'disabled', pendingAttachments: [] },
     });
   });
 

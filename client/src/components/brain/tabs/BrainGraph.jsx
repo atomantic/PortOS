@@ -54,6 +54,14 @@ const isCanvasGesture = (e) => e.target?.tagName === 'CANVAS';
 // constant the two silently drift apart.
 const TOOLTIP_WIDTH = 320;
 
+// The force layout is settled before the scene renders, so reduced-motion
+// users can see it immediately at rest. Keep the canvas on demand and turn
+// off OrbitControls' inertia too, preventing movement after an interaction.
+export const graphMotionSettings = (reducedMotion) => ({
+  frameloop: reducedMotion ? 'demand' : 'always',
+  enableDamping: !reducedMotion
+});
+
 // Per-type API getters for detail panel
 const TYPE_GETTERS = {
   people: api.getBrainPerson,
@@ -124,7 +132,7 @@ function GraphEdges({ simEdges, selectedId }) {
 // move over the canvas WHILE A NODE IS HOVERED (it tracks the tooltip position),
 // and every prop here is already identity-stable across that render — so without
 // memo each move reconciles a <mesh> per node for nothing.
-const GraphScene = memo(function GraphScene({ graph, selectedId, adjacentIds, onSelect, onFocus, onHover, pickRef, touchGestureRef }) {
+const GraphScene = memo(function GraphScene({ graph, selectedId, adjacentIds, onSelect, onFocus, onHover, pickRef, touchGestureRef, reducedMotion }) {
   const sphereGeo = useMemo(() => new THREE.SphereGeometry(1, 16, 12), []);
   const { camera, size } = useThree();
 
@@ -205,7 +213,7 @@ const GraphScene = memo(function GraphScene({ graph, selectedId, adjacentIds, on
         </mesh>
       )}
 
-      <OrbitControls enableDamping dampingFactor={0.05} minDistance={10} maxDistance={200} />
+      <OrbitControls enableDamping={!reducedMotion} dampingFactor={0.05} minDistance={10} maxDistance={200} />
     </>
   );
 });
@@ -233,6 +241,10 @@ export default function BrainGraph() {
   const [typeFilters, setTypeFilters] = useState(() =>
     Object.fromEntries(BRAIN_TYPES.map(t => [t, true]))
   );
+  const [reducedMotion, setReducedMotion] = useState(() =>
+    window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+  );
+  const motionSettings = graphMotionSettings(reducedMotion);
 
   const graphRef = useRef(null);
   const dragStartRef = useRef(null);
@@ -241,6 +253,15 @@ export default function BrainGraph() {
   // True while the in-flight gesture came from a finger, so the mesh raycast
   // and onPointerMissed can stand down for the threshold pick below.
   const touchGestureRef = useRef(false);
+
+  useEffect(() => {
+    const media = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+    if (!media) return undefined;
+    const updatePreference = () => setReducedMotion(media.matches);
+    updatePreference();
+    media.addEventListener?.('change', updatePreference);
+    return () => media.removeEventListener?.('change', updatePreference);
+  }, []);
 
   const focusId = currentFocusId(focusTrail);
 
@@ -566,10 +587,10 @@ export default function BrainGraph() {
                   type="checkbox"
                   checked={typeFilters[type]}
                   onChange={() => toggleType(type)}
-                  className="sr-only"
+                  className="peer sr-only"
                 />
                 <span
-                  className={`inline-block w-3 h-3 rounded-sm border-2 transition-colors ${
+                  className={`inline-block w-3 h-3 rounded-sm border-2 transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-port-accent peer-focus-visible:ring-offset-1 peer-focus-visible:ring-offset-port-bg ${
                     typeFilters[type] ? 'border-transparent' : 'border-gray-600 bg-transparent'
                   }`}
                   style={typeFilters[type] ? { backgroundColor: BRAIN_TYPE_HEX[type] } : undefined}
@@ -633,6 +654,7 @@ export default function BrainGraph() {
         {graph && (
           <Canvas
             camera={{ position: [0, 0, 80], fov: 50 }}
+            frameloop={motionSettings.frameloop}
             dpr={[1, 1.5]}
             style={{ background: 'rgb(var(--port-bg))' }}
             gl={{ antialias: true }}
@@ -647,6 +669,7 @@ export default function BrainGraph() {
               onHover={handleHover}
               pickRef={pickRef}
               touchGestureRef={touchGestureRef}
+              reducedMotion={reducedMotion}
             />
           </Canvas>
         )}

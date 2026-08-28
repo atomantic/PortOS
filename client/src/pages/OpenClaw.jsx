@@ -34,14 +34,23 @@ import {
 } from 'lucide-react';
 import AppContextPicker from '../components/AppContextPicker';
 import FilePickerButton from '../components/ui/FilePickerButton';
+import SettingsTabsHeader from '../components/settings/SettingsTabsHeader';
 import * as api from '../services/apiOpenClaw';
 import * as coreApi from '../services/api';
 import { formatDateTime } from '../utils/formatters';
 import { useOpenClawAttachments, OPENCLAW_ATTACHMENT_ACCEPT } from '../hooks/useOpenClawAttachments';
 import { useOpenClawStream } from '../hooks/useOpenClawStream';
 import { modKey } from '../utils/platform';
+import { useInstanceFeatures } from '../hooks/useInstanceFeatures.js';
 
-function getRuntimeState(status) {
+function getRuntimeState(status, featureEnabled) {
+  if (!featureEnabled || status?.featureEnabled === false) {
+    return {
+      label: 'Disabled',
+      classes: 'bg-gray-500/15 text-gray-300 border-gray-500/30'
+    };
+  }
+
   if (!status?.configured) {
     return {
       label: 'Unconfigured',
@@ -117,6 +126,8 @@ function partitionSessions(sessions = [], selectedSessionId = '', defaultSession
 }
 
 export default function OpenClaw() {
+  const { isFeatureEnabled } = useInstanceFeatures();
+  const featureEnabled = isFeatureEnabled('openclaw');
   const [status, setStatus] = useState(null);
   const [sessions, setSessions] = useState([]);
   const [apps, setApps] = useState([]);
@@ -186,10 +197,11 @@ export default function OpenClaw() {
     sending,
     setSending,
     onError: setMessagesError,
-    onSendComplete: handleSendComplete
+    onSendComplete: handleSendComplete,
+    featureEnabled,
   });
 
-  const runtimeState = useMemo(() => getRuntimeState(status), [status]);
+  const runtimeState = useMemo(() => getRuntimeState(status, featureEnabled), [status, featureEnabled]);
   const visibleSessions = useMemo(
     () => partitionSessions(sessions, selectedSessionId, status?.defaultSession),
     [sessions, selectedSessionId, status?.defaultSession]
@@ -199,6 +211,24 @@ export default function OpenClaw() {
     setStatusLoading(true);
     setSessionsLoading(true);
     setPageError('');
+
+    if (!featureEnabled) {
+      setStatus({
+        configured: false,
+        enabled: false,
+        featureEnabled: false,
+        reachable: false,
+        label: 'OpenClaw Runtime',
+        defaultSession: null,
+        message: 'OpenClaw is disabled for this PortOS instance.'
+      });
+      setSessions([]);
+      setSelectedSessionId('');
+      loadMessages('');
+      setStatusLoading(false);
+      setSessionsLoading(false);
+      return;
+    }
 
     try {
       const statusData = await api.getOpenClawStatus();
@@ -239,12 +269,16 @@ export default function OpenClaw() {
       setStatusLoading(false);
       setSessionsLoading(false);
     }
-  }, [loadMessages]);
+  }, [featureEnabled, loadMessages]);
 
   useEffect(() => {
     loadRuntime();
+    if (!featureEnabled) {
+      setApps([]);
+      return;
+    }
     coreApi.getApps().then(data => setApps((data || []).filter(app => !app.archived))).catch(() => setApps([]));
-  }, [loadRuntime]);
+  }, [featureEnabled, loadRuntime]);
 
   useEffect(() => {
     selectedSessionIdRef.current = selectedSessionId;
@@ -315,6 +349,8 @@ export default function OpenClaw() {
         </div>
       </div>
 
+      <SettingsTabsHeader activeTab="openclaw" />
+
       <div className="grid min-h-0 flex-1 gap-4 overflow-hidden p-4 lg:grid-cols-[320px_minmax(0,1fr)]">
         <aside className={`min-h-0 flex-col gap-4 ${showSidePanel ? 'flex' : 'hidden lg:flex'}`}>
           <section className="rounded-xl border border-port-border bg-port-card p-4">
@@ -376,6 +412,10 @@ export default function OpenClaw() {
                 <div className="flex items-center gap-2 p-4 text-sm text-gray-400">
                   <RefreshCw size={14} className="animate-spin" />
                   Loading sessions…
+                </div>
+              ) : !featureEnabled || status?.featureEnabled === false ? (
+                <div className="p-4 text-sm text-gray-400">
+                  Enable OpenClaw in Settings &gt; Features to discover sessions.
                 </div>
               ) : !status?.configured ? (
                 <div className="p-4 text-sm text-gray-400">
@@ -484,6 +524,10 @@ export default function OpenClaw() {
               <div className="flex h-full items-center justify-center gap-2 text-sm text-gray-400">
                 <RefreshCw size={16} className="animate-spin" />
                 Loading messages…
+              </div>
+            ) : !featureEnabled || status?.featureEnabled === false ? (
+              <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-port-border bg-port-bg/40 p-6 text-center text-sm text-gray-400">
+                OpenClaw is disabled for this PortOS instance. Enable it in Settings &gt; Features to use operator chat.
               </div>
             ) : !status?.configured ? (
               <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-port-border bg-port-bg/40 p-6 text-center text-sm text-gray-400">
@@ -604,7 +648,7 @@ export default function OpenClaw() {
                 onPaste={handlePaste}
                 onKeyDown={handleComposerKeyDown}
                 rows={3}
-                placeholder={status?.configured ? 'Send a message, paste an image, or drop files here…' : 'OpenClaw is not configured'}
+                placeholder={!featureEnabled || status?.featureEnabled === false ? 'OpenClaw is disabled' : (status?.configured ? 'Send a message, paste an image, or drop files here…' : 'OpenClaw is not configured')}
                 disabled={!status?.configured || !selectedSessionId || sending}
                 className="w-full resize-none rounded-lg border border-port-border bg-port-bg px-3 py-3 text-sm text-white focus:border-port-accent focus:outline-hidden disabled:cursor-not-allowed disabled:opacity-60"
               />
@@ -651,7 +695,7 @@ export default function OpenClaw() {
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
               <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
                 <span>
-                  {status?.configured && selectedSessionId ? `Stream via PortOS · ${modKey}+↵ to send` : 'Select a configured session to send.'}
+                  {!featureEnabled || status?.featureEnabled === false ? 'Enable OpenClaw in Settings > Features to send messages.' : (status?.configured && selectedSessionId ? `Stream via PortOS · ${modKey}+↵ to send` : 'Select a configured session to send.')}
                 </span>
                 <FilePickerButton
                   multiple

@@ -460,14 +460,14 @@ export default function InboxTab({ onRefresh, settings }) {
                           <div className="flex flex-col gap-1">
                             <button
                               onClick={() => handleSaveEdit(entry.id)}
-                              className="p-1 text-port-success hover:bg-port-success/20 rounded transition-colors"
+                              className="p-1 min-h-[44px] min-w-[44px] flex items-center justify-center text-port-success hover:bg-port-success/20 rounded transition-colors"
                               title="Save changes" aria-label="Save changes"
                             >
                               <Save size={14} />
                             </button>
                             <button
                               onClick={handleCancelEdit}
-                              className="p-1 text-gray-400 hover:bg-port-border/50 rounded transition-colors"
+                              className="p-1 min-h-[44px] min-w-[44px] flex items-center justify-center text-gray-400 hover:bg-port-border/50 rounded transition-colors"
                               title="Cancel editing" aria-label="Cancel editing"
                             >
                               <X size={14} />
@@ -480,14 +480,14 @@ export default function InboxTab({ onRefresh, settings }) {
                           <div className="flex gap-1">
                             <button
                               onClick={() => handleEdit(entry)}
-                              className="p-1 text-gray-400 hover:text-white transition-colors"
+                              className="p-1 min-h-[44px] min-w-[44px] flex items-center justify-center text-gray-400 hover:text-white transition-colors"
                               title="Edit text" aria-label="Edit text"
                             >
                               <Edit2 size={14} />
                             </button>
                             <button
                               onClick={() => setConfirmingDeleteId(entry.id)}
-                              className="p-1 text-gray-400 hover:text-port-error transition-colors"
+                              className="p-1 min-h-[44px] min-w-[44px] flex items-center justify-center text-gray-400 hover:text-port-error transition-colors"
                               title="Delete entry" aria-label="Delete entry"
                             >
                               <Trash2 size={14} />

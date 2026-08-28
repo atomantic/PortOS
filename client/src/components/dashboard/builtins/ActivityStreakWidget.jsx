@@ -1,3 +1,5 @@
+import { streakGlyph } from '../../../lib/streakGlyph.js';
+
 export default function ActivityStreakWidget({ dashboardState }) {
   const { usage } = dashboardState;
   if (!usage) return null;
@@ -5,7 +7,7 @@ export default function ActivityStreakWidget({ dashboardState }) {
     <div className="bg-port-card border border-port-border rounded-xl p-4">
       <div className="flex items-center gap-3 mb-3">
         <div className="text-2xl" aria-hidden="true">
-          {usage.currentStreak >= 7 ? '🔥' : usage.currentStreak >= 3 ? '⚡' : '✨'}
+          {streakGlyph(usage.currentStreak)}
         </div>
         <div>
           <div className="text-xl font-bold text-white">

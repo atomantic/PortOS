@@ -36,7 +36,10 @@ const TABBED_PAGES = [
   { prefix: '/wiki', file: 'client/src/pages/Wiki.jsx', kind: 'ids', constName: 'TABS' },
   { prefix: '/settings', file: 'client/src/components/settings/SettingsTabsHeader.jsx', kind: 'links', constName: 'TABS' },
   { prefix: '/models', file: 'client/src/components/models/ModelsTabsHeader.jsx', kind: 'links', constName: 'TABS' },
+  { prefix: '/media', file: 'client/src/pages/MediaGen.jsx', kind: 'ids', constName: 'TABS', allowBasePrefix: true },
+  { prefix: '/music', file: 'client/src/pages/Music.jsx', kind: 'ids', constName: 'TABS', allowBasePrefix: true },
   { prefix: '/sharing', file: 'client/src/pages/Sharing.jsx', kind: 'links', constName: 'SECTIONS' },
+  { prefix: '/system-resources', file: 'client/src/pages/SystemHealthPage.jsx', kind: 'ids', constName: 'RESOURCE_TABS', allowBasePrefix: true },
   // OpenWorld's fast-travel destinations aren't page tabs, but they follow the same
   // contract: one `/openworld/region/<id>` nav command per region in the client's
   // registry, so every warp target is reachable from ⌘K and voice — and a region
@@ -102,7 +105,7 @@ function extractConstIds(filePath, constName) {
 }
 
 // The set of absolute tab paths a page serves under its own prefix.
-function extractTabPaths(filePath, { kind, constName, switchVar, prefix, nestedIdSources }) {
+function extractTabPaths(filePath, { kind, constName, switchVar, prefix, nestedIdSources, allowBasePrefix }) {
   const src = fs.readFileSync(filePath, 'utf8');
   const nested = (nestedIdSources || []).flatMap(({ parent, file, constName: c }) =>
     extractConstIds(path.join(REPO_ROOT, file), c).map((id) => `${prefix}/${parent}/${id}`));
@@ -111,7 +114,8 @@ function extractTabPaths(filePath, { kind, constName, switchVar, prefix, nestedI
   }
   const block = extractConstArrayBlock(src, constName);
   if (kind === 'ids') {
-    return [...block.matchAll(/id:\s*['"]([^'"]+)['"]/g)].map((m) => `${prefix}/${m[1]}`);
+    const ids = [...block.matchAll(/id:\s*['"]([^'"]+)['"]/g)].map((m) => `${prefix}/${m[1]}`);
+    return allowBasePrefix ? [prefix, ...ids] : ids;
   }
   // kind 'links': keep only entries that point at this page, dropping cross-links.
   return [...block.matchAll(/(?:to|path):\s*['"]([^'"]+)['"]/g)]
@@ -144,6 +148,20 @@ describe('navManifest — shape invariants', () => {
   });
 });
 
+describe('navManifest — persistent mind dashboard', () => {
+  it.each(['mind-tools', 'persistent-mind-tools', 'tools-access'])(
+    'opens the embedded tools panel for the %s alias',
+    (alias) => {
+      expect(resolveNavCommand(alias)?.path).toBe('/cos/mind?panel=tools');
+    },
+  );
+
+  it('maps both former Mind Tools routes onto the embedded tools panel', () => {
+    const tools = NAV_COMMANDS.find((command) => command.id === 'nav.cos.mind-tools');
+    expect(tools?.previousPaths).toEqual(['/cos/tools', '/cos/mind/tools']);
+  });
+});
+
 // Feature gating hides a page from the ⌘K palette and the sidebar. A typo in a
 // `feature` tag would silently gate on a flag nothing can ever turn on, hiding
 // the page on every install with no other symptom.
@@ -171,6 +189,13 @@ describe('nav contract — instance-feature gating', () => {
     expect(byId['nav.devtools.jira']).toBe('jira');
     expect(byId['nav.devtools.jira-reports']).toBe('jira');
     expect(byId['nav.cos.gsd']).toBe('gsd');
+  });
+
+  it('gates the complete Health section and MortalLoom settings', () => {
+    const byId = Object.fromEntries(NAV_COMMANDS.map((c) => [c.id, c.feature]));
+    expect([...SECTION_FEATURE]).toContainEqual(['Health', 'health']);
+    expect(NAV_COMMANDS.filter((c) => c.section === 'Health').every((c) => c.feature === 'health')).toBe(true);
+    expect(byId['nav.settings.mortalloom']).toBe('health');
   });
 
   it('leaves ungated pages untagged', () => {

@@ -28,6 +28,7 @@ const enabledManifest = {
   configurationValid: true,
   profile: 'metadata',
   scopes: ['navigation', 'workspaces'],
+  actions: { readPortos: false, writePortos: false },
   tools: [{ name: 'context_profile', inputSchema: { type: 'object' } }],
 };
 
@@ -84,6 +85,8 @@ describe('agentContextMcp route', () => {
     expect(initialize.status).toBe(200);
     expect(initialize.body.result.protocolVersion).toBe('2025-11-25');
     expect(initialize.body.result.capabilities.tools).toEqual({ listChanged: false });
+    expect(initialize.body.result.serverInfo.name).toBe('PortOS Agent Tools');
+    expect(initialize.body.result.instructions).toMatch(/semantic actions/i);
 
     const tools = await mcpPost({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
     expect(tools.body.result.tools).toEqual(enabledManifest.tools);
@@ -98,7 +101,14 @@ describe('agentContextMcp route', () => {
     });
     expect(called.status).toBe(200);
     expect(mocks.callAgentContextTool).toHaveBeenCalledWith('context_profile', {}, {
-      agentContext: { enabled: true, profile: 'metadata', scopes: ['navigation', 'workspaces'] },
+      agentContext: {
+        enabled: true,
+        profile: 'metadata',
+        scopes: ['navigation', 'workspaces'],
+        actions: { readPortos: false, writePortos: false },
+      },
+    }, {
+      requestId: expect.stringMatching(/^agent-mcp:/),
     });
 
     const notification = await mcpPost({ jsonrpc: '2.0', method: 'notifications/initialized' });

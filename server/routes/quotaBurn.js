@@ -15,6 +15,7 @@ import { saveQuotaBurnConfig } from '../services/quotaBurnStore.js';
 import { getQuotaBurnStatus, runQuotaBurnCycle } from '../services/quotaBurnRunner.js';
 import { getActiveApps } from '../services/apps.js';
 import { listUniverseNames } from '../services/universeBuilder.js';
+import { listProviders } from '../services/providers.js';
 
 const router = Router();
 
@@ -32,12 +33,13 @@ router.get('/', asyncHandler(async (req, res) => {
 // pickers in one round trip: job types + their param descriptors, the family
 // list, and the app/universe/render-backend options those params select from.
 router.get('/catalog', asyncHandler(async (_req, res) => {
-  const [apps, universes] = await Promise.all([
+  const [apps, universes, providers] = await Promise.all([
     getActiveApps(),
     // The `{ id, name }` projection, NOT listUniverses() — the picker needs a
     // label, not every bible on the install. A missing/empty universe store must
     // not 500 the config page either; the universe job just has nothing to pick.
     listUniverseNames().catch(() => []),
+    listProviders().catch(() => []),
   ]);
   res.json({
     jobTypes: QUOTA_BURN_JOB_CATALOG,
@@ -50,6 +52,7 @@ router.get('/catalog', asyncHandler(async (_req, res) => {
     // Exactly the modes the media job queue can dispatch — the burn job enqueues
     // through it, so a backend added there appears in this picker for free.
     imageModes: QUEUEABLE_IMAGE_MODES,
+    providers: providers || [],
   });
 }));
 
@@ -63,7 +66,7 @@ router.put('/', asyncHandler(async (req, res) => {
 
 // POST /api/quota-burn/run — evaluate now. With no body it behaves like a
 // scheduled tick that ignores the master switch. `{ familyId, jobId, force }`
-// runs one named job immediately, past the window/reserve/cap gates.
+// runs a family or one named job immediately, past the window/reserve/cap gates.
 router.post('/run', asyncHandler(async (req, res) => {
   const { familyId = null, jobId = null, force = false } = validateRequest(quotaBurnRunSchema, req.body || {});
   if (force && !familyId) {

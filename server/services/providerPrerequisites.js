@@ -8,16 +8,16 @@
  *   - `getProviderPrerequisiteMap(providers)` — the whole collection's verdict,
  *     for decorating `GET /api/providers` so the AI Providers page reads the
  *     same answer the router uses instead of deriving its own.
+ *   - `getProviderPrerequisiteReadinessMap(providers)` — strict tri-state
+ *     readiness for authoritative choices that cannot treat unprobed as ready.
  *   - `prerequisitesMetForRouting(provider, providers)` — the gate the
  *     fallback-provider chain in `aiToolkit/providerStatus.js` consults.
  *
- * BOTH are synchronous and read only what the runtime probe has already cached,
- * kicking a coalesced background refresh when it has nothing current. Routing
- * has no choice — `getFallbackProvider` is a synchronous decision — and the
- * route must not await either: `GET /api/providers` is fetched by half the app,
- * and a cold cache would put a multi-second `--version` sweep of every CLI on
- * that critical path. The credential checks need no probe at all, so they are
- * always exact; only the runtime finding waits on the cache.
+ * The provider-page map and fallback route stay synchronous and read only what
+ * the runtime probe has already cached. The strict readiness map is async: its
+ * authoritative callers await a cold/expired probe before publishing choices.
+ * This keeps `GET /api/providers` off the multi-second `--version` sweep while
+ * preventing a Persistent Mind turn from receiving an empty, stale catalog.
  *
  * The result is permissive in three deliberate ways. An un-probed runtime
  * yields no finding, so the first pick after boot behaves exactly as it did
@@ -35,7 +35,15 @@
 
 import { blocksRouting, describeMissingPrerequisites, providerPrerequisites, providerRuntimeKey } from '../lib/providerPrerequisites.js';
 import { PROVIDER_GATEWAYS } from '../lib/providerGateways.js';
-import { getProviderRuntime, getProviderRuntimeStatuses, peekProviderRuntimeStatuses } from './providerRuntimeInstaller.js';
+import { inferTuiCommand } from '../lib/providerVendors.js';
+import { findCommandOnPath } from '../lib/processEnv.js';
+import { delimiter, isAbsolute } from 'path';
+import {
+  getProviderRuntime,
+  getProviderRuntimeStatus,
+  getProviderRuntimeStatuses,
+  peekProviderRuntimeStatuses,
+} from './providerRuntimeInstaller.js';
 
 /**
  * Per gateway id, does the sibling API provider of that id hold the key an
@@ -95,6 +103,53 @@ const forProvider = (provider, runtimes, gatewayKeySet) => providerPrerequisites
   gatewayKeySet,
 });
 
+const effectiveProcessCommand = (provider) => {
+  const configured = typeof provider?.command === 'string' ? provider.command.trim() : '';
+  if (configured) return configured;
+  return provider?.type === 'tui' ? inferTuiCommand(provider?.id) : 'claude';
+};
+
+const configuredCommandIsNormalized = (provider) => typeof provider?.command !== 'string'
+  || provider.command === ''
+  || provider.command === provider.command.trim();
+
+const prerequisiteReadinessFor = (provider, runtimes, gatewayKeySet) => {
+  const effectiveProvider = provider?.command
+    ? provider
+    : { ...provider, command: effectiveProcessCommand(provider) };
+  const runtimeKey = providerRuntimeKey(effectiveProvider);
+  const runtime = runtimes?.[runtimeKey ?? ''] ?? null;
+  const { missing } = forProvider(effectiveProvider, runtimes, gatewayKeySet);
+  if (missing.length > 0) {
+    return {
+      status: 'blocked',
+      reasonCodes: [...new Set(missing.map((entry) => entry.code).filter(Boolean))],
+    };
+  }
+  if (runtimeKey && getProviderRuntime(runtimeKey) && !runtime) {
+    return { status: 'unknown', reasonCodes: ['runtime-unprobed'] };
+  }
+  return { status: 'ready', reasonCodes: [] };
+};
+
+const processProviderRuntimeStatus = (provider, { cwd = null, deferCwdDependent = false } = {}) => {
+  if (provider?.type !== 'cli' && provider?.type !== 'tui') return null;
+  if (!configuredCommandIsNormalized(provider)) return { installed: false, reasonCode: 'command' };
+  const command = effectiveProcessCommand(provider);
+  const effectiveProvider = { ...provider, command };
+  const runtimeKey = providerRuntimeKey(effectiveProvider);
+  if (runtimeKey && getProviderRuntime(runtimeKey)) return null;
+  const env = { ...process.env, ...(provider?.envVars || {}) };
+  const explicitRelativeCommand = /[\\/]/.test(command) && !isAbsolute(command);
+  const relativePathEntry = String(env.PATH || env.Path || '')
+    .split(delimiter)
+    .some((entry) => entry === '' || !isAbsolute(entry));
+  if (deferCwdDependent && !cwd && (explicitRelativeCommand || relativePathEntry)) return null;
+  return findCommandOnPath(command, { env, ...(cwd ? { cwd } : {}) })
+    ? { installed: true }
+    : { installed: false };
+};
+
 /**
  * `{ [providerId]: { met, missing } }` for a whole provider collection.
  * @param {Array<object>} providers — raw or sanitized provider records
@@ -105,6 +160,48 @@ export function getProviderPrerequisiteMap(providers) {
   const runtimes = runtimeSnapshotFor(list.map(providerRuntimeKey));
   const gatewayKeySet = gatewayKeyState(list);
   return Object.fromEntries(list.map((provider) => [provider.id, forProvider(provider, runtimes, gatewayKeySet)]));
+}
+
+/**
+ * A strict, non-secret prerequisite verdict for authoritative task choices.
+ * Unlike routing, this distinguishes a cold/expired runtime probe from a known
+ * runnable provider so callers that promise a provider choice can fail closed.
+ * Commands outside the fixed installer table are resolved against the same
+ * configured PATH/explicit-path rules the child process uses. `candidates`
+ * limits expensive runtime probes while `providers` remains the full sibling
+ * set used for inherited credential checks. A catalog may defer cwd-dependent
+ * commands, then its execution path must call again with the selected app cwd.
+ */
+export async function getProviderPrerequisiteReadinessMap(providers, {
+  candidates = providers,
+  cwd = null,
+  deferCwdDependent = false,
+} = {}) {
+  const list = Array.isArray(providers) ? providers : [];
+  const targetList = Array.isArray(candidates) ? candidates : [];
+  if (list.length === 0 || targetList.length === 0) return {};
+  const processProviders = targetList.map((provider) => {
+    const command = effectiveProcessCommand(provider);
+    return { ...provider, command };
+  });
+  const runtimeKeys = processProviders.map(providerRuntimeKey);
+  const cached = peekProviderRuntimeStatuses();
+  const missingRuntimeKeys = [...new Set(runtimeKeys
+    .filter((key) => key && getProviderRuntime(key) && !cached[key]))];
+  const probed = await Promise.all(missingRuntimeKeys.map(async (key) => [
+    key,
+    await getProviderRuntimeStatus(key),
+  ]));
+  const runtimes = { ...cached, ...Object.fromEntries(probed) };
+  const gatewayKeySet = gatewayKeyState(list);
+  return Object.fromEntries(targetList.map((provider, index) => {
+    const effectiveProvider = processProviders[index];
+    const customRuntime = processProviderRuntimeStatus(provider, { cwd, deferCwdDependent });
+    const verdict = customRuntime?.installed === false
+      ? { status: 'blocked', reasonCodes: [customRuntime.reasonCode || 'runtime'] }
+      : prerequisiteReadinessFor(effectiveProvider, runtimes, gatewayKeySet);
+    return [provider.id, verdict];
+  }));
 }
 
 /**

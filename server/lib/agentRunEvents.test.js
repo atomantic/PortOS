@@ -199,6 +199,16 @@ describe('redactRunEventData — privacy', () => {
     expect(data.detail.length).toBe(RUN_EVENT_LIMITS.maxStringChars + 1); // + the ellipsis
   });
 
+  it('preserves bounded API-relative Persistent Mind image paths', () => {
+    const path = `/api/screenshots/${'a'.repeat(230)}.png`;
+    const data = redactRunEventData({ images: [{ path }] });
+    expect(data.images[0].path).toBe(path);
+    expect(data.images[0].path.length).toBeGreaterThan(RUN_EVENT_LIMITS.maxStringChars);
+
+    const ordinaryPath = redactRunEventData({ path: `/tmp/${'x'.repeat(230)}.png` });
+    expect(ordinaryPath.path.length).toBe(RUN_EVENT_LIMITS.maxStringChars + 1);
+  });
+
   it('caps array length, key count, and nesting depth', () => {
     const wide = Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`k${i}`, i]));
     const capped = redactRunEventData(wide);

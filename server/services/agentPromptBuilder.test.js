@@ -1107,6 +1107,23 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/\.agent-done/);
     });
 
+    it('keeps routine pre-review rebase conflicts in the originating agent session', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex'] } }),
+        '/r',
+        { branchName: 'claim/x', worktreePath: '/tmp/wt', baseBranch: 'main' },
+        isTruthyMeta,
+        { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' });
+
+      // A routine base conflict stays in this agent's lifecycle. Previously the
+      // local-review gate required an immediate abort, so cleanup opened the PR
+      // and spawned a second [Review Loop] agent despite this ownership contract.
+      expect(prompt).toMatch(/Resolve ordinary rebase conflicts in this same session/);
+      expect(prompt).toMatch(/git rebase --continue/);
+      expect(prompt).toMatch(/Abort and stop only when a conflict requires a product decision/);
+      expect(prompt).not.toMatch(/Fetch\/base-resolution failure or conflicts block publication/);
+    });
+
     // #3733 — the inline review loop is the SAME builder the `sys-rl-*` follow-up
     // agent gets, so the only things that can be wrong are its framing.
     it('the inline review loop never claims a reviewer was pre-requested', () => {
@@ -1194,7 +1211,7 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/READ THAT FILE/);
       expect(prompt).toMatch(/\/data\/slashdo-resolved\/local-agent-review-loop\.md/);
       expect(prompt).not.toMatch(/RECIPE HEADER/);
-      expect(prompt.length).toBeLessThan(20_000);
+      expect(prompt.length).toBeLessThan(21_000);
     });
 
     it('quotes a hostile branch ref inert in the PR-create command line', () => {

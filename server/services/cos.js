@@ -36,7 +36,7 @@ import { getUserTimezone } from './userTimezone.js';
 import { normalizeDomainAutonomy, getDomainMode } from '../lib/domainAutonomy.js';
 import { normalizeDomainBudgets, remainingActionBudget } from '../lib/domainBudgets.js';
 import { mergePersistentMindCapabilities } from '../lib/persistentMindCapabilities.js';
-import { mergePersistentMindProfile } from '../lib/persistentMindProfile.js';
+import { mergePersistentMindProfile, normalizePersistentMindProfile } from '../lib/persistentMindProfile.js';
 import { mergePersistentMindPrompt } from '../lib/persistentMindPrompt.js';
 import { getDomainBudgetStatus } from './domainUsage.js';
 import { pendingCosActionReservations } from './cosAdmissionReservations.js';
@@ -105,6 +105,13 @@ const RECENT_COMPLETION_GRACE_MS = 60_000;
 // sub-second; this is generous cover for a slow worktree/JIRA provisioning step.
 const SPAWN_CLAIM_GRACE_MS = 60_000;
 
+// Boot can reach the auto-start path from more than one initializer while the
+// server and runner settle. A boolean check is not sufficient: both callers
+// can observe the daemon as stopped before either one sets the in-memory flag.
+// Share the entire startup promise so recovery, scheduling, and the initial
+// dequeue happen exactly once.
+let daemonStartPromise = null;
+
 // Internal imports for functions used in this module
 import { pruneOldAgentArchives, loadAgentIndex } from './cosAgentIndex.js';
 import { archiveStaleAgents as _archiveStaleAgents } from './cosAgentArchive.js';
@@ -122,6 +129,7 @@ import {
   queueEligibleImprovementTasks,
   generateSelfImprovementTaskForType,
   generateManagedAppImprovementTaskForType,
+  recordDeferredPerpetualDispatch,
   applyOnDemandConsent,
   emitOnDemandEmpty,
   blockIfExceedsMaxSpawns,
@@ -159,6 +167,7 @@ import {
   shutdownPersistentMindSupervisor,
   handlePersistentMindGlobalPause,
   handlePersistentMindGlobalResume,
+  refreshPersistentMindWakeCadence,
   registerPersistentMindTurnAdapter,
   unregisterPersistentMindTurnAdapter,
 } from './persistentMindSupervisor.js';
@@ -216,6 +225,7 @@ export { getConfig } from './cosState.js';
  * Update configuration
  */
 export async function updateConfig(updates) {
+  let persistentMindWakeCadenceChanged = false;
   const config = await withStateLock(async () => {
     const state = await loadState();
     // domainAutonomy is a partial-friendly map: a PATCH that names only one
@@ -244,10 +254,13 @@ export async function updateConfig(updates) {
       state.config.domainBudgets = normalizeDomainBudgets(mergedBudgets);
     }
     if (updates.persistentMindProfile !== undefined) {
-      state.config.persistentMindProfile = mergePersistentMindProfile(
+      const nextPersistentMindProfile = mergePersistentMindProfile(
         priorPersistentMindProfile,
         updates.persistentMindProfile,
       );
+      persistentMindWakeCadenceChanged = nextPersistentMindProfile.wakeIntervalMinutes
+        !== normalizePersistentMindProfile(priorPersistentMindProfile).wakeIntervalMinutes;
+      state.config.persistentMindProfile = nextPersistentMindProfile;
     }
     if (updates.persistentMindCapabilities !== undefined) {
       state.config.persistentMindCapabilities = mergePersistentMindCapabilities(
@@ -265,6 +278,9 @@ export async function updateConfig(updates) {
     return state.config;
   });
   cosEvents.emit('config:changed', config);
+  if (persistentMindWakeCadenceChanged) {
+    await refreshPersistentMindWakeCadence();
+  }
   if (isDaemonRunning() && updates.domainAutonomy !== undefined) {
     const mode = getDomainMode(config, 'cos');
     if (mode === 'execute') await handlePersistentMindGlobalResume();
@@ -276,7 +292,16 @@ export async function updateConfig(updates) {
 /**
  * Start the CoS daemon
  */
-export async function start() {
+export function start() {
+  if (!daemonStartPromise) {
+    daemonStartPromise = runStart().finally(() => {
+      daemonStartPromise = null;
+    });
+  }
+  return daemonStartPromise;
+}
+
+async function runStart() {
   if (isDaemonRunning()) {
     emitLog('warn', 'CoS already running');
     return { success: false, error: 'Already running' };
@@ -988,7 +1013,10 @@ async function spawnDequeuePriority0OnDemand(ctx) {
         reviewStartedApps.add(targetApp.id);
       }
       await taskScheduleMod.recordExecution(`task:${request.taskType}`, targetApp.id);
-      task = await generateManagedAppImprovementTaskForType(request.taskType, targetApp, state, { skipPreconditions: true });
+      task = await generateManagedAppImprovementTaskForType(request.taskType, targetApp, state, {
+        skipPreconditions: true,
+        deferPerpetualDispatch: true
+      });
       if (task) {
         await bindAppReviewAgent(targetApp.id, `on-demand-${Date.now()}`);
       }
@@ -1019,8 +1047,9 @@ async function spawnDequeuePriority0OnDemand(ctx) {
       // and `agent:completed` fires before the completing task's updateTask
       // settles it to `completed` — so without excluding it the re-issued claim is
       // rejected as a duplicate of the run that just finished and the drain stalls.
-      const persisted = await addTask(task, 'internal', { raw: true, ignoreTaskId });
+      const persisted = await addTask(task, 'internal', { raw: true, ignoreTaskId, suppressDequeue: true });
       if (!persisted?.duplicate) {
+        await recordDeferredPerpetualDispatch(task, taskScheduleMod);
         cosEvents.emit('task:ready', task);
         capacity.trackSpawn(task);
       } else if (persisted.status === 'blocked') {
@@ -1028,7 +1057,8 @@ async function spawnDequeuePriority0OnDemand(ctx) {
         // retry path is reviving the existing task, not minting a duplicate —
         // and without this branch the Run is a silent no-op that strands the
         // bound on-demand review marker.
-        await reviveBlockedTask(persisted.id, { priority: task.priority, metadata: task.metadata }, 'internal');
+        await reviveBlockedTask(persisted.id, { priority: task.priority, metadata: task.metadata }, 'internal', { suppressDequeue: true });
+        await recordDeferredPerpetualDispatch(task, taskScheduleMod);
         const revived = { ...task, id: persisted.id };
         cosEvents.emit('task:ready', revived);
         capacity.trackSpawn(revived);
@@ -1263,6 +1293,7 @@ async function spawnDequeuePriority4IdleReview(ctx) {
     // that marker, which requires the emit. A denial would leave the app reading
     // "in review" indefinitely (#978's mode). See canSpawnCommitted (#4834).
     if (idleTask && capacity.canSpawnCommitted(idleTask, ctx.autonomousSpawnCeiling)) {
+      await recordDeferredPerpetualDispatch(idleTask, await import('./taskSchedule.js'));
       cosEvents.emit('task:ready', idleTask);
       capacity.trackSpawn(idleTask);
     }
@@ -1531,7 +1562,7 @@ async function refillPerpetualForCompletedAgent(agent) {
   // regenerates an identical first-line per app) is rejected as a duplicate of
   // the completing task and the drain stalls until the next scheduler tick.
   const cosTaskData = await getCosTasks();
-  await queueEligibleImprovementTasks(state, cosTaskData, { ignoreTaskId: agent?.taskId });
+  await queueEligibleImprovementTasks(state, cosTaskData, { ignoreTaskId: agent?.taskId, wakeAfterRecord: false });
   // NOTE: the caller (the agent:completed handler) runs dequeueNextTask AFTER
   // this resolves, so the freshly-queued perpetual task is on the queue before
   // slots are filled. Do not dequeue here — that would re-introduce the ordering
@@ -1638,6 +1669,7 @@ export async function init() {
       setImmediate(() => dequeueNextTask());
       if (data.type === 'user' && data.task) setImmediate(() => tryImmediateSpawn(data.task));
     } else if (data.action === 'approved' || data.action === 'unblocked' || data.action === 'requeued') {
+      if (data.suppressDequeue) return;
       setImmediate(() => dequeueNextTask());
     } else if (data.task?.status === 'completed' && data.previousStatus !== 'completed') {
       // A finished investigation releases the task(s) its failure was blocking

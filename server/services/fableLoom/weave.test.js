@@ -25,7 +25,7 @@ vi.mock('../pipeline/series.js', () => ({ getSeries: getSeriesMock }));
 const { createLoom, addEpisode, addNode, mutateLoom, updateLoom, updateNode, getLoom } = await import('./records.js');
 const { _resetFableLoomBackend } = await import('./store.js');
 const {
-  branchNode, buildCanonDigest, mapGeneratedGraph, playTurn, reformatEpisodeScenes, reviewEpisode, weaveEpisode,
+  branchNode, buildCanonDigest, feedbackEpisode, mapGeneratedGraph, playTurn, reformatEpisodeScenes, reviewEpisode, weaveEpisode,
 } = await import('./weave.js');
 
 beforeEach(() => {
@@ -176,6 +176,63 @@ describe('reviewEpisode', () => {
       { severity: 'high', nodeId, problem: 'Only one scene', suggestion: 'Branch it' },
       { severity: 'medium', nodeId: null, problem: 'Vague', suggestion: '' },
     ]);
+  });
+});
+
+describe('feedbackEpisode', () => {
+  it('applies sparse metadata, scene, and existing-path edits without changing ids', async () => {
+    const { loomId, episodeId } = await setup();
+    let updated = await addNode(loomId, episodeId, { title: 'The Gate', prose: 'You wait.' });
+    const gate = updated.episodes[0].nodes[0];
+    updated = await addNode(loomId, episodeId, {
+      title: 'Inside', prose: 'Torchlight.', fromNodeId: gate.id, fromIntent: 'enter',
+    });
+    const inside = updated.episodes[0].nodes.find((node) => node.title === 'Inside');
+    const transitionId = (await getLoom(loomId)).episodes[0].nodes[0].transitions[0].id;
+    runStagedLLM.mockImplementation(async (stage, variables, options) => {
+      expect(stage).toBe('fableloom-feedback-episode');
+      expect(variables.feedback).toBe('Make the opening more urgent.');
+      expect(options).toMatchObject({
+        providerOverride: 'writer', modelOverride: 'writer-large', effortOverride: 'high',
+      });
+      return {
+        content: {
+          title: 'The Gate at Midnight',
+          synopsis: '',
+          scenes: [{
+            id: gate.id,
+            prose: 'The lock clicks before you touch it.',
+            transitions: [{ id: transitionId, intent: 'cross the threshold', triggers: ['go in'], description: 'Enter.' }],
+          }],
+        },
+        runId: 'feedback-run',
+      };
+    });
+
+    const result = await feedbackEpisode(loomId, episodeId, {
+      feedback: ' Make the opening more urgent. ',
+      providerId: 'writer', model: 'writer-large', effort: 'high',
+    });
+    const episode = result.loom.episodes[0];
+    const revisedGate = episode.nodes.find((node) => node.id === gate.id);
+    expect(result).toMatchObject({ episodeId, changedScenes: 1, runId: 'feedback-run' });
+    expect(episode.title).toBe('The Gate at Midnight');
+    expect(episode.synopsis).toBe('');
+    expect(revisedGate).toMatchObject({ id: gate.id, prose: 'The lock clicks before you touch it.' });
+    expect(revisedGate.transitions).toEqual([expect.objectContaining({ id: transitionId, intent: 'cross the threshold' })]);
+    expect(episode.nodes.map((node) => node.id)).toEqual([gate.id, inside.id]);
+    expect(episode.nodes.find((node) => node.id === inside.id).prose).toBe('Torchlight.');
+  });
+
+  it('preserves authored values when the model omits them and rejects unusable edits', async () => {
+    const { loomId, episodeId } = await setup();
+    const withNode = await addNode(loomId, episodeId, { title: 'Opening', prose: 'Original.' });
+    runStagedLLM.mockResolvedValueOnce({ content: { scenes: [{ id: 'node-unknown', prose: 'Nope.' }] } });
+    await expect(feedbackEpisode(loomId, episodeId, { feedback: 'Make it better.' }))
+      .rejects.toMatchObject({ code: 'AI_RESPONSE_INVALID' });
+    expect((await getLoom(loomId)).episodes[0].nodes[0]).toMatchObject({
+      id: withNode.episodes[0].nodes[0].id, title: 'Opening', prose: 'Original.',
+    });
   });
 });
 

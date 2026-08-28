@@ -102,4 +102,21 @@ describe('PlayerController Space (jump) capture', () => {
 
     expect(() => act(() => runFrame({}, 1 / 60))).not.toThrow();
   });
+
+  it('publishes HUD pose telemetry immediately, then at a time-based 10Hz cadence', () => {
+    const onPlayerPoseChange = vi.fn();
+    renderRig({ onPlayerPoseChange });
+    const runFrame = frameCallbacks.at(-1);
+
+    act(() => runFrame({}, 0.016));
+    expect(onPlayerPoseChange).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      for (let frame = 0; frame < 4; frame += 1) runFrame({}, 0.02);
+    });
+    expect(onPlayerPoseChange).toHaveBeenCalledTimes(1);
+
+    act(() => runFrame({}, 0.02));
+    expect(onPlayerPoseChange).toHaveBeenCalledTimes(2);
+  });
 });

@@ -22,7 +22,7 @@ export const REPO_INTAKE_OPTIONS = [
     key: 'learn',
     label: 'Study for app ideas',
     Icon: Lightbulb,
-    hint: 'An agent reads the clone for implementation ideas worth adopting and files the good ones as issues. Clean-room — it never copies code.',
+    hint: 'An agent studies the clone as a product — its features and design — and files the feature ideas and enhancements worth adopting as issues. Clean-room — it never copies code.',
   },
 ];
 

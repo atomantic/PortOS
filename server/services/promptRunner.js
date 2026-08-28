@@ -26,19 +26,20 @@
  * stay honest about what the runner actually executed.
  */
 
-import { createRun, executeApiRun, executeCliRun, extractBakedModel, hasModelFlag, stopRun, patchRunMetadata } from './runner.js';
+import { createRun, executeApiRun, executeCliRun, extractBakedModel, hasModelFlag, stopRun, patchRunMetadata, finalizeRunRecord } from './runner.js';
 import { getActiveProvider, getProviderById, getAllProviders } from './providers.js';
 import { executeTuiRun } from './tuiPromptRunner.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { analyzeError, ERROR_CATEGORIES, isRunCanceledError } from '../lib/aiToolkit/errorDetection.js';
 import { isSchemaTypeCategory, resolveProviderBench } from '../lib/providerCooldown.js';
-import { isGenerationModel } from '../lib/localModelHeuristics.js';
+import { isGenerationModel, isVisionCapableCliProvider } from '../lib/localModelHeuristics.js';
 import { getAIToolkitInstance } from '../lib/aiToolkitState.js';
 import { createSingleFlight } from '../lib/singleFlight.js';
 import { extractJson } from '../lib/jsonExtract.js';
 import { isCreativeRunSource, withCreativeLatitude } from '../lib/creativeLatitude.js';
 import { DEFAULT_OUTPUT_RESERVE_TOKENS, estimateTokens } from '../lib/contextBudget.js';
+import { ensureProviderReadyForExecution } from './providerExecutionReadiness.js';
 
 // The fallback-lifecycle notifiers live in services/autoFixer.js, which
 // transitively pulls in services/cos.js (PM2 + fs + sockets). Importing it
@@ -83,7 +84,9 @@ export function buildRequestCapabilities({ prompt, screenshots, outputReserveTok
 // regardless — and, if the backend is configured for parallelism
 // (OLLAMA_NUM_PARALLEL > 1), it loads N model contexts at once and can spike
 // VRAM into an OOM/thrash. Cloud HTTP and CLI/TUI providers have no such
-// constraint. So we cap concurrent IN-FLIGHT calls per LOCAL endpoint and queue
+// constraint. Local TUI providers still share this gate because their readiness
+// hook can start the same daemon before the PTY is spawned. So we cap concurrent
+// IN-FLIGHT calls per LOCAL endpoint and queue
 // the rest (FIFO). Default 1 (serialize); a beefy box can lift it with
 // LOCAL_LLM_MAX_CONCURRENCY. Keyed by endpoint so two distinct local servers
 // still run in parallel with each other.
@@ -119,11 +122,13 @@ function releaseLocalSlot(endpoint) {
   else gate.active = Math.max(0, gate.active - 1);
 }
 
-// Run `fn` under the local-endpoint gate when `provider` is a local API backend;
-// otherwise run it immediately (cloud / CLI / TUI are unconstrained).
+// Run `fn` under the local-endpoint gate when `provider` is a local API or TUI
+// backend; otherwise run it immediately (cloud / non-local CLI/TUI are
+// unconstrained).
 export async function withLocalConcurrencyGate(provider, fn) {
   const endpoint = provider?.endpoint;
-  if (!(provider?.type === PROVIDER_TYPES.API && isLocalEndpoint(endpoint))) return fn();
+  const isLocalProvider = provider?.type === PROVIDER_TYPES.API || provider?.type === PROVIDER_TYPES.TUI;
+  if (!(isLocalProvider && isLocalEndpoint(endpoint))) return fn();
   await acquireLocalSlot(endpoint);
   try {
     return await fn();
@@ -447,14 +452,15 @@ export function assertProvider(provider, { message, code, status = 503 } = {}) {
 }
 
 /**
- * Guard a vision run against a silent fallback to a non-API provider.
+ * Guard a vision run against a transport that did not receive images.
  *
- * Vision only works on the API path (executeApiRun base64-inlines images);
- * CLI/TUI providers drop the images and return a completion hallucinated from
- * the text prompt alone. `runPromptThroughProvider` can swap the provider two
- * ways — a proactive swap inside createRun (`result.provider`) or a retry
- * fallback after failure (`result.fallbackProvider`) — so the provider that
- * ACTUALLY ran is the first of those, else the requested one. Throw
+ * API providers base64-inline images, while the shared CLI lifecycle stages
+ * file attachments for Codex and Claude Code. TUI and other CLI providers must
+ * not be accepted because they would answer from the text prompt alone.
+ * `runPromptThroughProvider` can swap the provider two ways — a proactive swap
+ * inside createRun (`result.provider`) or a retry fallback after failure
+ * (`result.fallbackProvider`) — so the provider that ACTUALLY ran is the first
+ * of those, else the requested one. Throw
  * VISION_FALLBACK_DROPPED_IMAGES when it isn't an API provider so callers don't
  * report image-grounded output that was really text-only.
  *
@@ -466,7 +472,8 @@ export function assertProvider(provider, { message, code, status = 503 } = {}) {
  */
 export function assertVisionRunUsedImages(result, requestedProvider) {
   const ran = result?.provider || result?.fallbackProvider || requestedProvider;
-  if (ran?.type && ran.type !== 'api') {
+  const usedImages = ran?.type === 'api' || isVisionCapableCliProvider(ran);
+  if (ran?.type && !usedImages) {
     // Name both providers so the cause is actionable. The usual trigger is a
     // proactive/retry swap because the requested API provider is in a temporary
     // cooldown (e.g. a prior model-not-found benched it for several minutes) —
@@ -524,12 +531,9 @@ export function assertVisionRunUsedImages(result, requestedProvider) {
  *   attempt resolves or rejects. Observational; callback errors are ignored.
  * @param {string[]} [args.screenshots] — image paths for a vision/multimodal
  *   call (relative to the runner's screenshots dir, or absolute). API providers
- *   only: the toolkit's executeApiRun base64-encodes each and sends them as
- *   `image_url` content blocks ahead of the prompt text. CLI/TUI providers
- *   ignore them (no vision path), so callers needing vision must resolve an
- *   API provider up front. On a fallback to a non-API provider the images are
- *   silently dropped — the fallback only fires after the primary API call has
- *   already failed.
+ *   base64-encode each into `image_url` blocks. Codex and Claude Code CLI
+ *   providers receive staged file attachments through executeCliRun. Other CLI
+ *   and all TUI providers are rejected before a run record is created.
  * @param {number} [args.timeout] — per-call timeout in ms; falls back to
  *   `provider.timeout`, then DEFAULT_TIMEOUT_MS. Callers like the loop
  *   runner expose a user-configurable timeout that isn't a provider attr.
@@ -1151,6 +1155,14 @@ async function executeProviderRunOnce({
   outputReserveTokens,
   allowFallback = true,
 }) {
+  if (screenshots.length > 0
+      && provider.type !== PROVIDER_TYPES.API
+      && !isVisionCapableCliProvider(provider)) {
+    throw new ServerError(
+      'The selected provider cannot receive image attachments. Choose Codex, Claude Code, or a vision API provider.',
+      { status: 422, code: 'VISION_PROVIDER_UNSUPPORTED' },
+    );
+  }
   // Resolve the model that'll actually run BEFORE creating the run record
   // so the record reflects reality. resolveEffectiveModel handles both
   // the override-honored fallback chain AND the args-baked-CLI case
@@ -1235,8 +1247,36 @@ async function executeProviderRunOnce({
   // (above) and any retry-fallback. This is the single chokepoint the
   // module comment promises: gating the *requested* provider at the call
   // site missed a remote/CLI primary that swaps/fails over to a local
-  // backend, defeating the VRAM/OOM serialization. No-op for cloud/CLI/TUI.
-  return withLocalConcurrencyGate(effectiveProvider, () => new Promise((resolve, reject) => {
+  // backend, defeating the VRAM/OOM serialization. Non-local CLI/TUI providers
+  // remain unconstrained.
+  const attemptStartedAt = Date.now();
+  return withLocalConcurrencyGate(effectiveProvider, async () => {
+    // API providers run through the shared toolkit readiness hook. TUI
+    // providers spawn OpenCode directly, so they need the same hook here or
+    // MTPLX remains stopped until after the TUI has already failed its request.
+    if (effectiveProvider.type === PROVIDER_TYPES.TUI) {
+      const ready = await ensureProviderReadyForExecution(effectiveProvider).catch((err) => ({
+        success: false,
+        error: err.message,
+      }));
+      if (!ready.success) {
+        const message = ready.error || 'Provider readiness check failed';
+        await finalizeRunRecord({
+          runId,
+          output: '',
+          exitCode: 1,
+          success: false,
+          error: message,
+          startTime: attemptStartedAt,
+        });
+        const error = new Error(message);
+        error.effectiveProvider = effectiveProvider;
+        error.effectiveModel = effectiveModel;
+        throw error;
+      }
+    }
+
+    return new Promise((resolve, reject) => {
     let text = '';
     let settled = false;
     let apiTimeoutHandle = null;
@@ -1324,7 +1364,7 @@ async function executeProviderRunOnce({
       : effectiveProvider;
 
     if (effectiveProvider.type === PROVIDER_TYPES.CLI) {
-      executeCliRun({ runId, provider: providerForRun, prompt, workspacePath: effectiveCwd, onData, onComplete, timeout: effectiveTimeout }).catch(safeReject);
+      executeCliRun({ runId, provider: providerForRun, prompt, workspacePath: effectiveCwd, screenshots, onData, onComplete, timeout: effectiveTimeout }).catch(safeReject);
     } else if (effectiveProvider.type === PROVIDER_TYPES.API) {
       // API runs take model as a first-class arg — no clone needed. The
       // toolkit's executeApiRun now owns the primary wall-clock timeout (it
@@ -1353,7 +1393,8 @@ async function executeProviderRunOnce({
     } else {
       safeReject(new Error(`Unsupported provider type: ${effectiveProvider.type}`));
     }
-  })).finally(() => {
+    });
+  }).finally(() => {
     if (typeof onRunSettled !== 'function') return;
     try { onRunSettled(runId); } catch (err) {
       console.error(`❌ run lifecycle settle hook failed: ${err.message}`);

@@ -31,6 +31,7 @@ function HoldButton({ label, hint, icon: Icon, onStart, onEnd, wide = false }) {
       }}
       onPointerUp={finish}
       onPointerCancel={finish}
+      onLostPointerCapture={finish}
       onContextMenu={(event) => event.preventDefault()}
     >
       <Icon size={18} strokeWidth={1.9} aria-hidden="true" />
@@ -47,6 +48,7 @@ export default function OpenWorldMobileControls({
   onToggleExploration,
 }) {
   const joystickRef = useRef(null);
+  const joystickPointerRef = useRef(null);
   const lookPointRef = useRef(null);
   const [stick, setStick] = useState({ x: 0, y: 0 });
 
@@ -75,7 +77,9 @@ export default function OpenWorldMobileControls({
     }
   }, [mobileInputRef]);
 
-  const resetMovement = useCallback(() => {
+  const resetMovement = useCallback((event) => {
+    if (event && joystickPointerRef.current !== event.pointerId) return;
+    joystickPointerRef.current = null;
     setStick({ x: 0, y: 0 });
     if (mobileInputRef.current) {
       mobileInputRef.current.moveX = 0;
@@ -85,25 +89,34 @@ export default function OpenWorldMobileControls({
 
   const handleJoystickDown = (event) => {
     event.preventDefault();
+    if (joystickPointerRef.current !== null) return;
+    joystickPointerRef.current = event.pointerId;
     event.currentTarget.setPointerCapture?.(event.pointerId);
+    writeMovement(event.clientX, event.clientY);
+  };
+
+  const handleJoystickMove = (event) => {
+    if (joystickPointerRef.current !== event.pointerId) return;
     writeMovement(event.clientX, event.clientY);
   };
 
   const handleLookDown = (event) => {
     event.preventDefault();
+    if (lookPointRef.current) return;
     event.currentTarget.setPointerCapture?.(event.pointerId);
-    lookPointRef.current = { x: event.clientX, y: event.clientY };
+    lookPointRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
   };
 
   const handleLookMove = (event) => {
     const previous = lookPointRef.current;
-    if (!previous || !mobileInputRef.current) return;
+    if (!previous || previous.pointerId !== event.pointerId || !mobileInputRef.current) return;
     mobileInputRef.current.lookDeltaX += event.clientX - previous.x;
     mobileInputRef.current.lookDeltaY += event.clientY - previous.y;
-    lookPointRef.current = { x: event.clientX, y: event.clientY };
+    lookPointRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
   };
 
-  const handleLookEnd = () => {
+  const handleLookEnd = (event) => {
+    if (event && lookPointRef.current?.pointerId !== event.pointerId) return;
     lookPointRef.current = null;
   };
 
@@ -127,6 +140,7 @@ export default function OpenWorldMobileControls({
         onPointerMove={handleLookMove}
         onPointerUp={handleLookEnd}
         onPointerCancel={handleLookEnd}
+        onLostPointerCapture={handleLookEnd}
         onContextMenu={(event) => event.preventDefault()}
       >
         <span className="openworld-mobile-look-hint">DRAG TO LOOK</span>
@@ -138,9 +152,10 @@ export default function OpenWorldMobileControls({
         role="group"
         aria-label="Movement joystick"
         onPointerDown={handleJoystickDown}
-        onPointerMove={(event) => writeMovement(event.clientX, event.clientY)}
+        onPointerMove={handleJoystickMove}
         onPointerUp={resetMovement}
         onPointerCancel={resetMovement}
+        onLostPointerCapture={resetMovement}
         onContextMenu={(event) => event.preventDefault()}
       >
         <span

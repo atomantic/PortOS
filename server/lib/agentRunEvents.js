@@ -143,6 +143,10 @@ const DROPPED_KEY_PATTERNS = [
 /** Bounds. A ledger line must stay a diagnostic, not become a record copy. */
 export const RUN_EVENT_LIMITS = Object.freeze({
   maxStringChars: 200,
+  // Persistent Mind image references are server-owned API-relative paths, not
+  // free-form text. Their bounded stored filename can be longer than the
+  // ordinary diagnostic string cap without exposing a filesystem path.
+  maxSafeImagePathChars: 512,
   // Explicitly display-safe mind text is allowed to be useful context while
   // still bounded. Prompt/result/body keys never take this path.
   maxDisplayChars: 4_000,
@@ -165,6 +169,12 @@ export const RUN_EVENT_READ_LIMITS = Object.freeze({
 });
 
 const isDroppedKey = (key) => DROPPED_KEY_PATTERNS.some((re) => re.test(key));
+const isSafeImagePath = (key, value) => (
+  key === 'path'
+  && typeof value === 'string'
+  && value.length <= RUN_EVENT_LIMITS.maxSafeImagePathChars
+  && /^\/api\/screenshots\/[A-Za-z0-9][A-Za-z0-9._-]*\.(?:png|jpg|jpeg|gif|webp)$/i.test(value)
+);
 
 /**
  * Replace the user's home directory prefix with `~` anywhere in a string.
@@ -252,6 +262,8 @@ function redactValue(value, depth) {
     // payload that was already safe.
     if (isDroppedKey(key) && (typeof raw === 'string' || (raw !== null && typeof raw === 'object'))) {
       out[key] = { redacted: 'content', chars: typeof raw === 'string' ? raw.length : null };
+    } else if (isSafeImagePath(key, raw)) {
+      out[key] = raw;
     } else if ((key === 'displayText' || key === 'summaryText') && typeof raw === 'string') {
       out[key] = scrubString(raw, RUN_EVENT_LIMITS.maxDisplayChars);
     } else {

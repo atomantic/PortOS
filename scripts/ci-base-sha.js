@@ -12,10 +12,10 @@
  * `github.event.pull_request.base.sha` twice over:
  *
  *   - It needs no history. `merge-base(HEAD^1, HEAD)` is HEAD^1 by
- *     construction, so `fetch-depth: 2` is enough for both the impact plan's
- *     `<base>...HEAD` diff and Vitest's `--changed <sha>` (which also runs a
- *     three-dot diff internally). Every job used to clone all ~13k commits to
- *     get the same answer.
+ *     construction, so `fetch-depth: 2` is enough for the impact plan's
+ *     `<base>...HEAD` diff. The planner passes those changed source paths to
+ *     Vitest directly. Every job used to clone all ~13k commits to get the
+ *     same answer.
  *   - It cannot drift. The payload's `base.sha` is the base tip when the event
  *     fired, and GitHub rebuilds the merge ref when the base branch moves, so
  *     the two can disagree — at which point a three-dot diff attributes

@@ -4,7 +4,7 @@ import { formatDateNumeric } from '../../utils/formatters';
 
 export default function GoalMilestones({
   goal, newMilestone, setNewMilestone, handleAddMilestone, handleCompleteMilestone,
-  handleCompleteMilestoneTask
+  handleCompleteMilestoneTask, milestoneSubmitting, milestoneActions
 }) {
   return (
     <div>
@@ -21,6 +21,7 @@ export default function GoalMilestones({
               <div className="flex items-center gap-2 text-sm">
                 <button
                   onClick={() => !ms.completedAt && handleCompleteMilestone(ms.id)}
+                  disabled={ms.completedAt || milestoneActions?.has(`milestone:${ms.id}`)}
                   aria-label={ms.completedAt ? `${ms.title} — completed` : `Mark ${ms.title} complete`}
                   className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
                     ms.completedAt
@@ -48,6 +49,7 @@ export default function GoalMilestones({
                       <div key={task.id} className="flex items-center gap-1.5 text-[11px]">
                         <button
                           onClick={() => handleCompleteMilestoneTask?.(ms.id, task.id)}
+                          disabled={milestoneActions?.has(`task:${ms.id}:${task.id}`)}
                           aria-label={done ? `Mark ${task.title} incomplete` : `Mark ${task.title} complete`}
                           className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${
                             done
@@ -87,7 +89,7 @@ export default function GoalMilestones({
         />
         <button
           onClick={handleAddMilestone}
-          disabled={!newMilestone.title.trim()}
+          disabled={milestoneSubmitting || !newMilestone.title.trim()}
           className="px-2 py-1 text-xs rounded bg-port-accent/20 text-port-accent disabled:opacity-50"
         >
           Add

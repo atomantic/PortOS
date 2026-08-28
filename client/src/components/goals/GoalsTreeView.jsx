@@ -380,6 +380,7 @@ export default function GoalsTreeView({ data, onRefresh }) {
   const [showLabels, setShowLabels] = useState(true);
   const [showNewGoal, setShowNewGoal] = useState(false);
   const [newGoal, setNewGoal] = useState({ ...DEFAULT_NEW_GOAL });
+  const [isCreating, setIsCreating] = useState(false);
   const [organizing, setOrganizing] = useState(false);
   const [orgSuggestion, setOrgSuggestion] = useState(null);
   const [applyingOrg, setApplyingOrg] = useState(false);
@@ -440,11 +441,18 @@ export default function GoalsTreeView({ data, onRefresh }) {
   };
 
   const handleCreateGoal = async () => {
-    if (!newGoal.title.trim()) return;
-    await api.createGoal(newGoal);
-    setNewGoal({ ...DEFAULT_NEW_GOAL });
-    setShowNewGoal(false);
-    onRefresh();
+    if (!newGoal.title.trim() || isCreating) return;
+    setIsCreating(true);
+    try {
+      await api.createGoal(newGoal, { silent: true });
+      setNewGoal({ ...DEFAULT_NEW_GOAL });
+      setShowNewGoal(false);
+      onRefresh();
+    } catch {
+      toast.error('Failed to create goal');
+    } finally {
+      setIsCreating(false);
+    }
   };
 
   const handleOrganize = async () => {
@@ -568,6 +576,7 @@ export default function GoalsTreeView({ data, onRefresh }) {
               aria-label="New goal title"
               className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white"
               onKeyDown={e => e.key === 'Enter' && handleCreateGoal()}
+              disabled={isCreating}
             />
             <textarea
               value={newGoal.description}
@@ -576,6 +585,7 @@ export default function GoalsTreeView({ data, onRefresh }) {
               aria-label="New goal description"
               rows={2}
               className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white resize-none"
+              disabled={isCreating}
             />
             <div className="flex gap-2">
               <select
@@ -583,6 +593,7 @@ export default function GoalsTreeView({ data, onRefresh }) {
                 onChange={e => setNewGoal({ ...newGoal, horizon: e.target.value })}
                 aria-label="New goal horizon"
                 className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"
+                disabled={isCreating}
               >
                 {HORIZON_OPTIONS.map(h => <option key={h.value} value={h.value}>{h.label}</option>)}
               </select>
@@ -591,6 +602,7 @@ export default function GoalsTreeView({ data, onRefresh }) {
                 onChange={e => setNewGoal({ ...newGoal, category: e.target.value })}
                 aria-label="New goal category"
                 className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"
+                disabled={isCreating}
               >
                 {Object.entries(CATEGORY_CONFIG).map(([k, v]) => (
                   <option key={k} value={k}>{v.label}</option>
@@ -600,7 +612,7 @@ export default function GoalsTreeView({ data, onRefresh }) {
             <div className="flex gap-2">
               <button
                 onClick={handleCreateGoal}
-                disabled={!newGoal.title.trim()}
+                disabled={!newGoal.title.trim() || isCreating}
                 className="px-3 py-1 text-sm rounded bg-port-accent text-white disabled:opacity-50"
               >
                 Create

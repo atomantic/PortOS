@@ -1,0 +1,124 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+
+import migration from './305-refresh-quota-burn-audit-contract.js';
+import { AUDIT_CONTRACT_HEADING, QUOTA_BURN_PROMPT_PRESETS } from '../../server/lib/quotaBurnPresets.js';
+
+const writeJson = (path, value) => writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+const readJson = (path) => JSON.parse(readFileSync(path, 'utf8'));
+
+const preset = QUOTA_BURN_PROMPT_PRESETS[0];
+const currentPrompt = preset.params.prompt;
+const mission = currentPrompt.slice(0, currentPrompt.indexOf(AUDIT_CONTRACT_HEADING));
+
+/**
+ * A plausible OLD render: the shipped mission verbatim, plus a contract that
+ * still carries the anchors every shipped revision has had but none of this
+ * revision's wording. This is the shape migration 294 could not match — it is
+ * neither the current render nor the one specific prior render 294 rebuilt.
+ */
+const staleContract = `${AUDIT_CONTRACT_HEADING}
+
+1. **Pick a bounded slice and say so first.** Audit one area.
+2. **Read the actual code.** Cite \`file.js:LINE\`.
+3. **File each surviving finding as its own issue.**
+   \`gh issue create --title "..." --body-file "$BODY"\`.
+   Suggested labels: \`ux\`, \`plan\`. Run \`gh label list\` first.
+4. **Cap yourself at 5 issues.**
+5. **Change no code.** The deliverable is the filed issues.
+6. **Report at the end**: the slice you audited and each issue number.
+`;
+const stalePrompt = `${mission}${staleContract}`;
+
+const config = (prompt) => ({
+  families: { claude: { enabled: true, jobs: [{ id: 'job-1', jobType: 'agent-prompt', params: { appId: 'app-1', prompt } }] } },
+});
+const storedPrompt = (path) => readJson(path).families.claude.jobs[0].params.prompt;
+
+describe('migration 305 — refresh quota-burn audit contract', () => {
+  let rootDir;
+  let configPath;
+  let backupPath;
+
+  beforeEach(() => {
+    rootDir = mkdtempSync(join(tmpdir(), 'migration-305-'));
+    mkdirSync(join(rootDir, 'data/cos'), { recursive: true });
+    configPath = join(rootDir, 'data/cos/quota-burn.json');
+    backupPath = join(rootDir, 'data/cos/quota-burn.pre-305.json');
+  });
+
+  afterEach(() => rmSync(rootDir, { recursive: true, force: true }));
+
+  it('upgrades a stale shipped render that byte-for-byte matching would have skipped', async () => {
+    writeJson(configPath, config(stalePrompt));
+    const result = await migration.up({ rootDir });
+    expect(result.updated).toBe(1);
+    expect(storedPrompt(configPath)).toBe(currentPrompt);
+  });
+
+  it('saves a byte-for-byte backup before rewriting anything', async () => {
+    // The edit-detection gates are structural heuristics, and `data/` is
+    // gitignored, so without this copy a wrongly-refreshed prompt is gone for
+    // good. Asserted on the raw bytes, not the parsed object, because a
+    // re-serialized backup would not round-trip a hand-formatted file.
+    writeJson(configPath, config(stalePrompt));
+    const before = readFileSync(configPath, 'utf8');
+    await migration.up({ rootDir });
+    expect(readFileSync(backupPath, 'utf8')).toBe(before);
+    expect(readFileSync(configPath, 'utf8')).not.toBe(before);
+  });
+
+  it('writes no backup when it upgrades nothing', async () => {
+    writeJson(configPath, config(currentPrompt));
+    await migration.up({ rootDir });
+    expect(existsSync(backupPath)).toBe(false);
+  });
+
+  it('leaves a prompt whose How-to-run section the user rewrote', async () => {
+    // Mission intact, procedure replaced — the anchors are gone, so this is the
+    // user's own contract and refreshing it would delete their instructions.
+    const custom = `${mission}${AUDIT_CONTRACT_HEADING}\n\nJust tell me what you find in chat. Do not file anything.\n`;
+    writeJson(configPath, config(custom));
+    const result = await migration.up({ rootDir });
+    expect(result.updated).toBe(0);
+    expect(storedPrompt(configPath)).toBe(custom);
+  });
+
+  it('leaves a prompt whose mission the user rewrote', async () => {
+    const custom = `# Audit the payments flow only\n\n${staleContract}`;
+    writeJson(configPath, config(custom));
+    const result = await migration.up({ rootDir });
+    expect(result.updated).toBe(0);
+    expect(storedPrompt(configPath)).toBe(custom);
+  });
+
+  it('is a no-op on an already-current prompt and rewrites no file', async () => {
+    writeJson(configPath, config(currentPrompt));
+    const before = readFileSync(configPath, 'utf8');
+    const result = await migration.up({ rootDir });
+    expect(result.updated).toBe(0);
+    expect(readFileSync(configPath, 'utf8')).toBe(before);
+  });
+
+  it('returns cleanly when the install has no quota-burn config', async () => {
+    await expect(migration.up({ rootDir })).resolves.toEqual({ updated: 0 });
+  });
+
+  it('throws on a corrupt config instead of reporting zero updates', async () => {
+    // Reporting `{ updated: 0 }` here would be indistinguishable from "this
+    // install has no burn plan", the runner would record 305 as applied, and
+    // the refresh would never run again once the user repaired the file.
+    writeFileSync(configPath, '{ "families": { oops');
+    await expect(migration.up({ rootDir })).rejects.toThrow(/not valid JSON/);
+  });
+
+  it('leaves the file byte-identical when it upgrades nothing', async () => {
+    const custom = `# my own audit\n\n${AUDIT_CONTRACT_HEADING}\n\nJust report in chat.\n`;
+    writeJson(configPath, config(custom));
+    const before = readFileSync(configPath, 'utf8');
+    await migration.up({ rootDir });
+    expect(readFileSync(configPath, 'utf8')).toBe(before);
+  });
+});
