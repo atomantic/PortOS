@@ -94,6 +94,9 @@ export default function useSingToVerify({ score: scoreText = '', tempo } = {}) {
     if (requestGeneration === null) return;
     setError(null);
     setRows([]);
+    // Drop the previous capture's report up front: a denied or aborted request
+    // below must not leave the old warning standing next to a new attempt.
+    setMicProcessing(null);
     trackRef.current = [];
     startBarRef.current = startBar;
 
@@ -177,6 +180,7 @@ export default function useSingToVerify({ score: scoreText = '', tempo } = {}) {
   const reset = useCallback(() => {
     setRows([]);
     setError(null);
+    setMicProcessing(null);
   }, []);
 
   const toggleAccept = useCallback((index) => {

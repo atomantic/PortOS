@@ -129,6 +129,24 @@ describe('useSingToVerify', () => {
       autoGainControl: null,
     });
   });
+  it('drops the processing report when the comparison is reset', async () => {
+    // The warning describes ONE capture. Left standing after a reset (or a
+    // score edit, which resets), it would blame the next attempt for drift
+    // that belonged to the last one.
+    navigator.mediaDevices.getUserMedia = vi.fn(async () => ({
+      getTracks: () => [{ stop: trackStop, getSettings: () => ({ autoGainControl: true }) }],
+    }));
+    const { result } = renderHook(() => useSingToVerify({
+      tempo: 120,
+      score: 'time: 4/4\n| C4q |',
+    }));
+
+    await act(async () => { await result.current.start(1); });
+    expect(result.current.micProcessing.autoGainControl).toBe(true);
+
+    act(() => result.current.reset());
+    expect(result.current.micProcessing).toBeNull();
+  });
   it('tears down mic stream, analyser, tracker, and metronome on unmount', async () => {
     const { result, unmount } = renderHook(() => useSingToVerify({
       tempo: 120,

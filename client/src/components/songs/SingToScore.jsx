@@ -15,12 +15,15 @@
 
 import { useMemo } from 'react';
 import { Mic, Square, Plus, Replace, X } from 'lucide-react';
+import MicProcessingHint from './MicProcessingHint.jsx';
 import ScoreSheet from './ScoreSheet.jsx';
 import useSingToScore, { SING_IDLE, SING_COUNT_IN, SING_RECORDING } from '../../hooks/useSingToScore.js';
 import { parseScore } from '../../lib/scoreNotation.js';
 
 export default function SingToScore({ value = '', tempo = null, musicKey = 'C', hasSelection = false, onInsert }) {
-  const { phase, beat, result, error, start, stop, reset } = useSingToScore({ tempo, score: value, musicKey });
+  const {
+    phase, beat, result, error, micProcessing, start, stop, reset,
+  } = useSingToScore({ tempo, score: value, musicKey });
 
   // The result is just the measure body; render it under the score's own header
   // (clef/key/time/tempo) so the preview staff matches what the inserted notes
@@ -87,6 +90,7 @@ export default function SingToScore({ value = '', tempo = null, musicKey = 'C', 
       </p>
 
       {error && <p className="mt-2 text-xs text-port-error">{error}</p>}
+      <MicProcessingHint processing={micProcessing} />
 
       {/* Transcribed result — live preview + insert controls. */}
       {result != null && !recording && (

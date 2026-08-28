@@ -35,6 +35,7 @@ import {
 } from '../../lib/songProgress.js';
 import useSongTraining from '../../hooks/useSongTraining.js';
 import useMounted from '../../hooks/useMounted.js';
+import MicProcessingHint from './MicProcessingHint.jsx';
 import ScoreSheet from './ScoreSheet.jsx';
 
 // Accuracy % → readout tone. Mirrors the color-match summary coloring.
@@ -73,6 +74,9 @@ export default function SongTraining({
   // deliberate practice action, so it owns its own getUserMedia (separate from
   // the take recorder), and nothing it captures is persisted as audio.
   const [stream, setStream] = useState(null);
+  // What the browser actually applied to the training mic — grading reads the
+  // same processed signal the tuner would, so it warns the same way.
+  const [micProcessing, setMicProcessing] = useState(null);
   const streamRef = useRef(null);
   const mountedRef = useMounted();
 
@@ -94,6 +98,7 @@ export default function SongTraining({
       streamRef.current = null;
     }
     setStream(null);
+    setMicProcessing(null);
   }, []);
 
   // Stop a session: end the training loop, then close the mic.
@@ -109,10 +114,11 @@ export default function SongTraining({
       return null;
     });
     if (!opened) return;
-    const { stream: src } = opened;
+    const { stream: src, processing } = opened;
     if (!mountedRef.current) { src.getTracks().forEach((t) => t.stop()); return; }
     streamRef.current = src;
     setStream(src);
+    setMicProcessing(processing);
   }, [running, stream, mountedRef]);
 
   // Once the mic stream lands (after Start), arm the training run for the scope.
@@ -208,6 +214,8 @@ export default function SongTraining({
           )}
         </div>
       </div>
+
+      <MicProcessingHint processing={micProcessing} />
 
       {/* Scope picker — whole song or a single section to drill. */}
       <div>

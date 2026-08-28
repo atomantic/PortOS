@@ -77,10 +77,13 @@ export default function PitchTuner({ stream = null, a4 = 440 }) {
   }, []);
 
   // Attach the tuner to a stream. Returns nothing; teardownTracker() detaches.
-  const attach = useCallback((src) => {
+  // `processing` is the read-back `openAnalysisMic` already did for a mic we
+  // opened ourselves; the attached-stream path has no such report and reads the
+  // track directly.
+  const attach = useCallback((src, processing) => {
     teardownTracker();
     if (!src) return;
-    setMicProcessing(readAppliedProcessing(src));
+    setMicProcessing(processing ?? readAppliedProcessing(src));
     const graph = createStreamAnalyser(src);
     analyserRef.current = graph;
     trackerRef.current = createPitchTracker(graph.analyser, {
@@ -148,11 +151,11 @@ export default function PitchTuner({ stream = null, a4 = 440 }) {
       return null;
     });
     if (!opened) return;
-    const { stream: src } = opened;
+    const { stream: src, processing } = opened;
     if (!mountedRef.current) { src.getTracks().forEach((t) => t.stop()); return; }
     ownStreamRef.current = src;
     setStandaloneOn(true);
-    attach(src);
+    attach(src, processing);
   }, [attach, standaloneOn]);
 
   const active = Boolean(stream) || standaloneOn;
