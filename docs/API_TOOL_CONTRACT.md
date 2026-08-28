@@ -12,7 +12,7 @@ job and confirmation extensions retained in the [unified design spec](./superpow
 
 The current source contains:
 
-- 145 mounted HTTP prefixes, 2,067 deduplicated HTTP operations, and 2,070
+- 145 mounted HTTP prefixes, 2,068 deduplicated HTTP operations, and 2,071
   route declarations in `server/lib/apiRouteCatalog.generated.json`.
 - 103 Socket.IO source files and 253 events in
   `server/lib/socketEventCatalog.generated.json`.
@@ -28,10 +28,11 @@ in-app API Explorer and the following endpoints expose them at runtime:
 | Surface | Endpoint | Contract |
 |---|---|---|
 | HTTP inventory | `GET /api/api-docs/catalog.json` | Searchable route metadata, domains, access classification, side-effect classification, and modeled/generated status. |
-| Internal HTTP spec | `GET /api/api-docs/internal/openapi.json` | OpenAPI 3.1 for every mounted HTTP operation. Generated operations have path parameters and a default response; modeled operations add richer contracts. |
-| Public HTTP spec | `GET /api/api-docs/openapi.json` | OpenAPI 3.1 for only APIs exposed through Settings → API Access. |
+| Internal HTTP spec | `GET /api/api-docs/internal/openapi.json` | OpenAPI 3.0.3 for every mounted HTTP operation. Generated operations have path parameters and a default response; modeled operations add richer contracts. |
+| Public HTTP spec | `GET /api/api-docs/openapi.json` | OpenAPI 3.0.3 for only APIs exposed through Settings → API Access. |
 | Socket.IO inventory | `GET /api/api-docs/events.json` | Searchable event names, direction, source, and payload-contract status. |
 | Socket.IO spec | `GET /api/api-docs/asyncapi.json` | AsyncAPI 3 document for the Socket.IO transport. |
+| HTTP tool resource | `GET /api/api-docs/tools.min.json` | Minimized provider-neutral records for the operations annotated `x-portos-tool`, with an HTTP binding and declared failure codes. Schemas are JSON Schema, sized for an agent to read whole. |
 
 Run `npm run generate:api-docs` after route or event declarations change. The
 generated manifests are source-derived artifacts; they are not a second
@@ -249,7 +250,7 @@ exposable merely because they appear in the internal OpenAPI inventory.
 
 1. **Resolved documentation drift.** The prior unified spec said 2,066 HTTP
    operations, 23 Persistent Mind tools, 22 semantic tools, and a `cursor`
-   catalog query. The current generated inventory is 2,067 operations; the
+   catalog query. The current generated inventory is 2,068 operations; the
    runtime registry is 22 tools total (21 semantic plus `cos.create-task`),
    and the implemented catalog query is `scope`, `intent`, and `format`.
    The point-in-time spec's implemented-foundation text is corrected in this
@@ -287,7 +288,7 @@ result path in `server/services/cosToolRegistry.js`, and
 ## Validation
 
 - `node scripts/generate-api-route-catalog.js` — regenerated deterministic
-  HTTP manifest: 2,067 operations / 2,070 declarations / 145 mounts.
+  HTTP manifest: 2,068 operations / 2,071 declarations / 145 mounts.
 - `node scripts/generate-socket-event-catalog.js` — deterministic 253-event
   Socket.IO manifest.
 - Focused Vitest execution was attempted but this isolated worktree has no
