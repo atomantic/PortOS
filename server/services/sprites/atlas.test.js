@@ -504,6 +504,17 @@ describe('compileAtlas', () => {
     expect(manifest.kind).toBe('reviewed-walk-set-runtime-atlas');
     // idle + 8 walk phases — no trailing scanner placeholder (#2986).
     expect(manifest.geometry.columns).toEqual(['idle', ...WALK_PHASES]);
+    expect(manifest.geometry.tracks).toEqual({
+      idle: fullSpan(0, 1),
+      walk: fullSpan(1, WALK_PHASES.length),
+    });
+    expect(manifest.geometry.tracks.idle.rows).toBe(SPRITE_DIRECTIONS.length);
+    expect(manifest.geometry.tracks.walk.rows).toBe(SPRITE_DIRECTIONS.length);
+    expect(manifest.geometry.rows).toBe(SPRITE_DIRECTIONS.length);
+    // Pre-fps run manifests must retain their historical extraction rate, not
+    // inherit the track's newer authoring default.
+    expect(manifest.geometry.walkFps).toBe(WALK_FPS);
+    expect(WALK_FPS).not.toBe(getAnimationTrack('walk').defaultFps);
     expect(manifest.geometry.directionOrder).toEqual(SPRITE_DIRECTIONS);
     expect(manifest.directions).toHaveLength(8);
     for (const row of manifest.directions) {
@@ -513,6 +524,7 @@ describe('compileAtlas', () => {
       expect(row.cells.some((c) => c.policy === 'locked-idle-placeholder')).toBe(false);
       expect(row).not.toHaveProperty('scannerPolicy');
       for (const cell of row.cells) {
+        expect(manifest.geometry.columns[cell.columnIndex]).toBe(cell.column);
         // Feet on the pivot ground line: bounds bottom (top + height - 1) = pivot y.
         expect(cell.occupiedBounds.top + cell.occupiedBounds.height - 1).toBe(DEFAULT_ATLAS_GEOMETRY.pivot[1]);
         // Target bounds drive the scale; lanczos soft edges may extend the
@@ -595,6 +607,14 @@ describe('compileAtlas', () => {
     expect(manifest.geometry.walkFrameCount).toBe(12);
     expect(manifest.geometry.walkFps).toBe(8);
     expect(manifest.geometry.widthPx).toBe(DEFAULT_ATLAS_GEOMETRY.cellSize * 13);
+    expect(manifest.geometry.tracks).toEqual({
+      idle: fullSpan(0, 1),
+      walk: fullSpan(1, 12),
+    });
+    const spanned = Object.values(manifest.geometry.tracks).reduce((n, span) => n + span.count, 0);
+    expect(spanned).toBe(manifest.geometry.columns.length);
+    expect(manifest.geometry.widthPx).toBe(DEFAULT_ATLAS_GEOMETRY.cellSize * spanned);
+    expect(result.geometry.tracks).toEqual(manifest.geometry.tracks);
     for (const row of manifest.directions) expect(row.cells).toHaveLength(13);
   });
 
@@ -622,59 +642,41 @@ describe('compileAtlas', () => {
     expect(again.version).toBe(first.version + 1);
     expect(again.geometry.columns).toEqual(['idle', ...WALK_PHASES]);
     expect(again.geometry.widthPx).toBe(DEFAULT_ATLAS_GEOMETRY.cellSize * 9);
+
+    // A track-set change can leave the column list identical. Repartition the
+    // now-current pointer and prove that semantic grid drift also versions.
+    const repartitioned = JSON.parse(await readFile(pointerAbs, 'utf8'));
+    expect(repartitioned.geometry.tracks).toEqual({ idle: fullSpan(0, 1), walk: fullSpan(1, 8) });
+    repartitioned.atlasSha256 = 'f'.repeat(64);
+    repartitioned.geometry = {
+      ...repartitioned.geometry,
+      tracks: {
+        idle: { start: 0, count: 1 },
+        walk: { start: 1, count: 4 },
+        scanner: { start: 5, count: 4 },
+      },
+    };
+    await writeFile(pointerAbs, JSON.stringify(repartitioned));
+
+    const trackChanged = await compileAtlas(id);
+    expect(trackChanged.created).toBe(true);
+    expect(trackChanged.version).toBe(again.version + 1);
+    expect(trackChanged.geometry.columns).toEqual(['idle', ...WALK_PHASES]);
+    expect(trackChanged.geometry.tracks).toEqual({ idle: fullSpan(0, 1), walk: fullSpan(1, 8) });
   });
 
-  it('records each track\'s column span in the compiled geometry (#3016)', async () => {
-    const id = newId();
-    await lockAllAnchors(id);
-    await buildFinalizedWalkSet(id, { frameCount: 12, fps: 8 });
-    const result = await compileAtlas(id);
-
-    const manifest = JSON.parse(await readFile(join(TEST_ROOT, 'sprites', id, result.manifestPath), 'utf8'));
-    expect(manifest.geometry.tracks).toEqual({
-      idle: fullSpan(0, 1),
-      walk: fullSpan(1, 12),
-    });
-    // The descriptor, the column list and the emitted PNG width all describe
-    // the same grid — a consumer resolving a track by span lands on the pixels
-    // the width accounts for.
-    const spanned = Object.values(manifest.geometry.tracks).reduce((n, s) => n + s.count, 0);
-    expect(spanned).toBe(manifest.geometry.columns.length);
-    expect(manifest.geometry.widthPx).toBe(DEFAULT_ATLAS_GEOMETRY.cellSize * spanned);
-    // The pointer carries the same geometry, so the publish path sees it too.
-    expect(result.geometry.tracks).toEqual(manifest.geometry.tracks);
-  });
-
-  it('records how many atlas rows each track occupies (#3017)', async () => {
-    const id = await finalizedCharacter();
-    const result = await compileAtlas(id);
-
-    // Both shipped tracks are directional, so both are full-height — that is
-    // the point: nothing about an existing character's atlas changes. What the
-    // field buys is that a NON-directional track (a tree in the wind) can say
-    // it owns row 0 only, and a consumer knows to read row 0 regardless of
-    // facing instead of sampling seven transparent rows.
-    expect(result.geometry.tracks.idle.rows).toBe(SPRITE_DIRECTIONS.length);
-    expect(result.geometry.tracks.walk.rows).toBe(SPRITE_DIRECTIONS.length);
-    expect(result.geometry.rows).toBe(SPRITE_DIRECTIONS.length);
-
-    // Cells are placed through the spans, so every manifest columnIndex lands
-    // inside its own track's span and names the column the grid has there.
-    const manifest = JSON.parse(await readFile(join(TEST_ROOT, 'sprites', id, result.manifestPath), 'utf8'));
-    for (const row of manifest.directions) {
-      for (const cell of row.cells) {
-        expect(manifest.geometry.columns[cell.columnIndex]).toBe(cell.column);
-      }
-    }
-  });
-
-  it('stays byte-identical to a pointer that predates the rows field', async () => {
+  it('stays idempotent for current and legacy geometry descriptors', async () => {
     // The idempotency regression #3017 could have caused: `rows` is new on every
     // span, so a pointer written before it would compare unequal and re-run the
     // entire pixel pipeline on every compile, forever, for every existing
     // install. Absent must normalize to full height on the way in.
     const id = await finalizedCharacter();
     const first = await compileAtlas(id);
+
+    const unchanged = await compileAtlas(id);
+    expect(unchanged.created).toBe(false);
+    expect(unchanged.version).toBe(first.version);
+    expect(unchanged.atlasSha256).toBe(first.atlasSha256);
 
     const pointerAbs = join(TEST_ROOT, 'sprites', id, 'runtime/current.json');
     const pointer = JSON.parse(await readFile(pointerAbs, 'utf8'));
@@ -686,54 +688,15 @@ describe('compileAtlas', () => {
     };
     await writeFile(pointerAbs, JSON.stringify(pointer));
 
-    const again = await compileAtlas(id);
-    expect(again.created).toBe(false);
-    expect(again.version).toBe(first.version);
-  });
-
-  it('recompiles a set whose pointer describes a DIFFERENT track set over the same columns', async () => {
-    const id = await finalizedCharacter();
-    const first = await compileAtlas(id);
-
-    // #2986's lesson one level up: a grid-shape change can leave every cell
-    // metric identical, and a TRACK-SET change can leave even the column list
-    // identical. Here the pointer keeps its exact column names and count but
-    // re-partitions them into three tracks — a different grid that must
-    // recompile. Only the atlas hash is falsified, so if the cheap pre-pixel
-    // check failed to notice the track change it would return the stale pointer
-    // untouched instead of writing a new version.
-    const pointerAbs = join(TEST_ROOT, 'sprites', id, 'runtime/current.json');
-    const pointer = JSON.parse(await readFile(pointerAbs, 'utf8'));
-    expect(pointer.geometry.tracks).toEqual({ idle: fullSpan(0, 1), walk: fullSpan(1, 8) });
-    pointer.atlasSha256 = 'f'.repeat(64);
-    pointer.geometry = {
-      ...pointer.geometry,
-      tracks: {
-        idle: { start: 0, count: 1 },
-        walk: { start: 1, count: 4 },
-        scanner: { start: 5, count: 4 },
-      },
-    };
-    await writeFile(pointerAbs, JSON.stringify(pointer));
-
-    const again = await compileAtlas(id);
-    expect(again.created).toBe(true);
-    expect(again.version).toBe(first.version + 1);
-    expect(again.geometry.columns).toEqual(['idle', ...WALK_PHASES]);
-    expect(again.geometry.tracks).toEqual({ idle: fullSpan(0, 1), walk: fullSpan(1, 8) });
-  });
-
-  it('stays idempotent for a legacy pointer written before the tracks descriptor existed', async () => {
-    const id = await finalizedCharacter();
-    const first = await compileAtlas(id);
+    const withoutRows = await compileAtlas(id);
+    expect(withoutRows.created).toBe(false);
+    expect(withoutRows.version).toBe(first.version);
 
     // Every atlas compiled before #3016 has no `geometry.tracks`. It must still
     // read as up to date, or upgrading an install re-runs the whole pixel
     // pipeline on every compile of every existing character, forever (the
     // pointer is never rewritten on the identical-bytes path, so it would never
     // gain the field and never stop).
-    const pointerAbs = join(TEST_ROOT, 'sprites', id, 'runtime/current.json');
-    const pointer = JSON.parse(await readFile(pointerAbs, 'utf8'));
     delete pointer.geometry.tracks;
     await writeFile(pointerAbs, JSON.stringify(pointer));
 
@@ -745,20 +708,9 @@ describe('compileAtlas', () => {
     const grid = buildAtlasGrid([{ id: 'walk', frameCount: WALK_PHASES.length }]);
     expect(compiledGridUpToDate(pointer.geometry, { ...DEFAULT_ATLAS_GEOMETRY, ...grid })).toBe(true);
 
-    const again = await compileAtlas(id);
-    expect(again.created).toBe(false);
-    expect(again.version).toBe(first.version);
-  });
-
-  it('compiles a pre-fps run manifest at the legacy extraction rate, not the track default', async () => {
-    // Older run manifests carry no `frameRate` at all. The fallback must stay
-    // the rate their frames were extracted at (12), NOT the walk track's
-    // authoring default (10) — otherwise upgrading silently re-stamps every
-    // newly-compiled legacy set's geometry and its published previewFps.
-    const id = await finalizedCharacter();
-    const result = await compileAtlas(id);
-    expect(result.geometry.walkFps).toBe(WALK_FPS);
-    expect(WALK_FPS).not.toBe(getAnimationTrack('walk').defaultFps);
+    const withoutTracks = await compileAtlas(id);
+    expect(withoutTracks.created).toBe(false);
+    expect(withoutTracks.version).toBe(first.version);
   });
 
   it('refuses to compile a set whose directions disagree on frame count', async () => {
@@ -790,15 +742,6 @@ describe('compileAtlas', () => {
     await writeFile(join(dir, walkSetRel), JSON.stringify(walkSet));
 
     await expect(compileAtlas(id)).rejects.toMatchObject({ code: 'ATLAS_COMPILE_INVALID' });
-  });
-
-  it('is idempotent for the same finalized set — and versions on a changed one', async () => {
-    const id = await finalizedCharacter();
-    const first = await compileAtlas(id);
-    const second = await compileAtlas(id);
-    expect(second.created).toBe(false);
-    expect(second.version).toBe(first.version);
-    expect(second.atlasSha256).toBe(first.atlasSha256);
   });
 
   it('refuses a tampered frame (per-frame sha256 revalidation)', async () => {
@@ -843,19 +786,16 @@ describe('compileAtlas', () => {
     await expect(compileAtlas(id)).rejects.toMatchObject({ status: 422 });
   });
 
-  it('honors a geometry override', async () => {
+  it('honors geometry overrides at normal and 2x source density', async () => {
     const id = await finalizedCharacter();
-    const result = await compileAtlas(id, {
+    const normal = await compileAtlas(id, {
       geometry: { cellSize: 64, pivot: [32, 56], targetMaxHeight: 44, targetMaxWidth: 52 },
     });
-    const meta = await sharp(join(TEST_ROOT, 'sprites', id, result.atlasPath)).metadata();
-    expect(meta.width).toBe(64 * 9);
-    expect(meta.height).toBe(64 * 8);
-  });
+    const normalMeta = await sharp(join(TEST_ROOT, 'sprites', id, normal.atlasPath)).metadata();
+    expect(normalMeta.width).toBe(64 * 9);
+    expect(normalMeta.height).toBe(64 * 8);
 
-  it('scales the visual tolerance with a 2x source-density compile', async () => {
-    const id = await finalizedCharacter();
-    const result = await compileAtlas(id, {
+    const dense = await compileAtlas(id, {
       geometry: {
         cellSize: 192,
         pivot: [96, 176],
@@ -863,9 +803,9 @@ describe('compileAtlas', () => {
         targetMaxWidth: 172,
       },
     });
-    const meta = await sharp(join(TEST_ROOT, 'sprites', id, result.atlasPath)).metadata();
-    expect(meta.width).toBe(192 * 9);
-    expect(meta.height).toBe(192 * 8);
+    const denseMeta = await sharp(join(TEST_ROOT, 'sprites', id, dense.atlasPath)).metadata();
+    expect(denseMeta.width).toBe(192 * 9);
+    expect(denseMeta.height).toBe(192 * 8);
   });
 
   it('refuses an imported legacy walk set with an explicit code (not a tamper error)', async () => {
@@ -895,18 +835,14 @@ describe('compileAtlas', () => {
     });
   });
 
-  it('self-heals a deleted versioned atlas instead of returning a dangling pointer', async () => {
+  it('self-heals a deleted atlas without overwriting an immutable version', async () => {
     const id = await finalizedCharacter();
     const first = await compileAtlas(id);
     rmSync(join(TEST_ROOT, 'sprites', id, first.atlasPath));
     const again = await compileAtlas(id);
     expect(again.version).toBe(first.version); // re-writes the same version, not a new one
     expect(await readFile(join(TEST_ROOT, 'sprites', id, first.atlasPath))).toBeTruthy();
-  });
 
-  it('skips a PNG-missing slot whose surviving manifest vouches for different bytes', async () => {
-    const id = await finalizedCharacter();
-    const first = await compileAtlas(id);
     // Delete the v1 PNG, then change the inputs (geometry) so the recompile
     // produces DIFFERENT bytes — it must land in v2, not poison v1.
     rmSync(join(TEST_ROOT, 'sprites', id, first.atlasPath));

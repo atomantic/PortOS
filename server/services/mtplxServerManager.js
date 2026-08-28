@@ -89,6 +89,10 @@ let portReleaseTimeoutMs = 30_000;
  * a suite asserting the never-answered path doesn't sit through the real budget.
  */
 let relaunchReadyTimeoutMs = 300_000;
+// Readiness poll cadence. Kept separate from the budget so lifecycle tests can
+// exercise retries and timer-driven PM2 transitions without one real second per
+// loop.
+let relaunchPollMs = 1000;
 /** Package-manager installs routinely run for minutes. */
 const INSTALL_TIMEOUT_MS = 20 * 60 * 1000;
 
@@ -232,7 +236,7 @@ async function waitForRelaunchedEndpoint(endpoint) {
     if (proc && ['errored', 'stopped', 'not_found'].includes(proc.status)) {
       return { ready: false, reason: `MTPLX exited while loading (${await exitTail(proc.status)})` };
     }
-    await sleep(1000);
+    await sleep(relaunchPollMs);
   }
   return { ready: false, reason: 'MTPLX relaunched but never answered on its port' };
 }
@@ -698,7 +702,14 @@ async function restorePrevious(previous, failure) {
 }
 
 /** Clears in-memory state (used by test suites). */
-export function _resetMtplxServerStateForTests({ startupWait, startupPoll, portRelease, relaunchReadyTimeout, idleMinutes = 0 } = {}) {
+export function _resetMtplxServerStateForTests({
+  startupWait,
+  startupPoll,
+  portRelease,
+  relaunchReadyTimeout,
+  relaunchPoll,
+  idleMinutes = 0,
+} = {}) {
   idleMinutesOverride = idleMinutes;
   currentConfig = null;
   daemon.resetLogs();
@@ -708,6 +719,7 @@ export function _resetMtplxServerStateForTests({ startupWait, startupPoll, portR
   startupPollMs = Number.isFinite(startupPoll) ? startupPoll : 1500;
   portReleaseTimeoutMs = Number.isFinite(portRelease) ? portRelease : 30_000;
   relaunchReadyTimeoutMs = Number.isFinite(relaunchReadyTimeout) ? relaunchReadyTimeout : 300_000;
+  relaunchPollMs = Number.isFinite(relaunchPoll) ? relaunchPoll : 1000;
 }
 
 // =============================================================================

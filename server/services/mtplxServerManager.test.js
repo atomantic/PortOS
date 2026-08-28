@@ -21,16 +21,23 @@ import * as streamingSpawn from '../lib/streamingSpawn.js';
 
 const BINARY = '/opt/homebrew/bin/mtplx';
 const cachedModel = (repoId, extra = {}) => ({ repo_id: repoId, validation: { ok: true }, ...extra });
+const FAST_TIMING = {
+  startupWait: 50,
+  startupPoll: 0,
+  portRelease: 20,
+  relaunchReadyTimeout: 30,
+  relaunchPoll: 0,
+};
+const resetForTest = (overrides = {}) => {
+  _resetMtplxServerStateForTests({ ...FAST_TIMING, ...overrides });
+};
 
 describe('mtplxServerManager', () => {
   let pm2State = null;
   let execPm2Calls = [];
 
   beforeEach(() => {
-    // A start that never answers on its port is the NORMAL path here (the probe
-    // is pinned unreachable), so every lifecycle test pays the startup budget AND
-    // its poll beat in full — shorten both rather than sitting through them.
-    _resetMtplxServerStateForTests({ startupWait: 50, startupPoll: 5, portRelease: 20 });
+    resetForTest();
     vi.restoreAllMocks();
     pm2State = null;
     execPm2Calls = [];
@@ -38,7 +45,8 @@ describe('mtplxServerManager', () => {
     // The host may genuinely be running MTPLX (or anything else) on :8000 — pin
     // both probes so a developer machine's real listeners can't decide these.
     vi.spyOn(platform, 'isPortInUse').mockResolvedValue(false);
-    vi.spyOn(openAiModelsProbe, 'probeOpenAiModels').mockResolvedValue({ reachable: false });
+    vi.spyOn(openAiModelsProbe, 'probeOpenAiModels')
+      .mockImplementation(async () => ({ reachable: pm2State?.status === 'online' }));
     vi.spyOn(platform, 'isAppleSilicon').mockReturnValue(true);
     // The dump is a real file on the developer's machine; pin it so the
     // startsAtBoot assertions are about this code, not their PM2 state.
@@ -254,9 +262,7 @@ describe('mtplxServerManager', () => {
   describe('relaunchMtplxServerWithTuning', () => {
     beforeEach(() => {
       vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue(BINARY);
-      // A relaunch judges readiness by the endpoint answering; the suite pins
-      // the probe unreachable, so shorten the budget rather than waiting it out.
-      _resetMtplxServerStateForTests({ startupWait: 20, startupPoll: 5, portRelease: 20, relaunchReadyTimeout: 30 });
+      resetForTest();
     });
 
     // Readiness is what the caller's `applied: true` means, so most cases need
@@ -351,6 +357,7 @@ describe('mtplxServerManager', () => {
     it('reports no config when the previous configuration could not be brought back', async () => {
       await startMtplxServer({ tuning: { depth: 2 } });
       // Nothing answers again — the tuned line, and the restore behind it.
+      vi.spyOn(openAiModelsProbe, 'probeOpenAiModels').mockResolvedValue({ reachable: false });
       const result = await relaunchMtplxServerWithTuning({ contextWindow: 65536 });
       expect(result.applied).toBe(false);
       expect(result.config).toBeNull();
@@ -366,7 +373,12 @@ describe('mtplxServerManager', () => {
       answerUnless('--context-window');
       // Long enough that sitting it out would blow the per-test timeout, so the
       // assertion is about noticing the death rather than about the clock.
-      _resetMtplxServerStateForTests({ startupWait: 20, startupPoll: 5, portRelease: 20, relaunchReadyTimeout: 60_000 });
+      resetForTest({
+        startupWait: 20,
+        startupPoll: 5,
+        relaunchReadyTimeout: 60_000,
+        relaunchPoll: 5,
+      });
 
       const realExec = pm2Module.execPm2.getMockImplementation();
       vi.spyOn(pm2Module, 'execPm2').mockImplementation(async (args) => {
@@ -571,7 +583,7 @@ describe('mtplxServerManager', () => {
       // A lazy start that never answers waits out the READINESS budget, not the
       // startup one — five real minutes by default. Shorten it here rather than
       // in the shared setup, which the give-up-path tests below depend on.
-      _resetMtplxServerStateForTests({ startupWait: 50, startupPoll: 5, portRelease: 20, relaunchReadyTimeout: 30 });
+      resetForTest();
     });
 
     it('is a no-op when the daemon is already online', async () => {
