@@ -6,6 +6,7 @@ import {
   normalizePersistentMindCapabilities,
   PERSISTENT_MIND_TOOL_CATALOG,
   persistentMindCapabilitiesSchema,
+  persistentMindCleanupRequestSchema,
   persistentMindTaskRequestSchema,
 } from './persistentMindCapabilities.js';
 
@@ -15,24 +16,34 @@ describe('persistent mind capabilities', () => {
       expect.objectContaining({ id: 'cos.create-task', capability: 'createTasks', defaultEnabled: false }),
       expect.objectContaining({ id: 'portos.read', capability: 'readPortos', defaultEnabled: false }),
       expect.objectContaining({ id: 'portos.write', capability: 'writePortos', defaultEnabled: false }),
+      expect.objectContaining({ id: 'mind.cleanup', capability: 'manageMind', defaultEnabled: false }),
     ]);
   });
 
   it('keeps task creation opt-in across fresh and legacy config', () => {
-    expect(createDefaultPersistentMindCapabilities()).toMatchObject({ createTasks: false, readPortos: false, writePortos: false });
-    expect(normalizePersistentMindCapabilities(null)).toMatchObject({ createTasks: false, readPortos: false, writePortos: false });
+    expect(createDefaultPersistentMindCapabilities()).toMatchObject({ createTasks: false, manageMind: false, readPortos: false, writePortos: false });
+    expect(normalizePersistentMindCapabilities(null)).toMatchObject({ createTasks: false, manageMind: false, readPortos: false, writePortos: false });
     expect(normalizePersistentMindCapabilities({ createTasks: 'true', readPortos: 'true' })).toMatchObject({ createTasks: false, readPortos: false });
   });
 
   it('validates and merges the explicit task-creation grant', () => {
-    expect(persistentMindCapabilitiesSchema.safeParse({ createTasks: true, readPortos: true, writePortos: false }).success).toBe(true);
+    expect(persistentMindCapabilitiesSchema.safeParse({ createTasks: true, manageMind: true, readPortos: true, writePortos: false }).success).toBe(true);
     expect(persistentMindCapabilitiesSchema.safeParse({ schemaVersion: 2, createTasks: true }).success).toBe(true);
     expect(persistentMindCapabilitiesSchema.safeParse({ taskModelAllowlist: [{ providerId: 'ollama', model: 'example-local' }] }).success).toBe(true);
+    expect(normalizePersistentMindCapabilities({ schemaVersion: 2, createTasks: true }))
+      .toMatchObject({ schemaVersion: 3, createTasks: true, manageMind: false });
     expect(persistentMindCapabilitiesSchema.safeParse({ allowedAppIds: ['example-app', 'second-app'] }).success).toBe(true);
     expect(persistentMindCapabilitiesSchema.safeParse({ allowedAppIds: Array.from({ length: 51 }, (_, index) => `app-${index}`) }).success).toBe(false);
     expect(persistentMindCapabilitiesSchema.safeParse({ createTasks: true, shell: true }).success).toBe(false);
     expect(mergePersistentMindCapabilities({ createTasks: false }, { createTasks: true }))
-      .toMatchObject({ createTasks: true, readPortos: false, writePortos: false });
+      .toMatchObject({ createTasks: true, manageMind: false, readPortos: false, writePortos: false });
+  });
+
+  it('accepts only unique bounded mindspace cleanup scopes', () => {
+    expect(persistentMindCleanupRequestSchema.safeParse({ scopes: ['context', 'history', 'memories'], reason: 'Old failures are no longer useful' }).success).toBe(true);
+    expect(persistentMindCleanupRequestSchema.safeParse({ scopes: [] }).success).toBe(false);
+    expect(persistentMindCleanupRequestSchema.safeParse({ scopes: ['history', 'history'] }).success).toBe(false);
+    expect(persistentMindCleanupRequestSchema.safeParse({ scopes: ['everything'] }).success).toBe(false);
   });
 
   it('restricts task choices only when exact provider/model pairs are configured', () => {

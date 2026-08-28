@@ -31,6 +31,7 @@ export const PERSISTENT_MIND_EVENT_KINDS = Object.freeze([
   'mind.failed',
   'mind.turn.completed',
   'mind.memory.promoted',
+  'mind.maintenance.completed',
 ]);
 
 const MIND_KIND_SET = new Set(PERSISTENT_MIND_EVENT_KINDS);

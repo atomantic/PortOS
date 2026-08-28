@@ -1069,6 +1069,21 @@ export async function refreshPersistentMindWakeCadence() {
   return result.state;
 }
 
+/** Clear failure/backoff residue without changing lifecycle or queued work. */
+export async function resetPersistentMindRuntimeResidue() {
+  const result = await mutateMindState((mind) => ({
+    mind: {
+      ...mind,
+      failureCount: 0,
+      lastError: null,
+      nextEligibleWakeAt: null,
+      pauseReason: mind.status === 'paused' ? mind.pauseReason : null,
+    },
+  }));
+  emitMindStatus(result.state);
+  return result.state;
+}
+
 export async function setPersistentMindEnabled(enabled) {
   if (!enabled) {
     runtimeGeneration += 1;
@@ -1169,7 +1184,7 @@ export async function resumePersistentMind() {
   return result.value;
 }
 
-export async function stopPersistentMind() {
+export async function stopPersistentMind({ waitForTurn = false } = {}) {
   runtimeGeneration += 1;
   activeAbortController?.abort('Persistent mind stopped');
   cancel(PERSISTENT_MIND_WAKE_EVENT_ID);
@@ -1201,6 +1216,11 @@ export async function stopPersistentMind() {
     });
   }
   emitMindStatus(result.state);
+  if (waitForTurn && activeRun) {
+    await activeRun.catch((error) => {
+      console.error(`❌ Failed while settling stopped persistent mind turn: ${error.message}`);
+    });
+  }
   return { success: true };
 }
 

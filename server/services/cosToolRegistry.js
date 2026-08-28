@@ -14,10 +14,12 @@ import { canonicalStringify } from '../lib/objects.js';
 import { sha256Text } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import {
+  persistentMindCleanupRequestSchema,
   persistentMindTaskRequestSchema,
 } from '../lib/persistentMindCapabilities.js';
 import { dispatchTool, getToolSpecs, getToolSpecsForIntent } from './voice/tools.js';
 import { executePersistentMindTaskRequests } from './persistentMindTaskCapability.js';
+import { cleanupPersistentMind } from './persistentMindMaintenance.js';
 
 const MAX_CALL_RESULTS = 500;
 const MAX_IDEMPOTENCY_TOMBSTONES = 10_000;
@@ -112,13 +114,34 @@ const taskTool = Object.freeze({
   adapter: { kind: 'persistent-mind-task' },
 });
 
-const toolCatalog = (intent) => [taskTool, ...voiceTools(intent)];
+const mindCleanupTool = Object.freeze({
+  type: 'portos_tool',
+  name: 'mind.cleanup',
+  version: COS_TOOL_SCHEMA_VERSION,
+  providerName: 'mind_cleanup',
+  aliases: ['mind_cleanup'],
+  description: 'Clean Persistent Mind-owned memories, trajectory history, or derived context when stale information is no longer useful.',
+  input_schema: zodToOpenApiSchema(persistentMindCleanupRequestSchema),
+  output_schema: objectOutputSchema,
+  policy: {
+    scopes: ['mind'],
+    requiredCapabilities: ['manageMind'],
+    sideEffect: 'destructive',
+    idempotent: true,
+    async: false,
+    confirmation: 'capability-grant',
+  },
+  adapter: { kind: 'persistent-mind-maintenance' },
+});
+
+const toolCatalog = (intent) => [taskTool, mindCleanupTool, ...voiceTools(intent)];
 const toolCalls = new Map();
 const toolCallFingerprints = new Map();
 
 const normalizeToolCapabilities = (raw) => ({
   ...normalizePortosSemanticToolGrants(raw),
   createTasks: raw?.createTasks === true,
+  manageMind: raw?.manageMind === true,
 });
 
 const publicTool = (tool, { scope, capabilities }) => ({
@@ -238,6 +261,14 @@ const validateArguments = (tool, args) => {
 const executeAdapter = async (tool, args, context) => {
   if (tool.adapter.kind === 'voice-tool') {
     return dispatchTool(tool.adapter.legacyName, args, { sideEffects: [], signal: context.signal });
+  }
+  if (tool.adapter.kind === 'persistent-mind-maintenance') {
+    return cleanupPersistentMind({
+      ...args,
+      requestedBy: 'mind',
+      preserveTurnId: context.turnId || null,
+      preserveMessageId: context.wake?.kind === 'message' ? context.wake.message?.id || null : null,
+    });
   }
   const [outcome] = await executePersistentMindTaskRequests({
     taskRequests: [args],

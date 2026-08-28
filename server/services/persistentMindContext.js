@@ -56,6 +56,17 @@ export async function readPersistentMindRollups(mindId = PERSISTENT_MIND_ID) {
     .sort((a, b) => a.source.fromSequence - b.source.fromSequence);
 }
 
+/** Drop derived summaries for one mind so the next wake rebuilds from retained history. */
+export function clearPersistentMindRollups(mindId = PERSISTENT_MIND_ID) {
+  return queueRollupWrite(async () => {
+    const store = await loadRollupStore();
+    const rollups = store.rollups.filter((rollup) => rollup.mindId !== mindId);
+    const cleared = store.rollups.length - rollups.length;
+    await atomicWrite(ROLLUP_PATH, { schemaVersion: ROLLUP_STORE_SCHEMA_VERSION, rollups });
+    return { cleared };
+  });
+}
+
 /** Full active memories explicitly owned by this mind, newest importance first. */
 export async function readPersistentMindMemories(mindId = PERSISTENT_MIND_ID) {
   const result = await memoryBackend.getMemories({
@@ -67,6 +78,35 @@ export async function readPersistentMindMemories(mindId = PERSISTENT_MIND_ID) {
   });
   const details = await Promise.all((result.memories || []).map((memory) => memoryBackend.peekMemory(memory.id)));
   return details.filter((memory) => memory?.status === 'active' && memory.sourceAgentId === mindId);
+}
+
+/**
+ * Archive every active memory owned by this mind. Archival removes the records
+ * from effective context while keeping recovery possible through Brain.
+ */
+export async function archivePersistentMindMemories(mindId = PERSISTENT_MIND_ID) {
+  let archived = 0;
+  while (true) {
+    const result = await memoryBackend.getMemories({
+      status: 'active',
+      sourceAgentId: mindId,
+      sortBy: 'createdAt',
+      sortOrder: 'asc',
+      limit: 100,
+    });
+    const candidates = result.memories || [];
+    if (candidates.length === 0) break;
+    let batchArchived = 0;
+    for (const candidate of candidates) {
+      const memory = await memoryBackend.peekMemory(candidate.id);
+      if (memory?.status !== 'active' || memory.sourceAgentId !== mindId) continue;
+      await memoryBackend.deleteMemory(memory.id, false);
+      archived += 1;
+      batchArchived += 1;
+    }
+    if (batchArchived === 0) break;
+  }
+  return { archived };
 }
 
 export function recordPersistentMindRollup(input) {

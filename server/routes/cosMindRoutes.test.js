@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   readPersistentMindVisibility: vi.fn(),
   readPersistentMindTaskCatalog: vi.fn(),
   resolveImageCapability: vi.fn(),
+  cleanupPersistentMind: vi.fn(),
 }));
 
 vi.mock('../services/agentRunEventLog.js', () => ({
@@ -54,6 +55,9 @@ vi.mock('../services/persistentMindAdapter.js', () => ({
 }));
 vi.mock('../services/persistentMindImageCapability.js', () => ({
   resolvePersistentMindImageCapability: (...args) => mocks.resolveImageCapability(...args),
+}));
+vi.mock('../services/persistentMindMaintenance.js', () => ({
+  cleanupPersistentMind: (...args) => mocks.cleanupPersistentMind(...args),
 }));
 vi.mock('../services/persistentMindTaskCapability.js', () => ({
   readPersistentMindTaskCatalog: mocks.readPersistentMindTaskCatalog,
@@ -132,6 +136,15 @@ describe('persistent mind routes', () => {
     mocks.pausePersistentMind.mockResolvedValue({ success: true });
     mocks.resumePersistentMind.mockResolvedValue({ success: true });
     mocks.stopPersistentMind.mockResolvedValue({ success: true });
+    mocks.cleanupPersistentMind.mockResolvedValue({
+      success: true,
+      scopes: ['history'],
+      historyEventsCleared: 12,
+      historyEventsPreserved: 0,
+      rollupsCleared: 2,
+      memoriesArchived: 0,
+      runtimeResidueCleared: true,
+    });
     mocks.inspectPersistentMindRuntime.mockResolvedValue({
       observedAt: '2026-08-27T12:00:00.000Z',
       inference: {
@@ -171,7 +184,7 @@ describe('persistent mind routes', () => {
         thinkingInterface: 'text',
         wakeIntervalMinutes: 30,
       },
-      capabilities: { schemaVersion: 3, createTasks: true, readPortos: false, writePortos: false, taskModelAllowlist: [] },
+      capabilities: { schemaVersion: 3, createTasks: true, manageMind: false, readPortos: false, writePortos: false, taskModelAllowlist: [] },
       harness: { type: 'api', recommendation: 'recommended' },
       imageCapability: { status: 'unknown' },
       autonomyMode: 'execute',
@@ -206,12 +219,13 @@ describe('persistent mind routes', () => {
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
       schemaVersion: 3,
-      capabilities: { schemaVersion: 3, createTasks: true, readPortos: false, writePortos: false, taskModelAllowlist: [] },
+      capabilities: { schemaVersion: 3, createTasks: true, manageMind: false, readPortos: false, writePortos: false, taskModelAllowlist: [] },
       boundaries: expect.arrayContaining([expect.stringMatching(/arbitrary shell/i)]),
       tools: expect.arrayContaining([
         expect.objectContaining({ id: 'cos.create-task', capability: 'createTasks', granted: true, defaultEnabled: false }),
         expect.objectContaining({ id: 'portos.read', capability: 'readPortos', granted: false, defaultEnabled: false }),
         expect.objectContaining({ id: 'portos.write', capability: 'writePortos', granted: false, defaultEnabled: false }),
+        expect.objectContaining({ id: 'mind.cleanup', capability: 'manageMind', granted: false, defaultEnabled: false }),
       ]),
       taskCatalog: {
         apps: [{ id: 'demo-app', planOnly: true }],
@@ -225,7 +239,7 @@ describe('persistent mind routes', () => {
 
   it('marks revoked managed apps without removing them from the settings inventory', async () => {
     mocks.loadState.mockResolvedValue({ config: {
-      persistentMindCapabilities: { schemaVersion: 2, createTasks: true, allowedAppIds: [] },
+      persistentMindCapabilities: { schemaVersion: 3, createTasks: true, allowedAppIds: [] },
     } });
     mocks.readPersistentMindTaskCatalog.mockResolvedValue({
       apps: [{ id: 'demo-app', name: 'Demo App', planOnly: true }],
@@ -296,6 +310,30 @@ describe('persistent mind routes', () => {
   it('returns not found when an edited memory is not owned by this mind', async () => {
     mocks.updatePersistentMindMemory.mockResolvedValue(null);
     expect((await put('/mind/memories/foreign', { content: 'No access' })).status).toBe(404);
+  });
+
+  it('stops the mind and performs only an explicitly confirmed cleanup', async () => {
+    expect((await post('/mind/cleanup', { scopes: ['history'], confirmation: 'no' })).status).toBe(400);
+    expect(mocks.stopPersistentMind).not.toHaveBeenCalled();
+
+    const res = await post('/mind/cleanup', {
+      scopes: ['history'],
+      reason: 'Discard stale failures',
+      confirmation: 'CLEAR',
+    });
+
+    expect(res.status).toBe(200);
+    expect(mocks.stopPersistentMind).toHaveBeenCalledWith({ waitForTurn: true });
+    expect(mocks.cleanupPersistentMind).toHaveBeenCalledWith({
+      scopes: ['history'],
+      reason: 'Discard stale failures',
+      requestedBy: 'user',
+    });
+    expect(res.body).toMatchObject({
+      success: true,
+      historyEventsCleared: 12,
+      state: { status: 'idle' },
+    });
   });
 
   it('rejects malformed cursors, oversized pages, and unknown query fields', async () => {

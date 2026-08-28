@@ -380,6 +380,31 @@ describe('persistent mind supervisor', () => {
     }));
   });
 
+  it('can wait for an aborted active turn to settle before cleanup starts', async () => {
+    const pending = deferred();
+    await supervisor.registerPersistentMindTurnAdapter({
+      prepare: vi.fn(async () => ({ ok: true, provider: { id: 'example-cloud' } })),
+      run: vi.fn(() => pending.promise),
+    });
+    await supervisor.setPersistentMindEnabled(true);
+    await supervisor.startPersistentMind();
+    await supervisor.enqueuePersistentMindMessage({ id: 'message-cleanup', text: 'This turn will be interrupted.' });
+    const drain = supervisor.drainPersistentMind();
+    await vi.waitFor(() => expect(mock.root.persistentMind.activeTurn).not.toBeNull());
+
+    let stopped = false;
+    const stopping = supervisor.stopPersistentMind({ waitForTurn: true }).then(() => {
+      stopped = true;
+    });
+    await vi.waitFor(() => expect(mock.root.persistentMind.activeTurn).toBeNull());
+    expect(stopped).toBe(false);
+
+    pending.resolve({ events: [{ kind: 'mind.thought', id: 'late-result', data: {} }] });
+    await Promise.all([drain, stopping]);
+    expect(stopped).toBe(true);
+    expect(mock.root.persistentMind).toMatchObject({ started: false, status: 'idle' });
+  });
+
   it('requeues a message and degrades visibly when the pinned provider is unavailable', async () => {
     await supervisor.registerPersistentMindTurnAdapter({
       prepare: vi.fn(async () => ({ ok: false, error: 'Pinned provider unavailable' })),

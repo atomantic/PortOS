@@ -178,6 +178,17 @@ function normalizeMindGenerations(events) {
   return { archive, active };
 }
 
+const relinkMindPredecessors = (events) => {
+  const previousByMind = new Map();
+  return [...events]
+    .sort((a, b) => a.sequence - b.sequence || String(a.eventId).localeCompare(String(b.eventId)))
+    .map((event) => {
+      const previousSequence = previousByMind.get(event.mindId) ?? null;
+      previousByMind.set(event.mindId, event.sequence);
+      return { ...event, data: { ...event.data, previousSequence } };
+    });
+};
+
 /**
  * Have we already stored this event, in a copy a reader can still see?
  *
@@ -513,6 +524,54 @@ export async function readPersistentMindHistory(mindId = PERSISTENT_MIND_ID) {
     // Current projections can ignore an unknown kind without deleting history.
     .filter((event) => isMindShapedEvent(event) && event.mindId === mindId)
     .sort((a, b) => a.sequence - b.sequence || String(a.eventId).localeCompare(String(b.eventId)));
+}
+
+/**
+ * Remove one mind's retained trajectory behind the same queue as appends.
+ * A cleanup requested by the mind itself may preserve its current turn and
+ * originating message so the final reply still has visible provenance.
+ */
+export function clearPersistentMindHistory({
+  mindId = PERSISTENT_MIND_ID,
+  preserveTurnId = null,
+  preserveMessageId = null,
+} = {}) {
+  const operation = appendQueue.then(async () => {
+    await hydrate();
+    const [archive, active] = await Promise.all([
+      readJSONLFile(MIND_ARCHIVE_PATH),
+      readJSONLFile(MIND_ACTIVE_PATH),
+    ]);
+    const stored = [...archive, ...active].filter(isMindShapedEvent);
+    const shouldPreserve = (event) => event.mindId !== mindId
+      || (preserveTurnId && event.turnId === preserveTurnId)
+      || (preserveMessageId && event.data?.messageId === preserveMessageId);
+    const kept = relinkMindPredecessors(stored.filter(shouldPreserve));
+    const removed = stored.filter((event) => event.mindId === mindId && !shouldPreserve(event));
+    const generations = normalizeMindGenerations(kept);
+
+    if (generations.archive.length === 0) {
+      if (await pathExists(MIND_ARCHIVE_PATH)) await unlink(MIND_ARCHIVE_PATH);
+    } else {
+      await writeJSONLines(MIND_ARCHIVE_PATH, generations.archive);
+    }
+    await writeJSONLines(MIND_ACTIVE_PATH, generations.active);
+
+    mindArchiveIds = indexById(generations.archive, { persistentMind: true });
+    mindActiveIds = indexById(generations.active, { persistentMind: true });
+    mindActiveCount = generations.active.length;
+    console.log(`🧹 Cleared ${removed.length} persistent mind history event(s)`);
+    return {
+      cleared: removed.length,
+      preserved: generations.archive.filter((event) => event.mindId === mindId).length
+        + generations.active.filter((event) => event.mindId === mindId).length,
+    };
+  });
+  appendQueue = operation.then(
+    () => undefined,
+    (error) => console.error(`❌ Failed to clear persistent mind history: ${error.message}`),
+  );
+  return operation;
 }
 
 /**

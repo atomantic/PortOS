@@ -62,7 +62,7 @@ describe('PersistentMindTools', () => {
     api.getPersistentMindTools
       .mockResolvedValueOnce(response())
       .mockResolvedValueOnce(response({
-        capabilities: { schemaVersion: 1, createTasks: true },
+        capabilities: { schemaVersion: 3, createTasks: true, manageMind: false, readPortos: false, writePortos: false },
         tools: [{ ...response().tools[0], granted: true }],
         taskCatalog: {
           apps: [{ id: 'example-app', name: 'Example App', planOnly: true }],
@@ -75,7 +75,7 @@ describe('PersistentMindTools', () => {
     await user.click(toggle);
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
-      { persistentMindCapabilities: { schemaVersion: 3, createTasks: true, readPortos: false, writePortos: false, taskModelAllowlist: [] } },
+      { persistentMindCapabilities: { schemaVersion: 3, createTasks: true, manageMind: false, readPortos: false, writePortos: false, taskModelAllowlist: [] } },
       { silent: true },
     ));
     expect(await screen.findByText(/persistent-mind capabilities granted/)).toHaveTextContent('1 of 1');
@@ -86,10 +86,31 @@ describe('PersistentMindTools', () => {
     expect(api.getPersistentMindTools).toHaveBeenCalledTimes(2);
   });
 
+  it('grants self-maintenance separately from broader PortOS write access', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    const toggle = await screen.findByRole('checkbox', { name: 'Allow mind to clean up its mindspace' });
+    await user.click(toggle);
+
+    await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
+      { persistentMindCapabilities: {
+        schemaVersion: 3,
+        createTasks: false,
+        manageMind: true,
+        readPortos: false,
+        writePortos: false,
+        taskModelAllowlist: [],
+      } },
+      { silent: true },
+    ));
+    expect(screen.getByRole('checkbox', { name: 'Allow bounded PortOS updates' })).not.toBeChecked();
+  });
+
   it('lets the user narrow task access to individual managed apps', async () => {
     const user = userEvent.setup();
     api.getPersistentMindTools.mockResolvedValueOnce(response({
-      capabilities: { schemaVersion: 2, createTasks: true, readPortos: false, writePortos: false },
+      capabilities: { schemaVersion: 3, createTasks: true, manageMind: false, readPortos: false, writePortos: false },
       tools: [{ ...response().tools[0], granted: true }],
       taskCatalog: {
         apps: [
@@ -109,6 +130,7 @@ describe('PersistentMindTools', () => {
       { persistentMindCapabilities: {
         schemaVersion: 3,
         createTasks: true,
+        manageMind: false,
         readPortos: false,
         writePortos: false,
         taskModelAllowlist: [],
@@ -138,7 +160,7 @@ describe('PersistentMindTools', () => {
     await user.click(toggle);
     await waitFor(() => expect(toggle).not.toBeChecked());
     resolveCatalog(response({
-      capabilities: { schemaVersion: 1, createTasks: true },
+      capabilities: { schemaVersion: 3, createTasks: true, manageMind: false, readPortos: false, writePortos: false },
       tools: [{ ...response().tools[0], granted: true }],
       taskCatalog: { apps: [{ id: 'stale-app', name: 'Stale App', planOnly: false }], providers: [] },
     }));

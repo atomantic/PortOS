@@ -5,6 +5,7 @@ import toast from '../ui/Toast';
 const normalizeCapabilities = (value) => ({
   schemaVersion: 3,
   createTasks: value?.createTasks === true,
+  manageMind: value?.manageMind === true,
   readPortos: value?.readPortos === true,
   writePortos: value?.writePortos === true,
   taskModelAllowlist: Array.isArray(value?.taskModelAllowlist)
@@ -30,6 +31,11 @@ const OPTIONS = [
     label: 'Allow mind to queue CoS agent tasks',
     hint: 'Queues typed tasks through isolated worktrees, capacity, budget, review, CI, and landing-policy gates.',
   },
+  {
+    key: 'manageMind',
+    label: 'Allow mind to clean up its mindspace',
+    hint: 'Lets the mind archive only its own memories, forget older trajectory history, or rebuild derived context. Cleanup remains bounded and auditable.',
+  },
 ];
 
 export default function PersistentMindTaskAccessControls({
@@ -47,7 +53,7 @@ export default function PersistentMindTaskAccessControls({
 
   useEffect(() => {
     if (!saving) setDraft(normalizeCapabilities(capabilities));
-  }, [capabilities?.schemaVersion, capabilities?.createTasks, capabilities?.readPortos, capabilities?.writePortos, capabilities?.taskModelAllowlist, capabilities?.taskModelAllowlistInvalid, capabilities?.allowedAppIds?.join('\0'), saving]);
+  }, [capabilities?.schemaVersion, capabilities?.createTasks, capabilities?.manageMind, capabilities?.readPortos, capabilities?.writePortos, capabilities?.taskModelAllowlist, capabilities?.taskModelAllowlistInvalid, capabilities?.allowedAppIds?.join('\0'), saving]);
 
   const save = async (key, enabled) => {
     const previous = draft;

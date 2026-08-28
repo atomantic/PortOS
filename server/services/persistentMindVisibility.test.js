@@ -73,11 +73,12 @@ describe('persistent mind visibility', () => {
       runtime: { status: 'ready', context: { pressure: 'nominal' } },
       provider: { status: 'configured', type: 'api' },
       actions: {
-        grants: { createTasks: true, readPortos: false, writePortos: false },
+        grants: { createTasks: true, manageMind: false, readPortos: false, writePortos: false },
         tools: expect.arrayContaining([
           expect.objectContaining({ id: 'cos.create-task', granted: true }),
           expect.objectContaining({ id: 'portos.read', granted: false }),
           expect.objectContaining({ id: 'portos.write', granted: false }),
+          expect.objectContaining({ id: 'mind.cleanup', granted: false }),
         ]),
       },
       scheduler: { autonomy: 'execute', capacity: { status: 'unknown' } },

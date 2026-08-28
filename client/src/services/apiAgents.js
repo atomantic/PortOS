@@ -113,6 +113,9 @@ export const createPersistentMindMemory = (body, options = {}) => request('/cos/
 export const updatePersistentMindMemory = (memoryId, body, options = {}) => request(`/cos/mind/memories/${encodeURIComponent(memoryId)}`, {
   method: 'PUT', body: JSON.stringify(body), ...options,
 });
+export const cleanupPersistentMind = (body, options = {}) => request('/cos/mind/cleanup', {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
 
 // Chief of Staff
 export const getCosStatus = () => request('/cos');

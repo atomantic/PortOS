@@ -5567,7 +5567,7 @@
       "sources": [
         {
           "source": "server/routes/cosMindRoutes.js",
-          "line": 151
+          "line": 161
         }
       ]
     },
@@ -5578,7 +5578,7 @@
       "sources": [
         {
           "source": "server/routes/cosMindRoutes.js",
-          "line": 280
+          "line": 301
         }
       ]
     },
@@ -5589,7 +5589,7 @@
       "sources": [
         {
           "source": "server/routes/cosMindRoutes.js",
-          "line": 265
+          "line": 286
         }
       ]
     },
@@ -5600,7 +5600,18 @@
       "sources": [
         {
           "source": "server/routes/cosMindRoutes.js",
-          "line": 270
+          "line": 291
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/cos/mind/cleanup",
+      "mountPath": "/api/cos",
+      "sources": [
+        {
+          "source": "server/routes/cosMindRoutes.js",
+          "line": 276
         }
       ]
     },
@@ -5611,7 +5622,7 @@
       "sources": [
         {
           "source": "server/routes/cosMindRoutes.js",
-          "line": 180
+          "line": 191
         }
       ]
     },
@@ -5622,7 +5633,7 @@
       "sources": [
         {
           "source": "server/routes/cosMindRoutes.js",
-          "line": 306
+          "line": 327
         }
       ]
     },
@@ -5633,7 +5644,7 @@
       "sources": [
         {
           "source": "server/routes/cosMindRoutes.js",
-          "line": 319
+          "line": 340
         }
       ]
     },
@@ -5644,7 +5655,7 @@
       "sources": [
         {
           "source": "server/routes/cosMindRoutes.js",
-          "line": 251
+          "line": 262
         }
       ]
     },
@@ -5655,7 +5666,7 @@
       "sources": [
         {
           "source": "server/routes/cosMindRoutes.js",
-          "line": 257
+          "line": 268
         }
       ]
     },
@@ -5666,7 +5677,7 @@
       "sources": [
         {
           "source": "server/routes/cosMindRoutes.js",
-          "line": 275
+          "line": 296
         }
       ]
     },
@@ -5677,7 +5688,7 @@
       "sources": [
         {
           "source": "server/routes/cosMindRoutes.js",
-          "line": 292
+          "line": 313
         }
       ]
     },
@@ -5688,7 +5699,7 @@
       "sources": [
         {
           "source": "server/routes/cosMindRoutes.js",
-          "line": 298
+          "line": 319
         }
       ]
     },
@@ -5699,7 +5710,7 @@
       "sources": [
         {
           "source": "server/routes/cosMindRoutes.js",
-          "line": 232
+          "line": 243
         }
       ]
     },
@@ -5710,7 +5721,7 @@
       "sources": [
         {
           "source": "server/routes/cosMindRoutes.js",
-          "line": 288
+          "line": 309
         }
       ]
     },
@@ -5721,7 +5732,7 @@
       "sources": [
         {
           "source": "server/routes/cosMindRoutes.js",
-          "line": 302
+          "line": 323
         }
       ]
     },
@@ -5732,7 +5743,7 @@
       "sources": [
         {
           "source": "server/routes/cosMindRoutes.js",
-          "line": 207
+          "line": 218
         }
       ]
     },
@@ -5743,7 +5754,7 @@
       "sources": [
         {
           "source": "server/routes/cosMindRoutes.js",
-          "line": 241
+          "line": 252
         }
       ]
     },
@@ -22916,8 +22927,8 @@
   ],
   "stats": {
     "mounts": 145,
-    "operations": 2067,
-    "declarations": 2070,
+    "operations": 2068,
+    "declarations": 2071,
     "sourceFiles": 224
   }
 }

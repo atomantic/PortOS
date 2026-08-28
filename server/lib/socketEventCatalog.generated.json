@@ -999,7 +999,7 @@
         {
           "direction": "server-to-client",
           "source": "client/src/components/cos/tabs/MindTab.jsx",
-          "line": 326
+          "line": 329
         },
         {
           "direction": "server-to-client",
@@ -1456,7 +1456,7 @@
         {
           "direction": "server-to-client",
           "source": "client/src/components/cos/tabs/MindTab.jsx",
-          "line": 327
+          "line": 330
         },
         {
           "direction": "server-to-client",
@@ -1474,7 +1474,7 @@
         {
           "direction": "server-to-client",
           "source": "client/src/components/cos/tabs/MindTab.jsx",
-          "line": 328
+          "line": 331
         },
         {
           "direction": "server-to-client",

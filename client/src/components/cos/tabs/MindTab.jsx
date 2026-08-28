@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
-import { ArrowUp, Brain, Check, CirclePause, CirclePlay, Cpu, Database, ImagePlus, MessageCircle, RefreshCw, Settings2, Square, StickyNote, Upload, Wrench, X } from 'lucide-react';
+import { ArrowUp, Brain, Check, CirclePause, CirclePlay, Cpu, Database, Eraser, ImagePlus, MessageCircle, RefreshCw, Settings2, Square, StickyNote, Upload, Wrench, X } from 'lucide-react';
 import { Link } from 'react-router';
 import useMounted from '../../../hooks/useMounted';
 import { useSocket } from '../../../hooks/useSocket';
@@ -13,6 +13,7 @@ import Banner from '../../ui/Banner';
 import FilePickerButton from '../../ui/FilePickerButton';
 import TabPills from '../../ui/TabPills';
 import PersistentMindContextPanel from '../PersistentMindContextPanel';
+import PersistentMindMaintenancePanel from '../PersistentMindMaintenancePanel';
 import PersistentMindProfileControls from '../PersistentMindProfileControls';
 import PersistentMindRuntimePanel, { PersistentMindThoughtStatus } from '../PersistentMindRuntimePanel';
 import PersistentMindVisibilityPanel from '../PersistentMindVisibilityPanel';
@@ -24,10 +25,11 @@ const MAX_BACKFILL_PAGES = 5;
 const MAX_VISIBLE_EVENTS = PAGE_LIMIT * MAX_BACKFILL_PAGES;
 const MAX_MESSAGE_IMAGES = 8;
 const MAX_MESSAGE_IMAGE_BYTES = 10 * 1024 * 1024;
-const MIND_PANELS = new Set(['context', 'memories', 'tools', 'settings']);
+const MIND_PANELS = new Set(['context', 'memories', 'maintenance', 'tools', 'settings']);
 const MIND_PANEL_TABS = [
   { id: 'context', label: 'Context', icon: Brain },
   { id: 'memories', label: 'Memories', icon: Database },
+  { id: 'maintenance', label: 'Cleanup', icon: Eraser },
   { id: 'tools', label: 'Tools', icon: Wrench },
   { id: 'settings', label: 'Settings', icon: Settings2 },
 ];
@@ -50,6 +52,7 @@ const EVENT_LABELS = {
   'mind.capability.request': 'Action request',
   'mind.capability.result': 'Action outcome',
   'mind.memory.promoted': 'Memory promoted',
+  'mind.maintenance.completed': 'Mindspace cleaned',
 };
 
 const eventLabel = (kind) => EVENT_LABELS[kind] || 'System state';
@@ -526,6 +529,15 @@ export default function MindTab() {
     }
   };
 
+  const handleMindspaceCleaned = async (result) => {
+    cursorRef.current = null;
+    setEvents([]);
+    setMind((current) => current ? { ...current, state: result.state || current.state } : current);
+    setContextRefreshKey((current) => current + 1);
+    await loadHistory({ reset: true });
+    void loadRuntime();
+  };
+
   const state = mind?.state;
   const selectedEvent = events?.find((event) => event.eventId === selectedEventId) || null;
   const isPaused = state?.status === 'paused';
@@ -715,6 +727,7 @@ export default function MindTab() {
           <div className="grid grid-cols-2 gap-2 xl:grid-cols-1">
             <MindStateButton icon={Brain} label="Context" value={runtime?.context?.approximateTokens == null ? 'Unavailable' : `~${runtime.context.approximateTokens.toLocaleString()} tokens`} detail={`${runtime?.context?.chars?.toLocaleString() || '—'} characters`} onClick={() => openPanel('context')} />
             <MindStateButton icon={Database} label="Memories" value={runtime?.context?.memoryCount == null ? 'Unavailable' : `${runtime.context.memoryCount} accessible`} detail="Created and curated" onClick={() => openPanel('memories')} />
+            <MindStateButton icon={Eraser} label="Cleanup" value={mind?.capabilities?.manageMind ? 'Self-maintenance on' : 'User controlled'} detail="Memories, history, and context" onClick={() => openPanel('maintenance')} />
             <MindStateButton icon={Wrench} label="Tools" value={grantedCapabilityCount > 0 ? `${grantedCapabilityCount} grant${grantedCapabilityCount === 1 ? '' : 's'} enabled` : 'No grants'} detail="Narrow, typed authority" onClick={() => openPanel('tools')} />
             <MindStateButton icon={Cpu} label="Settings" value={runtime?.inference?.active ? 'Running now' : runtime?.inference?.residency?.status === 'loaded' ? 'Loaded in memory' : 'Not running'} detail={runtime?.inference?.model || mind?.profile?.model || 'Not configured'} onClick={() => openPanel('settings')} />
           </div>
@@ -742,7 +755,14 @@ export default function MindTab() {
           <PersistentMindContextPanel view="context" refreshKey={contextRefreshKey} />
         </div>}
         {(visitedPanels.has('memories') || activePanel === 'memories') && <div hidden={activePanel !== 'memories'}>
-          <PersistentMindContextPanel view="memories" onMemoriesChanged={() => setContextRefreshKey((current) => current + 1)} />
+          <PersistentMindContextPanel view="memories" refreshKey={contextRefreshKey} onMemoriesChanged={() => setContextRefreshKey((current) => current + 1)} />
+        </div>}
+        {(visitedPanels.has('maintenance') || activePanel === 'maintenance') && <div hidden={activePanel !== 'maintenance'}>
+          <PersistentMindMaintenancePanel
+            selfCleanupEnabled={mind?.capabilities?.manageMind === true}
+            onOpenTools={() => openPanel('tools')}
+            onCleaned={handleMindspaceCleaned}
+          />
         </div>}
         {(visitedPanels.has('tools') || activePanel === 'tools') && <div hidden={activePanel !== 'tools'}>
           <PersistentMindTools onCapabilitiesChange={(capabilities) => setMind((current) => current ? { ...current, capabilities } : current)} onSavingChange={setCapabilitiesSaving} />
@@ -818,7 +838,7 @@ export default function MindTab() {
 
 function MindStateButton({ icon: Icon, label, value, detail, onClick }) {
   return (
-    <button type="button" onClick={onClick} className="group rounded-2xl border border-port-border bg-port-card p-3 text-left transition-colors hover:border-port-accent/60 hover:bg-port-accent/5">
+    <button type="button" aria-label={label} onClick={onClick} className="group rounded-2xl border border-port-border bg-port-card p-3 text-left transition-colors hover:border-port-accent/60 hover:bg-port-accent/5">
       <span className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-port-text-muted group-hover:text-port-accent">
         <Icon size={14} aria-hidden="true" /> {label}
       </span>

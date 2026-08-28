@@ -24,6 +24,7 @@ const api = vi.hoisted(() => ({
   getPersistentMindVisibility: vi.fn(),
   createPersistentMindMemory: vi.fn(),
   updatePersistentMindMemory: vi.fn(),
+  cleanupPersistentMind: vi.fn(),
 }));
 
 const socket = vi.hoisted(() => {
@@ -66,7 +67,7 @@ const response = (overrides = {}) => ({
   snapshot: {},
   state: { enabled: true, started: true, status: 'waiting', pauseReason: null },
   profile: { enabled: true, providerId: 'demo', model: 'demo-model', effort: 'high', thinkingInterface: 'text', wakeIntervalMinutes: 30 },
-  capabilities: { schemaVersion: 1, createTasks: false },
+  capabilities: { schemaVersion: 3, createTasks: false, manageMind: false, readPortos: false, writePortos: false },
   autonomyMode: 'execute',
   ...overrides,
 });
@@ -117,7 +118,7 @@ describe('MindTab', () => {
       harness: { type: 'api', label: 'Direct API', recommendation: 'recommended', detail: 'Structured and reliable.' },
     });
     api.getPersistentMindTools.mockResolvedValue({
-      capabilities: { schemaVersion: 2, createTasks: false, readPortos: false, writePortos: false },
+      capabilities: { schemaVersion: 3, createTasks: false, manageMind: false, readPortos: false, writePortos: false },
       tools: [{
         id: 'cos.create-task',
         name: 'Create CoS task',
@@ -160,6 +161,15 @@ describe('MindTab', () => {
     });
     api.createPersistentMindMemory.mockResolvedValue({ success: true });
     api.updatePersistentMindMemory.mockResolvedValue({ success: true });
+    api.cleanupPersistentMind.mockResolvedValue({
+      success: true,
+      memoriesArchived: 0,
+      historyEventsCleared: 5,
+      historyEventsPreserved: 0,
+      rollupsCleared: 2,
+      runtimeResidueCleared: true,
+      state: { enabled: true, started: false, status: 'idle', pauseReason: null },
+    });
   });
 
   it('restores event details from the URL and keeps the chat composer single-purpose', async () => {
@@ -321,7 +331,7 @@ describe('MindTab', () => {
     await user.click(taskAccess);
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
-      { persistentMindCapabilities: { schemaVersion: 3, createTasks: true, readPortos: false, writePortos: false, taskModelAllowlist: [] } },
+      { persistentMindCapabilities: { schemaVersion: 3, createTasks: true, manageMind: false, readPortos: false, writePortos: false, taskModelAllowlist: [] } },
       { silent: true },
     ));
     expect(screen.getAllByText(/code review then merge/i).length).toBeGreaterThan(0);
@@ -331,11 +341,31 @@ describe('MindTab', () => {
 
   it('reports every enabled typed-tool grant in the dashboard status', async () => {
     api.getPersistentMind.mockResolvedValue(response({
-      capabilities: { schemaVersion: 2, createTasks: false, readPortos: true, writePortos: true },
+      capabilities: { schemaVersion: 3, createTasks: false, manageMind: false, readPortos: true, writePortos: true },
     }));
     renderTab();
 
     expect(await screen.findByText('2 grants enabled')).toBeInTheDocument();
+  });
+
+  it('cleans selected mindspace through an inline confirmation and refreshes the stopped state', async () => {
+    const user = userEvent.setup();
+    renderTab('/cos/mind?panel=maintenance');
+
+    expect(await screen.findByRole('heading', { name: 'Clean mindspace' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Cleanup' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByLabelText('Rebuild derived context')).toBeChecked();
+    expect(screen.getByLabelText('Clear conversation history')).not.toBeChecked();
+    await user.click(screen.getByLabelText('Clear conversation history'));
+    await user.type(screen.getByLabelText('Type CLEAR to run the selected cleanup'), 'CLEAR');
+    await user.click(screen.getByRole('button', { name: 'Clean selected mindspace' }));
+
+    await waitFor(() => expect(api.cleanupPersistentMind).toHaveBeenCalledWith({
+      scopes: ['context', 'history'],
+      confirmation: 'CLEAR',
+    }, { silent: true }));
+    expect(await screen.findByText('Mindspace cleaned')).toBeInTheDocument();
+    await waitFor(() => expect(api.getPersistentMind).toHaveBeenCalledTimes(2));
   });
 
   it('keeps Start gated until a capability save finishes', async () => {

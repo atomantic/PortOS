@@ -9,6 +9,7 @@ import { MAX_SCREENSHOT_BYTES } from '../lib/uploadLimits.js';
 import {
   normalizePersistentMindCapabilities,
   PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION,
+  PERSISTENT_MIND_CLEANUP_SCOPES,
   PERSISTENT_MIND_TOOL_BOUNDARIES,
   PERSISTENT_MIND_TOOL_CATALOG,
 } from '../lib/persistentMindCapabilities.js';
@@ -34,6 +35,7 @@ import {
 } from '../services/persistentMindContext.js';
 import { getProviderById } from '../services/providers.js';
 import { persistentMindHarnessInfo } from '../services/persistentMindAdapter.js';
+import { cleanupPersistentMind } from '../services/persistentMindMaintenance.js';
 import { resolvePersistentMindImageCapability } from '../services/persistentMindImageCapability.js';
 import { readPersistentMindTaskCatalog } from '../services/persistentMindTaskCapability.js';
 import { inspectPersistentMindRuntime } from '../services/persistentMindRuntime.js';
@@ -130,6 +132,14 @@ const memoryUpdateSchema = z.object(memoryFields).partial().strict().refine(
   'At least one memory field is required'
 );
 const memoryParamsSchema = z.object({ memoryId: z.string().trim().min(1).max(128) }).strict();
+const cleanupSchema = z.object({
+  scopes: z.array(z.enum(PERSISTENT_MIND_CLEANUP_SCOPES))
+    .min(1)
+    .max(PERSISTENT_MIND_CLEANUP_SCOPES.length)
+    .refine((scopes) => new Set(scopes).size === scopes.length, 'cleanup scopes must be unique'),
+  reason: z.string().trim().min(1).max(300).optional(),
+  confirmation: z.literal('CLEAR'),
+}).strict();
 
 const requireSuccess = (result) => {
   if (result?.success === false) {
@@ -261,6 +271,16 @@ router.put('/mind/memories/:memoryId', asyncHandler(async (req, res) => {
   const memory = await updatePersistentMindMemory(memoryId, updates);
   if (!memory) throw new ServerError('Persistent mind memory not found', { status: 404, code: 'NOT_FOUND' });
   res.json({ success: true, memory });
+}));
+
+router.post('/mind/cleanup', asyncHandler(async (req, res) => {
+  const { confirmation: _confirmation, ...input } = validateRequest(cleanupSchema, req.body);
+  // A user-initiated cleanup creates a stable boundary: stop inference first so
+  // an in-flight turn cannot immediately repopulate state from the old context.
+  await stopPersistentMind({ waitForTurn: true });
+  const result = await cleanupPersistentMind({ ...input, requestedBy: 'user' });
+  const state = await getPersistentMindState();
+  res.json({ ...result, state: publicPersistentMindState(state) });
 }));
 
 router.post('/mind/attachments', asyncHandler(async (req, res) => {

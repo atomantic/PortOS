@@ -10,6 +10,7 @@ const mock = vi.hoisted(() => ({
     getMemories: vi.fn(async () => ({ memories: [] })),
     peekMemory: vi.fn(),
     createMemory: vi.fn(async (input) => ({ id: 'memory-automatic-1', ...input })),
+    deleteMemory: vi.fn(async (id) => ({ success: true, id })),
   },
 }));
 
@@ -33,6 +34,8 @@ vi.mock('./memoryBackend.js', () => mock.memoryApi);
 
 const {
   appendPersistentMindAnnotation,
+  archivePersistentMindMemories,
+  clearPersistentMindRollups,
   createPersistentMindMemoryFromCandidate,
   preparePersistentMindContext,
   promotePersistentMindMemory,
@@ -63,6 +66,7 @@ beforeEach(() => {
   mock.memoryApi.getMemories.mockClear();
   mock.memoryApi.peekMemory.mockClear();
   mock.memoryApi.createMemory.mockClear();
+  mock.memoryApi.deleteMemory.mockClear();
 });
 
 afterAll(() => rmSync(CONTEXT_DIR, { recursive: true, force: true }));
@@ -228,6 +232,35 @@ describe('persistent mind rollups', () => {
     await expect(readPersistentMindRollups()).rejects.toThrow('rollup cache is unreadable');
     await expect(preparePersistentMindContext()).rejects.toThrow('rollup cache is unreadable');
     expect(readFileSync(ROLLUPS, 'utf8')).toBe('{broken');
+  });
+
+  it('clears only the selected mind derived rollups', async () => {
+    mock.history = [event(1), event(2), event(3)];
+    await preparePersistentMindContext({ recentEventLimit: 1, summarize: async () => 'Default mind summary.' });
+    const foreign = (await readPersistentMindRollups())[0];
+    writeFileSync(ROLLUPS, JSON.stringify({
+      schemaVersion: 1,
+      rollups: [foreign, { ...foreign, id: 'future-mind:1-2:v1', mindId: 'future-mind' }],
+    }));
+
+    await expect(clearPersistentMindRollups()).resolves.toEqual({ cleared: 1 });
+    expect(await readPersistentMindRollups()).toEqual([]);
+    expect(await readPersistentMindRollups('future-mind')).toHaveLength(1);
+  });
+});
+
+describe('persistent mind memory cleanup', () => {
+  it('archives active memories owned by the mind without hard-deleting them', async () => {
+    mock.memoryApi.getMemories
+      .mockResolvedValueOnce({ memories: [{ id: 'memory-owned' }, { id: 'memory-foreign' }] })
+      .mockResolvedValueOnce({ memories: [] });
+    mock.memoryApi.peekMemory
+      .mockResolvedValueOnce({ id: 'memory-owned', status: 'active', sourceAgentId: 'cos-persistent-mind' })
+      .mockResolvedValueOnce({ id: 'memory-foreign', status: 'active', sourceAgentId: 'other-agent' });
+
+    await expect(archivePersistentMindMemories()).resolves.toEqual({ archived: 1 });
+    expect(mock.memoryApi.deleteMemory).toHaveBeenCalledWith('memory-owned', false);
+    expect(mock.memoryApi.deleteMemory).not.toHaveBeenCalledWith('memory-foreign', expect.anything());
   });
 });
 

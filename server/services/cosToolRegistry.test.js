@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   dispatch: vi.fn(),
   executeTasks: vi.fn(),
+  cleanupMind: vi.fn(),
 }));
 
 const specs = [
@@ -40,6 +41,9 @@ vi.mock('./voice/tools.js', () => ({
 vi.mock('./persistentMindTaskCapability.js', () => ({
   executePersistentMindTaskRequests: (...args) => mocks.executeTasks(...args),
 }));
+vi.mock('./persistentMindMaintenance.js', () => ({
+  cleanupPersistentMind: (...args) => mocks.cleanupMind(...args),
+}));
 
 import {
   __testing,
@@ -55,12 +59,13 @@ beforeEach(() => {
   __testing.toolCallFingerprints.clear();
   mocks.dispatch.mockResolvedValue({ ok: true });
   mocks.executeTasks.mockResolvedValue([{ success: true, task: { id: 'task-1' }, duplicate: false }]);
+  mocks.cleanupMind.mockResolvedValue({ ok: true, success: true, state: 'completed', historyEventsCleared: 8 });
 });
 
 describe('cosToolRegistry', () => {
   it('exports a compact canonical catalog and provider translations', () => {
     const catalog = getCosToolCatalog({ scope: 'mind', capabilities: { readPortos: true } });
-    expect(catalog.tools.map((tool) => tool.name)).toEqual(['cos.create-task', 'brain.search', 'brain.capture']);
+    expect(catalog.tools.map((tool) => tool.name)).toEqual(['cos.create-task', 'mind.cleanup', 'brain.search', 'brain.capture']);
     expect(catalog.tools.find((tool) => tool.name === 'brain.search').granted).toBe(true);
     expect(catalog.tools.find((tool) => tool.name === 'brain.capture').granted).toBe(false);
     const openai = formatCosToolCatalog(catalog, 'openai');
@@ -97,6 +102,34 @@ describe('cosToolRegistry', () => {
       call: { requestId: 'write-2', name: 'brain.capture', arguments: { text: 'example' } },
       authority: { scope: 'mind', capabilities: { writePortos: false } },
     })).rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
+  });
+
+  it('executes cleanup only with the dedicated mind capability and preserves current provenance', async () => {
+    const signal = new AbortController().signal;
+    const call = { requestId: 'cleanup-1', name: 'mind.cleanup', arguments: { scopes: ['history'], reason: 'Stale failures' } };
+    await expect(executeCosToolCall({
+      call,
+      authority: { scope: 'mind', capabilities: { manageMind: false } },
+    })).rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
+
+    const result = await executeCosToolCall({
+      call,
+      authority: { scope: 'mind', capabilities: { manageMind: true } },
+      context: {
+        turnId: 'turn-current',
+        wake: { kind: 'message', message: { id: 'message-current' } },
+        signal,
+      },
+    });
+
+    expect(result).toMatchObject({ state: 'completed', result: { historyEventsCleared: 8 } });
+    expect(mocks.cleanupMind).toHaveBeenCalledWith({
+      scopes: ['history'],
+      reason: 'Stale failures',
+      requestedBy: 'mind',
+      preserveTurnId: 'turn-current',
+      preserveMessageId: 'message-current',
+    });
   });
 
   it('coalesces a repeated request id and rejects changed arguments', async () => {

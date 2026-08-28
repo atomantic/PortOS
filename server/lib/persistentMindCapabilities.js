@@ -28,6 +28,12 @@ const persistentMindTaskModelAllowlistEntrySchema = z.object({
   model: z.string().trim().min(1).max(PERSISTENT_MIND_TASK_MODEL_ALLOWLIST_LIMITS.MODEL_CHARS),
 }).strict();
 
+export const PERSISTENT_MIND_CLEANUP_SCOPES = Object.freeze([
+  'context',
+  'history',
+  'memories',
+]);
+
 // The persistent mind has a deliberately smaller surface than ordinary CoS
 // agents. Keep this catalog beside the capability schema so the API and the UI
 // describe the same grants instead of maintaining a second client-only list.
@@ -72,6 +78,20 @@ export const PERSISTENT_MIND_TOOL_CATALOG = Object.freeze([
       'Calls use stable request ids so retries within the bounded retention window cannot repeat an accepted action',
     ],
   }),
+  Object.freeze({
+    id: 'mind.cleanup',
+    capability: 'manageMind',
+    name: 'Clean up mindspace',
+    description: 'Archive mind-owned memories, clear conversation history, or rebuild the derived context cache.',
+    kind: 'typed-action',
+    defaultEnabled: false,
+    guardrails: [
+      'Only Persistent Mind-owned machine-local state is in scope',
+      'Memory cleanup archives records instead of hard-deleting them',
+      'History cleanup preserves the turn requesting it and resets derived rollups',
+      'Every cleanup leaves a bounded maintenance record in the new trajectory',
+    ],
+  }),
 ]);
 
 export const PERSISTENT_MIND_TOOL_BOUNDARIES = Object.freeze([
@@ -109,6 +129,7 @@ export const persistentMindCapabilitiesSchema = portosSemanticToolGrantsSchema.e
     z.literal(PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION),
   ]).optional(),
   createTasks: z.boolean().optional(),
+  manageMind: z.boolean().optional(),
   // An empty list preserves the legacy unrestricted task catalog. Once any
   // entries are configured, requests must name one of these exact pairs.
   taskModelAllowlist: z.array(persistentMindTaskModelAllowlistEntrySchema)
@@ -119,6 +140,14 @@ export const persistentMindCapabilitiesSchema = portosSemanticToolGrantsSchema.e
   allowedAppIds: z.array(z.string().trim().min(1).max(PERSISTENT_MIND_TASK_LIMITS.appIdChars))
     .max(PERSISTENT_MIND_TASK_LIMITS.maxAllowedAppIds).optional(),
 });
+
+export const persistentMindCleanupRequestSchema = z.object({
+  scopes: z.array(z.enum(PERSISTENT_MIND_CLEANUP_SCOPES))
+    .min(1)
+    .max(PERSISTENT_MIND_CLEANUP_SCOPES.length)
+    .refine((scopes) => new Set(scopes).size === scopes.length, 'cleanup scopes must be unique'),
+  reason: z.string().trim().min(1).max(300).optional(),
+}).strict();
 
 export const persistentMindTaskRequestSchema = z.object({
   description: z.string().trim().min(1).max(PERSISTENT_MIND_TASK_LIMITS.descriptionChars),
@@ -157,6 +186,7 @@ export function createDefaultPersistentMindCapabilities() {
   return {
     schemaVersion: PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION,
     createTasks: false,
+    manageMind: false,
     readPortos: false,
     writePortos: false,
     taskModelAllowlist: [],
@@ -208,6 +238,7 @@ export function normalizePersistentMindCapabilities(raw) {
   return {
     schemaVersion: PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION,
     createTasks: source.createTasks === true,
+    manageMind: source.manageMind === true,
     ...semanticGrants,
     taskModelAllowlist: taskModelAllowlist.entries,
     // A malformed hand-edited persisted policy must not silently become the
