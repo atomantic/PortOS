@@ -71,7 +71,18 @@ export function getSyncDateRange(pastDays = 7, futureDays = 30) {
   return { pastDate, futureDate };
 }
 
-export async function pushSyncEvents(accountId, calendarId, calendarName, rawEvents, io) {
+/**
+ * Upsert a subcalendar's events into the local cache.
+ *
+ * `options.prune` (default true) removes cached events for this subcalendar
+ * that the incoming batch didn't mention — correct only when `rawEvents` is the
+ * COMPLETE set for the range. A caller working from a possibly-truncated payload
+ * (a CLI that exited non-zero mid-stream) must pass `prune: false`, or the
+ * missing tail reads as "these events were deleted upstream" and destroys real
+ * calendar data. `options.status` labels the resulting sync for the UI.
+ */
+export async function pushSyncEvents(accountId, calendarId, calendarName, rawEvents, io, options = {}) {
+  const { prune: shouldPrune = true, status = 'success' } = options;
   const account = await getAccount(accountId);
   if (!account) throw new Error('Account not found');
 
@@ -115,15 +126,19 @@ export async function pushSyncEvents(accountId, calendarId, calendarName, rawEve
     }
   }
 
-  // Prune events for this subcalendar that are no longer present
-  const before = cache.events.length;
-  cache.events = cache.events.filter(e =>
-    e.subcalendarId !== calendarId || incomingIds.has(e.externalId)
-  );
-  const pruned = before - cache.events.length;
+  // Prune events for this subcalendar that are no longer present. Skipped when
+  // the caller can't vouch that `rawEvents` is complete (see options.prune).
+  let pruned = 0;
+  if (shouldPrune) {
+    const before = cache.events.length;
+    cache.events = cache.events.filter(e =>
+      e.subcalendarId !== calendarId || incomingIds.has(e.externalId)
+    );
+    pruned = before - cache.events.length;
+  }
 
   await saveCache(accountId, cache);
-  await updateSyncStatus(accountId, 'success');
+  await updateSyncStatus(accountId, status);
 
   // Auto-log Tribe touchpoints from this subcalendar batch (#2033) — secondary
   // effect, must not fail the sync; idempotent on event id.
@@ -144,11 +159,11 @@ export async function pushSyncEvents(accountId, calendarId, calendarName, rawEve
     newEvents: newCount,
     updated: updatedCount,
     pruned,
-    status: 'success'
+    status
   });
 
-  console.log(`📅 Google push sync for ${calendarName}: ${newCount} new, ${updatedCount} updated, ${pruned} pruned`);
-  return { newEvents: newCount, updated: updatedCount, pruned, total: cache.events.length, status: 'success' };
+  console.log(`📅 Google push sync for ${calendarName}: ${newCount} new, ${updatedCount} updated, ${pruned} pruned${shouldPrune ? '' : ' (prune skipped — partial payload)'}`);
+  return { newEvents: newCount, updated: updatedCount, pruned, total: cache.events.length, status };
 }
 
 const mcpSyncLock = new Map();
@@ -187,9 +202,21 @@ Include the full events arrays as returned by gcal_list_events. Output NOTHING e
   const runSync = async () => {
     const result = await runConfiguredMcp(prompt, io, accountId);
 
+    // A non-zero CLI exit that still printed something is a PARTIAL sync: the
+    // JSON may be cut off mid-array, so every calendar it does describe is
+    // treated as incomplete. Upsert what arrived, but never prune from it —
+    // absent events mean "the CLI died", not "deleted upstream".
+    const { partial, stderrTail } = result;
+    const status = partial ? 'partial' : 'success';
+
     // Parse Claude's output and push events
     const parsed = parseCalendarJson(result.output);
-    if (!parsed) throw new ServerError('Failed to parse calendar data from Claude response', { status: 502 });
+    if (!parsed) {
+      // Carry the stderr tail so the failure names WHY the CLI produced no
+      // usable JSON instead of a bare, undiagnosable parse error.
+      const reason = stderrTail ? `: ${stderrTail}` : '';
+      throw new ServerError(`Failed to parse calendar data from Claude response${reason}`, { status: 502 });
+    }
 
     let totalNew = 0;
     let totalUpdated = 0;
@@ -198,18 +225,44 @@ Include the full events arrays as returned by gcal_list_events. Output NOTHING e
 
     for (const cal of parsed.calendars) {
       if (!cal.calendarId || !Array.isArray(cal.events)) continue;
-      const syncResult = await pushSyncEvents(accountId, cal.calendarId, cal.calendarName || cal.calendarId, cal.events, null);
+      const syncResult = await pushSyncEvents(
+        accountId,
+        cal.calendarId,
+        cal.calendarName || cal.calendarId,
+        cal.events,
+        null,
+        { prune: !partial, status },
+      );
       totalNew += syncResult.newEvents;
       totalUpdated += syncResult.updated;
       totalPruned += syncResult.pruned;
       results.push({ calendarId: cal.calendarId, calendarName: cal.calendarName, ...syncResult });
     }
 
-    await updateSyncStatus(accountId, 'success');
-    io?.emit('calendar:sync:completed', { accountId, newEvents: totalNew, updated: totalUpdated, pruned: totalPruned, status: 'success', method: 'mcp' });
-    console.log(`📅 MCP sync complete for ${account.name}: ${totalNew} new, ${totalUpdated} updated, ${totalPruned} pruned across ${results.length} calendars`);
+    await updateSyncStatus(accountId, status);
+    io?.emit('calendar:sync:completed', {
+      accountId,
+      newEvents: totalNew,
+      updated: totalUpdated,
+      pruned: totalPruned,
+      status,
+      method: 'mcp',
+      ...(partial ? { reason: stderrTail || `CLI exited with code ${result.exitCode}` } : {}),
+    });
+    if (partial) {
+      console.warn(`⚠️ MCP sync PARTIAL for ${account.name} (exit ${result.exitCode}): ${totalNew} new, ${totalUpdated} updated, prune skipped across ${results.length} calendars`);
+    } else {
+      console.log(`📅 MCP sync complete for ${account.name}: ${totalNew} new, ${totalUpdated} updated, ${totalPruned} pruned across ${results.length} calendars`);
+    }
 
-    return { newEvents: totalNew, updated: totalUpdated, pruned: totalPruned, calendars: results, status: 'success' };
+    return {
+      newEvents: totalNew,
+      updated: totalUpdated,
+      pruned: totalPruned,
+      calendars: results,
+      status,
+      ...(partial ? { reason: stderrTail || `CLI exited with code ${result.exitCode}` } : {}),
+    };
   };
 
   return runSync().catch(async (error) => {
@@ -258,9 +311,20 @@ Output NOTHING else — just the JSON array.`;
 
   const result = await runConfiguredMcp(prompt, io, accountId);
 
+  // Discovery REPLACES the stored subcalendar list, so a truncated array would
+  // silently drop calendars (and their enabled/goal wiring). A partial payload
+  // is never good enough to merge — fail loudly with the CLI's own reason.
+  if (result.partial) {
+    const reason = result.stderrTail || `CLI exited with code ${result.exitCode}`;
+    throw new ServerError(`Calendar discovery returned a partial response — not merging: ${reason}`, { status: 502 });
+  }
+
   // Parse the calendar list from Claude's output
   const match = result.output.match(/\[[\s\S]*\]/);
-  if (!match) throw new ServerError('Failed to parse calendar list from Claude response', { status: 502 });
+  if (!match) {
+    const reason = result.stderrTail ? `: ${result.stderrTail}` : '';
+    throw new ServerError(`Failed to parse calendar list from Claude response${reason}`, { status: 502 });
+  }
 
   const calendars = safeJSONParse(match[0], null);
   if (!Array.isArray(calendars)) throw new ServerError('Invalid calendar list format', { status: 502 });
@@ -312,5 +376,13 @@ async function runConfiguredMcp(prompt, io, accountId) {
   if (result.error) {
     throw new ServerError(result.error, { status: 502 });
   }
-  return { output: result.text, exitCode: result.exitCode };
+  // `partial` means the CLI exited non-zero but still printed something — the
+  // payload may be truncated mid-JSON. Callers MUST NOT let a partial payload
+  // drive a destructive operation (see pushSyncEvents' prune option).
+  return {
+    output: result.text,
+    exitCode: result.exitCode,
+    partial: result.partial === true,
+    stderrTail: result.stderrTail || '',
+  };
 }

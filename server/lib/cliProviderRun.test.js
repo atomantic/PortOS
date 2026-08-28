@@ -143,4 +143,46 @@ describe('runCliProviderPrompt', () => {
     expect(result.text).toBe('resolved path round-trip');
     expect(result.exitCode).toBe(0);
   });
+
+  // #5302: a non-zero exit that still printed is returned for parsing, but the
+  // text may be truncated — callers gate destructive use on `partial === false`.
+  describe('non-zero exit agreement', () => {
+    const shell = { id: 'gemini-cli', type: 'cli', command: process.platform === 'win32' ? 'cmd' : 'sh' };
+    const shellArgs = (script) => (process.platform === 'win32' ? ['/c', script] : ['-c', script]);
+
+    it.skipIf(process.platform === 'win32')('flags stdout from a non-zero exit as partial and carries a stderr tail', async () => {
+      const result = await runCliProviderPrompt({
+        provider: shell,
+        prompt: 'ignored',
+        extraArgs: shellArgs('echo \'{"calendars":[\'; echo "rate limit reached" >&2; exit 3'),
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.text).toBe('{"calendars":[');
+      expect(result.exitCode).toBe(3);
+      expect(result.partial).toBe(true);
+      expect(result.stderrTail).toContain('rate limit reached');
+    });
+
+    it.skipIf(process.platform === 'win32')('marks a clean exit as not partial', async () => {
+      const result = await runCliProviderPrompt({
+        provider: shell,
+        prompt: 'ignored',
+        extraArgs: shellArgs('echo ok'),
+      });
+      expect(result.partial).toBe(false);
+      expect(result.exitCode).toBe(0);
+    });
+
+    it.skipIf(process.platform === 'win32')('still errors on a non-zero exit with no stdout, exposing the tail', async () => {
+      const result = await runCliProviderPrompt({
+        provider: shell,
+        prompt: 'ignored',
+        extraArgs: shellArgs('echo "boom" >&2; exit 4'),
+      });
+      expect(result.error).toContain('boom');
+      expect(result.exitCode).toBe(4);
+      expect(result.stderrTail).toContain('boom');
+      expect(result.partial).toBeUndefined();
+    });
+  });
 });
