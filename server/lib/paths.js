@@ -97,6 +97,7 @@ export const PATHS = {
   // lora-datasets/<id>/index.json + lora-datasets/<id>/images/*.png).
   // Machine-local like `loras/` — datasets never federate.
   loraDatasets: join(INSTALL_ROOT, 'data/lora-datasets'),
+  rapidReaderLibrary: join(INSTALL_ROOT, 'data/rapid-reader-library'),
   // LoRA training run artifacts (checkpoints/samples/cache per run). Run
   // RECORDS live in Postgres (lora_training_runs); only artifacts live here.
   trainingRuns: join(INSTALL_ROOT, 'data/training-runs'),

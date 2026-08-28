@@ -18476,7 +18476,62 @@
       "sources": [
         {
           "source": "server/routes/rapidReader.js",
-          "line": 7
+          "line": 9
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/rapid-reader/library",
+      "mountPath": "/api/rapid-reader",
+      "sources": [
+        {
+          "source": "server/routes/rapidReader.js",
+          "line": 14
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/rapid-reader/library",
+      "mountPath": "/api/rapid-reader",
+      "sources": [
+        {
+          "source": "server/routes/rapidReader.js",
+          "line": 15
+        }
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/rapid-reader/library/:id",
+      "mountPath": "/api/rapid-reader",
+      "sources": [
+        {
+          "source": "server/routes/rapidReader.js",
+          "line": 18
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/rapid-reader/library/:id",
+      "mountPath": "/api/rapid-reader",
+      "sources": [
+        {
+          "source": "server/routes/rapidReader.js",
+          "line": 17
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/rapid-reader/library/fetch",
+      "mountPath": "/api/rapid-reader",
+      "sources": [
+        {
+          "source": "server/routes/rapidReader.js",
+          "line": 16
         }
       ]
     },
@@ -23070,8 +23125,8 @@
   ],
   "stats": {
     "mounts": 145,
-    "operations": 2081,
-    "declarations": 2084,
+    "operations": 2086,
+    "declarations": 2089,
     "sourceFiles": 225
   }
 }

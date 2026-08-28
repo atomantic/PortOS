@@ -140,6 +140,7 @@ import { storyBuilderStore } from './storyBuilder.js';
 import { writersRoomStore } from './writersRoom/store.js';
 import { mediaCollectionStore } from './mediaCollections.js';
 import { loraDatasetStore } from './loraDatasets.js';
+import { rapidReaderLibraryStore } from './rapidReaderLibrary.js';
 import { commissionStore, backfillAllCommissionFeedback } from './creativeCommissions/store.js';
 import { backfillProjectCommissionIds } from './creativeCommissions/projectControl.js';
 import { outcomesStore as liOutcomesStore } from './layeredIntelligenceOutcomes.js';
@@ -233,7 +234,7 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
     // but DO NOT crash the server. PortOS is single-user (AGENTS.md "Security
     // Model"); a hard exit on startup is worse than a noisy log the user can act
     // on. Returns per-store statuses for downstream telemetry; we discard them.
-    verifyCollections: () => verifyCollectionVersions([universeStore(), seriesStore(), issueStore(), conflictJournalStore(), storyBuilderStore(), mediaCollectionStore(), loraDatasetStore, liOutcomesStore(), commissionStore(), gameStore, fableLoomStore, ...brainCollectionStores()]),
+    verifyCollections: () => verifyCollectionVersions([universeStore(), seriesStore(), issueStore(), conflictJournalStore(), storyBuilderStore(), mediaCollectionStore(), loraDatasetStore, rapidReaderLibraryStore, liOutcomesStore(), commissionStore(), gameStore, fableLoomStore, ...brainCollectionStores()]),
 
     createToolkit: () => createAIToolkit({
       dataDir,

@@ -3,6 +3,7 @@ import { PATHS, atomicWrite, tryReadFileStrict } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { htmlToText } from '../lib/htmlToText.js';
 import { fetchPublicText } from '../lib/safeUrlFetch.js';
+import { upsertAccelerandoShelfEntry } from './rapidReaderLibrary.js';
 
 export const ACCELERANDO_BOOK = Object.freeze({
   id: 'accelerando',
@@ -133,7 +134,15 @@ async function loadAccelerando() {
 let loadPromise = null;
 
 /** Load the official edition, using the local cache after the first request. */
+async function loadAndStoreAccelerando() {
+  const book = await loadAccelerando();
+  const shelfStored = await upsertAccelerandoShelfEntry(book).then(() => true, (error) => {
+    console.error(`❌ Failed to save Accelerando to shelf: ${error.code || 'unknown error'}`);
+    return false;
+  });
+  return { ...book, shelfStored };
+}
 export function getAccelerandoBook() {
-  if (!loadPromise) loadPromise = loadAccelerando().finally(() => { loadPromise = null; });
+  if (!loadPromise) loadPromise = loadAndStoreAccelerando().finally(() => { loadPromise = null; });
   return loadPromise;
 }

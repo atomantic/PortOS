@@ -483,6 +483,7 @@ export default function App() {
           <Route path="wiki" element={<RedirectWithSearch to="/wiki/overview" />} />
           <Route path="wiki/:tab" element={<Wiki />} />
           <Route path="rapid-reader" element={<RapidReaderPage />} />
+          <Route path="rapid-reader/:id" element={<RapidReaderPage />} />
           {/* `/universes` is the universe index (list/table). The editor lives
               at `/universes/:universeId`; `new` is the create-mode sentinel
               (UniverseBuilder treats it as no-id → blank draft). Universe ids are
