@@ -177,6 +177,11 @@ describe('redactRunEventData — privacy', () => {
     vi.doMock('os', async (importOriginal) => ({ ...(await importOriginal()), homedir: () => '/' }));
     const { scrubHomePath: rootScrub } = await import('./agentRunEvents.js');
     expect(rootScrub('/var/log/example.log')).toBe('/var/log/example.log');
+    // Bypass probe: on a real machine the line above passes whether or not the
+    // `os` mock took, since the real home is not `/`. This one only passes when
+    // the mock actually reached the scrubber — otherwise the REAL home prefix
+    // would still be substituted.
+    expect(rootScrub(`${homedir()}/a`)).toBe(`${homedir()}/a`);
     vi.doUnmock('os');
     vi.resetModules();
   });

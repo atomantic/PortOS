@@ -192,6 +192,7 @@ export * from './agentInstructionsFile.js';
 export * from './fileCore.js';
 export * as fileUtils from './fileUtils.js';
 export * from './fileWriteQueue.js';
+export * from './homePath.js';
 export * from './jsonIo.js';
 export * from './mimeTypes.js';
 export * from './paths.js';
