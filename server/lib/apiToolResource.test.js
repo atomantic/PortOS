@@ -85,8 +85,22 @@ describe('buildToolResource', () => {
   it('publishes the error code a route actually throws, not one derived from the status', () => {
     // errorHandler resolves `err.code || getErrorCode(status)`, and both write
     // routes pass an explicit code — so a status-derived guess would publish
-    // BAD_REQUEST for a 400 that really reports VALIDATION_ERROR.
-    expect(byName('voice.synthesize').failures).toEqual([{ status: 400, code: 'VALIDATION_ERROR' }]);
+    // BAD_REQUEST for a 400 that really reports VALIDATION_ERROR. One status can
+    // carry several codes: a schema-valid request naming an unknown voice is a
+    // 400 UNKNOWN_VOICE (see routes/voicePublic.test.js).
+    expect(byName('voice.synthesize').failures).toEqual([
+      { status: 400, code: 'VALIDATION_ERROR' },
+      { status: 400, code: 'UNKNOWN_VOICE' },
+    ]);
+  });
+
+  it('declares the router-wide exposure gate on every sdapi tool, not just the write one', () => {
+    // routes/sdapi.js gates the WHOLE router with `router.use(...)`, so a read
+    // tool returns 403 too when A1111 exposure is off. An agent that never saw
+    // that failure has no way to explain the refusal.
+    for (const name of ['image.list-models', 'image.list-samplers', 'image.get-options', 'image.get-progress']) {
+      expect(byName(name).failures).toEqual([{ status: 403, code: 'FORBIDDEN' }]);
+    }
   });
 
   it('emits one entry per code when a status carries several', () => {
@@ -100,7 +114,7 @@ describe('buildToolResource', () => {
   });
 
   it('omits failures entirely for a tool that declares no error responses', () => {
-    expect(byName('image.list-models').failures).toBeUndefined();
+    expect(byName('voice.list-voices').failures).toBeUndefined();
   });
 
   it('marks read tools idempotent and side-effecting tools not', () => {

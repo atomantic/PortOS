@@ -108,6 +108,11 @@ const outputSchemaFor = (operation) => {
 /**
  * The failures an operation declares, as `{ status, code }` pairs.
  *
+ * These are the DECLARED failure modes — the ones the contract commits to — not
+ * an exhaustive enumeration of every error an internal service can surface. A
+ * caller should still handle an unlisted code, which is why the resource also
+ * publishes the full status/code vocabulary at the top level.
+ *
  * A status does NOT determine the code: `errorHandler` uses
  * `err.code || getErrorCode(status)`, so a route that passes an explicit code
  * (most do) emits something the status map would never produce — PortOS throws

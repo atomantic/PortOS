@@ -50,7 +50,7 @@ export const API_OPERATION_CONTRACTS = Object.freeze({
       requestBody: jsonBody(voiceSynthesizeBodySchema),
       responses: {
         200: { description: 'WAV audio', content: { 'audio/wav': { schema: { type: 'string', format: 'binary' } } } },
-        400: { description: 'Invalid payload or unknown voice', 'x-portos-error-codes': ['VALIDATION_ERROR'] },
+        400: { description: 'Invalid payload or unknown voice', 'x-portos-error-codes': ['VALIDATION_ERROR', 'UNKNOWN_VOICE'] },
       },
       'x-portos-tool': {
         name: 'voice.synthesize', version: 1,
@@ -96,21 +96,30 @@ export const API_OPERATION_CONTRACTS = Object.freeze({
   '/sdapi/v1/sd-models': {
     get: {
       summary: 'List image models',
-      responses: { 200: { description: 'Model catalog', content: { 'application/json': { schema: { type: 'array', items: { type: 'object' } } } } } },
+      responses: {
+        200: { description: 'Model catalog', content: { 'application/json': { schema: { type: 'array', items: { type: 'object' } } } } },
+        403: { description: 'A1111 API exposure is disabled' },
+      },
       'x-portos-tool': { name: 'image.list-models', version: 1, policy: { privacy: 'internal', sideEffect: 'read', async: false } },
     },
   },
   '/sdapi/v1/samplers': {
     get: {
       summary: 'List samplers',
-      responses: { 200: { description: 'Sampler list', content: { 'application/json': { schema: { type: 'array', items: { type: 'object' } } } } } },
+      responses: {
+        200: { description: 'Sampler list', content: { 'application/json': { schema: { type: 'array', items: { type: 'object' } } } } },
+        403: { description: 'A1111 API exposure is disabled' },
+      },
       'x-portos-tool': { name: 'image.list-samplers', version: 1, policy: { privacy: 'internal', sideEffect: 'read', async: false } },
     },
   },
   '/sdapi/v1/options': {
     get: {
       summary: 'Read active image options',
-      responses: { 200: { description: 'Active model and options', content: { 'application/json': { schema: { type: 'object' } } } } },
+      responses: {
+        200: { description: 'Active model and options', content: { 'application/json': { schema: { type: 'object' } } } },
+        403: { description: 'A1111 API exposure is disabled' },
+      },
       'x-portos-tool': { name: 'image.get-options', version: 1, policy: { privacy: 'internal', sideEffect: 'read', async: false } },
     },
     post: {
@@ -122,7 +131,10 @@ export const API_OPERATION_CONTRACTS = Object.freeze({
   '/sdapi/v1/progress': {
     get: {
       summary: 'Read generation progress',
-      responses: { 200: { description: 'Current generation progress or idle state', content: { 'application/json': { schema: { type: 'object' } } } } },
+      responses: {
+        200: { description: 'Current generation progress or idle state', content: { 'application/json': { schema: { type: 'object' } } } },
+        403: { description: 'A1111 API exposure is disabled' },
+      },
       'x-portos-tool': { name: 'image.get-progress', version: 1, policy: { privacy: 'internal', sideEffect: 'read', async: false } },
     },
   },

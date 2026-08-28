@@ -34,6 +34,12 @@
  * - `$schema` and `propertyNames` (no 3.0 equivalent) are dropped
  *
  * `$ref`/`$defs` are REFUSED rather than mangled — see `assertNoReferences`.
+ *
+ * KNOWN LOSSY CASE: 3.0's `nullable` only qualifies a `type` in the same Schema
+ * Object, so a nullable COMPOSED schema (`z.intersection(...).nullable()`, which
+ * collapses to `{allOf: [...], nullable: true}`) cannot express its null branch —
+ * 3.0 has no spelling for it. The flag is emitted anyway as the conventional
+ * best effort. No registered contract composes a nullable schema today.
  */
 
 import { isPlainObject } from './objects.js';
@@ -42,13 +48,24 @@ import { isPlainObject } from './objects.js';
 export const OPENAPI_VERSION = '3.0.3';
 
 // A `null` union member, in either the pre-conversion (`{type:'null'}`) or
-// post-conversion (`{nullable:true}`) spelling — the second appears when a
-// nested branch was converted before its parent union was collapsed. Only a
-// BARE marker counts; a null branch carrying other keywords is left alone
+// post-conversion (`{enum:[null], nullable:true}`) spelling — the second appears
+// when a nested branch was converted before its parent union was collapsed.
+// Only a BARE marker counts; a null branch carrying other keywords is left alone
 // rather than silently dropping those keywords.
-const isNullBranch = (branch) => isPlainObject(branch)
-  && Object.keys(branch).length === 1
-  && (branch.type === 'null' || branch.nullable === true);
+const NULL_MARKER_KEYS = new Set(['type', 'enum', 'nullable']);
+
+const isNullBranch = (branch) => {
+  if (!isPlainObject(branch)) return false;
+  const keys = Object.keys(branch);
+  if (!keys.every((key) => NULL_MARKER_KEYS.has(key))) return false;
+  if (branch.type === 'null') return true;
+  // `{type:'string', nullable:true}` shares the key set but is not a null
+  // marker — a converted marker carries no type at all.
+  return branch.type === undefined
+    && branch.nullable === true
+    && Array.isArray(branch.enum)
+    && branch.enum.every((value) => value === null);
+};
 
 const collapseNullableUnion = (schema, keyword) => {
   const branches = schema[keyword];
@@ -68,7 +85,9 @@ const collapseNullableUnion = (schema, keyword) => {
 const collapseNullableType = (schema) => {
   if (schema.type === 'null') {
     const { type: _dropped, ...rest } = schema;
-    return { ...rest, nullable: true };
+    // In 3.0 `nullable` only qualifies a `type` declared alongside it, so a
+    // null-only schema needs `enum: [null]` to actually accept null.
+    return { ...rest, ...(rest.enum === undefined ? { enum: [null] } : {}), nullable: true };
   }
   if (!Array.isArray(schema.type)) return schema;
   const types = schema.type.filter((type) => type !== 'null');
@@ -100,12 +119,16 @@ const convertExclusiveBounds = (schema) => {
 const convertTuple = (schema) => {
   const { prefixItems, ...rest } = schema;
   if (!Array.isArray(prefixItems)) return rest;
+  // A rest schema (`z.tuple([...]).rest(z.number())`) types every member past
+  // the prefix, so it joins the union rather than being overwritten by it —
+  // otherwise a valid tail element is rejected by the published contract.
+  const members = rest.items === undefined ? prefixItems : [...prefixItems, rest.items];
   return {
     ...rest,
-    items: prefixItems.length === 1 ? prefixItems[0] : { anyOf: prefixItems },
+    items: members.length === 1 ? members[0] : { anyOf: members },
     minItems: rest.minItems ?? prefixItems.length,
-    // An open-ended `items` schema means extra members are allowed past the
-    // prefix, so only a closed tuple gets a maximum.
+    // An open-ended rest means extra members are allowed, so only a closed
+    // tuple gets a maximum.
     ...(rest.items === undefined ? { maxItems: rest.maxItems ?? prefixItems.length } : {}),
   };
 };
@@ -131,10 +154,13 @@ const assertNoReferences = (schema) => {
 };
 
 // Keywords with no 3.0.3 Schema Object equivalent. The OAS 3.0 meta-schema
-// closes the Schema Object, so leaving one in makes the whole document invalid.
-// `propertyNames` comes from `z.record()` and its key constraint is simply not
-// expressible in 3.0.
-const UNSUPPORTED_KEYWORDS = ['$schema', 'propertyNames'];
+// CLOSES the Schema Object (`additionalProperties: false` plus an `^x-` escape
+// hatch), so leaving any one of these in makes the whole document invalid — not
+// just the subschema. `propertyNames`/`patternProperties` come from `z.record()`
+// and their key constraints are not expressible in 3.0; `contentEncoding` /
+// `contentMediaType` come from `z.base64()` / `z.file()`, whose `format` and
+// `pattern` siblings survive and carry most of the meaning.
+const UNSUPPORTED_KEYWORDS = ['$schema', 'propertyNames', 'patternProperties', 'contentEncoding', 'contentMediaType'];
 
 const NESTED_SCHEMA_KEYS = ['items', 'not', 'additionalProperties'];
 const NESTED_SCHEMA_LIST_KEYS = ['anyOf', 'oneOf', 'allOf'];

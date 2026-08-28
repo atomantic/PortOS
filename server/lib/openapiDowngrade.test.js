@@ -22,7 +22,7 @@ describe('toOpenApi30Schema', () => {
     // Collapsing it would silently discard `title`, so the branch survives as a
     // branch — converted to the 3.0.3 spelling, but never folded into the parent.
     expect(toOpenApi30Schema({ anyOf: [{ type: 'string' }, { type: 'null', title: 'explicitly absent' }] }))
-      .toEqual({ anyOf: [{ type: 'string' }, { nullable: true, title: 'explicitly absent' }] });
+      .toEqual({ anyOf: [{ type: 'string' }, { enum: [null], nullable: true, title: 'explicitly absent' }] });
   });
 
   it('collapses a type array into a single type plus nullable', () => {
@@ -60,14 +60,26 @@ describe('toOpenApi30Schema', () => {
       .toEqual({ type: 'array', items: { anyOf: [{ type: 'string' }, { type: 'number' }] }, minItems: 2, maxItems: 2 });
   });
 
-  it('leaves a tuple with a rest schema open-ended', () => {
-    const result = toOpenApi30Schema({ type: 'array', prefixItems: [{ type: 'string' }], items: { type: 'number' } });
-    expect(result.minItems).toBe(1);
-    expect(result.maxItems).toBeUndefined();
+  it('keeps a tuple rest schema in the member union instead of overwriting it', () => {
+    // `z.tuple([string]).rest(number)`: dropping `items` would reject every
+    // valid numeric tail element.
+    expect(toOpenApi30Schema({ type: 'array', prefixItems: [{ type: 'string' }], items: { type: 'number' } }))
+      .toEqual({ type: 'array', items: { anyOf: [{ type: 'string' }, { type: 'number' }] }, minItems: 1 });
   });
 
-  it('collapses a bare null type, which 3.0.3 cannot express', () => {
-    expect(toOpenApi30Schema({ type: 'null' })).toEqual({ nullable: true });
+  it('encodes a null-only schema as an enum, since bare nullable says nothing in 3.0', () => {
+    // 3.0's `nullable` only qualifies a `type` in the same Schema Object, so
+    // `{nullable:true}` alone does not actually accept null.
+    expect(toOpenApi30Schema({ type: 'null' })).toEqual({ enum: [null], nullable: true });
+    expect(toOpenApi30Schema({ type: 'null', enum: [null] })).toEqual({ enum: [null], nullable: true });
+  });
+
+  it('drops content keywords the closed 3.0 Schema Object rejects, keeping format and pattern', () => {
+    // z.base64() emits contentEncoding; one stray keyword invalidates the
+    // entire document, not just its subschema.
+    expect(toOpenApi30Schema({ type: 'string', format: 'base64', contentEncoding: 'base64', contentMediaType: 'text/plain', pattern: '^a' }))
+      .toEqual({ type: 'string', format: 'base64', pattern: '^a' });
+    expect(toOpenApi30Schema({ type: 'object', patternProperties: { '^a': { type: 'number' } } })).toEqual({ type: 'object' });
   });
 
   it('collapses a null branch that only surfaces after the branches convert', () => {
@@ -147,7 +159,8 @@ describe('OPENAPI_VERSION', () => {
 // contains a construct 3.0.3 rejects". Scan the real published documents rather
 // than trusting the unit cases above to have enumerated every source.
 describe('the published documents are actually 3.0.3', () => {
-  const FORBIDDEN_IN_30 = ['"type":"null"', '$schema', '"propertyNames"', '"prefixItems"', '"$defs"', '"$ref"', '"const":'];
+  const FORBIDDEN_IN_30 = ['"type":"null"', '$schema', '"propertyNames"', '"prefixItems"', '"$defs"', '"$ref"', '"const":',
+    '"patternProperties"', '"contentEncoding"', '"contentMediaType"', '"unevaluatedProperties"'];
 
   it.each([
     ['public', (m) => m.buildOpenApiSpec({ apiAccess: { voice: { exposed: true }, sdapi: { exposed: true } } }, { version: '1.0.0' })],
