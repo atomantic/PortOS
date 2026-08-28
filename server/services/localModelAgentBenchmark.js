@@ -137,6 +137,13 @@ export async function runOpenCodeAgentBenchmark({ backend, modelId, timeoutMs = 
         timeout: timeoutMs,
         label: `local-model-benchmark:${backend}`,
         guard: true,
+        // This run is a PROBE — measuring whether a local model can drive an
+        // agentic task is the whole point, so "it couldn't" is the result, and
+        // it is already reported in `error` below. Left reporting, every failed
+        // benchmark also queued a CoS "Investigate AI provider failure" task
+        // against a provider nobody claimed was healthy — and pointed it at a
+        // run record this function's `finally` had already deleted.
+        reportFailure: false,
         onComplete: resolve,
       }).catch((err) => resolve({ success: false, exitCode: 1, error: err?.message || 'OpenCode TUI failed' }));
     });

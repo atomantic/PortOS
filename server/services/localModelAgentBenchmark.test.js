@@ -75,6 +75,22 @@ describe('runOpenCodeAgentBenchmark', () => {
     }));
   });
 
+  // A benchmark probes whether a local model can drive an agentic task at all,
+  // so "it couldn't" is the measurement — reported in `error` below — not a
+  // provider incident. Reporting it fired the host's onRunFailed hook, and
+  // autoFixer queued a CoS "Investigate AI provider failure" task per failed
+  // benchmark run, pointing at a run record `finally` had already deleted.
+  it('runs as a probe so a failed benchmark does not queue a provider investigation', async () => {
+    executeTuiRun.mockImplementation(async ({ onComplete }) => {
+      onComplete({ success: false, exitCode: 1, error: 'TUI exited with code 1', duration: 86 });
+    });
+
+    const result = await runOpenCodeAgentBenchmark({ backend: 'llama', modelId: 'dflash' });
+
+    expect(executeTuiRun.mock.calls[0][0]).toEqual(expect.objectContaining({ reportFailure: false }));
+    expect(result).toMatchObject({ completed: false, exitCode: 1, error: 'TUI exited with code 1' });
+  });
+
   it('accepts the Claude Ollama TUI as a separate local harness target', async () => {
     getProviderById.mockResolvedValue({
       id: 'claude-ollama-tui',

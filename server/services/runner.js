@@ -91,9 +91,19 @@ export function getRunsPath() {
  * the file is written, so caller-specific fields like `completionReason`
  * (TUI) survive to disk and show up on /runs replay.
  *
+ * `identity` (optional `{ providerId, providerName, model }`) fills ONLY keys
+ * the stored metadata doesn't already carry — for a caller that spawns against
+ * a synthesized run id instead of a toolkit `createRun` record. `extras` still
+ * overwrites, so the two are not interchangeable.
+ *
+ * `reportFailure: false` finalizes the record but skips the `onRunFailed` hook,
+ * for a run that is a deliberate PROBE of a provider rather than work the user
+ * asked for. Same reasoning as the `canceled` branch below: the failure is the
+ * caller's measurement, not evidence that a configured provider is broken.
+ *
  * @returns the merged metadata object (also written to disk).
  */
-export async function finalizeRunRecord({ runId, output, exitCode, success, error, startTime, extras }) {
+export async function finalizeRunRecord({ runId, output, exitCode, success, error, startTime, extras, identity, reportFailure = true }) {
   const toolkit = requireToolkit();
   const runDir = join(getRunsPath(), runId);
   const outputPath = join(runDir, 'output.txt');
@@ -104,6 +114,18 @@ export async function finalizeRunRecord({ runId, output, exitCode, success, erro
   const metadataStr = await readFile(metadataPath, 'utf-8').catch(() => '{}');
   let metadata = {};
   try { metadata = JSON.parse(metadataStr); } catch { console.log('⚠️ Corrupted metadata for run, using fresh'); }
+  // A caller that never went through toolkit `createRun` — or whose run record
+  // was lost — leaves `{}` here, and the completion fields below then describe a
+  // run with no id, provider or model. That anonymous record still reaches the
+  // `onRunFailed` hook, which published an investigation task literally titled
+  // "Investigate AI provider failure: undefined (undefined)" and keyed its
+  // dedupe + circuit breaker on `undefined-undefined` — one bucket every such
+  // failure collapses into, suppressing unrelated real ones for the window.
+  // Backfill what the caller already handed us.
+  if (!metadata.id) metadata.id = runId;
+  for (const [key, value] of Object.entries(identity || {})) {
+    if (metadata[key] === undefined && value !== undefined) metadata[key] = value;
+  }
   metadata.endTime = new Date().toISOString();
   metadata.duration = Date.now() - startTime;
   metadata.exitCode = exitCode;
@@ -142,11 +164,36 @@ export async function finalizeRunRecord({ runId, output, exitCode, success, erro
   // already persisted by this point, so a failing hook must not un-finalize it.
   if (success) {
     safeSettle(() => runnerConfig.hooks?.onRunCompleted?.(metadata, output), 'onRunCompleted');
-  } else if (!canceled) {
+  } else if (!canceled && reportFailure) {
     safeSettle(() => runnerConfig.hooks?.onRunFailed?.(metadata, metadata.error, output), 'onRunFailed');
   }
 
   return metadata;
+}
+
+/**
+ * Report a PRE-SPAWN failure through the run record instead of throwing.
+ *
+ * Extracted from `resolveRunCwd` below so every "we can't even start this run"
+ * check shares one settlement path. Both spawning runners invoke their executor
+ * WITHOUT awaiting it (the /runs route never does), so a bare throw surfaces
+ * only as an unhandled rejection and the UI shows the run hanging forever.
+ *
+ * @returns the finalized metadata (also handed to `onComplete`).
+ */
+export async function failRunRecord({ runId, error, exitCode = null, startTime = Date.now(), onData, onComplete, identity, reportFailure = true }) {
+  const message = `❌ ${error}`;
+  // Settle the caller's callbacks through the same guard the close handler
+  // uses. A throwing (or rejecting) onComplete here would reject the caller
+  // AFTER the failed run was already persisted — and since /runs never awaits
+  // its executor, that lands as the unhandled rejection + hung-looking run
+  // this helper exists to prevent.
+  safeSettle(() => onData?.(message), 'onData');
+  const failure = await finalizeRunRecord({
+    runId, output: message, exitCode, success: false, error, startTime, identity, reportFailure,
+  });
+  safeSettle(() => onComplete?.(failure), 'onComplete');
+  return failure;
 }
 
 /**
@@ -163,21 +210,13 @@ export async function finalizeRunRecord({ runId, output, exitCode, success, erro
  * @returns {Promise<{cwd: string, failure?: undefined} | {cwd?: undefined, failure: object}>}
  *   `cwd` on success; `failure` (the finalized metadata) when the workspace is unusable.
  */
-export async function resolveRunCwd({ runId, workspacePath, label, startTime = Date.now(), onData, onComplete }) {
+export async function resolveRunCwd({ runId, workspacePath, label, startTime = Date.now(), onData, onComplete, identity, reportFailure = true }) {
   try {
     return { cwd: resolveSpawnCwd(workspacePath, PATHS.root, label) };
   } catch (err) {
-    const message = `❌ ${err.message}`;
-    // Settle the caller's callbacks through the same guard the close handler
-    // uses. A throwing (or rejecting) onComplete here would reject
-    // resolveRunCwd itself AFTER the failed run was already persisted — and
-    // since /runs never awaits its executor, that lands as the unhandled
-    // rejection + hung-looking run this helper exists to prevent.
-    safeSettle(() => onData?.(message), 'onData');
-    const failure = await finalizeRunRecord({
-      runId, output: message, exitCode: null, success: false, error: err.message, startTime,
+    const failure = await failRunRecord({
+      runId, error: err.message, exitCode: null, startTime, onData, onComplete, identity, reportFailure,
     });
-    safeSettle(() => onComplete?.(failure), 'onComplete');
     return { failure };
   }
 }
