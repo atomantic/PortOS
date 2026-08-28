@@ -13,9 +13,9 @@ Audience: PortOS server, Persistent Mind, voice, palette, and future agent integ
 
 The initial production slice is implemented. This section supersedes proposal language elsewhere in the document when the two differ.
 
-- The generated HTTP inventory contains 2,066 mounted operations and feeds `GET /api/api-docs/catalog.json` plus the complete OpenAPI 3.1 document at `/api/api-docs/internal/openapi.json`.
+- The generated HTTP inventory contains 2,067 mounted operations and feeds `GET /api/api-docs/catalog.json` plus the complete OpenAPI 3.1 document at `/api/api-docs/internal/openapi.json`.
 - A generated inventory of 253 Socket.IO events feeds `/api/api-docs/events.json` and the AsyncAPI 3 document at `/api/api-docs/asyncapi.json`.
-- `/api/cos/tools` exposes 23 Persistent Mind tools and 22 CoS-agent/UI/voice tools through the versioned provider-neutral catalog. OpenAI, Anthropic, and MCP translations derive from the same entries.
+- `/api/cos/tools` exposes 22 provider-neutral tools: one Persistent Mind task tool plus 21 semantic voice adapters. The `mind` scope can see all 22 when granted; the `agent`, `ui`, and `voice` scopes can see the 21 semantic adapters. OpenAI, Anthropic, and MCP translations derive from the same entries.
 - `/api/cos/tools/call` and `/api/cos/tools/calls/:requestId` implement server-derived UI authority, schema validation, normalized results, and replay conflict detection. Raw routes are not callable.
 - Persistent Mind has separate default-off read, write, and CoS-task grants and a bounded multi-round tool loop. `cos.create-task` reuses the existing scheduler, worktree, review, CI, and landing-policy path.
 - The existing loopback-only Agent Context MCP transport now optionally advertises the same semantic registry under separate default-off CoS-agent read/write grants. Its original bounded context scopes and privacy behavior remain intact.
@@ -34,7 +34,7 @@ The interface is not a generic HTTP proxy. A raw endpoint proxy would expose inc
 
 | Method | Endpoint | Purpose |
 |---|---|---|
-| `GET` | `/api/cos/tools` | Return the current, scope-filtered tool catalog and capability state. Supports `scope`, `intent`, `cursor`, and conditional `ETag` requests. |
+| `GET` | `/api/cos/tools` | Return the current, scope-filtered tool catalog and capability state. Supports `scope`, `intent`, `format`, and conditional `ETag` requests. |
 | `POST` | `/api/cos/tools/call` | Execute one tool call synchronously or start its asynchronous job. Requires an idempotency key for mutations. |
 | `GET` | `/api/cos/tools/calls/:requestId` | Read the normalized outcome of a prior call, including a job reference when work is still running. |
 | `POST` | `/api/cos/tools/calls/:requestId/approve` | Record explicit approval from a separate trusted human/UI session for a pending confirmation. |

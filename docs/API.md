@@ -12,6 +12,11 @@ When a TLS cert is provisioned (`npm run setup:cert`), `:5555` serves HTTPS inst
 
 This document covers the most commonly used endpoints plus a [route-domain index](#route-domain-index). The in-app **API Explorer** at `/api-reference/catalog` is the exhaustive, generated reference:
 
+For the bridge between these HTTP/event inventories and model-facing tools,
+see [API and MCP Unified Tool Contract](./API_TOOL_CONTRACT.md). It records
+the shipped semantic registry, MCP context/action schemas, authority matrix,
+and the current-vs-proposed boundary.
+
 - `GET /api/api-docs/catalog.json` — searchable metadata for every mounted HTTP operation.
 - `GET /api/api-docs/internal/openapi.json` — OpenAPI 3.1 for the complete internal HTTP surface.
 - `GET /api/api-docs/openapi.json` — OpenAPI 3.1 for only the external APIs currently exposed in Settings.
