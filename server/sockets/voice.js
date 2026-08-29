@@ -9,6 +9,9 @@
 //           | voice:dailyLog:appended | voice:error | voice:idle
 //           | voice:screenshot:request
 //           | voice:speak | voice:output:primary | voice:output:detached
+// Call host (FaceTime Audio bridge):
+// Inbound:  voice:call:attach | voice:call:audio | voice:call:detach
+// Outbound: voice:call:state | voice:call:tts
 
 import { runTurn } from '../services/voice/pipeline.js';
 import { getVoiceConfig } from '../services/voice/config.js';
@@ -19,6 +22,19 @@ import {
   releaseVoiceOutput,
 } from '../services/voice/voiceOutput.js';
 import { isIsoDate } from '../services/brainJournal.js';
+import { pcmToWavBuffer } from '../lib/chiptuneRender.js';
+import { CALL_AUDIO_SAMPLE_RATE, createCallEndpointer, pcmToFloat } from '../services/voice/callEndpointing.js';
+import {
+  attachHost,
+  detachHost,
+  getCallHost,
+  isCallActive,
+  markListening,
+  markSpeaking,
+  noteCallerSpeech,
+  recordTurn,
+  setCallStateListener,
+} from '../services/voice/callSession.js';
 
 // Cap by messages (each user utterance + assistant reply is ~2). 24 → ~12 turns.
 const HISTORY_MESSAGES = 24;
@@ -34,6 +50,10 @@ const MAX_TEXT_LEN = 4000;
 // (runaway / malicious client). The client already does word-boundary
 // truncation; we re-do it server-side so the guarantee holds end-to-end.
 const MAX_UI_TEXT_CHARS = 8000;
+// One PCM frame from the call host. The page ships ~20 ms of 16 kHz mono Int16
+// (640 bytes); 64 KB is two seconds of headroom for a delayed flush and rejects
+// a runaway client without ever clipping a normal burst.
+const MAX_CALL_FRAME_BYTES = 64 * 1024;
 
 // Truncate on the last whitespace boundary (space / newline / tab) so the
 // tail isn't a partial token, then append an ellipsis. Mirrors the
@@ -350,6 +370,102 @@ export const registerVoiceHandlers = (socket) => {
     claimVoiceOutput(socket);
   });
 
+  // ---------------------------------------------------------------------------
+  // Call host — the FaceTime Audio bridge.
+  //
+  // The page is a plain browser tab reading BlackHole, so it speaks the same
+  // socket the widget does. What differs is the shape of the input: a
+  // continuous PCM stream with no push-to-talk, endpointed here into the same
+  // `runTurn` utterances the microphone produces, and the destination of the
+  // reply, which is played into the call rather than out of the speakers.
+  // ---------------------------------------------------------------------------
+  const call = { endpointer: null, busy: false };
+
+  const emitCallState = (snapshot) => socket.emit('voice:call:state', snapshot);
+
+  const runCallUtterance = async (utterance) => {
+    call.busy = true;
+    markSpeaking();
+    let spoken = '';
+    try {
+      await runTurn({
+        audio: pcmToWavBuffer(pcmToFloat(utterance.pcm), { sampleRate: CALL_AUDIO_SAMPLE_RATE }),
+        mimeType: 'audio/wav',
+        history: state.history,
+        state,
+        // The pipeline speaks the widget's event vocabulary; only the audio is
+        // re-addressed, so persona, tools, and the confirm gate are unchanged.
+        emit: (event, data) => {
+          if (event === 'voice:tts:audio') {
+            spoken = data?.sentence || spoken;
+            socket.emit('voice:call:tts', data);
+            return;
+          }
+          if (event === 'voice:transcript' && data?.text) recordTurn('caller', data.text);
+          socket.emit(event, data);
+        },
+      });
+      if (spoken) recordTurn('assistant', spoken);
+    } catch (err) {
+      console.error(`📞 call turn failed: ${err.message}`);
+      socket.emit('voice:error', { stage: 'call', message: err.message });
+    } finally {
+      call.busy = false;
+      markListening();
+    }
+  };
+
+  socket.on('voice:call:attach', async () => {
+    try {
+      if (!(await ensureEnabled('call'))) return;
+      const claim = attachHost(socket);
+      if (!claim.ok) {
+        // Refused, not displaced: two tabs reading the same device would each
+        // answer, and the loser could not tell it had been muted.
+        socket.emit('voice:call:state', { error: claim.reason, hostAttached: false, active: false, state: 'idle' });
+        return;
+      }
+      call.endpointer = createCallEndpointer();
+      setCallStateListener(emitCallState);
+      emitCallState(claim.state);
+    } catch (err) {
+      console.error(`❌ voice:call:attach failed: ${err.message}`);
+      socket.emit('voice:error', { stage: 'call', message: err.message });
+    }
+  });
+
+  socket.on('voice:call:audio', async (payload = {}) => {
+    try {
+      if (getCallHost() !== socket || !call.endpointer) return;
+      const { pcm } = payload || {};
+      const bytes = audioByteLength(pcm);
+      if (!bytes || bytes > MAX_CALL_FRAME_BYTES) return;
+      const view = Buffer.isBuffer(pcm) || ArrayBuffer.isView(pcm)
+        ? new Int16Array(pcm.buffer, pcm.byteOffset, Math.floor(pcm.byteLength / 2))
+        : new Int16Array(pcm);
+
+      const utterance = call.endpointer.push(view);
+      // Barge-in: the caller talking over a reply cancels it, exactly as
+      // pressing the widget's interrupt does.
+      if (call.endpointer.speaking && call.busy) {
+        state.ctrl?.abort();
+        state.pendingDestructive = null;
+        socket.emit('voice:interrupt', { reason: 'barge-in' });
+      }
+      if (!utterance) return;
+      noteCallerSpeech();
+      if (call.busy) return;
+      await runCallUtterance(utterance);
+    } catch (err) {
+      console.error(`❌ voice:call:audio failed: ${err.message}`);
+    }
+  });
+
+  socket.on('voice:call:detach', async () => {
+    call.endpointer = null;
+    emitCallState(await detachHost(socket));
+  });
+
   socket.on('disconnect', () => {
     // Drop this tab from the voice-output registry; if it was the sole
     // recipient, output is promoted to another live tab so proactive audio
@@ -370,5 +486,15 @@ export const registerVoiceHandlers = (socket) => {
     state.uiTextWaiters.clear();
     textWaiters.forEach((resolve) => resolve(null));
     unregisterEchoBuffer(state.recentTts);
+    // A closed tab is a detached host: the call loses its audio path, so the
+    // session ends rather than running on deaf.
+    if (getCallHost() === socket) {
+      call.endpointer = null;
+      detachHost(socket).catch((err) => console.error(`❌ voice call detach failed: ${err.message}`));
+    }
   });
 };
+
+// Re-exported for the call-host page's own smoke checks and for tests that
+// assert the frame cap without standing up a socket.
+export { MAX_CALL_FRAME_BYTES };

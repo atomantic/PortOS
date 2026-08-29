@@ -75,6 +75,7 @@ export * from './appIdentity.js';
 export * from './applyManuscriptEdits.js';
 export * from './assessmentTuningNotice.js';
 export * from './audioRecorder.js';
+export * from './callAudioBridge.js';
 export * from './bareUrl.js';
 export * from './boundedMap.js';
 export * from './buildStamp.js';

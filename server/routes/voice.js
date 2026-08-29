@@ -41,6 +41,7 @@ const voiceConfigPatchSchema = z.object({
   trigger: z.enum(['push-to-talk', 'hotword', 'vad']).optional(),
   hotkey: z.string().max(32).optional(),
   facetime: z.object({
+    maxCallMinutes: z.number().int().min(1).max(120).optional(),
     targetHandle: z.string().trim().max(254).refine((value) => value === '' || /^\+?[1-9]\d{6,14}$/.test(value) || z.string().email().safeParse(value).success, 'Must be an E.164 phone number or email address').optional(),
     targetName: z.string().trim().max(120).optional(),
     blackHole2chLabel: z.string().trim().min(1).max(120).optional(),

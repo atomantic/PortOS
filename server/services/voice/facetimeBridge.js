@@ -25,6 +25,59 @@ export const facetimeControlResultSchema = z.object({
 
 export const facetimeHelperPath = () => join(voiceHome(), HELPER_NAME);
 
+// The call audio path needs two virtual devices at the rate FaceTime runs at.
+// Anything else is a misconfiguration the user has to fix in Audio MIDI Setup,
+// so the check names the specific device rather than reporting "audio broken".
+export const CALL_AUDIO_DEVICE_RATE = 48_000;
+const AUDIO_PROBE_TIMEOUT_MS = 10_000;
+
+const deviceChannels = (item, direction) => {
+  const raw = item?.[`coreaudio_device_${direction}`];
+  const parsed = Number.parseInt(String(raw ?? '').replace(/[^0-9]/g, ''), 10);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+/**
+ * Read the machine's audio devices.
+ *
+ * Returns `null` — not `[]` — when the list could not be read at all, so a
+ * failed probe is never reported as "the device is missing" and the user is
+ * not sent to reinstall something that is already there.
+ */
+export async function listAudioDevices() {
+  if (process.platform !== 'darwin') return null;
+  const result = await bufferedSpawn('system_profiler', ['SPAudioDataType', '-json'], { timeoutMs: AUDIO_PROBE_TIMEOUT_MS });
+  if (result.timedOut || !result.success) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch {
+    return null;
+  }
+  const items = parsed?.SPAudioDataType?.[0]?._items;
+  if (!Array.isArray(items)) return null;
+  return items.map((item) => ({
+    name: String(item?._name ?? ''),
+    sampleRate: Number.parseInt(String(item?.coreaudio_device_srate ?? '').replace(/[^0-9]/g, ''), 10) || 0,
+    inputChannels: deviceChannels(item, 'input'),
+    outputChannels: deviceChannels(item, 'output'),
+  }));
+}
+
+/** Grade one BlackHole device against the label, rate, and channel count. */
+export function checkAudioDevice(devices, label, channels) {
+  if (devices === null) return fact(false, `Could not read this Mac's audio devices to verify ${label}.`);
+  const device = devices.find((entry) => entry.name.trim().toLowerCase() === label.trim().toLowerCase());
+  if (!device) return fact(false, `Install ${label} with: brew install blackhole-${channels}ch`);
+  if (device.sampleRate !== CALL_AUDIO_DEVICE_RATE) {
+    return fact(false, `Set ${label} to ${CALL_AUDIO_DEVICE_RATE} Hz in Audio MIDI Setup (currently ${device.sampleRate || 'unknown'} Hz).`);
+  }
+  if (Math.max(device.inputChannels, device.outputChannels) < channels) {
+    return fact(false, `${label} reports fewer than ${channels} channels — reinstall it with: brew install blackhole-${channels}ch`);
+  }
+  return fact(true, `${label} is present at ${CALL_AUDIO_DEVICE_RATE} Hz with ${channels} channels.`);
+}
+
 const identityReady = (config) => Boolean(config?.facetime?.targetHandle?.trim() && config?.facetime?.targetName?.trim());
 
 const fact = (ok, message) => ({ ok: ok ? 'ok' : 'missing', message });
@@ -33,13 +86,14 @@ export async function checkSetup(config) {
   const voiceConfig = config || await getVoiceConfig();
   const facetime = voiceConfig.facetime || {};
   const helper = facetimeHelperPath();
+  const devices = await listAudioDevices();
   return {
     platform: fact(process.platform === 'darwin', 'FaceTime Audio control requires macOS.'),
     helper: fact(existsSync(helper), 'Run npm run setup:facetime to compile the FaceTime helper.'),
     identity: fact(identityReady(voiceConfig), 'Set a target name and E.164 phone number or email address.'),
     accessibility: fact(false, 'Grant Accessibility access to facetime-ax in System Settings > Privacy & Security > Accessibility.'),
-    blackHole2ch: fact(false, `Install/select ${facetime.blackHole2chLabel || 'BlackHole 2ch'} in FaceTime audio settings.`),
-    blackHole16ch: fact(false, `Install/select ${facetime.blackHole16chLabel || 'BlackHole 16ch'} in FaceTime audio settings.`),
+    blackHole2ch: checkAudioDevice(devices, facetime.blackHole2chLabel || 'BlackHole 2ch', 2),
+    blackHole16ch: checkAudioDevice(devices, facetime.blackHole16chLabel || 'BlackHole 16ch', 16),
   };
 }
 

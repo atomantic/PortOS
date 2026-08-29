@@ -1916,7 +1916,7 @@
         {
           "direction": "client-to-server",
           "source": "server/sockets/voice.js",
-          "line": 353
+          "line": 469
         }
       ]
     },
@@ -4524,6 +4524,106 @@
       ]
     },
     {
+      "event": "voice:call:attach",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/pages/VoiceCallHost.jsx",
+          "line": 169
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/voice.js",
+          "line": 418
+        }
+      ]
+    },
+    {
+      "event": "voice:call:audio",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/pages/VoiceCallHost.jsx",
+          "line": 163
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/voice.js",
+          "line": 437
+        }
+      ]
+    },
+    {
+      "event": "voice:call:detach",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/pages/VoiceCallHost.jsx",
+          "line": 174
+        },
+        {
+          "direction": "client-to-server",
+          "source": "client/src/pages/VoiceCallHost.jsx",
+          "line": 197
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/voice.js",
+          "line": 464
+        }
+      ]
+    },
+    {
+      "event": "voice:call:state",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/VoiceCallHost.jsx",
+          "line": 192
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/voice.js",
+          "line": 384
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/voice.js",
+          "line": 425
+        }
+      ]
+    },
+    {
+      "event": "voice:call:tts",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/pages/VoiceCallHost.jsx",
+          "line": 193
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/voice.js",
+          "line": 401
+        }
+      ]
+    },
+    {
       "event": "voice:dictation",
       "directions": [
         "server-to-client"
@@ -4537,17 +4637,17 @@
         {
           "direction": "server-to-client",
           "source": "server/sockets/voice.js",
-          "line": 224
+          "line": 244
         },
         {
           "direction": "server-to-client",
           "source": "server/sockets/voice.js",
-          "line": 248
+          "line": 268
         },
         {
           "direction": "server-to-client",
           "source": "server/sockets/voice.js",
-          "line": 253
+          "line": 273
         }
       ]
     },
@@ -4570,7 +4670,7 @@
         {
           "direction": "client-to-server",
           "source": "server/sockets/voice.js",
-          "line": 241
+          "line": 261
         }
       ]
     },
@@ -4588,27 +4688,17 @@
         {
           "direction": "server-to-client",
           "source": "server/sockets/voice.js",
-          "line": 132
+          "line": 152
         },
         {
           "direction": "server-to-client",
           "source": "server/sockets/voice.js",
-          "line": 145
+          "line": 165
         },
         {
           "direction": "server-to-client",
           "source": "server/sockets/voice.js",
-          "line": 154
-        },
-        {
-          "direction": "server-to-client",
-          "source": "server/sockets/voice.js",
-          "line": 159
-        },
-        {
-          "direction": "server-to-client",
-          "source": "server/sockets/voice.js",
-          "line": 163
+          "line": 174
         },
         {
           "direction": "server-to-client",
@@ -4618,27 +4708,47 @@
         {
           "direction": "server-to-client",
           "source": "server/sockets/voice.js",
-          "line": 188
+          "line": 183
         },
         {
           "direction": "server-to-client",
           "source": "server/sockets/voice.js",
-          "line": 193
+          "line": 199
         },
         {
           "direction": "server-to-client",
           "source": "server/sockets/voice.js",
-          "line": 197
+          "line": 208
         },
         {
           "direction": "server-to-client",
           "source": "server/sockets/voice.js",
-          "line": 203
+          "line": 213
         },
         {
           "direction": "server-to-client",
           "source": "server/sockets/voice.js",
-          "line": 256
+          "line": 217
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/voice.js",
+          "line": 223
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/voice.js",
+          "line": 276
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/voice.js",
+          "line": 411
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/voice.js",
+          "line": 433
         }
       ]
     },
@@ -4656,24 +4766,25 @@
         {
           "direction": "server-to-client",
           "source": "server/sockets/voice.js",
-          "line": 133
+          "line": 153
         },
         {
           "direction": "server-to-client",
           "source": "server/sockets/voice.js",
-          "line": 213
+          "line": 233
         },
         {
           "direction": "server-to-client",
           "source": "server/sockets/voice.js",
-          "line": 225
+          "line": 245
         }
       ]
     },
     {
       "event": "voice:interrupt",
       "directions": [
-        "client-to-server"
+        "client-to-server",
+        "server-to-client"
       ],
       "sources": [
         {
@@ -4699,7 +4810,12 @@
         {
           "direction": "client-to-server",
           "source": "server/sockets/voice.js",
-          "line": 207
+          "line": 227
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/voice.js",
+          "line": 453
         }
       ]
     },
@@ -4717,7 +4833,7 @@
         {
           "direction": "client-to-server",
           "source": "server/sockets/voice.js",
-          "line": 341
+          "line": 361
         }
       ]
     },
@@ -4735,7 +4851,7 @@
         {
           "direction": "client-to-server",
           "source": "server/sockets/voice.js",
-          "line": 349
+          "line": 369
         }
       ]
     },
@@ -4784,7 +4900,7 @@
         {
           "direction": "client-to-server",
           "source": "server/sockets/voice.js",
-          "line": 216
+          "line": 236
         }
       ]
     },
@@ -4802,7 +4918,7 @@
         {
           "direction": "client-to-server",
           "source": "server/sockets/voice.js",
-          "line": 301
+          "line": 321
         }
       ]
     },
@@ -4838,7 +4954,7 @@
         {
           "direction": "client-to-server",
           "source": "server/sockets/voice.js",
-          "line": 183
+          "line": 203
         }
       ]
     },
@@ -4887,7 +5003,7 @@
         {
           "direction": "client-to-server",
           "source": "server/sockets/voice.js",
-          "line": 149
+          "line": 169
         }
       ]
     },
@@ -4905,7 +5021,7 @@
         {
           "direction": "client-to-server",
           "source": "server/sockets/voice.js",
-          "line": 264
+          "line": 284
         }
       ]
     },
@@ -4936,7 +5052,7 @@
         {
           "direction": "client-to-server",
           "source": "server/sockets/voice.js",
-          "line": 319
+          "line": 339
         }
       ]
     },
@@ -4960,10 +5076,10 @@
     }
   ],
   "stats": {
-    "events": 253,
-    "clientToServer": 56,
-    "serverToClient": 205,
-    "bidirectional": 8,
-    "sourceFiles": 103
+    "events": 258,
+    "clientToServer": 59,
+    "serverToClient": 208,
+    "bidirectional": 9,
+    "sourceFiles": 104
   }
 }

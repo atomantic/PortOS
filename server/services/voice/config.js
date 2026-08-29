@@ -23,6 +23,8 @@ export const VOICE_DEFAULTS = Object.freeze({
     targetName: '',
     blackHole2chLabel: 'BlackHole 2ch',
     blackHole16chLabel: 'BlackHole 16ch',
+    // Hard ceiling on one call, so a line left open cannot run all day.
+    maxCallMinutes: 15,
   },
 
   stt: {

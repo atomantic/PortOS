@@ -356,7 +356,13 @@ export function VoiceTab() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <FormField label="Target name"><input id="facetime-target-name" value={facetime.targetName || ''} onChange={(e) => patch('facetime.targetName', e.target.value)} className={inputCls} /></FormField>
           <FormField label="Target handle" hint="E.164 phone number or email address."><input id="facetime-target-handle" value={facetime.targetHandle || ''} onChange={(e) => patch('facetime.targetHandle', e.target.value)} className={inputCls} /></FormField>
+          <FormField label="Maximum call length" hint="Minutes before PortOS hangs up on its own."><input id="facetime-max-call-minutes" type="number" min="1" max="120" value={facetime.maxCallMinutes ?? 15} onChange={(e) => patch('facetime.maxCallMinutes', Number(e.target.value))} className={inputCls} /></FormField>
         </div>
+        {/* Two-way audio needs a real browser tab on this Mac: device
+            permissions and setSinkId do not work from the server. */}
+        <p className="text-xs text-gray-400">
+          Call audio runs in its own tab — <Link to="/voice/call-host" className="text-port-accent underline">open the call host</Link> on this Mac and attach it before placing a call. Without it, PortOS can dial but nobody can hear the call.
+        </p>
         <div className="flex flex-wrap gap-2">
           {['probe', 'call', 'hangup'].map((action) => <button key={action} type="button" onClick={() => handleFaceTimeAction(action)} disabled={saving || faceTimeDirty || facetimeAction !== null} className="px-3 py-2 rounded bg-port-border text-sm text-white disabled:opacity-50">{facetimeAction === action ? 'Working…' : action === 'call' ? 'Test call' : action[0].toUpperCase() + action.slice(1)}</button>)}
           <button type="button" onClick={refreshFaceTime} className="px-3 py-2 rounded bg-port-bg border border-port-border text-sm text-white">Check setup</button>

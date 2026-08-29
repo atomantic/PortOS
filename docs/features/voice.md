@@ -19,6 +19,52 @@ The TTS engine is selectable in **Settings → Voice → TTS engine**.
 
 FaceTime Audio controls are off by default and remain machine-local. On macOS, run `npm run setup:facetime`, grant the installed helper Accessibility permission in System Settings, choose the configured BlackHole devices in FaceTime, then enable **FaceTime Audio** in Settings → Features. Set a target name and E.164 phone number or email in Settings → Voice, save, and use **Probe**, **Test call**, or **Hang up**. The helper refuses ambiguous FaceTime surfaces and never uses coordinate clicks.
 
+### FaceTime Audio call bridge
+
+The control plane can dial and hang up. Carrying the conversation takes two
+virtual audio devices and a browser tab.
+
+**Devices.** `npm run setup:facetime` offers to run `brew install blackhole-2ch
+blackhole-16ch`. BlackHole is GPLv3 and is never bundled — PortOS asks, you
+install it, and declining is fine (dial and hang up keep working without it).
+In FaceTime, set the **output** to BlackHole 16ch and the **microphone** to
+BlackHole 2ch. Both must run at 48 kHz; **Settings → Voice → Check setup**
+verifies the label, rate, and channel count of each and names the exact problem
+when one is wrong. A device list that cannot be read at all reports that
+plainly rather than claiming the device is missing.
+
+**Call host.** Open **/voice/call-host** in a browser tab on the Mac running
+PortOS and press **Attach call host**. Device permissions and `setSinkId` need
+a real browser profile, so this cannot live on the server. The page reads
+BlackHole 16ch (what FaceTime plays into), streams it to PortOS as 16 kHz mono
+PCM, and plays each reply back through BlackHole 2ch (what FaceTime hears as
+its microphone). An input-level meter and a one-second test tone confirm both
+directions before you rely on them.
+
+The page **fails closed and says why**: a browser missing any required API
+names all of them at once, a missing or misconfigured device is named
+specifically, an unlabeled device list is reported as a missing microphone
+permission rather than a missing driver, and a second tab is refused — it holds
+a Web Lock, and the server refuses a second host independently, so two tabs can
+never double-answer one call.
+
+**Turns.** A phone call has no push-to-talk, so the server decides where a turn
+ends: energy-based voice activity detection with 700 ms of trailing silence and
+a 20-second ceiling per utterance. Each utterance runs the **existing** voice
+pipeline — same persona, tools, confirm gate, and TTS settings as the widget.
+Speaking over a reply interrupts it, exactly as the widget's barge-in does.
+
+**Ending.** The call ends when the caller hangs up, after 60 seconds of caller
+silence, at the configured maximum call length (Settings → Voice, default 15
+minutes), or when the call-host tab goes away — a call nobody can hear is ended
+rather than left running. The helper's own view of the FaceTime window is the
+source of truth throughout: a probe that fails is treated as unknown, never as
+a hangup.
+
+**What is kept.** A text transcript is appended to the daily journal, labelled
+`Caller` and `PortOS`. The call audio is never persisted, and the configured
+handle never appears in the transcript or its metadata.
+
 ### Why Kokoro is the default
 
 Kokoro is a 82M-parameter frontier TTS model that runs in-process via ONNX Runtime + transformers.js — **no Python, no extra binaries, cross-platform**. Quality is significantly higher than Piper (more natural prosody, expressive pacing). First synthesis after server start has a 2–3 s cold start as the model loads; warm calls are 200–500 ms per sentence on CPU.
@@ -134,7 +180,12 @@ Barge-in works by aborting the shared `AbortController` tied to the current turn
 | GET  | `/api/voice/voices` | Voices for the active TTS engine |
 | POST | `/api/voice/test`   | Body `{ text }`, returns WAV bytes — verifies TTS |
 
-Socket events are documented in `server/sockets/voice.js`.
+| GET  | `/api/voice/facetime/status` | BlackHole device + helper + identity preflight |
+| POST | `/api/voice/facetime/{probe,call,answer,hangup}` | Machine-local call control |
+
+Socket events are documented in `server/sockets/voice.js` — including the
+call-host bridge (`voice:call:attach` / `voice:call:audio` / `voice:call:detach`
+inbound, `voice:call:state` / `voice:call:tts` outbound).
 
 ## Troubleshooting
 
