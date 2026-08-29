@@ -1,7 +1,11 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 
 vi.mock('./config.js', () => ({ getVoiceConfig: vi.fn() }));
-vi.mock('../brainJournal.js', () => ({ appendJournal: vi.fn(), getToday: () => '2026-08-29' }));
+// getToday is ASYNC in production (it reads the configured timezone). Mocking it
+// sync made this suite pass against an unawaited call whose pending Promise
+// appendJournal's isIsoDate() guard silently rejected, so no transcript was ever
+// written. The mock has to match the real signature for the assertion to mean anything.
+vi.mock('../brainJournal.js', () => ({ appendJournal: vi.fn(), getToday: async () => '2026-08-29' }));
 vi.mock('./facetimeBridge.js', () => ({ probe: vi.fn(), call: vi.fn(), hangup: vi.fn() }));
 
 import { getVoiceConfig } from './config.js';
