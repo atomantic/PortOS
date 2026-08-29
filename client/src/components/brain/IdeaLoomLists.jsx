@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ArrowDown, ArrowUp, CheckCircle2, Download, Plus, Save, Trash2, Upload, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, CheckCircle2, Download, Plus, RotateCcw, Save, Trash2, Upload, X } from 'lucide-react';
 import * as api from '../../services/api';
 import toast from '../ui/Toast';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
@@ -7,6 +7,12 @@ import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import useUrlParams from '../../hooks/useUrlParams';
 
 const emptyList = () => ({ title: '', prompt: '', category: '', help: '', status: 'draft', ideas: [] });
+
+// Every outcome the server can report. Anything that is not a clean
+// imported/exported/skipped result needs the user's attention, so the summary
+// names all of them rather than collapsing them into a single failure count.
+const PROBLEM_KEYS = ['conflicted', 'missing', 'malformed', 'unavailable', 'failed'];
+const RESULT_KEYS = ['imported', 'exported', 'skipped', ...PROBLEM_KEYS];
 
 // The list API is strict: it accepts exactly these keys and rejects record
 // metadata (id, schemaVersion, timestamps, importer-owned sync state). Project
@@ -51,6 +57,7 @@ export default function IdeaLoomLists() {
   const [ideaText, setIdeaText] = useState('');
   const [exchangeBusy, setExchangeBusy] = useState(false);
   const [exchangeResult, setExchangeResult] = useState(null);
+  const [vaults, setVaults] = useState([]);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   const select = useCallback((id) => updateParams({ list: id }), [updateParams]);
@@ -64,6 +71,10 @@ export default function IdeaLoomLists() {
       toast.error(error.message || 'Failed to load IdeaLoom lists');
       return [[], null];
     });
+    // The vault list only names existing vaults to choose between; a failure
+    // here leaves the picker empty rather than blocking local list editing.
+    const vaultData = await api.getNotesVaults().catch(() => ({ vaults: [] }));
+    setVaults(vaultData?.vaults || []);
     setLists(Array.isArray(nextLists?.lists) ? nextLists.lists : (Array.isArray(nextLists) ? nextLists : []));
     setSettings(nextSettings?.settings || nextSettings);
     setLoading(false);
@@ -128,6 +139,15 @@ export default function IdeaLoomLists() {
     setIdeaText('');
   };
 
+  const patchSettings = async (updates) => {
+    const result = await api.updateIdeaLoomSettings(updates, { silent: true }).catch((error) => {
+      toast.error(error.message || 'Failed to update IdeaLoom settings');
+      return null;
+    });
+    if (!result) return;
+    setSettings(result.settings || result);
+  };
+
   const runExchange = async (action, successMessage) => {
     setExchangeBusy(true);
     const result = await action().catch((error) => {
@@ -138,7 +158,7 @@ export default function IdeaLoomLists() {
     if (!result) return;
     const counts = result.counts || result;
     setExchangeResult(counts);
-    const problems = ['conflicted', 'malformed', 'unavailable', 'failed'].reduce((total, key) => total + (counts[key] || 0), 0);
+    const problems = PROBLEM_KEYS.reduce((total, key) => total + (counts[key] || 0), 0);
     if (problems) toast.error(`${successMessage} with ${problems} issue${problems === 1 ? '' : 's'}`);
     else toast.success(successMessage);
     await load();
@@ -153,12 +173,29 @@ export default function IdeaLoomLists() {
           <div><h2 className="font-medium text-white">IdeaLoom lists</h2><p className="text-xs text-gray-500">Separate from native Brain ideas</p></div>
           <button type="button" onClick={() => { setDraft(emptyList()); select(null); }} className="min-h-[44px] rounded px-3 text-sm text-port-accent hover:bg-port-accent/10" aria-label="Create IdeaLoom list"><Plus size={16} /></button>
         </div>
+        {settings && <div className="mb-3 space-y-2 rounded border border-port-border p-2">
+          <label className="flex items-center gap-2 text-xs text-gray-300" htmlFor="idealoom-enabled">
+            <input id="idealoom-enabled" type="checkbox" checked={Boolean(settings.enabled)} onChange={(event) => patchSettings({ enabled: event.target.checked })} />
+            Sync with an Obsidian vault
+          </label>
+          {settings.enabled && <label className="block text-xs text-gray-300" htmlFor="idealoom-vault">Vault
+            <select id="idealoom-vault" value={settings.obsidianVaultId || ''} onChange={(event) => patchSettings({ obsidianVaultId: event.target.value || null })} className="mt-1 block min-h-[44px] w-full rounded border border-port-border bg-port-bg px-3 text-sm text-white">
+              <option value="">Choose a vault…</option>
+              {vaults.map((vault) => <option key={vault.id} value={vault.id}>{vault.name}</option>)}
+            </select>
+          </label>}
+          {settings.enabled && settings.obsidianVaultId && <label className="flex items-start gap-2 text-xs text-gray-300" htmlFor="idealoom-autosync">
+            <input id="idealoom-autosync" type="checkbox" checked={Boolean(settings.autoSync)} onChange={(event) => patchSettings({ autoSync: event.target.checked })} />
+            <span>Export automatically after an edit<span className="block text-gray-500">Never deletes or recreates a note. A note you deleted in Obsidian is reported, not restored.</span></span>
+          </label>}
+        </div>}
         {notice && <p role="status" className="mb-3 rounded bg-port-warning/10 p-2 text-xs text-port-warning">{notice}</p>}
         {!notice && <div className="mb-3 flex flex-wrap gap-2">
           <button type="button" disabled={exchangeBusy} onClick={() => runExchange(() => api.importIdeaLoomFromObsidian({ silent: true }), 'IdeaLoom import complete')} className="flex min-h-[44px] items-center gap-2 rounded border border-port-border px-3 text-xs text-gray-300 hover:bg-port-border/50 disabled:opacity-50"><Download size={14} />Import from Obsidian</button>
           <button type="button" disabled={exchangeBusy} onClick={() => runExchange(() => api.syncIdeaLoomToObsidian(null, { silent: true }), 'IdeaLoom export complete')} className="flex min-h-[44px] items-center gap-2 rounded border border-port-border px-3 text-xs text-gray-300 hover:bg-port-border/50 disabled:opacity-50"><Upload size={14} />Export to Obsidian</button>
+          {Boolean(exchangeResult?.missing) && <button type="button" disabled={exchangeBusy} onClick={() => runExchange(() => api.syncIdeaLoomToObsidian(null, { silent: true, recreateMissing: true }), 'Deleted notes recreated')} className="flex min-h-[44px] items-center gap-2 rounded border border-port-warning px-3 text-xs text-port-warning hover:bg-port-warning/10 disabled:opacity-50"><RotateCcw size={14} />Recreate {exchangeResult.missing} deleted note{exchangeResult.missing === 1 ? '' : 's'}</button>}
         </div>}
-        {exchangeResult && <p role="status" className="mb-3 text-xs text-gray-400">Last exchange: {exchangeResult.imported || 0} imported · {exchangeResult.exported || 0} exported · {exchangeResult.skipped || 0} skipped · {exchangeResult.conflicted || 0} conflicted · {exchangeResult.malformed || 0} malformed · {exchangeResult.unavailable || 0} unavailable · {exchangeResult.failed || 0} failed</p>}
+        {exchangeResult && <p role="status" className="mb-3 text-xs text-gray-400">Last exchange: {RESULT_KEYS.map((key) => `${exchangeResult[key] || 0} ${key}`).join(' · ')}</p>}
         <div className="space-y-1">
           {lists.map((list) => <button key={list.id} type="button" onClick={() => select(list.id)} className={`w-full rounded p-3 text-left ${selected?.id === list.id ? 'bg-port-accent/20 text-white' : 'text-gray-300 hover:bg-port-border/50'}`}>
             <span className="block truncate text-sm font-medium">{list.title}</span><span className="text-xs text-gray-500">{list.status === 'completed' ? 'Completed' : 'Draft'} · {(list.ideas || []).length} ideas</span>

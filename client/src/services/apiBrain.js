@@ -132,9 +132,17 @@ export const deleteIdeaLoomList = (id, options = {}) => request(`/brain/ideas/id
 export const importIdeaLoomFromObsidian = (options = {}) => request('/brain/ideas/idealoom/import', {
   method: 'POST', body: JSON.stringify({}), ...options
 });
-export const syncIdeaLoomToObsidian = (listId, options = {}) => request('/brain/ideas/idealoom/sync', {
-  method: 'POST', body: JSON.stringify(listId ? { listId } : {}), ...options
-});
+// `recreateMissing` is the explicit recovery request for a vault note the user
+// deleted. Automatic sync never sets it, so recreating a note is always a
+// deliberate click rather than a side effect of saving a list.
+export const syncIdeaLoomToObsidian = (listId, options = {}) => {
+  const { recreateMissing, ...requestOptions } = options;
+  return request('/brain/ideas/idealoom/sync', {
+    method: 'POST',
+    body: JSON.stringify({ ...(listId ? { listId } : {}), ...(recreateMissing ? { recreateMissing: true } : {}) }),
+    ...requestOptions
+  });
+};
 
 // Brain - Admin
 export const getBrainAdmin = (filters) => {
