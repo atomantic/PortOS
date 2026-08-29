@@ -47,6 +47,9 @@ describe('syncYoutubePlaylists', () => {
     expect(result).toMatchObject({ ok: true, playlistCount: 1, videoCount: 1, scanned: 1, failed: 0 });
     expect(mocks.findOrOpenPage).toHaveBeenCalledWith('https://www.youtube.com/feed/playlists');
     expect(mocks.evaluateOnPage.mock.calls[0][1]).toContain('/accounts\\.google\\.com|\\/ServiceLogin/i');
+    expect(mocks.evaluateOnPage.mock.calls[0][1]).toContain('ytd-rich-item-renderer');
+    expect(mocks.evaluateOnPage.mock.calls[0][1]).toContain('yt-lockup-view-model');
+    expect(mocks.evaluateOnPage.mock.calls[2][1]).toContain('ytd-rich-grid-media');
     expect(mocks.atomicWrite).toHaveBeenCalledWith('/tmp/youtube/playlists.json', expect.objectContaining({ schemaVersion: 1 }));
   });
 

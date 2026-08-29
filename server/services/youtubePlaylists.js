@@ -61,16 +61,19 @@ function buildPlaylistsExtractionScript() {
       const abs = (href) => { try { return new URL(href, location.origin).href; } catch { return href || null; } };
       const seen = new Set();
       const playlists = [];
-      const collect = () => Array.from(document.querySelectorAll('ytd-playlist-renderer, ytd-grid-playlist-renderer, ytd-playlist-card-renderer')).map((card) => {
+      // YouTube has shipped both the older playlist renderers and its newer
+      // rich-grid/lockup cards. Keep the selectors together so a frontend
+      // rollout does not make a valid signed-in library look empty.
+      const collect = () => Array.from(document.querySelectorAll('ytd-playlist-renderer, ytd-grid-playlist-renderer, ytd-playlist-card-renderer, ytd-rich-item-renderer, ytd-rich-grid-media, yt-lockup-view-model')).map((card) => {
         const link = Array.from(card.querySelectorAll('a[href*="list="]'))[0];
         const url = link ? abs(link.getAttribute('href')) : null;
         let id = null;
         try { id = url ? new URL(url).searchParams.get('list') : null; } catch {}
-        const titleEl = card.querySelector('a#video-title, #video-title, #video-title-link');
+        const titleEl = card.querySelector('a#video-title, a#video-title-link, a.yt-lockup-metadata-view-model__title, #video-title');
         const image = card.querySelector('img');
         const text = (card.textContent || '').replace(/\\s+/g, ' ').trim();
         const count = text.match(/([\\d,]+)\\s+videos?/i);
-        return { id, name: (titleEl?.textContent || link?.textContent || '').trim(), videoCount: count ? Number(count[1].replace(/,/g, '')) : null, thumbnail: image?.src || image?.getAttribute('data-thumb') || null };
+        return { id, name: (titleEl?.textContent || titleEl?.getAttribute('title') || link?.textContent || '').trim(), videoCount: count ? Number(count[1].replace(/,/g, '')) : null, thumbnail: image?.src || image?.getAttribute('data-thumb') || null };
       });
       const append = (items) => items.forEach((item) => {
         if (item.id && !seen.has(item.id)) { seen.add(item.id); playlists.push(item); }
@@ -102,15 +105,18 @@ function buildPlaylistVideosExtractionScript() {
       const abs = (href) => { try { return new URL(href, location.origin).href; } catch { return href || null; } };
       const seen = new Set();
       const videos = [];
-      const collect = () => Array.from(document.querySelectorAll('ytd-playlist-video-renderer, ytd-playlist-panel-video-renderer, ytd-grid-video-renderer')).map((row) => {
-        const titleEl = row.querySelector('a#video-title, a#video-title-link');
-        const url = titleEl ? abs(titleEl.getAttribute('href')) : null;
+      // Playlist pages can render the same video rows as either legacy rows
+      // or rich-grid/lockup cards, depending on the active YouTube frontend.
+      const collect = () => Array.from(document.querySelectorAll('ytd-playlist-video-renderer, ytd-playlist-panel-video-renderer, ytd-grid-video-renderer, ytd-rich-item-renderer, ytd-rich-grid-media, yt-lockup-view-model')).map((row) => {
+        const titleEl = row.querySelector('a#video-title, a#video-title-link, a.yt-lockup-metadata-view-model__title, #video-title');
+        const videoLink = titleEl || row.querySelector('a[href*="watch?v="]');
+        const url = videoLink ? abs(videoLink.getAttribute('href')) : null;
         let id = null;
         try { id = url ? new URL(url).searchParams.get('v') : null; } catch {}
         const channelEl = row.querySelector('#byline a, ytd-channel-name a, #channel-name a');
         const image = row.querySelector('img');
         const durationEl = row.querySelector('ytd-thumbnail-overlay-time-status-renderer span, #text.ytd-thumbnail-overlay-time-status-renderer');
-        return { id, title: (titleEl?.textContent || '').trim(), channel: (channelEl?.textContent || '').trim() || null, thumbnail: image?.src || image?.getAttribute('data-thumb') || null, duration: (durationEl?.textContent || '').trim() || null };
+        return { id, title: (titleEl?.textContent || titleEl?.getAttribute('title') || '').trim(), channel: (channelEl?.textContent || '').trim() || null, thumbnail: image?.src || image?.getAttribute('data-thumb') || null, duration: (durationEl?.textContent || '').trim() || null };
       });
       const append = (items) => items.forEach((item) => {
         if (item.id && !seen.has(item.id)) { seen.add(item.id); videos.push(item); }
