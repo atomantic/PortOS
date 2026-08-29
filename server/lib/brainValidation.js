@@ -300,8 +300,12 @@ export const ideaLoomSettingsInputSchema = z.object({
 
 export const ideaLoomImportInputSchema = z.preprocess((value) => value ?? {}, z.object({}).strict());
 
+// `recreateMissing` is the explicit recovery switch for a vault note the user
+// deleted. It is only ever reachable from a user-initiated sync request —
+// automatic sync omits it, so it can never resurrect a deleted note on its own.
 export const ideaLoomSyncInputSchema = z.preprocess((value) => value ?? {}, z.object({
-  listId: z.string().uuid().optional()
+  listId: z.string().uuid().optional(),
+  recreateMissing: z.boolean().optional().default(false)
 }).strict());
 
 // Create/Update Admin input schema

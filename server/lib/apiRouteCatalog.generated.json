@@ -2443,23 +2443,12 @@
       "sources": [
         {
           "source": "server/routes/brainIdeaLoom.js",
-          "line": 27
+          "line": 28
         }
       ]
     },
     {
       "method": "GET",
-      "path": "/api/brain/ideas/idealoom/lists",
-      "mountPath": "/api/brain",
-      "sources": [
-        {
-          "source": "server/routes/brainIdeaLoom.js",
-          "line": 37
-        }
-      ]
-    },
-    {
-      "method": "POST",
       "path": "/api/brain/ideas/idealoom/lists",
       "mountPath": "/api/brain",
       "sources": [
@@ -2470,13 +2459,24 @@
       ]
     },
     {
+      "method": "POST",
+      "path": "/api/brain/ideas/idealoom/lists",
+      "mountPath": "/api/brain",
+      "sources": [
+        {
+          "source": "server/routes/brainIdeaLoom.js",
+          "line": 49
+        }
+      ]
+    },
+    {
       "method": "DELETE",
       "path": "/api/brain/ideas/idealoom/lists/:id",
       "mountPath": "/api/brain",
       "sources": [
         {
           "source": "server/routes/brainIdeaLoom.js",
-          "line": 59
+          "line": 73
         }
       ]
     },
@@ -2487,7 +2487,7 @@
       "sources": [
         {
           "source": "server/routes/brainIdeaLoom.js",
-          "line": 46
+          "line": 56
         }
       ]
     },
@@ -2498,7 +2498,7 @@
       "sources": [
         {
           "source": "server/routes/brainIdeaLoom.js",
-          "line": 52
+          "line": 62
         }
       ]
     },
@@ -2509,7 +2509,7 @@
       "sources": [
         {
           "source": "server/routes/brainIdeaLoom.js",
-          "line": 18
+          "line": 19
         }
       ]
     },
@@ -2520,7 +2520,7 @@
       "sources": [
         {
           "source": "server/routes/brainIdeaLoom.js",
-          "line": 22
+          "line": 23
         }
       ]
     },
@@ -2531,7 +2531,7 @@
       "sources": [
         {
           "source": "server/routes/brainIdeaLoom.js",
-          "line": 32
+          "line": 36
         }
       ]
     },

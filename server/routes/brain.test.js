@@ -88,6 +88,8 @@ vi.mock('../services/idealoomLists.js', () => ({
   deleteList: vi.fn()
 }));
 
+vi.mock('../services/idealoomAutoSync.js', () => ({ scheduleAutoSync: vi.fn() }));
+
 vi.mock('../services/idealoomObsidian.js', () => ({
   importFromObsidian: vi.fn(),
   exportToObsidian: vi.fn(),
@@ -151,6 +153,7 @@ vi.mock('../services/brainJournal.js', () => ({
 import * as brainService from '../services/brain.js';
 import * as ideaLoomLists from '../services/idealoomLists.js';
 import * as ideaLoomObsidian from '../services/idealoomObsidian.js';
+import { scheduleAutoSync } from '../services/idealoomAutoSync.js';
 import { getBrainGraphSearchIndex, getBrainGraphOverview, getBrainGraphNeighborhood } from '../services/brainGraph.js';
 import { syncAllBrainData, getEmbeddingCoverage } from '../services/brainMemoryBridge.js';
 import { getChangesSince } from '../services/brainSyncLog.js';
@@ -254,7 +257,41 @@ describe('Brain Routes', () => {
         .send({ listId: LIST_ID });
       expect(exported.status).toBe(200);
       expect(exported.body.counts.exported).toBe(1);
-      expect(ideaLoomObsidian.exportToObsidian).toHaveBeenCalledWith({ listId: LIST_ID });
+      // recreateMissing defaults to false: an export that does not ASK to
+      // recover a deleted note must never be handed a truthy switch.
+      expect(ideaLoomObsidian.exportToObsidian).toHaveBeenCalledWith({ listId: LIST_ID, recreateMissing: false });
+
+      const recovered = await request(app)
+        .post('/api/brain/ideas/idealoom/sync')
+        .send({ listId: LIST_ID, recreateMissing: true });
+      expect(recovered.status).toBe(200);
+      expect(ideaLoomObsidian.exportToObsidian).toHaveBeenLastCalledWith({ listId: LIST_ID, recreateMissing: true });
+    });
+
+    it('schedules automatic sync from local edits only, never from an exchange', async () => {
+      const input = {
+        prompt: 'Find practical improvements', title: 'Practical improvements',
+        category: 'product', ideas: ['Improve empty states']
+      };
+      ideaLoomLists.createList.mockResolvedValue({ id: LIST_ID, ...input });
+      ideaLoomLists.updateList.mockResolvedValue({ id: LIST_ID, ...input, title: 'Renamed' });
+      ideaLoomLists.deleteList.mockResolvedValue(true);
+      ideaLoomObsidian.importFromObsidian.mockResolvedValue({ counts: { imported: 1 } });
+      ideaLoomObsidian.exportToObsidian.mockResolvedValue({ counts: { exported: 1 } });
+
+      await request(app).post('/api/brain/ideas/idealoom/lists').send(input);
+      await request(app).put(`/api/brain/ideas/idealoom/lists/${LIST_ID}`).send({ title: 'Renamed' });
+      expect(scheduleAutoSync).toHaveBeenCalledTimes(2);
+      expect(scheduleAutoSync).toHaveBeenCalledWith(LIST_ID);
+
+      scheduleAutoSync.mockClear();
+      // Deleting a list must not schedule a write — the vault note is the
+      // user's to remove. Import/export must not either, or the two halves of
+      // the exchange would keep re-triggering each other.
+      await request(app).delete(`/api/brain/ideas/idealoom/lists/${LIST_ID}`);
+      await request(app).post('/api/brain/ideas/idealoom/import').send({});
+      await request(app).post('/api/brain/ideas/idealoom/sync').send({});
+      expect(scheduleAutoSync).not.toHaveBeenCalled();
     });
 
     it('rejects unknown exchange request fields', async () => {

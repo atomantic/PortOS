@@ -223,13 +223,57 @@ numbered Markdown shape, uses a date/title filename for new lists, and keeps an
 imported filename stable.
 
 The exchange result includes counts and per-note details for imported,
-exported, skipped, conflicted, malformed, unavailable, and failed work. When a
-note and its local list both changed since the last exchange, import and export
-fail closed with a conflict result rather than overwriting either side. List
-records and vault identifiers remain under `data/brain/idealoom-lists/` and
-never enter Brain federation or the memory bridge. Automatic-sync behavior and
-user-directed conflict resolution are intentionally handled by the follow-up
-sync slice.
+exported, skipped, conflicted, missing, malformed, unavailable, and failed
+work. Each stays a distinct outcome so a deleted note never reads as a failed
+one. List records and vault identifiers remain under
+`data/brain/idealoom-lists/` and never enter Brain federation or the memory
+bridge.
+
+### Conflicts
+
+Every exchanged list stores the hash of the note as it was last read or
+written. That hash is the base for the next comparison:
+
+| Vault note vs. base | Local list vs. base | Outcome |
+|---|---|---|
+| unchanged | unchanged | `skipped` (`unchanged`) — nothing is written |
+| changed | unchanged | import updates the list; export reports `skipped` (`external-change`) |
+| unchanged | changed | export writes the note |
+| changed | changed | `conflicted` (`both-sides-changed`) — **neither side is overwritten** |
+
+A conflict is resolved by hand: edit whichever side you want to keep so the
+other becomes the only changed one, then run the exchange again.
+
+### Deletions
+
+Deleting a vault note is treated as a decision, never as drift to repair. A
+list whose note is gone is reported as `missing` (`note-deleted-externally`)
+by both import and export, and **nothing is written** — the local list is kept
+so nothing is lost. Recreating the note takes an explicit "Recreate deleted
+notes" action, which is the only path that sets `recreateMissing`. In the other
+direction, deleting a local list leaves its vault note alone: removing the note
+is done in Obsidian.
+
+An iCloud note that has not been downloaded to this Mac is `unavailable`, not
+`missing` — the file still exists, so it is never a recovery candidate.
+
+### Automatic sync
+
+Automatic export is off by default and needs two separate opt-ins: vault sync
+enabled with a vault chosen, then **Export automatically after an edit**. Both
+are re-read when the write actually fires, so turning either off cancels work
+already queued. Automatic writes are debounced, so reordering a list one click
+at a time is a single note write.
+
+Automatic sync is deliberately the least powerful path in the feature. It can
+only ever update an existing note whose content differs from the list: it never
+deletes a note, never recreates a deleted one, and never resolves a conflict.
+Anything it cannot do safely is reported and waits for an explicit action.
+
+There is no import/export feedback loop: only a local list edit schedules an
+automatic export, and an export whose rendered Markdown already matches the
+note on disk is skipped instead of rewritten, so a freshly imported list does
+not export itself back.
 
 ## Implementation Files
 
@@ -239,7 +283,8 @@ sync slice.
 | `server/services/brain.js` | Core business logic |
 | `server/services/brainStorage.js` | JSONL/JSON file operations |
 | `server/services/idealoomLists.js` | Machine-local ordered IdeaLoom list records and sync metadata |
-| `server/services/idealoomObsidian.js` | Validated IdeaLoom Markdown import/export |
+| `server/services/idealoomObsidian.js` | Validated IdeaLoom Markdown import/export with base-hash conflict and deletion handling |
+| `server/services/idealoomAutoSync.js` | Opt-in debounced automatic export (never deletes or recreates a note) |
 | `server/services/brainScheduler.js` | Daily/weekly job scheduler |
 | `server/services/youtubeIngest.js` | YouTube ingest orchestration (transcript / video / audio → brain + Obsidian + CoS task) |
 | `server/lib/vttTranscript.js` | WebVTT/SRT → readable prose (collapses auto-caption repetition) |

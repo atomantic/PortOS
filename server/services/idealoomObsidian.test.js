@@ -217,6 +217,10 @@ describe('IdeaLoom Obsidian exchange', () => {
     const importedList = list({ id: '0a1b2c3d-4e5f-4a6b-8c7d-8e9f0a1b2c3d' });
     lists.listLists.mockResolvedValue([local, {
       ...importedList,
+      // Edited locally since the last exchange, so this is a real export rather
+      // than the no-op an unchanged list would be skipped for.
+      ideas: ['First idea', 'Second idea', 'Third idea'],
+      updatedAt: '2026-08-29T13:00:00.000Z',
       sync: {
         notePath: importedPath,
         lastKnownContentHash: createHash('sha256').update(renderIdeaLoomMarkdown(importedList), 'utf8').digest('hex'),
@@ -253,5 +257,68 @@ describe('IdeaLoom Obsidian exchange', () => {
 
     expect(result.counts).toMatchObject({ conflicted: 1, exported: 0 });
     expect(obsidian.updateNote).not.toHaveBeenCalled();
+  });
+
+  it('reports an externally deleted note as missing instead of recreating it', async () => {
+    const notePath = 'Idea Loom/2026-01-01-original-name.md';
+    const synced = list({
+      sync: {
+        notePath,
+        lastKnownContentHash: createHash('sha256').update(renderIdeaLoomMarkdown(list()), 'utf8').digest('hex'),
+        lastImportedAt: '2026-08-29T11:00:00.000Z',
+      },
+    });
+    lists.listLists.mockResolvedValue([synced]);
+    obsidian.getNote.mockResolvedValue({ error: 'NOTE_NOT_FOUND' });
+
+    const automatic = await exportToObsidian();
+
+    expect(automatic.counts).toMatchObject({ missing: 1, exported: 0 });
+    expect(automatic.details.missing[0]).toMatchObject({ id: LIST_ID, notePath, reason: 'note-deleted-externally' });
+    expect(obsidian.createNote).not.toHaveBeenCalled();
+    expect(obsidian.updateNote).not.toHaveBeenCalled();
+
+    obsidian.createNote.mockResolvedValue({ path: notePath });
+    const recovered = await exportToObsidian({ recreateMissing: true });
+
+    expect(recovered.counts).toMatchObject({ missing: 0, exported: 1 });
+    expect(obsidian.createNote).toHaveBeenCalledWith(VAULT_ID, notePath, expect.stringContaining('1. First idea'));
+  });
+
+  it('surfaces a deleted note on import without dropping the local list', async () => {
+    const notePath = 'Idea Loom/2026-01-01-original-name.md';
+    lists.listLists.mockResolvedValue([list({
+      sync: {
+        notePath,
+        lastKnownContentHash: 'stale-hash',
+        lastImportedAt: '2026-08-29T11:00:00.000Z',
+      },
+    })]);
+
+    const result = await importFromObsidian();
+
+    expect(result.counts).toMatchObject({ missing: 1, imported: 0 });
+    expect(result.details.missing[0]).toMatchObject({ id: LIST_ID, path: notePath });
+  });
+
+  it('does not rewrite a note that already matches the list (no import/export loop)', async () => {
+    const notePath = 'Idea Loom/2026-01-01-original-name.md';
+    const content = renderIdeaLoomMarkdown(list());
+    lists.listLists.mockResolvedValue([list({
+      sync: {
+        notePath,
+        // The hash the importer stored, so nothing looks externally changed.
+        lastKnownContentHash: createHash('sha256').update(content, 'utf8').digest('hex'),
+        lastImportedAt: '2026-08-29T12:00:00.000Z',
+      },
+    })]);
+    obsidian.getNote.mockResolvedValue({ content });
+
+    const result = await exportToObsidian();
+
+    expect(result.counts).toMatchObject({ exported: 0, skipped: 1, conflicted: 0 });
+    expect(result.details.skipped[0]).toMatchObject({ reason: 'unchanged' });
+    expect(obsidian.updateNote).not.toHaveBeenCalled();
+    expect(obsidian.createNote).not.toHaveBeenCalled();
   });
 });

@@ -6,6 +6,7 @@ vi.mock('../../services/api', () => ({
   getIdeaLoomLists: vi.fn(), getIdeaLoomSettings: vi.fn(),
   createIdeaLoomList: vi.fn(), updateIdeaLoomList: vi.fn(), deleteIdeaLoomList: vi.fn(),
   importIdeaLoomFromObsidian: vi.fn(), syncIdeaLoomToObsidian: vi.fn(),
+  updateIdeaLoomSettings: vi.fn(), getNotesVaults: vi.fn(),
 }));
 vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
 
@@ -42,9 +43,50 @@ beforeEach(() => {
   vi.clearAllMocks();
   api.getIdeaLoomLists.mockResolvedValue([]);
   api.getIdeaLoomSettings.mockResolvedValue({ enabled: false, obsidianVaultId: null, autoSync: false });
+  api.getNotesVaults.mockResolvedValue({ vaults: [{ id: 'vault-1', name: 'Example Vault' }] });
 });
 
 describe('IdeaLoomLists', () => {
+  it('opts into vault sync and automatic export one explicit step at a time', async () => {
+    api.updateIdeaLoomSettings
+      .mockResolvedValueOnce({ enabled: true, obsidianVaultId: null, autoSync: false })
+      .mockResolvedValueOnce({ enabled: true, obsidianVaultId: 'vault-1', autoSync: false })
+      .mockResolvedValueOnce({ enabled: true, obsidianVaultId: 'vault-1', autoSync: true });
+    renderPanel();
+
+    // The auto-sync toggle stays out of reach until sync is on AND a vault is
+    // chosen, so it can never be enabled against an unconfigured integration.
+    fireEvent.click(await screen.findByLabelText('Sync with an Obsidian vault'));
+    await waitFor(() => expect(screen.queryByLabelText('Vault')).toBeTruthy());
+    expect(screen.queryByLabelText(/Export automatically/)).toBeNull();
+
+    fireEvent.change(screen.getByLabelText('Vault'), { target: { value: 'vault-1' } });
+    const autoSync = await screen.findByLabelText(/Export automatically/);
+    fireEvent.click(autoSync);
+
+    await waitFor(() => expect(api.updateIdeaLoomSettings).toHaveBeenLastCalledWith({ autoSync: true }, expect.anything()));
+  });
+
+  it('offers explicit recovery only after an exchange reports a deleted note', async () => {
+    api.getIdeaLoomSettings.mockResolvedValue({ enabled: true, obsidianVaultId: 'vault-1', autoSync: false });
+    api.syncIdeaLoomToObsidian
+      .mockResolvedValueOnce({ counts: { exported: 0, missing: 1 } })
+      .mockResolvedValueOnce({ counts: { exported: 1, missing: 0 } });
+    renderPanel();
+
+    expect(screen.queryByText(/Recreate/)).toBeNull();
+    fireEvent.click(await screen.findByText('Export to Obsidian'));
+
+    const recover = await screen.findByText('Recreate 1 deleted note');
+    fireEvent.click(recover);
+
+    await waitFor(() => expect(api.syncIdeaLoomToObsidian)
+      .toHaveBeenLastCalledWith(null, expect.objectContaining({ recreateMissing: true })));
+    // The first, automatic-shaped export must NOT have asked for a recreate.
+    expect(api.syncIdeaLoomToObsidian.mock.calls[0][1]).not.toHaveProperty('recreateMissing');
+    await waitFor(() => expect(screen.queryByText(/Recreate/)).toBeNull());
+  });
+
   it('keeps local list editing available while vault sync is disabled', async () => {
     api.createIdeaLoomList.mockResolvedValue({ id: 'list-1', title: 'Launch ideas', prompt: 'Why?', category: 'product', status: 'draft', ideas: ['One'] });
     renderPanel();

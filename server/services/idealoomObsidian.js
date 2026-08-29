@@ -18,7 +18,7 @@ export const IDEA_LOOM_FOLDER = 'Idea Loom';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const NUMBERED_IDEA_RE = /^(\d+)\.\s+(.+)$/;
 
-const RESULT_KEYS = ['imported', 'exported', 'skipped', 'conflicted', 'malformed', 'unavailable', 'failed'];
+const RESULT_KEYS = ['imported', 'exported', 'skipped', 'conflicted', 'missing', 'malformed', 'unavailable', 'failed'];
 
 const newResult = () => {
   const counts = Object.fromEntries(RESULT_KEYS.map((key) => [key, 0]));
@@ -378,10 +378,31 @@ export async function importFromObsidian() {
     if (entry.status === 'rejected') addResult(result, 'failed', { path: note.notePath, id: note.id, reason: entry.reason?.message || 'import failed' });
     else addResult(result, entry.value.kind, entry.value);
   });
+  await reportDeletedNotes(exchange.vault.path, result);
   return result;
 }
 
-const writeNote = async (vaultId, notePath, content) => {
+/**
+ * Surface previously-exchanged lists whose vault note has been deleted.
+ *
+ * The deletion is REPORTED, never acted on: the local record is kept so the
+ * user can decide between deleting the list and recovering the note through an
+ * explicit sync. `existsSync` is the right probe rather than the scan result —
+ * an iCloud-evicted note is still a file on disk, and reporting an
+ * un-downloaded note as deleted would invite exactly the destructive recovery
+ * this outcome exists to gate.
+ */
+const reportDeletedNotes = async (vaultPath, result) => {
+  const lists = await ideaLoomLists.listLists();
+  lists.forEach((list) => {
+    const notePath = list.sync?.notePath;
+    if (!notePath || !list.sync?.lastKnownContentHash) return;
+    if (existsSync(join(vaultPath, notePath))) return;
+    addResult(result, 'missing', { id: list.id, path: notePath, reason: 'note-deleted-externally' });
+  });
+}
+
+const writeNote = async (vaultId, notePath, content, { allowCreate = true } = {}) => {
   const existing = await obsidian.getNote(vaultId, notePath, { includeBacklinks: false });
   if (existing?.error === 'NOTE_EVICTED') return { kind: 'unavailable', reason: 'note-unavailable' };
   if (existing?.error && existing.error !== 'NOTE_NOT_FOUND') return { kind: 'failed', reason: existing.error };
@@ -390,18 +411,31 @@ const writeNote = async (vaultId, notePath, content) => {
     return { kind: 'existing', id: parsedExisting.list.id, content: existing.content };
   }
   if (existing?.content) return { kind: 'existing', id: null };
+  // The note is absent. Writing it is a CREATE, which the caller must opt into:
+  // for a list that has already been exchanged, absence means the user deleted
+  // the note, and recreating it would resurrect data they removed on purpose.
+  if (!allowCreate) return { kind: 'missing', reason: 'note-deleted-externally' };
   const created = await obsidian.createNote(vaultId, notePath, content);
   if (!created?.error) return { kind: 'written' };
   if (created.error === 'NOTE_EVICTED') return { kind: 'unavailable', reason: 'note-unavailable' };
   return { kind: 'failed', reason: created.error };
 };
 
-/** Export one local list, preserving an imported note path forever. */
-const exportOne = async (vaultId, list) => {
+/**
+ * Export one local list, preserving an imported note path forever.
+ *
+ * `recreateMissing` is the explicit, user-directed recovery switch. Without it
+ * a list whose note has been deleted in the vault reports `missing` and writes
+ * nothing — automatic sync must never resurrect a note the user removed.
+ */
+const exportOne = async (vaultId, list, { recreateMissing = false } = {}) => {
   const content = renderIdeaLoomMarkdown(list);
   const importedPath = list.sync?.notePath;
+  const previouslyExchanged = Boolean(importedPath && list.sync?.lastKnownContentHash);
+  const allowCreate = !previouslyExchanged || recreateMissing;
   let notePath = importedPath || generatedNotePath(list);
-  let pathResult = await writeNote(vaultId, notePath, content);
+  let pathResult = await writeNote(vaultId, notePath, content, { allowCreate });
+  if (pathResult.kind === 'missing') return { ...pathResult, id: list.id, notePath };
   if (!importedPath && pathResult.kind === 'existing' && pathResult.id !== list.id) {
     let suffix = `-${list.id.slice(0, 8)}`;
     notePath = generatedNotePath(list, suffix);
@@ -413,6 +447,12 @@ const exportOne = async (vaultId, list) => {
     const localChanged = hasLocalChanges(list);
     if (remoteChanged && localChanged) return { kind: 'conflicted', reason: 'both-sides-changed', notePath };
     if (remoteChanged) return { kind: 'skipped', reason: 'external-change', notePath };
+    // The note already reads exactly as this list renders. Writing it anyway is
+    // what turns a just-imported list into an export, and that export into the
+    // next import's "changed" note — so a no-op write is skipped, not repeated.
+    if (hashContent(pathResult.content) === hashContent(content)) {
+      return { kind: 'skipped', reason: 'unchanged', notePath, id: list.id };
+    }
     const updated = await obsidian.updateNote(vaultId, notePath, content);
     if (updated?.error === 'NOTE_EVICTED') return { kind: 'unavailable', reason: 'note-unavailable', notePath };
     if (updated?.error) return { kind: 'failed', reason: updated.error, notePath };
@@ -427,8 +467,14 @@ const exportOne = async (vaultId, list) => {
   return { kind: 'exported', id: list.id, notePath };
 };
 
-/** Explicitly export all lists, or one selected list, to the configured vault. */
-export async function exportToObsidian({ listId } = {}) {
+/**
+ * Explicitly export all lists, or one selected list, to the configured vault.
+ *
+ * Automatic sync calls this with the defaults, so it can never delete or
+ * recreate a vault note; `recreateMissing` is only ever set by an explicit
+ * user-directed recovery request.
+ */
+export async function exportToObsidian({ listId, recreateMissing = false } = {}) {
   const exchange = await configuredExchange();
   if (!exchange.vault) return withReason(exchange.result, exchange.reason);
   const result = newResult();
@@ -441,7 +487,7 @@ export async function exportToObsidian({ listId } = {}) {
   // Path allocation checks the vault before writing. Keep exports sequential so
   // two lists with the same generated date/title cannot choose the same path.
   for (const list of selected) {
-    const [entry] = await Promise.allSettled([exportOne(exchange.settings.obsidianVaultId, list)]);
+    const [entry] = await Promise.allSettled([exportOne(exchange.settings.obsidianVaultId, list, { recreateMissing })]);
     if (entry.status === 'rejected') addResult(result, 'failed', { id: list.id, reason: entry.reason?.message || 'write failed' });
     else if (entry.value.kind === 'exported') addResult(result, 'exported', entry.value);
     else addResult(result, entry.value.kind, { id: list.id, ...entry.value });
