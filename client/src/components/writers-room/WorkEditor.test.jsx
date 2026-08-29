@@ -231,3 +231,42 @@ describe('WorkEditor unsaved-changes route guard (#3995)', () => {
     expect(screen.getByText('dashboard')).toBeInTheDocument();
   });
 });
+
+// A sibling panel (the sprint "Add to draft" action, #5300) saves a new body
+// server-side and pushes the result back down as `work.activeDraftBody`. The
+// body-sync effect has to adopt that on a clean editor without clobbering
+// whatever the writer has half-typed on a dirty one.
+describe('WorkEditor server-pushed draft body (#5300)', () => {
+  const renderWith = async (initial) => {
+    const router = createMemoryRouter([
+      { path: '/writers-room', element: <WorkEditor work={initial} onChange={() => {}} /> },
+    ], { initialEntries: ['/writers-room'] });
+    const view = render(<RouterProvider router={router} />);
+    await act(async () => {});
+    return view;
+  };
+
+  const rerenderWith = async (rerender, next) => {
+    const router = createMemoryRouter([
+      { path: '/writers-room', element: <WorkEditor work={next} onChange={() => {}} /> },
+    ], { initialEntries: ['/writers-room'] });
+    await act(async () => { rerender(<RouterProvider router={router} />); });
+  };
+
+  it('adopts a new activeDraftBody while the editor is clean', async () => {
+    const { container, rerender } = await renderWith(work);
+    expect(container.querySelector('textarea').value).toBe('The hero wakes.');
+
+    await rerenderWith(rerender, { ...work, activeDraftBody: 'The hero wakes.\n\nThen he runs.\n' });
+    expect(container.querySelector('textarea').value).toBe('The hero wakes.\n\nThen he runs.\n');
+  });
+
+  it('keeps the unsaved buffer when the editor is dirty', async () => {
+    const { container, rerender } = await renderWith(work);
+    const area = container.querySelector('textarea');
+    await act(async () => { fireEvent.change(area, { target: { value: 'The hero waits.' } }); });
+
+    await rerenderWith(rerender, { ...work, activeDraftBody: 'The hero wakes.\n\nThen he runs.\n' });
+    expect(container.querySelector('textarea').value).toBe('The hero waits.');
+  });
+});
