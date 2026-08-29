@@ -75,6 +75,14 @@ describe('IdeaLoomLists', () => {
     expect(await screen.findByLabelText('Idea 1')).toBeTruthy();
   });
 
+  it('does not report an unread settings fetch as a disabled integration', async () => {
+    api.getIdeaLoomSettings.mockRejectedValue(new Error('Server unreachable'));
+    renderPanel();
+
+    expect(await screen.findByText('Could not load IdeaLoom settings. Local lists remain available.')).toBeTruthy();
+    expect(screen.queryByText('Vault sync is disabled. Local lists remain available.')).toBeNull();
+  });
+
   it('reorders a selected list locally and saves only the schema fields', async () => {
     api.getIdeaLoomLists.mockResolvedValue([storedList()]);
     api.updateIdeaLoomList.mockResolvedValue(storedList({ ideas: ['Second', 'First'] }));

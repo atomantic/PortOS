@@ -4,8 +4,8 @@
 //   - "IdeaLoom lists"  — machine-local ordered list documents (never federated)
 // The active view lives in the URL (`?view=lists`) so it is shareable,
 // bookmarkable, and reachable from ⌘K / voice, per client/src/AGENTS.md.
-import { useSearchParams } from 'react-router';
 import { Lightbulb, ListOrdered } from 'lucide-react';
+import useUrlParams from '../../../hooks/useUrlParams';
 import TabPills from '../../ui/TabPills';
 import MemoryTab from './MemoryTab';
 import IdeaLoomLists from '../IdeaLoomLists';
@@ -18,22 +18,16 @@ const VIEWS = [
 ];
 
 export default function IdeasTab({ onRefresh }) {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams, updateParams] = useUrlParams();
   const view = searchParams.get('view') === LISTS_VIEW ? LISTS_VIEW : 'ideas';
 
-  const changeView = (next) => {
-    setSearchParams((current) => {
-      const params = new URLSearchParams(current);
-      if (next === LISTS_VIEW) {
-        params.set('view', LISTS_VIEW);
-      } else {
-        params.delete('view');
-        // `list` addresses an IdeaLoom list; it is meaningless on the native view.
-        params.delete('list');
-      }
-      return params;
-    });
-  };
+  // `list` addresses an IdeaLoom list, so it clears with the view that owns it.
+  // Flipping a view replaces rather than pushes — Back should leave the page,
+  // not walk the user back through every pill they clicked.
+  const changeView = (next) => updateParams(
+    next === LISTS_VIEW ? { view: LISTS_VIEW } : { view: null, list: null },
+    { replace: true },
+  );
 
   return (
     <div className="flex flex-col gap-3">

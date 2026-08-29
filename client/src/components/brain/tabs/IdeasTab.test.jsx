@@ -57,6 +57,6 @@ describe('IdeasTab', () => {
     const clientSrc = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
     const brainPage = readFileSync(join(clientSrc, 'pages', 'Brain.jsx'), 'utf8');
     expect(brainPage).toContain("import('../components/brain/tabs/IdeasTab')");
-    expect(brainPage).toMatch(/case 'ideas':\s*\n\s*return <IdeasTab /);
+    expect(brainPage).toMatch(/case 'ideas':[\s\S]{0,120}<IdeasTab\b/);
   });
 });

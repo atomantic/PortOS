@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router';
 import { ArrowDown, ArrowUp, CheckCircle2, Plus, Save, Trash2, X } from 'lucide-react';
 import * as api from '../../services/api';
 import toast from '../ui/Toast';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
+import useUrlParams from '../../hooks/useUrlParams';
 
 const emptyList = () => ({ title: '', prompt: '', category: '', help: '', status: 'draft', ideas: [] });
 
@@ -21,8 +21,11 @@ const toPayload = (draft) => ({
 });
 
 // Integration state never gates local editing — these are notices, not blockers.
+// A null `settings` is "the fetch failed", NOT "the integration is off": reporting
+// an unread configuration as disabled asserts a fact we never read.
 const integrationNotice = (settings) => {
-  if (!settings?.enabled) return 'Vault sync is disabled. Local lists remain available.';
+  if (!settings) return 'Could not load IdeaLoom settings. Local lists remain available.';
+  if (!settings.enabled) return 'Vault sync is disabled. Local lists remain available.';
   if (!settings.obsidianVaultId) return 'No Obsidian vault is selected. Local lists remain available.';
   return null;
 };
@@ -39,7 +42,7 @@ const missingField = (draft) => {
 // The dedicated Ideas page owns both models, but this panel intentionally only
 // speaks the machine-local IdeaLoom list API. Native Brain ideas stay separate.
 export default function IdeaLoomLists() {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams, updateParams] = useUrlParams();
   const selectedId = searchParams.get('list');
   const [lists, setLists] = useState([]);
   const [settings, setSettings] = useState(null);
@@ -48,14 +51,7 @@ export default function IdeaLoomLists() {
   const [ideaText, setIdeaText] = useState('');
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
-  const select = useCallback((id) => {
-    setSearchParams((current) => {
-      const next = new URLSearchParams(current);
-      if (id) next.set('list', id);
-      else next.delete('list');
-      return next;
-    });
-  }, [setSearchParams]);
+  const select = useCallback((id) => updateParams({ list: id }), [updateParams]);
 
   const load = useCallback(async () => {
     setLoading(true);
