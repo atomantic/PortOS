@@ -4,7 +4,6 @@ import BrailleSpinner from '../components/BrailleSpinner';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import LayoutPicker from '../components/dashboard/LayoutPicker';
 import LayoutEditor from '../components/dashboard/LayoutEditor';
-import WidgetSuggestions from '../components/dashboard/WidgetSuggestions';
 import DashboardGrid, { readingOrderIds, reconcileGrid, synthesizeGrid } from '../components/dashboard/DashboardGrid.jsx';
 import { WIDGETS_BY_ID, FALLBACK_LAYOUT } from '../components/dashboard/widgetRegistry.jsx';
 import WidgetSkeleton from '../components/dashboard/WidgetSkeleton';
@@ -73,17 +72,6 @@ export default function Dashboard() {
   // viewport, so the two disagree in a ~30px band and the hint would describe
   // handles that aren't on screen.
   const [gridIsMobile, setGridIsMobile] = useState(false);
-  // Widget just added from a suggestion chip, so the render pass that lands it
-  // in the grid can scroll it into view (new widgets append at the bottom —
-  // off-screen on the single-column mobile stack, which made the suggestion
-  // look like it did nothing when it was actually added). Scoped to the layout
-  // it was added on ({ widgetId, layoutId }) so a layout switch mid-save can't
-  // scroll to an unrelated widget that happens to exist in the new layout.
-  const [pendingScroll, setPendingScroll] = useState(null);
-  // Mirrors activeLayoutId for reads inside the async onAdd handler, whose
-  // closure captured a possibly-stale activeLayout — lets it skip arming the
-  // scroll when the user switched layouts while the add was still saving.
-  const activeLayoutIdRef = useRef(null);
   // Dashboard widget gates intentionally read the raw list: unlike navigation,
   // a failed feature read must fail closed and reserve no POST widget cell.
   const { features: instanceFeatureList } = useInstanceFeatures();
@@ -290,13 +278,8 @@ export default function Dashboard() {
   // Cancel grid edit mode whenever the user switches layouts so unsaved
   // positional edits don't bleed across layouts.
   useEffect(() => {
-    activeLayoutIdRef.current = activeLayoutId;
     setEditingGrid(false);
     setDraftGrid(null);
-    // Drop any pending "scroll the just-added widget into view" — it was armed
-    // against the previous layout, so honoring it after a switch could scroll
-    // to an unrelated widget (or an existing cell) in the new layout.
-    setPendingScroll(null);
   }, [activeLayoutId]);
 
   // Stable identity so DashboardGrid's memoized cells actually bail out — a
@@ -311,20 +294,6 @@ export default function Dashboard() {
       </Suspense>
     );
   }, [dashboardState]);
-
-  // Once a just-added widget lands in the rendered grid, scroll it into view
-  // so the "Add <widget>?" suggestion produces a visible result instead of a
-  // chip that silently vanishes.
-  useEffect(() => {
-    if (!pendingScroll) return;
-    // Only honor the scroll on the layout the widget was actually added to —
-    // a save that resolved after a layout switch must not scroll the new one.
-    if (pendingScroll.layoutId !== activeLayout?.id) return;
-    if (!renderGrid.some((item) => item.id === pendingScroll.widgetId)) return;
-    const el = document.querySelector(`[data-widget-id="${CSS.escape(pendingScroll.widgetId)}"]`);
-    el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    setPendingScroll(null);
-  }, [pendingScroll, renderGrid, activeLayout]);
 
   const startGridEdit = () => {
     setDraftGrid(renderGrid);
@@ -543,27 +512,6 @@ export default function Dashboard() {
         <div className="bg-port-card border border-port-border rounded-xl p-8 text-center text-gray-500">
           This layout has no widgets. Click the layout picker and choose &ldquo;Edit layouts…&rdquo; to add some.
         </div>
-      )}
-
-      {!editingGrid && activeLayout && activeLayout.id !== FALLBACK_LAYOUT.id && (
-        <WidgetSuggestions
-          presentWidgetIds={activeLayout.widgets}
-          dashboardState={dashboardState}
-          onAdd={async (widgetId) => {
-            const layoutId = activeLayout.id;
-            await saveLayout({
-              id: layoutId,
-              name: activeLayout.name,
-              widgets: [...activeLayout.widgets, widgetId],
-              activateWindow: activeLayout.activateWindow ?? null,
-            });
-            toast.success(`Added ${WIDGETS_BY_ID[widgetId]?.label ?? 'widget'} to your dashboard`);
-            // Only arm the scroll if this layout is still active — a switch
-            // while the save was in flight means the added widget isn't on
-            // screen, so arming would fire a stray scroll on returning here.
-            if (activeLayoutIdRef.current === layoutId) setPendingScroll({ widgetId, layoutId });
-          }}
-        />
       )}
 
       {visibleWidgets.length > 0 && (

@@ -1,8 +1,10 @@
 /**
  * FableLoom editor — the full-bleed visual workspace for one loom.
  *
- * URL is the source of truth: /fableloom/:loomId/:episodeId/:nodeId? — the
- * selected episode and scene are route params, the play drawer rides ?play=1.
+ * URL is the source of truth: /fableloom/:loomId/plan is the series workspace;
+ * /fableloom/:loomId/:episodeId selects an episode, /outline switches that
+ * episode to its text outline, and /:nodeId selects a scene in the graph. The
+ * play drawer rides ?play=1.
  * Left: the scene-graph canvas (stacks top-to-bottom under the `lg` rail
  * breakpoint). Right rail: the selected scene's editor, or the
  * structure/review panel when nothing is selected. On small screens the
@@ -10,9 +12,9 @@
  * thing you scroll.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router';
-import { ArrowLeft, BookOpenText, Loader2, Plus, Settings, Sparkles, Trash2, Waypoints, Workflow as WorkflowIcon } from 'lucide-react';
+import { ArrowLeft, BookOpenText, ListTree, Loader2, Plus, Settings, Sparkles, Trash2, Waypoints, Workflow as WorkflowIcon } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Drawer from '../components/Drawer';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
@@ -23,19 +25,33 @@ import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import useContainerWidth from '../hooks/useContainerWidth';
 import LoomCanvas from '../components/fableloom/LoomCanvas';
+import LoomEpisodeOutline from '../components/fableloom/LoomEpisodeOutline';
 import LoomEpisodeFeedback from '../components/fableloom/LoomEpisodeFeedback';
+import LoomMediaJobWatchers from '../components/fableloom/LoomMediaJobWatchers';
 import LoomNodeEditor from '../components/fableloom/LoomNodeEditor';
 import LoomPlayPanel from '../components/fableloom/LoomPlayPanel';
 import LoomSettingsDrawer from '../components/fableloom/LoomSettingsDrawer';
+import LoomSeriesPlan from '../components/fableloom/LoomSeriesPlan';
 import LoomValidationPanel from '../components/fableloom/LoomValidationPanel';
 import { fieldClass, labelClass } from '../components/fableloom/fieldStyles';
+import {
+  buildFableLoomImageRequest, buildFableLoomVideoRequest,
+} from '../components/fableloom/sceneMediaRequests';
+import { universeStylePreset } from '../lib/universeStylePreset';
 import { LOOM_ORIENTATION, LOOM_STACK_WIDTH } from '../lib/loomLayout';
 import {
-  addLoomEpisode, addLoomNode, deleteLoomEpisode, getLoom, getPipelineSeries,
-  updateLoomEpisode, updateLoomNode, weaveLoomEpisode,
+  addLoomEpisode, addLoomNode, deleteLoomEpisode, generateImage, generateVideo,
+  getLoom, getPipelineSeries, getUniverse, updateLoomEpisode, updateLoomNode,
+  weaveLoomEpisode,
 } from '../services/api';
 
-export default function FableLoomStory() {
+const CONTINUITY_FALLBACK_CODES = new Set([
+  'IMAGE_EDIT_UNSUPPORTED_MODE',
+  'REFERENCE_IMAGE_NOT_FOUND',
+  'REFERENCE_IMAGES_FLUX2_ONLY',
+]);
+
+export default function FableLoomStory({ view = 'graph' }) {
   const { loomId, episodeId, nodeId } = useParams();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -44,10 +60,19 @@ export default function FableLoomStory() {
   // `seriesId` is a soft ref: deleting the series is allowed and leaves the id
   // dangling, so an unresolvable id renders NO chip rather than a dead link.
   const [linkedSeries, setLinkedSeries] = useState(null);
+  const [linkedSeriesStatus, setLinkedSeriesStatus] = useState('idle');
+  const [linkedUniverse, setLinkedUniverse] = useState(null);
+  const [linkedUniverseStatus, setLinkedUniverseStatus] = useState('idle');
+  // nodeId -> { image?: job snapshot, video?: job snapshot }. The page owns
+  // this so the graph card and editor rail display one shared lifecycle and the
+  // socket hook mounts exactly once per job.
+  const [mediaJobs, setMediaJobs] = useState({});
   const [notFound, setNotFound] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const playOpen = searchParams.get('play') === '1';
+  const seriesPlanOpen = episodeId === 'plan';
+  const outlineOpen = view === 'outline';
   // Orientation keys off the PAGE, not the canvas. The canvas is the leftover
   // after the 380px rail on `lg+`, so measuring it would stack a laptop graph
   // while the rail is still beside it.
@@ -58,6 +83,7 @@ export default function FableLoomStory() {
 
   useEffect(() => {
     setNotFound(false);
+    setMediaJobs({});
     getLoom(loomId).then(setLoom).catch(() => setNotFound(true));
   }, [loomId]);
 
@@ -65,17 +91,234 @@ export default function FableLoomStory() {
   useEffect(() => {
     if (!linkedSeriesId) {
       setLinkedSeries(null);
+      setLinkedSeriesStatus('idle');
       return undefined;
     }
     let canceled = false;
+    setLinkedSeries(null);
+    setLinkedSeriesStatus('loading');
     getPipelineSeries(linkedSeriesId, { silent: true })
-      .then((series) => { if (!canceled) setLinkedSeries(series || null); })
-      .catch(() => { if (!canceled) setLinkedSeries(null); });
+      .then((series) => {
+        if (canceled) return;
+        setLinkedSeries(series || null);
+        setLinkedSeriesStatus(series ? 'ready' : 'unavailable');
+      })
+      .catch(() => {
+        if (canceled) return;
+        setLinkedSeries(null);
+        setLinkedSeriesStatus('unavailable');
+      });
     return () => { canceled = true; };
   }, [linkedSeriesId]);
 
-  const episode = loom?.episodes.find((e) => e.id === episodeId) || null;
+  // A loom normally carries universeId directly. The series fallback covers
+  // older/hand-linked records whose visual context exists only on the series.
+  const linkedUniverseId = loom?.universeId || linkedSeries?.universeId || null;
+  useEffect(() => {
+    if (!linkedUniverseId) {
+      setLinkedUniverse(null);
+      setLinkedUniverseStatus('idle');
+      return undefined;
+    }
+    let canceled = false;
+    setLinkedUniverse(null);
+    setLinkedUniverseStatus('loading');
+    getUniverse(linkedUniverseId, { silent: true })
+      .then((universe) => {
+        if (canceled) return;
+        setLinkedUniverse(universe || null);
+        setLinkedUniverseStatus(universe ? 'ready' : 'unavailable');
+      })
+      .catch(() => {
+        if (canceled) return;
+        setLinkedUniverse(null);
+        setLinkedUniverseStatus('unavailable');
+      });
+    return () => { canceled = true; };
+  }, [linkedUniverseId]);
+
+  const seriesStylePending = Boolean(linkedSeriesId)
+    && linkedSeriesStatus !== 'ready'
+    && linkedSeriesStatus !== 'unavailable';
+  const universeStylePending = Boolean(linkedUniverseId)
+    && linkedUniverseStatus !== 'ready'
+    && linkedUniverseStatus !== 'unavailable';
+  const styleContextLoading = seriesStylePending || universeStylePending;
+  const styleContextUnavailable = Boolean(linkedUniverseId) && linkedUniverseStatus === 'unavailable';
+  const generationDisabledReason = styleContextLoading
+    ? 'Loading linked universe style…'
+    : styleContextUnavailable
+      ? 'Linked universe style is unavailable'
+      : '';
+  const sceneStylePreset = useMemo(
+    () => universeStylePreset(linkedUniverse, linkedSeries),
+    [linkedSeries, linkedUniverse],
+  );
+
+  const episode = seriesPlanOpen ? null : loom?.episodes.find((e) => e.id === episodeId) || null;
   const node = episode?.nodes.find((n) => n.id === nodeId) || null;
+
+  const setSceneMediaJob = useCallback((targetNodeId, kind, nextJob) => {
+    setMediaJobs((prev) => {
+      const currentNodeJobs = prev[targetNodeId] || {};
+      if (nextJob) {
+        return { ...prev, [targetNodeId]: { ...currentNodeJobs, [kind]: nextJob } };
+      }
+      const nextNodeJobs = { ...currentNodeJobs };
+      delete nextNodeJobs[kind];
+      if (Object.keys(nextNodeJobs).length > 0) return { ...prev, [targetNodeId]: nextNodeJobs };
+      const next = { ...prev };
+      delete next[targetNodeId];
+      return next;
+    });
+  }, []);
+
+  const handleMediaJobUpdate = useCallback((targetNodeId, kind, jobId, progress) => {
+    setMediaJobs((prev) => {
+      const current = prev[targetNodeId]?.[kind];
+      if (!current || current.jobId !== jobId) return prev;
+      return {
+        ...prev,
+        [targetNodeId]: {
+          ...prev[targetNodeId],
+          [kind]: { ...current, ...progress, jobId },
+        },
+      };
+    });
+  }, []);
+
+  const applySceneMedia = useCallback((targetNodeId, patch) => {
+    setLoom((prev) => (prev ? {
+      ...prev,
+      episodes: prev.episodes.map((item) => ({
+        ...item,
+        nodes: item.nodes.map((scene) => (scene.id === targetNodeId ? { ...scene, ...patch } : scene)),
+      })),
+    } : prev));
+  }, []);
+
+  const handleMediaJobTerminal = useCallback((targetNodeId, kind, jobId, progress) => {
+    const label = kind === 'video' ? 'video' : 'image';
+    if (progress.status === 'failed') {
+      toast.error(`Scene ${label} generation failed${progress.error ? `: ${progress.error}` : ''}`);
+      return;
+    }
+    if (progress.status === 'canceled') return;
+    if (progress.status !== 'completed') return;
+
+    if (kind === 'image') {
+      applySceneMedia(targetNodeId, { image: progress.filename, imageJobId: jobId });
+    } else {
+      applySceneMedia(targetNodeId, { videoHistoryId: jobId });
+    }
+    setSceneMediaJob(targetNodeId, kind, null);
+    toast.success(`Scene ${label} ready`);
+  }, [applySceneMedia, setSceneMediaJob]);
+
+  const queueSceneImage = useCallback(async (targetNode) => {
+    const prompt = (targetNode?.imagePrompt || '').trim();
+    if (!prompt) {
+      toast.error('Write an image prompt first');
+      return null;
+    }
+    if (styleContextLoading || styleContextUnavailable) {
+      toast.error(generationDisabledReason || 'Scene style is not ready');
+      return null;
+    }
+
+    setSceneMediaJob(targetNode.id, 'image', { jobId: null, status: 'submitting', progress: 0 });
+    const imageRequest = (includeContinuity) => buildFableLoomImageRequest({
+      loom,
+      episode: includeContinuity ? episode : null,
+      episodeId,
+      node: targetNode,
+      stylePreset: sceneStylePreset,
+    });
+    let continuityFallbackCode = null;
+    const queued = await generateImage(imageRequest(true), { silent: true })
+      .catch((err) => {
+        if (!CONTINUITY_FALLBACK_CODES.has(err.code)) throw err;
+        continuityFallbackCode = err.code;
+        return generateImage(imageRequest(false), { silent: true });
+      })
+      .catch((err) => {
+        setSceneMediaJob(targetNode.id, 'image', {
+          jobId: null, status: 'failed', progress: 0, error: err.message || 'Could not start the render',
+        });
+        toast.error(`Could not start scene image: ${err.message || 'Render request failed'}`);
+        return null;
+      });
+    if (!queued) return null;
+    if (continuityFallbackCode) {
+      toast.warning(continuityFallbackCode === 'REFERENCE_IMAGE_NOT_FOUND'
+        ? 'The prior shot image is missing — rendering this scene without continuity conditioning'
+        : 'The current image backend cannot use the prior shot — rendering this scene without continuity conditioning');
+    }
+    // External SD-API renders synchronously: its generationId identifies the
+    // completed request, not a media-job record. The server has already filed
+    // the image onto the scene, so swap the preview immediately and do not
+    // mount a watcher that would poll a nonexistent queue job.
+    if (!queued.jobId && queued.filename) {
+      applySceneMedia(targetNode.id, {
+        image: queued.filename,
+        imageJobId: queued.generationId || null,
+      });
+      setSceneMediaJob(targetNode.id, 'image', null);
+      toast.success('Scene image ready');
+      return queued;
+    }
+    // `generationId` was the queue id on older route responses, but external
+    // synchronous results carry no status. Keep that compatibility without
+    // confusing their transient generation id for a pollable job.
+    const jobId = queued.jobId || (queued.status ? queued.generationId : null);
+    if (!jobId) {
+      const error = 'Image generator returned no job id';
+      setSceneMediaJob(targetNode.id, 'image', { jobId: null, status: 'failed', progress: 0, error });
+      toast.error(error);
+      return null;
+    }
+    setSceneMediaJob(targetNode.id, 'image', {
+      jobId, status: queued.status || 'queued', progress: 0,
+    });
+    toast.success('Scene image queued');
+    return queued;
+  }, [applySceneMedia, episode, episodeId, generationDisabledReason, loom, sceneStylePreset, setSceneMediaJob, styleContextLoading, styleContextUnavailable]);
+
+  const queueSceneVideo = useCallback(async (targetNode) => {
+    const prompt = (targetNode?.videoPrompt || '').trim() || (targetNode?.prose || '').trim();
+    if (!prompt) {
+      toast.error('Write the scene first');
+      return null;
+    }
+    if (styleContextLoading || styleContextUnavailable) {
+      toast.error(generationDisabledReason || 'Scene style is not ready');
+      return null;
+    }
+
+    setSceneMediaJob(targetNode.id, 'video', { jobId: null, status: 'submitting', progress: 0 });
+    const queued = await generateVideo(buildFableLoomVideoRequest({
+      loom, episodeId, node: targetNode, stylePreset: sceneStylePreset,
+    })).catch((err) => {
+      setSceneMediaJob(targetNode.id, 'video', {
+        jobId: null, status: 'failed', progress: 0, error: err.message || 'Could not start the render',
+      });
+      toast.error(`Could not start scene video: ${err.message || 'Render request failed'}`);
+      return null;
+    });
+    if (!queued) return null;
+    const jobId = queued.jobId || queued.generationId;
+    if (!jobId) {
+      const error = 'Video generator returned no job id';
+      setSceneMediaJob(targetNode.id, 'video', { jobId: null, status: 'failed', progress: 0, error });
+      toast.error(error);
+      return null;
+    }
+    setSceneMediaJob(targetNode.id, 'video', {
+      jobId, status: queued.status || 'queued', progress: 0,
+    });
+    toast.success('Scene video queued');
+    return queued;
+  }, [episodeId, generationDisabledReason, loom, sceneStylePreset, setSceneMediaJob, styleContextLoading, styleContextUnavailable]);
 
   const basePath = `/fableloom/${loomId}`;
   const episodePath = useCallback(
@@ -155,17 +398,26 @@ export default function FableLoomStory() {
     return <PageSkeleton label="Loading loom" fullHeight padded sidebar={false} />;
   }
 
-  // Route normalization: no/stale episode id → first episode (or stay bare
-  // when the loom has none yet).
-  if (!episode && loom.episodes.length) {
+  // Route normalization: a loom without episodes starts in series planning;
+  // an established loom opens its first episode. The reserved `plan` id is
+  // the series view.
+  if (!episodeId && !loom.episodes.length) {
+    return <Navigate to={`${basePath}/plan`} replace />;
+  }
+  if (!seriesPlanOpen && !episode && loom.episodes.length) {
     return <Navigate to={episodePath(loom.episodes[0].id)} replace />;
   }
-  if (episodeId && !episode) {
+  if (!seriesPlanOpen && episodeId && !episode) {
     return <Navigate to={basePath} replace />;
   }
 
   return (
     <div ref={pageRef} className="h-full flex flex-col">
+      <LoomMediaJobWatchers
+        jobs={mediaJobs}
+        onUpdate={handleMediaJobUpdate}
+        onTerminal={handleMediaJobTerminal}
+      />
       <header className="border-b border-port-border px-4 py-2.5 space-y-2">
         <div className="flex items-center gap-3 flex-wrap">
           <Link to="/fableloom" className="text-port-text-muted hover:text-port-text" aria-label="Back to FableLoom">
@@ -222,17 +474,18 @@ export default function FableLoomStory() {
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {loom.episodes.length > 0 && (
-            <TabPills
-              variant="pills"
-              size="sm"
-              ariaLabel="Episodes"
-              mobileDropdown
-              tabs={loom.episodes.map((e) => ({ id: e.id, label: `${e.number}. ${e.title || 'Untitled'}` }))}
-              activeTab={episodeId}
-              onChange={(id) => navigate(episodePath(id))}
-            />
-          )}
+          <TabPills
+            variant="pills"
+            size="sm"
+            ariaLabel="Series and episodes"
+            mobileDropdown
+            tabs={[
+              { id: 'plan', label: 'Series plan' },
+              ...loom.episodes.map((e) => ({ id: e.id, label: `${e.number}. ${e.title || 'Untitled'}` })),
+            ]}
+            activeTab={seriesPlanOpen ? 'plan' : episodeId}
+            onChange={(id) => navigate(episodePath(id))}
+          />
           <button
             type="button"
             onClick={handleAddEpisode}
@@ -240,10 +493,25 @@ export default function FableLoomStory() {
           >
             + Episode
           </button>
+          {episode && (
+            <TabPills
+              variant="pills"
+              size="xs"
+              ariaLabel="Episode view"
+              tabs={[
+                { id: 'graph', label: 'Graph', icon: Waypoints },
+                { id: 'outline', label: 'Outline', icon: ListTree },
+              ]}
+              activeTab={outlineOpen ? 'outline' : 'graph'}
+              onChange={(id) => navigate(id === 'outline' ? `${episodePath(episode.id)}/outline` : episodePath(episode.id))}
+            />
+          )}
         </div>
       </header>
 
-      {!episode ? (
+      {seriesPlanOpen ? (
+        <LoomSeriesPlan loom={loom} onLoomUpdate={setLoom} />
+      ) : !episode ? (
         <div className="flex-1 grid place-items-center p-8 text-center">
           <div>
             <Waypoints size={32} className="mx-auto text-port-text-muted mb-3" />
@@ -259,6 +527,12 @@ export default function FableLoomStory() {
             </button>
           </div>
         </div>
+      ) : outlineOpen ? (
+        <LoomEpisodeOutline
+          loom={loom}
+          episode={episode}
+          onSelectNode={(id) => navigate(episodePath(episode.id, id))}
+        />
       ) : (
         <div className="flex-1 min-h-0 flex flex-col lg:flex-row">
           <section className="flex-1 min-h-[55vh] lg:min-h-0 min-w-0 relative">
@@ -269,6 +543,11 @@ export default function FableLoomStory() {
                 onSelectNode={selectNode}
                 onMoveNode={handleMoveNode}
                 orientation={graphOrientation}
+                mediaJobs={mediaJobs}
+                onGenerateImage={queueSceneImage}
+                onGenerateVideo={queueSceneVideo}
+                generationDisabled={styleContextLoading || styleContextUnavailable}
+                generationDisabledReason={generationDisabledReason}
               />
             ) : (
               <div className="h-full grid place-items-center p-8 text-center">
@@ -308,6 +587,11 @@ export default function FableLoomStory() {
                 node={node}
                 onLoomUpdate={setLoom}
                 onClearSelection={() => navigate(episodePath(episode.id))}
+                mediaJobs={mediaJobs[node.id]}
+                onGenerateImage={queueSceneImage}
+                onGenerateVideo={queueSceneVideo}
+                generationDisabled={styleContextLoading || styleContextUnavailable}
+                generationDisabledReason={generationDisabledReason}
                 onMakeStart={node.id !== episode.startNodeId ? async () => {
                   const updated = await updateLoomEpisode(loomId, episode.id, { startNodeId: node.id })
                     .catch(() => null);
@@ -362,7 +646,7 @@ export default function FableLoomStory() {
  * controls, and episode deletion.
  */
 function EpisodeSetupDrawer({ open, onClose, loom, episode, onLoomUpdate, onFeedbackStarted, onDeleted }) {
-  const [form, setForm] = useState({ title: '', synopsis: '', guidance: '', nodeTarget: 12, endingTarget: 3 });
+  const [form, setForm] = useState({ title: '', synopsis: '', guidance: '' });
   // The weave reads server-side state (title/synopsis), so it gates on
   // in-flight meta saves per the client save-gating convention.
   const [metaSaving, setMetaSaving] = useState(0);
@@ -389,8 +673,6 @@ function EpisodeSetupDrawer({ open, onClose, loom, episode, onLoomUpdate, onFeed
   const [runWeave, weaving] = useAsyncAction(async () => {
     const result = await weaveLoomEpisode(loom.id, episode.id, {
       guidance: form.guidance,
-      nodeTarget: Number(form.nodeTarget) || 12,
-      endingTarget: Number(form.endingTarget) || 3,
       replace: hasScenes,
     }, { silent: true });
     onLoomUpdate(result.loom);
@@ -441,27 +723,12 @@ function EpisodeSetupDrawer({ open, onClose, loom, episode, onLoomUpdate, onFeed
               onChange={(e) => setForm((p) => ({ ...p, guidance: e.target.value }))}
             />
           </FormField>
-          <div className="grid grid-cols-2 gap-3">
-            <FormField label="Scenes (approx.)" labelClassName={labelClass}>
-              <input
-                type="number" min={3} max={60}
-                className={fieldClass}
-                value={form.nodeTarget}
-                onChange={(e) => setForm((p) => ({ ...p, nodeTarget: e.target.value }))}
-              />
-            </FormField>
-            <FormField label="Endings" labelClassName={labelClass}>
-              <input
-                type="number" min={1} max={12}
-                className={fieldClass}
-                value={form.endingTarget}
-                onChange={(e) => setForm((p) => ({ ...p, endingTarget: e.target.value }))}
-              />
-            </FormField>
-          </div>
+          <p className="text-xs text-port-text-muted">
+            The story writer and creative director choose the number of camera-cut scenes and endings from the episode.
+          </p>
           {hasScenes && (
             <p className="text-xs text-port-warning">
-              Weaving replaces this episode's {episode.nodes.length} existing scene{episode.nodes.length === 1 ? '' : 's'}.
+              Weaving replaces this episode's {episode.nodes.length} existing scene{episode.nodes.length === 1 ? '' : 's'} and drops their rendered stills and video clips.
             </p>
           )}
           <button

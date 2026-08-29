@@ -7,13 +7,15 @@ const TEST_DATA_ROOT = mkdtempSync(join(tmpdir(), 'portos-rapid-reader-'));
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   const actual = await importOriginal();
-  return { ...actual, PATHS: { ...actual.PATHS, data: TEST_DATA_ROOT } };
+  return { ...actual, PATHS: { ...actual.PATHS, data: TEST_DATA_ROOT, rapidReaderLibrary: join(TEST_DATA_ROOT, 'rapid-reader-library') } };
 });
 
 vi.mock('../lib/safeUrlFetch.js', () => ({ fetchPublicText: vi.fn() }));
 
 const service = await import('./rapidReader.js');
 const { fetchPublicText } = await import('../lib/safeUrlFetch.js');
+const libraryStore = (await import('./rapidReaderLibrary.js')).rapidReaderLibraryStore;
+const listShelf = (await import('./rapidReaderLibrary.js')).listRapidReaderLibrary;
 
 const CACHE_FILE = join(TEST_DATA_ROOT, 'cache', 'accelerando.html');
 const SOURCE_HTML = `<!doctype html>
@@ -59,6 +61,25 @@ describe('extractAccelerandoText', () => {
   });
 });
 
+describe('extractAccelerandoSections', () => {
+  it('extracts Parts and Chapters with reader word offsets', () => {
+    const html = `<div id="book">
+      <p>A novel by Charles Stross</p>
+      <h2><a name="PART1">PART 1: Start</a></h2>
+      <p>Opening text.</p>
+      <h3><a name="ChapterOne">Chapter 1: Alpha</a></h3>
+      <p>Chapter text.</p>
+    </div>`;
+    const text = 'A novel by Charles Stross PART 1: Start Opening text. Chapter 1: Alpha Chapter text.';
+    const sections = service.extractAccelerandoSections(html, text);
+
+    expect(sections).toEqual([
+      { id: 'part-1-start-1', title: 'PART 1: Start', kind: 'part', wordIndex: 5 },
+      { id: 'chapter-1-alpha-2', title: 'Chapter 1: Alpha', kind: 'chapter', wordIndex: 10 },
+    ]);
+  });
+});
+
 describe('getAccelerandoBook', () => {
   it('fetches the fixed official source and caches the raw edition', async () => {
     fetchPublicText.mockResolvedValue(SOURCE_HTML);
@@ -74,6 +95,9 @@ describe('getAccelerandoBook', () => {
       licenseUrl: 'https://creativecommons.org/licenses/by-nc-nd/2.5/',
       cached: false,
       wordCount: expect.any(Number),
+      sections: expect.arrayContaining([
+        expect.objectContaining({ title: 'Chapter 1: Example', kind: 'chapter' }),
+      ]),
     });
     expect(fetchPublicText).toHaveBeenCalledWith(
       service.ACCELERANDO_BOOK.sourceUrl,
@@ -106,6 +130,33 @@ describe('getAccelerandoBook', () => {
 
     expect(book.cached).toBe(false);
     expect(fetchPublicText).toHaveBeenCalledOnce();
+  });
+
+  it('upserts one stable shelf entry after a successful load', async () => {
+    fetchPublicText.mockResolvedValue(SOURCE_HTML);
+
+    const book = await service.getAccelerandoBook();
+    await service.getAccelerandoBook();
+
+    expect(book.shelfStored).toBe(true);
+    const shelf = await listShelf();
+    expect(shelf).toHaveLength(1);
+    expect(shelf[0]).toMatchObject({ id: 'accelerando', sourceType: 'accelerando', title: 'Accelerando' });
+  });
+
+  // The shelf is a convenience on top of the book, so an unwritable store
+  // degrades the same way an unwritable cache does: the book still returns.
+  it('still returns the book with shelfStored:false when the shelf write fails', async () => {
+    fetchPublicText.mockResolvedValue(SOURCE_HTML);
+    const saveOne = vi.spyOn(libraryStore, 'saveOne').mockRejectedValue(new Error('disk full'));
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const book = await service.getAccelerandoBook();
+
+    expect(book.shelfStored).toBe(false);
+    expect(book.text).toContain('Chapter 1');
+    saveOne.mockRestore();
+    consoleError.mockRestore();
   });
 
   it('fails closed when the remote source is unavailable or unrecognized', async () => {

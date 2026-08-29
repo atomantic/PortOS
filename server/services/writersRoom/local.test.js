@@ -17,7 +17,7 @@ const {
   listFolders, createFolder, deleteFolder,
   listWorks, countWorks, createWork, getWork, getWorkWithBody, updateWork, deleteWork,
   saveDraftBody, snapshotDraft, setActiveDraft, getDraftBody,
-  listExercises, createExercise, finishExercise, discardExercise,
+  listExercises, createExercise, finishExercise, discardExercise, promoteExercise,
   resolveLiveMode, recordLiveModeUsage, recordLiveModeRenderUsage, DEFAULT_LIVE_MODE,
   renderWorkVoiceGuide,
 } = local;
@@ -386,6 +386,36 @@ describe('exercise sessions', () => {
     const finished2 = await finishExercise(ex2.id, {});
     expect(finished2.wordsAdded).toBe(0);
     expect(finished2.endingWords).toBe(200);
+  });
+
+  it('promoteExercise appends trimmed sprint text and preserves the active draft references', async () => {
+    const work = await createWork({ title: 'Promotion' });
+    await saveDraftBody(work.id, 'Existing draft', { referencedIngredientIds: ['cat-char-1'] });
+    const exercise = await createExercise({ workId: work.id });
+    await finishExercise(exercise.id, { appendedText: '  Sprint ending  ' });
+
+    const result = await promoteExercise(exercise.id);
+    expect(result.work.activeDraftBody).toBe('Existing draft\n\nSprint ending\n');
+    expect(result.work.drafts[0].wordCount).toBe(4);
+    expect(result.work.drafts[0].referencedIngredientIds).toEqual(['cat-char-1']);
+    expect(result.exercise.promotedAt).toBeTruthy();
+    expect(result.exercise.promotedDraftVersionId).toBe(work.activeDraftVersionId);
+    await expect(promoteExercise(exercise.id)).rejects.toThrow(/already promoted/i);
+  });
+
+  it('promoteExercise rejects unfinished, standalone, and empty exercises', async () => {
+    const work = await createWork({ title: 'Promotion guards' });
+    const running = await createExercise({ workId: work.id });
+    await expect(promoteExercise(running.id)).rejects.toThrow(/finished/i);
+
+    const standalone = await createExercise({});
+    await finishExercise(standalone.id, { appendedText: 'Text' });
+    await expect(promoteExercise(standalone.id)).rejects.toThrow(/linked/i);
+
+    const empty = await createExercise({ workId: work.id });
+    await finishExercise(empty.id, { appendedText: '   ' });
+    await expect(promoteExercise(empty.id)).rejects.toThrow(/no text/i);
+    await expect(promoteExercise('wr-ex-missing')).rejects.toThrow(/not found/i);
   });
 
   it('discardExercise marks the session as discarded', async () => {

@@ -4,6 +4,27 @@ Common issues and solutions when running PortOS.
 
 ## Startup Issues
 
+### Start Here: `npm run doctor`
+
+**Symptom**: anything won't start, and it isn't obvious which prerequisite is missing.
+
+```bash
+npm run doctor          # human-readable table
+npm run doctor -- --json  # { ok, facts: [{ name, status, detail, required }] }
+```
+
+It is read-only (no installs, no migrations, no DB writes) and loads from a bare
+checkout, so it works even before `npm install` has ever run. Each prerequisite
+is probed independently and separately bounded, so one unreachable service
+degrades to a single line instead of hanging the report. It exits non-zero when
+a **required** prerequisite is unavailable; optional facts (TLS cert, `gh`,
+ffmpeg/python3/uv, the port block) are reported but never fail the run — a
+running install legitimately occupies ports 5553–5561.
+
+Details name no hostnames, usernames, IPs, or home-directory paths, so the
+output is safe to paste into a bug report as-is.
+
+
 ### Port Already in Use
 
 **Symptom**: Server fails to start with `EADDRINUSE` error.

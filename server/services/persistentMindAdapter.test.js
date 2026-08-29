@@ -10,6 +10,7 @@ const mock = vi.hoisted(() => ({
   executeTaskRequests: vi.fn(),
   executeToolCall: vi.fn(),
   readVisibility: vi.fn(),
+  executeCallRequest: vi.fn(),
   createPersistentMindMemoryFromCandidate: vi.fn(async ({ candidateId, ...candidate }) => ({
     success: true,
     duplicate: false,
@@ -40,6 +41,10 @@ vi.mock('./persistentMindVisibility.js', () => ({
   readPersistentMindVisibility: (...args) => mock.readVisibility(...args),
   buildPersistentMindVisibilityPrompt: () => 'Environment visibility: READY',
 }));
+vi.mock('./persistentMindCallCapability.js', () => ({
+  buildPersistentMindCallCapabilityPrompt: ({ enabled }) => `Call access: ${enabled ? 'ON' : 'OFF'}`,
+  executePersistentMindCallRequest: (...args) => mock.executeCallRequest(...args),
+}));
 vi.mock('./cosToolRegistry.js', () => ({
   buildPersistentMindToolPrompt: ({ readPortos, writePortos }) => `PortOS tools: read=${Boolean(readPortos)} write=${Boolean(writePortos)}`,
   executeCosToolCall: (...args) => mock.executeToolCall(...args),
@@ -56,6 +61,7 @@ beforeEach(() => {
   mock.readTaskCatalog.mockResolvedValue({ apps: [{ id: 'portos' }], providers: [{ id: 'codex' }] });
   mock.readVisibility.mockResolvedValue({ readiness: 'ready', workspaces: [] });
   mock.executeTaskRequests.mockResolvedValue([]);
+  mock.executeCallRequest.mockResolvedValue(null);
   mock.executeToolCall.mockResolvedValue({ state: 'completed', result: { ok: true, count: 1 } });
   mock.assertVision.mockImplementation((result, provider) => result?.provider || provider);
   mock.runPrompt.mockResolvedValue({ text: JSON.stringify({
@@ -503,5 +509,63 @@ describe('persistent mind adapter', () => {
     expect(persistentMindHarnessInfo({ type: 'api' }).recommendation).toBe('recommended');
     expect(persistentMindHarnessInfo({ type: 'cli' }).recommendation).toBe('supported');
     expect(persistentMindHarnessInfo({ type: 'tui' }).recommendation).toBe('not-recommended');
+  });
+
+  it('runs a call request on the terminal answer and tells the user when it was refused', async () => {
+    // The turn's reply is written before the gate runs, so a mind whose call
+    // was suppressed would otherwise leave the user waiting for a phone that
+    // never rings.
+    mock.root.config.persistentMindCapabilities = { createTasks: false, callUser: true };
+    const callRequest = { reason: 'Backups have failed three nights', openingLine: 'This is PortOS. Your backups keep failing.' };
+    mock.runPrompt
+      .mockResolvedValueOnce({ text: JSON.stringify({
+        thinkingSummary: 'Checking the backup history first.',
+        toolCalls: [{ name: 'portos.read', arguments: {} }],
+      }) })
+      .mockResolvedValueOnce({ text: JSON.stringify({
+        thinkingSummary: 'This cannot wait for a screen.',
+        message: 'Calling you about the backups.',
+        callRequest,
+      }) });
+    mock.executeCallRequest.mockResolvedValue({ placed: false, reason: 'quiet-hours' });
+
+    const signal = new AbortController().signal;
+    const result = await createPersistentMindTurnAdapter().run({
+      turnId: 'turn-call',
+      wake: { kind: 'message', message: { id: 'message-call', text: 'Anything wrong?' } },
+      ...profile,
+      signal,
+      context: { text: '# Context' },
+      recordCapabilityEvent: vi.fn(async () => true),
+    });
+
+    // Executed once, after the tool round — not on the intermediate response.
+    expect(mock.executeCallRequest).toHaveBeenCalledTimes(1);
+    expect(mock.executeCallRequest).toHaveBeenCalledWith({ callRequest, turnId: 'turn-call', signal });
+    const reply = result.events.find((event) => event.kind === 'mind.reply');
+    expect(reply.data.displayText).toContain('was not placed (quiet-hours)');
+  });
+
+  it('describes the call action to the model only when the grant is on', async () => {
+    mock.root.config.persistentMindCapabilities = { callUser: false };
+    await createPersistentMindTurnAdapter().run({
+      turnId: 'turn-call-off',
+      wake: { kind: 'message', message: { id: 'message-call-off', text: 'Hello' } },
+      ...profile,
+      signal: new AbortController().signal,
+      context: { text: '# Context' },
+    });
+    expect(mock.runPrompt.mock.calls[0][0].prompt).toContain('Call access: OFF');
+
+    mock.runPrompt.mockClear();
+    mock.root.config.persistentMindCapabilities = { callUser: true };
+    await createPersistentMindTurnAdapter().run({
+      turnId: 'turn-call-on',
+      wake: { kind: 'message', message: { id: 'message-call-on', text: 'Hello' } },
+      ...profile,
+      signal: new AbortController().signal,
+      context: { text: '# Context' },
+    });
+    expect(mock.runPrompt.mock.calls[0][0].prompt).toContain('Call access: ON');
   });
 });

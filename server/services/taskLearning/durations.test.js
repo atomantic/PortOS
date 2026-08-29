@@ -9,7 +9,7 @@ vi.mock('./store.js', async (importOriginal) => {
 });
 
 import { loadLearningData } from './store.js';
-import { getTaskDurationEstimate, getAllTaskDurations, estimateQueueCompletion } from './durations.js';
+import { getTaskDurationEstimate, getAllTaskDurations } from './durations.js';
 
 const baseData = (overrides = {}) => ({
   byTaskType: {},
@@ -97,49 +97,5 @@ describe('durations.getAllTaskDurations', () => {
   it('returns an empty object when there is no completed history', async () => {
     loadLearningData.mockResolvedValue(baseData());
     expect(await getAllTaskDurations()).toEqual({});
-  });
-});
-
-describe('durations.estimateQueueCompletion', () => {
-  it('matches tasks by type keyword and formats sub-hour estimates', async () => {
-    loadLearningData.mockResolvedValue(baseData({
-      byTaskType: {
-        'self-improve:ui': { completed: 4, avgDurationMs: 600000, successRate: 50 }, // 10 min
-      },
-      totals: { completed: 4, succeeded: 2, failed: 2, totalDurationMs: 2400000, avgDurationMs: 600000 },
-    }));
-    const out = await estimateQueueCompletion([{ description: 'fix ui glitch' }], 0);
-    expect(out.taskCount).toBe(1);
-    expect(out.basedOnHistory).toBe(true);
-    expect(out.formatted).toBe('~10m');
-    expect(out.confidence).toBe(100);
-  });
-
-  it('uses the overall average for unmatched tasks and adds half a running task', async () => {
-    loadLearningData.mockResolvedValue(baseData({
-      byTaskType: { 'self-improve:ui': { completed: 4, avgDurationMs: 600000, successRate: 50 } },
-      totals: { completed: 4, succeeded: 2, failed: 2, totalDurationMs: 2400000, avgDurationMs: 600000 },
-    }));
-    // unmatched description → overallAvg 600000; runningCount 1 adds 0.5*600000=300000
-    const out = await estimateQueueCompletion([{ description: 'totally unrelated work' }], 1);
-    expect(out.totalMs).toBe(900000); // 600000 + 300000
-    expect(out.basedOnHistory).toBe(false);
-    expect(out.confidence).toBe(0); // 0 matched of 2 total
-  });
-
-  it('formats multi-hour estimates with hours and minutes', async () => {
-    loadLearningData.mockResolvedValue(baseData({
-      totals: { completed: 4, succeeded: 4, failed: 0, totalDurationMs: 4 * 5400000, avgDurationMs: 5400000 },
-    }));
-    // 90 min average; two unmatched tasks → 180 min = 3h 0m
-    const out = await estimateQueueCompletion([{ description: 'x' }, { description: 'y' }], 0);
-    expect(out.formatted).toBe('~3h');
-  });
-
-  it('reports "under 1m" for an empty queue', async () => {
-    loadLearningData.mockResolvedValue(baseData());
-    const out = await estimateQueueCompletion([], 0);
-    expect(out.formatted).toBe('under 1m');
-    expect(out.confidence).toBe(0);
   });
 });

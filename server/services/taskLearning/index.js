@@ -82,8 +82,7 @@ export {
 
 export {
   getTaskDurationEstimate,
-  getAllTaskDurations,
-  estimateQueueCompletion
+  getAllTaskDurations
 } from './durations.js';
 
 export {

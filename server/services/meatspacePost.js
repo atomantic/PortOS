@@ -1274,33 +1274,44 @@ const DRILL_LABEL = (type) =>
   String(type || '').replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 
 /**
- * The single weakest scored drill by recent (windowed) accuracy — the drill
- * whose `byDrillAccuracy` is lowest among drills with at least one sample.
- * Pure; reads the shape `getPostStats` returns. `null` when there's no
- * accuracy signal yet (fresh install / all drills without derivable accuracy).
- * Returns `{ key, module, type, accuracy, samples }` where `key` is
- * `"<module>:<type>"`.
+ * EVERY scored drill with an accuracy signal, ranked weakest-first. Pure; reads
+ * the shape `getPostStats` returns. Empty when there's no accuracy signal yet
+ * (fresh install / all drills without derivable accuracy). Each entry is
+ * `{ key, module, type, accuracy, samples }` where `key` is `"<module>:<type>"`.
+ *
+ * Ranked rather than single-valued because the caller has to keep looking past
+ * the weakest drill when that one is disabled, excluded by `sessionModules`, or
+ * was already practiced inside the recency window (issue #5319) — stopping at
+ * the first candidate is what used to pin the tier to one drill forever.
  */
-export function weakestSkillFromStats(stats) {
+export function weakestSkillsFromStats(stats) {
   const acc = stats?.evidenceByDrillAccuracy || stats?.byDrillAccuracy || {};
   const counts = stats?.evidenceByDrillCount || stats?.byDrillCount || {};
-  let worst = null;
+  const ranked = [];
   for (const [key, a] of Object.entries(acc)) {
     if (typeof a !== 'number' || Number.isNaN(a)) continue;
     const samples = counts[key] || 0;
     if (samples < 1) continue;
-    if (!worst || a < worst.accuracy) {
-      const sep = key.indexOf(':');
-      worst = {
-        key,
-        module: sep >= 0 ? key.slice(0, sep) : null,
-        type: sep >= 0 ? key.slice(sep + 1) : key,
-        accuracy: a,
-        samples,
-      };
-    }
+    const sep = key.indexOf(':');
+    ranked.push({
+      key,
+      module: sep >= 0 ? key.slice(0, sep) : null,
+      type: sep >= 0 ? key.slice(sep + 1) : key,
+      accuracy: a,
+      samples,
+    });
   }
-  return worst;
+  // Stable: equal-accuracy drills keep their `Object.entries` order here, and
+  // the day rotation in `orderByRecencyRotation` is what breaks that tie later.
+  return ranked.sort((a, b) => a.accuracy - b.accuracy);
+}
+
+/**
+ * The single weakest scored drill by recent (windowed) accuracy — the head of
+ * `weakestSkillsFromStats`. `null` when there's no accuracy signal yet.
+ */
+export function weakestSkillFromStats(stats) {
+  return weakestSkillsFromStats(stats)[0] || null;
 }
 
 /**
@@ -1435,34 +1446,80 @@ export function memoryItemIdFromReview(review) {
  * @param {string} [timezone] - user timezone for re-keying legacy ISO dates
  * @returns {{ drillTypes: Set<string>, memoryItemIds: Set<string>, completedSession: boolean }}
  */
-export function practicedTodayFromActivity(sessions = [], trainingEntries = [], todayStr = null, timezone) {
+function activityOnDays(sessions, trainingEntries, dayKeys, timezone) {
   const drillTypes = new Set();
   const memoryItemIds = new Set();
   let completedSession = false;
-  // No resolvable local day ⇒ report nothing practiced rather than guessing, so
-  // the routine degrades to its pre-#3563 ordering instead of silently demoting.
-  const today = normalizeYmd(todayStr, timezone);
-  if (!today) return { drillTypes, memoryItemIds, completedSession };
 
   // Both feeds go through recordDayKey, which re-derives the day from each
-  // record's own instant in the CURRENT timezone (#4168) — a raw `!==` against
+  // record's own instant in the CURRENT timezone (#4168) — matching against
   // the stored `date` would read a record written under a previous timezone (or
   // a memory-practice entry carrying a full ISO timestamp) as not-practiced.
   for (const session of sessions || []) {
-    if (recordDayKey(session, timezone) !== today) continue;
+    if (!dayKeys.has(recordDayKey(session, timezone))) continue;
     completedSession = true;
     for (const task of session.tasks || []) {
       if (task?.type) drillTypes.add(task.type);
     }
   }
   for (const entry of trainingEntries || []) {
-    if (recordDayKey(entry, timezone) !== today) continue;
+    if (!dayKeys.has(recordDayKey(entry, timezone))) continue;
     // Training entries are two shapes sharing one log: drill practice carries
     // `drillType`, memory practice carries `memoryItemId` + `mode`.
     if (entry.drillType) drillTypes.add(entry.drillType);
     if (entry.memoryItemId) memoryItemIds.add(entry.memoryItemId);
   }
   return { drillTypes, memoryItemIds, completedSession };
+}
+
+export function practicedTodayFromActivity(sessions = [], trainingEntries = [], todayStr = null, timezone) {
+  // No resolvable local day ⇒ report nothing practiced rather than guessing, so
+  // the routine degrades to its pre-#3563 ordering instead of silently demoting.
+  const today = normalizeYmd(todayStr, timezone);
+  if (!today) return { drillTypes: new Set(), memoryItemIds: new Set(), completedSession: false };
+  return activityOnDays(sessions, trainingEntries, new Set([today]), timezone);
+}
+
+/**
+ * How many local calendar days the heuristic-tier recency window spans — today
+ * plus the previous two. Wide enough that a drill practiced yesterday yields to
+ * something else, narrow enough that a three-drill rotation still comes back
+ * around every third day.
+ */
+export const RECENT_PRACTICE_WINDOW_DAYS = 3;
+
+/**
+ * What the user has practiced across the last `windowDays` LOCAL calendar days,
+ * from both scored sessions and the training log (issue #5319).
+ *
+ * This is the multi-day sibling of `practicedTodayFromActivity`, and it feeds a
+ * different decision. `practicedToday` demotes an already-completed rec in
+ * EVERY tier — including schedule-driven due memory items and due reviews. This
+ * window only reorders the two HEURISTIC tiers (weakest skill, stalled ladder),
+ * whose signals are windowed averages a single rep barely moves, so the same
+ * drill would otherwise stay pinned to the top slot day after day. A genuinely
+ * due item is never deprioritized by it.
+ *
+ * Pure — exported for unit tests. Carries no prompts or session content, only
+ * drill types and memory item ids, and persists nothing.
+ *
+ * @param {Array} sessions - all scored sessions (`{ date, tasks: [{ type }] }`)
+ * @param {Array} trainingEntries - all training-log entries
+ * @param {string|null} todayStr - the user's local `YYYY-MM-DD`
+ * @param {string} [timezone] - user timezone for re-keying legacy ISO dates
+ * @param {number} [windowDays] - calendar days to look back over, including today
+ * @returns {{ dayKey: string|null, drillTypes: Set<string>, memoryItemIds: Set<string> }}
+ */
+export function recentPracticeFromActivity(sessions = [], trainingEntries = [], todayStr = null, timezone, windowDays = RECENT_PRACTICE_WINDOW_DAYS) {
+  // No resolvable local day ⇒ no window, and callers fall back to plain
+  // priority order rather than rotating off a guessed day.
+  const today = normalizeYmd(todayStr, timezone);
+  if (!today) return { dayKey: null, drillTypes: new Set(), memoryItemIds: new Set() };
+
+  const span = Math.max(1, Math.trunc(windowDays) || 1);
+  const days = new Set(Array.from({ length: span }, (_, i) => ymdShift(today, -i)));
+  const { drillTypes, memoryItemIds } = activityOnDays(sessions, trainingEntries, days, timezone);
+  return { dayKey: today, drillTypes, memoryItemIds };
 }
 
 export function composePostRecommendations({

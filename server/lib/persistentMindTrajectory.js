@@ -32,6 +32,12 @@ export const PERSISTENT_MIND_EVENT_KINDS = Object.freeze([
   'mind.turn.completed',
   'mind.memory.promoted',
   'mind.maintenance.completed',
+  // Outbound FaceTime Audio calls. Every decision is written down, including
+  // the ones that placed no call, so "why didn't it call me?" is answerable
+  // from the trajectory alone. The dialed handle is never recorded.
+  'mind.call.requested',
+  'mind.call.placed',
+  'mind.call.suppressed',
 ]);
 
 const MIND_KIND_SET = new Set(PERSISTENT_MIND_EVENT_KINDS);

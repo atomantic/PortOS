@@ -3,9 +3,10 @@ import * as api from '../../services/api';
 import toast from '../ui/Toast';
 
 const normalizeCapabilities = (value) => ({
-  schemaVersion: 3,
+  schemaVersion: 4,
   createTasks: value?.createTasks === true,
   manageMind: value?.manageMind === true,
+  callUser: value?.callUser === true,
   readPortos: value?.readPortos === true,
   writePortos: value?.writePortos === true,
   taskModelAllowlist: Array.isArray(value?.taskModelAllowlist)
@@ -36,6 +37,11 @@ const OPTIONS = [
     label: 'Allow mind to clean up its mindspace',
     hint: 'Lets the mind archive only its own memories, forget older trajectory history, or rebuild derived context. Cleanup remains bounded and auditable.',
   },
+  {
+    key: 'callUser',
+    label: 'Allow mind to call you on FaceTime Audio',
+    hint: 'Lets the mind ring the handle configured in Settings > Voice when nothing on screen can reach you. Honors quiet hours, never dials while a browser tab can speak, and is capped at 3 calls per 24 hours at least 30 minutes apart.',
+  },
 ];
 
 export default function PersistentMindTaskAccessControls({
@@ -53,7 +59,7 @@ export default function PersistentMindTaskAccessControls({
 
   useEffect(() => {
     if (!saving) setDraft(normalizeCapabilities(capabilities));
-  }, [capabilities?.schemaVersion, capabilities?.createTasks, capabilities?.manageMind, capabilities?.readPortos, capabilities?.writePortos, capabilities?.taskModelAllowlist, capabilities?.taskModelAllowlistInvalid, capabilities?.allowedAppIds?.join('\0'), saving]);
+  }, [capabilities?.schemaVersion, capabilities?.createTasks, capabilities?.manageMind, capabilities?.callUser, capabilities?.readPortos, capabilities?.writePortos, capabilities?.taskModelAllowlist, capabilities?.taskModelAllowlistInvalid, capabilities?.allowedAppIds?.join('\0'), saving]);
 
   const save = async (key, enabled) => {
     const previous = draft;

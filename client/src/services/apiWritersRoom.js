@@ -242,3 +242,7 @@ export const discardWritersRoomExercise = (id, options = {}) => request(`/writer
   method: 'POST',
   ...options,
 });
+export const promoteWritersRoomExercise = (id, options = {}) => request(`/writers-room/exercises/${enc(id)}/promote`, {
+  method: 'POST',
+  ...options,
+});

@@ -12,9 +12,13 @@ let trackerOnUpdate = null;
 let metroOpts = null;
 const { transcribeMock } = vi.hoisted(() => ({ transcribeMock: vi.fn(() => '| C4q |') }));
 
-vi.mock('../lib/audioRecorder.js', () => ({
-  createStreamAnalyser: vi.fn(() => ({ analyser: { fftSize: 2048 }, context: {}, close: analyserClose })),
-}));
+vi.mock('../lib/audioRecorder.js', async (importActual) => {
+  const actual = await importActual(); // keep the real openAnalysisMic / getSettings read-back
+  return {
+    ...actual,
+    createStreamAnalyser: vi.fn(() => ({ analyser: { fftSize: 2048 }, context: {}, close: analyserClose })),
+  };
+});
 
 vi.mock('../lib/pitchDetect.js', () => ({
   createPitchTracker: vi.fn((_analyser, opts) => { trackerOnUpdate = opts.onUpdate; return { stop: trackerStop }; }),

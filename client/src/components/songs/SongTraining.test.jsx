@@ -99,4 +99,17 @@ describe('SongTraining', () => {
     expect(trackStop).toHaveBeenCalled();
     expect(screen.getByRole('button', { name: /start/i })).toBeTruthy();
   });
+
+  it('warns when the browser kept processing on for the training mic', async () => {
+    const getUserMedia = vi.fn().mockResolvedValue({
+      getTracks: () => [{ stop: vi.fn(), getSettings: () => ({ noiseSuppression: true }) }],
+    });
+    Object.defineProperty(global.navigator, "mediaDevices", {
+      value: { getUserMedia }, configurable: true,
+    });
+    render(<SongTraining score={SCORE} />);
+    fireEvent.click(screen.getByRole("button", { name: /start/i }));
+    await act(async () => {});
+    expect(screen.getByText(/Browser audio processing is on \(noise suppression\)/)).toBeTruthy();
+  });
 });

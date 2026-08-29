@@ -24,6 +24,8 @@
 import { dataPath, ensureDir, atomicWrite, tryReadFile } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
+import { getSelfHost } from '../lib/peerSelfHost.js';
+import { getHttpsEnabledAtBoot } from '../lib/httpsState.js';
 
 // Cap on each token-endpoint round-trip so a hung accounts.spotify.com can't
 // stall an OAuth callback or a history-sync refresh indefinitely.
@@ -49,12 +51,21 @@ const ACCOUNTS_BASE = 'https://accounts.spotify.com';
  * googleAuth's env-driven constant so it stays stable across the auth-url and
  * callback round-trip. Surfaced in the auth status so the user can copy the
  * exact string into the Spotify dashboard (it must match byte-for-byte).
+ * An explicit request origin takes precedence over machine metadata so remote
+ * Tailscale HTTPS users see the same callback URI the browser will use.
  */
-export function getRedirectUri() {
+export function getRedirectUri({ origin } = {}) {
   if (process.env.SPOTIFY_REDIRECT_URI) return process.env.SPOTIFY_REDIRECT_URI;
-  const host = process.env.PUBLIC_HOST || 'localhost';
   const port = process.env.PORT || 5555;
-  return `http://${host}:${port}/api/spotify/oauth/callback`;
+  if (origin) return `${origin.replace(/\/$/, '')}/api/spotify/oauth/callback`;
+  if (process.env.PUBLIC_HOST) {
+    return `http://${process.env.PUBLIC_HOST}:${port}/api/spotify/oauth/callback`;
+  }
+  const detectedHost = getSelfHost();
+  const host = detectedHost && !/^(undefined|null)\b/i.test(detectedHost) ? detectedHost : null;
+  if (!host) return `http://localhost:${port}/api/spotify/oauth/callback`;
+  const scheme = getHttpsEnabledAtBoot().value ? 'https' : 'http';
+  return `${scheme}://${host}:${port}/api/spotify/oauth/callback`;
 }
 
 /**
@@ -95,9 +106,9 @@ export async function getCredentials() {
   return JSON.parse(raw);
 }
 
-export async function saveCredentials({ clientId, clientSecret }) {
+export async function saveCredentials({ clientId, clientSecret }, options = {}) {
   await ensureAuthDir();
-  const credentials = { clientId, clientSecret, redirectUri: getRedirectUri() };
+  const credentials = { clientId, clientSecret, redirectUri: getRedirectUri(options) };
   await atomicWrite(CREDENTIALS_FILE, credentials);
   console.log('🎧 Spotify OAuth credentials saved');
   return { hasCredentials: true, redirectUri: credentials.redirectUri };
@@ -152,7 +163,7 @@ async function requestToken(params) {
   return json;
 }
 
-export async function getAuthUrl() {
+export async function getAuthUrl(options = {}) {
   const credentials = await getCredentials();
   if (!credentials?.clientId) {
     throw new ServerError('No Spotify OAuth credentials configured', { status: 400 });
@@ -160,18 +171,18 @@ export async function getAuthUrl() {
   const params = new URLSearchParams({
     client_id: credentials.clientId,
     response_type: 'code',
-    redirect_uri: getRedirectUri(),
+    redirect_uri: getRedirectUri(options),
     scope: SPOTIFY_SCOPES.join(' '),
     show_dialog: 'false',
   });
   return { url: `${ACCOUNTS_BASE}/authorize?${params.toString()}` };
 }
 
-export async function handleCallback(code) {
+export async function handleCallback(code, options = {}) {
   const tokens = await requestToken({
     grant_type: 'authorization_code',
     code,
-    redirect_uri: getRedirectUri(),
+    redirect_uri: getRedirectUri(options),
   });
   await saveTokens(withExpiry(tokens));
   console.log('🎧 Spotify OAuth callback processed, tokens stored');
@@ -222,7 +233,7 @@ export async function getAccessToken() {
   return refreshPromise;
 }
 
-export async function getAuthStatus() {
+export async function getAuthStatus(options = {}) {
   const credentials = await getCredentials();
   const tokens = await getTokens();
   return {
@@ -230,6 +241,6 @@ export async function getAuthStatus() {
     hasTokens: !!(tokens?.access_token || tokens?.refresh_token),
     expiresAt: Number.isFinite(tokens?.expires_at) ? new Date(tokens.expires_at).toISOString() : null,
     scope: tokens?.scope || null,
-    redirectUri: getRedirectUri(),
+    redirectUri: getRedirectUri(options),
   };
 }

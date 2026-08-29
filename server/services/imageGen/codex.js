@@ -9,10 +9,10 @@
  * Wire format: `codex exec --skip-git-repo-check --sandbox workspace-write
  * '$imagegen <prompt>'`. Codex prints a `session id: <uuid>` banner on stderr
  * and usually writes the final PNG to
- * `~/.codex/generated_images/<session-id>/ig_*.png`. Newer Codex builds can
- * keep the image bytes only in the session JSONL's `image_generation_end`
- * event, so we parse the banner and harvest both locations after the child
- * exits.
+ * `~/.codex/generated_images/<session-id>/*.png` (`ig_*.png` historically;
+ * newer builds use `exec-*.png`). Other Codex builds can keep the image bytes
+ * only in the session JSONL's `image_generation_end` event, so we parse the
+ * banner and harvest both locations after the child exits.
  *
  * The user must explicitly enable this provider in Settings → Image Gen
  * because not every Codex account has access to the `image_gen` tool. When
@@ -460,14 +460,15 @@ const finalizeError = (job, jobId, proc, reason) => {
   closeJobAfterDelay(jobs, jobId);
 };
 
-// Returns the absolute path to the newest ig_*.png in the session dir, or
-// null if none appears within `timeoutMs`. Polls every 250ms — the file
-// usually lands in <1s but the rare slow case is fine.
+// Returns the absolute path to the newest PNG in the session dir. Codex has
+// used both `ig_*.png` and `exec-*.png`; the per-session directory is already
+// the ownership boundary, so a filename-prefix allowlist only turns valid tool
+// output into a false failure when the CLI changes its internal naming again.
 async function latestGeneratedImageFile(sessionId) {
   const dir = codexImagesDir(sessionId);
   if (!existsSync(dir)) return null;
   const names = await readdir(dir).catch(() => []);
-  const pngs = names.filter((f) => f.startsWith('ig_') && f.endsWith('.png'));
+  const pngs = names.filter((name) => name.toLowerCase().endsWith('.png'));
   if (pngs.length) {
     const stats = await Promise.all(pngs.map(async (n) => {
       const s = await stat(join(dir, n)).catch(() => null);
@@ -543,8 +544,8 @@ async function harvestGeneratedImage(sessionId, timeoutMs) {
     if (path) return { path };
 
     // Newer Codex builds may persist image bytes only in the session JSONL as
-    // image_generation_end.result (base64), without materializing
-    // ~/.codex/generated_images/<session-id>/ig_*.png. Decode that fallback so
+    // image_generation_end.result (base64), without materializing a PNG in
+    // ~/.codex/generated_images/<session-id>/. Decode that fallback so
     // a real generation does not get reported as "success but no file".
     const sessionImage = await harvestSessionLogImage(sessionId);
     if (sessionImage) return { buffer: sessionImage.buffer, sessionLogPath: sessionImage.path };

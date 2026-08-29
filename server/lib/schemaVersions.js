@@ -347,6 +347,11 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // to 2 then (where a v1 peer would round-trip the new shape through an
   // unaware sanitizer).
   storyBuilder: 1,
+  // v1 = FableLoom stories federate through the per-record push pipeline
+  // (record kind/category `fableLoom`). A pre-feature receiver has no merge
+  // path for the whole-record story graph, so only this category pauses until
+  // both peers upgrade; unrelated categories continue syncing.
+  fableLoom: 1,
   // v1 = Creative Director projects (PostgreSQL `creative_director_projects`)
   // federated via the per-record peer-sync push pipeline (record kind
   // `creativeDirectorProject`, sync category `creativeDirectorProjects`, #1564).
@@ -635,6 +640,7 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
   'cat-ingredient': Object.freeze(['catalog']),
   'cat-scrap': Object.freeze(['catalog']),
   storyBuilder: Object.freeze(['storyBuilder']),
+  fableLoom: Object.freeze(['fableLoom']),
   creativeDirectorProject: Object.freeze(['creativeDirectorProjects']),
   moodBoard: Object.freeze(['moodBoards']),
   writersRoomWork: Object.freeze(['writersRoomWorks']),

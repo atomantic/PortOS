@@ -10,7 +10,7 @@ import {
   syncSignal,
 } from '../../services/api';
 
-// Settings → Signal (#2154). Opt-in, machine-local ingestion of Signal Desktop's
+// Comms → Messages → Signal (#2154). Opt-in, machine-local ingestion of Signal Desktop's
 // SQLCipher-encrypted chat database into the Tribe touchpoint log + activity
 // timeline. OFF by default — reading the DB needs Signal's keychain-wrapped key.
 // Highest-fragility source: everything degrades gracefully to an actionable error.

@@ -3,7 +3,6 @@
 // earned. Artifacts are DERIVED from data the city already has — no new endpoint:
 //   • level milestones  — D&D-style character level crossing a threshold (level-up statues)
 //   • completed-goal milestones — every Nth completed life goal (achievement trophies)
-//   • streak milestones — best CoS completion streak crossing a threshold (streak trophies)
 // Nothing earned → empty cluster (no crash). No three.js / React imports so the topology is
 // unit-testable (mirrors openWorldGoalMonuments.js / openWorldProductivity.js).
 
@@ -46,15 +45,6 @@ export const GOAL_MILESTONES = [
   { count: 10, tier: 'gold', label: '10 GOALS' },
 ];
 
-// Best-streak milestones (in days): a trophy when the longest CoS completion streak crosses
-// a threshold. Uses the *best* (longest) streak so an earned trophy never disappears when the
-// current streak resets.
-export const STREAK_MILESTONES = [
-  { days: 3, tier: 'bronze', label: '3 DAY STREAK' },
-  { days: 7, tier: 'silver', label: '7 DAY STREAK' },
-  { days: 30, tier: 'gold', label: '30 DAY STREAK' },
-];
-
 // Coerce a value to a finite number or return null (the "absent" sentinel) so an absent field
 // never collapses into a real 0.
 function finiteOrNull(value) {
@@ -84,20 +74,9 @@ export function completedGoalCount(goals) {
   return list.filter((g) => g && typeof g === 'object' && g.status === 'completed').length;
 }
 
-// Best (longest) streak in days from the productivity quick-summary payload
-// (`{ streak: { current, longest, ... } }`). Falls back to `current` if `longest` is absent so
-// a payload that only carries a current streak still earns trophies. Returns null when absent.
-export function bestStreakDays(productivityData) {
-  const streak = productivityData?.streak;
-  if (!streak || typeof streak !== 'object') return null;
-  const longest = finiteOrNull(streak.longest);
-  if (longest !== null) return longest;
-  return finiteOrNull(streak.current);
-}
-
 // Build the list of EARNED artifact descriptors (kind/label/tier/threshold) from the three
 // inputs, before placement. Deterministic and side-effect-free.
-export function earnedArtifacts({ character, goals, productivityData } = {}) {
+export function earnedArtifacts({ character, goals } = {}) {
   const earned = [];
 
   const level = effectiveLevel(character);
@@ -113,15 +92,6 @@ export function earnedArtifacts({ character, goals, productivityData } = {}) {
   for (const m of GOAL_MILESTONES) {
     if (completed >= m.count) {
       earned.push({ id: `goals-${m.count}`, kind: 'goal', tier: m.tier, label: m.label, threshold: m.count });
-    }
-  }
-
-  const streak = bestStreakDays(productivityData);
-  if (streak !== null) {
-    for (const m of STREAK_MILESTONES) {
-      if (streak >= m.days) {
-        earned.push({ id: `streak-${m.days}`, kind: 'streak', tier: m.tier, label: m.label, threshold: m.days });
-      }
     }
   }
 
@@ -147,10 +117,10 @@ export function placeArtifact(descriptor, index) {
 
 // Full derived view-model for the component. Injects all inputs; an all-absent / nothing-earned
 // state yields an empty cluster (`hasData: false`) rather than a crash. Ordering is stable
-// (level → goal → streak, each ascending threshold) so the cluster doesn't reshuffle across
+// (level → goal, each ascending threshold) so the cluster doesn't reshuffle across
 // refetches.
-export function computeArtifacts({ character, goals, productivityData } = {}) {
-  const descriptors = earnedArtifacts({ character, goals, productivityData });
+export function computeArtifacts({ character, goals } = {}) {
+  const descriptors = earnedArtifacts({ character, goals });
   const artifacts = descriptors.map((d, i) => placeArtifact(d, i));
 
   return {

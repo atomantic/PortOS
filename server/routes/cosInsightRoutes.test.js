@@ -12,12 +12,7 @@ vi.mock('../services/cos.js', () => ({
 }));
 
 vi.mock('../services/taskLearning.js', () => ({
-  getLearningInsights: vi.fn(),
-  estimateQueueCompletion: vi.fn()
-}));
-
-vi.mock('../services/autonomousJobs.js', () => ({
-  getJobStats: vi.fn()
+  getLearningInsights: vi.fn()
 }));
 
 vi.mock('../services/productivity.js', () => ({
@@ -27,8 +22,7 @@ vi.mock('../services/productivity.js', () => ({
   getDailyTrends: vi.fn(),
   getActivityCalendar: vi.fn(),
   getOptimalTimeInfo: vi.fn(),
-  getVelocityMetrics: vi.fn(),
-  getWeekComparison: vi.fn()
+  getVelocityMetrics: vi.fn()
 }));
 
 vi.mock('../services/goalProgress.js', () => ({
@@ -48,7 +42,6 @@ vi.mock('../services/notifications.js', () => ({
 
 import * as cos from '../services/cos.js';
 import * as taskLearning from '../services/taskLearning.js';
-import * as autonomousJobs from '../services/autonomousJobs.js';
 import * as productivity from '../services/productivity.js';
 import * as goalProgress from '../services/goalProgress.js';
 import * as decisionLog from '../services/decisionLog.js';
@@ -70,7 +63,7 @@ describe('CoS Insight Routes', () => {
 
   describe('GET /api/cos/productivity', () => {
     it('should return productivity insights', async () => {
-      productivity.getProductivityInsights.mockResolvedValue({ streaks: {}, efficiency: 0.8 });
+      productivity.getProductivityInsights.mockResolvedValue({ dailyPatterns: {}, efficiency: 0.8 });
 
       const response = await request(app).get('/api/cos/productivity');
 
@@ -81,12 +74,12 @@ describe('CoS Insight Routes', () => {
 
   describe('GET /api/cos/productivity/summary', () => {
     it('should return productivity summary', async () => {
-      productivity.getProductivitySummary.mockResolvedValue({ currentStreak: 5 });
+      productivity.getProductivitySummary.mockResolvedValue({ totalDays: 5 });
 
       const response = await request(app).get('/api/cos/productivity/summary');
 
       expect(response.status).toBe(200);
-      expect(response.body.currentStreak).toBe(5);
+      expect(response.body.totalDays).toBe(5);
     });
   });
 
@@ -277,26 +270,24 @@ describe('CoS Insight Routes', () => {
         lastEvaluation: Date.now(),
         accomplishments: ['Fixed bug']
       });
-      productivity.getProductivitySummary.mockResolvedValue({
-        currentStreak: 5, longestStreak: 10, weeklyStreak: 3, lastActive: Date.now()
-      });
       cos.getAllTasks.mockResolvedValue({
         user: { grouped: { pending: [] } },
         cos: { awaitingApproval: [], grouped: { pending: [] } }
       });
-      autonomousJobs.getJobStats.mockResolvedValue({ nextDue: null });
       productivity.getVelocityMetrics.mockResolvedValue({
         velocity: 120, velocityLabel: 'Above average', avgPerDay: 3, historicalDays: 30
       });
-      productivity.getWeekComparison.mockResolvedValue({ delta: 2 });
-      productivity.getOptimalTimeInfo.mockResolvedValue({ hasData: false });
-      taskLearning.estimateQueueCompletion.mockResolvedValue({ eta: null });
 
       const response = await request(app).get('/api/cos/quick-summary');
 
       expect(response.status).toBe(200);
       expect(response.body.today.completed).toBe(3);
-      expect(response.body.streak.current).toBe(5);
+      expect(response.body).not.toHaveProperty('streak');
+      expect(response.body).not.toHaveProperty('nextJob');
+      expect(response.body).not.toHaveProperty('weekComparison');
+      expect(response.body).not.toHaveProperty('optimalTime');
+      expect(response.body.today).not.toHaveProperty('accomplishments');
+      expect(response.body.queue).not.toHaveProperty('estimate');
       expect(response.body.velocity.percentage).toBe(120);
     });
   });

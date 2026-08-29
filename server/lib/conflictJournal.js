@@ -487,6 +487,9 @@ export const RESTORABLE_FIELDS = Object.freeze({
   // machine-local schedule/runs/assignment/enabled are never in a snapshot
   // (stripped from the wire) so they're excluded.
   creativeCommission: ['name', 'targetAbility', 'brief', 'generation', 'feedbackWindow'],
+  // FableLoom restores the authored story graph and playback configuration.
+  // Universe/series ids are structural links and stay on the live record.
+  fableLoom: ['name', 'logline', 'premise', 'styleNotes', 'format', 'playSettings', 'seriesPlan', 'participationMode', 'audienceCommunicationMedium', 'episodes'],
   // Writers Room exercises (#1645): the user-authored sprint fields the merge can
   // restore through `restoreExercise` — the appended prose + the sprint config.
   // Server-owned / structural fields are excluded (`id`/`createdAt`/`startedAt`/

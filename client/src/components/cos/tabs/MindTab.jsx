@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
-import { ArrowUp, Brain, Check, CirclePause, CirclePlay, Cpu, Database, Eraser, ImagePlus, MessageCircle, RefreshCw, Settings2, Square, StickyNote, Upload, Wrench, X } from 'lucide-react';
+import { ArrowUp, Brain, Check, CirclePause, CirclePlay, Cpu, Database, Eraser, ImagePlus, MessageCircle, PhoneCall, PhoneOff, RefreshCw, Settings2, Square, StickyNote, Upload, Wrench, X } from 'lucide-react';
 import { Link } from 'react-router';
 import useMounted from '../../../hooks/useMounted';
 import { useSocket } from '../../../hooks/useSocket';
@@ -178,6 +178,11 @@ export default function MindTab() {
   const [visibility, setVisibility] = useState(null);
   const [visibilityError, setVisibilityError] = useState(null);
   const [visibilityLoading, setVisibilityLoading] = useState(true);
+  // FaceTime Audio call state — broadcast from callSession.js regardless of
+  // which tab (if any) is the call host, so this chip shows/hides even when
+  // the audio itself is carried by /voice/call-host in another tab.
+  const [callState, setCallState] = useState(null);
+  const [hangingUp, setHangingUp] = useState(false);
   const cursorRef = useRef(null);
   const loadPendingRef = useRef(false);
   const deferredLoadRef = useRef(false);
@@ -335,6 +340,23 @@ export default function MindTab() {
       socket.off('cos:mind:status', refresh);
     };
   }, [loadHistory, loadRuntime, loadVisibility, socket]);
+
+  useEffect(() => {
+    const onCallState = (snapshot) => setCallState(snapshot?.error ? null : snapshot);
+    socket.on('voice:call:state', onCallState);
+    return () => socket.off('voice:call:state', onCallState);
+  }, [socket]);
+
+  // No ack — the chip's own next `voice:call:state` broadcast (active: false)
+  // is the actual confirmation, same as the call-host page's own hangup.
+  const hangUpCall = useCallback(() => {
+    setHangingUp(true);
+    socket.emit('voice:call:hangup');
+  }, [socket]);
+
+  useEffect(() => {
+    if (!callState?.active) setHangingUp(false);
+  }, [callState?.active]);
 
   useEffect(() => {
     if (!stickToBottomRef.current || !messageListRef.current) return;
@@ -607,6 +629,26 @@ export default function MindTab() {
           }} />
         </div>
       </header>
+
+      {callState?.active && (
+        <Banner
+          tone="info"
+          icon={PhoneCall}
+          title="On a FaceTime Audio call"
+          actions={
+            <button
+              type="button"
+              onClick={hangUpCall}
+              disabled={hangingUp}
+              className="flex min-h-[36px] items-center gap-1.5 rounded border border-port-border px-3 text-xs text-port-text hover:bg-port-border/50 disabled:opacity-50"
+            >
+              <PhoneOff size={14} aria-hidden="true" />{hangingUp ? 'Hanging up…' : 'Hang up'}
+            </button>
+          }
+        >
+          {callState.turns > 0 ? `${callState.turns} turn${callState.turns === 1 ? '' : 's'} so far.` : 'Just connected.'}
+        </Banner>
+      )}
 
       {gap && <Banner tone="warning" title="History gap detected">The saved cursor is no longer retained. The visible trace was reloaded from the newest bounded snapshot.</Banner>}
       {loadError && <Banner tone="error" title="Conversation unavailable">{loadError}. Existing messages are preserved; retry when the connection recovers.</Banner>}

@@ -991,21 +991,35 @@
     },
     "fableloom-weave-episode": {
       "name": "FableLoom — Weave Episode Graph",
-      "description": "Generates a complete branching-narrative episode as a directed graph of scenes: an opening, 2–4 intent-labeled paths per scene (with example reader phrasings), and multiple distinct endings. Grounded in the loom's premise plus the linked universe's canon. Returns { startKey, nodes[] } with author-stable keys the service maps onto server-minted node ids.",
+      "description": "Generates a complete interactive-video episode as single-camera-cut nodes, choosing its own node and ending counts from the story. Automatic cuts use one Continue path; decision nodes loop while waiting on viewer intent. Each node includes image, video, and camera-movement direction.",
       "model": "heavy",
       "returnsJson": true,
       "variables": []
     },
     "fableloom-branch-node": {
       "name": "FableLoom — Branch a Scene",
-      "description": "Grows new paths out of ONE scene of a branching-narrative episode: each branch is a new scene plus the reader intent (label + example phrasings + spoiler-safe description) that leads to it, kept distinct from the scene's existing paths. Returns { branches[] }.",
+      "description": "Turns one camera-cut node into an interactive decision and grows new intent paths from it. Each branch is a new single-shot node with playback, image, video, and camera-movement direction. Returns { branches[] }.",
       "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "fableloom-generate-series-plan": {
+      "name": "FableLoom — Draft Series Plan",
+      "description": "Drafts a complete series-level scaffold from the loom title, logline, premise, linked-universe canon, and episode outline. Returns a full story arc plus ordered plot points and side quests without changing episode scene graphs.",
+      "model": "heavy",
       "returnsJson": true,
       "variables": []
     },
     "fableloom-feedback-episode": {
       "name": "FableLoom — Apply Episode Feedback",
       "description": "Applies one conversational author instruction to an existing branching-narrative episode. Returns sparse patches for episode metadata, existing scene content, and existing path labels/details while preserving scene and path ids.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
+    "fableloom-feedback-series-plan": {
+      "name": "FableLoom — Apply Series Plan Feedback",
+      "description": "Applies one conversational author instruction to a FableLoom series arc, ordered plot points, and side quests without changing episode scene graphs. Returns a sparse top-level plan patch plus a short change list.",
       "model": "heavy",
       "returnsJson": true,
       "variables": []
@@ -1027,6 +1041,13 @@
     "fableloom-review": {
       "name": "FableLoom — Episode Review",
       "description": "Story-editor critique of a branching episode's narrative layer — intent clarity, branch coherence, ending payoff, scene craft, canon fit — layered over the deterministic graph checks (which run separately and are passed in so the model doesn't repeat them). Returns { summary, findings[] } with node-anchored findings.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
+    "fableloom-review-series-plan": {
+      "name": "FableLoom — Review Series Plan",
+      "description": "Holistic story-editor analysis of the series arc, ordered plot points, side-quest lifecycle, and episode outline. Returns a summary, strengths, risks, and actionable recommendations without modifying the loom.",
       "model": "heavy",
       "returnsJson": true,
       "variables": []

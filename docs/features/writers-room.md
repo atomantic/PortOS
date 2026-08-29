@@ -16,9 +16,9 @@ The page lives in the sidebar's **Create** group. The main workspace is `client/
 
 ## Writing Exercise ("write for 10")
 
-`ExercisePanel.jsx` runs timed free-write sprints (default 10 minutes, clamped 1–60): start, finish, or discard, with live word count. Sessions can start standalone or attached to a work, and history records date, duration, word deltas, linked work, and prompt. Finished sprint text is stored as `appendedText` on the exercise record.
+`ExercisePanel.jsx` runs timed free-write sprints (default 10 minutes, clamped 1–60): start, finish, or discard, with live word count. Sessions can start standalone or attached to a work, and history records date, duration, word deltas, linked work, and prompt. Finished sprint text is stored as `appendedText` on the exercise record. A finished sprint tied to the open work can be added to its active draft; promotion appends the trimmed sprint text, records `promotedAt` and `promotedDraftVersionId`, and keeps the existing draft version and ingredient references.
 
-Not built (deliberately deferred): pause/resume mid-session, and a "promote to draft" action that merges `appendedText` into the work — the session record carries everything needed to add it later.
+Not built (deliberately deferred): pause/resume mid-session.
 
 ## Storage
 

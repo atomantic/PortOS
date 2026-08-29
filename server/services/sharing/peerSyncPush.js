@@ -36,6 +36,7 @@ import { getTrack } from '../tracks/index.js';
 import { getProject } from '../creativeDirector/local.js';
 import { getProject as getMusicVideoProject } from '../musicVideo/projects.js';
 import { getBoard } from '../moodBoard/index.js';
+import { getLoom } from '../fableLoom/index.js';
 import {
   getWorkForSync,
   buildWorkBodyManifest,
@@ -55,6 +56,7 @@ import {
   buildTrackAssetManifest,
   buildProjectAssetManifest,
   buildBoardAssetManifest,
+  buildFableLoomAssetManifest,
   buildMusicVideoAssetManifest,
 } from './peerSyncAssets.js';
 import {
@@ -131,6 +133,10 @@ async function isSubscriptionRecordTombstone(sub) {
   }
   if (sub.recordKind === 'moodBoard') {
     const record = await getBoard(sub.recordId, { includeDeleted: true }).catch(() => null);
+    return record?.deleted === true;
+  }
+  if (sub.recordKind === 'fableLoom') {
+    const record = await getLoom(sub.recordId, { includeDeleted: true }).catch(() => null);
     return record?.deleted === true;
   }
   if (sub.recordKind === 'writersRoomWork') {
@@ -492,7 +498,7 @@ export async function pushRecordToPeer(sub, options = {}) {
   }
   // Conflict-journal base hash: this record's content now lives on the peer too
   // (the record always lands even when assets are still pulling), so stamp the
-  // shared-state base for the two journaled kinds. This is the symmetric
+  // shared-state base for conflict-journal-aware kinds. This is the symmetric
   // convergence point to the receiver advancing its base in mergeXxxFromSync —
   // it keeps a peer's echo (reverse-subscription push-back) from later looking
   // like a divergence. Best-effort; never block the push result on a slow DISK
@@ -816,6 +822,14 @@ export async function buildPushPayload(sub, sourceInstanceId) {
     if (!sanitized) return null;
     const assetManifest = record.deleted === true ? [] : await buildBoardAssetManifest(record);
     return { kind: 'moodBoard', record: sanitized, assetManifest, sourceInstanceId, portosMeta };
+  }
+  if (sub.recordKind === 'fableLoom') {
+    const record = await getLoom(sub.recordId, { includeDeleted: true }).catch(() => null);
+    if (!record) return null;
+    const sanitized = sanitizeRecordForWire('fableLoom', record);
+    if (!sanitized) return null;
+    const assetManifest = record.deleted === true ? [] : await buildFableLoomAssetManifest(record);
+    return { kind: 'fableLoom', record: sanitized, assetManifest, sourceInstanceId, portosMeta };
   }
   if (sub.recordKind === 'writersRoomWork') {
     const record = await getWorkForSync(sub.recordId).catch(() => null);

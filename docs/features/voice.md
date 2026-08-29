@@ -15,6 +15,115 @@ PortOS includes an optional voice assistant with support for fully local operati
 
 The TTS engine is selectable in **Settings → Voice → TTS engine**.
 
+### FaceTime Audio control plane
+
+FaceTime Audio controls are off by default and remain machine-local. On macOS, run `npm run setup:facetime`, grant the installed helper Accessibility permission in System Settings, choose the configured BlackHole devices in FaceTime, then enable **FaceTime Audio** in Settings → Features. Set a target name and E.164 phone number or email in Settings → Voice, save, and use **Probe**, **Test call**, or **Hang up**. The helper refuses ambiguous FaceTime surfaces and never uses coordinate clicks.
+
+### FaceTime Audio call bridge
+
+The control plane can dial and hang up. Carrying the conversation takes two
+virtual audio devices and a browser tab.
+
+**Devices.** `npm run setup:facetime` offers to run `brew install blackhole-2ch
+blackhole-16ch`. BlackHole is GPLv3 and is never bundled — PortOS asks, you
+install it, and declining is fine (dial and hang up keep working without it).
+In FaceTime, set the **output** to BlackHole 16ch and the **microphone** to
+BlackHole 2ch. Both must run at 48 kHz; **Settings → Voice → Check setup**
+verifies the label, rate, and channel count of each and names the exact problem
+when one is wrong. A device list that cannot be read at all reports that
+plainly rather than claiming the device is missing.
+
+**Call host.** Open **/voice/call-host** in a browser tab on the Mac running
+PortOS and press **Attach call host**. Device permissions and `setSinkId` need
+a real browser profile, so this cannot live on the server. The page reads
+BlackHole 16ch (what FaceTime plays into), streams it to PortOS as 16 kHz mono
+PCM, and plays each reply back through BlackHole 2ch (what FaceTime hears as
+its microphone). An input-level meter and a one-second test tone confirm both
+directions before you rely on them.
+
+The page **fails closed and says why**: a browser missing any required API
+names all of them at once, a missing or misconfigured device is named
+specifically, an unlabeled device list is reported as a missing microphone
+permission rather than a missing driver, and a second tab is refused — it holds
+a Web Lock, and the server refuses a second host independently, so two tabs can
+never double-answer one call.
+
+**Turns.** A phone call has no push-to-talk, so the server decides where a turn
+ends: energy-based voice activity detection with 700 ms of trailing silence and
+a 20-second ceiling per utterance. Each utterance runs the **existing** voice
+pipeline — same persona, tools, confirm gate, and TTS settings as the widget.
+Speaking over a reply interrupts it, exactly as the widget's barge-in does.
+
+**Ending.** The call ends when the caller hangs up, after 60 seconds of caller
+silence, at the configured maximum call length (Settings → Voice, default 15
+minutes), or when the call-host tab goes away — a call nobody can hear is ended
+rather than left running. The helper's own view of the FaceTime window is the
+source of truth throughout: a probe that fails is treated as unknown, never as
+a hangup.
+
+**What is kept.** A text transcript is appended to the daily journal, labelled
+`Caller` and `PortOS`. The call audio is never persisted, and the configured
+handle never appears in the transcript or its metadata.
+
+**Calls PortOS places on its own.** Two opt-in paths can dial without you
+asking: the Persistent Mind's `voice.call-user` grant, and the
+critical-notification escalation in **Settings → Voice**. Both are off by
+default and share one gate and one budget — never while a browser tab can speak
+the message, never inside voice quiet hours, at most 3 calls per rolling 24
+hours and at least 30 minutes apart, counted in durable state so a restart
+cannot reset them. Escalation additionally fires only for a `critical`
+notification that is *still unread* after `escalateAfterMinutes`. See
+[Chief of Staff enhancement → Persistent Mind phone calls](./cos-enhancement.md#persistent-mind-phone-calls).
+
+**Calling PortOS back.** Turn on **Automatically answer incoming calls** in
+Settings → Voice → FaceTime Audio (`facetime.autoAnswer`, off by default) to
+call the Mac from your phone or watch and talk to your Chief of Staff. Fail
+closed by construction: the helper's `answer` command presses only the
+Notification Center action naming your own configured identity — a call from
+any other handle is left ringing, and PortOS never logs anything that would
+name who it was. Answering also needs the **call host** tab open and attached
+on this Mac (same tab the outbound bridge uses); without it, an authorized
+call rings unanswered and a `medium` notification records the miss instead of
+silently dropping it. Quiet hours change only the greeting's tone, never
+whether the call is picked up — you placed it, so PortOS answers at any hour.
+Once answered, the call runs exactly like an outbound one: whisper STT →
+voice LLM/persona → Kokoro/Piper TTS, the same silence/max-duration/hangup
+rules, and a transcript in the daily journal. If the Persistent Mind is
+running, the call carries its persona and context and the transcript is
+handed back to it as a message on hangup, continuing the same conversation on
+its next wake; if the mind isn't running, it's the plain voice persona, same
+as the widget. The Mind tab shows an active-call chip with a **Hang up**
+button (`voice:call:hangup`) for either direction, from any tab — not just
+the one carrying the audio.
+
+### Meeting capture
+
+The call-host page's second mode: **/voice/call-host?mode=capture** (or the
+**Capture system audio** tab on the same page) turns live audio from a
+Zoom/Meet/FaceTime meeting into a timestamped transcript in the daily journal
+and the Brain inbox — no dialing, no reply, no LLM call.
+
+**Setup.** Reads the same BlackHole 16ch device as the call bridge, so it
+needs no separate driver — but only the input half: capture never plays
+anything back, so BlackHole 2ch is not required. Route the meeting app's
+output to BlackHole 16ch (a macOS Multi-Output Device lets you also hear it
+through your speakers at the same time).
+
+**Capturing.** Press **Start capture**; PortOS transcribes continuously with
+the same whisper.cpp STT and energy-based endpointing (700 ms trailing
+silence) the call bridge uses, but stops there — it never runs the LLM/tools
+pipeline, so no AI provider is called while a meeting is being captured.
+Press **Stop capture** (or close the tab) to finalize: the transcript is
+appended to the daily journal under a "Meeting capture" heading with
+start/stop timestamps, and filed as a Brain inbox item with auto-classify
+off — exactly like a manually-typed thought with classification skipped. The
+usual summarize/tag flow applies only once you ask for it from the inbox.
+
+**Mutually exclusive with a call.** Both modes read the same BlackHole
+device and the same host tab, so starting one while the other is active on
+this tab is refused with a specific reason rather than fighting over the
+device.
+
 ### Why Kokoro is the default
 
 Kokoro is a 82M-parameter frontier TTS model that runs in-process via ONNX Runtime + transformers.js — **no Python, no extra binaries, cross-platform**. Quality is significantly higher than Piper (more natural prosody, expressive pacing). First synthesis after server start has a 2–3 s cold start as the model loads; warm calls are 200–500 ms per sentence on CPU.
@@ -130,7 +239,16 @@ Barge-in works by aborting the shared `AbortController` tied to the current turn
 | GET  | `/api/voice/voices` | Voices for the active TTS engine |
 | POST | `/api/voice/test`   | Body `{ text }`, returns WAV bytes — verifies TTS |
 
-Socket events are documented in `server/sockets/voice.js`.
+| GET  | `/api/voice/facetime/status` | BlackHole device + helper + identity preflight |
+| POST | `/api/voice/facetime/{probe,call,answer,hangup}` | Machine-local call control |
+
+Socket events are documented in `server/sockets/voice.js` — including the
+call-host bridge (`voice:call:attach` / `voice:call:audio` / `voice:call:detach`
+/ `voice:call:hangup` inbound, `voice:call:state` / `voice:call:tts` outbound —
+`voice:call:state` broadcasts to every connected tab, not just the call host,
+so the Mind tab's active-call chip stays in sync) and meeting capture, which
+reuses the same `voice:call:audio` PCM frames (`voice:capture:start` /
+`voice:capture:stop` inbound, `voice:capture:state` outbound).
 
 ## Troubleshooting
 

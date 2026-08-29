@@ -26,7 +26,7 @@ export default function LoomValidationPanel({ loom, episode, onSelectNode }) {
     () => [
       episode.startNodeId,
       ...episode.nodes.map((n) =>
-        `${n.id}|${n.isEnding ? 1 : 0}|${(n.transitions || []).map((t) => `${t.targetNodeId}:${t.intent}`).join(',')}`),
+        `${n.id}|${n.isEnding ? 1 : 0}|${n.playbackMode || 'decision'}|${(n.transitions || []).map((t) => `${t.targetNodeId}:${t.intent}`).join(',')}`),
     ].join(';'),
     [episode.startNodeId, episode.nodes],
   );
@@ -68,6 +68,7 @@ export default function LoomValidationPanel({ loom, episode, onSelectNode }) {
           <h3 className="text-sm font-semibold">Structure</h3>
           {structural?.stats && (
             <span className="text-xs text-port-text-muted">
+              {structural.stats.automaticCutCount} cuts · {structural.stats.decisionCount} decisions ·{' '}
               {structural.stats.reachableEndingCount}/{structural.stats.endingCount} endings reachable
               · depth {structural.stats.maxDepth}
             </span>

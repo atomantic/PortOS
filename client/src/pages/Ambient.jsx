@@ -84,7 +84,6 @@ export default function Ambient() {
 
   const cosSummary = data?.cosSummary;
   const today = useMemo(() => cosSummary?.today || {}, [cosSummary]);
-  const streak = useMemo(() => cosSummary?.streak || {}, [cosSummary]);
   const goals = data?.goals;
   const deathData = data?.deathClock;
 
@@ -204,11 +203,10 @@ export default function Ambient() {
           </AmbientPanel>
 
           <AmbientPanel title="Agent Activity">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-3">
               <AmbientStat label="Running" value={today.running || 0} color={today.running > 0 ? 'rgb(var(--port-accent))' : null} />
               <AmbientStat label="Completed" value={today.completed || 0} color={today.completed > 0 ? 'rgb(var(--port-success))' : null} />
               <AmbientStat label="Failed" value={today.failed || 0} color={today.failed > 0 ? 'rgb(var(--port-error))' : null} />
-              <AmbientStat label="Streak" value={`${streak.current || 0}d`} color={streak.current >= 7 ? 'rgb(var(--port-warning))' : null} />
             </div>
             {cosSummary?.status?.running && (
               <div className="mt-3 flex items-center gap-2">

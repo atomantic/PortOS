@@ -21,6 +21,13 @@ import { buildCliArgs, prepareCliPrompt } from './cliProviderArgs.js';
 import { killProcessTree, resolveWindowsExecutable, prepareWindowsSafeSpawn } from './bufferedSpawn.js';
 import { buildCliChildEnv } from './cliChildEnv.js';
 
+// How much stderr to hand back to callers. Enough to carry a rate-limit banner
+// or a stack's first frames, short enough to embed in an error message or a
+// persisted sync status without dumping a whole log into the UI.
+const STDERR_TAIL_LIMIT = 500;
+
+const stderrTailOf = (stderr) => stderr.trim().slice(-STDERR_TAIL_LIMIT);
+
 /**
  * Resolve which CLI provider + model a feature should use from the providers
  * list and the feature's stored `{ providerId, model }` config.
@@ -66,6 +73,15 @@ export function pickCliProvider(providers, config = {}) {
  * live for logging/progress. Mirrors the canonical `executeCliRun` settle
  * semantics — never rejects; failures come back as `{ error }`.
  *
+ * A non-zero exit that still produced stdout resolves as `{ text, partial: true }`
+ * rather than an error, because a CLI that printed a usable answer before dying
+ * (rate-limit banner, context overflow, killed mid-stream) is worth parsing.
+ * **That text may be TRUNCATED.** A caller MUST gate any destructive use of
+ * `text` — pruning, replacing, or overwriting stored records against it — on
+ * `partial === false`; a truncated payload otherwise reads as "these records no
+ * longer exist" and deletes real data. `stderrTail` carries the last
+ * `STDERR_TAIL_LIMIT` chars of stderr so the caller can surface WHY it was partial.
+ *
  * @param {object} args
  * @param {object} args.provider - resolved CLI provider (must have `.command`)
  * @param {string|null} [args.model] - model override; applied as `defaultModel` so buildCliArgs injects it
@@ -75,7 +91,7 @@ export function pickCliProvider(providers, config = {}) {
  * @param {number} [args.timeoutMs] - SIGTERM after this many ms (default 300000)
  * @param {(chunk: string, stream: 'stdout'|'stderr') => void} [args.onData] - live output callback
  * @param {NodeJS.ProcessEnv} [args.baseEnv] - base env for the child (default process.env); the shared child-env composer filters inherited variables. Explicit provider.envVars still overlays it.
- * @returns {Promise<{ text: string, exitCode: number, stderr: string } | { error: string, exitCode?: number, stderr?: string }>}
+ * @returns {Promise<{ text: string, exitCode: number, stderr: string, partial: boolean, stderrTail: string } | { error: string, exitCode?: number, stderr?: string, stderrTail?: string }>}
  */
 export function runCliProviderPrompt(args = {}) {
   const { provider, model = null, prompt, cwd, extraArgs = [], timeoutMs = 300000, onData, baseEnv = process.env } = args;
@@ -146,7 +162,7 @@ export function runCliProviderPrompt(args = {}) {
 
     const timer = setTimeout(() => {
       if (!child.killed) killProcessTree(child);
-      done({ error: `Provider call timed out after ${timeoutMs}ms`, text: stdout.trim(), stderr });
+      done({ error: `Provider call timed out after ${timeoutMs}ms`, text: stdout.trim(), stderr, stderrTail: stderrTailOf(stderr) });
     }, timeoutMs);
 
     // Register listeners BEFORE writing stdin so an immediate spawn failure or
@@ -173,13 +189,15 @@ export function runCliProviderPrompt(args = {}) {
 
     child.on('close', (code) => {
       const text = stdout.trim();
+      const stderrTail = stderrTailOf(stderr);
       // A non-zero exit with no stdout is a hard failure; surface stderr.
       // Match the historical calendar-sync rule: any stdout means partial
-      // success worth returning to the parser.
+      // success worth returning to the parser — but flag it `partial` so the
+      // caller can refuse to treat a possibly-truncated payload as complete.
       if (code !== 0 && !text) {
-        return done({ error: (stderr.trim().slice(0, 500) || `${provider.command} exited with code ${code}`), exitCode: code, stderr });
+        return done({ error: (stderr.trim().slice(0, STDERR_TAIL_LIMIT) || `${provider.command} exited with code ${code}`), exitCode: code, stderr, stderrTail });
       }
-      done({ text, exitCode: code, stderr });
+      done({ text, exitCode: code, stderr, partial: code !== 0, stderrTail });
     });
   });
 }

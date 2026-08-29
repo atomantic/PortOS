@@ -47,7 +47,7 @@ export const isWithinQuietHours = isWithinTimeWindow;
 // Pull the user's current local minutes-from-midnight via Intl. Server runs
 // TZ=UTC, so a naive `new Date().getHours()` would compare quiet hours
 // against UTC and silently let the bot speak during the user's bedtime.
-const getLocalMinutes = async () => {
+export const getLocalMinutes = async () => {
   const tz = await getUserTimezone();
   const parts = getLocalParts(new Date(), tz);
   return parts.hour * 60 + parts.minute;

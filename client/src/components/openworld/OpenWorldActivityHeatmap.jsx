@@ -3,7 +3,7 @@ import { useFrame } from '@react-three/fiber';
 import { computeActivityHeatmap } from '../../utils/openWorldActivityHeatmap';
 
 // OpenWorld productivity-district activity heatmap (issue #817): a GitHub-style contribution
-// grid laid out as a field of thin ground tiles framing the streak monument. Each tile is one
+// grid laid out as a field of thin ground tiles framing the throughput monument. Each tile is one
 // day; its glow scales with that day's completed-task count relative to the busiest day in the
 // window. Today's tile reads accent-blue. Active tiles breathe on the highest quality presets;
 // the static glow keeps the field legible when the pulse is dropped. Data comes from the

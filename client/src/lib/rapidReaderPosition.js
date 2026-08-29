@@ -7,11 +7,53 @@ export const RAPID_READER_PROGRESS_KEY = 'portos-rapid-reader-progress-v1';
 
 const MAX_SAVED_DOCUMENTS = 20;
 
-export const rapidReaderWords = (text = '') => Array.from(text.matchAll(/\S+/g), (match) => ({
-  text: match[0],
-  start: match.index,
-  end: match.index + match[0].length,
-}));
+const PUNCTUATION_ONLY = /^[\p{P}\p{S}]+$/u;
+const OPENING_PUNCTUATION_ONLY = /^[\p{Ps}\p{Pi}'"¿¡]+$/u;
+
+// RSVP should not spend a frame on a quote, bracket, comma, or ellipsis that
+// was separated from its word by line wrapping or HTML conversion. Keep
+// opening punctuation with the next word and closing punctuation with the
+// previous word while retaining source offsets for cursor resume.
+export const rapidReaderWords = (text = '') => {
+  const words = [];
+  let pendingPrefix = '';
+  let pendingStart = null;
+
+  for (const match of text.matchAll(/\S+/g)) {
+    const value = match[0];
+    const start = match.index;
+    const end = start + value.length;
+
+    if (PUNCTUATION_ONLY.test(value)) {
+      if (OPENING_PUNCTUATION_ONLY.test(value) || !words.length) {
+        pendingPrefix += value;
+        if (pendingStart == null) pendingStart = start;
+      } else {
+        const previous = words[words.length - 1];
+        previous.text += value;
+        previous.end = end;
+      }
+      continue;
+    }
+
+    words.push({
+      text: `${pendingPrefix}${value}`,
+      start: pendingStart ?? start,
+      end,
+    });
+    pendingPrefix = '';
+    pendingStart = null;
+  }
+
+  // A dangling opening quote at EOF still belongs to the final displayed
+  // word; dropping it would make the reader silently change the source text.
+  if (pendingPrefix && words.length) {
+    const previous = words[words.length - 1];
+    previous.text += pendingPrefix;
+  }
+
+  return words;
+};
 
 export const rapidReaderWordIndexAtCursor = (text, cursor = 0) => {
   const words = rapidReaderWords(text);

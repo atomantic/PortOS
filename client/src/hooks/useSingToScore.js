@@ -13,7 +13,7 @@
 // in AGENTS.md) so nothing dangles after navigation-away.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { createStreamAnalyser } from '../lib/audioRecorder.js';
+import { createStreamAnalyser, openAnalysisMic } from '../lib/audioRecorder.js';
 import { createPitchTracker } from '../lib/pitchDetect.js';
 import { createMetronome, clampBpm, timeSignatureFromScore, DEFAULT_BPM } from '../lib/metronome.js';
 import { transcribePitchTrack } from '../lib/singToScore.js';
@@ -44,7 +44,8 @@ const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Da
  * @param {string} [opts.musicKey] — key name for enharmonic spelling (e.g. "Eb").
  * @returns {{
  *   phase: string, beat: number|null, result: string|null,
- *   error: string|null, start: () => Promise<void>, stop: () => void,
+ *   error: string|null, micProcessing: object|null,
+ *   start: () => Promise<void>, stop: () => void,
  *   reset: () => void,
  * }}
  */
@@ -53,6 +54,9 @@ export default function useSingToScore({ tempo, score = '', musicKey = 'C' } = {
   const [beat, setBeat] = useState(null);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+  // What the browser actually applied to the capture stream — a stage left on
+  // despite ANALYSIS_AUDIO_CONSTRAINTS is why a transcription can come back off.
+  const [micProcessing, setMicProcessing] = useState(null);
 
   const mountedRef = useMounted();
   const streamRef = useRef(null);     // mic stream we own + must stop
@@ -127,6 +131,8 @@ export default function useSingToScore({ tempo, score = '', musicKey = 'C' } = {
     if (requestGeneration === null) return;
     setError(null);
     setResult(null);
+    // Drop the previous capture's report up front — see useSingToVerify.
+    setMicProcessing(null);
     trackRef.current = [];
 
     // Resolved (and null-checked) BEFORE the claim: on an insecure origin
@@ -145,14 +151,15 @@ export default function useSingToScore({ tempo, score = '', musicKey = 'C' } = {
     // handed back on every path that never reaches teardown() (the unmount bail
     // below is belt-and-suspenders: the hook already releases on unmount).
     claimSession();
-    const src = await getUserMedia({ audio: true }).catch((err) => {
+    const opened = await openAnalysisMic({ getUserMedia }).catch((err) => {
       if (settleStart(requestGeneration)) {
         releaseSession();
         if (mountedRef.current) setError(err?.message || 'Microphone access denied');
       }
       return null;
     });
-    if (!src) return;
+    if (!opened) return;
+    const { stream: src, processing } = opened;
     if (!mountedRef.current || !isCurrent(requestGeneration)) {
       src.getTracks().forEach((track) => track.stop());
       if (isCurrent(requestGeneration)) releaseSession();
@@ -160,6 +167,7 @@ export default function useSingToScore({ tempo, score = '', musicKey = 'C' } = {
     }
     settleStart(requestGeneration);
     streamRef.current = src;
+    setMicProcessing(processing);
 
     const graph = createStreamAnalyser(src);
     analyserRef.current = graph;
@@ -215,6 +223,7 @@ export default function useSingToScore({ tempo, score = '', musicKey = 'C' } = {
   const reset = useCallback(() => {
     setResult(null);
     setError(null);
+    setMicProcessing(null);
   }, []);
 
   // Belt-and-suspenders: cancel everything on unmount so a navigation-away
@@ -225,5 +234,5 @@ export default function useSingToScore({ tempo, score = '', musicKey = 'C' } = {
   cancelRef.current = cancel;
   useEffect(() => () => cancelRef.current(), []);
 
-  return { phase, beat, result, error, start, stop, reset };
+  return { phase, beat, result, error, micProcessing, start, stop, reset };
 }

@@ -225,10 +225,11 @@ export function sanitizeRecordForWire(kind, record) {
       return { ...rest, ...sanitizeSoftDeleteFields(record) };
     }
     case 'moodBoard':
+    case 'fableLoom':
     case 'writersRoomFolder':
     case 'writersRoomExercise':
     case 'commissionFeedback': {
-      // Persona/music/mood-board records: like mediaCollection,
+      // Persona/music/mood-board/FableLoom records: like mediaCollection,
       // no `ephemeral` flag — always wire-syncable when present. Strip-then-tail-
       // re-add the soft-delete pair for byte-stable checksums. The whole record
       // is LWW-overwritten on merge (no item-union), so the wire form converges

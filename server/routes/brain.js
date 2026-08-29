@@ -17,10 +17,13 @@ import syncRoutes from './brainSync.js';
 import dailyLogRoutes from './brainDailyLog.js';
 import songbookRoutes from './brainSongbook.js';
 import youtubeRoutes from './brainYoutube.js';
+import ideaLoomRoutes from './brainIdeaLoom.js';
 
 const router = Router();
 
 router.use(captureRoutes);
+// Static IdeaLoom routes must mount before brainCrud's `/ideas/:id` route.
+router.use(ideaLoomRoutes);
 router.use(crudRoutes);
 router.use(digestRoutes);
 router.use(settingsRoutes);

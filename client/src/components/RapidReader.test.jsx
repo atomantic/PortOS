@@ -62,8 +62,30 @@ describe('RapidReader keyboard transport', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Show two words at a time' }));
 
-    expect(container.textContent).toContain('3/4 words');
+    expect(container.textContent).toContain('3–4/4 words');
     expect(container.textContent).toContain('charlie');
+  });
+
+  it('keeps two-word frames readable and reports the full visible range', () => {
+    const { container } = renderReader({ text: 'alpha bravo charlie delta', chunkSize: 2 });
+
+    expect(container.textContent).toContain('1–2/4 words');
+    expect(container.textContent).toContain('alpha bravo');
+  });
+
+  it('jumps to a navigable section and pauses playback', () => {
+    const sections = [
+      { id: 'part-1', title: 'PART 1: Start', kind: 'part', wordIndex: 0 },
+      { id: 'chapter-1', title: 'Chapter 1: Alpha', kind: 'chapter', wordIndex: 2 },
+    ];
+    const { container } = renderReader({ text: 'one two three four', sections, autoPlay: true });
+    const select = screen.getByRole('combobox', { name: 'Navigate sections' });
+
+    fireEvent.change(select, { target: { value: '2' } });
+
+    expect(select).toHaveValue('2');
+    expect(container.textContent).toContain('Chapter · Chapter 1: Alpha');
+    expect(screen.getByLabelText('Play')).toBeInTheDocument();
   });
 
   it('saves the current canonical position from the bookmark button or B key', () => {
@@ -113,5 +135,28 @@ describe('RapidReader keyboard transport', () => {
 
     expect(screen.getByLabelText('Play')).toBeInTheDocument();
     expect(voiceHotkey()).not.toHaveBeenCalled();
+  });
+});
+
+describe('RapidReader remaining-time readout', () => {
+  installVoiceHotkeySpy();
+
+  const wordsText = (count) => Array.from({ length: count }, (_, i) => `w${i}`).join(' ');
+
+  it('counts down the words still to come and re-derives it when WPM changes', () => {
+    // 600 words at 300 WPM: 599 left after the on-screen chunk → 119.8s → "02:00".
+    const { container } = render(<RapidReader text={wordsText(600)} wpm={300} />);
+    expect(container.textContent).toContain('1/600 words · 02:00 left');
+
+    // The `-` hotkey drops WPM by 25, so the same remainder takes longer.
+    act(() => { fireEvent.keyDown(document.body, { key: '-' }); });
+
+    expect(container.textContent).toContain('1/600 words · 02:11 left');
+  });
+
+  it('renders an over-an-hour remainder as H:MM:SS', () => {
+    // 3700 words at 60 WPM: 3699 left → 3699s → "1:01:39".
+    const { container } = render(<RapidReader text={wordsText(3700)} wpm={60} />);
+    expect(container.textContent).toContain('1:01:39 left');
   });
 });

@@ -8,10 +8,25 @@ import * as spotifySync from '../services/spotifySync.js';
 
 const router = Router();
 
+// OAuth must use the same public origin the browser used to reach this request.
+// Certificate metadata is not guaranteed to be present on every HTTPS install,
+// while the request host is authoritative for the current callback round-trip.
+function requestOrigin(req) {
+  const proto = (req.headers['x-forwarded-proto'] || req.protocol || 'http')
+    .toString().split(',')[0].trim();
+  const host = (req.headers['x-forwarded-host'] || req.headers.host || '')
+    .toString().split(',')[0].trim();
+  return ['http', 'https'].includes(proto) && host ? `${proto}://${host}` : null;
+}
+
+function requestRedirectOptions(req) {
+  return { origin: requestOrigin(req) };
+}
+
 // Status — config (enabled/interval) + machine-local cursor state + OAuth status.
 // No API call, so cheap and safe to poll from the settings tab.
 router.get('/status', asyncHandler(async (req, res) => {
-  const status = await spotifySync.getStatus();
+  const status = await spotifySync.getStatus(requestRedirectOptions(req));
   res.json(status);
 }));
 
@@ -22,27 +37,27 @@ router.post('/auth/credentials', asyncHandler(async (req, res) => {
     clientSecret: z.string().min(1),
   });
   const data = validateRequest(schema, req.body);
-  const result = await spotifyAuth.saveCredentials(data);
+  const result = await spotifyAuth.saveCredentials(data, requestRedirectOptions(req));
   res.json(result);
 }));
 
 // Build the Spotify authorize URL (the SPA opens it to start the OAuth flow).
 router.get('/auth/url', asyncHandler(async (req, res) => {
-  const result = await spotifyAuth.getAuthUrl();
+  const result = await spotifyAuth.getAuthUrl(requestRedirectOptions(req));
   res.json(result);
 }));
 
 // OAuth redirect target — hit by a BROWSER redirect from Spotify, not the SPA —
-// so render every outcome as a redirect to the settings tab (which toasts the
-// oauthError param) instead of the JSON envelope the middleware would send.
+// so render every outcome as a redirect to the Brain Spotify tab (which toasts
+// the oauthError param) instead of the JSON envelope the middleware would send.
 router.get('/oauth/callback', asyncHandler(async (req, res) => {
   const settingsUrl = (error) => (error
-    ? `/settings/spotify?oauthError=${encodeURIComponent(error)}`
-    : '/settings/spotify?oauthConnected=1');
+    ? `/brain/spotify?oauthError=${encodeURIComponent(error)}`
+    : '/brain/spotify?oauthConnected=1');
   const { code, error: authError } = req.query;
   if (authError) return res.redirect(settingsUrl(String(authError)));
   if (!code) return res.redirect(settingsUrl('Missing authorization code'));
-  const error = await spotifyAuth.handleCallback(String(code)).then(() => null)
+  const error = await spotifyAuth.handleCallback(String(code), requestRedirectOptions(req)).then(() => null)
     .catch((err) => {
       // This catch replaces asyncHandler's logging (the redirect swallows the
       // throw), so keep the failure visible in server logs.

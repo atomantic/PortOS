@@ -506,14 +506,17 @@ export function countWords(text) {
 }
 
 /**
- * Format a number of seconds as MM:SS (e.g. 75 → "01:15"). Used for sprint
- * timers and other countdowns. Negative values clamp to 0.
+ * Format a number of seconds as MM:SS (e.g. 75 → "01:15"), or H:MM:SS once the
+ * total reaches an hour (e.g. 3661 → "1:01:01"). Used for sprint timers and
+ * other countdowns. Negative and non-finite values clamp to 0.
  */
 export function formatCountdown(seconds) {
-  const safe = Math.max(0, Math.round(seconds));
-  const m = Math.floor(safe / 60);
+  const safe = Number.isFinite(seconds) ? Math.max(0, Math.round(seconds)) : 0;
+  const h = Math.floor(safe / 3600);
+  const m = Math.floor((safe % 3600) / 60);
   const s = safe % 60;
-  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  const mmss = `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  return h > 0 ? `${h}:${mmss}` : mmss;
 }
 
 /**

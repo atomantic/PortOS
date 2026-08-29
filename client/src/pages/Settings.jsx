@@ -13,9 +13,6 @@ import { GeneralTab } from '../components/settings/GeneralTab';
 import { MortalLoomTab } from '../components/settings/MortalLoomTab';
 import { SecurityTab } from '../components/settings/SecurityTab';
 import { SharingTab } from '../components/settings/SharingTab';
-import { SignalTab } from '../components/settings/SignalTab';
-import { SpotifyTab } from '../components/settings/SpotifyTab';
-import { YoutubeTab } from '../components/settings/YoutubeTab';
 import { VoiceTab } from '../components/settings/VoiceTab';
 import SettingsTabsHeader from '../components/settings/SettingsTabsHeader';
 
@@ -25,7 +22,10 @@ import SettingsTabsHeader from '../components/settings/SettingsTabsHeader';
 const REDIRECTS = {
   'image-gen': '/media/image?settings=1',
   imessage: '/messages/imessage?settings=1',
+  signal: '/messages/signal',
   catalog: '/catalog?settings=1',
+  spotify: '/brain/spotify',
+  youtube: '/brain/youtube',
 };
 
 export default function Settings() {
@@ -48,9 +48,6 @@ export default function Settings() {
       case 'features': return <InstanceFeaturesTab />;
       case 'security': return <SecurityTab />;
       case 'sharing': return <SharingTab />;
-      case 'signal': return <SignalTab />;
-      case 'spotify': return <SpotifyTab />;
-      case 'youtube': return <YoutubeTab />;
       case 'voice': return <VoiceTab />;
       case 'telegram': return <TelegramTab />;
       case 'mortalloom': return <MortalLoomTab />;

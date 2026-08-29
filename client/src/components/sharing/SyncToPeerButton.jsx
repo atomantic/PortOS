@@ -1,6 +1,6 @@
 /**
  * SyncToPeerButton — dropdown of federated PortOS peers that toggles per-record
- * peer-sync subscriptions for universes + series.
+ * peer-sync subscriptions for supported creative records.
  *
  * Sibling of `ShareToButton` (which targets cloud-synced share buckets); this
  * targets *other PortOS instances over Tailnet*. The contract is the same:
@@ -16,7 +16,7 @@
  * from this UI; the Instances page shows the bidirectional picture.
  *
  * Props:
- *   recordKind: 'universe' | 'series'
+ *   recordKind: 'universe' | 'series' | 'fableLoom'
  *   recordId: string  (required — the record's id)
  *   label?: string
  *   compact?: boolean
@@ -87,9 +87,13 @@ export default function SyncToPeerButton({
   // (peerAllowsOutbound + peerHasCategory). Without this triple gate the
   // UI would let the user subscribe to a peer that silently rejects every
   // push (with peer-disabled, peer-disallows-outbound, or
-  // category-disabled), leaving the row checked but no records ever
-  // landing. universe → 'universe' category, series → 'pipeline'.
-  const requiredCategory = recordKind === 'universe' ? 'universe' : 'pipeline';
+  // category-disabled), leaving the row checked but no records ever landing.
+  const categoryMeta = {
+    universe: { key: 'universe', label: 'Universe' },
+    series: { key: 'pipeline', label: 'Pipeline' },
+    fableLoom: { key: 'fableLoom', label: 'FableLoom' },
+  }[recordKind] || { key: recordKind, label: recordKind };
+  const requiredCategory = categoryMeta.key;
   const peerCanReceiveOutbound = (peer) => {
     if (!peer) return false;
     // Global sync flag off → server's pushRecordToPeer refuses.
@@ -196,7 +200,7 @@ export default function SyncToPeerButton({
                 // only directions, or the per-record category is off. UI
                 // mirrors server-side guards in pushRecordToPeer.
                 const canSync = peerCanReceiveOutbound(p);
-                const categoryLabel = requiredCategory === 'universe' ? 'Universe' : 'Pipeline';
+                const categoryLabel = categoryMeta.label;
                 // Compute the most-specific reason for the inline hint.
                 const disabledReason = !canSync
                   ? (p.syncEnabled === false

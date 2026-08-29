@@ -3,12 +3,10 @@ import { Link } from 'react-router';
 import {
   CheckCircle,
   Clock,
-  Flame,
   Brain,
   AlertCircle,
   ChevronRight,
   ChevronDown,
-  Zap,
   Bot,
   XCircle,
   History,
@@ -21,7 +19,7 @@ import { timeAgo, formatWeekdayDate } from '../utils/formatters';
 
 /**
  * CosDashboardWidget - Compact CoS status widget for the main Dashboard
- * Shows today's progress, streak status, learning health, CoS running state, and recent tasks
+ * Shows today's progress, learning health, CoS running state, and recent tasks
  */
 const CosDashboardWidget = memo(function CosDashboardWidget() {
   const { data: dashData, loading } = useAutoRefetch(async () => {
@@ -40,7 +38,7 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
     return { summary, learningSummary, recentTasks, activityCalendar };
   }, 30000, {
     // Re-render only when one of the aggregated counts actually moves —
-    // running agents, completed/failed counts, streak, queue depth, learning
+    // running agents, completed/failed counts, queue depth, learning
     // success rate, every visible recent-task field, every per-day heatmap
     // cell, and the heatmap summary. The poll fires every 30s; without this
     // guard each tick re-renders the activity heatmap + recent tasks list
@@ -112,7 +110,6 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
           && prev.summary?.today?.running === next.summary?.today?.running
           && prev.summary?.today?.completed === next.summary?.today?.completed
           && prev.summary?.today?.timeWorked === next.summary?.today?.timeWorked
-          && prev.summary?.streak?.current === next.summary?.streak?.current
           && prev.summary?.queue?.total === next.summary?.queue?.total
           && prev.summary?.queue?.pendingApprovals === next.summary?.queue?.pendingApprovals
           && prev.learningSummary?.overallSuccessRate === next.learningSummary?.overallSuccessRate
@@ -125,7 +122,6 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
           && prev.activityCalendar?.summary?.successRate === next.activityCalendar?.summary?.successRate
           && prev.activityCalendar?.summary?.activeDays === next.activityCalendar?.summary?.activeDays
           && prev.activityCalendar?.maxTasks === next.activityCalendar?.maxTasks
-          && prev.activityCalendar?.currentStreak === next.activityCalendar?.currentStreak
       );
     },
   });
@@ -145,7 +141,6 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
   const hasActivity = summary && (
     summary.today?.completed > 0 ||
     summary.today?.running > 0 ||
-    summary.streak?.current > 0 ||
     summary.queue?.total > 0 ||
     summary.status?.running
   );
@@ -157,7 +152,6 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
   }
 
   const today = summary?.today || {};
-  const streak = summary?.streak || {};
   const queue = summary?.queue || {};
   const status = summary?.status || {};
 
@@ -202,7 +196,7 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
       </div>
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         {/* Today's Progress */}
         <div className="bg-port-bg/50 rounded-lg p-3">
           <div className="flex items-center gap-2 mb-1">
@@ -219,23 +213,6 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
           </div>
           {today.timeWorked && today.timeWorked !== '0s' && (
             <div className="text-xs text-gray-500">{today.timeWorked}</div>
-          )}
-        </div>
-
-        {/* Streak */}
-        <div className="bg-port-bg/50 rounded-lg p-3">
-          <div className="flex items-center gap-2 mb-1">
-            <Flame size={14} className={streak.current >= 3 ? 'text-orange-400' : 'text-gray-400'} />
-            <span className="text-xs text-gray-500">Streak</span>
-          </div>
-          <div className={`text-lg sm:text-xl font-bold ${streak.current >= 3 ? 'text-orange-400' : 'text-white'}`}>
-            {streak.current || 0}
-            <span className="text-sm font-normal text-gray-500"> day{streak.current !== 1 ? 's' : ''}</span>
-          </div>
-          {streak.current >= 3 && (
-            <div className="flex items-center gap-1 text-xs text-yellow-400">
-              <Zap size={10} /> On fire!
-            </div>
           )}
         </div>
 
@@ -400,12 +377,6 @@ function ActivityCalendar({ data }) {
         <div className="flex items-center gap-2">
           <Activity size={14} className="text-port-accent" />
           <span className="text-sm font-medium text-gray-300">Activity</span>
-          {data.currentStreak > 0 && (
-            <span className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-400">
-              <Flame size={10} />
-              {data.currentStreak}d
-            </span>
-          )}
         </div>
         <Link
           to="/cos/productivity"

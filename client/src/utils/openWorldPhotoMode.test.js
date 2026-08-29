@@ -93,12 +93,11 @@ describe('stepFly', () => {
 
 describe('buildPostcardStats', () => {
   it('renders the headline lines that have data', () => {
-    const lines = buildPostcardStats({ online: 3, total: 5, agents: 2, peers: 1, level: 7, streak: 4 });
+    const lines = buildPostcardStats({ online: 3, total: 5, agents: 2, peers: 1, level: 7 });
     expect(lines).toContain('3/5 SYSTEMS ONLINE');
     expect(lines).toContain('2 AGENTS ACTIVE');
     expect(lines).toContain('1 PEER LINKED');
     expect(lines).toContain('LEVEL 7');
-    expect(lines).toContain('4-DAY STREAK');
   });
   it('omits zero/absent fields rather than printing 0', () => {
     const lines = buildPostcardStats({ online: 0, total: 2, agents: 0, peers: 0 });

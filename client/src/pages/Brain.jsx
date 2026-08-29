@@ -16,6 +16,7 @@ import { timeAgo } from '../utils/formatters';
 const InboxTab = lazy(() => import('../components/brain/tabs/InboxTab'));
 const LinksTab = lazy(() => import('../components/brain/tabs/LinksTab'));
 const MemoryTab = lazy(() => import('../components/brain/tabs/MemoryTab'));
+const IdeasTab = lazy(() => import('../components/brain/tabs/IdeasTab'));
 const DigestTab = lazy(() => import('../components/brain/tabs/DigestTab'));
 const FeedsTab = lazy(() => import('../components/brain/tabs/FeedsTab'));
 const TrustTab = lazy(() => import('../components/brain/tabs/TrustTab'));
@@ -24,6 +25,8 @@ const DailyLogTab = lazy(() => import('../components/brain/tabs/DailyLogTab'));
 const ConfigTab = lazy(() => import('../components/brain/tabs/ConfigTab'));
 const ImportTab = lazy(() => import('../components/brain/tabs/ImportTab'));
 const BrainGraph = lazy(() => import('../components/brain/tabs/BrainGraph'));
+const SpotifyTab = lazy(() => import('../components/brain/tabs/SpotifyTab'));
+const YoutubeTab = lazy(() => import('../components/brain/tabs/YoutubeTab'));
 
 export default function Brain() {
   const { tab } = useParams();
@@ -63,6 +66,8 @@ export default function Brain() {
         return <LinksTab onRefresh={refetch} />;
       case 'memory':
         return <MemoryTab onRefresh={refetch} />;
+      case 'ideas':
+        return <IdeasTab onRefresh={refetch} />;
       case 'notes':
         return <NotesTab onRefresh={refetch} />;
       case 'daily-log':
@@ -77,6 +82,10 @@ export default function Brain() {
         return <TrustTab onRefresh={refetch} />;
       case 'import':
         return <ImportTab />;
+      case 'spotify':
+        return <SpotifyTab />;
+      case 'youtube':
+        return <YoutubeTab />;
       case 'config':
         return <ConfigTab onRefresh={refetch} />;
       default:

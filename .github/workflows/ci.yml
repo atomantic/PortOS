@@ -51,6 +51,7 @@ jobs:
       windows_mode: ${{ steps.plan.outputs.windows_mode }}
       windows_files: ${{ steps.plan.outputs.windows_files }}
       windows_sources: ${{ steps.plan.outputs.windows_sources }}
+      suite_reasons: ${{ steps.plan.outputs.suite_reasons }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -90,6 +91,7 @@ jobs:
           SMOKE_MODE: ${{ steps.plan.outputs.smoke }}
           WINDOWS_MODE: ${{ steps.plan.outputs.windows }}
           WINDOWS_TEST_MODE: ${{ steps.plan.outputs.windows_mode }}
+          SUITE_REASONS: ${{ steps.plan.outputs.suite_reasons }}
         run: |
           {
             echo "### CI impact plan"
@@ -102,6 +104,7 @@ jobs:
             echo "- Client build: \`${BUILD_MODE}\`"
             echo "- Server smoke: \`${SMOKE_MODE}\`"
             echo "- Windows server tests: \`${WINDOWS_MODE}\` (\`${WINDOWS_TEST_MODE}\`)"
+            echo "- Suite selection reasons: \`${SUITE_REASONS}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
   server:

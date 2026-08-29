@@ -4,8 +4,7 @@ import { streakGlyph } from '../../../lib/streakGlyph.js';
 
 // Health-logging habit loop. Reads the `meatspaceLogging` slice of
 // dashboardState (cross-domain streak + this-week counts computed server-side)
-// and deep-links into MeatSpace. Mirrors ActivityStreakWidget/DailyPostWidget's
-// streak framing. Gated off until at least one health log exists.
+// and deep-links into MeatSpace. Gated off until at least one health log exists.
 export default function MeatSpaceStreakWidget({ dashboardState }) {
   const stats = dashboardState?.meatspaceLogging;
   if (!stats) return null;

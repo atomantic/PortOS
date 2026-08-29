@@ -29,7 +29,7 @@
  */
 
 import { z } from 'zod';
-import { homedir } from 'os';
+import { scrubHomePath } from './homePath.js';
 import { sha256Text } from './fileUtils.js';
 import { canonicalStringify, POLLUTING_KEYS } from './objects.js';
 import { redactOutput } from './commandSecurity.js';
@@ -176,22 +176,10 @@ const isSafeImagePath = (key, value) => (
   && /^\/api\/screenshots\/[A-Za-z0-9][A-Za-z0-9._-]*\.(?:png|jpg|jpeg|gif|webp)$/i.test(value)
 );
 
-/**
- * Replace the user's home directory prefix with `~` anywhere in a string.
- *
- * Workspace paths are the most common thing a lifecycle payload carries, and
- * `/Users/<name>/…` embeds the OS username. The ledger is machine-local, but a
- * diagnostic is exactly the thing a user pastes into a bug report, so the
- * username never gets written down in the first place.
- */
-export function scrubHomePath(value) {
-  const home = homedir();
-  // A root-user container reports `/` as the home directory. Substituting on
-  // that would rewrite every separator in every path (`/var/log` → `~var~log`),
-  // destroying the diagnostic to protect a username that isn't in the string.
-  if (typeof value !== 'string' || !home || home === '/' || home === '\\') return value;
-  return value.split(home).join('~');
-}
+// Re-exported so the ledger stays the one import site callers already know,
+// while the definition lives in a builtin-only module `scripts/doctor.js` can
+// also load from a bare checkout. See server/lib/homePath.js.
+export { scrubHomePath };
 
 /**
  * Scrub + bound one free-form string: home path, then the shared secret filter,

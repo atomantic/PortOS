@@ -58,6 +58,12 @@ export const INSTANCE_FEATURES = Object.freeze([
     // installs on that behavior until the user explicitly changes the flag.
     defaultEnabled: true,
   }),
+  Object.freeze({
+    id: 'facetime',
+    label: 'FaceTime Audio',
+    description: 'Machine-local FaceTime Audio call controls and setup checks.',
+    defaultEnabled: false,
+  }),
 ]);
 
 export const INSTANCE_FEATURE_IDS = Object.freeze(INSTANCE_FEATURES.map((feature) => feature.id));

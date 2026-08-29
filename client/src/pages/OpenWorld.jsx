@@ -523,9 +523,8 @@ function OpenWorldInner() {
       agents: (cosAgents || []).filter(a => a.status === 'running' || a.state === 'coding' || a.state === 'thinking').length,
       peers: (instances?.peers || []).filter(p => p.status === 'online').length,
       level: character?.level,
-      streak: productivityData?.currentStreak ?? productivityData?.streak,
     };
-  }, [apps, cosAgents, instances, character, productivityData]);
+  }, [apps, cosAgents, instances, character]);
 
   // In playback mode, overlay the current snapshot frame's data onto the props
   // the scene consumes. mergeFrameIntoOpenWorldProps returns ONLY the props the frame

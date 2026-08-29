@@ -6,8 +6,8 @@ import OpenWorldLabel from './OpenWorldLabel';
 import { computeEasterEggs, EGGS } from '../../utils/openWorldEasterEggs';
 
 // OpenWorld's easter eggs (roadmap 3.5 follow-up, #824): rare, hidden emblems that only appear
-// when a special condition is met (a developer's date, a "leet" level, a palindrome streak, a
-// clean-sweep goal board). Tucked in a quiet far corner so they read as a discovery, not a
+// when a special condition is met (a developer's date, a "leet" level, or a clean-sweep goal
+// board). Tucked in a quiet far corner so they read as a discovery, not a
 // featured district. Each egg is a small glowing icosahedron with a tiny glyph label; they bob
 // (each on its own phase offset) gated on the quality dial (mirrors OpenWorldArtifacts).
 function Egg({ egg, animate, dayMix = 0 }) {
@@ -49,14 +49,14 @@ function Egg({ egg, animate, dayMix = 0 }) {
   );
 }
 
-export default function OpenWorldEasterEggs({ date, character, goals, productivityData, settings }) {
+export default function OpenWorldEasterEggs({ date, character, goals, settings }) {
   // Re-resolve unlocked eggs as real time advances so calendar eggs (e.g. April 1) turn over at the
   // day boundary while OpenWorld stays open — an hourly tick is plenty and battery-friendly (shared
   // singleton timer, paused while hidden). An explicit `date` prop still wins for callers/tests.
   const tick = useTimeTick(3600000);
   const cluster = useMemo(
-    () => computeEasterEggs({ date: date ?? new Date(tick), character, goals, productivityData }),
-    [date, tick, character, goals, productivityData],
+    () => computeEasterEggs({ date: date ?? new Date(tick), character, goals }),
+    [date, tick, character, goals],
   );
 
   // Honor the quality dial: drop the bob on the lowest preset, keep the static glow.

@@ -23,7 +23,6 @@ const FULL_TRIGGER_RULES = [
   { re: /^client\/(?:biome\.jsonc|[^/]+\.grit)$/, reason: 'lint configuration changed' },
   { re: /^client\/vite\.config\.js$/, reason: 'client build configuration changed' },
   { re: /^server\/index\.js$/, reason: 'server composition root changed' },
-  { re: /^client\/src\/App\.jsx$/, reason: 'client composition root changed' },
   { re: /^server\/lib\/(?:schemaVersions|validation)\.js$/, reason: 'shared server contract changed' },
   // The scripts that decide what CI runs, run it, and gate the release on it.
   // A bug in any of them can make a scoped plan silently test nothing, so they
@@ -284,6 +283,41 @@ const isStructuralBarrel = (path) => [
 ].includes(path);
 
 /**
+ * A route declaration is a safe, client-only subset of the App composition
+ * root. Everything else in App.jsx can alter providers, boot hooks, lazy
+ * imports, or authentication boundaries and must retain the complete matrix.
+ *
+ * This intentionally accepts only one-line Route additions/removals. Unknown
+ * diff shapes (including comments, formatting, or multiline JSX) are unsafe
+ * by default, so a future route style cannot silently narrow CI.
+ */
+export const isRouteOnlyAppDiff = (diff) => {
+  if (typeof diff !== 'string' || !diff.trim()) return false;
+  const changedLines = diff.split('\n').filter((line) => /^[+-]/.test(line) && !/^(?:\+\+\+|---)/.test(line));
+  return changedLines.length > 0 && changedLines.every((line) => /^[-+]\s*<\/?Route\b.*>(?:\s*)$/.test(line));
+};
+
+const suiteReasonsFor = (plan, { appRouteOnly = false } = {}) => ({
+  server: plan.server.mode === 'skip'
+    ? 'skipped: no server-impacting source changed'
+    : plan.full
+      ? `full matrix: ${plan.reason}`
+      : 'always-run cross-install and repository guards',
+  client: plan.client.mode === 'skip'
+    ? 'skipped: no client-impacting source changed'
+    : appRouteOnly
+      ? 'route-only client App.jsx change: related client contracts'
+      : plan.full
+        ? `full matrix: ${plan.reason}`
+        : 'client-impacting source changed',
+  db: plan.db ? (plan.full ? `full matrix: ${plan.reason}` : 'database-risk source changed') : 'skipped: no database-risk source changed',
+  lint: plan.lint.mode === 'skip' ? 'skipped: no changed client source needs linting' : plan.full ? `full matrix: ${plan.reason}` : 'changed client source',
+  build: plan.build ? (plan.full ? `full matrix: ${plan.reason}` : 'client-impacting source changed') : 'skipped: no client-impacting source changed',
+  smoke: plan.smoke ? (plan.full ? `full matrix: ${plan.reason}` : 'server-impacting source changed') : 'skipped: no server-impacting source changed',
+  windows: plan.windows ? (plan.full ? `full matrix: ${plan.reason}` : 'Windows-sensitive surface changed') : 'skipped: no Windows-sensitive surface changed',
+});
+
+/**
  * Build a conservative PR test plan.
  *
  * "files" mode is used only when every executable change belongs to a
@@ -295,12 +329,13 @@ export function buildCiTestPlan(changedFiles, {
   trackedFiles = [],
   forceFull = false,
   forceFullReason = 'full CI requested',
+  appRouteOnly = false,
 } = {}) {
   const changed = uniqueSorted(changedFiles.filter(Boolean));
   const trackedSet = new Set(trackedFiles);
 
   if (forceFull) {
-    return {
+    const plan = {
       full: true,
       reason: forceFullReason,
       changedFiles: changed,
@@ -315,6 +350,12 @@ export function buildCiTestPlan(changedFiles, {
       windowsFiles: [],
       windowsSources: [],
     };
+    return { ...plan, suiteReasons: suiteReasonsFor(plan, { appRouteOnly }) };
+  }
+
+  const appCompositionChanged = changed.includes('client/src/App.jsx');
+  if (appCompositionChanged && !appRouteOnly) {
+    return fullPlan(changed, 'client composition root changed: client/src/App.jsx', { appRouteOnly });
   }
 
   const fullTrigger = changed
@@ -324,7 +365,7 @@ export function buildCiTestPlan(changedFiles, {
     .at(0);
 
   if (fullTrigger) {
-    return fullPlan(changed, `${fullTrigger.reason}: ${fullTrigger.path}`);
+    return fullPlan(changed, `${fullTrigger.reason}: ${fullTrigger.path}`, { appRouteOnly });
   }
 
   const alwaysRun = alwaysRunTests(trackedSet);
@@ -332,7 +373,7 @@ export function buildCiTestPlan(changedFiles, {
   const relevant = changed.filter((path) => !isDocumentationOnly(path));
   if (relevant.length === 0) {
     const { server: alwaysRunServer, client: alwaysRunClient } = splitByRunner(alwaysRun);
-    return {
+    const plan = {
       full: false,
       reason: changed.length ? 'documentation-only change' : 'no changed files',
       changedFiles: changed,
@@ -347,15 +388,16 @@ export function buildCiTestPlan(changedFiles, {
       windowsFiles: [],
       windowsSources: [],
     };
+    return { ...plan, suiteReasons: suiteReasonsFor(plan, { appRouteOnly }) };
   }
 
   const executable = relevant.filter(isExecutable);
   const unknown = relevant.filter((path) => !isExecutable(path));
   if (unknown.length > 0) {
-    return fullPlan(changed, `unclassified changed file: ${unknown[0]}`);
+    return fullPlan(changed, `unclassified changed file: ${unknown[0]}`, { appRouteOnly });
   }
   if (executable.length > MAX_CHANGED_CODE_FILES) {
-    return fullPlan(changed, `wide change (${executable.length} executable files)`);
+    return fullPlan(changed, `wide change (${executable.length} executable files)`, { appRouteOnly });
   }
 
   // `changed` includes deleted paths (diff-filter ACMRD), but a deleted test
@@ -367,14 +409,14 @@ export function buildCiTestPlan(changedFiles, {
     !isServerRunnerFile(path) && !path.startsWith('client/')
   ));
   if (unsupportedSources.length > 0) {
-    return fullPlan(changed, `unmapped executable surface: ${unsupportedSources[0]}`);
+    return fullPlan(changed, `unmapped executable surface: ${unsupportedSources[0]}`, { appRouteOnly });
   }
   const deletedSources = sourceFiles.filter((path) => !trackedSet.has(path));
   if (deletedSources.length > 0) {
     // `vitest related` needs a real source path. A deleted module can still
     // affect importers, so widening is safer than silently dropping its side of
     // the graph.
-    return fullPlan(changed, `deleted executable source: ${deletedSources[0]}`);
+    return fullPlan(changed, `deleted executable source: ${deletedSources[0]}`, { appRouteOnly });
   }
   const features = uniqueSorted(sourceFiles.map(featureDirectory).filter(Boolean));
   const unscopedSources = sourceFiles.filter((path) => !featureDirectory(path));
@@ -394,7 +436,7 @@ export function buildCiTestPlan(changedFiles, {
   const clientFiles = uniqueSorted(selectedTests.filter((path) => runnerForTest(path) === 'client'));
 
   if (serverFiles.length > MAX_TARGETED_TEST_FILES || clientFiles.length > MAX_TARGETED_TEST_FILES) {
-    return fullPlan(changed, 'targeted test set exceeded safety cap');
+    return fullPlan(changed, 'targeted test set exceeded safety cap', { appRouteOnly });
   }
 
   const hasServerSource = sourceFiles.some(isServerRunnerFile);
@@ -431,7 +473,7 @@ export function buildCiTestPlan(changedFiles, {
     ? (serverSources.length > 0 ? 'related' : 'files')
     : 'skip';
 
-  return {
+  const plan = {
     full: false,
     reason: features.length
       ? `targeted features: ${features.join(', ')}`
@@ -453,10 +495,11 @@ export function buildCiTestPlan(changedFiles, {
     windowsFiles: windows ? windowsContractTests(trackedSet) : [],
     windowsSources: windowsMode === 'related' ? serverSources : [],
   };
+  return { ...plan, suiteReasons: suiteReasonsFor(plan, { appRouteOnly }) };
 }
 
-function fullPlan(changedFiles, reason) {
-  return {
+function fullPlan(changedFiles, reason, options) {
+  const plan = {
     full: true,
     reason,
     changedFiles,
@@ -471,6 +514,7 @@ function fullPlan(changedFiles, reason) {
     windowsFiles: [],
     windowsSources: [],
   };
+  return { ...plan, suiteReasons: suiteReasonsFor(plan, options) };
 }
 
 const gitLines = (args) => execFileSync('git', args, { encoding: 'utf8' })
@@ -497,6 +541,7 @@ export function emitGitHubPlan(plan) {
     windows_mode: plan.windowsMode,
     windows_files: JSON.stringify(plan.windowsFiles),
     windows_sources: JSON.stringify(plan.windowsSources),
+    suite_reasons: JSON.stringify(plan.suiteReasons),
   };
 
   Object.entries(outputs).forEach(([name, value]) => writeStepOutput(name, value));
@@ -534,7 +579,15 @@ function main() {
     ? []
     : gitLines(['diff', '--name-only', '--diff-filter=ACMRD', `${base}...HEAD`]);
   const trackedFiles = gitLines(['ls-files']);
-  emitGitHubPlan(buildCiTestPlan(changedFiles, { trackedFiles, forceFull, forceFullReason }));
+  const appDiff = forceFull || !changedFiles.includes('client/src/App.jsx')
+    ? null
+    : execFileSync('git', ['diff', '--unified=0', `${base}...HEAD`, '--', 'client/src/App.jsx'], { encoding: 'utf8' });
+  emitGitHubPlan(buildCiTestPlan(changedFiles, {
+    trackedFiles,
+    forceFull,
+    forceFullReason,
+    appRouteOnly: isRouteOnlyAppDiff(appDiff),
+  }));
 }
 
 if (isDirectlyInvoked(import.meta.url)) main();

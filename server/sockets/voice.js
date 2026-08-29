@@ -9,6 +9,12 @@
 //           | voice:dailyLog:appended | voice:error | voice:idle
 //           | voice:screenshot:request
 //           | voice:speak | voice:output:primary | voice:output:detached
+// Call host (FaceTime Audio bridge):
+// Inbound:  voice:call:attach | voice:call:audio | voice:call:detach | voice:call:hangup
+// Outbound: voice:call:state | voice:call:tts
+// Meeting capture (same page, same audio bridge, no LLM — STT only):
+// Inbound:  voice:capture:start | voice:call:audio | voice:capture:stop
+// Outbound: voice:capture:state
 
 import { runTurn } from '../services/voice/pipeline.js';
 import { getVoiceConfig } from '../services/voice/config.js';
@@ -19,6 +25,34 @@ import {
   releaseVoiceOutput,
 } from '../services/voice/voiceOutput.js';
 import { isIsoDate } from '../services/brainJournal.js';
+import { pcmToWavBuffer } from '../lib/chiptuneRender.js';
+import { transcribe } from '../services/voice/stt.js';
+import { CALL_AUDIO_SAMPLE_RATE, createCallEndpointer, pcmToFloat } from '../services/voice/callEndpointing.js';
+import {
+  attachHost,
+  detachHost,
+  endCall,
+  getCallContext,
+  getCallHost,
+  isCallActive,
+  markListening,
+  markSpeaking,
+  noteCallerSpeech,
+  recordTurn,
+  setCallStateListener,
+  takeCallOpeningLine,
+} from '../services/voice/callSession.js';
+import { synthesize } from '../services/voice/tts.js';
+import {
+  attachCaptureHost,
+  detachCaptureHost,
+  endCapture,
+  getCaptureHost,
+  isCaptureActive,
+  recordUtterance,
+  setCaptureStateListener,
+  startCapture,
+} from '../services/voice/captureSession.js';
 
 // Cap by messages (each user utterance + assistant reply is ~2). 24 → ~12 turns.
 const HISTORY_MESSAGES = 24;
@@ -34,6 +68,10 @@ const MAX_TEXT_LEN = 4000;
 // (runaway / malicious client). The client already does word-boundary
 // truncation; we re-do it server-side so the guarantee holds end-to-end.
 const MAX_UI_TEXT_CHARS = 8000;
+// One PCM frame from the call host. The page ships ~20 ms of 16 kHz mono Int16
+// (640 bytes); 64 KB is two seconds of headroom for a delayed flush and rejects
+// a runaway client without ever clipping a normal burst.
+const MAX_CALL_FRAME_BYTES = 64 * 1024;
 
 // Truncate on the last whitespace boundary (space / newline / tab) so the
 // tail isn't a partial token, then append an ellipsis. Mirrors the
@@ -350,12 +388,260 @@ export const registerVoiceHandlers = (socket) => {
     claimVoiceOutput(socket);
   });
 
+  // ---------------------------------------------------------------------------
+  // Call host — the FaceTime Audio bridge.
+  //
+  // The page is a plain browser tab reading BlackHole, so it speaks the same
+  // socket the widget does. What differs is the shape of the input: a
+  // continuous PCM stream with no push-to-talk, endpointed here into the same
+  // `runTurn` utterances the microphone produces, and the destination of the
+  // reply, which is played into the call rather than out of the speakers.
+  // ---------------------------------------------------------------------------
+  const call = { endpointer: null, busy: false, ctrl: null };
+
+  // Speak the line the caller was rung to hear, once, as soon as the far end
+  // picks up. Without this a mind-placed call connects to silence and the user
+  // says "hello?" into a bot that has not been told why it is on the phone.
+  const deliverOpeningLine = async () => {
+    // Busy is checked BEFORE consuming: taking the line while a turn is in
+    // flight would drop it for good. Leaving it pending means the next state
+    // emit (that turn's own markListening) retries it.
+    if (call.busy) return;
+    const line = takeCallOpeningLine();
+    if (!line) return;
+    call.busy = true;
+    markSpeaking();
+    try {
+      const { wav, latencyMs } = await synthesize(line);
+      socket.emit('voice:call:tts', { sentence: line, wav, latencyMs });
+      recordTurn('assistant', line);
+    } finally {
+      call.busy = false;
+      markListening();
+    }
+  };
+
+  const emitCallState = (snapshot) => {
+    socket.emit('voice:call:state', snapshot);
+    // 'listening' is the first state the poll reaches once the helper reports a
+    // connected call. `takeCallOpeningLine` is consume-once, so the repeated
+    // state emits this broadcast produces cannot repeat the line.
+    if (snapshot?.state === 'listening') {
+      deliverOpeningLine().catch((err) => console.error(`❌ voice call: opening line failed: ${err.message}`));
+    }
+  };
+
+  const runCallUtterance = async (utterance) => {
+    call.busy = true;
+    markSpeaking();
+    call.ctrl?.abort();
+    call.ctrl = new AbortController();
+    const { signal } = call.ctrl;
+    let spoken = '';
+    try {
+      await runTurn({
+        audio: pcmToWavBuffer(pcmToFloat(utterance.pcm), { sampleRate: CALL_AUDIO_SAMPLE_RATE }),
+        mimeType: 'audio/wav',
+        history: state.history,
+        state,
+        signal,
+        // A mind-placed call carries the mind's own briefing, so the voice on
+        // the phone continues that conversation instead of answering cold.
+        systemContext: getCallContext(),
+        // The pipeline speaks the widget's event vocabulary; only the audio is
+        // re-addressed, so persona, tools, and the confirm gate are unchanged.
+        emit: (event, data) => {
+          if (signal.aborted) return;
+          if (event === 'voice:tts:audio') {
+            spoken = data?.sentence || spoken;
+            socket.emit('voice:call:tts', data);
+            return;
+          }
+          if (event === 'voice:transcript' && data?.text) recordTurn('caller', data.text);
+          socket.emit(event, data);
+        },
+      });
+      if (signal.aborted) return;
+      if (spoken) recordTurn('assistant', spoken);
+    } catch (err) {
+      if (signal.aborted) return;
+      console.error(`📞 call turn failed: ${err.message}`);
+      socket.emit('voice:error', { stage: 'call', message: err.message });
+    } finally {
+      call.busy = false;
+      markListening();
+    }
+  };
+
+  socket.on('voice:call:attach', async () => {
+    try {
+      if (!(await ensureEnabled('call'))) return;
+      // Mutually exclusive with meeting capture: both want the same BlackHole
+      // input device and the same host tab, and a call also wants BlackHole
+      // 2ch to talk back through — running both at once would fight over the
+      // device rather than fail closed with a clear reason.
+      if (isCaptureActive() || getCaptureHost() === socket) {
+        socket.emit('voice:call:state', { error: 'capture-active', hostAttached: false, active: false, state: 'idle' });
+        return;
+      }
+      const claim = attachHost(socket);
+      if (!claim.ok) {
+        // Refused, not displaced: two tabs reading the same device would each
+        // answer, and the loser could not tell it had been muted.
+        socket.emit('voice:call:state', { error: claim.reason, hostAttached: false, active: false, state: 'idle' });
+        return;
+      }
+      call.endpointer = createCallEndpointer();
+      setCallStateListener(emitCallState);
+      emitCallState(claim.state);
+    } catch (err) {
+      console.error(`❌ voice:call:attach failed: ${err.message}`);
+      socket.emit('voice:error', { stage: 'call', message: err.message });
+    }
+  });
+
+  socket.on('voice:call:audio', async (payload = {}) => {
+    try {
+      const asCallHost = getCallHost() === socket && call.endpointer;
+      const asCaptureHost = getCaptureHost() === socket && capture.endpointer;
+      if (!asCallHost && !asCaptureHost) return;
+      const { pcm } = payload || {};
+      const bytes = audioByteLength(pcm);
+      if (!bytes || bytes > MAX_CALL_FRAME_BYTES) return;
+      const view = Buffer.isBuffer(pcm) || ArrayBuffer.isView(pcm)
+        ? new Int16Array(pcm.buffer, pcm.byteOffset, Math.floor(pcm.byteLength / 2))
+        : new Int16Array(pcm);
+
+      if (asCallHost) {
+        const utterance = call.endpointer.push(view);
+        // Barge-in: the caller talking over a reply cancels it, exactly as
+        // pressing the widget's interrupt does.
+        if (call.endpointer.speaking && call.busy) {
+          call.ctrl?.abort();
+          state.pendingDestructive = null;
+          socket.emit('voice:interrupt', { reason: 'barge-in' });
+        }
+        if (!utterance) return;
+        noteCallerSpeech();
+        if (call.busy) return;
+        await runCallUtterance(utterance);
+        return;
+      }
+
+      // Meeting capture: STT only, never the LLM/tools pipeline (no
+      // cold-bootstrap AI calls — see AGENTS.md). Utterances are queued and
+      // transcribed one at a time so a burst of speech can't run two whisper
+      // requests concurrently and interleave the transcript out of order.
+      const utterance = capture.endpointer.push(view);
+      if (utterance) enqueueCaptureUtterance(utterance);
+    } catch (err) {
+      console.error(`❌ voice:call:audio failed: ${err.message}`);
+    }
+  });
+
+  socket.on('voice:call:detach', async () => {
+    call.endpointer = null;
+    emitCallState(await detachHost(socket));
+  });
+
+  // Hang up the active call from any tab, not just the one carrying the
+  // audio — the Mind tab's "Hang up" button is not the call host. Routed
+  // through endCall() (not a raw facetimeBridge.hangup()) so the session is
+  // cleaned up the same way any other end-of-call is: journal write, mind
+  // handoff, state reset. A no-op when nothing is active.
+  socket.on('voice:call:hangup', async () => {
+    try {
+      if (isCallActive()) await endCall('user-hangup');
+    } catch (err) {
+      console.error(`❌ voice:call:hangup failed: ${err.message}`);
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // Meeting capture — the same call-host page's other mode. Reads the same
+  // BlackHole 16ch device and rides the same `voice:call:audio` PCM frames,
+  // but only transcribes: it never runs the LLM/tools pipeline and never
+  // plays anything back. Stopping finalizes whatever is still buffered in the
+  // endpointer, then writes the transcript to the journal and the inbox.
+  // ---------------------------------------------------------------------------
+  const capture = { endpointer: null, queue: Promise.resolve() };
+
+  const emitCaptureState = (snapshot) => socket.emit('voice:capture:state', snapshot);
+
+  const runCaptureUtterance = async (utterance) => {
+    try {
+      const { text } = await transcribe(
+        pcmToWavBuffer(pcmToFloat(utterance.pcm), { sampleRate: CALL_AUDIO_SAMPLE_RATE }),
+        { mimeType: 'audio/wav' },
+      );
+      if (text) emitCaptureState(recordUtterance(text));
+    } catch (err) {
+      console.error(`🎙️ capture transcribe failed: ${err.message}`);
+      socket.emit('voice:error', { stage: 'capture', message: err.message });
+    }
+  };
+
+  // Serialize onto a per-socket queue (AGENTS.md: async handlers mutating
+  // shared module-level state must not fire concurrently) rather than
+  // dropping an utterance that arrives mid-transcription — a dropped chunk
+  // here is lost meeting content, not a superseded turn like call barge-in.
+  const enqueueCaptureUtterance = (utterance) => {
+    capture.queue = capture.queue.then(() => runCaptureUtterance(utterance));
+    return capture.queue;
+  };
+
+  socket.on('voice:capture:start', async () => {
+    try {
+      if (!(await ensureEnabled('capture'))) return;
+      if (isCallActive() || getCallHost() === socket) {
+        socket.emit('voice:capture:state', { error: 'call-active', hostAttached: false, active: false, state: 'idle' });
+        return;
+      }
+      const claim = attachCaptureHost(socket);
+      if (!claim.ok) {
+        socket.emit('voice:capture:state', { error: claim.reason, hostAttached: false, active: false, state: 'idle' });
+        return;
+      }
+      const started = startCapture(socket);
+      if (!started.ok) {
+        socket.emit('voice:capture:state', { error: started.reason, hostAttached: true, active: false, state: 'idle' });
+        return;
+      }
+      capture.endpointer = createCallEndpointer();
+      capture.queue = Promise.resolve();
+      setCaptureStateListener(emitCaptureState);
+      emitCaptureState(started.state);
+    } catch (err) {
+      console.error(`❌ voice:capture:start failed: ${err.message}`);
+      socket.emit('voice:error', { stage: 'capture', message: err.message });
+    }
+  });
+
+  socket.on('voice:capture:stop', async () => {
+    try {
+      if (getCaptureHost() !== socket) return;
+      // Finalize whatever speech is still buffered rather than dropping the
+      // last few seconds of the meeting on the floor.
+      const pending = capture.endpointer?.flush();
+      if (pending) enqueueCaptureUtterance(pending);
+      await capture.queue.catch(() => {});
+      capture.endpointer = null;
+      const ended = await endCapture('stopped');
+      emitCaptureState(ended);
+      emitCaptureState(await detachCaptureHost(socket));
+    } catch (err) {
+      console.error(`❌ voice:capture:stop failed: ${err.message}`);
+      socket.emit('voice:error', { stage: 'capture', message: err.message });
+    }
+  });
+
   socket.on('disconnect', () => {
     // Drop this tab from the voice-output registry; if it was the sole
     // recipient, output is promoted to another live tab so proactive audio
     // keeps exactly one home.
     releaseVoiceOutput(socket);
     state.ctrl?.abort();
+    call.ctrl?.abort();
     // Abort any pending UI refresh waiters so their turns don't hang.
     const waiters = state.uiWaiters;
     state.uiWaiters = [];
@@ -370,5 +656,22 @@ export const registerVoiceHandlers = (socket) => {
     state.uiTextWaiters.clear();
     textWaiters.forEach((resolve) => resolve(null));
     unregisterEchoBuffer(state.recentTts);
+    // A closed tab is a detached host: the call loses its audio path, so the
+    // session ends rather than running on deaf.
+    if (getCallHost() === socket) {
+      call.endpointer = null;
+      detachHost(socket).catch((err) => console.error(`❌ voice call detach failed: ${err.message}`));
+    }
+    // Same for meeting capture — best-effort, no final flush of whatever was
+    // still mid-utterance (matches the call path above, which drops its own
+    // in-flight endpointer buffer on disconnect the same way).
+    if (getCaptureHost() === socket) {
+      capture.endpointer = null;
+      detachCaptureHost(socket).catch((err) => console.error(`❌ voice capture detach failed: ${err.message}`));
+    }
   });
 };
+
+// Re-exported for the call-host page's own smoke checks and for tests that
+// assert the frame cap without standing up a socket.
+export { MAX_CALL_FRAME_BYTES };

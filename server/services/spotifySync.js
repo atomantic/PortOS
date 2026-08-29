@@ -176,7 +176,7 @@ async function doRunSync() {
     return null;
   });
   if (!accessToken) {
-    return { ok: false, needsAuth: true, error: 'Spotify not connected — authorize in Settings → Spotify.' };
+    return { ok: false, needsAuth: true, error: 'Spotify not connected — authorize in Brain → Spotify.' };
   }
 
   const started = Date.now();
@@ -253,11 +253,11 @@ async function doRunSync() {
 }
 
 // Status for the settings UI: config + cursor state + auth status (no API call).
-export async function getStatus() {
+export async function getStatus(options = {}) {
   const [config, state, auth] = await Promise.all([
     getSpotifyConfig(),
     readSyncState(),
-    getAuthStatus(),
+    getAuthStatus(options),
   ]);
   return { config, state, auth };
 }

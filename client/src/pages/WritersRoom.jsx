@@ -23,6 +23,7 @@ export default function WritersRoom() {
   const [activeWork, setActiveWork] = useState(null);
   const [loadingWork, setLoadingWork] = useState(false);
   const [showExercise, setShowExercise] = useState(false);
+  const [editorDirty, setEditorDirty] = useState(false);
   // Header + library collapse state. Opening a work auto-collapses both (see
   // selectWork) so the editor gets maximum room — this now applies on mobile
   // too, where the library is an inline block stacked above the editor. The
@@ -211,6 +212,7 @@ export default function WritersRoom() {
                 onChange={handleWorkChange}
                 onToggleExercise={() => setShowExercise((s) => !s)}
                 exerciseOpen={showExercise}
+                onDirtyChange={setEditorDirty}
               />
             </>
           )}
@@ -218,7 +220,7 @@ export default function WritersRoom() {
 
         {showExercise && (
           <aside className="border-t lg:border-t-0 lg:border-l border-port-border bg-port-card/30 p-3 min-h-0 lg:overflow-y-auto">
-            <ExercisePanel activeWork={activeWork} onClose={() => setShowExercise(false)} />
+            <ExercisePanel activeWork={activeWork} editorDirty={editorDirty} onWorkChange={handleWorkChange} onClose={() => setShowExercise(false)} />
           </aside>
         )}
       </div>

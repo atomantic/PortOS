@@ -295,7 +295,7 @@ export const generateCosDigest = (weekId = null) => request('/cos/digest/generat
 });
 export const compareCosWeeks = (week1, week2) => request(`/cos/digest/compare?week1=${week1}&week2=${week2}`);
 
-// Productivity & Streaks
+// Productivity
 export const getCosProductivity = () => request('/cos/productivity');
 export const getCosProductivitySummary = () => request('/cos/productivity/summary');
 export const recalculateCosProductivity = () => request('/cos/productivity/recalculate', { method: 'POST' });

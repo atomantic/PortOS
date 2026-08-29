@@ -688,6 +688,30 @@ export async function finishExercise(id, { endingWords, appendedText = null } = 
   return finished;
 }
 
+export async function promoteExercise(id) {
+  const all = await store().listExercises();
+  const existing = all.find((exercise) => exercise.id === id);
+  if (!existing) throw notFound('Exercise');
+  if (existing.promotedAt) throw badRequest('Exercise already promoted');
+  if (existing.status !== 'finished') throw badRequest('Exercise must be finished before promotion');
+  if (!existing.workId) throw badRequest('Exercise is not linked to a work');
+  const text = typeof existing.appendedText === 'string' ? existing.appendedText.trim() : '';
+  if (!text) throw badRequest('Exercise has no text to promote');
+
+  const { manifest, body } = await getWorkWithBody(existing.workId);
+  const nextBody = body.trimEnd() === '' ? text : `${body.trimEnd()}\n\n${text}\n`;
+  const { manifest: updatedManifest } = await saveDraftBody(existing.workId, nextBody);
+  const promoted = {
+    ...existing,
+    promotedAt: nowIso(),
+    promotedDraftVersionId: updatedManifest.activeDraftVersionId,
+    updatedAt: nowIso(),
+  };
+  await store().writeExercise(promoted);
+  emitRecordUpdated(WRITERS_ROOM_EXERCISE_KIND, id);
+  return { exercise: promoted, work: { ...updatedManifest, activeDraftBody: nextBody } };
+}
+
 export async function discardExercise(id) {
   const all = await store().listExercises();
   const existing = all.find((e) => e.id === id);
@@ -701,7 +725,7 @@ export async function discardExercise(id) {
 }
 
 // Conflict-restore for an exercise sprint — see restoreBodylessRecord above.
-const EXERCISE_RESTORABLE = ['workId', 'prompt', 'durationSeconds', 'startingWords', 'endingWords', 'wordsAdded', 'appendedText', 'status', 'finishedAt'];
+const EXERCISE_RESTORABLE = ['workId', 'prompt', 'durationSeconds', 'startingWords', 'endingWords', 'wordsAdded', 'appendedText', 'status', 'finishedAt', 'promotedAt', 'promotedDraftVersionId'];
 export async function restoreExercise(id, patch) {
   return restoreBodylessRecord(id, patch, {
     read: (rid, opts) => store().readExercise(rid, opts),

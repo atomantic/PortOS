@@ -41,6 +41,7 @@ import { restoreBoard } from './moodBoard/index.js';
 import { updateWork, restoreFolder, restoreExercise } from './writersRoom/local.js';
 import { restoreCommissionFeedback } from './creativeCommissions/feedbackStore.js';
 import { restoreCommission } from './creativeCommissions/store.js';
+import { restoreLoom } from './fableLoom/index.js';
 
 export const ERR_NOT_FOUND = 'CONFLICT_JOURNAL_NOT_FOUND';
 export const ERR_VALIDATION = 'CONFLICT_JOURNAL_VALIDATION';
@@ -177,6 +178,10 @@ async function applyToRecord(kind, recordId, patch, { replace = false } = {}) {
     // runs/assignment are kept as-is. Returns null for a missing record (#2686).
     const restored = await restoreCommission(recordId, patch).catch(translateGone);
     if (!restored) throw makeErr(`The ${kind} this conflict targets no longer exists — discard the entry.`, ERR_TARGET_GONE);
+  } else if (kind === 'fableLoom') {
+    // Restore the authored story graph and playback settings through the normal
+    // loom mutation path so the edit is sanitized, timestamped, and re-pushed.
+    await restoreLoom(recordId, patch).catch(translateGone);
   } else {
     throw makeErr(`Unsupported conflict kind: ${kind}`, ERR_VALIDATION);
   }

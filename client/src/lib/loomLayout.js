@@ -19,12 +19,16 @@
  * right-edge → left-edge cubic made parallel intents occupy the same curve.
  * Backward / same-layer edges drop into packed return lanes on the unused
  * side of the card band; skip-layer edges go around the other side so they
- * don't sweep through cards in between. Labels sit on the first stub, then
- * de-collide — see `routeLoomEdges`.
+ * don't sweep through cards in between. Decision labels sit on the first stub,
+ * then de-collide; automatic cuts use a compact, unlabeled connection — see
+ * `routeLoomEdges`.
  */
 
 export const LOOM_NODE_W = 200;
-export const LOOM_NODE_H = 112;
+// Tall enough for the scene's visual preview + always-visible image/video
+// controls. The graph is a visual editor, so media is the card's primary body
+// rather than a thumbnail squeezed beside prose.
+export const LOOM_NODE_H = 184;
 /** Longest intent text drawn on an edge before it is ellipsized. */
 export const LOOM_EDGE_LABEL_MAX = 24;
 export const LOOM_ORIENTATION = Object.freeze({ LR: 'lr', TB: 'tb' });
@@ -38,6 +42,9 @@ const MARGIN = 24;
 // Gap along the reading direction: enough for a 24-char label plus a vertical
 // (or horizontal, in tb) lane. Fan-out adds LANE_GAP per extra parallel edge.
 const BASE_FLOW_GAP = 148;
+// Automatic cuts carry no choice label, so they only need room for the arrow
+// and its generous pointer target rather than a full intent-text corridor.
+const COMPACT_FLOW_GAP = 48;
 const RANK_GAP = 48;
 const LANE_OFFSET = 36;
 const LANE_GAP = 18;
@@ -52,6 +59,11 @@ const MIN_NODE_W = 168;
 
 const asArray = (v) => (Array.isArray(v) ? v : []);
 const isFinitePos = (pos) => pos && Number.isFinite(pos.x) && Number.isFinite(pos.y);
+const isAutomaticContinuation = (node) => (
+  !node?.isEnding
+  && node?.playbackMode === 'cut'
+  && asArray(node?.transitions).length === 1
+);
 
 /** BFS layers from the start node, ordered to reduce edge crossings. */
 export function loomGraphLayers(episode) {
@@ -154,6 +166,20 @@ function flowGapFor(nodes) {
   return BASE_FLOW_GAP + Math.max(0, maxFanout(nodes) - 2) * LANE_GAP;
 }
 
+function layerFlowGaps(layers, byId, depthById, defaultGap) {
+  return layers.map((layer, depth) => {
+    const forwardSources = layer.flatMap((id) => {
+      const node = byId.get(id);
+      return asArray(node?.transitions)
+        .filter((transition) => depthById.get(transition?.targetNodeId) === depth + 1)
+        .map(() => node);
+    });
+    return forwardSources.length > 0 && forwardSources.every(isAutomaticContinuation)
+      ? COMPACT_FLOW_GAP
+      : defaultGap;
+  });
+}
+
 /**
  * Position every node and route every transition. Returns
  * `{ positions, edges, width, height, nodeW, nodeH, orientation }` —
@@ -174,7 +200,11 @@ export function layoutLoomGraph(episode, options = {}) {
     || pickLoomOrientation(options.viewportWidth, layers.length);
   const { nodeW, nodeH } = nodeMetrics(orientation, options.viewportWidth);
   const flowGap = flowGapFor(nodes);
+  const byId = new Map(nodes.map((node) => [node.id, node]));
   const posById = new Map(nodes.map((n) => [n.id, n.pos]));
+  const depthById = new Map();
+  layers.forEach((layer, depth) => layer.forEach((id) => depthById.set(id, depth)));
+  const flowGaps = layerFlowGaps(layers, byId, depthById, flowGap);
 
   const place = (originX, originY) => placeNodes(layers, {
     originX,
@@ -184,11 +214,10 @@ export function layoutLoomGraph(episode, options = {}) {
     orientation,
     viewportWidth: options.viewportWidth,
     flowGap,
+    flowGaps,
     rankGap: RANK_GAP,
     posById,
   });
-  const depthById = new Map();
-  layers.forEach((layer, depth) => layer.forEach((id) => depthById.set(id, depth)));
   const routeFor = (pos) => {
     const band = cardBand(pos, nodeW, nodeH, orientation);
     return routeLoomEdges(nodes, pos, band.max, {
@@ -241,18 +270,20 @@ export function layoutLoomGraph(episode, options = {}) {
 }
 
 function placeNodes(layers, {
-  originX, originY, nodeW, nodeH, orientation, viewportWidth, flowGap, rankGap, posById,
+  originX, originY, nodeW, nodeH, orientation, viewportWidth, flowGap, flowGaps, rankGap, posById,
 }) {
   const positions = {};
   const isLR = orientation === LOOM_ORIENTATION.LR;
   if (isLR) {
+    let x = originX;
     layers.forEach((layer, col) => {
       layer.forEach((id, row) => {
         const custom = posById.get(id);
         positions[id] = isFinitePos(custom)
           ? { x: custom.x, y: custom.y }
-          : { x: originX + col * (nodeW + flowGap), y: originY + row * (nodeH + rankGap) };
+          : { x, y: originY + row * (nodeH + rankGap) };
       });
+      x += nodeW + (flowGaps[col] ?? flowGap);
     });
     return positions;
   }
@@ -261,7 +292,7 @@ function placeNodes(layers, {
   const inner = Math.max(nodeW, (viewportWidth || (nodeW + originX * 2)) - originX * 2);
   const perRow = Math.max(1, Math.floor((inner + rankGap) / (nodeW + rankGap)));
   let y = originY;
-  for (const layer of layers) {
+  for (const [layerIndex, layer] of layers.entries()) {
     for (let i = 0; i < layer.length; i += perRow) {
       const row = layer.slice(i, i + perRow);
       const rowW = row.length * nodeW + (row.length - 1) * rankGap;
@@ -270,7 +301,7 @@ function placeNodes(layers, {
         positions[id] = { x: startX + ci * (nodeW + rankGap), y };
       });
       const lastInLayer = i + perRow >= layer.length;
-      y += nodeH + (lastInLayer ? flowGap : rankGap);
+      y += nodeH + (lastInLayer ? (flowGaps[layerIndex] ?? flowGap) : rankGap);
     }
   }
   return positions;
@@ -377,6 +408,7 @@ export function routeLoomEdges(nodes, positions, cardExtent, options = {}) {
       const back = !self && (byDepth
         ? toD <= fromD
         : (isLR ? to.x <= from.x : to.y <= from.y));
+      const automatic = !self && !skip && !back && isAutomaticContinuation(node);
       routes.push({
         id: tr.id,
         sourceId: node.id,
@@ -387,6 +419,7 @@ export function routeLoomEdges(nodes, positions, cardExtent, options = {}) {
         self,
         skip,
         back,
+        automatic,
         around: !self && (back || skip),
       });
     }
@@ -401,6 +434,7 @@ export function routeLoomEdges(nodes, positions, cardExtent, options = {}) {
     sourceId: route.sourceId,
     targetId: route.targetId,
     intent: route.intent,
+    showLabel: !route.automatic,
     ...loomEdgePath(route.from, route.to, {
       self: route.self,
       around: route.around,
@@ -546,7 +580,7 @@ export function placeEdgeLabels(edges, { obstacles = [] } = {}) {
   const placed = [];
   const halfWidth = (text) => (Math.min(text.length, LOOM_EDGE_LABEL_MAX) * LABEL_CHAR_W) / 2;
   for (const edge of [...edges].sort((a, b) => a.labelY - b.labelY || a.labelX - b.labelX)) {
-    if (!edge.intent) continue;
+    if (!edge.intent || edge.showLabel === false) continue;
     const half = halfWidth(edge.intent);
     const candidates = [edge.labelY];
     for (let row = 1; row <= LABEL_MAX_NUDGE_ROWS; row += 1) {

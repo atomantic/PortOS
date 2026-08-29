@@ -14,11 +14,14 @@ vi.mock('../services/fableLoom/index.js', () => ({
   deleteNode: vi.fn(),
   deleteNodeTransition: vi.fn(),
   feedbackEpisode: vi.fn(),
+  feedbackSeriesPlan: vi.fn(),
+  generateSeriesPlan: vi.fn(),
   getLoom: vi.fn(),
   listLoomSummaries: vi.fn(async () => []),
   playTurn: vi.fn(),
   reformatEpisodeScenes: vi.fn(),
   reviewEpisode: vi.fn(),
+  reviewSeriesPlan: vi.fn(),
   updateEpisode: vi.fn(),
   updateLoom: vi.fn(),
   updateNode: vi.fn(),
@@ -93,6 +96,47 @@ describe('FableLoom routes', () => {
       .send({ name: 'Y' });
     expect(response.status).toBe(200);
     expect(fableLoom.updateLoom).toHaveBeenCalledWith('loom-1', { name: 'Y' });
+  });
+
+  it('generates, reviews, and conversationally edits the series plan', async () => {
+    fableLoom.generateSeriesPlan.mockResolvedValueOnce({ loom: { id: 'loom-1' }, runId: 'run-draft' });
+    const generated = await request(makeApp())
+      .post('/api/fableloom/loom-1/plan/generate')
+      .send({ providerId: 'writer', model: 'large', effort: 'high' });
+    expect(generated.status).toBe(200);
+    expect(fableLoom.generateSeriesPlan).toHaveBeenCalledWith('loom-1', {
+      providerId: 'writer', model: 'large', effort: 'high',
+    });
+
+    fableLoom.reviewSeriesPlan.mockResolvedValueOnce({ analysis: { summary: 'Coherent.' } });
+    const reviewed = await request(makeApp())
+      .post('/api/fableloom/loom-1/plan/review')
+      .send({ providerId: 'writer', model: 'large' });
+    expect(reviewed.status).toBe(200);
+    expect(fableLoom.reviewSeriesPlan).toHaveBeenCalledWith('loom-1', { providerId: 'writer', model: 'large' });
+
+    fableLoom.feedbackSeriesPlan.mockResolvedValueOnce({ loom: { id: 'loom-1' }, changes: ['Moved midpoint'] });
+    const edited = await request(makeApp())
+      .post('/api/fableloom/loom-1/plan/feedback')
+      .send({ feedback: 'Move the midpoint earlier.' });
+    expect(edited.status).toBe(200);
+    expect(fableLoom.feedbackSeriesPlan).toHaveBeenCalledWith('loom-1', { feedback: 'Move the midpoint earlier.' });
+
+    const invalid = await request(makeApp()).post('/api/fableloom/loom-1/plan/feedback').send({ feedback: '   ' });
+    expect(invalid.status).toBe(400);
+    expect(fableLoom.feedbackSeriesPlan).toHaveBeenCalledTimes(1);
+  });
+
+  it('validates and forwards structured series-plan patches', async () => {
+    const seriesPlan = {
+      storyArc: 'A courier becomes a leader.',
+      plotPoints: [{ id: 'plot-1', title: 'The choice', description: 'She stays.', episodeId: 'ep-1' }],
+      sideQuests: [{ id: 'quest-1', title: 'Lost map', description: 'Recover it.', status: 'active', startEpisodeId: 'ep-1', endEpisodeId: null }],
+    };
+    fableLoom.updateLoom.mockResolvedValueOnce({ id: 'loom-1', seriesPlan });
+    const response = await request(makeApp()).patch('/api/fableloom/loom-1').send({ seriesPlan });
+    expect(response.status).toBe(200);
+    expect(fableLoom.updateLoom).toHaveBeenCalledWith('loom-1', { seriesPlan });
   });
 
   it('episode + node CRUD dispatches with route params', async () => {
@@ -177,17 +221,11 @@ describe('FableLoom routes', () => {
     expect(response.body.issues).toEqual([]);
   });
 
-  it('POST weave validates bounds and forwards options', async () => {
-    const invalid = await request(makeApp())
-      .post('/api/fableloom/loom-1/episodes/ep-1/weave')
-      .send({ nodeTarget: 999 });
-    expect(invalid.status).toBe(400);
-    expect(fableLoom.weaveEpisode).not.toHaveBeenCalled();
-
+  it('POST weave ignores legacy count hints and forwards current options', async () => {
     fableLoom.weaveEpisode.mockResolvedValueOnce({ loom: { id: 'loom-1' }, runId: 'r' });
     const ok = await request(makeApp())
       .post('/api/fableloom/loom-1/episodes/ep-1/weave')
-      .send({ guidance: 'darker', replace: true });
+      .send({ guidance: 'darker', replace: true, nodeTarget: 999, endingTarget: 999 });
     expect(ok.status).toBe(200);
     expect(fableLoom.weaveEpisode).toHaveBeenCalledWith('loom-1', 'ep-1', { guidance: 'darker', replace: true });
   });

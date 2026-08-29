@@ -15,7 +15,7 @@ import { catalogSyncIngredientSchema, catalogSyncRefSchema } from './catalogVali
 // subscriptions target another PortOS instance over Tailnet.
 export const peerSubscribeSchema = z.object({
   peerId: z.string().trim().min(1).max(120),
-  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject', 'commissionFeedback', 'creativeCommission']),
+  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'fableLoom', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject', 'commissionFeedback', 'creativeCommission']),
   recordId: z.string().trim().min(1).max(120),
 }).strict();
 
@@ -203,6 +203,12 @@ const moodBoardPushSchema = z.object({
   kind: z.literal('moodBoard'),
   ...peerSyncPushBase,
 }).strict();
+// FableLoom stories push the whole branching graph plus scene image/video
+// bytes through the base asset manifest. No child records or extra bundles.
+const fableLoomPushSchema = z.object({
+  kind: z.literal('fableLoom'),
+  ...peerSyncPushBase,
+}).strict();
 // Writers Room works (#1565) push the bare work manifest (the decomposed
 // draft-version metadata rides inside the record's `drafts[]`). The file-primary
 // `.md` prose bodies do NOT ride `assetManifest` (which keys on a flat basename +
@@ -277,6 +283,7 @@ export const peerSyncPushSchema = z.discriminatedUnion('kind', [
   trackPushSchema,
   creativeDirectorProjectPushSchema,
   moodBoardPushSchema,
+  fableLoomPushSchema,
   writersRoomWorkPushSchema,
   writersRoomFolderPushSchema,
   writersRoomExercisePushSchema,
@@ -289,7 +296,7 @@ export const peerSyncPushSchema = z.discriminatedUnion('kind', [
 
 export const peerSyncRecordSchema = z.object({
   peerId: z.string().trim().min(1).max(120),
-  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject', 'commissionFeedback', 'creativeCommission']),
+  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'fableLoom', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject', 'commissionFeedback', 'creativeCommission']),
   recordId: z.string().trim().min(1).max(200),
 }).strict();
 

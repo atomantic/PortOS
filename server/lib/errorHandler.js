@@ -59,6 +59,13 @@ export class ServerError extends Error {
     this.code = options.code || getErrorCode(this.status);
     this.timestamp = Date.now();
     this.context = options.context || {};
+    // Most errors use one message everywhere. A federation boundary may need a
+    // locally-actionable message (for logs/socket toasts) while returning a
+    // less identifying message to the HTTP caller; keep that distinction on
+    // the shared envelope instead of hand-rolling a route response.
+    this.responseMessage = typeof options.responseMessage === 'string' && options.responseMessage
+      ? options.responseMessage
+      : null;
     this.severity = options.severity || 'error'; // error, critical, warning
     this.canAutoFix = options.canAutoFix || false;
   }
@@ -152,7 +159,7 @@ export function asyncHandler(fn) {
  */
 export function buildErrorEnvelope(error, safeContext) {
   return {
-    error: error.message,
+    error: error.responseMessage || error.message,
     code: error.code,
     timestamp: error.timestamp,
     ...(safeContext && Object.keys(safeContext).length > 0 && { context: safeContext })

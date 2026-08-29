@@ -141,6 +141,11 @@ router.get('/post/progress', asyncHandler(async (req, res) => {
  * skill re-verifications, the weakest recent skill, and stalled ladder
  * progressions — each with a deep link into the exact drill/mode. Never empty
  * (falls back to a sensible default when nothing specific is actionable).
+ *
+ * Also returns `recentPractice` (`{ dayKey, drillTypes, memoryItemIds }`), the
+ * three-local-day window used to rotate the heuristic tiers (issue #5319). The
+ * client hands it straight back to `composeQuickSession` so the Quick session
+ * rotates its per-domain picks off exactly the same signal.
  */
 router.get('/post/recommendations', asyncHandler(async (req, res) => {
   const rawLimit = req.query.limit != null ? parseInt(req.query.limit, 10) : undefined;

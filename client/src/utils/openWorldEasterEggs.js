@@ -2,7 +2,7 @@
 // hidden/rare artifacts that only appear when a special, non-obvious condition is met. Unlike
 // the earned-artifact trophies (openWorldArtifacts.js), which mark expected milestones, easter eggs
 // are surprises — a developer's date (Apr 1), a numerically-special level (the "leet" 13/42),
-// a palindrome streak, or an exact all-goals-complete state. Each is DERIVED from data the city
+// or an exact all-goals-complete state. Each is DERIVED from data the city
 // already has plus a caller-supplied date — nothing here calls `new Date()` so every condition
 // is unit-testable on a fixed day. No three.js / React imports (mirrors openWorldArtifacts.js).
 //
@@ -11,7 +11,7 @@
 // the placement doesn't reshuffle across refetches.
 
 import { hashString } from './hashString';
-import { effectiveLevel, completedGoalCount, bestStreakDays } from './openWorldArtifacts';
+import { effectiveLevel, completedGoalCount } from './openWorldArtifacts';
 import { PARCELS } from './openWorldPlan';
 
 // Placement: a tight cluster at the far -X / +Z corner, deliberately off in a quiet quadrant
@@ -23,16 +23,8 @@ export const EGGS = {
   size: 1.1,
 };
 
-// A number reads the same forwards and backwards (and is >= 10 so single digits don't trivially
-// qualify). Used by the palindrome-streak egg.
-function isPalindrome(n) {
-  if (!Number.isInteger(n) || n < 10) return false;
-  const s = String(n);
-  return s === [...s].reverse().join('');
-}
-
 // Each egg is { id, label, hint, color, test }. `test` is a pure predicate over the derived
-// context { date, level, completedGoals, totalGoals, bestStreak }. Ordered most-special first
+// context { date, level, completedGoals, totalGoals }. Ordered most-special first
 // for stable placement. Colors lean into rare/arcade neon (the city's accent palette).
 export const EASTER_EGGS = [
   {
@@ -59,13 +51,6 @@ export const EASTER_EGGS = [
     test: ({ level }) => level === 42,
   },
   {
-    id: 'palindrome-streak',
-    label: '⇄',
-    hint: 'PALINDROME STREAK',
-    color: '#a855f7',
-    test: ({ bestStreak }) => bestStreak !== null && isPalindrome(bestStreak),
-  },
-  {
     id: 'clean-sweep',
     label: '★',
     hint: 'CLEAN SWEEP',
@@ -83,15 +68,13 @@ function totalGoalCount(goals) {
 }
 
 // Normalize the raw inputs into the flat predicate context, reusing the openWorldArtifacts derivations
-// so the egg conditions stay consistent with the earned-artifact trophies. `level` and `bestStreak`
-// are nullable (absent → null, never 0) so an "exact value" egg can't false-fire on missing data.
-export function eggContext({ date, character, goals, productivityData } = {}) {
+// so the egg conditions stay consistent with the earned-artifact trophies.
+export function eggContext({ date, character, goals } = {}) {
   return {
     date: date || null,
     level: effectiveLevel(character), // floored level or null (xp-derived if needed)
     completedGoals: completedGoalCount(goals),
     totalGoals: totalGoalCount(goals),
-    bestStreak: bestStreakDays(productivityData), // longest, else current, else null
   };
 }
 

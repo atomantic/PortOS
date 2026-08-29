@@ -28,7 +28,6 @@ import StatusIndicator from '../components/cos/StatusIndicator';
 import StatCard from '../components/cos/StatCard';
 import StatusBubble from '../components/cos/StatusBubble';
 import EventLog from '../components/cos/EventLog';
-import QuickSummary from '../components/cos/QuickSummary';
 import ActionableInsightsBanner from '../components/cos/ActionableInsightsBanner';
 import TasksTab from '../components/cos/tabs/TasksTab';
 import AgentsTab from '../components/cos/tabs/AgentsTab';
@@ -1106,10 +1105,7 @@ export default function ChiefOfStaff() {
         )}
         {activeTab === 'tasks' && (
           <div role="tabpanel" id="tabpanel-tasks" aria-labelledby="tab-tasks">
-            {/* Tasks-only widgets live under the tab nav so they don't stretch above
-                tabs that don't surface this data. */}
             <ActionableInsightsBanner insights={insights} onTaskUnblocked={handleTaskUnblocked} onRefresh={fetchData} />
-            <QuickSummary />
             <TasksTab tasks={tasks} agents={agents} onRefresh={fetchData} onTaskAdded={handleUserTaskAdded} providers={providers} apps={apps} />
           </div>
         )}

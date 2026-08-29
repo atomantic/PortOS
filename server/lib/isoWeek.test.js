@@ -3,7 +3,6 @@ import {
   getIsoWeekNumber,
   getIsoWeekYear,
   getWeekId,
-  isConsecutiveWeek,
   isoWeekParts,
   isoWeeksInYear,
   parseWeekId,
@@ -91,40 +90,5 @@ describe('parseWeekId', () => {
     for (const bad of ['', '2026', '2026-01', 'W01', '2026-W', '2026-W00', '2026-W54', null, undefined, 20261, {}]) {
       expect(parseWeekId(bad)).toBeNull();
     }
-  });
-});
-
-describe('isConsecutiveWeek', () => {
-  it('accepts adjacent weeks inside a year', () => {
-    expect(isConsecutiveWeek('2026-W10', '2026-W11')).toBe(true);
-  });
-
-  it('rejects a gap, a repeat, and a backwards step', () => {
-    expect(isConsecutiveWeek('2026-W10', '2026-W12')).toBe(false);
-    expect(isConsecutiveWeek('2026-W10', '2026-W10')).toBe(false);
-    expect(isConsecutiveWeek('2026-W11', '2026-W10')).toBe(false);
-  });
-
-  it('still bridges a real year rollover', () => {
-    expect(isConsecutiveWeek('2025-W52', '2026-W01')).toBe(true);
-  });
-
-  it('does NOT bridge W52 → W01 across a leap-week year, whose W53 sits between', () => {
-    expect(isConsecutiveWeek('2026-W52', '2027-W01')).toBe(false);
-    expect(isConsecutiveWeek('2026-W52', '2026-W53')).toBe(true);
-    expect(isConsecutiveWeek('2026-W53', '2027-W01')).toBe(true);
-  });
-
-  it('rejects a multi-year jump and an unparseable id', () => {
-    expect(isConsecutiveWeek('2024-W52', '2026-W01')).toBe(false);
-    expect(isConsecutiveWeek(null, '2026-W01')).toBe(false);
-    expect(isConsecutiveWeek('2026-W01', undefined)).toBe(false);
-    expect(isConsecutiveWeek('not-a-week', '2026-W01')).toBe(false);
-  });
-
-  it('chains a whole rollover the way the streak scan walks it', () => {
-    const weeks = ['2025-W51', '2025-W52', '2026-W01', '2026-W02'];
-    const chained = weeks.slice(1).every((week, i) => isConsecutiveWeek(weeks[i], week));
-    expect(chained).toBe(true);
   });
 });

@@ -152,7 +152,7 @@ function readyEngine(overrides = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   state.settings = { federation: { mediaProvider: config() } };
-  state.peer = { instanceId: 'peer-example', enabled: true };
+  state.peer = { instanceId: 'peer-example', name: 'Example Peer', enabled: true };
   state.jobs = [];
   state.nextId = 1;
   state.capabilities = { engines: [readyEngine()], defaultEngine: 'musicgen' };
@@ -176,6 +176,9 @@ describe('federated media provider authorization', () => {
     await expect(authorizeFederatedMediaPeer(baseReq)).rejects.toMatchObject({
       status: 403, code: 'MEDIA_PROVIDER_PEER_AUTH_REQUIRED',
     });
+    await expect(authorizeFederatedMediaPeer(baseReq, { statusProbe: true })).rejects.toMatchObject({
+      status: 403, code: 'MEDIA_PROVIDER_PEER_AUTH_REQUIRED', severity: 'warning',
+    });
     await expect(authorizeFederatedMediaPeer({
       ...baseReq,
       portosAuthContext: { enabled: true, authenticated: true, method: 'session' },
@@ -192,6 +195,42 @@ describe('federated media provider authorization', () => {
     });
 
     state.peer.enabled = false;
+    await expect(authorizeFederatedMediaPeer(req)).rejects.toMatchObject({
+      status: 403, code: 'MEDIA_PROVIDER_PEER_FORBIDDEN',
+    });
+  });
+
+  it('keeps periodic disabled-provider discovery quiet while naming real job callers', async () => {
+    state.settings = { federation: { mediaProvider: { ...config(), enabled: false } } };
+    const req = {
+      headers: { 'x-portos-instance-id': 'peer-example' },
+      portosAuthContext: { enabled: true, authenticated: true, method: 'basic' },
+    };
+
+    await expect(authorizeFederatedMediaPeer(req, { statusProbe: true })).rejects.toMatchObject({
+      status: 503,
+      code: 'MEDIA_PROVIDER_DISABLED',
+      severity: 'warning',
+      message: 'Federated media provider is disabled — refused request from peer "Example Peer"',
+      responseMessage: 'Federated media provider is disabled',
+    });
+    await expect(authorizeFederatedMediaPeer(req)).rejects.toMatchObject({
+      status: 503,
+      code: 'MEDIA_PROVIDER_DISABLED',
+      severity: 'error',
+      message: 'Federated media provider is disabled — refused request from peer "Example Peer"',
+      responseMessage: 'Federated media provider is disabled',
+    });
+
+    // Provider config stays hidden until the caller proves both its credential
+    // and registered peer identity, even when the provider is disabled.
+    await expect(authorizeFederatedMediaPeer({
+      ...req,
+      portosAuthContext: { enabled: true, authenticated: false, method: null },
+    })).rejects.toMatchObject({
+      status: 403, code: 'MEDIA_PROVIDER_PEER_AUTH_REQUIRED',
+    });
+    state.peer = null;
     await expect(authorizeFederatedMediaPeer(req)).rejects.toMatchObject({
       status: 403, code: 'MEDIA_PROVIDER_PEER_FORBIDDEN',
     });

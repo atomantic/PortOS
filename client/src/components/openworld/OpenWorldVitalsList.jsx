@@ -2,7 +2,7 @@ import { formatDurationMs, formatMonthDay } from '../../utils/formatters';
 import { StatButton, metricColor } from './openWorldHudBits';
 
 // The System Vitals rows (uptime, health CPU/MEM/DISK, agents, stopped, archived,
-// review, nodes, notifs, tasks, streak + the SYS.OK footer). Extracted from the
+// review, nodes, notifs, tasks + the SYS.OK footer). Extracted from the
 // desktop clock-rail so the SAME rows back both the desktop cockpit's vitals panel
 // AND the compact/phone `vitals` disclosure surface — no divergent copies.
 export default function OpenWorldVitalsList({
@@ -102,16 +102,6 @@ export default function OpenWorldVitalsList({
 
       {productivityData?.todaySucceeded > 0 && (
         <StatButton label="TASKS" valueClass="text-purple-400" value={`${productivityData.todaySucceeded} TODAY`} onClick={() => onOpenDestination?.('productivity')} title="Teleport to Productivity" />
-      )}
-
-      {productivityData?.currentDailyStreak > 0 && (
-        <StatButton
-          label="STREAK"
-          valueClass={productivityData.currentDailyStreak >= 3 ? 'text-orange-400' : 'text-gray-400'}
-          value={`${productivityData.currentDailyStreak}d`}
-          onClick={() => onOpenDestination?.('productivity')}
-          title="Teleport to Productivity"
-        />
       )}
 
       {/* Divider */}

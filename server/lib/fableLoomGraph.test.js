@@ -54,6 +54,8 @@ describe('analyzeEpisodeGraph', () => {
     expect(issues).toEqual([]);
     expect(stats).toMatchObject({
       nodeCount: 4,
+      automaticCutCount: 0,
+      decisionCount: 2,
       endingCount: 2,
       reachableCount: 4,
       reachableEndingCount: 2,
@@ -91,6 +93,65 @@ describe('analyzeEpisodeGraph', () => {
     const { issues } = analyzeEpisodeGraph(ep);
     const deadEnd = issues.find((i) => i.code === GRAPH_ISSUE_CODES.DEAD_END);
     expect(deadEnd).toMatchObject({ severity: 'error', nodeId: 'n4' });
+  });
+
+  it('requires an automatic cut to have exactly one next path', () => {
+    const none = soundEpisode();
+    none.nodes[0].playbackMode = 'cut';
+    none.nodes[0].transitions = [];
+    expect(issueCodes(none)).toContain(GRAPH_ISSUE_CODES.CUT_TRANSITION_COUNT);
+
+    const many = soundEpisode();
+    many.nodes[0].playbackMode = 'cut';
+    expect(issueCodes(many)).toContain(GRAPH_ISSUE_CODES.CUT_TRANSITION_COUNT);
+
+    const one = soundEpisode();
+    one.nodes[0].playbackMode = 'cut';
+    one.nodes[0].transitions = [tr('t1', 'n2', 'Continue')];
+    expect(issueCodes(one)).not.toContain(GRAPH_ISSUE_CODES.CUT_TRANSITION_COUNT);
+  });
+
+  it('requires helper stories to connect near the opening and blocks disconnected decisions', () => {
+    const neverConnected = soundEpisode();
+    neverConnected.nodes[0].playbackMode = 'cut';
+    neverConnected.nodes[0].transitions = [tr('t1', 'n2', 'Continue')];
+    const disconnectedCodes = analyzeEpisodeGraph(neverConnected, {
+      participationMode: 'helper', requireAudienceIntroduction: true,
+    })
+      .issues.map((issue) => issue.code);
+    expect(disconnectedCodes).toContain(GRAPH_ISSUE_CODES.NO_AUDIENCE_CONNECTION);
+    expect(disconnectedCodes).toContain(GRAPH_ISSUE_CODES.DISCONNECTED_DECISION);
+
+    const connected = soundEpisode();
+    connected.nodes[0].playbackMode = 'cut';
+    connected.nodes[0].transitions = [tr('t1', 'n2', 'Continue')];
+    connected.nodes[1].audienceConnection = 'connected';
+    connected.nodes[1].playbackMode = 'decision';
+    const connectedCodes = analyzeEpisodeGraph(connected, {
+      participationMode: 'helper', requireAudienceIntroduction: true,
+    })
+      .issues.map((issue) => issue.code);
+    expect(connectedCodes).not.toContain(GRAPH_ISSUE_CODES.NO_AUDIENCE_CONNECTION);
+    expect(connectedCodes).not.toContain(GRAPH_ISSUE_CODES.DISCONNECTED_DECISION);
+  });
+
+  it('warns when a helper audience is not connected until after the opening sequence', () => {
+    const nodes = Array.from({ length: 6 }, (_, index) => ({
+      id: `n${index}`,
+      title: `Scene ${index}`,
+      playbackMode: index < 4 ? 'cut' : 'decision',
+      audienceConnection: index === 4 ? 'connected' : 'disconnected',
+      isEnding: index === 5,
+      transitions: index === 5 ? [] : [tr(`t${index}`, `n${index + 1}`, 'Continue')],
+    }));
+    const { issues } = analyzeEpisodeGraph({ startNodeId: 'n0', nodes }, {
+      participationMode: 'helper', requireAudienceIntroduction: true,
+    });
+    expect(issues).toContainEqual(expect.objectContaining({
+      code: GRAPH_ISSUE_CODES.LATE_AUDIENCE_CONNECTION,
+      severity: 'warning',
+      nodeId: 'n4',
+    }));
   });
 
   it('warns on unreachable nodes and errors when no ending is reachable', () => {
@@ -135,20 +196,33 @@ describe('describeGraphForPrompt', () => {
     const text = describeGraphForPrompt(soundEpisode());
     expect(text).toContain('[n1] The Gate (START)');
     expect(text).toContain('[n4] The Vault (ENDING: Treasure found)');
+    expect(text).not.toContain('The Vault (ENDING: Treasure found) (DECISION LOOP)');
     expect(text).toContain('-> [n2] intent "enter the gate"');
   });
 
-  it('truncates long prose at proseLimit', () => {
+  it('truncates long prose and video direction at proseLimit', () => {
     const ep = soundEpisode();
     ep.nodes[0].prose = 'x'.repeat(500);
+    ep.nodes[0].videoPrompt = 'y'.repeat(500);
     const text = describeGraphForPrompt(ep, { proseLimit: 100 });
     expect(text).toContain(`${'x'.repeat(100)}…`);
+    expect(text).toContain(`Video: ${'y'.repeat(100)}…`);
     expect(text).not.toContain('x'.repeat(101));
+    expect(text).not.toContain('y'.repeat(101));
   });
 
   it('includes trigger examples', () => {
     const ep = soundEpisode();
     ep.nodes[0].transitions[0].triggers = ['go in', 'open the gate'];
     expect(describeGraphForPrompt(ep)).toContain('(triggers: go in; open the gate)');
+  });
+
+  it('renders connection flags only for helper stories', () => {
+    const ep = soundEpisode();
+    ep.nodes[0].audienceConnection = 'connected';
+    expect(describeGraphForPrompt(ep, { participationMode: 'helper' }))
+      .toContain('(START) (DECISION LOOP) (AUDIENCE CONNECTED)');
+    expect(describeGraphForPrompt(ep)).not.toContain('AUDIENCE CONNECTED');
+    expect(describeGraphForPrompt(ep)).not.toContain('AUDIENCE DISCONNECTED');
   });
 });

@@ -344,6 +344,11 @@ Context tools remain read-only. Semantic reads and writes are independent, defau
 | GET | `/brain/ideas/:id` | Get idea |
 | PUT | `/brain/ideas/:id` | Update idea |
 | DELETE | `/brain/ideas/:id` | Delete idea |
+| GET/PUT | `/brain/ideas/idealoom/settings` | Get or update local IdeaLoom integration settings (disabled by default) |
+| GET/POST | `/brain/ideas/idealoom/lists` | List or create machine-local IdeaLoom lists |
+| GET/PUT/DELETE | `/brain/ideas/idealoom/lists/:id` | Read, update, or delete a machine-local IdeaLoom list |
+| POST | `/brain/ideas/idealoom/import` | Explicitly import valid IdeaLoom Markdown from the configured Obsidian vault |
+| POST | `/brain/ideas/idealoom/sync` | Explicitly export all lists, or one list (`listId`), to the configured Obsidian vault. `recreateMissing: true` is the only way to rewrite a note deleted in the vault — automatic sync never sets it |
 | GET | `/brain/admin` | List admin tasks |
 | POST | `/brain/admin` | Create admin task |
 | GET | `/brain/admin/:id` | Get admin task |

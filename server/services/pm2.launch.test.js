@@ -83,6 +83,9 @@ describe('PM2 command launch interpreters', () => {
       vi.stubEnv('max_memory_restart', '4294967296');
       vi.stubEnv('exec_mode', 'cluster_mode');
       vi.stubEnv('watch', 'true');
+      // portos-server carries its own V8 heap cap; inherited, it would cap every
+      // app PortOS launches — including one whose job is to hold more than that.
+      vi.stubEnv('node_args', '--max-old-space-size=3072');
 
       await execPm2(['start', '/usr/local/bin/llama-server', '--name', 'portos-llama-server']);
 
@@ -90,6 +93,7 @@ describe('PM2 command launch interpreters', () => {
       expect(spawnOpts.env).not.toHaveProperty('max_memory_restart');
       expect(spawnOpts.env).not.toHaveProperty('exec_mode');
       expect(spawnOpts.env).not.toHaveProperty('watch');
+      expect(spawnOpts.env).not.toHaveProperty('node_args');
       expect(spawnOpts.env.PATH).toBe(process.env.PATH);
     });
 

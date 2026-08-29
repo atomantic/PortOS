@@ -74,6 +74,31 @@ describe('SyncToPeerButton', () => {
     ));
   });
 
+  it('uses the FableLoom category when sharing a loom', async () => {
+    api.getInstances.mockResolvedValue({
+      peers: [{
+        instanceId: 'peer-fable',
+        name: 'Peer Fable',
+        enabled: true,
+        status: 'online',
+        syncCategories: { fableLoom: true },
+      }],
+    });
+    api.subscribeToPeer.mockResolvedValue({
+      subscription: { id: 'peer-fableLoom-loom-1-peer-fable' },
+    });
+    const user = userEvent.setup();
+    render(<SyncToPeerButton recordKind="fableLoom" recordId="loom-1" />);
+    await user.click(screen.getByRole('button', { name: /Sync/i }));
+    const row = await screen.findByRole('button', { name: /Peer Fable/i });
+    expect(row).not.toBeDisabled();
+    await user.click(row);
+    await waitFor(() => expect(api.subscribeToPeer).toHaveBeenCalledWith(
+      { peerId: 'peer-fable', recordKind: 'fableLoom', recordId: 'loom-1' },
+      { silent: true },
+    ));
+  });
+
   it('shows a filled check when already subscribed to that peer', async () => {
     api.listPeerSubscriptions.mockResolvedValue({
       subscriptions: [{

@@ -6,8 +6,8 @@ import OpenWorldLabel from './OpenWorldLabel';
 import { computeArtifacts, ARTIFACTS } from '../../utils/openWorldArtifacts';
 
 // OpenWorld's earned artifacts (roadmap 3.5): a "Hall of Achievements" cluster of trophies
-// that only appear once a milestone is earned (level-ups, completed-goal counts, best CoS
-// streak). Each artifact is a dark pedestal topped by a glowing faceted emblem (an octahedron)
+// that only appear once a milestone is earned (level-ups and completed-goal counts). Each
+// artifact is a dark pedestal topped by a glowing faceted emblem (an octahedron)
 // — visually distinct from the goal monuments' tower/scaffold so milestones don't read as
 // goals. The emblems shimmer in unison via a single per-frame ref mutation, gated on the
 // quality dial. Mirrors OpenWorldGoalMonuments / OpenWorldProductivityDistrict.
@@ -42,10 +42,10 @@ function Artifact({ artifact, dayMix = 0 }) {
   );
 }
 
-export default function OpenWorldArtifacts({ character, goals, productivityData, settings }) {
+export default function OpenWorldArtifacts({ character, goals, settings }) {
   const hall = useMemo(
-    () => computeArtifacts({ character, goals, productivityData }),
-    [character, goals, productivityData],
+    () => computeArtifacts({ character, goals }),
+    [character, goals],
   );
 
   // Shared shimmer driver: one ref scales emissive intensity for the whole cluster, so the

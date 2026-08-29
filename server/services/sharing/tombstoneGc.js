@@ -50,6 +50,7 @@ import {
   listProjectIds as listMusicVideoProjectIds,
 } from '../musicVideo/projects.js';
 import { pruneTombstonedBoards, listBoardIds } from '../moodBoard/index.js';
+import { pruneTombstonedLooms, listLooms } from '../fableLoom/index.js';
 import {
   pruneTombstonedWorks, listWorkIdsForSync,
   pruneTombstonedFolders, listFolderIdsForSync,
@@ -84,6 +85,7 @@ const LIVE_ID_LISTERS = Object.freeze({
   creativeDirectorProject: () => listProjectIds(),
   musicVideoProject: () => listMusicVideoProjectIds(),
   moodBoard: () => listBoardIds(),
+  fableLoom: async () => (await listLooms()).map((r) => r.id),
   writersRoomWork: () => listWorkIdsForSync(),
   writersRoomFolder: () => listFolderIdsForSync(),
   writersRoomExercise: () => listExerciseIdsForSync(),
@@ -109,6 +111,7 @@ const ALL_ID_LISTERS = Object.freeze({
   creativeDirectorProject: () => listProjectIds({ includeDeleted: true }),
   musicVideoProject: () => listMusicVideoProjectIds({ includeDeleted: true }),
   moodBoard: () => listBoardIds({ includeDeleted: true }),
+  fableLoom: async () => (await listLooms({ includeDeleted: true })).map((r) => r.id),
   writersRoomWork: () => listWorkIdsForSync({ includeDeleted: true }),
   writersRoomFolder: () => listFolderIdsForSync({ includeDeleted: true }),
   writersRoomExercise: () => listExerciseIdsForSync({ includeDeleted: true }),
@@ -354,6 +357,7 @@ function refusedFromCutoffs(cutoffs) {
     projectCutoff,
     musicVideoProjectCutoff,
     boardCutoff,
+    fableLoomCutoff,
     workCutoff,
     folderCutoff,
     exerciseCutoff,
@@ -377,6 +381,7 @@ function refusedFromCutoffs(cutoffs) {
   if (projectCutoff === null) refused.push('creativeDirectorProject');
   if (musicVideoProjectCutoff === null) refused.push('musicVideoProject');
   if (boardCutoff === null) refused.push('moodBoard');
+  if (fableLoomCutoff === null) refused.push('fableLoom');
   if (workCutoff === null) refused.push('writersRoomWork');
   if (folderCutoff === null) refused.push('writersRoomFolder');
   if (exerciseCutoff === null) refused.push('writersRoomExercise');
@@ -409,6 +414,7 @@ export async function sweepTombstones({ now = Date.now(), graceMs = GRACE_MS } =
     projectCutoff,
     musicVideoProjectCutoff,
     boardCutoff,
+    fableLoomCutoff,
     workCutoff,
     folderCutoff,
     exerciseCutoff,
@@ -425,6 +431,7 @@ export async function sweepTombstones({ now = Date.now(), graceMs = GRACE_MS } =
     cutoffForKind('creativeDirectorProject', { peers, subs, now, graceMs }),
     cutoffForKind('musicVideoProject', { peers, subs, now, graceMs }),
     cutoffForKind('moodBoard', { peers, subs, now, graceMs }),
+    cutoffForKind('fableLoom', { peers, subs, now, graceMs }),
     cutoffForKind('writersRoomWork', { peers, subs, now, graceMs }),
     cutoffForKind('writersRoomFolder', { peers, subs, now, graceMs }),
     cutoffForKind('writersRoomExercise', { peers, subs, now, graceMs }),
@@ -432,7 +439,7 @@ export async function sweepTombstones({ now = Date.now(), graceMs = GRACE_MS } =
     cutoffForKind('creativeCommission', { peers, subs, now, graceMs }),
   ]);
   const issueCutoff = seriesCutoff;
-  const [u, s, i, c, a, ar, al, t, cd, mv, mb, wr, wrf, wre, cfb, cc] = await Promise.all([
+  const [u, s, i, c, a, ar, al, t, cd, mv, mb, fl, wr, wrf, wre, cfb, cc] = await Promise.all([
     universeCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedUniverses(universeCutoff),
     seriesCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedSeries(seriesCutoff),
     issueCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedIssues(issueCutoff),
@@ -444,6 +451,7 @@ export async function sweepTombstones({ now = Date.now(), graceMs = GRACE_MS } =
     projectCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedProjects(projectCutoff),
     musicVideoProjectCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedMusicVideoProjects(musicVideoProjectCutoff),
     boardCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedBoards(boardCutoff),
+    fableLoomCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedLooms(fableLoomCutoff),
     workCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedWorks(workCutoff),
     folderCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedFolders(folderCutoff),
     exerciseCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedExercises(exerciseCutoff),
@@ -476,6 +484,7 @@ export async function sweepTombstones({ now = Date.now(), graceMs = GRACE_MS } =
     creativeDirectorProjects: cd.pruned,
     musicVideoProjects: mv.pruned,
     moodBoards: mb.pruned,
+    fableLooms: fl.pruned,
     writersRoomWorks: wr.pruned,
     writersRoomFolders: wrf.pruned,
     writersRoomExercises: wre.pruned,
@@ -483,7 +492,7 @@ export async function sweepTombstones({ now = Date.now(), graceMs = GRACE_MS } =
     creativeCommissions: cc.pruned,
     orphanBaseHashes: orphan.pruned,
     orphanSubscriptions: orphanSubs.pruned,
-    refused: refusedFromCutoffs({ universeCutoff, seriesCutoff, collectionCutoff, authorCutoff, artistCutoff, albumCutoff, trackCutoff, projectCutoff, musicVideoProjectCutoff, boardCutoff, workCutoff, folderCutoff, exerciseCutoff, commissionFeedbackCutoff, creativeCommissionCutoff }),
+    refused: refusedFromCutoffs({ universeCutoff, seriesCutoff, collectionCutoff, authorCutoff, artistCutoff, albumCutoff, trackCutoff, projectCutoff, musicVideoProjectCutoff, boardCutoff, fableLoomCutoff, workCutoff, folderCutoff, exerciseCutoff, commissionFeedbackCutoff, creativeCommissionCutoff }),
   };
 }
 
@@ -492,7 +501,7 @@ export async function sweepTombstones({ now = Date.now(), graceMs = GRACE_MS } =
 // coverage matters), so this hardcodes graceMs:0 internally.
 export async function getSweepStatus({ now = Date.now() } = {}) {
   const { peers, subs } = await loadState();
-  const [universeCutoff, seriesCutoff, collectionCutoff, authorCutoff, artistCutoff, albumCutoff, trackCutoff, projectCutoff, musicVideoProjectCutoff, boardCutoff, workCutoff, folderCutoff, exerciseCutoff, commissionFeedbackCutoff, creativeCommissionCutoff] = await Promise.all([
+  const [universeCutoff, seriesCutoff, collectionCutoff, authorCutoff, artistCutoff, albumCutoff, trackCutoff, projectCutoff, musicVideoProjectCutoff, boardCutoff, fableLoomCutoff, workCutoff, folderCutoff, exerciseCutoff, commissionFeedbackCutoff, creativeCommissionCutoff] = await Promise.all([
     cutoffForKind('universe', { peers, subs, now, graceMs: 0 }),
     cutoffForKind('series', { peers, subs, now, graceMs: 0 }),
     cutoffForKind('mediaCollection', { peers, subs, now, graceMs: 0 }),
@@ -503,13 +512,14 @@ export async function getSweepStatus({ now = Date.now() } = {}) {
     cutoffForKind('creativeDirectorProject', { peers, subs, now, graceMs: 0 }),
     cutoffForKind('musicVideoProject', { peers, subs, now, graceMs: 0 }),
     cutoffForKind('moodBoard', { peers, subs, now, graceMs: 0 }),
+    cutoffForKind('fableLoom', { peers, subs, now, graceMs: 0 }),
     cutoffForKind('writersRoomWork', { peers, subs, now, graceMs: 0 }),
     cutoffForKind('writersRoomFolder', { peers, subs, now, graceMs: 0 }),
     cutoffForKind('writersRoomExercise', { peers, subs, now, graceMs: 0 }),
     cutoffForKind('commissionFeedback', { peers, subs, now, graceMs: 0 }),
     cutoffForKind('creativeCommission', { peers, subs, now, graceMs: 0 }),
   ]);
-  return { refused: refusedFromCutoffs({ universeCutoff, seriesCutoff, collectionCutoff, authorCutoff, artistCutoff, albumCutoff, trackCutoff, projectCutoff, musicVideoProjectCutoff, boardCutoff, workCutoff, folderCutoff, exerciseCutoff, commissionFeedbackCutoff, creativeCommissionCutoff }) };
+  return { refused: refusedFromCutoffs({ universeCutoff, seriesCutoff, collectionCutoff, authorCutoff, artistCutoff, albumCutoff, trackCutoff, projectCutoff, musicVideoProjectCutoff, boardCutoff, fableLoomCutoff, workCutoff, folderCutoff, exerciseCutoff, commissionFeedbackCutoff, creativeCommissionCutoff }) };
 }
 
 export const TOMBSTONE_GRACE_MS = GRACE_MS;

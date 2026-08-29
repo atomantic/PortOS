@@ -62,7 +62,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiScaffold.js` | App scaffolding templates. |
 | `apiSchedules.js` | Automation schedules. |
 | `apiQuotaBurn.js` | Quota Burn plan + live status, the job-type catalog its config form renders, and manual runs (`getQuotaBurn`/`getQuotaBurnCatalog`/`saveQuotaBurn`/`runQuotaBurn`), plus `rearmQuotaBurn` to put spent `run once` steps back into the rotation. |
-| `apiRapidReader.js` | Rapid Reader's optional author-hosted Accelerando book loader. |
+| `apiRapidReader.js` | Rapid Reader's optional author-hosted Accelerando loader and machine-local shelf API. |
 | `apiSystem.js` | System info (CPU/memory/ports/alerts/active processing and local hardware capabilities) + D&D-style character sheet getter, plus the usage cost report and explicit historical reconciliation (`getUsage`/`getUsageRaw`/`resetUsage`, `getProviderUsage`, `getUsageBackfillStatus`/`startUsageBackfill`, `updateSubscriptionCosts` for the subscription-vs-API savings comparison). |
 | `apiAuth.js` | Optional login password — status, login/logout, set/clear password. |
 | `apiLoops.js` | Scheduled loops. |
@@ -122,7 +122,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiSharing.js` | Share buckets + federation sync. |
 | `apiRounds.js` | Rounds workbench CRUD (a cappella round writing + arranging voice layers + learning tracking). |
 | `apiSongbook.js` | SongBook repertoire tracker (`/songbook` — Brain `songs` entity): song CRUD + stage PATCH, `practiceSong(id, quality)` (logs a 0..5-graded practice run; the server owns the SM-2 advance and the resulting `stage`/`practice`), URL import draft, and attachments (base64 upload, present-flag list, raw serve URL via `songAttachmentUrl`). |
-| `apiPeerSync.js` | Per-record peer sync subscriptions (universe + series → other PortOS instances over Tailnet). |
+| `apiPeerSync.js` | Per-record federated sync subscriptions, integrity checks, and manual push/pull controls (including Universe, Pipeline, Media Collections, and FableLoom). |
 | `apiSyncReview.js` | Sync hygiene: duplicate-record detection + smart merge (universe/series) and the non-blocking edit-conflict journal (list/resolve). Surfaced in Sharing → Duplicates / Conflicts. |
 
 ## Tools / integrations

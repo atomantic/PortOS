@@ -28,11 +28,6 @@ describe('eggContext', () => {
     expect(ctx.totalGoals).toBe(2); // two real objects, junk dropped
   });
 
-  it('prefers longest streak over current, else null (never 0 from absence)', () => {
-    expect(eggContext({ productivityData: { streak: { current: 2, longest: 11 } } }).bestStreak).toBe(11);
-    expect(eggContext({ productivityData: { streak: { current: 4 } } }).bestStreak).toBe(4);
-    expect(eggContext({}).bestStreak).toBeNull();
-  });
 });
 
 describe('unlockedEggs — conditions', () => {
@@ -55,13 +50,6 @@ describe('unlockedEggs — conditions', () => {
   it('unlocks the answer egg at exactly level 42', () => {
     expect(unlockedEggs({ character: { level: 42 } }).map((e) => e.id)).toContain('answer');
     expect(unlockedEggs({ character: { level: 41 } }).map((e) => e.id)).not.toContain('answer');
-  });
-
-  it('unlocks the palindrome-streak egg only for a palindromic best streak >= 10', () => {
-    expect(unlockedEggs({ productivityData: { streak: { longest: 22 } } }).map((e) => e.id)).toContain('palindrome-streak');
-    expect(unlockedEggs({ productivityData: { streak: { longest: 121 } } }).map((e) => e.id)).toContain('palindrome-streak');
-    expect(unlockedEggs({ productivityData: { streak: { longest: 23 } } }).map((e) => e.id)).not.toContain('palindrome-streak');
-    expect(unlockedEggs({ productivityData: { streak: { longest: 7 } } }).map((e) => e.id)).not.toContain('palindrome-streak'); // single digit
   });
 
   it('unlocks the clean-sweep egg only when all (>=1) goals are completed', () => {

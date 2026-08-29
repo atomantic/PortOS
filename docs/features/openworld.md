@@ -139,7 +139,7 @@ what's healthy, what's not, find a specific app, and take action.
 | **1.9** | **Status filter chips in HUD** — All / Online / Stopped / Errored / Has-Agent / Has-Pending-Review pill row above legend. Persists per-session. | S |
 | **1.10** | **Hover preview card with quick actions** — show status / uptime / CPU / MEM / err / recent log line, with **Logs / Restart / Deploy / Open** buttons. Restart and Deploy POST to existing endpoints with explicit confirmation. | M |
 | **1.11** | **Clickable HUD stats** — every count routes somewhere: PENDING REVIEWS → `/review`, AGENTS → `/cos`, NODES → `/instances`, etc. | XS |
-| **1.12** | **Richer billboards** — rotate today's briefing headline, productivity streak, top actionable insight, recent agent completion summary, goal progress. | S |
+| **1.12** | **Richer billboards** — rotate today's briefing headline, top actionable insight, recent agent completion summary, goal progress. | S |
 | **1.13** | **Agent → building tether** — visible light from `AgentEntity` to its assigned building; color = agent state. Plus window-pulse animation on the building. | M |
 | **1.14** | **Mobile / touch support** — `pointer: coarse` detection, single-finger orbit, two-finger pinch zoom, tap-to-select. Below 640px collapse HUD into a bottom sheet with search + filters + needs-attention. WASD exploration disables. AGENTS.md mandate. | M |
 | **1.15** | **Adaptive render budget** — the scene selects an internal detail tier from sustained frame time; player settings do not expose renderer knobs. | XS |
@@ -155,7 +155,7 @@ Goal: every major system PortOS tracks has a place in the city.
 | **2.3** | **Backup vault landmark** — pulses on `backup:started/completed`, label shows time-since-last-snapshot, goes red when stale. | S |
 | **2.4** | **Voice agent district marker** — small area whose lighting mirrors voice-agent state (idle / dictating / error). | S |
 | **2.5** | **Federation horizon** — peers as distant skyline silhouettes; opacity = reachability, bridge condition = sync state. Even with one instance the void zone stays visible. | M |
-| **2.6** | **Productivity district** — streak monument, activity heatmap ground tiles, task flow river. Driven by `/api/cos/productivity/*`. | L |
+| **2.6** | **Productivity district** — throughput monument, activity heatmap ground tiles, task flow river. Driven by `/api/cos/productivity/*`. | L |
 | **2.7** | **Goal monuments** — active goals as construction sites; completed goals as polished monuments; stalled goals dimmed. Driven by `/api/digital-twin/identity/goals`. | L |
 | **2.8** | **Mini-map overlay** — top-down map in HUD corner with click-to-teleport. | M |
 | **2.9** | **Health vitals tower** — biometric tower in a wellness district visualizing heart rate / steps / sleep / calories from `/api/meatspace/apple-health/metrics/latest`. | M |
@@ -172,7 +172,7 @@ Goal: the city feels alive, distinctive, and earned.
 | **3.2** | **Memory / knowledge district** — categories as crystal clusters, graph edges as light bridges, brain inbox as a glowing well. Driven by `/api/memory/graph`. | L |
 | **3.3** | **Photo mode / cinematic camera** — pause animations, cinematic presets, depth-of-field, vignette, high-res screenshots, "city postcard" with stats overlay. | M |
 | **3.4** | **Ambient soundscape tied to data** — base key/tempo follows system health; agent activity adds rhythmic voices; completed tasks chime. Extends existing synth music. | L |
-| **3.5** | **Earned artifacts & achievements** — milestone statues, streak trophies, easter eggs. | M |
+| **3.5** | **Earned artifacts & achievements** — milestone statues and easter eggs. | M |
 | **3.6** | **Historical timeline scrubber** — scrub back to past city states; buildings appear/disappear via construction animations. Requires snapshot data. | L |
 | **3.7** | **JIRA sprint district** — current sprint tickets as crates / under-construction / completed structures. | M |
 | **3.8** | **Throttle expensive socket-driven repaints** — coalesce noisy event bursts into a 100ms tick. Becomes load-bearing once Phase 2's beams/vehicles ship. | S |
@@ -235,8 +235,9 @@ exercised by the suite instead of bit-rotting behind a default nobody selects.
 
 The style change keeps the operational geometry and live data mappings stable while changing
 their material language. The Vibes pass now adds grounded nature patches, a varied plaza grove,
-and planter-framed warp pads; the shared app-building grammar remains intentionally recognizable
-across both styles so a status means the same thing in either world.
+planter-framed warp pads, and a deterministic drifting cloud bank that scales with the adaptive
+render tier; the shared app-building grammar remains intentionally recognizable across both
+styles so a status means the same thing in either world.
 
 ## Critical Files
 
@@ -266,7 +267,7 @@ across both styles so a status means the same thing in either world.
 | `/api/cos/queue` (or `/api/cos`) | 1.7, 2.2 | task queue depth |
 | `/api/instances/peers` | 1.7, 2.5 | sync failures, peer rendering |
 | `/api/cos/briefings/latest` | 1.12 | billboard headline |
-| `/api/cos/productivity/summary` | 1.12, 2.6 | streak, throughput |
+| `/api/cos/productivity/summary` | 1.12, 2.6 | throughput, pace |
 | `/api/cos/productivity/trends` | 2.6 | activity heatmap |
 | `/api/digital-twin/identity/goals` | 2.7 | goal monuments |
 | `/api/digital-twin/identity/chronotype/energy-schedule` | 3.1 | energy overlay |

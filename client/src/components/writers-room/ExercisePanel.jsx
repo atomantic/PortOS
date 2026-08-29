@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Timer, Play, StopCircle, X } from 'lucide-react';
+import { Timer, Play, StopCircle, X, FilePlus } from 'lucide-react';
 import toast from '../ui/Toast';
 import {
   listWritersRoomExercises,
   createWritersRoomExercise,
   finishWritersRoomExercise,
   discardWritersRoomExercise,
+  promoteWritersRoomExercise,
 } from '../../services/apiWritersRoom';
 import { countWords, formatCountdown } from '../../utils/formatters';
 import { FormField } from '../ui/FormField';
@@ -18,7 +19,7 @@ const DURATION_PRESETS = [
   { label: '25 min', seconds: 1500 },
 ];
 
-export default function ExercisePanel({ activeWork, onClose }) {
+export default function ExercisePanel({ activeWork, onClose, editorDirty = false, onWorkChange }) {
   const [history, setHistory] = useState([]);
   const [duration, setDuration] = useState(600);
   const [prompt, setPrompt] = useState('');
@@ -100,6 +101,17 @@ export default function ExercisePanel({ activeWork, onClose }) {
     }
     setActive(null);
     setText('');
+    await refresh();
+  };
+
+  const promote = async (exercise) => {
+    const result = await promoteWritersRoomExercise(exercise.id, { silent: true }).catch((err) => {
+      toast.error(`Could not add to draft: ${err.message}`);
+      return null;
+    });
+    if (!result) return;
+    toast.success(`Added ${countWords(exercise.appendedText)} words to draft`);
+    onWorkChange?.(result.work);
     await refresh();
   };
 
@@ -216,6 +228,18 @@ export default function ExercisePanel({ activeWork, onClose }) {
               </span>
               <span className="text-gray-600 truncate flex-1">{ex.prompt || '(free-write)'}</span>
               <span className="text-gray-600">{Math.round((ex.durationSeconds || 0) / 60)}m</span>
+              {ex.promotedAt && <span className="text-port-success">✓ in draft</span>}
+              {ex.status === 'finished' && ex.appendedText && ex.workId === activeWork?.id && !ex.promotedAt && (
+                <button
+                  onClick={() => promote(ex)}
+                  disabled={editorDirty}
+                  title={editorDirty ? 'Save first' : 'Add to draft'}
+                  aria-label="Add sprint text to draft"
+                  className="min-h-[44px] min-w-[44px] flex items-center justify-center text-port-accent disabled:text-gray-600"
+                >
+                  <FilePlus size={15} />
+                </button>
+              )}
             </li>
           ))}
         </ul>

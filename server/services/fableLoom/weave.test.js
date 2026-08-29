@@ -25,7 +25,8 @@ vi.mock('../pipeline/series.js', () => ({ getSeries: getSeriesMock }));
 const { createLoom, addEpisode, addNode, mutateLoom, updateLoom, updateNode, getLoom } = await import('./records.js');
 const { _resetFableLoomBackend } = await import('./store.js');
 const {
-  branchNode, buildCanonDigest, feedbackEpisode, mapGeneratedGraph, playTurn, reformatEpisodeScenes, reviewEpisode, weaveEpisode,
+  branchNode, buildCanonDigest, feedbackEpisode, feedbackSeriesPlan, generateSeriesPlan, mapGeneratedGraph, playTurn,
+  reformatEpisodeScenes, reviewEpisode, reviewSeriesPlan, weaveEpisode,
 } = await import('./weave.js');
 
 beforeEach(() => {
@@ -103,6 +104,11 @@ describe('weaveEpisode', () => {
     expect(stage).toBe('fableloom-weave-episode');
     expect(variables.storyContext).toContain('The Hollow Crown');
     expect(variables.guidance).toBe('darker');
+    expect(variables.existingGraph).toContain('(none');
+    expect(variables.cameraMovementCatalog).toContain('slow-dolly-in');
+    expect(variables.participationContract).toContain('audience acts as the protagonist');
+    expect(variables).not.toHaveProperty('nodeTarget');
+    expect(variables).not.toHaveProperty('endingTarget');
   });
 
   it('refuses to clobber a non-empty episode without replace', async () => {
@@ -114,6 +120,38 @@ describe('weaveEpisode', () => {
     runStagedLLM.mockResolvedValue({ content: generatedGraph(), runId: 'run-2' });
     const { loom } = await weaveEpisode(loomId, episodeId, { replace: true });
     expect(loom.episodes[0].nodes).toHaveLength(3);
+  });
+
+  it('rejects a helper weave that offers decisions before establishing its audience channel', async () => {
+    const { loomId, episodeId } = await setup();
+    await updateLoom(loomId, {
+      participationMode: 'helper',
+      audienceCommunicationMedium: 'A pocket radio.',
+    });
+    runStagedLLM.mockResolvedValue({ content: generatedGraph(), runId: 'run-disconnected' });
+
+    await expect(weaveEpisode(loomId, episodeId))
+      .rejects.toMatchObject({ code: 'AI_RESPONSE_INVALID' });
+    expect((await getLoom(loomId)).episodes[0].nodes).toEqual([]);
+  });
+
+  it('persists the first helper invitation and its connected decision scenes', async () => {
+    const { loomId, episodeId } = await setup();
+    await updateLoom(loomId, {
+      participationMode: 'helper',
+      audienceCommunicationMedium: 'A pocket radio.',
+    });
+    const graph = generatedGraph();
+    graph.nodes[0].playbackMode = 'cut';
+    graph.nodes[0].audienceConnection = 'disconnected';
+    graph.nodes[0].transitions = [graph.nodes[0].transitions[0]];
+    graph.nodes[1].playbackMode = 'decision';
+    graph.nodes[1].audienceConnection = 'connected';
+    runStagedLLM.mockResolvedValue({ content: graph, runId: 'run-connected' });
+
+    const result = await weaveEpisode(loomId, episodeId);
+    expect(result.loom.episodes[0].nodes.map((node) => node.audienceConnection))
+      .toEqual(['disconnected', 'connected', 'disconnected']);
   });
 });
 
@@ -138,9 +176,11 @@ describe('branchNode', () => {
     const ep = loom.episodes[0];
     expect(ep.nodes).toHaveLength(3);
     const source = ep.nodes.find((n) => n.id === nodeId);
+    expect(source.playbackMode).toBe('decision');
     expect(source.transitions.map((t) => t.intent)).toEqual(['scale the wall', 'bribe the guard']);
     const ending = ep.nodes.find((n) => n.title === 'A Deal');
     expect(ending).toMatchObject({ isEnding: true, endingLabel: 'Bought passage' });
+    expect(ep.nodes.filter((n) => n.id !== nodeId).every((n) => n.playbackMode === 'decision')).toBe(true);
   });
 
   it('rejects when the model returns no usable branches', async () => {
@@ -149,6 +189,19 @@ describe('branchNode', () => {
     runStagedLLM.mockResolvedValue({ content: { branches: [] }, runId: 'r' });
     await expect(branchNode(loomId, episodeId, withNode.episodes[0].nodes[0].id, {}))
       .rejects.toMatchObject({ code: 'AI_RESPONSE_INVALID' });
+  });
+
+  it('does not create audience branches while a helper story is disconnected', async () => {
+    const { loomId, episodeId } = await setup();
+    await updateLoom(loomId, {
+      participationMode: 'helper',
+      audienceCommunicationMedium: 'A pocket radio.',
+    });
+    const withNode = await addNode(loomId, episodeId, { title: 'Silent opening', audienceConnection: 'disconnected' });
+
+    await expect(branchNode(loomId, episodeId, withNode.episodes[0].nodes[0].id, {}))
+      .rejects.toMatchObject({ code: 'AUDIENCE_DISCONNECTED' });
+    expect(runStagedLLM).not.toHaveBeenCalled();
   });
 });
 
@@ -234,6 +287,28 @@ describe('feedbackEpisode', () => {
       id: withNode.episodes[0].nodes[0].id, title: 'Opening', prose: 'Original.',
     });
   });
+
+  it('preserves playback mode when feedback returns an invalid placeholder', async () => {
+    const { loomId, episodeId } = await setup();
+    const withNode = await addNode(loomId, episodeId, {
+      title: 'Opening', playbackMode: 'cut', cameraMovement: 'slow-dolly-in',
+    });
+    const nodeId = withNode.episodes[0].nodes[0].id;
+    runStagedLLM.mockResolvedValue({
+      content: { scenes: [{
+        id: nodeId,
+        playbackMode: 'cut or decision, only when changed',
+        cameraMovement: 'slow-dolly-in, only when changed',
+        title: 'Revised',
+      }] },
+    });
+
+    const result = await feedbackEpisode(loomId, episodeId, { feedback: 'Revise the title.' });
+
+    expect(result.loom.episodes[0].nodes[0]).toMatchObject({
+      title: 'Revised', playbackMode: 'cut', cameraMovement: 'slow-dolly-in',
+    });
+  });
 });
 
 describe('playTurn', () => {
@@ -292,6 +367,42 @@ describe('playTurn', () => {
       action: 'move', resolvedBy: 'choice', narration: '', ended: true,
     });
     expect(result.node.id).toBe(insideId);
+    expect(runStagedLLM).not.toHaveBeenCalled();
+  });
+
+  it('locks typed audience input out while a helper channel is disconnected but permits canon advance', async () => {
+    const { loomId, episodeId, gate: originalGate, insideId } = await playSetup();
+    await updateLoom(loomId, {
+      participationMode: 'helper',
+      audienceCommunicationMedium: 'A pocket radio.',
+    });
+    await updateNode(loomId, episodeId, originalGate.id, {
+      playbackMode: 'cut', audienceConnection: 'disconnected',
+    });
+    // `elsewhereId` deliberately targets a DIFFERENT node than transitions[0]
+    // (insideId): a non-interactive scene resolves via the graph's own first
+    // transition, not the caller's requested transitionId, and asserting
+    // against insideId only pins that if the alternate path leads somewhere
+    // else — otherwise both paths land on the same node and the assertion
+    // can't distinguish "used transitions[0]" from "honored transitionId".
+    const withElsewhere = await addNode(loomId, episodeId, { title: 'Elsewhere', prose: 'Fog.', fromNodeId: originalGate.id, fromIntent: 'go the other way' });
+    const elsewhereId = withElsewhere.episodes[0].nodes.find((n) => n.title === 'Elsewhere').id;
+    await mutateLoom(loomId, (loom) => {
+      const gate = loom.episodes[0].nodes.find((node) => node.id === originalGate.id);
+      gate.transitions = gate.transitions.filter((t) => t.targetNodeId !== elsewhereId);
+      gate.transitions.push({ id: 'alternate-path', targetNodeId: elsewhereId, intent: 'Choose a different route' });
+      return loom;
+    });
+    const gate = (await getLoom(loomId)).episodes[0].nodes.find((node) => node.id === originalGate.id);
+    expect(gate.transitions[0].targetNodeId).toBe(insideId);
+
+    await expect(playTurn(loomId, episodeId, { nodeId: gate.id, message: 'Can you hear me?' }))
+      .rejects.toMatchObject({ code: 'AUDIENCE_DISCONNECTED' });
+    const advanced = await playTurn(loomId, episodeId, {
+      nodeId: gate.id, transitionId: 'alternate-path',
+    });
+    expect(advanced).toMatchObject({ action: 'move', resolvedBy: 'graph' });
+    expect(advanced.node.id).toBe(insideId);
     expect(runStagedLLM).not.toHaveBeenCalled();
   });
 
@@ -581,5 +692,147 @@ describe('buildCanonDigest', () => {
     expect(digest).not.toContain('objects:');
 
     expect(await buildCanonDigest({ universeId: null })).toBe('');
+  });
+});
+
+describe('series plan AI', () => {
+  it('drafts and persists a complete scaffold while preserving episode records', async () => {
+    const { loomId, episodeId } = await setup();
+    getUniverseMock.mockResolvedValueOnce({
+      characters: [{ name: 'Mara', description: 'a courier who fears command' }],
+    });
+    runStagedLLM.mockResolvedValueOnce({
+      content: {
+        storyArc: 'Mara accepts responsibility for the city she once fled.',
+        plotPoints: [
+          { title: 'The summons', description: 'The crown chooses Mara.', episodeId },
+          { title: 'The false road', description: 'A tempting escape closes.', episodeId: 'invented-episode' },
+        ],
+        sideQuests: [{
+          title: 'The missing map', description: 'A rival becomes an ally.', status: 'planned',
+          startEpisodeId: episodeId, endEpisodeId: null,
+        }],
+      },
+      runId: 'run-draft',
+    });
+
+    const result = await generateSeriesPlan(loomId, {
+      providerId: 'writer', model: 'large', effort: 'high',
+    });
+
+    expect(result.runId).toBe('run-draft');
+    expect(result.loom.seriesPlan.storyArc).toContain('accepts responsibility');
+    expect(result.loom.seriesPlan.plotPoints).toHaveLength(2);
+    expect(result.loom.seriesPlan.plotPoints.every((item) => item.id.startsWith('plot-'))).toBe(true);
+    expect(result.loom.seriesPlan.plotPoints[1].episodeId).toBeNull();
+    expect(result.loom.seriesPlan.sideQuests[0]).toMatchObject({
+      title: 'The missing map', startEpisodeId: episodeId,
+    });
+    expect(result.loom.episodes).toHaveLength(1);
+    expect(result.loom.episodes[0]).toMatchObject({ id: episodeId, title: 'Pilot', synopsis: 'A crown wakes.' });
+    expect(runStagedLLM).toHaveBeenCalledWith('fableloom-generate-series-plan', expect.objectContaining({
+      storyContext: expect.stringContaining('The Hollow Crown'),
+      canonDigest: expect.stringContaining('Mara'),
+      seriesPlanJson: expect.stringContaining(episodeId),
+    }), expect.objectContaining({
+      providerOverride: 'writer', modelOverride: 'large', effortOverride: 'high',
+    }));
+  });
+
+  it('rejects an incomplete generated scaffold without replacing the saved plan', async () => {
+    const { loomId } = await setup();
+    await updateLoom(loomId, { seriesPlan: {
+      storyArc: 'Saved arc', plotPoints: [], sideQuests: [],
+    } });
+    runStagedLLM.mockResolvedValueOnce({
+      content: { storyArc: 'Partial arc', plotPoints: [{ title: 'A beat' }], sideQuests: [] },
+    });
+
+    await expect(generateSeriesPlan(loomId)).rejects.toMatchObject({ code: 'AI_RESPONSE_INVALID' });
+    expect((await getLoom(loomId)).seriesPlan.storyArc).toBe('Saved arc');
+  });
+
+  it('does not overwrite story inputs saved while the provider call is in flight', async () => {
+    const { loomId } = await setup();
+    let finishDraft;
+    runStagedLLM.mockImplementationOnce(() => new Promise((resolve) => { finishDraft = resolve; }));
+    const generation = generateSeriesPlan(loomId);
+    await vi.waitFor(() => expect(runStagedLLM).toHaveBeenCalledOnce());
+    await updateLoom(loomId, { premise: 'A newer premise saved during the draft.' });
+    finishDraft({
+      content: {
+        storyArc: 'A stale arc.',
+        plotPoints: [{ title: 'Old beat', description: 'Based on stale context.' }],
+        sideQuests: [{ title: 'Old thread', description: 'Also stale.' }],
+      },
+    });
+
+    await expect(generation).rejects.toMatchObject({ code: 'LOOM_CHANGED_DURING_GENERATION' });
+    const current = await getLoom(loomId);
+    expect(current.premise).toBe('A newer premise saved during the draft.');
+    expect(current.seriesPlan.storyArc).toBe('');
+  });
+
+  it('returns normalized holistic analysis without mutating the loom', async () => {
+    const { loomId } = await setup();
+    runStagedLLM.mockResolvedValueOnce({
+      content: { summary: 'Strong spine.', strengths: ['Clear goal'], risks: ['Late turn'], recommendations: ['Move the turn'] },
+      runId: 'run-review',
+    });
+    const result = await reviewSeriesPlan(loomId, { providerId: 'writer' });
+    expect(result).toEqual({
+      analysis: { summary: 'Strong spine.', strengths: ['Clear goal'], risks: ['Late turn'], recommendations: ['Move the turn'] },
+      runId: 'run-review',
+    });
+    expect(runStagedLLM).toHaveBeenCalledWith('fableloom-review-series-plan', expect.objectContaining({
+      seriesPlanJson: expect.stringContaining('episodes'),
+    }), expect.objectContaining({ providerOverride: 'writer' }));
+  });
+
+  it('applies sparse series-plan feedback and preserves omitted collections', async () => {
+    const { loomId, episodeId } = await setup();
+    await updateLoom(loomId, { seriesPlan: {
+      storyArc: 'Old arc',
+      plotPoints: [{ id: 'plot-1', title: 'Turn', description: 'Old', episodeId }],
+      sideQuests: [],
+    } });
+    runStagedLLM.mockResolvedValueOnce({
+      content: { storyArc: 'New arc', changes: ['Raised the stakes'] },
+      runId: 'run-feedback',
+    });
+    const result = await feedbackSeriesPlan(loomId, { feedback: 'Raise the stakes.' });
+    expect(result.loom.seriesPlan.storyArc).toBe('New arc');
+    expect(result.loom.seriesPlan.plotPoints).toHaveLength(1);
+    expect(result.changes).toEqual(['Raised the stakes']);
+  });
+
+  it('preserves plan items outside the AI digest and patches existing items by id', async () => {
+    const { loomId, episodeId } = await setup();
+    const plotPoints = Array.from({ length: 35 }, (_, index) => ({
+      id: `plot-${index + 1}`, title: `Beat ${index + 1}`, description: `Purpose ${index + 1}`, episodeId,
+    }));
+    await updateLoom(loomId, { seriesPlan: { storyArc: 'Arc', plotPoints, sideQuests: [] } });
+    runStagedLLM.mockResolvedValueOnce({
+      content: { plotPointEdits: [{ id: 'plot-1', description: 'A sharper purpose.' }] },
+      runId: 'run-feedback',
+    });
+    const result = await feedbackSeriesPlan(loomId, { feedback: 'Sharpen the opening beat.' });
+    expect(result.loom.seriesPlan.plotPoints).toHaveLength(35);
+    expect(result.loom.seriesPlan.plotPoints[0].description).toBe('A sharper purpose.');
+    expect(result.loom.seriesPlan.plotPoints[34].title).toBe('Beat 35');
+  });
+
+  it('annotates and prioritizes episode-assigned plan beats in episode AI context', async () => {
+    const { loomId, episodeId } = await setup();
+    const manyBeats = Array.from({ length: 13 }, (_, index) => ({
+      id: `plot-${index}`, title: `Beat ${index}`, description: '', episodeId: null,
+    }));
+    manyBeats.push({ id: 'plot-relevant', title: 'Episode turn', description: '', episodeId });
+    await updateLoom(loomId, { seriesPlan: { storyArc: '', plotPoints: manyBeats, sideQuests: [] } });
+    runStagedLLM.mockResolvedValueOnce({ content: generatedGraph(), runId: 'run-weave' });
+    await weaveEpisode(loomId, episodeId, { replace: true });
+    expect(runStagedLLM).toHaveBeenCalledWith('fableloom-weave-episode', expect.objectContaining({
+      storyContext: expect.stringContaining('Plot point 1 [planned for Episode 1: Pilot]: Episode turn'),
+    }), expect.anything());
   });
 });

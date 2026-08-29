@@ -5,7 +5,9 @@ import {
   nextPersistentMindWakeAt,
   normalizePersistentMindState,
   persistentMindBackoffMs,
+  persistentMindCallRateVerdict,
   persistentMindImageWorkGuard,
+  recordPersistentMindCall,
   persistentMindTurnIsStale,
   requeuePersistentMindWake,
   takeNextPersistentMindWake,
@@ -221,5 +223,48 @@ describe('persistent mind state', () => {
     };
     expect(persistentMindTurnIsStale(state, 1 + PERSISTENT_MIND_LIMITS.WATCHDOG_STALE_MS - 1)).toBe(false);
     expect(persistentMindTurnIsStale(state, 1 + PERSISTENT_MIND_LIMITS.WATCHDOG_STALE_MS)).toBe(true);
+  });
+
+  it('caps outbound calls from durable state so a restart cannot reset the budget', () => {
+    const CAPS = { maxPerRollingDay: 3, rollingWindowMs: 86_400_000, minGapMs: 1_800_000 };
+    const now = Date.parse('2026-08-28T12:00:00.000Z');
+    const at = (minutesAgo) => iso(now - minutesAgo * 60_000);
+
+    expect(persistentMindCallRateVerdict(createDefaultPersistentMindState(), now, CAPS))
+      .toMatchObject({ ok: true, callsInWindow: 0 });
+
+    // The gap cap is what stops a burst of urgent-feeling wakes from redialing.
+    expect(persistentMindCallRateVerdict({ callHistory: [{ at: at(29) }] }, now, CAPS))
+      .toMatchObject({ ok: false, reason: 'too-soon' });
+    expect(persistentMindCallRateVerdict({ callHistory: [{ at: at(30) }] }, now, CAPS))
+      .toMatchObject({ ok: true });
+
+    // Three inside the window is the ceiling; the fourth is rate-capped even
+    // though the gap since the last one is fine.
+    const three = { callHistory: [{ at: at(600) }, { at: at(300) }, { at: at(60) }] };
+    expect(persistentMindCallRateVerdict(three, now, CAPS)).toMatchObject({ ok: false, reason: 'rate-capped', callsInWindow: 3 });
+    // The same three calls age out of the rolling window rather than being
+    // forgiven by a restart — a day later the budget is available again.
+    expect(persistentMindCallRateVerdict(three, now + 86_400_000, CAPS)).toMatchObject({ ok: true, callsInWindow: 0 });
+
+    // A clock rollback (or a hand-edited future timestamp) must fail closed.
+    expect(persistentMindCallRateVerdict({ callHistory: [{ at: iso(now + 60_000) }] }, now, CAPS))
+      .toMatchObject({ ok: false, reason: 'too-soon' });
+  });
+
+  it('keeps the call ledger bounded and free of the dialed handle', () => {
+    let state = createDefaultPersistentMindState();
+    for (let index = 0; index < PERSISTENT_MIND_LIMITS.MAX_CALL_HISTORY + 5; index += 1) {
+      state = recordPersistentMindCall(state, { at: iso(index * 60_000), reason: `call ${index}`, source: 'mind' });
+    }
+    expect(state.callHistory).toHaveLength(PERSISTENT_MIND_LIMITS.MAX_CALL_HISTORY);
+    expect(state.callHistory.at(-1)).toMatchObject({ reason: 'call 24', source: 'mind' });
+    // Anything a caller tries to smuggle alongside the record is dropped: the
+    // handle is the user's phone number and never belongs in durable state.
+    const smuggled = recordPersistentMindCall(createDefaultPersistentMindState(), {
+      at: iso(1), reason: 'urgent', source: 'mind',
+    });
+    expect(Object.keys(smuggled.callHistory[0]).sort()).toEqual(['at', 'reason', 'source']);
+    expect(normalizePersistentMindState({ callHistory: [{ reason: 'no timestamp' }, { at: 'not-a-date' }] }).callHistory).toEqual([]);
   });
 });

@@ -1,0 +1,175 @@
+/**
+ * FableLoom's shared scene-media surface.
+ *
+ * Used in both the graph node and selected-scene editor. A completed video is
+ * always the final preview; otherwise the still image (or the current latent
+ * frame while rendering) remains visible. Generation controls never disappear,
+ * and queued/running/failed/canceled states stay visible after the POST returns.
+ */
+
+import { AlertCircle, ImagePlus, Loader2, Video } from 'lucide-react';
+import MediaImage from '../MediaImage';
+
+const ACTIVE_STATUSES = new Set(['submitting', 'queued', 'running', 'unknown']);
+
+const isActive = (job) => Boolean(job && ACTIVE_STATUSES.has(job.status));
+
+const progressPercent = (job) => {
+  if (!job) return null;
+  if (Number.isFinite(job.totalSteps) && job.totalSteps > 0 && Number.isFinite(job.step)) {
+    return Math.round((job.step / job.totalSteps) * 100);
+  }
+  return Number.isFinite(job.progress) ? Math.round(job.progress * 100) : null;
+};
+
+const jobStateLabel = (kind, job) => {
+  const noun = kind === 'video' ? 'video' : 'image';
+  if (!job) return null;
+  if (job.status === 'failed') return `${noun[0].toUpperCase()}${noun.slice(1)} failed`;
+  if (job.status === 'canceled') return `${noun[0].toUpperCase()}${noun.slice(1)} canceled`;
+  if (!isActive(job)) return null;
+  const pct = progressPercent(job);
+  return job.status === 'submitting'
+    ? `Starting ${noun}…`
+    : `Generating ${noun}${pct !== null ? ` ${pct}%` : '…'}`;
+};
+
+export default function LoomSceneMedia({
+  node,
+  jobs = {},
+  onGenerateImage,
+  onGenerateVideo,
+  compact = false,
+  generationDisabled = false,
+  generationDisabledReason = '',
+}) {
+  const imageJob = jobs.image || null;
+  const videoJob = jobs.video || null;
+  const imageActive = isActive(imageJob);
+  const videoActive = isActive(videoJob);
+  const activeJob = videoActive ? videoJob : imageActive ? imageJob : null;
+  const activeKind = videoActive ? 'video' : imageActive ? 'image' : null;
+  const failedJob = videoJob?.status === 'failed'
+    ? { kind: 'video', ...videoJob }
+    : imageJob?.status === 'failed'
+      ? { kind: 'image', ...imageJob }
+      : null;
+  const canceledJob = !failedJob && (videoJob?.status === 'canceled'
+    ? { kind: 'video', ...videoJob }
+    : imageJob?.status === 'canceled'
+      ? { kind: 'image', ...imageJob }
+      : null);
+  const noticeJob = failedJob || canceledJob;
+  const noticeLabel = noticeJob && jobStateLabel(noticeJob.kind, noticeJob);
+  const activeLabel = activeKind && jobStateLabel(activeKind, activeJob);
+  const title = node.title || 'Scene';
+
+  // The final video wins. During a new video render its live frame wins; when
+  // no live frame exists, retain the still rather than replacing useful visual
+  // context with an empty spinner.
+  const showFinalVideo = Boolean(node.videoHistoryId) && !videoActive;
+  const liveFrame = activeJob?.currentImage || null;
+  const showStill = !showFinalVideo && !liveFrame && Boolean(node.image);
+  const showSpinner = !showFinalVideo && !liveFrame && !showStill && Boolean(activeJob);
+
+  const stopNodeActivation = (event) => event.stopPropagation();
+  const buttonClass = compact
+    ? 'inline-flex min-w-0 items-center justify-center gap-1 rounded border border-port-border bg-port-bg/80 px-1.5 py-1 text-[9px] text-port-text hover:border-port-accent hover:text-port-accent disabled:opacity-45'
+    : 'inline-flex items-center justify-center gap-1.5 rounded border border-port-border px-2.5 py-1.5 text-xs text-port-text hover:border-port-accent hover:text-port-accent disabled:opacity-45';
+
+  return (
+    <div className={compact ? 'flex h-full min-h-0 flex-col gap-1' : 'space-y-2'}>
+      <div className={`relative min-h-0 overflow-hidden rounded border border-port-border bg-port-bg ${compact ? 'flex-1' : 'aspect-video max-h-56'}`}>
+        {showFinalVideo ? (
+          <video
+            src={`/data/videos/${encodeURIComponent(node.videoHistoryId)}.mp4`}
+            aria-label={`${title} video preview`}
+            className="h-full w-full object-cover"
+            controls={!compact}
+            autoPlay={compact}
+            muted={compact}
+            loop={compact}
+            playsInline
+            preload={compact ? 'metadata' : 'none'}
+            onPointerDown={stopNodeActivation}
+            onClick={stopNodeActivation}
+          />
+        ) : liveFrame ? (
+          <img
+            src={`data:image/png;base64,${liveFrame}`}
+            alt={`${title} ${activeKind} generation preview`}
+            className="h-full w-full object-cover"
+          />
+        ) : showStill ? (
+          <MediaImage
+            src={`/data/images/${node.image}`}
+            alt={`${title} image preview`}
+            className="h-full w-full object-cover"
+          />
+        ) : showSpinner ? (
+          <div className="grid h-full min-h-16 place-items-center text-port-accent">
+            <Loader2 size={compact ? 16 : 22} className="animate-spin" aria-hidden="true" />
+          </div>
+        ) : (
+          <div className="flex h-full min-h-16 flex-col items-center justify-center gap-1 text-port-text-muted">
+            <ImagePlus size={compact ? 15 : 22} aria-hidden="true" />
+            <span className={compact ? 'text-[9px]' : 'text-xs'}>No scene media yet</span>
+          </div>
+        )}
+
+        {activeLabel && (
+          <div className="port-media-overlay absolute inset-x-0 bottom-0 px-2 py-1 text-center text-[9px] font-medium" role="status">
+            {activeLabel}
+          </div>
+        )}
+        {noticeLabel && (
+          <div
+            className="port-media-overlay-strong absolute inset-x-0 bottom-0 flex items-center justify-center gap-1 px-2 py-1 text-[9px] font-medium text-port-error"
+            role={compact ? 'alert' : undefined}
+            title={noticeJob.error || noticeLabel}
+          >
+            <AlertCircle size={10} aria-hidden="true" /> {noticeLabel}
+          </div>
+        )}
+      </div>
+
+      <div
+        className="grid shrink-0 grid-cols-2 gap-1"
+        onPointerDown={stopNodeActivation}
+        onClick={stopNodeActivation}
+        onKeyDown={stopNodeActivation}
+      >
+        <button
+          type="button"
+          onClick={() => onGenerateImage?.(node)}
+          disabled={imageActive || generationDisabled || !onGenerateImage}
+          title={generationDisabledReason || (node.image ? 'Regenerate scene image' : 'Generate scene image')}
+          className={buttonClass}
+        >
+          {imageActive ? <Loader2 size={compact ? 10 : 12} className="animate-spin" /> : <ImagePlus size={compact ? 10 : 12} />}
+          <span className="truncate">{imageActive ? 'Generating image' : node.image ? 'Regenerate image' : 'Generate image'}</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => onGenerateVideo?.(node)}
+          disabled={videoActive || generationDisabled || !onGenerateVideo}
+          title={generationDisabledReason || (node.videoHistoryId ? 'Regenerate scene video' : 'Generate scene video')}
+          className={buttonClass}
+        >
+          {videoActive ? <Loader2 size={compact ? 10 : 12} className="animate-spin" /> : <Video size={compact ? 10 : 12} />}
+          <span className="truncate">{videoActive ? 'Generating video' : node.videoHistoryId ? 'Regenerate video' : 'Generate video'}</span>
+        </button>
+      </div>
+
+      {noticeLabel && !compact && (
+        <p className="flex items-start gap-1 text-xs text-port-error" role="alert">
+          <AlertCircle size={13} className="mt-0.5 shrink-0" aria-hidden="true" />
+          <span>{noticeLabel}{noticeJob.error ? `: ${noticeJob.error}` : ''}</span>
+        </p>
+      )}
+      {generationDisabledReason && !noticeLabel && !compact && (
+        <p className="text-xs text-port-text-muted" role="status">{generationDisabledReason}</p>
+      )}
+    </div>
+  );
+}

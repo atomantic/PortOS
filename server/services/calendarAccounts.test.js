@@ -121,6 +121,19 @@ describe('calendarAccounts', () => {
       expect(result).toBeNull();
     });
 
+    // #5302: a Google MCP sync whose CLI exited non-zero with a possibly
+    // truncated payload persists 'partial' — events kept, nothing pruned.
+    // capabilityMap degrades a 'partial' account row to WARN, so this value
+    // has to survive the store verbatim rather than being coerced to
+    // success/error by a status enum added here later.
+    it('persists a partial sync status verbatim', async () => {
+      await calendarAccounts.createAccount({ name: 'Sync Test', type: 'google-calendar' });
+      await calendarAccounts.updateSyncStatus('test-uuid-1234', 'partial');
+
+      const account = await calendarAccounts.getAccount('test-uuid-1234');
+      expect(account.lastSyncStatus).toBe('partial');
+    });
+
     it('preserves a concurrent account edit', async () => {
       await calendarAccounts.createAccount({ name: 'Sync Test', type: 'outlook-calendar' });
 

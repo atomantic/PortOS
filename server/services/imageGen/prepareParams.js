@@ -6,12 +6,12 @@
  *   - gate input-image uploads to backends that can consume them, are enabled,
  *     and can take that many — all BEFORE anything is staged to disk
  *   - stage multer temp uploads into PATHS.images / PATHS.imageRefs
- *   - resolve initImagePath from upload or gallery filename
+ *   - resolve initImagePath and referenceImagePaths from uploads or gallery filenames
  *   - enforce each cloud CLI's prompt requirement
  *
  * Returns:
  *   {
- *     data            - mutated validated body (initImageFile/referenceStrengths
+ *     data            - mutated validated body (gallery filenames/referenceStrengths
  *                       stripped; initImagePath/referenceImagePaths/Strengths added)
  *     mode            - resolved IMAGE_GEN_MODE string
  *     settings        - raw settings object (caller reuses for dispatch)
@@ -100,6 +100,7 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
   const initUpload = files?.initImage;
   const referenceImagePaths = [];
   const referenceImageStrengths = [];
+  const namedReferenceFiles = Array.isArray(data.referenceImageFiles) ? data.referenceImageFiles : [];
 
   // Pair strengths by PACK position (post-filter), not slot position — the
   // client renumbers populated slots into `referenceImage1..N` and sends a
@@ -109,7 +110,10 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
   const referenceUploads = referenceImageFields
     .map((field) => files?.[field])
     .filter(Boolean)
-    .map((upload, packedIndex) => ({ upload, strength: data.referenceStrengths?.[packedIndex] }));
+    .map((upload, packedIndex) => ({
+      upload,
+      strength: data.referenceStrengths?.[namedReferenceFiles.length + packedIndex],
+    }));
 
   // Best-effort cleanup of every multer-staged file currently on `files`.
   // The multipart parser writes uploads to `os.tmpdir()` as they stream in,
@@ -173,7 +177,16 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
   // request or named by an earlier one) plus every reference slot. Every gate
   // below keys off these two, rather than respelling "carries input images"
   // per gate and having to keep the spellings in sync.
-  const inputImageCount = (initUpload || data.initImageFile ? 1 : 0) + referenceUploads.length;
+  const referenceImageCount = namedReferenceFiles.length + referenceUploads.length;
+  const inputImageCount = (initUpload || data.initImageFile ? 1 : 0) + referenceImageCount;
+
+  if (referenceImageCount > referenceImageFields.length) {
+    cleanupReqFilesTemp();
+    throw new ServerError(
+      `Image generation accepts at most ${referenceImageFields.length} reference images; received ${referenceImageCount}`,
+      { status: 400, code: 'TOO_MANY_REFERENCE_IMAGES' },
+    );
+  }
 
   if (!isEditCapableMode(mode) && inputImageCount) {
     cleanupReqFilesTemp();
@@ -209,7 +222,7 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
   // copying the uploads to PATHS.imageRefs and silently dropping them
   // downstream — that would orphan files on disk and produce metadata sidecars
   // that lie about how the render was conditioned.
-  if (referenceUploads.length && mode === IMAGE_GEN_MODE.LOCAL) {
+  if (referenceImageCount && mode === IMAGE_GEN_MODE.LOCAL) {
     const candidate = selectLocalImageModel(data.modelId);
     if (!isFlux2(candidate)) {
       cleanupReqFilesTemp();
@@ -262,6 +275,23 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
     initImagePath = resolved;
   }
 
+  // JSON callers can condition a new render on existing gallery images
+  // without mislabeling them as an init/edit source. Keep these first so their
+  // strengths align with `referenceStrengths`, followed by multipart uploads.
+  for (const [index, filename] of namedReferenceFiles.entries()) {
+    const resolved = resolveGalleryImage(filename);
+    if (!resolved) {
+      cleanupStagedAndTemp();
+      throw new ServerError(
+        'Reference image not found in gallery',
+        { status: 400, code: 'REFERENCE_IMAGE_NOT_FOUND' },
+      );
+    }
+    referenceImagePaths.push(resolved);
+    const strength = data.referenceStrengths?.[index];
+    referenceImageStrengths.push(typeof strength === 'number' ? strength : 1.0);
+  }
+
   // Multi-reference editing (FLUX.2). Walk packed slot entries in submit
   // order — each contributes a path + its parallel strength. Empty slots
   // are filtered out above so the runner sees `referenceImagePaths: [p1, ...]`
@@ -281,6 +311,7 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
 
   // Strip the route-only fields — providers expect normalized `…Path(s)`.
   delete data.initImageFile;
+  delete data.referenceImageFiles;
   delete data.referenceStrengths;
   if (initImagePath) data.initImagePath = initImagePath;
   if (referenceImagePaths.length) {

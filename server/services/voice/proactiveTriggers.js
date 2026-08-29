@@ -11,6 +11,13 @@
 //   2. cosEvents   'task:ready'   — a new task became spawnable.
 //   3. notificationEvents 'added' — only high/critical priority notifications.
 //
+// A `critical` notification also arms a second, slower path: if it is STILL
+// unread after `facetime.escalateAfterMinutes` and no browser tab can speak,
+// PortOS asks to ring the user's phone (persistentMindCallCapability.js, which
+// owns the quiet-hours / no-tab / rate-cap gate). That path is off by default
+// behind `facetime.escalateCritical` — speaking into an empty room is cheap,
+// but a phone call is not.
+//
 // Each source has its OWN rate-limit bucket so a burst from one source can't
 // starve another, and a storm within a source can't talk over the user. The
 // rate-limit is applied BEFORE `speakProactive` (so we skip the config read +
@@ -28,7 +35,7 @@
 
 import { errorEvents } from '../../lib/errorHandler.js';
 import { cosEvents } from '../cosEvents.js';
-import { notificationEvents } from '../notifications.js';
+import { getNotifications, notificationEvents } from '../notifications.js';
 import { speakProactive as defaultSpeak } from './proactiveSpeech.js';
 import { getVoiceConfig } from './config.js';
 import { TIMED_COOLDOWN_BLOCKED_CATEGORIES } from '../../lib/taskBlockCategories.js';
@@ -46,6 +53,19 @@ export const RATE_LIMIT_MS = {
   // close together. Instead the wiring serializes completion lines onto a
   // queue (see taskCompleteTail) so they are spoken one after another without
   // dropping or overlapping.
+};
+
+// How long a critical notification may sit unread before PortOS escalates it
+// from "spoken into an empty room" to "ring the user's phone". Only used when
+// facetime.escalateCritical is on; the config value overrides it.
+export const DEFAULT_ESCALATE_AFTER_MINUTES = 10;
+
+// Imported lazily: the call gate reaches into cos state, the mind trajectory,
+// and the FaceTime bridge, and none of that belongs in the module graph of a
+// voice trigger that usually only speaks a sentence.
+const defaultRequestCall = async (input) => {
+  const { requestUserCall } = await import('../persistentMindCallCapability.js');
+  return requestUserCall(input);
 };
 
 // Spoken lines should be short — synthesis is capped at MAX_PROACTIVE_TEXT_LEN
@@ -138,6 +158,22 @@ export const formatNotificationLine = (notification) => {
   return description ? `${title}. ${description}` : title;
 };
 
+/** Minutes a critical notification may stay unread before a call is requested. */
+export const escalateAfterMs = (cfg) => {
+  const minutes = Number(cfg?.facetime?.escalateAfterMinutes);
+  return (Number.isFinite(minutes) && minutes > 0 ? minutes : DEFAULT_ESCALATE_AFTER_MINUTES) * 60_000;
+};
+
+// What the user hears when they pick up. `openingLine` is capped at 400 chars
+// by the call request schema, so the title/description are clipped first
+// rather than letting a long notification lose the "why" at the end.
+export const formatEscalationOpeningLine = (notification) => {
+  const title = clip(notification?.title, 160);
+  if (!title) return '';
+  const description = clip(notification?.description, 160);
+  return `This is PortOS. Something critical is still waiting for you: ${title}.${description ? ` ${description}` : ''}`;
+};
+
 // Truthy check mirroring isTruthyMeta — task metadata round-trips through
 // TASKS.md, so `voiceDispatch: true` comes back as the STRING 'true'. Kept
 // inline so this module stays decoupled from the agent-state helpers.
@@ -175,7 +211,13 @@ export const formatTaskCompletionLine = (task) => {
  * @returns {Function} unwire — removes the listeners (boot wires once; tests
  *                     and hot-reload use this to avoid double-wiring).
  */
-export const wireProactiveTriggers = ({ io, speak = defaultSpeak, limits = RATE_LIMIT_MS } = {}) => {
+export const wireProactiveTriggers = ({
+  io,
+  speak = defaultSpeak,
+  limits = RATE_LIMIT_MS,
+  requestCall = defaultRequestCall,
+  readNotifications = getNotifications,
+} = {}) => {
   if (!io) {
     console.warn('🔕 voice: proactive triggers not wired (no io)');
     return () => {};
@@ -236,9 +278,62 @@ export const wireProactiveTriggers = ({ io, speak = defaultSpeak, limits = RATE_
     );
   };
 
+  // Critical notifications waiting on their escalation timer, keyed by id. The
+  // value is null between arming and scheduling so a duplicate 'added' for the
+  // same notification cannot arm twice across the config read.
+  const escalationTimers = new Map();
+
+  // Ring the user only if the notification is STILL unread when the timer
+  // fires — the whole point of waiting is to give them a chance to see it — and
+  // only while the setting is on, re-read at fire time so a toggle flipped
+  // during the wait is honoured in both directions.
+  const escalateCriticalNotification = async (notification) => {
+    const cfg = await getVoiceConfig();
+    if (cfg?.facetime?.escalateCritical !== true) return { placed: false, reason: 'escalation-disabled' };
+    const unread = await readNotifications({ unreadOnly: true });
+    if (!Array.isArray(unread) || !unread.some((entry) => entry?.id === notification.id)) {
+      return { placed: false, reason: 'already-read' };
+    }
+    const openingLine = formatEscalationOpeningLine(notification);
+    if (!openingLine) return { placed: false, reason: 'empty' };
+    return requestCall({
+      // Authorized by facetime.escalateCritical, not by the mind's grant — but
+      // subject to every other gate, including the shared 24-hour budget.
+      requireMindGrant: false,
+      source: 'critical-notification',
+      reason: `A critical notification went unread: ${clip(notification?.title, 150)}`,
+      openingLine,
+    });
+  };
+
+  const armCriticalEscalation = (notification) => {
+    if (notification?.priority !== 'critical' || !notification?.id) return;
+    const { id } = notification;
+    if (escalationTimers.has(id)) return;
+    escalationTimers.set(id, null);
+    getVoiceConfig().then((cfg) => {
+      // Unwired (or already fired) while the config read was in flight.
+      if (!escalationTimers.has(id)) return;
+      const timer = setTimeout(() => {
+        escalationTimers.delete(id);
+        escalateCriticalNotification(notification).catch((err) =>
+          console.error(`🔕 voice: critical notification escalation failed: ${err?.message || err}`),
+        );
+      }, escalateAfterMs(cfg));
+      timer.unref?.();
+      escalationTimers.set(id, timer);
+    }).catch((err) => {
+      escalationTimers.delete(id);
+      console.error(`🔕 voice: could not arm critical notification escalation: ${err?.message || err}`);
+    });
+  };
+
   const onError = (error) => fire('error', formatErrorLine(error), 'high');
   const onTaskReady = (task) => fire('task:ready', formatTaskLine(task), 'normal');
-  const onNotification = (notification) => fire('notification', formatNotificationLine(notification), 'high');
+  const onNotification = (notification) => {
+    fire('notification', formatNotificationLine(notification), 'high');
+    armCriticalEscalation(notification);
+  };
 
   // Announce completion of a coding task the user dispatched by voice. Keyed
   // off the TERMINAL task status (tasks:changed → updated → completed/blocked)
@@ -307,5 +402,7 @@ export const wireProactiveTriggers = ({ io, speak = defaultSpeak, limits = RATE_
     cosEvents.off('tasks:changed', onTaskUpdated);
     notificationEvents.off('added', onNotification);
     announcedOutcomes.clear();
+    for (const timer of escalationTimers.values()) if (timer) clearTimeout(timer);
+    escalationTimers.clear();
   };
 };

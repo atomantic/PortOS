@@ -18,12 +18,27 @@ import { runStagedLLM } from '../stageRunner.js';
 import { isStr, trimTo } from '../../lib/storyBible.js';
 import { resolveLlmRoutePin } from '../../lib/llmRoutePin.js';
 import { renderCanonForPrompt } from '../../lib/universePromptRenderers.js';
-import { analyzeEpisodeGraph, describeGraphForPrompt } from '../../lib/fableLoomGraph.js';
+import { GRAPH_ISSUE_CODES, analyzeEpisodeGraph, describeGraphForPrompt } from '../../lib/fableLoomGraph.js';
+import {
+  FABLELOOM_CAMERA_MOVEMENT_VALUES,
+  fableLoomCameraMovementCatalogForPrompt,
+  normalizeFableLoomCameraMovement,
+} from '../../lib/fableLoomCameraMovements.js';
+import { isFableLoomPlaybackMode } from '../../lib/fableLoomPlayback.js';
+import {
+  asFableLoomAudienceConnection,
+  audienceCanParticipate,
+  participationContractForPrompt,
+} from '../../lib/fableLoomParticipation.js';
 import { getUniverse } from '../universeBuilder.js';
 import { LOOM_LIMITS, findEpisode, findNode, getLoom, mutateLoom } from './records.js';
 import { asLoomFormat, loomFormatLabel, narrationFormatContract, sceneFormatContract } from './formats.js';
 
 const TRANSCRIPT_TURNS_MAX = 12;
+const AUDIENCE_GRAPH_ERROR_CODES = new Set([
+  GRAPH_ISSUE_CODES.NO_AUDIENCE_CONNECTION,
+  GRAPH_ISSUE_CODES.DISCONNECTED_DECISION,
+]);
 
 const clamp = (value, min, max, fallback) =>
   (Number.isFinite(value) ? Math.min(max, Math.max(min, Math.round(value))) : fallback);
@@ -69,14 +84,77 @@ export async function buildCanonDigest(loom) {
   return universe ? renderCanonForPrompt(universe) : '';
 }
 
+const seriesPlanContext = (loom, episode) => {
+  const plan = loom.seriesPlan;
+  if (!plan) return [];
+  const episodeLabels = new Map(loom.episodes.map((item) => [item.id, `Episode ${item.number}: ${item.title || 'Untitled'}`]));
+  const relevantFirst = (items, matchesEpisode) => episode
+    ? [...items].sort((a, b) => Number(matchesEpisode(b, episode.id)) - Number(matchesEpisode(a, episode.id)))
+    : items;
+  const plotPoints = relevantFirst(plan.plotPoints || [], (item, id) => item.episodeId === id)
+    .slice(0, 12)
+    .map((item, index) => {
+      const assignment = item.episodeId ? ` [planned for ${episodeLabels.get(item.episodeId) || item.episodeId}]` : ' [unassigned]';
+      return `Plot point ${index + 1}${assignment}: ${item.title || 'Untitled'}${item.description ? ` — ${trimTo(item.description, 300)}` : ''}`;
+    });
+  const sideQuests = relevantFirst(plan.sideQuests || [], (item, id) => item.startEpisodeId === id || item.endEpisodeId === id)
+    .slice(0, 12)
+    .map((item) => {
+      const start = item.startEpisodeId ? episodeLabels.get(item.startEpisodeId) || item.startEpisodeId : 'unassigned';
+      const end = item.endEpisodeId ? episodeLabels.get(item.endEpisodeId) || item.endEpisodeId : 'unassigned';
+      return `Side quest (${item.status}; starts ${start}; ends ${end}): ${item.title || 'Untitled'}${item.description ? ` — ${trimTo(item.description, 300)}` : ''}`;
+    });
+  return [
+    plan.storyArc ? `Series arc: ${trimTo(plan.storyArc, 4000)}` : '',
+    ...plotPoints,
+    ...sideQuests,
+  ].filter(Boolean);
+};
+
+const requiresAudienceIntroduction = (loom, episode) => (
+  !episode || episode.id === loom.episodes[0]?.id
+);
+
+const audienceContract = (loom, episode) => participationContractForPrompt(loom, {
+  requiresIntroduction: requiresAudienceIntroduction(loom, episode),
+});
+
 const storyContext = (loom, episode) => [
   `Story: ${loom.name}`,
   `Scene format: ${loomFormatLabel(loom.format)}`,
+  `Audience participation: ${audienceContract(loom, episode)}`,
   loom.logline ? `Logline: ${loom.logline}` : '',
   loom.premise ? `Premise: ${loom.premise}` : '',
+  ...seriesPlanContext(loom, episode),
   episode ? `Episode ${episode.number}: ${episode.title || 'Untitled'}` : '',
   episode?.synopsis ? `Synopsis: ${episode.synopsis}` : '',
 ].filter(Boolean).join('\n');
+
+const seriesPlanDigest = (loom) => JSON.stringify({
+  storyArc: trimTo(loom.seriesPlan?.storyArc, 6000),
+  plotPoints: (loom.seriesPlan?.plotPoints || []).map((item) => ({
+    ...item, description: trimTo(item.description, 400),
+  })),
+  sideQuests: (loom.seriesPlan?.sideQuests || []).map((item) => ({
+    ...item, description: trimTo(item.description, 400),
+  })),
+  episodes: loom.episodes.map(({ id, number, title, synopsis }) => ({
+    id, number, title, synopsis: trimTo(synopsis, 300),
+  })),
+}, null, 2);
+
+// A full-plan draft replaces the whole scaffold after a potentially slow
+// provider call. Capture every authored input the stage read so a save made
+// while that call is in flight cannot be overwritten by a stale response.
+const seriesPlanGenerationFingerprint = (loom) => JSON.stringify({
+  name: loom.name,
+  logline: loom.logline,
+  premise: loom.premise,
+  format: loom.format,
+  universeId: loom.universeId,
+  seriesPlan: loom.seriesPlan,
+  episodes: loom.episodes.map(({ id, number, title, synopsis }) => ({ id, number, title, synopsis })),
+});
 
 // --- Weave: generate a full episode graph -----------------------------------
 
@@ -85,6 +163,10 @@ const generatedNodeFields = (raw) => ({
   title: raw.title,
   prose: raw.prose,
   imagePrompt: raw.imagePrompt,
+  videoPrompt: raw.videoPrompt,
+  cameraMovement: raw.cameraMovement,
+  playbackMode: raw.playbackMode,
+  audienceConnection: raw.audienceConnection,
   isEnding: raw.isEnding === true,
   endingLabel: raw.endingLabel,
 });
@@ -123,7 +205,7 @@ export function mapGeneratedGraph(parsed) {
 }
 
 export async function weaveEpisode(loomId, episodeId, {
-  guidance = '', nodeTarget, endingTarget, replace = false, providerId, model, effort,
+  guidance = '', replace = false, providerId, model, effort,
 } = {}) {
   const loom = await requireLoom(loomId);
   const episode = findEpisode(loom, episodeId);
@@ -135,12 +217,31 @@ export async function weaveEpisode(loomId, episodeId, {
     storyContext: storyContext(loom, episode),
     canonDigest: canonDigest || '(none — invent what the story needs)',
     guidance: guidance || '(none)',
-    nodeTarget: String(clamp(nodeTarget, 3, 60, 12)),
-    endingTarget: String(clamp(endingTarget, 1, 12, 3)),
+    existingGraph: episode.nodes.length
+      ? describeGraphForPrompt(episode, { proseLimit: 1200, participationMode: loom.participationMode })
+      : '(none — create the episode from the story context)',
+    cameraMovementCatalog: fableLoomCameraMovementCatalogForPrompt(),
     sceneFormatContract: sceneFormatContract(loom.format),
+    participationContract: audienceContract(loom, episode),
   }, llmOptions({ providerId, model, effort }, 'fableloom-weave'));
 
   const { nodes, startNodeId } = mapGeneratedGraph(content);
+  if (loom.participationMode === 'helper') {
+    const audienceErrors = analyzeEpisodeGraph(
+      { ...episode, nodes, startNodeId },
+      {
+        participationMode: 'helper',
+        requireAudienceIntroduction: requiresAudienceIntroduction(loom, episode),
+      },
+    ).issues.filter((issue) => issue.severity === 'error' && (
+      AUDIENCE_GRAPH_ERROR_CODES.has(issue.code)
+      || (issue.code === GRAPH_ISSUE_CODES.CUT_TRANSITION_COUNT
+        && nodes.find((node) => node.id === issue.nodeId)?.audienceConnection !== 'connected')
+    ));
+    if (audienceErrors.length) {
+      throw aiShapeError(`The model returned an invalid audience connection graph: ${audienceErrors[0].message}`);
+    }
+  }
   const updated = await mutateLoom(loomId, (current) => {
     const ep = findEpisode(current, episodeId);
     // Stamped with the format they were generated in, so a later reformat can
@@ -161,18 +262,29 @@ export async function branchNode(loomId, episodeId, nodeId, {
   const loom = await requireLoom(loomId);
   const episode = findEpisode(loom, episodeId);
   const node = findNode(episode, nodeId);
+  if (!audienceCanParticipate(loom, node)) {
+    throw new ServerError('The audience cannot branch this scene until its communication channel is connected', {
+      status: 409,
+      code: 'AUDIENCE_DISCONNECTED',
+    });
+  }
   const count = clamp(branchCount, 1, 4, 2);
 
   const canonDigest = await buildCanonDigest(loom);
   const { content, runId } = await runStagedLLM('fableloom-branch-node', {
     storyContext: storyContext(loom, episode),
     canonDigest: canonDigest || '(none — invent what the story needs)',
-    graphDigest: describeGraphForPrompt(episode, { proseLimit: 200 }),
+    graphDigest: describeGraphForPrompt(episode, {
+      proseLimit: 200,
+      participationMode: loom.participationMode,
+    }),
     sceneTitle: node.title || 'Untitled scene',
     sceneProse: node.prose || '(no prose yet)',
     branchCount: String(count),
+    cameraMovementCatalog: fableLoomCameraMovementCatalogForPrompt(),
     guidance: guidance || '(none)',
     sceneFormatContract: sceneFormatContract(loom.format),
+    participationContract: audienceContract(loom, episode),
   }, llmOptions({ providerId, model, effort }, 'fableloom-branch'));
 
   const branches = Array.isArray(content?.branches)
@@ -183,9 +295,20 @@ export async function branchNode(loomId, episodeId, nodeId, {
   const updated = await mutateLoom(loomId, (current) => {
     const ep = findEpisode(current, episodeId);
     const source = findNode(ep, nodeId);
+    // Asking for branches turns the source into an interactive choice point.
+    // This prevents an automatic cut from retaining ambiguous outgoing paths.
+    source.playbackMode = 'decision';
     for (const branch of branches) {
       if (ep.nodes.length >= LOOM_LIMITS.NODES_MAX) break;
-      const newNode = { id: `node-${randomUUID()}`, ...generatedNodeFields(branch.node), format: asLoomFormat(loom.format), transitions: [], pos: null };
+      const newNode = {
+        id: `node-${randomUUID()}`,
+        ...generatedNodeFields(branch.node),
+        playbackMode: 'decision',
+        audienceConnection: 'connected',
+        format: asLoomFormat(loom.format),
+        transitions: [],
+        pos: null,
+      };
       ep.nodes.push(newNode);
       source.transitions = [...(source.transitions || []), {
         targetNodeId: newNode.id,
@@ -207,10 +330,13 @@ const REVIEW_SEVERITIES = new Set(['high', 'medium', 'low']);
 export async function reviewEpisode(loomId, episodeId, { providerId, model, effort } = {}) {
   const loom = await requireLoom(loomId);
   const episode = findEpisode(loom, episodeId);
-  const structural = analyzeEpisodeGraph(episode);
+  const structural = analyzeEpisodeGraph(episode, {
+    participationMode: loom.participationMode,
+    requireAudienceIntroduction: requiresAudienceIntroduction(loom, episode),
+  });
   const { content, runId } = await runStagedLLM('fableloom-review', {
     storyContext: storyContext(loom, episode),
-    graphDigest: describeGraphForPrompt(episode),
+    graphDigest: describeGraphForPrompt(episode, { participationMode: loom.participationMode }),
     structuralDigest: structural.issues.length
       ? structural.issues.map((i) => `- [${i.severity}] ${i.message}`).join('\n')
       : '(no structural issues)',
@@ -234,9 +360,12 @@ export async function reviewEpisode(loomId, episodeId, { providerId, model, effo
 
 // --- Feedback: apply a conversational episode edit --------------------------
 
-const FEEDBACK_NODE_FIELDS = ['title', 'prose', 'imagePrompt', 'isEnding', 'endingLabel'];
+const FEEDBACK_NODE_FIELDS = [
+  'title', 'prose', 'imagePrompt', 'videoPrompt', 'cameraMovement', 'playbackMode',
+  'audienceConnection', 'isEnding', 'endingLabel',
+];
 const FEEDBACK_TRANSITION_FIELDS = ['targetNodeId', 'intent', 'triggers', 'description'];
-const FEEDBACK_STRING_NODE_FIELDS = new Set(['title', 'prose', 'imagePrompt', 'endingLabel']);
+const FEEDBACK_STRING_NODE_FIELDS = new Set(['title', 'prose', 'imagePrompt', 'videoPrompt', 'endingLabel']);
 
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
 
@@ -263,6 +392,13 @@ const normalizeFeedbackPatch = (content, episode) => {
       const value = rawScene[key];
       if (!hasOwn(rawScene, key)) continue;
       if (FEEDBACK_STRING_NODE_FIELDS.has(key) && typeof value === 'string') {
+        nodePatch[key] = value;
+      } else if (key === 'cameraMovement' && typeof value === 'string') {
+        const movement = normalizeFableLoomCameraMovement(value);
+        if (!movement || FABLELOOM_CAMERA_MOVEMENT_VALUES.includes(movement)) nodePatch[key] = movement;
+      } else if (key === 'playbackMode' && isFableLoomPlaybackMode(value)) {
+        nodePatch[key] = value;
+      } else if (key === 'audienceConnection' && ['connected', 'disconnected'].includes(value)) {
         nodePatch[key] = value;
       } else if (key === 'isEnding' && typeof value === 'boolean') {
         nodePatch[key] = value;
@@ -317,7 +453,11 @@ export async function feedbackEpisode(loomId, episodeId, {
   const { content, runId } = await runStagedLLM('fableloom-feedback-episode', {
     storyContext: storyContext(loom, episode),
     canonDigest: canonDigest || '(none)',
-    graphDigest: describeGraphForPrompt(episode, { proseLimit: 1200 }),
+    graphDigest: describeGraphForPrompt(episode, {
+      proseLimit: 1200,
+      participationMode: loom.participationMode,
+    }),
+    cameraMovementCatalog: fableLoomCameraMovementCatalogForPrompt(),
     feedback: instruction,
   }, llmOptions({ providerId, model, effort }, 'fableloom-feedback'));
 
@@ -352,6 +492,155 @@ export async function feedbackEpisode(loomId, episodeId, {
   };
 }
 
+// --- Series plan: generation, holistic guidance, and conversational editing --
+
+const analysisStrings = (value) => (Array.isArray(value) ? value : [])
+  .filter((item) => typeof item === 'string')
+  .map((item) => trimTo(item, 1000))
+  .filter(Boolean)
+  .slice(0, 12);
+
+/**
+ * Draft the complete series-level scaffold from the story metadata, linked
+ * universe canon, current episode outline, and any useful ideas already in the
+ * plan. This intentionally replaces only `seriesPlan`; episode records and
+ * scene graphs remain untouched.
+ */
+export async function generateSeriesPlan(loomId, { providerId, model, effort } = {}) {
+  const loom = await requireLoom(loomId);
+  const sourceFingerprint = seriesPlanGenerationFingerprint(loom);
+  const canonDigest = await buildCanonDigest(loom);
+  const { content, runId } = await runStagedLLM('fableloom-generate-series-plan', {
+    storyContext: storyContext(loom),
+    canonDigest: canonDigest || '(none — invent only what the premise needs)',
+    seriesPlanJson: seriesPlanDigest(loom),
+  }, llmOptions({ providerId, model, effort }, 'fableloom-generate-series-plan'));
+
+  const storyArc = isStr(content?.storyArc) ? content.storyArc : '';
+  const isUsablePlanItem = (item) => item && typeof item === 'object'
+    && ((isStr(item.title) && item.title.trim()) || (isStr(item.description) && item.description.trim()));
+  const plotPoints = (Array.isArray(content?.plotPoints) ? content.plotPoints : [])
+    .filter(isUsablePlanItem);
+  const sideQuests = (Array.isArray(content?.sideQuests) ? content.sideQuests : [])
+    .filter(isUsablePlanItem);
+  if (!storyArc.trim() || !plotPoints.length || !sideQuests.length) {
+    throw aiShapeError('The model did not return a complete series-plan scaffold');
+  }
+
+  const updated = await mutateLoom(loomId, (current) => {
+    if (seriesPlanGenerationFingerprint(current) !== sourceFingerprint) {
+      throw new ServerError('The story changed while its plan was being drafted', {
+        status: 409,
+        code: 'LOOM_CHANGED_DURING_GENERATION',
+      });
+    }
+    current.seriesPlan = { storyArc, plotPoints, sideQuests };
+    return current;
+  });
+  return { loom: updated, runId };
+}
+
+/** Read-only story-editor pass over the arc, tentpole beats, side quests, and episode outline. */
+export async function reviewSeriesPlan(loomId, { providerId, model, effort } = {}) {
+  const loom = await requireLoom(loomId);
+  const canonDigest = await buildCanonDigest(loom);
+  const { content, runId } = await runStagedLLM('fableloom-review-series-plan', {
+    storyContext: storyContext(loom),
+    canonDigest: canonDigest || '(none)',
+    seriesPlanJson: seriesPlanDigest(loom),
+  }, llmOptions({ providerId, model, effort }, 'fableloom-review-series-plan'));
+  const analysis = {
+    summary: trimTo(content?.summary, 2000),
+    strengths: analysisStrings(content?.strengths),
+    risks: analysisStrings(content?.risks),
+    recommendations: analysisStrings(content?.recommendations),
+  };
+  if (!analysis.summary && !analysis.strengths.length && !analysis.risks.length && !analysis.recommendations.length) {
+    throw aiShapeError('The model returned no usable series analysis');
+  }
+  return {
+    analysis,
+    runId,
+  };
+}
+
+/** Apply one author instruction to the series-level plan without touching episode scene graphs. */
+export async function feedbackSeriesPlan(loomId, {
+  feedback, providerId, model, effort,
+} = {}) {
+  const instruction = trimTo(feedback, LOOM_LIMITS.FEEDBACK_MAX);
+  if (!instruction) {
+    throw new ServerError('Series-plan feedback is required', { status: 400, code: 'FEEDBACK_REQUIRED' });
+  }
+  const loom = await requireLoom(loomId);
+  const canonDigest = await buildCanonDigest(loom);
+  const { content, runId } = await runStagedLLM('fableloom-feedback-series-plan', {
+    storyContext: storyContext(loom),
+    canonDigest: canonDigest || '(none)',
+    seriesPlanJson: seriesPlanDigest(loom),
+    feedback: instruction,
+  }, llmOptions({ providerId, model, effort }, 'fableloom-feedback-series-plan'));
+
+  if (!content || typeof content !== 'object') {
+    throw aiShapeError('The model returned no series-plan edits');
+  }
+  const hasPlanEdit = (hasOwn(content, 'storyArc') && typeof content.storyArc === 'string')
+    || Array.isArray(content.plotPointEdits) || Array.isArray(content.plotPointOrder)
+    || Array.isArray(content.sideQuestEdits) || Array.isArray(content.sideQuestOrder);
+  if (!hasPlanEdit) throw aiShapeError('The model returned no usable series-plan edits');
+
+  const updated = await mutateLoom(loomId, (current) => {
+    const plan = { ...current.seriesPlan };
+    if (hasOwn(content, 'storyArc') && typeof content.storyArc === 'string') plan.storyArc = content.storyArc;
+    plan.plotPoints = applyPlanItemEdits(plan.plotPoints, content.plotPointEdits, content.plotPointOrder, {
+      prefix: 'plot', fields: ['title', 'description', 'episodeId'],
+    });
+    plan.sideQuests = applyPlanItemEdits(plan.sideQuests, content.sideQuestEdits, content.sideQuestOrder, {
+      prefix: 'quest', fields: ['title', 'description', 'status', 'startEpisodeId', 'endEpisodeId'],
+    });
+    current.seriesPlan = plan;
+    return current;
+  });
+  return {
+    loom: updated,
+    changes: analysisStrings(content.changes),
+    runId,
+  };
+}
+
+function applyPlanItemEdits(currentItems = [], rawEdits, rawOrder, { prefix, fields }) {
+  const items = currentItems.map((item) => ({ ...item }));
+  const byId = new Map(items.map((item) => [item.id, item]));
+  const removed = new Set();
+  for (const edit of (Array.isArray(rawEdits) ? rawEdits : []).slice(0, LOOM_LIMITS.PLAN_ITEMS_MAX)) {
+    if (!edit || typeof edit !== 'object') continue;
+    if (typeof edit.id === 'string' && byId.has(edit.id)) {
+      if (edit.remove === true) {
+        removed.add(edit.id);
+        continue;
+      }
+      const item = byId.get(edit.id);
+      for (const field of fields) {
+        if (hasOwn(edit, field)) item[field] = edit[field];
+      }
+      continue;
+    }
+    if (!edit.id && edit.remove !== true) {
+      const item = { id: `${prefix}-${randomUUID()}` };
+      for (const field of fields) {
+        if (hasOwn(edit, field)) item[field] = edit[field];
+      }
+      items.push(item);
+      byId.set(item.id, item);
+    }
+  }
+  const kept = items.filter((item) => !removed.has(item.id));
+  if (!Array.isArray(rawOrder)) return kept;
+  const order = rawOrder.filter((id) => typeof id === 'string' && byId.has(id) && !removed.has(id));
+  const ranked = new Map(order.map((id, index) => [id, index]));
+  return [...kept].sort((a, b) => (ranked.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (ranked.get(b.id) ?? Number.MAX_SAFE_INTEGER));
+}
+
 // --- Play: resolve a reader's free-text intent ------------------------------
 
 /** Reader-facing scene shape — trigger phrases stay server-side. */
@@ -360,6 +649,9 @@ export const publicNode = (node) => ({
   title: node.title,
   prose: node.prose,
   image: node.image,
+  videoHistoryId: node.videoHistoryId,
+  playbackMode: node.playbackMode,
+  audienceConnection: asFableLoomAudienceConnection(node.audienceConnection),
   isEnding: node.isEnding,
   endingLabel: node.endingLabel,
   choices: (node.transitions || []).map((t) => ({ id: t.id, intent: t.intent })),
@@ -391,11 +683,24 @@ export async function playTurn(loomId, episodeId, {
   }
 
   if (transitionId) {
-    const taken = node.transitions.find((t) => t.id === transitionId);
+    const interactive = audienceCanParticipate(loom, node);
+    const taken = interactive
+      ? node.transitions.find((t) => t.id === transitionId)
+      : node.transitions[0];
     if (!taken) {
       throw new ServerError('That path is not on this scene', { status: 400, code: 'INVALID_TRANSITION' });
     }
-    return moveResult(episode, node, taken, { narration: '', resolvedBy: 'choice' });
+    return moveResult(episode, node, taken, {
+      narration: '',
+      resolvedBy: interactive ? 'choice' : 'graph',
+    });
+  }
+
+  if (!audienceCanParticipate(loom, node)) {
+    throw new ServerError('The audience communication channel is not connected in this scene', {
+      status: 409,
+      code: 'AUDIENCE_DISCONNECTED',
+    });
   }
 
   const choicesDigest = node.transitions.map((t) => [

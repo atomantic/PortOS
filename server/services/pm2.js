@@ -53,8 +53,13 @@ function isJsScript(script) {
  * fires regardless of `--no-autorestart`) killed the 25GB model process seconds
  * after every successful load, forever. `exec_mode` and `watch` leak the same
  * way — verified by starting a process with each key set in the environment.
+ *
+ * `node_args` joins them for the same reason: portos-server carries its own V8
+ * heap cap (ecosystem.config.cjs), and leaking that into a `pm2 start` would cap
+ * every app PortOS launches at portos-server's ceiling — including an app whose
+ * whole job is to hold more than that.
  */
-const INHERITED_PM2_CONFIG_KEYS = ['max_memory_restart', 'exec_mode', 'watch'];
+const INHERITED_PM2_CONFIG_KEYS = ['max_memory_restart', 'exec_mode', 'watch', 'node_args'];
 
 /** Drop the PM2 config keys PM2 injected into our own environment. */
 function withoutInheritedPm2Config(env) {
@@ -100,6 +105,18 @@ export function spawnPm2(pm2Args, opts = {}) {
 /**
  * Execute a PM2 CLI command and return stdout/stderr as a promise.
  * Drop-in replacement for execAsync('pm2 ...') that bypasses pm2.cmd on Windows.
+ *
+ * TESTING — `vi.spyOn(pm2Module, 'execPm2')` is NOT enough on its own. It
+ * intercepts callers in OTHER modules (mtplxServerManager, llamaServerManager),
+ * but every export in THIS file that calls `execPm2`/`spawnPm2` reads the local
+ * binding and runs the real implementation regardless of the spy — silently, with
+ * the test still passing. `pm2.savedProcesses.test.js` relied on that and really
+ * ran `pm2 save`, and PM2 forked a God Daemon per test that outlived the suite:
+ * 641 orphans holding 38 GB accumulated on one dev machine before anyone noticed.
+ * A test that calls into this module must mock the spawn seam instead —
+ * `vi.mock('../lib/childProcess.js', … spawn: mockSpawn)`, as pm2.launch.test.js
+ * and pm2.savedProcesses.test.js do — and assert the mock was reached.
+ *
  * @param {string[]} pm2Args PM2 CLI arguments (e.g. ['jlist'])
  * @param {object} opts Spawn options (env, cwd, etc.)
  * @returns {Promise<{stdout: string, stderr: string}>}

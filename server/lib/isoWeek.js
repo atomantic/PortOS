@@ -2,11 +2,11 @@
  * ISO-8601 week identity (pure).
  *
  * The one place PortOS turns a date into a `YYYY-Www` week id. Both the CoS
- * productivity streaks (`services/productivity.js`) and the weekly digest
+ * productivity week aggregates (`services/productivity.js`) and the weekly digest
  * (`services/weeklyDigest.js`) used to carry their own copy, and both paired
  * the ISO week NUMBER with the CALENDAR year (#3465). Those two disagree at
  * either end of the year, which split one ISO week across two ids (breaking
- * streaks and week-over-week lookups) and collided two different weeks onto a
+ * week aggregates and week-over-week lookups) and collided two different weeks onto a
  * single id (a late-December digest overwriting the early-January one).
  *
  * The year here is the ISO week-numbering year — the calendar year of that
@@ -94,24 +94,4 @@ export function parseWeekId(weekId) {
  */
 export function isoWeeksInYear(year) {
   return isoWeekParts(new Date(year, 11, 28)).week;
-}
-
-/**
- * True when `week2` is the ISO week immediately after `week1`.
- *
- * Across a year rollover, `week1` must be the LAST week of its own numbering
- * year — 53 in a leap-week year, 52 otherwise. A bare `week1 >= 52` check would
- * wrongly bridge `2026-W52` → `2027-W01` even though `2026-W53` sits between.
- *
- * @param {string} week1
- * @param {string} week2
- * @returns {boolean}
- */
-export function isConsecutiveWeek(week1, week2) {
-  const a = parseWeekId(week1);
-  const b = parseWeekId(week2);
-  if (!a || !b) return false;
-  if (a.year === b.year) return b.week - a.week === 1;
-  if (b.year - a.year === 1 && b.week === 1) return a.week === isoWeeksInYear(a.year);
-  return false;
 }

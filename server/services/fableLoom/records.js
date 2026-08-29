@@ -3,19 +3,35 @@
  * transitions.
  *
  * A loom is a branching-narrative story: episodes hold a directed graph of
- * scene nodes; each node carries prose, an image prompt/render, and a list of
- * intent-triggered transitions the play LLM matches free-text reader input
- * against. All ids are server-minted. Every write funnels through
- * `mutateLoom` (per-record write queue + full re-sanitize), so a malformed
- * mutation can never persist.
+ * scene nodes; each node carries prose, image and single-clip video prompts,
+ * camera direction, rendered media, and a list of intent-triggered transitions
+ * the play LLM matches against free-text reader input. Legacy nodes without a
+ * video prompt still render from scene text. All ids are server-minted. Every
+ * write funnels through `mutateLoom` (per-record write queue + full re-sanitize),
+ * so a malformed mutation can never persist.
  */
 
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { isStr, trimTo } from '../../lib/storyBible.js';
 import { sanitizeLlmRoutePin } from '../../lib/llmRoutePin.js';
+import { compareNewerWins } from '../../lib/lwwTimestamp.js';
+import { sanitizeSoftDeleteFields } from '../../lib/syncWire.js';
+import {
+  contentHashForRecord,
+  deleteSyncBaseHash,
+  flushBaseHashes,
+  maybeJournalBeforeOverwrite,
+  setSyncBaseHash,
+  withBaseHashFlushBatch,
+} from '../../lib/conflictJournal.js';
 import { getUniverse } from '../universeBuilder.js';
 import { getSeries } from '../pipeline/series.js';
+import {
+  autoSubscribeRecordToAllPeers,
+  emitRecordDeleted,
+  emitRecordUpdated,
+} from '../sharing/recordEvents.js';
 import {
   deleteRaw,
   isValidLoomId,
@@ -26,11 +42,20 @@ import {
 } from './store.js';
 import { LOOM_LIMITS } from './limits.js';
 import { asLoomFormat, isLoomFormat } from './formats.js';
+import { asFableLoomPlaybackMode } from '../../lib/fableLoomPlayback.js';
+import {
+  FABLELOOM_LEGACY_PARTICIPATION_MODE,
+  asFableLoomAudienceConnection,
+  asFableLoomParticipationMode,
+} from '../../lib/fableLoomParticipation.js';
+import { normalizeFableLoomCameraMovement } from '../../lib/fableLoomCameraMovements.js';
 
 export { LOOM_LIMITS };
 
 const isSafeImageFilename = (value) =>
   typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]*\.(png|jpg|jpeg|webp)$/i.test(value);
+const isSafeVideoHistoryId = (value) =>
+  typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(value);
 
 const nullableRef = (value) => (isStr(value) && value.trim() ? value.trim().slice(0, LOOM_LIMITS.REF_ID_MAX) : null);
 
@@ -65,6 +90,11 @@ function sanitizeNode(raw) {
     imagePrompt: trimTo(raw.imagePrompt, LOOM_LIMITS.IMAGE_PROMPT_MAX),
     image: isSafeImageFilename(raw.image) ? raw.image : null,
     imageJobId: isStr(raw.imageJobId) && raw.imageJobId ? raw.imageJobId.slice(0, 200) : null,
+    videoPrompt: trimTo(raw.videoPrompt, LOOM_LIMITS.VIDEO_PROMPT_MAX),
+    cameraMovement: trimTo(normalizeFableLoomCameraMovement(raw.cameraMovement), LOOM_LIMITS.CAMERA_MOVEMENT_MAX),
+    playbackMode: asFableLoomPlaybackMode(raw.playbackMode),
+    audienceConnection: asFableLoomAudienceConnection(raw.audienceConnection),
+    videoHistoryId: isSafeVideoHistoryId(raw.videoHistoryId) ? raw.videoHistoryId : null,
     isEnding: raw.isEnding === true,
     // The format this scene's text is actually WRITTEN in — server-set, not
     // patchable. `null` means unknown (authored before the field existed, or
@@ -104,12 +134,59 @@ function sanitizeEpisode(raw) {
   };
 }
 
+const planItemId = (prefix, value, seenIds) => {
+  const candidate = isStr(value) && value.trim() ? value.trim().slice(0, 80) : '';
+  const id = candidate && !seenIds.has(candidate) ? candidate : `${prefix}-${randomUUID()}`;
+  seenIds.add(id);
+  return id;
+};
+
+const planEpisodeRef = (value, episodeIds) => (
+  isStr(value) && episodeIds.has(value) ? value : null
+);
+
+function sanitizeSeriesPlan(raw, episodes) {
+  const source = raw && typeof raw === 'object' ? raw : {};
+  const episodeIds = new Set(episodes.map((episode) => episode.id));
+  const plotIds = new Set();
+  const questIds = new Set();
+  return {
+    storyArc: trimTo(source.storyArc, LOOM_LIMITS.STORY_ARC_MAX),
+    plotPoints: (Array.isArray(source.plotPoints) ? source.plotPoints : [])
+      .filter((item) => item && typeof item === 'object')
+      .slice(0, LOOM_LIMITS.PLAN_ITEMS_MAX)
+      .map((item) => ({
+        id: planItemId('plot', item.id, plotIds),
+        title: trimTo(item.title, LOOM_LIMITS.PLAN_ITEM_TITLE_MAX),
+        description: trimTo(item.description, LOOM_LIMITS.PLAN_ITEM_DESCRIPTION_MAX),
+        episodeId: planEpisodeRef(item.episodeId, episodeIds),
+      })),
+    sideQuests: (Array.isArray(source.sideQuests) ? source.sideQuests : [])
+      .filter((item) => item && typeof item === 'object')
+      .slice(0, LOOM_LIMITS.PLAN_ITEMS_MAX)
+      .map((item) => ({
+        id: planItemId('quest', item.id, questIds),
+        title: trimTo(item.title, LOOM_LIMITS.PLAN_ITEM_TITLE_MAX),
+        description: trimTo(item.description, LOOM_LIMITS.PLAN_ITEM_DESCRIPTION_MAX),
+        status: ['idea', 'planned', 'active', 'resolved'].includes(item.status) ? item.status : 'idea',
+        startEpisodeId: planEpisodeRef(item.startEpisodeId, episodeIds),
+        endEpisodeId: planEpisodeRef(item.endEpisodeId, episodeIds),
+      })),
+  };
+}
+
 export function sanitizeLoom(raw) {
   if (!raw || typeof raw !== 'object') return null;
   if (!isStr(raw.id) || !raw.id) return null;
   const name = trimTo(raw.name, LOOM_LIMITS.NAME_MAX);
   if (!name) return null;
   const now = new Date().toISOString();
+  const { deleted, deletedAt } = sanitizeSoftDeleteFields(raw);
+  const episodes = (Array.isArray(raw.episodes) ? raw.episodes : [])
+    .map(sanitizeEpisode)
+    .filter(Boolean)
+    .slice(0, LOOM_LIMITS.EPISODES_MAX)
+    .sort((a, b) => a.number - b.number || a.createdAt.localeCompare(b.createdAt));
   return {
     id: raw.id,
     schemaVersion: 1,
@@ -117,6 +194,11 @@ export function sanitizeLoom(raw) {
     logline: trimTo(raw.logline, LOOM_LIMITS.LOGLINE_MAX),
     premise: trimTo(raw.premise, LOOM_LIMITS.PREMISE_MAX),
     styleNotes: trimTo(raw.styleNotes, LOOM_LIMITS.STYLE_NOTES_MAX),
+    participationMode: asFableLoomParticipationMode(raw.participationMode),
+    audienceCommunicationMedium: trimTo(
+      raw.audienceCommunicationMedium,
+      LOOM_LIMITS.AUDIENCE_COMMUNICATION_MEDIUM_MAX,
+    ),
     format: asLoomFormat(raw.format),
     // The loom's route pin for the play stage — which provider/model/effort
     // turns a reader's free text into a path. An unset dimension stays null
@@ -124,13 +206,12 @@ export function sanitizeLoom(raw) {
     playSettings: sanitizeLlmRoutePin(raw.playSettings),
     universeId: nullableRef(raw.universeId),
     seriesId: nullableRef(raw.seriesId),
-    episodes: (Array.isArray(raw.episodes) ? raw.episodes : [])
-      .map(sanitizeEpisode)
-      .filter(Boolean)
-      .slice(0, LOOM_LIMITS.EPISODES_MAX)
-      .sort((a, b) => a.number - b.number || a.createdAt.localeCompare(b.createdAt)),
+    seriesPlan: sanitizeSeriesPlan(raw.seriesPlan, episodes),
+    episodes,
     createdAt: isStr(raw.createdAt) && raw.createdAt ? raw.createdAt : now,
     updatedAt: isStr(raw.updatedAt) && raw.updatedAt ? raw.updatedAt : now,
+    deleted,
+    deletedAt,
   };
 }
 
@@ -157,13 +238,14 @@ async function assertRefsExist({ universeId, seriesId } = {}) {
 const requireLoomRaw = async (id) => {
   if (!isValidLoomId(id)) throw notFound();
   const loom = sanitizeLoom(await readRaw(id));
-  if (!loom) throw notFound();
+  if (!loom || loom.deleted) throw notFound();
   return loom;
 };
 
-export async function listLooms() {
+export async function listLooms({ includeDeleted = false } = {}) {
   const records = (await listRaw()).map(sanitizeLoom).filter(Boolean);
-  return records.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.name.localeCompare(b.name));
+  const visible = includeDeleted ? records : records.filter((loom) => !loom.deleted);
+  return visible.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.name.localeCompare(b.name));
 }
 
 /**
@@ -178,11 +260,16 @@ export async function listLooms() {
 export async function listLoomSummaries({ seriesId: scopeSeriesId } = {}) {
   const looms = await listLooms();
   const scoped = scopeSeriesId ? looms.filter((loom) => loom.seriesId === scopeSeriesId) : looms;
-  return scoped.map(({ id, name, logline, format, universeId, seriesId, createdAt, updatedAt, episodes }) => ({
+  return scoped.map(({
+    id, name, logline, format, participationMode, audienceCommunicationMedium,
+    universeId, seriesId, createdAt, updatedAt, episodes,
+  }) => ({
     id,
     name,
     logline,
     format,
+    participationMode,
+    audienceCommunicationMedium,
     universeId,
     seriesId,
     createdAt,
@@ -193,13 +280,29 @@ export async function listLoomSummaries({ seriesId: scopeSeriesId } = {}) {
   }));
 }
 
-export async function getLoom(id) {
+export async function getLoom(id, { includeDeleted = false } = {}) {
   if (!isValidLoomId(id)) return null;
-  return sanitizeLoom(await readRaw(id));
+  const loom = sanitizeLoom(await readRaw(id));
+  return loom && (includeDeleted || !loom.deleted) ? loom : null;
 }
 
-export async function createLoom({ name, logline, premise, styleNotes, format, playSettings, universeId, seriesId } = {}) {
+const assertParticipationConfigured = ({ participationMode, audienceCommunicationMedium }) => {
+  if (asFableLoomParticipationMode(participationMode) === 'helper'
+    && !trimTo(audienceCommunicationMedium, LOOM_LIMITS.AUDIENCE_COMMUNICATION_MEDIUM_MAX)) {
+    throw new ServerError('Helper stories need an audience communication medium', {
+      status: 400,
+      code: 'AUDIENCE_MEDIUM_REQUIRED',
+    });
+  }
+};
+
+export async function createLoom({
+  name, logline, premise, styleNotes, format, playSettings, seriesPlan,
+  participationMode = FABLELOOM_LEGACY_PARTICIPATION_MODE,
+  audienceCommunicationMedium, universeId, seriesId,
+} = {}) {
   const now = new Date().toISOString();
+  assertParticipationConfigured({ participationMode, audienceCommunicationMedium });
   await assertRefsExist({ universeId: nullableRef(universeId), seriesId: nullableRef(seriesId) });
   const loom = sanitizeLoom({
     id: `loom-${randomUUID()}`,
@@ -207,8 +310,11 @@ export async function createLoom({ name, logline, premise, styleNotes, format, p
     logline,
     premise,
     styleNotes,
+    participationMode,
+    audienceCommunicationMedium,
     format,
     playSettings,
+    seriesPlan,
     universeId,
     seriesId,
     episodes: [],
@@ -217,6 +323,8 @@ export async function createLoom({ name, logline, premise, styleNotes, format, p
   });
   if (!loom) throw new ServerError('Loom needs a name', { status: 400, code: 'VALIDATION_ERROR' });
   await writeRaw(loom.id, loom);
+  emitRecordUpdated('fableLoom', loom.id);
+  autoSubscribeRecordToAllPeers('fableLoom', loom.id).catch(() => {});
   return loom;
 }
 
@@ -225,20 +333,30 @@ export async function createLoom({ name, logline, premise, styleNotes, format, p
  * (or a falsy value to skip the write). The result is re-sanitized before
  * persisting so a mutation can never store a malformed record.
  */
-export function mutateLoom(id, mutator) {
+export async function mutateLoom(id, mutator) {
   if (!isValidLoomId(id)) throw notFound();
-  return queueLoomWrite(id, async () => {
+  const result = await queueLoomWrite(id, async () => {
     const current = await requireLoomRaw(id);
     const changed = await mutator(current);
-    if (!changed) return current;
+    if (!changed) return { loom: current, changed: false };
     const next = sanitizeLoom({ ...changed, id, updatedAt: new Date().toISOString() });
     if (!next) throw new ServerError('Invalid loom record', { status: 400, code: 'VALIDATION_ERROR' });
     await writeRaw(id, next);
-    return next;
+    return { loom: next, changed: true };
   });
+  if (result.changed) emitRecordUpdated('fableLoom', id);
+  return result.loom;
 }
 
-const PATCH_FIELDS = ['name', 'logline', 'premise', 'styleNotes', 'format', 'playSettings', 'universeId', 'seriesId'];
+const PATCH_FIELDS = [
+  'name', 'logline', 'premise', 'styleNotes', 'format', 'playSettings', 'seriesPlan',
+  'participationMode', 'audienceCommunicationMedium', 'universeId', 'seriesId',
+];
+
+const RESTORABLE_FIELDS = [
+  'name', 'logline', 'premise', 'styleNotes', 'format', 'playSettings', 'seriesPlan',
+  'participationMode', 'audienceCommunicationMedium', 'episodes',
+];
 
 export async function updateLoom(id, patch = {}) {
   await assertRefsExist({
@@ -250,13 +368,101 @@ export async function updateLoom(id, patch = {}) {
     for (const key of PATCH_FIELDS) {
       if (key in patch) next[key] = patch[key];
     }
+    assertParticipationConfigured(next);
+    return next;
+  });
+}
+
+/** Reapply a conflict snapshot through the normal mutation/push lifecycle. */
+export function restoreLoom(id, patch = {}) {
+  return mutateLoom(id, (loom) => {
+    const next = { ...loom };
+    for (const key of RESTORABLE_FIELDS) {
+      if (key in patch) next[key] = patch[key];
+    }
+    assertParticipationConfigured(next);
     return next;
   });
 }
 
 export async function deleteLoom(id) {
-  await requireLoomRaw(id);
-  await deleteRaw(id);
+  if (!isValidLoomId(id)) throw notFound();
+  await queueLoomWrite(id, async () => {
+    const current = await requireLoomRaw(id);
+    const now = new Date().toISOString();
+    await writeRaw(id, sanitizeLoom({
+      ...current,
+      deleted: true,
+      deletedAt: now,
+      updatedAt: now,
+    }));
+  });
+  emitRecordDeleted('fableLoom', id);
+}
+
+/**
+ * Merge FableLoom records received from a federated peer. Records are
+ * sanitized before persistence, unioned by id, and resolved by whole-record
+ * LWW on `updatedAt`; tombstones travel through the same path.
+ */
+export async function mergeLoomsFromSync(
+  remoteLooms,
+  { source = { via: 'sync', peerId: null } } = {},
+) {
+  if (!Array.isArray(remoteLooms)) return { applied: false, count: 0 };
+  const byId = new Map();
+  for (const raw of remoteLooms) {
+    const remote = sanitizeLoom(raw);
+    if (!remote || !isValidLoomId(remote.id) || byId.has(remote.id)) continue;
+    byId.set(remote.id, remote);
+  }
+  let changed = 0;
+  for (const remote of byId.values()) {
+    const applied = await queueLoomWrite(remote.id, async () => {
+      const local = sanitizeLoom(await readRaw(remote.id));
+      if (local && !compareNewerWins(remote.updatedAt, local.updatedAt)) return false;
+      if (local) {
+        await maybeJournalBeforeOverwrite({
+          kind: 'fableLoom', id: remote.id, local, remote, source,
+        });
+      } else {
+        await setSyncBaseHash(
+          'fableLoom',
+          remote.id,
+          contentHashForRecord('fableLoom', remote),
+        );
+      }
+      await writeRaw(remote.id, remote);
+      return true;
+    });
+    if (applied) changed += 1;
+  }
+  await flushBaseHashes();
+  if (changed > 0) console.log(`🧶 FableLoom sync: merged ${changed} loom(s)`);
+  return { applied: changed > 0, count: changed };
+}
+
+/** Hard-prune tombstones only after the shared federation GC computes a safe cutoff. */
+export async function pruneTombstonedLooms(olderThanMs) {
+  if (!Number.isFinite(olderThanMs)) return { pruned: 0 };
+  const candidates = (await listLooms({ includeDeleted: true }))
+    .filter((loom) => loom.deleted && Number.isFinite(Date.parse(loom.deletedAt))
+      && Date.parse(loom.deletedAt) < olderThanMs);
+  let pruned = 0;
+  await withBaseHashFlushBatch(async () => {
+    for (const candidate of candidates) {
+      const removed = await queueLoomWrite(candidate.id, async () => {
+        const current = sanitizeLoom(await readRaw(candidate.id));
+        const deletedAtMs = Date.parse(current?.deletedAt || '');
+        if (!current?.deleted || !Number.isFinite(deletedAtMs) || deletedAtMs >= olderThanMs) return false;
+        await deleteRaw(candidate.id);
+        await deleteSyncBaseHash('fableLoom', candidate.id);
+        return true;
+      });
+      if (removed) pruned += 1;
+    }
+  });
+  return { pruned };
 }
 
 // --- Episodes ---------------------------------------------------------------
@@ -321,7 +527,10 @@ export function deleteEpisode(loomId, episodeId) {
 
 // --- Nodes & transitions ----------------------------------------------------
 
-const NODE_PATCH_FIELDS = ['title', 'prose', 'imagePrompt', 'isEnding', 'endingLabel', 'pos', 'transitions'];
+const NODE_PATCH_FIELDS = [
+  'title', 'prose', 'imagePrompt', 'videoPrompt', 'cameraMovement', 'playbackMode',
+  'audienceConnection', 'isEnding', 'endingLabel', 'pos', 'transitions',
+];
 
 export function addNode(loomId, episodeId, fields = {}) {
   return mutateLoom(loomId, (loom) => {
@@ -330,6 +539,11 @@ export function addNode(loomId, episodeId, fields = {}) {
       throw new ServerError('Scene limit reached', { status: 400, code: 'LIMIT_REACHED' });
     }
     const node = { id: `node-${randomUUID()}`, ...fields };
+    if (asFableLoomParticipationMode(loom.participationMode) === 'helper'
+      && asFableLoomAudienceConnection(fields.audienceConnection) !== 'connected'
+      && !('playbackMode' in fields)) {
+      node.playbackMode = 'cut';
+    }
     episode.nodes.push(node);
     if (!episode.startNodeId) episode.startNodeId = node.id;
     // Optionally wire the new node in as a branch of an existing one. The
@@ -448,6 +662,24 @@ export async function attachNodeImage(loomId, episodeId, nodeId, { filename, job
     if (!node) return null;
     node.image = filename;
     node.imageJobId = isStr(jobId) ? jobId : null;
+    episode.updatedAt = new Date().toISOString();
+    return loom;
+  }).catch(() => null);
+  return updated?.episodes.find((e) => e.id === episodeId)?.nodes.find((n) => n.id === nodeId) ?? null;
+}
+
+/**
+ * Durable video attach for the media-job completion hook. Video history ids
+ * are also the generated filenames under data/videos, but are kept as ids so
+ * the node can use the same history/media conventions as other video surfaces.
+ */
+export async function attachNodeVideo(loomId, episodeId, nodeId, { videoHistoryId }) {
+  if (!isValidLoomId(loomId) || !isSafeVideoHistoryId(videoHistoryId)) return null;
+  const updated = await mutateLoom(loomId, (loom) => {
+    const episode = loom.episodes.find((e) => e.id === episodeId);
+    const node = episode?.nodes.find((n) => n.id === nodeId);
+    if (!node) return null;
+    node.videoHistoryId = videoHistoryId;
     episode.updatedAt = new Date().toISOString();
     return loom;
   }).catch(() => null);

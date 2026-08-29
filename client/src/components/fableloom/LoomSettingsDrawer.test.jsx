@@ -10,7 +10,7 @@ vi.mock('../../hooks/useProviderModels', () => ({ default: () => ({ providers: [
 vi.mock('../ProviderModelSelector', () => ({ default: () => null }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
-import { reformatLoomEpisode } from '../../services/api';
+import { reformatLoomEpisode, updateLoom } from '../../services/api';
 import toast from '../ui/Toast';
 import LoomSettingsDrawer from './LoomSettingsDrawer';
 
@@ -157,5 +157,46 @@ describe('LoomSettingsDrawer rewrite', () => {
     renderDrawer(makeLoom([{ id: 'ep-1', title: 'Pilot', nodes: [scene('s1', 'teleplay')] }]));
     expect(screen.queryByRole('button', { name: /^Rewrite/ })).not.toBeInTheDocument();
     expect(screen.getByText(/Every scene you have is already written as teleplay/)).toBeInTheDocument();
+  });
+});
+
+describe('LoomSettingsDrawer audience participation', () => {
+  it('saves the helper role together with its required communication medium', async () => {
+    updateLoom.mockResolvedValue({
+      ...makeLoom([]),
+      participationMode: 'helper',
+      audienceCommunicationMedium: 'A silver mirror.',
+    });
+    const user = userEvent.setup();
+    renderDrawer({ ...makeLoom([]), participationMode: 'protagonist' });
+
+    await user.selectOptions(screen.getByLabelText('Audience role'), 'helper');
+    expect(screen.getByText(/need a communication medium before the role can be saved/i)).toBeInTheDocument();
+    await user.type(screen.getByLabelText('Communication medium'), 'A silver mirror.');
+    await user.tab();
+
+    await waitFor(() => expect(updateLoom).toHaveBeenCalledWith('loom-1', {
+      participationMode: 'helper',
+      audienceCommunicationMedium: 'A silver mirror.',
+    }, { silent: true }));
+  });
+
+  it('resets an unsaved helper selection when the drawer closes', async () => {
+    const user = userEvent.setup();
+    const loom = { ...makeLoom([]), participationMode: 'protagonist' };
+    const props = {
+      loom,
+      onClose: () => {},
+      onLoomUpdate: vi.fn(),
+      onRewritten: vi.fn(),
+    };
+    const { rerender } = render(<LoomSettingsDrawer open {...props} />);
+
+    await user.selectOptions(screen.getByLabelText('Audience role'), 'helper');
+    expect(updateLoom).not.toHaveBeenCalled();
+    rerender(<LoomSettingsDrawer open={false} {...props} />);
+    rerender(<LoomSettingsDrawer open {...props} />);
+
+    expect(screen.getByLabelText('Audience role')).toHaveValue('protagonist');
   });
 });

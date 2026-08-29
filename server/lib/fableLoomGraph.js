@@ -29,6 +29,10 @@ export const GRAPH_ISSUE_CODES = Object.freeze({
   DUPLICATE_INTENT: 'DUPLICATE_INTENT',
   ENDING_UNREACHABLE: 'ENDING_UNREACHABLE',
   SELF_LOOP: 'SELF_LOOP',
+  CUT_TRANSITION_COUNT: 'CUT_TRANSITION_COUNT',
+  DISCONNECTED_DECISION: 'DISCONNECTED_DECISION',
+  NO_AUDIENCE_CONNECTION: 'NO_AUDIENCE_CONNECTION',
+  LATE_AUDIENCE_CONNECTION: 'LATE_AUDIENCE_CONNECTION',
 });
 
 /**
@@ -70,7 +74,9 @@ export function computeGraphLayers(episode) {
  * `{ issues, stats }`; `issues` entries are
  * `{ code, severity: 'error'|'warning', message, nodeId?, transitionId? }`.
  */
-export function analyzeEpisodeGraph(episode) {
+export function analyzeEpisodeGraph(episode, {
+  participationMode = 'protagonist', requireAudienceIntroduction = false,
+} = {}) {
   const nodes = asArray(episode?.nodes);
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const issues = [];
@@ -96,6 +102,27 @@ export function analyzeEpisodeGraph(episode) {
     push(GRAPH_ISSUE_CODES.ENDING_UNREACHABLE, 'error', 'No ending is reachable from the opening scene.');
   }
 
+  if (participationMode === 'helper' && requireAudienceIntroduction && nodes.length) {
+    const connected = nodes.filter((node) => node?.audienceConnection === 'connected' && depthById.has(node.id));
+    if (!connected.length) {
+      push(
+        GRAPH_ISSUE_CODES.NO_AUDIENCE_CONNECTION,
+        'error',
+        'The audience is never invited into the story through its communication medium.',
+      );
+    } else {
+      const firstDepth = Math.min(...connected.map((node) => depthById.get(node.id)));
+      if (firstDepth > 3) {
+        push(
+          GRAPH_ISSUE_CODES.LATE_AUDIENCE_CONNECTION,
+          'warning',
+          'The audience communication channel is not activated until late in the opening sequence.',
+          { nodeId: connected.find((node) => depthById.get(node.id) === firstDepth)?.id },
+        );
+      }
+    }
+  }
+
   for (const node of nodes) {
     const transitions = asArray(node?.transitions);
     const label = node?.title || node?.id;
@@ -108,6 +135,23 @@ export function analyzeEpisodeGraph(episode) {
     }
     if (node?.isEnding && transitions.length) {
       push(GRAPH_ISSUE_CODES.ENDING_WITH_TRANSITIONS, 'warning', `Ending "${label}" still has outgoing paths — they will never fire.`, { nodeId: node.id });
+    }
+    if (!node?.isEnding && node?.playbackMode === 'cut' && transitions.length !== 1) {
+      push(
+        GRAPH_ISSUE_CODES.CUT_TRANSITION_COUNT,
+        'error',
+        `Automatic cut "${label}" must have exactly one path to the next camera cut.`,
+        { nodeId: node.id },
+      );
+    }
+    if (participationMode === 'helper' && !node?.isEnding
+      && node?.audienceConnection !== 'connected' && node?.playbackMode !== 'cut') {
+      push(
+        GRAPH_ISSUE_CODES.DISCONNECTED_DECISION,
+        'error',
+        `"${label}" waits for viewer input while the audience communication channel is disconnected.`,
+        { nodeId: node.id },
+      );
     }
 
     const seenIntents = new Set();
@@ -130,6 +174,8 @@ export function analyzeEpisodeGraph(episode) {
 
   const stats = {
     nodeCount: nodes.length,
+    automaticCutCount: nodes.filter((node) => !node?.isEnding && node?.playbackMode === 'cut').length,
+    decisionCount: nodes.filter((node) => !node?.isEnding && node?.playbackMode !== 'cut').length,
     endingCount: endings.length,
     reachableCount: depthById.size,
     reachableEndingCount: reachableEndings.length,
@@ -151,17 +197,27 @@ export function analyzeEpisodeGraph(episode) {
  * `proseLimit` truncates each node's prose so a large graph stays inside the
  * stage's context window.
  */
-export function describeGraphForPrompt(episode, { proseLimit = 400 } = {}) {
+export function describeGraphForPrompt(episode, {
+  proseLimit = 400, participationMode = 'protagonist',
+} = {}) {
   const nodes = asArray(episode?.nodes);
   const lines = [];
   for (const node of nodes) {
     const flags = [
       node.id === episode?.startNodeId ? 'START' : null,
       node?.isEnding ? `ENDING${isStr(node?.endingLabel) ? `: ${node.endingLabel}` : ''}` : null,
+      node?.isEnding ? null : (node?.playbackMode === 'cut' ? 'AUTO CUT' : 'DECISION LOOP'),
+      participationMode === 'helper'
+        ? (node?.audienceConnection === 'connected' ? 'AUDIENCE CONNECTED' : 'AUDIENCE DISCONNECTED')
+        : null,
     ].filter(Boolean);
     lines.push(`[${node.id}] ${node.title || 'Untitled scene'}${flags.length ? ` (${flags.join(') (')})` : ''}`);
     const prose = typeof node.prose === 'string' ? node.prose.trim() : '';
     if (prose) lines.push(prose.length > proseLimit ? `${prose.slice(0, proseLimit)}…` : prose);
+    if (isStr(node.videoPrompt)) {
+      lines.push(`Video: ${node.videoPrompt.length > proseLimit ? `${node.videoPrompt.slice(0, proseLimit)}…` : node.videoPrompt}`);
+    }
+    if (isStr(node.cameraMovement)) lines.push(`Camera movement: ${node.cameraMovement}`);
     for (const tr of asArray(node.transitions)) {
       const triggers = asArray(tr?.triggers).filter(isStr);
       lines.push(`-> [${tr?.targetNodeId}] intent "${tr?.intent || ''}"${triggers.length ? ` (triggers: ${triggers.join('; ')})` : ''}`);

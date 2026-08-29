@@ -8,6 +8,7 @@ import { PORTOS_APP_ID } from './appIdentity.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
+const SETTINGS_PAGE = path.join(REPO_ROOT, 'client/src/pages/Settings.jsx');
 
 // Maps URL prefix → how to extract the page's own tab set from its source. Each
 // page validates the :tab/:section param against this list, so the nav manifest
@@ -601,13 +602,25 @@ function scanRoutes(appSrc) {
   return { required: [...new Set(required)], redirects, malformed, stackDepth: stack.length };
 }
 
+// Settings owns a small declarative redirect map for retired tabs, while App.jsx
+// owns redirects that need their own route element. Keep both forms in the
+// previous-path contract so a migration can use the existing Settings page
+// without turning a route-only client edit into an application-root change.
+function scanSettingsRedirects(settingsSrc) {
+  const block = settingsSrc.match(/const REDIRECTS\s*=\s*\{([\s\S]*?)^\};/m);
+  if (!block) throw new Error('No REDIRECTS object found in Settings.jsx');
+  return [...block[1].matchAll(/^\s*['"]?([\w-]+)['"]?\s*:\s*['"]([^'"]+)['"]\s*,?$/gm)]
+    .map((match) => ({ from: `/settings/${match[1]}`, to: match[2] }));
+}
+
 describe('nav coverage — every navigable App.jsx route has a manifest entry', () => {
   // Query string / hash on a manifest path (e.g. /media/image?settings=1) is a
   // deep-link variant of a real route; compare on the bare path.
   const navPaths = new Set(NAV_COMMANDS.map((c) => c.path.split(/[?#]/)[0]));
   const scan = scanRoutes(fs.readFileSync(APP_JSX, 'utf8'));
+  const settingsRedirects = scanSettingsRedirects(fs.readFileSync(SETTINGS_PAGE, 'utf8'));
   const routePaths = new Set(scan.required);
-  const byFrom = new Map(scan.redirects.map((r) => [r.from, r]));
+  const byFrom = new Map([...scan.redirects, ...settingsRedirects].map((r) => [r.from, r]));
 
   it('the line scanner saw every <Route> (single-line assumption holds)', () => {
     // A non-empty malformed list or unbalanced stack means a multi-line route
@@ -679,6 +692,7 @@ describe('nav coverage — every navigable App.jsx route has a manifest entry', 
       '/devtools/submodules',
       '/devtools/runs',
       '/settings/contacts',
+      '/settings/signal',
       '/settings/catalog',
       '/imessage',
       '/system-health',

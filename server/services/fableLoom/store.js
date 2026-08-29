@@ -4,7 +4,8 @@
  * Looms are db-primary in normal installs (`fableloom_stories`). The
  * collectionStore backend keeps the domain runnable in tests and under the
  * unsupported MEMORY_BACKEND=file development escape hatch — same split as
- * games (server/services/games/store.js).
+ * games (server/services/games/store.js). Federation is backend-neutral and
+ * operates through the sanitized record lifecycle above this facade.
  */
 
 import { join } from 'path';

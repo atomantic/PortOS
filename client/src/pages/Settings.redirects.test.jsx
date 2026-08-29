@@ -18,14 +18,17 @@ function Landed() {
   return <div data-testid="landed">{`${pathname}${search}`}</div>;
 }
 
-// Former Settings tabs now live as drawers over the pages they configure.
-// Their old /settings/<tab> URLs stay live as redirects so bookmarks, stale ⌘K
-// history, and older docs keep working — and land with the drawer already open.
-describe('Settings — retired tabs redirect to their drawer', () => {
+// Former Settings tabs now live on the pages they configure. Their old
+// /settings/<tab> URLs stay live as redirects so bookmarks, stale ⌘K history,
+// and older docs keep working.
+describe('Settings — retired tabs redirect to their new home', () => {
   it.each([
     ['/settings/image-gen', '/media/image?settings=1'],
     ['/settings/imessage', '/messages/imessage?settings=1'],
+    ['/settings/signal', '/messages/signal'],
     ['/settings/catalog', '/catalog?settings=1'],
+    ['/settings/spotify', '/brain/spotify'],
+    ['/settings/youtube', '/brain/youtube'],
   ])('%s → %s', (from, to) => {
     render(
       <MemoryRouter initialEntries={[from]}>

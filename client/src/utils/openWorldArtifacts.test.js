@@ -3,10 +3,8 @@ import {
   ARTIFACTS,
   LEVEL_MILESTONES,
   GOAL_MILESTONES,
-  STREAK_MILESTONES,
   effectiveLevel,
   completedGoalCount,
-  bestStreakDays,
   earnedArtifacts,
   placeArtifact,
   computeArtifacts,
@@ -67,27 +65,10 @@ describe('completedGoalCount', () => {
   });
 });
 
-describe('bestStreakDays', () => {
-  it('prefers longest over current', () => {
-    expect(bestStreakDays({ streak: { current: 2, longest: 9 } })).toBe(9);
-  });
-
-  it('falls back to current when longest absent', () => {
-    expect(bestStreakDays({ streak: { current: 4 } })).toBe(4);
-  });
-
-  it('returns null when no streak data', () => {
-    expect(bestStreakDays(null)).toBeNull();
-    expect(bestStreakDays({})).toBeNull();
-    expect(bestStreakDays({ streak: {} })).toBeNull();
-    expect(bestStreakDays({ streak: 'nope' })).toBeNull();
-  });
-});
-
 describe('earnedArtifacts — thresholds', () => {
   it('returns nothing when nothing is earned', () => {
     expect(earnedArtifacts({})).toEqual([]);
-    expect(earnedArtifacts({ character: { level: 1 }, goals: [], productivityData: { streak: { longest: 0 } } })).toEqual([]);
+    expect(earnedArtifacts({ character: { level: 1 }, goals: [] })).toEqual([]);
   });
 
   it('earns level milestones at/above each threshold', () => {
@@ -108,21 +89,13 @@ describe('earnedArtifacts — thresholds', () => {
     expect(ids).not.toContain('goals-10');
   });
 
-  it('earns streak milestones from the best streak', () => {
-    const ids = earnedArtifacts({ productivityData: { streak: { longest: 7 } } }).map((a) => a.id);
-    expect(ids).toContain('streak-3');
-    expect(ids).toContain('streak-7');
-    expect(ids).not.toContain('streak-30');
-  });
-
-  it('combines all three sources in stable order (level → goal → streak)', () => {
+  it('combines level and goal sources in stable order', () => {
     const earned = earnedArtifacts({
       character: { level: 2 },
       goals: completedGoals(1),
-      productivityData: { streak: { longest: 3 } },
     });
-    expect(earned.map((a) => a.kind)).toEqual(['level', 'goal', 'streak']);
-    expect(earned.map((a) => a.id)).toEqual(['level-2', 'goals-1', 'streak-3']);
+    expect(earned.map((a) => a.kind)).toEqual(['level', 'goal']);
+    expect(earned.map((a) => a.id)).toEqual(['level-2', 'goals-1']);
   });
 
   it('attaches a tier + label to each descriptor', () => {
@@ -174,9 +147,8 @@ describe('computeArtifacts', () => {
     const vm = computeArtifacts({
       character: { level: 10 }, // 3 level milestones
       goals: completedGoals(10), // 3 goal milestones
-      productivityData: { streak: { longest: 30 } }, // 3 streak milestones
     });
-    expect(vm.total).toBe(LEVEL_MILESTONES.length + GOAL_MILESTONES.length + STREAK_MILESTONES.length);
+    expect(vm.total).toBe(LEVEL_MILESTONES.length + GOAL_MILESTONES.length);
     expect(vm.hasData).toBe(true);
     for (const a of vm.artifacts) {
       expect(a.position).toHaveLength(3);

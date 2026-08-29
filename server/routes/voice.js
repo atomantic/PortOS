@@ -8,8 +8,10 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { validateRequest } from '../lib/validation.js';
 import { getVoiceConfig, updateVoiceConfig } from '../services/voice/config.js';
 import { checkAll, invalidateHealthCache } from '../services/voice/health.js';
+import * as facetimeBridge from '../services/voice/facetimeBridge.js';
 import { reconcile, verifyBinaries, verifyModels, downloadPiperVoice, startWhisper, stopWhisper } from '../services/voice/bootstrap.js';
 import { synthesize, listVoices, VALID_ENGINES } from '../services/voice/tts.js';
 import { readyState as kokoroReadyState, unloadKokoro, loadedModelKey as kokoroLoadedKey } from '../services/voice/tts-kokoro.js';
@@ -17,6 +19,8 @@ import { findPiperVoice } from '../services/voice/piper-voices.js';
 import { speakProactive, HHMM_RE, MAX_PROACTIVE_TEXT_LEN } from '../services/voice/proactiveSpeech.js';
 
 const router = Router();
+
+const facetimeActionSchema = z.object({}).strict();
 
 const validEngine = (v) => VALID_ENGINES.has(v) ? v : undefined;
 
@@ -36,6 +40,16 @@ const voiceConfigPatchSchema = z.object({
   enabled: z.boolean().optional(),
   trigger: z.enum(['push-to-talk', 'hotword', 'vad']).optional(),
   hotkey: z.string().max(32).optional(),
+  facetime: z.object({
+    maxCallMinutes: z.number().int().min(1).max(120).optional(),
+    targetHandle: z.string().trim().max(254).refine((value) => value === '' || /^\+?[1-9]\d{6,14}$/.test(value) || z.string().email().safeParse(value).success, 'Must be an E.164 phone number or email address').optional(),
+    targetName: z.string().trim().max(120).optional(),
+    blackHole2chLabel: z.string().trim().min(1).max(120).optional(),
+    blackHole16chLabel: z.string().trim().min(1).max(120).optional(),
+    escalateCritical: z.boolean().optional(),
+    escalateAfterMinutes: z.number().int().min(1).max(1440).optional(),
+    autoAnswer: z.boolean().optional(),
+  }).partial().optional(),
   stt: z.object({
     engine: z.enum(['whisper', 'web-speech']).optional(),
     endpoint: z.string().url().optional(),
@@ -164,6 +178,20 @@ router.get('/status', asyncHandler(async (_req, res) => {
     models,
   });
 }));
+
+// FaceTime Audio is machine-local and explicitly feature-gated.  The helper is
+// never spawned by a read/status request; operators must press one of the
+// explicit control buttons.
+router.get('/facetime/status', asyncHandler(async (_req, res) => {
+  res.json(await facetimeBridge.checkSetup());
+}));
+
+for (const command of ['probe', 'call', 'hangup']) {
+  router.post(`/facetime/${command}`, asyncHandler(async (req, res) => {
+    validateRequest(facetimeActionSchema, req.body || {});
+    res.json(await facetimeBridge[command]());
+  }));
+}
 
 // GET /api/voice/voices?engine=kokoro|piper — enumerate voices for the given
 // engine (or the active one when unspecified). Query param lets the Settings

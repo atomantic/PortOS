@@ -5,6 +5,8 @@ const mocks = {
   atomicWrite: vi.fn(async () => {}),
   tryReadFile: vi.fn(async () => null),
   fetchWithTimeout: vi.fn(),
+  getSelfHost: vi.fn(),
+  getHttpsEnabledAtBoot: vi.fn(),
 };
 
 vi.mock('../lib/fileUtils.js', () => ({
@@ -18,7 +20,15 @@ vi.mock('../lib/fetchWithTimeout.js', () => ({
   fetchWithTimeout: (...args) => mocks.fetchWithTimeout(...args),
 }));
 
-import { isTokenExpired, withExpiry, getRedirectUri, getAccessToken } from './spotifyAuth.js';
+vi.mock('../lib/peerSelfHost.js', () => ({
+  getSelfHost: (...args) => mocks.getSelfHost(...args),
+}));
+
+vi.mock('../lib/httpsState.js', () => ({
+  getHttpsEnabledAtBoot: (...args) => mocks.getHttpsEnabledAtBoot(...args),
+}));
+
+import { isTokenExpired, withExpiry, getRedirectUri, getAuthStatus, getAccessToken } from './spotifyAuth.js';
 
 describe('spotifyAuth pure helpers', () => {
   describe('withExpiry', () => {
@@ -61,6 +71,8 @@ describe('spotifyAuth pure helpers', () => {
     const savedEnv = { ...process.env };
     afterEach(() => {
       process.env = { ...savedEnv };
+      mocks.getSelfHost.mockReset().mockReturnValue(null);
+      mocks.getHttpsEnabledAtBoot.mockReset().mockReturnValue({ value: false });
     });
 
     it('honors an explicit SPOTIFY_REDIRECT_URI override', () => {
@@ -68,11 +80,70 @@ describe('spotifyAuth pure helpers', () => {
       expect(getRedirectUri()).toBe('https://example.test/api/spotify/oauth/callback');
     });
 
+    it('uses a request origin when the caller supplies the public URL', () => {
+      delete process.env.SPOTIFY_REDIRECT_URI;
+      delete process.env.PUBLIC_HOST;
+      process.env.PORT = '5555';
+
+      expect(getRedirectUri({ origin: 'https://host-example.ts.net:5555/' }))
+        .toBe('https://host-example.ts.net:5555/api/spotify/oauth/callback');
+    });
+
     it('builds the callback path from PUBLIC_HOST/PORT otherwise', () => {
       delete process.env.SPOTIFY_REDIRECT_URI;
       process.env.PUBLIC_HOST = 'myhost';
       process.env.PORT = '5555';
       expect(getRedirectUri()).toBe('http://myhost:5555/api/spotify/oauth/callback');
+    });
+
+    it('uses the active Tailscale host and HTTPS state when no override is configured', () => {
+      delete process.env.SPOTIFY_REDIRECT_URI;
+      delete process.env.PUBLIC_HOST;
+      process.env.PORT = '5555';
+      mocks.getSelfHost.mockReturnValue('host-example.ts.net');
+      mocks.getHttpsEnabledAtBoot.mockReturnValue({ value: true });
+
+      expect(getRedirectUri()).toBe('https://host-example.ts.net:5555/api/spotify/oauth/callback');
+    });
+
+    it('uses HTTP for an auto-detected host when HTTPS is disabled', () => {
+      delete process.env.SPOTIFY_REDIRECT_URI;
+      delete process.env.PUBLIC_HOST;
+      process.env.PORT = '5555';
+      mocks.getSelfHost.mockReturnValue('host-example.ts.net');
+      mocks.getHttpsEnabledAtBoot.mockReturnValue({ value: false });
+
+      expect(getRedirectUri()).toBe('http://host-example.ts.net:5555/api/spotify/oauth/callback');
+    });
+
+    it('falls back to localhost when no host is auto-detected', () => {
+      delete process.env.SPOTIFY_REDIRECT_URI;
+      delete process.env.PUBLIC_HOST;
+      process.env.PORT = '5555';
+      mocks.getSelfHost.mockReturnValue(null);
+
+      expect(getRedirectUri()).toBe('http://localhost:5555/api/spotify/oauth/callback');
+    });
+
+    it('falls back to localhost when certificate metadata has an invalid hostname', () => {
+      delete process.env.SPOTIFY_REDIRECT_URI;
+      delete process.env.PUBLIC_HOST;
+      process.env.PORT = '5555';
+      mocks.getSelfHost.mockReturnValue('undefined.example-tailnet.ts.net');
+
+      expect(getRedirectUri()).toBe('http://localhost:5555/api/spotify/oauth/callback');
+    });
+
+    it('surfaces the derived URI in auth status', async () => {
+      delete process.env.SPOTIFY_REDIRECT_URI;
+      delete process.env.PUBLIC_HOST;
+      process.env.PORT = '5555';
+      mocks.getSelfHost.mockReturnValue('host-example.ts.net');
+      mocks.getHttpsEnabledAtBoot.mockReturnValue({ value: true });
+
+      await expect(getAuthStatus()).resolves.toMatchObject({
+        redirectUri: 'https://host-example.ts.net:5555/api/spotify/oauth/callback',
+      });
     });
   });
 });

@@ -14,8 +14,12 @@ import {
   portosSemanticToolGrantsSchema,
 } from './cosToolContracts.js';
 
-export const PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION = 3;
-const PREVIOUS_PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION = 2;
+export const PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION = 4;
+// Every wire version this server still accepts on input. Installs upgrade on
+// their own schedule, so a browser bundle (or a route caller) pinned at an
+// older version must keep being able to toggle the grants it already knows
+// about; normalization always writes the current version forward.
+const ACCEPTED_CAPABILITIES_SCHEMA_VERSIONS = Object.freeze([2, 3, 4]);
 
 export const PERSISTENT_MIND_TASK_MODEL_ALLOWLIST_LIMITS = Object.freeze({
   MAX_ENTRIES: 200,
@@ -33,6 +37,19 @@ export const PERSISTENT_MIND_CLEANUP_SCOPES = Object.freeze([
   'history',
   'memories',
 ]);
+
+// Ringing a phone is the loudest thing this install can do, so the budget is
+// deliberately small and fixed rather than user-tunable: a mind that could
+// raise its own call allowance would not really be capped. The counters live
+// in durable mind state (server/lib/persistentMind.js) so a restart, a crash,
+// or a supervisor rewire cannot hand back a fresh allowance.
+export const PERSISTENT_MIND_CALL_LIMITS = Object.freeze({
+  maxPerRollingDay: 3,
+  rollingWindowMs: 24 * 60 * 60 * 1000,
+  minGapMs: 30 * 60 * 1000,
+  reasonChars: 200,
+  openingLineChars: 400,
+});
 
 // The persistent mind has a deliberately smaller surface than ordinary CoS
 // agents. Keep this catalog beside the capability schema so the API and the UI
@@ -92,11 +109,27 @@ export const PERSISTENT_MIND_TOOL_CATALOG = Object.freeze([
       'Every cleanup leaves a bounded maintenance record in the new trajectory',
     ],
   }),
+  Object.freeze({
+    id: 'voice.call-user',
+    capability: 'callUser',
+    name: 'Call the user on FaceTime Audio',
+    description: 'Place a FaceTime Audio call to the identity configured in Settings > Voice when something needs the user and no browser tab can speak to them.',
+    kind: 'typed-action',
+    defaultEnabled: false,
+    guardrails: [
+      'Only the single handle configured in Settings > Voice > FaceTime Audio; the mind never chooses who to contact',
+      'Honors voice quiet hours',
+      `At most ${PERSISTENT_MIND_CALL_LIMITS.maxPerRollingDay} calls per rolling 24 hours and at least ${PERSISTENT_MIND_CALL_LIMITS.minGapMs / 60_000} minutes apart, counted in durable state so a restart cannot reset them`,
+      'A reason is required, and the decision plus its outcome is recorded in the trajectory',
+      'Never placed while a browser voice tab can deliver the message instead',
+      'Requires the optional FaceTime feature and an attached call-host page',
+    ],
+  }),
 ]);
 
 export const PERSISTENT_MIND_TOOL_BOUNDARIES = Object.freeze([
   'No arbitrary shell or file-system access',
-  'No raw HTTP proxy, browser controls, process control, paid generation, or external messaging',
+  "No raw HTTP proxy, browser controls, process control, or paid generation, and no external messaging except the granted voice.call-user action to the user's own configured handle",
   'No provider credentials or hidden reasoning tokens are exposed as tools',
 ]);
 
@@ -122,14 +155,14 @@ export const PERSISTENT_MIND_VALIDATION_CHECKS = Object.freeze([
 ]);
 
 export const persistentMindCapabilitiesSchema = portosSemanticToolGrantsSchema.extend({
-  // Accept the previous wire version so an older client can still change the
+  // Accept every prior wire version so an older client can still change the
   // unrelated grants while this server normalizes the stored shape forward.
-  schemaVersion: z.union([
-    z.literal(PREVIOUS_PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION),
-    z.literal(PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION),
-  ]).optional(),
+  schemaVersion: z.number().int()
+    .refine((value) => ACCEPTED_CAPABILITIES_SCHEMA_VERSIONS.includes(value), 'unsupported persistent mind capabilities schema version')
+    .optional(),
   createTasks: z.boolean().optional(),
   manageMind: z.boolean().optional(),
+  callUser: z.boolean().optional(),
   // An empty list preserves the legacy unrestricted task catalog. Once any
   // entries are configured, requests must name one of these exact pairs.
   taskModelAllowlist: z.array(persistentMindTaskModelAllowlistEntrySchema)
@@ -147,6 +180,14 @@ export const persistentMindCleanupRequestSchema = z.object({
     .max(PERSISTENT_MIND_CLEANUP_SCOPES.length)
     .refine((scopes) => new Set(scopes).size === scopes.length, 'cleanup scopes must be unique'),
   reason: z.string().trim().min(1).max(300).optional(),
+}).strict();
+
+// The mind supplies only why it is calling and what it will open with. It
+// never supplies a destination: the handle comes from voice configuration, so
+// a compromised or confused turn cannot dial anyone but the user.
+export const persistentMindCallRequestSchema = z.object({
+  reason: z.string().trim().min(1).max(PERSISTENT_MIND_CALL_LIMITS.reasonChars),
+  openingLine: z.string().trim().min(1).max(PERSISTENT_MIND_CALL_LIMITS.openingLineChars),
 }).strict();
 
 export const persistentMindTaskRequestSchema = z.object({
@@ -187,6 +228,7 @@ export function createDefaultPersistentMindCapabilities() {
     schemaVersion: PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION,
     createTasks: false,
     manageMind: false,
+    callUser: false,
     readPortos: false,
     writePortos: false,
     taskModelAllowlist: [],
@@ -239,6 +281,7 @@ export function normalizePersistentMindCapabilities(raw) {
     schemaVersion: PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION,
     createTasks: source.createTasks === true,
     manageMind: source.manageMind === true,
+    callUser: source.callUser === true,
     ...semanticGrants,
     taskModelAllowlist: taskModelAllowlist.entries,
     // A malformed hand-edited persisted policy must not silently become the

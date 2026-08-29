@@ -76,7 +76,7 @@ its tunable constants and placement helpers.
 | `openWorldAgentMotion` | Agent orbit/trail motion math (`computeAgentOrbit`, `computeAgentTrailPoints`, trail colors). |
 | `openWorldAiCore` | AI-ops core: model tiers, beam thickness, and `computeAiCore` / `computeAiCoreBeams` from live AI status events. |
 | `openWorldAppMetrics` | Per-building live telemetry: aggregate an app's `pm2Status` CPU/memory/uptime/restarts into one snapshot (`computeAppMetrics`, `cpuTone`, `hasPm2Error`, `buildingSignalTone` — façade LED / rooftop stress flags). |
-| `openWorldArtifacts` | Earned-artifact milestones (level/goal/streak) → placed artifact descriptors (`computeArtifacts`). |
+| `openWorldArtifacts` | Earned-artifact milestones (level/goal) → placed artifact descriptors (`computeArtifacts`). |
 | `openWorldBackupVault` | Backup-vault health/alerting state and color (`computeBackupVault`, `vaultHealth`). |
 | `openWorldChronotype` | Chronotype energy curve by hour → brightness/tempo modifiers (`computeChronotypeEnergy`). |
 | `openWorldCollectibles` | Deterministic Cyber Shards collectible placement, collection overlap math, and progress tracking (`getCollectiblesList`, `checkShardCollection`, `getCollectionStats`, `CYBER_SHARDS`). |
@@ -101,7 +101,7 @@ its tunable constants and placement helpers.
 | `openWorldPlayerRig` | Exploration player-rig math: third-person follow camera, boom collision, damping, facing, avatar state (`thirdPersonCamera`, `resolveBoom`, `dampAngle`, `moveFacing`, `avatarState`). |
 | `openWorldRenderBudget` | Pure Auto-quality render-budget state machine: capability-aware startup tier (`recommendOpenWorldStartTier`), p75 frame-time windows, hysteresis, cooldown, warm-up/gap rejection (`createRenderBudget`, `recordFrame`, `restartWarmup`, `resetRenderBudget`, `getEffectiveTier`, `QUALITY_TIERS`, `DEFAULT_RENDER_BUDGET_CONFIG`). |
 | `openWorldRooftops` | Deterministic rooftop fixture kits (antenna/tank/AC/dish) per app name (`computeRooftopKit`). |
-| `openWorldProductivity` | Productivity monument from streak/velocity tiers (`computeProductivityMonument`). |
+| `openWorldProductivity` | Productivity monument from same-day throughput and velocity tiers (`computeProductivityMonument`). |
 | `openWorldSoundscape` | Ambient soundscape: mood/energy classification, chord selection (`computeSoundscape`), and the manual mood override (`applyMoodOverride`). |
 | `openWorldSpeedPads` | Luminous road speed boost pads placement and geometric local-coordinate overlap detection (`getSpeedPadsList`, `checkSpeedPadOverlap`, `SPEED_PADS`). |
 | `openWorldTaskFlowRiver` | Task-flow river width/speed from backlog & throughput (`computeTaskFlowRiver`). |

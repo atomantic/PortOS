@@ -1,6 +1,6 @@
 // Pure, deterministic helpers for OpenWorld's productivity-district activity heatmap
 // (roadmap 2.6 follow-up, issue #817): a GitHub-style contribution grid rendered as a field
-// of ground tiles laid out around the streak monument. Each tile is one day; its glow scales
+// of ground tiles laid out around the throughput monument. Each tile is one day; its glow scales
 // with that day's completed-task count relative to the busiest day in the window. The grid
 // matches the calendar payload's shape exactly — weeks run left→right (x), day-of-week runs
 // front→back (z) — so the field reads like the contribution chart on the productivity tab.
@@ -42,7 +42,7 @@ export function tileLevel(tasks, maxTasks) {
 
 // Full derived view-model for the component. `calendarData` is the `getActivityCalendar`
 // payload (`{ weeks: [[{ date, dayOfWeek, tasks, isToday, isFuture, ... }]], maxTasks,
-// summary, currentStreak }`). A missing/non-object payload, or one with no usable weeks,
+// summary }`). A missing/non-object payload, or one with no usable weeks,
 // yields `present: false` and an empty tile list so the field simply doesn't render rather
 // than crashing.
 export function computeActivityHeatmap(calendarData) {

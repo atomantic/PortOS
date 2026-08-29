@@ -51,7 +51,11 @@ const assetAuth = asyncHandler(async (req, _res, next) => {
 const assetBody = raw({ type: FEDERATED_MEDIA_ASSET_MIME_TYPES, limit: FEDERATED_MEDIA_ASSET_MAX_BYTES });
 
 router.get('/status', asyncHandler(async (req, res) => {
-  const { config } = await authorizeFederatedMediaPeer(req);
+  // Capacity discovery is a periodic control-plane probe. A disabled provider,
+  // stale credential, or retired peer must still get a typed HTTP response for
+  // the consumer's readiness UI, but should not become a red error toast on the
+  // provider every time the peer poller runs.
+  const { config } = await authorizeFederatedMediaPeer(req, { statusProbe: true });
   const { kinds: kindsParam } = validateRequest(federatedMediaStatusQuerySchema, req.query);
   const kinds = normalizeRequestedMediaKinds(kindsParam);
   res.json(await getFederatedMediaProviderStatus(config, { kinds }));

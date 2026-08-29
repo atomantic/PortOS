@@ -5,8 +5,7 @@
  * `routes/cosInsightRoutes.test.js` — referenced by a test, executed by none.
  * Here the real module runs: only the file-I/O boundary is redirected
  * (`PATHS.cos` → a temp dir) and the agent history source (`cosAgentLifecycle.js` / `cosAgentIndex.js`) is
- * stubbed, so the streak arithmetic, the day/week boundary handling, and the
- * insight derivation are all exercised for real.
+ * stubbed, so activity aggregation and insight derivation are exercised for real.
  *
  * Dates are built from LOCAL components (`new Date(y, m, d, h)`) because the
  * service reads local getters (`getDateString`, `getHours`, `getDay`) — that
@@ -82,18 +81,10 @@ afterEach(() => {
   cosEvents.removeAllListeners();
 });
 
-describe('recalculateProductivity — streaks', () => {
-  it('returns zeroed streaks and totals for an empty history', async () => {
+describe('recalculateProductivity — activity totals', () => {
+  it('returns empty totals for an empty history', async () => {
     const result = await productivity.recalculateProductivity();
-
-    expect(result.streaks).toMatchObject({
-      currentDaily: 0,
-      longestDaily: 0,
-      currentWeekly: 0,
-      longestWeekly: 0,
-      lastActiveDate: null,
-      lastActiveWeek: null,
-    });
+    expect(result).not.toHaveProperty('streaks');
     expect(result.totals).toEqual({
       totalTasks: 0,
       successfulTasks: 0,
@@ -101,98 +92,34 @@ describe('recalculateProductivity — streaks', () => {
       activeDays: 0,
       activeWeeks: 0,
     });
-    expect(result.dailyHistory).toEqual({});
-    expect(result.milestones).toEqual([]);
   });
 
-  it('counts a single active day as a 1-day streak', async () => {
-    mock.agents = [agentOn('a1', { day: 18 })];
-
-    const { streaks, totals } = await productivity.recalculateProductivity();
-
-    expect(streaks.currentDaily).toBe(1);
-    expect(streaks.longestDaily).toBe(1);
-    expect(streaks.lastActiveDate).toBe('2026-03-18');
-    expect(streaks.lastActiveWeek).toBe('2026-W12');
-    expect(totals.activeDays).toBe(1);
-    expect(totals.activeWeeks).toBe(1);
-  });
-
-  it('counts three consecutive days ending today as a 3-day streak', async () => {
+  it('counts distinct active days and weeks without deriving streaks', async () => {
     mock.agents = [
-      agentOn('a1', { day: 16 }),
-      agentOn('a2', { day: 17 }),
-      agentOn('a3', { day: 18 }),
+      agentOn('a', { day: 16 }),
+      agentOn('b', { day: 17 }),
+      agentOn('c', { day: 18 }),
     ];
 
-    const { streaks } = await productivity.recalculateProductivity();
+    const result = await productivity.recalculateProductivity();
 
-    expect(streaks.currentDaily).toBe(3);
-    expect(streaks.longestDaily).toBe(3);
-  });
-
-  it('breaks the current streak at a gap but keeps the longest run', async () => {
-    mock.agents = [
-      agentOn('a1', { day: 10 }),
-      agentOn('a2', { day: 11 }),
-      agentOn('a3', { day: 18 }),
-    ];
-
-    const { streaks, totals } = await productivity.recalculateProductivity();
-
-    expect(streaks.longestDaily).toBe(2);
-    expect(streaks.currentDaily).toBe(1);
-    expect(totals.activeDays).toBe(3);
-  });
-
-  it('keeps the current streak alive when the last activity was yesterday', async () => {
-    mock.agents = [agentOn('a1', { day: 16 }), agentOn('a2', { day: 17 })];
-
-    const { streaks } = await productivity.recalculateProductivity();
-
-    expect(streaks.currentDaily).toBe(2);
-    expect(streaks.lastActiveDate).toBe('2026-03-17');
-  });
-
-  it('zeroes the current streak once the gap exceeds one day', async () => {
-    mock.agents = [agentOn('a1', { day: 15 })];
-
-    const { streaks } = await productivity.recalculateProductivity();
-
-    expect(streaks.currentDaily).toBe(0);
-    expect(streaks.longestDaily).toBe(1);
-    expect(streaks.lastActiveDate).toBe('2026-03-15');
-  });
-
-  it('splits activity across the local midnight boundary into two streak days', async () => {
-    mock.agents = [
-      agentOn('late', { day: 17, hour: 23, minute: 30 }),
-      agentOn('early', { day: 18, hour: 0, minute: 15 }),
-    ];
-
-    const { streaks, dailyHistory, hourlyPatterns } = await productivity.recalculateProductivity();
-
-    expect(Object.keys(dailyHistory).sort()).toEqual(['2026-03-17', '2026-03-18']);
-    expect(hourlyPatterns[23].tasks).toBe(1);
-    expect(hourlyPatterns[0].tasks).toBe(1);
-    expect(streaks.currentDaily).toBe(2);
-    expect(streaks.longestDaily).toBe(2);
+    expect(result).not.toHaveProperty('streaks');
+    expect(result.totals).toMatchObject({ totalTasks: 3, activeDays: 3, activeWeeks: 1 });
   });
 
   it('ignores agents that are not completed or carry no completion stamp', async () => {
     mock.agents = [
-      agentOn('done', { day: 18 }),
-      agentOn('running', { day: 18, status: 'running' }),
-      agentOn('no-stamp', { day: 18, completedAt: null }),
+      agentOn('good', { day: 18 }),
+      { ...agentOn('running', { day: 18 }), status: 'running' },
+      { ...agentOn('unstamped', { day: 18 }), completedAt: null },
     ];
 
-    const { totals, dailyHistory } = await productivity.recalculateProductivity();
+    const result = await productivity.recalculateProductivity();
 
-    expect(totals.totalTasks).toBe(1);
-    expect(dailyHistory['2026-03-18'].tasks).toBe(1);
+    expect(result.totals.totalTasks).toBe(1);
+    expect(result.dailyHistory['2026-03-18'].tasks).toBe(1);
   });
 });
-
 describe('recalculateProductivity — aggregates and milestones', () => {
   it('computes exact hourly, day-of-week and per-date aggregates', async () => {
     mock.agents = [
@@ -222,7 +149,7 @@ describe('recalculateProductivity — aggregates and milestones', () => {
     expect(result.totals).toMatchObject({ totalTasks: 3, successfulTasks: 2, successRate: 67 });
   });
 
-  it('awards the 10-task and 3-day-streak milestones once earned', async () => {
+  it('awards task-count milestones without streak milestones', async () => {
     mock.agents = [
       ...Array.from({ length: 4 }, (_, i) => agentOn(`d16-${i}`, { day: 16 })),
       ...Array.from({ length: 3 }, (_, i) => agentOn(`d17-${i}`, { day: 17 })),
@@ -237,10 +164,9 @@ describe('recalculateProductivity — aggregates and milestones', () => {
       achievedAt: expect.any(String),
       description: 'Completed 10 tasks',
     });
-    expect(milestones).toContainEqual({ type: 'streak', value: 3, description: '3-day work streak' });
-    // 25-task and 7-day milestones are not reached yet.
+    expect(milestones.some(m => m.type === 'streak')).toBe(false);
+    // The 25-task milestone is not reached yet.
     expect(milestones.filter(m => m.value === 25)).toEqual([]);
-    expect(milestones.filter(m => m.type === 'streak' && m.value === 7)).toEqual([]);
   });
 
   it('persists the recalculated snapshot with a lastUpdated stamp', async () => {
@@ -249,13 +175,17 @@ describe('recalculateProductivity — aggregates and milestones', () => {
     await productivity.recalculateProductivity();
 
     const stored = readStore();
-    expect(stored.streaks.currentDaily).toBe(1);
+    expect(stored).not.toHaveProperty('streaks');
     expect(stored.lastUpdated).toBe(NOW.toISOString());
   });
 });
 
-describe('onTaskCompleted — incremental streak updates', () => {
-  it('starts a 1-day streak from an empty store and emits the update event', async () => {
+describe('onTaskCompleted — incremental productivity updates', () => {
+  it('records the completed task, drops a retired streak field, and emits the update event', async () => {
+    seed({
+      streaks: { currentDaily: 9, longestDaily: 12 },
+      hourlyPatterns: {}, dailyPatterns: {}, dailyHistory: {}, milestones: [],
+    });
     const emitted = [];
     const listener = () => emitted.push('productivity:updated');
     cosEvents.on('productivity:updated', listener);
@@ -263,137 +193,47 @@ describe('onTaskCompleted — incremental streak updates', () => {
     await productivity.onTaskCompleted(agentOn('a1', { day: 18, hour: 9, duration: 4000 }));
 
     const stored = readStore();
-    expect(stored.streaks).toMatchObject({
-      currentDaily: 1,
-      longestDaily: 1,
-      currentWeekly: 1,
-      longestWeekly: 1,
-      lastActiveDate: '2026-03-18',
-      lastActiveWeek: '2026-W12',
-    });
-    expect(stored.hourlyPatterns[9]).toMatchObject({ tasks: 1, successes: 1, avgDuration: 4000, successRate: 100 });
-    expect(stored.dailyHistory['2026-03-18']).toEqual({ tasks: 1, successes: 1, failures: 0, successRate: 100 });
+    expect(stored).not.toHaveProperty('streaks');
+    expect(stored.dailyHistory['2026-03-18']).toMatchObject({ tasks: 1, successes: 1, failures: 0 });
+    expect(stored.hourlyPatterns[9]).toMatchObject({ tasks: 1, successes: 1, avgDuration: 4000 });
     expect(emitted).toEqual(['productivity:updated']);
-
     cosEvents.off('productivity:updated', listener);
-  });
-
-  it('extends the streak on a consecutive day and preserves the longest run', async () => {
-    seed({
-      streaks: { currentDaily: 2, longestDaily: 5, currentWeekly: 1, longestWeekly: 3, lastActiveDate: '2026-03-17', lastActiveWeek: '2026-W12' },
-      hourlyPatterns: {}, dailyPatterns: {}, dailyHistory: {}, milestones: [],
-    });
-
-    await productivity.onTaskCompleted(agentOn('a1', { day: 18 }));
-
-    expect(readStore().streaks).toMatchObject({ currentDaily: 3, longestDaily: 5, lastActiveDate: '2026-03-18' });
-  });
-
-  it('resets the current streak to 1 after a gap', async () => {
-    seed({
-      streaks: { currentDaily: 4, longestDaily: 5, currentWeekly: 1, longestWeekly: 3, lastActiveDate: '2026-03-10', lastActiveWeek: '2026-W11' },
-      hourlyPatterns: {}, dailyPatterns: {}, dailyHistory: {}, milestones: [],
-    });
-
-    await productivity.onTaskCompleted(agentOn('a1', { day: 18 }));
-
-    expect(readStore().streaks).toMatchObject({ currentDaily: 1, longestDaily: 5 });
-  });
-
-  it('leaves the streak untouched for a second task on the same day', async () => {
-    seed({
-      streaks: { currentDaily: 4, longestDaily: 5, currentWeekly: 2, longestWeekly: 3, lastActiveDate: '2026-03-18', lastActiveWeek: '2026-W12' },
-      hourlyPatterns: {}, dailyPatterns: {},
-      dailyHistory: { '2026-03-18': { tasks: 1, successes: 1, failures: 0, successRate: 100 } },
-      milestones: [],
-    });
-
-    await productivity.onTaskCompleted(agentOn('a1', { day: 18, success: false }));
-
-    const stored = readStore();
-    expect(stored.streaks).toMatchObject({ currentDaily: 4, longestDaily: 5, currentWeekly: 2 });
-    expect(stored.dailyHistory['2026-03-18']).toEqual({ tasks: 2, successes: 1, failures: 1, successRate: 50 });
-  });
-
-  it('rolls the weekly streak across a year boundary (W52 → W01)', async () => {
-    seed({
-      streaks: { currentDaily: 1, longestDaily: 4, currentWeekly: 3, longestWeekly: 3, lastActiveDate: '2025-12-26', lastActiveWeek: '2025-W52' },
-      hourlyPatterns: {}, dailyPatterns: {}, dailyHistory: {}, milestones: [],
-    });
-
-    await productivity.onTaskCompleted(agentOn('a1', { month: 1, day: 1 }));
-
-    expect(readStore().streaks).toMatchObject({
-      currentWeekly: 4,
-      longestWeekly: 4,
-      lastActiveWeek: '2026-W01',
-    });
-  });
-
-  it('keeps an ISO week that straddles the new year on a single week id (#3465)', async () => {
-    // Mon 2025-12-29 and Thu 2026-01-01 are the SAME ISO week. Before #3465 the
-    // week id paired the ISO week NUMBER with the CALENDAR year, so they stamped
-    // '2025-W01' and '2026-W01' — splitting the week (and reusing '2025-W01',
-    // which is also the id of the JANUARY 2025 week). Both are now '2026-W01'.
-    await productivity.onTaskCompleted(agentOn('dec', { month: 12, day: 29, completedAt: new Date(2025, 11, 29, 10).toISOString() }));
-    expect(readStore().streaks).toMatchObject({ lastActiveWeek: '2026-W01', currentWeekly: 1 });
-
-    await productivity.onTaskCompleted(agentOn('jan', { month: 1, day: 1 }));
-
-    // Same week, so the id does not move and the week is not counted twice.
-    expect(readStore().streaks).toMatchObject({
-      lastActiveWeek: '2026-W01',
-      currentWeekly: 1,
-      longestWeekly: 1,
-    });
-
-    // …and the following week extends the streak instead of resetting it.
-    await productivity.onTaskCompleted(agentOn('next', { month: 1, day: 5 }));
-
-    expect(readStore().streaks).toMatchObject({
-      lastActiveWeek: '2026-W02',
-      currentWeekly: 2,
-      longestWeekly: 2,
-    });
   });
 
   it('prunes daily history older than 90 days', async () => {
     seed({
-      streaks: { currentDaily: 0, longestDaily: 0, currentWeekly: 0, longestWeekly: 0, lastActiveDate: null, lastActiveWeek: null },
       hourlyPatterns: {}, dailyPatterns: {},
       dailyHistory: {
-        '2025-06-01': { tasks: 3, successes: 3, failures: 0, successRate: 100 },
-        '2026-03-01': { tasks: 1, successes: 1, failures: 0, successRate: 100 },
+        '2025-01-01': { tasks: 1, successes: 1, failures: 0, successRate: 100 },
+        '2026-03-18': { tasks: 1, successes: 1, failures: 0, successRate: 100 },
       },
       milestones: [],
     });
 
     await productivity.onTaskCompleted(agentOn('a1', { day: 18 }));
 
-    expect(Object.keys(readStore().dailyHistory).sort()).toEqual(['2026-03-01', '2026-03-18']);
+    const stored = readStore();
+    expect(stored.dailyHistory['2025-01-01']).toBeUndefined();
+    expect(stored.dailyHistory['2026-03-18'].tasks).toBe(2);
   });
 
   it('is a no-op for an agent with no completion stamp', async () => {
     await productivity.onTaskCompleted({ id: 'a1', result: { success: true } });
-
     expect(existsSync(PRODUCTIVITY_FILE)).toBe(false);
   });
 
   it('does not leak one incremental update into the next empty-store read', async () => {
-    await productivity.onTaskCompleted(agentOn('a1', { day: 18, hour: 9 }));
-    rmSync(PRODUCTIVITY_FILE, { force: true });
+    await productivity.onTaskCompleted(agentOn('a1', { day: 18 }));
+    rmSync(PRODUCTIVITY_FILE);
 
     const fresh = await productivity.loadProductivity();
 
-    expect(fresh.hourlyPatterns).toEqual({});
     expect(fresh.dailyHistory).toEqual({});
-    expect(fresh.streaks.currentDaily).toBe(0);
+    expect(fresh.hourlyPatterns).toEqual({});
   });
 });
-
 describe('getProductivityInsights', () => {
   const insightsFixture = {
-    streaks: { currentDaily: 5, longestDaily: 9, currentWeekly: 4, longestWeekly: 4, lastActiveDate: '2026-03-18', lastActiveWeek: '2026-W12' },
     hourlyPatterns: {
       9: { tasks: 10, successes: 8, failures: 2, totalDuration: 10000, avgDuration: 1000, successRate: 80 },
       13: { tasks: 6, successes: 3, failures: 3, totalDuration: 6000, avgDuration: 1000, successRate: 50 },
@@ -410,7 +250,7 @@ describe('getProductivityInsights', () => {
     milestones: [],
   };
 
-  it('derives peak-hour, best-day, streak and weekly insights with concrete copy', async () => {
+  it('derives peak-hour and best-day insights with concrete copy', async () => {
     seed(insightsFixture);
 
     const result = await productivity.getProductivityInsights();
@@ -433,18 +273,6 @@ describe('getProductivityInsights', () => {
         message: 'Wednesdays show 88% success rate with 8 tasks completed',
         icon: 'calendar',
       },
-      {
-        type: 'success',
-        title: '🔥 Hot Streak!',
-        message: '5 days of continuous productivity! Keep it up!',
-        icon: 'flame',
-      },
-      {
-        type: 'success',
-        title: 'Weekly Warrior',
-        message: '4 consecutive weeks of activity!',
-        icon: 'trophy',
-      },
     ]);
   });
 
@@ -464,24 +292,6 @@ describe('getProductivityInsights', () => {
       .toBe('Tasks completed around 3PM have a 60% success rate');
   });
 
-  it('flags a broken streak against the previous best', async () => {
-    seed({
-      ...insightsFixture,
-      hourlyPatterns: {},
-      dailyPatterns: {},
-      streaks: { currentDaily: 0, longestDaily: 7, currentWeekly: 1, longestWeekly: 4, lastActiveDate: '2026-03-10', lastActiveWeek: '2026-W11' },
-    });
-
-    const { insights } = await productivity.getProductivityInsights();
-
-    expect(insights).toEqual([{
-      type: 'warning',
-      title: 'Streak Broken',
-      message: 'Your best was 7 days. Start a new streak today!',
-      icon: 'refresh',
-    }]);
-  });
-
   it('returns no insights and null extremes for a store with no history', async () => {
     const result = await productivity.getProductivityInsights();
 
@@ -496,80 +306,27 @@ describe('getProductivityInsights', () => {
 describe('getProductivitySummary', () => {
   it('projects the dashboard fields from the stored snapshot', async () => {
     seed({
-      streaks: { currentDaily: 3, longestDaily: 9, currentWeekly: 2, longestWeekly: 4, lastActiveDate: '2026-03-18', lastActiveWeek: '2026-W12' },
+      streaks: { currentDaily: 3, longestDaily: 9 },
       hourlyPatterns: {}, dailyPatterns: {}, dailyHistory: {},
       totals: { totalTasks: 20, successfulTasks: 18, successRate: 90, activeDays: 11, activeWeeks: 3 },
       milestones: [
+        { type: 'streak', value: 30, description: '30-day work streak' },
         { type: 'tasks', value: 10, description: 'Completed 10 tasks' },
-        { type: 'streak', value: 3, description: '3-day work streak' },
+        { type: 'tasks', value: 25, description: 'Completed 25 tasks' },
       ],
     });
 
     expect(await productivity.getProductivitySummary()).toEqual({
-      currentStreak: 3,
-      longestStreak: 9,
-      weeklyStreak: 2,
-      lastActive: '2026-03-18',
       totalDays: 11,
-      recentMilestone: { type: 'streak', value: 3, description: '3-day work streak' },
+      recentMilestone: { type: 'tasks', value: 25, description: 'Completed 25 tasks' },
     });
   });
 
   it('falls back to zeros and nulls for an empty store', async () => {
     expect(await productivity.getProductivitySummary()).toEqual({
-      currentStreak: 0,
-      longestStreak: 0,
-      weeklyStreak: 0,
-      lastActive: null,
       totalDays: 0,
       recentMilestone: null,
     });
-  });
-});
-
-describe('getWeekComparison', () => {
-  const withHistory = (dailyHistory) => seed({
-    streaks: {}, hourlyPatterns: {}, dailyPatterns: {}, dailyHistory, milestones: [],
-  });
-
-  it('compares matching day ranges of this week and last week', async () => {
-    // Today is Wednesday 2026-03-18 → this week starts Sunday 2026-03-15 and
-    // last week's comparable range is Sunday 2026-03-08 through Wed 2026-03-11.
-    withHistory({
-      '2026-03-16': { tasks: 4, successes: 4, failures: 0, successRate: 100 },
-      '2026-03-18': { tasks: 2, successes: 1, failures: 1, successRate: 50 },
-      '2026-03-09': { tasks: 3, successes: 3, failures: 0, successRate: 100 },
-      // Outside last week's comparable range (Thursday) — must not be counted.
-      '2026-03-12': { tasks: 9, successes: 9, failures: 0, successRate: 100 },
-    });
-
-    expect(await productivity.getWeekComparison()).toEqual({
-      thisWeek: { tasks: 6, successes: 5, successRate: 83 },
-      lastWeek: { tasks: 3, successes: 3, successRate: 100 },
-      changePercent: 100,
-      trend: 'up',
-      daysCompared: 4,
-    });
-  });
-
-  it('reports a decline when this week trails last week', async () => {
-    withHistory({
-      '2026-03-16': { tasks: 2, successes: 2, failures: 0, successRate: 100 },
-      '2026-03-09': { tasks: 10, successes: 5, failures: 5, successRate: 50 },
-    });
-
-    const result = await productivity.getWeekComparison();
-
-    expect(result.changePercent).toBe(-80);
-    expect(result.trend).toBe('down');
-  });
-
-  it('treats a first active week as a 100% gain and a fully idle pair as neutral', async () => {
-    withHistory({ '2026-03-16': { tasks: 5, successes: 5, failures: 0, successRate: 100 } });
-    expect(await productivity.getWeekComparison()).toMatchObject({ changePercent: 100, trend: 'up' });
-
-    withHistory({});
-    expect(await productivity.getWeekComparison()).toMatchObject({ changePercent: null, trend: 'neutral' });
   });
 });
 
@@ -719,7 +476,7 @@ describe('getDailyTrends', () => {
     for (let day = 12; day <= 18; day++) {
       dailyHistory[`2026-03-${String(day).padStart(2, '0')}`] = { tasks: 1, successes: 0, failures: 1, successRate: 0 };
     }
-    seed({ streaks: {}, hourlyPatterns: {}, dailyPatterns: {}, milestones: [], dailyHistory });
+    seed({ hourlyPatterns: {}, dailyPatterns: {}, milestones: [], dailyHistory });
 
     const { summary } = await productivity.getDailyTrends(30);
 
@@ -731,7 +488,7 @@ describe('getDailyTrends', () => {
 describe('getActivityCalendar', () => {
   it('builds Sunday-aligned weeks through the end of the current week', async () => {
     seed({
-      streaks: { currentDaily: 3 }, hourlyPatterns: {}, dailyPatterns: {}, milestones: [],
+      hourlyPatterns: {}, dailyPatterns: {}, milestones: [],
       dailyHistory: {
         '2026-03-18': { tasks: 7, successes: 6, failures: 1, successRate: 86 },
         '2026-03-10': { tasks: 3, successes: 3, failures: 0, successRate: 100 },
@@ -750,7 +507,7 @@ describe('getActivityCalendar', () => {
     expect(today).toMatchObject({ date: '2026-03-18', tasks: 7, successRate: 86 });
 
     expect(calendar.maxTasks).toBe(7);
-    expect(calendar.currentStreak).toBe(3);
+    expect(calendar).not.toHaveProperty('currentStreak');
     expect(calendar.summary).toEqual({
       totalDays: 21,
       activeDays: 2,

@@ -8,6 +8,7 @@ import { readyState as kokoroReadyState } from './tts-kokoro.js';
 import { which } from './bootstrap.js';
 import { resolveLlmEndpoint, authHeaders } from './llm.js';
 import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
+import { checkSetup as checkFaceTimeSetup } from './facetimeBridge.js';
 
 const PROBE_TIMEOUT_MS = 1500;
 const CACHE_TTL_MS = 3000;
@@ -77,6 +78,7 @@ export const checkAll = async (cfg) => {
     const state = kokoroReadyState();
     out.kokoro = { ok: state === 'loaded', state };
   }
+  out.facetime = await checkFaceTimeSetup(voice);
 
   cache = { key: cacheKey, ts: Date.now(), value: out };
   return out;

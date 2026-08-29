@@ -5,7 +5,6 @@
 import { Router } from 'express';
 import * as cos from '../services/cos.js';
 import * as taskLearning from '../services/taskLearning.js';
-import * as autonomousJobs from '../services/autonomousJobs.js';
 import * as productivity from '../services/productivity.js';
 import * as goalProgress from '../services/goalProgress.js';
 import * as decisionLog from '../services/decisionLog.js';
@@ -14,7 +13,7 @@ import { parsePagination } from '../lib/validation.js';
 
 const router = Router();
 
-// GET /api/cos/productivity - Get productivity insights and streaks
+// GET /api/cos/productivity - Get productivity insights and work patterns
 router.get('/productivity', asyncHandler(async (req, res) => {
   const insights = await productivity.getProductivityInsights();
   res.json(insights);
@@ -210,16 +209,12 @@ router.get('/recent-tasks', asyncHandler(async (req, res) => {
 }));
 
 // GET /api/cos/quick-summary - Get at-a-glance dashboard summary
-// Combines today's activity, streak status, next job, and pending approvals into one efficient call
+// Combines today's activity, queue counts, and velocity into one efficient call.
 router.get('/quick-summary', asyncHandler(async (req, res) => {
-  const [todayActivity, productivityData, tasksData, jobStats, velocityData, weekData, optimalTime] = await Promise.all([
+  const [todayActivity, tasksData, velocityData] = await Promise.all([
     cos.getTodayActivity(),
-    productivity.getProductivitySummary(),
     cos.getAllTasks(),
-    autonomousJobs.getJobStats(),
-    productivity.getVelocityMetrics(),
-    productivity.getWeekComparison(),
-    productivity.getOptimalTimeInfo()
+    productivity.getVelocityMetrics()
   ]);
 
   // Count pending approvals from system tasks
@@ -228,18 +223,6 @@ router.get('/quick-summary', asyncHandler(async (req, res) => {
   // Count pending user tasks
   const pendingUserTasks = tasksData.user?.grouped?.pending?.length || 0;
 
-  // Combine all pending tasks for queue estimate
-  const allPendingTasks = [
-    ...(tasksData.user?.grouped?.pending || []),
-    ...(tasksData.cos?.grouped?.pending || [])
-  ];
-
-  // Get queue completion estimate
-  const queueEstimate = await taskLearning.estimateQueueCompletion(
-    allPendingTasks,
-    todayActivity.stats.running
-  );
-
   res.json({
     today: {
       completed: todayActivity.stats.completed,
@@ -247,14 +230,7 @@ router.get('/quick-summary', asyncHandler(async (req, res) => {
       failed: todayActivity.stats.failed,
       running: todayActivity.stats.running,
       successRate: todayActivity.stats.successRate,
-      timeWorked: todayActivity.time.combined,
-      accomplishments: todayActivity.accomplishments || []
-    },
-    streak: {
-      current: productivityData.currentStreak,
-      longest: productivityData.longestStreak,
-      weekly: productivityData.weeklyStreak,
-      lastActive: productivityData.lastActive
+      timeWorked: todayActivity.time.combined
     },
     velocity: {
       percentage: velocityData.velocity,
@@ -262,20 +238,16 @@ router.get('/quick-summary', asyncHandler(async (req, res) => {
       avgPerDay: velocityData.avgPerDay,
       historicalDays: velocityData.historicalDays
     },
-    nextJob: jobStats.nextDue,
     queue: {
       pendingApprovals,
       pendingUserTasks,
-      total: pendingApprovals + pendingUserTasks,
-      estimate: queueEstimate
+      total: pendingApprovals + pendingUserTasks
     },
     status: {
       running: todayActivity.isRunning,
       paused: todayActivity.isPaused,
       lastEvaluation: todayActivity.lastEvaluation
-    },
-    weekComparison: weekData,
-    optimalTime
+    }
   });
 }));
 

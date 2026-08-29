@@ -37,6 +37,7 @@ import { listTracks } from '../tracks/index.js';
 import { listProjects } from '../creativeDirector/local.js';
 import { listProjects as listMusicVideoProjects } from '../musicVideo/projects.js';
 import { listBoards } from '../moodBoard/index.js';
+import { listLooms } from '../fableLoom/index.js';
 import { listWorksForSync, listFoldersForSync, listExercisesForSync } from '../writersRoom/sync.js';
 import { listCommissionFeedbackForSync } from '../creativeCommissions/feedbackStore.js';
 import { listCommissionsForSync } from '../creativeCommissions/store.js';
@@ -408,6 +409,7 @@ const RECORD_KIND_LISTERS = {
   track: () => listTracks({ includeDeleted: false }).catch(() => []),
   creativeDirectorProject: () => listProjects({ includeDeleted: false }).catch(() => []),
   moodBoard: () => listBoards({ includeDeleted: false }).catch(() => []),
+  fableLoom: () => listLooms({ includeDeleted: false }).catch(() => []),
   // Live works as { id, updatedAt } (full-sync coverage compares updatedAt to
   // detect a stale confirmed push; bare {id} stubs would report a changed
   // manuscript as fully mirrored). Without this branch, enabling the

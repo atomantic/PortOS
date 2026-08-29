@@ -1,135 +1,68 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
   MONUMENT,
-  streakLevel,
-  velocityTier,
   computeProductivityMonument,
+  throughputLevel,
+  velocityTier,
 } from './openWorldProductivity';
 
-const full = {
-  streak: { current: 12, longest: 30, weekly: 3, lastActive: '2026-06-02' },
-  today: { completed: 8, succeeded: 7, failed: 1 },
-  velocity: { percentage: 130, label: 'surging' },
-};
-
-describe('streakLevel', () => {
-  it('maps streak/cap into 0..1', () => {
-    expect(streakLevel(15, 30)).toBe(0.5);
-    expect(streakLevel(30, 30)).toBe(1);
+describe('throughputLevel', () => {
+  it('maps completed tasks into a clamped 0..1 level', () => {
+    expect(throughputLevel(10, 20)).toBe(0.5);
+    expect(throughputLevel(999, 20)).toBe(1);
+    expect(throughputLevel(-5, 20)).toBe(0);
+    expect(throughputLevel(0, 20)).toBe(0);
   });
 
-  it('clamps above the cap to 1 and negatives to 0', () => {
-    expect(streakLevel(999, 30)).toBe(1);
-    expect(streakLevel(-5, 30)).toBe(0);
-  });
-
-  it('treats a legitimate zero streak as level 0, not absent', () => {
-    expect(streakLevel(0, 30)).toBe(0);
-  });
-
-  it('returns null for non-numeric streaks or bad caps', () => {
-    expect(streakLevel(undefined)).toBeNull();
-    expect(streakLevel(null)).toBeNull();
-    expect(streakLevel(NaN)).toBeNull();
-    expect(streakLevel('12')).toBeNull();
-    expect(streakLevel(12, 0)).toBeNull();
-    expect(streakLevel(12, -1)).toBeNull();
+  it('returns null for absent values and invalid caps', () => {
+    expect(throughputLevel(undefined)).toBeNull();
+    expect(throughputLevel('10')).toBeNull();
+    expect(throughputLevel(10, 0)).toBeNull();
   });
 });
 
-describe('velocityTier', () => {
-  it('classifies into the expected tiers', () => {
-    expect(velocityTier(130).key).toBe('surging');
-    expect(velocityTier(100).key).toBe('steady');
-    expect(velocityTier(60).key).toBe('slowing');
-    expect(velocityTier(10).key).toBe('idle');
-    expect(velocityTier(0).key).toBe('idle');
-  });
+// @vitest-environment node
 
-  it('returns null for non-numeric velocity', () => {
+describe('velocityTier', () => {
+  it('classifies present pace values and preserves absence', () => {
+    expect(velocityTier(150)?.key).toBe('surging');
+    expect(velocityTier(100)?.key).toBe('steady');
+    expect(velocityTier(50)?.key).toBe('slowing');
+    expect(velocityTier(0)?.key).toBe('idle');
     expect(velocityTier(undefined)).toBeNull();
-    expect(velocityTier(null)).toBeNull();
-    expect(velocityTier(NaN)).toBeNull();
-    expect(velocityTier('100')).toBeNull();
   });
 });
 
 describe('computeProductivityMonument', () => {
-  it('carries the fixed position and base width through unchanged', () => {
-    const vm = computeProductivityMonument(full);
-    expect(vm.position).toEqual(MONUMENT.position);
-    expect(vm.baseWidth).toBe(MONUMENT.baseWidth);
-  });
+  it('uses today throughput for height and labeling', () => {
+    const vm = computeProductivityMonument({
+      today: { completed: 10 },
+      velocity: { percentage: 125 },
+    });
 
-  it('derives a full view-model from complete data', () => {
-    const vm = computeProductivityMonument(full);
     expect(vm.present).toBe(true);
-    expect(vm.current).toBe(12);
-    expect(vm.longest).toBe(30);
-    expect(vm.completedToday).toBe(8);
-    expect(vm.level).toBeCloseTo(0.4);
-    expect(vm.color).toBe('#22c55e'); // surging tier
+    expect(vm.completedToday).toBe(10);
+    expect(vm.level).toBe(0.5);
+    expect(vm.height).toBe(MONUMENT.minHeight + 0.5 * (MONUMENT.maxHeight - MONUMENT.minHeight));
+    expect(vm.throughputLabel).toBe('10 TASKS TODAY');
     expect(vm.tierKey).toBe('surging');
-    expect(vm.surging).toBe(true);
-    expect(vm.streakLabel).toBe('12 DAYS STREAK');
-    expect(vm.height).toBeGreaterThan(MONUMENT.minHeight);
   });
 
-  it('singularizes a one-day streak label', () => {
-    const vm = computeProductivityMonument({ ...full, streak: { current: 1 } });
-    expect(vm.streakLabel).toBe('1 DAY STREAK');
-  });
-
-  it('distinguishes a real zero-day streak from absent data', () => {
-    const zero = computeProductivityMonument({ streak: { current: 0 }, velocity: { percentage: 50 } });
+  it('distinguishes zero throughput from absent data', () => {
+    const zero = computeProductivityMonument({ today: { completed: 0 }, velocity: { percentage: 50 } });
     expect(zero.present).toBe(true);
-    expect(zero.current).toBe(0);
-    expect(zero.level).toBe(0);
-    expect(zero.streakLabel).toBe('NO STREAK');
-    expect(zero.color).toBe('#f59e0b'); // slowing tier still colors it, not slate
-    expect(zero.height).toBeCloseTo(MONUMENT.minHeight);
-    expect(zero.intensity).toBeGreaterThan(0.1); // faintly lit, above the absent floor
+    expect(zero.throughputLabel).toBe('NO TASKS TODAY');
+    expect(zero.height).toBe(MONUMENT.minHeight);
 
     const absent = computeProductivityMonument({});
     expect(absent.present).toBe(false);
-    expect(absent.current).toBeNull();
-    expect(absent.level).toBe(0);
-    expect(absent.streakLabel).toBe('NO DATA');
-    expect(absent.tierLabel).toBe('NO DATA');
-    expect(absent.color).toBe('#64748b'); // slate
-    expect(absent.height).toBeCloseTo(MONUMENT.minHeight);
-    expect(absent.intensity).toBeLessThan(zero.intensity);
+    expect(absent.throughputLabel).toBe('NO DATA');
+    expect(absent.height).toBe(MONUMENT.minHeight);
   });
 
-  it('colors a present-but-velocity-missing payload as idle, never dark', () => {
-    const vm = computeProductivityMonument({ streak: { current: 5 } });
-    expect(vm.present).toBe(true);
-    expect(vm.color).toBe('#ef4444'); // idle tier fallback
-    expect(vm.tierLabel).toBe('IDLE');
-  });
-
-  it('clamps a streak above the cap to full height', () => {
-    const vm = computeProductivityMonument({ streak: { current: 9999 }, velocity: { percentage: 100 } });
-    expect(vm.level).toBe(1);
-    expect(vm.height).toBeCloseTo(MONUMENT.maxHeight);
-    expect(vm.intensity).toBeCloseTo(1);
-  });
-
-  it('handles null / undefined / non-object input as absent without crashing', () => {
-    for (const bad of [null, undefined, 'nope', 42, []]) {
-      const vm = computeProductivityMonument(bad);
-      expect(vm.present).toBe(false);
-      expect(vm.level).toBe(0);
-      expect(vm.streakLabel).toBe('NO DATA');
-      expect(vm.position).toEqual(MONUMENT.position);
-    }
-  });
-
-  it('tolerates a non-object streak/today/velocity sub-field', () => {
-    const vm = computeProductivityMonument({ streak: 'oops', today: 5, velocity: null });
-    expect(vm.present).toBe(false);
-    expect(vm.completedToday).toBeNull();
-    expect(vm.longest).toBeNull();
+  it('tolerates malformed payloads and clamps unusually high throughput', () => {
+    expect(computeProductivityMonument(null).throughputLabel).toBe('NO DATA');
+    expect(computeProductivityMonument({ today: 5 }).throughputLabel).toBe('NO DATA');
+    expect(computeProductivityMonument({ today: { completed: 9999 } }).level).toBe(1);
   });
 });
-// @vitest-environment node

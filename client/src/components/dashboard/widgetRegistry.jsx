@@ -22,7 +22,6 @@ const ReviewHubCard         = lazyWithReload(() => import('../ReviewHubCard'));
 const WhileAwayWidget        = lazyWithReload(() => import('../WhileAwayWidget'));
 const AppsGridWidget        = lazyWithReload(() => import('./builtins/AppsGridWidget'));
 const QuickStatsWidget      = lazyWithReload(() => import('./builtins/QuickStatsWidget'));
-const ActivityStreakWidget  = lazyWithReload(() => import('./builtins/ActivityStreakWidget'));
 const HourlyActivityWidget  = lazyWithReload(() => import('./builtins/HourlyActivityWidget'));
 const FeedsWidget           = lazyWithReload(() => import('./builtins/FeedsWidget'));
 const MeatSpaceStreakWidget = lazyWithReload(() => import('./builtins/MeatSpaceStreakWidget'));
@@ -69,7 +68,6 @@ export const WIDGETS = [
   { id: 'tribe-care',        label: 'Tribe Care',            Component: TribeCareWidget,        width: 'quarter', defaultH: 4, gate: (s) => !!s.tribeCare?.hasPeople },
   { id: 'quick-stats',       label: 'Quick Stats',           Component: QuickStatsWidget,       width: 'quarter', defaultH: 3, gate: (s) => s.apps.length > 0 },
   { id: 'decision-log',      label: 'Decision Log',          Component: DecisionLogWidget,      width: 'quarter', defaultH: 4 },
-  { id: 'activity-streak',   label: 'Activity Streak',       Component: ActivityStreakWidget,   width: 'third',   defaultH: 3, gate: (s) => s.usage?.currentStreak > 0 || s.usage?.longestStreak > 0 },
   { id: 'hourly-activity',   label: 'Activity by Hour',      Component: HourlyActivityWidget,   width: 'full',    defaultH: 4, gate: (s) => !!s.usage?.hourlyActivity && s.usage.hourlyActivity.some((v) => v > 0) },
   { id: 'feeds',             label: 'Feeds Digest',          Component: FeedsWidget,            width: 'quarter', defaultH: 4, gate: (s) => (s.feeds?.totalFeeds ?? 0) > 0 },
   { id: 'meatspace-streak',  label: 'Health Logging Streak', Component: MeatSpaceStreakWidget,  width: 'third',   defaultH: 4, gate: (s) => (s.meatspaceLogging?.totalLogged ?? 0) > 0 },

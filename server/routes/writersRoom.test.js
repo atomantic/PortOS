@@ -20,6 +20,7 @@ vi.mock('../services/writersRoom/local.js', () => ({
   createExercise: vi.fn(async (data) => ({ id: 'wr-ex-new', ...data })),
   finishExercise: vi.fn(async (id) => ({ id, status: 'finished' })),
   discardExercise: vi.fn(async (id) => ({ id, status: 'discarded' })),
+  promoteExercise: vi.fn(async (id) => ({ exercise: { id, promotedAt: '2026-01-01T00:00:00.000Z' }, work: { id: 'wr-work-1' } })),
   ensureWorkMediaCollection: vi.fn(async () => ({ id: 'col-1' })),
 }));
 
@@ -263,6 +264,12 @@ describe('writersRoom routes', () => {
       const r = await request(app).post('/api/writers-room/exercises/wr-ex-1/discard');
       expect(r.status).toBe(200);
       expect(svc.discardExercise).toHaveBeenCalledWith('wr-ex-1');
+    });
+
+    it('POST /exercises/:id/promote hits the promotion handler', async () => {
+      const r = await request(app).post('/api/writers-room/exercises/wr-ex-1/promote');
+      expect(r.status).toBe(200);
+      expect(svc.promoteExercise).toHaveBeenCalledWith('wr-ex-1');
     });
   });
 

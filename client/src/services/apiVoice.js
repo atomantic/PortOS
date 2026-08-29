@@ -27,3 +27,5 @@ export const testTts = (text, voice, engine) => {
 export const getTtsStatus = (options) => api.get('/voice/tts/status', options);
 export const unloadKokoroTts = (options) => api.post('/voice/tts/unload', {}, options);
 export const controlWhisper = (action, options) => api.post('/voice/whisper', { action }, options);
+export const getFaceTimeStatus = (options) => api.get('/voice/facetime/status', options);
+export const controlFaceTime = (action, options) => api.post(`/voice/facetime/${action}`, {}, options);

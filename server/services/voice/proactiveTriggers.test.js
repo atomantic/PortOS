@@ -24,6 +24,9 @@ import {
   formatTaskCompletionLine,
   deriveTaskSpeechLabel,
   wireProactiveTriggers,
+  formatEscalationOpeningLine,
+  escalateAfterMs,
+  DEFAULT_ESCALATE_AFTER_MINUTES,
   RATE_LIMIT_MS,
 } from './proactiveTriggers.js';
 
@@ -456,5 +459,117 @@ describe('wireProactiveTriggers', () => {
     cosEvents.emit('tasks:changed', taskUpdate('completed'));
     await flush();
     expect(speak).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('critical notification call escalation', () => {
+  const critical = (overrides = {}) => ({
+    id: 'notification-1',
+    priority: 'critical',
+    title: 'Nightly backup failed',
+    description: 'Three consecutive nights.',
+    ...overrides,
+  });
+
+  let unwire;
+  let requestCall;
+  let readNotifications;
+  const speak = vi.fn(async () => ({ ok: true }));
+
+  const wire = () => {
+    unwire = wireProactiveTriggers({ io: {}, speak, requestCall, readNotifications });
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    requestCall = vi.fn(async () => ({ placed: true, reason: null }));
+    readNotifications = vi.fn(async () => [critical()]);
+    getVoiceConfig.mockResolvedValue({
+      enabled: true,
+      llm: { codeAgent: { announceOnComplete: true } },
+      facetime: { escalateCritical: true, escalateAfterMinutes: 10 },
+    });
+  });
+
+  afterEach(() => {
+    unwire?.();
+    unwire = null;
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  // The config read that arms the timer is async, so let it settle before
+  // advancing the fake clock.
+  const settle = async () => { await vi.advanceTimersByTimeAsync(0); };
+
+  it('falls back to the documented delay when the setting is absent or nonsense', () => {
+    expect(escalateAfterMs({})).toBe(DEFAULT_ESCALATE_AFTER_MINUTES * 60_000);
+    expect(escalateAfterMs({ facetime: { escalateAfterMinutes: 0 } })).toBe(DEFAULT_ESCALATE_AFTER_MINUTES * 60_000);
+    expect(escalateAfterMs({ facetime: { escalateAfterMinutes: 25 } })).toBe(25 * 60_000);
+  });
+
+  it('calls only after the delay, and only while the notification is still unread', async () => {
+    wire();
+    notificationEvents.emit('added', critical());
+    await settle();
+
+    // The waiting period is the point: a user who reads it in time is not rung.
+    await vi.advanceTimersByTimeAsync(9 * 60_000);
+    expect(requestCall).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(requestCall).toHaveBeenCalledWith(expect.objectContaining({
+      requireMindGrant: false,
+      source: 'critical-notification',
+      openingLine: expect.stringContaining('Nightly backup failed'),
+    }));
+  });
+
+  it('does not call when the notification was read during the wait', async () => {
+    readNotifications = vi.fn(async () => []);
+    wire();
+    notificationEvents.emit('added', critical());
+    await settle();
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(requestCall).not.toHaveBeenCalled();
+  });
+
+  it('ignores anything below critical', async () => {
+    wire();
+    notificationEvents.emit('added', critical({ priority: 'high' }));
+    await settle();
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    expect(requestCall).not.toHaveBeenCalled();
+  });
+
+  it('stays off unless escalateCritical is enabled, re-read when the timer fires', async () => {
+    // The setting is checked at fire time, so turning it off during the wait
+    // cancels the call rather than ringing on a stale decision.
+    wire();
+    notificationEvents.emit('added', critical());
+    await settle();
+    getVoiceConfig.mockResolvedValue({ enabled: true, facetime: { escalateCritical: false, escalateAfterMinutes: 10 } });
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(requestCall).not.toHaveBeenCalled();
+  });
+
+  it('arms one timer per notification and drops them all on unwire', async () => {
+    wire();
+    notificationEvents.emit('added', critical());
+    notificationEvents.emit('added', critical());
+    await settle();
+    unwire();
+    unwire = null;
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    expect(requestCall).not.toHaveBeenCalled();
+  });
+
+  it('keeps the spoken opening line inside the call request bound', () => {
+    const line = formatEscalationOpeningLine(critical({
+      title: 'T'.repeat(400),
+      description: 'D'.repeat(400),
+    }));
+    expect(line.length).toBeLessThanOrEqual(400);
+    expect(formatEscalationOpeningLine({ priority: 'critical' })).toBe('');
   });
 });

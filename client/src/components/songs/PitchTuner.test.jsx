@@ -9,9 +9,13 @@ const analyserClose = vi.fn();
 const trackerStop = vi.fn();
 let lastOnUpdate = null;
 
-vi.mock('../../lib/audioRecorder.js', () => ({
-  createStreamAnalyser: vi.fn(() => ({ analyser: { id: 'analyser' }, context: {}, close: analyserClose })),
-}));
+vi.mock('../../lib/audioRecorder.js', async (importActual) => {
+  const actual = await importActual(); // keep the real openAnalysisMic / getSettings read-back
+  return {
+    ...actual,
+    createStreamAnalyser: vi.fn(() => ({ analyser: { id: 'analyser' }, context: {}, close: analyserClose })),
+  };
+});
 
 vi.mock('../../lib/pitchDetect.js', async (importActual) => {
   const actual = await importActual(); // keep the real tuningQuality
@@ -98,11 +102,32 @@ describe('PitchTuner', () => {
 
     fireEvent.click(screen.getByText('Tune'));
     await waitFor(() => expect(createPitchTracker).toHaveBeenCalled());
-    expect(getUserMedia).toHaveBeenCalledWith({ audio: true });
+    // Pitch analysis opens the mic with the browser processing chain requested
+    // off — AGC/NS/AEC all corrupt the signal the tracker reads.
+    expect(getUserMedia).toHaveBeenCalledWith({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+    });
 
     fireEvent.click(screen.getByText('Stop'));
     expect(trackerStop).toHaveBeenCalled();
     expect(analyserClose).toHaveBeenCalled();
     expect(ownTracks[0].stop).toHaveBeenCalled(); // the mic we opened is released
+  });
+
+  it('warns when the browser kept its processing chain on, and stays quiet otherwise', async () => {
+    const withSettings = (settings) => ({
+      getTracks: () => [{ stop: vi.fn(), getSettings: () => settings }],
+    });
+
+    // Honored constraints (plus an unreported stage) → no warning.
+    const clean = render(<PitchTuner stream={withSettings({ echoCancellation: false, noiseSuppression: false })} />);
+    expect(screen.queryByText(/Browser audio processing is on/)).toBeNull();
+    clean.unmount();
+
+    // AGC survived the request → the readout says why the reading may drift.
+    render(<PitchTuner stream={withSettings({ autoGainControl: true, noiseSuppression: false })} />);
+    await waitFor(() => expect(
+      screen.getByText(/Browser audio processing is on \(automatic gain control\)/),
+    ).toBeTruthy());
   });
 });

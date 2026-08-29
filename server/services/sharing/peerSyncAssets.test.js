@@ -38,6 +38,7 @@ const {
   buildMusicVideoAssetManifest,
   buildProjectAssetManifest,
   buildBoardAssetManifest,
+  buildFableLoomAssetManifest,
   inflightPulls,
   pullMissingAssetsFromPeer,
 } = await import('./peerSyncAssets.js');
@@ -298,6 +299,37 @@ describe('buildBoardAssetManifest — video items (#4188)', () => {
     });
     expect(manifest).toContainEqual(expect.objectContaining({ filename: 'render.png', kind: 'image', sha256: sha(imageBytes) }));
     expect(manifest).toContainEqual(expect.objectContaining({ filename: 'clip.mp4', kind: 'video', sha256: sha(videoBytes) }));
+    expect(manifest).toHaveLength(2);
+  });
+});
+
+describe('buildFableLoomAssetManifest — scene renders', () => {
+  beforeEach(() => {
+    tempRoot = mkdtempSync(join(tmpdir(), 'portos-fableloom-assets-'));
+  });
+  afterEach(() => {
+    if (tempRoot) rmSync(tempRoot, { recursive: true, force: true });
+  });
+
+  it('bundles and deduplicates scene stills plus managed video-history clips', async () => {
+    const imageBytes = Buffer.from('scene-image');
+    const videoBytes = Buffer.from('scene-video');
+    writeImage('scene.png', imageBytes);
+    writeVideo('video-1.mp4', videoBytes);
+
+    const manifest = await buildFableLoomAssetManifest({
+      episodes: [
+        { nodes: [{ id: 'node-1', image: 'scene.png', videoHistoryId: 'video-1' }] },
+        { nodes: [{ id: 'node-2', image: 'scene.png', videoHistoryId: 'video-1' }] },
+      ],
+    });
+
+    expect(manifest).toContainEqual(expect.objectContaining({
+      filename: 'scene.png', kind: 'image', sha256: sha(imageBytes),
+    }));
+    expect(manifest).toContainEqual({
+      filename: 'video-1.mp4', kind: 'video', sha256: sha(videoBytes),
+    });
     expect(manifest).toHaveLength(2);
   });
 });

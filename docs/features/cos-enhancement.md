@@ -138,6 +138,50 @@ mind arbitrary shell, filesystem, or general API access. Broader PortOS APIs
 remain governed by their own authenticated route contracts and are not silently
 made callable by enabling task filing.
 
+## Persistent Mind phone calls
+
+`voice.call-user` is the mind's only outward-reaching authority, and like every
+other grant it is **off by default** — an install upgrading with the mind
+already running gains nothing until the user turns it on in **Mind → Tools**.
+It lets the mind place a FaceTime Audio call to the single handle configured in
+**Settings → Voice → FaceTime Audio**. The request the model returns
+(`callRequest: { reason, openingLine }`) carries no recipient, so a confused or
+compromised turn cannot dial anyone else.
+
+The gate lives in `server/services/persistentMindCallCapability.js` and runs
+*after* inference. A call is placed only when all of these hold:
+
+| Check | Suppression reason |
+|---|---|
+| The grant is on (re-read from stored config) | `not-granted` |
+| The optional **FaceTime** feature is enabled | `feature-disabled` |
+| Voice is enabled and an identity is saved | `voice-disabled`, `identity-unconfigured` |
+| No browser tab can speak the message instead | `tab-available` |
+| The user's local time is outside voice quiet hours | `quiet-hours` |
+| No call is already up | `call-in-progress` |
+| ≥30 minutes since the last call, ≤3 calls in the last 24 h | `too-soon`, `rate-capped` |
+| A call-host tab is attached and the helper dials | `no-call-host`, `dial-failed` |
+
+The caps are counted in durable Persistent Mind state (`callHistory`), so a
+restart, a crash, or a supervisor rewire cannot hand back a fresh allowance. The
+budget is spent only on a call that actually went out. Every decision — placed
+or suppressed, and why — is appended to the trajectory as `mind.call.requested`
+plus `mind.call.placed` / `mind.call.suppressed`; the dialed handle is never
+written there. When a request is refused, the turn's reply is appended with the
+reason, so the mind cannot leave the user waiting for a phone that never rings.
+
+A placed call runs with the mind's persona and a bounded briefing of its
+trajectory, speaks the `openingLine` the moment the far end picks up, and hands
+the transcript back as a Persistent Mind message on hangup, so the next wake
+knows what was said.
+
+**Critical-notification escalation** (Settings → Voice) uses the same gate and
+the same budget, but is authorized by its own `facetime.escalateCritical`
+setting rather than by the mind's grant. When a `critical` notification is
+still unread after `facetime.escalateAfterMinutes` (default 10) and no voice
+tab is available, PortOS asks to ring the user with the notification as the
+opening line. Off by default.
+
 ## Test Coverage
 
 | Test File | Module |

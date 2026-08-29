@@ -158,6 +158,51 @@ describe('AI Toolkit runner service', () => {
     });
   });
 
+  it('classifies an injected missing-key prerequisite as an authentication failure', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const provider = {
+      id: 'nvidia-kimi',
+      name: 'NVIDIA Kimi K2.5',
+      endpoint: 'https://integrate.api.nvidia.com/v1',
+      defaultModel: 'moonshotai/kimi-k2.5',
+    };
+    const fetch = vi.fn();
+    vi.stubGlobal('fetch', fetch);
+    const runner = createRunnerService({
+      dataDir,
+      hooks: {
+        ensureProviderReady: async () => ({
+          success: false,
+          error: 'Authentication unavailable for NVIDIA Kimi K2.5: API key is not set.',
+        }),
+      },
+    });
+    let done;
+    const completed = new Promise((resolve) => { done = resolve; });
+
+    await runner.executeApiRun({
+      runId: 'run-missing-api-key',
+      provider,
+      model: null,
+      prompt: 'hello',
+      workspacePath: process.cwd(),
+      screenshots: [],
+      onData: undefined,
+      onComplete: done,
+    });
+
+    await expect(completed).resolves.toMatchObject({
+      success: false,
+      errorCategory: 'auth-error',
+      errorAnalysis: expect.objectContaining({
+        actionable: true,
+        requiresFallback: true,
+      }),
+    });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('records the nested cause of a pre-header transport failure', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
     tempDirs.push(dataDir);

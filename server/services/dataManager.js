@@ -110,6 +110,9 @@ export const CATEGORIES = {
   'privacy': { label: 'Privacy', description: 'Data-broker opt-out records and request history', archivable: true, deletable: false },
   'prompts': { label: 'Prompts', description: 'AI prompt templates', archivable: false, deletable: false },
   'python': { label: 'Python Runtime', description: 'Managed virtualenv for local ML tooling — rebuilt on the next Python-backed run (re-downloads several GB of wheels)', archivable: false, deletable: true, purgeScope: 'category' },
+  // A pasted or URL-fetched book is the user's only copy — the shelf is not a
+  // cache of anything re-fetchable, so it is neither archivable nor deletable.
+  'rapid-reader-library': { label: 'Rapid Reader Shelf', description: 'Saved books for Rapid Reader — pasted and URL-imported prose kept on this machine, not regenerable', archivable: false, deletable: false },
   'repos': { label: 'Cloned Repos', description: 'Git repositories cloned by agents', archivable: false, deletable: true, purgeScope: 'category' },
   'review': { label: 'Review', description: 'Review hub items', archivable: true, deletable: true, purgeScope: 'category' },
   'runs': { label: 'AI Runs', description: 'Agent run logs and outputs', archivable: true, deletable: true, purgeScope: 'category' },

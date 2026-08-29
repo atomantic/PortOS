@@ -3,9 +3,9 @@
  *
  * CRUD for looms/episodes/nodes plus the AI lanes (weave/branch/feedback/review/play)
  * and the deterministic graph validation. Every AI endpoint is a direct
- * user action in the same request (AI Provider Usage Policy). Scene images
- * ride the existing `/api/image-gen/generate` queue with a `fableLoom`
- * destination tag — there is no image endpoint here.
+ * user action in the same request (AI Provider Usage Policy). Scene media
+ * rides the shared image/video generation queues with a `fableLoom`
+ * destination tag — there are no bespoke generation endpoints here.
  */
 
 import { Router } from 'express';
@@ -24,6 +24,9 @@ import {
   playTurnSchema,
   reformatSchema,
   reviewSchema,
+  seriesPlanFeedbackSchema,
+  seriesPlanGenerateSchema,
+  seriesPlanReviewSchema,
   transitionCreateSchema,
   transitionPatchSchema,
   weaveSchema,
@@ -40,11 +43,14 @@ import {
   deleteNode,
   deleteNodeTransition,
   feedbackEpisode,
+  feedbackSeriesPlan,
+  generateSeriesPlan,
   getLoom,
   listLoomSummaries,
   playTurn,
   reformatEpisodeScenes,
   reviewEpisode,
+  reviewSeriesPlan,
   updateEpisode,
   updateLoom,
   updateNode,
@@ -87,6 +93,23 @@ router.delete('/:id', asyncHandler(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// --- Series plan ------------------------------------------------------------
+
+router.post('/:id/plan/generate', asyncHandler(async (req, res) => {
+  const input = validateRequest(seriesPlanGenerateSchema, req.body);
+  res.json(await generateSeriesPlan(req.params.id, input));
+}));
+
+router.post('/:id/plan/review', asyncHandler(async (req, res) => {
+  const input = validateRequest(seriesPlanReviewSchema, req.body);
+  res.json(await reviewSeriesPlan(req.params.id, input));
+}));
+
+router.post('/:id/plan/feedback', asyncHandler(async (req, res) => {
+  const input = validateRequest(seriesPlanFeedbackSchema, req.body);
+  res.json(await feedbackSeriesPlan(req.params.id, input));
+}));
+
 // --- Episodes ---------------------------------------------------------------
 
 router.post('/:id/episodes', asyncHandler(async (req, res) => {
@@ -108,7 +131,10 @@ router.get('/:id/episodes/:episodeId/validate', asyncHandler(async (req, res) =>
   const loom = await getLoom(req.params.id);
   const episode = loom?.episodes.find((e) => e.id === req.params.episodeId);
   if (!episode) throw new ServerError('Episode not found', { status: 404, code: 'NOT_FOUND' });
-  res.json(analyzeEpisodeGraph(episode));
+  res.json(analyzeEpisodeGraph(episode, {
+    participationMode: loom.participationMode,
+    requireAudienceIntroduction: episode.id === loom.episodes[0]?.id,
+  }));
 }));
 
 // --- Nodes ------------------------------------------------------------------

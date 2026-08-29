@@ -7,7 +7,7 @@ import {
   Database, Brain, CheckCircle2, AlertCircle, Clock,
   RefreshCcw, Timer,
   Target, Sword, Fingerprint, HeartPulse, ChevronDown, ChevronRight,
-  Lock, Globe, Info, Sparkles, Film, Images, Library, BookOpen, FilePen, Music, Music2, Disc3, Clapperboard, Palette, BookText, FolderTree, Video
+  Lock, Globe, Info, Sparkles, Film, Images, Library, BookOpen, FilePen, Music, Music2, Disc3, Clapperboard, Palette, BookText, FolderTree, Video, Waypoints
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Pill from '../components/ui/Pill';
@@ -528,6 +528,7 @@ const SYNC_CATEGORY_META = [
   { key: 'mediaCollections', label: 'Media Collections', icon: Images, description: 'Per-universe/series image + video buckets' },
   { key: 'videoHistory', label: 'Video History', icon: Film, description: 'Generated-video metadata rows (so synced collection videos render)' },
   { key: 'storyBuilder', label: 'Story Builder', icon: BookOpen, description: 'Resumable Story Builder sessions you marked for cross-machine sync' },
+  { key: 'fableLoom', label: 'FableLoom', icon: Waypoints, description: 'Branching stories, series plans, episode graphs, and rendered scene references' },
   { key: 'authors', label: 'Authors', icon: FilePen, description: 'Author personas + headshots used as series bylines (PostgreSQL)' },
   { key: 'artists', label: 'Artists', icon: Music, description: 'Music artist personas + portraits (PostgreSQL)' },
   { key: 'albums', label: 'Albums', icon: Disc3, description: 'Music albums + cover art and ordered track lists (PostgreSQL)' },
@@ -544,9 +545,9 @@ const SYNC_CATEGORY_META = [
 ];
 
 // Snapshot categories — exclude the per-record / delta-based categories that
-// have no 60s snapshot checksum: brain + memory (delta), catalog + authors/music
-// (PostgreSQL, per-record peer-push only — no snapshot loop).
-const NON_SNAPSHOT_KEYS = new Set(['brain', 'memory', 'catalog', 'authors', 'artists', 'albums', 'tracks', 'creativeDirectorProjects', 'moodBoards', 'writersRoomWorks', 'writersRoomFolders', 'writersRoomExercises', 'musicVideoProjects', 'commissionFeedback', 'creativeCommissions']);
+// have no 60s snapshot checksum: brain + memory (delta), catalog, and creative
+// record kinds handled by the per-record peer-push pipeline.
+const NON_SNAPSHOT_KEYS = new Set(['brain', 'memory', 'catalog', 'authors', 'artists', 'albums', 'tracks', 'creativeDirectorProjects', 'moodBoards', 'fableLoom', 'writersRoomWorks', 'writersRoomFolders', 'writersRoomExercises', 'musicVideoProjects', 'commissionFeedback', 'creativeCommissions']);
 const SNAPSHOT_CATEGORIES = SYNC_CATEGORY_META.filter(m => !NON_SNAPSHOT_KEYS.has(m.key));
 
 // Indicator backed by REAL coverage diffing (record IDs vs confirmed pushes),

@@ -998,6 +998,23 @@ describe('videoGen routes', () => {
       }));
     });
 
+    it('forwards a fableLoom i2v tag into job.params alongside the resolved frame', async () => {
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'the gate slowly opens',
+        mode: 'image',
+        sourceImageFile: 'scene-image.png',
+        fableLoom: JSON.stringify({ loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1' }),
+      });
+      expect(r.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'video',
+        params: expect.objectContaining({
+          sourceImagePath: '/mock/images/scene-image.png',
+          fableLoom: { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1' },
+        }),
+      }));
+    });
+
     it('rejects a musicVideo i2v render when the reference frame cannot be resolved (no silent t2v)', async () => {
       // A stale/deleted gallery file resolves to null (mustExist defaults true).
       resolveGalleryImage.mockReturnValueOnce(null);

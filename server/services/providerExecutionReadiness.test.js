@@ -28,16 +28,39 @@ describe('provider execution readiness', () => {
     mocks.isMtplx.mockReturnValue(false);
   });
 
-  it('leaves providers without a managed local daemon alone', async () => {
-    const provider = { id: 'remote', type: 'api' };
+  it('leaves configured providers without a managed local daemon alone', async () => {
+    const provider = { id: 'remote', type: 'api', endpoint: 'https://api.example.com/v1', apiKey: 'sk-example' };
 
     await expect(ensureProviderReadyForExecution(provider)).resolves.toEqual({ success: true });
     expect(mocks.ensureOllama).not.toHaveBeenCalled();
     expect(mocks.ensureMtplx).not.toHaveBeenCalled();
   });
 
+  it('rejects a public API provider without its required key before fetch', async () => {
+    const provider = {
+      id: 'nvidia-kimi',
+      name: 'NVIDIA Kimi K2.5',
+      type: 'api',
+      endpoint: 'https://integrate.api.nvidia.com/v1',
+      apiKey: '',
+    };
+
+    await expect(ensureProviderReadyForExecution(provider)).resolves.toEqual({
+      success: false,
+      error: 'Authentication unavailable for NVIDIA Kimi K2.5: API key is not set. Add it in Settings > AI Providers.',
+    });
+    expect(mocks.ensureOllama).not.toHaveBeenCalled();
+    expect(mocks.ensureMtplx).not.toHaveBeenCalled();
+  });
+
+  it('keeps private-network API endpoints keyless', async () => {
+    const provider = { id: 'peer-llm', type: 'api', endpoint: 'http://desk.ts.net:11434/v1', apiKey: '' };
+
+    await expect(ensureProviderReadyForExecution(provider)).resolves.toEqual({ success: true });
+  });
+
   it('uses Ollama readiness for an Ollama provider', async () => {
-    const provider = { id: 'ollama', type: 'api' };
+    const provider = { id: 'ollama', type: 'api', endpoint: 'http://localhost:11434/v1' };
     mocks.isOllama.mockReturnValue(true);
 
     await expect(ensureProviderReadyForExecution(provider)).resolves.toEqual({ success: true });
@@ -46,7 +69,7 @@ describe('provider execution readiness', () => {
   });
 
   it('wakes MTPLX for an MTPLX provider', async () => {
-    const provider = { id: 'mtplx', type: 'api' };
+    const provider = { id: 'mtplx', type: 'api', endpoint: 'http://127.0.0.1:8000/v1' };
     mocks.isMtplx.mockReturnValue(true);
 
     await expect(ensureProviderReadyForExecution(provider)).resolves.toEqual({ success: true });
@@ -55,7 +78,7 @@ describe('provider execution readiness', () => {
   });
 
   it('keeps the failing runtime in the error shown by the runner', async () => {
-    const provider = { id: 'mtplx', type: 'api' };
+    const provider = { id: 'mtplx', type: 'api', endpoint: 'http://127.0.0.1:8000/v1' };
     mocks.isMtplx.mockReturnValue(true);
     mocks.ensureMtplx.mockResolvedValue({ success: false, error: 'checkpoint failed to load' });
 

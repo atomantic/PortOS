@@ -18,7 +18,7 @@ vi.mock('../services/sharing/peerSync.js', () => ({
   ERR_NOT_FOUND: 'PEER_SYNC_SUBSCRIPTION_NOT_FOUND',
   ERR_VALIDATION: 'PEER_SYNC_SUBSCRIPTION_VALIDATION',
   ERR_SCHEMA_VERSION_AHEAD: 'PEER_SYNC_SCHEMA_VERSION_AHEAD',
-  PEER_SUBSCRIBABLE_KINDS: Object.freeze(['universe', 'series', 'mediaCollection']),
+  PEER_SUBSCRIBABLE_KINDS: Object.freeze(['universe', 'series', 'mediaCollection', 'fableLoom']),
 }));
 
 vi.mock('../services/sharing/integrity.js', () => ({
@@ -86,6 +86,30 @@ describe('peer-sync routes', () => {
       expect(svc.applyIncomingPush).toHaveBeenCalledWith(expect.objectContaining({
         kind: 'universe',
         sourceInstanceId: 'peer-a',
+      }));
+    });
+
+    it('accepts a FableLoom push with scene-media assets', async () => {
+      svc.applyIncomingPush.mockResolvedValue({
+        missingAssets: [],
+        reverseSubscriptionCreated: true,
+        ackedDeletesUpTo: 0,
+      });
+      const res = await request(buildApp())
+        .post('/api/peer-sync/push')
+        .send({
+          kind: 'fableLoom',
+          record: { id: 'loom-1', name: 'Example Story', episodes: [] },
+          assetManifest: [
+            { filename: 'scene.png', kind: 'image', sha256: 'a'.repeat(64) },
+            { filename: 'scene.mp4', kind: 'video', sha256: 'b'.repeat(64) },
+          ],
+          sourceInstanceId: 'peer-a',
+        });
+      expect(res.status).toBe(200);
+      expect(svc.applyIncomingPush).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'fableLoom',
+        record: expect.objectContaining({ id: 'loom-1' }),
       }));
     });
 
@@ -474,6 +498,22 @@ describe('peer-sync routes', () => {
         .send({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
       expect(res.status).toBe(201);
       expect(res.body.subscription.peerId).toBe('peer-a');
+    });
+
+    it('accepts a per-record FableLoom subscription', async () => {
+      svc.subscribePeer.mockResolvedValue({
+        id: 'peer-fableLoom-loom-1-peer-a',
+        peerId: 'peer-a',
+        recordKind: 'fableLoom',
+        recordId: 'loom-1',
+      });
+      const res = await request(buildApp())
+        .post('/api/peer-sync/subscriptions')
+        .send({ peerId: 'peer-a', recordKind: 'fableLoom', recordId: 'loom-1' });
+      expect(res.status).toBe(201);
+      expect(svc.subscribePeer).toHaveBeenCalledWith(expect.objectContaining({
+        recordKind: 'fableLoom', recordId: 'loom-1',
+      }));
     });
 
     it('400s when recordKind is "issue" (only universe + series subscribable)', async () => {

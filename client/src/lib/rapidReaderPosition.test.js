@@ -3,6 +3,7 @@ import {
   RAPID_READER_PROGRESS_KEY,
   clearRapidReaderProgress,
   rapidReaderDocumentId,
+  rapidReaderWords,
   rapidReaderWordIndexAtCursor,
   readRapidReaderProgress,
   writeRapidReaderProgress,
@@ -22,6 +23,18 @@ describe('rapidReaderWordIndexAtCursor', () => {
     expect(rapidReaderWordIndexAtCursor(text, 5)).toBe(1);
     expect(rapidReaderWordIndexAtCursor(text, 8)).toBe(1);
     expect(rapidReaderWordIndexAtCursor(text, text.length)).toBe(2);
+  });
+});
+
+describe('rapidReaderWords', () => {
+  it('folds dangling punctuation into the nearest readable word', () => {
+    expect(rapidReaderWords('She said " hello ," then paused …').map(({ text }) => text)).toEqual([
+      'She', 'said', '"hello,"', 'then', 'paused…',
+    ]);
+  });
+
+  it('does not count punctuation-only frames as words', () => {
+    expect(rapidReaderWords('wait — really?').map(({ text }) => text)).toEqual(['wait—', 'really?']);
   });
 });
 

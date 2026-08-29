@@ -276,6 +276,38 @@ export const ideaInputSchema = z.object({
   tags: z.array(z.string().max(50)).optional()
 });
 
+// IdeaLoom lists are intentionally distinct from native Brain ideas. They are
+// machine-local list documents, so neither their shape nor their sync metadata
+// belongs to the federated Brain entity schemas above.
+export const ideaLoomListStatusEnum = z.enum(['draft', 'completed']);
+
+export const ideaLoomListInputSchema = z.object({
+  prompt: z.string().min(1).max(10000),
+  title: z.string().min(1).max(200),
+  category: z.string().min(1).max(100),
+  status: ideaLoomListStatusEnum.optional().default('draft'),
+  help: z.string().max(5000).optional(),
+  ideas: z.array(z.string().trim().min(1).max(2000)).max(500)
+}).strict();
+
+// Settings deliberately contain only integration switches and a vault id.
+// Paths and note hashes stay on local list records and never cross this API.
+export const ideaLoomSettingsInputSchema = z.object({
+  enabled: z.boolean().optional(),
+  obsidianVaultId: z.string().uuid().nullable().optional(),
+  autoSync: z.boolean().optional()
+}).strict();
+
+export const ideaLoomImportInputSchema = z.preprocess((value) => value ?? {}, z.object({}).strict());
+
+// `recreateMissing` is the explicit recovery switch for a vault note the user
+// deleted. It is only ever reachable from a user-initiated sync request —
+// automatic sync omits it, so it can never resurrect a deleted note on its own.
+export const ideaLoomSyncInputSchema = z.preprocess((value) => value ?? {}, z.object({
+  listId: z.string().uuid().optional(),
+  recreateMissing: z.boolean().optional().default(false)
+}).strict());
+
 // Create/Update Admin input schema
 export const adminInputSchema = z.object({
   title: z.string().min(1).max(200),

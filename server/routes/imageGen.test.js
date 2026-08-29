@@ -10,6 +10,9 @@ import { writeFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join as pathJoin } from 'path';
 
+const attachNodeImage = vi.hoisted(() => vi.fn(async () => ({})));
+vi.mock('../services/fableLoom/records.js', () => ({ attachNodeImage }));
+
 vi.mock('../services/imageGen/index.js', () => ({
   checkConnection: vi.fn(),
   generateImage: vi.fn(),
@@ -227,6 +230,29 @@ describe('Image Gen Routes', () => {
       expect(response.status).toBe(200);
       expect(response.body.path).toBe('/data/images/test.png');
       expect(imageGen.generateImage).toHaveBeenCalledWith(expect.objectContaining({ prompt: 'a fantasy landscape' }));
+    });
+
+    it('durably attaches a synchronous FableLoom scene render', async () => {
+      imageGen.generateImage.mockResolvedValue({
+        generationId: 'gen-scene-001',
+        filename: 'scene.png',
+        path: '/data/images/scene.png',
+      });
+
+      const response = await request(app)
+        .post('/api/image-gen/generate')
+        .send({
+          prompt: 'an example scene',
+          fableLoom: { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1' },
+        });
+
+      expect(response.status).toBe(200);
+      expect(attachNodeImage).toHaveBeenCalledWith(
+        'loom-1',
+        'ep-1',
+        'node-1',
+        { filename: 'scene.png', jobId: 'gen-scene-001' },
+      );
     });
 
     it('accepts a missing/empty prompt (i2i / edit / unconditional), defaulting it to empty', async () => {

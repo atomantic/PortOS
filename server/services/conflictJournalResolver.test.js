@@ -21,6 +21,7 @@ const resolver = await import('./conflictJournalResolver.js');
 const universeSvc = await import('./universeBuilder.js');
 const collSvc = await import('./mediaCollections.js');
 const issueSvc = await import('./pipeline/issues.js');
+const fableLoomSvc = await import('./fableLoom/index.js');
 const cj = await import('../lib/conflictJournal.js');
 
 afterAll(() => rmSync(TEST_DATA_ROOT, { recursive: true, force: true }));
@@ -158,6 +159,26 @@ describe('conflictJournalResolver', () => {
     const entryId = await seedEntry(u.id, { id: u.id, name: 'X' });
     await expect(resolver.resolveConflict(entryId, { action: 'merge-fields', fields: ['id'] }))
       .rejects.toMatchObject({ code: resolver.ERR_VALIDATION });
+  });
+
+  it('restore-all reapplies an archived FableLoom story graph', async () => {
+    const loom = await fableLoomSvc.createLoom({ name: 'Remote story', premise: 'Remote premise' });
+    const entryId = await seedEntry(loom.id, {
+      ...loom,
+      name: 'Local story',
+      premise: 'Local premise',
+      episodes: [{
+        id: 'ep-local',
+        number: 1,
+        title: 'Local opening',
+        nodes: [{ id: 'node-local', title: 'A local scene' }],
+      }],
+    }, 'fableLoom');
+
+    await resolver.resolveConflict(entryId, { action: 'restore-all' });
+    const restored = await fableLoomSvc.getLoom(loom.id);
+    expect(restored).toMatchObject({ name: 'Local story', premise: 'Local premise' });
+    expect(restored.episodes[0]).toMatchObject({ id: 'ep-local', title: 'Local opening' });
   });
 
   it('discard marks resolved without touching the record', async () => {

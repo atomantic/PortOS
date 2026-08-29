@@ -16,6 +16,28 @@ export const VOICE_DEFAULTS = Object.freeze({
   trigger: 'push-to-talk',
   hotkey: 'Space',
 
+  // FaceTime control-plane configuration is machine-local.  It is deliberately
+  // nested under voice rather than the federation-facing instance profile.
+  facetime: {
+    targetHandle: '',
+    targetName: '',
+    blackHole2chLabel: 'BlackHole 2ch',
+    blackHole16chLabel: 'BlackHole 16ch',
+    // Hard ceiling on one call, so a line left open cannot run all day.
+    maxCallMinutes: 15,
+    // Escalate an unread critical notification to a phone call when no browser
+    // tab can speak it. OFF by default: enabling the FaceTime feature must not
+    // by itself make an install start ringing the user.
+    escalateCritical: false,
+    escalateAfterMinutes: 10,
+    // Answer an inbound call from the configured identity automatically. OFF
+    // by default — same reasoning as escalateCritical: enabling the feature
+    // must never by itself make the Mac start picking up calls. The watcher
+    // that acts on this also requires a call-host tab attached (see
+    // callSession.js) — this flag alone changes nothing without one.
+    autoAnswer: false,
+  },
+
   stt: {
     // 'web-speech' (browser-native, zero-latency, no server process needed) is the
     // default. Falls back to 'whisper' (local whisper.cpp) for browsers without

@@ -69,9 +69,13 @@ describe('SeriesLoomsPanel', () => {
     await waitFor(() => expect(screen.getByText('Example Series — branching narrative')).toBeInTheDocument());
 
     await user.click(screen.getByRole('button', { name: /New branching narrative/ }));
+    await user.type(screen.getByLabelText('Communication medium'), 'A crystal radio.');
+    await user.click(screen.getByRole('button', { name: 'Create narrative' }));
     await waitFor(() => expect(api.createLoom).toHaveBeenCalledWith({
       name: 'Example Series — branching narrative',
       logline: 'A quiet town keeps a loud secret.',
+      participationMode: 'helper',
+      audienceCommunicationMedium: 'A crystal radio.',
       universeId: 'uni-1',
       seriesId: 'ser-1',
     }, { silent: true }));
@@ -86,8 +90,13 @@ describe('SeriesLoomsPanel', () => {
     await waitFor(() => expect(screen.getByText(/None yet/)).toBeInTheDocument());
 
     await user.click(screen.getByRole('button', { name: /New branching narrative/ }));
+    await user.selectOptions(screen.getByLabelText('Audience role'), 'protagonist');
+    await user.click(screen.getByRole('button', { name: 'Create narrative' }));
     await waitFor(() => expect(api.createLoom).toHaveBeenCalledWith(
-      expect.objectContaining({ universeId: null, seriesId: 'ser-2' }),
+      expect.objectContaining({
+        participationMode: 'protagonist', audienceCommunicationMedium: '',
+        universeId: null, seriesId: 'ser-2',
+      }),
       { silent: true },
     ));
   });

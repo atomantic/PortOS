@@ -24,21 +24,31 @@ const getSeriesMock = vi.hoisted(() => vi.fn(async (id) => ({ id })));
 vi.mock('../pipeline/series.js', () => ({ getSeries: getSeriesMock }));
 
 const {
-  LOOM_LIMITS, addEpisode, addNode, addNodeTransition, attachNodeImage, createLoom,
+  LOOM_LIMITS, addEpisode, addNode, addNodeTransition, attachNodeImage, attachNodeVideo, createLoom,
   deleteEpisode, deleteLoom, deleteNode, deleteNodeTransition, getLoom,
-  listLooms, listLoomSummaries, sanitizeLoom, updateEpisode, updateLoom,
+  listLooms, listLoomSummaries, mergeLoomsFromSync, pruneTombstonedLooms,
+  restoreLoom, sanitizeLoom, updateEpisode, updateLoom,
   updateNode, updateNodeTransition,
 } = await import('./records.js');
 const { _resetFableLoomBackend } = await import('./store.js');
+const conflictJournal = await import('../../lib/conflictJournal.js');
+const { registerSubscriptionAdapter, __resetSubscriptionAdapter } = await import('../sharing/recordEvents.js');
+const autoSubscribeMock = vi.fn(async () => []);
 
 beforeEach(() => {
   rmSync(join(TEST_DATA_ROOT, 'fableloom'), { recursive: true, force: true });
+  rmSync(join(TEST_DATA_ROOT, 'sharing'), { recursive: true, force: true });
+  rmSync(join(TEST_DATA_ROOT, 'conflict-journal'), { recursive: true, force: true });
+  conflictJournal.__resetBaseHashCacheForTests();
   _resetFableLoomBackend();
   getUniverseMock.mockClear().mockImplementation(async (id) => ({ id }));
   getSeriesMock.mockClear().mockImplementation(async (id) => ({ id }));
+  autoSubscribeMock.mockClear();
+  registerSubscriptionAdapter({ autoSubscribeRecordToAllPeers: autoSubscribeMock });
 });
 
 afterAll(() => {
+  __resetSubscriptionAdapter();
   rmSync(TEST_DATA_ROOT, { recursive: true, force: true });
 });
 
@@ -82,10 +92,43 @@ describe('sanitizeLoom', () => {
     expect(loom.episodes[0].startNodeId).toBe('n1');
   });
 
+  it('preserves single-cut video direction and camera movement metadata', () => {
+    const loom = sanitizeLoom({
+      id: 'loom-1',
+      name: 'X',
+      episodes: [{ id: 'ep-1', nodes: [{
+        id: 'n1', videoPrompt: 'A figure turns as the camera arcs.', cameraMovement: 'cinematic-arc',
+      }] }],
+    });
+    expect(loom.episodes[0].nodes[0]).toMatchObject({
+      videoPrompt: 'A figure turns as the camera arcs.', cameraMovement: 'cinematic-arc', playbackMode: 'decision',
+    });
+  });
+
+  it('keeps known playback modes and defaults legacy or invalid nodes to decision', () => {
+    const loom = sanitizeLoom({
+      id: 'loom-1', name: 'X', episodes: [{ id: 'ep-1', nodes: [
+        { id: 'n1', playbackMode: 'cut' },
+        { id: 'n2', playbackMode: 'unknown' },
+        { id: 'n3' },
+      ] }],
+    });
+    expect(loom.episodes[0].nodes.map((node) => node.playbackMode)).toEqual(['cut', 'decision', 'decision']);
+  });
+
   it('defaults the scene format and keeps only a known one', () => {
     expect(sanitizeLoom({ id: 'loom-1', name: 'X' }).format).toBe('prose');
     expect(sanitizeLoom({ id: 'loom-1', name: 'X', format: 'teleplay' }).format).toBe('teleplay');
     expect(sanitizeLoom({ id: 'loom-1', name: 'X', format: 'haiku' }).format).toBe('prose');
+  });
+
+  it('preserves legacy protagonist behavior and defaults old scenes to a disconnected channel', () => {
+    const loom = sanitizeLoom({
+      id: 'loom-1', name: 'X', episodes: [{ id: 'ep-1', nodes: [{ id: 'n1' }] }],
+    });
+    expect(loom.participationMode).toBe('protagonist');
+    expect(loom.audienceCommunicationMedium).toBe('');
+    expect(loom.episodes[0].nodes[0].audienceConnection).toBe('disconnected');
   });
 
   it('keeps a partial play pin but collapses an all-empty one to null', () => {
@@ -106,6 +149,38 @@ describe('sanitizeLoom', () => {
     expect(loom.episodes[0].nodes[0].image).toBeNull();
     expect(loom.episodes[0].nodes[1].image).toBe('render.png');
   });
+
+  it('sanitizes the series plan and clears episode references that no longer resolve', () => {
+    const loom = sanitizeLoom({
+      id: 'loom-1',
+      name: 'X',
+      episodes: [{ id: 'ep-1', number: 1 }],
+      seriesPlan: {
+        storyArc: 'A long transformation.',
+        plotPoints: [{ title: 'Midpoint', description: 'The truth lands.', episodeId: 'ep-1' }],
+        sideQuests: [{ title: 'Map', description: 'Find it.', status: 'bogus', startEpisodeId: 'gone', endEpisodeId: 'ep-1' }],
+      },
+    });
+    expect(loom.seriesPlan.storyArc).toBe('A long transformation.');
+    expect(loom.seriesPlan.plotPoints[0]).toMatchObject({ title: 'Midpoint', episodeId: 'ep-1' });
+    expect(loom.seriesPlan.plotPoints[0].id).toMatch(/^plot-/);
+    expect(loom.seriesPlan.sideQuests[0]).toMatchObject({ status: 'idea', startEpisodeId: null, endEpisodeId: 'ep-1' });
+  });
+
+  it('re-mints duplicate planning ids so each editable row remains addressable', () => {
+    const loom = sanitizeLoom({
+      id: 'loom-1', name: 'X',
+      seriesPlan: {
+        storyArc: '',
+        plotPoints: [
+          { id: 'plot-same', title: 'One', description: '' },
+          { id: 'plot-same', title: 'Two', description: '' },
+        ],
+        sideQuests: [],
+      },
+    });
+    expect(new Set(loom.seriesPlan.plotPoints.map((item) => item.id)).size).toBe(2);
+  });
 });
 
 describe('loom CRUD', () => {
@@ -113,6 +188,7 @@ describe('loom CRUD', () => {
     const loom = await makeLoom({ logline: 'A crown that remembers.', universeId: 'uni-1' });
     expect(loom.id).toMatch(/^loom-/);
     expect(loom.universeId).toBe('uni-1');
+    expect(autoSubscribeMock).toHaveBeenCalledWith('fableLoom', loom.id);
 
     expect((await listLooms()).map((l) => l.id)).toEqual([loom.id]);
 
@@ -124,6 +200,87 @@ describe('loom CRUD', () => {
 
     await deleteLoom(loom.id);
     expect(await getLoom(loom.id)).toBeNull();
+    expect(await getLoom(loom.id, { includeDeleted: true })).toMatchObject({
+      id: loom.id,
+      deleted: true,
+    });
+    expect(await listLooms()).toEqual([]);
+    expect(await listLooms({ includeDeleted: true })).toHaveLength(1);
+  });
+
+  it('merges peer records by updatedAt and lets tombstones converge', async () => {
+    const local = await makeLoom({ name: 'Local draft' });
+    const newer = {
+      ...local,
+      name: 'Peer draft',
+      updatedAt: '2099-01-01T00:00:00.000Z',
+    };
+    expect(await mergeLoomsFromSync([newer])).toEqual({ applied: true, count: 1 });
+    expect((await getLoom(local.id)).name).toBe('Peer draft');
+
+    const stale = { ...newer, name: 'Stale peer draft', updatedAt: '2000-01-01T00:00:00.000Z' };
+    expect(await mergeLoomsFromSync([stale])).toEqual({ applied: false, count: 0 });
+    expect((await getLoom(local.id)).name).toBe('Peer draft');
+
+    const tombstone = {
+      ...newer,
+      deleted: true,
+      deletedAt: '2100-01-01T00:00:00.000Z',
+      updatedAt: '2100-01-01T00:00:00.000Z',
+    };
+    expect(await mergeLoomsFromSync([tombstone])).toEqual({ applied: true, count: 1 });
+    expect(await getLoom(local.id)).toBeNull();
+  });
+
+  it('journals divergent story edits and can restore the authored snapshot', async () => {
+    const local = await makeLoom({ name: 'Local story', premise: 'Local premise' });
+    const base = { ...local, name: 'Shared story', premise: 'Shared premise' };
+    await conflictJournal.setSyncBaseHash(
+      'fableLoom',
+      local.id,
+      conflictJournal.contentHashForRecord('fableLoom', base),
+    );
+
+    const remote = {
+      ...local,
+      name: 'Remote story',
+      premise: 'Remote premise',
+      updatedAt: '2099-01-01T00:00:00.000Z',
+    };
+    await mergeLoomsFromSync([remote], {
+      source: { via: 'peer-push', peerId: 'peer-example' },
+    });
+
+    const entries = await conflictJournal.conflictJournalStore().loadAll();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      recordKind: 'fableLoom',
+      recordId: local.id,
+      source: { via: 'peer-push', peerId: 'peer-example' },
+      localSnapshot: { name: 'Local story', premise: 'Local premise' },
+      remoteSnapshot: { name: 'Remote story', premise: 'Remote premise' },
+    });
+
+    await restoreLoom(local.id, entries[0].localSnapshot);
+    expect(await getLoom(local.id)).toMatchObject({
+      name: 'Local story',
+      premise: 'Local premise',
+    });
+  });
+
+  it('hard-prunes only tombstones older than the safe federation cutoff', async () => {
+    const loom = await makeLoom();
+    await mergeLoomsFromSync([{
+      ...loom,
+      deleted: true,
+      deletedAt: '2099-01-01T00:00:00.000Z',
+      updatedAt: '2099-01-01T00:00:00.000Z',
+    }]);
+    expect(await conflictJournal.getSyncBaseHash('fableLoom', loom.id)).not.toBeNull();
+    expect(await pruneTombstonedLooms(Date.parse('2999-01-01T00:00:00.000Z')))
+      .toEqual({ pruned: 1 });
+    expect(await getLoom(loom.id, { includeDeleted: true })).toBeNull();
+    expect(await conflictJournal.getSyncBaseHash('fableLoom', loom.id)).toBeNull();
   });
 
   it('rejects creating a loom without a name', async () => {
@@ -160,6 +317,50 @@ describe('format and play settings round-trip', () => {
     const cleared = await updateLoom(loom.id, { playSettings: null });
     expect(cleared.playSettings).toBeNull();
     expect(cleared.format).toBe('teleplay');
+  });
+});
+
+describe('audience participation round-trip', () => {
+  it('requires a communication medium in helper mode and persists connection state', async () => {
+    await expect(makeLoom({ participationMode: 'helper' }))
+      .rejects.toMatchObject({ code: 'AUDIENCE_MEDIUM_REQUIRED' });
+
+    let loom = await makeLoom({
+      participationMode: 'helper',
+      audienceCommunicationMedium: 'A hand-cranked radio carried by the protagonist.',
+    });
+    expect(loom).toMatchObject({
+      participationMode: 'helper',
+      audienceCommunicationMedium: 'A hand-cranked radio carried by the protagonist.',
+    });
+    loom = await addEpisode(loom.id, { title: 'Pilot' });
+    loom = await addNode(loom.id, loom.episodes[0].id);
+    expect(loom.episodes[0].nodes[0]).toMatchObject({
+      audienceConnection: 'disconnected',
+      playbackMode: 'cut',
+    });
+    loom = await addNode(loom.id, loom.episodes[0].id, { audienceConnection: 'connected' });
+    expect(loom.episodes[0].nodes[1].audienceConnection).toBe('connected');
+
+    await expect(updateLoom(loom.id, { audienceCommunicationMedium: '' }))
+      .rejects.toMatchObject({ code: 'AUDIENCE_MEDIUM_REQUIRED' });
+  });
+});
+
+describe('series plan round-trip', () => {
+  it('persists ordered plot points and side quests without changing them on unrelated patches', async () => {
+    let loom = await makeLoom();
+    loom = await addEpisode(loom.id, { title: 'Pilot' });
+    const episodeId = loom.episodes[0].id;
+    const seriesPlan = {
+      storyArc: 'The courier learns to lead.',
+      plotPoints: [{ id: 'plot-1', title: 'Refusal', description: 'She turns away.', episodeId }],
+      sideQuests: [{ id: 'quest-1', title: 'The map', description: 'A hidden route.', status: 'planned', startEpisodeId: episodeId, endEpisodeId: null }],
+    };
+    const planned = await updateLoom(loom.id, { seriesPlan });
+    expect(planned.seriesPlan).toEqual(seriesPlan);
+    const renamed = await updateLoom(loom.id, { name: 'Renamed' });
+    expect(renamed.seriesPlan).toEqual(seriesPlan);
   });
 });
 
@@ -365,5 +566,27 @@ describe('attachNodeImage', () => {
     expect(await attachNodeImage(loom.id, episodeId, 'node-gone', { filename: 'x.png' })).toBeNull();
     expect(await attachNodeImage(loom.id, episodeId, 'node-gone', { filename: '../x.png' })).toBeNull();
     expect(await attachNodeImage('loom-missing', episodeId, 'node-gone', { filename: 'x.png' })).toBeNull();
+  });
+});
+
+describe('attachNodeVideo', () => {
+  it('files a completed video history id onto its node', async () => {
+    const loom = await makeLoom();
+    let updated = await addEpisode(loom.id, {});
+    const episodeId = updated.episodes[0].id;
+    updated = await addNode(loom.id, episodeId, { title: 'A' });
+    const node = updated.episodes[0].nodes[0];
+
+    const attached = await attachNodeVideo(loom.id, episodeId, node.id, { videoHistoryId: 'video-1' });
+    expect(attached).toMatchObject({ id: node.id, videoHistoryId: 'video-1' });
+    expect((await getLoom(loom.id)).episodes[0].nodes[0].videoHistoryId).toBe('video-1');
+  });
+
+  it('returns null when the target or history id is unsafe', async () => {
+    const loom = await makeLoom();
+    const updated = await addEpisode(loom.id, {});
+    const episodeId = updated.episodes[0].id;
+    expect(await attachNodeVideo(loom.id, episodeId, 'node-gone', { videoHistoryId: '../video' })).toBeNull();
+    expect(await attachNodeVideo(loom.id, episodeId, 'node-gone', { videoHistoryId: 'video-1' })).toBeNull();
   });
 });

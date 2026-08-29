@@ -1,15 +1,14 @@
 /**
- * Productivity & Streaks Service
+ * Productivity Service
  *
- * Tracks work patterns, productivity streaks, and generates
- * insights about optimal working times.
+ * Tracks agent work patterns and generates insights about optimal working times.
  */
 
 import { join } from 'path';
 import { cosEvents } from './cosEvents.js';
 import { getAgents } from './cosAgentLifecycle.js';
 import { ensureDir, getDateString, PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
-import { getWeekId, isConsecutiveWeek } from '../lib/isoWeek.js';
+import { getWeekId } from '../lib/isoWeek.js';
 
 const DATA_DIR = PATHS.cos;
 const PRODUCTIVITY_FILE = join(DATA_DIR, 'productivity.json');
@@ -18,14 +17,6 @@ const PRODUCTIVITY_FILE = join(DATA_DIR, 'productivity.json');
  * Default productivity data structure
  */
 const DEFAULT_PRODUCTIVITY = {
-  streaks: {
-    currentDaily: 0,        // Consecutive days with completed tasks
-    longestDaily: 0,        // Best daily streak ever
-    currentWeekly: 0,       // Consecutive weeks with activity
-    longestWeekly: 0,       // Best weekly streak ever
-    lastActiveDate: null,   // Last day with completed tasks
-    lastActiveWeek: null    // Last week with activity
-  },
   hourlyPatterns: {
     // Aggregated by hour: { tasks, successes, failures, avgDuration }
   },
@@ -52,11 +43,17 @@ export async function loadProductivity() {
   // would leak one call's counters into the next "no file yet" read.
   const defaults = structuredClone(DEFAULT_PRODUCTIVITY);
   if (!data) return defaults;
-  // Merge with defaults to ensure all fields exist
+  // Ignore the retired streak field when reading older installs. The next
+  // normal write removes it from disk without needing a destructive migration.
+  const currentData = { ...data };
+  delete currentData.streaks;
+  if (Array.isArray(currentData.milestones)) {
+    currentData.milestones = currentData.milestones.filter((milestone) => milestone?.type !== 'streak');
+  }
+  // Merge with defaults to ensure all current fields exist.
   return {
     ...defaults,
-    ...data,
-    streaks: { ...defaults.streaks, ...data.streaks }
+    ...currentData,
   };
 }
 
@@ -68,19 +65,6 @@ async function saveProductivity(data) {
   data.lastUpdated = new Date().toISOString();
   await atomicWrite(PRODUCTIVITY_FILE, data);
   return data;
-}
-
-/**
- * Check if two dates are consecutive days
- */
-function isConsecutiveDay(date1, date2) {
-  if (!date1 || !date2) return false;
-  const d1 = new Date(date1);
-  const d2 = new Date(date2);
-  d1.setHours(0, 0, 0, 0);
-  d2.setHours(0, 0, 0, 0);
-  const diffDays = Math.round((d2 - d1) / (1000 * 60 * 60 * 24));
-  return diffDays === 1;
 }
 
 /**
@@ -100,7 +84,7 @@ export async function recalculateProductivity() {
   const dailyPatterns = {};
   const dailyHistory = {};
 
-  // Track dates with activity for streak calculation
+  // Track distinct active dates and weeks for aggregate totals.
   const activeDates = new Set();
   const activeWeeks = new Set();
 
@@ -161,69 +145,8 @@ export async function recalculateProductivity() {
     p.successRate = p.tasks > 0 ? Math.round((p.successes / p.tasks) * 100) : 0;
   }
 
-  // Calculate streaks
   const sortedDates = Array.from(activeDates).sort();
   const sortedWeeks = Array.from(activeWeeks).sort();
-
-  const today = getDateString();
-  const thisWeek = getWeekId();
-
-  // Daily streak calculation
-  let currentDaily = 0;
-  let longestDaily = 0;
-  let tempStreak = 0;
-
-  for (let i = 0; i < sortedDates.length; i++) {
-    if (i === 0 || isConsecutiveDay(sortedDates[i - 1], sortedDates[i])) {
-      tempStreak++;
-    } else {
-      longestDaily = Math.max(longestDaily, tempStreak);
-      tempStreak = 1;
-    }
-  }
-  longestDaily = Math.max(longestDaily, tempStreak);
-
-  // Current streak: count backwards from today
-  const lastDate = sortedDates[sortedDates.length - 1];
-  if (lastDate === today || isConsecutiveDay(lastDate, today)) {
-    // Still active or just yesterday
-    currentDaily = 1;
-    for (let i = sortedDates.length - 1; i >= 1; i--) {
-      if (isConsecutiveDay(sortedDates[i - 1], sortedDates[i])) {
-        currentDaily++;
-      } else {
-        break;
-      }
-    }
-  }
-
-  // Weekly streak calculation
-  let currentWeekly = 0;
-  let longestWeekly = 0;
-  let tempWeekStreak = 0;
-
-  for (let i = 0; i < sortedWeeks.length; i++) {
-    if (i === 0 || isConsecutiveWeek(sortedWeeks[i - 1], sortedWeeks[i])) {
-      tempWeekStreak++;
-    } else {
-      longestWeekly = Math.max(longestWeekly, tempWeekStreak);
-      tempWeekStreak = 1;
-    }
-  }
-  longestWeekly = Math.max(longestWeekly, tempWeekStreak);
-
-  // Current weekly streak
-  const lastWeek = sortedWeeks[sortedWeeks.length - 1];
-  if (lastWeek === thisWeek || isConsecutiveWeek(lastWeek, thisWeek)) {
-    currentWeekly = 1;
-    for (let i = sortedWeeks.length - 1; i >= 1; i--) {
-      if (isConsecutiveWeek(sortedWeeks[i - 1], sortedWeeks[i])) {
-        currentWeekly++;
-      } else {
-        break;
-      }
-    }
-  }
 
   // Check for new milestones
   const milestones = [];
@@ -242,26 +165,7 @@ export async function recalculateProductivity() {
     }
   }
 
-  const streakMilestones = [3, 7, 14, 30, 60, 100];
-  for (const m of streakMilestones) {
-    if (longestDaily >= m) {
-      milestones.push({
-        type: 'streak',
-        value: m,
-        description: `${m}-day work streak`
-      });
-    }
-  }
-
   const productivity = {
-    streaks: {
-      currentDaily,
-      longestDaily,
-      currentWeekly,
-      longestWeekly,
-      lastActiveDate: sortedDates[sortedDates.length - 1] || null,
-      lastActiveWeek: sortedWeeks[sortedWeeks.length - 1] || null
-    },
     hourlyPatterns,
     dailyPatterns,
     dailyHistory,
@@ -322,34 +226,6 @@ export async function getProductivityInsights() {
     });
   }
 
-  // Streak encouragement
-  const { streaks } = data;
-  if (streaks?.currentDaily >= 3) {
-    insights.push({
-      type: 'success',
-      title: '🔥 Hot Streak!',
-      message: `${streaks.currentDaily} days of continuous productivity! Keep it up!`,
-      icon: 'flame'
-    });
-  } else if (streaks?.currentDaily === 0 && streaks?.longestDaily > 0) {
-    insights.push({
-      type: 'warning',
-      title: 'Streak Broken',
-      message: `Your best was ${streaks.longestDaily} days. Start a new streak today!`,
-      icon: 'refresh'
-    });
-  }
-
-  // Weekly consistency
-  if (streaks?.currentWeekly >= 4) {
-    insights.push({
-      type: 'success',
-      title: 'Weekly Warrior',
-      message: `${streaks.currentWeekly} consecutive weeks of activity!`,
-      icon: 'trophy'
-    });
-  }
-
   return {
     ...data,
     insights,
@@ -370,7 +246,6 @@ export async function onTaskCompleted(agent) {
   const data = await loadProductivity();
   const completedAt = new Date(agent.completedAt);
   const dateStr = getDateString(completedAt);
-  const weekId = getWeekId(completedAt);
   const hour = completedAt.getHours();
   const dayOfWeek = completedAt.getDay();
   const success = agent.result?.success === true;
@@ -407,27 +282,6 @@ export async function onTaskCompleted(agent) {
   else data.dailyHistory[dateStr].failures++;
   data.dailyHistory[dateStr].successRate = Math.round((data.dailyHistory[dateStr].successes / data.dailyHistory[dateStr].tasks) * 100);
 
-  // Update streaks using agent's completion date (not "now")
-  if (data.streaks.lastActiveDate !== dateStr) {
-    if (isConsecutiveDay(data.streaks.lastActiveDate, dateStr)) {
-      data.streaks.currentDaily++;
-    } else {
-      data.streaks.currentDaily = 1;
-    }
-    data.streaks.longestDaily = Math.max(data.streaks.longestDaily, data.streaks.currentDaily);
-    data.streaks.lastActiveDate = dateStr;
-  }
-
-  if (data.streaks.lastActiveWeek !== weekId) {
-    if (isConsecutiveWeek(data.streaks.lastActiveWeek, weekId)) {
-      data.streaks.currentWeekly++;
-    } else {
-      data.streaks.currentWeekly = 1;
-    }
-    data.streaks.longestWeekly = Math.max(data.streaks.longestWeekly, data.streaks.currentWeekly);
-    data.streaks.lastActiveWeek = weekId;
-  }
-
   // Prune dailyHistory older than 90 days
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - 90);
@@ -447,90 +301,8 @@ export async function getProductivitySummary() {
   const data = await loadProductivity();
 
   return {
-    currentStreak: data.streaks?.currentDaily || 0,
-    longestStreak: data.streaks?.longestDaily || 0,
-    weeklyStreak: data.streaks?.currentWeekly || 0,
-    lastActive: data.streaks?.lastActiveDate || null,
     totalDays: data.totals?.activeDays || 0,
     recentMilestone: data.milestones?.[data.milestones.length - 1] || null
-  };
-}
-
-/**
- * Get week-over-week comparison metrics
- * Compares this week's completed tasks to last week
- * @returns {Object} Week comparison data
- */
-export async function getWeekComparison() {
-  const data = await loadProductivity();
-  const dailyHistory = data.dailyHistory || {};
-
-  // Get date ranges for this week and last week
-  const today = new Date();
-  const dayOfWeek = today.getDay(); // 0 = Sunday
-
-  // This week: from last Sunday to today
-  const thisWeekStart = new Date(today);
-  thisWeekStart.setDate(today.getDate() - dayOfWeek);
-  thisWeekStart.setHours(0, 0, 0, 0);
-
-  // Last week: 7 days before this week's start, for 7 days
-  const lastWeekStart = new Date(thisWeekStart);
-  lastWeekStart.setDate(lastWeekStart.getDate() - 7);
-
-  // Aggregate this week's tasks (up to today)
-  let thisWeekTasks = 0;
-  let thisWeekSuccesses = 0;
-  for (let d = new Date(thisWeekStart); d <= today; d.setDate(d.getDate() + 1)) {
-    const dateStr = getDateString(d);
-    const dayData = dailyHistory[dateStr];
-    if (dayData) {
-      thisWeekTasks += dayData.tasks || 0;
-      thisWeekSuccesses += dayData.successes || 0;
-    }
-  }
-
-  // Aggregate last week's tasks (same day range as this week for fair comparison)
-  let lastWeekTasks = 0;
-  let lastWeekSuccesses = 0;
-  const lastWeekEnd = new Date(lastWeekStart);
-  lastWeekEnd.setDate(lastWeekEnd.getDate() + dayOfWeek); // Same relative day as today
-  for (let d = new Date(lastWeekStart); d <= lastWeekEnd; d.setDate(d.getDate() + 1)) {
-    const dateStr = getDateString(d);
-    const dayData = dailyHistory[dateStr];
-    if (dayData) {
-      lastWeekTasks += dayData.tasks || 0;
-      lastWeekSuccesses += dayData.successes || 0;
-    }
-  }
-
-  // Calculate change
-  let changePercent = null;
-  let trend = 'neutral';
-  if (lastWeekTasks > 0) {
-    changePercent = Math.round(((thisWeekTasks - lastWeekTasks) / lastWeekTasks) * 100);
-    if (changePercent > 10) trend = 'up';
-    else if (changePercent < -10) trend = 'down';
-  } else if (thisWeekTasks > 0) {
-    // No tasks last week but have tasks this week
-    trend = 'up';
-    changePercent = 100;
-  }
-
-  return {
-    thisWeek: {
-      tasks: thisWeekTasks,
-      successes: thisWeekSuccesses,
-      successRate: thisWeekTasks > 0 ? Math.round((thisWeekSuccesses / thisWeekTasks) * 100) : 0
-    },
-    lastWeek: {
-      tasks: lastWeekTasks,
-      successes: lastWeekSuccesses,
-      successRate: lastWeekTasks > 0 ? Math.round((lastWeekSuccesses / lastWeekTasks) * 100) : 0
-    },
-    changePercent,
-    trend,
-    daysCompared: dayOfWeek + 1 // How many days we're comparing (e.g., if today is Tuesday, comparing 3 days)
   };
 }
 
@@ -751,8 +523,7 @@ export async function getActivityCalendar(weeks = 12) {
       avgTasksPerActiveDay: activeDays.length > 0
         ? Math.round((totalTasks / activeDays.length) * 10) / 10
         : 0
-    },
-    currentStreak: data.streaks?.currentDaily || 0
+    }
   };
 }
 

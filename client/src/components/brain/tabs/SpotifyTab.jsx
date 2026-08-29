@@ -1,19 +1,19 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { Save, Loader2, Music, Link2, LogOut, RefreshCw, CheckCircle2, AlertCircle } from 'lucide-react';
-import toast from '../ui/Toast';
-import BrailleSpinner from '../BrailleSpinner';
-import { formatDateTime } from '../../utils/formatters';
-import { useSyncSourceSettings } from '../../hooks/useSyncSourceSettings';
+import toast from '../../ui/Toast';
+import BrailleSpinner from '../../BrailleSpinner';
+import { formatDateTime } from '../../../utils/formatters';
+import { useSyncSourceSettings } from '../../../hooks/useSyncSourceSettings';
 import {
   getSpotifyStatus,
   getSpotifyAuthUrl,
   saveSpotifyCredentials,
   clearSpotifyAuth,
   syncSpotify,
-} from '../../services/api';
+} from '../../../services/api';
 
-// Settings → Spotify (#2152). Opt-in, machine-local ingestion of Spotify
+// Brain → Spotify (#2152). Opt-in, machine-local ingestion of Spotify
 // listening history (recently-played) into the activity timeline. OFF by
 // default — requires a user-created Spotify developer app + OAuth connection.
 export function SpotifyTab() {

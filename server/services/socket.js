@@ -25,6 +25,7 @@ import { videoGenEvents } from './videoGen/events.js';
 import { audioGenEvents } from './audioGen/events.js';
 import { aiStatusEvents } from './aiStatusEvents.js';
 import { wireProactiveTriggers } from './voice/proactiveTriggers.js';
+import { callStateEvents } from './voice/callSession.js';
 import {
   validateSocketData,
   errorRecoverSchema
@@ -206,6 +207,7 @@ function setupEventForwarding() {
   setupMusicVideoEventForwarding();
   setupProactiveSpeechForwarding();
   setupPersistentMindEventForwarding();
+  setupCallStateEventForwarding();
 }
 
 let persistentMindEventForwardingSetup = false;
@@ -213,6 +215,20 @@ function setupPersistentMindEventForwarding() {
   if (persistentMindEventForwardingSetup) return;
   persistentMindEventForwardingSetup = true;
   runEventLogEvents.on('mind:event', (event) => broadcastToCos('cos:mind:event', event));
+}
+
+// The call-host tab already gets `voice:call:state` directly from its own
+// socket handler (server/sockets/voice.js — it drives that socket's opening-
+// line delivery too). This is the read-only fan-out to every OTHER tab, so a
+// view like the Mind tab's active-call chip can show/hide without being the
+// tab carrying the audio.
+let callStateForwardingSetup = false;
+function setupCallStateEventForwarding() {
+  if (callStateForwardingSetup) return;
+  callStateForwardingSetup = true;
+  callStateEvents.on('state', (snapshot) => {
+    if (ioInstance) ioInstance.emit('voice:call:state', snapshot);
+  });
 }
 
 export function initSocket(io) {

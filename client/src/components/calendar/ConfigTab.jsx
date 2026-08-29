@@ -11,6 +11,10 @@ import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { DEFAULT_AVATAR_COLOR } from '../../themes/portosThemes';
 
 const TYPE_ICONS = { 'outlook-calendar': Globe, 'google-calendar': Calendar };
+// A 'partial' sync (the CLI died mid-payload, so nothing was pruned) is a
+// warning, not a failure — the events that DID arrive were saved. Only 'error'
+// means the sync produced nothing.
+const SYNC_STATUS_CLASS = { partial: 'text-port-warning', error: 'text-port-error' };
 const TYPE_LABELS = { 'outlook-calendar': 'Outlook Calendar (API)', 'google-calendar': 'Google Calendar' };
 
 export default function ConfigTab({ accounts, setAccounts }) {
@@ -304,7 +308,11 @@ export default function ConfigTab({ accounts, setAccounts }) {
                       </div>
                       {account.lastSyncAt && (
                         <div className="text-xs text-gray-600">
-                          Last sync: {formatDateTime(account.lastSyncAt)} ({account.lastSyncStatus})
+                          Last sync: {formatDateTime(account.lastSyncAt)} (
+                          <span className={SYNC_STATUS_CLASS[account.lastSyncStatus] || ''}>
+                            {account.lastSyncStatus}
+                          </span>
+                          )
                         </div>
                       )}
                     </div>

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
-  Flame,
+  BarChart2,
   RefreshCw,
   TrendingUp,
   Clock,
@@ -10,7 +10,6 @@ import {
   Zap,
   CheckCircle,
   AlertTriangle,
-  BarChart2,
   ChevronDown,
   ChevronRight,
   Award
@@ -28,10 +27,9 @@ export default function ProductivityTab() {
   const [loading, setLoading] = useState(true);
   const [recalculating, setRecalculating] = useState(false);
   const [expandedSections, setExpandedSections] = useState({
-    streaks: true,
     patterns: true,
     insights: true,
-    milestones: false
+    milestones: false,
   });
 
   const loadData = useCallback(async (autoRecalculate = false) => {
@@ -113,8 +111,8 @@ export default function ProductivityTab() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
-          <Flame className="w-5 h-5 text-orange-400" />
-          <h3 className="text-lg font-semibold text-white">Productivity & Streaks</h3>
+          <BarChart2 className="w-5 h-5 text-port-accent" />
+          <h3 className="text-lg font-semibold text-white">Productivity</h3>
         </div>
         <button
           onClick={handleRecalculate}
@@ -128,85 +126,14 @@ export default function ProductivityTab() {
 
       {!hasData ? (
         <div className="bg-port-card border border-port-border rounded-lg p-8 text-center">
-          <Flame className="w-12 h-12 text-gray-600 mx-auto mb-3" />
+          <BarChart2 className="w-12 h-12 text-gray-600 mx-auto mb-3" />
           <p className="text-gray-400">No productivity data yet.</p>
           <p className="text-gray-500 text-sm mt-1">
-            Complete some tasks to start tracking your work patterns and building streaks!
+            Complete some tasks to start tracking your work patterns.
           </p>
         </div>
       ) : (
         <>
-          {/* Streak Stats */}
-          <div>
-            <button
-              onClick={() => toggleSection('streaks')}
-              className="flex items-center gap-2 w-full text-left mb-3"
-            >
-              {expandedSections.streaks ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-              <Flame size={16} className="text-orange-400" />
-              <span className="font-medium text-white">Work Streaks</span>
-            </button>
-            {expandedSections.streaks && (
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                {/* Current Daily Streak */}
-                <div className="bg-gradient-to-br from-orange-500/20 to-red-500/20 border border-orange-500/30 rounded-lg p-4">
-                  <div className="flex items-center gap-2 mb-1">
-                    <Flame size={14} className="text-orange-400" />
-                    <span className="text-xs text-gray-400">Current Streak</span>
-                  </div>
-                  <div className="text-3xl font-bold text-white">
-                    {data.streaks?.currentDaily || 0}
-                  </div>
-                  <div className="text-xs text-gray-500">
-                    {data.streaks?.currentDaily === 1 ? 'day' : 'days'}
-                  </div>
-                  {data.streaks?.currentDaily >= 3 && (
-                    <div className="mt-2 text-xs text-orange-400 flex items-center gap-1">
-                      <Zap size={10} />
-                      On fire!
-                    </div>
-                  )}
-                </div>
-
-                {/* Longest Daily Streak */}
-                <div className="bg-port-card border border-port-border rounded-lg p-4">
-                  <div className="flex items-center gap-2 mb-1">
-                    <Trophy size={14} className="text-yellow-400" />
-                    <span className="text-xs text-gray-400">Best Streak</span>
-                  </div>
-                  <div className="text-3xl font-bold text-yellow-400">
-                    {data.streaks?.longestDaily || 0}
-                  </div>
-                  <div className="text-xs text-gray-500">days</div>
-                </div>
-
-                {/* Weekly Streak */}
-                <div className="bg-port-card border border-port-border rounded-lg p-4">
-                  <div className="flex items-center gap-2 mb-1">
-                    <Calendar size={14} className="text-port-accent" />
-                    <span className="text-xs text-gray-400">Weekly Streak</span>
-                  </div>
-                  <div className="text-3xl font-bold text-port-accent">
-                    {data.streaks?.currentWeekly || 0}
-                  </div>
-                  <div className="text-xs text-gray-500">weeks</div>
-                </div>
-
-                {/* Active Days */}
-                <div className="bg-port-card border border-port-border rounded-lg p-4">
-                  <div className="flex items-center gap-2 mb-1">
-                    <Target size={14} className="text-port-accent" />
-                    <span className="text-xs text-gray-400">Total Active</span>
-                  </div>
-                  <div className="text-3xl font-bold text-white">
-                    {data.totals?.activeDays || 0}
-                  </div>
-                  <div className="text-xs text-gray-500">days worked</div>
-                </div>
-              </div>
-            )}
-          </div>
-
           {/* Daily Task Trends Chart */}
           <DailyTrendsChart days={30} initialExpanded={true} />
 

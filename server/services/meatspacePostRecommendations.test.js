@@ -42,6 +42,8 @@ import {
   memoryPracticeDeepLink,
   memoryItemIdFromReview,
   practicedTodayFromActivity,
+  recentPracticeFromActivity,
+  weakestSkillsFromStats,
 } from './meatspacePost.js';
 import { atomicWrite } from '../lib/fileUtils.js';
 
@@ -672,5 +674,149 @@ describe('memoryItemIdFromReview', () => {
     expect(memoryItemIdFromReview({ skillId: 'memory:' })).toBeNull();
     expect(memoryItemIdFromReview({})).toBeNull();
     expect(memoryItemIdFromReview(null)).toBeNull();
+  });
+});
+
+// Issue #5319: the heuristic tiers (weakest skill, stalled ladder) are driven by
+// windowed averages a single rep barely moves, so before this they resolved to
+// one fixed drill and the daily routine handed back the same practice every day.
+describe('recentPracticeFromActivity (issue #5319)', () => {
+  const day = (offset) => new Date(Date.UTC(2026, 2, 10 - offset)).toISOString().slice(0, 10);
+
+  it('collects drill types and memory items across the three-day window, from BOTH feeds', () => {
+    const recent = recentPracticeFromActivity(
+      [{ date: day(1), tasks: [{ type: 'digit-span' }] }],
+      [
+        { date: day(2), drillType: 'morse-copy' },
+        { date: day(0), memoryItemId: 'elements-song' },
+      ],
+      day(0),
+      'UTC',
+    );
+    expect(recent.dayKey).toBe(day(0));
+    expect([...recent.drillTypes].sort()).toEqual(['digit-span', 'morse-copy']);
+    expect([...recent.memoryItemIds]).toEqual(['elements-song']);
+  });
+
+  it('excludes activity older than the window so a rotation comes back around', () => {
+    const recent = recentPracticeFromActivity(
+      [{ date: day(3), tasks: [{ type: 'digit-span' }] }],
+      [],
+      day(0),
+      'UTC',
+    );
+    expect(recent.drillTypes.has('digit-span')).toBe(false);
+  });
+
+  it('re-derives each record\'s day in the CURRENT timezone, not its stored date', () => {
+    // Written under a UTC-ish zone as "the 10th", but its instant is the 11th in
+    // Tokyo — the window must read it as the local day it actually happened on.
+    const recent = recentPracticeFromActivity(
+      [{ date: '2026-03-10', startedAt: '2026-03-10T16:00:00.000Z', tasks: [{ type: 'n-back' }] }],
+      [],
+      '2026-03-11',
+      'Asia/Tokyo',
+    );
+    expect(recent.drillTypes.has('n-back')).toBe(true);
+  });
+
+  it('reports an empty window rather than guessing when the local day is unresolvable', () => {
+    const recent = recentPracticeFromActivity([{ date: day(0), tasks: [{ type: 'n-back' }] }], [], null, 'UTC');
+    expect(recent.dayKey).toBeNull();
+    expect(recent.drillTypes.size).toBe(0);
+  });
+});
+
+describe('weakestSkillsFromStats ranking (issue #5319)', () => {
+  it('ranks every sampled drill weakest-first so the caller can skip ineligible ones', () => {
+    const stats = {
+      byDrillAccuracy: { 'cognitive:digit-span': 0.4, 'mental-math:powers': 0.6, 'cognitive:n-back': 0.5 },
+      byDrillCount: { 'cognitive:digit-span': 3, 'mental-math:powers': 3, 'cognitive:n-back': 3 },
+    };
+    expect(weakestSkillsFromStats(stats).map(s => s.type)).toEqual(['digit-span', 'n-back', 'powers']);
+    // The single-value helper stays the head of that list.
+    expect(weakestSkillFromStats(stats).type).toBe('digit-span');
+  });
+});
+
+describe('getPostRecommendations drill rotation (issue #5319)', () => {
+  // Two enabled cognitive drills, both scored, both stalled — the exact shape
+  // that used to pin digit-span to the #1 slot indefinitely.
+  const scored = (date, type, accuracy) => ({
+    id: `s-${date}-${type}`, date, score: Math.round(accuracy * 100), durationMs: 60000,
+    tasks: [{ module: 'cognitive', type, score: Math.round(accuracy * 100), accuracy, completion: 1, questions: [{ answered: 'x', correct: false }] }],
+  });
+  // Memory off so the drill-shaped recs are the whole list.
+  const drillsOnlyConfig = { memory: { enabled: false }, topics: { memory: { enabled: false } } };
+
+  beforeEach(() => {
+    settingsState.timezone = 'UTC';
+    state.config = drillsOnlyConfig;
+  });
+
+  it('advances the top recommendation across days instead of repeating one drill', async () => {
+    vi.useFakeTimers();
+    // Baseline history OUTSIDE the three-day window, so both drills carry an
+    // accuracy signal and neither starts out "recently practiced".
+    state.sessions = [scored('2026-03-04', 'digit-span', 0.4), scored('2026-03-04', 'n-back', 0.4)];
+
+    const heads = [];
+    // Three consecutive days. Each day the user practices whatever was
+    // recommended, which is what feeds the next day's recency window.
+    for (const today of ['2026-03-10', '2026-03-11', '2026-03-12']) {
+      vi.setSystemTime(new Date(`${today}T12:00:00.000Z`));
+      const { recommendations } = await getPostRecommendations();
+      const head = recommendations[0];
+      expect(head.drillType, 'expected a drill-shaped top recommendation').toBeTruthy();
+      heads.push(head.drillType);
+      state.sessions = [...state.sessions, scored(today, head.drillType, 0.4)];
+    }
+    // Nothing is served two days running, and the rotation actually varies.
+    expect(new Set(heads).size).toBeGreaterThan(1);
+    expect(heads[0]).not.toBe(heads[1]);
+    expect(heads[1]).not.toBe(heads[2]);
+  });
+
+  it('picks the next eligible weakest skill when the lowest-accuracy one is excluded', async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    state.sessions = [scored(today, 'digit-span', 0.3), scored(today, 'n-back', 0.5)];
+    // digit-span is weakest but the user switched that ONE drill off — the tier
+    // must walk past it rather than dropping the whole weak-skill slot.
+    state.config = { ...drillsOnlyConfig, cognitive: { drillTypes: { 'digit-span': { enabled: false } } } };
+
+    const { recommendations } = await getPostRecommendations();
+    const weak = recommendations.find(r => r.kind === 'weak-skill');
+    expect(weak?.drillType).toBe('n-back');
+  });
+
+  it('never deprioritizes a genuinely due memory item for being practiced yesterday', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-11T12:00:00.000Z'));
+    state.config = {};
+    state.memoryItems = [{
+      id: 'raven', title: 'Example Poem', type: 'poem', content: { chunks: [] },
+      schedule: { ease: 2.5, intervalDays: 1, nextReview: '2026-03-10T00:00:00.000Z' },
+      mastery: { overallPct: 40, chunks: {} },
+    }];
+    // Practiced YESTERDAY (inside the heuristic window) but not today, so the
+    // unchanged same-day demotion doesn't apply either.
+    state.training = [{ date: '2026-03-10', memoryItemId: 'raven', mode: 'spaced' }];
+
+    const { recommendations } = await getPostRecommendations();
+    expect(recommendations[0].kind).toBe('memory-due');
+    expect(recommendations[0].practicedToday).toBe(false);
+    expect(recommendations.find(r => r.id === 'memory-due:raven')).toBeTruthy();
+  });
+
+  it('reports the window it used so the client rotates Quick session off the same signal', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-11T12:00:00.000Z'));
+    state.sessions = [scored('2026-03-10', 'digit-span', 0.4)];
+    state.training = [{ date: '2026-03-11', memoryItemId: 'elements-song', mode: 'spaced' }];
+
+    const { recentPractice } = await getPostRecommendations();
+    expect(recentPractice.dayKey).toBe('2026-03-11');
+    expect(recentPractice.drillTypes).toContain('digit-span');
+    expect(recentPractice.memoryItemIds).toContain('elements-song');
   });
 });

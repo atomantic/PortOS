@@ -42,6 +42,8 @@ function makeFakeChild({ pid = 1234 } = {}) {
   const child = new EventEmitter();
   Object.setPrototypeOf(child, ChildProcess.prototype);
   child.pid = pid;
+  child.exitCode = null;
+  child.signalCode = null;
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
   child.kill = vi.fn();
@@ -401,11 +403,11 @@ describe('bufferedSpawn — structured result', () => {
     expect(result.stdout.startsWith('a')).toBe(true);
   });
 
-  it('times out: kills the tree and resolves timedOut with buffered partial output', async () => {
+  it('times out: resolves at the deadline, then SIGKILLs a child that ignores SIGTERM after its grace period', async () => {
     vi.useFakeTimers();
     const child = makeFakeChild();
     spawnMock.mockReturnValueOnce(child);
-    const p = bufferedSpawn('hang', [], { timeoutMs: 1000 });
+    const p = bufferedSpawn('hang', [], { timeoutMs: 1000, killGraceMs: 80 });
     child.stdout.emit('data', 'partial');
     vi.advanceTimersByTime(1000);
     const result = await p;
@@ -414,6 +416,21 @@ describe('bufferedSpawn — structured result', () => {
     expect(result.code).toBe(-1);
     expect(result.stdout).toBe('partial');
     if (!IS_WIN32) expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    vi.advanceTimersByTime(80);
+    if (!IS_WIN32) expect(child.kill).toHaveBeenLastCalledWith('SIGKILL');
+  });
+
+  it('does not escalate when the child exits during the SIGTERM grace period', async () => {
+    vi.useFakeTimers();
+    const child = makeFakeChild();
+    spawnMock.mockReturnValueOnce(child);
+    const p = bufferedSpawn('hang', [], { timeoutMs: 1000, killGraceMs: 80 });
+    vi.advanceTimersByTime(1000);
+    await p;
+    child.exitCode = 0;
+    child.signalCode = 'SIGTERM';
+    vi.advanceTimersByTime(80);
+    if (!IS_WIN32) expect(child.kill).toHaveBeenCalledTimes(1);
   });
 
   it('a close after timeout does not double-resolve (settled guard)', async () => {

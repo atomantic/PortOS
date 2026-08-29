@@ -35,7 +35,7 @@ import {
   listFolders, createFolder, deleteFolder,
   listWorks, getWorkWithBody, createWork, updateWork, deleteWork,
   saveDraftBody, snapshotDraft, setActiveDraft, getDraftBody,
-  listExercises, createExercise, finishExercise, discardExercise,
+  listExercises, createExercise, finishExercise, discardExercise, promoteExercise,
 } from '../services/writersRoom/local.js';
 import {
   runAnalysis, listAnalyses, getAnalysis, persistSceneImage,
@@ -191,6 +191,10 @@ router.post('/exercises/:id/finish', asyncHandler(async (req, res) => {
 
 router.post('/exercises/:id/discard', asyncHandler(async (req, res) => {
   res.json(await discardExercise(req.params.id));
+}));
+
+router.post('/exercises/:id/promote', asyncHandler(async (req, res) => {
+  res.json(await promoteExercise(req.params.id));
 }));
 
 // ---------- analysis ----------

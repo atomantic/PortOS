@@ -146,6 +146,11 @@ vi.mock('../moodBoard/index.js', async (importOriginal) => ({
   ...(await importOriginal()),
   listBoards: vi.fn().mockResolvedValue([]),
 }));
+vi.mock('../fableLoom/index.js', () => ({
+  getLoom: vi.fn(),
+  listLooms: vi.fn().mockResolvedValue([]),
+  mergeLoomsFromSync: vi.fn().mockResolvedValue({ applied: true, count: 1 }),
+}));
 vi.mock('../writersRoom/sync.js', async (importOriginal) => ({
   ...(await importOriginal()),
   listWorksForSync: vi.fn().mockResolvedValue([]),
@@ -243,6 +248,7 @@ import {
 import { listAuthors } from '../authors/index.js';
 import { listProjects as listCreativeDirectorProjects } from '../creativeDirector/local.js';
 import { listBoards } from '../moodBoard/index.js';
+import { getLoom, listLooms, mergeLoomsFromSync } from '../fableLoom/index.js';
 import { listWorksForSync, listFoldersForSync, listExercisesForSync } from '../writersRoom/sync.js';
 import { listCommissionFeedbackForSync } from '../creativeCommissions/feedbackStore.js';
 import { listCommissionsForSync } from '../creativeCommissions/store.js';
@@ -351,6 +357,9 @@ beforeEach(async () => {
   vi.mocked(listAuthors).mockReset().mockResolvedValue([]);
   vi.mocked(listCreativeDirectorProjects).mockReset().mockResolvedValue([]);
   vi.mocked(listBoards).mockReset().mockResolvedValue([]);
+  vi.mocked(getLoom).mockReset().mockResolvedValue(null);
+  vi.mocked(listLooms).mockReset().mockResolvedValue([]);
+  vi.mocked(mergeLoomsFromSync).mockReset().mockResolvedValue({ applied: true, count: 1 });
   vi.mocked(listWorksForSync).mockReset().mockResolvedValue([]);
   vi.mocked(listFoldersForSync).mockReset().mockResolvedValue([]);
   vi.mocked(listExercisesForSync).mockReset().mockResolvedValue([]);
@@ -392,12 +401,12 @@ afterEach(async () => {
 
 describe('peerSync', () => {
   describe('PEER_SUBSCRIBABLE_KINDS', () => {
-    it('is exactly [universe, series, mediaCollection, author, artist, album, track, creativeDirectorProject, moodBoard, writersRoomWork]', () => {
+    it('lists every record kind handled by the peer-sync pipeline', () => {
       // Exact equality (not toContain) so an accidental add/remove/reorder is
       // caught — this list is canonical and its order can affect iteration
       // elsewhere (e.g. syncNow's per-kind backfill). Issues piggyback on series
       // subscriptions; direct issue subs are intentionally rejected (Stage 2).
-      expect(PEER_SUBSCRIBABLE_KINDS).toEqual(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject', 'commissionFeedback', 'creativeCommission']);
+      expect(PEER_SUBSCRIBABLE_KINDS).toEqual(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'fableLoom', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject', 'commissionFeedback', 'creativeCommission']);
     });
   });
 
@@ -935,6 +944,26 @@ describe('peerSync', () => {
       vi.mocked(listSeries).mockResolvedValue([{ id: 's1' }, { id: 's2' }]);
       const created = await autoSubscribePeerToAllRecords('peer-a', 'series');
       expect(created.map(c => c.recordId).sort()).toEqual(['s1', 's2']);
+    });
+
+    it('backfills every local FableLoom when its category is enabled', async () => {
+      vi.mocked(getPeers).mockResolvedValue([{
+        instanceId: 'peer-a',
+        name: 'A',
+        enabled: true,
+        syncEnabled: true,
+        directions: ['outbound'],
+        syncCategories: { fableLoom: true },
+      }]);
+      vi.mocked(listLooms).mockResolvedValue([{ id: 'loom-1' }, { id: 'loom-2' }]);
+      vi.mocked(getLoom).mockImplementation(async (id) => ({
+        id, name: `Story ${id}`, episodes: [], updatedAt: '2026-01-01T00:00:00.000Z',
+      }));
+
+      const created = await autoSubscribePeerToAllRecords('peer-a', 'fableLoom');
+
+      expect(created.map((sub) => sub.recordId).sort()).toEqual(['loom-1', 'loom-2']);
+      expect(await findPeerSubscription('peer-a', 'fableLoom', 'loom-1')).not.toBeNull();
     });
 
     it('returns [] when the peer is disabled', async () => {
@@ -2268,6 +2297,38 @@ describe('peerSync', () => {
       expect(captured.assetManifest).toEqual([]);
     });
 
+    it('ships FableLoom tombstones without scene assets', async () => {
+      vi.mocked(getPeers).mockResolvedValue([
+        {
+          instanceId: 'peer-a', name: 'Peer A', host: null, address: '192.0.2.10', port: 5555,
+          enabled: true, syncEnabled: true,
+          directions: ['outbound', 'inbound'],
+          syncCategories: { fableLoom: true },
+        },
+      ]);
+      vi.mocked(getLoom).mockResolvedValue({
+        id: 'loom-tomb',
+        name: 'Example Loom',
+        episodes: [{ scenes: [{ imageUrl: '/data/images/doomed.png', videoHistoryId: 'doomed' }] }],
+        updatedAt: '2026-01-01T00:00:00Z',
+        deleted: true,
+        deletedAt: '2026-01-01T00:00:00Z',
+      });
+      let captured = null;
+      vi.mocked(peerFetch).mockImplementation(async (_url, opts) => {
+        captured = JSON.parse(opts.body);
+        return { ok: true, json: async () => ({}) };
+      });
+
+      await pushRecordToPeer({
+        id: 'sub-loom', peerId: 'peer-a', recordKind: 'fableLoom', recordId: 'loom-tomb',
+      });
+
+      expect(captured.kind).toBe('fableLoom');
+      expect(captured.record).toMatchObject({ id: 'loom-tomb', deleted: true });
+      expect(captured.assetManifest).toEqual([]);
+    });
+
     it('drops deleted child issues from the asset manifest input', async () => {
       // Deleted issues' tombstones must still ride along in `issues` (so
       // the receiver's delete cascade runs), but their asset filenames
@@ -2809,6 +2870,19 @@ describe('peerSync', () => {
       expect(mergeUniversesFromSync).toHaveBeenCalledWith(
         [expect.objectContaining({ id: 'u1' })],
         { source: { via: 'peer-push', peerId: 'peer-a' }, senderSchemaVersions: {} },
+      );
+    });
+
+    it('dispatches FableLoom pushes through the story merge path', async () => {
+      await applyIncomingPush({
+        kind: 'fableLoom',
+        record: { id: 'loom-1', name: 'Example Story', episodes: [] },
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      expect(mergeLoomsFromSync).toHaveBeenCalledWith(
+        [expect.objectContaining({ id: 'loom-1' })],
+        { source: { via: 'peer-push', peerId: 'peer-a' } },
       );
     });
 

@@ -277,10 +277,11 @@ export function killProcessTree(child, signal = 'SIGTERM', { processGroup = fals
  * @param {string} [options.cwd]
  * @param {NodeJS.ProcessEnv} [options.env] - complete child environment
  * @param {number} [options.timeoutMs] - kill + resolve as timed-out after this
+ * @param {number} [options.killGraceMs=8000] - SIGTERM grace period before fire-and-forget SIGKILL cleanup
  * @param {boolean} [options.shell] - defaults to `needsShell(cmd)`
  * @returns {Promise<object>} structured result (never rejects)
  */
-export function bufferedSpawn(cmd, args, { cwd, env = process.env, timeoutMs, shell } = {}) {
+export function bufferedSpawn(cmd, args, { cwd, env = process.env, timeoutMs, killGraceMs = 8000, shell } = {}) {
   return new Promise((resolve) => {
     const child = spawn(cmd, args, {
       cwd,
@@ -300,7 +301,20 @@ export function bufferedSpawn(cmd, args, { cwd, env = process.env, timeoutMs, sh
       ? setTimeout(() => {
           if (!settled) {
             settled = true;
-            killProcessTree(child);
+            killProcessTree(child, 'SIGTERM');
+            if (!IS_WIN32) {
+              const escalationTimer = setTimeout(() => {
+                try {
+                  if (child.exitCode === null && child.signalCode === null) {
+                    console.log(`⚠️ ${cmd} didn't exit on SIGTERM — escalating to SIGKILL`);
+                    killProcessTree(child, 'SIGKILL');
+                  }
+                } catch (err) {
+                  console.error(`❌ ${cmd} SIGKILL escalation failed: ${err.message}`);
+                }
+              }, killGraceMs);
+              escalationTimer.unref?.();
+            }
             resolve({ success: false, code: -1, signal: null, stdout, stderr, timedOut: true });
           }
         }, timeoutMs)

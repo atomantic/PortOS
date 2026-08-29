@@ -48,6 +48,10 @@ vi.mock('../moodBoard/index.js', () => ({
   pruneTombstonedBoards: vi.fn().mockResolvedValue({ pruned: 0 }),
   listBoardIds: vi.fn().mockResolvedValue([]),
 }));
+vi.mock('../fableLoom/index.js', () => ({
+  pruneTombstonedLooms: vi.fn().mockResolvedValue({ pruned: 0 }),
+  listLooms: vi.fn().mockResolvedValue([]),
+}));
 vi.mock('../writersRoom/sync.js', () => ({
   pruneTombstonedWorks: vi.fn().mockResolvedValue({ pruned: 0 }),
   listWorkIdsForSync: vi.fn().mockResolvedValue([]),
@@ -94,6 +98,7 @@ import { pruneTombstonedTracks, listTrackIds } from '../tracks/index.js';
 import { pruneTombstonedProjects } from '../creativeDirector/local.js';
 import { pruneTombstonedProjects as pruneTombstonedMusicVideoProjects } from '../musicVideo/projects.js';
 import { pruneTombstonedBoards } from '../moodBoard/index.js';
+import { pruneTombstonedLooms } from '../fableLoom/index.js';
 import { pruneTombstonedWorks, pruneTombstonedFolders, pruneTombstonedExercises } from '../writersRoom/sync.js';
 import { pruneOrphanedBaseHashes } from '../../lib/conflictJournal.js';
 import { listPeerSubscriptions, pruneOrphanedPeerSubscriptions } from './peerSync.js';
@@ -148,6 +153,7 @@ describe('sweepTombstones — no peers subscribed', () => {
     expect(pruneTombstonedSeries).toHaveBeenCalledWith(expectedCutoff);
     expect(pruneTombstonedIssues).toHaveBeenCalledWith(expectedCutoff);
     expect(pruneTombstonedCollections).toHaveBeenCalledWith(expectedCutoff);
+    expect(pruneTombstonedLooms).toHaveBeenCalledWith(expectedCutoff);
     expect(pruneTombstonedAuthors).toHaveBeenCalledWith(expectedCutoff);
     expect(pruneTombstonedArtists).toHaveBeenCalledWith(expectedCutoff);
     expect(pruneTombstonedAlbums).toHaveBeenCalledWith(expectedCutoff);
@@ -467,6 +473,7 @@ describe('sweepTombstones — return shape', () => {
       albums: 6,
       tracks: 7,
       creativeDirectorProjects: 8,
+      fableLooms: 0,
       musicVideoProjects: 13,
       moodBoards: 9,
       writersRoomWorks: 10,

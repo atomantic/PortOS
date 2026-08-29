@@ -89,6 +89,7 @@ const Privacy = lazyWithReload(() => import('./pages/Privacy'));
 const Agents = lazyWithReload(() => import('./pages/Agents'));
 const Uploads = lazyWithReload(() => import('./pages/Uploads'));
 const Settings = lazyWithReload(() => import('./pages/Settings'));
+const VoiceCallHost = lazyWithReload(() => import('./pages/VoiceCallHost'));
 const ApiExplorer = lazyWithReload(() => import('./pages/ApiExplorer'));
 const LocalLlmPlayground = lazyWithReload(() => import('./pages/LocalLlmPlayground'));
 const Models = lazyWithReload(() => import('./pages/Models'));
@@ -321,7 +322,16 @@ export default function App() {
           {/* Embeddings moved into Models with the rest of the model management
               (#4728) — it picks a model, not a preference. */}
           <Route path="settings/embeddings" element={<Navigate to="/models/embeddings" replace />} />
+          {/* Spotify/YouTube sync feed the activity Timeline, which lives in
+              Brain — moved alongside it so they show up in the same sidebar
+              section as the data they populate. */}
+          <Route path="settings/spotify" element={<RedirectWithSearch to="/brain/spotify" />} />
+          <Route path="settings/youtube" element={<RedirectWithSearch to="/brain/youtube" />} />
           <Route path="settings/:tab" element={<Settings />} />
+          {/* The FaceTime call host runs in its own tab on the Mac — device
+              permissions and setSinkId need a real browser profile, and the
+              page holds a Web Lock so a second tab cannot double-answer. */}
+          <Route path="voice/call-host" element={<VoiceCallHost />} />
           <Route path="api-reference" element={<Navigate to="/api-reference/catalog" replace />} />
           <Route path="api-reference/:tab" element={<ApiExplorer />} />
           <Route path="models" element={<Navigate to="/models/performance" replace />} />
@@ -478,6 +488,7 @@ export default function App() {
           <Route path="wiki" element={<RedirectWithSearch to="/wiki/overview" />} />
           <Route path="wiki/:tab" element={<Wiki />} />
           <Route path="rapid-reader" element={<RapidReaderPage />} />
+          <Route path="rapid-reader/:id" element={<RapidReaderPage />} />
           {/* `/universes` is the universe index (list/table). The editor lives
               at `/universes/:universeId`; `new` is the create-mode sentinel
               (UniverseBuilder treats it as no-id → blank draft). Universe ids are
@@ -514,6 +525,7 @@ export default function App() {
           <Route path="importer" element={<Importer />} />
           <Route path="fableloom" element={<FableLoom />} />
           <Route path="fableloom/:loomId" element={<FableLoomStory />} />
+          <Route path="fableloom/:loomId/:episodeId/outline" element={<FableLoomStory view="outline" />} />
           <Route path="fableloom/:loomId/:episodeId" element={<FableLoomStory />} />
           <Route path="fableloom/:loomId/:episodeId/:nodeId" element={<FableLoomStory />} />
           <Route path="start-story" element={<StartStory />} />

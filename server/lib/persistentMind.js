@@ -12,7 +12,7 @@ import { MAX_SCREENSHOT_BYTES } from './uploadLimits.js';
 import { sanitizeFilename } from './mimeTypes.js';
 import { isSafeFilename } from './pathSafety.js';
 
-export const PERSISTENT_MIND_SCHEMA_VERSION = 4;
+export const PERSISTENT_MIND_SCHEMA_VERSION = 5;
 
 export const PERSISTENT_MIND_IMAGE_EXTENSIONS = Object.freeze(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
 export const PERSISTENT_MIND_IMAGE_MIME_TYPES = Object.freeze({
@@ -43,6 +43,9 @@ export const PERSISTENT_MIND_LIMITS = Object.freeze({
   MAX_MESSAGE_IMAGES: 8,
   MAX_MESSAGE_CHARS: 8_000,
   MAX_REASON_CHARS: 500,
+  MAX_CALL_HISTORY: 20,
+  MAX_CALL_REASON_CHARS: 200,
+  MAX_CALL_SOURCE_CHARS: 60,
   MAX_ATTACHMENT_ID_CHARS: 128,
   MAX_ATTACHMENT_FILENAME_CHARS: 255,
   MAX_ATTACHMENT_NAME_CHARS: 200,
@@ -222,6 +225,19 @@ const sanitizeMessage = (value) => {
   };
 };
 
+// One placed outbound call. Only the timestamp, the mind's own reason, and
+// which subsystem asked are kept — never the handle that was dialed, which is
+// the user's phone number or email and has no business in a durable ledger.
+const sanitizeCallRecord = (value) => {
+  const at = asIso(value?.at);
+  if (!at) return null;
+  return {
+    at,
+    reason: asBoundedString(value?.reason, PERSISTENT_MIND_LIMITS.MAX_CALL_REASON_CHARS),
+    source: asBoundedString(value?.source, PERSISTENT_MIND_LIMITS.MAX_CALL_SOURCE_CHARS) || 'mind',
+  };
+};
+
 const sanitizeSelfWake = (value) => {
   const id = asId(value?.id);
   const reason = asBoundedString(value?.reason, PERSISTENT_MIND_LIMITS.MAX_REASON_CHARS);
@@ -277,6 +293,7 @@ export function createDefaultPersistentMindState() {
     activeTurn: null,
     recentMessageIds: [],
     recentMessageFingerprints: [],
+    callHistory: [],
     lastCompletedTurnId: null,
     lastCompletedAt: null,
     nextEligibleWakeAt: null,
@@ -312,6 +329,11 @@ export function normalizePersistentMindState(raw) {
     if (!id || !fingerprint || seenFingerprintIds.has(id)) continue;
     seenFingerprintIds.add(id);
     recentMessageFingerprints.push({ id, fingerprint });
+  }
+  const callHistory = [];
+  for (const candidate of Array.isArray(source.callHistory) ? source.callHistory : []) {
+    const record = sanitizeCallRecord(candidate);
+    if (record) callHistory.push(record);
   }
   const pendingAttachments = [];
   const seenAttachmentIds = new Set();
@@ -360,12 +382,61 @@ export function normalizePersistentMindState(raw) {
     activeTurn,
     recentMessageIds: recentMessageIds.slice(-PERSISTENT_MIND_LIMITS.MAX_RECENT_MESSAGE_IDS),
     recentMessageFingerprints: recentMessageFingerprints.slice(-PERSISTENT_MIND_LIMITS.MAX_RECENT_MESSAGE_IDS),
+    callHistory: callHistory.slice(-PERSISTENT_MIND_LIMITS.MAX_CALL_HISTORY),
     lastCompletedTurnId: asId(source.lastCompletedTurnId) || null,
     lastCompletedAt: asIso(source.lastCompletedAt),
     nextEligibleWakeAt: asIso(source.nextEligibleWakeAt),
     failureCount: asCount(source.failureCount),
     lastError: asBoundedString(source.lastError, PERSISTENT_MIND_LIMITS.MAX_REASON_CHARS) || null,
   };
+}
+
+/**
+ * May the mind ring the user's phone right now?
+ *
+ * Two independent caps, both read from durable state so a restart, a crash, or
+ * a supervisor rewire cannot hand back a fresh allowance:
+ *
+ * - a minimum gap, so a burst of urgent-feeling wakes cannot dial repeatedly;
+ * - a rolling-window ceiling, so a persistently agitated mind still stops.
+ *
+ * A timestamp in the future (a clock rollback, a hand-edited state file) reads
+ * as "too soon" rather than as "no recent calls" — the fail-closed reading,
+ * which self-heals once the clock passes it.
+ */
+export function persistentMindCallRateVerdict(raw, now = Date.now(), limits = {}) {
+  const {
+    maxPerRollingDay = 3,
+    rollingWindowMs = 24 * 60 * 60 * 1000,
+    minGapMs = 30 * 60 * 1000,
+  } = limits;
+  const placedAt = normalizePersistentMindState(raw).callHistory
+    .map((entry) => Date.parse(entry.at))
+    .filter((value) => Number.isFinite(value));
+  const withinWindow = placedAt.filter((at) => now - at < rollingWindowMs);
+  const mostRecent = placedAt.length > 0 ? Math.max(...placedAt) : null;
+  if (mostRecent !== null && now - mostRecent < minGapMs) {
+    return { ok: false, reason: 'too-soon', retryAt: mostRecent + minGapMs, callsInWindow: withinWindow.length };
+  }
+  if (withinWindow.length >= maxPerRollingDay) {
+    return {
+      ok: false,
+      reason: 'rate-capped',
+      retryAt: Math.min(...withinWindow) + rollingWindowMs,
+      callsInWindow: withinWindow.length,
+    };
+  }
+  return { ok: true, reason: null, retryAt: null, callsInWindow: withinWindow.length };
+}
+
+/** Append one placed call to the durable, bounded call ledger. */
+export function recordPersistentMindCall(raw, { at = new Date().toISOString(), reason = '', source = 'mind' } = {}) {
+  const state = normalizePersistentMindState(raw);
+  return normalizePersistentMindState({
+    ...state,
+    callHistory: [...state.callHistory, { at, reason, source }]
+      .slice(-PERSISTENT_MIND_LIMITS.MAX_CALL_HISTORY),
+  });
 }
 
 export function persistentMindBackoffMs(failureCount) {

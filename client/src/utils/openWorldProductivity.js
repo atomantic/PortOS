@@ -1,18 +1,15 @@
-// Pure, deterministic helpers for OpenWorld's productivity district (roadmap 2.6): a
-// streak monument (a glowing obelisk) in a southwest district whose height and glow scale
-// with the user's current CoS completion streak, tiered by recent velocity. The monument
-// distinguishes "no productivity data yet" (absent → dim, reads "NO DATA") from a real
-// zero-day streak (present but unlit beyond the base). No three.js / React imports so the
-// topology is unit-testable (mirrors openWorldBackupVault.js / openWorldHealthTower.js).
+// Pure, deterministic helpers for OpenWorld's productivity district: a glowing
+// obelisk whose height reflects today's completed agent tasks and whose color
+// reflects recent velocity. No three.js / React imports.
 
 import { PARCELS } from './openWorldPlan';
 
 export const MONUMENT = {
   position: PARCELS.productivity.anchor, // southwest district — anchored by the master plan (openWorldPlan.js)
   baseWidth: 5, // footprint of the obelisk base
-  minHeight: 3, // floor height so a 0-streak monument still reads as a stub, not nothing
-  maxHeight: 26, // height at/above STREAK_CAP days
-  streakCap: 30, // streak length mapped to full height; longer streaks stay capped (don't overrun the skybox)
+  minHeight: 3,
+  maxHeight: 26,
+  taskCap: 20,
 };
 
 // Velocity tiers drive the monument color so the district speaks recent throughput at a
@@ -35,13 +32,12 @@ function finiteOrNull(value) {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
-// Map a streak length (in days) to a 0..1 fill against the cap, clamped. Returns null for a
-// non-numeric input so an absent streak never collapses into a real 0-day streak.
-export function streakLevel(streak, cap = MONUMENT.streakCap) {
-  const s = finiteOrNull(streak);
-  if (s === null) return null;
+// Map today's completed task count to a 0..1 fill against the cap.
+export function throughputLevel(tasks, cap = MONUMENT.taskCap) {
+  const count = finiteOrNull(tasks);
+  if (count === null) return null;
   if (typeof cap !== 'number' || !Number.isFinite(cap) || cap <= 0) return null;
-  return clamp01(s / cap);
+  return clamp01(count / cap);
 }
 
 // Classify recent velocity into a color tier. A non-numeric velocity (absent) falls through
@@ -53,20 +49,15 @@ export function velocityTier(velocity) {
 }
 
 // Full derived view-model for the component. `productivityData` is the quick-summary payload
-// (`{ streak: { current, longest, weekly, lastActive }, today: { completed, ... },
-// velocity: { percentage, ... } }`). A missing/non-object payload, or one with no streak
-// field, yields an absent monument (dim, floor height) rather than a crash.
+// (`{ today: { completed, ... }, velocity: { percentage, ... } }`).
 export function computeProductivityMonument(productivityData) {
   const payload = productivityData && typeof productivityData === 'object' ? productivityData : {};
-  const streakSrc = payload.streak && typeof payload.streak === 'object' ? payload.streak : {};
   const todaySrc = payload.today && typeof payload.today === 'object' ? payload.today : {};
   const velocitySrc = payload.velocity && typeof payload.velocity === 'object' ? payload.velocity : {};
 
-  const current = finiteOrNull(streakSrc.current);
-  const longest = finiteOrNull(streakSrc.longest);
   const completedToday = finiteOrNull(todaySrc.completed);
-  const level = streakLevel(current) ?? 0; // 0 for both absent and a real 0-streak; `present` disambiguates
-  const present = current !== null;
+  const level = throughputLevel(completedToday) ?? 0;
+  const present = completedToday !== null;
 
   const tier = velocityTier(velocitySrc.percentage);
   // Absent productivity data reads slate/dim; a present payload always gets a tier color
@@ -76,15 +67,13 @@ export function computeProductivityMonument(productivityData) {
   const tierLabel = present ? (tier?.label ?? TIERS[TIERS.length - 1].label) : 'NO DATA';
 
   const height = MONUMENT.minHeight + level * (MONUMENT.maxHeight - MONUMENT.minHeight);
-  // Emissive intensity: brighter as the streak grows; a present-but-zero streak still glows
-  // faintly so it's legible; an absent monument is nearly dark.
+  // A present-but-quiet day still glows faintly; absent data is nearly dark.
   const intensity = present ? 0.3 + level * 0.7 : 0.1;
 
-  // Short streak label: "12 DAY STREAK" / "1 DAY STREAK" / "NO STREAK" (real 0) / "NO DATA".
-  let streakLabel;
-  if (!present) streakLabel = 'NO DATA';
-  else if (current === 0) streakLabel = 'NO STREAK';
-  else streakLabel = `${current} DAY${current === 1 ? '' : 'S'} STREAK`;
+  let throughputLabel;
+  if (!present) throughputLabel = 'NO DATA';
+  else if (completedToday === 0) throughputLabel = 'NO TASKS TODAY';
+  else throughputLabel = `${completedToday} TASK${completedToday === 1 ? '' : 'S'} TODAY`;
 
   return {
     position: MONUMENT.position,
@@ -92,15 +81,12 @@ export function computeProductivityMonument(productivityData) {
     height,
     level,
     present,
-    current: present ? current : null,
-    longest,
     completedToday,
     color,
     intensity,
     tierKey: present ? (tier?.key ?? TIERS[TIERS.length - 1].key) : 'absent',
     tierLabel,
-    streakLabel,
-    // The monument pulses brighter the higher the streak; surging velocity adds urgency.
+    throughputLabel,
     surging: tier?.key === 'surging',
   };
 }

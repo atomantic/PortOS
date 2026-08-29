@@ -186,6 +186,11 @@ export default function PostSessionLauncher({
   // recommendation also biases the Quick session's drill picks.
   const [recommendations, setRecommendations] = useState([]);
   const [recommendationsLoaded, setRecommendationsLoaded] = useState(false);
+  // Compact multi-day practice window from the same endpoint (issue #5319), so
+  // the Quick session rotates its per-domain picks off exactly the signal the
+  // server used to order the recommendations. null = not loaded / load failed,
+  // which composeQuickSession degrades to its previous fixed ordering.
+  const [recentPractice, setRecentPractice] = useState(null);
   // Current effective Morse WPM — fetched only when a Morse WPM goal is set, so
   // that goal can render progress (issue #2100). null when unset/unavailable.
   const [morseWpm, setMorseWpm] = useState(null);
@@ -201,8 +206,14 @@ export default function PostSessionLauncher({
   useEffect(() => {
     getPostReviewReps(5).then(r => setReviewReps(r?.reps || [])).catch(() => setReviewReps([]));
     getPostRecommendations()
-      .then(r => setRecommendations(r?.recommendations || []))
-      .catch(() => setRecommendations([]))
+      .then(r => {
+        setRecommendations(r?.recommendations || []);
+        setRecentPractice(r?.recentPractice || null);
+      })
+      .catch(() => {
+        setRecommendations([]);
+        setRecentPractice(null);
+      })
       .finally(() => setRecommendationsLoaded(true));
     getMemoryItems({ silent: true })
       .then(items => setMemoryItemsState({ status: 'ready', items: Array.isArray(items) ? items : [] }))
@@ -458,6 +469,7 @@ export default function PostSessionLauncher({
     toleranceSec: QUICK_DURATION_TOLERANCE_SEC,
     observedDurations: deriveQuickObservedDurations(recentSessions),
     memoryItemIds: quickMemoryItemIds,
+    recentPractice,
   });
 
   function handleQuickDurationChange(event) {

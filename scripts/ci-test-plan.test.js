@@ -4,6 +4,7 @@ import {
   ALWAYS_RUN_TESTS,
   buildCiTestPlan,
   forceFullReasonFor,
+  isRouteOnlyAppDiff,
   splitByRunner,
   WINDOWS_CONTRACT_TESTS,
 } from './ci-test-plan.js';
@@ -33,6 +34,8 @@ const TRACKED = [
   'server/lib/shellCd.js',
   'server/services/agentTuiSpawning.test.js',
   'client/src/a11yConventions.test.js',
+  'client/src/App.jsx',
+  'client/src/App.test.jsx',
   'client/src/hooks/mountedRefConventions.test.js',
   'client/src/components/catalog/CatalogCard.jsx',
   'client/src/components/catalog/CatalogCard.test.jsx',
@@ -169,6 +172,54 @@ describe('CI test impact planner', () => {
       expect(plan.client.mode, path).toBe('full');
       expect(plan.db, path).toBe(true);
     }
+  });
+
+  it('scopes an App.jsx change only when its diff contains route declarations', () => {
+    const routeDiff = [
+      'diff --git a/client/src/App.jsx b/client/src/App.jsx',
+      '--- a/client/src/App.jsx',
+      '+++ b/client/src/App.jsx',
+      '@@ -10 +10 @@',
+      '-        <Route path="legacy" element={<Legacy />} />',
+      '+        <Route path="current" element={<Current />} />',
+    ].join('\n');
+
+    expect(isRouteOnlyAppDiff(routeDiff)).toBe(true);
+    const plan = buildCiTestPlan(['client/src/App.jsx'], {
+      trackedFiles: TRACKED,
+      appRouteOnly: isRouteOnlyAppDiff(routeDiff),
+    });
+
+    expect(plan).toMatchObject({
+      full: false,
+      server: { mode: 'files' },
+      client: { mode: 'related', sources: ['client/src/App.jsx'] },
+      db: false,
+      build: true,
+      smoke: false,
+      windows: false,
+    });
+    expect(plan.suiteReasons.client).toMatch(/route-only/i);
+    expect(plan.suiteReasons.db).toMatch(/skipped/i);
+  });
+
+  it('fails closed to the full matrix for any non-route App.jsx diff', () => {
+    const providerDiff = [
+      'diff --git a/client/src/App.jsx b/client/src/App.jsx',
+      '--- a/client/src/App.jsx',
+      '+++ b/client/src/App.jsx',
+      '@@ -1 +1 @@',
+      '-import { ExistingProvider } from \'./provider\';',
+      '+import { NewProvider } from \'./provider\';',
+    ].join('\n');
+
+    expect(isRouteOnlyAppDiff(providerDiff)).toBe(false);
+    const plan = buildCiTestPlan(['client/src/App.jsx'], {
+      trackedFiles: TRACKED,
+      appRouteOnly: isRouteOnlyAppDiff(providerDiff),
+    });
+    expect(plan).toMatchObject({ full: true, db: true, smoke: true, windows: true });
+    expect(plan.reason).toMatch(/composition root changed/);
   });
 
   it('uses only the structural contract for a server barrel edit', () => {

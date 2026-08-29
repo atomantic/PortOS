@@ -10,6 +10,7 @@ const mock = vi.hoisted(() => ({
 }));
 
 vi.mock('./settings.js', () => ({
+  getSettings: vi.fn(async () => structuredClone(mock.settings)),
   getSettingsWithStatus: vi.fn(async () => ({ corrupt: mock.corrupt, settings: structuredClone(mock.settings) })),
   updateSettingsWith: mock.updateSettingsWith,
 }));
@@ -171,7 +172,7 @@ describe('instance features', () => {
 
     const { features } = await getInstanceFeatures();
     expect(Object.fromEntries(features.map((f) => [f.id, f.enabled])))
-      .toEqual({ post: true, datadog: true, jira: false, gsd: true, openclaw: true, health: true });
+      .toEqual({ post: true, datadog: true, jira: false, gsd: true, openclaw: true, health: true, facetime: false });
   });
 
   it('rejects an unknown feature id', async () => {

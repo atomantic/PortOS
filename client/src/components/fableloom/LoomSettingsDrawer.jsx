@@ -1,7 +1,9 @@
 /**
  * FableLoom story settings — the loom-level choices that steer every AI lane.
  *
- * Two things live here:
+ * Three things live here:
+ *   - **Audience participation.** Whether the audience acts as the protagonist
+ *     or helps an autonomous protagonist through a named in-story channel.
  *   - **Scene format.** Whether scenes are written as narrated prose or as a
  *     teleplay. The setting is a pin: weave, branch, and play all render the
  *     matching format contract into their prompts. Changing it does NOT
@@ -14,7 +16,7 @@
  *     all, so this only governs typed input.
  */
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Loader2, Sparkles } from 'lucide-react';
 import Drawer from '../Drawer';
 import ProviderModelSelector from '../ProviderModelSelector';
@@ -26,6 +28,7 @@ import { effectiveModelFor, effortAwareModelOptions } from '../../utils/provider
 import { reformatLoomEpisode, updateLoom } from '../../services/api';
 import { fieldClass, labelClass } from './fieldStyles';
 import { LOOM_FORMATS, episodesNeedingReformat, loomFormatHint, loomFormatLabel } from './loomFormats';
+import { FABLELOOM_PARTICIPATION_MODES } from '../../../../server/lib/fableLoomParticipation.js';
 
 /**
  * The one line of feedback a multi-minute rewrite gives. Built as a single
@@ -48,6 +51,13 @@ export default function LoomSettingsDrawer({ open, onClose, loom, onLoomUpdate, 
   const [rewritingEpisode, setRewritingEpisode] = useState(null);
 
   const format = loom.format || 'prose';
+  const [participationMode, setParticipationMode] = useState(loom.participationMode || 'protagonist');
+  const [communicationMedium, setCommunicationMedium] = useState(loom.audienceCommunicationMedium || '');
+  useEffect(() => {
+    if (open) return;
+    setParticipationMode(loom.participationMode || 'protagonist');
+    setCommunicationMedium(loom.audienceCommunicationMedium || '');
+  }, [open, loom.participationMode, loom.audienceCommunicationMedium]);
   const play = loom.playSettings || {};
   const playProvider = providers.find((p) => p.id === play.providerId);
   // Only scenes not already in the target format are sent, so this is what the
@@ -144,6 +154,58 @@ export default function LoomSettingsDrawer({ open, onClose, loom, onLoomUpdate, 
     >
       <div className="space-y-5">
         <section className="space-y-2">
+          <FormField label="Audience role" labelClassName={labelClass}>
+            <select
+              className={fieldClass}
+              value={participationMode}
+              disabled={saving || reformatting}
+              onChange={(event) => {
+                const mode = event.target.value;
+                setParticipationMode(mode);
+                if (mode === 'protagonist' || communicationMedium.trim()) {
+                  patch({
+                    participationMode: mode,
+                    ...(mode === 'helper' ? { audienceCommunicationMedium: communicationMedium.trim() } : {}),
+                  });
+                }
+              }}
+            >
+              {FABLELOOM_PARTICIPATION_MODES.map((mode) => (
+                <option key={mode} value={mode}>
+                  {mode === 'helper' ? 'Audience helps the protagonist' : 'Audience acts as the protagonist'}
+                </option>
+              ))}
+            </select>
+          </FormField>
+          <p className="text-xs text-port-text-muted">
+            {participationMode === 'helper'
+              ? 'The protagonist keeps their own agency. The audience can advise them only while an in-story connection is working.'
+              : 'The audience chooses the protagonist’s actions directly, like a classic choose-your-own adventure.'}
+          </p>
+          {participationMode === 'helper' && (
+            <FormField label="Communication medium" labelClassName={labelClass}>
+              <textarea
+                rows={3}
+                className={fieldClass}
+                value={communicationMedium}
+                onChange={(event) => setCommunicationMedium(event.target.value)}
+                onBlur={() => {
+                  if (communicationMedium.trim() !== (loom.audienceCommunicationMedium || '')) {
+                    patch({ participationMode: 'helper', audienceCommunicationMedium: communicationMedium.trim() });
+                  }
+                }}
+                placeholder="How the protagonist hears the audience: radio, telepathy, magic device, phone…"
+              />
+              {!communicationMedium.trim() && (
+                <p className="text-xs text-port-warning mt-1">
+                  Helper stories need a communication medium before the role can be saved.
+                </p>
+              )}
+            </FormField>
+          )}
+        </section>
+
+        <section className="border-t border-port-border pt-4 space-y-2">
           <FormField label="Scene format" labelClassName={labelClass}>
             <select
               className={fieldClass}

@@ -45,6 +45,12 @@ vi.mock('../services/voice/proactiveSpeech.js', async () => {
     speakProactive: vi.fn(),
   };
 });
+vi.mock('../services/voice/facetimeBridge.js', () => ({
+  checkSetup: vi.fn(),
+  probe: vi.fn(),
+  call: vi.fn(),
+  hangup: vi.fn(),
+}));
 
 import * as config from '../services/voice/config.js';
 import * as health from '../services/voice/health.js';
@@ -54,6 +60,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import * as piperVoices from '../services/voice/piper-voices.js';
 import * as proactiveSpeech from '../services/voice/proactiveSpeech.js';
 import * as kokoro from '../services/voice/tts-kokoro.js';
+import * as facetimeBridge from '../services/voice/facetimeBridge.js';
 import voiceRoutes from './voice.js';
 import { errorEvents } from '../lib/errorHandler.js';
 
@@ -142,6 +149,24 @@ describe('Voice Routes', () => {
       const res = await request(buildApp()).put('/api/voice/config').send(patch);
       expect(res.status).toBe(200);
       expect(config.updateVoiceConfig).toHaveBeenCalledWith(patch);
+    });
+
+    it('accepts a facetime.autoAnswer patch', async () => {
+      config.updateVoiceConfig.mockResolvedValue({ ...DEFAULT_CFG });
+      bootstrap.reconcile.mockResolvedValue({ skipped: true });
+      const patch = { facetime: { autoAnswer: true } };
+      const res = await request(buildApp()).put('/api/voice/config').send(patch);
+      expect(res.status).toBe(200);
+      expect(config.updateVoiceConfig).toHaveBeenCalledWith(patch);
+    });
+
+    it('rejects a non-boolean facetime.autoAnswer', async () => {
+      const res = await request(buildApp())
+        .put('/api/voice/config')
+        .send({ facetime: { autoAnswer: 'yes' } });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('VALIDATION_ERROR');
+      expect(config.updateVoiceConfig).not.toHaveBeenCalled();
     });
 
     it('rejects out-of-range fastPath.browser params', async () => {
@@ -386,6 +411,36 @@ describe('Voice Routes', () => {
       expect(res.body.code).toBe('VALIDATION_ERROR');
       expect(bootstrap.startWhisper).not.toHaveBeenCalled();
       expect(bootstrap.stopWhisper).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('FaceTime Audio control plane', () => {
+    it('GET /api/voice/facetime/status reports setup without spawning the helper', async () => {
+      facetimeBridge.checkSetup.mockResolvedValue({ ready: true });
+      const res = await request(buildApp()).get('/api/voice/facetime/status');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ ready: true });
+      expect(facetimeBridge.probe).not.toHaveBeenCalled();
+    });
+
+    it.each(['probe', 'call', 'hangup'])('POST /api/voice/facetime/%s dispatches to the matching bridge command', async (command) => {
+      facetimeBridge[command].mockResolvedValue({ ok: true, command });
+      const res = await request(buildApp()).post(`/api/voice/facetime/${command}`).send({});
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ ok: true, command });
+      expect(facetimeBridge[command]).toHaveBeenCalledTimes(1);
+    });
+
+    it('POST /api/voice/facetime/probe propagates a bridge failure as an error response', async () => {
+      facetimeBridge.probe.mockRejectedValue(new ServerError('helper not installed', { status: 409 }));
+      const res = await request(buildApp()).post('/api/voice/facetime/probe').send({});
+      expect(res.status).toBe(409);
+    });
+
+    it('rejects an unexpected body field with 400 without touching the bridge', async () => {
+      const res = await request(buildApp()).post('/api/voice/facetime/call').send({ extra: 'nope' });
+      expect(res.status).toBe(400);
+      expect(facetimeBridge.call).not.toHaveBeenCalled();
     });
   });
 });

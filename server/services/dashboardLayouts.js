@@ -54,16 +54,15 @@ export const INTENT_LAYOUTS = [
   {
     id: 'health',
     name: 'Health',
-    widgets: ['death-clock', 'goal-progress', 'activity-streak', 'daily-post', 'quick-brain', 'hourly-activity', 'meatspace-streak'],
+    widgets: ['death-clock', 'goal-progress', 'daily-post', 'quick-brain', 'hourly-activity', 'meatspace-streak'],
     grid: [
       { id: 'death-clock',      x: 0, w: 4,  order: 0, h: 3 },
       { id: 'goal-progress',    x: 4, w: 5,  order: 1, h: 5 },
-      { id: 'activity-streak',  x: 9, w: 3,  order: 2, h: 3 },
-      { id: 'quick-brain',      x: 0, w: 4,  order: 3, h: 2 },
-      { id: 'daily-post',       x: 9, w: 3,  order: 4, h: 2 },
-      { id: 'hourly-activity',  x: 0, w: 12, order: 5, h: 4 },
+      { id: 'quick-brain',      x: 0, w: 4,  order: 2, h: 2 },
+      { id: 'daily-post',       x: 9, w: 3,  order: 3, h: 2 },
+      { id: 'hourly-activity',  x: 0, w: 12, order: 4, h: 4 },
       // Gated on any health log existing — hidden on installs with no logs.
-      { id: 'meatspace-streak', x: 0, w: 4,  order: 6, h: 4 },
+      { id: 'meatspace-streak', x: 0, w: 4,  order: 5, h: 4 },
     ],
   },
   {
@@ -112,7 +111,7 @@ const DEFAULT_LAYOUTS = [
       'apps',
       'cos', 'goal-progress', 'upcoming-tasks',
       'proactive-alerts', 'review-hub', 'while-away', 'system-health', 'active-processing', 'network-exposure', 'backup', 'death-clock', 'quick-stats', 'decision-log',
-      'activity-streak', 'hourly-activity', 'tribe-care', 'feeds',
+      'hourly-activity', 'tribe-care', 'feeds',
     ],
     // Above-the-fold capture row stretches to h=5 so the Quick Task card
     // can show its expanded options (worktree/PR/simplify/etc.) without
@@ -129,28 +128,27 @@ const DEFAULT_LAYOUTS = [
       { id: 'active-processing',x: 5, w: 3,  order: 5,  h: 5 },
       { id: 'proactive-alerts', x: 8, w: 3,  order: 6,  h: 3 },
       { id: 'death-clock',      x: 8, w: 4,  order: 7,  h: 2 },
-      { id: 'activity-streak',  x: 8, w: 4,  order: 8,  h: 3 },
-      { id: 'review-hub',       x: 5, w: 3,  order: 9,  h: 2 },
+      { id: 'review-hub',       x: 5, w: 3,  order: 8,  h: 2 },
       // Secondary widgets
-      { id: 'backup',           x: 0, w: 3,  order: 10, h: 4 },
-      { id: 'quick-stats',      x: 3, w: 3,  order: 11, h: 3 },
-      { id: 'goal-progress',    x: 6, w: 3,  order: 12, h: 4 },
-      { id: 'network-exposure', x: 9, w: 3,  order: 13, h: 5 },
+      { id: 'backup',           x: 0, w: 3,  order: 9,  h: 4 },
+      { id: 'quick-stats',      x: 3, w: 3,  order: 10, h: 3 },
+      { id: 'goal-progress',    x: 6, w: 3,  order: 11, h: 4 },
+      { id: 'network-exposure', x: 9, w: 3,  order: 12, h: 5 },
       // Lower-priority + cos
-      { id: 'decision-log',     x: 0, w: 4,  order: 14, h: 2 },
-      { id: 'cos',              x: 4, w: 5,  order: 15, h: 4 },
-      { id: 'while-away',       x: 9, w: 3,  order: 16, h: 3 },
+      { id: 'decision-log',     x: 0, w: 4,  order: 13, h: 2 },
+      { id: 'cos',              x: 4, w: 5,  order: 14, h: 4 },
+      { id: 'while-away',       x: 9, w: 3,  order: 15, h: 3 },
       // Full-width visualizations + apps
-      { id: 'hourly-activity',  x: 0, w: 12, order: 17, h: 3 },
-      { id: 'apps',             x: 0, w: 12, order: 18, h: 8 },
+      { id: 'hourly-activity',  x: 0, w: 12, order: 16, h: 3 },
+      { id: 'apps',             x: 0, w: 12, order: 17, h: 8 },
       // Quick-idea (catalog) is sequenced below apps so the seeded layout
       // doesn't crowd the tightly-packed above-the-fold band.
       // Reorderable via the Arrange button on the dashboard.
-      { id: 'quick-idea',       x: 0, w: 4,  order: 19, h: 4 },
+      { id: 'quick-idea',       x: 0, w: 4,  order: 18, h: 4 },
       // Gated on the Tribe having people — hidden on installs that don't use it.
-      { id: 'tribe-care',       x: 4, w: 4,  order: 20, h: 4 },
+      { id: 'tribe-care',       x: 4, w: 4,  order: 19, h: 4 },
       // Gated on having subscribed feeds — hidden on installs with none.
-      { id: 'feeds',            x: 8, w: 3,  order: 21, h: 4 },
+      { id: 'feeds',            x: 8, w: 3,  order: 20, h: 4 },
     ],
   },
   {
@@ -161,7 +159,7 @@ const DEFAULT_LAYOUTS = [
     // All three widgets above the fold. Quick-task is sized to show its
     // expanded options (matches the Everything layout's h=5 capture row);
     // upcoming-tasks tall on the right (the focus list); cos below
-    // quick-task for streak/progress context.
+    // quick-task for status/progress context.
     grid: [
       { id: 'quick-task',     x: 0, w: 6, order: 0, h: 5 },
       { id: 'upcoming-tasks', x: 6, w: 6, order: 1, h: 10 },

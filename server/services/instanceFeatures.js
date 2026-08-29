@@ -30,6 +30,12 @@ const DETECTORS = {
     const { hasConfiguredInstances } = await import('./jira.js');
     return hasConfiguredInstances();
   },
+  facetime: async () => {
+    if (process.platform !== 'darwin') return false;
+    const { checkSetup } = await import('./voice/facetimeBridge.js');
+    const report = await checkSetup();
+    return report.helper?.ok === 'ok' && report.identity?.ok === 'ok';
+  },
 };
 
 const FEATURE_BY_ID = new Map(INSTANCE_FEATURES.map((feature) => [feature.id, feature]));

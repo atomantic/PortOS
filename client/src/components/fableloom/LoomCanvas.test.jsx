@@ -23,14 +23,104 @@ const episode = () => ({
   ],
 });
 
+const sceneY = (name) => {
+  const transform = screen.getByLabelText(`Scene: ${name}`).getAttribute('transform');
+  return Number(/translate\([^,]+, ([^)]+)\)/.exec(transform)?.[1]);
+};
+
 describe('LoomCanvas', () => {
   it('renders scene cards with start/ending markers and edge intent labels', () => {
     render(<LoomCanvas episode={episode()} selectedNodeId={null} onSelectNode={() => {}} />);
     expect(screen.getByLabelText('Scene: The Gate')).toBeInTheDocument();
     expect(screen.getByLabelText('Scene: Inside')).toBeInTheDocument();
     expect(screen.getByText('Opening')).toBeInTheDocument();
+    expect(screen.getByText('Decision loop')).toBeInTheDocument();
     expect(screen.getByText('Within')).toBeInTheDocument();
     expect(screen.getByText('enter the gate')).toBeInTheDocument();
+  });
+
+  it('packs an automatic cut tightly and omits its redundant connection label', () => {
+    const automatic = episode();
+    automatic.nodes[0].playbackMode = 'cut';
+    automatic.nodes[0].transitions[0].intent = 'Continue';
+    const { rerender } = render(
+      <LoomCanvas
+        episode={automatic}
+        selectedNodeId={null}
+        onSelectNode={() => {}}
+        viewportWidth={390}
+      />,
+    );
+
+    const cutStartY = sceneY('The Gate');
+    const cutNextY = sceneY('Inside');
+    expect(screen.queryByText('Continue')).not.toBeInTheDocument();
+
+    rerender(
+      <LoomCanvas
+        episode={episode()}
+        selectedNodeId={null}
+        onSelectNode={() => {}}
+        viewportWidth={390}
+      />,
+    );
+    const decisionStartY = sceneY('The Gate');
+    const decisionNextY = sceneY('Inside');
+    expect(cutNextY - cutStartY).toBeLessThan(decisionNextY - decisionStartY);
+  });
+
+  it('keeps media controls in each visual node and gives a finished video preview precedence', () => {
+    const onGenerateImage = vi.fn();
+    const onGenerateVideo = vi.fn();
+    const withMedia = episode();
+    withMedia.nodes[0] = {
+      ...withMedia.nodes[0], image: 'scene.png', videoHistoryId: 'video-1',
+    };
+    render(
+      <LoomCanvas
+        episode={withMedia}
+        selectedNodeId={null}
+        onSelectNode={() => {}}
+        onGenerateImage={onGenerateImage}
+        onGenerateVideo={onGenerateVideo}
+      />,
+    );
+
+    expect(screen.getByLabelText('The Gate video preview')).toBeInTheDocument();
+    expect(screen.queryByAltText('The Gate image preview')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Regenerate image' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Regenerate video' }));
+    expect(onGenerateImage).toHaveBeenCalledWith(withMedia.nodes[0]);
+    expect(onGenerateVideo).toHaveBeenCalledWith(withMedia.nodes[0]);
+  });
+
+  it('shows live image progress and retains an actionable failed indicator', () => {
+    const { rerender } = render(
+      <LoomCanvas
+        episode={episode()}
+        selectedNodeId={null}
+        onSelectNode={() => {}}
+        onGenerateImage={() => {}}
+        onGenerateVideo={() => {}}
+        mediaJobs={{ n1: { image: { jobId: 'image-1', status: 'running', progress: 0.42, currentImage: 'AAAA' } } }}
+      />,
+    );
+    expect(screen.getByAltText('The Gate image generation preview')).toBeInTheDocument();
+    expect(screen.getByText('Generating image 42%')).toBeInTheDocument();
+
+    rerender(
+      <LoomCanvas
+        episode={episode()}
+        selectedNodeId={null}
+        onSelectNode={() => {}}
+        onGenerateImage={() => {}}
+        onGenerateVideo={() => {}}
+        mediaJobs={{ n1: { image: { jobId: 'image-1', status: 'failed', error: 'Synthetic failure' } } }}
+      />,
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent('Image failed');
+    expect(screen.getByRole('alert')).toHaveAttribute('title', 'Synthetic failure');
+    expect(screen.getAllByRole('button', { name: 'Generate image' })[0]).toBeEnabled();
   });
 
   it('selects a node on keyboard activation', () => {

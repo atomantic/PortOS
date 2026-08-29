@@ -208,6 +208,7 @@ describe('federated media routes', () => {
 
   it('defaults GET /status to the audio-only kinds an unopted-in caller understands', async () => {
     await request(buildApp()).get('/api/federation/media/v1/status');
+    expect(provider.authorize).toHaveBeenCalledWith(expect.anything(), { statusProbe: true });
     expect(provider.status).toHaveBeenCalledWith(expect.anything(), { kinds: ['audio'] });
   });
 

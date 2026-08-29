@@ -102,7 +102,7 @@ function readSidebarTab() {
   return STORYBOARD_TAB_VALUES.includes(stored) ? stored : STORYBOARD_TAB.BOARDS;
 }
 
-export default function WorkEditor({ work, onChange, onToggleExercise, exerciseOpen }) {
+export default function WorkEditor({ work, onChange, onToggleExercise, exerciseOpen, onDirtyChange }) {
   const navigate = useNavigate();
   const [body, setBody] = useState(work.activeDraftBody || '');
   const [title, setTitle] = useState(work.title);
@@ -254,14 +254,16 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   // Rehydrate body/title when the parent swaps the active work OR switches to
   // a different draft version of the same work.
   const prevKey = useRef({ id: work.id, draftId: work.activeDraftVersionId });
+  const dirty = body !== savedBody;
   useEffect(() => {
     const key = { id: work.id, draftId: work.activeDraftVersionId };
-    if (prevKey.current.id === key.id && prevKey.current.draftId === key.draftId) return;
+    const hasNewCleanBody = work.activeDraftBody !== savedBody && !dirty;
+    if (prevKey.current.id === key.id && prevKey.current.draftId === key.draftId && !hasNewCleanBody) return;
     prevKey.current = key;
     setBody(work.activeDraftBody || '');
     setSavedBody(work.activeDraftBody || '');
     setTitle(work.title);
-  }, [work.id, work.activeDraftVersionId, work.activeDraftBody, work.title]);
+  }, [work.id, work.activeDraftVersionId, work.activeDraftBody, work.title, savedBody, dirty]);
 
   useEffect(() => { setStatus(work.status); }, [work.status]);
   useEffect(() => { setTitle(work.title); }, [work.title]);
@@ -281,7 +283,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     });
   }, [work.id]);
 
-  const dirty = body !== savedBody;
+  useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
   const wordCount = useMemo(() => countWords(body), [body]);
 
   // Live mirror of `body` for callbacks that only READ the prose (#3387).

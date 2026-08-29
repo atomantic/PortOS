@@ -274,12 +274,6 @@ export default function OpenWorldBillboards({ positions, apps, cosStatus, review
           text: `${productivityData.todaySucceeded} TASKS COMPLETED`,
         });
       }
-      if (productivityData.currentDailyStreak > 0) {
-        activityMessages.push({
-          label: 'STREAK',
-          text: `${productivityData.currentDailyStreak} DAY${productivityData.currentDailyStreak > 1 ? 'S' : ''} ACTIVE`,
-        });
-      }
     }
 
     const billboards = [];

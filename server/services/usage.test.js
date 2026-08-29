@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 /**
- * Tests for usage.js — streak calculation logic and getUsageSummary shape.
+ * Tests for usage.js — getUsageSummary shape and usage persistence.
  *
  * Strategy: mock fs/promises + fileUtils so usageData is controlled by each test.
- * This lets us assert EXACT streak values rather than typeof checks.
+ * This lets us assert exact summary values.
  */
 
 vi.mock('fs/promises', () => ({
@@ -59,7 +59,7 @@ function makeUsage(dailyActivity = {}, extras = {}) {
 // Fixed reference date: noon UTC on a Wednesday to avoid midnight edge cases.
 const FIXED_DATE = new Date('2025-06-11T12:00:00.000Z');
 
-describe('usage.js — streak calculations', () => {
+describe('usage.js — summary', () => {
   beforeEach(async () => {
     // Freeze time so daysAgo() and usage.js internal new Date() agree,
     // preventing flakiness when a test run crosses UTC midnight.
@@ -70,110 +70,6 @@ describe('usage.js — streak calculations', () => {
 
   afterEach(() => {
     vi.useRealTimers();
-  });
-
-  describe('currentStreak', () => {
-    it('returns 0 when dailyActivity is empty', async () => {
-      readJSONFile.mockResolvedValueOnce(makeUsage({}));
-      await loadUsage();
-      const summary = getUsageSummary();
-      expect(summary.currentStreak).toBe(0);
-    });
-
-    it('returns 3 for 3 consecutive days ending today', async () => {
-      const activity = {
-        [daysAgo(0)]: { sessions: 2, messages: 5, tokens: 100 },
-        [daysAgo(1)]: { sessions: 1, messages: 3, tokens: 50 },
-        [daysAgo(2)]: { sessions: 3, messages: 7, tokens: 200 }
-      };
-      readJSONFile.mockResolvedValueOnce(makeUsage(activity));
-      await loadUsage();
-      const summary = getUsageSummary();
-      expect(summary.currentStreak).toBe(3);
-    });
-
-    it('returns 1 when only today has activity', async () => {
-      const activity = {
-        [daysAgo(0)]: { sessions: 1, messages: 1, tokens: 10 }
-      };
-      readJSONFile.mockResolvedValueOnce(makeUsage(activity));
-      await loadUsage();
-      const summary = getUsageSummary();
-      expect(summary.currentStreak).toBe(1);
-    });
-
-    it('returns 1 when today has activity but yesterday does not (gap breaks streak)', async () => {
-      const activity = {
-        [daysAgo(0)]: { sessions: 1, messages: 1, tokens: 10 },
-        [daysAgo(2)]: { sessions: 2, messages: 2, tokens: 20 }  // gap at day 1
-      };
-      readJSONFile.mockResolvedValueOnce(makeUsage(activity));
-      await loadUsage();
-      const summary = getUsageSummary();
-      expect(summary.currentStreak).toBe(1);
-    });
-
-    it('counts streak from yesterday when today has no activity', async () => {
-      // Yesterday + day before: streak of 2 from yesterday
-      const activity = {
-        [daysAgo(1)]: { sessions: 2, messages: 4, tokens: 80 },
-        [daysAgo(2)]: { sessions: 1, messages: 2, tokens: 40 }
-      };
-      readJSONFile.mockResolvedValueOnce(makeUsage(activity));
-      await loadUsage();
-      const summary = getUsageSummary();
-      expect(summary.currentStreak).toBe(2);
-    });
-
-    it('returns 0 when there is a day with sessions:0 in the record', async () => {
-      const activity = {
-        [daysAgo(0)]: { sessions: 0, messages: 0, tokens: 0 }
-      };
-      readJSONFile.mockResolvedValueOnce(makeUsage(activity));
-      await loadUsage();
-      const summary = getUsageSummary();
-      expect(summary.currentStreak).toBe(0);
-    });
-  });
-
-  describe('longestStreak', () => {
-    it('returns 0 for empty data', async () => {
-      readJSONFile.mockResolvedValueOnce(makeUsage({}));
-      await loadUsage();
-      const summary = getUsageSummary();
-      expect(summary.longestStreak).toBe(0);
-    });
-
-    it('returns 5 for 5 consecutive days even when current streak is shorter', async () => {
-      // 5-day run ending 10 days ago, then a new 1-day run today
-      const activity = {
-        [daysAgo(14)]: { sessions: 1, messages: 1, tokens: 10 },
-        [daysAgo(13)]: { sessions: 1, messages: 1, tokens: 10 },
-        [daysAgo(12)]: { sessions: 1, messages: 1, tokens: 10 },
-        [daysAgo(11)]: { sessions: 1, messages: 1, tokens: 10 },
-        [daysAgo(10)]: { sessions: 1, messages: 1, tokens: 10 },
-        // gap
-        [daysAgo(0)]:  { sessions: 1, messages: 1, tokens: 10 }
-      };
-      readJSONFile.mockResolvedValueOnce(makeUsage(activity));
-      await loadUsage();
-      const summary = getUsageSummary();
-      expect(summary.longestStreak).toBe(5);
-      expect(summary.currentStreak).toBe(1);
-    });
-
-    it('currentStreak equals longestStreak when all recent days active', async () => {
-      const activity = {
-        [daysAgo(0)]: { sessions: 1, messages: 1, tokens: 10 },
-        [daysAgo(1)]: { sessions: 1, messages: 1, tokens: 10 },
-        [daysAgo(2)]: { sessions: 1, messages: 1, tokens: 10 }
-      };
-      readJSONFile.mockResolvedValueOnce(makeUsage(activity));
-      await loadUsage();
-      const summary = getUsageSummary();
-      expect(summary.currentStreak).toBe(3);
-      expect(summary.longestStreak).toBe(3);
-    });
   });
 
   describe('summary structure', () => {

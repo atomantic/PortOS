@@ -1164,10 +1164,10 @@ CREATE INDEX IF NOT EXISTS idx_wr_exercises_work ON writers_room_exercises (work
 -- FableLoom branching narratives. One row per loom (a branching-narrative
 -- story), the full sanitized record (episodes, scene-node graphs, intent
 -- transitions) in `data` JSONB. `universe_id`/`series_id` are soft refs
--- mirrored for relationship queries only. Machine-local like Writers Room —
--- no dataSync category, no sync cursor, no tombstones; deletes are hard
--- deletes (games precedent). Mirrors the fableloom_stories block in
--- db/schema/pipeline.js.
+-- mirrored for relationship queries only. FableLoom federates through the
+-- per-record peer-sync pipeline (record kind/category `fableLoom`), so deletes
+-- are LWW tombstones. No sync_sequence: recordEvents subscriptions drive pushes.
+-- Mirrors the fableloom_stories block in db/schema/pipeline.js.
 CREATE TABLE IF NOT EXISTS fableloom_stories (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -1175,10 +1175,13 @@ CREATE TABLE IF NOT EXISTS fableloom_stories (
   series_id TEXT,
   data JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE,
+  deleted_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_fableloom_universe ON fableloom_stories (universe_id);
 CREATE INDEX IF NOT EXISTS idx_fableloom_updated ON fableloom_stories (updated_at);
+CREATE INDEX IF NOT EXISTS idx_fableloom_live ON fableloom_stories (deleted) WHERE deleted = FALSE;
 
 -- LoRA training runs (character LoRA training, /api/lora-training). One row
 -- per run: id/status/character_id mirrored as columns for filtering, the

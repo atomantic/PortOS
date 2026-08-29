@@ -15,6 +15,7 @@ import { computeRecordIntegrity } from '../../lib/syncIntegrity.js';
 import { listCollections } from '../mediaCollections.js';
 import { listUniverses } from '../universeBuilder.js';
 import { listSeries } from '../pipeline/series.js';
+import { listLooms } from '../fableLoom/index.js';
 import { getPeers } from '../instances.js';
 import { assetIntegrityForRecord } from './peerSync.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
@@ -26,6 +27,7 @@ async function recordsForKind(kind) {
   if (kind === 'mediaCollection') return listCollections({ includeDeleted: true });
   if (kind === 'universe') return listUniverses({ includeDeleted: true });
   if (kind === 'series') return listSeries({ includeDeleted: true });
+  if (kind === 'fableLoom') return listLooms({ includeDeleted: true });
   return [];
 }
 
@@ -34,7 +36,7 @@ async function recordsForKind(kind) {
  * One row per record: `{ id, name, updatedAt, deleted, assetHashes }`.
  * Includes tombstoned records so deletes surface correctly in the diff.
  *
- * @param {'universe'|'series'|'mediaCollection'} kind
+ * @param {'universe'|'series'|'mediaCollection'|'fableLoom'} kind
  * @returns {Promise<Array>}
  */
 export async function buildLocalManifest(kind) {

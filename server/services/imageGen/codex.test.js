@@ -331,7 +331,7 @@ describe('codex provider — generateImage', () => {
 });
 
 describe('codex provider — image harvest', () => {
-  it('copies the latest ig_*.png from ~/.codex/generated_images/<session-id>/ into PATHS.images', async () => {
+  it('copies the latest PNG from ~/.codex/generated_images/<session-id>/ into PATHS.images', async () => {
     const sessionId = '019dd59e-a8da-7bd2-a7d8-4ac6f46e7b07';
     const codexDir = join(TEST_HOME, '.codex', 'generated_images', sessionId);
     await mkdir(codexDir, { recursive: true });
@@ -365,6 +365,27 @@ describe('codex provider — image harvest', () => {
     // Sidecar metadata exists too.
     const sidecar = join(FAKE_IMAGES_DIR, `${job.generationId}.metadata.json`);
     expect(existsSync(sidecar)).toBe(true);
+  });
+
+  it('harvests the exec-named PNG emitted by newer Codex image tools', async () => {
+    const sessionId = '33333333-3333-4333-8333-333333333333';
+    const codexDir = join(TEST_HOME, '.codex', 'generated_images', sessionId);
+    await mkdir(codexDir, { recursive: true });
+    const fakePngBytes = Buffer.from('new-codex-png');
+    await writeFile(join(codexDir, 'exec-example-output.png'), fakePngBytes);
+
+    const completedListener = vi.fn();
+    imageGenEvents.on('completed', completedListener);
+
+    const job = await codex.generateImage({ prompt: 'an example landscape' });
+    const child = spawnCalls[0].child;
+    child.stderr.emit('data', Buffer.from(`session id: ${sessionId}\n`));
+    child.stdout.emit('data', Buffer.from('[Generated image](sandbox:/example/generated_images/session/exec-example-output.png)'));
+    child.exitCode = 0;
+    child.emit('close', 0, null);
+
+    await vi.waitFor(() => expect(completedListener).toHaveBeenCalledTimes(1));
+    expect(await readFile(join(FAKE_IMAGES_DIR, job.filename))).toEqual(fakePngBytes);
   });
 
   it('decodes image bytes from the Codex session JSONL when no generated_images file exists', async () => {

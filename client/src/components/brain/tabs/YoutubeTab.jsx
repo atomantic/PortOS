@@ -1,17 +1,17 @@
 import { useState } from 'react';
 import { Save, Loader2, MonitorPlay, RefreshCw, CheckCircle2, AlertCircle, ShieldQuestion } from 'lucide-react';
-import toast from '../ui/Toast';
-import FormField from '../ui/FormField';
-import BrailleSpinner from '../BrailleSpinner';
-import { formatDateTime } from '../../utils/formatters';
-import { useSyncSourceSettings } from '../../hooks/useSyncSourceSettings';
+import toast from '../../ui/Toast';
+import FormField from '../../ui/FormField';
+import BrailleSpinner from '../../BrailleSpinner';
+import { formatDateTime } from '../../../utils/formatters';
+import { useSyncSourceSettings } from '../../../hooks/useSyncSourceSettings';
 import {
   getYoutubeStatus,
   getYoutubeSetupCheck,
   syncYoutube,
-} from '../../services/api';
+} from '../../../services/api';
 
-// Settings → YouTube (#2153). Opt-in, machine-local ingestion of YouTube watch
+// Brain → YouTube (#2153). Opt-in, machine-local ingestion of YouTube watch
 // history into the activity timeline. OFF by default — the YouTube watch-history
 // API is gone, so this scrapes the signed-in history page in the managed browser.
 // Requires being logged into YouTube there; the Takeout backfill on the Timeline

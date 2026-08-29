@@ -27,6 +27,20 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 /** Run by the CI `impact` job before any dependency install. */
 const PRE_INSTALL_ENTRYPOINTS = ['scripts/ci-base-sha.js', 'scripts/ci-test-plan.js'];
 
+/**
+ * Scripts that must ALSO load from a bare checkout, but for their own reason
+ * rather than because CI runs them first — so they get the builtin-only
+ * assertion without the CI-wiring one.
+ *
+ * `doctor.js` is here because a missing `node_modules` is precisely the
+ * failure it exists to explain (#5304): if it needed `npm install` to have
+ * succeeded, the one install state that most needs a diagnostic would get a
+ * module-resolution stack trace instead. Its `pg` import is a dynamic
+ * `import()` inside the database probe for the same reason, which is why it
+ * does not show up in this static walk.
+ */
+const BARE_CHECKOUT_SCRIPTS = ['scripts/doctor.js'];
+
 const BUILTINS = new Set(builtinModules);
 const isBuiltin = (specifier) => BUILTINS.has(specifier.replace(/^node:/, ''));
 
@@ -55,7 +69,7 @@ function bareSpecifiersReachableFrom(entry) {
   return [...bare];
 }
 
-describe('CI pre-install entrypoints load from a bare checkout', () => {
+describe('scripts that must load from a bare checkout', () => {
   // The walker decides whether the assertions below mean anything, so it is
   // verified against this file's own known imports rather than trusted.
   it('bareSpecifiersReachableFrom follows relative imports and collects bare ones', () => {
@@ -72,8 +86,11 @@ describe('CI pre-install entrypoints load from a bare checkout', () => {
     expect(workflow).toContain(`node ${entry}`);
   });
 
-  it.each(PRE_INSTALL_ENTRYPOINTS)('%s imports only Node builtins, transitively', (entry) => {
-    const nonBuiltins = bareSpecifiersReachableFrom(entry).filter((s) => !isBuiltin(s));
-    expect(nonBuiltins).toEqual([]);
-  });
+  it.each([...PRE_INSTALL_ENTRYPOINTS, ...BARE_CHECKOUT_SCRIPTS])(
+    '%s imports only Node builtins, transitively',
+    (entry) => {
+      const nonBuiltins = bareSpecifiersReachableFrom(entry).filter((s) => !isBuiltin(s));
+      expect(nonBuiltins).toEqual([]);
+    },
+  );
 });

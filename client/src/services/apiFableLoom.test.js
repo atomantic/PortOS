@@ -43,6 +43,23 @@ describe('apiFableLoom', () => {
     });
   });
 
+  it('posts series-plan generation, analysis, and feedback', async () => {
+    await api.generateLoomSeriesPlan('loom-1', { providerId: 'writer', effort: 'high' }, { silent: true });
+    expect(request).toHaveBeenCalledWith('/fableloom/loom-1/plan/generate', {
+      method: 'POST', body: JSON.stringify({ providerId: 'writer', effort: 'high' }), silent: true,
+    });
+
+    await api.reviewLoomSeriesPlan('loom/1', { providerId: 'writer' }, { silent: true });
+    expect(request).toHaveBeenCalledWith('/fableloom/loom%2F1/plan/review', {
+      method: 'POST', body: JSON.stringify({ providerId: 'writer' }), silent: true,
+    });
+
+    await api.feedbackLoomSeriesPlan('loom-1', { feedback: 'Raise the stakes.' });
+    expect(request).toHaveBeenCalledWith('/fableloom/loom-1/plan/feedback', {
+      method: 'POST', body: JSON.stringify({ feedback: 'Raise the stakes.' }),
+    });
+  });
+
   it('posts play turns with the transcript', async () => {
     const body = { nodeId: 'node-1', message: 'open the gate', transcript: [] };
     await api.playLoomTurn('loom-1', 'ep-1', body);

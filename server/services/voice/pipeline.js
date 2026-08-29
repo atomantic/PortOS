@@ -382,7 +382,12 @@ export const detectNarrationWithoutCall = ({ finalText, toolRuns }) =>
 // plenty for single-user PortOS.
 const shortId = () => Math.random().toString(36).slice(2, 7);
 
-export const runTurn = async ({ audio, text, mimeType, source, history = [], emit, signal, state }) => {
+// Cap on an injected per-conversation briefing (the FaceTime call host passes
+// the persistent mind's). Bounded here because it rides in front of every turn
+// of that conversation and a runaway caller would blow the model's window.
+const MAX_SYSTEM_CONTEXT_CHARS = 4000;
+
+export const runTurn = async ({ audio, text, mimeType, source, history = [], emit, signal, state, systemContext = null }) => {
   const cfg = await getVoiceConfig();
   if (signal?.aborted) return { transcript: '', reply: '' };
 
@@ -570,6 +575,11 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
   const messages = [
     { role: 'system', content: buildSystemPrompt(cfg) },
   ];
+  // Sits after the persona so it adds context without displacing the spoken-
+  // reply rules; absent/blank leaves the turn exactly as it was.
+  if (typeof systemContext === 'string' && systemContext.trim()) {
+    messages.push({ role: 'system', content: systemContext.trim().slice(0, MAX_SYSTEM_CONTEXT_CHARS) });
+  }
   if (shouldIncludeUi(userText, intent.activeGroups)) {
     const uiSummary = summarizeUi(state?.ui);
     if (uiSummary) {

@@ -37,6 +37,7 @@ import OpenWorldSignalBeacons from './OpenWorldSignalBeacons';
 import OpenWorldSky from './OpenWorldSky';
 import OpenWorldGalaxySky from './OpenWorldGalaxySky';
 import OpenWorldLandscape from './OpenWorldLandscape';
+import OpenWorldClouds from './OpenWorldClouds';
 import OpenWorldNature from './OpenWorldNature';
 import OpenWorldGrass from './OpenWorldGrass';
 import OpenWorldWater from './OpenWorldWater';
@@ -167,8 +168,8 @@ function OpenWorldScene({
   const landmarks = useMemo(() => getResolvedLandmarks(isFeatureEnabled), [isFeatureEnabled]);
   const collectibles = useMemo(() => getCollectiblesList(isPassiveFeatureEnabled), [isPassiveFeatureEnabled]);
   const easterEggsList = useMemo(
-    () => computeEasterEggs({ character, goals, productivityData }),
-    [character, goals, productivityData]
+    () => computeEasterEggs({ character, goals }),
+    [character, goals]
   );
 
   useEffect(() => {
@@ -385,6 +386,7 @@ function OpenWorldScene({
           would recompile every lit material 1.2s into each load. */}
       <OpenWorldLights settings={renderSettings} lightingTier={settings?.effectiveTier} />
       <OpenWorldLandscape settings={renderSettings} />
+      {palette?.lowPoly && <OpenWorldClouds settings={renderSettings} />}
       <OpenWorldNature settings={renderSettings} />
       <OpenWorldGrass settings={renderSettings} />
       <OpenWorldWater settings={renderSettings} />
@@ -401,8 +403,8 @@ function OpenWorldScene({
       <OpenWorldActivityHeatmap calendarData={activityCalendar} settings={renderSettings} />
       <OpenWorldTaskFlowRiver cosTasks={cosTasks} productivityData={productivityData} calendarData={activityCalendar} settings={renderSettings} />
       <OpenWorldGoalMonuments goals={goals} settings={renderSettings} />
-      <OpenWorldArtifacts character={character} goals={goals} productivityData={productivityData} settings={renderSettings} />
-      <OpenWorldEasterEggs character={character} goals={goals} productivityData={productivityData} settings={renderSettings} />
+      <OpenWorldArtifacts character={character} goals={goals} settings={renderSettings} />
+      <OpenWorldEasterEggs character={character} goals={goals} settings={renderSettings} />
       <OpenWorldVoiceMarker voiceState={voiceState} settings={renderSettings} />
       <OpenWorldMemoryDistrict memoryGraph={memoryGraph} inboxDepth={inboxDepth} settings={renderSettings} />
       <OpenWorldDataHarbor introspection={introspection} settings={renderSettings} />

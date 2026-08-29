@@ -353,6 +353,24 @@ const generateBodySchema = z.object({
       sceneId: z.string().min(1).max(200),
     }).optional(),
   ),
+  // FableLoom scene-video render. The media-job completion hook files the
+  // finished history id onto the tagged loom node, even if the editor has
+  // unmounted. Video requests are multipart, so parse the JSON tag before
+  // validation; the tag carries destination identity only.
+  fableLoom: z.preprocess(
+    (v) => {
+      if (v == null || v === '') return undefined;
+      if (typeof v === 'string') {
+        try { return JSON.parse(v); } catch { return v; }
+      }
+      return v;
+    },
+    z.object({
+      loomId: z.string().min(1).max(200),
+      episodeId: z.string().min(1).max(200),
+      nodeId: z.string().min(1).max(200),
+    }).optional(),
+  ),
   // Federated media provider (#4348). When set, the render is submitted to
   // THIS registered peer instead of local hardware. Server-validated against
   // the per-peer allowlist, so naming a peer here cannot route work to one the
@@ -920,6 +938,7 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
       ['LoRA weights', body.loraFilenames?.length],
       ['chained chunks', body.chunks > 1],
       ['the Grok backend', body.backend === 'grok'],
+      ['a FableLoom scene tag', body.fableLoom],
       // A loose reference (#4874) is a per-runtime CAPABILITY, and this side
       // cannot see which runtime the peer will pick — nor can an older peer even
       // parse the field, which its wire schema would strip on the way in. Sending
@@ -1037,6 +1056,7 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
       sourceImagePath,
       uploadedTempPath,
       ...(body.musicVideo ? { musicVideo: body.musicVideo } : {}),
+      ...(body.fableLoom ? { fableLoom: body.fableLoom } : {}),
     });
     return res.json({ jobId, generationId: jobId, filename: `${jobId}.mp4`, model: 'grok', mode: 'grok', status, position });
   }
@@ -1107,6 +1127,9 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
     // job.params so the completion hook can file the clip onto the scene even
     // if the board unmounted; absent for ordinary VideoGen-page renders.
     ...(body.musicVideo ? { musicVideo: body.musicVideo } : {}),
+    // FableLoom scene attach tag. Rides into persisted job.params so the
+    // completion hook can file the clip even if the editor unmounted.
+    ...(body.fableLoom ? { fableLoom: body.fableLoom } : {}),
   });
   // Match the legacy response shape (jobId, generationId, filename, model,
   // mode) so existing client code keeps working; add status+position for

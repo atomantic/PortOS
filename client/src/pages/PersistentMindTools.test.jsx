@@ -75,7 +75,7 @@ describe('PersistentMindTools', () => {
     await user.click(toggle);
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
-      { persistentMindCapabilities: { schemaVersion: 3, createTasks: true, manageMind: false, readPortos: false, writePortos: false, taskModelAllowlist: [] } },
+      { persistentMindCapabilities: { schemaVersion: 4, createTasks: true, manageMind: false, callUser: false, readPortos: false, writePortos: false, taskModelAllowlist: [] } },
       { silent: true },
     ));
     expect(await screen.findByText(/persistent-mind capabilities granted/)).toHaveTextContent('1 of 1');
@@ -95,9 +95,10 @@ describe('PersistentMindTools', () => {
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
       { persistentMindCapabilities: {
-        schemaVersion: 3,
+        schemaVersion: 4,
         createTasks: false,
         manageMind: true,
+        callUser: false,
         readPortos: false,
         writePortos: false,
         taskModelAllowlist: [],
@@ -128,9 +129,10 @@ describe('PersistentMindTools', () => {
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
       { persistentMindCapabilities: {
-        schemaVersion: 3,
+        schemaVersion: 4,
         createTasks: true,
         manageMind: false,
+        callUser: false,
         readPortos: false,
         writePortos: false,
         taskModelAllowlist: [],
@@ -175,5 +177,30 @@ describe('PersistentMindTools', () => {
 
     expect(await screen.findByText('Tools unavailable')).toBeInTheDocument();
     expect(screen.queryByText(/persistent-mind capabilities granted/)).not.toBeInTheDocument();
+  });
+
+  it('offers the call grant off by default and sends it as an explicit false alongside other edits', async () => {
+    // A phone call is the one grant whose absence the user cannot notice by
+    // looking at a screen, so the control must be visible even when off, and
+    // an unrelated toggle must never quietly drop the field from the payload.
+    const user = userEvent.setup();
+    renderPage();
+
+    const callToggle = await screen.findByRole('checkbox', { name: /Allow mind to call you on FaceTime Audio/ });
+    expect(callToggle).not.toBeChecked();
+
+    await user.click(callToggle);
+    await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
+      { persistentMindCapabilities: {
+        schemaVersion: 4,
+        createTasks: false,
+        manageMind: false,
+        callUser: true,
+        readPortos: false,
+        writePortos: false,
+        taskModelAllowlist: [],
+      } },
+      { silent: true },
+    ));
   });
 });

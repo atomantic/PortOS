@@ -1091,10 +1091,11 @@ describe('LoRA key layout', () => {
     });
     const list = await lorasService.listLoras();
     expect(list.find((l) => l.filename === 'lora-comfy.safetensors').keyLayout).toBe('comfyui');
-    // Sidecar write is fire-and-forget; let the microtask queue drain.
-    await new Promise((r) => setTimeout(r, 10));
-    const sidecar = JSON.parse(await fs.readFile(join(tmpLoras, 'lora-comfy.safetensors.metadata.json'), 'utf-8'));
-    expect(sidecar.keyLayout).toBe('comfyui');
+    // Sidecar write is fire-and-forget; wait for it to complete.
+    await vi.waitFor(async () => {
+      const sidecar = JSON.parse(await fs.readFile(join(tmpLoras, 'lora-comfy.safetensors.metadata.json'), 'utf-8'));
+      expect(sidecar.keyLayout).toBe('comfyui');
+    });
   });
 
   it('prefers the stored sidecar layout over re-reading the header', async () => {

@@ -184,7 +184,7 @@ describe('persistent mind routes', () => {
         thinkingInterface: 'text',
         wakeIntervalMinutes: 30,
       },
-      capabilities: { schemaVersion: 3, createTasks: true, manageMind: false, readPortos: false, writePortos: false, taskModelAllowlist: [] },
+      capabilities: { schemaVersion: 4, createTasks: true, manageMind: false, callUser: false, readPortos: false, writePortos: false, taskModelAllowlist: [] },
       harness: { type: 'api', recommendation: 'recommended' },
       imageCapability: { status: 'unknown' },
       autonomyMode: 'execute',
@@ -218,14 +218,15 @@ describe('persistent mind routes', () => {
     const res = await get('/mind/tools');
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
-      schemaVersion: 3,
-      capabilities: { schemaVersion: 3, createTasks: true, manageMind: false, readPortos: false, writePortos: false, taskModelAllowlist: [] },
+      schemaVersion: 4,
+      capabilities: { schemaVersion: 4, createTasks: true, manageMind: false, callUser: false, readPortos: false, writePortos: false, taskModelAllowlist: [] },
       boundaries: expect.arrayContaining([expect.stringMatching(/arbitrary shell/i)]),
       tools: expect.arrayContaining([
         expect.objectContaining({ id: 'cos.create-task', capability: 'createTasks', granted: true, defaultEnabled: false }),
         expect.objectContaining({ id: 'portos.read', capability: 'readPortos', granted: false, defaultEnabled: false }),
         expect.objectContaining({ id: 'portos.write', capability: 'writePortos', granted: false, defaultEnabled: false }),
         expect.objectContaining({ id: 'mind.cleanup', capability: 'manageMind', granted: false, defaultEnabled: false }),
+        expect.objectContaining({ id: 'voice.call-user', capability: 'callUser', granted: false, defaultEnabled: false }),
       ]),
       taskCatalog: {
         apps: [{ id: 'demo-app', planOnly: true }],

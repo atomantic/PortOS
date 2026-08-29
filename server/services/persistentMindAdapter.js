@@ -12,6 +12,7 @@ import { z } from 'zod';
 import {
   PERSISTENT_MIND_TASK_LIMITS,
   normalizePersistentMindCapabilities,
+  persistentMindCallRequestSchema,
   persistentMindTaskRequestSchema,
 } from '../lib/persistentMindCapabilities.js';
 import { PERSISTENT_MIND_ID } from '../lib/persistentMindTrajectory.js';
@@ -32,6 +33,10 @@ import {
   executePersistentMindTaskRequests,
   readPersistentMindTaskCatalog,
 } from './persistentMindTaskCapability.js';
+import {
+  buildPersistentMindCallCapabilityPrompt,
+  executePersistentMindCallRequest,
+} from './persistentMindCallCapability.js';
 import {
   buildPersistentMindVisibilityPrompt,
   readPersistentMindVisibility,
@@ -70,6 +75,9 @@ export const persistentMindResponseSchema = z.object({
     reason: z.string().trim().min(1).max(500),
     delayMinutes: z.number().int().min(1).max(10_080),
   }).strict().nullable().optional().default(null),
+  // At most one per turn, and only ever to the configured handle: the request
+  // carries no recipient, so a turn cannot dial anyone but the user.
+  callRequest: persistentMindCallRequestSchema.nullable().optional().default(null),
 }).strict();
 
 const boundedToolResult = (result) => {
@@ -213,7 +221,7 @@ const currentWakeText = (wake) => {
   return `This is a self-directed wake. Continue one worthwhile thread from the trajectory.\nreason=${wake?.reason || 'scheduled reflection'}`;
 };
 
-export function buildPersistentMindTurnPrompt({ context, wake, taskCapabilityPrompt, toolCapabilityPrompt = '# PortOS semantic tools\nSemantic tool access is OFF.', visibilityPrompt = '# Persistent Mind environment visibility\nWorkspace and runtime visibility is unknown.' }) {
+export function buildPersistentMindTurnPrompt({ context, wake, taskCapabilityPrompt, toolCapabilityPrompt = '# PortOS semantic tools\nSemantic tool access is OFF.', visibilityPrompt = '# Persistent Mind environment visibility\nWorkspace and runtime visibility is unknown.', callCapabilityPrompt = buildPersistentMindCallCapabilityPrompt({ enabled: false }) }) {
   return `${context.text}
 
 ${visibilityPrompt}
@@ -225,6 +233,8 @@ ${taskCapabilityPrompt}
 
 ${toolCapabilityPrompt}
 
+${callCapabilityPrompt}
+
 # Response contract
 Return ONLY one JSON object with this shape:
 {
@@ -233,9 +243,10 @@ Return ONLY one JSON object with this shape:
   "memoryCandidates": [{ "content": "A durable fact worth remembering", "summary": "Short label", "type": "fact", "category": "other", "tags": ["optional"] }],
   "taskRequests": [{ "description": "Concise queue label", "prompt": "Complete instructions for the agent", "priority": "MEDIUM", "appId": "configured-app-id", "providerId": "configured-provider-id", "model": "configured-model-id-or-empty-for-default", "effort": "high", "planOnly": false, "prCompletion": "review-then-merge", "requiredValidation": ["dependencies"] }],
   "toolCalls": [{ "requestId": "optional-stable-id", "name": "catalog-name", "arguments": {} }],
-  "selfWake": { "reason": "Why another wake would be useful", "delayMinutes": 60 }
+  "selfWake": { "reason": "Why another wake would be useful", "delayMinutes": 60 },
+  "callRequest": { "reason": "Why this cannot wait for a screen", "openingLine": "What to say the moment they answer" }
 }
-Use empty arrays when there is no durable memory candidate, task request, or tool call, and null when no earlier follow-up is needed. Memory candidates are durable memories to save automatically; only include information that is worth retaining. Never put the same CoS task in both taskRequests and toolCalls. This lane cannot mutate files directly, call arbitrary routes, contact people, or exceed the semantic tool catalog.`;
+Use empty arrays when there is no durable memory candidate, task request, or tool call, and null for selfWake and callRequest when neither is needed. Memory candidates are durable memories to save automatically; only include information that is worth retaining. Never put the same CoS task in both taskRequests and toolCalls. This lane cannot mutate files directly, call arbitrary routes, contact anyone other than the configured PortOS user, or exceed the semantic tool catalog.`;
 }
 
 const summaryEventLines = (events) => (Array.isArray(events) ? events : []).map((event) => {
@@ -340,6 +351,7 @@ export function createPersistentMindTurnAdapter() {
       });
       const visibilityPrompt = buildPersistentMindVisibilityPrompt(visibility);
       const toolCapabilityPrompt = buildPersistentMindToolPrompt(taskAccess);
+      const callCapabilityPrompt = buildPersistentMindCallCapabilityPrompt({ enabled: taskAccess.callUser });
       const screenshots = (Array.isArray(wake?.message?.images) ? wake.message.images : []).map((image) => {
         const path = resolveScreenshot(image?.filename);
         if (!path) throw new Error('A Persistent Mind image attachment no longer resolves under the screenshots directory');
@@ -351,6 +363,7 @@ export function createPersistentMindTurnAdapter() {
         taskCapabilityPrompt,
         toolCapabilityPrompt,
         visibilityPrompt,
+        callCapabilityPrompt,
       });
       let providerPrompt = basePrompt;
       let result;
@@ -454,6 +467,19 @@ export function createPersistentMindTurnAdapter() {
         const budgetExhausted = toolCallCount >= COS_TOOL_CALL_LIMITS.maxCallsPerTurn || round === MAX_TOOL_PROVIDER_ROUNDS - 2;
         providerPrompt = `${basePrompt}\n\n# Completed tool results\n${JSON.stringify(completedToolResults)}\n\n${parsed.taskRequests.length > 0 ? 'Task requests from this intermediate round were not queued. Include only the final desired taskRequests in a terminal response with toolCalls: [].\n' : ''}${budgetExhausted ? 'The tool-call budget is exhausted. Return a final response with toolCalls: [] and do not repeat completed actions.' : 'Use these results to continue. Do not repeat a completed requestId.'}`;
       }
+      // After the tool rounds, so a call is placed on the turn's final answer
+      // rather than on an intermediate round the model went on to revise.
+      const callOutcome = await executePersistentMindCallRequest({
+        callRequest: parsed.callRequest,
+        turnId,
+        signal,
+      });
+      if (callOutcome && !callOutcome.placed) {
+        // The model has already written its reply believing the call may go
+        // out. Correcting it here is what keeps "I called you" from being a
+        // lie in the one case the user cannot check by looking at a screen.
+        actionNotices.add(`The requested phone call was not placed (${callOutcome.reason}).`);
+      }
       if (actionNotices.size > 0) {
         const notice = [...actionNotices].join(' ');
         parsed = wake?.kind === 'message'
@@ -462,7 +488,7 @@ export function createPersistentMindTurnAdapter() {
         result = { ...result, text: JSON.stringify(parsed) };
       }
       const message = parsed.message || (wake?.kind === 'message' ? parsed.thinkingSummary : '');
-      if (!parsed.thinkingSummary && !message && parsed.memoryCandidates.length === 0 && parsed.taskRequests.length === 0 && toolCallCount === 0) {
+      if (!parsed.thinkingSummary && !message && parsed.memoryCandidates.length === 0 && parsed.taskRequests.length === 0 && toolCallCount === 0 && !callOutcome) {
         throw new Error('Persistent mind returned no visible thought, reply, memory candidate, task request, or tool call');
       }
       const memoryWrites = await Promise.allSettled(parsed.memoryCandidates.map((candidate, index) => (

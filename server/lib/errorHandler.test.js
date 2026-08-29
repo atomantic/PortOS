@@ -37,6 +37,7 @@ describe('errorHandler.js', () => {
       expect(error.canAutoFix).toBe(false);
       expect(error.timestamp).toBeDefined();
       expect(error.context).toEqual({});
+      expect(error.responseMessage).toBeNull();
     });
 
     it('should create error with custom options', () => {
@@ -45,13 +46,15 @@ describe('errorHandler.js', () => {
         code: 'NOT_FOUND',
         severity: 'warning',
         canAutoFix: true,
-        context: { resource: 'user' }
+        context: { resource: 'user' },
+        responseMessage: 'Resource not found',
       });
       expect(error.status).toBe(404);
       expect(error.code).toBe('NOT_FOUND');
       expect(error.severity).toBe('warning');
       expect(error.canAutoFix).toBe(true);
       expect(error.context).toEqual({ resource: 'user' });
+      expect(error.responseMessage).toBe('Resource not found');
     });
 
     it('should derive code from status when no explicit code is passed', () => {
@@ -513,12 +516,18 @@ describe('errorHandler.js', () => {
       errorEvents.on('error', listener);
       sendErrorResponse(
         res,
-        new ServerError('boom', { status: 400, context: { modelId: 'm', apiKey: 'secret' } }),
+        new ServerError('boom for local peer', {
+          status: 400,
+          context: { modelId: 'm', apiKey: 'secret' },
+          responseMessage: 'Request failed',
+        }),
         { io }
       );
 
       const payload = io.emit.mock.calls.find(([event]) => event === 'error:occurred')[1];
+      expect(payload.message).toBe('boom for local peer');
       expect(payload.context).toEqual({ modelId: 'm' });
+      expect(res.json.mock.calls[0][0].error).toBe('Request failed');
       expect(res.json.mock.calls[0][0].context).toEqual({ modelId: 'm' });
       errorEvents.off('error', listener);
     });
@@ -528,6 +537,21 @@ describe('errorHandler.js', () => {
     it('omits context when the sanitized context is empty', () => {
       const body = buildErrorEnvelope(new ServerError('nope', { status: 400 }), {});
       expect(body).toEqual({ error: 'nope', code: 'BAD_REQUEST', timestamp: expect.any(Number) });
+    });
+
+    it('can keep a detailed local message out of the HTTP response', () => {
+      const error = new ServerError('Disabled for peer "Example Peer"', {
+        status: 503,
+        code: 'MEDIA_PROVIDER_DISABLED',
+        responseMessage: 'Federated media provider is disabled',
+      });
+
+      expect(buildErrorEnvelope(error, {})).toEqual({
+        error: 'Federated media provider is disabled',
+        code: 'MEDIA_PROVIDER_DISABLED',
+        timestamp: expect.any(Number),
+      });
+      expect(error.message).toContain('Example Peer');
     });
   });
 });

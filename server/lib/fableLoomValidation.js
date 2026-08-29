@@ -8,12 +8,19 @@
 import { z } from 'zod';
 import { LOOM_LIMITS } from './fableLoomLimits.js';
 import { LOOM_FORMATS } from './fableLoomFormats.js';
+import { FABLELOOM_PLAYBACK_MODES } from './fableLoomPlayback.js';
+import {
+  FABLELOOM_AUDIENCE_CONNECTION_STATES,
+  FABLELOOM_PARTICIPATION_MODES,
+} from './fableLoomParticipation.js';
 import { llmRoutePinSchema } from './llmRoutePin.js';
 
 const name = z.string().trim().min(1).max(LOOM_LIMITS.NAME_MAX);
 const logline = z.string().max(LOOM_LIMITS.LOGLINE_MAX);
 const premise = z.string().max(LOOM_LIMITS.PREMISE_MAX);
 const styleNotes = z.string().max(LOOM_LIMITS.STYLE_NOTES_MAX);
+const participationMode = z.enum(FABLELOOM_PARTICIPATION_MODES);
+const audienceCommunicationMedium = z.string().max(LOOM_LIMITS.AUDIENCE_COMMUNICATION_MEDIUM_MAX);
 const refId = z.string().max(LOOM_LIMITS.REF_ID_MAX).nullable();
 const title = z.string().max(LOOM_LIMITS.EPISODE_TITLE_MAX);
 const synopsis = z.string().max(LOOM_LIMITS.SYNOPSIS_MAX);
@@ -25,6 +32,26 @@ const format = z.enum(LOOM_FORMATS);
 // the runner would clamp an unknown level silently, and the door check is
 // where a typo should surface.
 const playSettings = llmRoutePinSchema.nullable();
+const planItemId = z.string().min(1).max(80).optional();
+const planEpisodeId = z.string().min(1).max(80).nullable().optional();
+const planItemFields = {
+  id: planItemId,
+  title: z.string().max(LOOM_LIMITS.PLAN_ITEM_TITLE_MAX),
+  description: z.string().max(LOOM_LIMITS.PLAN_ITEM_DESCRIPTION_MAX),
+};
+const seriesPlan = z.object({
+  storyArc: z.string().max(LOOM_LIMITS.STORY_ARC_MAX),
+  plotPoints: z.array(z.object({
+    ...planItemFields,
+    episodeId: planEpisodeId,
+  })).max(LOOM_LIMITS.PLAN_ITEMS_MAX),
+  sideQuests: z.array(z.object({
+    ...planItemFields,
+    status: z.enum(['idea', 'planned', 'active', 'resolved']),
+    startEpisodeId: planEpisodeId,
+    endEpisodeId: planEpisodeId,
+  })).max(LOOM_LIMITS.PLAN_ITEMS_MAX),
+});
 
 // Index filter. `?seriesId=` scopes the list to the looms soft-linked to one
 // pipeline series (the series detail page's "Branching narratives" card). An
@@ -39,8 +66,11 @@ export const loomCreateSchema = z.object({
   logline: logline.optional(),
   premise: premise.optional(),
   styleNotes: styleNotes.optional(),
+  participationMode: participationMode.optional(),
+  audienceCommunicationMedium: audienceCommunicationMedium.optional(),
   format: format.optional(),
   playSettings: playSettings.optional(),
+  seriesPlan: seriesPlan.optional(),
   universeId: refId.optional(),
   seriesId: refId.optional(),
 });
@@ -50,8 +80,11 @@ export const loomPatchSchema = z.object({
   logline: logline.optional(),
   premise: premise.optional(),
   styleNotes: styleNotes.optional(),
+  participationMode: participationMode.optional(),
+  audienceCommunicationMedium: audienceCommunicationMedium.optional(),
   format: format.optional(),
   playSettings: playSettings.optional(),
+  seriesPlan: seriesPlan.optional(),
   universeId: refId.optional(),
   seriesId: refId.optional(),
 });
@@ -100,6 +133,10 @@ const nodeFields = {
   title: z.string().max(LOOM_LIMITS.NODE_TITLE_MAX).optional(),
   prose: z.string().max(LOOM_LIMITS.PROSE_MAX).optional(),
   imagePrompt: z.string().max(LOOM_LIMITS.IMAGE_PROMPT_MAX).optional(),
+  videoPrompt: z.string().max(LOOM_LIMITS.VIDEO_PROMPT_MAX).optional(),
+  cameraMovement: z.string().max(LOOM_LIMITS.CAMERA_MOVEMENT_MAX).optional(),
+  playbackMode: z.enum(FABLELOOM_PLAYBACK_MODES).optional(),
+  audienceConnection: z.enum(FABLELOOM_AUDIENCE_CONNECTION_STATES).optional(),
   isEnding: z.boolean().optional(),
   endingLabel: z.string().max(LOOM_LIMITS.ENDING_LABEL_MAX).optional(),
   pos: z.object({ x: z.number(), y: z.number() }).nullable().optional(),
@@ -120,8 +157,6 @@ const llmPickFields = llmRoutePinSchema.shape;
 
 export const weaveSchema = z.object({
   guidance: z.string().max(4000).optional(),
-  nodeTarget: z.number().int().min(3).max(60).optional(),
-  endingTarget: z.number().int().min(1).max(12).optional(),
   replace: z.boolean().optional(),
   ...llmPickFields,
 });
@@ -157,6 +192,15 @@ export const reformatSchema = z.object({
 });
 
 export const feedbackSchema = z.object({
+  feedback: z.string().trim().min(1).max(LOOM_LIMITS.FEEDBACK_MAX),
+  ...llmPickFields,
+});
+
+export const seriesPlanReviewSchema = z.object({ ...llmPickFields });
+
+export const seriesPlanGenerateSchema = z.object({ ...llmPickFields });
+
+export const seriesPlanFeedbackSchema = z.object({
   feedback: z.string().trim().min(1).max(LOOM_LIMITS.FEEDBACK_MAX),
   ...llmPickFields,
 });

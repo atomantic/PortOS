@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { EventEmitter } from 'events';
 import { mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -7,8 +8,31 @@ import { join } from 'path';
 // call is made). Mocked to keep the import side-effect-free in CI.
 vi.mock('pm2', () => ({ default: { connect: vi.fn(), list: vi.fn(), disconnect: vi.fn() } }));
 
+// `saveProcessList` runs `pm2 save` through pm2.js's OWN `execPm2`, and an
+// intra-module call reads the local binding — a `vi.spyOn(pm2Module, 'execPm2')`
+// never intercepts it (that only works for the cross-module callers in
+// mtplxServerManager / llamaServerManager). This test used to rely on that spy,
+// so every run really launched `pm2 save` against the throwaway PM2_HOME below,
+// and PM2 answered by forking a God Daemon that outlived the suite. Those
+// daemons never exit: 641 of them (38 GB of RSS) had accumulated on the dev
+// machine that reported this. Mocking the spawn seam — the same one
+// pm2.launch.test.js uses — is what actually keeps the subprocess out.
+const mockSpawn = vi.hoisted(() => vi.fn());
+vi.mock('../lib/childProcess.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  spawn: mockSpawn,
+}));
+
 import { getSavedProcessNames, saveProcessList } from './pm2.js';
-import * as pm2Module from './pm2.js';
+
+// Fake child_process.spawn result: closes with exit code 0 on the next tick.
+function fakeChild() {
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  queueMicrotask(() => child.emit('close', 0));
+  return child;
+}
 
 /**
  * `getSavedProcessNames` reads `$PM2_HOME/dump.pm2` — the list a boot-time
@@ -68,18 +92,30 @@ describe('saveProcessList exclusions', () => {
 
   beforeEach(async () => {
     home = await mkdtemp(join(tmpdir(), 'portos-pm2-home-'));
-    // `pm2 save` itself is the real subprocess; the dump it would have written
-    // is seeded per test so the filtering is what's under assertion.
-    vi.spyOn(pm2Module, 'execPm2').mockResolvedValue({ stdout: '', stderr: '' });
+    // `pm2 save` is stubbed out at the spawn seam; the dump it would have
+    // written is seeded per test so the filtering is what's under assertion.
+    mockSpawn.mockReset();
+    mockSpawn.mockImplementation(() => fakeChild());
   });
 
   afterEach(async () => {
-    vi.restoreAllMocks();
     await rm(home, { recursive: true, force: true });
   });
 
   const seedDump = (names) =>
     writeFile(join(home, 'dump.pm2'), JSON.stringify(names.map((name) => ({ name, script: `/bin/${name}` }))));
+
+  // Regression guard for the daemon leak described at the top of this file.
+  it('runs `pm2 save` through the stubbed spawn seam, never a real subprocess', async () => {
+    await seedDump(['portos-server']);
+
+    await saveProcessList(home);
+
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    const [, args, opts] = mockSpawn.mock.calls[0];
+    expect(args.at(-1)).toBe('save');
+    expect(opts.env.PM2_HOME).toBe(home);
+  });
 
   it('drops an excluded app from the dump and leaves the rest', async () => {
     await seedDump(['portos-server', 'portos-llama-server', 'portos-mtplx']);

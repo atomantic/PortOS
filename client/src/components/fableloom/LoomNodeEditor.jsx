@@ -1,7 +1,8 @@
 /**
  * FableLoom scene editor — the side panel for the selected node: title/prose,
- * ending flag + label, the intent-transition list, the scene image (prompt +
- * queued render via the shared image-gen lane), and the AI branch action.
+ * ending flag + label, the intent-transition list, scene image prompt and
+ * image/video previews via the shared local media lanes, a known camera-move
+ * selector, a dedicated single-clip video prompt, and the AI branch action.
  *
  * Fields save on blur (silent PATCH, skipped when unchanged; the server
  * returns the full loom, which the parent folds into state). Paths save one
@@ -12,19 +13,22 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { GitBranch, ImagePlus, Loader2, Trash2 } from 'lucide-react';
+import { GitBranch, Loader2, Trash2 } from 'lucide-react';
 import toast from '../ui/Toast';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import { FormField } from '../ui/FormField.jsx';
-import MediaImage from '../MediaImage';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import {
   addLoomTransition, branchLoomNode, deleteLoomNode, deleteLoomTransition,
-  generateImage, updateLoomNode, updateLoomTransition,
+  updateLoomNode, updateLoomTransition,
 } from '../../services/api';
 import { fieldClass, labelClass, sceneFieldClass } from './fieldStyles';
 import { isTeleplayFormat } from './loomFormats';
+import LoomSceneMedia from './LoomSceneMedia';
+import { FABLELOOM_CAMERA_MOVEMENTS } from '../../../../server/lib/fableLoomCameraMovements.js';
+import { FABLELOOM_PLAYBACK_MODES } from '../../../../server/lib/fableLoomPlayback.js';
+import { FABLELOOM_AUDIENCE_CONNECTION_STATES } from '../../../../server/lib/fableLoomParticipation.js';
 
 const toRow = (t) => ({ ...t, triggersText: (t.triggers || []).join('; ') });
 const rowToPatch = ({ targetNodeId, intent, triggersText, description }) => ({
@@ -34,7 +38,11 @@ const rowToPatch = ({ targetNodeId, intent, triggersText, description }) => ({
   description: description || '',
 });
 
-export default function LoomNodeEditor({ loom, episode, node, onLoomUpdate, onClearSelection, onMakeStart }) {
+export default function LoomNodeEditor({
+  loom, episode, node, onLoomUpdate, onClearSelection, onMakeStart,
+  mediaJobs = {}, onGenerateImage, onGenerateVideo,
+  generationDisabled = false, generationDisabledReason = '',
+}) {
   const [form, setForm] = useState(null);
   // In-flight blur-saves; the AI buttons (which read server-side state) stay
   // disabled until every pending save settles.
@@ -55,6 +63,10 @@ export default function LoomNodeEditor({ loom, episode, node, onLoomUpdate, onCl
       title: node.title || '',
       prose: node.prose || '',
       imagePrompt: node.imagePrompt || '',
+      videoPrompt: node.videoPrompt || '',
+      cameraMovement: node.cameraMovement || '',
+      playbackMode: node.playbackMode || 'decision',
+      audienceConnection: node.audienceConnection || 'disconnected',
       isEnding: !!node.isEnding,
       endingLabel: node.endingLabel || '',
       transitions: (node.transitions || []).map(toRow),
@@ -144,13 +156,19 @@ export default function LoomNodeEditor({ loom, episode, node, onLoomUpdate, onCl
     onLoomUpdate(result.loom);
     // The AI writes new paths straight onto the record; this panel is keyed by
     // node.id so it never remounts to pick them up.
-    const woven = result.loom?.episodes.find((e) => e.id === episode.id)
-      ?.nodes.find((n) => n.id === node.id)?.transitions;
-    if (woven) setForm((prev) => ({ ...prev, transitions: woven.map(toRow) }));
+    const wovenNode = result.loom?.episodes.find((e) => e.id === episode.id)
+      ?.nodes.find((n) => n.id === node.id);
+    if (wovenNode) {
+      setForm((prev) => ({
+        ...prev,
+        playbackMode: wovenNode.playbackMode || 'decision',
+        transitions: (wovenNode.transitions || []).map(toRow),
+      }));
+    }
     toast.success('New branches woven');
   }, { errorMessage: 'Branching failed' });
 
-  const [runGenerateImage, rendering] = useAsyncAction(async () => {
+  const runGenerateImage = async () => {
     const prompt = form.imagePrompt.trim();
     if (!prompt) {
       toast.error('Write an image prompt first');
@@ -161,12 +179,23 @@ export default function LoomNodeEditor({ loom, episode, node, onLoomUpdate, onCl
     // files the finished image onto this node even if the page unmounts
     // mid-render.
     await saveField('imagePrompt', prompt);
-    await generateImage({
-      prompt: loom.styleNotes ? `${prompt}\n\nStyle: ${loom.styleNotes}` : prompt,
-      fableLoom: { loomId: loom.id, episodeId: episode.id, nodeId: node.id },
-    }, { silent: true });
-    toast.success('Scene render queued — it will attach when it completes');
-  }, { errorMessage: 'Could not queue the render' });
+    await onGenerateImage?.({ ...node, imagePrompt: prompt });
+  };
+
+  const runGenerateVideo = async () => {
+    const authoredPrompt = form.videoPrompt.trim() || form.prose.trim();
+    if (!authoredPrompt) {
+      toast.error('Write the scene first');
+      return;
+    }
+    await saveField('videoPrompt', form.videoPrompt);
+    await onGenerateVideo?.({
+      ...node,
+      prose: form.prose,
+      videoPrompt: form.videoPrompt,
+      cameraMovement: form.cameraMovement,
+    });
+  };
 
   const handleDelete = async () => {
     const updated = await deleteLoomNode(loom.id, episode.id, node.id).catch(() => null);
@@ -178,6 +207,8 @@ export default function LoomNodeEditor({ loom, episode, node, onLoomUpdate, onCl
 
   if (!form) return null;
   const aiBlocked = pendingSaves > 0;
+  const helperMode = loom.participationMode === 'helper';
+  const audienceConnected = !helperMode || form.audienceConnection === 'connected';
 
   return (
     <div className="space-y-4 p-4">
@@ -227,6 +258,55 @@ export default function LoomNodeEditor({ loom, episode, node, onLoomUpdate, onCl
         />
       </FormField>
 
+      <FormField label="Playback behavior" labelClassName={labelClass}>
+        <select
+          className={fieldClass}
+          aria-label="Playback behavior"
+          value={form.playbackMode}
+          onChange={(e) => {
+            setForm((p) => ({ ...p, playbackMode: e.target.value }));
+            patchNode({ playbackMode: e.target.value });
+          }}
+        >
+          {FABLELOOM_PLAYBACK_MODES.map((mode) => (
+            <option key={mode} value={mode} disabled={helperMode && !audienceConnected && mode === 'decision'}>
+              {mode === 'cut' ? 'Automatic cut — play once, then advance' : 'Decision point — loop while awaiting input'}
+            </option>
+          ))}
+        </select>
+      </FormField>
+
+      {helperMode && (
+        <FormField label="Audience connection" labelClassName={labelClass}>
+          <select
+            className={fieldClass}
+            aria-label="Audience connection"
+            value={form.audienceConnection}
+            onChange={(event) => {
+              const audienceConnection = event.target.value;
+              const nextPlaybackMode = audienceConnection === 'disconnected' ? 'cut' : form.playbackMode;
+              setForm((current) => ({
+                ...current,
+                audienceConnection,
+                playbackMode: nextPlaybackMode,
+              }));
+              patchNode({ audienceConnection, playbackMode: nextPlaybackMode });
+            }}
+          >
+            {FABLELOOM_AUDIENCE_CONNECTION_STATES.map((state) => (
+              <option key={state} value={state}>
+                {state === 'connected' ? 'Connected — audience can help' : 'Disconnected — passive canon only'}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-port-text-muted mt-1">
+            {form.audienceConnection === 'connected'
+              ? `The protagonist can hear the audience through ${loom.audienceCommunicationMedium || 'the configured medium'}.`
+              : 'The audience watches but cannot choose until the communication medium is activated or restored.'}
+          </p>
+        </FormField>
+      )}
+
       <div className="flex items-center gap-3">
         <label className="flex items-center gap-2 text-sm" htmlFor="loom-node-ending">
           <input
@@ -254,18 +334,19 @@ export default function LoomNodeEditor({ loom, episode, node, onLoomUpdate, onCl
       )}
 
       <div>
-        <div className="flex items-center justify-between mb-1">
-          <span className="text-xs font-medium text-port-text-muted">Scene image</span>
-          <button
-            type="button"
-            onClick={runGenerateImage}
-            disabled={rendering || aiBlocked}
-            className="flex items-center gap-1 text-xs text-port-accent hover:underline disabled:opacity-50"
-          >
-            {rendering ? <Loader2 size={12} className="animate-spin" /> : <ImagePlus size={12} />}
-            Generate
-          </button>
-        </div>
+        <span className="mb-1 block text-xs font-medium text-port-text-muted">Scene media</span>
+        <LoomSceneMedia
+          node={node}
+          jobs={mediaJobs}
+          onGenerateImage={runGenerateImage}
+          onGenerateVideo={runGenerateVideo}
+          generationDisabled={aiBlocked || generationDisabled}
+          generationDisabledReason={aiBlocked ? 'Wait for scene changes to save' : generationDisabledReason}
+        />
+      </div>
+
+      <div>
+        <span className="mb-1 block text-xs font-medium text-port-text-muted">Scene image prompt</span>
         <textarea
           rows={2}
           className={fieldClass}
@@ -275,25 +356,53 @@ export default function LoomNodeEditor({ loom, episode, node, onLoomUpdate, onCl
           onChange={(e) => setForm((p) => ({ ...p, imagePrompt: e.target.value }))}
           onBlur={() => saveField('imagePrompt', form.imagePrompt)}
         />
-        {node.image && (
-          <MediaImage
-            src={`/data/images/${node.image}`}
-            alt={form.title || 'Scene render'}
-            className="mt-2 rounded max-w-full max-h-48 object-cover"
+      </div>
+
+      <div>
+        <span className="mb-1 block text-xs font-medium text-port-text-muted">Scene video prompt</span>
+        <div className="space-y-2">
+          <label htmlFor="loom-node-camera-movement" className={labelClass}>Camera movement</label>
+          <select
+            id="loom-node-camera-movement"
+            className={fieldClass}
+            value={form.cameraMovement}
+            onChange={(e) => {
+              setForm((p) => ({ ...p, cameraMovement: e.target.value }));
+              patchNode({ cameraMovement: e.target.value });
+            }}
+          >
+            <option value="">Choose a movement</option>
+            {form.cameraMovement && !FABLELOOM_CAMERA_MOVEMENTS.some((move) => move.value === form.cameraMovement) && (
+              <option value={form.cameraMovement}>{form.cameraMovement} (custom)</option>
+            )}
+            {FABLELOOM_CAMERA_MOVEMENTS.map((move) => (
+              <option key={move.value} value={move.value}>{move.label}</option>
+            ))}
+          </select>
+          <textarea
+            rows={3}
+            className={fieldClass}
+            placeholder="One continuous clip: action, camera move, pace, atmosphere, final beat"
+            aria-label="Video prompt"
+            value={form.videoPrompt}
+            onChange={(e) => setForm((p) => ({ ...p, videoPrompt: e.target.value }))}
+            onBlur={() => saveField('videoPrompt', form.videoPrompt)}
           />
-        )}
+          <p className="text-xs text-port-text-muted">Falls back to the scene text when no dedicated video prompt is set.</p>
+        </div>
       </div>
 
       <div>
         <div className="flex items-center justify-between mb-1">
           <span className="text-xs font-medium text-port-text-muted">
-            Paths out ({form.transitions.length})
+            {form.playbackMode === 'cut' ? 'Next cut' : 'Viewer paths'} ({form.transitions.length})
           </span>
           <div className="flex items-center gap-3">
             <button
               type="button"
               onClick={runBranch}
-              disabled={branching || aiBlocked}
+              disabled={branching || aiBlocked || !audienceConnected}
+              title={!audienceConnected ? 'Connect the audience communication medium before adding decision branches' : undefined}
               className="flex items-center gap-1 text-xs text-port-accent hover:underline disabled:opacity-50"
             >
               {branching ? <Loader2 size={12} className="animate-spin" /> : <GitBranch size={12} />}
@@ -311,6 +420,9 @@ export default function LoomNodeEditor({ loom, episode, node, onLoomUpdate, onCl
         </div>
         {form.isEnding && form.transitions.length > 0 && (
           <p className="text-xs text-port-warning mb-2">Endings never fire their outgoing paths.</p>
+        )}
+        {!form.isEnding && form.playbackMode === 'cut' && form.transitions.length !== 1 && (
+          <p className="text-xs text-port-error mb-2">Automatic cuts need exactly one path to the next cut.</p>
         )}
         <div className="space-y-3">
           {form.transitions.map((tr, index) => (

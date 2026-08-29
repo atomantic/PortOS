@@ -78,6 +78,23 @@ vi.mock('../services/brain.js', () => ({
   deleteBucketAndUnlinkChildren: vi.fn()
 }));
 
+vi.mock('../services/idealoomLists.js', () => ({
+  getSettings: vi.fn(),
+  updateSettings: vi.fn(),
+  listLists: vi.fn(),
+  getList: vi.fn(),
+  createList: vi.fn(),
+  updateList: vi.fn(),
+  deleteList: vi.fn()
+}));
+
+vi.mock('../services/idealoomAutoSync.js', () => ({ scheduleAutoSync: vi.fn() }));
+
+vi.mock('../services/idealoomObsidian.js', () => ({
+  importFromObsidian: vi.fn(),
+  exportToObsidian: vi.fn(),
+}));
+
 // Mock the brain graph service
 vi.mock('../services/brainGraph.js', () => ({
   getBrainGraphSearchIndex: vi.fn(),
@@ -134,6 +151,9 @@ vi.mock('../services/brainJournal.js', () => ({
 
 // Import mocked modules
 import * as brainService from '../services/brain.js';
+import * as ideaLoomLists from '../services/idealoomLists.js';
+import * as ideaLoomObsidian from '../services/idealoomObsidian.js';
+import { scheduleAutoSync } from '../services/idealoomAutoSync.js';
 import { getBrainGraphSearchIndex, getBrainGraphOverview, getBrainGraphNeighborhood } from '../services/brainGraph.js';
 import { syncAllBrainData, getEmbeddingCoverage } from '../services/brainMemoryBridge.js';
 import { getChangesSince } from '../services/brainSyncLog.js';
@@ -143,12 +163,143 @@ import * as journal from '../services/brainJournal.js';
 
 describe('Brain Routes', () => {
   let app;
+  const LIST_ID = 'c17c0284-b7de-4db6-a09c-7f735f0fd501';
 
   beforeEach(() => {
     app = express();
     app.use(express.json());
     app.use('/api/brain', brainRoutes);
     vi.clearAllMocks();
+  });
+
+  describe('IdeaLoom local lists', () => {
+    const listInput = {
+      prompt: 'Find practical improvements', title: 'Practical improvements',
+      category: 'product', ideas: ['Improve empty states']
+    };
+
+    it('uses the static settings route before the native idea id route', async () => {
+      ideaLoomLists.getSettings.mockResolvedValue({ enabled: false, obsidianVaultId: null, autoSync: false });
+      const response = await request(app).get('/api/brain/ideas/idealoom/settings');
+      expect(response.status).toBe(200);
+      expect(response.body.enabled).toBe(false);
+      expect(brainService.getIdeaById).not.toHaveBeenCalled();
+    });
+
+    it('validates local list CRUD input and preserves native Brain ideas', async () => {
+      ideaLoomLists.createList.mockResolvedValue({ id: LIST_ID, ...listInput, status: 'draft' });
+      const created = await request(app).post('/api/brain/ideas/idealoom/lists').send(listInput);
+      expect(created.status).toBe(201);
+      expect(ideaLoomLists.createList).toHaveBeenCalledWith({ ...listInput, status: 'draft' });
+      expect(brainService.createIdea).not.toHaveBeenCalled();
+
+      const rejected = await request(app).post('/api/brain/ideas/idealoom/lists').send({ ...listInput, ideas: [''] });
+      expect(rejected.status).toBe(400);
+    });
+
+    it('reads, updates and deletes a list by id', async () => {
+      const stored = { id: LIST_ID, ...listInput, status: 'draft' };
+
+      ideaLoomLists.getList.mockResolvedValue(stored);
+      const read = await request(app).get(`/api/brain/ideas/idealoom/lists/${LIST_ID}`);
+      expect(read.status).toBe(200);
+      expect(read.body).toEqual(stored);
+      expect(ideaLoomLists.getList).toHaveBeenCalledWith(LIST_ID);
+      expect(brainService.getIdeaById).not.toHaveBeenCalled();
+
+      ideaLoomLists.updateList.mockResolvedValue({ ...stored, title: 'Renamed' });
+      const updated = await request(app)
+        .put(`/api/brain/ideas/idealoom/lists/${LIST_ID}`)
+        .send({ title: 'Renamed' });
+      expect(updated.status).toBe(200);
+      expect(ideaLoomLists.updateList).toHaveBeenCalledWith(LIST_ID, { title: 'Renamed' });
+      expect(brainService.updateIdea).not.toHaveBeenCalled();
+
+      // deleteList resolving true is what makes this a 204 rather than a 404 —
+      // the service must report whether the record actually existed.
+      ideaLoomLists.deleteList.mockResolvedValue(true);
+      const removed = await request(app).delete(`/api/brain/ideas/idealoom/lists/${LIST_ID}`);
+      expect(removed.status).toBe(204);
+      expect(ideaLoomLists.deleteList).toHaveBeenCalledWith(LIST_ID);
+      expect(brainService.deleteIdea).not.toHaveBeenCalled();
+    });
+
+    it('answers 404 for an unknown id on every id-addressed route', async () => {
+      ideaLoomLists.getList.mockResolvedValue(null);
+      ideaLoomLists.updateList.mockResolvedValue(null);
+      ideaLoomLists.deleteList.mockResolvedValue(false);
+
+      // The service is mocked here, so this pins the ROUTE contract: a falsy
+      // service result becomes a 404 on every id-addressed verb, for a
+      // well-formed id and a malformed one alike. That the service itself
+      // returns falsy for a bad id is covered against the live store in
+      // services/idealoomLists.test.js.
+      for (const id of [LIST_ID, 'not-a-uuid']) {
+        expect((await request(app).get(`/api/brain/ideas/idealoom/lists/${id}`)).status).toBe(404);
+        expect((await request(app).put(`/api/brain/ideas/idealoom/lists/${id}`).send({ title: 'x' })).status).toBe(404);
+        expect((await request(app).delete(`/api/brain/ideas/idealoom/lists/${id}`)).status).toBe(404);
+      }
+    });
+  });
+
+  describe('IdeaLoom Obsidian exchange', () => {
+    it('validates explicit import and export actions and returns their results', async () => {
+      ideaLoomObsidian.importFromObsidian.mockResolvedValue({ counts: { imported: 1 } });
+      ideaLoomObsidian.exportToObsidian.mockResolvedValue({ counts: { exported: 1 } });
+
+      const imported = await request(app).post('/api/brain/ideas/idealoom/import').send({});
+      expect(imported.status).toBe(200);
+      expect(imported.body.counts.imported).toBe(1);
+      expect(ideaLoomObsidian.importFromObsidian).toHaveBeenCalledOnce();
+
+      const exported = await request(app)
+        .post('/api/brain/ideas/idealoom/sync')
+        .send({ listId: LIST_ID });
+      expect(exported.status).toBe(200);
+      expect(exported.body.counts.exported).toBe(1);
+      // recreateMissing defaults to false: an export that does not ASK to
+      // recover a deleted note must never be handed a truthy switch.
+      expect(ideaLoomObsidian.exportToObsidian).toHaveBeenCalledWith({ listId: LIST_ID, recreateMissing: false });
+
+      const recovered = await request(app)
+        .post('/api/brain/ideas/idealoom/sync')
+        .send({ listId: LIST_ID, recreateMissing: true });
+      expect(recovered.status).toBe(200);
+      expect(ideaLoomObsidian.exportToObsidian).toHaveBeenLastCalledWith({ listId: LIST_ID, recreateMissing: true });
+    });
+
+    it('schedules automatic sync from local edits only, never from an exchange', async () => {
+      const input = {
+        prompt: 'Find practical improvements', title: 'Practical improvements',
+        category: 'product', ideas: ['Improve empty states']
+      };
+      ideaLoomLists.createList.mockResolvedValue({ id: LIST_ID, ...input });
+      ideaLoomLists.updateList.mockResolvedValue({ id: LIST_ID, ...input, title: 'Renamed' });
+      ideaLoomLists.deleteList.mockResolvedValue(true);
+      ideaLoomObsidian.importFromObsidian.mockResolvedValue({ counts: { imported: 1 } });
+      ideaLoomObsidian.exportToObsidian.mockResolvedValue({ counts: { exported: 1 } });
+
+      await request(app).post('/api/brain/ideas/idealoom/lists').send(input);
+      await request(app).put(`/api/brain/ideas/idealoom/lists/${LIST_ID}`).send({ title: 'Renamed' });
+      expect(scheduleAutoSync).toHaveBeenCalledTimes(2);
+      expect(scheduleAutoSync).toHaveBeenCalledWith(LIST_ID);
+
+      scheduleAutoSync.mockClear();
+      // Deleting a list must not schedule a write — the vault note is the
+      // user's to remove. Import/export must not either, or the two halves of
+      // the exchange would keep re-triggering each other.
+      await request(app).delete(`/api/brain/ideas/idealoom/lists/${LIST_ID}`);
+      await request(app).post('/api/brain/ideas/idealoom/import').send({});
+      await request(app).post('/api/brain/ideas/idealoom/sync').send({});
+      expect(scheduleAutoSync).not.toHaveBeenCalled();
+    });
+
+    it('rejects unknown exchange request fields', async () => {
+      expect((await request(app).post('/api/brain/ideas/idealoom/import').send({ force: true })).status).toBe(400);
+      expect((await request(app).post('/api/brain/ideas/idealoom/sync').send({ direction: 'both' })).status).toBe(400);
+      expect(ideaLoomObsidian.importFromObsidian).not.toHaveBeenCalled();
+      expect(ideaLoomObsidian.exportToObsidian).not.toHaveBeenCalled();
+    });
   });
 
   // ===========================================================================

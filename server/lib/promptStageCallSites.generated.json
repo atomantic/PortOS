@@ -37,6 +37,12 @@
   "fableloom-feedback-episode": [
     "server/services/fableLoom/weave.js"
   ],
+  "fableloom-feedback-series-plan": [
+    "server/services/fableLoom/weave.js"
+  ],
+  "fableloom-generate-series-plan": [
+    "server/services/fableLoom/weave.js"
+  ],
   "fableloom-play-turn": [
     "server/services/fableLoom/weave.js"
   ],
@@ -44,6 +50,9 @@
     "server/services/fableLoom/weave.js"
   ],
   "fableloom-review": [
+    "server/services/fableLoom/weave.js"
+  ],
+  "fableloom-review-series-plan": [
     "server/services/fableLoom/weave.js"
   ],
   "fableloom-weave-episode": [

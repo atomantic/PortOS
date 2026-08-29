@@ -14,9 +14,11 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { Loader2, Plus, Waypoints } from 'lucide-react';
 import Pill from '../ui/Pill';
+import { FormField } from '../ui/FormField.jsx';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import { timeAgo } from '../../utils/formatters';
 import { createLoom, listLooms } from '../../services/api';
+import { fieldClass, labelClass } from '../fableloom/fieldStyles';
 
 // Mirrors LOOM_LIMITS.NAME_MAX (server/lib/fableLoomLimits.js) — the
 // derived name is built from the series name, which has its own longer cap, so
@@ -36,6 +38,9 @@ export default function SeriesLoomsPanel({ series }) {
   const navigate = useNavigate();
   const seriesId = series?.id;
   const [looms, setLooms] = useState(null);
+  const [showCreate, setShowCreate] = useState(false);
+  const [participationMode, setParticipationMode] = useState('helper');
+  const [communicationMedium, setCommunicationMedium] = useState('');
 
   useEffect(() => {
     if (!seriesId) return undefined;
@@ -51,6 +56,8 @@ export default function SeriesLoomsPanel({ series }) {
     const loom = await createLoom({
       name: deriveLoomName(series?.name),
       logline: series?.logline || '',
+      participationMode,
+      audienceCommunicationMedium: participationMode === 'helper' ? communicationMedium.trim() : '',
       universeId: series?.universeId || null,
       seriesId,
     }, { silent: true });
@@ -73,7 +80,7 @@ export default function SeriesLoomsPanel({ series }) {
         </div>
         <button
           type="button"
-          onClick={runCreate}
+          onClick={() => setShowCreate((shown) => !shown)}
           disabled={creating}
           className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs bg-port-accent/15 border border-port-accent/40 text-port-accent hover:bg-port-accent/25 disabled:opacity-50"
         >
@@ -83,6 +90,53 @@ export default function SeriesLoomsPanel({ series }) {
           New branching narrative
         </button>
       </div>
+
+      {showCreate && (
+        <div className="rounded border border-port-border bg-port-card p-3 space-y-3">
+          <div className="grid gap-3 @md:grid-cols-2">
+            <FormField label="Audience role" labelClassName={labelClass}>
+              <select
+                className={fieldClass}
+                value={participationMode}
+                onChange={(event) => setParticipationMode(event.target.value)}
+                disabled={creating}
+              >
+                <option value="helper">Audience helps the protagonist</option>
+                <option value="protagonist">Audience acts as the protagonist</option>
+              </select>
+            </FormField>
+            {participationMode === 'helper' && (
+              <FormField label="Communication medium" labelClassName={labelClass}>
+                <input
+                  className={fieldClass}
+                  value={communicationMedium}
+                  onChange={(event) => setCommunicationMedium(event.target.value)}
+                  placeholder="e.g. a radio activated in the opening"
+                  disabled={creating}
+                />
+              </FormField>
+            )}
+          </div>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setShowCreate(false)}
+              disabled={creating}
+              className="px-2.5 py-1.5 rounded border border-port-border text-xs disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={runCreate}
+              disabled={creating || (participationMode === 'helper' && !communicationMedium.trim())}
+              className="px-2.5 py-1.5 rounded bg-port-accent text-white text-xs disabled:opacity-50"
+            >
+              {creating ? 'Creating…' : 'Create narrative'}
+            </button>
+          </div>
+        </div>
+      )}
 
       {looms === null ? (
         <div className="flex items-center gap-2 text-xs text-gray-500">

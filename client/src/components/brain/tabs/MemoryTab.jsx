@@ -50,9 +50,12 @@ export function transcriptTeaser(content, maxLen = 220) {
   return `${plain.slice(0, maxLen).trimEnd()}…`;
 }
 
-export default function MemoryTab({ onRefresh }) {
+// Ideas is a first-class Brain route, but it deliberately shares this native
+// record surface so CRUD, status completion, catalog handoff, embeddings, and
+// federation continue to use the same idea model and API.
+export default function MemoryTab({ onRefresh, fixedType = null }) {
   const navigate = useNavigate();
-  const [activeType, setActiveType] = useState('memories');
+  const [activeType, setActiveType] = useState(fixedType || 'memories');
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState(null);
@@ -66,6 +69,10 @@ export default function MemoryTab({ onRefresh }) {
   const [viewerRecord, setViewerRecord] = useState(null);
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
+
+  useEffect(() => {
+    if (fixedType) setActiveType(fixedType);
+  }, [fixedType]);
 
   const fetchRecords = useCallback(async () => {
     setLoading(true);
@@ -742,7 +749,7 @@ export default function MemoryTab({ onRefresh }) {
 
       {/* Type tabs */}
       <div className="flex items-center gap-2 flex-wrap">
-        {MEMORY_TABS.map((tab) => {
+        {!fixedType && MEMORY_TABS.map((tab) => {
           const Icon = tab.icon;
           const isActive = activeType === tab.id;
           const destInfo = DESTINATIONS[tab.id];

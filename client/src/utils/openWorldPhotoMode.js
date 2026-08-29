@@ -103,12 +103,11 @@ export function stepFly(progress, deltaSeconds) {
 // omitted rather than rendered as "0/undefined", so a sparse install still prints a clean card.
 export function buildPostcardStats(snapshot = {}) {
   const lines = [];
-  const { online, total, agents, peers, level, streak } = snapshot;
+  const { online, total, agents, peers, level } = snapshot;
   if (Number.isFinite(total)) lines.push(`${online ?? 0}/${total} SYSTEMS ONLINE`);
   if (Number.isFinite(agents) && agents > 0) lines.push(`${agents} AGENT${agents === 1 ? '' : 'S'} ACTIVE`);
   if (Number.isFinite(peers) && peers > 0) lines.push(`${peers} PEER${peers === 1 ? '' : 'S'} LINKED`);
   if (Number.isFinite(level)) lines.push(`LEVEL ${level}`);
-  if (Number.isFinite(streak) && streak > 0) lines.push(`${streak}-DAY STREAK`);
   return lines;
 }
 

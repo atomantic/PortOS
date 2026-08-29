@@ -35,7 +35,7 @@ const OPEN_WORLD_REGION_COMMANDS = [
   ['wellness', 'Wellness Tower', ['wellness tower', 'health tower', 'vitals tower']],
   ['archive', 'Archive District', ['archive district', 'warehouse', 'cold storage']],
   ['quiet-corner', 'Quiet Corner', ['quiet corner', 'easter eggs']],
-  ['productivity', 'Productivity Terrace', ['productivity terrace', 'productivity', 'streak district']],
+  ['productivity', 'Productivity Terrace', ['productivity terrace', 'productivity', 'throughput district', 'streak district']],
   ['backup-vault', 'Backup Vault', ['backup vault', 'the vault']],
   ['memory', 'Memory Quarter', ['memory quarter', 'memory district', 'knowledge district']],
   ['sprint-yard', 'Sprint Yard', ['sprint yard', 'jira yard', 'sprint district'], 'jira'],
@@ -132,6 +132,8 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.brain.digest', path: '/brain/digest', label: 'Digest', section: 'Brain', aliases: ['brain-digest'] },
   { id: 'nav.brain.feeds', path: '/brain/feeds', label: 'Feeds', section: 'Brain', aliases: ['brain-feeds', 'feeds', 'rss'], keywords: ['rss', 'subscriptions'] },
   { id: 'nav.brain.graph', path: '/brain/graph', label: 'Graph', section: 'Brain', aliases: ['brain-graph'] },
+  { id: 'nav.brain.ideas', path: '/brain/ideas', label: 'Ideas', section: 'Brain', aliases: ['brain-ideas', 'ideas'], keywords: ['brainstorm', 'creative', 'thought', 'concept'] },
+  { id: 'nav.brain.idealoom', path: '/brain/ideas?view=lists', label: 'IdeaLoom Lists', section: 'Brain', aliases: ['idealoom', 'idea-loom', 'idealoom-lists'], keywords: ['obsidian', 'vault', 'ordered list', 'local lists'] },
   { id: 'nav.brain.import', path: '/brain/import', label: 'Import', section: 'Brain', aliases: ['brain-import', 'import-chatgpt', 'chatgpt-import'], keywords: ['chatgpt', 'openai', 'export', 'third-party'] },
   { id: 'nav.brain.links', path: '/brain/links', label: 'Links', section: 'Brain', aliases: ['brain-links'] },
   { id: 'nav.brain.memory', path: '/brain/memory', label: 'Memory', section: 'Brain', aliases: ['brain-memory', 'memory'] },
@@ -170,11 +172,12 @@ const RAW_NAV_COMMANDS = [
   // visualization + inline schedule editor). The `workflow` aliases are kept
   // for muscle memory; the bare `timeline` alias stays with /media/timeline.
   { id: 'nav.cos.workflow', path: '/cos/workflow', label: 'Timeline', section: 'Chief of Staff', aliases: ['workflow', 'cos-workflow', 'cos-timeline', 'schedule-timeline'], keywords: ['timeline', 'schedule', 'launch order', 'run order', 'gantt', 'upcoming runs', 'overlap', 'dependencies'] },
-  { id: 'nav.cos.productivity', path: '/cos/productivity', label: 'Streaks', section: 'Chief of Staff', aliases: ['streaks', 'cos-productivity'] },
+  { id: 'nav.cos.productivity', path: '/cos/productivity', label: 'Productivity', section: 'Chief of Staff', aliases: ['cos-productivity', 'work-patterns', 'streaks'] },
 
   { id: 'nav.messages.inbox', path: '/messages/inbox', label: 'Inbox', section: 'Comms', aliases: ['messages', 'comms', 'comms-inbox'], keywords: ['comms', 'email', 'inbox'] },
   { id: 'nav.messages.drafts', path: '/messages/drafts', label: 'Drafts', section: 'Comms', aliases: ['drafts', 'comms-drafts'], keywords: ['comms'] },
   { id: 'nav.messages.imessage', path: '/messages/imessage', label: 'iMessage', section: 'Comms', previousPaths: ['/imessage'], aliases: ['imessage', 'i-message', 'apple-messages', 'comms-imessage'], keywords: ['comms', 'imessage', 'sms', 'text messages', 'chat.db', 'blocklist', 'spam'] },
+  { id: 'nav.messages.signal', path: '/messages/signal', label: 'Signal', section: 'Comms', previousPaths: ['/settings/signal'], aliases: ['signal', 'signal-desktop', 'comms-signal', 'signal-settings'], keywords: ['comms', 'signal', 'signal desktop', 'messages', 'sqlcipher', 'chat', 'tribe', 'timeline', 'encrypted', 'keychain'] },
   { id: 'nav.messages.contacts', path: '/messages/contacts', label: 'Contacts', section: 'Comms', previousPaths: ['/settings/contacts'], aliases: ['contacts', 'address-book', 'comms-contacts', 'settings-contacts'], keywords: ['comms', 'contacts', 'address book', 'phone', 'email', 'tribe', 'imessage', 'names', 'resolve'] },
   // Ingestion config is a drawer over the iMessage manager (?settings=1), not a
   // Settings page — the settings-* aliases stay so "open iMessage settings" still lands.
@@ -185,6 +188,11 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.x', path: '/x', label: 'X', section: 'Comms', aliases: ['x', 'x-com', 'twitter', 'comms-x'], keywords: ['comms', 'social', 'reach', 'engagement', 'shadowban', 'diagnostics'] },
   { id: 'nav.timeline', path: '/timeline', label: 'Timeline', section: 'Brain', aliases: ['activity-timeline', 'activity', 'my-day', 'life-log', 'life-timeline'], keywords: ['human activity', 'life log', 'timeline', 'messages', 'calendar', 'history', 'what did i do', 'daily', 'import', 'backfill', 'whatsapp', 'spotify', 'discord', 'youtube'] },
   { id: 'nav.tribe', path: '/tribe', label: 'Tribe', section: 'Brain', aliases: ['tribe', 'relationships', 'relationship-manager', 'people'], keywords: ['dunbar', 'friends', 'family', 'network', 'social graph', 'care cadence'] },
+  // Moved out of Settings into Brain (alongside Timeline, which these feed) —
+  // ids kept stable since they're opaque, persisted palette-history values;
+  // only the path and section move, per the /models/* precedent above.
+  { id: 'nav.settings.spotify', path: '/brain/spotify', label: 'Spotify', section: 'Brain', previousPaths: ['/settings/spotify'], aliases: ['settings-spotify', 'spotify', 'spotify-settings', 'brain-spotify'], keywords: ['spotify', 'music', 'listening', 'recently played', 'oauth', 'timeline', 'taste', 'media'] },
+  { id: 'nav.settings.youtube', path: '/brain/youtube', label: 'YouTube', section: 'Brain', previousPaths: ['/settings/youtube'], aliases: ['settings-youtube', 'youtube', 'youtube-settings', 'brain-youtube'], keywords: ['youtube', 'watch history', 'video', 'scrape', 'takeout', 'timeline', 'taste', 'media'] },
 
   { id: 'nav.devtools.agents', path: '/devtools/agents', label: 'AI Agents', section: 'Dev Tools', aliases: ['ai-agents', 'devtools'] },
   { id: 'nav.browser', path: '/browser', label: 'Browser', section: 'Dev Tools', aliases: ['browser'] },
@@ -322,11 +330,10 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.settings.openclaw', path: '/openclaw', label: 'OpenClaw', section: 'Settings', feature: 'openclaw', aliases: ['openclaw', 'settings-openclaw'], keywords: ['operator', 'chat', 'agent', 'runtime', 'sessions', 'streaming'] },
   { id: 'nav.settings.security', path: '/settings/security', label: 'Security', section: 'Settings', aliases: ['settings-security', 'login-password', 'auth-password', 'password-settings'], keywords: ['password', 'login', 'auth', 'sign-in', 'lock', 'tailnet', 'sidecar'] },
   { id: 'nav.settings.sharing', path: '/settings/sharing', label: 'Sharing', section: 'Settings', aliases: ['settings-sharing', 'sharing-settings'], keywords: ['display name', 'bio', 'attribution', 'identity', 'source'] },
-  { id: 'nav.settings.signal', path: '/settings/signal', label: 'Signal', section: 'Settings', aliases: ['settings-signal', 'signal', 'signal-settings'], keywords: ['signal', 'signal desktop', 'messages', 'sqlcipher', 'chat', 'tribe', 'timeline', 'encrypted', 'keychain'] },
-  { id: 'nav.settings.spotify', path: '/settings/spotify', label: 'Spotify', section: 'Settings', aliases: ['settings-spotify', 'spotify', 'spotify-settings'], keywords: ['spotify', 'music', 'listening', 'recently played', 'oauth', 'timeline', 'taste', 'media'] },
   { id: 'nav.settings.telegram', path: '/settings/telegram', label: 'Telegram', section: 'Settings', aliases: ['settings-telegram', 'telegram'] },
   { id: 'nav.settings.voice', path: '/settings/voice', label: 'Voice', section: 'Settings', aliases: ['settings-voice', 'voice', 'voice-settings'], keywords: ['mic', 'microphone', 'speech', 'tts', 'whisper', 'kokoro'] },
-  { id: 'nav.settings.youtube', path: '/settings/youtube', label: 'YouTube', section: 'Settings', aliases: ['settings-youtube', 'youtube', 'youtube-settings'], keywords: ['youtube', 'watch history', 'video', 'scrape', 'takeout', 'timeline', 'taste', 'media'] },
+  { id: 'nav.settings.facetime', path: '/settings/voice', label: 'FaceTime Audio', section: 'Settings', feature: 'facetime', aliases: ['facetime', 'facetime-audio', 'call-settings'], keywords: ['facetime', 'audio call', 'call', 'hang up', 'blackhole'] },
+  { id: 'nav.settings.call-host', path: '/voice/call-host', label: 'Call Host', section: 'Settings', feature: 'facetime', aliases: ['call-host', 'voice-call-host', 'facetime-call-host', 'audio-bridge', 'meeting-capture', 'capture-audio'], keywords: ['facetime', 'call audio', 'blackhole', 'bridge', 'attach', 'microphone', 'speaker', 'call host', 'meeting capture', 'transcribe meeting', 'record meeting'] },
 
   { id: 'nav.ambient', path: '/ambient', label: 'Ambient', section: 'Dev Tools', aliases: ['ambient', 'ambient-mode', 'ambient mode'], keywords: ['idle', 'background', 'display', 'screensaver', 'fullscreen'] },
   { id: 'nav.capabilities', path: '/capabilities', label: 'Capabilities', section: 'Dev Tools', aliases: ['capabilities', 'capability-map', 'integrations'], keywords: ['status', 'setup', 'checklist', 'connected systems', 'integrations', 'providers', 'health overview'] },

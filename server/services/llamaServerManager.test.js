@@ -125,6 +125,12 @@ describe('llamaServerManager', () => {
     vi.spyOn(openAiModelsProbe, 'probeOpenAiModels')
       .mockImplementation(async () => ({ reachable: pm2State?.status === 'online', models: [] }));
 
+    // `createDaemonWatcher` reads the saved boot list on every status read, and
+    // the dump is a real file on the developer's machine — pin it so these tests
+    // are about this code, not their PM2 state. (Its twin in
+    // mtplxServerManager.test.js pins it for the same reason.)
+    vi.spyOn(pm2Module, 'getSavedProcessNames').mockResolvedValue([]);
+
     vi.spyOn(pm2Module, 'execPm2').mockImplementation(async (args) => {
       execPm2Calls.push(args);
       const action = args[0];

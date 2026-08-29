@@ -141,6 +141,7 @@ async function buildIntegrityAssetManifest(kind, record) {
   if (kind === 'creativeDirectorProject') return buildProjectAssetManifest(record);
   if (kind === 'musicVideoProject') return buildMusicVideoAssetManifest(record);
   if (kind === 'moodBoard') return buildBoardAssetManifest(record);
+  if (kind === 'fableLoom') return buildFableLoomAssetManifest(record);
   if (kind === 'series') {
     const childIssues = await listIssues({ seriesId: record?.id, includeDeleted: true }).catch(() => []);
     const manifestIssues = childIssues.filter(
@@ -541,6 +542,34 @@ export async function buildMusicVideoAssetManifest(project) {
   )];
   if (imageNames.length) {
     const entries = await Promise.all(imageNames.map((name) => hashImageForManifest(name)));
+    for (const entry of entries) {
+      if (entry) dedup.set(`${entry.kind}:${entry.filename}`, entry);
+    }
+  }
+  return [...dedup.values()];
+}
+
+/**
+ * Hash every rendered scene asset referenced by a FableLoom story. Scene stills
+ * are gallery basenames; clips point at video-history ids and the FableLoom
+ * player resolves them directly as managed `<id>.mp4` files.
+ */
+export async function buildFableLoomAssetManifest(loom) {
+  const nodes = (Array.isArray(loom?.episodes) ? loom.episodes : [])
+    .flatMap((episode) => (Array.isArray(episode?.nodes) ? episode.nodes : []));
+  const dedup = new Map();
+  const imageNames = [...new Set(
+    nodes.map((node) => (isStr(node?.image) ? node.image : null)).filter(Boolean),
+  )];
+  for (const entry of await Promise.all(imageNames.map((name) => hashImageForManifest(name)))) {
+    if (entry) dedup.set(`${entry.kind}:${entry.filename}`, entry);
+  }
+  const videoIds = [...new Set(
+    nodes.map((node) => (isStr(node?.videoHistoryId) ? node.videoHistoryId : null)).filter(Boolean),
+  )];
+  if (videoIds.length > 0) {
+    const entries = await Promise.all(videoIds.map((id) =>
+      hashSimpleAsset(collectionVideoRefToFilename(id), 'video', PATHS.videos)));
     for (const entry of entries) {
       if (entry) dedup.set(`${entry.kind}:${entry.filename}`, entry);
     }

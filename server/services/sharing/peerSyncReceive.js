@@ -31,6 +31,7 @@ import { getTrack, mergeTracksFromSync } from '../tracks/index.js';
 import { getProject, mergeProjectsFromSync } from '../creativeDirector/local.js';
 import { getProject as getMusicVideoProject, mergeProjectsFromSync as mergeMusicVideoProjectsFromSync } from '../musicVideo/projects.js';
 import { getBoard, mergeBoardsFromSync } from '../moodBoard/index.js';
+import { mergeLoomsFromSync } from '../fableLoom/index.js';
 import {
   getWorkForSync,
   mergeWorksFromSync,
@@ -338,6 +339,8 @@ export async function applyIncomingPush(payload) {
     await mergeProjectsFromSync([record], { source });
   } else if (kind === 'moodBoard') {
     await mergeBoardsFromSync([record], { source });
+  } else if (kind === 'fableLoom') {
+    await mergeLoomsFromSync([record], { source });
   } else if (kind === 'writersRoomWork') {
     const mergeResult = await mergeWorksFromSync([record], { source });
     // Did the receiver accept the remote work (insert / remote-won LWW)? This
